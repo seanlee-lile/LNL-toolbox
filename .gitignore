@@ -1,0 +1,52 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Packaging output
+dist/
+build/
+*.egg-info/
+
+# IDE, OS, and local assistant state
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+.codex/
+.agents/
+
+# Datasets and generated experiment artifacts
+docs/paper-summaries.md
+/data/
+artifacts/
+outputs/
+runs/
+checkpoints/
+*.ckpt
+*.pth
+*.pt
+*.log
+
+# Temporary extraction, previews, and scratch work
+tmp/
+temp/
+scratch/
+
+# Downloaded papers are local research inputs; keep README and manifest
+papers/**/*.pdf
+
+# One-off paper acquisition/extraction utilities
+scripts/download_papers.ps1
+scripts/extract_papers.py
+
+# Personal working notes and question drafts
+new_knowledge.txt
+part1-summary.md

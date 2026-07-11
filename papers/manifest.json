@@ -1,0 +1,158 @@
+﻿[
+    {
+        "file":  "01_instance_dependent/01_upm_aaai2021.pdf",
+        "url":  "https://ojs.aaai.org/index.php/AAAI/article/download/17221/17028",
+        "status":  "ok",
+        "bytes":  722713
+    },
+    {
+        "file":  "01_instance_dependent/02_cal_cvpr2021.pdf",
+        "url":  "https://openaccess.thecvf.com/content/CVPR2021/papers/Zhu_A_Second-Order_Approach_to_Learning_With_Instance-Dependent_Label_Noise_CVPR_2021_paper.pdf",
+        "status":  "ok",
+        "bytes":  509666
+    },
+    {
+        "file":  "01_instance_dependent/03_pdl_neurips2020.pdf",
+        "url":  "https://papers.nips.cc/paper/2020/file/5607fe8879e4fd269e88387e8cb30b7e-Paper.pdf",
+        "status":  "ok",
+        "bytes":  353269
+    },
+    {
+        "file":  "02_sample_selection/04_jocor_cvpr2020.pdf",
+        "url":  "https://openaccess.thecvf.com/content_CVPR_2020/papers/Wei_Combating_Noisy_Labels_by_Agreement_A_Joint_Training_Method_with_CVPR_2020_paper.pdf",
+        "status":  "ok",
+        "bytes":  1155541
+    },
+    {
+        "file":  "02_sample_selection/05_dss_cvpr2026.pdf",
+        "url":  "https://openaccess.thecvf.com/content/CVPR2026/papers/Pan_Debiased_Sample_Selection_for_Learning_with_Noisy_Labels_CVPR_2026_paper.pdf",
+        "status":  "ok",
+        "bytes":  752030
+    },
+    {
+        "file":  "02_sample_selection/06_elr_iclr2021.pdf",
+        "url":  "https://scispace.com/pdf/robust-early-learning-hindering-the-memorization-of-noisy-1wsritdtfs.pdf",
+        "status":  "failed",
+        "error":  "Downloaded file is empty"
+    },
+    {
+        "file":  "02_sample_selection/07_uncertainty_selection.pdf",
+        "url":  "https://arxiv.org/pdf/2106.00445.pdf",
+        "status":  "ok",
+        "bytes":  1276395
+    },
+    {
+        "file":  "02_sample_selection/08_mentornet_icml2018.pdf",
+        "url":  "https://proceedings.mlr.press/v80/jiang18c/jiang18c.pdf",
+        "status":  "ok",
+        "bytes":  724170
+    },
+    {
+        "file":  "02_sample_selection/09_coteaching_neurips2018.pdf",
+        "url":  "https://papers.nips.cc/paper/2018/file/a19744e268754fb0148b017647355b7b-Paper.pdf",
+        "status":  "ok",
+        "bytes":  1145213
+    },
+    {
+        "file":  "03_robust_loss/10_loss_correction_cvpr2017.pdf",
+        "url":  "https://openaccess.thecvf.com/content_cvpr_2017/papers/Patrini_Making_Deep_Neural_CVPR_2017_paper.pdf",
+        "status":  "ok",
+        "bytes":  875354
+    },
+    {
+        "file":  "03_robust_loss/11_normalized_losses_icml2020.pdf",
+        "url":  "https://proceedings.mlr.press/v119/ma20c/ma20c.pdf",
+        "status":  "ok",
+        "bytes":  5566314
+    },
+    {
+        "file":  "03_robust_loss/12_gce_neurips2018.pdf",
+        "url":  "https://papers.nips.cc/paper/8094-generalized-cross-entropy-loss-for-training-deep-neural-networks-with-noisy-labels.pdf",
+        "status":  "ok",
+        "bytes":  734639
+    },
+    {
+        "file":  "04_statistics/13_volminnet_icml2021.pdf",
+        "url":  "https://proceedings.mlr.press/v139/li21l/li21l.pdf",
+        "status":  "ok",
+        "bytes":  967477
+    },
+    {
+        "file":  "04_statistics/14_learning_with_noisy_labels_neurips2013.pdf",
+        "url":  "https://papers.nips.cc/paper_files/paper/2013/file/3871bd64012152bfb53fdf04b401193f-Paper.pdf",
+        "status":  "ok",
+        "bytes":  1553145
+    },
+    {
+        "file":  "04_statistics/15_t_revision_neurips2019.pdf",
+        "url":  "https://papers.nips.cc/paper/2019/file/9308b0d6e5898366a4a986bc33f3d3e7-Paper.pdf",
+        "status":  "ok",
+        "bytes":  770204
+    },
+    {
+        "file":  "04_statistics/16_dual_t_neurips2020.pdf",
+        "url":  "https://papers.nips.cc/paper/2020/file/512c5cad6c37edb98ae91c8a76c3a291-Paper.pdf",
+        "status":  "ok",
+        "bytes":  511853
+    },
+    {
+        "file":  "04_statistics/17_mc_ldce_sdm2022.pdf",
+        "url":  "https://arxiv.org/pdf/2203.10858.pdf",
+        "status":  "ok",
+        "bytes":  799916
+    },
+    {
+        "file":  "04_statistics/18_importance_reweighting_tpami2016.pdf",
+        "url":  "https://arxiv.org/pdf/1411.7718.pdf",
+        "status":  "ok",
+        "bytes":  634569
+    },
+    {
+        "file":  "04_statistics/19_cwd_tpami2022.pdf",
+        "url":  "https://gcatnjust.github.io/ChenGong/paper/gong_tpami22.pdf",
+        "status":  "ok",
+        "bytes":  2666382
+    },
+    {
+        "file":  "04_statistics/20_pcse_tpami2024.pdf",
+        "url":  "https://randydkx.github.io/pdf/TPAMI_paper.pdf",
+        "status":  "ok",
+        "bytes":  4457414
+    },
+    {
+        "file":  "05_hybrid/21_dld_cvpr2025.pdf",
+        "url":  "https://openaccess.thecvf.com/content/CVPR2025/papers/Hou_Directional_Label_Diffusion_Model_for_Learning_from_Noisy_Labels_CVPR_2025_paper.pdf",
+        "status":  "ok",
+        "bytes":  1453413
+    },
+    {
+        "file":  "05_hybrid/22_active_forgetting_cvpr2026.pdf",
+        "url":  "https://openaccess.thecvf.com/content/CVPR2026/papers/Sheng_Revisiting_Learning_with_Noisy_Labels_Active_Forgetting_and_Noise_Suppression_CVPR_2026_paper.pdf",
+        "status":  "ok",
+        "bytes":  13019940
+    },
+    {
+        "file":  "05_hybrid/23_ca2c_iccv2025.pdf",
+        "url":  "https://openaccess.thecvf.com/content/ICCV2025/papers/Sheng_CA2C_A_Prior-Knowledge-Free_Approach_for_Robust_Label_Noise_Learning_via_ICCV_2025_paper.pdf",
+        "status":  "ok",
+        "bytes":  1635219
+    },
+    {
+        "file":  "05_hybrid/24_dividemix_iclr2020.pdf",
+        "url":  "https://arxiv.org/pdf/2002.07394.pdf",
+        "status":  "ok",
+        "bytes":  771769
+    },
+    {
+        "file":  "05_hybrid/25_l2rw_icml2018.pdf",
+        "url":  "https://proceedings.mlr.press/v80/ren18a/ren18a.pdf",
+        "status":  "ok",
+        "bytes":  2922359
+    },
+    {
+        "file":  "05_hybrid/26_lend_mlj2022.pdf",
+        "url":  "https://arxiv.org/pdf/2206.13025.pdf",
+        "status":  "ok",
+        "bytes":  10155988
+    }
+]

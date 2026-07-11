@@ -1,0 +1,24 @@
+seed: 7
+output_root: artifacts/runs
+data:
+  name: cifar10
+  root: data/cifar10
+  validation_size: 5000
+  max_train_samples: null
+  max_validation_samples: null
+  max_test_samples: null
+  augment: true
+loader:
+  batch_size: 128
+  num_workers: 0
+  pin_memory: true
+model:
+  name: tiny_cnn
+  width: 64
+optimizer:
+  name: adamw
+  lr: 0.001
+  weight_decay: 0.0005
+trainer:
+  epochs: 30
+  device: auto

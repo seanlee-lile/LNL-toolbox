@@ -1,0 +1,80 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+import numpy as np
+import torch
+
+from lnl_toolbox.algorithms.supervised import SupervisedClassificationAlgorithm
+from lnl_toolbox.core import Batch, ExperimentContext, RunState
+from lnl_toolbox.data.cifar import CifarData, default_data_root
+from lnl_toolbox.data.torch_cifar import TorchCifarDataset, stratified_split
+from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
+from lnl_toolbox.models import TinyCNN
+from lnl_toolbox.runtime import resolve_device
+from lnl_toolbox.training.checkpoint import load_checkpoint, save_checkpoint
+
+
+class TorchTrainingTest(unittest.TestCase):
+    def test_repository_data_path(self):
+        self.assertEqual(default_data_root().name, "data")
+        self.assertTrue((default_data_root() / "cifar10" / "data_batch_1").is_file())
+
+    def test_dataset_shape_dtype_target_and_stable_index(self):
+        data = CifarData(np.zeros((3, 32, 32, 3), dtype=np.uint8), np.array([2, 1, 0]),
+                         ("a", "b", "c"), "train", "fixture")
+        sample = TorchCifarDataset(data, [2])[0]
+        self.assertEqual(sample["input"].shape, (3, 32, 32))
+        self.assertEqual(sample["input"].dtype, torch.float32)
+        self.assertEqual(sample["target"], 0)
+        self.assertEqual(sample["index"], 2)
+
+    def test_stratified_split_is_reproducible(self):
+        labels = np.repeat(np.arange(10), 100)
+        first = stratified_split(labels, 100, 9)
+        second = stratified_split(labels, 100, 9)
+        np.testing.assert_array_equal(first[0], second[0])
+        np.testing.assert_array_equal(first[1], second[1])
+        self.assertTrue(np.all(np.bincount(labels[first[1]]) == 10))
+
+    def test_tinycnn_shape(self):
+        self.assertEqual(TinyCNN(10, 8)(torch.randn(4, 3, 32, 32)).shape, (4, 10))
+
+    def test_training_step_changes_parameters(self):
+        model = TinyCNN(10, 8)
+        algorithm = SupervisedClassificationAlgorithm(
+            model, torch.optim.SGD(model.parameters(), lr=0.01), CrossEntropyLoss(), torch.device("cpu"))
+        algorithm.setup(ExperimentContext(Path.cwd()))
+        before = model.classifier.weight.detach().clone()
+        result = algorithm.step(Batch({"input": torch.randn(4, 3, 32, 32),
+                                       "target": torch.tensor([0, 1, 2, 3])}), RunState())
+        self.assertTrue(np.isfinite(result.metrics["loss"]))
+        self.assertFalse(torch.equal(before, model.classifier.weight))
+
+    def test_device_selection(self):
+        self.assertEqual(resolve_device("cpu").type, "cpu")
+        expected = "cuda" if torch.cuda.is_available() else "cpu"
+        self.assertEqual(resolve_device("auto").type, expected)
+        if torch.cuda.is_available():
+            self.assertEqual(resolve_device("cuda").type, "cuda")
+
+    def test_checkpoint_roundtrip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model = TinyCNN(10, 8)
+            optimizer = torch.optim.AdamW(model.parameters())
+            algorithm = SupervisedClassificationAlgorithm(model, optimizer, CrossEntropyLoss(), torch.device("cpu"))
+            algorithm.setup(ExperimentContext(Path(directory)))
+            state = RunState(cycle=2, step=17)
+            path = Path(directory) / "last.pt"
+            saved = model.classifier.weight.detach().clone()
+            save_checkpoint(path, algorithm, state, 2, {"seed": 1})
+            with torch.no_grad():
+                model.classifier.weight.zero_()
+            restored, epoch, _ = load_checkpoint(path, algorithm, torch.device("cpu"))
+            self.assertTrue(torch.equal(saved, model.classifier.weight))
+            self.assertEqual(restored.step, 17)
+            self.assertEqual(epoch, 2)
+
+
+if __name__ == "__main__":
+    unittest.main()
