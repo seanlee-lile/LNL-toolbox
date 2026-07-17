@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""A small CNN used for fast integration tests and CIFAR smoke runs."""
+
 from torch import nn
 
 

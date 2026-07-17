@@ -1,0 +1,26 @@
+# Normalize text in the repository while allowing Windows working trees to use CRLF.
+* text=auto
+
+# Source, configuration, and documentation files.
+*.py text
+*.md text
+*.txt text
+*.toml text
+*.yaml text
+*.yml text
+*.json text
+*.ps1 text eol=crlf
+
+# Binary and experiment artifact formats must never be line-ending converted.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.xlsx binary
+*.pt binary
+*.pth binary
+*.npz binary
+*.npy binary
+*.pkl binary
+*.pickle binary

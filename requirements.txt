@@ -1,0 +1,8 @@
+# Reproducible environment used by the current CIFAR training pipeline.
+# Install the appropriate PyTorch build (CUDA or CPU) before installing this file
+# if the default PyPI build is not suitable for your machine.
+numpy==2.0.1
+torch==2.5.1
+torchvision==0.20.1
+PyYAML==6.0.3
+Pillow==11.1.0

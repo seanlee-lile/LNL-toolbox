@@ -5,6 +5,7 @@
 ## 从这里开始
 
 - [使用说明](docs/usage-guide.md)
+- [开发指南](docs/development-guide.md)
 - [逐文件职责](docs/file-map.md)
 - [项目管理指南](docs/project-management-guide.md)
 - [LNL 长期架构与实验路线](toolbox-architecture.md)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Shared classification evaluation used across training algorithms."""
+
 import torch
 
 

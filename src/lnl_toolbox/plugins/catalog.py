@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+"""Small plugin catalog for discovering and constructing toolbox components."""
+
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
 
 @dataclass(frozen=True, slots=True)
 class PluginSpec:
+    """Immutable description of one registered component factory."""
     kind: str
     name: str
     factory: Callable[..., Any]
@@ -52,4 +55,3 @@ class PluginCatalog:
         if capability is not None:
             values = (item for item in values if capability in item.capabilities)
         return tuple(sorted(values, key=lambda item: (item.kind, item.name)))
-

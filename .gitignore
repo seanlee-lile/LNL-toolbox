@@ -50,3 +50,7 @@ scripts/extract_papers.py
 # Personal working notes and question drafts
 new_knowledge.txt
 part1-summary.md
+outline.md
+relies.yaml
+summary.md
+tree.txt

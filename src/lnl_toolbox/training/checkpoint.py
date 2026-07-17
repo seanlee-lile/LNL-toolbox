@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Save and restore algorithm progress for interruption-safe experiments."""
+
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping

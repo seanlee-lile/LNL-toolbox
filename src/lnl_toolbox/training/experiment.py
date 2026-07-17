@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""End-to-end orchestration for a reproducible CIFAR training run.
+
+This module deliberately keeps experiment I/O and lifecycle management outside
+individual algorithms so future LNL methods can share the same data splits,
+logging, checkpointing, and evaluation rules.
+"""
+
 from dataclasses import asdict
 from datetime import datetime
 import json
@@ -69,6 +76,7 @@ def _optimizer(model, config: dict[str, Any]):
 
 def run_experiment(config: dict[str, Any], output_dir: str | Path | None = None,
                    resume: str | Path | None = None) -> Path:
+    """Run one configured experiment and return its artifact directory."""
     seed = int(config.get("seed", 1))
     seed_everything(seed)
     device = resolve_device(config["trainer"].get("device", "auto"))
@@ -87,6 +95,8 @@ def run_experiment(config: dict[str, Any], output_dir: str | Path | None = None,
     environment = _environment(seed, device)
     (run_dir / "environment.json").write_text(json.dumps(environment, indent=2), encoding="utf-8")
 
+    # Build train/validation/test sets once so every algorithm is compared on
+    # identical sample identities and splits.
     data_cfg = config["data"]
     dataset_name = data_cfg.get("name", "cifar10")
     loader_fn = load_cifar10 if dataset_name == "cifar10" else load_cifar100
@@ -116,6 +126,7 @@ def run_experiment(config: dict[str, Any], output_dir: str | Path | None = None,
     algorithm.on_run_start(state)
     metrics_path = run_dir / "metrics.jsonl"
     epochs = int(config["trainer"]["epochs"])
+    # JSON Lines is append-only, human-readable, and survives interrupted runs.
     with metrics_path.open("a", encoding="utf-8") as metrics_file:
         for epoch in range(completed_epoch + 1, epochs):
             state.cycle = epoch

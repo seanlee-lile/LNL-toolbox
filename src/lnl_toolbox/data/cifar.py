@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Strict readers for the original CIFAR-10 and CIFAR-100 pickle formats."""
+
 from dataclasses import dataclass
 from pathlib import Path
 import pickle
@@ -10,6 +12,7 @@ import numpy as np
 
 @dataclass(frozen=True, slots=True)
 class CifarData:
+    """In-memory CIFAR split with validated NHWC images and integer labels."""
     images: np.ndarray
     labels: np.ndarray
     class_names: tuple[str, ...]
@@ -65,6 +68,7 @@ def _decode_images(flat: Any, source: Path) -> np.ndarray:
 
 
 def load_cifar10(root: str | Path | None = None, split: str = "train") -> CifarData:
+    """Load an official CIFAR-10 train or test split from extracted files."""
     root = Path(root) if root is not None else default_data_root() / "cifar10"
     if split == "train":
         files = [root / f"data_batch_{index}" for index in range(1, 6)]
@@ -81,6 +85,7 @@ def load_cifar10(root: str | Path | None = None, split: str = "train") -> CifarD
 
 
 def load_cifar100(root: str | Path | None = None, split: str = "train") -> CifarData:
+    """Load an official CIFAR-100 train or test split from extracted files."""
     root = Path(root) if root is not None else default_data_root() / "cifar100"
     if split not in {"train", "test"}:
         raise ValueError("CIFAR-100 split must be 'train' or 'test'")
@@ -93,6 +98,7 @@ def load_cifar100(root: str | Path | None = None, split: str = "train") -> Cifar
 
 
 def summarize_cifar(data: CifarData) -> dict[str, Any]:
+    """Return lightweight integrity and class-balance statistics."""
     counts = np.bincount(data.labels, minlength=len(data.class_names))
     return {
         "dataset": data.dataset,

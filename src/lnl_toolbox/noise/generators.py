@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Reproducible synthetic label-noise generators for controlled benchmarks."""
+
 import numpy as np
 
 from .manifest import NoiseManifest
@@ -21,6 +23,7 @@ def _validate(labels: np.ndarray, num_classes: int, rate: float) -> np.ndarray:
 def generate_symmetric(
     labels: np.ndarray, num_classes: int, rate: float, seed: int, dataset: str = "unknown"
 ) -> NoiseManifest:
+    """Replace a fixed fraction of labels with uniformly chosen wrong classes."""
     labels = _validate(labels, num_classes, rate)
     noisy = labels.copy()
     rng = np.random.default_rng(seed)
@@ -36,6 +39,7 @@ def generate_symmetric(
 def generate_pairflip(
     labels: np.ndarray, num_classes: int, rate: float, seed: int, dataset: str = "unknown"
 ) -> NoiseManifest:
+    """Flip each label to the next class with the requested probability."""
     labels = _validate(labels, num_classes, rate)
     noisy = labels.copy()
     rng = np.random.default_rng(seed)

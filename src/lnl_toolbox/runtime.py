@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Runtime helpers for deterministic seeding and CPU/GPU selection."""
+
 import random
 
 import numpy as np
