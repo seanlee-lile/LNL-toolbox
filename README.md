@@ -30,7 +30,7 @@
 `src/lnl_toolbox/plugins/builtin/` 注册少量参考插件，用来验证扩展点：
 
 - symmetric、pairflip、instance-dependent 噪声示例；
-- CE、GCE loss 示例；
+- 可训练的逐样本 CE、GCE、NCE、MAE、RCE 和 APL；
 - Co-teaching 的交叉选样函数。
 
 这些实现不是运行框架的必选依赖。旧导入路径暂时保留，方便前期实验代码迁移。
@@ -41,6 +41,17 @@
 $env:PYTHONPATH = "src"
 python -m unittest discover -s tests -v
 ```
+
+训练、clean baseline、数据检查和噪声生成命令均支持无参数交互向导。例如：
+
+```powershell
+lnl-train
+lnl-clean-train
+lnl-inspect-data
+lnl-make-noise
+```
+
+只要提供任意命令行参数，程序就继续使用原有的非交互 argparse 模式，适合脚本和批量实验。
 
 可选：生成 LNL 噪声清单（输入为一维 `.npy` 标签数组）：
 

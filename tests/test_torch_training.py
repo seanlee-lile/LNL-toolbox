@@ -11,6 +11,7 @@ from lnl_toolbox.data.cifar import CifarData, default_data_root
 from lnl_toolbox.data.torch_cifar import TorchCifarDataset, stratified_split
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 from lnl_toolbox.models import TinyCNN
+from lnl_toolbox.plugins.builtin import build_builtin_loss
 from lnl_toolbox.runtime import resolve_device
 from lnl_toolbox.training.checkpoint import load_checkpoint, save_checkpoint
 
@@ -50,6 +51,49 @@ class TorchTrainingTest(unittest.TestCase):
                                        "target": torch.tensor([0, 1, 2, 3])}), RunState())
         self.assertTrue(np.isfinite(result.metrics["loss"]))
         self.assertFalse(torch.equal(before, model.classifier.weight))
+
+    def test_each_p0_loss_completes_one_training_step(self):
+        configs = [
+            {"name": "ce"}, {"name": "gce"}, {"name": "nce"},
+            {"name": "mae"}, {"name": "rce"}, {"name": "apl"},
+        ]
+        for config in configs:
+            with self.subTest(name=config["name"]):
+                model = TinyCNN(10, 8)
+                algorithm = SupervisedClassificationAlgorithm(
+                    model,
+                    torch.optim.SGD(model.parameters(), lr=0.01),
+                    build_builtin_loss(config),
+                    torch.device("cpu"),
+                )
+                algorithm.setup(ExperimentContext(Path.cwd()))
+                before = model.classifier.weight.detach().clone()
+                result = algorithm.step(
+                    Batch({
+                        "input": torch.randn(4, 3, 32, 32),
+                        "target": torch.tensor([0, 1, 2, 3]),
+                    }),
+                    RunState(),
+                )
+                self.assertTrue(np.isfinite(result.metrics["loss"]))
+                self.assertFalse(torch.equal(before, model.classifier.weight))
+
+    def test_training_rejects_scalar_loss(self):
+        model = TinyCNN(10, 8)
+        algorithm = SupervisedClassificationAlgorithm(
+            model,
+            torch.optim.SGD(model.parameters(), lr=0.01),
+            torch.nn.CrossEntropyLoss(),
+            torch.device("cpu"),
+        )
+        with self.assertRaises(ValueError):
+            algorithm.step(
+                Batch({
+                    "input": torch.randn(2, 3, 32, 32),
+                    "target": torch.tensor([0, 1]),
+                }),
+                RunState(),
+            )
 
     def test_device_selection(self):
         self.assertEqual(resolve_device("cpu").type, "cpu")

@@ -179,10 +179,11 @@ git push
 
 | 文件 | 功能 | 常用命令 |
 |---|---|---|
-| `cli/__init__.py` | 声明 CLI 包。 | 无需直接运行。 |
-| `cli/inspect_data.py` | 检查 CIFAR 文件、样本数、尺寸和类别分布。 | `python -m lnl_toolbox.cli.inspect_data ...` |
-| `cli/make_noise.py` | 从 `.npy` 标签生成噪声清单。 | 当前支持 symmetric 和 pairflip。 |
-| `cli/train.py` | 读取 YAML，支持覆盖 epochs 和恢复 checkpoint，调用训练主流程。 | `python -m lnl_toolbox.cli.train --config ...` |
+| `cli/__init__.py` | 提供共享交互提示、模板发现和训练配置覆盖，不执行训练数学。 | 由其他 CLI 导入。 |
+| `cli/inspect_data.py` | 交互或参数化地检查 CIFAR 文件、尺寸和类别分布。 | `lnl-inspect-data` |
+| `cli/make_noise.py` | 交互或参数化地从 `.npy` 标签生成噪声清单。 | `lnl-make-noise` |
+| `cli/train.py` | 无参数进入向导；有参数时读取 YAML、覆盖 epochs 并调用通用训练。 | `lnl-train` |
+| `cli/clean_train.py` | Clean baseline 向导及单次、恢复、多 seed 调度。 | `lnl-clean-train` |
 
 ## 17. 单元测试 `tests/`
 
@@ -195,9 +196,10 @@ git push
 | `tests/test_registry.py` | 旧 Registry 的注册和构建。 |
 | `tests/test_cifar_reader.py` | 用临时假 CIFAR pickle 检查 CIFAR-10/100 解码。 |
 | `tests/test_noise.py` | 噪声率、翻转约束、随机种子、manifest 保存加载和 IDN 概率。 |
-| `tests/test_losses.py` | GCE 在 `q` 接近零时逼近 CE。 |
+| `tests/test_losses.py` | P0 loss 公式、极端数值、梯度和参数校验。 |
 | `tests/test_coteaching.py` | 双网络交叉选样和保留率。 |
 | `tests/test_torch_training.py` | PyTorch 数据集、训练 step、设备解析和 checkpoint 恢复。 |
+| `tests/test_cli.py` | 交互重试/取消、配置构造、dispatch 和 argparse 兼容。 |
 
 ## 18. 论文来源目录 `papers/`
 

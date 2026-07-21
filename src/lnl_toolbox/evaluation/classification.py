@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import torch
 
+from lnl_toolbox.losses.torch_losses import validate_per_sample_loss
+
 
 @torch.inference_mode()
 def evaluate_classification(model, loader, loss, device) -> dict[str, float]:
@@ -16,7 +18,8 @@ def evaluate_classification(model, loader, loss, device) -> dict[str, float]:
         targets = batch["target"].to(device, non_blocking=True)
         logits = model(inputs)
         count = int(targets.numel())
-        loss_sum += float(loss(logits, targets).item()) * count
+        per_sample_loss = validate_per_sample_loss(loss(logits, targets), count)
+        loss_sum += float(per_sample_loss.sum().item())
         correct += int((logits.argmax(1) == targets).sum().item())
         samples += count
     return {"loss": loss_sum / samples, "accuracy": correct / samples, "samples": float(samples)}

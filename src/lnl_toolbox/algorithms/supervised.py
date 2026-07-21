@@ -8,6 +8,7 @@ import torch
 from torch import nn
 
 from lnl_toolbox.core import Batch, ExperimentContext, RunState, StepResult
+from lnl_toolbox.losses.torch_losses import validate_per_sample_loss
 
 
 class SupervisedClassificationAlgorithm:
@@ -40,7 +41,10 @@ class SupervisedClassificationAlgorithm:
         targets = batch.payload["target"].to(self.device, non_blocking=True)
         self.optimizer.zero_grad(set_to_none=True)
         logits = self.model(inputs)
-        loss = self.loss(logits, targets)
+        per_sample_loss = validate_per_sample_loss(
+            self.loss(logits, targets), int(targets.numel())
+        )
+        loss = per_sample_loss.mean()
         loss.backward()
         self.optimizer.step()
         count = int(targets.numel())

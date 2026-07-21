@@ -32,7 +32,7 @@
 | `plugins/__init__.py` | 公开 `PluginCatalog` 和 `PluginSpec`。 |
 | `plugins/catalog.py` | 实现按 kind/name 注册、构建及 capability 查询的插件目录。 |
 | `plugins/builtin/__init__.py` | 公开内置示例插件目录构造函数。 |
-| `plugins/builtin/catalog.py` | 将 CE/GCE、三种噪声生成和 Co-teaching selector 注册成可选示例插件。 |
+| `plugins/builtin/catalog.py` | 注册 PyTorch/NumPy loss、噪声生成器和 Co-teaching selector，并按配置构造 P0 loss。 |
 | `registry.py` | 早期的单类型轻量 Registry；暂时保留以兼容已有代码，长期可由 PluginCatalog 取代。 |
 
 ## 4. Runner 与算法接口
@@ -63,7 +63,10 @@
 | `noise/generators.py` | symmetric、pairflip 和基于 class score 的示例 IDN 生成器。 |
 | `noise/__init__.py` | 公开 Noise Manifest 和生成器。 |
 | `losses/numpy_losses.py` | NumPy 版逐样本 CE 与 GCE，用于数学验证，不执行神经网络反向传播。 |
-| `losses/__init__.py` | 公开损失函数。 |
+| `losses/torch_losses.py` | PyTorch 版逐样本 CE、标准 GCE、NCE、MAE、RCE、严格 P0 APL，以及 `[B]` 输出合同校验。 |
+| `losses/__init__.py` | 公开 NumPy 参考函数；安装 PyTorch 时同时公开可训练 loss。 |
+| `losses/loss板块第一轮.md` | Loss 实现简报及 Config、Algorithm、Selector、Evaluator 间的统一调用协议。 |
+| `plugins/builtin/catalog.py` | 将 PyTorch loss 注册为 `loss`、NumPy 参考实现注册为 `numpy_loss`，递归构造并校验 APL，拒绝 GCE 的旧 `eps` 配置。 |
 | `evaluation/metrics.py` | NumPy 版 accuracy 和选样 precision/recall。 |
 | `evaluation/__init__.py` | 公开当前示例指标。 |
 
@@ -71,9 +74,11 @@
 
 | 文件 | 作用 |
 |---|---|
-| `cli/__init__.py` | CLI 包标记。 |
-| `cli/make_noise.py` | 从 `.npy` 标签数组生成 symmetric/pairflip Noise Manifest。 |
-| `cli/inspect_data.py` | 读取并验证本地 CIFAR-10/100，输出样本数、尺寸、类别范围和类别计数。 |
+| `cli/__init__.py` | 共享中文 `PromptSession`、实验模板发现、常用训练参数覆盖和最终确认；不包含训练数学。 |
+| `cli/train.py` | 通用训练入口；无参数进入向导，有参数时保持 argparse/YAML 调用。 |
+| `cli/clean_train.py` | Clean baseline 入口；交互选择模型、scheduler、恢复或多 seed。 |
+| `cli/make_noise.py` | 交互或参数化地从 `.npy` 标签生成 symmetric/pairflip Noise Manifest。 |
+| `cli/inspect_data.py` | 交互或参数化地验证 CIFAR-10/100 并输出划分摘要。 |
 
 ## 8. 配置
 
@@ -81,7 +86,9 @@
 |---|---|
 | `configs/README.md` | 说明 YAML 是 LNL 示例配置，核心只接收 mapping，不依赖 YAML/Hydra。 |
 | `configs/algorithm/ce.yaml` | CE 示例参数。 |
-| `configs/algorithm/gce.yaml` | GCE 示例参数。 |
+| `configs/algorithm/gce.yaml` | 标准 GCE 的 `q` 参数；不包含隐式截断阈值。 |
+| `configs/algorithm/nce.yaml` | NCE 的数值稳定参数。 |
+| `configs/algorithm/apl.yaml` | 严格正权重及 NCE + RCE 嵌套配置。 |
 | `configs/algorithm/coteaching.yaml` | Co-teaching 示例参数。 |
 | `configs/noise/symmetric.yaml` | symmetric noise 示例参数。 |
 | `configs/noise/instance_dependent.yaml` | 示例 IDN 参数。 |
@@ -91,12 +98,13 @@
 | 文件 | 验证内容 |
 |---|---|
 | `tests/test_core.py` | 通用 Runner 生命周期、状态推进和 close 行为。 |
-| `tests/test_plugins.py` | capability 查询及与 LNL 无关的自定义插件。 |
+| `tests/test_plugins.py` | capability 查询、loss 类型隔离、递归 APL 构造，以及 builder/catalog 约束一致性。 |
 | `tests/test_registry.py` | 旧 Registry 注册和构建。 |
 | `tests/test_cifar_reader.py` | 用小型临时 pickle 验证 CIFAR-10/100 解码逻辑。 |
 | `tests/test_noise.py` | 零噪声、翻转约束、seed 可复现、manifest roundtrip、IDN 概率归一化。 |
-| `tests/test_losses.py` | GCE 在 `q→0` 时逼近 CE。 |
+| `tests/test_losses.py` | P0 loss 公式、GCE 极低概率梯度、逐样本 shape、极端数值和 APL 论文约束。 |
 | `tests/test_coteaching.py` | 双网络交叉选样和保留率日程。 |
+| `tests/test_cli.py` | Prompt 重试/取消、GCE/APL 配置、APL 正权重输入和交互/参数模式兼容。 |
 
 ## 10. 调研脚本与文档
 
@@ -109,4 +117,3 @@
 | `docs/architecture.md` | 通用核心、插件、Runner 与 CIFAR 数据流的架构图。 |
 | `docs/file-map.md` | 本文档，解释每个代码文件的职责。 |
 | `papers/README.md` | 论文目录、下载状态和缺失 PDF 说明。 |
-

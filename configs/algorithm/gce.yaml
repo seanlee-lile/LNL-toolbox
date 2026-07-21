@@ -1,4 +1,3 @@
 name: gce
-loss: generalized_cross_entropy
 q: 0.7
 

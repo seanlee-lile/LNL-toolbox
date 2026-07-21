@@ -25,8 +25,8 @@ from lnl_toolbox.core import Batch, ExperimentContext, RunState
 from lnl_toolbox.data.cifar import load_cifar10, load_cifar100
 from lnl_toolbox.data.torch_cifar import TorchCifarDataset, build_cifar_transform, stratified_split
 from lnl_toolbox.evaluation.classification import evaluate_classification
-from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 from lnl_toolbox.models import TinyCNN
+from lnl_toolbox.plugins.builtin import build_builtin_loss
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from .checkpoint import load_checkpoint, save_checkpoint
 
@@ -116,7 +116,7 @@ def run_experiment(config: dict[str, Any], output_dir: str | Path | None = None,
     test_loader = _loader(test_set, loader_cfg, shuffle=False, seed=seed)
 
     model = TinyCNN(num_classes=classes, width=int(config["model"].get("width", 64)))
-    criterion = CrossEntropyLoss()
+    criterion = build_builtin_loss(config.get("loss", {"name": "ce"})).to(device)
     algorithm = SupervisedClassificationAlgorithm(model, _optimizer(model, config["optimizer"]), criterion, device)
     algorithm.setup(ExperimentContext(run_dir, config, seed))
     state = RunState()

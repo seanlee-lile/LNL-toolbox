@@ -21,8 +21,10 @@ from lnl_toolbox.core import RunState
 from lnl_toolbox.data.cifar import load_cifar10, load_cifar100
 from lnl_toolbox.data.torch_cifar import TorchCifarDataset, build_cifar_transform, stratified_split
 from lnl_toolbox.evaluation.classification import evaluate_classification
+from lnl_toolbox.losses.torch_losses import validate_per_sample_loss
 from lnl_toolbox.models.cifar_resnet import cifar_resnet18, preact_resnet18
 from lnl_toolbox.models.tiny_cnn import TinyCNN
+from lnl_toolbox.plugins.builtin import build_builtin_loss
 from lnl_toolbox.runtime import resolve_device, seed_everything
 
 
@@ -175,7 +177,7 @@ def run_clean_experiment(config: dict[str, Any], output_dir: str | Path | None =
     test_loader = _make_loader(test_set, loader_config, False, seed)
 
     model = build_clean_model(config["model"], num_classes).to(device)
-    criterion = nn.CrossEntropyLoss().to(device)
+    criterion = build_builtin_loss(config.get("loss", {"name": "ce"})).to(device)
     optimizer = build_clean_optimizer(model, config["optimizer"])
     scheduler = build_clean_scheduler(optimizer, config.get("scheduler"), epochs)
     state = RunState(phase="train")
@@ -201,13 +203,14 @@ def run_clean_experiment(config: dict[str, Any], output_dir: str | Path | None =
             for batch in train_loader:
                 inputs = batch["input"].to(device, non_blocking=True)
                 targets = batch["target"].to(device, non_blocking=True)
+                count = int(targets.numel())
                 optimizer.zero_grad(set_to_none=True)
                 logits = model(inputs)
-                loss = criterion(logits, targets)
+                per_sample_loss = validate_per_sample_loss(criterion(logits, targets), count)
+                loss = per_sample_loss.mean()
                 loss.backward()
                 optimizer.step()
-                count = int(targets.numel())
-                loss_sum += float(loss.detach().item()) * count
+                loss_sum += float(per_sample_loss.detach().sum().item())
                 correct += int((logits.argmax(1) == targets).sum().item())
                 samples += count
                 state.step += 1

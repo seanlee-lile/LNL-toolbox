@@ -33,7 +33,7 @@ Use `cifar10_clean_baseline.yaml` for formal clean-label runs. Resume with `--re
 
 Follow standard Python style: four-space indentation, `snake_case` functions/modules, `PascalCase` classes, and descriptive type hints on public interfaces. Prefer small dataclasses and protocols over framework-wide inheritance. Keep `core/` independent of PyTorch and LNL-specific assumptions. Use docstrings where lifecycle behavior, state ownership, or tensor shapes are not obvious. No formatter or linter is currently enforced; match surrounding code and keep imports grouped.
 
-Do not add new files unless necessary; prefer extending an existing, appropriately scoped module or document.
+Maintain documentation of relationships within and between modules. Before adding or modifying content, review the current relationships; after the change, update the relationship documentation accordingly.
 
 ## Testing Guidelines
 

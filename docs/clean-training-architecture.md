@@ -2,7 +2,9 @@
 
 ```mermaid
 flowchart LR
-    C["YAML 配置"] --> E["clean_train 入口"]
+    I["无参数中文向导"] --> C["内存 resolved config"]
+    Y["YAML + argparse"] --> C
+    C --> E["clean_train 入口"]
     D["CIFAR-10 / CIFAR-100"] --> S["固定 seed 分层划分"]
     S --> L["Dataset / DataLoader"]
     E --> L

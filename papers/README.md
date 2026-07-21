@@ -1,6 +1,7 @@
 # 论文文件说明
 
 - [论文阅读与实现标准](reading-standard.md)：统一的阅读成熟度、笔记模板和实现前验收清单。
+- [26 篇论文中的 Loss 内容与关系](loss-content-audit.md)：按原文关键词、公式与算法框核查 loss 的实际角色和依赖关系。
 
 - `01_instance_dependent/`：3 篇实例依赖噪声论文；
 - `02_sample_selection/`：样本选择与 curriculum；

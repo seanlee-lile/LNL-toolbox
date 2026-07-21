@@ -349,9 +349,9 @@ GCE 用 (ho) 在 CE 的学习能力和 MAE 的鲁棒性之间折中：
 ### 代码
 
 ```python
-p = F.softmax(logits, dim=1)
-p_y = p.gather(1, targets[:, None]).squeeze(1)
-per_sample_loss = (1.0 - p_y.pow(rho)) / rho
+log_p_y = F.log_softmax(logits, dim=1).gather(1, targets[:, None]).squeeze(1)
+per_sample_loss = -torch.expm1(rho * log_p_y) / rho
+# Standard GCE has no probability clamp; an explicit threshold defines Truncated GCE.
 ```
 
 实际实现应保证 (ho>0)，并对概率进行数值保护。

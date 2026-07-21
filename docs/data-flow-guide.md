@@ -40,7 +40,7 @@
 ```mermaid
 flowchart TD
     A["configs/experiment/cifar10_smoke.yaml<br/>数据、模型、优化器、epoch 配置"]
-    B["src/lnl_toolbox/cli/train.py<br/>读取 YAML 和命令行参数"]
+    B["src/lnl_toolbox/cli/<br/>交互向导或 argparse"]
     C["training/experiment.py::run_experiment<br/>当前闭环的总调度器"]
     D["runtime.py<br/>固定 seed，选择 auto/cpu/cuda"]
     E["data/cifar.py<br/>解码 CIFAR pickle"]
@@ -57,10 +57,10 @@ flowchart TD
 ### 2.1 配置如何进入程序
 
 1. `configs/experiment/cifar10_smoke.yaml` 或 `cifar10_clean.yaml` 保存实验参数。
-2. `src/lnl_toolbox/cli/train.py` 使用 PyYAML 读取文件，得到 Python `dict`。
+2. `src/lnl_toolbox/cli/` 在无参数时通过 `PromptSession` 选择模板并覆盖内存配置；有参数时继续由 argparse + PyYAML 得到 Python `dict`。
 3. `train.py` 将这个字典、`--output-dir` 和 `--resume` 交给 `training/experiment.py::run_experiment()`。
 
-注意：当前配置虽然写有 `model.name: tiny_cnn`，但 `experiment.py` 还没有通过 registry 根据名字动态构造模型。它目前直接写死了 `TinyCNN`、`CrossEntropyLoss` 和 `SupervisedClassificationAlgorithm`。
+注意：当前 `experiment.py` 仍直接构造 `TinyCNN` 和 `SupervisedClassificationAlgorithm`；loss 已改为把顶层 `loss` mapping 交给 `PluginCatalog` 构造。
 
 ### 2.2 原始 CIFAR 如何变成 Dataset
 
@@ -92,7 +92,7 @@ flowchart LR
     C["algorithms/supervised.py::step"]
     D["input/target 搬到 GPU"]
     E["models/tiny_cnn.py<br/>input -> logits"]
-    F["losses/torch_losses.py<br/>logits + target -> CE loss"]
+    F["losses/torch_losses.py<br/>logits + target -> configured loss [B]"]
     G["zero_grad -> backward -> optimizer.step"]
     H["core/result.py::StepResult<br/>loss, accuracy, samples"]
     I["training/experiment.py<br/>按样本数汇总 epoch 指标"]
@@ -112,8 +112,8 @@ flowchart LR
 3. `algorithms/supervised.py::SupervisedClassificationAlgorithm.step()` 从 `batch.payload` 取出 `input` 和 `target`。
 4. `input` 和 `target` 被移动到 `runtime.py` 选择的设备。
 5. `models/tiny_cnn.py::TinyCNN` 把图片变成 `[B, classes]` 的 logits。
-6. `losses/torch_losses.py::CrossEntropyLoss` 用 logits 和 target 计算一个标量 CE loss。
-7. 算法执行清梯度、反向传播和参数更新。
+6. 配置选中的 PyTorch loss 用 logits 和 target 计算 `[B]` 逐样本 loss。
+7. 算法校验 shape、求均值，再执行清梯度、反向传播和参数更新。
 8. 算法返回 `core/result.py::StepResult`，其中包含 batch loss、batch accuracy 和样本数。
 9. `training/experiment.py` 对所有 batch 做加权汇总，得到一个 epoch 的训练指标。
 
@@ -209,8 +209,8 @@ last.pt
 | `losses/numpy_losses.py` | NumPy CE/GCE 数学示例 | 不能直接参与 PyTorch 反向传播 |
 | `algorithms/coteaching.py` | NumPy small-loss 交叉选样 | 还没有双网络训练 Algorithm |
 | `evaluation/metrics.py` | selection precision/recall | 当前训练 evaluator 没有调用 |
-| `plugins/catalog.py` | 按 kind/name 注册和构造插件 | 当前训练入口仍直接写死组件 |
-| `plugins/builtin/catalog.py` | 注册上述 NumPy 示例 | 尚未负责构造可训练的 PyTorch 组件 |
+| `plugins/catalog.py` | 按 kind/name 注册和构造插件 | 当前仅 loss 进入生产训练构造链 |
+| `plugins/builtin/catalog.py` | 注册 NumPy 参考与 PyTorch loss | 模型和算法仍未统一走 catalog |
 
 因此，当前闭环准确地说是“可恢复的干净标签监督分类闭环”，而不是完整的 LNL 闭环。
 
@@ -305,7 +305,14 @@ flowchart LR
     F --> G["StepResult"]
 ```
 
-这类算法可以继续复用 `SupervisedClassificationAlgorithm`，只需要新增可反向传播的 PyTorch loss，并让算法支持逐样本 loss 后再统一聚合。
+这类算法复用 `SupervisedClassificationAlgorithm`。当前生产路径已经统一为：
+
+1. 实验 YAML 的顶层 `loss` mapping 交给 `plugins/builtin/catalog.py`；
+2. `PluginCatalog` 按 `kind="loss"` 构造 PyTorch loss；
+3. loss 只负责输出严格的 `[B]` 逐样本张量；
+4. `SupervisedClassificationAlgorithm` 校验合同并执行 `mean`，evaluator 则按样本求和后除以样本总数。
+
+当前可训练组件为 CE、GCE、NCE、MAE、RCE 和 APL。标准 GCE 直接计算论文的 `(1-p_y^q)/q`，不做隐式概率截断。APL 要求 `alpha`、`beta` 严格为正，P0 active 仅为 NCE、passive 仅为 MAE 或 RCE；这些约束在 loss 类、catalog 直接构造和 YAML builder 三条路径上一致。NumPy CE/GCE 仅作为 `kind="numpy_loss"` 的公式参考，不进入反向传播路径。
 
 ### 9.2 选样或重加权算法
 
@@ -371,8 +378,7 @@ src/lnl_toolbox/
     preact_resnet.py                # 建议新增：正式 CIFAR baseline
 
   losses/
-    torch_losses.py                 # 已有：PyTorch CE
-    gce.py                          # 建议新增：PyTorch 逐样本 GCE
+    torch_losses.py                 # 已有：CE/GCE/NCE/MAE/RCE/APL
 
   algorithms/
     supervised.py                   # 已有：单模型监督训练
@@ -388,7 +394,7 @@ src/lnl_toolbox/
 
   plugins/
     catalog.py                      # 已有：注册和构造机制
-    builtin/catalog.py              # 扩展：注册可训练的 PyTorch 组件
+    builtin/catalog.py              # 已有：注册并构造可训练的 PyTorch loss
 
   training/
     builders.py                     # 建议新增：根据 YAML 和 registry 组装组件
@@ -430,7 +436,8 @@ src/lnl_toolbox/
 一句话概括当前与理想状态：
 
 ```text
-当前：YAML -> 固定 CIFAR/TinyCNN/CE -> 训练 -> 评估 -> checkpoint
+当前：YAML -> registry 构造 CE/GCE/NCE/MAE/RCE/APL
+     -> per-sample loss [B] -> Algorithm 聚合 -> 评估 -> checkpoint
 
 理想：YAML -> registry 组装数据/噪声/模型/loss/算法
      -> Algorithm 使用 global index 管理逐样本状态
