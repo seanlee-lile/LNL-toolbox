@@ -19,11 +19,18 @@ import yaml
 
 from lnl_toolbox.core import RunState
 from lnl_toolbox.data.cifar import load_cifar10, load_cifar100
+from lnl_toolbox.data.noisy_dataset import NoisyTargetDataset
 from lnl_toolbox.data.torch_cifar import TorchCifarDataset, build_cifar_transform, stratified_split
 from lnl_toolbox.evaluation.classification import evaluate_classification
 from lnl_toolbox.models.cifar_resnet import cifar_resnet18, preact_resnet18
 from lnl_toolbox.models.tiny_cnn import TinyCNN
 from lnl_toolbox.runtime import resolve_device, seed_everything
+from lnl_toolbox.training.noisy_labels import (
+    checkpoint_noise_metadata,
+    effective_subset_actual_rate,
+    prepare_noise_manifest,
+    validate_ce_algorithm,
+)
 
 
 def build_clean_model(config: dict[str, Any], num_classes: int) -> nn.Module:
@@ -94,13 +101,17 @@ def _atomic_save(payload: dict[str, Any], path: Path) -> None:
 
 
 def _checkpoint(model, optimizer, scheduler, state: RunState, completed_epoch: int,
-                best_epoch: int, best_accuracy: float, config: dict[str, Any]) -> dict[str, Any]:
-    return {
+                best_epoch: int, best_accuracy: float, config: dict[str, Any],
+                noise: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = {
         "format_version": 1, "model": model.state_dict(), "optimizer": optimizer.state_dict(),
         "scheduler": None if scheduler is None else scheduler.state_dict(),
         "run_state": asdict(state), "completed_epoch": completed_epoch,
         "best_epoch": best_epoch, "best_validation_accuracy": best_accuracy, "config": config,
     }
+    if noise is not None:
+        payload["noise"] = noise
+    return payload
 
 
 def _load_checkpoint(path: Path, model, optimizer, scheduler, device):
@@ -128,6 +139,7 @@ def _environment(seed: int, device: torch.device) -> dict[str, Any]:
 def run_clean_experiment(config: dict[str, Any], output_dir: str | Path | None = None,
                          resume: str | Path | None = None) -> Path:
     config = deepcopy(config)
+    validate_ce_algorithm(config)
     seed = int(config.get("seed", 1))
     epochs = int(config["trainer"]["epochs"])
     seed_everything(seed)
@@ -153,20 +165,40 @@ def run_clean_experiment(config: dict[str, Any], output_dir: str | Path | None =
     num_classes = 10 if dataset_name == "cifar10" else 100
     train_data = loader_fn(data_config.get("root"), "train")
     test_data = loader_fn(data_config.get("root"), "test")
-    train_indices, validation_indices = stratified_split(
+    full_train_indices, validation_indices = stratified_split(
         train_data.labels, int(data_config["validation_size"]), seed
     )
-    train_indices = _subset(train_indices, train_data.labels, data_config.get("max_train_samples"), seed + 1)
+    checkpoint_payload = None
+    if resume is not None:
+        checkpoint_payload = torch.load(Path(resume), map_location="cpu", weights_only=False)
+    manifest, manifest_path = prepare_noise_manifest(
+        config,
+        dataset=dataset_name,
+        clean_targets=train_data.labels[full_train_indices],
+        global_indices=full_train_indices,
+        num_classes=num_classes,
+        run_dir=run_dir,
+        checkpoint_payload=checkpoint_payload,
+    )
+    train_indices = _subset(
+        full_train_indices, train_data.labels, data_config.get("max_train_samples"), seed + 1
+    )
     validation_indices = _subset(
         validation_indices, train_data.labels, data_config.get("max_validation_samples"), seed + 2
     )
     test_indices = _subset(
         np.arange(len(test_data)), test_data.labels, data_config.get("max_test_samples"), seed + 3
     )
-    train_set = TorchCifarDataset(
+    clean_train_set = TorchCifarDataset(
         train_data, train_indices,
         transform=build_cifar_transform(True, bool(data_config.get("augment", True)))
     )
+    train_set = clean_train_set
+    noise_metadata = None
+    if manifest is not None:
+        train_set = NoisyTargetDataset(clean_train_set, manifest.global_indices, manifest.noisy_targets)
+        effective_rate = effective_subset_actual_rate(manifest, train_indices)
+        noise_metadata = checkpoint_noise_metadata(manifest, manifest_path, run_dir, effective_rate)
     validation_set = TorchCifarDataset(train_data, validation_indices, transform=build_cifar_transform(False))
     test_set = TorchCifarDataset(test_data, test_indices, transform=build_cifar_transform(False))
     loader_config = config["loader"]
@@ -224,7 +256,9 @@ def run_clean_experiment(config: dict[str, Any], output_dir: str | Path | None =
             if improved:
                 best_accuracy = validation["accuracy"]
                 best_epoch = epoch
-            payload = _checkpoint(model, optimizer, scheduler, state, epoch, best_epoch, best_accuracy, config)
+            payload = _checkpoint(
+                model, optimizer, scheduler, state, epoch, best_epoch, best_accuracy, config, noise_metadata
+            )
             _atomic_save(payload, run_dir / "last.pt")
             if improved:
                 _atomic_save(payload, run_dir / "best.pt")
@@ -242,6 +276,8 @@ def run_clean_experiment(config: dict[str, Any], output_dir: str | Path | None =
             "best_epoch": best_epoch + 1, "best_validation_accuracy": best_accuracy,
             "test_checkpoint": "best.pt", "test_loss": test["loss"], "test_accuracy": test["accuracy"],
         }
+        if noise_metadata is not None:
+            final["noise"] = noise_metadata
         if device.type == "cuda":
             final["max_cuda_memory_mb"] = torch.cuda.max_memory_allocated(device) / (1024 ** 2)
         metrics_file.write(json.dumps(final) + "\n")
