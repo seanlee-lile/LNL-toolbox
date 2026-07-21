@@ -30,6 +30,37 @@ class TorchTrainingTest(unittest.TestCase):
         self.assertEqual(sample["target"], 0)
         self.assertEqual(sample["index"], 2)
 
+    def test_dataset_injects_noisy_target_by_global_index_without_clean_label_leak(self):
+        data = CifarData(
+            np.zeros((3, 32, 32, 3), dtype=np.uint8),
+            np.array([2, 1, 0]),
+            ("a", "b", "c"),
+            "train",
+            "fixture",
+        )
+        noisy_targets = np.array([1, 2, 2])
+        clean_sample = TorchCifarDataset(data, [2])[0]
+        sample = TorchCifarDataset(data, [2], targets=noisy_targets)[0]
+        self.assertEqual(set(sample), {"input", "target", "index"})
+        self.assertTrue(torch.equal(sample["input"], clean_sample["input"]))
+        self.assertEqual(clean_sample["target"], 0)
+        self.assertEqual(sample["target"], 2)
+        self.assertEqual(sample["index"], clean_sample["index"])
+        self.assertEqual(sample["index"], 2)
+
+    def test_dataset_rejects_misaligned_noisy_targets(self):
+        data = CifarData(
+            np.zeros((3, 32, 32, 3), dtype=np.uint8),
+            np.array([2, 1, 0]),
+            ("a", "b", "c"),
+            "train",
+            "fixture",
+        )
+        with self.assertRaisesRegex(ValueError, "every global dataset index"):
+            TorchCifarDataset(data, targets=[1, 2])
+        with self.assertRaisesRegex(ValueError, "class range"):
+            TorchCifarDataset(data, targets=[1, 2, 3])
+
     def test_stratified_split_is_reproducible(self):
         labels = np.repeat(np.arange(10), 100)
         first = stratified_split(labels, 100, 9)

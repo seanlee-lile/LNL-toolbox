@@ -60,6 +60,8 @@ $env:PYTHONPATH = "src"
 python -m lnl_toolbox.cli.make_noise labels.npy artifacts/noise/demo.npz --kind symmetric --rate 0.4 --classes 10 --seed 1
 ```
 
+要使用固定噪声训练，在实验 YAML 中加入 `noise.manifest`，再运行 `lnl-train --config <yaml>`。程序会先校验数据 fingerprint、标签范围和转移概率；train 使用 noisy target，validation/test 继续使用干净标签。`lnl-clean-train` 会拒绝噪声配置。
+
 论文原文位于 `papers/`，逐篇中文摘要、代码状态和伪代码见 `docs/paper-summaries.md`；详细架构取舍见 `toolbox-architecture.md`。
 
 ## 结构参考

@@ -51,6 +51,7 @@
 |---|---|
 | `data/contracts.py` | 早期 LNL 分类样本结构，包含 image、target、index 和可选干净标签；属于具体任务协议。 |
 | `data/cifar.py` | 读取 CIFAR-10/100 官方 pickle，转换为 `[N,32,32,3]` uint8 图像并验证标签。 |
+| `data/torch_cifar.py` | 提供分层划分、图像变换和 PyTorch Dataset；可用全量 `targets[N]` 按稳定 global index 覆盖训练标签，batch 仍只返回 `input/target/index`。 |
 | `data/__init__.py` | 公开 CIFAR 读取函数和数据类型。 |
 | `data/cifar-10-batches-py/` | 用户放入的 CIFAR-10 官方 Python 数据。 |
 | `data/cifar-100-python/` | 用户放入的 CIFAR-100 官方 Python 数据。 |
@@ -59,9 +60,10 @@
 
 | 文件 | 作用 |
 |---|---|
-| `noise/manifest.py` | `NoiseManifest` 的数据结构、标签 fingerprint、NPZ 保存与加载。 |
+| `noise/manifest.py` | `NoiseManifest` 的数据结构、标签 fingerprint、NPZ 保存/加载，以及数据集、长度、标签范围和概率的训练前校验。 |
 | `noise/generators.py` | symmetric、pairflip 和基于 class score 的示例 IDN 生成器。 |
-| `noise/__init__.py` | 公开 Noise Manifest 和生成器。 |
+| `noise/transition.py` | 验证 `T[i,j]=P(noisy=j|clean=i)` 行随机矩阵，并通过 `KnownTransition` 提供只读 Tensor 接口。 |
+| `noise/__init__.py` | 公开 Noise Manifest、生成器和转移矩阵协议。 |
 | `losses/numpy_losses.py` | NumPy 版逐样本 CE 与 GCE，用于数学验证，不执行神经网络反向传播。 |
 | `losses/torch_losses.py` | PyTorch 版逐样本 CE、标准 GCE、NCE、MAE、RCE、严格 P0 APL，以及 `[B]` 输出合同校验。 |
 | `losses/__init__.py` | 公开 NumPy 参考函数；安装 PyTorch 时同时公开可训练 loss。 |
@@ -92,6 +94,7 @@
 | `configs/algorithm/coteaching.yaml` | Co-teaching 示例参数。 |
 | `configs/noise/symmetric.yaml` | symmetric noise 示例参数。 |
 | `configs/noise/instance_dependent.yaml` | 示例 IDN 参数。 |
+| 实验 YAML 顶层 `noise.manifest` | 可选的已有 Noise Manifest 路径；省略时使用干净标签。 |
 
 ## 9. 测试
 
@@ -101,7 +104,7 @@
 | `tests/test_plugins.py` | capability 查询、loss 类型隔离、递归 APL 构造，以及 builder/catalog 约束一致性。 |
 | `tests/test_registry.py` | 旧 Registry 注册和构建。 |
 | `tests/test_cifar_reader.py` | 用小型临时 pickle 验证 CIFAR-10/100 解码逻辑。 |
-| `tests/test_noise.py` | 零噪声、翻转约束、seed 可复现、manifest roundtrip、IDN 概率归一化。 |
+| `tests/test_noise.py` | 噪声生成、manifest roundtrip/身份校验、非法标签与概率拒绝、KnownTransition 和恢复训练 manifest 身份约束。 |
 | `tests/test_losses.py` | P0 loss 公式、GCE 极低概率梯度、逐样本 shape、极端数值和 APL 论文约束。 |
 | `tests/test_coteaching.py` | 双网络交叉选样和保留率日程。 |
 | `tests/test_cli.py` | Prompt 重试/取消、GCE/APL 配置、APL 正权重输入和交互/参数模式兼容。 |

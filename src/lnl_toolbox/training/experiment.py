@@ -7,13 +7,14 @@ individual algorithms so future LNL methods can share the same data splits,
 logging, checkpointing, and evaluation rules.
 """
 
-from dataclasses import asdict
+from copy import deepcopy
 from datetime import datetime
+import hashlib
 import json
 import platform
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 import torch
@@ -26,9 +27,79 @@ from lnl_toolbox.data.cifar import load_cifar10, load_cifar100
 from lnl_toolbox.data.torch_cifar import TorchCifarDataset, build_cifar_transform, stratified_split
 from lnl_toolbox.evaluation.classification import evaluate_classification
 from lnl_toolbox.models import TinyCNN
+from lnl_toolbox.noise import NoiseManifest
 from lnl_toolbox.plugins.builtin import build_builtin_loss
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from .checkpoint import load_checkpoint, save_checkpoint
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _load_noise_manifest(
+    noise_config: Mapping[str, Any] | None,
+    clean_targets: np.ndarray,
+    dataset_name: str,
+    num_classes: int,
+) -> tuple[NoiseManifest | None, dict[str, Any] | None, dict[str, Any] | None]:
+    """Load, validate, and describe the immutable noisy-label input."""
+
+    if not noise_config:
+        return None, None, None
+    if not isinstance(noise_config, Mapping):
+        raise TypeError("noise configuration must be a mapping")
+    manifest_value = noise_config.get("manifest")
+    if not manifest_value:
+        raise ValueError("noise.manifest is required when noise is configured")
+    manifest_path = Path(str(manifest_value)).expanduser().resolve()
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"Noise manifest does not exist: {manifest_path}")
+
+    manifest = NoiseManifest.load(manifest_path)
+    manifest.validate_for(clean_targets, dataset_name, num_classes)
+    manifest_sha256 = _file_sha256(manifest_path)
+    expected_sha256 = noise_config.get("manifest_sha256")
+    if expected_sha256 and str(expected_sha256).lower() != manifest_sha256:
+        raise ValueError("Noise manifest SHA-256 does not match the resolved configuration")
+
+    summary = {
+        "manifest": str(manifest_path),
+        "manifest_sha256": manifest_sha256,
+        "dataset": manifest.dataset,
+        "dataset_fingerprint": manifest.dataset_fingerprint,
+        "noise_type": manifest.noise_type,
+        "seed": manifest.seed,
+        "requested_rate": manifest.requested_rate,
+        "realized_rate": manifest.realized_rate,
+        "has_transition_matrix": manifest.transition_matrix is not None,
+        "uses_known_transition": False,
+        "has_per_sample_transition": manifest.per_sample_transition is not None,
+    }
+    resolved = dict(noise_config)
+    resolved.update(summary)
+    return manifest, resolved, summary
+
+
+def _noise_identity(config: Mapping[str, Any]) -> str | None:
+    noise = config.get("noise")
+    if not noise:
+        return None
+    if not isinstance(noise, Mapping):
+        raise TypeError("noise configuration must be a mapping")
+    identity = noise.get("manifest_sha256")
+    return None if identity is None else str(identity).lower()
+
+
+def _validate_resume_noise(
+    current_config: Mapping[str, Any], saved_config: Mapping[str, Any]
+) -> None:
+    if _noise_identity(current_config) != _noise_identity(saved_config):
+        raise ValueError("Resume checkpoint was created with a different noise manifest")
 
 
 def _subset(indices: np.ndarray, labels: np.ndarray, size: int | None, seed: int) -> np.ndarray:
@@ -77,6 +148,7 @@ def _optimizer(model, config: dict[str, Any]):
 def run_experiment(config: dict[str, Any], output_dir: str | Path | None = None,
                    resume: str | Path | None = None) -> Path:
     """Run one configured experiment and return its artifact directory."""
+    config = deepcopy(config)
     seed = int(config.get("seed", 1))
     seed_everything(seed)
     device = resolve_device(config["trainer"].get("device", "auto"))
@@ -91,23 +163,34 @@ def run_experiment(config: dict[str, Any], output_dir: str | Path | None = None,
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         run_dir = Path(config.get("output_root", "artifacts/runs")) / stamp
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
-    environment = _environment(seed, device)
-    (run_dir / "environment.json").write_text(json.dumps(environment, indent=2), encoding="utf-8")
 
     # Build train/validation/test sets once so every algorithm is compared on
     # identical sample identities and splits.
     data_cfg = config["data"]
-    dataset_name = data_cfg.get("name", "cifar10")
+    dataset_name = str(data_cfg.get("name", "cifar10")).lower()
+    if dataset_name not in {"cifar10", "cifar100"}:
+        raise ValueError(f"Unsupported dataset: {dataset_name}")
     loader_fn = load_cifar10 if dataset_name == "cifar10" else load_cifar100
     classes = 10 if dataset_name == "cifar10" else 100
     raw_train = loader_fn(data_cfg.get("root"), "train")
     raw_test = loader_fn(data_cfg.get("root"), "test")
+    manifest, resolved_noise, noise_summary = _load_noise_manifest(
+        config.get("noise"), raw_train.labels, dataset_name, classes
+    )
+    if resolved_noise is None:
+        config.pop("noise", None)
+    else:
+        config["noise"] = resolved_noise
     train_indices, val_indices = stratified_split(raw_train.labels, int(data_cfg["validation_size"]), seed)
     train_indices = _subset(train_indices, raw_train.labels, data_cfg.get("max_train_samples"), seed + 1)
     val_indices = _subset(val_indices, raw_train.labels, data_cfg.get("max_validation_samples"), seed + 2)
     test_indices = _subset(np.arange(len(raw_test)), raw_test.labels, data_cfg.get("max_test_samples"), seed + 3)
-    train_set = TorchCifarDataset(raw_train, train_indices, transform=build_cifar_transform(True, data_cfg.get("augment", True)))
+    train_set = TorchCifarDataset(
+        raw_train,
+        train_indices,
+        targets=None if manifest is None else manifest.noisy_targets,
+        transform=build_cifar_transform(True, data_cfg.get("augment", True)),
+    )
     val_set = TorchCifarDataset(raw_train, val_indices, transform=build_cifar_transform(False))
     test_set = TorchCifarDataset(raw_test, test_indices, transform=build_cifar_transform(False))
     loader_cfg = config["loader"]
@@ -122,7 +205,17 @@ def run_experiment(config: dict[str, Any], output_dir: str | Path | None = None,
     state = RunState()
     completed_epoch = -1
     if resume:
-        state, completed_epoch, _ = load_checkpoint(resume, algorithm, device)
+        state, completed_epoch, payload = load_checkpoint(resume, algorithm, device)
+        _validate_resume_noise(config, payload.get("config", {}))
+    (run_dir / "resolved_config.yaml").write_text(
+        yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
+    )
+    environment = _environment(seed, device)
+    (run_dir / "environment.json").write_text(json.dumps(environment, indent=2), encoding="utf-8")
+    if noise_summary is not None:
+        (run_dir / "noise_summary.json").write_text(
+            json.dumps(noise_summary, indent=2), encoding="utf-8"
+        )
     algorithm.on_run_start(state)
     metrics_path = run_dir / "metrics.jsonl"
     epochs = int(config["trainer"]["epochs"])

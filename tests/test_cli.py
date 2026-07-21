@@ -76,13 +76,14 @@ class PromptSessionTest(unittest.TestCase):
                 "trainer": {"epochs": 2, "device": "cpu"},
             }
             session, _ = scripted_session([
-                "", "", "", "gce", "0.5", "", "", "", "", "", "", "", "", "", "y",
+                "", "", "", "", "gce", "0.5", "", "", "", "", "", "", "", "", "", "y",
             ])
             with patch.object(cli_shared, "_choose_template", return_value=(root / "base.yaml", template)):
                 selection = cli_shared.prompt_training_selection(session, clean=False)
             self.assertIsNotNone(selection)
             assert selection is not None
             self.assertEqual(selection.config["loss"], {"name": "gce", "q": 0.5})
+            self.assertNotIn("noise", selection.config)
             self.assertEqual(template["loss"], {"name": "ce"})
 
 

@@ -392,6 +392,28 @@ def prompt_training_selection(session: PromptSession, *, clean: bool) -> Trainin
     assert root is not None
     data["root"] = str(root)
 
+    if not clean:
+        current_noise = config.get("noise")
+        use_noise = session.confirm(
+            "使用已有 Noise Manifest",
+            default=isinstance(current_noise, Mapping) and bool(current_noise.get("manifest")),
+        )
+        if use_noise:
+            default_manifest = None
+            if isinstance(current_noise, Mapping) and current_noise.get("manifest"):
+                default_manifest = Path(str(current_noise["manifest"]))
+            manifest_path = session.path(
+                "Noise Manifest 文件",
+                default=default_manifest,
+                required=True,
+                must_exist=True,
+                file_only=True,
+            )
+            assert manifest_path is not None
+            config["noise"] = {"manifest": str(manifest_path)}
+        else:
+            config.pop("noise", None)
+
     model = config.setdefault("model", {})
     if clean:
         model_name = session.choose(

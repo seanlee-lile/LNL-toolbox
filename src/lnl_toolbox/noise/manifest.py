@@ -8,6 +8,8 @@ from typing import Any
 
 import numpy as np
 
+from .transition import validate_transition_matrix
+
 
 def fingerprint_labels(labels: np.ndarray) -> str:
     values = np.asarray(labels, dtype=np.int64)
@@ -15,6 +17,25 @@ def fingerprint_labels(labels: np.ndarray) -> str:
     digest.update(str(values.shape).encode())
     digest.update(values.tobytes(order="C"))
     return digest.hexdigest()
+
+
+def _canonical_dataset_name(value: str) -> str:
+    return "".join(character for character in value.strip().lower() if character.isalnum())
+
+
+def _validate_per_sample_transition(values: np.ndarray, samples: int) -> np.ndarray:
+    probabilities = np.asarray(values, dtype=np.float64)
+    if probabilities.ndim != 2 or probabilities.shape[0] != samples:
+        raise ValueError(f"per_sample_transition must have shape [{samples}, C]")
+    if probabilities.shape[1] < 2:
+        raise ValueError("per_sample_transition must contain at least two classes")
+    if not np.isfinite(probabilities).all():
+        raise ValueError("per_sample_transition must contain only finite values")
+    if (probabilities < 0.0).any():
+        raise ValueError("per_sample_transition must be non-negative")
+    if not np.allclose(probabilities.sum(axis=1), 1.0, rtol=1e-6, atol=1e-8):
+        raise ValueError("every per_sample_transition row must sum to one")
+    return probabilities.copy()
 
 
 @dataclass(slots=True)
@@ -34,12 +55,67 @@ class NoiseManifest:
     def __post_init__(self) -> None:
         self.clean_targets = np.asarray(self.clean_targets, dtype=np.int64)
         self.noisy_targets = np.asarray(self.noisy_targets, dtype=np.int64)
+        if self.clean_targets.ndim != 1 or self.noisy_targets.ndim != 1:
+            raise ValueError("clean_targets and noisy_targets must be one-dimensional")
         if self.clean_targets.shape != self.noisy_targets.shape:
             raise ValueError("clean_targets and noisy_targets must have the same shape")
+        if self.clean_targets.size and (
+            self.clean_targets.min() < 0 or self.noisy_targets.min() < 0
+        ):
+            raise ValueError("clean_targets and noisy_targets must be non-negative")
         if not 0.0 <= self.requested_rate <= 1.0:
             raise ValueError("requested_rate must be in [0, 1]")
-        if not self.dataset_fingerprint:
-            self.dataset_fingerprint = fingerprint_labels(self.clean_targets)
+        expected_fingerprint = fingerprint_labels(self.clean_targets)
+        if self.dataset_fingerprint and self.dataset_fingerprint != expected_fingerprint:
+            raise ValueError("dataset_fingerprint does not match clean_targets")
+        self.dataset_fingerprint = expected_fingerprint
+        if self.transition_matrix is not None:
+            self.transition_matrix = validate_transition_matrix(self.transition_matrix)
+        if self.per_sample_transition is not None:
+            self.per_sample_transition = _validate_per_sample_transition(
+                self.per_sample_transition, self.clean_targets.size
+            )
+
+    def validate_for(
+        self,
+        clean_targets: np.ndarray,
+        dataset: str,
+        num_classes: int,
+    ) -> "NoiseManifest":
+        """Verify that this manifest is safe to apply by stable global index."""
+
+        reference = np.asarray(clean_targets, dtype=np.int64)
+        if reference.ndim != 1:
+            raise ValueError("reference clean targets must be one-dimensional")
+        if _canonical_dataset_name(self.dataset) != _canonical_dataset_name(dataset):
+            raise ValueError(
+                f"Noise manifest dataset {self.dataset!r} does not match {dataset!r}"
+            )
+        if reference.shape != self.clean_targets.shape:
+            raise ValueError(
+                "Noise manifest length does not match the current training dataset"
+            )
+        if fingerprint_labels(reference) != self.dataset_fingerprint:
+            raise ValueError("Noise manifest fingerprint does not match the current dataset")
+        if not np.array_equal(reference, self.clean_targets):
+            raise ValueError("Noise manifest clean targets do not match the current dataset")
+        for name, values in (
+            ("clean_targets", self.clean_targets),
+            ("noisy_targets", self.noisy_targets),
+        ):
+            if values.size and (values.min() < 0 or values.max() >= num_classes):
+                raise ValueError(f"{name} must be within [0, {num_classes})")
+        if self.transition_matrix is not None:
+            self.transition_matrix = validate_transition_matrix(
+                self.transition_matrix, num_classes
+            )
+        if self.per_sample_transition is not None:
+            if self.per_sample_transition.shape != (reference.size, num_classes):
+                raise ValueError(
+                    "per_sample_transition must have shape "
+                    f"[{reference.size}, {num_classes}]"
+                )
+        return self
 
     @property
     def flip_mask(self) -> np.ndarray:

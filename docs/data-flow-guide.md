@@ -24,12 +24,12 @@
 ```python
 {
     "input": image_tensor,  # [3, 32, 32]，已经增强和归一化
-    "target": label,        # 当前是干净标签
+    "target": label,        # 无 manifest 时为干净标签；噪声训练时为 noisy target
     "index": global_index,  # 样本在原始数据集中的稳定编号
 }
 ```
 
-`index` 对普通 CE 训练暂时没有被使用，但它是以后维护逐样本 loss、噪声标签、选样结果和历史状态的关键。DataLoader 即使 shuffle，`index` 也不会改变。
+`index` 是噪声标签注入和未来逐样本状态的共同主键。DataLoader 即使 shuffle，`index` 也不会改变。训练 batch 不包含 `clean_target` 或 `flip_mask`。
 
 ---
 
@@ -45,6 +45,7 @@ flowchart TD
     D["runtime.py<br/>固定 seed，选择 auto/cpu/cuda"]
     E["data/cifar.py<br/>解码 CIFAR pickle"]
     F["CifarData<br/>images[N,32,32,3] + labels[N]"]
+    N["NoiseManifest（可选）<br/>校验 fingerprint 后提供 noisy_targets[N]"]
     G["data/torch_cifar.py::stratified_split<br/>固定 seed 分层划分"]
     H["TorchCifarDataset<br/>transform + input/target/index"]
     I["PyTorch DataLoader<br/>组成 batch，可 shuffle"]
@@ -52,6 +53,7 @@ flowchart TD
     A --> B --> C
     C --> D
     C --> E --> F --> G --> H --> I
+    C --> N --> H
 ```
 
 ### 2.1 配置如何进入程序
@@ -73,7 +75,10 @@ flowchart TD
    - 对训练集做 random crop、horizontal flip 和 normalize；
    - 对验证/测试集只做 normalize；
    - 返回 `input`、`target`、`index`。
+   - 若训练入口提供了经过校验的 `noisy_targets[N]`，则按 global index 返回噪声标签；否则返回原始标签。
 6. `training/experiment.py::_loader()` 把 Dataset 包装成 PyTorch `DataLoader`。
+
+只有 train Dataset 接收噪声标签覆盖。validation/test Dataset 不接收覆盖，因此评测仍以干净标签为准。
 
 这里的职责边界是：
 
@@ -159,6 +164,7 @@ flowchart TD
 |---|---|---|
 | `resolved_config.yaml` | CLI 读取并覆盖后的配置字典 | 这次实验实际用了什么参数 |
 | `environment.json` | `runtime.py` 和 PyTorch 环境 | Python、PyTorch、CUDA、GPU、seed |
+| `noise_summary.json`（仅噪声训练） | 已校验的 manifest 元数据 | 绝对路径、SHA-256、数据 fingerprint、噪声类型/rate/seed、是否含/使用转移矩阵；不保存标签数组 |
 | `metrics.jsonl` | 算法的 `StepResult` 汇总 + evaluator | 每个 epoch 和最终测试指标 |
 | `last.pt` | `training/checkpoint.py` | 模型、优化器、`RunState`、已完成 epoch、配置 |
 | `final_metrics.json` | test evaluator | 最终 test loss、accuracy、显存峰值 |
@@ -173,6 +179,7 @@ last.pt
   -> algorithms/supervised.py::load_state_dict()
   -> 恢复 TinyCNN 参数和 optimizer 状态
   -> 恢复 core/state.py::RunState
+  -> 对比 checkpoint 与当前 resolved config 的 manifest SHA-256
   -> training/experiment.py 从下一个 epoch 继续
 ```
 
@@ -197,22 +204,24 @@ last.pt
 
 ---
 
-## 6. 当前已有的 LNL 零件为什么还没有进入小闭环
+## 6. 当前已接入与尚未接入的 LNL 零件
 
-仓库已经有以下文件，但它们目前是独立示例：
+噪声标签与 loss 已进入通用训练闭环；更复杂算法仍是独立组件：
 
 | 文件 | 已有能力 | 当前缺口 |
 |---|---|---|
-| `noise/generators.py` | symmetric、pairflip、简化 IDN | `training/experiment.py` 没有调用 |
-| `noise/manifest.py` | 保存 clean/noisy targets、flip mask 和转移信息 | `TorchCifarDataset` 不读取 manifest |
-| `cli/make_noise.py` | 从 `.npy` 标签单独生成 manifest | 与 `lnl-train` 是两条命令链 |
+| `noise/generators.py` | symmetric、pairflip、简化 IDN | 离线生成 manifest；训练时不临时采样 |
+| `noise/manifest.py` | 保存并严格校验 clean/noisy targets、fingerprint 和转移信息 | 已由 `training/experiment.py` 加载 |
+| `noise/transition.py` | 验证并提供已知类别转移矩阵 | 已建立接口，尚未接 Forward/Backward Correction |
+| `data/torch_cifar.py` | 按 global index 选择训练 target | 已接收经过校验的 noisy targets，且不暴露 clean label |
+| `cli/make_noise.py` | 从 `.npy` 标签单独生成 manifest | 生成与训练分离，便于复现同一噪声输入 |
 | `losses/numpy_losses.py` | NumPy CE/GCE 数学示例 | 不能直接参与 PyTorch 反向传播 |
 | `algorithms/coteaching.py` | NumPy small-loss 交叉选样 | 还没有双网络训练 Algorithm |
 | `evaluation/metrics.py` | selection precision/recall | 当前训练 evaluator 没有调用 |
 | `plugins/catalog.py` | 按 kind/name 注册和构造插件 | 当前仅 loss 进入生产训练构造链 |
 | `plugins/builtin/catalog.py` | 注册 NumPy 参考与 PyTorch loss | 模型和算法仍未统一走 catalog |
 
-因此，当前闭环准确地说是“可恢复的干净标签监督分类闭环”，而不是完整的 LNL 闭环。
+因此，当前闭环已经能做“可恢复、可复现的固定噪声标签训练”，但还没有接入 Selector、重加权、标签修正或转移矩阵校正算法。
 
 ---
 
@@ -227,9 +236,9 @@ flowchart TD
     C["建议新增 training/builders.py<br/>通过 PluginCatalog 构造组件"]
 
     D["data/cifar.py<br/>clean images + clean targets"]
-    E["noise/generators.py 或 manifest.py<br/>生成/加载 noisy targets"]
-    F["建议新增 data/noisy_dataset.py<br/>按 global index 合并图片与噪声标签"]
-    G["DataLoader batch<br/>input / target / index<br/>clean_target 仅供 evaluator"]
+    E["noise/manifest.py<br/>加载并校验 noisy targets"]
+    F["data/torch_cifar.py<br/>按 global index 合并图片与噪声标签"]
+    G["训练 DataLoader batch<br/>仅 input / target / index"]
 
     H["models/<model>.py<br/>一个或多个模型"]
     I["losses/<loss>.py<br/>per-sample loss"]
@@ -258,31 +267,27 @@ flowchart TD
 
 ---
 
-## 8. 理想的 batch 数据合同
+## 8. 当前 noisy batch 数据合同
 
-建议未来噪声 Dataset 返回：
+噪声训练 Dataset 只返回：
 
 ```python
 {
     "input": image_tensor,
     "target": noisy_target,       # 算法实际训练的标签
     "index": global_index,        # 读写逐样本状态的键
-
-    # 以下是真值字段，只允许 evaluator 使用
-    "clean_target": clean_target,
-    "is_clean": noisy_target == clean_target,
 }
 ```
 
-更严格的实现可以把真值字段放到单独的 evaluator 数据视图或 metadata 中，避免训练算法误访问。
+`clean_target`、`flip_mask` 和 `is_clean` 都不会进入训练 batch。validation/test 使用未覆盖标签的独立 Dataset，因此分类评测能使用干净标签，但 Loss、Selector 和 Algorithm 无法从训练 batch 访问真值。
 
 噪声标签的合并过程应当是：
 
 ```text
-data/cifar.py 的 clean_targets
-  -> noise/generators.py 生成 NoiseManifest
-     或 noise/manifest.py 加载已有 NoiseManifest
+实验 YAML 的 noise.manifest
+  -> noise/manifest.py 加载已有 NoiseManifest
   -> 根据 manifest.dataset_fingerprint 检查数据是否匹配
+  -> 检查数据集名、长度、标签范围和所有概率/矩阵
   -> 根据 global index 查询 noisy_targets[index]
   -> Dataset 的 target 返回 noisy target
 ```

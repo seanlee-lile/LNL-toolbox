@@ -12,10 +12,15 @@ from lnl_toolbox.training.clean_baseline import (
     build_clean_model,
     build_clean_optimizer,
     build_clean_scheduler,
+    run_clean_experiment,
 )
 
 
 class CleanBaselineTest(unittest.TestCase):
+    def test_clean_runner_rejects_noise_manifest_configuration(self):
+        with self.assertRaisesRegex(ValueError, "does not accept noise manifests"):
+            run_clean_experiment({"noise": {"manifest": "noise.npz"}})
+
     def test_supported_models_produce_class_logits(self):
         inputs = torch.randn(2, 3, 32, 32)
         for name in ("tiny_cnn", "resnet18", "preact_resnet18"):

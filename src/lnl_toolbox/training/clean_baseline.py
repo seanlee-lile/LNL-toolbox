@@ -130,6 +130,10 @@ def _environment(seed: int, device: torch.device) -> dict[str, Any]:
 def run_clean_experiment(config: dict[str, Any], output_dir: str | Path | None = None,
                          resume: str | Path | None = None) -> Path:
     config = deepcopy(config)
+    if config.get("noise"):
+        raise ValueError(
+            "Clean baseline does not accept noise manifests; use lnl-train for noisy-label runs"
+        )
     seed = int(config.get("seed", 1))
     epochs = int(config["trainer"]["epochs"])
     seed_everything(seed)

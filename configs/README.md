@@ -14,3 +14,12 @@ loss:
 
 `configs/algorithm/` 保存可复用的组件片段；当前入口尚未实现 Hydra defaults 合并，因此完整实验 YAML 需要显式包含所选 loss 配置。
 
+通用训练入口可选读取一个已经生成的 Noise Manifest：
+
+```yaml
+noise:
+  manifest: data/noise/cifar10-symmetric-0.4-seed1.npz
+```
+
+缺少 `noise` 时保持干净标签训练；配置后仅训练集按 global index 使用 manifest 中的噪声标签，validation/test 仍使用干净标签。训练不会临时重采样噪声。`lnl-clean-train` 专用于 clean baseline，会拒绝 `noise` 配置；噪声实验使用 `lnl-train`。
+
