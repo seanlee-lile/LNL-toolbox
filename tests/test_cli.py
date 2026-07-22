@@ -20,6 +20,10 @@ def scripted_session(values: list[str]) -> tuple[PromptSession, list[str]]:
 
 
 class PromptSessionTest(unittest.TestCase):
+    def test_clean_template_discovery_excludes_noisy_configs(self) -> None:
+        names = {path.name for path, _ in cli_shared._experiment_templates(clean=True)}
+        self.assertNotIn("cifar10_symmetric_ce_smoke.yaml", names)
+
     def test_choice_and_number_retry(self) -> None:
         session, output = scripted_session(["invalid", "2", "bad", "0", "3"])
         self.assertEqual(
@@ -62,6 +66,29 @@ class PromptSessionTest(unittest.TestCase):
             cli_shared._prompt_scheduler(session, {"name": "none"}, 20),
             {"name": "multistep", "milestones": [5, 10], "gamma": 0.2},
         )
+
+    def test_noise_wizard_builds_generated_and_external_modes(self) -> None:
+        generated, _ = scripted_session(["2", "", "2", "0.3", "9"])
+        self.assertEqual(
+            cli_shared._prompt_noise(generated, None, 1),
+            {
+                "name": "pairflip",
+                "rate": 0.3,
+                "seed": 9,
+                "manifest_filename": "noise_manifest.npz",
+            },
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "source.npz"
+            manifest.touch()
+            external, _ = scripted_session(["3", "", str(manifest)])
+            self.assertEqual(
+                cli_shared._prompt_noise(external, None, 1),
+                {
+                    "manifest": str(manifest),
+                    "manifest_filename": "noise_manifest.npz",
+                },
+            )
 
     def test_training_wizard_keeps_template_in_memory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

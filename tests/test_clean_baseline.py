@@ -4,21 +4,21 @@ from pathlib import Path
 
 import torch
 
-from lnl_toolbox.core import RunState
+from lnl_toolbox.algorithms.supervised import SupervisedClassificationAlgorithm
+from lnl_toolbox.core import ExperimentContext, RunState
+from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 from lnl_toolbox.training.clean_baseline import (
-    _atomic_save,
-    _checkpoint,
-    _load_checkpoint,
     build_clean_model,
     build_clean_optimizer,
     build_clean_scheduler,
     run_clean_experiment,
 )
+from lnl_toolbox.training.checkpoint import load_checkpoint, save_checkpoint
 
 
 class CleanBaselineTest(unittest.TestCase):
     def test_clean_runner_rejects_noise_manifest_configuration(self):
-        with self.assertRaisesRegex(ValueError, "does not accept noise manifests"):
+        with self.assertRaisesRegex(ValueError, "does not accept noise configuration"):
             run_clean_experiment({"noise": {"manifest": "noise.npz"}})
 
     def test_supported_models_produce_class_logits(self):
@@ -44,13 +44,24 @@ class CleanBaselineTest(unittest.TestCase):
             scheduler.step()
             saved_lr = optimizer.param_groups[0]["lr"]
             path = Path(directory) / "last.pt"
-            payload = _checkpoint(model, optimizer, scheduler, RunState(cycle=1, step=9), 1, 0, 0.5, {})
-            _atomic_save(payload, path)
+            algorithm = SupervisedClassificationAlgorithm(
+                model, optimizer, CrossEntropyLoss(), torch.device("cpu")
+            )
+            save_checkpoint(
+                path, algorithm, RunState(cycle=1, step=9), 1, {},
+                scheduler=scheduler, best_epoch=0, best_validation_accuracy=0.5,
+            )
 
             new_model = build_clean_model({"name": "tiny_cnn", "width": 8}, 10)
             new_optimizer = build_clean_optimizer(new_model, {"name": "sgd", "lr": 0.1, "momentum": 0.9})
             new_scheduler = build_clean_scheduler(new_optimizer, {"name": "cosine", "t_max": 5}, 5)
-            state, restored = _load_checkpoint(path, new_model, new_optimizer, new_scheduler, torch.device("cpu"))
+            new_algorithm = SupervisedClassificationAlgorithm(
+                new_model, new_optimizer, CrossEntropyLoss(), torch.device("cpu")
+            )
+            new_algorithm.setup(ExperimentContext(Path(directory)))
+            state, _, restored = load_checkpoint(
+                path, new_algorithm, torch.device("cpu"), scheduler=new_scheduler
+            )
             self.assertAlmostEqual(new_optimizer.param_groups[0]["lr"], saved_lr)
             self.assertEqual(new_scheduler.last_epoch, scheduler.last_epoch)
             self.assertEqual(state.step, 9)

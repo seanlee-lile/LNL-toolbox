@@ -1,18 +1,25 @@
+import json
+from pathlib import Path
 import tempfile
 import unittest
-from pathlib import Path
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader
 
+from lnl_toolbox.data.noisy_dataset import NoisyTargetDataset
 from lnl_toolbox.noise import (
     KnownTransition,
     NoiseManifest,
     generate_instance_dependent,
+    generate_pairflip,
     generate_symmetric,
     validate_transition_matrix,
 )
-from lnl_toolbox.training.experiment import _load_noise_manifest, _validate_resume_noise
+from lnl_toolbox.training.noisy_labels import (
+    checkpoint_noise_metadata,
+    prepare_noise_manifest,
+)
 
 
 class NoiseTest(unittest.TestCase):
@@ -36,7 +43,82 @@ class NoiseTest(unittest.TestCase):
             first.save(path)
             loaded = NoiseManifest.load(path)
         np.testing.assert_array_equal(first.noisy_targets, loaded.noisy_targets)
+        np.testing.assert_array_equal(first.global_indices, loaded.global_indices)
+        self.assertEqual(first.mapping_hash, loaded.mapping_hash)
         self.assertAlmostEqual(first.realized_rate, loaded.realized_rate)
+
+    def test_legacy_v1_manifest_loads_with_explicit_default_indices(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "legacy.npz"
+            metadata = {
+                "version": "1.0", "dataset": "toy", "dataset_fingerprint": "",
+                "noise_type": "symmetric", "seed": 3, "requested_rate": 0.2,
+                "metadata": {},
+            }
+            noisy = self.labels.copy()
+            noisy[:2] = (noisy[:2] + 1) % 10
+            np.savez_compressed(
+                path, clean_targets=self.labels, noisy_targets=noisy,
+                flip_mask=self.labels != noisy, transition_matrix=np.array([]),
+                per_sample_transition=np.array([]),
+                metadata_json=np.array(json.dumps(metadata)),
+            )
+            loaded = NoiseManifest.load(path)
+        self.assertEqual(loaded.version, "1.0")
+        np.testing.assert_array_equal(loaded.global_indices, np.arange(self.labels.size))
+
+    def test_different_seeds_usually_generate_different_noise(self) -> None:
+        first = generate_symmetric(self.labels, 10, 0.4, 7, "toy")
+        second = generate_symmetric(self.labels, 10, 0.4, 8, "toy")
+        self.assertFalse(np.array_equal(first.noisy_targets, second.noisy_targets))
+
+    def test_symmetric_realized_rate_matches_fixed_requested_count(self) -> None:
+        manifest = generate_symmetric(self.labels, 10, 0.4, 7, "toy")
+        self.assertAlmostEqual(manifest.actual_rate, 0.4)
+
+    def test_pairflip_only_moves_to_next_class(self) -> None:
+        manifest = generate_pairflip(self.labels, 10, 0.5, 3, "toy")
+        expected = (manifest.clean_targets[manifest.flip_mask] + 1) % 10
+        np.testing.assert_array_equal(manifest.noisy_targets[manifest.flip_mask], expected)
+
+    def test_mapping_hash_covers_indices_targets_and_context(self) -> None:
+        manifest = generate_symmetric(self.labels, 10, 0.4, 7, "toy")
+        reordered = NoiseManifest(
+            dataset=manifest.dataset,
+            split=manifest.split,
+            noise_type=manifest.noise_type,
+            seed=manifest.seed,
+            requested_rate=manifest.requested_rate,
+            clean_targets=manifest.clean_targets[::-1],
+            noisy_targets=manifest.noisy_targets[::-1],
+            global_indices=manifest.global_indices[::-1],
+            num_classes=manifest.num_classes,
+        )
+        self.assertNotEqual(manifest.mapping_hash, reordered.mapping_hash)
+
+    def test_noisy_dataset_maps_by_global_index_and_hides_clean_target(self) -> None:
+        class IndexedDataset:
+            indices = np.array([9, 3, 7], dtype=np.int64)
+
+            def __len__(self) -> int:
+                return len(self.indices)
+
+            def __getitem__(self, item: int) -> dict[str, object]:
+                index = int(self.indices[item])
+                return {"input": torch.tensor([index]), "target": index % 2, "index": index}
+
+        dataset = NoisyTargetDataset(
+            IndexedDataset(),
+            global_indices=np.array([3, 7, 9]),
+            noisy_targets=np.array([1, 2, 4]),
+        )
+        self.assertEqual(set(dataset[0]), {"input", "target", "index"})
+        self.assertEqual(dataset[0]["target"], 4)
+        seen = {}
+        loader = DataLoader(dataset, batch_size=1, shuffle=True, generator=torch.Generator().manual_seed(2))
+        for batch in loader:
+            seen[int(batch["index"].item())] = int(batch["target"].item())
+        self.assertEqual(seen, {3: 1, 7: 2, 9: 4})
 
     def test_instance_dependent_manifest_tracks_per_sample_probabilities(self) -> None:
         scores = np.random.default_rng(3).normal(size=(self.labels.size, 10))
@@ -63,12 +145,11 @@ class NoiseTest(unittest.TestCase):
             manifest.validate_for(self.labels, "cifar10", 10)
 
         probabilities = np.full((self.labels.size, 9), 1.0 / 9.0)
-        manifest = NoiseManifest(
-            "cifar10", "fixture", 1, 0.1, self.labels, self.labels,
-            per_sample_transition=probabilities,
-        )
         with self.assertRaisesRegex(ValueError, "per_sample_transition"):
-            manifest.validate_for(self.labels, "cifar10", 10)
+            NoiseManifest(
+                "cifar10", "fixture", 1, 0.1, self.labels, self.labels,
+                per_sample_transition=probabilities,
+            )
 
     def test_transition_matrix_validation_and_known_provider(self) -> None:
         matrix = np.eye(10, dtype=np.float64) * 0.9
@@ -100,34 +181,49 @@ class NoiseTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     validate_transition_matrix(matrix)
 
-    def test_training_manifest_resolution_records_identity_without_labels(self) -> None:
+    def test_external_manifest_is_normalized_and_records_identity_without_labels(self) -> None:
         manifest = generate_symmetric(self.labels, 10, 0.4, 5, "cifar10")
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "noise.npz"
-            manifest.save(path)
-            loaded, resolved, summary = _load_noise_manifest(
-                {"manifest": str(path)}, self.labels, "cifar10", 10
+            root = Path(directory)
+            source = root / "source.npz"
+            run_dir = root / "run"
+            run_dir.mkdir()
+            manifest.save(source)
+            loaded, path = prepare_noise_manifest(
+                {"noise": {"manifest": str(source)}},
+                dataset="cifar10",
+                clean_targets=self.labels,
+                global_indices=np.arange(self.labels.size),
+                num_classes=10,
+                run_dir=run_dir,
+            )
+            summary = checkpoint_noise_metadata(
+                loaded, path, run_dir, loaded.actual_rate, mode="external"
             )
         self.assertIsNotNone(loaded)
-        self.assertEqual(resolved["manifest"], str(path.resolve()))
-        self.assertEqual(len(resolved["manifest_sha256"]), 64)
+        self.assertEqual(path.name, "noise_manifest.npz")
+        self.assertEqual(len(summary["manifest_sha256"]), 64)
+        self.assertEqual(len(summary["source_manifest_sha256"]), 64)
         self.assertEqual(summary["noise_type"], "symmetric")
-        self.assertFalse(summary["uses_known_transition"])
         self.assertNotIn("clean_targets", summary)
         self.assertNotIn("noisy_targets", summary)
 
-    def test_resume_must_use_the_same_manifest_identity(self) -> None:
-        _validate_resume_noise(
-            {"noise": {"manifest_sha256": "abc"}},
-            {"noise": {"manifest_sha256": "ABC"}},
+    def test_manifest_can_be_a_superset_of_required_training_indices(self) -> None:
+        manifest = generate_symmetric(self.labels, 10, 0.4, 5, "cifar10")
+        required = np.arange(20, 80, dtype=np.int64)
+        self.assertIs(
+            manifest.validate_for(
+                self.labels, "cifar10", 10, required_indices=required
+            ),
+            manifest,
         )
-        with self.assertRaisesRegex(ValueError, "different noise manifest"):
-            _validate_resume_noise(
-                {"noise": {"manifest_sha256": "abc"}},
-                {"noise": {"manifest_sha256": "def"}},
+        with self.assertRaisesRegex(ValueError, "cover"):
+            manifest.validate_for(
+                self.labels,
+                "cifar10",
+                10,
+                required_indices=np.array([self.labels.size]),
             )
-        with self.assertRaisesRegex(ValueError, "different noise manifest"):
-            _validate_resume_noise({"noise": {"manifest_sha256": "abc"}}, {})
 
 
 

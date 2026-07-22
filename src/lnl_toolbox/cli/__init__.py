@@ -230,6 +230,8 @@ def _experiment_templates(*, clean: bool) -> list[tuple[Path, dict[str, Any]]]:
             except (OSError, ValueError):
                 continue
             model_name = str(config.get("model", {}).get("name", "tiny_cnn")).lower()
+            if clean and config.get("noise"):
+                continue
             if clean or model_name == "tiny_cnn":
                 discovered[resolved] = config
     return list(discovered.items())
@@ -374,6 +376,61 @@ def _prompt_scheduler(
     return {"name": "none"}
 
 
+def _prompt_noise(
+    session: PromptSession,
+    current: Mapping[str, Any] | None,
+    default_seed: int,
+) -> dict[str, Any] | None:
+    values = dict(current or {})
+    if values.get("manifest"):
+        current_mode = "external"
+    elif str(values.get("name", "clean")).lower() in {"symmetric", "pairflip"}:
+        current_mode = "generated"
+    else:
+        current_mode = "clean"
+    mode = session.choose(
+        "选择标签模式",
+        [("干净标签", "clean"), ("运行时生成噪声", "generated"),
+         ("使用已有 Noise Manifest", "external")],
+        default=current_mode,
+    )
+    if mode == "clean":
+        return None
+    filename = session.text(
+        "运行目录中的 manifest 文件名",
+        default=str(values.get("manifest_filename", "noise_manifest.npz")),
+        required=True,
+        validator=lambda item: Path(item).name == item,
+        error="请输入不含目录的文件名。",
+    )
+    if mode == "external":
+        default_manifest = Path(str(values["manifest"])) if values.get("manifest") else None
+        manifest = session.path(
+            "Noise Manifest 文件",
+            default=default_manifest,
+            required=True,
+            must_exist=True,
+            file_only=True,
+        )
+        assert manifest is not None
+        return {"manifest": str(manifest), "manifest_filename": filename}
+    name = session.choose(
+        "选择噪声类型",
+        [("Symmetric", "symmetric"), ("Pairflip", "pairflip")],
+        default=str(values.get("name", "symmetric")).lower(),
+    )
+    return {
+        "name": name,
+        "rate": session.floating(
+            "噪声率", default=float(values.get("rate", 0.4)), minimum=0.0, maximum=1.0
+        ),
+        "seed": session.integer(
+            "噪声随机种子", default=int(values.get("seed", default_seed)), minimum=0
+        ),
+        "manifest_filename": filename,
+    }
+
+
 def prompt_training_selection(session: PromptSession, *, clean: bool) -> TrainingSelection | None:
     """Build an in-memory training configuration through a terminal wizard."""
 
@@ -394,25 +451,15 @@ def prompt_training_selection(session: PromptSession, *, clean: bool) -> Trainin
 
     if not clean:
         current_noise = config.get("noise")
-        use_noise = session.confirm(
-            "使用已有 Noise Manifest",
-            default=isinstance(current_noise, Mapping) and bool(current_noise.get("manifest")),
+        selected_noise = _prompt_noise(
+            session,
+            current_noise if isinstance(current_noise, Mapping) else None,
+            int(config.get("seed", 1)),
         )
-        if use_noise:
-            default_manifest = None
-            if isinstance(current_noise, Mapping) and current_noise.get("manifest"):
-                default_manifest = Path(str(current_noise["manifest"]))
-            manifest_path = session.path(
-                "Noise Manifest 文件",
-                default=default_manifest,
-                required=True,
-                must_exist=True,
-                file_only=True,
-            )
-            assert manifest_path is not None
-            config["noise"] = {"manifest": str(manifest_path)}
-        else:
+        if selected_noise is None:
             config.pop("noise", None)
+        else:
+            config["noise"] = selected_noise
 
     model = config.setdefault("model", {})
     if clean:

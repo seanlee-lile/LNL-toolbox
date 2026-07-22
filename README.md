@@ -60,7 +60,9 @@ $env:PYTHONPATH = "src"
 python -m lnl_toolbox.cli.make_noise labels.npy artifacts/noise/demo.npz --kind symmetric --rate 0.4 --classes 10 --seed 1
 ```
 
-要使用固定噪声训练，在实验 YAML 中加入 `noise.manifest`，再运行 `lnl-train --config <yaml>`。程序会先校验数据 fingerprint、标签范围和转移概率；train 使用 noisy target，validation/test 继续使用干净标签。`lnl-clean-train` 会拒绝噪声配置。
+`lnl-train` 统一支持 TinyCNN、ResNet-18、PreActResNet-18 和全部已注册逐样本 loss。噪声既可由 `name/rate/seed` 在运行开始时生成，也可通过 `noise.manifest` 读取；两种方式都会生成不可变的 run-local manifest。程序先校验数据 fingerprint、global index、标签范围和转移概率；train 只看到 noisy target，validation/test 继续使用干净标签。`lnl-clean-train` 是同一训练器的 clean-only 包装，会拒绝任何噪声配置。
+
+每轮保存 checkpoint v2：模型、优化器、scheduler、`RunState`、best 指标、loss 配置和噪声映射身份完整进入 `last.pt`/`best.pt`。恢复训练只使用运行目录内的 manifest，并有限兼容旧 CE-baseline 顶层 checkpoint 和旧 Loss 嵌套 checkpoint。
 
 论文原文位于 `papers/`，逐篇中文摘要、代码状态和伪代码见 `docs/paper-summaries.md`；详细架构取舍见 `toolbox-architecture.md`。
 

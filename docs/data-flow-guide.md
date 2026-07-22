@@ -1,450 +1,342 @@
-# LNL Toolbox 数据流开发指南
+# LNL Toolbox 跨模块接口规范
 
-本文面向第一次接触本项目的开发者，回答两个问题：
+本文是当前训练路径的唯一人类可读接口规范，供开发者和 Codex 修改代码时查阅。它只记录已经实现的合同和明确标注的预留边界，不解释论文方法。
 
-1. 当前已经跑通的 CIFAR + TinyCNN + CE 小闭环，数据到底经过了哪些文件？
-2. 将来加入一个标签噪声学习（LNL）算法时，理想的数据应该怎样流动？
+权威顺序：**代码与自动化测试 > 本文 > 其他架构或研究文档**。若三者不一致，先以代码和测试判断现状，再在同一次修改中更新本文。
 
-本文只描述当前仓库中的真实代码，并把尚未存在的理想组件明确标为“建议新增”。
-
----
-
-## 1. 先认识三种“数据”
-
-入门时最容易混淆的是：项目里不只有图片和标签。
-
-| 数据种类 | 例子 | 用途 |
-|---|---|---|
-| 样本数据 | 图片、标签、全局 `index` | 输入模型并计算 loss |
-| 运行状态 | epoch、global step、模型参数、优化器状态 | 控制训练和恢复训练 |
-| 实验产物 | 配置、指标、checkpoint、环境信息 | 复现实验和比较算法 |
-
-当前 Dataset 返回的单个样本是：
-
-```python
-{
-    "input": image_tensor,  # [3, 32, 32]，已经增强和归一化
-    "target": label,        # 无 manifest 时为干净标签；噪声训练时为 noisy target
-    "index": global_index,  # 样本在原始数据集中的稳定编号
-}
-```
-
-`index` 是噪声标签注入和未来逐样本状态的共同主键。DataLoader 即使 shuffle，`index` 也不会改变。训练 batch 不包含 `clean_target` 或 `flip_mask`。
-
----
-
-## 2. 当前小闭环：启动阶段的数据流
-
-当前真正执行训练的是 `src/lnl_toolbox/training/experiment.py`，不是通用的 `engine/runner.py`。
-
-```mermaid
-flowchart TD
-    A["configs/experiment/cifar10_smoke.yaml<br/>数据、模型、优化器、epoch 配置"]
-    B["src/lnl_toolbox/cli/<br/>交互向导或 argparse"]
-    C["training/experiment.py::run_experiment<br/>当前闭环的总调度器"]
-    D["runtime.py<br/>固定 seed，选择 auto/cpu/cuda"]
-    E["data/cifar.py<br/>解码 CIFAR pickle"]
-    F["CifarData<br/>images[N,32,32,3] + labels[N]"]
-    N["NoiseManifest（可选）<br/>校验 fingerprint 后提供 noisy_targets[N]"]
-    G["data/torch_cifar.py::stratified_split<br/>固定 seed 分层划分"]
-    H["TorchCifarDataset<br/>transform + input/target/index"]
-    I["PyTorch DataLoader<br/>组成 batch，可 shuffle"]
-
-    A --> B --> C
-    C --> D
-    C --> E --> F --> G --> H --> I
-    C --> N --> H
-```
-
-### 2.1 配置如何进入程序
-
-1. `configs/experiment/cifar10_smoke.yaml` 或 `cifar10_clean.yaml` 保存实验参数。
-2. `src/lnl_toolbox/cli/` 在无参数时通过 `PromptSession` 选择模板并覆盖内存配置；有参数时继续由 argparse + PyYAML 得到 Python `dict`。
-3. `train.py` 将这个字典、`--output-dir` 和 `--resume` 交给 `training/experiment.py::run_experiment()`。
-
-注意：当前 `experiment.py` 仍直接构造 `TinyCNN` 和 `SupervisedClassificationAlgorithm`；loss 已改为把顶层 `loss` mapping 交给 `PluginCatalog` 构造。
-
-### 2.2 原始 CIFAR 如何变成 Dataset
-
-1. `training/experiment.py` 根据 `data.name` 选择 `load_cifar10()` 或 `load_cifar100()`。
-2. `src/lnl_toolbox/data/cifar.py` 读取仓库根目录 `data/cifar10/` 或 `data/cifar100/` 中的 pickle 文件。
-3. `cifar.py` 把图片转成 NumPy `uint8` 数组 `[N, 32, 32, 3]`，把标签转成 `[N]`，封装成 `CifarData`。
-4. `src/lnl_toolbox/data/torch_cifar.py::stratified_split()` 依据标签和 seed 生成 train/validation 的全局索引。
-5. 同一文件中的 `TorchCifarDataset` 保存 `CifarData` 和索引，并在 `__getitem__()` 中：
-   - 用 PIL 包装图片；
-   - 对训练集做 random crop、horizontal flip 和 normalize；
-   - 对验证/测试集只做 normalize；
-   - 返回 `input`、`target`、`index`。
-   - 若训练入口提供了经过校验的 `noisy_targets[N]`，则按 global index 返回噪声标签；否则返回原始标签。
-6. `training/experiment.py::_loader()` 把 Dataset 包装成 PyTorch `DataLoader`。
-
-只有 train Dataset 接收噪声标签覆盖。validation/test Dataset 不接收覆盖，因此评测仍以干净标签为准。
-
-这里的职责边界是：
-
-- `data/cifar.py` 只负责“读懂磁盘文件”；
-- `data/torch_cifar.py` 负责“变成 PyTorch 能训练的样本”；
-- `training/experiment.py` 决定“使用哪个数据集、如何划分以及如何组 batch”。
-
----
-
-## 3. 当前小闭环：一个训练 batch 的数据流
+## 1. 当前生产边界
 
 ```mermaid
 flowchart LR
-    A["DataLoader batch<br/>input, target, index"]
-    B["core/batch.py::Batch<br/>通用 payload 信封"]
-    C["algorithms/supervised.py::step"]
-    D["input/target 搬到 GPU"]
-    E["models/tiny_cnn.py<br/>input -> logits"]
-    F["losses/torch_losses.py<br/>logits + target -> configured loss [B]"]
-    G["zero_grad -> backward -> optimizer.step"]
-    H["core/result.py::StepResult<br/>loss, accuracy, samples"]
-    I["training/experiment.py<br/>按样本数汇总 epoch 指标"]
-
-    A --> B --> C --> D --> E --> F --> G --> H --> I
+    A["CLI / YAML"] --> B["run_supervised_experiment"]
+    B --> C["Dataset / DataLoader"]
+    B --> D["Model"]
+    B --> E["PluginCatalog → Loss"]
+    C --> F["Batch"]
+    D --> G["logits [B,C]"]
+    G --> E
+    E --> H["per-sample loss [B]"]
+    F --> I["Supervised Algorithm"]
+    H --> I
+    I --> J["StepResult"]
+    B --> K["Clean Evaluator"]
+    B --> L["Checkpoint v2"]
 ```
 
-具体发生的事情如下：
+当前事实：
 
-1. DataLoader 产生一个字典。经过默认 collate 后：
-   - `input` 是 `[B, 3, 32, 32]` Tensor；
-   - `target` 是 `[B]` Tensor；
-   - `index` 是 `[B]` Tensor。
-2. `training/experiment.py` 用 `core/batch.py::Batch(raw_batch)` 包一层。
-   - `Batch` 是一个通用信封；
-   - core 不需要知道里面是图片、文本还是图数据。
-3. `algorithms/supervised.py::SupervisedClassificationAlgorithm.step()` 从 `batch.payload` 取出 `input` 和 `target`。
-4. `input` 和 `target` 被移动到 `runtime.py` 选择的设备。
-5. `models/tiny_cnn.py::TinyCNN` 把图片变成 `[B, classes]` 的 logits。
-6. 配置选中的 PyTorch loss 用 logits 和 target 计算 `[B]` 逐样本 loss。
-7. 算法校验 shape、求均值，再执行清梯度、反向传播和参数更新。
-8. 算法返回 `core/result.py::StepResult`，其中包含 batch loss、batch accuracy 和样本数。
-9. `training/experiment.py` 对所有 batch 做加权汇总，得到一个 epoch 的训练指标。
+- `training/experiment.py::run_supervised_experiment` 是 clean/noisy CIFAR 的唯一生产训练循环。
+- `run_experiment` 是兼容别名；`run_clean_experiment` 是 clean-only 包装。
+- 生产路径固定使用 `SupervisedClassificationAlgorithm`；尚不能通过 YAML 替换任意 Algorithm。
+- `engine/runner.py` 没有进入该路径。两者都会推进 step，不能直接嵌套。
+- Loss 已通过 `PluginCatalog` 构造；Model、Algorithm、Evaluator 尚未全部插件化。
+- Selector、WeightProvider、RiskCorrector 尚未接入生产训练循环。
 
-当前 `index` 会跟随 batch 到达算法，但 `SupervisedClassificationAlgorithm` 没有读取它。这正是以后 LNL 算法要扩展的位置。
+## 2. 模块职责与依赖方向
 
----
-
-## 4. 当前小闭环：验证、测试和产物流向
-
-```mermaid
-flowchart TD
-    A["训练 epoch 结束"]
-    B["evaluation/classification.py<br/>model.eval + inference_mode"]
-    C["validation loader<br/>input + target"]
-    D["validation loss / accuracy"]
-    E["metrics.jsonl<br/>追加一行 epoch 指标"]
-    F["training/checkpoint.py<br/>torch.save"]
-    G["last.pt<br/>algorithm + RunState + config"]
-    H["test loader"]
-    I["final_metrics.json<br/>test loss / accuracy / 显存"]
-
-    A --> B
-    C --> B --> D --> E
-    D --> F --> G
-    A --> H --> B --> I
-```
-
-### 4.1 验证和测试
-
-`src/lnl_toolbox/evaluation/classification.py::evaluate_classification()` 直接读取 DataLoader 的字典，不经过 `core.Batch`：
-
-- 切换到 `model.eval()`；
-- 禁止梯度；
-- 计算全数据集平均 loss 和 accuracy。
-
-每个 epoch 后运行 validation，全部训练结束后运行 test。
-
-### 4.2 输出文件
-
-`training/experiment.py` 在 `artifacts/runs/<运行目录>/` 生成：
-
-| 文件 | 数据从哪里来 | 含义 |
+| 模块 | 拥有什么 | 不得负责什么 |
 |---|---|---|
-| `resolved_config.yaml` | CLI 读取并覆盖后的配置字典 | 这次实验实际用了什么参数 |
-| `environment.json` | `runtime.py` 和 PyTorch 环境 | Python、PyTorch、CUDA、GPU、seed |
-| `noise_summary.json`（仅噪声训练） | 已校验的 manifest 元数据 | 绝对路径、SHA-256、数据 fingerprint、噪声类型/rate/seed、是否含/使用转移矩阵；不保存标签数组 |
-| `metrics.jsonl` | 算法的 `StepResult` 汇总 + evaluator | 每个 epoch 和最终测试指标 |
-| `last.pt` | `training/checkpoint.py` | 模型、优化器、`RunState`、已完成 epoch、配置 |
-| `final_metrics.json` | test evaluator | 最终 test loss、accuracy、显存峰值 |
+| `core/` | 任务无关的 `Batch`、`RunState`、`StepResult`、生命周期 Protocol | 依赖 PyTorch、CIFAR 或 LNL 假设 |
+| `cli/` | 交互、argparse、YAML mapping | 训练数学、标签修改、optimizer step |
+| `data/` | 原始数据解码、transform、Dataset、稳定 index | 选样、Loss、论文训练策略 |
+| `noise/` | 噪声生成、Manifest、转移矩阵验证 | 选样、模型更新、读取验证指标 |
+| `models/` | `inputs -> logits` | 读取标签、Manifest 或逐样本历史 |
+| `losses/` | `logits + targets -> loss[B]` | 聚合、选样、optimizer、clean label |
+| `algorithms/` | 组合模型、Loss、优化器和训练决策；拥有私有状态 | 数据文件解析、实验目录管理 |
+| `evaluation/` | clean validation/test 指标 | 参与训练更新或泄漏 clean label |
+| `training/` | 组装、循环、恢复、产物 | 实现论文公式或把算法逻辑写死在公共入口 |
+| `plugins/` | 注册、发现、按配置构造组件 | 执行训练生命周期 |
 
-### 4.3 恢复训练
-
-恢复方向与保存方向相反：
+允许的主要依赖方向：
 
 ```text
-last.pt
-  -> training/checkpoint.py::load_checkpoint()
-  -> algorithms/supervised.py::load_state_dict()
-  -> 恢复 TinyCNN 参数和 optimizer 状态
-  -> 恢复 core/state.py::RunState
-  -> 对比 checkpoint 与当前 resolved config 的 manifest SHA-256
-  -> training/experiment.py 从下一个 epoch 继续
+cli → training
+training → data / noise / models / losses / algorithms / evaluation / plugins
+algorithms → core / models / losses
+evaluation → losses
+data ↔ noise 只通过显式 mapping/Manifest 连接
+core → 标准库
 ```
 
----
+## 3. 配置与 Runner 合同
 
-## 5. 通用 core 在当前闭环中的位置
+统一入口：
 
-`src/lnl_toolbox/core/` 不是训练实现，而是组件之间约定的“插头形状”。
+```python
+run_supervised_experiment(
+    config: dict,
+    output_dir: str | Path | None = None,
+    resume: str | Path | None = None,
+) -> Path
+```
 
-| 文件 | 当前意义 |
+配置必须是 YAML-compatible mapping。顶层字段：
+
+| 字段 | 要求 |
 |---|---|
-| `core/batch.py` | 用通用 `Batch.payload` 携带算法输入 |
-| `core/algorithm.py` | 规定算法应该实现 setup、cycle、step、保存和恢复等方法 |
-| `core/context.py` | 把工作目录、配置、seed 和服务交给算法 |
-| `core/state.py` | 保存框架级 cycle、step、phase 和指标 |
-| `core/result.py` | 统一算法 step 的输出形式 |
-| `core/storage.py` | 定义更通用的产物和 checkpoint 协议，目前小闭环尚未完整使用 |
+| `data` | 必须；dataset、root、划分和可选子集大小 |
+| `loader` | 必须；batch size、workers、pin memory |
+| `model` | 必须；当前支持 TinyCNN、ResNet-18、PreActResNet-18 |
+| `optimizer` | 必须；当前支持 SGD、AdamW |
+| `trainer` | 必须；epochs、device |
+| `loss` | 可选；缺省为 `{name: ce}` |
+| `scheduler` | 可选；none、cosine、multistep |
+| `noise` | 可选；省略即 clean |
+| `seed` / `output_root` | 可选；有稳定默认值 |
 
-`src/lnl_toolbox/engine/runner.py` 实现了任务无关的生命周期 Runner，但当前 CIFAR 小闭环没有调用它，而是在 `training/experiment.py` 中手写训练循环。
+噪声配置只能选择一种模式：
 
-开发时需要特别注意：当前 `SupervisedClassificationAlgorithm.step()` 自己增加 `state.step`，`engine/runner.py` 也会增加 `state.step`。在统一两条运行路径之前，不能直接把现有监督算法塞入通用 Runner，否则 global step 会重复增加。
-
----
-
-## 6. 当前已接入与尚未接入的 LNL 零件
-
-噪声标签与 loss 已进入通用训练闭环；更复杂算法仍是独立组件：
-
-| 文件 | 已有能力 | 当前缺口 |
-|---|---|---|
-| `noise/generators.py` | symmetric、pairflip、简化 IDN | 离线生成 manifest；训练时不临时采样 |
-| `noise/manifest.py` | 保存并严格校验 clean/noisy targets、fingerprint 和转移信息 | 已由 `training/experiment.py` 加载 |
-| `noise/transition.py` | 验证并提供已知类别转移矩阵 | 已建立接口，尚未接 Forward/Backward Correction |
-| `data/torch_cifar.py` | 按 global index 选择训练 target | 已接收经过校验的 noisy targets，且不暴露 clean label |
-| `cli/make_noise.py` | 从 `.npy` 标签单独生成 manifest | 生成与训练分离，便于复现同一噪声输入 |
-| `losses/numpy_losses.py` | NumPy CE/GCE 数学示例 | 不能直接参与 PyTorch 反向传播 |
-| `algorithms/coteaching.py` | NumPy small-loss 交叉选样 | 还没有双网络训练 Algorithm |
-| `evaluation/metrics.py` | selection precision/recall | 当前训练 evaluator 没有调用 |
-| `plugins/catalog.py` | 按 kind/name 注册和构造插件 | 当前仅 loss 进入生产训练构造链 |
-| `plugins/builtin/catalog.py` | 注册 NumPy 参考与 PyTorch loss | 模型和算法仍未统一走 catalog |
-
-因此，当前闭环已经能做“可恢复、可复现的固定噪声标签训练”，但还没有接入 Selector、重加权、标签修正或转移矩阵校正算法。
-
----
-
-## 7. 加入一个算法后的理想总体数据流
-
-下面的图表示理想目标。其中带“建议新增”的文件目前并不存在，是下一阶段可以创建的结构。
-
-```mermaid
-flowchart TD
-    A["实验 YAML<br/>dataset / noise / model / loss / algorithm"]
-    B["cli/train.py<br/>读取配置"]
-    C["建议新增 training/builders.py<br/>通过 PluginCatalog 构造组件"]
-
-    D["data/cifar.py<br/>clean images + clean targets"]
-    E["noise/manifest.py<br/>加载并校验 noisy targets"]
-    F["data/torch_cifar.py<br/>按 global index 合并图片与噪声标签"]
-    G["训练 DataLoader batch<br/>仅 input / target / index"]
-
-    H["models/<model>.py<br/>一个或多个模型"]
-    I["losses/<loss>.py<br/>per-sample loss"]
-    J["algorithms/<algorithm>.py<br/>选样/重加权/修正/多阶段训练"]
-    K["算法私有 SampleState<br/>按 global index 读写历史"]
-    L["StepResult<br/>训练指标 + 选样信息"]
-    M["evaluation/<evaluator>.py<br/>测试准确率 + 噪声识别指标"]
-    N["checkpoint.py<br/>模型/优化器/RunState/算法私有状态"]
-
-    A --> B --> C
-    C --> D
-    D --> E --> F --> G
-    C --> H --> J
-    C --> I --> J
-    G --> J
-    J <--> K
-    J --> L --> M
-    J --> N
-    K --> N
+```yaml
+# 运行开始时生成一次
+noise:
+  name: symmetric       # 或 pairflip
+  rate: 0.4
+  seed: 17
+  manifest_filename: noise_manifest.npz
 ```
 
-这个理想数据流有两个核心原则：
+```yaml
+# 导入外部映射
+noise:
+  manifest: data/noise/example.npz
+  manifest_filename: noise_manifest.npz
+```
 
-1. **训练算法看到 noisy target，evaluator 才能看到 clean target。** 防止算法偷看答案。
-2. **所有逐样本状态都通过稳定 global index 读写。** 不能使用 batch 内位置代替样本身份。
+规则：
 
----
+- `manifest` 不得与 `name/rate/seed` 混用。
+- 训练期间不得按 batch 重新采样噪声。
+- 最终映射必须写入 run-local manifest。
+- `run_clean_experiment` 和多 seed suite 必须拒绝非空 `noise`。
+- 新配置使用顶层 `loss`；不得再用 `algorithm: {name: ce}` 表示 CE。
+- 实际配置必须写入 `resolved_config.yaml`。
 
-## 8. 当前 noisy batch 数据合同
+## 4. 样本身份与 global index
 
-噪声训练 Dataset 只返回：
+### 4.1 完整身份
+
+样本的完整主键是：
+
+```text
+(dataset, split, global_index)
+```
+
+单独的 `global_index` 只在同一 dataset 和 split 内唯一。train 的 index `7` 与 test 的 index `7` 不是同一个样本。
+
+### 4.2 index 不变量
+
+- `global_index` 是样本在原始 split 中的位置，不是 Dataset 子集位置或 batch 位置。
+- shuffle、数据增强、subset、sampler 和 noisy wrapper 都不得改变它。
+- 所有跨 epoch 的逐样本状态必须通过 global index 读写。
+- 持久化逐样本数组时，必须同时保存对应 `global_indices`；不得依靠当前数组顺序猜测身份。
+- 非连续 index 可以使用显式 mapping，或使用覆盖完整原始 split 的数组；两者必须明确区分。
+- 禁止用 `enumerate(loader)`、batch offset 或排序后的位置作为样本身份。
+
+global index 的当前用途：
+
+| 使用方 | 用法 |
+|---|---|
+| `NoiseManifest` | `global_indices[i] -> noisy_targets[i]` |
+| `NoisyTargetDataset` | 按样本 index 查找训练 target |
+| Selector/可靠性模块（预留） | 读取和更新 loss history、mask、weight、概率 |
+| Checkpoint | 保存逐样本状态及其 index 对齐信息 |
+| Evaluator | 仅在需要逐样本对齐时连接预测与评测真值 |
+
+## 5. Dataset 与 Batch 合同
+
+单样本必须返回且只能依赖以下公共字段：
 
 ```python
 {
-    "input": image_tensor,
-    "target": noisy_target,       # 算法实际训练的标签
-    "index": global_index,        # 读写逐样本状态的键
+    "input": Tensor[C, H, W],
+    "target": int,
+    "index": int,
 }
 ```
 
-`clean_target`、`flip_mask` 和 `is_clean` 都不会进入训练 batch。validation/test 使用未覆盖标签的独立 Dataset，因此分类评测能使用干净标签，但 Loss、Selector 和 Algorithm 无法从训练 batch 访问真值。
-
-噪声标签的合并过程应当是：
+默认 collate 后：
 
 ```text
-实验 YAML 的 noise.manifest
-  -> noise/manifest.py 加载已有 NoiseManifest
-  -> 根据 manifest.dataset_fingerprint 检查数据是否匹配
-  -> 检查数据集名、长度、标签范围和所有概率/矩阵
-  -> 根据 global index 查询 noisy_targets[index]
-  -> Dataset 的 target 返回 noisy target
+input  : Tensor[B,C,H,W]
+target : LongTensor[B]
+index  : LongTensor[B]
 ```
 
-validation/test 默认仍使用干净标签，除非某篇论文的正式实验协议明确要求其他设置。
+职责：
 
----
+- `TorchCifarDataset` 读取原始标签，不接受 `targets=` override。
+- noisy train 使用 `NoisyTargetDataset(clean_dataset, global_indices, noisy_targets)`。
+- wrapper 只能替换 `target`，必须保持 input、transform、长度和 index 不变。
+- validation/test 使用独立 clean Dataset。
+- `clean_target`、`flip_mask`、`is_clean` 不得进入训练 batch。
+- Algorithm 不得通过 Dataset 内部属性绕过上述隔离。
 
-## 9. 一个新算法内部的理想 batch 流程
+`core.Batch` 只是 payload 信封。当前监督 Algorithm 约定 `Batch.payload` 为上述字典；通用 core 本身不固定这些字段。
 
-### 9.1 简单算法：只替换 loss，例如 GCE
+## 6. Noise Manifest 合同
 
-```mermaid
-flowchart LR
-    A["batch input/target"] --> B["model -> logits"]
-    B --> C["PyTorch GCE<br/>reduction=none"]
-    C --> D["per-sample loss [B]"]
-    D --> E["统一 reduce"]
-    E --> F["backward + optimizer"]
-    F --> G["StepResult"]
-```
+Manifest v2 的核心字段：
 
-这类算法复用 `SupervisedClassificationAlgorithm`。当前生产路径已经统一为：
+| 字段 | 合同 |
+|---|---|
+| `dataset` / `split` | 标识 index 的作用域；训练 manifest 的 split 为 `train` |
+| `global_indices` | `int64[N]`，一维、唯一、非负 |
+| `clean_targets` | `int64[N]`，只用于生成记录和训练前校验 |
+| `noisy_targets` | `int64[N]`，训练实际使用的标签 |
+| `num_classes` | 与当前 dataset 一致 |
+| `dataset_fingerprint` | 绑定 clean target 对齐关系 |
+| `mapping_hash` | 绑定上下文、indices 和 noisy targets |
+| `transition_matrix` | 可选 `[C,C]`，有限、非负、每行和为 1 |
+| `per_sample_transition` | 可选 `[N,C]`，有限、非负、每行和为 1 |
 
-1. 实验 YAML 的顶层 `loss` mapping 交给 `plugins/builtin/catalog.py`；
-2. `PluginCatalog` 按 `kind="loss"` 构造 PyTorch loss；
-3. loss 只负责输出严格的 `[B]` 逐样本张量；
-4. `SupervisedClassificationAlgorithm` 校验合同并执行 `mean`，evaluator 则按样本求和后除以样本总数。
+应用前必须验证：dataset、split、类别数、标签范围、fingerprint、required indices 覆盖和所有概率矩阵。
 
-当前可训练组件为 CE、GCE、NCE、MAE、RCE 和 APL。标准 GCE 直接计算论文的 `(1-p_y^q)/q`，不做隐式概率截断。APL 要求 `alpha`、`beta` 严格为正，P0 active 仅为 NCE、passive 仅为 MAE 或 RCE；这些约束在 loss 类、catalog 直接构造和 YAML builder 三条路径上一致。NumPy CE/GCE 仅作为 `kind="numpy_loss"` 的公式参考，不进入反向传播路径。
+- 外部 manifest 可以精确覆盖当前训练划分，也可以是其超集。
+- Manifest 中缺少任一 required index 时必须失败。
+- v1 缺少 indices 时只能解释为连续 `0..N-1`；无法证明对齐时必须失败。
+- resume 只读取 run-local manifest，并核对 mapping hash 与文件 SHA-256。
+- Loss、Selector 和训练 Algorithm 不得读取 `clean_targets`。
 
-### 9.2 选样或重加权算法
+## 7. Model、Loss 与 Algorithm 合同
 
-```mermaid
-flowchart LR
-    A["input/target/index"] --> B["model -> logits"]
-    B --> C["per-sample loss [B]"]
-    A --> D["用 index 读取 SampleState"]
-    C --> E["selector / reweighter / corrector"]
-    D --> E
-    E --> F["mask / weight / corrected target"]
-    F --> G["weighted loss -> optimizer"]
-    E --> H["用 index 更新 SampleState"]
-    G --> I["StepResult"]
-```
-
-算法私有状态不要塞进通用 `RunState`。例如可以由具体算法自己保存：
+### 7.1 Model
 
 ```python
-sample_state.loss_ema[index]
-sample_state.selected_mask[index]
-sample_state.clean_probability[index]
-sample_state.corrected_target[index]
+logits = model(inputs)  # FloatTensor[B,C]
 ```
 
-算法的 `state_dict()` 必须包含这些数据，`training/checkpoint.py` 才能让恢复训练前后一致。
+必须返回原始 logits。Model 不得读取 target、index、Manifest 或 clean label。
 
-### 9.3 多网络算法，例如 Co-teaching
+### 7.2 Loss
 
-```mermaid
-flowchart TD
-    A["同一个 batch"] --> B["model A -> loss A[B]"]
-    A --> C["model B -> loss B[B]"]
-    B --> D["A 选择自己的 small-loss 样本"]
-    C --> E["B 选择自己的 small-loss 样本"]
-    D --> F["用 A 选出的样本更新 model B"]
-    E --> G["用 B 选出的样本更新 model A"]
-    F --> H["双模型指标和选样结果"]
-    G --> H
-    H --> I["checkpoint 保存两套 model/optimizer"]
+```python
+per_sample = loss(logits, targets)  # FloatTensor[B]
 ```
 
-这类算法不应该被压缩成一个 loss 函数。建议新增完整的 `algorithms/coteaching_torch.py`，由它拥有两个模型、两个优化器、forget/remember rate 日程和私有状态。
+必须满足：
 
----
+- `logits` 为 `[B,C]`；`targets` 为 `[B]` 的 `torch.long`，值位于 `[0,C)`。
+- logits、targets、Loss module 位于同一设备。
+- 返回严格 `[B]`，保留 autograd graph。
+- Loss 内不得 `mean/sum/detach/item/numpy`。
+- `validate_per_sample_loss(values, B)` 在训练和评测边界强制检查 shape。
+- 当前只支持硬标签单标签分类；不包含 soft label、mixup、label smoothing 或 multi-label。
 
-## 10. 推荐的文件落点
+### 7.3 当前监督 Algorithm
 
-以下是加入新算法时比较清楚的目录分工。带“建议新增”的路径尚未实现。
-
-```text
-configs/
-  experiment/<实验名>.yaml          # 一次完整实验的组合配置
-
-src/lnl_toolbox/
-  data/
-    cifar.py                        # 已有：读取原始 CIFAR
-    torch_cifar.py                  # 已有：PyTorch Dataset 与 transform
-    noisy_dataset.py                # 建议新增：合并 manifest 与 global index
-
-  models/
-    tiny_cnn.py                     # 已有：smoke 模型
-    preact_resnet.py                # 建议新增：正式 CIFAR baseline
-
-  losses/
-    torch_losses.py                 # 已有：CE/GCE/NCE/MAE/RCE/APL
-
-  algorithms/
-    supervised.py                   # 已有：单模型监督训练
-    <algorithm>.py                  # 新算法的完整生命周期与私有状态
-
-  noise/
-    generators.py                   # 已有：噪声生成
-    manifest.py                     # 已有：噪声记录和复现
-
-  evaluation/
-    classification.py              # 已有：loss/accuracy
-    noise_detection.py              # 建议新增：selection precision/recall 等
-
-  plugins/
-    catalog.py                      # 已有：注册和构造机制
-    builtin/catalog.py              # 已有：注册并构造可训练的 PyTorch loss
-
-  training/
-    builders.py                     # 建议新增：根据 YAML 和 registry 组装组件
-    experiment.py                   # 保留：调度数据、训练、评估和产物
-    checkpoint.py                   # 已有：保存/恢复全部状态
+```python
+objective = per_sample.mean()
+objective.backward()
+optimizer.step()
 ```
 
----
+`SupervisedClassificationAlgorithm.step()` 必须返回：
 
-## 11. 新增算法的开发步骤
-
-建议按以下顺序实现，避免算法代码和框架代码混在一起。
-
-1. **先写配置**：明确算法需要几个模型、什么 loss、什么噪声和哪些超参数。
-2. **定义 batch 需要的字段**：普通算法只需 `input/target/index`；评测噪声识别时还需隔离的真值信息。
-3. **实现 PyTorch 数学核心**：优先保证能输出 `[B]` 的逐样本 loss 或 weight/mask。
-4. **实现 Algorithm 生命周期**：放在 `algorithms/<algorithm>.py`，复杂方法自己拥有模型、优化器和阶段状态。
-5. **实现 `state_dict/load_state_dict`**：保存所有模型、优化器、scheduler 和逐样本历史。
-6. **注册插件**：在 `plugins/builtin/catalog.py` 中注册工厂和 capability。
-7. **接入构造层**：配置中的算法名字必须真正决定创建哪个对象，不能继续在 `experiment.py` 写死。
-8. **增加 evaluator**：既看最终分类准确率，也看算法声称解决的问题，例如选中样本的 precision/recall。
-9. **增加 unittest**：分别测试数学核心、一个训练 step、checkpoint roundtrip 和固定 seed 可复现。
-10. **最后跑 smoke**：验证配置、DataLoader、GPU、指标、checkpoint 和恢复训练组成完整闭环。
-
----
-
-## 12. 开发者最需要记住的边界
-
-- 原始数据解码属于 `data/cifar.py`，不要写进算法。
-- 数据增强和 PyTorch Dataset 属于 `data/torch_cifar.py`。
-- 噪声标签应通过 `NoiseManifest + global index` 注入，不要在每个 batch 临时随机改标签。
-- 模型结构属于 `models/`，loss 数学属于 `losses/`，训练决策属于 `algorithms/`。
-- `training/experiment.py` 负责组装、循环、评估和输出，不应该理解某个论文算法的内部数学。
-- 通用 `core/` 不应该依赖 CIFAR、PyTorch CE、噪声率或双网络假设。
-- clean target 只能用于评估，不能泄漏给训练算法。
-- 复杂算法的逐样本历史属于算法私有状态，但必须进入 checkpoint。
-- 当前 `engine/runner.py` 与实际训练循环尚未统一；修改生命周期前先解决 global step 的唯一归属。
-
-一句话概括当前与理想状态：
-
-```text
-当前：YAML -> registry 构造 CE/GCE/NCE/MAE/RCE/APL
-     -> per-sample loss [B] -> Algorithm 聚合 -> 评估 -> checkpoint
-
-理想：YAML -> registry 组装数据/噪声/模型/loss/算法
-     -> Algorithm 使用 global index 管理逐样本状态
-     -> 通用评估与完整 checkpoint
+```python
+StepResult(metrics={
+    "loss": float,
+    "accuracy": float,
+    "samples": float,
+})
 ```
+
+它负责推进 `RunState.step`。状态接口必须提供：
+
+```python
+state_dict() -> dict
+load_state_dict(state: dict) -> None
+```
+
+复杂 Algorithm 必须把模型、优化器、scheduler、阶段状态和逐样本历史纳入可恢复状态；不得把算法私有数组塞入通用 `RunState`。
+
+### 7.4 Selector 等预留边界
+
+Selector 尚未接入统一 runner。接入前不规定最终 mask/weight schema。最低约束：
+
+- 可消费 `input/target/index`、模型输出和 `per_sample.detach()` 的评分副本。
+- 不得读取 clean label、生成噪声或修改 Manifest。
+- 不得 detach 用于 backward 的原始 loss。
+- mask、weight、corrected target 的 shape/语义及 checkpoint 状态必须在接入时补充本文并由测试固定。
+
+## 8. Evaluator、产物与 Checkpoint
+
+### 8.1 Evaluator
+
+```python
+evaluate_classification(model, clean_loader, loss, device) -> {
+    "loss": float,
+    "accuracy": float,
+    "samples": float,
+}
+```
+
+Evaluator 使用独立 clean validation/test loader；在 `inference_mode` 下按样本汇总同一逐样本 Loss。它不得参与训练更新。
+
+### 8.2 每次运行的必要产物
+
+| 文件 | 含义 |
+|---|---|
+| `resolved_config.yaml` | 实际配置和解析后的噪声身份 |
+| `environment.json` | Python、PyTorch、CUDA、GPU、seed |
+| `metrics.jsonl` | epoch、兼容提示和 final 指标 |
+| `last.pt` / `best.pt` | 完整 checkpoint |
+| `final_metrics.json` | best checkpoint 的 test 指标 |
+| `noise_manifest.npz` / `noise_summary.json` | 仅 noisy run |
+
+### 8.3 Checkpoint v2
+
+```python
+{
+    "format_version": 2,
+    "model": ...,
+    "optimizer": ...,
+    "scheduler": ...,
+    "run_state": ...,
+    "completed_epoch": int,
+    "best_epoch": int,
+    "best_validation_accuracy": float,
+    "loss": dict,
+    "config": dict,
+    "noise": dict,  # 仅 noisy run
+}
+```
+
+恢复规则：
+
+- model、optimizer、`RunState` 缺失时必须失败。
+- 当前启用 scheduler 时，checkpoint 缺少 scheduler state 必须失败。
+- noisy resume 缺少 run-local manifest 身份时必须失败。
+- 不得用 `0`、空 mapping 或默认对象伪造关键状态。
+- 兼容旧 CE-baseline 顶层 model/optimizer 和旧 Loss 嵌套 `algorithm.model/optimizer`。
+- 旧格式缺少 best 指标时，下一 epoch 重新建立，并在 metrics 中记录兼容提示。
+- 新 checkpoint 不再保证存在 `checkpoint["algorithm"]`。
+
+## 9. 接口索引
+
+| 需要修改的接口 | 生产方 | 主要消费方 | 强制测试 |
+|---|---|---|---|
+| 样本字段/index | `data/torch_cifar.py`、`data/noisy_dataset.py` | Algorithm、Manifest、未来 Selector | `test_torch_training.py`、`test_noise.py` |
+| Manifest v2 | `noise/manifest.py`、`training/noisy_labels.py` | Dataset、Runner、Checkpoint | `test_noise.py`、`test_noisy_ce_baseline.py` |
+| Loss `[B]` | `losses/torch_losses.py`、plugin catalog | Algorithm、Evaluator、未来 Selector | `test_losses.py`、`test_plugins.py` |
+| Algorithm/StepResult | `algorithms/supervised.py` | Runner、Checkpoint | `test_core.py`、`test_torch_training.py` |
+| Runner/config | `training/experiment.py`、CLI | 所有训练组件 | `test_cli.py`、smoke tests |
+| Checkpoint v2 | `training/checkpoint.py` | Runner、resume | `test_clean_baseline.py`、`test_torch_training.py` |
+| clean evaluation | `evaluation/classification.py` | Runner | `test_noisy_ce_baseline.py` |
+
+## 10. 修改接口时的强制流程
+
+1. 先定位上表中的生产方、全部消费方和测试。
+2. 保持职责边界；不要为了单个算法把特殊字段加入通用 Batch。
+3. 同一次修改中更新代码、测试、本文和 `docs/file-map.md`。
+4. 持久化格式变化必须增加版本或明确安全迁移规则。
+5. 先跑 focused tests，再跑完整 `unittest` 和相关 clean/noisy smoke、resume。
+6. 合并报告必须列出破坏性变化、旧调用方式、替代方式和协作者冲突文件。
+
+禁止：
+
+- 向 `TorchCifarDataset` 恢复 `targets=` override；
+- 把 clean label、flip mask 或噪声答案放入训练 batch；
+- 让 Loss 自行聚合或管理 optimizer；
+- 按 batch 位置保存逐样本历史；
+- 在 `training/experiment.py` 写入某篇论文算法的内部数学；
+- 把研究文档中的建议接口当作已经实现的生产合同。

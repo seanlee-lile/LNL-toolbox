@@ -68,7 +68,6 @@ class TorchCifarDataset(Dataset[dict[str, Any]]):
         data: CifarData,
         indices: Sequence[int] | np.ndarray | None = None,
         *,
-        targets: Sequence[int] | np.ndarray | None = None,
         transform: Callable[[Image.Image], torch.Tensor] | None = None,
     ) -> None:
         self.data = data
@@ -81,14 +80,6 @@ class TorchCifarDataset(Dataset[dict[str, Any]]):
             raise ValueError("indices must be one-dimensional")
         if self.indices.size and (self.indices.min() < 0 or self.indices.max() >= len(data)):
             raise IndexError("dataset indices are out of range")
-        self.targets = None if targets is None else np.asarray(targets, dtype=np.int64).copy()
-        if self.targets is not None:
-            if self.targets.shape != (len(data),):
-                raise ValueError("targets must contain one label for every global dataset index")
-            if self.targets.size and (
-                self.targets.min() < 0 or self.targets.max() >= len(data.class_names)
-            ):
-                raise ValueError("targets contain labels outside the dataset class range")
         self.transform = transform or build_cifar_transform(training=False)
 
     def __len__(self) -> int:
@@ -99,7 +90,7 @@ class TorchCifarDataset(Dataset[dict[str, Any]]):
         image = Image.fromarray(self.data.images[index], mode="RGB")
         return {
             "input": self.transform(image),
-            "target": int(self.data.labels[index] if self.targets is None else self.targets[index]),
+            "target": int(self.data.labels[index]),
             "index": index,
         }
 

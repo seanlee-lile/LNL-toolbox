@@ -51,8 +51,9 @@
 |---|---|
 | `data/contracts.py` | 早期 LNL 分类样本结构，包含 image、target、index 和可选干净标签；属于具体任务协议。 |
 | `data/cifar.py` | 读取 CIFAR-10/100 官方 pickle，转换为 `[N,32,32,3]` uint8 图像并验证标签。 |
-| `data/torch_cifar.py` | 提供分层划分、图像变换和 PyTorch Dataset；可用全量 `targets[N]` 按稳定 global index 覆盖训练标签，batch 仍只返回 `input/target/index`。 |
-| `data/__init__.py` | 公开 CIFAR 读取函数和数据类型。 |
+| `data/torch_cifar.py` | 提供分层划分、图像变换和只读取原始标签的 PyTorch Dataset；返回稳定的 `input/target/index`。 |
+| `data/noisy_dataset.py` | 按显式 global-index mapping 包装训练 Dataset 并替换 target；不会向 batch 暴露 clean label。 |
+| `data/__init__.py` | 公开 CIFAR 读取函数、干净 Dataset 和 noisy wrapper。 |
 | `data/cifar-10-batches-py/` | 用户放入的 CIFAR-10 官方 Python 数据。 |
 | `data/cifar-100-python/` | 用户放入的 CIFAR-100 官方 Python 数据。 |
 
@@ -76,13 +77,22 @@
 
 | 文件 | 作用 |
 |---|---|
-| `cli/__init__.py` | 共享中文 `PromptSession`、实验模板发现、常用训练参数覆盖和最终确认；不包含训练数学。 |
+| `cli/__init__.py` | 共享中文 `PromptSession`、实验模板发现、Loss 选择、clean/generated/external 标签模式和最终确认；不包含训练数学。 |
 | `cli/train.py` | 通用训练入口；无参数进入向导，有参数时保持 argparse/YAML 调用。 |
 | `cli/clean_train.py` | Clean baseline 入口；交互选择模型、scheduler、恢复或多 seed。 |
 | `cli/make_noise.py` | 交互或参数化地从 `.npy` 标签生成 symmetric/pairflip Noise Manifest。 |
 | `cli/inspect_data.py` | 交互或参数化地验证 CIFAR-10/100 并输出划分摘要。 |
 
-## 8. 配置
+## 8. 训练编排
+
+| 文件 | 作用 |
+|---|---|
+| `training/experiment.py` | 唯一监督训练器；统一构造模型、Loss、optimizer、scheduler、clean/noisy Dataset、评测和产物。`run_experiment` 为兼容入口。 |
+| `training/clean_baseline.py` | clean-only 包装和多 seed 汇总；检测到 noise 配置立即拒绝。 |
+| `training/noisy_labels.py` | 生成或导入 manifest，规范化为 run-local v2，校验恢复身份并生成无标签泄漏的元数据。 |
+| `training/checkpoint.py` | 保存 checkpoint v2，并安全读取旧 CE-baseline 顶层格式和旧 Loss 嵌套格式。 |
+
+## 9. 配置
 
 | 文件 | 作用 |
 |---|---|
@@ -94,9 +104,10 @@
 | `configs/algorithm/coteaching.yaml` | Co-teaching 示例参数。 |
 | `configs/noise/symmetric.yaml` | symmetric noise 示例参数。 |
 | `configs/noise/instance_dependent.yaml` | 示例 IDN 参数。 |
-| 实验 YAML 顶层 `noise.manifest` | 可选的已有 Noise Manifest 路径；省略时使用干净标签。 |
+| `configs/experiment/cifar10_symmetric_ce_smoke.yaml` | symmetric 0.4 + CE 的统一 noisy runner smoke 配置。 |
+| 实验 YAML 顶层 `noise` | 省略时 clean；`name/rate/seed` 生成噪声，或用 `manifest` 导入外部映射，两种方式互斥。 |
 
-## 9. 测试
+## 10. 测试
 
 | 文件 | 验证内容 |
 |---|---|
@@ -108,8 +119,9 @@
 | `tests/test_losses.py` | P0 loss 公式、GCE 极低概率梯度、逐样本 shape、极端数值和 APL 论文约束。 |
 | `tests/test_coteaching.py` | 双网络交叉选样和保留率日程。 |
 | `tests/test_cli.py` | Prompt 重试/取消、GCE/APL 配置、APL 正权重输入和交互/参数模式兼容。 |
+| `tests/test_noisy_ce_baseline.py` | 统一 runner 的 generated noise、clean evaluation、manifest 元数据和非 CE loss 接入。 |
 
-## 10. 调研脚本与文档
+## 11. 调研脚本与文档
 
 | 文件 | 作用 |
 |---|---|
