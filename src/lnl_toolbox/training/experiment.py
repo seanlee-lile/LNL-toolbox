@@ -25,7 +25,7 @@ from lnl_toolbox.data.torch_cifar import TorchCifarDataset, build_cifar_transfor
 from lnl_toolbox.evaluation.classification import evaluate_classification
 from lnl_toolbox.models.cifar_resnet import cifar_resnet18, preact_resnet18
 from lnl_toolbox.models.tiny_cnn import TinyCNN
-from lnl_toolbox.plugins.builtin import build_builtin_loss
+from lnl_toolbox.plugins.builtin import build_builtin_loss, build_builtin_selector
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import load_checkpoint, read_checkpoint, save_checkpoint
 from lnl_toolbox.training.noisy_labels import (
@@ -129,11 +129,13 @@ def _normalized_resume_value(config: Mapping[str, Any], key: str) -> Any:
         return dict(config.get("loss", {"name": "ce"}))
     if key == "scheduler":
         return dict(config.get("scheduler", {"name": "none"}) or {"name": "none"})
+    if key == "selector":
+        return dict(config.get("selector", {"name": "all"}) or {"name": "all"})
     return config.get(key)
 
 
 def _validate_resume_config(current: Mapping[str, Any], saved: Mapping[str, Any]) -> None:
-    for key in ("seed", "model", "loss", "optimizer", "scheduler"):
+    for key in ("seed", "model", "loss", "optimizer", "scheduler", "selector"):
         if _normalized_resume_value(current, key) != _normalized_resume_value(saved, key):
             raise ValueError(f"Resume configuration changed {key}")
     current_dataset = str(current.get("data", {}).get("name", "cifar10")).lower()
@@ -170,6 +172,7 @@ def run_supervised_experiment(
 
     config = deepcopy(config)
     config.setdefault("loss", {"name": "ce"})
+    config.setdefault("selector", {"name": "all"})
     seed = int(config.get("seed", 1))
     epochs = int(config["trainer"]["epochs"])
     seed_everything(seed)
@@ -275,10 +278,11 @@ def run_supervised_experiment(
 
     model = build_model(config["model"], num_classes)
     criterion = build_builtin_loss(config["loss"]).to(device)
+    selector = build_builtin_selector(config["selector"])
     optimizer = build_optimizer(model, config["optimizer"])
     scheduler = build_scheduler(optimizer, config.get("scheduler"), epochs)
     algorithm = SupervisedClassificationAlgorithm(
-        model, optimizer, criterion, device
+        model, optimizer, criterion, device, selector=selector
     )
     algorithm.setup(ExperimentContext(run_dir, config, seed))
     state = RunState(phase="train")
@@ -320,15 +324,20 @@ def run_supervised_experiment(
             state.cycle = epoch
             algorithm.on_cycle_start(state)
             loss_sum = 0.0
+            all_sample_loss_sum = 0.0
             correct_weighted = 0.0
             samples = 0.0
+            selected_samples = 0.0
             learning_rate = float(optimizer.param_groups[0]["lr"])
             for raw_batch in train_loader:
                 result = algorithm.step(Batch(raw_batch), state)
                 count = result.metrics["samples"]
-                loss_sum += result.metrics["loss"] * count
+                selected_count = result.metrics["selected_samples"]
+                loss_sum += result.metrics["loss"] * selected_count
+                all_sample_loss_sum += result.metrics["all_sample_loss"] * count
                 correct_weighted += result.metrics["accuracy"] * count
                 samples += count
+                selected_samples += selected_count
             algorithm.on_cycle_end(state)
             validation = evaluate_classification(
                 model, validation_loader, criterion, device
@@ -340,8 +349,11 @@ def run_supervised_experiment(
                 "epoch": epoch + 1,
                 "global_step": state.step,
                 "learning_rate": learning_rate,
-                "train_loss": loss_sum / samples,
+                "train_loss": loss_sum / selected_samples,
+                "train_all_sample_loss": all_sample_loss_sum / samples,
                 "train_accuracy": correct_weighted / samples,
+                "selected_samples": selected_samples,
+                "selected_ratio": selected_samples / samples,
                 "validation_loss": validation["loss"],
                 "validation_accuracy": validation["accuracy"],
             }

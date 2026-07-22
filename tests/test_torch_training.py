@@ -14,6 +14,7 @@ from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 from lnl_toolbox.models import TinyCNN
 from lnl_toolbox.plugins.builtin import build_builtin_loss
 from lnl_toolbox.runtime import resolve_device
+from lnl_toolbox.selectors import AllSelector, SelectionResult, SmallLossSelector
 from lnl_toolbox.training.checkpoint import load_checkpoint, save_checkpoint
 
 
@@ -85,8 +86,10 @@ class TorchTrainingTest(unittest.TestCase):
         algorithm.setup(ExperimentContext(Path.cwd()))
         before = model.classifier.weight.detach().clone()
         result = algorithm.step(Batch({"input": torch.randn(4, 3, 32, 32),
-                                       "target": torch.tensor([0, 1, 2, 3])}), RunState())
+                                       "target": torch.tensor([0, 1, 2, 3]),
+                                       "index": torch.arange(4)}), RunState())
         self.assertTrue(np.isfinite(result.metrics["loss"]))
+        self.assertEqual(result.metrics["selected_ratio"], 1.0)
         self.assertFalse(torch.equal(before, model.classifier.weight))
 
     def test_each_p0_loss_completes_one_training_step(self):
@@ -109,6 +112,7 @@ class TorchTrainingTest(unittest.TestCase):
                     Batch({
                         "input": torch.randn(4, 3, 32, 32),
                         "target": torch.tensor([0, 1, 2, 3]),
+                        "index": torch.arange(4),
                     }),
                     RunState(),
                 )
@@ -128,9 +132,118 @@ class TorchTrainingTest(unittest.TestCase):
                 Batch({
                     "input": torch.randn(2, 3, 32, 32),
                     "target": torch.tensor([0, 1]),
+                    "index": torch.arange(2),
                 }),
                 RunState(),
             )
+
+    def test_selector_receives_detached_scores_and_only_selected_loss_backpropagates(self):
+        class FirstSampleSelector:
+            def __init__(self) -> None:
+                self.scores_require_grad = None
+                self.sample_indices = None
+                self.epoch = None
+
+            def select(self, selection_input):
+                self.scores_require_grad = selection_input.scores.requires_grad
+                self.sample_indices = selection_input.sample_indices.detach().clone()
+                self.epoch = selection_input.metadata.get("epoch")
+                return SelectionResult(
+                    selected_mask=torch.tensor([True, False]),
+                    metrics={"selected_samples": 1.0, "selected_ratio": 0.5},
+                )
+
+        model = torch.nn.Linear(2, 2, bias=False)
+        selector = FirstSampleSelector()
+        algorithm = SupervisedClassificationAlgorithm(
+            model,
+            torch.optim.SGD(model.parameters(), lr=0.1),
+            CrossEntropyLoss(),
+            torch.device("cpu"),
+            selector=selector,
+        )
+        algorithm.setup(ExperimentContext(Path.cwd()))
+        before = model.weight.detach().clone()
+        result = algorithm.step(
+            Batch({
+                "input": torch.eye(2),
+                "target": torch.tensor([0, 1]),
+                "index": torch.tensor([9, 3]),
+            }),
+            RunState(cycle=4),
+        )
+
+        self.assertIs(selector.scores_require_grad, False)
+        self.assertTrue(torch.equal(selector.sample_indices, torch.tensor([9, 3])))
+        self.assertEqual(selector.epoch, 4)
+        self.assertFalse(torch.equal(before[:, 0], model.weight[:, 0]))
+        self.assertTrue(torch.equal(before[:, 1], model.weight[:, 1]))
+        self.assertEqual(result.metrics["selected_samples"], 1.0)
+        self.assertEqual(result.metrics["selected_ratio"], 0.5)
+
+    def test_small_loss_selector_completes_training_step(self):
+        model = TinyCNN(10, 8)
+        algorithm = SupervisedClassificationAlgorithm(
+            model,
+            torch.optim.SGD(model.parameters(), lr=0.01),
+            CrossEntropyLoss(),
+            torch.device("cpu"),
+            selector=SmallLossSelector(keep_rate=0.5),
+        )
+        algorithm.setup(ExperimentContext(Path.cwd()))
+        result = algorithm.step(
+            Batch({
+                "input": torch.randn(4, 3, 32, 32),
+                "target": torch.tensor([0, 1, 2, 3]),
+                "index": torch.tensor([100, 20, 80, 40]),
+            }),
+            RunState(),
+        )
+        self.assertEqual(result.metrics["selected_samples"], 2.0)
+        self.assertEqual(result.metrics["selected_ratio"], 0.5)
+
+    def test_all_selector_matches_full_batch_mean_and_parameter_update(self):
+        torch.manual_seed(23)
+        selected_model = torch.nn.Linear(3, 2)
+        reference_model = torch.nn.Linear(3, 2)
+        reference_model.load_state_dict(selected_model.state_dict())
+        inputs = torch.tensor([
+            [1.0, 0.0, -1.0],
+            [0.0, 2.0, 1.0],
+            [-1.0, 1.0, 0.5],
+        ])
+        targets = torch.tensor([0, 1, 0])
+
+        selected_optimizer = torch.optim.SGD(selected_model.parameters(), lr=0.05)
+        algorithm = SupervisedClassificationAlgorithm(
+            selected_model,
+            selected_optimizer,
+            CrossEntropyLoss(),
+            torch.device("cpu"),
+            selector=AllSelector(),
+        )
+        algorithm.setup(ExperimentContext(Path.cwd()))
+        result = algorithm.step(
+            Batch({
+                "input": inputs,
+                "target": targets,
+                "index": torch.tensor([50, 10, 30]),
+            }),
+            RunState(),
+        )
+
+        reference_optimizer = torch.optim.SGD(reference_model.parameters(), lr=0.05)
+        reference_optimizer.zero_grad(set_to_none=True)
+        reference_loss = CrossEntropyLoss()(reference_model(inputs), targets).mean()
+        reference_loss.backward()
+        reference_optimizer.step()
+
+        self.assertAlmostEqual(result.metrics["loss"], reference_loss.item(), places=7)
+        self.assertEqual(result.metrics["selected_ratio"], 1.0)
+        for selected, reference in zip(
+            selected_model.parameters(), reference_model.parameters()
+        ):
+            self.assertTrue(torch.allclose(selected, reference, atol=0.0, rtol=0.0))
 
     def test_device_selection(self):
         self.assertEqual(resolve_device("cpu").type, "cpu")

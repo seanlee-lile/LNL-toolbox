@@ -32,7 +32,7 @@
 | `plugins/__init__.py` | 公开 `PluginCatalog` 和 `PluginSpec`。 |
 | `plugins/catalog.py` | 实现按 kind/name 注册、构建及 capability 查询的插件目录。 |
 | `plugins/builtin/__init__.py` | 公开内置示例插件目录构造函数。 |
-| `plugins/builtin/catalog.py` | 注册 PyTorch/NumPy loss、噪声生成器和 Co-teaching selector，并按配置构造 P0 loss。 |
+| `plugins/builtin/catalog.py` | 注册 PyTorch/NumPy loss、噪声生成器、独立 `batch_selector` 及旧 Co-teaching helper，并按配置构造 P0 loss 和通用 Selector。 |
 | `registry.py` | 早期的单类型轻量 Registry；暂时保留以兼容已有代码，长期可由 PluginCatalog 取代。 |
 
 ## 4. Runner 与算法接口
@@ -43,6 +43,7 @@
 | `engine/runner.py` | 执行 setup、run、cycle、step、evaluator 和 close；不处理模型或梯度。 |
 | `algorithms/base.py` | 将旧 `Algorithm/TrainState` 导入映射到新的通用核心，保持兼容。 |
 | `algorithms/coteaching.py` | NumPy 版 Co-teaching 保留率日程和小损失交叉选样函数。 |
+| `algorithms/supervised.py` | 单模型监督训练步骤；将 detached 逐样本 loss 交给通用 Selector，再按 hard mask 归约原始 loss 并反向传播。 |
 | `algorithms/__init__.py` | 汇总算法兼容接口和 Co-teaching 函数。 |
 
 ## 5. 数据层
@@ -69,7 +70,11 @@
 | `losses/torch_losses.py` | PyTorch 版逐样本 CE、标准 GCE、NCE、MAE、RCE、严格 P0 APL，以及 `[B]` 输出合同校验。 |
 | `losses/__init__.py` | 公开 NumPy 参考函数；安装 PyTorch 时同时公开可训练 loss。 |
 | `losses/loss板块第一轮.md` | Loss 实现简报及 Config、Algorithm、Selector、Evaluator 间的统一调用协议。 |
-| `plugins/builtin/catalog.py` | 将 PyTorch loss 注册为 `loss`、NumPy 参考实现注册为 `numpy_loss`，递归构造并校验 APL，拒绝 GCE 的旧 `eps` 配置。 |
+| `plugins/builtin/catalog.py` | 将 PyTorch loss 注册为 `loss`、通用 Selector 注册为 `batch_selector`，同时保留 NumPy loss 与旧 Co-teaching helper 的独立 kind。 |
+| `selectors/base.py` | 定义单 batch 的 `SelectionInput`、`SelectionResult`、无状态 `Selector` Protocol 及输入输出校验。 |
+| `selectors/basic.py` | 实现选择全部样本的 `AllSelector` 和 schedule-driven、stable-index tie-break 的 `SmallLossSelector`。 |
+| `selectors/schedules.py` | 定义无状态 keep-rate schedule，支持固定浮点、显式 constant 和零基 epoch linear 配置。 |
+| `selectors/__init__.py` | 公开通用 Selector 合同、基础实现和边界校验。 |
 | `evaluation/metrics.py` | NumPy 版 accuracy 和选样 precision/recall。 |
 | `evaluation/__init__.py` | 公开当前示例指标。 |
 
@@ -87,7 +92,7 @@
 
 | 文件 | 作用 |
 |---|---|
-| `training/experiment.py` | 唯一监督训练器；统一构造模型、Loss、optimizer、scheduler、clean/noisy Dataset、评测和产物。`run_experiment` 为兼容入口。 |
+| `training/experiment.py` | 唯一监督训练器；统一构造模型、Loss、无状态 batch Selector、optimizer、scheduler、clean/noisy Dataset、评测和产物。`run_experiment` 为兼容入口。 |
 | `training/clean_baseline.py` | clean-only 包装和多 seed 汇总；检测到 noise 配置立即拒绝。 |
 | `training/noisy_labels.py` | 生成或导入 manifest，规范化为 run-local v2，校验恢复身份并生成无标签泄漏的元数据。 |
 | `training/checkpoint.py` | 保存 checkpoint v2，并安全读取旧 CE-baseline 顶层格式和旧 Loss 嵌套格式。 |
@@ -105,6 +110,9 @@
 | `configs/noise/symmetric.yaml` | symmetric noise 示例参数。 |
 | `configs/noise/instance_dependent.yaml` | 示例 IDN 参数。 |
 | `configs/experiment/cifar10_symmetric_ce_smoke.yaml` | symmetric 0.4 + CE 的统一 noisy runner smoke 配置。 |
+| `configs/experiment/cifar10_symmetric_small_loss_smoke.yaml` | symmetric 0.4 + CE + 固定 0.5 keep-rate SmallLossSelector 的单模型 smoke 配置。 |
+| `configs/experiment/cifar10_symmetric_small_loss_linear_smoke.yaml` | symmetric 0.4 + CE + 从 1.0 线性变化到 0.5 的 SmallLossSelector smoke 配置。 |
+| 实验 YAML 顶层 `selector` | 省略时为 `all`；当前支持 `all` 和固定 keep-rate `small_loss`。 |
 | 实验 YAML 顶层 `noise` | 省略时 clean；`name/rate/seed` 生成噪声，或用 `manifest` 导入外部映射，两种方式互斥。 |
 
 ## 10. 测试
@@ -112,14 +120,15 @@
 | 文件 | 验证内容 |
 |---|---|
 | `tests/test_core.py` | 通用 Runner 生命周期、状态推进和 close 行为。 |
-| `tests/test_plugins.py` | capability 查询、loss 类型隔离、递归 APL 构造，以及 builder/catalog 约束一致性。 |
+| `tests/test_plugins.py` | capability 查询、loss/`batch_selector`/旧 Co-teaching kind 隔离，以及 builder/catalog 约束一致性。 |
 | `tests/test_registry.py` | 旧 Registry 注册和构建。 |
 | `tests/test_cifar_reader.py` | 用小型临时 pickle 验证 CIFAR-10/100 解码逻辑。 |
 | `tests/test_noise.py` | 噪声生成、manifest roundtrip/身份校验、非法标签与概率拒绝、KnownTransition 和恢复训练 manifest 身份约束。 |
 | `tests/test_losses.py` | P0 loss 公式、GCE 极低概率梯度、逐样本 shape、极端数值和 APL 论文约束。 |
 | `tests/test_coteaching.py` | 双网络交叉选样和保留率日程。 |
 | `tests/test_cli.py` | Prompt 重试/取消、GCE/APL 配置、APL 正权重输入和交互/参数模式兼容。 |
-| `tests/test_noisy_ce_baseline.py` | 统一 runner 的 generated noise、clean evaluation、manifest 元数据和非 CE loss 接入。 |
+| `tests/test_noisy_ce_baseline.py` | 统一 runner 的 generated noise、clean evaluation、manifest 元数据、Loss 与 Selector 配置接入。 |
+| `tests/test_selectors.py` | 通用 Selector 输入输出合同、固定比例、最少选择、stable-index tie-break 和失败边界。 |
 
 ## 11. 调研脚本与文档
 

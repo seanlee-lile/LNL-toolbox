@@ -12,12 +12,16 @@ flowchart LR
     B --> C["Dataset / DataLoader"]
     B --> D["Model"]
     B --> E["PluginCatalog → Loss"]
+    B --> S["PluginCatalog → batch_selector"]
     C --> F["Batch"]
     D --> G["logits [B,C]"]
     G --> E
     E --> H["per-sample loss [B]"]
+    H -->|"detach + index"| S
+    S --> M["hard mask [B]"]
     F --> I["Supervised Algorithm"]
     H --> I
+    M --> I
     I --> J["StepResult"]
     B --> K["Clean Evaluator"]
     B --> L["Checkpoint v2"]
@@ -29,8 +33,9 @@ flowchart LR
 - `run_experiment` 是兼容别名；`run_clean_experiment` 是 clean-only 包装。
 - 生产路径固定使用 `SupervisedClassificationAlgorithm`；尚不能通过 YAML 替换任意 Algorithm。
 - `engine/runner.py` 没有进入该路径。两者都会推进 step，不能直接嵌套。
-- Loss 已通过 `PluginCatalog` 构造；Model、Algorithm、Evaluator 尚未全部插件化。
-- Selector、WeightProvider、RiskCorrector 尚未接入生产训练循环。
+- Loss 和无状态 batch Selector 已通过 `PluginCatalog` 构造；Model、Algorithm、Evaluator 尚未全部插件化。
+- 通用 `all`/`small_loss` Selector 已接入单模型监督路径；WeightProvider、RiskCorrector 尚未接入。
+- Co-teaching 的双网络协调和 peer exchange 仍属于独立 Algorithm/Pipeline，不由通用 Selector 承担。
 
 ## 2. 模块职责与依赖方向
 
@@ -42,6 +47,7 @@ flowchart LR
 | `noise/` | 噪声生成、Manifest、转移矩阵验证 | 选样、模型更新、读取验证指标 |
 | `models/` | `inputs -> logits` | 读取标签、Manifest 或逐样本历史 |
 | `losses/` | `logits + targets -> loss[B]` | 聚合、选样、optimizer、clean label |
+| `selectors/` | detached `scores[B] + index[B] -> hard mask[B]` | 模型、optimizer、backward、peer exchange、生命周期 |
 | `algorithms/` | 组合模型、Loss、优化器和训练决策；拥有私有状态 | 数据文件解析、实验目录管理 |
 | `evaluation/` | clean validation/test 指标 | 参与训练更新或泄漏 clean label |
 | `training/` | 组装、循环、恢复、产物 | 实现论文公式或把算法逻辑写死在公共入口 |
@@ -52,7 +58,7 @@ flowchart LR
 ```text
 cli → training
 training → data / noise / models / losses / algorithms / evaluation / plugins
-algorithms → core / models / losses
+algorithms → core / models / losses / selectors
 evaluation → losses
 data ↔ noise 只通过显式 mapping/Manifest 连接
 core → 标准库
@@ -80,6 +86,7 @@ run_supervised_experiment(
 | `optimizer` | 必须；当前支持 SGD、AdamW |
 | `trainer` | 必须；epochs、device |
 | `loss` | 可选；缺省为 `{name: ce}` |
+| `selector` | 可选；缺省为 `{name: all}`，另支持固定 keep-rate `small_loss` |
 | `scheduler` | 可选；none、cosine、multistep |
 | `noise` | 可选；省略即 clean |
 | `seed` / `output_root` | 可选；有稳定默认值 |
@@ -138,7 +145,7 @@ global index 的当前用途：
 |---|---|
 | `NoiseManifest` | `global_indices[i] -> noisy_targets[i]` |
 | `NoisyTargetDataset` | 按样本 index 查找训练 target |
-| Selector/可靠性模块（预留） | 读取和更新 loss history、mask、weight、概率 |
+| batch Selector | 用 stable index 对相同 score 做确定性裁决；当前不保存逐样本历史 |
 | Checkpoint | 保存逐样本状态及其 index 对齐信息 |
 | Evaluator | 仅在需要逐样本对齐时连接预测与评测真值 |
 
@@ -225,18 +232,24 @@ per_sample = loss(logits, targets)  # FloatTensor[B]
 ### 7.3 当前监督 Algorithm
 
 ```python
-objective = per_sample.mean()
+selection = selector.select(SelectionInput(per_sample.detach(), indices))
+objective = per_sample[selection.selected_mask].mean()
 objective.backward()
 optimizer.step()
 ```
+
+用于 backward 的 `per_sample` 保留 autograd graph；只有评分副本会 detach。缺少 `selector` 配置时构造 `AllSelector`，因此 objective 与旧行为相同。
 
 `SupervisedClassificationAlgorithm.step()` 必须返回：
 
 ```python
 StepResult(metrics={
     "loss": float,
+    "all_sample_loss": float,
     "accuracy": float,
     "samples": float,
+    "selected_samples": float,
+    "selected_ratio": float,
 })
 ```
 
@@ -249,14 +262,21 @@ load_state_dict(state: dict) -> None
 
 复杂 Algorithm 必须把模型、优化器、scheduler、阶段状态和逐样本历史纳入可恢复状态；不得把算法私有数组塞入通用 `RunState`。
 
-### 7.4 Selector 等预留边界
+### 7.4 通用 batch Selector
 
-Selector 尚未接入统一 runner。接入前不规定最终 mask/weight schema。最低约束：
+`Selector.select(SelectionInput) -> SelectionResult` 的生产合同为：
 
-- 可消费 `input/target/index`、模型输出和 `per_sample.detach()` 的评分副本。
-- 不得读取 clean label、生成噪声或修改 Manifest。
-- 不得 detach 用于 backward 的原始 loss。
-- mask、weight、corrected target 的 shape/语义及 checkpoint 状态必须在接入时补充本文并由测试固定。
+- 输入 `scores` 是有限、非空、detached 的浮点 `Tensor[B]`。
+- 输入 `sample_indices` 是同设备、唯一的整数 `Tensor[B]`，表示 stable global index。
+- 输出 `selected_mask` 是同设备的 `torch.bool Tensor[B]`，且至少选择一个样本。
+- 输出 `metrics` 只包含有限标量统计；当前基础实现报告选择数量和比例。
+- `AllSelector` 选择全部样本；`SmallLossSelector` 按 fixed、constant 或 linear `keep_rate` 选择低分样本，数量向上取整且至少为一，同分时按 global index 确定性裁决。
+- `SelectionInput.metadata["epoch"]` 是当前零基 epoch。缺失时为兼容直接调用按 epoch 0 处理；若显式提供，则必须是非负整数。
+- linear schedule 在 epoch 0 返回 `start`，在 epoch `warmup_epochs` 返回 `end`，之后保持 `end`；所有 rate 位于 `(0, 1]`，且不从 noise rate 推导。
+- Selector 不接收 input、target、clean label、corruption mask 或 NoiseManifest，不拥有模型、optimizer、backward、peer exchange 或训练生命周期。
+- 当前 Selector 和 keep-rate schedule 均无运行时状态，不新增 checkpoint schema；完整 schedule 配置由 resolved config 保存，恢复时必须完全一致。
+
+插件 kind 为 `batch_selector`。旧的 `selector/coteaching_exchange` 是 Co-teaching helper，保持隔离且不应被普通单模型配置混用。
 
 ## 8. Evaluator、产物与 Checkpoint
 
@@ -315,9 +335,10 @@ Evaluator 使用独立 clean validation/test loader；在 `inference_mode` 下�
 
 | 需要修改的接口 | 生产方 | 主要消费方 | 强制测试 |
 |---|---|---|---|
-| 样本字段/index | `data/torch_cifar.py`、`data/noisy_dataset.py` | Algorithm、Manifest、未来 Selector | `test_torch_training.py`、`test_noise.py` |
+| 样本字段/index | `data/torch_cifar.py`、`data/noisy_dataset.py` | Algorithm、Manifest、Selector | `test_torch_training.py`、`test_noise.py` |
 | Manifest v2 | `noise/manifest.py`、`training/noisy_labels.py` | Dataset、Runner、Checkpoint | `test_noise.py`、`test_noisy_ce_baseline.py` |
-| Loss `[B]` | `losses/torch_losses.py`、plugin catalog | Algorithm、Evaluator、未来 Selector | `test_losses.py`、`test_plugins.py` |
+| Loss `[B]` | `losses/torch_losses.py`、plugin catalog | Algorithm、Evaluator、Selector | `test_losses.py`、`test_plugins.py` |
+| Selector hard mask | `selectors/`、plugin catalog | Supervised Algorithm | `test_selectors.py`、`test_torch_training.py` |
 | Algorithm/StepResult | `algorithms/supervised.py` | Runner、Checkpoint | `test_core.py`、`test_torch_training.py` |
 | Runner/config | `training/experiment.py`、CLI | 所有训练组件 | `test_cli.py`、smoke tests |
 | Checkpoint v2 | `training/checkpoint.py` | Runner、resume | `test_clean_baseline.py`、`test_torch_training.py` |
