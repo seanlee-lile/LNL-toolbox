@@ -34,7 +34,7 @@ flowchart LR
 - 生产路径固定使用 `SupervisedClassificationAlgorithm`；尚不能通过 YAML 替换任意 Algorithm。
 - `engine/runner.py` 没有进入该路径。两者都会推进 step，不能直接嵌套。
 - Loss 和无状态 batch Selector 已通过 `PluginCatalog` 构造；Model、Algorithm、Evaluator 尚未全部插件化。
-- 通用 `all`/`small_loss` Selector 已接入单模型监督路径；WeightProvider、RiskCorrector 尚未接入。
+- 通用 `all`/`small_loss` Selector 已接入单模型监督路径；二分类 asymmetric-RCN importance-weight 组件可通过内部 treatment 合同独立调用，但尚未接入公开训练配置；RiskCorrector 尚未接入。
 - Co-teaching 的双网络协调和 peer exchange 仍属于独立 Algorithm/Pipeline，不由通用 Selector 承担。
 
 ## 2. 模块职责与依赖方向
@@ -232,13 +232,19 @@ per_sample = loss(logits, targets)  # FloatTensor[B]
 ### 7.3 当前监督 Algorithm
 
 ```python
-selection = selector.select(SelectionInput(per_sample.detach(), indices))
-objective = per_sample[selection.selected_mask].mean()
+contribution = selector_adapter.resolve(
+    SelectionInput(per_sample.detach(), indices)
+)
+objective = reduce_per_sample_loss(
+    per_sample,
+    contribution,
+    ReductionSpec("weight_sum_mean"),
+)
 objective.backward()
 optimizer.step()
 ```
 
-用于 backward 的 `per_sample` 保留 autograd graph；只有评分副本会 detach。缺少 `selector` 配置时构造 `AllSelector`，因此 objective 与旧行为相同。
+用于 backward 的 `per_sample` 保留 autograd graph；只有评分副本会 detach。Selector adapter 将旧的 hard mask 转成 `ContributionResult(mask, ones)`，统一 reducer 计算 `sum(weight * loss) / sum(weight)`。在当前 hard-mask 路径中，这与 `per_sample[selected_mask].mean()` 数值等价。缺少 `selector` 配置时仍构造 `AllSelector`，因此 objective、配置、指标和 checkpoint 行为与旧实现相同。
 
 `SupervisedClassificationAlgorithm.step()` 必须返回：
 
@@ -277,6 +283,34 @@ load_state_dict(state: dict) -> None
 - 当前 Selector 和 keep-rate schedule 均无运行时状态，不新增 checkpoint schema；完整 schedule 配置由 resolved config 保存，恢复时必须完全一致。
 
 插件 kind 为 `batch_selector`。旧的 `selector/coteaching_exchange` 是 Co-teaching helper，保持隔离且不应被普通单模型配置混用。
+
+### 7.5 内部 Sample Treatment Phase 1
+
+`treatments/` 建立普通监督训练和独立权重组件共用的内部贡献合同，不是面向用户的论文方法组合接口：
+
+- `ContributionResult.selected_mask` 是 hard selection；
+- `ContributionResult.sample_weights` 是有限、非负、同设备的 `[B]` 浮点权重；
+- legacy Selector adapter 保留原 mask 和 metrics，并补充全一权重；
+- `ReductionSpec` 明确支持 `weight_sum_mean`、`batch_mean` 和 `sum`；
+- 普通监督训练固定使用 `weight_sum_mean`，零有效贡献或非有限 loss 必须报错，不得回退到全样本 CE；
+- 当前不支持 soft target、label correction、论文 method preset 或 stateful treatment，也不修改 checkpoint schema。
+
+公共配置继续使用既有 `selector: all/small_loss`。`TopKSelector`、`ThresholdSelector` 和论文 Algorithm 不属于本阶段。
+
+### 7.6 二分类 asymmetric-RCN importance-weight 组件
+
+通用 `WeightProvider[InputT]` 只约束 provider 将自己的输入转换为统一 `WeightResult(sample_weights, metrics)`；不同方法可以定义各自的输入合同。`WeightContributionAdapter` 只校验 provider 输出，并根据输出权重的 shape 和 device 生成全 `True` mask，不读取 posterior、target、logits 或其他方法专用字段。具体 provider 负责校验输入及输入/输出 batch 对齐，最终 reducer 再校验权重与逐样本 loss 对齐。
+
+`BinaryRCNImportanceWeightProvider` 使用论文专用的 `BinaryRCNWeightInput`，实现论文在二分类 asymmetric random classification noise 假设下的权重公式。输入 posterior 必须是 noisy-label posterior `P(noisy_Y = class | X)`，不是 clean posterior。标签编码为 `0=negative`、`1=positive`，且：
+
+- `rho_positive = P(noisy_y=0 | clean_y=1)`；
+- `rho_negative = P(noisy_y=1 | clean_y=0)`；
+- observed target 为 `0` 时公式减去 `rho_positive`，为 `1` 时减去 `rho_negative`；
+- 权重在逐样本 loss 计算前由外部 posterior 产生，并在 provider 边界 detach；
+- adapter 生成全 `True` mask，权重乘到保留 autograd 的逐样本 loss；
+- 论文目标使用 `ReductionSpec("batch_mean")`，即 `sum(beta_i * loss_i) / B`，不能改成按权重和归一化。
+
+该组件不支持多分类，不估计 posterior 或噪声率，未接入 YAML、plugin、checkpoint 或监督训练构造流程，因此只是 **paper-exact binary asymmetric-RCN importance-weight component**，不是完整 Importance Reweighting Pipeline。
 
 ## 8. Evaluator、产物与 Checkpoint
 

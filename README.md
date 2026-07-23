@@ -35,6 +35,61 @@
 
 这些实现不是运行框架的必选依赖。旧导入路径暂时保留，方便前期实验代码迁移。
 
+## Sample Selection and Reweighting
+
+当前 sample-treatment 基础设施包括 `AllSelector`、`SmallLossSelector`、constant/linear keep-rate schedule、`ContributionResult`、`ReductionSpec`，以及将旧 Selector hard mask 转为 contribution 的 adapter。连续加权侧提供泛型 `WeightProvider[InputT]`、通用 `WeightResult` 和 `WeightContributionAdapter`。
+
+统一内部数据流为：
+
+```text
+per-sample loss
++ hard mask / continuous sample weights
+→ ContributionResult
+→ explicit reduction
+→ scalar objective
+```
+
+`BinaryRCNImportanceWeightProvider` 实现二分类 asymmetric random classification noise 下的论文精确权重计算组件：
+
+```text
+noisy-label posterior + observed binary labels + known asymmetric noise rates
+→ detached importance weights
+→ all-True contribution mask
+→ batch-mean weighted loss
+```
+
+最小内部调用示例：
+
+```python
+from lnl_toolbox.treatments import (
+    BinaryRCNImportanceWeightProvider,
+    BinaryRCNWeightInput,
+    ReductionSpec,
+    WeightContributionAdapter,
+    reduce_per_sample_loss,
+)
+
+provider = BinaryRCNImportanceWeightProvider(
+    rho_positive=0.2,
+    rho_negative=0.1,
+)
+
+contribution = WeightContributionAdapter(provider).resolve(
+    BinaryRCNWeightInput(
+        posterior_probabilities=noisy_posterior,
+        observed_targets=observed_targets,
+    )
+)
+
+objective = reduce_per_sample_loss(
+    per_sample_loss,
+    contribution,
+    ReductionSpec("batch_mean"),
+)
+```
+
+其中 `noisy_posterior` 的形状为 `[B, 2]`，表示 `P(noisy_Y | X)`；`per_sample_loss` 必须保留 autograd graph，而 provider 输出的 sample weights 已 detach。该组件不支持多分类，不负责 posterior estimation 或 noise-rate estimation，且尚未接入 YAML、plugin 或默认监督训练构造流程。它不是完整的 Importance Reweighting Pipeline。Co-teaching、JoCoR、DivideMix 等复杂论文方法仍应由独立 Algorithm/Pipeline 实现。
+
 ## 快速验证
 
 ```powershell

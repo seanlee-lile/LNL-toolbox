@@ -202,6 +202,47 @@ class TorchTrainingTest(unittest.TestCase):
         self.assertEqual(result.metrics["selected_samples"], 2.0)
         self.assertEqual(result.metrics["selected_ratio"], 0.5)
 
+    def test_small_loss_reducer_matches_selected_mean_and_parameter_update(self):
+        selected_model = torch.nn.Linear(2, 2, bias=False)
+        reference_model = torch.nn.Linear(2, 2, bias=False)
+        with torch.no_grad():
+            selected_model.weight.copy_(torch.tensor([[0.4, -0.2], [-0.1, 0.3]]))
+        reference_model.load_state_dict(selected_model.state_dict())
+        inputs = torch.eye(2)
+        targets = torch.tensor([0, 0])
+
+        algorithm = SupervisedClassificationAlgorithm(
+            selected_model,
+            torch.optim.SGD(selected_model.parameters(), lr=0.1),
+            CrossEntropyLoss(),
+            torch.device("cpu"),
+            selector=SmallLossSelector(keep_rate=0.5),
+        )
+        algorithm.setup(ExperimentContext(Path.cwd()))
+        result = algorithm.step(
+            Batch({
+                "input": inputs,
+                "target": targets,
+                "index": torch.tensor([9, 3]),
+            }),
+            RunState(),
+        )
+
+        reference_optimizer = torch.optim.SGD(reference_model.parameters(), lr=0.1)
+        reference_optimizer.zero_grad(set_to_none=True)
+        reference_losses = CrossEntropyLoss()(reference_model(inputs), targets)
+        reference_loss = reference_losses[reference_losses.argmin()].mean()
+        reference_loss.backward()
+        reference_optimizer.step()
+
+        self.assertAlmostEqual(result.metrics["loss"], reference_loss.item(), places=7)
+        self.assertEqual(result.metrics["selected_samples"], 1.0)
+        self.assertEqual(result.metrics["selected_ratio"], 0.5)
+        for selected, reference in zip(
+            selected_model.parameters(), reference_model.parameters()
+        ):
+            self.assertTrue(torch.equal(selected, reference))
+
     def test_all_selector_matches_full_batch_mean_and_parameter_update(self):
         torch.manual_seed(23)
         selected_model = torch.nn.Linear(3, 2)

@@ -75,6 +75,11 @@
 | `selectors/basic.py` | 实现选择全部样本的 `AllSelector` 和 schedule-driven、stable-index tie-break 的 `SmallLossSelector`。 |
 | `selectors/schedules.py` | 定义无状态 keep-rate schedule，支持固定浮点、显式 constant 和零基 epoch linear 配置。 |
 | `selectors/__init__.py` | 公开通用 Selector 合同、基础实现和边界校验。 |
+| `treatments/base.py` | 定义内部 `ContributionResult`，统一表达 hard mask、连续非负样本权重和标量统计。 |
+| `treatments/reduction.py` | 定义 `ReductionSpec`，按 weight-sum mean、batch mean 或 sum 归约逐样本 loss。 |
+| `treatments/selector_adapter.py` | 将现有 hard Selector 适配为 mask 加全一权重，保持旧配置和数值行为。 |
+| `treatments/weights.py` | 定义泛型 WeightProvider、通用 WeightResult 和不依赖具体输入字段的 adapter；BinaryRCNWeightInput 与对应 provider 实现二分类 asymmetric-RCN 的论文精确 importance-weight 公式，不负责 posterior 或噪声率估计。 |
+| `treatments/__init__.py` | 公开内部 sample-treatment、reducer、Selector adapter 和连续权重合同。 |
 | `evaluation/metrics.py` | NumPy 版 accuracy 和选样 precision/recall。 |
 | `evaluation/__init__.py` | 公开当前示例指标。 |
 

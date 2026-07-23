@@ -13,7 +13,11 @@ from lnl_toolbox.selectors import (
     AllSelector,
     SelectionInput,
     Selector,
-    validate_selection_result,
+)
+from lnl_toolbox.treatments import (
+    ReductionSpec,
+    SelectorContributionAdapter,
+    reduce_per_sample_loss,
 )
 
 
@@ -31,6 +35,8 @@ class SupervisedClassificationAlgorithm:
         self.loss = loss
         self.device = device
         self.selector = selector or AllSelector()
+        self.contribution_adapter = SelectorContributionAdapter(self.selector)
+        self.reduction = ReductionSpec()
 
     def setup(self, context: ExperimentContext) -> None:
         self.model.to(self.device)
@@ -55,17 +61,17 @@ class SupervisedClassificationAlgorithm:
         per_sample_loss = validate_per_sample_loss(
             self.loss(logits, targets), int(targets.numel())
         )
-        selection = self.selector.select(SelectionInput(
+        contribution = self.contribution_adapter.resolve(SelectionInput(
             scores=per_sample_loss.detach(),
             sample_indices=sample_indices,
             metadata={"epoch": state.cycle},
         ))
-        selected_mask = validate_selection_result(
-            selection,
-            batch_size=int(targets.numel()),
-            device=per_sample_loss.device,
+        selected_mask = contribution.selected_mask
+        loss = reduce_per_sample_loss(
+            per_sample_loss,
+            contribution,
+            self.reduction,
         )
-        loss = per_sample_loss[selected_mask].mean()
         loss.backward()
         self.optimizer.step()
         count = int(targets.numel())
