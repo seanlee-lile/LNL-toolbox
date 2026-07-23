@@ -39,7 +39,7 @@ flowchart LR
 | `core/` | 任务无关的 `Batch`、`RunState`、`StepResult`、生命周期 Protocol | 依赖 PyTorch、CIFAR 或 LNL 假设 |
 | `cli/` | 交互、argparse、YAML mapping | 训练数学、标签修改、optimizer step |
 | `data/` | 原始数据解码、transform、Dataset、稳定 index | 选样、Loss、论文训练策略 |
-| `noise/` | 噪声生成、Manifest、转移矩阵验证 | 选样、模型更新、读取验证指标 |
+| `noise/` | 噪声生成、Manifest、后验快照、转移矩阵估计与验证 | 选样、模型更新、读取验证指标 |
 | `models/` | `inputs -> logits` | 读取标签、Manifest 或逐样本历史 |
 | `losses/` | `logits + targets -> loss[B]` | 聚合、选样、optimizer、clean label |
 | `algorithms/` | 组合模型、Loss、优化器和训练决策；拥有私有状态 | 数据文件解析、实验目录管理 |
@@ -55,6 +55,7 @@ training → data / noise / models / losses / algorithms / evaluation / plugins
 algorithms → core / models / losses
 evaluation → losses
 data ↔ noise 只通过显式 mapping/Manifest 连接
+models/training → noise 只通过 PosteriorSnapshot 连接
 core → 标准库
 ```
 
@@ -197,6 +198,42 @@ Manifest v2 的核心字段：
 - resume 只读取 run-local manifest，并核对 mapping hash 与文件 SHA-256。
 - Loss、Selector 和训练 Algorithm 不得读取 `clean_targets`。
 
+### 6.1 转移矩阵估计合同
+
+离线估计链路固定为：
+
+```text
+warm-up model → PosteriorSnapshot → TransitionEstimator → TransitionArtifact
+```
+
+`PosteriorSnapshot` 只包含 noisy posterior `float64[N,C]`、noisy target
+`int64[N]`、global index `int64[N]` 以及 dataset/split。它不得包含 clean
+target、flip mask 或真实转移矩阵。概率必须有限、非负且逐行和为 1；index
+必须唯一、非负。`snapshot_hash` 绑定以上全部内容和上下文。
+
+Estimator 的唯一公共调用为：
+
+```python
+estimate(snapshot: PosteriorSnapshot) -> TransitionArtifact
+```
+
+`TransitionArtifact.matrix` 是行随机 `[C,C]` 矩阵，方向只能是：
+
+```text
+T[i,j] = P(noisy=j | clean=i)
+p_noisy = p_clean @ T
+```
+
+Artifact 必须保存格式版本、estimator 名称、来源 snapshot hash、配置/诊断
+metadata 和 artifact hash；加载时验证内容完整性，不得隐式裁剪或归一化。
+`KnownTransition` 与 estimator 产物共享相同矩阵方向和 Tensor 输出接口。
+
+当前 `anchor` 是离线、无状态 estimator：每类选择 noisy posterior 最大的样本；
+精确并列时取最小 global index。它尚未接入统一 runner，也不是 Loss。
+Forward/Backward、Importance Weighting 等未来消费者只能接收 Artifact，不能反向
+修改 Snapshot。`NoiseManifest.per_sample_transition[N,C]` 只是每个样本真实类别
+对应的一行，不等于 PDL 的完整 `T(x)[N,C,C]`。
+
 ## 7. Model、Loss 与 Algorithm 合同
 
 ### 7.1 Model
@@ -317,6 +354,8 @@ Evaluator 使用独立 clean validation/test loader；在 `inference_mode` 下�
 |---|---|---|---|
 | 样本字段/index | `data/torch_cifar.py`、`data/noisy_dataset.py` | Algorithm、Manifest、未来 Selector | `test_torch_training.py`、`test_noise.py` |
 | Manifest v2 | `noise/manifest.py`、`training/noisy_labels.py` | Dataset、Runner、Checkpoint | `test_noise.py`、`test_noisy_ce_baseline.py` |
+| PosteriorSnapshot | warm-up 推理（未来） | TransitionEstimator | `test_transition_estimators.py` |
+| TransitionArtifact `[C,C]` | `noise/estimators.py`、`noise/transition.py` | 未来 RiskCorrector/WeightProvider | `test_transition_estimators.py`、`test_plugins.py` |
 | Loss `[B]` | `losses/torch_losses.py`、plugin catalog | Algorithm、Evaluator、未来 Selector | `test_losses.py`、`test_plugins.py` |
 | Algorithm/StepResult | `algorithms/supervised.py` | Runner、Checkpoint | `test_core.py`、`test_torch_training.py` |
 | Runner/config | `training/experiment.py`、CLI | 所有训练组件 | `test_cli.py`、smoke tests |

@@ -6,7 +6,12 @@ from typing import Any
 
 from lnl_toolbox.algorithms.coteaching import coteaching_exchange
 from lnl_toolbox.losses.numpy_losses import cross_entropy, generalized_cross_entropy
-from lnl_toolbox.noise import generate_instance_dependent, generate_pairflip, generate_symmetric
+from lnl_toolbox.noise import (
+    AnchorTransitionEstimator,
+    generate_instance_dependent,
+    generate_pairflip,
+    generate_symmetric,
+)
 from lnl_toolbox.plugins import PluginCatalog
 
 
@@ -73,6 +78,13 @@ def create_builtin_catalog() -> PluginCatalog:
         capabilities=("multi_model", "sample_selection"),
         metadata={"example": True},
     )
+    catalog.add(
+        "transition_estimator",
+        "anchor",
+        AnchorTransitionEstimator,
+        capabilities=("class_conditional", "offline", "paper_reference"),
+        metadata={"paper": "Patrini et al., CVPR 2017"},
+    )
     return catalog
 
 
@@ -109,4 +121,26 @@ def build_builtin_loss(
     except KeyError as exc:
         available = ", ".join(item.name for item in catalog.find(kind="loss")) or "none"
         raise ValueError(f"Unknown trainable loss {name!r}; available: {available}") from exc
+
+
+def build_builtin_transition_estimator(
+    config: Mapping[str, Any] | None,
+    catalog: PluginCatalog | None = None,
+) -> Any:
+    """Build an offline transition estimator from a YAML-compatible mapping."""
+
+    if config is not None and not isinstance(config, Mapping):
+        raise TypeError("Transition estimator configuration must be a mapping")
+    values = dict(config or {"name": "anchor"})
+    name = str(values.pop("name", "anchor")).strip().lower()
+    catalog = catalog or create_builtin_catalog()
+    try:
+        return catalog.build("transition_estimator", name, **values)
+    except KeyError as exc:
+        available = ", ".join(
+            item.name for item in catalog.find(kind="transition_estimator")
+        ) or "none"
+        raise ValueError(
+            f"Unknown transition estimator {name!r}; available: {available}"
+        ) from exc
 

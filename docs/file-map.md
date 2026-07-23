@@ -32,7 +32,7 @@
 | `plugins/__init__.py` | 公开 `PluginCatalog` 和 `PluginSpec`。 |
 | `plugins/catalog.py` | 实现按 kind/name 注册、构建及 capability 查询的插件目录。 |
 | `plugins/builtin/__init__.py` | 公开内置示例插件目录构造函数。 |
-| `plugins/builtin/catalog.py` | 注册 PyTorch/NumPy loss、噪声生成器和 Co-teaching selector，并按配置构造 P0 loss。 |
+| `plugins/builtin/catalog.py` | 注册 PyTorch/NumPy loss、噪声生成器、Co-teaching selector 和 Anchor transition estimator，并提供配置 builder。 |
 | `registry.py` | 早期的单类型轻量 Registry；暂时保留以兼容已有代码，长期可由 PluginCatalog 取代。 |
 
 ## 4. Runner 与算法接口
@@ -63,13 +63,14 @@
 |---|---|
 | `noise/manifest.py` | `NoiseManifest` 的数据结构、标签 fingerprint、NPZ 保存/加载，以及数据集、长度、标签范围和概率的训练前校验。 |
 | `noise/generators.py` | symmetric、pairflip 和基于 class score 的示例 IDN 生成器。 |
-| `noise/transition.py` | 验证 `T[i,j]=P(noisy=j|clean=i)` 行随机矩阵，并通过 `KnownTransition` 提供只读 Tensor 接口。 |
-| `noise/__init__.py` | 公开 Noise Manifest、生成器和转移矩阵协议。 |
+| `noise/transition.py` | 验证 `T[i,j]=P(noisy=j|clean=i)` 行随机矩阵；提供 `KnownTransition`、版本化 `TransitionArtifact`、NPZ roundtrip 和哈希篡改检测。 |
+| `noise/estimators.py` | 定义无 clean-label 的 `PosteriorSnapshot`、`TransitionEstimator` Protocol，并按 Patrini CVPR 2017 原式实现 Anchor estimator。 |
+| `noise/__init__.py` | 公开 Noise Manifest、生成器、后验快照、estimator 和转移矩阵产物协议。 |
 | `losses/numpy_losses.py` | NumPy 版逐样本 CE 与 GCE，用于数学验证，不执行神经网络反向传播。 |
 | `losses/torch_losses.py` | PyTorch 版逐样本 CE、标准 GCE、NCE、MAE、RCE、严格 P0 APL，以及 `[B]` 输出合同校验。 |
 | `losses/__init__.py` | 公开 NumPy 参考函数；安装 PyTorch 时同时公开可训练 loss。 |
 | `losses/loss板块第一轮.md` | Loss 实现简报及 Config、Algorithm、Selector、Evaluator 间的统一调用协议。 |
-| `plugins/builtin/catalog.py` | 将 PyTorch loss 注册为 `loss`、NumPy 参考实现注册为 `numpy_loss`，递归构造并校验 APL，拒绝 GCE 的旧 `eps` 配置。 |
+| `plugins/builtin/catalog.py` | 将 PyTorch loss 注册为 `loss`、NumPy 参考实现注册为 `numpy_loss`、Anchor 注册为 `transition_estimator`；递归构造并校验 APL。 |
 | `evaluation/metrics.py` | NumPy 版 accuracy 和选样 precision/recall。 |
 | `evaluation/__init__.py` | 公开当前示例指标。 |
 
@@ -116,6 +117,7 @@
 | `tests/test_registry.py` | 旧 Registry 注册和构建。 |
 | `tests/test_cifar_reader.py` | 用小型临时 pickle 验证 CIFAR-10/100 解码逻辑。 |
 | `tests/test_noise.py` | 噪声生成、manifest roundtrip/身份校验、非法标签与概率拒绝、KnownTransition 和恢复训练 manifest 身份约束。 |
+| `tests/test_transition_estimators.py` | Snapshot 输入合同、Anchor 数学/顺序不变性/并列规则、Artifact roundtrip/篡改检测和 Tensor 转换。 |
 | `tests/test_losses.py` | P0 loss 公式、GCE 极低概率梯度、逐样本 shape、极端数值和 APL 论文约束。 |
 | `tests/test_coteaching.py` | 双网络交叉选样和保留率日程。 |
 | `tests/test_cli.py` | Prompt 重试/取消、GCE/APL 配置、APL 正权重输入和交互/参数模式兼容。 |
@@ -132,3 +134,4 @@
 | `docs/architecture.md` | 通用核心、插件、Runner 与 CIFAR 数据流的架构图。 |
 | `docs/file-map.md` | 本文档，解释每个代码文件的职责。 |
 | `papers/README.md` | 论文目录、下载状态和缺失 PDF 说明。 |
+| `papers/transition-estimator-audit.md` | Anchor transition estimator 的 L3 论文/作者代码核对、公式、假设、伪代码、差异和实现成熟度。 |
