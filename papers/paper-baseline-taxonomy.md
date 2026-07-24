@@ -1,783 +1,580 @@
-# LNL 论文的 baseline 谱系与算法关系
+# LNL 论文的 baseline 谱系与算法关系（按训练流程修改位置重构）
 
-本文档不是按照论文使用的数学工具简单分组，而是回答两个问题：
+本文档不再把论文简单地按“使用了什么数学工具”或“属于哪一类研究方向”来分，而是以一个统一主线来组织：
 
-1. 每一类方法删去创新后，剩下的最小 baseline 是什么？
-2. 每篇论文究竟替换、扩展或组合了 baseline 的哪个部分？
+> 论文最终是修改了训练流程中的哪一个阶段？
 
-这里的 `baseline` 指算法结构上的直接起点，不是论文实验表格中列出的所有比较方法。论文之间存在多重继承关系，因此整体结构是有向关系图，而不是严格的单父节点树。
+> 文中的各阶段不是所有算法都会依次经过的严格串行流水线，而是一组用于描述“论文修改训练流程中哪些位置”的分析坐标。
 
-## 0. 结合当前 summary 后的分类原则
+1. 内层训练数据流；
+2. 外层 Pipeline / Lifecycle 控制；
+3. 训练后的 Post-processing。
 
-当前 summary 已经形成了几项重要而且基本正确的认识：
+本文档对每篇论文回答三个问题：
 
-- 应区分完整训练框架与可插拔模块。例如 DSS 中 `BASE` 是主体选择流程，MDA 和 CCS 是针对两类偏差的补充模块；FINE同样是附着在已有 selector 上的正则模块。
-- 应区分样本选择、样本加权、标签修正、loss 修正、梯度修改和参数修改。它们表面上都在“减少噪声影响”，代码接口却完全不同。
-- 转移矩阵论文通常共享同一个下游 baseline：先得到 `T`，再做 forward、backward 或 importance correction。论文的创新往往在 `T` 的识别方式，而不在分类器主体。
-- 统计估计论文的核心不是“复杂公式本身”，而是寻找一个能从 noisy distribution 恢复 clean risk 的充分统计量，例如全局质心、逐类均值或协方差。
-- warm-up 不是已经得到正确模型，而是为后续选择、纠错或统计估计提供一个不完全可靠的启动信号。
+1. Primary research question
+   - 论文主要要解决什么问题？
 
-需要进一步修正的是：当前 `papers` 文件夹的分类适合文件管理，但不等于思想谱系。例如第6篇不是样本选择，第10篇的核心归属是转移矩阵校正，第20篇主要是统计后处理，第25篇是 meta reweighting，第26篇是 feature-based selector。
+2. Modified pipeline stages
+   - 它修改了训练流程中的哪些阶段？
 
-## 1. 总 baseline：Noisy CE / ERM
-
-绝大多数论文最终都可以追溯到同一个最小训练流程：
-
-```text
-initialize model
-
-for batch:
-    logits = model(images)
-    loss = CrossEntropy(logits, noisy_labels)
-    update model using mean(loss)
-```
-
-它同时包含六个默认选择：
-
-```text
-监督信号：直接相信 noisy label
-样本使用：所有样本等权参与
-损失函数：Cross Entropy
-模型结构：单网络判别式分类器
-噪声机制：不显式建模
-参数更新：所有参数接受同一目标的梯度
-```
-
-不同论文分别替换其中一个或多个默认选择：
-
-```mermaid
-flowchart TB
-    B0["Noisy CE / ERM"]
-
-    B0 --> A["改变 loss 或风险表达"]
-    B0 --> B["改变样本选择"]
-    B0 --> C["显式建模噪声机制"]
-    B0 --> D["改变样本或参数权重"]
-    B0 --> E["恢复 clean statistics"]
-    B0 --> F["重构训练范式"]
-
-    A --> A1["GCE、Normalized Loss、Natarajan"]
-    B --> B1["MentorNet、Co-teaching、JoCoR、CNLCU、DSS、LEND"]
-    C --> C1["Forward/Backward、T-Revision、Dual-T、VolMinNet、PDL"]
-    D --> D1["Importance Reweighting、L2RW、CDR"]
-    E --> E1["MC-LDCE、CWD、PCSE"]
-    F --> F1["DivideMix、DLD、FINE、CA2C"]
-```
+3. Implementation type
+   - 在 toolbox 中，应该把它实现为什么组件？
 
 ---
 
-# 2. 第一类：直接改变 loss 形状
+## 0. 统一分类原则
 
-## 2.1 这一类的 baseline
+### 0.1 先定义一个统一 baseline
 
-最小 baseline 是普通 CE：
-
-```text
-probabilities = softmax(logits)
-loss = -log(probabilities[noisy_label])
-```
-
-这一类方法不一定估计哪些样本干净，也不一定估计转移矩阵，而是希望仅通过改变 `loss(probabilities, noisy_label)`，降低错误标签产生的过大梯度。
-
-## 2.2 流程图
-
-```mermaid
-flowchart LR
-    X["images"] --> M["model"]
-    M --> P["probabilities"]
-    Y["noisy label"] --> L["robust loss"]
-    P --> L
-    L --> G["gradient"]
-    G --> U["update all parameters"]
-```
-
-## 2.3 类树状关系
+大多数 LNL 论文都可以追溯到一个最小 baseline：
 
 ```text
-普通分类 loss
-├── CE
-│   ├── 优点：高置信错误也会产生强梯度，学习快
-│   └── 缺点：容易记忆 noisy label
-│
-├── MAE
-│   ├── 优点：对称噪声下具有较强理论鲁棒性
-│   └── 缺点：梯度容易饱和，深网训练慢、欠拟合
-│
-├── 第12篇 GCE
-│   ├── baseline：CE + MAE
-│   ├── 改动：用 q 在 CE 与 MAE 之间连续插值
-│   └── 截断版：低置信样本不再继续贡献过强梯度
-│
-└── 第11篇 Normalized Loss / APL
-    ├── baseline：任意已有 loss，包括 CE、GCE、RCE
-    ├── 改动1：除以该预测对所有类别的 loss 总和
-    ├── 目的1：让 loss 满足对称噪声下的常和条件
-    ├── 问题：单纯归一化容易欠拟合
-    └── 改动2：组合 active loss 与 passive loss
+给定 noisy dataset
+    ↓
+用模型预测 logits
+    ↓
+用 noisy label 和 CE 计算 loss
+    ↓
+用平均梯度更新参数
 ```
 
-### 与 baseline 的本质关系
+也就是说，所有方法都可以看作是对这条训练流程中的某个阶段做了“替换、补充、改写或重构”。
 
-```text
-GCE：在两个已有端点 CE 和 MAE 之间寻找折中
-Normalized Loss：给任意 loss 套一层鲁棒化变换
-APL：在归一化之后补回不足的学习能力
-```
+### 0.2 三维分类框架
 
-这一类最适合在 toolbox 中实现为纯 `Loss` 插件，不应要求修改 Runner 生命周期。
+每篇论文都要同时说明三件事：
+
+| 维度 | 问题 | 例子 |
+|---|---|---|
+| Primary research question | 论文要解决什么问题？ | “如何更好估计噪声机制” / “如何判断哪些样本更干净” |
+| Modified pipeline stages | 它修改了训练过程的哪几个步骤？ | “在 noise estimation 阶段加入 T 的估计” / “在 sample usage 阶段加入 selector” |
+| Implementation type | 在 toolbox 中应做成什么组件？ | `Loss` / `Selector` / `TransitionEstimator` / `WeightProvider` / `PipelinePlugin` |
+
+这三个维度不能混在一起。比如：
+
+- “GCE” 的主要问题是“改 loss 的形状”，所以它属于 Objective / Risk Construction；
+- “Co-teaching” 的主要问题是“哪些样本应该参与训练”，所以它属于 Sample Usage；
+- “T-Revision” 的主要问题是“如何估计转移矩阵 T”，所以它属于 Noise Modeling / Noise Estimation。
 
 ---
 
-# 3. 第二类：已知噪声机制后的风险校正
+## 1. 训练流程中的修改位置（唯一主线）
 
-## 3.1 这一类的 baseline
+下面把 26 篇论文按“它们修改了训练流程中的哪一个或多个阶段”来归类。这个结构是本文档的主线，后续所有讨论都围绕它展开。
 
-baseline 是类条件噪声模型：
-
-\[
-T_{ij}=P(\tilde Y=j\mid Y=i),
-\qquad
-P(\tilde Y\mid X)=T^\top P(Y\mid X).
-\]
-
-如果 `T` 已知，则可以把 noisy learning 转化为普通风险最小化。这里必须分开两个问题：
-
+内层训练数据流
 ```text
-问题A：已知 T 后，怎样使用 T？
-问题B：现实中，怎样得到 T？
-```
-
-第14、10、18篇主要奠定问题A；第15、16、13篇主要修改问题B。
-
-## 3.2 使用已知 T 的流程图
-
-```mermaid
-flowchart TB
-    X["images"] --> M["clean posterior model p(y|x)"]
-    M --> P["predicted clean posterior"]
-    T["known or estimated T"] --> C{"correction mode"}
-    P --> C
-    Y["noisy label"] --> C
-
-    C -->|"Forward"| F["compare Tᵀp with noisy label"]
-    C -->|"Backward"| B["multiply class-loss vector by T⁻¹"]
-    C -->|"Importance"| W["weight noisy loss to recover clean risk"]
-
-    F --> U["update classifier"]
-    B --> U
-    W --> U
-```
-
-## 3.3 类树状关系
-
-```text
-已知类条件噪声率 / 转移矩阵
-├── 第14篇 Learning with Noisy Labels
-│   ├── baseline：二分类普通 surrogate risk
-│   ├── 改动1：构造原 loss 的无偏 noisy estimator
-│   ├── 改动2：把问题约化为加权 0-1 / surrogate risk
-│   └── 局限：二分类；要求两个翻转率已知
-│
-├── 第10篇 Forward / Backward Correction
-│   ├── baseline：第14篇的二分类无偏校正
-│   ├── 推广：多分类转移矩阵 T + 深度网络
-│   ├── Backward：校正 loss，理论无偏但 T⁻¹ 易放大误差
-│   ├── Forward：校正预测，不求逆，数值更稳定
-│   └── 额外模块：用高置信近似 anchor 估计 T
-│
-└── 第18篇 Importance Reweighting
-    ├── baseline：普通 noisy empirical risk
-    ├── 改动：将 clean risk 改写为 noisy risk 的加权形式
-    ├── 权重来源：clean posterior / noisy posterior
-    └── 风险：posterior 或噪声率误差会制造高方差权重
-```
-
-第18篇和第25篇虽然都叫 reweighting，但它们并非同一类：
-
-```text
-第18篇：概率统计推导出的理论权重；通常依赖噪声机制
-第25篇：干净验证集通过 meta-gradient 在线学习权重
-```
-
----
-
-# 4. 第三类：转移矩阵 T 的估计与修订
-
-## 4.1 这一类的 baseline
-
-baseline 不是普通 CE，而是完整的两阶段 T-correction：
-
-```text
-train / obtain noisy posterior model
+Input noisy batch
         ↓
-estimate transition matrix T
+A. Noise / Intermediate Estimation
+   ├── transition matrix T
+   ├── instance-dependent T(x)
+   ├── sample reliability
+   └── clean statistics
         ↓
-use T in Forward / Backward / Importance correction
+B. Supervision Construction
+   ├── original noisy label
+   ├── corrected label
+   ├── soft target
+   ├── pseudo-label
+   ├── candidate label set
+   └── complementary label
         ↓
-train final clean posterior classifier
-```
-
-这类论文通常不改变最后一步的 correction，而是替换中间的 `estimate T`。
-
-## 4.2 总关系图
-
-```mermaid
-flowchart TB
-    B["Baseline: anchor / extreme prediction estimates T"]
-
-    B --> P15["15 T-Revision"]
-    B --> P16["16 Dual-T"]
-    B --> P13["13 VolMinNet"]
-    B --> P3["3 PDL"]
-
-    P15 --> R15["T₀ + learnable ΔT"]
-    P16 --> R16["T = T-natural × T-spade"]
-    P13 --> R13["jointly learn classifier and minimum-volume T"]
-    P3 --> R3["T(x) = weighted sum of part-level T"]
-
-    R15 --> C["Forward / Reweight correction"]
-    R16 --> C
-    R13 --> C
-    R3 --> C
-```
-
-## 4.3 类树状关系
-
-```text
-Anchor / 极值预测估计 T
-├── 第15篇 T-Revision
-│   ├── 不完全否定 anchor：先用近似 anchor 得到 T₀
-│   ├── 新增可训练 ΔT
-│   ├── Tfinal = legalize(T₀ + ΔT)
-│   └── 与标准CNN相比：ΔT和网络权重一样由loss反向传播更新
-│
-├── 第16篇 Dual-T
-│   ├── 认为直接估计 T 的误差太大
-│   ├── 引入中间标签 Y'
-│   ├── 将 T 分解为两个更容易估计的矩阵
-│   └── 矩阵估计结束后，下游 correction 不变
-│
-├── 第13篇 VolMinNet
-│   ├── 认为真实 anchor 可能不存在
-│   ├── 不再选择某几个极端样本决定 T
-│   ├── 联合学习 clean posterior network 与 T
-│   ├── 用最小 simplex 体积识别 T
-│   └── 用 sufficiently-scattered 假设替代 anchor 假设
-│
-└── 第3篇 PDL
-    ├── baseline 的 T 对所有同类实例相同
-    ├── 改为每个实例拥有 T(x)
-    ├── T(x) 由多个 part-level T 加权组合
-    └── 仍需 anchor 和“部件组合权重可共享”等结构假设
-```
-
-这四篇不是严格的优劣递进，而是在修复四种不同问题：
-
-```text
-T-Revision：初始 T 有偏怎么办？
-Dual-T：直接估计 T 方差太大怎么办？
-VolMinNet：没有 anchor 怎么办？
-PDL：同一类别不同实例的噪声机制不同怎么办？
-```
-
----
-
-# 5. 第四类：实例依赖噪声 IDN
-
-## 5.1 这一类的 baseline
-
-baseline 是 class-conditional noise：
-
-\[
-P(\tilde Y\mid Y,X)=P(\tilde Y\mid Y).
-\]
-
-也就是只要真实类别相同，所有实例共享同一个噪声机制。IDN论文指出现实中困难、模糊或特定结构的样本更容易被标错，因此需要：
-
-\[
-P(\tilde Y\mid Y,X).
-\]
-
-## 5.2 流程关系图
-
-```mermaid
-flowchart TB
-    CCN["Baseline: class-dependent noise"] --> Q["问题：噪声还依赖具体实例 x"]
-
-    Q --> UPM["1 UPM: latent confusing variable"]
-    Q --> CAL["2 CAL: second-order covariance correction"]
-    Q --> PDL["3 PDL: structured T(x) from parts"]
-
-    UPM --> U1["alternating posterior and per-sample confusion updates"]
-    CAL --> U2["reduce IDN risk to easier CCN-type risk"]
-    PDL --> U3["construct instance transition matrix"]
-```
-
-## 5.3 类树状关系
-
-```text
-从 CCN 扩展到 IDN
-├── 第1篇 UPM：概率生成模型路线
-│   ├── 区分 confusing / unconfusing instance
-│   ├── 为每个样本维护混淆概率
-│   ├── 估计潜在clean label posterior
-│   └── posterior、逐样本变量与分类器交替优化
-│
-├── 第2篇 CAL：风险统计路线
-│   ├── baseline：Peer Loss / CORES2 的一阶统计
-│   ├── 指出IDN造成非均匀降权和类别/实例失衡
-│   ├── 加入噪声率与Bayes标签的二阶协方差项
-│   └── 将IDN问题转化为较容易处理的CCN型问题
-│
-└── 第3篇 PDL：结构化转移矩阵路线
-    ├── 不直接自由估计任意 T(x)
-    ├── 假设噪声由实例的语义部件引起
-    └── 用part-level transition matrix组合近似 T(x)
-```
-
-三篇不是彼此扩展，而是对“不可识别的任意 IDN”加入三种不同结构：隐变量结构、二阶统计结构、部件组合结构。
-
----
-
-# 6. 第五类：memorization 与样本选择
-
-## 6.1 这一类的 baseline
-
-最基本 baseline 是 small-loss/self-paced selection：
-
-```text
-warm up model
-
-for batch:
-    compute per-sample noisy-label loss
-    select samples with smaller loss
-    train only on selected samples
-```
-
-它依赖：
-
-```text
-DNN先学习容易且多数的干净模式
+C. Sample Usage
+   ├── use all samples equally
+   ├── hard selection
+   ├── soft weighting
+   └── labeled / unlabeled split
         ↓
-训练早期 clean sample 通常 loss 更小
+D. Objective / Risk Construction
+   ├── robust loss
+   ├── transition-corrected risk
+   ├── importance-reweighted risk
+   └── statistic-reconstructed risk
         ↓
-small loss 可作为不完美的clean indicator
-```
-
-后续论文主要在修改四个位置：谁来打分、如何稳定打分、谁为谁选样本、被判为noisy的样本如何处理。
-
-## 6.2 总流程图
-
-```mermaid
-flowchart TB
-    W["warm-up / early learning"] --> S["compute reliability signal"]
-    S --> D["divide or weight samples"]
-    D --> C["clean-like samples"]
-    D --> N["noisy-like samples"]
-
-    C --> T1["supervised training"]
-    N --> T2{"method choice"}
-    T2 --> X1["discard / mask"]
-    T2 --> X2["use as unlabeled data"]
-    T2 --> X3["negative learning / forgetting"]
-    T2 --> X4["preserve original label under restricted loss"]
-```
-
-## 6.3 类树状关系
-
-```text
-Small-loss / curriculum baseline
-├── 第8篇 MentorNet
-│   ├── baseline：人工预定义 curriculum / self-paced learning
-│   ├── 改动：MentorNet根据loss、epoch、label等输出样本权重
-│   └── StudentNet只负责执行加权训练
-│
-├── 第9篇 Co-teaching
-│   ├── baseline1：单网络small-loss会自我确认
-│   ├── baseline2：Decoupling只在双网分歧区域更新
-│   ├── 改动：两个网络分别选小损失样本
-│   └── 关键：A选出的样本更新B，B选出的样本更新A
-│
-├── 第4篇 JoCoR
-│   ├── baseline：Co-teaching+强调双网disagreement
-│   ├── 改动：联合CE + 双向KL形成joint loss
-│   ├── 按joint small-loss选择同一组样本
-│   └── 两个网络同时更新并逐渐达成agreement
-│
-├── 第7篇 CNLCU / Uncertainty Selection
-│   ├── baseline：用当前时刻的单点loss排序
-│   ├── 改动：维护固定时间区间的loss历史
-│   ├── 用稳健均值和置信下界进行选择
-│   └── 用被尝试次数给欠代表样本探索机会
-│
-├── 第5篇 DSS
-│   ├── BASE：warm-up后选择预测类别与noisy label一致的样本
-│   ├── MDA：动态校正类别边际，修复easy-class过选
-│   ├── CCS：从CE分母暂时排除可能是真类的候选类
-│   ├── CCS不重标注，只屏蔽错误负梯度
-│   └── DSS = BASE + MDA + CCS
-│
-├── 第24篇 DivideMix
-│   ├── baseline1：Co-teaching双网络交叉去偏
-│   ├── baseline2：MixMatch半监督训练
-│   ├── 用两分量GMM估计clean probability
-│   ├── 每个网络使用另一个网络的数据划分
-│   ├── clean-like样本做label refinement
-│   └── noisy-like样本不丢弃，作为unlabeled做label guessing
-│
-└── 第26篇 LEND
-    ├── baseline：依赖分类头预测或单点loss的早期选择
-    ├── 改动：用embedding构造mini-batch kNN图
-    ├── 从noisy one-hot出发做label noise dilution
-    ├── 使用跨epoch momentum稳定稀释标签
-    ├── 稀释标签只负责判断noisy label是否可信
-    └── 被选样本最终仍使用原noisy label训练
-```
-
-## 6.4 直接关系树
-
-```text
-Self-paced / small-loss
-├── MentorNet：把手工课程变成可学习课程网络
-│   └── Co-teaching：把单网自选改成双网交叉选择
-│       ├── JoCoR：不同意“必须保持分歧”，改为联合一致性
-│       └── DivideMix：把被拒绝样本转化为半监督unlabeled数据
-│
-├── CNLCU：把单点loss改成带不确定性的时间统计
-├── DSS：修复类别级与实例级确认偏差
-└── LEND：把分类头信号改成特征邻域信号
-```
-
----
-
-# 7. 第六类：样本权重与参数更新方向
-
-## 7.1 这一类的 baseline
-
-普通SGD默认每个样本等权，并让所有参数接受同一个batch loss的梯度：
-
-\[
-g=\frac{1}{B}\sum_i \nabla_\theta \ell_i,
-\qquad
-\theta\leftarrow\theta-\eta g.
-\]
-
-这一类方法不一定删除样本，而是修改：
-
-```text
-样本i的梯度乘多少权重？
-哪些参数允许接收该梯度？
-```
-
-## 7.2 流程图
-
-```mermaid
-flowchart LR
-    L["per-sample losses"] --> G["per-sample gradients"]
-    G --> Q{"what is modified?"}
-    Q -->|"sample weight"| W["weighted gradient sum"]
-    Q -->|"parameter mask"| P["different parameter update rules"]
-    W --> U["update model"]
-    P --> U
-```
-
-## 7.3 类树状关系
-
-```text
-普通等权SGD
-├── 第18篇 Importance Reweighting：概率统计权重
-│   ├── 根据clean/noisy distribution ratio得到权重
-│   └── 目标是让加权noisy risk等于clean risk
-│
-├── 第25篇 L2RW：meta-gradient样本权重
-│   ├── 为当前batch建立从0开始的临时权重 epsilon
-│   ├── 做一次虚拟训练参数更新
-│   ├── 干净验证集判断虚拟更新方向是否有利
-│   ├── 取负meta-gradient的非负部分并归一化
-│   └── 用所得权重重新做正式训练更新
-│
-└── 第6篇 Robust Early-Learning / CDR：参数级权重
-    ├── baseline：普通CE + early stopping
-    ├── 用 |w_i × grad_i| 判断参数重要性
-    ├── 关键参数：loss gradient + weight decay
-    ├── 非关键参数：只做weight decay，不接收loss gradient
-    └── 仍依赖noise rate决定关键参数比例，并使用验证集early stop
-```
-
-toolbox接口应分别是：
-
-```text
-Importance Reweighting / L2RW → SampleWeightProvider
-CDR                           → ParameterUpdatePolicy
-```
-
----
-
-# 8. 第七类：Loss Decomposition 与统计恢复
-
-## 8.1 这一类的 baseline
-
-baseline 是把clean empirical risk拆成：
-
-\[
-R(W)=R_{\text{label-independent}}(W)
-     +R_{\text{label-dependent}}(W,\mu).
-\]
-
-其中只有第二部分受标签噪声影响，而它可以由数据质心等统计量控制。因此问题从“逐个判断标签是否正确”转化为：
-
-```text
-从noisy data估计clean statistic
+E. Gradient and Parameter Update
         ↓
-把估计量代回clean risk
+Model parameters
+
+eg：
+GCE:
+noisy batch
+→ robust loss
+→ ordinary update
+
+Co-teaching:
+noisy batch
+→ per-sample reliability
+→ hard selection
+→ dual-network update
+
+CWD:
+noisy batch + flip rates
+→ clean centroid estimation
+→ statistic-reconstructed risk
+→ ordinary update
+
+外层pipeline
+Training Pipeline / Lifecycle
+┌──────────────────────────────────────┐
+│ warm-up strategy                     │
+│ number of models                     │
+│ estimator refresh schedule           │
+│ sample split schedule                │
+│ alternating optimization             │
+│ semi-supervised stages               │
+│ multi-network coordination           │
+│ checkpoint / validation / evaluation │
+└──────────────────────────────────────┘
+Co-teaching；
+JoCoR；
+T-Revision；
+VolMinNet；
+UPM；
+DivideMix；
+CA2C；
+DLD；
+
+都需要独立或定制化的 Pipeline，不能只实现成一个普通插件
+
+训练后 Post-processing
+Trained backbone / embeddings
         ↓
-最小化恢复后的风险
+PostProcessor
+        ↓
+new statistics or new classifier
+eg：PCSE不应被放在普通 batch training flow 中，而应被视为训练完成后的统计恢复与生成式分类阶段
+
 ```
-
-## 8.2 流程图
-
-```mermaid
-flowchart TB
-    D["noisy labels + features"] --> NS["noisy statistics"]
-    T["noise relation / transition statistics"] --> R["recover clean statistics"]
-    NS --> R
-    R --> CS["clean centroid / per-class mean and covariance"]
-    CS --> O{"downstream"}
-    O --> L["unbiased decomposed loss"]
-    O --> G["generative classifier"]
-```
-
-## 8.3 类树状关系
-
-```text
-Binary LDCE / 全局clean centroid估计
-├── 第17篇 MC-LDCE
-│   ├── baseline：二分类LDCE
-│   ├── 将MSE分成label-independent与label-dependent部分
-│   ├── 重新定义多分类矩阵质心 E[XYᵀ]
-│   └── 恢复质心后构造多分类无偏风险
-│
-├── 第19篇 CWD
-│   ├── baseline：一次性处理所有类别的全局质心估计
-│   ├── 二分类中分别处理false positive与false negative
-│   ├── 构造两个虚拟辅助集再组合clean centroid
-│   ├── 目的：保持无偏的同时降低估计方差
-│   └── 多分类扩展为逐类别虚拟集合
-│
-└── 第20篇 PCSE
-    ├── baseline1：MC-LDCE/CWD只恢复全局质心
-    ├── baseline2：RoG等方法通过实例选择估计逐类统计
-    ├── 改动：使用全部noisy样本恢复每类prior、mean、covariance
-    ├── 下游：使用GDA生成式分类器，而非继续训练原分类头
-    └── 定位：可接在已有noisy预训练网络后面的post-processor
-```
-
-直接关系为：
-
-```text
-LDCE
-├── MC-LDCE：binary → multi-class
-├── CWD：global one-shot correction → class-wise lower-variance correction
-└── PCSE：global centroid → per-class first/second-order statistics
-```
-
-PCSE同时吸收了MC-LDCE的多分类质心表示和CWD的逐类思想，但最终目标从“修正一个训练loss”进一步变成“构造逐类生成式分类器”。
 
 ---
 
-# 9. 第八类：重构训练范式与可插拔混合模块
+## 2. 第一类：Noise Modeling / Noise Estimation
 
-## 9.1 这一类的 baseline
+这一阶段的核心问题是：
 
-baseline 是一个已有的判别式LNL训练器：
+- 噪声到底是怎样产生的？
+- 能不能先建模噪声机制，再让训练过程对其做校正？
 
-```text
-image → backbone → logits → robust loss / selector → SGD
-```
+### 2.1 这一类论文的共同特点
 
-这些论文不只替换一个loss或selector，而是引入额外学习范式，或者作为插件改变noisy subset的处理方式。
+这类方法一般不直接改变 loss 公式，而是先做一个“噪声模型”或者“转移矩阵估计”。后续的 correction 或 reweighting 只是在这个模型的基础上运行。
 
-## 9.2 流程图
+### 2.2 论文归类
 
-```mermaid
-flowchart TB
-    B["existing discriminative LNL pipeline"]
+| 论文 | Primary research question | Modified pipeline stages | Implementation type | 说明 |
+|---|---|---|---|---|
+| 1. UPM | 如何建模实例相关噪声，并为每个样本估计混淆概率？ | 1. Noise Modeling / Noise Estimation；3. Supervision Construction / Label Refinement | `NoiseModel` / `PosteriorRefiner` | 重点不在普通 CE，而在为每个样本建模实例级混淆。 |
+| 2. CAL | 如何把 IDN 问题转成更易处理的风险形式？ | 1. Noise Modeling / Noise Estimation；5. Objective / Risk Construction | `NoiseModel` / `RiskRefiner` | 通过二阶统计改写风险。 |
+| 3. PDL | 如何把 class-conditional transition 扩展成实例相关 transition $T(x)$？ | 1. Noise Modeling / Noise Estimation | `TransitionEstimator` | 这是典型的“估计更复杂噪声机制”的方法。 |
+| 10. Forward / Backward | 在已知/估计得到 $T$ 的前提下，怎样对风险进行校正？ | 1. Noise Modeling / Noise Estimation；5. Objective / Risk Construction | `TransitionEstimator` + `CorrectedLoss` | 这是 transition estimation 与 risk construction 的组合。 |
+| 13. VolMinNet | 如何在没有强 anchor 假设时仍然估计出合理的 $T$？ | 1. Noise Modeling / Noise Estimation | `TransitionEstimator` | 通过最小体积假设学习一个稳定的 transition。 |
+| 15. T-Revision | 初始 transition 估计有偏时，能否用一个可训练修正项改进它？ | 1. Noise Modeling / Noise Estimation | `TransitionEstimator` | 它不是完全重写 loss，而是在噪声模型层面做修订。 |
+| 16. Dual-T | 如何把一个难以直接估计的转移矩阵拆成两个更易估计的矩阵？ | 1. Noise Modeling / Noise Estimation | `TransitionEstimator` | 更偏“模型分解”，适合做成估计模块。 |
+| 14. Natarajan | 在已知翻转率时，如何构造无偏风险估计？ | 1. Noise Modeling / Noise Estimation；5. Objective / Risk Construction | `RiskCorrector` | 它的核心是把 noisy risk 改写成可估计的 clean risk。 |
 
-    B --> DLD["21 DLD"]
-    B --> FINE["22 FINE"]
-    B --> CA2C["23 CA2C"]
-    B --> DM["24 DivideMix"]
+### 2.3 工程上建议的接口
 
-    DLD --> D1["label generation by directional + random diffusion"]
-    FINE --> F1["baseline selector + active forgetting + negative learning"]
-    CA2C --> C1["PLL model + NL model + cross-guidance"]
-    DM --> M1["sample division + MixMatch semi-supervised learning"]
-```
+- `NoiseModel` / `TransitionEstimator`
+- `RiskCorrector` / `CorrectedLoss`
 
-## 9.3 类树状关系
+### 2.4 实现优先级
 
-```text
-已有判别式LNL pipeline
-├── 第21篇 DLD：改成生成式标签恢复
-│   ├── baseline1：DDPM / conditional label diffusion / CARD
-│   ├── baseline2：邻域一致性的label pre-correction
-│   ├── random diffusion提供随机性
-│   ├── directional diffusion显式朝估计噪声分布移动
-│   └── 反向过程从随机标签逐步生成预测标签
-│
-├── 第22篇 FINE：给已有selector增加noisy-subset处理器
-│   ├── baseline必须先提供clean/noisy划分
-│   ├── early-stage：negative CE主动忘记已吸收的错误知识
-│   ├── later-stage：complementary-label NL抑制继续拟合噪声
-│   └── 不替换baseline的clean-sample supervised loss
-│
-├── 第23篇 CA2C：重新设计双网分工
-│   ├── baseline1：Co-teaching等对称双网co-training
-│   ├── baseline2：NPN在单模型混合PLL与NL
-│   ├── P-model只做partial-label learning
-│   ├── N-model只做negative learning
-│   ├── 两网络交叉生成候选标签与互补标签
-│   └── 使用置信重加权降低PLL消歧失败
-│
-└── 第24篇 DivideMix：sample selection + SSL组合
-    ├── baseline1：Co-teaching双网交叉去偏
-    ├── baseline2：MixMatch
-    └── 最大变化：noisy-like样本不再被简单丢弃
-```
-
-第26篇LEND虽然也组合了图传播和样本选择，但主归属仍应是`Feature-based Selector`；第24篇DivideMix虽然属于本节的混合框架，其主干仍从small-loss双网谱系发展而来。
+- P0：基础 `TransitionEstimator` 与 `KnownTransition`
+- P1：`TRevision` 与 `DualT`
+- P2：实例相关 `T(x)$ 的更复杂版本（如 PDL）
 
 ---
 
-# 10. 26篇论文的主归属与交叉归属
+## 3. 第二类：Reliability or Clean-Statistic Estimation
 
-| 编号 | 方法 | 主归属 | 交叉归属 | 直接baseline |
-|---:|---|---|---|---|
-| 1 | UPM | IDN概率模型 | label posterior refinement | 类条件/已有概率噪声模型 |
-| 2 | CAL | IDN二阶统计 | robust loss | Peer Loss / CORES2一阶统计 |
-| 3 | PDL | IDN转移矩阵 | T estimation | 类条件全局转移矩阵 |
-| 4 | JoCoR | 双网样本选择 | consistency regularization | Co-teaching+ / Decoupling |
-| 5 | DSS | 去偏样本选择 | loss denominator modification | BASE small-loss/预测一致选择 |
-| 6 | CDR | 参数更新策略 | early stopping | CE + early stopping |
-| 7 | CNLCU | 不确定性样本选择 | exploration curriculum | 单点small-loss selector |
-| 8 | MentorNet | curriculum/weight provider | sample selection | 固定curriculum / self-paced learning |
-| 9 | Co-teaching | 双网交叉样本选择 | co-training | MentorNet式small-loss + Decoupling |
-| 10 | Forward/Backward | T-based risk correction | robust loss | 二分类无偏loss correction |
-| 11 | Normalized Loss/APL | robust loss | loss composition | CE/GCE/RCE等已有loss |
-| 12 | GCE | robust loss | truncated loss | CE + MAE |
-| 13 | VolMinNet | T estimation | end-to-end joint learning | anchor-estimated T correction |
-| 14 | Natarajan | unbiased risk correction | weighted surrogate | 二分类普通surrogate ERM |
-| 15 | T-Revision | T revision | reweight / correction | 近似anchor初始化T |
-| 16 | Dual-T | T decomposition | transition estimation | 直接估计T |
-| 17 | MC-LDCE | 多分类质心风险 | unbiased risk | binary LDCE |
-| 18 | Importance Reweighting | statistical sample weighting | noise-rate estimation | 普通noisy ERM |
-| 19 | CWD | class-wise centroid | variance reduction | 全局centroid estimator |
-| 20 | PCSE | statistic post-processing | generative classification | MC-LDCE/CWD + RoG |
-| 21 | DLD | generative label recovery | neighborhood pre-correction | conditional label diffusion/CARD |
-| 22 | FINE | regularizer plugin | machine unlearning / NL | 任意clean-sample reliant LNL baseline |
-| 23 | CA2C | asymmetric dual-network learning | PLL + NL + reweighting | symmetric co-training + NPN |
-| 24 | DivideMix | semi-supervised LNL | double-network selection | Co-teaching + MixMatch |
-| 25 | L2RW | meta sample weighting | bilevel optimization | 手工loss-based weighting |
-| 26 | LEND | feature-graph sample selection | label propagation | prediction/loss-based early selection |
+这一阶段的核心问题是：
+
+- 除了直接估计噪声机制，还能不能先估计哪些样本更可靠，或者估计出 clean statistics？
+
+### 3.1 这一类论文的共同特点
+
+这类方法不一定要“先把标签改掉”，而是先估计某种可靠性信号或统计量，然后再把它送给后续的监督构造、样本筛选或风险重建模块。
+
+### 3.2 论文归类
+
+| 论文 | Primary research question | Modified pipeline stages | Implementation type | 说明 |
+|---|---|---|---|---|
+| 5. DSS | 如何减少 selector 在类别偏差下的错误选择？ | 2. Reliability or Clean-Statistic Estimation；4. Sample Usage: Selection or Weighting | `ReliabilityEstimator` / `Selector` | 它在“选择样本”前先进行更稳健的可靠性估计。 |
+| 7. CNLCU | 如何让 sample selection 更稳定、更不依赖单点 loss？ | 2. Reliability or Clean-Statistic Estimation；4. Sample Usage: Selection or Weighting | `ReliabilityEstimator` / `Selector` | 它把单点 loss 改成带历史和不确定性的统计量。 |
+| 17. MC-LDCE | 如何从 noisy data 中恢复多分类的 clean centroid / statistics？ | 2. Reliability or Clean-Statistic Estimation；5. Objective / Risk Construction | `StatisticEstimator` | 它的目标是恢复 clean statistics，而不只是按 loss 排序。 |
+| 19. CWD | 如何在类别维度上更稳健地恢复 clean centroid？ | 2. Reliability or Clean-Statistic Estimation；5. Objective / Risk Construction | `StatisticEstimator` | 它把全局 centroid 的恢复改成更稳健的类别维估计。 |
+| 20. PCSE | 如何在训练后阶段恢复每类的 mean / covariance / prior？ | 2. Reliability or Clean-Statistic Estimation；8. Post-processing / Inference | `StatisticEstimator` / `PostProcessor` | 这是非常典型的“统计恢复 + 后处理”路线。 |
+| 26. LEND | 如何用特征邻域信息构造更稳健的 label reliability 信号？ | 2. Reliability or Clean-Statistic Estimation；4. Sample Usage: Selection or Weighting | `ReliabilityEstimator` / `Selector` | 它把“基于分类头的单点信号”换成“基于 embedding 的邻域信号”。 |
+
+### 3.3 工程上建议的接口
+
+- `ReliabilityEstimator`
+- `StatisticEstimator`
+- `PostProcessor`
+
+### 3.4 实现优先级
+
+- P1：`ReliabilityEstimator` 与基础 `StatisticEstimator`
+- P2：更复杂的 `PostProcessor`
 
 ---
 
-# 11. 面向 LNL-toolbox 的最终组件树
+## 4. 第三类：Supervision Construction / Label Refinement
 
-如果目标是实现toolbox，最有用的分类不是论文所属文件夹，而是算法应接入哪个接口：
+这一阶段的核心问题是：
+
+- 在训练时，能不能把 noisy label 改造成更可靠的监督信号？
+- 是直接丢弃、重标、软化，还是变成 unlabeled？
+
+### 4.1 这一类论文的共同特点
+
+这些方法不一定改变标准 loss 的形式，而是改“训练用什么监督目标”。
+
+### 4.2 论文归类
+
+| 论文 | Primary research question | Modified pipeline stages | Implementation type | 说明 |
+|---|---|---|---|---|
+| 21. DLD | 能否用生成式/扩散式过程恢复更可信的标签？ | 3. Supervision Construction / Label Refinement；7. Training Lifecycle / Pipeline Orchestration | `LabelRefiner` / `PipelinePlugin` | 它把标签修正变成一个生成式过程。 |
+| 22. FINE | 在已有 selector 的基础上，能否对 noisy subset 做进一步的 forgetting / negative learning？ | 3. Supervision Construction / Label Refinement；7. Training Lifecycle / Pipeline Orchestration | `LabelRefiner` / `RegularizerPlugin` | 它不是简单丢弃样本，而是改写 noisy subset 的监督方式。 |
+| 24. DivideMix | 被判定为 noisy 的样本是否能转为 unlabeled，并与 clean 样本一起做半监督训练？ | 3. Supervision Construction / Label Refinement；4. Sample Usage: Selection or Weighting；7. Training Lifecycle / Pipeline Orchestration | `LabelRefiner` / `Selector` / `PipelinePlugin` | 这是一个典型的“分流 + 重构监督目标”的方法。 |
+| 1. UPM | 能否把每个样本的 posterior 视作更好的监督信号？ | 3. Supervision Construction / Label Refinement | `PosteriorRefiner` | 它把 noisy label 变成更精细的 posterior。 |
+| 23. CA2C | 能否让双网络分别生成 partial label 与 negative label，从而改善监督信号？ | 3. Supervision Construction / Label Refinement；7. Training Lifecycle / Pipeline Orchestration | `LabelRefiner` / `PipelinePlugin` | 它把监督信号设计成一种双模型协同产物。 |
+
+### 4.3 工程上建议的接口
+
+- `LabelRefiner`
+- `PosteriorRefiner`
+- `RegularizerPlugin`
+
+### 4.4 实现优先级
+
+- P1：基础 `LabelRefiner`
+- P2：复杂的 `PipelinePlugin`
+
+---
+
+## 5. 第四类：Sample Usage: Selection or Weighting
+
+这一阶段的核心问题是：
+
+- 哪些样本应该参与当前阶段的训练？
+- 这些样本应该以什么权重参与？
+
+### 5.1 这一类论文的共同特点
+
+这些方法不一定改 loss 的公式，但会改变训练时样本的使用方式：
+
+- 直接筛掉某些样本；
+- 只对一部分样本更新；
+- 给不同样本不同权重；
+- 把某些样本转成 unlabeled。
+
+### 5.2 论文归类
+
+| 论文 | Primary research question | Modified pipeline stages | Implementation type | 说明 |
+|---|---|---|---|---|
+| 8. MentorNet | 如何让训练过程根据样本难度自动调整其参与权重？ | 4. Sample Usage: Selection or Weighting | `Selector` / `WeightProvider` | 它把“手工 curriculum”变成可学习的课程。 |
+| 9. Co-teaching | 如何让双网络互相筛选更可靠的样本？ | 4. Sample Usage: Selection or Weighting | `Selector` | 这是典型的双网络交叉筛选。 |
+| 4. JoCoR | 如何在双网络下引入一致性约束，并让样本选择更稳健？ | 4. Sample Usage: Selection or Weighting | `Selector` | 它是对 Co-teaching 的一致性增强。 |
+| 5. DSS | 如何修正类别偏差和实例偏差下的选择行为？ | 4. Sample Usage: Selection or Weighting | `Selector` | 它在 classic small-loss 的基础上加入更细的修正。 |
+| 7. CNLCU | 如何让 selector 变得更稳健、减少单点波动？ | 4. Sample Usage: Selection or Weighting | `Selector` | 它把单点 loss 改成统计区间。 |
+| 24. DivideMix | 如何把 noisy-like 样本转成 unlabeled 数据，而不是简单丢弃？ | 4. Sample Usage: Selection or Weighting；3. Supervision Construction / Label Refinement | `Selector` / `LabelRefiner` | 它同时改变样本使用方式和监督构造。 |
+| 26. LEND | 如何用特征邻域图替代单点分类头信号做选择？ | 4. Sample Usage: Selection or Weighting | `Selector` | 它把“选择信号”从分类头改为 embedding 图。 |
+| 18. Importance Reweighting | 如何把 noisy risk 改写为加权 clean risk？ | 4. Sample Usage: Selection or Weighting；5. Objective / Risk Construction | `WeightProvider` | 它本质是“样本权重”而不是“直接丢弃样本”。 |
+| 25. L2RW | 如何在线学习每个样本的权重？ | 4. Sample Usage: Selection or Weighting | `WeightProvider` | 它的核心是 meta-gradient 学到权重。 |
+
+### 5.3 工程上建议的接口
+
+- `Selector`
+- `WeightProvider`
+- `SampleCleaner`
+
+### 5.4 实现优先级
+
+- P0：基础 `Selector` 与 `WeightProvider`
+- P1：Co-teaching / MentorNet / DSS / LEND
+- P2：复杂半监督型的 `DivideMix`
+
+---
+
+## 6. 第五类：Objective / Risk Construction
+
+这一阶段的核心问题是：
+
+- 在给定 noisy target 的情况下，应该用什么 loss / risk 来训练？
+- 能不能把 noisy risk 改写成更接近 clean risk 的形式？
+
+### 6.1 这一类论文的共同特点
+
+这类方法通常不需要改样本选择流程，也不需要提前估计大规模噪声模型；它们直接改“训练时使用的风险形式”。
+
+### 6.2 论文归类
+
+| 论文 | Primary research question | Modified pipeline stages | Implementation type | 说明 |
+|---|---|---|---|---|
+| 11. Normalized Loss / APL | 如何让 loss 在对称噪声下更鲁棒？ | 5. Objective / Risk Construction | `Loss` | 它们主要是对 loss 的形状做归一化与组合。 |
+| 12. GCE | 如何在 CE 和 MAE 之间找到更鲁棒的折中 loss？ | 5. Objective / Risk Construction | `Loss` | 这是最典型的“改 loss”的方法。 |
+| 10. Forward / Backward | 如何利用 transition matrix 进行风险校正？ | 5. Objective / Risk Construction | `CorrectedLoss` | 这是 risk construction 的典型代表。 |
+| 14. Natarajan | 如何构造无偏 noisy-risk 估计？ | 5. Objective / Risk Construction | `RiskCorrector` | 它不完全是“换 loss”，而是重写风险形式。 |
+| 17. MC-LDCE | 如何通过恢复统计量来构造多分类无偏风险？ | 5. Objective / Risk Construction | `StatisticEstimator` / `RiskCorrector` | 它由统计恢复出发，最后落在风险构造上。 |
+| 19. CWD | 如何用更稳健的 centroid 估计构造更稳定的风险？ | 5. Objective / Risk Construction | `StatisticEstimator` / `RiskCorrector` | 它与 MC-LDCE 同属统计恢复路线。 |
+
+### 6.3 工程上建议的接口
+
+- `Loss`
+- `CorrectedLoss`
+- `RiskCorrector`
+
+### 6.4 实现优先级
+
+- P0：CE / GCE / Normalized Loss
+- P1：Forward / Backward / Natarajan
+- P2：统计恢复型 risk construction
+
+---
+
+## 7. 第六类：Gradient and Parameter Update
+
+这一阶段的核心问题是：
+
+- 哪些参数应该接收来自 noisy label 的梯度？
+- 参数更新规则能不能被改写成更鲁棒的形式？
+
+### 7.1 这一类论文的共同特点
+
+这些方法不是换 loss，也不是换样本，而是改“参数如何被更新”。
+
+### 7.2 论文归类
+
+| 论文 | Primary research question | Modified pipeline stages | Implementation type | 说明 |
+|---|---|---|---|---|
+| 6. CDR | 如何让只有真正关键的参数接收 noisy gradient，而其他参数只做正则化？ | 6. Gradient and Parameter Update | `ParameterUpdatePolicy` | 它最适合做成 optimizer / update policy 插件。 |
+| 25. L2RW | 如何通过 meta-gradient 改变当前 batch 的样本权重，从而改变更新方向？ | 6. Gradient and Parameter Update；4. Sample Usage: Selection or Weighting | `WeightProvider` / `MetaUpdater` | 它虽然涉及权重，但最终是通过更新方向来影响参数。 |
+
+### 7.3 工程上建议的接口
+
+- `ParameterUpdatePolicy`
+- `MetaUpdater`
+
+### 7.4 实现优先级
+
+- P1：基础 `ParameterUpdatePolicy`
+
+---
+
+## 8. 第七类：Training Lifecycle / Pipeline Orchestration
+
+这一阶段的核心问题是：
+
+- 如果一个方法必须改变训练周期、阶段划分、双网络协同或半监督流程，那它就不应该被塞进单独的 loss 或 selector。
+
+### 8.1 这一类论文的共同特点
+
+这类方法通常改写了整个训练范式，而不是只插入一个小模块。
+
+### 8.2 论文归类
+
+| 论文 | Primary research question | Modified pipeline stages | Implementation type | 说明 |
+|---|---|---|---|---|
+| 21. DLD | 能不能把标签恢复设计成一个独立的生成/扩散过程？ | 7. Training Lifecycle / Pipeline Orchestration | `PipelinePlugin` | 它是一个完整的训练范式升级。 |
+| 22. FINE | 能不能在已有 selector 的基础上增加 forgetting / negative learning 的阶段性机制？ | 7. Training Lifecycle / Pipeline Orchestration | `PipelinePlugin` / `RegularizerPlugin` | 它属于“在原有 pipeline 上叠加新的阶段”。 |
+| 23. CA2C | 如何用双网络分工做 partial-label / negative-label 协同训练？ | 7. Training Lifecycle / Pipeline Orchestration | `PipelinePlugin` | 它改变了训练的协同方式，而不只是换一个 selector。 |
+| 24. DivideMix | 如何把样本筛选和半监督训练揉成一个完整 pipeline？ | 7. Training Lifecycle / Pipeline Orchestration | `PipelinePlugin` | 这是最典型的“重构训练范式”方法。 |
+
+### 8.3 工程上建议的接口
+
+- `PipelinePlugin`
+- `SemiSupervisedLNLTrainer`
+
+### 8.4 实现优先级
+
+- P2：独立 `PipelinePlugin`
+- 适合在基础模块稳定后再实现
+
+---
+
+## 9. 第八类：Post-processing / Inference
+
+这一阶段的核心问题是：
+
+- 即使训练阶段已经结束，能否在推理阶段再修正预测结果或恢复更干净的统计量？
+
+### 9.1 这一类论文的共同特点
+
+这类方法更偏“训练后处理”而不是“训练前/中间模块”。
+
+### 9.2 论文归类
+
+| 论文 | Primary research question | Modified pipeline stages | Implementation type | 说明 |
+|---|---|---|---|---|
+| 20. PCSE | 在训练后能否用每类统计量构造一个生成式分类器？ | 8. Post-processing / Inference | `PostProcessor` / `StatisticEstimator` | 它的落点更接近 inference-stage 后处理。 |
+
+---
+
+## 10. 面向 toolbox 的最终模块树（按训练流程修改位置）
+
+如果目标是把这些论文真正落成一个可扩展的 toolbox，那么最自然的组织方式不是“按论文目录”或者“按数学工具”，而是按训练流程中的修改位置来设计模块：
+
+对应到工程接口，可以整理为：
 
 ```text
 LNLToolbox
-├── Loss
-│   ├── CrossEntropy
-│   ├── GCE
-│   ├── NormalizedLoss
-│   ├── ActivePassiveLoss
-│   ├── ForwardCorrectedLoss
-│   └── BackwardCorrectedLoss
+├── NoiseEstimator
+│   ├── NoiseRateEstimator
+│   ├── TransitionEstimator
+│   └── InstanceNoiseModel
 │
-├── NoiseModel / TransitionEstimator
-│   ├── KnownTransition
-│   ├── AnchorTransition
-│   ├── TRevision
-│   ├── DualT
-│   ├── VolMinTransition
-│   └── PartDependentTransition
-│
-├── Selector / ReliabilityEstimator
-│   ├── SmallLossSelector
-│   ├── MentorNetSelector
-│   ├── CoTeachingExchange
-│   ├── JoCoRJointSelector
-│   ├── UncertaintyIntervalSelector
-│   ├── DSSSelector
-│   └── LENDFeatureGraphSelector
-│
-├── WeightProvider
-│   ├── ImportanceRatioWeight
-│   └── L2RWMetaWeight
-│
-├── ParameterUpdatePolicy
-│   └── CDRCriticalParameterUpdate
-│
-├── LabelProvider / LabelRefiner
-│   ├── UPMPosterior
-│   ├── DivideMixCoRefinement
-│   ├── CA2CCrossGuidance
-│   └── DLDLabelGenerator
-│
-├── Regularizer
-│   ├── JoCoRAgreement
-│   ├── FINEActiveForgetting
-│   └── FINENoiseSuppression
+├── ReliabilityEstimator
+│   ├── LossBasedReliability
+│   ├── UncertaintyReliability
+│   └── FeatureGraphReliability
 │
 ├── StatisticEstimator
-│   ├── MCLDCECentroid
-│   ├── CWDClassWiseCentroid
-│   └── PCSEPerClassStatistics
+│   ├── GlobalCentroidEstimator
+│   ├── ClassWiseCentroidEstimator
+│   └── PerClassMomentEstimator
 │
-└── Pipeline
-    ├── StandardNoisyERM
-    ├── CoTeachingPipeline
-    ├── DivideMixPipeline
-    ├── CA2CPipeline
-    └── DLDGenerativePipeline
-```
+├── LabelProvider
+│   ├── SoftTargetProvider
+│   ├── PseudoLabelProvider
+│   ├── CandidateSetProvider
+│   └── ComplementaryLabelProvider
+│
+├── SampleUsagePolicy
+│   ├── HardSelectionPolicy
+│   ├── SoftWeightingPolicy
+│   └── DatasetSplitPolicy
+│
+├── Objective
+│   ├── RobustLoss
+│   ├── TransitionRiskCorrector
+│   ├── ImportanceRiskCorrector
+│   └── StatisticReconstructedRisk
+│
+├── Regularizer
+│   ├── AgreementRegularizer
+│   ├── ActiveForgettingRegularizer
+│   └── NegativeLearningRegularizer
+│
+├── ParameterUpdatePolicy
+│   └── CDRPolicy
+│
+├── Pipeline
+│   ├── StandardNoisyERM
+│   ├── CoTeachingPipeline
+│   ├── JoCoRPipeline
+│   ├── TRevisionPipeline
+│   ├── VolMinNetPipeline
+│   ├── UPMPipeline
+│   ├── DivideMixPipeline
+│   ├── CA2CPipeline
+│   └── DLDPipeline
+│
+└── PostProcessor
+    └── PCSEPostProcessor```
 
-## 11.1 关键架构结论
+---
 
-1. `Loss`、`Selector`、`WeightProvider`、`LabelProvider`不能共用一个模糊的“denoiser”接口。
-2. `TransitionEstimator`的输出应是独立artifact；Forward、Backward和Importance correction只消费它，不负责估计它。
-3. `Selector`必须明确输出hard mask、soft weight还是clean probability。
-4. `LabelProvider`必须明确输出soft target、hard pseudo-label、candidate set还是complementary set。
-5. CDR修改optimizer step，不能伪装成普通loss插件。
-6. PCSE主要消费已训练模型的embedding，应作为post-processing pipeline。
-7. DivideMix、CA2C和DLD改变Runner生命周期，应实现为独立pipeline，而不是把所有逻辑塞进通用Runner。
-8. DSS、FINE等插件应保留可组合性，能够挂载到不止一个baseline。
+## 11. 实现优先级建议
 
-## 11.2 最简理解
+如果你们要把这个 toolbox 切成工程模块，我建议把优先级分成三层：
+
+### 11.1 第一优先级：最容易做成插件的模块
+
+这类最适合先落地，因为接口清晰、改动点集中。
+
+1. **Loss 模块**
+   - 先做 CE、GCE、Normalized Loss / APL；
+   - 这类方法主要改 objective / risk construction；
+   - 最适合做成 `Loss` 插件。
+
+2. **Selector / WeightProvider 模块**
+   - 先做 Co-teaching、MentorNet、DSS；
+   - 它们主要改 sample usage；
+   - 最适合做成 `Selector` 或 `WeightProvider`。
+
+3. **TransitionEstimator / NoiseModel 模块**
+   - 先做 Forward / Backward、T-Revision、VolMinNet、PDL；
+   - 它们主要改 noise modeling / estimation；
+   - 最适合作为 `TransitionEstimator` / `NoiseModel`。
+
+### 11.2 第二优先级：单一功能明确，但数学或状态稍复杂
+
+1. **ReliabilityEstimator / StatisticEstimator**
+   - 代表方法：CNLCU、DSS、MC-LDCE、CWD、PCSE；
+   - 更偏统计恢复或可靠性估计；
+   - 适合做成独立 estimator。
+
+2. **ParameterUpdatePolicy**
+   - 代表方法：CDR；
+   - 它不是改 loss，而是改更新规则；
+   - 适合做成 `ParameterUpdatePolicy`。
+
+### 11.3 第三优先级：需要重构整个训练范式
+
+这类方法不适合一开始就塞进一个简单插件，而更适合做成独立 pipeline：
+
+- DivideMix
+- DLD
+- FINE
+- CA2C
+
+它们的共同点是：
 
 ```text
-有些论文问：应该算什么loss？
-    → GCE、Normalized Loss、Forward/Backward
-
-有些论文问：哪些样本应该参与？
-    → MentorNet、Co-teaching、JoCoR、CNLCU、DSS、LEND
-
-有些论文问：每个样本应该有多大作用？
-    → Importance Reweighting、L2RW
-
-有些论文问：噪声是怎么产生的？
-    → UPM、CAL、PDL、T-family
-
-有些论文问：哪些参数应该接受梯度？
-    → CDR
-
-有些论文问：能否恢复clean distribution的统计量？
-    → MC-LDCE、CWD、PCSE
-
-有些论文问：是否应重构整个训练范式？
-    → DivideMix、DLD、FINE、CA2C
+它们不是“换一个 loss”或“换一个 selector”，
+而是把整条训练流程重写了一遍。
 ```
 
-这也是当前26篇论文最稳定、最适合toolbox实现的分类方式。
+---
+
+## 12. 有值得注意的几个点
+
+你的整体方向基本是对的，但为了避免后续在 toolbox 设计中产生混乱，建议把下面几点再明确一下：
+
+1. **“改 loss” 与 “改样本选择” 不能混在一个接口里**
+   - 前者改的是 loss / risk 的形式；
+   - 后者改的是样本是否参与训练以及以什么权重参与。
+
+2. **“估计 T” 与 “使用 T 做 correction” 不应该混成一件事**
+   - 前者是 `TransitionEstimator`；
+   - 后者是 `CorrectedLoss` 或 `RiskCorrector`。
+
+3. **“样本选择” 与 “标签修正” 不应该混在一起**
+   - 前者决定“哪些样本参与训练”；
+   - 后者决定“训练时用什么监督目标”。
+
+4. **CDR 不应被当成普通 loss 插件**
+   - 你的判断是对的：CDR 更接近 `ParameterUpdatePolicy`，而不是 `Loss`。
+
+5. **MC-LDCE / CWD / PCSE 更像统计恢复或后处理，而不是普通 loss 插件**
+   - 它们的本质是“恢复 clean statistics”，不是“简单换一个 loss 公式”。
+
+6. **DivideMix、DLD、CA2C、FINE 不适合一开始就塞进普通插件接口**
+   - 它们会重构训练流程、阶段设计、数据流或协同方式；
+   - 更适合作为独立 `PipelinePlugin`。
+
+7. **IDN 方法（UPM / CAL / PDL）最好理解为“实例相关噪声建模 + 目标重构”**
+   - 它们比普通 class-conditional transition 更复杂；
+   - 工程上可以把它们看成 `NoiseModel` / `TransitionEstimator` 的扩展分支。
+
+---
+
+## 13. 最后总结：这 26 篇论文最适合的 toolbox 组织方式
+
+如果我们要把这些论文真正变成一个可扩展的 label-noise learning toolbox，最稳定的组织方式不是“按论文主题分”，而是按“它在训练流程中修改了哪些位置”来分：
+
+```text
+先做最容易插进训练流程的模块：
+    Loss / Selector / WeightProvider / TransitionEstimator
+
+再做更需要状态和统计支持的模块：
+    ReliabilityEstimator / StatisticEstimator / ParameterUpdatePolicy
+
+最后再做重构训练范式的复杂模块：
+    PipelinePlugin / SemiSupervisedTrainer / PostProcessor
+```
+
+这也是为什么本文档把论文的分类从“研究问题”转成“训练流程中修改的位置”——这样更适合后续分工开发、接口定义和代码落地。
