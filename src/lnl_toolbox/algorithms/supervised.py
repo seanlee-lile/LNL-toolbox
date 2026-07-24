@@ -9,6 +9,16 @@ from torch import nn
 
 from lnl_toolbox.core import Batch, ExperimentContext, RunState, StepResult
 from lnl_toolbox.losses.torch_losses import validate_per_sample_loss
+from lnl_toolbox.selectors import (
+    AllSelector,
+    SelectionInput,
+    Selector,
+)
+from lnl_toolbox.treatments import (
+    ReductionSpec,
+    SelectorContributionAdapter,
+    reduce_per_sample_loss,
+)
 
 
 class SupervisedClassificationAlgorithm:
@@ -18,11 +28,15 @@ class SupervisedClassificationAlgorithm:
     LNL algorithms should implement the same public hooks.
     """
     def __init__(self, model: nn.Module, optimizer: torch.optim.Optimizer,
-                 loss: nn.Module, device: torch.device) -> None:
+                 loss: nn.Module, device: torch.device,
+                 selector: Selector | None = None) -> None:
         self.model = model
         self.optimizer = optimizer
         self.loss = loss
         self.device = device
+        self.selector = selector or AllSelector()
+        self.contribution_adapter = SelectorContributionAdapter(self.selector)
+        self.reduction = ReductionSpec()
 
     def setup(self, context: ExperimentContext) -> None:
         self.model.to(self.device)
@@ -39,21 +53,38 @@ class SupervisedClassificationAlgorithm:
         """Perform one optimization step and return batch-level metrics."""
         inputs = batch.payload["input"].to(self.device, non_blocking=True)
         targets = batch.payload["target"].to(self.device, non_blocking=True)
+        sample_indices = torch.as_tensor(
+            batch.payload["index"], dtype=torch.long, device=self.device
+        )
         self.optimizer.zero_grad(set_to_none=True)
         logits = self.model(inputs)
         per_sample_loss = validate_per_sample_loss(
             self.loss(logits, targets), int(targets.numel())
         )
-        loss = per_sample_loss.mean()
+        contribution = self.contribution_adapter.resolve(SelectionInput(
+            scores=per_sample_loss.detach(),
+            sample_indices=sample_indices,
+            metadata={"epoch": state.cycle},
+        ))
+        selected_mask = contribution.selected_mask
+        loss = reduce_per_sample_loss(
+            per_sample_loss,
+            contribution,
+            self.reduction,
+        )
         loss.backward()
         self.optimizer.step()
         count = int(targets.numel())
+        selected_count = int(selected_mask.sum().item())
         correct = int((logits.argmax(1) == targets).sum().item())
         state.step += 1
         return StepResult(metrics={
             "loss": float(loss.detach().item()),
+            "all_sample_loss": float(per_sample_loss.detach().mean().item()),
             "accuracy": correct / count,
             "samples": float(count),
+            "selected_samples": float(selected_count),
+            "selected_ratio": selected_count / count,
         })
 
     def on_cycle_end(self, state: RunState) -> StepResult:

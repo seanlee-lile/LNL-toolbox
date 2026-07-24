@@ -178,14 +178,25 @@ return TransitionArtifact(t, estimator="dual_t", factor metadata)
 - merge-base：`cb9b847`。
 - 清单：计划替换、集成分支、远程验证、本地 merge/冲突、四类联合检查、
   focused/完整回归、CUDA smoke/resume、最终保护检查，共 8 项。
-- 已完成：前 3 项；进度 `3 / 8 = 37.5%`。
+- 已完成：全部 8 项；进度 `8 / 8 = 100%`。
 - 已确认同事提交：
   - `f2e241f feat(selector): add batch selection and keep-rate schedules`
   - `3f11ad0 feat: add sample treatment and binary RCN reweighting`
-- 当前 blocker：合并前必须先保存本分支现有 Dual-T/Collector 等工作；checkpoint
-  commit 需要用户单独授权。
+- 本地 checkpoint：`15e3915 checkpoint: prepare taxonomy P1 integration`。
+- 本地 merge 已完成内容整合；实际冲突集中在 plugin export/catalog、统一 runner、
+  两份公共文档和两份联合测试，均按“保留 Selector 生产路径、并列接入
+  TransitionEstimator 旁路”的原则解决。
 - 受保护范围：同事的 `selectors/`、`treatments/`、监督 Algorithm、README、
   Selector/WeightProvider 配置和专属测试不得改写。
-- exact next step：经授权创建本地 checkpoint，然后执行
-  `git merge --no-ff --no-commit origin/ce_baseline`。
+- 四类联合检查：Loss、Selector、Treatment/WeightProvider、TransitionEstimator
+  focused tests 共 65 项通过；训练与 noisy resume 测试 25 项通过；完整
+  `unittest` 127 项通过。
+- CUDA smoke：noisy CE + AllSelector、fixed Small-Loss、linear Small-Loss
+  均完成 2 epochs；fixed Small-Loss 从 epoch 2 恢复至 epoch 3。epoch/global
+  step、selector ratio、manifest mapping hash、checkpoint 均连续，峰值显存
+  不超过 162 MB。
+- 最终检查：临时 CIFAR junction 与 smoke 产物均已清理，F 盘源数据完整；
+  allowlist、受保护文件和最终 diff 检查通过。
+- exact next step：由用户审阅当前本地 merge 结果；如接受，再单独授权创建最终
+  merge commit。禁止 push。
 - history cleanup / push readiness：均未就绪；禁止 push。

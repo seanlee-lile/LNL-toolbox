@@ -1,4 +1,9 @@
+import sys
 import unittest
+from unittest.mock import patch
+
+import numpy as np
+import torch
 
 from lnl_toolbox.losses import (
     ActivePassiveLoss,
@@ -7,12 +12,26 @@ from lnl_toolbox.losses import (
     MeanAbsoluteErrorLoss,
     NormalizedCrossEntropyLoss,
 )
-from lnl_toolbox.noise import AnchorTransitionEstimator, DualTransitionEstimator
+from lnl_toolbox.noise import (
+    AnchorTransitionEstimator,
+    DualTransitionEstimator,
+    PosteriorSnapshot,
+)
 from lnl_toolbox.plugins import PluginCatalog
 from lnl_toolbox.plugins.builtin import (
     build_builtin_loss,
+    build_builtin_selector,
     build_builtin_transition_estimator,
     create_builtin_catalog,
+)
+from lnl_toolbox.selectors import AllSelector, SelectionInput, SmallLossSelector
+from lnl_toolbox.treatments import (
+    BinaryRCNImportanceWeightProvider,
+    BinaryRCNWeightInput,
+    ReductionSpec,
+    SelectorContributionAdapter,
+    WeightContributionAdapter,
+    reduce_per_sample_loss,
 )
 
 
@@ -36,6 +55,76 @@ class PluginCatalogTest(unittest.TestCase):
         self.assertEqual([item.name for item in catalog.find(kind="numpy_loss")], ["ce", "gce"])
         self.assertIsInstance(build_builtin_loss({"name": "gce", "q": 0.5}, catalog),
                               GeneralizedCrossEntropyLoss)
+
+    def test_batch_selectors_use_a_distinct_plugin_kind(self) -> None:
+        catalog = create_builtin_catalog()
+        self.assertEqual(
+            [item.name for item in catalog.find(kind="batch_selector")],
+            ["all", "small_loss"],
+        )
+        self.assertIsInstance(build_builtin_selector(None, catalog), AllSelector)
+        selector = build_builtin_selector(
+            {"name": "small_loss", "keep_rate": 0.5}, catalog
+        )
+        self.assertIsInstance(selector, SmallLossSelector)
+        self.assertEqual(selector.keep_rate, 0.5)
+        constant = build_builtin_selector({
+            "name": "small_loss",
+            "keep_rate": {"name": "constant", "value": 0.8},
+        }, catalog)
+        linear = build_builtin_selector({
+            "name": "small_loss",
+            "keep_rate": {
+                "name": "linear", "start": 1.0, "end": 0.6,
+                "warmup_epochs": 10,
+            },
+        }, catalog)
+        self.assertEqual(constant.schedule.rate_at(7), 0.8)
+        self.assertEqual(linear.schedule.rate_at(5), 0.8)
+        with self.assertRaises(ValueError):
+            build_builtin_selector({"name": "unknown"}, catalog)
+        with self.assertRaises(TypeError):
+            build_builtin_selector("all", catalog)  # type: ignore[arg-type]
+
+    def test_selector_import_failure_does_not_change_loss_catalog(self) -> None:
+        catalog_with_selectors = create_builtin_catalog()
+        expected_losses = [
+            (item.name, item.factory, item.capabilities)
+            for item in catalog_with_selectors.find(kind="loss")
+        ]
+        with patch.dict(sys.modules, {"lnl_toolbox.selectors": None}):
+            catalog = create_builtin_catalog()
+
+        self.assertEqual(
+            [
+                (item.name, item.factory, item.capabilities)
+                for item in catalog.find(kind="loss")
+            ],
+            expected_losses,
+        )
+        self.assertEqual(catalog.find(kind="batch_selector"), ())
+
+    def test_legacy_coteaching_exchange_registration_and_behavior_are_unchanged(self) -> None:
+        catalog = create_builtin_catalog()
+        spec = catalog.get("selector", "coteaching_exchange")
+        self.assertEqual(spec.kind, "selector")
+        self.assertEqual(spec.name, "coteaching_exchange")
+        self.assertEqual(
+            spec.capabilities,
+            frozenset({"multi_model", "sample_selection"}),
+        )
+
+        selected_for_a, selected_for_b = catalog.build(
+            "selector",
+            "coteaching_exchange",
+            losses_a=np.array([0.4, 0.1, 0.3, 0.2]),
+            losses_b=np.array([0.2, 0.4, 0.1, 0.3]),
+            keep_rate=0.5,
+        )
+        np.testing.assert_array_equal(selected_for_a, np.array([2, 0]))
+        np.testing.assert_array_equal(selected_for_b, np.array([1, 3]))
+        with self.assertRaises(ValueError):
+            build_builtin_selector({"name": "coteaching_exchange"}, catalog)
 
     def test_apl_is_built_recursively_and_rejects_unsupported_children(self) -> None:
         loss = build_builtin_loss({
@@ -95,6 +184,70 @@ class PluginCatalogTest(unittest.TestCase):
             build_builtin_transition_estimator({"name": "unknown"}, catalog)
         with self.assertRaises(TypeError):
             build_builtin_transition_estimator("anchor")  # type: ignore[arg-type]
+
+    def test_taxonomy_p1_components_coexist_and_remain_separate(self) -> None:
+        catalog = create_builtin_catalog()
+
+        logits = torch.tensor(
+            [[3.0, 0.0], [0.0, 3.0], [2.0, 0.0], [0.0, 2.0]],
+            requires_grad=True,
+        )
+        targets = torch.tensor([0, 1, 1, 0])
+        per_sample = build_builtin_loss({"name": "ce"}, catalog)(logits, targets)
+        selector = build_builtin_selector(
+            {"name": "small_loss", "keep_rate": 0.5}, catalog
+        )
+        selection = SelectorContributionAdapter(selector).resolve(
+            SelectionInput(
+                scores=per_sample.detach(),
+                sample_indices=torch.tensor([40, 10, 30, 20]),
+                metadata={"epoch": 0},
+            )
+        )
+        objective = reduce_per_sample_loss(per_sample, selection)
+        objective.backward()
+        self.assertTrue(torch.isfinite(objective))
+        self.assertTrue(torch.isfinite(logits.grad).all())
+        self.assertEqual(int(selection.selected_mask.sum().item()), 2)
+
+        snapshot = PosteriorSnapshot(
+            noisy_probabilities=np.asarray(
+                [[0.9, 0.1], [0.2, 0.8], [0.7, 0.3], [0.1, 0.9]]
+            ),
+            noisy_targets=np.asarray([0, 1, 1, 0]),
+            global_indices=np.asarray([40, 10, 30, 20]),
+            dataset="fixture",
+            split="train",
+        )
+        for name in ("anchor", "dual_t"):
+            artifact = build_builtin_transition_estimator(
+                {"name": name}, catalog
+            ).estimate(snapshot)
+            tensor = artifact.as_tensor(device="cpu", dtype=torch.float32)
+            self.assertEqual(tensor.shape, (2, 2))
+            self.assertTrue(torch.isfinite(tensor).all())
+
+        provider = BinaryRCNImportanceWeightProvider(
+            rho_positive=0.2,
+            rho_negative=0.1,
+        )
+        weighted = WeightContributionAdapter(provider).resolve(
+            BinaryRCNWeightInput(
+                posterior_probabilities=torch.tensor([[0.9, 0.1], [0.2, 0.8]]),
+                observed_targets=torch.tensor([0, 1]),
+            )
+        )
+        weighted_losses = torch.tensor([1.0, 2.0], requires_grad=True)
+        weighted_objective = reduce_per_sample_loss(
+            weighted_losses,
+            weighted,
+            ReductionSpec("batch_mean"),
+        )
+        weighted_objective.backward()
+        self.assertTrue(torch.isfinite(weighted_objective))
+        self.assertTrue(torch.isfinite(weighted_losses.grad).all())
+
+        self.assertEqual(catalog.find(kind="weight_provider"), ())
 
 
 if __name__ == "__main__":

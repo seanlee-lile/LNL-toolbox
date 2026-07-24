@@ -14,6 +14,38 @@ loss:
 
 `configs/algorithm/` 保存可复用的组件片段；当前入口尚未实现 Hydra defaults 合并，因此完整实验 YAML 需要显式包含所选 loss 配置。
 
+顶层 `selector` mapping 选择单 batch 的 hard sample selector。缺省时使用 `all`，与原有全样本均值训练一致：
+
+```yaml
+selector:
+  name: small_loss
+  keep_rate: 0.5
+```
+
+`small_loss` 的固定浮点配置保持兼容，也可显式写为 constant schedule：
+
+```yaml
+selector:
+  name: small_loss
+  keep_rate:
+    name: constant
+    value: 0.8
+```
+
+linear schedule 使用零基 epoch：epoch 0 为 `start`，epoch `warmup_epochs` 达到 `end`，之后固定为 `end`。
+
+```yaml
+selector:
+  name: small_loss
+  keep_rate:
+    name: linear
+    start: 1.0
+    end: 0.6
+    warmup_epochs: 10
+```
+
+所有 rate 必须位于 `(0, 1]`，`warmup_epochs` 必须为正整数。keep rate 不从 noise rate 推导。当前通用训练路径只提供无状态的 `all` 和 `small_loss`。Selector 只接收 detached 的逐样本 loss、stable global index 和当前零基 epoch；不读取 clean label，也不管理优化器或训练生命周期。Co-teaching 的双网络 peer exchange 仍属于独立 Algorithm/Pipeline，不使用该配置替代。
+
 通用训练入口支持两种互斥噪声来源。运行开始时生成：
 
 ```yaml

@@ -1,5 +1,6 @@
 import json
 import os
+from copy import deepcopy
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,7 +11,7 @@ import torch
 
 from lnl_toolbox.data.cifar import CifarData
 from lnl_toolbox.noise.manifest import NoiseManifest
-from lnl_toolbox.training.experiment import run_experiment
+from lnl_toolbox.training.experiment import _validate_resume_config, run_experiment
 from lnl_toolbox.training.noisy_labels import prepare_noise_manifest
 
 
@@ -66,15 +67,13 @@ class NoisyCeBaselineTest(unittest.TestCase):
             self.assertTrue((run_dir / "noise_manifest.npz").is_file())
             self.assertTrue((run_dir / "noise_summary.json").is_file())
 
-    def test_unconnected_pipeline_component_configurations_are_rejected(self) -> None:
-        for field in ("selector", "transition_estimator"):
-            with self.subTest(field=field):
-                config = _config()
-                config[field] = {"name": "example"}
-                with self.assertRaisesRegex(
-                    ValueError, rf"field '{field}'.*not connected"
-                ):
-                    run_experiment(config)
+    def test_unconnected_transition_estimator_configuration_is_rejected(self) -> None:
+        config = _config()
+        config["transition_estimator"] = {"name": "anchor"}
+        with self.assertRaisesRegex(
+            ValueError, r"field 'transition_estimator'.*not connected"
+        ):
+            run_experiment(config)
 
     def test_noisy_training_writes_manifest_metadata_and_clean_evaluation_sets(self) -> None:
         train_data = _cifar(40, "train")
@@ -96,6 +95,11 @@ class NoisyCeBaselineTest(unittest.TestCase):
             manifest = NoiseManifest.load(run_dir / "noise_manifest.npz")
             checkpoint = torch.load(run_dir / "last.pt", map_location="cpu", weights_only=False)
             final = json.loads((run_dir / "final_metrics.json").read_text(encoding="utf-8"))
+            epoch_rows = [
+                json.loads(line)
+                for line in (run_dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
+                if json.loads(line).get("event") == "epoch"
+            ]
 
         self.assertEqual(set(checkpoint["noise"]), {
             "mode", "manifest_path", "manifest_version", "manifest_sha256", "mapping_hash", "dataset", "split",
@@ -105,6 +109,8 @@ class NoisyCeBaselineTest(unittest.TestCase):
         })
         self.assertEqual(checkpoint["noise"]["mapping_hash"], manifest.mapping_hash)
         self.assertEqual(final["noise"], checkpoint["noise"])
+        self.assertEqual(checkpoint["config"]["selector"], {"name": "all"})
+        self.assertEqual(epoch_rows[0]["selected_ratio"], 1.0)
         self.assertEqual(manifest.global_indices.size, 30)
         self.assertEqual(len(observed_evaluation_targets), 2)
         for index, target in observed_evaluation_targets:
@@ -169,6 +175,65 @@ class NoisyCeBaselineTest(unittest.TestCase):
             run_dir = run_experiment(config, directory)
             checkpoint = torch.load(run_dir / "last.pt", map_location="cpu", weights_only=False)
         self.assertEqual(checkpoint["loss"], {"name": "gce", "q": 0.7})
+
+    def test_small_loss_selector_is_applied_and_resume_config_is_checked(self) -> None:
+        config = _config()
+        config["selector"] = {"name": "small_loss", "keep_rate": 0.5}
+        train_data = _cifar(40, "train")
+        test_data = _cifar(20, "test")
+
+        def load_data(_root, split):
+            return train_data if split == "train" else test_data
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "lnl_toolbox.training.experiment.load_cifar10", side_effect=load_data
+        ), patch(
+            "lnl_toolbox.training.experiment.evaluate_classification",
+            return_value={"loss": 1.0, "accuracy": 0.25, "samples": 10.0},
+        ):
+            run_dir = run_experiment(config, directory)
+            checkpoint = torch.load(
+                run_dir / "last.pt", map_location="cpu", weights_only=False
+            )
+            rows = [
+                json.loads(line)
+                for line in (run_dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+        epoch_row = next(row for row in rows if row.get("event") == "epoch")
+        self.assertEqual(epoch_row["selected_samples"], 10.0)
+        self.assertEqual(epoch_row["selected_ratio"], 0.5)
+        self.assertIn("train_all_sample_loss", epoch_row)
+        self.assertEqual(checkpoint["config"]["selector"], config["selector"])
+
+        changed = _config()
+        changed["selector"] = {"name": "small_loss", "keep_rate": 0.75}
+        with self.assertRaisesRegex(ValueError, "selector"):
+            _validate_resume_config(changed, config)
+
+    def test_resume_rejects_every_linear_schedule_configuration_change(self) -> None:
+        saved = _config()
+        saved["selector"] = {
+            "name": "small_loss",
+            "keep_rate": {
+                "name": "linear",
+                "start": 1.0,
+                "end": 0.6,
+                "warmup_epochs": 10,
+            },
+        }
+        _validate_resume_config(deepcopy(saved), saved)
+        changes = {
+            "name": "constant",
+            "start": 0.9,
+            "end": 0.5,
+            "warmup_epochs": 11,
+        }
+        for key, value in changes.items():
+            with self.subTest(key=key):
+                current = deepcopy(saved)
+                current["selector"]["keep_rate"][key] = value
+                with self.assertRaisesRegex(ValueError, "selector"):
+                    _validate_resume_config(current, saved)
 
 
 if __name__ == "__main__":

@@ -36,13 +36,13 @@
 | 共享职责 | 唯一位置 / 接口 | 当前状态 | 使用论文 |
 |---|---|---|---|
 | noisy posterior 快照 | `noise/estimators.py::PosteriorSnapshot` | 已有 | UPM、CAL、PDL、Loss Correction、T-Revision、Dual-T、Importance Reweighting |
-| posterior / feature 收集 | `training/snapshots.py` | 规划 | UPM、CAL、PDL、Loss Correction、T-Revision、Dual-T、MC-LDCE、CWD、PCSE、DLD、LEND |
+| posterior / feature 收集 | `training/snapshots.py::collect_posterior_snapshot()` | 已有 posterior 收集；feature 收集仍规划 | UPM、CAL、PDL、Loss Correction、T-Revision、Dual-T、MC-LDCE、CWD、PCSE、DLD、LEND |
 | 全局转移矩阵 artifact | `noise/transition.py::TransitionArtifact` | 已有 | CAL、Loss Correction、VolMinNet、T-Revision、Dual-T、MC-LDCE、PCSE |
 | 实例转移查询 | `noise/transition.py::InstanceTransitionProvider` | 规划 | UPM、PDL |
-| 选样结果 | `core/result.py::SelectionResult` | 规划 | JoCoR、DSS、CNLCU、Co-teaching、FINE、DivideMix、LEND |
-| 小损失排序与保留率 | `selectors/small_loss.py` | 规划；迁移现有 `algorithms/coteaching.py` 逻辑 | JoCoR、CNLCU、Co-teaching |
+| 选样结果 | `selectors/base.py::SelectionResult` | 已有 hard-mask 协议 | JoCoR、DSS、CNLCU、Co-teaching、FINE、DivideMix、LEND |
+| 小损失排序与保留率 | `selectors/basic.py::SmallLossSelector`、`selectors/schedules.py` | 已有 fixed、constant、linear 保留率 | JoCoR、CNLCU、Co-teaching |
 | 按样本历史状态 | `selectors/history.py` | 规划 | DSS、CNLCU、LEND、CA2C、DivideMix |
-| 连续样本权重 | `core/result.py::WeightResult` / `WeightProvider` | 规划 | MentorNet、T-Revision、Importance Reweighting、L2RW、CA2C、DivideMix |
+| 连续样本权重 | `treatments/weights.py::WeightResult` / `WeightProvider` | 已有基础协议和 Binary RCN provider；其他方法规划 | MentorNet、T-Revision、Importance Reweighting、L2RW、CA2C、DivideMix |
 | soft target 结果 | `core/result.py::SoftTargetResult` | 规划 | UPM、DLD、CA2C、DivideMix、LEND |
 | 特征快照 | `training/snapshots.py::FeatureSnapshot` | 规划 | MC-LDCE、CWD、PCSE、DLD、LEND |
 | 特征邻域图 | `data/neighbors.py::NeighborGraphArtifact` | 规划 | DLD、LEND |
@@ -55,6 +55,9 @@
 
 “唯一位置”是 guideline 的合并目标，不表示规划项已经存在。若同事分支已提供等价
 公共接口，应合入同事接口并回改本表，而不是并存两套。
+
+当前生产 Runner 已接入逐样本 Loss 与 batch Selector；WeightProvider 和
+TransitionEstimator 仍是可独立调用的旁路组件，不得写成已经接入训练主链。
 
 ## 当前进度
 

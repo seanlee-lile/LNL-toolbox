@@ -63,6 +63,24 @@ def create_builtin_catalog() -> PluginCatalog:
             "loss", "apl", ActivePassiveLoss,
             capabilities=common + ("composite", "noise_robust"),
         )
+    try:
+        from lnl_toolbox.selectors import AllSelector, SmallLossSelector
+    except ImportError:
+        pass  # Generic selectors are optional with the PyTorch training stack.
+    else:
+        selector_capabilities = ("hard_selection", "single_batch", "stateless")
+        catalog.add(
+            "batch_selector",
+            "all",
+            AllSelector,
+            capabilities=selector_capabilities,
+        )
+        catalog.add(
+            "batch_selector",
+            "small_loss",
+            SmallLossSelector,
+            capabilities=selector_capabilities + ("score_ranking",),
+        )
     catalog.add("noise", "symmetric", generate_symmetric, metadata={"example": True})
     catalog.add("noise", "pairflip", generate_pairflip, metadata={"example": True})
     catalog.add(
@@ -150,5 +168,28 @@ def build_builtin_transition_estimator(
         ) or "none"
         raise ValueError(
             f"Unknown transition estimator {name!r}; available: {available}"
+        ) from exc
+
+
+def build_builtin_selector(
+    config: Mapping[str, Any] | None,
+    catalog: PluginCatalog | None = None,
+) -> Any:
+    """Build a stateless per-batch selector from a YAML-compatible mapping."""
+
+    if config is not None and not isinstance(config, Mapping):
+        raise TypeError("Selector configuration must be a mapping")
+    values = dict(config or {"name": "all"})
+    name = str(values.pop("name", "all")).strip().lower()
+    catalog = catalog or create_builtin_catalog()
+    try:
+        return catalog.build("batch_selector", name, **values)
+    except KeyError as exc:
+        available = (
+            ", ".join(item.name for item in catalog.find(kind="batch_selector"))
+            or "none"
+        )
+        raise ValueError(
+            f"Unknown batch selector {name!r}; available: {available}"
         ) from exc
 
