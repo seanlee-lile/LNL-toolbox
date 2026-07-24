@@ -73,31 +73,119 @@ PosteriorSnapshot → AnchorTransitionEstimator → TransitionArtifact
 - Artifact 是 Forward/Backward、Importance Weighting 等未来模块的输入，不是 Loss。
 - 当前 Manifest 的 `per_sample_transition[N,C]` 不是 PDL 的 `T(x)[N,C,C]`。
 
-## 2. 后续算法边界（未实现）
+## 2. Dual-T（论文原式实现）
+
+### 来源、假设与公式
+
+- 论文：Yao et al., *Dual T: Reducing Estimation Error for Transition Matrix
+  in Label-noise Learning*, NeurIPS 2020。
+- 本地 PDF：`papers/04_statistics/16_dual_t_neurips2020.pdf`。
+- 论文页面：<https://papers.nips.cc/paper/2020/hash/512c5cad6c37edb98ae91c8a76c3a291-Abstract.html>。
+- 官方代码：未发现作者发布的官方实现；实现依据为原文 Algorithm 1。
+
+论文引入 hard intermediate label，把 clean→noisy 转移拆为：
+
+```text
+T_club[i,l]  = P(intermediate=l | clean=i)
+T_spade[l,j] = P(noisy=j | intermediate=l)
+T             = T_club @ T_spade
+```
+
+`T_club` 复用 Anchor estimator；intermediate label 是 noisy posterior 的
+`argmax`；`T_spade` 由 intermediate 与 observed noisy target 的频数估计。
+矩阵乘法按 Toolbox 行向量约定书写，仍满足 `p_noisy = p_clean @ T`。
+
+### Toolbox 实现与工程边界
+
+```text
+model + noisy loader
+  → collect_posterior_snapshot()
+  → PosteriorSnapshot
+  → DualTransitionEstimator
+  → TransitionArtifact(matrix, factors, counts, anchors, source hash)
+```
+
+- Collector 在 inference mode 下收集并按 global index 排序，不改变输入 Dataset，
+  不读取 clean target，结束后恢复模型原训练/eval 状态。
+- Dual-T 不复制 anchor 逻辑；`T_club` 来自现有 Anchor artifact。
+- intermediate `argmax` 的类别并列遵循 NumPy 最小类别 index；这是确定性工程规则。
+- 任一 intermediate 类别没有样本时，频数条件概率不可定义，因此明确失败；
+  不静默加平滑、不重归一化。
+- `T_club`、`T_spade`、频数、anchor global indices 与父 artifact hash 均保存
+  在最终 Artifact metadata，且受 artifact hash 保护。
+- Estimator 无 optimizer/checkpoint 私有状态，当前不接入公共 runner；warm-up
+  训练和 Forward/Backward 等消费者不属于本轮。
+
+### 伪代码
+
+```text
+t_club_artifact = AnchorTransitionEstimator.estimate(snapshot)
+intermediate = argmax(snapshot.noisy_probabilities, axis=1)
+counts[l,j] = number of samples with intermediate=l and noisy_target=j
+fail if any row count is zero
+t_spade = counts / row_sum(counts)
+t = t_club_artifact.matrix @ t_spade
+return TransitionArtifact(t, estimator="dual_t", factor metadata)
+```
+
+### 论文一致性说明
+
+- 原文 Algorithm 1 的 anchor、hard intermediate label、频数估计和因子合成均保留。
+- 原文采用的矩阵记号与本项目行向量方向不同；本实现依据条件概率下标固定为
+  `T_club @ T_spade`，没有改变概率语义。
+- 因未找到官方代码，不能宣称完成作者实现逐行复现；当前成熟度是“论文原式
+  实现并通过数学/协议测试”。
+
+## 3. 后续算法边界（未实现）
 
 | 方法 | 正确模块归属 | 本轮状态 |
 |---|---|---|
 | T-Revision | 有状态 NoiseModel；联合优化 `T + ΔT` | 仅定位论文，未实现 |
-| Dual-T | 第二个离线 TransitionEstimator | 未实现 |
 | VolMinNet | 独立联合训练 Pipeline | 未实现 |
 | PDL | InstanceNoiseModel，输出 `T(x)[B,C,C]` | 未实现 |
 | UPM | InstanceNoiseModel + PosteriorRefiner | 未实现 |
 | CAL | StatisticEstimator / RiskCorrector | 未实现 |
 
-## 3. 实施进度
+## 4. 当前任务进度
 
-- 分支/基线：`loss` / `cb9b847`。
-- 已完成：Snapshot 严格校验与哈希、Artifact v1 持久化与篡改检测、Anchor
-  原式、registry/builder、CPU/CUDA Tensor 转换测试、跨模块协议更新。
-- 定向验证：`test_transition_estimators` 8 项、`test_noise` 16 项、
-  `test_plugins` 6 项，共 30 项通过。
-- 完整回归：临时映射真实 CIFAR-10 后，`unittest` 76 项全部通过；映射已移除。
-- CUDA noisy smoke：symmetric 0.4 + CE 完成 2 epochs / 8 steps，所有 loss
-  有限，生成 resolved config、manifest、last/best checkpoint；峰值显存约
-  160.6 MB，产物已清理。
-- 遗留问题：配置中的相对 `output_root` 会在现有 noisy runner 内与绝对
-  manifest 路径混用而失败；使用绝对 `--output-dir` 可运行。本轮按范围约束未
-  修改 `training/`。
-- 最终 allowlist：工作区变化仅包含计划批准的 7 个修改文件和 3 个必要新增
-  文件；无数据、运行产物、junction、checkpoint 或缓存进入 Git 状态。
-- 明确未做：runner/CLI/checkpoint 接入、Loss/Selector 修改、复杂 estimator。
+- 当前任务：共享 posterior collector + Dual-T 离线 TransitionEstimator。
+- 分支/基线：`loss` / `6be5677`（该提交已包含完整论文 guideline）。
+- 清单：论文/指南核对、collector、Dual-T、factor metadata、registry、
+  focused tests、完整回归、最终 diff/allowlist，共 8 项。
+- 已完成：8 项；进度 `8 / 8 = 100%`。
+- 已修改：`noise/estimators.py`、`noise/__init__.py`、`training/__init__.py`、
+  plugin catalog、两份测试、两份公共文档及两份论文指南。
+- 已新增：`training/snapshots.py`。
+- focused tests：`test_transition_estimators.py` 15 项（含 CUDA collector）、
+  `test_plugins.py` 6 项和 `test_noise.py` 16 项通过。
+- 完整回归：临时映射 F 盘 CIFAR-10 后，`unittest` 85 项全部通过；junction
+  已验证并清理，源数据未受影响。
+- local checkpoint commits：无；本任务未获 commit 授权。
+- blockers：无。
+- 明确未做：warm-up trainer、runner/CLI/checkpoint 接入、消费者算法、
+  Loss/Selector 修改。
+- exact next step：由用户审阅本地 diff；如需提交，另行授权 commit。
+- history cleanup：不需要。push readiness：代码和测试已就绪，但尚未获 commit
+  或 push 授权。
+- 协作提示：plugin catalog、plugin tests、data-flow 和 file-map 是高冲突文件；
+  与 Selector 分支合并时只整合 Dual-T 对应的 import、注册项和文档行。
+
+## 5. Taxonomy P1 本地集成状态
+
+- 当前任务：合并 Loss、Selector、WeightProvider 与 TransitionEstimator 基础组件。
+- 当前分支：`codex/integrate-taxonomy-p1`。
+- 两个来源：`origin/loss@6be5677`、`origin/ce_baseline@3f11ad0`。
+- merge-base：`cb9b847`。
+- 清单：计划替换、集成分支、远程验证、本地 merge/冲突、四类联合检查、
+  focused/完整回归、CUDA smoke/resume、最终保护检查，共 8 项。
+- 已完成：前 3 项；进度 `3 / 8 = 37.5%`。
+- 已确认同事提交：
+  - `f2e241f feat(selector): add batch selection and keep-rate schedules`
+  - `3f11ad0 feat: add sample treatment and binary RCN reweighting`
+- 当前 blocker：合并前必须先保存本分支现有 Dual-T/Collector 等工作；checkpoint
+  commit 需要用户单独授权。
+- 受保护范围：同事的 `selectors/`、`treatments/`、监督 Algorithm、README、
+  Selector/WeightProvider 配置和专属测试不得改写。
+- exact next step：经授权创建本地 checkpoint，然后执行
+  `git merge --no-ff --no-commit origin/ce_baseline`。
+- history cleanup / push readiness：均未就绪；禁止 push。

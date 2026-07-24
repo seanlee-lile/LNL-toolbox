@@ -8,6 +8,7 @@ from lnl_toolbox.algorithms.coteaching import coteaching_exchange
 from lnl_toolbox.losses.numpy_losses import cross_entropy, generalized_cross_entropy
 from lnl_toolbox.noise import (
     AnchorTransitionEstimator,
+    DualTransitionEstimator,
     generate_instance_dependent,
     generate_pairflip,
     generate_symmetric,
@@ -84,6 +85,13 @@ def create_builtin_catalog() -> PluginCatalog:
         AnchorTransitionEstimator,
         capabilities=("class_conditional", "offline", "paper_reference"),
         metadata={"paper": "Patrini et al., CVPR 2017"},
+    )
+    catalog.add(
+        "transition_estimator",
+        "dual_t",
+        DualTransitionEstimator,
+        capabilities=("class_conditional", "offline", "factorized", "paper_reference"),
+        metadata={"paper": "Yao et al., NeurIPS 2020"},
     )
     return catalog
 

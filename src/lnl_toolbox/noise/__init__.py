@@ -1,5 +1,10 @@
 from .generators import generate_instance_dependent, generate_pairflip, generate_symmetric
-from .estimators import AnchorTransitionEstimator, PosteriorSnapshot, TransitionEstimator
+from .estimators import (
+    AnchorTransitionEstimator,
+    DualTransitionEstimator,
+    PosteriorSnapshot,
+    TransitionEstimator,
+)
 from .manifest import NoiseManifest
 from .transition import (
     KnownTransition,
@@ -16,6 +21,7 @@ __all__ = [
     "PosteriorSnapshot",
     "TransitionEstimator",
     "AnchorTransitionEstimator",
+    "DualTransitionEstimator",
     "TransitionArtifact",
     "KnownTransition",
     "TransitionProvider",

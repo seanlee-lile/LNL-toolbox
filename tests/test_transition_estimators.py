@@ -7,15 +7,185 @@ import unittest
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader
 
 from lnl_toolbox.noise import (
     AnchorTransitionEstimator,
+    DualTransitionEstimator,
     PosteriorSnapshot,
     TransitionArtifact,
 )
+from lnl_toolbox.training.snapshots import collect_posterior_snapshot
 
 
 class TransitionEstimatorTest(unittest.TestCase):
+    def test_collector_sorts_indices_and_restores_model_mode(self) -> None:
+        records = [
+            {"input": torch.tensor([0.0, 2.0]), "target": 1, "index": 20},
+            {"input": torch.tensor([3.0, 0.0]), "target": 0, "index": 10},
+            {"input": torch.tensor([0.5, 0.5]), "target": 1, "index": 30},
+        ]
+        model = torch.nn.Identity()
+        model.train()
+
+        snapshot = collect_posterior_snapshot(
+            model,
+            DataLoader(records, batch_size=2, shuffle=False),
+            "cpu",
+            dataset="fixture",
+            split="train",
+        )
+
+        self.assertTrue(model.training)
+        np.testing.assert_array_equal(snapshot.global_indices, [10, 20, 30])
+        np.testing.assert_array_equal(snapshot.noisy_targets, [0, 1, 1])
+        expected_logits = torch.stack(
+            [records[1]["input"], records[0]["input"], records[2]["input"]]
+        )
+        expected = torch.softmax(expected_logits, dim=1).numpy()
+        np.testing.assert_allclose(snapshot.noisy_probabilities, expected, atol=1e-7)
+
+    def test_collector_rejects_empty_or_duplicate_indices(self) -> None:
+        with self.assertRaisesRegex(ValueError, "at least one batch"):
+            collect_posterior_snapshot(
+                torch.nn.Identity(),
+                DataLoader([], batch_size=1),
+                "cpu",
+                dataset="fixture",
+                split="train",
+            )
+
+        records = [
+            {"input": torch.tensor([1.0, 0.0]), "target": 0, "index": 7},
+            {"input": torch.tensor([0.0, 1.0]), "target": 1, "index": 7},
+        ]
+        with self.assertRaisesRegex(ValueError, "unique"):
+            collect_posterior_snapshot(
+                torch.nn.Identity(),
+                DataLoader(records, batch_size=2),
+                "cpu",
+                dataset="fixture",
+                split="train",
+            )
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is unavailable")
+    def test_collector_accepts_cuda_model_and_returns_cpu_snapshot(self) -> None:
+        records = [
+            {"input": torch.tensor([2.0, 0.0]), "target": 0, "index": 1},
+            {"input": torch.tensor([0.0, 2.0]), "target": 1, "index": 0},
+        ]
+        snapshot = collect_posterior_snapshot(
+            torch.nn.Identity().cuda(),
+            DataLoader(records, batch_size=2),
+            "cuda",
+            dataset="fixture",
+            split="train",
+        )
+        np.testing.assert_array_equal(snapshot.global_indices, [0, 1])
+        self.assertEqual(snapshot.noisy_probabilities.dtype, np.float64)
+
+    @staticmethod
+    def _dual_t_snapshot() -> PosteriorSnapshot:
+        return PosteriorSnapshot(
+            noisy_probabilities=np.asarray(
+                [
+                    [0.90, 0.05, 0.05],
+                    [0.10, 0.80, 0.10],
+                    [0.05, 0.05, 0.90],
+                    [0.60, 0.20, 0.20],
+                    [0.20, 0.60, 0.20],
+                    [0.20, 0.20, 0.60],
+                ]
+            ),
+            noisy_targets=np.asarray([0, 1, 2, 1, 2, 0]),
+            global_indices=np.asarray([30, 10, 50, 20, 40, 60]),
+            dataset="fixture",
+            split="train",
+        )
+
+    def test_dual_t_matches_paper_factorization(self) -> None:
+        snapshot = self._dual_t_snapshot()
+        artifact = DualTransitionEstimator().estimate(snapshot)
+        t_club = np.asarray(
+            [
+                [0.90, 0.05, 0.05],
+                [0.10, 0.80, 0.10],
+                [0.05, 0.05, 0.90],
+            ]
+        )
+        t_spade = np.asarray(
+            [
+                [0.5, 0.5, 0.0],
+                [0.0, 0.5, 0.5],
+                [0.5, 0.0, 0.5],
+            ]
+        )
+
+        self.assertEqual(artifact.estimator, "dual_t")
+        self.assertEqual(artifact.source_snapshot_hash, snapshot.snapshot_hash)
+        self.assertEqual(artifact.metadata["composition"], "t_club @ t_spade")
+        np.testing.assert_allclose(artifact.metadata["t_club"], t_club)
+        np.testing.assert_allclose(artifact.metadata["t_spade"], t_spade)
+        np.testing.assert_allclose(artifact.matrix, t_club @ t_spade)
+        self.assertEqual(artifact.metadata["anchor_global_indices"], [30, 10, 50])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "dual_t.npz"
+            artifact.save(path)
+            loaded = TransitionArtifact.load(path)
+        self.assertEqual(loaded.artifact_hash, artifact.artifact_hash)
+        np.testing.assert_allclose(loaded.metadata["t_club"], t_club)
+        np.testing.assert_allclose(loaded.metadata["t_spade"], t_spade)
+
+    def test_dual_t_is_invariant_to_snapshot_order(self) -> None:
+        snapshot = self._dual_t_snapshot()
+        order = np.asarray([4, 1, 5, 0, 3, 2])
+        reordered = PosteriorSnapshot(
+            noisy_probabilities=snapshot.noisy_probabilities[order],
+            noisy_targets=snapshot.noisy_targets[order],
+            global_indices=snapshot.global_indices[order],
+            dataset=snapshot.dataset,
+            split=snapshot.split,
+        )
+
+        first = DualTransitionEstimator().estimate(snapshot)
+        second = DualTransitionEstimator().estimate(reordered)
+        np.testing.assert_allclose(first.matrix, second.matrix)
+        np.testing.assert_allclose(first.metadata["t_club"], second.metadata["t_club"])
+        np.testing.assert_allclose(first.metadata["t_spade"], second.metadata["t_spade"])
+        self.assertEqual(
+            first.metadata["anchor_global_indices"],
+            second.metadata["anchor_global_indices"],
+        )
+
+    def test_dual_t_rejects_empty_intermediate_class(self) -> None:
+        snapshot = PosteriorSnapshot(
+            noisy_probabilities=np.asarray(
+                [[0.70, 0.20, 0.10], [0.20, 0.70, 0.10], [0.60, 0.30, 0.10]]
+            ),
+            noisy_targets=np.asarray([0, 1, 2]),
+            global_indices=np.asarray([0, 1, 2]),
+            dataset="fixture",
+            split="train",
+        )
+        with self.assertRaisesRegex(ValueError, "empty intermediate classes: 2"):
+            DualTransitionEstimator().estimate(snapshot)
+
+    def test_dual_t_reduces_to_anchor_with_identity_second_factor(self) -> None:
+        probabilities = np.asarray(
+            [[0.90, 0.10], [0.80, 0.20], [0.20, 0.80], [0.10, 0.90]]
+        )
+        snapshot = PosteriorSnapshot(
+            noisy_probabilities=probabilities,
+            noisy_targets=probabilities.argmax(axis=1),
+            global_indices=np.asarray([0, 1, 2, 3]),
+            dataset="fixture",
+            split="train",
+        )
+        anchor = AnchorTransitionEstimator().estimate(snapshot)
+        dual = DualTransitionEstimator().estimate(snapshot)
+        np.testing.assert_allclose(dual.metadata["t_spade"], np.eye(2))
+        np.testing.assert_allclose(dual.matrix, anchor.matrix)
+
     def setUp(self) -> None:
         self.matrix = np.array(
             [

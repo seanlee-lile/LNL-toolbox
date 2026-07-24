@@ -3782,7 +3782,7 @@ loss: {name: ce}
   Gang Niu, Masashi Sugiyama
 - 论文页面：<https://papers.nips.cc/paper/2020/hash/512c5cad6c37edb98ae91c8a76c3a291-Abstract.html>
 - 官方代码：未发现论文作者发布的官方实现
-- 当前成熟度：L1；已阅读论文，尚未实现或运行
+- 当前成熟度：L3（论文原式实现并通过数学/协议测试；未发现官方代码）
 - Toolbox 归属：`TransitionEstimator`
 - 不是：RiskCorrector、Loss 或联合训练 NoiseModel
 
@@ -3826,12 +3826,12 @@ noisy Dataset -> warm-up model -> PosteriorSnapshot
 ### 4. 按顺序映射到文件和函数
 
 1. `[已有] noise/estimators.py::PosteriorSnapshot`
-2. `[扩展] training/snapshots.py::collect_posterior_snapshot()`
+2. `[已有] training/snapshots.py::collect_posterior_snapshot()`
 3. `[已有] noise/estimators.py::AnchorTransitionEstimator.estimate()`
-4. `[扩展] noise/estimators.py::DualTransitionEstimator.estimate()`
+4. `[已有] noise/estimators.py::DualTransitionEstimator.estimate()`
 5. `[已有] noise/transition.py::TransitionArtifact`
-6. `[扩展/高冲突] plugins/builtin/catalog.py` 注册 `transition_estimator/dual_t`
-7. `[规划] tests/test_transition_estimators.py` 增加 Dual-T 数学测试
+6. `[已有/高冲突] plugins/builtin/catalog.py` 注册 `transition_estimator/dual_t`
+7. `[已有] tests/test_transition_estimators.py` 的 collector 与 Dual-T 数学/协议测试
 
 ### 5. 规划接口
 
@@ -3890,10 +3890,13 @@ indices、合成方向、最终 artifact hash 和 warm-up model identity。
   用条件概率下标推导并固定为 `T_club @ T_spade`。
 - `[待核实]` 未发现作者官方代码，因此只依据论文公式和算法给出伪代码。
 
-### 11. 当前未实现
+### 11. 当前实现状态与边界
 
-- DualTransitionEstimator、registry、数学测试与 artifact factor metadata
-- warm-up→估计 smoke
+- 已实现：共享 posterior collector、DualTransitionEstimator、registry、
+  `T_club/T_spade/counts/anchors` artifact metadata 及数学/协议测试。
+- 未实现：warm-up trainer、公共 runner/CLI 接入、Forward/Backward 等消费者。
+- 当前可由代码显式调用 `collect_posterior_snapshot()` 后构造 `dual_t` estimator；
+  尚不能仅靠实验 YAML 自动执行完整两阶段论文流程。
 
 ---
 

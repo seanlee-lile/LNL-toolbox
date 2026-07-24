@@ -161,6 +161,15 @@ def _resolved_noise_config(
     return resolved
 
 
+def _validate_supervised_config(config: Mapping[str, Any]) -> None:
+    for field in ("selector", "transition_estimator"):
+        if field in config:
+            raise ValueError(
+                f"Configuration field {field!r} is registered but not connected to "
+                "run_supervised_experiment"
+            )
+
+
 def run_supervised_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
@@ -170,6 +179,7 @@ def run_supervised_experiment(
 
     config = deepcopy(config)
     config.setdefault("loss", {"name": "ce"})
+    _validate_supervised_config(config)
     seed = int(config.get("seed", 1))
     epochs = int(config["trainer"]["epochs"])
     seed_everything(seed)
@@ -185,6 +195,7 @@ def run_supervised_experiment(
         run_dir = Path(config.get("output_root", "artifacts/runs")) / datetime.now().strftime(
             "%Y%m%d-%H%M%S"
         )
+    run_dir = run_dir.expanduser().resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
 
     checkpoint_payload = None

@@ -108,8 +108,11 @@ noise:
 - `manifest` 不得与 `name/rate/seed` 混用。
 - 训练期间不得按 batch 重新采样噪声。
 - 最终映射必须写入 run-local manifest。
+- `run_dir` 在创建 manifest 前必须解析为绝对路径；相对 `output_root` 以启动命令时的工作目录为基准。
 - `run_clean_experiment` 和多 seed suite 必须拒绝非空 `noise`。
 - 新配置使用顶层 `loss`；不得再用 `algorithm: {name: ce}` 表示 CE。
+- 插件注册不代表已经接入生产 Runner；当前配置出现 `selector` 或
+  `transition_estimator` 时必须明确报错，不得静默忽略。
 - 实际配置必须写入 `resolved_config.yaml`。
 
 ## 4. 样本身份与 global index
@@ -228,8 +231,18 @@ Artifact 必须保存格式版本、estimator 名称、来源 snapshot hash、�
 metadata 和 artifact hash；加载时验证内容完整性，不得隐式裁剪或归一化。
 `KnownTransition` 与 estimator 产物共享相同矩阵方向和 Tensor 输出接口。
 
-当前 `anchor` 是离线、无状态 estimator：每类选择 noisy posterior 最大的样本；
-精确并列时取最小 global index。它尚未接入统一 runner，也不是 Loss。
+`training/snapshots.py::collect_posterior_snapshot()` 是唯一 posterior 收集入口：
+在 `inference_mode` 下按 batch 的 `input/target/index` 收集，按 global index 排序，
+并恢复模型原训练状态。它不负责 warm-up 训练，也不读取 clean target。
+
+当前离线、无状态 estimator：
+
+- `anchor`：每类选择 noisy posterior 最大的样本；精确并列取最小 global index。
+- `dual_t`：复用 Anchor 得到 `T_club`，按 posterior argmax 与 noisy target
+  频数估计 `T_spade`，输出 `T_club @ T_spade`。空 intermediate 类别直接失败；
+  factors、counts 和 anchors 记录在 Artifact metadata。
+
+两者可由 plugin catalog 构造，但尚未接入统一 runner，也不是 Loss。
 Forward/Backward、Importance Weighting 等未来消费者只能接收 Artifact，不能反向
 修改 Snapshot。`NoiseManifest.per_sample_transition[N,C]` 只是每个样本真实类别
 对应的一行，不等于 PDL 的完整 `T(x)[N,C,C]`。
@@ -354,7 +367,7 @@ Evaluator 使用独立 clean validation/test loader；在 `inference_mode` 下�
 |---|---|---|---|
 | 样本字段/index | `data/torch_cifar.py`、`data/noisy_dataset.py` | Algorithm、Manifest、未来 Selector | `test_torch_training.py`、`test_noise.py` |
 | Manifest v2 | `noise/manifest.py`、`training/noisy_labels.py` | Dataset、Runner、Checkpoint | `test_noise.py`、`test_noisy_ce_baseline.py` |
-| PosteriorSnapshot | warm-up 推理（未来） | TransitionEstimator | `test_transition_estimators.py` |
+| PosteriorSnapshot | `training/snapshots.py` | Anchor、Dual-T | `test_transition_estimators.py` |
 | TransitionArtifact `[C,C]` | `noise/estimators.py`、`noise/transition.py` | 未来 RiskCorrector/WeightProvider | `test_transition_estimators.py`、`test_plugins.py` |
 | Loss `[B]` | `losses/torch_losses.py`、plugin catalog | Algorithm、Evaluator、未来 Selector | `test_losses.py`、`test_plugins.py` |
 | Algorithm/StepResult | `algorithms/supervised.py` | Runner、Checkpoint | `test_core.py`、`test_torch_training.py` |

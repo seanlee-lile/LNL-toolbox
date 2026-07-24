@@ -138,3 +138,49 @@ class AnchorTransitionEstimator:
                 "paper": "Patrini et al., CVPR 2017, Equations (12)-(13)",
             },
         )
+
+
+@dataclass(frozen=True, slots=True)
+class DualTransitionEstimator:
+    """Yao et al. (NeurIPS 2020), Algorithm 1, in row-vector convention."""
+
+    def estimate(self, snapshot: PosteriorSnapshot) -> TransitionArtifact:
+        t_club_artifact = AnchorTransitionEstimator().estimate(snapshot)
+        probabilities = snapshot.noisy_probabilities
+        intermediate_targets = probabilities.argmax(axis=1)
+
+        counts = np.zeros(
+            (snapshot.num_classes, snapshot.num_classes), dtype=np.int64
+        )
+        np.add.at(counts, (intermediate_targets, snapshot.noisy_targets), 1)
+        totals = counts.sum(axis=1)
+        missing = np.flatnonzero(totals == 0)
+        if missing.size:
+            missing_values = ", ".join(str(int(value)) for value in missing)
+            raise ValueError(
+                "Dual-T cannot estimate intermediate-to-noisy rows for empty "
+                f"intermediate classes: {missing_values}"
+            )
+
+        t_spade = counts / totals[:, None]
+        matrix = t_club_artifact.matrix @ t_spade
+        return TransitionArtifact(
+            matrix=matrix,
+            estimator="dual_t",
+            source_snapshot_hash=snapshot.snapshot_hash,
+            metadata={
+                "dataset": snapshot.dataset,
+                "split": snapshot.split,
+                "num_samples": snapshot.num_samples,
+                "composition": "t_club @ t_spade",
+                "t_club": t_club_artifact.matrix.tolist(),
+                "t_spade": t_spade.tolist(),
+                "t_spade_counts": counts.tolist(),
+                "t_club_artifact_hash": t_club_artifact.artifact_hash,
+                "anchor_global_indices": t_club_artifact.metadata[
+                    "anchor_global_indices"
+                ],
+                "intermediate_assignment": "argmax_tie_min_class_index",
+                "paper": "Yao et al., NeurIPS 2020, Algorithm 1",
+            },
+        )

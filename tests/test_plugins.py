@@ -7,7 +7,7 @@ from lnl_toolbox.losses import (
     MeanAbsoluteErrorLoss,
     NormalizedCrossEntropyLoss,
 )
-from lnl_toolbox.noise import AnchorTransitionEstimator
+from lnl_toolbox.noise import AnchorTransitionEstimator, DualTransitionEstimator
 from lnl_toolbox.plugins import PluginCatalog
 from lnl_toolbox.plugins.builtin import (
     build_builtin_loss,
@@ -81,11 +81,15 @@ class PluginCatalogTest(unittest.TestCase):
         catalog = create_builtin_catalog()
         self.assertEqual(
             [item.name for item in catalog.find(kind="transition_estimator")],
-            ["anchor"],
+            ["anchor", "dual_t"],
         )
         self.assertIsInstance(
             build_builtin_transition_estimator({"name": "anchor"}, catalog),
             AnchorTransitionEstimator,
+        )
+        self.assertIsInstance(
+            build_builtin_transition_estimator({"name": "dual_t"}, catalog),
+            DualTransitionEstimator,
         )
         with self.assertRaises(ValueError):
             build_builtin_transition_estimator({"name": "unknown"}, catalog)
