@@ -30,10 +30,11 @@ def build_checkpoint(
     best_validation_accuracy: float = float("-inf"),
     noise: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    algorithm_state = algorithm.state_dict()
     payload: dict[str, Any] = {
         "format_version": 2,
-        "model": algorithm.model.state_dict(),
-        "optimizer": algorithm.optimizer.state_dict(),
+        "model": algorithm_state["model"],
+        "optimizer": algorithm_state["optimizer"],
         "scheduler": None if scheduler is None else scheduler.state_dict(),
         "run_state": asdict(run_state),
         "completed_epoch": int(completed_epoch),
@@ -42,6 +43,10 @@ def build_checkpoint(
         "loss": dict(config.get("loss", {"name": "ce"})),
         "config": dict(config),
     }
+    if "parameter_update_policy" in algorithm_state:
+        payload["parameter_update_policy"] = algorithm_state[
+            "parameter_update_policy"
+        ]
     if noise is not None:
         payload["noise"] = dict(noise)
     return payload
@@ -83,10 +88,13 @@ def read_checkpoint(path: str | Path, device: torch.device | str = "cpu") -> dic
 
 def _restore_model_optimizer(payload: Mapping[str, Any], algorithm) -> str:
     if "model" in payload and "optimizer" in payload:
-        algorithm.load_state_dict({
+        state = {
             "model": payload["model"],
             "optimizer": payload["optimizer"],
-        })
+        }
+        if "parameter_update_policy" in payload:
+            state["parameter_update_policy"] = payload["parameter_update_policy"]
+        algorithm.load_state_dict(state)
         return "top-level"
     legacy = payload.get("algorithm")
     if isinstance(legacy, Mapping) and "model" in legacy and "optimizer" in legacy:

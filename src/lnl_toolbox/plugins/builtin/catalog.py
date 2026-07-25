@@ -81,6 +81,32 @@ def create_builtin_catalog() -> PluginCatalog:
             SmallLossSelector,
             capabilities=selector_capabilities + ("score_ranking",),
         )
+    try:
+        from lnl_toolbox.algorithms.cdr import CDRUpdatePolicy
+        from lnl_toolbox.algorithms.update_policy import StandardUpdatePolicy
+    except ImportError:
+        pass  # Parameter update policies require the PyTorch training stack.
+    else:
+        catalog.add(
+            "parameter_update_policy",
+            "standard",
+            StandardUpdatePolicy,
+            capabilities=("single_model", "optimizer_step", "stateless"),
+        )
+        catalog.add(
+            "parameter_update_policy",
+            "cdr",
+            CDRUpdatePolicy,
+            capabilities=(
+                "single_model",
+                "optimizer_step",
+                "gradient_transform",
+                "parameter_mask",
+                "stateless",
+                "paper_reference",
+            ),
+            metadata={"paper": "Xia et al., ICLR 2021"},
+        )
     catalog.add("noise", "symmetric", generate_symmetric, metadata={"example": True})
     catalog.add("noise", "pairflip", generate_pairflip, metadata={"example": True})
     catalog.add(
@@ -191,5 +217,27 @@ def build_builtin_selector(
         )
         raise ValueError(
             f"Unknown batch selector {name!r}; available: {available}"
+        ) from exc
+
+
+def build_builtin_parameter_update_policy(
+    config: Mapping[str, Any] | None,
+    catalog: PluginCatalog | None = None,
+) -> Any:
+    """Build the owner of backward and optimizer stepping."""
+
+    if config is not None and not isinstance(config, Mapping):
+        raise TypeError("Parameter update configuration must be a mapping")
+    values = dict(config or {"name": "standard"})
+    name = str(values.pop("name", "standard")).strip().lower()
+    catalog = catalog or create_builtin_catalog()
+    try:
+        return catalog.build("parameter_update_policy", name, **values)
+    except KeyError as exc:
+        available = ", ".join(
+            item.name for item in catalog.find(kind="parameter_update_policy")
+        ) or "none"
+        raise ValueError(
+            f"Unknown parameter update policy {name!r}; available: {available}"
         ) from exc
 

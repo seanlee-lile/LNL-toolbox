@@ -25,7 +25,11 @@ from lnl_toolbox.data.torch_cifar import TorchCifarDataset, build_cifar_transfor
 from lnl_toolbox.evaluation.classification import evaluate_classification
 from lnl_toolbox.models.cifar_resnet import cifar_resnet18, preact_resnet18
 from lnl_toolbox.models.tiny_cnn import TinyCNN
-from lnl_toolbox.plugins.builtin import build_builtin_loss, build_builtin_selector
+from lnl_toolbox.plugins.builtin import (
+    build_builtin_loss,
+    build_builtin_parameter_update_policy,
+    build_builtin_selector,
+)
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import load_checkpoint, read_checkpoint, save_checkpoint
 from lnl_toolbox.training.noisy_labels import (
@@ -131,11 +135,24 @@ def _normalized_resume_value(config: Mapping[str, Any], key: str) -> Any:
         return dict(config.get("scheduler", {"name": "none"}) or {"name": "none"})
     if key == "selector":
         return dict(config.get("selector", {"name": "all"}) or {"name": "all"})
+    if key == "parameter_update":
+        return dict(
+            config.get("parameter_update", {"name": "standard"})
+            or {"name": "standard"}
+        )
     return config.get(key)
 
 
 def _validate_resume_config(current: Mapping[str, Any], saved: Mapping[str, Any]) -> None:
-    for key in ("seed", "model", "loss", "optimizer", "scheduler", "selector"):
+    for key in (
+        "seed",
+        "model",
+        "loss",
+        "optimizer",
+        "scheduler",
+        "selector",
+        "parameter_update",
+    ):
         if _normalized_resume_value(current, key) != _normalized_resume_value(saved, key):
             raise ValueError(f"Resume configuration changed {key}")
     current_dataset = str(current.get("data", {}).get("name", "cifar10")).lower()
@@ -170,6 +187,17 @@ def _validate_supervised_config(config: Mapping[str, Any]) -> None:
             f"Configuration field {field!r} is registered but not connected to "
             "run_supervised_experiment"
         )
+    update_config = config.get("parameter_update", {"name": "standard"})
+    if not isinstance(update_config, Mapping):
+        raise TypeError("parameter_update configuration must be a mapping")
+    if str(update_config.get("name", "standard")).strip().lower() == "cdr":
+        optimizer_config = config.get("optimizer")
+        if not isinstance(optimizer_config, Mapping):
+            raise TypeError("optimizer configuration must be a mapping")
+        if str(optimizer_config.get("name", "sgd")).strip().lower() != "sgd":
+            raise ValueError("Paper-mode CDR requires optimizer.name=sgd")
+        if float(optimizer_config.get("weight_decay", 0.0)) != 0.0:
+            raise ValueError("Paper-mode CDR requires optimizer.weight_decay=0")
 
 
 def run_supervised_experiment(
@@ -181,6 +209,7 @@ def run_supervised_experiment(
 
     config = deepcopy(config)
     config.setdefault("loss", {"name": "ce"})
+    config.setdefault("parameter_update", {"name": "standard"})
     _validate_supervised_config(config)
     config.setdefault("selector", {"name": "all"})
     seed = int(config.get("seed", 1))
@@ -290,10 +319,18 @@ def run_supervised_experiment(
     model = build_model(config["model"], num_classes)
     criterion = build_builtin_loss(config["loss"]).to(device)
     selector = build_builtin_selector(config["selector"])
+    update_policy = build_builtin_parameter_update_policy(
+        config["parameter_update"]
+    )
     optimizer = build_optimizer(model, config["optimizer"])
     scheduler = build_scheduler(optimizer, config.get("scheduler"), epochs)
     algorithm = SupervisedClassificationAlgorithm(
-        model, optimizer, criterion, device, selector=selector
+        model,
+        optimizer,
+        criterion,
+        device,
+        selector=selector,
+        update_policy=update_policy,
     )
     algorithm.setup(ExperimentContext(run_dir, config, seed))
     state = RunState(phase="train")
@@ -339,6 +376,8 @@ def run_supervised_experiment(
             correct_weighted = 0.0
             samples = 0.0
             selected_samples = 0.0
+            update_metric_sums: dict[str, float] = {}
+            update_metric_steps = 0
             learning_rate = float(optimizer.param_groups[0]["lr"])
             for raw_batch in train_loader:
                 result = algorithm.step(Batch(raw_batch), state)
@@ -349,6 +388,17 @@ def run_supervised_experiment(
                 correct_weighted += result.metrics["accuracy"] * count
                 samples += count
                 selected_samples += selected_count
+                update_metrics = {
+                    key: float(value)
+                    for key, value in result.metrics.items()
+                    if key.startswith("update_")
+                }
+                if update_metrics:
+                    update_metric_steps += 1
+                    for key, value in update_metrics.items():
+                        update_metric_sums[key] = (
+                            update_metric_sums.get(key, 0.0) + value
+                        )
             algorithm.on_cycle_end(state)
             validation = evaluate_classification(
                 model, validation_loader, criterion, device
@@ -368,6 +418,11 @@ def run_supervised_experiment(
                 "validation_loss": validation["loss"],
                 "validation_accuracy": validation["accuracy"],
             }
+            if update_metric_steps:
+                row.update({
+                    f"train_{key}": value / update_metric_steps
+                    for key, value in update_metric_sums.items()
+                })
             state.metrics = {
                 key: float(value)
                 for key, value in row.items()

@@ -51,7 +51,7 @@
 | 转移矩阵风险校正 | `algorithms/transition_risk.py::RiskCorrector` | 规划 | Loss Correction、Learning with Noisy Labels |
 | 可训练全局转移模型 | `noise/transition.py::TrainableTransitionModel` | 规划 | VolMinNet、T-Revision |
 | 双网络 peer exchange | `algorithms/coteaching.py::peer_exchange()` | 扩展现有 NumPy helper | JoCoR、CNLCU、Co-teaching |
-| backward 后参数更新 | `algorithms/cdr.py::ParameterUpdatePolicy` | 规划，出现第二个消费者后再拆文件 | CDR |
+| backward 与参数更新 | `algorithms/update_policy.py::ParameterUpdatePolicy` | 已有；Standard 与 CDR 首批实现 | CDR；未来单模型参数级更新方法 |
 
 “唯一位置”是 guideline 的合并目标，不表示规划项已经存在。若同事分支已提供等价
 公共接口，应合入同事接口并回改本表，而不是并存两套。
@@ -1630,8 +1630,8 @@ target 偷看类别分布。
   Zongyuan Ge, Yi Chang
 - 官方页面：<https://openreview.net/forum?id=Eql5b1_hTE4>
 - 官方代码：<https://github.com/xiaoboxia/CDR>
-- 当前成熟度：L2
-- 核对状态：已阅读论文；已检查官方 `main.py`；尚未运行
+- 当前成熟度：组件 L3；完整 CDR Pipeline L2
+- 核对状态：已阅读论文；已检查官方 `main.py`；论文模式组件已实现并完成数学/CPU/CUDA 测试
 - Toolbox 归属：`ParameterUpdatePolicy + 单网络 Pipeline`
 - 不是：Loss、样本 Selector 或 TransitionEstimator
 
@@ -1682,41 +1682,41 @@ batch(input, noisy target, global index)
 - 复用现有 Loss 协议；CDR 不复制 CE。
 - CDR 与 Selector 完全正交：Selector 决定哪些样本形成 loss，CDR 决定 loss
   backward 后哪些参数吸收梯度。
-- `[规划/共享]` 若后续论文也修改 gradient / optimizer step，则共用
-  `ParameterUpdatePolicy` 协议；否则先把协议和 CDR 放在同一
-  `algorithms/cdr.py`，不新建空泛文件。
+- `[已有/共享] algorithms/update_policy.py` 定义所有单模型、单 objective
+  参数级更新共用的 `ParameterUpdatePolicy`；CDR 数学独立保存在
+  `algorithms/cdr.py`。
 - 数据、噪声 manifest、evaluator、checkpoint 外壳继续复用通用 runner。
 - noisy validation 不等于 clean validation，配置必须显式区分。
 
 ### 4. 按顺序映射到文件和函数
 
-1. `[规划] src/lnl_toolbox/algorithms/cdr.py`
-   - `flatten_parameter_statistics(named_parameters)`
+1. `[已有/共享] src/lnl_toolbox/algorithms/update_policy.py`
+   - `ParameterUpdateInput` / `ParameterUpdateResult`
+   - `ParameterUpdatePolicy`
+   - `StandardUpdatePolicy`
+2. `[已有] src/lnl_toolbox/algorithms/cdr.py`
    - `critical_parameter_masks(named_parameters, noise_rate)`
-   - `CDRUpdatePolicy.apply(model, learning_rate)`
-   - `CDRAlgorithm.step(batch, context)`
-2. `[扩展] src/lnl_toolbox/training/experiment.py`
-   - 未来由统一 runner 在 `backward` 和 `optimizer.step` 之间调用 update policy；
-     这是高影响接口，需集成人协调。
-3. `[规划] src/lnl_toolbox/training/cdr_pipeline.py`
+   - `CDRUpdatePolicy.update(request)`
+3. `[已有/扩展] src/lnl_toolbox/algorithms/supervised.py`
+   - 所有 scalar objective 统一委托 ParameterUpdatePolicy 完成 backward/update。
+4. `[已有/扩展] src/lnl_toolbox/training/experiment.py`
+   - 构造 policy、聚合 `update_*` 指标并校验 resume 配置。
+5. `[规划] src/lnl_toolbox/training/cdr_pipeline.py`
    - 仅在通用 runner 无法表达论文的显式 L1 更新时使用。
-4. `[扩展/高冲突] src/lnl_toolbox/plugins/builtin/catalog.py`
-   - 注册 `algorithm/cdr` 或 `update_policy/cdr`。
-5. `[规划] configs/algorithm/cdr.yaml`
-6. `[规划] tests/test_cdr.py`
+6. `[已有/高冲突] src/lnl_toolbox/plugins/builtin/catalog.py`
+   - 注册 `parameter_update_policy/standard` 与 `parameter_update_policy/cdr`。
+7. `[已有] configs/algorithm/cdr.yaml`
+8. `[已有] tests/test_update_policy.py`、`tests/test_cdr.py`
 
 ### 5. 规划接口
 
 ```python
 class ParameterUpdatePolicy(Protocol):
-    def step(
+    def update(
         self,
-        *,
-        model: nn.Module,
-        optimizer: Optimizer,
-        context: ExperimentContext,
-    ) -> Mapping[str, float]:
-        """在 backward 后消费梯度，并完成一次受控更新。"""
+        request: ParameterUpdateInput,
+    ) -> ParameterUpdateResult:
+        """拥有 zero_grad、backward 和一次受控 optimizer update。"""
 
 
 def critical_parameter_masks(
@@ -1737,24 +1737,15 @@ def critical_parameter_masks(
 ### 6. Pipeline 伪代码
 
 ```python
-optimizer.zero_grad()
 logits = model(batch["input"])
 per_sample = loss_fn(logits, batch["target"])
 objective = per_sample.mean()
-objective.backward()
-
-masks = critical_parameter_masks(
-    model.named_parameters(),
-    critical_fraction=1.0 - noise_rate,
-)
-apply_cdr_update(
+policy.update(ParameterUpdateInput(
+    objective=objective,
     model=model,
-    masks=masks,
-    learning_rate=current_lr,
-    gradient_scale=1.0 - noise_rate,
-    l1_decay=lambda_,
-)
-optimizer_state_adapter.advance_if_needed()
+    optimizer=optimizer,
+    run_state=state,
+))
 ```
 
 不能简单把 non-critical 的 `.grad` 设为零后调用带 L2 weight decay 的 SGD，并
@@ -1763,12 +1754,11 @@ optimizer_state_adapter.advance_if_needed()
 ### 7. 配置草案
 
 ```yaml
-algorithm:
+parameter_update:
   name: cdr
   noise_rate: 0.4
   l1_decay: 0.001
   critical_scope: all_trainable
-  validation_role: noisy
 
 optimizer:
   name: sgd
@@ -1782,7 +1772,7 @@ optimizer:
 - model、optimizer/scheduler 和 momentum state；
 - epoch、global step、current learning rate；
 - `noise_rate`、critical scope、gradient scale 和 L1 decay；
-- noisy validation identity、best noisy-validation error、early-stop state；
+- `[完整 Pipeline 尚缺]` noisy validation identity、best noisy-validation error、early-stop state；
 - noise manifest identity 和 RNG state。
 
 critical mask 每 step 重算，不需要持久化；若为调试保存，只能作为 artifact，
@@ -1817,19 +1807,20 @@ critical mask 每 step 重算，不需要持久化；若为调试保存，只能
   `1-noise_rate` 覆盖，实际没有 gradual 变化。
 - `[差异]` 官方阈值用 `>= threshold`，并列时 critical 参数数量可能超过目标；
   toolbox 应采用确定性的精确 top-k。
-- `[推断]` toolbox 默认实现论文模式，同时可用显式
-  `compatibility_mode: official_code` 复现作者代码；两者不得静默混合。
+- `[推断]` toolbox 当前只实现论文模式；未来若增加
+  `compatibility_mode: official_code`，必须显式复现作者代码的参数 scope 和
+  L2 decay，不能与论文模式静默混合。
 
-### 11. 当前未实现
+### 11. 当前实施状态
 
-- `ParameterUpdatePolicy`
-- CDR critical mask 与论文更新式
-- noisy-validation early stopping 角色
-- CDR 配置、checkpoint 适配和测试
-- 论文 / 官方代码兼容模式
-- 论文结果复现
+- `[已实现]` 通用 ParameterUpdatePolicy、Standard policy 和 plugin/config。
+- `[已实现]` CDR Eq. (3)-(6)、全局精确 top-k、稳定并列规则和 L1 更新。
+- `[已实现]` 与 Loss/Selector 的生产组合、policy checkpoint 身份和 resume 配置校验。
+- `[已验证]` 手算、失败边界、CPU/CUDA、checkpoint 与 noisy CUDA smoke。
+- `[未实现]` noisy-validation early stopping、官方代码 compatibility mode 和论文结果复现。
 
-因此当前 toolbox 不能宣称支持 CDR。
+因此当前 toolbox 可宣称支持 **paper-mode CDR ParameterUpdatePolicy 组件**，
+但不能宣称完整复现包含 noisy-validation early stopping 的 CDR Pipeline。
 
 ---
 

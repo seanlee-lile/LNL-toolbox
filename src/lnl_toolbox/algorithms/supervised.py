@@ -9,6 +9,13 @@ from torch import nn
 
 from lnl_toolbox.core import Batch, ExperimentContext, RunState, StepResult
 from lnl_toolbox.losses.torch_losses import validate_per_sample_loss
+from lnl_toolbox.algorithms.update_policy import (
+    ParameterUpdateInput,
+    ParameterUpdatePolicy,
+    StandardUpdatePolicy,
+    restore_update_policy,
+    serialize_update_policy,
+)
 from lnl_toolbox.selectors import (
     AllSelector,
     SelectionInput,
@@ -29,18 +36,21 @@ class SupervisedClassificationAlgorithm:
     """
     def __init__(self, model: nn.Module, optimizer: torch.optim.Optimizer,
                  loss: nn.Module, device: torch.device,
-                 selector: Selector | None = None) -> None:
+                 selector: Selector | None = None,
+                 update_policy: ParameterUpdatePolicy | None = None) -> None:
         self.model = model
         self.optimizer = optimizer
         self.loss = loss
         self.device = device
         self.selector = selector or AllSelector()
+        self.update_policy = update_policy or StandardUpdatePolicy()
         self.contribution_adapter = SelectorContributionAdapter(self.selector)
         self.reduction = ReductionSpec()
 
     def setup(self, context: ExperimentContext) -> None:
         self.model.to(self.device)
         self.loss.to(self.device)
+        self.update_policy.setup(context)
 
     def on_run_start(self, state: RunState) -> None:
         pass
@@ -56,7 +66,6 @@ class SupervisedClassificationAlgorithm:
         sample_indices = torch.as_tensor(
             batch.payload["index"], dtype=torch.long, device=self.device
         )
-        self.optimizer.zero_grad(set_to_none=True)
         logits = self.model(inputs)
         per_sample_loss = validate_per_sample_loss(
             self.loss(logits, targets), int(targets.numel())
@@ -72,20 +81,26 @@ class SupervisedClassificationAlgorithm:
             contribution,
             self.reduction,
         )
-        loss.backward()
-        self.optimizer.step()
+        update_result = self.update_policy.update(ParameterUpdateInput(
+            objective=loss,
+            model=self.model,
+            optimizer=self.optimizer,
+            run_state=state,
+        ))
         count = int(targets.numel())
         selected_count = int(selected_mask.sum().item())
         correct = int((logits.argmax(1) == targets).sum().item())
         state.step += 1
-        return StepResult(metrics={
+        metrics = {
             "loss": float(loss.detach().item()),
             "all_sample_loss": float(per_sample_loss.detach().mean().item()),
             "accuracy": correct / count,
             "samples": float(count),
             "selected_samples": float(selected_count),
             "selected_ratio": selected_count / count,
-        })
+        }
+        metrics.update(update_result.metrics)
+        return StepResult(metrics=metrics)
 
     def on_cycle_end(self, state: RunState) -> StepResult:
         return StepResult()
@@ -94,12 +109,20 @@ class SupervisedClassificationAlgorithm:
         return StepResult()
 
     def state_dict(self) -> dict[str, Any]:
-        return {"model": self.model.state_dict(), "optimizer": self.optimizer.state_dict()}
+        return {
+            "model": self.model.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+            "parameter_update_policy": serialize_update_policy(self.update_policy),
+        }
 
     def load_state_dict(self, state: dict[str, Any]) -> None:
         """Restore model and optimizer state, moving optimizer tensors as needed."""
         self.model.load_state_dict(state["model"])
         self.optimizer.load_state_dict(state["optimizer"])
+        restore_update_policy(
+            self.update_policy,
+            state.get("parameter_update_policy"),
+        )
         for optimizer_state in self.optimizer.state.values():
             for key, value in optimizer_state.items():
                 if torch.is_tensor(value):

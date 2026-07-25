@@ -13,6 +13,7 @@ flowchart LR
     B --> D["Model"]
     B --> E["PluginCatalog → Loss"]
     B --> S["PluginCatalog → batch_selector"]
+    B --> P["PluginCatalog → parameter_update_policy"]
     C --> F["Batch"]
     D --> G["logits [B,C]"]
     G --> E
@@ -22,7 +23,9 @@ flowchart LR
     F --> I["Supervised Algorithm"]
     H --> I
     M --> I
-    I --> J["StepResult"]
+    I --> P
+    P --> J["backward + optimizer step"]
+    J --> R["StepResult"]
     B --> K["Clean Evaluator"]
     B --> L["Checkpoint v2"]
 ```
@@ -33,9 +36,10 @@ flowchart LR
 - `run_experiment` 是兼容别名；`run_clean_experiment` 是 clean-only 包装。
 - 生产路径固定使用 `SupervisedClassificationAlgorithm`；尚不能通过 YAML 替换任意 Algorithm。
 - `engine/runner.py` 没有进入该路径。两者都会推进 step，不能直接嵌套。
-- Loss 和无状态 batch Selector 已通过 `PluginCatalog` 构造；Model、Algorithm、Evaluator 尚未全部插件化。
+- Loss、无状态 batch Selector 和 ParameterUpdatePolicy 已通过 `PluginCatalog` 构造；Model、Algorithm、Evaluator 尚未全部插件化。
 - 通用 `all`/`small_loss` Selector 已接入单模型监督路径；二分类 asymmetric-RCN importance-weight 组件可通过内部 treatment 合同独立调用，但尚未接入公开训练配置；RiskCorrector 尚未接入。
 - Co-teaching 的双网络协调和 peer exchange 仍属于独立 Algorithm/Pipeline，不由通用 Selector 承担。
+- `StandardUpdatePolicy` 保持普通更新；`CDRUpdatePolicy` 是当前首个参数级更新策略。需要 meta-batch、高阶梯度或多网络协调的方法仍属于 MetaUpdater/独立 Pipeline。
 
 ## 2. 模块职责与依赖方向
 
@@ -48,7 +52,7 @@ flowchart LR
 | `models/` | `inputs -> logits` | 读取标签、Manifest 或逐样本历史 |
 | `losses/` | `logits + targets -> loss[B]` | 聚合、选样、optimizer、clean label |
 | `selectors/` | detached `scores[B] + index[B] -> hard mask[B]` | 模型、optimizer、backward、peer exchange、生命周期 |
-| `algorithms/` | 组合模型、Loss、优化器和训练决策；拥有私有状态 | 数据文件解析、实验目录管理 |
+| `algorithms/` | 组合模型、Loss、Selector、ParameterUpdatePolicy 和训练决策；拥有私有状态 | 数据文件解析、实验目录管理 |
 | `evaluation/` | clean validation/test 指标 | 参与训练更新或泄漏 clean label |
 | `training/` | 组装、循环、恢复、产物 | 实现论文公式或把算法逻辑写死在公共入口 |
 | `plugins/` | 注册、发现、按配置构造组件 | 执行训练生命周期 |
@@ -88,6 +92,7 @@ run_supervised_experiment(
 | `trainer` | 必须；epochs、device |
 | `loss` | 可选；缺省为 `{name: ce}` |
 | `selector` | 可选；缺省为 `{name: all}`，另支持固定 keep-rate `small_loss` |
+| `parameter_update` | 可选；缺省为 `{name: standard}`，另支持 paper-mode `cdr` |
 | `scheduler` | 可选；none、cosine、multistep |
 | `noise` | 可选；省略即 clean |
 | `seed` / `output_root` | 可选；有稳定默认值 |
@@ -290,8 +295,9 @@ objective = reduce_per_sample_loss(
     contribution,
     ReductionSpec("weight_sum_mean"),
 )
-objective.backward()
-optimizer.step()
+update_policy.update(
+    ParameterUpdateInput(objective, model, optimizer, run_state)
+)
 ```
 
 用于 backward 的 `per_sample` 保留 autograd graph；只有评分副本会 detach。Selector adapter 将旧的 hard mask 转成 `ContributionResult(mask, ones)`，统一 reducer 计算 `sum(weight * loss) / sum(weight)`。在当前 hard-mask 路径中，这与 `per_sample[selected_mask].mean()` 数值等价。缺少 `selector` 配置时仍构造 `AllSelector`，因此 objective、配置、指标和 checkpoint 行为与旧实现相同。
@@ -316,9 +322,34 @@ state_dict() -> dict
 load_state_dict(state: dict) -> None
 ```
 
-复杂 Algorithm 必须把模型、优化器、scheduler、阶段状态和逐样本历史纳入可恢复状态；不得把算法私有数组塞入通用 `RunState`。
+复杂 Algorithm 必须把模型、优化器、ParameterUpdatePolicy、scheduler、阶段状态和逐样本历史纳入可恢复状态；不得把算法私有数组塞入通用 `RunState`。
 
-### 7.4 通用 batch Selector
+### 7.4 ParameterUpdatePolicy
+
+`ParameterUpdatePolicy.update(ParameterUpdateInput) -> ParameterUpdateResult`
+拥有一次更新中的 `zero_grad`、`backward` 和 optimizer step。普通训练也必须通过
+`StandardUpdatePolicy`，Algorithm 不得在 policy 之外再次 backward 或 step。
+
+输入只包含 scalar objective、model、optimizer 和 `RunState`；不得包含 clean
+target、corruption mask 或样本可靠性真值。输出 metrics 必须是有限标量，私有状态
+通过 `state_dict/load_state_dict` 保存。插件 kind 固定为
+`parameter_update_policy`，YAML 顶层字段固定为 `parameter_update`。
+
+当前 `CDRUpdatePolicy`：
+
+- 按论文 Eq. (3) 对所有有梯度的可训练标量计算 `abs(grad * parameter)`；
+- 精确选择 `ceil((1-noise_rate) * m)` 个 critical 标量；
+- 并列按 `(parameter_name, flat_offset)` 稳定裁决；
+- critical/non-critical 分别执行 Eq. (5)/(6) 的梯度变换；
+- 只接受 SGD，且 paper mode 要求 optimizer `weight_decay=0`；
+- mask 每 step 重算，无 checkpoint 私有状态。
+
+该接口覆盖单模型、单 objective 的参数级更新。L2RW 的 clean meta-batch 和高阶
+虚拟更新属于 `MetaUpdater`；双网络或多阶段方法属于独立 Pipeline，均不得伪装成
+ParameterUpdatePolicy。当前也未实现 CDR 的 noisy-validation early stopping 或
+官方代码 L2 compatibility mode，因此不能宣称完整复现 CDR Pipeline。
+
+### 7.5 通用 batch Selector
 
 `Selector.select(SelectionInput) -> SelectionResult` 的生产合同为：
 
@@ -334,7 +365,7 @@ load_state_dict(state: dict) -> None
 
 插件 kind 为 `batch_selector`。旧的 `selector/coteaching_exchange` 是 Co-teaching helper，保持隔离且不应被普通单模型配置混用。
 
-### 7.5 内部 Sample Treatment Phase 1
+### 7.6 内部 Sample Treatment Phase 1
 
 `treatments/` 建立普通监督训练和独立权重组件共用的内部贡献合同，不是面向用户的论文方法组合接口：
 
@@ -347,7 +378,7 @@ load_state_dict(state: dict) -> None
 
 公共配置继续使用既有 `selector: all/small_loss`。`TopKSelector`、`ThresholdSelector` 和论文 Algorithm 不属于本阶段。
 
-### 7.6 二分类 asymmetric-RCN importance-weight 组件
+### 7.7 二分类 asymmetric-RCN importance-weight 组件
 
 通用 `WeightProvider[InputT]` 只约束 provider 将自己的输入转换为统一 `WeightResult(sample_weights, metrics)`；不同方法可以定义各自的输入合同。`WeightContributionAdapter` 只校验 provider 输出，并根据输出权重的 shape 和 device 生成全 `True` mask，不读取 posterior、target、logits 或其他方法专用字段。具体 provider 负责校验输入及输入/输出 batch 对齐，最终 reducer 再校验权重与逐样本 loss 对齐。
 
@@ -394,6 +425,7 @@ Evaluator 使用独立 clean validation/test loader；在 `inference_mode` 下�
     "format_version": 2,
     "model": ...,
     "optimizer": ...,
+    "parameter_update_policy": {"name": str, "state": dict},
     "scheduler": ...,
     "run_state": ...,
     "completed_epoch": int,
@@ -408,6 +440,7 @@ Evaluator 使用独立 clean validation/test loader；在 `inference_mode` 下�
 恢复规则：
 
 - model、optimizer、`RunState` 缺失时必须失败。
+- 非默认 ParameterUpdatePolicy 的身份或状态缺失/不匹配时必须失败。
 - 当前启用 scheduler 时，checkpoint 缺少 scheduler state 必须失败。
 - noisy resume 缺少 run-local manifest 身份时必须失败。
 - 不得用 `0`、空 mapping 或默认对象伪造关键状态。
@@ -425,6 +458,7 @@ Evaluator 使用独立 clean validation/test loader；在 `inference_mode` 下�
 | TransitionArtifact `[C,C]` | `noise/estimators.py`、`noise/transition.py` | 未来 RiskCorrector/WeightProvider | `test_transition_estimators.py`、`test_plugins.py` |
 | Loss `[B]` | `losses/torch_losses.py`、plugin catalog | Algorithm、Evaluator、Selector | `test_losses.py`、`test_plugins.py` |
 | Selector hard mask | `selectors/`、plugin catalog | Supervised Algorithm | `test_selectors.py`、`test_torch_training.py` |
+| ParameterUpdatePolicy | `algorithms/update_policy.py`、plugin catalog | Supervised Algorithm、Checkpoint | `test_update_policy.py`、`test_cdr.py` |
 | Algorithm/StepResult | `algorithms/supervised.py` | Runner、Checkpoint | `test_core.py`、`test_torch_training.py` |
 | Runner/config | `training/experiment.py`、CLI | 所有训练组件 | `test_cli.py`、smoke tests |
 | Checkpoint v2 | `training/checkpoint.py` | Runner、resume | `test_clean_baseline.py`、`test_torch_training.py` |
