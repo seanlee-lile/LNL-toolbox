@@ -42,20 +42,23 @@ class PreActBlock(nn.Module):
 
 
 class CifarResNet(nn.Module):
-    """ResNet-18 adapted to 32x32 images."""
+    """Residual network adapted to 32x32 CIFAR images."""
 
     def __init__(self, block: type[nn.Module], num_classes: int = 10,
-                 base_width: int = 64, preactivation: bool = False) -> None:
+                 base_width: int = 64, preactivation: bool = False,
+                 layer_counts: tuple[int, int, int, int] = (2, 2, 2, 2)) -> None:
         super().__init__()
+        if len(layer_counts) != 4 or any(count <= 0 for count in layer_counts):
+            raise ValueError("layer_counts must contain four positive integers")
         self.incoming = base_width
         stem: nn.Module = nn.Conv2d(3, base_width, 3, padding=1, bias=False)
         if not preactivation:
             stem = nn.Sequential(stem, nn.BatchNorm2d(base_width), nn.ReLU(inplace=True))
         self.stem = stem
-        self.layer1 = self._make_layer(block, base_width, 2, 1)
-        self.layer2 = self._make_layer(block, base_width * 2, 2, 2)
-        self.layer3 = self._make_layer(block, base_width * 4, 2, 2)
-        self.layer4 = self._make_layer(block, base_width * 8, 2, 2)
+        self.layer1 = self._make_layer(block, base_width, layer_counts[0], 1)
+        self.layer2 = self._make_layer(block, base_width * 2, layer_counts[1], 2)
+        self.layer3 = self._make_layer(block, base_width * 4, layer_counts[2], 2)
+        self.layer4 = self._make_layer(block, base_width * 8, layer_counts[3], 2)
         self.final_bn = nn.BatchNorm2d(base_width * 8) if preactivation else nn.Identity()
         self.preactivation = preactivation
         self.classifier = nn.Linear(base_width * 8, num_classes)
@@ -85,6 +88,18 @@ class CifarResNet(nn.Module):
 
 def cifar_resnet18(num_classes: int = 10, base_width: int = 64) -> CifarResNet:
     return CifarResNet(BasicBlock, num_classes, base_width, preactivation=False)
+
+
+def cifar_resnet34(num_classes: int = 10, base_width: int = 64) -> CifarResNet:
+    """Return the [3, 4, 6, 3] ResNet-34 used by the GCE CIFAR experiments."""
+
+    return CifarResNet(
+        BasicBlock,
+        num_classes,
+        base_width,
+        preactivation=False,
+        layer_counts=(3, 4, 6, 3),
+    )
 
 
 def preact_resnet18(num_classes: int = 10, base_width: int = 64) -> CifarResNet:

@@ -232,6 +232,9 @@ def checkpoint_noise_metadata(
     run_dir: Path,
     effective_rate: float,
     mode: str | None = None,
+    *,
+    validation_targets: str = "clean",
+    effective_validation_rate: float | None = None,
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {
         "mode": mode or str(manifest.metadata.get("source", "generated")),
@@ -248,6 +251,8 @@ def checkpoint_noise_metadata(
         "num_classes": manifest.num_classes,
         "manifest_actual_rate": manifest.actual_rate,
         "effective_train_subset_actual_rate": effective_rate,
+        "validation_targets": validation_targets,
+        "effective_validation_subset_actual_rate": effective_validation_rate,
         "has_transition_matrix": manifest.transition_matrix is not None,
         "has_per_sample_transition": manifest.per_sample_transition is not None,
     }

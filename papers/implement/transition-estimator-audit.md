@@ -1,6 +1,8 @@
 # Transition Estimator 论文审计
 
-本文按 `papers/reading-standard.md` 记录 TransitionEstimator 的算法依据与实施状态。
+> 归档位置与维护规则见本目录的 `README.md`。
+
+本文按本仓库论文阅读规范记录 TransitionEstimator 的算法依据与实施状态。
 研究结论以论文原文为准；作者代码只用于核对实现细节。
 
 ## 1. Anchor Transition（L3）

@@ -9,13 +9,19 @@ from lnl_toolbox.algorithms.supervised import SupervisedClassificationAlgorithm
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
 from lnl_toolbox.data.cifar import CifarData, default_data_root
 from lnl_toolbox.data.noisy_dataset import NoisyTargetDataset
-from lnl_toolbox.data.torch_cifar import TorchCifarDataset, stratified_split
+from lnl_toolbox.data.torch_cifar import (
+    TorchCifarDataset,
+    build_cifar_transform,
+    cifar_pixel_mean,
+    stratified_split,
+)
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 from lnl_toolbox.models import TinyCNN
 from lnl_toolbox.plugins.builtin import build_builtin_loss
 from lnl_toolbox.runtime import resolve_device
 from lnl_toolbox.selectors import AllSelector, SelectionResult, SmallLossSelector
 from lnl_toolbox.training.checkpoint import load_checkpoint, save_checkpoint
+from lnl_toolbox.training.experiment import build_model
 
 
 class TorchTrainingTest(unittest.TestCase):
@@ -78,6 +84,34 @@ class TorchTrainingTest(unittest.TestCase):
 
     def test_tinycnn_shape(self):
         self.assertEqual(TinyCNN(10, 8)(torch.randn(4, 3, 32, 32)).shape, (4, 10))
+
+    def test_cifar_resnet34_shape_and_stage_depths(self):
+        model = build_model(
+            {"name": "resnet34", "base_width": 8}, num_classes=10
+        )
+        self.assertEqual(
+            tuple(len(layer) for layer in (
+                model.layer1, model.layer2, model.layer3, model.layer4
+            )),
+            (3, 4, 6, 3),
+        )
+        self.assertEqual(model(torch.randn(2, 3, 32, 32)).shape, (2, 10))
+
+    def test_gce2018_preprocessing_subtracts_training_pixel_mean(self):
+        images = np.full((2, 32, 32, 3), 128, dtype=np.uint8)
+        mean = cifar_pixel_mean(images)
+        transform = build_cifar_transform(
+            False, preprocessing="gce2018", pixel_mean=mean
+        )
+        data = CifarData(
+            images,
+            np.array([0, 1]),
+            ("a", "b"),
+            "train",
+            "fixture",
+        )
+        sample = TorchCifarDataset(data, [0], transform=transform)[0]
+        torch.testing.assert_close(sample["input"], torch.zeros_like(sample["input"]))
 
     def test_training_step_changes_parameters(self):
         model = TinyCNN(10, 8)

@@ -33,6 +33,7 @@ flowchart LR
 当前事实：
 
 - `training/experiment.py::run_supervised_experiment` 是 clean/noisy CIFAR 的唯一生产训练循环。
+- 论文复现仍复用该循环：显式配置可让同一 Noise Manifest 覆盖 train/validation，test 始终保持 clean；`trainer.progress` 只负责终端显示和 SVG 产物，不改变训练数学。
 - `run_experiment` 是兼容别名；`run_clean_experiment` 是 clean-only 包装。
 - 生产路径固定使用 `SupervisedClassificationAlgorithm`；尚不能通过 YAML 替换任意 Algorithm。
 - `engine/runner.py` 没有进入该路径。两者都会推进 step，不能直接嵌套。
@@ -461,6 +462,7 @@ Evaluator 使用独立 clean validation/test loader；在 `inference_mode` 下�
 | ParameterUpdatePolicy | `algorithms/update_policy.py`、plugin catalog | Supervised Algorithm、Checkpoint | `test_update_policy.py`、`test_cdr.py` |
 | Algorithm/StepResult | `algorithms/supervised.py` | Runner、Checkpoint | `test_core.py`、`test_torch_training.py` |
 | Runner/config | `training/experiment.py`、CLI | 所有训练组件 | `test_cli.py`、smoke tests |
+| 训练进度/曲线 | `training/progress.py` | Runner、人工实验审阅 | `test_training_progress.py` |
 | Checkpoint v2 | `training/checkpoint.py` | Runner、resume | `test_clean_baseline.py`、`test_torch_training.py` |
 | clean evaluation | `evaluation/classification.py` | Runner | `test_noisy_ce_baseline.py` |
 

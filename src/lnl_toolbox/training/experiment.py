@@ -21,9 +21,18 @@ from lnl_toolbox.algorithms.supervised import SupervisedClassificationAlgorithm
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
 from lnl_toolbox.data import NoisyTargetDataset
 from lnl_toolbox.data.cifar import load_cifar10, load_cifar100
-from lnl_toolbox.data.torch_cifar import TorchCifarDataset, build_cifar_transform, stratified_split
+from lnl_toolbox.data.torch_cifar import (
+    TorchCifarDataset,
+    build_cifar_transform,
+    cifar_pixel_mean,
+    stratified_split,
+)
 from lnl_toolbox.evaluation.classification import evaluate_classification
-from lnl_toolbox.models.cifar_resnet import cifar_resnet18, preact_resnet18
+from lnl_toolbox.models.cifar_resnet import (
+    cifar_resnet18,
+    cifar_resnet34,
+    preact_resnet18,
+)
 from lnl_toolbox.models.tiny_cnn import TinyCNN
 from lnl_toolbox.plugins.builtin import (
     build_builtin_loss,
@@ -38,6 +47,10 @@ from lnl_toolbox.training.noisy_labels import (
     noise_mode,
     prepare_noise_manifest,
 )
+from lnl_toolbox.training.progress import (
+    TerminalTrainingProgress,
+    write_training_curves_svg,
+)
 
 
 def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
@@ -46,6 +59,8 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
         return TinyCNN(num_classes, int(config.get("width", 64)))
     if name == "resnet18":
         return cifar_resnet18(num_classes, int(config.get("base_width", 64)))
+    if name == "resnet34":
+        return cifar_resnet34(num_classes, int(config.get("base_width", 64)))
     if name == "preact_resnet18":
         return preact_resnet18(num_classes, int(config.get("base_width", 64)))
     raise ValueError(f"Unsupported model: {name}")
@@ -159,6 +174,22 @@ def _validate_resume_config(current: Mapping[str, Any], saved: Mapping[str, Any]
     saved_dataset = str(saved.get("data", {}).get("name", "cifar10")).lower()
     if current_dataset != saved_dataset:
         raise ValueError("Resume configuration changed data.name")
+    current_preprocessing = str(
+        current.get("data", {}).get("preprocessing", "standard")
+    ).lower()
+    saved_preprocessing = str(
+        saved.get("data", {}).get("preprocessing", "standard")
+    ).lower()
+    if current_preprocessing != saved_preprocessing:
+        raise ValueError("Resume configuration changed data.preprocessing")
+    current_validation_targets = str(
+        current.get("noise", {}).get("validation_targets", "clean")
+    ).lower()
+    saved_validation_targets = str(
+        saved.get("noise", {}).get("validation_targets", "clean")
+    ).lower()
+    if current_validation_targets != saved_validation_targets:
+        raise ValueError("Resume configuration changed noise.validation_targets")
 
 
 def _resolved_noise_config(
@@ -173,6 +204,10 @@ def _resolved_noise_config(
         "actual_rate": metadata["manifest_actual_rate"],
         "effective_train_subset_actual_rate": metadata[
             "effective_train_subset_actual_rate"
+        ],
+        "validation_targets": metadata["validation_targets"],
+        "effective_validation_subset_actual_rate": metadata[
+            "effective_validation_subset_actual_rate"
         ],
     })
     if "source_manifest_sha256" in metadata:
@@ -198,6 +233,16 @@ def _validate_supervised_config(config: Mapping[str, Any]) -> None:
             raise ValueError("Paper-mode CDR requires optimizer.name=sgd")
         if float(optimizer_config.get("weight_decay", 0.0)) != 0.0:
             raise ValueError("Paper-mode CDR requires optimizer.weight_decay=0")
+    noise_config = config.get("noise") or {}
+    if not isinstance(noise_config, Mapping):
+        raise TypeError("noise configuration must be a mapping")
+    validation_targets = str(
+        noise_config.get("validation_targets", "clean")
+    ).strip().lower()
+    if validation_targets not in {"clean", "noisy"}:
+        raise ValueError("noise.validation_targets must be 'clean' or 'noisy'")
+    if validation_targets == "noisy" and noise_mode(config) == "clean":
+        raise ValueError("Noisy validation targets require an enabled noise source")
 
 
 def run_supervised_experiment(
@@ -249,12 +294,21 @@ def run_supervised_experiment(
     full_train_indices, validation_indices = stratified_split(
         train_data.labels, int(data_config["validation_size"]), seed
     )
+    noise_config = config.get("noise") or {}
+    validation_target_source = str(
+        noise_config.get("validation_targets", "clean")
+    ).strip().lower()
+    manifest_indices = full_train_indices
+    if validation_target_source == "noisy":
+        manifest_indices = np.sort(
+            np.concatenate((full_train_indices, validation_indices))
+        )
 
     manifest, manifest_path = prepare_noise_manifest(
         config,
         dataset=dataset_name,
-        clean_targets=train_data.labels[full_train_indices],
-        global_indices=full_train_indices,
+        clean_targets=train_data.labels[manifest_indices],
+        global_indices=manifest_indices,
         num_classes=num_classes,
         run_dir=run_dir,
         checkpoint_payload=checkpoint_payload,
@@ -278,12 +332,24 @@ def run_supervised_experiment(
         data_config.get("max_test_samples"),
         seed + 3,
     )
+    preprocessing = str(data_config.get("preprocessing", "standard")).lower()
+    pixel_mean = (
+        cifar_pixel_mean(train_data.images)
+        if preprocessing == "gce2018"
+        else None
+    )
+    transform_options = {
+        "preprocessing": preprocessing,
+        "pixel_mean": pixel_mean,
+    }
 
     clean_train_set = TorchCifarDataset(
         train_data,
         train_indices,
         transform=build_cifar_transform(
-            True, bool(data_config.get("augment", True))
+            True,
+            bool(data_config.get("augment", True)),
+            **transform_options,
         ),
     )
     train_set = clean_train_set
@@ -294,20 +360,39 @@ def run_supervised_experiment(
             clean_train_set, manifest.global_indices, manifest.noisy_targets
         )
         effective_rate = effective_subset_actual_rate(manifest, train_indices)
+    clean_validation_set = TorchCifarDataset(
+        train_data,
+        validation_indices,
+        transform=build_cifar_transform(False, **transform_options),
+    )
+    validation_set = clean_validation_set
+    effective_validation_rate = None
+    if manifest is not None and validation_target_source == "noisy":
+        validation_set = NoisyTargetDataset(
+            clean_validation_set,
+            manifest.global_indices,
+            manifest.noisy_targets,
+        )
+        effective_validation_rate = effective_subset_actual_rate(
+            manifest, validation_indices
+        )
+    if manifest is not None:
+        assert manifest_path is not None
         noise_metadata = checkpoint_noise_metadata(
             manifest,
             manifest_path,
             run_dir,
             effective_rate,
             mode=noise_mode(config),
+            validation_targets=validation_target_source,
+            effective_validation_rate=effective_validation_rate,
         )
         config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
 
-    validation_set = TorchCifarDataset(
-        train_data, validation_indices, transform=build_cifar_transform(False)
-    )
     test_set = TorchCifarDataset(
-        test_data, test_indices, transform=build_cifar_transform(False)
+        test_data,
+        test_indices,
+        transform=build_cifar_transform(False, **transform_options),
     )
     loader_config = config["loader"]
     train_loader = _loader(train_set, loader_config, shuffle=True, seed=seed)
@@ -361,6 +446,20 @@ def run_supervised_experiment(
 
     algorithm.on_run_start(state)
     metrics_path = run_dir / "metrics.jsonl"
+    curve_rows: list[dict[str, Any]] = []
+    if metrics_path.is_file():
+        for line in metrics_path.read_text(encoding="utf-8").splitlines():
+            value = json.loads(line)
+            if value.get("event") == "epoch":
+                curve_rows.append(value)
+    progress_config = config["trainer"].get("progress", {})
+    if isinstance(progress_config, bool):
+        progress_config = {"enabled": progress_config}
+    if not isinstance(progress_config, Mapping):
+        raise TypeError("trainer.progress must be a boolean or mapping")
+    progress_enabled = bool(progress_config.get("enabled", False))
+    progress_interval = int(progress_config.get("update_interval", 20))
+    curves_enabled = bool(progress_config.get("curves", progress_enabled))
     with metrics_path.open("a", encoding="utf-8") as metrics_file:
         if compatibility_warnings:
             metrics_file.write(json.dumps({
@@ -379,7 +478,14 @@ def run_supervised_experiment(
             update_metric_sums: dict[str, float] = {}
             update_metric_steps = 0
             learning_rate = float(optimizer.param_groups[0]["lr"])
-            for raw_batch in train_loader:
+            progress = TerminalTrainingProgress(
+                epoch=epoch + 1,
+                total_epochs=epochs,
+                total_batches=len(train_loader),
+                update_interval=progress_interval,
+                enabled=progress_enabled,
+            )
+            for batch_number, raw_batch in enumerate(train_loader, start=1):
                 result = algorithm.step(Batch(raw_batch), state)
                 count = result.metrics["samples"]
                 selected_count = result.metrics["selected_samples"]
@@ -399,6 +505,11 @@ def run_supervised_experiment(
                         update_metric_sums[key] = (
                             update_metric_sums.get(key, 0.0) + value
                         )
+                progress.update(
+                    batch_number,
+                    loss=loss_sum / selected_samples,
+                    accuracy=correct_weighted / samples,
+                )
             algorithm.on_cycle_end(state)
             validation = evaluate_classification(
                 model, validation_loader, criterion, device
@@ -457,6 +568,11 @@ def run_supervised_experiment(
                 )
             metrics_file.write(json.dumps(row) + "\n")
             metrics_file.flush()
+            curve_rows.append(row)
+            if curves_enabled:
+                write_training_curves_svg(
+                    curve_rows, run_dir / "training_curves.svg"
+                )
             print(json.dumps(row), flush=True)
 
         best_path = run_dir / "best.pt"

@@ -1,5 +1,7 @@
 # LNL 论文实现映射指南
 
+> 归档位置与维护规则见本目录的 `README.md`。
+
 本文按 `papers/manifest.json` 的编号顺序，把每篇论文转换为可执行的 toolbox
 实现路线。这里出现的规划文件、函数和类不代表已经实现；它们用于确定未来代码
 应放在哪里、按什么顺序调用，以及需要复用哪些已有能力。
@@ -73,8 +75,8 @@ TransitionEstimator 仍是可独立调用的旁路组件，不得写成已经接
   APL、VolMinNet、T-Revision、PCSE、DLD、FINE、CA2C、DivideMix、L2RW
   官方代码；GCE、Learning with Noisy Labels、Dual-T、MC-LDCE、
   Importance Reweighting、CWD 与 LEND 未发现论文作者发布的官方实现。
-- 已修改：`papers/paper-implementation-guideline.md`（继续维护）。
-- 已新增：`papers/paper-implementation-guideline.md`。
+- 已修改：`papers/implement/paper-implementation-guideline.md`（继续维护）。
+- 已新增：`papers/implement/paper-implementation-guideline.md`。
 - 本地 checkpoint commit：无。
 - 阻塞项：UPM 官方仓库代码存在明显缺失；CAL 官方代码基于旧版 PyTorch，
   且数据路径携带 clean label；PDL 官方代码依赖顺序位置定位样本，且与论文

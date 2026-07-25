@@ -105,6 +105,7 @@ class NoisyCeBaselineTest(unittest.TestCase):
             "mode", "manifest_path", "manifest_version", "manifest_sha256", "mapping_hash", "dataset", "split",
             "dataset_fingerprint", "noise_type", "requested_rate", "seed", "num_classes",
             "manifest_actual_rate", "effective_train_subset_actual_rate",
+            "validation_targets", "effective_validation_subset_actual_rate",
             "has_transition_matrix", "has_per_sample_transition",
         })
         self.assertEqual(checkpoint["noise"]["mapping_hash"], manifest.mapping_hash)
@@ -115,6 +116,48 @@ class NoisyCeBaselineTest(unittest.TestCase):
         self.assertEqual(len(observed_evaluation_targets), 2)
         for index, target in observed_evaluation_targets:
             self.assertEqual(target, index % 10)
+
+    def test_paper_mode_can_apply_one_manifest_to_train_and_validation(self) -> None:
+        config = _config()
+        config["noise"]["validation_targets"] = "noisy"
+        train_data = _cifar(40, "train")
+        test_data = _cifar(20, "test")
+        observed = []
+
+        def load_data(_root, split):
+            return train_data if split == "train" else test_data
+
+        def evaluate(model, loader, criterion, device):
+            sample = loader.dataset[0]
+            observed.append((sample["index"], sample["target"]))
+            return {
+                "loss": 1.0,
+                "accuracy": 0.25,
+                "samples": float(len(loader.dataset)),
+            }
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "lnl_toolbox.training.experiment.load_cifar10", side_effect=load_data
+        ), patch(
+            "lnl_toolbox.training.experiment.evaluate_classification",
+            side_effect=evaluate,
+        ):
+            run_dir = run_experiment(config, directory)
+            manifest = NoiseManifest.load(run_dir / "noise_manifest.npz")
+            summary = json.loads(
+                (run_dir / "noise_summary.json").read_text(encoding="utf-8")
+            )
+
+        mapping = dict(zip(manifest.global_indices, manifest.noisy_targets))
+        validation_index, validation_target = observed[0]
+        test_index, test_target = observed[1]
+        self.assertEqual(manifest.global_indices.size, 40)
+        self.assertEqual(validation_target, mapping[validation_index])
+        self.assertEqual(test_target, test_index % 10)
+        self.assertEqual(summary["validation_targets"], "noisy")
+        self.assertIsNotNone(
+            summary["effective_validation_subset_actual_rate"]
+        )
 
     def test_resume_reuses_manifest_and_rejects_hash_mismatch(self) -> None:
         config = _config()
@@ -234,6 +277,19 @@ class NoisyCeBaselineTest(unittest.TestCase):
                 current["selector"]["keep_rate"][key] = value
                 with self.assertRaisesRegex(ValueError, "selector"):
                     _validate_resume_config(current, saved)
+
+    def test_resume_rejects_preprocessing_or_validation_target_change(self) -> None:
+        saved = _config()
+        saved["data"]["preprocessing"] = "gce2018"
+        saved["noise"]["validation_targets"] = "noisy"
+        changed = deepcopy(saved)
+        changed["data"]["preprocessing"] = "standard"
+        with self.assertRaisesRegex(ValueError, "data.preprocessing"):
+            _validate_resume_config(changed, saved)
+        changed = deepcopy(saved)
+        changed["noise"]["validation_targets"] = "clean"
+        with self.assertRaisesRegex(ValueError, "noise.validation_targets"):
+            _validate_resume_config(changed, saved)
 
 
 if __name__ == "__main__":
