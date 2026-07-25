@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 
 import numpy as np
+import torch
 
 from lnl_toolbox.losses import (
     ActivePassiveLoss,
@@ -11,13 +12,27 @@ from lnl_toolbox.losses import (
     MeanAbsoluteErrorLoss,
     NormalizedCrossEntropyLoss,
 )
+from lnl_toolbox.noise import (
+    AnchorTransitionEstimator,
+    DualTransitionEstimator,
+    PosteriorSnapshot,
+)
 from lnl_toolbox.plugins import PluginCatalog
 from lnl_toolbox.plugins.builtin import (
     build_builtin_loss,
     build_builtin_selector,
+    build_builtin_transition_estimator,
     create_builtin_catalog,
 )
-from lnl_toolbox.selectors import AllSelector, SmallLossSelector
+from lnl_toolbox.selectors import AllSelector, SelectionInput, SmallLossSelector
+from lnl_toolbox.treatments import (
+    BinaryRCNImportanceWeightProvider,
+    BinaryRCNWeightInput,
+    ReductionSpec,
+    SelectorContributionAdapter,
+    WeightContributionAdapter,
+    reduce_per_sample_loss,
+)
 
 
 class PluginCatalogTest(unittest.TestCase):
@@ -150,6 +165,89 @@ class PluginCatalogTest(unittest.TestCase):
                 passive=MeanAbsoluteErrorLoss(),
                 alpha=0.0,
             )
+
+    def test_transition_estimator_registry_and_builder(self) -> None:
+        catalog = create_builtin_catalog()
+        self.assertEqual(
+            [item.name for item in catalog.find(kind="transition_estimator")],
+            ["anchor", "dual_t"],
+        )
+        self.assertIsInstance(
+            build_builtin_transition_estimator({"name": "anchor"}, catalog),
+            AnchorTransitionEstimator,
+        )
+        self.assertIsInstance(
+            build_builtin_transition_estimator({"name": "dual_t"}, catalog),
+            DualTransitionEstimator,
+        )
+        with self.assertRaises(ValueError):
+            build_builtin_transition_estimator({"name": "unknown"}, catalog)
+        with self.assertRaises(TypeError):
+            build_builtin_transition_estimator("anchor")  # type: ignore[arg-type]
+
+    def test_taxonomy_p1_components_coexist_and_remain_separate(self) -> None:
+        catalog = create_builtin_catalog()
+
+        logits = torch.tensor(
+            [[3.0, 0.0], [0.0, 3.0], [2.0, 0.0], [0.0, 2.0]],
+            requires_grad=True,
+        )
+        targets = torch.tensor([0, 1, 1, 0])
+        per_sample = build_builtin_loss({"name": "ce"}, catalog)(logits, targets)
+        selector = build_builtin_selector(
+            {"name": "small_loss", "keep_rate": 0.5}, catalog
+        )
+        selection = SelectorContributionAdapter(selector).resolve(
+            SelectionInput(
+                scores=per_sample.detach(),
+                sample_indices=torch.tensor([40, 10, 30, 20]),
+                metadata={"epoch": 0},
+            )
+        )
+        objective = reduce_per_sample_loss(per_sample, selection)
+        objective.backward()
+        self.assertTrue(torch.isfinite(objective))
+        self.assertTrue(torch.isfinite(logits.grad).all())
+        self.assertEqual(int(selection.selected_mask.sum().item()), 2)
+
+        snapshot = PosteriorSnapshot(
+            noisy_probabilities=np.asarray(
+                [[0.9, 0.1], [0.2, 0.8], [0.7, 0.3], [0.1, 0.9]]
+            ),
+            noisy_targets=np.asarray([0, 1, 1, 0]),
+            global_indices=np.asarray([40, 10, 30, 20]),
+            dataset="fixture",
+            split="train",
+        )
+        for name in ("anchor", "dual_t"):
+            artifact = build_builtin_transition_estimator(
+                {"name": name}, catalog
+            ).estimate(snapshot)
+            tensor = artifact.as_tensor(device="cpu", dtype=torch.float32)
+            self.assertEqual(tensor.shape, (2, 2))
+            self.assertTrue(torch.isfinite(tensor).all())
+
+        provider = BinaryRCNImportanceWeightProvider(
+            rho_positive=0.2,
+            rho_negative=0.1,
+        )
+        weighted = WeightContributionAdapter(provider).resolve(
+            BinaryRCNWeightInput(
+                posterior_probabilities=torch.tensor([[0.9, 0.1], [0.2, 0.8]]),
+                observed_targets=torch.tensor([0, 1]),
+            )
+        )
+        weighted_losses = torch.tensor([1.0, 2.0], requires_grad=True)
+        weighted_objective = reduce_per_sample_loss(
+            weighted_losses,
+            weighted,
+            ReductionSpec("batch_mean"),
+        )
+        weighted_objective.backward()
+        self.assertTrue(torch.isfinite(weighted_objective))
+        self.assertTrue(torch.isfinite(weighted_losses.grad).all())
+
+        self.assertEqual(catalog.find(kind="weight_provider"), ())
 
 
 if __name__ == "__main__":

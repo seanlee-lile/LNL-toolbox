@@ -1,4 +1,5 @@
 import json
+import os
 from copy import deepcopy
 import tempfile
 import unittest
@@ -39,6 +40,41 @@ def _config(epochs: int = 1) -> dict:
 
 
 class NoisyCeBaselineTest(unittest.TestCase):
+    def test_relative_output_root_is_resolved_before_manifest_metadata(self) -> None:
+        config = _config()
+        config["output_root"] = "runs"
+        train_data = _cifar(40, "train")
+        test_data = _cifar(20, "test")
+
+        def load_data(_root, split):
+            return train_data if split == "train" else test_data
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "lnl_toolbox.training.experiment.load_cifar10", side_effect=load_data
+        ), patch(
+            "lnl_toolbox.training.experiment.evaluate_classification",
+            return_value={"loss": 1.0, "accuracy": 0.25, "samples": 10.0},
+        ):
+            previous = Path.cwd()
+            try:
+                os.chdir(directory)
+                run_dir = run_experiment(config)
+            finally:
+                os.chdir(previous)
+
+            self.assertTrue(run_dir.is_absolute())
+            self.assertEqual(run_dir.parent, (Path(directory) / "runs").resolve())
+            self.assertTrue((run_dir / "noise_manifest.npz").is_file())
+            self.assertTrue((run_dir / "noise_summary.json").is_file())
+
+    def test_unconnected_transition_estimator_configuration_is_rejected(self) -> None:
+        config = _config()
+        config["transition_estimator"] = {"name": "anchor"}
+        with self.assertRaisesRegex(
+            ValueError, r"field 'transition_estimator'.*not connected"
+        ):
+            run_experiment(config)
+
     def test_noisy_training_writes_manifest_metadata_and_clean_evaluation_sets(self) -> None:
         train_data = _cifar(40, "train")
         test_data = _cifar(20, "test")

@@ -13,6 +13,7 @@ flowchart LR
     B --> D["Model"]
     B --> E["PluginCatalog → Loss"]
     B --> S["PluginCatalog → batch_selector"]
+    B --> P["PluginCatalog → parameter_update_policy"]
     C --> F["Batch"]
     D --> G["logits [B,C]"]
     G --> E
@@ -22,7 +23,9 @@ flowchart LR
     F --> I["Supervised Algorithm"]
     H --> I
     M --> I
-    I --> J["StepResult"]
+    I --> P
+    P --> J["backward + optimizer step"]
+    J --> R["StepResult"]
     B --> K["Clean Evaluator"]
     B --> L["Checkpoint v2"]
 ```
@@ -33,9 +36,10 @@ flowchart LR
 - `run_experiment` 是兼容别名；`run_clean_experiment` 是 clean-only 包装。
 - 生产路径固定使用 `SupervisedClassificationAlgorithm`；尚不能通过 YAML 替换任意 Algorithm。
 - `engine/runner.py` 没有进入该路径。两者都会推进 step，不能直接嵌套。
-- Loss 和无状态 batch Selector 已通过 `PluginCatalog` 构造；Model、Algorithm、Evaluator 尚未全部插件化。
+- Loss、无状态 batch Selector 和 ParameterUpdatePolicy 已通过 `PluginCatalog` 构造；Model、Algorithm、Evaluator 尚未全部插件化。
 - 通用 `all`/`small_loss` Selector 已接入单模型监督路径；二分类 asymmetric-RCN importance-weight 组件可通过内部 treatment 合同独立调用，但尚未接入公开训练配置；RiskCorrector 尚未接入。
 - Co-teaching 的双网络协调和 peer exchange 仍属于独立 Algorithm/Pipeline，不由通用 Selector 承担。
+- `StandardUpdatePolicy` 保持普通更新；`CDRUpdatePolicy` 是当前首个参数级更新策略。需要 meta-batch、高阶梯度或多网络协调的方法仍属于 MetaUpdater/独立 Pipeline。
 
 ## 2. 模块职责与依赖方向
 
@@ -44,11 +48,11 @@ flowchart LR
 | `core/` | 任务无关的 `Batch`、`RunState`、`StepResult`、生命周期 Protocol | 依赖 PyTorch、CIFAR 或 LNL 假设 |
 | `cli/` | 交互、argparse、YAML mapping | 训练数学、标签修改、optimizer step |
 | `data/` | 原始数据解码、transform、Dataset、稳定 index | 选样、Loss、论文训练策略 |
-| `noise/` | 噪声生成、Manifest、转移矩阵验证 | 选样、模型更新、读取验证指标 |
+| `noise/` | 噪声生成、Manifest、后验快照、转移矩阵估计与验证 | 选样、模型更新、读取验证指标 |
 | `models/` | `inputs -> logits` | 读取标签、Manifest 或逐样本历史 |
 | `losses/` | `logits + targets -> loss[B]` | 聚合、选样、optimizer、clean label |
 | `selectors/` | detached `scores[B] + index[B] -> hard mask[B]` | 模型、optimizer、backward、peer exchange、生命周期 |
-| `algorithms/` | 组合模型、Loss、优化器和训练决策；拥有私有状态 | 数据文件解析、实验目录管理 |
+| `algorithms/` | 组合模型、Loss、Selector、ParameterUpdatePolicy 和训练决策；拥有私有状态 | 数据文件解析、实验目录管理 |
 | `evaluation/` | clean validation/test 指标 | 参与训练更新或泄漏 clean label |
 | `training/` | 组装、循环、恢复、产物 | 实现论文公式或把算法逻辑写死在公共入口 |
 | `plugins/` | 注册、发现、按配置构造组件 | 执行训练生命周期 |
@@ -61,6 +65,7 @@ training → data / noise / models / losses / algorithms / evaluation / plugins
 algorithms → core / models / losses / selectors
 evaluation → losses
 data ↔ noise 只通过显式 mapping/Manifest 连接
+models/training → noise 只通过 PosteriorSnapshot 连接
 core → 标准库
 ```
 
@@ -87,6 +92,7 @@ run_supervised_experiment(
 | `trainer` | 必须；epochs、device |
 | `loss` | 可选；缺省为 `{name: ce}` |
 | `selector` | 可选；缺省为 `{name: all}`，另支持固定 keep-rate `small_loss` |
+| `parameter_update` | 可选；缺省为 `{name: standard}`，另支持 paper-mode `cdr` |
 | `scheduler` | 可选；none、cosine、multistep |
 | `noise` | 可选；省略即 clean |
 | `seed` / `output_root` | 可选；有稳定默认值 |
@@ -114,8 +120,11 @@ noise:
 - `manifest` 不得与 `name/rate/seed` 混用。
 - 训练期间不得按 batch 重新采样噪声。
 - 最终映射必须写入 run-local manifest。
+- `run_dir` 在创建 manifest 前必须解析为绝对路径；相对 `output_root` 以启动命令时的工作目录为基准。
 - `run_clean_experiment` 和多 seed suite 必须拒绝非空 `noise`。
 - 新配置使用顶层 `loss`；不得再用 `algorithm: {name: ce}` 表示 CE。
+- 插件注册不代表已经接入生产 Runner；`selector` 已接入通用训练路径，
+  当前配置出现尚未接入的 `transition_estimator` 时必须明确报错，不得静默忽略。
 - 实际配置必须写入 `resolved_config.yaml`。
 
 ## 4. 样本身份与 global index
@@ -204,6 +213,52 @@ Manifest v2 的核心字段：
 - resume 只读取 run-local manifest，并核对 mapping hash 与文件 SHA-256。
 - Loss、Selector 和训练 Algorithm 不得读取 `clean_targets`。
 
+### 6.1 转移矩阵估计合同
+
+离线估计链路固定为：
+
+```text
+warm-up model → PosteriorSnapshot → TransitionEstimator → TransitionArtifact
+```
+
+`PosteriorSnapshot` 只包含 noisy posterior `float64[N,C]`、noisy target
+`int64[N]`、global index `int64[N]` 以及 dataset/split。它不得包含 clean
+target、flip mask 或真实转移矩阵。概率必须有限、非负且逐行和为 1；index
+必须唯一、非负。`snapshot_hash` 绑定以上全部内容和上下文。
+
+Estimator 的唯一公共调用为：
+
+```python
+estimate(snapshot: PosteriorSnapshot) -> TransitionArtifact
+```
+
+`TransitionArtifact.matrix` 是行随机 `[C,C]` 矩阵，方向只能是：
+
+```text
+T[i,j] = P(noisy=j | clean=i)
+p_noisy = p_clean @ T
+```
+
+Artifact 必须保存格式版本、estimator 名称、来源 snapshot hash、配置/诊断
+metadata 和 artifact hash；加载时验证内容完整性，不得隐式裁剪或归一化。
+`KnownTransition` 与 estimator 产物共享相同矩阵方向和 Tensor 输出接口。
+
+`training/snapshots.py::collect_posterior_snapshot()` 是唯一 posterior 收集入口：
+在 `inference_mode` 下按 batch 的 `input/target/index` 收集，按 global index 排序，
+并恢复模型原训练状态。它不负责 warm-up 训练，也不读取 clean target。
+
+当前离线、无状态 estimator：
+
+- `anchor`：每类选择 noisy posterior 最大的样本；精确并列取最小 global index。
+- `dual_t`：复用 Anchor 得到 `T_club`，按 posterior argmax 与 noisy target
+  频数估计 `T_spade`，输出 `T_club @ T_spade`。空 intermediate 类别直接失败；
+  factors、counts 和 anchors 记录在 Artifact metadata。
+
+两者可由 plugin catalog 构造，但尚未接入统一 runner，也不是 Loss。
+Forward/Backward、Importance Weighting 等未来消费者只能接收 Artifact，不能反向
+修改 Snapshot。`NoiseManifest.per_sample_transition[N,C]` 只是每个样本真实类别
+对应的一行，不等于 PDL 的完整 `T(x)[N,C,C]`。
+
 ## 7. Model、Loss 与 Algorithm 合同
 
 ### 7.1 Model
@@ -240,8 +295,9 @@ objective = reduce_per_sample_loss(
     contribution,
     ReductionSpec("weight_sum_mean"),
 )
-objective.backward()
-optimizer.step()
+update_policy.update(
+    ParameterUpdateInput(objective, model, optimizer, run_state)
+)
 ```
 
 用于 backward 的 `per_sample` 保留 autograd graph；只有评分副本会 detach。Selector adapter 将旧的 hard mask 转成 `ContributionResult(mask, ones)`，统一 reducer 计算 `sum(weight * loss) / sum(weight)`。在当前 hard-mask 路径中，这与 `per_sample[selected_mask].mean()` 数值等价。缺少 `selector` 配置时仍构造 `AllSelector`，因此 objective、配置、指标和 checkpoint 行为与旧实现相同。
@@ -266,9 +322,34 @@ state_dict() -> dict
 load_state_dict(state: dict) -> None
 ```
 
-复杂 Algorithm 必须把模型、优化器、scheduler、阶段状态和逐样本历史纳入可恢复状态；不得把算法私有数组塞入通用 `RunState`。
+复杂 Algorithm 必须把模型、优化器、ParameterUpdatePolicy、scheduler、阶段状态和逐样本历史纳入可恢复状态；不得把算法私有数组塞入通用 `RunState`。
 
-### 7.4 通用 batch Selector
+### 7.4 ParameterUpdatePolicy
+
+`ParameterUpdatePolicy.update(ParameterUpdateInput) -> ParameterUpdateResult`
+拥有一次更新中的 `zero_grad`、`backward` 和 optimizer step。普通训练也必须通过
+`StandardUpdatePolicy`，Algorithm 不得在 policy 之外再次 backward 或 step。
+
+输入只包含 scalar objective、model、optimizer 和 `RunState`；不得包含 clean
+target、corruption mask 或样本可靠性真值。输出 metrics 必须是有限标量，私有状态
+通过 `state_dict/load_state_dict` 保存。插件 kind 固定为
+`parameter_update_policy`，YAML 顶层字段固定为 `parameter_update`。
+
+当前 `CDRUpdatePolicy`：
+
+- 按论文 Eq. (3) 对所有有梯度的可训练标量计算 `abs(grad * parameter)`；
+- 精确选择 `ceil((1-noise_rate) * m)` 个 critical 标量；
+- 并列按 `(parameter_name, flat_offset)` 稳定裁决；
+- critical/non-critical 分别执行 Eq. (5)/(6) 的梯度变换；
+- 只接受 SGD，且 paper mode 要求 optimizer `weight_decay=0`；
+- mask 每 step 重算，无 checkpoint 私有状态。
+
+该接口覆盖单模型、单 objective 的参数级更新。L2RW 的 clean meta-batch 和高阶
+虚拟更新属于 `MetaUpdater`；双网络或多阶段方法属于独立 Pipeline，均不得伪装成
+ParameterUpdatePolicy。当前也未实现 CDR 的 noisy-validation early stopping 或
+官方代码 L2 compatibility mode，因此不能宣称完整复现 CDR Pipeline。
+
+### 7.5 通用 batch Selector
 
 `Selector.select(SelectionInput) -> SelectionResult` 的生产合同为：
 
@@ -284,7 +365,7 @@ load_state_dict(state: dict) -> None
 
 插件 kind 为 `batch_selector`。旧的 `selector/coteaching_exchange` 是 Co-teaching helper，保持隔离且不应被普通单模型配置混用。
 
-### 7.5 Reliability 与 Statistic estimation 合同
+### 7.6 Reliability 与 Statistic estimation 合同
 
 `ReliabilityEstimator[InputT].estimate(...) -> ReliabilityResult` 只产生与
 stable sample index 对齐的可靠性证据，不决定最终保留多少样本：
@@ -356,7 +437,7 @@ GMM result 可以经上述 adapter 从 dataset reliability 转为 batch ranking
 input；这仅完成 stable-index 对齐与分数方向转换，不是 DivideMix 的
 clean/noisy threshold split。
 
-### 7.6 内部 Sample Treatment Phase 1
+### 7.7 内部 Sample Treatment Phase 1
 
 `treatments/` 建立普通监督训练和独立权重组件共用的内部贡献合同，不是面向用户的论文方法组合接口：
 
@@ -369,7 +450,7 @@ clean/noisy threshold split。
 
 公共配置继续使用既有 `selector: all/small_loss`。`TopKSelector`、`ThresholdSelector` 和论文 Algorithm 不属于本阶段。
 
-### 7.7 二分类 asymmetric-RCN importance-weight 组件
+### 7.8 二分类 asymmetric-RCN importance-weight 组件
 
 通用 `WeightProvider[InputT]` 只约束 provider 将自己的输入转换为统一 `WeightResult(sample_weights, metrics)`；不同方法可以定义各自的输入合同。`WeightContributionAdapter` 只校验 provider 输出，并根据输出权重的 shape 和 device 生成全 `True` mask，不读取 posterior、target、logits 或其他方法专用字段。具体 provider 负责校验输入及输入/输出 batch 对齐，最终 reducer 再校验权重与逐样本 loss 对齐。
 
@@ -416,6 +497,7 @@ Evaluator 使用独立 clean validation/test loader；在 `inference_mode` 下�
     "format_version": 2,
     "model": ...,
     "optimizer": ...,
+    "parameter_update_policy": {"name": str, "state": dict},
     "scheduler": ...,
     "run_state": ...,
     "completed_epoch": int,
@@ -430,6 +512,7 @@ Evaluator 使用独立 clean validation/test loader；在 `inference_mode` 下�
 恢复规则：
 
 - model、optimizer、`RunState` 缺失时必须失败。
+- 非默认 ParameterUpdatePolicy 的身份或状态缺失/不匹配时必须失败。
 - 当前启用 scheduler 时，checkpoint 缺少 scheduler state 必须失败。
 - noisy resume 缺少 run-local manifest 身份时必须失败。
 - 不得用 `0`、空 mapping 或默认对象伪造关键状态。
@@ -443,8 +526,11 @@ Evaluator 使用独立 clean validation/test loader；在 `inference_mode` 下�
 |---|---|---|---|
 | 样本字段/index | `data/torch_cifar.py`、`data/noisy_dataset.py` | Algorithm、Manifest、Selector | `test_torch_training.py`、`test_noise.py` |
 | Manifest v2 | `noise/manifest.py`、`training/noisy_labels.py` | Dataset、Runner、Checkpoint | `test_noise.py`、`test_noisy_ce_baseline.py` |
+| PosteriorSnapshot | `training/snapshots.py` | Anchor、Dual-T | `test_transition_estimators.py` |
+| TransitionArtifact `[C,C]` | `noise/estimators.py`、`noise/transition.py` | 未来 RiskCorrector/WeightProvider | `test_transition_estimators.py`、`test_plugins.py` |
 | Loss `[B]` | `losses/torch_losses.py`、plugin catalog | Algorithm、Evaluator、Selector | `test_losses.py`、`test_plugins.py` |
 | Selector hard mask | `selectors/`、plugin catalog | Supervised Algorithm | `test_selectors.py`、`test_torch_training.py` |
+| ParameterUpdatePolicy | `algorithms/update_policy.py`、plugin catalog | Supervised Algorithm、Checkpoint | `test_update_policy.py`、`test_cdr.py` |
 | Algorithm/StepResult | `algorithms/supervised.py` | Runner、Checkpoint | `test_core.py`、`test_torch_training.py` |
 | Runner/config | `training/experiment.py`、CLI | 所有训练组件 | `test_cli.py`、smoke tests |
 | Checkpoint v2 | `training/checkpoint.py` | Runner、resume | `test_clean_baseline.py`、`test_torch_training.py` |
