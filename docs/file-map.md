@@ -75,6 +75,10 @@
 | `selectors/basic.py` | 实现选择全部样本的 `AllSelector` 和 schedule-driven、stable-index tie-break 的 `SmallLossSelector`。 |
 | `selectors/schedules.py` | 定义无状态 keep-rate schedule，支持固定浮点、显式 constant 和零基 epoch linear 配置。 |
 | `selectors/__init__.py` | 公开通用 Selector 合同、基础实现和边界校验。 |
+| `estimators/base.py` | 定义 sample-aligned `ReliabilityResult`、泛型 `ReliabilityEstimator[InputT]` 和轻量 `StatisticResult[StatisticT]`；reliability score 固定为越大越可靠，不直接兼容低分优先的 `SmallLossSelector`。 |
+| `estimators/__init__.py` | 公开 Reliability/Statistic estimation 合同及边界验证；不接入 plugin、配置或训练生命周期。 |
+| `estimators/dividemix_gmm.py` | 实现 DivideMix 中独立的 epoch-level two-Gaussian clean-probability 子模块；CPU float64 拟合并按 stable index 返回高分代表更可靠的证据，不包含完整 DivideMix Pipeline。 |
+| `estimators/selection_adapter.py` | 按 stable index 将 dataset-level reliability 查找、抽取并重排为 batch 输入，再固定取负转换为低分优先的 `SelectionInput`；不调用 Selector 或决定 threshold/split。 |
 | `treatments/base.py` | 定义内部 `ContributionResult`，统一表达 hard mask、连续非负样本权重和标量统计。 |
 | `treatments/reduction.py` | 定义 `ReductionSpec`，按 weight-sum mean、batch mean 或 sum 归约逐样本 loss。 |
 | `treatments/selector_adapter.py` | 将现有 hard Selector 适配为 mask 加全一权重，保持旧配置和数值行为。 |

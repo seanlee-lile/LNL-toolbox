@@ -284,7 +284,79 @@ load_state_dict(state: dict) -> None
 
 插件 kind 为 `batch_selector`。旧的 `selector/coteaching_exchange` 是 Co-teaching helper，保持隔离且不应被普通单模型配置混用。
 
-### 7.5 内部 Sample Treatment Phase 1
+### 7.5 Reliability 与 Statistic estimation 合同
+
+`ReliabilityEstimator[InputT].estimate(...) -> ReliabilityResult` 只产生与
+stable sample index 对齐的可靠性证据，不决定最终保留多少样本：
+
+- `ReliabilityResult.sample_indices` 是唯一、非空的整数 `[B]` 或 `[N]`；
+- `ReliabilityResult.scores` 是同设备、同长度、有限且 detached 的浮点
+  Tensor；
+- **reliability score 的固定方向是数值越大表示样本越可靠**；
+- result 可以与 expected indices 做严格的顺序和值核对，防止 shuffle 后
+  evidence 与样本错位；
+- estimator 输入由具体方法定义，且 stateless estimator 不需要实现空的
+  `state_dict` 或 `load_state_dict`。
+
+这一方向与现有 `SmallLossSelector` 不同：`SmallLossSelector` 把输入当作
+loss-like score，按**数值越小越优先**选择。因此两者当前不可直接连接，
+调用方不得把 `ReliabilityResult.scores` 直接传给 `SmallLossSelector`。
+`ReliabilityToSelectionInputAdapter` 提供显式、固定方向的连接：
+
+```text
+dataset-level ReliabilityResult [N]
+→ 按 expected_sample_indices 查找、抽取并重排为当前 batch [B]
+→ selection score = -reliability score
+→ SelectionInput [B]
+```
+
+`expected_sample_indices` 必须是一维、非空、唯一的整数 Tensor，与 result
+位于同一 device，且每个 index 都必须存在于 result；输出 index 的值、顺序、
+dtype 和 device 严格保持 expected 输入。查找只依赖 stable index，不依赖
+index 连续或数组位置。adapter 只生成 `SelectionInput`，不调用 Selector，
+不决定 keep rate、threshold 或 split，也不产生 mask、weight、标签修正或
+训练状态。后续 hard mask 仍由 Selector 产生，并可由现有
+`SelectorContributionAdapter` 转成 `ContributionResult`。
+
+`StatisticResult[StatisticT]` 只是 method-specific statistics 的轻量泛型
+容器。通用验证只检查容器类型和有限 Python float metrics，不查看或猜测
+`StatisticT` 的内部结构。CAL、MC-LDCE、CWD 和 PCSE 不被强迫共享统一的
+`fit`、`compute` 或状态生命周期。
+
+当前合同不接入 YAML、plugin、experiment、Algorithm 或 checkpoint。
+
+`DivideMixGMMCleanProbabilityEstimator` 实现 DivideMix 中可独立复用的
+epoch-level GMM clean-probability 子模块：
+
+```text
+完整训练集逐样本 loss
+→ min-max normalization
+→ CPU float64 two-component GaussianMixture
+→ 较小均值 component 的 posterior
+→ ReliabilityResult（越大越可能 clean）
+```
+
+输入 `DivideMixGMMLossInput` 只包含 loss `[N]` 和 stable sample index
+`[N]`，不接收 label、clean truth、模型或 optimizer。输出 probability
+为 float64，并返回输入 device 和原始 index 顺序。实现先按 stable index
+建立 canonical order 再拟合，最后映射回调用顺序；这是避免输入 permutation
+影响初始化的确定性工程增强，**不是 DivideMix 论文步骤**。
+
+每次 `estimate` 都重新拟合，不保留 GMM runtime state。constant loss、
+不可区分的 component means 和未收敛拟合会明确失败。该组件不实现论文在
+极高噪声配置中使用的最近五轮 loss 平均；如有需要，应由未来的专属
+Algorithm/Pipeline 构造输入。
+
+该实现不进行 clean/noisy threshold 分流，不接入 Selector、YAML、plugin、
+training 或 checkpoint。它只是 **DivideMix GMM clean-probability
+component**，不是完整 DivideMix；完整方法仍需双网络 co-divide、MixMatch、
+label co-refinement 和 co-guessing。
+
+GMM result 可以经上述 adapter 从 dataset reliability 转为 batch ranking
+input；这仅完成 stable-index 对齐与分数方向转换，不是 DivideMix 的
+clean/noisy threshold split。
+
+### 7.6 内部 Sample Treatment Phase 1
 
 `treatments/` 建立普通监督训练和独立权重组件共用的内部贡献合同，不是面向用户的论文方法组合接口：
 
@@ -297,7 +369,7 @@ load_state_dict(state: dict) -> None
 
 公共配置继续使用既有 `selector: all/small_loss`。`TopKSelector`、`ThresholdSelector` 和论文 Algorithm 不属于本阶段。
 
-### 7.6 二分类 asymmetric-RCN importance-weight 组件
+### 7.7 二分类 asymmetric-RCN importance-weight 组件
 
 通用 `WeightProvider[InputT]` 只约束 provider 将自己的输入转换为统一 `WeightResult(sample_weights, metrics)`；不同方法可以定义各自的输入合同。`WeightContributionAdapter` 只校验 provider 输出，并根据输出权重的 shape 和 device 生成全 `True` mask，不读取 posterior、target、logits 或其他方法专用字段。具体 provider 负责校验输入及输入/输出 batch 对齐，最终 reducer 再校验权重与逐样本 loss 对齐。
 
