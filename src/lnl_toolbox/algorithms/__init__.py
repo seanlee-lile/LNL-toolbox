@@ -1,11 +1,16 @@
 from .base import Algorithm, TrainState
 from .coteaching import coteaching_exchange, remember_rate
+from .multi_model import ModelGroup, PeerExchangeResult, SmallLossPeerExchange, consistency_loss
 
 __all__ = [
     "Algorithm",
     "TrainState",
     "coteaching_exchange",
     "remember_rate",
+    "ModelGroup",
+    "PeerExchangeResult",
+    "SmallLossPeerExchange",
+    "consistency_loss",
 ]
 try:
     from .cdr import CDRUpdatePolicy, CriticalParameterMasks, critical_parameter_masks

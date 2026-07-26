@@ -36,12 +36,14 @@ from lnl_toolbox.models.cifar_resnet import (
 from lnl_toolbox.models.cifar_cnn import CifarCnn8
 from lnl_toolbox.models.tiny_cnn import TinyCNN
 from lnl_toolbox.plugins.builtin import (
+    build_builtin_pipeline,
     build_builtin_loss,
     build_builtin_parameter_update_policy,
     build_builtin_selector,
 )
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import load_checkpoint, read_checkpoint, save_checkpoint
+from lnl_toolbox.training.early_stopping import EarlyStopping
 from lnl_toolbox.training.noisy_labels import (
     checkpoint_noise_metadata,
     effective_subset_actual_rate,
@@ -158,6 +160,10 @@ def _normalized_resume_value(config: Mapping[str, Any], key: str) -> Any:
             config.get("parameter_update", {"name": "standard"})
             or {"name": "standard"}
         )
+    if key == "pipeline":
+        return dict(config.get("pipeline", {}) or {})
+    if key == "early_stopping":
+        return dict(config.get("early_stopping", {}) or {})
     return config.get(key)
 
 
@@ -170,6 +176,8 @@ def _validate_resume_config(current: Mapping[str, Any], saved: Mapping[str, Any]
         "scheduler",
         "selector",
         "parameter_update",
+        "pipeline",
+        "early_stopping",
     ):
         if _normalized_resume_value(current, key) != _normalized_resume_value(saved, key):
             raise ValueError(f"Resume configuration changed {key}")
@@ -227,12 +235,17 @@ def _resolved_noise_config(
 
 
 def _validate_supervised_config(config: Mapping[str, Any]) -> None:
-    field = "transition_estimator"
-    if field in config:
+    if "transition_estimator" in config:
         raise ValueError(
-            f"Configuration field {field!r} is registered but not connected to "
-            "run_supervised_experiment"
+            "field 'transition_estimator' is not connected; use "
+            "pipeline.transition_estimator"
         )
+    pipeline_config = config.get("pipeline", {}) or {}
+    if not isinstance(pipeline_config, Mapping):
+        raise TypeError("pipeline configuration must be a mapping")
+    early_stopping_config = config.get("early_stopping", {}) or {}
+    if early_stopping_config not in (False, None) and not isinstance(early_stopping_config, Mapping):
+        raise TypeError("early_stopping configuration must be a mapping or false")
     update_config = config.get("parameter_update", {"name": "standard"})
     if not isinstance(update_config, Mapping):
         raise TypeError("parameter_update configuration must be a mapping")
@@ -430,6 +443,27 @@ def run_supervised_experiment(
         config["parameter_update"]
     )
     optimizer = build_optimizer(model, config["optimizer"])
+    pipeline = build_builtin_pipeline(config.get("pipeline"))
+    if resume is not None and not pipeline.load_artifacts(run_dir):
+        pipeline.prepare_transition(
+            model=model,
+            optimizer=optimizer,
+            loader=train_loader,
+            device=device,
+            dataset=dataset_name,
+            split="train",
+            run_dir=run_dir,
+        )
+    elif resume is None:
+        pipeline.prepare_transition(
+            model=model,
+            optimizer=optimizer,
+            loader=train_loader,
+            device=device,
+            dataset=dataset_name,
+            split="train",
+            run_dir=run_dir,
+        )
     scheduler = build_scheduler(optimizer, config.get("scheduler"), epochs)
     algorithm = SupervisedClassificationAlgorithm(
         model,
@@ -438,10 +472,15 @@ def run_supervised_experiment(
         device,
         selector=selector,
         update_policy=update_policy,
+        risk_corrector=pipeline.risk_corrector,
+        transition=pipeline.artifacts.transition,
+        weight_provider=pipeline.weight_provider,
     )
     algorithm.setup(ExperimentContext(run_dir, config, seed))
     state = RunState(phase="train")
+    early_stopping = EarlyStopping.from_config(config.get("early_stopping"))
     completed_epoch = -1
+    last_completed_epoch = completed_epoch
     best_epoch = -1
     best_accuracy = float("-inf")
     best_selection_accuracy = float("-inf")
@@ -458,6 +497,8 @@ def run_supervised_experiment(
         compatibility_warnings = list(
             checkpoint_payload.get("_compatibility_warnings", [])
         )
+        if early_stopping is not None and checkpoint_payload.get("early_stopping") is not None:
+            early_stopping.load_state_dict(checkpoint_payload["early_stopping"])
 
     (run_dir / "resolved_config.yaml").write_text(
         yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
@@ -583,6 +624,9 @@ def run_supervised_experiment(
                 best_selection_accuracy = selection["accuracy"]
                 best_accuracy = best_selection_accuracy
                 best_epoch = epoch
+            if early_stopping is not None:
+                early_stopping.update(row)
+            last_completed_epoch = epoch
             checkpoint_kwargs = {
                 "scheduler": scheduler,
                 "best_epoch": best_epoch,
@@ -590,6 +634,8 @@ def run_supervised_experiment(
                 "selection_split": selection_split,
                 "best_selection_accuracy": best_selection_accuracy,
                 "noise": noise_metadata,
+                "pipeline": pipeline.state_dict(),
+                "early_stopping": None if early_stopping is None else early_stopping.state_dict(),
             }
             save_checkpoint(
                 run_dir / "last.pt",
@@ -628,6 +674,9 @@ def run_supervised_experiment(
                     curve_rows_for_svg, run_dir / "training_curves.svg"
                 )
             print(json.dumps(row), flush=True)
+            if early_stopping is not None and early_stopping.stopped:
+                state.stopped = True
+                break
 
         best_path = run_dir / "best.pt"
         if not best_path.is_file():
@@ -643,7 +692,7 @@ def run_supervised_experiment(
         )
         final: dict[str, Any] = {
             "event": "final",
-            "completed_epochs": epochs,
+            "completed_epochs": last_completed_epoch + 1,
             "global_step": state.step,
             "best_epoch": best_epoch + 1,
             "best_validation_accuracy": best_accuracy,

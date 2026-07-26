@@ -138,6 +138,24 @@ def create_builtin_catalog() -> PluginCatalog:
         metadata={"paper": "Yao et al., NeurIPS 2020"},
     )
     try:
+        from lnl_toolbox.noise.transition import TrainableTransitionModel
+        from lnl_toolbox.algorithms.multi_model import SmallLossPeerExchange
+    except ImportError:
+        pass
+    else:
+        catalog.add(
+            "transition_model",
+            "trainable_global",
+            TrainableTransitionModel,
+            capabilities=("trainable", "global", "row_stochastic"),
+        )
+        catalog.add(
+            "peer_exchange",
+            "small_loss",
+            SmallLossPeerExchange,
+            capabilities=("multi_model", "sample_selection"),
+        )
+    try:
         from lnl_toolbox.algorithms.transition_risk import (
             BackwardRiskCorrector,
             ForwardRiskCorrector,
@@ -152,6 +170,29 @@ def create_builtin_catalog() -> PluginCatalog:
         catalog.add(
             "risk_corrector", "backward", BackwardRiskCorrector,
             capabilities=("transition_consumer", "corrected_risk"),
+        )
+    try:
+        from lnl_toolbox.treatments.weights import BinaryRCNImportanceWeightProvider
+    except ImportError:
+        pass
+    else:
+        catalog.add(
+            "weight_provider",
+            "binary_rcn_importance",
+            BinaryRCNImportanceWeightProvider,
+            capabilities=("continuous_weight", "binary_rcn", "offline_posterior"),
+            metadata={"paper": "Importance Reweighting"},
+        )
+    try:
+        from lnl_toolbox.training.pipeline import StandardNoisyERMPipeline
+    except ImportError:
+        pass
+    else:
+        catalog.add(
+            "pipeline",
+            "standard_noisy_erm",
+            StandardNoisyERMPipeline.from_config,
+            capabilities=("single_model", "stage_lifecycle", "artifact_handoff"),
         )
     return catalog
 
@@ -232,6 +273,80 @@ def build_builtin_risk_corrector(
         ) or "none"
         raise ValueError(
             f"Unknown risk corrector {name!r}; available: {available}"
+        ) from exc
+
+
+def build_builtin_weight_provider(
+    config: Mapping[str, Any] | None,
+    catalog: PluginCatalog | None = None,
+) -> Any:
+    """Build a continuous sample-weight provider from configuration."""
+
+    if config is not None and not isinstance(config, Mapping):
+        raise TypeError("Weight provider configuration must be a mapping")
+    values = dict(config or {"name": "binary_rcn_importance"})
+    name = str(values.pop("name", "binary_rcn_importance")).strip().lower()
+    catalog = catalog or create_builtin_catalog()
+    try:
+        return catalog.build("weight_provider", name, **values)
+    except KeyError as exc:
+        available = ", ".join(
+            item.name for item in catalog.find(kind="weight_provider")
+        ) or "none"
+        raise ValueError(
+            f"Unknown weight provider {name!r}; available: {available}"
+        ) from exc
+
+
+def build_builtin_transition_model(
+    config: Mapping[str, Any] | None,
+    catalog: PluginCatalog | None = None,
+) -> Any:
+    if config is not None and not isinstance(config, Mapping):
+        raise TypeError("Transition model configuration must be a mapping")
+    values = dict(config or {"name": "trainable_global"})
+    name = str(values.pop("name", "trainable_global")).strip().lower()
+    catalog = catalog or create_builtin_catalog()
+    try:
+        return catalog.build("transition_model", name, **values)
+    except KeyError as exc:
+        raise ValueError(f"Unknown transition model {name!r}") from exc
+
+
+def build_builtin_peer_exchange(
+    config: Mapping[str, Any] | None,
+    catalog: PluginCatalog | None = None,
+) -> Any:
+    if config is not None and not isinstance(config, Mapping):
+        raise TypeError("peer exchange configuration must be a mapping")
+    values = dict(config or {"name": "small_loss"})
+    name = str(values.pop("name", "small_loss")).strip().lower()
+    catalog = catalog or create_builtin_catalog()
+    try:
+        return catalog.build("peer_exchange", name, **values)
+    except KeyError as exc:
+        raise ValueError(f"Unknown peer exchange {name!r}") from exc
+
+
+def build_builtin_pipeline(
+    config: Mapping[str, Any] | None,
+    catalog: PluginCatalog | None = None,
+) -> Any:
+    """Build a lifecycle pipeline without embedding paper-specific branches."""
+
+    if config is not None and not isinstance(config, Mapping):
+        raise TypeError("Pipeline configuration must be a mapping")
+    values = dict(config or {"name": "standard_noisy_erm"})
+    name = str(values.pop("name", "standard_noisy_erm")).strip().lower()
+    catalog = catalog or create_builtin_catalog()
+    try:
+        return catalog.build("pipeline", name, config=values)
+    except KeyError as exc:
+        available = ", ".join(
+            item.name for item in catalog.find(kind="pipeline")
+        ) or "none"
+        raise ValueError(
+            f"Unknown pipeline {name!r}; available: {available}"
         ) from exc
 
 

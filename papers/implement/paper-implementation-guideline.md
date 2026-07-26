@@ -38,28 +38,29 @@
 | 共享职责 | 唯一位置 / 接口 | 当前状态 | 使用论文 |
 |---|---|---|---|
 | noisy posterior 快照 | `noise/estimators.py::PosteriorSnapshot` | 已有 | UPM、CAL、PDL、Loss Correction、T-Revision、Dual-T、Importance Reweighting |
-| posterior / feature 收集 | `training/snapshots.py::collect_posterior_snapshot()` | 已有 posterior 收集；feature 收集仍规划 | UPM、CAL、PDL、Loss Correction、T-Revision、Dual-T、MC-LDCE、CWD、PCSE、DLD、LEND |
+| posterior / feature 收集 | `training/snapshots.py::collect_posterior_snapshot()`、`FeatureSnapshot`、`pretrain_noisy_classifier()` | 已有 posterior/feature 收集与共享 warm-up | UPM、CAL、PDL、Loss Correction、T-Revision、Dual-T、MC-LDCE、CWD、PCSE、DLD、LEND |
 | 全局转移矩阵 artifact | `noise/transition.py::TransitionArtifact` | 已有 | CAL、Loss Correction、VolMinNet、T-Revision、Dual-T、MC-LDCE、PCSE |
-| 实例转移查询 | `noise/transition.py::InstanceTransitionProvider` | 规划 | UPM、PDL |
+| 实例转移查询 | `noise/transition.py::InstanceTransitionProvider` | 已有通用协议；实例模型仍待论文实现 | UPM、PDL |
 | 选样结果 | `selectors/base.py::SelectionResult` | 已有 hard-mask 协议 | JoCoR、DSS、CNLCU、Co-teaching、FINE、DivideMix、LEND |
 | 小损失排序与保留率 | `selectors/basic.py::SmallLossSelector`、`selectors/schedules.py` | 已有 fixed、constant、linear 保留率 | JoCoR、CNLCU、Co-teaching |
-| 按样本历史状态 | `selectors/history.py` | 规划 | DSS、CNLCU、LEND、CA2C、DivideMix |
+| 按样本历史状态 | `selectors/history.py::IndexedHistory` | 已有 global-index 基础状态存储 | DSS、CNLCU、LEND、CA2C、DivideMix |
 | 连续样本权重 | `treatments/weights.py::WeightResult` / `WeightProvider` | 已有基础协议和 Binary RCN provider；其他方法规划 | MentorNet、T-Revision、Importance Reweighting、L2RW、CA2C、DivideMix |
-| soft target 结果 | `core/result.py::SoftTargetResult` | 规划 | UPM、DLD、CA2C、DivideMix、LEND |
-| 特征快照 | `training/snapshots.py::FeatureSnapshot` | 规划 | MC-LDCE、CWD、PCSE、DLD、LEND |
-| 特征邻域图 | `data/neighbors.py::NeighborGraphArtifact` | 规划 | DLD、LEND |
-| 全局/分类统计量 | `noise/statistics.py::StatisticArtifact` | 规划 | MC-LDCE、CWD、PCSE |
-| 半监督 batch | `data/semi_supervised.py::SemiSupervisedBatch` | 规划 | DivideMix |
-| 转移矩阵风险校正 | `algorithms/transition_risk.py::RiskCorrector` | 已有通用 Forward/Backward 组件；Pipeline 仍规划 | Loss Correction、Learning with Noisy Labels |
-| 可训练全局转移模型 | `noise/transition.py::TrainableTransitionModel` | 规划 | VolMinNet、T-Revision |
-| 双网络 peer exchange | `algorithms/coteaching.py::peer_exchange()` | 扩展现有 NumPy helper | JoCoR、CNLCU、Co-teaching |
+| soft target 结果 | `core/result.py::SoftTargetResult`、`core/targets.py` | 已有通用结果与 Provider 协议 | UPM、DLD、CA2C、DivideMix、LEND |
+| 特征快照 | `training/snapshots.py::FeatureSnapshot` | 已有 | MC-LDCE、CWD、PCSE、DLD、LEND |
+| 特征邻域图 | `data/neighbors.py::NeighborGraphArtifact` | 已有基础 artifact | DLD、LEND |
+| 全局/分类统计量 | `noise/statistics.py::StatisticArtifact` | 已有基础 artifact | MC-LDCE、CWD、PCSE |
+| 半监督 batch | `data/semi_supervised.py::SemiSupervisedBatch` | 已有通用 batch 合同；MixMatch 仍待实现 | DivideMix |
+| 转移矩阵风险校正 | `algorithms/transition_risk.py::RiskCorrector` | 已有通用 Forward/Backward 组件并接入单模型 Pipeline | Loss Correction、Learning with Noisy Labels |
+| 可训练全局转移模型 | `noise/transition.py::TrainableTransitionModel` | 已有通用 row-stochastic 模型；论文目标仍待实现 | VolMinNet、T-Revision |
+| 双网络 peer exchange | `algorithms/multi_model.py::PeerExchange` | 已有通用 torch 协议与 small-loss 参考实现 | JoCoR、CNLCU、Co-teaching |
 | backward 与参数更新 | `algorithms/update_policy.py::ParameterUpdatePolicy` | 已有；Standard 与 CDR 首批实现 | CDR；未来单模型参数级更新方法 |
 
 “唯一位置”是 guideline 的合并目标，不表示规划项已经存在。若同事分支已提供等价
 公共接口，应合入同事接口并回改本表，而不是并存两套。
 
-当前生产 Runner 已接入逐样本 Loss 与 batch Selector；WeightProvider 和
-TransitionEstimator 仍是可独立调用的旁路组件，不得写成已经接入训练主链。
+当前生产 Runner 已接入逐样本 Loss、batch Selector、WeightProvider、RiskCorrector
+和 TransitionEstimator 的标准单模型路径；多网络、半监督和论文私有状态仍必须使用
+独立 Pipeline，不得塞入普通 Runner 的论文分支。
 
 ## 当前进度
 

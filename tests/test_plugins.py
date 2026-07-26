@@ -40,7 +40,10 @@ class PluginCatalogTest(unittest.TestCase):
     def test_capability_discovery(self) -> None:
         catalog = create_builtin_catalog()
         selectors = catalog.find(capability="sample_selection")
-        self.assertEqual([(item.kind, item.name) for item in selectors], [("selector", "coteaching_exchange")])
+        self.assertEqual(
+            [(item.kind, item.name) for item in selectors],
+            [("peer_exchange", "small_loss"), ("selector", "coteaching_exchange")],
+        )
 
     def test_custom_plugin_does_not_need_lnl_types(self) -> None:
         catalog = PluginCatalog()
@@ -261,7 +264,10 @@ class PluginCatalogTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(weighted_objective))
         self.assertTrue(torch.isfinite(weighted_losses.grad).all())
 
-        self.assertEqual(catalog.find(kind="weight_provider"), ())
+        self.assertEqual(
+            [item.name for item in catalog.find(kind="weight_provider")],
+            ["binary_rcn_importance"],
+        )
 
 
 if __name__ == "__main__":

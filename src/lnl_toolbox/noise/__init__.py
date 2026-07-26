@@ -8,6 +8,8 @@ from .estimators import (
 from .manifest import NoiseManifest
 from .transition import (
     KnownTransition,
+    InstanceTransitionProvider,
+    TrainableTransitionModel,
     TransitionArtifact,
     TransitionProvider,
     validate_transition_matrix,
@@ -24,6 +26,8 @@ __all__ = [
     "DualTransitionEstimator",
     "TransitionArtifact",
     "KnownTransition",
+    "InstanceTransitionProvider",
+    "TrainableTransitionModel",
     "TransitionProvider",
     "validate_transition_matrix",
 ]

@@ -25,15 +25,15 @@
 | 7 | CNLCU | Selector 基础 | 未开始 | loss history、不确定性与双网络 |
 | 8 | MentorNet | WeightProvider 基础 | 未开始 | Mentor/Student Pipeline |
 | 9 | Co-teaching | small-loss/交换 helper | 未开始 | 双网络训练与恢复 |
-| 10 | Loss Correction | Anchor estimator、Forward/Backward RiskCorrector | 组件完成 | 两阶段 pipeline 与论文实验 |
+| 10 | Loss Correction | Anchor estimator、Forward/Backward RiskCorrector、通用 Pipeline | Pipeline smoke 通过 | 论文实验 |
 | 11 | Normalized Loss/APL | NCE、MAE、RCE、APL | 单次复现 | 如需完整复现，再补多 seed 与其他噪声设置 |
 | 12 | GCE | 标准 GCE | 单次复现 | 后续如需完整复现，再补 5 次重复与其他噪声设置 |
 | 13 | VolMinNet | Transition 基础 | 未开始 | 可训练 NoiseModel |
 | 14 | Natarajan Risk | Weight/Risk 基础 | 未开始 | 二分类 RiskCorrector |
 | 15 | T-Revision | Anchor/Weight 基础 | 未开始 | 三阶段 Pipeline |
-| 16 | Dual-T | TransitionEstimator | 组件完成 | 与 RiskCorrector 组成训练闭环；当前保持独立 estimator |
+| 16 | Dual-T | TransitionEstimator、PosteriorSnapshot、通用 Pipeline | Pipeline smoke 通过 | 论文实验与参数核对 |
 | 17 | MC-LDCE | 指南 | 未开始 | StatisticEstimator、global objective |
-| 18 | Importance Reweighting | Binary RCN WeightProvider | 组件完成 | posterior/rate estimator 与 runner |
+| 18 | Importance Reweighting | Binary RCN WeightProvider、通用权重接入 | Pipeline smoke 通过 | posterior/rate estimator 与论文实验 |
 | 19 | CWD | 指南 | 未开始 | class-wise StatisticEstimator |
 | 20 | PCSE | 指南 | 未开始 | 特征统计与 post-processing |
 | 21 | DLD | 指南 | 未开始 | diffusion label Pipeline |
@@ -59,4 +59,4 @@
 - APL 对照修正：标准 CIFAR-10 Normalize 已采用作者代码精确常数；40% 实验使用 global symmetric sampling，以减少与作者数据生成逻辑的偏差；`CifarCnn8` 当前结构保持不变，待官方模型源码可取得后再做逐层确认。
 - APL 40%：完成 CIFAR-10 symmetric 0.4、NCE+RCE、seed 1、120 epochs；best epoch 119，test accuracy `66.61%`；产物位于 `artifacts/reproductions/20260726-144152/`，test selection leakage 已明确记录。
 - APL 官方噪声对齐：已实现通用 `sampling: per_class` + `rng: numpy_legacy`，未运行实验；此前 40% 结果使用旧 global/default_rng 配置，不作为对齐后结果。
-- 四篇计划的共享代码整理：CDR optimizer 约束已移回 `CDRUpdatePolicy`；新增通用 `loss_for_all_targets`、`RiskCorrector`、Forward/Backward 校正器和插件注册；Dual-T 仍不接入 runner，GCE 保持通用 loss。
+- 共享代码整理：CDR optimizer 约束已移回 `CDRUpdatePolicy`；新增通用 `loss_for_all_targets`、`RiskCorrector`、Forward/Backward 校正器、WeightProvider、Pipeline、统一 warm-up、FeatureSnapshot、TargetProvider、IndexedHistory、EarlyStopping、MultiModel/PeerExchange、Instance/Trainable Transition、Statistic/Neighbor Artifact 和 checkpoint RNG 状态；Dual-T 已通过 warm-up → snapshot → artifact → correction 闭环 smoke，GCE 保持通用 loss。

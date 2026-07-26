@@ -71,7 +71,7 @@ class NoisyCeBaselineTest(unittest.TestCase):
         config = _config()
         config["transition_estimator"] = {"name": "anchor"}
         with self.assertRaisesRegex(
-            ValueError, r"field 'transition_estimator'.*not connected"
+            ValueError, r"field 'transition_estimator'.*pipeline.transition_estimator"
         ):
             run_experiment(config)
 

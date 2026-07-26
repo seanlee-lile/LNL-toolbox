@@ -1,0 +1,46 @@
+seed: 7
+output_root: artifacts/test-runs
+data:
+  name: cifar10
+  root: data/cifar10
+  validation_size: 5000
+  max_train_samples: 128
+  max_validation_samples: 64
+  max_test_samples: 64
+  augment: true
+noise:
+  name: symmetric
+  rate: 0.4
+  seed: 17
+  manifest_filename: noise_manifest.npz
+loss:
+  name: ce
+loader:
+  batch_size: 64
+  num_workers: 0
+  pin_memory: true
+model:
+  name: tiny_cnn
+  width: 32
+optimizer:
+  name: adamw
+  lr: 0.001
+  weight_decay: 0.0005
+scheduler:
+  name: cosine
+  t_max: 3
+trainer:
+  epochs: 3
+  device: auto
+pipeline:
+  name: standard_noisy_erm
+  warmup_epochs: 1
+  transition_estimator:
+    name: anchor
+  risk_corrector:
+    name: forward
+early_stopping:
+  monitor: selection_accuracy
+  mode: max
+  patience: 1
+  min_delta: 0.0
