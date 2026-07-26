@@ -94,6 +94,16 @@ class ParameterUpdatePolicyTest(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, "mapping"):
             restore_update_policy(policy, {"name": "standard", "state": []})
 
+    def test_standard_policy_gradient_clipping_matches_torch(self) -> None:
+        model = torch.nn.Linear(2, 1, bias=False)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+        policy = StandardUpdatePolicy(max_grad_norm=0.25)
+        objective = (model(torch.ones(1, 2)) - 10.0).square().mean()
+        request = ParameterUpdateInput(objective, model, optimizer, RunState())
+        policy.update(request)
+        self.assertAlmostEqual(float(model.weight.grad.norm()), 0.25, places=5)
+        self.assertEqual(policy.state_dict(), {"max_grad_norm": 0.25})
+
 
 if __name__ == "__main__":
     unittest.main()

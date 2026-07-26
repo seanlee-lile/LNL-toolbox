@@ -12,8 +12,8 @@ from torchvision import transforms
 from .cifar import CifarData
 
 
-CIFAR_MEAN = (0.4914, 0.4822, 0.4465)
-CIFAR_STD = (0.2470, 0.2435, 0.2616)
+CIFAR_MEAN = (0.49139968, 0.48215827, 0.44653124)
+CIFAR_STD = (0.24703233, 0.24348505, 0.26158768)
 
 
 def stratified_split(labels: np.ndarray, validation_size: int, seed: int) -> tuple[np.ndarray, np.ndarray]:

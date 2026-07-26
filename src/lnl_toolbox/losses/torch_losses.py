@@ -32,6 +32,19 @@ def validate_per_sample_loss(values: Tensor, batch_size: int) -> Tensor:
     return values
 
 
+def loss_for_all_targets(loss: nn.Module, logits: Tensor) -> Tensor:
+    """Evaluate a per-sample classification loss for every hypothetical target."""
+
+    if logits.ndim != 2:
+        raise ValueError("logits must have shape [batch, classes]")
+    batch_size, num_classes = logits.shape
+    expanded_logits = logits[:, None, :].expand(-1, num_classes, -1)
+    expanded_logits = expanded_logits.reshape(batch_size * num_classes, num_classes)
+    targets = torch.arange(num_classes, device=logits.device).repeat(batch_size)
+    values = validate_per_sample_loss(loss(expanded_logits, targets), batch_size * num_classes)
+    return values.reshape(batch_size, num_classes)
+
+
 def _target_log_probability(logits: Tensor, targets: Tensor) -> Tensor:
     _validate_inputs(logits, targets)
     return F.log_softmax(logits, dim=1).gather(1, targets[:, None]).squeeze(1)

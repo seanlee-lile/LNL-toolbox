@@ -21,17 +21,17 @@
 | 3 | PDL | 指南 | 未开始 | 实例级 `T(x)` 与 Pipeline |
 | 4 | JoCoR | Selector 基础 | 未开始 | 双网络 Algorithm |
 | 5 | DSS | 指南 | 未开始 | 有状态可靠性估计与 Selector |
-| 6 | CDR | ParameterUpdatePolicy | 组件完成 | noisy-validation early stopping 与论文实验 |
+| 6 | CDR | ParameterUpdatePolicy | 组件完成 | noisy-validation early stopping 与论文实验；runner 已移除 CDR 专属校验 |
 | 7 | CNLCU | Selector 基础 | 未开始 | loss history、不确定性与双网络 |
 | 8 | MentorNet | WeightProvider 基础 | 未开始 | Mentor/Student Pipeline |
 | 9 | Co-teaching | small-loss/交换 helper | 未开始 | 双网络训练与恢复 |
-| 10 | Loss Correction | Anchor estimator | 组件完成 | Forward/Backward RiskCorrector |
-| 11 | Normalized Loss/APL | NCE、MAE、RCE、APL | 组件完成 | 按 `apl/plan.md` 完成单次复现 |
+| 10 | Loss Correction | Anchor estimator、Forward/Backward RiskCorrector | 组件完成 | 两阶段 pipeline 与论文实验 |
+| 11 | Normalized Loss/APL | NCE、MAE、RCE、APL | 单次复现 | 如需完整复现，再补多 seed 与其他噪声设置 |
 | 12 | GCE | 标准 GCE | 单次复现 | 后续如需完整复现，再补 5 次重复与其他噪声设置 |
 | 13 | VolMinNet | Transition 基础 | 未开始 | 可训练 NoiseModel |
 | 14 | Natarajan Risk | Weight/Risk 基础 | 未开始 | 二分类 RiskCorrector |
 | 15 | T-Revision | Anchor/Weight 基础 | 未开始 | 三阶段 Pipeline |
-| 16 | Dual-T | TransitionEstimator | 组件完成 | 与 RiskCorrector 组成训练闭环 |
+| 16 | Dual-T | TransitionEstimator | 组件完成 | 与 RiskCorrector 组成训练闭环；当前保持独立 estimator |
 | 17 | MC-LDCE | 指南 | 未开始 | StatisticEstimator、global objective |
 | 18 | Importance Reweighting | Binary RCN WeightProvider | 组件完成 | posterior/rate estimator 与 runner |
 | 19 | CWD | 指南 | 未开始 | class-wise StatisticEstimator |
@@ -50,9 +50,13 @@
 | 论文 | 复用原料 | 新增/扩展通用原料 | 论文专属菜谱 | 新增依据 | 后续使用者 | 状态 |
 |---|---|---|---|---|---|---|
 | GCE | CIFAR Dataset、Noise Manifest、SGD/scheduler、统一 runner、checkpoint、逐样本 Loss 协议 | `GeneralizedCrossEntropyLoss`；CIFAR ResNet-34；`gce2018` per-pixel mean preprocessing；可选 noisy validation；终端进度与 SVG 曲线 | `gce_cifar10_noise02_smoke.yaml`、`gce_cifar10_noise02_reproduction.yaml` | GCE 公式和论文实验模型/预处理此前不在生产闭环；进度能力为所有长实验共用 | 后续 robust loss、transition correction 及其他 CIFAR 长实验 | 单次复现；详见 [GCE 结果](gce/result.md) |
-| APL | CIFAR Dataset、Noise Manifest、NCE、RCE、APL、SGD/cosine、统一 runner、checkpoint、metrics | 计划新增通用 `CifarCnn8`；symmetric `per_class` sampling；StandardUpdatePolicy gradient clipping；显式 model-selection split | 计划新增 `apl_cifar10_noise02_smoke.yaml`、`apl_cifar10_noise02_reproduction.yaml` | 对齐论文及作者代码的 8 层 CNN、逐类噪声、梯度裁剪和 test-selection 协议；不得形成 APL 专属公共模块 | 其他 CIFAR loss 论文、使用逐类对称噪声或梯度裁剪的实验 | 计划中；尚未实现，详见 [APL 计划](apl/plan.md) |
+| APL | CIFAR Dataset、Noise Manifest、NCE、RCE、APL、SGD/cosine、统一 runner、checkpoint、metrics | 通用 `CifarCnn8`；symmetric sampling；StandardUpdatePolicy gradient clipping；显式 model-selection split | `apl_cifar10_noise02_reproduction.yaml`、`apl_cifar10_noise04_reproduction.yaml` | 已新增通用 `numpy_legacy + per_class` 官方噪声策略；Normalize 已改为作者精确常数；模型源码仍需官方 `models.py` 可得后逐行确认 | 其他 CIFAR loss 论文、使用 symmetric noise 或梯度裁剪的实验 | 旧配置两次单次复现；20% `79.25%`，40% `66.61%`；官方噪声对齐后待重跑 |
 
 ## 单篇复现记录
 
 - GCE：[单次复现结果](gce/result.md)
-- APL：[单次复现计划](apl/plan.md)（计划中，尚无结果文件）
+- APL：[单次复现计划](apl/plan.md)；已完成 CIFAR-10 symmetric 0.2、NCE+RCE、seed 1 的一次 120 epochs 运行，best epoch 113，test accuracy `79.25%`，test selection leakage 已明确记录。
+- APL 对照修正：标准 CIFAR-10 Normalize 已采用作者代码精确常数；40% 实验使用 global symmetric sampling，以减少与作者数据生成逻辑的偏差；`CifarCnn8` 当前结构保持不变，待官方模型源码可取得后再做逐层确认。
+- APL 40%：完成 CIFAR-10 symmetric 0.4、NCE+RCE、seed 1、120 epochs；best epoch 119，test accuracy `66.61%`；产物位于 `artifacts/reproductions/20260726-144152/`，test selection leakage 已明确记录。
+- APL 官方噪声对齐：已实现通用 `sampling: per_class` + `rng: numpy_legacy`，未运行实验；此前 40% 结果使用旧 global/default_rng 配置，不作为对齐后结果。
+- 四篇计划的共享代码整理：CDR optimizer 约束已移回 `CDRUpdatePolicy`；新增通用 `loss_for_all_targets`、`RiskCorrector`、Forward/Backward 校正器和插件注册；Dual-T 仍不接入 runner，GCE 保持通用 loss。

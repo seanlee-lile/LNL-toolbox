@@ -21,19 +21,57 @@ def _validate(labels: np.ndarray, num_classes: int, rate: float) -> np.ndarray:
 
 
 def generate_symmetric(
-    labels: np.ndarray, num_classes: int, rate: float, seed: int, dataset: str = "unknown"
+    labels: np.ndarray,
+    num_classes: int,
+    rate: float,
+    seed: int,
+    dataset: str = "unknown",
+    sampling: str = "global",
+    rng: str = "default_rng",
 ) -> NoiseManifest:
     """Replace a fixed fraction of labels with uniformly chosen wrong classes."""
     labels = _validate(labels, num_classes, rate)
+    sampling = str(sampling).strip().lower()
+    if sampling not in {"global", "per_class"}:
+        raise ValueError("symmetric sampling must be 'global' or 'per_class'")
+    rng = str(rng).strip().lower()
+    if rng not in {"default_rng", "numpy_legacy"}:
+        raise ValueError("symmetric rng must be 'default_rng' or 'numpy_legacy'")
     noisy = labels.copy()
-    rng = np.random.default_rng(seed)
-    count = int(round(rate * labels.size))
-    chosen = rng.choice(labels.size, size=count, replace=False)
-    offsets = rng.integers(1, num_classes, size=count)
-    noisy[chosen] = (labels[chosen] + offsets) % num_classes
+    random = np.random.RandomState(seed) if rng == "numpy_legacy" else np.random.default_rng(seed)
+    if sampling == "global":
+        count = int(round(rate * labels.size))
+        chosen = random.choice(labels.size, size=count, replace=False)
+    else:
+        chosen_parts = [
+            random.choice(
+                np.flatnonzero(labels == class_index),
+                size=int(round(rate * int(np.sum(labels == class_index)))),
+                replace=False,
+            )
+            for class_index in range(num_classes)
+            if np.any(labels == class_index)
+        ]
+        chosen = np.concatenate(chosen_parts) if chosen_parts else np.empty(0, dtype=np.int64)
+    if rng == "numpy_legacy":
+        for index in chosen:
+            other_classes = np.delete(np.arange(num_classes), labels[index])
+            noisy[index] = random.choice(other_classes)
+    else:
+        offsets = random.integers(1, num_classes, size=chosen.size)
+        noisy[chosen] = (labels[chosen] + offsets) % num_classes
     transition = np.full((num_classes, num_classes), rate / (num_classes - 1))
     np.fill_diagonal(transition, 1.0 - rate)
-    return NoiseManifest(dataset, "symmetric", seed, rate, labels, noisy, transition)
+    return NoiseManifest(
+        dataset,
+        "symmetric",
+        seed,
+        rate,
+        labels,
+        noisy,
+        transition,
+        metadata={"sampling": sampling, "rng": rng},
+    )
 
 
 def generate_pairflip(

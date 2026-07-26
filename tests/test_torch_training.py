@@ -97,6 +97,12 @@ class TorchTrainingTest(unittest.TestCase):
         )
         self.assertEqual(model(torch.randn(2, 3, 32, 32)).shape, (2, 10))
 
+    def test_cifar_cnn8_shape_and_reference_channels(self):
+        model = build_model({"name": "cifar_cnn8"}, num_classes=10)
+        convolutions = [module for module in model.modules() if isinstance(module, torch.nn.Conv2d)]
+        self.assertEqual([module.out_channels for module in convolutions], [64, 64, 128, 128, 196, 196])
+        self.assertEqual(model(torch.randn(2, 3, 32, 32)).shape, (2, 10))
+
     def test_gce2018_preprocessing_subtracts_training_pixel_mean(self):
         images = np.full((2, 32, 32, 3), 128, dtype=np.uint8)
         mean = cifar_pixel_mean(images)

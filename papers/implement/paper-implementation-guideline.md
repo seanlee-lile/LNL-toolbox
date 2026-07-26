@@ -50,7 +50,7 @@
 | 特征邻域图 | `data/neighbors.py::NeighborGraphArtifact` | 规划 | DLD、LEND |
 | 全局/分类统计量 | `noise/statistics.py::StatisticArtifact` | 规划 | MC-LDCE、CWD、PCSE |
 | 半监督 batch | `data/semi_supervised.py::SemiSupervisedBatch` | 规划 | DivideMix |
-| 转移矩阵风险校正 | `algorithms/transition_risk.py::RiskCorrector` | 规划 | Loss Correction、Learning with Noisy Labels |
+| 转移矩阵风险校正 | `algorithms/transition_risk.py::RiskCorrector` | 已有通用 Forward/Backward 组件；Pipeline 仍规划 | Loss Correction、Learning with Noisy Labels |
 | 可训练全局转移模型 | `noise/transition.py::TrainableTransitionModel` | 规划 | VolMinNet、T-Revision |
 | 双网络 peer exchange | `algorithms/coteaching.py::peer_exchange()` | 扩展现有 NumPy helper | JoCoR、CNLCU、Co-teaching |
 | backward 与参数更新 | `algorithms/update_policy.py::ParameterUpdatePolicy` | 已有；Standard 与 CDR 首批实现 | CDR；未来单模型参数级更新方法 |
@@ -1701,8 +1701,8 @@ batch(input, noisy target, global index)
    - `CDRUpdatePolicy.update(request)`
 3. `[已有/扩展] src/lnl_toolbox/algorithms/supervised.py`
    - 所有 scalar objective 统一委托 ParameterUpdatePolicy 完成 backward/update。
-4. `[已有/扩展] src/lnl_toolbox/training/experiment.py`
-   - 构造 policy、聚合 `update_*` 指标并校验 resume 配置。
+4. `[已有/共享] src/lnl_toolbox/training/experiment.py`
+   - 只负责通用 policy 生命周期、指标聚合和 resume；不得包含 CDR 专属 optimizer 校验。
 5. `[规划] src/lnl_toolbox/training/cdr_pipeline.py`
    - 仅在通用 runner 无法表达论文的显式 L1 更新时使用。
 6. `[已有/高冲突] src/lnl_toolbox/plugins/builtin/catalog.py`
@@ -1819,7 +1819,7 @@ critical mask 每 step 重算，不需要持久化；若为调试保存，只能
 - `[已实现]` CDR Eq. (3)-(6)、全局精确 top-k、稳定并列规则和 L1 更新。
 - `[已实现]` 与 Loss/Selector 的生产组合、policy checkpoint 身份和 resume 配置校验。
 - `[已验证]` 手算、失败边界、CPU/CUDA、checkpoint 与 noisy CUDA smoke。
-- `[未实现]` noisy-validation early stopping、官方代码 compatibility mode 和论文结果复现。
+- `[未实现]` noisy-validation early stopping、官方代码 compatibility mode 和论文结果复现；这些应通过通用 lifecycle hook 接入，不应回填 CDR 分支到 runner。
 
 因此当前 toolbox 可宣称支持 **paper-mode CDR ParameterUpdatePolicy 组件**，
 但不能宣称完整复现包含 noisy-validation early stopping 的 CDR Pipeline。
@@ -2714,7 +2714,7 @@ Anchor estimator 已实现不等于整篇 Loss Correction 已实现。
   Sarah Erfani, James Bailey
 - 官方页面：<https://proceedings.mlr.press/v119/ma20c.html>
 - 官方代码：<https://github.com/HanxunH/Active-Passive-Losses>
-- 当前成熟度：L3（P0 的 NCE、MAE、RCE、APL 已实现）
+- 当前成熟度：L4（P0 的 NCE、MAE、RCE、APL 已实现，并完成一次 CIFAR-10 NCE+RCE 复现）
 - 核对状态：已阅读论文；已检查官方 `loss.py`、`main.py`、`trainer.py`；
   当前仓库已有数学与集成测试
 - Toolbox 归属：`Loss`
@@ -2849,7 +2849,7 @@ loss:
   alpha: 1.0
   beta: 1.0
   active: {name: nce, eps: 1.0e-8}
-  passive: {name: rce, log_zero: -4.0}
+  passive: {name: rce, log_zero: -9.210340371976184}
 ```
 
 论文不同数据集使用的 alpha/beta 属实验超参数；默认值不是论文统一最优值。
@@ -2895,7 +2895,7 @@ Loss 本身无可学习状态。checkpoint 只需保存 resolved loss config，�
 - Normalized Focal Loss
 - 对任意 base loss 的通用归一化 wrapper
 - NFL+MAE / NFL+RCE
-- 论文全部数据集和超参数复现
+- 论文全部数据集和超参数复现；当前仅完成 CIFAR-10 symmetric 0.2、NCE+RCE、seed 1 的一次 120 epochs 运行，best epoch 113、test accuracy 79.25%
 
 P0 主线已实现并可训练；完整论文覆盖仍需上述扩展。
 

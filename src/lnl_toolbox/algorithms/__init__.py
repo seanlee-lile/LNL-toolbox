@@ -31,3 +31,9 @@ try:
     from .supervised import SupervisedClassificationAlgorithm
 except ImportError:
     SupervisedClassificationAlgorithm = None  # type: ignore[assignment]
+try:
+    from .transition_risk import BackwardRiskCorrector, ForwardRiskCorrector, RiskCorrector
+except ImportError:
+    pass
+else:
+    __all__.extend(["BackwardRiskCorrector", "ForwardRiskCorrector", "RiskCorrector"])

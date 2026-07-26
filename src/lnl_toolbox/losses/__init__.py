@@ -9,6 +9,7 @@ try:
         MeanAbsoluteErrorLoss,
         NormalizedCrossEntropyLoss,
         ReverseCrossEntropyLoss,
+        loss_for_all_targets,
         validate_per_sample_loss,
     )
 except ImportError:  # Torch remains an optional dependency of the generic core.
@@ -19,6 +20,7 @@ except ImportError:  # Torch remains an optional dependency of the generic core.
     ReverseCrossEntropyLoss = None  # type: ignore[assignment]
     ActivePassiveLoss = None  # type: ignore[assignment]
     validate_per_sample_loss = None  # type: ignore[assignment]
+    loss_for_all_targets = None  # type: ignore[assignment]
 else:
     __all__ += [
         "CrossEntropyLoss",
@@ -28,4 +30,5 @@ else:
         "ReverseCrossEntropyLoss",
         "ActivePassiveLoss",
         "validate_per_sample_loss",
+        "loss_for_all_targets",
     ]

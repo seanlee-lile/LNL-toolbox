@@ -1,0 +1,57 @@
+seed: 1
+output_root: artifacts/reproductions
+data:
+  name: cifar10
+  root: data/cifar10
+  validation_size: 0
+  max_train_samples: null
+  max_validation_samples: null
+  max_test_samples: null
+  augment: true
+  preprocessing: standard
+noise:
+  name: symmetric
+  rate: 0.2
+  seed: 1
+  sampling: per_class
+  validation_targets: clean
+  manifest_filename: noise_manifest.npz
+loss:
+  name: apl
+  alpha: 1.0
+  beta: 1.0
+  active: {name: nce}
+  passive:
+    name: rce
+    log_zero: -9.210340371976184
+selector: {name: all}
+parameter_update:
+  name: standard
+  max_grad_norm: 5.0
+loader:
+  batch_size: 128
+  num_workers: 8
+  pin_memory: true
+model:
+  name: cifar_cnn8
+optimizer:
+  name: sgd
+  lr: 0.01
+  momentum: 0.9
+  nesterov: false
+  weight_decay: 0.0001
+scheduler:
+  name: cosine
+  t_max: 120
+  eta_min: 0.0
+trainer:
+  epochs: 120
+  device: auto
+  progress:
+    enabled: true
+    update_interval: 20
+    curves: true
+evaluation:
+  selection_split: test
+  allow_test_selection: true
+  loss: {name: ce}

@@ -137,6 +137,22 @@ def create_builtin_catalog() -> PluginCatalog:
         capabilities=("class_conditional", "offline", "factorized", "paper_reference"),
         metadata={"paper": "Yao et al., NeurIPS 2020"},
     )
+    try:
+        from lnl_toolbox.algorithms.transition_risk import (
+            BackwardRiskCorrector,
+            ForwardRiskCorrector,
+        )
+    except ImportError:
+        pass
+    else:
+        catalog.add(
+            "risk_corrector", "forward", ForwardRiskCorrector,
+            capabilities=("transition_consumer", "corrected_risk"),
+        )
+        catalog.add(
+            "risk_corrector", "backward", BackwardRiskCorrector,
+            capabilities=("transition_consumer", "corrected_risk"),
+        )
     return catalog
 
 
@@ -194,6 +210,28 @@ def build_builtin_transition_estimator(
         ) or "none"
         raise ValueError(
             f"Unknown transition estimator {name!r}; available: {available}"
+        ) from exc
+
+
+def build_builtin_risk_corrector(
+    config: Mapping[str, Any] | None,
+    catalog: PluginCatalog | None = None,
+) -> Any:
+    """Build a transition-consuming risk corrector from configuration."""
+
+    if config is not None and not isinstance(config, Mapping):
+        raise TypeError("Risk corrector configuration must be a mapping")
+    values = dict(config or {"name": "forward"})
+    name = str(values.pop("name", "forward")).strip().lower()
+    catalog = catalog or create_builtin_catalog()
+    try:
+        return catalog.build("risk_corrector", name, **values)
+    except KeyError as exc:
+        available = ", ".join(
+            item.name for item in catalog.find(kind="risk_corrector")
+        ) or "none"
+        raise ValueError(
+            f"Unknown risk corrector {name!r}; available: {available}"
         ) from exc
 
 

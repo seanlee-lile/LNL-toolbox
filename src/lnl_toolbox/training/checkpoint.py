@@ -28,6 +28,8 @@ def build_checkpoint(
     scheduler=None,
     best_epoch: int = -1,
     best_validation_accuracy: float = float("-inf"),
+    selection_split: str = "validation",
+    best_selection_accuracy: float = float("-inf"),
     noise: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     algorithm_state = algorithm.state_dict()
@@ -40,6 +42,8 @@ def build_checkpoint(
         "completed_epoch": int(completed_epoch),
         "best_epoch": int(best_epoch),
         "best_validation_accuracy": float(best_validation_accuracy),
+        "selection_split": str(selection_split),
+        "best_selection_accuracy": float(best_selection_accuracy),
         "loss": dict(config.get("loss", {"name": "ce"})),
         "config": dict(config),
     }
@@ -62,6 +66,8 @@ def save_checkpoint(
     scheduler=None,
     best_epoch: int = -1,
     best_validation_accuracy: float = float("-inf"),
+    selection_split: str = "validation",
+    best_selection_accuracy: float = float("-inf"),
     noise: Mapping[str, Any] | None = None,
 ) -> None:
     atomic_save(
@@ -73,6 +79,8 @@ def save_checkpoint(
             scheduler=scheduler,
             best_epoch=best_epoch,
             best_validation_accuracy=best_validation_accuracy,
+            selection_split=selection_split,
+            best_selection_accuracy=best_selection_accuracy,
             noise=noise,
         ),
         path,
@@ -135,6 +143,8 @@ def load_checkpoint(
         warnings.append(
             "Legacy checkpoint has no best metric; the next completed epoch will establish it."
         )
+    payload.setdefault("selection_split", "validation")
+    payload.setdefault("best_selection_accuracy", payload["best_validation_accuracy"])
     if int(payload.get("format_version", 0)) < 2:
         warnings.append(f"Loaded legacy {layout} checkpoint layout.")
     if warnings:
