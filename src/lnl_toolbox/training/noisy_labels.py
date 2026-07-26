@@ -47,7 +47,7 @@ def _manifest_filename(noise: Mapping[str, Any]) -> str:
     return filename
 
 
-def _generated_spec(config: Mapping[str, Any]) -> tuple[str, float, int]:
+def _generated_spec(config: Mapping[str, Any]) -> tuple[str, float, int, str, str]:
     noise = config["noise"]
     name = str(noise["name"]).lower()
     if name not in {"symmetric", "pairflip"}:
@@ -55,7 +55,15 @@ def _generated_spec(config: Mapping[str, Any]) -> tuple[str, float, int]:
     rate = float(noise["rate"])
     if not 0.0 <= rate <= 1.0:
         raise ValueError("noise rate must be in [0, 1]")
-    return name, rate, int(noise.get("seed", config.get("seed", 1)))
+    sampling = str(noise.get("sampling", "global")).strip().lower()
+    if name != "symmetric" and sampling != "global":
+        raise ValueError("noise.sampling is only supported for symmetric noise")
+    if sampling not in {"global", "per_class"}:
+        raise ValueError("noise.sampling must be 'global' or 'per_class'")
+    rng = str(noise.get("rng", "default_rng")).strip().lower()
+    if rng not in {"default_rng", "numpy_legacy"}:
+        raise ValueError("noise.rng must be 'default_rng' or 'numpy_legacy'")
+    return name, rate, int(noise.get("seed", config.get("seed", 1))), sampling, rng
 
 
 def _validate_manifest(
@@ -78,13 +86,15 @@ def _validate_manifest(
         raise ValueError("Noise manifest split must be 'train'")
     if mode == "generated":
         assert generated_spec is not None
-        noise_type, rate, seed = generated_spec
+        noise_type, rate, seed, sampling, rng = generated_spec
         checks = {
             "noise type": manifest.noise_type == noise_type,
             "requested rate": np.isclose(
                 manifest.requested_rate, rate, rtol=0.0, atol=1e-12
             ),
             "seed": manifest.seed == seed,
+            "sampling": manifest.metadata.get("sampling", "global") == sampling,
+            "rng": manifest.metadata.get("rng", "default_rng") == rng,
         }
         failed = [name for name, valid in checks.items() if not valid]
         if failed:
@@ -173,9 +183,20 @@ def prepare_noise_manifest(
 
     if mode == "generated":
         assert generated_spec is not None
-        noise_type, rate, seed = generated_spec
+        noise_type, rate, seed, sampling, rng = generated_spec
         generator = generate_symmetric if noise_type == "symmetric" else generate_pairflip
-        manifest = generator(clean_targets, num_classes, rate, seed, dataset)
+        if noise_type == "symmetric":
+            manifest = generator(
+                clean_targets,
+                num_classes,
+                rate,
+                seed,
+                dataset,
+                sampling=sampling,
+                rng=rng,
+            )
+        else:
+            manifest = generator(clean_targets, num_classes, rate, seed, dataset)
         manifest.global_indices = global_indices.copy()
         manifest.split = "train"
         manifest.num_classes = num_classes
@@ -232,6 +253,9 @@ def checkpoint_noise_metadata(
     run_dir: Path,
     effective_rate: float,
     mode: str | None = None,
+    *,
+    validation_targets: str = "clean",
+    effective_validation_rate: float | None = None,
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {
         "mode": mode or str(manifest.metadata.get("source", "generated")),
@@ -248,6 +272,8 @@ def checkpoint_noise_metadata(
         "num_classes": manifest.num_classes,
         "manifest_actual_rate": manifest.actual_rate,
         "effective_train_subset_actual_rate": effective_rate,
+        "validation_targets": validation_targets,
+        "effective_validation_subset_actual_rate": effective_validation_rate,
         "has_transition_matrix": manifest.transition_matrix is not None,
         "has_per_sample_transition": manifest.per_sample_transition is not None,
     }

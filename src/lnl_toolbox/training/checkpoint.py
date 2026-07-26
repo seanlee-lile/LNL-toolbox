@@ -4,11 +4,37 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
+import random
 from typing import Any, Mapping
 
+import numpy as np
 import torch
 
 from lnl_toolbox.core import RunState
+
+
+def capture_rng_state() -> dict[str, Any]:
+    state: dict[str, Any] = {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def restore_rng_state(state: Mapping[str, Any]) -> None:
+    if not isinstance(state, Mapping):
+        raise TypeError("rng state must be a mapping")
+    if "python" in state:
+        random.setstate(state["python"])
+    if "numpy" in state:
+        np.random.set_state(state["numpy"])
+    if "torch" in state:
+        torch.set_rng_state(state["torch"])
+    if "cuda" in state and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(state["cuda"])
 
 
 def atomic_save(payload: Mapping[str, Any], path: str | Path) -> None:
@@ -28,7 +54,12 @@ def build_checkpoint(
     scheduler=None,
     best_epoch: int = -1,
     best_validation_accuracy: float = float("-inf"),
+    selection_split: str = "validation",
+    best_selection_accuracy: float = float("-inf"),
     noise: Mapping[str, Any] | None = None,
+    pipeline: Mapping[str, Any] | None = None,
+    early_stopping: Mapping[str, Any] | None = None,
+    component_states: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     algorithm_state = algorithm.state_dict()
     payload: dict[str, Any] = {
@@ -40,8 +71,16 @@ def build_checkpoint(
         "completed_epoch": int(completed_epoch),
         "best_epoch": int(best_epoch),
         "best_validation_accuracy": float(best_validation_accuracy),
+        "selection_split": str(selection_split),
+        "best_selection_accuracy": float(best_selection_accuracy),
         "loss": dict(config.get("loss", {"name": "ce"})),
         "config": dict(config),
+        "rng_state": capture_rng_state(),
+        "algorithm_private_state": {
+            key: value
+            for key, value in algorithm_state.items()
+            if key not in {"model", "optimizer"}
+        },
     }
     if "parameter_update_policy" in algorithm_state:
         payload["parameter_update_policy"] = algorithm_state[
@@ -49,6 +88,12 @@ def build_checkpoint(
         ]
     if noise is not None:
         payload["noise"] = dict(noise)
+    if pipeline is not None:
+        payload["pipeline"] = dict(pipeline)
+    if early_stopping is not None:
+        payload["early_stopping"] = dict(early_stopping)
+    if component_states is not None:
+        payload["component_states"] = dict(component_states)
     return payload
 
 
@@ -62,7 +107,12 @@ def save_checkpoint(
     scheduler=None,
     best_epoch: int = -1,
     best_validation_accuracy: float = float("-inf"),
+    selection_split: str = "validation",
+    best_selection_accuracy: float = float("-inf"),
     noise: Mapping[str, Any] | None = None,
+    pipeline: Mapping[str, Any] | None = None,
+    early_stopping: Mapping[str, Any] | None = None,
+    component_states: Mapping[str, Any] | None = None,
 ) -> None:
     atomic_save(
         build_checkpoint(
@@ -73,7 +123,12 @@ def save_checkpoint(
             scheduler=scheduler,
             best_epoch=best_epoch,
             best_validation_accuracy=best_validation_accuracy,
+            selection_split=selection_split,
+            best_selection_accuracy=best_selection_accuracy,
             noise=noise,
+            pipeline=pipeline,
+            early_stopping=early_stopping,
+            component_states=component_states,
         ),
         path,
     )
@@ -94,6 +149,7 @@ def _restore_model_optimizer(payload: Mapping[str, Any], algorithm) -> str:
         }
         if "parameter_update_policy" in payload:
             state["parameter_update_policy"] = payload["parameter_update_policy"]
+        state.update(dict(payload.get("algorithm_private_state", {})))
         algorithm.load_state_dict(state)
         return "top-level"
     legacy = payload.get("algorithm")
@@ -111,6 +167,8 @@ def load_checkpoint(
     scheduler=None,
 ) -> tuple[RunState, int, dict[str, Any]]:
     payload = read_checkpoint(path, device)
+    if "rng_state" in payload:
+        restore_rng_state(payload["rng_state"])
     layout = _restore_model_optimizer(payload, algorithm)
 
     has_scheduler = "scheduler" in payload
@@ -135,6 +193,8 @@ def load_checkpoint(
         warnings.append(
             "Legacy checkpoint has no best metric; the next completed epoch will establish it."
         )
+    payload.setdefault("selection_split", "validation")
+    payload.setdefault("best_selection_accuracy", payload["best_validation_accuracy"])
     if int(payload.get("format_version", 0)) < 2:
         warnings.append(f"Loaded legacy {layout} checkpoint layout.")
     if warnings:

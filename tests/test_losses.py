@@ -14,10 +14,23 @@ from lnl_toolbox.losses import (
     cross_entropy,
     generalized_cross_entropy,
 )
+from lnl_toolbox.losses.torch_losses import loss_for_all_targets
 from lnl_toolbox.plugins.builtin import build_builtin_loss
 
 
 class LossTest(unittest.TestCase):
+    def test_loss_for_all_targets_reuses_per_sample_loss_contract(self) -> None:
+        logits = torch.tensor([[2.0, 0.0, -1.0], [0.0, 1.0, 2.0]])
+        values = loss_for_all_targets(CrossEntropyLoss(), logits)
+        expected = torch.stack(
+            [
+                CrossEntropyLoss()(logits, torch.zeros(2, dtype=torch.long)),
+                CrossEntropyLoss()(logits, torch.ones(2, dtype=torch.long)),
+                CrossEntropyLoss()(logits, torch.full((2,), 2, dtype=torch.long)),
+            ],
+            dim=1,
+        )
+        torch.testing.assert_close(values, expected)
     def test_gce_approaches_ce(self) -> None:
         probabilities = np.array([[0.8, 0.2], [0.3, 0.7]])
         targets = np.array([0, 1])

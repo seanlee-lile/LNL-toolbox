@@ -76,6 +76,28 @@ class NoiseTest(unittest.TestCase):
         manifest = generate_symmetric(self.labels, 10, 0.4, 7, "toy")
         self.assertAlmostEqual(manifest.actual_rate, 0.4)
 
+    def test_per_class_symmetric_sampling_flips_each_class_at_requested_rate(self) -> None:
+        manifest = generate_symmetric(
+            self.labels, 10, 0.2, 7, "toy", sampling="per_class"
+        )
+        for class_index in range(10):
+            class_mask = manifest.clean_targets == class_index
+            self.assertEqual(
+                int(manifest.flip_mask[class_mask].sum()),
+                int(round(0.2 * int(class_mask.sum()))),
+            )
+        self.assertEqual(manifest.metadata["sampling"], "per_class")
+
+    def test_legacy_numpy_per_class_sampling_is_reproducible(self) -> None:
+        first = generate_symmetric(
+            self.labels, 10, 0.2, 7, "toy", sampling="per_class", rng="numpy_legacy"
+        )
+        second = generate_symmetric(
+            self.labels, 10, 0.2, 7, "toy", sampling="per_class", rng="numpy_legacy"
+        )
+        np.testing.assert_array_equal(first.noisy_targets, second.noisy_targets)
+        self.assertEqual(first.metadata["rng"], "numpy_legacy")
+
     def test_pairflip_only_moves_to_next_class(self) -> None:
         manifest = generate_pairflip(self.labels, 10, 0.5, 3, "toy")
         expected = (manifest.clean_targets[manifest.flip_mask] + 1) % 10

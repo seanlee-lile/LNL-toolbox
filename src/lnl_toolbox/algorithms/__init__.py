@@ -1,11 +1,16 @@
 from .base import Algorithm, TrainState
 from .coteaching import coteaching_exchange, remember_rate
+from .multi_model import ModelGroup, PeerExchangeResult, SmallLossPeerExchange, consistency_loss
 
 __all__ = [
     "Algorithm",
     "TrainState",
     "coteaching_exchange",
     "remember_rate",
+    "ModelGroup",
+    "PeerExchangeResult",
+    "SmallLossPeerExchange",
+    "consistency_loss",
 ]
 try:
     from .cdr import CDRUpdatePolicy, CriticalParameterMasks, critical_parameter_masks
@@ -31,3 +36,9 @@ try:
     from .supervised import SupervisedClassificationAlgorithm
 except ImportError:
     SupervisedClassificationAlgorithm = None  # type: ignore[assignment]
+try:
+    from .transition_risk import BackwardRiskCorrector, ForwardRiskCorrector, RiskCorrector
+except ImportError:
+    pass
+else:
+    __all__.extend(["BackwardRiskCorrector", "ForwardRiskCorrector", "RiskCorrector"])

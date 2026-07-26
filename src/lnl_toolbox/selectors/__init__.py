@@ -8,6 +8,7 @@ from .base import (
     validate_selection_result,
 )
 from .basic import AllSelector, SmallLossSelector
+from .history import IndexedHistory, LossHistory, SelectionHistory
 from .schedules import (
     ConstantKeepRateSchedule,
     KeepRateSchedule,
@@ -19,9 +20,12 @@ __all__ = [
     "AllSelector",
     "ConstantKeepRateSchedule",
     "KeepRateSchedule",
+    "IndexedHistory",
+    "LossHistory",
     "LinearKeepRateSchedule",
     "SelectionInput",
     "SelectionResult",
+    "SelectionHistory",
     "Selector",
     "SmallLossSelector",
     "build_keep_rate_schedule",

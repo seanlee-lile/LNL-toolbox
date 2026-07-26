@@ -54,7 +54,7 @@
 |---|---|
 | `data/contracts.py` | 早期 LNL 分类样本结构，包含 image、target、index 和可选干净标签；属于具体任务协议。 |
 | `data/cifar.py` | 读取 CIFAR-10/100 官方 pickle，转换为 `[N,32,32,3]` uint8 图像并验证标签。 |
-| `data/torch_cifar.py` | 提供分层划分、图像变换和只读取原始标签的 PyTorch Dataset；返回稳定的 `input/target/index`。 |
+| `data/torch_cifar.py` | 提供分层划分、标准图像变换、GCE 2018 per-pixel mean preprocessing 和只读取原始标签的 PyTorch Dataset；返回稳定的 `input/target/index`。 |
 | `data/noisy_dataset.py` | 按显式 global-index mapping 包装训练 Dataset 并替换 target；不会向 batch 暴露 clean label。 |
 | `data/__init__.py` | 公开 CIFAR 读取函数、干净 Dataset 和 noisy wrapper。 |
 | `data/cifar-10-batches-py/` | 用户放入的 CIFAR-10 官方 Python 数据。 |
@@ -103,9 +103,10 @@
 
 | 文件 | 作用 |
 |---|---|
-| `training/experiment.py` | 唯一监督训练器；统一构造模型、Loss、batch Selector、ParameterUpdatePolicy、optimizer、scheduler、clean/noisy Dataset、评测和产物。 |
+| `training/experiment.py` | 唯一监督训练器；统一构造模型、Loss、batch Selector、ParameterUpdatePolicy、optimizer、scheduler、clean/noisy Dataset、可显式选择 clean/noisy validation、评测和产物。 |
+| `training/progress.py` | 无第三方依赖的 batch 终端进度显示和逐 epoch `training_curves.svg` 生成器；不参与训练决策。 |
 | `training/clean_baseline.py` | clean-only 包装和多 seed 汇总；检测到 noise 配置立即拒绝。 |
-| `training/noisy_labels.py` | 生成或导入 manifest，规范化为 run-local v2，校验恢复身份并生成无标签泄漏的元数据。 |
+| `training/noisy_labels.py` | 生成或导入 manifest，规范化为 run-local v2，校验恢复身份，并分别记录 train/validation 的标签来源与实际噪声率。 |
 | `training/checkpoint.py` | 保存 checkpoint v2 的模型、优化器和 ParameterUpdatePolicy 身份/私有状态，并安全读取旧格式。 |
 | `training/snapshots.py` | 在 inference mode 下收集 noisy posterior、target 和稳定 global index，排序后构造 `PosteriorSnapshot`；不执行 warm-up 训练。 |
 
@@ -126,6 +127,8 @@
 | `configs/experiment/cifar10_symmetric_small_loss_smoke.yaml` | symmetric 0.4 + CE + 固定 0.5 keep-rate SmallLossSelector 的单模型 smoke 配置。 |
 | `configs/experiment/cifar10_symmetric_small_loss_linear_smoke.yaml` | symmetric 0.4 + CE + 从 1.0 线性变化到 0.5 的 SmallLossSelector smoke 配置。 |
 | `configs/experiment/cifar10_symmetric_cdr_smoke.yaml` | symmetric 0.4 + CE + paper-mode CDR ParameterUpdatePolicy 的 smoke 配置。 |
+| `configs/experiment/gce_cifar10_noise02_smoke.yaml` | GCE 论文设置的 CIFAR-10、symmetric 0.2、ResNet-34 小样本 CUDA smoke。 |
+| `configs/experiment/gce_cifar10_noise02_reproduction.yaml` | GCE 论文设置的 CIFAR-10、symmetric 0.2、单次 120 epoch 正式配置。 |
 | 实验 YAML 顶层 `selector` | 省略时为 `all`；当前支持 `all` 和固定 keep-rate `small_loss`。 |
 | 实验 YAML 顶层 `noise` | 省略时 clean；`name/rate/seed` 生成噪声，或用 `manifest` 导入外部映射，两种方式互斥。 |
 
@@ -147,7 +150,8 @@
 | `tests/test_update_policy.py` | 通用 ParameterUpdatePolicy 输入输出、Standard 更新等价性和 checkpoint 身份协议。 |
 | `tests/test_cdr.py` | CDR Eq. (3)-(6)、稳定 top-k、失败边界、Selector 组合、plugin、checkpoint 和 CPU/CUDA 一致性。 |
 | `tests/test_cli.py` | Prompt 重试/取消、GCE/APL 配置、APL 正权重输入和交互/参数模式兼容。 |
-| `tests/test_noisy_ce_baseline.py` | 统一 runner 的 generated noise、clean evaluation、manifest 元数据、Loss 与 Selector 配置接入。 |
+| `tests/test_noisy_ce_baseline.py` | 统一 runner 的 generated noise、默认 clean/显式 noisy validation、manifest 元数据、Loss 与 Selector 配置接入。 |
+| `tests/test_training_progress.py` | 终端进度节流、关闭行为、非法输入和 SVG 曲线产物。 |
 | `tests/test_selectors.py` | 通用 Selector 输入输出合同、固定比例、最少选择、stable-index tie-break 和失败边界。 |
 | `tests/test_treatments.py` | ContributionResult、ReductionSpec、Selector adapter 和显式 loss 归约合同。 |
 | `tests/test_importance_reweighting.py` | Binary asymmetric-RCN 权重公式、通用 WeightProvider adapter、detach 和 batch-mean 梯度。 |
@@ -163,4 +167,9 @@
 | `docs/architecture.md` | 通用核心、插件、Runner 与 CIFAR 数据流的架构图。 |
 | `docs/file-map.md` | 本文档，解释每个代码文件的职责。 |
 | `papers/README.md` | 论文目录、下载状态和缺失 PDF 说明。 |
-| `papers/transition-estimator-audit.md` | Anchor 与 Dual-T transition estimator 的论文依据、公式、实现边界、差异和验证状态。 |
+| `papers/implement/README.md` | 论文实现资料、共享原料和单篇复现目录的维护规则。 |
+| `papers/implement/paper-implementation-guideline.md` | 26 篇论文到唯一 Toolbox 模块、接口和调用顺序的实现映射。 |
+| `papers/implement/transition-estimator-audit.md` | Anchor 与 Dual-T transition estimator 的论文依据、公式、实现边界、差异和验证状态。 |
+| `papers/implement/paper-reproduction-progress.md` | 26 篇论文的复现状态总表、复现增量与复用审计表，以及单篇记录索引。 |
+| `papers/implement/gce/result.md` | GCE 单次正式复现的参数、产物、结果和原文差异。 |
+| `papers/implement/apl/plan.md` | APL NCE+RCE 单次复现的原料复用、必要增量、固定配置和验收计划。 |

@@ -68,6 +68,49 @@ class TransitionProvider(Protocol):
         ...
 
 
+@runtime_checkable
+class InstanceTransitionProvider(Protocol):
+    """Provide one transition matrix per sample, aligned by global index."""
+
+    def transition_for(self, inputs: Any, sample_indices: Any, *, device: Any = None, dtype: Any = None) -> "Tensor":
+        ...
+
+
+try:
+    import torch
+    from torch import nn
+except ImportError:  # pragma: no cover - torch is optional for noise-only use
+    torch = None  # type: ignore[assignment]
+    nn = None  # type: ignore[assignment]
+
+
+if nn is not None:
+    class TrainableTransitionModel(nn.Module):
+        """Trainable global transition model with row-stochastic output."""
+
+        def __init__(self, num_classes: int, *, temperature: float = 1.0) -> None:
+            super().__init__()
+            if num_classes < 2:
+                raise ValueError("num_classes must be at least two")
+            if temperature <= 0:
+                raise ValueError("temperature must be positive")
+            self.num_classes = int(num_classes)
+            self.temperature = float(temperature)
+            self.logits = nn.Parameter(torch.eye(num_classes) * 4.0)
+
+        def forward(self) -> "Tensor":
+            return torch.softmax(self.logits / self.temperature, dim=1)
+
+        def as_tensor(self, *, device: Any = None, dtype: Any = None) -> "Tensor":
+            matrix = self.forward()
+            return matrix.to(device=device, dtype=dtype or matrix.dtype)
+
+else:
+    class TrainableTransitionModel:  # type: ignore[no-redef]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            raise ImportError("TrainableTransitionModel requires PyTorch")
+
+
 @dataclass(frozen=True, slots=True)
 class TransitionArtifact:
     """Versioned output of a class-conditional transition estimator.

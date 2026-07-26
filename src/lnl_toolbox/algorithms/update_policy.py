@@ -70,21 +70,33 @@ class StandardUpdatePolicy:
 
     name = "standard"
 
+    def __init__(self, max_grad_norm: float | None = None) -> None:
+        if max_grad_norm is not None:
+            max_grad_norm = float(max_grad_norm)
+            if not math.isfinite(max_grad_norm) or max_grad_norm <= 0.0:
+                raise ValueError("max_grad_norm must be finite and positive")
+        self.max_grad_norm = max_grad_norm
+
     def setup(self, context: ExperimentContext) -> None:
         del context
 
     def update(self, request: ParameterUpdateInput) -> ParameterUpdateResult:
         request.optimizer.zero_grad(set_to_none=True)
         request.objective.backward()
+        if self.max_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(
+                request.model.parameters(), self.max_grad_norm
+            )
         request.optimizer.step()
         return ParameterUpdateResult()
 
     def state_dict(self) -> Mapping[str, Any]:
-        return {}
+        return {} if self.max_grad_norm is None else {"max_grad_norm": self.max_grad_norm}
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
-        if state:
-            raise ValueError("Standard update policy has no private state")
+        expected = {} if self.max_grad_norm is None else {"max_grad_norm": self.max_grad_norm}
+        if dict(state) != expected:
+            raise ValueError("Standard update policy max_grad_norm does not match")
 
 
 def serialize_update_policy(policy: ParameterUpdatePolicy) -> dict[str, Any]:

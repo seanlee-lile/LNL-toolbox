@@ -49,6 +49,22 @@ class WeightResult:
     metrics: Mapping[str, float] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class WeightInput:
+    """Method-neutral model outputs available to a weight provider.
+
+    The contract deliberately contains only noisy-label training information.
+    Clean targets are never part of a provider input.
+    """
+
+    logits: Tensor
+    noisy_targets: Tensor
+    sample_indices: Tensor
+    per_sample_loss: Tensor
+    posterior_probabilities: Tensor
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
 InputT_contra = TypeVar("InputT_contra", contravariant=True)
 
 
@@ -58,6 +74,17 @@ class WeightProvider(Protocol[InputT_contra]):
 
     def compute(self, weight_input: InputT_contra) -> WeightResult:
         """Return weights aligned with the input batch."""
+
+
+@runtime_checkable
+class StatefulWeightProvider(WeightProvider[InputT_contra], Protocol):
+    """Optional state contract for history-based or learned weights."""
+
+    def state_dict(self) -> Mapping[str, Any]:
+        ...
+
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        ...
 
 
 def _validate_rate(name: str, value: float) -> float:
@@ -168,7 +195,13 @@ class BinaryRCNImportanceWeightProvider:
         if self.rho_positive + self.rho_negative >= 1.0:
             raise ValueError("rho_positive + rho_negative must be less than 1")
 
-    def compute(self, weight_input: BinaryRCNWeightInput) -> WeightResult:
+    def compute(self, weight_input: BinaryRCNWeightInput | WeightInput) -> WeightResult:
+        if isinstance(weight_input, WeightInput):
+            weight_input = BinaryRCNWeightInput(
+                posterior_probabilities=weight_input.posterior_probabilities,
+                observed_targets=weight_input.noisy_targets,
+                metadata=weight_input.metadata,
+            )
         posterior, targets = validate_binary_rcn_weight_input(weight_input)
         q = posterior.gather(1, targets[:, None].long()).squeeze(1)
         opposite_rate = torch.where(
@@ -229,3 +262,18 @@ class WeightContributionAdapter(Generic[InputT]):
             sample_weights=weights,
             metrics=dict(result.metrics),
         )
+
+    def state_dict(self) -> dict[str, Any]:
+        if hasattr(self.provider, "state_dict"):
+            return {"state": dict(self.provider.state_dict())}
+        return {}
+
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        if not state:
+            return
+        if not hasattr(self.provider, "load_state_dict"):
+            raise ValueError("weight provider is not stateful")
+        provider_state = state.get("state", state)
+        if not isinstance(provider_state, Mapping):
+            raise TypeError("weight provider state must be a mapping")
+        self.provider.load_state_dict(provider_state)

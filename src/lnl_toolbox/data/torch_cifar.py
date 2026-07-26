@@ -12,8 +12,8 @@ from torchvision import transforms
 from .cifar import CifarData
 
 
-CIFAR_MEAN = (0.4914, 0.4822, 0.4465)
-CIFAR_STD = (0.2470, 0.2435, 0.2616)
+CIFAR_MEAN = (0.49139968, 0.48215827, 0.44653124)
+CIFAR_STD = (0.24703233, 0.24348505, 0.26158768)
 
 
 def stratified_split(labels: np.ndarray, validation_size: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
@@ -46,7 +46,45 @@ def stratified_split(labels: np.ndarray, validation_size: int, seed: int) -> tup
     return train_indices, validation_indices
 
 
-def build_cifar_transform(training: bool, augment: bool = True) -> Callable[[Image.Image], torch.Tensor]:
+def cifar_pixel_mean(images: np.ndarray) -> torch.Tensor:
+    """Return the training-set per-pixel RGB mean as a ``[3, 32, 32]`` tensor."""
+
+    values = np.asarray(images)
+    if values.ndim != 4 or values.shape[1:] != (32, 32, 3):
+        raise ValueError("CIFAR images must have shape [N, 32, 32, 3]")
+    if values.shape[0] == 0:
+        raise ValueError("CIFAR images must not be empty")
+    mean = values.astype(np.float64).mean(axis=0) / 255.0
+    return torch.from_numpy(mean.transpose(2, 0, 1).astype(np.float32))
+
+
+def build_cifar_transform(
+    training: bool,
+    augment: bool = True,
+    *,
+    preprocessing: str = "standard",
+    pixel_mean: torch.Tensor | None = None,
+) -> Callable[[Image.Image], torch.Tensor]:
+    preprocessing = str(preprocessing).strip().lower()
+    if preprocessing == "gce2018":
+        if pixel_mean is None or tuple(pixel_mean.shape) != (3, 32, 32):
+            raise ValueError(
+                "gce2018 preprocessing requires pixel_mean with shape [3, 32, 32]"
+            )
+        mean = pixel_mean.detach().clone().to(dtype=torch.float32)
+        operations: list[Any] = [
+            transforms.ToTensor(),
+            transforms.Lambda(lambda value: value - mean),
+        ]
+        if training and augment:
+            operations.extend((
+                transforms.Pad(4),
+                transforms.RandomCrop(32),
+                transforms.RandomHorizontalFlip(),
+            ))
+        return transforms.Compose(operations)
+    if preprocessing != "standard":
+        raise ValueError(f"Unsupported CIFAR preprocessing: {preprocessing}")
     operations: list[Any] = []
     if training and augment:
         operations.extend((transforms.RandomCrop(32, padding=4), transforms.RandomHorizontalFlip()))

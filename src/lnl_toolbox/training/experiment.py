@@ -21,22 +21,38 @@ from lnl_toolbox.algorithms.supervised import SupervisedClassificationAlgorithm
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
 from lnl_toolbox.data import NoisyTargetDataset
 from lnl_toolbox.data.cifar import load_cifar10, load_cifar100
-from lnl_toolbox.data.torch_cifar import TorchCifarDataset, build_cifar_transform, stratified_split
+from lnl_toolbox.data.torch_cifar import (
+    TorchCifarDataset,
+    build_cifar_transform,
+    cifar_pixel_mean,
+    stratified_split,
+)
 from lnl_toolbox.evaluation.classification import evaluate_classification
-from lnl_toolbox.models.cifar_resnet import cifar_resnet18, preact_resnet18
+from lnl_toolbox.models.cifar_resnet import (
+    cifar_resnet18,
+    cifar_resnet34,
+    preact_resnet18,
+)
+from lnl_toolbox.models.cifar_cnn import CifarCnn8
 from lnl_toolbox.models.tiny_cnn import TinyCNN
 from lnl_toolbox.plugins.builtin import (
+    build_builtin_pipeline,
     build_builtin_loss,
     build_builtin_parameter_update_policy,
     build_builtin_selector,
 )
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import load_checkpoint, read_checkpoint, save_checkpoint
+from lnl_toolbox.training.early_stopping import EarlyStopping
 from lnl_toolbox.training.noisy_labels import (
     checkpoint_noise_metadata,
     effective_subset_actual_rate,
     noise_mode,
     prepare_noise_manifest,
+)
+from lnl_toolbox.training.progress import (
+    TerminalTrainingProgress,
+    write_training_curves_svg,
 )
 
 
@@ -44,8 +60,12 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
     name = str(config.get("name", "preact_resnet18")).lower()
     if name == "tiny_cnn":
         return TinyCNN(num_classes, int(config.get("width", 64)))
+    if name == "cifar_cnn8":
+        return CifarCnn8(num_classes)
     if name == "resnet18":
         return cifar_resnet18(num_classes, int(config.get("base_width", 64)))
+    if name == "resnet34":
+        return cifar_resnet34(num_classes, int(config.get("base_width", 64)))
     if name == "preact_resnet18":
         return preact_resnet18(num_classes, int(config.get("base_width", 64)))
     raise ValueError(f"Unsupported model: {name}")
@@ -140,6 +160,10 @@ def _normalized_resume_value(config: Mapping[str, Any], key: str) -> Any:
             config.get("parameter_update", {"name": "standard"})
             or {"name": "standard"}
         )
+    if key == "pipeline":
+        return dict(config.get("pipeline", {}) or {})
+    if key == "early_stopping":
+        return dict(config.get("early_stopping", {}) or {})
     return config.get(key)
 
 
@@ -152,6 +176,8 @@ def _validate_resume_config(current: Mapping[str, Any], saved: Mapping[str, Any]
         "scheduler",
         "selector",
         "parameter_update",
+        "pipeline",
+        "early_stopping",
     ):
         if _normalized_resume_value(current, key) != _normalized_resume_value(saved, key):
             raise ValueError(f"Resume configuration changed {key}")
@@ -159,6 +185,30 @@ def _validate_resume_config(current: Mapping[str, Any], saved: Mapping[str, Any]
     saved_dataset = str(saved.get("data", {}).get("name", "cifar10")).lower()
     if current_dataset != saved_dataset:
         raise ValueError("Resume configuration changed data.name")
+    current_preprocessing = str(
+        current.get("data", {}).get("preprocessing", "standard")
+    ).lower()
+    saved_preprocessing = str(
+        saved.get("data", {}).get("preprocessing", "standard")
+    ).lower()
+    if current_preprocessing != saved_preprocessing:
+        raise ValueError("Resume configuration changed data.preprocessing")
+    current_validation_targets = str(
+        current.get("noise", {}).get("validation_targets", "clean")
+    ).lower()
+    saved_validation_targets = str(
+        saved.get("noise", {}).get("validation_targets", "clean")
+    ).lower()
+    if current_validation_targets != saved_validation_targets:
+        raise ValueError("Resume configuration changed noise.validation_targets")
+    current_selection = dict(current.get("evaluation", {}) or {}).get(
+        "selection_split", "validation"
+    )
+    saved_selection = dict(saved.get("evaluation", {}) or {}).get(
+        "selection_split", "validation"
+    )
+    if str(current_selection).lower() != str(saved_selection).lower():
+        raise ValueError("Resume configuration changed evaluation.selection_split")
 
 
 def _resolved_noise_config(
@@ -174,6 +224,10 @@ def _resolved_noise_config(
         "effective_train_subset_actual_rate": metadata[
             "effective_train_subset_actual_rate"
         ],
+        "validation_targets": metadata["validation_targets"],
+        "effective_validation_subset_actual_rate": metadata[
+            "effective_validation_subset_actual_rate"
+        ],
     })
     if "source_manifest_sha256" in metadata:
         resolved["source_manifest_sha256"] = metadata["source_manifest_sha256"]
@@ -181,23 +235,38 @@ def _resolved_noise_config(
 
 
 def _validate_supervised_config(config: Mapping[str, Any]) -> None:
-    field = "transition_estimator"
-    if field in config:
+    if "transition_estimator" in config:
         raise ValueError(
-            f"Configuration field {field!r} is registered but not connected to "
-            "run_supervised_experiment"
+            "field 'transition_estimator' is not connected; use "
+            "pipeline.transition_estimator"
         )
+    pipeline_config = config.get("pipeline", {}) or {}
+    if not isinstance(pipeline_config, Mapping):
+        raise TypeError("pipeline configuration must be a mapping")
+    early_stopping_config = config.get("early_stopping", {}) or {}
+    if early_stopping_config not in (False, None) and not isinstance(early_stopping_config, Mapping):
+        raise TypeError("early_stopping configuration must be a mapping or false")
     update_config = config.get("parameter_update", {"name": "standard"})
     if not isinstance(update_config, Mapping):
         raise TypeError("parameter_update configuration must be a mapping")
-    if str(update_config.get("name", "standard")).strip().lower() == "cdr":
-        optimizer_config = config.get("optimizer")
-        if not isinstance(optimizer_config, Mapping):
-            raise TypeError("optimizer configuration must be a mapping")
-        if str(optimizer_config.get("name", "sgd")).strip().lower() != "sgd":
-            raise ValueError("Paper-mode CDR requires optimizer.name=sgd")
-        if float(optimizer_config.get("weight_decay", 0.0)) != 0.0:
-            raise ValueError("Paper-mode CDR requires optimizer.weight_decay=0")
+    noise_config = config.get("noise") or {}
+    if not isinstance(noise_config, Mapping):
+        raise TypeError("noise configuration must be a mapping")
+    validation_targets = str(
+        noise_config.get("validation_targets", "clean")
+    ).strip().lower()
+    if validation_targets not in {"clean", "noisy"}:
+        raise ValueError("noise.validation_targets must be 'clean' or 'noisy'")
+    if validation_targets == "noisy" and noise_mode(config) == "clean":
+        raise ValueError("Noisy validation targets require an enabled noise source")
+    evaluation = config.get("evaluation", {}) or {}
+    if not isinstance(evaluation, Mapping):
+        raise TypeError("evaluation configuration must be a mapping")
+    selection_split = str(evaluation.get("selection_split", "validation")).lower()
+    if selection_split not in {"validation", "test"}:
+        raise ValueError("evaluation.selection_split must be 'validation' or 'test'")
+    if selection_split == "test" and not bool(evaluation.get("allow_test_selection", False)):
+        raise ValueError("test selection requires evaluation.allow_test_selection=true")
 
 
 def run_supervised_experiment(
@@ -246,15 +315,29 @@ def run_supervised_experiment(
     num_classes = 10 if dataset_name == "cifar10" else 100
     train_data = loader_fn(data_config.get("root"), "train")
     test_data = loader_fn(data_config.get("root"), "test")
-    full_train_indices, validation_indices = stratified_split(
-        train_data.labels, int(data_config["validation_size"]), seed
-    )
+    validation_size = int(data_config["validation_size"])
+    if validation_size == 0:
+        full_train_indices = np.arange(len(train_data), dtype=np.int64)
+        validation_indices = np.empty(0, dtype=np.int64)
+    else:
+        full_train_indices, validation_indices = stratified_split(
+            train_data.labels, validation_size, seed
+        )
+    noise_config = config.get("noise") or {}
+    validation_target_source = str(
+        noise_config.get("validation_targets", "clean")
+    ).strip().lower()
+    manifest_indices = full_train_indices
+    if validation_target_source == "noisy":
+        manifest_indices = np.sort(
+            np.concatenate((full_train_indices, validation_indices))
+        )
 
     manifest, manifest_path = prepare_noise_manifest(
         config,
         dataset=dataset_name,
-        clean_targets=train_data.labels[full_train_indices],
-        global_indices=full_train_indices,
+        clean_targets=train_data.labels[manifest_indices],
+        global_indices=manifest_indices,
         num_classes=num_classes,
         run_dir=run_dir,
         checkpoint_payload=checkpoint_payload,
@@ -278,12 +361,24 @@ def run_supervised_experiment(
         data_config.get("max_test_samples"),
         seed + 3,
     )
+    preprocessing = str(data_config.get("preprocessing", "standard")).lower()
+    pixel_mean = (
+        cifar_pixel_mean(train_data.images)
+        if preprocessing == "gce2018"
+        else None
+    )
+    transform_options = {
+        "preprocessing": preprocessing,
+        "pixel_mean": pixel_mean,
+    }
 
     clean_train_set = TorchCifarDataset(
         train_data,
         train_indices,
         transform=build_cifar_transform(
-            True, bool(data_config.get("augment", True))
+            True,
+            bool(data_config.get("augment", True)),
+            **transform_options,
         ),
     )
     train_set = clean_train_set
@@ -294,20 +389,39 @@ def run_supervised_experiment(
             clean_train_set, manifest.global_indices, manifest.noisy_targets
         )
         effective_rate = effective_subset_actual_rate(manifest, train_indices)
+    clean_validation_set = TorchCifarDataset(
+        train_data,
+        validation_indices,
+        transform=build_cifar_transform(False, **transform_options),
+    )
+    validation_set = clean_validation_set
+    effective_validation_rate = None
+    if manifest is not None and validation_target_source == "noisy":
+        validation_set = NoisyTargetDataset(
+            clean_validation_set,
+            manifest.global_indices,
+            manifest.noisy_targets,
+        )
+        effective_validation_rate = effective_subset_actual_rate(
+            manifest, validation_indices
+        )
+    if manifest is not None:
+        assert manifest_path is not None
         noise_metadata = checkpoint_noise_metadata(
             manifest,
             manifest_path,
             run_dir,
             effective_rate,
             mode=noise_mode(config),
+            validation_targets=validation_target_source,
+            effective_validation_rate=effective_validation_rate,
         )
         config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
 
-    validation_set = TorchCifarDataset(
-        train_data, validation_indices, transform=build_cifar_transform(False)
-    )
     test_set = TorchCifarDataset(
-        test_data, test_indices, transform=build_cifar_transform(False)
+        test_data,
+        test_indices,
+        transform=build_cifar_transform(False, **transform_options),
     )
     loader_config = config["loader"]
     train_loader = _loader(train_set, loader_config, shuffle=True, seed=seed)
@@ -315,6 +429,12 @@ def run_supervised_experiment(
         validation_set, loader_config, shuffle=False, seed=seed
     )
     test_loader = _loader(test_set, loader_config, shuffle=False, seed=seed)
+    evaluation_config = config.get("evaluation", {}) or {}
+    selection_split = str(evaluation_config.get("selection_split", "validation")).lower()
+    selection_criterion = build_builtin_loss(
+        evaluation_config.get("loss", {"name": "ce"})
+    ).to(device)
+    selection_loader = test_loader if selection_split == "test" else validation_loader
 
     model = build_model(config["model"], num_classes)
     criterion = build_builtin_loss(config["loss"]).to(device)
@@ -323,6 +443,27 @@ def run_supervised_experiment(
         config["parameter_update"]
     )
     optimizer = build_optimizer(model, config["optimizer"])
+    pipeline = build_builtin_pipeline(config.get("pipeline"))
+    if resume is not None and not pipeline.load_artifacts(run_dir):
+        pipeline.prepare_transition(
+            model=model,
+            optimizer=optimizer,
+            loader=train_loader,
+            device=device,
+            dataset=dataset_name,
+            split="train",
+            run_dir=run_dir,
+        )
+    elif resume is None:
+        pipeline.prepare_transition(
+            model=model,
+            optimizer=optimizer,
+            loader=train_loader,
+            device=device,
+            dataset=dataset_name,
+            split="train",
+            run_dir=run_dir,
+        )
     scheduler = build_scheduler(optimizer, config.get("scheduler"), epochs)
     algorithm = SupervisedClassificationAlgorithm(
         model,
@@ -331,22 +472,33 @@ def run_supervised_experiment(
         device,
         selector=selector,
         update_policy=update_policy,
+        risk_corrector=pipeline.risk_corrector,
+        transition=pipeline.artifacts.transition,
+        weight_provider=pipeline.weight_provider,
     )
     algorithm.setup(ExperimentContext(run_dir, config, seed))
     state = RunState(phase="train")
+    early_stopping = EarlyStopping.from_config(config.get("early_stopping"))
     completed_epoch = -1
+    last_completed_epoch = completed_epoch
     best_epoch = -1
     best_accuracy = float("-inf")
+    best_selection_accuracy = float("-inf")
     compatibility_warnings: list[str] = []
     if resume is not None:
         state, completed_epoch, checkpoint_payload = load_checkpoint(
             resume, algorithm, device, scheduler=scheduler
         )
         best_epoch = int(checkpoint_payload["best_epoch"])
-        best_accuracy = float(checkpoint_payload["best_validation_accuracy"])
+        best_accuracy = float(checkpoint_payload.get("best_validation_accuracy", float("-inf")))
+        best_selection_accuracy = float(
+            checkpoint_payload.get("best_selection_accuracy", best_accuracy)
+        )
         compatibility_warnings = list(
             checkpoint_payload.get("_compatibility_warnings", [])
         )
+        if early_stopping is not None and checkpoint_payload.get("early_stopping") is not None:
+            early_stopping.load_state_dict(checkpoint_payload["early_stopping"])
 
     (run_dir / "resolved_config.yaml").write_text(
         yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
@@ -361,6 +513,20 @@ def run_supervised_experiment(
 
     algorithm.on_run_start(state)
     metrics_path = run_dir / "metrics.jsonl"
+    curve_rows: list[dict[str, Any]] = []
+    if metrics_path.is_file():
+        for line in metrics_path.read_text(encoding="utf-8").splitlines():
+            value = json.loads(line)
+            if value.get("event") == "epoch":
+                curve_rows.append(value)
+    progress_config = config["trainer"].get("progress", {})
+    if isinstance(progress_config, bool):
+        progress_config = {"enabled": progress_config}
+    if not isinstance(progress_config, Mapping):
+        raise TypeError("trainer.progress must be a boolean or mapping")
+    progress_enabled = bool(progress_config.get("enabled", False))
+    progress_interval = int(progress_config.get("update_interval", 20))
+    curves_enabled = bool(progress_config.get("curves", progress_enabled))
     with metrics_path.open("a", encoding="utf-8") as metrics_file:
         if compatibility_warnings:
             metrics_file.write(json.dumps({
@@ -379,7 +545,14 @@ def run_supervised_experiment(
             update_metric_sums: dict[str, float] = {}
             update_metric_steps = 0
             learning_rate = float(optimizer.param_groups[0]["lr"])
-            for raw_batch in train_loader:
+            progress = TerminalTrainingProgress(
+                epoch=epoch + 1,
+                total_epochs=epochs,
+                total_batches=len(train_loader),
+                update_interval=progress_interval,
+                enabled=progress_enabled,
+            )
+            for batch_number, raw_batch in enumerate(train_loader, start=1):
                 result = algorithm.step(Batch(raw_batch), state)
                 count = result.metrics["samples"]
                 selected_count = result.metrics["selected_samples"]
@@ -399,10 +572,22 @@ def run_supervised_experiment(
                         update_metric_sums[key] = (
                             update_metric_sums.get(key, 0.0) + value
                         )
+                progress.update(
+                    batch_number,
+                    loss=loss_sum / selected_samples,
+                    accuracy=correct_weighted / samples,
+                )
             algorithm.on_cycle_end(state)
-            validation = evaluate_classification(
-                model, validation_loader, criterion, device
-            )
+            validation = None
+            if selection_split == "validation":
+                validation = evaluate_classification(
+                    model, validation_loader, selection_criterion, device
+                )
+                selection = validation
+            else:
+                selection = evaluate_classification(
+                    model, selection_loader, selection_criterion, device
+                )
             if scheduler is not None:
                 scheduler.step()
             row = {
@@ -415,9 +600,15 @@ def run_supervised_experiment(
                 "train_accuracy": correct_weighted / samples,
                 "selected_samples": selected_samples,
                 "selected_ratio": selected_samples / samples,
-                "validation_loss": validation["loss"],
-                "validation_accuracy": validation["accuracy"],
+                "selection_split": selection_split,
+                "selection_loss": selection["loss"],
+                "selection_accuracy": selection["accuracy"],
             }
+            if validation is not None:
+                row.update({
+                    "validation_loss": validation["loss"],
+                    "validation_accuracy": validation["accuracy"],
+                })
             if update_metric_steps:
                 row.update({
                     f"train_{key}": value / update_metric_steps
@@ -428,15 +619,23 @@ def run_supervised_experiment(
                 for key, value in row.items()
                 if isinstance(value, float)
             }
-            improved = validation["accuracy"] > best_accuracy
+            improved = selection["accuracy"] > best_selection_accuracy
             if improved:
-                best_accuracy = validation["accuracy"]
+                best_selection_accuracy = selection["accuracy"]
+                best_accuracy = best_selection_accuracy
                 best_epoch = epoch
+            if early_stopping is not None:
+                early_stopping.update(row)
+            last_completed_epoch = epoch
             checkpoint_kwargs = {
                 "scheduler": scheduler,
                 "best_epoch": best_epoch,
                 "best_validation_accuracy": best_accuracy,
+                "selection_split": selection_split,
+                "best_selection_accuracy": best_selection_accuracy,
                 "noise": noise_metadata,
+                "pipeline": pipeline.state_dict(),
+                "early_stopping": None if early_stopping is None else early_stopping.state_dict(),
             }
             save_checkpoint(
                 run_dir / "last.pt",
@@ -457,7 +656,27 @@ def run_supervised_experiment(
                 )
             metrics_file.write(json.dumps(row) + "\n")
             metrics_file.flush()
+            curve_rows.append(row)
+            if curves_enabled:
+                curve_rows_for_svg = [
+                    {
+                        **curve_row,
+                        "validation_loss": curve_row.get(
+                            "validation_loss", curve_row["selection_loss"]
+                        ),
+                        "validation_accuracy": curve_row.get(
+                            "validation_accuracy", curve_row["selection_accuracy"]
+                        ),
+                    }
+                    for curve_row in curve_rows
+                ]
+                write_training_curves_svg(
+                    curve_rows_for_svg, run_dir / "training_curves.svg"
+                )
             print(json.dumps(row), flush=True)
+            if early_stopping is not None and early_stopping.stopped:
+                state.stopped = True
+                break
 
         best_path = run_dir / "best.pt"
         if not best_path.is_file():
@@ -466,13 +685,20 @@ def run_supervised_experiment(
             )
         best_payload = read_checkpoint(best_path, device)
         model.load_state_dict(best_payload["model"])
-        test = evaluate_classification(model, test_loader, criterion, device)
+        test = evaluate_classification(
+            model, test_loader,
+            selection_criterion if selection_split == "test" else criterion,
+            device,
+        )
         final: dict[str, Any] = {
             "event": "final",
-            "completed_epochs": epochs,
+            "completed_epochs": last_completed_epoch + 1,
             "global_step": state.step,
             "best_epoch": best_epoch + 1,
             "best_validation_accuracy": best_accuracy,
+            "selection_split": selection_split,
+            "best_selection_accuracy": best_selection_accuracy,
+            "test_selection_leakage": selection_split == "test",
             "test_checkpoint": "best.pt",
             "test_loss": test["loss"],
             "test_accuracy": test["accuracy"],
