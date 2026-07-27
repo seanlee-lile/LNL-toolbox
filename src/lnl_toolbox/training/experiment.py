@@ -444,17 +444,17 @@ def run_supervised_experiment(
     )
     optimizer = build_optimizer(model, config["optimizer"])
     pipeline = build_builtin_pipeline(config.get("pipeline"))
-    if resume is not None and not pipeline.load_artifacts(run_dir):
-        pipeline.prepare_transition(
-            model=model,
-            optimizer=optimizer,
-            loader=train_loader,
-            device=device,
+    pipeline_compatibility_warnings: list[str] = []
+    if resume is not None:
+        assert checkpoint_payload is not None
+        pipeline_compatibility_warnings = pipeline.restore_for_resume(
+            run_dir,
+            checkpoint_state=checkpoint_payload.get("pipeline"),
+            component_states=checkpoint_payload.get("component_states"),
             dataset=dataset_name,
             split="train",
-            run_dir=run_dir,
         )
-    elif resume is None:
+    else:
         pipeline.prepare_transition(
             model=model,
             optimizer=optimizer,
@@ -484,7 +484,9 @@ def run_supervised_experiment(
     best_epoch = -1
     best_accuracy = float("-inf")
     best_selection_accuracy = float("-inf")
-    compatibility_warnings: list[str] = []
+    compatibility_warnings: list[str] = list(
+        pipeline_compatibility_warnings
+    )
     if resume is not None:
         state, completed_epoch, checkpoint_payload = load_checkpoint(
             resume, algorithm, device, scheduler=scheduler
@@ -494,7 +496,7 @@ def run_supervised_experiment(
         best_selection_accuracy = float(
             checkpoint_payload.get("best_selection_accuracy", best_accuracy)
         )
-        compatibility_warnings = list(
+        compatibility_warnings.extend(
             checkpoint_payload.get("_compatibility_warnings", [])
         )
         if early_stopping is not None and checkpoint_payload.get("early_stopping") is not None:
@@ -635,6 +637,7 @@ def run_supervised_experiment(
                 "best_selection_accuracy": best_selection_accuracy,
                 "noise": noise_metadata,
                 "pipeline": pipeline.state_dict(),
+                "component_states": pipeline.component_state_dict(),
                 "early_stopping": None if early_stopping is None else early_stopping.state_dict(),
             }
             save_checkpoint(

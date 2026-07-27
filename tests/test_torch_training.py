@@ -7,6 +7,7 @@ import torch
 
 from lnl_toolbox.algorithms.supervised import SupervisedClassificationAlgorithm
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
+from lnl_toolbox.core import SoftTargetResult
 from lnl_toolbox.data.cifar import CifarData, default_data_root
 from lnl_toolbox.data.noisy_dataset import NoisyTargetDataset
 from lnl_toolbox.data.torch_cifar import (
@@ -20,11 +21,36 @@ from lnl_toolbox.models import TinyCNN
 from lnl_toolbox.plugins.builtin import build_builtin_loss
 from lnl_toolbox.runtime import resolve_device
 from lnl_toolbox.selectors import AllSelector, SelectionResult, SmallLossSelector
-from lnl_toolbox.training.checkpoint import load_checkpoint, save_checkpoint
+from lnl_toolbox.training.checkpoint import (
+    load_checkpoint,
+    restore_rng_state,
+    save_checkpoint,
+)
 from lnl_toolbox.training.experiment import build_model
 
 
 class TorchTrainingTest(unittest.TestCase):
+    @staticmethod
+    def _target_algorithm(provider):
+        model = torch.nn.Linear(2, 2, bias=False)
+        algorithm = SupervisedClassificationAlgorithm(
+            model,
+            torch.optim.SGD(model.parameters(), lr=0.1),
+            CrossEntropyLoss(),
+            torch.device("cpu"),
+            target_provider=provider,
+        )
+        algorithm.setup(ExperimentContext(Path.cwd()))
+        return algorithm
+
+    @staticmethod
+    def _target_batch():
+        return Batch({
+            "input": torch.eye(2),
+            "target": torch.tensor([0, 1]),
+            "index": torch.tensor([9, 3]),
+        })
+
     def test_repository_data_path(self):
         self.assertEqual(default_data_root().name, "data")
         self.assertTrue((default_data_root() / "cifar10" / "data_batch_1").is_file())
@@ -131,6 +157,58 @@ class TorchTrainingTest(unittest.TestCase):
         self.assertTrue(np.isfinite(result.metrics["loss"]))
         self.assertEqual(result.metrics["selected_ratio"], 1.0)
         self.assertFalse(torch.equal(before, model.classifier.weight))
+
+    def test_target_sample_indices_exact_match_passes(self):
+        class Provider:
+            def resolve(self, target_input):
+                return SoftTargetResult(
+                    targets=torch.tensor([[1.0, 0.0], [0.0, 1.0]]),
+                    sample_indices=target_input.sample_indices,
+                )
+
+        result = self._target_algorithm(Provider()).step(
+            self._target_batch(), RunState()
+        )
+        self.assertTrue(np.isfinite(result.metrics["loss"]))
+
+    def test_target_sample_indices_permutation_rejected(self):
+        class Provider:
+            def resolve(self, target_input):
+                return SoftTargetResult(
+                    targets=torch.tensor([[1.0, 0.0], [0.0, 1.0]]),
+                    sample_indices=target_input.sample_indices.flip(0),
+                )
+
+        with self.assertRaisesRegex(ValueError, "batch-order aligned"):
+            self._target_algorithm(Provider()).step(
+                self._target_batch(), RunState()
+            )
+
+    def test_target_sample_indices_duplicate_rejected(self):
+        class Provider:
+            def resolve(self, target_input):
+                return SoftTargetResult(
+                    targets=torch.tensor([[1.0, 0.0], [0.0, 1.0]]),
+                    sample_indices=torch.tensor([9, 9]),
+                )
+
+        with self.assertRaisesRegex(ValueError, "unique"):
+            self._target_algorithm(Provider()).step(
+                self._target_batch(), RunState()
+            )
+
+    def test_target_sample_indices_length_mismatch_rejected(self):
+        class Provider:
+            def resolve(self, target_input):
+                return SoftTargetResult(
+                    targets=torch.tensor([[1.0, 0.0]]),
+                    sample_indices=torch.tensor([9]),
+                )
+
+        with self.assertRaisesRegex(ValueError, "length mismatch"):
+            self._target_algorithm(Provider()).step(
+                self._target_batch(), RunState()
+            )
 
     def test_each_p0_loss_completes_one_training_step(self):
         configs = [
@@ -349,6 +427,59 @@ class TorchTrainingTest(unittest.TestCase):
             self.assertTrue(torch.equal(saved, model.classifier.weight))
             self.assertEqual(restored.step, 17)
             self.assertEqual(epoch, 2)
+
+    def test_restore_cpu_rng_state_on_cpu(self):
+        original = torch.get_rng_state()
+        expected = torch.Generator().manual_seed(1234).get_state()
+        try:
+            restore_rng_state({"torch": expected.clone()})
+            self.assertTrue(torch.equal(torch.get_rng_state(), expected))
+        finally:
+            torch.set_rng_state(original)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
+    def test_restore_cpu_rng_state_loaded_on_cuda_device(self):
+        original = torch.get_rng_state()
+        expected = torch.Generator().manual_seed(5678).get_state()
+        try:
+            restore_rng_state({"torch": expected.to("cuda")})
+            self.assertTrue(torch.equal(torch.get_rng_state(), expected))
+        finally:
+            torch.set_rng_state(original)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
+    def test_restore_cuda_rng_state_list_normalizes_devices(self):
+        original = torch.cuda.get_rng_state_all()
+        try:
+            torch.cuda.manual_seed_all(9012)
+            expected = torch.cuda.get_rng_state_all()
+            torch.cuda.set_rng_state_all(original)
+            restore_rng_state({
+                "cuda": [value.to("cuda") for value in expected],
+            })
+            actual = torch.cuda.get_rng_state_all()
+            self.assertEqual(len(actual), len(expected))
+            for actual_state, expected_state in zip(actual, expected):
+                self.assertEqual(actual_state.device.type, "cpu")
+                self.assertTrue(torch.equal(actual_state, expected_state))
+        finally:
+            torch.cuda.set_rng_state_all(original)
+
+    def test_restore_rng_state_rejects_invalid_tensor_contract(self):
+        with self.assertRaisesRegex(TypeError, "torch.uint8"):
+            restore_rng_state({
+                "torch": torch.zeros(8, dtype=torch.int64),
+            })
+        with self.assertRaisesRegex(ValueError, "non-empty 1D"):
+            restore_rng_state({
+                "torch": torch.zeros((2, 4), dtype=torch.uint8),
+            })
+        with self.assertRaisesRegex(TypeError, "list or tuple"):
+            restore_rng_state({
+                "cuda": torch.zeros(8, dtype=torch.uint8),
+            })
+        with self.assertRaisesRegex(TypeError, "must be a tensor"):
+            restore_rng_state({"cuda": [b"not a tensor"]})
 
     def test_legacy_checkpoint_layouts_load_without_fabricated_best_metric(self):
         for layout in ("top-level", "nested"):

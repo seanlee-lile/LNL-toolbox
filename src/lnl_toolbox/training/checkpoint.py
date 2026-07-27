@@ -13,6 +13,21 @@ import torch
 from lnl_toolbox.core import RunState
 
 
+def _validate_component_states(
+    states: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(states, Mapping):
+        raise TypeError("component_states must be a mapping")
+    validated: dict[str, dict[str, Any]] = {}
+    for name, state in states.items():
+        if not isinstance(name, str) or not name:
+            raise TypeError("component state names must be non-empty strings")
+        if not isinstance(state, Mapping):
+            raise TypeError(f"component state {name!r} must be a mapping")
+        validated[name] = dict(state)
+    return validated
+
+
 def capture_rng_state() -> dict[str, Any]:
     state: dict[str, Any] = {
         "python": random.getstate(),
@@ -24,6 +39,18 @@ def capture_rng_state() -> dict[str, Any]:
     return state
 
 
+def _cpu_byte_rng_state(value: Any, *, owner: str) -> torch.Tensor:
+    """Validate one serialized RNG state and normalize its device to CPU."""
+
+    if not torch.is_tensor(value):
+        raise TypeError(f"{owner} RNG state must be a tensor")
+    if value.dtype != torch.uint8:
+        raise TypeError(f"{owner} RNG state must use torch.uint8")
+    if value.ndim != 1 or value.numel() == 0:
+        raise ValueError(f"{owner} RNG state must be a non-empty 1D tensor")
+    return value.detach().cpu()
+
+
 def restore_rng_state(state: Mapping[str, Any]) -> None:
     if not isinstance(state, Mapping):
         raise TypeError("rng state must be a mapping")
@@ -32,9 +59,21 @@ def restore_rng_state(state: Mapping[str, Any]) -> None:
     if "numpy" in state:
         np.random.set_state(state["numpy"])
     if "torch" in state:
-        torch.set_rng_state(state["torch"])
-    if "cuda" in state and torch.cuda.is_available():
-        torch.cuda.set_rng_state_all(state["cuda"])
+        torch.set_rng_state(
+            _cpu_byte_rng_state(state["torch"], owner="PyTorch CPU")
+        )
+    if "cuda" in state:
+        cuda_states = state["cuda"]
+        if not isinstance(cuda_states, (list, tuple)):
+            raise TypeError("CUDA RNG states must be a list or tuple")
+        if not cuda_states:
+            raise ValueError("CUDA RNG states must not be empty")
+        normalized_cuda_states = [
+            _cpu_byte_rng_state(value, owner=f"CUDA device {index}")
+            for index, value in enumerate(cuda_states)
+        ]
+        if torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(normalized_cuda_states)
 
 
 def atomic_save(payload: Mapping[str, Any], path: str | Path) -> None:
@@ -89,11 +128,15 @@ def build_checkpoint(
     if noise is not None:
         payload["noise"] = dict(noise)
     if pipeline is not None:
+        if not isinstance(pipeline, Mapping):
+            raise TypeError("pipeline checkpoint state must be a mapping")
         payload["pipeline"] = dict(pipeline)
     if early_stopping is not None:
         payload["early_stopping"] = dict(early_stopping)
     if component_states is not None:
-        payload["component_states"] = dict(component_states)
+        payload["component_states"] = _validate_component_states(
+            component_states
+        )
     return payload
 
 
@@ -167,6 +210,12 @@ def load_checkpoint(
     scheduler=None,
 ) -> tuple[RunState, int, dict[str, Any]]:
     payload = read_checkpoint(path, device)
+    if "pipeline" in payload and not isinstance(payload["pipeline"], Mapping):
+        raise TypeError("checkpoint pipeline state must be a mapping")
+    if "component_states" in payload:
+        payload["component_states"] = _validate_component_states(
+            payload["component_states"]
+        )
     if "rng_state" in payload:
         restore_rng_state(payload["rng_state"])
     layout = _restore_model_optimizer(payload, algorithm)
