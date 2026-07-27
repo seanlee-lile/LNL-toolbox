@@ -464,7 +464,7 @@ clean/noisy threshold split。
 - adapter 生成全 `True` mask，权重乘到保留 autograd 的逐样本 loss；
 - 论文目标使用 `ReductionSpec("batch_mean")`，即 `sum(beta_i * loss_i) / B`，不能改成按权重和归一化。
 
-该组件仍不支持多分类，也不估计 posterior 或噪声率；它现在可通过通用 Pipeline 的 `WeightInput` 接入，但仍不是完整 Importance Reweighting 论文 Pipeline。
+该组件仍不支持多分类，也不估计 posterior 或噪声率。普通监督训练只产生 `SupervisedWeightInput`，其中没有 posterior；因此当前组件必须由未来的显式 posterior producer 构造 `BinaryRCNWeightInput` 后调用，不能把当前分类器 softmax 当作独立 noisy-label posterior。该组件不作为可运行 YAML/plugin 方法暴露，也不是完整 Importance Reweighting 论文 Pipeline。
 
 ## 8. Evaluator、产物与 Checkpoint
 
