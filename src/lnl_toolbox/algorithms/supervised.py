@@ -29,11 +29,55 @@ from lnl_toolbox.treatments import (
     ContributionResult,
     ReductionSpec,
     SelectorContributionAdapter,
+    SupervisedWeightInput,
     WeightContributionAdapter,
-    WeightInput,
     WeightProvider,
     reduce_per_sample_loss,
 )
+
+
+def _validate_target_sample_indices(
+    target_result: SoftTargetResult | PseudoLabelResult,
+    batch_sample_indices: torch.Tensor,
+) -> None:
+    """Reject target-provider output that is not exactly batch-order aligned."""
+
+    result_indices = target_result.sample_indices
+    if result_indices.shape != batch_sample_indices.shape:
+        raise ValueError(
+            "target provider sample index length mismatch: "
+            f"batch shape={tuple(batch_sample_indices.shape)}, "
+            f"provider shape={tuple(result_indices.shape)}"
+        )
+    if result_indices.device != batch_sample_indices.device:
+        raise ValueError(
+            "target provider sample index device mismatch: "
+            f"batch device={batch_sample_indices.device}, "
+            f"provider device={result_indices.device}"
+        )
+    comparable_result = result_indices.to(dtype=torch.int64)
+    comparable_batch = batch_sample_indices.to(dtype=torch.int64)
+    mismatch = torch.nonzero(
+        comparable_result != comparable_batch,
+        as_tuple=False,
+    ).flatten()
+    if mismatch.numel() == 0:
+        return
+    positions = mismatch[:8]
+    summary = [
+        {
+            "position": int(position),
+            "batch": int(comparable_batch[position].item()),
+            "provider": int(comparable_result[position].item()),
+        }
+        for position in positions
+    ]
+    raise ValueError(
+        "target provider sample indices are not exactly batch-order aligned; "
+        f"mismatch_count={int(mismatch.numel())}, mismatches={summary}, "
+        f"batch_indices={comparable_batch.detach().cpu().tolist()}, "
+        f"provider_indices={comparable_result.detach().cpu().tolist()}"
+    )
 
 
 class SupervisedClassificationAlgorithm:
@@ -48,7 +92,7 @@ class SupervisedClassificationAlgorithm:
                  update_policy: ParameterUpdatePolicy | None = None,
                  risk_corrector: RiskCorrector | None = None,
                  transition: TransitionProvider | None = None,
-                 weight_provider: WeightProvider[WeightInput] | None = None,
+                 weight_provider: WeightProvider[SupervisedWeightInput] | None = None,
                  target_provider: LabelProvider | None = None) -> None:
         self.model = model
         self.optimizer = optimizer
@@ -95,6 +139,8 @@ class SupervisedClassificationAlgorithm:
                 sample_indices=sample_indices.detach(),
                 metadata={"epoch": state.cycle},
             ))
+            if isinstance(target_result, (SoftTargetResult, PseudoLabelResult)):
+                _validate_target_sample_indices(target_result, sample_indices)
         if self.risk_corrector is not None and target_result is not None:
             raise ValueError("risk correction and target replacement cannot be combined implicitly")
         if self.risk_corrector is not None:
@@ -126,12 +172,11 @@ class SupervisedClassificationAlgorithm:
             metadata={"epoch": state.cycle},
         ))
         if self.weight_adapter is not None:
-            weight_input = WeightInput(
+            weight_input = SupervisedWeightInput(
                 logits=logits.detach(),
                 noisy_targets=targets.detach(),
                 sample_indices=sample_indices.detach(),
                 per_sample_loss=per_sample_loss.detach(),
-                posterior_probabilities=torch.softmax(logits.detach(), dim=1),
                 metadata={"epoch": state.cycle},
             )
             weights = self.weight_adapter.resolve(weight_input)

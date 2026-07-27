@@ -172,18 +172,6 @@ def create_builtin_catalog() -> PluginCatalog:
             capabilities=("transition_consumer", "corrected_risk"),
         )
     try:
-        from lnl_toolbox.treatments.weights import BinaryRCNImportanceWeightProvider
-    except ImportError:
-        pass
-    else:
-        catalog.add(
-            "weight_provider",
-            "binary_rcn_importance",
-            BinaryRCNImportanceWeightProvider,
-            capabilities=("continuous_weight", "binary_rcn", "offline_posterior"),
-            metadata={"paper": "Importance Reweighting"},
-        )
-    try:
         from lnl_toolbox.training.pipeline import StandardNoisyERMPipeline
     except ImportError:
         pass
@@ -282,10 +270,14 @@ def build_builtin_weight_provider(
 ) -> Any:
     """Build a continuous sample-weight provider from configuration."""
 
+    if config is None:
+        raise ValueError("Weight provider configuration must be explicit")
     if config is not None and not isinstance(config, Mapping):
         raise TypeError("Weight provider configuration must be a mapping")
-    values = dict(config or {"name": "binary_rcn_importance"})
-    name = str(values.pop("name", "binary_rcn_importance")).strip().lower()
+    values = dict(config)
+    if "name" not in values:
+        raise ValueError("Weight provider configuration requires a name")
+    name = str(values.pop("name")).strip().lower()
     catalog = catalog or create_builtin_catalog()
     try:
         return catalog.build("weight_provider", name, **values)

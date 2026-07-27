@@ -5,12 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol, TYPE_CHECKING, runtime_checkable
 
+import torch
+
 if TYPE_CHECKING:
     from torch import Tensor
 else:
     Tensor = Any
 
-from .result import CandidateLabelResult, PseudoLabelResult, SoftTargetResult
+from .result import (
+    CandidateLabelResult,
+    PseudoLabelResult,
+    SoftTargetResult,
+    _validate_sample_indices,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,10 +58,25 @@ class ComplementaryLabelResult:
     sample_indices: Tensor
 
     def __post_init__(self) -> None:
-        if self.negatives.ndim != 2 or self.negatives.dtype != torch.bool:
+        if (
+            not isinstance(self.negatives, torch.Tensor)
+            or self.negatives.ndim != 2
+            or self.negatives.dtype != torch.bool
+        ):
             raise ValueError("complementary labels must be boolean shape [B, C]")
-        if self.sample_indices.shape != (self.negatives.shape[0],):
-            raise ValueError("complementary label indices must have shape [B]")
+        batch_size, classes = self.negatives.shape
+        if batch_size == 0 or classes == 0:
+            raise ValueError("complementary labels must not be empty")
+        _validate_sample_indices(
+            self.sample_indices,
+            batch_size=batch_size,
+            device=self.negatives.device,
+            owner="complementary label",
+        )
+        if not bool(self.negatives.any(dim=1).all().item()):
+            raise ValueError(
+                "every sample must have at least one complementary label"
+            )
 
 
 __all__ = [

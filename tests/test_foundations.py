@@ -8,7 +8,12 @@ import numpy as np
 import torch
 
 from lnl_toolbox.algorithms.multi_model import SmallLossPeerExchange, consistency_loss
-from lnl_toolbox.core import SoftTargetResult
+from lnl_toolbox.core import (
+    CandidateLabelResult,
+    ComplementaryLabelResult,
+    PseudoLabelResult,
+    SoftTargetResult,
+)
 from lnl_toolbox.data import NeighborGraphArtifact, SemiSupervisedBatch
 from lnl_toolbox.noise import TrainableTransitionModel
 from lnl_toolbox.noise.statistics import StatisticArtifact
@@ -46,6 +51,94 @@ class FoundationTest(unittest.TestCase):
             unlabeled={"input": torch.ones(2, 2), "index": torch.tensor([2, 4])},
         )
         self.assertEqual(batch.unlabeled_indices.tolist(), [2, 4])
+
+    def test_target_results_execute_runtime_tensor_validation(self) -> None:
+        soft = SoftTargetResult(
+            targets=torch.tensor([[0.75, 0.25], [0.1, 0.9]]),
+            sample_indices=torch.tensor([7, 2]),
+            confidence=torch.tensor([0.8, 0.7]),
+            selected_mask=torch.tensor([True, False]),
+        )
+        pseudo = PseudoLabelResult(
+            labels=torch.tensor([1, 0]),
+            confidence=torch.tensor([0.9, 0.6]),
+            selected_mask=torch.tensor([True, True]),
+            sample_indices=torch.tensor([7, 2]),
+        )
+        candidates = CandidateLabelResult(
+            candidates=torch.tensor([[True, False], [True, True]]),
+            sample_indices=torch.tensor([7, 2]),
+        )
+        self.assertEqual(tuple(soft.targets.shape), (2, 2))
+        self.assertEqual(pseudo.labels.tolist(), [1, 0])
+        self.assertEqual(candidates.candidates.dtype, torch.bool)
+
+    def test_target_results_reject_invalid_probabilities_and_confidence(self) -> None:
+        indices = torch.tensor([7, 2])
+        invalid_targets = (
+            torch.tensor([[0.8, 0.3], [0.1, 0.9]]),
+            torch.tensor([[1.1, -0.1], [0.1, 0.9]]),
+            torch.tensor([[float("nan"), 0.0], [0.1, 0.9]]),
+            torch.zeros(2, 2),
+            torch.ones(2, 2, dtype=torch.int64),
+        )
+        for targets in invalid_targets:
+            with self.subTest(targets=targets), self.assertRaises(ValueError):
+                SoftTargetResult(targets=targets, sample_indices=indices)
+        with self.assertRaisesRegex(ValueError, "confidence.*detached"):
+            SoftTargetResult(
+                targets=torch.tensor([[0.8, 0.2], [0.1, 0.9]]),
+                sample_indices=indices,
+                confidence=torch.tensor(
+                    [0.8, 0.7], requires_grad=True
+                ),
+            )
+        with self.assertRaisesRegex(ValueError, "confidence.*finite"):
+            PseudoLabelResult(
+                labels=torch.tensor([0, 1]),
+                confidence=torch.tensor([0.8, float("inf")]),
+                selected_mask=torch.tensor([True, True]),
+                sample_indices=indices,
+            )
+
+    def test_target_results_reject_invalid_indices_masks_and_candidates(self) -> None:
+        targets = torch.tensor([[0.8, 0.2], [0.1, 0.9]])
+        with self.assertRaisesRegex(ValueError, "integer dtype"):
+            SoftTargetResult(
+                targets=targets,
+                sample_indices=torch.tensor([1.0, 2.0]),
+            )
+        with self.assertRaisesRegex(ValueError, "unique"):
+            SoftTargetResult(
+                targets=targets,
+                sample_indices=torch.tensor([4, 4]),
+            )
+        with self.assertRaisesRegex(ValueError, "selected_mask"):
+            SoftTargetResult(
+                targets=targets,
+                sample_indices=torch.tensor([4, 5]),
+                selected_mask=torch.tensor([1, 0]),
+            )
+        with self.assertRaisesRegex(ValueError, "at least one candidate"):
+            CandidateLabelResult(
+                candidates=torch.tensor([[False, False], [True, False]]),
+                sample_indices=torch.tensor([4, 5]),
+            )
+        with self.assertRaisesRegex(ValueError, "at least one complementary"):
+            ComplementaryLabelResult(
+                negatives=torch.tensor([[False, False], [False, True]]),
+                sample_indices=torch.tensor([4, 5]),
+            )
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is unavailable")
+    def test_target_results_reject_cross_device_fields(self) -> None:
+        with self.assertRaisesRegex(ValueError, "device"):
+            SoftTargetResult(
+                targets=torch.tensor(
+                    [[0.8, 0.2], [0.1, 0.9]], device="cuda"
+                ),
+                sample_indices=torch.tensor([4, 5]),
+            )
 
     def test_peer_exchange_and_consistency(self) -> None:
         losses = {"a": torch.tensor([0.1, 0.5]), "b": torch.tensor([0.4, 0.2])}

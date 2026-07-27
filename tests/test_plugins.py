@@ -23,6 +23,7 @@ from lnl_toolbox.plugins.builtin import (
     build_builtin_risk_corrector,
     build_builtin_selector,
     build_builtin_transition_estimator,
+    build_builtin_weight_provider,
     create_builtin_catalog,
 )
 from lnl_toolbox.selectors import AllSelector, SelectionInput, SmallLossSelector
@@ -264,9 +265,32 @@ class PluginCatalogTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(weighted_objective))
         self.assertTrue(torch.isfinite(weighted_losses.grad).all())
 
+        self.assertEqual(catalog.find(kind="weight_provider"), ())
+        with self.assertRaisesRegex(ValueError, "available: none"):
+            build_builtin_weight_provider(
+                {"name": "binary_rcn_importance"}, catalog
+            )
+        with self.assertRaisesRegex(ValueError, "must be explicit"):
+            build_builtin_weight_provider(None, catalog)
         self.assertEqual(
-            [item.name for item in catalog.find(kind="weight_provider")],
-            ["binary_rcn_importance"],
+            [item.name for item in catalog.find(kind="loss")],
+            ["apl", "ce", "gce", "mae", "nce", "rce"],
+        )
+        self.assertEqual(
+            [item.name for item in catalog.find(kind="batch_selector")],
+            ["all", "small_loss"],
+        )
+        self.assertEqual(
+            [item.name for item in catalog.find(kind="transition_estimator")],
+            ["anchor", "dual_t"],
+        )
+        self.assertEqual(
+            [item.name for item in catalog.find(kind="parameter_update_policy")],
+            ["cdr", "standard"],
+        )
+        self.assertEqual(
+            [item.name for item in catalog.find(kind="selector")],
+            ["coteaching_exchange"],
         )
 
 

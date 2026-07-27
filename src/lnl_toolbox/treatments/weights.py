@@ -50,18 +50,18 @@ class WeightResult:
 
 
 @dataclass(frozen=True)
-class WeightInput:
-    """Method-neutral model outputs available to a weight provider.
+class SupervisedWeightInput:
+    """Noisy-only signals exposed by the ordinary supervised training step.
 
-    The contract deliberately contains only noisy-label training information.
-    Clean targets are never part of a provider input.
+    This input deliberately does not contain a posterior estimate. Providers
+    that require method-specific evidence must define and receive their own
+    typed input instead of inferring it from the current classifier.
     """
 
     logits: Tensor
     noisy_targets: Tensor
     sample_indices: Tensor
     per_sample_loss: Tensor
-    posterior_probabilities: Tensor
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -195,13 +195,7 @@ class BinaryRCNImportanceWeightProvider:
         if self.rho_positive + self.rho_negative >= 1.0:
             raise ValueError("rho_positive + rho_negative must be less than 1")
 
-    def compute(self, weight_input: BinaryRCNWeightInput | WeightInput) -> WeightResult:
-        if isinstance(weight_input, WeightInput):
-            weight_input = BinaryRCNWeightInput(
-                posterior_probabilities=weight_input.posterior_probabilities,
-                observed_targets=weight_input.noisy_targets,
-                metadata=weight_input.metadata,
-            )
+    def compute(self, weight_input: BinaryRCNWeightInput) -> WeightResult:
         posterior, targets = validate_binary_rcn_weight_input(weight_input)
         q = posterior.gather(1, targets[:, None].long()).squeeze(1)
         opposite_rate = torch.where(
