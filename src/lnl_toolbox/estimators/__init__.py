@@ -12,10 +12,13 @@ from .dividemix_gmm import (
     DivideMixGMMLossInput,
 )
 from .selection_adapter import ReliabilityToSelectionInputAdapter
+from .cwd import CWDEstimator, ClassWiseVirtualSetEstimator
 
 __all__ = [
     "DivideMixGMMCleanProbabilityEstimator",
     "DivideMixGMMLossInput",
+    "CWDEstimator",
+    "ClassWiseVirtualSetEstimator",
     "ReliabilityEstimator",
     "ReliabilityResult",
     "ReliabilityToSelectionInputAdapter",

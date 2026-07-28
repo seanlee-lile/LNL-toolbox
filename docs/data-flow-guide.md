@@ -338,17 +338,20 @@ target、corruption mask 或样本可靠性真值。输出 metrics 必须是有�
 
 当前 `CDRUpdatePolicy`：
 
-- 按论文 Eq. (3) 对所有有梯度的可训练标量计算 `abs(grad * parameter)`；
-- 精确选择 `ceil((1-noise_rate) * m)` 个 critical 标量；
-- 并列按 `(parameter_name, flat_offset)` 稳定裁决；
-- critical/non-critical 分别执行 Eq. (5)/(6) 的梯度变换；
-- 只接受 SGD，且 paper mode 要求 optimizer `weight_decay=0`；
+- `compatibility_mode: paper` 按论文 Eq. (3) 对全部可训练标量计算
+  `abs(grad * parameter)`，精确选择 `ceil((1-noise_rate) * m)` 个标量，
+  并列按 `(parameter_name, flat_offset)` 稳定裁决，再执行 Eq. (5)/(6)；
+- `compatibility_mode: official_code` 仅处理二维/四维权重，使用官方
+  `floor + threshold >=` 的并列规则并保留 optimizer L2 weight decay；
+- 两种模式均只接受 SGD；paper mode 要求 optimizer `weight_decay=0`，
+  official-code mode 要求 `l1_decay=0`，不得静默混合；
 - mask 每 step 重算，无 checkpoint 私有状态。
 
 该接口覆盖单模型、单 objective 的参数级更新。L2RW 的 clean meta-batch 和高阶
 虚拟更新属于 `MetaUpdater`；双网络或多阶段方法属于独立 Pipeline，均不得伪装成
-ParameterUpdatePolicy。当前也未实现 CDR 的 noisy-validation early stopping 或
-官方代码 L2 compatibility mode，因此不能宣称完整复现 CDR Pipeline。
+ParameterUpdatePolicy。通用 runner 已支持 noisy validation、最佳 checkpoint、
+可选 EarlyStopping 及其 resume 状态；CDR 正式配置按论文未给出 patience 的事实，
+运行固定 100 epochs 后以 noisy validation 最优 checkpoint 测试。
 
 ### 7.5 通用 batch Selector
 
@@ -365,6 +368,20 @@ ParameterUpdatePolicy。当前也未实现 CDR 的 noisy-validation early stoppi
 - 当前 Selector 和 keep-rate schedule 均无运行时状态，不新增 checkpoint schema；完整 schedule 配置由 resolved config 保存，恢复时必须完全一致。
 
 插件 kind 为 `batch_selector`。旧的 `selector/coteaching_exchange` 是 Co-teaching helper，保持隔离且不应被普通单模型配置混用。
+
+### 7.5.1 结构化 Objective 与有状态监督
+
+`ObjectiveConsumer.compute(...)` 继续兼容 scalar Tensor，也可返回
+`ObjectiveResult(objective, selected_mask, reporting_loss, metrics)`：
+
+- `objective` 是唯一进入 ParameterUpdatePolicy 的标量；
+- `selected_mask` 负责样本统计，不与 `[B,C]` 类别排除 mask 混用；
+- `reporting_loss` 允许优化使用 batch mean、日志仍按选中样本均值统计；
+- Algorithm 通用转发 `on_run/cycle_start/end`，Pipeline 继续通过
+  `component_states` 保存 Objective 私有状态。
+
+DSS 由该接口组合 global-index posterior history、MDA、BASE 和 CCS。
+`training/experiment.py` 不包含 DSS 名称判断，也没有论文专属 runner。
 
 ### 7.6 Reliability 与 Statistic estimation 合同
 
@@ -555,3 +572,26 @@ Evaluator 使用独立 clean validation/test loader；在 `inference_mode` 下�
 - 按 batch 位置保存逐样本历史；
 - 在 `training/experiment.py` 写入某篇论文算法的内部数学；
 - 把研究文档中的建议接口当作已经实现的生产合同。
+## 11. 四篇论文复现底座新增数据流
+
+```text
+YAML parameter_sampling
+  -> ParameterRecord
+  -> resolved_config.yaml / parameter_record.json
+  -> checkpoint parameter_record
+
+noisy batch
+  -> base per-sample loss
+  -> selector / weight provider
+  -> optional corrected-risk consumer
+  -> optional regularizer
+  -> scalar objective
+  -> ParameterUpdatePolicy
+
+metrics.jsonl
+  -> standard epoch fields
+  -> curve_comparison
+  -> overlay SVG / difference CSV / summary JSON
+```
+
+参数抽样、regularizer、selector 和风险校正均通过组合接口接入；论文名称不进入统一 `experiment.py` 的训练分支。resume 时必须保持参数记录、组件私有状态和 artifact 身份一致。

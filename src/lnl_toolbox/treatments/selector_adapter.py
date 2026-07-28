@@ -30,4 +30,5 @@ class SelectorContributionAdapter:
             selected_mask=mask,
             sample_weights=torch.ones_like(selection_input.scores),
             metrics=dict(selection.metrics),
+            selection_mask=mask,
         )

@@ -30,6 +30,7 @@ class ForwardRiskCorrector:
     """Forward correction: map clean posterior through ``T`` before loss."""
 
     name = "forward"
+    requires_transition = True
 
     def per_sample_risk(self, *, logits, noisy_targets, base_loss, transition):
         if logits.ndim != 2 or noisy_targets.ndim != 1:
@@ -51,10 +52,13 @@ class BackwardRiskCorrector:
     """Backward correction using ``T^{-1}`` under row-vector convention."""
 
     name = "backward"
+    requires_transition = True
 
     def per_sample_risk(self, *, logits, noisy_targets, base_loss, transition):
         if logits.ndim != 2 or noisy_targets.ndim != 1:
             raise ValueError("logits and noisy_targets have invalid shapes")
+        if noisy_targets.ndim != 1 or noisy_targets.shape[0] != logits.shape[0]:
+            raise ValueError("noisy_targets must have shape [B]")
         matrix = transition.as_tensor(device=logits.device, dtype=logits.dtype)
         if matrix.shape != (logits.shape[1], logits.shape[1]):
             raise ValueError("transition classes must match logits classes")

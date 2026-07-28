@@ -1,0 +1,61 @@
+seed: 4
+output_root: artifacts/test-runs
+data:
+  name: cifar10
+  root: data/cifar10
+  validation_size: 5000
+  max_train_samples: 256
+  max_validation_samples: 128
+  max_test_samples: 128
+  augment: true
+  validation_split:
+    strategy: classwise_legacy
+    rng: numpy_legacy
+  normalization:
+    mean: [0.4914, 0.4822, 0.4465]
+    std: [0.2023, 0.1994, 0.2010]
+noise:
+  manifest: artifacts/manifests/dss_cifar10_symmetric05_seed4.npz
+  validation_targets: noisy
+  manifest_filename: noise_manifest.npz
+loss:
+  name: ce
+selector:
+  name: all
+parameter_update:
+  name: standard
+pipeline:
+  name: standard_noisy_erm
+  objective_consumer:
+    name: dss
+    num_samples: 50000
+    num_classes: 10
+    total_epochs: 2
+    warmup_epochs: 1
+    alpha: 0.10
+    prior_decay: 0.99
+    mda: true
+    ccs: true
+loader:
+  batch_size: 128
+  num_workers: 0
+  pin_memory: true
+model:
+  name: preact_resnet18
+  base_width: 8
+optimizer:
+  name: sgd
+  lr: 0.02
+  momentum: 0.9
+  nesterov: false
+  weight_decay: 0.001
+scheduler:
+  name: multistep
+  milestones: [1]
+  gamma: 0.1
+trainer:
+  epochs: 2
+  device: auto
+  progress: false
+evaluation:
+  selection_split: validation

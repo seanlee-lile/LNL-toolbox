@@ -18,6 +18,7 @@ class ContributionResult:
     selected_mask: Tensor
     sample_weights: Tensor
     metrics: Mapping[str, float] = field(default_factory=dict)
+    selection_mask: Tensor | None = None
 
 
 def validate_contribution_result(
@@ -66,4 +67,10 @@ def validate_contribution_result(
             raise ValueError(
                 f"sample treatment metric {name!r} must be a finite scalar"
             )
+    if result.selection_mask is not None:
+        selection_mask = result.selection_mask
+        if not isinstance(selection_mask, Tensor) or selection_mask.shape != (batch_size,):
+            raise ValueError("selection_mask must have shape [batch_size]")
+        if selection_mask.dtype != torch.bool or selection_mask.device != device:
+            raise ValueError("selection_mask must be a boolean mask on the loss device")
     return mask, weights

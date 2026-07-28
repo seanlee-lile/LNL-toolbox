@@ -43,7 +43,7 @@
 | 实例转移查询 | `noise/transition.py::InstanceTransitionProvider` | 已有通用协议；实例模型仍待论文实现 | UPM、PDL |
 | 选样结果 | `selectors/base.py::SelectionResult` | 已有 hard-mask 协议 | JoCoR、DSS、CNLCU、Co-teaching、FINE、DivideMix、LEND |
 | 小损失排序与保留率 | `selectors/basic.py::SmallLossSelector`、`selectors/schedules.py` | 已有 fixed、constant、linear 保留率 | JoCoR、CNLCU、Co-teaching |
-| 按样本历史状态 | `selectors/history.py::IndexedHistory` | 已有 global-index 基础状态存储 | DSS、CNLCU、LEND、CA2C、DivideMix |
+| 按样本历史状态 | `selectors/history.py::IndexedHistory/IndexedTensorHistory` | 已有 scalar 与有界 `[N,E,C]` global-index 状态存储；DSS 已接入 | DSS、CNLCU、LEND、CA2C、DivideMix |
 | 连续样本权重 | `treatments/weights.py::WeightResult` / `WeightProvider` | 已有基础协议和 Binary RCN provider；其他方法规划 | MentorNet、T-Revision、Importance Reweighting、L2RW、CA2C、DivideMix |
 | soft target 结果 | `core/result.py::SoftTargetResult`、`core/targets.py` | 已有通用结果与 Provider 协议 | UPM、DLD、CA2C、DivideMix、LEND |
 | 特征快照 | `training/snapshots.py::FeatureSnapshot` | 已有 | MC-LDCE、CWD、PCSE、DLD、LEND |
@@ -1473,24 +1473,20 @@ batch(input, noisy target, global index)
 
 ### 4. 按顺序映射到文件和函数
 
-1. `[规划/共享] src/lnl_toolbox/selectors/marginal.py`
-   - `MarginalDistributionAdjuster.update(probabilities)`
-   - `MarginalDistributionAdjuster.adjust(probabilities)`
-2. `[规划] src/lnl_toolbox/selectors/dss.py`
-   - `PredictionMatchSelector.select(probabilities, targets, indices)`
-   - `mann_kendall_upward_score(history)`
-   - `CandidateClassState.update(indices, probabilities, targets)`
-   - `DSSSelector`
-3. `[规划/共享] src/lnl_toolbox/algorithms/masked_risk.py`
-   - `candidate_masked_ce(logits, targets, excluded_classes) -> [B]`
-4. `[规划] src/lnl_toolbox/algorithms/dss.py`
-   - 组合 sample selection、candidate mask 和 optimizer step。
-5. `[规划] src/lnl_toolbox/training/dss_pipeline.py`
-   - warm-up、每 epoch 状态更新、评测、恢复。
-6. `[扩展/高冲突] src/lnl_toolbox/plugins/builtin/catalog.py`
-   - 注册 MDA、DSS selector 和 DSS pipeline；由集成人修改。
-7. `[规划] configs/algorithm/dss.yaml`
-8. `[规划] tests/test_dss.py`
+1. `[已实现/共享] src/lnl_toolbox/selectors/history.py`
+   - `IndexedTensorHistory` 保存有界 `[N,E,C]` 历史。
+2. `[已实现] src/lnl_toolbox/selectors/dss.py`
+   - `DSSSelectorState` 组合 MDA、Prediction Match、Mann–Kendall 与 CCS。
+3. `[已实现/共享] src/lnl_toolbox/algorithms/masked_risk.py`
+   - `candidate_masked_cross_entropy(...) -> [B]`
+4. `[已实现] src/lnl_toolbox/algorithms/dss.py`
+   - `DSSObjective` 返回结构化 `ObjectiveResult`。
+5. `[复用] src/lnl_toolbox/training/pipeline.py`
+   - 现有 Objective component state 已覆盖保存和恢复，无 DSS 专属 Pipeline。
+6. `[已扩展/高冲突] src/lnl_toolbox/plugins/builtin/catalog.py`
+   - 以 `objective_consumer/dss` 注册；runner 无论文名称分支。
+7. `[已实现] configs/algorithm/dss.yaml`
+8. `[已实现] tests/test_dss.py`
 
 为避免文件碎片化，实现时可把 `marginal.py` 合并进 `selectors/dss.py`；只有出现
 第二个消费者后再拆出共享文件。
@@ -1609,15 +1605,15 @@ target 偷看类别分布。
   toolbox 必须把这一时序写入配置和 checkpoint。
 - `[差异]` 官方 checkpoint 没有保存 selector 状态，不能作为 toolbox 恢复标准。
 
-### 11. 当前未实现
+### 11. 当前状态
 
-- MDA、PredictionMatchSelector 和 CandidateClassState
-- candidate-class masked risk
-- DSS Algorithm / Pipeline、配置、checkpoint 和测试
-- DSS+ 双网络与一致性扩展
-- 论文结果复现
+- 已实现 MDA、Prediction Match、CCS、candidate-class masked risk；
+- 已实现 Objective lifecycle、配置、checkpoint roundtrip 和 CUDA smoke；
+- 已对齐官方 classwise split、训练/验证分别重启 noise RNG 的数据通路；
+- 尚未实现 DSS+ 双网络与一致性扩展；
+- 尚未运行唯一一次 150-epoch 正式实验和论文曲线比较。
 
-因此当前 toolbox 不能宣称支持 DSS。
+因此当前 toolbox 可声明“基础 DSS 训练通路 Smoke 通过”，不能声明“论文结果已经复现”。
 
 ---
 
@@ -1633,8 +1629,9 @@ target 偷看类别分布。
   Zongyuan Ge, Yi Chang
 - 官方页面：<https://openreview.net/forum?id=Eql5b1_hTE4>
 - 官方代码：<https://github.com/xiaoboxia/CDR>
-- 当前成熟度：组件 L3；完整 CDR Pipeline L2
-- 核对状态：已阅读论文；已检查官方 `main.py`；论文模式组件已实现并完成数学/CPU/CUDA 测试
+- 当前成熟度：组件 L3；完整 CDR Pipeline L3（正式 100-epoch 结果未完成）
+- 核对状态：已阅读论文并检查官方 `main.py`、`tools.py`、`data_load.py`
+  与 `resnet.py`；论文/官方代码双模式及完整 smoke 已验证
 - Toolbox 归属：`ParameterUpdatePolicy + 单网络 Pipeline`
 - 不是：Loss、样本 Selector 或 TransitionEstimator
 
@@ -1699,13 +1696,14 @@ batch(input, noisy target, global index)
    - `StandardUpdatePolicy`
 2. `[已有] src/lnl_toolbox/algorithms/cdr.py`
    - `critical_parameter_masks(named_parameters, noise_rate)`
+   - `official_code_parameter_masks(named_parameters, noise_rate)`
    - `CDRUpdatePolicy.update(request)`
 3. `[已有/扩展] src/lnl_toolbox/algorithms/supervised.py`
    - 所有 scalar objective 统一委托 ParameterUpdatePolicy 完成 backward/update。
 4. `[已有/共享] src/lnl_toolbox/training/experiment.py`
    - 只负责通用 policy 生命周期、指标聚合和 resume；不得包含 CDR 专属 optimizer 校验。
-5. `[规划] src/lnl_toolbox/training/cdr_pipeline.py`
-   - 仅在通用 runner 无法表达论文的显式 L1 更新时使用。
+5. `[无需新增] src/lnl_toolbox/training/cdr_pipeline.py`
+   - 通用 runner、ParameterUpdatePolicy 与 noisy-validation lifecycle 已能完整表达。
 6. `[已有/高冲突] src/lnl_toolbox/plugins/builtin/catalog.py`
    - 注册 `parameter_update_policy/standard` 与 `parameter_update_policy/cdr`。
 7. `[已有] configs/algorithm/cdr.yaml`
@@ -1762,6 +1760,7 @@ parameter_update:
   noise_rate: 0.4
   l1_decay: 0.001
   critical_scope: all_trainable
+  compatibility_mode: paper
 
 optimizer:
   name: sgd
@@ -1775,7 +1774,7 @@ optimizer:
 - model、optimizer/scheduler 和 momentum state；
 - epoch、global step、current learning rate；
 - `noise_rate`、critical scope、gradient scale 和 L1 decay；
-- `[完整 Pipeline 尚缺]` noisy validation identity、best noisy-validation error、early-stop state；
+- noisy validation identity、best noisy-validation metric 与可选 early-stop state；
 - noise manifest identity 和 RNG state。
 
 critical mask 每 step 重算，不需要持久化；若为调试保存，只能作为 artifact，
@@ -1808,22 +1807,28 @@ critical mask 每 step 重算，不需要持久化；若为调试保存，只能
   明确写的是 `lambda * sign(W)`。
 - `[差异]` 官方代码中的 gradual `clip` 先被计算，随后又被常数
   `1-noise_rate` 覆盖，实际没有 gradual 变化。
-- `[差异]` 官方阈值用 `>= threshold`，并列时 critical 参数数量可能超过目标；
-  toolbox 应采用确定性的精确 top-k。
-- `[推断]` toolbox 当前只实现论文模式；未来若增加
-  `compatibility_mode: official_code`，必须显式复现作者代码的参数 scope 和
-  L2 decay，不能与论文模式静默混合。
+- `[差异]` 官方阈值用 `>= threshold`，并列时 critical 参数数量可能超过目标。
+- `[已实现]` `compatibility_mode: paper` 保持确定性精确 top-k 和论文 L1；
+  `compatibility_mode: official_code` 显式复现作者代码的参数 scope、阈值并列和
+  optimizer L2，不允许两者静默混合。
+- `[已对齐]` 通用数据配置可表达官方 random split、legacy transition sampling、
+  CIFAR Normalize；ResNet-50 可配置官方 stem `padding=0` 与默认初始化。
 
 ### 11. 当前实施状态
 
 - `[已实现]` 通用 ParameterUpdatePolicy、Standard policy 和 plugin/config。
 - `[已实现]` CDR Eq. (3)-(6)、全局精确 top-k、稳定并列规则和 L1 更新。
+- `[已实现]` 官方代码 compatibility mode、random split、transition noise、
+  精确 Normalize 和官方 ResNet-50 stem/初始化选项。
 - `[已实现]` 与 Loss/Selector 的生产组合、policy checkpoint 身份和 resume 配置校验。
-- `[已验证]` 手算、失败边界、CPU/CUDA、checkpoint 与 noisy CUDA smoke。
-- `[未实现]` noisy-validation early stopping、官方代码 compatibility mode 和论文结果复现；这些应通过通用 lifecycle hook 接入，不应回填 CDR 分支到 runner。
+- `[已实现]` noisy validation 最佳 checkpoint、可选通用 EarlyStopping 及 resume；
+  正式配置因论文未给 patience 而采用固定 100 epochs 后按 noisy validation 选优。
+- `[已验证]` 手算、失败边界、CPU/CUDA、checkpoint、配置合同、完整 unittest
+  与 noisy CUDA smoke。
+- `[未完成]` 对齐后正式 100-epoch 单次运行和论文曲线/最终指标比较。
 
-因此当前 toolbox 可宣称支持 **paper-mode CDR ParameterUpdatePolicy 组件**，
-但不能宣称完整复现包含 noisy-validation early stopping 的 CDR Pipeline。
+因此当前 toolbox 可宣称支持 **CDR 论文/官方代码双模式组件及完整训练通路**；
+在对齐后的 100-epoch 运行完成前，仍不能宣称论文结果已复现。
 
 ---
 
@@ -5172,3 +5177,15 @@ feature-layer identity、epoch/global step、optimizer/scheduler 和 manifest id
 至此，`papers/manifest.json` 中可读取的 26 篇论文均已完成实现映射。所有条目都应先
 复用顶部“重叠能力主索引”的唯一接口；若同事分支已经实现同义组件，合并同事接口并
 回改本指南，不并存两套文件、函数或协议。
+## 27. 本轮实现状态同步
+
+本轮已将四篇目标论文所需的最小底座接入现有通用接口：
+
+- Binary Risk：`algorithms/binary_risk.py` 提供 Natarajan 无偏风险和 label-dependent cost risk；`data/binary_benchmarks.py` 与 `training/binary_experiment.py` 提供通用二分类数据/训练边界。
+- Loss Correction：`transition_risk.py` 保持 known-T 与 estimated-T 两条路径；`models/cifar_resnet.py` 增加 CIFAR ResNet-14/32 深度构造接口。
+- CWD：`estimators/cwd.py` 生成 class-wise statistic artifact，`algorithms/cwd.py` 只消费该 artifact，不负责 runner 或数据读取。
+- FINE：`algorithms/fine.py` 提供 regularizer 与 complementary-label RNG，`selectors/sed.py` 独立提供 SED selection；Pipeline 通过组合接口接入。
+- 通用复现记录：`core/hyperparameters.py`、`training/checkpoint.py` 和 `training/experiment.py` 保存单次抽样 seed、候选集合、来源、解析配置并校验 resume 一致性。
+- 曲线比较：`evaluation/curve_comparison.py` 在正式实验结束后读取 `metrics.jsonl`，输出 overlay、差值和摘要。
+
+截至本轮，以上组件和相关 focused/smoke tests 已通过；四篇论文的正式训练、单组超参数选择、论文曲线对比尚未运行，不能标记为单次复现完成。

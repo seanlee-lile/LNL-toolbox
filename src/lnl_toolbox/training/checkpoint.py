@@ -99,6 +99,7 @@ def build_checkpoint(
     pipeline: Mapping[str, Any] | None = None,
     early_stopping: Mapping[str, Any] | None = None,
     component_states: Mapping[str, Any] | None = None,
+    parameter_record: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     algorithm_state = algorithm.state_dict()
     payload: dict[str, Any] = {
@@ -137,6 +138,10 @@ def build_checkpoint(
         payload["component_states"] = _validate_component_states(
             component_states
         )
+    if parameter_record is not None:
+        if not isinstance(parameter_record, Mapping):
+            raise TypeError("parameter_record must be a mapping")
+        payload["parameter_record"] = dict(parameter_record)
     return payload
 
 
@@ -156,6 +161,7 @@ def save_checkpoint(
     pipeline: Mapping[str, Any] | None = None,
     early_stopping: Mapping[str, Any] | None = None,
     component_states: Mapping[str, Any] | None = None,
+    parameter_record: Mapping[str, Any] | None = None,
 ) -> None:
     atomic_save(
         build_checkpoint(
@@ -172,6 +178,7 @@ def save_checkpoint(
             pipeline=pipeline,
             early_stopping=early_stopping,
             component_states=component_states,
+            parameter_record=parameter_record,
         ),
         path,
     )

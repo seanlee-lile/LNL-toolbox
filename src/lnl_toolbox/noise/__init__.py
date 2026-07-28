@@ -1,7 +1,13 @@
-from .generators import generate_instance_dependent, generate_pairflip, generate_symmetric
+from .generators import (
+    generate_class_conditional,
+    generate_instance_dependent,
+    generate_pairflip,
+    generate_symmetric,
+)
 from .estimators import (
     AnchorTransitionEstimator,
     DualTransitionEstimator,
+    KnownTransitionEstimator,
     PosteriorSnapshot,
     TransitionEstimator,
 )
@@ -19,11 +25,13 @@ __all__ = [
     "NoiseManifest",
     "generate_symmetric",
     "generate_pairflip",
+    "generate_class_conditional",
     "generate_instance_dependent",
     "PosteriorSnapshot",
     "TransitionEstimator",
     "AnchorTransitionEstimator",
     "DualTransitionEstimator",
+    "KnownTransitionEstimator",
     "TransitionArtifact",
     "KnownTransition",
     "InstanceTransitionProvider",

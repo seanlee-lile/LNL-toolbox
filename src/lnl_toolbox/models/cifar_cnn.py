@@ -5,6 +5,8 @@ from __future__ import annotations
 import torch
 from torch import nn
 
+from .feature_output import FeatureOutput
+
 
 class CifarCnn8(nn.Module):
     """Six-convolution CIFAR classifier matching the APL reference model."""
@@ -45,4 +47,8 @@ class CifarCnn8(nn.Module):
                 nn.init.zeros_(module.bias)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        return self.classifier(self.features(inputs).flatten(1))
+        return self.forward_with_features(inputs).logits
+
+    def forward_with_features(self, inputs: torch.Tensor) -> FeatureOutput:
+        features = self.features(inputs).flatten(1)
+        return FeatureOutput(self.classifier(features), features)

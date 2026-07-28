@@ -15,6 +15,7 @@ from lnl_toolbox.data.torch_cifar import (
     build_cifar_transform,
     cifar_pixel_mean,
     stratified_split,
+    train_validation_split,
 )
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 from lnl_toolbox.models import TinyCNN
@@ -108,6 +109,21 @@ class TorchTrainingTest(unittest.TestCase):
         np.testing.assert_array_equal(first[1], second[1])
         self.assertTrue(np.all(np.bincount(labels[first[1]]) == 10))
 
+    def test_legacy_random_split_matches_choice_then_complement(self):
+        labels = np.arange(20) % 3
+        train, validation = train_validation_split(
+            labels,
+            4,
+            7,
+            strategy="random",
+            rng="numpy_legacy",
+        )
+        random = np.random.RandomState(7)
+        expected_train = random.choice(20, 16, replace=False)
+        expected_validation = np.delete(np.arange(20), expected_train)
+        np.testing.assert_array_equal(train, expected_train)
+        np.testing.assert_array_equal(validation, expected_validation)
+
     def test_tinycnn_shape(self):
         self.assertEqual(TinyCNN(10, 8)(torch.randn(4, 3, 32, 32)).shape, (4, 10))
 
@@ -144,6 +160,26 @@ class TorchTrainingTest(unittest.TestCase):
         )
         sample = TorchCifarDataset(data, [0], transform=transform)[0]
         torch.testing.assert_close(sample["input"], torch.zeros_like(sample["input"]))
+
+    def test_standard_preprocessing_accepts_explicit_normalization(self):
+        transform = build_cifar_transform(
+            False,
+            normalization_mean=(0.5, 0.5, 0.5),
+            normalization_std=(0.25, 0.25, 0.25),
+        )
+        image = np.full((32, 32, 3), 128, dtype=np.uint8)
+        output = transform(CifarData(
+            image[None],
+            np.array([0]),
+            ("a",),
+            "train",
+            "fixture",
+        ).images[0])
+        expected = (128.0 / 255.0 - 0.5) / 0.25
+        torch.testing.assert_close(
+            output,
+            torch.full_like(output, expected),
+        )
 
     def test_training_step_changes_parameters(self):
         model = TinyCNN(10, 8)

@@ -10,7 +10,7 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 
-from .transition import TransitionArtifact
+from .transition import TransitionArtifact, validate_transition_matrix
 
 
 def _readonly_copy(values: np.ndarray, dtype: np.dtype) -> np.ndarray:
@@ -185,6 +185,33 @@ class AnchorTransitionEstimator:
                 "anchor_scores": anchor_scores,
                 "selection": "argmax_noisy_posterior_tie_min_global_index",
                 "paper": "Patrini et al., CVPR 2017, Equations (12)-(13)",
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class KnownTransitionEstimator:
+    """Return a validated transition matrix supplied by an experiment."""
+
+    matrix: np.ndarray
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "matrix", _readonly_copy(validate_transition_matrix(self.matrix), np.float64)
+        )
+
+    def estimate(self, snapshot: PosteriorSnapshot) -> TransitionArtifact:
+        if self.matrix.shape[0] != snapshot.num_classes:
+            raise ValueError("known transition classes must match posterior snapshot")
+        return TransitionArtifact(
+            matrix=self.matrix,
+            estimator="known",
+            source_snapshot_hash=snapshot.snapshot_hash,
+            metadata={
+                "dataset": snapshot.dataset,
+                "split": snapshot.split,
+                "num_samples": snapshot.num_samples,
+                "source": "configuration",
             },
         )
 

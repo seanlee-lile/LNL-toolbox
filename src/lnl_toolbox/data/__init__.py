@@ -15,8 +15,12 @@ __all__ = [
 from .cifar import CifarData, default_data_root, load_cifar10, load_cifar100
 from .noisy_dataset import NoisyTargetDataset
 from .torch_cifar import TorchCifarDataset, build_cifar_transform, stratified_split
+from .binary_benchmarks import BinaryBenchmark, load_binary_npz, load_uci_binary
+from .preprocessing import BinaryPreprocessingConfig, BinaryPreprocessor
 
 __all__ = [
     "CifarData", "NoisyTargetDataset", "TorchCifarDataset", "build_cifar_transform", "default_data_root",
     "load_cifar10", "load_cifar100", "stratified_split",
+    "BinaryBenchmark", "BinaryPreprocessingConfig", "BinaryPreprocessor",
+    "load_binary_npz", "load_uci_binary",
 ]

@@ -47,3 +47,29 @@ class StatisticArtifact:
             if payload.get("artifact_hash") != artifact.artifact_hash:
                 raise ValueError("statistic artifact hash does not match contents")
             return artifact
+
+
+@dataclass(frozen=True)
+class CWDStatisticArtifact(StatisticArtifact):
+    """Named class-wise artifact used by the CWD risk consumer."""
+
+    @property
+    def class_centroids(self) -> np.ndarray:
+        return self.values
+
+    @property
+    def class_prior(self) -> np.ndarray:
+        value = self.metadata.get("class_prior")
+        if value is None:
+            return np.full(self.values.shape[0], 1.0 / self.values.shape[0])
+        return np.asarray(value, dtype=np.float64)
+
+    @property
+    def label_flip_matrix(self) -> np.ndarray:
+        value = self.metadata.get("label_flip_matrix")
+        if value is None:
+            return np.eye(self.values.shape[0], dtype=np.float64)
+        return np.asarray(value, dtype=np.float64)
+
+
+__all__ = ["CWDStatisticArtifact", "StatisticArtifact"]

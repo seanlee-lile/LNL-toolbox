@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from .manifest import NoiseManifest
+from .transition import validate_transition_matrix
 
 
 def _validate(labels: np.ndarray, num_classes: int, rate: float) -> np.ndarray:
@@ -32,14 +33,33 @@ def generate_symmetric(
     """Replace a fixed fraction of labels with uniformly chosen wrong classes."""
     labels = _validate(labels, num_classes, rate)
     sampling = str(sampling).strip().lower()
-    if sampling not in {"global", "per_class"}:
-        raise ValueError("symmetric sampling must be 'global' or 'per_class'")
+    if sampling not in {"global", "per_class", "transition"}:
+        raise ValueError(
+            "symmetric sampling must be 'global', 'per_class', or 'transition'"
+        )
     rng = str(rng).strip().lower()
     if rng not in {"default_rng", "numpy_legacy"}:
         raise ValueError("symmetric rng must be 'default_rng' or 'numpy_legacy'")
     noisy = labels.copy()
     random = np.random.RandomState(seed) if rng == "numpy_legacy" else np.random.default_rng(seed)
-    if sampling == "global":
+    if sampling == "transition":
+        transition = np.full(
+            (num_classes, num_classes),
+            rate / (num_classes - 1),
+        )
+        np.fill_diagonal(transition, 1.0 - rate)
+        if rng == "numpy_legacy":
+            for index, label in enumerate(labels):
+                noisy[index] = random.multinomial(
+                    1, transition[int(label)], size=1
+                )[0].argmax()
+        else:
+            for index, label in enumerate(labels):
+                noisy[index] = random.choice(
+                    num_classes, p=transition[int(label)]
+                )
+        chosen = np.flatnonzero(noisy != labels)
+    elif sampling == "global":
         count = int(round(rate * labels.size))
         chosen = random.choice(labels.size, size=count, replace=False)
     else:
@@ -53,7 +73,9 @@ def generate_symmetric(
             if np.any(labels == class_index)
         ]
         chosen = np.concatenate(chosen_parts) if chosen_parts else np.empty(0, dtype=np.int64)
-    if rng == "numpy_legacy":
+    if sampling == "transition":
+        pass
+    elif rng == "numpy_legacy":
         for index in chosen:
             other_classes = np.delete(np.arange(num_classes), labels[index])
             noisy[index] = random.choice(other_classes)
@@ -86,6 +108,43 @@ def generate_pairflip(
     transition = np.eye(num_classes) * (1.0 - rate)
     transition[np.arange(num_classes), (np.arange(num_classes) + 1) % num_classes] = rate
     return NoiseManifest(dataset, "pairflip", seed, rate, labels, noisy, transition)
+
+
+def generate_class_conditional(
+    labels: np.ndarray,
+    transition_matrix: np.ndarray,
+    rate: float,
+    seed: int,
+    dataset: str = "unknown",
+    rng: str = "numpy_legacy",
+) -> NoiseManifest:
+    """Sample noisy labels from a row-stochastic class transition matrix."""
+
+    labels = np.asarray(labels, dtype=np.int64)
+    if labels.ndim != 1:
+        raise ValueError("labels must be one-dimensional")
+    matrix = validate_transition_matrix(transition_matrix)
+    if labels.size and (labels.min() < 0 or labels.max() >= matrix.shape[0]):
+        raise ValueError("labels must be within the transition matrix classes")
+    if not 0.0 <= float(rate) <= 1.0:
+        raise ValueError("rate must be in [0, 1]")
+    rng_name = str(rng).strip().lower()
+    if rng_name != "numpy_legacy":
+        raise ValueError("class_conditional noise requires rng='numpy_legacy'")
+    random = np.random.RandomState(seed)
+    noisy = labels.copy()
+    for position, label in enumerate(labels):
+        noisy[position] = int(random.multinomial(1, matrix[int(label)]).argmax())
+    return NoiseManifest(
+        dataset,
+        "class_conditional",
+        seed,
+        float(rate),
+        labels,
+        noisy,
+        matrix,
+        metadata={"rng": rng_name, "transition_source": "configuration"},
+    )
 
 
 def generate_instance_dependent(

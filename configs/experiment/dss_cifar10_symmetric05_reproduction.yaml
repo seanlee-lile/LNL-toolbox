@@ -1,0 +1,81 @@
+seed: 4
+output_root: artifacts/reproductions
+parameter_sampling:
+  paper: dss
+  seed: 20260728
+  candidates:
+    setting:
+      - {noise: symmetric, rate: 0.5, warmup_epochs: 30}
+      - {noise: asymmetric, rate: 0.4, warmup_epochs: 30}
+      - {noise: instance_dependent, rate: 0.5, warmup_epochs: 30}
+    train_seed: [1, 2, 3, 4, 5]
+  sources:
+    setting: CVPR 2026 paper and supplemental CIFAR-10 settings
+    train_seed: official BASE+MDA+CCS CIFAR-10 script
+data:
+  name: cifar10
+  root: data/cifar10
+  validation_size: 5000
+  max_train_samples: null
+  max_validation_samples: null
+  max_test_samples: null
+  augment: true
+  validation_split:
+    strategy: classwise_legacy
+    rng: numpy_legacy
+  normalization:
+    mean: [0.4914, 0.4822, 0.4465]
+    std: [0.2023, 0.1994, 0.2010]
+noise:
+  manifest: artifacts/manifests/dss_cifar10_symmetric05_seed4.npz
+  validation_targets: noisy
+  manifest_filename: noise_manifest.npz
+loss:
+  name: ce
+selector:
+  name: all
+parameter_update:
+  name: standard
+pipeline:
+  name: standard_noisy_erm
+  objective_consumer:
+    name: dss
+    num_samples: 50000
+    num_classes: 10
+    total_epochs: 150
+    warmup_epochs: 30
+    alpha: 0.10
+    prior_decay: 0.99
+    mda: true
+    ccs: true
+loader:
+  batch_size: 128
+  num_workers: 8
+  pin_memory: true
+model:
+  name: preact_resnet18
+  base_width: 64
+optimizer:
+  name: sgd
+  lr: 0.02
+  momentum: 0.9
+  nesterov: false
+  weight_decay: 0.001
+scheduler:
+  name: multistep
+  milestones: [80]
+  gamma: 0.1
+early_stopping:
+  monitor: selection_accuracy
+  mode: max
+  patience: 2000
+  min_delta: 0.0
+trainer:
+  epochs: 150
+  device: auto
+  progress:
+    enabled: true
+    update_interval: 20
+    curves: true
+evaluation:
+  selection_split: validation

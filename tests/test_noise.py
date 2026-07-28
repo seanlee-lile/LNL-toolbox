@@ -11,6 +11,7 @@ from lnl_toolbox.data.noisy_dataset import NoisyTargetDataset
 from lnl_toolbox.noise import (
     KnownTransition,
     NoiseManifest,
+    generate_class_conditional,
     generate_instance_dependent,
     generate_pairflip,
     generate_symmetric,
@@ -98,10 +99,42 @@ class NoiseTest(unittest.TestCase):
         np.testing.assert_array_equal(first.noisy_targets, second.noisy_targets)
         self.assertEqual(first.metadata["rng"], "numpy_legacy")
 
+    def test_transition_sampling_matches_per_sample_legacy_multinomial(self) -> None:
+        labels = np.arange(10, dtype=np.int64)
+        manifest = generate_symmetric(
+            labels,
+            10,
+            0.4,
+            7,
+            "toy",
+            sampling="transition",
+            rng="numpy_legacy",
+        )
+        matrix = np.full((10, 10), 0.4 / 9.0)
+        np.fill_diagonal(matrix, 0.6)
+        random = np.random.RandomState(7)
+        expected = np.array([
+            random.multinomial(1, matrix[label], size=1)[0].argmax()
+            for label in labels
+        ])
+        np.testing.assert_array_equal(manifest.noisy_targets, expected)
+        self.assertEqual(manifest.metadata["sampling"], "transition")
+
     def test_pairflip_only_moves_to_next_class(self) -> None:
         manifest = generate_pairflip(self.labels, 10, 0.5, 3, "toy")
         expected = (manifest.clean_targets[manifest.flip_mask] + 1) % 10
         np.testing.assert_array_equal(manifest.noisy_targets[manifest.flip_mask], expected)
+
+    def test_class_conditional_generator_is_reproducible_and_preserves_matrix(self) -> None:
+        matrix = np.eye(3, dtype=np.float64)
+        matrix[0] = [0.6, 0.4, 0.0]
+        matrix[1] = [0.0, 0.6, 0.4]
+        labels = np.tile(np.arange(3), 20)
+        manifest = generate_class_conditional(labels, matrix, 0.4, 11, "fixture")
+        repeated = generate_class_conditional(labels, matrix, 0.4, 11, "fixture")
+        np.testing.assert_array_equal(manifest.noisy_targets, repeated.noisy_targets)
+        np.testing.assert_allclose(manifest.transition_matrix, matrix)
+        self.assertEqual(manifest.noise_type, "class_conditional")
 
     def test_mapping_hash_covers_indices_targets_and_context(self) -> None:
         manifest = generate_symmetric(self.labels, 10, 0.4, 7, "toy")

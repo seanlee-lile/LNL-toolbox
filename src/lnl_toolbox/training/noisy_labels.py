@@ -6,8 +6,13 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from lnl_toolbox.noise.generators import generate_pairflip, generate_symmetric
+from lnl_toolbox.noise.generators import (
+    generate_class_conditional,
+    generate_pairflip,
+    generate_symmetric,
+)
 from lnl_toolbox.noise.manifest import NoiseManifest, fingerprint_labels
+from lnl_toolbox.noise.transition import validate_transition_matrix
 
 
 def file_sha256(path: Path) -> str:
@@ -47,10 +52,10 @@ def _manifest_filename(noise: Mapping[str, Any]) -> str:
     return filename
 
 
-def _generated_spec(config: Mapping[str, Any]) -> tuple[str, float, int, str, str]:
+def _generated_spec(config: Mapping[str, Any]) -> tuple[Any, ...]:
     noise = config["noise"]
     name = str(noise["name"]).lower()
-    if name not in {"symmetric", "pairflip"}:
+    if name not in {"symmetric", "pairflip", "class_conditional"}:
         raise ValueError(f"Unsupported generated noise type: {name}")
     rate = float(noise["rate"])
     if not 0.0 <= rate <= 1.0:
@@ -58,12 +63,20 @@ def _generated_spec(config: Mapping[str, Any]) -> tuple[str, float, int, str, st
     sampling = str(noise.get("sampling", "global")).strip().lower()
     if name != "symmetric" and sampling != "global":
         raise ValueError("noise.sampling is only supported for symmetric noise")
-    if sampling not in {"global", "per_class"}:
-        raise ValueError("noise.sampling must be 'global' or 'per_class'")
+    if sampling not in {"global", "per_class", "transition"}:
+        raise ValueError(
+            "noise.sampling must be 'global', 'per_class', or 'transition'"
+        )
     rng = str(noise.get("rng", "default_rng")).strip().lower()
     if rng not in {"default_rng", "numpy_legacy"}:
         raise ValueError("noise.rng must be 'default_rng' or 'numpy_legacy'")
-    return name, rate, int(noise.get("seed", config.get("seed", 1))), sampling, rng
+    seed = int(noise.get("seed", config.get("seed", 1)))
+    if name == "class_conditional":
+        if rng != "numpy_legacy":
+            raise ValueError("class_conditional noise requires rng='numpy_legacy'")
+        matrix = validate_transition_matrix(noise.get("transition_matrix"))
+        return name, rate, seed, sampling, rng, matrix
+    return name, rate, seed, sampling, rng, None
 
 
 def _validate_manifest(
@@ -86,7 +99,7 @@ def _validate_manifest(
         raise ValueError("Noise manifest split must be 'train'")
     if mode == "generated":
         assert generated_spec is not None
-        noise_type, rate, seed, sampling, rng = generated_spec
+        noise_type, rate, seed, sampling, rng, matrix = generated_spec
         checks = {
             "noise type": manifest.noise_type == noise_type,
             "requested rate": np.isclose(
@@ -96,6 +109,11 @@ def _validate_manifest(
             "sampling": manifest.metadata.get("sampling", "global") == sampling,
             "rng": manifest.metadata.get("rng", "default_rng") == rng,
         }
+        if noise_type == "class_conditional":
+            checks["transition matrix"] = (
+                manifest.transition_matrix is not None
+                and np.allclose(manifest.transition_matrix, matrix)
+            )
         failed = [name for name, valid in checks.items() if not valid]
         if failed:
             raise ValueError(f"Noise manifest validation failed: {', '.join(failed)}")
@@ -183,7 +201,7 @@ def prepare_noise_manifest(
 
     if mode == "generated":
         assert generated_spec is not None
-        noise_type, rate, seed, sampling, rng = generated_spec
+        noise_type, rate, seed, sampling, rng, matrix = generated_spec
         generator = generate_symmetric if noise_type == "symmetric" else generate_pairflip
         if noise_type == "symmetric":
             manifest = generator(
@@ -195,8 +213,14 @@ def prepare_noise_manifest(
                 sampling=sampling,
                 rng=rng,
             )
-        else:
+        elif noise_type == "pairflip":
             manifest = generator(clean_targets, num_classes, rate, seed, dataset)
+        else:
+            if matrix.shape != (num_classes, num_classes):
+                raise ValueError("class_conditional transition matrix does not match dataset classes")
+            manifest = generate_class_conditional(
+                clean_targets, matrix, rate, seed, dataset, rng=rng
+            )
         manifest.global_indices = global_indices.copy()
         manifest.split = "train"
         manifest.num_classes = num_classes

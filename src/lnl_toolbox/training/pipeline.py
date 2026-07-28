@@ -15,14 +15,20 @@ from lnl_toolbox.noise.estimators import (
     TransitionEstimator,
 )
 from lnl_toolbox.noise.transition import TransitionArtifact, TransitionProvider
+from lnl_toolbox.noise.statistics import StatisticArtifact
 from lnl_toolbox.plugins.builtin.catalog import (
+    build_builtin_objective_consumer,
     build_builtin_risk_corrector,
+    build_builtin_regularizer,
+    build_builtin_statistic_estimator,
     build_builtin_transition_estimator,
     build_builtin_weight_provider,
 )
 from lnl_toolbox.algorithms.transition_risk import RiskCorrector
 from lnl_toolbox.treatments.weights import SupervisedWeightInput, WeightProvider
 from lnl_toolbox.training.snapshots import collect_posterior_snapshot, pretrain_noisy_classifier
+from lnl_toolbox.training.snapshots import FeatureSnapshot, collect_feature_snapshot
+from lnl_toolbox.models.feature_output import forward_with_features
 
 
 class PipelinePhase(str, Enum):
@@ -63,6 +69,10 @@ class PipelineArtifacts:
     transition: TransitionProvider | None = None
     snapshot_path: str | None = None
     transition_path: str | None = None
+    feature_snapshot: FeatureSnapshot | None = None
+    statistic: StatisticArtifact | None = None
+    feature_snapshot_path: str | None = None
+    statistic_path: str | None = None
 
     def state_dict(self) -> dict[str, Any]:
         state: dict[str, Any] = {}
@@ -82,6 +92,22 @@ class PipelineArtifacts:
                     self.transition.source_snapshot_hash
                 ),
             })
+        if self.feature_snapshot is not None:
+            state.update({
+                "feature_snapshot_hash": self.feature_snapshot.snapshot_hash,
+                "feature_snapshot_path": self.feature_snapshot_path,
+                "feature_snapshot_dataset": self.feature_snapshot.dataset,
+                "feature_snapshot_split": self.feature_snapshot.split,
+            })
+        if self.statistic is not None:
+            state.update({
+                "statistic_artifact_hash": self.statistic.artifact_hash,
+                "statistic_path": self.statistic_path,
+                "statistic_estimator": self.statistic.estimator,
+                "statistic_source_snapshot_hash": self.statistic.metadata.get(
+                    "source_snapshot_hash", ""
+                ),
+            })
         return state
 
 
@@ -95,7 +121,10 @@ class StandardNoisyERMPipeline:
 
     risk_corrector: RiskCorrector | None = None
     transition_estimator: TransitionEstimator | None = None
+    statistic_estimator: Any | None = None
+    objective_consumer: Any | None = None
     weight_provider: WeightProvider[SupervisedWeightInput] | None = None
+    regularizer: Any | None = None
     warmup_epochs: int = 0
     artifacts: PipelineArtifacts = field(default_factory=PipelineArtifacts)
     state: PipelineState = field(default_factory=PipelineState)
@@ -105,7 +134,10 @@ class StandardNoisyERMPipeline:
         values = dict(config or {})
         risk_config = values.get("risk_corrector")
         estimator_config = values.get("transition_estimator")
+        statistic_config = values.get("statistic_estimator")
+        objective_config = values.get("objective_consumer")
         weight_config = values.get("weight_provider")
+        regularizer_config = values.get("regularizer")
         if isinstance(weight_config, Mapping):
             weight_name = str(weight_config.get("name", "")).strip().lower()
             if weight_name == "binary_rcn_importance":
@@ -129,6 +161,21 @@ class StandardNoisyERMPipeline:
             if weight_config in (None, False)
             else build_builtin_weight_provider(weight_config)
         )
+        statistic_estimator = (
+            None
+            if statistic_config in (None, False)
+            else build_builtin_statistic_estimator(statistic_config)
+        )
+        objective_consumer = (
+            None
+            if objective_config in (None, False)
+            else build_builtin_objective_consumer(objective_config)
+        )
+        regularizer = (
+            None
+            if regularizer_config in (None, False)
+            else build_builtin_regularizer(regularizer_config)
+        )
         warmup_epochs = int(values.get("warmup_epochs", 0))
         if warmup_epochs < 0:
             raise ValueError("pipeline.warmup_epochs must be non-negative")
@@ -136,7 +183,19 @@ class StandardNoisyERMPipeline:
             raise ValueError(
                 "pipeline.risk_corrector requires pipeline.transition_estimator"
             )
-        return cls(risk, estimator, weight, warmup_epochs)
+        if statistic_estimator is not None and objective_consumer is None:
+            raise ValueError(
+                "pipeline.statistic_estimator requires pipeline.objective_consumer"
+            )
+        return cls(
+            risk_corrector=risk,
+            transition_estimator=estimator,
+            statistic_estimator=statistic_estimator,
+            objective_consumer=objective_consumer,
+            weight_provider=weight,
+            regularizer=regularizer,
+            warmup_epochs=warmup_epochs,
+        )
 
     def warmup(
         self,
@@ -174,6 +233,7 @@ class StandardNoisyERMPipeline:
 
         if self.transition_estimator is None:
             return self.artifacts
+        model.to(device)
         self.warmup(model, optimizer, loader, device)
         snapshot = collect_posterior_snapshot(
             model,
@@ -198,9 +258,86 @@ class StandardNoisyERMPipeline:
         self.state.phase = PipelinePhase.TRAIN
         return self.artifacts
 
+    def prepare_statistics(
+        self,
+        *,
+        model: nn.Module,
+        optimizer: torch.optim.Optimizer,
+        loader,
+        device: torch.device,
+        dataset: str,
+        split: str,
+        run_dir: str | Path,
+    ) -> PipelineArtifacts:
+        """Run warm-up, feature snapshot, and a generic statistic estimator."""
+
+        if self.statistic_estimator is None:
+            return self.artifacts
+        model.to(device)
+        self.warmup(model, optimizer, loader, device)
+        snapshot = collect_feature_snapshot(
+            model,
+            loader,
+            device,
+            dataset=dataset,
+            split=split,
+            feature_extractor=lambda current_model, inputs: forward_with_features(
+                current_model, inputs
+            ).features,
+        )
+        destination = Path(run_dir)
+        feature_snapshot_path = destination / "feature_snapshot.npz"
+        snapshot.save(feature_snapshot_path)
+        statistic = self.statistic_estimator.estimate(snapshot)
+        if not isinstance(statistic, StatisticArtifact):
+            raise TypeError("statistic estimator must return a StatisticArtifact")
+        statistic_path = destination / "statistic_artifact.npz"
+        statistic.save(statistic_path)
+        binder = getattr(self.objective_consumer, "bind_statistic", None)
+        if callable(binder):
+            binder(statistic)
+        elif self.objective_consumer is not None and hasattr(self.objective_consumer, "statistic"):
+            self.objective_consumer.statistic = statistic
+        self.artifacts = PipelineArtifacts(
+            feature_snapshot=snapshot,
+            statistic=statistic,
+            feature_snapshot_path=str(feature_snapshot_path),
+            statistic_path=str(statistic_path),
+        )
+        self.state.phase = PipelinePhase.TRAIN
+        return self.artifacts
+
+    def prepare(self, **kwargs: Any) -> PipelineArtifacts:
+        """Prepare whichever artifact lifecycle is selected by configuration."""
+
+        if self.statistic_estimator is not None:
+            return self.prepare_statistics(**kwargs)
+        return self.prepare_transition(**kwargs)
+
     def load_artifacts(self, run_dir: str | Path) -> bool:
         """Restore prepared artifacts when resuming a staged run."""
 
+        if self.statistic_estimator is not None:
+            destination = Path(run_dir)
+            feature_snapshot_path = destination / "feature_snapshot.npz"
+            statistic_path = destination / "statistic_artifact.npz"
+            if not feature_snapshot_path.is_file() or not statistic_path.is_file():
+                return False
+            snapshot = FeatureSnapshot.load(feature_snapshot_path)
+            statistic = StatisticArtifact.load(statistic_path)
+            if statistic.metadata.get("source_snapshot_hash") != snapshot.snapshot_hash:
+                raise ValueError("statistic artifact does not match feature snapshot")
+            binder = getattr(self.objective_consumer, "bind_statistic", None)
+            if callable(binder):
+                binder(statistic)
+            self.artifacts = PipelineArtifacts(
+                feature_snapshot=snapshot,
+                statistic=statistic,
+                feature_snapshot_path=str(feature_snapshot_path),
+                statistic_path=str(statistic_path),
+            )
+            self.state.phase = PipelinePhase.TRAIN
+            return True
         if self.transition_estimator is None:
             return False
         destination = Path(run_dir)
@@ -227,6 +364,12 @@ class StandardNoisyERMPipeline:
         components: dict[str, Any] = {}
         if self.transition_estimator is not None:
             components["transition_estimator"] = self.transition_estimator
+        if self.statistic_estimator is not None:
+            components["statistic_estimator"] = self.statistic_estimator
+        if self.objective_consumer is not None:
+            components["objective_consumer"] = self.objective_consumer
+        if self.regularizer is not None:
+            components["regularizer"] = self.regularizer
         return components
 
     def component_state_dict(self) -> dict[str, Any]:
@@ -344,6 +487,42 @@ class StandardNoisyERMPipeline:
             transition_path=str(transition_path),
         )
 
+    @staticmethod
+    def _load_resume_statistics(
+        run_dir: str | Path,
+        *,
+        dataset: str,
+        split: str,
+    ) -> PipelineArtifacts:
+        destination = Path(run_dir)
+        snapshot_path = destination / "feature_snapshot.npz"
+        statistic_path = destination / "statistic_artifact.npz"
+        missing = [
+            str(path.name)
+            for path in (snapshot_path, statistic_path)
+            if not path.is_file()
+        ]
+        if missing:
+            raise FileNotFoundError(
+                f"statistic artifact missing during resume: {', '.join(missing)}"
+            )
+        snapshot = FeatureSnapshot.load(snapshot_path)
+        statistic = StatisticArtifact.load(statistic_path)
+        if snapshot.dataset != dataset or snapshot.split != split:
+            raise ValueError(
+                "statistic artifact provenance mismatch: "
+                f"expected dataset={dataset!r}, split={split!r}; "
+                f"found dataset={snapshot.dataset!r}, split={snapshot.split!r}"
+            )
+        if statistic.metadata.get("source_snapshot_hash") != snapshot.snapshot_hash:
+            raise ValueError("statistic artifact source snapshot hash mismatch")
+        return PipelineArtifacts(
+            feature_snapshot=snapshot,
+            statistic=statistic,
+            feature_snapshot_path=str(snapshot_path),
+            statistic_path=str(statistic_path),
+        )
+
     def restore_for_resume(
         self,
         run_dir: str | Path,
@@ -365,7 +544,25 @@ class StandardNoisyERMPipeline:
         else:
             self.load_state_dict(checkpoint_state)
 
-        if self.transition_estimator is not None:
+        if self.statistic_estimator is not None:
+            artifacts = self._load_resume_statistics(
+                run_dir,
+                dataset=dataset,
+                split=split,
+            )
+            if not legacy:
+                expected = checkpoint_state.get("artifacts")
+                if not isinstance(expected, Mapping):
+                    raise ValueError("checkpoint identity mismatch: statistic artifact identity is missing")
+                actual = artifacts.state_dict()
+                for name in ("feature_snapshot_hash", "statistic_artifact_hash"):
+                    if expected.get(name) != actual.get(name):
+                        raise ValueError(f"checkpoint identity mismatch for {name}")
+            self.artifacts = artifacts
+            binder = getattr(self.objective_consumer, "bind_statistic", None)
+            if callable(binder):
+                binder(artifacts.statistic)
+        elif self.transition_estimator is not None:
             artifacts = self._load_resume_artifacts(
                 run_dir,
                 dataset=dataset,

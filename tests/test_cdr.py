@@ -5,7 +5,11 @@ from pathlib import Path
 
 import torch
 
-from lnl_toolbox.algorithms.cdr import CDRUpdatePolicy, critical_parameter_masks
+from lnl_toolbox.algorithms.cdr import (
+    CDRUpdatePolicy,
+    critical_parameter_masks,
+    official_code_parameter_masks,
+)
 from lnl_toolbox.algorithms.supervised import SupervisedClassificationAlgorithm
 from lnl_toolbox.algorithms.update_policy import ParameterUpdateInput
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
@@ -158,6 +162,67 @@ class CDRUpdatePolicyTest(unittest.TestCase):
         self.assertEqual(result.eligible_parameters, 11)
         self.assertEqual(result.critical_parameters, math.ceil(0.6 * 11))
         self.assertIn("bias", result.masks)
+
+    def test_official_code_mode_matches_released_scope_ties_and_l2_step(self) -> None:
+        model = torch.nn.Linear(2, 2)
+        with torch.no_grad():
+            model.weight.copy_(torch.tensor([[2.0, -1.0], [0.0, 4.0]]))
+            model.bias.copy_(torch.tensor([1.0, -1.0]))
+        weight_before = model.weight.detach().clone()
+        bias_before = model.bias.detach().clone()
+        coefficients = torch.tensor([[1.0, 3.0], [9.0, -0.25]])
+        bias_coefficients = torch.tensor([2.0, -3.0])
+        objective = (
+            (model.weight * coefficients).sum()
+            + (model.bias * bias_coefficients).sum()
+        )
+        optimizer = torch.optim.SGD(
+            model.parameters(), lr=0.1, weight_decay=0.1
+        )
+        result = CDRUpdatePolicy(
+            noise_rate=0.5,
+            l1_decay=0.0,
+            critical_scope="matrix_and_convolution_weights",
+            compatibility_mode="official_code",
+        ).update(ParameterUpdateInput(
+            objective, model, optimizer, RunState()
+        ))
+        expected_weight_gradient = torch.tensor([
+            [0.5, 1.5],
+            [0.0, 0.0],
+        ]) + 0.1 * weight_before
+        expected_bias_gradient = bias_coefficients + 0.1 * bias_before
+        torch.testing.assert_close(
+            model.weight,
+            weight_before - 0.1 * expected_weight_gradient,
+        )
+        torch.testing.assert_close(
+            model.bias,
+            bias_before - 0.1 * expected_bias_gradient,
+        )
+        self.assertEqual(result.metrics["update_eligible_parameters"], 4.0)
+        self.assertEqual(result.metrics["update_critical_parameters"], 2.0)
+
+        tied = torch.nn.Parameter(torch.ones(4, 1))
+        tied.grad = torch.ones_like(tied)
+        masks = official_code_parameter_masks([("weight", tied)], 0.5)
+        self.assertEqual(masks.critical_parameters, 4)
+
+    def test_official_code_mode_rejects_paper_l1_or_scope(self) -> None:
+        with self.assertRaisesRegex(ValueError, "l1_decay=0"):
+            CDRUpdatePolicy(
+                0.4,
+                0.001,
+                compatibility_mode="official_code",
+                critical_scope="matrix_and_convolution_weights",
+            )
+        with self.assertRaisesRegex(ValueError, "critical_scope"):
+            CDRUpdatePolicy(
+                0.4,
+                0.0,
+                compatibility_mode="official_code",
+                critical_scope="all_trainable",
+            )
 
     def test_selector_and_cdr_compose_without_clean_label_input(self) -> None:
         model = torch.nn.Linear(2, 2, bias=False)

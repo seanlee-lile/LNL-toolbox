@@ -19,6 +19,7 @@ import yaml
 
 from lnl_toolbox.algorithms.supervised import SupervisedClassificationAlgorithm
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
+from lnl_toolbox.core.hyperparameters import resolve_parameter_sampling
 from lnl_toolbox.data import NoisyTargetDataset
 from lnl_toolbox.data.cifar import load_cifar10, load_cifar100
 from lnl_toolbox.data.torch_cifar import (
@@ -26,11 +27,16 @@ from lnl_toolbox.data.torch_cifar import (
     build_cifar_transform,
     cifar_pixel_mean,
     stratified_split,
+    train_validation_split,
 )
 from lnl_toolbox.evaluation.classification import evaluate_classification
 from lnl_toolbox.models.cifar_resnet import (
+    cifar_resnet14,
+    cifar_resnet32,
+    cifar_resnet_depth,
     cifar_resnet18,
     cifar_resnet34,
+    cifar_resnet50,
     preact_resnet18,
 )
 from lnl_toolbox.models.cifar_cnn import CifarCnn8
@@ -66,6 +72,19 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
         return cifar_resnet18(num_classes, int(config.get("base_width", 64)))
     if name == "resnet34":
         return cifar_resnet34(num_classes, int(config.get("base_width", 64)))
+    if name == "resnet50":
+        return cifar_resnet50(
+            num_classes,
+            int(config.get("base_width", 64)),
+            stem_padding=int(config.get("stem_padding", 1)),
+            initialization=str(config.get("initialization", "kaiming")),
+        )
+    if name in {"resnet14", "cifar_resnet14"}:
+        return cifar_resnet14(num_classes, int(config.get("base_width", 16)))
+    if name in {"resnet32", "cifar_resnet32"}:
+        return cifar_resnet32(num_classes, int(config.get("base_width", 16)))
+    if name.startswith("resnet") and name[6:].isdigit():
+        return cifar_resnet_depth(int(name[6:]), num_classes, int(config.get("base_width", 16)))
     if name == "preact_resnet18":
         return preact_resnet18(num_classes, int(config.get("base_width", 64)))
     raise ValueError(f"Unsupported model: {name}")
@@ -164,6 +183,8 @@ def _normalized_resume_value(config: Mapping[str, Any], key: str) -> Any:
         return dict(config.get("pipeline", {}) or {})
     if key == "early_stopping":
         return dict(config.get("early_stopping", {}) or {})
+    if key == "parameter_record":
+        return dict(config.get("parameter_record", {}) or {})
     return config.get(key)
 
 
@@ -178,6 +199,7 @@ def _validate_resume_config(current: Mapping[str, Any], saved: Mapping[str, Any]
         "parameter_update",
         "pipeline",
         "early_stopping",
+        "parameter_record",
     ):
         if _normalized_resume_value(current, key) != _normalized_resume_value(saved, key):
             raise ValueError(f"Resume configuration changed {key}")
@@ -193,6 +215,15 @@ def _validate_resume_config(current: Mapping[str, Any], saved: Mapping[str, Any]
     ).lower()
     if current_preprocessing != saved_preprocessing:
         raise ValueError("Resume configuration changed data.preprocessing")
+    for key, default in (
+        ("validation_size", None),
+        ("validation_split", {"strategy": "stratified", "rng": "default_rng"}),
+        ("normalization", None),
+    ):
+        current_value = current.get("data", {}).get(key, default)
+        saved_value = saved.get("data", {}).get(key, default)
+        if current_value != saved_value:
+            raise ValueError(f"Resume configuration changed data.{key}")
     current_validation_targets = str(
         current.get("noise", {}).get("validation_targets", "clean")
     ).lower()
@@ -277,6 +308,7 @@ def run_supervised_experiment(
     """Run one reproducible clean or noisy-label supervised experiment."""
 
     config = deepcopy(config)
+    config, parameter_record = resolve_parameter_sampling(config)
     config.setdefault("loss", {"name": "ce"})
     config.setdefault("parameter_update", {"name": "standard"})
     _validate_supervised_config(config)
@@ -306,6 +338,8 @@ def run_supervised_experiment(
         if not isinstance(saved_config, Mapping):
             raise ValueError("Checkpoint is missing its resolved configuration")
         _validate_resume_config(config, saved_config)
+        if parameter_record is not None and saved_config.get("parameter_record") != parameter_record.to_dict():
+            raise ValueError("Resume parameter sampling record changed")
 
     data_config = config["data"]
     dataset_name = str(data_config.get("name", "cifar10")).lower()
@@ -320,8 +354,15 @@ def run_supervised_experiment(
         full_train_indices = np.arange(len(train_data), dtype=np.int64)
         validation_indices = np.empty(0, dtype=np.int64)
     else:
-        full_train_indices, validation_indices = stratified_split(
-            train_data.labels, validation_size, seed
+        split_config = data_config.get("validation_split", {}) or {}
+        if not isinstance(split_config, Mapping):
+            raise TypeError("data.validation_split must be a mapping")
+        full_train_indices, validation_indices = train_validation_split(
+            train_data.labels,
+            validation_size,
+            seed,
+            strategy=str(split_config.get("strategy", "stratified")),
+            rng=str(split_config.get("rng", "default_rng")),
         )
     noise_config = config.get("noise") or {}
     validation_target_source = str(
@@ -362,6 +403,12 @@ def run_supervised_experiment(
         seed + 3,
     )
     preprocessing = str(data_config.get("preprocessing", "standard")).lower()
+    normalization = data_config.get("normalization")
+    if normalization is not None and not isinstance(normalization, Mapping):
+        raise TypeError("data.normalization must be a mapping")
+    normalization = dict(normalization or {})
+    if normalization and set(normalization) != {"mean", "std"}:
+        raise ValueError("data.normalization must contain exactly mean and std")
     pixel_mean = (
         cifar_pixel_mean(train_data.images)
         if preprocessing == "gce2018"
@@ -370,6 +417,8 @@ def run_supervised_experiment(
     transform_options = {
         "preprocessing": preprocessing,
         "pixel_mean": pixel_mean,
+        "normalization_mean": normalization.get("mean"),
+        "normalization_std": normalization.get("std"),
     }
 
     clean_train_set = TorchCifarDataset(
@@ -455,7 +504,7 @@ def run_supervised_experiment(
             split="train",
         )
     else:
-        pipeline.prepare_transition(
+        pipeline.prepare(
             model=model,
             optimizer=optimizer,
             loader=train_loader,
@@ -475,6 +524,9 @@ def run_supervised_experiment(
         risk_corrector=pipeline.risk_corrector,
         transition=pipeline.artifacts.transition,
         weight_provider=pipeline.weight_provider,
+        regularizer=pipeline.regularizer,
+        objective_consumer=pipeline.objective_consumer,
+        regularizer_weight=float((config.get("pipeline", {}) or {}).get("regularizer_weight", 1.0)),
     )
     algorithm.setup(ExperimentContext(run_dir, config, seed))
     state = RunState(phase="train")
@@ -505,6 +557,10 @@ def run_supervised_experiment(
     (run_dir / "resolved_config.yaml").write_text(
         yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
     )
+    if parameter_record is not None:
+        (run_dir / "parameter_record.json").write_text(
+            json.dumps(parameter_record.to_dict(), indent=2), encoding="utf-8"
+        )
     (run_dir / "environment.json").write_text(
         json.dumps(_environment(seed, device), indent=2), encoding="utf-8"
     )
@@ -639,6 +695,7 @@ def run_supervised_experiment(
                 "pipeline": pipeline.state_dict(),
                 "component_states": pipeline.component_state_dict(),
                 "early_stopping": None if early_stopping is None else early_stopping.state_dict(),
+                "parameter_record": None if parameter_record is None else parameter_record.to_dict(),
             }
             save_checkpoint(
                 run_dir / "last.pt",

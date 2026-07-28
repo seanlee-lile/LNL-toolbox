@@ -102,8 +102,56 @@ def critical_parameter_masks(
     return CriticalParameterMasks(masks, count, critical_count)
 
 
+def official_code_parameter_masks(
+    named_parameters: Iterable[tuple[str, nn.Parameter]],
+    noise_rate: float,
+) -> CriticalParameterMasks:
+    """Reproduce the released code's 2D/4D scope and threshold tie behavior."""
+
+    tau = _validate_noise_rate(noise_rate)
+    values = [
+        (str(name), parameter)
+        for name, parameter in named_parameters
+        if (
+            parameter.requires_grad
+            and parameter.grad is not None
+            and parameter.dim() in {2, 4}
+        )
+    ]
+    if not values:
+        raise ValueError("Official-code CDR requires a 2D or 4D parameter")
+    devices = {parameter.device for _, parameter in values}
+    if len(devices) != 1:
+        raise ValueError("CDR requires all eligible parameters on one device")
+    for name, parameter in values:
+        gradient = parameter.grad
+        assert gradient is not None
+        if gradient.is_sparse:
+            raise ValueError(f"CDR does not support sparse gradients: {name}")
+        if not torch.isfinite(parameter.detach()).all():
+            raise ValueError(f"CDR parameter must be finite: {name}")
+        if not torch.isfinite(gradient.detach()).all():
+            raise ValueError(f"CDR gradient must be finite: {name}")
+    flattened = [
+        (parameter.grad.detach() * parameter.detach()).abs().reshape(-1)
+        for _, parameter in values
+    ]
+    scores = torch.cat(flattened)
+    count = int(scores.numel())
+    requested_count = int((1.0 - tau) * count)
+    if requested_count <= 0:
+        raise ValueError("Official-code CDR selected zero critical parameters")
+    threshold = torch.topk(scores, requested_count).values[-1]
+    masks = {
+        name: (parameter.grad.detach() * parameter.detach()).abs() >= threshold
+        for name, parameter in values
+    }
+    actual_count = sum(int(mask.sum().item()) for mask in masks.values())
+    return CriticalParameterMasks(masks, count, actual_count)
+
+
 class CDRUpdatePolicy:
-    """Paper-mode CDR update policy implementing Eq. (3)-(6)."""
+    """CDR update policy with explicit paper-equation and released-code modes."""
 
     name = "cdr"
 
@@ -111,17 +159,35 @@ class CDRUpdatePolicy:
         self,
         noise_rate: float,
         l1_decay: float,
-        critical_scope: str = "all_trainable",
+        critical_scope: str | None = None,
+        compatibility_mode: str = "paper",
     ) -> None:
         self.noise_rate = _validate_noise_rate(noise_rate)
         self.l1_decay = float(l1_decay)
         if not math.isfinite(self.l1_decay) or self.l1_decay < 0.0:
             raise ValueError("CDR l1_decay must be finite and non-negative")
-        if critical_scope != "all_trainable":
+        self.compatibility_mode = str(compatibility_mode).strip().lower()
+        if self.compatibility_mode not in {"paper", "official_code"}:
             raise ValueError(
-                "Paper-mode CDR only supports critical_scope='all_trainable'"
+                "CDR compatibility_mode must be 'paper' or 'official_code'"
             )
-        self.critical_scope = critical_scope
+        expected_scope = (
+            "all_trainable"
+            if self.compatibility_mode == "paper"
+            else "matrix_and_convolution_weights"
+        )
+        self.critical_scope = expected_scope if critical_scope is None else str(
+            critical_scope
+        )
+        if self.critical_scope != expected_scope:
+            raise ValueError(
+                f"{self.compatibility_mode} CDR requires "
+                f"critical_scope={expected_scope!r}"
+            )
+        if self.compatibility_mode == "official_code" and self.l1_decay != 0.0:
+            raise ValueError(
+                "Official-code CDR requires l1_decay=0; use optimizer weight_decay"
+            )
 
     def setup(self, context: ExperimentContext) -> None:
         del context
@@ -132,13 +198,14 @@ class CDRUpdatePolicy:
         optimizer: torch.optim.Optimizer,
     ) -> None:
         if not isinstance(optimizer, torch.optim.SGD):
-            raise TypeError("Paper-mode CDR requires torch.optim.SGD")
-        for group in optimizer.param_groups:
-            if float(group.get("weight_decay", 0.0)) != 0.0:
-                raise ValueError(
-                    "Paper-mode CDR requires optimizer weight_decay=0; "
-                    "use l1_decay for Eq. (5)-(6)"
-                )
+            raise TypeError("CDR requires torch.optim.SGD")
+        if self.compatibility_mode == "paper":
+            for group in optimizer.param_groups:
+                if float(group.get("weight_decay", 0.0)) != 0.0:
+                    raise ValueError(
+                        "Paper-mode CDR requires optimizer weight_decay=0; "
+                        "use l1_decay for Eq. (5)-(6)"
+                    )
         model_ids = {
             id(parameter)
             for parameter in model.parameters()
@@ -161,10 +228,17 @@ class CDRUpdatePolicy:
         request.optimizer.zero_grad(set_to_none=True)
         request.objective.backward()
         named_parameters = list(request.model.named_parameters())
-        selected = critical_parameter_masks(
-            named_parameters,
-            self.noise_rate,
-            critical_scope=self.critical_scope,
+        selected = (
+            critical_parameter_masks(
+                named_parameters,
+                self.noise_rate,
+                critical_scope=self.critical_scope,
+            )
+            if self.compatibility_mode == "paper"
+            else official_code_parameter_masks(
+                named_parameters,
+                self.noise_rate,
+            )
         )
         gradient_scale = 1.0 - self.noise_rate
         with torch.no_grad():
@@ -172,10 +246,13 @@ class CDRUpdatePolicy:
                 gradient = parameter.grad
                 if not parameter.requires_grad or gradient is None:
                     continue
+                if name not in selected.masks:
+                    continue
                 mask = selected.masks[name]
                 gradient.mul_(mask.to(dtype=gradient.dtype))
                 gradient.mul_(gradient_scale)
-                gradient.add_(parameter.sign(), alpha=self.l1_decay)
+                if self.compatibility_mode == "paper":
+                    gradient.add_(parameter.sign(), alpha=self.l1_decay)
         request.optimizer.step()
         return ParameterUpdateResult({
             "update_eligible_parameters": float(selected.eligible_parameters),

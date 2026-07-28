@@ -33,9 +33,22 @@ else:
         "critical_parameter_masks",
     ])
 try:
+    from .binary_risk import BinaryRiskCorrector, LabelDependentCostRisk, NatarajanRisk, NatarajanUnbiasedRisk
+except ImportError:
+    pass
+else:
+    __all__.extend(["BinaryRiskCorrector", "LabelDependentCostRisk", "NatarajanRisk", "NatarajanUnbiasedRisk"])
+try:
     from .supervised import SupervisedClassificationAlgorithm
 except ImportError:
     SupervisedClassificationAlgorithm = None  # type: ignore[assignment]
+try:
+    from .dss import DSSObjective
+    from .masked_risk import candidate_masked_cross_entropy
+except ImportError:
+    pass
+else:
+    __all__.extend(["DSSObjective", "candidate_masked_cross_entropy"])
 try:
     from .transition_risk import BackwardRiskCorrector, ForwardRiskCorrector, RiskCorrector
 except ImportError:

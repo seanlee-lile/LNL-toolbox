@@ -175,7 +175,7 @@ class PluginCatalogTest(unittest.TestCase):
         catalog = create_builtin_catalog()
         self.assertEqual(
             [item.name for item in catalog.find(kind="transition_estimator")],
-            ["anchor", "dual_t"],
+            ["anchor", "dual_t", "known"],
         )
         self.assertIsInstance(
             build_builtin_transition_estimator({"name": "anchor"}, catalog),
@@ -184,6 +184,12 @@ class PluginCatalogTest(unittest.TestCase):
         self.assertIsInstance(
             build_builtin_transition_estimator({"name": "dual_t"}, catalog),
             DualTransitionEstimator,
+        )
+        self.assertEqual(
+            type(build_builtin_transition_estimator(
+                {"name": "known", "matrix": np.eye(2).tolist()}, catalog
+            )).__name__,
+            "KnownTransitionEstimator",
         )
         with self.assertRaises(ValueError):
             build_builtin_transition_estimator({"name": "unknown"}, catalog)
@@ -282,7 +288,7 @@ class PluginCatalogTest(unittest.TestCase):
         )
         self.assertEqual(
             [item.name for item in catalog.find(kind="transition_estimator")],
-            ["anchor", "dual_t"],
+            ["anchor", "dual_t", "known"],
         )
         self.assertEqual(
             [item.name for item in catalog.find(kind="parameter_update_policy")],

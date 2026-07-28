@@ -27,6 +27,12 @@ class SelectionResult:
     selected_mask: Tensor
     metrics: Mapping[str, float] = field(default_factory=dict)
 
+    @property
+    def rejected_mask(self) -> Tensor:
+        """Return the aligned complement for noisy-subset consumers."""
+
+        return ~self.selected_mask
+
 
 @runtime_checkable
 class Selector(Protocol):
