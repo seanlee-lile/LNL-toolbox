@@ -284,7 +284,7 @@ class CDRUpdatePolicyTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "does not match"):
                 load_checkpoint(path, standard_algorithm, torch.device("cpu"))
 
-    def test_runner_validation_rejects_incompatible_optimizer_and_resume(self) -> None:
+    def test_runner_does_not_own_cdr_optimizer_validation(self) -> None:
         base = {
             "optimizer": {"name": "sgd", "lr": 0.01, "weight_decay": 0.0},
             "parameter_update": {
@@ -294,16 +294,14 @@ class CDRUpdatePolicyTest(unittest.TestCase):
             },
         }
         _validate_supervised_config(base)
-        with self.assertRaisesRegex(ValueError, "optimizer.name=sgd"):
-            _validate_supervised_config({
-                **base,
-                "optimizer": {"name": "adamw", "lr": 0.001},
-            })
-        with self.assertRaisesRegex(ValueError, "weight_decay=0"):
-            _validate_supervised_config({
-                **base,
-                "optimizer": {"name": "sgd", "lr": 0.01, "weight_decay": 0.1},
-            })
+        _validate_supervised_config({
+            **base,
+            "optimizer": {"name": "adamw", "lr": 0.001},
+        })
+        _validate_supervised_config({
+            **base,
+            "optimizer": {"name": "sgd", "lr": 0.01, "weight_decay": 0.1},
+        })
         with self.assertRaisesRegex(ValueError, "parameter_update"):
             _validate_resume_config(
                 base,

@@ -49,6 +49,22 @@ class WeightResult:
     metrics: Mapping[str, float] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class SupervisedWeightInput:
+    """Noisy-only signals exposed by the ordinary supervised training step.
+
+    This input deliberately does not contain a posterior estimate. Providers
+    that require method-specific evidence must define and receive their own
+    typed input instead of inferring it from the current classifier.
+    """
+
+    logits: Tensor
+    noisy_targets: Tensor
+    sample_indices: Tensor
+    per_sample_loss: Tensor
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
 InputT_contra = TypeVar("InputT_contra", contravariant=True)
 
 
@@ -58,6 +74,17 @@ class WeightProvider(Protocol[InputT_contra]):
 
     def compute(self, weight_input: InputT_contra) -> WeightResult:
         """Return weights aligned with the input batch."""
+
+
+@runtime_checkable
+class StatefulWeightProvider(WeightProvider[InputT_contra], Protocol):
+    """Optional state contract for history-based or learned weights."""
+
+    def state_dict(self) -> Mapping[str, Any]:
+        ...
+
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        ...
 
 
 def _validate_rate(name: str, value: float) -> float:
@@ -229,3 +256,18 @@ class WeightContributionAdapter(Generic[InputT]):
             sample_weights=weights,
             metrics=dict(result.metrics),
         )
+
+    def state_dict(self) -> dict[str, Any]:
+        if hasattr(self.provider, "state_dict"):
+            return {"state": dict(self.provider.state_dict())}
+        return {}
+
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        if not state:
+            return
+        if not hasattr(self.provider, "load_state_dict"):
+            raise ValueError("weight provider is not stateful")
+        provider_state = state.get("state", state)
+        if not isinstance(provider_state, Mapping):
+            raise TypeError("weight provider state must be a mapping")
+        self.provider.load_state_dict(provider_state)

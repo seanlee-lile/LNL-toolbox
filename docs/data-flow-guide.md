@@ -33,6 +33,7 @@ flowchart LR
 当前事实：
 
 - `training/experiment.py::run_supervised_experiment` 是 clean/noisy CIFAR 的唯一生产训练循环。
+- 论文复现仍复用该循环：显式配置可让同一 Noise Manifest 覆盖 train/validation，test 始终保持 clean；`trainer.progress` 只负责终端显示和 SVG 产物，不改变训练数学。
 - `run_experiment` 是兼容别名；`run_clean_experiment` 是 clean-only 包装。
 - 生产路径固定使用 `SupervisedClassificationAlgorithm`；尚不能通过 YAML 替换任意 Algorithm。
 - `engine/runner.py` 没有进入该路径。两者都会推进 step，不能直接嵌套。
@@ -243,9 +244,9 @@ Artifact 必须保存格式版本、estimator 名称、来源 snapshot hash、�
 metadata 和 artifact hash；加载时验证内容完整性，不得隐式裁剪或归一化。
 `KnownTransition` 与 estimator 产物共享相同矩阵方向和 Tensor 输出接口。
 
-`training/snapshots.py::collect_posterior_snapshot()` 是唯一 posterior 收集入口：
+`training/snapshots.py::collect_posterior_snapshot()` 与 `collect_feature_snapshot()` 是唯一 posterior/feature 收集入口：
 在 `inference_mode` 下按 batch 的 `input/target/index` 收集，按 global index 排序，
-并恢复模型原训练状态。它不负责 warm-up 训练，也不读取 clean target。
+并恢复模型原训练状态。共享 `pretrain_noisy_classifier()` 负责 warm-up；snapshot 收集不读取 clean target。
 
 当前离线、无状态 estimator：
 
@@ -446,7 +447,7 @@ clean/noisy threshold split。
 - legacy Selector adapter 保留原 mask 和 metrics，并补充全一权重；
 - `ReductionSpec` 明确支持 `weight_sum_mean`、`batch_mean` 和 `sum`；
 - 普通监督训练固定使用 `weight_sum_mean`，零有效贡献或非有限 loss 必须报错，不得回退到全样本 CE；
-- 当前不支持 soft target、label correction、论文 method preset 或 stateful treatment，也不修改 checkpoint schema。
+- 当前提供 soft/pseudo/candidate target 的通用结果与 Provider 合同；具体论文的 label correction 和 stateful treatment 仍由独立 Pipeline 实现。
 
 公共配置继续使用既有 `selector: all/small_loss`。`TopKSelector`、`ThresholdSelector` 和论文 Algorithm 不属于本阶段。
 
@@ -463,7 +464,7 @@ clean/noisy threshold split。
 - adapter 生成全 `True` mask，权重乘到保留 autograd 的逐样本 loss；
 - 论文目标使用 `ReductionSpec("batch_mean")`，即 `sum(beta_i * loss_i) / B`，不能改成按权重和归一化。
 
-该组件不支持多分类，不估计 posterior 或噪声率，未接入 YAML、plugin、checkpoint 或监督训练构造流程，因此只是 **paper-exact binary asymmetric-RCN importance-weight component**，不是完整 Importance Reweighting Pipeline。
+该组件仍不支持多分类，也不估计 posterior 或噪声率。普通监督训练只产生 `SupervisedWeightInput`，其中没有 posterior；因此当前组件必须由未来的显式 posterior producer 构造 `BinaryRCNWeightInput` 后调用，不能把当前分类器 softmax 当作独立 noisy-label posterior。该组件不作为可运行 YAML/plugin 方法暴露，也不是完整 Importance Reweighting 论文 Pipeline。
 
 ## 8. Evaluator、产物与 Checkpoint
 
@@ -533,6 +534,7 @@ Evaluator 使用独立 clean validation/test loader；在 `inference_mode` 下�
 | ParameterUpdatePolicy | `algorithms/update_policy.py`、plugin catalog | Supervised Algorithm、Checkpoint | `test_update_policy.py`、`test_cdr.py` |
 | Algorithm/StepResult | `algorithms/supervised.py` | Runner、Checkpoint | `test_core.py`、`test_torch_training.py` |
 | Runner/config | `training/experiment.py`、CLI | 所有训练组件 | `test_cli.py`、smoke tests |
+| 训练进度/曲线 | `training/progress.py` | Runner、人工实验审阅 | `test_training_progress.py` |
 | Checkpoint v2 | `training/checkpoint.py` | Runner、resume | `test_clean_baseline.py`、`test_torch_training.py` |
 | clean evaluation | `evaluation/classification.py` | Runner | `test_noisy_ce_baseline.py` |
 

@@ -8,12 +8,74 @@
 
 本文不把“类型兼容”“plugin 可构造”或“单元测试可拼接”视为完整论文实现。只有模型数量、目标函数、状态、更新顺序和训练生命周期都符合原文时，才允许声明完整实现。
 
+## 项目总目标与实现原则
+
+本项目的一切接口设计、模块实现、论文复现、训练接入和工程测试，最终都服务于本文定义的目标。本文同时定义可复用原语与独立 Algorithm/Pipeline 的边界，记录代码实际覆盖层级，并约束可以和禁止对外声明的能力。
+
+### 最终目标
+
+- 为可复用论文机制提供语义清晰、边界稳定的通用原语；
+- 为具有独立模型数量、目标函数、状态和更新顺序的方法实现完整 Algorithm/Pipeline；
+- 将原语接入真实训练、checkpoint 和 resume 生命周期；
+- 为论文方法提供原文对应的 acceptance tests；
+- 准确区分完整实现、精确子组件、通用工程原语、近似实现和未实现；
+- 不以类型兼容、plugin 注册或组件拼接夸大完成度。
+
+### 功能保护原则
+
+“不得撤销已有功能”只保护与论文公式或已批准工程语义一致、职责清晰、已有测试、具有合法数据来源且不妨碍其他论文实现空间的能力。违反论文语义的临时接入、宽泛万能输入、没有合法 producer/consumer 的伪链路、silent failure、样本错位、错误 resume 和仅用于证明可构造的 plugin 不属于应原样保留的功能，应通过兼容适配、局部重构或显式弃用修正。
+
+必须保护的已验证能力包括：
+
+- CE、GCE、NCE、MAE、RCE、APL 的逐样本 Loss 与训练消费链；
+- AllSelector、SmallLossSelector、keep-rate schedule；
+- ContributionResult、ReductionSpec 和统一 reducer；
+- Binary RCN importance-weight 精确公式；
+- ReliabilityResult、DivideMix GMM 和 stable-index adapter；
+- PosteriorSnapshot、Anchor/Dual-T estimator 和 TransitionArtifact；
+- StandardUpdatePolicy、CDRUpdatePolicy；
+- 合法的 plugin、配置、checkpoint/resume 路径；
+- Co-teaching legacy exchange primitive；
+- 已有测试证明的 backward compatibility。
+
+使用当前分类器 softmax 冒充独立 noisy-label posterior、未经 stable-index 校验应用 target result、resume 缺失 artifact 时静默重估、保存 state 但不恢复，以及用通用原语冒充完整论文方法，均属于必须修正的过渡行为。
+
+### 开发优先级
+
+1. 完成 Forward/Backward Loss Correction 的 RiskCorrector 和训练消费链；
+2. 建立完整 Co-teaching 双模型 Algorithm；
+3. 补齐 CDR paper preset 和 early-learning lifecycle；
+4. 完成 Importance Reweighting 的 posterior/rate producer 与 Pipeline；
+5. 选择 MC-LDCE、CWD 或 PCSE 完成一个 statistic vertical slice；
+6. 将 DivideMix 实现为独立双网络 SSL Pipeline；
+7. 再逐步补充其他论文完整实现。
+
+主线之外不继续增加无目标容器、空接口或没有 consumer 的 plugin。
+
+### 完整论文方法的完成标准
+
+只有同时满足下列条件，才能标记为“完整实现”：
+
+- 模型数量和 objective 与原文一致；
+- 必需的跨 batch、跨 epoch 或全数据状态已经实现；
+- 更新顺序和阶段生命周期与原文一致；
+- checkpoint/resume 覆盖全部必要状态；
+- 具有论文专属配置和 acceptance tests；
+- 完成可重复的端到端实验验证；
+- 文档准确记录实现偏差与适用范围。
+
+只完成 loss、selector、estimator、update rule 或其他单一模块时，只能声明为“精确子组件”或“通用工程原语”。
+
+### 合并与验收原则
+
+分支合入 `ce_baseline` 前必须说明：补充了哪项覆盖能力；属于原语、精确子组件还是完整方法；是否存在真实 producer/consumer；是否进入训练、checkpoint/resume；是否改变接口或配置；论文忠实性风险；测试是否充分；以及是否需要同步更新本文。不能回答这些问题的代码不应直接进入稳定基线。
+
 ## 1. 阅读范围与版本
 
 审计基线为 `ce_baseline` 的 commit
 `d53ac44d0ab6d441c5985746da3f5135e9d69994`。论文清单来自
-`papers/paper-baseline-taxonomy.md` 和
-`papers/paper-implementation-guideline.md`，实现判断来自当前源码与测试。
+`papers/implement/paper-baseline-taxonomy.md` 和
+`papers/implement/paper-implementation-guideline.md`，实现判断来自当前源码与测试。
 
 实际论文根目录是 `D:\ABhomework\科研\label-noise\papers`。审计时该目录只有
 24 个 PDF。以下两篇没有本地 PDF，使用在线官方原文核验：
@@ -80,13 +142,13 @@
 | 07 | CNLCU | loss confidence bounds | Reliability / Selector | 通用合同 | 未实现 | 否 | 否 | 历史状态、区间估计、双网络流程 |
 | 08 | MentorNet | learned sample weights | WeightProvider | 泛型合同 | 接口已存在但无实现 | 否 | 否 | Mentor model 与 student lifecycle |
 | 09 | Co-teaching | peer small-loss exchange | Algorithm | `src/lnl_toolbox/algorithms/coteaching.py` | 精确子组件 | 否 | 否 | 双模型 Algorithm/checkpoint |
-| 10 | Loss Correction | Anchor transition estimate | TransitionEstimator / RiskCorrector | `src/lnl_toolbox/noise/estimators.py` | 精确子组件 | estimator 否 | 否 | Forward/Backward risk consumer |
+| 10 | Loss Correction | Anchor estimate、Forward/Backward corrected risk | TransitionEstimator / RiskCorrector | `src/lnl_toolbox/noise/estimators.py`、`src/lnl_toolbox/algorithms/transition_risk.py` | 精确子组件 | 是 | 否 | 论文 preset、acceptance experiment |
 | 11 | Normalized Losses / APL | NCE、MAE、RCE、APL | Loss | `src/lnl_toolbox/losses/torch_losses.py` | 精确子组件 | 是 | 否 | 论文全部组合与复现实验 |
 | 12 | GCE | standard \(L_q\) | Loss | `src/lnl_toolbox/losses/torch_losses.py` | 精确子组件 | 是 | 否 | truncated \(L_q\) 更新 |
 | 13 | VolMinNet | trainable transition | NoiseModel / Pipeline | 无 | 未实现 | 否 | 否 | volume regularizer、联合优化 |
 | 14 | Natarajan | unbiased binary risk | RiskCorrector | 无 | 未实现 | 否 | 否 | signed corrected risk |
 | 15 | T-Revision | Anchor initialization | Transition primitive | `src/lnl_toolbox/noise/estimators.py` | 通用工程原语 | 否 | 否 | trainable slack、revision stages |
-| 16 | Dual-T | factorized transition estimate | TransitionEstimator | `src/lnl_toolbox/noise/estimators.py` | 精确子组件 | estimator 否 | 否 | corrected-risk consumer |
+| 16 | Dual-T | factorized transition estimate | TransitionEstimator | `src/lnl_toolbox/noise/estimators.py` | 精确子组件 | 是 | 否 | 论文 preset、正式复现实验 |
 | 17 | MC-LDCE | clean centroid statistic | Statistic / RiskCorrector | `StatisticResult` | 接口已存在但无实现 | 否 | 否 | centroid estimator、global risk |
 | 18 | Importance Reweighting | binary asymmetric-RCN weight | WeightProvider | `src/lnl_toolbox/treatments/weights.py` | 精确子组件 | 否 | 否 | posterior/rate estimation 与构造入口 |
 | 19 | CWD | class-wise centroid | Statistic / RiskCorrector | `StatisticResult` | 接口已存在但无实现 | 否 | 否 | auxiliary sets、risk consumer |
@@ -153,10 +215,11 @@ reliability，也仍需要未来 Algorithm 管理历史、特征或监督状态�
 - `AnchorTransitionEstimator`：Patrini 等人的 anchor 估计；
 - `DualTransitionEstimator`：`T_club @ T_spade`；
 - `TransitionArtifact`：矩阵方向、校验、hash、保存和加载；
-- `collect_posterior_snapshot`：按 stable index 采集 noisy posterior。
+- `collect_posterior_snapshot`：按 stable index 采集 noisy posterior；
+- `ForwardRiskCorrector` / `BackwardRiskCorrector`：消费冻结的 TransitionArtifact 并输出逐样本 corrected risk；
+- `StandardNoisyERMPipeline`：编排 warm-up、snapshot、transition estimation、artifact 恢复和监督训练消费。
 
-`transition_estimator` 已注册 plugin，但 `src/lnl_toolbox/training/experiment.py` 会明确拒绝该配置，
-因为尚无 corrected-risk consumer。plugin 可构造不等于训练已接通。
+这些组件通过 `pipeline.transition_estimator` 与 `pipeline.risk_corrector` 的嵌套配置进入训练；resume 必须加载并核验已有 artifact，不允许静默重新估计。该链路仍只是 Loss Correction 和 Dual-T 的精确组件组合，尚无论文专属 preset、acceptance experiment 或完整复现声明。
 
 PDL、VolMinNet、T-Revision 的 transition 是 trainable model/lifecycle 的一部分，
 不能伪装成一次性离线 estimator。
@@ -198,13 +261,13 @@ early-learning 的训练/停止生命周期和论文实验配方。
 - 泛型 WeightProvider、Binary RCN importance-weight 精确子组件及 contribution adapter；
 - ReliabilityResult、DivideMix GMM clean-probability 精确子组件及 stable-index selection adapter；
 - PosteriorSnapshot、Anchor/Dual-T TransitionEstimator 和可校验、可 roundtrip 的 TransitionArtifact；
+- Forward/Backward RiskCorrector 及其 StandardNoisyERMPipeline 训练、artifact、checkpoint/resume 消费链；
 - Standard/CDR ParameterUpdatePolicy，以及 CDR 的训练、checkpoint 和 resume 接入。
 
 当前明显缺失的原语或消费链：
 
-- Forward/Backward、Natarajan、CAL、MC-LDCE 和 CWD 所需的 RiskCorrector；
+- Natarajan、CAL、MC-LDCE 和 CWD 所需的 RiskCorrector；
 - 具体 StatisticEstimator，以及 StatisticResult 的生产者和训练/推理消费者；
-- TransitionArtifact 到 corrected risk 的训练消费链；
 - UPM、PDL、VolMinNet 和 T-Revision 所需的 trainable NoiseModel；
 - DSS、CNLCU、LEND 所需的 stateful reliability/history producer；
 - label refinement、dataset split、post-processing 和通用 component-state checkpoint ownership；
@@ -344,11 +407,11 @@ early-learning 的训练/停止生命周期和论文实验配方。
 - **关键输入/输出**：logits、targets、T；输出 corrected per-sample risk。
 - **可模块化部分**：AnchorTransitionEstimator、Forward/Backward RiskCorrector。
 - **必须 Algorithm 化的部分**：snapshot/estimate/freeze/correct/train 编排。
-- **当前实现/状态**：Anchor estimator 精确，risk correction 尚缺；**精确子组件**。
-- **代码与测试位置**：`src/lnl_toolbox/noise/estimators.py`、`tests/test_transition_estimators.py`。
-- **当前缺失**：Forward/Backward consumer、配置和 resume binding。
-- **可以声明**：实现 Patrini anchor transition estimation component。
-- **禁止声明**：不得把 transition artifact 等同于 Loss Correction。
+- **当前实现/状态**：Anchor estimator、Forward/Backward RiskCorrector 和 staged training consumer 已连接；**精确子组件**。
+- **代码与测试位置**：`src/lnl_toolbox/noise/estimators.py`、`src/lnl_toolbox/algorithms/transition_risk.py`、`src/lnl_toolbox/training/pipeline.py`、`tests/test_transition_estimators.py`、`tests/test_transition_risk.py`、`tests/test_pipeline.py`。
+- **当前缺失**：论文专属 preset、完整 acceptance experiment 和参考结果复现。
+- **可以声明**：实现并接通 Patrini Anchor + Forward/Backward corrected-risk component chain。
+- **禁止声明**：不得仅凭通用 pipeline 组件链声称已完整复现 Loss Correction 论文。
 
 ### P11 — Normalized Losses / APL
 
@@ -432,9 +495,9 @@ early-learning 的训练/停止生命周期和论文实验配方。
 - **必须 Algorithm 化的部分**：warm-up snapshot 和 corrected classifier consumer。
 - **当前实现/状态**：`DualTransitionEstimator`；**精确子组件**。
 - **代码与测试位置**：`src/lnl_toolbox/noise/estimators.py`、`tests/test_transition_estimators.py`、`tests/test_plugins.py`。
-- **当前缺失**：训练入口；`src/lnl_toolbox/training/experiment.py` 当前主动拒绝该配置。
-- **可以声明**：Dual-T transition-estimation component 已实现并可保存。
-- **禁止声明**：不得声称完整 Dual-T classifier training 已接通。
+- **当前缺失**：论文专属 preset、acceptance experiment 和正式参考结果复现。
+- **可以声明**：Dual-T transition-estimation component 已实现、可保存，并可由通用 corrected-risk pipeline 消费。
+- **禁止声明**：不得声称已完整复现 Dual-T 论文训练和实验结果。
 
 ### P17 — MC-LDCE
 
@@ -582,7 +645,7 @@ early-learning 的训练/停止生命周期和论文实验配方。
 
 建议停止无目标地增加容器，改为由真实消费者驱动原语建设：
 
-1. **Forward loss correction**：实现最小 RiskCorrector，使现有 Anchor/Dual-T 首次进入训练。
+1. **Forward/Backward loss correction 验收**：在现有 RiskCorrector 和训练消费链上补论文 preset、严格 resume 与 acceptance experiment。
 2. **完整 Co-teaching**：建立第一个双模型 Algorithm，严格复用但不改写 legacy exchange。
 3. **CDR paper preset/lifecycle**：在已有精确 update policy 上补完整运行定义。
 4. **Importance Reweighting Pipeline**：补 noisy posterior 与 noise-rate producers。
@@ -627,7 +690,8 @@ component”“DivideMix GMM clean-probability subcomponent”或
 | DivideMix GMM | `src/lnl_toolbox/estimators/dividemix_gmm.py` | `tests/test_dividemix_gmm.py` | 未接训练 |
 | Reliability adapter | `src/lnl_toolbox/estimators/selection_adapter.py` | `tests/test_reliability_selection_adapter.py` | 组件链测试 |
 | transition snapshot | `src/lnl_toolbox/training/snapshots.py` | `tests/test_transition_estimators.py` | 可独立调用 |
-| Anchor/Dual-T | `src/lnl_toolbox/noise/estimators.py` | `tests/test_transition_estimators.py` | plugin；训练拒绝 |
+| Anchor/Dual-T | `src/lnl_toolbox/noise/estimators.py` | `tests/test_transition_estimators.py`, `tests/test_pipeline.py` | plugin + staged training |
+| Forward/Backward RiskCorrector | `src/lnl_toolbox/algorithms/transition_risk.py` | `tests/test_transition_risk.py`, `tests/test_pipeline.py` | plugin + staged training |
 | TransitionArtifact | `src/lnl_toolbox/noise/transition.py` | `tests/test_transition_estimators.py` | save/load |
 | update policies | `src/lnl_toolbox/algorithms/update_policy.py` | `tests/test_update_policy.py` | plugin + training |
 | CDR update | `src/lnl_toolbox/algorithms/cdr.py` | `tests/test_cdr.py` | training + checkpoint |
@@ -638,8 +702,8 @@ component”“DivideMix GMM clean-probability subcomponent”或
 | Stateful contract | `src/lnl_toolbox/core/component.py` | `tests/test_core.py` | 无通用 ownership |
 
 `StatisticResult` 当前没有具体 `StatisticEstimator` producer 或 consumer。
-Weight 和 reliability 链路有跨组件测试但没有 YAML/训练构造入口。TransitionEstimator
-有 plugin，但 runner 的拒绝逻辑是有意的安全边界。
+Weight 和 reliability 链路有跨组件测试但没有合法 YAML/训练构造入口。
+TransitionEstimator 与 Forward/Backward RiskCorrector 已由 staged pipeline 消费，但仍不代表论文完整复现。
 
 ## 17. 原文版本与证据索引
 

@@ -20,8 +20,10 @@ from lnl_toolbox.noise import (
 from lnl_toolbox.plugins import PluginCatalog
 from lnl_toolbox.plugins.builtin import (
     build_builtin_loss,
+    build_builtin_risk_corrector,
     build_builtin_selector,
     build_builtin_transition_estimator,
+    build_builtin_weight_provider,
     create_builtin_catalog,
 )
 from lnl_toolbox.selectors import AllSelector, SelectionInput, SmallLossSelector
@@ -39,7 +41,10 @@ class PluginCatalogTest(unittest.TestCase):
     def test_capability_discovery(self) -> None:
         catalog = create_builtin_catalog()
         selectors = catalog.find(capability="sample_selection")
-        self.assertEqual([(item.kind, item.name) for item in selectors], [("selector", "coteaching_exchange")])
+        self.assertEqual(
+            [(item.kind, item.name) for item in selectors],
+            [("peer_exchange", "small_loss"), ("selector", "coteaching_exchange")],
+        )
 
     def test_custom_plugin_does_not_need_lnl_types(self) -> None:
         catalog = PluginCatalog()
@@ -185,6 +190,19 @@ class PluginCatalogTest(unittest.TestCase):
         with self.assertRaises(TypeError):
             build_builtin_transition_estimator("anchor")  # type: ignore[arg-type]
 
+    def test_risk_corrector_registry_and_builder(self) -> None:
+        catalog = create_builtin_catalog()
+        self.assertEqual(
+            [item.name for item in catalog.find(kind="risk_corrector")],
+            ["backward", "forward"],
+        )
+        self.assertEqual(
+            type(build_builtin_risk_corrector({"name": "forward"}, catalog)).__name__,
+            "ForwardRiskCorrector",
+        )
+        with self.assertRaises(ValueError):
+            build_builtin_risk_corrector({"name": "unknown"}, catalog)
+
     def test_taxonomy_p1_components_coexist_and_remain_separate(self) -> None:
         catalog = create_builtin_catalog()
 
@@ -248,6 +266,32 @@ class PluginCatalogTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(weighted_losses.grad).all())
 
         self.assertEqual(catalog.find(kind="weight_provider"), ())
+        with self.assertRaisesRegex(ValueError, "available: none"):
+            build_builtin_weight_provider(
+                {"name": "binary_rcn_importance"}, catalog
+            )
+        with self.assertRaisesRegex(ValueError, "must be explicit"):
+            build_builtin_weight_provider(None, catalog)
+        self.assertEqual(
+            [item.name for item in catalog.find(kind="loss")],
+            ["apl", "ce", "gce", "mae", "nce", "rce"],
+        )
+        self.assertEqual(
+            [item.name for item in catalog.find(kind="batch_selector")],
+            ["all", "small_loss"],
+        )
+        self.assertEqual(
+            [item.name for item in catalog.find(kind="transition_estimator")],
+            ["anchor", "dual_t"],
+        )
+        self.assertEqual(
+            [item.name for item in catalog.find(kind="parameter_update_policy")],
+            ["cdr", "standard"],
+        )
+        self.assertEqual(
+            [item.name for item in catalog.find(kind="selector")],
+            ["coteaching_exchange"],
+        )
 
 
 if __name__ == "__main__":

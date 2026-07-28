@@ -1,5 +1,7 @@
 # 26 篇论文中的 Loss 内容与关系（原文审计）
 
+> 归档位置与维护规则见本目录的 `README.md`。
+
 ## 1. 核查方法与边界
 
 本文以 `papers/` 下 26 篇 PDF 为唯一内容依据。对每篇全文检索 `loss`、`objective`、`risk`、`regularization`、`cross-entropy`、`gradient`、`reweight`、`likelihood` 等关键词，并回读公式前后文、算法框和实验实现段落。

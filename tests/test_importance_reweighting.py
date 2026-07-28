@@ -10,6 +10,7 @@ from lnl_toolbox.treatments import (
     BinaryRCNImportanceWeightProvider,
     BinaryRCNWeightInput,
     ReductionSpec,
+    SupervisedWeightInput,
     WeightContributionAdapter,
     WeightResult,
     reduce_per_sample_loss,
@@ -17,6 +18,16 @@ from lnl_toolbox.treatments import (
 
 
 class ImportanceReweightingTest(unittest.TestCase):
+    def test_binary_rcn_requires_explicit_posterior_input(self):
+        provider = BinaryRCNImportanceWeightProvider(0.2, 0.1)
+        with self.assertRaisesRegex(TypeError, "BinaryRCNWeightInput"):
+            provider.compute(SupervisedWeightInput(
+                logits=torch.tensor([[2.0, 0.0]]),
+                noisy_targets=torch.tensor([0]),
+                sample_indices=torch.tensor([3]),
+                per_sample_loss=torch.tensor([0.1]),
+            ))
+
     def test_binary_asymmetric_rcn_weights_match_manual_formula(self):
         provider = BinaryRCNImportanceWeightProvider(
             rho_positive=0.2,

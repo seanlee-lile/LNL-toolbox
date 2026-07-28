@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 import numpy as np
@@ -94,6 +95,54 @@ class PosteriorSnapshot:
         digest.update(self.noisy_targets.astype("<i8", copy=False).tobytes(order="C"))
         digest.update(self.global_indices.astype("<i8", copy=False).tobytes(order="C"))
         return digest.hexdigest()
+
+    def save(self, path: str | Path) -> None:
+        """Persist the snapshot with its dataset identity and content hash."""
+
+        destination = Path(path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        metadata = {
+            "dataset": self.dataset,
+            "split": self.split,
+            "snapshot_hash": self.snapshot_hash,
+        }
+        np.savez_compressed(
+            destination,
+            noisy_probabilities=self.noisy_probabilities,
+            noisy_targets=self.noisy_targets,
+            global_indices=self.global_indices,
+            metadata_json=np.array(json.dumps(metadata, sort_keys=True)),
+        )
+
+    @classmethod
+    def load(cls, path: str | Path) -> "PosteriorSnapshot":
+        """Load and integrity-check a persisted posterior snapshot."""
+
+        with np.load(path, allow_pickle=False) as data:
+            required = {
+                "noisy_probabilities",
+                "noisy_targets",
+                "global_indices",
+                "metadata_json",
+            }
+            if not required.issubset(data.files):
+                raise ValueError("posterior snapshot is missing required fields")
+            try:
+                metadata = json.loads(str(data["metadata_json"].item()))
+            except (AttributeError, json.JSONDecodeError, ValueError) as exc:
+                raise ValueError("posterior snapshot metadata is invalid") from exc
+            if not isinstance(metadata, dict):
+                raise ValueError("posterior snapshot metadata must be a mapping")
+            snapshot = cls(
+                noisy_probabilities=data["noisy_probabilities"],
+                noisy_targets=data["noisy_targets"],
+                global_indices=data["global_indices"],
+                dataset=str(metadata.get("dataset", "")),
+                split=str(metadata.get("split", "")),
+            )
+            if metadata.get("snapshot_hash") != snapshot.snapshot_hash:
+                raise ValueError("posterior snapshot hash does not match its contents")
+            return snapshot
 
 
 @runtime_checkable

@@ -6,9 +6,11 @@ from .selector_adapter import SelectorContributionAdapter
 from .weights import (
     BinaryRCNWeightInput,
     BinaryRCNImportanceWeightProvider,
+    SupervisedWeightInput,
     WeightContributionAdapter,
     WeightProvider,
     WeightResult,
+    StatefulWeightProvider,
     validate_binary_rcn_weight_input,
     validate_weight_result,
 )
@@ -19,8 +21,10 @@ __all__ = [
     "ContributionResult",
     "ReductionSpec",
     "SelectorContributionAdapter",
+    "SupervisedWeightInput",
     "WeightContributionAdapter",
     "WeightProvider",
+    "StatefulWeightProvider",
     "WeightResult",
     "reduce_per_sample_loss",
     "validate_binary_rcn_weight_input",
