@@ -47,4 +47,3 @@ class LossHistory(IndexedHistory):
 
 class SelectionHistory(IndexedHistory):
     """Per-sample selection/participation history keyed by global index."""
-
