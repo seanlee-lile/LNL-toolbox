@@ -729,4 +729,18 @@ def run_experiment(
 ) -> Path:
     """Compatibility entry point for the general training CLI."""
 
+    method = config.get("method")
+    method_name = (
+        str(method.get("name", "")).strip().lower()
+        if isinstance(method, Mapping)
+        else str(method or "").strip().lower()
+    )
+    if method_name == "dual_t_forward":
+        raise ValueError("method 'dual_t_forward' was renamed to 'dual_t'")
+    if method_name == "dual_t":
+        from lnl_toolbox.training.dual_t_experiment import (
+            run_dual_t_experiment,
+        )
+
+        return run_dual_t_experiment(config, output_dir, resume)
     return run_supervised_experiment(config, output_dir, resume)
