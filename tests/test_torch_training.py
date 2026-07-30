@@ -18,6 +18,10 @@ from lnl_toolbox.data.torch_cifar import (
 )
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 from lnl_toolbox.models import TinyCNN
+from lnl_toolbox.models.feature_output import (
+    FeatureOutput,
+    forward_with_features,
+)
 from lnl_toolbox.plugins.builtin import build_builtin_loss
 from lnl_toolbox.runtime import resolve_device
 from lnl_toolbox.selectors import AllSelector, SelectionResult, SmallLossSelector
@@ -128,6 +132,51 @@ class TorchTrainingTest(unittest.TestCase):
         convolutions = [module for module in model.modules() if isinstance(module, torch.nn.Conv2d)]
         self.assertEqual([module.out_channels for module in convolutions], [64, 64, 128, 128, 196, 196])
         self.assertEqual(model(torch.randn(2, 3, 32, 32)).shape, (2, 10))
+
+    def test_existing_models_expose_compatible_feature_output(self):
+        models = (
+            TinyCNN(10, 8),
+            build_model(
+                {"name": "resnet18", "base_width": 8},
+                num_classes=10,
+            ),
+            build_model({"name": "cifar_cnn8"}, num_classes=10),
+        )
+        inputs = torch.randn(2, 3, 32, 32)
+        for model in models:
+            with self.subTest(model=type(model).__name__):
+                model.eval()
+                keys = tuple(model.state_dict())
+                parameter_count = sum(
+                    parameter.numel() for parameter in model.parameters()
+                )
+                ordinary = model(inputs)
+                feature_output = forward_with_features(model, inputs)
+                self.assertIsInstance(feature_output, FeatureOutput)
+                torch.testing.assert_close(
+                    feature_output.logits,
+                    ordinary,
+                )
+                self.assertEqual(feature_output.features.shape[0], 2)
+                self.assertEqual(tuple(model.state_dict()), keys)
+                self.assertEqual(
+                    sum(
+                        parameter.numel()
+                        for parameter in model.parameters()
+                    ),
+                    parameter_count,
+                )
+                feature_output.logits.sum().backward()
+                self.assertTrue(any(
+                    parameter.grad is not None
+                    for parameter in model.parameters()
+                ))
+
+    def test_feature_output_rejects_invalid_tensor_contract(self):
+        with self.assertRaisesRegex(ValueError, "shape"):
+            FeatureOutput(torch.zeros(2), torch.zeros(2, 3))
+        with self.assertRaisesRegex(ValueError, "batch size"):
+            FeatureOutput(torch.zeros(2, 3), torch.zeros(3, 4))
 
     def test_gce2018_preprocessing_subtracts_training_pixel_mean(self):
         images = np.full((2, 32, 32, 3), 128, dtype=np.uint8)

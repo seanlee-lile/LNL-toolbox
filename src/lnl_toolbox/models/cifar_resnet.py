@@ -4,6 +4,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from .feature_output import FeatureOutput
+
 
 class BasicBlock(nn.Module):
     def __init__(self, incoming: int, outgoing: int, stride: int = 1) -> None:
@@ -80,10 +82,17 @@ class CifarResNet(nn.Module):
                 nn.init.zeros_(module.bias)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        return self.forward_with_features(inputs).logits
+
+    def forward_with_features(
+        self,
+        inputs: torch.Tensor,
+    ) -> FeatureOutput:
         output = self.layer4(self.layer3(self.layer2(self.layer1(self.stem(inputs)))))
         if self.preactivation:
             output = F.relu(self.final_bn(output), inplace=True)
-        return self.classifier(F.adaptive_avg_pool2d(output, 1).flatten(1))
+        features = F.adaptive_avg_pool2d(output, 1).flatten(1)
+        return FeatureOutput(self.classifier(features), features)
 
 
 def cifar_resnet18(num_classes: int = 10, base_width: int = 64) -> CifarResNet:
