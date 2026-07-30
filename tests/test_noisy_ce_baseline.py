@@ -291,6 +291,15 @@ class NoisyCeBaselineTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "noise.validation_targets"):
             _validate_resume_config(changed, saved)
 
+    def test_test_set_cannot_select_checkpoint_without_explicit_opt_in(self):
+        config = _config()
+        config["evaluation"] = {"selection_split": "test"}
+        with self.assertRaisesRegex(
+            ValueError,
+            "test selection requires",
+        ):
+            run_experiment(config)
+
 
 if __name__ == "__main__":
     unittest.main()

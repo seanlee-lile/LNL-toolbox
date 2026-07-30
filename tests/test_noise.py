@@ -103,6 +103,41 @@ class NoiseTest(unittest.TestCase):
         expected = (manifest.clean_targets[manifest.flip_mask] + 1) % 10
         np.testing.assert_array_equal(manifest.noisy_targets[manifest.flip_mask], expected)
 
+    def test_transition_sampling_matches_legacy_multinomial(self) -> None:
+        labels = np.arange(10, dtype=np.int64)
+        manifest = generate_symmetric(
+            labels,
+            10,
+            0.4,
+            7,
+            "toy",
+            sampling="transition",
+            rng="numpy_legacy",
+        )
+        matrix = np.full((10, 10), 0.4 / 9.0)
+        np.fill_diagonal(matrix, 0.6)
+        random = np.random.RandomState(7)
+        expected = np.array([
+            random.multinomial(
+                1,
+                matrix[label],
+                size=1,
+            )[0].argmax()
+            for label in labels
+        ])
+        np.testing.assert_array_equal(
+            manifest.noisy_targets,
+            expected,
+        )
+        np.testing.assert_allclose(
+            manifest.transition_matrix,
+            matrix,
+        )
+        self.assertEqual(
+            manifest.metadata["sampling"],
+            "transition",
+        )
+
     def test_mapping_hash_covers_indices_targets_and_context(self) -> None:
         manifest = generate_symmetric(self.labels, 10, 0.4, 7, "toy")
         reordered = NoiseManifest(

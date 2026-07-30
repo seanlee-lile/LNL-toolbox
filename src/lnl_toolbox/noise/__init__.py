@@ -6,6 +6,7 @@ from .estimators import (
     TransitionEstimator,
 )
 from .manifest import NoiseManifest
+from .split_manifest import generate_split_symmetric_manifest
 from .transition import (
     KnownTransition,
     InstanceTransitionProvider,
@@ -20,6 +21,7 @@ __all__ = [
     "generate_symmetric",
     "generate_pairflip",
     "generate_instance_dependent",
+    "generate_split_symmetric_manifest",
     "PosteriorSnapshot",
     "TransitionEstimator",
     "AnchorTransitionEstimator",
