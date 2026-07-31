@@ -16,6 +16,7 @@ from lnl_toolbox.noise.estimators import (
 )
 from lnl_toolbox.noise.transition import TransitionArtifact, TransitionProvider
 from lnl_toolbox.plugins.builtin.catalog import (
+    build_builtin_objective_consumer,
     build_builtin_risk_corrector,
     build_builtin_transition_estimator,
     build_builtin_weight_provider,
@@ -96,6 +97,7 @@ class StandardNoisyERMPipeline:
     risk_corrector: RiskCorrector | None = None
     transition_estimator: TransitionEstimator | None = None
     weight_provider: WeightProvider[SupervisedWeightInput] | None = None
+    objective_consumer: Any | None = None
     warmup_epochs: int = 0
     artifacts: PipelineArtifacts = field(default_factory=PipelineArtifacts)
     state: PipelineState = field(default_factory=PipelineState)
@@ -106,6 +108,22 @@ class StandardNoisyERMPipeline:
         risk_config = values.get("risk_corrector")
         estimator_config = values.get("transition_estimator")
         weight_config = values.get("weight_provider")
+        objective_config = values.get("objective_consumer")
+        if objective_config not in (None, False):
+            configured_conflicts = [
+                name
+                for name, value in (
+                    ("risk_corrector", risk_config),
+                    ("transition_estimator", estimator_config),
+                    ("WeightProvider", weight_config),
+                )
+                if value not in (None, False)
+            ]
+            if configured_conflicts:
+                raise ValueError(
+                    "pipeline.objective_consumer cannot be combined with "
+                    + ", ".join(configured_conflicts)
+                )
         if isinstance(weight_config, Mapping):
             weight_name = str(weight_config.get("name", "")).strip().lower()
             if weight_name == "binary_rcn_importance":
@@ -129,6 +147,11 @@ class StandardNoisyERMPipeline:
             if weight_config in (None, False)
             else build_builtin_weight_provider(weight_config)
         )
+        objective_consumer = (
+            None
+            if objective_config in (None, False)
+            else build_builtin_objective_consumer(objective_config)
+        )
         warmup_epochs = int(values.get("warmup_epochs", 0))
         if warmup_epochs < 0:
             raise ValueError("pipeline.warmup_epochs must be non-negative")
@@ -136,7 +159,36 @@ class StandardNoisyERMPipeline:
             raise ValueError(
                 "pipeline.risk_corrector requires pipeline.transition_estimator"
             )
-        return cls(risk, estimator, weight, warmup_epochs)
+        if objective_consumer is not None:
+            incompatible = []
+            if risk is not None or estimator is not None:
+                incompatible.append("risk/transition correction")
+            if weight is not None:
+                incompatible.append("WeightProvider")
+            unknown_composition = sorted(
+                set(values)
+                - {
+                    "risk_corrector",
+                    "transition_estimator",
+                    "weight_provider",
+                    "objective_consumer",
+                    "warmup_epochs",
+                }
+            )
+            if unknown_composition:
+                incompatible.extend(unknown_composition)
+            if incompatible:
+                raise ValueError(
+                    "pipeline.objective_consumer cannot be combined with "
+                    + ", ".join(incompatible)
+                )
+        return cls(
+            risk_corrector=risk,
+            transition_estimator=estimator,
+            weight_provider=weight,
+            objective_consumer=objective_consumer,
+            warmup_epochs=warmup_epochs,
+        )
 
     def warmup(
         self,
@@ -227,6 +279,8 @@ class StandardNoisyERMPipeline:
         components: dict[str, Any] = {}
         if self.transition_estimator is not None:
             components["transition_estimator"] = self.transition_estimator
+        if self.objective_consumer is not None:
+            components["objective_consumer"] = self.objective_consumer
         return components
 
     def component_state_dict(self) -> dict[str, Any]:

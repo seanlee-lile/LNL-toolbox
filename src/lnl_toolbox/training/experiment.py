@@ -231,6 +231,49 @@ def _validate_resume_config(current: Mapping[str, Any], saved: Mapping[str, Any]
         raise ValueError("Resume configuration changed evaluation.selection_split")
 
 
+def _resolve_dss_epoch_contract(
+    config: dict[str, Any],
+    epochs: int,
+) -> None:
+    """Bind DSS history horizon to the final trainer epoch budget."""
+
+    pipeline = config.get("pipeline")
+    if not isinstance(pipeline, Mapping):
+        return
+    objective = pipeline.get("objective_consumer")
+    if not isinstance(objective, Mapping):
+        return
+    if str(objective.get("name", "")).strip().lower() != "dss":
+        return
+    required_components = (
+        ("loss", "ce"),
+        ("selector", "all"),
+        ("parameter_update", "standard"),
+    )
+    for section, required_name in required_components:
+        section_config = config.get(section, {"name": required_name})
+        if not isinstance(section_config, Mapping):
+            raise TypeError(f"{section} configuration must be a mapping")
+        actual_name = str(
+            section_config.get("name", required_name)
+        ).strip().lower()
+        if actual_name != required_name:
+            raise ValueError(
+                f"DSS requires {section}.name={required_name!r}; "
+                f"found {actual_name!r}"
+            )
+    configured = objective.get("total_epochs")
+    if configured is not None and int(configured) != epochs:
+        raise ValueError(
+            "DSS total_epochs must equal the resolved trainer.epochs"
+        )
+    resolved_pipeline = dict(pipeline)
+    resolved_objective = dict(objective)
+    resolved_objective["total_epochs"] = epochs
+    resolved_pipeline["objective_consumer"] = resolved_objective
+    config["pipeline"] = resolved_pipeline
+
+
 def _resolved_noise_config(
     original: Mapping[str, Any], metadata: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -303,6 +346,7 @@ def run_supervised_experiment(
     config.setdefault("selector", {"name": "all"})
     seed = int(config.get("seed", 1))
     epochs = int(config["trainer"]["epochs"])
+    _resolve_dss_epoch_contract(config, epochs)
     seed_everything(seed)
     device = resolve_device(config["trainer"].get("device", "auto"))
     if device.type == "cuda":
@@ -512,6 +556,7 @@ def run_supervised_experiment(
         risk_corrector=pipeline.risk_corrector,
         transition=pipeline.artifacts.transition,
         weight_provider=pipeline.weight_provider,
+        objective_consumer=pipeline.objective_consumer,
     )
     algorithm.setup(ExperimentContext(run_dir, config, seed))
     state = RunState(phase="train")
@@ -528,6 +573,7 @@ def run_supervised_experiment(
         state, completed_epoch, checkpoint_payload = load_checkpoint(
             resume, algorithm, device, scheduler=scheduler
         )
+        last_completed_epoch = completed_epoch
         best_epoch = int(checkpoint_payload["best_epoch"])
         best_accuracy = float(checkpoint_payload.get("best_validation_accuracy", float("-inf")))
         best_selection_accuracy = float(

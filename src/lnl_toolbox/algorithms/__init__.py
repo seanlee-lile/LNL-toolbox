@@ -37,6 +37,12 @@ try:
 except ImportError:
     SupervisedClassificationAlgorithm = None  # type: ignore[assignment]
 try:
+    from .dss import DSSObjective
+except ImportError:
+    pass
+else:
+    __all__.append("DSSObjective")
+try:
     from .transition_risk import BackwardRiskCorrector, ForwardRiskCorrector, RiskCorrector
 except ImportError:
     pass

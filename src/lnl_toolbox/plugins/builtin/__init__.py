@@ -2,6 +2,7 @@
 
 from .catalog import (
     build_builtin_loss,
+    build_builtin_objective_consumer,
     build_builtin_parameter_update_policy,
     build_builtin_pipeline,
     build_builtin_peer_exchange,
@@ -15,6 +16,7 @@ from .catalog import (
 
 __all__ = [
     "build_builtin_loss",
+    "build_builtin_objective_consumer",
     "build_builtin_parameter_update_policy",
     "build_builtin_pipeline",
     "build_builtin_peer_exchange",

@@ -7,6 +7,7 @@ import numpy as np
 import torch
 
 from lnl_toolbox.algorithms.supervised import SupervisedClassificationAlgorithm
+from lnl_toolbox.algorithms.dss import DSSObjective
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
 from lnl_toolbox.core import SoftTargetResult
 from lnl_toolbox.data.cifar import CifarData, default_data_root
@@ -36,6 +37,54 @@ from lnl_toolbox.training.experiment import build_model
 
 
 class TorchTrainingTest(unittest.TestCase):
+    def test_objective_consumer_is_opt_in_and_owns_backward(self):
+        base_model = torch.nn.Linear(2, 2, bias=False)
+        dss_model = torch.nn.Linear(2, 2, bias=False)
+        dss_model.load_state_dict(base_model.state_dict())
+        base = SupervisedClassificationAlgorithm(
+            base_model,
+            torch.optim.SGD(base_model.parameters(), lr=0.1),
+            CrossEntropyLoss(),
+            torch.device("cpu"),
+        )
+        dss_objective = DSSObjective(
+            2, 2, 1, warmup_epochs=1, mda=False, ccs=False
+        )
+        dss = SupervisedClassificationAlgorithm(
+            dss_model,
+            torch.optim.SGD(dss_model.parameters(), lr=0.1),
+            CrossEntropyLoss(),
+            torch.device("cpu"),
+            objective_consumer=dss_objective,
+        )
+        for algorithm in (base, dss):
+            algorithm.setup(ExperimentContext(Path.cwd()))
+            algorithm.on_cycle_start(RunState(cycle=0))
+        batch = Batch({
+            "input": torch.eye(2),
+            "target": torch.tensor([0, 1]),
+            "index": torch.tensor([0, 1]),
+        })
+        base_result = base.step(batch, RunState(cycle=0))
+        dss_result = dss.step(batch, RunState(cycle=0))
+        torch.testing.assert_close(base_model.weight, dss_model.weight)
+        self.assertNotIn("optimization_loss", base_result.metrics)
+        self.assertIn("optimization_loss", dss_result.metrics)
+
+    def test_objective_consumer_rejects_existing_treatment_composition(self):
+        model = torch.nn.Linear(2, 2)
+        with self.assertRaisesRegex(ValueError, "non-all selector"):
+            SupervisedClassificationAlgorithm(
+                model,
+                torch.optim.SGD(model.parameters(), lr=0.1),
+                CrossEntropyLoss(),
+                torch.device("cpu"),
+                selector=SmallLossSelector(0.5),
+                objective_consumer=DSSObjective(
+                    2, 2, 1, warmup_epochs=1
+                ),
+            )
+
     @staticmethod
     def _target_algorithm(provider):
         model = torch.nn.Linear(2, 2, bias=False)

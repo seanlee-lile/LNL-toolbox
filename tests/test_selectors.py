@@ -11,11 +11,30 @@ from lnl_toolbox.selectors import (
     SelectionInput,
     SelectionResult,
     SmallLossSelector,
+    IndexedTensorHistory,
     validate_selection_result,
 )
 
 
 class SelectorTest(unittest.TestCase):
+    def test_indexed_tensor_history_roundtrip_and_contract(self) -> None:
+        history = IndexedTensorHistory(4, 3, 2)
+        history.update(
+            torch.tensor([3, 1]),
+            0,
+            torch.tensor([[0.3, 0.7], [0.8, 0.2]]),
+        )
+        restored = IndexedTensorHistory(4, 3, 2)
+        restored.load_state_dict(history.state_dict())
+        torch.testing.assert_close(restored.values, history.values)
+        torch.testing.assert_close(restored.observed, history.observed)
+        with self.assertRaisesRegex(ValueError, "unique"):
+            history.update(
+                torch.tensor([1, 1]), 1, torch.ones(2, 2)
+            )
+        with self.assertRaisesRegex(ValueError, "integer"):
+            history.previous(torch.tensor([1.0]), 1)
+
     def test_constant_schedule_returns_the_same_rate_at_every_epoch(self) -> None:
         schedule = ConstantKeepRateSchedule(0.8)
         self.assertEqual(schedule.rate_at(0), 0.8)

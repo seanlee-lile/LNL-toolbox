@@ -16,6 +16,29 @@ from lnl_toolbox.noise import (
 from lnl_toolbox.plugins import PluginCatalog
 
 
+def _register_dss(catalog: PluginCatalog) -> None:
+    """Register optional DSS without hiding errors inside an installed module."""
+
+    try:
+        from lnl_toolbox.algorithms.dss import DSSObjective
+    except ModuleNotFoundError as exc:
+        if exc.name != "lnl_toolbox.algorithms.dss":
+            raise
+        return
+    catalog.add(
+        "objective_consumer",
+        "dss",
+        DSSObjective,
+        capabilities=(
+            "stateful_objective",
+            "debiased_selection",
+            "class_exclusion",
+            "global_index",
+        ),
+        metadata={"paper": "Pan et al., CVPR 2026"},
+    )
+
+
 def create_builtin_catalog() -> PluginCatalog:
     """Register small examples used to validate extension points."""
 
@@ -182,6 +205,7 @@ def create_builtin_catalog() -> PluginCatalog:
             StandardNoisyERMPipeline.from_config,
             capabilities=("single_model", "stage_lifecycle", "artifact_handoff"),
         )
+    _register_dss(catalog)
     return catalog
 
 
@@ -287,6 +311,30 @@ def build_builtin_weight_provider(
         ) or "none"
         raise ValueError(
             f"Unknown weight provider {name!r}; available: {available}"
+        ) from exc
+
+
+def build_builtin_objective_consumer(
+    config: Mapping[str, Any] | None,
+    catalog: PluginCatalog | None = None,
+) -> Any:
+    """Build an explicit owner of the optimization objective."""
+
+    if not isinstance(config, Mapping):
+        raise TypeError("Objective consumer configuration must be a mapping")
+    values = dict(config)
+    name = str(values.pop("name", "")).strip().lower()
+    if not name:
+        raise ValueError("Objective consumer configuration requires a name")
+    catalog = catalog or create_builtin_catalog()
+    try:
+        return catalog.build("objective_consumer", name, **values)
+    except KeyError as exc:
+        available = ", ".join(
+            item.name for item in catalog.find(kind="objective_consumer")
+        ) or "none"
+        raise ValueError(
+            f"Unknown objective consumer {name!r}; available: {available}"
         ) from exc
 
 

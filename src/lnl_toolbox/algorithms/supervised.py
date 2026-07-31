@@ -2,7 +2,8 @@ from __future__ import annotations
 
 """Reference supervised algorithm used to verify the shared training path."""
 
-from typing import Any
+import math
+from typing import Any, Mapping
 
 import torch
 from torch import nn
@@ -10,6 +11,7 @@ from torch import nn
 from lnl_toolbox.core import Batch, ExperimentContext, RunState, StepResult
 from lnl_toolbox.core.result import PseudoLabelResult, SoftTargetResult
 from lnl_toolbox.core.targets import LabelProvider, TargetInput
+from lnl_toolbox.core.objectives import ObjectiveConsumer, ObjectiveResult
 from lnl_toolbox.losses.torch_losses import loss_for_all_targets, validate_per_sample_loss
 from lnl_toolbox.noise.transition import TransitionProvider
 from lnl_toolbox.algorithms.transition_risk import RiskCorrector
@@ -93,7 +95,8 @@ class SupervisedClassificationAlgorithm:
                  risk_corrector: RiskCorrector | None = None,
                  transition: TransitionProvider | None = None,
                  weight_provider: WeightProvider[SupervisedWeightInput] | None = None,
-                 target_provider: LabelProvider | None = None) -> None:
+                 target_provider: LabelProvider | None = None,
+                 objective_consumer: ObjectiveConsumer | None = None) -> None:
         self.model = model
         self.optimizer = optimizer
         self.loss = loss
@@ -104,6 +107,24 @@ class SupervisedClassificationAlgorithm:
         self.transition = transition
         self.weight_provider = weight_provider
         self.target_provider = target_provider
+        self.objective_consumer = objective_consumer
+        if objective_consumer is not None:
+            incompatible = []
+            if not isinstance(self.selector, AllSelector):
+                incompatible.append("non-all selector")
+            if weight_provider is not None:
+                incompatible.append("WeightProvider")
+            if target_provider is not None:
+                incompatible.append("LabelRefiner/target provider")
+            if risk_corrector is not None or transition is not None:
+                incompatible.append("non-identity risk correction")
+            if not isinstance(self.update_policy, StandardUpdatePolicy):
+                incompatible.append("non-standard parameter update policy")
+            if incompatible:
+                raise ValueError(
+                    "ObjectiveConsumer owns the optimization objective and "
+                    "cannot be combined with " + ", ".join(incompatible)
+                )
         self.contribution_adapter = SelectorContributionAdapter(self.selector)
         self.weight_adapter = (
             None if weight_provider is None else WeightContributionAdapter(weight_provider)
@@ -116,11 +137,16 @@ class SupervisedClassificationAlgorithm:
         self.update_policy.setup(context)
 
     def on_run_start(self, state: RunState) -> None:
-        pass
+        hook = getattr(self.objective_consumer, "on_run_start", None)
+        if callable(hook):
+            hook(state)
 
     def on_cycle_start(self, state: RunState) -> None:
         state.phase = "train"
         self.model.train()
+        hook = getattr(self.objective_consumer, "on_cycle_start", None)
+        if callable(hook):
+            hook(state)
 
     def step(self, batch: Batch, state: RunState) -> StepResult:
         """Perform one optimization step and return batch-level metrics."""
@@ -192,11 +218,75 @@ class SupervisedClassificationAlgorithm:
                 metrics=contribution.metrics,
             )
         selected_mask = contribution.selected_mask
-        loss = reduce_per_sample_loss(
-            per_sample_loss,
-            contribution,
-            self.reduction,
-        )
+        reporting_loss: torch.Tensor | None = None
+        objective_metrics: dict[str, float] = {}
+        if self.objective_consumer is None:
+            loss = reduce_per_sample_loss(
+                per_sample_loss,
+                contribution,
+                self.reduction,
+            )
+        else:
+            computed = self.objective_consumer.compute(
+                logits=logits,
+                noisy_targets=targets,
+                sample_indices=sample_indices,
+                base_loss=self.loss,
+                metadata={"epoch": state.cycle},
+            )
+            if not isinstance(computed, ObjectiveResult):
+                raise TypeError(
+                    "ObjectiveConsumer must return an ObjectiveResult"
+                )
+            loss = computed.objective
+            if (
+                not torch.is_tensor(loss)
+                or loss.ndim != 0
+                or not loss.is_floating_point()
+                or loss.device != logits.device
+                or not loss.requires_grad
+                or not bool(torch.isfinite(loss))
+            ):
+                raise ValueError(
+                    "ObjectiveConsumer objective must be a finite scalar "
+                    "floating tensor with autograd on the logits device"
+                )
+            if computed.selected_mask is not None:
+                objective_mask = computed.selected_mask
+                if (
+                    not torch.is_tensor(objective_mask)
+                    or objective_mask.shape != targets.shape
+                    or objective_mask.dtype != torch.bool
+                    or objective_mask.device != targets.device
+                ):
+                    raise ValueError(
+                        "objective selected_mask must be boolean [B] on "
+                        "the target device"
+                    )
+                selected_mask = objective_mask
+            if computed.reporting_loss is not None:
+                reporting_loss = computed.reporting_loss
+                if (
+                    not torch.is_tensor(reporting_loss)
+                    or reporting_loss.ndim != 0
+                    or not reporting_loss.is_floating_point()
+                    or reporting_loss.device != logits.device
+                    or not bool(torch.isfinite(reporting_loss))
+                ):
+                    raise ValueError(
+                        "objective reporting_loss must be a finite scalar "
+                        "floating tensor on the logits device"
+                    )
+            if not isinstance(computed.metrics, Mapping):
+                raise TypeError("objective metrics must be a mapping")
+            for name, value in computed.metrics.items():
+                scalar = float(value)
+                if not isinstance(name, str) or not math.isfinite(scalar):
+                    raise ValueError(
+                        "objective metrics must have string names and "
+                        "finite scalar values"
+                    )
+                objective_metrics[name] = scalar
         update_result = self.update_policy.update(ParameterUpdateInput(
             objective=loss,
             model=self.model,
@@ -208,7 +298,11 @@ class SupervisedClassificationAlgorithm:
         correct = int((logits.argmax(1) == targets).sum().item())
         state.step += 1
         metrics = {
-            "loss": float(loss.detach().item()),
+            "loss": float(
+                (reporting_loss if reporting_loss is not None else loss)
+                .detach()
+                .item()
+            ),
             "all_sample_loss": float(per_sample_loss.detach().mean().item()),
             "accuracy": correct / count,
             "samples": float(count),
@@ -220,12 +314,24 @@ class SupervisedClassificationAlgorithm:
             for key, value in contribution.metrics.items()
         })
         metrics.update(update_result.metrics)
+        if self.objective_consumer is not None:
+            metrics["optimization_loss"] = float(loss.detach().item())
+        metrics.update({
+            f"objective_{key}": value
+            for key, value in objective_metrics.items()
+        })
         return StepResult(metrics=metrics)
 
     def on_cycle_end(self, state: RunState) -> StepResult:
+        hook = getattr(self.objective_consumer, "on_cycle_end", None)
+        if callable(hook):
+            hook(state)
         return StepResult()
 
     def on_run_end(self, state: RunState) -> StepResult:
+        hook = getattr(self.objective_consumer, "on_run_end", None)
+        if callable(hook):
+            hook(state)
         return StepResult()
 
     def state_dict(self) -> dict[str, Any]:
