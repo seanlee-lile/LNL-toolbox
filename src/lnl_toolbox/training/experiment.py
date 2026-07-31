@@ -96,6 +96,16 @@ def build_optimizer(model: nn.Module, config: Mapping[str, Any]):
         )
     if name == "adamw":
         return torch.optim.AdamW(model.parameters(), **common)
+    if name == "adam":
+        return torch.optim.Adam(
+            model.parameters(),
+            betas=(
+                float(config.get("beta1", 0.9)),
+                float(config.get("beta2", 0.999)),
+            ),
+            eps=float(config.get("eps", 1e-8)),
+            **common,
+        )
     raise ValueError(f"Unsupported optimizer: {name}")
 
 
@@ -864,6 +874,12 @@ def run_experiment(
         if isinstance(method, Mapping)
         else str(method or "").strip().lower()
     )
+    if method_name == "coteaching":
+        from lnl_toolbox.training.coteaching_experiment import (
+            run_coteaching_experiment,
+        )
+
+        return run_coteaching_experiment(config, output_dir, resume)
     if method_name == "dual_t_forward":
         raise ValueError("method 'dual_t_forward' was renamed to 'dual_t'")
     if method_name == "dual_t":

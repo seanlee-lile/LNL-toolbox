@@ -141,7 +141,7 @@
 | 06 | CDR | critical parameter update | ParameterUpdatePolicy | `src/lnl_toolbox/algorithms/cdr.py` | 精确子组件 | 是 | 否 | 完整 early-learning lifecycle |
 | 07 | CNLCU | loss confidence bounds | Reliability / Selector | 通用合同 | 未实现 | 否 | 否 | 历史状态、区间估计、双网络流程 |
 | 08 | MentorNet | learned sample weights | WeightProvider | 泛型合同 | 接口已存在但无实现 | 否 | 否 | Mentor model 与 student lifecycle |
-| 09 | Co-teaching | peer small-loss exchange | Algorithm | `src/lnl_toolbox/algorithms/coteaching.py` | 精确子组件 | 否 | 否 | 双模型 Algorithm/checkpoint |
+| 09 | Co-teaching | peer small-loss exchange | Algorithm | `src/lnl_toolbox/algorithms/coteaching/`、`src/lnl_toolbox/training/coteaching_experiment.py` | 完整实现 | 是 | 是 | 论文专属 CNN、正式 200-epoch/multi-seed 数值复现 |
 | 10 | Loss Correction | Anchor estimate、Forward/Backward corrected risk | TransitionEstimator / RiskCorrector | `src/lnl_toolbox/noise/estimators.py`、`src/lnl_toolbox/algorithms/transition_risk.py` | 精确子组件 | 是 | 否 | 论文 preset、acceptance experiment |
 | 11 | Normalized Losses / APL | NCE、MAE、RCE、APL | Loss | `src/lnl_toolbox/losses/torch_losses.py` | 精确子组件 | 是 | 否 | 论文全部组合与复现实验 |
 | 12 | GCE | standard \(L_q\) | Loss | `src/lnl_toolbox/losses/torch_losses.py` | 精确子组件 | 是 | 否 | truncated \(L_q\) 更新 |
@@ -393,11 +393,11 @@ early-learning 的训练/停止生命周期和论文实验配方。
 - **关键输入/输出**：两组 per-sample loss；输出交叉 index sets。
 - **可模块化部分**：peer exchange helper、keep-rate schedule。
 - **必须 Algorithm 化的部分**：两个模型/optimizer、交叉更新顺序和 checkpoint。
-- **当前实现/状态**：`src/lnl_toolbox/algorithms/coteaching.py::coteaching_exchange`；**精确子组件**。
-- **代码与测试位置**：`tests/test_coteaching.py`、legacy plugin regression in `tests/test_plugins.py`。
-- **当前缺失**：可训练双网络 Algorithm/Pipeline。
-- **可以声明**：已实现 legacy Co-teaching exchange primitive。
-- **禁止声明**：不得声称 Toolbox 已完成 Co-teaching 训练。
+- **当前实现/状态**：`src/lnl_toolbox/algorithms/coteaching/algorithm.py::CoTeachingAlgorithm` 与专属 runner 实现双模型、peer cross-update、双 optimizer/scheduler 和 checkpoint/resume；**完整论文方法实现（工程训练闭环）**。
+- **代码与测试位置**：`src/lnl_toolbox/training/coteaching_experiment.py`、`tests/test_coteaching_algorithm.py`、`tests/test_coteaching_workflow.py`；`tests/test_coteaching.py` 和 plugin regression 保护 legacy helper。
+- **当前缺失**：论文专属 9-layer CNN、200 epoch preset、正式 benchmark 与 multi-seed 数值复现。
+- **可以声明**：已实现可通过 `method: coteaching` 运行的双模型 Co-teaching 训练、评测和 epoch-boundary resume。
+- **禁止声明**：不得把辅助 ensemble 当作论文原始输出，也不得声称已复现论文报告精度或完整实验表格。
 
 ### P10 — Forward / Backward Loss Correction
 
@@ -646,7 +646,7 @@ early-learning 的训练/停止生命周期和论文实验配方。
 建议停止无目标地增加容器，改为由真实消费者驱动原语建设：
 
 1. **Forward/Backward loss correction 验收**：在现有 RiskCorrector 和训练消费链上补论文 preset、严格 resume 与 acceptance experiment。
-2. **完整 Co-teaching**：建立第一个双模型 Algorithm，严格复用但不改写 legacy exchange。
+2. **Co-teaching 正式复现**：在已完成的双模型 Algorithm 上补论文专属 CNN、200 epoch preset 和 multi-seed acceptance experiment。
 3. **CDR paper preset/lifecycle**：在已有精确 update policy 上补完整运行定义。
 4. **Importance Reweighting Pipeline**：补 noisy posterior 与 noise-rate producers。
 5. **一个 statistic vertical slice**：MC-LDCE、CWD、PCSE 三选一，同时实现 producer 和唯一 consumer。

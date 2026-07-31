@@ -1,5 +1,11 @@
 from .base import Algorithm, TrainState
-from .coteaching import coteaching_exchange, remember_rate
+from .coteaching import (
+    CoTeachingAlgorithm,
+    CoTeachingConfig,
+    CoTeachingState,
+    coteaching_exchange,
+    remember_rate,
+)
 from .multi_model import ModelGroup, PeerExchangeResult, SmallLossPeerExchange, consistency_loss
 
 __all__ = [
@@ -7,6 +13,9 @@ __all__ = [
     "TrainState",
     "coteaching_exchange",
     "remember_rate",
+    "CoTeachingAlgorithm",
+    "CoTeachingConfig",
+    "CoTeachingState",
     "ModelGroup",
     "PeerExchangeResult",
     "SmallLossPeerExchange",
