@@ -58,8 +58,10 @@ def _generated_spec(config: Mapping[str, Any]) -> tuple[str, float, int, str, st
     sampling = str(noise.get("sampling", "global")).strip().lower()
     if name != "symmetric" and sampling != "global":
         raise ValueError("noise.sampling is only supported for symmetric noise")
-    if sampling not in {"global", "per_class"}:
-        raise ValueError("noise.sampling must be 'global' or 'per_class'")
+    if sampling not in {"global", "per_class", "transition"}:
+        raise ValueError(
+            "noise.sampling must be 'global', 'per_class', or 'transition'"
+        )
     rng = str(noise.get("rng", "default_rng")).strip().lower()
     if rng not in {"default_rng", "numpy_legacy"}:
         raise ValueError("noise.rng must be 'default_rng' or 'numpy_legacy'")

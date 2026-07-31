@@ -5,7 +5,11 @@ from pathlib import Path
 
 import torch
 
-from lnl_toolbox.algorithms.cdr import CDRUpdatePolicy, critical_parameter_masks
+from lnl_toolbox.algorithms.cdr import (
+    CDRUpdatePolicy,
+    critical_parameter_masks,
+    official_code_parameter_masks,
+)
 from lnl_toolbox.algorithms.supervised import SupervisedClassificationAlgorithm
 from lnl_toolbox.algorithms.update_policy import ParameterUpdateInput
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
@@ -159,6 +163,129 @@ class CDRUpdatePolicyTest(unittest.TestCase):
         self.assertEqual(result.critical_parameters, math.ceil(0.6 * 11))
         self.assertIn("bias", result.masks)
 
+    def test_default_mode_is_identical_to_explicit_paper_mode(self) -> None:
+        results = []
+        metrics = []
+        for mode in (None, "paper"):
+            model = _VectorModel()
+            optimizer = torch.optim.SGD(model.parameters(), lr=0.2)
+            objective = (
+                model() * torch.tensor([1.0, 3.0, 9.0, -0.25])
+            ).sum()
+            keyword = {} if mode is None else {"compatibility_mode": mode}
+            result = CDRUpdatePolicy(
+                noise_rate=0.5,
+                l1_decay=0.1,
+                **keyword,
+            ).update(ParameterUpdateInput(
+                objective,
+                model,
+                optimizer,
+                RunState(),
+            ))
+            results.append(model.values.detach().clone())
+            metrics.append(result.metrics)
+        self.assertTrue(torch.equal(results[0], results[1]))
+        self.assertEqual(metrics[0], metrics[1])
+
+    def test_official_code_scope_threshold_ties_and_l2_step(self) -> None:
+        model = torch.nn.Linear(2, 2)
+        with torch.no_grad():
+            model.weight.copy_(torch.tensor([
+                [2.0, -1.0],
+                [0.0, 4.0],
+            ]))
+            model.bias.copy_(torch.tensor([1.0, -1.0]))
+        weight_before = model.weight.detach().clone()
+        bias_before = model.bias.detach().clone()
+        coefficients = torch.tensor([
+            [1.0, 3.0],
+            [9.0, -0.25],
+        ])
+        bias_coefficients = torch.tensor([2.0, -3.0])
+        objective = (
+            (model.weight * coefficients).sum()
+            + (model.bias * bias_coefficients).sum()
+        )
+        optimizer = torch.optim.SGD(
+            model.parameters(),
+            lr=0.1,
+            weight_decay=0.1,
+        )
+        result = CDRUpdatePolicy(
+            noise_rate=0.5,
+            l1_decay=0.0,
+            compatibility_mode="official_code",
+        ).update(ParameterUpdateInput(
+            objective,
+            model,
+            optimizer,
+            RunState(),
+        ))
+        expected_weight_gradient = torch.tensor([
+            [0.5, 1.5],
+            [0.0, 0.0],
+        ]) + 0.1 * weight_before
+        expected_bias_gradient = bias_coefficients + 0.1 * bias_before
+        torch.testing.assert_close(
+            model.weight,
+            weight_before - 0.1 * expected_weight_gradient,
+        )
+        torch.testing.assert_close(
+            model.bias,
+            bias_before - 0.1 * expected_bias_gradient,
+        )
+        self.assertEqual(
+            result.metrics["update_eligible_parameters"],
+            4.0,
+        )
+        self.assertEqual(
+            result.metrics["update_critical_parameters"],
+            2.0,
+        )
+
+        tied = torch.nn.Parameter(torch.ones(4, 1))
+        tied.grad = torch.ones_like(tied)
+        masks = official_code_parameter_masks([("weight", tied)], 0.5)
+        self.assertEqual(masks.eligible_parameters, 4)
+        self.assertEqual(masks.critical_parameters, 4)
+
+    def test_modes_are_validated_immutable_and_checkpoint_bound(self) -> None:
+        with self.assertRaisesRegex(ValueError, "compatibility_mode"):
+            CDRUpdatePolicy(0.4, 0.0, compatibility_mode="unknown")
+        with self.assertRaisesRegex(ValueError, "l1_decay=0"):
+            CDRUpdatePolicy(
+                0.4,
+                0.001,
+                compatibility_mode="official_code",
+            )
+        with self.assertRaisesRegex(ValueError, "critical_scope"):
+            CDRUpdatePolicy(
+                0.4,
+                0.0,
+                critical_scope="all_trainable",
+                compatibility_mode="official_code",
+            )
+        policy = CDRUpdatePolicy(0.4, 0.001)
+        with self.assertRaises(AttributeError):
+            policy.compatibility_mode = "official_code"  # type: ignore[misc]
+        self.assertEqual(
+            policy.state_dict(),
+            {"compatibility_mode": "paper"},
+        )
+        policy.load_state_dict({})
+        with self.assertRaisesRegex(ValueError, "changed"):
+            policy.load_state_dict({
+                "compatibility_mode": "official_code",
+            })
+        official = CDRUpdatePolicy(
+            0.4,
+            0.0,
+            compatibility_mode="official_code",
+        )
+        with self.assertRaisesRegex(ValueError, "Legacy"):
+            official.load_state_dict({})
+
     def test_selector_and_cdr_compose_without_clean_label_input(self) -> None:
         model = torch.nn.Linear(2, 2, bias=False)
         optimizer = torch.optim.SGD(model.parameters(), lr=0.05)
@@ -210,6 +337,13 @@ class CDRUpdatePolicyTest(unittest.TestCase):
             "critical_scope": "all_trainable",
         }, catalog)
         self.assertIsInstance(cdr, CDRUpdatePolicy)
+        official = build_builtin_parameter_update_policy({
+            "name": "cdr",
+            "noise_rate": 0.4,
+            "l1_decay": 0.0,
+            "compatibility_mode": "official_code",
+        }, catalog)
+        self.assertEqual(official.compatibility_mode, "official_code")
         with self.assertRaises(ValueError):
             build_builtin_parameter_update_policy({"name": "unknown"}, catalog)
         with self.assertRaises(TypeError):
@@ -268,7 +402,10 @@ class CDRUpdatePolicyTest(unittest.TestCase):
             self.assertEqual(epoch, 0)
             self.assertEqual(
                 payload["parameter_update_policy"],
-                {"name": "cdr", "state": {}},
+                {
+                    "name": "cdr",
+                    "state": {"compatibility_mode": "paper"},
+                },
             )
             for name, value in restored_model.named_parameters():
                 self.assertTrue(torch.equal(value, saved_parameters[name]))
@@ -314,6 +451,17 @@ class CDRUpdatePolicyTest(unittest.TestCase):
                     },
                 },
             )
+        official = {
+            **base,
+            "parameter_update": {
+                "name": "cdr",
+                "noise_rate": 0.4,
+                "l1_decay": 0.0,
+                "compatibility_mode": "official_code",
+            },
+        }
+        with self.assertRaisesRegex(ValueError, "parameter_update"):
+            _validate_resume_config(official, base)
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is unavailable")
     def test_cpu_and_cuda_masks_and_updates_match(self) -> None:

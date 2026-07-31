@@ -150,6 +150,30 @@ class TorchTrainingTest(unittest.TestCase):
         )
         self.assertEqual(model(torch.randn(2, 3, 32, 32)).shape, (2, 10))
 
+    def test_cifar_resnet50_is_explicit_and_preserves_feature_contract(self):
+        model = build_model({
+            "name": "resnet50",
+            "base_width": 8,
+            "stem_padding": 0,
+            "initialization": "torch_default",
+        }, num_classes=10)
+        self.assertEqual(
+            tuple(len(layer) for layer in (
+                model.layer1,
+                model.layer2,
+                model.layer3,
+                model.layer4,
+            )),
+            (3, 4, 6, 3),
+        )
+        self.assertEqual(model.stem[0].padding, (0, 0))
+        model.eval()
+        inputs = torch.randn(2, 3, 32, 32)
+        ordinary = model(inputs)
+        featured = forward_with_features(model, inputs)
+        torch.testing.assert_close(featured.logits, ordinary)
+        self.assertEqual(featured.features.shape, (2, 256))
+
     def test_cifar_cnn8_shape_and_reference_channels(self):
         model = build_model({"name": "cifar_cnn8"}, num_classes=10)
         convolutions = [module for module in model.modules() if isinstance(module, torch.nn.Conv2d)]
@@ -218,6 +242,13 @@ class TorchTrainingTest(unittest.TestCase):
                 build_model({"name": "cifar_cnn8"}, num_classes=10),
                 "lnl_toolbox.models.cifar_cnn.FeatureOutput",
             ),
+            (
+                build_model({
+                    "name": "resnet50",
+                    "base_width": 8,
+                }, num_classes=10),
+                "lnl_toolbox.models.cifar_resnet.FeatureOutput",
+            ),
         )
         inputs = torch.randn(2, 3, 32, 32)
         for model, symbol in cases:
@@ -277,6 +308,37 @@ class TorchTrainingTest(unittest.TestCase):
         )
         sample = TorchCifarDataset(data, [0], transform=transform)[0]
         torch.testing.assert_close(sample["input"], torch.zeros_like(sample["input"]))
+
+    def test_standard_preprocessing_accepts_explicit_normalization(self):
+        transform = build_cifar_transform(
+            False,
+            normalization_mean=(0.5, 0.5, 0.5),
+            normalization_std=(0.25, 0.25, 0.25),
+        )
+        image = np.full((32, 32, 3), 128, dtype=np.uint8)
+        output = transform(image)
+        expected = (128.0 / 255.0 - 0.5) / 0.25
+        torch.testing.assert_close(
+            output,
+            torch.full_like(output, expected),
+        )
+        with self.assertRaisesRegex(ValueError, "provided together"):
+            build_cifar_transform(
+                False,
+                normalization_mean=(0.5, 0.5, 0.5),
+            )
+        with self.assertRaisesRegex(ValueError, "three values"):
+            build_cifar_transform(
+                False,
+                normalization_mean=(0.5, 0.5),
+                normalization_std=(0.25, 0.25),
+            )
+        with self.assertRaisesRegex(ValueError, "positive"):
+            build_cifar_transform(
+                False,
+                normalization_mean=(0.5, 0.5, 0.5),
+                normalization_std=(0.25, 0.0, 0.25),
+            )
 
     def test_training_step_changes_parameters(self):
         model = TinyCNN(10, 8)

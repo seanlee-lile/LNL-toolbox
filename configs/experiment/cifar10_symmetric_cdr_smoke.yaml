@@ -22,6 +22,7 @@ parameter_update:
   noise_rate: 0.4
   l1_decay: 0.001
   critical_scope: all_trainable
+  compatibility_mode: paper
 loader:
   batch_size: 128
   num_workers: 0

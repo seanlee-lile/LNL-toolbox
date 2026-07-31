@@ -26,11 +26,13 @@ from lnl_toolbox.data.torch_cifar import (
     build_cifar_transform,
     cifar_pixel_mean,
     stratified_split,
+    train_validation_split,
 )
 from lnl_toolbox.evaluation.classification import evaluate_classification
 from lnl_toolbox.models.cifar_resnet import (
     cifar_resnet18,
     cifar_resnet34,
+    cifar_resnet50,
     preact_resnet18,
 )
 from lnl_toolbox.models.cifar_cnn import CifarCnn8
@@ -66,6 +68,13 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
         return cifar_resnet18(num_classes, int(config.get("base_width", 64)))
     if name == "resnet34":
         return cifar_resnet34(num_classes, int(config.get("base_width", 64)))
+    if name == "resnet50":
+        return cifar_resnet50(
+            num_classes,
+            int(config.get("base_width", 64)),
+            stem_padding=int(config.get("stem_padding", 1)),
+            initialization=str(config.get("initialization", "kaiming")),
+        )
     if name == "preact_resnet18":
         return preact_resnet18(num_classes, int(config.get("base_width", 64)))
     raise ValueError(f"Unsupported model: {name}")
@@ -193,6 +202,17 @@ def _validate_resume_config(current: Mapping[str, Any], saved: Mapping[str, Any]
     ).lower()
     if current_preprocessing != saved_preprocessing:
         raise ValueError("Resume configuration changed data.preprocessing")
+    for key, default in (
+        (
+            "validation_split",
+            {"strategy": "stratified", "rng": "default_rng"},
+        ),
+        ("normalization", None),
+    ):
+        current_value = current.get("data", {}).get(key, default)
+        saved_value = saved.get("data", {}).get(key, default)
+        if current_value != saved_value:
+            raise ValueError(f"Resume configuration changed data.{key}")
     current_validation_targets = str(
         current.get("noise", {}).get("validation_targets", "clean")
     ).lower()
@@ -320,8 +340,15 @@ def run_supervised_experiment(
         full_train_indices = np.arange(len(train_data), dtype=np.int64)
         validation_indices = np.empty(0, dtype=np.int64)
     else:
-        full_train_indices, validation_indices = stratified_split(
-            train_data.labels, validation_size, seed
+        split_config = data_config.get("validation_split", {}) or {}
+        if not isinstance(split_config, Mapping):
+            raise TypeError("data.validation_split must be a mapping")
+        full_train_indices, validation_indices = train_validation_split(
+            train_data.labels,
+            validation_size,
+            seed,
+            strategy=str(split_config.get("strategy", "stratified")),
+            rng=str(split_config.get("rng", "default_rng")),
         )
     noise_config = config.get("noise") or {}
     validation_target_source = str(
@@ -362,6 +389,14 @@ def run_supervised_experiment(
         seed + 3,
     )
     preprocessing = str(data_config.get("preprocessing", "standard")).lower()
+    normalization = data_config.get("normalization")
+    if normalization is not None and not isinstance(normalization, Mapping):
+        raise TypeError("data.normalization must be a mapping")
+    normalization = dict(normalization or {})
+    if normalization and set(normalization) != {"mean", "std"}:
+        raise ValueError(
+            "data.normalization must contain exactly mean and std"
+        )
     pixel_mean = (
         cifar_pixel_mean(train_data.images)
         if preprocessing == "gce2018"
@@ -370,6 +405,8 @@ def run_supervised_experiment(
     transform_options = {
         "preprocessing": preprocessing,
         "pixel_mean": pixel_mean,
+        "normalization_mean": normalization.get("mean"),
+        "normalization_std": normalization.get("std"),
     }
 
     clean_train_set = TorchCifarDataset(

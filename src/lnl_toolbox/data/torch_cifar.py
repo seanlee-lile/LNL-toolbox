@@ -144,6 +144,8 @@ def build_cifar_transform(
     *,
     preprocessing: str = "standard",
     pixel_mean: torch.Tensor | None = None,
+    normalization_mean: Sequence[float] | None = None,
+    normalization_std: Sequence[float] | None = None,
 ) -> Callable[[Image.Image], torch.Tensor]:
     preprocessing = str(preprocessing).strip().lower()
     if preprocessing == "gce2018":
@@ -165,10 +167,39 @@ def build_cifar_transform(
         return transforms.Compose(operations)
     if preprocessing != "standard":
         raise ValueError(f"Unsupported CIFAR preprocessing: {preprocessing}")
+    if (normalization_mean is None) != (normalization_std is None):
+        raise ValueError(
+            "normalization_mean and normalization_std must be provided together"
+        )
+    mean = (
+        CIFAR_MEAN
+        if normalization_mean is None
+        else tuple(float(value) for value in normalization_mean)
+    )
+    std = (
+        CIFAR_STD
+        if normalization_std is None
+        else tuple(float(value) for value in normalization_std)
+    )
+    if len(mean) != 3 or len(std) != 3:
+        raise ValueError(
+            "CIFAR normalization mean and std must contain three values"
+        )
+    if (
+        not np.isfinite(mean).all()
+        or not np.isfinite(std).all()
+        or any(value <= 0.0 for value in std)
+    ):
+        raise ValueError(
+            "CIFAR normalization values must be finite and std positive"
+        )
     operations: list[Any] = []
     if training and augment:
         operations.extend((transforms.RandomCrop(32, padding=4), transforms.RandomHorizontalFlip()))
-    operations.extend((transforms.ToTensor(), transforms.Normalize(CIFAR_MEAN, CIFAR_STD)))
+    operations.extend((
+        transforms.ToTensor(),
+        transforms.Normalize(mean, std),
+    ))
     return transforms.Compose(operations)
 
 
