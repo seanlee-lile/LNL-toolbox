@@ -7,6 +7,7 @@ paper split can fit statistics on the training fold only and reuse the exact
 state for validation/test data.
 """
 
+import copy
 from dataclasses import asdict, dataclass, field
 import csv
 import hashlib
@@ -107,6 +108,11 @@ class BinaryPreprocessor:
     column_specs: list[dict[str, Any]] = field(default_factory=list, init=False)
     fitted: bool = field(default=False, init=False)
     source_fingerprint: str = field(default="", init=False)
+    parser_format: str = field(default="", init=False)
+    input_width: int = field(default=0, init=False)
+    input_header: list[str] = field(default_factory=list, init=False)
+    target_column_index: int = field(default=-1, init=False)
+    feature_columns: list[int] = field(default_factory=list, init=False)
 
     def _resolve_format(self, path: Path, lines: Sequence[str]) -> str:
         configured = self.config.file_format
@@ -123,7 +129,12 @@ class BinaryPreprocessor:
             return "whitespace"
         return "delimited"
 
-    def _read_rows(self, path: str | Path) -> tuple[list[list[str]], str]:
+    def _read_rows(
+        self,
+        path: str | Path,
+        *,
+        expected_libsvm_width: int | None = None,
+    ) -> tuple[list[list[str]], str]:
         source = Path(path)
         if not source.is_file():
             raise FileNotFoundError(source)
@@ -136,7 +147,10 @@ class BinaryPreprocessor:
             raise ValueError("binary benchmark file contains no data rows")
         file_format = self._resolve_format(source, lines)
         if file_format == "libsvm":
-            return self._read_libsvm(lines), file_format
+            return self._read_libsvm(
+                lines,
+                expected_width=expected_libsvm_width,
+            ), file_format
         if file_format == "whitespace":
             return [line.split() for line in lines], file_format
         delimiter = self.config.delimiter
@@ -154,7 +168,11 @@ class BinaryPreprocessor:
         ], "delimited"
 
     @staticmethod
-    def _read_libsvm(lines: Sequence[str]) -> list[list[str]]:
+    def _read_libsvm(
+        lines: Sequence[str],
+        *,
+        expected_width: int | None = None,
+    ) -> list[list[str]]:
         parsed: list[tuple[str, dict[int, str]]] = []
         width = 0
         for line in lines:
@@ -171,9 +189,18 @@ class BinaryPreprocessor:
                     raise ValueError(
                         "LibSVM feature indices must be positive"
                     )
+                if index - 1 in values:
+                    raise ValueError(
+                        "LibSVM rows must not contain duplicate feature indices"
+                    )
                 values[index - 1] = value
                 width = max(width, index)
             parsed.append((tokens[0], values))
+        if expected_width is not None and width != expected_width:
+            raise ValueError(
+                "LibSVM observed feature width does not match the fitted "
+                f"schema: expected {expected_width}, got {width}"
+            )
         return [
             [label] + [
                 values.get(index, "0") for index in range(width)
@@ -203,6 +230,10 @@ class BinaryPreprocessor:
                 "binary benchmark file contains no data rows after header"
             )
         width = len(rows[0])
+        if len(header) != width:
+            raise ValueError("header width must match the data width")
+        if len(set(header)) != len(header):
+            raise ValueError("binary benchmark column names must be unique")
         if any(len(row) != width for row in rows):
             raise ValueError(
                 "all binary benchmark rows must have the same number of columns"
@@ -281,13 +312,14 @@ class BinaryPreprocessor:
                     ],
                     dtype=np.float64,
                 )
+                scale = float(np.std(filled))
                 self.column_specs.append({
                     "index": column,
                     "name": name,
                     "kind": "numeric",
                     "fill": fill,
                     "mean": float(np.mean(filled)),
-                    "scale": float(np.std(filled)),
+                    "scale": scale if scale > 0.0 else 1.0,
                 })
                 self.feature_names.append(name)
             else:
@@ -389,15 +421,21 @@ class BinaryPreprocessor:
             else self._resolve_target_column(header)
         )
         self._fit_labels([row[target_column] for row in rows])
+        feature_columns = [
+            index
+            for index in range(len(header))
+            if index != target_column
+        ]
         self._fit_columns(
             rows,
-            [
-                index
-                for index in range(len(header))
-                if index != target_column
-            ],
+            feature_columns,
             header,
         )
+        self.parser_format = file_format
+        self.input_width = len(header)
+        self.input_header = list(header)
+        self.target_column_index = target_column
+        self.feature_columns = feature_columns
         self.fitted = True
         self.source_fingerprint = self._fingerprint(rows, header)
         return self
@@ -413,17 +451,41 @@ class BinaryPreprocessor:
             raise RuntimeError(
                 "BinaryPreprocessor must be fitted before transform"
             )
-        rows, file_format = self._read_rows(path)
+        expected_libsvm_width = (
+            self.input_width - 1
+            if self.parser_format == "libsvm"
+            else None
+        )
+        rows, file_format = self._read_rows(
+            path,
+            expected_libsvm_width=expected_libsvm_width,
+        )
         rows, header = self._drop_header(
             rows,
             self.config.has_header,
         )
+        if file_format != self.parser_format:
+            raise ValueError(
+                "input parser format does not match the fitted schema"
+            )
+        if len(header) != self.input_width:
+            raise ValueError(
+                "input feature width does not match the fitted schema"
+            )
+        if list(header) != self.input_header:
+            raise ValueError(
+                "input columns and order do not match the fitted schema"
+            )
         target_column = (
             0
             if file_format == "libsvm"
             and self.config.target_column == -1
             else self._resolve_target_column(header)
         )
+        if target_column != self.target_column_index:
+            raise ValueError(
+                "target column does not match the fitted schema"
+            )
         features, targets = self._transform_rows(rows, target_column)
         from .binary_benchmarks import BinaryBenchmark
 
@@ -463,14 +525,19 @@ class BinaryPreprocessor:
             raise RuntimeError(
                 "cannot serialize an unfitted BinaryPreprocessor"
             )
-        return {
+        return copy.deepcopy({
             "version": 1,
             "config": asdict(self.config),
             "feature_names": list(self.feature_names),
             "label_mapping": dict(self.label_mapping),
-            "column_specs": list(self.column_specs),
+            "column_specs": self.column_specs,
             "source_fingerprint": self.source_fingerprint,
-        }
+            "parser_format": self.parser_format,
+            "input_width": self.input_width,
+            "input_header": list(self.input_header),
+            "target_column_index": self.target_column_index,
+            "feature_columns": list(self.feature_columns),
+        })
 
     def save(self, path: str | Path) -> None:
         Path(path).write_text(
@@ -478,30 +545,208 @@ class BinaryPreprocessor:
             encoding="utf-8",
         )
 
+    def load_state_dict(
+        self,
+        payload: Mapping[str, Any],
+    ) -> "BinaryPreprocessor":
+        if not isinstance(payload, Mapping):
+            raise TypeError("preprocessing state must be a mapping")
+        if payload.get("version") != 1:
+            raise ValueError(
+                "unsupported BinaryPreprocessor state version"
+            )
+        required = {
+            "config",
+            "feature_names",
+            "label_mapping",
+            "column_specs",
+            "source_fingerprint",
+            "parser_format",
+            "input_width",
+            "input_header",
+            "target_column_index",
+            "feature_columns",
+        }
+        missing = sorted(required.difference(payload))
+        if missing:
+            raise ValueError(
+                "preprocessing state is missing fields: "
+                + ", ".join(missing)
+            )
+
+        config_payload = payload["config"]
+        if not isinstance(config_payload, Mapping):
+            raise TypeError("preprocessing config state must be a mapping")
+        config = BinaryPreprocessingConfig.from_mapping(config_payload)
+
+        parser_format = payload["parser_format"]
+        if parser_format not in {"delimited", "whitespace", "libsvm"}:
+            raise ValueError("invalid fitted parser format")
+        input_width = payload["input_width"]
+        if (
+            isinstance(input_width, bool)
+            or not isinstance(input_width, int)
+            or input_width < 2
+        ):
+            raise ValueError("input_width must be an integer of at least 2")
+
+        input_header = payload["input_header"]
+        if (
+            not isinstance(input_header, list)
+            or len(input_header) != input_width
+            or any(
+                not isinstance(name, str) or not name
+                for name in input_header
+            )
+            or len(set(input_header)) != len(input_header)
+        ):
+            raise ValueError(
+                "input_header must contain unique non-empty column names"
+            )
+
+        target_column = payload["target_column_index"]
+        if (
+            isinstance(target_column, bool)
+            or not isinstance(target_column, int)
+            or not 0 <= target_column < input_width
+        ):
+            raise ValueError("invalid target_column_index")
+        expected_features = [
+            index for index in range(input_width)
+            if index != target_column
+        ]
+        feature_columns = payload["feature_columns"]
+        if feature_columns != expected_features:
+            raise ValueError(
+                "feature_columns do not match the fitted input schema"
+            )
+
+        label_mapping = payload["label_mapping"]
+        if (
+            not isinstance(label_mapping, Mapping)
+            or len(label_mapping) != 2
+            or any(
+                not isinstance(label, str) or not label
+                for label in label_mapping
+            )
+            or set(label_mapping.values()) != {0, 1}
+            or any(
+                isinstance(value, bool) or not isinstance(value, int)
+                for value in label_mapping.values()
+            )
+        ):
+            raise ValueError(
+                "label_mapping must map exactly two labels to 0 and 1"
+            )
+
+        raw_specs = payload["column_specs"]
+        if (
+            not isinstance(raw_specs, list)
+            or len(raw_specs) != len(expected_features)
+        ):
+            raise ValueError(
+                "column_specs must align with all fitted feature columns"
+            )
+        column_specs: list[dict[str, Any]] = []
+        derived_names: list[str] = []
+        for raw_spec, column in zip(raw_specs, expected_features):
+            if not isinstance(raw_spec, Mapping):
+                raise TypeError("each column spec must be a mapping")
+            name = raw_spec.get("name")
+            if (
+                raw_spec.get("index") != column
+                or name != input_header[column]
+            ):
+                raise ValueError(
+                    "column spec does not match the fitted input schema"
+                )
+            kind = raw_spec.get("kind")
+            if kind == "numeric":
+                values: dict[str, float] = {}
+                for field_name in ("fill", "mean", "scale"):
+                    value = raw_spec.get(field_name)
+                    if (
+                        isinstance(value, bool)
+                        or not isinstance(value, (int, float))
+                        or not np.isfinite(value)
+                    ):
+                        raise ValueError(
+                            f"numeric column {field_name} must be finite"
+                        )
+                    values[field_name] = float(value)
+                if values["scale"] <= 0.0:
+                    raise ValueError(
+                        "numeric column scale must be greater than zero"
+                    )
+                column_specs.append({
+                    "index": column,
+                    "name": name,
+                    "kind": "numeric",
+                    **values,
+                })
+                derived_names.append(name)
+            elif kind == "categorical":
+                categories = raw_spec.get("categories")
+                fill = raw_spec.get("fill")
+                if (
+                    not isinstance(categories, list)
+                    or not categories
+                    or any(
+                        not isinstance(value, str) or not value
+                        for value in categories
+                    )
+                    or len(set(categories)) != len(categories)
+                    or fill not in categories
+                ):
+                    raise ValueError(
+                        "categorical column state is invalid"
+                    )
+                column_specs.append({
+                    "index": column,
+                    "name": name,
+                    "kind": "categorical",
+                    "fill": fill,
+                    "categories": list(categories),
+                })
+                derived_names.extend(
+                    f"{name}={category}" for category in categories
+                )
+            else:
+                raise ValueError(
+                    "column spec kind must be numeric or categorical"
+                )
+
+        feature_names = payload["feature_names"]
+        if feature_names != derived_names:
+            raise ValueError(
+                "feature_names do not match the fitted column specs"
+            )
+        fingerprint = payload["source_fingerprint"]
+        if (
+            not isinstance(fingerprint, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", fingerprint)
+        ):
+            raise ValueError("source_fingerprint must be a SHA-256 hex digest")
+
+        self.config = config
+        self.feature_names = list(derived_names)
+        self.label_mapping = dict(label_mapping)
+        self.column_specs = copy.deepcopy(column_specs)
+        self.source_fingerprint = fingerprint
+        self.parser_format = parser_format
+        self.input_width = input_width
+        self.input_header = list(input_header)
+        self.target_column_index = target_column
+        self.feature_columns = list(feature_columns)
+        self.fitted = True
+        return self
+
     @classmethod
     def load(cls, path: str | Path) -> "BinaryPreprocessor":
         payload = json.loads(
             Path(path).read_text(encoding="utf-8")
         )
-        if payload.get("version") != 1:
-            raise ValueError(
-                "unsupported BinaryPreprocessor state version"
-            )
-        config = BinaryPreprocessingConfig.from_mapping(
-            payload.get("config")
-        )
-        result = cls(config)
-        result.feature_names = list(payload["feature_names"])
-        result.label_mapping = {
-            str(key): int(value)
-            for key, value in payload["label_mapping"].items()
-        }
-        result.column_specs = list(payload["column_specs"])
-        result.source_fingerprint = str(
-            payload.get("source_fingerprint", "")
-        )
-        result.fitted = True
-        return result
+        return cls().load_state_dict(payload)
 
 
 __all__ = ["BinaryPreprocessingConfig", "BinaryPreprocessor"]

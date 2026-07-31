@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -199,6 +200,67 @@ class TorchTrainingTest(unittest.TestCase):
             FeatureOutput(torch.zeros(2), torch.zeros(2, 3))
         with self.assertRaisesRegex(ValueError, "batch size"):
             FeatureOutput(torch.zeros(2, 3), torch.zeros(3, 4))
+
+    def test_ordinary_forward_does_not_construct_feature_output(self):
+        cases = (
+            (
+                TinyCNN(10, 8),
+                "lnl_toolbox.models.tiny_cnn.FeatureOutput",
+            ),
+            (
+                build_model(
+                    {"name": "resnet18", "base_width": 8},
+                    num_classes=10,
+                ),
+                "lnl_toolbox.models.cifar_resnet.FeatureOutput",
+            ),
+            (
+                build_model({"name": "cifar_cnn8"}, num_classes=10),
+                "lnl_toolbox.models.cifar_cnn.FeatureOutput",
+            ),
+        )
+        inputs = torch.randn(2, 3, 32, 32)
+        for model, symbol in cases:
+            with self.subTest(model=type(model).__name__):
+                model.eval()
+                with patch(
+                    symbol,
+                    side_effect=AssertionError(
+                        "ordinary forward constructed FeatureOutput"
+                    ),
+                ):
+                    self.assertEqual(model(inputs).shape, (2, 10))
+
+    def test_feature_forward_updates_batchnorm_only_once(self):
+        model = build_model(
+            {"name": "resnet18", "base_width": 8},
+            num_classes=10,
+        )
+        model.train()
+        batch_norm = next(
+            module
+            for module in model.modules()
+            if isinstance(module, torch.nn.BatchNorm2d)
+        )
+        before = int(batch_norm.num_batches_tracked.item())
+        output = forward_with_features(
+            model,
+            torch.randn(2, 3, 32, 32),
+        )
+        self.assertEqual(output.logits.shape, (2, 10))
+        self.assertEqual(
+            int(batch_norm.num_batches_tracked.item()),
+            before + 1,
+        )
+
+    def test_ordinary_forward_does_not_add_nonfinite_rejection(self):
+        model = TinyCNN(10, 8).eval()
+        inputs = torch.zeros(1, 3, 32, 32)
+        inputs[0, 0, 0, 0] = torch.nan
+        output = model(inputs)
+        self.assertTrue(bool(torch.isnan(output).any()))
+        with self.assertRaisesRegex(ValueError, "finite"):
+            forward_with_features(model, inputs)
 
     def test_gce2018_preprocessing_subtracts_training_pixel_mean(self):
         images = np.full((2, 32, 32, 3), 128, dtype=np.uint8)

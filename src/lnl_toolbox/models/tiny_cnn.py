@@ -31,8 +31,11 @@ class TinyCNN(nn.Module):
         self.classifier = nn.Linear(channels[-1], num_classes)
 
     def forward(self, inputs):
-        return self.forward_with_features(inputs).logits
+        return self.classifier(self._representation(inputs))
+
+    def _representation(self, inputs):
+        return self.pool(self.features(inputs)).flatten(1)
 
     def forward_with_features(self, inputs) -> FeatureOutput:
-        features = self.pool(self.features(inputs)).flatten(1)
+        features = self._representation(inputs)
         return FeatureOutput(self.classifier(features), features)

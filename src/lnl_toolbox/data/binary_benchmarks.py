@@ -4,11 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 import numpy as np
-
-from lnl_toolbox.noise.manifest import NoiseManifest
 
 
 @dataclass(frozen=True)
@@ -33,17 +30,23 @@ class BinaryBenchmark:
             raise ValueError(
                 "binary targets must be labels 0 and 1 aligned with features"
             )
-        indices = (
-            np.arange(len(targets), dtype=np.int64)
-            if self.global_indices is None
-            else np.asarray(self.global_indices, dtype=np.int64)
-        )
+        if self.global_indices is None:
+            indices = np.arange(len(targets), dtype=np.int64)
+        else:
+            raw_indices = np.asarray(self.global_indices)
+            if not np.issubdtype(raw_indices.dtype, np.integer):
+                raise ValueError(
+                    "binary global_indices must use an integer dtype"
+                )
+            indices = raw_indices.astype(np.int64, copy=True)
         if (
             indices.shape != targets.shape
+            or (indices.size and indices.min() < 0)
             or np.unique(indices).size != len(indices)
         ):
             raise ValueError(
-                "binary global_indices must be unique and aligned"
+                "binary global_indices must be non-negative, unique, "
+                "and aligned"
             )
         dataset = str(self.dataset).strip()
         split = str(self.split).strip()
@@ -66,7 +69,11 @@ def load_uci_binary(
     delimiter: str = ",",
     name: str | None = None,
 ) -> BinaryBenchmark:
-    """Read a UCI-style file through the reusable binary preprocessor."""
+    """Fit preprocessing and read one training-only UCI-style file.
+
+    Validation and test splits must instead reuse an explicit fitted
+    :class:`BinaryPreprocessor`.
+    """
 
     from .preprocessing import (
         BinaryPreprocessingConfig,
@@ -101,100 +108,8 @@ def load_binary_npz(
         )
 
 
-def stratified_binary_splits(
-    targets: Sequence[int],
-    folds: int = 3,
-    seed: int = 1,
-) -> list[tuple[np.ndarray, np.ndarray]]:
-    labels = np.asarray(targets, dtype=np.int64)
-    if labels.ndim != 1 or set(np.unique(labels)) - {0, 1}:
-        raise ValueError("binary split targets must contain only 0 and 1")
-    if folds < 2 or folds > len(labels):
-        raise ValueError(
-            "folds must be between 2 and the sample count"
-        )
-    rng = np.random.default_rng(seed)
-    buckets = [
-        np.asarray([], dtype=np.int64) for _ in range(folds)
-    ]
-    for label in (0, 1):
-        indices = np.flatnonzero(labels == label)
-        rng.shuffle(indices)
-        for part, values in enumerate(np.array_split(indices, folds)):
-            buckets[part] = np.concatenate((buckets[part], values))
-    return [
-        (
-            np.sort(np.concatenate([
-                buckets[j] for j in range(folds) if j != i
-            ])),
-            np.sort(buckets[i]),
-        )
-        for i in range(folds)
-    ]
-
-
-def corrupt_binary_labels(
-    targets: Sequence[int],
-    rho_positive: float,
-    rho_negative: float,
-    seed: int,
-) -> NoiseManifest:
-    clean = np.asarray(targets, dtype=np.int64)
-    if clean.ndim != 1 or clean.size == 0:
-        raise ValueError(
-            "binary corruption targets must be a non-empty vector"
-        )
-    if set(np.unique(clean)) - {0, 1}:
-        raise ValueError("binary corruption targets must contain only 0 and 1")
-    if not (
-        0.0 <= float(rho_positive) < 1.0
-        and 0.0 <= float(rho_negative) < 1.0
-        and float(rho_positive) + float(rho_negative) < 1.0
-    ):
-        raise ValueError(
-            "binary noise rates must be in [0, 1) and sum to less than one"
-        )
-    rng = np.random.default_rng(seed)
-    noisy = clean.copy()
-    noisy[
-        (clean == 1) & (rng.random(len(clean)) < rho_positive)
-    ] = 0
-    noisy[
-        (clean == 0) & (rng.random(len(clean)) < rho_negative)
-    ] = 1
-    return NoiseManifest(
-        dataset="binary",
-        split="train",
-        noise_type="class_dependent",
-        seed=int(seed),
-        requested_rate=float(
-            (rho_positive + rho_negative) / 2.0
-        ),
-        clean_targets=clean,
-        noisy_targets=noisy,
-        transition_matrix=np.asarray([
-            [1.0 - rho_negative, rho_negative],
-            [rho_positive, 1.0 - rho_positive],
-        ]),
-        num_classes=2,
-    )
-
-
-def cifar_airplane_automobile_view(
-    data,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Return airplane/automobile images, labels, and original indices."""
-
-    labels = np.asarray(data.labels, dtype=np.int64)
-    indices = np.flatnonzero(np.isin(labels, (0, 1)))
-    return data.images[indices], labels[indices], indices
-
-
 __all__ = [
     "BinaryBenchmark",
-    "cifar_airplane_automobile_view",
-    "corrupt_binary_labels",
     "load_binary_npz",
     "load_uci_binary",
-    "stratified_binary_splits",
 ]
