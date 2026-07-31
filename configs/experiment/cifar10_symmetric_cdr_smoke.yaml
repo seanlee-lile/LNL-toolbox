@@ -33,7 +33,8 @@ model:
 optimizer:
   name: sgd
   lr: 0.01
-  momentum: 0.9
+  # Strict paper-equation updates require no historical loss-gradient momentum.
+  momentum: 0.0
   weight_decay: 0.0
 scheduler:
   name: cosine

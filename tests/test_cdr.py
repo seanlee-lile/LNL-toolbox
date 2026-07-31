@@ -108,6 +108,29 @@ class CDRUpdatePolicyTest(unittest.TestCase):
         self.assertEqual(delta[2].item(), 0.0)
         self.assertAlmostEqual(delta[3].item(), 0.2, places=6)
 
+    def test_critical_then_noncritical_parameter_has_only_l1_second_step(self) -> None:
+        model = _VectorModel()
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.0)
+        policy = CDRUpdatePolicy(noise_rate=0.75, l1_decay=0.2)
+        policy.update(ParameterUpdateInput(
+            (model() * torch.tensor([10.0, 0.0, 0.0, 0.0])).sum(),
+            model,
+            optimizer,
+            RunState(),
+        ))
+        before_second_step = model.values.detach().clone()
+
+        policy.update(ParameterUpdateInput(
+            (model() * torch.tensor([0.0, 10.0, 0.0, 0.0])).sum(),
+            model,
+            optimizer,
+            RunState(),
+        ))
+
+        actual_delta = before_second_step[0] - model.values.detach()[0]
+        expected_l1_delta = 0.1 * 0.2 * before_second_step[0].sign()
+        torch.testing.assert_close(actual_delta, expected_l1_delta)
+
     def test_invalid_parameters_optimizer_and_gradients_fail(self) -> None:
         with self.assertRaises(ValueError):
             CDRUpdatePolicy(noise_rate=-0.1, l1_decay=0.1)
@@ -136,6 +159,16 @@ class CDRUpdatePolicyTest(unittest.TestCase):
                 objective,
                 model,
                 torch.optim.SGD(model.parameters(), lr=0.1, weight_decay=0.01),
+                RunState(),
+            ))
+
+        model = _VectorModel()
+        objective = model().sum()
+        with self.assertRaisesRegex(ValueError, "non-critical.*L1"):
+            CDRUpdatePolicy(0.2, 0.1).update(ParameterUpdateInput(
+                objective,
+                model,
+                torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9),
                 RunState(),
             ))
 
@@ -210,6 +243,7 @@ class CDRUpdatePolicyTest(unittest.TestCase):
         optimizer = torch.optim.SGD(
             model.parameters(),
             lr=0.1,
+            momentum=0.9,
             weight_decay=0.1,
         )
         result = CDRUpdatePolicy(
@@ -353,7 +387,7 @@ class CDRUpdatePolicyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             model = torch.nn.Linear(2, 2)
             optimizer = torch.optim.SGD(
-                model.parameters(), lr=0.05, momentum=0.9
+                model.parameters(), lr=0.05, momentum=0.0
             )
             algorithm = SupervisedClassificationAlgorithm(
                 model,
@@ -385,7 +419,7 @@ class CDRUpdatePolicyTest(unittest.TestCase):
 
             restored_model = torch.nn.Linear(2, 2)
             restored_optimizer = torch.optim.SGD(
-                restored_model.parameters(), lr=0.05, momentum=0.9
+                restored_model.parameters(), lr=0.05, momentum=0.0
             )
             restored_algorithm = SupervisedClassificationAlgorithm(
                 restored_model,
@@ -409,7 +443,8 @@ class CDRUpdatePolicyTest(unittest.TestCase):
             )
             for name, value in restored_model.named_parameters():
                 self.assertTrue(torch.equal(value, saved_parameters[name]))
-            self.assertTrue(restored_optimizer.state)
+            self.assertEqual(restored_optimizer.param_groups[0]["momentum"], 0.0)
+            self.assertFalse(restored_optimizer.state)
 
             standard_model = torch.nn.Linear(2, 2)
             standard_algorithm = SupervisedClassificationAlgorithm(
@@ -421,9 +456,15 @@ class CDRUpdatePolicyTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "does not match"):
                 load_checkpoint(path, standard_algorithm, torch.device("cpu"))
 
-    def test_runner_does_not_own_cdr_optimizer_validation(self) -> None:
+    def test_runner_validates_cdr_optimizer_and_noise_contracts(self) -> None:
         base = {
-            "optimizer": {"name": "sgd", "lr": 0.01, "weight_decay": 0.0},
+            "optimizer": {
+                "name": "sgd",
+                "lr": 0.01,
+                "momentum": 0.0,
+                "weight_decay": 0.0,
+            },
+            "noise": {"name": "symmetric", "rate": 0.4},
             "parameter_update": {
                 "name": "cdr",
                 "noise_rate": 0.4,
@@ -431,14 +472,46 @@ class CDRUpdatePolicyTest(unittest.TestCase):
             },
         }
         _validate_supervised_config(base)
-        _validate_supervised_config({
+        equivalent_rate = {
             **base,
-            "optimizer": {"name": "adamw", "lr": 0.001},
-        })
-        _validate_supervised_config({
-            **base,
-            "optimizer": {"name": "sgd", "lr": 0.01, "weight_decay": 0.1},
-        })
+            "noise": {"name": "symmetric", "rate": 0.40000000001},
+        }
+        _validate_supervised_config(equivalent_rate)
+        with self.assertRaisesRegex(ValueError, "optimizer.name='sgd'"):
+            _validate_supervised_config({
+                **base,
+                "optimizer": {"name": "adamw", "lr": 0.001},
+            })
+        with self.assertRaisesRegex(ValueError, "non-critical.*L1"):
+            invalid_momentum = {
+                **base,
+                "optimizer": {
+                    "name": "sgd",
+                    "lr": 0.01,
+                    "momentum": 0.9,
+                    "weight_decay": 0.0,
+                },
+            }
+            _validate_supervised_config(invalid_momentum)
+        self.assertEqual(invalid_momentum["optimizer"]["momentum"], 0.9)
+        with self.assertRaisesRegex(ValueError, "weight_decay=0"):
+            _validate_supervised_config({
+                **base,
+                "optimizer": {
+                    "name": "sgd",
+                    "lr": 0.01,
+                    "momentum": 0.0,
+                    "weight_decay": 0.1,
+                },
+            })
+        with self.assertRaisesRegex(
+            ValueError,
+            r"noise\.rate=0\.2.*parameter_update\.noise_rate=0\.4",
+        ):
+            _validate_supervised_config({
+                **base,
+                "noise": {"name": "symmetric", "rate": 0.2},
+            })
         with self.assertRaisesRegex(ValueError, "parameter_update"):
             _validate_resume_config(
                 base,
@@ -453,6 +526,12 @@ class CDRUpdatePolicyTest(unittest.TestCase):
             )
         official = {
             **base,
+            "optimizer": {
+                "name": "sgd",
+                "lr": 0.01,
+                "momentum": 0.9,
+                "weight_decay": 0.1,
+            },
             "parameter_update": {
                 "name": "cdr",
                 "noise_rate": 0.4,
@@ -460,8 +539,12 @@ class CDRUpdatePolicyTest(unittest.TestCase):
                 "compatibility_mode": "official_code",
             },
         }
+        _validate_supervised_config(official)
         with self.assertRaisesRegex(ValueError, "parameter_update"):
-            _validate_resume_config(official, base)
+            _validate_resume_config(official, {
+                **base,
+                "optimizer": official["optimizer"],
+            })
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is unavailable")
     def test_cpu_and_cuda_masks_and_updates_match(self) -> None:

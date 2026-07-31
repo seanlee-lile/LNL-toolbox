@@ -4,7 +4,12 @@ from pathlib import Path
 import torch
 import yaml
 
-from lnl_toolbox.training.experiment import build_model
+from lnl_toolbox.plugins.builtin import build_builtin_parameter_update_policy
+from lnl_toolbox.training.experiment import (
+    _validate_supervised_config,
+    build_model,
+    build_optimizer,
+)
 
 
 class CDRReproductionTest(unittest.TestCase):
@@ -77,12 +82,42 @@ class CDRReproductionTest(unittest.TestCase):
             "all_trainable",
         )
         self.assertEqual(config["optimizer"]["weight_decay"], 0.0)
+        self.assertEqual(config["optimizer"]["momentum"], 0.0)
         self.assertEqual(config["model"]["name"], "resnet50")
         self.assertEqual(config["model"]["stem_padding"], 0)
         self.assertEqual(
             config["model"]["initialization"],
             "torch_default",
         )
+        _validate_supervised_config(config)
+        model = build_model(config["model"], 10)
+        optimizer = build_optimizer(model, config["optimizer"])
+        policy = build_builtin_parameter_update_policy(
+            config["parameter_update"]
+        )
+        self.assertEqual(policy.compatibility_mode, "paper")
+        self.assertEqual(optimizer.param_groups[0]["momentum"], 0.0)
+        self.assertEqual(optimizer.param_groups[0]["weight_decay"], 0.0)
+
+    def test_smoke_config_uses_strict_paper_optimizer_contract(self) -> None:
+        path = (
+            Path(__file__).resolve().parents[1]
+            / "configs"
+            / "experiment"
+            / "cifar10_symmetric_cdr_smoke.yaml"
+        )
+        config = yaml.safe_load(path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            config["parameter_update"]["compatibility_mode"],
+            "paper",
+        )
+        self.assertEqual(config["optimizer"]["momentum"], 0.0)
+        self.assertEqual(config["optimizer"]["weight_decay"], 0.0)
+        self.assertEqual(
+            config["noise"]["rate"],
+            config["parameter_update"]["noise_rate"],
+        )
+        _validate_supervised_config(config)
 
 
 if __name__ == "__main__":

@@ -221,6 +221,12 @@ class CDRUpdatePolicy:
             raise TypeError("CDR requires torch.optim.SGD")
         if self.compatibility_mode == "paper":
             for group in optimizer.param_groups:
+                if float(group.get("momentum", 0.0)) != 0.0:
+                    raise ValueError(
+                        "CDR paper mode requires SGD momentum=0 so that "
+                        "non-critical parameters receive only the explicit "
+                        "L1 update"
+                    )
                 if float(group.get("weight_decay", 0.0)) != 0.0:
                     raise ValueError(
                         "Paper-mode CDR requires optimizer weight_decay=0; "

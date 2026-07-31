@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime
 import json
+import math
 import platform
 from pathlib import Path
 import random
@@ -315,6 +316,51 @@ def _validate_supervised_config(config: Mapping[str, Any]) -> None:
     noise_config = config.get("noise") or {}
     if not isinstance(noise_config, Mapping):
         raise TypeError("noise configuration must be a mapping")
+    if str(update_config.get("name", "standard")).strip().lower() == "cdr":
+        optimizer_config = config.get("optimizer")
+        if not isinstance(optimizer_config, Mapping):
+            raise TypeError("CDR optimizer configuration must be a mapping")
+        optimizer_name = str(
+            optimizer_config.get("name", "sgd")
+        ).strip().lower()
+        if optimizer_name != "sgd":
+            raise ValueError("CDR requires optimizer.name='sgd'")
+        compatibility_mode = str(
+            update_config.get("compatibility_mode", "paper")
+        ).strip().lower()
+        if compatibility_mode not in {"paper", "official_code"}:
+            raise ValueError(
+                "CDR compatibility_mode must be 'paper' or 'official_code'"
+            )
+        if compatibility_mode == "paper":
+            momentum = float(optimizer_config.get("momentum", 0.9))
+            if momentum != 0.0:
+                raise ValueError(
+                    "CDR paper mode requires SGD momentum=0 so that "
+                    "non-critical parameters receive only the explicit "
+                    "L1 update"
+                )
+            weight_decay = float(optimizer_config.get("weight_decay", 0.0))
+            if weight_decay != 0.0:
+                raise ValueError(
+                    "CDR paper mode requires optimizer weight_decay=0; "
+                    "use parameter_update.l1_decay for Eq. (5)-(6)"
+                )
+        if "rate" in noise_config and noise_config["rate"] is not None:
+            configured_noise_rate = float(noise_config["rate"])
+            update_noise_rate = float(update_config["noise_rate"])
+            if not math.isclose(
+                configured_noise_rate,
+                update_noise_rate,
+                rel_tol=1e-9,
+                abs_tol=1e-12,
+            ):
+                raise ValueError(
+                    "CDR noise-rate mismatch: "
+                    f"noise.rate={configured_noise_rate} but "
+                    "parameter_update.noise_rate="
+                    f"{update_noise_rate}"
+                )
     validation_targets = str(
         noise_config.get("validation_targets", "clean")
     ).strip().lower()

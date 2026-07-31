@@ -2,4 +2,7 @@ name: cdr
 noise_rate: 0.4
 l1_decay: 0.001
 critical_scope: all_trainable
+# Strict equation-oriented Eq. (3)-(6) semantics. This mode requires SGD
+# momentum=0 and weight_decay=0; it is not a full numerical paper reproduction.
+# Use official_code for the released-code-compatible momentum/L2 behavior.
 compatibility_mode: paper
