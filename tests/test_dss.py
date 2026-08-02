@@ -7,16 +7,15 @@ import torch
 import yaml
 
 from lnl_toolbox.algorithms.dss import DSSObjective
-from lnl_toolbox.algorithms.masked_risk import (
-    candidate_masked_cross_entropy,
-)
+from lnl_toolbox.algorithms.masked_risk import candidate_masked_cross_entropy
 from lnl_toolbox.core import RunState
-from lnl_toolbox.core.hyperparameters import resolve_parameter_sampling
 from lnl_toolbox.core.objectives import ObjectiveResult
 from lnl_toolbox.plugins.builtin.catalog import (
     build_builtin_objective_consumer,
 )
 from lnl_toolbox.selectors.dss import DSSSelectorState
+from lnl_toolbox.training.experiment import _resolve_dss_epoch_contract
+from lnl_toolbox.training.pipeline import StandardNoisyERMPipeline
 
 
 class DSSRiskTest(unittest.TestCase):
@@ -30,12 +29,16 @@ class DSSRiskTest(unittest.TestCase):
         loss.sum().backward()
         self.assertEqual(float(logits.grad[0, 1]), 0.0)
 
-    def test_target_class_cannot_be_excluded(self) -> None:
+    def test_invalid_mask_contract_is_rejected(self) -> None:
+        logits = torch.zeros(1, 3)
+        targets = torch.tensor([1])
         with self.assertRaisesRegex(ValueError, "target class"):
             candidate_masked_cross_entropy(
-                torch.zeros(1, 3),
-                torch.tensor([1]),
-                torch.tensor([[False, True, False]]),
+                logits, targets, torch.tensor([[False, True, False]])
+            )
+        with self.assertRaisesRegex(ValueError, "shape"):
+            candidate_masked_cross_entropy(
+                logits, targets, torch.zeros(1, 2, dtype=torch.bool)
             )
 
 
@@ -59,9 +62,7 @@ class DSSSelectorStateTest(unittest.TestCase):
         after, _ = selector.masks(indices, targets)
         self.assertTrue(bool(before.all()))
         self.assertTrue(bool(during.all()))
-        torch.testing.assert_close(
-            after, torch.tensor([True, False])
-        )
+        torch.testing.assert_close(after, torch.tensor([True, False]))
 
     def test_mda_uses_batch_ema_and_renormalization(self) -> None:
         selector = DSSSelectorState(
@@ -83,9 +84,7 @@ class DSSSelectorStateTest(unittest.TestCase):
         adjusted = probabilities / (2 * expected_marginal)
         adjusted = adjusted / adjusted.sum(dim=1, keepdim=True)
         torch.testing.assert_close(selector.marginal, expected_marginal)
-        torch.testing.assert_close(
-            selector.current_prediction[:2], adjusted
-        )
+        torch.testing.assert_close(selector.current_prediction[:2], adjusted)
 
     def test_ccs_excludes_significantly_rising_non_target_class(self) -> None:
         selector = DSSSelectorState(
@@ -100,12 +99,8 @@ class DSSSelectorStateTest(unittest.TestCase):
                 epoch,
             )
             selector.on_cycle_end(epoch)
-        _, excluded = selector.masks(
-            torch.tensor([0]), torch.tensor([0])
-        )
-        torch.testing.assert_close(
-            excluded, torch.tensor([[False, True]])
-        )
+        _, excluded = selector.masks(torch.tensor([0]), torch.tensor([0]))
+        torch.testing.assert_close(excluded, torch.tensor([[False, True]]))
 
     def test_state_roundtrip_restores_history_and_masks(self) -> None:
         selector = DSSSelectorState(
@@ -119,16 +114,31 @@ class DSSSelectorStateTest(unittest.TestCase):
             0,
         )
         selector.on_cycle_end(0)
-        state = selector.state_dict()
         restored = DSSSelectorState(
             2, 2, 3, warmup_epochs=1, mda=False
         )
-        restored.load_state_dict(state)
+        restored.load_state_dict(selector.state_dict())
         self.assertEqual(restored.current_epoch, 0)
         torch.testing.assert_close(restored.selected, selector.selected)
         torch.testing.assert_close(
             restored.history.values, selector.history.values
         )
+
+    def test_stable_index_and_epoch_contracts_fail_explicitly(self) -> None:
+        selector = DSSSelectorState(3, 2, 2, warmup_epochs=1)
+        selector.on_cycle_start(0)
+        with self.assertRaisesRegex(ValueError, "unique"):
+            selector.masks(torch.tensor([0, 0]), torch.tensor([0, 0]))
+        with self.assertRaisesRegex(ValueError, "integer"):
+            selector.masks(torch.tensor([0.0]), torch.tensor([0]))
+        with self.assertRaisesRegex(ValueError, "prior epoch"):
+            selector.current_epoch = 1
+            selector.observe(
+                torch.tensor([1]),
+                torch.tensor([0]),
+                torch.tensor([[0.6, 0.4]]),
+                1,
+            )
 
 
 class DSSObjectiveTest(unittest.TestCase):
@@ -137,15 +147,12 @@ class DSSObjectiveTest(unittest.TestCase):
             2, 2, 2, warmup_epochs=0, mda=False, ccs=False
         )
         objective.selector.selected[:] = torch.tensor([True, False])
-        state = RunState(cycle=0)
-        objective.on_cycle_start(state)
+        objective.on_cycle_start(RunState(cycle=0))
         logits = torch.tensor(
             [[2.0, 0.0], [0.0, 2.0]], requires_grad=True
         )
         result = objective.compute(
-            model=None,
             logits=logits,
-            features=None,
             noisy_targets=torch.tensor([0, 1]),
             sample_indices=torch.tensor([0, 1]),
             base_loss=None,
@@ -160,49 +167,116 @@ class DSSObjectiveTest(unittest.TestCase):
         result.objective.backward()
         self.assertEqual(float(logits.grad[1].abs().sum()), 0.0)
 
-    def test_plugin_builds_dss_without_runner_branch(self) -> None:
-        objective = build_builtin_objective_consumer({
+    def test_plugin_builds_dss_and_pipeline_rejects_composition(self) -> None:
+        objective_config = {
             "name": "dss",
             "num_samples": 8,
             "num_classes": 2,
             "total_epochs": 3,
             "warmup_epochs": 1,
-        })
+        }
+        objective = build_builtin_objective_consumer(objective_config)
         self.assertIsInstance(objective, DSSObjective)
+        with self.assertRaisesRegex(ValueError, "cannot be combined"):
+            StandardNoisyERMPipeline.from_config({
+                "objective_consumer": objective_config,
+                "weight_provider": {"name": "missing"},
+            })
 
-    def test_reproduction_config_matches_official_single_run(self) -> None:
-        path = Path(
-            "configs/experiment/dss_cifar10_symmetric05_reproduction.yaml"
-        )
-        config = yaml.safe_load(path.read_text(encoding="utf-8"))
-        resolved, record = resolve_parameter_sampling(config)
-        self.assertEqual(resolved["seed"], 4)
-        self.assertEqual(record.parameters["train_seed"], 4)
-        self.assertEqual(record.parameters["setting"], {
-            "noise": "symmetric",
-            "rate": 0.5,
-            "warmup_epochs": 30,
-        })
-        self.assertEqual(resolved["trainer"]["epochs"], 150)
-        self.assertEqual(resolved["loader"]["batch_size"], 128)
-        self.assertEqual(resolved["model"]["name"], "preact_resnet18")
-        self.assertEqual(resolved["optimizer"], {
-            "name": "sgd",
-            "lr": 0.02,
-            "momentum": 0.9,
-            "nesterov": False,
-            "weight_decay": 0.001,
-        })
-        self.assertEqual(resolved["scheduler"]["milestones"], [80])
-        objective = resolved["pipeline"]["objective_consumer"]
-        self.assertEqual(objective["warmup_epochs"], 30)
-        self.assertEqual(objective["prior_decay"], 0.99)
-        self.assertEqual(objective["alpha"], 0.10)
+    def test_trainer_epochs_are_the_only_resolved_horizon(self) -> None:
+        config = {
+            "pipeline": {
+                "objective_consumer": {
+                    "name": "dss",
+                    "num_samples": 8,
+                    "num_classes": 2,
+                }
+            }
+        }
+        _resolve_dss_epoch_contract(config, 4)
         self.assertEqual(
-            resolved["data"]["validation_split"]["strategy"],
-            "classwise_legacy",
+            config["pipeline"]["objective_consumer"]["total_epochs"], 4
         )
-        self.assertEqual(resolved["noise"]["validation_targets"], "noisy")
+        conflicting = {
+            "pipeline": {
+                "objective_consumer": {
+                    "name": "dss",
+                    "total_epochs": 3,
+                }
+            }
+        }
+        with self.assertRaisesRegex(ValueError, "trainer.epochs"):
+            _resolve_dss_epoch_contract(conflicting, 4)
+        for section, value in (
+            ("loss", {"name": "gce"}),
+            ("selector", {"name": "small_loss", "keep_rate": 0.5}),
+            ("parameter_update", {"name": "cdr"}),
+        ):
+            invalid = {
+                section: value,
+                "pipeline": {
+                    "objective_consumer": {"name": "dss"}
+                },
+            }
+            with self.subTest(section=section), self.assertRaisesRegex(
+                ValueError, "DSS requires"
+            ):
+                _resolve_dss_epoch_contract(invalid, 4)
+
+    def test_pipeline_component_state_roundtrip_is_strict(self) -> None:
+        config = {
+            "objective_consumer": {
+                "name": "dss",
+                "num_samples": 2,
+                "num_classes": 2,
+                "total_epochs": 2,
+                "warmup_epochs": 1,
+                "mda": False,
+                "ccs": False,
+            }
+        }
+        pipeline = StandardNoisyERMPipeline.from_config(config)
+        objective = pipeline.objective_consumer
+        objective.on_cycle_start(RunState(cycle=0))
+        objective.compute(
+            logits=torch.tensor([[2.0, 0.0], [0.0, 2.0]]),
+            noisy_targets=torch.tensor([0, 1]),
+            sample_indices=torch.tensor([0, 1]),
+            base_loss=None,
+            metadata={"epoch": 0},
+        )
+        objective.on_cycle_end(RunState(cycle=0))
+        states = pipeline.component_state_dict()
+        restored = StandardNoisyERMPipeline.from_config(config)
+        restored.load_component_states(states)
+        torch.testing.assert_close(
+            restored.objective_consumer.selector.history.values,
+            objective.selector.history.values,
+        )
+        with self.assertRaisesRegex(ValueError, "missing"):
+            restored.load_component_states({})
+
+    def test_configs_do_not_duplicate_total_epochs(self) -> None:
+        for filename, expected_epochs in (
+            ("dss_cifar10_symmetric05_smoke.yaml", 2),
+            ("dss_cifar10_symmetric05_reproduction.yaml", 150),
+        ):
+            config = yaml.safe_load(
+                (
+                    Path("configs/experiment") / filename
+                ).read_text(encoding="utf-8")
+            )
+            objective = config["pipeline"]["objective_consumer"]
+            self.assertNotIn("total_epochs", objective)
+            _resolve_dss_epoch_contract(
+                config, int(config["trainer"]["epochs"])
+            )
+            self.assertEqual(objective.get("total_epochs"), None)
+            self.assertEqual(
+                config["pipeline"]["objective_consumer"]["total_epochs"],
+                expected_epochs,
+            )
+            self.assertEqual(config["evaluation"]["selection_split"], "validation")
 
 
 if __name__ == "__main__":

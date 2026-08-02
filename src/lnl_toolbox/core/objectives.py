@@ -1,15 +1,15 @@
+"""Framework-neutral contracts for components that own an objective."""
+
 from __future__ import annotations
 
-"""Framework-neutral contracts for composable training objectives."""
-
-from dataclasses import dataclass, field
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 
 @dataclass(frozen=True)
 class ObjectiveResult:
-    """Structured objective plus optional sample accounting and diagnostics."""
+    """Optimization objective with separate reporting and sample accounting."""
 
     objective: Any
     selected_mask: Any | None = None
@@ -19,19 +19,17 @@ class ObjectiveResult:
 
 @runtime_checkable
 class ObjectiveConsumer(Protocol):
-    """Build a scalar or structured objective from shared training inputs."""
+    """Own the scalar objective for one batch."""
 
     def compute(
         self,
         *,
-        model: Any,
         logits: Any,
-        features: Any,
         noisy_targets: Any,
         sample_indices: Any,
         base_loss: Any,
         metadata: Mapping[str, Any],
-    ) -> Any | ObjectiveResult:
+    ) -> ObjectiveResult:
         ...
 
 

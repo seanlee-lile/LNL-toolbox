@@ -20,6 +20,7 @@ from .pdl import (
     fit_part_transition_matrices,
 )
 from .manifest import NoiseManifest
+from .split_manifest import generate_split_symmetric_manifest
 from .transition import (
     KnownTransition,
     InstanceTransitionProvider,
@@ -35,7 +36,7 @@ __all__ = [
     "generate_pairflip",
     "generate_class_conditional",
     "generate_instance_dependent",
-    "generate_pdl_idn",
+    "generate_split_symmetric_manifest",
     "PosteriorSnapshot",
     "TransitionEstimator",
     "AnchorTransitionEstimator",

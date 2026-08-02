@@ -43,9 +43,7 @@
 | `engine/__init__.py` | 公开 `run_cycles` 和兼容名称 `run_epochs`。 |
 | `engine/runner.py` | 执行 setup、run、cycle、step、evaluator 和 close；不处理模型或梯度。 |
 | `algorithms/base.py` | 将旧 `Algorithm/TrainState` 导入映射到新的通用核心，保持兼容。 |
-| `algorithms/coteaching.py` | NumPy 版 Co-teaching 保留率日程和小损失交叉选样函数。 |
-| `algorithms/multi_model.py` | 通用命名模型组、成组 device/mode/state、联合 logits，以及独立的 peer-exchange 协议。 |
-| `algorithms/jocor.py` | JoCoR 双向 KL、逐样本联合分数、共同小损失集合和双网络联合更新。 |
+| `algorithms/coteaching/` | 完整双模型 `CoTeachingAlgorithm`、配置/状态、stable-index small-loss 选择，以及原 NumPy helper 的兼容迁移。 |
 | `algorithms/update_policy.py` | 定义通用 ParameterUpdateInput/Result/Policy、普通 StandardUpdatePolicy，以及 policy checkpoint 身份协议。 |
 | `algorithms/cdr.py` | 实现 CDR 论文 Eq. (3)-(6) 的全参数精确 top-k 模式，以及官方代码二维/四维权重、阈值并列和 L2-compatible 模式。 |
 | `algorithms/supervised.py` | 单模型监督训练步骤；兼容普通逐样本归约与结构化 Objective，并通用转发 Objective 生命周期钩子。 |
@@ -133,8 +131,8 @@
 
 | 文件 | 作用 |
 |---|---|
-| `training/experiment.py` | 单模型监督训练器；统一构造模型、Loss、batch Selector、ParameterUpdatePolicy、optimizer、scheduler、clean/noisy Dataset、可显式选择 clean/noisy validation、评测和产物。 |
-| `training/multi_model_experiment.py` | 通用 CIFAR 多模型编排；组合模型组、插件化 multi-model Algorithm、共享 Selector、Noise Manifest、联合 optimizer、checkpoint/resume 和成员/ensemble 评测。 |
+| `training/experiment.py` | 唯一监督训练器；统一构造模型、Loss、batch Selector、ParameterUpdatePolicy、optimizer、scheduler、clean/noisy Dataset、可显式选择 clean/noisy validation、评测和产物。 |
+| `training/coteaching_experiment.py` | `method: coteaching` 的 CIFAR 双模型生命周期；负责独立 peer 初始化、epoch-seeded loader、双 peer 评测和 checkpoint/resume。 |
 | `training/progress.py` | 无第三方依赖的 batch 终端进度显示和逐 epoch `training_curves.svg` 生成器；不参与训练决策。 |
 | `training/clean_baseline.py` | clean-only 包装和多 seed 汇总；检测到 noise 配置立即拒绝。 |
 | `training/noisy_labels.py` | 生成或导入 manifest，规范化为 run-local v2，校验恢复身份，并分别记录 train/validation 的标签来源与实际噪声率。 |
@@ -159,8 +157,8 @@
 | `configs/experiment/cifar10_symmetric_ce_smoke.yaml` | symmetric 0.4 + CE 的统一 noisy runner smoke 配置。 |
 | `configs/experiment/cifar10_symmetric_small_loss_smoke.yaml` | symmetric 0.4 + CE + 固定 0.5 keep-rate SmallLossSelector 的单模型 smoke 配置。 |
 | `configs/experiment/cifar10_symmetric_small_loss_linear_smoke.yaml` | symmetric 0.4 + CE + 从 1.0 线性变化到 0.5 的 SmallLossSelector smoke 配置。 |
-| `configs/experiment/cifar10_symmetric_cdr_smoke.yaml` | 官方式 random split、transition noise、Normalize 与 noisy validation，加 paper-mode CDR ParameterUpdatePolicy 的 smoke 配置。 |
-| `configs/experiment/cifar10_symmetric_cdr_reproduction.yaml` | CDR 单次 CIFAR-10 symmetric-40% 配置：官方数据/模型路径、论文 Eq. (3)-(6)、ResNet-50、batch 64、SGD、100 epochs、noisy validation。 |
+| `configs/experiment/cifar10_symmetric_cdr_smoke.yaml` | symmetric 0.4 + CE + paper-mode CDR ParameterUpdatePolicy 的 smoke 配置。 |
+| `configs/experiment/cifar10_coteaching_smoke.yaml` | 双 TinyCNN、symmetric 0.4、两轮 CPU Co-teaching smoke 配置。 |
 | `configs/experiment/gce_cifar10_noise02_smoke.yaml` | GCE 论文设置的 CIFAR-10、symmetric 0.2、ResNet-34 小样本 CUDA smoke。 |
 | `configs/experiment/gce_cifar10_noise02_reproduction.yaml` | GCE 论文设置的 CIFAR-10、symmetric 0.2、单次 120 epoch 正式配置。 |
 | `configs/experiment/loss_correction_cifar10_asymmetric04.yaml` | Loss Correction 论文设置的 CIFAR-10、官方 class-conditional asymmetric 0.4、Forward、单次 120 epoch 正式配置。 |
@@ -186,7 +184,9 @@
 | `tests/test_dividemix_gmm.py` | DivideMix GMM clean-probability 子组件的拟合、确定性、退化输入、可选依赖与输出合同。 |
 | `tests/test_reliability_selection_adapter.py` | dataset-level reliability 按 stable index 抽取、重排并显式转换为低分优先 SelectionInput。 |
 | `tests/test_losses.py` | P0 loss 公式、GCE 极低概率梯度、逐样本 shape、极端数值和 APL 论文约束。 |
-| `tests/test_coteaching.py` | 双网络交叉选样和保留率日程。 |
+| `tests/test_coteaching.py` | legacy Co-teaching exchange 与旧导入路径回归。 |
+| `tests/test_coteaching_algorithm.py` | peer cross-update、初始化、schedule、floor/tie-break 和双 peer state 合同。 |
+| `tests/test_coteaching_workflow.py` | YAML dispatch、双模型 checkpoint、fresh/resume/completed-resume 和配置漂移。 |
 | `tests/test_update_policy.py` | 通用 ParameterUpdatePolicy 输入输出、Standard 更新等价性和 checkpoint 身份协议。 |
 | `tests/test_cdr.py` | CDR Eq. (3)-(6)、官方代码 scope/threshold/L2 模式、稳定 top-k、失败边界、Selector、checkpoint 和 CPU/CUDA 一致性。 |
 | `tests/test_cdr_reproduction.py` | CDR 正式配置的 100-epoch 合同、官方 ResNet stem/初始化选项和通用 builder 接入。 |

@@ -290,7 +290,6 @@ class NoisyCeBaselineTest(unittest.TestCase):
         changed["noise"]["validation_targets"] = "clean"
         with self.assertRaisesRegex(ValueError, "noise.validation_targets"):
             _validate_resume_config(changed, saved)
-        saved = _config()
         saved["data"]["validation_split"] = {
             "strategy": "random",
             "rng": "numpy_legacy",
@@ -307,6 +306,15 @@ class NoisyCeBaselineTest(unittest.TestCase):
         changed["data"]["normalization"]["std"][0] = 0.7
         with self.assertRaisesRegex(ValueError, "data.normalization"):
             _validate_resume_config(changed, saved)
+
+    def test_test_set_cannot_select_checkpoint_without_explicit_opt_in(self):
+        config = _config()
+        config["evaluation"] = {"selection_split": "test"}
+        with self.assertRaisesRegex(
+            ValueError,
+            "test selection requires",
+        ):
+            run_experiment(config)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,29 @@ from lnl_toolbox.noise.generators import generate_class_conditional
 from lnl_toolbox.plugins import PluginCatalog
 
 
+def _register_dss(catalog: PluginCatalog) -> None:
+    """Register optional DSS without hiding errors inside an installed module."""
+
+    try:
+        from lnl_toolbox.algorithms.dss import DSSObjective
+    except ModuleNotFoundError as exc:
+        if exc.name != "lnl_toolbox.algorithms.dss":
+            raise
+        return
+    catalog.add(
+        "objective_consumer",
+        "dss",
+        DSSObjective,
+        capabilities=(
+            "stateful_objective",
+            "debiased_selection",
+            "class_exclusion",
+            "global_index",
+        ),
+        metadata={"paper": "Pan et al., CVPR 2026"},
+    )
+
+
 def create_builtin_catalog() -> PluginCatalog:
     """Register small examples used to validate extension points."""
 
@@ -256,23 +279,6 @@ def create_builtin_catalog() -> PluginCatalog:
             capabilities=("transition_consumer", "corrected_risk"),
         )
     try:
-        from lnl_toolbox.algorithms.dss import DSSObjective
-    except ImportError:
-        pass
-    else:
-        catalog.add(
-            "objective_consumer",
-            "dss",
-            DSSObjective,
-            capabilities=(
-                "stateful_objective",
-                "debiased_selection",
-                "class_exclusion",
-                "global_index",
-            ),
-            metadata={"paper": "Pan et al., CVPR 2026"},
-        )
-    try:
         from lnl_toolbox.training.pipeline import StandardNoisyERMPipeline
     except ImportError:
         pass
@@ -295,6 +301,7 @@ def create_builtin_catalog() -> PluginCatalog:
             capabilities=("continuous_weight", "learned_curriculum", "stateful"),
             metadata={"paper": "Jiang et al., ICML 2018"},
         )
+    _register_dss(catalog)
     return catalog
 
 
@@ -428,8 +435,9 @@ def build_builtin_instance_transition_estimator(
     try:
         return catalog.build("instance_transition_estimator", name, **values)
     except KeyError as exc:
-        available = ", ".join(item.name for item in catalog.find(
-            kind="instance_transition_estimator")) or "none"
+        available = ", ".join(
+            item.name for item in catalog.find(kind="instance_transition_estimator")
+        ) or "none"
         raise ValueError(
             f"Unknown instance transition estimator {name!r}; available: {available}"
         ) from exc
@@ -445,7 +453,7 @@ def build_builtin_instance_transition_algorithm(
     device: Any,
     catalog: PluginCatalog | None = None,
 ) -> Any:
-    """Build a generic consumer of ``[B,C,C]`` transition providers."""
+    """Build a generic consumer of per-sample transition providers."""
 
     if not isinstance(config, Mapping):
         raise TypeError("Instance transition algorithm configuration must be a mapping")
@@ -453,11 +461,20 @@ def build_builtin_instance_transition_algorithm(
     name = str(values.pop("name", "corrected_classification")).strip().lower()
     catalog = catalog or create_builtin_catalog()
     try:
-        return catalog.build("instance_transition_algorithm", name, model=model,
-            optimizer=optimizer, loss=loss, transition=transition, device=device, **values)
+        return catalog.build(
+            "instance_transition_algorithm",
+            name,
+            model=model,
+            optimizer=optimizer,
+            loss=loss,
+            transition=transition,
+            device=device,
+            **values,
+        )
     except KeyError as exc:
-        available = ", ".join(item.name for item in catalog.find(
-            kind="instance_transition_algorithm")) or "none"
+        available = ", ".join(
+            item.name for item in catalog.find(kind="instance_transition_algorithm")
+        ) or "none"
         raise ValueError(
             f"Unknown instance transition algorithm {name!r}; available: {available}"
         ) from exc
@@ -467,7 +484,7 @@ def build_builtin_regularizer(
     config: Mapping[str, Any] | None,
     catalog: PluginCatalog | None = None,
 ) -> Any:
-    """Build a generic objective regularizer without paper branches in runners."""
+    """Build a generic objective regularizer."""
 
     if config is not None and not isinstance(config, Mapping):
         raise TypeError("Regularizer configuration must be a mapping")
@@ -479,14 +496,20 @@ def build_builtin_regularizer(
     try:
         return catalog.build("regularizer", name, **values)
     except KeyError as exc:
-        available = ", ".join(item.name for item in catalog.find(kind="regularizer")) or "none"
-        raise ValueError(f"Unknown regularizer {name!r}; available: {available}") from exc
+        available = ", ".join(
+            item.name for item in catalog.find(kind="regularizer")
+        ) or "none"
+        raise ValueError(
+            f"Unknown regularizer {name!r}; available: {available}"
+        ) from exc
 
 
 def build_builtin_statistic_estimator(
     config: Mapping[str, Any] | None,
     catalog: PluginCatalog | None = None,
 ) -> Any:
+    """Build an offline statistic estimator."""
+
     if config is not None and not isinstance(config, Mapping):
         raise TypeError("Statistic estimator configuration must be a mapping")
     values = dict(config or {})
@@ -497,17 +520,23 @@ def build_builtin_statistic_estimator(
     try:
         return catalog.build("statistic_estimator", name, **values)
     except KeyError as exc:
-        available = ", ".join(item.name for item in catalog.find(kind="statistic_estimator")) or "none"
-        raise ValueError(f"Unknown statistic estimator {name!r}; available: {available}") from exc
+        available = ", ".join(
+            item.name for item in catalog.find(kind="statistic_estimator")
+        ) or "none"
+        raise ValueError(
+            f"Unknown statistic estimator {name!r}; available: {available}"
+        ) from exc
 
 
 def build_builtin_objective_consumer(
     config: Mapping[str, Any] | None,
     catalog: PluginCatalog | None = None,
 ) -> Any:
-    if config is not None and not isinstance(config, Mapping):
+    """Build an explicit owner of the optimization objective."""
+
+    if not isinstance(config, Mapping):
         raise TypeError("Objective consumer configuration must be a mapping")
-    values = dict(config or {})
+    values = dict(config)
     name = str(values.pop("name", "")).strip().lower()
     if not name:
         raise ValueError("Objective consumer configuration requires a name")
@@ -515,15 +544,19 @@ def build_builtin_objective_consumer(
     try:
         return catalog.build("objective_consumer", name, **values)
     except KeyError as exc:
-        available = ", ".join(item.name for item in catalog.find(kind="objective_consumer")) or "none"
-        raise ValueError(f"Unknown objective consumer {name!r}; available: {available}") from exc
+        available = ", ".join(
+            item.name for item in catalog.find(kind="objective_consumer")
+        ) or "none"
+        raise ValueError(
+            f"Unknown objective consumer {name!r}; available: {available}"
+        ) from exc
 
 
 def build_builtin_fine_selector(
     config: Mapping[str, Any] | None,
     catalog: PluginCatalog | None = None,
 ) -> Any:
-    """Build FINE's selector in its own plugin kind to preserve old selectors."""
+    """Build FINE selection without changing the generic selector kind."""
 
     if config is not None and not isinstance(config, Mapping):
         raise TypeError("FINE selector configuration must be a mapping")

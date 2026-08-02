@@ -108,6 +108,29 @@ class CDRUpdatePolicyTest(unittest.TestCase):
         self.assertEqual(delta[2].item(), 0.0)
         self.assertAlmostEqual(delta[3].item(), 0.2, places=6)
 
+    def test_critical_then_noncritical_parameter_has_only_l1_second_step(self) -> None:
+        model = _VectorModel()
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.0)
+        policy = CDRUpdatePolicy(noise_rate=0.75, l1_decay=0.2)
+        policy.update(ParameterUpdateInput(
+            (model() * torch.tensor([10.0, 0.0, 0.0, 0.0])).sum(),
+            model,
+            optimizer,
+            RunState(),
+        ))
+        before_second_step = model.values.detach().clone()
+
+        policy.update(ParameterUpdateInput(
+            (model() * torch.tensor([0.0, 10.0, 0.0, 0.0])).sum(),
+            model,
+            optimizer,
+            RunState(),
+        ))
+
+        actual_delta = before_second_step[0] - model.values.detach()[0]
+        expected_l1_delta = 0.1 * 0.2 * before_second_step[0].sign()
+        torch.testing.assert_close(actual_delta, expected_l1_delta)
+
     def test_invalid_parameters_optimizer_and_gradients_fail(self) -> None:
         with self.assertRaises(ValueError):
             CDRUpdatePolicy(noise_rate=-0.1, l1_decay=0.1)
@@ -139,6 +162,16 @@ class CDRUpdatePolicyTest(unittest.TestCase):
                 RunState(),
             ))
 
+        model = _VectorModel()
+        objective = model().sum()
+        with self.assertRaisesRegex(ValueError, "non-critical.*L1"):
+            CDRUpdatePolicy(0.2, 0.1).update(ParameterUpdateInput(
+                objective,
+                model,
+                torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9),
+                RunState(),
+            ))
+
         parameter = torch.nn.Parameter(torch.tensor([float("nan")]))
         parameter.grad = torch.ones(1)
         with self.assertRaisesRegex(ValueError, "finite"):
@@ -163,29 +196,65 @@ class CDRUpdatePolicyTest(unittest.TestCase):
         self.assertEqual(result.critical_parameters, math.ceil(0.6 * 11))
         self.assertIn("bias", result.masks)
 
-    def test_official_code_mode_matches_released_scope_ties_and_l2_step(self) -> None:
+    def test_default_mode_is_identical_to_explicit_paper_mode(self) -> None:
+        results = []
+        metrics = []
+        for mode in (None, "paper"):
+            model = _VectorModel()
+            optimizer = torch.optim.SGD(model.parameters(), lr=0.2)
+            objective = (
+                model() * torch.tensor([1.0, 3.0, 9.0, -0.25])
+            ).sum()
+            keyword = {} if mode is None else {"compatibility_mode": mode}
+            result = CDRUpdatePolicy(
+                noise_rate=0.5,
+                l1_decay=0.1,
+                **keyword,
+            ).update(ParameterUpdateInput(
+                objective,
+                model,
+                optimizer,
+                RunState(),
+            ))
+            results.append(model.values.detach().clone())
+            metrics.append(result.metrics)
+        self.assertTrue(torch.equal(results[0], results[1]))
+        self.assertEqual(metrics[0], metrics[1])
+
+    def test_official_code_scope_threshold_ties_and_l2_step(self) -> None:
         model = torch.nn.Linear(2, 2)
         with torch.no_grad():
-            model.weight.copy_(torch.tensor([[2.0, -1.0], [0.0, 4.0]]))
+            model.weight.copy_(torch.tensor([
+                [2.0, -1.0],
+                [0.0, 4.0],
+            ]))
             model.bias.copy_(torch.tensor([1.0, -1.0]))
         weight_before = model.weight.detach().clone()
         bias_before = model.bias.detach().clone()
-        coefficients = torch.tensor([[1.0, 3.0], [9.0, -0.25]])
+        coefficients = torch.tensor([
+            [1.0, 3.0],
+            [9.0, -0.25],
+        ])
         bias_coefficients = torch.tensor([2.0, -3.0])
         objective = (
             (model.weight * coefficients).sum()
             + (model.bias * bias_coefficients).sum()
         )
         optimizer = torch.optim.SGD(
-            model.parameters(), lr=0.1, weight_decay=0.1
+            model.parameters(),
+            lr=0.1,
+            momentum=0.9,
+            weight_decay=0.1,
         )
         result = CDRUpdatePolicy(
             noise_rate=0.5,
             l1_decay=0.0,
-            critical_scope="matrix_and_convolution_weights",
             compatibility_mode="official_code",
         ).update(ParameterUpdateInput(
-            objective, model, optimizer, RunState()
+            objective,
+            model,
+            optimizer,
+            RunState(),
         ))
         expected_weight_gradient = torch.tensor([
             [0.5, 1.5],
@@ -200,29 +269,56 @@ class CDRUpdatePolicyTest(unittest.TestCase):
             model.bias,
             bias_before - 0.1 * expected_bias_gradient,
         )
-        self.assertEqual(result.metrics["update_eligible_parameters"], 4.0)
-        self.assertEqual(result.metrics["update_critical_parameters"], 2.0)
+        self.assertEqual(
+            result.metrics["update_eligible_parameters"],
+            4.0,
+        )
+        self.assertEqual(
+            result.metrics["update_critical_parameters"],
+            2.0,
+        )
 
         tied = torch.nn.Parameter(torch.ones(4, 1))
         tied.grad = torch.ones_like(tied)
         masks = official_code_parameter_masks([("weight", tied)], 0.5)
+        self.assertEqual(masks.eligible_parameters, 4)
         self.assertEqual(masks.critical_parameters, 4)
 
-    def test_official_code_mode_rejects_paper_l1_or_scope(self) -> None:
+    def test_modes_are_validated_immutable_and_checkpoint_bound(self) -> None:
+        with self.assertRaisesRegex(ValueError, "compatibility_mode"):
+            CDRUpdatePolicy(0.4, 0.0, compatibility_mode="unknown")
         with self.assertRaisesRegex(ValueError, "l1_decay=0"):
             CDRUpdatePolicy(
                 0.4,
                 0.001,
                 compatibility_mode="official_code",
-                critical_scope="matrix_and_convolution_weights",
             )
         with self.assertRaisesRegex(ValueError, "critical_scope"):
             CDRUpdatePolicy(
                 0.4,
                 0.0,
-                compatibility_mode="official_code",
                 critical_scope="all_trainable",
+                compatibility_mode="official_code",
             )
+        policy = CDRUpdatePolicy(0.4, 0.001)
+        with self.assertRaises(AttributeError):
+            policy.compatibility_mode = "official_code"  # type: ignore[misc]
+        self.assertEqual(
+            policy.state_dict(),
+            {"compatibility_mode": "paper"},
+        )
+        policy.load_state_dict({})
+        with self.assertRaisesRegex(ValueError, "changed"):
+            policy.load_state_dict({
+                "compatibility_mode": "official_code",
+            })
+        official = CDRUpdatePolicy(
+            0.4,
+            0.0,
+            compatibility_mode="official_code",
+        )
+        with self.assertRaisesRegex(ValueError, "Legacy"):
+            official.load_state_dict({})
 
     def test_selector_and_cdr_compose_without_clean_label_input(self) -> None:
         model = torch.nn.Linear(2, 2, bias=False)
@@ -275,6 +371,13 @@ class CDRUpdatePolicyTest(unittest.TestCase):
             "critical_scope": "all_trainable",
         }, catalog)
         self.assertIsInstance(cdr, CDRUpdatePolicy)
+        official = build_builtin_parameter_update_policy({
+            "name": "cdr",
+            "noise_rate": 0.4,
+            "l1_decay": 0.0,
+            "compatibility_mode": "official_code",
+        }, catalog)
+        self.assertEqual(official.compatibility_mode, "official_code")
         with self.assertRaises(ValueError):
             build_builtin_parameter_update_policy({"name": "unknown"}, catalog)
         with self.assertRaises(TypeError):
@@ -284,7 +387,7 @@ class CDRUpdatePolicyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             model = torch.nn.Linear(2, 2)
             optimizer = torch.optim.SGD(
-                model.parameters(), lr=0.05, momentum=0.9
+                model.parameters(), lr=0.05, momentum=0.0
             )
             algorithm = SupervisedClassificationAlgorithm(
                 model,
@@ -316,7 +419,7 @@ class CDRUpdatePolicyTest(unittest.TestCase):
 
             restored_model = torch.nn.Linear(2, 2)
             restored_optimizer = torch.optim.SGD(
-                restored_model.parameters(), lr=0.05, momentum=0.9
+                restored_model.parameters(), lr=0.05, momentum=0.0
             )
             restored_algorithm = SupervisedClassificationAlgorithm(
                 restored_model,
@@ -333,11 +436,15 @@ class CDRUpdatePolicyTest(unittest.TestCase):
             self.assertEqual(epoch, 0)
             self.assertEqual(
                 payload["parameter_update_policy"],
-                {"name": "cdr", "state": {}},
+                {
+                    "name": "cdr",
+                    "state": {"compatibility_mode": "paper"},
+                },
             )
             for name, value in restored_model.named_parameters():
                 self.assertTrue(torch.equal(value, saved_parameters[name]))
-            self.assertTrue(restored_optimizer.state)
+            self.assertEqual(restored_optimizer.param_groups[0]["momentum"], 0.0)
+            self.assertFalse(restored_optimizer.state)
 
             standard_model = torch.nn.Linear(2, 2)
             standard_algorithm = SupervisedClassificationAlgorithm(
@@ -349,9 +456,15 @@ class CDRUpdatePolicyTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "does not match"):
                 load_checkpoint(path, standard_algorithm, torch.device("cpu"))
 
-    def test_runner_does_not_own_cdr_optimizer_validation(self) -> None:
+    def test_runner_validates_cdr_optimizer_and_noise_contracts(self) -> None:
         base = {
-            "optimizer": {"name": "sgd", "lr": 0.01, "weight_decay": 0.0},
+            "optimizer": {
+                "name": "sgd",
+                "lr": 0.01,
+                "momentum": 0.0,
+                "weight_decay": 0.0,
+            },
+            "noise": {"name": "symmetric", "rate": 0.4},
             "parameter_update": {
                 "name": "cdr",
                 "noise_rate": 0.4,
@@ -359,14 +472,46 @@ class CDRUpdatePolicyTest(unittest.TestCase):
             },
         }
         _validate_supervised_config(base)
-        _validate_supervised_config({
+        equivalent_rate = {
             **base,
-            "optimizer": {"name": "adamw", "lr": 0.001},
-        })
-        _validate_supervised_config({
-            **base,
-            "optimizer": {"name": "sgd", "lr": 0.01, "weight_decay": 0.1},
-        })
+            "noise": {"name": "symmetric", "rate": 0.40000000001},
+        }
+        _validate_supervised_config(equivalent_rate)
+        with self.assertRaisesRegex(ValueError, "optimizer.name='sgd'"):
+            _validate_supervised_config({
+                **base,
+                "optimizer": {"name": "adamw", "lr": 0.001},
+            })
+        with self.assertRaisesRegex(ValueError, "non-critical.*L1"):
+            invalid_momentum = {
+                **base,
+                "optimizer": {
+                    "name": "sgd",
+                    "lr": 0.01,
+                    "momentum": 0.9,
+                    "weight_decay": 0.0,
+                },
+            }
+            _validate_supervised_config(invalid_momentum)
+        self.assertEqual(invalid_momentum["optimizer"]["momentum"], 0.9)
+        with self.assertRaisesRegex(ValueError, "weight_decay=0"):
+            _validate_supervised_config({
+                **base,
+                "optimizer": {
+                    "name": "sgd",
+                    "lr": 0.01,
+                    "momentum": 0.0,
+                    "weight_decay": 0.1,
+                },
+            })
+        with self.assertRaisesRegex(
+            ValueError,
+            r"noise\.rate=0\.2.*parameter_update\.noise_rate=0\.4",
+        ):
+            _validate_supervised_config({
+                **base,
+                "noise": {"name": "symmetric", "rate": 0.2},
+            })
         with self.assertRaisesRegex(ValueError, "parameter_update"):
             _validate_resume_config(
                 base,
@@ -379,6 +524,27 @@ class CDRUpdatePolicyTest(unittest.TestCase):
                     },
                 },
             )
+        official = {
+            **base,
+            "optimizer": {
+                "name": "sgd",
+                "lr": 0.01,
+                "momentum": 0.9,
+                "weight_decay": 0.1,
+            },
+            "parameter_update": {
+                "name": "cdr",
+                "noise_rate": 0.4,
+                "l1_decay": 0.0,
+                "compatibility_mode": "official_code",
+            },
+        }
+        _validate_supervised_config(official)
+        with self.assertRaisesRegex(ValueError, "parameter_update"):
+            _validate_resume_config(official, {
+                **base,
+                "optimizer": official["optimizer"],
+            })
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is unavailable")
     def test_cpu_and_cuda_masks_and_updates_match(self) -> None:

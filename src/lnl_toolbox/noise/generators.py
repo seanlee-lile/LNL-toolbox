@@ -35,7 +35,8 @@ def generate_symmetric(
     sampling = str(sampling).strip().lower()
     if sampling not in {"global", "per_class", "transition"}:
         raise ValueError(
-            "symmetric sampling must be 'global', 'per_class', or 'transition'"
+            "symmetric sampling must be 'global', 'per_class', "
+            "or 'transition'"
         )
     rng = str(rng).strip().lower()
     if rng not in {"default_rng", "numpy_legacy"}:
@@ -46,17 +47,21 @@ def generate_symmetric(
         transition = np.full(
             (num_classes, num_classes),
             rate / (num_classes - 1),
+            dtype=np.float64,
         )
         np.fill_diagonal(transition, 1.0 - rate)
         if rng == "numpy_legacy":
             for index, label in enumerate(labels):
                 noisy[index] = random.multinomial(
-                    1, transition[int(label)], size=1
+                    1,
+                    transition[int(label)],
+                    size=1,
                 )[0].argmax()
         else:
             for index, label in enumerate(labels):
                 noisy[index] = random.choice(
-                    num_classes, p=transition[int(label)]
+                    num_classes,
+                    p=transition[int(label)],
                 )
         chosen = np.flatnonzero(noisy != labels)
     elif sampling == "global":
@@ -73,15 +78,21 @@ def generate_symmetric(
             if np.any(labels == class_index)
         ]
         chosen = np.concatenate(chosen_parts) if chosen_parts else np.empty(0, dtype=np.int64)
-    if sampling == "transition":
-        pass
-    elif rng == "numpy_legacy":
-        for index in chosen:
-            other_classes = np.delete(np.arange(num_classes), labels[index])
-            noisy[index] = random.choice(other_classes)
-    else:
-        offsets = random.integers(1, num_classes, size=chosen.size)
-        noisy[chosen] = (labels[chosen] + offsets) % num_classes
+    if sampling != "transition":
+        if rng == "numpy_legacy":
+            for index in chosen:
+                other_classes = np.delete(
+                    np.arange(num_classes),
+                    labels[index],
+                )
+                noisy[index] = random.choice(other_classes)
+        else:
+            offsets = random.integers(
+                1,
+                num_classes,
+                size=chosen.size,
+            )
+            noisy[chosen] = (labels[chosen] + offsets) % num_classes
     transition = np.full((num_classes, num_classes), rate / (num_classes - 1))
     np.fill_diagonal(transition, 1.0 - rate)
     return NoiseManifest(

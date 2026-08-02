@@ -1,7 +1,6 @@
 name: dss
 num_samples: 50000
 num_classes: 10
-total_epochs: 150
 warmup_epochs: 30
 alpha: 0.10
 prior_decay: 0.99

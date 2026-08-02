@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Create a split-aware CIFAR noise manifest for an external-manifest run."""
+"""Prepare a split-aware CIFAR manifest for external-manifest runs."""
 
 import argparse
 from pathlib import Path
@@ -14,7 +14,11 @@ from lnl_toolbox.noise.split_manifest import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", choices=("cifar10", "cifar100"), required=True)
+    parser.add_argument(
+        "--dataset",
+        choices=("cifar10", "cifar100"),
+        required=True,
+    )
     parser.add_argument("--data-root", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--validation-size", type=int, required=True)
@@ -23,9 +27,24 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _prepare_destination(path: str | Path) -> Path:
+    destination = Path(path).expanduser()
+    if destination.exists():
+        raise FileExistsError(
+            f"refusing to overwrite existing manifest: {destination}"
+        )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    return destination
+
+
 def main() -> None:
     args = parse_args()
-    loader = load_cifar10 if args.dataset == "cifar10" else load_cifar100
+    destination = _prepare_destination(args.output)
+    loader = (
+        load_cifar10
+        if args.dataset == "cifar10"
+        else load_cifar100
+    )
     dataset = loader(args.data_root, "train")
     train_indices, validation_indices = train_validation_split(
         dataset.labels,
@@ -41,8 +60,8 @@ def main() -> None:
         rate=args.rate,
         seed=args.seed,
         dataset=args.dataset,
+        split_names=("train", "validation"),
     )
-    destination = Path(args.output)
     manifest.save(destination)
     print(destination.resolve())
 

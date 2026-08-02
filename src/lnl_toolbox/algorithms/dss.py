@@ -1,6 +1,6 @@
-from __future__ import annotations
+"""DSS objective consumer: BASE + MDA + matching + CCS."""
 
-"""Composable DSS objective consumer."""
+from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
@@ -15,7 +15,7 @@ from .masked_risk import candidate_masked_cross_entropy
 
 
 class DSSObjective:
-    """BASE + MDA + CCS with official batch-mean optimization semantics."""
+    """Own the DSS batch-mean masked classification objective."""
 
     def __init__(
         self,
@@ -49,15 +49,13 @@ class DSSObjective:
     def compute(
         self,
         *,
-        model: Any,
         logits: Tensor,
-        features: Any,
         noisy_targets: Tensor,
         sample_indices: Tensor,
         base_loss: Any,
         metadata: Mapping[str, Any],
     ) -> ObjectiveResult:
-        del model, features, base_loss
+        del base_loss
         epoch = int(metadata["epoch"])
         selected_cpu, excluded_cpu = self.selector.masks(
             sample_indices, noisy_targets
@@ -71,13 +69,12 @@ class DSSObjective:
         per_sample = candidate_masked_cross_entropy(
             logits, noisy_targets, excluded
         )
-        objective = (
-            per_sample * selected.to(per_sample.dtype)
-        ).mean()
-        if bool(selected.any()):
-            reporting_loss = per_sample[selected].mean()
-        else:
-            reporting_loss = per_sample.sum() * 0.0
+        objective = (per_sample * selected.to(per_sample.dtype)).mean()
+        reporting_loss = (
+            per_sample[selected].mean()
+            if bool(selected.any())
+            else per_sample.detach().sum() * 0.0
+        )
         return ObjectiveResult(
             objective=objective,
             selected_mask=selected,

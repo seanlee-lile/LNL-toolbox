@@ -61,7 +61,9 @@ class IndexedTensorHistory:
         dtype: torch.dtype = torch.float32,
     ) -> None:
         if min(int(capacity), int(horizon), int(width)) <= 0:
-            raise ValueError("history capacity, horizon, and width must be positive")
+            raise ValueError(
+                "history capacity, horizon, and width must be positive"
+            )
         if not torch.empty((), dtype=dtype).is_floating_point():
             raise ValueError("tensor history dtype must be floating point")
         self.capacity = int(capacity)
@@ -77,8 +79,14 @@ class IndexedTensorHistory:
         self.completed_steps = 0
 
     def _indices(self, indices: Tensor) -> Tensor:
-        values = torch.as_tensor(indices, dtype=torch.long).detach().cpu()
-        if values.ndim != 1 or values.numel() == 0:
+        if not torch.is_tensor(indices) or indices.ndim != 1:
+            raise ValueError("history indices must be a non-empty vector")
+        if indices.dtype not in {
+            torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8
+        }:
+            raise ValueError("history indices must use an integer dtype")
+        values = indices.detach().cpu().to(torch.long)
+        if values.numel() == 0:
             raise ValueError("history indices must be a non-empty vector")
         if int(values.min()) < 0 or int(values.max()) >= self.capacity:
             raise IndexError("history index is outside configured capacity")
@@ -98,11 +106,14 @@ class IndexedTensorHistory:
         step = int(step)
         if not 0 <= step < self.horizon:
             raise IndexError("history step is outside configured horizon")
-        detached = torch.as_tensor(values).detach().cpu().to(self.dtype)
+        detached = torch.as_tensor(values).detach().cpu()
         if detached.shape != (resolved.numel(), self.width):
             raise ValueError(
                 "history values must have shape [batch_size, width]"
             )
+        if not detached.is_floating_point():
+            raise ValueError("history values must use a floating-point dtype")
+        detached = detached.to(self.dtype)
         if not bool(torch.isfinite(detached).all()):
             raise ValueError("history values must be finite")
         if bool(self.observed[resolved, step].any()):
@@ -140,10 +151,14 @@ class IndexedTensorHistory:
         observed = torch.as_tensor(state.get("observed"))
         if values.shape != (self.capacity, completed, self.width):
             raise ValueError("tensor history values shape mismatch")
+        if values.dtype != self.dtype or not bool(torch.isfinite(values).all()):
+            raise ValueError("tensor history values dtype or values are invalid")
         if observed.shape != (self.capacity, completed):
             raise ValueError("tensor history observed shape mismatch")
+        if observed.dtype != torch.bool:
+            raise ValueError("tensor history observed must use torch.bool")
         self.values.zero_()
         self.observed.zero_()
-        self.values[:, :completed] = values.to(self.dtype)
-        self.observed[:, :completed] = observed.to(torch.bool)
+        self.values[:, :completed] = values
+        self.observed[:, :completed] = observed
         self.completed_steps = completed

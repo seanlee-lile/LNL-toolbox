@@ -1,6 +1,6 @@
-from __future__ import annotations
+"""Stateful MDA, prediction matching, and CCS for DSS."""
 
-"""Stateful MDA, prediction matching, and CCS for debiased selection."""
+from __future__ import annotations
 
 from collections.abc import Mapping
 from statistics import NormalDist
@@ -13,7 +13,7 @@ from .history import IndexedTensorHistory
 
 
 class DSSSelectorState:
-    """Global-index DSS state updated once for every training sample per epoch."""
+    """Dataset-indexed DSS state updated once per observed sample and epoch."""
 
     def __init__(
         self,
@@ -58,8 +58,7 @@ class DSSSelectorState:
             self.num_samples, self.num_classes, dtype=torch.float32
         )
         self.marginal = torch.full(
-            (self.num_classes,), 1.0 / self.num_classes,
-            dtype=torch.float32,
+            (self.num_classes,), 1.0 / self.num_classes, dtype=torch.float32
         )
         self.selected = torch.ones(self.num_samples, dtype=torch.bool)
         self.excluded = torch.zeros(
@@ -70,23 +69,31 @@ class DSSSelectorState:
     def _indices_targets(
         self, sample_indices: Tensor, noisy_targets: Tensor
     ) -> tuple[Tensor, Tensor]:
-        indices = torch.as_tensor(
-            sample_indices, dtype=torch.long
-        ).detach().cpu()
-        targets = torch.as_tensor(
-            noisy_targets, dtype=torch.long
-        ).detach().cpu()
-        if indices.ndim != 1 or targets.shape != indices.shape:
+        if not torch.is_tensor(sample_indices) or sample_indices.ndim != 1:
+            raise ValueError("DSS sample indices must have shape [B]")
+        if sample_indices.dtype not in {
+            torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8
+        }:
+            raise ValueError("DSS sample indices must use an integer dtype")
+        indices = sample_indices.detach().cpu().to(torch.long)
+        targets = torch.as_tensor(noisy_targets).detach().cpu()
+        if targets.ndim != 1 or targets.shape != indices.shape:
             raise ValueError("DSS indices and targets must align as [B]")
+        if targets.dtype not in {
+            torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8
+        }:
+            raise ValueError("DSS noisy targets must use an integer dtype")
+        targets = targets.to(torch.long)
         if indices.numel() == 0:
             raise ValueError("DSS batch must not be empty")
+        if torch.unique(indices).numel() != indices.numel():
+            raise ValueError("DSS batch sample indices must be unique")
         if int(indices.min()) < 0 or int(indices.max()) >= self.num_samples:
             raise IndexError("DSS sample index exceeds num_samples")
         if int(targets.min()) < 0 or int(targets.max()) >= self.num_classes:
             raise ValueError("DSS noisy target is outside the class range")
         known = self.labels[indices]
-        mismatch = (known >= 0) & (known != targets)
-        if bool(mismatch.any()):
+        if bool(((known >= 0) & (known != targets)).any()):
             raise ValueError("DSS noisy target changed for a stable sample index")
         return indices, targets
 
@@ -95,9 +102,7 @@ class DSSSelectorState:
     ) -> tuple[Tensor, Tensor]:
         indices, targets = self._indices_targets(sample_indices, noisy_targets)
         excluded = self.excluded[indices].clone()
-        excluded[
-            torch.arange(indices.numel()), targets
-        ] = False
+        excluded[torch.arange(indices.numel()), targets] = False
         return self.selected[indices].clone(), excluded
 
     def observe(
@@ -117,21 +122,18 @@ class DSSSelectorState:
         if not bool(torch.isfinite(values).all()) or bool((values < 0).any()):
             raise ValueError("DSS probabilities must be finite and non-negative")
         if not torch.allclose(
-            values.sum(dim=1),
-            torch.ones(indices.numel()),
-            rtol=1e-5,
-            atol=1e-6,
+            values.sum(dim=1), torch.ones(indices.numel()), rtol=1e-5, atol=1e-6
         ):
             raise ValueError("DSS probabilities must sum to one")
         if self.mda:
             self.marginal.mul_(self.prior_decay).add_(
                 values.mean(dim=0), alpha=1.0 - self.prior_decay
             )
+            if not bool((self.marginal > 0).all()):
+                raise ValueError("DSS marginal distribution became non-positive")
             values = values / (self.num_classes * self.marginal)
             values = values / values.sum(dim=1, keepdim=True)
-        if epoch > 0 and not bool(
-            self.history.observed[indices, :epoch].all()
-        ):
+        if epoch > 0 and not bool(self.history.observed[indices, :epoch].all()):
             raise ValueError("DSS requires one observation per prior epoch")
         previous = self.history.previous(indices, epoch)
         if epoch:
@@ -176,9 +178,7 @@ class DSSSelectorState:
             z_score = (score - score.sign()) / variance**0.5
             z_score[score == 0] = 0
         observed_labels = self.labels[observed]
-        z_score[
-            torch.arange(observed_labels.numel()), observed_labels
-        ] = float("-inf")
+        z_score[torch.arange(observed_labels.numel()), observed_labels] = float("-inf")
         threshold = NormalDist().inv_cdf(1.0 - self.alpha)
         self.excluded[observed] = z_score > threshold
 
@@ -230,8 +230,14 @@ class DSSSelectorState:
             value = torch.as_tensor(state.get(name))
             if value.shape != destination.shape:
                 raise ValueError(f"DSS state shape mismatch for {name}")
-            destination.copy_(value.to(destination.dtype))
+            if value.dtype != destination.dtype:
+                raise ValueError(f"DSS state dtype mismatch for {name}")
+            if value.is_floating_point() and not bool(torch.isfinite(value).all()):
+                raise ValueError(f"DSS state contains non-finite values for {name}")
+            destination.copy_(value)
         self.current_epoch = int(state.get("current_epoch", -1))
+        if not -1 <= self.current_epoch < self.total_epochs:
+            raise ValueError("DSS current epoch is outside the configured range")
 
 
 __all__ = ["DSSSelectorState"]

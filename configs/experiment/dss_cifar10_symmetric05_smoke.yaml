@@ -8,14 +8,11 @@ data:
   max_validation_samples: 128
   max_test_samples: 128
   augment: true
-  validation_split:
-    strategy: classwise_legacy
-    rng: numpy_legacy
-  normalization:
-    mean: [0.4914, 0.4822, 0.4465]
-    std: [0.2023, 0.1994, 0.2010]
 noise:
-  manifest: artifacts/manifests/dss_cifar10_symmetric05_seed4.npz
+  name: symmetric
+  rate: 0.5
+  seed: 4
+  sampling: transition
   validation_targets: noisy
   manifest_filename: noise_manifest.npz
 loss:
@@ -30,7 +27,6 @@ pipeline:
     name: dss
     num_samples: 50000
     num_classes: 10
-    total_epochs: 2
     warmup_epochs: 1
     alpha: 0.10
     prior_decay: 0.99

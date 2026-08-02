@@ -8,8 +8,6 @@ from typing import Sequence
 
 import numpy as np
 
-from lnl_toolbox.noise.manifest import NoiseManifest
-
 
 @dataclass(frozen=True)
 class BinaryBenchmark:
@@ -24,64 +22,142 @@ class BinaryBenchmark:
         targets = np.asarray(self.targets, dtype=np.int64)
         if features.ndim != 2 or features.shape[0] == 0:
             raise ValueError("binary features must have shape [N, D]")
-        if targets.shape != (features.shape[0],) or set(np.unique(targets)) - {0, 1}:
-            raise ValueError("binary targets must be labels 0 and 1 aligned with features")
-        indices = np.arange(len(targets), dtype=np.int64) if self.global_indices is None else np.asarray(self.global_indices, dtype=np.int64)
-        if indices.shape != targets.shape or np.unique(indices).size != len(indices):
-            raise ValueError("binary global_indices must be unique and aligned")
+        if not np.isfinite(features).all():
+            raise ValueError("binary features must be finite")
+        if (
+            targets.shape != (features.shape[0],)
+            or set(np.unique(targets)) - {0, 1}
+        ):
+            raise ValueError(
+                "binary targets must be labels 0 and 1 aligned with features"
+            )
+        if self.global_indices is None:
+            indices = np.arange(len(targets), dtype=np.int64)
+        else:
+            raw_indices = np.asarray(self.global_indices)
+            if not np.issubdtype(raw_indices.dtype, np.integer):
+                raise ValueError(
+                    "binary global_indices must use an integer dtype"
+                )
+            indices = raw_indices.astype(np.int64, copy=True)
+        if (
+            indices.shape != targets.shape
+            or (indices.size and indices.min() < 0)
+            or np.unique(indices).size != len(indices)
+        ):
+            raise ValueError(
+                "binary global_indices must be non-negative, unique, "
+                "and aligned"
+            )
+        dataset = str(self.dataset).strip()
+        split = str(self.split).strip()
+        if not dataset or not split:
+            raise ValueError("binary dataset and split must not be empty")
         object.__setattr__(self, "features", features)
         object.__setattr__(self, "targets", targets)
         object.__setattr__(self, "global_indices", indices)
-        object.__setattr__(self, "dataset", str(self.dataset).strip())
-        object.__setattr__(self, "split", str(self.split).strip())
+        object.__setattr__(self, "dataset", dataset)
+        object.__setattr__(self, "split", split)
 
     def __len__(self) -> int:
         return int(self.targets.size)
 
 
-def load_uci_binary(path: str | Path, *, target_column: int = -1, delimiter: str = ",", name: str | None = None) -> BinaryBenchmark:
-    """Read a UCI-style file through the reusable binary preprocessor."""
+def load_uci_binary(
+    path: str | Path,
+    *,
+    target_column: int = -1,
+    delimiter: str = ",",
+    name: str | None = None,
+) -> BinaryBenchmark:
+    """Fit preprocessing and read one training-only UCI-style file.
 
-    from .preprocessing import BinaryPreprocessingConfig, BinaryPreprocessor
+    Validation and test splits must instead reuse an explicit fitted
+    :class:`BinaryPreprocessor`.
+    """
+
+    from .preprocessing import (
+        BinaryPreprocessingConfig,
+        BinaryPreprocessor,
+    )
 
     processor = BinaryPreprocessor(BinaryPreprocessingConfig(
         file_format="delimited",
         delimiter=delimiter,
         target_column=target_column,
     ))
-    return processor.fit_transform(path, dataset=name or Path(path).stem)
+    return processor.fit_transform(
+        path,
+        dataset=name or Path(path).stem,
+    )
 
 
-def load_binary_npz(path: str | Path, *, name: str | None = None) -> BinaryBenchmark:
+def load_binary_npz(
+    path: str | Path,
+    *,
+    name: str | None = None,
+) -> BinaryBenchmark:
     with np.load(path, allow_pickle=False) as data:
         if "features" not in data or "targets" not in data:
-            raise ValueError("binary npz must contain features and targets")
-        return BinaryBenchmark(data["features"], data["targets"], name or Path(path).stem)
+            raise ValueError(
+                "binary npz must contain features and targets"
+            )
+        return BinaryBenchmark(
+            data["features"],
+            data["targets"],
+            name or Path(path).stem,
+        )
 
 
-def stratified_binary_splits(targets: Sequence[int], folds: int = 3, seed: int = 1) -> list[tuple[np.ndarray, np.ndarray]]:
+def stratified_binary_splits(
+    targets: Sequence[int],
+    folds: int = 3,
+    seed: int = 1,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Return deterministic train/validation folds stratified by binary label."""
+
     labels = np.asarray(targets, dtype=np.int64)
+    if labels.ndim != 1 or set(np.unique(labels)) - {0, 1}:
+        raise ValueError("targets must be a one-dimensional binary label array")
     if folds < 2 or folds > len(labels):
         raise ValueError("folds must be between 2 and the sample count")
-    rng = np.random.default_rng(seed)
+    random = np.random.default_rng(seed)
     buckets = [np.asarray([], dtype=np.int64) for _ in range(folds)]
     for label in (0, 1):
         indices = np.flatnonzero(labels == label)
-        rng.shuffle(indices)
+        random.shuffle(indices)
         for part, values in enumerate(np.array_split(indices, folds)):
             buckets[part] = np.concatenate((buckets[part], values))
     return [
-        (np.sort(np.concatenate([buckets[j] for j in range(folds) if j != i])), np.sort(buckets[i]))
-        for i in range(folds)
+        (
+            np.sort(np.concatenate([
+                buckets[part] for part in range(folds) if part != held_out
+            ])),
+            np.sort(buckets[held_out]),
+        )
+        for held_out in range(folds)
     ]
 
 
-def corrupt_binary_labels(targets: Sequence[int], rho_positive: float, rho_negative: float, seed: int) -> NoiseManifest:
+def corrupt_binary_labels(
+    targets: Sequence[int],
+    rho_positive: float,
+    rho_negative: float,
+    seed: int,
+) -> "NoiseManifest":
+    """Apply class-dependent binary label noise and retain its manifest."""
+
+    from lnl_toolbox.noise.manifest import NoiseManifest
+
     clean = np.asarray(targets, dtype=np.int64)
-    rng = np.random.default_rng(seed)
+    if clean.ndim != 1 or set(np.unique(clean)) - {0, 1}:
+        raise ValueError("targets must be a one-dimensional binary label array")
+    if not 0.0 <= rho_positive < 1.0 or not 0.0 <= rho_negative < 1.0:
+        raise ValueError("binary noise rates must be in [0, 1)")
+    random = np.random.default_rng(seed)
     noisy = clean.copy()
-    noisy[(clean == 1) & (rng.random(len(clean)) < rho_positive)] = 0
-    noisy[(clean == 0) & (rng.random(len(clean)) < rho_negative)] = 1
+    noisy[(clean == 1) & (random.random(len(clean)) < rho_positive)] = 0
+    noisy[(clean == 0) & (random.random(len(clean)) < rho_negative)] = 1
     return NoiseManifest(
         dataset="binary",
         split="train",
@@ -90,17 +166,23 @@ def corrupt_binary_labels(targets: Sequence[int], rho_positive: float, rho_negat
         requested_rate=float((rho_positive + rho_negative) / 2.0),
         clean_targets=clean,
         noisy_targets=noisy,
-        transition_matrix=np.asarray([[1.0 - rho_negative, rho_negative], [rho_positive, 1.0 - rho_positive]]),
+        transition_matrix=np.asarray([
+            [1.0 - rho_negative, rho_negative],
+            [rho_positive, 1.0 - rho_positive],
+        ]),
         num_classes=2,
     )
 
 
-def cifar_airplane_automobile_view(data) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Return airplane/automobile images, binary labels, and original indices."""
+def cifar_airplane_automobile_view(
+    data: object,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return the CIFAR airplane/automobile binary view with stable indices."""
 
-    labels = np.asarray(data.labels, dtype=np.int64)
+    labels = np.asarray(getattr(data, "labels"), dtype=np.int64)
+    images = np.asarray(getattr(data, "images"))
     indices = np.flatnonzero(np.isin(labels, (0, 1)))
-    return data.images[indices], labels[indices], indices
+    return images[indices], labels[indices], indices
 
 
 __all__ = [

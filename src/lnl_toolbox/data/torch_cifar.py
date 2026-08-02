@@ -54,21 +54,25 @@ def train_validation_split(
     strategy: str = "stratified",
     rng: str = "default_rng",
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Split stable global indices using a configured, reproducible strategy."""
+    """Split stable global indices using an explicit reproducibility policy."""
 
     labels = np.asarray(labels, dtype=np.int64)
     strategy = str(strategy).strip().lower()
     rng = str(rng).strip().lower()
+    if strategy == "stratified":
+        if rng != "default_rng":
+            raise ValueError("stratified split requires rng='default_rng'")
+        return stratified_split(labels, validation_size, seed)
+    if labels.ndim != 1:
+        raise ValueError("labels must be one-dimensional")
+    if not 0 < validation_size < labels.size:
+        raise ValueError(
+            "validation_size must be between zero and the dataset size"
+        )
     if strategy == "classwise_legacy":
         if rng != "numpy_legacy":
             raise ValueError(
                 "classwise_legacy split requires rng='numpy_legacy'"
-            )
-        if labels.ndim != 1:
-            raise ValueError("labels must be one-dimensional")
-        if not 0 < validation_size < labels.size:
-            raise ValueError(
-                "validation_size must be between zero and the dataset size"
             )
         classes = np.unique(labels)
         train_per_class = int(
@@ -96,21 +100,15 @@ def train_validation_split(
         random.shuffle(train_indices)
         random.shuffle(validation_indices)
         return train_indices, validation_indices
-    if strategy == "stratified":
-        if rng != "default_rng":
-            raise ValueError("stratified split requires rng='default_rng'")
-        return stratified_split(labels, validation_size, seed)
     if strategy != "random":
         raise ValueError(
             "split strategy must be 'stratified', 'classwise_legacy', "
             "or 'random'"
         )
     if rng not in {"default_rng", "numpy_legacy"}:
-        raise ValueError("split rng must be 'default_rng' or 'numpy_legacy'")
-    if labels.ndim != 1:
-        raise ValueError("labels must be one-dimensional")
-    if not 0 < validation_size < labels.size:
-        raise ValueError("validation_size must be between zero and the dataset size")
+        raise ValueError(
+            "random split rng must be 'default_rng' or 'numpy_legacy'"
+        )
     random = (
         np.random.RandomState(seed)
         if rng == "numpy_legacy"
@@ -121,8 +119,11 @@ def train_validation_split(
         random.choice(labels.size, size=train_size, replace=False),
         dtype=np.int64,
     )
-    validation_indices = np.delete(np.arange(labels.size), train_indices)
-    return train_indices, validation_indices.astype(np.int64, copy=False)
+    validation_indices = np.delete(
+        np.arange(labels.size, dtype=np.int64),
+        train_indices,
+    )
+    return train_indices, validation_indices
 
 
 def cifar_pixel_mean(images: np.ndarray) -> torch.Tensor:
@@ -167,23 +168,38 @@ def build_cifar_transform(
     if preprocessing != "standard":
         raise ValueError(f"Unsupported CIFAR preprocessing: {preprocessing}")
     if (normalization_mean is None) != (normalization_std is None):
-        raise ValueError("normalization_mean and normalization_std must be provided together")
-    mean = CIFAR_MEAN if normalization_mean is None else tuple(
-        float(value) for value in normalization_mean
+        raise ValueError(
+            "normalization_mean and normalization_std must be provided together"
+        )
+    mean = (
+        CIFAR_MEAN
+        if normalization_mean is None
+        else tuple(float(value) for value in normalization_mean)
     )
-    std = CIFAR_STD if normalization_std is None else tuple(
-        float(value) for value in normalization_std
+    std = (
+        CIFAR_STD
+        if normalization_std is None
+        else tuple(float(value) for value in normalization_std)
     )
     if len(mean) != 3 or len(std) != 3:
-        raise ValueError("CIFAR normalization mean and std must contain three values")
-    if not np.isfinite(mean).all() or not np.isfinite(std).all() or any(
-        value <= 0.0 for value in std
+        raise ValueError(
+            "CIFAR normalization mean and std must contain three values"
+        )
+    if (
+        not np.isfinite(mean).all()
+        or not np.isfinite(std).all()
+        or any(value <= 0.0 for value in std)
     ):
-        raise ValueError("CIFAR normalization values must be finite and std must be positive")
+        raise ValueError(
+            "CIFAR normalization values must be finite and std positive"
+        )
     operations: list[Any] = []
     if training and augment:
         operations.extend((transforms.RandomCrop(32, padding=4), transforms.RandomHorizontalFlip()))
-    operations.extend((transforms.ToTensor(), transforms.Normalize(mean, std)))
+    operations.extend((
+        transforms.ToTensor(),
+        transforms.Normalize(mean, std),
+    ))
     return transforms.Compose(operations)
 
 

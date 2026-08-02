@@ -13,7 +13,7 @@ from .result import (
     StepResult,
 )
 from .state import RunState
-from .objectives import ObjectiveConsumer
+from .objectives import ObjectiveConsumer, ObjectiveResult
 from .storage import ArtifactRef, ArtifactSink, Checkpoint, CheckpointStore
 from .targets import (
     CandidateSetProvider,
@@ -39,6 +39,8 @@ __all__ = [
     "ExperimentContext",
     "ComplementaryLabelResult",
     "LabelProvider",
+    "ObjectiveConsumer",
+    "ObjectiveResult",
     "PseudoLabelProvider",
     "PseudoLabelResult",
     "RunState",

@@ -1,11 +1,13 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import torch
 
 from lnl_toolbox.algorithms.supervised import SupervisedClassificationAlgorithm
+from lnl_toolbox.algorithms.dss import DSSObjective
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
 from lnl_toolbox.core import SoftTargetResult
 from lnl_toolbox.data.cifar import CifarData, default_data_root
@@ -19,6 +21,10 @@ from lnl_toolbox.data.torch_cifar import (
 )
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 from lnl_toolbox.models import TinyCNN
+from lnl_toolbox.models.feature_output import (
+    FeatureOutput,
+    forward_with_features,
+)
 from lnl_toolbox.plugins.builtin import build_builtin_loss
 from lnl_toolbox.runtime import resolve_device
 from lnl_toolbox.selectors import AllSelector, SelectionResult, SmallLossSelector
@@ -31,6 +37,54 @@ from lnl_toolbox.training.experiment import build_model
 
 
 class TorchTrainingTest(unittest.TestCase):
+    def test_objective_consumer_is_opt_in_and_owns_backward(self):
+        base_model = torch.nn.Linear(2, 2, bias=False)
+        dss_model = torch.nn.Linear(2, 2, bias=False)
+        dss_model.load_state_dict(base_model.state_dict())
+        base = SupervisedClassificationAlgorithm(
+            base_model,
+            torch.optim.SGD(base_model.parameters(), lr=0.1),
+            CrossEntropyLoss(),
+            torch.device("cpu"),
+        )
+        dss_objective = DSSObjective(
+            2, 2, 1, warmup_epochs=1, mda=False, ccs=False
+        )
+        dss = SupervisedClassificationAlgorithm(
+            dss_model,
+            torch.optim.SGD(dss_model.parameters(), lr=0.1),
+            CrossEntropyLoss(),
+            torch.device("cpu"),
+            objective_consumer=dss_objective,
+        )
+        for algorithm in (base, dss):
+            algorithm.setup(ExperimentContext(Path.cwd()))
+            algorithm.on_cycle_start(RunState(cycle=0))
+        batch = Batch({
+            "input": torch.eye(2),
+            "target": torch.tensor([0, 1]),
+            "index": torch.tensor([0, 1]),
+        })
+        base_result = base.step(batch, RunState(cycle=0))
+        dss_result = dss.step(batch, RunState(cycle=0))
+        torch.testing.assert_close(base_model.weight, dss_model.weight)
+        self.assertNotIn("optimization_loss", base_result.metrics)
+        self.assertIn("optimization_loss", dss_result.metrics)
+
+    def test_objective_consumer_rejects_existing_treatment_composition(self):
+        model = torch.nn.Linear(2, 2)
+        with self.assertRaisesRegex(ValueError, "non-all selector"):
+            SupervisedClassificationAlgorithm(
+                model,
+                torch.optim.SGD(model.parameters(), lr=0.1),
+                CrossEntropyLoss(),
+                torch.device("cpu"),
+                selector=SmallLossSelector(0.5),
+                objective_consumer=DSSObjective(
+                    2, 2, 1, warmup_epochs=1
+                ),
+            )
+
     @staticmethod
     def _target_algorithm(provider):
         model = torch.nn.Linear(2, 2, bias=False)
@@ -120,9 +174,15 @@ class TorchTrainingTest(unittest.TestCase):
         )
         random = np.random.RandomState(7)
         expected_train = random.choice(20, 16, replace=False)
-        expected_validation = np.delete(np.arange(20), expected_train)
+        expected_validation = np.delete(
+            np.arange(20),
+            expected_train,
+        )
         np.testing.assert_array_equal(train, expected_train)
-        np.testing.assert_array_equal(validation, expected_validation)
+        np.testing.assert_array_equal(
+            validation,
+            expected_validation,
+        )
 
     def test_tinycnn_shape(self):
         self.assertEqual(TinyCNN(10, 8)(torch.randn(4, 3, 32, 32)).shape, (4, 10))
@@ -139,11 +199,148 @@ class TorchTrainingTest(unittest.TestCase):
         )
         self.assertEqual(model(torch.randn(2, 3, 32, 32)).shape, (2, 10))
 
+    def test_cifar_resnet50_is_explicit_and_preserves_feature_contract(self):
+        model = build_model({
+            "name": "resnet50",
+            "base_width": 8,
+            "stem_padding": 0,
+            "initialization": "torch_default",
+        }, num_classes=10)
+        self.assertEqual(
+            tuple(len(layer) for layer in (
+                model.layer1,
+                model.layer2,
+                model.layer3,
+                model.layer4,
+            )),
+            (3, 4, 6, 3),
+        )
+        self.assertEqual(model.stem[0].padding, (0, 0))
+        model.eval()
+        inputs = torch.randn(2, 3, 32, 32)
+        ordinary = model(inputs)
+        featured = forward_with_features(model, inputs)
+        torch.testing.assert_close(featured.logits, ordinary)
+        self.assertEqual(featured.features.shape, (2, 256))
+
     def test_cifar_cnn8_shape_and_reference_channels(self):
         model = build_model({"name": "cifar_cnn8"}, num_classes=10)
         convolutions = [module for module in model.modules() if isinstance(module, torch.nn.Conv2d)]
         self.assertEqual([module.out_channels for module in convolutions], [64, 64, 128, 128, 196, 196])
         self.assertEqual(model(torch.randn(2, 3, 32, 32)).shape, (2, 10))
+
+    def test_existing_models_expose_compatible_feature_output(self):
+        models = (
+            TinyCNN(10, 8),
+            build_model(
+                {"name": "resnet18", "base_width": 8},
+                num_classes=10,
+            ),
+            build_model({"name": "cifar_cnn8"}, num_classes=10),
+        )
+        inputs = torch.randn(2, 3, 32, 32)
+        for model in models:
+            with self.subTest(model=type(model).__name__):
+                model.eval()
+                keys = tuple(model.state_dict())
+                parameter_count = sum(
+                    parameter.numel() for parameter in model.parameters()
+                )
+                ordinary = model(inputs)
+                feature_output = forward_with_features(model, inputs)
+                self.assertIsInstance(feature_output, FeatureOutput)
+                torch.testing.assert_close(
+                    feature_output.logits,
+                    ordinary,
+                )
+                self.assertEqual(feature_output.features.shape[0], 2)
+                self.assertEqual(tuple(model.state_dict()), keys)
+                self.assertEqual(
+                    sum(
+                        parameter.numel()
+                        for parameter in model.parameters()
+                    ),
+                    parameter_count,
+                )
+                feature_output.logits.sum().backward()
+                self.assertTrue(any(
+                    parameter.grad is not None
+                    for parameter in model.parameters()
+                ))
+
+    def test_feature_output_rejects_invalid_tensor_contract(self):
+        with self.assertRaisesRegex(ValueError, "shape"):
+            FeatureOutput(torch.zeros(2), torch.zeros(2, 3))
+        with self.assertRaisesRegex(ValueError, "batch size"):
+            FeatureOutput(torch.zeros(2, 3), torch.zeros(3, 4))
+
+    def test_ordinary_forward_does_not_construct_feature_output(self):
+        cases = (
+            (
+                TinyCNN(10, 8),
+                "lnl_toolbox.models.tiny_cnn.FeatureOutput",
+            ),
+            (
+                build_model(
+                    {"name": "resnet18", "base_width": 8},
+                    num_classes=10,
+                ),
+                "lnl_toolbox.models.cifar_resnet.FeatureOutput",
+            ),
+            (
+                build_model({"name": "cifar_cnn8"}, num_classes=10),
+                "lnl_toolbox.models.cifar_cnn.FeatureOutput",
+            ),
+            (
+                build_model({
+                    "name": "resnet50",
+                    "base_width": 8,
+                }, num_classes=10),
+                "lnl_toolbox.models.cifar_resnet.FeatureOutput",
+            ),
+        )
+        inputs = torch.randn(2, 3, 32, 32)
+        for model, symbol in cases:
+            with self.subTest(model=type(model).__name__):
+                model.eval()
+                with patch(
+                    symbol,
+                    side_effect=AssertionError(
+                        "ordinary forward constructed FeatureOutput"
+                    ),
+                ):
+                    self.assertEqual(model(inputs).shape, (2, 10))
+
+    def test_feature_forward_updates_batchnorm_only_once(self):
+        model = build_model(
+            {"name": "resnet18", "base_width": 8},
+            num_classes=10,
+        )
+        model.train()
+        batch_norm = next(
+            module
+            for module in model.modules()
+            if isinstance(module, torch.nn.BatchNorm2d)
+        )
+        before = int(batch_norm.num_batches_tracked.item())
+        output = forward_with_features(
+            model,
+            torch.randn(2, 3, 32, 32),
+        )
+        self.assertEqual(output.logits.shape, (2, 10))
+        self.assertEqual(
+            int(batch_norm.num_batches_tracked.item()),
+            before + 1,
+        )
+
+    def test_ordinary_forward_does_not_add_nonfinite_rejection(self):
+        model = TinyCNN(10, 8).eval()
+        inputs = torch.zeros(1, 3, 32, 32)
+        inputs[0, 0, 0, 0] = torch.nan
+        output = model(inputs)
+        self.assertTrue(bool(torch.isnan(output).any()))
+        with self.assertRaisesRegex(ValueError, "finite"):
+            forward_with_features(model, inputs)
 
     def test_gce2018_preprocessing_subtracts_training_pixel_mean(self):
         images = np.full((2, 32, 32, 3), 128, dtype=np.uint8)
@@ -168,18 +365,29 @@ class TorchTrainingTest(unittest.TestCase):
             normalization_std=(0.25, 0.25, 0.25),
         )
         image = np.full((32, 32, 3), 128, dtype=np.uint8)
-        output = transform(CifarData(
-            image[None],
-            np.array([0]),
-            ("a",),
-            "train",
-            "fixture",
-        ).images[0])
+        output = transform(image)
         expected = (128.0 / 255.0 - 0.5) / 0.25
         torch.testing.assert_close(
             output,
             torch.full_like(output, expected),
         )
+        with self.assertRaisesRegex(ValueError, "provided together"):
+            build_cifar_transform(
+                False,
+                normalization_mean=(0.5, 0.5, 0.5),
+            )
+        with self.assertRaisesRegex(ValueError, "three values"):
+            build_cifar_transform(
+                False,
+                normalization_mean=(0.5, 0.5),
+                normalization_std=(0.25, 0.25),
+            )
+        with self.assertRaisesRegex(ValueError, "positive"):
+            build_cifar_transform(
+                False,
+                normalization_mean=(0.5, 0.5, 0.5),
+                normalization_std=(0.25, 0.0, 0.25),
+            )
 
     def test_training_step_changes_parameters(self):
         model = TinyCNN(10, 8)

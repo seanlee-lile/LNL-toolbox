@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime
 import json
+import math
 import platform
 from pathlib import Path
 import random
@@ -37,7 +38,6 @@ from lnl_toolbox.models.cifar_resnet import (
     cifar_resnet18,
     cifar_resnet34,
     cifar_resnet50,
-    cifar_resnet101,
     preact_resnet18,
 )
 from lnl_toolbox.models.cifar_cnn import CifarCnn8
@@ -80,19 +80,6 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
             stem_padding=int(config.get("stem_padding", 1)),
             initialization=str(config.get("initialization", "kaiming")),
         )
-    if name == "resnet101":
-        return cifar_resnet101(
-            num_classes,
-            int(config.get("base_width", 64)),
-            stem_padding=int(config.get("stem_padding", 1)),
-            initialization=str(config.get("initialization", "kaiming")),
-        )
-    if name in {"resnet14", "cifar_resnet14"}:
-        return cifar_resnet14(num_classes, int(config.get("base_width", 16)))
-    if name in {"resnet32", "cifar_resnet32"}:
-        return cifar_resnet32(num_classes, int(config.get("base_width", 16)))
-    if name.startswith("resnet") and name[6:].isdigit():
-        return cifar_resnet_depth(int(name[6:]), num_classes, int(config.get("base_width", 16)))
     if name == "preact_resnet18":
         return preact_resnet18(num_classes, int(config.get("base_width", 64)))
     raise ValueError(f"Unsupported model: {name}")
@@ -113,6 +100,16 @@ def build_optimizer(model: nn.Module, config: Mapping[str, Any]):
         )
     if name == "adamw":
         return torch.optim.AdamW(model.parameters(), **common)
+    if name == "adam":
+        return torch.optim.Adam(
+            model.parameters(),
+            betas=(
+                float(config.get("beta1", 0.9)),
+                float(config.get("beta2", 0.999)),
+            ),
+            eps=float(config.get("eps", 1e-8)),
+            **common,
+        )
     raise ValueError(f"Unsupported optimizer: {name}")
 
 
@@ -232,8 +229,10 @@ def _validate_resume_config(current: Mapping[str, Any], saved: Mapping[str, Any]
     if current_preprocessing != saved_preprocessing:
         raise ValueError("Resume configuration changed data.preprocessing")
     for key, default in (
-        ("validation_size", None),
-        ("validation_split", {"strategy": "stratified", "rng": "default_rng"}),
+        (
+            "validation_split",
+            {"strategy": "stratified", "rng": "default_rng"},
+        ),
         ("normalization", None),
     ):
         current_value = current.get("data", {}).get(key, default)
@@ -256,6 +255,49 @@ def _validate_resume_config(current: Mapping[str, Any], saved: Mapping[str, Any]
     )
     if str(current_selection).lower() != str(saved_selection).lower():
         raise ValueError("Resume configuration changed evaluation.selection_split")
+
+
+def _resolve_dss_epoch_contract(
+    config: dict[str, Any],
+    epochs: int,
+) -> None:
+    """Bind DSS history horizon to the final trainer epoch budget."""
+
+    pipeline = config.get("pipeline")
+    if not isinstance(pipeline, Mapping):
+        return
+    objective = pipeline.get("objective_consumer")
+    if not isinstance(objective, Mapping):
+        return
+    if str(objective.get("name", "")).strip().lower() != "dss":
+        return
+    required_components = (
+        ("loss", "ce"),
+        ("selector", "all"),
+        ("parameter_update", "standard"),
+    )
+    for section, required_name in required_components:
+        section_config = config.get(section, {"name": required_name})
+        if not isinstance(section_config, Mapping):
+            raise TypeError(f"{section} configuration must be a mapping")
+        actual_name = str(
+            section_config.get("name", required_name)
+        ).strip().lower()
+        if actual_name != required_name:
+            raise ValueError(
+                f"DSS requires {section}.name={required_name!r}; "
+                f"found {actual_name!r}"
+            )
+    configured = objective.get("total_epochs")
+    if configured is not None and int(configured) != epochs:
+        raise ValueError(
+            "DSS total_epochs must equal the resolved trainer.epochs"
+        )
+    resolved_pipeline = dict(pipeline)
+    resolved_objective = dict(objective)
+    resolved_objective["total_epochs"] = epochs
+    resolved_pipeline["objective_consumer"] = resolved_objective
+    config["pipeline"] = resolved_pipeline
 
 
 def _resolved_noise_config(
@@ -299,6 +341,51 @@ def _validate_supervised_config(config: Mapping[str, Any]) -> None:
     noise_config = config.get("noise") or {}
     if not isinstance(noise_config, Mapping):
         raise TypeError("noise configuration must be a mapping")
+    if str(update_config.get("name", "standard")).strip().lower() == "cdr":
+        optimizer_config = config.get("optimizer")
+        if not isinstance(optimizer_config, Mapping):
+            raise TypeError("CDR optimizer configuration must be a mapping")
+        optimizer_name = str(
+            optimizer_config.get("name", "sgd")
+        ).strip().lower()
+        if optimizer_name != "sgd":
+            raise ValueError("CDR requires optimizer.name='sgd'")
+        compatibility_mode = str(
+            update_config.get("compatibility_mode", "paper")
+        ).strip().lower()
+        if compatibility_mode not in {"paper", "official_code"}:
+            raise ValueError(
+                "CDR compatibility_mode must be 'paper' or 'official_code'"
+            )
+        if compatibility_mode == "paper":
+            momentum = float(optimizer_config.get("momentum", 0.9))
+            if momentum != 0.0:
+                raise ValueError(
+                    "CDR paper mode requires SGD momentum=0 so that "
+                    "non-critical parameters receive only the explicit "
+                    "L1 update"
+                )
+            weight_decay = float(optimizer_config.get("weight_decay", 0.0))
+            if weight_decay != 0.0:
+                raise ValueError(
+                    "CDR paper mode requires optimizer weight_decay=0; "
+                    "use parameter_update.l1_decay for Eq. (5)-(6)"
+                )
+        if "rate" in noise_config and noise_config["rate"] is not None:
+            configured_noise_rate = float(noise_config["rate"])
+            update_noise_rate = float(update_config["noise_rate"])
+            if not math.isclose(
+                configured_noise_rate,
+                update_noise_rate,
+                rel_tol=1e-9,
+                abs_tol=1e-12,
+            ):
+                raise ValueError(
+                    "CDR noise-rate mismatch: "
+                    f"noise.rate={configured_noise_rate} but "
+                    "parameter_update.noise_rate="
+                    f"{update_noise_rate}"
+                )
     validation_targets = str(
         noise_config.get("validation_targets", "clean")
     ).strip().lower()
@@ -331,6 +418,7 @@ def run_supervised_experiment(
     config.setdefault("selector", {"name": "all"})
     seed = int(config.get("seed", 1))
     epochs = int(config["trainer"]["epochs"])
+    _resolve_dss_epoch_contract(config, epochs)
     seed_everything(seed)
     device = resolve_device(config["trainer"].get("device", "auto"))
     if device.type == "cuda":
@@ -424,7 +512,9 @@ def run_supervised_experiment(
         raise TypeError("data.normalization must be a mapping")
     normalization = dict(normalization or {})
     if normalization and set(normalization) != {"mean", "std"}:
-        raise ValueError("data.normalization must contain exactly mean and std")
+        raise ValueError(
+            "data.normalization must contain exactly mean and std"
+        )
     pixel_mean = (
         cifar_pixel_mean(train_data.images)
         if preprocessing == "gce2018"
@@ -546,9 +636,7 @@ def run_supervised_experiment(
         risk_corrector=pipeline.risk_corrector,
         transition=pipeline.artifacts.transition,
         weight_provider=pipeline.weight_provider,
-        regularizer=pipeline.regularizer,
         objective_consumer=pipeline.objective_consumer,
-        regularizer_weight=float((config.get("pipeline", {}) or {}).get("regularizer_weight", 1.0)),
     )
     algorithm.setup(ExperimentContext(run_dir, config, seed))
     state = RunState(phase="train")
@@ -565,6 +653,7 @@ def run_supervised_experiment(
         state, completed_epoch, checkpoint_payload = load_checkpoint(
             resume, algorithm, device, scheduler=scheduler
         )
+        last_completed_epoch = completed_epoch
         best_epoch = int(checkpoint_payload["best_epoch"])
         best_accuracy = float(checkpoint_payload.get("best_validation_accuracy", float("-inf")))
         best_selection_accuracy = float(
@@ -808,4 +897,36 @@ def run_experiment(
 ) -> Path:
     """Compatibility entry point for the general training CLI."""
 
+    method = config.get("method")
+    method_name = (
+        str(method.get("name", "")).strip().lower()
+        if isinstance(method, Mapping)
+        else str(method or "").strip().lower()
+    )
+    if method_name == "coteaching":
+        from lnl_toolbox.training.coteaching_experiment import (
+            run_coteaching_experiment,
+        )
+
+        return run_coteaching_experiment(config, output_dir, resume)
+    if method_name == "dual_t_forward":
+        raise ValueError("method 'dual_t_forward' was renamed to 'dual_t'")
+    if method_name == "dual_t":
+        from lnl_toolbox.training.dual_t_experiment import (
+            run_dual_t_experiment,
+        )
+
+        return run_dual_t_experiment(config, output_dir, resume)
+    if method_name == "importance_reweighting":
+        from lnl_toolbox.training.importance_reweighting_experiment import (
+            run_importance_reweighting_experiment,
+        )
+
+        return run_importance_reweighting_experiment(
+            config, output_dir, resume
+        )
+    if method_name == "pcse":
+        from lnl_toolbox.training.pcse_experiment import run_pcse_experiment
+
+        return run_pcse_experiment(config, output_dir, resume)
     return run_supervised_experiment(config, output_dir, resume)

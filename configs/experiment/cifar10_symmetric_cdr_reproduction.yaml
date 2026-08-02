@@ -44,7 +44,9 @@ model:
 optimizer:
   name: sgd
   lr: 0.01
-  momentum: 0.9
+  # Equation-faithful CDR update combined with the official-code-aligned
+  # CIFAR data/model path; this is not a line-by-line or numerical reproduction.
+  momentum: 0.0
   weight_decay: 0.0
 scheduler:
   name: multistep

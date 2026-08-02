@@ -22,6 +22,7 @@ from lnl_toolbox.plugins.builtin import (
     build_builtin_instance_transition_algorithm,
     build_builtin_instance_transition_estimator,
     build_builtin_loss,
+    build_builtin_objective_consumer,
     build_builtin_risk_corrector,
     build_builtin_selector,
     build_builtin_transition_estimator,
@@ -40,31 +41,59 @@ from lnl_toolbox.treatments import (
 
 
 class PluginCatalogTest(unittest.TestCase):
-    def test_instance_transition_plugins_are_isolated_from_global_transition(self) -> None:
+    def test_dss_registration_is_isolated_from_existing_catalog(self) -> None:
         catalog = create_builtin_catalog()
-        self.assertEqual(
-            [item.name for item in catalog.find(kind="instance_transition_estimator")],
-            ["pdl"],
-        )
-        estimator = build_builtin_instance_transition_estimator({
-            "name": "pdl", "num_parts": 2,
-            "factorization": {"iterations": 3, "seed": 9},
-            "anchors": {"candidates_per_class": 2},
+        dss = catalog.get("objective_consumer", "dss")
+        self.assertEqual(dss.name, "dss")
+        self.assertIn("stateful_objective", dss.capabilities)
+        objective = build_builtin_objective_consumer({
+            "name": "dss",
+            "num_samples": 4,
+            "num_classes": 2,
+            "total_epochs": 2,
+            "warmup_epochs": 1,
         }, catalog)
-        self.assertEqual(estimator.num_parts, 2)
-        self.assertEqual(estimator.representation_iterations, 3)
-        model = torch.nn.Linear(2, 2)
-        algorithm = build_builtin_instance_transition_algorithm(
-            {"name": "corrected_classification", "correction": "forward"},
-            model=model, optimizer=torch.optim.SGD(model.parameters(), lr=0.1),
-            loss=CrossEntropyLoss(), transition=object(), device=torch.device("cpu"),
-            catalog=catalog,
-        )
-        self.assertEqual(algorithm.correction, "forward")
+        self.assertEqual(type(objective).__name__, "DSSObjective")
+
+        original_import = __import__
+
+        def without_dss(name, *args, **kwargs):
+            if name == "lnl_toolbox.algorithms.dss":
+                error = ModuleNotFoundError(name)
+                error.name = name
+                raise error
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=without_dss):
+            isolated = create_builtin_catalog()
         self.assertEqual(
-            [item.name for item in catalog.find(kind="transition_estimator")],
-            ["anchor", "dual_t", "known"],
+            [item.name for item in isolated.find(kind="objective_consumer")],
+            ["cwd"],
         )
+        self.assertEqual(
+            [item.name for item in isolated.find(kind="loss")],
+            ["apl", "ce", "gce", "mae", "nce", "rce"],
+        )
+        self.assertEqual(
+            [item.name for item in isolated.find(kind="batch_selector")],
+            ["all", "small_loss"],
+        )
+        self.assertEqual(
+            [item.name for item in isolated.find(kind="parameter_update_policy")],
+            ["cdr", "standard", "step_milestone"],
+        )
+
+    def test_dss_internal_import_errors_are_not_silently_swallowed(self) -> None:
+        original_import = __import__
+
+        def broken_dss(name, *args, **kwargs):
+            if name == "lnl_toolbox.algorithms.dss":
+                raise ImportError("DSS internal failure")
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=broken_dss):
+            with self.assertRaisesRegex(ImportError, "internal failure"):
+                create_builtin_catalog()
 
     def test_capability_discovery(self) -> None:
         catalog = create_builtin_catalog()

@@ -87,7 +87,7 @@ git push
 | `configs/experiment/cifar10_clean.yaml` | 30 轮干净 CIFAR-10 基准实验。 | 正式运行前确认数据路径、设备和训练轮数。 |
 | `configs/algorithm/ce.yaml` | CE 示例算法配置。 | `name` 和 loss 名称必须与插件注册一致。 |
 | `configs/algorithm/gce.yaml` | GCE 示例配置。 | `q` 控制 CE 与 MAE 之间的折中。 |
-| `configs/algorithm/coteaching.yaml` | Co-teaching 参数示例。 | 当前只有选样函数，尚非完整端到端训练实现。 |
+| `configs/algorithm/coteaching.yaml` | Co-teaching 参数片段。 | 双模型方法由 `method: coteaching` 专属 runner 消费；不是通用 Selector 配置。 |
 | `configs/noise/symmetric.yaml` | 对称噪声参数示例。 | 记录噪声率和 seed。 |
 | `configs/noise/instance_dependent.yaml` | 实例依赖噪声参数示例。 | 当前是基于 class score 的示例生成器，不等同于某篇论文完整算法。 |
 
@@ -143,7 +143,7 @@ git push
 | `algorithms/__init__.py` | 导出算法接口及 Co-teaching 工具函数。 | 兼容层。 |
 | `algorithms/base.py` | 将旧 `TrainState` 映射到新 `RunState`。 | 兼容层，尽量不扩展。 |
 | `algorithms/supervised.py` | 普通监督分类的完整训练 step：前向、loss、反向和更新。 | 已用于干净 CIFAR 闭环。 |
-| `algorithms/coteaching.py` | 计算保留率并让双网络交叉选择小损失样本。 | 仅选样核心，不是完整 Co-teaching 训练器。 |
+| `algorithms/coteaching/` | 完整双模型 cross-update Algorithm；`legacy.py` 保留旧 helper 行为。 | 第一阶段支持训练与 epoch-boundary resume，尚无论文专属 CNN/正式长实验。 |
 
 ## 13. 插件系统 `src/lnl_toolbox/plugins/`
 
@@ -197,7 +197,9 @@ git push
 | `tests/test_cifar_reader.py` | 用临时假 CIFAR pickle 检查 CIFAR-10/100 解码。 |
 | `tests/test_noise.py` | 噪声率、翻转约束、随机种子、manifest 保存加载和 IDN 概率。 |
 | `tests/test_losses.py` | P0 loss 公式、极端数值、梯度和参数校验。 |
-| `tests/test_coteaching.py` | 双网络交叉选样和保留率。 |
+| `tests/test_coteaching.py` | legacy helper 兼容。 |
+| `tests/test_coteaching_algorithm.py` | cross-update、选择、初始化与状态合同。 |
+| `tests/test_coteaching_workflow.py` | YAML/CLI dispatch、双 peer checkpoint/resume 和评测。 |
 | `tests/test_torch_training.py` | PyTorch 数据集、训练 step、设备解析和 checkpoint 恢复。 |
 | `tests/test_cli.py` | 交互重试/取消、配置构造、dispatch 和 argparse 兼容。 |
 

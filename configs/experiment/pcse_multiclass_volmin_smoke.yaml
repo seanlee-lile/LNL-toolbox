@@ -1,0 +1,86 @@
+method: pcse
+seed: 23
+
+data:
+  name: synthetic_multiclass
+  num_classes: 3
+  dimension: 6
+  train_size: 180
+  validation_size: 60
+  test_size: 60
+
+noise:
+  mode: generated
+  type: symmetric
+  rate: 0.1
+  seed: 31
+  sampling: per_class
+  rng: default_rng
+  validation_targets: noisy
+  manifest_filename: noise_manifest.npz
+
+pretraining_stage:
+  epochs: 4
+  checkpoint_selection: noisy_validation_accuracy
+  model:
+    name: pcse_mlp
+    hidden_width: 12
+  loss:
+    name: ce
+  optimizer:
+    name: adamw
+    lr: 0.01
+    weight_decay: 0.0001
+  scheduler:
+    name: none
+
+transition_stage:
+  name: paper_volmin
+  # All settings below are explicit implementation choices. The strict
+  # diagonal-dominance parameterization is narrower than the paper's general
+  # nonsingular row-stochastic assumption.
+  epochs: 2
+  lambda_volume: 0.001
+  optimizer:
+    name: adamw
+    model_lr: 0.002
+    transition_lr: 0.01
+    weight_decay: 0.0001
+  scheduler:
+    name: none
+  parameterization:
+    name: diagonal_dominant
+    initial_flip_mass: 0.05
+    max_flip_mass: 0.49
+    temperature: 1.0
+    seed: 37
+  determinant_tolerance: 1.0e-6
+  condition_limit: 1000000.0
+
+feature_stage:
+  layers:
+    - name: hidden1
+      pooling: global_average
+    - name: hidden2
+      pooling: global_average
+
+statistics_stage:
+  condition_limit: 100000000.0
+
+gda_stage:
+  covariance_ridge: 0.1
+
+ensemble_stage:
+  epochs: 2
+  learning_rate: 0.05
+
+loader:
+  batch_size: 30
+  num_workers: 0
+  pin_memory: false
+
+trainer:
+  device: cpu
+
+evaluation:
+  selection_split: validation

@@ -47,8 +47,17 @@ class CifarCnn8(nn.Module):
                 nn.init.zeros_(module.bias)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        return self.forward_with_features(inputs).logits
+        return self.classifier(self._representation(inputs))
 
-    def forward_with_features(self, inputs: torch.Tensor) -> FeatureOutput:
-        features = self.features(inputs).flatten(1)
+    def _representation(
+        self,
+        inputs: torch.Tensor,
+    ) -> torch.Tensor:
+        return self.features(inputs).flatten(1)
+
+    def forward_with_features(
+        self,
+        inputs: torch.Tensor,
+    ) -> FeatureOutput:
+        features = self._representation(inputs)
         return FeatureOutput(self.classifier(features), features)

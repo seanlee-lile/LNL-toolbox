@@ -106,20 +106,28 @@ def official_code_parameter_masks(
     named_parameters: Iterable[tuple[str, nn.Parameter]],
     noise_rate: float,
 ) -> CriticalParameterMasks:
-    """Reproduce the released code's 2D/4D scope and threshold tie behavior."""
+    """Match the released code's 2D/4D scope and threshold tie behavior."""
 
     tau = _validate_noise_rate(noise_rate)
-    values = [
-        (str(name), parameter)
-        for name, parameter in named_parameters
-        if (
-            parameter.requires_grad
-            and parameter.grad is not None
-            and parameter.dim() in {2, 4}
-        )
-    ]
+    values = sorted(
+        (
+            (str(name), parameter)
+            for name, parameter in named_parameters
+            if (
+                parameter.requires_grad
+                and parameter.grad is not None
+                and parameter.dim() in {2, 4}
+            )
+        ),
+        key=lambda item: item[0],
+    )
     if not values:
-        raise ValueError("Official-code CDR requires a 2D or 4D parameter")
+        raise ValueError(
+            "Official-code CDR requires a 2D or 4D parameter with a gradient"
+        )
+    names = [name for name, _ in values]
+    if len(names) != len(set(names)):
+        raise ValueError("CDR parameter names must be unique")
     devices = {parameter.device for _, parameter in values}
     if len(devices) != 1:
         raise ValueError("CDR requires all eligible parameters on one device")
@@ -132,18 +140,22 @@ def official_code_parameter_masks(
             raise ValueError(f"CDR parameter must be finite: {name}")
         if not torch.isfinite(gradient.detach()).all():
             raise ValueError(f"CDR gradient must be finite: {name}")
-    flattened = [
+
+    scores = torch.cat([
         (parameter.grad.detach() * parameter.detach()).abs().reshape(-1)
         for _, parameter in values
-    ]
-    scores = torch.cat(flattened)
+    ])
     count = int(scores.numel())
     requested_count = int((1.0 - tau) * count)
     if requested_count <= 0:
-        raise ValueError("Official-code CDR selected zero critical parameters")
+        raise ValueError(
+            "Official-code CDR selected zero critical parameters"
+        )
     threshold = torch.topk(scores, requested_count).values[-1]
     masks = {
-        name: (parameter.grad.detach() * parameter.detach()).abs() >= threshold
+        name: (
+            parameter.grad.detach() * parameter.detach()
+        ).abs() >= threshold
         for name, parameter in values
     }
     actual_count = sum(int(mask.sum().item()) for mask in masks.values())
@@ -151,7 +163,7 @@ def official_code_parameter_masks(
 
 
 class CDRUpdatePolicy:
-    """CDR update policy with explicit paper-equation and released-code modes."""
+    """CDR update policy with explicit paper and released-code semantics."""
 
     name = "cdr"
 
@@ -166,28 +178,36 @@ class CDRUpdatePolicy:
         self.l1_decay = float(l1_decay)
         if not math.isfinite(self.l1_decay) or self.l1_decay < 0.0:
             raise ValueError("CDR l1_decay must be finite and non-negative")
-        self.compatibility_mode = str(compatibility_mode).strip().lower()
-        if self.compatibility_mode not in {"paper", "official_code"}:
+        mode = str(compatibility_mode).strip().lower()
+        if mode not in {"paper", "official_code"}:
             raise ValueError(
                 "CDR compatibility_mode must be 'paper' or 'official_code'"
             )
         expected_scope = (
             "all_trainable"
-            if self.compatibility_mode == "paper"
+            if mode == "paper"
             else "matrix_and_convolution_weights"
         )
-        self.critical_scope = expected_scope if critical_scope is None else str(
+        scope = expected_scope if critical_scope is None else str(
             critical_scope
         )
-        if self.critical_scope != expected_scope:
+        if scope != expected_scope:
             raise ValueError(
-                f"{self.compatibility_mode} CDR requires "
-                f"critical_scope={expected_scope!r}"
+                f"{mode} CDR requires critical_scope={expected_scope!r}"
             )
-        if self.compatibility_mode == "official_code" and self.l1_decay != 0.0:
+        if mode == "official_code" and self.l1_decay != 0.0:
             raise ValueError(
-                "Official-code CDR requires l1_decay=0; use optimizer weight_decay"
+                "Official-code CDR requires l1_decay=0; "
+                "use optimizer weight_decay"
             )
+        self._compatibility_mode = mode
+        self.critical_scope = scope
+
+    @property
+    def compatibility_mode(self) -> str:
+        """Return the immutable update semantics selected at construction."""
+
+        return self._compatibility_mode
 
     def setup(self, context: ExperimentContext) -> None:
         del context
@@ -201,6 +221,12 @@ class CDRUpdatePolicy:
             raise TypeError("CDR requires torch.optim.SGD")
         if self.compatibility_mode == "paper":
             for group in optimizer.param_groups:
+                if float(group.get("momentum", 0.0)) != 0.0:
+                    raise ValueError(
+                        "CDR paper mode requires SGD momentum=0 so that "
+                        "non-critical parameters receive only the explicit "
+                        "L1 update"
+                    )
                 if float(group.get("weight_decay", 0.0)) != 0.0:
                     raise ValueError(
                         "Paper-mode CDR requires optimizer weight_decay=0; "
@@ -263,8 +289,17 @@ class CDRUpdatePolicy:
         })
 
     def state_dict(self) -> Mapping[str, Any]:
-        return {}
+        return {"compatibility_mode": self.compatibility_mode}
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
-        if state:
-            raise ValueError("CDR update policy has no private state")
+        if not state:
+            if self.compatibility_mode != "paper":
+                raise ValueError(
+                    "Legacy CDR state without compatibility_mode can only "
+                    "resume in paper mode"
+                )
+            return
+        if set(state) != {"compatibility_mode"}:
+            raise ValueError("CDR update policy state has unexpected fields")
+        if state["compatibility_mode"] != self.compatibility_mode:
+            raise ValueError("CDR compatibility_mode changed during resume")

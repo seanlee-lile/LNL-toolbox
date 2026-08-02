@@ -138,6 +138,21 @@ class StandardNoisyERMPipeline:
         objective_config = values.get("objective_consumer")
         weight_config = values.get("weight_provider")
         regularizer_config = values.get("regularizer")
+        if objective_config not in (None, False):
+            configured_conflicts = [
+                name
+                for name, value in (
+                    ("risk_corrector", risk_config),
+                    ("transition_estimator", estimator_config),
+                    ("WeightProvider", weight_config),
+                )
+                if value not in (None, False)
+            ]
+            if configured_conflicts:
+                raise ValueError(
+                    "pipeline.objective_consumer cannot be combined with "
+                    + ", ".join(configured_conflicts)
+                )
         if isinstance(weight_config, Mapping):
             weight_name = str(weight_config.get("name", "")).strip().lower()
             if weight_name == "binary_rcn_importance":
@@ -183,6 +198,31 @@ class StandardNoisyERMPipeline:
             raise ValueError(
                 "pipeline.risk_corrector requires pipeline.transition_estimator"
             )
+        if objective_consumer is not None:
+            incompatible = []
+            if risk is not None or estimator is not None:
+                incompatible.append("risk/transition correction")
+            if weight is not None:
+                incompatible.append("WeightProvider")
+            unknown_composition = sorted(
+                set(values)
+                - {
+                    "risk_corrector",
+                    "transition_estimator",
+                    "weight_provider",
+                    "statistic_estimator",
+                    "objective_consumer",
+                    "regularizer",
+                    "warmup_epochs",
+                }
+            )
+            if unknown_composition:
+                incompatible.extend(unknown_composition)
+            if incompatible:
+                raise ValueError(
+                    "pipeline.objective_consumer cannot be combined with "
+                    + ", ".join(incompatible)
+                )
         if statistic_estimator is not None and objective_consumer is None:
             raise ValueError(
                 "pipeline.statistic_estimator requires pipeline.objective_consumer"
@@ -191,8 +231,8 @@ class StandardNoisyERMPipeline:
             risk_corrector=risk,
             transition_estimator=estimator,
             statistic_estimator=statistic_estimator,
-            objective_consumer=objective_consumer,
             weight_provider=weight,
+            objective_consumer=objective_consumer,
             regularizer=regularizer,
             warmup_epochs=warmup_epochs,
         )
@@ -364,12 +404,8 @@ class StandardNoisyERMPipeline:
         components: dict[str, Any] = {}
         if self.transition_estimator is not None:
             components["transition_estimator"] = self.transition_estimator
-        if self.statistic_estimator is not None:
-            components["statistic_estimator"] = self.statistic_estimator
         if self.objective_consumer is not None:
             components["objective_consumer"] = self.objective_consumer
-        if self.regularizer is not None:
-            components["regularizer"] = self.regularizer
         return components
 
     def component_state_dict(self) -> dict[str, Any]:

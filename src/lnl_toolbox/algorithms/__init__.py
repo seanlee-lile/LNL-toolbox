@@ -1,5 +1,11 @@
 from .base import Algorithm, TrainState
-from .coteaching import coteaching_exchange, remember_rate
+from .coteaching import (
+    CoTeachingAlgorithm,
+    CoTeachingConfig,
+    CoTeachingState,
+    coteaching_exchange,
+    remember_rate,
+)
 from .multi_model import ModelGroup, PeerExchangeResult, SmallLossPeerExchange, consistency_loss
 from .jocor import JoCoRAlgorithm, jocor_joint_scores, symmetric_kl_per_sample
 
@@ -8,6 +14,9 @@ __all__ = [
     "TrainState",
     "coteaching_exchange",
     "remember_rate",
+    "CoTeachingAlgorithm",
+    "CoTeachingConfig",
+    "CoTeachingState",
     "ModelGroup",
     "PeerExchangeResult",
     "SmallLossPeerExchange",
@@ -56,11 +65,10 @@ except ImportError:
     SupervisedClassificationAlgorithm = None  # type: ignore[assignment]
 try:
     from .dss import DSSObjective
-    from .masked_risk import candidate_masked_cross_entropy
 except ImportError:
     pass
 else:
-    __all__.extend(["DSSObjective", "candidate_masked_cross_entropy"])
+    __all__.append("DSSObjective")
 try:
     from .transition_risk import BackwardRiskCorrector, ForwardRiskCorrector, RiskCorrector
 except ImportError:

@@ -125,16 +125,168 @@ class NoiseTest(unittest.TestCase):
         expected = (manifest.clean_targets[manifest.flip_mask] + 1) % 10
         np.testing.assert_array_equal(manifest.noisy_targets[manifest.flip_mask], expected)
 
-    def test_class_conditional_generator_is_reproducible_and_preserves_matrix(self) -> None:
-        matrix = np.eye(3, dtype=np.float64)
-        matrix[0] = [0.6, 0.4, 0.0]
-        matrix[1] = [0.0, 0.6, 0.4]
-        labels = np.tile(np.arange(3), 20)
-        manifest = generate_class_conditional(labels, matrix, 0.4, 11, "fixture")
-        repeated = generate_class_conditional(labels, matrix, 0.4, 11, "fixture")
-        np.testing.assert_array_equal(manifest.noisy_targets, repeated.noisy_targets)
-        np.testing.assert_allclose(manifest.transition_matrix, matrix)
-        self.assertEqual(manifest.noise_type, "class_conditional")
+    def test_transition_sampling_matches_legacy_multinomial(self) -> None:
+        labels = np.arange(10, dtype=np.int64)
+        manifest = generate_symmetric(
+            labels,
+            10,
+            0.4,
+            7,
+            "toy",
+            sampling="transition",
+            rng="numpy_legacy",
+        )
+        matrix = np.full((10, 10), 0.4 / 9.0)
+        np.fill_diagonal(matrix, 0.6)
+        random = np.random.RandomState(7)
+        expected = np.array([
+            random.multinomial(
+                1,
+                matrix[label],
+                size=1,
+            )[0].argmax()
+            for label in labels
+        ])
+        np.testing.assert_array_equal(
+            manifest.noisy_targets,
+            expected,
+        )
+        np.testing.assert_allclose(
+            manifest.transition_matrix,
+            matrix,
+        )
+        self.assertEqual(
+            manifest.metadata["sampling"],
+            "transition",
+        )
+
+    def test_noise_config_sampling_contract_and_resume_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            common = {
+                "dataset": "cifar10",
+                "clean_targets": self.labels,
+                "global_indices": np.arange(self.labels.size),
+                "num_classes": 10,
+                "dataset_targets": self.labels,
+            }
+            transition_config = {
+                "seed": 7,
+                "noise": {
+                    "name": "symmetric",
+                    "rate": 0.4,
+                    "seed": 7,
+                    "sampling": "transition",
+                    "rng": "numpy_legacy",
+                },
+            }
+            transition_dir = root / "transition"
+            transition_dir.mkdir()
+            manifest, path = prepare_noise_manifest(
+                transition_config,
+                run_dir=transition_dir,
+                **common,
+            )
+            self.assertEqual(
+                manifest.metadata["sampling"],
+                "transition",
+            )
+            summary = checkpoint_noise_metadata(
+                manifest,
+                path,
+                transition_dir,
+                manifest.actual_rate,
+                mode="generated",
+            )
+            resumed, _ = prepare_noise_manifest(
+                transition_config,
+                run_dir=transition_dir,
+                checkpoint_payload={"noise": summary},
+                **common,
+            )
+            self.assertEqual(resumed.mapping_hash, manifest.mapping_hash)
+            changed = {
+                **transition_config,
+                "noise": {
+                    **transition_config["noise"],
+                    "sampling": "global",
+                },
+            }
+            with self.assertRaisesRegex(ValueError, "sampling"):
+                prepare_noise_manifest(
+                    changed,
+                    run_dir=transition_dir,
+                    checkpoint_payload={"noise": summary},
+                    **common,
+                )
+
+            for name, noise, expected in (
+                (
+                    "default",
+                    {"name": "symmetric", "rate": 0.2, "seed": 7},
+                    "global",
+                ),
+                (
+                    "per_class",
+                    {
+                        "name": "symmetric",
+                        "rate": 0.2,
+                        "seed": 7,
+                        "sampling": "per_class",
+                    },
+                    "per_class",
+                ),
+            ):
+                with self.subTest(name=name):
+                    run_dir = root / name
+                    run_dir.mkdir()
+                    generated, _ = prepare_noise_manifest(
+                        {"seed": 7, "noise": noise},
+                        run_dir=run_dir,
+                        **common,
+                    )
+                    self.assertEqual(
+                        generated.metadata["sampling"],
+                        expected,
+                    )
+
+    def test_invalid_or_non_symmetric_transition_sampling_fails_early(self):
+        common = {
+            "dataset": "cifar10",
+            "clean_targets": self.labels,
+            "global_indices": np.arange(self.labels.size),
+            "num_classes": 10,
+            "dataset_targets": self.labels,
+        }
+        cases = (
+            {
+                "noise": {
+                    "name": "pairflip",
+                    "rate": 0.2,
+                    "sampling": "transition",
+                },
+            },
+            {
+                "noise": {
+                    "name": "symmetric",
+                    "rate": 0.2,
+                    "sampling": "invalid",
+                },
+            },
+        )
+        for config in cases:
+            with self.subTest(config=config):
+                with tempfile.TemporaryDirectory() as directory:
+                    run_dir = Path(directory)
+                    with self.assertRaisesRegex(ValueError, "sampling"):
+                        prepare_noise_manifest(
+                            config,
+                            run_dir=run_dir,
+                            **common,
+                        )
+                    self.assertFalse(
+                        (run_dir / "noise_manifest.npz").exists()
+                    )
 
     def test_mapping_hash_covers_indices_targets_and_context(self) -> None:
         manifest = generate_symmetric(self.labels, 10, 0.4, 7, "toy")

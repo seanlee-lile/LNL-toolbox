@@ -1,6 +1,6 @@
-from __future__ import annotations
+"""Class-exclusion risks with an explicit per-sample candidate mask."""
 
-"""Generic class-exclusion risks with explicit candidate masks."""
+from __future__ import annotations
 
 import torch
 from torch import Tensor
@@ -11,11 +11,11 @@ def candidate_masked_cross_entropy(
     targets: Tensor,
     excluded_classes: Tensor,
 ) -> Tensor:
-    """Return per-sample CE after excluding configured denominator classes."""
+    """Return per-sample CE after removing excluded denominator classes."""
 
     if logits.ndim != 2:
         raise ValueError("logits must have shape [B, C]")
-    batch_size, num_classes = logits.shape
+    batch_size, _ = logits.shape
     if targets.shape != (batch_size,) or targets.dtype != torch.long:
         raise ValueError("targets must use torch.long with shape [B]")
     if excluded_classes.shape != logits.shape:
