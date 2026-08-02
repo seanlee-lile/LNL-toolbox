@@ -244,6 +244,8 @@
 | `configs/experiment/cwd_cifar10_{smoke,reproduction}.yaml` | CWD smoke 与单次 200-epoch、五折中 fold 0 的论文配置。 |
 | `configs/experiment/fine_cifar100n_{smoke,reproduction}.yaml` | FINE smoke 与单次 300-epoch、200-epoch warm-up 配置。 |
 | `training/experiment.py` | 仅接入参数记录、ResNet 深度构造和通用 regularizer，不含论文名称分支。 |
+| `training/workflows.py` | 独立 workflow 的延迟注册与通用调度；主实验入口不再按论文名称分支。 |
 | `training/pipeline.py` | regularizer、warm-up、artifact 和组件状态生命周期编排。 |
 | `training/checkpoint.py` | 参数抽样记录及算法/组件可恢复状态。 |
 | `training/progress.py` | 标准 epoch 字段校验和兼容的训练曲线产物。 |
+| `tests/test_workflow_registry.py` | workflow 注册、延迟加载、重命名提示及主入口模块化边界。 |

@@ -61,6 +61,7 @@ from lnl_toolbox.training.progress import (
     TerminalTrainingProgress,
     write_training_curves_svg,
 )
+from lnl_toolbox.training.workflows import resolve_workflow
 
 
 def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
@@ -897,36 +898,7 @@ def run_experiment(
 ) -> Path:
     """Compatibility entry point for the general training CLI."""
 
-    method = config.get("method")
-    method_name = (
-        str(method.get("name", "")).strip().lower()
-        if isinstance(method, Mapping)
-        else str(method or "").strip().lower()
-    )
-    if method_name == "coteaching":
-        from lnl_toolbox.training.coteaching_experiment import (
-            run_coteaching_experiment,
-        )
-
-        return run_coteaching_experiment(config, output_dir, resume)
-    if method_name == "dual_t_forward":
-        raise ValueError("method 'dual_t_forward' was renamed to 'dual_t'")
-    if method_name == "dual_t":
-        from lnl_toolbox.training.dual_t_experiment import (
-            run_dual_t_experiment,
-        )
-
-        return run_dual_t_experiment(config, output_dir, resume)
-    if method_name == "importance_reweighting":
-        from lnl_toolbox.training.importance_reweighting_experiment import (
-            run_importance_reweighting_experiment,
-        )
-
-        return run_importance_reweighting_experiment(
-            config, output_dir, resume
-        )
-    if method_name == "pcse":
-        from lnl_toolbox.training.pcse_experiment import run_pcse_experiment
-
-        return run_pcse_experiment(config, output_dir, resume)
+    workflow = resolve_workflow(config)
+    if workflow is not None:
+        return workflow(config, output_dir, resume)
     return run_supervised_experiment(config, output_dir, resume)

@@ -234,3 +234,23 @@
   仍属于高冲突共享文件。
 - 精确下一步：由用户选择 CWD 或 FINE 后，只运行对应单次 reproduction YAML；完成后
   数字化论文曲线并比较。本轮未运行正式论文实验。
+
+## ce-baseline 整合记录（2026-08-02）
+
+- 整合原则：冲突与重复实现优先采用 `origin/ce_baseline`，保留本地独有的 Binary Risk、
+  Loss Correction、CWD、FINE、PDL、JoCoR 和 MentorNet。
+- 远端增量：已接收 Co-teaching、Dual-T workflow/evidence、Importance Reweighting、
+  PCSE 以及 binary/multiclass synthetic data。
+- 共享接口：已人工融合 supervised objective/regularizer、statistic pipeline、feature-output
+  辅助接口、plugin kinds、数据与算法导出；`training/experiment.py` 不再包含论文名分支，
+  独立生命周期由 `training/workflows.py` 延迟注册和调度。
+- 高风险文件：CDR/DSS 保持远端实现；ResNet-101、本地噪声生成扩展、插件并集和双方
+  file-map 内容均已保留。
+- 验证状态：远端 workflow 聚焦测试 `61/61`、本地独有方法与共享接口测试 `119/119`、
+  完整 unittest `439/439` 均通过；完成 14 次 smoke，覆盖 Co-teaching、Dual-T/evidence、
+  Importance Reweighting 两组、PCSE/VolMin、CDR、DSS、CWD、PDL、JoCoR、FINE 和
+  MentorNet。Binary Risk 与 Loss Correction 本轮使用聚焦/完整测试验证，未误跑正式配置。
+- 当前分支：`codex/lnl-reproduction-foundations`；整合基点为 `origin/ce_baseline`
+  `04b6b25`，本地 implement 提交为 `fcc5d0f`。
+- 临时产物：本次 `merge-final-*` smoke 目录在核验指标与 checkpoint 后清理，不计入论文结果。
+- 精确下一步：由用户将本地整合提交推送到 `origin/implement`，再交由同事复核。
