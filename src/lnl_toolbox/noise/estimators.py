@@ -153,6 +153,25 @@ class TransitionEstimator(Protocol):
         ...
 
 
+def select_anchor_candidates(
+    snapshot: PosteriorSnapshot,
+    candidates_per_class: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Select deterministic top-posterior candidates for every clean class."""
+
+    count = int(candidates_per_class)
+    if count < 1 or count > snapshot.num_samples:
+        raise ValueError("candidates_per_class must be within [1, num_samples]")
+    positions = np.empty((snapshot.num_classes, count), dtype=np.int64)
+    indices = np.empty_like(positions)
+    for class_index in range(snapshot.num_classes):
+        scores = snapshot.noisy_probabilities[:, class_index]
+        order = np.lexsort((snapshot.global_indices, -scores))[:count]
+        positions[class_index] = order
+        indices[class_index] = snapshot.global_indices[order]
+    return positions, indices
+
+
 @dataclass(frozen=True, slots=True)
 class AnchorTransitionEstimator:
     """Patrini et al. (CVPR 2017), Equations (12)-(13)."""

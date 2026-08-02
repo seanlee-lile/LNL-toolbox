@@ -18,12 +18,12 @@
 |---:|---|---|---|---|
 | 1 | UPM | 指南 | 未开始 | InstanceNoiseModel、PosteriorRefiner、Pipeline |
 | 2 | CAL | 指南 | 未开始 | StatisticEstimator、RiskCorrector |
-| 3 | PDL | 指南 | 未开始 | 实例级 `T(x)` 与 Pipeline |
-| 4 | JoCoR | Selector 基础 | 未开始 | 双网络 Algorithm |
-| 5 | DSS | BASE/MDA/CCS、masked risk、Objective lifecycle、split-aware manifest | Smoke 通过 | 唯一一次 150-epoch 正式实验与论文曲线比较 |
+| 3 | PDL | Algorithm 2、Eq. 1/2/4、实例转移 Algorithm 与独立多阶段 runner | Smoke 通过 | 单次正式论文实验与曲线比较 |
+| 4 | JoCoR | 双网络 Algorithm、共同 small-loss、通用 multi-model runner | 正式实验中断（161/200） | 续训至 200 epochs 后完成最终论文比较 |
+| 5 | DSS | BASE/MDA/CCS、masked risk、Objective lifecycle、split-aware manifest | 单次正式复现完成 | 论文曲线比较 |
 | 6 | CDR | 论文/官方双模式 ParameterUpdatePolicy、完整 noisy-validation Pipeline | Smoke 通过 | 对齐后单次 100-epoch 正式实验与曲线比较 |
 | 7 | CNLCU | Selector 基础 | 未开始 | loss history、不确定性与双网络 |
-| 8 | MentorNet | WeightProvider 基础 | 未开始 | Mentor/Student Pipeline |
+| 8 | MentorNet | MentorArtifact、bi-LSTM Mentor、状态化 WeightProvider、step 调度、ResNet-101、5000-sample trusted data | 正式数据与 smoke 通过 | 唯一一次 CIFAR-100 Sym-40 39k-step 训练 |
 | 9 | Co-teaching | small-loss/交换 helper | 未开始 | 双网络训练与恢复 |
 | 10 | Loss Correction | Anchor/known estimator、Forward/Backward RiskCorrector、通用 Pipeline | 单次复现 | 多 seed、其他噪声设置 |
 | 11 | Normalized Loss/APL | NCE、MAE、RCE、APL | 单次复现 | 如需完整复现，再补多 seed 与其他噪声设置 |
@@ -34,10 +34,10 @@
 | 16 | Dual-T | TransitionEstimator、PosteriorSnapshot、通用 Pipeline | Pipeline smoke 通过 | 论文实验与参数核对 |
 | 17 | MC-LDCE | 指南 | 未开始 | StatisticEstimator、global objective |
 | 18 | Importance Reweighting | Binary RCN WeightProvider、通用权重接入 | Pipeline smoke 通过 | posterior/rate estimator 与论文实验 |
-| 19 | CWD | 指南 | 未开始 | class-wise StatisticEstimator |
+| 19 | CWD | Eq. 19/21--30 estimator、global objective、独立 CIFAR-binary runner | 组件完成 | 正式 200-epoch 单 fold 运行与论文曲线比较 |
 | 20 | PCSE | 指南 | 未开始 | 特征统计与 post-processing |
 | 21 | DLD | 指南 | 未开始 | diffusion label Pipeline |
-| 22 | FINE | Selector 基础 | 未开始 | forgetting/negative regularizer |
+| 22 | FINE | EMA、SCS/SCR、强增强、两项 regularizer、独立两阶段 runner | 组件完成 | 正式 300-epoch 单次运行与论文曲线比较 |
 | 23 | CA2C | 双网络接口待建 | 未开始 | asymmetric Pipeline |
 | 24 | DivideMix | Selector 基础 | 未开始 | GMM、MixMatch、双网络 Pipeline |
 | 25 | L2RW | WeightProvider 基础 | 未开始 | clean meta-batch 与 MetaUpdater |
@@ -115,9 +115,9 @@
   `ccc9146`。
 - 精确目标：BASE + MDA + CCS、candidate masked CE、epoch-boundary 状态、
   checkpoint/resume、官方数据划分/噪声 RNG 和单次正式配置。
-- 完成度：6/7（85.71%）：论文/官方通路核对、通用 Objective lifecycle、
-  DSS 数学与状态、split-aware manifest、配置与参数抽样、测试/Smoke 和文档维护
-  已完成；唯一一次 150-epoch 正式训练与曲线比较未执行。
+- 完成度：7/7（100%）：论文/官方通路核对、通用 Objective lifecycle、DSS 数学与状态、
+  split-aware manifest、配置与参数抽样、测试/Smoke、唯一一次 150-epoch 正式训练和文档维护
+  已完成；论文曲线比较待补。
 - 抽样记录：sampling seed `20260728`；从论文出现的 CIFAR-10
   symmetric-50%、asymmetric-40%、IDN-50% 中抽中 symmetric-50%；官方 seeds
   1–5 中抽中训练 seed 4。
@@ -134,14 +134,103 @@
   selected ratio 1.0，epoch 2 为 0.078125；checkpoint 恢复成功。
 - 测试：DSS focused 9 项、split-manifest 3 项和受影响模块测试通过；完整
   unittest `271/271` 通过。
+- 正式复现：`artifacts/reproductions/dss-cifar10-sym05-seed4-managed/` 完成 150 epochs；
+  best epoch `121`，best noisy-validation accuracy `45.84%`，clean test accuracy `88.50%`；
+  `test_selection_leakage=false`，checkpoint 为 format v2 并包含 `objective_consumer` 状态。
 - 文件维护：已更新 `docs/file-map.md`、`docs/data-flow-guide.md`、
   `papers/lnl-26-paper-module-coverage.md` 和 implementation guideline。
 - 本地 checkpoint commits：无；history cleanup 尚不需要；当前未准备 push。
-- 正式训练状态：按用户要求跳过全部训练流程，当前无训练进程。此前两个正式启动目录
+- 历史无效启动状态：此前两个正式启动目录
   `artifacts/reproductions/dss-cifar10-sym05-seed4/` 和
   `artifacts/reproductions/dss-cifar10-sym05-seed4-valid/` 均误用了环境中旧版安装包，
   checkpoint 不含 DSS component state，因此仅作为诊断产物，不计入复现结果；
-  `dss-cifar10-sym05-seed4-current-source/` 未形成有效训练产物。
-- 阻塞：无代码或数据阻塞；正式训练由用户主动跳过。
-- 精确下一步：保持底座与 Smoke 状态，不运行正式实验；仅在用户重新明确授权训练后，
-  先以前台导入校验确认当前工作区源码，再执行唯一一次 150-epoch 正式运行。
+  `dss-cifar10-sym05-seed4-current-source/` 未形成有效训练产物；均不计入结果。
+- 阻塞：无代码或数据阻塞；正式训练已完成。
+- 精确下一步：使用 `curve_comparison.py` 补充 DSS 与论文曲线的对齐比较。
+
+## PDL 底座与 Smoke 记录（2026-08-01）
+
+- 当前任务：模块化实现 PDL，并建立可供 UPM 等方法复用的实例转移训练入口；
+  当前分支 `codex/lnl-reproduction-foundations`，基线提交 `4dd0746`。
+- 完成度：7/7（100%）：Algorithm 2 generator、anchor candidates、Eq. (1)/(2)/(4)、
+  紧凑 artifact、通用实例转移 Algorithm、独立多阶段 runner、配置/测试/文档均完成。
+- 模块化边界：`training/experiment.py`、`training/pipeline.py` 和
+  `algorithms/supervised.py` 未因 PDL 修改；全局 `[C,C]` TransitionArtifact 语义不变。
+  PDL 使用独立 `instance_transition_estimator` 与 `instance_transition_algorithm` plugin kinds。
+- 论文配置：CIFAR-10、PDL IDN rate `0.4`、ResNet-34、无 augmentation、batch 128、
+  SGD lr `0.01`、momentum `0.9`、weight decay `1e-4`、milestones 40/80、
+  noisy validation 5000、20 parts；正式配置尚未运行。
+- Smoke：`artifacts/test-runs/pdl-cifar10-smoke/` 完成 warm-up 1 epoch 与 corrected
+  training 2 epochs；生成 posterior/feature snapshot、instance artifact、best/last checkpoint、
+  metrics 与曲线；resume 成功且 artifact hash
+  `2c729d2c317cdcd981522b6facb964e2bf4beb956873bc99fcafa23e59e27574` 保持一致。
+- Smoke 指标仅验证通路：100 个 test 样本 accuracy `10.0%`，不作为论文结果。
+- 测试：PDL `7/7`、Plugin `12/12`、受影响 transition `20/20`、完整 unittest
+  `292/292` 通过；fresh smoke 与 checkpoint resume 均成功。
+- 尚未实现：共享 T-Revision；它不是 PDL 基础 Forward/Reweight 通路的阻塞项。
+- 当前修改未提交、未推送；shared plugin catalog、file-map 和两份论文文档存在协作者冲突风险。
+- 精确下一步：在用户确认随机抽取的论文配置后，仅运行一次正式实验，再生成论文曲线比较。
+
+## JoCoR 底座与 Smoke 记录（2026-07-29）
+
+- 当前任务：模块化实现 JoCoR，并为后续 Co-teaching、CNLCU 提供通用多模型入口；
+  当前分支 `codex/lnl-reproduction-foundations`，基线提交 `4dd0746`。
+- 完成度：6/7（85.71%）：论文/官方代码核对、通用模型组、JoCoR 数学、
+  multi-model runner、checkpoint/resume、配置/测试/文档均完成；正式实验已运行至
+  161/200，但两次训练进程均在未触发 early stopping 的情况下中断。
+- 模块化边界：新增 `multi_model_algorithm` plugin kind 和独立
+  `training/multi_model_experiment.py`；`training/experiment.py` 与
+  `training/pipeline.py` 未修改，JoCoR 不使用 Co-teaching peer exchange。
+- 论文对齐：官方六卷积 CNN 两份、同一 batch、两份 CE 加双向 KL、
+  同一 joint small-loss 集合、一个联合 Adam optimizer；SmallLossSelector 通过
+  显式 `rounding: floor` 对齐官方 `int(...)`，旧默认 `ceil` 不变。
+- 抽样配置：sampling seed `20260728` 从 CIFAR-10 Sym-20%、Sym-50%、
+  Sym-80%、Asym-40% 中抽中 Sym-50%；训练 seed 1；λ=0.9。
+- 正式参数：tensor-only、无 augmentation/Normalize、batch 128、Adam
+  `lr=0.001`、β=(0.9,0.999)、200 epochs、epoch 80 后线性衰减并将 β1 改为
+  0.1、num_gradual 10、末 10 epoch 两个成员准确率均值。
+- Smoke：`artifacts/test-runs/jocor-cifar10-smoke/` 完成 2 epochs；
+  CUDA 运行、双模型 format-v2 checkpoint、恢复、成员/ensemble 指标和曲线均正常。
+- 测试：JoCoR focused `7/7`、Selector `14/14`、Plugin `11/11`、
+  Foundation `9/9` 通过；完整 unittest `278/278` 通过。
+- 正式产物：`artifacts/reproductions/jocor-cifar10-sym05-seed1/`；
+  `last.pt` 可恢复，最近 10 个已完成 epoch（152--161）的双成员平均测试准确率
+  `79.12%`，ensemble 平均为 `79.55%`，最佳 ensemble 为 `79.78%`（epoch 139）。
+- 暂定论文比较：论文 CIFAR-10 symmetric-50% 报告 `79.41 ± 0.25%`；按论文双成员
+  平均口径当前差 `-0.29` 个百分点。该结果仅为暂定值，因为尚未完成 200 epochs，
+  且本轮只有一个 seed，不能替代论文的多次重复统计。
+- 当前修改未提交、未推送；高冲突文件仅为 plugin catalog、file-map 和两份共享论文文档。
+- 精确下一步：如需完成 JoCoR，使用同一 `last.pt` 续训至 200 epochs，再以末 10
+  epoch 两模型均值与论文同设置结果比较；否则保留当前结果为中断的暂定记录。
+
+## CWD/FINE 最小侵入补齐记录（2026-08-02）
+
+- 当前任务：使 CWD 与 FINE 在用户提供 YAML 后可由独立 CLI 直接训练；当前分支
+  `codex/lnl-reproduction-foundations`，基线提交 `4dd0746`。
+- 完成度：4/4（100%）：CWD 论文统计公式、CWD 独立训练入口、FINE 官方损失与
+  selection 语义、FINE warm-up/EMA/SCS/SCR/强增强两阶段入口均已实现。
+- 模块化边界：未修改 `training/experiment.py`、`training/pipeline.py`、
+  `plugins/builtin/catalog.py` 或 checkpoint；CWD/FINE 生命周期分别位于独立 runner，
+  模型、EMA、多视图、selector、estimator 和 objective 均可单独复用。
+- CWD：按 Eq. 19、21--30 保存 class prior、virtual flip matrix、系数矩阵、伪逆、
+  centroid 与 source snapshot hash；CIFAR airplane/automobile 合并官方 train/test 后执行
+  五折中的固定 fold 0，每个 epoch 刷新 feature/statistic artifact。
+- CWD 单次配置：symmetric `(eta_P, eta_N)=(0.2,0.2)`、ResNet-34、Adam lr `0.05`、
+  weight decay `1e-4`、milestones 40/120、200 epochs；只运行一个 fold/seed，不重复。
+- FINE：附加项仅作用于 `rejected_mask & (pseudo_label != noisy_label)`；训练入口保存
+  EMA、SCS、SCR、regularizer、optimizer/scheduler 与 RNG 状态。
+- FINE 单次配置：CIFAR-100 symmetric 20%、七卷积 StudentNet、batch 128、SGD、
+  warm-up lr `0.1`、robust lr `0.05`、warm-up 200/total 300 epochs、cosine eta-min
+  `5e-4`、alpha/beta/gamma=`1.0/0.1/0.002`；只运行一个 seed。
+- 已执行测试：CWD focused/training `7/7`，FINE focused/training `8/8`，Pipeline
+  `12/12`，完整 unittest `299/299`，均通过；conda 启动仍输出已有 OpenCL vendor
+  `temp.txt` 警告，但不影响测试结果。
+- Smoke：CWD 与 FINE 两份 smoke YAML 均完成并通过 checkpoint resume；产物分别位于
+  `artifacts/test-runs/cwd-cifar10-minimal-invasion/` 和
+  `artifacts/test-runs/fine-cifar100-minimal-invasion/`。指标只验证调用链，不作论文比较。
+- 文件新增：CWD/FINE 两个独立 runner 与 CLI、通用 EMA、多视图、七卷积模型、
+  两个训练测试和四份 smoke/reproduction YAML；file-map 已同步维护。
+- 当前修改未提交、未推送；`docs/file-map.md` 与本文件已有协作者内容，只做局部追加，
+  仍属于高冲突共享文件。
+- 精确下一步：由用户选择 CWD 或 FINE 后，只运行对应单次 reproduction YAML；完成后
+  数字化论文曲线并比较。本轮未运行正式论文实验。

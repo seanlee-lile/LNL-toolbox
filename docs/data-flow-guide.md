@@ -260,6 +260,16 @@ Forward/Backward、Importance Weighting 等未来消费者只能接收 Artifact�
 修改 Snapshot。`NoiseManifest.per_sample_transition[N,C]` 只是每个样本真实类别
 对应的一行，不等于 PDL 的完整 `T(x)[N,C,C]`。
 
+### PDL 实例转移训练通路
+
+`generate_pdl_idn()` 仅在离线 manifest 构造时读取 clean label。训练 batch 仍只含
+`input/target/index`。`instance_transition_experiment.py` 先以 noisy train/noisy
+validation 训练 warm-up 模型，再收集同一 global-index 集合的 posterior 与 feature
+snapshot；`PartTransitionEstimator` 依次拟合 Eq. (1) 系数和 Eq. (4) part matrices，
+输出紧凑 artifact。校正阶段按 batch global index 查询 `[B,C,C]`，交给通用
+Forward 或 importance consumer。checkpoint 同时核验 correction identity 与 artifact hash，
+恢复时不会静默重估或替换转移矩阵。
+
 ## 7. Model、Loss 与 Algorithm 合同
 
 ### 7.1 Model
@@ -361,7 +371,7 @@ ParameterUpdatePolicy。通用 runner 已支持 noisy validation、最佳 checkp
 - 输入 `sample_indices` 是同设备、唯一的整数 `Tensor[B]`，表示 stable global index。
 - 输出 `selected_mask` 是同设备的 `torch.bool Tensor[B]`，且至少选择一个样本。
 - 输出 `metrics` 只包含有限标量统计；当前基础实现报告选择数量和比例。
-- `AllSelector` 选择全部样本；`SmallLossSelector` 按 fixed、constant 或 linear `keep_rate` 选择低分样本，数量向上取整且至少为一，同分时按 global index 确定性裁决。
+- `AllSelector` 选择全部样本；`SmallLossSelector` 按 fixed、constant 或 linear `keep_rate` 选择低分样本，同分时按 global index 确定性裁决。数量默认向上取整，也可由论文配置显式选择 `rounding: floor`，两者都至少保留一个样本。
 - `SelectionInput.metadata["epoch"]` 是当前零基 epoch。缺失时为兼容直接调用按 epoch 0 处理；若显式提供，则必须是非负整数。
 - linear schedule 在 epoch 0 返回 `start`，在 epoch `warmup_epochs` 返回 `end`，之后保持 `end`；所有 rate 位于 `(0, 1]`，且不从 noise rate 推导。
 - Selector 不接收 input、target、clean label、corruption mask 或 NoiseManifest，不拥有模型、optimizer、backward、peer exchange 或训练生命周期。
@@ -382,6 +392,26 @@ ParameterUpdatePolicy。通用 runner 已支持 noisy validation、最佳 checkp
 
 DSS 由该接口组合 global-index posterior history、MDA、BASE 和 CCS。
 `training/experiment.py` 不包含 DSS 名称判断，也没有论文专属 runner。
+
+### 7.5.2 通用多模型训练与 JoCoR
+
+多模型算法通过独立的 `training/multi_model_experiment.py` 编排，不向单模型
+`training/experiment.py` 增加论文名称分支：
+
+```text
+NoisyTargetDataset
+→ ModelGroup.models 输入同一 batch
+→ multi_model_algorithm 插件产生联合更新
+→ 通用 batch Selector 消费 detached score 与 stable index
+→ 一个联合 optimizer step
+→ model-group evaluator 同时报告各成员和 mean-logit ensemble
+→ checkpoint v2 保存命名模型 state、联合 optimizer、RNG 与 Noise Manifest identity
+```
+
+JoCoR 只在 `algorithms/jocor.py` 拥有论文数学：两份逐样本 CE、双向 KL、
+共同 joint score 和同一个 selection mask。它不调用 Co-teaching 的 peer
+exchange，也不接收 clean label。`SmallLossSelector(rounding="floor")` 显式复现
+官方 `int(remember_rate * batch_size)`；默认 selector 的 `ceil` 行为不变。
 
 ### 7.6 Reliability 与 Statistic estimation 合同
 
@@ -473,6 +503,12 @@ clean/noisy threshold split。
 通用 `WeightProvider[InputT]` 只约束 provider 将自己的输入转换为统一 `WeightResult(sample_weights, metrics)`；不同方法可以定义各自的输入合同。`WeightContributionAdapter` 只校验 provider 输出，并根据输出权重的 shape 和 device 生成全 `True` mask，不读取 posterior、target、logits 或其他方法专用字段。具体 provider 负责校验输入及输入/输出 batch 对齐，最终 reducer 再校验权重与逐样本 loss 对齐。
 
 `BinaryRCNImportanceWeightProvider` 使用论文专用的 `BinaryRCNWeightInput`，实现论文在二分类 asymmetric random classification noise 假设下的权重公式。输入 posterior 必须是 noisy-label posterior `P(noisy_Y = class | X)`，不是 clean posterior。标签编码为 `0=negative`、`1=positive`，且：
+
+MentorNet 使用同一 `WeightProvider` 边界，但其 trusted teacher learning 与目标
+Student run 严格分离：离线 `MentorFeatureDataset -> MentorNet -> MentorArtifact`，
+在线仅执行 `detached Student loss -> moving percentile -> frozen MentorNet ->
+detached sample weights -> batch mean(weight * loss)`。MentorArtifact 的结构、feature
+schema、来源与哈希进入恢复校验；clean truth 不进入目标 noisy run。
 
 - `rho_positive = P(noisy_y=0 | clean_y=1)`；
 - `rho_negative = P(noisy_y=1 | clean_y=0)`；

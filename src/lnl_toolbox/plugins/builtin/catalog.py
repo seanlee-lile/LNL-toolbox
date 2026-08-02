@@ -10,6 +10,7 @@ from lnl_toolbox.noise import (
     AnchorTransitionEstimator,
     DualTransitionEstimator,
     generate_instance_dependent,
+    generate_pdl_idn,
     generate_pairflip,
     generate_symmetric,
 )
@@ -100,7 +101,10 @@ def create_builtin_catalog() -> PluginCatalog:
         )
     try:
         from lnl_toolbox.algorithms.cdr import CDRUpdatePolicy
-        from lnl_toolbox.algorithms.update_policy import StandardUpdatePolicy
+        from lnl_toolbox.algorithms.update_policy import (
+            StandardUpdatePolicy,
+            StepMilestoneUpdatePolicy,
+        )
     except ImportError:
         pass  # Parameter update policies require the PyTorch training stack.
     else:
@@ -109,6 +113,12 @@ def create_builtin_catalog() -> PluginCatalog:
             "standard",
             StandardUpdatePolicy,
             capabilities=("single_model", "optimizer_step", "stateless"),
+        )
+        catalog.add(
+            "parameter_update_policy",
+            "step_milestone",
+            StepMilestoneUpdatePolicy,
+            capabilities=("single_model", "optimizer_step", "step_schedule", "stateful"),
         )
         catalog.add(
             "parameter_update_policy",
@@ -138,6 +148,11 @@ def create_builtin_catalog() -> PluginCatalog:
         metadata={"example": True},
     )
     catalog.add(
+        "noise", "pdl", generate_pdl_idn,
+        capabilities=("per_sample_state", "paper_benchmark"),
+        metadata={"paper": "Xia et al., NeurIPS 2020, Algorithm 2"},
+    )
+    catalog.add(
         "selector",
         "coteaching_exchange",
         coteaching_exchange,
@@ -163,8 +178,25 @@ def create_builtin_catalog() -> PluginCatalog:
         capabilities=("class_conditional", "configured", "offline"),
     )
     try:
+        from lnl_toolbox.noise.pdl import PartTransitionEstimator
+        from lnl_toolbox.algorithms.instance_transition import InstanceTransitionClassificationAlgorithm
+    except ImportError:
+        pass
+    else:
+        catalog.add(
+            "instance_transition_estimator", "pdl", PartTransitionEstimator,
+            capabilities=("instance_dependent", "feature_snapshot", "posterior_snapshot", "offline"),
+            metadata={"paper": "Xia et al., NeurIPS 2020"},
+        )
+        catalog.add(
+            "instance_transition_algorithm", "corrected_classification",
+            InstanceTransitionClassificationAlgorithm,
+            capabilities=("single_model", "instance_transition", "corrected_risk"),
+        )
+    try:
         from lnl_toolbox.noise.transition import TrainableTransitionModel
         from lnl_toolbox.algorithms.multi_model import SmallLossPeerExchange
+        from lnl_toolbox.algorithms.jocor import JoCoRAlgorithm
     except ImportError:
         pass
     else:
@@ -179,6 +211,17 @@ def create_builtin_catalog() -> PluginCatalog:
             "small_loss",
             SmallLossPeerExchange,
             capabilities=("multi_model", "sample_selection"),
+        )
+        catalog.add(
+            "multi_model_algorithm",
+            "jocor",
+            JoCoRAlgorithm,
+            capabilities=(
+                "multi_model",
+                "joint_selection",
+                "agreement_regularization",
+            ),
+            metadata={"paper": "Wei et al., CVPR 2020"},
         )
     try:
         from lnl_toolbox.algorithms.transition_risk import (
@@ -239,6 +282,18 @@ def create_builtin_catalog() -> PluginCatalog:
             "standard_noisy_erm",
             StandardNoisyERMPipeline.from_config,
             capabilities=("single_model", "stage_lifecycle", "artifact_handoff"),
+        )
+    try:
+        from lnl_toolbox.algorithms.mentornet import MentorNetWeightProvider
+    except ImportError:
+        pass
+    else:
+        catalog.add(
+            "weight_provider",
+            "mentornet",
+            MentorNetWeightProvider,
+            capabilities=("continuous_weight", "learned_curriculum", "stateful"),
+            metadata={"paper": "Jiang et al., ICML 2018"},
         )
     return catalog
 
@@ -348,6 +403,66 @@ def build_builtin_weight_provider(
         ) from exc
 
 
+def build_builtin_instance_transition_estimator(
+    config: Mapping[str, Any] | None,
+    catalog: PluginCatalog | None = None,
+) -> Any:
+    """Build an estimator that emits a per-sample transition provider."""
+
+    if config is not None and not isinstance(config, Mapping):
+        raise TypeError("Instance transition estimator configuration must be a mapping")
+    values = dict(config or {"name": "pdl"})
+    name = str(values.pop("name", "pdl")).strip().lower()
+    factorization = values.pop("factorization", None)
+    anchors = values.pop("anchors", None)
+    if factorization is not None:
+        if not isinstance(factorization, Mapping):
+            raise TypeError("factorization configuration must be a mapping")
+        values["representation_iterations"] = int(factorization.get("iterations", 200))
+        values["representation_seed"] = int(factorization.get("seed", 0))
+    if anchors is not None:
+        if not isinstance(anchors, Mapping):
+            raise TypeError("anchors configuration must be a mapping")
+        values["anchor_candidates"] = int(anchors["candidates_per_class"])
+    catalog = catalog or create_builtin_catalog()
+    try:
+        return catalog.build("instance_transition_estimator", name, **values)
+    except KeyError as exc:
+        available = ", ".join(item.name for item in catalog.find(
+            kind="instance_transition_estimator")) or "none"
+        raise ValueError(
+            f"Unknown instance transition estimator {name!r}; available: {available}"
+        ) from exc
+
+
+def build_builtin_instance_transition_algorithm(
+    config: Mapping[str, Any],
+    *,
+    model: Any,
+    optimizer: Any,
+    loss: Any,
+    transition: Any,
+    device: Any,
+    catalog: PluginCatalog | None = None,
+) -> Any:
+    """Build a generic consumer of ``[B,C,C]`` transition providers."""
+
+    if not isinstance(config, Mapping):
+        raise TypeError("Instance transition algorithm configuration must be a mapping")
+    values = dict(config)
+    name = str(values.pop("name", "corrected_classification")).strip().lower()
+    catalog = catalog or create_builtin_catalog()
+    try:
+        return catalog.build("instance_transition_algorithm", name, model=model,
+            optimizer=optimizer, loss=loss, transition=transition, device=device, **values)
+    except KeyError as exc:
+        available = ", ".join(item.name for item in catalog.find(
+            kind="instance_transition_algorithm")) or "none"
+        raise ValueError(
+            f"Unknown instance transition algorithm {name!r}; available: {available}"
+        ) from exc
+
+
 def build_builtin_regularizer(
     config: Mapping[str, Any] | None,
     catalog: PluginCatalog | None = None,
@@ -449,6 +564,47 @@ def build_builtin_peer_exchange(
         return catalog.build("peer_exchange", name, **values)
     except KeyError as exc:
         raise ValueError(f"Unknown peer exchange {name!r}") from exc
+
+
+def build_builtin_multi_model_algorithm(
+    config: Mapping[str, Any],
+    *,
+    models: Any,
+    optimizer: Any,
+    loss: Any,
+    selector: Any,
+    device: Any,
+    catalog: PluginCatalog | None = None,
+) -> Any:
+    """Build a multi-network algorithm from injected reusable components."""
+
+    if not isinstance(config, Mapping):
+        raise TypeError("multi-model algorithm configuration must be a mapping")
+    values = dict(config)
+    name = str(values.pop("name", "")).strip().lower()
+    if not name:
+        raise ValueError("multi-model algorithm name must not be empty")
+    if "lambda" in values:
+        values["lambda_"] = values.pop("lambda")
+    catalog = catalog or create_builtin_catalog()
+    try:
+        return catalog.build(
+            "multi_model_algorithm",
+            name,
+            models=models,
+            optimizer=optimizer,
+            loss=loss,
+            selector=selector,
+            device=device,
+            **values,
+        )
+    except KeyError as exc:
+        available = ", ".join(
+            item.name for item in catalog.find(kind="multi_model_algorithm")
+        ) or "none"
+        raise ValueError(
+            f"Unknown multi-model algorithm {name!r}; available: {available}"
+        ) from exc
 
 
 def build_builtin_pipeline(

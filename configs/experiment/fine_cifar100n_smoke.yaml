@@ -1,0 +1,50 @@
+seed: 23
+output_root: artifacts/test-runs/fine-cifar100-smoke
+
+data:
+  name: cifar100
+  root: data/cifar100
+  validation_size: 100
+  max_train_samples: 200
+  max_validation_samples: 100
+  max_test_samples: 100
+  augment: false
+  strong_magnitude: 1
+
+noise:
+  name: symmetric
+  rate: 0.2
+  seed: 23
+
+loader:
+  batch_size: 100
+  num_workers: 0
+  pin_memory: false
+
+model:
+  name: tiny_cnn
+  width: 2
+
+optimizer:
+  name: sgd
+  lr: 0.01
+  momentum: 0.9
+  weight_decay: 0.0005
+
+scheduler:
+  eta_min: 0.0005
+
+trainer:
+  epochs: 2
+  device: auto
+
+fine:
+  warmup_epochs: 1
+  warmup_lr: 0.01
+  ema_momentum: 0.999
+  momentum_scs: 0.999
+  momentum_scr: 0.99
+  maximum_threshold: 0.95
+  alpha: 1.0
+  beta: 0.1
+  gamma: 0.002

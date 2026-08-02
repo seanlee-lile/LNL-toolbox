@@ -1,0 +1,36 @@
+seed: 20260729
+data:
+  name: cifar100
+  validation_size: 0
+  augment: true
+model: {name: resnet101, base_width: 64}
+noise: {name: symmetric, rate: 0.4, seed: 20260729}
+loss: {name: ce}
+selector: {name: all}
+parameter_update:
+  name: step_milestone
+  milestones: [19500, 25000, 30000]
+  gamma: 0.1
+optimizer:
+  name: sgd
+  lr: 0.1
+  momentum: 0.9
+  weight_decay: 0.00004
+scheduler: {name: none}
+pipeline:
+  weight_provider:
+    name: mentornet
+    artifact_path: data/mentornet/cifar10-symmetric04-seed20260729/mentor_artifact.pt
+    total_epochs: 100
+    percentile: 0.75
+    decay: 0.95
+    burn_in_fraction: 0.2
+    fixed_label: 0
+    seed: 20260729
+trainer: {epochs: 100}
+loader: {batch_size: 128, num_workers: 4, drop_last: true}
+evaluation: {selection_split: test, allow_test_selection: true}
+hyperparameters:
+  sampling_seed: 20260729
+  source: Jiang et al. ICML 2018 supplementary and official repository
+  sampled_setting: CIFAR-100 symmetric-40 MentorNet-DD ResNet 39k steps

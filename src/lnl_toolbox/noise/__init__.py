@@ -1,6 +1,7 @@
 from .generators import (
     generate_class_conditional,
     generate_instance_dependent,
+    generate_pdl_idn,
     generate_pairflip,
     generate_symmetric,
 )
@@ -10,6 +11,13 @@ from .estimators import (
     KnownTransitionEstimator,
     PosteriorSnapshot,
     TransitionEstimator,
+    select_anchor_candidates,
+)
+from .pdl import (
+    PartTransitionArtifact,
+    PartTransitionEstimator,
+    fit_part_representation,
+    fit_part_transition_matrices,
 )
 from .manifest import NoiseManifest
 from .transition import (
@@ -27,6 +35,7 @@ __all__ = [
     "generate_pairflip",
     "generate_class_conditional",
     "generate_instance_dependent",
+    "generate_pdl_idn",
     "PosteriorSnapshot",
     "TransitionEstimator",
     "AnchorTransitionEstimator",
@@ -38,5 +47,10 @@ __all__ = [
     "TrainableTransitionModel",
     "TransitionProvider",
     "validate_transition_matrix",
+    "select_anchor_candidates",
+    "PartTransitionArtifact",
+    "PartTransitionEstimator",
+    "fit_part_representation",
+    "fit_part_transition_matrices",
 ]
 

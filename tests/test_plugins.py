@@ -19,6 +19,8 @@ from lnl_toolbox.noise import (
 )
 from lnl_toolbox.plugins import PluginCatalog
 from lnl_toolbox.plugins.builtin import (
+    build_builtin_instance_transition_algorithm,
+    build_builtin_instance_transition_estimator,
     build_builtin_loss,
     build_builtin_risk_corrector,
     build_builtin_selector,
@@ -38,6 +40,32 @@ from lnl_toolbox.treatments import (
 
 
 class PluginCatalogTest(unittest.TestCase):
+    def test_instance_transition_plugins_are_isolated_from_global_transition(self) -> None:
+        catalog = create_builtin_catalog()
+        self.assertEqual(
+            [item.name for item in catalog.find(kind="instance_transition_estimator")],
+            ["pdl"],
+        )
+        estimator = build_builtin_instance_transition_estimator({
+            "name": "pdl", "num_parts": 2,
+            "factorization": {"iterations": 3, "seed": 9},
+            "anchors": {"candidates_per_class": 2},
+        }, catalog)
+        self.assertEqual(estimator.num_parts, 2)
+        self.assertEqual(estimator.representation_iterations, 3)
+        model = torch.nn.Linear(2, 2)
+        algorithm = build_builtin_instance_transition_algorithm(
+            {"name": "corrected_classification", "correction": "forward"},
+            model=model, optimizer=torch.optim.SGD(model.parameters(), lr=0.1),
+            loss=CrossEntropyLoss(), transition=object(), device=torch.device("cpu"),
+            catalog=catalog,
+        )
+        self.assertEqual(algorithm.correction, "forward")
+        self.assertEqual(
+            [item.name for item in catalog.find(kind="transition_estimator")],
+            ["anchor", "dual_t", "known"],
+        )
+
     def test_capability_discovery(self) -> None:
         catalog = create_builtin_catalog()
         selectors = catalog.find(capability="sample_selection")
@@ -271,8 +299,11 @@ class PluginCatalogTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(weighted_objective))
         self.assertTrue(torch.isfinite(weighted_losses.grad).all())
 
-        self.assertEqual(catalog.find(kind="weight_provider"), ())
-        with self.assertRaisesRegex(ValueError, "available: none"):
+        self.assertEqual(
+            [item.name for item in catalog.find(kind="weight_provider")],
+            ["mentornet"],
+        )
+        with self.assertRaisesRegex(ValueError, "available: mentornet"):
             build_builtin_weight_provider(
                 {"name": "binary_rcn_importance"}, catalog
             )
@@ -292,7 +323,7 @@ class PluginCatalogTest(unittest.TestCase):
         )
         self.assertEqual(
             [item.name for item in catalog.find(kind="parameter_update_policy")],
-            ["cdr", "standard"],
+            ["cdr", "standard", "step_milestone"],
         )
         self.assertEqual(
             [item.name for item in catalog.find(kind="selector")],

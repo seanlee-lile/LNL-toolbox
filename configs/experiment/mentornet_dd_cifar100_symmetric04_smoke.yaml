@@ -1,0 +1,29 @@
+seed: 20260729
+data:
+  name: cifar100
+  validation_size: 100
+  max_train_samples: 256
+  max_test_samples: 100
+  augment: true
+model:
+  name: tiny_cnn
+  width: 16
+noise: {name: symmetric, rate: 0.4, seed: 20260729}
+loss: {name: ce}
+selector: {name: all}
+parameter_update: {name: standard}
+optimizer: {name: sgd, lr: 0.1, momentum: 0.9}
+scheduler: {name: none}
+pipeline:
+  weight_provider:
+    name: mentornet
+    artifact_path: data/mentornet/cifar10-symmetric04-seed20260729/mentor_artifact.pt
+    total_epochs: 2
+    percentile: 0.75
+    decay: 0.95
+    burn_in_fraction: 0.2
+    fixed_label: 0
+    seed: 20260729
+trainer: {epochs: 2}
+loader: {batch_size: 128, num_workers: 0, drop_last: true}
+evaluation: {selection_split: test, allow_test_selection: true}

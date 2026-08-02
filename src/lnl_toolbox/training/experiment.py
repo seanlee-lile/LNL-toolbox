@@ -37,6 +37,7 @@ from lnl_toolbox.models.cifar_resnet import (
     cifar_resnet18,
     cifar_resnet34,
     cifar_resnet50,
+    cifar_resnet101,
     preact_resnet18,
 )
 from lnl_toolbox.models.cifar_cnn import CifarCnn8
@@ -74,6 +75,13 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
         return cifar_resnet34(num_classes, int(config.get("base_width", 64)))
     if name == "resnet50":
         return cifar_resnet50(
+            num_classes,
+            int(config.get("base_width", 64)),
+            stem_padding=int(config.get("stem_padding", 1)),
+            initialization=str(config.get("initialization", "kaiming")),
+        )
+    if name == "resnet101":
+        return cifar_resnet101(
             num_classes,
             int(config.get("base_width", 64)),
             stem_padding=int(config.get("stem_padding", 1)),
@@ -140,7 +148,14 @@ def _seed_worker(_worker_id: int) -> None:
     random.seed(worker_seed)
 
 
-def _loader(dataset, config: Mapping[str, Any], *, shuffle: bool, seed: int) -> DataLoader:
+def _loader(
+    dataset,
+    config: Mapping[str, Any],
+    *,
+    shuffle: bool,
+    seed: int,
+    drop_last: bool = False,
+) -> DataLoader:
     workers = int(config.get("num_workers", 0))
     return DataLoader(
         dataset,
@@ -151,6 +166,7 @@ def _loader(dataset, config: Mapping[str, Any], *, shuffle: bool, seed: int) -> 
         persistent_workers=workers > 0,
         worker_init_fn=_seed_worker if workers else None,
         generator=torch.Generator().manual_seed(seed),
+        drop_last=drop_last,
     )
 
 
@@ -473,7 +489,13 @@ def run_supervised_experiment(
         transform=build_cifar_transform(False, **transform_options),
     )
     loader_config = config["loader"]
-    train_loader = _loader(train_set, loader_config, shuffle=True, seed=seed)
+    train_loader = _loader(
+        train_set,
+        loader_config,
+        shuffle=True,
+        seed=seed,
+        drop_last=bool(loader_config.get("drop_last", False)),
+    )
     validation_loader = _loader(
         validation_set, loader_config, shuffle=False, seed=seed
     )

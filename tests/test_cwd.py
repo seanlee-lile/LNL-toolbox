@@ -35,6 +35,26 @@ class CWDTest(unittest.TestCase):
         artifact = CWDEstimator().estimate(snapshot)
         self.assertEqual(artifact.values.shape, (2, 2))
         self.assertTrue(artifact.artifact_hash)
+        np.testing.assert_allclose(
+            artifact.values,
+            np.asarray([[0.5, 0.25], [0.0, 0.25]]),
+            atol=1e-10,
+        )
+        self.assertEqual(artifact.metadata["cwd_equations"], "19,21-30")
+        self.assertEqual(len(artifact.metadata["coefficient_matrices"]), 2)
+
+    def test_multiclass_identity_recovers_empirical_centroid(self) -> None:
+        features = np.asarray([[1., 0.], [0., 2.], [3., 3.]])
+        snapshot = FeatureSnapshot(
+            features,
+            np.asarray([0, 1, 2]),
+            np.arange(3),
+            "fixture",
+            "train",
+        )
+        artifact = CWDEstimator(np.eye(3)).estimate(snapshot)
+        np.testing.assert_allclose(artifact.values, features / 3.0, atol=1e-10)
+        np.testing.assert_allclose(artifact.metadata["class_prior"], np.ones(3) / 3)
 
     def test_cwd_risk_is_differentiable(self) -> None:
         logits = torch.randn(3, 2, requires_grad=True)

@@ -217,6 +217,24 @@ def cifar_resnet50(
     )
 
 
+def cifar_resnet101(
+    num_classes: int = 10,
+    base_width: int = 64,
+    *,
+    stem_padding: int = 1,
+    initialization: str = "kaiming",
+) -> CifarResNetBottleneck:
+    """Return a reusable CIFAR ResNet-101 bottleneck StudentNet."""
+
+    return CifarResNetBottleneck(
+        num_classes,
+        base_width,
+        layer_counts=(3, 4, 23, 3),
+        stem_padding=stem_padding,
+        initialization=initialization,
+    )
+
+
 def preact_resnet18(num_classes: int = 10, base_width: int = 64) -> CifarResNet:
     return CifarResNet(PreActBlock, num_classes, base_width, preactivation=True)
 

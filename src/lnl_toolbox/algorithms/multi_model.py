@@ -26,6 +26,30 @@ class ModelGroup:
         for name, model in self.models.items():
             model.load_state_dict(state[name])
 
+    def to(self, device: torch.device) -> "ModelGroup":
+        for model in self.models.values():
+            model.to(device)
+        return self
+
+    def train(self, mode: bool = True) -> "ModelGroup":
+        for model in self.models.values():
+            model.train(mode)
+        return self
+
+    def eval(self) -> "ModelGroup":
+        return self.train(False)
+
+    def parameters(self):
+        for model in self.models.values():
+            yield from model.parameters()
+
+    def logits(self, inputs: Tensor) -> dict[str, Tensor]:
+        return {name: model(inputs) for name, model in self.models.items()}
+
+    def mean_logits(self, inputs: Tensor) -> Tensor:
+        outputs = tuple(self.logits(inputs).values())
+        return torch.stack(outputs, dim=0).mean(dim=0)
+
 
 @dataclass(frozen=True)
 class PeerExchangeResult:

@@ -262,7 +262,7 @@ class CDRUpdatePolicyTest(unittest.TestCase):
                 item.name
                 for item in catalog.find(kind="parameter_update_policy")
             ],
-            ["cdr", "standard"],
+            ["cdr", "standard", "step_milestone"],
         )
         self.assertEqual(
             build_builtin_parameter_update_policy(None, catalog).name,

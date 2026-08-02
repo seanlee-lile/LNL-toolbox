@@ -40,7 +40,7 @@
 | noisy posterior 快照 | `noise/estimators.py::PosteriorSnapshot` | 已有 | UPM、CAL、PDL、Loss Correction、T-Revision、Dual-T、Importance Reweighting |
 | posterior / feature 收集 | `training/snapshots.py::collect_posterior_snapshot()`、`FeatureSnapshot`、`pretrain_noisy_classifier()` | 已有 posterior/feature 收集与共享 warm-up | UPM、CAL、PDL、Loss Correction、T-Revision、Dual-T、MC-LDCE、CWD、PCSE、DLD、LEND |
 | 全局转移矩阵 artifact | `noise/transition.py::TransitionArtifact` | 已有 | CAL、Loss Correction、VolMinNet、T-Revision、Dual-T、MC-LDCE、PCSE |
-| 实例转移查询 | `noise/transition.py::InstanceTransitionProvider` | 已有通用协议；实例模型仍待论文实现 | UPM、PDL |
+| 实例转移查询 | `noise/transition.py::InstanceTransitionProvider`、`noise/pdl.py::PartTransitionArtifact` | 已有协议和 PDL 紧凑实例 provider | UPM、PDL |
 | 选样结果 | `selectors/base.py::SelectionResult` | 已有 hard-mask 协议 | JoCoR、DSS、CNLCU、Co-teaching、FINE、DivideMix、LEND |
 | 小损失排序与保留率 | `selectors/basic.py::SmallLossSelector`、`selectors/schedules.py` | 已有 fixed、constant、linear 保留率 | JoCoR、CNLCU、Co-teaching |
 | 按样本历史状态 | `selectors/history.py::IndexedHistory/IndexedTensorHistory` | 已有 scalar 与有界 `[N,E,C]` global-index 状态存储；DSS 已接入 | DSS、CNLCU、LEND、CA2C、DivideMix |
@@ -105,7 +105,7 @@
 - 作者：Qizhou Wang, Bo Han, Tongliang Liu, Gang Niu, Jian Yang, Chen Gong
 - 官方页面：<https://ojs.aaai.org/index.php/AAAI/article/view/17221>
 - 官方代码：<https://github.com/QizhouWang/instance-dependent-label-noise>
-- 当前成熟度：L2
+- 当前成熟度：L3（双网络 Algorithm、通用 multi-model runner 与 Smoke 已完成）
 - 核对状态：已阅读论文；已检查官方 `pretrain.py`、`main.py` 和
   `cloth1m.py`；尚未运行
 - Toolbox 归属：`InstanceNoiseModel + PosteriorRefiner + Pipeline`
@@ -868,20 +868,20 @@ NoiseManifest + NoisyTargetDataset
 | 7 | 规划，共享 | `training/snapshots.py` | `collect_feature_snapshot()` | model + feature hook + loader → `FeatureSnapshot[N,D]` | inference mode 下收集指定层输出；与 posterior 的 index 集合严格对齐。 |
 | 8 | 扩展，共享 | `noise/estimators.py` | `select_anchor_candidates()` | PosteriorSnapshot + candidates per class → indices `[C,K]` | 每类至少 `r` 个唯一候选；score 并列按最小 global index；现有 Anchor 可复用第一个候选。 |
 | 9 | 扩展，共享 | `noise/transition.py` | `InstanceTransitionProvider` | global indices `[B]` → `T(x)[B,C,C]` | 与全局 `TransitionProvider` 分开，防止 `[C,C]` 和 `[B,C,C]` 混用。 |
-| 10 | 规划，PDL | `noise/pdl.py` | `fit_part_representation()` | FeatureSnapshot + num parts → parts `[D,r]`、coefficients `[N,r]` | 实现 Eq. 1；每行 coefficient 非负且和为 1。 |
-| 11 | 规划，PDL | `noise/pdl.py` | `fit_part_transition_matrices()` | anchor rows + anchor coefficients → `P[r,C,C]` | 实现 Eq. 4；每个 `P_j` 非负且逐行和为 1；不足 `r` 个候选或系数矩阵秩不足时失败。 |
-| 12 | 规划，PDL | `noise/pdl.py` | `PartTransitionArtifact` | parts + coefficients + P + indices + hashes → compact artifact | 不长期物化 `[N,C,C]`；保存 snapshot、anchor、配置和 mapping hash。 |
-| 13 | 规划，PDL | `noise/pdl.py` | `PartTransitionArtifact.transitions_for()` | global indices `[B]` → `[B,C,C]` | 以 `einsum` 实现 Eq. 2；输出有限、非负、逐行和为 1。 |
-| 14 | 规划，共享 | `algorithms/transition_risk.py` | `forward_corrected_losses()` | logits、targets、`T(x)[B,C,C]` → `[B]` | 共享 transition consumer；第 10 篇进一步核对 Forward 原式。 |
-| 15 | 规划，共享 | `algorithms/transition_risk.py` | `importance_reweighted_losses()` | logits、targets、`T(x)[B,C,C]` → `[B]` | 共享逐样本权重 consumer；第 18 篇进一步核对权重假设。 |
-| 16 | 规划，PDL | `algorithms/pdl.py` | `PDLAlgorithm.step()` | Batch + instance provider + risk corrector → StepResult | 按 batch index 查询 `T(x)`，再调用共享 corrector 和 optimizer。 |
-| 17 | 规划，PDL | `training/pdl_pipeline.py` | `run_pdl_experiment()` | resolved config → run directory | 编排 warm-up、snapshot、Eq. 1、anchor、Eq. 4、corrected training 和 resume。 |
+| 10 | 已实现，PDL | `noise/pdl.py` | `fit_part_representation()` | FeatureSnapshot + num parts → parts `[D,r]`、coefficients `[N,r]` | Eq. 1；每行 coefficient 非负且和为 1。 |
+| 11 | 已实现，PDL | `noise/pdl.py` | `fit_part_transition_matrices()` | anchor rows + anchor coefficients → `P[r,C,C]` | Eq. 4；逐行 simplex projection；候选不足或秩不足时失败。 |
+| 12 | 已实现，PDL | `noise/pdl.py` | `PartTransitionArtifact` | parts + coefficients + P + indices + hashes → compact artifact | 不长期物化 `[N,C,C]`；保存 snapshot、anchor、配置与 hash。 |
+| 13 | 已实现，PDL | `noise/pdl.py` | `PartTransitionArtifact.transitions_for()` | global indices `[B]` → `[B,C,C]` | 以 `einsum` 实现 Eq. 2。 |
+| 14 | 已实现，共享 | `algorithms/transition_risk.py` | `forward_instance_corrected_losses()` | logits、targets、`T(x)[B,C,C]` → `[B]` | 与全局 Forward consumer 分离，避免 shape 混用。 |
+| 15 | 已实现，共享 | `algorithms/transition_risk.py` | `instance_importance_reweighted_losses()` | logits、targets、`T(x)[B,C,C]` → `[B]` | 权重假设仍由第 18 篇进一步核对。 |
+| 16 | 已实现，共享 | `algorithms/instance_transition.py` | `InstanceTransitionClassificationAlgorithm.step()` | Batch + instance provider + correction → StepResult | 不写 PDL 名称分支。 |
+| 17 | 已实现，共享 | `training/instance_transition_experiment.py` | `run_instance_transition_experiment()` | resolved config → run directory | 编排 warm-up、snapshot、Eq. 1、anchor、Eq. 4、校正训练和 resume。 |
 | 18 | 扩展，共享 | `training/checkpoint.py` | 通用 pipeline/algorithm state | PDL state ↔ checkpoint | 保存当前阶段、artifact hash、factorization/optimizer 状态和 corrector identity。 |
 | 19 | 扩展，共享 | `evaluation/metrics.py` | `transition_summary()` | provider + indices → diagonal/entropy/row statistics | 无需 clean label 的诊断；真 `T(x)` 对比仅限合成实验 evaluator。 |
-| 20 | 扩展，共享 | `plugins/builtin/catalog.py` | `build_builtin_pipeline()` / estimator builder | configs → PDL components | 注册 `instance_transition_estimator/pdl` 与 `pipeline/pdl`，不伪装成全局 estimator。 |
-| 21 | 规划，PDL | `configs/noise/pdl.yaml` | — | estimator config | num parts、factorization、anchor 与 matrix-fit 参数。 |
-| 22 | 规划，PDL | `configs/experiment/cifar10_pdl_smoke.yaml` | — | 多阶段 smoke config | 复用现有 CIFAR、manifest、模型、optimizer 和 artifact 目录。 |
-| 23 | 规划，PDL | `tests/test_pdl.py` | PDL 单元/集成测试 | fixtures → assertions | 集中测试 Eq. 1–4、provider、generator、校正调用、checkpoint 和 smoke。 |
+| 20 | 已实现，共享 | `plugins/builtin/catalog.py` | instance estimator/algorithm builders | configs → PDL components | 使用独立 plugin kinds，不伪装成全局 estimator。 |
+| 21 | 已实现，PDL | `configs/noise/pdl.yaml` | — | generator config | Algorithm 2 的 rate、seed 和 manifest 文件名。 |
+| 22 | 已实现，PDL | `configs/experiment/pdl_cifar10_smoke.yaml` | — | 多阶段 smoke config | 复用现有 CIFAR、manifest、模型、optimizer 和 artifact 目录。 |
+| 23 | 已实现，PDL | `tests/test_pdl.py` | PDL 单元/集成测试 | fixtures → assertions | 覆盖 Eq. 1/2/4、provider、generator、校正调用和 checkpoint identity。 |
 
 ### 6. 规划接口
 
@@ -1149,22 +1149,19 @@ best validation metric
 - `[推断]` 紧凑保存 `h[N,r] + P[r,C,C]` 比保存全部 `[N,C,C]` 更符合论文
   结构，也更节省空间。
 
-### 12. 当前未实现
+### 12. 当前实现状态
 
-- `training/snapshots.py`
-- `FeatureSnapshot` 与 feature collector
-- 通用 `InstanceTransitionProvider`
-- `select_anchor_candidates()`
-- `noise/pdl.py`
-- `algorithms/transition_risk.py`
-- `algorithms/pdl.py`
-- `training/pdl_pipeline.py`
-- PDL benchmark generator mode
-- PDL 配置、artifact、checkpoint 私有状态和测试
+已实现：共享 snapshot、`InstanceTransitionProvider`、anchor candidates、PDL
+Algorithm 2、Eq. (1)/(2)/(4)、紧凑 artifact、Forward/Reweight consumer、独立通用
+instance-transition Algorithm/runner、配置、checkpoint identity 和测试。
+
+尚未实现：
+
 - shared T-Revision
 - 论文结果复现
 
-因此当前 toolbox 不能宣称支持 PDL；本条目只是未来实现指南。
+当前 toolbox 已具备 PDL 的模块化实现和 smoke 级完整通路；正式论文配置尚未运行，
+因此只能宣称“实现并通过 smoke”，不能宣称完成论文结果复现。共享 T-Revision 仍为后续项。
 
 ---
 
@@ -1178,8 +1175,8 @@ best validation metric
 - 论文页面：<https://openaccess.thecvf.com/content_CVPR_2020/html/Wei_Combating_Noisy_Labels_by_Agreement_A_Joint_Training_Method_with_CVPR_2020_paper.html>
 - 官方代码：<https://github.com/hongxin001/JoCoR>
 - 当前成熟度：L2
-- 核对状态：已阅读论文；已检查官方 `algorithm/jocor.py` 和
-  `algorithm/loss.py`；尚未运行
+- 核对状态：已阅读论文；已检查官方 `main.py`、`algorithm/jocor.py`、
+  `algorithm/loss.py` 和 `model/cnn.py`；Toolbox Smoke 已运行
 - Toolbox 归属：`双网络 Algorithm + 共享小损失 Selector + Pipeline`
 - 不是：可直接注册为 `loss(logits, targets) -> [B]` 的普通单网络 Loss
 
@@ -1246,24 +1243,24 @@ NoisyTargetDataset
 
 ### 4. 按顺序映射到文件和函数
 
-1. `[扩展/共享] src/lnl_toolbox/core/result.py`
-   - `SelectionResult`
-   - 保存 batch positions、global indices、scores、keep rate 和统计量。
-2. `[规划/共享] src/lnl_toolbox/selectors/small_loss.py`
-   - `RememberRateSchedule`
-   - `SmallLossSelector.select(scores, global_indices, keep_rate)`
-   - 并列分数按最小 global index 决定，保证输入重排后结果稳定。
-3. `[规划] src/lnl_toolbox/algorithms/jocor.py`
+1. `[已有/共享] src/lnl_toolbox/selectors/base.py`
+   - `SelectionInput` / `SelectionResult` 保存 score、stable index、mask 和统计量。
+2. `[已扩展/共享] src/lnl_toolbox/selectors/basic.py`
+   - `SmallLossSelector` 复用 linear keep-rate schedule；
+   - `rounding: floor` 复现官方 `int(...)`，默认 `ceil` 保持兼容；
+   - 并列分数按最小 global index 决定。
+3. `[已实现] src/lnl_toolbox/algorithms/jocor.py`
    - `symmetric_kl_per_sample(logits_1, logits_2)`
    - `jocor_joint_scores(loss_1, loss_2, logits_1, logits_2, lambda_)`
    - `JoCoRAlgorithm.step(batch, context)`
-4. `[规划] src/lnl_toolbox/training/jocor_pipeline.py`
-   - 构造两个模型、optimizer、selector、loss、evaluator 和 checkpoint。
-5. `[扩展/高冲突] src/lnl_toolbox/plugins/builtin/catalog.py`
-   - 注册 `algorithm/jocor` 和共享 selector；由集成人统一修改。
-6. `[规划] configs/algorithm/jocor.yaml`
+4. `[已实现/共享] src/lnl_toolbox/training/multi_model_experiment.py`
+   - 构造命名模型组、联合 optimizer、selector、loss、evaluator 和 checkpoint；
+   - 后续 Co-teaching、CNLCU 复用，不含 JoCoR 名称判断。
+5. `[已扩展/高冲突] src/lnl_toolbox/plugins/builtin/catalog.py`
+   - 注册 `multi_model_algorithm/jocor`，与 peer-exchange kind 隔离。
+6. `[已实现] configs/algorithm/jocor.yaml`
    - 只保存算法参数，不写本机路径。
-7. `[规划] tests/test_jocor.py`
+7. `[已实现] tests/test_jocor.py`
    - 数学、双网络更新、选择协议和恢复测试。
 
 ### 5. 规划接口
@@ -1326,8 +1323,8 @@ loss:
   name: ce
 
 models:
-  - {name: preact_resnet18}
-  - {name: preact_resnet18}
+  - {name: cifar_six_conv}
+  - {name: cifar_six_conv}
 ```
 
 `lambda`、网络结构、训练轮数和学习率由实验配置给出；不得把论文某个数据集的
@@ -1376,14 +1373,15 @@ JoCoR 没有跨 batch 的 selector 私有状态；SelectionResult 不需要持�
   线性增长到 `noise_rate`。toolbox 默认忠于论文，`exponent` 只能作为显式
   复现实验选项。
 
-### 11. 当前未实现
+### 11. 当前实现状态
 
-- 共享 `SelectionResult` 和 `SmallLossSelector`
-- `JoCoRAlgorithm`
-- JoCoR pipeline、配置、checkpoint 适配和测试
-- 论文结果复现
-
-因此当前 toolbox 不能宣称支持 JoCoR。
+- 已实现共享 `ModelGroup`、`SmallLossSelector` 的显式 floor 取整和模型组评测；
+- 已实现 `JoCoRAlgorithm`、插件构建、官方六卷积 CIFAR 模型和联合 Adam 更新；
+- 已实现独立通用 multi-model runner、双模型 checkpoint/resume、成员与 ensemble 指标；
+- 已完成 focused 7 项、受影响测试、CUDA Smoke 与完整 `278/278` unittest；
+- `training/experiment.py` 和 `training/pipeline.py` 未修改；
+- 尚未运行唯一一次 200-epoch 正式实验，因此当前只可宣称 JoCoR 底座和 Smoke
+  完成，不能宣称论文数值复现完成。
 
 ---
 
@@ -2305,7 +2303,12 @@ teacher-training step；不能混入 Student checkpoint 的普通 model 字段�
 - MentorNet Pipeline、配置、checkpoint 和测试
 - 论文结果复现
 
-因此当前 toolbox 不能宣称支持 MentorNet。
+当前已实现 MentorNet DD 的通用底座：bi-LSTM Mentor、哈希化 MentorArtifact、
+隔离的 trusted feature 数据、离线 artifact trainer、状态化 WeightProvider、
+burn-in/dropout RNG 恢复、按 global-step 的学习率里程碑和 ResNet-101 Student
+构造。已在隔离的 `data/mentornet/` 路径生成 CIFAR-10 5000-sample trusted
+feature artifact，并完成 CIFAR-100 Sym-40 smoke；正式声明复现仍需唯一一次
+39k-step 训练及论文结果比较。
 
 ---
 

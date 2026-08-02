@@ -33,7 +33,7 @@
 | `plugins/__init__.py` | 公开 `PluginCatalog` 和 `PluginSpec`。 |
 | `plugins/catalog.py` | 实现按 kind/name 注册、构建及 capability 查询的插件目录。 |
 | `plugins/builtin/__init__.py` | 公开内置示例插件目录构造函数。 |
-| `plugins/builtin/catalog.py` | 分 kind 注册 PyTorch/NumPy loss、噪声生成器、通用 `batch_selector`、Anchor/Dual-T `transition_estimator`、ParameterUpdatePolicy 及旧 Co-teaching helper，并提供各自独立的配置构造入口。 |
+| `plugins/builtin/catalog.py` | 分 kind 注册 PyTorch/NumPy loss、噪声生成器、通用 `batch_selector`、`multi_model_algorithm`、Anchor/Dual-T `transition_estimator`、ParameterUpdatePolicy 及旧 Co-teaching helper，并提供各自独立的配置构造入口。 |
 | `registry.py` | 早期的单类型轻量 Registry；暂时保留以兼容已有代码，长期可由 PluginCatalog 取代。 |
 
 ## 4. Runner 与算法接口
@@ -44,12 +44,15 @@
 | `engine/runner.py` | 执行 setup、run、cycle、step、evaluator 和 close；不处理模型或梯度。 |
 | `algorithms/base.py` | 将旧 `Algorithm/TrainState` 导入映射到新的通用核心，保持兼容。 |
 | `algorithms/coteaching.py` | NumPy 版 Co-teaching 保留率日程和小损失交叉选样函数。 |
+| `algorithms/multi_model.py` | 通用命名模型组、成组 device/mode/state、联合 logits，以及独立的 peer-exchange 协议。 |
+| `algorithms/jocor.py` | JoCoR 双向 KL、逐样本联合分数、共同小损失集合和双网络联合更新。 |
 | `algorithms/update_policy.py` | 定义通用 ParameterUpdateInput/Result/Policy、普通 StandardUpdatePolicy，以及 policy checkpoint 身份协议。 |
 | `algorithms/cdr.py` | 实现 CDR 论文 Eq. (3)-(6) 的全参数精确 top-k 模式，以及官方代码二维/四维权重、阈值并列和 L2-compatible 模式。 |
 | `algorithms/supervised.py` | 单模型监督训练步骤；兼容普通逐样本归约与结构化 Objective，并通用转发 Objective 生命周期钩子。 |
 | `algorithms/masked_risk.py` | 通用 candidate-class masked cross entropy；显式接收 `[B,C]` 类别排除 mask。 |
 | `algorithms/dss.py` | DSS 的插件化 Objective consumer；组合 BASE、MDA、CCS 和官方 batch-mean 优化语义。 |
 | `algorithms/__init__.py` | 汇总算法兼容接口、Co-teaching 函数和可选 PyTorch ParameterUpdatePolicy。 |
+| `models/cifar_six_conv.py` | 通用六卷积 CIFAR 分类器；保持 JoCoR 官方 64/64/128/128/196/16 通道及 256→C 头。 |
 
 ## 5. 数据层
 
@@ -65,6 +68,19 @@
 
 ## 6. LNL 示例能力
 
+### PDL / 通用实例转移链路（2026-08-01）
+
+| 文件 | 作用 |
+|---|---|
+| `noise/pdl.py` | PDL Eq. (1)/(4)、紧凑 `PartTransitionArtifact` 与按 global index 查询的 `[B,C,C]` provider。 |
+| `algorithms/instance_transition.py` | 不绑定论文名称的实例转移校正分类 Algorithm，支持 Forward 与 importance correction。 |
+| `training/instance_transition_experiment.py` | 独立多阶段 runner：noisy warm-up、posterior/feature snapshot、实例转移估计、校正训练、checkpoint/resume。 |
+| `cli/instance_transition_train.py` | 通用实例转移实验命令行入口。 |
+| `configs/noise/pdl.yaml` | PDL Algorithm 2 噪声 manifest 参数片段。 |
+| `configs/experiment/pdl_cifar10_smoke.yaml` | PDL 小样本多阶段 smoke。 |
+| `configs/experiment/pdl_cifar10_reproduction.yaml` | 论文 CIFAR-10 单次正式配置；尚未运行。 |
+| `tests/test_pdl.py` | generator、anchor、Eq. (1)/(2)/(4)、artifact、Forward/Reweight、checkpoint identity 测试。 |
+
 | 文件 | 作用 |
 |---|---|
 | `noise/manifest.py` | `NoiseManifest` 的数据结构、标签 fingerprint、NPZ 保存/加载，以及数据集、长度、标签范围和概率的训练前校验。 |
@@ -78,7 +94,7 @@
 | `losses/__init__.py` | 公开 NumPy 参考函数；安装 PyTorch 时同时公开可训练 loss。 |
 | `losses/loss板块第一轮.md` | Loss 实现简报及 Config、Algorithm、Selector、Evaluator 间的统一调用协议。 |
 | `selectors/base.py` | 定义单 batch 的 `SelectionInput`、`SelectionResult`、无状态 `Selector` Protocol 及输入输出校验。 |
-| `selectors/basic.py` | 实现选择全部样本的 `AllSelector` 和 schedule-driven、stable-index tie-break 的 `SmallLossSelector`。 |
+| `selectors/basic.py` | 实现选择全部样本的 `AllSelector` 和 schedule-driven、stable-index tie-break 的 `SmallLossSelector`；支持显式 `ceil/floor` 数量取整，默认仍为 `ceil`。 |
 | `selectors/schedules.py` | 定义无状态 keep-rate schedule，支持固定浮点、显式 constant 和零基 epoch linear 配置。 |
 | `selectors/history.py` | 提供 scalar indexed history 与容量/epoch/class 有界的 `IndexedTensorHistory`。 |
 | `selectors/dss.py` | 保存 DSS posterior 历史、MDA 边际、Mann–Kendall score、样本 mask 和类别排除 mask。 |
@@ -91,8 +107,15 @@
 | `treatments/reduction.py` | 定义 `ReductionSpec`，按 weight-sum mean、batch mean 或 sum 归约逐样本 loss。 |
 | `treatments/selector_adapter.py` | 将现有 hard Selector 适配为 mask 加全一权重，保持旧配置和数值行为。 |
 | `treatments/weights.py` | 定义泛型 WeightProvider、通用 WeightResult 和不依赖具体输入字段的 adapter；BinaryRCNWeightInput 与对应 provider 实现二分类 asymmetric-RCN 的论文精确 importance-weight 公式，不负责 posterior 或噪声率估计。 |
+| `algorithms/mentornet.py` | MentorNet 的移动分位数、burn-in/dropout 和状态化连续权重 Provider；只消费 noisy Student loss 与冻结 MentorArtifact。 |
+| `models/mentornet.py` | 可复用 bi-LSTM curriculum model；不拥有 StudentNet 或训练循环。 |
+| `training/mentor_artifacts.py` | 冻结 Mentor 模型的结构、特征 schema、来源和哈希校验。 |
+| `training/mentor_learning.py` | 从隔离的 trusted curriculum feature 数据离线训练 MentorArtifact。 |
+| `data/curriculum.py` | trusted curriculum feature 数据合同，与目标 noisy Student run 隔离。 |
+| `cli/mentor_prepare.py` | 在 `data/mentornet/` 下确定性生成 trusted indices、noise manifest、Student-feedback features 与元数据。 |
 | `treatments/__init__.py` | 公开内部 sample-treatment、reducer、Selector adapter 和连续权重合同。 |
 | `evaluation/metrics.py` | NumPy 版 accuracy 和选样 precision/recall。 |
+| `evaluation/classification.py` | 单模型分类评测，以及通用命名模型组各成员与 mean-logit ensemble 的单遍评测。 |
 | `evaluation/__init__.py` | 公开当前示例指标。 |
 
 ## 7. CLI
@@ -101,6 +124,7 @@
 |---|---|
 | `cli/__init__.py` | 共享中文 `PromptSession`、实验模板发现、Loss 选择、clean/generated/external 标签模式和最终确认；不包含训练数学。 |
 | `cli/train.py` | 通用训练入口；无参数进入向导，有参数时保持 argparse/YAML 调用。 |
+| `cli/multi_train.py` | 独立的配置化多模型训练入口；供 JoCoR、Co-teaching、CNLCU 等共用，不修改单模型主入口。 |
 | `cli/clean_train.py` | Clean baseline 入口；交互选择模型、scheduler、恢复或多 seed。 |
 | `cli/make_noise.py` | 交互或参数化地从 `.npy` 标签生成 symmetric/pairflip Noise Manifest。 |
 | `cli/inspect_data.py` | 交互或参数化地验证 CIFAR-10/100 并输出划分摘要。 |
@@ -109,7 +133,8 @@
 
 | 文件 | 作用 |
 |---|---|
-| `training/experiment.py` | 唯一监督训练器；统一构造模型、Loss、batch Selector、ParameterUpdatePolicy、optimizer、scheduler、clean/noisy Dataset、可显式选择 clean/noisy validation、评测和产物。 |
+| `training/experiment.py` | 单模型监督训练器；统一构造模型、Loss、batch Selector、ParameterUpdatePolicy、optimizer、scheduler、clean/noisy Dataset、可显式选择 clean/noisy validation、评测和产物。 |
+| `training/multi_model_experiment.py` | 通用 CIFAR 多模型编排；组合模型组、插件化 multi-model Algorithm、共享 Selector、Noise Manifest、联合 optimizer、checkpoint/resume 和成员/ensemble 评测。 |
 | `training/progress.py` | 无第三方依赖的 batch 终端进度显示和逐 epoch `training_curves.svg` 生成器；不参与训练决策。 |
 | `training/clean_baseline.py` | clean-only 包装和多 seed 汇总；检测到 noise 配置立即拒绝。 |
 | `training/noisy_labels.py` | 生成或导入 manifest，规范化为 run-local v2，校验恢复身份，并分别记录 train/validation 的标签来源与实际噪声率。 |
@@ -128,6 +153,7 @@
 | `configs/algorithm/coteaching.yaml` | Co-teaching 示例参数。 |
 | `configs/algorithm/cdr.yaml` | 显式声明 paper-mode CDR 的噪声率、L1 系数、参数范围和 compatibility mode。 |
 | `configs/algorithm/dss.yaml` | DSS Objective 的论文参数片段：150 epochs、30 warm-up、MDA 0.99 与 CCS α=0.10。 |
+| `configs/algorithm/jocor.yaml` | JoCoR 联合目标和官方 floor small-loss 日程片段。 |
 | `configs/noise/symmetric.yaml` | symmetric noise 示例参数。 |
 | `configs/noise/instance_dependent.yaml` | 示例 IDN 参数。 |
 | `configs/experiment/cifar10_symmetric_ce_smoke.yaml` | symmetric 0.4 + CE 的统一 noisy runner smoke 配置。 |
@@ -140,6 +166,8 @@
 | `configs/experiment/loss_correction_cifar10_asymmetric04.yaml` | Loss Correction 论文设置的 CIFAR-10、官方 class-conditional asymmetric 0.4、Forward、单次 120 epoch 正式配置。 |
 | `configs/experiment/dss_cifar10_symmetric05_smoke.yaml` | DSS 两 epoch 小样本闭环配置，仅用于 pipeline/checkpoint 验证。 |
 | `configs/experiment/dss_cifar10_symmetric05_reproduction.yaml` | 单次 DSS CIFAR-10 symmetric-50% 正式配置：seed 4、PreActResNet-18、150 epochs。 |
+| `configs/experiment/jocor_cifar10_symmetric05_smoke.yaml` | JoCoR 两模型、共同选样、checkpoint 和 CUDA/CPU 闭环 smoke 配置。 |
+| `configs/experiment/jocor_cifar10_symmetric05_reproduction.yaml` | JoCoR CIFAR-10 symmetric-50% 单次正式配置：官方 CNN、Adam、λ=0.9、200 epochs 和末 10 epoch 双成员均值。 |
 | 实验 YAML 顶层 `selector` | 省略时为 `all`；当前支持 `all` 和固定 keep-rate `small_loss`。 |
 | 实验 YAML 顶层 `noise` | 省略时 clean；`name/rate/seed` 生成 symmetric、pairflip 或 class-conditional 噪声；symmetric 可选 fixed-global、per-class 或 transition 采样；也可用 `manifest` 导入外部映射。 |
 | 实验 YAML 的 `data.validation_split` / `data.normalization` | 通用配置 random/stratified split、RNG 实现以及三通道 mean/std；默认保持原有分层划分与 Toolbox 标准常数。 |
@@ -169,6 +197,7 @@
 | `tests/test_treatments.py` | ContributionResult、ReductionSpec、Selector adapter 和显式 loss 归约合同。 |
 | `tests/test_importance_reweighting.py` | Binary asymmetric-RCN 权重公式、通用 WeightProvider adapter、detach 和 batch-mean 梯度。 |
 | `tests/test_dss.py` | MDA、BASE、CCS、masked CE、batch-mean objective、状态恢复和插件构建。 |
+| `tests/test_jocor.py` | 双向 KL、联合分数、floor 稳定选样、共同更新、官方模型、插件、配置和双模型 checkpoint roundtrip。 |
 | `tests/test_split_noise_manifest.py` | classwise legacy split、per-split RNG 重启和 manifest roundtrip。 |
 
 ## 11. 调研脚本与文档
@@ -199,10 +228,21 @@
 | `data/binary_benchmarks.py` | UCI/NPZ 二分类数据、稳定 index、分层划分、噪声 manifest 和 CIFAR 二分类视图。 |
 | `training/binary_experiment.py` | 通用二分类 Dataset、训练、评测和单次实验入口。 |
 | `cli/binary_train.py` | 二分类实验的 YAML/argparse 入口。 |
-| `estimators/cwd.py` | CWD class-wise virtual auxiliary statistics 和 centroid artifact。 |
-| `algorithms/cwd.py` | 只消费 CWD statistic artifact 的风险组件。 |
-| `algorithms/fine.py` | FINE active forgetting、complementary negative learning 和 RNG 状态。 |
-| `selectors/sed.py` | 独立的 SED selection，不把 selection 逻辑写入 FINE regularizer。 |
+| `estimators/cwd.py` | 按 CWD Eq. 19、21--30 恢复 binary/multiclass class-wise virtual auxiliary prior、系数矩阵、伪逆和 centroid artifact。 |
+| `algorithms/cwd.py` | 只消费 feature/statistic artifact 的 CWD squared global objective；不绑定 runner。 |
+| `training/cwd_experiment.py` | CWD CIFAR airplane/automobile 单 fold 生命周期：五折切片、噪声、逐 epoch feature/statistic artifact、Adam、checkpoint/resume。 |
+| `cli/cwd_train.py` | CWD 独立 YAML 训练入口。 |
+| `models/fine_cnn.py` | 可复用的七卷积 CIFAR StudentNet，公开 logits/features，不包含 FINE 生命周期。 |
+| `algorithms/fine.py` | FINE suppression/active-forgetting 两项损失，仅消费 rejected 且伪标签改变的样本。 |
+| `selectors/sed.py` | 独立 SED selector，以及可恢复的 SCS 选择和 SCR 连续权重。 |
+| `training/model_ema.py` | 通用 EMA 模型及 checkpoint 状态。 |
+| `data/multi_view.py` | 稳定 sample index 的 weak/strong CIFAR 多视图数据包装与强增强。 |
+| `training/fine_experiment.py` | 独立 warm-up → EMA/SCS/SCR → strong-view robust training 生命周期。 |
+| `cli/fine_train.py` | FINE 独立 YAML 训练入口。 |
+| `tests/test_cwd.py`、`tests/test_cwd_training.py` | CWD 公式、失败边界、artifact/pipeline 和独立训练闭环。 |
+| `tests/test_fine.py`、`tests/test_fine_training.py` | FINE loss/mask、SCS/SCR、EMA、多视图、七卷积模型和两阶段闭环。 |
+| `configs/experiment/cwd_cifar10_{smoke,reproduction}.yaml` | CWD smoke 与单次 200-epoch、五折中 fold 0 的论文配置。 |
+| `configs/experiment/fine_cifar100n_{smoke,reproduction}.yaml` | FINE smoke 与单次 300-epoch、200-epoch warm-up 配置。 |
 | `training/experiment.py` | 仅接入参数记录、ResNet 深度构造和通用 regularizer，不含论文名称分支。 |
 | `training/pipeline.py` | regularizer、warm-up、artifact 和组件状态生命周期编排。 |
 | `training/checkpoint.py` | 参数抽样记录及算法/组件可恢复状态。 |
