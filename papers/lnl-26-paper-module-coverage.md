@@ -139,7 +139,7 @@
 | 04 | JoCoR | joint loss 中的逐样本 score | Algorithm / Selector primitive | 通用 Loss、Selector | 未实现 | 否 | 否 | 双网络、co-regularization、联合更新 |
 | 05 | DSS | class/instance debias evidence | Reliability / LabelRefiner | 通用合同 | 未实现 | 否 | 否 | MDA、CCS 历史与趋势检验 |
 | 06 | CDR | critical parameter update | ParameterUpdatePolicy | `src/lnl_toolbox/algorithms/cdr.py` | 精确子组件 | 是 | 否 | 完整 early-learning lifecycle |
-| 07 | CNLCU | loss confidence bounds | Algorithm / stateful selection | `src/lnl_toolbox/algorithms/cnlcu/`、`src/lnl_toolbox/training/cnlcu_experiment.py` | 完整实现（CNLCU-S） | 是 | 否 | CNLCU-H、正式论文配置与多 seed 数值复现 |
+| 07 | CNLCU | loss confidence bounds | Algorithm / stateful selection | `src/lnl_toolbox/algorithms/cnlcu/`、`src/lnl_toolbox/training/cnlcu_experiment.py` | 完整实现（CNLCU-S/H workflow） | 是 | 否 | 正式论文配置、长训练与多 seed 数值复现 |
 | 08 | MentorNet | learned sample weights | WeightProvider | 泛型合同 | 接口已存在但无实现 | 否 | 否 | Mentor model 与 student lifecycle |
 | 09 | Co-teaching | peer small-loss exchange | Algorithm | `src/lnl_toolbox/algorithms/coteaching/`、`src/lnl_toolbox/training/coteaching_experiment.py` | 完整实现 | 是 | 是 | 论文专属 CNN、正式 200-epoch/multi-seed 数值复现 |
 | 10 | Loss Correction | Anchor estimate、Forward/Backward corrected risk | TransitionEstimator / RiskCorrector | `src/lnl_toolbox/noise/estimators.py`、`src/lnl_toolbox/algorithms/transition_risk.py` | 精确子组件 | 是 | 否 | 论文 preset、acceptance experiment |
@@ -366,11 +366,11 @@ early-learning 的训练/停止生命周期和论文实验配方。
 - **关键输入/输出**：indexed loss history；输出 uncertainty-adjusted selection evidence。
 - **可模块化部分**：soft influence、robust mean 和 uncertainty-adjusted score；它们当前保持 CNLCU 私有，避免伪装成通用无状态 ReliabilityEstimator。
 - **必须 Algorithm 化的部分**：历史采集、选择/试用反馈和论文网络协作。
-- **当前实现/状态**：`method: cnlcu` 已完成 CNLCU-S 的 peer-specific fixed-window history（epoch 窗口内 loss 与 selected count 同步重置，首次 score 使用一次显式伪计数）、Eq. (2)/(3)/(7) soft score、stable-index floor selection、双模型交叉更新、noisy-validation best selection 和 checkpoint/resume；**CNLCU-S 完整方法闭环，论文整体尚未完整实现**。
+- **当前实现/状态**：`method: cnlcu` 已完成 peer-specific fixed-window history（epoch 窗口内 loss 与 selected count 同步重置，首次 score 使用一次显式伪计数）、CNLCU-S Eq. (2)/(3)/(7)，以及 CNLCU-H Eq. (4)/(8) 与 corrected released-code-inspired LOF；两者共享 stable-index floor selection、双模型交叉更新、noisy-validation best selection 和 checkpoint/resume。**CNLCU-S 是完整方法闭环；CNLCU-H 是 faithful engineering workflow，不是 paper-exact 或官方 bug-compatible 复刻；论文正式数值复现尚未完成**。
 - **代码与测试位置**：`src/lnl_toolbox/algorithms/cnlcu/`、`src/lnl_toolbox/training/cnlcu_experiment.py`、`tests/test_cnlcu_estimators.py`、`tests/test_cnlcu_algorithm.py`、`tests/test_cnlcu_workflow.py`。
-- **当前缺失**：CNLCU-H、正式论文训练 preset、长训练和 multi-seed 数值验收。
-- **可以声明**：已实现可通过 YAML/CLI 运行的 CNLCU-S 双模型 uncertainty-aware peer-selection workflow。
-- **禁止声明**：不得把通用 SmallLossSelector 称为 CNLCU；不得把 CNLCU-S smoke 称为整篇论文或正式数值复现。
+- **当前缺失**：正式论文训练 preset、长训练和 multi-seed 数值验收。
+- **可以声明**：已实现可通过 YAML/CLI 运行的 CNLCU-S，以及使用论文公式和 corrected released-code-inspired LOF 的 CNLCU-H faithful engineering workflow。
+- **禁止声明**：不得把通用 SmallLossSelector 称为 CNLCU；不得把 smoke 称为整篇论文或正式数值复现；不得把 corrected-LOF CNLCU-H 称为 paper-exact。
 
 ### P08 — MentorNet
 

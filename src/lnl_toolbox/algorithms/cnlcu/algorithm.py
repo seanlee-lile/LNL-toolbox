@@ -12,9 +12,9 @@ from lnl_toolbox.core import Batch, ExperimentContext, RunState, StepResult
 from lnl_toolbox.losses.torch_losses import validate_per_sample_loss
 
 from .config import CNLCUConfig
-from .estimators import soft_robust_mean
+from .estimators import HardRobustLossEstimator, soft_robust_mean
 from .history import PeerLossHistory
-from .scoring import cnlcu_soft_score
+from .scoring import cnlcu_hard_score, cnlcu_soft_score
 from .state import CNLCUState
 
 
@@ -79,6 +79,16 @@ class CNLCUAlgorithm:
         self.optimizer_a, self.optimizer_b = optimizer_a, optimizer_b
         self.scheduler_a, self.scheduler_b = scheduler_a, scheduler_b
         self.loss, self.device, self.method_config = loss, device, method_config
+        self.hard_estimator = None
+        if method_config.variant == "hard":
+            assert method_config.n_neighbors is not None
+            assert method_config.contamination is not None
+            assert method_config.minimum_observations is not None
+            self.hard_estimator = HardRobustLossEstimator(
+                n_neighbors=method_config.n_neighbors,
+                contamination=method_config.contamination,
+                minimum_observations=method_config.minimum_observations,
+            )
         self.private_state = CNLCUState(
             PeerLossHistory(canonical_global_indices, method_config.window_size, "a"),
             PeerLossHistory(canonical_global_indices, method_config.window_size, "b"),
@@ -99,16 +109,58 @@ class CNLCUAlgorithm:
 
     def _score(self, history: PeerLossHistory, rows: Tensor) -> tuple[Tensor, dict[str, Tensor]]:
         values, observed, selected_count = history.lookup_rows(rows)
-        robust_mean, lengths = soft_robust_mean(values, observed)
         # The stored value is the number of completed selections in the active
         # epoch window.  The one-count pseudocount makes the first selection
         # attempt well-defined without pretending it is a completed selection.
         effective_count = selected_count + 1
-        score, bonus = cnlcu_soft_score(
-            robust_mean, lengths, effective_count, self.method_config.sigma_squared
+        if self.method_config.variant == "soft":
+            robust_mean, lengths = soft_robust_mean(values, observed)
+            assert self.method_config.sigma_squared is not None
+            score, bonus = cnlcu_soft_score(
+                robust_mean,
+                lengths,
+                effective_count,
+                self.method_config.sigma_squared,
+            )
+            return score, {
+                "robust_mean": robust_mean,
+                "history_length": lengths,
+                "effective_selected_count": effective_count,
+                "confidence_bonus": bonus,
+            }
+
+        assert self.hard_estimator is not None
+        assert self.method_config.loss_upper_bound is not None
+        observed_losses = values[observed]
+        exceeds = observed_losses > self.method_config.loss_upper_bound
+        if bool(exceeds.any()):
+            raise ValueError(
+                "CNLCU-H observed loss exceeded fixed loss_upper_bound: "
+                f"count={int(exceeds.sum())}, max={float(observed_losses.max())}"
+            )
+        estimate = self.hard_estimator.estimate(values, observed)
+        assert self.method_config.tau_min is not None
+        score, bonus = cnlcu_hard_score(
+            estimate.robust_mean,
+            estimate.observation_count,
+            estimate.outlier_count,
+            estimate.retained_count,
+            effective_count,
+            self.method_config.tau_min,
+            self.method_config.loss_upper_bound,
         )
-        return score, {"robust_mean": robust_mean, "history_length": lengths,
-                       "effective_selected_count": effective_count, "confidence_bonus": bonus}
+        return score, {
+            "robust_mean": estimate.robust_mean,
+            "history_length": estimate.observation_count,
+            "effective_selected_count": effective_count,
+            "confidence_bonus": bonus,
+            "outlier_count": estimate.outlier_count,
+            "retained_count": estimate.retained_count,
+            "outlier_ratio": (
+                estimate.outlier_count.to(torch.float64)
+                / estimate.observation_count.to(torch.float64)
+            ),
+        }
 
     def step(self, batch: Batch, state: RunState) -> StepResult:
         payload = batch.payload
@@ -159,6 +211,19 @@ class CNLCUAlgorithm:
             "samples": float(count), "optimizer_steps_a": float(self.private_state.optimizer_steps_a),
             "optimizer_steps_b": float(self.private_state.optimizer_steps_b),
         }
+        if self.method_config.variant == "hard":
+            metrics.update({
+                "outlier_count_a": detail_a["outlier_count"].float().mean().item(),
+                "outlier_count_b": detail_b["outlier_count"].float().mean().item(),
+                "retained_count_a": detail_a["retained_count"].float().mean().item(),
+                "retained_count_b": detail_b["retained_count"].float().mean().item(),
+                "outlier_ratio_a": detail_a["outlier_ratio"].mean().item(),
+                "outlier_ratio_b": detail_b["outlier_ratio"].mean().item(),
+                "hard_robust_mean_a": detail_a["robust_mean"].mean().item(),
+                "hard_robust_mean_b": detail_b["robust_mean"].mean().item(),
+                "hard_confidence_bonus_a": detail_a["confidence_bonus"].mean().item(),
+                "hard_confidence_bonus_b": detail_b["confidence_bonus"].mean().item(),
+            })
         return StepResult(metrics=metrics, metadata={
             "selected_by_a_indices": indices[selected_a].detach().cpu(),
             "selected_by_b_indices": indices[selected_b].detach().cpu(),
@@ -174,13 +239,12 @@ class CNLCUAlgorithm:
 
     def state_dict(self) -> dict[str, Any]:
         schedule = self.method_config.remember_schedule
-        return {"model": {"a": self.model_a.state_dict(), "b": self.model_b.state_dict()},
+        result = {"model": {"a": self.model_a.state_dict(), "b": self.model_b.state_dict()},
                 "optimizer": {"a": self.optimizer_a.state_dict(), "b": self.optimizer_b.state_dict()},
                 "schedulers": {"a": None if self.scheduler_a is None else self.scheduler_a.state_dict(),
                                "b": None if self.scheduler_b is None else self.scheduler_b.state_dict()},
                 "cnlcu_state": self.private_state.state_dict(), "method_identity": "cnlcu",
                 "peer_identity": ("a", "b"), "variant": self.method_config.variant,
-                "sigma_squared": self.method_config.sigma_squared,
                 "window_size": self.method_config.window_size,
                 "selected_count_scope": "fixed_window",
                 "noise_rate": self.method_config.noise_rate,
@@ -190,6 +254,24 @@ class CNLCUAlgorithm:
                     "end": schedule.end,
                     "gradual_epochs": schedule.warmup_epochs,
                 }}
+        if self.method_config.variant == "soft":
+            result["sigma_squared"] = self.method_config.sigma_squared
+        else:
+            result["hard_identity"] = {
+                "hard_fidelity": self.method_config.hard_fidelity,
+                "tau_min": self.method_config.tau_min,
+                "loss_upper_bound": {
+                    "mode": self.method_config.loss_upper_bound_mode,
+                    "value": self.method_config.loss_upper_bound,
+                },
+                "truncation": {
+                    "method": self.method_config.truncation_method,
+                    "n_neighbors": self.method_config.n_neighbors,
+                    "contamination": self.method_config.contamination,
+                    "minimum_observations": self.method_config.minimum_observations,
+                },
+            }
+        return result
 
     def load_state_dict(self, state: dict[str, Any]) -> None:
         models = _peer_mapping(state.get("model"), "model state")
@@ -208,11 +290,30 @@ class CNLCUAlgorithm:
             state.get("variant") != self.method_config.variant
             or int(state.get("window_size", -1)) != self.method_config.window_size
             or state.get("selected_count_scope") != "fixed_window"
-            or float(state.get("sigma_squared", -1)) != self.method_config.sigma_squared
             or float(state.get("noise_rate", -1)) != self.method_config.noise_rate
             or state.get("remember_schedule") != expected_schedule
         ):
             raise ValueError("CNLCU checkpoint method configuration changed")
+        if self.method_config.variant == "soft":
+            if float(state.get("sigma_squared", -1)) != self.method_config.sigma_squared:
+                raise ValueError("CNLCU checkpoint method configuration changed")
+        else:
+            expected_hard_identity = {
+                "hard_fidelity": self.method_config.hard_fidelity,
+                "tau_min": self.method_config.tau_min,
+                "loss_upper_bound": {
+                    "mode": self.method_config.loss_upper_bound_mode,
+                    "value": self.method_config.loss_upper_bound,
+                },
+                "truncation": {
+                    "method": self.method_config.truncation_method,
+                    "n_neighbors": self.method_config.n_neighbors,
+                    "contamination": self.method_config.contamination,
+                    "minimum_observations": self.method_config.minimum_observations,
+                },
+            }
+            if state.get("hard_identity") != expected_hard_identity:
+                raise ValueError("CNLCU-H checkpoint configuration changed")
         self.model_a.load_state_dict(models["a"]); self.model_b.load_state_dict(models["b"])
         self.optimizer_a.load_state_dict(optimizers["a"]); self.optimizer_b.load_state_dict(optimizers["b"])
         for optimizer in (self.optimizer_a, self.optimizer_b):

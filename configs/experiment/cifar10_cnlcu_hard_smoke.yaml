@@ -1,0 +1,67 @@
+method: cnlcu
+seed: 7
+output_root: artifacts/runs
+data:
+  name: cifar10
+  root: data/cifar10
+  validation_size: 100
+  max_train_samples: 200
+  max_validation_samples: 100
+  max_test_samples: 100
+  preprocessing: standard
+  augment: false
+noise:
+  name: symmetric
+  rate: 0.4
+  seed: 17
+  validation_targets: noisy
+loss:
+  name: ce
+model:
+  name: tiny_cnn
+  width: 16
+optimizer:
+  name: adam
+  lr: 0.001
+  weight_decay: 0.0
+scheduler:
+  name: none
+cnlcu:
+  variant: hard
+  hard_fidelity: paper_formula_corrected_lof
+  model_count: 2
+  noise_rate: 0.4
+  initialization:
+    peer_seed_offset: 1
+  remember_schedule:
+    name: linear
+    start: 1.0
+    end: 0.6
+    gradual_epochs: 2
+  history:
+    window_size: 3
+    storage_dtype: float32
+  uncertainty:
+    tau_min: 0.0001
+    loss_upper_bound:
+      mode: fixed
+      value: 10.0
+  truncation:
+    method: lof
+    n_neighbors: 2
+    contamination: 0.1
+    minimum_observations: 3
+  selection:
+    count_rule: floor
+    tie_break: stable_sample_index
+loader:
+  batch_size: 50
+  num_workers: 0
+  pin_memory: false
+evaluation:
+  selection_split: validation
+  primary: mean_peer_accuracy
+  ensemble: mean_probabilities
+trainer:
+  epochs: 3
+  device: cpu

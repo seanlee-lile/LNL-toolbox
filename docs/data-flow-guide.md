@@ -56,7 +56,7 @@ checkpoint v2 中以固定键 `a`/`b` 保存完整双 peer 状态。验证集的
 `mean_peer_accuracy` 选择 best checkpoint；mean-probability ensemble 仅为工具箱辅助指标。
 第一阶段仅承诺 epoch-boundary resume，不声称包含论文专属 CNN、200 epoch 配方或正式数值复现。
 
-### 1.2 CNLCU-S 状态双模型路径
+### 1.2 CNLCU-S/H 状态双模型路径
 
 `method: cnlcu` lazy-dispatch 到专属 runner。每个 noisy batch 同时进入 A/B；每个 peer
 先把当前 detached per-sample CE 写入自己的 fixed-window history，再按论文 soft 影响函数、
@@ -66,7 +66,10 @@ selected count 在完成本轮选择后递增，并与 loss history 一起按 ep
 history、A/B model/optimizer/scheduler、窗口 cursor、
 mapping hash 和 peer identity 全部进入 checkpoint v2，支持严格 epoch-boundary resume。
 clean-label corruption mask 只在 runner 中生成 selection precision 诊断，不进入 Algorithm。
-当前只实现 CNLCU-S；不包含 CNLCU-H 或正式论文数值复现。
+`variant: soft` 使用论文 Eq. (2)/(3)/(7)；`variant: hard` 使用 Eq. (4)/(8)，并以
+`paper_formula_corrected_lof` 明确记录 corrected released-code-inspired LOF：`-1` 删除、
+`+1` 保留，短 history 全保留，且不使用官方代码额外的 ReLU。CNLCU-H 是 faithful
+engineering workflow，不声明 paper-exact；当前仍不包含正式论文数值复现。
 
 | 模块 | 拥有什么 | 不得负责什么 |
 |---|---|---|

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""CIFAR assembly and epoch-boundary lifecycle for CNLCU-S."""
+"""CIFAR assembly and epoch-boundary lifecycle for CNLCU-S/H."""
 
 from copy import deepcopy
 from datetime import datetime
@@ -53,12 +53,12 @@ def _validate_resume_config(current: Mapping[str, Any], saved: Mapping[str, Any]
 
 def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None = None,
                          resume: str | Path | None = None) -> Path:
-    """Run the complete CNLCU-S method with strict epoch-boundary resume."""
+    """Run a configured CNLCU variant with strict epoch-boundary resume."""
 
     config = deepcopy(config)
     method_config = CNLCUConfig.from_mapping(config)
     if dict(config.get("loss", {"name": "ce"})) != {"name": "ce"}:
-        raise ValueError("CNLCU-S requires per-sample CE loss")
+        raise ValueError("CNLCU requires per-sample CE loss")
     seed, epochs = int(config.get("seed", 1)), int(config["trainer"]["epochs"])
     if epochs <= 0:
         raise ValueError("trainer.epochs must be positive")
@@ -83,7 +83,7 @@ def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None =
     data_config = config["data"]
     dataset_name = str(data_config.get("name", "cifar10")).lower()
     if dataset_name not in {"cifar10", "cifar100"}:
-        raise ValueError("CNLCU-S first version supports CIFAR-10 and CIFAR-100")
+        raise ValueError("CNLCU supports CIFAR-10 and CIFAR-100")
     loader_fn = load_cifar10 if dataset_name == "cifar10" else load_cifar100
     num_classes = 10 if dataset_name == "cifar10" else 100
     train_data, test_data = loader_fn(data_config.get("root"), "train"), loader_fn(data_config.get("root"), "test")
@@ -172,10 +172,18 @@ def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None =
                 count = result.metrics["samples"]; samples += count
                 selected_a_total += result.metrics["selected_by_a_count"]
                 selected_b_total += result.metrics["selected_by_b_count"]
-                for key in ("current_loss_a", "current_loss_b", "robust_mean_a", "robust_mean_b",
+                aggregate_keys = ["current_loss_a", "current_loss_b", "robust_mean_a", "robust_mean_b",
                             "confidence_bonus_a", "confidence_bonus_b", "uncertainty_score_a", "uncertainty_score_b",
                             "history_length_a", "history_length_b", "effective_selected_count_a", "effective_selected_count_b",
-                            "selection_overlap_rate", "prediction_agreement_rate", "accuracy_a", "accuracy_b", "accuracy_ensemble"):
+                            "selection_overlap_rate", "prediction_agreement_rate", "accuracy_a", "accuracy_b", "accuracy_ensemble"]
+                if method_config.variant == "hard":
+                    aggregate_keys.extend([
+                        "outlier_count_a", "outlier_count_b", "retained_count_a",
+                        "retained_count_b", "outlier_ratio_a", "outlier_ratio_b",
+                        "hard_robust_mean_a", "hard_robust_mean_b",
+                        "hard_confidence_bonus_a", "hard_confidence_bonus_b",
+                    ])
+                for key in aggregate_keys:
                     sums[key] = sums.get(key, 0.0) + result.metrics[key] * count
                 sums["loss_a_on_selected_by_b"] = sums.get("loss_a_on_selected_by_b", 0.0) + result.metrics["loss_a_on_selected_by_b"] * result.metrics["selected_by_b_count"]
                 sums["loss_b_on_selected_by_a"] = sums.get("loss_b_on_selected_by_a", 0.0) + result.metrics["loss_b_on_selected_by_a"] * result.metrics["selected_by_a_count"]
