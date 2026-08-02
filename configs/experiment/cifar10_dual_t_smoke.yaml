@@ -53,3 +53,4 @@ final_stage:
     weight_decay: 0.0005
   scheduler:
     name: none
+execution: {runner: dual_t}

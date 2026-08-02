@@ -27,3 +27,4 @@ pipeline:
 trainer: {epochs: 2}
 loader: {batch_size: 128, num_workers: 0, drop_last: true}
 evaluation: {selection_split: test, allow_test_selection: true}
+execution: {runner: supervised}

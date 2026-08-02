@@ -24,3 +24,4 @@ optimizer:
 trainer:
   epochs: 2
   device: auto
+execution: {runner: supervised}

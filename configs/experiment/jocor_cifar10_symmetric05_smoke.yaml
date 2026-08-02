@@ -63,3 +63,4 @@ trainer:
 evaluation:
   selection_split: validation
   report_last_epochs: 0
+execution: {runner: multi_model}

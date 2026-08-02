@@ -48,3 +48,4 @@ evaluation:
 trainer:
   epochs: 2
   device: cpu
+execution: {runner: coteaching}

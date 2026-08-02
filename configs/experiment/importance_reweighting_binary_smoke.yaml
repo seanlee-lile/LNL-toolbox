@@ -51,3 +51,4 @@ evaluation:
   selection_split: validation
 
 output_root: artifacts/runs
+execution: {runner: importance_reweighting}

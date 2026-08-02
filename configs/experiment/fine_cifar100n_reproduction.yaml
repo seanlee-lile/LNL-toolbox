@@ -56,3 +56,4 @@ parameter_record:
   selected_group: cifar100_symmetric_02
   source: official_sed_fine_command
   repeated_runs: 1
+execution: {runner: fine}

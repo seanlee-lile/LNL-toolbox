@@ -64,3 +64,4 @@ final_stage:
     name: multistep
     milestones: [50]
     gamma: 0.1
+execution: {runner: dual_t}

@@ -38,6 +38,7 @@ from lnl_toolbox.models.cifar_resnet import (
     cifar_resnet18,
     cifar_resnet34,
     cifar_resnet50,
+    cifar_resnet101,
     preact_resnet18,
 )
 from lnl_toolbox.models.cifar_cnn import CifarCnn8
@@ -61,7 +62,6 @@ from lnl_toolbox.training.progress import (
     TerminalTrainingProgress,
     write_training_curves_svg,
 )
-from lnl_toolbox.training.workflows import resolve_workflow
 
 
 def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
@@ -70,12 +70,23 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
         return TinyCNN(num_classes, int(config.get("width", 64)))
     if name == "cifar_cnn8":
         return CifarCnn8(num_classes)
+    if name == "resnet14":
+        return cifar_resnet14(num_classes, int(config.get("base_width", 16)))
+    if name == "resnet32":
+        return cifar_resnet32(num_classes, int(config.get("base_width", 16)))
     if name == "resnet18":
         return cifar_resnet18(num_classes, int(config.get("base_width", 64)))
     if name == "resnet34":
         return cifar_resnet34(num_classes, int(config.get("base_width", 64)))
     if name == "resnet50":
         return cifar_resnet50(
+            num_classes,
+            int(config.get("base_width", 64)),
+            stem_padding=int(config.get("stem_padding", 1)),
+            initialization=str(config.get("initialization", "kaiming")),
+        )
+    if name == "resnet101":
+        return cifar_resnet101(
             num_classes,
             int(config.get("base_width", 64)),
             stem_padding=int(config.get("stem_padding", 1)),
@@ -898,7 +909,6 @@ def run_experiment(
 ) -> Path:
     """Compatibility entry point for the general training CLI."""
 
-    workflow = resolve_workflow(config)
-    if workflow is not None:
-        return workflow(config, output_dir, resume)
-    return run_supervised_experiment(config, output_dir, resume)
+    from lnl_toolbox.training.runners import resolve_runner
+
+    return resolve_runner(config).invoke(dict(config), output_dir, resume)

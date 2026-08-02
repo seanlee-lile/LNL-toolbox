@@ -57,3 +57,4 @@ evidence:
   include_noisy_ce: true
   final_seed: 29
   sampler_seed: 1031
+execution: {runner: dual_t}

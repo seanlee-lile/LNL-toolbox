@@ -5,14 +5,13 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from lnl_toolbox.cli import (
     PromptCancelled,
     PromptSession,
     command_arguments,
     prompt_training_selection,
 )
+from lnl_toolbox.catalog import find_project_root, load_yaml, resolve_config_paths
 from lnl_toolbox.training.clean_baseline import run_clean_experiment, run_seed_suite
 
 
@@ -27,10 +26,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _load_config(path: Path) -> dict[str, Any]:
-    config = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if not isinstance(config, dict):
-        raise ValueError(f"Configuration must contain a YAML mapping: {path}")
-    return config
+    resolved = path.expanduser().resolve()
+    return resolve_config_paths(load_yaml(resolved), find_project_root(resolved))
 
 
 def _run_arguments(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:

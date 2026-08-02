@@ -50,3 +50,4 @@ evaluation:
   selection_split: test
   allow_test_selection: true
   loss: {name: ce}
+execution: {runner: supervised}

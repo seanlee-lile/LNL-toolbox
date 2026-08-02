@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from importlib import import_module
+from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
 
@@ -56,7 +57,13 @@ class WorkflowRegistry:
             replacement = self._renamed[key]
             raise ValueError(f"method {key!r} was renamed to {replacement!r}")
         spec = self._specs.get(key)
-        return None if spec is None else spec.load()
+        if spec is None:
+            suggestion = get_close_matches(key, self.names(), n=1)
+            hint = f"; did you mean {suggestion[0]!r}?" if suggestion else ""
+            raise ValueError(
+                f"unknown method {key!r}{hint}; valid methods: " + ", ".join(self.names())
+            )
+        return spec.load()
 
     def names(self) -> tuple[str, ...]:
         return tuple(sorted(self._specs))

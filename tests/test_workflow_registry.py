@@ -29,8 +29,9 @@ class WorkflowRegistryTest(unittest.TestCase):
         self.assertEqual(method_name({"method": " Dual_T "}), "dual_t")
         self.assertEqual(method_name({"method": {"name": "PCSE"}}), "pcse")
 
-    def test_unknown_method_falls_back_and_renamed_method_fails(self) -> None:
-        self.assertIsNone(resolve_workflow({"method": "not_registered"}))
+    def test_unknown_and_renamed_methods_fail_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unknown method"):
+            resolve_workflow({"method": "not_registered"})
         with self.assertRaisesRegex(ValueError, "dual_t_forward.*dual_t"):
             resolve_workflow({"method": "dual_t_forward"})
 

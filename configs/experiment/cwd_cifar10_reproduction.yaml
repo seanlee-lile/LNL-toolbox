@@ -45,3 +45,4 @@ parameter_record:
   selected_group: cifar_binary_symmetric_02
   source: paper_cifar_binary_protocol
   repeated_runs: 1
+execution: {runner: cwd}

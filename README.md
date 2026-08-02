@@ -1,129 +1,215 @@
 # LNL Toolbox
 
-一个面向研究实验的通用、可扩展运行框架，LNL 是首个插件集合，而不是核心层的硬编码前提。
+LNL Toolbox 是一个面向 Learning with Noisy Labels（噪声标签学习）实验的可复现工具箱。使用者可以通过统一的 `lnl` 命令检查环境、浏览实验、预检配置、运行训练、恢复 checkpoint，以及查看知名论文在 toolbox 中的具体实现。
 
-## 从这里开始
+## 1. 安装
 
-- [使用说明](docs/usage-guide.md)
-- [开发指南](docs/development-guide.md)
-- [逐文件职责](docs/file-map.md)
-- [项目管理指南](docs/project-management-guide.md)
-- [LNL 长期架构与实验路线](toolbox-architecture.md)
+要求 Python 3.10 或更高版本。推荐在已有 PyTorch 环境中以 editable 模式安装：
 
-## 通用核心
-
-`src/lnl_toolbox/core/` 只固定最小协议：
-
-- `Batch`：不透明 payload，可承载图像、文本、图、数组或任务自定义对象；
-- `ExperimentContext`：配置、工作目录、随机种子和外部服务；
-- `Algorithm`：run/cycle/step 生命周期，不规定 cycle 必须是 epoch；
-- `RunState`：框架级进度和指标，算法私有状态仍由算法自己保存；
-- `StepResult`：统一封装输出、指标、artifact 和元数据；
-- `Evaluator`：消费结果，不预设 accuracy、F1 或噪声识别指标；
-- `ArtifactSink / CheckpointStore`：把本地文件、对象存储或实验平台隔离为 adapter；
-- `PluginCatalog`：按 kind/name 注册并按 capability 发现组件。
-
-核心不依赖 PyTorch，也不假设分类标签、噪声率、单网络或双网络。
-
-## 可选内置插件
-
-`src/lnl_toolbox/plugins/builtin/` 注册少量参考插件，用来验证扩展点：
-
-- symmetric、pairflip、instance-dependent 噪声示例；
-- 可训练的逐样本 CE、GCE、NCE、MAE、RCE 和 APL；
-- Co-teaching 的交叉选样函数。
-
-这些实现不是运行框架的必选依赖。旧导入路径暂时保留，方便前期实验代码迁移。
-
-## Sample Selection and Reweighting
-
-当前 sample-treatment 基础设施包括 `AllSelector`、`SmallLossSelector`、constant/linear keep-rate schedule、`ContributionResult`、`ReductionSpec`，以及将旧 Selector hard mask 转为 contribution 的 adapter。连续加权侧提供泛型 `WeightProvider[InputT]`、通用 `WeightResult` 和 `WeightContributionAdapter`。
-
-统一内部数据流为：
-
-```text
-per-sample loss
-+ hard mask / continuous sample weights
-→ ContributionResult
-→ explicit reduction
-→ scalar objective
+```powershell
+conda activate pytorch
+python -m pip install -e ".[train]"
 ```
 
-`BinaryRCNImportanceWeightProvider` 实现二分类 asymmetric random classification noise 下的论文精确权重计算组件：
+安装完成后确认统一入口可用：
 
-```text
-noisy-label posterior + observed binary labels + known asymmetric noise rates
-→ detached importance weights
-→ all-True contribution mask
-→ batch-mean weighted loss
+```powershell
+lnl --help
 ```
 
-最小内部调用示例：
+原有的 `lnl-train`、`lnl-clean-train`、`lnl-inspect-data` 和 `lnl-make-noise` 命令仍然保留。
 
-```python
-from lnl_toolbox.treatments import (
-    BinaryRCNImportanceWeightProvider,
-    BinaryRCNWeightInput,
-    ReductionSpec,
-    WeightContributionAdapter,
-    reduce_per_sample_loss,
-)
+## 2. 第一次运行：按这五步操作
 
-provider = BinaryRCNImportanceWeightProvider(
-    rho_positive=0.2,
-    rho_negative=0.1,
-)
+### 第一步：检查环境
 
-contribution = WeightContributionAdapter(provider).resolve(
-    BinaryRCNWeightInput(
-        posterior_probabilities=noisy_posterior,
-        observed_targets=observed_targets,
-    )
-)
-
-objective = reduce_per_sample_loss(
-    per_sample_loss,
-    contribution,
-    ReductionSpec("batch_mean"),
-)
+```powershell
+lnl doctor
 ```
 
-其中 `noisy_posterior` 的形状为 `[B, 2]`，表示 `P(noisy_Y | X)`；`per_sample_loss` 必须保留 autograd graph，而 provider 输出的 sample weights 已 detach。该组件不支持多分类，不负责 posterior estimation 或 noise-rate estimation，且尚未接入 YAML、plugin 或默认监督训练构造流程。它不是完整的 Importance Reweighting Pipeline。Co-teaching、JoCoR、DivideMix 等复杂论文方法仍应由独立 Algorithm/Pipeline 实现。
+意义：确认 Python、PyTorch、CUDA、配置目录和输出位置是否可用。`FAIL` 项会给出修复方向；CUDA 不可用时仍可使用 CPU。
 
-## 快速验证
+### 第二步：浏览可运行实验
+
+```powershell
+lnl list experiments --profile smoke
+```
+
+意义：查看适合快速验证的实验。输出中的重要字段：
+
+- `RECIPE`：可以直接运行的配置名称；
+- `PROFILE`：`smoke` 用于快速验证，`reproduction` 用于论文规模实验；
+- `METHOD`：实验实现的方法或主要组件；
+- `RUNNER`：toolbox 实际采用的训练生命周期；
+- `EPOCHS`：配置的训练轮数。
+
+第一次建议选择 `cifar10-symmetric-ce-smoke`。
+
+### 第三步：检查配置
+
+```powershell
+lnl validate --recipe cifar10-symmetric-ce-smoke
+```
+
+意义：训练前检查 YAML、执行器、模型、loss、优化器和路径。检查不会开始训练，也不会下载数据。
+
+若还要确认本地数据目录存在：
+
+```powershell
+lnl validate --recipe cifar10-symmetric-ce-smoke --check-data
+```
+
+### 第四步：预览实际运行内容
+
+```powershell
+lnl run --recipe cifar10-symmetric-ce-smoke --dry-run
+```
+
+意义：显示最终数据路径、噪声来源、模型、训练轮数、设备、最佳模型选择依据和输出目录。`--dry-run` 不创建训练产物。
+
+请重点确认：
+
+- `标签来源` 是否为预期噪声；
+- `最佳模型依据` 是否使用 validation，而不是 test；
+- `执行器` 是否与方法一致；
+- `输出根目录` 是否正确。
+
+### 第五步：开始训练
+
+```powershell
+lnl run --recipe cifar10-symmetric-ce-smoke
+```
+
+意义：按 recipe 启动完整实验，并保存 resolved config、指标、噪声 manifest 和 checkpoint。
+
+## 3. 查看知名论文 Config
+
+列出当前已经具有可运行配置的论文：
+
+```powershell
+lnl papers list
+```
+
+查看某篇论文在 toolbox 中的详细实现：
+
+```powershell
+lnl papers show dual-t
+lnl papers show jocor
+lnl papers show fine
+```
+
+意义：了解论文核心机制、toolbox 生命周期、论文概念与 YAML 字段的对应关系、标签使用边界、已知实现差异和推荐命令。
+
+查看论文的原始配置：
+
+```powershell
+lnl papers config dual-t --profile smoke --variant cifar10-sym20
+```
+
+查看补齐绝对路径后的配置：
+
+```powershell
+lnl papers config dual-t --profile smoke --variant cifar10-sym20 --resolved
+```
+
+只获取配置文件路径：
+
+```powershell
+lnl papers config dual-t --profile smoke --variant cifar10-sym20 --path-only
+```
+
+`smoke` 表示缩小规模的通路验证；`reproduction` 表示论文规模配置，但不自动代表已经复现论文报告的数值。请同时查看 `fidelity` 和论文详情中的限制说明。
+
+## 4. 使用自定义 YAML
+
+复制一份现有配置后，可以通过文件路径预检和运行：
+
+```powershell
+lnl validate --config configs/experiment/my_experiment.yaml
+lnl run --config configs/experiment/my_experiment.yaml --dry-run
+lnl run --config configs/experiment/my_experiment.yaml
+```
+
+每份可运行配置都应明确声明：
+
+```yaml
+execution:
+  runner: supervised
+```
+
+专用 runner 包括 `coteaching`、`dual_t`、`multi_model`、`cwd`、`fine`、`instance_transition`、`importance_reweighting` 和 `pcse`。未知方法、未知 runner 或专用配置被送入错误 runner 时，toolbox 会在训练前失败，不会静默改跑普通监督实验。
+
+临时覆盖训练轮数或输出位置：
+
+```powershell
+lnl run --config configs/experiment/my_experiment.yaml --epochs 5
+lnl run --config configs/experiment/my_experiment.yaml --output-dir artifacts/my-run
+```
+
+## 5. 恢复训练
+
+```powershell
+lnl resume artifacts/runs/20260802-120000
+```
+
+默认读取 `last.pt`。若要从最佳 checkpoint 恢复：
+
+```powershell
+lnl resume artifacts/runs/20260802-120000 --checkpoint best
+```
+
+意义：自动读取运行目录中的 `resolved_config.yaml` 和 checkpoint。恢复时会检查配置、噪声映射和组件身份，避免把 checkpoint 接到不兼容实验。
+
+## 6. 如何理解运行产物
+
+典型运行目录包含：
+
+| 文件 | 意义 |
+| --- | --- |
+| `resolved_config.yaml` | 本次真正使用的完整配置 |
+| `environment.json` | Python、PyTorch、CUDA 和设备信息 |
+| `noise_manifest.npz` | 不可变的噪声标签映射 |
+| `noise_summary.json` | 噪声类型、请求噪声率和实际噪声率 |
+| `metrics.jsonl` | 每个 epoch 的训练与验证记录 |
+| `final_metrics.json` | 最终测试指标和模型选择信息 |
+| `last.pt` | 最新训练状态，用于继续训练 |
+| `best.pt` | 按验证指标选出的最佳 checkpoint |
+
+在 `final_metrics.json` 中重点检查：
+
+- `selection_split`：最佳模型使用哪个数据划分选择；
+- `test_selection_leakage`：应为 `false`；
+- `test_accuracy`：最终测试集指标；
+- `noise.effective_train_subset_actual_rate`：实际训练子集中的噪声比例。
+
+## 7. 浏览底层组件
+
+```powershell
+lnl list components
+lnl list components --kind loss
+lnl list components --kind batch_selector
+```
+
+意义：查看可组合的 loss、selector、pipeline 和 parameter-update 组件。组件不一定等于完整论文方法；完整论文入口应优先从 `lnl papers list` 或 `lnl list experiments` 获取。
+
+## 8. 开发与验证
+
+运行全部测试：
 
 ```powershell
 $env:PYTHONPATH = "src"
 python -m unittest discover -s tests -v
 ```
 
-训练、clean baseline、数据检查和噪声生成命令均支持无参数交互向导。例如：
+当前测试覆盖配置路由、噪声 manifest、checkpoint、resume、专用论文生命周期和 clean-label 泄漏防护。
 
-```powershell
-lnl-train
-lnl-clean-train
-lnl-inspect-data
-lnl-make-noise
-```
+进一步了解仓库内部结构：
 
-只要提供任意命令行参数，程序就继续使用原有的非交互 argparse 模式，适合脚本和批量实验。
+- [开发指南](docs/development-guide.md)
+- [逐文件职责](docs/file-map.md)
+- [数据流指南](docs/data-flow-guide.md)
+- [项目管理指南](docs/project-management-guide.md)
+- [长期架构与实验路线](toolbox-architecture.md)
+- [论文实现进度](papers/implement/paper-reproduction-progress.md)
 
-可选：生成 LNL 噪声清单（输入为一维 `.npy` 标签数组）：
-
-```powershell
-$env:PYTHONPATH = "src"
-python -m lnl_toolbox.cli.make_noise labels.npy artifacts/noise/demo.npz --kind symmetric --rate 0.4 --classes 10 --seed 1
-```
-
-`lnl-train` 统一支持 TinyCNN、ResNet-18、PreActResNet-18 和全部已注册逐样本 loss。噪声既可由 `name/rate/seed` 在运行开始时生成，也可通过 `noise.manifest` 读取；两种方式都会生成不可变的 run-local manifest。程序先校验数据 fingerprint、global index、标签范围和转移概率；train 只看到 noisy target，validation/test 继续使用干净标签。`lnl-clean-train` 是同一训练器的 clean-only 包装，会拒绝任何噪声配置。
-
-每轮保存 checkpoint v2：模型、优化器、scheduler、`RunState`、best 指标、loss 配置和噪声映射身份完整进入 `last.pt`/`best.pt`。恢复训练只使用运行目录内的 manifest，并有限兼容旧 CE-baseline 顶层 checkpoint 和旧 Loss 嵌套 checkpoint。
-
-论文原文位于 `papers/`，逐篇中文摘要、代码状态和伪代码见 `docs/paper-summaries.md`；详细架构取舍见 `toolbox-architecture.md`。
-
-## 结构参考
-
-- Cleanlab：模型无关的数据诊断 API；
-- Co-teaching / JoCoR：双模型与选样逻辑应由插件算法管理；
-- DivideMix：warm-up、全数据统计和阶段切换不应写入通用 Runner；
-- Active-Passive-Losses：loss 配置与训练器解耦。
+本地数据放在 `data/`，训练产物放在 `artifacts/`；二者均不应提交到 Git。

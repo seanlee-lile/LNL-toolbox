@@ -38,3 +38,4 @@ trainer:
 
 cwd:
   ridge: 1.0e-8
+execution: {runner: cwd}

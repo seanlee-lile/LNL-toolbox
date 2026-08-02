@@ -44,3 +44,4 @@ early_stopping:
   mode: max
   patience: 1
   min_delta: 0.0
+execution: {runner: supervised}

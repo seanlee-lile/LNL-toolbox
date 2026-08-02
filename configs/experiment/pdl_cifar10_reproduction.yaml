@@ -66,3 +66,4 @@ trainer:
   epochs: 100
   device: auto
   progress: {curves: true}
+execution: {runner: instance_transition}

@@ -1,0 +1,156 @@
+[
+  {
+    "id": "pdl", "acronym": "PDL", "title": "Part-dependent Label Noise", "venue": "NeurIPS", "year": 2020,
+    "source_url": "https://papers.nips.cc/paper/2020/file/5607fe8879e4fd269e88387e8cb30b7e-Paper.pdf",
+    "summary": "使用样本相关的部件转移结构描述实例依赖标签噪声。",
+    "mechanism": "估计多个基础转移矩阵及逐样本混合系数，再以实例转移矩阵执行 forward correction。",
+    "lifecycle": ["warm-up", "feature snapshots", "instance-transition estimation", "corrected training", "evaluation"],
+    "limitations": ["当前配置只覆盖 CIFAR-10 IDN 路径。", "尚未包含共享 T-Revision 扩展。"],
+    "configs": [{"recipe_id":"pdl-cifar10-smoke","profile":"smoke","variant":"cifar10-idn40","fidelity":"paper-aligned"},{"recipe_id":"pdl-cifar10-reproduction","profile":"reproduction","variant":"cifar10-idn40","fidelity":"paper-protocol"}],
+    "concept_to_config": [{"concept":"part-dependent transition","config":"instance_transition","implementation":"estimators/instance_transition.py"},{"concept":"corrected risk","config":"algorithm.correction","implementation":"algorithms/instance_transition.py"}],
+    "implementation_paths": ["src/lnl_toolbox/training/instance_transition_experiment.py", "src/lnl_toolbox/algorithms/instance_transition.py"]
+  },
+  {
+    "id": "jocor", "acronym": "JoCoR", "title": "Combating Noisy Labels by Agreement: A Joint Training Method with Co-Regularization", "venue": "CVPR", "year": 2020,
+    "source_url": "https://openaccess.thecvf.com/content_CVPR_2020/papers/Wei_Combating_Noisy_Labels_by_Agreement_A_Joint_Training_Method_with_CVPR_2020_paper.pdf",
+    "summary": "用两个网络的预测一致性和共同 small-loss 选择抵抗错误标签。",
+    "mechanism": "联合计算监督损失与 co-regularization，按联合逐样本分数选择样本并同时更新两个网络。",
+    "lifecycle": ["two-model initialization", "joint forward", "agreement regularization", "small-loss selection", "joint update"],
+    "limitations": ["正式配置不代表已经完成论文多次重复。", "与 Co-teaching 的 peer exchange 生命周期不同。"],
+    "configs": [{"recipe_id":"jocor-cifar10-symmetric05-smoke","profile":"smoke","variant":"cifar10-sym50","fidelity":"paper-aligned"},{"recipe_id":"jocor-cifar10-symmetric05-reproduction","profile":"reproduction","variant":"cifar10-sym50","fidelity":"paper-protocol"}],
+    "concept_to_config": [{"concept":"joint loss","config":"algorithm.name/lambda","implementation":"algorithms/jocor.py"},{"concept":"sample selection","config":"selector","implementation":"training/multi_model_experiment.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/jocor.py", "src/lnl_toolbox/training/multi_model_experiment.py"]
+  },
+  {
+    "id": "dss", "acronym": "DSS", "title": "Debiased Sample Selection for Learning with Noisy Labels", "venue": "CVPR", "year": 2026,
+    "source_url": "https://openaccess.thecvf.com/content/CVPR2026/papers/Pan_Debiased_Sample_Selection_for_Learning_with_Noisy_Labels_CVPR_2026_paper.pdf",
+    "summary": "以类别和实例去偏证据改进 noisy-label sample selection。",
+    "mechanism": "状态化 objective 维护 BASE/MDA/CCS 证据，生成候选监督集合并以 masked risk 训练。",
+    "lifecycle": ["per-sample evidence update", "debiasing", "candidate-label construction", "masked-risk update"],
+    "limitations": ["当前是基础单网络 DSS，不是 DSS+。", "reproduction profile 不等同于多次论文数值复现。"],
+    "configs": [{"recipe_id":"dss-cifar10-symmetric05-smoke","profile":"smoke","variant":"cifar10-sym50","fidelity":"paper-aligned"},{"recipe_id":"dss-cifar10-symmetric05-reproduction","profile":"reproduction","variant":"cifar10-sym50","fidelity":"paper-protocol"}],
+    "concept_to_config": [{"concept":"DSS objective","config":"pipeline.objective_consumer","implementation":"algorithms/dss.py"},{"concept":"selection evidence","config":"selector","implementation":"selectors/dss.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/dss.py", "src/lnl_toolbox/selectors/dss.py"]
+  },
+  {
+    "id": "cdr", "acronym": "CDR", "title": "Robust Early-Learning: Hindering the Memorization of Noisy Labels", "venue": "ICLR", "year": 2021,
+    "source_url": "https://openreview.net/pdf?id=Eql5b1_hTE4",
+    "summary": "通过只更新关键参数，抑制网络后期记忆噪声标签。",
+    "mechanism": "根据梯度与参数幅值计算 critical score，并按论文或官方代码模式限制参数更新。",
+    "lifecycle": ["standard early learning", "critical-score computation", "masked parameter update", "checkpointed policy state"],
+    "limitations": ["paper 与 official_code 模式存在明确差异。", "单次 reproduction 不提供五次运行均值和标准差。"],
+    "configs": [{"recipe_id":"cifar10-symmetric-cdr-smoke","profile":"smoke","variant":"cifar10-sym40","fidelity":"paper-aligned"},{"recipe_id":"cifar10-symmetric-cdr-reproduction","profile":"reproduction","variant":"cifar10-sym40","fidelity":"paper-protocol"}],
+    "concept_to_config": [{"concept":"critical parameter update","config":"parameter_update","implementation":"algorithms/cdr.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/cdr.py", "src/lnl_toolbox/training/experiment.py"]
+  },
+  {
+    "id": "mentornet", "acronym": "MentorNet", "title": "MentorNet: Learning Data-Driven Curriculum for Very Deep Neural Networks on Corrupted Labels", "venue": "ICML", "year": 2018,
+    "source_url": "https://proceedings.mlr.press/v80/jiang18c/jiang18c.pdf",
+    "summary": "由 Mentor 网络学习课程权重，再指导 Student 网络训练。",
+    "mechanism": "trusted data 先生成 MentorArtifact，bi-LSTM Mentor 根据 loss、epoch 与标签历史产生 sample weights。",
+    "lifecycle": ["trusted feature preparation", "mentor training", "artifact validation", "student weighted training"],
+    "limitations": ["Mentor preparation/training 是独立前置阶段。", "正式配置仍需外部 MentorArtifact。"],
+    "configs": [{"recipe_id":"mentornet-dd-cifar100-symmetric04-smoke","profile":"smoke","variant":"cifar100-sym40","fidelity":"paper-aligned"},{"recipe_id":"mentornet-dd-cifar100-symmetric04-reproduction","profile":"reproduction","variant":"cifar100-sym40","fidelity":"paper-protocol"}],
+    "concept_to_config": [{"concept":"learned curriculum","config":"pipeline.weight_provider","implementation":"training/mentor_learning.py"},{"concept":"student schedule","config":"parameter_update","implementation":"plugins/builtin/catalog.py"}],
+    "implementation_paths": ["src/lnl_toolbox/training/mentor_learning.py", "src/lnl_toolbox/models/mentornet.py"]
+  },
+  {
+    "id": "coteaching", "acronym": "Co-teaching", "title": "Co-teaching: Robust Training of Deep Neural Networks with Extremely Noisy Labels", "venue": "NeurIPS", "year": 2018,
+    "source_url": "https://papers.nips.cc/paper/2018/file/a19744e268754fb0148b017647355b7b-Paper.pdf",
+    "summary": "两个网络分别选择 small-loss 样本并交叉提供给对方更新。",
+    "mechanism": "双模型使用独立初始化；每个 batch 按 remember-rate 选择样本并执行 peer cross-update。",
+    "lifecycle": ["peer initialization", "independent loss scoring", "stable small-loss selection", "cross update", "peer/ensemble evaluation"],
+    "limitations": ["当前只有 smoke 配置。", "尚未提供论文 200 epoch multi-seed 正式 profile。"],
+    "configs": [{"recipe_id":"cifar10-coteaching-smoke","profile":"smoke","variant":"cifar10-sym40","fidelity":"paper-aligned"}],
+    "concept_to_config": [{"concept":"remember-rate","config":"coteaching.remember_schedule","implementation":"algorithms/coteaching/selection.py"},{"concept":"cross update","config":"coteaching.selection","implementation":"algorithms/coteaching/algorithm.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/coteaching", "src/lnl_toolbox/training/coteaching_experiment.py"]
+  },
+  {
+    "id": "loss-correction", "acronym": "Loss Correction", "title": "Making Deep Neural Networks Robust to Label Noise: A Loss Correction Approach", "venue": "CVPR", "year": 2017,
+    "source_url": "https://openaccess.thecvf.com/content_cvpr_2017/papers/Patrini_Making_Deep_Neural_CVPR_2017_paper.pdf",
+    "summary": "使用已知或估计的类别转移矩阵修正训练损失。",
+    "mechanism": "先获得 class-conditional transition artifact，再由 Forward 或 Backward risk corrector 消费。",
+    "lifecycle": ["transition acquisition", "artifact validation", "corrected per-sample risk", "supervised optimization"],
+    "limitations": ["当前配置是单次 CIFAR-10 asymmetric-40 实验。", "未覆盖论文全部数据集和噪声组合。"],
+    "configs": [{"recipe_id":"loss-correction-cifar10-asymmetric04","profile":"reproduction","variant":"cifar10-asym40","fidelity":"paper-aligned"}],
+    "concept_to_config": [{"concept":"transition estimator","config":"pipeline.transition_estimator","implementation":"noise/estimators.py"},{"concept":"forward correction","config":"pipeline.risk_corrector","implementation":"algorithms/transition_risk.py"}],
+    "implementation_paths": ["src/lnl_toolbox/noise/estimators.py", "src/lnl_toolbox/algorithms/transition_risk.py"]
+  },
+  {
+    "id": "apl", "acronym": "APL", "title": "Normalized Loss Functions for Deep Learning with Noisy Labels", "venue": "ICML", "year": 2020,
+    "source_url": "https://proceedings.mlr.press/v119/ma20c/ma20c.pdf",
+    "summary": "组合 active 与 passive robust losses，兼顾学习速度与抗噪性。",
+    "mechanism": "以 NCE 等 normalized active loss 加 MAE/RCE passive loss，保留逐样本损失后统一 reduction。",
+    "lifecycle": ["per-sample active loss", "per-sample passive loss", "weighted composition", "standard supervised update"],
+    "limitations": ["当前重点覆盖 NCE+RCE。", "配置结果不代表论文全部组合和多次重复。"],
+    "configs": [{"recipe_id":"apl-cifar10-noise02-smoke","profile":"smoke","variant":"cifar10-sym20","fidelity":"engineering"},{"recipe_id":"apl-cifar10-noise02-reproduction","profile":"reproduction","variant":"cifar10-sym20","fidelity":"paper-aligned"},{"recipe_id":"apl-cifar10-noise04-reproduction","profile":"reproduction","variant":"cifar10-sym40","fidelity":"paper-aligned"}],
+    "concept_to_config": [{"concept":"active-passive composition","config":"loss","implementation":"losses/torch_losses.py"}],
+    "implementation_paths": ["src/lnl_toolbox/losses/torch_losses.py", "src/lnl_toolbox/training/experiment.py"]
+  },
+  {
+    "id": "gce", "acronym": "GCE", "title": "Generalized Cross Entropy Loss for Training Deep Neural Networks with Noisy Labels", "venue": "NeurIPS", "year": 2018,
+    "source_url": "https://papers.nips.cc/paper/8094-generalized-cross-entropy-loss-for-training-deep-neural-networks-with-noisy-labels.pdf",
+    "summary": "用 q 参数在交叉熵和 MAE 之间折中。",
+    "mechanism": "标准 Lq 逐样本损失直接接入统一监督训练器。",
+    "lifecycle": ["per-sample GCE", "batch reduction", "standard update", "validation selection"],
+    "limitations": ["只实现 standard GCE。", "不包含 truncated GCE 参数更新。"],
+    "configs": [{"recipe_id":"gce-cifar10-noise02-smoke","profile":"smoke","variant":"cifar10-sym20","fidelity":"engineering"},{"recipe_id":"gce-cifar10-noise02-reproduction","profile":"reproduction","variant":"cifar10-sym20","fidelity":"paper-aligned"}],
+    "concept_to_config": [{"concept":"Lq loss","config":"loss.name/q","implementation":"losses/torch_losses.py"}],
+    "implementation_paths": ["src/lnl_toolbox/losses/torch_losses.py", "src/lnl_toolbox/training/experiment.py"]
+  },
+  {
+    "id": "dual-t", "acronym": "Dual-T", "title": "Dual T: Reducing Estimation Error for Transition Matrix in Label-noise Learning", "venue": "NeurIPS", "year": 2020,
+    "source_url": "https://papers.nips.cc/paper/2020/file/512c5cad6c37edb98ae91c8a76c3a291-Paper.pdf",
+    "summary": "把噪声转移矩阵分解为两个较易估计的转移矩阵。",
+    "mechanism": "先训练 posterior 模型，生成快照与 Dual-T artifact，再以全新模型执行 Forward corrected training。",
+    "lifecycle": ["posterior training", "best snapshot", "dual transition estimation", "artifact hashing", "fresh corrected model training"],
+    "limitations": ["evidence profile增加审计链但不改变论文核心参数。", "正式结果仍需按论文报告执行多 seed 比较。"],
+    "configs": [{"recipe_id":"cifar10-dual-t-smoke","profile":"smoke","variant":"cifar10-sym20","fidelity":"paper-aligned"},{"recipe_id":"cifar10-dual-t-sym20","profile":"reproduction","variant":"cifar10-sym20","fidelity":"paper-protocol"},{"recipe_id":"cifar10-dual-t-sym20-evidence","profile":"reproduction","variant":"cifar10-sym20-evidence","fidelity":"paper-protocol"}],
+    "concept_to_config": [{"concept":"two-stage transition","config":"posterior_stage/final_stage","implementation":"algorithms/dual_t"},{"concept":"Forward correction","config":"final_stage.loss","implementation":"training/dual_t_experiment.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/dual_t", "src/lnl_toolbox/training/dual_t_experiment.py"]
+  },
+  {
+    "id": "importance-reweighting", "acronym": "Importance Reweighting", "title": "Learning from Noisy Labels with Importance Reweighting", "venue": "TPAMI", "year": 2016,
+    "source_url": "https://arxiv.org/pdf/1411.7718.pdf",
+    "summary": "在 binary asymmetric random classification noise 下估计并应用重要性权重。",
+    "mechanism": "KDE posterior 与 raw-min rate estimator 产生噪声率，再以 detached importance weights 加权 CE。",
+    "lifecycle": ["posterior estimation", "raw-min noise-rate estimation", "artifact validation", "importance-weighted training"],
+    "limitations": ["当前仅支持二分类 asymmetric RCN。", "synthetic profiles 不是论文 UCI 表格的数值复现。"],
+    "configs": [{"recipe_id":"importance-reweighting-binary-smoke","profile":"smoke","variant":"synthetic-2d","fidelity":"paper-aligned"},{"recipe_id":"importance-reweighting-binary-low-dim","profile":"reproduction","variant":"synthetic-low-dim","fidelity":"paper-aligned"},{"recipe_id":"importance-reweighting-binary-high-dim","profile":"reproduction","variant":"synthetic-high-dim","fidelity":"paper-aligned"}],
+    "concept_to_config": [{"concept":"noise-rate estimation","config":"posterior.rate_estimator","implementation":"algorithms/importance_reweighting/estimation.py"},{"concept":"importance weights","config":"loss","implementation":"treatments/weights.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/importance_reweighting", "src/lnl_toolbox/training/importance_reweighting_experiment.py"]
+  },
+  {
+    "id": "cwd", "acronym": "CWD", "title": "Class-Wise Denoising for Robust Learning under Label Noise", "venue": "TPAMI", "year": 2022,
+    "source_url": "https://gcatnjust.github.io/ChenGong/paper/gong_tpami22.pdf",
+    "summary": "从类别统计量恢复去噪风险，并按论文的 CIFAR binary protocol 训练。",
+    "mechanism": "估计 class prior、virtual flip matrix、系数矩阵及伪逆，再计算全局 squared objective。",
+    "lifecycle": ["binary fold construction", "class statistics", "coefficient pseudoinverse", "global objective", "fold evaluation"],
+    "limitations": ["当前一次只运行论文五折协议中的一个 fold。", "需要分别执行全部 folds 才能形成正式汇总。"],
+    "configs": [{"recipe_id":"cwd-cifar10-smoke","profile":"smoke","variant":"cifar10-binary","fidelity":"paper-aligned"},{"recipe_id":"cwd-cifar10-reproduction","profile":"reproduction","variant":"cifar10-binary","fidelity":"paper-protocol"}],
+    "concept_to_config": [{"concept":"class-wise statistics","config":"cwd","implementation":"estimators/cwd.py"},{"concept":"global objective","config":"cwd.objective","implementation":"algorithms/cwd.py"}],
+    "implementation_paths": ["src/lnl_toolbox/estimators/cwd.py", "src/lnl_toolbox/training/cwd_experiment.py"]
+  },
+  {
+    "id": "pcse", "acronym": "PCSE", "title": "Estimating Per-Class Statistics for Learning with Noisy Labels", "venue": "TPAMI", "year": 2024,
+    "source_url": "https://randydkx.github.io/pdf/TPAMI_paper.pdf",
+    "summary": "利用多时刻特征快照和类别统计恢复 clean per-class statistics。",
+    "mechanism": "预训练后收集 snapshot，估计 transition，再按 Eq. 19 与 Eqs. 20-23 恢复统计并执行后处理。",
+    "lifecycle": ["noisy pretraining", "feature snapshots", "transition estimation", "per-class statistic recovery", "post-processing"],
+    "limitations": ["synthetic multiclass smoke 不是论文数据集数值复现。", "paper_volmin 参数化比论文一般非奇异矩阵约束更窄。"],
+    "configs": [{"recipe_id":"pcse-multiclass-smoke","profile":"smoke","variant":"synthetic-dual-t","fidelity":"engineering"},{"recipe_id":"pcse-multiclass-volmin-smoke","profile":"smoke","variant":"synthetic-volmin","fidelity":"paper-aligned"}],
+    "concept_to_config": [{"concept":"transition backend","config":"transition_stage.name","implementation":"algorithms/pcse/algorithm.py"},{"concept":"per-class recovery","config":"statistics","implementation":"algorithms/pcse/statistics.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/pcse", "src/lnl_toolbox/training/pcse_experiment.py"]
+  },
+  {
+    "id": "fine", "acronym": "FINE", "title": "Revisiting Learning with Noisy Labels: Active Forgetting and Noise Suppression", "venue": "CVPR", "year": 2026,
+    "source_url": "https://openaccess.thecvf.com/content/CVPR2026/papers/Sheng_Revisiting_Learning_with_Noisy_Labels_Active_Forgetting_and_Noise_Suppression_CVPR_2026_paper.pdf",
+    "summary": "通过主动遗忘与噪声抑制划分并处理可疑样本。",
+    "mechanism": "warm-up 后使用 EMA、SCS/SCR 与强增强形成 accepted/rejected partition，并对拒绝子集施加额外目标。",
+    "lifecycle": ["warm-up", "EMA update", "SCS/SCR partition", "strong augmentation", "active forgetting objectives"],
+    "limitations": ["正式配置是单次 CIFAR-100 symmetric-20。", "尚未形成论文曲线和多 seed 汇总。"],
+    "configs": [{"recipe_id":"fine-cifar100n-smoke","profile":"smoke","variant":"cifar100-sym20","fidelity":"paper-aligned"},{"recipe_id":"fine-cifar100n-reproduction","profile":"reproduction","variant":"cifar100-sym20","fidelity":"paper-protocol"}],
+    "concept_to_config": [{"concept":"active forgetting","config":"fine","implementation":"algorithms/fine.py"},{"concept":"two-stage training","config":"fine.warmup_epochs","implementation":"training/fine_experiment.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/fine.py", "src/lnl_toolbox/training/fine_experiment.py"]
+  }
+]

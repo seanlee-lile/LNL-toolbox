@@ -85,3 +85,4 @@ evaluation:
   selection_split: test
   allow_test_selection: true
   report_last_epochs: 10
+execution: {runner: multi_model}
