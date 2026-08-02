@@ -61,7 +61,9 @@ checkpoint v2 中以固定键 `a`/`b` 保存完整双 peer 状态。验证集的
 `method: cnlcu` lazy-dispatch 到专属 runner。每个 noisy batch 同时进入 A/B；每个 peer
 先把当前 detached per-sample CE 写入自己的 fixed-window history，再按论文 soft 影响函数、
 robust mean 与 uncertainty bonus 生成 score。A 的 stable-index 选集更新 B，B 的选集更新 A；
-selected count 在完成本轮选择后递增。history、A/B model/optimizer/scheduler、窗口 cursor、
+selected count 在完成本轮选择后递增，并与 loss history 一起按 epoch 计数的 fixed window
+重置；score 使用 `selected_count + 1` 作为明确的一次伪计数，使窗口内首次选择有合法分母。
+history、A/B model/optimizer/scheduler、窗口 cursor、
 mapping hash 和 peer identity 全部进入 checkpoint v2，支持严格 epoch-boundary resume。
 clean-label corruption mask 只在 runner 中生成 selection precision 诊断，不进入 Algorithm。
 当前只实现 CNLCU-S；不包含 CNLCU-H 或正式论文数值复现。

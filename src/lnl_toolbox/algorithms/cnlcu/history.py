@@ -55,6 +55,9 @@ class PeerLossHistory:
                 raise ValueError("CNLCU history cannot move backwards across windows")
             self.values.zero_()
             self.observed.zero_()
+            # CNLCU's released implementation restarts both the fixed-window
+            # losses and the peer-specific selection counts at each time step.
+            self.selected_count.zero_()
             self.window_start_epoch = window_start
             self.window_epoch_count = 0
         self.active_epoch = epoch

@@ -366,7 +366,7 @@ early-learning 的训练/停止生命周期和论文实验配方。
 - **关键输入/输出**：indexed loss history；输出 uncertainty-adjusted selection evidence。
 - **可模块化部分**：soft influence、robust mean 和 uncertainty-adjusted score；它们当前保持 CNLCU 私有，避免伪装成通用无状态 ReliabilityEstimator。
 - **必须 Algorithm 化的部分**：历史采集、选择/试用反馈和论文网络协作。
-- **当前实现/状态**：`method: cnlcu` 已完成 CNLCU-S 的 peer-specific fixed-window history、Eq. (2)/(3)/(7) soft score、stable-index floor selection、双模型交叉更新、noisy-validation best selection 和 checkpoint/resume；**CNLCU-S 完整方法闭环，论文整体尚未完整实现**。
+- **当前实现/状态**：`method: cnlcu` 已完成 CNLCU-S 的 peer-specific fixed-window history（epoch 窗口内 loss 与 selected count 同步重置，首次 score 使用一次显式伪计数）、Eq. (2)/(3)/(7) soft score、stable-index floor selection、双模型交叉更新、noisy-validation best selection 和 checkpoint/resume；**CNLCU-S 完整方法闭环，论文整体尚未完整实现**。
 - **代码与测试位置**：`src/lnl_toolbox/algorithms/cnlcu/`、`src/lnl_toolbox/training/cnlcu_experiment.py`、`tests/test_cnlcu_estimators.py`、`tests/test_cnlcu_algorithm.py`、`tests/test_cnlcu_workflow.py`。
 - **当前缺失**：CNLCU-H、正式论文训练 preset、长训练和 multi-seed 数值验收。
 - **可以声明**：已实现可通过 YAML/CLI 运行的 CNLCU-S 双模型 uncertainty-aware peer-selection workflow。

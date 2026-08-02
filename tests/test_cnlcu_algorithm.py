@@ -46,6 +46,56 @@ def _algorithm():
 
 
 class CNLCUAlgorithmTest(unittest.TestCase):
+    def test_optimizer_parameters_exactly_match_and_do_not_overlap(self):
+        algorithm = _algorithm()
+        model_a = {id(parameter) for parameter in algorithm.model_a.parameters()}
+        model_b = {id(parameter) for parameter in algorithm.model_b.parameters()}
+        optimizer_a = {
+            id(parameter)
+            for group in algorithm.optimizer_a.param_groups
+            for parameter in group["params"]
+        }
+        optimizer_b = {
+            id(parameter)
+            for group in algorithm.optimizer_b.param_groups
+            for parameter in group["params"]
+        }
+        self.assertEqual(optimizer_a, model_a)
+        self.assertEqual(optimizer_b, model_b)
+        self.assertFalse(optimizer_a & optimizer_b)
+
+    def test_misbound_or_overlapping_optimizer_parameters_fail(self):
+        model_a = _IndexedLogits([[1, 0]])
+        model_b = _IndexedLogits([[0, 1]])
+        common = dict(
+            scheduler_a=None,
+            scheduler_b=None,
+            loss=CrossEntropyLoss(),
+            device=torch.device("cpu"),
+            method_config=CNLCUConfig.from_mapping(_config()),
+            canonical_global_indices=torch.tensor([10]),
+        )
+        with self.assertRaisesRegex(ValueError, "optimizer a parameters"):
+            CNLCUAlgorithm(
+                model_a=model_a,
+                model_b=model_b,
+                optimizer_a=torch.optim.SGD(model_b.parameters(), lr=0.1),
+                optimizer_b=torch.optim.SGD(model_b.parameters(), lr=0.1),
+                **common,
+            )
+
+        shared = torch.nn.Parameter(torch.tensor([[1.0, 0.0]]))
+        model_a.logits = shared
+        model_b.logits = shared
+        with self.assertRaisesRegex(ValueError, "model parameter sets must not overlap"):
+            CNLCUAlgorithm(
+                model_a=model_a,
+                model_b=model_b,
+                optimizer_a=torch.optim.SGD(model_a.parameters(), lr=0.1),
+                optimizer_b=torch.optim.SGD(model_b.parameters(), lr=0.1),
+                **common,
+            )
+
     def test_peer_cross_update_and_peer_specific_counts(self):
         algorithm = _algorithm()
         before_a, before_b = algorithm.model_a.logits.detach().clone(), algorithm.model_b.logits.detach().clone()
@@ -106,6 +156,10 @@ class CNLCUAlgorithmTest(unittest.TestCase):
         schedule_drift["remember_schedule"]["gradual_epochs"] += 1
         with self.assertRaisesRegex(ValueError, "configuration"):
             _algorithm().load_state_dict(schedule_drift)
+        count_scope_drift = copy.deepcopy(saved)
+        count_scope_drift["selected_count_scope"] = "global"
+        with self.assertRaisesRegex(ValueError, "configuration"):
+            _algorithm().load_state_dict(count_scope_drift)
 
     def test_configuration_rejects_hard_and_single_model_composition(self):
         values = _config(); values["cnlcu"]["variant"] = "hard"

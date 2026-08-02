@@ -27,6 +27,39 @@ def _peer_mapping(value: Any, owner: str) -> Mapping[str, Any]:
     return value
 
 
+def _validate_peer_parameter_ownership(
+    model_a: nn.Module,
+    model_b: nn.Module,
+    optimizer_a: torch.optim.Optimizer,
+    optimizer_b: torch.optim.Optimizer,
+) -> None:
+    model_parameters = {
+        "a": {id(parameter) for parameter in model_a.parameters()},
+        "b": {id(parameter) for parameter in model_b.parameters()},
+    }
+    optimizer_parameters = {
+        "a": {
+            id(parameter)
+            for group in optimizer_a.param_groups
+            for parameter in group["params"]
+        },
+        "b": {
+            id(parameter)
+            for group in optimizer_b.param_groups
+            for parameter in group["params"]
+        },
+    }
+    if model_parameters["a"] & model_parameters["b"]:
+        raise ValueError("CNLCU peer model parameter sets must not overlap")
+    for peer in ("a", "b"):
+        if optimizer_parameters[peer] != model_parameters[peer]:
+            raise ValueError(
+                f"CNLCU optimizer {peer} parameters must exactly match model {peer}"
+            )
+    if optimizer_parameters["a"] & optimizer_parameters["b"]:
+        raise ValueError("CNLCU peer optimizer parameter sets must not overlap")
+
+
 class CNLCUAlgorithm:
     """Use uncertainty-aware peer selections for exact cross-updates."""
 
@@ -39,6 +72,9 @@ class CNLCUAlgorithm:
             raise ValueError("CNLCU peer models and optimizers must be distinct")
         if scheduler_a is not None and scheduler_a is scheduler_b:
             raise ValueError("CNLCU peer schedulers must be distinct")
+        _validate_peer_parameter_ownership(
+            model_a, model_b, optimizer_a, optimizer_b
+        )
         self.model_a, self.model_b = model_a, model_b
         self.optimizer_a, self.optimizer_b = optimizer_a, optimizer_b
         self.scheduler_a, self.scheduler_b = scheduler_a, scheduler_b
@@ -64,6 +100,9 @@ class CNLCUAlgorithm:
     def _score(self, history: PeerLossHistory, rows: Tensor) -> tuple[Tensor, dict[str, Tensor]]:
         values, observed, selected_count = history.lookup_rows(rows)
         robust_mean, lengths = soft_robust_mean(values, observed)
+        # The stored value is the number of completed selections in the active
+        # epoch window.  The one-count pseudocount makes the first selection
+        # attempt well-defined without pretending it is a completed selection.
         effective_count = selected_count + 1
         score, bonus = cnlcu_soft_score(
             robust_mean, lengths, effective_count, self.method_config.sigma_squared
@@ -143,6 +182,7 @@ class CNLCUAlgorithm:
                 "peer_identity": ("a", "b"), "variant": self.method_config.variant,
                 "sigma_squared": self.method_config.sigma_squared,
                 "window_size": self.method_config.window_size,
+                "selected_count_scope": "fixed_window",
                 "noise_rate": self.method_config.noise_rate,
                 "remember_schedule": {
                     "name": "linear",
@@ -167,6 +207,7 @@ class CNLCUAlgorithm:
         if (
             state.get("variant") != self.method_config.variant
             or int(state.get("window_size", -1)) != self.method_config.window_size
+            or state.get("selected_count_scope") != "fixed_window"
             or float(state.get("sigma_squared", -1)) != self.method_config.sigma_squared
             or float(state.get("noise_rate", -1)) != self.method_config.noise_rate
             or state.get("remember_schedule") != expected_schedule

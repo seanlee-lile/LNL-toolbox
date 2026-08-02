@@ -43,7 +43,7 @@
 | `engine/runner.py` | 执行 setup、run、cycle、step、evaluator 和 close；不处理模型或梯度。 |
 | `algorithms/base.py` | 将旧 `Algorithm/TrainState` 导入映射到新的通用核心，保持兼容。 |
 | `algorithms/coteaching/` | 完整双模型 `CoTeachingAlgorithm`、配置/状态、stable-index small-loss 选择，以及原 NumPy helper 的兼容迁移。 |
-| `algorithms/cnlcu/` | CNLCU-S 的 soft influence/robust mean/uncertainty score、peer-specific fixed-window history、稳定索引选择、双模型交叉更新及可恢复状态。 |
+| `algorithms/cnlcu/` | CNLCU-S 的 soft influence/robust mean/uncertainty score、按 epoch 划窗且 history/count 同步重置的 peer state、稳定索引选择、双模型交叉更新及可恢复状态。 |
 | `algorithms/update_policy.py` | 定义通用 ParameterUpdateInput/Result/Policy、普通 StandardUpdatePolicy，以及 policy checkpoint 身份协议。 |
 | `algorithms/cdr.py` | 实现 CDR 的全局逐标量 criticality、确定性 top-k 和论文 Eq. (5)/(6) 参数更新。 |
 | `algorithms/supervised.py` | 单模型监督训练步骤；将 detached 逐样本 loss 交给通用 Selector，再把归约后的 scalar objective 交给 ParameterUpdatePolicy。 |

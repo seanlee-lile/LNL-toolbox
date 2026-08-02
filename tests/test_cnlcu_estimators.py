@@ -65,7 +65,18 @@ class CNLCUHistoryTest(unittest.TestCase):
         self.assertEqual(history.lookup_rows(history.resolve(torch.tensor([90])))[1].sum().item(), 2)
         history.prepare_epoch(2)
         self.assertFalse(bool(history.observed.any()))
-        self.assertEqual(history.selected_count.sum().item(), 1)
+        self.assertEqual(history.selected_count.sum().item(), 0)
+
+    def test_selection_count_resets_with_each_epoch_window(self):
+        history = PeerLossHistory(torch.tensor([10, 20]), 2, "a")
+        history.prepare_epoch(0)
+        rows = history.append(torch.tensor([10, 20]), torch.tensor([0.1, 0.2]))
+        history.increment_selected(rows, torch.tensor([True, False]))
+        history.prepare_epoch(1)
+        self.assertEqual(history.selected_count.tolist(), [1, 0])
+        history.prepare_epoch(2)
+        self.assertEqual(history.window_start_epoch, 2)
+        self.assertEqual(history.selected_count.tolist(), [0, 0])
 
     def test_duplicate_missing_and_double_observation_fail(self):
         history = PeerLossHistory(torch.tensor([10, 20]), 2, "a")
