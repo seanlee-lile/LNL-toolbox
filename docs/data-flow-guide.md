@@ -287,6 +287,32 @@ Forward/Backward、Importance Weighting 等未来消费者只能接收 Artifact�
 修改 Snapshot。`NoiseManifest.per_sample_transition[N,C]` 只是每个样本真实类别
 对应的一行，不等于 PDL 的完整 `T(x)[N,C,C]`。
 
+### 6.1 T-Revision Reweight-R 方法路径
+
+`method: t_revision` 是论文专属生命周期，不是通用 transition plugin：
+
+```text
+noisy CE + noisy-validation best
+→ best-checkpoint train-only PosteriorSnapshot
+→ Anchor T_hat / TransitionArtifact
+→ fixed-T_hat corrected vectorized Eq. (3) classifier initialization
+→ raw T_hat + Delta_T joint classifier/transition revision
+→ noisy-validation best
+→ clean test
+```
+
+矩阵始终使用 `T[i,j] = P(noisy=j | clean=i)` 和
+`p_noisy = p_clean @ T`。Stage 2A 的 `T_hat` 是合法、冻结且带 snapshot/best
+checkpoint/manifest provenance 的 `TransitionArtifact`；Stage 2B 复现论文实验代码的
+raw additive choice，不 clamp、归一化、softmax 或 projection，因此 revised matrix
+允许负元素或非单位行和，并保存在方法专属 `RevisedTransitionArtifact` 中。
+
+Eq. (3) 使用 `p_clean[y] / (p_clean @ T)[y]` 乘以 clean logits 上的逐样本
+CE 后做 batch mean。ratio 不 detach，不求逆、不裁剪、不按权重和归一化；非法或过小
+denominator 直接失败。当前对外准确表述是：paper-faithful Reweight-R workflow with
+corrected vectorized Eq. (3) and explicit released-code lifecycle choices；不得称为
+paper-exact T-Revision，也尚不包含 Forward-R、projected transition 或正式长训练复现。
+
 ## 7. Model、Loss 与 Algorithm 合同
 
 ### 7.1 Model

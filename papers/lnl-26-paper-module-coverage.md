@@ -147,7 +147,7 @@
 | 12 | GCE | standard \(L_q\) | Loss | `src/lnl_toolbox/losses/torch_losses.py` | 精确子组件 | 是 | 否 | truncated \(L_q\) 更新 |
 | 13 | VolMinNet | trainable transition | NoiseModel / Pipeline | 无 | 未实现 | 否 | 否 | volume regularizer、联合优化 |
 | 14 | Natarajan | unbiased binary risk | RiskCorrector | 无 | 未实现 | 否 | 否 | signed corrected risk |
-| 15 | T-Revision | Anchor initialization | Transition primitive | `src/lnl_toolbox/noise/estimators.py` | 通用工程原语 | 否 | 否 | trainable slack、revision stages |
+| 15 | T-Revision | Anchor initialization、Eq. (3) reweight、raw additive revision | Algorithm / Transition primitive | `src/lnl_toolbox/algorithms/t_revision/`、`src/lnl_toolbox/noise/estimators.py` | 完整实现 | 是 | 是（限定 Reweight-R fidelity） | Forward-R、正式长训练与 multi-seed 数值复现 |
 | 16 | Dual-T | factorized transition estimate | TransitionEstimator | `src/lnl_toolbox/noise/estimators.py` | 精确子组件 | 是 | 否 | 论文 preset、正式复现实验 |
 | 17 | MC-LDCE | clean centroid statistic | Statistic / RiskCorrector | `StatisticResult` | 接口已存在但无实现 | 否 | 否 | centroid estimator、global risk |
 | 18 | Importance Reweighting | binary asymmetric-RCN weight | WeightProvider | `src/lnl_toolbox/treatments/weights.py` | 精确子组件 | 否 | 否 | posterior/rate estimation 与构造入口 |
@@ -269,7 +269,7 @@ early-learning 的训练/停止生命周期和论文实验配方。
 
 - Natarajan、CAL、MC-LDCE 和 CWD 所需的 RiskCorrector；
 - 具体 StatisticEstimator，以及 StatisticResult 的生产者和训练/推理消费者；
-- UPM、PDL、VolMinNet 和 T-Revision 所需的 trainable NoiseModel；
+- UPM、PDL 和 VolMinNet 所需的 trainable NoiseModel；T-Revision raw additive revision 已作为论文方法私有组件实现，不扩张为通用 NoiseModel；
 - DSS、LEND 所需的 stateful reliability/history producer，以及尚未实现的 CNLCU-H；
 - label refinement、dataset split、post-processing 和通用 component-state checkpoint ownership；
 - WeightProvider 和 ReliabilityEstimator 的公开 YAML/plugin/训练构造入口。
@@ -480,11 +480,11 @@ early-learning 的训练/停止生命周期和论文实验配方。
 - **关键输入/输出**：initial T、trainable slack、classifier posterior；输出 revised T 和 weighted objective。
 - **可模块化部分**：Anchor initialization、revision layer、专用 weight calculation。
 - **必须 Algorithm 化的部分**：初始化、joint revision、validation/训练阶段顺序。
-- **当前实现/状态**：只有可复用 Anchor primitive；**通用工程原语**。
-- **代码与测试位置**：`src/lnl_toolbox/noise/estimators.py`、`tests/test_transition_estimators.py`。
-- **当前缺失**：slack、revision optimizer、importance stage。
-- **可以声明**：Anchor component 可作为 T-Revision 前置原语。
-- **禁止声明**：不得把一次 Anchor estimate 注册为 T-Revision。
+- **当前实现/状态**：`method: t_revision` 已形成 noisy CE → best-checkpoint Anchor `T_hat` → 固定矩阵 classifier initialization → raw additive joint revision 的 Reweight-R 闭环；Eq. (3) 使用 corrected vectorized 实现，并明确采用 released-code lifecycle choices。**完整方法工作流（限定 fidelity）**。
+- **代码与测试位置**：`src/lnl_toolbox/algorithms/t_revision/`、`src/lnl_toolbox/training/t_revision_experiment.py`、`tests/test_t_revision_objective.py`、`tests/test_t_revision_algorithm.py`、`tests/test_t_revision_workflow.py`。
+- **当前缺失**：Forward-R、projected/softmax transition、MNIST/Clothing1M、正式长训练与 multi-seed 数值复现。
+- **可以声明**：已实现 paper-faithful Reweight-R workflow with corrected vectorized Eq. (3) and explicit released-code lifecycle choices。
+- **禁止声明**：不得称为 paper-exact T-Revision；不得把 smoke 当作论文数值复现，也不得声称已实现 Forward-R。
 
 ### P16 — Dual-T
 
