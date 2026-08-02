@@ -1,0 +1,152 @@
+import copy
+import unittest
+from pathlib import Path
+
+import torch
+
+from lnl_toolbox.algorithms.cnlcu import CNLCUAlgorithm, CNLCUConfig
+from lnl_toolbox.core import Batch, ExperimentContext, RunState
+from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
+
+
+def _config(window_size=3, sigma=0.1):
+    return {
+        "method": "cnlcu", "noise": {"name": "symmetric", "rate": 0.5},
+        "cnlcu": {"variant": "soft", "model_count": 2, "noise_rate": 0.5,
+            "initialization": {"peer_seed_offset": 1},
+            "remember_schedule": {"name": "linear", "start": 1.0, "end": 0.5, "gradual_epochs": 1},
+            "history": {"window_size": window_size, "storage_dtype": "float32"},
+            "uncertainty": {"sigma_squared": sigma},
+            "selection": {"count_rule": "floor", "tie_break": "stable_sample_index"}},
+        "evaluation": {"selection_split": "validation", "primary": "mean_peer_accuracy", "ensemble": "mean_probabilities"},
+    }
+
+
+class _IndexedLogits(torch.nn.Module):
+    def __init__(self, logits):
+        super().__init__()
+        self.logits = torch.nn.Parameter(torch.tensor(logits, dtype=torch.float32))
+    def forward(self, inputs):
+        return self.logits[inputs.reshape(-1).long()]
+
+
+def _algorithm():
+    a = _IndexedLogits([[5, -5], [5, -5], [-5, 5], [-5, 5]])
+    b = _IndexedLogits([[-5, 5], [-5, 5], [5, -5], [5, -5]])
+    result = CNLCUAlgorithm(
+        model_a=a, model_b=b, optimizer_a=torch.optim.SGD(a.parameters(), lr=0.1),
+        optimizer_b=torch.optim.SGD(b.parameters(), lr=0.1), scheduler_a=None, scheduler_b=None,
+        loss=CrossEntropyLoss(), device=torch.device("cpu"),
+        method_config=CNLCUConfig.from_mapping(_config()),
+        canonical_global_indices=torch.tensor([40, 10, 30, 20]),
+    )
+    result.setup(ExperimentContext(Path.cwd()))
+    result.on_cycle_start(RunState(cycle=1))
+    return result
+
+
+class CNLCUAlgorithmTest(unittest.TestCase):
+    def test_peer_cross_update_and_peer_specific_counts(self):
+        algorithm = _algorithm()
+        before_a, before_b = algorithm.model_a.logits.detach().clone(), algorithm.model_b.logits.detach().clone()
+        state = RunState(cycle=1)
+        result = algorithm.step(Batch({"input": torch.arange(4), "target": torch.zeros(4, dtype=torch.long),
+                                       "index": torch.tensor([10, 20, 30, 40])}), state)
+        self.assertEqual(result.metadata["selected_by_a_indices"].tolist(), [10, 20])
+        self.assertEqual(result.metadata["selected_by_b_indices"].tolist(), [30, 40])
+        torch.testing.assert_close(algorithm.model_a.logits[:2], before_a[:2])
+        self.assertFalse(torch.equal(algorithm.model_a.logits[2:], before_a[2:]))
+        self.assertFalse(torch.equal(algorithm.model_b.logits[:2], before_b[:2]))
+        torch.testing.assert_close(algorithm.model_b.logits[2:], before_b[2:])
+        rows_a = algorithm.private_state.history_a.resolve(torch.tensor([10, 20, 30, 40]))
+        rows_b = algorithm.private_state.history_b.resolve(torch.tensor([10, 20, 30, 40]))
+        self.assertEqual(algorithm.private_state.history_a.selected_count[rows_a].tolist(), [1, 1, 0, 0])
+        self.assertEqual(algorithm.private_state.history_b.selected_count[rows_b].tolist(), [0, 0, 1, 1])
+
+    def test_current_loss_is_appended_before_score_and_clean_oracle_is_ignored(self):
+        first, second = _algorithm(), _algorithm()
+        payload = {"input": torch.arange(4), "target": torch.zeros(4, dtype=torch.long),
+                   "index": torch.tensor([10, 20, 30, 40])}
+        left = first.step(Batch(payload), RunState(cycle=1))
+        right = second.step(Batch({**payload, "clean_target": torch.ones(4, dtype=torch.long)}), RunState(cycle=1))
+        self.assertEqual(left.metadata["selected_by_a_indices"].tolist(), right.metadata["selected_by_a_indices"].tolist())
+        self.assertEqual(left.metrics["history_length_a"], 1.0)
+        for a, b in zip(first.model_a.parameters(), second.model_a.parameters()):
+            torch.testing.assert_close(a, b)
+
+    def test_uncertainty_count_can_change_current_loss_ranking(self):
+        algorithm = _algorithm()
+        algorithm.model_a.logits.data.copy_(torch.tensor(
+            [[0.4, 0.0], [0.4, 0.0], [0.2, 0.0], [0.2, 0.0]]
+        ))
+        rows = algorithm.private_state.history_a.resolve(torch.tensor([10, 20, 30, 40]))
+        algorithm.private_state.history_a.selected_count[rows] = torch.tensor([100, 100, 0, 0])
+        result = algorithm.step(Batch({"input": torch.arange(4), "target": torch.zeros(4, dtype=torch.long),
+            "index": torch.tensor([10, 20, 30, 40])}), RunState(cycle=1))
+        # A's current losses favor 10/20, but the uncertainty bonus gives 30/40 a trial.
+        self.assertEqual(result.metadata["selected_by_a_indices"].tolist(), [30, 40])
+
+    def test_checkpoint_roundtrip_and_wrong_identity_fail(self):
+        algorithm = _algorithm()
+        algorithm.step(Batch({"input": torch.arange(4), "target": torch.zeros(4, dtype=torch.long),
+            "index": torch.tensor([10, 20, 30, 40])}), RunState(cycle=1))
+        saved = copy.deepcopy(algorithm.state_dict())
+        restored = _algorithm(); restored.load_state_dict(saved)
+        self.assertEqual(restored.private_state.history_a.selected_count.tolist(),
+                         algorithm.private_state.history_a.selected_count.tolist())
+        wrong = copy.deepcopy(saved); wrong["method_identity"] = "coteaching"
+        with self.assertRaisesRegex(ValueError, "identity"):
+            restored.load_state_dict(wrong)
+        swapped = copy.deepcopy(saved)
+        private = swapped["cnlcu_state"]
+        private["history_a"], private["history_b"] = private["history_b"], private["history_a"]
+        with self.assertRaisesRegex(ValueError, "identity"):
+            _algorithm().load_state_dict(swapped)
+        schedule_drift = copy.deepcopy(saved)
+        schedule_drift["remember_schedule"]["gradual_epochs"] += 1
+        with self.assertRaisesRegex(ValueError, "configuration"):
+            _algorithm().load_state_dict(schedule_drift)
+
+    def test_configuration_rejects_hard_and_single_model_composition(self):
+        values = _config(); values["cnlcu"]["variant"] = "hard"
+        with self.assertRaisesRegex(ValueError, "only variant"):
+            CNLCUConfig.from_mapping(values)
+        for key in ("selector", "parameter_update", "weight_provider", "objective_consumer", "dss"):
+            values = _config(); values[key] = {"name": "anything"}
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, key):
+                CNLCUConfig.from_mapping(values)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
+    def test_cuda_step_keeps_history_on_cpu(self):
+        model_a = _IndexedLogits([[5, -5], [5, -5], [-5, 5], [-5, 5]])
+        model_b = _IndexedLogits([[-5, 5], [-5, 5], [5, -5], [5, -5]])
+        algorithm = CNLCUAlgorithm(
+            model_a=model_a,
+            model_b=model_b,
+            optimizer_a=torch.optim.SGD(model_a.parameters(), lr=0.1),
+            optimizer_b=torch.optim.SGD(model_b.parameters(), lr=0.1),
+            scheduler_a=None,
+            scheduler_b=None,
+            loss=CrossEntropyLoss(),
+            device=torch.device("cuda"),
+            method_config=CNLCUConfig.from_mapping(_config()),
+            canonical_global_indices=torch.tensor([40, 10, 30, 20]),
+        )
+        algorithm.setup(ExperimentContext(Path.cwd()))
+        algorithm.on_cycle_start(RunState(cycle=1))
+        algorithm.step(
+            Batch(
+                {
+                    "input": torch.arange(4),
+                    "target": torch.zeros(4, dtype=torch.long),
+                    "index": torch.tensor([10, 20, 30, 40]),
+                }
+            ),
+            RunState(cycle=1),
+        )
+        self.assertEqual(algorithm.private_state.history_a.values.device.type, "cpu")
+        self.assertEqual(algorithm.private_state.history_b.values.device.type, "cpu")
+
+
+if __name__ == "__main__":
+    unittest.main()

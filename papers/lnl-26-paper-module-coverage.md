@@ -139,7 +139,7 @@
 | 04 | JoCoR | joint loss 中的逐样本 score | Algorithm / Selector primitive | 通用 Loss、Selector | 未实现 | 否 | 否 | 双网络、co-regularization、联合更新 |
 | 05 | DSS | class/instance debias evidence | Reliability / LabelRefiner | 通用合同 | 未实现 | 否 | 否 | MDA、CCS 历史与趋势检验 |
 | 06 | CDR | critical parameter update | ParameterUpdatePolicy | `src/lnl_toolbox/algorithms/cdr.py` | 精确子组件 | 是 | 否 | 完整 early-learning lifecycle |
-| 07 | CNLCU | loss confidence bounds | Reliability / Selector | 通用合同 | 未实现 | 否 | 否 | 历史状态、区间估计、双网络流程 |
+| 07 | CNLCU | loss confidence bounds | Algorithm / stateful selection | `src/lnl_toolbox/algorithms/cnlcu/`、`src/lnl_toolbox/training/cnlcu_experiment.py` | 完整实现（CNLCU-S） | 是 | 否 | CNLCU-H、正式论文配置与多 seed 数值复现 |
 | 08 | MentorNet | learned sample weights | WeightProvider | 泛型合同 | 接口已存在但无实现 | 否 | 否 | Mentor model 与 student lifecycle |
 | 09 | Co-teaching | peer small-loss exchange | Algorithm | `src/lnl_toolbox/algorithms/coteaching/`、`src/lnl_toolbox/training/coteaching_experiment.py` | 完整实现 | 是 | 是 | 论文专属 CNN、正式 200-epoch/multi-seed 数值复现 |
 | 10 | Loss Correction | Anchor estimate、Forward/Backward corrected risk | TransitionEstimator / RiskCorrector | `src/lnl_toolbox/noise/estimators.py`、`src/lnl_toolbox/algorithms/transition_risk.py` | 精确子组件 | 是 | 否 | 论文 preset、acceptance experiment |
@@ -186,8 +186,8 @@ CE、GCE、NCE、MAE、RCE、APL 均输出逐样本 `[B]` 并接入 plugin 和�
 `SelectorContributionAdapter` 已进入真实单模型训练。它们只解决单 batch、
 单 score 向量的 hard selection。
 
-Co-teaching、JoCoR 需要双网络和固定 exchange/update 顺序；CNLCU 需要跨 epoch
-历史；DSS 会改变候选监督；DivideMix 会把数据分成 labeled/unlabeled；
+Co-teaching、JoCoR 需要双网络和固定 exchange/update 顺序；CNLCU-S 已由独立双网络
+Algorithm 管理跨 epoch peer history，不能退化为通用 Selector；DSS 会改变候选监督；DivideMix 会把数据分成 labeled/unlabeled；
 这些都不能通过增加一个 Selector 名称忠实实现。
 
 `WeightProvider` 能表达已经计算好的连续非负权重。它不能独自实现 MentorNet 的
@@ -204,8 +204,9 @@ DivideMix GMM 已有精确的 loss normalization、二分量 GMM 和低均值 co
 clean probability；它可通过 adapter、Selector、Contribution 和 reducer 被测试消费。
 这只是 dataset reliability 到 batch ranking 的组件链，不是 DivideMix split。
 
-CNLCU、DSS、LEND 的具体 evidence producer 尚未实现。它们即使输出 scalar
-reliability，也仍需要未来 Algorithm 管理历史、特征或监督状态。
+CNLCU-S 的 evidence 计算已由其专属 Algorithm 结合 peer history 消费，不发布为通用
+ReliabilityEstimator；DSS、LEND 的具体 evidence producer 仍未实现。后两者即使输出
+scalar reliability，也仍需要未来 Algorithm 管理特征或监督状态。
 
 ## 8. Transition 类论文
 
@@ -269,7 +270,7 @@ early-learning 的训练/停止生命周期和论文实验配方。
 - Natarajan、CAL、MC-LDCE 和 CWD 所需的 RiskCorrector；
 - 具体 StatisticEstimator，以及 StatisticResult 的生产者和训练/推理消费者；
 - UPM、PDL、VolMinNet 和 T-Revision 所需的 trainable NoiseModel；
-- DSS、CNLCU、LEND 所需的 stateful reliability/history producer；
+- DSS、LEND 所需的 stateful reliability/history producer，以及尚未实现的 CNLCU-H；
 - label refinement、dataset split、post-processing 和通用 component-state checkpoint ownership；
 - WeightProvider 和 ReliabilityEstimator 的公开 YAML/plugin/训练构造入口。
 
@@ -363,13 +364,13 @@ early-learning 的训练/停止生命周期和论文实验配方。
 - **研究问题**：避免把高 loss 但欠代表的 clean 样本长期排除。
 - **核心机制**：跨时间 loss 的置信区间/lower bound 和探索式选择。
 - **关键输入/输出**：indexed loss history；输出 uncertainty-adjusted selection evidence。
-- **可模块化部分**：stateful ReliabilityEstimator、区间估计器。
+- **可模块化部分**：soft influence、robust mean 和 uncertainty-adjusted score；它们当前保持 CNLCU 私有，避免伪装成通用无状态 ReliabilityEstimator。
 - **必须 Algorithm 化的部分**：历史采集、选择/试用反馈和论文网络协作。
-- **当前实现/状态**：无具体 producer；**未实现**。
-- **代码与测试位置**：通用合同 `src/lnl_toolbox/estimators/base.py`；无 CNLCU 测试。
-- **当前缺失**：history state、bound 公式、selection lifecycle。
-- **可以声明**：ReliabilityResult 的方向适合表达其可靠性结果。
-- **禁止声明**：不得把当前 epoch 的 SmallLossSelector 称为 CNLCU。
+- **当前实现/状态**：`method: cnlcu` 已完成 CNLCU-S 的 peer-specific fixed-window history、Eq. (2)/(3)/(7) soft score、stable-index floor selection、双模型交叉更新、noisy-validation best selection 和 checkpoint/resume；**CNLCU-S 完整方法闭环，论文整体尚未完整实现**。
+- **代码与测试位置**：`src/lnl_toolbox/algorithms/cnlcu/`、`src/lnl_toolbox/training/cnlcu_experiment.py`、`tests/test_cnlcu_estimators.py`、`tests/test_cnlcu_algorithm.py`、`tests/test_cnlcu_workflow.py`。
+- **当前缺失**：CNLCU-H、正式论文训练 preset、长训练和 multi-seed 数值验收。
+- **可以声明**：已实现可通过 YAML/CLI 运行的 CNLCU-S 双模型 uncertainty-aware peer-selection workflow。
+- **禁止声明**：不得把通用 SmallLossSelector 称为 CNLCU；不得把 CNLCU-S smoke 称为整篇论文或正式数值复现。
 
 ### P08 — MentorNet
 
@@ -646,7 +647,7 @@ early-learning 的训练/停止生命周期和论文实验配方。
 建议停止无目标地增加容器，改为由真实消费者驱动原语建设：
 
 1. **Forward/Backward loss correction 验收**：在现有 RiskCorrector 和训练消费链上补论文 preset、严格 resume 与 acceptance experiment。
-2. **Co-teaching 正式复现**：在已完成的双模型 Algorithm 上补论文专属 CNN、200 epoch preset 和 multi-seed acceptance experiment。
+2. **Co-teaching/CNLCU-S 正式复现**：在已完成的双模型 Algorithm 上补论文 preset、长训练和 multi-seed acceptance experiment；CNLCU-H 另行审计实现。
 3. **CDR paper preset/lifecycle**：在已有精确 update policy 上补完整运行定义。
 4. **Importance Reweighting Pipeline**：补 noisy posterior 与 noise-rate producers。
 5. **一个 statistic vertical slice**：MC-LDCE、CWD、PCSE 三选一，同时实现 producer 和唯一 consumer。

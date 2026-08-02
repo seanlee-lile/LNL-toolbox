@@ -40,6 +40,7 @@ flowchart LR
 - Loss、无状态 batch Selector 和 ParameterUpdatePolicy 已通过 `PluginCatalog` 构造；Model、Algorithm、Evaluator 尚未全部插件化。
 - 通用 `all`/`small_loss` Selector 已接入单模型监督路径；二分类 asymmetric-RCN importance-weight 组件可通过内部 treatment 合同独立调用，但尚未接入公开训练配置；RiskCorrector 尚未接入。
 - Co-teaching 已由 `CoTeachingAlgorithm` 和专属 experiment runner 实现为双模型方法；它使用 peer small-loss cross-update，不由通用 Selector 承担。旧 `coteaching_exchange` 只保留为兼容原语。
+- CNLCU-S 已由 `CNLCUAlgorithm` 和专属 experiment runner 实现为 stateful 双模型方法；它在 CPU float32 的 peer-specific fixed-window history 中按 stable global index 维护 loss，计算论文 soft confidence score，再执行严格 peer cross-update。它不复用或扩展通用无状态 Selector。
 - `StandardUpdatePolicy` 保持普通更新；`CDRUpdatePolicy` 是当前首个参数级更新策略。需要 meta-batch、高阶梯度或多网络协调的方法仍属于 MetaUpdater/独立 Pipeline。
 
 ## 2. 模块职责与依赖方向
@@ -54,6 +55,16 @@ remember rate 使用 zero-based epoch：
 checkpoint v2 中以固定键 `a`/`b` 保存完整双 peer 状态。验证集的
 `mean_peer_accuracy` 选择 best checkpoint；mean-probability ensemble 仅为工具箱辅助指标。
 第一阶段仅承诺 epoch-boundary resume，不声称包含论文专属 CNN、200 epoch 配方或正式数值复现。
+
+### 1.2 CNLCU-S 状态双模型路径
+
+`method: cnlcu` lazy-dispatch 到专属 runner。每个 noisy batch 同时进入 A/B；每个 peer
+先把当前 detached per-sample CE 写入自己的 fixed-window history，再按论文 soft 影响函数、
+robust mean 与 uncertainty bonus 生成 score。A 的 stable-index 选集更新 B，B 的选集更新 A；
+selected count 在完成本轮选择后递增。history、A/B model/optimizer/scheduler、窗口 cursor、
+mapping hash 和 peer identity 全部进入 checkpoint v2，支持严格 epoch-boundary resume。
+clean-label corruption mask 只在 runner 中生成 selection precision 诊断，不进入 Algorithm。
+当前只实现 CNLCU-S；不包含 CNLCU-H 或正式论文数值复现。
 
 | 模块 | 拥有什么 | 不得负责什么 |
 |---|---|---|

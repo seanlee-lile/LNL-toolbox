@@ -880,6 +880,10 @@ def run_experiment(
         )
 
         return run_coteaching_experiment(config, output_dir, resume)
+    if method_name == "cnlcu":
+        from lnl_toolbox.training.cnlcu_experiment import run_cnlcu_experiment
+
+        return run_cnlcu_experiment(config, output_dir, resume)
     if method_name == "dual_t_forward":
         raise ValueError("method 'dual_t_forward' was renamed to 'dual_t'")
     if method_name == "dual_t":
