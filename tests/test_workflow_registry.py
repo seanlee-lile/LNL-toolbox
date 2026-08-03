@@ -20,7 +20,7 @@ class WorkflowRegistryTest(unittest.TestCase):
             registry.names(),
             (
                 "cnlcu", "coteaching", "dual_t", "importance_reweighting",
-                "pcse", "t_revision",
+                "pcse", "t_revision", "volminnet",
             ),
         )
         source = inspect.getsource(run_experiment)
@@ -31,6 +31,7 @@ class WorkflowRegistryTest(unittest.TestCase):
         self.assertEqual(method_name({}), "")
         self.assertEqual(method_name({"method": " Dual_T "}), "dual_t")
         self.assertEqual(method_name({"method": {"name": "PCSE"}}), "pcse")
+        self.assertEqual(method_name({"method": "VolMinNet"}), "volminnet")
 
     def test_unknown_and_renamed_methods_fail_closed(self) -> None:
         with self.assertRaisesRegex(ValueError, "unknown method"):

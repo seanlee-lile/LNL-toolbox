@@ -36,6 +36,7 @@
     "configs/experiment/mentornet_dd_cifar100_symmetric04_smoke.yaml",
     "configs/experiment/pcse_multiclass_smoke.yaml",
     "configs/experiment/pcse_multiclass_volmin_smoke.yaml",
+    "configs/experiment/cifar10_volminnet_smoke.yaml",
     "configs/experiment/pdl_cifar10_reproduction.yaml",
     "configs/experiment/pdl_cifar10_smoke.yaml",
     "configs/reproduction/cifar10_dual_t_sym20.yaml",

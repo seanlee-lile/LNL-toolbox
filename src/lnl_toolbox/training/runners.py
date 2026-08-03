@@ -101,6 +101,11 @@ def create_runner_registry() -> RunnerRegistry:
         "run_importance_reweighting_experiment",
     )
     registry.add("pcse", "lnl_toolbox.training.pcse_experiment", "run_pcse_experiment")
+    registry.add(
+        "volminnet",
+        "lnl_toolbox.training.volminnet_experiment",
+        "run_volminnet_experiment",
+    )
     registry.add("cnlcu", "lnl_toolbox.training.cnlcu_experiment", "run_cnlcu_experiment")
     registry.add(
         "t_revision",
@@ -119,6 +124,7 @@ _METHOD_RUNNERS = frozenset(
         "importance_reweighting",
         "pcse",
         "t_revision",
+        "volminnet",
     }
 )
 _RENAMED_METHODS = {"dual_t_forward": "dual_t"}

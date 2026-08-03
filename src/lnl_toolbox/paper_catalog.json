@@ -191,5 +191,17 @@
     "configs": [],
     "concept_to_config": [{"concept":"unbiased binary risk","config":"risk","implementation":"algorithms/binary_risk.py"}],
     "implementation_paths": ["src/lnl_toolbox/algorithms/binary_risk.py", "src/lnl_toolbox/training/binary_experiment.py"]
+  },
+  {
+    "id": "volminnet", "acronym": "VolMinNet", "title": "Provably End-to-end Label-noise Learning without Anchor Points", "venue": "ICML", "year": 2021,
+    "source_url": "https://proceedings.mlr.press/v139/li21l.html",
+    "summary": "Jointly learns a clean-posterior classifier and a class-conditional transition matrix without anchor points.",
+    "mechanism": "Optimizes noisy-label NLL and a positive-logdet minimum-volume term while updating the classifier and paper-parameterized transition together.",
+    "lifecycle": ["manifest preparation", "joint classifier-transition training", "noisy-validation selection", "transition artifact publication", "clean-test evaluation"],
+    "limitations": ["The built-in profile is a smoke run, not a paper numerical reproduction.", "The paper formula and author code differ on positive logdet versus log-absolute-determinant; this implementation uses the explicit paper_positive_logdet fidelity."],
+    "implementation_status": "user_ready", "reproduction_status": "not_run", "availability": "runnable",
+    "configs": [{"recipe_id":"cifar10-volminnet-smoke","profile":"smoke","variant":"cifar10-sym40","configuration_fidelity":"paper_oriented","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}],
+    "concept_to_config": [{"concept":"joint minimum-volume objective","config":"volminnet.objective","implementation":"algorithms/volminnet/objective.py"},{"concept":"trainable transition","config":"volminnet.transition","implementation":"algorithms/volminnet/transition.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/volminnet", "src/lnl_toolbox/training/volminnet_experiment.py"]
   }
 ]
