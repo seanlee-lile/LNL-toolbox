@@ -142,6 +142,18 @@ class CliEntryPointTest(unittest.TestCase):
         self.assertEqual(called["t_revision"]["revision"]["epochs"], 5)
         self.assertNotIn("epochs", called["trainer"])
 
+    def test_epochs_override_rejects_ambiguous_staged_method(self) -> None:
+        config = {
+            "method": "dual_t",
+            "posterior_stage": {"epochs": 1},
+            "final_stage": {"epochs": 1},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yaml"
+            path.write_text(yaml.safe_dump(config), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "ambiguous.*dual_t"):
+                train_cli.main(["--config", str(path), "--epochs", "5"])
+
     def test_all_no_argument_entrypoints_dispatch_interactively(self) -> None:
         session, _ = scripted_session([])
         selection = TrainingSelection({"trainer": {"epochs": 1}}, Path("template.yaml"))

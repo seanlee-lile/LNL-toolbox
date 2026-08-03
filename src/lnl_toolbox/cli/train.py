@@ -13,6 +13,7 @@ from lnl_toolbox.cli import (
 )
 from lnl_toolbox.catalog import find_project_root, load_yaml, resolve_config_paths
 from lnl_toolbox.training.experiment import run_experiment
+from lnl_toolbox.training.runners import apply_epoch_override
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -50,29 +51,7 @@ def _load_config(path: Path) -> dict[str, Any]:
 def _run_arguments(args: argparse.Namespace) -> None:
     config = _load_config(args.config)
     if args.epochs is not None:
-        if args.epochs <= 0:
-            raise ValueError("--epochs must be positive")
-        method = config.get("method")
-        method_name = (
-            str(method.get("name", "")).strip().lower()
-            if isinstance(method, dict)
-            else str(method or "").strip().lower()
-        )
-        if method_name == "t_revision":
-            t_revision = config.get("t_revision")
-            if not isinstance(t_revision, dict):
-                raise ValueError("method: t_revision requires a t_revision mapping")
-            revision = t_revision.get("revision")
-            if not isinstance(revision, dict):
-                raise ValueError(
-                    "method: t_revision requires t_revision.revision mapping"
-                )
-            revision["epochs"] = args.epochs
-        else:
-            trainer = config.setdefault("trainer", {})
-            if not isinstance(trainer, dict):
-                raise TypeError("trainer configuration must be a mapping")
-            trainer["epochs"] = args.epochs
+        apply_epoch_override(config, args.epochs)
     run_experiment(config, args.output_dir, args.resume)
 
 

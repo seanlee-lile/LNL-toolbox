@@ -1,4 +1,5 @@
 method: cnlcu
+execution: {runner: cnlcu}
 seed: 7
 output_root: artifacts/runs
 data:

@@ -3,6 +3,9 @@ from __future__ import annotations
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -10,8 +13,10 @@ import yaml
 
 from lnl_toolbox.catalog import (
     discover_recipes,
+    find_project_root,
     load_papers,
     load_yaml,
+    load_recipe_config,
     resolve_config_paths,
     select_paper_config,
     validate_config,
@@ -30,7 +35,7 @@ class RunnerResolutionTest(unittest.TestCase):
             {
                 "binary", "clean", "coteaching", "cwd", "dual_t", "fine",
                 "importance_reweighting", "instance_transition", "multi_model",
-                "pcse", "supervised",
+                "pcse", "supervised", "cnlcu", "t_revision",
             },
         )
 
@@ -61,18 +66,46 @@ class CatalogTest(unittest.TestCase):
         recipes = discover_recipes(ROOT)
         self.assertGreaterEqual(len(recipes), 39)
         for recipe in recipes:
-            config = load_yaml(recipe.config_path)
+            config = load_recipe_config(recipe)
             self.assertIn("execution", config, recipe.id)
             self.assertEqual(validate_config(config).name, recipe.runner, recipe.id)
 
     def test_paper_catalog_only_references_runnable_recipes(self) -> None:
-        recipes = {item.id for item in discover_recipes(ROOT)}
+        recipes = {
+            item.id
+            for item in discover_recipes(ROOT, include_conditional=True)
+        }
         papers = load_papers(ROOT)
         self.assertGreaterEqual(len(papers), 10)
         for paper in papers:
-            self.assertTrue(paper.configs)
             for item in paper.configs:
                 self.assertIn(item.recipe_id, recipes)
+
+    def test_manifest_excludes_local_untracked_yaml_and_conditional_recipes(self) -> None:
+        recipes = {item.id for item in discover_recipes(ROOT)}
+        self.assertNotIn("cifar10-symmetric40-all-e5", recipes)
+        self.assertNotIn("cifar10-symmetric40-small-loss-e5", recipes)
+        self.assertFalse(any("mentornet" in recipe for recipe in recipes))
+        all_recipes = {
+            item.id
+            for item in discover_recipes(ROOT, include_conditional=True)
+        }
+        self.assertIn("mentornet-dd-cifar100-symmetric04-smoke", all_recipes)
+
+    def test_method_specific_preflight_and_conditional_artifact(self) -> None:
+        cnlcu = load_recipe_config(
+            next(item for item in discover_recipes(ROOT) if item.id == "cifar10-cnlcu-soft-smoke")
+        )
+        self.assertEqual(validate_config(cnlcu).name, "cnlcu")
+        mentor = load_recipe_config(
+            next(
+                item
+                for item in discover_recipes(ROOT, include_conditional=True)
+                if item.id == "mentornet-dd-cifar100-symmetric04-smoke"
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "conditional.*MentorArtifact"):
+            validate_config(resolve_config_paths(mentor, ROOT))
 
     def test_multiple_paper_variants_require_selection(self) -> None:
         paper = next(item for item in load_papers(ROOT) if item.id == "apl")
@@ -92,6 +125,15 @@ class CatalogTest(unittest.TestCase):
                 os.chdir(previous)
         self.assertEqual(Path(resolved["data"]["root"]), (ROOT / "data/cifar10").resolve())
         self.assertEqual(Path(resolved["output_root"]), (ROOT / "artifacts/runs").resolve())
+
+    def test_packaged_recipe_without_project_uses_caller_working_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            previous = Path.cwd()
+            try:
+                os.chdir(directory)
+                self.assertEqual(find_project_root(), Path(directory).resolve())
+            finally:
+                os.chdir(previous)
 
 
 class UnifiedCliTest(unittest.TestCase):
@@ -127,6 +169,39 @@ class UnifiedCliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("执行器: supervised", output)
         self.assertIn("标签来源:", output)
+
+    def test_list_experiments_marks_status_and_hides_conditional(self) -> None:
+        code, output, _ = self.invoke("list", "experiments", "--profile", "smoke")
+        self.assertEqual(code, 0)
+        self.assertIn("IMPLEMENTATION", output)
+        self.assertIn("cifar10-cnlcu-soft-smoke", output)
+        self.assertNotIn("mentornet", output)
+
+    def test_browsing_does_not_import_optional_sklearn(self) -> None:
+        script = r'''
+import builtins, contextlib, io
+original = builtins.__import__
+def blocked(name, *args, **kwargs):
+    if name == "sklearn" or name.startswith("sklearn."):
+        raise ModuleNotFoundError("blocked sklearn")
+    return original(name, *args, **kwargs)
+builtins.__import__ = blocked
+from lnl_toolbox.cli.main import main
+with contextlib.redirect_stdout(io.StringIO()):
+    assert main(["list", "experiments"]) == 0
+    assert main(["papers", "list"]) == 0
+'''
+        environment = dict(os.environ)
+        environment["PYTHONPATH"] = str(ROOT / "src")
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

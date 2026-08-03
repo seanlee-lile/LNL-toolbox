@@ -1,40 +1,5 @@
-[build-system]
-requires = ["setuptools>=69"]
-build-backend = "setuptools.build_meta"
-
-[project]
-name = "lnl-toolbox"
-version = "0.1.0"
-description = "A reproducible research toolbox for learning with noisy labels"
-readme = "README.md"
-requires-python = ">=3.10"
-dependencies = ["numpy>=1.24"]
-
-[project.optional-dependencies]
-train = [
-    "torch>=2.2",
-    "torchvision>=0.17",
-    "pyyaml>=6.0",
-    "scikit-learn>=1.7,<2",
-]
-dev = ["pytest>=8.0"]
-
-[project.scripts]
-lnl = "lnl_toolbox.cli.main:main"
-lnl-clean-train = "lnl_toolbox.cli.clean_train:main"
-lnl-inspect-data = "lnl_toolbox.cli.inspect_data:main"
-lnl-make-noise = "lnl_toolbox.cli.make_noise:main"
-lnl-train = "lnl_toolbox.cli.train:main"
-
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools.package-data]
-lnl_toolbox = ["paper_catalog.json"]
-"lnl_toolbox.cli" = ["data/recipe_catalog.json"]
-
-[tool.setuptools.data-files]
-"share/lnl-toolbox/configs/experiment" = [
+{
+  "recipes": [
     "configs/experiment/apl_cifar10_noise02_reproduction.yaml",
     "configs/experiment/apl_cifar10_noise02_smoke.yaml",
     "configs/experiment/apl_cifar10_noise04_reproduction.yaml",
@@ -73,10 +38,13 @@ lnl_toolbox = ["paper_catalog.json"]
     "configs/experiment/pcse_multiclass_volmin_smoke.yaml",
     "configs/experiment/pdl_cifar10_reproduction.yaml",
     "configs/experiment/pdl_cifar10_smoke.yaml",
-]
-"share/lnl-toolbox/configs/reproduction" = [
     "configs/reproduction/cifar10_dual_t_sym20.yaml",
     "configs/reproduction/cifar10_dual_t_sym20_evidence.yaml",
     "configs/reproduction/importance_reweighting_binary_high_dim.yaml",
-    "configs/reproduction/importance_reweighting_binary_low_dim.yaml",
-]
+    "configs/reproduction/importance_reweighting_binary_low_dim.yaml"
+  ],
+  "conditional": [
+    "configs/experiment/mentornet_dd_cifar100_symmetric04_reproduction.yaml",
+    "configs/experiment/mentornet_dd_cifar100_symmetric04_smoke.yaml"
+  ]
+}

@@ -152,5 +152,44 @@
     "configs": [{"recipe_id":"fine-cifar100n-smoke","profile":"smoke","variant":"cifar100-sym20","fidelity":"paper-aligned"},{"recipe_id":"fine-cifar100n-reproduction","profile":"reproduction","variant":"cifar100-sym20","fidelity":"paper-protocol"}],
     "concept_to_config": [{"concept":"active forgetting","config":"fine","implementation":"algorithms/fine.py"},{"concept":"two-stage training","config":"fine.warmup_epochs","implementation":"training/fine_experiment.py"}],
     "implementation_paths": ["src/lnl_toolbox/algorithms/fine.py", "src/lnl_toolbox/training/fine_experiment.py"]
+  },
+  {
+    "id": "cnlcu", "acronym": "CNLCU", "title": "Sample Selection with Uncertainty of Losses for Learning with Noisy Labels", "venue": "ICLR", "year": 2022,
+    "source_url": "https://openreview.net/forum?id=xENf4QUL4LW",
+    "summary": "以双网络历史损失和不确定性证据执行 peer sample selection。",
+    "mechanism": "CNLCU-S 使用软不确定性；CNLCU-H 使用论文公式修正的 LOF 截断，再执行双网络交叉更新。",
+    "lifecycle": ["peer initialization", "history update", "uncertainty-aware selection", "cross update", "checkpointed history"],
+    "limitations": ["S/H smoke 已验证，但尚未完成论文多 seed 数值复现。", "H 明确采用 paper_formula_corrected_lof fidelity policy。"],
+    "implementation_status": "user_ready", "reproduction_status": "not_run", "availability": "runnable",
+    "configs": [
+      {"recipe_id":"cifar10-cnlcu-soft-smoke","profile":"smoke","variant":"cnlcu-s","configuration_fidelity":"smoke","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"},
+      {"recipe_id":"cifar10-cnlcu-hard-smoke","profile":"smoke","variant":"cnlcu-h","configuration_fidelity":"smoke","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}
+    ],
+    "concept_to_config": [{"concept":"uncertainty-aware peer selection","config":"cnlcu","implementation":"algorithms/cnlcu"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/cnlcu", "src/lnl_toolbox/training/cnlcu_experiment.py"]
+  },
+  {
+    "id": "t-revision", "acronym": "T-Revision", "title": "Are Anchor Points Really Indispensable in Label-Noise Learning?", "venue": "NeurIPS", "year": 2019,
+    "source_url": "https://papers.nips.cc/paper/2019/hash/9308b0d6e5898366a4a986bc33f3d3e7-Abstract.html",
+    "summary": "从伪 anchor 转移矩阵初始化出发，以 Reweight-R 联合修订转移参数和分类器。",
+    "mechanism": "stage-1 noisy classifier、transition initialization、classifier initialization 与 revision 阶段形成可恢复 workflow。",
+    "lifecycle": ["stage-1 training", "transition initialization", "classifier initialization", "revision training", "clean-test evaluation"],
+    "limitations": ["当前只实现论文 Reweight-R 路径。", "正式数值和多 seed 复现尚未执行。"],
+    "implementation_status": "user_ready", "reproduction_status": "not_run", "availability": "runnable",
+    "configs": [{"recipe_id":"cifar10-t-revision-smoke","profile":"smoke","variant":"cifar10-asymmetric","configuration_fidelity":"paper_oriented","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}],
+    "concept_to_config": [{"concept":"transition revision","config":"t_revision.revision","implementation":"algorithms/t_revision"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/t_revision", "src/lnl_toolbox/training/t_revision_experiment.py"]
+  },
+  {
+    "id": "binary-risk", "acronym": "Binary Risk", "title": "Learning with Noisy Labels", "venue": "NeurIPS", "year": 2013,
+    "source_url": "https://papers.nips.cc/paper/2013/hash/3871bd64012152bfb53fdf04b401193f-Abstract.html",
+    "summary": "在已知二分类 class-dependent noise rates 下构造无偏风险。",
+    "mechanism": "Natarajan binary risk corrector 对逐样本 surrogate risk 做精确校正。",
+    "lifecycle": ["known binary rates", "per-sample corrected risk", "binary optimization"],
+    "limitations": ["当前是精确风险子组件和 binary runner，不是论文完整 benchmark reproduction。", "尚无默认内置可直接运行 recipe。"],
+    "implementation_status": "component", "reproduction_status": "not_run", "availability": "conditional",
+    "configs": [],
+    "concept_to_config": [{"concept":"unbiased binary risk","config":"risk","implementation":"algorithms/binary_risk.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/binary_risk.py", "src/lnl_toolbox/training/binary_experiment.py"]
   }
 ]

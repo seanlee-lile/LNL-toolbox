@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-"""Lazy registry for experiments with dedicated lifecycle runners."""
+"""Compatibility facade over the central :mod:`training.runners` registry."""
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from importlib import import_module
-from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
 
@@ -30,11 +29,12 @@ class WorkflowSpec:
 
 
 class WorkflowRegistry:
-    """Map method names to lazily imported workflow runners."""
+    """Legacy workflow API; built-ins are resolved by ``RunnerRegistry``."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, include_builtins: bool = False) -> None:
         self._specs: dict[str, WorkflowSpec] = {}
         self._renamed: dict[str, str] = {}
+        self._include_builtins = include_builtins
 
     def add(self, name: str, module: str, runner: str) -> None:
         key = _normalize_name(name)
@@ -57,16 +57,23 @@ class WorkflowRegistry:
             replacement = self._renamed[key]
             raise ValueError(f"method {key!r} was renamed to {replacement!r}")
         spec = self._specs.get(key)
-        if spec is None:
-            suggestion = get_close_matches(key, self.names(), n=1)
-            hint = f"; did you mean {suggestion[0]!r}?" if suggestion else ""
-            raise ValueError(
-                f"unknown method {key!r}{hint}; valid methods: " + ", ".join(self.names())
-            )
-        return spec.load()
+        if spec is not None:
+            return spec.load()
+        if self._include_builtins:
+            from lnl_toolbox.training.runners import resolve_runner
+
+            return resolve_runner({"method": key}).load()
+        raise ValueError(
+            f"unknown method {key!r}; valid methods: " + ", ".join(self.names())
+        )
 
     def names(self) -> tuple[str, ...]:
-        return tuple(sorted(self._specs))
+        names = set(self._specs)
+        if self._include_builtins:
+            from lnl_toolbox.training.runners import method_names
+
+            names.update(method_names())
+        return tuple(sorted(names))
 
 
 def _normalize_name(name: object, *, allow_empty: bool = False) -> str:
@@ -84,27 +91,7 @@ def method_name(config: Mapping[str, Any]) -> str:
 
 
 def create_workflow_registry() -> WorkflowRegistry:
-    registry = WorkflowRegistry()
-    registry.add(
-        "coteaching",
-        "lnl_toolbox.training.coteaching_experiment",
-        "run_coteaching_experiment",
-    )
-    registry.add(
-        "dual_t",
-        "lnl_toolbox.training.dual_t_experiment",
-        "run_dual_t_experiment",
-    )
-    registry.add(
-        "importance_reweighting",
-        "lnl_toolbox.training.importance_reweighting_experiment",
-        "run_importance_reweighting_experiment",
-    )
-    registry.add(
-        "pcse",
-        "lnl_toolbox.training.pcse_experiment",
-        "run_pcse_experiment",
-    )
+    registry = WorkflowRegistry(include_builtins=True)
     registry.add_renamed("dual_t_forward", "dual_t")
     return registry
 
@@ -117,7 +104,8 @@ def resolve_workflow(config: Mapping[str, Any]) -> WorkflowRunner | None:
 
     if not isinstance(config, Mapping):
         raise TypeError("experiment configuration must be a mapping")
-    return _BUILTIN_WORKFLOWS.resolve(method_name(config))
+    name = method_name(config)
+    return _BUILTIN_WORKFLOWS.resolve(name) if name else None
 
 
 __all__ = [

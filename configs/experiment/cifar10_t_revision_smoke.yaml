@@ -1,4 +1,5 @@
 method: t_revision
+execution: {runner: t_revision}
 seed: 7
 output_root: artifacts/runs
 

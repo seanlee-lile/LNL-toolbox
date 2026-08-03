@@ -20,10 +20,11 @@ from lnl_toolbox.catalog import (
     paper_by_id,
     recipe_by_id,
     resolve_config_paths,
+    load_recipe_config,
     select_paper_config,
     validate_config,
 )
-from lnl_toolbox.training.runners import resolve_runner
+from lnl_toolbox.training.runners import apply_epoch_override, resolve_runner
 
 
 def _source_options(parser: argparse.ArgumentParser) -> None:
@@ -54,6 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
     experiments = list_sub.add_parser("experiments", help="列出内置实验配置")
     experiments.add_argument("--profile", choices=("smoke", "reproduction", "experiment"))
     experiments.add_argument("--dataset")
+    experiments.add_argument(
+        "--include-conditional",
+        action="store_true",
+        help="同时显示需要外部 artifact 的条件可用配置",
+    )
     components = list_sub.add_parser("components", help="列出底层可组合组件")
     components.add_argument("--kind")
 
@@ -93,11 +99,15 @@ def _load_source(args: argparse.Namespace) -> tuple[dict[str, Any], Path, Recipe
     if args.recipe:
         recipe = recipe_by_id(args.recipe, root)
         config_path = recipe.config_path
+        config = load_recipe_config(recipe)
     else:
         recipe = None
         config_path = args.config.expanduser().resolve()
-    project = find_project_root(config_path, root)
-    config = resolve_config_paths(load_yaml(config_path), project)
+        if not config_path.is_file():
+            raise FileNotFoundError(f"configuration does not exist: {config_path}")
+        config = load_yaml(config_path)
+    project = find_project_root(None if recipe is not None else config_path, root)
+    config = resolve_config_paths(config, project)
     return config, config_path, recipe, project
 
 
@@ -121,6 +131,31 @@ def _selection_description(config: dict[str, Any]) -> str:
     return f"{split} / targets={targets} / primary={primary}"
 
 
+def _epoch_description(config: dict[str, Any]) -> str:
+    method = config.get("method", "")
+    if isinstance(method, dict):
+        method = method.get("name", "")
+    method = str(method).strip().lower()
+    if method == "t_revision":
+        values = config.get("t_revision", {}) or {}
+        return "/".join(
+            str((values.get(stage, {}) or {}).get("epochs", "-"))
+            for stage in ("stage1", "classifier_initialization", "revision")
+        ) + " (stage1/classifier/revision)"
+    if method == "dual_t":
+        return "/".join(
+            str((config.get(stage, {}) or {}).get("epochs", "-"))
+            for stage in ("posterior_stage", "final_stage")
+        ) + " (posterior/final)"
+    if method == "pcse":
+        return "/".join(
+            str((config.get(stage, {}) or {}).get("epochs", "-"))
+            for stage in ("pretraining_stage", "ensemble_stage")
+        ) + " (pretraining/ensemble)"
+    trainer = config.get("trainer", {}) or {}
+    return str(trainer.get("epochs", config.get("epochs", "runner default")))
+
+
 def _print_plan(config: dict[str, Any], config_path: Path, project: Path) -> None:
     runner = resolve_runner(config)
     data = config.get("data", {}) or {}
@@ -133,7 +168,7 @@ def _print_plan(config: dict[str, Any], config_path: Path, project: Path) -> Non
     print(f"  数据路径: {data.get('root') or data.get('path') or '由数据适配器生成'}")
     print(f"  标签来源: {_noise_description(config)}")
     print(f"  模型: {(config.get('model', {}) or {}).get('name', 'runner default')}")
-    print(f"  训练轮数: {trainer.get('epochs', config.get('epochs', 'runner default'))}")
+    print(f"  训练轮数: {_epoch_description(config)}")
     print(f"  设备: {trainer.get('device', 'auto')}")
     print(f"  最佳模型依据: {_selection_description(config)}")
     print(f"  输出根目录: {config.get('output_root', 'artifacts/runs')}")
@@ -180,16 +215,21 @@ def _doctor(args: argparse.Namespace) -> int:
 
 
 def _list_experiments(args: argparse.Namespace) -> int:
-    recipes = discover_recipes()
+    recipes = discover_recipes(include_conditional=args.include_conditional)
     if args.profile:
         recipes = tuple(item for item in recipes if item.profile == args.profile)
     if args.dataset:
         recipes = tuple(item for item in recipes if item.dataset.lower() == args.dataset.lower())
-    print("RECIPE | PROFILE | DATASET | NOISE | METHOD | RUNNER | EPOCHS")
+    print(
+        "RECIPE | PROFILE | DATASET | NOISE | METHOD | RUNNER | "
+        "IMPLEMENTATION | FIDELITY | REPRODUCTION | AVAILABILITY | EPOCHS"
+    )
     for item in recipes:
         print(
             f"{item.id} | {item.profile} | {item.dataset} | {item.noise} | "
-            f"{item.method} | {item.runner} | {item.epochs if item.epochs is not None else '-'}"
+            f"{item.method} | {item.runner} | {item.implementation_status} | "
+            f"{item.configuration_fidelity} | {item.reproduction_status} | "
+            f"{item.availability} | {item.epochs if item.epochs is not None else '-'}"
         )
         print(f"  lnl run --recipe {item.id} --dry-run")
     return 0
@@ -221,11 +261,7 @@ def _validate(args: argparse.Namespace) -> int:
 def _run(args: argparse.Namespace) -> int:
     config, path, _recipe, project = _load_source(args)
     if args.epochs is not None:
-        if args.epochs <= 0:
-            raise ValueError("--epochs must be positive")
-        trainer = dict(config.get("trainer", {}) or {})
-        trainer["epochs"] = args.epochs
-        config["trainer"] = trainer
+        apply_epoch_override(config, args.epochs)
     validate_config(config, check_data=args.check_data)
     if args.dry_run:
         _print_plan(config, path, project)
@@ -255,19 +291,30 @@ def _resume(args: argparse.Namespace) -> int:
 
 
 def _paper_list() -> int:
-    print("ID | PAPER | VENUE | PROFILES | FIDELITY | RUNNERS | RECOMMENDED")
-    recipes = {item.id: item for item in discover_recipes()}
+    print(
+        "ID | PAPER | VENUE | IMPLEMENTATION | FIDELITY | REPRODUCTION | "
+        "AVAILABILITY | PROFILES | RUNNERS | RECOMMENDED"
+    )
+    recipes = {item.id: item for item in discover_recipes(include_conditional=True)}
     for paper in load_papers():
         profiles = ",".join(sorted({item.profile for item in paper.configs}))
-        fidelity = ",".join(sorted({item.fidelity for item in paper.configs}))
+        fidelity = ",".join(sorted({item.configuration_fidelity for item in paper.configs}))
         runners = ",".join(sorted({recipes[item.recipe_id].runner for item in paper.configs}))
-        recommended = next((item.recipe_id for item in paper.configs if item.profile == "smoke"), paper.configs[0].recipe_id)
-        print(f"{paper.id} | {paper.acronym} | {paper.venue} {paper.year} | {profiles} | {fidelity} | {runners} | {recommended}")
+        recommended = next(
+            (item.recipe_id for item in paper.configs if item.profile == "smoke"),
+            paper.configs[0].recipe_id if paper.configs else "-",
+        )
+        print(
+            f"{paper.id} | {paper.acronym} | {paper.venue} {paper.year} | "
+            f"{paper.implementation_status} | {fidelity} | "
+            f"{paper.reproduction_status} | {paper.availability} | {profiles} | "
+            f"{runners} | {recommended}"
+        )
     return 0
 
 
 def _paper_show(paper: PaperSpec) -> int:
-    recipes = {item.id: item for item in discover_recipes()}
+    recipes = {item.id: item for item in discover_recipes(include_conditional=True)}
     print(f"{paper.acronym}: {paper.title}")
     print(f"出处: {paper.venue} {paper.year} | {paper.source_url}")
     print(f"问题: {paper.summary}")
@@ -281,13 +328,16 @@ def _paper_show(paper: PaperSpec) -> int:
     print("\n可用配置:")
     for item in paper.configs:
         recipe = recipes[item.recipe_id]
-        config = load_yaml(recipe.config_path)
+        config = load_recipe_config(recipe)
         data = config.get("data", {}) or {}
         noise = config.get("noise", {}) or {}
         model = config.get("model", {}) or {}
         optimizer = config.get("optimizer", {}) or {}
         trainer = config.get("trainer", {}) or {}
-        print(f"  {item.profile}/{item.variant} [{item.fidelity}] {item.recipe_id}")
+        print(
+            f"  {item.profile}/{item.variant} "
+            f"[{item.configuration_fidelity}; {item.availability}] {item.recipe_id}"
+        )
         print(
             f"    runner={recipe.runner}; data={data.get('name', '-')}; noise={noise.get('name', 'clean')} "
             f"rate={noise.get('rate', '-')}; model={model.get('name', '-')}; optimizer={optimizer.get('name', '-')}; "
@@ -302,11 +352,17 @@ def _paper_show(paper: PaperSpec) -> int:
     print("\n核心实现路径:")
     for path in paper.implementation_paths:
         print(f"  - {path}")
-    recommended = next((item for item in paper.configs if item.profile == "smoke"), paper.configs[0])
     print("\n推荐命令:")
-    print(f"  lnl validate --recipe {recommended.recipe_id}")
-    print(f"  lnl run --recipe {recommended.recipe_id} --dry-run")
-    print(f"  lnl run --recipe {recommended.recipe_id}")
+    if paper.configs:
+        recommended = next(
+            (item for item in paper.configs if item.profile == "smoke"),
+            paper.configs[0],
+        )
+        print(f"  lnl validate --recipe {recommended.recipe_id}")
+        print(f"  lnl run --recipe {recommended.recipe_id} --dry-run")
+        print(f"  lnl run --recipe {recommended.recipe_id}")
+    else:
+        print("  当前只有组件实现，没有内置可直接运行 recipe。")
     return 0
 
 
@@ -319,9 +375,9 @@ def _paper_config(args: argparse.Namespace) -> int:
     if args.path_only:
         print(recipe.config_path)
         return 0
-    config = load_yaml(recipe.config_path)
+    config = load_recipe_config(recipe)
     if args.resolved:
-        project = find_project_root(recipe.config_path, root)
+        project = find_project_root(None, root)
         config = resolve_config_paths(config, project)
     import yaml
 
