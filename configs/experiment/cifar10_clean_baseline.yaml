@@ -30,3 +30,4 @@ scheduler:
 trainer:
   epochs: 200
   device: auto
+execution: {runner: clean}

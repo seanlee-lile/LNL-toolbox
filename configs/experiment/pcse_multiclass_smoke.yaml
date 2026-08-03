@@ -64,3 +64,4 @@ trainer:
 
 evaluation:
   selection_split: validation
+execution: {runner: pcse}

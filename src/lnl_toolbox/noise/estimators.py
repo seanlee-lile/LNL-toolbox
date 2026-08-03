@@ -10,7 +10,7 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 
-from .transition import TransitionArtifact
+from .transition import TransitionArtifact, validate_transition_matrix
 
 
 def _readonly_copy(values: np.ndarray, dtype: np.dtype) -> np.ndarray:
@@ -153,6 +153,25 @@ class TransitionEstimator(Protocol):
         ...
 
 
+def select_anchor_candidates(
+    snapshot: PosteriorSnapshot,
+    candidates_per_class: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Select deterministic top-posterior candidates for every clean class."""
+
+    count = int(candidates_per_class)
+    if count < 1 or count > snapshot.num_samples:
+        raise ValueError("candidates_per_class must be within [1, num_samples]")
+    positions = np.empty((snapshot.num_classes, count), dtype=np.int64)
+    indices = np.empty_like(positions)
+    for class_index in range(snapshot.num_classes):
+        scores = snapshot.noisy_probabilities[:, class_index]
+        order = np.lexsort((snapshot.global_indices, -scores))[:count]
+        positions[class_index] = order
+        indices[class_index] = snapshot.global_indices[order]
+    return positions, indices
+
+
 @dataclass(frozen=True, slots=True)
 class AnchorTransitionEstimator:
     """Patrini et al. (CVPR 2017), Equations (12)-(13)."""
@@ -185,6 +204,33 @@ class AnchorTransitionEstimator:
                 "anchor_scores": anchor_scores,
                 "selection": "argmax_noisy_posterior_tie_min_global_index",
                 "paper": "Patrini et al., CVPR 2017, Equations (12)-(13)",
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class KnownTransitionEstimator:
+    """Return a validated transition matrix supplied by an experiment."""
+
+    matrix: np.ndarray
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "matrix", _readonly_copy(validate_transition_matrix(self.matrix), np.float64)
+        )
+
+    def estimate(self, snapshot: PosteriorSnapshot) -> TransitionArtifact:
+        if self.matrix.shape[0] != snapshot.num_classes:
+            raise ValueError("known transition classes must match posterior snapshot")
+        return TransitionArtifact(
+            matrix=self.matrix,
+            estimator="known",
+            source_snapshot_hash=snapshot.snapshot_hash,
+            metadata={
+                "dataset": snapshot.dataset,
+                "split": snapshot.split,
+                "num_samples": snapshot.num_samples,
+                "source": "configuration",
             },
         )
 

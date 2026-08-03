@@ -27,3 +27,4 @@ scheduler:
 trainer:
   epochs: 2
   device: auto
+execution: {runner: clean}

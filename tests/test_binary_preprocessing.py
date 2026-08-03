@@ -278,15 +278,9 @@ class BinaryPreprocessingTest(unittest.TestCase):
 
     def test_binary_package_exports_only_consumed_public_api(self) -> None:
         self.assertFalse(hasattr(data_package, "load_uci_binary"))
-        self.assertFalse(
-            hasattr(binary_benchmarks, "corrupt_binary_labels")
-        )
-        self.assertFalse(
-            hasattr(binary_benchmarks, "stratified_binary_splits")
-        )
-        self.assertFalse(
-            hasattr(binary_benchmarks, "cifar_airplane_automobile_view")
-        )
+        self.assertTrue(callable(binary_benchmarks.corrupt_binary_labels))
+        self.assertTrue(callable(binary_benchmarks.stratified_binary_splits))
+        self.assertTrue(callable(binary_benchmarks.cifar_airplane_automobile_view))
 
 
 if __name__ == "__main__":

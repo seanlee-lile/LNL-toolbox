@@ -11,6 +11,7 @@ from lnl_toolbox.data.noisy_dataset import NoisyTargetDataset
 from lnl_toolbox.noise import (
     KnownTransition,
     NoiseManifest,
+    generate_class_conditional,
     generate_instance_dependent,
     generate_pairflip,
     generate_symmetric,
@@ -97,6 +98,27 @@ class NoiseTest(unittest.TestCase):
         )
         np.testing.assert_array_equal(first.noisy_targets, second.noisy_targets)
         self.assertEqual(first.metadata["rng"], "numpy_legacy")
+
+    def test_transition_sampling_matches_per_sample_legacy_multinomial(self) -> None:
+        labels = np.arange(10, dtype=np.int64)
+        manifest = generate_symmetric(
+            labels,
+            10,
+            0.4,
+            7,
+            "toy",
+            sampling="transition",
+            rng="numpy_legacy",
+        )
+        matrix = np.full((10, 10), 0.4 / 9.0)
+        np.fill_diagonal(matrix, 0.6)
+        random = np.random.RandomState(7)
+        expected = np.array([
+            random.multinomial(1, matrix[label], size=1)[0].argmax()
+            for label in labels
+        ])
+        np.testing.assert_array_equal(manifest.noisy_targets, expected)
+        self.assertEqual(manifest.metadata["sampling"], "transition")
 
     def test_pairflip_only_moves_to_next_class(self) -> None:
         manifest = generate_pairflip(self.labels, 10, 0.5, 3, "toy")

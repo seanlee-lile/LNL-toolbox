@@ -44,6 +44,7 @@ __all__ = [
     "PseudoLabelProvider",
     "PseudoLabelResult",
     "RunState",
+    "ObjectiveConsumer",
     "Stateful",
     "SoftTargetProvider",
     "SoftTargetResult",

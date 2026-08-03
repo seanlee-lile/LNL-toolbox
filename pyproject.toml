@@ -20,6 +20,7 @@ train = [
 dev = ["pytest>=8.0"]
 
 [project.scripts]
+lnl = "lnl_toolbox.cli.main:main"
 lnl-clean-train = "lnl_toolbox.cli.clean_train:main"
 lnl-inspect-data = "lnl_toolbox.cli.inspect_data:main"
 lnl-make-noise = "lnl_toolbox.cli.make_noise:main"
@@ -27,3 +28,6 @@ lnl-train = "lnl_toolbox.cli.train:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+lnl_toolbox = ["paper_catalog.json"]

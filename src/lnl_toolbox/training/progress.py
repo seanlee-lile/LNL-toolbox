@@ -180,3 +180,22 @@ def write_training_curves_svg(
     ))
     target.write_text("\n".join(parts), encoding="utf-8")
     return target
+
+
+def standardize_epoch_row(row: Mapping[str, object]) -> dict[str, object]:
+    """Normalize runner metrics to the shared curve-comparison field names."""
+
+    result = dict(row)
+    result.setdefault("event", "epoch")
+    if "validation_accuracy" not in result and "selection_accuracy" in result:
+        result["validation_accuracy"] = result["selection_accuracy"]
+    if "validation_loss" not in result and "selection_loss" in result:
+        result["validation_loss"] = result["selection_loss"]
+    required = ("train_loss", "validation_loss", "train_accuracy", "validation_accuracy", "learning_rate")
+    missing = [name for name in required if name not in result]
+    if missing:
+        raise ValueError(f"epoch row is missing standard fields: {missing}")
+    for name in required:
+        if not math.isfinite(float(result[name])):
+            raise ValueError(f"epoch metric {name!r} must be finite")
+    return result

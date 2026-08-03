@@ -10,9 +10,12 @@ from lnl_toolbox.noise import (
     AnchorTransitionEstimator,
     DualTransitionEstimator,
     generate_instance_dependent,
+    generate_pdl_idn,
     generate_pairflip,
     generate_symmetric,
 )
+from lnl_toolbox.noise.estimators import KnownTransitionEstimator
+from lnl_toolbox.noise.generators import generate_class_conditional
 from lnl_toolbox.plugins import PluginCatalog
 
 
@@ -87,6 +90,21 @@ def create_builtin_catalog() -> PluginCatalog:
             capabilities=common + ("composite", "noise_robust"),
         )
     try:
+        from lnl_toolbox.algorithms.fine import FINERegularizer
+    except ImportError:
+        pass
+    else:
+        catalog.add(
+            "regularizer", "fine", FINERegularizer,
+            capabilities=("noisy_only", "active_forgetting", "negative_learning"),
+            metadata={"paper": "FINE active forgetting and noise suppression"},
+        )
+        from lnl_toolbox.selectors.sed import SEDSelector
+        catalog.add(
+            "fine_selector", "sed", SEDSelector,
+            capabilities=("fine_selection", "fine", "stateless"),
+        )
+    try:
         from lnl_toolbox.selectors import AllSelector, SmallLossSelector
     except ImportError:
         pass  # Generic selectors are optional with the PyTorch training stack.
@@ -106,7 +124,10 @@ def create_builtin_catalog() -> PluginCatalog:
         )
     try:
         from lnl_toolbox.algorithms.cdr import CDRUpdatePolicy
-        from lnl_toolbox.algorithms.update_policy import StandardUpdatePolicy
+        from lnl_toolbox.algorithms.update_policy import (
+            StandardUpdatePolicy,
+            StepMilestoneUpdatePolicy,
+        )
     except ImportError:
         pass  # Parameter update policies require the PyTorch training stack.
     else:
@@ -115,6 +136,12 @@ def create_builtin_catalog() -> PluginCatalog:
             "standard",
             StandardUpdatePolicy,
             capabilities=("single_model", "optimizer_step", "stateless"),
+        )
+        catalog.add(
+            "parameter_update_policy",
+            "step_milestone",
+            StepMilestoneUpdatePolicy,
+            capabilities=("single_model", "optimizer_step", "step_schedule", "stateful"),
         )
         catalog.add(
             "parameter_update_policy",
@@ -133,11 +160,20 @@ def create_builtin_catalog() -> PluginCatalog:
     catalog.add("noise", "symmetric", generate_symmetric, metadata={"example": True})
     catalog.add("noise", "pairflip", generate_pairflip, metadata={"example": True})
     catalog.add(
+        "noise", "class_conditional", generate_class_conditional,
+        capabilities=("class_conditional", "matrix_configured"),
+    )
+    catalog.add(
         "noise",
         "instance_dependent",
         generate_instance_dependent,
         capabilities=("per_sample_state",),
         metadata={"example": True},
+    )
+    catalog.add(
+        "noise", "pdl", generate_pdl_idn,
+        capabilities=("per_sample_state", "paper_benchmark"),
+        metadata={"paper": "Xia et al., NeurIPS 2020, Algorithm 2"},
     )
     catalog.add(
         "selector",
@@ -160,9 +196,30 @@ def create_builtin_catalog() -> PluginCatalog:
         capabilities=("class_conditional", "offline", "factorized", "paper_reference"),
         metadata={"paper": "Yao et al., NeurIPS 2020"},
     )
+    catalog.add(
+        "transition_estimator", "known", KnownTransitionEstimator,
+        capabilities=("class_conditional", "configured", "offline"),
+    )
+    try:
+        from lnl_toolbox.noise.pdl import PartTransitionEstimator
+        from lnl_toolbox.algorithms.instance_transition import InstanceTransitionClassificationAlgorithm
+    except ImportError:
+        pass
+    else:
+        catalog.add(
+            "instance_transition_estimator", "pdl", PartTransitionEstimator,
+            capabilities=("instance_dependent", "feature_snapshot", "posterior_snapshot", "offline"),
+            metadata={"paper": "Xia et al., NeurIPS 2020"},
+        )
+        catalog.add(
+            "instance_transition_algorithm", "corrected_classification",
+            InstanceTransitionClassificationAlgorithm,
+            capabilities=("single_model", "instance_transition", "corrected_risk"),
+        )
     try:
         from lnl_toolbox.noise.transition import TrainableTransitionModel
         from lnl_toolbox.algorithms.multi_model import SmallLossPeerExchange
+        from lnl_toolbox.algorithms.jocor import JoCoRAlgorithm
     except ImportError:
         pass
     else:
@@ -178,6 +235,17 @@ def create_builtin_catalog() -> PluginCatalog:
             SmallLossPeerExchange,
             capabilities=("multi_model", "sample_selection"),
         )
+        catalog.add(
+            "multi_model_algorithm",
+            "jocor",
+            JoCoRAlgorithm,
+            capabilities=(
+                "multi_model",
+                "joint_selection",
+                "agreement_regularization",
+            ),
+            metadata={"paper": "Wei et al., CVPR 2020"},
+        )
     try:
         from lnl_toolbox.algorithms.transition_risk import (
             BackwardRiskCorrector,
@@ -189,6 +257,22 @@ def create_builtin_catalog() -> PluginCatalog:
         catalog.add(
             "risk_corrector", "forward", ForwardRiskCorrector,
             capabilities=("transition_consumer", "corrected_risk"),
+        )
+    try:
+        from lnl_toolbox.estimators.cwd import CWDEstimator
+        from lnl_toolbox.algorithms.cwd import CWDGlobalObjective
+    except ImportError:
+        pass
+    else:
+        catalog.add(
+            "statistic_estimator", "cwd", CWDEstimator,
+            capabilities=("feature_snapshot", "classwise", "offline"),
+            metadata={"paper": "CWD TPAMI 2022"},
+        )
+        catalog.add(
+            "objective_consumer", "cwd", CWDGlobalObjective,
+            capabilities=("feature_objective", "global_risk"),
+            metadata={"paper": "CWD TPAMI 2022"},
         )
         catalog.add(
             "risk_corrector", "backward", BackwardRiskCorrector,
@@ -204,6 +288,18 @@ def create_builtin_catalog() -> PluginCatalog:
             "standard_noisy_erm",
             StandardNoisyERMPipeline.from_config,
             capabilities=("single_model", "stage_lifecycle", "artifact_handoff"),
+        )
+    try:
+        from lnl_toolbox.algorithms.mentornet import MentorNetWeightProvider
+    except ImportError:
+        pass
+    else:
+        catalog.add(
+            "weight_provider",
+            "mentornet",
+            MentorNetWeightProvider,
+            capabilities=("continuous_weight", "learned_curriculum", "stateful"),
+            metadata={"paper": "Jiang et al., ICML 2018"},
         )
     _register_dss(catalog)
     return catalog
@@ -314,6 +410,124 @@ def build_builtin_weight_provider(
         ) from exc
 
 
+def build_builtin_instance_transition_estimator(
+    config: Mapping[str, Any] | None,
+    catalog: PluginCatalog | None = None,
+) -> Any:
+    """Build an estimator that emits a per-sample transition provider."""
+
+    if config is not None and not isinstance(config, Mapping):
+        raise TypeError("Instance transition estimator configuration must be a mapping")
+    values = dict(config or {"name": "pdl"})
+    name = str(values.pop("name", "pdl")).strip().lower()
+    factorization = values.pop("factorization", None)
+    anchors = values.pop("anchors", None)
+    if factorization is not None:
+        if not isinstance(factorization, Mapping):
+            raise TypeError("factorization configuration must be a mapping")
+        values["representation_iterations"] = int(factorization.get("iterations", 200))
+        values["representation_seed"] = int(factorization.get("seed", 0))
+    if anchors is not None:
+        if not isinstance(anchors, Mapping):
+            raise TypeError("anchors configuration must be a mapping")
+        values["anchor_candidates"] = int(anchors["candidates_per_class"])
+    catalog = catalog or create_builtin_catalog()
+    try:
+        return catalog.build("instance_transition_estimator", name, **values)
+    except KeyError as exc:
+        available = ", ".join(
+            item.name for item in catalog.find(kind="instance_transition_estimator")
+        ) or "none"
+        raise ValueError(
+            f"Unknown instance transition estimator {name!r}; available: {available}"
+        ) from exc
+
+
+def build_builtin_instance_transition_algorithm(
+    config: Mapping[str, Any],
+    *,
+    model: Any,
+    optimizer: Any,
+    loss: Any,
+    transition: Any,
+    device: Any,
+    catalog: PluginCatalog | None = None,
+) -> Any:
+    """Build a generic consumer of per-sample transition providers."""
+
+    if not isinstance(config, Mapping):
+        raise TypeError("Instance transition algorithm configuration must be a mapping")
+    values = dict(config)
+    name = str(values.pop("name", "corrected_classification")).strip().lower()
+    catalog = catalog or create_builtin_catalog()
+    try:
+        return catalog.build(
+            "instance_transition_algorithm",
+            name,
+            model=model,
+            optimizer=optimizer,
+            loss=loss,
+            transition=transition,
+            device=device,
+            **values,
+        )
+    except KeyError as exc:
+        available = ", ".join(
+            item.name for item in catalog.find(kind="instance_transition_algorithm")
+        ) or "none"
+        raise ValueError(
+            f"Unknown instance transition algorithm {name!r}; available: {available}"
+        ) from exc
+
+
+def build_builtin_regularizer(
+    config: Mapping[str, Any] | None,
+    catalog: PluginCatalog | None = None,
+) -> Any:
+    """Build a generic objective regularizer."""
+
+    if config is not None and not isinstance(config, Mapping):
+        raise TypeError("Regularizer configuration must be a mapping")
+    values = dict(config or {})
+    name = str(values.pop("name", "")).strip().lower()
+    if not name:
+        raise ValueError("Regularizer configuration requires a name")
+    catalog = catalog or create_builtin_catalog()
+    try:
+        return catalog.build("regularizer", name, **values)
+    except KeyError as exc:
+        available = ", ".join(
+            item.name for item in catalog.find(kind="regularizer")
+        ) or "none"
+        raise ValueError(
+            f"Unknown regularizer {name!r}; available: {available}"
+        ) from exc
+
+
+def build_builtin_statistic_estimator(
+    config: Mapping[str, Any] | None,
+    catalog: PluginCatalog | None = None,
+) -> Any:
+    """Build an offline statistic estimator."""
+
+    if config is not None and not isinstance(config, Mapping):
+        raise TypeError("Statistic estimator configuration must be a mapping")
+    values = dict(config or {})
+    name = str(values.pop("name", "")).strip().lower()
+    if not name:
+        raise ValueError("Statistic estimator configuration requires a name")
+    catalog = catalog or create_builtin_catalog()
+    try:
+        return catalog.build("statistic_estimator", name, **values)
+    except KeyError as exc:
+        available = ", ".join(
+            item.name for item in catalog.find(kind="statistic_estimator")
+        ) or "none"
+        raise ValueError(
+            f"Unknown statistic estimator {name!r}; available: {available}"
+        ) from exc
+
+
 def build_builtin_objective_consumer(
     config: Mapping[str, Any] | None,
     catalog: PluginCatalog | None = None,
@@ -336,6 +550,23 @@ def build_builtin_objective_consumer(
         raise ValueError(
             f"Unknown objective consumer {name!r}; available: {available}"
         ) from exc
+
+
+def build_builtin_fine_selector(
+    config: Mapping[str, Any] | None,
+    catalog: PluginCatalog | None = None,
+) -> Any:
+    """Build FINE selection without changing the generic selector kind."""
+
+    if config is not None and not isinstance(config, Mapping):
+        raise TypeError("FINE selector configuration must be a mapping")
+    values = dict(config or {"name": "sed"})
+    name = str(values.pop("name", "sed")).strip().lower()
+    catalog = catalog or create_builtin_catalog()
+    try:
+        return catalog.build("fine_selector", name, **values)
+    except KeyError as exc:
+        raise ValueError(f"Unknown FINE selector {name!r}") from exc
 
 
 def build_builtin_transition_model(
@@ -366,6 +597,47 @@ def build_builtin_peer_exchange(
         return catalog.build("peer_exchange", name, **values)
     except KeyError as exc:
         raise ValueError(f"Unknown peer exchange {name!r}") from exc
+
+
+def build_builtin_multi_model_algorithm(
+    config: Mapping[str, Any],
+    *,
+    models: Any,
+    optimizer: Any,
+    loss: Any,
+    selector: Any,
+    device: Any,
+    catalog: PluginCatalog | None = None,
+) -> Any:
+    """Build a multi-network algorithm from injected reusable components."""
+
+    if not isinstance(config, Mapping):
+        raise TypeError("multi-model algorithm configuration must be a mapping")
+    values = dict(config)
+    name = str(values.pop("name", "")).strip().lower()
+    if not name:
+        raise ValueError("multi-model algorithm name must not be empty")
+    if "lambda" in values:
+        values["lambda_"] = values.pop("lambda")
+    catalog = catalog or create_builtin_catalog()
+    try:
+        return catalog.build(
+            "multi_model_algorithm",
+            name,
+            models=models,
+            optimizer=optimizer,
+            loss=loss,
+            selector=selector,
+            device=device,
+            **values,
+        )
+    except KeyError as exc:
+        available = ", ".join(
+            item.name for item in catalog.find(kind="multi_model_algorithm")
+        ) or "none"
+        raise ValueError(
+            f"Unknown multi-model algorithm {name!r}; available: {available}"
+        ) from exc
 
 
 def build_builtin_pipeline(
@@ -401,6 +673,8 @@ def build_builtin_selector(
     values = dict(config or {"name": "all"})
     name = str(values.pop("name", "all")).strip().lower()
     catalog = catalog or create_builtin_catalog()
+    if name == "sed":
+        return build_builtin_fine_selector({"name": name, **values}, catalog)
     try:
         return catalog.build("batch_selector", name, **values)
     except KeyError as exc:

@@ -18,7 +18,7 @@ def _condition_number(matrix: np.ndarray, *, owner: str, limit: float) -> float:
     condition = float(singular_values[0] / singular_values[-1])
     if not np.isfinite(condition) or condition > limit:
         raise ValueError(
-            f"{owner} is ill-conditioned: condition={condition:.6g}, "
+            f"{owner} is singular or ill-conditioned: condition={condition:.6g}, "
             f"limit={limit:.6g}"
         )
     return condition

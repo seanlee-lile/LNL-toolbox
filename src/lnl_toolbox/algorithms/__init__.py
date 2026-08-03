@@ -8,6 +8,7 @@ from .coteaching import (
 )
 from .cnlcu import CNLCUAlgorithm, CNLCUConfig, CNLCUState
 from .multi_model import ModelGroup, PeerExchangeResult, SmallLossPeerExchange, consistency_loss
+from .jocor import JoCoRAlgorithm, jocor_joint_scores, symmetric_kl_per_sample
 
 __all__ = [
     "Algorithm",
@@ -23,6 +24,9 @@ __all__ = [
     "ModelGroup",
     "PeerExchangeResult",
     "SmallLossPeerExchange",
+    "JoCoRAlgorithm",
+    "jocor_joint_scores",
+    "symmetric_kl_per_sample",
     "consistency_loss",
 ]
 try:
@@ -32,6 +36,7 @@ try:
         ParameterUpdatePolicy,
         ParameterUpdateResult,
         StandardUpdatePolicy,
+        StepMilestoneUpdatePolicy,
     )
 except ImportError:
     pass  # PyTorch-backed update policies are optional with the training stack.
@@ -43,8 +48,21 @@ else:
         "ParameterUpdatePolicy",
         "ParameterUpdateResult",
         "StandardUpdatePolicy",
+        "StepMilestoneUpdatePolicy",
         "critical_parameter_masks",
     ])
+try:
+    from .mentornet import MentorNetWeightProvider, MovingPercentileState
+except ImportError:
+    pass
+else:
+    __all__.extend(["MentorNetWeightProvider", "MovingPercentileState"])
+try:
+    from .binary_risk import BinaryRiskCorrector, LabelDependentCostRisk, NatarajanRisk, NatarajanUnbiasedRisk
+except ImportError:
+    pass
+else:
+    __all__.extend(["BinaryRiskCorrector", "LabelDependentCostRisk", "NatarajanRisk", "NatarajanUnbiasedRisk"])
 try:
     from .supervised import SupervisedClassificationAlgorithm
 except ImportError:
@@ -61,3 +79,9 @@ except ImportError:
     pass
 else:
     __all__.extend(["BackwardRiskCorrector", "ForwardRiskCorrector", "RiskCorrector"])
+try:
+    from .instance_transition import InstanceTransitionClassificationAlgorithm
+except ImportError:
+    pass
+else:
+    __all__.append("InstanceTransitionClassificationAlgorithm")

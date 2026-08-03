@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Stable global-index state stores for loss and selection history."""
+"""Stable global-index state stores for scalar and tensor histories."""
 
 from dataclasses import dataclass, field
 from typing import Any, Mapping

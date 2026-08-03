@@ -68,4 +68,36 @@ def forward_with_features(
     )
 
 
-__all__ = ["FeatureOutput", "forward_with_features"]
+def classifier_parameters(model: nn.Module) -> tuple[Tensor, Tensor | None]:
+    """Return the final linear classifier through a model-neutral contract."""
+
+    classifier = getattr(model, "classifier", None)
+    if isinstance(classifier, nn.Linear):
+        return classifier.weight, classifier.bias
+    if isinstance(classifier, nn.Sequential):
+        for module in reversed(tuple(classifier)):
+            if isinstance(module, nn.Linear):
+                return module.weight, module.bias
+    raise TypeError(
+        f"model {type(model).__name__} has no discoverable linear classifier"
+    )
+
+
+def validate_objective(value: Tensor) -> Tensor:
+    """Validate the scalar, differentiable objective consumer contract."""
+
+    if not torch.is_tensor(value) or value.ndim != 0:
+        raise ValueError("objective consumer must return a scalar tensor")
+    if not value.requires_grad:
+        raise ValueError("objective consumer output must require gradients")
+    if not bool(torch.isfinite(value.detach()).item()):
+        raise ValueError("objective consumer output must be finite")
+    return value
+
+
+__all__ = [
+    "FeatureOutput",
+    "classifier_parameters",
+    "forward_with_features",
+    "validate_objective",
+]

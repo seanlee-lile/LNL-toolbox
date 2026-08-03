@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from .manifest import NoiseManifest
+from .transition import validate_transition_matrix
 
 
 def _validate(labels: np.ndarray, num_classes: int, rate: float) -> np.ndarray:
@@ -120,6 +121,43 @@ def generate_pairflip(
     return NoiseManifest(dataset, "pairflip", seed, rate, labels, noisy, transition)
 
 
+def generate_class_conditional(
+    labels: np.ndarray,
+    transition_matrix: np.ndarray,
+    rate: float,
+    seed: int,
+    dataset: str = "unknown",
+    rng: str = "numpy_legacy",
+) -> NoiseManifest:
+    """Sample noisy labels from a row-stochastic class transition matrix."""
+
+    labels = np.asarray(labels, dtype=np.int64)
+    if labels.ndim != 1:
+        raise ValueError("labels must be one-dimensional")
+    matrix = validate_transition_matrix(transition_matrix)
+    if labels.size and (labels.min() < 0 or labels.max() >= matrix.shape[0]):
+        raise ValueError("labels must be within the transition matrix classes")
+    if not 0.0 <= float(rate) <= 1.0:
+        raise ValueError("rate must be in [0, 1]")
+    rng_name = str(rng).strip().lower()
+    if rng_name != "numpy_legacy":
+        raise ValueError("class_conditional noise requires rng='numpy_legacy'")
+    random = np.random.RandomState(seed)
+    noisy = labels.copy()
+    for position, label in enumerate(labels):
+        noisy[position] = int(random.multinomial(1, matrix[int(label)]).argmax())
+    return NoiseManifest(
+        dataset,
+        "class_conditional",
+        seed,
+        float(rate),
+        labels,
+        noisy,
+        matrix,
+        metadata={"rng": rng_name, "transition_source": "configuration"},
+    )
+
+
 def generate_instance_dependent(
     labels: np.ndarray,
     class_scores: np.ndarray,
@@ -161,3 +199,49 @@ def generate_instance_dependent(
         per_sample_transition=per_sample,
         metadata={"generator": "score_weighted_idn"},
     )
+
+
+def generate_pdl_idn(
+    inputs: np.ndarray,
+    clean_targets: np.ndarray,
+    num_classes: int,
+    rate: float,
+    seed: int,
+    dataset: str = "unknown",
+) -> NoiseManifest:
+    """Generate PDL Algorithm 2 instance-dependent noise.
+
+    Per-sample corruption rates are sampled from a truncated normal and wrong
+    classes are distributed by input-dependent random linear scores.
+    """
+
+    targets = _validate(clean_targets, num_classes, rate)
+    features = np.asarray(inputs, dtype=np.float64)
+    if features.shape[0] != targets.size:
+        raise ValueError("inputs and clean_targets must contain the same samples")
+    features = features.reshape(targets.size, -1)
+    if not np.isfinite(features).all():
+        raise ValueError("inputs must be finite")
+    random = np.random.RandomState(seed)
+    rates = random.normal(float(rate), 0.1, size=targets.size)
+    invalid = (rates < 0.0) | (rates > 1.0)
+    while invalid.any():
+        rates[invalid] = random.normal(float(rate), 0.1, size=int(invalid.sum()))
+        invalid = (rates < 0.0) | (rates > 1.0)
+    weights = random.standard_normal((num_classes, features.shape[1], num_classes))
+    transitions = np.zeros((targets.size, num_classes), dtype=np.float64)
+    noisy = targets.copy()
+    for position, clean_class in enumerate(targets):
+        scores = features[position] @ weights[int(clean_class)]
+        scores[int(clean_class)] = -np.inf
+        classes = np.delete(np.arange(num_classes), int(clean_class))
+        wrong_scores = scores[classes]
+        wrong = np.exp(wrong_scores - wrong_scores.max())
+        wrong /= wrong.sum()
+        transitions[position, classes] = rates[position] * wrong
+        transitions[position, int(clean_class)] = 1.0 - rates[position]
+        noisy[position] = int(random.choice(num_classes, p=transitions[position]))
+    return NoiseManifest(dataset, "pdl_instance_dependent", seed, rate, targets,
+        noisy, per_sample_transition=transitions, num_classes=num_classes,
+        metadata={"generator": "pdl_algorithm_2", "rate_distribution": "truncated_normal",
+            "rate_std": 0.1, "transition_convention": "clean_to_noisy_row"})

@@ -3,7 +3,7 @@ from __future__ import annotations
 """Reference supervised algorithm used to verify the shared training path."""
 
 import math
-from typing import Any, Mapping
+from typing import Any, Mapping, Protocol, runtime_checkable
 
 import torch
 from torch import nn
@@ -15,6 +15,8 @@ from lnl_toolbox.core.objectives import ObjectiveConsumer, ObjectiveResult
 from lnl_toolbox.losses.torch_losses import loss_for_all_targets, validate_per_sample_loss
 from lnl_toolbox.noise.transition import TransitionProvider
 from lnl_toolbox.algorithms.transition_risk import RiskCorrector
+from lnl_toolbox.core.objectives import ObjectiveConsumer, ObjectiveResult
+from lnl_toolbox.models.feature_output import FeatureOutput, forward_with_features, validate_objective
 from lnl_toolbox.algorithms.update_policy import (
     ParameterUpdateInput,
     ParameterUpdatePolicy,
@@ -36,6 +38,56 @@ from lnl_toolbox.treatments import (
     WeightProvider,
     reduce_per_sample_loss,
 )
+
+
+@runtime_checkable
+class Regularizer(Protocol):
+    """Generic noisy-only objective added after sample treatment."""
+
+    def __call__(
+        self,
+        logits: torch.Tensor,
+        noisy_targets: torch.Tensor,
+        *,
+        sample_indices: torch.Tensor,
+        selected_mask: torch.Tensor,
+        rejected_mask: torch.Tensor,
+        metadata: Mapping[str, Any],
+    ) -> torch.Tensor:
+        ...
+
+
+def _call_regularizer(
+    regularizer: Any,
+    *,
+    logits: torch.Tensor,
+    noisy_targets: torch.Tensor,
+    sample_indices: torch.Tensor,
+    selected_mask: torch.Tensor,
+    rejected_mask: torch.Tensor,
+    metadata: Mapping[str, Any],
+) -> torch.Tensor:
+    """Call either the common callable or compute-style regularizer contract."""
+
+    arguments = {
+        "logits": logits,
+        "noisy_targets": noisy_targets,
+        "sample_indices": sample_indices,
+        "selected_mask": selected_mask,
+        "rejected_mask": rejected_mask,
+        "metadata": metadata,
+    }
+    compute = getattr(regularizer, "compute", None)
+    value = compute(**arguments) if callable(compute) else regularizer(**arguments)
+    if not torch.is_tensor(value) or value.ndim not in (0, 1):
+        raise ValueError("regularizer must return a scalar or per-sample tensor")
+    if value.ndim == 1:
+        if value.shape != noisy_targets.shape:
+            raise ValueError("regularizer per-sample output must align with the batch")
+        value = value.mean()
+    if not torch.isfinite(value).all():
+        raise ValueError("regularizer returned a non-finite value")
+    return value
 
 
 def _validate_target_sample_indices(
@@ -96,7 +148,9 @@ class SupervisedClassificationAlgorithm:
                  transition: TransitionProvider | None = None,
                  weight_provider: WeightProvider[SupervisedWeightInput] | None = None,
                  target_provider: LabelProvider | None = None,
-                 objective_consumer: ObjectiveConsumer | None = None) -> None:
+                 regularizer: Regularizer | None = None,
+                 objective_consumer: ObjectiveConsumer | None = None,
+                 regularizer_weight: float = 1.0) -> None:
         self.model = model
         self.optimizer = optimizer
         self.loss = loss
@@ -107,7 +161,11 @@ class SupervisedClassificationAlgorithm:
         self.transition = transition
         self.weight_provider = weight_provider
         self.target_provider = target_provider
+        self.regularizer = regularizer
         self.objective_consumer = objective_consumer
+        if not math.isfinite(float(regularizer_weight)):
+            raise ValueError("regularizer_weight must be finite")
+        self.regularizer_weight = float(regularizer_weight)
         if objective_consumer is not None:
             incompatible = []
             if not isinstance(self.selector, AllSelector):
@@ -155,7 +213,12 @@ class SupervisedClassificationAlgorithm:
         sample_indices = torch.as_tensor(
             batch.payload["index"], dtype=torch.long, device=self.device
         )
-        logits = self.model(inputs)
+        model_output: FeatureOutput | None = None
+        if bool(getattr(self.objective_consumer, "requires_features", False)):
+            model_output = forward_with_features(self.model, inputs)
+            logits = model_output.logits
+        else:
+            logits = self.model(inputs)
         target_mask = None
         target_result = None
         if self.target_provider is not None:
@@ -170,7 +233,10 @@ class SupervisedClassificationAlgorithm:
         if self.risk_corrector is not None and target_result is not None:
             raise ValueError("risk correction and target replacement cannot be combined implicitly")
         if self.risk_corrector is not None:
-            if self.transition is None:
+            requires_transition = bool(
+                getattr(self.risk_corrector, "requires_transition", True)
+            )
+            if self.transition is None and requires_transition:
                 raise ValueError("risk correction requires a transition provider")
             per_sample_loss = self.risk_corrector.per_sample_risk(
                 logits=logits,
@@ -210,14 +276,20 @@ class SupervisedClassificationAlgorithm:
                 selected_mask=contribution.selected_mask & weights.selected_mask,
                 sample_weights=contribution.sample_weights * weights.sample_weights,
                 metrics={**contribution.metrics, **weights.metrics},
+                selection_mask=contribution.selection_mask,
             )
         if target_mask is not None:
             contribution = ContributionResult(
                 selected_mask=contribution.selected_mask & target_mask.to(device=self.device),
                 sample_weights=contribution.sample_weights,
                 metrics=contribution.metrics,
+                selection_mask=contribution.selection_mask,
             )
         selected_mask = contribution.selected_mask
+        selection_mask = contribution.selection_mask
+        if selection_mask is None:
+            selection_mask = selected_mask
+        rejected_mask = ~selection_mask
         reporting_loss: torch.Tensor | None = None
         objective_metrics: dict[str, float] = {}
         if self.objective_consumer is None:
@@ -227,18 +299,26 @@ class SupervisedClassificationAlgorithm:
                 self.reduction,
             )
         else:
-            computed = self.objective_consumer.compute(
-                logits=logits,
-                noisy_targets=targets,
-                sample_indices=sample_indices,
-                base_loss=self.loss,
-                metadata={"epoch": state.cycle},
-            )
-            if not isinstance(computed, ObjectiveResult):
-                raise TypeError(
-                    "ObjectiveConsumer must return an ObjectiveResult"
+            objective_arguments: dict[str, Any] = {
+                "logits": logits,
+                "noisy_targets": targets,
+                "sample_indices": sample_indices,
+                "base_loss": self.loss,
+                "metadata": {"epoch": state.cycle},
+            }
+            if model_output is not None:
+                objective_arguments.update(
+                    model=self.model,
+                    features=model_output.features,
                 )
-            loss = computed.objective
+            computed = self.objective_consumer.compute(**objective_arguments)
+            if isinstance(computed, ObjectiveResult):
+                loss = computed.objective
+            elif torch.is_tensor(computed):
+                loss = computed
+                computed = ObjectiveResult(objective=loss)
+            else:
+                raise TypeError("ObjectiveConsumer must return an ObjectiveResult")
             if (
                 not torch.is_tensor(loss)
                 or loss.ndim != 0
@@ -287,6 +367,18 @@ class SupervisedClassificationAlgorithm:
                         "finite scalar values"
                     )
                 objective_metrics[name] = scalar
+        regularizer_loss: torch.Tensor | None = None
+        if self.regularizer is not None:
+            regularizer_loss = _call_regularizer(
+                self.regularizer,
+                logits=logits,
+                noisy_targets=targets,
+                sample_indices=sample_indices,
+                selected_mask=selected_mask,
+                rejected_mask=rejected_mask,
+                metadata={"epoch": state.cycle},
+            )
+            loss = loss + self.regularizer_weight * regularizer_loss
         update_result = self.update_policy.update(ParameterUpdateInput(
             objective=loss,
             model=self.model,
@@ -320,6 +412,8 @@ class SupervisedClassificationAlgorithm:
             f"objective_{key}": value
             for key, value in objective_metrics.items()
         })
+        if regularizer_loss is not None:
+            metrics["regularizer_loss"] = float(regularizer_loss.detach().item())
         return StepResult(metrics=metrics)
 
     def on_cycle_end(self, state: RunState) -> StepResult:
@@ -344,6 +438,11 @@ class SupervisedClassificationAlgorithm:
             weight_state = self.weight_adapter.state_dict()
             if weight_state:
                 state["weight_provider"] = weight_state
+        if self.regularizer is not None:
+            state_dict = getattr(self.regularizer, "state_dict", None)
+            if callable(state_dict):
+                state["regularizer"] = dict(state_dict())
+            state["regularizer_weight"] = self.regularizer_weight
         return state
 
     def load_state_dict(self, state: dict[str, Any]) -> None:
@@ -356,6 +455,14 @@ class SupervisedClassificationAlgorithm:
         )
         if self.weight_adapter is not None and state.get("weight_provider") is not None:
             self.weight_adapter.load_state_dict(state["weight_provider"])
+        if "regularizer_weight" in state:
+            if float(state["regularizer_weight"]) != self.regularizer_weight:
+                raise ValueError("regularizer configuration mismatch")
+        if self.regularizer is not None and state.get("regularizer") is not None:
+            loader = getattr(self.regularizer, "load_state_dict", None)
+            if not callable(loader):
+                raise ValueError("regularizer is not stateful")
+            loader(state["regularizer"])
         for optimizer_state in self.optimizer.state.values():
             for key, value in optimizer_state.items():
                 if torch.is_tensor(value):

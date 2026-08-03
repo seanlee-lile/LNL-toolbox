@@ -70,3 +70,4 @@ trainer:
     curves: true
 evaluation:
   selection_split: validation
+execution: {runner: supervised}

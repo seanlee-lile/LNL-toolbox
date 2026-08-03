@@ -19,6 +19,8 @@ from lnl_toolbox.noise import (
 )
 from lnl_toolbox.plugins import PluginCatalog
 from lnl_toolbox.plugins.builtin import (
+    build_builtin_instance_transition_algorithm,
+    build_builtin_instance_transition_estimator,
     build_builtin_loss,
     build_builtin_objective_consumer,
     build_builtin_risk_corrector,
@@ -64,7 +66,10 @@ class PluginCatalogTest(unittest.TestCase):
 
         with patch("builtins.__import__", side_effect=without_dss):
             isolated = create_builtin_catalog()
-        self.assertEqual(isolated.find(kind="objective_consumer"), ())
+        self.assertEqual(
+            [item.name for item in isolated.find(kind="objective_consumer")],
+            ["cwd"],
+        )
         self.assertEqual(
             [item.name for item in isolated.find(kind="loss")],
             ["apl", "ce", "gce", "mae", "nce", "rce"],
@@ -75,7 +80,7 @@ class PluginCatalogTest(unittest.TestCase):
         )
         self.assertEqual(
             [item.name for item in isolated.find(kind="parameter_update_policy")],
-            ["cdr", "standard"],
+            ["cdr", "standard", "step_milestone"],
         )
 
     def test_dss_internal_import_errors_are_not_silently_swallowed(self) -> None:
@@ -227,7 +232,7 @@ class PluginCatalogTest(unittest.TestCase):
         catalog = create_builtin_catalog()
         self.assertEqual(
             [item.name for item in catalog.find(kind="transition_estimator")],
-            ["anchor", "dual_t"],
+            ["anchor", "dual_t", "known"],
         )
         self.assertIsInstance(
             build_builtin_transition_estimator({"name": "anchor"}, catalog),
@@ -236,6 +241,12 @@ class PluginCatalogTest(unittest.TestCase):
         self.assertIsInstance(
             build_builtin_transition_estimator({"name": "dual_t"}, catalog),
             DualTransitionEstimator,
+        )
+        self.assertEqual(
+            type(build_builtin_transition_estimator(
+                {"name": "known", "matrix": np.eye(2).tolist()}, catalog
+            )).__name__,
+            "KnownTransitionEstimator",
         )
         with self.assertRaises(ValueError):
             build_builtin_transition_estimator({"name": "unknown"}, catalog)
@@ -317,8 +328,11 @@ class PluginCatalogTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(weighted_objective))
         self.assertTrue(torch.isfinite(weighted_losses.grad).all())
 
-        self.assertEqual(catalog.find(kind="weight_provider"), ())
-        with self.assertRaisesRegex(ValueError, "available: none"):
+        self.assertEqual(
+            [item.name for item in catalog.find(kind="weight_provider")],
+            ["mentornet"],
+        )
+        with self.assertRaisesRegex(ValueError, "available: mentornet"):
             build_builtin_weight_provider(
                 {"name": "binary_rcn_importance"}, catalog
             )
@@ -334,11 +348,11 @@ class PluginCatalogTest(unittest.TestCase):
         )
         self.assertEqual(
             [item.name for item in catalog.find(kind="transition_estimator")],
-            ["anchor", "dual_t"],
+            ["anchor", "dual_t", "known"],
         )
         self.assertEqual(
             [item.name for item in catalog.find(kind="parameter_update_policy")],
-            ["cdr", "standard"],
+            ["cdr", "standard", "step_milestone"],
         )
         self.assertEqual(
             [item.name for item in catalog.find(kind="selector")],

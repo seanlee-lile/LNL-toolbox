@@ -55,3 +55,4 @@ trainer:
   progress: false
 evaluation:
   selection_split: validation
+execution: {runner: supervised}

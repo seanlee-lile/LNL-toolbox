@@ -20,6 +20,7 @@ import yaml
 
 from lnl_toolbox.algorithms.supervised import SupervisedClassificationAlgorithm
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
+from lnl_toolbox.core.hyperparameters import resolve_parameter_sampling
 from lnl_toolbox.data import NoisyTargetDataset
 from lnl_toolbox.data.cifar import load_cifar10, load_cifar100
 from lnl_toolbox.data.torch_cifar import (
@@ -31,9 +32,13 @@ from lnl_toolbox.data.torch_cifar import (
 )
 from lnl_toolbox.evaluation.classification import evaluate_classification
 from lnl_toolbox.models.cifar_resnet import (
+    cifar_resnet14,
+    cifar_resnet32,
+    cifar_resnet_depth,
     cifar_resnet18,
     cifar_resnet34,
     cifar_resnet50,
+    cifar_resnet101,
     preact_resnet18,
 )
 from lnl_toolbox.models.cifar_cnn import CifarCnn8
@@ -65,12 +70,23 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
         return TinyCNN(num_classes, int(config.get("width", 64)))
     if name == "cifar_cnn8":
         return CifarCnn8(num_classes)
+    if name == "resnet14":
+        return cifar_resnet14(num_classes, int(config.get("base_width", 16)))
+    if name == "resnet32":
+        return cifar_resnet32(num_classes, int(config.get("base_width", 16)))
     if name == "resnet18":
         return cifar_resnet18(num_classes, int(config.get("base_width", 64)))
     if name == "resnet34":
         return cifar_resnet34(num_classes, int(config.get("base_width", 64)))
     if name == "resnet50":
         return cifar_resnet50(
+            num_classes,
+            int(config.get("base_width", 64)),
+            stem_padding=int(config.get("stem_padding", 1)),
+            initialization=str(config.get("initialization", "kaiming")),
+        )
+    if name == "resnet101":
+        return cifar_resnet101(
             num_classes,
             int(config.get("base_width", 64)),
             stem_padding=int(config.get("stem_padding", 1)),
@@ -141,7 +157,14 @@ def _seed_worker(_worker_id: int) -> None:
     random.seed(worker_seed)
 
 
-def _loader(dataset, config: Mapping[str, Any], *, shuffle: bool, seed: int) -> DataLoader:
+def _loader(
+    dataset,
+    config: Mapping[str, Any],
+    *,
+    shuffle: bool,
+    seed: int,
+    drop_last: bool = False,
+) -> DataLoader:
     workers = int(config.get("num_workers", 0))
     return DataLoader(
         dataset,
@@ -152,6 +175,7 @@ def _loader(dataset, config: Mapping[str, Any], *, shuffle: bool, seed: int) -> 
         persistent_workers=workers > 0,
         worker_init_fn=_seed_worker if workers else None,
         generator=torch.Generator().manual_seed(seed),
+        drop_last=drop_last,
     )
 
 
@@ -184,6 +208,8 @@ def _normalized_resume_value(config: Mapping[str, Any], key: str) -> Any:
         return dict(config.get("pipeline", {}) or {})
     if key == "early_stopping":
         return dict(config.get("early_stopping", {}) or {})
+    if key == "parameter_record":
+        return dict(config.get("parameter_record", {}) or {})
     return config.get(key)
 
 
@@ -198,6 +224,7 @@ def _validate_resume_config(current: Mapping[str, Any], saved: Mapping[str, Any]
         "parameter_update",
         "pipeline",
         "early_stopping",
+        "parameter_record",
     ):
         if _normalized_resume_value(current, key) != _normalized_resume_value(saved, key):
             raise ValueError(f"Resume configuration changed {key}")
@@ -396,6 +423,7 @@ def run_supervised_experiment(
     """Run one reproducible clean or noisy-label supervised experiment."""
 
     config = deepcopy(config)
+    config, parameter_record = resolve_parameter_sampling(config)
     config.setdefault("loss", {"name": "ce"})
     config.setdefault("parameter_update", {"name": "standard"})
     _validate_supervised_config(config)
@@ -426,6 +454,8 @@ def run_supervised_experiment(
         if not isinstance(saved_config, Mapping):
             raise ValueError("Checkpoint is missing its resolved configuration")
         _validate_resume_config(config, saved_config)
+        if parameter_record is not None and saved_config.get("parameter_record") != parameter_record.to_dict():
+            raise ValueError("Resume parameter sampling record changed")
 
     data_config = config["data"]
     dataset_name = str(data_config.get("name", "cifar10")).lower()
@@ -561,7 +591,13 @@ def run_supervised_experiment(
         transform=build_cifar_transform(False, **transform_options),
     )
     loader_config = config["loader"]
-    train_loader = _loader(train_set, loader_config, shuffle=True, seed=seed)
+    train_loader = _loader(
+        train_set,
+        loader_config,
+        shuffle=True,
+        seed=seed,
+        drop_last=bool(loader_config.get("drop_last", False)),
+    )
     validation_loader = _loader(
         validation_set, loader_config, shuffle=False, seed=seed
     )
@@ -592,7 +628,7 @@ def run_supervised_experiment(
             split="train",
         )
     else:
-        pipeline.prepare_transition(
+        pipeline.prepare(
             model=model,
             optimizer=optimizer,
             loader=train_loader,
@@ -644,6 +680,10 @@ def run_supervised_experiment(
     (run_dir / "resolved_config.yaml").write_text(
         yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
     )
+    if parameter_record is not None:
+        (run_dir / "parameter_record.json").write_text(
+            json.dumps(parameter_record.to_dict(), indent=2), encoding="utf-8"
+        )
     (run_dir / "environment.json").write_text(
         json.dumps(_environment(seed, device), indent=2), encoding="utf-8"
     )
@@ -778,6 +818,7 @@ def run_supervised_experiment(
                 "pipeline": pipeline.state_dict(),
                 "component_states": pipeline.component_state_dict(),
                 "early_stopping": None if early_stopping is None else early_stopping.state_dict(),
+                "parameter_record": None if parameter_record is None else parameter_record.to_dict(),
             }
             save_checkpoint(
                 run_dir / "last.pt",
@@ -868,48 +909,6 @@ def run_experiment(
 ) -> Path:
     """Compatibility entry point for the general training CLI."""
 
-    method = config.get("method")
-    method_name = (
-        str(method.get("name", "")).strip().lower()
-        if isinstance(method, Mapping)
-        else str(method or "").strip().lower()
-    )
-    if method_name == "coteaching":
-        from lnl_toolbox.training.coteaching_experiment import (
-            run_coteaching_experiment,
-        )
+    from lnl_toolbox.training.runners import resolve_runner
 
-        return run_coteaching_experiment(config, output_dir, resume)
-    if method_name == "cnlcu":
-        from lnl_toolbox.training.cnlcu_experiment import run_cnlcu_experiment
-
-        return run_cnlcu_experiment(config, output_dir, resume)
-    if method_name == "dual_t_forward":
-        raise ValueError("method 'dual_t_forward' was renamed to 'dual_t'")
-    if method_name == "dual_t":
-        from lnl_toolbox.training.dual_t_experiment import (
-            run_dual_t_experiment,
-        )
-
-        return run_dual_t_experiment(config, output_dir, resume)
-    if method_name == "importance_reweighting":
-        from lnl_toolbox.training.importance_reweighting_experiment import (
-            run_importance_reweighting_experiment,
-        )
-
-        return run_importance_reweighting_experiment(
-            config, output_dir, resume
-        )
-    if method_name == "pcse":
-        from lnl_toolbox.training.pcse_experiment import run_pcse_experiment
-
-        return run_pcse_experiment(config, output_dir, resume)
-    if method_name == "t_revision":
-        from lnl_toolbox.training.t_revision_experiment import (
-            run_t_revision_experiment,
-        )
-
-        return run_t_revision_experiment(config, output_dir, resume)
-    if method_name:
-        raise ValueError(f"Unsupported training method: {method_name}")
-    return run_supervised_experiment(config, output_dir, resume)
+    return resolve_runner(config).invoke(dict(config), output_dir, resume)

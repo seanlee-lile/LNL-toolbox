@@ -1,0 +1,48 @@
+# CWD TPAMI CIFAR-binary experiment: one deterministic fold/run only.
+seed: 17
+output_root: artifacts/runs/cwd-cifar10-symmetric02-fold0
+
+data:
+  name: cifar10_airplane_automobile
+  root: data/cifar10
+  folds: 5
+  fold_index: 0
+  augment: false
+
+noise:
+  # Paper candidate selected once: symmetric (eta_P, eta_N) = (0.2, 0.2).
+  rho_positive: 0.2
+  rho_negative: 0.2
+  seed: 17
+
+loader:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+
+model:
+  name: cifar_resnet34
+  base_width: 64
+
+optimizer:
+  name: adam
+  lr: 0.05
+  weight_decay: 0.0001
+
+scheduler:
+  milestones: [40, 120]
+  gamma: 0.1
+
+trainer:
+  epochs: 200
+  device: auto
+
+cwd:
+  ridge: 1.0e-8
+
+parameter_record:
+  sampling_seed: 17
+  selected_group: cifar_binary_symmetric_02
+  source: paper_cifar_binary_protocol
+  repeated_runs: 1
+execution: {runner: cwd}

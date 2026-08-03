@@ -24,3 +24,4 @@ optimizer:
 trainer:
   epochs: 30
   device: auto
+execution: {runner: clean}

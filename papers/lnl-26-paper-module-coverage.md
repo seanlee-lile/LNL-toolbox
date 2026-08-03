@@ -137,7 +137,7 @@
 | 02 | CAL | second-order statistics | Statistic / RiskCorrector | `src/lnl_toolbox/estimators/base.py` 仅容器 | 接口已存在但无实现 | 否 | 否 | covariance estimator、CAL risk |
 | 03 | PDL | part-dependent transition | NoiseModel | 无论文实现 | 未实现 | 否 | 否 | basis transitions、instance mixing |
 | 04 | JoCoR | joint loss 中的逐样本 score | Algorithm / Selector primitive | 通用 Loss、Selector | 未实现 | 否 | 否 | 双网络、co-regularization、联合更新 |
-| 05 | DSS | class/instance debias evidence | Reliability / LabelRefiner | 通用合同 | 未实现 | 否 | 否 | MDA、CCS 历史与趋势检验 |
+| 05 | DSS | class/instance debias evidence | Stateful Objective / LabelRefiner | `selectors/dss.py`、`algorithms/dss.py` | Smoke 通过 | 是 | 否 | 150-epoch 单次实验与曲线比较 |
 | 06 | CDR | critical parameter update | ParameterUpdatePolicy | `src/lnl_toolbox/algorithms/cdr.py` | 精确子组件 | 是 | 否 | 完整 early-learning lifecycle |
 | 07 | CNLCU | loss confidence bounds | Algorithm / stateful selection | `src/lnl_toolbox/algorithms/cnlcu/`、`src/lnl_toolbox/training/cnlcu_experiment.py` | 完整实现（CNLCU-S/H workflow） | 是 | 否 | 正式论文配置、长训练与多 seed 数值复现 |
 | 08 | MentorNet | learned sample weights | WeightProvider | 泛型合同 | 接口已存在但无实现 | 否 | 否 | Mentor model 与 student lifecycle |
@@ -204,9 +204,10 @@ DivideMix GMM 已有精确的 loss normalization、二分量 GMM 和低均值 co
 clean probability；它可通过 adapter、Selector、Contribution 和 reducer 被测试消费。
 这只是 dataset reliability 到 batch ranking 的组件链，不是 DivideMix split。
 
-CNLCU-S 的 evidence 计算已由其专属 Algorithm 结合 peer history 消费，不发布为通用
-ReliabilityEstimator；DSS、LEND 的具体 evidence producer 仍未实现。后两者即使输出
-scalar reliability，也仍需要未来 Algorithm 管理特征或监督状态。
+CNLCU-S/H 的 evidence 计算已由其专属 Algorithm 结合 peer history 消费，不发布为
+通用 ReliabilityEstimator；DSS 已通过 stateful Objective 管理 posterior 历史和监督
+空间。LEND 的具体 evidence producer 仍未实现，未来仍需由其 Algorithm 管理历史、
+特征或监督状态。
 
 ## 8. Transition 类论文
 
@@ -269,8 +270,8 @@ early-learning 的训练/停止生命周期和论文实验配方。
 
 - Natarajan、CAL、MC-LDCE 和 CWD 所需的 RiskCorrector；
 - 具体 StatisticEstimator，以及 StatisticResult 的生产者和训练/推理消费者；
-- UPM、PDL 和 VolMinNet 所需的 trainable NoiseModel；T-Revision raw additive revision 已作为论文方法私有组件实现，不扩张为通用 NoiseModel；
-- DSS、LEND 所需的 stateful reliability/history producer，以及尚未实现的 CNLCU-H；
+- UPM 和 VolMinNet 所需的通用 trainable NoiseModel；PDL 的实例转移和 T-Revision raw additive revision 已作为论文方法私有组件实现，不扩张为通用 NoiseModel；
+- LEND 所需的 stateful reliability/history producer；CNLCU-S/H 和 DSS 已在各自 Algorithm/Objective 生命周期中管理其专属状态；
 - label refinement、dataset split、post-processing 和通用 component-state checkpoint ownership；
 - WeightProvider 和 ReliabilityEstimator 的公开 YAML/plugin/训练构造入口。
 
@@ -338,11 +339,14 @@ early-learning 的训练/停止生命周期和论文实验配方。
 - **关键输入/输出**：epoch-level prediction history；输出调整后的预测/候选监督。
 - **可模块化部分**：history statistic、reliability evidence。
 - **必须 Algorithm 化的部分**：历史维护、监督空间修改及每轮更新顺序。
-- **当前实现/状态**：Reliability/Selector 仅提供合同；**未实现**。
-- **代码与测试位置**：`src/lnl_toolbox/estimators/base.py`、`src/lnl_toolbox/selectors/base.py`；无 DSS 测试。
-- **当前缺失**：MDA、CCS、趋势检验和 state。
-- **可以声明**：stable-index reliability 合同可承载部分证据。
-- **禁止声明**：不得把 scalar Top-K/small-loss 称为 DSS。
+- **当前实现/状态**：BASE、MDA、CCS、candidate masked risk、有状态
+  Objective/checkpoint 与完整 smoke 通路已实现；**Smoke 通过**。
+- **代码与测试位置**：`src/lnl_toolbox/selectors/dss.py`、
+  `src/lnl_toolbox/algorithms/{dss,masked_risk}.py`、`tests/test_dss.py`。
+- **当前缺失**：一次 150-epoch 正式实验及论文曲线比较；DSS+ 双网络扩展不在
+  当前基础 DSS 范围。
+- **可以声明**：toolbox 支持论文基础 DSS 的单网络训练通路。
+- **禁止声明**：正式实验完成前不得声明结果复现；不得把基础 DSS 称为 DSS+。
 
 ### P06 — CDR / Robust Early-Learning
 

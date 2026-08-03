@@ -46,3 +46,4 @@ trainer:
     enabled: true
     update_interval: 1
     curves: true
+execution: {runner: supervised}

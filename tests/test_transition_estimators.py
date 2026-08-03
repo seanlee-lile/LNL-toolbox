@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 from lnl_toolbox.noise import (
     AnchorTransitionEstimator,
     DualTransitionEstimator,
+    KnownTransitionEstimator,
     PosteriorSnapshot,
     TransitionArtifact,
 )
@@ -232,6 +233,17 @@ class TransitionEstimatorTest(unittest.TestCase):
             artifact.metadata["anchor_global_indices"], [30, 10, 50]
         )
         self.assertFalse(artifact.matrix.flags.writeable)
+
+    def test_known_estimator_returns_configured_transition(self) -> None:
+        snapshot = self.snapshot()
+        artifact = KnownTransitionEstimator(self.matrix).estimate(snapshot)
+        np.testing.assert_allclose(artifact.matrix, self.matrix)
+        self.assertEqual(artifact.estimator, "known")
+        self.assertEqual(artifact.metadata["source"], "configuration")
+
+    def test_known_estimator_rejects_wrong_class_count(self) -> None:
+        with self.assertRaisesRegex(ValueError, "classes"):
+            KnownTransitionEstimator(np.eye(2)).estimate(self.snapshot())
 
     def test_input_reordering_does_not_change_estimate(self) -> None:
         original = AnchorTransitionEstimator().estimate(self.snapshot())

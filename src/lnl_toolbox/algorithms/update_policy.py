@@ -99,6 +99,65 @@ class StandardUpdatePolicy:
             raise ValueError("Standard update policy max_grad_norm does not match")
 
 
+class StepMilestoneUpdatePolicy(StandardUpdatePolicy):
+    """Apply reusable optimizer learning-rate milestones by global step."""
+
+    name = "step_milestone"
+
+    def __init__(
+        self,
+        milestones: list[int] | tuple[int, ...],
+        gamma: float = 0.1,
+        max_grad_norm: float | None = None,
+    ) -> None:
+        super().__init__(max_grad_norm=max_grad_norm)
+        resolved = tuple(int(value) for value in milestones)
+        if not resolved or any(value <= 0 for value in resolved):
+            raise ValueError("milestones must contain positive global steps")
+        if tuple(sorted(set(resolved))) != resolved:
+            raise ValueError("milestones must be strictly increasing")
+        self.milestones = resolved
+        self.gamma = float(gamma)
+        if not math.isfinite(self.gamma) or not 0.0 < self.gamma < 1.0:
+            raise ValueError("gamma must satisfy 0 < gamma < 1")
+        self.applied = 0
+
+    def update(self, request: ParameterUpdateInput) -> ParameterUpdateResult:
+        while (
+            self.applied < len(self.milestones)
+            and request.run_state.step >= self.milestones[self.applied]
+        ):
+            for group in request.optimizer.param_groups:
+                group["lr"] *= self.gamma
+            self.applied += 1
+        super().update(request)
+        return ParameterUpdateResult(
+            {"learning_rate": float(request.optimizer.param_groups[0]["lr"])}
+        )
+
+    def state_dict(self) -> Mapping[str, Any]:
+        return {
+            "milestones": list(self.milestones),
+            "gamma": self.gamma,
+            "max_grad_norm": self.max_grad_norm,
+            "applied": self.applied,
+        }
+
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        expected = {
+            "milestones": list(self.milestones),
+            "gamma": self.gamma,
+            "max_grad_norm": self.max_grad_norm,
+        }
+        actual = {key: state.get(key) for key in expected}
+        if actual != expected:
+            raise ValueError("Step milestone update policy configuration mismatch")
+        applied = int(state.get("applied", -1))
+        if not 0 <= applied <= len(self.milestones):
+            raise ValueError("Step milestone update policy state is invalid")
+        self.applied = applied
+
+
 def serialize_update_policy(policy: ParameterUpdatePolicy) -> dict[str, Any]:
     """Return a checkpoint-safe identity and private-state payload."""
 

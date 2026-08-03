@@ -32,8 +32,11 @@ class AllSelector:
 class SmallLossSelector:
     """Keep the scheduled fraction of samples with the smallest scores."""
 
-    def __init__(self, keep_rate: object) -> None:
+    def __init__(self, keep_rate: object, rounding: str = "ceil") -> None:
         self.schedule: KeepRateSchedule = build_keep_rate_schedule(keep_rate)
+        self.rounding = str(rounding).strip().lower()
+        if self.rounding not in {"ceil", "floor"}:
+            raise ValueError("small-loss rounding must be 'ceil' or 'floor'")
 
     @property
     def keep_rate(self) -> float:
@@ -45,7 +48,11 @@ class SmallLossSelector:
         batch_size = validate_selection_input(selection_input)
         epoch = selection_input.metadata.get("epoch", 0)
         keep_rate = self.schedule.rate_at(epoch)
-        keep_count = max(1, int(math.ceil(batch_size * keep_rate)))
+        scaled = batch_size * keep_rate
+        keep_count = max(
+            1,
+            int(math.floor(scaled) if self.rounding == "floor" else math.ceil(scaled)),
+        )
 
         # Stable global indices make equal-score selection deterministic and
         # independent of the incoming batch order.
