@@ -166,6 +166,7 @@
 | `tests/test_t_revision_objective.py` | Reweight-R Eq. (3) 手算、矩阵方向、ratio、梯度、raw transition 和数值失败边界。 |
 | `tests/test_t_revision_algorithm.py` | additive delta、optimizer 参数所有权、方法专属 revised artifact 和阶段状态机。 |
 | `tests/test_t_revision_workflow.py` | 三阶段运行、best provenance、阶段内 resume、artifact/manifest drift、completed no-op、CPU/CUDA。 |
+| `docs/t-revision.md` | T-Revision Reweight-R 的用户入口、适用边界、配置、三阶段生命周期、输出解释与 resume 规则。 |
 | `tests/test_update_policy.py` | 通用 ParameterUpdatePolicy 输入输出、Standard 更新等价性和 checkpoint 身份协议。 |
 | `tests/test_cdr.py` | CDR Eq. (3)-(6)、稳定 top-k、失败边界、Selector 组合、plugin、checkpoint 和 CPU/CUDA 一致性。 |
 | `tests/test_cli.py` | Prompt 重试/取消、GCE/APL 配置、APL 正权重输入和交互/参数模式兼容。 |

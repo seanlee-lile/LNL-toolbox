@@ -910,4 +910,6 @@ def run_experiment(
         )
 
         return run_t_revision_experiment(config, output_dir, resume)
+    if method_name:
+        raise ValueError(f"Unsupported training method: {method_name}")
     return run_supervised_experiment(config, output_dir, resume)

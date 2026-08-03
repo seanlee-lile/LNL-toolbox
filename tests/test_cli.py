@@ -115,6 +115,33 @@ class PromptSessionTest(unittest.TestCase):
 
 
 class CliEntryPointTest(unittest.TestCase):
+    def test_train_help_lists_t_revision(self) -> None:
+        help_text = train_cli.build_parser().format_help()
+        self.assertIn("t_revision", help_text)
+
+    def test_missing_training_config_has_clear_error(self) -> None:
+        missing = Path("definitely-missing-t-revision-config.yaml")
+        with self.assertRaisesRegex(FileNotFoundError, "does not exist"):
+            train_cli.main(["--config", str(missing)])
+
+    def test_epochs_override_targets_t_revision_final_stage(self) -> None:
+        config = {
+            "method": "t_revision",
+            "trainer": {"device": "cpu"},
+            "t_revision": {"revision": {"epochs": 2}},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yaml"
+            path.write_text(yaml.safe_dump(config), encoding="utf-8")
+            with patch.object(train_cli, "run_experiment") as run:
+                self.assertEqual(
+                    train_cli.main(["--config", str(path), "--epochs", "5"]),
+                    0,
+                )
+        called = run.call_args.args[0]
+        self.assertEqual(called["t_revision"]["revision"]["epochs"], 5)
+        self.assertNotIn("epochs", called["trainer"])
+
     def test_all_no_argument_entrypoints_dispatch_interactively(self) -> None:
         session, _ = scripted_session([])
         selection = TrainingSelection({"trainer": {"epochs": 1}}, Path("template.yaml"))

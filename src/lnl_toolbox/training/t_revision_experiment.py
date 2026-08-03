@@ -42,6 +42,35 @@ from lnl_toolbox.training.noisy_labels import (
 )
 
 
+def _preflight_model_output(
+    model: nn.Module,
+    loader: Any,
+    device: torch.device,
+    num_classes: int,
+) -> None:
+    """Validate the public model contract without creating inference parameters."""
+
+    was_training = model.training
+    model.eval()
+    try:
+        first_batch = next(iter(loader))
+    except StopIteration as exc:
+        raise ValueError("T-Revision training split is empty") from exc
+    with torch.inference_mode():
+        probe = first_batch["input"].to(device)
+        probe_logits = model(probe)
+    model.train(was_training)
+    if not torch.is_tensor(probe_logits) or probe_logits.ndim != 2:
+        raise ValueError("T-Revision model output must have shape [B, C]")
+    if probe_logits.shape != (probe.shape[0], num_classes):
+        raise ValueError(
+            "T-Revision model output class dimension does not match dataset "
+            f"class count {num_classes}: got {tuple(probe_logits.shape)}"
+        )
+    if not bool(torch.isfinite(probe_logits).all().item()):
+        raise ValueError("T-Revision model preflight logits must be finite")
+
+
 def run_t_revision_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
@@ -88,6 +117,8 @@ def run_t_revision_experiment(
     full_train_indices, validation_indices = stratified_split(
         train_data.labels, int(data_config["validation_size"]), seed
     )
+    if np.intersect1d(full_train_indices, validation_indices).size:
+        raise ValueError("T-Revision train and validation indices must be disjoint")
     manifest_indices = np.sort(np.concatenate((full_train_indices, validation_indices)))
     manifest, manifest_path = prepare_noise_manifest(
         config,
@@ -101,6 +132,13 @@ def run_t_revision_experiment(
     )
     if manifest is None or manifest_path is None:
         raise ValueError("T-Revision requires an enabled noisy-label manifest")
+    if manifest.num_classes != num_classes:
+        raise ValueError("T-Revision noise manifest class count mismatch")
+    if manifest.transition_matrix is None or manifest.per_sample_transition is not None:
+        raise ValueError(
+            "T-Revision requires one fixed class-dependent transition matrix; "
+            "sample-dependent transitions are unsupported"
+        )
 
     train_indices = _subset(
         full_train_indices,
@@ -120,6 +158,21 @@ def run_t_revision_experiment(
         data_config.get("max_test_samples"),
         seed + 3,
     )
+    manifest_position = {
+        int(index): position
+        for position, index in enumerate(manifest.global_indices.tolist())
+    }
+    observed_train_targets = np.asarray(
+        [manifest.noisy_targets[manifest_position[int(index)]] for index in train_indices],
+        dtype=np.int64,
+    )
+    observed_classes = np.unique(observed_train_targets)
+    if not np.array_equal(observed_classes, np.arange(num_classes)):
+        missing = np.setdiff1d(np.arange(num_classes), observed_classes).tolist()
+        raise ValueError(
+            "T-Revision noisy training split is missing observed classes: "
+            f"{missing}"
+        )
     preprocessing = str(data_config.get("preprocessing", "standard")).lower()
     pixel_mean = cifar_pixel_mean(train_data.images) if preprocessing == "gce2018" else None
     transform_options = {"preprocessing": preprocessing, "pixel_mean": pixel_mean}
@@ -178,7 +231,8 @@ def run_t_revision_experiment(
     )
     config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
 
-    model = build_model(method_config.model, num_classes)
+    model = build_model(method_config.model, num_classes).to(device)
+    _preflight_model_output(model, posterior_loader, device, num_classes)
     stage1_optimizer = build_optimizer(model, method_config.stage1.optimizer)
     stage1_scheduler = build_scheduler(
         stage1_optimizer,

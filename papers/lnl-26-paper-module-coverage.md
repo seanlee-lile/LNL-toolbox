@@ -480,7 +480,7 @@ early-learning 的训练/停止生命周期和论文实验配方。
 - **关键输入/输出**：initial T、trainable slack、classifier posterior；输出 revised T 和 weighted objective。
 - **可模块化部分**：Anchor initialization、revision layer、专用 weight calculation。
 - **必须 Algorithm 化的部分**：初始化、joint revision、validation/训练阶段顺序。
-- **当前实现/状态**：`method: t_revision` 已形成 noisy CE → best-checkpoint Anchor `T_hat` → 固定矩阵 classifier initialization → raw additive joint revision 的 Reweight-R 闭环；Eq. (3) 使用 corrected vectorized 实现，并明确采用 released-code lifecycle choices。**完整方法工作流（限定 fidelity）**。
+- **当前实现/状态**：`method: t_revision` 已形成 noisy CE → best-checkpoint Anchor `T_hat` → 固定矩阵 classifier initialization → raw additive joint revision 的 Reweight-R 闭环；Eq. (3) 使用 corrected vectorized 实现，并明确采用 released-code lifecycle choices。公共 YAML/CLI、场景预检、可读 final summary 和各阶段严格 resume 已接通。**完整且用户可调用的方法工作流（限定 fidelity）**。
 - **代码与测试位置**：`src/lnl_toolbox/algorithms/t_revision/`、`src/lnl_toolbox/training/t_revision_experiment.py`、`tests/test_t_revision_objective.py`、`tests/test_t_revision_algorithm.py`、`tests/test_t_revision_workflow.py`。
 - **当前缺失**：Forward-R、projected/softmax transition、MNIST/Clothing1M、正式长训练与 multi-seed 数值复现。
 - **可以声明**：已实现 paper-faithful Reweight-R workflow with corrected vectorized Eq. (3) and explicit released-code lifecycle choices。

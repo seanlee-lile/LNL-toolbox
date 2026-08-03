@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Three-stage T-Revision Reweight-R lifecycle."""
 
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -252,12 +253,37 @@ class TRevisionAlgorithm:
                 int(self.config.get("seed", 1)) + stage_offset + int(epoch)
             )
 
-    def _validate_config(self, saved: Mapping[str, Any]) -> None:
-        if TRevisionConfig.from_mapping(saved) != self.method_config:
+    def _validate_config(self, saved: Mapping[str, Any]) -> int:
+        saved_method = TRevisionConfig.from_mapping(saved)
+        saved_revision_epochs = saved_method.revision.epochs
+        current_revision_epochs = self.method_config.revision.epochs
+        if current_revision_epochs < saved_revision_epochs:
+            raise ValueError(
+                "Resume cannot reduce t_revision.revision.epochs below the "
+                "checkpoint target"
+            )
+        comparable_saved = replace(
+            saved_method,
+            revision=replace(
+                saved_method.revision, epochs=current_revision_epochs
+            ),
+        )
+        if comparable_saved != self.method_config:
             raise ValueError("Resume configuration changed T-Revision settings")
+        if current_revision_epochs > saved_revision_epochs:
+            scheduler = self.method_config.revision.scheduler
+            if (
+                str(scheduler.get("name", "none")).strip().lower() == "cosine"
+                and "t_max" not in scheduler
+            ):
+                raise ValueError(
+                    "Extending T-Revision revision epochs with cosine scheduler "
+                    "requires an explicit revision.scheduler.t_max"
+                )
         for name in ("seed", "data", "noise", "loader", "trainer"):
             if saved.get(name) != self.config.get(name):
                 raise ValueError(f"Resume configuration changed {name}")
+        return saved_revision_epochs
 
     def _validate_best(self, path: Path, expected: str, *, owner: str) -> None:
         if not path.is_file():
@@ -321,8 +347,19 @@ class TRevisionAlgorithm:
         saved_config = payload.get("config")
         if not isinstance(saved_config, Mapping):
             raise ValueError("T-Revision checkpoint is missing config")
-        self._validate_config(saved_config)
+        saved_revision_epochs = self._validate_config(saved_config)
         self.state = TRevisionState.from_state_dict(payload["t_revision_state"])
+        extend_completed_revision = (
+            self.state.phase is TRevisionPhase.COMPLETED
+            and self.method_config.revision.epochs > saved_revision_epochs
+        )
+        if extend_completed_revision and (
+            self.state.revision_completed_epochs != saved_revision_epochs
+        ):
+            raise ValueError(
+                "Completed T-Revision checkpoint progress does not match its "
+                "revision epoch target"
+            )
         self._validate_best(
             self.stage1_best_path,
             self.state.stage1_best_hash,
@@ -391,6 +428,9 @@ class TRevisionAlgorithm:
             revised = RevisedTransitionArtifact.load(self.revised_transition_path)
             if revised.artifact_hash != self.state.revised_transition_hash:
                 raise ValueError("T-Revision revised transition artifact hash mismatch")
+            if extend_completed_revision:
+                self.state.phase = TRevisionPhase.REVISION_TRAINING
+                self.state.revised_transition_hash = ""
 
     def _diagnostic_relative_l1(self, matrix: np.ndarray | Tensor) -> float | None:
         if self.diagnostic_transition is None:
@@ -459,6 +499,20 @@ class TRevisionAlgorithm:
             dataset=self.dataset,
             split="train",
         )
+        if snapshot.noisy_probabilities.shape[1] != self.num_classes:
+            raise ValueError(
+                "T-Revision posterior snapshot class dimension does not match "
+                f"the configured class count {self.num_classes}"
+            )
+        snapshot_classes = np.unique(snapshot.noisy_targets)
+        if not np.array_equal(snapshot_classes, np.arange(self.num_classes)):
+            missing = np.setdiff1d(
+                np.arange(self.num_classes), snapshot_classes
+            ).tolist()
+            raise ValueError(
+                "T-Revision posterior snapshot is missing noisy target classes: "
+                f"{missing}"
+            )
         base = AnchorTransitionEstimator().estimate(snapshot)
         metadata = dict(base.metadata)
         metadata.update({
@@ -700,9 +754,14 @@ class TRevisionAlgorithm:
         best = read_checkpoint(self.best_path, "cpu")
         if best.get("checkpoint_role") != "revision_best":
             raise ValueError("T-Revision revision best checkpoint identity mismatch")
-        self.model.load_state_dict(best["model"])
         if self.revision is None:
             raise ValueError("T-Revision revision module is unavailable")
+        current_model_state = {
+            name: value.detach().cpu().clone()
+            for name, value in self.model.state_dict().items()
+        }
+        current_delta_state = self.revision.delta.detach().cpu().clone()
+        self.model.load_state_dict(best["model"])
         best_delta = best.get("delta")
         if not torch.is_tensor(best_delta):
             raise ValueError("T-Revision best checkpoint is missing delta")
@@ -742,13 +801,24 @@ class TRevisionAlgorithm:
         self.state.advance(TRevisionPhase.COMPLETED)
         final = {
             "event": "final", "method": "t_revision",
+            "phase": TRevisionPhase.COMPLETED.value,
             "fidelity": "paper_experiment_raw_additive",
+            "transition_mode": "paper_experiment_raw_additive",
+            "revised_transition_is_probability_matrix": False,
+            "raw_additive_warning": (
+                "T_hat + delta is unconstrained and may contain negative values "
+                "or rows that do not sum to one"
+            ),
             "completed_stage1_epochs": self.state.stage1_completed_epochs,
             "stage1_global_step": self.state.stage1_global_step,
             "best_stage1_epoch": self.state.stage1_best_epoch + 1,
+            "best_stage1_noisy_validation_accuracy": self.state.stage1_best_metric,
             "completed_classifier_initialization_epochs": self.state.stage2a_completed_epochs,
             "classifier_initialization_global_step": self.state.stage2a_global_step,
             "best_classifier_initialization_epoch": self.state.stage2a_best_epoch + 1,
+            "best_classifier_initialization_noisy_validation_accuracy": (
+                self.state.stage2a_best_metric
+            ),
             "completed_revision_epochs": self.state.revision_completed_epochs,
             "revision_global_step": self.state.revision_global_step,
             "best_revision_epoch": self.state.revision_best_epoch + 1,
@@ -757,15 +827,43 @@ class TRevisionAlgorithm:
             "posterior_snapshot_hash": self.state.snapshot_hash,
             "transition_initial_hash": self.state.initial_transition_hash,
             "transition_revised_hash": self.state.revised_transition_hash,
+            "artifact_paths": {
+                "stage1_best": self.stage1_best_path.name,
+                "posterior_snapshot": self.snapshot_path.name,
+                "transition_initial": self.initial_transition_path.name,
+                "stage2a_best": self.stage2a_best_path.name,
+                "revision_best": self.best_path.name,
+                "transition_revised": self.revised_transition_path.name,
+                "resume_checkpoint": self.last_path.name,
+                "metrics": self.metrics_path.name,
+                "final_metrics": "final_metrics.json",
+            },
+            "pseudo_anchor_indices": self.initial_transition.metadata.get(
+                "anchor_global_indices", []
+            ),
+            "initial_transition_diagnostics": {
+                "row_sums": self.initial_transition.matrix.sum(axis=1).tolist(),
+                "minimum": float(self.initial_transition.matrix.min()),
+                "maximum": float(self.initial_transition.matrix.max()),
+                "diagonal": np.diag(self.initial_transition.matrix).tolist(),
+                "condition_number": float(
+                    np.linalg.cond(self.initial_transition.matrix)
+                ),
+            },
             **persisted.diagnostics,
         }
         true_error = self._diagnostic_relative_l1(persisted.revised_transition)
         if true_error is not None:
             final["true_T_relative_L1_error"] = true_error
         self._append_metrics(final)
-        (self.run_dir / "final_metrics.json").write_text(
-            json.dumps(final, indent=2), encoding="utf-8"
-        )
+        final_path = self.run_dir / "final_metrics.json"
+        temporary_final = final_path.with_suffix(".json.tmp")
+        temporary_final.write_text(json.dumps(final, indent=2), encoding="utf-8")
+        if json.loads(temporary_final.read_text(encoding="utf-8")) != final:
+            raise ValueError("T-Revision final summary verification failed")
+        temporary_final.replace(final_path)
+        self.model.load_state_dict(current_model_state)
+        self.revision.delta.data.copy_(current_delta_state.to(self.device))
         self._save_last()
         return final
 

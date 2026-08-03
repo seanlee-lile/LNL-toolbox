@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -17,6 +20,7 @@ from lnl_toolbox.algorithms.t_revision import (
 )
 from lnl_toolbox.training.checkpoint import read_checkpoint
 from lnl_toolbox.training.experiment import run_experiment
+from lnl_toolbox.training.t_revision_experiment import _preflight_model_output
 
 
 class _Classifier(nn.Module):
@@ -48,7 +52,7 @@ def _config(
     return {
         "method": "t_revision",
         "seed": 5,
-        "data": {"name": "fixture", "width": 3},
+        "data": {"name": "fixture", "width": 3, "validation_size": 3},
         "noise": {
             "name": "symmetric", "rate": 0.2, "seed": 9,
             "validation_targets": "noisy", "mapping_hash": "a" * 64,
@@ -165,6 +169,62 @@ class TRevisionWorkflowTest(unittest.TestCase):
         values["evaluation"]["selection_split"] = "test"
         with self.assertRaisesRegex(ValueError, "must use validation"):
             TRevisionConfig.from_mapping(values)
+        values = _config()
+        values["data"]["validation_size"] = 0
+        with self.assertRaisesRegex(ValueError, "validation_size"):
+            TRevisionConfig.from_mapping(values)
+        values = _config()
+        values["noise"]["name"] = "instance_dependent"
+        with self.assertRaisesRegex(ValueError, "class-dependent"):
+            TRevisionConfig.from_mapping(values)
+        values = _config()
+        del values["loader"]
+        with self.assertRaisesRegex(TypeError, "loader"):
+            TRevisionConfig.from_mapping(values)
+        values = _config()
+        del values["trainer"]["device"]
+        with self.assertRaisesRegex(ValueError, "trainer.device"):
+            TRevisionConfig.from_mapping(values)
+        values = _config()
+        values["t_revision"]["classifier_initialization"]["start_from"] = "last"
+        with self.assertRaisesRegex(ValueError, "start_from"):
+            TRevisionConfig.from_mapping(values)
+        values = _config()
+        values["t_revision"]["revision"]["start_from"] = "stage1_best"
+        with self.assertRaisesRegex(ValueError, "start_from"):
+            TRevisionConfig.from_mapping(values)
+        values = _config()
+        values["t_revision"]["revision"]["delta_initialization"] = "random"
+        with self.assertRaisesRegex(ValueError, "delta_initialization"):
+            TRevisionConfig.from_mapping(values)
+        values = _config()
+        values["t_revision"]["revision"]["ratio"]["detach"] = True
+        with self.assertRaisesRegex(ValueError, "detach"):
+            TRevisionConfig.from_mapping(values)
+        values = _config()
+        values["t_revision"]["revision"]["ratio"]["clamp"] = "zero"
+        with self.assertRaisesRegex(ValueError, "clamp"):
+            TRevisionConfig.from_mapping(values)
+
+    def test_model_preflight_rejects_class_mismatch_and_preserves_backward(self) -> None:
+        loader = [{"input": torch.ones(2, 3)}]
+        wrong = nn.Linear(3, 2)
+        with self.assertRaisesRegex(ValueError, "class dimension"):
+            _preflight_model_output(wrong, loader, torch.device("cpu"), 3)
+        model = nn.Linear(3, 3)
+        _preflight_model_output(model, loader, torch.device("cpu"), 3)
+        model(torch.ones(2, 3)).sum().backward()
+        self.assertIsNotNone(model.weight.grad)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
+    def test_cuda_model_preflight_does_not_create_inference_parameters(self) -> None:
+        device = torch.device("cuda")
+        model = nn.Linear(3, 3).to(device)
+        _preflight_model_output(
+            model, [{"input": torch.ones(2, 3)}], device, 3
+        )
+        model(torch.ones(2, 3, device=device)).sum().backward()
+        self.assertIsNotNone(model.weight.grad)
 
     def test_full_three_stage_workflow_and_completed_resume_noop(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -173,6 +233,18 @@ class TRevisionWorkflowTest(unittest.TestCase):
             result = algorithm.run()
             self.assertIs(algorithm.state.phase, TRevisionPhase.COMPLETED)
             self.assertEqual(result["method"], "t_revision")
+            self.assertEqual(result["phase"], "completed")
+            self.assertIs(result["revised_transition_is_probability_matrix"], False)
+            self.assertIn("artifact_paths", result)
+            self.assertEqual(
+                result["artifact_paths"]["transition_revised"],
+                "transition_revised.npz",
+            )
+            self.assertIn("best_stage1_noisy_validation_accuracy", result)
+            self.assertIn(
+                "best_classifier_initialization_noisy_validation_accuracy",
+                result,
+            )
             for name in (
                 "stage1_best.pt", "posterior_snapshot.npz", "transition_initial.npz",
                 "stage2a_best.pt", "best.pt", "transition_revised.npz",
@@ -196,6 +268,69 @@ class TRevisionWorkflowTest(unittest.TestCase):
                 name: (_sha(run_dir / name), (run_dir / name).stat().st_mtime_ns)
                 for name in protected
             })
+
+    def test_completed_revision_can_extend_epochs_without_rebuilding_initial_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            first = _algorithm(run_dir, revision_epochs=1)
+            first.run()
+            initial_artifacts = {
+                name: (_sha(run_dir / name), (run_dir / name).stat().st_mtime_ns)
+                for name in ("posterior_snapshot.npz", "transition_initial.npz")
+            }
+            old_step = first.state.revision_global_step
+
+            extended = _algorithm(run_dir, revision_epochs=2)
+            extended.resume(run_dir / "last.pt")
+            self.assertIs(extended.state.phase, TRevisionPhase.REVISION_TRAINING)
+            extended.run()
+            self.assertEqual(extended.state.revision_completed_epochs, 2)
+            self.assertGreater(extended.state.revision_global_step, old_step)
+            self.assertEqual(initial_artifacts, {
+                name: (_sha(run_dir / name), (run_dir / name).stat().st_mtime_ns)
+                for name in initial_artifacts
+            })
+            self.assertEqual(len(extended.state.revised_transition_hash), 64)
+
+    def test_resume_rejects_reduced_epochs_and_other_identity_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            first = _algorithm(run_dir, revision_epochs=2)
+            first.train_stage1()
+            first.initialize_transition()
+            first.start_classifier_initialization()
+            first.train_classifier_initialization()
+            first.start_revision()
+            first.train_revision(max_epochs=1)
+            reduced = _algorithm(run_dir, revision_epochs=1)
+            with self.assertRaisesRegex(ValueError, "cannot reduce"):
+                reduced.resume(run_dir / "last.pt")
+
+    def test_t_revision_import_does_not_require_sklearn(self) -> None:
+        code = """
+import builtins
+real_import = builtins.__import__
+def guarded(name, *args, **kwargs):
+    if name == 'sklearn' or name.startswith('sklearn.'):
+        raise ModuleNotFoundError('blocked sklearn')
+    return real_import(name, *args, **kwargs)
+builtins.__import__ = guarded
+from lnl_toolbox.algorithms.t_revision import TRevisionAlgorithm
+from lnl_toolbox.training.t_revision_experiment import run_t_revision_experiment
+print(TRevisionAlgorithm.__name__, run_t_revision_experiment.__name__)
+"""
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = "src"
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=Path(__file__).resolve().parents[1],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("TRevisionAlgorithm", result.stdout)
 
     def test_stage1_interruption_resume_reaches_completion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -246,6 +381,17 @@ class TRevisionWorkflowTest(unittest.TestCase):
                 algorithm.initial_transition.source_snapshot_hash,
                 algorithm.snapshot.snapshot_hash,
             )
+
+    def test_transition_initialization_rejects_snapshot_missing_target_class(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            algorithm = _algorithm(directory)
+            algorithm.train_stage1()
+            records = [record for record in _records() if int(record["target"]) < 2]
+            algorithm.posterior_loader = DataLoader(
+                records, batch_size=2, shuffle=False
+            )
+            with self.assertRaisesRegex(ValueError, "missing noisy target classes"):
+                algorithm.initialize_transition()
 
     def test_classifier_initialization_and_revision_resume_match_uninterrupted(self) -> None:
         with tempfile.TemporaryDirectory() as uninterrupted_dir, tempfile.TemporaryDirectory() as resumed_dir:
@@ -349,6 +495,10 @@ class TRevisionWorkflowTest(unittest.TestCase):
             result = run_experiment(_config())
         self.assertEqual(result, Path("fixture"))
         runner.assert_called_once()
+
+    def test_unknown_method_fails_instead_of_supervised_fallback(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Unsupported training method"):
+            run_experiment({"method": "not_a_method"})
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA required")
     def test_cuda_three_stage_workflow(self) -> None:

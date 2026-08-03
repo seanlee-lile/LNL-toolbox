@@ -153,6 +153,13 @@ class TRevisionConfig:
             )
 
         noise = _mapping(value.get("noise"), owner="noise")
+        noise_name = str(noise.get("name", "")).strip().lower()
+        has_manifest = bool(str(noise.get("manifest", "")).strip())
+        if not has_manifest and noise_name not in {"symmetric", "pairflip"}:
+            raise ValueError(
+                "T-Revision requires class-dependent, instance-independent "
+                "noise (symmetric, pairflip, or an external manifest)"
+            )
         if str(noise.get("validation_targets", "")).strip().lower() != "noisy":
             raise ValueError(
                 "T-Revision checkpoint selection requires "
@@ -166,6 +173,15 @@ class TRevisionConfig:
             "validation"
         ):
             raise ValueError("T-Revision best selection must use validation")
+
+        data = _mapping(value.get("data"), owner="data")
+        validation_size = int(data.get("validation_size", 0))
+        if validation_size <= 0:
+            raise ValueError("T-Revision requires data.validation_size > 0")
+        _mapping(value.get("loader"), owner="loader")
+        trainer = _mapping(value.get("trainer"), owner="trainer")
+        if not str(trainer.get("device", "")).strip():
+            raise ValueError("T-Revision requires trainer.device")
 
         return cls(
             model=model,
