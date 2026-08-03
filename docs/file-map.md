@@ -2,6 +2,10 @@
 
 本表覆盖当前项目中的源代码、配置、测试和主要文档。`papers/` 下的 PDF、CIFAR 二进制文件和自动生成的 `__pycache__/` 不逐个解释。
 
+统一 CLI 的执行事实源是 `training/runners.py`；`training/workflows.py` 只保留兼容
+API。`cli/data/recipe_catalog.json` 是显式内置 recipe 清单，配置文件通过 package
+data 安装，避免用户本地 YAML 污染 catalog。
+
 ## 1. 仓库根目录
 
 | 文件 | 作用 |

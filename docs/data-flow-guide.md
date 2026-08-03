@@ -4,6 +4,11 @@
 
 权威顺序：**代码与自动化测试 > 本文 > 其他架构或研究文档**。若三者不一致，先以代码和测试判断现状，再在同一次修改中更新本文。
 
+用户入口的生产 dispatch 只有 `training/runners.py::RunnerRegistry`。旧
+`training/workflows.py` 仅是兼容外壳，委托同一 registry，不维护第二份 method 表。
+内置 recipe 来自显式、随包安装的 manifest；本地或未跟踪 YAML 不会自动进入
+`lnl list experiments`。CLI 分开报告实现状态、配置忠实度、数值复现状态和可用性。
+
 ## 1. 当前生产边界
 
 ```mermaid

@@ -135,26 +135,26 @@
 |---:|---|---|---|---|---|---|---|---|
 | 01 | UPM | instance noise posterior | NoiseModel / LabelRefiner | 无 | 未实现 | 否 | 否 | latent noise model、交替优化 |
 | 02 | CAL | second-order statistics | Statistic / RiskCorrector | `src/lnl_toolbox/estimators/base.py` 仅容器 | 接口已存在但无实现 | 否 | 否 | covariance estimator、CAL risk |
-| 03 | PDL | part-dependent transition | NoiseModel | 无论文实现 | 未实现 | 否 | 否 | basis transitions、instance mixing |
-| 04 | JoCoR | joint loss 中的逐样本 score | Algorithm / Selector primitive | 通用 Loss、Selector | 未实现 | 否 | 否 | 双网络、co-regularization、联合更新 |
+| 03 | PDL | part-dependent transition | NoiseModel / Algorithm | `estimators/instance_transition.py`、`training/instance_transition_experiment.py` | 完整 workflow | 是 | 是（限定当前配置） | 正式长训练与 multi-seed 数值复现 |
+| 04 | JoCoR | joint loss 中的逐样本 score | Algorithm / Selector primitive | `algorithms/jocor.py`、`training/multi_model_experiment.py` | 完整 workflow | 是 | 是 | 正式长训练与 multi-seed 数值复现 |
 | 05 | DSS | class/instance debias evidence | Stateful Objective / LabelRefiner | `selectors/dss.py`、`algorithms/dss.py` | Smoke 通过 | 是 | 否 | 150-epoch 单次实验与曲线比较 |
 | 06 | CDR | critical parameter update | ParameterUpdatePolicy | `src/lnl_toolbox/algorithms/cdr.py` | 精确子组件 | 是 | 否 | 完整 early-learning lifecycle |
 | 07 | CNLCU | loss confidence bounds | Algorithm / stateful selection | `src/lnl_toolbox/algorithms/cnlcu/`、`src/lnl_toolbox/training/cnlcu_experiment.py` | 完整实现（CNLCU-S/H workflow） | 是 | 否 | 正式论文配置、长训练与多 seed 数值复现 |
-| 08 | MentorNet | learned sample weights | WeightProvider | 泛型合同 | 接口已存在但无实现 | 否 | 否 | Mentor model 与 student lifecycle |
+| 08 | MentorNet | learned sample weights | WeightProvider / Pipeline | `models/mentornet.py`、`training/mentor_learning.py` | 条件可用 workflow | 是 | 是（需外部 artifact） | 先生成 MentorArtifact；正式数值复现 |
 | 09 | Co-teaching | peer small-loss exchange | Algorithm | `src/lnl_toolbox/algorithms/coteaching/`、`src/lnl_toolbox/training/coteaching_experiment.py` | 完整实现 | 是 | 是 | 论文专属 CNN、正式 200-epoch/multi-seed 数值复现 |
 | 10 | Loss Correction | Anchor estimate、Forward/Backward corrected risk | TransitionEstimator / RiskCorrector | `src/lnl_toolbox/noise/estimators.py`、`src/lnl_toolbox/algorithms/transition_risk.py` | 精确子组件 | 是 | 否 | 论文 preset、acceptance experiment |
 | 11 | Normalized Losses / APL | NCE、MAE、RCE、APL | Loss | `src/lnl_toolbox/losses/torch_losses.py` | 精确子组件 | 是 | 否 | 论文全部组合与复现实验 |
 | 12 | GCE | standard \(L_q\) | Loss | `src/lnl_toolbox/losses/torch_losses.py` | 精确子组件 | 是 | 否 | truncated \(L_q\) 更新 |
 | 13 | VolMinNet | trainable transition | NoiseModel / Pipeline | 无 | 未实现 | 否 | 否 | volume regularizer、联合优化 |
-| 14 | Natarajan | unbiased binary risk | RiskCorrector | 无 | 未实现 | 否 | 否 | signed corrected risk |
+| 14 | Natarajan | unbiased binary risk | RiskCorrector | `algorithms/binary_risk.py` | 精确子组件 | 是（binary runner） | 否 | 内置 recipe 与论文 benchmark |
 | 15 | T-Revision | Anchor initialization、Eq. (3) reweight、raw additive revision | Algorithm / Transition primitive | `src/lnl_toolbox/algorithms/t_revision/`、`src/lnl_toolbox/noise/estimators.py` | 完整实现 | 是 | 是（限定 Reweight-R fidelity） | Forward-R、正式长训练与 multi-seed 数值复现 |
-| 16 | Dual-T | factorized transition estimate | TransitionEstimator | `src/lnl_toolbox/noise/estimators.py` | 精确子组件 | 是 | 否 | 论文 preset、正式复现实验 |
+| 16 | Dual-T | factorized transition estimate | TransitionEstimator / Algorithm | `algorithms/dual_t/`、`training/dual_t_experiment.py` | 完整 workflow | 是 | 是 | 正式长训练与 multi-seed 数值复现 |
 | 17 | MC-LDCE | clean centroid statistic | Statistic / RiskCorrector | `StatisticResult` | 接口已存在但无实现 | 否 | 否 | centroid estimator、global risk |
-| 18 | Importance Reweighting | binary asymmetric-RCN weight | WeightProvider | `src/lnl_toolbox/treatments/weights.py` | 精确子组件 | 否 | 否 | posterior/rate estimation 与构造入口 |
-| 19 | CWD | class-wise centroid | Statistic / RiskCorrector | `StatisticResult` | 接口已存在但无实现 | 否 | 否 | auxiliary sets、risk consumer |
-| 20 | PCSE | per-class statistics | Statistic / PostProcessor | `StatisticResult` | 接口已存在但无实现 | 否 | 否 | producer 与 inference consumer |
+| 18 | Importance Reweighting | binary asymmetric-RCN weight | WeightProvider / Algorithm | `algorithms/importance_reweighting/`、`treatments/weights.py` | 完整 binary workflow | 是 | 是（限定 binary synthetic） | UCI/hinge 与论文数值复现 |
+| 19 | CWD | class-wise centroid | Statistic / RiskCorrector | `estimators/cwd.py`、`training/cwd_experiment.py` | 完整 workflow | 是 | 是（单 fold） | 五折汇总与正式数值复现 |
+| 20 | PCSE | per-class statistics | Statistic / PostProcessor | `algorithms/pcse/`、`training/pcse_experiment.py` | 完整 workflow | 是 | 是（当前 backends） | CIFAR 长训练与论文数值复现 |
 | 21 | DLD | directional label diffusion | LabelRefiner / Pipeline | 无 | 不适合模块化 | 否 | 否 | 完整生成式训练流程 |
-| 22 | FINE | noisy-subset objectives | Treatment consumer / Pipeline | 通用 contribution | 未实现 | 否 | 否 | forgetting、negative learning |
+| 22 | FINE | noisy-subset objectives | Treatment consumer / Pipeline | `algorithms/fine.py`、`training/fine_experiment.py` | 完整 workflow | 是 | 是 | 正式长训练与 multi-seed 数值复现 |
 | 23 | CA2C | asymmetric co-learning | dual-network Pipeline | 无 | 不适合模块化 | 否 | 否 | 两类模型、cross-guidance |
 | 24 | DivideMix | loss-GMM clean probability | ReliabilityEstimator | `src/lnl_toolbox/estimators/dividemix_gmm.py` | 精确子组件 | 否 | 否 | co-divide、MixMatch、双网络 |
 | 25 | L2RW | meta-gradient weights | MetaUpdater / Pipeline | 无忠实接口 | 未实现 | 否 | 否 | virtual update、clean meta batch |
@@ -311,11 +311,11 @@ early-learning 的训练/停止生命周期和论文实验配方。
 - **关键输入/输出**：样本特征；输出每个样本的 transition matrix。
 - **可模块化部分**：basis transition parameterization、instance transition output contract。
 - **必须 Algorithm 化的部分**：特征网络、basis/mixing 和 noisy objective 的联合训练。
-- **当前实现/状态**：现有 Anchor/Dual-T 只输出全局 class-conditional T；**未实现**。
-- **代码与测试位置**：共享基础在 `src/lnl_toolbox/noise/transition.py`；无 PDL 测试。
-- **当前缺失**：\(T(x)\)、part basis、联合 optimizer/state。
-- **可以声明**：已有 class-conditional transition artifact。
-- **禁止声明**：不得把 Anchor/Dual-T 或 IDN generator 称为 PDL。
+- **当前实现/状态**：part basis、instance mixing、warm-up、artifact 和 Forward corrected training 已由专属 runner 连接；**完整 workflow**。
+- **代码与测试位置**：`src/lnl_toolbox/estimators/instance_transition.py`、`src/lnl_toolbox/algorithms/instance_transition.py`、`src/lnl_toolbox/training/instance_transition_experiment.py`、`tests/test_instance_transition*.py`。
+- **当前缺失**：论文规模长训练、完整数据集组合和 multi-seed 数值复现。
+- **可以声明**：已实现可运行的 PDL workflow。
+- **禁止声明**：不得把 smoke 或单次配置称为论文表格复现。
 
 ### P04 — JoCoR
 
@@ -325,11 +325,11 @@ early-learning 的训练/停止生命周期和论文实验配方。
 - **关键输入/输出**：双网络 logits；输出 joint per-sample loss、mask 和双模型更新。
 - **可模块化部分**：agreement loss、small-loss ranking primitive。
 - **必须 Algorithm 化的部分**：双网络、joint objective、同步更新和 checkpoint。
-- **当前实现/状态**：只有通用 Loss/SmallLossSelector；**未实现**。
-- **代码与测试位置**：`src/lnl_toolbox/selectors/basic.py`、`tests/test_selectors.py` 不是 JoCoR 测试。
-- **当前缺失**：JoCoR objective、双模型 lifecycle。
-- **可以声明**：small-loss 是可复用原语。
-- **禁止声明**：不得把 SmallLossSelector 或 Co-teaching helper 称为 JoCoR。
+- **当前实现/状态**：joint supervised/co-regularization objective、共同选样、双模型同步更新和 checkpoint/resume 已连接；**完整 workflow**。
+- **代码与测试位置**：`src/lnl_toolbox/algorithms/jocor.py`、`src/lnl_toolbox/training/multi_model_experiment.py`、`tests/test_jocor*.py`。
+- **当前缺失**：论文规模长训练和 multi-seed 数值复现。
+- **可以声明**：已实现可运行的 JoCoR workflow。
+- **禁止声明**：不得把 smoke 结果称为论文数值复现。
 
 ### P05 — DSS
 
@@ -384,11 +384,11 @@ early-learning 的训练/停止生命周期和论文实验配方。
 - **关键输入/输出**：mentor features/state；输出连续权重。
 - **可模块化部分**：Mentor-specific WeightProvider 输出边界。
 - **必须 Algorithm 化的部分**：Mentor 训练/加载、Student 更新及课程生命周期。
-- **当前实现/状态**：只有泛型 `WeightProvider[InputT]`；**接口已存在但无实现**。
-- **代码与测试位置**：`src/lnl_toolbox/treatments/weights.py`、`tests/test_importance_reweighting.py` 仅测通用 adapter。
-- **当前缺失**：Mentor model、input schema、state 和 pipeline。
-- **可以声明**：统一 reducer 能消费预先算好的 Mentor weights。
-- **禁止声明**：不得把固定 keep-rate 或任意 WeightProvider 称为 MentorNet。
+- **当前实现/状态**：Mentor model、artifact preparation/validation 和 Student weighted-training pipeline 已连接；因需要外部 MentorArtifact，属于**条件可用 workflow**。
+- **代码与测试位置**：`src/lnl_toolbox/models/mentornet.py`、`src/lnl_toolbox/training/mentor_learning.py`、`src/lnl_toolbox/training/mentor_artifacts.py`、`tests/test_mentornet*.py`。
+- **当前缺失**：默认内置 artifact 和正式论文数值复现。
+- **可以声明**：准备好合法 MentorArtifact 后可运行 MentorNet workflow。
+- **禁止声明**：缺少 artifact 时不得列为默认直接可运行，也不得把 smoke 称为数值复现。
 
 ### P09 — Co-teaching
 
@@ -470,11 +470,11 @@ early-learning 的训练/停止生命周期和论文实验配方。
 - **关键输入/输出**：binary losses 和两类 noise rates；输出 signed corrected risk。
 - **可模块化部分**：BinaryRiskCorrector。
 - **必须 Algorithm 化的部分**：普通优化可消费，但 reducer 必须允许 signed risk。
-- **当前实现/状态**：无对应实现；**未实现**。
-- **代码与测试位置**：无；`src/lnl_toolbox/treatments/base.py` 禁止负 sample weights。
-- **当前缺失**：RiskCorrector 合同与 signed-risk 测试。
-- **可以声明**：现有二分类 RCN rate 语义可作为未来输入参考。
-- **禁止声明**：不得把 Binary RCN Importance WeightProvider 称为 Natarajan risk。
+- **当前实现/状态**：signed corrected risk、rate validation 和 binary runner consumer 已实现；**精确子组件**。
+- **代码与测试位置**：`src/lnl_toolbox/algorithms/binary_risk.py`、`src/lnl_toolbox/training/binary_experiment.py`、`tests/test_binary_risk.py`。
+- **当前缺失**：默认内置 recipe 和论文 benchmark 数值复现。
+- **可以声明**：已实现 Natarajan binary unbiased-risk component。
+- **禁止声明**：不得把组件或通用 binary runner 称为论文数值复现。
 
 ### P15 — T-Revision
 
@@ -498,11 +498,11 @@ early-learning 的训练/停止生命周期和论文实验配方。
 - **关键输入/输出**：noisy posterior、observed labels、stable indices；输出 TransitionArtifact。
 - **可模块化部分**：完整 Dual-T estimator。
 - **必须 Algorithm 化的部分**：warm-up snapshot 和 corrected classifier consumer。
-- **当前实现/状态**：`DualTransitionEstimator`；**精确子组件**。
-- **代码与测试位置**：`src/lnl_toolbox/noise/estimators.py`、`tests/test_transition_estimators.py`、`tests/test_plugins.py`。
-- **当前缺失**：论文专属 preset、acceptance experiment 和正式参考结果复现。
-- **可以声明**：Dual-T transition-estimation component 已实现、可保存，并可由通用 corrected-risk pipeline 消费。
-- **禁止声明**：不得声称已完整复现 Dual-T 论文训练和实验结果。
+- **当前实现/状态**：posterior best checkpoint、snapshot、Dual-T artifact、fresh Forward classifier、phase-aware resume 及 evidence workflow 已连接；**完整 workflow**。
+- **代码与测试位置**：`src/lnl_toolbox/algorithms/dual_t/`、`src/lnl_toolbox/training/dual_t_experiment.py`、`tests/test_dual_t_*.py`。
+- **当前缺失**：正式长训练、多 seed 和论文参考结果复现。
+- **可以声明**：已实现可运行的 Dual-T + Forward workflow 与独立 evidence chain。
+- **禁止声明**：不得把 smoke 或单 seed 配置称为论文数值复现。
 
 ### P17 — MC-LDCE
 
@@ -526,11 +526,11 @@ early-learning 的训练/停止生命周期和论文实验配方。
 - **关键输入/输出**：\(P(\tilde Y\mid X)\)、observed binary target、\(\rho_+,\rho_-\)；输出 detached weights。
 - **可模块化部分**：BinaryRCNImportanceWeightProvider。
 - **必须 Algorithm 化的部分**：posterior 与 noise-rate estimation、完整实验流程。
-- **当前实现/状态**：公式、rho 方向、q=0 和负权重校验均已有；**精确子组件**。
-- **代码与测试位置**：`src/lnl_toolbox/treatments/weights.py`、`tests/test_importance_reweighting.py`。
-- **当前缺失**：producer、plugin/YAML、监督训练构造入口。
-- **可以声明**：paper-exact binary asymmetric-RCN importance-weight component。
-- **禁止声明**：不得声称完整 Importance Reweighting 或多分类支持。
+- **当前实现/状态**：KDE/KLIEP posterior、raw-min rates、精确 weights、atomic artifacts、weighted CE 和严格 resume 已连接；**完整 binary workflow**。
+- **代码与测试位置**：`src/lnl_toolbox/algorithms/importance_reweighting/`、`src/lnl_toolbox/treatments/weights.py`、`src/lnl_toolbox/training/importance_reweighting_experiment.py`、`tests/test_importance_reweighting*.py`。
+- **当前缺失**：UCI、hinge、论文表格与 multi-seed 数值复现。
+- **可以声明**：已实现 binary asymmetric-RCN Importance Reweighting workflow，低维 KDE、高维 KLIEP。
+- **禁止声明**：不得声称多分类支持或论文数值复现。
 
 ### P19 — CWD
 
@@ -540,11 +540,11 @@ early-learning 的训练/停止生命周期和论文实验配方。
 - **关键输入/输出**：class-wise data statistics 和 noise rates；输出 centroids/corrected risk。
 - **可模块化部分**：CWD StatisticEstimator、RiskCorrector。
 - **必须 Algorithm 化的部分**：全局统计采集和 objective integration。
-- **当前实现/状态**：只有 statistic 容器；**接口已存在但无实现**。
-- **代码与测试位置**：`src/lnl_toolbox/estimators/base.py`；无 CWD 测试。
-- **当前缺失**：auxiliary sets、centroid formula、consumer。
-- **可以声明**：StatisticResult 可承载未来 CWD payload。
-- **禁止声明**：不得把 generic class statistics 称为 CWD。
+- **当前实现/状态**：class statistics、coefficient pseudoinverse、global objective 和单-fold runner 已连接；**完整 workflow**。
+- **代码与测试位置**：`src/lnl_toolbox/estimators/cwd.py`、`src/lnl_toolbox/algorithms/cwd.py`、`src/lnl_toolbox/training/cwd_experiment.py`、`tests/test_cwd*.py`。
+- **当前缺失**：论文五折完整汇总和正式数值复现。
+- **可以声明**：已实现 CWD 单-fold workflow。
+- **禁止声明**：单 fold 或 smoke 不得冒充论文完整汇总。
 
 ### P20 — PCSE
 
@@ -554,11 +554,11 @@ early-learning 的训练/停止生命周期和论文实验配方。
 - **关键输入/输出**：固定 feature、noisy class statistics；输出 clean per-class statistics/predictions。
 - **可模块化部分**：PCSE StatisticEstimator、PostProcessor。
 - **必须 Algorithm 化的部分**：预训练、指定 feature layer、统计恢复和 inference stage。
-- **当前实现/状态**：只有 `StatisticResult[T]`；**接口已存在但无实现**。
-- **代码与测试位置**：`src/lnl_toolbox/estimators/base.py`；无 PCSE 测试。
-- **当前缺失**：具体 payload、estimator、postprocessor。
-- **可以声明**：通用容器不会阻碍未来 PCSE statistics。
-- **禁止声明**：不得把训练期 ReliabilityEstimator 称为 PCSE。
+- **当前实现/状态**：multiclass statistics recovery、shared-covariance GDA、multi-layer ensemble、Dual-T/paper-volmin transition backend 及严格 resume 已连接；**完整 workflow**。
+- **代码与测试位置**：`src/lnl_toolbox/algorithms/pcse/`、`src/lnl_toolbox/training/pcse_experiment.py`、`tests/test_pcse_*.py`。
+- **当前缺失**：CIFAR 全规模、论文 baselines、multi-seed 与论文数值复现。
+- **可以声明**：已实现 PCSE method-level workflow，并明确 backend fidelity。
+- **禁止声明**：不得把 synthetic smoke 称为论文数值复现。
 
 ## 13. 必须实现为 Algorithm/Pipeline 的方法
 
@@ -584,11 +584,11 @@ early-learning 的训练/停止生命周期和论文实验配方。
 - **关键输入/输出**：外部 clean/noisy partition；输出多分支 objective。
 - **可模块化部分**：subset-specific regularizer/objective。
 - **必须 Algorithm 化的部分**：partition consumer、阶段调度和多项 loss 聚合。
-- **当前实现/状态**：ContributionResult 只是共享基础；**未实现**。
-- **代码与测试位置**：`src/lnl_toolbox/treatments/base.py`、`src/lnl_toolbox/treatments/reduction.py` 不是 FINE。
-- **当前缺失**：FINE objectives、partition lifecycle。
-- **可以声明**：统一 treatment 可承载 hard subset contribution。
-- **禁止声明**：不得把 Selector 或 reducer 称为 FINE。
+- **当前实现/状态**：warm-up、EMA、SCS/SCR partition、strong augmentation 与 active-forgetting objectives 已由专属 runner 连接；**完整 workflow**。
+- **代码与测试位置**：`src/lnl_toolbox/algorithms/fine.py`、`src/lnl_toolbox/training/fine_experiment.py`、`tests/test_fine*.py`。
+- **当前缺失**：论文规模长训练、多 seed 和论文数值复现。
+- **可以声明**：已实现可运行的 FINE workflow。
+- **禁止声明**：不得把单次 smoke 称为论文数值复现。
 
 ### P23 — CA2C
 

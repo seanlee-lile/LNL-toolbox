@@ -41,6 +41,10 @@ lnl list experiments --profile smoke
 - `PROFILE`：`smoke` 用于快速验证，`reproduction` 用于论文规模实验；
 - `METHOD`：实验实现的方法或主要组件；
 - `RUNNER`：toolbox 实际采用的训练生命周期；
+- `IMPLEMENTATION`：组件、workflow 或可直接调用的方法实现状态；
+- `FIDELITY`：smoke、工程配置或论文导向配置的忠实度；
+- `REPRODUCTION`：数值复现是否实际执行，不能由配置名称推断；
+- `AVAILABILITY`：`runnable` 可直接运行，`conditional` 仍需外部 artifact；
 - `EPOCHS`：配置的训练轮数。
 
 第一次建议选择 `cifar10-symmetric-ce-smoke`。
@@ -118,7 +122,7 @@ lnl papers config dual-t --profile smoke --variant cifar10-sym20 --resolved
 lnl papers config dual-t --profile smoke --variant cifar10-sym20 --path-only
 ```
 
-`smoke` 表示缩小规模的通路验证；`reproduction` 表示论文规模配置，但不自动代表已经复现论文报告的数值。请同时查看 `fidelity` 和论文详情中的限制说明。
+`smoke` 表示缩小规模的通路验证；`reproduction` 表示论文规模配置，但不自动代表已经复现论文报告的数值。请同时查看 `implementation_status`、`configuration_fidelity`、`reproduction_status`、`availability` 和论文详情中的限制说明。
 
 ## 4. 使用自定义 YAML
 
@@ -137,7 +141,9 @@ execution:
   runner: supervised
 ```
 
-专用 runner 包括 `coteaching`、`dual_t`、`multi_model`、`cwd`、`fine`、`instance_transition`、`importance_reweighting` 和 `pcse`。未知方法、未知 runner 或专用配置被送入错误 runner 时，toolbox 会在训练前失败，不会静默改跑普通监督实验。
+专用 runner 包括 `coteaching`、`cnlcu`、`t_revision`、`dual_t`、`multi_model`、`cwd`、`fine`、`instance_transition`、`importance_reweighting` 和 `pcse`。未知方法、未知 runner 或专用配置被送入错误 runner 时，toolbox 会在训练前失败，不会静默改跑普通监督实验。
+
+MentorNet 等依赖外部训练 artifact 的 recipe 默认不会出现在直接可运行列表中；使用 `lnl list experiments --include-conditional` 查看，并先运行 `lnl validate` 获取缺失 artifact 的明确提示。
 
 临时覆盖训练轮数或输出位置：
 
