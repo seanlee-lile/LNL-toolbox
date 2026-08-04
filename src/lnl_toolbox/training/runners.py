@@ -107,6 +107,7 @@ def create_runner_registry() -> RunnerRegistry:
         "run_volminnet_experiment",
     )
     registry.add("upm", "lnl_toolbox.training.upm_experiment", "run_upm_experiment")
+    registry.add("dld", "lnl_toolbox.training.dld_experiment", "run_dld_experiment")
     registry.add("cnlcu", "lnl_toolbox.training.cnlcu_experiment", "run_cnlcu_experiment")
     registry.add(
         "t_revision",
@@ -122,6 +123,7 @@ _METHOD_RUNNERS = frozenset(
         "cnlcu",
         "coteaching",
         "dual_t",
+        "dld",
         "importance_reweighting",
         "pcse",
         "t_revision",
@@ -174,6 +176,9 @@ def apply_epoch_override(config: dict[str, Any], epochs: int) -> None:
         return
     if method == "upm":
         _set_nested_epoch(config, ("upm", "main", "epochs"), epochs)
+        return
+    if method == "dld":
+        _set_nested_epoch(config, ("dld", "diffusion", "epochs"), epochs)
         return
     if method in {"dual_t", "pcse"}:
         raise ValueError(

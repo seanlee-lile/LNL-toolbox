@@ -508,6 +508,7 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
         ),
         "cnlcu": ("lnl_toolbox.algorithms.cnlcu.config", "CNLCUConfig"),
         "dual_t": ("lnl_toolbox.algorithms.dual_t.config", "DualTConfig"),
+        "dld": ("lnl_toolbox.algorithms.dld.config", "DLDConfig"),
         "importance_reweighting": (
             "lnl_toolbox.algorithms.importance_reweighting.config",
             "ImportanceReweightingConfig",

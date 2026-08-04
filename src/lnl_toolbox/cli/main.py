@@ -158,6 +158,9 @@ def _epoch_description(config: dict[str, Any]) -> str:
             str((values.get(stage, {}) or {}).get("epochs", "-"))
             for stage in ("stage1", "main")
         ) + " (stage1/main)"
+    if method == "dld":
+        values = config.get("dld", {}) or {}
+        return str((values.get("diffusion", {}) or {}).get("epochs", "-")) + " (diffusion)"
     trainer = config.get("trainer", {}) or {}
     return str(trainer.get("epochs", config.get("epochs", "runner default")))
 
@@ -189,6 +192,25 @@ def _print_plan(config: dict[str, Any], config_path: Path, project: Path) -> Non
         print(f"  UPM eta initial value: {eta.get('initial_value', '-')}")
         print(f"  UPM eta update start epoch: {eta.get('update_start_epoch', '-')}")
         print(f"  UPM eta update interval: {eta.get('update_interval_epochs', '-')}")
+    if str(method).strip().lower() == "dld":
+        dld = config.get("dld", {}) or {}
+        feature = dld.get("feature_extractor", {}) or {}
+        pre = dld.get("precorrection", {}) or {}
+        diffusion = dld.get("diffusion", {}) or {}
+        inference = dld.get("inference", {}) or {}
+        fidelity = dld.get("fidelity", {}) or {}
+        print(f"  DLD feature extractor: {feature.get('source', '-')}")
+        print(
+            "  DLD pre-correction: "
+            f"K={pre.get('k_neighbors', '-')} / "
+            f"metric={fidelity.get('neighbor_metric', '-')} / "
+            f"self={fidelity.get('self_neighbor', '-')} / "
+            f"divergence={fidelity.get('divergence', '-')} / GMM"
+        )
+        print(f"  DLD artifact: dld_precorrection.npz")
+        print(f"  DLD timesteps: {diffusion.get('timesteps', '-')}")
+        print(f"  DLD inference steps: {inference.get('steps', '-')}")
+        print(f"  DLD fidelity: {fidelity.get('name', '-')}")
 
 
 def _doctor(args: argparse.Namespace) -> int:

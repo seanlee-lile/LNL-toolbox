@@ -46,6 +46,7 @@ lnl_toolbox = ["paper_catalog.json"]
     "configs/experiment/cifar10_coteaching_smoke.yaml",
     "configs/experiment/cifar10_dual_t_evidence_smoke.yaml",
     "configs/experiment/cifar10_dual_t_smoke.yaml",
+    "configs/experiment/cifar10_dld_smoke.yaml",
     "configs/experiment/cifar10_foundation_smoke.yaml",
     "configs/experiment/cifar10_smoke.yaml",
     "configs/experiment/cifar10_symmetric_cdr_reproduction.yaml",

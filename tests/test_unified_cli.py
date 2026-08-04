@@ -35,7 +35,7 @@ class RunnerResolutionTest(unittest.TestCase):
             {
                 "binary", "clean", "coteaching", "cwd", "dual_t", "fine",
                 "importance_reweighting", "instance_transition", "multi_model",
-                "pcse", "supervised", "cnlcu", "t_revision", "upm", "volminnet",
+                "pcse", "supervised", "cnlcu", "dld", "t_revision", "upm", "volminnet",
             },
         )
 
