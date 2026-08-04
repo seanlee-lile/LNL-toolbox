@@ -152,6 +152,12 @@ def _epoch_description(config: dict[str, Any]) -> str:
             str((config.get(stage, {}) or {}).get("epochs", "-"))
             for stage in ("pretraining_stage", "ensemble_stage")
         ) + " (pretraining/ensemble)"
+    if method == "upm":
+        values = config.get("upm", {}) or {}
+        return "/".join(
+            str((values.get(stage, {}) or {}).get("epochs", "-"))
+            for stage in ("stage1", "main")
+        ) + " (stage1/main)"
     trainer = config.get("trainer", {}) or {}
     return str(trainer.get("epochs", config.get("epochs", "runner default")))
 
@@ -172,6 +178,17 @@ def _print_plan(config: dict[str, Any], config_path: Path, project: Path) -> Non
     print(f"  设备: {trainer.get('device', 'auto')}")
     print(f"  最佳模型依据: {_selection_description(config)}")
     print(f"  输出根目录: {config.get('output_root', 'artifacts/runs')}")
+    method = config.get("method", "")
+    if isinstance(method, dict):
+        method = method.get("name", "")
+    if str(method).strip().lower() == "upm":
+        upm = config.get("upm", {}) or {}
+        psi = upm.get("psi", {}) or {}
+        eta = upm.get("confusing_probability", {}) or {}
+        print(f"  UPM psi source: {psi.get('source', '-')}")
+        print(f"  UPM eta initial value: {eta.get('initial_value', '-')}")
+        print(f"  UPM eta update start epoch: {eta.get('update_start_epoch', '-')}")
+        print(f"  UPM eta update interval: {eta.get('update_interval_epochs', '-')}")
 
 
 def _doctor(args: argparse.Namespace) -> int:

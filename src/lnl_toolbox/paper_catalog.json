@@ -203,5 +203,17 @@
     "configs": [{"recipe_id":"cifar10-volminnet-smoke","profile":"smoke","variant":"cifar10-sym40","configuration_fidelity":"paper_oriented","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}],
     "concept_to_config": [{"concept":"joint minimum-volume objective","config":"volminnet.objective","implementation":"algorithms/volminnet/objective.py"},{"concept":"trainable transition","config":"volminnet.transition","implementation":"algorithms/volminnet/transition.py"}],
     "implementation_paths": ["src/lnl_toolbox/algorithms/volminnet", "src/lnl_toolbox/training/volminnet_experiment.py"]
+  },
+  {
+    "id": "upm", "acronym": "UPM", "title": "Tackling Instance-Dependent Label Noise via a Universal Probabilistic Model", "venue": "AAAI", "year": 2021,
+    "source_url": "https://ojs.aaai.org/index.php/AAAI/article/view/17221",
+    "summary": "Models instance-dependent label corruption through one learnable confusing probability per stable training sample.",
+    "mechanism": "A noisy-label classifier first supplies scalar observed-class psi; a fresh main classifier then alternates detached true-posterior prediction, explicit projected eta updates, and fixed-q soft-target learning.",
+    "lifecycle": ["noisy-CE Stage 1", "best-checkpoint deterministic psi snapshot", "stable-index eta initialization", "UPM alternating optimization", "clean-test evaluation"],
+    "limitations": ["The built-in profile is a workflow smoke with symmetric noise, not the paper's CIFAR instance-dependent relabeling or numerical reproduction.", "Best-checkpoint deterministic snapshot collection is an explicit toolbox reproducibility choice because the paper does not fully specify this lifecycle detail."],
+    "implementation_status": "user_ready", "reproduction_status": "not_run", "availability": "runnable",
+    "configs": [{"recipe_id":"cifar10-upm-smoke","profile":"smoke","variant":"cifar10-workflow","configuration_fidelity":"paper_oriented","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}],
+    "concept_to_config": [{"concept":"naive observed-label probability","config":"upm.stage1/upm.psi","implementation":"algorithms/upm/posterior.py"},{"concept":"confusing probability PGA","config":"upm.confusing_probability","implementation":"algorithms/upm/confusing.py"},{"concept":"true-posterior soft supervision","config":"upm.main","implementation":"algorithms/upm/objective.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/upm", "src/lnl_toolbox/training/upm_experiment.py"]
   }
 ]
