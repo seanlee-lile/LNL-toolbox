@@ -106,14 +106,31 @@ def create_runner_registry() -> RunnerRegistry:
     registry.add("ca2c", "lnl_toolbox.training.ca2c_experiment", "run_ca2c_experiment")
     registry.add("l2rw", "lnl_toolbox.training.l2rw_experiment", "run_l2rw_experiment")
     registry.add("dld", "lnl_toolbox.training.dld_experiment", "run_dld_experiment")
+    registry.add("cnlcu", "lnl_toolbox.training.cnlcu_experiment", "run_cnlcu_experiment")
+    registry.add(
+        "t_revision",
+        "lnl_toolbox.training.t_revision_experiment",
+        "run_t_revision_experiment",
+    )
     return registry
 
 
 _RUNNERS = create_runner_registry()
-_METHOD_RUNNERS = frozenset({
-    "coteaching", "dual_t", "importance_reweighting", "pcse",
-    "mc_ldce", "cal", "ca2c", "l2rw", "dld",
-})
+_METHOD_RUNNERS = frozenset(
+    {
+        "cnlcu",
+        "coteaching",
+        "dual_t",
+        "importance_reweighting",
+        "pcse",
+        "mc_ldce",
+        "cal",
+        "ca2c",
+        "l2rw",
+        "dld",
+        "t_revision",
+    }
+)
 _RENAMED_METHODS = {"dual_t_forward": "dual_t"}
 _DEDICATED_SECTIONS = {
     "cwd": "cwd",
@@ -124,6 +141,50 @@ _DEDICATED_SECTIONS = {
 
 def runner_names() -> tuple[str, ...]:
     return _RUNNERS.names()
+
+
+def method_names() -> tuple[str, ...]:
+    """Return public method names owned by the central runner registry."""
+
+    return tuple(sorted(_METHOD_RUNNERS))
+
+
+def _set_nested_epoch(config: dict[str, Any], path: tuple[str, ...], epochs: int) -> None:
+    current: dict[str, Any] = config
+    for key in path[:-1]:
+        value = current.get(key)
+        if not isinstance(value, dict):
+            raise ValueError(
+                f"--epochs requires an existing {'.'.join(path[:-1])} mapping"
+            )
+        current = value
+    current[path[-1]] = epochs
+
+
+def apply_epoch_override(config: dict[str, Any], epochs: int) -> None:
+    """Apply a user epoch target only where its lifecycle meaning is unambiguous."""
+
+    if epochs <= 0:
+        raise ValueError("--epochs must be positive")
+    runner = resolve_runner(config)
+    method_value = config.get("method", "")
+    if isinstance(method_value, Mapping):
+        method_value = method_value.get("name", "")
+    method = _normalize(method_value) if str(method_value).strip() else ""
+    if method == "t_revision":
+        _set_nested_epoch(config, ("t_revision", "revision", "epochs"), epochs)
+        return
+    if method in {"dual_t", "pcse"}:
+        raise ValueError(
+            f"--epochs is ambiguous for staged method {method!r}; edit the explicit "
+            "stage epoch field in the YAML instead"
+        )
+    if runner.name == "binary":
+        raise ValueError("--epochs is not supported by the non-resumable binary runner")
+    trainer = config.get("trainer")
+    if not isinstance(trainer, dict):
+        raise ValueError("--epochs requires an existing trainer mapping")
+    trainer["epochs"] = epochs
 
 
 def resolve_runner(config: Mapping[str, Any]) -> RunnerSpec:
@@ -145,7 +206,8 @@ def resolve_runner(config: Mapping[str, Any]) -> RunnerSpec:
         suggestion = get_close_matches(method, sorted(_METHOD_RUNNERS), n=1)
         hint = f"; did you mean {suggestion[0]!r}?" if suggestion else ""
         raise ValueError(
-            f"unknown method {method!r}{hint}; run 'lnl list experiments' to see runnable methods"
+            f"Unsupported training method: unknown method {method!r}{hint}; "
+            "run 'lnl list experiments' to see runnable methods"
         )
 
     inferred = method
@@ -171,7 +233,9 @@ def resolve_runner(config: Mapping[str, Any]) -> RunnerSpec:
 __all__ = [
     "RunnerRegistry",
     "RunnerSpec",
+    "apply_epoch_override",
     "create_runner_registry",
+    "method_names",
     "resolve_runner",
     "runner_names",
 ]

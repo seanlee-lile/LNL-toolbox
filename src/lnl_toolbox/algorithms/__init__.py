@@ -6,6 +6,7 @@ from .coteaching import (
     coteaching_exchange,
     remember_rate,
 )
+from .cnlcu import CNLCUAlgorithm, CNLCUConfig, CNLCUState
 from .multi_model import ModelGroup, PeerExchangeResult, SmallLossPeerExchange, consistency_loss
 from .jocor import JoCoRAlgorithm, jocor_joint_scores, symmetric_kl_per_sample
 
@@ -17,6 +18,9 @@ __all__ = [
     "CoTeachingAlgorithm",
     "CoTeachingConfig",
     "CoTeachingState",
+    "CNLCUAlgorithm",
+    "CNLCUConfig",
+    "CNLCUState",
     "ModelGroup",
     "PeerExchangeResult",
     "SmallLossPeerExchange",

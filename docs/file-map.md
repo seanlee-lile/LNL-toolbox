@@ -2,6 +2,10 @@
 
 本表覆盖当前项目中的源代码、配置、测试和主要文档。`papers/` 下的 PDF、CIFAR 二进制文件和自动生成的 `__pycache__/` 不逐个解释。
 
+统一 CLI 的执行事实源是 `training/runners.py`；`training/workflows.py` 只保留兼容
+API。`cli/data/recipe_catalog.json` 是显式内置 recipe 清单，配置文件通过 package
+data 安装，避免用户本地 YAML 污染 catalog。
+
 ## 1. 仓库根目录
 
 | 文件 | 作用 |
@@ -45,6 +49,8 @@
 | `engine/runner.py` | 执行 setup、run、cycle、step、evaluator 和 close；不处理模型或梯度。 |
 | `algorithms/base.py` | 将旧 `Algorithm/TrainState` 导入映射到新的通用核心，保持兼容。 |
 | `algorithms/coteaching/` | 完整双模型 `CoTeachingAlgorithm`、配置/状态、stable-index small-loss 选择，以及原 NumPy helper 的兼容迁移。 |
+| `algorithms/cnlcu/` | CNLCU-S Eq. (2)/(3)/(7) 与 CNLCU-H Eq. (4)/(8)、corrected LOF、按 epoch 划窗且 history/count 同步重置的 peer state、稳定索引选择、双模型交叉更新及可恢复状态。 |
+| `algorithms/t_revision/` | T-Revision Reweight-R 的三阶段状态机、corrected vectorized Eq. (3)、raw additive transition revision、方法专属 artifact 与严格 resume；不把 raw revised matrix 伪装成通用 `TransitionArtifact`。 |
 | `algorithms/update_policy.py` | 定义通用 ParameterUpdateInput/Result/Policy、普通 StandardUpdatePolicy，以及 policy checkpoint 身份协议。 |
 | `algorithms/cdr.py` | 实现 CDR 论文 Eq. (3)-(6) 的全参数精确 top-k 模式，以及官方代码二维/四维权重、阈值并列和 L2-compatible 模式。 |
 | `algorithms/supervised.py` | 单模型监督训练步骤；兼容普通逐样本归约与结构化 Objective，并通用转发 Objective 生命周期钩子。 |
@@ -136,6 +142,8 @@
 |---|---|
 | `training/experiment.py` | 唯一监督训练器；统一构造模型、Loss、batch Selector、ParameterUpdatePolicy、optimizer、scheduler、clean/noisy Dataset、可显式选择 clean/noisy validation、评测和产物。 |
 | `training/coteaching_experiment.py` | `method: coteaching` 的 CIFAR 双模型生命周期；负责独立 peer 初始化、epoch-seeded loader、双 peer 评测和 checkpoint/resume。 |
+| `training/cnlcu_experiment.py` | `method: cnlcu` 的 CIFAR-10/100 双模型生命周期；按 `variant: soft|hard` 组装 scorer，共享严格 peer cross-update、noisy-validation best selection 和 epoch-boundary resume。 |
+| `training/t_revision_experiment.py` | `method: t_revision` 的 CIFAR-10/100 Reweight-R 生命周期；组装 noisy CE、train-only Anchor snapshot、固定-T classifier initialization 和 classifier/delta joint revision。 |
 | `training/progress.py` | 无第三方依赖的 batch 终端进度显示和逐 epoch `training_curves.svg` 生成器；不参与训练决策。 |
 | `training/clean_baseline.py` | clean-only 包装和多 seed 汇总；检测到 noise 配置立即拒绝。 |
 | `training/noisy_labels.py` | 生成或导入 manifest，规范化为 run-local v2，校验恢复身份，并分别记录 train/validation 的标签来源与实际噪声率。 |
@@ -152,6 +160,8 @@
 | `configs/algorithm/nce.yaml` | NCE 的数值稳定参数。 |
 | `configs/algorithm/apl.yaml` | 严格正权重及 NCE + RCE 嵌套配置。 |
 | `configs/algorithm/coteaching.yaml` | Co-teaching 示例参数。 |
+| `configs/algorithm/cnlcu_soft.yaml` | CNLCU-S 的线性 remember schedule、fixed-window float32 history、soft uncertainty 和 stable-index selection 参数。 |
+| `configs/algorithm/cnlcu_hard.yaml` | CNLCU-H paper formulas、fixed loss bound 和 corrected-LOF fidelity identity。 |
 | `configs/algorithm/cdr.yaml` | 显式声明 paper-mode CDR 的噪声率、L1 系数、参数范围和 compatibility mode。 |
 | `configs/algorithm/dss.yaml` | DSS Objective 的论文参数片段：150 epochs、30 warm-up、MDA 0.99 与 CCS α=0.10。 |
 | `configs/algorithm/jocor.yaml` | JoCoR 联合目标和官方 floor small-loss 日程片段。 |
@@ -162,6 +172,9 @@
 | `configs/experiment/cifar10_symmetric_small_loss_linear_smoke.yaml` | symmetric 0.4 + CE + 从 1.0 线性变化到 0.5 的 SmallLossSelector smoke 配置。 |
 | `configs/experiment/cifar10_symmetric_cdr_smoke.yaml` | symmetric 0.4 + CE + paper-mode CDR ParameterUpdatePolicy 的 smoke 配置。 |
 | `configs/experiment/cifar10_coteaching_smoke.yaml` | 双 TinyCNN、symmetric 0.4、两轮 CPU Co-teaching smoke 配置。 |
+| `configs/experiment/cifar10_cnlcu_soft_smoke.yaml` | 双 TinyCNN、symmetric 0.4、两轮 CPU CNLCU-S smoke 配置。 |
+| `configs/experiment/cifar10_cnlcu_hard_smoke.yaml` | 双 TinyCNN、symmetric 0.4、corrected LOF 的 CPU CNLCU-H smoke 配置。 |
+| `configs/experiment/cifar10_t_revision_smoke.yaml` | TinyCNN、symmetric 0.4、Stage 1/2A/2B 各两轮的 CPU T-Revision Reweight-R smoke 配置。 |
 | `configs/experiment/gce_cifar10_noise02_smoke.yaml` | GCE 论文设置的 CIFAR-10、symmetric 0.2、ResNet-34 小样本 CUDA smoke。 |
 | `configs/experiment/gce_cifar10_noise02_reproduction.yaml` | GCE 论文设置的 CIFAR-10、symmetric 0.2、单次 120 epoch 正式配置。 |
 | `configs/experiment/loss_correction_cifar10_asymmetric04.yaml` | Loss Correction 论文设置的 CIFAR-10、官方 class-conditional asymmetric 0.4、Forward、单次 120 epoch 正式配置。 |
@@ -190,6 +203,13 @@
 | `tests/test_coteaching.py` | legacy Co-teaching exchange 与旧导入路径回归。 |
 | `tests/test_coteaching_algorithm.py` | peer cross-update、初始化、schedule、floor/tie-break 和双 peer state 合同。 |
 | `tests/test_coteaching_workflow.py` | YAML dispatch、双模型 checkpoint、fresh/resume/completed-resume 和配置漂移。 |
+| `tests/test_cnlcu_estimators.py` | CNLCU-S Eq. (2)/(3)/(7)、CNLCU-H Eq. (4)/(8)、corrected LOF、无 ReLU score、fixed-window history 和 state validation。 |
+| `tests/test_cnlcu_algorithm.py` | 当前 loss 先写 history、uncertainty-aware selection、严格 peer cross-update、A/B identity 和配置隔离。 |
+| `tests/test_cnlcu_workflow.py` | CIFAR-10/100 dispatch、fresh/resume/completed no-op、history checkpoint 与连续/恢复训练等价性。 |
+| `tests/test_t_revision_objective.py` | Reweight-R Eq. (3) 手算、矩阵方向、ratio、梯度、raw transition 和数值失败边界。 |
+| `tests/test_t_revision_algorithm.py` | additive delta、optimizer 参数所有权、方法专属 revised artifact 和阶段状态机。 |
+| `tests/test_t_revision_workflow.py` | 三阶段运行、best provenance、阶段内 resume、artifact/manifest drift、completed no-op、CPU/CUDA。 |
+| `docs/t-revision.md` | T-Revision Reweight-R 的用户入口、适用边界、配置、三阶段生命周期、输出解释与 resume 规则。 |
 | `tests/test_update_policy.py` | 通用 ParameterUpdatePolicy 输入输出、Standard 更新等价性和 checkpoint 身份协议。 |
 | `tests/test_cdr.py` | CDR Eq. (3)-(6)、官方代码 scope/threshold/L2 模式、稳定 top-k、失败边界、Selector、checkpoint 和 CPU/CUDA 一致性。 |
 | `tests/test_cdr_reproduction.py` | CDR 正式配置的 100-epoch 合同、官方 ResNet stem/初始化选项和通用 builder 接入。 |

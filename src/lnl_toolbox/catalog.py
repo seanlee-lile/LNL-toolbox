@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
+from importlib import metadata, resources
 import json
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,10 @@ class RecipeSpec:
     noise: str
     method: str
     epochs: int | None
+    implementation_status: str
+    configuration_fidelity: str
+    reproduction_status: str
+    availability: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,7 +35,10 @@ class PaperConfig:
     recipe_id: str
     profile: str
     variant: str
-    fidelity: str
+    configuration_fidelity: str
+    implementation_status: str
+    reproduction_status: str
+    availability: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +56,9 @@ class PaperSpec:
     configs: tuple[PaperConfig, ...]
     concept_to_config: tuple[Mapping[str, str], ...]
     implementation_paths: tuple[str, ...]
+    implementation_status: str
+    reproduction_status: str
+    availability: str
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -83,6 +94,10 @@ def _display_method(config: Mapping[str, Any], runner: str) -> str:
         method = method.get("name", "")
     if str(method).strip():
         return str(method)
+    if runner == "instance_transition":
+        transition = config.get("instance_transition", {}) or {}
+        if isinstance(transition, Mapping) and str(transition.get("name", "")).strip():
+            return str(transition["name"])
     algorithm = config.get("algorithm", {}) or {}
     if isinstance(algorithm, Mapping) and str(algorithm.get("name", "")).strip():
         return str(algorithm["name"])
@@ -101,13 +116,74 @@ def _display_method(config: Mapping[str, Any], runner: str) -> str:
     return runner
 
 
-def discover_recipes(root: Path | None = None) -> tuple[RecipeSpec, ...]:
+def _recipe_manifest() -> tuple[tuple[str, ...], frozenset[str]]:
+    text = resources.files("lnl_toolbox.cli").joinpath(
+        "data/recipe_catalog.json"
+    ).read_text(encoding="utf-8")
+    raw = json.loads(text)
+    paths = tuple(str(value) for value in raw["recipes"])
+    if len(paths) != len(set(paths)):
+        raise ValueError("built-in recipe manifest contains duplicate paths")
+    return paths, frozenset(str(value) for value in raw.get("conditional", ()))
+
+
+def _installed_recipe_path(relative: str) -> Path:
+    try:
+        distribution = metadata.distribution("lnl-toolbox")
+    except metadata.PackageNotFoundError as exc:
+        raise FileNotFoundError(
+            f"built-in recipe is unavailable outside a source checkout: {relative}"
+        ) from exc
+    return Path(distribution.locate_file(Path("share/lnl-toolbox") / relative)).resolve()
+
+
+def _recipe_path(relative: str, project: Path) -> Path:
+    source = (project / relative).resolve()
+    if source.is_file():
+        return source
+    installed = _installed_recipe_path(relative)
+    if not installed.is_file():
+        raise FileNotFoundError(f"packaged built-in recipe is missing: {relative}")
+    return installed
+
+
+def _implementation_status(method: str, runner: str) -> str:
+    if method in {
+        "cnlcu", "coteaching", "dss", "dual_t", "fine",
+        "importance_reweighting", "jocor", "pcse", "pdl", "t_revision",
+        "cwd",
+    }:
+        return "user_ready"
+    if method == "mentornet":
+        return "workflow"
+    if runner in {"clean", "supervised"}:
+        return "component"
+    return "workflow"
+
+
+def _configuration_fidelity(path: Path, profile: str) -> str:
+    name = path.stem.lower()
+    if profile == "smoke":
+        return "smoke"
+    if "reproduction" in name or path.parent.name == "reproduction":
+        return "paper_oriented"
+    return "engineering"
+
+
+def discover_recipes(
+    root: Path | None = None,
+    *,
+    include_conditional: bool = False,
+) -> tuple[RecipeSpec, ...]:
     project = (root or repository_root()).resolve()
-    paths = sorted((project / "configs" / "experiment").glob("*.yaml"))
-    paths += sorted((project / "configs" / "reproduction").glob("*.yaml"))
+    manifest_paths, conditional_paths = _recipe_manifest()
     recipes: list[RecipeSpec] = []
     seen: set[str] = set()
-    for path in paths:
+    for relative in manifest_paths:
+        conditional = relative in conditional_paths
+        if conditional and not include_conditional:
+            continue
+        path = _recipe_path(relative, project)
         recipe_id = _recipe_id(path)
         if recipe_id in seen:
             recipe_id = f"{path.parent.name}-{recipe_id}"
@@ -131,6 +207,12 @@ def discover_recipes(root: Path | None = None) -> tuple[RecipeSpec, ...]:
                 noise=str(noise.get("name", "clean")) if noise else "clean",
                 method=_display_method(config, runner),
                 epochs=int(trainer["epochs"]) if "epochs" in trainer else None,
+                implementation_status=_implementation_status(
+                    _display_method(config, runner), runner
+                ),
+                configuration_fidelity=_configuration_fidelity(path, _profile(path)),
+                reproduction_status="not_run",
+                availability="conditional" if conditional else "runnable",
             )
         )
     return tuple(recipes)
@@ -138,7 +220,10 @@ def discover_recipes(root: Path | None = None) -> tuple[RecipeSpec, ...]:
 
 def recipe_by_id(recipe_id: str, root: Path | None = None) -> RecipeSpec:
     key = recipe_id.strip().lower().replace("_", "-")
-    recipes = {item.id: item for item in discover_recipes(root)}
+    recipes = {
+        item.id: item
+        for item in discover_recipes(root, include_conditional=True)
+    }
     try:
         return recipes[key]
     except KeyError as exc:
@@ -152,15 +237,45 @@ def recipe_by_id(recipe_id: str, root: Path | None = None) -> RecipeSpec:
 def load_papers(root: Path | None = None) -> tuple[PaperSpec, ...]:
     project = (root or repository_root()).resolve()
     raw = json.loads(
-        (project / "src" / "lnl_toolbox" / "paper_catalog.json").read_text(encoding="utf-8")
+        resources.files("lnl_toolbox").joinpath("paper_catalog.json").read_text(
+            encoding="utf-8"
+        )
     )
-    recipes = {item.id: item for item in discover_recipes(project)}
+    recipes = {
+        item.id: item
+        for item in discover_recipes(project, include_conditional=True)
+    }
     papers: list[PaperSpec] = []
     for item in raw:
-        configs = tuple(PaperConfig(**value) for value in item["configs"])
-        # The user-facing list intentionally excludes metadata-only papers.
-        if not configs or any(config.recipe_id not in recipes for config in configs):
-            continue
+        parsed_configs: list[PaperConfig] = []
+        for value in item["configs"]:
+            recipe = recipes.get(value["recipe_id"])
+            if recipe is None:
+                raise ValueError(
+                    f"paper {item['id']!r} references unknown built-in recipe "
+                    f"{value['recipe_id']!r}"
+                )
+            parsed_configs.append(
+                PaperConfig(
+                    recipe_id=value["recipe_id"],
+                    profile=value["profile"],
+                    variant=value["variant"],
+                    configuration_fidelity=str(
+                        value.get(
+                            "configuration_fidelity",
+                            value.get("fidelity", recipe.configuration_fidelity),
+                        )
+                    ),
+                    implementation_status=str(
+                        value.get("implementation_status", recipe.implementation_status)
+                    ),
+                    reproduction_status=str(
+                        value.get("reproduction_status", "not_run")
+                    ),
+                    availability=str(value.get("availability", recipe.availability)),
+                )
+            )
+        configs = tuple(parsed_configs)
         papers.append(
             PaperSpec(
                 id=item["id"],
@@ -176,6 +291,24 @@ def load_papers(root: Path | None = None) -> tuple[PaperSpec, ...]:
                 configs=configs,
                 concept_to_config=tuple(item["concept_to_config"]),
                 implementation_paths=tuple(item["implementation_paths"]),
+                implementation_status=str(
+                    item.get(
+                        "implementation_status",
+                        max(
+                            (value.implementation_status for value in configs),
+                            default="component",
+                        ),
+                    )
+                ),
+                reproduction_status=str(item.get("reproduction_status", "not_run")),
+                availability=str(
+                    item.get(
+                        "availability",
+                        "conditional"
+                        if any(value.availability == "conditional" for value in configs)
+                        else "runnable",
+                    )
+                ),
             )
         )
     return tuple(sorted(papers, key=lambda value: (value.year, value.id)))
@@ -190,7 +323,7 @@ def paper_by_id(paper_id: str, root: Path | None = None) -> PaperSpec:
     if key in aliases:
         return aliases[key]
     raise ValueError(
-        f"unknown runnable paper {paper_id!r}; valid papers: " + ", ".join(sorted(papers))
+        f"unknown paper {paper_id!r}; valid papers: " + ", ".join(sorted(papers))
     )
 
 
@@ -202,6 +335,11 @@ def select_paper_config(
     root: Path | None = None,
 ) -> tuple[PaperConfig, RecipeSpec]:
     candidates = list(paper.configs)
+    if not candidates:
+        raise ValueError(
+            f"paper {paper.id!r} has no built-in runnable recipe; "
+            f"availability={paper.availability}"
+        )
     if profile:
         candidates = [item for item in candidates if item.profile == profile]
     if variant:
@@ -218,6 +356,12 @@ def select_paper_config(
     return selected, recipe_by_id(selected.recipe_id, root)
 
 
+def load_recipe_config(recipe: RecipeSpec) -> dict[str, Any]:
+    """Load one explicit built-in recipe without scanning user configuration."""
+
+    return load_yaml(recipe.config_path)
+
+
 def find_project_root(config_path: Path | None = None, explicit: Path | None = None) -> Path:
     if explicit is not None:
         return explicit.expanduser().resolve()
@@ -228,7 +372,7 @@ def find_project_root(config_path: Path | None = None, explicit: Path | None = N
             pyproject = candidate / "pyproject.toml"
             if pyproject.is_file() and "name = \"lnl-toolbox\"" in pyproject.read_text(encoding="utf-8"):
                 return candidate
-    return config_path.resolve().parent if config_path is not None else repository_root().resolve()
+    return config_path.resolve().parent if config_path is not None else Path.cwd().resolve()
 
 
 def resolve_config_paths(config: Mapping[str, Any], project_root: Path) -> dict[str, Any]:
@@ -243,7 +387,59 @@ def resolve_config_paths(config: Mapping[str, Any], project_root: Path) -> dict[
     if resolved.get("output_root"):
         path = Path(str(resolved["output_root"])).expanduser()
         resolved["output_root"] = str(path if path.is_absolute() else (project_root / path).resolve())
+    pipeline = resolved.get("pipeline")
+    if isinstance(pipeline, Mapping):
+        updated_pipeline = dict(pipeline)
+        provider = updated_pipeline.get("weight_provider")
+        if isinstance(provider, Mapping) and provider.get("artifact_path"):
+            updated_provider = dict(provider)
+            path = Path(str(updated_provider["artifact_path"])).expanduser()
+            updated_provider["artifact_path"] = str(
+                path if path.is_absolute() else (project_root / path).resolve()
+            )
+            updated_pipeline["weight_provider"] = updated_provider
+            resolved["pipeline"] = updated_pipeline
     return resolved
+
+
+def _require_mapping(config: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    value = config.get(key)
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{key} configuration must be a mapping")
+    return value
+
+
+def _validate_dedicated_runner(config: Mapping[str, Any], runner: str) -> None:
+    if runner == "multi_model":
+        algorithm = _require_mapping(config, "algorithm")
+        if str(algorithm.get("name", "")).strip().lower() != "jocor":
+            raise ValueError("multi_model built-in workflow requires algorithm.name: jocor")
+        models = config.get("models")
+        if not isinstance(models, list) or len(models) != 2:
+            raise ValueError("JoCoR requires exactly two model configurations")
+        selector = _require_mapping(config, "selector")
+        if str(selector.get("name", "")).strip().lower() != "small_loss":
+            raise ValueError("JoCoR requires selector.name: small_loss")
+    elif runner == "cwd":
+        cwd = _require_mapping(config, "cwd")
+        if float(cwd.get("ridge", 0.0)) < 0.0:
+            raise ValueError("cwd.ridge must be non-negative")
+        data = _require_mapping(config, "data")
+        folds = int(data.get("folds", 0))
+        fold_index = int(data.get("fold_index", -1))
+        if folds < 2 or not 0 <= fold_index < folds:
+            raise ValueError("CWD requires 0 <= data.fold_index < data.folds")
+    elif runner == "fine":
+        fine = _require_mapping(config, "fine")
+        if int(fine.get("warmup_epochs", 0)) <= 0:
+            raise ValueError("fine.warmup_epochs must be positive")
+    elif runner == "instance_transition":
+        transition = _require_mapping(config, "instance_transition")
+        if str(transition.get("name", "")).strip().lower() != "pdl":
+            raise ValueError("instance_transition runner currently requires name: pdl")
+        algorithm = _require_mapping(config, "algorithm")
+        if str(algorithm.get("correction", "")).strip().lower() != "forward":
+            raise ValueError("PDL workflow requires algorithm.correction: forward")
 
 
 def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> RunnerSpec:
@@ -262,6 +458,7 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
         raise ValueError("trainer configuration must be a mapping")
     if isinstance(trainer, Mapping) and "epochs" in trainer and int(trainer["epochs"]) <= 0:
         raise ValueError("trainer.epochs must be positive")
+    _validate_dedicated_runner(config, runner.name)
     if runner.name in {"supervised", "clean"}:
         model = config.get("model", {}) or {}
         if not isinstance(model, Mapping):
@@ -300,6 +497,40 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
                     catalog.get(kind, name)
         except KeyError as exc:
             raise ValueError(str(exc)) from exc
+    method = config.get("method", "")
+    if isinstance(method, Mapping):
+        method = method.get("name", "")
+    method_name = str(method).strip().lower()
+    validators = {
+        "coteaching": (
+            "lnl_toolbox.algorithms.coteaching.config", "CoTeachingConfig"
+        ),
+        "cnlcu": ("lnl_toolbox.algorithms.cnlcu.config", "CNLCUConfig"),
+        "dual_t": ("lnl_toolbox.algorithms.dual_t.config", "DualTConfig"),
+        "importance_reweighting": (
+            "lnl_toolbox.algorithms.importance_reweighting.config",
+            "ImportanceReweightingConfig",
+        ),
+        "pcse": ("lnl_toolbox.algorithms.pcse.config", "PCSEConfig"),
+        "t_revision": (
+            "lnl_toolbox.algorithms.t_revision.config", "TRevisionConfig"
+        ),
+    }
+    if method_name in validators:
+        from importlib import import_module
+
+        module_name, class_name = validators[method_name]
+        getattr(import_module(module_name), class_name).from_mapping(config)
+    pipeline = config.get("pipeline", {}) or {}
+    if isinstance(pipeline, Mapping):
+        provider = pipeline.get("weight_provider", {}) or {}
+        if isinstance(provider, Mapping) and str(provider.get("name", "")).lower() == "mentornet":
+            artifact = Path(str(provider.get("artifact_path", "")))
+            if not artifact.is_file():
+                raise ValueError(
+                    "MentorNet recipe is conditional and requires a prepared "
+                    f"MentorArtifact: {artifact}"
+                )
     return runner
 
 
@@ -310,6 +541,7 @@ __all__ = [
     "discover_recipes",
     "find_project_root",
     "load_papers",
+    "load_recipe_config",
     "load_yaml",
     "paper_by_id",
     "recipe_by_id",

@@ -4,6 +4,11 @@
 
 权威顺序：**代码与自动化测试 > 本文 > 其他架构或研究文档**。若三者不一致，先以代码和测试判断现状，再在同一次修改中更新本文。
 
+用户入口的生产 dispatch 只有 `training/runners.py::RunnerRegistry`。旧
+`training/workflows.py` 仅是兼容外壳，委托同一 registry，不维护第二份 method 表。
+内置 recipe 来自显式、随包安装的 manifest；本地或未跟踪 YAML 不会自动进入
+`lnl list experiments`。CLI 分开报告实现状态、配置忠实度、数值复现状态和可用性。
+
 ## 1. 当前生产边界
 
 ```mermaid
@@ -40,6 +45,7 @@ flowchart LR
 - Loss、无状态 batch Selector 和 ParameterUpdatePolicy 已通过 `PluginCatalog` 构造；Model、Algorithm、Evaluator 尚未全部插件化。
 - 通用 `all`/`small_loss` Selector 已接入单模型监督路径；二分类 asymmetric-RCN importance-weight 组件可通过内部 treatment 合同独立调用，但尚未接入公开训练配置；RiskCorrector 尚未接入。
 - Co-teaching 已由 `CoTeachingAlgorithm` 和专属 experiment runner 实现为双模型方法；它使用 peer small-loss cross-update，不由通用 Selector 承担。旧 `coteaching_exchange` 只保留为兼容原语。
+- CNLCU-S 已由 `CNLCUAlgorithm` 和专属 experiment runner 实现为 stateful 双模型方法；它在 CPU float32 的 peer-specific fixed-window history 中按 stable global index 维护 loss，计算论文 soft confidence score，再执行严格 peer cross-update。它不复用或扩展通用无状态 Selector。
 - `StandardUpdatePolicy` 保持普通更新；`CDRUpdatePolicy` 是当前首个参数级更新策略。需要 meta-batch、高阶梯度或多网络协调的方法仍属于 MetaUpdater/独立 Pipeline。
 
 ## 2. 模块职责与依赖方向
@@ -54,6 +60,21 @@ remember rate 使用 zero-based epoch：
 checkpoint v2 中以固定键 `a`/`b` 保存完整双 peer 状态。验证集的
 `mean_peer_accuracy` 选择 best checkpoint；mean-probability ensemble 仅为工具箱辅助指标。
 第一阶段仅承诺 epoch-boundary resume，不声称包含论文专属 CNN、200 epoch 配方或正式数值复现。
+
+### 1.2 CNLCU-S/H 状态双模型路径
+
+`method: cnlcu` lazy-dispatch 到专属 runner。每个 noisy batch 同时进入 A/B；每个 peer
+先把当前 detached per-sample CE 写入自己的 fixed-window history，再按论文 soft 影响函数、
+robust mean 与 uncertainty bonus 生成 score。A 的 stable-index 选集更新 B，B 的选集更新 A；
+selected count 在完成本轮选择后递增，并与 loss history 一起按 epoch 计数的 fixed window
+重置；score 使用 `selected_count + 1` 作为明确的一次伪计数，使窗口内首次选择有合法分母。
+history、A/B model/optimizer/scheduler、窗口 cursor、
+mapping hash 和 peer identity 全部进入 checkpoint v2，支持严格 epoch-boundary resume。
+clean-label corruption mask 只在 runner 中生成 selection precision 诊断，不进入 Algorithm。
+`variant: soft` 使用论文 Eq. (2)/(3)/(7)；`variant: hard` 使用 Eq. (4)/(8)，并以
+`paper_formula_corrected_lof` 明确记录 corrected released-code-inspired LOF：`-1` 删除、
+`+1` 保留，短 history 全保留，且不使用官方代码额外的 ReLU。CNLCU-H 是 faithful
+engineering workflow，不声明 paper-exact；当前仍不包含正式论文数值复现。
 
 | 模块 | 拥有什么 | 不得负责什么 |
 |---|---|---|
@@ -271,7 +292,38 @@ Forward/Backward、Importance Weighting 等未来消费者只能接收 Artifact�
 修改 Snapshot。`NoiseManifest.per_sample_transition[N,C]` 只是每个样本真实类别
 对应的一行，不等于 PDL 的完整 `T(x)[N,C,C]`。
 
-### PDL 实例转移训练通路
+### 6.1 T-Revision Reweight-R 方法路径
+
+用户入口、适用场景、完整配置、artifact 解释和 resume 规则见
+[`docs/t-revision.md`](t-revision.md)。公共命令使用
+`python -m lnl_toolbox.cli.train --config ...`；未知 `method` 会显式失败，
+不会回落到普通监督训练。
+
+`method: t_revision` 是论文专属生命周期，不是通用 transition plugin：
+
+```text
+noisy CE + noisy-validation best
+→ best-checkpoint train-only PosteriorSnapshot
+→ Anchor T_hat / TransitionArtifact
+→ fixed-T_hat corrected vectorized Eq. (3) classifier initialization
+→ raw T_hat + Delta_T joint classifier/transition revision
+→ noisy-validation best
+→ clean test
+```
+
+矩阵始终使用 `T[i,j] = P(noisy=j | clean=i)` 和
+`p_noisy = p_clean @ T`。Stage 2A 的 `T_hat` 是合法、冻结且带 snapshot/best
+checkpoint/manifest provenance 的 `TransitionArtifact`；Stage 2B 复现论文实验代码的
+raw additive choice，不 clamp、归一化、softmax 或 projection，因此 revised matrix
+允许负元素或非单位行和，并保存在方法专属 `RevisedTransitionArtifact` 中。
+
+Eq. (3) 使用 `p_clean[y] / (p_clean @ T)[y]` 乘以 clean logits 上的逐样本
+CE 后做 batch mean。ratio 不 detach，不求逆、不裁剪、不按权重和归一化；非法或过小
+denominator 直接失败。当前对外准确表述是：paper-faithful Reweight-R workflow with
+corrected vectorized Eq. (3) and explicit released-code lifecycle choices；不得称为
+paper-exact T-Revision，也尚不包含 Forward-R、projected transition 或正式长训练复现。
+
+### 6.2 PDL 实例转移训练通路
 
 `generate_pdl_idn()` 仅在离线 manifest 构造时读取 clean label。训练 batch 仍只含
 `input/target/index`。`instance_transition_experiment.py` 先以 noisy train/noisy

@@ -1,0 +1,84 @@
+method: t_revision
+execution: {runner: t_revision}
+seed: 7
+output_root: artifacts/runs
+
+data:
+  name: cifar10
+  root: data/cifar10
+  validation_size: 100
+  max_train_samples: 200
+  max_validation_samples: 100
+  max_test_samples: 100
+  preprocessing: standard
+  augment: false
+
+noise:
+  name: symmetric
+  rate: 0.4
+  seed: 17
+  validation_targets: noisy
+
+loader:
+  batch_size: 50
+  num_workers: 0
+  pin_memory: false
+
+trainer:
+  device: cpu
+
+t_revision:
+  objective: reweight
+  fidelity: paper_experiment_raw_additive
+
+  stage1:
+    epochs: 2
+    model:
+      name: tiny_cnn
+      width: 16
+    optimizer:
+      name: sgd
+      lr: 0.01
+      momentum: 0.0
+      weight_decay: 0.0001
+    scheduler:
+      name: none
+    best_metric: noisy_validation_accuracy
+
+  transition_initialization:
+    method: pseudo_anchor_max_posterior
+    posterior_split: train
+    extraction_augmentation: false
+    tie_break: stable_sample_index
+
+  classifier_initialization:
+    epochs: 2
+    optimizer:
+      name: sgd
+      lr: 0.01
+      momentum: 0.9
+      weight_decay: 0.0001
+    scheduler:
+      name: none
+    start_from: stage1_best
+    best_metric: revised_noisy_validation_accuracy
+
+  revision:
+    epochs: 2
+    transition_mode: paper_experiment_raw_additive
+    delta_initialization: zeros
+    start_from: classifier_initialization_best
+    optimizer:
+      name: adam
+      lr: 0.0000005
+      weight_decay: 0.0001
+    scheduler:
+      name: none
+    ratio:
+      detach: false
+      clamp: none
+      denominator_floor: 1.0e-12
+    best_metric: revised_noisy_validation_accuracy
+
+evaluation:
+  selection_split: validation

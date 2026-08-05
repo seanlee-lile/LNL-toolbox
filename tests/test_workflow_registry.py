@@ -18,7 +18,10 @@ class WorkflowRegistryTest(unittest.TestCase):
         registry = create_workflow_registry()
         self.assertEqual(
             registry.names(),
-            ("coteaching", "dual_t", "importance_reweighting", "pcse"),
+            (
+                "cnlcu", "coteaching", "dual_t", "importance_reweighting",
+                "pcse", "t_revision",
+            ),
         )
         source = inspect.getsource(run_experiment)
         for name in registry.names():
