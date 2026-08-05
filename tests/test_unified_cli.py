@@ -104,6 +104,9 @@ class CatalogTest(unittest.TestCase):
                 if item.id == "mentornet-dd-cifar100-symmetric04-smoke"
             )
         )
+        mentor["pipeline"]["weight_provider"]["artifact_path"] = str(
+            ROOT / "data/mentornet/missing-artifact-for-test.pt"
+        )
         with self.assertRaisesRegex(ValueError, "conditional.*MentorArtifact"):
             validate_config(resolve_config_paths(mentor, ROOT))
 

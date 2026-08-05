@@ -416,7 +416,7 @@ def _paper_list(args: argparse.Namespace) -> int:
             runners = ",".join(sorted({recipes[item.recipe_id].runner for item in paper.configs}))
             recommended = next(
                 (item.recipe_id for item in paper.configs if item.profile == "smoke"),
-                paper.configs[0].recipe_id,
+                paper.configs[0].recipe_id if paper.configs else "-",
             )
             print(
                 f"{paper.id}\t{paper.acronym}\t{paper.title}\t{paper.venue}\t{paper.year}\t"
