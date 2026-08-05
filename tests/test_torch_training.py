@@ -199,6 +199,16 @@ class TorchTrainingTest(unittest.TestCase):
         )
         self.assertEqual(model(torch.randn(2, 3, 32, 32)).shape, (2, 10))
 
+    def test_cifar_resnet34_can_use_torch_default_initialization(self):
+        torch.manual_seed(123)
+        reference = torch.nn.Conv2d(3, 8, 3, padding=1, bias=False)
+        torch.manual_seed(123)
+        model = build_model(
+            {"name": "resnet34", "base_width": 8, "initialization": "torch_default"},
+            num_classes=10,
+        )
+        torch.testing.assert_close(model.stem[0].weight, reference.weight)
+
     def test_cifar_resnet50_is_explicit_and_preserves_feature_contract(self):
         model = build_model({
             "name": "resnet50",

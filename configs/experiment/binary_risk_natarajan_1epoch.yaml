@@ -1,0 +1,23 @@
+seed: 2013
+output_root: artifacts/reproductions/binary-risk-natarajan-1epoch
+
+data:
+  name: synthetic_binary_2d
+  train_size: 512
+  seed: 2013
+
+noise:
+  rho_positive: 0.2
+  rho_negative: 0.1
+  seed: 2013
+
+risk:
+  name: natarajan_unbiased
+  rho_positive: 0.2
+  rho_negative: 0.1
+
+batch_size: 64
+hidden_width: 128
+learning_rate: 0.01
+epochs: 1
+execution: {runner: binary}

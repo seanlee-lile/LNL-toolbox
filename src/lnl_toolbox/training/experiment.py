@@ -75,9 +75,17 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
     if name == "resnet32":
         return cifar_resnet32(num_classes, int(config.get("base_width", 16)))
     if name == "resnet18":
-        return cifar_resnet18(num_classes, int(config.get("base_width", 64)))
+        return cifar_resnet18(
+            num_classes,
+            int(config.get("base_width", 64)),
+            initialization=str(config.get("initialization", "kaiming")),
+        )
     if name == "resnet34":
-        return cifar_resnet34(num_classes, int(config.get("base_width", 64)))
+        return cifar_resnet34(
+            num_classes,
+            int(config.get("base_width", 64)),
+            initialization=str(config.get("initialization", "kaiming")),
+        )
     if name == "resnet50":
         return cifar_resnet50(
             num_classes,
@@ -142,6 +150,62 @@ def build_scheduler(optimizer, config: Mapping[str, Any] | None, epochs: int):
             gamma=float(config.get("gamma", 0.1)),
         )
     raise ValueError(f"Unsupported scheduler: {name}")
+
+
+class AlphaScaledScheduler:
+    """Reusable scheduler matching the official CAL alpha-coupled LR rule."""
+
+    def __init__(self, optimizer, config: Mapping[str, Any]):
+        self.optimizer = optimizer
+        self.name = str(config.get("name", "none")).lower()
+        self.gamma = float(config.get("gamma", 0.1))
+        self.milestones = tuple(int(value) for value in config.get("milestones", []))
+        self.step_size = int(config.get("step_size", 1))
+        self.last_epoch = -1
+        self.alpha = 0.0
+        self.record_lrs = [float(group["lr"]) for group in optimizer.param_groups]
+        if self.name not in {"step", "multistep"}:
+            raise ValueError("alpha-scaled scheduler supports step or multistep")
+        if self.name == "step" and self.step_size <= 0:
+            raise ValueError("alpha-scaled step_size must be positive")
+        if self.name == "multistep" and list(self.milestones) != sorted(self.milestones):
+            raise ValueError("alpha-scaled milestones must be sorted")
+
+    def step(self, alpha: float = 0.0) -> None:
+        self.last_epoch += 1
+        if self.name == "step" and self.last_epoch > 0 and self.last_epoch % self.step_size == 0:
+            self.record_lrs = [value * self.gamma for value in self.record_lrs]
+        if self.name == "multistep" and self.last_epoch in self.milestones:
+            self.record_lrs = [value * self.gamma for value in self.record_lrs]
+        self.alpha = float(alpha)
+        if not math.isfinite(self.alpha) or self.alpha < 0.0:
+            raise ValueError("alpha-scaled scheduler alpha must be finite and non-negative")
+        for group, raw_lr in zip(self.optimizer.param_groups, self.record_lrs):
+            group["lr"] = raw_lr / (1.0 + self.alpha)
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "gamma": self.gamma,
+            "milestones": self.milestones,
+            "step_size": self.step_size,
+            "last_epoch": self.last_epoch,
+            "alpha": self.alpha,
+            "record_lrs": list(self.record_lrs),
+        }
+
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        self.last_epoch = int(state["last_epoch"])
+        self.alpha = float(state["alpha"])
+        self.record_lrs = [float(value) for value in state["record_lrs"]]
+        for group, raw_lr in zip(self.optimizer.param_groups, self.record_lrs):
+            group["lr"] = raw_lr / (1.0 + self.alpha)
+
+
+def build_alpha_scaled_scheduler(optimizer, config: Mapping[str, Any] | None):
+    if not config or str(config.get("name", "none")).lower() == "none":
+        return None
+    return AlphaScaledScheduler(optimizer, config)
 
 
 def _subset(indices: np.ndarray, labels: np.ndarray, size: int | None, seed: int) -> np.ndarray:

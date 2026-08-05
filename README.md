@@ -1,6 +1,6 @@
 # LNL Toolbox
 
-LNL Toolbox 是一个面向 Learning with Noisy Labels（噪声标签学习）实验的可复现工具箱。使用者可以通过统一的 `lnl` 命令检查环境、浏览实验、预检配置、运行训练、恢复 checkpoint，以及查看知名论文在 toolbox 中的具体实现。
+LNL Toolbox 是一个面向 Learning with Noisy Labels（噪声标签学习）实验的可复现工具箱。使用者可以通过统一的 `lnl` 命令检查环境、浏览实验、组合组件、预检配置、运行训练、恢复 checkpoint，以及查看知名论文在 toolbox 中的具体实现。
 
 ## 1. 安装
 
@@ -35,13 +35,19 @@ lnl doctor
 lnl list experiments --profile smoke
 ```
 
-意义：查看适合快速验证的实验。输出中的重要字段：
+意义：查看适合快速验证的实验。默认输出为带编号和中文标签的分块列表，其中：
 
-- `RECIPE`：可以直接运行的配置名称；
-- `PROFILE`：`smoke` 用于快速验证，`reproduction` 用于论文规模实验；
-- `METHOD`：实验实现的方法或主要组件；
-- `RUNNER`：toolbox 实际采用的训练生命周期；
-- `EPOCHS`：配置的训练轮数。
+- `recipe`：每个编号条目的名称，可以直接用于后续命令；
+- `规模`：`smoke` 用于快速验证，`reproduction` 用于论文规模实验；
+- `方法`：实验实现的方法或主要组件；
+- `执行器`：toolbox 实际采用的训练生命周期；
+- `训练轮数`：配置计划运行的 epoch 数。
+
+如果需要把列表交给 PowerShell 或其他脚本处理，可以输出稳定的 TSV：
+
+```powershell
+lnl list experiments --profile smoke --format tsv
+```
 
 第一次建议选择 `cifar10-symmetric-ce-smoke`。
 
@@ -89,6 +95,8 @@ lnl run --recipe cifar10-symmetric-ce-smoke
 ```powershell
 lnl papers list
 ```
+
+意义：只列出仓库中已有可运行配置的论文。默认按论文分块展示标题、出处、profile、实现保真度、执行器和建议命令；脚本处理时可追加 `--format tsv`。
 
 查看某篇论文在 toolbox 中的详细实现：
 
@@ -190,9 +198,42 @@ lnl list components --kind loss
 lnl list components --kind batch_selector
 ```
 
-意义：查看可组合的 loss、selector、pipeline 和 parameter-update 组件。组件不一定等于完整论文方法；完整论文入口应优先从 `lnl papers list` 或 `lnl list experiments` 获取。
+意义：按类型查看可组合的 loss、selector、pipeline 和 parameter-update 组件。默认展示每个组件的能力与论文关联；脚本处理时可追加 `--format tsv`。组件不一定等于完整论文方法；完整论文入口应优先从 `lnl papers list` 或 `lnl list experiments` 获取。
 
-## 8. 开发与验证
+## 8. 组合组件并生成配置
+
+先查看指定 runner 的组合边界：
+
+```powershell
+lnl compose list --runner supervised
+lnl compose list --runner dual_t
+```
+
+`supervised` 会列出可以替换的 loss、selector、parameter update 和 pipeline 规则；Dual-T、FINE、Co-teaching 等专用 runner 只展示完整 recipe，不允许被错误拆装。
+
+从内置 smoke recipe 生成一份新配置：
+
+```powershell
+lnl compose create `
+  --base cifar10-symmetric-ce-smoke `
+  --loss gce `
+  --selector small_loss `
+  --keep-rate 0.6 `
+  --output configs/experiment/my_gce_small_loss.yaml
+```
+
+意义：保留 base recipe 的数据、模型和训练规模，把损失改为 GCE，并让每个 batch 只使用损失较小的 60% 样本。生成前会检查组件名称、runner、构造参数和跨槽位冲突；已有输出文件不会被覆盖，原 recipe 也不会被修改。
+
+检查并预览生成结果：
+
+```powershell
+lnl compose check --config configs/experiment/my_gce_small_loss.yaml
+lnl run --config configs/experiment/my_gce_small_loss.yaml --dry-run
+```
+
+自定义组合只代表工程实验，不自动对应论文方法或论文复现结果。
+
+## 9. 开发与验证
 
 运行全部测试：
 

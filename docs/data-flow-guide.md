@@ -65,7 +65,7 @@ checkpoint v2 中以固定键 `a`/`b` 保存完整双 peer 状态。验证集的
 | `losses/` | `logits + targets -> loss[B]` | 聚合、选样、optimizer、clean label |
 | `selectors/` | detached `scores[B] + index[B] -> hard mask[B]` | 模型、optimizer、backward、peer exchange、生命周期 |
 | `algorithms/` | 组合模型、Loss、Selector、ParameterUpdatePolicy 和训练决策；拥有私有状态 | 数据文件解析、实验目录管理 |
-| `evaluation/` | clean validation/test 指标 | 参与训练更新或泄漏 clean label |
+| `evaluation/` | clean validation/test 指标 | 参与训练更新或泄漏 clean label；L2RW 的显式 trusted supervision 不经过 evaluator |
 | `training/` | 组装、循环、恢复、产物 | 实现论文公式或把算法逻辑写死在公共入口 |
 | `plugins/` | 注册、发现、按配置构造组件 | 执行训练生命周期 |
 
@@ -195,7 +195,7 @@ index  : LongTensor[B]
 - `TorchCifarDataset` 读取原始标签，不接受 `targets=` override。
 - noisy train 使用 `NoisyTargetDataset(clean_dataset, global_indices, noisy_targets)`。
 - wrapper 只能替换 `target`，必须保持 input、transform、长度和 index 不变。
-- validation/test 使用独立 clean Dataset。
+- validation/test 使用独立 clean Dataset；不得自动提升为训练监督。
 - `clean_target`、`flip_mask`、`is_clean` 不得进入训练 batch。
 - Algorithm 不得通过 Dataset 内部属性绕过上述隔离。
 
@@ -614,11 +614,32 @@ Evaluator 使用独立 clean validation/test loader；在 `inference_mode` 下�
 禁止：
 
 - 向 `TorchCifarDataset` 恢复 `targets=` override；
-- 把 clean label、flip mask 或噪声答案放入训练 batch；
+- 把 clean label、flip mask 或噪声答案放入普通 noisy training batch；L2RW 只能通过下述显式 trusted provider 取得独立 meta-batch；
 - 让 Loss 自行聚合或管理 optimizer；
 - 按 batch 位置保存逐样本历史；
 - 在 `training/experiment.py` 写入某篇论文算法的内部数学；
 - 把研究文档中的建议接口当作已经实现的生产合同。
+
+### 7.9 L2RW 可信监督例外
+
+2026-08-03 已由用户批准 L2RW 所需的 clean meta-batch 例外。该例外仅限：
+
+```text
+TrustedSupervisionManifest
+  -> TrustedValidationProvider
+  -> 独立 trusted mini-batch
+  -> L2RW virtual step / meta-gradient
+```
+
+强制约束：
+
+- manifest 的 split 必须是 `trusted_validation`；source 只能是
+  `audited_manifest`，或测试专用 `synthetic_fixture`；
+- 普通 `validation`、`test`、NoiseManifest.clean_targets 和 noisy training dataset
+  均不能自动转换为 trusted supervision；
+- trusted fingerprint、来源、平衡标记和 loader RNG 必须进入 checkpoint/resume 校验；
+- trusted target 只进入 L2RW 的 virtual/meta loss，不进入 noisy batch，也不替换其 target；
+- 其他论文若要使用 clean training supervision，必须另行审批，不能借用本例外。
 ## 11. 四篇论文复现底座新增数据流
 
 ```text

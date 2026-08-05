@@ -12,7 +12,12 @@ from torch.utils.data import DataLoader, Dataset
 
 from lnl_toolbox.algorithms.binary_risk import NatarajanUnbiasedRisk
 from lnl_toolbox.core.hyperparameters import resolve_parameter_sampling
-from lnl_toolbox.data.binary_benchmarks import BinaryBenchmark, load_binary_npz
+from lnl_toolbox.data.binary_benchmarks import (
+    BinaryBenchmark,
+    corrupt_binary_labels,
+    load_binary_npz,
+)
+from lnl_toolbox.data.binary_synthetic import generate_synthetic_binary_2d
 from lnl_toolbox.data.preprocessing import BinaryPreprocessingConfig, BinaryPreprocessor
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 
@@ -103,13 +108,45 @@ def run_binary_experiment(config: Mapping[str, Any], output_dir: str | Path | No
 
     resolved_config, record = resolve_parameter_sampling(config)
     data_config = dict(resolved_config.get("data", {}))
-    source = Path(data_config["path"])
+    source = Path(data_config["path"]) if data_config.get("path") else None
     preprocessor = None
-    if source.suffix.lower() == ".npz":
+    noise_manifest = None
+    data_name = str(data_config.get("name", "")).strip().lower()
+    if data_name in {"synthetic_binary_2d", "synthetic_binary"}:
+        size = int(data_config.get("train_size", 512))
+        data_seed = int(data_config.get("seed", resolved_config.get("seed", 1)))
+        clean = generate_synthetic_binary_2d(
+            size=size,
+            seed=data_seed,
+            split="train",
+        )
+        noise_config = dict(resolved_config.get("noise", {}))
+        risk_config = dict(resolved_config.get("risk", {}))
+        rho_positive = float(
+            noise_config.get("rho_positive", risk_config.get("rho_positive", 0.2))
+        )
+        rho_negative = float(
+            noise_config.get("rho_negative", risk_config.get("rho_negative", 0.1))
+        )
+        noise_manifest = corrupt_binary_labels(
+            clean.labels,
+            rho_positive,
+            rho_negative,
+            int(noise_config.get("seed", data_seed)),
+        )
+        benchmark = BinaryBenchmark(
+            clean.features,
+            noise_manifest.noisy_targets,
+            data_name,
+            global_indices=clean.global_indices,
+        )
+    elif source is not None and source.suffix.lower() == ".npz":
         benchmark = load_binary_npz(source)
-    else:
+    elif source is not None:
         preprocessor = BinaryPreprocessor(BinaryPreprocessingConfig.from_mapping(data_config.get("preprocessing")))
         benchmark = preprocessor.fit_transform(source, dataset=data_config.get("name", source.stem))
+    else:
+        raise ValueError("binary data requires data.path or a supported synthetic data.name")
     dataset = BinaryTensorDataset(benchmark)
     loader = DataLoader(dataset, batch_size=int(resolved_config.get("batch_size", 64)), shuffle=True)
     model = build_binary_mlp(benchmark.features.shape[1], int(resolved_config.get("hidden_width", 128)))
@@ -134,6 +171,8 @@ def run_binary_experiment(config: Mapping[str, Any], output_dir: str | Path | No
         (destination / "parameter_record.json").write_text(json.dumps(record.to_dict(), indent=2), encoding="utf-8")
     if preprocessor is not None:
         preprocessor.save(destination / "preprocessing.json")
+    if noise_manifest is not None:
+        noise_manifest.save(destination / "noise_manifest.npz")
     (destination / "metrics.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
     return destination
 

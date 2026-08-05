@@ -179,10 +179,14 @@ class CifarResNet(nn.Module):
 
     def __init__(self, block: type[nn.Module], num_classes: int = 10,
                  base_width: int = 64, preactivation: bool = False,
-                 layer_counts: tuple[int, int, int, int] = (2, 2, 2, 2)) -> None:
+                 layer_counts: tuple[int, int, int, int] = (2, 2, 2, 2),
+                 initialization: str = "kaiming") -> None:
         super().__init__()
         if len(layer_counts) != 4 or any(count <= 0 for count in layer_counts):
             raise ValueError("layer_counts must contain four positive integers")
+        initialization = str(initialization).strip().lower()
+        if initialization not in {"kaiming", "torch_default"}:
+            raise ValueError("initialization must be 'kaiming' or 'torch_default'")
         self.incoming = base_width
         stem: nn.Module = nn.Conv2d(3, base_width, 3, padding=1, bias=False)
         if not preactivation:
@@ -195,7 +199,8 @@ class CifarResNet(nn.Module):
         self.final_bn = nn.BatchNorm2d(base_width * 8) if preactivation else nn.Identity()
         self.preactivation = preactivation
         self.classifier = nn.Linear(base_width * 8, num_classes)
-        self._initialize()
+        if initialization == "kaiming":
+            self._initialize()
 
     def _make_layer(self, block: type[nn.Module], outgoing: int, count: int, stride: int) -> nn.Sequential:
         layers = []
@@ -232,11 +237,27 @@ class CifarResNet(nn.Module):
         return FeatureOutput(self.classifier(features), features)
 
 
-def cifar_resnet18(num_classes: int = 10, base_width: int = 64) -> CifarResNet:
-    return CifarResNet(BasicBlock, num_classes, base_width, preactivation=False)
+def cifar_resnet18(
+    num_classes: int = 10,
+    base_width: int = 64,
+    *,
+    initialization: str = "kaiming",
+) -> CifarResNet:
+    return CifarResNet(
+        BasicBlock,
+        num_classes,
+        base_width,
+        preactivation=False,
+        initialization=initialization,
+    )
 
 
-def cifar_resnet34(num_classes: int = 10, base_width: int = 64) -> CifarResNet:
+def cifar_resnet34(
+    num_classes: int = 10,
+    base_width: int = 64,
+    *,
+    initialization: str = "kaiming",
+) -> CifarResNet:
     """Return the [3, 4, 6, 3] ResNet-34 used by the GCE CIFAR experiments."""
 
     return CifarResNet(
@@ -245,6 +266,7 @@ def cifar_resnet34(num_classes: int = 10, base_width: int = 64) -> CifarResNet:
         base_width,
         preactivation=False,
         layer_counts=(3, 4, 6, 3),
+        initialization=initialization,
     )
 
 

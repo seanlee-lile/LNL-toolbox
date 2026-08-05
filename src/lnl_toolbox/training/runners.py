@@ -101,11 +101,19 @@ def create_runner_registry() -> RunnerRegistry:
         "run_importance_reweighting_experiment",
     )
     registry.add("pcse", "lnl_toolbox.training.pcse_experiment", "run_pcse_experiment")
+    registry.add("mc_ldce", "lnl_toolbox.training.mc_ldce_experiment", "run_mc_ldce_experiment")
+    registry.add("cal", "lnl_toolbox.training.cal_experiment", "run_cal_experiment")
+    registry.add("ca2c", "lnl_toolbox.training.ca2c_experiment", "run_ca2c_experiment")
+    registry.add("l2rw", "lnl_toolbox.training.l2rw_experiment", "run_l2rw_experiment")
+    registry.add("dld", "lnl_toolbox.training.dld_experiment", "run_dld_experiment")
     return registry
 
 
 _RUNNERS = create_runner_registry()
-_METHOD_RUNNERS = frozenset({"coteaching", "dual_t", "importance_reweighting", "pcse"})
+_METHOD_RUNNERS = frozenset({
+    "coteaching", "dual_t", "importance_reweighting", "pcse",
+    "mc_ldce", "cal", "ca2c", "l2rw", "dld",
+})
 _RENAMED_METHODS = {"dual_t_forward": "dual_t"}
 _DEDICATED_SECTIONS = {
     "cwd": "cwd",

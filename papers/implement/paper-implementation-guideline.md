@@ -4956,19 +4956,19 @@ noisy train batch + trusted clean validation batch
 
 - 输出复用 `WeightResult`，但 provider 依赖模型梯度，不能当纯函数 selector。
 - 必须使用 functional/differentiable optimizer，不覆盖真实 optimizer state。
-- 当前仓库规则要求 clean label 只能进入 evaluator，因此 L2RW **当前不可接入**。
-  实施前必须由团队显式批准 `TrustedSupervisionProvider` 例外，并保证它不是
-  noisy training data 的隐藏 clean truth。
+- 2026-08-03 已显式批准 L2RW 的 `TrustedValidationProvider` 例外。该例外要求
+  独立 manifest、来源和 fingerprint，且不能把普通 validation/test 或 noisy dataset
+  中的 clean truth 自动提升为训练监督。
 
 ### 4. 按顺序映射到文件和函数
 
-1. `[阻塞/规划] data/trusted.py::TrustedValidationProvider`
+1. `[已实现] data/trusted.py::TrustedValidationProvider`
 2. `[扩展/共享] core/result.py::WeightResult`
-3. `[规划] algorithms/l2rw.py::meta_reweight()`
-4. `[规划] training/l2rw_pipeline.py::run_l2rw_experiment()`
-5. `[规划] tests/test_l2rw.py`
+3. `[已实现] algorithms/l2rw.py::meta_reweight()`
+4. `[已实现] training/l2rw_experiment.py::run_l2rw_experiment()`
+5. `[已实现] tests/test_l2rw.py、tests/test_l2rw_training.py`
 
-在团队批准 policy 前，不得创建或注册上述 trusted-data 接口。
+该接口仅对显式 `audited_manifest` 开放；`synthetic_fixture` 只用于 smoke。
 
 ### 5. 规划接口
 
@@ -5010,7 +5010,7 @@ trusted_validation:
 meta: {virtual_learning_rate: 0.1}
 ```
 
-该配置只有在 repository safety policy 修改并获批准后才可启用。
+正式配置只有在 audited trusted manifest 已准备并通过 identity 检查后才可运行。
 
 ### 8. Checkpoint 必需状态
 
@@ -5034,9 +5034,10 @@ virtual-step rule、target balance、global step 和 RNG；epsilon/weights 为�
 - `[代码]` 官方实现基于 TensorFlow 1.10/protobuf；不能复制到当前 PyTorch runner。
 - `[差异/阻塞]` 论文方法的 clean supervision 前提与仓库当前安全规则冲突。
 
-### 11. 当前未实现
+### 11. 当前实现状态
 
-- safety policy 例外、TrustedValidationProvider、meta-reweight、Pipeline 与测试
+- Trusted manifest/provider、二阶 meta-reweight、独立 runner、checkpoint/resume 与
+  synthetic smoke 已实现；正式 CIFAR trusted manifest 和单次论文实验尚未执行。
 
 ---
 

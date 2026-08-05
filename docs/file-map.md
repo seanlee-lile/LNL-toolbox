@@ -8,6 +8,7 @@
 |---|---|
 | `README.md` | 项目入口，说明当前定位、核心能力和文档导航。 |
 | `pyproject.toml` | Python 包信息、依赖、可选训练依赖、命令行入口及 `src` 包发现规则。 |
+| `CLI_CHANGE_REQUESTS.md` | 记录统一 CLI 实际试用中发现的体验问题、处理方案和验收命令。 |
 | `toolbox-architecture.md` | LNL toolbox 的长期设计、实验公平性、Noise Manifest 和阶段路线；其中具体算法是参考插件规划。 |
 | `.gitignore` | 忽略缓存、虚拟环境、构建产物、运行输出和临时文件。 |
 
@@ -121,6 +122,8 @@
 | 文件 | 作用 |
 |---|---|
 | `cli/__init__.py` | 共享中文 `PromptSession`、实验模板发现、Loss 选择、clean/generated/external 标签模式和最终确认；不包含训练数学。 |
+| `cli/main.py` | `lnl` 统一入口；提供环境检查、实验/组件/论文浏览、配置校验、运行、恢复及组合配置生成。 |
+| `composition.py` | 定义 supervised 组件组合的深层兼容校验、显式槽位覆盖和不覆盖式 YAML 写入；专用 runner 不在此伪装成自由组合。 |
 | `cli/train.py` | 通用训练入口；无参数进入向导，有参数时保持 argparse/YAML 调用。 |
 | `cli/multi_train.py` | 独立的配置化多模型训练入口；供 JoCoR、Co-teaching、CNLCU 等共用，不修改单模型主入口。 |
 | `cli/clean_train.py` | Clean baseline 入口；交互选择模型、scheduler、恢复或多 seed。 |
@@ -243,9 +246,87 @@
 | `tests/test_fine.py`、`tests/test_fine_training.py` | FINE loss/mask、SCS/SCR、EMA、多视图、七卷积模型和两阶段闭环。 |
 | `configs/experiment/cwd_cifar10_{smoke,reproduction}.yaml` | CWD smoke 与单次 200-epoch、五折中 fold 0 的论文配置。 |
 | `configs/experiment/fine_cifar100n_{smoke,reproduction}.yaml` | FINE smoke 与单次 300-epoch、200-epoch warm-up 配置。 |
+| `configs/experiment/binary_risk_natarajan_1epoch.yaml` | Natarajan 二分类无偏风险的一组 synthetic 论文算法 1-epoch 验证配置。 |
+| `configs/experiment/cwd_cifar10_1epoch.yaml` | CWD 五折 fold 0、CIFAR airplane/automobile、1-epoch 完整生命周期配置。 |
+| `configs/experiment/fine_cifar100n_1epoch.yaml` | FINE CIFAR-100N、1-epoch warm-up 生命周期配置；`warmup_epochs == trainer.epochs` 表示只验证首个论文阶段。 |
+| `configs/experiment/mentornet_cifar10_symmetric04_1epoch.yaml` | MentorNet CIFAR-10 symmetric-40、ResNet-101、冻结 MentorArtifact 的 1-epoch 配置。 |
+| `configs/experiment/mc_ldce_cifar10_1epoch.yaml` | MC-LDCE（仓库中 MC-PCDE 的对应命名）1-epoch 表示/转移估计与全局 objective 配置。 |
+| `configs/experiment/l2rw_cifar10_1epoch.yaml` | L2RW 1-epoch、1000-sample audited trusted manifest 与 bilevel 更新配置。 |
 | `training/experiment.py` | 仅接入参数记录、ResNet 深度构造和通用 regularizer，不含论文名称分支。 |
+| `training/binary_experiment.py` | 保持 CSV/NPZ 兼容，并接入现有 synthetic binary generator、class-dependent noise manifest 与 Natarajan risk。 |
 | `training/workflows.py` | 独立 workflow 的延迟注册与通用调度；主实验入口不再按论文名称分支。 |
 | `training/pipeline.py` | regularizer、warm-up、artifact 和组件状态生命周期编排。 |
 | `training/checkpoint.py` | 参数抽样记录及算法/组件可恢复状态。 |
 | `training/progress.py` | 标准 epoch 字段校验和兼容的训练曲线产物。 |
 | `tests/test_workflow_registry.py` | workflow 注册、延迟加载、重命名提示及主入口模块化边界。 |
+
+## 13. MC-LDCE、CAL 与 CA2C 最小侵入接入
+
+| 文件 | 作用 |
+|---|---|
+| `estimators/mc_ldce.py` | MC-LDCE clean prior、label-imputation coefficient matrix、秩/条件数检查和 clean centroid statistic artifact。 |
+| `algorithms/mc_ldce.py` | 消费 centroid artifact 的 MC-LDCE 全局平方风险目标。 |
+| `training/mc_ldce_experiment.py` | 独立 VolMin 表示/转移估计、固定 feature snapshot、无偏置线性头、transition/statistic artifact、全局目标训练与严格恢复。 |
+| `noise/cal.py` | CAL proxy label/status artifact，按稳定 global index 查询并校验来源哈希。 |
+| `algorithms/cal.py` | CORES² adjusted loss、transition indicator、二阶 covariance correction 与 CAL objective；保留官方稳定 softmax 数值项。 |
+| `training/cal_experiment.py` | CORES² warm-up、posterior/adjusted-loss 对齐、proxy 构建、CAL 训练和恢复；使用可复用的 alpha 耦合 LR 生命周期。 |
+| `algorithms/ca2c.py` | CA2C CandidateMemory、N 网络 top-K 与 P 网络 top-K 全类补集 cross-guidance、partial-label 与 negative-learning objective。 |
+| `training/ca2c_experiment.py` | P/N 双网络 warm-up、交叉指导、memory、评测和双网络恢复。 |
+| `training/reproduction_data.py` | 三个独立 runner 共用的 synthetic/CIFAR noisy-data、稳定 index、loader 与 feature-model 组装；支持论文指定 CIFAR 归一化。 |
+| `training/runners.py` | 仅增加 `mc_ldce`、`cal`、`ca2c` 三条懒加载注册；`experiment.py` 不含论文分支。 |
+| `tests/test_mc_ldce.py`、`tests/test_cal.py`、`tests/test_ca2c.py` | 三篇论文公式、artifact、索引、梯度和失败边界。 |
+| `tests/test_new_paper_training.py`、`tests/test_runner_registry.py` | 三个统一入口 smoke/resume 和 runner 注册边界。 |
+| `configs/experiment/{mc_ldce,cal,ca2c}_cifar10_{smoke,reproduction}.yaml` | 三篇论文的 smoke 与正式运行候选配置；正式运行前仍需完成下述论文保真度核验。 |
+
+## 14. L2RW 可信元学习通路
+
+| 文件 | 作用 |
+|---|---|
+| `data/trusted.py` | 显式 trusted supervision manifest/provider、来源限制、fingerprint 和稳定 index 校验。 |
+| `algorithms/l2rw.py` | differentiable virtual SGD、trusted meta-loss、epsilon 二阶梯度和非负归一化权重。 |
+| `training/l2rw_experiment.py` | noisy batch 与 trusted batch 分离、真实加权更新、loader RNG/checkpoint/resume。 |
+| `configs/experiment/l2rw_cifar10_smoke.yaml` | 只允许 `synthetic_fixture` 的一轮确定性 smoke。 |
+| `configs/experiment/l2rw_cifar10_reproduction.yaml` | 要求外部 audited balanced trusted manifest 的正式候选配置。 |
+| `tests/test_trusted_supervision.py` | 拒绝普通 validation/test 提升、manifest roundtrip 和显式 target 映射。 |
+| `tests/test_l2rw.py`、`tests/test_l2rw_training.py` | 有限差分、权重退化规则、模型不变性及 runner smoke/resume。 |
+
+## 15. 四篇正式复现对齐
+
+| 文件 | 作用 |
+|---|---|
+| `models/mc_ldce_cnn.py` | MC-LDCE 论文六卷积 CIFAR 模型、显式 feature 输出及固定表示阶段（含 dropout 冻结）。 |
+| `models/ca2c_cnn.py` | CA2C 官方结构 SevenCNN 分类器与 projector。 |
+| `training/reproduction_data.py` | 可选外部噪声标签、全训练集模式、CIFAR 强视图及专属模型构造。 |
+| `training/mc_ldce_experiment.py` | 复用现有 PCSE VolMin 原语但使用独立估计模型；复制估计表示、重置无 bias 分类头并冻结表示后，才采集 snapshot 和构建 statistic。 |
+| `training/cal_experiment.py` | 官方固定 IDN 标签下的 proxy 构建与 CAL 二阶段训练。 |
+| `training/ca2c_experiment.py` | warm-up candidate 累积、非对称双目标与强视图 consistency。 |
+| `training/l2rw_experiment.py` | audited trusted 子集消费及论文 step-budget 调度。 |
+| 四份 `*_reproduction.yaml` | 每篇仅一组正式参数；CA2C 保留旧文件名但数据集已改为 CIFAR-100。 |
+
+本轮未修改 `training/experiment.py`、通用 Pipeline、checkpoint、plugin catalog 和现有
+`algorithms/pcse/volmin.py`。
+
+## 16. CA2C / L2RW 语义对齐维护（2026-08-04）
+
+| 文件 | 本轮职责 |
+|---|---|
+| `algorithms/ca2c.py` | 官方 top-K complementary mask、按样本聚合的 negative-label objective、CandidateMemory 校验与 fingerprint。 |
+| `training/ca2c_experiment.py` | 复用 CA2C objectives，记录 warm-up/robust phase 和 memory hash，严格恢复双网络状态。 |
+| `algorithms/l2rw.py` | 对 noisy/trusted batch、输入输出形状、设备和 target dtype 做 meta-gradient 边界校验。 |
+| `training/l2rw_experiment.py` | 保留 trusted manifest 隔离、bilevel 更新、step budget、实时 epoch 输出和 checkpoint/resume。 |
+| `tests/test_ca2c.py`、`tests/test_l2rw.py`、`tests/test_l2rw_training.py` | 论文公式、tie 行为、权重梯度和训练恢复测试。 |
+
+本轮仍未修改 `training/experiment.py`、通用 Pipeline、模型和 plugin catalog。
+
+## 17. 六篇论文 1-epoch 调用验收（2026-08-05）
+
+| 方法 | 1-epoch 产物 | 结果 |
+|---|---|---|
+| Binary Risk | `artifacts/reproductions/binary-risk-natarajan-1epoch/` | Natarajan risk、class-dependent noise、manifest、metrics 均生成。 |
+| CWD | `artifacts/reproductions/cwd-cifar10-1epoch/20260805-205014/` | feature snapshot、statistic artifact、global objective、checkpoint 和曲线均生成。 |
+| FINE | `artifacts/reproductions/fine-cifar100n-1epoch/20260805-205111/` | 1 个 warm-up epoch 完成；允许 `warmup_epochs == trainer.epochs`，不伪造 robust 阶段。 |
+| MentorNet | `artifacts/reproductions/mentornet-cifar10-symmetric04-1epoch/20260805-205208/` | ResNet-101、390 steps、冻结 MentorArtifact、checkpoint 和 final metrics 均生成。 |
+| MC-LDCE | `artifacts/reproductions/mc-ldce-cifar10-1epoch/20260805-205506/` | feature/statistic/transition artifact、固定表示 objective 和 checkpoint 均生成。 |
+| L2RW | `artifacts/reproductions/l2rw-cifar10-1epoch/20260805-205825/` | 1000-sample trusted manifest、490 meta steps、checkpoint 和 fingerprint 均生成。 |
+
+`data/trusted/l2rw_cifar10_balanced_1000.npz` 是由官方 CIFAR-10 训练标签按固定 seed 生成的本地 audited manifest，属于运行数据，不提交到仓库。

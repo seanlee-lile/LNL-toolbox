@@ -274,8 +274,8 @@ def run_fine_experiment(
     fine_config = config["fine"]
     warmup_epochs = int(fine_config["warmup_epochs"])
     epochs = int(config["trainer"]["epochs"])
-    if not 0 <= warmup_epochs < epochs:
-        raise ValueError("FINE warmup_epochs must be in [0, epochs)")
+    if not 0 <= warmup_epochs <= epochs:
+        raise ValueError("FINE warmup_epochs must be in [0, epochs]")
     optimizer_config["lr"] = float(fine_config.get("warmup_lr", optimizer_config["lr"]))
     optimizer = build_optimizer(model, optimizer_config)
     ema = ModelEMA(model, float(fine_config.get("ema_momentum", 0.999)))
