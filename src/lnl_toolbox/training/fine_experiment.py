@@ -70,11 +70,18 @@ def _subset(indices: np.ndarray, labels: np.ndarray, size: int | None, seed: int
     return indices[selected]
 
 
-def _loader(dataset, config: Mapping[str, Any], *, shuffle: bool, seed: int) -> DataLoader:
+def _loader(
+    dataset,
+    config: Mapping[str, Any],
+    *,
+    shuffle: bool,
+    seed: int,
+    batch_size: int | None = None,
+) -> DataLoader:
     workers = int(config.get("num_workers", 0))
     return DataLoader(
         dataset,
-        batch_size=int(config["batch_size"]),
+        batch_size=int(config["batch_size"] if batch_size is None else batch_size),
         shuffle=shuffle,
         num_workers=workers,
         pin_memory=bool(config.get("pin_memory", True)),
@@ -86,8 +93,11 @@ def _loader(dataset, config: Mapping[str, Any], *, shuffle: bool, seed: int) -> 
 
 @torch.inference_mode()
 def _epoch_predictions(model, ema_model, loader, device, positions: Mapping[int, int], classes: int):
-    model.eval()
-    ema_model.eval()
+    # The official robust stage performs this no-grad snapshot while both
+    # networks are still in train mode.  In particular, BatchNorm buffers are
+    # allowed to follow the source implementation during the snapshot pass.
+    model.train()
+    ema_model.train()
     size = len(positions)
     probabilities = torch.zeros((size, classes), device=device)
     ema_probabilities = torch.zeros_like(probabilities)
@@ -207,9 +217,14 @@ def run_fine_experiment(
         raise ValueError("FINE CIFAR runner currently supports CIFAR-100/CIFAR-100N")
     train_data = load_cifar100(data_config.get("root"), "train")
     test_data = load_cifar100(data_config.get("root"), "test")
-    train_indices, validation_indices = train_validation_split(
-        train_data.labels, int(data_config["validation_size"]), seed
-    )
+    validation_size = int(data_config.get("validation_size", 0))
+    if validation_size == 0:
+        train_indices = np.arange(len(train_data), dtype=np.int64)
+        validation_indices = np.empty(0, dtype=np.int64)
+    else:
+        train_indices, validation_indices = train_validation_split(
+            train_data.labels, validation_size, seed
+        )
     train_indices = _subset(train_indices, train_data.labels, data_config.get("max_train_samples"), seed + 1)
     validation_indices = _subset(validation_indices, train_data.labels, data_config.get("max_validation_samples"), seed + 2)
     test_indices = _subset(np.arange(len(test_data)), test_data.labels, data_config.get("max_test_samples"), seed + 3)
@@ -250,6 +265,7 @@ def run_fine_experiment(
         mean=mean or (0.49139968, 0.48215827, 0.44653124),
         std=std or (0.24703233, 0.24348505, 0.26158768),
         magnitude=int(data_config.get("strong_magnitude", 10)),
+        policy=str(data_config.get("strong_policy", "official_cifar10")),
     )
     train_set = IndexedMultiViewCifarDataset(
         train_data,
@@ -261,13 +277,32 @@ def run_fine_experiment(
     evaluation_transform = build_cifar_transform(
         False, normalization_mean=mean, normalization_std=std
     )
-    validation_set = TorchCifarDataset(train_data, validation_indices, transform=evaluation_transform)
     test_set = TorchCifarDataset(test_data, test_indices, transform=evaluation_transform)
+    validation_set = (
+        TorchCifarDataset(train_data, validation_indices, transform=evaluation_transform)
+        if validation_indices.size
+        else test_set
+    )
     loader_config = config["loader"]
     train_loader = _loader(train_set, loader_config, shuffle=True, seed=seed)
     snapshot_loader = _loader(train_set, loader_config, shuffle=False, seed=seed)
-    validation_loader = _loader(validation_set, loader_config, shuffle=False, seed=seed)
-    test_loader = _loader(test_set, loader_config, shuffle=False, seed=seed)
+    evaluation_batch_size = int(
+        config.get("evaluation", {}).get("batch_size", loader_config["batch_size"])
+    )
+    validation_loader = _loader(
+        validation_set,
+        loader_config,
+        shuffle=False,
+        seed=seed,
+        batch_size=evaluation_batch_size,
+    )
+    test_loader = _loader(
+        test_set,
+        loader_config,
+        shuffle=False,
+        seed=seed,
+        batch_size=evaluation_batch_size,
+    )
 
     model = _build_fine_model(config["model"], 100).to(device)
     optimizer_config = dict(config["optimizer"])
@@ -278,8 +313,15 @@ def run_fine_experiment(
         raise ValueError("FINE warmup_epochs must be in [0, epochs]")
     optimizer_config["lr"] = float(fine_config.get("warmup_lr", optimizer_config["lr"]))
     optimizer = build_optimizer(model, optimizer_config)
-    ema = ModelEMA(model, float(fine_config.get("ema_momentum", 0.999)))
+    ema = ModelEMA(
+        model,
+        float(fine_config.get("ema_momentum", 0.95)),
+        update_buffers=False,
+    )
     ema.model.to(device)
+    # ModelEMA intentionally defaults to eval mode for generic teacher use;
+    # FINE's official ``model_ema`` remains in train mode during snapshots.
+    ema.model.train()
     scs = SelfAdaptiveClassSelector(
         100,
         float(fine_config.get("momentum_scs", 0.999)),

@@ -9,7 +9,7 @@ from typing import Any, Mapping, Sequence
 
 import torch
 
-from lnl_toolbox.models.mentornet import MentorNet
+from lnl_toolbox.models.mentornet import build_mentor_model
 from lnl_toolbox.training.mentor_artifacts import MentorArtifact
 from lnl_toolbox.treatments.weights import (
     SupervisedWeightInput,
@@ -65,6 +65,8 @@ class MentorNetWeightProvider:
         percentile: float = 0.75,
         decay: float = 0.95,
         burn_in_fraction: float = 0.2,
+        burn_in_epoch: int | None = None,
+        fixed_epoch_after_burn_in: bool = False,
         fixed_label: int | None = 0,
         dropout_schedule: Sequence[Sequence[float]] = (),
         seed: int = 0,
@@ -72,7 +74,7 @@ class MentorNetWeightProvider:
     ) -> None:
         self.artifact_path = str(Path(artifact_path))
         self.artifact = MentorArtifact.load(self.artifact_path)
-        self.model = MentorNet(**dict(self.artifact.architecture))
+        self.model = build_mentor_model(dict(self.artifact.architecture))
         self.model.load_state_dict(dict(self.artifact.model_state))
         self.model.eval()
         for parameter in self.model.parameters():
@@ -83,6 +85,10 @@ class MentorNetWeightProvider:
         self.burn_in_fraction = float(burn_in_fraction)
         if not 0.0 <= self.burn_in_fraction <= 1.0:
             raise ValueError("burn_in_fraction must be within [0, 1]")
+        self.burn_in_epoch = None if burn_in_epoch is None else int(burn_in_epoch)
+        if self.burn_in_epoch is not None and not 0 <= self.burn_in_epoch <= 100:
+            raise ValueError("burn_in_epoch must be within [0, 100]")
+        self.fixed_epoch_after_burn_in = bool(fixed_epoch_after_burn_in)
         self.fixed_label = fixed_label
         self.moving = MovingPercentileState(percentile, decay)
         self.dropout_schedule = tuple(
@@ -107,7 +113,14 @@ class MentorNetWeightProvider:
         losses = weight_input.per_sample_loss.detach()
         epoch = int(weight_input.metadata.get("epoch", 0))
         moving = self.moving.update(losses)
-        if epoch / self.total_epochs < self.burn_in_fraction:
+        configured_burn_in = self.burn_in_epoch
+        if configured_burn_in is None:
+            burn_in = epoch / self.total_epochs < self.burn_in_fraction
+            mentor_epoch = epoch
+        else:
+            mentor_epoch = min(epoch, configured_burn_in)
+            burn_in = mentor_epoch < max(0, configured_burn_in - 1)
+        if burn_in:
             weights = torch.ones_like(losses)
         else:
             labels = (
@@ -117,7 +130,8 @@ class MentorNetWeightProvider:
                     weight_input.noisy_targets, int(self.fixed_label)
                 )
             )
-            epoch_percentage = min(99, int(100 * epoch / self.total_epochs))
+            epoch_percentage = min(99, mentor_epoch if self.fixed_epoch_after_burn_in
+                                   else int(100 * epoch / self.total_epochs))
             epochs = torch.full_like(labels, epoch_percentage)
             self.model.to(losses.device)
             with torch.no_grad():
@@ -127,7 +141,7 @@ class MentorNetWeightProvider:
                     labels,
                     epochs,
                 )
-        rate = self._dropout_rate(epoch)
+        rate = self._dropout_rate(mentor_epoch)
         if rate:
             keep = torch.rand(
                 weights.shape,
@@ -152,6 +166,9 @@ class MentorNetWeightProvider:
     def state_dict(self) -> Mapping[str, Any]:
         return {
             "artifact_hash": self.artifact.artifact_hash,
+            "total_epochs": self.total_epochs,
+            "burn_in_epoch": self.burn_in_epoch,
+            "fixed_epoch_after_burn_in": self.fixed_epoch_after_burn_in,
             "moving": self.moving.state_dict(),
             "rng_state": self.generator.get_state(),
         }
@@ -159,5 +176,14 @@ class MentorNetWeightProvider:
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
         if state.get("artifact_hash") != self.artifact.artifact_hash:
             raise ValueError("MentorArtifact identity mismatch")
+        if "total_epochs" in state and int(state["total_epochs"]) != self.total_epochs:
+            raise ValueError("MentorNet total_epochs mismatch")
+        if "burn_in_epoch" in state and state["burn_in_epoch"] != self.burn_in_epoch:
+            raise ValueError("MentorNet burn_in_epoch mismatch")
+        if (
+            "fixed_epoch_after_burn_in" in state
+            and bool(state["fixed_epoch_after_burn_in"]) != self.fixed_epoch_after_burn_in
+        ):
+            raise ValueError("MentorNet fixed-epoch configuration mismatch")
         self.moving.load_state_dict(state["moving"])
         self.generator.set_state(torch.as_tensor(state["rng_state"]).cpu())

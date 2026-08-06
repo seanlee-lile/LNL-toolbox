@@ -8,6 +8,9 @@ data:
   max_test_samples: null
   preprocessing: standard
   augment: false
+  normalization:
+    mean: [0.4914, 0.4822, 0.4465]
+    std: [0.2023, 0.1994, 0.2010]
 
 noise:
   name: pdl
@@ -16,54 +19,69 @@ noise:
   manifest_filename: noise_manifest.npz
 
 warmup:
-  epochs: 100
+  # Official main.py uses range(1, n_epoch_1): n_epoch_1=5 -> 4 updates.
+  epochs: 4
   noisy_validation_size: 5000
+  split_strategy: random
+  split_rng: numpy_legacy
   loss: {name: ce}
   optimizer:
     name: sgd
     lr: 0.01
-    momentum: 0.9
+    # Official main.py warm-up SGD has no momentum.
+    momentum: 0.0
     nesterov: false
     weight_decay: 0.0001
-  scheduler:
-    name: multistep
-    milestones: [40, 80]
-    gamma: 0.1
+  # Official PDL warm-up does not step a learning-rate scheduler.
+  scheduler: {name: none}
 
 instance_transition:
   name: pdl
   num_parts: 20
-  factorization:
-    iterations: 10
-    seed: 1
-  anchors:
-    candidates_per_class: 20
+  representation_iterations: 10
+  representation_seed: 1
+  representation_error_tolerance: 1.0e-5
+  anchor_candidates: 20
+  anchor_percentages: [97.0, 97.1052631579, 97.2105263158, 97.3157894737, 97.4210526316, 97.5263157895, 97.6315789474, 97.7368421053, 97.8421052632, 97.9473684211, 98.0526315789, 98.1578947368, 98.2631578947, 98.3684210526, 98.4736842105, 98.5789473684, 98.6842105263, 98.7894736842, 98.8947368421, 99.0]
+  basis_epochs: 1500
+  basis_learning_rate: 0.001
+  basis_loss_threshold: 0.02
 
 algorithm:
   name: corrected_classification
-  correction: forward
+  correction: pdl
 
 loss: {name: ce}
 model:
   name: resnet34
   base_width: 64
+  # Official Part-dependent-label-noise/resnet.py settings.
+  stem_padding: 0
+  initialization: torch_default
 optimizer:
   name: sgd
   lr: 0.01
   momentum: 0.9
   nesterov: false
   weight_decay: 0.0001
-scheduler:
-  name: multistep
-  milestones: [40, 80]
-  gamma: 0.1
+scheduler: {name: none}
 loader:
   batch_size: 128
   num_workers: 0
   pin_memory: true
   drop_last: false
+phases:
+  # Official main.py uses range(1, n_epoch_2) and range(1, n_epoch_3),
+  # with n_epoch_2=n_epoch_3=50, hence 49+49 update epochs.
+  correction_epochs: 49
+  revision_epochs: 49
+revision:
+  optimizer:
+    name: adam
+    lr: 5.0e-7
+    weight_decay: 0.0001
 trainer:
-  epochs: 100
+  epochs: 98
   device: auto
   progress: {curves: true}
 execution: {runner: instance_transition}

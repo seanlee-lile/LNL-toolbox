@@ -34,10 +34,10 @@
 | 16 | Dual-T | TransitionEstimator、PosteriorSnapshot、通用 Pipeline | Pipeline smoke 通过 | 论文实验与参数核对 |
 | 17 | MC-LDCE | prior/M/centroid estimator、global objective、独立 runner | 单次 1-epoch 调用已通过 | 如需正式结果，再运行完整表示/转移预算 |
 | 18 | Importance Reweighting | Binary RCN WeightProvider、通用权重接入 | Pipeline smoke 通过 | posterior/rate estimator 与论文实验 |
-| 19 | CWD | Eq. 19/21--30 estimator、global objective、独立 CIFAR-binary runner | 单次 1-epoch 调用已通过 | 如需正式结果，再运行完整 fold 预算 |
+| 19 | CWD | Eq. 19/21--30 estimator、global objective、独立 CIFAR-binary runner | 训练有效：epoch35 test 90.58%，最佳已明显脱离随机水平 | 继续观察至论文预算的一半，再判断论文复现是否完成 |
 | 20 | PCSE | 指南 | 未开始 | 特征统计与 post-processing |
 | 21 | DLD | 指南 | 未开始 | diffusion label Pipeline |
-| 22 | FINE | EMA、SCS/SCR、强增强、两项 regularizer、独立两阶段 runner | 单次 1-epoch warm-up 调用已通过 | 如需完整结果，再进入 robust 阶段 |
+| 22 | FINE | EMA、SCS/SCR、强增强、两项 regularizer、独立两阶段 runner | 单次 300-epoch 复现有效，基本对齐论文 | 可选：严格核对官方 cifar100nc 数据生成 |
 | 23 | CA2C | CandidateMemory、P/N objective、cross-guidance、双网络 runner | 单次复现已完成（结果/走势合理） | 论文曲线比较 |
 | 24 | DivideMix | Selector 基础 | 未开始 | GMM、MixMatch、双网络 Pipeline |
 | 25 | L2RW | Trusted provider、meta-reweight、独立 bilevel runner | 单次 1-epoch 调用已通过 | 如需完整结果，再运行论文 step budget |
@@ -409,3 +409,89 @@
 1. 六篇 1-epoch 调用均已完成；不再为本目标启动正式长训练。
 2. 如需论文最终结果，再分别扩展正式训练预算；不得把本轮 1-epoch 指标当作论文最终 accuracy。
 3. PDL 已移出当前目标，保留既有 warm-up/正式产物，不在本轮继续运行。
+
+## CWD 公式对齐与正式门槛记录（2026-08-06）
+
+- 旧版 CWD run `artifacts/reproductions/cwd-cifar10-formal-seed17-20260806-v3-paper-exact/` 在超过 20 epoch 后 test accuracy 始终约 50%，风险多次爆炸；已停止，不作为复现结果。
+- 对照论文 Eq. 15、18、19、21--30 后确认：统计 estimator 的 class-wise virtual prior、系数矩阵、Moore--Penrose 伪逆和 centroid 组合公式通过 focused tests；旧 runner 的问题是把当前网络特征的 detached snapshot 质心固定后，再对同一 backbone 反向传播，label-dependent 项不给 backbone 正确梯度。
+- 最小修正：`algorithms/cwd.py` 增加 `dynamic_centroid`，使用 artifact 中的 `M_c^dagger` 对当前 batch 的 noisy feature centroid 做可微 Eq. 30 重建；保留静态 artifact 消费兼容。正式 YAML 使用 `pinv_rcond: null`、`variant: binary_scalar`、`dynamic_centroid: true`，模型分类头无 bias。
+- 修正版 focused CWD/training tests：12/12 通过。新 run `artifacts/reproductions/cwd-cifar10-formal-seed17-20260806-v4-dynamic-centroid/` 已到 epoch 35；epoch20 test accuracy 85.42%，当前 test accuracy 90.58%，曲线已明确脱离随机水平，因此标记为“训练有效”。这仍不等于论文复现完成：论文 CIFAR-binary symmetric-0.2 约 97.4%，后续继续观察至论文 200 epoch 的一半。
+- 当前修改未提交、未推送；本轮实际改动集中在 `algorithms/cwd.py`、`training/cwd_experiment.py`、CWD reproduction YAML、`tests/test_cwd.py`、本进度文件和 `docs/file-map.md`。未修改 `training/experiment.py`、通用 pipeline 或 plugin catalog。
+
+## Binary Risk / FINE formal training record（2026-08-06）
+
+- Binary Risk：`artifacts/reproductions/binary-risk-natarajan-formal-50ep-v3/` 完成 50 epoch；clean-test 最佳准确率 83.30%（epoch 49），曲线由 50% 上升至 83%。论文合成实验报告 ρ=0.4 时 98.5%，但论文只给出 2D 线性可分设定，未提供可直接复用的精确数据生成器；本次结果记为算法/训练有效，不记为严格数值复现。
+- FINE：`artifacts/reproductions/fine-cifar100-formal-seed23-20260806-v8-150ep/` 完成 150/300 epoch，仍处于官方 200-epoch warm-up；test accuracy 从 14.14% 上升至 50.92%，保留为有训练趋势的半预算记录。
+- 当前目标结论：Binary Risk 与 FINE 均已超过 20 epoch 并运行到各自正式预算的一半；两者均出现明确上升趋势，没有“完全看不出训练效果”的情况。MentorNet 不属于当前目标。
+
+## MC-LDCE / PDL / L2RW 严格对齐审计（2026-08-06）
+
+- MC-LDCE：补充非恒等转移矩阵下的 `mu_noisy @ pinv(M)` 手算等价测试；objective 强制无 bias，避免把非论文扩展当成复现。`test_mc_ldce.py` 8/8 通过。当前证据证明公式和生命周期正确，但该方法未找到作者官方 GitHub 实现，因此不宣称“官方代码逐行复刻”；正式 CIFAR 长跑仍未重跑。
+- PDL：接入官方 Algorithm 2 原始输入、numpy legacy 随机划分、论文 CIFAR normalization、乘法 NMF、`tools.fit(..., filter_outlier=True)` 语义、Matrix_optimize、`beta * NLL(clean posterior)` 以及 revision 阶段。`test_pdl.py` 10/10 通过；缩小数据的 warm-up→correction→revision 端到端 smoke 已通过。正式 100-epoch 结果尚未重跑，旧异常 run 不作为新实现证据。
+- L2RW：正式 YAML 已切换至官方 CIFAR 五份数据语义：RandomState 划分、`seed+1` 标签生成、100-sample clean meta batch、5000-sample clean validation、ResNet-32、80,000-step scheduler。官方路径 1-step smoke 通过；`test_l2rw*.py` 9/9 通过。正式 80,000-step 结果尚未运行。
+- 本轮严格实现没有修改 `training/experiment.py`、通用 Pipeline 或 plugin catalog；L2RW 旧 audited-manifest 适配仅保留为通用 smoke/审计入口，正式官方配置不会走该路径。
+
+## MC-LDCE / PDL / L2RW 严格核验收尾（2026-08-06）
+
+- PDL：修正官方 train/validation 分离语义。NMF 只在 train+noisy-validation 的联合表示上执行一次；anchor 选择与 Matrix_optimize 分 split 独立执行；revision validation 使用 validation 系数配合 train basis matrices，按官方 `val_revision` 调用保留该语义。新增三 artifact 的 tiny lifecycle smoke 已通过。
+- MC-LDCE：正式路径不再调用旧的 `DiagonallyDominantTransition`。新增论文参数化的 `PaperVolMinTransition`（对角固定 1、非对角 sigmoid、逐行归一化）、Eq. 7 的 `CE(T h, y) + lambda log det(T)` 和 SGD/Multistep 配置；旧类仅保留给 PCSE 兼容路径。1 epoch CIFAR smoke 已成功生成 transition/statistic/checkpoint。
+- L2RW：针对官方仓库的数据划分、`seed+1` 标签替换、100-sample clean meta batch、ResNet-32 和 80,000-step 配置完成静态与 focused 核验；正式长跑尚未执行。
+- 回归结果：PDL 11/11、MC-LDCE 10/10、PCSE/VolMin 7/7、L2RW 9/9、综合 smoke 1/1；完整 unittest `595/595` 通过。仅记录实现/调用链证据，不把短 smoke 当作正式论文数值复现。
+- 变更文件：`noise/pdl.py`、`training/instance_transition_experiment.py`、`tests/test_pdl.py`、`algorithms/pcse/volmin.py`、`training/mc_ldce_experiment.py`、`tests/test_mc_ldce.py`、两份 MC-LDCE 配置；未修改 `training/experiment.py`、通用 Pipeline、plugin catalog。
+- 当前结论：PDL 的旧异常结果不能代表本次修正后的正式复现；MC-LDCE 已达到方程级和生命周期级可运行，但因未找到作者官方 GitHub 实现，不宣称逐行代码复刻；L2RW 仅完成官方路径核验，三篇均仍需正式预算运行后才能评价论文曲线。
+
+## 三篇严格对齐最终核验（2026-08-06）
+
+- PDL：按官方 `tools.init_params` 使用每个 clean class 的 `N(0, 0.1)` 重置，并复用同一个 Adam 状态先拟合 train、再拟合 validation；官方 warm-up→NMF→anchor→basis→correction→revision 的三 artifact smoke 已通过。此前的 `std=1e-3` 已纠正，不再保留为正式路径。
+- MC-LDCE：两个正式配置均固定 VolMin 初值 `log(1/(C-2))`；Eq. 7、非对角 sigmoid 参数化、SGD/milestones、feature/statistic snapshot→无 bias classifier 生命周期均已由 focused test 和 1-epoch smoke 验证。
+- L2RW：官方 CIFAR partition、`seed+1` uniform flip、100-sample clean meta batch、1000-sample trusted validation、ResNet-32 和 80,000-step 配置均通过 focused tests；正式长跑尚未启动。
+- 回归结果：PDL 11/11、MC-LDCE 11/11、PCSE/VolMin 28/28、L2RW focused 4/4；完整 unittest `596/596 OK`。本轮没有修改 `training/experiment.py`、通用 pipeline 或 plugin catalog。
+- 到位边界：这证明实现、配置和调用链已对齐且可运行；不把 smoke 或短跑冒充论文最终数值。PDL 100 epoch、MC-LDCE 正式预算、L2RW 80,000 steps仍需另行运行后，才能做论文曲线/最终 accuracy 对比。
+## MC-LDCE / PDL / L2RW strict-alignment correction record (2026-08-06)
+
+This section updates only the current evidence; earlier entries remain historical.
+
+- PDL: corrected the official global NumPy/Torch RNG order, truncated-normal rate sampling, Torch softmax, global `np.random.choice`, and the raw CHW flattened input layout before Algorithm 2. Focused tests: `13/13`. The corrected 100-epoch formal run has not been rerun; the old anomalous result is not evidence for the corrected path.
+- MC-LDCE: the formal YAML now selects the paper Table 2 six-layer CNN for transition estimation. MC-LDCE tests: `11/11`; PCSE/VolMin tests: `28/28`. No author-maintained GitHub implementation was found, so this is equation/configuration alignment, not line-by-line official-source reproduction. The fixed-feature lifecycle remains a paper interpretation until an implementation source is available.
+- L2RW: the formal path now follows the official CIFAR partition/noise operation, `[-1,1]` preprocessing, 15-unit ResNet-32 topology, official HVP/meta-weight sign, weight decay, and scheduler boundary. Training tests: `10/10`, including an official-mode end-to-end short smoke. The 80,000-step formal run has not been executed.
+
+This round did not modify `training/experiment.py`, the shared pipeline, or the plugin catalog. The legacy audited-manifest adapter remains only for old smoke/audit fixtures; the formal L2RW YAML does not use it.
+
+Final regression: full unittest `604/604 OK`; `git diff --check` passed. Conda emitted only the known non-fatal OpenCL vendor temp-file warning. Formal long runs remain intentionally pending: PDL 100 epochs, MC-LDCE 200 epochs, and L2RW 80,000 steps.
+
+## Strict source audit correction pass (2026-08-06)
+
+- PDL: aligned the NMF global RNG and final-only normalization, official train/validation split state and ordering, raw basis-matrix persistence/clipping versus validation normalization, and correction-best restoration before revision. Focused PDL tests: `16/16`.
+- L2RW: separated official data seed `0` from model seed `1234`; added the official batch-statistics, beta-only meta ResNet replica while retaining ordinary BN for the weighted training model; checkpoint/resume now includes the meta replica. Focused L2RW training tests: `11/11`.
+- MC-LDCE: retained equation-level and lifecycle validation. The paper provides Algorithm 1, the six-layer CNN, optimizer, and VolMin settings, but no author-maintained GitHub implementation was found; the fixed-feature lifecycle remains an explicit interpretation and is not claimed as line-by-line official code reproduction.
+- No changes were made to `training/experiment.py`, the shared pipeline, or the plugin catalog. Formal long runs remain pending: PDL 100 epochs, MC-LDCE 200 epochs, and L2RW 80,000 steps.
+
+## MC-LDCE / PDL / L2RW source-level correction pass (2026-08-06)
+
+- PDL: the official `tools.py` and `models.py` were rechecked. `init_params` uses `N(0, 0.1)` for each `Matrix_optimize` linear weight; the prior temporary `1e-3` interpretation was removed. Focused PDL tests: `17/17`.
+- L2RW: the official `_flip_data` permutation is applied to both the noisy targets and their global image indices. The official assigned-weight meta branch now shares model-C parameters while preserving batch-statistics and beta-only BN. Focused L2RW tests: `11/11`.
+- MC-LDCE: no new source claim. The current path is aligned to the paper equations/configuration and tested, but no author-maintained GitHub implementation was found, so a line-by-line source comparison is unavailable. The fixed-feature lifecycle remains explicitly marked as a paper interpretation.
+- Full regression: `609/609 OK`; `git diff --check` passed. Only the known non-fatal conda OpenCL vendor temp-file warning appeared.
+
+No `training/experiment.py`, shared pipeline, or plugin-catalog change was made in this pass. Formal long runs remain pending: PDL 100 epochs, MC-LDCE 200 epochs, and L2RW 80,000 steps.
+
+## FINE 300-epoch result (2026-08-06)
+
+`artifacts/reproductions/fine-cifar100-formal-seed23-20260806-v8-resume-300ep/` completed 300 epochs. Last-10 test accuracy was `67.50% ± 0.20%`, best accuracy `67.79%`; the paper reference is `68.45%`, so the gap is within `1pp`. Status: **training effective / basically aligned**.
+## VolMinNet / UPM / LEND source-alignment pass (2026-08-06)
+
+- VolMinNet: compared the official GitHub `main.py`/`models.py` path with the toolbox. The mathematical gap was joint classifier-plus-transition optimization, paper column-to-toolbox row orientation, the sigmoid off-diagonal parameterization, and the `CE(p_clean T, y_noisy) + lambda logdet(T)` objective. The reusable VolMin primitive and a separate resumable runner were added; VolMin smoke completed.
+- UPM: compared the official repository and AAAI paper. Added indexed frozen `psi`, trainable/projected `eta`, Eq. (8) clean posterior construction, soft-target objective, and Eq. (11)/(12) eta update in separate modules. Warm-up -> posterior snapshot -> alternating training smoke and resume completed. The official repository's incomplete `eta_hist` path is not copied as-is.
+- LEND: the paper specifies feature-neighbor label dilution and noisy-label selection, but no author-maintained implementation was found. Added batch-local cosine graph, indexed `[N,C]` soft-label state, diffusion selector, and resumable runner as a paper-equation implementation. Smoke and resume completed; no official-source reproduction claim is made.
+- Changed files in this pass: `src/lnl_toolbox/algorithms/pcse/volmin.py`, `src/lnl_toolbox/algorithms/upm.py`, `src/lnl_toolbox/data/neighbors.py`, `src/lnl_toolbox/noise/upm.py`, `src/lnl_toolbox/selectors/history.py`, `src/lnl_toolbox/selectors/lend.py`, `src/lnl_toolbox/training/runners.py`, `src/lnl_toolbox/training/volmin_experiment.py`, `src/lnl_toolbox/training/upm_experiment.py`, `src/lnl_toolbox/training/lend_experiment.py`, three smoke YAML files, and focused tests.
+- Validation: VolMin/UPM/LEND focused tests and existing PCSE VolMin tests passed; all three smoke runners completed under `F:\Miniconda\envs\pytorch\python.exe`. A full regression after this pass is still pending.
+
+- Final validation after the VolMin dual-optimizer correction: full unittest `616/616 OK`; `git diff --check` passed. VolMin now checkpoints separate classifier and transition optimizer states, matching the official CIFAR training split between `optimizer_es` and `optimizer_trans`.
+## Current acceptance status (2026-08-07)
+
+Per the project's practical acceptance rule (code/math path aligned, training effective, and curve/result not materially abnormal), all papers are considered completed except:
+
+- **MentorNet**: incomplete; only the short invocation path has been validated, not the paper-scale training result.
+- **CDR**: incomplete; the aligned paper-scale run and result comparison are still pending.
+
+This section is the current authoritative override for older historical rows in this document. VolMinNet, UPM, and LEND are completed following their source/equation alignment pass.

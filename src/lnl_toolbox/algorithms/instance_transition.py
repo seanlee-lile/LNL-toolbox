@@ -12,7 +12,46 @@ from lnl_toolbox.noise.transition import InstanceTransitionProvider
 from .transition_risk import (
     forward_instance_corrected_losses,
     instance_importance_reweighted_losses,
+    validate_instance_transitions,
 )
+
+
+def _row_abs_normalize(transitions: torch.Tensor) -> torch.Tensor:
+    """Match PDL ``tools.norm`` for a batch of transition matrices."""
+
+    return transitions.abs() / transitions.abs().sum(dim=2, keepdim=True).clamp_min(
+        torch.finfo(transitions.dtype).tiny
+    )
+
+
+def pdl_instance_corrected_losses(
+    logits: torch.Tensor,
+    noisy_targets: torch.Tensor,
+    transitions: torch.Tensor,
+    *,
+    detach_importance_weight: bool = False,
+) -> torch.Tensor:
+    """PDL's ``beta * NLL(log p_theta(y_tilde|x))`` objective."""
+
+    if logits.ndim != 2 or noisy_targets.shape != (logits.shape[0],):
+        raise ValueError("logits and noisy_targets have invalid shapes")
+    if transitions.shape != (logits.shape[0], logits.shape[1], logits.shape[1]):
+        raise ValueError("PDL transitions have incompatible shapes")
+    if not torch.isfinite(transitions).all() or bool((transitions < 0).any()):
+        raise ValueError("PDL transitions must be finite and non-negative")
+    # Official train_correction consumes the clipped raw matrix directly;
+    # unlike generic transition consumers it does not row-normalize it.
+    matrices = transitions
+    clean = torch.softmax(logits, dim=1)
+    noisy = torch.bmm(clean.unsqueeze(1), matrices).squeeze(1)
+    target_probability = clean.gather(1, noisy_targets[:, None]).squeeze(1)
+    noisy_probability = noisy.gather(1, noisy_targets[:, None]).squeeze(1)
+    weight = target_probability / noisy_probability.clamp_min(
+        torch.finfo(logits.dtype).tiny
+    )
+    if detach_importance_weight:
+        weight = weight.detach()
+    return weight * -torch.log(target_probability.clamp_min(torch.finfo(logits.dtype).tiny))
 
 
 class InstanceTransitionClassificationAlgorithm:
@@ -31,8 +70,10 @@ class InstanceTransitionClassificationAlgorithm:
         maximum_importance_weight: float | None = None,
     ) -> None:
         correction = str(correction).strip().lower()
-        if correction not in {"forward", "importance"}:
-            raise ValueError("correction must be 'forward' or 'importance'")
+        if correction not in {"forward", "importance", "pdl", "pdl_revision"}:
+            raise ValueError(
+                "correction must be 'forward', 'importance', 'pdl', or 'pdl_revision'"
+            )
         self.model = model
         self.optimizer = optimizer
         self.loss = loss
@@ -61,13 +102,30 @@ class InstanceTransitionClassificationAlgorithm:
         matrices = self.transition.transition_for(
             inputs, indices, device=logits.device, dtype=logits.dtype
         )
+        effective_matrices = matrices
+        if self.correction == "pdl_revision":
+            revision = getattr(self.model, "T_revision", None)
+            if not isinstance(revision, nn.Linear) or revision.bias is not None:
+                raise TypeError(
+                    "PDL revision requires a bias-free model.T_revision Linear head"
+                )
+            effective_matrices = _row_abs_normalize(
+                matrices + revision.weight.to(matrices).unsqueeze(0)
+            )
         if self.correction == "forward":
-            per_sample = forward_instance_corrected_losses(logits, targets, matrices, self.loss)
-        else:
+            per_sample = forward_instance_corrected_losses(
+                logits, targets, matrices, self.loss
+            )
+        elif self.correction == "importance":
             per_sample = instance_importance_reweighted_losses(
                 logits, targets, matrices, self.loss,
                 detach_weights=self.detach_importance_weights,
                 maximum_weight=self.maximum_importance_weight,
+            )
+        else:
+            per_sample = pdl_instance_corrected_losses(
+                logits, targets, effective_matrices,
+                detach_importance_weight=False,
             )
         if per_sample.ndim != 1 or per_sample.shape != targets.shape:
             raise ValueError("corrected risk must return one loss per sample")
@@ -79,7 +137,15 @@ class InstanceTransitionClassificationAlgorithm:
         self.optimizer.step()
         state.step += 1
         count = int(targets.numel())
-        correct = int((logits.argmax(1) == targets).sum().item())
+        metric_logits = logits
+        if self.correction in {"pdl", "pdl_revision"}:
+            observed = torch.bmm(
+                torch.softmax(logits, dim=1).unsqueeze(1), effective_matrices
+            ).squeeze(1)
+            metric_logits = torch.log(
+                observed.clamp_min(torch.finfo(logits.dtype).tiny)
+            )
+        correct = int((metric_logits.argmax(1) == targets).sum().item())
         return StepResult(metrics={
             "loss": float(objective.detach().item()),
             "accuracy": correct / count,

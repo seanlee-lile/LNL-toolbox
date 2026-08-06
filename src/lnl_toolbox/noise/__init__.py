@@ -18,6 +18,8 @@ from .pdl import (
     PartTransitionEstimator,
     fit_part_representation,
     fit_part_transition_matrices,
+    fit_pdl_basis_matrices,
+    select_pdl_anchor_candidates,
 )
 from .manifest import NoiseManifest
 from .split_manifest import generate_split_symmetric_manifest
@@ -53,5 +55,7 @@ __all__ = [
     "PartTransitionEstimator",
     "fit_part_representation",
     "fit_part_transition_matrices",
+    "fit_pdl_basis_matrices",
+    "select_pdl_anchor_candidates",
 ]
 

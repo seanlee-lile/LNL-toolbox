@@ -57,6 +57,8 @@ class CWDGlobalObjective:
         *,
         loss: str = "squared",
         constant: float = 1.0,
+        variant: str = "multiclass",
+        dynamic_centroid: bool = False,
     ) -> None:
         if str(loss).strip().lower() != "squared":
             raise ValueError("CWD currently supports the paper's squared objective")
@@ -65,6 +67,17 @@ class CWDGlobalObjective:
         self.statistic = statistic
         self.loss = "squared"
         self.constant = float(constant)
+        self.variant = str(variant).strip().lower()
+        self.dynamic_centroid = bool(dynamic_centroid)
+        if self.variant not in {
+            "multiclass",
+            "binary",
+            "binary_margin",
+            "binary_scalar",
+        }:
+            raise ValueError(
+                "CWD variant must be multiclass, binary_margin, or binary_scalar"
+            )
 
     def compute(
         self,
@@ -77,7 +90,7 @@ class CWDGlobalObjective:
         base_loss: nn.Module,
         metadata: Mapping[str, Any],
     ) -> Tensor:
-        del logits, noisy_targets, sample_indices, base_loss, metadata
+        del logits, sample_indices, base_loss
         if self.statistic is None:
             raise ValueError("CWD objective requires a statistic artifact")
         if features.ndim != 2:
@@ -91,17 +104,18 @@ class CWDGlobalObjective:
             raise ValueError("CWD centroids must have shape [C, D]")
         weight, bias = classifier_parameters(model)
         weight = weight.to(device=features.device, dtype=features.dtype)
-        if weight.shape != centroids.shape:
+        expected_weight_shape = (
+            (1, centroids.shape[1])
+            if self.variant == "binary_scalar"
+            else centroids.shape
+        )
+        if weight.shape != expected_weight_shape:
             raise ValueError(
                 "CWD classifier weight and centroid dimensions do not match: "
                 f"weight={tuple(weight.shape)}, centroids={tuple(centroids.shape)}"
             )
         if bias is not None:
             bias = bias.to(device=features.device, dtype=features.dtype)
-        scores = features @ weight.transpose(0, 1)
-        if bias is not None:
-            scores = scores + bias
-        quadratic = scores.square().sum(dim=1).mean()
         prior_values = self.statistic.metadata.get("class_prior")
         if prior_values is None:
             prior = torch.full(
@@ -115,9 +129,76 @@ class CWDGlobalObjective:
         if prior.shape != (centroids.shape[0],) or not torch.isfinite(prior).all() or bool((prior < 0).any()):
             raise ValueError("CWD class_prior must be a finite non-negative [C] vector")
         prior = prior / prior.sum().clamp_min(torch.finfo(prior.dtype).tiny)
-        cross = (weight * centroids).sum()
-        if bias is not None:
-            cross = cross + (bias * prior).sum()
+        if self.dynamic_centroid:
+            pseudoinverses = self.statistic.metadata.get(
+                "coefficient_pseudoinverses"
+            )
+            if pseudoinverses is None or len(pseudoinverses) != centroids.shape[0]:
+                raise ValueError(
+                    "CWD dynamic centroid requires coefficient pseudoinverses"
+                )
+            if noisy_targets.shape != (features.shape[0],):
+                raise ValueError("CWD noisy_targets must match the feature batch")
+            if noisy_targets.dtype.is_floating_point:
+                noisy_targets = noisy_targets.long()
+            if bool((noisy_targets < 0).any()) or bool(
+                (noisy_targets >= centroids.shape[0]).any()
+            ):
+                raise ValueError("CWD noisy_targets contain an invalid class")
+            one_hot = torch.nn.functional.one_hot(
+                noisy_targets.long(), num_classes=centroids.shape[0]
+            ).to(dtype=features.dtype)
+            observed = features.transpose(0, 1) @ one_hot
+            observed = observed / float(features.shape[0])
+            virtual = []
+            for value in pseudoinverses:
+                inverse = torch.as_tensor(
+                    value, dtype=features.dtype, device=features.device
+                )
+                if inverse.shape != (centroids.shape[0], centroids.shape[0]):
+                    raise ValueError(
+                        "CWD coefficient pseudoinverse has an invalid shape"
+                    )
+                virtual.append(observed @ inverse)
+            centroids = (
+                torch.stack(virtual, dim=0).sum(dim=0)
+                - (centroids.shape[0] - 1) * observed
+            ).transpose(0, 1)
+        if self.variant == "binary_scalar":
+            if centroids.shape[0] != 2 or weight.shape[0] != 1:
+                raise ValueError(
+                    "CWD binary_scalar requires two centroid classes and "
+                    "a one-output classifier"
+                )
+            margin = features @ weight[0]
+            if bias is not None:
+                margin = margin + bias[0]
+            quadratic = margin.square().mean()
+            signed_centroid = centroids[1] - centroids[0]
+            cross = (weight[0] * signed_centroid).sum()
+            if bias is not None:
+                cross = cross + bias[0] * (prior[1] - prior[0])
+        elif self.variant in {"binary", "binary_margin"}:
+            if centroids.shape[0] != 2 or weight.shape[0] != 2:
+                raise ValueError("CWD binary_margin requires exactly two classes")
+            margin_weight = weight[1] - weight[0]
+            margin = features @ margin_weight
+            if bias is not None:
+                margin_bias = bias[1] - bias[0]
+                margin = margin + margin_bias
+            quadratic = margin.square().mean()
+            signed_centroid = centroids[1] - centroids[0]
+            cross = (margin_weight * signed_centroid).sum()
+            if bias is not None:
+                cross = cross + (bias[1] - bias[0]) * (prior[1] - prior[0])
+        else:
+            scores = features @ weight.transpose(0, 1)
+            if bias is not None:
+                scores = scores + bias
+            quadratic = scores.square().sum(dim=1).mean()
+            cross = (weight * centroids).sum()
+            if bias is not None:
+                cross = cross + (bias * prior).sum()
         return validate_objective(self.constant + quadratic - 2.0 * cross)
 
     def bind_statistic(self, statistic: StatisticArtifact) -> None:
@@ -129,11 +210,17 @@ class CWDGlobalObjective:
         return {
             "loss": self.loss,
             "constant": self.constant,
+            "variant": self.variant,
+            "dynamic_centroid": self.dynamic_centroid,
             "statistic_hash": None if self.statistic is None else self.statistic.artifact_hash,
         }
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
         if str(state.get("loss", self.loss)) != self.loss or float(state.get("constant", self.constant)) != self.constant:
+            raise ValueError("CWD objective configuration mismatch")
+        if str(state.get("variant", self.variant)).strip().lower() != self.variant:
+            raise ValueError("CWD objective configuration mismatch")
+        if bool(state.get("dynamic_centroid", self.dynamic_centroid)) != self.dynamic_centroid:
             raise ValueError("CWD objective configuration mismatch")
         expected = state.get("statistic_hash")
         actual = None if self.statistic is None else self.statistic.artifact_hash

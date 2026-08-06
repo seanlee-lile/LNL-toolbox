@@ -23,6 +23,8 @@ loader:
 model:
   name: cifar_resnet34
   base_width: 64
+  # Eq. (3)/(18) use h(x)=W^T x; the paper has no classifier bias.
+  bias: false
 
 optimizer:
   name: adam
@@ -38,7 +40,12 @@ trainer:
   device: auto
 
 cwd:
-  ridge: 1.0e-8
+  # The paper specifies the Moore-Penrose pseudo-inverse M^dagger.
+  pinv_rcond: null
+  variant: binary_scalar
+  # Reconstruct the centroid from the current stochastic feature batch so
+  # the end-to-end CNN receives the gradient of Eq. (4)/(18).
+  dynamic_centroid: true
 
 parameter_record:
   sampling_seed: 17

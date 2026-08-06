@@ -14,10 +14,10 @@ import yaml
 
 from lnl_toolbox.algorithms.mc_ldce import MCLDCEObjective
 from lnl_toolbox.algorithms.pcse.volmin import (
-    DiagonallyDominantTransition,
-    build_volmin_optimizer,
-    validate_trainable_transition,
-    volmin_objective,
+    PaperVolMinTransition,
+    build_paper_volmin_optimizer,
+    paper_volmin_objective,
+    validate_paper_volmin_transition,
 )
 from lnl_toolbox.estimators.mc_ldce import MCLDCEEstimator
 from lnl_toolbox.evaluation.classification import evaluate_classification
@@ -99,34 +99,47 @@ def _prepare_fixed_feature_classifier(model: nn.Module) -> None:
 def _estimate_volmin(config, model, loader, device):
     value = dict(config["transition"])
     parameterization = dict(value["parameterization"])
-    transition_model = DiagonallyDominantTransition(
+    transition_model = PaperVolMinTransition(
         int(value["num_classes"]),
-        initial_flip_mass=float(parameterization["initial_flip_mass"]),
-        max_flip_mass=float(parameterization["max_flip_mass"]),
-        temperature=float(parameterization["temperature"]),
+        initial_weight=float(parameterization["initial_weight"]),
         seed=int(parameterization["seed"]),
     ).to(device)
-    optimizer = build_volmin_optimizer(model, transition_model, value["optimizer"])
+    optimizer = build_paper_volmin_optimizer(model, transition_model, value["optimizer"])
+    scheduler_config = dict(value.get("scheduler", {}) or {})
+    scheduler = None
+    if str(scheduler_config.get("name", "none")).lower() == "multistep":
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(
+            optimizer,
+            milestones=[int(item) for item in scheduler_config.get("milestones", [])],
+            gamma=float(scheduler_config.get("gamma", 0.1)),
+        )
+    elif str(scheduler_config.get("name", "none")).lower() != "none":
+        raise ValueError("paper VolMin transition scheduler must be none or multistep")
     latest = {}
     for _ in range(int(value["epochs"])):
         model.train()
         for batch in loader:
             logits = model(batch["input"].to(device)).to(torch.float64)
-            objective, latest = volmin_objective(
+            objective, latest = paper_volmin_objective(
                 logits, batch["target"].to(device), transition_model.matrix(),
                 lambda_volume=float(value["lambda_volume"]),
                 determinant_tolerance=float(value.get("determinant_tolerance", 1e-8)),
                 condition_limit=float(value.get("condition_limit", 1e8)),
             )
             optimizer.zero_grad(set_to_none=True); objective.backward(); optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
     matrix = transition_model.matrix()
-    _, diagnostics = validate_trainable_transition(
+    _, diagnostics = validate_paper_volmin_transition(
         matrix,
         determinant_tolerance=float(value.get("determinant_tolerance", 1e-8)),
         condition_limit=float(value.get("condition_limit", 1e8)),
     )
     return matrix.detach().cpu().numpy(), {
         "epochs": int(value["epochs"]),
+        "optimizer": dict(value["optimizer"]),
+        "scheduler": scheduler_config,
+        "parameterization": parameterization,
         **latest,
         "determinant": diagnostics.determinant,
         "condition_number": diagnostics.condition_number,
@@ -156,12 +169,13 @@ def run_mc_ldce_experiment(config: dict[str, Any], output_dir=None, resume=None)
         _prepare_fixed_feature_classifier(model)
     elif str(config["transition"].get("estimator", "")).lower() == "paper_volmin":
         estimator_model = build_reproduction_model(
-            config["model"], config["data"], prepared.num_classes
+            dict(config["transition"].get("model", {"name": "resnet18"})),
+            config["data"],
+            prepared.num_classes,
         ).to(device)
         matrix, transition_metadata = _estimate_volmin(
             config, estimator_model, prepared.train_loader, device
         )
-        model.load_state_dict(estimator_model.state_dict())
         del estimator_model
         _prepare_fixed_feature_classifier(model)
     else:

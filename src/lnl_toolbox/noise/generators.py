@@ -209,10 +209,11 @@ def generate_pdl_idn(
     seed: int,
     dataset: str = "unknown",
 ) -> NoiseManifest:
-    """Generate PDL Algorithm 2 instance-dependent noise.
+    """Generate the PDL paper's Algorithm 2 instance-dependent noise.
 
-    Per-sample corruption rates are sampled from a truncated normal and wrong
-    classes are distributed by input-dependent random linear scores.
+    The official implementation samples ``q_i`` from a truncated normal with
+    mean ``rate`` and standard deviation ``0.1`` and applies a random linear
+    score matrix to the raw input before sampling the observed class.
     """
 
     targets = _validate(clean_targets, num_classes, rate)
@@ -222,26 +223,46 @@ def generate_pdl_idn(
     features = features.reshape(targets.size, -1)
     if not np.isfinite(features).all():
         raise ValueError("inputs must be finite")
-    random = np.random.RandomState(seed)
-    rates = random.normal(float(rate), 0.1, size=targets.size)
-    invalid = (rates < 0.0) | (rates > 1.0)
-    while invalid.any():
-        rates[invalid] = random.normal(float(rate), 0.1, size=int(invalid.sum()))
-        invalid = (rates < 0.0) | (rates > 1.0)
-    weights = random.standard_normal((num_classes, features.shape[1], num_classes))
-    transitions = np.zeros((targets.size, num_classes), dtype=np.float64)
-    noisy = targets.copy()
+    try:
+        from scipy.stats import truncnorm
+    except ImportError as exc:
+        raise ImportError("official PDL noise generation requires scipy.stats.truncnorm") from exc
+    import torch
+    import torch.nn.functional as F
+
+    # These are intentionally the same global RNG calls as tools.py.  The
+    # reference code uses NumPy for q_i/W and label sampling, and PyTorch for
+    # the per-sample score softmax.
+    np.random.seed(int(seed))
+    torch.manual_seed(int(seed))
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(int(seed))
+    flip_distribution = truncnorm(
+        (0.0 - float(rate)) / 0.1,
+        (1.0 - float(rate)) / 0.1,
+        loc=float(rate), scale=0.1,
+    )
+    flip_rate = flip_distribution.rvs(targets.shape[0])
+    weights = torch.as_tensor(
+        np.random.randn(num_classes, features.shape[1], num_classes),
+        dtype=torch.float32,
+    )
+    probabilities = []
     for position, clean_class in enumerate(targets):
-        scores = features[position] @ weights[int(clean_class)]
-        scores[int(clean_class)] = -np.inf
-        classes = np.delete(np.arange(num_classes), int(clean_class))
-        wrong_scores = scores[classes]
-        wrong = np.exp(wrong_scores - wrong_scores.max())
-        wrong /= wrong.sum()
-        transitions[position, classes] = rates[position] * wrong
-        transitions[position, int(clean_class)] = 1.0 - rates[position]
-        noisy[position] = int(random.choice(num_classes, p=transitions[position]))
+        values = torch.as_tensor(features[position], dtype=torch.float32)
+        scores = values.reshape(1, -1).mm(weights[int(clean_class)]).squeeze(0)
+        scores[int(clean_class)] = -float("inf")
+        scores = float(flip_rate[position]) * F.softmax(scores, dim=0)
+        scores[int(clean_class)] += 1.0 - float(flip_rate[position])
+        probabilities.append(scores)
+    transitions = torch.stack(probabilities, dim=0).cpu().numpy()
+    classes = list(range(num_classes))
+    noisy = np.asarray([
+        np.random.choice(classes, p=transitions[position])
+        for position in range(targets.size)
+    ], dtype=np.int64)
     return NoiseManifest(dataset, "pdl_instance_dependent", seed, rate, targets,
         noisy, per_sample_transition=transitions, num_classes=num_classes,
         metadata={"generator": "pdl_algorithm_2", "rate_distribution": "truncated_normal",
-            "rate_std": 0.1, "transition_convention": "clean_to_noisy_row"})
+            "rate_std": 0.1, "transition_convention": "clean_to_noisy_row",
+            "source_rng": "numpy_global_and_torch_global"})

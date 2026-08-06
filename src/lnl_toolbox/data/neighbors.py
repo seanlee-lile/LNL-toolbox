@@ -11,6 +11,44 @@ from typing import Any, Mapping
 import numpy as np
 
 
+def build_neighbor_graph(
+    features: np.ndarray,
+    global_indices: np.ndarray,
+    *,
+    k: int,
+    gamma: float = 1.0,
+    scope: str = "batch",
+) -> "NeighborGraphArtifact":
+    """Build a deterministic local cosine-neighbor graph.
+
+    ``neighbors`` contains row positions within the supplied feature batch;
+    global sample identity is kept separately in ``global_indices``.  A
+    dataset-level graph must be requested explicitly so a batch-local LEND
+    graph cannot be silently reused by another lifecycle.
+    """
+    values = np.asarray(features, dtype=np.float64)
+    indices = np.asarray(global_indices, dtype=np.int64)
+    if values.ndim != 2 or indices.shape != (values.shape[0],):
+        raise ValueError("features/global_indices must have shapes [N,D] and [N]")
+    if values.shape[0] < 2 or not 1 <= int(k) < values.shape[0]:
+        raise ValueError("k must be in [1, N-1]")
+    if not np.isfinite(values).all() or not np.isfinite(float(gamma)) or float(gamma) <= 0.0:
+        raise ValueError("features and gamma must be finite; gamma must be positive")
+    if str(scope).strip().lower() != "batch":
+        raise ValueError("this builder only supports scope='batch'")
+    normalized = values / np.maximum(np.linalg.norm(values, axis=1, keepdims=True), 1e-12)
+    similarity = normalized @ normalized.T
+    np.fill_diagonal(similarity, -np.inf)
+    order = np.argsort(-similarity, axis=1, kind="stable")[:, : int(k)]
+    distances = 1.0 - similarity[np.arange(values.shape[0])[:, None], order]
+    return NeighborGraphArtifact(
+        order,
+        distances,
+        indices,
+        {"scope": "batch", "metric": "cosine", "gamma": float(gamma), "k": int(k)},
+    )
+
+
 @dataclass(frozen=True)
 class NeighborGraphArtifact:
     neighbors: np.ndarray

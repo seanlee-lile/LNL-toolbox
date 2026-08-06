@@ -74,7 +74,14 @@ class FINERegularizer:
             return logits.sum() * 0.0
         probabilities = torch.softmax(logits, dim=1)
         p_target = probabilities.gather(1, noisy_targets.long()[:, None]).squeeze(1)
-        suppression = -torch.log((1.0 - p_target).clamp_min(self.probability_floor))
+        # The official implementation uses ``log(1.0000001 - p_y)`` rather
+        # than a post-hoc clamp of ``1 - p_y``.  Keep the epsilon explicit so
+        # this consumer is numerically and algebraically source-faithful.
+        suppression = -torch.log(
+            (1.0 + self.probability_floor - p_target).clamp_min(
+                self.probability_floor
+            )
+        )
         forgetting = torch.log_softmax(logits, dim=1).gather(
             1, noisy_targets.long()[:, None]
         ).squeeze(1)

@@ -94,11 +94,23 @@ class CWDEstimator:
 
     name = "cwd"
 
-    def __init__(self, label_flip_matrix: np.ndarray | None = None, ridge: float = 1e-8) -> None:
-        if ridge < 0.0:
-            raise ValueError("ridge must be non-negative")
+    def __init__(
+        self,
+        label_flip_matrix: np.ndarray | None = None,
+        pinv_rcond: float | None = None,
+        *,
+        ridge: float | None = None,
+    ) -> None:
+        if pinv_rcond is not None and ridge is not None:
+            raise ValueError("specify only one of pinv_rcond and legacy ridge")
+        if ridge is not None:
+            pinv_rcond = ridge
+        if pinv_rcond is not None and (
+            not np.isfinite(float(pinv_rcond)) or float(pinv_rcond) < 0.0
+        ):
+            raise ValueError("pinv_rcond must be finite and non-negative")
         self.label_flip_matrix = None if label_flip_matrix is None else np.asarray(label_flip_matrix, dtype=np.float64)
-        self.ridge = float(ridge)
+        self.pinv_rcond = None if pinv_rcond is None else float(pinv_rcond)
 
     def estimate(
         self,
@@ -141,7 +153,13 @@ class CWDEstimator:
             virtual_prior, virtual_flip, coefficient = _virtual_system(
                 transition, prior, clean_class
             )
-            coefficient_pinv = np.linalg.pinv(coefficient, rcond=max(self.ridge, 1e-15))
+            if self.pinv_rcond is None:
+                coefficient_pinv = np.linalg.pinv(coefficient)
+            else:
+                coefficient_pinv = np.linalg.pinv(
+                    coefficient,
+                    rcond=self.pinv_rcond,
+                )
             virtual_centroids.append(observed_centroid @ coefficient_pinv)
             virtual_priors.append(virtual_prior.tolist())
             virtual_flip_matrices.append(virtual_flip.tolist())
@@ -170,6 +188,7 @@ class CWDEstimator:
                 "virtual_samples": int(len(labels)),
                 "cwd_equations": "19,21-30",
                 "source_snapshot_hash": snapshot.snapshot_hash,
+                "pinv_rcond": self.pinv_rcond,
             },
         )
 

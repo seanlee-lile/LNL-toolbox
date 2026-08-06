@@ -222,6 +222,9 @@ def build_reproduction_model(config: Mapping[str, Any], data: Mapping[str, Any],
     if name == "mc_ldce_cnn":
         from lnl_toolbox.models.mc_ldce_cnn import MCLDCECifarCNN
         return MCLDCECifarCNN(classes)
+    if name == "l2rw_resnet32":
+        from lnl_toolbox.models.cifar_resnet import l2rw_resnet32
+        return l2rw_resnet32(classes, int(config.get("base_width", 16)))
     if name == "ca2c_seven_cnn":
         from lnl_toolbox.models.ca2c_cnn import CA2CSevenCNN
         return CA2CSevenCNN(classes)

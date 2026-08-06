@@ -33,9 +33,11 @@ class TrustedSupervisionManifest:
         dataset = str(self.dataset).strip()
         split = str(self.split).strip().lower()
         source = str(self.source).strip().lower()
-        if not dataset or split != "trusted_validation":
-            raise ValueError("trusted supervision split must be 'trusted_validation'")
-        if source not in {"audited_manifest", "synthetic_fixture"}:
+        if not dataset or split not in {"trusted_validation", "train_clean"}:
+            raise ValueError(
+                "trusted supervision split must be 'trusted_validation' or 'train_clean'"
+            )
+        if source not in {"audited_manifest", "synthetic_fixture", "official_generated"}:
             raise ValueError("trusted supervision source must be explicitly audited")
         order = np.argsort(indices, kind="stable")
         object.__setattr__(self, "global_indices", indices[order].copy())

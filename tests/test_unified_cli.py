@@ -35,7 +35,7 @@ class RunnerResolutionTest(unittest.TestCase):
             {
                 "binary", "cal", "ca2c", "clean", "coteaching", "cwd", "dld", "dual_t", "fine",
                 "importance_reweighting", "instance_transition", "multi_model",
-                "l2rw", "mc_ldce", "pcse", "supervised", "cnlcu", "t_revision",
+                "l2rw", "lend", "mc_ldce", "pcse", "supervised", "cnlcu", "t_revision", "upm", "volmin",
             },
         )
 

@@ -20,7 +20,7 @@ from lnl_toolbox.data import (
 )
 from lnl_toolbox.models import TinyCNN
 from lnl_toolbox.noise.generators import generate_symmetric
-from lnl_toolbox.models.mentornet import MentorNet
+from lnl_toolbox.models.mentornet import build_mentor_model
 from lnl_toolbox.training.mentor_artifacts import MentorArtifact
 
 
@@ -146,16 +146,30 @@ def train_mentor_artifact(
     )
     architecture = dict(config.get("model", {}))
     device = torch.device(str(config.get("device", "cpu")))
-    model = MentorNet(**architecture).to(device)
-    optimizer = torch.optim.Adam(
-        model.parameters(), lr=float(config.get("learning_rate", 1e-3))
-    )
+    model = build_mentor_model(architecture).to(device)
+    implementation = str(architecture.get("implementation", "legacy")).lower()
+    learning_rate = float(config.get("learning_rate", 1e-3))
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    max_steps = config.get("max_steps")
+    if max_steps is not None:
+        max_steps = int(max_steps)
+        if max_steps <= 0:
+            raise ValueError("max_steps must be positive")
     epochs = int(config.get("epochs", 20))
     if epochs <= 0:
         raise ValueError("MentorNet epochs must be positive")
     model.train()
-    for _ in range(epochs):
-        for batch in loader:
+    if implementation == "official" and max_steps is not None:
+        iterator = iter(loader)
+        for step in range(max_steps):
+            try:
+                batch = next(iterator)
+            except StopIteration:
+                iterator = iter(loader)
+                batch = next(iterator)
+            current_lr = learning_rate * (0.9 ** (step // 1000))
+            for group in optimizer.param_groups:
+                group["lr"] = current_lr
             prediction = model(
                 batch["loss"].to(device),
                 batch["loss_difference"].to(device),
@@ -167,7 +181,23 @@ def train_mentor_artifact(
             )
             optimizer.zero_grad(set_to_none=True)
             objective.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             optimizer.step()
+    else:
+        for _ in range(epochs):
+            for batch in loader:
+                prediction = model(
+                    batch["loss"].to(device),
+                    batch["loss_difference"].to(device),
+                    batch["label"].to(device),
+                    batch["epoch_percentage"].to(device),
+                )
+                objective = torch.nn.functional.mse_loss(
+                    prediction, batch["curriculum_target"].to(device)
+                )
+                optimizer.zero_grad(set_to_none=True)
+                objective.backward()
+                optimizer.step()
     artifact = MentorArtifact.create(
         architecture=model.architecture(),
         feature_schema={
@@ -181,6 +211,9 @@ def train_mentor_artifact(
             "feature_data": str(Path(config["feature_data"])),
             "seed": seed,
             "epochs": epochs,
+            "max_steps": max_steps,
+            "optimizer": "adam",
+            "learning_rate_decay": "0.9 every 1000 steps" if max_steps else None,
         },
         model_state={
             key: value.detach().cpu()

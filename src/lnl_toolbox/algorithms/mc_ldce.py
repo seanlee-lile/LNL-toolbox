@@ -38,23 +38,16 @@ class MCLDCEObjective:
         if self.statistic is None:
             raise ValueError("MC-LDCE objective requires a statistic artifact")
         weight, bias = classifier_parameters(model)
+        if bias is not None:
+            raise ValueError("MC-LDCE Eq. (30) requires a bias-free classifier")
         centroid = torch.as_tensor(
             self.statistic.values.copy(), dtype=features.dtype, device=features.device
         )
         if weight.shape != centroid.shape:
             raise ValueError("classifier and centroid dimensions differ")
         scores = features @ weight.transpose(0, 1)
-        if bias is not None:
-            scores = scores + bias.to(features)
         quadratic = scores.square().sum(dim=1).mean()
         cross = (weight.to(features) * centroid).sum()
-        if bias is not None:
-            prior = torch.as_tensor(
-                self.statistic.metadata["clean_class_prior"],
-                dtype=features.dtype,
-                device=features.device,
-            )
-            cross = cross + (bias.to(features) * prior).sum()
         return validate_objective(1.0 + quadratic - 2.0 * cross)
 
     def state_dict(self) -> dict[str, Any]:

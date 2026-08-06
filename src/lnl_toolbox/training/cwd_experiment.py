@@ -85,10 +85,47 @@ def _limit_indices(labels: np.ndarray, maximum: int | None, seed: int) -> np.nda
 def _build_model(config: Mapping[str, Any]):
     name = str(config.get("name", "resnet34")).strip().lower()
     if name in {"resnet34", "cifar_resnet34"}:
-        return cifar_resnet34(2, int(config.get("base_width", 64)))
+        outputs = int(config.get("num_outputs", 2))
+        return cifar_resnet34(
+            outputs,
+            int(config.get("base_width", 64)),
+            bias=bool(config.get("bias", True)),
+        )
     if name == "tiny_cnn":
         return TinyCNN(2, int(config.get("width", 8)))
     raise ValueError(f"Unsupported CWD model: {name}")
+
+
+def _classification_from_cwd_logits(logits: torch.Tensor) -> torch.Tensor:
+    if logits.ndim != 2:
+        raise ValueError("CWD logits must have shape [B, C]")
+    if logits.shape[1] == 1:
+        return (logits[:, 0] >= 0.0).long()
+    return logits.argmax(1)
+
+
+@torch.no_grad()
+def _evaluate_cwd(model, loader, device, *, scalar_binary: bool) -> dict[str, float]:
+    model.eval()
+    loss_sum = correct = samples = 0.0
+    for batch in loader:
+        inputs = batch["input"].to(device, non_blocking=True)
+        targets = batch["target"].to(device, non_blocking=True)
+        output = forward_with_features(model, inputs)
+        if scalar_binary:
+            signed = targets.to(dtype=output.logits.dtype).mul(2.0).sub(1.0)
+            margins = output.logits[:, 0]
+            loss = (1.0 - signed * margins).square()
+        else:
+            loss = torch.nn.functional.cross_entropy(output.logits, targets, reduction="none")
+        predictions = _classification_from_cwd_logits(output.logits)
+        count = int(targets.numel())
+        loss_sum += float(loss.sum())
+        correct += float(predictions.eq(targets).sum())
+        samples += count
+    if samples == 0:
+        raise ValueError("CWD evaluation loader must not be empty")
+    return {"loss": loss_sum / samples, "accuracy": correct / samples}
 
 
 def _train_epoch(model, optimizer, loader, objective, device) -> tuple[float, float]:
@@ -114,7 +151,7 @@ def _train_epoch(model, optimizer, loader, objective, device) -> tuple[float, fl
         optimizer.step()
         count = int(targets.numel())
         loss_sum += float(loss.detach()) * count
-        correct += float(output.logits.argmax(1).eq(targets).sum())
+        correct += float(_classification_from_cwd_logits(output.logits).eq(targets).sum())
         samples += count
     return loss_sum / samples, correct / samples
 
@@ -206,7 +243,12 @@ def run_cwd_experiment(
     snapshot_loader = _loader(snapshot_set, loader_config, shuffle=False, seed=seed)
     test_loader = _loader(test_set, loader_config, shuffle=False, seed=seed)
 
-    model = _build_model(config["model"]).to(device)
+    cwd_config = config.get("cwd", {})
+    cwd_variant = str(cwd_config.get("variant", "multiclass")).strip().lower()
+    model_config = dict(config["model"])
+    if cwd_variant == "binary_scalar":
+        model_config["num_outputs"] = 1
+    model = _build_model(model_config).to(device)
     optimizer_config = config["optimizer"]
     if str(optimizer_config.get("name", "adam")).lower() != "adam":
         raise ValueError("CWD paper runner requires Adam")
@@ -238,7 +280,12 @@ def run_cwd_experiment(
         ],
         dtype=np.float64,
     )
-    estimator = CWDEstimator(transition, ridge=float(config.get("cwd", {}).get("ridge", 1e-8)))
+    pinv_rcond = config.get("cwd", {}).get("pinv_rcond")
+    if pinv_rcond is None and "ridge" in config.get("cwd", {}):
+        # Backward-compatible parsing for old smoke configurations.  The
+        # reproduction configuration uses the paper's unregularized pinv.
+        pinv_rcond = float(config["cwd"]["ridge"])
+    estimator = CWDEstimator(transition, pinv_rcond=pinv_rcond)
     criterion = CrossEntropyLoss().to(device)
     epochs = int(config["trainer"]["epochs"])
     metrics_path = run_dir / "metrics.jsonl"
@@ -254,11 +301,22 @@ def run_cwd_experiment(
         artifact = estimator.estimate(snapshot)
         snapshot.save(run_dir / "feature_snapshot.npz")
         artifact.save(run_dir / "statistic_artifact.npz")
-        objective = CWDGlobalObjective(artifact)
+        objective = CWDGlobalObjective(
+            artifact,
+            variant=str(config.get("cwd", {}).get("variant", "multiclass")),
+            dynamic_centroid=bool(
+                config.get("cwd", {}).get("dynamic_centroid", False)
+            ),
+        )
         train_loss, train_accuracy = _train_epoch(
             model, optimizer, train_loader, objective, device
         )
-        test = evaluate_classification(model, test_loader, criterion, device)
+        test = _evaluate_cwd(
+            model,
+            test_loader,
+            device,
+            scalar_binary=cwd_variant == "binary_scalar",
+        )
         row = standardize_epoch_row(
             {
                 "epoch": epoch + 1,

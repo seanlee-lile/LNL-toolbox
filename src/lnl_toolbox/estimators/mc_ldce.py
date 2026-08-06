@@ -106,6 +106,10 @@ class MCLDCEEstimator:
                 "coefficient_condition": coefficient_condition,
                 "transition_rank": rank,
                 "transition_condition": condition,
+                "feature_dimension": int(snapshot.features.shape[1]),
+                "num_classes": int(classes),
+                "coefficient_convention": "M=sum_i pi_i sum_j T_ij K_i_to_j^T",
+                "centroid_recovery": "mu_clean=mu_noisy@pinv(M)",
                 "rcond": self.rcond,
             },
         )

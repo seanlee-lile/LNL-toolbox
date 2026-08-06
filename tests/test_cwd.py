@@ -14,6 +14,7 @@ from lnl_toolbox.estimators.cwd import CWDEstimator
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 from lnl_toolbox.training.snapshots import FeatureSnapshot
 from lnl_toolbox.models.feature_output import FeatureOutput
+from lnl_toolbox.models.cifar_resnet import cifar_resnet34
 from lnl_toolbox.training.pipeline import StandardNoisyERMPipeline
 
 
@@ -21,6 +22,18 @@ class _FeatureModel(nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.classifier = nn.Linear(2, 2)
+
+    def forward_with_features(self, inputs: torch.Tensor) -> FeatureOutput:
+        return FeatureOutput(self.classifier(inputs), inputs)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        return self.forward_with_features(inputs).logits
+
+
+class _ScalarFeatureModel(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.classifier = nn.Linear(2, 1)
 
     def forward_with_features(self, inputs: torch.Tensor) -> FeatureOutput:
         return FeatureOutput(self.classifier(inputs), inputs)
@@ -56,6 +69,39 @@ class CWDTest(unittest.TestCase):
         np.testing.assert_allclose(artifact.values, features / 3.0, atol=1e-10)
         np.testing.assert_allclose(artifact.metadata["class_prior"], np.ones(3) / 3)
 
+    def test_binary_estimator_matches_paper_eq15(self) -> None:
+        features = np.arange(20, dtype=np.float64).reshape(10, 2)
+        noisy = np.asarray([0, 1, 0, 1, 1, 0, 1, 0, 1, 1])
+        transition = np.asarray([[0.9, 0.1], [0.3, 0.7]])
+        artifact = CWDEstimator(transition).estimate(
+            FeatureSnapshot(features, noisy, np.arange(10), "fixture", "train")
+        )
+        observed_prior = noisy.mean()
+        rho_positive = transition[1, 0]
+        rho_negative = transition[0, 1]
+        clean_positive = (observed_prior - rho_negative) / (
+            1.0 - rho_positive - rho_negative
+        )
+        clean_negative = 1.0 - clean_positive
+        omega = (
+            1.0 / (1.0 - 2.0 * clean_positive * rho_positive)
+            + 1.0 / (1.0 - 2.0 * clean_negative * rho_negative)
+            - 1.0
+        )
+        observed_centroid = (
+            features[noisy == 1].sum(axis=0) - features[noisy == 0].sum(axis=0)
+        ) / len(features)
+        np.testing.assert_allclose(
+            artifact.values[1] - artifact.values[0],
+            omega * observed_centroid,
+            atol=1e-10,
+        )
+        self.assertIsNone(artifact.metadata["pinv_rcond"])
+
+    def test_cifar_resnet_cwd_can_disable_classifier_bias(self) -> None:
+        model = cifar_resnet34(1, base_width=4, bias=False)
+        self.assertIsNone(model.classifier.bias)
+
     def test_cwd_risk_is_differentiable(self) -> None:
         logits = torch.randn(3, 2, requires_grad=True)
         values = CWDUnbiasedRisk().per_sample_risk(logits=logits, noisy_targets=torch.tensor([0, 1, 0]), base_loss=CrossEntropyLoss())
@@ -86,6 +132,95 @@ class CWDTest(unittest.TestCase):
         value.backward()
         self.assertTrue(torch.isfinite(value))
         self.assertTrue(torch.isfinite(model.classifier.weight.grad).all())
+
+    def test_binary_margin_objective_matches_signed_centroid_risk(self) -> None:
+        snapshot = FeatureSnapshot(
+            np.asarray([[1., 0.], [0., 1.]]),
+            np.asarray([0, 1]),
+            np.arange(2),
+            "fixture",
+            "train",
+        )
+        artifact = CWDEstimator(np.eye(2)).estimate(snapshot)
+        model = _FeatureModel()
+        with torch.no_grad():
+            model.classifier.weight.copy_(torch.tensor([[1., 2.], [3., 5.]]))
+            model.classifier.bias.zero_()
+        features = torch.tensor([[1., 0.], [0., 1.]], dtype=torch.float32)
+        output = model.forward_with_features(features)
+        value = CWDGlobalObjective(artifact, variant="binary_margin").compute(
+            model=model,
+            logits=output.logits,
+            features=output.features,
+            noisy_targets=torch.tensor([0, 1]),
+            sample_indices=torch.tensor([0, 1]),
+            base_loss=CrossEntropyLoss(),
+            metadata={},
+        )
+        expected = torch.tensor(1.0) + torch.tensor([2.0, 3.0]).square().mean() - 2.0 * torch.dot(
+            torch.tensor([2.0, 3.0]), torch.tensor([-0.5, 0.5])
+        )
+        torch.testing.assert_close(value.detach(), expected)
+
+    def test_binary_scalar_objective_matches_paper_squared_risk(self) -> None:
+        snapshot = FeatureSnapshot(
+            np.asarray([[1., 0.], [0., 1.]]),
+            np.asarray([0, 1]),
+            np.arange(2),
+            "fixture",
+            "train",
+        )
+        artifact = CWDEstimator(np.eye(2)).estimate(snapshot)
+        model = _ScalarFeatureModel()
+        with torch.no_grad():
+            model.classifier.weight.copy_(torch.tensor([[2., 3.]]))
+            model.classifier.bias.zero_()
+        features = torch.tensor([[1., 0.], [0., 1.]], dtype=torch.float32)
+        weight = model.classifier.weight
+        margin = features @ weight[0]
+        signed_centroid = torch.tensor([-0.5, 0.5])
+        expected = torch.tensor(1.0) + margin.square().mean() - 2.0 * torch.dot(
+            weight[0], signed_centroid
+        )
+        value = CWDGlobalObjective(artifact, variant="binary_scalar").compute(
+            model=model,
+            logits=model(features),
+            features=features,
+            noisy_targets=torch.tensor([0, 1]),
+            sample_indices=torch.tensor([0, 1]),
+            base_loss=CrossEntropyLoss(),
+            metadata={},
+        )
+        torch.testing.assert_close(value.detach(), expected)
+
+    def test_dynamic_centroid_matches_static_identity_case(self) -> None:
+        snapshot = FeatureSnapshot(
+            np.asarray([[1., 0.], [0., 1.]]),
+            np.asarray([0, 1]),
+            np.arange(2),
+            "fixture",
+            "train",
+        )
+        artifact = CWDEstimator(np.eye(2)).estimate(snapshot)
+        model = _ScalarFeatureModel()
+        features = torch.tensor([[1., 0.], [0., 1.]], requires_grad=True)
+        output = model.forward_with_features(features)
+        kwargs = dict(
+            model=model,
+            logits=output.logits,
+            features=features,
+            noisy_targets=torch.tensor([0, 1]),
+            sample_indices=torch.tensor([0, 1]),
+            base_loss=CrossEntropyLoss(),
+            metadata={},
+        )
+        static = CWDGlobalObjective(
+            artifact, variant="binary_scalar", dynamic_centroid=False
+        ).compute(**kwargs)
+        dynamic = CWDGlobalObjective(
+            artifact, variant="binary_scalar", dynamic_centroid=True
+        ).compute(**kwargs)
+        torch.testing.assert_close(static.detach(), dynamic.detach())
 
     def test_pipeline_prepares_feature_statistic_and_binds_consumer(self) -> None:
         model = _FeatureModel()

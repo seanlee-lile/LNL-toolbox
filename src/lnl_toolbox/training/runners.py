@@ -112,6 +112,9 @@ def create_runner_registry() -> RunnerRegistry:
         "lnl_toolbox.training.t_revision_experiment",
         "run_t_revision_experiment",
     )
+    registry.add("volmin", "lnl_toolbox.training.volmin_experiment", "run_volmin_experiment")
+    registry.add("upm", "lnl_toolbox.training.upm_experiment", "run_upm_experiment")
+    registry.add("lend", "lnl_toolbox.training.lend_experiment", "run_lend_experiment")
     return registry
 
 
@@ -129,6 +132,9 @@ _METHOD_RUNNERS = frozenset(
         "l2rw",
         "dld",
         "t_revision",
+        "volmin",
+        "upm",
+        "lend",
     }
 )
 _RENAMED_METHODS = {"dual_t_forward": "dual_t"}

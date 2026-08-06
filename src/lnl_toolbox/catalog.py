@@ -422,7 +422,14 @@ def _validate_dedicated_runner(config: Mapping[str, Any], runner: str) -> None:
             raise ValueError("JoCoR requires selector.name: small_loss")
     elif runner == "cwd":
         cwd = _require_mapping(config, "cwd")
-        if float(cwd.get("ridge", 0.0)) < 0.0:
+        pinv_rcond = cwd.get("pinv_rcond")
+        if pinv_rcond is not None and (
+            not math.isfinite(float(pinv_rcond)) or float(pinv_rcond) < 0.0
+        ):
+            raise ValueError("cwd.pinv_rcond must be finite and non-negative")
+        # Keep accepting the old smoke-only key while new reproduction YAMLs
+        # use the paper's explicit Moore-Penrose default above.
+        if "ridge" in cwd and float(cwd.get("ridge", 0.0)) < 0.0:
             raise ValueError("cwd.ridge must be non-negative")
         data = _require_mapping(config, "data")
         folds = int(data.get("folds", 0))
@@ -438,8 +445,12 @@ def _validate_dedicated_runner(config: Mapping[str, Any], runner: str) -> None:
         if str(transition.get("name", "")).strip().lower() != "pdl":
             raise ValueError("instance_transition runner currently requires name: pdl")
         algorithm = _require_mapping(config, "algorithm")
-        if str(algorithm.get("correction", "")).strip().lower() != "forward":
-            raise ValueError("PDL workflow requires algorithm.correction: forward")
+        if str(algorithm.get("correction", "")).strip().lower() not in {
+            "forward", "pdl", "pdl_revision"
+        }:
+            raise ValueError(
+                "PDL workflow requires algorithm.correction: forward, pdl, or pdl_revision"
+            )
 
 
 def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> RunnerSpec:
@@ -466,7 +477,7 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
         model_name = str(model.get("name", "preact_resnet18")).lower()
         supported_models = {
             "tiny_cnn", "cifar_cnn8", "resnet14", "resnet32", "resnet18", "resnet34",
-            "resnet50", "resnet101", "preact_resnet18"
+            "resnet50", "resnet101", "mentor_wide_resnet", "preact_resnet18"
         }
         if model_name not in supported_models:
             raise ValueError(

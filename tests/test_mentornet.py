@@ -16,7 +16,8 @@ from lnl_toolbox.algorithms.update_policy import (
 )
 from lnl_toolbox.core import RunState
 from lnl_toolbox.models.cifar_resnet import cifar_resnet101
-from lnl_toolbox.models.mentornet import MentorNet
+from lnl_toolbox.models.mentor_wide_resnet import MentorWideResNet101
+from lnl_toolbox.models.mentornet import OfficialMentorNet, MentorNet
 from lnl_toolbox.plugins.builtin.catalog import (
     build_builtin_parameter_update_policy,
     build_builtin_weight_provider,
@@ -47,6 +48,18 @@ class MentorNetTest(unittest.TestCase):
         )
         self.assertEqual(tuple(weights.shape), (3,))
         self.assertTrue(bool(((weights >= 0) & (weights <= 1)).all()))
+
+    def test_official_model_uses_one_timestep_per_sample(self) -> None:
+        model = OfficialMentorNet()
+        values = model(
+            torch.tensor([0.1, 0.2, 0.3]),
+            torch.tensor([-0.1, 0.0, 0.1]),
+            torch.zeros(3, dtype=torch.long),
+            torch.full((3,), 18, dtype=torch.long),
+        )
+        self.assertEqual(tuple(values.shape), (3,))
+        self.assertTrue(bool(((values >= 0) & (values <= 1)).all()))
+        self.assertEqual(model.architecture()["implementation"], "official")
 
     def test_moving_percentile_round_trip(self) -> None:
         state = MovingPercentileState(0.75, 0.95)
@@ -126,6 +139,12 @@ class MentorNetTest(unittest.TestCase):
             self.assertIsInstance(provider, MentorNetWeightProvider)
         model = cifar_resnet101(num_classes=100, base_width=4)
         self.assertEqual(model(torch.randn(1, 3, 32, 32)).shape, (1, 100))
+
+    def test_official_student_decay_is_weighted_and_conv_only(self) -> None:
+        model = MentorWideResNet101(num_classes=10, num_residual_units=1, width_multiplier=0.1)
+        penalty = model.weighted_parameter_decay(torch.ones(4))
+        self.assertGreater(float(penalty.item()), 0.0)
+        self.assertTrue(penalty.requires_grad)
 
 
 if __name__ == "__main__":

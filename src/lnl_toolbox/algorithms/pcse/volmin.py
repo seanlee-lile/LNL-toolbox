@@ -88,6 +88,159 @@ class DiagonallyDominantTransition(nn.Module):
         return self.matrix()
 
 
+class PaperVolMinTransition(nn.Module):
+    """VolMinNet's sigmoid off-diagonal parameterization.
+
+    The paper fixes every diagonal entry of ``A`` to one, applies a sigmoid
+    only to the free off-diagonal weights, and normalizes each row.  This is
+    intentionally separate from ``DiagonallyDominantTransition``: the latter
+    is a narrower numerical-safety parameterization retained for the PCSE
+    workflow and is not the VolMinNet parameterization used by MC-LDCE.
+    """
+
+    def __init__(self, num_classes: int, *, initial_weight: float, seed: int = 0) -> None:
+        super().__init__()
+        if int(num_classes) < 2:
+            raise ValueError("paper VolMin requires at least two classes")
+        if not math.isfinite(float(initial_weight)):
+            raise ValueError("paper VolMin initial_weight must be finite")
+        self.num_classes = int(num_classes)
+        self.initial_weight = float(initial_weight)
+        self.seed = int(seed)
+        self.off_diagonal_logits = nn.Parameter(
+            torch.full(
+                (self.num_classes, self.num_classes),
+                self.initial_weight,
+                dtype=torch.float64,
+            )
+        )
+
+    def matrix(self, *, dtype: torch.dtype | None = None) -> Tensor:
+        diagonal = torch.eye(
+            self.num_classes,
+            dtype=self.off_diagonal_logits.dtype,
+            device=self.off_diagonal_logits.device,
+        )
+        values = torch.sigmoid(self.off_diagonal_logits)
+        values = values * (1.0 - diagonal) + diagonal
+        transition = values / values.sum(dim=1, keepdim=True)
+        return transition if dtype is None else transition.to(dtype=dtype)
+
+    def forward(self) -> Tensor:
+        return self.matrix()
+
+
+def validate_paper_volmin_transition(
+    transition: Tensor,
+    *,
+    determinant_tolerance: float,
+    condition_limit: float,
+) -> tuple[Tensor, VolMinDiagnostics]:
+    """Validate the row-stochastic matrix used by the paper parameterization."""
+
+    if not torch.is_tensor(transition) or transition.ndim != 2:
+        raise ValueError("paper VolMin transition must have shape [C, C]")
+    rows, columns = transition.shape
+    if rows < 2 or rows != columns:
+        raise ValueError("paper VolMin transition must be square with C >= 2")
+    if not torch.is_floating_point(transition):
+        raise TypeError("paper VolMin transition must use a floating-point dtype")
+    if not bool(torch.isfinite(transition).all().item()) or bool((transition < 0).any().item()):
+        raise ValueError("paper VolMin transition must be finite and non-negative")
+    if not torch.allclose(
+        transition.sum(dim=1),
+        torch.ones(rows, device=transition.device, dtype=transition.dtype),
+        rtol=1e-6,
+        atol=1e-8,
+    ):
+        raise ValueError("paper VolMin transition rows must sum to one")
+    sign, logabsdet = torch.linalg.slogdet(transition)
+    singular_values = torch.linalg.svdvals(transition)
+    smallest = singular_values[-1]
+    largest = singular_values[0]
+    condition = largest / smallest
+    if float(sign.detach().item()) == 0.0 or not bool(torch.isfinite(logabsdet).item()):
+        raise ValueError("paper VolMin transition determinant must be non-zero")
+    if float(smallest.detach().item()) <= float(determinant_tolerance):
+        raise ValueError("paper VolMin transition is singular or below tolerance")
+    if float(condition.detach().item()) > float(condition_limit):
+        raise ValueError("paper VolMin transition exceeds the condition limit")
+    return logabsdet, VolMinDiagnostics(
+        determinant=float(torch.exp(logabsdet).detach().item()),
+        log_determinant=float(logabsdet.detach().item()),
+        minimum_singular_value=float(smallest.detach().item()),
+        condition_number=float(condition.detach().item()),
+    )
+
+
+def paper_volmin_objective(
+    logits: Tensor,
+    noisy_targets: Tensor,
+    transition: Tensor,
+    *,
+    lambda_volume: float,
+    determinant_tolerance: float,
+    condition_limit: float,
+) -> tuple[Tensor, Mapping[str, float]]:
+    """Equation (7) of VolMinNet with the paper's matrix parameterization."""
+
+    if logits.ndim != 2 or noisy_targets.ndim != 1 or logits.shape[0] != noisy_targets.shape[0]:
+        raise ValueError("paper VolMin logits/targets have incompatible shapes")
+    if transition.shape != (logits.shape[1], logits.shape[1]):
+        raise ValueError("paper VolMin logits and transition class counts differ")
+    if not math.isfinite(float(lambda_volume)) or float(lambda_volume) <= 0.0:
+        raise ValueError("lambda_volume must be finite and positive")
+    logdet, diagnostics = validate_paper_volmin_transition(
+        transition,
+        determinant_tolerance=determinant_tolerance,
+        condition_limit=condition_limit,
+    )
+    clean_log_probability = torch.log_softmax(logits, dim=1)
+    noisy_log_probability = torch.logsumexp(
+        clean_log_probability[:, :, None]
+        + torch.log(transition)[None, :, :],
+        dim=1,
+    )
+    classification_loss = F.nll_loss(
+        noisy_log_probability, noisy_targets.to(dtype=torch.long), reduction="mean"
+    )
+    objective = classification_loss + float(lambda_volume) * logdet
+    if not bool(torch.isfinite(objective).item()):
+        raise ValueError("paper VolMin objective is non-finite")
+    return objective, {
+        "classification_loss": float(classification_loss.detach().item()),
+        "volume_regularizer": float(logdet.detach().item()),
+        "objective": float(objective.detach().item()),
+        "determinant": diagnostics.determinant,
+        "minimum_singular_value": diagnostics.minimum_singular_value,
+        "condition_number": diagnostics.condition_number,
+    }
+
+
+def build_paper_volmin_optimizer(
+    model: nn.Module,
+    transition_model: PaperVolMinTransition,
+    config: Mapping[str, Any],
+) -> torch.optim.Optimizer:
+    """Build the CIFAR-10 VolMinNet SGD optimizer from the paper settings."""
+
+    if str(config.get("name", "")).strip().lower() != "sgd":
+        raise ValueError("paper VolMin optimizer requires SGD")
+    lr = float(config["lr"])
+    momentum = float(config.get("momentum", 0.0))
+    weight_decay = float(config.get("weight_decay", 0.0))
+    if not math.isfinite(lr) or lr <= 0.0 or not math.isfinite(momentum) or momentum < 0.0:
+        raise ValueError("paper VolMin optimizer values are invalid")
+    if not math.isfinite(weight_decay) or weight_decay < 0.0:
+        raise ValueError("paper VolMin weight_decay must be non-negative")
+    return torch.optim.SGD(
+        list(model.parameters()) + list(transition_model.parameters()),
+        lr=lr,
+        momentum=momentum,
+        weight_decay=weight_decay,
+    )
+
+
 def validate_trainable_transition(
     transition: Tensor,
     *,

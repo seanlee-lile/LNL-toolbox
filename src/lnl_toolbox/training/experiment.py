@@ -43,6 +43,7 @@ from lnl_toolbox.models.cifar_resnet import (
 )
 from lnl_toolbox.models.cifar_cnn import CifarCnn8
 from lnl_toolbox.models.tiny_cnn import TinyCNN
+from lnl_toolbox.models.mentor_wide_resnet import MentorWideResNet101
 from lnl_toolbox.plugins.builtin import (
     build_builtin_pipeline,
     build_builtin_loss,
@@ -68,6 +69,14 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
     name = str(config.get("name", "preact_resnet18")).lower()
     if name == "tiny_cnn":
         return TinyCNN(num_classes, int(config.get("width", 64)))
+    if name == "mentor_wide_resnet":
+        return MentorWideResNet101(
+            num_classes,
+            num_residual_units=int(config.get("num_residual_units", 9)),
+            leakiness=float(config.get("leakiness", 0.1)),
+            width_multiplier=float(config.get("width_multiplier", 1.0)),
+            weight_decay=float(config.get("weight_decay", 0.0002)),
+        )
     if name == "cifar_cnn8":
         return CifarCnn8(num_classes)
     if name == "resnet14":

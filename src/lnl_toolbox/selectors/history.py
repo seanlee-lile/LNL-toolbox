@@ -162,3 +162,63 @@ class IndexedTensorHistory:
         self.values[:, :completed] = values
         self.observed[:, :completed] = observed
         self.completed_steps = completed
+
+
+class IndexedSoftLabelState:
+    """Global-indexed soft labels with an explicit momentum update.
+
+    This is the persistent ``Z[N,C]`` state used by feature-diffusion methods
+    such as LEND.  It intentionally stores no clean labels.
+    """
+
+    def __init__(self, capacity: int, width: int, *, dtype: torch.dtype = torch.float32) -> None:
+        if int(capacity) <= 0 or int(width) <= 1:
+            raise ValueError("soft-label capacity and width are invalid")
+        if not torch.empty((), dtype=dtype).is_floating_point():
+            raise ValueError("soft-label state dtype must be floating point")
+        self.capacity = int(capacity)
+        self.width = int(width)
+        self.dtype = dtype
+        self.values = torch.full((self.capacity, self.width), 1.0 / self.width, dtype=dtype)
+        self.observed = torch.zeros(self.capacity, dtype=torch.bool)
+
+    def _indices(self, indices: Tensor) -> Tensor:
+        resolved = torch.as_tensor(indices, dtype=torch.long).detach().cpu()
+        if resolved.ndim != 1 or resolved.numel() == 0:
+            raise ValueError("soft-label indices must be a non-empty vector")
+        if int(resolved.min()) < 0 or int(resolved.max()) >= self.capacity:
+            raise IndexError("soft-label index is outside configured capacity")
+        if torch.unique(resolved).numel() != resolved.numel():
+            raise ValueError("soft-label indices must be unique")
+        return resolved
+
+    def lookup(self, indices: Tensor) -> Tensor:
+        return self.values[self._indices(indices)].to(device=indices.device)
+
+    def update(self, indices: Tensor, values: Tensor, *, momentum: float) -> None:
+        resolved = self._indices(indices)
+        incoming = torch.as_tensor(values).detach().cpu().to(self.dtype)
+        if incoming.shape != (resolved.numel(), self.width):
+            raise ValueError("soft-label values must have shape [B, C]")
+        if not 0.0 <= float(momentum) <= 1.0 or not bool(torch.isfinite(incoming).all()):
+            raise ValueError("soft-label momentum or values are invalid")
+        incoming = incoming / incoming.sum(dim=1, keepdim=True).clamp_min(1e-8)
+        old = self.values[resolved]
+        self.values[resolved] = float(momentum) * old + (1.0 - float(momentum)) * incoming
+        self.values[resolved] /= self.values[resolved].sum(dim=1, keepdim=True).clamp_min(1e-8)
+        self.observed[resolved] = True
+
+    def state_dict(self) -> dict[str, Any]:
+        return {"capacity": self.capacity, "width": self.width, "dtype": str(self.dtype), "values": self.values.clone(), "observed": self.observed.clone()}
+
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        if (int(state.get("capacity", -1)), int(state.get("width", -1)), str(state.get("dtype", ""))) != (self.capacity, self.width, str(self.dtype)):
+            raise ValueError("soft-label state configuration mismatch")
+        values = torch.as_tensor(state.get("values"))
+        observed = torch.as_tensor(state.get("observed"))
+        if values.shape != self.values.shape or values.dtype != self.dtype or observed.shape != self.observed.shape or observed.dtype != torch.bool:
+            raise ValueError("soft-label state shape or dtype mismatch")
+        if not bool(torch.isfinite(values).all()) or bool((values < 0.0).any()):
+            raise ValueError("soft-label state contains invalid values")
+        self.values.copy_(values)
+        self.observed.copy_(observed)

@@ -379,6 +379,22 @@ class SupervisedClassificationAlgorithm:
                 metadata={"epoch": state.cycle},
             )
             loss = loss + self.regularizer_weight * regularizer_loss
+        parameter_decay = getattr(self.model, "weighted_parameter_decay", None)
+        if callable(parameter_decay):
+            decay_loss = parameter_decay(contribution.sample_weights)
+            if (
+                not torch.is_tensor(decay_loss)
+                or decay_loss.ndim != 0
+                or not decay_loss.is_floating_point()
+                or decay_loss.device != logits.device
+                or not bool(torch.isfinite(decay_loss))
+            ):
+                raise ValueError(
+                    "weighted_parameter_decay must return a finite scalar "
+                    "on the logits device"
+                )
+            loss = loss + decay_loss
+            objective_metrics["parameter_decay"] = float(decay_loss.detach().item())
         update_result = self.update_policy.update(ParameterUpdateInput(
             objective=loss,
             model=self.model,

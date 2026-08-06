@@ -1,13 +1,18 @@
 import tempfile
 import unittest
+import pickle
 from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
 import torch
+from PIL import Image
 
 from lnl_toolbox.data.cifar import CifarData
-from lnl_toolbox.data.multi_view import IndexedMultiViewCifarDataset
+from lnl_toolbox.data.multi_view import (
+    IndexedMultiViewCifarDataset,
+    build_strong_cifar_transform,
+)
 from lnl_toolbox.models.fine_cnn import FineSevenCNN
 from lnl_toolbox.training.fine_experiment import run_fine_experiment
 from lnl_toolbox.training.model_ema import ModelEMA
@@ -25,7 +30,20 @@ class FINETrainingTest(unittest.TestCase):
         model = FineSevenCNN(100, base_width=2)
         output = model.forward_with_features(torch.randn(2, 3, 32, 32))
         self.assertEqual(output.logits.shape, (2, 100))
-        self.assertEqual(output.features.shape, (2, 8))
+        self.assertEqual(output.features.shape, (2, 16))
+        outputs = model.forward_outputs(torch.randn(2, 3, 32, 32))
+        self.assertEqual(outputs["logits"].shape, (2, 100))
+        self.assertEqual(outputs["prob"].shape, (2, 100))
+
+    def test_seven_cnn_initialization_matches_official_scope(self) -> None:
+        model = FineSevenCNN(100, base_width=64)
+        linear_layers = [module for module in model.modules() if isinstance(module, torch.nn.Linear)]
+        convolution_layers = [module for module in model.modules() if isinstance(module, torch.nn.Conv2d)]
+        self.assertEqual(len(linear_layers), 4)
+        self.assertEqual(len(convolution_layers), 6)
+        for layer in linear_layers:
+            self.assertTrue(torch.isfinite(layer.weight).all())
+            self.assertTrue(torch.equal(layer.bias, torch.zeros_like(layer.bias)))
 
     def test_model_ema_round_trip(self) -> None:
         model = torch.nn.Linear(2, 2)
@@ -36,6 +54,18 @@ class FINETrainingTest(unittest.TestCase):
         restored = ModelEMA(model, 0.9)
         restored.load_state_dict(ema.state_dict())
         self.assertTrue(torch.equal(restored.model.weight, ema.model.weight))
+
+    def test_fine_ema_matches_official_parameter_only_updates(self) -> None:
+        model = torch.nn.Sequential(torch.nn.BatchNorm1d(2), torch.nn.Linear(2, 2))
+        ema = ModelEMA(model, 0.5, update_buffers=False)
+        initial_mean = ema.model[0].running_mean.clone()
+        with torch.no_grad():
+            model[0].running_mean.add_(3.0)
+            model[1].weight.add_(2.0)
+        before = ema.model[1].weight.clone()
+        ema.update(model)
+        self.assertTrue(torch.equal(ema.model[0].running_mean, initial_mean))
+        torch.testing.assert_close(ema.model[1].weight, 0.5 * before + 0.5 * model[1].weight)
 
     def test_multi_view_preserves_global_index_and_target(self) -> None:
         data = _cifar("train", 1)
@@ -51,6 +81,13 @@ class FINETrainingTest(unittest.TestCase):
         self.assertEqual(sample["index"], 7)
         self.assertEqual(sample["target"], 3)
         self.assertEqual(sample["input"].shape, sample["strong_input"].shape)
+
+    def test_official_cifar_strong_policy_returns_tensor(self) -> None:
+        image = np.zeros((32, 32, 3), dtype=np.uint8)
+        transform = build_strong_cifar_transform(policy="official_cifar10")
+        result = transform(Image.fromarray(image, mode="RGB"))
+        self.assertEqual(tuple(result.shape), (3, 32, 32))
+        pickle.dumps(transform)
 
     def test_two_epoch_cli_lifecycle_writes_resumable_outputs(self) -> None:
         train = _cifar("train", 2)

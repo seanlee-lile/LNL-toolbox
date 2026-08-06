@@ -20,7 +20,7 @@ class WorkflowRegistryTest(unittest.TestCase):
             registry.names(),
             (
                 "ca2c", "cal", "cnlcu", "coteaching", "dld", "dual_t",
-                "importance_reweighting", "l2rw", "mc_ldce", "pcse", "t_revision",
+                "importance_reweighting", "l2rw", "lend", "mc_ldce", "pcse", "t_revision", "upm", "volmin",
             ),
         )
         source = inspect.getsource(run_experiment)

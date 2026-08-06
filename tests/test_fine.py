@@ -25,7 +25,7 @@ class FINETest(unittest.TestCase):
         )
         probabilities = torch.softmax(logits, dim=1)
         expected = (
-            0.001 * -torch.log(1.0 - probabilities[1, 0])
+            0.001 * -torch.log(1.0 + 1.0e-7 - probabilities[1, 0])
             + 0.1 * torch.log_softmax(logits, dim=1)[1, 0]
         )
         self.assertTrue(torch.allclose(value, expected))

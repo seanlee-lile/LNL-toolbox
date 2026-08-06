@@ -1,0 +1,13 @@
+method: upm
+execution: {runner: upm}
+seed: 1
+output_root: artifacts/reproductions/upm-cifar10-idn
+data: {name: cifar10, root: data/cifar10, validation_size: 5000, split_strategy: stratified, split_rng: default_rng, augment: true}
+noise: {type: symmetric, rate: 0.4, seed: 1, sampling: per_class, rng: default_rng, validation_targets: clean}
+loader: {batch_size: 128, num_workers: 4, pin_memory: true, drop_last: false}
+model: {name: resnet18, base_width: 16}
+optimizer: {name: sgd, lr: 0.05, momentum: 0.9, weight_decay: 0.0001}
+scheduler: {name: multistep, milestones: [40, 80, 120], gamma: 0.1}
+warmup: {epochs: 1}
+upm: {eta_init: 0.01, eta_lr: 0.7, eta_update_start_epoch: 35, eta_update_interval: 5, posterior_eps: 1.0e-8}
+trainer: {epochs: 160, device: cuda}

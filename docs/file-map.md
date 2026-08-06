@@ -252,8 +252,8 @@ data 安装，避免用户本地 YAML 污染 catalog。
 | `training/binary_experiment.py` | 通用二分类 Dataset、训练、评测和单次实验入口。 |
 | `cli/binary_train.py` | 二分类实验的 YAML/argparse 入口。 |
 | `estimators/cwd.py` | 按 CWD Eq. 19、21--30 恢复 binary/multiclass class-wise virtual auxiliary prior、系数矩阵、伪逆和 centroid artifact。 |
-| `algorithms/cwd.py` | 只消费 feature/statistic artifact 的 CWD squared global objective；不绑定 runner。 |
-| `training/cwd_experiment.py` | CWD CIFAR airplane/automobile 单 fold 生命周期：五折切片、噪声、逐 epoch feature/statistic artifact、Adam、checkpoint/resume。 |
+| `algorithms/cwd.py` | 只消费 feature/statistic artifact 的 CWD squared global objective；支持论文质心伪逆的静态消费和当前 batch 的可微重建；不绑定 runner。 |
+| `training/cwd_experiment.py` | CWD CIFAR airplane/automobile 单 fold 生命周期：五折切片、噪声、逐 epoch feature/statistic artifact、论文 Adam 配置、可微质心重建和 checkpoint/resume。 |
 | `cli/cwd_train.py` | CWD 独立 YAML 训练入口。 |
 | `models/fine_cnn.py` | 可复用的七卷积 CIFAR StudentNet，公开 logits/features，不包含 FINE 生命周期。 |
 | `algorithms/fine.py` | FINE suppression/active-forgetting 两项损失，仅消费 rejected 且伪标签改变的样本。 |
@@ -264,7 +264,7 @@ data 安装，避免用户本地 YAML 污染 catalog。
 | `cli/fine_train.py` | FINE 独立 YAML 训练入口。 |
 | `tests/test_cwd.py`、`tests/test_cwd_training.py` | CWD 公式、失败边界、artifact/pipeline 和独立训练闭环。 |
 | `tests/test_fine.py`、`tests/test_fine_training.py` | FINE loss/mask、SCS/SCR、EMA、多视图、七卷积模型和两阶段闭环。 |
-| `configs/experiment/cwd_cifar10_{smoke,reproduction}.yaml` | CWD smoke 与单次 200-epoch、五折中 fold 0 的论文配置。 |
+| `configs/experiment/cwd_cifar10_{smoke,reproduction}.yaml` | CWD smoke 与单次 200-epoch、五折中 fold 0 的论文配置；reproduction 使用 Moore--Penrose `pinv` 和 dynamic centroid。 |
 | `configs/experiment/fine_cifar100n_{smoke,reproduction}.yaml` | FINE smoke 与单次 300-epoch、200-epoch warm-up 配置。 |
 | `configs/experiment/binary_risk_natarajan_1epoch.yaml` | Natarajan 二分类无偏风险的一组 synthetic 论文算法 1-epoch 验证配置。 |
 | `configs/experiment/cwd_cifar10_1epoch.yaml` | CWD 五折 fold 0、CIFAR airplane/automobile、1-epoch 完整生命周期配置。 |
@@ -350,3 +350,98 @@ data 安装，避免用户本地 YAML 污染 catalog。
 | L2RW | `artifacts/reproductions/l2rw-cifar10-1epoch/20260805-205825/` | 1000-sample trusted manifest、490 meta steps、checkpoint 和 fingerprint 均生成。 |
 
 `data/trusted/l2rw_cifar10_balanced_1000.npz` 是由官方 CIFAR-10 训练标签按固定 seed 生成的本地 audited manifest，属于运行数据，不提交到仓库。
+
+## 18. Binary Risk / FINE formal training record (2026-08-06)
+
+| Method | Artifact | Result |
+|---|---|---|
+| Binary Risk | `artifacts/reproductions/binary-risk-natarajan-formal-50ep-v3/` | 50 epochs completed; best clean-test accuracy 83.30% at epoch 49; synthetic protocol recorded as implementation validation, not exact numerical reproduction. |
+| FINE | `artifacts/reproductions/fine-cifar100-formal-seed23-20260806-v8-150ep/` | 150/300 epochs completed in official warm-up; test accuracy rose from 14.14% to 50.92%. |
+
+Formal entries used here: `configs/experiment/binary_risk_natarajan_reproduction.yaml`, `src/lnl_toolbox/algorithms/binary_risk.py`, `src/lnl_toolbox/training/binary_experiment.py`, and the existing FINE independent runner/configuration.
+
+## 19. MC-LDCE / PDL / L2RW strict-alignment audit (2026-08-06)
+
+| File | Strict-alignment responsibility |
+|---|---|
+| `src/lnl_toolbox/estimators/mc_ldce.py` | Paper coefficient matrix `M`, clean-prior recovery, Moore--Penrose centroid reconstruction, and auditable convention metadata. |
+| `src/lnl_toolbox/algorithms/mc_ldce.py` | Bias-free squared-risk objective only; the paper-inconsistent classifier-bias extension is rejected. |
+| `src/lnl_toolbox/algorithms/instance_transition.py` | PDL `beta * NLL(clean posterior)` objective, row-normalized revision matrices, and corrected-posterior evaluation. |
+| `src/lnl_toolbox/noise/pdl.py`、`src/lnl_toolbox/noise/generators.py` | Official PDL Algorithm 2, multiplicative NMF representation, percentile anchor selection, and Matrix_optimize basis fitting. |
+| `src/lnl_toolbox/training/instance_transition_experiment.py` | PDL raw-input noise generation, official split/normalization, warm-up → correction → revision lifecycle, and artifact-aware resume. |
+| `src/lnl_toolbox/training/l2rw_experiment.py` | Official L2RW CIFAR partition/noise generator, noisy train/clean meta/validation/test loaders, and step-level resume. |
+| `configs/experiment/pdl_cifar10_reproduction.yaml`、`configs/experiment/l2rw_cifar10_reproduction.yaml` | Paper/official-source reproduction settings; formal configs do not select the legacy audited-manifest path. |
+| `tests/test_mc_ldce.py`、`tests/test_pdl.py`、`tests/test_l2rw_training.py` | Non-identity MC-LDCE matrix recovery, PDL beta-NLL, official PDL/L2RW data operations, and resume/smoke coverage. |
+
+The legacy L2RW audited-manifest path remains only as a reusable non-official data adapter for existing smoke/audit fixtures. It is not used by the official reproduction YAML and is not evidence for the official numerical result.
+
+## 20. Strict alignment follow-up: MC-LDCE / PDL / L2RW
+
+| File | Current responsibility |
+|---|---|
+| `src/lnl_toolbox/noise/pdl.py` | Shared-representation NMF plus split-local anchor/basis artifacts, including the official revision-validation lineage. |
+| `src/lnl_toolbox/training/instance_transition_experiment.py` | Official PDL train/validation/revision-validation artifact lifecycle and hash-aware resume; generic instance-transition path remains unchanged. |
+| `src/lnl_toolbox/algorithms/pcse/volmin.py` | `PaperVolMinTransition` and Eq. 7 objective for MC-LDCE's VolMin estimation; legacy `DiagonallyDominantTransition` remains only for PCSE compatibility. |
+| `src/lnl_toolbox/training/mc_ldce_experiment.py` | Separate paper-style VolMin estimator model, SGD/milestone schedule, then fixed-feature MC-LDCE objective. |
+| `configs/experiment/mc_ldce_cifar10_reproduction.yaml` | One paper-aligned MC-LDCE configuration: 150 VolMin epochs, SGD, milestones 30/60, lambda `1e-4`, sigmoid off-diagonal parameterization. |
+| `tests/test_pdl.py`, `tests/test_mc_ldce.py` | Split artifact semantics, non-identity matrix recovery, paper VolMin parameterization, differentiability, and failure boundaries. |
+
+The formal MC-LDCE path no longer selects the old PCSE transition parameterization. No global experiment runner or plugin registry change was needed.
+
+## 21. Strict-alignment verification closeout (2026-08-06)
+
+| Method | Verification completed | Remaining boundary |
+|---|---|---|
+| PDL | Official `Matrix_optimize` reset (`N(0, 0.1)`) and shared Adam lifecycle across train then validation are wired; official three-artifact smoke passed. | Full 100-epoch numerical comparison was not rerun in this audit. |
+| MC-LDCE | Formal path uses paper VolMin parameterization with `initial_weight = log(1/(C-2))`, Eq. 7 objective, SGD/milestones, and fixed-feature classifier; 1-epoch smoke passed. | No author-maintained GitHub implementation was found, so this is paper-equation alignment, not line-by-line source matching. |
+| L2RW | Official partition/noise/meta-batch/ResNet-32/step-budget path and resume semantics passed focused tests. | Full 80,000-step numerical comparison was not run. |
+
+Validation: PDL 11/11, MC-LDCE 11/11, PCSE/VolMin 28/28, L2RW focused 4/4, full unittest 596/596. No `training/experiment.py`, global pipeline, or plugin-registry change was required.
+
+## 22. Strict-alignment corrections and current evidence (2026-08-06)
+
+This section supersedes only the verification counts and path details above; prior entries are retained as history.
+
+| Method | Corrected formal-path evidence | Not yet claimed |
+|---|---|---|
+| PDL | `noise/generators.py` now follows the official global NumPy/Torch seed order, truncated-normal rate sampling, Torch softmax, and global `np.random.choice`; `training/instance_transition_experiment.py` converts HWC images back to the official raw CHW flattened layout before Algorithm 2. Focused PDL tests: 13/13. | The corrected 100-epoch formal result has not been rerun, so the old anomalous result is not used as evidence. |
+| MC-LDCE | `mc_ldce_cifar10_reproduction.yaml` now selects the paper's six-layer CNN for the transition-estimation path; focused MC-LDCE tests: 11/11, PCSE/VolMin tests: 28/28. | No author-maintained GitHub implementation was found; this is equation/configuration alignment, not line-by-line official-source reproduction. The fixed-feature lifecycle remains a paper interpretation until an implementation source is available. |
+| L2RW | The formal path now uses the official CIFAR partition/noise operation, `[-1,1]` preprocessing, 15-unit official ResNet-32 topology, source HVP/meta-weight sign, weight-decay term, and pre-boundary scheduler semantics. Focused L2RW training tests: 10/10, including an official-mode end-to-end short smoke. | The 80,000-step formal result has not been run. |
+
+The official formal paths do not use the legacy audited-manifest adapter. No `training/experiment.py`, global pipeline, or plugin-catalog change was made for these corrections.
+
+Final regression after the official-mode L2RW smoke: full unittest `604/604 OK`; `git diff --check` passed. Conda emitted only the known non-fatal OpenCL vendor temp-file warning.
+
+## 23. Strict source audit correction pass (2026-08-06)
+
+This entry records the source-level corrections made after the previous audit; older entries remain historical.
+
+| Method | Current source-aligned behavior | Evidence boundary |
+|---|---|---|
+| PDL | `fit_part_representation(..., seed=None)` reproduces `tools.train_m` global NumPy state and final-only normalization. The official split preserves the global `np.random.choice` state and train-then-validation order. Basis fitting keeps the official raw post-`optimizer.step()` train/validation weights; train matrices are clipped only where `main.py` clips them, while validation/revision evaluation applies `tools.norm`. Correction best state is restored before revision. | PDL focused tests: 16/16. Formal 100-epoch rerun is still pending. |
+| L2RW | The formal YAML separates model seed `1234` from official data seed `0`. The official meta replica now uses batch-statistics BN with beta-only affine state, while the weighted training model keeps ordinary BN; the meta replica is checkpointed for resume. | L2RW focused tests: 11/11. Formal 80,000-step rerun is still pending. |
+| MC-LDCE | Paper equations, six-layer CNN, VolMin parameterization, and artifact lifecycle remain covered. | The paper states the CNN/optimizer setup and Algorithm 1, but no author-maintained GitHub implementation was found; the fixed-feature lifecycle therefore cannot be called an official line-by-line reproduction. |
+
+Relevant primary sources: [PDL official repository](https://github.com/xiaoboxia/Part-dependent-label-noise), [L2RW official repository](https://github.com/uber-research/learning-to-reweight-examples), and [MC-LDCE paper PDF](https://gcatnjust.github.io/ChenGong/paper/ding_sdm22.pdf).
+
+## 24. Source-level correction pass (2026-08-06)
+
+| Method | Maintained source-level fact | Evidence boundary |
+|---|---|---|
+| PDL | Rechecked the official `tools.py`/`models.py`: `init_params` resets each `Matrix_optimize` linear weight with `N(0, 0.1)`, not `N(0, 0.001)`. The local implementation and regression test now use `0.1`. | PDL focused tests: `17/17`; the corrected 100-epoch run is still pending. |
+| L2RW | The official `_flip_data` permutation is now applied to both noisy targets and global image indices, preventing image/label misalignment. The assigned-weight meta replica shares model-C parameters while retaining official batch-statistics, beta-only BN behavior. | L2RW focused tests: `11/11`; the 80,000-step run is still pending. |
+| MC-LDCE | Equation-level implementation, six-layer CNN configuration, VolMin path, and artifact lifecycle remain covered. | No author-maintained GitHub implementation was found; therefore this is not claimed as line-by-line source reproduction. |
+
+Full regression after this pass: `609/609 OK`; `git diff --check` passed. No `training/experiment.py`, shared pipeline, or plugin-catalog change was required.
+## 25. VolMinNet / UPM / LEND modular additions (2026-08-06)
+
+| Method | Added or changed modules | Evidence boundary |
+|---|---|---|
+| VolMinNet | `algorithms/pcse/volmin.py` now permits the paper's general nonsingular row-stochastic matrix; `training/volmin_experiment.py` performs joint classifier/transition updates and resumable checkpoints. | Official VolMinNet repository: [xuefeng-li1/Provably-end-to-end-label-noise-learning-without-anchor-points](https://github.com/xuefeng-li1/Provably-end-to-end-label-noise-learning-without-anchor-points). Current runner smoke uses the existing synthetic batch contract; an official CIFAR long run is not claimed. |
+| UPM | `noise/upm.py` owns frozen `psi` and indexed `eta`; `algorithms/upm.py` implements Eq. 8, soft-target CE, and projected Eq. 11/12 update; `training/upm_experiment.py` separates noisy warm-up from alternating training. | Official repository: [QizhouWang/instance-dependent-label-noise](https://github.com/QizhouWang/instance-dependent-label-noise). The repository contains incomplete training state code, so the local implementation follows the paper equations and validates the source-compatible parts. |
+| LEND | `selectors/lend.py` implements batch-local feature diffusion and `SelectionResult`; `selectors/history.py` adds indexed `Z[N,C]` state; `data/neighbors.py` adds batch graph construction; `training/lend_experiment.py` provides a resumable lifecycle. | No author-maintained implementation was found. This is explicitly a paper-equation implementation, not an official-source line-by-line reproduction. |
+
+The three new runners are registered in `training/runners.py`; no `training/experiment.py`, shared pipeline, model, or plugin-catalog branch was added. Focused smoke paths use `configs/experiment/{volmin_cifar10_smoke,upm_cifar10_smoke,lend_cifar10_smoke}.yaml`.
+## Current paper acceptance status (2026-08-07)
+
+The current reproduction acceptance status is maintained in `papers/implement/paper-reproduction-progress.md`. Only MentorNet and CDR remain incomplete; VolMinNet, UPM, and LEND are completed after source/equation alignment and validation.
