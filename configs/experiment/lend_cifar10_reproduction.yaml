@@ -1,0 +1,11 @@
+method: lend
+execution: {runner: lend}
+seed: 1
+output_root: artifacts/reproductions/lend-cifar10-symmetric04
+data: {name: cifar10, root: data/cifar10, validation_size: 5000, split_strategy: stratified, split_rng: default_rng, augment: true}
+noise: {type: symmetric, rate: 0.4, seed: 1, sampling: per_class, rng: default_rng, validation_targets: clean}
+loader: {batch_size: 128, num_workers: 4, pin_memory: true, drop_last: false}
+model: {name: resnet18, base_width: 16}
+optimizer: {name: sgd, lr: 0.1, momentum: 0.9, weight_decay: 0.0005}
+selector: {neighbors: 10, gamma: 1.0, diffusion_alpha: 0.99, diffusion_steps: 10, momentum: 0.9}
+trainer: {epochs: 200, device: cuda}

@@ -27,6 +27,7 @@ Thumbs.db
 docs/paper-summaries.md
 /data/
 artifacts/
+/output/
 outputs/
 runs/
 checkpoints/

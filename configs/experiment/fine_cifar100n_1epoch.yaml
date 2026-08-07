@@ -1,0 +1,28 @@
+seed: 23
+output_root: artifacts/reproductions/fine-cifar100n-1epoch
+
+data:
+  name: cifar100
+  root: data/cifar100
+  validation_size: 5000
+  augment: true
+  strong_magnitude: 10
+
+noise: {name: symmetric, rate: 0.2, seed: 23}
+loader: {batch_size: 128, num_workers: 0, drop_last: false}
+model: {name: fine_seven_cnn, base_width: 128, dropout: 0.25}
+optimizer: {name: sgd, lr: 0.1, momentum: 0.9, weight_decay: 0.0005}
+scheduler: {name: cosine, eta_min: 0.0005}
+trainer: {epochs: 1, device: auto}
+fine:
+  warmup_epochs: 1
+  warmup_lr: 0.1
+  ema_momentum: 0.999
+  momentum_scs: 0.999
+  momentum_scr: 0.99
+  maximum_threshold: 0.95
+  alpha: 1.0
+  beta: 0.1
+  gamma: 0.002
+  probability_floor: 1.0e-7
+execution: {runner: fine}

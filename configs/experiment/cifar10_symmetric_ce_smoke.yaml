@@ -1,0 +1,35 @@
+seed: 7
+output_root: artifacts/runs
+data:
+  name: cifar10
+  root: data/cifar10
+  validation_size: 5000
+  max_train_samples: 512
+  max_validation_samples: 256
+  max_test_samples: 256
+  augment: true
+noise:
+  name: symmetric
+  rate: 0.4
+  seed: 17
+  manifest_filename: noise_manifest.npz
+loss:
+  name: ce
+loader:
+  batch_size: 128
+  num_workers: 0
+  pin_memory: true
+model:
+  name: tiny_cnn
+  width: 32
+optimizer:
+  name: adamw
+  lr: 0.001
+  weight_decay: 0.0005
+scheduler:
+  name: cosine
+  t_max: 3
+trainer:
+  epochs: 2
+  device: auto
+execution: {runner: supervised}

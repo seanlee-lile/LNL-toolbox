@@ -1,0 +1,56 @@
+method: dual_t
+seed: 7
+output_root: artifacts/test-runs
+data:
+  name: cifar10
+  root: data/cifar10
+  validation_size: 5000
+  max_train_samples: 2048
+  max_validation_samples: 512
+  max_test_samples: 256
+  augment: true
+  preprocessing: standard
+noise:
+  name: symmetric
+  rate: 0.2
+  seed: 17
+  validation_targets: noisy
+  manifest_filename: noise_manifest.npz
+loader:
+  batch_size: 64
+  num_workers: 0
+  pin_memory: false
+trainer:
+  device: cpu
+evaluation:
+  selection_split: validation
+posterior_stage:
+  epochs: 8
+  checkpoint_selection: noisy_validation_accuracy
+  model:
+    name: tiny_cnn
+    width: 32
+  loss:
+    name: ce
+  optimizer:
+    name: adamw
+    lr: 0.001
+    weight_decay: 0.0005
+  scheduler:
+    name: none
+transition_stage: {}
+final_stage:
+  epochs: 2
+  fresh_model: true
+  model:
+    name: tiny_cnn
+    width: 32
+  loss:
+    name: ce
+  optimizer:
+    name: adamw
+    lr: 0.001
+    weight_decay: 0.0005
+  scheduler:
+    name: none
+execution: {runner: dual_t}

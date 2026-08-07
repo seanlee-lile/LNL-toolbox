@@ -1,0 +1,65 @@
+# Maintained high-dimensional workflow for the paper-exact binary
+# asymmetric-RCN importance-weight component. The KLIEP tuning values below
+# are repository implementation choices, not paper-reported hyperparameters.
+method: importance_reweighting
+num_classes: 2
+label_convention: zero_one
+seed: 17
+output_root: artifacts/reproductions
+
+data:
+  name: synthetic_binary_high_dim
+  dimension: 20
+  train_size: 4096
+  validation_size: 1024
+  test_size: 1024
+
+noise:
+  name: binary_asymmetric_rcn
+  rho_positive: 0.20
+  rho_negative: 0.10
+  seed: 29
+  # The current method selects checkpoints on observed/noisy validation labels.
+  # The held-out test split remains clean.
+  validation_targets: noisy
+
+posterior_stage:
+  name: kliep
+  bandwidth: 4.0
+  max_centers: 24
+  max_iterations: 200
+  learning_rate: 0.02
+  tolerance: 1.0e-7
+  epsilon: 1.0e-12
+  seed: 37
+  rate_estimator: paper_raw_min
+
+model:
+  name: linear
+  in_features: 20
+  num_classes: 2
+
+loss:
+  name: ce
+
+optimizer:
+  name: sgd
+  lr: 0.05
+  momentum: 0.0
+  weight_decay: 0.0
+
+scheduler:
+  name: none
+
+loader:
+  batch_size: 128
+  num_workers: 0
+  pin_memory: false
+
+trainer:
+  epochs: 50
+  device: auto
+
+evaluation:
+  selection_split: validation
+execution: {runner: importance_reweighting}

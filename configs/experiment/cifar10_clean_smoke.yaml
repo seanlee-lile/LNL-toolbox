@@ -15,6 +15,8 @@ loader:
 model:
   name: tiny_cnn
   width: 32
+loss:
+  name: ce
 optimizer:
   name: adamw
   lr: 0.001
@@ -25,3 +27,4 @@ scheduler:
 trainer:
   epochs: 2
   device: auto
+execution: {runner: clean}

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Compatibility helpers from the repository's original Co-teaching stub."""
+
 import numpy as np
 
 
@@ -28,4 +30,3 @@ def coteaching_exchange(
     selected_by_a = _small_loss(losses_a, count)
     selected_by_b = _small_loss(losses_b, count)
     return selected_by_b, selected_by_a
-

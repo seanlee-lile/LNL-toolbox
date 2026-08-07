@@ -5,22 +5,49 @@ from .batch import Batch
 from .component import Component, Stateful
 from .context import ExperimentContext
 from .evaluator import Evaluator
-from .result import Artifact, StepResult
+from .result import (
+    Artifact,
+    CandidateLabelResult,
+    PseudoLabelResult,
+    SoftTargetResult,
+    StepResult,
+)
 from .state import RunState
+from .objectives import ObjectiveConsumer, ObjectiveResult
 from .storage import ArtifactRef, ArtifactSink, Checkpoint, CheckpointStore
+from .targets import (
+    CandidateSetProvider,
+    ComplementaryLabelResult,
+    LabelProvider,
+    PseudoLabelProvider,
+    SoftTargetProvider,
+    TargetInput,
+)
 
 __all__ = [
     "Algorithm",
     "Artifact",
     "ArtifactRef",
     "ArtifactSink",
+    "CandidateLabelResult",
+    "CandidateSetProvider",
     "Batch",
     "Component",
     "Checkpoint",
     "CheckpointStore",
     "Evaluator",
     "ExperimentContext",
+    "ComplementaryLabelResult",
+    "LabelProvider",
+    "ObjectiveConsumer",
+    "ObjectiveResult",
+    "PseudoLabelProvider",
+    "PseudoLabelResult",
     "RunState",
+    "ObjectiveConsumer",
     "Stateful",
+    "SoftTargetProvider",
+    "SoftTargetResult",
     "StepResult",
+    "TargetInput",
 ]

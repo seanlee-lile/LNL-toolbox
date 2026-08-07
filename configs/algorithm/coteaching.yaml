@@ -1,5 +1,13 @@
-name: coteaching
-networks: 2
+# Method fragment for the complete dual-model Co-teaching workflow.
+model_count: 2
 noise_rate: 0.4
-warmup_epochs: 10
-
+initialization:
+  peer_seed_offset: 1
+remember_schedule:
+  name: linear
+  start: 1.0
+  end: 0.6
+  gradual_epochs: 10
+selection:
+  count_rule: floor
+  tie_break: stable_sample_index

@@ -1,0 +1,8 @@
+name: apl
+alpha: 1.0
+beta: 1.0
+active:
+  name: nce
+passive:
+  name: rce
+  log_zero: -4.0

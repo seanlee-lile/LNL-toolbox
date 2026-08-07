@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from torch import nn
 
+from .feature_output import FeatureOutput
+
 
 class TinyCNN(nn.Module):
     """A compact three-block CNN for end-to-end CIFAR validation."""
@@ -29,5 +31,11 @@ class TinyCNN(nn.Module):
         self.classifier = nn.Linear(channels[-1], num_classes)
 
     def forward(self, inputs):
-        features = self.pool(self.features(inputs)).flatten(1)
-        return self.classifier(features)
+        return self.classifier(self._representation(inputs))
+
+    def _representation(self, inputs):
+        return self.pool(self.features(inputs)).flatten(1)
+
+    def forward_with_features(self, inputs) -> FeatureOutput:
+        features = self._representation(inputs)
+        return FeatureOutput(self.classifier(features), features)

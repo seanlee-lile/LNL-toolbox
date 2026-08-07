@@ -1,0 +1,17 @@
+method: mc_ldce
+execution: {runner: mc_ldce}
+mc_ldce: {lifecycle_version: 2, transition_model: separate, feature_mode: fixed, classifier_bias: false}
+seed: 17
+output_root: artifacts/test-runs/mc-ldce-smoke
+data: {name: synthetic_multiclass, num_classes: 3, dimension: 6, train_size: 90, validation_size: 30, test_size: 30}
+noise: {type: symmetric, rate: 0.1, seed: 19, sampling: per_class, rng: default_rng}
+loader: {batch_size: 30, num_workers: 0, pin_memory: false}
+model: {name: feature_mlp, hidden_width: 6}
+optimizer: {name: adam, lr: 0.01, weight_decay: 0.0}
+scheduler: {name: none}
+warmup: {epochs: 1}
+transition:
+  estimator: known_smoke
+  matrix: [[0.9, 0.05, 0.05], [0.05, 0.9, 0.05], [0.05, 0.05, 0.9]]
+statistics: {rcond: 1.0e-8, condition_limit: 1.0e8}
+trainer: {epochs: 1, device: cpu}
