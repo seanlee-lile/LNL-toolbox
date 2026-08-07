@@ -1,0 +1,67 @@
+# UPM workflow smoke only. The symmetric noise here does not reproduce the
+# paper's instance-dependent CIFAR-10 relabeling process or numerical results.
+method: upm
+execution:
+  runner: upm
+seed: 7
+data:
+  name: cifar10
+  root: data
+  validation_size: 100
+  max_train_samples: 128
+  max_validation_samples: 64
+  max_test_samples: 64
+  augment: false
+  preprocessing: standard
+loader:
+  batch_size: 32
+  num_workers: 0
+  pin_memory: false
+noise:
+  name: symmetric
+  rate: 0.2
+  seed: 17
+  validation_targets: noisy
+upm:
+  stage1:
+    epochs: 2
+    model:
+      name: tiny_cnn
+      width: 8
+    optimizer:
+      name: sgd
+      lr: 0.01
+      momentum: 0.0
+      weight_decay: 0.0
+    scheduler:
+      name: none
+    best_metric: noisy_validation_accuracy
+  psi:
+    source: stage1_best
+    split: train
+    augmentation: false
+  main:
+    epochs: 2
+    initialization: fresh
+    model:
+      name: tiny_cnn
+      width: 8
+    optimizer:
+      name: sgd
+      lr: 0.01
+      momentum: 0.0
+      weight_decay: 0.0
+    scheduler:
+      name: none
+  confusing_probability:
+    initial_value: 0.01
+    learning_rate: 0.1
+    epsilon: 0.0001
+    update_start_epoch: 0
+    update_interval_epochs: 1
+evaluation:
+  selection_split: validation
+  primary: accuracy
+trainer:
+  device: cpu
+output_root: artifacts/runs
