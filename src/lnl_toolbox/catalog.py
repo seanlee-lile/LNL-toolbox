@@ -149,7 +149,7 @@ def _recipe_path(relative: str, project: Path) -> Path:
 
 def _implementation_status(method: str, runner: str) -> str:
     if method in {
-        "cnlcu", "coteaching", "dss", "dual_t", "fine",
+        "cnlcu", "coteaching", "dividemix", "dss", "dual_t", "fine",
         "importance_reweighting", "jocor", "pcse", "pdl", "t_revision",
         "upm", "volminnet",
         "cwd",
@@ -509,6 +509,7 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
         "cnlcu": ("lnl_toolbox.algorithms.cnlcu.config", "CNLCUConfig"),
         "dual_t": ("lnl_toolbox.algorithms.dual_t.config", "DualTConfig"),
         "dld": ("lnl_toolbox.algorithms.dld.config", "DLDConfig"),
+        "dividemix": ("lnl_toolbox.algorithms.dividemix.config", "DivideMixConfig"),
         "importance_reweighting": (
             "lnl_toolbox.algorithms.importance_reweighting.config",
             "ImportanceReweightingConfig",

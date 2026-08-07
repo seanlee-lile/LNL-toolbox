@@ -161,6 +161,12 @@ def _epoch_description(config: dict[str, Any]) -> str:
     if method == "dld":
         values = config.get("dld", {}) or {}
         return str((values.get("diffusion", {}) or {}).get("epochs", "-")) + " (diffusion)"
+    if method == "dividemix":
+        values = config.get("dividemix", {}) or {}
+        warmup = (values.get("warmup", {}) or {}).get("epochs", "-")
+        main = (values.get("training", {}) or {}).get("epochs", "-")
+        total = warmup + main if isinstance(warmup, int) and isinstance(main, int) else "-"
+        return f"{warmup}/{main}/{total} (warmup/main/total)"
     trainer = config.get("trainer", {}) or {}
     return str(trainer.get("epochs", config.get("epochs", "runner default")))
 
@@ -211,6 +217,15 @@ def _print_plan(config: dict[str, Any], config_path: Path, project: Path) -> Non
         print(f"  DLD timesteps: {diffusion.get('timesteps', '-')}")
         print(f"  DLD inference steps: {inference.get('steps', '-')}")
         print(f"  DLD fidelity: {fidelity.get('name', '-')}")
+    if str(method).strip().lower() == "dividemix":
+        values = config.get("dividemix", {}) or {}
+        gmm = values.get("gmm", {}) or {}; history = gmm.get("loss_history", {}) or {}
+        mixmatch = values.get("mixmatch", {}) or {}; objective = values.get("objective", {}) or {}; inference = values.get("inference", {}) or {}
+        print("  DivideMix models: 2")
+        print(f"  DivideMix GMM threshold/history: {gmm.get('threshold', '-')} / {history.get('name', '-')}")
+        print(f"  DivideMix M/T/alpha: {mixmatch.get('augmentations', '-')} / {mixmatch.get('temperature', '-')} / {mixmatch.get('mixup_alpha', '-')}")
+        print(f"  DivideMix lambda_u/ramp-up: {objective.get('lambda_u', '-')} / {objective.get('rampup_epochs', '-')}")
+        print(f"  DivideMix ensemble: {inference.get('ensemble', '-')}")
 
 
 def _doctor(args: argparse.Namespace) -> int:

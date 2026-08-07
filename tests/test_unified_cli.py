@@ -35,7 +35,7 @@ class RunnerResolutionTest(unittest.TestCase):
             {
                 "binary", "clean", "coteaching", "cwd", "dual_t", "fine",
                 "importance_reweighting", "instance_transition", "multi_model",
-                "pcse", "supervised", "cnlcu", "dld", "t_revision", "upm", "volminnet",
+                "pcse", "supervised", "cnlcu", "dld", "dividemix", "t_revision", "upm", "volminnet",
             },
         )
 
@@ -226,6 +226,18 @@ with contextlib.redirect_stdout(io.StringIO()):
         self.assertEqual(code, 0, error)
         self.assertIn("volminnet", output)
         self.assertIn("3", output)
+
+    def test_dividemix_is_discoverable_and_has_staged_epoch_override(self) -> None:
+        code, output, error = self.invoke("papers", "show", "dividemix")
+        self.assertEqual(code, 0, error)
+        self.assertIn("cross-network GMM", output)
+        code, output, error = self.invoke(
+            "run", "--recipe", "cifar10-dividemix-smoke", "--dry-run", "--epochs", "3"
+        )
+        self.assertEqual(code, 0, error)
+        self.assertIn("1/3/4 (warmup/main/total)", output)
+        self.assertIn("DivideMix models: 2", output)
+        self.assertIn("official_logits_sum", output)
 
 
 if __name__ == "__main__":

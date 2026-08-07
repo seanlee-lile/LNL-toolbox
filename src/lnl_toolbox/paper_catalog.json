@@ -227,5 +227,17 @@
     "configs": [{"recipe_id":"cifar10-upm-smoke","profile":"smoke","variant":"cifar10-workflow","configuration_fidelity":"paper_oriented","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}],
     "concept_to_config": [{"concept":"naive observed-label probability","config":"upm.stage1/upm.psi","implementation":"algorithms/upm/posterior.py"},{"concept":"confusing probability PGA","config":"upm.confusing_probability","implementation":"algorithms/upm/confusing.py"},{"concept":"true-posterior soft supervision","config":"upm.main","implementation":"algorithms/upm/objective.py"}],
     "implementation_paths": ["src/lnl_toolbox/algorithms/upm", "src/lnl_toolbox/training/upm_experiment.py"]
+  },
+  {
+    "id": "dividemix", "acronym": "DivideMix", "title": "Learning with Noisy Labels as Semi-supervised Learning", "venue": "ICLR", "year": 2020,
+    "source_url": "https://openreview.net/forum?id=HJgExaVtwr",
+    "summary": "Treats the per-sample loss distribution as a mixture and turns likely noisy examples into unlabeled data for two-network semi-supervised learning.",
+    "mechanism": "Independent warmup is followed by cross-network GMM co-divide, co-refinement, co-guessing, and a MixMatch objective with paired inference.",
+    "lifecycle": ["independent peer warmup", "full-dataset peer loss snapshots", "cross co-divide artifact", "sequential MixMatch peer training", "paired noisy-validation selection", "clean-test ensemble evaluation"],
+    "limitations": ["The bundled profile is a small workflow smoke, not the paper's 300-epoch numerical reproduction.", "Deterministic GMM seeding, strict artifact validation, and noisy-validation selection are explicit toolbox safeguards."],
+    "implementation_status": "user_ready", "reproduction_status": "not_run", "availability": "runnable",
+    "configs": [{"recipe_id":"cifar10-dividemix-smoke","profile":"smoke","variant":"cifar10-sym20","configuration_fidelity":"paper_official_oriented","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}],
+    "concept_to_config": [{"concept":"cross-network loss-mixture co-divide","config":"dividemix.gmm","implementation":"algorithms/dividemix/gmm.py"},{"concept":"co-refinement and co-guessing","config":"dividemix.mixmatch","implementation":"algorithms/dividemix/targets.py"},{"concept":"MixMatch objective","config":"dividemix.objective","implementation":"algorithms/dividemix/objective.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/dividemix", "src/lnl_toolbox/training/dividemix_experiment.py"]
   }
 ]
