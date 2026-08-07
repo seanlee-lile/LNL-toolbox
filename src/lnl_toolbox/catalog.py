@@ -151,7 +151,7 @@ def _implementation_status(method: str, runner: str) -> str:
     if method in {
         "cnlcu", "coteaching", "dividemix", "dss", "dual_t", "fine",
         "importance_reweighting", "jocor", "pcse", "pdl", "t_revision",
-        "upm", "volminnet",
+        "upm", "volminnet", "lend",
         "cwd",
     }:
         return "user_ready"
@@ -518,6 +518,7 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
         "t_revision": (
             "lnl_toolbox.algorithms.t_revision.config", "TRevisionConfig"
         ),
+        "lend": ("lnl_toolbox.algorithms.lend.config", "LENDConfig"),
         "upm": ("lnl_toolbox.algorithms.upm.config", "UPMConfig"),
         "volminnet": (
             "lnl_toolbox.algorithms.volminnet.config", "VolMinNetConfig"

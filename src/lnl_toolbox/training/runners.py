@@ -109,6 +109,7 @@ def create_runner_registry() -> RunnerRegistry:
     registry.add("upm", "lnl_toolbox.training.upm_experiment", "run_upm_experiment")
     registry.add("dld", "lnl_toolbox.training.dld_experiment", "run_dld_experiment")
     registry.add("dividemix", "lnl_toolbox.training.dividemix_experiment", "run_dividemix_experiment")
+    registry.add("lend", "lnl_toolbox.training.lend_experiment", "run_lend_experiment")
     registry.add("cnlcu", "lnl_toolbox.training.cnlcu_experiment", "run_cnlcu_experiment")
     registry.add(
         "t_revision",
@@ -127,6 +128,7 @@ _METHOD_RUNNERS = frozenset(
         "dld",
         "dividemix",
         "importance_reweighting",
+        "lend",
         "pcse",
         "t_revision",
         "upm",
@@ -184,6 +186,9 @@ def apply_epoch_override(config: dict[str, Any], epochs: int) -> None:
         return
     if method == "dividemix":
         _set_nested_epoch(config, ("dividemix", "training", "epochs"), epochs)
+        return
+    if method == "lend":
+        _set_nested_epoch(config, ("lend", "training", "epochs"), epochs)
         return
     if method in {"dual_t", "pcse"}:
         raise ValueError(

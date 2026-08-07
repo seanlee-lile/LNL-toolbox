@@ -239,5 +239,17 @@
     "configs": [{"recipe_id":"cifar10-dividemix-smoke","profile":"smoke","variant":"cifar10-sym20","configuration_fidelity":"paper_official_oriented","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}],
     "concept_to_config": [{"concept":"cross-network loss-mixture co-divide","config":"dividemix.gmm","implementation":"algorithms/dividemix/gmm.py"},{"concept":"co-refinement and co-guessing","config":"dividemix.mixmatch","implementation":"algorithms/dividemix/targets.py"},{"concept":"MixMatch objective","config":"dividemix.objective","implementation":"algorithms/dividemix/objective.py"}],
     "implementation_paths": ["src/lnl_toolbox/algorithms/dividemix", "src/lnl_toolbox/training/dividemix_experiment.py"]
+  },
+  {
+    "id": "lend", "acronym": "LEND", "title": "Towards Harnessing Feature Embedding for Robust Learning with Noisy Labels", "venue": "Machine Learning", "year": 2022,
+    "source_url": "https://doi.org/10.1007/s10994-022-06197-6",
+    "summary": "Uses current mini-batch feature embeddings to dilute noisy labels over an online graph and selects samples whose diluted evidence still agrees with the observed label.",
+    "mechanism": "A single model supplies logits and penultimate embeddings in one forward; directed batch kNN, A^T A normalization, fixed-step dilution, stable-index cross-epoch history, and agreement selection precede summed noisy-label CE updates.",
+    "lifecycle": ["online feature extraction", "batch-local graph", "label dilution", "persistent history", "hard agreement selection", "noisy-label update"],
+    "limitations": ["This is a paper-oriented workflow because no verifiable author implementation was found and several graph and convergence details are unspecified.", "The bundled profile is a tiny workflow smoke, not a numerical reproduction."],
+    "implementation_status": "user_ready", "reproduction_status": "not_run", "availability": "runnable",
+    "configs": [{"recipe_id":"cifar10-lend-smoke","profile":"smoke","variant":"cifar10-sym20","configuration_fidelity":"paper_oriented","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}],
+    "concept_to_config": [{"concept":"online feature graph","config":"lend.graph","implementation":"algorithms/lend/graph.py"},{"concept":"label dilution and history","config":"lend.dilution/lend.history","implementation":"algorithms/lend/dilution.py and algorithms/lend/history.py"},{"concept":"agreement selection","config":"lend.selection","implementation":"algorithms/lend/selector.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/lend", "src/lnl_toolbox/training/lend_experiment.py"]
   }
 ]

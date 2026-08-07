@@ -167,6 +167,9 @@ def _epoch_description(config: dict[str, Any]) -> str:
         main = (values.get("training", {}) or {}).get("epochs", "-")
         total = warmup + main if isinstance(warmup, int) and isinstance(main, int) else "-"
         return f"{warmup}/{main}/{total} (warmup/main/total)"
+    if method == "lend":
+        values = config.get("lend", {}) or {}
+        return str((values.get("training", {}) or {}).get("epochs", "-")) + " (LEND)"
     trainer = config.get("trainer", {}) or {}
     return str(trainer.get("epochs", config.get("epochs", "runner default")))
 
@@ -226,6 +229,37 @@ def _print_plan(config: dict[str, Any], config_path: Path, project: Path) -> Non
         print(f"  DivideMix M/T/alpha: {mixmatch.get('augmentations', '-')} / {mixmatch.get('temperature', '-')} / {mixmatch.get('mixup_alpha', '-')}")
         print(f"  DivideMix lambda_u/ramp-up: {objective.get('lambda_u', '-')} / {objective.get('rampup_epochs', '-')}")
         print(f"  DivideMix ensemble: {inference.get('ensemble', '-')}")
+    if str(method).strip().lower() == "lend":
+        values = config.get("lend", {}) or {}
+        graph = values.get("graph", {}) or {}
+        dilution = values.get("dilution", {}) or {}
+        history = values.get("history", {}) or {}
+        selection = values.get("selection", {}) or {}
+        loader = config.get("loader", {}) or {}
+        print(f"  LEND batch size: {loader.get('batch_size', '-')}")
+        print(
+            "  LEND graph: "
+            f"k={graph.get('k', '-')} / gamma={graph.get('gamma', '-')} / "
+            f"metric={graph.get('metric', '-')} / "
+            f"normalize_features={graph.get('normalize_features', '-')} / "
+            f"zero_degree={graph.get('zero_degree_policy', '-')}"
+        )
+        print(
+            "  LEND dilution: "
+            f"alpha={dilution.get('alpha', '-')} / "
+            f"policy={dilution.get('policy', '-')} / steps={dilution.get('steps', '-')}"
+        )
+        print(
+            "  LEND history: "
+            f"beta={history.get('beta', '-')} / "
+            f"first={history.get('first_observation', '-')}"
+        )
+        print(
+            "  LEND selection: "
+            f"rule={selection.get('rule', '-')} / "
+            f"reduction={selection.get('reduction', '-')} / "
+            f"empty={selection.get('empty_batch', '-')}"
+        )
 
 
 def _doctor(args: argparse.Namespace) -> int:
