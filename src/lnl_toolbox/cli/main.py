@@ -30,6 +30,7 @@ from lnl_toolbox.composition import (
     write_composed_config,
 )
 from lnl_toolbox.training.runners import apply_epoch_override, resolve_runner, runner_names
+from lnl_toolbox.training.reporting import write_run_report, write_toolbox_report
 
 
 def _source_options(parser: argparse.ArgumentParser) -> None:
@@ -95,6 +96,14 @@ def build_parser() -> argparse.ArgumentParser:
     resume = sub.add_parser("resume", help="从运行目录自动恢复")
     resume.add_argument("run_dir", type=Path)
     resume.add_argument("--checkpoint", choices=("last", "best"), default="last")
+
+    report = sub.add_parser("report", help="鐢熸垚鍗曟鎴栧叏閮ㄨ繍琛屾姤鍛?")
+    report_sub = report.add_subparsers(dest="report_command", required=True)
+    report_run = report_sub.add_parser("run", help="鐢熸垚鍗曟 run 鐩綍鎶ュ憡")
+    report_run.add_argument("run_dir", type=Path)
+    report_toolbox = report_sub.add_parser("toolbox", help="姹囨€昏繍琛屾姤鍛?")
+    report_toolbox.add_argument("--runs-root", type=Path, required=True)
+    report_toolbox.add_argument("--output", type=Path, required=True)
 
     compose = sub.add_parser("compose", help="查看兼容组合并生成自定义 YAML")
     compose_sub = compose.add_subparsers(dest="compose_command", required=True)
@@ -405,6 +414,16 @@ def _resume(args: argparse.Namespace) -> int:
     return 0
 
 
+def _report(args: argparse.Namespace) -> int:
+    if args.report_command == "run":
+        paths = write_run_report(args.run_dir)
+        print("report generated:", paths["markdown"])
+        return 0
+    paths = write_toolbox_report(args.runs_root, args.output)
+    print("toolbox report generated:", paths["markdown"])
+    return 0
+
+
 def _paper_list(args: argparse.Namespace) -> int:
     recipes = {item.id: item for item in discover_recipes(include_conditional=True)}
     papers = load_papers()
@@ -651,6 +670,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run(args)
         if args.command == "resume":
             return _resume(args)
+        if args.command == "report":
+            return _report(args)
         if args.command == "compose":
             if args.compose_command == "list":
                 return _compose_list(args)

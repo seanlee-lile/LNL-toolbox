@@ -13,7 +13,7 @@ import torch
 from torch import nn
 import yaml
 
-from lnl_toolbox.algorithms.pcse import PCSEAlgorithm, PCSEConfig
+from lnl_toolbox.algorithms.pcse import PCSEAlgorithm, PCSEConfig, PCSEPhase
 from lnl_toolbox.data.multiclass_synthetic import (
     MulticlassTensorDataset,
     generate_synthetic_multiclass,
@@ -23,6 +23,7 @@ from lnl_toolbox.noise.manifest import NoiseManifest
 from lnl_toolbox.plugins.builtin import build_builtin_loss
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import read_checkpoint
+from lnl_toolbox.training.interfaces import RunContext
 from lnl_toolbox.training.experiment import (
     _environment,
     _loader,
@@ -182,6 +183,8 @@ def run_pcse_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    context: RunContext | None = None,
 ) -> Path:
     """Run noisy pretraining, estimated transition and PCSE post-processing."""
 
@@ -334,7 +337,24 @@ def run_pcse_experiment(
     try:
         if resume is not None:
             algorithm.resume(resume)
-        algorithm.run()
+        if context is None or not context.state.get("lifecycle_active"):
+            algorithm.run()
+        else:
+            phase_calls = (
+                (PCSEPhase.PRETRAINING, "pretraining", algorithm.train_pretraining),
+                (PCSEPhase.PRETRAINED, "transition_estimation", algorithm.estimate_transition),
+                (PCSEPhase.TRANSITION_TRAINING, "transition_training", algorithm.train_transition),
+                (PCSEPhase.TRANSITION_READY, "statistics_estimation", algorithm.estimate_statistics),
+                (PCSEPhase.STATISTICS_READY, "gda", algorithm.build_gda),
+                (PCSEPhase.GDA_READY, "ensemble_start", algorithm.start_ensemble_training),
+                (PCSEPhase.ENSEMBLE_TRAINING, "ensemble_training", algorithm.train_ensemble),
+            )
+            for phase, name, call in phase_calls:
+                if algorithm.state.phase is phase:
+                    context.session.start_phase(name)
+                    call()
+                    context.session.end_phase(name)
+            algorithm.run()
     finally:
         algorithm.close()
     return run_dir

@@ -3,6 +3,9 @@ from __future__ import annotations
 """Canonical checkpoint v2 plus safe readers for both historical layouts."""
 
 from dataclasses import asdict
+from datetime import datetime, timezone
+import hashlib
+import json
 from pathlib import Path
 import random
 from typing import Any, Mapping
@@ -11,6 +14,11 @@ import numpy as np
 import torch
 
 from lnl_toolbox.core import RunState
+
+
+def _config_hash(config: Mapping[str, Any]) -> str:
+    encoded = json.dumps(dict(config), sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _validate_component_states(
@@ -142,6 +150,37 @@ def build_checkpoint(
         if not isinstance(parameter_record, Mapping):
             raise TypeError("parameter_record must be a mapping")
         payload["parameter_record"] = dict(parameter_record)
+    payload["checkpoint_v3"] = build_v3_envelope(
+        identity={
+            "runner": str(config.get("execution", {}).get("runner", "supervised"))
+            if isinstance(config.get("execution", {}), Mapping)
+            else "supervised",
+            "method": str(config.get("method", "supervised")),
+            "seed": config.get("seed"),
+            "config_hash": _config_hash(config),
+        },
+        progress={
+            "phase": run_state.phase,
+            "cycle": run_state.cycle,
+            "step": run_state.step,
+            "completed_epoch": int(completed_epoch),
+        },
+        component_states={
+            "model": algorithm_state["model"],
+            "optimizer": algorithm_state["optimizer"],
+            "algorithm_private": dict(algorithm_state.get("algorithm_private_state", {})),
+            "pipeline": {} if pipeline is None else dict(pipeline),
+        },
+        config=config,
+        rng_state=payload["rng_state"],
+        best_metric={
+            "epoch": int(best_epoch),
+            "validation_accuracy": float(best_validation_accuracy),
+            "selection_accuracy": float(best_selection_accuracy),
+        },
+        artifact_refs={} if noise is None else dict(noise),
+        log_sequence=int(run_state.step),
+    )["checkpoint"]
     return payload
 
 
@@ -189,6 +228,169 @@ def read_checkpoint(path: str | Path, device: torch.device | str = "cpu") -> dic
     if not isinstance(payload, dict):
         raise ValueError("Checkpoint payload must be a mapping")
     return payload
+
+
+def checkpoint_file_hash(path: str | Path) -> str:
+    """Return a stable SHA-256 identity for a checkpoint file."""
+
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def upgrade_checkpoint_to_v3(
+    path: str | Path,
+    *,
+    config: Mapping[str, Any],
+    runner: str,
+    method: str,
+    events: int = -1,
+) -> bool:
+    """Add a v3 envelope to a legacy/custom checkpoint in place.
+
+    Existing top-level fields are deliberately retained so each method's
+    historical resume reader remains compatible.
+    """
+
+    target = Path(path)
+    if not target.is_file():
+        return False
+    payload = torch.load(target, map_location="cpu", weights_only=False)
+    if not isinstance(payload, Mapping):
+        return False
+    if "checkpoint_v3" in payload or (
+        int(payload.get("format_version", 0)) == 3 and "checkpoint" in payload
+    ):
+        return False
+    component_states: dict[str, Any] = {}
+    for key in (
+        "model", "models", "optimizer", "optimizers", "scheduler", "schedulers",
+        "algorithm_private_state", "method_state", "history", "run_state",
+    ):
+        value = payload.get(key)
+        if isinstance(value, Mapping):
+            component_states[key] = dict(value)
+    progress = {
+        "phase": payload.get("phase", payload.get("stage", "default")),
+        "completed_epoch": int(payload.get("completed_epoch", payload.get("epoch", -1))),
+        "global_step": int(payload.get("global_step", payload.get("step", -1))),
+    }
+    envelope = build_v3_envelope(
+        identity={
+            "runner": runner,
+            "method": method,
+            "seed": config.get("seed"),
+            "config_hash": _config_hash(config),
+        },
+        progress=progress,
+        component_states=component_states,
+        config=config,
+        rng_state=payload.get("rng_state"),
+        best_metric={
+            key: payload[key]
+            for key in (
+                "best_epoch", "best_validation_accuracy", "best_selection_accuracy",
+            )
+            if key in payload
+        },
+        artifact_refs={},
+        log_sequence=int(payload.get("log_sequence", events)),
+    )["checkpoint"]
+    updated = dict(payload)
+    updated["checkpoint_v3"] = envelope
+    atomic_save(updated, target)
+    return True
+
+
+def build_v3_envelope(
+    *,
+    identity: Mapping[str, Any],
+    progress: Mapping[str, Any],
+    component_states: Mapping[str, Any],
+    config: Mapping[str, Any],
+    rng_state: Mapping[str, Any] | None = None,
+    best_metric: Mapping[str, Any] | None = None,
+    artifact_refs: Mapping[str, Any] | None = None,
+    log_sequence: int = -1,
+    lifecycle_version: str = "1",
+) -> dict[str, Any]:
+    """Build the generic v3 checkpoint envelope.
+
+    Method-specific runners may keep their historical top-level payload beside
+    this envelope.  The envelope gives the toolbox a common identity and
+    recovery contract without changing the method's mathematical state.
+    """
+
+    if not isinstance(identity, Mapping) or not isinstance(progress, Mapping):
+        raise TypeError("checkpoint identity and progress must be mappings")
+    if not isinstance(component_states, Mapping):
+        raise TypeError("checkpoint component_states must be a mapping")
+    return {
+        "format_version": 3,
+        "checkpoint": {
+            "identity": dict(identity),
+            "progress": dict(progress),
+            "component_states": dict(component_states),
+            "rng_state": capture_rng_state() if rng_state is None else dict(rng_state),
+            "best_metric": {} if best_metric is None else dict(best_metric),
+            "artifact_refs": {} if artifact_refs is None else dict(artifact_refs),
+            "log_sequence": int(log_sequence),
+            "lifecycle_version": str(lifecycle_version),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "resolved_config": dict(config),
+            "config": dict(config),
+        },
+    }
+
+
+def save_v3_checkpoint(
+    path: str | Path,
+    *,
+    identity: Mapping[str, Any],
+    progress: Mapping[str, Any],
+    component_states: Mapping[str, Any],
+    config: Mapping[str, Any],
+    rng_state: Mapping[str, Any] | None = None,
+    best_metric: Mapping[str, Any] | None = None,
+    artifact_refs: Mapping[str, Any] | None = None,
+    log_sequence: int = -1,
+    lifecycle_version: str = "1",
+    legacy_payload: Mapping[str, Any] | None = None,
+) -> None:
+    """Atomically save v3 state while retaining an optional legacy payload."""
+
+    payload = dict(legacy_payload or {})
+    envelope = build_v3_envelope(
+        identity=identity,
+        progress=progress,
+        component_states=component_states,
+        config=config,
+        rng_state=rng_state,
+        best_metric=best_metric,
+        artifact_refs=artifact_refs,
+        log_sequence=log_sequence,
+        lifecycle_version=lifecycle_version,
+    )
+    payload.update(envelope)
+    atomic_save(payload, path)
+
+
+def read_v3_checkpoint(
+    path: str | Path,
+    device: torch.device | str = "cpu",
+) -> dict[str, Any]:
+    """Read and validate the generic v3 envelope."""
+
+    payload = read_checkpoint(path, device)
+    envelope = payload.get("checkpoint_v3", payload.get("checkpoint"))
+    if not isinstance(envelope, Mapping):
+        raise ValueError("checkpoint is not a valid v3 envelope")
+    for key in ("identity", "progress", "component_states", "rng_state"):
+        if key not in envelope or not isinstance(envelope[key], Mapping):
+            raise ValueError(f"v3 checkpoint is missing mapping {key!r}")
+    return dict(payload)
 
 
 def _restore_model_optimizer(payload: Mapping[str, Any], algorithm) -> str:

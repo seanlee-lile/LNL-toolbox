@@ -3,14 +3,22 @@ from __future__ import annotations
 """Central lazy registry for user-facing experiment execution."""
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from difflib import get_close_matches
 from importlib import import_module
 from pathlib import Path
 from typing import Any, Callable
 
 
+
 Runner = Callable[[dict[str, Any], str | Path | None, str | Path | None], Path]
+
+
+def _method_name(config: Mapping[str, Any], fallback: str) -> str:
+    value = config.get("method", fallback)
+    if isinstance(value, Mapping):
+        value = value.get("name", fallback)
+    return str(value or fallback)
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,12 +27,22 @@ class RunnerSpec:
     module: str
     function: str
     supports_resume: bool = True
+    lifecycle: str = "single_stage"
+    checkpoint_unit: str = "epoch"
+    smoke_recipe: str | None = None
 
     def load(self) -> Callable[..., Path]:
         candidate = getattr(import_module(self.module), self.function)
         if not callable(candidate):
             raise TypeError(f"runner {self.module}.{self.function} is not callable")
         return candidate
+
+    def build(self, *, method: str | None = None):
+        """Build the public protocol object for this legacy runner."""
+
+        from lnl_toolbox.training.adapters import adapter_class_for
+
+        return adapter_class_for(self, method=method)(self, method=method)
 
     def invoke(
         self,
@@ -34,10 +52,12 @@ class RunnerSpec:
     ) -> Path:
         if resume is not None and not self.supports_resume:
             raise ValueError(f"runner {self.name!r} does not support resume")
-        runner = self.load()
-        if self.supports_resume:
-            return runner(config, output_dir, resume)
-        return runner(config, output_dir)
+        result = self.build(method=_method_name(config, self.name)).fit(
+            config=config,
+            output_dir=output_dir,
+            resume=resume,
+        )
+        return result.run_dir
 
 
 class RunnerRegistry:
@@ -87,7 +107,7 @@ def create_runner_registry() -> RunnerRegistry:
     registry.add("multi_model", "lnl_toolbox.training.multi_model_experiment", "run_multi_model_experiment")
     registry.add("cwd", "lnl_toolbox.training.cwd_experiment", "run_cwd_experiment")
     registry.add("fine", "lnl_toolbox.training.fine_experiment", "run_fine_experiment")
-    registry.add("binary", "lnl_toolbox.training.binary_experiment", "run_binary_experiment", supports_resume=False)
+    registry.add("binary", "lnl_toolbox.training.binary_experiment", "run_binary_experiment")
     registry.add(
         "instance_transition",
         "lnl_toolbox.training.instance_transition_experiment",
@@ -115,6 +135,37 @@ def create_runner_registry() -> RunnerRegistry:
     registry.add("volmin", "lnl_toolbox.training.volmin_experiment", "run_volmin_experiment")
     registry.add("upm", "lnl_toolbox.training.upm_experiment", "run_upm_experiment")
     registry.add("lend", "lnl_toolbox.training.lend_experiment", "run_lend_experiment")
+    profiles = {
+        "supervised": ("single_stage", "epoch", "cifar10-symmetric-ce-smoke"),
+        "clean": ("single_stage", "epoch", "cifar10-clean-smoke"),
+        "multi_model": ("multi_model", "epoch", "jocor-cifar10-symmetric05-smoke"),
+        "cwd": ("binary_fold", "epoch", "cwd-cifar10-smoke"),
+        "fine": ("two_stage", "epoch", "fine-cifar100n-smoke"),
+        "binary": ("single_stage", "epoch", "binary-risk-natarajan-1epoch"),
+        "instance_transition": ("staged", "epoch", "pdl-cifar10-smoke"),
+        "coteaching": ("multi_model", "epoch", "cifar10-coteaching-smoke"),
+        "dual_t": ("staged", "epoch", "cifar10-dual-t-smoke"),
+        "importance_reweighting": ("staged", "epoch", "importance-reweighting-binary-smoke"),
+        "pcse": ("staged", "epoch", "pcse-multiclass-smoke"),
+        "mc_ldce": ("staged", "epoch", "mc-ldce-cifar10-smoke"),
+        "cal": ("staged", "epoch", "cal-cifar10-smoke"),
+        "ca2c": ("staged", "epoch", "ca2c-cifar10-smoke"),
+        "l2rw": ("staged", "step", "l2rw-cifar10-smoke"),
+        "dld": ("staged", "epoch", "dld-cifar10-smoke"),
+        "cnlcu": ("multi_model", "epoch", "cifar10-cnlcu-soft-smoke"),
+        "t_revision": ("staged", "epoch", "cifar10-t-revision-smoke"),
+        "volmin": ("staged", "epoch", "volmin-cifar10-smoke"),
+        "upm": ("staged", "epoch", "upm-cifar10-smoke"),
+        "lend": ("staged", "epoch", "lend-cifar10-smoke"),
+    }
+    for name, (lifecycle, checkpoint_unit, smoke_recipe) in profiles.items():
+        current = registry._specs[name]
+        registry._specs[name] = replace(
+            current,
+            lifecycle=lifecycle,
+            checkpoint_unit=checkpoint_unit,
+            smoke_recipe=smoke_recipe,
+        )
     return registry
 
 
@@ -137,6 +188,18 @@ _METHOD_RUNNERS = frozenset(
         "lend",
     }
 )
+_SUPPORTED_METHOD_ALIASES = frozenset(
+    {"apl", "gce", "dss", "cdr", "loss_correction", "binary_risk", "natarajan"}
+)
+_RUNNER_ALIASES = {
+    "apl": "supervised",
+    "gce": "supervised",
+    "dss": "supervised",
+    "cdr": "supervised",
+    "loss_correction": "supervised",
+    "binary_risk": "binary",
+    "natarajan": "binary",
+}
 _RENAMED_METHODS = {"dual_t_forward": "dual_t"}
 _DEDICATED_SECTIONS = {
     "cwd": "cwd",
@@ -208,7 +271,7 @@ def resolve_runner(config: Mapping[str, Any]) -> RunnerSpec:
     method = _normalize(method_value) if str(method_value).strip() else ""
     if method in _RENAMED_METHODS:
         raise ValueError(f"method {method!r} was renamed to {_RENAMED_METHODS[method]!r}")
-    if method and method not in _METHOD_RUNNERS:
+    if method and method not in _METHOD_RUNNERS and method not in _SUPPORTED_METHOD_ALIASES:
         suggestion = get_close_matches(method, sorted(_METHOD_RUNNERS), n=1)
         hint = f"; did you mean {suggestion[0]!r}?" if suggestion else ""
         raise ValueError(
@@ -229,6 +292,7 @@ def resolve_runner(config: Mapping[str, Any]) -> RunnerSpec:
         inferred = "multi_model"
 
     selected = _normalize(explicit) if explicit else (inferred or "supervised")
+    selected = _RUNNER_ALIASES.get(selected, selected)
     if explicit and inferred and selected != inferred:
         raise ValueError(
             f"execution.runner {selected!r} conflicts with configuration requiring {inferred!r}"

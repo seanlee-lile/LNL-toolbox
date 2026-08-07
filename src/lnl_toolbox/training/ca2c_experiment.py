@@ -21,6 +21,7 @@ from lnl_toolbox.algorithms.ca2c import (
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
+from lnl_toolbox.training.interfaces import RunContext
 from lnl_toolbox.training.experiment import build_optimizer, build_scheduler
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
 from lnl_toolbox.training.reproduction_data import build_reproduction_model, prepare_noisy_classification
@@ -41,7 +42,7 @@ def _evaluate(models, loader, criterion, device):
     return {"loss": loss_sum / total, "accuracy": correct / total}
 
 
-def run_ca2c_experiment(config: dict[str, Any], output_dir=None, resume=None) -> Path:
+def run_ca2c_experiment(config: dict[str, Any], output_dir=None, resume=None, *, context: RunContext | None = None) -> Path:
     config = deepcopy(config); seed = int(config.get("seed", 1)); seed_everything(seed)
     device = resolve_device(str(config.get("trainer", {}).get("device", "auto")))
     run_dir = Path(resume).resolve().parent if resume else Path(output_dir or Path(config.get("output_root", "artifacts/runs")) / datetime.now().strftime("%Y%m%d-%H%M%S")).resolve(); run_dir.mkdir(parents=True, exist_ok=True)
@@ -71,6 +72,9 @@ def run_ca2c_experiment(config: dict[str, Any], output_dir=None, resume=None) ->
         )
     )
     robust_weight = float(ca2c_config.get("robust_weight", 0.8))
+    session = context.session if context is not None and context.state.get("lifecycle_active") else None
+    if session is not None:
+        session.start_phase("co_learning", total_units=epochs)
     for epoch in range(start, epochs):
         p_model.train(); n_model.train(); total = correct = 0; loss_sum = 0.0
         for batch in data.train_loader:
@@ -117,6 +121,13 @@ def run_ca2c_experiment(config: dict[str, Any], output_dir=None, resume=None) ->
             "candidate_memory_hash": memory.fingerprint(),
         })
         rows.append(row)
+        if session is not None:
+            session.log_epoch(
+                epoch + 1,
+                phase=str(row.get("phase", "train")),
+                **{key: value for key, value in row.items()
+                   if key not in {"event", "epoch", "phase", "seq"}},
+            )
         print(
             f"CA2C epoch {epoch + 1}/{epochs} phase={row['phase']} "
             f"loss={row['train_loss']:.5f} val={row['validation_accuracy']:.4f} "
@@ -140,7 +151,14 @@ def run_ca2c_experiment(config: dict[str, Any], output_dir=None, resume=None) ->
             "metrics": rows,
             "rng_state": capture_rng_state(),
         }, run_dir / "last.pt")
-    (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8"); (run_dir / "metrics.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    if session is None:
+        (run_dir / "metrics.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    else:
+        session.end_phase("co_learning", completed_units=max(0, epochs - start))
+        session.emit("final", phase="evaluation", method="ca2c",
+                     completed_epochs=epochs,
+                     test_accuracy=rows[-1].get("test_accuracy") if rows else None)
     if rows: write_training_curves_svg(rows, run_dir / "training_curves.svg")
     return run_dir
 

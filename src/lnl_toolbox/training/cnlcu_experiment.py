@@ -35,6 +35,8 @@ from lnl_toolbox.training.noisy_labels import (
     checkpoint_noise_metadata, effective_subset_actual_rate, noise_mode,
     prepare_noise_manifest,
 )
+from lnl_toolbox.training.interfaces import RunContext
+from lnl_toolbox.training.reporting import RunSession
 
 
 def _validate_resume_config(current: Mapping[str, Any], saved: Mapping[str, Any]) -> None:
@@ -52,7 +54,8 @@ def _validate_resume_config(current: Mapping[str, Any], saved: Mapping[str, Any]
 
 
 def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None = None,
-                         resume: str | Path | None = None) -> Path:
+                         resume: str | Path | None = None,
+                         *, context: RunContext | None = None) -> Path:
     """Run a configured CNLCU variant with strict epoch-boundary resume."""
 
     config = deepcopy(config)
@@ -72,6 +75,20 @@ def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None =
     else:
         run_dir = Path(config.get("output_root", "artifacts/runs")) / datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
+    session = context.session if context is not None else RunSession(
+        run_dir,
+        config=config,
+        runner="cnlcu",
+        method=str(config.get("method", "cnlcu")),
+        resumed=resume is not None,
+    )
+    lifecycle_active = context is None or bool(
+        context.state.get("lifecycle_active", False)
+    )
+    if lifecycle_active:
+        if not (context is not None and context.state.get("resume_lifecycle")):
+            session.start_run()
+            session.start_phase("train", total_units=epochs)
     checkpoint_payload = None
     if resume is not None:
         checkpoint_payload = read_checkpoint(resume, "cpu")
@@ -217,7 +234,13 @@ def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None =
             save_checkpoint(run_dir / "last.pt", algorithm, state, epoch, config, scheduler=None, **kwargs)
             if improved:
                 save_checkpoint(run_dir / "best.pt", algorithm, state, epoch, config, scheduler=None, **kwargs)
-            metrics_file.write(json.dumps(row) + "\n"); metrics_file.flush(); print(json.dumps(row), flush=True)
+            if lifecycle_active:
+                event_metrics = dict(row)
+                event_metrics.pop("event", None)
+                event_metrics.pop("epoch", None)
+                event_metrics.pop("global_step", None)
+                session.log_epoch(epoch + 1, phase="train", **event_metrics)
+            print(json.dumps(row), flush=True)
         best_payload = read_checkpoint(run_dir / "best.pt", device)
         algorithm.model_a.load_state_dict(best_payload["model"]["a"])
         algorithm.model_b.load_state_dict(best_payload["model"]["b"])
@@ -231,7 +254,12 @@ def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None =
                  "test_mean_peer_accuracy": test["mean_peer_accuracy"],
                  "test_accuracy_ensemble": test["ensemble_accuracy"], "noise": noise_metadata}
         if device.type == "cuda": final["max_cuda_memory_mb"] = torch.cuda.max_memory_allocated(device) / 1024 ** 2
-        metrics_file.write(json.dumps(final) + "\n"); print(json.dumps(final), flush=True)
+        if lifecycle_active:
+            session.end_phase("train", completed_units=epochs)
+            final_metrics = dict(final)
+            final_metrics.pop("event", None)
+            session.emit("final", phase="evaluation", **final_metrics)
+        print(json.dumps(final), flush=True)
     (run_dir / "final_metrics.json").write_text(json.dumps(final, indent=2), encoding="utf-8")
     algorithm.on_run_end(state); algorithm.close()
     return run_dir

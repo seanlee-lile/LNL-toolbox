@@ -24,6 +24,7 @@ from lnl_toolbox.evaluation.classification import evaluate_classification
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
+from lnl_toolbox.training.interfaces import RunContext
 from lnl_toolbox.training.experiment import build_optimizer, build_scheduler
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
 from lnl_toolbox.training.reproduction_data import build_reproduction_model, prepare_noisy_classification
@@ -235,7 +236,7 @@ def _trusted_manifest(
 
 def run_l2rw_experiment(
     config: dict[str, Any], output_dir: str | Path | None = None,
-    resume: str | Path | None = None,
+    resume: str | Path | None = None, *, context: RunContext | None = None,
 ) -> Path:
     config = deepcopy(config)
     seed = int(config.get("seed", 1)); seed_everything(seed)
@@ -339,6 +340,9 @@ def run_l2rw_experiment(
     meta_implementation = str(meta_config.get("implementation", "paper"))
     meta_weight_decay = float(config["optimizer"].get("weight_decay", 0.0))
     global_step = int(payload.get("global_step", 0)) if payload is not None else 0
+    session = context.session if context is not None and context.state.get("lifecycle_active") else None
+    if session is not None:
+        session.start_phase("step_training", total_units=max_steps or None)
     step_milestones = [int(value) for value in config.get("scheduler", {}).get("step_milestones", [])]
     while (global_step < max_steps) if max_steps else (start < epochs):
         epoch = start
@@ -373,6 +377,14 @@ def run_l2rw_experiment(
             objective = torch.sum(weights.sample_weights.to(per_sample) * per_sample)
             optimizer.zero_grad(set_to_none=True); objective.backward(); optimizer.step()
             global_step += 1
+            if session is not None:
+                session.log_step(
+                    global_step,
+                    phase="weighted_update",
+                    epoch=epoch + 1,
+                    objective=float(objective.detach()),
+                    positive_weight_count=float(weights.metrics["positive_weight_count"]),
+                )
             count = targets.numel(); total += count; loss_sum += float(objective.detach()) * count
             correct += int(logits.argmax(1).eq(targets).sum())
             weight_sum += float(weights.sample_weights.sum()); positive_sum += weights.metrics["positive_weight_count"]
@@ -388,6 +400,13 @@ def run_l2rw_experiment(
             "trusted_fingerprint": manifest.fingerprint, "global_step": global_step,
         })
         rows.append(row)
+        if session is not None:
+            session.log_epoch(
+                epoch + 1,
+                phase="evaluation",
+                **{key: value for key, value in row.items()
+                   if key not in {"event", "epoch", "phase", "seq"}},
+            )
         print(
             f"L2RW epoch {epoch + 1}/{epochs} steps={global_step} "
             f"loss={row['train_loss']:.5f} val={row['validation_accuracy']:.4f} "
@@ -408,7 +427,14 @@ def run_l2rw_experiment(
         }, run_dir / "last.pt")
         start += 1
     (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
-    (run_dir / "metrics.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    if session is None:
+        (run_dir / "metrics.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    else:
+        session.end_phase("step_training", completed_units=global_step)
+        session.emit("final", phase="evaluation", method="l2rw",
+                     completed_epochs=start,
+                     global_step=global_step,
+                     test_accuracy=rows[-1].get("test_accuracy") if rows else None)
     if rows: write_training_curves_svg(rows, run_dir / "training_curves.svg")
     return run_dir
 

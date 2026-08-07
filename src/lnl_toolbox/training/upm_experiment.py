@@ -18,6 +18,7 @@ from lnl_toolbox.noise.estimators import PosteriorSnapshot
 from lnl_toolbox.noise.generators import generate_symmetric
 from lnl_toolbox.noise.upm import UPMNoiseState
 from lnl_toolbox.runtime import seed_everything
+from lnl_toolbox.training.interfaces import RunContext
 from lnl_toolbox.training.reproduction_data import build_reproduction_model, prepare_noisy_classification
 
 
@@ -71,7 +72,7 @@ def _snapshot(model: nn.Module, loader: DataLoader, device: torch.device, classe
     return PosteriorSnapshot(probabilities, targets, indices, "synthetic_multiclass", "train")
 
 
-def run_upm_experiment(config: dict[str, Any], output_dir: str | Path | None = None, resume: str | Path | None = None) -> Path:
+def run_upm_experiment(config: dict[str, Any], output_dir: str | Path | None = None, resume: str | Path | None = None, *, context: RunContext | None = None) -> Path:
     run_dir = _dir(config, output_dir, resume); seed_everything(int(config.get("seed", 1))); train_loader, snapshot_loader, val_loader, test_loader, dimension, classes, noisy_targets = _data(config, run_dir)
     device = torch.device(str(config.get("trainer", {}).get("device", "cpu"))); model_cfg = config.get("model", {}); warm = (_UPMMLP(dimension, int(model_cfg.get("hidden_width", 16)), classes) if dimension else build_reproduction_model(model_cfg, config["data"], classes)).to(device); warm_opt = torch.optim.SGD(warm.parameters(), lr=float(config.get("optimizer", {}).get("lr", 0.05)), momentum=0.9)
     pre_epochs = int(config.get("warmup", {}).get("epochs", 1))
@@ -87,6 +88,9 @@ def run_upm_experiment(config: dict[str, Any], output_dir: str | Path | None = N
     if resume and checkpoint.exists():
         payload = torch.load(checkpoint, map_location=device, weights_only=False); model.load_state_dict(payload["model"]); optimizer.load_state_dict(payload["optimizer"]); state.load_state_dict(payload["upm_state"]); start = int(payload["epoch"])
     upm_cfg = config.get("upm", {}); interval = max(1, int(upm_cfg.get("eta_update_interval", 1))); metrics = (run_dir / "metrics.jsonl").open("a", encoding="utf-8")
+    session = context.session if context is not None and context.state.get("lifecycle_active") else None
+    if session is not None:
+        session.start_phase("alternating_training", total_units=epochs)
     with metrics:
         for epoch in range(start, epochs):
             model.train(); total = 0.0
@@ -98,7 +102,19 @@ def run_upm_experiment(config: dict[str, Any], output_dir: str | Path | None = N
             if scheduler is not None:
                 scheduler.step()
             record = {"epoch": epoch + 1, "train_loss": total / len(train_loader.dataset), "validation_accuracy": _accuracy(model, val_loader, device), "test_accuracy": _accuracy(model, test_loader, device), "eta_mean": float(state.confusion_probability.mean())}
-            metrics.write(json.dumps(record) + "\n"); metrics.flush(); torch.save({"epoch": epoch + 1, "model": model.state_dict(), "optimizer": optimizer.state_dict(), "upm_state": state.state_dict(), "config": config}, checkpoint)
+            if session is not None:
+                session.log_epoch(
+                    epoch + 1,
+                    phase="alternating_training",
+                    **{key: value for key, value in record.items() if key != "epoch"},
+                )
+            else:
+                metrics.write(json.dumps(record) + "\n"); metrics.flush()
+            torch.save({"epoch": epoch + 1, "model": model.state_dict(), "optimizer": optimizer.state_dict(), "upm_state": state.state_dict(), "config": config}, checkpoint)
+    if session is not None:
+        session.end_phase("alternating_training", completed_units=max(0, epochs - start))
+        session.emit("final", phase="evaluation", method="upm", completed_epochs=epochs,
+                     test_accuracy=record.get("test_accuracy") if epochs else None)
     return run_dir
 
 

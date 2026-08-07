@@ -13,7 +13,11 @@ import torch
 from torch import nn
 import yaml
 
-from lnl_toolbox.algorithms.t_revision import TRevisionAlgorithm, TRevisionConfig
+from lnl_toolbox.algorithms.t_revision import (
+    TRevisionAlgorithm,
+    TRevisionConfig,
+    TRevisionPhase,
+)
 from lnl_toolbox.data import NoisyTargetDataset
 from lnl_toolbox.data.cifar import load_cifar10, load_cifar100
 from lnl_toolbox.data.torch_cifar import (
@@ -25,6 +29,7 @@ from lnl_toolbox.data.torch_cifar import (
 from lnl_toolbox.plugins.builtin import build_builtin_loss
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import read_checkpoint
+from lnl_toolbox.training.interfaces import RunContext
 from lnl_toolbox.training.experiment import (
     _environment,
     _loader,
@@ -75,6 +80,8 @@ def run_t_revision_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    context: RunContext | None = None,
 ) -> Path:
     """Run the paper-faithful Reweight-R workflow with explicit code choices."""
 
@@ -299,7 +306,25 @@ def run_t_revision_experiment(
     try:
         if resume is not None:
             algorithm.resume(resume)
-        algorithm.run()
+        if context is None or not context.state.get("lifecycle_active"):
+            algorithm.run()
+        else:
+            phase_calls = (
+                (TRevisionPhase.STAGE1_TRAINING, "stage1", algorithm.train_stage1),
+                (TRevisionPhase.STAGE1_READY, "transition_initialization", algorithm.initialize_transition),
+                (TRevisionPhase.TRANSITION_INITIALIZED, "classifier_initialization_start", algorithm.start_classifier_initialization),
+                (TRevisionPhase.CLASSIFIER_INITIALIZATION, "classifier_initialization", algorithm.train_classifier_initialization),
+                (TRevisionPhase.CLASSIFIER_READY, "revision_start", algorithm.start_revision),
+                (TRevisionPhase.REVISION_TRAINING, "revision", algorithm.train_revision),
+            )
+            for phase, name, call in phase_calls:
+                if algorithm.state.phase is phase:
+                    context.session.start_phase(name)
+                    call()
+                    context.session.end_phase(name)
+            # Preserve the algorithm's own completion validation and return
+            # contract without invoking any training operation a second time.
+            algorithm.run()
     finally:
         algorithm.close()
     return run_dir

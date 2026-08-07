@@ -53,6 +53,7 @@ from lnl_toolbox.plugins.builtin import (
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import load_checkpoint, read_checkpoint, save_checkpoint
 from lnl_toolbox.training.early_stopping import EarlyStopping
+from lnl_toolbox.training.interfaces import RunContext
 from lnl_toolbox.training.noisy_labels import (
     checkpoint_noise_metadata,
     effective_subset_actual_rate,
@@ -63,6 +64,7 @@ from lnl_toolbox.training.progress import (
     TerminalTrainingProgress,
     write_training_curves_svg,
 )
+from lnl_toolbox.training.reporting import RunSession
 
 
 def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
@@ -492,6 +494,8 @@ def run_supervised_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    context: RunContext | None = None,
 ) -> Path:
     """Run one reproducible clean or noisy-label supervised experiment."""
 
@@ -519,6 +523,20 @@ def run_supervised_experiment(
         )
     run_dir = run_dir.expanduser().resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
+    session = context.session if context is not None else RunSession(
+        run_dir,
+        config=config,
+        runner="supervised",
+        method=str(config.get("method", "supervised")),
+        resumed=resume is not None,
+    )
+    lifecycle_active = context is None or bool(
+        context.state.get("lifecycle_active", False)
+    )
+    if lifecycle_active:
+        if not (context is not None and context.state.get("resume_lifecycle")):
+            session.start_run()
+            session.start_phase("train", total_units=epochs)
 
     checkpoint_payload = None
     if resume is not None:
@@ -783,11 +801,12 @@ def run_supervised_experiment(
     curves_enabled = bool(progress_config.get("curves", progress_enabled))
     with metrics_path.open("a", encoding="utf-8") as metrics_file:
         if compatibility_warnings:
-            metrics_file.write(json.dumps({
-                "event": "checkpoint_compatibility",
-                "warnings": compatibility_warnings,
-            }) + "\n")
-            metrics_file.flush()
+            if lifecycle_active:
+                session.emit(
+                    "checkpoint_compatibility",
+                    phase="resume",
+                    warnings=compatibility_warnings,
+                )
         for epoch in range(completed_epoch + 1, epochs):
             state.cycle = epoch
             algorithm.on_cycle_start(state)
@@ -910,9 +929,16 @@ def run_supervised_experiment(
                     config,
                     **checkpoint_kwargs,
                 )
-            metrics_file.write(json.dumps(row) + "\n")
-            metrics_file.flush()
-            curve_rows.append(row)
+            event_metrics = dict(row)
+            event_metrics.pop("event", None)
+            event_metrics.pop("epoch", None)
+            event_metrics.pop("global_step", None)
+            logged_row = (
+                session.log_epoch(epoch + 1, phase="train", **event_metrics)
+                if lifecycle_active
+                else row
+            )
+            curve_rows.append(logged_row)
             if curves_enabled:
                 curve_rows_for_svg = [
                     {
@@ -965,7 +991,11 @@ def run_supervised_experiment(
             final["max_cuda_memory_mb"] = torch.cuda.max_memory_allocated(device) / (
                 1024 ** 2
             )
-        metrics_file.write(json.dumps(final) + "\n")
+        if lifecycle_active:
+            session.end_phase("train", completed_units=last_completed_epoch + 1)
+            final_metrics = dict(final)
+            final_metrics.pop("event", None)
+            session.emit("final", phase="evaluation", **final_metrics)
         print(json.dumps(final), flush=True)
     (run_dir / "final_metrics.json").write_text(
         json.dumps(final, indent=2), encoding="utf-8"
@@ -982,6 +1012,6 @@ def run_experiment(
 ) -> Path:
     """Compatibility entry point for the general training CLI."""
 
-    from lnl_toolbox.training.runners import resolve_runner
+    from lnl_toolbox.training.unified import toolbox
 
-    return resolve_runner(config).invoke(dict(config), output_dir, resume)
+    return toolbox.run(config=dict(config), output_dir=output_dir, resume=resume).run_dir

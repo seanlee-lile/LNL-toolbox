@@ -16,6 +16,7 @@ import yaml
 from lnl_toolbox.algorithms.importance_reweighting import (
     ImportanceReweightingAlgorithm,
     ImportanceReweightingConfig,
+    ImportanceReweightingPhase,
 )
 from lnl_toolbox.data.binary_synthetic import (
     BinaryTensorDataset,
@@ -35,12 +36,15 @@ from lnl_toolbox.training.experiment import (
     build_optimizer,
     build_scheduler,
 )
+from lnl_toolbox.training.interfaces import RunContext
 
 
 def run_importance_reweighting_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    context: RunContext | None = None,
 ) -> Path:
     """Run the paper-scoped binary KDE/raw-min/weighted-CE workflow."""
 
@@ -199,4 +203,18 @@ def run_importance_reweighting_experiment(
         }, indent=2, sort_keys=True),
         encoding="utf-8",
     )
+    if context is None or not context.state.get("lifecycle_active"):
+        return algorithm.run()
+    phase_calls = (
+        (ImportanceReweightingPhase.POSTERIOR_FITTING, "posterior_fitting", algorithm._fit_posterior),
+        (ImportanceReweightingPhase.POSTERIOR_READY, "noise_rate_estimation", algorithm._estimate_rates),
+        (ImportanceReweightingPhase.RATE_READY, "final_training", algorithm._train_final),
+    )
+    for phase, name, call in phase_calls:
+        if algorithm.state.phase is phase:
+            context.session.start_phase(name)
+            call()
+            context.session.end_phase(name)
+    # Keep the algorithm's final-state validation and no-op completed-resume
+    # semantics without running any phase twice.
     return algorithm.run()

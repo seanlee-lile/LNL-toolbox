@@ -27,6 +27,7 @@ from lnl_toolbox.noise.statistics import StatisticArtifact
 from lnl_toolbox.noise.transition import TransitionArtifact
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
+from lnl_toolbox.training.interfaces import RunContext
 from lnl_toolbox.training.experiment import build_optimizer, build_scheduler
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
 from lnl_toolbox.training.reproduction_data import build_reproduction_model, prepare_noisy_classification
@@ -146,7 +147,7 @@ def _estimate_volmin(config, model, loader, device):
     }
 
 
-def run_mc_ldce_experiment(config: dict[str, Any], output_dir=None, resume=None) -> Path:
+def run_mc_ldce_experiment(config: dict[str, Any], output_dir=None, resume=None, *, context: RunContext | None = None) -> Path:
     config = deepcopy(config)
     seed = int(config.get("seed", 1))
     seed_everything(seed)
@@ -221,6 +222,9 @@ def run_mc_ldce_experiment(config: dict[str, Any], output_dir=None, resume=None)
     objective = MCLDCEObjective(statistic)
     base_learning_rate = float(config["optimizer"]["lr"])
     decay_start = int(config.get("scheduler", {}).get("decay_start", epochs))
+    session = context.session if context is not None and context.state.get("lifecycle_active") else None
+    if session is not None:
+        session.start_phase("classifier_training", total_units=epochs)
     for epoch in range(start_epoch, epochs):
         if str(config.get("scheduler", {}).get("name", "none")).lower() == "linear_after":
             factor = 1.0 if epoch < decay_start else max(
@@ -239,10 +243,28 @@ def run_mc_ldce_experiment(config: dict[str, Any], output_dir=None, resume=None)
         test = evaluate_classification(model, prepared.test_loader, criterion, device)
         row = standardize_epoch_row({"epoch": epoch + 1, "train_loss": loss_sum / total, "train_accuracy": correct / total, "validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"], "test_loss": test["loss"], "test_accuracy": test["accuracy"], "learning_rate": optimizer.param_groups[0]["lr"], "method": "mc_ldce"})
         rows.append(row)
+        if session is not None:
+            session.log_epoch(
+                epoch + 1,
+                phase="classifier_training",
+                **{key: value for key, value in row.items()
+                   if key not in {"event", "epoch", "phase", "seq"}},
+            )
         if scheduler is not None: scheduler.step()
         atomic_save({"method": "mc_ldce", "lifecycle_version": lifecycle["lifecycle_version"], "config": config, "model": model.state_dict(), "optimizer": optimizer.state_dict(), "scheduler": None if scheduler is None else scheduler.state_dict(), "completed_epoch": epoch, "metrics": rows, "statistic_hash": statistic.artifact_hash, "rng_state": capture_rng_state()}, run_dir / "last.pt")
+    if session is not None:
+        session.end_phase("classifier_training", completed_units=max(0, epochs - start_epoch))
+        final = {
+            "method": "mc_ldce",
+            "completed_epochs": epochs,
+            "test_loss": rows[-1].get("test_loss") if rows else None,
+            "test_accuracy": rows[-1].get("test_accuracy") if rows else None,
+            "statistic_hash": statistic.artifact_hash,
+        }
+        session.emit("final", phase="evaluation", **final)
     (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
-    (run_dir / "metrics.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    if session is None:
+        (run_dir / "metrics.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     if rows: write_training_curves_svg(rows, run_dir / "training_curves.svg")
     return run_dir
 

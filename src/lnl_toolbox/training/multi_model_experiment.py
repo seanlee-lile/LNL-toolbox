@@ -49,6 +49,8 @@ from lnl_toolbox.training.progress import (
     standardize_epoch_row,
     write_training_curves_svg,
 )
+from lnl_toolbox.training.interfaces import RunContext
+from lnl_toolbox.training.reporting import RunSession
 
 
 def _seed_worker(_worker_id: int) -> None:
@@ -221,6 +223,8 @@ def run_multi_model_experiment(
     raw_config: Mapping[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    context: RunContext | None = None,
 ) -> Path:
     """Run one configured multi-model algorithm without paper-name branches."""
 
@@ -237,6 +241,20 @@ def run_multi_model_experiment(
         if resume is not None
         else _run_directory(config, output_dir)
     )
+    session = context.session if context is not None else RunSession(
+        run_dir,
+        config=config,
+        runner="multi_model",
+        method=str(config.get("method", "multi_model")),
+        resumed=resume is not None,
+    )
+    lifecycle_active = context is None or bool(
+        context.state.get("lifecycle_active", False)
+    )
+    if lifecycle_active:
+        if not (context is not None and context.state.get("resume_lifecycle")):
+            session.start_run()
+            session.start_phase("train", total_units=epochs)
     checkpoint_payload = (
         None if resume is None else read_checkpoint(resume, device)
     )
@@ -481,9 +499,16 @@ def run_multi_model_experiment(
                     "model_2_accuracy"
                 ],
             })
+            event_metrics = dict(row)
+            event_metrics.pop("event", None)
+            event_metrics.pop("epoch", None)
+            event_metrics.pop("global_step", None)
+            row = (
+                session.log_epoch(epoch + 1, phase="train", **event_metrics)
+                if lifecycle_active
+                else row
+            )
             curve_rows.append(row)
-            metrics_file.write(json.dumps(row) + "\n")
-            metrics_file.flush()
             if selected_metrics["accuracy"] > best_accuracy:
                 best_accuracy = float(selected_metrics["accuracy"])
                 best_epoch = epoch + 1
@@ -556,8 +581,11 @@ def run_multi_model_experiment(
             )
         if noise_metadata is not None:
             final["noise"] = noise_metadata
-        metrics_file.write(json.dumps(final) + "\n")
-        metrics_file.flush()
+        if lifecycle_active:
+            session.end_phase("train", completed_units=epochs)
+            final_metrics = dict(final)
+            final_metrics.pop("event", None)
+            session.emit("final", phase="evaluation", **final_metrics)
     (run_dir / "final_metrics.json").write_text(
         json.dumps(final, indent=2), encoding="utf-8"
     )

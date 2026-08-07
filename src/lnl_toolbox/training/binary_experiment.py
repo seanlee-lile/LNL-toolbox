@@ -3,6 +3,7 @@ from __future__ import annotations
 """Framework-neutral binary experiment utilities for UCI and CIFAR views."""
 
 from pathlib import Path
+import json
 from typing import Any, Mapping
 
 import numpy as np
@@ -20,6 +21,8 @@ from lnl_toolbox.data.binary_benchmarks import (
 from lnl_toolbox.data.binary_synthetic import generate_synthetic_binary_2d
 from lnl_toolbox.data.preprocessing import BinaryPreprocessingConfig, BinaryPreprocessor
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
+from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, restore_rng_state
+from lnl_toolbox.training.interfaces import RunContext
 
 
 class BinaryTensorDataset(Dataset[dict[str, Any]]):
@@ -120,7 +123,13 @@ def evaluate_binary(model: nn.Module, loader: DataLoader, device: torch.device |
     return {"loss": total_loss / samples, "accuracy": correct / samples, "samples": float(samples)}
 
 
-def run_binary_experiment(config: Mapping[str, Any], output_dir: str | Path | None = None) -> Path:
+def run_binary_experiment(
+    config: Mapping[str, Any],
+    output_dir: str | Path | None = None,
+    resume: str | Path | None = None,
+    *,
+    context: RunContext | None = None,
+) -> Path:
     """Run a single configured binary experiment and persist its metrics."""
 
     resolved_config, record = resolve_parameter_sampling(config)
@@ -180,6 +189,12 @@ def run_binary_experiment(config: Mapping[str, Any], output_dir: str | Path | No
         benchmark = preprocessor.fit_transform(source, dataset=data_config.get("name", source.stem))
     else:
         raise ValueError("binary data requires data.path or a supported synthetic data.name")
+    destination = (
+        Path(resume).expanduser().resolve().parent
+        if resume is not None
+        else Path(output_dir or resolved_config.get("output_root", "artifacts/binary"))
+    )
+    destination.mkdir(parents=True, exist_ok=True)
     dataset = BinaryTensorDataset(benchmark)
     loader = DataLoader(
         dataset,
@@ -199,8 +214,36 @@ def run_binary_experiment(config: Mapping[str, Any], output_dir: str | Path | No
     epochs = int(resolved_config.get("epochs", 1))
     if epochs <= 0:
         raise ValueError("epochs must be positive")
-    rows = []
-    for epoch in range(epochs):
+    rows: list[dict[str, float]] = []
+    start_epoch = 0
+    best_metric = float("-inf")
+    session = context.session if context is not None and context.state.get("lifecycle_active") else None
+    if session is not None:
+        if not context.state.get("resume_lifecycle"):
+            session.start_run()
+        session.start_phase("binary_training", total_units=epochs)
+    if resume is not None:
+        checkpoint_path = Path(resume).expanduser().resolve()
+        payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        if not isinstance(payload, Mapping) or payload.get("method") != "binary_risk":
+            raise ValueError("Binary Risk resume checkpoint identity mismatch")
+        if payload.get("config") != dict(resolved_config):
+            raise ValueError("Binary Risk resume configuration mismatch")
+        model.load_state_dict(payload["model"])
+        optimizer.load_state_dict(payload["optimizer"])
+        if isinstance(payload.get("rng_state"), Mapping):
+            restore_rng_state(payload["rng_state"])
+        start_epoch = int(payload.get("completed_epoch", -1)) + 1
+        best_metric = float(payload.get("best_metric", float("-inf")))
+        metrics_path = destination / "metrics.json"
+        if metrics_path.is_file():
+            try:
+                previous = json.loads(metrics_path.read_text(encoding="utf-8"))
+                if isinstance(previous, list):
+                    rows = [dict(item) for item in previous if isinstance(item, Mapping)]
+            except json.JSONDecodeError:
+                rows = []
+    for epoch in range(start_epoch, epochs):
         row = train_binary_epoch(model, loader, optimizer, risk=risk)
         row["epoch"] = float(epoch + 1)
         if clean_test_benchmark is not None:
@@ -213,9 +256,41 @@ def run_binary_experiment(config: Mapping[str, Any], output_dir: str | Path | No
             row["test_loss"] = evaluation["loss"]
             row["test_accuracy"] = evaluation["accuracy"]
         rows.append(row)
-    destination = Path(output_dir or resolved_config.get("output_root", "artifacts/binary"))
-    destination.mkdir(parents=True, exist_ok=True)
-    import json
+        if session is not None:
+            session.log_epoch(
+                epoch + 1,
+                phase="binary_training",
+                **{key: value for key, value in row.items() if key != "epoch"},
+            )
+        metric = float(row.get("test_accuracy", row.get("accuracy", float("-inf"))))
+        if metric >= best_metric:
+            best_metric = metric
+            atomic_save(
+                {
+                    "format_version": 2,
+                    "method": "binary_risk",
+                    "config": dict(resolved_config),
+                    "model": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "completed_epoch": epoch,
+                    "best_metric": best_metric,
+                    "rng_state": capture_rng_state(),
+                },
+                destination / "best.pt",
+            )
+        atomic_save(
+            {
+                "format_version": 2,
+                "method": "binary_risk",
+                "config": dict(resolved_config),
+                "model": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "completed_epoch": epoch,
+                "best_metric": best_metric,
+                "rng_state": capture_rng_state(),
+            },
+            destination / "last.pt",
+        )
     (destination / "resolved_config.json").write_text(json.dumps(resolved_config, indent=2), encoding="utf-8")
     if record is not None:
         (destination / "parameter_record.json").write_text(json.dumps(record.to_dict(), indent=2), encoding="utf-8")
@@ -224,6 +299,11 @@ def run_binary_experiment(config: Mapping[str, Any], output_dir: str | Path | No
     if noise_manifest is not None:
         noise_manifest.save(destination / "noise_manifest.npz")
     (destination / "metrics.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    if session is not None:
+        session.end_phase("binary_training", completed_units=max(0, epochs - start_epoch))
+        session.emit("final", phase="evaluation", method="binary_risk",
+                     completed_epochs=epochs,
+                     test_accuracy=rows[-1].get("test_accuracy") if rows else None)
     return destination
 
 

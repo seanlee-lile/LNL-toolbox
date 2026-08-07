@@ -47,6 +47,7 @@ from lnl_toolbox.plugins.builtin import (
 )
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import load_checkpoint, read_checkpoint, save_checkpoint
+from lnl_toolbox.training.interfaces import RunContext
 from lnl_toolbox.training.experiment import build_model, build_optimizer, build_scheduler
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
 from lnl_toolbox.training.snapshots import (
@@ -240,6 +241,7 @@ def _run_pdl_official_phases(
     epochs: int,
     parameter_record: Any,
     resume: str | Path | None,
+    context: RunContext | None = None,
 ) -> Path:
     """Run PDL's warm-up/correction/revision phases without a paper branch."""
 
@@ -308,6 +310,9 @@ def _run_pdl_official_phases(
     for phase_index, (phase, phase_length, optimizer_config, correction) in enumerate(phase_specs):
         if phase_index < phase_start or phase_length == 0:
             continue
+        session = context.session if context is not None and context.state.get("lifecycle_active") else None
+        if session is not None:
+            session.start_phase(phase, total_units=phase_length)
         phase_best_path = run_dir / "pdl_correction_best.pt"
         phase_best_accuracy = float("-inf")
         phase_best_state = None
@@ -369,8 +374,18 @@ def _run_pdl_official_phases(
                     "method": "pdl",
                 })
                 rows.append(row)
-                handle.write(json.dumps(row) + "\n")
-                handle.flush()
+                if session is not None:
+                    session.log_epoch(
+                        global_epoch,
+                        phase=phase,
+                        **{key: value for key, value in row.items()
+                           if key not in {"event", "epoch", "phase", "seq"}},
+                    )
+                    # The event has already been committed by RunSession; no
+                    # second write is allowed because it would duplicate epochs.
+                else:
+                    handle.write(json.dumps(row) + "\n")
+                    handle.flush()
                 if phase == "correction" and selection["accuracy"] > phase_best_accuracy:
                     phase_best_accuracy = selection["accuracy"]
                     phase_best_state = {
@@ -396,6 +411,8 @@ def _run_pdl_official_phases(
                 if bool(config.get("trainer", {}).get("progress", {}).get("curves", True)):
                     write_training_curves_svg(rows, run_dir / "training_curves.svg")
         algorithm.on_run_end(state)
+        if session is not None:
+            session.end_phase(phase, completed_units=phase_length)
         if phase == "correction" and revision_epochs > 0:
             if phase_best_state is None:
                 raise RuntimeError("PDL correction phase produced no best checkpoint")
@@ -409,8 +426,13 @@ def _run_pdl_official_phases(
         "validation_artifact_hash": validation_artifact.artifact_hash,
         "revision_validation_artifact_hash": revision_validation_artifact.artifact_hash,
     }
-    with metrics_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(final) + "\n")
+    if session is not None:
+        session.emit("final", phase="evaluation", **{
+            key: value for key, value in final.items() if key != "event"
+        })
+    else:
+        with metrics_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(final) + "\n")
     (run_dir / "final_metrics.json").write_text(json.dumps(final, indent=2), encoding="utf-8")
     return run_dir
 
@@ -460,6 +482,8 @@ def run_instance_transition_experiment(
     raw_config: Mapping[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    context: RunContext | None = None,
 ) -> Path:
     """Run warm-up → snapshots → instance estimator → corrected training."""
 
@@ -728,6 +752,7 @@ def run_instance_transition_experiment(
             epochs=epochs,
             parameter_record=parameter_record,
             resume=resume,
+            context=context,
         )
 
     model = _build_instance_model(config["model"], num_classes)
@@ -765,6 +790,9 @@ def run_instance_transition_experiment(
     if metrics_path.is_file():
         rows = [json.loads(line) for line in metrics_path.read_text(encoding="utf-8").splitlines()
             if json.loads(line).get("event") == "epoch"]
+    session = context.session if context is not None and context.state.get("lifecycle_active") else None
+    if session is not None:
+        session.start_phase("corrected_train", total_units=epochs)
     algorithm.on_run_start(state)
     with metrics_path.open("a", encoding="utf-8") as handle:
         for epoch in range(completed_epoch + 1, epochs):
@@ -785,8 +813,16 @@ def run_instance_transition_experiment(
                 "selection_split": "noisy_validation", "selection_loss": selection["loss"],
                 "selection_accuracy": selection["accuracy"]})
             rows.append(row)
-            handle.write(json.dumps(row) + "\n")
-            handle.flush()
+            if session is not None:
+                session.log_epoch(
+                    epoch + 1,
+                    phase="corrected_train",
+                    **{key: value for key, value in row.items()
+                       if key not in {"event", "epoch", "phase", "seq"}},
+                )
+            else:
+                handle.write(json.dumps(row) + "\n")
+                handle.flush()
             if scheduler is not None:
                 scheduler.step()
             if selection["accuracy"] > best_accuracy:
@@ -802,12 +838,19 @@ def run_instance_transition_experiment(
             if bool(config["trainer"].get("progress", {}).get("curves", True)):
                 write_training_curves_svg(rows, run_dir / "training_curves.svg")
         algorithm.on_run_end(state)
+        if session is not None:
+            session.end_phase("corrected_train", completed_units=max(0, epochs - completed_epoch - 1))
         test = evaluate_classification(model, test_loader, criterion, device)
         final = {"event": "final", "completed_epochs": epochs, "global_step": state.step,
             "best_epoch": best_epoch, "best_selection_accuracy": best_accuracy,
             "test_loss": test["loss"], "test_accuracy": test["accuracy"],
             "artifact_hash": artifact.artifact_hash}
-        handle.write(json.dumps(final) + "\n")
+        if session is None:
+            handle.write(json.dumps(final) + "\n")
+    if session is not None:
+        session.emit("final", phase="evaluation", **{
+            key: value for key, value in final.items() if key != "event"
+        })
     (run_dir / "final_metrics.json").write_text(json.dumps(final, indent=2), encoding="utf-8")
     return run_dir
 

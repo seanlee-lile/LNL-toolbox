@@ -47,6 +47,8 @@ from lnl_toolbox.training.noisy_labels import (
     noise_mode,
     prepare_noise_manifest,
 )
+from lnl_toolbox.training.interfaces import RunContext
+from lnl_toolbox.training.reporting import RunSession
 
 
 def _build_peer_models(
@@ -181,6 +183,8 @@ def run_coteaching_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    context: RunContext | None = None,
 ) -> Path:
     """Run Co-teaching with exact peer cross-update and epoch-boundary resume."""
 
@@ -206,6 +210,20 @@ def run_coteaching_experiment(
             "%Y%m%d-%H%M%S"
         )
     run_dir.mkdir(parents=True, exist_ok=True)
+    session = context.session if context is not None else RunSession(
+        run_dir,
+        config=config,
+        runner="coteaching",
+        method=str(config.get("method", "coteaching")),
+        resumed=resume is not None,
+    )
+    lifecycle_active = context is None or bool(
+        context.state.get("lifecycle_active", False)
+    )
+    if lifecycle_active:
+        if not (context is not None and context.state.get("resume_lifecycle")):
+            session.start_run()
+            session.start_phase("train", total_units=epochs)
 
     checkpoint_payload = None
     if resume is not None:
@@ -477,8 +495,12 @@ def run_coteaching_experiment(
                     config,
                     **checkpoint_kwargs,
                 )
-            metrics_file.write(json.dumps(row) + "\n")
-            metrics_file.flush()
+            event_metrics = dict(row)
+            event_metrics.pop("event", None)
+            event_metrics.pop("epoch", None)
+            event_metrics.pop("global_step", None)
+            if lifecycle_active:
+                session.log_epoch(epoch + 1, phase="train", **event_metrics)
             print(json.dumps(row), flush=True)
 
         best_payload = read_checkpoint(run_dir / "best.pt", device)
@@ -505,7 +527,21 @@ def run_coteaching_experiment(
         }
         if device.type == "cuda":
             final["max_cuda_memory_mb"] = torch.cuda.max_memory_allocated(device) / 1024 ** 2
-        metrics_file.write(json.dumps(final) + "\n")
+        if lifecycle_active:
+            phase_metrics = {
+                key: value
+                for key, value in row.items()
+                if key not in {"event", "epoch", "global_step"}
+            }
+            session.emit(
+                "phase_end",
+                phase="train",
+                completed_units=epochs,
+                **phase_metrics,
+            )
+            final_metrics = dict(final)
+            final_metrics.pop("event", None)
+            session.emit("final", phase="evaluation", **final_metrics)
         print(json.dumps(final), flush=True)
     (run_dir / "final_metrics.json").write_text(
         json.dumps(final, indent=2), encoding="utf-8"

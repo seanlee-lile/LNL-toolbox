@@ -445,3 +445,15 @@ The three new runners are registered in `training/runners.py`; no `training/expe
 ## Current paper acceptance status (2026-08-07)
 
 The current reproduction acceptance status is maintained in `papers/implement/paper-reproduction-progress.md`. Only MentorNet and CDR remain incomplete; VolMinNet, UPM, and LEND are completed after source/equation alignment and validation.
+
+## 26. Unified run infrastructure (2026-08-07)
+
+| Path | Responsibility |
+|---|---|
+| `training/reporting.py` | `RunSession`, JSONL lifecycle events, run reports, artifact registration, and toolbox aggregation. |
+| `training/checkpoint.py` | Backward-compatible checkpoint v2 plus the common v3 envelope and atomic save/read helpers. |
+| `training/runners.py` | Public runner registry metadata: lifecycle type, checkpoint unit, resume capability, and smoke recipe. |
+| `cli/main.py` | `lnl report run` and `lnl report toolbox` commands. |
+| `scripts/run_smoke_matrix.py` | Discoverable smoke execution and failure/status recording. |
+
+The infrastructure is an outer lifecycle layer. It does not replace paper-specific loss, selector, estimator, model, noise, or algorithm modules. `DivideMix` remains a catalog-level missing workflow because no complete code flow exists in this repository.

@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader
 from lnl_toolbox.data.multiclass_synthetic import MulticlassTensorDataset, generate_synthetic_multiclass
 from lnl_toolbox.noise.generators import generate_symmetric
 from lnl_toolbox.runtime import seed_everything
+from lnl_toolbox.training.interfaces import RunContext
 from lnl_toolbox.models.feature_output import forward_with_features
 from lnl_toolbox.training.reproduction_data import build_reproduction_model, prepare_noisy_classification
 from lnl_toolbox.selectors.history import IndexedSoftLabelState
@@ -32,7 +33,7 @@ def _run_dir(config: Mapping[str, Any], output_dir: str | Path | None, resume: s
     path = Path(resume).resolve().parent if resume else (Path(output_dir).expanduser().resolve() if output_dir else Path(config.get("output_root", "artifacts/runs")) / datetime.now().strftime("%Y%m%d-%H%M%S")); path.mkdir(parents=True, exist_ok=True); return path
 
 
-def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = None, resume: str | Path | None = None) -> Path:
+def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = None, resume: str | Path | None = None, *, context: RunContext | None = None) -> Path:
     run_dir = _run_dir(config, output_dir, resume); seed_everything(int(config.get("seed", 1))); data = config.get("data", {}); classes, dimension = int(data.get("num_classes", 3)), int(data.get("dimension", 6)); n = int(data.get("train_size", 90)); seed = int(config.get("seed", 1))
     if str(data.get("name", "synthetic_multiclass")).lower() in {"cifar10", "cifar100"}:
         prepared = prepare_noisy_classification(config, run_dir, seed); loader, val_loader, test_loader, classes, n = prepared.train_loader, prepared.validation_loader, prepared.test_loader, prepared.num_classes, int(prepared.train_indices.size); dimension = 0
@@ -42,6 +43,9 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
     if resume and checkpoint.exists():
         payload = torch.load(checkpoint, map_location=device, weights_only=False); model.load_state_dict(payload["model"]); optimizer.load_state_dict(payload["optimizer"]); state.load_state_dict(payload["lend_state"]); start = int(payload["epoch"])
     epochs = int(config.get("trainer", {}).get("epochs", 1)); metrics = (run_dir / "metrics.jsonl").open("a", encoding="utf-8")
+    session = context.session if context is not None and context.state.get("lifecycle_active") else None
+    if session is not None:
+        session.start_phase("graph_training", total_units=epochs)
     with metrics:
         for epoch in range(start, epochs):
             model.train(); total = 0.0; selected_total = 0; count = 0
@@ -70,7 +74,16 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
                     for item in eval_loader:
                         out = model(item["input"].to(device))[1] if dimension else forward_with_features(model, item["input"].to(device)).logits; correct += int(out.argmax(1).eq(item["target"].to(device)).sum()); total_eval += out.shape[0]
                 return correct / max(total_eval, 1)
-            record = {"epoch": epoch + 1, "train_loss": total / max(count, 1), "selected_ratio": selected_total / max(count, 1), "validation_accuracy": acc(val_loader), "test_accuracy": acc(test_loader)}; metrics.write(json.dumps(record) + "\n"); metrics.flush(); torch.save({"epoch": epoch + 1, "model": model.state_dict(), "optimizer": optimizer.state_dict(), "lend_state": state.state_dict(), "config": config}, checkpoint)
+            record = {"epoch": epoch + 1, "train_loss": total / max(count, 1), "selected_ratio": selected_total / max(count, 1), "validation_accuracy": acc(val_loader), "test_accuracy": acc(test_loader)}
+            if session is not None:
+                session.log_epoch(epoch + 1, phase="graph_training", **{key: value for key, value in record.items() if key != "epoch"})
+            else:
+                metrics.write(json.dumps(record) + "\n"); metrics.flush()
+            torch.save({"epoch": epoch + 1, "model": model.state_dict(), "optimizer": optimizer.state_dict(), "lend_state": state.state_dict(), "config": config}, checkpoint)
+    if session is not None:
+        session.end_phase("graph_training", completed_units=max(0, epochs - start))
+        session.emit("final", phase="evaluation", method="lend", completed_epochs=epochs,
+                     test_accuracy=record.get("test_accuracy") if epochs else None)
     return run_dir
 
 

@@ -34,6 +34,7 @@ from lnl_toolbox.training.checkpoint import (
     read_checkpoint,
     restore_rng_state,
 )
+from lnl_toolbox.training.interfaces import RunContext
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
 from lnl_toolbox.training.snapshots import collect_feature_snapshot
 
@@ -160,6 +161,8 @@ def run_cwd_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    context: RunContext | None = None,
 ) -> Path:
     """Run one configured fold of the paper's five-fold CIFAR-binary protocol."""
 
@@ -289,6 +292,9 @@ def run_cwd_experiment(
     criterion = CrossEntropyLoss().to(device)
     epochs = int(config["trainer"]["epochs"])
     metrics_path = run_dir / "metrics.jsonl"
+    session = context.session if context is not None and context.state.get("lifecycle_active") else None
+    if session is not None:
+        session.start_phase("fold_training", total_units=epochs)
     for epoch in range(start_epoch, epochs):
         snapshot = collect_feature_snapshot(
             model,
@@ -334,10 +340,18 @@ def run_cwd_experiment(
             }
         )
         rows.append(row)
-        metrics_path.write_text(
-            "".join(json.dumps(value, sort_keys=True) + "\n" for value in rows),
-            encoding="utf-8",
-        )
+        if session is not None:
+            session.log_epoch(
+                epoch + 1,
+                phase="fold_training",
+                **{key: value for key, value in row.items()
+                   if key not in {"event", "epoch", "phase", "seq"}},
+            )
+        else:
+            metrics_path.write_text(
+                "".join(json.dumps(value, sort_keys=True) + "\n" for value in rows),
+                encoding="utf-8",
+            )
         scheduler.step()
         atomic_save(
             {
@@ -361,6 +375,10 @@ def run_cwd_experiment(
     )
     if rows:
         write_training_curves_svg(rows, run_dir / "training_curves.svg")
+    if session is not None:
+        session.end_phase("fold_training", completed_units=max(0, epochs - start_epoch))
+        session.emit("final", phase="evaluation", method="cwd", completed_epochs=epochs,
+                     test_accuracy=rows[-1].get("test_accuracy") if rows else None)
     return run_dir
 
 

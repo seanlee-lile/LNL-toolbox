@@ -40,6 +40,7 @@ from lnl_toolbox.training.checkpoint import (
     read_checkpoint,
     restore_rng_state,
 )
+from lnl_toolbox.training.interfaces import RunContext
 from lnl_toolbox.training.experiment import build_model, build_optimizer
 from lnl_toolbox.training.model_ema import ModelEMA
 from lnl_toolbox.training.noisy_labels import (
@@ -195,6 +196,8 @@ def run_fine_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    context: RunContext | None = None,
 ) -> Path:
     """Run the official warm-up -> SED/SCR -> FINE lifecycle."""
 
@@ -354,6 +357,9 @@ def run_fine_experiment(
     criterion = CrossEntropyLoss().to(device)
     positions = {int(index): position for position, index in enumerate(train_indices)}
     metrics_path = run_dir / "metrics.jsonl"
+    session = context.session if context is not None and context.state.get("lifecycle_active") else None
+    if session is not None:
+        session.start_phase("fine_training", total_units=epochs)
     if start_epoch >= warmup_epochs:
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
@@ -412,10 +418,18 @@ def run_fine_experiment(
             "learning_rate": float(optimizer.param_groups[0]["lr"]),
         })
         rows.append(row)
-        metrics_path.write_text(
-            "".join(json.dumps(value, sort_keys=True) + "\n" for value in rows),
-            encoding="utf-8",
-        )
+        if session is not None:
+            session.log_epoch(
+                epoch + 1,
+                phase=str(row.get("phase", "train")),
+                **{key: value for key, value in row.items()
+                   if key not in {"event", "epoch", "phase", "seq"}},
+            )
+        else:
+            metrics_path.write_text(
+                "".join(json.dumps(value, sort_keys=True) + "\n" for value in rows),
+                encoding="utf-8",
+            )
         if scheduler is not None:
             scheduler.step()
         atomic_save({
@@ -434,6 +448,11 @@ def run_fine_experiment(
             "rng_state": capture_rng_state(),
             "noise": noise_metadata,
         }, run_dir / "last.pt")
+    if session is not None:
+        session.end_phase("fine_training", completed_units=max(0, epochs - start_epoch))
+        session.emit("final", phase="evaluation", method="fine_sed",
+                     completed_epochs=epochs,
+                     test_accuracy=rows[-1].get("test_accuracy") if rows else None)
     (run_dir / "resolved_config.yaml").write_text(
         yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
     )

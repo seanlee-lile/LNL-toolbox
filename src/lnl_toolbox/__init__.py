@@ -2,6 +2,7 @@
 
 from .core import Batch, ExperimentContext, RunState, StepResult
 from .registry import Registry
+from .training.unified import Toolbox, toolbox
 
-__all__ = ["Batch", "ExperimentContext", "Registry", "RunState", "StepResult"]
+__all__ = ["Batch", "ExperimentContext", "Registry", "RunState", "StepResult", "Toolbox", "toolbox"]
 __version__ = "0.1.0"

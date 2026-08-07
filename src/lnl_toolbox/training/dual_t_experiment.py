@@ -15,6 +15,7 @@ import yaml
 from lnl_toolbox.algorithms.dual_t import (
     DualTAlgorithm,
     DualTConfig,
+    DualTPhase,
 )
 from lnl_toolbox.data import NoisyTargetDataset
 from lnl_toolbox.data.cifar import load_cifar10, load_cifar100
@@ -27,6 +28,7 @@ from lnl_toolbox.data.torch_cifar import (
 from lnl_toolbox.plugins.builtin import build_builtin_loss
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import read_checkpoint
+from lnl_toolbox.training.interfaces import RunContext
 from lnl_toolbox.training.experiment import (
     _environment,
     _loader,
@@ -48,6 +50,8 @@ def run_dual_t_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    context: RunContext | None = None,
 ) -> Path:
     """Build and run the first paper-specific Dual-T + Forward workflow."""
 
@@ -247,7 +251,21 @@ def run_dual_t_experiment(
     try:
         if resume is not None:
             algorithm.resume(resume)
-        algorithm.run()
+        if context is None or not context.state.get("lifecycle_active"):
+            algorithm.run()
+        else:
+            phase_calls = (
+                (DualTPhase.POSTERIOR_TRAINING, "posterior_estimation", algorithm.train_posterior),
+                (DualTPhase.POSTERIOR_READY, "transition_initialization", algorithm.estimate_transition),
+                (DualTPhase.TRANSITION_READY, "final_training_start", algorithm.start_final_training),
+                (DualTPhase.FINAL_TRAINING, "final_training", algorithm.train_final),
+            )
+            for phase, name, call in phase_calls:
+                if algorithm.state.phase is phase:
+                    context.session.start_phase(name)
+                    call()
+                    context.session.end_phase(name)
+            algorithm.run()
     finally:
         algorithm.close()
     return run_dir

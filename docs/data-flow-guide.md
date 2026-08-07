@@ -715,3 +715,9 @@ metrics.jsonl
 ```
 
 参数抽样、regularizer、selector 和风险校正均通过组合接口接入；论文名称不进入统一 `experiment.py` 的训练分支。resume 时必须保持参数记录、组件私有状态和 artifact 身份一致。
+
+## 12. Unified run lifecycle contract (2026-08-07)
+
+Every public runner is wrapped by `RunnerSpec.invoke` and writes its resolved configuration, environment metadata, authoritative `metrics.jsonl`, artifact index, final metrics, and JSON/Markdown report. `RunSession` records `run_start`, phase, epoch or step, and final/failure events with monotonic `seq` values. Checkpoint recovery may truncate events newer than the committed checkpoint sequence. The wrapper preserves existing runner signatures, YAML values, training order, and method-specific artifact names.
+
+The report status fields are intentionally independent: `implementation_status`, `modularization_status`, `smoke_status`, `formal_run_status`, and `paper_fidelity_status`. A smoke event can establish modularization and smoke evidence only; it cannot establish formal reproduction or paper fidelity.

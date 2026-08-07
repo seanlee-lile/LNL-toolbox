@@ -172,3 +172,19 @@ lnl-train --config configs/experiment/cifar10_smoke.yaml
 ```
 
 不要直接使用完整 Conda 环境的 `pip freeze` 覆盖 requirements；那会把其他项目的 Cleanlab、OpenCV、Pandas、Ultralytics 等无关依赖一起带入。
+
+## 11. Modular run infrastructure (2026-08-07)
+
+Use the repository's Conda environment for validation:
+
+```powershell
+F:\Miniconda\Scripts\conda.exe run -n pytorch python -m unittest discover -s tests -v
+```
+
+When another editable checkout shadows this source tree, run with `$env:PYTHONPATH=(Resolve-Path 'src').Path` or reinstall this checkout as the environment's editable package. The local smoke matrix is:
+
+```powershell
+F:\Miniconda\Scripts\conda.exe run -n pytorch python scripts/run_smoke_matrix.py --output artifacts/smoke-matrix
+```
+
+The matrix records missing data and implementation errors per recipe. It must not turn a smoke pass into a paper-fidelity claim. DivideMix is intentionally reported as unavailable until a complete repository code flow exists.

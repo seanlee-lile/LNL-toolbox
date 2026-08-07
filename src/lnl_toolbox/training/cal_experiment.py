@@ -23,6 +23,7 @@ from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 from lnl_toolbox.noise.cal import CALProxyArtifact, build_cal_proxy_artifact
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
+from lnl_toolbox.training.interfaces import RunContext
 from lnl_toolbox.training.experiment import (
     build_alpha_scaled_scheduler,
     build_optimizer,
@@ -56,7 +57,7 @@ def _assert_finite_warmup_gradients(model) -> None:
             )
 
 
-def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> Path:
+def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None, *, context: RunContext | None = None) -> Path:
     config = deepcopy(config); seed = int(config.get("seed", 1)); seed_everything(seed)
     device = resolve_device(str(config.get("trainer", {}).get("device", "auto")))
     run_dir = Path(resume).resolve().parent if resume else Path(output_dir or Path(config.get("output_root", "artifacts/runs")) / datetime.now().strftime("%Y%m%d-%H%M%S")).resolve()
@@ -154,6 +155,9 @@ def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> 
         model.load_state_dict(payload["model"]); optimizer.load_state_dict(payload["optimizer"])
         if scheduler is not None: scheduler.load_state_dict(payload["scheduler"])
         means = payload["reference_loss_means"].to(device); rows = list(payload.get("metrics", [])); start = int(payload["completed_epoch"]) + 1; restore_rng_state(payload["rng_state"])
+    session = context.session if context is not None and context.state.get("lifecycle_active") else None
+    if session is not None:
+        session.start_phase("risk_correction", total_units=epochs)
     for epoch in range(start, epochs):
         model.train(); total = correct = 0; loss_sum = 0.0
         epoch_loss_sums = torch.zeros_like(means)
@@ -178,6 +182,8 @@ def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> 
         means[observed_classes] = epoch_loss_sums[observed_classes] / epoch_class_counts[observed_classes, None]
         means = means.detach(); validation = evaluate_classification(model, data.validation_loader, criterion, device); test = evaluate_classification(model, data.test_loader, criterion, device)
         row = standardize_epoch_row({"epoch": epoch + 1, "train_loss": loss_sum / total, "train_accuracy": correct / total, "validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"], "test_loss": test["loss"], "test_accuracy": test["accuracy"], "learning_rate": optimizer.param_groups[0]["lr"], "method": "cal"}); rows.append(row)
+        if session is not None:
+            session.log_epoch(epoch + 1, phase="risk_correction", **{key: value for key, value in row.items() if key not in {"event", "epoch", "phase", "seq"}})
         if scheduler is not None:
             scheduler.step(resolve_confidence_weight(
                 epoch + 1,
@@ -185,7 +191,13 @@ def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> 
                 cal_schedule,
             ))
         atomic_save({"method": "cal", "config": config, "model": model.state_dict(), "optimizer": optimizer.state_dict(), "scheduler": None if scheduler is None else scheduler.state_dict(), "completed_epoch": epoch, "metrics": rows, "proxy_hash": proxy.artifact_hash, "reference_loss_means": means.cpu(), "rng_state": capture_rng_state()}, run_dir / "last.pt")
-    (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8"); (run_dir / "metrics.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    if session is None:
+        (run_dir / "metrics.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    else:
+        session.end_phase("risk_correction", completed_units=max(0, epochs - start))
+        session.emit("final", phase="evaluation", method="cal", completed_epochs=epochs,
+                     test_accuracy=rows[-1].get("test_accuracy") if rows else None)
     if rows: write_training_curves_svg(rows, run_dir / "training_curves.svg")
     return run_dir
 

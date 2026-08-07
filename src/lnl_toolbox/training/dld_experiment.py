@@ -30,6 +30,7 @@ from lnl_toolbox.training.checkpoint import (
     read_checkpoint,
     restore_rng_state,
 )
+from lnl_toolbox.training.interfaces import RunContext
 from lnl_toolbox.training.experiment import build_optimizer
 from lnl_toolbox.training.model_ema import ModelEMA
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
@@ -308,6 +309,8 @@ def run_dld_experiment(
     config: Mapping[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    context: RunContext | None = None,
 ) -> Path:
     """Run one DLD configuration with deterministic artifact/resume checks."""
 
@@ -422,6 +425,9 @@ def run_dld_experiment(
         rows = list(payload.get("metrics", []))
         restore_rng_state(payload["rng_state"])
 
+    session = context.session if context is not None and context.state.get("lifecycle_active") else None
+    if session is not None:
+        session.start_phase("diffusion_training", total_units=epochs)
     for epoch in range(start_epoch, epochs):
         model.train()
         feature_model.eval()
@@ -507,6 +513,13 @@ def run_dld_experiment(
             "learning_rate": optimizer.param_groups[0]["lr"],
         })
         rows.append(row)
+        if session is not None:
+            session.log_epoch(
+                epoch + 1,
+                phase=str(row.get("phase", "diffusion")),
+                **{key: value for key, value in row.items()
+                   if key not in {"event", "epoch", "phase", "seq"}},
+            )
         print(
             f"DLD epoch {epoch + 1}/{epochs} phase={row['phase']} "
             f"loss={row['train_loss']:.5f} val={row['validation_accuracy']:.4f} "
@@ -533,10 +546,16 @@ def run_dld_experiment(
     (run_dir / "resolved_config.yaml").write_text(
         yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
     )
-    (run_dir / "metrics.jsonl").write_text(
-        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
-        encoding="utf-8",
-    )
+    if session is None:
+        (run_dir / "metrics.jsonl").write_text(
+            "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+    else:
+        session.end_phase("diffusion_training", completed_units=max(0, epochs - start_epoch))
+        session.emit("final", phase="evaluation", method="dld",
+                     completed_epochs=epochs,
+                     test_accuracy=rows[-1].get("test_accuracy") if rows else None)
     if rows:
         write_training_curves_svg(rows, run_dir / "training_curves.svg")
     return run_dir

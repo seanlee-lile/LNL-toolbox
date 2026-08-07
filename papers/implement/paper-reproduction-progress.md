@@ -495,3 +495,96 @@ Per the project's practical acceptance rule (code/math path aligned, training ef
 - **CDR**: incomplete; the aligned paper-scale run and result comparison are still pending.
 
 This section is the current authoritative override for older historical rows in this document. VolMinNet, UPM, and LEND are completed following their source/equation alignment pass.
+
+## Toolbox modularization pass (2026-08-07)
+
+- Scope: preserve existing LNL mathematics, training order, CLI, YAML values, and artifact names while unifying lifecycle infrastructure. Paper-fidelity auditing and formal long runs are intentionally deferred.
+- Environment: `F:\\Miniconda\\envs\\pytorch\\python.exe`, PyTorch 2.5.1, CUDA 12.1 available.
+- Baseline before changes: `python -m unittest discover -s tests -v` completed with 616 tests passing in the Conda environment; the repository CIFAR path test requires the local dataset and is environment-dependent.
+- Added infrastructure: `training/reporting.py` with `RunSession`, per-run JSON/Markdown reports, artifact index, and toolbox aggregation; v3 checkpoint envelope helpers; runner lifecycle metadata; `lnl report run` and `lnl report toolbox`; smoke matrix script and CPU CI workflow.
+- Existing `papers/implement/paper-reproduction-progress.md` is the authoritative progress record; no duplicate `docs/toolbox-modularization-progress.md` was created.
+- Current implementation status: RunSession, report generation, artifact registration, v3 checkpoint helpers, runner lifecycle metadata, 25-paper catalog coverage, report CLI, smoke matrix, and CPU CI are implemented. `DivideMix` remains explicitly unavailable because the repository has no complete code flow.
+- Focused validation: RunSession `5/5`, reporting `3/3`, runner contract `2/2`; catalog discovery loads 25 papers and 62 recipes, with 60 non-conditional recipes.
+- Full validation under the current source via `PYTHONPATH=src`: `626` tests ran, `625` passed, and `1` failed because `data/cifar10/data_batch_1` is absent from this worktree. The user-specified command without `PYTHONPATH` still resolves the environment's older editable installation from another worktree and cannot see this pass's new modules.
+- Smoke matrix: `32` recipes executed; `11` completed and `21` failed. `20` failures are missing local CIFAR/CIFAR100 data; one DLD run exposed `ValueError: images must have shape [B,3,H,W]`. All failures are recorded in `artifacts/smoke-matrix/smoke_matrix.json` and per-run reports; no formal-run or paper-fidelity status is inferred.
+- Current next step: make the source checkout the environment's editable package (or export `PYTHONPATH=src`) and repeat the GPU/data-backed smoke gate after the local datasets are mounted. Formal long runs remain intentionally out of scope for this pass.
+
+## Unified algorithm interface migration (2026-08-07)
+
+- Public contract added: `RunContext`, `RunResult`, `EvaluationResult`, `ExperimentRunner`, `Toolbox`, and the singleton `toolbox`. All 25 catalogued runnable papers resolve through `toolbox.get(name)` to a lifecycle-specific runner exposing `prepare`, `fit`, `evaluate`, `save_checkpoint`, and `load_checkpoint`.
+- Legacy compatibility preserved: `run_experiment(config, output_dir, resume)` now delegates to `Toolbox.run()` and retains its `Path` return behavior. Existing formulas, model definitions, training order, YAML values, and artifact names were not rewritten.
+- Lifecycle adapters cover supervised, stateful, corrected-risk, conditional teacher/student, multi-model, staged, two-stage, fold, statistic-risk, dual-optimizer, alternating, artifact-pipeline, binary, step, diffusion, and graph-state flows. Binary Risk now has checkpoint/resume support through the common entry point.
+- Resume behavior was made idempotent for legacy JSONL writers: stale final events are removed only when training will continue; completed-resume no-ops retain byte-stable logs. Legacy top-level metric fields remain readable while common `unit`, `completed`, `metrics`, and `artifacts` fields are added.
+- New interface and contract tests: unified lookup, method/lifecycle matrix, result shape, checkpoint boundaries, resume behavior, reporting, and registry compatibility.
+- Validation under `F:\\Miniconda\\envs\\pytorch\\python.exe` with `PYTHONPATH=src`: focused unified tests `29/29`; lifecycle/reporting/registry tests `16/16`; CNLCU `7/7`; Co-teaching `3/3`; Importance Reweighting `32/32`; full suite `634` tests, `633` passed, `1` failed only because the local CIFAR-10 file `data/cifar10/data_batch_1` is absent.
+- Unified smoke matrix: `32` recipes executed through the compatibility-backed `Toolbox` path; `11` completed and `21` failed. `20` failures are missing CIFAR/CIFAR100 files and one is the existing DLD `[B,3,H,W]` input-shape error. Summary: `artifacts/smoke-matrix-unified/smoke_matrix.json`.
+- Scope boundary: the external API is unified for all 25 papers, while most legacy method bodies remain behind adapters in this pass. This establishes one callable protocol without claiming that every method has already been internally rewritten into native lifecycle classes or formally reproduced.
+- Exact next step: mount the required datasets, fix DLD input preparation, then rerun the smoke matrix and separately conduct formal paper-scale experiments. No smoke result is a paper-fidelity claim.
+
+## Native lifecycle migration pass 1 (2026-08-07)
+
+- The previous compatibility-only boundary was replaced for seven methods. Native lifecycle runners now cover GCE, APL, CDR, Loss Correction, JoCoR, Co-teaching, and CNLCU.
+- The single-stage methods enter the real `run_supervised_experiment` through `RunContext`; the training loop writes `run_start`, `phase_start`, common epoch events, `phase_end`, and evaluation `final` events through `RunSession`.
+- JoCoR, Co-teaching, and CNLCU enter their real multi-model training loops through the native multi-model lifecycle runner. Model-group checkpoint code and method-specific peer state remain unchanged.
+- Resume logs now remove only the committed phase tail before continuing. A resumed run continues the existing phase instead of duplicating `run_start` and `phase_start`; completed-resume no-ops remain stable. This was validated against the existing CNLCU and Co-teaching byte/state resume tests.
+- Added native lifecycle contract coverage for context propagation and event ordering. Focused results: native lifecycle `1/1`, unified interface `6/6`, CNLCU `7/7`, Co-teaching `3/3`, GCE/APL/CDR/Loss Correction supervised regression `16/16`, JoCoR `7/7`.
+- Full regression after this pass: `638` tests, `637` passed, `1` environment failure because `data/cifar10/data_batch_1` is absent. No implementation failure remains in the executed suite.
+- Current native migration count: `7/25` runnable papers. The remaining 18 papers still use compatibility-backed lifecycle classes and are not claimed as natively migrated.
+- Exact next step: migrate staged methods PDL, T-Revision, Dual-T, PCSE, MC-LDCE, and VolMinNet using the same phase-resume contract, then run their staged workflow tests before moving to the remaining specialized runners.
+
+## Native lifecycle migration pass 2 (2026-08-07)
+
+- PDL now writes correction/revision phase boundaries and epoch events through `RunSession` while preserving its existing instance-transition algorithm, phase checkpoints, best restoration, and artifact validation. Its legacy corrected-training path uses the same session boundary when selected.
+- T-Revision, Dual-T, and PCSE now enter their existing public phase methods through the shared context in exactly the same order as their original `algorithm.run()` dispatch. The algorithm modules, objectives, selectors, estimators, model definitions, and checkpoint payloads were not rewritten.
+- MC-LDCE and VolMinNet now emit common epoch/final events from their existing training loops. Staged legacy metric rows are normalized after execution so sequence numbers and nested metrics become canonical without changing the original flat fields.
+- Focused staged validation: Dual-T `22/22`, T-Revision `19/19`, PCSE `10/10`, MC-LDCE `11/11`, VolMinNet `1/1`, unified lifecycle `7/7`; total `70/70` in the staged/native selection.
+- Full regression: `638` tests ran, `637` passed, and `1` environment failure remains because `data/cifar10/data_batch_1` is absent. `compileall` and `git diff --check` passed.
+- Evidence for mathematical preservation: `git diff -- src/lnl_toolbox/algorithms` is empty. This pass changed only training adapters/wrappers and lifecycle persistence calls; it did not delete or rewrite original algorithm code.
+- Current native migration count: `13/25` runnable papers. The remaining 12 use the same external protocol but remain compatibility-backed and are not claimed as internally migrated.
+- Exact next step: migrate the remaining specialized runners in small lifecycle groups, beginning with FINE, CA2C, UPM, Importance Reweighting, and Binary Risk, with differential/resume tests for each group.
+
+## Native lifecycle migration pass 3 (2026-08-07)
+
+- FINE, CA2C, UPM, and Importance Reweighting now accept the shared `RunContext` from the native staged runner. Their existing warmup, co-learning, posterior/alternating, artifact pipeline, and optimizer logic remains in place; session events are added at the surrounding lifecycle boundaries.
+- Binary Risk now accepts the same context through the native single-stage runner and emits common binary-training epoch/final events while retaining its existing `metrics.json`, risk correction, and checkpoint compatibility outputs.
+- Added interface assertions for this group. Focused validation: CA2C `9/9`, Binary training `3/3`, UPM `1/1`, FINE `7/7`, unified interface `7/7`, plus the existing Importance Reweighting `13/13` tests.
+- Mathematical preservation evidence remains explicit: no file under `src/lnl_toolbox/algorithms` changed in this pass; only training wrappers/adapters and lifecycle tests changed.
+- Current native migration count: `18/25` runnable papers. The remaining seven are DSS, MentorNet, CAL, CWD, DLD, L2RW, and LEND.
+- Exact next step: migrate the final seven specialized runners, prioritizing step-based L2RW and graph/diffusion flows because their checkpoint units and tensor-state contracts need dedicated validation.
+
+## Unified context coverage pass (2026-08-07)
+
+- DSS and MentorNet now resolve through the native single-stage context path because their executable training body is the shared supervised workflow; MentorNet's prerequisite validation remains method-specific.
+- CAL, CWD, DLD, L2RW, and LEND now accept the common `RunContext` entry point and remain mapped to lifecycle-specific public runners. L2RW keeps its step checkpoint metadata; no epoch/step semantics or mathematical implementation was changed.
+- The final group has only reached context/adapter coverage in this pass; it is not being mislabeled as complete internal native migration. Their dedicated loops still require direct session event/checkpoint integration and differential resume tests in the next pass.
+- Interface/CLI validation after this coverage pass: unified interface `7/7`, unified CLI `21/21`, `compileall` and `git diff --check` passed. The prior full regression remains `639` tests with `638` passed and one missing local CIFAR data failure.
+- Current honest status: all 25 runnable papers share the same external protocol and resolve through a runner class; 18/25 have internal context-aware lifecycle migration; 7/25 have context-compatible adapter coverage pending deeper loop integration. DivideMix remains unavailable.
+
+## Final specialized lifecycle pass (2026-08-07)
+
+- L2RW now emits canonical `step` events for every weighted update and retains epoch evaluation events. Its existing meta-gradient, trusted branch, step budget, model state, and checkpoint payload remain unchanged.
+- DLD, CAL, CWD, and LEND now write their real epoch/final lifecycle through `RunSession` when called from the unified runner, while their legacy direct entry points continue writing the original files.
+- DSS and MentorNet are confirmed to use the shared supervised execution path through the native single-stage adapter; no duplicate algorithm loop was introduced.
+- Importance Reweighting remains the one exception: its algorithm-owned lifecycle is normalized by the shared staged adapter after execution, but it still needs direct session calls inside the algorithm wrapper for a fully native event stream.
+- Focused validation: L2RW `11/11`, DLD `6/6`, CWD `1/1`, CAL `9/9`, UPM `1/1`, unified interface `7/7`; `compileall` passed.
+- Current honest status: all 25 runnable papers have the same external protocol; 24/25 have direct or shared-loop lifecycle event integration, while Importance Reweighting has compatibility normalization only. DivideMix remains unavailable.
+- Exact next step: add the final direct session boundary to Importance Reweighting, then run the complete suite and perform a synthetic unified smoke check that inspects `metrics.jsonl` event schemas for representative single-stage, staged, multi-model, and step runners.
+
+## Unified lifecycle completion audit (2026-08-07)
+
+- Importance Reweighting now uses the existing phase machine through explicit context-aware calls for posterior fitting, rate estimation, and final training; the final algorithm-owned metric rows are normalized by the common adapter.
+- Final full regression under `F:\Miniconda\envs\pytorch\python.exe` with `PYTHONPATH=src`: `639` tests ran, `638` passed. The sole failure is the known environment/data failure: `data/cifar10/data_batch_1` is absent.
+- Final focused group results: L2RW `11/11`, DLD `6/6`, CWD `1/1`, CAL `9/9`, Importance Reweighting `32/32`, unified interface `7/7`; `compileall` and `git diff --check` passed.
+- No file under `src/lnl_toolbox/algorithms` was modified. Mathematical identity is supported by preserving the original algorithm calls/order and passing the existing equation, training, artifact, and resume tests; it is not claimed as a formal theorem.
+- Current status: all 25 runnable papers have one external invocation protocol; all 25 now have a context-aware runner boundary, with legacy algorithm-owned persistence retained where direct rewrite would risk changing the paper path. DivideMix remains explicitly unavailable.
+
+## LNL / pu-toolbox comparison and tutorial verification (2026-08-07)
+
+- The comparison is based on the repository data-flow and the extracted pu-toolbox source, not on documentation alone. LNL standardizes a complete paper-experiment lifecycle; pu-toolbox standardizes an algorithm estimator contract.
+- LNL data-flow verification used the original F-drive project configuration and CIFAR-10 data: `F:\\lab\\2026-summer\\LNL-toolbox`. The tutorial preflight passed under `F:\\Miniconda\\envs\\pytorch\\python.exe` with PyTorch 2.5.1 and CUDA available.
+- LNL CLI smoke completed successfully for `cifar10_symmetric_ce_smoke.yaml` with two epochs and 512 training samples. The run produced resolved configuration, environment metadata, JSONL metrics, noise manifest, artifact index, `last.pt`, `best.pt`, JSON/Markdown reports, and a training curve. The smoke test accuracy was `0.10546875`; this is not a paper-fidelity claim.
+- The same F-drive configuration also completed through the Python `toolbox.run(...)` API and returned `RunResult(status="completed")` with the same smoke result.
+- All 25 catalogued runnable papers resolved through `toolbox.get(name)` and exposed `prepare`, `fit`, `evaluate`, `save_checkpoint`, and `load_checkpoint`. This proves one external protocol, not identical internal implementations: the flowcharts still show distinct single-model, multi-model, staged, statistic, diffusion, graph, and step paths.
+- pu-toolbox's source tutorial also ran successfully on its generated PU demo data. Its `PUPipeline` selected `PUSBClassifier`, completed three-fold evaluation, and generated `report.json` and `report.md`.
+- Architectural conclusion: pu-toolbox is easier to extend when a new method can be represented as one `BasePUClassifier` estimator and registered with metadata. LNL can create unique algorithms as well, including multi-model and multi-stage methods, but a new method must enter the appropriate lifecycle flow, plugin/catalog registration, recipe/config catalog, and contract tests; a genuinely new lifecycle may require a new experiment runner.
+- Current LNL boundary remains explicit: external invocation and run artifacts are unified, while some legacy algorithm-owned persistence is still normalized by adapters. The report generated by the tutorial correctly keeps `formal_run_status` as `not_run` and `paper_fidelity_status` as `not_audited`; its `smoke_status` remains `unknown` unless the smoke matrix records that status.
