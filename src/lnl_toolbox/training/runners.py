@@ -135,6 +135,8 @@ def create_runner_registry() -> RunnerRegistry:
     registry.add("volmin", "lnl_toolbox.training.volmin_experiment", "run_volmin_experiment")
     registry.add("upm", "lnl_toolbox.training.upm_experiment", "run_upm_experiment")
     registry.add("lend", "lnl_toolbox.training.lend_experiment", "run_lend_experiment")
+    registry.add("dividemix", "lnl_toolbox.training.dividemix_experiment", "run_dividemix_experiment")
+    registry.add("volminnet", "lnl_toolbox.training.volminnet_experiment", "run_volminnet_experiment")
     profiles = {
         "supervised": ("single_stage", "epoch", "cifar10-symmetric-ce-smoke"),
         "clean": ("single_stage", "epoch", "cifar10-clean-smoke"),
@@ -157,6 +159,8 @@ def create_runner_registry() -> RunnerRegistry:
         "volmin": ("staged", "epoch", "volmin-cifar10-smoke"),
         "upm": ("staged", "epoch", "upm-cifar10-smoke"),
         "lend": ("staged", "epoch", "lend-cifar10-smoke"),
+        "dividemix": ("multi_model", "epoch", "cifar10-dividemix-smoke"),
+        "volminnet": ("dual_optimizer", "epoch", "cifar10-volminnet-smoke"),
     }
     for name, (lifecycle, checkpoint_unit, smoke_recipe) in profiles.items():
         current = registry._specs[name]
@@ -186,6 +190,8 @@ _METHOD_RUNNERS = frozenset(
         "volmin",
         "upm",
         "lend",
+        "dividemix",
+        "volminnet",
     }
 )
 _SUPPORTED_METHOD_ALIASES = frozenset(
@@ -242,6 +248,9 @@ def apply_epoch_override(config: dict[str, Any], epochs: int) -> None:
     method = _normalize(method_value) if str(method_value).strip() else ""
     if method == "t_revision":
         _set_nested_epoch(config, ("t_revision", "revision", "epochs"), epochs)
+        return
+    if method == "dividemix":
+        _set_nested_epoch(config, ("dividemix", "training", "epochs"), epochs)
         return
     if method in {"dual_t", "pcse"}:
         raise ValueError(

@@ -15,6 +15,8 @@ class UnifiedMethodMatrixTest(unittest.TestCase):
             "cal": "staged", "pcse": "staged", "mc-ldce": "staged", "volmin": "staged",
             "upm": "staged", "fine": "two_stage", "ca2c": "staged", "dld": "staged",
             "lend": "staged", "importance-reweighting": "staged", "l2rw": "staged",
+            "dividemix": "multi_model",
+            "volminnet": "dual_optimizer",
             "binary-risk": "single_stage", "mentornet": "single_stage",
         }
         for method, lifecycle in expected.items():

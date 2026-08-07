@@ -396,6 +396,32 @@ class NativeMultiModelRunner(LegacyRunnerAdapter):
 class NativeStagedRunner(LegacyRunnerAdapter):
     """Expose existing staged algorithms through the shared phase context."""
 
+    @staticmethod
+    def _is_completed_noop(
+        spec: Any,
+        config: Mapping[str, Any],
+        resume: Path | None,
+    ) -> bool:
+        if spec.name not in {"dividemix", "volminnet"} or resume is None:
+            return False
+        try:
+            import torch
+
+            payload = torch.load(resume, map_location="cpu", weights_only=False)
+            if spec.name == "dividemix":
+                state = payload["algorithm"]["dividemix_state"]
+                target = int(config["dividemix"]["training"]["epochs"])
+                return str(state.get("phase", "")) == "completed" and int(
+                    state.get("main_completed_epochs", -1)
+                ) >= target
+            state = payload["algorithm"]["volminnet_state"]
+            target = int(config["trainer"]["epochs"])
+            return bool(state.get("completed")) and int(
+                state.get("completed_epochs", -1)
+            ) >= target
+        except (ImportError, KeyError, OSError, TypeError, ValueError, RuntimeError):
+            return False
+
     def fit(
         self,
         context: RunContext | None = None,
@@ -410,25 +436,34 @@ class NativeStagedRunner(LegacyRunnerAdapter):
             if resume is not None
             else self._loaded_resume
         )
-        ctx.state["lifecycle_active"] = True
+        ctx.state["lifecycle_active"] = not self._is_completed_noop(
+            self.spec, ctx.resolved_config, effective_resume
+        )
+        if not ctx.state["lifecycle_active"]:
+            return RunResult.from_run_dir(ctx.run_dir, resolve=False)
         runner = self.spec.load()
         try:
-            if not (context is not None and context.state.get("resume_lifecycle")):
+            if ctx.state["lifecycle_active"] and not (
+                context is not None and context.state.get("resume_lifecycle")
+            ):
                 ctx.session.start_run()
-            ctx.session.start_phase(self.method, total_units=None)
+            if ctx.state["lifecycle_active"]:
+                ctx.session.start_phase(self.method, total_units=None)
             result = runner(
                 dict(ctx.resolved_config),
                 ctx.run_dir,
                 effective_resume,
                 context=ctx,
             )
-            ctx.session.end_phase(self.method)
+            if ctx.state["lifecycle_active"]:
+                ctx.session.end_phase(self.method)
             run_dir = Path(result).expanduser()
             # Staged algorithms retain their own metric-producing code.  Bring
             # those existing rows through the common event normalizer after the
             # run so sequence numbers and nested metric fields are canonical,
             # without touching any objective or optimizer code.
-            self._normalize_legacy_metrics(run_dir)
+            if ctx.state["lifecycle_active"]:
+                self._normalize_legacy_metrics(run_dir)
             write_run_report(
                 run_dir,
                 config=ctx.resolved_config,
@@ -533,6 +568,8 @@ def adapter_class_for(spec: Any, method: str | None = None):
         return NativeMultiModelRunner
     if spec.name in {"coteaching", "cnlcu"}:
         return NativeMultiModelRunner
+    if spec.name in {"dividemix", "volminnet"}:
+        return NativeStagedRunner
     if spec.name in {
         "instance_transition", "dual_t", "t_revision",
         "pcse", "mc_ldce", "volmin",

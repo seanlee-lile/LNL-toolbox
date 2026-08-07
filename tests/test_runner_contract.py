@@ -8,7 +8,7 @@ from lnl_toolbox.training.runners import create_runner_registry
 class RunnerContractTest(unittest.TestCase):
     def test_every_builtin_runner_declares_lifecycle_checkpoint_and_smoke(self) -> None:
         registry = create_runner_registry()
-        self.assertEqual(len(registry.names()), 21)
+        self.assertEqual(len(registry.names()), 23)
         for name in registry.names():
             spec = registry.get(name)
             self.assertTrue(spec.lifecycle, name)

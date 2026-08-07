@@ -23,6 +23,8 @@ _METHOD_TO_RUNNER = {
     "natarajan": "binary",
     "pdl": "instance_transition",
     "mentornet": "supervised",
+    "dividemix": "dividemix",
+    "volminnet": "volminnet",
 }
 
 

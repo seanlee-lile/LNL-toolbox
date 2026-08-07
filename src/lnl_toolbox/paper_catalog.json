@@ -193,6 +193,18 @@
     "implementation_paths": ["src/lnl_toolbox/algorithms/binary_risk.py", "src/lnl_toolbox/training/binary_experiment.py"]
   },
   {
+    "id": "dividemix", "acronym": "DivideMix", "title": "DivideMix: Learning with Noisy Labels as Semi-Supervised Learning", "venue": "ICLR", "year": 2020,
+    "source_url": "https://openreview.net/forum?id=HJgExaVtwr",
+    "summary": "Two peer networks divide examples with a loss-model posterior and train with MixMatch-style consistency.",
+    "mechanism": "peer warm-up, per-epoch loss GMM co-divide, cross-peer labeled/unlabeled training, and ensemble evaluation",
+    "lifecycle": ["two-model warm-up", "loss-history and GMM co-divide", "peer MixMatch updates", "paired validation selection", "ensemble evaluation"],
+    "limitations": ["This integration adds the existing executable workflow; smoke execution is required before treating it as operationally verified.", "No paper-fidelity claim is made by this catalog entry."],
+    "implementation_status": "workflow", "reproduction_status": "not_run", "availability": "runnable",
+    "configs": [{"recipe_id":"cifar10-dividemix-smoke","profile":"smoke","variant":"cifar10","configuration_fidelity":"smoke","implementation_status":"workflow","reproduction_status":"not_run","availability":"runnable"}],
+    "concept_to_config": [{"concept":"co-divide clean probability","config":"dividemix.gmm","implementation":"src/lnl_toolbox/algorithms/dividemix/gmm.py"}, {"concept":"MixMatch peer update","config":"dividemix.mixmatch","implementation":"src/lnl_toolbox/algorithms/dividemix/algorithm.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/dividemix", "src/lnl_toolbox/training/dividemix_experiment.py"]
+  },
+  {
     "id": "upm", "acronym": "UPM", "title": "Learning with Instance-Dependent Label Noise", "venue": "AAAI", "year": 2021,
     "source_url": "https://ojs.aaai.org/index.php/AAAI/article/view/17221",
     "summary": "Existing UPM experiment flow registered for lifecycle and smoke reporting.",
@@ -224,7 +236,7 @@
     "lifecycle": ["classifier initialization", "transition optimization", "evaluation"],
     "limitations": ["This pass registers the existing code flow; no paper-fidelity claim is made."],
     "implementation_status": "workflow", "reproduction_status": "not_run", "availability": "runnable",
-    "configs": [{"recipe_id":"volmin-cifar10-smoke","profile":"smoke","variant":"cifar10","configuration_fidelity":"smoke","implementation_status":"workflow","reproduction_status":"not_run","availability":"runnable"}, {"recipe_id":"volmin-cifar10-reproduction","profile":"reproduction","variant":"cifar10","configuration_fidelity":"paper_oriented","implementation_status":"workflow","reproduction_status":"not_run","availability":"runnable"}],
+    "configs": [{"recipe_id":"volmin-cifar10-smoke","profile":"smoke","variant":"cifar10","configuration_fidelity":"smoke","implementation_status":"workflow","reproduction_status":"not_run","availability":"runnable"}, {"recipe_id":"volmin-cifar10-reproduction","profile":"reproduction","variant":"cifar10","configuration_fidelity":"paper_oriented","implementation_status":"workflow","reproduction_status":"not_run","availability":"runnable"}, {"recipe_id":"cifar10-volminnet-smoke","profile":"smoke","variant":"volminnet-cifar10","configuration_fidelity":"smoke","implementation_status":"workflow","reproduction_status":"not_run","availability":"runnable"}],
     "concept_to_config": [{"concept":"trainable transition","config":"volmin","implementation":"src/lnl_toolbox/training/volmin_experiment.py"}],
     "implementation_paths": ["src/lnl_toolbox/training/volmin_experiment.py", "src/lnl_toolbox/noise/transition.py"]
   },

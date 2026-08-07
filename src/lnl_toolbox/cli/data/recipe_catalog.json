@@ -44,6 +44,8 @@
     "configs/experiment/cal_cifar10_smoke.yaml",
     "configs/experiment/dld_cifar10_reproduction.yaml",
     "configs/experiment/dld_cifar10_smoke.yaml",
+    "configs/experiment/cifar10_dividemix_smoke.yaml",
+    "configs/experiment/cifar10_volminnet_smoke.yaml",
     "configs/experiment/l2rw_cifar10_1epoch.yaml",
     "configs/experiment/l2rw_cifar10_reproduction.yaml",
     "configs/experiment/l2rw_cifar10_smoke.yaml",
