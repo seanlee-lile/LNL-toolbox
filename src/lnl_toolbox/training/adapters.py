@@ -396,13 +396,15 @@ class NativeMultiModelRunner(LegacyRunnerAdapter):
 class NativeStagedRunner(LegacyRunnerAdapter):
     """Expose existing staged algorithms through the shared phase context."""
 
+    _RUNNER_OWNED_LIFECYCLE = frozenset({"dld", "upm", "lend"})
+
     @staticmethod
     def _is_completed_noop(
         spec: Any,
         config: Mapping[str, Any],
         resume: Path | None,
     ) -> bool:
-        if spec.name not in {"dividemix", "volminnet"} or resume is None:
+        if spec.name not in {"dividemix", "volminnet", "dld", "upm", "lend"} or resume is None:
             return False
         try:
             import torch
@@ -414,11 +416,34 @@ class NativeStagedRunner(LegacyRunnerAdapter):
                 return str(state.get("phase", "")) == "completed" and int(
                     state.get("main_completed_epochs", -1)
                 ) >= target
-            state = payload["algorithm"]["volminnet_state"]
+            if spec.name == "volminnet":
+                state = payload["algorithm"]["volminnet_state"]
+                target = int(config["trainer"]["epochs"])
+                return bool(state.get("completed")) and int(
+                    state.get("completed_epochs", -1)
+                ) >= target
+            if spec.name == "dld":
+                dld_settings = config.get("dld", {})
+                if isinstance(dld_settings, Mapping) and isinstance(dld_settings.get("diffusion"), Mapping):
+                    target = int(dld_settings["diffusion"]["epochs"])
+                    state = payload.get("dld_state", {})
+                    return int(state.get("completed_epochs", -1)) >= target
+                target = int(config["trainer"]["epochs"])
+                return int(payload.get("completed_epoch", -1)) + 1 >= target
+            if spec.name == "upm":
+                upm_settings = config.get("upm", {})
+                if isinstance(upm_settings, Mapping) and isinstance(upm_settings.get("main"), Mapping):
+                    target = int(upm_settings["main"]["epochs"])
+                    state = payload.get("upm_state", {})
+                    return int(state.get("main_completed_epochs", -1)) >= target
+                target = int(config["trainer"]["epochs"])
+                return int(payload.get("epoch", 0)) >= target
+            lend_settings = config.get("lend", {})
+            if isinstance(lend_settings, Mapping) and isinstance(lend_settings.get("training"), Mapping):
+                target = int(lend_settings["training"]["epochs"])
+                return int(payload.get("completed_epoch", -1)) + 1 >= target
             target = int(config["trainer"]["epochs"])
-            return bool(state.get("completed")) and int(
-                state.get("completed_epochs", -1)
-            ) >= target
+            return int(payload.get("epoch", 0)) >= target
         except (ImportError, KeyError, OSError, TypeError, ValueError, RuntimeError):
             return False
 
@@ -441,13 +466,23 @@ class NativeStagedRunner(LegacyRunnerAdapter):
         )
         if not ctx.state["lifecycle_active"]:
             return RunResult.from_run_dir(ctx.run_dir, resolve=False)
+        if effective_resume is not None and self.spec.name in self._RUNNER_OWNED_LIFECYCLE:
+            try:
+                ctx.session.recover_metrics_from_checkpoint(effective_resume)
+            except (OSError, RuntimeError, TypeError, ValueError, KeyError):
+                self._prepare_native_resume_log(ctx.run_dir)
+            else:
+                # Native paper workflows write their own final row, while
+                # their legacy checkpoint step is not necessarily a JSONL
+                # sequence.  Re-enter after the committed epoch/phase tail.
+                self._prepare_native_resume_log(ctx.run_dir)
+            ctx.session._sequence = len(load_metric_events(ctx.run_dir / "metrics.jsonl"))
+        ctx.state["resume_lifecycle"] = effective_resume is not None
         runner = self.spec.load()
         try:
-            if ctx.state["lifecycle_active"] and not (
-                context is not None and context.state.get("resume_lifecycle")
-            ):
+            if ctx.state["lifecycle_active"] and not ctx.state.get("resume_lifecycle"):
                 ctx.session.start_run()
-            if ctx.state["lifecycle_active"]:
+            if ctx.state["lifecycle_active"] and self.spec.name not in self._RUNNER_OWNED_LIFECYCLE:
                 ctx.session.start_phase(self.method, total_units=None)
             result = runner(
                 dict(ctx.resolved_config),
@@ -455,7 +490,7 @@ class NativeStagedRunner(LegacyRunnerAdapter):
                 effective_resume,
                 context=ctx,
             )
-            if ctx.state["lifecycle_active"]:
+            if ctx.state["lifecycle_active"] and self.spec.name not in self._RUNNER_OWNED_LIFECYCLE:
                 ctx.session.end_phase(self.method)
             run_dir = Path(result).expanduser()
             # Staged algorithms retain their own metric-producing code.  Bring
@@ -520,7 +555,7 @@ class DualOptimizerRunner(StagedRunner):
     pass
 
 
-class AlternatingRunner(StagedRunner):
+class AlternatingRunner(NativeStagedRunner):
     pass
 
 
@@ -536,11 +571,11 @@ class StepRunner(StagedRunner):
     pass
 
 
-class DiffusionRunner(StagedRunner):
+class DiffusionRunner(NativeStagedRunner):
     pass
 
 
-class GraphStateRunner(StagedRunner):
+class GraphStateRunner(NativeStagedRunner):
     pass
 
 
@@ -568,6 +603,12 @@ def adapter_class_for(spec: Any, method: str | None = None):
         return NativeMultiModelRunner
     if spec.name in {"coteaching", "cnlcu"}:
         return NativeMultiModelRunner
+    if spec.name == "dld":
+        return DiffusionRunner
+    if spec.name == "upm":
+        return AlternatingRunner
+    if spec.name == "lend":
+        return GraphStateRunner
     if spec.name in {"dividemix", "volminnet"}:
         return NativeStagedRunner
     if spec.name in {
@@ -579,24 +620,18 @@ def adapter_class_for(spec: Any, method: str | None = None):
         return MultiModelRunner
     if spec.name == "fine":
         return NativeStagedRunner
-    if spec.name in {"cal", "cwd", "dld", "l2rw", "lend"}:
+    if spec.name in {"cal", "cwd", "l2rw"}:
         return NativeStagedRunner
     if spec.name in {"cal", "mc_ldce", "pcse"}:
         return StatisticRiskRunner
     if spec.name == "volmin":
         return DualOptimizerRunner
-    if spec.name in {"ca2c", "upm", "importance_reweighting"}:
+    if spec.name in {"ca2c", "importance_reweighting"}:
         return NativeStagedRunner
-    if spec.name == "upm":
-        return AlternatingRunner
     if spec.name == "importance_reweighting":
         return ArtifactPipelineRunner
     if spec.name == "l2rw":
         return StepRunner
-    if spec.name == "dld":
-        return DiffusionRunner
-    if spec.name == "lend":
-        return GraphStateRunner
     if spec.name in {"instance_transition", "dual_t", "t_revision"}:
         return StagedRunner
     if spec.name == "supervised" and spec.lifecycle == "single_stage":

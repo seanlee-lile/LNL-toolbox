@@ -15,6 +15,9 @@ from lnl_toolbox.training.adapters import (
     NativeMultiModelRunner,
     NativeSingleStageRunner,
     NativeStagedRunner,
+    AlternatingRunner,
+    DiffusionRunner,
+    GraphStateRunner,
 )
 
 
@@ -51,9 +54,14 @@ class UnifiedInterfaceTest(unittest.TestCase):
             self.assertIsInstance(toolbox.get(method), NativeMultiModelRunner)
 
     def test_second_native_migration_group_uses_shared_lifecycle_runners(self) -> None:
-        for method in ("fine", "ca2c", "upm", "importance_reweighting"):
+        for method in ("fine", "ca2c", "importance_reweighting"):
             self.assertIsInstance(toolbox.get(method), NativeStagedRunner)
         self.assertIsInstance(toolbox.get("binary-risk"), NativeSingleStageRunner)
+
+    def test_specialized_lifecycle_methods_use_their_native_adapters(self) -> None:
+        self.assertIsInstance(toolbox.get("dld"), DiffusionRunner)
+        self.assertIsInstance(toolbox.get("upm"), AlternatingRunner)
+        self.assertIsInstance(toolbox.get("lend"), GraphStateRunner)
 
     def test_custom_runner_registration_uses_same_lookup(self) -> None:
         class DummyRunner:

@@ -25,6 +25,9 @@ _METHOD_TO_RUNNER = {
     "mentornet": "supervised",
     "dividemix": "dividemix",
     "volminnet": "volminnet",
+    "dld": "dld",
+    "upm": "upm",
+    "lend": "lend",
 }
 
 

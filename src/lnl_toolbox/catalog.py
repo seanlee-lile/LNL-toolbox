@@ -149,9 +149,9 @@ def _recipe_path(relative: str, project: Path) -> Path:
 
 def _implementation_status(method: str, runner: str) -> str:
     if method in {
-        "cnlcu", "coteaching", "dss", "dual_t", "fine",
+        "cnlcu", "coteaching", "dld", "dss", "dual_t", "fine",
         "importance_reweighting", "jocor", "pcse", "pdl", "t_revision",
-        "cwd",
+        "cwd", "lend", "upm",
     }:
         return "user_ready"
     if method == "mentornet":
