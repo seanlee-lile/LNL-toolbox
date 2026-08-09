@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import random
 from typing import Any, Mapping
+import warnings
 
 import numpy as np
 import torch
@@ -48,6 +49,11 @@ from lnl_toolbox.plugins.builtin import (
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import load_checkpoint, read_checkpoint, save_checkpoint
 from lnl_toolbox.training.interfaces import RunContext
+from lnl_toolbox.training.epoch_stream import (
+    build_epoch_loader,
+    loader_stream_metadata,
+    validate_loader_stream,
+)
 from lnl_toolbox.training.experiment import build_model, build_optimizer, build_scheduler
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
 from lnl_toolbox.training.snapshots import (
@@ -276,11 +282,15 @@ def _run_pdl_official_phases(
     phase_start = 0
     completed_in_phase = -1
     if payload is not None:
-        if payload.get("method") != "pdl" or payload.get("config") != dict(config):
+        # Historical checkpoints produced by ``save_checkpoint`` did not copy
+        # the method identity to the top level.  Artifact provenance below is
+        # still mandatory, so accept only that missing legacy identity.
+        if payload.get("method") not in {None, "pdl"} or payload.get("config") != dict(config):
             raise ValueError("PDL resume configuration mismatch")
-        if payload.get("artifact_hash") != artifact.artifact_hash:
-            raise ValueError("PDL transition artifact resume mismatch")
         pipeline = dict(payload.get("pipeline", {}))
+        saved_artifact_hash = payload.get("artifact_hash", pipeline.get("artifact_hash"))
+        if saved_artifact_hash != artifact.artifact_hash:
+            raise ValueError("PDL transition artifact resume mismatch")
         if pipeline.get("validation_artifact_hash") != validation_artifact.artifact_hash:
             raise ValueError("PDL validation artifact resume mismatch")
         if pipeline.get("revision_validation_artifact_hash") != revision_validation_artifact.artifact_hash:
@@ -290,6 +300,19 @@ def _run_pdl_official_phases(
         if saved_phase == "revision":
             phase_start = 1
         completed_in_phase = int(payload.get("completed_epoch", -1))
+        exact_loader_resume = validate_loader_stream(
+            payload.get("loader_stream"),
+            base_seed=seed,
+            namespace=f"pdl.{saved_phase}",
+            next_epoch=completed_in_phase + 1,
+        )
+        if not exact_loader_resume:
+            warnings.warn(
+                "Legacy PDL checkpoint has no loader_stream metadata; "
+                "epoch-boundary input-stream resume is best effort.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         model.load_state_dict(payload["model"])
 
     phase_specs = [
@@ -343,7 +366,15 @@ def _run_pdl_official_phases(
                 state.cycle = local_epoch
                 algorithm.on_cycle_start(state)
                 loss_sum = accuracy_sum = samples = 0.0
-                for raw_batch in train_loader:
+                epoch_loader = build_epoch_loader(
+                    train_loader.dataset,
+                    config["loader"],
+                    base_seed=seed,
+                    namespace=f"pdl.{phase}",
+                    epoch=local_epoch,
+                    drop_last=bool(config["loader"].get("drop_last", False)),
+                )
+                for raw_batch in epoch_loader:
                     result = algorithm.step(Batch(raw_batch), state)
                     count = result.metrics["samples"]
                     samples += count
@@ -407,6 +438,11 @@ def _run_pdl_official_phases(
                     },
                     best_epoch=global_epoch, best_selection_accuracy=best_accuracy,
                     selection_split="noisy_validation",
+                    loader_stream=loader_stream_metadata(
+                        base_seed=seed,
+                        namespace=f"pdl.{phase}",
+                        next_epoch=local_epoch + 1,
+                    ),
                 )
                 if bool(config.get("trainer", {}).get("progress", {}).get("curves", True)):
                     write_training_curves_svg(rows, run_dir / "training_curves.svg")
@@ -770,6 +806,19 @@ def run_instance_transition_experiment(
         state, completed_epoch, checkpoint_payload = load_checkpoint(
             resume, algorithm, device, scheduler=scheduler
         )
+        exact_loader_resume = validate_loader_stream(
+            checkpoint_payload.get("loader_stream"),
+            base_seed=seed,
+            namespace="pdl.corrected_train",
+            next_epoch=completed_epoch + 1,
+        )
+        if not exact_loader_resume:
+            warnings.warn(
+                "Legacy PDL checkpoint has no loader_stream metadata; "
+                "epoch-boundary input-stream resume is best effort.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         best_epoch = int(checkpoint_payload["best_epoch"])
         best_accuracy = float(checkpoint_payload["best_selection_accuracy"])
 
@@ -799,7 +848,15 @@ def run_instance_transition_experiment(
             state.cycle = epoch
             algorithm.on_cycle_start(state)
             loss_sum = accuracy_sum = samples = 0.0
-            for raw_batch in train_loader:
+            epoch_loader = build_epoch_loader(
+                train_loader.dataset,
+                config["loader"],
+                base_seed=seed,
+                namespace="pdl.corrected_train",
+                epoch=epoch,
+                drop_last=bool(config["loader"].get("drop_last", False)),
+            )
+            for raw_batch in epoch_loader:
                 result = algorithm.step(Batch(raw_batch), state)
                 count = result.metrics["samples"]
                 samples += count
@@ -830,11 +887,21 @@ def run_instance_transition_experiment(
                 save_checkpoint(run_dir / "best.pt", algorithm, state, epoch, config,
                     scheduler=scheduler, best_epoch=best_epoch,
                     best_selection_accuracy=best_accuracy, selection_split="noisy_validation",
-                    pipeline={"phase": "corrected_train", "artifact_hash": artifact.artifact_hash})
+                    pipeline={"phase": "corrected_train", "artifact_hash": artifact.artifact_hash},
+                    loader_stream=loader_stream_metadata(
+                        base_seed=seed,
+                        namespace="pdl.corrected_train",
+                        next_epoch=epoch + 1,
+                    ))
             save_checkpoint(run_dir / "last.pt", algorithm, state, epoch, config,
                 scheduler=scheduler, best_epoch=best_epoch,
                 best_selection_accuracy=best_accuracy, selection_split="noisy_validation",
-                pipeline={"phase": "corrected_train", "artifact_hash": artifact.artifact_hash})
+                pipeline={"phase": "corrected_train", "artifact_hash": artifact.artifact_hash},
+                loader_stream=loader_stream_metadata(
+                    base_seed=seed,
+                    namespace="pdl.corrected_train",
+                    next_epoch=epoch + 1,
+                ))
             if bool(config["trainer"].get("progress", {}).get("curves", True)):
                 write_training_curves_svg(rows, run_dir / "training_curves.svg")
         algorithm.on_run_end(state)

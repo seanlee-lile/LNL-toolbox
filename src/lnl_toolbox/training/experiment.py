@@ -53,6 +53,11 @@ from lnl_toolbox.plugins.builtin import (
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import load_checkpoint, read_checkpoint, save_checkpoint
 from lnl_toolbox.training.early_stopping import EarlyStopping
+from lnl_toolbox.training.epoch_stream import (
+    build_epoch_loader,
+    loader_stream_metadata,
+    validate_loader_stream,
+)
 from lnl_toolbox.training.interfaces import RunContext
 from lnl_toolbox.training.noisy_labels import (
     checkpoint_noise_metadata,
@@ -682,6 +687,16 @@ def run_supervised_experiment(
         transform=build_cifar_transform(False, **transform_options),
     )
     loader_config = config["loader"]
+    pipeline_config = config.get("pipeline", {}) or {}
+    objective_config = (
+        pipeline_config.get("objective_consumer", {})
+        if isinstance(pipeline_config, Mapping)
+        else {}
+    )
+    deterministic_dss_stream = (
+        isinstance(objective_config, Mapping)
+        and str(objective_config.get("name", "")).strip().lower() == "dss"
+    )
     train_loader = _loader(
         train_set,
         loader_config,
@@ -765,6 +780,18 @@ def run_supervised_experiment(
         compatibility_warnings.extend(
             checkpoint_payload.get("_compatibility_warnings", [])
         )
+        if deterministic_dss_stream:
+            exact_loader_resume = validate_loader_stream(
+                checkpoint_payload.get("loader_stream"),
+                base_seed=seed,
+                namespace="dss.train",
+                next_epoch=completed_epoch + 1,
+            )
+            if not exact_loader_resume:
+                compatibility_warnings.append(
+                    "Legacy DSS checkpoint has no loader_stream metadata; "
+                    "epoch-boundary input-stream resume is best effort."
+                )
         if early_stopping is not None and checkpoint_payload.get("early_stopping") is not None:
             early_stopping.load_state_dict(checkpoint_payload["early_stopping"])
 
@@ -818,14 +845,24 @@ def run_supervised_experiment(
             update_metric_sums: dict[str, float] = {}
             update_metric_steps = 0
             learning_rate = float(optimizer.param_groups[0]["lr"])
+            epoch_train_loader = train_loader
+            if deterministic_dss_stream:
+                epoch_train_loader = build_epoch_loader(
+                    train_set,
+                    loader_config,
+                    base_seed=seed,
+                    namespace="dss.train",
+                    epoch=epoch,
+                    drop_last=bool(loader_config.get("drop_last", False)),
+                )
             progress = TerminalTrainingProgress(
                 epoch=epoch + 1,
                 total_epochs=epochs,
-                total_batches=len(train_loader),
+                total_batches=len(epoch_train_loader),
                 update_interval=progress_interval,
                 enabled=progress_enabled,
             )
-            for batch_number, raw_batch in enumerate(train_loader, start=1):
+            for batch_number, raw_batch in enumerate(epoch_train_loader, start=1):
                 result = algorithm.step(Batch(raw_batch), state)
                 count = result.metrics["samples"]
                 selected_count = result.metrics["selected_samples"]
@@ -911,6 +948,15 @@ def run_supervised_experiment(
                 "component_states": pipeline.component_state_dict(),
                 "early_stopping": None if early_stopping is None else early_stopping.state_dict(),
                 "parameter_record": None if parameter_record is None else parameter_record.to_dict(),
+                "loader_stream": (
+                    loader_stream_metadata(
+                        base_seed=seed,
+                        namespace="dss.train",
+                        next_epoch=epoch + 1,
+                    )
+                    if deterministic_dss_stream
+                    else None
+                ),
             }
             save_checkpoint(
                 run_dir / "last.pt",

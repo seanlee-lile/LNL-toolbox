@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import pickle
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,6 +19,40 @@ from lnl_toolbox.training.fine_experiment import run_fine_experiment
 from lnl_toolbox.training.model_ema import ModelEMA
 
 
+def _assert_nested_equal(test: unittest.TestCase, left, right) -> None:
+    if torch.is_tensor(left):
+        torch.testing.assert_close(left, right, rtol=0.0, atol=0.0)
+    elif isinstance(left, dict):
+        test.assertEqual(set(left), set(right))
+        for key in left:
+            _assert_nested_equal(test, left[key], right[key])
+    elif isinstance(left, (list, tuple)):
+        test.assertEqual(len(left), len(right))
+        for first, second in zip(left, right):
+            _assert_nested_equal(test, first, second)
+    else:
+        test.assertEqual(left, right)
+
+
+class _RecordingLoader:
+    def __init__(self, loader, sink, stream) -> None:
+        self.loader = loader
+        self.dataset = loader.dataset
+        self.sink = sink
+        self.stream = stream
+
+    def __len__(self):
+        return len(self.loader)
+
+    def __iter__(self):
+        for batch in self.loader:
+            values = [batch["index"].clone(), batch["input"].clone()]
+            if "strong_input" in batch:
+                values.append(batch["strong_input"].clone())
+            self.sink.setdefault(self.stream, []).append(tuple(values))
+            yield batch
+
+
 def _cifar(split: str, samples_per_class: int) -> CifarData:
     labels = np.repeat(np.arange(100, dtype=np.int64), samples_per_class)
     images = np.zeros((labels.size, 32, 32, 3), dtype=np.uint8)
@@ -26,6 +61,27 @@ def _cifar(split: str, samples_per_class: int) -> CifarData:
 
 
 class FINETrainingTest(unittest.TestCase):
+    @staticmethod
+    def _resume_config():
+        return {
+            "seed": 3,
+            "data": {
+                "name": "cifar100", "root": "unused", "validation_size": 0,
+                "augment": True, "strong_magnitude": 1,
+            },
+            "noise": {"name": "symmetric", "rate": 0.2, "seed": 3},
+            "loader": {"batch_size": 100, "num_workers": 0, "pin_memory": False},
+            "model": {"name": "tiny_cnn", "width": 2},
+            "optimizer": {"name": "sgd", "lr": 0.01, "momentum": 0.0},
+            "scheduler": {"eta_min": 0.0005},
+            "trainer": {"epochs": 3, "device": "cpu"},
+            "fine": {
+                "warmup_epochs": 1, "warmup_lr": 0.01, "ema_momentum": 0.9,
+                "momentum_scs": 0.9, "momentum_scr": 0.9,
+                "beta": 0.1, "gamma": 0.002, "alpha": 1.0,
+            },
+        }
+
     def test_seven_cnn_exposes_logits_and_features(self) -> None:
         model = FineSevenCNN(100, base_width=2)
         output = model.forward_with_features(torch.randn(2, 3, 32, 32))
@@ -133,6 +189,119 @@ class FINETrainingTest(unittest.TestCase):
             self.assertIn("ema", payload)
             self.assertIn("scs", payload)
             self.assertIn("scr", payload)
+
+    def test_zero_validation_size_does_not_reuse_clean_test(self) -> None:
+        train = _cifar("train", 1)
+        test = _cifar("test", 1)
+        config = {
+            "seed": 5,
+            "data": {
+                "name": "cifar100", "root": "unused", "validation_size": 0,
+                "max_test_samples": 100, "augment": False, "strong_magnitude": 1,
+            },
+            "noise": {"name": "symmetric", "rate": 0.2, "seed": 5},
+            "loader": {"batch_size": 100, "num_workers": 0, "pin_memory": False},
+            "model": {"name": "tiny_cnn", "width": 2},
+            "optimizer": {"name": "sgd", "lr": 0.01, "momentum": 0.0},
+            "scheduler": {"eta_min": 0.0005},
+            "trainer": {"epochs": 1, "device": "cpu"},
+            "fine": {
+                "warmup_epochs": 1, "warmup_lr": 0.01, "ema_momentum": 0.9,
+                "momentum_scs": 0.9, "momentum_scr": 0.9,
+                "beta": 0.1, "gamma": 0.002, "alpha": 1.0,
+            },
+        }
+        evaluated_splits = []
+        from lnl_toolbox.training import fine_experiment
+        original = fine_experiment.evaluate_classification
+
+        def record(model, loader, criterion, device):
+            evaluated_splits.append(loader.dataset.data.split)
+            return original(model, loader, criterion, device)
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "lnl_toolbox.training.fine_experiment.load_cifar100",
+            side_effect=lambda _root, split: train if split == "train" else test,
+        ), patch(
+            "lnl_toolbox.training.fine_experiment.evaluate_classification",
+            side_effect=record,
+        ):
+            result = run_fine_experiment(config, directory)
+            metrics_text = (result / "metrics.jsonl").read_text()
+        self.assertEqual(evaluated_splits, ["test"])
+        rows = [json.loads(line) for line in metrics_text.splitlines()]
+        epoch = next(row for row in rows if row["event"] == "epoch")
+        final = next(row for row in rows if row["event"] == "final")
+        self.assertEqual(epoch["validation_metric"], "unavailable")
+        self.assertNotIn("validation_accuracy", epoch)
+        self.assertNotIn("test_accuracy", epoch)
+        self.assertEqual(final["validation_metric"], "unavailable")
+        self.assertIn("test_accuracy", final)
+
+    def test_epoch_boundary_resume_reproduces_fine_stream_and_state(self) -> None:
+        from lnl_toolbox.training import fine_experiment
+        train = _cifar("train", 2)
+        test = _cifar("test", 1)
+        config = self._resume_config()
+        original_builder = fine_experiment.build_epoch_loader
+        original_save = fine_experiment.atomic_save
+
+        def run(directory, sink, *, interrupt=False, resume=None):
+            def build(*args, **kwargs):
+                loader = original_builder(*args, **kwargs)
+                return _RecordingLoader(
+                    loader, sink, (kwargs["namespace"], kwargs["epoch"])
+                )
+
+            stopped = False
+
+            def save(payload, path):
+                nonlocal stopped
+                original_save(payload, path)
+                if (
+                    interrupt and not stopped and Path(path).name == "last.pt"
+                    and int(payload["completed_epoch"]) == 0
+                ):
+                    stopped = True
+                    raise RuntimeError("simulated interruption")
+
+            with patch(
+                "lnl_toolbox.training.fine_experiment.load_cifar100",
+                side_effect=lambda _root, split: train if split == "train" else test,
+            ), patch(
+                "lnl_toolbox.training.fine_experiment.build_epoch_loader", side_effect=build
+            ), patch(
+                "lnl_toolbox.training.fine_experiment.atomic_save", side_effect=save
+            ):
+                if interrupt:
+                    with self.assertRaisesRegex(RuntimeError, "simulated interruption"):
+                        run_fine_experiment(config, directory, resume=resume)
+                    return None
+                return run_fine_experiment(config, directory, resume=resume)
+
+        with tempfile.TemporaryDirectory() as uninterrupted_dir, tempfile.TemporaryDirectory() as resumed_dir:
+            uninterrupted_stream = {}
+            uninterrupted = run(uninterrupted_dir, uninterrupted_stream)
+            interrupted_stream = {}
+            run(resumed_dir, interrupted_stream, interrupt=True)
+            resumed_stream = {}
+            resumed = run(
+                resumed_dir, resumed_stream,
+                resume=Path(resumed_dir) / "last.pt",
+            )
+            expected = torch.load(uninterrupted / "last.pt", map_location="cpu", weights_only=False)
+            actual = torch.load(resumed / "last.pt", map_location="cpu", weights_only=False)
+        for epoch in (1, 2):
+            for namespace in ("fine.snapshot", "fine.train"):
+                key = (namespace, epoch)
+                self.assertEqual(len(uninterrupted_stream[key]), len(resumed_stream[key]))
+                for left, right in zip(uninterrupted_stream[key], resumed_stream[key]):
+                    self.assertEqual(len(left), len(right))
+                    for first, second in zip(left, right):
+                        torch.testing.assert_close(first, second, rtol=0.0, atol=0.0)
+        for key in ("model", "optimizer", "ema", "scs", "scr", "regularizer"):
+            _assert_nested_equal(self, expected[key], actual[key])
+        self.assertEqual(expected["metrics"], actual["metrics"])
 
 
 if __name__ == "__main__":

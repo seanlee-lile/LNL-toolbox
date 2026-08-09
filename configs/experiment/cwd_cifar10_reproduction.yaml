@@ -7,6 +7,8 @@ data:
   root: data/cifar10
   folds: 5
   fold_index: 0
+  # Paper fold protocol uses a fixed budget and final held-out test only.
+  validation_size: 0
   augment: false
 
 noise:

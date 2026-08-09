@@ -108,6 +108,7 @@ def build_checkpoint(
     early_stopping: Mapping[str, Any] | None = None,
     component_states: Mapping[str, Any] | None = None,
     parameter_record: Mapping[str, Any] | None = None,
+    loader_stream: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     algorithm_state = algorithm.state_dict()
     payload: dict[str, Any] = {
@@ -150,6 +151,10 @@ def build_checkpoint(
         if not isinstance(parameter_record, Mapping):
             raise TypeError("parameter_record must be a mapping")
         payload["parameter_record"] = dict(parameter_record)
+    if loader_stream is not None:
+        if not isinstance(loader_stream, Mapping):
+            raise TypeError("loader_stream must be a mapping")
+        payload["loader_stream"] = dict(loader_stream)
     payload["checkpoint_v3"] = build_v3_envelope(
         identity={
             "runner": str(config.get("execution", {}).get("runner", "supervised"))
@@ -164,6 +169,7 @@ def build_checkpoint(
             "cycle": run_state.cycle,
             "step": run_state.step,
             "completed_epoch": int(completed_epoch),
+            **({} if loader_stream is None else {"loader_stream": dict(loader_stream)}),
         },
         component_states={
             "model": algorithm_state["model"],
@@ -201,6 +207,7 @@ def save_checkpoint(
     early_stopping: Mapping[str, Any] | None = None,
     component_states: Mapping[str, Any] | None = None,
     parameter_record: Mapping[str, Any] | None = None,
+    loader_stream: Mapping[str, Any] | None = None,
 ) -> None:
     atomic_save(
         build_checkpoint(
@@ -218,6 +225,7 @@ def save_checkpoint(
             early_stopping=early_stopping,
             component_states=component_states,
             parameter_record=parameter_record,
+            loader_stream=loader_stream,
         ),
         path,
     )

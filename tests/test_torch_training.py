@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+import random
 
 import numpy as np
 import torch
@@ -34,9 +35,89 @@ from lnl_toolbox.training.checkpoint import (
     save_checkpoint,
 )
 from lnl_toolbox.training.experiment import build_model
+from lnl_toolbox.training.epoch_stream import (
+    build_epoch_loader,
+    derive_epoch_seed,
+    loader_stream_metadata,
+    validate_loader_stream,
+)
+
+
+class _EpochRandomDataset(torch.utils.data.Dataset):
+    def __init__(self, size: int = 12) -> None:
+        self.size = size
+
+    def __len__(self) -> int:
+        return self.size
+
+    def __getitem__(self, index: int):
+        return {
+            "index": index,
+            "fingerprint": torch.tensor([
+                random.random(),
+                float(np.random.random()),
+                float(torch.rand(())),
+            ]),
+        }
 
 
 class TorchTrainingTest(unittest.TestCase):
+    def _epoch_stream(self, workers: int, epoch: int, namespace: str = "test"):
+        loader = build_epoch_loader(
+            _EpochRandomDataset(),
+            {"batch_size": 4, "num_workers": workers, "pin_memory": False},
+            base_seed=19,
+            namespace=namespace,
+            epoch=epoch,
+        )
+        return [
+            (batch["index"].clone(), batch["fingerprint"].clone())
+            for batch in loader
+        ]
+
+    def test_epoch_stream_seed_and_main_process_augmentation_are_stable(self):
+        self.assertEqual(
+            derive_epoch_seed(19, "method.train", 2),
+            derive_epoch_seed(19, "method.train", 2),
+        )
+        first = self._epoch_stream(0, 2, "method.train")
+        second = self._epoch_stream(0, 2, "method.train")
+        self.assertEqual(len(first), len(second))
+        for left, right in zip(first, second):
+            torch.testing.assert_close(left[0], right[0])
+            torch.testing.assert_close(left[1], right[1])
+        self.assertNotEqual(
+            derive_epoch_seed(19, "method.train", 2),
+            derive_epoch_seed(19, "other.train", 2),
+        )
+        self.assertNotEqual(
+            derive_epoch_seed(19, "method.train", 2),
+            derive_epoch_seed(19, "method.train", 3),
+        )
+
+    def test_epoch_stream_worker_process_augmentation_is_stable(self):
+        first = self._epoch_stream(2, 3, "worker.test")
+        second = self._epoch_stream(2, 3, "worker.test")
+        self.assertEqual(len(first), len(second))
+        for left, right in zip(first, second):
+            torch.testing.assert_close(left[0], right[0])
+            torch.testing.assert_close(left[1], right[1])
+
+    def test_loader_stream_metadata_is_strict_but_missing_is_legacy(self):
+        metadata = loader_stream_metadata(
+            base_seed=7, namespace="dss.train", next_epoch=2
+        )
+        self.assertTrue(validate_loader_stream(
+            metadata, base_seed=7, namespace="dss.train", next_epoch=2
+        ))
+        self.assertFalse(validate_loader_stream(
+            None, base_seed=7, namespace="dss.train", next_epoch=2
+        ))
+        with self.assertRaisesRegex(ValueError, "identity mismatch"):
+            validate_loader_stream(
+                metadata, base_seed=7, namespace="dss.train", next_epoch=3
+            )
+
     def test_objective_consumer_is_opt_in_and_owns_backward(self):
         base_model = torch.nn.Linear(2, 2, bias=False)
         dss_model = torch.nn.Linear(2, 2, bias=False)

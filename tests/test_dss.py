@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+import json
+import tempfile
+from unittest.mock import patch
 
+import numpy as np
 import torch
 import yaml
 
@@ -10,12 +14,56 @@ from lnl_toolbox.algorithms.dss import DSSObjective
 from lnl_toolbox.algorithms.masked_risk import candidate_masked_cross_entropy
 from lnl_toolbox.core import RunState
 from lnl_toolbox.core.objectives import ObjectiveResult
+from lnl_toolbox.data.cifar import CifarData
 from lnl_toolbox.plugins.builtin.catalog import (
     build_builtin_objective_consumer,
 )
 from lnl_toolbox.selectors.dss import DSSSelectorState
-from lnl_toolbox.training.experiment import _resolve_dss_epoch_contract
+from lnl_toolbox.training.experiment import (
+    _resolve_dss_epoch_contract,
+    run_supervised_experiment,
+)
 from lnl_toolbox.training.pipeline import StandardNoisyERMPipeline
+
+
+def _tiny_cifar(split: str, samples_per_class: int) -> CifarData:
+    labels = np.repeat(np.arange(10, dtype=np.int64), samples_per_class)
+    images = np.zeros((labels.size, 32, 32, 3), dtype=np.uint8)
+    images[:, 0, 0, 0] = np.arange(labels.size, dtype=np.uint8)
+    return CifarData(images, labels, tuple(map(str, range(10))), split, "cifar10")
+
+
+def _assert_nested_equal(test: unittest.TestCase, left, right) -> None:
+    if torch.is_tensor(left):
+        torch.testing.assert_close(left, right, rtol=0.0, atol=0.0)
+    elif isinstance(left, dict):
+        test.assertEqual(set(left), set(right))
+        for key in left:
+            _assert_nested_equal(test, left[key], right[key])
+    elif isinstance(left, (list, tuple)):
+        test.assertEqual(len(left), len(right))
+        for first, second in zip(left, right):
+            _assert_nested_equal(test, first, second)
+    else:
+        test.assertEqual(left, right)
+
+
+class _RecordingLoader:
+    def __init__(self, loader, sink, epoch) -> None:
+        self.loader = loader
+        self.dataset = loader.dataset
+        self.sink = sink
+        self.epoch = epoch
+
+    def __len__(self):
+        return len(self.loader)
+
+    def __iter__(self):
+        for batch in self.loader:
+            self.sink.setdefault(self.epoch, []).append((
+                batch["index"].clone(), batch["input"].clone()
+            ))
+            yield batch
 
 
 class DSSRiskTest(unittest.TestCase):
@@ -142,6 +190,36 @@ class DSSSelectorStateTest(unittest.TestCase):
 
 
 class DSSObjectiveTest(unittest.TestCase):
+    @staticmethod
+    def _workflow_config(*, dss: bool = True):
+        config = {
+            "seed": 4,
+            "data": {
+                "name": "cifar10", "root": "unused", "validation_size": 10,
+                "augment": True, "max_test_samples": 10,
+            },
+            "noise": {"name": "symmetric", "rate": 0.0, "seed": 4},
+            "loss": {"name": "ce"},
+            "selector": {"name": "all"},
+            "parameter_update": {"name": "standard"},
+            "loader": {"batch_size": 10, "num_workers": 0, "pin_memory": False},
+            "model": {"name": "tiny_cnn", "width": 2},
+            "optimizer": {"name": "sgd", "lr": 0.01, "momentum": 0.0},
+            "scheduler": {"name": "none"},
+            "trainer": {"epochs": 3, "device": "cpu", "progress": False},
+            "evaluation": {"selection_split": "validation"},
+        }
+        if dss:
+            config["pipeline"] = {
+                "name": "standard_noisy_erm",
+                "objective_consumer": {
+                    "name": "dss", "num_samples": 40, "num_classes": 10,
+                    "warmup_epochs": 1, "alpha": 0.1, "prior_decay": 0.99,
+                    "mda": True, "ccs": True,
+                },
+            }
+        return config
+
     def test_objective_uses_batch_mean_but_reports_selected_mean(self) -> None:
         objective = DSSObjective(
             2, 2, 2, warmup_epochs=0, mda=False, ccs=False
@@ -277,6 +355,84 @@ class DSSObjectiveTest(unittest.TestCase):
                 expected_epochs,
             )
             self.assertEqual(config["evaluation"]["selection_split"], "validation")
+
+    def test_dss_epoch_boundary_resume_reproduces_stream_and_selector_state(self) -> None:
+        from lnl_toolbox.training import experiment
+        train = _tiny_cifar("train", 4)
+        test = _tiny_cifar("test", 1)
+        config = self._workflow_config()
+        original_builder = experiment.build_epoch_loader
+        original_save = experiment.save_checkpoint
+
+        def run(directory, sink, *, interrupt=False, resume=None):
+            def build(*args, **kwargs):
+                return _RecordingLoader(
+                    original_builder(*args, **kwargs), sink, kwargs["epoch"]
+                )
+
+            stopped = False
+
+            def save(path, algorithm, state, completed_epoch, saved_config, **kwargs):
+                nonlocal stopped
+                original_save(
+                    path, algorithm, state, completed_epoch, saved_config, **kwargs
+                )
+                if (
+                    interrupt and not stopped and Path(path).name == "best.pt"
+                    and completed_epoch == 0
+                ):
+                    stopped = True
+                    raise RuntimeError("simulated interruption")
+
+            with patch(
+                "lnl_toolbox.training.experiment.load_cifar10",
+                side_effect=lambda _root, split: train if split == "train" else test,
+            ), patch(
+                "lnl_toolbox.training.experiment.build_epoch_loader", side_effect=build
+            ), patch(
+                "lnl_toolbox.training.experiment.save_checkpoint", side_effect=save
+            ):
+                if interrupt:
+                    with self.assertRaisesRegex(RuntimeError, "simulated interruption"):
+                        run_supervised_experiment(config, directory, resume=resume)
+                    return None
+                return run_supervised_experiment(config, directory, resume=resume)
+
+        with tempfile.TemporaryDirectory() as uninterrupted_dir, tempfile.TemporaryDirectory() as resumed_dir:
+            uninterrupted_stream = {}
+            uninterrupted = run(uninterrupted_dir, uninterrupted_stream)
+            interrupted_stream = {}
+            run(resumed_dir, interrupted_stream, interrupt=True)
+            resumed_stream = {}
+            resumed = run(
+                resumed_dir, resumed_stream,
+                resume=Path(resumed_dir) / "last.pt",
+            )
+            expected = torch.load(uninterrupted / "last.pt", map_location="cpu", weights_only=False)
+            actual = torch.load(resumed / "last.pt", map_location="cpu", weights_only=False)
+            expected_final = json.loads((uninterrupted / "final_metrics.json").read_text())
+            actual_final = json.loads((resumed / "final_metrics.json").read_text())
+        for epoch in (1, 2):
+            for left, right in zip(uninterrupted_stream[epoch], resumed_stream[epoch]):
+                torch.testing.assert_close(left[0], right[0], rtol=0.0, atol=0.0)
+                torch.testing.assert_close(left[1], right[1], rtol=0.0, atol=0.0)
+        for key in ("model", "optimizer", "component_states"):
+            _assert_nested_equal(self, expected[key], actual[key])
+        self.assertEqual(expected_final, actual_final)
+
+    def test_non_dss_supervised_does_not_use_epoch_stream_loader(self) -> None:
+        train = _tiny_cifar("train", 4)
+        test = _tiny_cifar("test", 1)
+        config = self._workflow_config(dss=False)
+        config["trainer"]["epochs"] = 1
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "lnl_toolbox.training.experiment.load_cifar10",
+            side_effect=lambda _root, split: train if split == "train" else test,
+        ), patch(
+            "lnl_toolbox.training.experiment.build_epoch_loader",
+            side_effect=AssertionError("ordinary supervised path changed"),
+        ):
+            run_supervised_experiment(config, directory)
 
 
 if __name__ == "__main__":

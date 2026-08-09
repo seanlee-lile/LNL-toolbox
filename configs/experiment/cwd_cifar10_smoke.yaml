@@ -6,6 +6,7 @@ data:
   root: data/cifar10
   folds: 5
   fold_index: 0
+  validation_size: 0
   max_samples: 100
   augment: false
 

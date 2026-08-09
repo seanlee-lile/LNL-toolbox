@@ -7,6 +7,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 from typing import Any, Mapping
+import warnings
 
 import numpy as np
 import torch
@@ -39,6 +40,11 @@ from lnl_toolbox.training.checkpoint import (
     capture_rng_state,
     read_checkpoint,
     restore_rng_state,
+)
+from lnl_toolbox.training.epoch_stream import (
+    build_epoch_loader,
+    loader_stream_metadata,
+    validate_loader_stream,
 )
 from lnl_toolbox.training.interfaces import RunContext
 from lnl_toolbox.training.experiment import build_model, build_optimizer
@@ -284,20 +290,22 @@ def run_fine_experiment(
     validation_set = (
         TorchCifarDataset(train_data, validation_indices, transform=evaluation_transform)
         if validation_indices.size
-        else test_set
+        else None
     )
     loader_config = config["loader"]
-    train_loader = _loader(train_set, loader_config, shuffle=True, seed=seed)
-    snapshot_loader = _loader(train_set, loader_config, shuffle=False, seed=seed)
     evaluation_batch_size = int(
         config.get("evaluation", {}).get("batch_size", loader_config["batch_size"])
     )
-    validation_loader = _loader(
-        validation_set,
-        loader_config,
-        shuffle=False,
-        seed=seed,
-        batch_size=evaluation_batch_size,
+    validation_loader = (
+        None
+        if validation_set is None
+        else _loader(
+            validation_set,
+            loader_config,
+            shuffle=False,
+            seed=seed,
+            batch_size=evaluation_batch_size,
+        )
     )
     test_loader = _loader(
         test_set,
@@ -352,6 +360,19 @@ def run_fine_experiment(
         regularizer.load_state_dict(checkpoint["regularizer"])
         restore_rng_state(checkpoint["rng_state"])
         start_epoch = int(checkpoint["completed_epoch"]) + 1
+        exact_loader_resume = validate_loader_stream(
+            checkpoint.get("loader_stream"),
+            base_seed=seed,
+            namespace="fine",
+            next_epoch=start_epoch,
+        )
+        if not exact_loader_resume:
+            warnings.warn(
+                "Legacy FINE checkpoint has no loader_stream metadata; "
+                "epoch-boundary input-stream resume is best effort.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         rows = list(checkpoint.get("metrics", []))
 
     criterion = CrossEntropyLoss().to(device)
@@ -378,15 +399,40 @@ def run_fine_experiment(
                 eta_min=float(config.get("scheduler", {}).get("eta_min", 5e-4)),
             )
         if epoch < warmup_epochs:
+            train_loader = build_epoch_loader(
+                train_set,
+                loader_config,
+                base_seed=seed,
+                namespace="fine.train",
+                epoch=epoch,
+                drop_last=bool(loader_config.get("drop_last", False)),
+            )
             train_loss, train_accuracy = _train_warmup(model, ema, optimizer, train_loader, device)
             clean_ratio = 1.0
         else:
+            snapshot_loader = build_epoch_loader(
+                train_set,
+                loader_config,
+                base_seed=seed,
+                namespace="fine.snapshot",
+                epoch=epoch,
+                shuffle=False,
+                drop_last=False,
+            )
             probabilities, ema_probabilities, snapshot_targets = _epoch_predictions(
                 model, ema.model, snapshot_loader, device, positions, 100
             )
             clean_mask = scs.select_epoch(probabilities, snapshot_targets)
             weights = scr.weights(ema_probabilities)
             pseudo = ema_probabilities.argmax(dim=1)
+            train_loader = build_epoch_loader(
+                train_set,
+                loader_config,
+                base_seed=seed,
+                namespace="fine.train",
+                epoch=epoch,
+                drop_last=bool(loader_config.get("drop_last", False)),
+            )
             clean_by_index = {index: bool(clean_mask[position]) for index, position in positions.items()}
             pseudo_by_index = {index: int(pseudo[position]) for index, position in positions.items()}
             weight_by_index = {index: float(weights[position]) for index, position in positions.items()}
@@ -403,20 +449,26 @@ def run_fine_experiment(
                 alpha=float(fine_config.get("alpha", 1.0)),
             )
             clean_ratio = float(clean_mask.float().mean())
-        validation = evaluate_classification(model, validation_loader, criterion, device)
-        test = evaluate_classification(model, test_loader, criterion, device)
-        row = standardize_epoch_row({
+        row = {
+            "event": "epoch",
             "epoch": epoch + 1,
             "phase": "warmup" if epoch < warmup_epochs else "robust",
             "train_loss": train_loss,
             "train_accuracy": train_accuracy,
-            "validation_loss": validation["loss"],
-            "validation_accuracy": validation["accuracy"],
-            "test_loss": test["loss"],
-            "test_accuracy": test["accuracy"],
+            "validation_metric": "unavailable",
             "selected_ratio": clean_ratio,
             "learning_rate": float(optimizer.param_groups[0]["lr"]),
-        })
+        }
+        if validation_loader is not None:
+            validation = evaluate_classification(
+                model, validation_loader, criterion, device
+            )
+            row.update({
+                "validation_loss": validation["loss"],
+                "validation_accuracy": validation["accuracy"],
+                "validation_metric": "clean_validation_accuracy",
+            })
+            row = standardize_epoch_row(row)
         rows.append(row)
         if session is not None:
             session.log_epoch(
@@ -447,16 +499,35 @@ def run_fine_experiment(
             "metrics": rows,
             "rng_state": capture_rng_state(),
             "noise": noise_metadata,
+            "loader_stream": loader_stream_metadata(
+                base_seed=seed, namespace="fine", next_epoch=epoch + 1
+            ),
         }, run_dir / "last.pt")
+    test = evaluate_classification(model, test_loader, criterion, device)
+    final = {
+        "event": "final",
+        "method": "fine_sed",
+        "completed_epochs": epochs,
+        "validation_metric": (
+            "clean_validation_accuracy" if validation_loader is not None else "unavailable"
+        ),
+        "test_loss": test["loss"],
+        "test_accuracy": test["accuracy"],
+    }
+    if session is None:
+        with metrics_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(final, sort_keys=True) + "\n")
     if session is not None:
         session.end_phase("fine_training", completed_units=max(0, epochs - start_epoch))
-        session.emit("final", phase="evaluation", method="fine_sed",
-                     completed_epochs=epochs,
-                     test_accuracy=rows[-1].get("test_accuracy") if rows else None)
+        session.emit(
+            "final",
+            phase="evaluation",
+            **{key: value for key, value in final.items() if key != "event"},
+        )
     (run_dir / "resolved_config.yaml").write_text(
         yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
     )
-    if rows:
+    if rows and validation_loader is not None:
         write_training_curves_svg(rows, run_dir / "training_curves.svg")
     return run_dir
 

@@ -7,6 +7,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 from typing import Any, Mapping
+import warnings
 
 import numpy as np
 import torch
@@ -20,7 +21,11 @@ from lnl_toolbox.data.binary_benchmarks import (
     stratified_binary_splits,
 )
 from lnl_toolbox.data.cifar import CifarData, load_cifar10
-from lnl_toolbox.data.torch_cifar import TorchCifarDataset, build_cifar_transform
+from lnl_toolbox.data.torch_cifar import (
+    TorchCifarDataset,
+    build_cifar_transform,
+    stratified_split,
+)
 from lnl_toolbox.estimators.cwd import CWDEstimator
 from lnl_toolbox.evaluation.classification import evaluate_classification
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
@@ -35,6 +40,11 @@ from lnl_toolbox.training.checkpoint import (
     restore_rng_state,
 )
 from lnl_toolbox.training.interfaces import RunContext
+from lnl_toolbox.training.epoch_stream import (
+    build_epoch_loader,
+    loader_stream_metadata,
+    validate_loader_stream,
+)
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
 from lnl_toolbox.training.snapshots import collect_feature_snapshot
 
@@ -196,6 +206,17 @@ def run_cwd_experiment(
     if not 0 <= fold_index < len(splits):
         raise ValueError("CWD fold_index is outside the configured fold range")
     train_positions, test_positions = splits[fold_index]
+    validation_size = int(data_config.get("validation_size", 0))
+    if validation_size < 0:
+        raise ValueError("CWD validation_size must be non-negative")
+    if validation_size:
+        retained, held_out = stratified_split(
+            clean_labels[train_positions], validation_size, seed + 101
+        )
+        validation_positions = train_positions[held_out]
+        train_positions = train_positions[retained]
+    else:
+        validation_positions = np.asarray([], dtype=np.int64)
 
     noise_config = config["noise"]
     rho_positive = float(noise_config["rho_positive"])
@@ -234,6 +255,15 @@ def run_cwd_experiment(
         "test",
         corpus.dataset,
     )
+    validation_data = None
+    if validation_positions.size:
+        validation_data = CifarData(
+            images[validation_positions],
+            clean_labels[validation_positions],
+            corpus.class_names,
+            "validation",
+            corpus.dataset,
+        )
     transform = build_cifar_transform(
         True, bool(data_config.get("augment", False))
     )
@@ -241,9 +271,18 @@ def run_cwd_experiment(
     train_set = TorchCifarDataset(train_data, transform=transform)
     snapshot_set = TorchCifarDataset(train_data, transform=evaluation_transform)
     test_set = TorchCifarDataset(test_data, transform=evaluation_transform)
+    validation_set = (
+        None
+        if validation_data is None
+        else TorchCifarDataset(validation_data, transform=evaluation_transform)
+    )
     loader_config = config["loader"]
-    train_loader = _loader(train_set, loader_config, shuffle=True, seed=seed)
     snapshot_loader = _loader(snapshot_set, loader_config, shuffle=False, seed=seed)
+    validation_loader = (
+        None
+        if validation_set is None
+        else _loader(validation_set, loader_config, shuffle=False, seed=seed + 1)
+    )
     test_loader = _loader(test_set, loader_config, shuffle=False, seed=seed)
 
     cwd_config = config.get("cwd", {})
@@ -274,6 +313,19 @@ def run_cwd_experiment(
         scheduler.load_state_dict(checkpoint["scheduler"])
         restore_rng_state(checkpoint["rng_state"])
         start_epoch = int(checkpoint["completed_epoch"]) + 1
+        exact_loader_resume = validate_loader_stream(
+            checkpoint.get("loader_stream"),
+            base_seed=seed,
+            namespace="cwd.train",
+            next_epoch=start_epoch,
+        )
+        if not exact_loader_resume:
+            warnings.warn(
+                "Legacy CWD checkpoint has no loader_stream metadata; "
+                "epoch-boundary input-stream resume is best effort.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         rows = list(checkpoint.get("metrics", []))
 
     transition = np.asarray(
@@ -314,31 +366,42 @@ def run_cwd_experiment(
                 config.get("cwd", {}).get("dynamic_centroid", False)
             ),
         )
+        train_loader = build_epoch_loader(
+            train_set,
+            loader_config,
+            base_seed=seed,
+            namespace="cwd.train",
+            epoch=epoch,
+            drop_last=bool(loader_config.get("drop_last", False)),
+        )
         train_loss, train_accuracy = _train_epoch(
             model, optimizer, train_loader, objective, device
         )
-        test = _evaluate_cwd(
-            model,
-            test_loader,
-            device,
-            scalar_binary=cwd_variant == "binary_scalar",
-        )
-        row = standardize_epoch_row(
-            {
-                "epoch": epoch + 1,
-                "phase": "cwd",
-                "train_loss": train_loss,
-                "train_accuracy": train_accuracy,
-                "validation_loss": test["loss"],
-                "validation_accuracy": test["accuracy"],
-                "test_loss": test["loss"],
-                "test_accuracy": test["accuracy"],
-                "learning_rate": float(optimizer.param_groups[0]["lr"]),
-                "statistic_hash": artifact.artifact_hash,
-                "feature_snapshot_hash": snapshot.snapshot_hash,
-                "fold_index": fold_index,
-            }
-        )
+        row = {
+            "event": "epoch",
+            "epoch": epoch + 1,
+            "phase": "cwd",
+            "train_loss": train_loss,
+            "train_accuracy": train_accuracy,
+            "learning_rate": float(optimizer.param_groups[0]["lr"]),
+            "statistic_hash": artifact.artifact_hash,
+            "feature_snapshot_hash": snapshot.snapshot_hash,
+            "fold_index": fold_index,
+            "validation_metric": "unavailable",
+        }
+        if validation_loader is not None:
+            validation = _evaluate_cwd(
+                model,
+                validation_loader,
+                device,
+                scalar_binary=cwd_variant == "binary_scalar",
+            )
+            row.update({
+                "validation_loss": validation["loss"],
+                "validation_accuracy": validation["accuracy"],
+                "validation_metric": "clean_validation_accuracy",
+            })
+            row = standardize_epoch_row(row)
         rows.append(row)
         if session is not None:
             session.log_epoch(
@@ -367,18 +430,46 @@ def run_cwd_experiment(
                 "noise_mapping_hash": manifest.mapping_hash,
                 "statistic_hash": artifact.artifact_hash,
                 "feature_snapshot_hash": snapshot.snapshot_hash,
+                "loader_stream": loader_stream_metadata(
+                    base_seed=seed,
+                    namespace="cwd.train",
+                    next_epoch=epoch + 1,
+                ),
             },
             run_dir / "last.pt",
         )
     (run_dir / "resolved_config.yaml").write_text(
         yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
     )
-    if rows:
+    if rows and validation_loader is not None:
         write_training_curves_svg(rows, run_dir / "training_curves.svg")
+    test = _evaluate_cwd(
+        model,
+        test_loader,
+        device,
+        scalar_binary=cwd_variant == "binary_scalar",
+    )
+    final = {
+        "event": "final",
+        "method": "cwd",
+        "completed_epochs": epochs,
+        "fold_index": fold_index,
+        "validation_metric": (
+            "clean_validation_accuracy" if validation_loader is not None else "unavailable"
+        ),
+        "test_loss": test["loss"],
+        "test_accuracy": test["accuracy"],
+    }
+    if session is None:
+        with metrics_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(final, sort_keys=True) + "\n")
     if session is not None:
         session.end_phase("fold_training", completed_units=max(0, epochs - start_epoch))
-        session.emit("final", phase="evaluation", method="cwd", completed_epochs=epochs,
-                     test_accuracy=rows[-1].get("test_accuracy") if rows else None)
+        session.emit(
+            "final",
+            phase="evaluation",
+            **{key: value for key, value in final.items() if key != "event"},
+        )
     return run_dir
 
 

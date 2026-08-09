@@ -3,10 +3,13 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 import unittest
+from unittest.mock import patch
+from copy import deepcopy
 
 import numpy as np
 import torch
 from torch import nn
+from torch.utils.data import DataLoader, Dataset
 
 from lnl_toolbox.algorithms.instance_transition import InstanceTransitionClassificationAlgorithm
 from lnl_toolbox.algorithms.instance_transition import pdl_instance_corrected_losses
@@ -29,7 +32,58 @@ from lnl_toolbox.training.snapshots import FeatureSnapshot
 from lnl_toolbox.training.instance_transition_experiment import (
     _official_pdl_split,
     _pdl_official_raw_features,
+    _run_pdl_official_phases,
 )
+
+
+class _IndexedDataset(Dataset):
+    def __init__(self) -> None:
+        self.inputs = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+        self.targets = torch.tensor([0, 1])
+        self.indices = torch.tensor([11, 4])
+
+    def __len__(self) -> int:
+        return 2
+
+    def __getitem__(self, item: int):
+        return {
+            "input": self.inputs[item],
+            "target": self.targets[item],
+            "index": self.indices[item],
+        }
+
+
+class _RecordingLoader:
+    def __init__(self, loader, sink, epoch) -> None:
+        self.loader = loader
+        self.dataset = loader.dataset
+        self.sink = sink
+        self.epoch = epoch
+
+    def __len__(self):
+        return len(self.loader)
+
+    def __iter__(self):
+        for batch in self.loader:
+            self.sink.setdefault(self.epoch, []).append((
+                batch["index"].clone(), batch["input"].clone()
+            ))
+            yield batch
+
+
+def _assert_nested_equal(test: unittest.TestCase, left, right) -> None:
+    if torch.is_tensor(left):
+        torch.testing.assert_close(left, right, rtol=0.0, atol=0.0)
+    elif isinstance(left, dict):
+        test.assertEqual(set(left), set(right))
+        for key in left:
+            _assert_nested_equal(test, left[key], right[key])
+    elif isinstance(left, (list, tuple)):
+        test.assertEqual(len(left), len(right))
+        for first, second in zip(left, right):
+            _assert_nested_equal(test, first, second)
+    else:
+        test.assertEqual(left, right)
 
 
 class PDLTest(unittest.TestCase):
@@ -418,6 +472,89 @@ class PDLTest(unittest.TestCase):
         saved["transition_artifact_hash"] = "changed"
         with self.assertRaisesRegex(ValueError, "artifact mismatch"):
             algorithm.load_state_dict(saved)
+
+    def test_official_correction_epoch_boundary_resume_reproduces_stream(self) -> None:
+        from lnl_toolbox.training import instance_transition_experiment
+        artifact = self._artifact()
+        dataset = _IndexedDataset()
+        config = {
+            "seed": 13,
+            "loader": {"batch_size": 2, "num_workers": 0, "pin_memory": False},
+            "loss": {"name": "ce"},
+            "optimizer": {"name": "sgd", "lr": 0.01, "momentum": 0.0},
+            "revision": {"optimizer": {"name": "sgd", "lr": 0.01}},
+            "algorithm": {"name": "corrected_classification", "correction": "pdl"},
+            "phases": {"correction_epochs": 3, "revision_epochs": 0},
+            "trainer": {"epochs": 3, "progress": {"curves": False}},
+        }
+        original_builder = instance_transition_experiment.build_epoch_loader
+        original_save = instance_transition_experiment.save_checkpoint
+
+        def run(directory, sink, *, interrupt=False, resume=None):
+            torch.manual_seed(29)
+            model = nn.Linear(2, 2)
+            train_loader = DataLoader(dataset, batch_size=2, shuffle=False)
+            validation_loader = DataLoader(dataset, batch_size=2, shuffle=False)
+            test_loader = DataLoader(dataset, batch_size=2, shuffle=False)
+
+            def build(*args, **kwargs):
+                return _RecordingLoader(
+                    original_builder(*args, **kwargs), sink, kwargs["epoch"]
+                )
+
+            stopped = False
+
+            def save(path, algorithm, state, completed_epoch, saved_config, **kwargs):
+                nonlocal stopped
+                original_save(
+                    path, algorithm, state, completed_epoch, saved_config, **kwargs
+                )
+                if interrupt and not stopped and completed_epoch == 0:
+                    stopped = True
+                    raise RuntimeError("simulated interruption")
+
+            with patch(
+                "lnl_toolbox.training.instance_transition_experiment.build_epoch_loader",
+                side_effect=build,
+            ), patch(
+                "lnl_toolbox.training.instance_transition_experiment.save_checkpoint",
+                side_effect=save,
+            ):
+                arguments = dict(
+                    config=deepcopy(config), run_dir=Path(directory), model=model,
+                    artifact=artifact, validation_artifact=artifact,
+                    revision_validation_artifact=artifact,
+                    train_loader=train_loader, validation_loader=validation_loader,
+                    test_loader=test_loader, device=torch.device("cpu"), seed=13,
+                    epochs=3, parameter_record=None, resume=resume,
+                )
+                if resume is not None:
+                    saved = torch.load(resume, map_location="cpu", weights_only=False)
+                    self.assertEqual(saved["config"], arguments["config"])
+                if interrupt:
+                    with self.assertRaisesRegex(RuntimeError, "simulated interruption"):
+                        _run_pdl_official_phases(**arguments)
+                    return None
+                return _run_pdl_official_phases(**arguments)
+
+        with tempfile.TemporaryDirectory() as uninterrupted_dir, tempfile.TemporaryDirectory() as resumed_dir:
+            uninterrupted_stream = {}
+            uninterrupted = run(uninterrupted_dir, uninterrupted_stream)
+            interrupted_stream = {}
+            run(resumed_dir, interrupted_stream, interrupt=True)
+            resumed_stream = {}
+            resumed = run(
+                resumed_dir, resumed_stream,
+                resume=Path(resumed_dir) / "last.pt",
+            )
+            expected = torch.load(uninterrupted / "last.pt", map_location="cpu", weights_only=False)
+            actual = torch.load(resumed / "last.pt", map_location="cpu", weights_only=False)
+        for epoch in (1, 2):
+            for left, right in zip(uninterrupted_stream[epoch], resumed_stream[epoch]):
+                torch.testing.assert_close(left[0], right[0], rtol=0.0, atol=0.0)
+                torch.testing.assert_close(left[1], right[1], rtol=0.0, atol=0.0)
+        for key in ("model", "optimizer", "algorithm_private_state"):
+            _assert_nested_equal(self, expected[key], actual[key])
 
 
 if __name__ == "__main__":
