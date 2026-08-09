@@ -177,6 +177,10 @@ def _noise_description(config: dict[str, Any]) -> str:
 
 
 def _selection_description(config: dict[str, Any]) -> str:
+    method = str(config.get("method", "")).strip().lower()
+    data = config.get("data", {}) or {}
+    if method in {"cwd", "fine"} and int(data.get("validation_size", 0)) == 0:
+        return "fixed-budget; no model selection; test final only"
     evaluation = config.get("evaluation", {}) or {}
     noise = config.get("noise", {}) or {}
     split = evaluation.get("selection_split", "validation")
@@ -289,6 +293,13 @@ def _print_plan(config: dict[str, Any], config_path: Path, project: Path) -> Non
     elif normalized_method == "cwd":
         validation_size = int(data.get("validation_size", 0))
         protocol = "independent clean validation" if validation_size > 0 else "fixed budget; test final only"
+        cwd = config.get("cwd", {}) or {}
+        fold_protocol = str(cwd.get("protocol", "single_fold"))
+        print(f"  CWD protocol: {fold_protocol}")
+        if fold_protocol == "five_fold":
+            print("  CWD folds: 0, 1, 2, 3, 4")
+            print("  CWD aggregation: final-test accuracy mean/std")
+            print(f"  CWD split/training seed: {config.get('seed', 1)}")
         print(f"  CWD validation_size: {validation_size}")
         print(f"  CWD evaluation: {protocol}")
     elif normalized_method == "dss":
@@ -307,6 +318,7 @@ def _print_plan(config: dict[str, Any], config_path: Path, project: Path) -> Non
             f"warmup={fine.get('warmup_epochs', '-')}, EMA, SCS/SCR"
         )
         print(f"  FINE evaluation: {protocol}")
+        print("  FINE reporting: final epoch only; reconstructible last-k unavailable")
 
 
 def _doctor(args: argparse.Namespace) -> int:

@@ -433,9 +433,20 @@ def _validate_dedicated_runner(config: Mapping[str, Any], runner: str) -> None:
             raise ValueError("cwd.ridge must be non-negative")
         data = _require_mapping(config, "data")
         folds = int(data.get("folds", 0))
-        fold_index = int(data.get("fold_index", -1))
-        if folds < 2 or not 0 <= fold_index < folds:
-            raise ValueError("CWD requires 0 <= data.fold_index < data.folds")
+        protocol = str(cwd.get("protocol", "single_fold")).strip().lower()
+        if protocol not in {"single_fold", "five_fold"}:
+            raise ValueError("cwd.protocol must be one of: single_fold, five_fold")
+        if protocol == "five_fold":
+            if folds != 5:
+                raise ValueError("CWD five_fold protocol requires data.folds: 5")
+            if "fold_index" in data:
+                raise ValueError(
+                    "CWD five_fold protocol manages data.fold_index internally"
+                )
+        else:
+            fold_index = int(data.get("fold_index", -1))
+            if folds < 2 or not 0 <= fold_index < folds:
+                raise ValueError("CWD requires 0 <= data.fold_index < data.folds")
         if int(data.get("validation_size", 0)) < 0:
             raise ValueError("CWD data.validation_size must be non-negative")
     elif runner == "fine":

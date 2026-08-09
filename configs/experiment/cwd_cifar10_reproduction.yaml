@@ -1,13 +1,12 @@
-# CWD TPAMI CIFAR-binary experiment: one deterministic fold/run only.
+# CWD TPAMI CIFAR-binary five-fold reproduction protocol.
 seed: 17
 method: cwd
-output_root: artifacts/runs/cwd-cifar10-symmetric02-fold0
+output_root: artifacts/runs/cwd-cifar10-symmetric02-five-fold
 
 data:
   name: cifar10_airplane_automobile
   root: data/cifar10
   folds: 5
-  fold_index: 0
   # Paper fold protocol uses a fixed budget and final held-out test only.
   validation_size: 0
   augment: false
@@ -43,6 +42,7 @@ trainer:
   device: auto
 
 cwd:
+  protocol: five_fold
   # The paper specifies the Moore-Penrose pseudo-inverse M^dagger.
   pinv_rcond: null
   variant: binary_scalar

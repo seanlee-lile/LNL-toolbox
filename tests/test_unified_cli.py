@@ -259,6 +259,17 @@ class UnifiedCliTest(unittest.TestCase):
                 self.assertIn(f"执行器: {runner}", output)
                 self.assertIn(detail, output)
 
+    def test_cwd_reproduction_dry_run_exposes_five_fold_aggregation(self) -> None:
+        code, output, error = self.invoke(
+            "run", "--recipe", "cwd-cifar10-reproduction", "--dry-run"
+        )
+        self.assertEqual(code, 0, error)
+        self.assertIn("CWD protocol: five_fold", output)
+        self.assertIn("CWD folds: 0, 1, 2, 3, 4", output)
+        self.assertIn("CWD aggregation: final-test accuracy mean/std", output)
+        self.assertIn("CWD evaluation: fixed budget; test final only", output)
+        self.assertIn("fixed-budget; no model selection; test final only", output)
+
     def test_volmin_paper_alias_selects_canonical_recipe(self) -> None:
         canonical = self.invoke(
             "papers", "config", "volmin", "--profile", "smoke", "--path-only"

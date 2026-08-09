@@ -7,7 +7,9 @@ from unittest.mock import patch
 import numpy as np
 import torch
 
+from lnl_toolbox.data.binary_benchmarks import stratified_binary_splits
 from lnl_toolbox.data.cifar import CifarData
+from lnl_toolbox.training.checkpoint import atomic_save
 from lnl_toolbox.training.cwd_experiment import run_cwd_experiment
 
 
@@ -244,6 +246,135 @@ class CWDTrainingTest(unittest.TestCase):
         _assert_nested_equal(self, expected["optimizer"], actual["optimizer"])
         self.assertEqual(expected["metrics"], actual["metrics"])
         self.assertEqual(expected["statistic_hash"], actual["statistic_hash"])
+
+    def test_five_fold_split_covers_every_sample_once_without_overlap(self) -> None:
+        labels = np.repeat(np.asarray([0, 1], dtype=np.int64), 15)
+        splits = stratified_binary_splits(labels, folds=5, seed=17)
+        held_out = []
+        for train, test in splits:
+            self.assertFalse(set(train.tolist()) & set(test.tolist()))
+            self.assertEqual(set(train.tolist()) | set(test.tolist()), set(range(30)))
+            held_out.extend(test.tolist())
+        self.assertEqual(sorted(held_out), list(range(30)))
+
+    def test_five_fold_orchestration_aggregates_final_test_only(self) -> None:
+        config = self._config(epochs=2)
+        config["data"].update({"folds": 5, "validation_size": 0})
+        config["data"].pop("fold_index")
+        config["cwd"]["protocol"] = "five_fold"
+        calls = []
+
+        def complete(fold_config, output_dir, resume, *, context):
+            fold_index = int(fold_config["data"]["fold_index"])
+            calls.append((fold_index, resume, context))
+            directory = Path(output_dir)
+            directory.mkdir(parents=True, exist_ok=True)
+            atomic_save(
+                {
+                    "format_version": 1, "method": "cwd", "config": fold_config,
+                    "completed_epoch": 1, "noise_mapping_hash": f"mapping-{fold_index}",
+                },
+                directory / "last.pt",
+            )
+            (directory / "final_metrics.json").write_text(
+                json.dumps({
+                    "method": "cwd", "status": "completed", "fold_index": fold_index,
+                    "test_accuracy": 0.5 + fold_index * 0.1,
+                    "test_loss": 1.0 - fold_index * 0.1,
+                }),
+                encoding="utf-8",
+            )
+            return directory
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "lnl_toolbox.training.cwd_experiment._run_cwd_single_fold",
+            side_effect=complete,
+        ):
+            result = run_cwd_experiment(config, directory)
+            aggregate = json.loads((result / "aggregate_metrics.json").read_text())
+            root = torch.load(result / "last.pt", map_location="cpu", weights_only=False)
+        self.assertEqual([item[0] for item in calls], list(range(5)))
+        self.assertTrue(all(item[1] is None and item[2] is None for item in calls))
+        self.assertEqual(aggregate["protocol"], "five_fold")
+        self.assertEqual(aggregate["fold_count"], 5)
+        self.assertAlmostEqual(aggregate["test_accuracy_mean"], 0.7)
+        self.assertAlmostEqual(
+            aggregate["test_accuracy_std"], np.std([0.5, 0.6, 0.7, 0.8, 0.9])
+        )
+        self.assertEqual(
+            aggregate["selection_protocol"], "fixed_budget_test_final_only_per_fold"
+        )
+        self.assertTrue(root["protocol_state"]["completed"])
+        self.assertEqual(root["protocol_state"]["completed_folds"], list(range(5)))
+
+    def test_five_fold_resume_skips_completed_and_resumes_interrupted_fold(self) -> None:
+        config = self._config(epochs=2)
+        config["data"].update({"folds": 5, "validation_size": 0})
+        config["data"].pop("fold_index")
+        config["cwd"]["protocol"] = "five_fold"
+        first_attempt = True
+        resumed_calls = []
+
+        def run_fold(fold_config, output_dir, resume, *, context):
+            nonlocal first_attempt
+            fold_index = int(fold_config["data"]["fold_index"])
+            directory = Path(output_dir)
+            directory.mkdir(parents=True, exist_ok=True)
+            if fold_index == 2 and first_attempt:
+                first_attempt = False
+                atomic_save(
+                    {
+                        "format_version": 1, "method": "cwd", "config": fold_config,
+                        "completed_epoch": 0, "noise_mapping_hash": "mapping-2",
+                    },
+                    directory / "last.pt",
+                )
+                raise RuntimeError("interrupted fold")
+            resumed_calls.append((fold_index, None if resume is None else Path(resume)))
+            atomic_save(
+                {
+                    "format_version": 1, "method": "cwd", "config": fold_config,
+                    "completed_epoch": 1, "noise_mapping_hash": f"mapping-{fold_index}",
+                },
+                directory / "last.pt",
+            )
+            (directory / "final_metrics.json").write_text(
+                json.dumps({
+                    "status": "completed", "fold_index": fold_index,
+                    "test_accuracy": 0.6 + 0.01 * fold_index, "test_loss": 0.4,
+                }),
+                encoding="utf-8",
+            )
+            return directory
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "lnl_toolbox.training.cwd_experiment._run_cwd_single_fold",
+            side_effect=run_fold,
+        ):
+            root = Path(directory)
+            with self.assertRaisesRegex(RuntimeError, "interrupted fold"):
+                run_cwd_experiment(config, root)
+            fold_zero_before = (root / "fold-0" / "last.pt").read_bytes()
+            fold_one_before = (root / "fold-1" / "last.pt").read_bytes()
+            incomplete = torch.load(root / "last.pt", map_location="cpu", weights_only=False)
+            self.assertFalse(incomplete["protocol_state"]["completed"])
+            self.assertEqual(incomplete["protocol_state"]["completed_folds"], [0, 1])
+            resumed_calls.clear()
+            result = run_cwd_experiment(config, resume=root / "last.pt")
+            self.assertEqual((root / "fold-0" / "last.pt").read_bytes(), fold_zero_before)
+            self.assertEqual((root / "fold-1" / "last.pt").read_bytes(), fold_one_before)
+            self.assertEqual([item[0] for item in resumed_calls], [2, 3, 4])
+            self.assertEqual(resumed_calls[0][1], root / "fold-2" / "last.pt")
+            self.assertIsNone(resumed_calls[1][1])
+            self.assertIsNone(resumed_calls[2][1])
+            tracked = (
+                root / "aggregate_metrics.json", root / "final_metrics.json", root / "last.pt"
+            )
+            before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in tracked}
+            again = run_cwd_experiment(config, resume=root / "last.pt")
+            after = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in tracked}
+        self.assertEqual(result, again)
+        self.assertEqual(before, after)
 
 
 if __name__ == "__main__":

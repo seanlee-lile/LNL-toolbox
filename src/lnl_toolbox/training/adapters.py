@@ -463,7 +463,21 @@ class NativeStagedRunner(LegacyRunnerAdapter):
                     ) + 1 >= correction_epochs
                 target = int(config["trainer"]["epochs"])
                 return int(payload.get("completed_epoch", -1)) + 1 >= target
-            if spec.name in {"cwd", "fine"}:
+            if spec.name == "cwd":
+                cwd = config.get("cwd", {})
+                if isinstance(cwd, Mapping) and str(
+                    cwd.get("protocol", "single_fold")
+                ).strip().lower() == "five_fold":
+                    state = payload.get("protocol_state", {})
+                    return (
+                        isinstance(state, Mapping)
+                        and state.get("protocol") == "five_fold"
+                        and bool(state.get("completed"))
+                        and len(state.get("completed_folds", ())) == 5
+                    )
+                target = int(config["trainer"]["epochs"])
+                return int(payload.get("completed_epoch", -1)) + 1 >= target
+            if spec.name == "fine":
                 target = int(config["trainer"]["epochs"])
                 return int(payload.get("completed_epoch", -1)) + 1 >= target
             lend_settings = config.get("lend", {})

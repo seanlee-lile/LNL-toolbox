@@ -6,10 +6,40 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 
-from lnl_toolbox.training.adapters import NativeSingleStageRunner
+import torch
+
+from lnl_toolbox.training.adapters import NativeSingleStageRunner, NativeStagedRunner
 
 
 class NativeRunnerLifecycleTest(unittest.TestCase):
+    def test_cwd_five_fold_completed_checkpoint_is_strict_noop(self) -> None:
+        spec = SimpleNamespace(name="cwd")
+        config = {
+            "cwd": {"protocol": "five_fold"},
+            "trainer": {"epochs": 200},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            checkpoint = Path(directory) / "last.pt"
+            torch.save(
+                {
+                    "protocol_state": {
+                        "protocol": "five_fold",
+                        "completed": True,
+                        "completed_folds": [0, 1, 2, 3, 4],
+                    }
+                },
+                checkpoint,
+            )
+            self.assertTrue(
+                NativeStagedRunner._is_completed_noop(spec, config, checkpoint)
+            )
+            payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+            payload["protocol_state"]["completed"] = False
+            torch.save(payload, checkpoint)
+            self.assertFalse(
+                NativeStagedRunner._is_completed_noop(spec, config, checkpoint)
+            )
+
     def test_native_runner_passes_context_and_writes_common_lifecycle_events(self) -> None:
         received: list[object] = []
 

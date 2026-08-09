@@ -488,4 +488,28 @@ lnl papers show t-revision
 lnl papers config t-revision --profile smoke --path-only
 ```
 
+## 10. CWD 五折复现协议与 FINE 报告边界
+
+CWD 正式 recipe 会自动执行五个隔离 fold，并只在每个 fold 训练结束后读取其
+held-out test：
+
+```powershell
+lnl validate --recipe cwd-cifar10-reproduction
+lnl run --recipe cwd-cifar10-reproduction --dry-run
+lnl run --recipe cwd-cifar10-reproduction `
+  --output-dir artifacts/runs/cwd-five-fold
+lnl resume artifacts/runs/cwd-five-fold
+```
+
+每个 fold 位于 `fold-0/` 至 `fold-4/`。根目录 `last.pt` 记录已完成 folds；恢复时
+已完成 fold 严格跳过，被中断 fold 从自身 `last.pt` 继续。只有五折全部完成后才生成
+`aggregate_metrics.json`，其中 `test_accuracy_mean/std` 仅来自五次最终 test。当前代码
+状态是 **protocol-ready**；在实际跑完 200 epochs × 5 folds 前不得写成
+protocol-completed。
+
+FINE 当前保持 fixed-budget、test-final-only。历史记录中存在一次训练及 last-10
+ledger 数值，但当前 runner 没有保存逐 epoch test 指标或最后十个模型，因此无法从
+现有 artifact 重建 last-k。后续若要生成可审计 last-k，需另行批准保存最后十个模型，
+并在训练全部结束后统一测试；不得恢复逐 epoch test 或让 test 参与选模。
+
 Linux/macOS 下命令名称和参数相同；将 PowerShell 的反引号续行改为反斜杠，或写成单行即可。

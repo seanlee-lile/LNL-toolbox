@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime
+import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Mapping
+import uuid
 import warnings
 
 import numpy as np
@@ -167,7 +170,7 @@ def _train_epoch(model, optimizer, loader, objective, device) -> tuple[float, fl
     return loss_sum / samples, correct / samples
 
 
-def run_cwd_experiment(
+def _run_cwd_single_fold(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
@@ -487,6 +490,208 @@ def run_cwd_experiment(
         json.dumps(final, indent=2), encoding="utf-8"
     )
     return run_dir
+
+
+def _config_identity(config: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        config, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _atomic_write_json(payload: Mapping[str, Any], path: Path) -> None:
+    """Write orchestration metadata without exposing a partial JSON file."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True, ensure_ascii=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        loaded = json.loads(temporary.read_text(encoding="utf-8"))
+        if loaded != payload:
+            raise ValueError(f"CWD orchestration JSON verification failed: {path.name}")
+        temporary.replace(path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _fold_result(run_dir: Path, fold_index: int, config: Mapping[str, Any]) -> dict[str, Any] | None:
+    checkpoint_path = run_dir / "last.pt"
+    final_path = run_dir / "final_metrics.json"
+    if not checkpoint_path.is_file() or not final_path.is_file():
+        return None
+    checkpoint = read_checkpoint(checkpoint_path, "cpu")
+    final = json.loads(final_path.read_text(encoding="utf-8"))
+    epochs = int(config["trainer"]["epochs"])
+    if (
+        checkpoint.get("method") != "cwd"
+        or checkpoint.get("config") != config
+        or int(checkpoint.get("completed_epoch", -1)) + 1 < epochs
+        or final.get("status") != "completed"
+        or int(final.get("fold_index", -1)) != fold_index
+    ):
+        return None
+    test_accuracy = float(final["test_accuracy"])
+    test_loss = float(final["test_loss"])
+    if not np.isfinite(test_accuracy) or not np.isfinite(test_loss):
+        raise ValueError(f"CWD fold {fold_index} contains non-finite final metrics")
+    noise_seed = int(config["noise"].get("seed", config.get("seed", 1)))
+    return {
+        "fold_index": fold_index,
+        "status": "completed",
+        "test_accuracy": test_accuracy,
+        "test_loss": test_loss,
+        "run_directory": str(run_dir),
+        "checkpoint": str(checkpoint_path),
+        "noise_mapping_hash": str(checkpoint["noise_mapping_hash"]),
+        "split_seed": int(config.get("seed", 1)),
+        "training_seed": int(config.get("seed", 1)),
+        "noise_seed": noise_seed,
+    }
+
+
+def _root_checkpoint(
+    config: Mapping[str, Any], fold_results: list[Mapping[str, Any]], *, completed: bool
+) -> dict[str, Any]:
+    return {
+        "format_version": 1,
+        "method": "cwd",
+        "config": deepcopy(dict(config)),
+        "completed_epoch": len(fold_results) - 1,
+        "protocol_state": {
+            "protocol": "five_fold",
+            "completed": bool(completed),
+            "completed_folds": [int(item["fold_index"]) for item in fold_results],
+            "fold_results": [dict(item) for item in fold_results],
+            "config_identity": _config_identity(config),
+        },
+    }
+
+
+def _run_cwd_five_fold(
+    config: dict[str, Any],
+    output_dir: str | Path | None,
+    resume: str | Path | None,
+    *,
+    context: RunContext | None,
+) -> Path:
+    config = deepcopy(config)
+    data_config = config["data"]
+    folds = int(data_config.get("folds", 5))
+    if folds != 5:
+        raise ValueError("CWD five_fold protocol requires data.folds: 5")
+    if "fold_index" in data_config:
+        raise ValueError("CWD five_fold protocol manages fold_index internally")
+    run_dir = (
+        Path(resume).resolve().parent
+        if resume is not None
+        else Path(
+            output_dir
+            or Path(config.get("output_root", "artifacts/runs"))
+            / datetime.now().strftime("%Y%m%d-%H%M%S")
+        ).resolve()
+    )
+    run_dir.mkdir(parents=True, exist_ok=True)
+    root_last = run_dir / "last.pt"
+    if resume is not None:
+        checkpoint = read_checkpoint(resume, "cpu")
+        state = checkpoint.get("protocol_state")
+        if checkpoint.get("method") != "cwd" or not isinstance(state, Mapping):
+            raise ValueError("CWD five-fold resume checkpoint is invalid")
+        if checkpoint.get("config") != config:
+            raise ValueError("CWD five-fold resume configuration mismatch")
+        if state.get("protocol") != "five_fold":
+            raise ValueError("CWD resume protocol mismatch")
+        if state.get("config_identity") != _config_identity(config):
+            raise ValueError("CWD five-fold resume configuration identity mismatch")
+
+    fold_results: list[dict[str, Any]] = []
+    fold_configs: list[dict[str, Any]] = []
+    for fold_index in range(folds):
+        fold_config = deepcopy(config)
+        fold_config["cwd"]["protocol"] = "single_fold"
+        fold_config["data"]["fold_index"] = fold_index
+        fold_configs.append(fold_config)
+    for fold_index, fold_config in enumerate(fold_configs):
+        existing = _fold_result(run_dir / f"fold-{fold_index}", fold_index, fold_config)
+        if existing is None:
+            break
+        fold_results.append(existing)
+
+    if len(fold_results) == folds:
+        state = None if resume is None else read_checkpoint(resume, "cpu").get("protocol_state")
+        if isinstance(state, Mapping) and bool(state.get("completed")):
+            return run_dir
+
+    atomic_save(_root_checkpoint(config, fold_results, completed=False), root_last)
+    for fold_index in range(len(fold_results), folds):
+        fold_dir = run_dir / f"fold-{fold_index}"
+        fold_last = fold_dir / "last.pt"
+        fold_resume = fold_last if fold_last.is_file() else None
+        _run_cwd_single_fold(
+            fold_configs[fold_index], fold_dir, fold_resume, context=None
+        )
+        result = _fold_result(fold_dir, fold_index, fold_configs[fold_index])
+        if result is None:
+            raise RuntimeError(f"CWD fold {fold_index} did not produce a completed result")
+        fold_results.append(result)
+        atomic_save(_root_checkpoint(config, fold_results, completed=False), root_last)
+
+    accuracies = np.asarray(
+        [float(item["test_accuracy"]) for item in fold_results], dtype=np.float64
+    )
+    aggregate: dict[str, Any] = {
+        "event": "final",
+        "method": "cwd",
+        "runner": "cwd",
+        "protocol": "five_fold",
+        "status": "completed",
+        "completed": True,
+        "fold_count": folds,
+        "fold_results": fold_results,
+        "test_accuracy_mean": float(accuracies.mean()),
+        "test_accuracy_std": float(accuracies.std(ddof=0)),
+        "split_seed": int(config.get("seed", 1)),
+        "training_seed": int(config.get("seed", 1)),
+        "noise_seed": int(config["noise"].get("seed", config.get("seed", 1))),
+        "source_fold_directories": [item["run_directory"] for item in fold_results],
+        "selection_protocol": "fixed_budget_test_final_only_per_fold",
+        "reproduction_status": "protocol_ready",
+    }
+    _atomic_write_json(aggregate, run_dir / "aggregate_metrics.json")
+    _atomic_write_json(aggregate, run_dir / "final_metrics.json")
+    atomic_save(_root_checkpoint(config, fold_results, completed=True), root_last)
+    (run_dir / "resolved_config.yaml").write_text(
+        yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
+    )
+    if context is not None and context.state.get("lifecycle_active"):
+        context.session.emit(
+            "final",
+            phase="five_fold_evaluation",
+            **{key: value for key, value in aggregate.items() if key != "event"},
+        )
+    return run_dir
+
+
+def run_cwd_experiment(
+    config: dict[str, Any],
+    output_dir: str | Path | None = None,
+    resume: str | Path | None = None,
+    *,
+    context: RunContext | None = None,
+) -> Path:
+    """Run either one legacy CWD fold or the complete five-fold protocol."""
+
+    protocol = str(config.get("cwd", {}).get("protocol", "single_fold")).strip().lower()
+    if protocol == "single_fold":
+        return _run_cwd_single_fold(config, output_dir, resume, context=context)
+    if protocol == "five_fold":
+        return _run_cwd_five_fold(config, output_dir, resume, context=context)
+    raise ValueError("cwd.protocol must be one of: single_fold, five_fold")
 
 
 __all__ = ["run_cwd_experiment"]
