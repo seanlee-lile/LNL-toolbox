@@ -181,6 +181,18 @@
     "implementation_paths": ["src/lnl_toolbox/algorithms/t_revision", "src/lnl_toolbox/training/t_revision_experiment.py"]
   },
   {
+    "id": "dld", "acronym": "DLD", "title": "Directional Label Diffusion Model for Learning from Noisy Labels", "venue": "CVPR", "year": 2025,
+    "source_url": "https://openaccess.thecvf.com/content/CVPR2025/html/Hou_Directional_Label_Diffusion_Model_for_Learning_from_Noisy_Labels_CVPR_2025_paper.html",
+    "summary": "Builds weak/strong-view label pre-corrections and learns directional and random label-diffusion predictors.",
+    "mechanism": "Weighted-neighbor distributions and a divergence GMM form clean/noisy/hard groups; two independent predictors learn the label direction and injected noise for deterministic reverse prediction.",
+    "lifecycle": ["frozen weak/strong feature extraction", "pre-correction artifact", "paired diffusion training", "noisy-validation selection", "clean-test evaluation"],
+    "limitations": ["The bundled profile is a workflow smoke with a repository-frozen model and synthetic symmetric noise.", "This is paper-oriented, not a paper numerical or released-code exact reproduction; zero inference initialization is an engineering policy."],
+    "implementation_status": "user_ready", "reproduction_status": "not_run", "availability": "runnable",
+    "configs": [{"recipe_id":"cifar10-dld-smoke","profile":"smoke","variant":"cifar10-workflow","configuration_fidelity":"paper_oriented","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}],
+    "concept_to_config": [{"concept":"label pre-correction","config":"dld.precorrection","implementation":"algorithms/dld/precorrection.py"},{"concept":"directional diffusion","config":"dld.diffusion","implementation":"algorithms/dld/algorithm.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/dld", "src/lnl_toolbox/training/dld_experiment.py"]
+  },
+  {
     "id": "binary-risk", "acronym": "Binary Risk", "title": "Learning with Noisy Labels", "venue": "NeurIPS", "year": 2013,
     "source_url": "https://papers.nips.cc/paper/2013/hash/3871bd64012152bfb53fdf04b401193f-Abstract.html",
     "summary": "在已知二分类 class-dependent noise rates 下构造无偏风险。",
@@ -191,5 +203,53 @@
     "configs": [],
     "concept_to_config": [{"concept":"unbiased binary risk","config":"risk","implementation":"algorithms/binary_risk.py"}],
     "implementation_paths": ["src/lnl_toolbox/algorithms/binary_risk.py", "src/lnl_toolbox/training/binary_experiment.py"]
+  },
+  {
+    "id": "volminnet", "acronym": "VolMinNet", "title": "Provably End-to-end Label-noise Learning without Anchor Points", "venue": "ICML", "year": 2021,
+    "source_url": "https://proceedings.mlr.press/v139/li21l.html",
+    "summary": "Jointly learns a clean-posterior classifier and a class-conditional transition matrix without anchor points.",
+    "mechanism": "Optimizes noisy-label NLL and a positive-logdet minimum-volume term while updating the classifier and paper-parameterized transition together.",
+    "lifecycle": ["manifest preparation", "joint classifier-transition training", "noisy-validation selection", "transition artifact publication", "clean-test evaluation"],
+    "limitations": ["The built-in profile is a smoke run, not a paper numerical reproduction.", "The paper formula and author code differ on positive logdet versus log-absolute-determinant; this implementation uses the explicit paper_positive_logdet fidelity."],
+    "implementation_status": "user_ready", "reproduction_status": "not_run", "availability": "runnable",
+    "configs": [{"recipe_id":"cifar10-volminnet-smoke","profile":"smoke","variant":"cifar10-sym40","configuration_fidelity":"paper_oriented","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}],
+    "concept_to_config": [{"concept":"joint minimum-volume objective","config":"volminnet.objective","implementation":"algorithms/volminnet/objective.py"},{"concept":"trainable transition","config":"volminnet.transition","implementation":"algorithms/volminnet/transition.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/volminnet", "src/lnl_toolbox/training/volminnet_experiment.py"]
+  },
+  {
+    "id": "upm", "acronym": "UPM", "title": "Tackling Instance-Dependent Label Noise via a Universal Probabilistic Model", "venue": "AAAI", "year": 2021,
+    "source_url": "https://ojs.aaai.org/index.php/AAAI/article/view/17221",
+    "summary": "Models instance-dependent label corruption through one learnable confusing probability per stable training sample.",
+    "mechanism": "A noisy-label classifier first supplies scalar observed-class psi; a fresh main classifier then alternates detached true-posterior prediction, explicit projected eta updates, and fixed-q soft-target learning.",
+    "lifecycle": ["noisy-CE Stage 1", "best-checkpoint deterministic psi snapshot", "stable-index eta initialization", "UPM alternating optimization", "clean-test evaluation"],
+    "limitations": ["The built-in profile is a workflow smoke with symmetric noise, not the paper's CIFAR instance-dependent relabeling or numerical reproduction.", "Best-checkpoint deterministic snapshot collection is an explicit toolbox reproducibility choice because the paper does not fully specify this lifecycle detail."],
+    "implementation_status": "user_ready", "reproduction_status": "not_run", "availability": "runnable",
+    "configs": [{"recipe_id":"cifar10-upm-smoke","profile":"smoke","variant":"cifar10-workflow","configuration_fidelity":"paper_oriented","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}],
+    "concept_to_config": [{"concept":"naive observed-label probability","config":"upm.stage1/upm.psi","implementation":"algorithms/upm/posterior.py"},{"concept":"confusing probability PGA","config":"upm.confusing_probability","implementation":"algorithms/upm/confusing.py"},{"concept":"true-posterior soft supervision","config":"upm.main","implementation":"algorithms/upm/objective.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/upm", "src/lnl_toolbox/training/upm_experiment.py"]
+  },
+  {
+    "id": "dividemix", "acronym": "DivideMix", "title": "Learning with Noisy Labels as Semi-supervised Learning", "venue": "ICLR", "year": 2020,
+    "source_url": "https://openreview.net/forum?id=HJgExaVtwr",
+    "summary": "Treats the per-sample loss distribution as a mixture and turns likely noisy examples into unlabeled data for two-network semi-supervised learning.",
+    "mechanism": "Independent warmup is followed by cross-network GMM co-divide, co-refinement, co-guessing, and a MixMatch objective with paired inference.",
+    "lifecycle": ["independent peer warmup", "full-dataset peer loss snapshots", "cross co-divide artifact", "sequential MixMatch peer training", "paired noisy-validation selection", "clean-test ensemble evaluation"],
+    "limitations": ["The bundled profile is a small workflow smoke, not the paper's 300-epoch numerical reproduction.", "Deterministic GMM seeding, strict artifact validation, and noisy-validation selection are explicit toolbox safeguards."],
+    "implementation_status": "user_ready", "reproduction_status": "not_run", "availability": "runnable",
+    "configs": [{"recipe_id":"cifar10-dividemix-smoke","profile":"smoke","variant":"cifar10-sym20","configuration_fidelity":"paper_official_oriented","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}],
+    "concept_to_config": [{"concept":"cross-network loss-mixture co-divide","config":"dividemix.gmm","implementation":"algorithms/dividemix/gmm.py"},{"concept":"co-refinement and co-guessing","config":"dividemix.mixmatch","implementation":"algorithms/dividemix/targets.py"},{"concept":"MixMatch objective","config":"dividemix.objective","implementation":"algorithms/dividemix/objective.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/dividemix", "src/lnl_toolbox/training/dividemix_experiment.py"]
+  },
+  {
+    "id": "lend", "acronym": "LEND", "title": "Towards Harnessing Feature Embedding for Robust Learning with Noisy Labels", "venue": "Machine Learning", "year": 2022,
+    "source_url": "https://doi.org/10.1007/s10994-022-06197-6",
+    "summary": "Uses current mini-batch feature embeddings to dilute noisy labels over an online graph and selects samples whose diluted evidence still agrees with the observed label.",
+    "mechanism": "A single model supplies logits and penultimate embeddings in one forward; directed batch kNN, A^T A normalization, fixed-step dilution, stable-index cross-epoch history, and agreement selection precede summed noisy-label CE updates.",
+    "lifecycle": ["online feature extraction", "batch-local graph", "label dilution", "persistent history", "hard agreement selection", "noisy-label update"],
+    "limitations": ["This is a paper-oriented workflow because no verifiable author implementation was found and several graph and convergence details are unspecified.", "The bundled profile is a tiny workflow smoke, not a numerical reproduction."],
+    "implementation_status": "user_ready", "reproduction_status": "not_run", "availability": "runnable",
+    "configs": [{"recipe_id":"cifar10-lend-smoke","profile":"smoke","variant":"cifar10-sym20","configuration_fidelity":"paper_oriented","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}],
+    "concept_to_config": [{"concept":"online feature graph","config":"lend.graph","implementation":"algorithms/lend/graph.py"},{"concept":"label dilution and history","config":"lend.dilution/lend.history","implementation":"algorithms/lend/dilution.py and algorithms/lend/history.py"},{"concept":"agreement selection","config":"lend.selection","implementation":"algorithms/lend/selector.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/lend", "src/lnl_toolbox/training/lend_experiment.py"]
   }
 ]

@@ -105,7 +105,15 @@ def create_runner_registry() -> RunnerRegistry:
     registry.add("cal", "lnl_toolbox.training.cal_experiment", "run_cal_experiment")
     registry.add("ca2c", "lnl_toolbox.training.ca2c_experiment", "run_ca2c_experiment")
     registry.add("l2rw", "lnl_toolbox.training.l2rw_experiment", "run_l2rw_experiment")
+    registry.add(
+        "volminnet",
+        "lnl_toolbox.training.volminnet_experiment",
+        "run_volminnet_experiment",
+    )
+    registry.add("upm", "lnl_toolbox.training.upm_experiment", "run_upm_experiment")
     registry.add("dld", "lnl_toolbox.training.dld_experiment", "run_dld_experiment")
+    registry.add("dividemix", "lnl_toolbox.training.dividemix_experiment", "run_dividemix_experiment")
+    registry.add("lend", "lnl_toolbox.training.lend_experiment", "run_lend_experiment")
     registry.add("cnlcu", "lnl_toolbox.training.cnlcu_experiment", "run_cnlcu_experiment")
     registry.add(
         "t_revision",
@@ -113,8 +121,6 @@ def create_runner_registry() -> RunnerRegistry:
         "run_t_revision_experiment",
     )
     registry.add("volmin", "lnl_toolbox.training.volmin_experiment", "run_volmin_experiment")
-    registry.add("upm", "lnl_toolbox.training.upm_experiment", "run_upm_experiment")
-    registry.add("lend", "lnl_toolbox.training.lend_experiment", "run_lend_experiment")
     return registry
 
 
@@ -124,17 +130,19 @@ _METHOD_RUNNERS = frozenset(
         "cnlcu",
         "coteaching",
         "dual_t",
+        "dld",
+        "dividemix",
         "importance_reweighting",
+        "lend",
         "pcse",
         "mc_ldce",
         "cal",
         "ca2c",
         "l2rw",
-        "dld",
         "t_revision",
         "volmin",
         "upm",
-        "lend",
+        "volminnet",
     }
 )
 _RENAMED_METHODS = {"dual_t_forward": "dual_t"}
@@ -179,6 +187,18 @@ def apply_epoch_override(config: dict[str, Any], epochs: int) -> None:
     method = _normalize(method_value) if str(method_value).strip() else ""
     if method == "t_revision":
         _set_nested_epoch(config, ("t_revision", "revision", "epochs"), epochs)
+        return
+    if method == "upm":
+        _set_nested_epoch(config, ("upm", "main", "epochs"), epochs)
+        return
+    if method == "dld":
+        _set_nested_epoch(config, ("dld", "diffusion", "epochs"), epochs)
+        return
+    if method == "dividemix":
+        _set_nested_epoch(config, ("dividemix", "training", "epochs"), epochs)
+        return
+    if method == "lend":
+        _set_nested_epoch(config, ("lend", "training", "epochs"), epochs)
         return
     if method in {"dual_t", "pcse"}:
         raise ValueError(

@@ -149,8 +149,9 @@ def _recipe_path(relative: str, project: Path) -> Path:
 
 def _implementation_status(method: str, runner: str) -> str:
     if method in {
-        "cnlcu", "coteaching", "dss", "dual_t", "fine",
+        "cnlcu", "coteaching", "dividemix", "dss", "dual_t", "fine",
         "importance_reweighting", "jocor", "pcse", "pdl", "t_revision",
+        "upm", "volminnet", "lend",
         "cwd",
     }:
         return "user_ready"
@@ -518,6 +519,8 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
         ),
         "cnlcu": ("lnl_toolbox.algorithms.cnlcu.config", "CNLCUConfig"),
         "dual_t": ("lnl_toolbox.algorithms.dual_t.config", "DualTConfig"),
+        "dld": ("lnl_toolbox.algorithms.dld.config", "DLDConfig"),
+        "dividemix": ("lnl_toolbox.algorithms.dividemix.config", "DivideMixConfig"),
         "importance_reweighting": (
             "lnl_toolbox.algorithms.importance_reweighting.config",
             "ImportanceReweightingConfig",
@@ -525,6 +528,11 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
         "pcse": ("lnl_toolbox.algorithms.pcse.config", "PCSEConfig"),
         "t_revision": (
             "lnl_toolbox.algorithms.t_revision.config", "TRevisionConfig"
+        ),
+        "lend": ("lnl_toolbox.algorithms.lend.config", "LENDConfig"),
+        "upm": ("lnl_toolbox.algorithms.upm.config", "UPMConfig"),
+        "volminnet": (
+            "lnl_toolbox.algorithms.volminnet.config", "VolMinNetConfig"
         ),
     }
     if method_name in validators:

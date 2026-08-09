@@ -35,7 +35,8 @@ class RunnerResolutionTest(unittest.TestCase):
             {
                 "binary", "cal", "ca2c", "clean", "coteaching", "cwd", "dld", "dual_t", "fine",
                 "importance_reweighting", "instance_transition", "multi_model",
-                "l2rw", "lend", "mc_ldce", "pcse", "supervised", "cnlcu", "t_revision", "upm", "volmin",
+                "l2rw", "lend", "mc_ldce", "pcse", "supervised", "cnlcu", "dividemix",
+                "t_revision", "upm", "volmin", "volminnet",
             },
         )
 
@@ -312,6 +313,42 @@ with contextlib.redirect_stdout(io.StringIO()):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_volminnet_is_discoverable_and_paper_mapped(self) -> None:
+        code, output, _ = self.invoke("list", "experiments", "--profile", "smoke")
+        self.assertEqual(code, 0)
+        self.assertIn("cifar10-volminnet-smoke", output)
+        code, output, _ = self.invoke("papers", "show", "volminnet")
+        self.assertEqual(code, 0)
+        self.assertIn("VolMinNet", output)
+        self.assertIn("paper_positive_logdet", output)
+        code, output, _ = self.invoke(
+            "papers", "config", "volminnet", "--profile", "smoke", "--path-only"
+        )
+        self.assertEqual(code, 0)
+        self.assertTrue(output.strip().endswith("cifar10_volminnet_smoke.yaml"))
+
+    def test_volminnet_validate_dry_run_and_epoch_override(self) -> None:
+        code, _, error = self.invoke("validate", "--recipe", "cifar10-volminnet-smoke")
+        self.assertEqual(code, 0, error)
+        code, output, error = self.invoke(
+            "run", "--recipe", "cifar10-volminnet-smoke", "--dry-run", "--epochs", "3"
+        )
+        self.assertEqual(code, 0, error)
+        self.assertIn("volminnet", output)
+        self.assertIn("3", output)
+
+    def test_dividemix_is_discoverable_and_has_staged_epoch_override(self) -> None:
+        code, output, error = self.invoke("papers", "show", "dividemix")
+        self.assertEqual(code, 0, error)
+        self.assertIn("cross-network GMM", output)
+        code, output, error = self.invoke(
+            "run", "--recipe", "cifar10-dividemix-smoke", "--dry-run", "--epochs", "3"
+        )
+        self.assertEqual(code, 0, error)
+        self.assertIn("1/3/4 (warmup/main/total)", output)
+        self.assertIn("DivideMix models: 2", output)
+        self.assertIn("official_logits_sum", output)
 
 
 if __name__ == "__main__":

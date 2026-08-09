@@ -223,6 +223,24 @@ def _epoch_description(config: dict[str, Any]) -> str:
             str((config.get(stage, {}) or {}).get("epochs", "-"))
             for stage in ("pretraining_stage", "ensemble_stage")
         ) + " (pretraining/ensemble)"
+    if method == "upm":
+        values = config.get("upm", {}) or {}
+        return "/".join(
+            str((values.get(stage, {}) or {}).get("epochs", "-"))
+            for stage in ("stage1", "main")
+        ) + " (stage1/main)"
+    if method == "dld":
+        values = config.get("dld", {}) or {}
+        return str((values.get("diffusion", {}) or {}).get("epochs", "-")) + " (diffusion)"
+    if method == "dividemix":
+        values = config.get("dividemix", {}) or {}
+        warmup = (values.get("warmup", {}) or {}).get("epochs", "-")
+        main = (values.get("training", {}) or {}).get("epochs", "-")
+        total = warmup + main if isinstance(warmup, int) and isinstance(main, int) else "-"
+        return f"{warmup}/{main}/{total} (warmup/main/total)"
+    if method == "lend":
+        values = config.get("lend", {}) or {}
+        return str((values.get("training", {}) or {}).get("epochs", "-")) + " (LEND)"
     trainer = config.get("trainer", {}) or {}
     return str(trainer.get("epochs", config.get("epochs", "runner default")))
 
@@ -243,6 +261,76 @@ def _print_plan(config: dict[str, Any], config_path: Path, project: Path) -> Non
     print(f"  设备: {trainer.get('device', 'auto')}")
     print(f"  最佳模型依据: {_selection_description(config)}")
     print(f"  输出根目录: {config.get('output_root', 'artifacts/runs')}")
+    method = config.get("method", "")
+    if isinstance(method, dict):
+        method = method.get("name", "")
+    if str(method).strip().lower() == "upm":
+        upm = config.get("upm", {}) or {}
+        psi = upm.get("psi", {}) or {}
+        eta = upm.get("confusing_probability", {}) or {}
+        print(f"  UPM psi source: {psi.get('source', '-')}")
+        print(f"  UPM eta initial value: {eta.get('initial_value', '-')}")
+        print(f"  UPM eta update start epoch: {eta.get('update_start_epoch', '-')}")
+        print(f"  UPM eta update interval: {eta.get('update_interval_epochs', '-')}")
+    if str(method).strip().lower() == "dld":
+        dld = config.get("dld", {}) or {}
+        feature = dld.get("feature_extractor", {}) or {}
+        pre = dld.get("precorrection", {}) or {}
+        diffusion = dld.get("diffusion", {}) or {}
+        inference = dld.get("inference", {}) or {}
+        fidelity = dld.get("fidelity", {}) or {}
+        print(f"  DLD feature extractor: {feature.get('source', '-')}")
+        print(
+            "  DLD pre-correction: "
+            f"K={pre.get('k_neighbors', '-')} / "
+            f"metric={fidelity.get('neighbor_metric', '-')} / "
+            f"self={fidelity.get('self_neighbor', '-')} / "
+            f"divergence={fidelity.get('divergence', '-')} / GMM"
+        )
+        print(f"  DLD artifact: dld_precorrection.npz")
+        print(f"  DLD timesteps: {diffusion.get('timesteps', '-')}")
+        print(f"  DLD inference steps: {inference.get('steps', '-')}")
+        print(f"  DLD fidelity: {fidelity.get('name', '-')}")
+    if str(method).strip().lower() == "dividemix":
+        values = config.get("dividemix", {}) or {}
+        gmm = values.get("gmm", {}) or {}; history = gmm.get("loss_history", {}) or {}
+        mixmatch = values.get("mixmatch", {}) or {}; objective = values.get("objective", {}) or {}; inference = values.get("inference", {}) or {}
+        print("  DivideMix models: 2")
+        print(f"  DivideMix GMM threshold/history: {gmm.get('threshold', '-')} / {history.get('name', '-')}")
+        print(f"  DivideMix M/T/alpha: {mixmatch.get('augmentations', '-')} / {mixmatch.get('temperature', '-')} / {mixmatch.get('mixup_alpha', '-')}")
+        print(f"  DivideMix lambda_u/ramp-up: {objective.get('lambda_u', '-')} / {objective.get('rampup_epochs', '-')}")
+        print(f"  DivideMix ensemble: {inference.get('ensemble', '-')}")
+    if str(method).strip().lower() == "lend":
+        values = config.get("lend", {}) or {}
+        graph = values.get("graph", {}) or {}
+        dilution = values.get("dilution", {}) or {}
+        history = values.get("history", {}) or {}
+        selection = values.get("selection", {}) or {}
+        loader = config.get("loader", {}) or {}
+        print(f"  LEND batch size: {loader.get('batch_size', '-')}")
+        print(
+            "  LEND graph: "
+            f"k={graph.get('k', '-')} / gamma={graph.get('gamma', '-')} / "
+            f"metric={graph.get('metric', '-')} / "
+            f"normalize_features={graph.get('normalize_features', '-')} / "
+            f"zero_degree={graph.get('zero_degree_policy', '-')}"
+        )
+        print(
+            "  LEND dilution: "
+            f"alpha={dilution.get('alpha', '-')} / "
+            f"policy={dilution.get('policy', '-')} / steps={dilution.get('steps', '-')}"
+        )
+        print(
+            "  LEND history: "
+            f"beta={history.get('beta', '-')} / "
+            f"first={history.get('first_observation', '-')}"
+        )
+        print(
+            "  LEND selection: "
+            f"rule={selection.get('rule', '-')} / "
+            f"reduction={selection.get('reduction', '-')} / "
+            f"empty={selection.get('empty_batch', '-')}"
+        )
 
 
 def _doctor(args: argparse.Namespace) -> int:
