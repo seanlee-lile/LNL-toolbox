@@ -61,6 +61,7 @@ class CWDTrainingTest(unittest.TestCase):
     @staticmethod
     def _config(epochs: int = 3):
         return {
+            "method": "cwd",
             "seed": 7,
             "data": {
                 "name": "cifar10_airplane_automobile", "root": "unused",
@@ -221,6 +222,11 @@ class CWDTrainingTest(unittest.TestCase):
             uninterrupted = run(uninterrupted_dir, uninterrupted_stream)
             interrupted_stream = {}
             run(resumed_dir, interrupted_stream, interrupt=True)
+            legacy = torch.load(
+                Path(resumed_dir) / "last.pt", map_location="cpu", weights_only=False
+            )
+            legacy["config"].pop("method", None)
+            torch.save(legacy, Path(resumed_dir) / "last.pt")
             resumed_stream = {}
             resumed = run(
                 resumed_dir, resumed_stream,

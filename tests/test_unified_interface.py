@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
+import json
 import tempfile
 import unittest
+
+import torch
 
 from lnl_toolbox import toolbox
 from lnl_toolbox.catalog import load_papers
@@ -62,6 +66,54 @@ class UnifiedInterfaceTest(unittest.TestCase):
         self.assertIsInstance(toolbox.get("dld"), DiffusionRunner)
         self.assertIsInstance(toolbox.get("upm"), AlternatingRunner)
         self.assertIsInstance(toolbox.get("lend"), GraphStateRunner)
+
+    def test_completed_pdl_cwd_dss_and_fine_resumes_are_strict_noops(self) -> None:
+        cases = {
+            "pdl": ({
+                "method": "pdl", "data": {"name": "cifar10"},
+                "trainer": {"epochs": 2},
+                "phases": {"correction_epochs": 1, "revision_epochs": 1},
+                "instance_transition": {}, "execution": {"runner": "instance_transition"},
+            }, {"completed_epoch": 0, "pipeline": {"phase": "revision"}}),
+            "cwd": ({
+                "method": "cwd", "data": {"name": "cifar10"},
+                "trainer": {"epochs": 2}, "cwd": {},
+                "execution": {"runner": "cwd"},
+            }, {"completed_epoch": 1}),
+            "dss": ({
+                "method": "dss", "data": {"name": "cifar10"},
+                "trainer": {"epochs": 2}, "execution": {"runner": "supervised"},
+            }, {"completed_epoch": 1}),
+            "fine": ({
+                "method": "fine", "data": {"name": "cifar100"},
+                "trainer": {"epochs": 2}, "fine": {},
+                "execution": {"runner": "fine"},
+            }, {"completed_epoch": 1}),
+        }
+        for method, (config, payload) in cases.items():
+            with self.subTest(method=method), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                checkpoint = root / "last.pt"
+                torch.save(payload, checkpoint)
+                (root / "metrics.jsonl").write_text(
+                    json.dumps({"event": "final", "test_accuracy": 0.5}) + "\n",
+                    encoding="utf-8",
+                )
+                (root / "final_metrics.json").write_text(
+                    json.dumps({"method": method, "test_accuracy": 0.5}),
+                    encoding="utf-8",
+                )
+                before = {
+                    path.name: (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mtime_ns)
+                    for path in root.iterdir()
+                }
+                result = toolbox.run(config=config, resume=checkpoint)
+                after = {
+                    path.name: (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mtime_ns)
+                    for path in root.iterdir()
+                }
+                self.assertEqual(result.run_dir, root.resolve())
+                self.assertEqual(before, after)
 
     def test_custom_runner_registration_uses_same_lookup(self) -> None:
         class DummyRunner:

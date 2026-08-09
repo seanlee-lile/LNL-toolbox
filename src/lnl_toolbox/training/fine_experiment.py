@@ -218,8 +218,16 @@ def run_fine_experiment(
     )
     run_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = None if resume is None else read_checkpoint(resume, "cpu")
-    if checkpoint is not None and checkpoint.get("config") != config:
+    saved_config = None if checkpoint is None else checkpoint.get("config")
+    if isinstance(saved_config, dict):
+        saved_config = deepcopy(saved_config)
+        saved_config["method"] = "fine"
+    comparable_config = deepcopy(config)
+    comparable_config["method"] = "fine"
+    if checkpoint is not None and saved_config != comparable_config:
         raise ValueError("FINE resume configuration mismatch")
+    if checkpoint is not None and checkpoint.get("method") not in {None, "fine", "fine_sed"}:
+        raise ValueError("FINE resume method identity mismatch")
 
     data_config = config["data"]
     if str(data_config.get("name", "cifar100")).lower() != "cifar100":
@@ -486,7 +494,7 @@ def run_fine_experiment(
             scheduler.step()
         atomic_save({
             "format_version": 1,
-            "method": "fine_sed",
+            "method": "fine",
             "config": config,
             "model": model.state_dict(),
             "optimizer": optimizer.state_dict(),
@@ -506,8 +514,15 @@ def run_fine_experiment(
     test = evaluate_classification(model, test_loader, criterion, device)
     final = {
         "event": "final",
-        "method": "fine_sed",
+        "method": "fine",
+        "runner": "fine",
+        "status": "completed",
         "completed_epochs": epochs,
+        "selection_protocol": (
+            "independent_clean_validation"
+            if validation_loader is not None
+            else "fixed_budget_test_final_only"
+        ),
         "validation_metric": (
             "clean_validation_accuracy" if validation_loader is not None else "unavailable"
         ),
@@ -529,6 +544,9 @@ def run_fine_experiment(
     )
     if rows and validation_loader is not None:
         write_training_curves_svg(rows, run_dir / "training_curves.svg")
+    (run_dir / "final_metrics.json").write_text(
+        json.dumps(final, indent=2), encoding="utf-8"
+    )
     return run_dir
 
 

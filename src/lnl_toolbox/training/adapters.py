@@ -280,6 +280,8 @@ class NativeSingleStageRunner(LegacyRunnerAdapter):
         ctx.state["lifecycle_active"] = self._will_continue(
             ctx.resolved_config, effective_resume
         )
+        if effective_resume is not None and not ctx.state["lifecycle_active"]:
+            return RunResult.from_run_dir(ctx.run_dir, resolve=False)
         if effective_resume is not None and self.spec.supports_resume and ctx.state["lifecycle_active"]:
             self._prepare_native_resume_log(ctx.run_dir)
             ctx.session._sequence = len(load_metric_events(ctx.run_dir / "metrics.jsonl"))
@@ -406,7 +408,10 @@ class NativeStagedRunner(LegacyRunnerAdapter):
         config: Mapping[str, Any],
         resume: Path | None,
     ) -> bool:
-        if spec.name not in {"dividemix", "volmin", "volminnet", "dld", "upm", "lend"} or resume is None:
+        if spec.name not in {
+            "dividemix", "volmin", "volminnet", "dld", "upm", "lend",
+            "instance_transition", "cwd", "fine",
+        } or resume is None:
             return False
         try:
             import torch
@@ -440,6 +445,27 @@ class NativeStagedRunner(LegacyRunnerAdapter):
                     return int(state.get("main_completed_epochs", -1)) >= target
                 target = int(config["trainer"]["epochs"])
                 return int(payload.get("epoch", 0)) >= target
+            if spec.name == "instance_transition":
+                pipeline = payload.get("pipeline", {})
+                if not isinstance(pipeline, Mapping):
+                    return False
+                phase = str(pipeline.get("phase", ""))
+                phases = config.get("phases", {})
+                if isinstance(phases, Mapping) and phase in {"correction", "revision"}:
+                    correction_epochs = int(phases.get("correction_epochs", 0))
+                    revision_epochs = int(phases.get("revision_epochs", 0))
+                    if revision_epochs > 0:
+                        return phase == "revision" and int(
+                            payload.get("completed_epoch", -1)
+                        ) + 1 >= revision_epochs
+                    return phase == "correction" and int(
+                        payload.get("completed_epoch", -1)
+                    ) + 1 >= correction_epochs
+                target = int(config["trainer"]["epochs"])
+                return int(payload.get("completed_epoch", -1)) + 1 >= target
+            if spec.name in {"cwd", "fine"}:
+                target = int(config["trainer"]["epochs"])
+                return int(payload.get("completed_epoch", -1)) + 1 >= target
             lend_settings = config.get("lend", {})
             if isinstance(lend_settings, Mapping) and isinstance(lend_settings.get("training"), Mapping):
                 target = int(lend_settings["training"]["epochs"])

@@ -210,6 +210,7 @@ class DSSObjectiveTest(unittest.TestCase):
             "evaluation": {"selection_split": "validation"},
         }
         if dss:
+            config["method"] = "dss"
             config["pipeline"] = {
                 "name": "standard_noisy_erm",
                 "objective_consumer": {

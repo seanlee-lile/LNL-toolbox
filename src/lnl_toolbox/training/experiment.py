@@ -1031,6 +1031,23 @@ def run_supervised_experiment(
             "test_loss": test["loss"],
             "test_accuracy": test["accuracy"],
         }
+        pipeline_config = config.get("pipeline", {})
+        objective_config = (
+            pipeline_config.get("objective_consumer", {})
+            if isinstance(pipeline_config, Mapping)
+            else {}
+        )
+        is_dss = str(config.get("method", "")).strip().lower() == "dss" or (
+            isinstance(objective_config, Mapping)
+            and str(objective_config.get("name", "")).strip().lower() == "dss"
+        )
+        if is_dss:
+            final.update({
+                "method": "dss",
+                "runner": "supervised",
+                "status": "completed",
+                "selection_protocol": selection_split,
+            })
         if noise_metadata is not None:
             final["noise"] = noise_metadata
         if device.type == "cuda":

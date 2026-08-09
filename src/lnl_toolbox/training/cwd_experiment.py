@@ -191,7 +191,13 @@ def run_cwd_experiment(
     )
     run_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = None if resume is None else read_checkpoint(resume, "cpu")
-    if checkpoint is not None and checkpoint.get("config") != config:
+    saved_config = None if checkpoint is None else checkpoint.get("config")
+    if isinstance(saved_config, dict):
+        saved_config = deepcopy(saved_config)
+        saved_config["method"] = "cwd"
+    comparable_config = deepcopy(config)
+    comparable_config["method"] = "cwd"
+    if checkpoint is not None and saved_config != comparable_config:
         raise ValueError("CWD resume configuration mismatch")
 
     data_config = config["data"]
@@ -452,8 +458,15 @@ def run_cwd_experiment(
     final = {
         "event": "final",
         "method": "cwd",
+        "runner": "cwd",
+        "status": "completed",
         "completed_epochs": epochs,
         "fold_index": fold_index,
+        "selection_protocol": (
+            "independent_clean_validation"
+            if validation_loader is not None
+            else "fixed_budget_test_final_only"
+        ),
         "validation_metric": (
             "clean_validation_accuracy" if validation_loader is not None else "unavailable"
         ),
@@ -470,6 +483,9 @@ def run_cwd_experiment(
             phase="evaluation",
             **{key: value for key, value in final.items() if key != "event"},
         )
+    (run_dir / "final_metrics.json").write_text(
+        json.dumps(final, indent=2), encoding="utf-8"
+    )
     return run_dir
 
 

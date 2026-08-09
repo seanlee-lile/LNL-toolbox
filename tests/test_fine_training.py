@@ -243,6 +243,7 @@ class FINETrainingTest(unittest.TestCase):
         train = _cifar("train", 2)
         test = _cifar("test", 1)
         config = self._resume_config()
+        config["method"] = "fine"
         original_builder = fine_experiment.build_epoch_loader
         original_save = fine_experiment.atomic_save
 
@@ -284,6 +285,12 @@ class FINETrainingTest(unittest.TestCase):
             uninterrupted = run(uninterrupted_dir, uninterrupted_stream)
             interrupted_stream = {}
             run(resumed_dir, interrupted_stream, interrupt=True)
+            legacy = torch.load(
+                Path(resumed_dir) / "last.pt", map_location="cpu", weights_only=False
+            )
+            legacy["method"] = "fine_sed"
+            legacy["config"].pop("method", None)
+            torch.save(legacy, Path(resumed_dir) / "last.pt")
             resumed_stream = {}
             resumed = run(
                 resumed_dir, resumed_stream,
