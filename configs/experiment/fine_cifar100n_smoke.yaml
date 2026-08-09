@@ -1,4 +1,5 @@
 seed: 23
+method: fine
 output_root: artifacts/test-runs/fine-cifar100-smoke
 
 data:

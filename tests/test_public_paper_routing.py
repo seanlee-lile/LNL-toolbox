@@ -101,6 +101,21 @@ class PublicPaperRoutingTest(unittest.TestCase):
             self.assertEqual(papers[method].implementation_status, "user_ready")
             self.assertEqual(papers[method].availability, "runnable")
 
+    def test_pdl_cwd_dss_and_fine_recipes_use_canonical_public_methods(self) -> None:
+        cases = {
+            "pdl-cifar10-smoke": ("pdl", "instance_transition"),
+            "cwd-cifar10-smoke": ("cwd", "cwd"),
+            "dss-cifar10-symmetric05-smoke": ("dss", "supervised"),
+            "fine-cifar100n-smoke": ("fine", "fine"),
+        }
+        for recipe_id, (method, runner) in cases.items():
+            with self.subTest(recipe=recipe_id):
+                config = self._config(recipe_id)
+                self.assertEqual(config["method"], method)
+                self.assertEqual(resolve_runner(config).name, runner)
+                self.assertEqual(validate_config(config).name, runner)
+                self.assertEqual(toolbox.get(method, config=config).spec.name, runner)
+
     @staticmethod
     def _nested(config, path):
         value = config

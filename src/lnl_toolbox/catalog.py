@@ -436,10 +436,16 @@ def _validate_dedicated_runner(config: Mapping[str, Any], runner: str) -> None:
         fold_index = int(data.get("fold_index", -1))
         if folds < 2 or not 0 <= fold_index < folds:
             raise ValueError("CWD requires 0 <= data.fold_index < data.folds")
+        if int(data.get("validation_size", 0)) < 0:
+            raise ValueError("CWD data.validation_size must be non-negative")
     elif runner == "fine":
         fine = _require_mapping(config, "fine")
-        if int(fine.get("warmup_epochs", 0)) <= 0:
+        warmup_epochs = int(fine.get("warmup_epochs", 0))
+        if warmup_epochs <= 0:
             raise ValueError("fine.warmup_epochs must be positive")
+        trainer = _require_mapping(config, "trainer")
+        if warmup_epochs > int(trainer.get("epochs", 0)):
+            raise ValueError("fine.warmup_epochs must not exceed trainer.epochs")
     elif runner == "instance_transition":
         transition = _require_mapping(config, "instance_transition")
         if str(transition.get("name", "")).strip().lower() != "pdl":
@@ -451,6 +457,18 @@ def _validate_dedicated_runner(config: Mapping[str, Any], runner: str) -> None:
             raise ValueError(
                 "PDL workflow requires algorithm.correction: forward, pdl, or pdl_revision"
             )
+        warmup = _require_mapping(config, "warmup")
+        if int(warmup.get("epochs", 0)) <= 0:
+            raise ValueError("PDL warmup.epochs must be positive")
+        phases = config.get("phases")
+        if isinstance(phases, Mapping):
+            phase_total = int(phases.get("correction_epochs", 0)) + int(
+                phases.get("revision_epochs", 0)
+            )
+            if phase_total != int(_require_mapping(config, "trainer").get("epochs", 0)):
+                raise ValueError(
+                    "PDL trainer.epochs must equal correction_epochs + revision_epochs"
+                )
 
 
 def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> RunnerSpec:
@@ -512,6 +530,21 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
     if isinstance(method, Mapping):
         method = method.get("name", "")
     method_name = str(method).strip().lower()
+    if method_name == "dss":
+        pipeline = _require_mapping(config, "pipeline")
+        objective = pipeline.get("objective_consumer")
+        if not isinstance(objective, Mapping) or str(
+            objective.get("name", "")
+        ).strip().lower() != "dss":
+            raise ValueError("DSS requires pipeline.objective_consumer.name: dss")
+        if int(objective.get("num_samples", 0)) <= 0:
+            raise ValueError("DSS objective num_samples must be positive")
+        if int(objective.get("num_classes", 0)) < 2:
+            raise ValueError("DSS objective num_classes must be at least two")
+        warmup_epochs = int(objective.get("warmup_epochs", -1))
+        total_epochs = int(_require_mapping(config, "trainer").get("epochs", 0))
+        if not 0 <= warmup_epochs <= total_epochs:
+            raise ValueError("DSS warmup_epochs must be in [0, trainer.epochs]")
     validators = {
         "coteaching": (
             "lnl_toolbox.algorithms.coteaching.config", "CoTeachingConfig"

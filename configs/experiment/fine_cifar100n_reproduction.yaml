@@ -1,5 +1,6 @@
 # Single official SED+FINE CIFAR-100 closed-set configuration.
 seed: 23
+method: fine
 output_root: artifacts/runs/fine-cifar100-symmetric02
 
 data:

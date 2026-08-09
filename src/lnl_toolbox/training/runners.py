@@ -195,7 +195,10 @@ _METHOD_RUNNERS = frozenset(
     }
 )
 _SUPPORTED_METHOD_ALIASES = frozenset(
-    {"apl", "gce", "dss", "cdr", "loss_correction", "binary_risk", "natarajan", "jocor"}
+    {
+        "apl", "gce", "cdr", "loss_correction", "binary_risk", "natarajan",
+        "jocor", "pdl", "cwd", "dss", "fine",
+    }
 )
 _RUNNER_ALIASES = {
     "apl": "supervised",
@@ -206,6 +209,10 @@ _RUNNER_ALIASES = {
     "binary_risk": "binary",
     "natarajan": "binary",
     "jocor": "multi_model",
+    "pdl": "instance_transition",
+    "cwd": "cwd",
+    "dss": "supervised",
+    "fine": "fine",
 }
 _RENAMED_METHODS = {"dual_t_forward": "dual_t"}
 _DEDICATED_SECTIONS = {

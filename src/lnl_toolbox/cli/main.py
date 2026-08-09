@@ -249,6 +249,13 @@ def _epoch_description(config: dict[str, Any]) -> str:
         warmup = (values.get("warmup", {}) or {}).get("epochs", "-")
         main = (values.get("training", {}) or {}).get("epochs", "-")
         return f"{warmup}/{main} (warmup/main)"
+    if method == "pdl":
+        phases = config.get("phases", {}) or {}
+        return (
+            f"{(config.get('warmup', {}) or {}).get('epochs', '-')}/"
+            f"{phases.get('correction_epochs', '-')}/"
+            f"{phases.get('revision_epochs', '-')} (warmup/correction/revision)"
+        )
     trainer = config.get("trainer", {}) or {}
     return str(trainer.get("epochs", config.get("epochs", "runner default")))
 
@@ -273,6 +280,33 @@ def _print_plan(config: dict[str, Any], config_path: Path, project: Path) -> Non
     print(f"  设备: {trainer.get('device', 'auto')}")
     print(f"  最佳模型依据: {_selection_description(config)}")
     print(f"  输出根目录: {config.get('output_root', 'artifacts/runs')}")
+
+
+    normalized_method = str(method).strip().lower()
+    if normalized_method == "pdl":
+        print("  PDL resume: warmup/correction/revision epoch boundary")
+        print("  PDL selection: noisy validation")
+    elif normalized_method == "cwd":
+        validation_size = int(data.get("validation_size", 0))
+        protocol = "independent clean validation" if validation_size > 0 else "fixed budget; test final only"
+        print(f"  CWD validation_size: {validation_size}")
+        print(f"  CWD evaluation: {protocol}")
+    elif normalized_method == "dss":
+        objective = ((config.get("pipeline", {}) or {}).get("objective_consumer", {}) or {})
+        print(
+            "  DSS history-based selection: "
+            f"warmup={objective.get('warmup_epochs', '-')}, "
+            f"MDA={bool(objective.get('mda', False))}, CCS={bool(objective.get('ccs', False))}"
+        )
+    elif normalized_method == "fine":
+        validation_size = int(data.get("validation_size", 0))
+        protocol = "independent clean validation" if validation_size > 0 else "fixed budget; test final only"
+        fine = config.get("fine", {}) or {}
+        print(
+            "  FINE stages: "
+            f"warmup={fine.get('warmup_epochs', '-')}, EMA, SCS/SCR"
+        )
+        print(f"  FINE evaluation: {protocol}")
 
 
 def _doctor(args: argparse.Namespace) -> int:

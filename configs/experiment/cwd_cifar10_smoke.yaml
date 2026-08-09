@@ -1,4 +1,5 @@
 seed: 17
+method: cwd
 output_root: artifacts/test-runs/cwd-cifar10-smoke
 
 data:

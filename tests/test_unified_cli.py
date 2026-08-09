@@ -244,6 +244,21 @@ class UnifiedCliTest(unittest.TestCase):
                 self.assertIn(f"执行器: {runner}", output)
                 self.assertIn(f"训练轮数: {epochs}", output)
 
+    def test_pdl_cwd_dss_and_fine_dry_runs_show_canonical_lifecycle(self) -> None:
+        cases = {
+            "pdl-cifar10-smoke": ("pdl", "instance_transition", "1/-/-"),
+            "cwd-cifar10-smoke": ("cwd", "cwd", "fixed budget; test final only"),
+            "dss-cifar10-symmetric05-smoke": ("dss", "supervised", "MDA=True, CCS=True"),
+            "fine-cifar100n-smoke": ("fine", "fine", "independent clean validation"),
+        }
+        for recipe, (method, runner, detail) in cases.items():
+            with self.subTest(recipe=recipe):
+                code, output, error = self.invoke("run", "--recipe", recipe, "--dry-run")
+                self.assertEqual(code, 0, error)
+                self.assertIn(f"方法: {method}", output)
+                self.assertIn(f"执行器: {runner}", output)
+                self.assertIn(detail, output)
+
     def test_volmin_paper_alias_selects_canonical_recipe(self) -> None:
         canonical = self.invoke(
             "papers", "config", "volmin", "--profile", "smoke", "--path-only"

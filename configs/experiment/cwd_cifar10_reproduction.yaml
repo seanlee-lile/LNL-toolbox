@@ -1,5 +1,6 @@
 # CWD TPAMI CIFAR-binary experiment: one deterministic fold/run only.
 seed: 17
+method: cwd
 output_root: artifacts/runs/cwd-cifar10-symmetric02-fold0
 
 data:

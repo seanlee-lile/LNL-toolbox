@@ -22,6 +22,8 @@ _METHOD_TO_RUNNER = {
     "binary-risk": "binary",
     "natarajan": "binary",
     "pdl": "instance_transition",
+    "cwd": "cwd",
+    "fine": "fine",
     "mentornet": "supervised",
     "dividemix": "dividemix",
     "volmin": "volmin",

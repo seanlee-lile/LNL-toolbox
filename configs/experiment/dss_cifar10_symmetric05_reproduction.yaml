@@ -1,4 +1,5 @@
 seed: 4
+method: dss
 output_root: artifacts/reproductions
 data:
   name: cifar10

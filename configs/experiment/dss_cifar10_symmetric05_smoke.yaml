@@ -1,4 +1,5 @@
 seed: 4
+method: dss
 output_root: artifacts/test-runs
 data:
   name: cifar10
