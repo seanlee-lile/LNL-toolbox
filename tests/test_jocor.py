@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
+import time
 import unittest
 
 import torch
@@ -23,6 +25,8 @@ from lnl_toolbox.plugins.builtin import (
 )
 from lnl_toolbox.selectors import SelectionInput, SmallLossSelector
 from lnl_toolbox.training.checkpoint import load_checkpoint, save_checkpoint
+from lnl_toolbox.training.adapters import NativeMultiModelRunner
+from lnl_toolbox.training.runners import resolve_runner
 
 
 class JoCoRMathTest(unittest.TestCase):
@@ -177,6 +181,8 @@ class JoCoRConfigurationTest(unittest.TestCase):
             "configs/experiment/jocor_cifar10_symmetric05_reproduction.yaml"
         )
         config = yaml.safe_load(path.read_text(encoding="utf-8"))
+        self.assertEqual(config["method"], "jocor")
+        self.assertEqual(resolve_runner(config).name, "multi_model")
         resolved, record = resolve_parameter_sampling(config)
         self.assertEqual(record.parameters["setting"], {
             "noise": "symmetric",
@@ -195,6 +201,57 @@ class JoCoRConfigurationTest(unittest.TestCase):
         self.assertEqual(resolved["scheduler"]["start_epoch"], 80)
         self.assertEqual(resolved["evaluation"]["report_last_epochs"], 10)
         self.assertTrue(resolved["evaluation"]["allow_test_selection"])
+
+    def test_completed_resume_is_strict_noop(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkpoint = root / "last.pt"
+            torch.save({"completed_epoch": 1}, checkpoint)
+            (root / "best.pt").write_bytes(b"best-checkpoint")
+            (root / "metrics.jsonl").write_text(
+                '{"event":"final","completed_epochs":2}\n', encoding="utf-8"
+            )
+            (root / "final_metrics.json").write_text(
+                '{"method":"jocor","runner":"multi_model"}', encoding="utf-8"
+            )
+            (root / "noise_manifest.npz").write_bytes(b"noise-manifest")
+            protected = tuple(
+                root / name
+                for name in (
+                    "last.pt",
+                    "best.pt",
+                    "metrics.jsonl",
+                    "final_metrics.json",
+                    "noise_manifest.npz",
+                )
+            )
+            before = {
+                path.name: (path.read_bytes(), path.stat().st_mtime_ns)
+                for path in protected
+            }
+            time.sleep(0.01)
+
+            def unexpected_load():
+                self.fail("completed resume must not load the native runner")
+
+            spec = SimpleNamespace(
+                name="multi_model",
+                supports_resume=True,
+                load=unexpected_load,
+            )
+            result = NativeMultiModelRunner(spec, method="jocor").fit(
+                config={"method": "jocor", "trainer": {"epochs": 2}},
+                output_dir=root,
+                resume=checkpoint,
+            )
+
+            self.assertEqual(result.final_metrics["method"], "jocor")
+            self.assertEqual(result.final_metrics["runner"], "multi_model")
+            after = {
+                path.name: (path.read_bytes(), path.stat().st_mtime_ns)
+                for path in protected
+            }
+            self.assertEqual(after, before)
 
 
 if __name__ == "__main__":

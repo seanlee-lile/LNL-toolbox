@@ -1,11 +1,26 @@
 method: volmin
 execution: {runner: volmin}
-seed: 1
-output_root: artifacts/test-runs/volmin-smoke
-data: {name: synthetic_multiclass, num_classes: 3, dimension: 6, train_size: 90, validation_size: 30, test_size: 30}
-noise: {type: symmetric, rate: 0.2, seed: 11, sampling: per_class, rng: default_rng}
-loader: {batch_size: 30}
-model: {hidden_width: 16}
-optimizer: {name: sgd, lr: 0.01, momentum: 0.9, weight_decay: 0.0001}
-transition: {initial_weight: 4.5, lambda_volume: 0.0001, determinant_tolerance: 1.0e-8, condition_limit: 1.0e8}
+seed: 41
+output_root: artifacts/runs
+data: {name: cifar10, root: data/cifar10, validation_size: 5000, max_train_samples: 128, max_validation_samples: 64, max_test_samples: 64, augment: false}
+noise: {name: symmetric, rate: 0.4, seed: 43, sampling: transition, rng: default_rng, validation_targets: noisy, manifest_filename: noise_manifest.npz}
+volminnet:
+  fidelity: paper_positive_logdet
+  model: {name: tiny_cnn, width: 8}
+  transition:
+    parameterization: fixed_diagonal_sigmoid_offdiag
+    convention: clean_to_noisy_row
+    normalization_axis: row
+    initialization: {mode: paper}
+  objective:
+    classification: noisy_nll
+    volume: {mode: positive_logdet, coefficient: 0.0001}
+  optimizer:
+    classifier: {name: sgd, lr: 0.01, momentum: 0.9, weight_decay: 0.001}
+    transition: {name: sgd, lr: 0.01, momentum: 0.9, weight_decay: 0.001}
+  scheduler:
+    classifier: {name: none}
+    transition: {name: none}
+  checkpoint_selection: {split: noisy_validation, metric: loss, mode: min}
+loader: {batch_size: 32, num_workers: 0, pin_memory: false}
 trainer: {epochs: 2, device: cpu}

@@ -151,7 +151,7 @@ def _implementation_status(method: str, runner: str) -> str:
     if method in {
         "cnlcu", "coteaching", "dld", "dss", "dual_t", "fine",
         "importance_reweighting", "jocor", "pcse", "pdl", "t_revision",
-        "cwd", "lend", "upm",
+        "cwd", "dividemix", "lend", "upm", "volmin", "volminnet",
     }:
         return "user_ready"
     if method == "mentornet":
@@ -523,6 +523,18 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
             "ImportanceReweightingConfig",
         ),
         "pcse": ("lnl_toolbox.algorithms.pcse.config", "PCSEConfig"),
+        "upm": ("lnl_toolbox.algorithms.upm.config", "UPMConfig"),
+        "dld": ("lnl_toolbox.algorithms.dld.config", "DLDConfig"),
+        "lend": ("lnl_toolbox.algorithms.lend.config", "LENDConfig"),
+        "dividemix": (
+            "lnl_toolbox.algorithms.dividemix.config", "DivideMixConfig"
+        ),
+        "volmin": (
+            "lnl_toolbox.algorithms.volminnet.config", "VolMinNetConfig"
+        ),
+        "volminnet": (
+            "lnl_toolbox.algorithms.volminnet.config", "VolMinNetConfig"
+        ),
         "t_revision": (
             "lnl_toolbox.algorithms.t_revision.config", "TRevisionConfig"
         ),

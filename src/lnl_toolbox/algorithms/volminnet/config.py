@@ -40,11 +40,16 @@ class VolMinNetConfig:
         method = value.get("method", "")
         if isinstance(method, Mapping):
             method = method.get("name", "")
-        if str(method).strip().lower() != "volminnet":
-            raise ValueError("VolMinNet runner requires method: volminnet")
+        method = str(method).strip().lower()
+        if method not in {"volmin", "volminnet"}:
+            raise ValueError("VolMin requires method: volmin (or legacy alias volminnet)")
         execution = _mapping(value.get("execution"), owner="execution")
-        if str(execution.get("runner", "")).strip().lower() != "volminnet":
-            raise ValueError("VolMinNet requires execution.runner: volminnet")
+        runner = str(execution.get("runner", "")).strip().lower()
+        if runner not in {"volmin", "volminnet"}:
+            raise ValueError(
+                "VolMin requires execution.runner: volmin "
+                "(or legacy alias volminnet)"
+            )
         data = _mapping(value.get("data"), owner="data")
         dataset = str(data.get("name", "")).strip().lower()
         expected_classes = {"cifar10": 10, "cifar100": 100}

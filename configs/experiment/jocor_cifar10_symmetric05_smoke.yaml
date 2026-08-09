@@ -1,3 +1,4 @@
+method: jocor
 seed: 1
 output_root: artifacts/test-runs
 

@@ -232,17 +232,38 @@ def _epoch_description(config: dict[str, Any]) -> str:
             str((config.get(stage, {}) or {}).get("epochs", "-"))
             for stage in ("pretraining_stage", "ensemble_stage")
         ) + " (pretraining/ensemble)"
+    if method == "upm":
+        values = config.get("upm", {}) or {}
+        return "/".join(
+            str((values.get(stage, {}) or {}).get("epochs", "-"))
+            for stage in ("stage1", "main")
+        ) + " (stage1/main)"
+    if method == "dld":
+        diffusion = (config.get("dld", {}) or {}).get("diffusion", {}) or {}
+        return f"pre-correction/{diffusion.get('epochs', '-')} (pre-correction/diffusion)"
+    if method == "lend":
+        training = (config.get("lend", {}) or {}).get("training", {}) or {}
+        return f"{training.get('epochs', '-')} (lend.training)"
+    if method == "dividemix":
+        values = config.get("dividemix", {}) or {}
+        warmup = (values.get("warmup", {}) or {}).get("epochs", "-")
+        main = (values.get("training", {}) or {}).get("epochs", "-")
+        return f"{warmup}/{main} (warmup/main)"
     trainer = config.get("trainer", {}) or {}
     return str(trainer.get("epochs", config.get("epochs", "runner default")))
 
 
 def _print_plan(config: dict[str, Any], config_path: Path, project: Path) -> None:
     runner = resolve_runner(config)
+    method = config.get("method", runner.name)
+    if isinstance(method, dict):
+        method = method.get("name", runner.name)
     data = config.get("data", {}) or {}
     trainer = config.get("trainer", {}) or {}
     print("配置预览")
     print(f"  配置文件: {config_path}")
     print(f"  项目根目录: {project}")
+    print(f"  方法: {method}")
     print(f"  执行器: {runner.name}")
     print(f"  数据集: {data.get('name', 'unknown')}")
     print(f"  数据路径: {data.get('root') or data.get('path') or '由数据适配器生成'}")
@@ -266,7 +287,7 @@ def _doctor(args: argparse.Namespace) -> int:
 
     report(sys.version_info >= (3, 10), "Python", platform.python_version())
     report((root / "pyproject.toml").is_file(), "项目根目录", str(root))
-    for package in ("numpy", "yaml", "torch", "torchvision"):
+    for package in ("numpy", "yaml", "torch", "torchvision", "randaugment"):
         distribution = "pyyaml" if package == "yaml" else package
         try:
             version = metadata.version(distribution)

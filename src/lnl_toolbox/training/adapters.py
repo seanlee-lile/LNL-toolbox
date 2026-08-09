@@ -345,6 +345,8 @@ class NativeMultiModelRunner(LegacyRunnerAdapter):
         ctx.state["lifecycle_active"] = self._will_continue(
             ctx.resolved_config, effective_resume
         )
+        if effective_resume is not None and not ctx.state["lifecycle_active"]:
+            return RunResult.from_run_dir(ctx.run_dir, resolve=False)
         if effective_resume is not None and self.spec.supports_resume and ctx.state["lifecycle_active"]:
             self._prepare_native_resume_log(ctx.run_dir)
             ctx.session._sequence = len(load_metric_events(ctx.run_dir / "metrics.jsonl"))
@@ -404,7 +406,7 @@ class NativeStagedRunner(LegacyRunnerAdapter):
         config: Mapping[str, Any],
         resume: Path | None,
     ) -> bool:
-        if spec.name not in {"dividemix", "volminnet", "dld", "upm", "lend"} or resume is None:
+        if spec.name not in {"dividemix", "volmin", "volminnet", "dld", "upm", "lend"} or resume is None:
             return False
         try:
             import torch
@@ -416,7 +418,7 @@ class NativeStagedRunner(LegacyRunnerAdapter):
                 return str(state.get("phase", "")) == "completed" and int(
                     state.get("main_completed_epochs", -1)
                 ) >= target
-            if spec.name == "volminnet":
+            if spec.name in {"volmin", "volminnet"}:
                 state = payload["algorithm"]["volminnet_state"]
                 target = int(config["trainer"]["epochs"])
                 return bool(state.get("completed")) and int(

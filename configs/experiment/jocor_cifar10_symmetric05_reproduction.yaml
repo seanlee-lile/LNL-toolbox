@@ -85,4 +85,5 @@ evaluation:
   selection_split: test
   allow_test_selection: true
   report_last_epochs: 10
+method: jocor
 execution: {runner: multi_model}

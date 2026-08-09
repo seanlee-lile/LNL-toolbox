@@ -555,6 +555,8 @@ def run_multi_model_experiment(
         window_rows = curve_rows[-report_last:] if report_last else []
         final = {
             "event": "final",
+            "method": str(config.get("method", "multi_model")),
+            "runner": "multi_model",
             "completed_epochs": epochs,
             "global_step": state.step,
             "best_epoch": best_epoch,

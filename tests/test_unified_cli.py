@@ -222,8 +222,39 @@ class UnifiedCliTest(unittest.TestCase):
     def test_dry_run_does_not_create_output(self) -> None:
         code, output, _ = self.invoke("run", "--recipe", "cifar10-symmetric-ce-smoke", "--dry-run")
         self.assertEqual(code, 0)
+        self.assertIn("方法: supervised", output)
         self.assertIn("执行器: supervised", output)
         self.assertIn("标签来源:", output)
+
+    def test_restored_paper_recipes_show_public_method_runner_and_epochs(self) -> None:
+        cases = {
+            "upm-cifar10-smoke": ("upm", "upm", "2/3 (stage1/main)"),
+            "dld-cifar10-smoke": ("dld", "dld", "pre-correction/3"),
+            "cifar10-dividemix-smoke": ("dividemix", "dividemix", "1/3 (warmup/main)"),
+            "lend-cifar10-smoke": ("lend", "lend", "3 (lend.training)"),
+            "volmin-cifar10-smoke": ("volmin", "volmin", "3"),
+        }
+        for recipe, (method, runner, epochs) in cases.items():
+            with self.subTest(recipe=recipe):
+                code, output, error = self.invoke(
+                    "run", "--recipe", recipe, "--dry-run", "--epochs", "3"
+                )
+                self.assertEqual(code, 0, error)
+                self.assertIn(f"方法: {method}", output)
+                self.assertIn(f"执行器: {runner}", output)
+                self.assertIn(f"训练轮数: {epochs}", output)
+
+    def test_volmin_paper_alias_selects_canonical_recipe(self) -> None:
+        canonical = self.invoke(
+            "papers", "config", "volmin", "--profile", "smoke", "--path-only"
+        )
+        alias = self.invoke(
+            "papers", "config", "volminnet", "--profile", "smoke", "--path-only"
+        )
+        self.assertEqual(canonical[0], 0, canonical[2])
+        self.assertEqual(alias[0], 0, alias[2])
+        self.assertEqual(canonical[1].strip(), alias[1].strip())
+        self.assertTrue(canonical[1].strip().endswith("volmin_cifar10_smoke.yaml"))
 
     def test_compose_lists_compatible_slots_and_dedicated_runners(self) -> None:
         code, output, _ = self.invoke("compose", "list", "--runner", "supervised")

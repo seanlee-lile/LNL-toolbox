@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Unified CIFAR runner for the standalone VolMinNet method."""
+"""Unified CIFAR runner for canonical VolMin and its VolMinNet alias."""
 
 from copy import deepcopy
 from datetime import datetime
@@ -71,8 +71,8 @@ def _resume_identity(config: Mapping[str, Any]) -> dict[str, Any]:
     trainer = dict(config["trainer"])
     trainer.pop("epochs", None)
     return {
-        "method": config.get("method"),
-        "execution": config.get("execution"),
+        "method": "volmin",
+        "execution": {"runner": "volmin"},
         "seed": config.get("seed"),
         "data": config.get("data"),
         "noise": {key: noise[key] for key in sorted(allowed_noise & set(noise))},
@@ -161,6 +161,8 @@ def _artifact(
     matrix = algorithm.transition.matrix().detach().cpu().numpy()
     diagnostics = algorithm.transition.diagnostics()
     metadata: dict[str, Any] = {
+        # Artifact schema retains its historical implementation identifier;
+        # public method/runner identity is canonicalized separately to volmin.
         "method": "volminnet",
         "role": role,
         "convention": algorithm.transition.convention,
@@ -207,7 +209,7 @@ def _checkpoint_payload(
 ) -> dict[str, Any]:
     return {
         "format_version": 1,
-        "method": "volminnet",
+        "method": "volmin",
         "checkpoint_role": role,
         "config": dict(config),
         "config_identity_hash": _stable_hash(_resume_identity(config)),
@@ -259,8 +261,8 @@ def run_volminnet_experiment(
     resume_payload = None
     if resume is not None:
         resume_payload = read_checkpoint(resume, "cpu")
-        if resume_payload.get("method") != "volminnet" or resume_payload.get("checkpoint_role") != "run_state":
-            raise ValueError("Only a VolMinNet last.pt checkpoint may be resumed")
+        if resume_payload.get("method") not in {"volmin", "volminnet"} or resume_payload.get("checkpoint_role") != "run_state":
+            raise ValueError("Only a VolMin last.pt checkpoint may be resumed")
         saved_config = resume_payload.get("config")
         if not isinstance(saved_config, Mapping):
             raise ValueError("VolMinNet checkpoint resolved config is missing")
@@ -485,7 +487,8 @@ def run_volminnet_experiment(
     algorithm.state.completed = True
     final: dict[str, Any] = {
         "event": "final",
-        "method": "volminnet",
+        "method": "volmin",
+        "runner": "volmin",
         "completed_epochs": algorithm.state.completed_epochs,
         "global_step": algorithm.state.global_step,
         "best_epoch": algorithm.state.best_epoch,

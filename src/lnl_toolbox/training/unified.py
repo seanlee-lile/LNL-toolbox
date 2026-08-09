@@ -24,6 +24,7 @@ _METHOD_TO_RUNNER = {
     "pdl": "instance_transition",
     "mentornet": "supervised",
     "dividemix": "dividemix",
+    "volmin": "volmin",
     "volminnet": "volminnet",
     "dld": "dld",
     "upm": "upm",

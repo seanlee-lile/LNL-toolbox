@@ -132,7 +132,7 @@ def create_runner_registry() -> RunnerRegistry:
         "lnl_toolbox.training.t_revision_experiment",
         "run_t_revision_experiment",
     )
-    registry.add("volmin", "lnl_toolbox.training.volmin_experiment", "run_volmin_experiment")
+    registry.add("volmin", "lnl_toolbox.training.volminnet_experiment", "run_volminnet_experiment")
     registry.add("upm", "lnl_toolbox.training.upm_experiment", "run_upm_experiment")
     registry.add("lend", "lnl_toolbox.training.lend_experiment", "run_lend_experiment")
     registry.add("dividemix", "lnl_toolbox.training.dividemix_experiment", "run_dividemix_experiment")
@@ -195,7 +195,7 @@ _METHOD_RUNNERS = frozenset(
     }
 )
 _SUPPORTED_METHOD_ALIASES = frozenset(
-    {"apl", "gce", "dss", "cdr", "loss_correction", "binary_risk", "natarajan"}
+    {"apl", "gce", "dss", "cdr", "loss_correction", "binary_risk", "natarajan", "jocor"}
 )
 _RUNNER_ALIASES = {
     "apl": "supervised",
@@ -205,6 +205,7 @@ _RUNNER_ALIASES = {
     "loss_correction": "supervised",
     "binary_risk": "binary",
     "natarajan": "binary",
+    "jocor": "multi_model",
 }
 _RENAMED_METHODS = {"dual_t_forward": "dual_t"}
 _DEDICATED_SECTIONS = {
@@ -252,6 +253,15 @@ def apply_epoch_override(config: dict[str, Any], epochs: int) -> None:
     if method == "dividemix":
         _set_nested_epoch(config, ("dividemix", "training", "epochs"), epochs)
         return
+    if method == "upm":
+        _set_nested_epoch(config, ("upm", "main", "epochs"), epochs)
+        return
+    if method == "dld":
+        _set_nested_epoch(config, ("dld", "diffusion", "epochs"), epochs)
+        return
+    if method == "lend":
+        _set_nested_epoch(config, ("lend", "training", "epochs"), epochs)
+        return
     if method in {"dual_t", "pcse"}:
         raise ValueError(
             f"--epochs is ambiguous for staged method {method!r}; edit the explicit "
@@ -288,7 +298,7 @@ def resolve_runner(config: Mapping[str, Any]) -> RunnerSpec:
             "run 'lnl list experiments' to see runnable methods"
         )
 
-    inferred = method
+    inferred = _RUNNER_ALIASES.get(method, method)
     for section, runner in _DEDICATED_SECTIONS.items():
         if section in config:
             if inferred and inferred != runner:
