@@ -18,8 +18,10 @@ from lnl_toolbox.algorithms.transition_risk import (
     instance_importance_reweighted_losses,
 )
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
+from lnl_toolbox.data.cifar import CifarData
 from lnl_toolbox.models.cifar_resnet import cifar_resnet34
 from lnl_toolbox.noise import (
+    NoiseManifest,
     PartTransitionArtifact,
     PartTransitionEstimator,
     PosteriorSnapshot,
@@ -33,6 +35,7 @@ from lnl_toolbox.training.instance_transition_experiment import (
     _official_pdl_split,
     _pdl_official_raw_features,
     _run_pdl_official_phases,
+    run_instance_transition_experiment,
 )
 
 
@@ -478,6 +481,7 @@ class PDLTest(unittest.TestCase):
         artifact = self._artifact()
         dataset = _IndexedDataset()
         config = {
+            "method": "pdl",
             "seed": 13,
             "loader": {"batch_size": 2, "num_workers": 0, "pin_memory": False},
             "loss": {"name": "ce"},
@@ -530,7 +534,9 @@ class PDLTest(unittest.TestCase):
                 )
                 if resume is not None:
                     saved = torch.load(resume, map_location="cpu", weights_only=False)
-                    self.assertEqual(saved["config"], arguments["config"])
+                    saved_config = dict(saved["config"])
+                    saved_config["method"] = "pdl"
+                    self.assertEqual(saved_config, arguments["config"])
                 if interrupt:
                     with self.assertRaisesRegex(RuntimeError, "simulated interruption"):
                         _run_pdl_official_phases(**arguments)
@@ -542,6 +548,11 @@ class PDLTest(unittest.TestCase):
             uninterrupted = run(uninterrupted_dir, uninterrupted_stream)
             interrupted_stream = {}
             run(resumed_dir, interrupted_stream, interrupt=True)
+            legacy = torch.load(
+                Path(resumed_dir) / "last.pt", map_location="cpu", weights_only=False
+            )
+            legacy["config"].pop("method", None)
+            torch.save(legacy, Path(resumed_dir) / "last.pt")
             resumed_stream = {}
             resumed = run(
                 resumed_dir, resumed_stream,
@@ -555,6 +566,128 @@ class PDLTest(unittest.TestCase):
                 torch.testing.assert_close(left[1], right[1], rtol=0.0, atol=0.0)
         for key in ("model", "optimizer", "algorithm_private_state"):
             _assert_nested_equal(self, expected[key], actual[key])
+
+    def test_warmup_one_epoch_interrupt_resume_to_three_matches_uninterrupted(self) -> None:
+        from lnl_toolbox.training import instance_transition_experiment
+
+        labels = np.tile(np.arange(10, dtype=np.int64), 3)
+        images = np.zeros((labels.size, 32, 32, 3), dtype=np.uint8)
+        images[:, 0, 0, 0] = np.arange(labels.size, dtype=np.uint8)
+        train = CifarData(images, labels, tuple(map(str, range(10))), "train", "cifar10")
+        test = CifarData(images[:10], labels[:10], tuple(map(str, range(10))), "test", "cifar10")
+        config = {
+            "method": "pdl", "seed": 9,
+            "data": {"name": "cifar10", "root": "unused", "augment": False},
+            "noise": {"name": "pdl", "rate": 0.2, "seed": 9},
+            "warmup": {
+                "epochs": 3, "noisy_validation_size": 10,
+                "loss": {"name": "ce"},
+                "optimizer": {"name": "sgd", "lr": 0.01, "momentum": 0.0},
+                "scheduler": {"name": "none"},
+            },
+            "instance_transition": {"name": "pdl", "num_parts": 2},
+            "algorithm": {"name": "corrected_classification", "correction": "forward"},
+            "loss": {"name": "ce"}, "model": {"name": "tiny_cnn", "width": 2},
+            "optimizer": {"name": "sgd", "lr": 0.01},
+            "scheduler": {"name": "none"},
+            "loader": {"batch_size": 10, "num_workers": 0, "pin_memory": False},
+            "trainer": {"epochs": 1, "device": "cpu", "progress": {"curves": False}},
+            "execution": {"runner": "instance_transition"},
+        }
+
+        def run(directory, *, interrupt=False, resume=None, expected_error=None):
+            original_save = instance_transition_experiment.atomic_save
+            stopped = False
+
+            def save(payload, path):
+                nonlocal stopped
+                original_save(payload, path)
+                if interrupt and not stopped and payload.get("pipeline") == {"phase": "warmup"}:
+                    stopped = True
+                    raise RuntimeError("warmup interrupted")
+
+            with patch(
+                "lnl_toolbox.training.instance_transition_experiment.load_cifar10",
+                side_effect=lambda _root, split: train if split == "train" else test,
+            ), patch(
+                "lnl_toolbox.training.instance_transition_experiment.atomic_save",
+                side_effect=save,
+            ), patch(
+                "lnl_toolbox.training.instance_transition_experiment.collect_posterior_snapshot",
+                side_effect=RuntimeError("warmup complete"),
+            ):
+                message = expected_error or (
+                    "warmup interrupted" if interrupt else "warmup complete"
+                )
+                exception_type = ValueError if expected_error is not None else RuntimeError
+                with self.assertRaisesRegex(exception_type, message):
+                    run_instance_transition_experiment(config, directory, resume=resume)
+
+        with (
+            tempfile.TemporaryDirectory() as uninterrupted_dir,
+            tempfile.TemporaryDirectory() as resumed_dir,
+            tempfile.TemporaryDirectory() as legacy_dir,
+        ):
+            run(uninterrupted_dir)
+            run(resumed_dir, interrupt=True)
+            interrupted = torch.load(
+                Path(resumed_dir) / "last.pt", map_location="cpu", weights_only=False
+            )
+            self.assertEqual(interrupted["pipeline"], {"phase": "warmup"})
+            self.assertEqual(interrupted["completed_epoch"], 0)
+            self.assertEqual(interrupted["global_step"], 2)
+            manifest = NoiseManifest.load(Path(resumed_dir) / "noise_manifest.npz")
+            self.assertEqual(interrupted["noise_mapping_hash"], manifest.mapping_hash)
+
+            mismatched = deepcopy(interrupted)
+            mismatched["noise_mapping_hash"] = "mismatched-mapping-hash"
+            torch.save(mismatched, Path(resumed_dir) / "last.pt")
+            run(
+                resumed_dir,
+                resume=Path(resumed_dir) / "last.pt",
+                expected_error="mapping hash mismatch",
+            )
+            torch.save(interrupted, Path(resumed_dir) / "last.pt")
+            run(resumed_dir, resume=Path(resumed_dir) / "last.pt")
+
+            run(legacy_dir, interrupt=True)
+            legacy = torch.load(
+                Path(legacy_dir) / "last.pt", map_location="cpu", weights_only=False
+            )
+            legacy.pop("global_step")
+            legacy.pop("noise_mapping_hash")
+            torch.save(legacy, Path(legacy_dir) / "last.pt")
+            with self.assertWarnsRegex(RuntimeWarning, "best effort"):
+                run(legacy_dir, resume=Path(legacy_dir) / "last.pt")
+            uninterrupted_checkpoint = torch.load(
+                Path(uninterrupted_dir) / "last.pt",
+                map_location="cpu",
+                weights_only=False,
+            )
+            resumed_checkpoint = torch.load(
+                Path(resumed_dir) / "last.pt",
+                map_location="cpu",
+                weights_only=False,
+            )
+            expected = torch.load(
+                Path(uninterrupted_dir) / "warmup_model.pt", map_location="cpu", weights_only=False
+            )
+            actual = torch.load(
+                Path(resumed_dir) / "warmup_model.pt", map_location="cpu", weights_only=False
+            )
+        _assert_nested_equal(self, expected["model"], actual["model"])
+        self.assertEqual(
+            uninterrupted_checkpoint["global_step"],
+            resumed_checkpoint["global_step"],
+        )
+        self.assertEqual(
+            uninterrupted_checkpoint["noise_mapping_hash"],
+            resumed_checkpoint["noise_mapping_hash"],
+        )
+        self.assertEqual(
+            expected["best_noisy_validation_accuracy"],
+            actual["best_noisy_validation_accuracy"],
+        )
 
 
 if __name__ == "__main__":

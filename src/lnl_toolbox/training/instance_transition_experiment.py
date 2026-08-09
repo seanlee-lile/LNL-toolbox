@@ -47,7 +47,14 @@ from lnl_toolbox.plugins.builtin import (
     build_builtin_loss,
 )
 from lnl_toolbox.runtime import resolve_device, seed_everything
-from lnl_toolbox.training.checkpoint import load_checkpoint, read_checkpoint, save_checkpoint
+from lnl_toolbox.training.checkpoint import (
+    atomic_save,
+    capture_rng_state,
+    load_checkpoint,
+    read_checkpoint,
+    restore_rng_state,
+    save_checkpoint,
+)
 from lnl_toolbox.training.interfaces import RunContext
 from lnl_toolbox.training.epoch_stream import (
     build_epoch_loader,
@@ -159,6 +166,26 @@ def _write_environment(path: Path, seed: int, device: torch.device) -> None:
         "pytorch": torch.__version__, "cuda_runtime": torch.version.cuda,
         "cuda_available": torch.cuda.is_available(), "device": str(device), "seed": seed,
     }, indent=2), encoding="utf-8")
+
+
+def _pdl_resume_config_matches(
+    current: Mapping[str, Any], saved: Mapping[str, Any], *, warmup: bool
+) -> bool:
+    """Accept legacy identity and warm-up target extension only."""
+
+    current_value = dict(current)
+    saved_value = dict(saved)
+    current_value["method"] = saved_value["method"] = "pdl"
+    if warmup:
+        current_warmup = dict(current_value.get("warmup", {}))
+        saved_warmup = dict(saved_value.get("warmup", {}))
+        current_epochs = int(current_warmup.pop("epochs", 0))
+        saved_epochs = int(saved_warmup.pop("epochs", 0))
+        current_value["warmup"] = current_warmup
+        saved_value["warmup"] = saved_warmup
+        if current_epochs < saved_epochs:
+            return False
+    return current_value == saved_value
 
 
 def _build_instance_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
@@ -285,7 +312,9 @@ def _run_pdl_official_phases(
         # Historical checkpoints produced by ``save_checkpoint`` did not copy
         # the method identity to the top level.  Artifact provenance below is
         # still mandatory, so accept only that missing legacy identity.
-        if payload.get("method") not in {None, "pdl"} or payload.get("config") != dict(config):
+        if payload.get("method") not in {None, "pdl"} or not _pdl_resume_config_matches(
+            config, dict(payload.get("config") or {}), warmup=False
+        ):
             raise ValueError("PDL resume configuration mismatch")
         pipeline = dict(payload.get("pipeline", {}))
         saved_artifact_hash = payload.get("artifact_hash", pipeline.get("artifact_hash"))
@@ -456,7 +485,9 @@ def _run_pdl_official_phases(
         payload = None
     final_test = evaluate_classification(model, test_loader, criterion, device)
     final = {
-        "event": "final", "method": "pdl", "completed_epochs": global_epoch,
+        "event": "final", "method": "pdl", "runner": "instance_transition",
+        "status": "completed", "completed_epochs": global_epoch,
+        "selection_protocol": "noisy_validation",
         "test_loss": final_test["loss"], "test_accuracy": final_test["accuracy"],
         "artifact_hash": artifact.artifact_hash,
         "validation_artifact_hash": validation_artifact.artifact_hash,
@@ -533,7 +564,14 @@ def run_instance_transition_experiment(
     device = resolve_device(str(config["trainer"].get("device", "auto")))
     run_dir = Path(resume).resolve().parent if resume else _run_directory(config, output_dir)
     checkpoint_payload = None if resume is None else read_checkpoint(resume, device)
-    if checkpoint_payload is not None and dict(checkpoint_payload.get("config") or {}) != config:
+    resume_phase = str(
+        (checkpoint_payload or {}).get("pipeline", {}).get("phase", "")
+    )
+    if checkpoint_payload is not None and not _pdl_resume_config_matches(
+        config,
+        dict(checkpoint_payload.get("config") or {}),
+        warmup=resume_phase == "warmup",
+    ):
         raise ValueError("Resume configuration changed")
 
     data_config = dict(config["data"])
@@ -557,6 +595,17 @@ def run_instance_transition_experiment(
         all_indices = selected
     manifest = _prepare_pdl_manifest(config=config["noise"], data=train_data,
         indices=all_indices, num_classes=num_classes, run_dir=run_dir, resume=resume is not None)
+    if checkpoint_payload is not None and resume_phase == "warmup":
+        saved_mapping_hash = checkpoint_payload.get("noise_mapping_hash")
+        if saved_mapping_hash is None:
+            warnings.warn(
+                "Legacy PDL warmup checkpoint has no noise manifest mapping "
+                "hash; manifest identity validation is best effort.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        elif str(saved_mapping_hash) != manifest.mapping_hash:
+            raise ValueError("PDL warmup noise manifest mapping hash mismatch")
 
     noisy_validation_size = int(config["warmup"]["noisy_validation_size"])
     split_strategy = str(config["warmup"].get("split_strategy", "random"))
@@ -604,7 +653,8 @@ def run_instance_transition_experiment(
     artifact_path = run_dir / "instance_transition_artifact.npz"
     validation_artifact_path = run_dir / "validation_instance_transition_artifact.npz"
     revision_validation_artifact_path = run_dir / "revision_validation_instance_transition_artifact.npz"
-    if resume is not None:
+    downstream_resume = None if resume_phase == "warmup" else resume
+    if downstream_resume is not None:
         artifact = PartTransitionArtifact.load(artifact_path)
         if official_pdl:
             validation_artifact = PartTransitionArtifact.load(validation_artifact_path)
@@ -630,15 +680,85 @@ def run_instance_transition_experiment(
         warmup_epochs = int(config["warmup"]["epochs"])
         best_state = None
         best_accuracy = float("-inf")
-        for _ in range(warmup_epochs):
-            pretrain_noisy_classifier(warmup_model, warmup_optimizer, train_loader,
+        warmup_start = 0
+        warmup_global_step = 0
+        if checkpoint_payload is not None:
+            if checkpoint_payload.get("method") not in {None, "pdl", "instance_transition"}:
+                raise ValueError("PDL warmup resume method identity mismatch")
+            warmup_model.load_state_dict(checkpoint_payload["model"])
+            warmup_optimizer.load_state_dict(checkpoint_payload["optimizer"])
+            if warmup_scheduler is not None and checkpoint_payload.get("scheduler") is not None:
+                warmup_scheduler.load_state_dict(checkpoint_payload["scheduler"])
+            restore_rng_state(checkpoint_payload["rng_state"])
+            warmup_start = int(checkpoint_payload.get("completed_epoch", -1)) + 1
+            if "global_step" in checkpoint_payload:
+                warmup_global_step = int(checkpoint_payload["global_step"])
+                if warmup_global_step < 0:
+                    raise ValueError(
+                        "PDL warmup checkpoint global_step must be non-negative"
+                    )
+            else:
+                warnings.warn(
+                    "Legacy PDL warmup checkpoint has no global_step; deriving "
+                    "an epoch-boundary value without claiming strict equivalence.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                warmup_global_step = warmup_start * len(train_loader)
+            best_accuracy = float(
+                checkpoint_payload.get("best_noisy_validation_accuracy", float("-inf"))
+            )
+            best_state = checkpoint_payload.get("best_model")
+            validate_loader_stream(
+                checkpoint_payload.get("loader_stream"),
+                base_seed=seed,
+                namespace="pdl.warmup",
+                next_epoch=warmup_start,
+            )
+        for warmup_epoch in range(warmup_start, warmup_epochs):
+            warmup_epoch_loader = build_epoch_loader(
+                train_set,
+                loader_config,
+                base_seed=seed,
+                namespace="pdl.warmup",
+                epoch=warmup_epoch,
+                shuffle=False,
+                drop_last=False,
+            )
+            pretrain_noisy_classifier(warmup_model, warmup_optimizer, warmup_epoch_loader,
                 device, epochs=1, criterion=warmup_loss)
+            warmup_global_step += len(warmup_epoch_loader)
             score = evaluate_classification(warmup_model, noisy_validation_loader, warmup_loss, device)
             if score["accuracy"] > best_accuracy:
                 best_accuracy = score["accuracy"]
                 best_state = {key: value.detach().cpu().clone() for key, value in warmup_model.state_dict().items()}
             if warmup_scheduler is not None:
                 warmup_scheduler.step()
+            atomic_save(
+                {
+                    "format_version": 2,
+                    "method": "pdl",
+                    "config": config,
+                    "model": warmup_model.state_dict(),
+                    "optimizer": warmup_optimizer.state_dict(),
+                    "scheduler": (
+                        None if warmup_scheduler is None else warmup_scheduler.state_dict()
+                    ),
+                    "completed_epoch": warmup_epoch,
+                    "global_step": warmup_global_step,
+                    "noise_mapping_hash": manifest.mapping_hash,
+                    "best_noisy_validation_accuracy": best_accuracy,
+                    "best_model": best_state,
+                    "rng_state": capture_rng_state(),
+                    "pipeline": {"phase": "warmup"},
+                    "loader_stream": loader_stream_metadata(
+                        base_seed=seed,
+                        namespace="pdl.warmup",
+                        next_epoch=warmup_epoch + 1,
+                    ),
+                },
+                run_dir / "last.pt",
+            )
         if best_state is not None:
             warmup_model.load_state_dict(best_state)
         torch.save({"model": warmup_model.state_dict(), "best_noisy_validation_accuracy": best_accuracy},
@@ -787,7 +907,7 @@ def run_instance_transition_experiment(
             seed=seed,
             epochs=epochs,
             parameter_record=parameter_record,
-            resume=resume,
+            resume=downstream_resume,
             context=context,
         )
 
@@ -802,9 +922,9 @@ def run_instance_transition_experiment(
     algorithm.setup(ExperimentContext(run_dir, config, seed))
     state = RunState(phase="corrected_train")
     completed_epoch, best_epoch, best_accuracy = -1, -1, float("-inf")
-    if resume is not None:
+    if downstream_resume is not None:
         state, completed_epoch, checkpoint_payload = load_checkpoint(
-            resume, algorithm, device, scheduler=scheduler
+            downstream_resume, algorithm, device, scheduler=scheduler
         )
         exact_loader_resume = validate_loader_stream(
             checkpoint_payload.get("loader_stream"),
@@ -908,7 +1028,9 @@ def run_instance_transition_experiment(
         if session is not None:
             session.end_phase("corrected_train", completed_units=max(0, epochs - completed_epoch - 1))
         test = evaluate_classification(model, test_loader, criterion, device)
-        final = {"event": "final", "completed_epochs": epochs, "global_step": state.step,
+        final = {"event": "final", "method": "pdl", "runner": "instance_transition",
+            "status": "completed", "completed_epochs": epochs, "global_step": state.step,
+            "selection_protocol": "noisy_validation",
             "best_epoch": best_epoch, "best_selection_accuracy": best_accuracy,
             "test_loss": test["loss"], "test_accuracy": test["accuracy"],
             "artifact_hash": artifact.artifact_hash}
