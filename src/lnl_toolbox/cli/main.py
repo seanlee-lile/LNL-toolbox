@@ -156,6 +156,54 @@ def _load_source(args: argparse.Namespace) -> tuple[dict[str, Any], Path, Recipe
     return config, config_path, recipe, project
 
 
+def _method_name(config: dict[str, Any], recipe: RecipeSpec | None = None) -> str:
+    if recipe is not None:
+        return recipe.method
+    method = config.get("method")
+    if isinstance(method, dict):
+        method = method.get("name")
+    if method:
+        return str(method)
+    algorithm = config.get("algorithm")
+    if isinstance(algorithm, dict) and algorithm.get("name"):
+        return str(algorithm["name"])
+    loss = config.get("loss")
+    if isinstance(loss, dict) and loss.get("name"):
+        return str(loss["name"])
+    return resolve_runner(config).name
+
+
+def _write_final_result_contract(
+    run_dir: str | Path,
+    config: dict[str, Any],
+    recipe: RecipeSpec | None = None,
+) -> None:
+    """Add stable CLI metadata without changing runner-owned metrics."""
+
+    path = Path(run_dir) / "final_metrics.json"
+    if path.is_file():
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        payload = {}
+        metrics_path = path.with_name("metrics.jsonl")
+        if metrics_path.is_file():
+            rows = [line for line in metrics_path.read_text(encoding="utf-8").splitlines() if line]
+            if rows:
+                payload = json.loads(rows[-1])
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"final_metrics.json must contain a JSON object: {path}")
+    payload.update(
+        {
+            "event": "final",
+            "method": _method_name(config, recipe),
+            "runner": resolve_runner(config).name,
+            "status": "completed",
+            "completed": True,
+        }
+    )
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
 def _noise_description(config: dict[str, Any]) -> str:
     noise = config.get("noise", {}) or {}
     if not noise:
@@ -462,16 +510,17 @@ def _validate(args: argparse.Namespace) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
-    config, path, _recipe, project = _load_source(args)
+    config, path, recipe, project = _load_source(args)
     if args.epochs is not None:
         apply_epoch_override(config, args.epochs)
-    validate_config(config, check_data=args.check_data)
+    validate_config(config, check_data=(args.check_data or not args.dry_run))
     if args.dry_run:
         _print_plan(config, path, project)
         return 0
     from lnl_toolbox.training.experiment import run_experiment
 
     result = run_experiment(config, args.output_dir, args.resume)
+    _write_final_result_contract(result, config, recipe)
     print(f"运行完成: {result}")
     return 0
 
@@ -481,6 +530,10 @@ def _resume(args: argparse.Namespace) -> int:
     config_path = run_dir / "resolved_config.yaml"
     if not config_path.is_file():
         raise ValueError(f"run directory is missing resolved_config.yaml: {run_dir}")
+    final_path = run_dir / "final_metrics.json"
+    if final_path.is_file():
+        print(f"运行已完成，无需恢复: {run_dir}")
+        return 0
     checkpoint = run_dir / f"{args.checkpoint}.pt"
     if not checkpoint.is_file():
         raise ValueError(f"checkpoint does not exist: {checkpoint}")
@@ -489,6 +542,7 @@ def _resume(args: argparse.Namespace) -> int:
     from lnl_toolbox.training.experiment import run_experiment
 
     result = run_experiment(config, run_dir, checkpoint)
+    _write_final_result_contract(result, config)
     print(f"恢复完成: {result}")
     return 0
 

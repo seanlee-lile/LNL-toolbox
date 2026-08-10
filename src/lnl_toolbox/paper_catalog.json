@@ -199,8 +199,8 @@
     "mechanism": "Natarajan binary risk corrector 对逐样本 surrogate risk 做精确校正。",
     "lifecycle": ["known binary rates", "per-sample corrected risk", "binary optimization"],
     "limitations": ["当前是精确风险子组件和 binary runner，不是论文完整 benchmark reproduction。", "尚无默认内置可直接运行 recipe。"],
-    "implementation_status": "component", "reproduction_status": "not_run", "availability": "conditional",
-    "configs": [],
+    "implementation_status": "user_ready", "reproduction_status": "not_run", "availability": "runnable",
+    "configs": [{"recipe_id":"binary-risk-natarajan-reproduction","profile":"reproduction","variant":"natarajan-binary","configuration_fidelity":"paper_oriented","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}],
     "concept_to_config": [{"concept":"unbiased binary risk","config":"risk","implementation":"algorithms/binary_risk.py"}],
     "implementation_paths": ["src/lnl_toolbox/algorithms/binary_risk.py", "src/lnl_toolbox/training/binary_experiment.py"]
   },
@@ -251,5 +251,53 @@
     "configs": [{"recipe_id":"cifar10-lend-smoke","profile":"smoke","variant":"cifar10-sym20","configuration_fidelity":"paper_oriented","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}],
     "concept_to_config": [{"concept":"online feature graph","config":"lend.graph","implementation":"algorithms/lend/graph.py"},{"concept":"label dilution and history","config":"lend.dilution/lend.history","implementation":"algorithms/lend/dilution.py and algorithms/lend/history.py"},{"concept":"agreement selection","config":"lend.selection","implementation":"algorithms/lend/selector.py"}],
     "implementation_paths": ["src/lnl_toolbox/algorithms/lend", "src/lnl_toolbox/training/lend_experiment.py"]
+  },
+  {
+    "id": "cal", "acronym": "CAL", "title": "A Second-Order Approach to Learning with Instance-Dependent Label Noise", "venue": "CVPR", "year": 2021,
+    "source_url": "https://openaccess.thecvf.com/content/CVPR2021/html/Zhu_A_Second-Order_Approach_to_Learning_With_Instance-Dependent_Label_Noise_CVPR_2021_paper.html",
+    "summary": "Provides the existing second-order corrected-risk training workflow through the unified runner.",
+    "mechanism": "Builds proxy-label statistics before second-order risk-corrected training.",
+    "lifecycle": ["proxy construction", "second-order corrected training", "evaluation"],
+    "limitations": ["The smoke profile validates the workflow and is not a numerical reproduction."],
+    "implementation_status": "workflow", "reproduction_status": "not_run", "availability": "runnable",
+    "configs": [{"recipe_id":"cal-cifar10-smoke","profile":"smoke","variant":"cifar10","configuration_fidelity":"smoke","implementation_status":"workflow","reproduction_status":"not_run","availability":"runnable"},{"recipe_id":"cal-cifar10-reproduction","profile":"reproduction","variant":"cifar10","configuration_fidelity":"paper_oriented","implementation_status":"workflow","reproduction_status":"not_run","availability":"runnable"}],
+    "concept_to_config": [{"concept":"second-order corrected risk","config":"cal","implementation":"training/cal_experiment.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/cal.py", "src/lnl_toolbox/training/cal_experiment.py"]
+  },
+  {
+    "id": "mc-ldce", "acronym": "MC-LDCE", "title": "Learning from Multiple Complementary Labels with Deep Classifier Ensemble", "venue": "SDM", "year": 2022,
+    "source_url": "https://arxiv.org/abs/2203.10858",
+    "summary": "Exposes the existing fixed-feature centroid-risk workflow through the unified runner.",
+    "mechanism": "Estimates a transition model and clean centroid statistic before fixed-feature risk optimization.",
+    "lifecycle": ["transition estimation", "centroid recovery", "fixed-feature training", "evaluation"],
+    "limitations": ["The smoke profile validates the workflow and is not a numerical reproduction."],
+    "implementation_status": "workflow", "reproduction_status": "not_run", "availability": "runnable",
+    "configs": [{"recipe_id":"mc-ldce-cifar10-smoke","profile":"smoke","variant":"cifar10","configuration_fidelity":"smoke","implementation_status":"workflow","reproduction_status":"not_run","availability":"runnable"},{"recipe_id":"mc-ldce-cifar10-reproduction","profile":"reproduction","variant":"cifar10","configuration_fidelity":"paper_oriented","implementation_status":"workflow","reproduction_status":"not_run","availability":"runnable"}],
+    "concept_to_config": [{"concept":"clean centroid statistic","config":"mc_ldce","implementation":"estimators/mc_ldce.py"}],
+    "implementation_paths": ["src/lnl_toolbox/estimators/mc_ldce.py", "src/lnl_toolbox/training/mc_ldce_experiment.py"]
+  },
+  {
+    "id": "ca2c", "acronym": "CA2C", "title": "A Prior-Knowledge-Free Approach for Robust Label Noise Learning via Asymmetric Co-Learning", "venue": "ICCV", "year": 2025,
+    "source_url": "https://openaccess.thecvf.com/content/ICCV2025/html/Sheng_CA2C_A_Prior-Knowledge-Free_Approach_for_Robust_Label_Noise_Learning_via_ICCV_2025_paper.html",
+    "summary": "Exposes the existing asymmetric co-learning workflow through the unified runner.",
+    "mechanism": "Uses dual-network candidate memory and asymmetric cross-guidance objectives.",
+    "lifecycle": ["warm-up", "candidate-memory update", "asymmetric co-learning", "evaluation"],
+    "limitations": ["The smoke profile validates the workflow and is not a numerical reproduction."],
+    "implementation_status": "workflow", "reproduction_status": "not_run", "availability": "runnable",
+    "configs": [{"recipe_id":"ca2c-cifar10-smoke","profile":"smoke","variant":"cifar10","configuration_fidelity":"smoke","implementation_status":"workflow","reproduction_status":"not_run","availability":"runnable"},{"recipe_id":"ca2c-cifar10-reproduction","profile":"reproduction","variant":"cifar10","configuration_fidelity":"paper_oriented","implementation_status":"workflow","reproduction_status":"not_run","availability":"runnable"}],
+    "concept_to_config": [{"concept":"asymmetric co-learning","config":"ca2c","implementation":"algorithms/ca2c.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/ca2c.py", "src/lnl_toolbox/training/ca2c_experiment.py"]
+  },
+  {
+    "id": "l2rw", "acronym": "L2RW", "title": "Learning to Reweight Examples for Robust Deep Learning", "venue": "ICML", "year": 2018,
+    "source_url": "https://proceedings.mlr.press/v80/ren18a.html",
+    "summary": "Exposes the existing meta-gradient example-reweighting workflow through the unified runner.",
+    "mechanism": "Uses a trusted meta batch to differentiate example weights through a virtual update.",
+    "lifecycle": ["trusted meta-batch", "virtual update", "meta-gradient weighting", "training update", "evaluation"],
+    "limitations": ["The smoke profile validates the workflow and is not a numerical reproduction."],
+    "implementation_status": "workflow", "reproduction_status": "not_run", "availability": "runnable",
+    "configs": [{"recipe_id":"l2rw-cifar10-smoke","profile":"smoke","variant":"cifar10","configuration_fidelity":"smoke","implementation_status":"workflow","reproduction_status":"not_run","availability":"runnable"},{"recipe_id":"l2rw-cifar10-reproduction","profile":"reproduction","variant":"cifar10","configuration_fidelity":"paper_oriented","implementation_status":"workflow","reproduction_status":"not_run","availability":"runnable"}],
+    "concept_to_config": [{"concept":"meta-gradient example weights","config":"l2rw","implementation":"algorithms/l2rw.py"}],
+    "implementation_paths": ["src/lnl_toolbox/algorithms/l2rw.py", "src/lnl_toolbox/training/l2rw_experiment.py"]
   }
 ]
