@@ -3,11 +3,13 @@ from __future__ import annotations
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import yaml
 
@@ -225,6 +227,106 @@ class UnifiedCliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("执行器: supervised", output)
         self.assertIn("标签来源:", output)
+
+    def test_run_checks_data_before_invoking_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "missing-data.yaml"
+            config_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "data": {"name": "cifar10", "root": str(root / "missing")},
+                        "execution": {"runner": "supervised"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch("lnl_toolbox.training.experiment.run_experiment") as runner:
+                code, _, error = self.invoke(
+                    "run",
+                    "--config", str(config_path),
+                    "--project-root", str(ROOT),
+                )
+            self.assertEqual(code, 2)
+            self.assertIn("data path does not exist", error)
+            runner.assert_not_called()
+
+    def test_run_normalizes_final_result_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data_root = root / "data"
+            data_root.mkdir()
+            run_dir = root / "run"
+            config_path = root / "custom.yaml"
+            config_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "data": {"name": "cifar10", "root": str(data_root)},
+                        "loss": {"name": "gce"},
+                        "execution": {"runner": "supervised"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def fake_run(_config, output_dir, _resume):
+                output = Path(output_dir)
+                output.mkdir()
+                (output / "metrics.jsonl").write_text(
+                    json.dumps({"epoch": 1, "test_accuracy": 0.75}) + "\n",
+                    encoding="utf-8",
+                )
+                return output
+
+            with patch(
+                "lnl_toolbox.training.experiment.run_experiment", side_effect=fake_run
+            ):
+                code, _, error = self.invoke(
+                    "run",
+                    "--config", str(config_path),
+                    "--project-root", str(ROOT),
+                    "--output-dir", str(run_dir),
+                )
+            self.assertEqual(code, 0, error)
+            final = json.loads((run_dir / "final_metrics.json").read_text(encoding="utf-8"))
+            self.assertEqual(final["test_accuracy"], 0.75)
+            self.assertEqual(final["event"], "final")
+            self.assertEqual(final["method"], "gce")
+            self.assertEqual(final["runner"], "supervised")
+            self.assertEqual(final["status"], "completed")
+            self.assertIs(final["completed"], True)
+
+    def test_completed_resume_is_strict_noop(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            (run_dir / "resolved_config.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "data": {"name": "cifar10", "root": "missing-data-is-irrelevant"},
+                        "execution": {"runner": "supervised"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (run_dir / "last.pt").write_bytes(b"checkpoint")
+            (run_dir / "metrics.jsonl").write_text("original\n", encoding="utf-8")
+            (run_dir / "final_metrics.json").write_text(
+                json.dumps({"test_accuracy": 0.5}), encoding="utf-8"
+            )
+            before = {
+                path.name: (path.read_bytes(), path.stat().st_mtime_ns)
+                for path in run_dir.iterdir()
+            }
+            with patch("lnl_toolbox.training.experiment.run_experiment") as runner:
+                code, output, error = self.invoke("resume", str(run_dir))
+            after = {
+                path.name: (path.read_bytes(), path.stat().st_mtime_ns)
+                for path in run_dir.iterdir()
+            }
+            self.assertEqual(code, 0, error)
+            self.assertIn("无需恢复", output)
+            self.assertEqual(after, before)
+            runner.assert_not_called()
 
     def test_compose_lists_compatible_slots_and_dedicated_runners(self) -> None:
         code, output, _ = self.invoke("compose", "list", "--runner", "supervised")
