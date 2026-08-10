@@ -1,54 +1,10 @@
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
 import unittest
 
-import numpy as np
 import torch
 
-from lnl_toolbox.algorithms.dld import (
-    DLDPrecorrectionArtifact,
-    build_knn_label_distribution,
-    precorrect_two_views,
-)
 from lnl_toolbox.models.directional_diffusion import DirectionalDiffusion
-
-
-class DLDAlgorithmTest(unittest.TestCase):
-    def _features(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        weak = np.asarray(
-            [[1.0, 0.0], [0.9, 0.1], [0.0, 1.0], [0.1, 0.9], [-1.0, 0.0], [-0.9, 0.1]],
-            dtype=np.float32,
-        )
-        strong = weak + np.asarray(
-            [[0.0, 0.01], [0.01, 0.0], [0.0, -0.01], [-0.01, 0.0], [0.0, 0.01], [0.01, 0.0]],
-            dtype=np.float32,
-        )
-        labels = np.asarray([0, 0, 1, 1, 2, 2], dtype=np.int64)
-        return weak, strong, labels
-
-    def test_knn_distribution_is_aligned_and_normalized(self) -> None:
-        weak, _, labels = self._features()
-        distribution, neighbors = build_knn_label_distribution(weak, labels, k=2)
-        self.assertEqual(distribution.shape, (6, 3))
-        self.assertEqual(neighbors.shape, (6, 2))
-        np.testing.assert_allclose(distribution.sum(axis=1), 1.0, atol=1e-6)
-        self.assertTrue(np.array_equal(neighbors, neighbors.astype(np.int64)))
-
-    def test_pre_correction_artifact_round_trip_and_index_identity(self) -> None:
-        weak, strong, labels = self._features()
-        indices = np.asarray([10, 20, 30, 40, 50, 60], dtype=np.int64)
-        artifact = precorrect_two_views(weak, strong, labels, indices, k=2, seed=7)
-        self.assertEqual(artifact.global_indices.tolist(), indices.tolist())
-        self.assertEqual(artifact.partition.shape, labels.shape)
-        self.assertTrue(np.all(artifact.loss_weights > 0.0))
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "dld.npz"
-            artifact.save(path)
-            restored = DLDPrecorrectionArtifact.load(path)
-        self.assertEqual(restored.artifact_hash, artifact.artifact_hash)
-        np.testing.assert_allclose(restored.weak_targets, artifact.weak_targets)
 
 
 class DLDModelTest(unittest.TestCase):

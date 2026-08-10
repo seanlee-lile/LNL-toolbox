@@ -6,7 +6,7 @@ execution:
 seed: 7
 data:
   name: cifar10
-  root: data
+  root: data/cifar10
   validation_size: 100
   max_train_samples: 128
   max_validation_samples: 64
