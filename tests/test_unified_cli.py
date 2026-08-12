@@ -225,8 +225,8 @@ class UnifiedCliTest(unittest.TestCase):
     def test_dry_run_does_not_create_output(self) -> None:
         code, output, _ = self.invoke("run", "--recipe", "cifar10-symmetric-ce-smoke", "--dry-run")
         self.assertEqual(code, 0)
-        self.assertIn("执行器: supervised", output)
-        self.assertIn("标签来源:", output)
+        self.assertIn("runner: supervised", output)
+        self.assertIn("Dataset: cifar10", output)
 
     def test_run_checks_data_before_invoking_runner(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -279,7 +279,7 @@ class UnifiedCliTest(unittest.TestCase):
                 return output
 
             with patch(
-                "lnl_toolbox.training.experiment.run_experiment", side_effect=fake_run
+                "lnl_toolbox.training.runners.RunnerSpec.invoke", side_effect=fake_run
             ):
                 code, _, error = self.invoke(
                     "run",
@@ -324,7 +324,7 @@ class UnifiedCliTest(unittest.TestCase):
                 for path in run_dir.iterdir()
             }
             self.assertEqual(code, 0, error)
-            self.assertIn("无需恢复", output)
+            self.assertIn("resume complete", output)
             self.assertEqual(after, before)
             runner.assert_not_called()
 
@@ -449,8 +449,41 @@ with contextlib.redirect_stdout(io.StringIO()):
         )
         self.assertEqual(code, 0, error)
         self.assertIn("1/3/4 (warmup/main/total)", output)
-        self.assertIn("DivideMix models: 2", output)
-        self.assertIn("official_logits_sum", output)
+        self.assertIn("Models: 2", output)
+
+    def test_positional_source_and_dotted_override(self) -> None:
+        code, output, error = self.invoke(
+            "run",
+            "cifar10-symmetric-ce-smoke",
+            "--set",
+            "trainer.epochs=2",
+            "--dry-run",
+        )
+        self.assertEqual(code, 0, error)
+        self.assertIn("Training budget: 2", output)
+
+    def test_positional_yaml_is_accepted(self) -> None:
+        path = ROOT / "configs/experiment/cifar10_symmetric_ce_smoke.yaml"
+        code, output, error = self.invoke("validate", str(path))
+        self.assertEqual(code, 0, error)
+        self.assertIn("supervised", output)
+
+    def test_compare_and_report_dispatch_to_evaluation_service(self) -> None:
+        summary = {"summaries": [], "warnings": [], "failed_runs": []}
+        with patch("lnl_toolbox.cli.main.compare_runs", return_value=summary):
+            code, output, error = self.invoke("compare", str(ROOT))
+        self.assertEqual(code, 0, error)
+        self.assertIn("method\tnoise", output)
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "lnl_toolbox.cli.main.compare_runs", return_value=summary
+        ), patch(
+            "lnl_toolbox.cli.main.write_report",
+            return_value={"report": Path(directory) / "report.md"},
+        ):
+            code, output, error = self.invoke("report", str(ROOT), "--output-dir", directory)
+        self.assertEqual(code, 0, error)
+        self.assertIn("report.md", output)
 
 
 if __name__ == "__main__":

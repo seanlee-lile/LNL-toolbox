@@ -445,3 +445,18 @@ The three new runners are registered in `training/runners.py`; no `training/expe
 ## Current paper acceptance status (2026-08-07)
 
 The current reproduction acceptance status is maintained in `papers/implement/paper-reproduction-progress.md`. Only MentorNet and CDR remain incomplete; VolMinNet, UPM, and LEND are completed after source/equation alignment and validation.
+
+## Unified experiment infrastructure (2026-08-11)
+
+| Path | Responsibility |
+|---|---|
+| `core/config_overrides.py` | Typed, fail-closed dotted configuration overrides. |
+| `training/planning.py` | Runner-owned `RunPlan` and display-neutral introspection. |
+| `training/results.py` | Versioned `final_metrics.json` Result Contract. |
+| `training/service.py` | Shared run/resume entry for CLI, Python API, and sweeps. |
+| `training/sweep.py` | Sequential, resumable, failure-isolated multi-seed execution. |
+| `evaluation/run_comparison.py` | Aggregate statistics, fairness warnings, Markdown/CSV/JSON reports. |
+| `cli/main.py` | Thin commands: positional recipe/YAML, `--set`, `sweep`, `compare`, `report`. |
+| `.github/workflows/quality.yml` | Python 3.10/3.12 lint, tests, coverage, CLI, wheel installation. |
+
+Paper mathematics and dedicated experiment runners remain unchanged by this infrastructure pass.

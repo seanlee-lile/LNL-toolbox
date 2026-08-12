@@ -1,5 +1,7 @@
 from .checkpoint import load_checkpoint, save_checkpoint
 from .experiment import run_experiment
+from .service import ExperimentService
+from .sweep import SweepResult, run_sweep
 from .snapshots import (
     FeatureSnapshot,
     collect_feature_snapshot,
@@ -14,6 +16,9 @@ __all__ = [
     "load_checkpoint",
     "save_checkpoint",
     "run_experiment",
+    "ExperimentService",
+    "SweepResult",
+    "run_sweep",
     "collect_posterior_snapshot",
     "FeatureSnapshot",
     "collect_feature_snapshot",

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from importlib import metadata
-import json
 from pathlib import Path
 import platform
 import sys
@@ -29,11 +28,16 @@ from lnl_toolbox.composition import (
     validate_composition,
     write_composed_config,
 )
+from lnl_toolbox.core.config_overrides import apply_override_assignments
+from lnl_toolbox.evaluation.run_comparison import compare_runs, write_report
 from lnl_toolbox.training.runners import apply_epoch_override, resolve_runner, runner_names
+from lnl_toolbox.training.service import ExperimentService
+from lnl_toolbox.training.sweep import run_sweep
 
 
 def _source_options(parser: argparse.ArgumentParser) -> None:
-    group = parser.add_mutually_exclusive_group(required=True)
+    parser.add_argument("source", nargs="?", help="recipe name or YAML path")
+    group = parser.add_mutually_exclusive_group()
     group.add_argument("--recipe", help="内置实验配置名称")
     group.add_argument("--config", type=Path, help="自定义 YAML 配置")
     parser.add_argument("--project-root", type=Path, help="显式指定项目根目录")
@@ -91,10 +95,33 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--epochs", type=int)
     run.add_argument("--dry-run", action="store_true")
     run.add_argument("--check-data", action="store_true")
+    run.add_argument(
+        "--set",
+        dest="overrides",
+        action="append",
+        default=[],
+        metavar="PATH=VALUE",
+        help="override an existing dotted configuration value; repeatable",
+    )
 
     resume = sub.add_parser("resume", help="从运行目录自动恢复")
     resume.add_argument("run_dir", type=Path)
     resume.add_argument("--checkpoint", choices=("last", "best"), default="last")
+
+    sweep = sub.add_parser("sweep", help="run multiple seeds sequentially and resumably")
+    _source_options(sweep)
+    sweep.add_argument("--seeds", type=int, nargs="+", required=True)
+    sweep.add_argument("--output-dir", type=Path)
+    sweep.add_argument(
+        "--set", dest="overrides", action="append", default=[], metavar="PATH=VALUE"
+    )
+
+    compare = sub.add_parser("compare", help="compare completed run directories")
+    compare.add_argument("path", type=Path)
+
+    report = sub.add_parser("report", help="write Markdown, CSV, and JSON run reports")
+    report.add_argument("path", type=Path)
+    report.add_argument("--output-dir", type=Path)
 
     compose = sub.add_parser("compose", help="查看兼容组合并生成自定义 YAML")
     compose_sub = compose.add_subparsers(dest="compose_command", required=True)
@@ -141,67 +168,32 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _load_source(args: argparse.Namespace) -> tuple[dict[str, Any], Path, RecipeSpec | None, Path]:
     root = args.project_root.expanduser().resolve() if args.project_root else None
-    if args.recipe:
-        recipe = recipe_by_id(args.recipe, root)
+    source = getattr(args, "source", None)
+    recipe_name = getattr(args, "recipe", None)
+    config_arg = getattr(args, "config", None)
+    if source is not None and (recipe_name is not None or config_arg is not None):
+        raise ValueError("positional source cannot be combined with --recipe or --config")
+    if source is not None:
+        candidate = Path(source).expanduser()
+        if candidate.suffix.lower() in {".yaml", ".yml"} or candidate.is_file():
+            config_arg = candidate
+        else:
+            recipe_name = source
+    if recipe_name:
+        recipe = recipe_by_id(recipe_name, root)
         config_path = recipe.config_path
         config = load_recipe_config(recipe)
-    else:
+    elif config_arg is not None:
         recipe = None
-        config_path = args.config.expanduser().resolve()
+        config_path = config_arg.expanduser().resolve()
         if not config_path.is_file():
             raise FileNotFoundError(f"configuration does not exist: {config_path}")
         config = load_yaml(config_path)
+    else:
+        raise ValueError("provide a recipe name or YAML path")
     project = find_project_root(None if recipe is not None else config_path, root)
     config = resolve_config_paths(config, project)
     return config, config_path, recipe, project
-
-
-def _method_name(config: dict[str, Any], recipe: RecipeSpec | None = None) -> str:
-    if recipe is not None:
-        return recipe.method
-    method = config.get("method")
-    if isinstance(method, dict):
-        method = method.get("name")
-    if method:
-        return str(method)
-    algorithm = config.get("algorithm")
-    if isinstance(algorithm, dict) and algorithm.get("name"):
-        return str(algorithm["name"])
-    loss = config.get("loss")
-    if isinstance(loss, dict) and loss.get("name"):
-        return str(loss["name"])
-    return resolve_runner(config).name
-
-
-def _write_final_result_contract(
-    run_dir: str | Path,
-    config: dict[str, Any],
-    recipe: RecipeSpec | None = None,
-) -> None:
-    """Add stable CLI metadata without changing runner-owned metrics."""
-
-    path = Path(run_dir) / "final_metrics.json"
-    if path.is_file():
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    else:
-        payload = {}
-        metrics_path = path.with_name("metrics.jsonl")
-        if metrics_path.is_file():
-            rows = [line for line in metrics_path.read_text(encoding="utf-8").splitlines() if line]
-            if rows:
-                payload = json.loads(rows[-1])
-    if not isinstance(payload, dict):
-        raise RuntimeError(f"final_metrics.json must contain a JSON object: {path}")
-    payload.update(
-        {
-            "event": "final",
-            "method": _method_name(config, recipe),
-            "runner": resolve_runner(config).name,
-            "status": "completed",
-            "completed": True,
-        }
-    )
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def _noise_description(config: dict[str, Any]) -> str:
@@ -250,135 +242,17 @@ def _paper_config_value(config: dict[str, Any], key: str) -> str:
     return "；".join(staged) if staged else "由执行器决定"
 
 
-def _epoch_description(config: dict[str, Any]) -> str:
-    method = config.get("method", "")
-    if isinstance(method, dict):
-        method = method.get("name", "")
-    method = str(method).strip().lower()
-    if method == "t_revision":
-        values = config.get("t_revision", {}) or {}
-        return "/".join(
-            str((values.get(stage, {}) or {}).get("epochs", "-"))
-            for stage in ("stage1", "classifier_initialization", "revision")
-        ) + " (stage1/classifier/revision)"
-    if method == "dual_t":
-        return "/".join(
-            str((config.get(stage, {}) or {}).get("epochs", "-"))
-            for stage in ("posterior_stage", "final_stage")
-        ) + " (posterior/final)"
-    if method == "pcse":
-        return "/".join(
-            str((config.get(stage, {}) or {}).get("epochs", "-"))
-            for stage in ("pretraining_stage", "ensemble_stage")
-        ) + " (pretraining/ensemble)"
-    if method == "upm":
-        values = config.get("upm", {}) or {}
-        return "/".join(
-            str((values.get(stage, {}) or {}).get("epochs", "-"))
-            for stage in ("stage1", "main")
-        ) + " (stage1/main)"
-    if method == "dld":
-        values = config.get("dld", {}) or {}
-        return str((values.get("diffusion", {}) or {}).get("epochs", "-")) + " (diffusion)"
-    if method == "dividemix":
-        values = config.get("dividemix", {}) or {}
-        warmup = (values.get("warmup", {}) or {}).get("epochs", "-")
-        main = (values.get("training", {}) or {}).get("epochs", "-")
-        total = warmup + main if isinstance(warmup, int) and isinstance(main, int) else "-"
-        return f"{warmup}/{main}/{total} (warmup/main/total)"
-    if method == "lend":
-        values = config.get("lend", {}) or {}
-        return str((values.get("training", {}) or {}).get("epochs", "-")) + " (LEND)"
-    trainer = config.get("trainer", {}) or {}
-    return str(trainer.get("epochs", config.get("epochs", "runner default")))
-
-
 def _print_plan(config: dict[str, Any], config_path: Path, project: Path) -> None:
     runner = resolve_runner(config)
-    data = config.get("data", {}) or {}
-    trainer = config.get("trainer", {}) or {}
-    print("配置预览")
-    print(f"  配置文件: {config_path}")
-    print(f"  项目根目录: {project}")
-    print(f"  执行器: {runner.name}")
-    print(f"  数据集: {data.get('name', 'unknown')}")
-    print(f"  数据路径: {data.get('root') or data.get('path') or '由数据适配器生成'}")
-    print(f"  标签来源: {_noise_description(config)}")
-    print(f"  模型: {(config.get('model', {}) or {}).get('name', 'runner default')}")
-    print(f"  训练轮数: {_epoch_description(config)}")
-    print(f"  设备: {trainer.get('device', 'auto')}")
-    print(f"  最佳模型依据: {_selection_description(config)}")
-    print(f"  输出根目录: {config.get('output_root', 'artifacts/runs')}")
-    method = config.get("method", "")
-    if isinstance(method, dict):
-        method = method.get("name", "")
-    if str(method).strip().lower() == "upm":
-        upm = config.get("upm", {}) or {}
-        psi = upm.get("psi", {}) or {}
-        eta = upm.get("confusing_probability", {}) or {}
-        print(f"  UPM psi source: {psi.get('source', '-')}")
-        print(f"  UPM eta initial value: {eta.get('initial_value', '-')}")
-        print(f"  UPM eta update start epoch: {eta.get('update_start_epoch', '-')}")
-        print(f"  UPM eta update interval: {eta.get('update_interval_epochs', '-')}")
-    if str(method).strip().lower() == "dld":
-        dld = config.get("dld", {}) or {}
-        feature = dld.get("feature_extractor", {}) or {}
-        pre = dld.get("precorrection", {}) or {}
-        diffusion = dld.get("diffusion", {}) or {}
-        inference = dld.get("inference", {}) or {}
-        fidelity = dld.get("fidelity", {}) or {}
-        print(f"  DLD feature extractor: {feature.get('source', '-')}")
-        print(
-            "  DLD pre-correction: "
-            f"K={pre.get('k_neighbors', '-')} / "
-            f"metric={fidelity.get('neighbor_metric', '-')} / "
-            f"self={fidelity.get('self_neighbor', '-')} / "
-            f"divergence={fidelity.get('divergence', '-')} / GMM"
-        )
-        print(f"  DLD artifact: dld_precorrection.npz")
-        print(f"  DLD timesteps: {diffusion.get('timesteps', '-')}")
-        print(f"  DLD inference steps: {inference.get('steps', '-')}")
-        print(f"  DLD fidelity: {fidelity.get('name', '-')}")
-    if str(method).strip().lower() == "dividemix":
-        values = config.get("dividemix", {}) or {}
-        gmm = values.get("gmm", {}) or {}; history = gmm.get("loss_history", {}) or {}
-        mixmatch = values.get("mixmatch", {}) or {}; objective = values.get("objective", {}) or {}; inference = values.get("inference", {}) or {}
-        print("  DivideMix models: 2")
-        print(f"  DivideMix GMM threshold/history: {gmm.get('threshold', '-')} / {history.get('name', '-')}")
-        print(f"  DivideMix M/T/alpha: {mixmatch.get('augmentations', '-')} / {mixmatch.get('temperature', '-')} / {mixmatch.get('mixup_alpha', '-')}")
-        print(f"  DivideMix lambda_u/ramp-up: {objective.get('lambda_u', '-')} / {objective.get('rampup_epochs', '-')}")
-        print(f"  DivideMix ensemble: {inference.get('ensemble', '-')}")
-    if str(method).strip().lower() == "lend":
-        values = config.get("lend", {}) or {}
-        graph = values.get("graph", {}) or {}
-        dilution = values.get("dilution", {}) or {}
-        history = values.get("history", {}) or {}
-        selection = values.get("selection", {}) or {}
-        loader = config.get("loader", {}) or {}
-        print(f"  LEND batch size: {loader.get('batch_size', '-')}")
-        print(
-            "  LEND graph: "
-            f"k={graph.get('k', '-')} / gamma={graph.get('gamma', '-')} / "
-            f"metric={graph.get('metric', '-')} / "
-            f"normalize_features={graph.get('normalize_features', '-')} / "
-            f"zero_degree={graph.get('zero_degree_policy', '-')}"
-        )
-        print(
-            "  LEND dilution: "
-            f"alpha={dilution.get('alpha', '-')} / "
-            f"policy={dilution.get('policy', '-')} / steps={dilution.get('steps', '-')}"
-        )
-        print(
-            "  LEND history: "
-            f"beta={history.get('beta', '-')} / "
-            f"first={history.get('first_observation', '-')}"
-        )
-        print(
-            "  LEND selection: "
-            f"rule={selection.get('rule', '-')} / "
-            f"reduction={selection.get('reduction', '-')} / "
-            f"empty={selection.get('empty_batch', '-')}"
-        )
+    plan = runner.describe(config)
+    print("Configuration preview")
+    print(f"  configuration: {config_path}")
+    print(f"  project root: {project}")
+    print(f"  runner: {plan.runner}")
+    print(f"  method: {plan.method}")
+    print(f"  Training budget: {plan.training_budget}")
+    for field in plan.fields:
+        print(f"  {field.label}: {field.value}")
 
 
 def _doctor(args: argparse.Namespace) -> int:
@@ -511,39 +385,64 @@ def _validate(args: argparse.Namespace) -> int:
 
 def _run(args: argparse.Namespace) -> int:
     config, path, recipe, project = _load_source(args)
+    config = apply_override_assignments(config, args.overrides)
     if args.epochs is not None:
         apply_epoch_override(config, args.epochs)
     validate_config(config, check_data=(args.check_data or not args.dry_run))
     if args.dry_run:
         _print_plan(config, path, project)
         return 0
-    from lnl_toolbox.training.experiment import run_experiment
-
-    result = run_experiment(config, args.output_dir, args.resume)
-    _write_final_result_contract(result, config, recipe)
+    result = ExperimentService().run(
+        config,
+        args.output_dir,
+        args.resume,
+        recipe=recipe.id if recipe is not None else None,
+    )
     print(f"运行完成: {result}")
     return 0
 
 
 def _resume(args: argparse.Namespace) -> int:
-    run_dir = args.run_dir.expanduser().resolve()
-    config_path = run_dir / "resolved_config.yaml"
-    if not config_path.is_file():
-        raise ValueError(f"run directory is missing resolved_config.yaml: {run_dir}")
-    final_path = run_dir / "final_metrics.json"
-    if final_path.is_file():
-        print(f"运行已完成，无需恢复: {run_dir}")
-        return 0
-    checkpoint = run_dir / f"{args.checkpoint}.pt"
-    if not checkpoint.is_file():
-        raise ValueError(f"checkpoint does not exist: {checkpoint}")
-    config = load_yaml(config_path)
-    validate_config(config)
-    from lnl_toolbox.training.experiment import run_experiment
+    result = ExperimentService().resume(args.run_dir, args.checkpoint)
+    print(f"resume complete: {result}")
+    return 0
 
-    result = run_experiment(config, run_dir, checkpoint)
-    _write_final_result_contract(result, config)
-    print(f"恢复完成: {result}")
+
+def _sweep(args: argparse.Namespace) -> int:
+    config, _path, recipe, _project = _load_source(args)
+    config = apply_override_assignments(config, args.overrides)
+    validate_config(config, check_data=True)
+    result = run_sweep(
+        config,
+        args.seeds,
+        output_dir=args.output_dir,
+        recipe=recipe.id if recipe is not None else None,
+    )
+    print(f"sweep: {result.root}")
+    print(
+        f"completed={result.completed} skipped={result.skipped} failed={result.failed}"
+    )
+    return 1 if result.failed else 0
+
+
+def _compare(args: argparse.Namespace) -> int:
+    comparison = compare_runs(args.path)
+    print("method\tnoise\tn\tmean\tstd")
+    for row in comparison["summaries"]:
+        print(
+            f"{row['method']}\t{row['noise']}\t{row['n']}\t"
+            f"{row['mean']:.6f}\t{row['std']:.6f}"
+        )
+    for warning in comparison["warnings"]:
+        print(warning)
+    return 0
+
+
+def _report(args: argparse.Namespace) -> int:
+    comparison = compare_runs(args.path)
+    output_dir = args.output_dir or args.path
+    for path in write_report(comparison, output_dir).values():
+        print(path)
     return 0
 
 
@@ -793,6 +692,12 @@ def main(argv: list[str] | None = None) -> int:
             return _run(args)
         if args.command == "resume":
             return _resume(args)
+        if args.command == "sweep":
+            return _sweep(args)
+        if args.command == "compare":
+            return _compare(args)
+        if args.command == "report":
+            return _report(args)
         if args.command == "compose":
             if args.compose_command == "list":
                 return _compose_list(args)

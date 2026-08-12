@@ -672,6 +672,26 @@ Evaluator 使用独立 clean validation/test loader；在 `inference_mode` 下�
 - 在 `training/experiment.py` 写入某篇论文算法的内部数学；
 - 把研究文档中的建议接口当作已经实现的生产合同。
 
+## 12. 运行、结果与批量比较数据流
+
+```text
+recipe/YAML
+  -> dotted --set overrides
+  -> config validation
+  -> RunnerSpec.describe/apply_training_budget
+  -> ExperimentService
+  -> runner lifecycle
+  -> Result Contract (final_metrics.json)
+
+base config + ordered seeds
+  -> sequential resumable sweep
+  -> per-seed run directories + sweep_manifest.json
+  -> compare fairness audit
+  -> report.md + summary.csv + summary.json
+```
+
+`ExperimentService` 是 CLI、Python API 和 sweep 的共同入口。已完成运行的 resume 是严格 no-op；比较层只消费 Result Contract，并对数据集、模型、增强、训练预算、噪声率/manifest、模型选择划分和测试集泄漏标记进行公平性告警。
+
 ### 7.9 L2RW 可信监督例外
 
 2026-08-03 已由用户批准 L2RW 所需的 clean meta-batch 例外。该例外仅限：

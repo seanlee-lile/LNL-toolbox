@@ -172,3 +172,19 @@ lnl-train --config configs/experiment/cifar10_smoke.yaml
 ```
 
 不要直接使用完整 Conda 环境的 `pip freeze` 覆盖 requirements；那会把其他项目的 Cleanlab、OpenCV、Pandas、Ultralytics 等无关依赖一起带入。
+
+## 11. 统一实验服务与质量门禁
+
+用户入口统一调用 `ExperimentService`；runner 只负责训练生命周期，服务层负责标准运行元数据和 `final_metrics.json` Result Contract。新增 runner 时应在 `training/runners.py` 注册自身的预算路径与 `RunPlan`，CLI 不得按论文名称分支。
+
+常用命令：
+
+```powershell
+lnl run cifar10-symmetric-ce-smoke --set trainer.epochs=2 --dry-run
+lnl run configs/experiment/cifar10_symmetric_ce_smoke.yaml
+lnl sweep cifar10-symmetric-ce-smoke --seeds 1 2 3
+lnl compare artifacts/sweeps/example
+lnl report artifacts/sweeps/example
+```
+
+CI 在 Python 3.10 和 3.12 上执行 Ruff、完整 unittest、CLI 测试和 coverage；独立 wheel job 验证构建、安装及 `lnl --help`。

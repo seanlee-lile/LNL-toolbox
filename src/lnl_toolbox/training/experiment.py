@@ -980,8 +980,8 @@ def run_experiment(
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
 ) -> Path:
-    """Compatibility entry point for the general training CLI."""
+    """Public Python API with the same result contract as the CLI."""
 
-    from lnl_toolbox.training.runners import resolve_runner
+    from lnl_toolbox.training.service import ExperimentService
 
-    return resolve_runner(config).invoke(dict(config), output_dir, resume)
+    return ExperimentService().run(config, output_dir, resume)
