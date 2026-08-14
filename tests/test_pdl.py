@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -383,7 +384,9 @@ class PDLTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(logits.grad).all())
 
     def test_pdl_reweight_objective_matches_official_beta_nll(self) -> None:
-        logits = torch.tensor([[1.0, -0.5], [-0.2, 0.7]], dtype=torch.float64)
+        logits = torch.tensor(
+            [[1.0, -0.5], [-0.2, 0.7]], dtype=torch.float64, requires_grad=True
+        )
         targets = torch.tensor([0, 1])
         matrices = torch.tensor([
             [[0.8, 0.2], [0.1, 0.9]],
@@ -396,6 +399,65 @@ class PDLTest(unittest.TestCase):
         expected = (clean_y / noisy_y) * (-torch.log(clean_y))
         actual = pdl_instance_corrected_losses(logits, targets, matrices)
         torch.testing.assert_close(actual, expected)
+
+        official_logits = logits.detach().clone().requires_grad_(True)
+        official_clean = torch.softmax(official_logits, dim=1)
+        official_noisy = torch.bmm(
+            official_clean.unsqueeze(1), matrices
+        ).squeeze(1)
+        official_clean_y = official_clean.gather(1, targets[:, None]).squeeze(1)
+        official_noisy_y = official_noisy.gather(1, targets[:, None]).squeeze(1)
+        official_beta = (official_clean_y / official_noisy_y).detach()
+        (official_beta * -torch.log(official_clean_y)).mean().backward()
+
+        correction_logits = logits.detach().clone().requires_grad_(True)
+        pdl_instance_corrected_losses(
+            correction_logits,
+            targets,
+            matrices,
+            detach_importance_weight=True,
+        ).mean().backward()
+        torch.testing.assert_close(correction_logits.grad, official_logits.grad)
+
+        revision_logits = logits.detach().clone().requires_grad_(True)
+        pdl_instance_corrected_losses(
+            revision_logits,
+            targets,
+            matrices,
+            detach_importance_weight=False,
+        ).mean().backward()
+        self.assertFalse(torch.allclose(revision_logits.grad, official_logits.grad))
+
+    def test_pdl_algorithm_uses_phase_specific_beta_gradients(self) -> None:
+        batch = Batch({
+            "input": torch.tensor([[1.0, 0.0], [0.0, 1.0]]),
+            "target": torch.tensor([0, 1]),
+            "index": torch.tensor([11, 4]),
+        })
+        artifact = self._artifact()
+        for correction, expected_detach in (("pdl", True), ("pdl_revision", False)):
+            model = nn.Linear(2, 2)
+            if correction == "pdl_revision":
+                model.T_revision = nn.Linear(2, 2, bias=False)
+                nn.init.zeros_(model.T_revision.weight)
+            algorithm = InstanceTransitionClassificationAlgorithm(
+                model,
+                torch.optim.SGD(model.parameters(), lr=0.0),
+                nn.CrossEntropyLoss(reduction="none"),
+                artifact,
+                torch.device("cpu"),
+                correction=correction,
+            )
+            algorithm.setup(ExperimentContext(work_dir=Path(".")))
+            with patch(
+                "lnl_toolbox.algorithms.instance_transition.pdl_instance_corrected_losses",
+                wraps=pdl_instance_corrected_losses,
+            ) as corrected_loss:
+                algorithm.step(batch, RunState())
+            self.assertEqual(
+                corrected_loss.call_args.kwargs["detach_importance_weight"],
+                expected_detach,
+            )
 
     def test_algorithm_checkpoint_rejects_artifact_change(self) -> None:
         artifact = self._artifact()
