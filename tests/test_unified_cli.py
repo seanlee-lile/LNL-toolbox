@@ -67,24 +67,30 @@ class RunnerResolutionTest(unittest.TestCase):
 
 class CatalogTest(unittest.TestCase):
     def test_installed_recipe_uses_distribution_file_record(self) -> None:
-        relative = "configs/experiment/cifar10_volminnet_smoke.yaml"
-        entry = Path("../..") / "share" / "lnl-toolbox" / relative
+        with tempfile.TemporaryDirectory() as temporary:
+            prefix = Path(temporary) / "venv"
+            site_packages = prefix / "lib" / "site-packages"
+            site_packages.mkdir(parents=True)
+            relative = "configs/experiment/cifar10_volminnet_smoke.yaml"
+            entry = Path("../..") / "share" / "lnl-toolbox" / relative
 
-        class Distribution:
-            files = (entry,)
+            class Distribution:
+                files = (entry,)
 
-            @staticmethod
-            def locate_file(value: Path) -> Path:
-                return Path("C:/venv/Lib/site-packages") / value
+                @staticmethod
+                def locate_file(value: Path) -> Path:
+                    return site_packages / value
 
-        with patch.object(
-            catalog_module.metadata, "distribution", return_value=Distribution()
-        ):
-            installed = catalog_module._installed_recipe_path(relative)
-        self.assertEqual(
-            installed,
-            Path("C:/venv/share/lnl-toolbox") / relative,
-        )
+            with patch.object(
+                catalog_module.metadata,
+                "distribution",
+                return_value=Distribution(),
+            ):
+                installed = catalog_module._installed_recipe_path(relative)
+            self.assertEqual(
+                installed,
+                (prefix / "share" / "lnl-toolbox" / relative).resolve(),
+            )
 
     def test_every_builtin_recipe_has_explicit_valid_runner(self) -> None:
         recipes = discover_recipes(ROOT)
