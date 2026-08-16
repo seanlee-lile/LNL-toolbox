@@ -4,6 +4,7 @@
 numpy==2.0.1
 torch==2.5.1
 torchvision==0.20.1
+randaugment==1.0.2
 PyYAML==6.0.3
 Pillow==11.1.0
 scikit-learn==1.7.2

@@ -36,7 +36,13 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[train,dev]"
-      - run: python -m build --wheel
+      - run: python -m build
       - run: python -m pip uninstall -y lnl-toolbox
       - run: python -m pip install dist/*.whl
       - run: lnl --help
+      - run: lnl list experiments --profile smoke --format tsv
+      - run: lnl validate --recipe cifar10-volminnet-smoke
+      - run: python -m pip uninstall -y lnl-toolbox
+      - run: python -m pip install dist/*.tar.gz
+      - run: lnl list experiments --profile smoke --format tsv
+      - run: lnl validate --recipe cifar10-volminnet-smoke

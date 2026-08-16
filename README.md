@@ -4,10 +4,13 @@ LNL Toolbox 是一个面向 Learning with Noisy Labels（噪声标签学习）�
 
 ## 1. 安装
 
-要求 Python 3.10 或更高版本。推荐在已有 PyTorch 环境中以 editable 模式安装：
+要求 Python 3.10 或更高版本。先克隆仓库，再在独立环境中安装训练依赖：
 
 ```powershell
-conda activate pytorch
+git clone https://github.com/seanlee-lile/LNL-toolbox.git
+Set-Location LNL-toolbox
+conda create -n lnl-toolbox python=3.11 -y
+conda activate lnl-toolbox
 python -m pip install -e ".[train]"
 ```
 
@@ -18,6 +21,24 @@ lnl --help
 ```
 
 原有的 `lnl-train`、`lnl-clean-train`、`lnl-inspect-data` 和 `lnl-make-noise` 命令仍然保留。
+
+### 准备 CIFAR 数据
+
+内置 CIFAR recipe 读取官方 Python pickle，不会静默下载数据。请从 CIFAR 官方页面下载
+`cifar-10-python.tar.gz` 或 `cifar-100-python.tar.gz`，解压后整理为：
+
+```text
+data/cifar10/data_batch_1 ... data_batch_5, test_batch, batches.meta
+data/cifar100/train, test, meta
+```
+
+然后先执行：
+
+```powershell
+lnl validate --recipe cifar10-symmetric-ce-smoke --check-data
+```
+
+真实 UCI workflow 的数据准备命令见对应 reproduction 文档；数据和训练产物都不应提交到 Git。
 
 ## 2. 第一次运行：按这五步操作
 
@@ -154,9 +175,14 @@ execution:
   runner: supervised
 ```
 
-专用 runner 包括 `coteaching`、`cnlcu`、`t_revision`、`dual_t`、`multi_model`、`cwd`、`fine`、`instance_transition`、`importance_reweighting` 和 `pcse`。未知方法、未知 runner 或专用配置被送入错误 runner 时，toolbox 会在训练前失败，不会静默改跑普通监督实验。
+专用 runner 包括 Co-teaching、CNLCU、Dual-T、T-Revision、UPM、DLD、DivideMix、LEND、PCSE、Importance Reweighting 等完整方法生命周期。请以 `lnl list experiments` 的 `RUNNER` 字段为准；未知方法、未知 runner 或专用配置被送入错误 runner 时，toolbox 会在训练前失败，不会静默改跑普通监督实验。
 
 MentorNet 等依赖外部训练 artifact 的 recipe 默认不会出现在直接可运行列表中；使用 `lnl list experiments --include-conditional` 查看，并先运行 `lnl validate` 获取缺失 artifact 的明确提示。
+
+PCSE 的真实 CIFAR profile 同样属于 conditional workflow：它要求一个严格匹配的 UPM
+`main_best` checkpoint 和 noise manifest。先阅读
+`papers/pcse/reproduction.md`，准备 source artifact 并设置
+`LNL_PCSE_SOURCE_RUN`；缺失或 identity 不匹配时，`validate` 和 dry-run 会在训练前失败。
 
 临时覆盖训练轮数或输出位置：
 

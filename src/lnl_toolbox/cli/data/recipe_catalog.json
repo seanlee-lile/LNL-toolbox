@@ -66,6 +66,7 @@
     "configs/reproduction/uci_heart_importance_reweighting.yaml"
   ],
   "conditional": [
+    "configs/reproduction/cifar10_pcse_reproduction.yaml",
     "configs/experiment/mentornet_dd_cifar100_symmetric04_reproduction.yaml",
     "configs/experiment/mentornet_dd_cifar100_symmetric04_smoke.yaml"
   ]

@@ -1,16 +1,24 @@
 # LNL Toolbox 实际操作手册
 
-本文档基于当前 `codex/cli` 分支的实际命令验证整理。默认使用 Windows PowerShell、Conda 环境 `pytorch` 和仓库根目录。
+本文档基于统一 CLI 的发布合同整理。示例默认使用 Windows PowerShell、名为
+`lnl-toolbox` 的 Conda 环境和用户自己的仓库根目录。
 
 ## 1. 启动环境
 
 ```powershell
-conda activate pytorch
-Set-Location C:\Users\lenovo\.codex\worktrees\440a\LNL-toolbox
-$env:PYTHONPATH = "src"
+git clone https://github.com/seanlee-lile/LNL-toolbox.git
+Set-Location LNL-toolbox
+conda create -n lnl-toolbox python=3.11 -y
+conda activate lnl-toolbox
+python -m pip install -e ".[train]"
 ```
 
-如果仓库位于 F 盘，只需要把 `Set-Location` 改为实际仓库路径。配置中的数据根目录可以继续指向 F 盘数据目录。
+安装后优先使用 `lnl`；若尚未生成 console script，可在源码 checkout 中临时设置
+`$env:PYTHONPATH = "src"` 并使用 `python -m lnl_toolbox.cli.main`。
+
+内置 CIFAR recipe 不自动下载数据。将官方 CIFAR-10 Python pickle 解压到
+`data/cifar10/`，或将 CIFAR-100 解压到 `data/cifar100/`，再用
+`lnl validate --recipe <recipe> --check-data` 核验。
 
 ## 2. 先检查环境和数据
 
@@ -158,6 +166,9 @@ Get-Item artifacts/reproductions/<run>/best.pt
 - 训练结果异常：先检查 `resolved_config.yaml`、noise manifest、数据 split、模型名和验证集来源，再判断是否为算法问题。
 - 论文算法不得读取 clean training labels；clean labels 只能通过显式、审计过的 trusted-supervision 入口使用。
 
-## 11. 当前未完成论文
+## 11. 如何理解论文状态
 
-按当前复现验收口径，只有 MentorNet 和 CDR 仍未完成论文规模结果；其余论文可按对应 YAML 运行。完成状态以 `papers/implement/paper-reproduction-progress.md` 的最新状态段为准。
+不要用“配置存在”推断论文数值已经复现。以 `lnl papers show <paper-id>` 输出的
+`implementation_status`、`configuration_fidelity`、`reproduction_status` 和
+`availability` 为准。`conditional` 表示还需外部数据或 artifact；`not_run` 表示尚未完成
+对应数值实验，即使方法 workflow 已经可用。

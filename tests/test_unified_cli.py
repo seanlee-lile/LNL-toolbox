@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import yaml
 
+from lnl_toolbox import catalog as catalog_module
 from lnl_toolbox.catalog import (
     discover_recipes,
     find_project_root,
@@ -65,6 +66,26 @@ class RunnerResolutionTest(unittest.TestCase):
 
 
 class CatalogTest(unittest.TestCase):
+    def test_installed_recipe_uses_distribution_file_record(self) -> None:
+        relative = "configs/experiment/cifar10_volminnet_smoke.yaml"
+        entry = Path("../..") / "share" / "lnl-toolbox" / relative
+
+        class Distribution:
+            files = (entry,)
+
+            @staticmethod
+            def locate_file(value: Path) -> Path:
+                return Path("C:/venv/Lib/site-packages") / value
+
+        with patch.object(
+            catalog_module.metadata, "distribution", return_value=Distribution()
+        ):
+            installed = catalog_module._installed_recipe_path(relative)
+        self.assertEqual(
+            installed,
+            Path("C:/venv/share/lnl-toolbox") / relative,
+        )
+
     def test_every_builtin_recipe_has_explicit_valid_runner(self) -> None:
         recipes = discover_recipes(ROOT)
         self.assertGreaterEqual(len(recipes), 39)
@@ -89,11 +110,13 @@ class CatalogTest(unittest.TestCase):
         self.assertNotIn("cifar10-symmetric40-all-e5", recipes)
         self.assertNotIn("cifar10-symmetric40-small-loss-e5", recipes)
         self.assertFalse(any("mentornet" in recipe for recipe in recipes))
+        self.assertNotIn("cifar10-pcse-reproduction", recipes)
         all_recipes = {
             item.id
             for item in discover_recipes(ROOT, include_conditional=True)
         }
         self.assertIn("mentornet-dd-cifar100-symmetric04-smoke", all_recipes)
+        self.assertIn("cifar10-pcse-reproduction", all_recipes)
 
     def test_method_specific_preflight_and_conditional_artifact(self) -> None:
         cnlcu = load_recipe_config(
@@ -112,6 +135,19 @@ class CatalogTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "conditional.*MentorArtifact"):
             validate_config(resolve_config_paths(mentor, ROOT))
+        pcse = load_recipe_config(
+            next(
+                item
+                for item in discover_recipes(ROOT, include_conditional=True)
+                if item.id == "cifar10-pcse-reproduction"
+            )
+        )
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LNL_PCSE_SOURCE_RUN", None)
+            with self.assertRaisesRegex(
+                ValueError, "source environment variable is not set"
+            ):
+                validate_config(resolve_config_paths(pcse, ROOT))
 
     def test_multiple_paper_variants_require_selection(self) -> None:
         paper = next(item for item in load_papers(ROOT) if item.id == "apl")

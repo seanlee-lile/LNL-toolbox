@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 import tomllib
 import unittest
@@ -169,26 +170,22 @@ class RunnerPlanningTest(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
         data_files = pyproject["tool"]["setuptools"]["data-files"]
-        required = {
-            "share/lnl-toolbox/configs/experiment": {
-                "configs/experiment/cifar10_coteaching_reproduction.yaml",
-                "configs/experiment/lend_cifar10_reproduction.yaml",
-                "configs/experiment/upm_cifar10_reproduction.yaml",
-            },
-            "share/lnl-toolbox/configs/reproduction": {
-                "configs/reproduction/cifar10_cnlcu_soft_sym20_short.yaml",
-                "configs/reproduction/cifar10_dividemix_sym20.yaml",
-                "configs/reproduction/cifar10_dld_sym20_short.yaml",
-                "configs/reproduction/cifar10_pcse_reproduction.yaml",
-                "configs/reproduction/cifar10_t_revision_sym20_short.yaml",
-                "configs/reproduction/uci_heart_importance_reweighting.yaml",
-            },
+        declared = {
+            path
+            for paths in data_files.values()
+            for path in paths
         }
-        for destination, paths in required.items():
-            declared = set(data_files[destination])
-            self.assertTrue(paths <= declared, destination)
-            for path in paths:
-                self.assertTrue((root / path).is_file(), path)
+        manifest = json.loads(
+            (root / "src/lnl_toolbox/cli/data/recipe_catalog.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        catalog_recipes = set(manifest["recipes"]) | set(
+            manifest.get("conditional", [])
+        )
+        self.assertEqual(catalog_recipes - declared, set())
+        for path in catalog_recipes:
+            self.assertTrue((root / path).is_file(), path)
 
 
 if __name__ == "__main__":

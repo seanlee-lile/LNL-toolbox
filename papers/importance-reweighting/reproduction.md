@@ -38,7 +38,8 @@ contract, while the test labels remain clean.
 
 This version does not include:
 
-- UCI datasets;
+- the full set of UCI datasets and paper cross-validation protocols beyond
+  the maintained Statlog Heart engineering workflow;
 - hinge loss;
 - multiclass importance reweighting;
 - automatic KDE or KLIEP bandwidth selection;
@@ -151,8 +152,7 @@ hyperparameters.
 Low-dimensional KDE:
 
 ```powershell
-$env:PYTHONPATH = "src"
-python -m lnl_toolbox.cli.train `
+lnl run `
   --config configs/reproduction/importance_reweighting_binary_low_dim.yaml `
   --output-dir artifacts/reproductions/importance-reweighting-low-dim-seed17
 ```
@@ -160,8 +160,7 @@ python -m lnl_toolbox.cli.train `
 High-dimensional KLIEP:
 
 ```powershell
-$env:PYTHONPATH = "src"
-python -m lnl_toolbox.cli.train `
+lnl run `
   --config configs/reproduction/importance_reweighting_binary_high_dim.yaml `
   --output-dir artifacts/reproductions/importance-reweighting-high-dim-seed17
 ```
@@ -174,19 +173,13 @@ must not be committed.
 Resume an interrupted low-dimensional run:
 
 ```powershell
-$env:PYTHONPATH = "src"
-python -m lnl_toolbox.cli.train `
-  --config configs/reproduction/importance_reweighting_binary_low_dim.yaml `
-  --resume artifacts/reproductions/importance-reweighting-low-dim-seed17/last.pt
+lnl resume artifacts/reproductions/importance-reweighting-low-dim-seed17
 ```
 
 Resume an interrupted high-dimensional run:
 
 ```powershell
-$env:PYTHONPATH = "src"
-python -m lnl_toolbox.cli.train `
-  --config configs/reproduction/importance_reweighting_binary_high_dim.yaml `
-  --resume artifacts/reproductions/importance-reweighting-high-dim-seed17/last.pt
+lnl resume artifacts/reproductions/importance-reweighting-high-dim-seed17
 ```
 
 `--epochs <total>` may be used only when deliberately extending the total

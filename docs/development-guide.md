@@ -52,6 +52,7 @@ pip install -e . --no-deps
 ```
 
 `requirements.txt` 固定版本用于复现实验；`pyproject.toml` 中的版本范围用于描述工具包兼容性。
+两条安装路径都包含需要 RandAugment 的公开方法依赖；修改依赖时必须同步维护二者。
 
 ## 3. 检查环境
 
@@ -82,6 +83,10 @@ data/
 ```
 
 `data/` 已加入 `.gitignore`。
+
+下载 CIFAR 官方 Python 版本后，只复制解压目录中的数据文件，不要提交压缩包或数据集。
+统一 CLI 不会在训练时自动下载数据；用 `lnl validate --recipe <recipe> --check-data`
+提前验证路径。
 
 ## 5. 运行测试
 
@@ -145,13 +150,13 @@ lnl-train `
 
 ## 8. 无需激活 Conda 的运行方式
 
-自动化工具可以直接调用环境中的解释器：
+自动化工具可以在激活环境后直接调用解释器：
 
 ```powershell
-& "F:\Miniconda\envs\pytorch\python.exe" -m unittest discover -s tests -v
+python -m unittest discover -s tests -v
 ```
 
-本机绝对路径只用于本地自动调试，不应写进项目配置或源代码。其他开发者应使用自己的环境路径或正常执行 `conda activate lnl-toolbox`。
+不要把本机 Python、数据或临时运行目录的绝对路径写进项目配置、源码或用户文档。
 
 ## 9. 开发约定
 
@@ -187,4 +192,6 @@ lnl compare artifacts/sweeps/example
 lnl report artifacts/sweeps/example
 ```
 
-CI 在 Python 3.10 和 3.12 上执行 Ruff、完整 unittest、CLI 测试和 coverage；独立 wheel job 验证构建、安装及 `lnl --help`。
+CI 在 Python 3.10 和 3.12 上执行 Ruff、完整 unittest、CLI 测试和 coverage；发布 job
+分别从 wheel 与 sdist 安装，并验证 `lnl --help`、公开 recipe discovery 和 VolMinNet
+smoke 配置预检。

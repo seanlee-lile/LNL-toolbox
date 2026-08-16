@@ -134,7 +134,11 @@ def _installed_recipe_path(relative: str) -> Path:
         raise FileNotFoundError(
             f"built-in recipe is unavailable outside a source checkout: {relative}"
         ) from exc
-    return Path(distribution.locate_file(Path("share/lnl-toolbox") / relative)).resolve()
+    installed_suffix = (Path("share/lnl-toolbox") / relative).as_posix()
+    for entry in distribution.files or ():
+        if entry.as_posix().endswith(installed_suffix):
+            return Path(distribution.locate_file(entry)).resolve()
+    raise FileNotFoundError(f"packaged built-in recipe is missing: {relative}")
 
 
 def _recipe_path(relative: str, project: Path) -> Path:
@@ -544,7 +548,28 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
         from importlib import import_module
 
         module_name, class_name = validators[method_name]
-        getattr(import_module(module_name), class_name).from_mapping(config)
+        parsed_method_config = getattr(
+            import_module(module_name), class_name
+        ).from_mapping(config)
+        if (
+            method_name == "pcse"
+            and parsed_method_config.pretraining.mode == "external_checkpoint"
+        ):
+            from lnl_toolbox.training.experiment import build_model
+            from lnl_toolbox.training.pcse_pretrained import (
+                load_upm_main_best_source,
+            )
+
+            num_classes = int(_require_mapping(config, "data")["num_classes"])
+            model = build_model(
+                dict(parsed_method_config.pretraining.model), num_classes
+            )
+            source = load_upm_main_best_source(
+                parsed_method_config.pretraining.source,
+                model,
+                num_classes=num_classes,
+            )
+            source.assert_unchanged()
     pipeline = config.get("pipeline", {}) or {}
     if isinstance(pipeline, Mapping):
         provider = pipeline.get("weight_provider", {}) or {}

@@ -8,7 +8,7 @@ It is not a paper-exact numerical reproduction.
 
 ## Source contract
 
-Set `LNL_PCSE_SOURCE_RUN` to the UPM run directory containing `best.pt` and
+This recipe is conditional. Set `LNL_PCSE_SOURCE_RUN` to the UPM run directory containing `best.pt` and
 `noise_manifest.npz`. The adapter supports only the explicit
 `upm_main_best` schema. It validates the configured checkpoint SHA-256,
 manifest SHA-256, mapping hash, dataset fingerprint, method/role, ResNet-18
@@ -16,12 +16,21 @@ base-width 16 architecture, ten classes, and a strict state-dict load.
 The source files' SHA-256, size, and mtime are checked again after the run.
 
 ```powershell
-$env:LNL_PCSE_SOURCE_RUN = "C:\Users\win11\AppData\Local\Temp\lnl-upm-full-mainprime-8904368-20260812-v1"
-python -m lnl_toolbox.cli.main validate --recipe cifar10-pcse-reproduction
-python -m lnl_toolbox.cli.main run --recipe cifar10-pcse-reproduction --dry-run
-python -m lnl_toolbox.cli.main run --recipe cifar10-pcse-reproduction
-python -m lnl_toolbox.cli.main resume <run-directory>
+lnl list experiments --profile reproduction --include-conditional
+$env:LNL_PCSE_SOURCE_RUN = (Resolve-Path <completed-upm-run-directory>)
+lnl validate --recipe cifar10-pcse-reproduction
+lnl run --recipe cifar10-pcse-reproduction --dry-run
+lnl run --recipe cifar10-pcse-reproduction
+lnl resume <pcse-run-directory>
 ```
+
+The built-in recipe pins the exact checkpoint, manifest, mapping, and dataset
+digests used for its accepted engineering run. A newly trained UPM source will
+normally have different identities. In that case copy the YAML, replace all
+source identity fields with values audited from that immutable run, and use
+`lnl validate --config <copied-config>` before training. Validation deliberately
+fails when the environment variable, files, hashes, role, architecture, or
+manifest provenance do not match; it never guesses a checkpoint schema.
 
 ## Data boundaries
 

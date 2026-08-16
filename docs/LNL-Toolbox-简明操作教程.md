@@ -2,8 +2,7 @@
 
 > 只讲怎么操作，以及每一步为什么要做
 
-本教程对应 `integration` 分支、提交
-`fcd3de376e0ab3847178600d3ea14c36f02bced1` 的实际命令行行为。
+本教程对应当前发布版统一 CLI 的实际命令行合同。
 推荐按下面的顺序操作：
 
 ```text
@@ -29,7 +28,14 @@ python -m pip install -e ".[train]"
 如果你使用的环境名称不是 `pytorch`，请替换为自己的 Conda 环境名。本项目要求
 Python 3.10 或更高版本。
 
-### 1.2 找不到 `lnl` 时怎么办
+### 1.2 准备 CIFAR 数据
+
+内置 CIFAR recipe 使用官方 Python pickle，不自动联网下载。把 CIFAR-10 解压后的
+`data_batch_1` 至 `data_batch_5`、`test_batch` 和 `batches.meta` 放到
+`data/cifar10/`；CIFAR-100 的 `train`、`test`、`meta` 放到 `data/cifar100/`。
+运行前使用 `validate --check-data`，避免直到训练启动才发现路径错误。
+
+### 1.3 找不到 `lnl` 时怎么办
 
 先确认安装命令是在当前环境中执行的：
 
@@ -49,7 +55,7 @@ python -m lnl_toolbox.cli.main --help
 python -m lnl_toolbox.cli.main
 ```
 
-### 1.3 检查环境
+### 1.4 检查环境
 
 ```powershell
 lnl doctor
@@ -125,6 +131,11 @@ lnl validate --recipe mentornet-dd-cifar100-symmetric04-smoke
 ```
 
 如果 artifact 缺失，`validate` 会报告所需路径。不要把 conditional 当成普通 runnable recipe。
+
+真实 CIFAR PCSE profile 也属于 conditional：它需要严格匹配的 UPM `main_best`
+checkpoint 与 noise manifest。使用 `--include-conditional` 查找它，并按
+`papers/pcse/reproduction.md` 准备来源；缺失或 hash/provenance 不匹配会在
+`validate`/dry-run 阶段失败。
 
 ## 3. 先检查，再运行
 

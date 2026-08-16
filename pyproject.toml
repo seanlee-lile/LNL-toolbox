@@ -89,6 +89,7 @@ skip_covered = true
     "configs/experiment/cifar10_symmetric_small_loss_smoke.yaml",
     "configs/experiment/cifar10_t_revision_smoke.yaml",
     "configs/experiment/cifar10_upm_smoke.yaml",
+    "configs/experiment/cifar10_volminnet_smoke.yaml",
     "configs/experiment/cwd_cifar10_reproduction.yaml",
     "configs/experiment/cwd_cifar10_smoke.yaml",
     "configs/experiment/dss_cifar10_symmetric05_reproduction.yaml",
