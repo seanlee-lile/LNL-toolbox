@@ -73,6 +73,7 @@ skip_covered = true
     "configs/experiment/cifar10_clean_smoke.yaml",
     "configs/experiment/cifar10_cnlcu_hard_smoke.yaml",
     "configs/experiment/cifar10_cnlcu_soft_smoke.yaml",
+    "configs/experiment/cifar10_coteaching_reproduction.yaml",
     "configs/experiment/cifar10_coteaching_smoke.yaml",
     "configs/experiment/cifar10_dual_t_evidence_smoke.yaml",
     "configs/experiment/cifar10_dual_t_smoke.yaml",
@@ -103,6 +104,7 @@ skip_covered = true
     "configs/experiment/loss_correction_cifar10_asymmetric04.yaml",
     "configs/experiment/l2rw_cifar10_reproduction.yaml",
     "configs/experiment/l2rw_cifar10_smoke.yaml",
+    "configs/experiment/lend_cifar10_reproduction.yaml",
     "configs/experiment/mc_ldce_cifar10_reproduction.yaml",
     "configs/experiment/mc_ldce_cifar10_smoke.yaml",
     "configs/experiment/mentornet_dd_cifar100_symmetric04_reproduction.yaml",
@@ -111,10 +113,17 @@ skip_covered = true
     "configs/experiment/pcse_multiclass_volmin_smoke.yaml",
     "configs/experiment/pdl_cifar10_reproduction.yaml",
     "configs/experiment/pdl_cifar10_smoke.yaml",
+    "configs/experiment/upm_cifar10_reproduction.yaml",
 ]
 "share/lnl-toolbox/configs/reproduction" = [
+    "configs/reproduction/cifar10_cnlcu_soft_sym20_short.yaml",
+    "configs/reproduction/cifar10_dividemix_sym20.yaml",
+    "configs/reproduction/cifar10_dld_sym20_short.yaml",
     "configs/reproduction/cifar10_dual_t_sym20.yaml",
     "configs/reproduction/cifar10_dual_t_sym20_evidence.yaml",
+    "configs/reproduction/cifar10_pcse_reproduction.yaml",
+    "configs/reproduction/cifar10_t_revision_sym20_short.yaml",
     "configs/reproduction/importance_reweighting_binary_high_dim.yaml",
     "configs/reproduction/importance_reweighting_binary_low_dim.yaml",
+    "configs/reproduction/uci_heart_importance_reweighting.yaml",
 ]

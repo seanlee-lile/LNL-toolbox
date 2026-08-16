@@ -2,16 +2,19 @@
 
 ## Fidelity
 
-The implemented `paper_oriented_v1` policy fixes averaged weak/strong `y0`, an
-estimated `yn`, direction `yn - y0`, cosine distance, included self-neighbors,
-`KL(p_s || p_w)` without a second softmax, average diffusion schedules, and five
-deterministic reverse steps. A zero initial inference vector is documented as a
-toolbox engineering choice.
+The implemented `paper_oriented_v2_cosine_similarity` policy fixes averaged
+weak/strong `y0`, an estimated `yn`, direction `yn - y0`, included
+self-neighbors, `KL(p_s || p_w)` without a second softmax, average diffusion
+schedules, and five deterministic reverse steps. For the cosine backend it
+matches the released implementation: select the largest cosine similarities
+and use `1 / (similarity + delta)` before row normalization. Invalid non-positive
+denominators fail rather than being clipped. A zero initial inference vector is
+documented as a toolbox engineering choice.
 
 This version is user-ready as a workflow smoke. It is not a paper-exact numerical
-reproduction and is not a released-code exact reproduction. In particular, the
-repository-frozen-model backend substitutes for the paper/released representation
-setup, and the bundled CIFAR smoke uses synthetic symmetric noise.
+reproduction. In particular, the repository-frozen-model backend substitutes
+for the paper/released representation setup, and the bundled CIFAR smoke uses
+synthetic symmetric noise.
 
 ## Commands
 

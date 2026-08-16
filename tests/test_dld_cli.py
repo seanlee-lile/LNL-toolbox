@@ -38,7 +38,18 @@ class DLDCliTest(unittest.TestCase):
         with redirect_stdout(output):
             self.assertEqual(main(["run", "--config", str(self.path), "--dry-run"]), 0)
         text = output.getvalue()
-        for value in ("dld", "2 (diffusion)", "K=10", "cosine_distance", "dld_precorrection.npz", "paper_oriented_v1", "DLD inference steps: 5"):
+        for value in ("dld", "2 (diffusion)", "K=10", "cosine_similarity", "dld_precorrection.npz", "paper_oriented_v2_cosine_similarity", "DLD inference steps: 5"):
+            self.assertIn(value, text)
+
+    def test_real_short_config_validates_and_dry_runs(self) -> None:
+        path = ROOT / "configs" / "reproduction" / "cifar10_dld_sym20_short.yaml"
+        config = yaml.safe_load(path.read_text(encoding="utf-8"))
+        self.assertEqual(validate_config(config).name, "dld")
+        output = StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(main(["run", "--config", str(path), "--dry-run"]), 0)
+        text = output.getvalue()
+        for value in ("dld", "15 (diffusion)", "K=50", "paper_oriented_v2_cosine_similarity"):
             self.assertIn(value, text)
 
     def test_protected_local_yaml_is_not_catalogued(self) -> None:

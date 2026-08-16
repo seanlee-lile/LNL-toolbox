@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Corrected vectorized implementation of T-Revision Equation (3)."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 
 import torch
@@ -20,6 +20,8 @@ class TRevisionObjectiveResult:
     numerator_min: float
     denominator_min: float
     clean_probability_entropy: float
+    sample_weights: Tensor = field(repr=False)
+    sample_denominators: Tensor = field(repr=False)
 
     @property
     def metrics(self) -> dict[str, float]:
@@ -41,12 +43,15 @@ def t_revision_reweight_objective(
     transition: Tensor,
     *,
     denominator_floor: float,
+    detach_ratio: bool = False,
 ) -> TRevisionObjectiveResult:
     """Return paper Eq. (3) with row-vector clean-to-noisy convention.
 
-    The importance ratio intentionally remains in the autograd graph.  No
-    inverse, clipping, normalization, projection, or detached approximation is
-    applied.
+    ``detach_ratio`` controls only autograd ownership, not Equation (3)'s
+    numerical value.  Classifier initialization uses a detached fixed-T ratio;
+    transition revision keeps the ratio differentiable so both the classifier
+    and additive transition correction receive gradients.  No inverse,
+    clipping, normalization, or projection is applied.
     """
 
     if not torch.is_tensor(logits) or logits.ndim != 2:
@@ -95,7 +100,8 @@ def t_revision_reweight_objective(
     if not bool(torch.isfinite(weights).all().item()):
         raise ValueError("T-Revision importance weights must be finite")
     base_ce = F.cross_entropy(logits, noisy_targets.long(), reduction="none")
-    objective = (weights * base_ce).mean()
+    loss_weights = weights.detach() if detach_ratio else weights
+    objective = (loss_weights * base_ce).mean()
     if not bool(torch.isfinite(objective).item()):
         raise ValueError("T-Revision objective must be finite")
     entropy = -(clean_prob * clean_prob.clamp_min(torch.finfo(clean_prob.dtype).tiny).log()).sum(dim=1).mean()
@@ -108,4 +114,6 @@ def t_revision_reweight_objective(
         numerator_min=float(numerator.detach().min().item()),
         denominator_min=float(denominator.detach().min().item()),
         clean_probability_entropy=float(entropy.detach().item()),
+        sample_weights=weights.detach(),
+        sample_denominators=denominator.detach(),
     )

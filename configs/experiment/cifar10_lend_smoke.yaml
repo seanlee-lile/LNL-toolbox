@@ -41,7 +41,6 @@ lend:
     gamma: 1.0
     metric: inner_product
     normalize_features: false
-    zero_degree_policy: error
   dilution:
     alpha: 0.99
     policy: fixed_steps
@@ -51,7 +50,7 @@ lend:
     first_observation: current
   selection:
     rule: noisy_equals_diluted_argmax
-    reduction: paper_sum
+    reduction: batch_mean
     empty_batch: skip_update
   training:
     epochs: 2

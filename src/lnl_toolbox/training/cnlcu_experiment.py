@@ -166,6 +166,7 @@ def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None =
         for epoch in range(completed_epoch + 1, epochs):
             state.cycle = epoch; algorithm.on_cycle_start(state)
             sums: dict[str, float] = {}; samples = selected_a_total = selected_b_total = 0.0
+            extrema: dict[str, float] = {}
             clean_a = clean_b = 0
             for raw_batch in _train_loader_for_epoch(train_set, config["loader"], seed + epoch):
                 result = algorithm.step(Batch(raw_batch), state)
@@ -175,6 +176,7 @@ def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None =
                 aggregate_keys = ["current_loss_a", "current_loss_b", "robust_mean_a", "robust_mean_b",
                             "confidence_bonus_a", "confidence_bonus_b", "uncertainty_score_a", "uncertainty_score_b",
                             "history_length_a", "history_length_b", "effective_selected_count_a", "effective_selected_count_b",
+                            "gradient_norm_a", "gradient_norm_b", "parameter_norm_a", "parameter_norm_b",
                             "selection_overlap_rate", "prediction_agreement_rate", "accuracy_a", "accuracy_b", "accuracy_ensemble"]
                 if method_config.variant == "hard":
                     aggregate_keys.extend([
@@ -185,6 +187,21 @@ def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None =
                     ])
                 for key in aggregate_keys:
                     sums[key] = sums.get(key, 0.0) + result.metrics[key] * count
+                for key in (
+                    "robust_mean_min_a", "robust_mean_min_b",
+                    "uncertainty_score_min_a", "uncertainty_score_min_b",
+                    "history_length_min_a", "history_length_min_b",
+                    "effective_selected_count_min_a", "effective_selected_count_min_b",
+                ):
+                    extrema[key] = min(extrema.get(key, float("inf")), result.metrics[key])
+                for key in (
+                    "robust_mean_max_a", "robust_mean_max_b",
+                    "uncertainty_score_max_a", "uncertainty_score_max_b",
+                    "history_length_max_a", "history_length_max_b",
+                    "effective_selected_count_max_a", "effective_selected_count_max_b",
+                    "gradient_norm_a", "gradient_norm_b",
+                ):
+                    extrema[key] = max(extrema.get(key, float("-inf")), result.metrics[key])
                 sums["loss_a_on_selected_by_b"] = sums.get("loss_a_on_selected_by_b", 0.0) + result.metrics["loss_a_on_selected_by_b"] * result.metrics["selected_by_b_count"]
                 sums["loss_b_on_selected_by_a"] = sums.get("loss_b_on_selected_by_a", 0.0) + result.metrics["loss_b_on_selected_by_a"] * result.metrics["selected_by_a_count"]
                 clean_a += sum(not corruption[int(i)] for i in result.metadata["selected_by_a_indices"].tolist())
@@ -198,16 +215,23 @@ def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None =
                    "train_loss_a_on_selected_by_b": sums["loss_a_on_selected_by_b"] / selected_b_total,
                    "train_loss_b_on_selected_by_a": sums["loss_b_on_selected_by_a"] / selected_a_total,
                    "selected_by_a_count": selected_a_total, "selected_by_b_count": selected_b_total,
+                   "selected_by_a_ratio": selected_a_total / samples,
+                   "selected_by_b_ratio": selected_b_total / samples,
                    "selected_clean_precision_a": clean_a / selected_a_total,
                    "selected_clean_precision_b": clean_b / selected_b_total,
                    "validation_accuracy_a": validation["accuracy_a"], "validation_accuracy_b": validation["accuracy_b"],
                    "mean_peer_accuracy": validation["mean_peer_accuracy"],
                    "validation_accuracy_ensemble": validation["ensemble_accuracy"],
                    "optimizer_steps_a": algorithm.private_state.optimizer_steps_a,
-                   "optimizer_steps_b": algorithm.private_state.optimizer_steps_b}
+                   "optimizer_steps_b": algorithm.private_state.optimizer_steps_b,
+                   "history_window_start_epoch": algorithm.private_state.history_a.window_start_epoch,
+                   "history_window_epoch_count": algorithm.private_state.history_a.window_epoch_count}
             for key, value in sums.items():
                 if key not in {"loss_a_on_selected_by_b", "loss_b_on_selected_by_a"}:
                     row["train_" + key] = value / samples
+            for key, value in extrema.items():
+                suffix = "_max" if key in {"gradient_norm_a", "gradient_norm_b"} else ""
+                row["train_" + key + suffix] = value
             improved = validation["mean_peer_accuracy"] > best_primary
             if improved:
                 best_primary, best_epoch, best_metrics = validation["mean_peer_accuracy"], epoch, _best_component_state(validation)

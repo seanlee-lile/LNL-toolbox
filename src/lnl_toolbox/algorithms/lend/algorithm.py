@@ -91,7 +91,11 @@ class LENDAlgorithm:
         selected_count = int(selected.sum().item())
         objective_value = 0.0
         if selected_count:
-            objective = per_sample[selected].sum()
+            # Eq. (7) writes a sum over selected examples, but does not state
+            # the executable mini-batch reduction.  Divide by the actual
+            # batch size (not selected_count) so changing the selected ratio
+            # does not amplify the SGD scale by O(B).
+            objective = per_sample[selected].sum() / count
             if not bool(torch.isfinite(objective)):
                 raise ValueError("LEND selected objective is non-finite")
             self.optimizer.zero_grad(set_to_none=True)

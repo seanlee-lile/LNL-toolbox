@@ -82,15 +82,28 @@ def supervised_plan(config: Mapping[str, Any], runner: str, budget_path: tuple[s
 def coteaching_plan(config: Mapping[str, Any], runner: str, budget_path: tuple[str, ...] | None) -> RunPlan:
     base = generic_plan(config, runner, budget_path)
     values = config.get("coteaching", {}) or {}
+    loader = config.get("loader", {}) or {}
+    optimizer = config.get("optimizer", {}) or {}
+    schedule = values.get("remember_schedule", {}) or {}
+    noise = config.get("noise", {}) or {}
     return RunPlan(
         base.runner,
         base.method,
         f"{base.training_budget} epochs",
         base.fields
         + (
-            PlanField("Models", "2"),
-            PlanField("Gradual epochs", str(values.get("gradual_epochs", "-"))),
-            PlanField("Noise rate", str((config.get("noise", {}) or {}).get("rate", "-"))),
+            PlanField("Co-teaching networks", str(values.get("model_count", 2))),
+            PlanField("Co-teaching batch size", str(loader.get("batch_size", "-"))),
+            PlanField("Co-teaching optimizer", str(optimizer.get("name", "-"))),
+            PlanField("Co-teaching learning rate", str(optimizer.get("lr", "-"))),
+            PlanField(
+                "Co-teaching Tk / gradual epochs",
+                str(schedule.get("gradual_epochs", "-")),
+            ),
+            PlanField(
+                "Co-teaching tau / noise rate",
+                str(values.get("noise_rate", noise.get("rate", "-"))),
+            ),
         ),
     )
 
@@ -101,7 +114,12 @@ def dividemix_plan(config: Mapping[str, Any], runner: str, budget_path: tuple[st
     main = (values.get("training", {}) or {}).get("epochs", "-")
     total = warmup + main if isinstance(warmup, int) and isinstance(main, int) else "-"
     gmm = values.get("gmm", {}) or {}
+    history = gmm.get("loss_history", {}) or {}
     mixmatch = values.get("mixmatch", {}) or {}
+    objective = values.get("objective", {}) or {}
+    inference = values.get("inference", {}) or {}
+    loader = config.get("loader", {}) or {}
+    optimizer = config.get("optimizer", {}) or {}
     base = generic_plan(config, runner, budget_path)
     return RunPlan(
         base.runner,
@@ -110,9 +128,19 @@ def dividemix_plan(config: Mapping[str, Any], runner: str, budget_path: tuple[st
         base.fields
         + (
             PlanField("Models", "2"),
+            PlanField("DivideMix batch size", str(loader.get("batch_size", "-"))),
+            PlanField("DivideMix optimizer", str(optimizer.get("name", "-"))),
+            PlanField("DivideMix learning rate", str(optimizer.get("lr", "-"))),
             PlanField("GMM threshold", str(gmm.get("threshold", "-"))),
+            PlanField("DivideMix loss history", str(history.get("name", "-"))),
             PlanField("MixMatch temperature", str(mixmatch.get("temperature", "-"))),
             PlanField("MixUp alpha", str(mixmatch.get("mixup_alpha", "-"))),
+            PlanField("DivideMix lambda_u", str(objective.get("lambda_u", "-"))),
+            PlanField(
+                "DivideMix ramp-up epochs",
+                str(objective.get("rampup_epochs", "-")),
+            ),
+            PlanField("DivideMix ensemble", str(inference.get("ensemble", "-"))),
         ),
     )
 
@@ -141,20 +169,39 @@ def upm_plan(config: Mapping[str, Any], runner: str, budget_path: tuple[str, ...
 def dld_plan(config: Mapping[str, Any], runner: str, budget_path: tuple[str, ...] | None) -> RunPlan:
     base = generic_plan(config, runner, budget_path)
     values = config.get("dld", {}) or {}
+    feature = values.get("feature_extractor", {}) or {}
+    external = feature.get("external", {}) or {}
+    feature_model = feature.get("model", {}) or {}
     pre = values.get("precorrection", {}) or {}
+    diffusion = values.get("diffusion", {}) or {}
     inference = values.get("inference", {}) or {}
     fidelity = values.get("fidelity", {}) or {}
+    loader = config.get("loader", {}) or {}
     return RunPlan(
         base.runner,
         base.method,
         f"{value_at(config, ('dld', 'diffusion', 'epochs'))} (diffusion)",
         base.fields
         + (
+            PlanField("DLD feature source", str(feature.get("source", "-"))),
+            PlanField(
+                "DLD feature model",
+                str(feature_model.get("name", "-")),
+            ),
+            PlanField("DLD source adapter", str(external.get("adapter", "-"))),
+            PlanField(
+                "DLD checkpoint identity",
+                str(external.get("checkpoint_sha256", "-")),
+            ),
             PlanField("DLD neighbors", f"K={pre.get('k_neighbors', '-') }"),
             PlanField("DLD neighbor metric", str(fidelity.get("neighbor_metric", "-"))),
+            PlanField("DLD self-neighbor", str(fidelity.get("self_neighbor", "-"))),
+            PlanField("DLD divergence", str(fidelity.get("divergence", "-"))),
             PlanField("DLD artifact", "dld_precorrection.npz"),
             PlanField("DLD fidelity", str(fidelity.get("name", "-"))),
+            PlanField("DLD timesteps", str(diffusion.get("timesteps", "-"))),
             PlanField("DLD inference steps", str(inference.get("steps", "-"))),
+            PlanField("DLD batch size", str(loader.get("batch_size", "-"))),
         ),
     )
 
@@ -166,23 +213,34 @@ def lend_plan(config: Mapping[str, Any], runner: str, budget_path: tuple[str, ..
     dilution = values.get("dilution", {}) or {}
     history = values.get("history", {}) or {}
     selection = values.get("selection", {}) or {}
+    loader = config.get("loader", {}) or {}
+    optimizer = config.get("optimizer", {}) or {}
     return RunPlan(
         base.runner,
         base.method,
         f"{value_at(config, ('lend', 'training', 'epochs'))} (LEND)",
         base.fields
         + (
+            PlanField("LEND batch size", str(loader.get("batch_size", "-"))),
+            PlanField("LEND optimizer", str(optimizer.get("name", "-"))),
+            PlanField("LEND learning rate", str(optimizer.get("lr", "-"))),
             PlanField(
                 "LEND graph",
                 f"k={graph.get('k', '-')} gamma={graph.get('gamma', '-')} "
-                f"{graph.get('metric', '-')} normalize_features={graph.get('normalize_features', '-')}",
+                f"{graph.get('metric', '-')} "
+                f"normalize_features={graph.get('normalize_features', '-')} "
+                f"zero_degree={graph.get('zero_degree_policy', '-')}",
             ),
             PlanField(
                 "LEND dilution",
                 f"alpha={dilution.get('alpha', '-')} {dilution.get('policy', '-')} "
                 f"steps={dilution.get('steps', '-')}",
             ),
-            PlanField("LEND history", f"beta={history.get('beta', '-')}"),
+            PlanField(
+                "LEND history",
+                f"beta={history.get('beta', '-')} "
+                f"first={history.get('first_observation', '-')}",
+            ),
             PlanField("LEND selection rule", str(selection.get("rule", "-"))),
             PlanField("LEND reduction", str(selection.get("reduction", "-"))),
             PlanField("LEND empty batch", str(selection.get("empty_batch", "-"))),

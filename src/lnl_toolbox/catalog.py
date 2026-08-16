@@ -211,7 +211,12 @@ def discover_recipes(
                 implementation_status=_implementation_status(
                     _display_method(config, runner), runner
                 ),
-                configuration_fidelity=_configuration_fidelity(path, _profile(path)),
+                configuration_fidelity=str(
+                    config.get(
+                        "configuration_fidelity",
+                        _configuration_fidelity(path, _profile(path)),
+                    )
+                ),
                 reproduction_status="not_run",
                 availability="conditional" if conditional else "runnable",
             )

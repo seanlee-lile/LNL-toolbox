@@ -1,13 +1,76 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
+import numpy as np
 import torch
 
+from lnl_toolbox.algorithms.dld import (
+    DLDAlgorithm,
+    DLDLabelPredictor,
+    DLDPreCorrectionArtifact,
+    DirectionalDiffusionSchedule,
+)
 from lnl_toolbox.models.directional_diffusion import DirectionalDiffusion
 
 
+def _algorithm_fixture() -> DLDAlgorithm:
+    torch.manual_seed(29)
+    direction = DLDLabelPredictor(2, 3, hidden_dim=8, time_dim=4)
+    noise = DLDLabelPredictor(2, 3, hidden_dim=8, time_dim=4)
+    probabilities = np.array([[0.8, 0.2], [0.3, 0.7]], dtype=np.float64)
+    y0 = np.eye(2, dtype=np.float64)
+    yn = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float64)
+    artifact = DLDPreCorrectionArtifact(
+        np.array([7, 3]), np.array([0, 1]), probabilities, probabilities,
+        probabilities, np.zeros(2), np.array([0, 1]), y0, yn, yn - y0,
+        np.array([[1.0, 2.0, 3.0], [3.0, 4.0, 5.0]]), {"test": True},
+    )
+    return DLDAlgorithm(
+        direction_model=direction,
+        noise_model=noise,
+        direction_optimizer=torch.optim.Adam(direction.parameters(), lr=1e-2),
+        noise_optimizer=torch.optim.Adam(noise.parameters(), lr=1e-2),
+        direction_scheduler=None,
+        noise_scheduler=None,
+        schedule=DirectionalDiffusionSchedule.average(5),
+        artifact=artifact,
+        device="cpu",
+        ema_decay=0.9,
+    )
+
+
 class DLDModelTest(unittest.TestCase):
+    def test_read_only_telemetry_preserves_losses_and_parameter_updates(self) -> None:
+        reference = _algorithm_fixture()
+        observed = _algorithm_fixture()
+        indices = torch.tensor([3, 7], dtype=torch.int64)
+        torch.manual_seed(101)
+        with patch.object(DLDAlgorithm, "_parameter_norm", return_value=0.0), patch.object(
+            DLDAlgorithm, "_tensor_rms", return_value=0.0
+        ):
+            expected = reference.train_step(indices)
+        torch.manual_seed(101)
+        actual = observed.train_step(indices)
+        self.assertEqual(actual["direction_loss"], expected["direction_loss"])
+        self.assertEqual(actual["noise_loss"], expected["noise_loss"])
+        for expected_model, actual_model in (
+            (reference.direction_model, observed.direction_model),
+            (reference.noise_model, observed.noise_model),
+        ):
+            for left, right in zip(expected_model.parameters(), actual_model.parameters()):
+                torch.testing.assert_close(left, right, rtol=0, atol=0)
+        for name in (
+            "direction_parameter_norm",
+            "noise_parameter_norm",
+            "predicted_direction_rms",
+            "predicted_noise_rms",
+            "target_direction_rms",
+            "target_noise_rms",
+        ):
+            self.assertTrue(np.isfinite(actual[name]), name)
+
     def test_cosine_schedule_matches_official_state_shape(self) -> None:
         model = DirectionalDiffusion(
             3,

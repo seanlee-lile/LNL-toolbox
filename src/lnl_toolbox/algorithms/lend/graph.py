@@ -63,7 +63,7 @@ def build_lend_similarity(features: Tensor, sample_indices: Tensor, *, k: int,
     return adjacency.detach()
 
 
-def normalize_lend_graph(adjacency: Tensor, *, zero_degree_policy: str = "error") -> Tensor:
+def normalize_lend_graph(adjacency: Tensor, *, zero_degree_policy: str = "zero_inverse") -> Tensor:
     """Apply W=D^-1/2(A^T A)D^-1/2 without extra row normalization."""
 
     if not isinstance(adjacency, Tensor) or adjacency.ndim != 2 or adjacency.shape[0] != adjacency.shape[1]:
@@ -72,13 +72,15 @@ def normalize_lend_graph(adjacency: Tensor, *, zero_degree_policy: str = "error"
         raise ValueError("LEND adjacency must be detached floating values")
     if not bool(torch.isfinite(adjacency).all()) or bool((adjacency < 0).any()):
         raise ValueError("LEND adjacency must be finite and non-negative")
-    if zero_degree_policy != "error":
+    if zero_degree_policy != "zero_inverse":
         raise ValueError("unsupported LEND zero-degree policy")
     product = adjacency.transpose(0, 1) @ adjacency
     degree = product.sum(dim=1)
-    if bool((degree <= 0).any()):
-        raise ValueError("LEND normalized graph has a non-positive degree")
-    inverse = degree.rsqrt()
+    if not bool(torch.isfinite(degree).all()) or bool((degree < 0).any()):
+        raise ValueError("LEND normalized graph has an invalid degree")
+    inverse = torch.zeros_like(degree)
+    positive = degree > 0
+    inverse[positive] = degree[positive].rsqrt()
     graph = inverse[:, None] * product * inverse[None, :]
     if not torch.allclose(graph, graph.transpose(0, 1), atol=1e-6, rtol=1e-5):
         raise ValueError("LEND normalized graph must be symmetric")
