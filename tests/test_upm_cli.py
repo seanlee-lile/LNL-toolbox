@@ -4,7 +4,12 @@ import io
 from pathlib import Path
 import unittest
 
-from lnl_toolbox.catalog import paper_by_id, recipe_by_id, validate_config
+from lnl_toolbox.catalog import (
+    load_recipe_config,
+    paper_by_id,
+    recipe_by_id,
+    validate_config,
+)
 from lnl_toolbox.cli import main as cli_main
 from lnl_toolbox.training.runners import apply_epoch_override, resolve_runner
 
@@ -41,6 +46,30 @@ class UPMCliTest(unittest.TestCase):
         self.assertEqual(recipe.runner, "upm")
         paper = paper_by_id("upm")
         self.assertEqual(paper.implementation_status, "user_ready")
+
+    def test_full_run_recipe_uses_current_upm_schema(self) -> None:
+        recipe = recipe_by_id("upm-cifar10-reproduction")
+        self.assertEqual(recipe.profile, "reproduction")
+        self.assertEqual(recipe.runner, "upm")
+        self.assertEqual(recipe.configuration_fidelity, "engineering")
+        self.assertEqual(
+            recipe_by_id("cifar10-upm-smoke").configuration_fidelity,
+            "smoke",
+        )
+        config = load_recipe_config(recipe)
+        self.assertEqual(validate_config(config).name, "upm")
+        self.assertEqual(config["method"], "upm")
+        self.assertEqual(config["execution"]["runner"], "upm")
+        self.assertEqual(config["data"]["name"], "cifar10")
+        self.assertNotIn("max_train_samples", config["data"])
+        self.assertEqual(config["noise"]["name"], "symmetric")
+        self.assertEqual(config["noise"]["rate"], 0.4)
+        self.assertEqual(config["noise"]["validation_targets"], "noisy")
+        self.assertEqual(config["upm"]["stage1"]["epochs"], 160)
+        self.assertEqual(config["upm"]["main"]["epochs"], 160)
+        self.assertEqual(config["upm"]["main"]["model"], {
+            "name": "resnet18", "base_width": 16,
+        })
 
     def test_epoch_override_only_changes_main(self) -> None:
         config = _config()

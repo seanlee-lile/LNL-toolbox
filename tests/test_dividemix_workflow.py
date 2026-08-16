@@ -12,6 +12,7 @@ import torch
 
 from lnl_toolbox.data.cifar import CifarData
 from lnl_toolbox.estimators import ReliabilityResult
+from lnl_toolbox.catalog import load_recipe_config, recipe_by_id
 from lnl_toolbox.training.experiment import run_experiment
 
 
@@ -68,6 +69,34 @@ def _hash(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 class DivideMixWorkflowTest(unittest.TestCase):
     def setUp(self): self.train, self.test = _data(40, "train"), _data(20, "test")
     def load(self, _root, split): return self.train if split == "train" else self.test
+
+    def test_formal_recipe_has_full_data_and_paper_oriented_contract(self):
+        config = load_recipe_config(recipe_by_id("cifar10-dividemix-sym20"))
+        self.assertFalse(
+            {"max_train_samples", "max_validation_samples", "max_test_samples"}
+            & set(config["data"])
+        )
+        self.assertEqual(config["data"]["name"], "cifar10")
+        self.assertTrue(config["data"]["augment"])
+        self.assertEqual(config["noise"]["name"], "symmetric")
+        self.assertEqual(config["noise"]["rate"], 0.2)
+        self.assertEqual(config["noise"]["sampling"], "global")
+        self.assertEqual(config["model"], {"name": "preact_resnet18", "base_width": 64})
+        self.assertEqual(
+            config["optimizer"],
+            {"name": "sgd", "lr": 0.02, "momentum": 0.9, "weight_decay": 0.0005},
+        )
+        self.assertEqual(config["scheduler"], {"name": "multistep", "milestones": [150], "gamma": 0.1})
+        self.assertEqual(config["loader"]["batch_size"], 128)
+        method = config["dividemix"]
+        self.assertEqual(method["warmup"]["epochs"], 10)
+        self.assertEqual(method["training"]["epochs"], 300)
+        self.assertEqual(method["gmm"]["threshold"], 0.5)
+        self.assertEqual(method["mixmatch"]["augmentations"], 2)
+        self.assertEqual(method["mixmatch"]["temperature"], 0.5)
+        self.assertEqual(method["mixmatch"]["mixup_alpha"], 4.0)
+        self.assertEqual(method["objective"]["lambda_u"], 25.0)
+        self.assertEqual(method["objective"]["lambda_r"], 1.0)
 
     def test_fresh_extension_and_completed_noop(self):
         with tempfile.TemporaryDirectory() as directory, patch("lnl_toolbox.training.dividemix_experiment.load_cifar10", side_effect=self.load), patch("lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator", _FakeEstimator):

@@ -10,11 +10,12 @@ from typing import Any, Mapping
 
 
 _FIDELITY = {
-    "name": "paper_oriented_v1",
+    "name": "paper_oriented_v2_cosine_similarity",
     "hard_y0": "averaged_views",
     "direction_endpoint": "estimated_yn",
     "direction": "yn_minus_y0",
-    "neighbor_metric": "cosine_distance",
+    "neighbor_metric": "cosine_similarity",
+    "neighbor_weighting": "inverse_neighbor_value",
     "self_neighbor": "include",
     "divergence": "kl_ps_to_pw",
     "divergence_softmax": False,
@@ -62,22 +63,42 @@ class DLDConfig:
         for name, expected in _FIDELITY.items():
             if fidelity.get(name) != expected:
                 raise ValueError(
-                    f"dld.fidelity.{name} must be {expected!r} for paper_oriented_v1"
+                    f"dld.fidelity.{name} must be {expected!r} for "
+                    "paper_oriented_v2_cosine_similarity"
                 )
 
         extractor = _mapping(
             section.get("feature_extractor"), "dld.feature_extractor"
         )
-        if extractor.get("source") != "repository_frozen_model":
+        source = str(extractor.get("source", "")).strip().lower()
+        if source not in {"repository_frozen_model", "external_checkpoint"}:
             raise ValueError(
-                "DLD first version requires feature_extractor.source: "
-                "repository_frozen_model"
+                "DLD feature_extractor.source must be repository_frozen_model "
+                "or external_checkpoint"
             )
         _mapping(extractor.get("model"), "dld.feature_extractor.model")
+        if source == "external_checkpoint":
+            external = _mapping(
+                extractor.get("external"), "dld.feature_extractor.external"
+            )
+            if str(external.get("adapter", "")).strip().lower() != "upm_main_best":
+                raise ValueError("DLD external feature adapter must be upm_main_best")
+            for field in (
+                "run_directory_env",
+                "checkpoint_sha256",
+                "manifest_sha256",
+                "mapping_hash",
+                "dataset_fingerprint",
+            ):
+                if not str(external.get(field, "")).strip():
+                    raise ValueError(f"dld.feature_extractor.external.{field} is required")
 
         precorrection = _mapping(section.get("precorrection"), "dld.precorrection")
         _positive_int(precorrection.get("k_neighbors"), "dld.precorrection.k_neighbors")
         _finite_positive(precorrection.get("delta"), "dld.precorrection.delta")
+        chunk_size = precorrection.get("query_chunk_size")
+        if chunk_size is not None:
+            _positive_int(chunk_size, "dld.precorrection.query_chunk_size")
         if _positive_int(
             precorrection.get("gmm_components"),
             "dld.precorrection.gmm_components",
@@ -122,11 +143,19 @@ class DLDConfig:
         inference = _mapping(section.get("inference"), "dld.inference")
         steps = _positive_int(inference.get("steps"), "dld.inference.steps")
         if steps != 5 or steps > timesteps:
-            raise ValueError("paper_oriented_v1 requires five inference steps <= timesteps")
+            raise ValueError(
+                "paper_oriented_v2_cosine_similarity requires five inference "
+                "steps <= timesteps"
+            )
         if inference.get("deterministic") is not True:
-            raise ValueError("paper_oriented_v1 inference must be deterministic")
+            raise ValueError(
+                "paper_oriented_v2_cosine_similarity inference must be deterministic"
+            )
         if inference.get("initialization") != "zero":
-            raise ValueError("paper_oriented_v1 inference initialization must be zero")
+            raise ValueError(
+                "paper_oriented_v2_cosine_similarity inference initialization "
+                "must be zero"
+            )
         return cls(fidelity, extractor, precorrection, diffusion, inference)
 
     @property

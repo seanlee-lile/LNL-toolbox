@@ -22,11 +22,12 @@ noise:
   validation_targets: noisy
 dld:
   fidelity:
-    name: paper_oriented_v1
+    name: paper_oriented_v2_cosine_similarity
     hard_y0: averaged_views
     direction_endpoint: estimated_yn
     direction: yn_minus_y0
-    neighbor_metric: cosine_distance
+    neighbor_metric: cosine_similarity
+    neighbor_weighting: inverse_neighbor_value
     self_neighbor: include
     divergence: kl_ps_to_pw
     divergence_softmax: false

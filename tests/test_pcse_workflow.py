@@ -192,6 +192,66 @@ class PCSEWorkflowTest(unittest.TestCase):
             parsed_paper.transition_backend_config["lambda_volume"], 0.001
         )
 
+    def test_external_checkpoint_config_is_strict_and_train_mode_unchanged(self) -> None:
+        config = _load_smoke_config()
+        self.assertEqual(PCSEConfig.from_mapping(config).pretraining.mode, "train")
+        external = deepcopy(config)
+        external["pretraining_stage"]["mode"] = "external_checkpoint"
+        external["pretraining_stage"]["epochs"] = 0
+        model = dict(external["pretraining_stage"]["model"])
+        external["pretraining_stage"]["source"] = {
+            "adapter": "upm_main_best",
+            "run_directory_env": "LNL_PCSE_SOURCE_RUN",
+            "checkpoint_sha256": "a" * 64,
+            "manifest_sha256": "b" * 64,
+            "mapping_hash": "c" * 64,
+            "dataset_fingerprint": "d" * 64,
+            "model": model,
+        }
+        parsed = PCSEConfig.from_mapping(external)
+        self.assertEqual(parsed.pretraining.mode, "external_checkpoint")
+        invalid = deepcopy(external)
+        invalid["pretraining_stage"]["source"]["adapter"] = "generic"
+        with self.assertRaisesRegex(ValueError, "upm_main_best"):
+            PCSEConfig.from_mapping(invalid)
+
+    def test_external_adoption_persists_provenance_and_resumes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = _load_smoke_config()
+            config["pretraining_stage"]["mode"] = "external_checkpoint"
+            config["pretraining_stage"]["epochs"] = 0
+            model = dict(config["pretraining_stage"]["model"])
+            config["pretraining_stage"]["source"] = {
+                "adapter": "upm_main_best",
+                "run_directory_env": "PCSE_TEST_SOURCE",
+                "checkpoint_sha256": "a" * 64,
+                "manifest_sha256": "b" * 64,
+                "mapping_hash": "c" * 64,
+                "dataset_fingerprint": "d" * 64,
+                "model": model,
+            }
+            source = {
+                "adapter": "upm_main_best",
+                "checkpoint": {"sha256": "a" * 64},
+            }
+            algorithm = _pretraining_algorithm(Path(directory))
+            algorithm.config = config
+            algorithm.method_config = PCSEConfig.from_mapping(config)
+            algorithm.external_source_provenance = source
+            algorithm.adopt_external_pretrained(
+                completed_epochs=3,
+                global_step=9,
+                best_epoch=1,
+                validation_accuracy=0.5,
+                validation_loss=1.0,
+            )
+            self.assertEqual(algorithm.state.phase, PCSEPhase.PRETRAINED)
+            checkpoint = torch.load(
+                Path(directory) / "last.pt", map_location="cpu", weights_only=False
+            )
+            self.assertEqual(checkpoint["external_source_provenance"], source)
+            algorithm.close()
+
     def test_phase_machine_rejects_illegal_transition(self) -> None:
         state = PCSEState()
         with self.assertRaisesRegex(ValueError, "illegal PCSE phase"):

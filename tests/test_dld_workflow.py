@@ -35,15 +35,17 @@ def _config(epochs: int) -> dict:
         "noise": {"name": "symmetric", "rate": 0.2, "seed": 8, "validation_targets": "noisy"},
         "dld": {
             "fidelity": {
-                "name": "paper_oriented_v1", "hard_y0": "averaged_views",
+                "name": "paper_oriented_v2_cosine_similarity", "hard_y0": "averaged_views",
                 "direction_endpoint": "estimated_yn", "direction": "yn_minus_y0",
-                "neighbor_metric": "cosine_distance", "self_neighbor": "include",
+                "neighbor_metric": "cosine_similarity",
+                "neighbor_weighting": "inverse_neighbor_value",
+                "self_neighbor": "include",
                 "divergence": "kl_ps_to_pw", "divergence_softmax": False,
                 "hard_yn_zero_denominator": "fail", "schedule": "average",
                 "inference_initialization": "zero", "inference_steps": 5,
             },
             "feature_extractor": {"source": "repository_frozen_model", "model": {"name": "tiny_cnn", "width": 4}},
-            "precorrection": {"k_neighbors": 3, "delta": 1e-6, "gmm_components": 2, "gmm_seed": 0, "minimum_mean_separation": 0.0},
+            "precorrection": {"k_neighbors": 3, "delta": 1e-6, "gmm_components": 2, "gmm_seed": 0, "minimum_mean_separation": 0.0, "query_chunk_size": 2},
             "diffusion": {
                 "timesteps": 5, "epochs": epochs,
                 "model": {"independent_predictors": True, "hidden_dim": 8, "time_dim": 4},
@@ -102,6 +104,29 @@ class DLDWorkflowTest(unittest.TestCase):
             self.assertEqual(files, {name: (run / name).stat().st_mtime_ns for name in files})
             final = json.loads((run / "final_metrics.json").read_text())
             self.assertFalse(final["test_selection_leakage"])
+            for name in (
+                "test_reverse_output_min",
+                "test_reverse_output_max",
+                "test_reverse_output_std",
+                "test_reverse_prediction_class_count",
+                "test_reverse_prediction_entropy",
+            ):
+                self.assertTrue(np.isfinite(final[name]), name)
+            epoch_rows = [
+                json.loads(line)
+                for line in (run / "metrics.jsonl").read_text().splitlines()
+                if '"event": "diffusion_epoch"' in line
+            ]
+            self.assertTrue(epoch_rows)
+            for name in (
+                "direction_parameter_norm",
+                "noise_parameter_norm",
+                "predicted_direction_rms",
+                "predicted_noise_rms",
+                "validation_reverse_output_std",
+                "validation_reverse_prediction_class_count",
+            ):
+                self.assertTrue(np.isfinite(epoch_rows[-1][name]), name)
             for name in ("last.pt", "best.pt", "metrics.jsonl", "final_metrics.json", "noise_manifest.npz"):
                 self.assertTrue((run / name).is_file(), name)
 

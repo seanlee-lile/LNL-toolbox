@@ -5,8 +5,15 @@ from pathlib import Path
 import torch
 
 from lnl_toolbox.algorithms.cnlcu import CNLCUAlgorithm, CNLCUConfig
+from lnl_toolbox.algorithms.coteaching.selection import (
+    determine_keep_count,
+    stable_small_loss_mask,
+)
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
-from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
+from lnl_toolbox.losses.torch_losses import (
+    CrossEntropyLoss,
+    validate_per_sample_loss,
+)
 
 
 def _config(window_size=3, sigma=0.1, variant="soft"):
@@ -59,7 +66,92 @@ def _algorithm(variant="soft"):
     return result
 
 
+def _reference_step(algorithm, batch, state):
+    """Execute the pre-telemetry CNLCU step contract for regression comparison."""
+
+    payload = batch.payload
+    inputs = payload["input"].to(algorithm.device)
+    targets = payload["target"].to(algorithm.device)
+    indices = torch.as_tensor(payload["index"], dtype=torch.long, device=algorithm.device)
+    logits_a, logits_b = algorithm.model_a(inputs), algorithm.model_b(inputs)
+    losses_a = validate_per_sample_loss(algorithm.loss(logits_a, targets), targets.numel())
+    losses_b = validate_per_sample_loss(algorithm.loss(logits_b, targets), targets.numel())
+    rows_a = algorithm.private_state.history_a.append(indices, losses_a.detach())
+    rows_b = algorithm.private_state.history_b.append(indices, losses_b.detach())
+    score_a, _ = algorithm._score(algorithm.private_state.history_a, rows_a)
+    score_b, _ = algorithm._score(algorithm.private_state.history_b, rows_b)
+    keep_count = determine_keep_count(
+        int(targets.numel()), algorithm.method_config.rate_at(state.cycle)
+    )
+    selected_a = stable_small_loss_mask(score_a.to(algorithm.device), indices, keep_count)
+    selected_b = stable_small_loss_mask(score_b.to(algorithm.device), indices, keep_count)
+    objective_a = losses_a[selected_b].mean()
+    objective_b = losses_b[selected_a].mean()
+    algorithm.optimizer_a.zero_grad(set_to_none=True)
+    objective_a.backward()
+    algorithm.optimizer_a.step()
+    algorithm.private_state.optimizer_steps_a += 1
+    algorithm.optimizer_b.zero_grad(set_to_none=True)
+    objective_b.backward()
+    algorithm.optimizer_b.step()
+    algorithm.private_state.optimizer_steps_b += 1
+    algorithm.private_state.history_a.increment_selected(rows_a, selected_a)
+    algorithm.private_state.history_b.increment_selected(rows_b, selected_b)
+    state.step += 1
+    return {
+        "selected_a": indices[selected_a].detach().cpu(),
+        "selected_b": indices[selected_b].detach().cpu(),
+        "objective_a": objective_a.detach(),
+        "objective_b": objective_b.detach(),
+    }
+
+
 class CNLCUAlgorithmTest(unittest.TestCase):
+    def test_read_only_telemetry_preserves_selection_loss_and_parameter_updates(self):
+        observed, reference = _algorithm(), _algorithm()
+        observed_state, reference_state = RunState(cycle=1), RunState(cycle=1)
+        batch = Batch({
+            "input": torch.arange(4),
+            "target": torch.zeros(4, dtype=torch.long),
+            "index": torch.tensor([10, 20, 30, 40]),
+        })
+        for cycle in (1, 2):
+            if cycle > 1:
+                observed.on_cycle_start(RunState(cycle=cycle))
+                reference.on_cycle_start(RunState(cycle=cycle))
+                observed_state.cycle = reference_state.cycle = cycle
+            result = observed.step(batch, observed_state)
+            expected = _reference_step(reference, batch, reference_state)
+            self.assertEqual(
+                result.metadata["selected_by_a_indices"].tolist(),
+                expected["selected_a"].tolist(),
+            )
+            self.assertEqual(
+                result.metadata["selected_by_b_indices"].tolist(),
+                expected["selected_b"].tolist(),
+            )
+            torch.testing.assert_close(
+                torch.tensor(result.metrics["loss_a_on_selected_by_b"]),
+                expected["objective_a"], rtol=0.0, atol=0.0,
+            )
+            torch.testing.assert_close(
+                torch.tensor(result.metrics["loss_b_on_selected_by_a"]),
+                expected["objective_b"], rtol=0.0, atol=0.0,
+            )
+            for observed_model, reference_model in (
+                (observed.model_a, reference.model_a),
+                (observed.model_b, reference.model_b),
+            ):
+                for left, right in zip(
+                    observed_model.parameters(), reference_model.parameters(), strict=True
+                ):
+                    torch.testing.assert_close(left, right, rtol=0.0, atol=0.0)
+            for key in (
+                "gradient_norm_a", "gradient_norm_b",
+                "parameter_norm_a", "parameter_norm_b",
+            ):
+                self.assertTrue(torch.isfinite(torch.tensor(result.metrics[key])))
+
     def test_optimizer_parameters_exactly_match_and_do_not_overlap(self):
         algorithm = _algorithm()
         model_a = {id(parameter) for parameter in algorithm.model_a.parameters()}

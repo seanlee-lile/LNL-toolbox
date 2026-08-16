@@ -1,5 +1,7 @@
 import copy
+from contextlib import redirect_stdout
 import hashlib
+import io
 import json
 import tempfile
 import unittest
@@ -10,6 +12,8 @@ import numpy as np
 import torch
 
 from lnl_toolbox.data.cifar import CifarData
+from lnl_toolbox.catalog import load_recipe_config, paper_by_id, recipe_by_id, validate_config
+from lnl_toolbox.cli import main as cli_main
 from lnl_toolbox.training.experiment import run_experiment
 
 
@@ -141,6 +145,66 @@ class CoTeachingWorkflowTest(unittest.TestCase):
         ) as run:
             self.assertEqual(run_experiment(_config()), Path("coteaching-run"))
             run.assert_called_once()
+
+    def test_full_run_recipe_uses_engineering_cifar10_protocol(self):
+        recipe = recipe_by_id("cifar10-coteaching-reproduction")
+        self.assertEqual(recipe.profile, "reproduction")
+        self.assertEqual(recipe.method, "coteaching")
+        self.assertEqual(recipe.runner, "coteaching")
+        self.assertEqual(recipe.configuration_fidelity, "engineering")
+        config = load_recipe_config(recipe)
+        self.assertEqual(validate_config(config).name, "coteaching")
+        self.assertEqual(config["method"], "coteaching")
+        self.assertEqual(config["execution"]["runner"], "coteaching")
+        self.assertEqual(config["data"]["name"], "cifar10")
+        for key in (
+            "max_train_samples",
+            "max_validation_samples",
+            "max_test_samples",
+        ):
+            self.assertNotIn(key, config["data"])
+        self.assertEqual(config["noise"]["name"], "symmetric")
+        self.assertEqual(config["noise"]["rate"], 0.2)
+        self.assertEqual(config["noise"]["sampling"], "transition")
+        self.assertEqual(config["noise"]["validation_targets"], "noisy")
+        self.assertEqual(config["model"], {"name": "cifar_cnn8"})
+        self.assertEqual(config["trainer"]["epochs"], 200)
+        self.assertEqual(config["loader"]["batch_size"], 128)
+        self.assertEqual(config["optimizer"]["name"], "adam")
+        self.assertEqual(config["optimizer"]["lr"], 0.001)
+        self.assertEqual(config["coteaching"]["model_count"], 2)
+        self.assertEqual(config["coteaching"]["noise_rate"], 0.2)
+        self.assertEqual(
+            config["coteaching"]["remember_schedule"]["gradual_epochs"],
+            10,
+        )
+        paper = paper_by_id("coteaching")
+        exposed = {item.recipe_id: item for item in paper.configs}
+        self.assertEqual(
+            exposed[recipe.id].configuration_fidelity,
+            "engineering",
+        )
+
+    def test_coteaching_dry_run_reports_method_specific_settings(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = cli_main.main([
+                "run",
+                "--recipe",
+                "cifar10-coteaching-reproduction",
+                "--dry-run",
+            ])
+        self.assertEqual(result, 0)
+        text = output.getvalue()
+        for expected in (
+            "Co-teaching networks: 2",
+            "Co-teaching batch size: 128",
+            "Co-teaching optimizer: adam",
+            "Co-teaching learning rate: 0.001",
+            "Co-teaching Tk / gradual epochs: 10",
+            "Co-teaching tau / noise rate: 0.2",
+        ):
+            self.assertIn(expected, text)
 
 
 if __name__ == "__main__":

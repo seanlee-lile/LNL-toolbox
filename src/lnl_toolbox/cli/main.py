@@ -320,6 +320,17 @@ def _print_plan(config: dict[str, Any], config_path: Path, project: Path) -> Non
         print(f"  UPM eta initial value: {eta.get('initial_value', '-')}")
         print(f"  UPM eta update start epoch: {eta.get('update_start_epoch', '-')}")
         print(f"  UPM eta update interval: {eta.get('update_interval_epochs', '-')}")
+    if str(method).strip().lower() == "coteaching":
+        coteaching = config.get("coteaching", {}) or {}
+        loader = config.get("loader", {}) or {}
+        optimizer = config.get("optimizer", {}) or {}
+        schedule = coteaching.get("remember_schedule", {}) or {}
+        print(f"  Co-teaching networks: {coteaching.get('model_count', '-')}")
+        print(f"  Co-teaching batch size: {loader.get('batch_size', '-')}")
+        print(f"  Co-teaching optimizer: {optimizer.get('name', '-')}")
+        print(f"  Co-teaching learning rate: {optimizer.get('lr', '-')}")
+        print(f"  Co-teaching Tk / gradual epochs: {schedule.get('gradual_epochs', '-')}")
+        print(f"  Co-teaching tau / noise rate: {coteaching.get('noise_rate', '-')}")
     if str(method).strip().lower() == "dld":
         dld = config.get("dld", {}) or {}
         feature = dld.get("feature_extractor", {}) or {}

@@ -52,10 +52,12 @@ class PCSEFeatureLayerConfig:
 
 @dataclass(frozen=True)
 class PCSEPretrainingConfig:
+    mode: str
     model: Mapping[str, Any]
     optimizer: Mapping[str, Any]
     scheduler: Mapping[str, Any]
     epochs: int
+    source: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -92,9 +94,18 @@ class PCSEConfig:
         pretraining = _mapping(
             value.get("pretraining_stage"), owner="pretraining_stage"
         )
+        mode = str(pretraining.get("mode", "train")).strip().lower()
+        if mode not in {"train", "external_checkpoint"}:
+            raise ValueError(
+                "pretraining_stage.mode must be train or external_checkpoint"
+            )
         epochs = int(pretraining.get("epochs", 0))
-        if epochs <= 0:
+        if mode == "train" and epochs <= 0:
             raise ValueError("pretraining_stage.epochs must be positive")
+        if mode == "external_checkpoint" and epochs != 0:
+            raise ValueError(
+                "external PCSE pretraining_stage.epochs must be zero"
+            )
         loss = _mapping(
             pretraining.get("loss", {"name": "ce"}),
             owner="pretraining_stage.loss",
@@ -111,7 +122,73 @@ class PCSEConfig:
                 "PCSE pretraining checkpoint selection must use noisy "
                 "validation accuracy"
             )
+        source: Mapping[str, Any] | None = None
+        if mode == "external_checkpoint":
+            source_values = _mapping(
+                pretraining.get("source"), owner="pretraining_stage.source"
+            )
+            _exact_keys(
+                source_values,
+                owner="pretraining_stage.source",
+                allowed={
+                    "adapter",
+                    "run_directory_env",
+                    "checkpoint_sha256",
+                    "manifest_sha256",
+                    "mapping_hash",
+                    "dataset_fingerprint",
+                    "model",
+                },
+            )
+            if (
+                str(source_values.get("adapter", "")).strip().lower()
+                != "upm_main_best"
+            ):
+                raise ValueError(
+                    "PCSE external source.adapter must be upm_main_best"
+                )
+            if not str(source_values.get("run_directory_env", "")).strip():
+                raise ValueError(
+                    "PCSE source.run_directory_env must not be empty"
+                )
+            source_model = _mapping(
+                source_values.get("model"),
+                owner="pretraining_stage.source.model",
+            )
+            model = _mapping(
+                pretraining.get("model"), owner="pretraining_stage.model"
+            )
+            if source_model != model:
+                raise ValueError(
+                    "PCSE source model must match pretraining_stage.model"
+                )
+            for key in (
+                "checkpoint_sha256",
+                "manifest_sha256",
+                "mapping_hash",
+                "dataset_fingerprint",
+            ):
+                digest = str(source_values.get(key, "")).strip().lower()
+                if len(digest) != 64 or any(
+                    char not in "0123456789abcdef" for char in digest
+                ):
+                    raise ValueError(
+                        f"pretraining_stage.source.{key} must be a SHA-256 digest"
+                    )
+            source = {
+                **source_values,
+                "adapter": "upm_main_best",
+                "run_directory_env": str(
+                    source_values["run_directory_env"]
+                ).strip(),
+                "model": source_model,
+            }
+        elif "source" in pretraining:
+            raise ValueError(
+                "pretraining_stage.source is only valid for external_checkpoint"
+            )
         pretraining_config = PCSEPretrainingConfig(
+            mode=mode,
             model=_mapping(pretraining.get("model"), owner="pretraining_stage.model"),
             optimizer=_mapping(
                 pretraining.get("optimizer"), owner="pretraining_stage.optimizer"
@@ -121,6 +198,7 @@ class PCSEConfig:
                 owner="pretraining_stage.scheduler",
             ),
             epochs=epochs,
+            source=source,
         )
 
         transition = _mapping(

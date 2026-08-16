@@ -60,6 +60,23 @@ def _validate_peer_parameter_ownership(
         raise ValueError("CNLCU peer optimizer parameter sets must not overlap")
 
 
+def _finite_l2_norm(values: Any, owner: str) -> float:
+    """Read a detached L2 norm without modifying tensors or their gradients."""
+
+    total = 0.0
+    for value in values:
+        if value is None:
+            continue
+        detached = value.detach()
+        if not bool(torch.isfinite(detached).all().item()):
+            raise ValueError(f"CNLCU {owner} must be finite")
+        total += float(detached.double().square().sum().item())
+    result = total ** 0.5
+    if not torch.isfinite(torch.tensor(result, dtype=torch.float64)).item():
+        raise ValueError(f"CNLCU {owner} norm must be finite")
+    return result
+
+
 class CNLCUAlgorithm:
     """Use uncertainty-aware peer selections for exact cross-updates."""
 
@@ -184,9 +201,27 @@ class CNLCUAlgorithm:
         selected_a = stable_small_loss_mask(score_a.to(self.device), indices, keep_count)
         selected_b = stable_small_loss_mask(score_b.to(self.device), indices, keep_count)
         objective_a, objective_b = losses_a[selected_b].mean(), losses_b[selected_a].mean()
-        self.optimizer_a.zero_grad(set_to_none=True); objective_a.backward(); self.optimizer_a.step()
+        self.optimizer_a.zero_grad(set_to_none=True)
+        objective_a.backward()
+        gradient_norm_a = _finite_l2_norm(
+            (parameter.grad for parameter in self.model_a.parameters()),
+            "model-a gradients",
+        )
+        self.optimizer_a.step()
+        parameter_norm_a = _finite_l2_norm(
+            self.model_a.parameters(), "model-a parameters"
+        )
         self.private_state.optimizer_steps_a += 1
-        self.optimizer_b.zero_grad(set_to_none=True); objective_b.backward(); self.optimizer_b.step()
+        self.optimizer_b.zero_grad(set_to_none=True)
+        objective_b.backward()
+        gradient_norm_b = _finite_l2_norm(
+            (parameter.grad for parameter in self.model_b.parameters()),
+            "model-b gradients",
+        )
+        self.optimizer_b.step()
+        parameter_norm_b = _finite_l2_norm(
+            self.model_b.parameters(), "model-b parameters"
+        )
         self.private_state.optimizer_steps_b += 1
         self.private_state.history_a.increment_selected(rows_a, selected_a)
         self.private_state.history_b.increment_selected(rows_b, selected_b)
@@ -202,6 +237,24 @@ class CNLCUAlgorithm:
             "uncertainty_score_a": score_a.mean().item(), "uncertainty_score_b": score_b.mean().item(),
             "history_length_a": detail_a["history_length"].float().mean().item(), "history_length_b": detail_b["history_length"].float().mean().item(),
             "effective_selected_count_a": detail_a["effective_selected_count"].float().mean().item(), "effective_selected_count_b": detail_b["effective_selected_count"].float().mean().item(),
+            "gradient_norm_a": gradient_norm_a, "gradient_norm_b": gradient_norm_b,
+            "parameter_norm_a": parameter_norm_a, "parameter_norm_b": parameter_norm_b,
+            "robust_mean_min_a": detail_a["robust_mean"].detach().min().item(),
+            "robust_mean_max_a": detail_a["robust_mean"].detach().max().item(),
+            "robust_mean_min_b": detail_b["robust_mean"].detach().min().item(),
+            "robust_mean_max_b": detail_b["robust_mean"].detach().max().item(),
+            "uncertainty_score_min_a": score_a.detach().min().item(),
+            "uncertainty_score_max_a": score_a.detach().max().item(),
+            "uncertainty_score_min_b": score_b.detach().min().item(),
+            "uncertainty_score_max_b": score_b.detach().max().item(),
+            "history_length_min_a": detail_a["history_length"].detach().min().item(),
+            "history_length_max_a": detail_a["history_length"].detach().max().item(),
+            "history_length_min_b": detail_b["history_length"].detach().min().item(),
+            "history_length_max_b": detail_b["history_length"].detach().max().item(),
+            "effective_selected_count_min_a": detail_a["effective_selected_count"].detach().min().item(),
+            "effective_selected_count_max_a": detail_a["effective_selected_count"].detach().max().item(),
+            "effective_selected_count_min_b": detail_b["effective_selected_count"].detach().min().item(),
+            "effective_selected_count_max_b": detail_b["effective_selected_count"].detach().max().item(),
             "selected_by_a_count": selected_a.sum().item(), "selected_by_b_count": selected_b.sum().item(),
             "remember_rate": rate,
             "selection_overlap_rate": (selected_a & selected_b).sum().item() / keep_count,

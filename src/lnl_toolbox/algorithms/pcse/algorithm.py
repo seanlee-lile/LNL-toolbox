@@ -178,6 +178,8 @@ class PCSEAlgorithm:
         dataset: str,
         num_classes: int,
         noise_metadata: Mapping[str, Any] | None = None,
+        external_source_provenance: Mapping[str, Any] | None = None,
+        external_source_model: nn.Module | None = None,
     ) -> None:
         self.config = dict(config)
         self.method_config = PCSEConfig.from_mapping(config)
@@ -192,6 +194,10 @@ class PCSEAlgorithm:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.dataset = str(dataset)
         self.noise_metadata = dict(noise_metadata or {})
+        self.external_source_provenance = dict(
+            external_source_provenance or {}
+        )
+        self.external_source_model = external_source_model
         self.train_loader = train_loader
         self.statistics_loader = statistics_loader
         self.noisy_validation_loader = noisy_validation_loader
@@ -290,6 +296,7 @@ class PCSEAlgorithm:
                 else self.ensemble_optimizer.state_dict()
             ),
             "noise": self.noise_metadata,
+            "external_source_provenance": self.external_source_provenance,
             "rng_state": capture_rng_state(),
         }
 
@@ -317,6 +324,10 @@ class PCSEAlgorithm:
     def train_pretraining(self, *, max_epochs: int | None = None) -> None:
         if self.state.phase is not PCSEPhase.PRETRAINING:
             raise ValueError("PCSE pretraining is not active")
+        if self.method_config.pretraining.mode != "train":
+            raise ValueError(
+                "external PCSE pretraining requires validated checkpoint adoption"
+            )
         target = self.method_config.pretraining.epochs
         if max_epochs is not None:
             target = min(target, self.state.pretraining_completed_epochs + max_epochs)
@@ -385,6 +396,64 @@ class PCSEAlgorithm:
             self._validate_best_checkpoint(required=True)
             self.state.advance(PCSEPhase.PRETRAINED)
             self._save_last()
+
+    def adopt_external_pretrained(
+        self,
+        *,
+        completed_epochs: int,
+        global_step: int,
+        best_epoch: int,
+        validation_accuracy: float,
+        validation_loss: float,
+    ) -> None:
+        """Publish a validated immutable source as a PCSE-local checkpoint."""
+
+        if self.state.phase is not PCSEPhase.PRETRAINING:
+            raise ValueError("PCSE external checkpoint adoption is not active")
+        if self.method_config.pretraining.mode != "external_checkpoint":
+            raise ValueError("PCSE train mode cannot adopt an external checkpoint")
+        if not self.external_source_provenance:
+            raise ValueError("PCSE external source provenance is missing")
+        if completed_epochs <= 0 or global_step < 0:
+            raise ValueError("PCSE external source progress is invalid")
+        if best_epoch < 0 or best_epoch >= completed_epochs:
+            raise ValueError("PCSE external source best epoch is invalid")
+        if not np.isfinite(validation_accuracy) or not np.isfinite(
+            validation_loss
+        ):
+            raise ValueError("PCSE external source metrics must be finite")
+        self.state.pretraining_completed_epochs = int(completed_epochs)
+        self.state.pretraining_global_step = int(global_step)
+        self.state.best_pretraining_epoch = int(best_epoch)
+        self.state.best_pretraining_validation_accuracy = float(
+            validation_accuracy
+        )
+        self.state.best_pretraining_validation_loss = float(validation_loss)
+        self.pretraining_run_state.cycle = int(completed_epochs - 1)
+        self.pretraining_run_state.step = int(global_step)
+        self._save(self.pretrained_best_path, role="pretrained_best")
+        self.state.pretrained_checkpoint_sha256 = _file_sha256(
+            self.pretrained_best_path
+        )
+        self._validate_best_checkpoint(required=True)
+        payload = read_checkpoint(self.pretrained_best_path, "cpu")
+        if payload.get("external_source_provenance") != (
+            self.external_source_provenance
+        ):
+            raise ValueError("PCSE normalized source provenance mismatch")
+        self.state.advance(PCSEPhase.PRETRAINED)
+        self._append_metrics({
+            "event": "external_checkpoint",
+            "stage": "pretraining",
+            "adapter": self.external_source_provenance.get("adapter"),
+            "source_checkpoint_sha256": self.external_source_provenance.get(
+                "checkpoint", {}
+            ).get("sha256"),
+            "pretrained_checkpoint_sha256": (
+                self.state.pretrained_checkpoint_sha256
+            ),
+        })
+        self._save_last()
 
     def _load_best_model(self) -> None:
         self._validate_best_checkpoint(required=True)
@@ -973,6 +1042,15 @@ class PCSEAlgorithm:
             raise ValueError("PCSE final posterior is invalid")
         predictions = posterior.argmax(axis=1)
         test_accuracy = float(np.mean(predictions == clean_targets))
+        source_backbone_accuracy = None
+        if self.external_source_model is not None:
+            source_evaluation = evaluate_classification(
+                self.external_source_model,
+                self.clean_test_loader,
+                self.pretraining_algorithm.loss,
+                self.device,
+            )
+            source_backbone_accuracy = float(source_evaluation["accuracy"])
         self.ensemble_artifact = loaded
         self.state.ensemble_artifact_hash = loaded.artifact_hash
         self.state.advance(PCSEPhase.COMPLETED)
@@ -1001,6 +1079,10 @@ class PCSEAlgorithm:
             "ensemble_weights": loaded.weights.tolist(),
             "test_accuracy": test_accuracy,
             "test_samples": int(clean_targets.size),
+            "external_source_provenance": self.external_source_provenance,
+            "source_backbone_clean_test_accuracy": (
+                source_backbone_accuracy
+            ),
         }
         (self.run_dir / "final_metrics.json").write_text(
             json.dumps(final, indent=2), encoding="utf-8"
@@ -1146,6 +1228,10 @@ class PCSEAlgorithm:
         for key in ("seed", "data", "noise", "loader"):
             if saved_config.get(key) != self.config.get(key):
                 raise ValueError(f"Resume configuration changed {key}")
+        if payload.get("external_source_provenance", {}) != (
+            self.external_source_provenance
+        ):
+            raise ValueError("PCSE resume external source identity mismatch")
         self.state = PCSEState.from_state_dict(payload["pcse_state"])
         self.pretraining_algorithm.load_state_dict(
             payload["pretraining_algorithm"]
@@ -1238,6 +1324,10 @@ class PCSEAlgorithm:
 
     def run(self) -> dict[str, Any]:
         if self.state.phase is PCSEPhase.PRETRAINING:
+            if self.method_config.pretraining.mode == "external_checkpoint":
+                raise RuntimeError(
+                    "PCSE external checkpoint must be adopted before run()"
+                )
             self.train_pretraining()
         if self.state.phase is PCSEPhase.PRETRAINED:
             self.estimate_transition()

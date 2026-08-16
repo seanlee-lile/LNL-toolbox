@@ -42,7 +42,14 @@ def _indices(value: Tensor, size: int, owner: str) -> Tensor:
 class NeighborDistributionResult:
     probabilities: Tensor
     neighbor_indices: Tensor
-    distances: Tensor
+    neighbor_values: Tensor
+    weights: Tensor
+    unnormalized_weights: Tensor
+
+    @property
+    def distances(self) -> Tensor:
+        """Legacy alias for callers of the original distance-only API."""
+        return self.neighbor_values
 
 
 def weighted_neighbor_distribution(
@@ -57,6 +64,7 @@ def weighted_neighbor_distribution(
     metric: str,
     delta: float,
     self_neighbor: str = "include",
+    query_chunk_size: int | None = None,
 ) -> NeighborDistributionResult:
     if query_features.ndim != 2 or reference_features.ndim != 2:
         raise ValueError("DLD KNN features must have shape [N, D]")
@@ -84,38 +92,93 @@ def weighted_neighbor_distribution(
     if not np.isfinite(delta) or delta <= 0:
         raise ValueError("DLD KNN delta must be finite and positive")
     metric = str(metric).lower()
-    if metric == "cosine_distance":
-        query = F.normalize(query_features, dim=1)
+    if metric in {"cosine_distance", "cosine_similarity"}:
         reference = F.normalize(reference_features, dim=1)
-        distances = (1.0 - query @ reference.T).clamp_min(0.0)
-    elif metric == "euclidean":
-        distances = torch.cdist(query_features, reference_features)
-    else:
-        raise ValueError("DLD metric must be cosine_distance or euclidean")
+    elif metric != "euclidean":
+        raise ValueError(
+            "DLD metric must be cosine_similarity, cosine_distance, or euclidean"
+        )
     if self_neighbor not in {"include", "exclude"}:
         raise ValueError("DLD self_neighbor must be include or exclude")
-    if self_neighbor == "exclude":
-        same = query_indices[:, None] == reference_indices[None, :]
-        distances = distances.masked_fill(same, float("inf"))
-        if bool((torch.isfinite(distances).sum(dim=1) < k).any()):
-            raise ValueError("DLD has too few non-self neighbors")
+    if query_chunk_size is None:
+        query_chunk_size = n
+    if (
+        isinstance(query_chunk_size, bool)
+        or not isinstance(query_chunk_size, int)
+        or query_chunk_size <= 0
+    ):
+        raise ValueError("DLD query_chunk_size must be a positive integer")
+
     # Stable global identity is the deterministic tie-break, never the current
-    # row position. Sorting by identity first makes the following stable distance
-    # sort lexicographic in (distance, global_index).
+    # row position. Each query chunk uses the exact dense reference set and the
+    # same two stable sorts as the original implementation. Chunking therefore
+    # changes peak allocation only; it does not approximate the KNN search.
     reference_order = torch.argsort(reference_indices, stable=True)
-    ordered_distances = distances[:, reference_order]
-    distance_order = torch.argsort(ordered_distances, dim=1, stable=True)[:, :k]
-    positions = reference_order[distance_order]
-    selected_distances = distances.gather(1, positions)
-    if not bool(torch.isfinite(selected_distances).all()):
-        raise ValueError("DLD selected neighbor distances are non-finite")
-    weights = 1.0 / (selected_distances + float(delta))
-    weights = weights / weights.sum(dim=1, keepdim=True)
-    neighbor_targets = reference_targets[positions]
-    one_hot = F.one_hot(neighbor_targets.to(torch.int64), num_classes=num_classes).to(
-        dtype=query_features.dtype
-    )
-    probabilities = (one_hot * weights[:, :, None]).sum(dim=1)
+    probability_chunks: list[Tensor] = []
+    position_chunks: list[Tensor] = []
+    value_chunks: list[Tensor] = []
+    weight_chunks: list[Tensor] = []
+    unnormalized_weight_chunks: list[Tensor] = []
+    for start in range(0, n, query_chunk_size):
+        stop = min(start + query_chunk_size, n)
+        current_query = query_features[start:stop]
+        if metric in {"cosine_distance", "cosine_similarity"}:
+            current = F.normalize(current_query, dim=1)
+            similarities = current @ reference.T
+            values = (
+                similarities
+                if metric == "cosine_similarity"
+                else (1.0 - similarities).clamp_min(0.0)
+            )
+        else:
+            values = torch.cdist(current_query, reference_features)
+        if self_neighbor == "exclude":
+            same = query_indices[start:stop, None] == reference_indices[None, :]
+            excluded_value = (
+                float("-inf") if metric == "cosine_similarity" else float("inf")
+            )
+            values = values.masked_fill(same, excluded_value)
+            if bool((torch.isfinite(values).sum(dim=1) < k).any()):
+                raise ValueError("DLD has too few non-self neighbors")
+        ordered_values = values[:, reference_order]
+        value_order = torch.argsort(
+            ordered_values,
+            dim=1,
+            descending=metric == "cosine_similarity",
+            stable=True,
+        )[:, :k]
+        positions = reference_order[value_order]
+        selected_values = values.gather(1, positions)
+        if not bool(torch.isfinite(selected_values).all()):
+            raise ValueError("DLD selected neighbor values are non-finite")
+        denominators = selected_values + float(delta)
+        if not bool(torch.isfinite(denominators).all()) or bool(
+            (denominators <= 0).any()
+        ):
+            raise ValueError("DLD neighbor weight denominator must be finite and positive")
+        unnormalized_weights = 1.0 / denominators
+        if not bool(torch.isfinite(unnormalized_weights).all()) or bool(
+            (unnormalized_weights <= 0).any()
+        ):
+            raise ValueError("DLD neighbor weights must be finite and positive")
+        weight_sums = unnormalized_weights.sum(dim=1, keepdim=True)
+        if not bool(torch.isfinite(weight_sums).all()) or bool((weight_sums <= 0).any()):
+            raise ValueError("DLD neighbor weight sums must be finite and positive")
+        weights = unnormalized_weights / weight_sums
+        neighbor_targets = reference_targets[positions]
+        one_hot = F.one_hot(
+            neighbor_targets.to(torch.int64), num_classes=num_classes
+        ).to(dtype=query_features.dtype)
+        probability_chunks.append((one_hot * weights[:, :, None]).sum(dim=1))
+        position_chunks.append(positions)
+        value_chunks.append(selected_values)
+        weight_chunks.append(weights)
+        unnormalized_weight_chunks.append(unnormalized_weights)
+    probabilities = torch.cat(probability_chunks, dim=0)
+    positions = torch.cat(position_chunks, dim=0)
+    selected_values = torch.cat(value_chunks, dim=0)
+    weights = torch.cat(weight_chunks, dim=0)
+    unnormalized_weights = torch.cat(unnormalized_weight_chunks, dim=0)
     if not bool(torch.isfinite(probabilities).all()) or bool((probabilities < 0).any()):
         raise ValueError("DLD neighbor distribution is invalid")
     if not torch.allclose(
@@ -125,7 +188,9 @@ def weighted_neighbor_distribution(
     return NeighborDistributionResult(
         probabilities.detach(),
         reference_indices[positions].detach(),
-        selected_distances.detach(),
+        selected_values.detach(),
+        weights.detach(),
+        unnormalized_weights.detach(),
     )
 
 
