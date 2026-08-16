@@ -3,8 +3,12 @@ from __future__ import annotations
 import inspect
 import json
 from pathlib import Path
-import tomllib
 import unittest
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
 
 from lnl_toolbox.cli.main import _print_plan
 from lnl_toolbox.training.runners import apply_epoch_override, resolve_runner
