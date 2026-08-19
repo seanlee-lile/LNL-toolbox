@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import gzip
 from pathlib import Path
+import struct
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -28,6 +30,21 @@ def _cifar(size: int, split: str, classes: int = 10) -> CifarData:
     )
 
 
+def _write_idx(root: Path, split: str, count: int) -> None:
+    prefix = "train" if split == "train" else "t10k"
+    images = np.arange(count * 28 * 28, dtype=np.uint8).reshape(count, 28, 28)
+    labels = np.arange(count, dtype=np.uint8) % 10
+    with gzip.open(root / f"{prefix}-images-idx3-ubyte.gz", "wb") as handle:
+        handle.write(struct.pack(">IIII", 2051, count, 28, 28) + images.tobytes())
+    with gzip.open(root / f"{prefix}-labels-idx1-ubyte.gz", "wb") as handle:
+        handle.write(struct.pack(">II", 2049, count) + labels.tobytes())
+
+
+def _animal_record(index: int, label: int) -> bytes:
+    pixels = np.full(3 * 64 * 64, index % 256, dtype=np.uint8)
+    return index.to_bytes(4, "little") + label.to_bytes(4, "little") + pixels.tobytes()
+
+
 class DataAdapterFixtureTest(unittest.TestCase):
     def test_cifar_and_cifar_n_observed_clean_separation(self) -> None:
         corpus = _cifar(6, "train")
@@ -38,9 +55,9 @@ class DataAdapterFixtureTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            noisy = torch.as_tensor([1, 1, 2, 3, 4, 5])
+            noisy = np.asarray([1, 1, 2, 3, 4, 5], dtype=np.int64)
             torch.save(
-                {"aggre_label": noisy, "clean_label": torch.as_tensor(corpus.labels)},
+                {"aggre_label": noisy, "clean_label": corpus.labels.copy()},
                 root / "CIFAR-10_human.pt",
             )
             with patch("lnl_toolbox.data.cifar_n.load_cifar10", return_value=corpus):
@@ -51,23 +68,17 @@ class DataAdapterFixtureTest(unittest.TestCase):
             self.assertEqual(split.clean_targets.tolist(), corpus.labels.tolist())
             self.assertIn("human_annotation", split.source)
 
-    def test_mnist_local_fixture_never_downloads(self) -> None:
-        class Fixture:
-            classes = list(map(str, range(10)))
-
-            def __init__(self, root, train, download):
-                self.root, self.train, self.download = root, train, download
-                self.data = torch.zeros((8, 28, 28), dtype=torch.uint8)
-                self.targets = torch.arange(8) % 2
-
-        with tempfile.TemporaryDirectory() as directory, patch(
-            "torchvision.datasets.MNIST", Fixture
-        ):
-            split = MnistAdapter("mnist").load(
-                DataSpec("mnist", root=Path(directory)), "train", seed=1
-            )
+    def test_mnist_official_idx_gzip_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_idx(root, "train", 8)
+            _write_idx(root, "test", 4)
+            adapter = MnistAdapter("mnist")
+            adapter.validate(DataSpec("mnist", root=root))
+            split = adapter.load(DataSpec("mnist", root=root), "train", seed=1)
         self.assertEqual(len(split), 8)
-        self.assertEqual(split.source, "torchvision_local")
+        self.assertEqual(split.inputs.shape, (8, 28, 28))
+        self.assertEqual(split.source, "official_idx_gzip")
 
     def test_clothing1m_and_animal10n_lazy_file_fixtures(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -79,7 +90,9 @@ class DataAdapterFixtureTest(unittest.TestCase):
                 "clean_val_key_list.txt",
                 "clean_test_key_list.txt",
             ):
-                (root / name).write_text("sample.jpg 3\n", encoding="utf-8")
+                (root / name).write_text("sample.jpg\n", encoding="utf-8")
+            (root / "noisy_label_kv.txt").write_text("sample.jpg 3\n", encoding="utf-8")
+            (root / "clean_label_kv.txt").write_text("sample.jpg 3\n", encoding="utf-8")
             clothing = Clothing1MAdapter()
             clothing.validate(DataSpec("clothing1m", root=root))
             train = clothing.load(DataSpec("clothing1m", root=root), "train", seed=1)
@@ -89,17 +102,32 @@ class DataAdapterFixtureTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for split_name in ("train", "test"):
+            for split_name in ("training", "testing"):
+                split_root = root / split_name
+                split_root.mkdir(parents=True)
                 for label in range(10):
-                    class_dir = root / split_name / f"class{label}"
-                    class_dir.mkdir(parents=True)
-                    Image.new("RGB", (4, 4), "white").save(class_dir / "one.png")
+                    Image.new("RGB", (4, 4), "white").save(split_root / f"{label}_one.png")
             animal = Animal10NAdapter()
             train = animal.load(DataSpec("animal10n", root=root), "train", seed=1)
             test = animal.load(DataSpec("animal10n", root=root), "test", seed=1)
             self.assertIsNone(train.clean_targets)
             self.assertEqual(len(test), 10)
             self.assertIsNotNone(test.clean_targets)
+
+    def test_animal10n_official_binary_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "data_batch_1.bin").write_bytes(
+                _animal_record(0, 2) + _animal_record(1, 7)
+            )
+            (root / "test_batch.bin").write_bytes(_animal_record(2, 4))
+            adapter = Animal10NAdapter()
+            adapter.validate(DataSpec("animal10n", root=root))
+            train = adapter.load(DataSpec("animal10n", root=root), "train", seed=1)
+            test = adapter.load(DataSpec("animal10n", root=root), "test", seed=1)
+            self.assertEqual(train.inputs.shape, (2, 64, 64, 3))
+            self.assertEqual(train.observed_targets.tolist(), [2, 7])
+            self.assertEqual(test.clean_targets.tolist(), [4])
 
     def test_uci_fits_preprocessing_on_training_rows_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

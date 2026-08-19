@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import gzip
 import json
 from pathlib import Path
+import struct
 import tempfile
 import unittest
 
@@ -30,6 +32,16 @@ def _config() -> dict:
         "noise": {"name": "clean", "rate": 0.0, "seed": 9},
         "loader": {"batch_size": 6, "num_workers": 0, "drop_last": False},
     }
+
+
+def _write_fashion_idx(root: Path, split: str, count: int) -> None:
+    prefix = "train" if split == "train" else "t10k"
+    images = np.arange(count * 28 * 28, dtype=np.uint8).reshape(count, 28, 28)
+    labels = np.arange(count, dtype=np.uint8) % 10
+    with gzip.open(root / f"{prefix}-images-idx3-ubyte.gz", "wb") as handle:
+        handle.write(struct.pack(">IIII", 2051, count, 28, 28) + images.tobytes())
+    with gzip.open(root / f"{prefix}-labels-idx1-ubyte.gz", "wb") as handle:
+        handle.write(struct.pack(">II", 2049, count) + labels.tobytes())
 
 
 class DataServiceTest(unittest.TestCase):
@@ -85,6 +97,27 @@ class DataServiceTest(unittest.TestCase):
             )
             self.assertEqual(dynamic.indices.tolist(), chosen.tolist())
             self.assertIn("clean_probability", dynamic[0])
+
+    def test_official_fashion_idx_enters_unified_service(self) -> None:
+        requirements = DataRequirements(roles=frozenset({DataRole.TRAIN, DataRole.TEST}))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data_root, run_root = root / "fashion", root / "run"
+            data_root.mkdir()
+            _write_fashion_idx(data_root, "train", 20)
+            _write_fashion_idx(data_root, "test", 10)
+            config = {
+                "data": {"name": "fashion_mnist", "root": str(data_root), "validation_size": 0},
+                "noise": {"name": "clean", "rate": 0.0, "seed": 3},
+                "loader": {"batch_size": 5, "num_workers": 0},
+            }
+            prepared = prepare_experiment_data(
+                config, requirements=requirements, run_dir=run_root, seed=3
+            )
+            batch = next(iter(prepared.loader(DataRole.TRAIN, epoch=0)))
+            self.assertEqual(set(batch), {"input", "target", "index"})
+            self.assertNotIn("clean_target", batch)
+            self.assertEqual(tuple(batch["input"].shape[1:]), (1, 28, 28))
 
     def test_manifest_checkpoint_round_trip_and_tamper_failure(self) -> None:
         requirements = DataRequirements(roles=frozenset({DataRole.TRAIN, DataRole.TEST}))

@@ -31,3 +31,14 @@
 - Tests: unified data tests and affected workflow suites pass; full unittest passed 797 / 797; 63 directly available built-in recipes validate and construct their runner successfully. The conditional PCSE reproduction recipe correctly refuses construction without `LNL_PCSE_SOURCE_RUN`.
 - Exact next step: human diff review, then commit only if requested.
 - Collaborator note: `training/experiment.py`, `training/checkpoint.py`, `cli/main.py`, and the four documentation files are high-conflict shared files; edits are limited to generic data construction and identity validation.
+
+## Official dataset-format correction (2026-08-19)
+
+- Current task: verify installed and deferred datasets against primary dataset releases and official paper repositories.
+- Branch: `codex/cli`; base commit: `1ed54c4`.
+- Checklist: CIFAR-N safe loading; MNIST IDX compatibility; Clothing1M official metadata; ANIMAL-10N official layouts; focused tests; full regression.
+- Completed: 6 / 6 (100%); implementation and validation are complete.
+- Real-data evidence: local CIFAR-10N and CIFAR-100N each load 50,000 train / 10,000 test samples; local Fashion-MNIST IDX.GZ loads 60,000 train / 10,000 test samples.
+- Focused evidence: official-format adapter and unified-service tests pass 13 / 13; affected data/CLI tests pass 47 / 47; full unittest passes 802 / 802.
+- Exact next step: human diff review, then commit only if requested.
+- Collaborator note: no runner, algorithm, model, configuration, checkpoint, or registry interface changed.

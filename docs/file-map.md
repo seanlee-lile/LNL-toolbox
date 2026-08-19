@@ -446,6 +446,16 @@ The three new runners are registered in `training/runners.py`; no `training/expe
 
 The current reproduction acceptance status is maintained in `papers/implement/paper-reproduction-progress.md`. Only MentorNet and CDR remain incomplete; VolMinNet, UPM, and LEND are completed after source/equation alignment and validation.
 
+## Official dataset-format compatibility audit (2026-08-19)
+
+| File | Maintained official formats |
+|---|---|
+| `data/cifar_n.py` | Official UCSC CIFAR-10N/100N torch files containing NumPy label arrays, loaded through a restricted safe-global list. |
+| `data/mnist.py` | Official uncompressed IDX and downloaded IDX.GZ layouts, either directly under `data.root`, under `raw/`, or under the TorchVision `MNIST/raw` / `FashionMNIST/raw` layout. |
+| `data/real_noise.py` | Clothing1M key lists plus separate noisy/clean label-KV files; ANIMAL-10N official binary records and common official-code flat image layouts. |
+
+These adapters remain local-only: they validate existing data and never download it during training.
+
 ## Unified experiment infrastructure (2026-08-11)
 
 | Path | Responsibility |
