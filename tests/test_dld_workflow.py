@@ -75,7 +75,7 @@ class DLDWorkflowTest(unittest.TestCase):
     def test_fresh_resume_extension_and_completed_noop(self) -> None:
         train, test = _data("train", 4), _data("test", 2)
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.dld_experiment.load_cifar10",
+            "lnl_toolbox.data.sources.load_cifar10",
             side_effect=lambda root, split: train if split == "train" else test,
         ), patch("lnl_toolbox.training.dld_experiment.partition_samples", side_effect=_partition):
             run = Path(directory) / "run"
@@ -140,7 +140,7 @@ class DLDWorkflowTest(unittest.TestCase):
         config["loader"]["batch_size"] = 100
         train, test = _data("train", 2, 100), _data("test", 1, 100)
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.dld_experiment.load_cifar100",
+            "lnl_toolbox.data.sources.load_cifar100",
             side_effect=lambda root, split: train if split == "train" else test,
         ), patch("lnl_toolbox.training.dld_experiment.partition_samples", side_effect=_partition):
             run = run_dld_experiment(config, Path(directory) / "cifar100")

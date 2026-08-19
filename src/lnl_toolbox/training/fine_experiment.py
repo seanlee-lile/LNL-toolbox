@@ -11,21 +11,10 @@ from typing import Any, Mapping
 import numpy as np
 import torch
 from torch.nn import functional as F
-from torch.utils.data import DataLoader
 import yaml
 
 from lnl_toolbox.algorithms.fine import FINERegularizer
-from lnl_toolbox.data.cifar import load_cifar100
-from lnl_toolbox.data.multi_view import (
-    IndexedMultiViewCifarDataset,
-    build_strong_cifar_transform,
-)
-from lnl_toolbox.data.torch_cifar import (
-    TorchCifarDataset,
-    build_cifar_transform,
-    stratified_split,
-    train_validation_split,
-)
+from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.evaluation.classification import evaluate_classification
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 from lnl_toolbox.models.fine_cnn import FineSevenCNN
@@ -41,12 +30,12 @@ from lnl_toolbox.training.checkpoint import (
     restore_rng_state,
 )
 from lnl_toolbox.training.experiment import build_model, build_optimizer
+from lnl_toolbox.training.data_service import prepare_experiment_data
 from lnl_toolbox.training.model_ema import ModelEMA
 from lnl_toolbox.training.noisy_labels import (
     checkpoint_noise_metadata,
     effective_subset_actual_rate,
     noise_mode,
-    prepare_noise_manifest,
 )
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
 
@@ -61,34 +50,6 @@ def _build_fine_model(config: Mapping[str, Any], num_classes: int):
             dropout=float(config.get("dropout", 0.25)),
         )
     return build_model(config, num_classes)
-
-
-def _subset(indices: np.ndarray, labels: np.ndarray, size: int | None, seed: int) -> np.ndarray:
-    if size is None or int(size) >= indices.size:
-        return indices
-    _, selected = stratified_split(labels[indices], int(size), seed)
-    return indices[selected]
-
-
-def _loader(
-    dataset,
-    config: Mapping[str, Any],
-    *,
-    shuffle: bool,
-    seed: int,
-    batch_size: int | None = None,
-) -> DataLoader:
-    workers = int(config.get("num_workers", 0))
-    return DataLoader(
-        dataset,
-        batch_size=int(config["batch_size"] if batch_size is None else batch_size),
-        shuffle=shuffle,
-        num_workers=workers,
-        pin_memory=bool(config.get("pin_memory", True)),
-        persistent_workers=workers > 0,
-        generator=torch.Generator().manual_seed(seed),
-        drop_last=bool(config.get("drop_last", False)) if shuffle else False,
-    )
 
 
 @torch.inference_mode()
@@ -213,35 +174,20 @@ def run_fine_experiment(
         raise ValueError("FINE resume configuration mismatch")
 
     data_config = config["data"]
-    if str(data_config.get("name", "cifar100")).lower() != "cifar100":
-        raise ValueError("FINE CIFAR runner currently supports CIFAR-100/CIFAR-100N")
-    train_data = load_cifar100(data_config.get("root"), "train")
-    test_data = load_cifar100(data_config.get("root"), "test")
-    validation_size = int(data_config.get("validation_size", 0))
-    if validation_size == 0:
-        train_indices = np.arange(len(train_data), dtype=np.int64)
-        validation_indices = np.empty(0, dtype=np.int64)
-    else:
-        train_indices, validation_indices = train_validation_split(
-            train_data.labels, validation_size, seed
-        )
-    train_indices = _subset(train_indices, train_data.labels, data_config.get("max_train_samples"), seed + 1)
-    validation_indices = _subset(validation_indices, train_data.labels, data_config.get("max_validation_samples"), seed + 2)
-    test_indices = _subset(np.arange(len(test_data)), test_data.labels, data_config.get("max_test_samples"), seed + 3)
-    manifest, manifest_path = prepare_noise_manifest(
+    prepared = prepare_experiment_data(
         config,
-        dataset="cifar100",
-        clean_targets=train_data.labels[train_indices],
-        global_indices=train_indices,
-        num_classes=100,
+        requirements=DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.CLEAN_VALIDATION, DataRole.TEST}),
+            views=("weak", "strong"),
+            manifest_scope="effective_train",
+        ),
         run_dir=run_dir,
+        seed=seed,
         checkpoint_payload=checkpoint,
-        dataset_targets=train_data.labels,
     )
-    targets_by_index = None if manifest is None else {
-        int(index): int(target)
-        for index, target in zip(manifest.global_indices, manifest.noisy_targets)
-    }
+    if prepared.num_classes != 100:
+        raise ValueError("FINE requires a 100-class dataset")
+    manifest, manifest_path = prepared.manifest, prepared.manifest_path
     noise_metadata = None
     if manifest is not None:
         assert manifest_path is not None
@@ -249,60 +195,17 @@ def run_fine_experiment(
             manifest,
             manifest_path,
             run_dir,
-            effective_subset_actual_rate(manifest, train_indices),
+            effective_subset_actual_rate(manifest, prepared.train_indices),
             mode=noise_mode(config),
         )
-    normalization = data_config.get("normalization", {}) or {}
-    mean = normalization.get("mean")
-    std = normalization.get("std")
-    weak_transform = build_cifar_transform(
-        True,
-        bool(data_config.get("augment", True)),
-        normalization_mean=mean,
-        normalization_std=std,
-    )
-    strong_transform = build_strong_cifar_transform(
-        mean=mean or (0.49139968, 0.48215827, 0.44653124),
-        std=std or (0.24703233, 0.24348505, 0.26158768),
-        magnitude=int(data_config.get("strong_magnitude", 10)),
-        policy=str(data_config.get("strong_policy", "official_cifar10")),
-    )
-    train_set = IndexedMultiViewCifarDataset(
-        train_data,
-        train_indices,
-        weak_transform=weak_transform,
-        strong_transform=strong_transform,
-        targets_by_index=targets_by_index,
-    )
-    evaluation_transform = build_cifar_transform(
-        False, normalization_mean=mean, normalization_std=std
-    )
-    test_set = TorchCifarDataset(test_data, test_indices, transform=evaluation_transform)
-    validation_set = (
-        TorchCifarDataset(train_data, validation_indices, transform=evaluation_transform)
-        if validation_indices.size
-        else test_set
-    )
     loader_config = config["loader"]
-    train_loader = _loader(train_set, loader_config, shuffle=True, seed=seed)
-    snapshot_loader = _loader(train_set, loader_config, shuffle=False, seed=seed)
+    train_loader = prepared.loader(DataRole.TRAIN)
+    snapshot_loader = prepared.loader(DataRole.TRAIN_EVAL, shuffle=False)
     evaluation_batch_size = int(
         config.get("evaluation", {}).get("batch_size", loader_config["batch_size"])
     )
-    validation_loader = _loader(
-        validation_set,
-        loader_config,
-        shuffle=False,
-        seed=seed,
-        batch_size=evaluation_batch_size,
-    )
-    test_loader = _loader(
-        test_set,
-        loader_config,
-        shuffle=False,
-        seed=seed,
-        batch_size=evaluation_batch_size,
-    )
+    validation_loader = prepared.loader(DataRole.CLEAN_VALIDATION, shuffle=False, batch_size=evaluation_batch_size)
+    test_loader = prepared.loader(DataRole.TEST, shuffle=False, batch_size=evaluation_batch_size)
 
     model = _build_fine_model(config["model"], 100).to(device)
     optimizer_config = dict(config["optimizer"])
@@ -352,7 +255,7 @@ def run_fine_experiment(
         rows = list(checkpoint.get("metrics", []))
 
     criterion = CrossEntropyLoss().to(device)
-    positions = {int(index): position for position, index in enumerate(train_indices)}
+    positions = {int(index): position for position, index in enumerate(prepared.train_indices)}
     metrics_path = run_dir / "metrics.jsonl"
     if start_epoch >= warmup_epochs:
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(

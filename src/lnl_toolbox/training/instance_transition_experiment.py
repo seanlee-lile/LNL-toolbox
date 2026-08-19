@@ -5,36 +5,25 @@ from __future__ import annotations
 from datetime import datetime
 import json
 from pathlib import Path
-import random
 from typing import Any, Mapping
 
 import numpy as np
 import torch
 from torch import nn
-from torch.utils.data import DataLoader
 import yaml
 
 from lnl_toolbox.algorithms.instance_transition import InstanceTransitionClassificationAlgorithm
 from lnl_toolbox.algorithms.instance_transition import pdl_instance_corrected_losses
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
 from lnl_toolbox.core.hyperparameters import resolve_parameter_sampling
-from lnl_toolbox.data import NoisyTargetDataset
-from lnl_toolbox.data.cifar import load_cifar10, load_cifar100
-from lnl_toolbox.data.torch_cifar import (
-    TorchCifarDataset,
-    build_cifar_transform,
-    stratified_split,
-    train_validation_split,
-)
+from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.evaluation.classification import evaluate_classification
 from lnl_toolbox.models.feature_output import forward_with_features
 from lnl_toolbox.models.cifar_resnet import cifar_resnet34
 from lnl_toolbox.noise import (
-    NoiseManifest,
     PartTransitionArtifact,
     PosteriorSnapshot,
     fit_part_representation,
-    generate_pdl_idn,
 )
 from lnl_toolbox.noise.pdl import (
     fit_pdl_basis_matrices_pair,
@@ -49,28 +38,13 @@ from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import load_checkpoint, read_checkpoint, save_checkpoint
 from lnl_toolbox.training.experiment import build_model, build_optimizer, build_scheduler
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
+from lnl_toolbox.training.data_service import prepare_experiment_data
 from lnl_toolbox.training.snapshots import (
     FeatureSnapshot,
     collect_feature_snapshot,
     collect_posterior_snapshot,
     pretrain_noisy_classifier,
 )
-
-
-def _loader(dataset, config: Mapping[str, Any], *, shuffle: bool, seed: int) -> DataLoader:
-    workers = int(config.get("num_workers", 0))
-    generator = torch.Generator().manual_seed(seed)
-
-    def seed_worker(_worker_id: int) -> None:
-        worker_seed = torch.initial_seed() % (2**32)
-        np.random.seed(worker_seed)
-        random.seed(worker_seed)
-
-    return DataLoader(dataset, batch_size=int(config["batch_size"]), shuffle=shuffle,
-        num_workers=workers, pin_memory=bool(config.get("pin_memory", True)),
-        drop_last=bool(config.get("drop_last", False)) if shuffle else False,
-        persistent_workers=workers > 0, worker_init_fn=seed_worker if workers else None,
-        generator=generator)
 
 
 def _official_pdl_split(
@@ -134,16 +108,6 @@ def _run_directory(config: Mapping[str, Any], output_dir: str | Path | None) -> 
     ) / datetime.now().strftime("%Y%m%d-%H%M%S")
     path.mkdir(parents=True, exist_ok=True)
     return path.resolve()
-
-
-def _transform(training: bool, config: Mapping[str, Any]):
-    normalization = dict(config.get("normalization", {}) or {})
-    return build_cifar_transform(
-        training, bool(config.get("augment", False)) if training else False,
-        preprocessing=str(config.get("preprocessing", "standard")),
-        normalization_mean=normalization.get("mean"),
-        normalization_std=normalization.get("std"),
-    )
 
 
 def _write_environment(path: Path, seed: int, device: torch.device) -> None:
@@ -415,34 +379,6 @@ def _run_pdl_official_phases(
     return run_dir
 
 
-def _prepare_pdl_manifest(
-    *, config: Mapping[str, Any], data: Any, indices: np.ndarray,
-    num_classes: int, run_dir: Path, resume: bool,
-) -> NoiseManifest:
-    path = run_dir / str(config.get("manifest_filename", "noise_manifest.npz"))
-    if resume:
-        manifest = NoiseManifest.load(path)
-        manifest.validate_for(data.labels, data.dataset, num_classes, required_indices=indices)
-        return manifest
-    if str(config.get("name", "")).lower() != "pdl":
-        raise ValueError("instance-transition runner currently requires noise.name=pdl")
-    # The official PDL data loader passes the raw CIFAR array from data.py
-    # (CHW order) flattened before Algorithm 2 consumes it.  Toolbox datasets
-    # expose images in HWC order, so convert explicitly instead of letting a
-    # reshape silently change the feature coordinates used by x @ W[y].
-    raw_inputs = _pdl_official_raw_features(data.images[indices])
-    manifest = generate_pdl_idn(
-        raw_inputs,
-        data.labels[indices], num_classes, float(config["rate"]),
-        int(config["seed"]), data.dataset,
-    )
-    manifest.global_indices = indices.copy()
-    manifest.split = "train"
-    manifest.num_classes = num_classes
-    manifest.save(path)
-    return manifest
-
-
 def _pdl_official_raw_features(images: np.ndarray) -> np.ndarray:
     """Return CIFAR inputs in the flattened layout used by official PDL."""
 
@@ -477,69 +413,39 @@ def run_instance_transition_experiment(
         raise ValueError("Resume configuration changed")
 
     data_config = dict(config["data"])
-    dataset_name = str(data_config["name"]).lower()
-    if dataset_name == "cifar10":
-        train_data, test_data, num_classes = (
-            load_cifar10(data_config["root"], "train"),
-            load_cifar10(data_config["root"], "test"), 10,
-        )
-    elif dataset_name == "cifar100":
-        train_data, test_data, num_classes = (
-            load_cifar100(data_config["root"], "train"),
-            load_cifar100(data_config["root"], "test"), 100,
-        )
-    else:
-        raise ValueError("instance-transition runner supports CIFAR-10/100")
-    all_indices = np.arange(len(train_data), dtype=np.int64)
-    maximum = data_config.get("max_train_samples")
-    if maximum is not None and int(maximum) < all_indices.size:
-        _, selected = stratified_split(train_data.labels, int(maximum), seed + 1)
-        all_indices = selected
-    manifest = _prepare_pdl_manifest(config=config["noise"], data=train_data,
-        indices=all_indices, num_classes=num_classes, run_dir=run_dir, resume=resume is not None)
-
     noisy_validation_size = int(config["warmup"]["noisy_validation_size"])
-    split_strategy = str(config["warmup"].get("split_strategy", "random"))
-    split_rng = str(config["warmup"].get("split_rng", "numpy_legacy"))
     official_pdl = (
         str(config.get("algorithm", {}).get("correction", "")).lower()
         in {"pdl", "pdl_revision"}
         or "phases" in config
     )
-    if official_pdl:
-        train_positions, validation_positions = _official_pdl_split(
-            manifest.noisy_targets.size, noisy_validation_size, seed
-        )
-    else:
-        train_positions, validation_positions = train_validation_split(
-            manifest.noisy_targets,
-            noisy_validation_size,
-            seed,
-            strategy=split_strategy,
-            rng=split_rng,
-        )
-    train_indices = manifest.global_indices[train_positions]
-    validation_indices = manifest.global_indices[validation_positions]
-    train_targets = manifest.noisy_targets[train_positions]
-    validation_targets = manifest.noisy_targets[validation_positions]
-    train_set = NoisyTargetDataset(TorchCifarDataset(train_data, train_indices,
-        transform=_transform(True, data_config)), train_indices, train_targets)
-    noisy_validation_set = NoisyTargetDataset(TorchCifarDataset(train_data, validation_indices,
-        transform=_transform(False, data_config)), validation_indices, validation_targets)
-    union_set = NoisyTargetDataset(TorchCifarDataset(train_data, manifest.global_indices,
-        transform=_transform(False, data_config)), manifest.global_indices, manifest.noisy_targets)
-    max_test = data_config.get("max_test_samples")
-    test_indices = np.arange(len(test_data), dtype=np.int64)
-    if max_test is not None and int(max_test) < test_indices.size:
-        _, test_indices = stratified_split(test_data.labels, int(max_test), seed + 3)
-    test_set = TorchCifarDataset(test_data, test_indices, transform=_transform(False, data_config))
-    loader_config = dict(config["loader"])
+    prepared = prepare_experiment_data(
+        config,
+        requirements=DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
+            validation_targets="noisy",
+            validation_size=noisy_validation_size,
+            split_strategy="numpy_choice_complement" if official_pdl else None,
+            subset_before_split=True,
+        ),
+        run_dir=run_dir, seed=seed, checkpoint_payload=checkpoint_payload,
+    )
+    dataset_name, num_classes = prepared.dataset, prepared.num_classes
+    manifest = prepared.manifest
+    if manifest is None:
+        raise ValueError("instance-transition runner requires noisy labels")
+    train_indices = prepared.train_indices
+    validation_indices = prepared.validation_indices
+    noisy_map = {int(index): int(target) for index, target in zip(manifest.global_indices, manifest.noisy_targets)}
+    union_set = prepared.dynamic_dataset(
+        manifest.global_indices, targets_by_index=noisy_map, training=False
+    )
     # The official PDL code uses a non-shuffled loader and indexes W by the
     # sequential batch position during correction.
-    train_loader = _loader(train_set, loader_config, shuffle=False, seed=seed)
-    noisy_validation_loader = _loader(noisy_validation_set, loader_config, shuffle=False, seed=seed)
-    union_loader = _loader(union_set, loader_config, shuffle=False, seed=seed)
-    test_loader = _loader(test_set, loader_config, shuffle=False, seed=seed)
+    train_loader = prepared.loader(DataRole.TRAIN, shuffle=False)
+    noisy_validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False)
+    union_loader = prepared.loader_for_dataset(union_set, shuffle=False)
+    test_loader = prepared.loader(DataRole.TEST, shuffle=False)
 
     artifact_path = run_dir / "instance_transition_artifact.npz"
     validation_artifact_path = run_dir / "validation_instance_transition_artifact.npz"

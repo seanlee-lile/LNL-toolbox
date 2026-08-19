@@ -195,3 +195,10 @@ lnl report artifacts/sweeps/example
 CI 在 Python 3.10 和 3.12 上执行 Ruff、完整 unittest、CLI 测试和 coverage；发布 job
 分别从 wheel 与 sdist 安装，并验证 `lnl --help`、公开 recipe discovery 和 VolMinNet
 smoke 配置预检。
+# 注册第三方数据源（2026-08-18）
+
+新增数据集时实现 `DatasetAdapter`：`validate(DataSpec)` 负责路径和布局检查，`load(DataSpec, split, seed=...)` 返回 `RawDatasetSplit`。随后在 `create_dataset_registry()` 的数据源注册函数中登记名称和别名。适配器不得包含论文方法、训练阶段或 optimizer 逻辑。
+
+必须保证：global index 在 shuffle/subset/view 后稳定；observed 与 clean label 分开保存；真实噪声训练 split 不向 batch 暴露 clean label；缺失数据只输出本地准备说明，不下载、不回退。需要持久化预处理或 split 状态的适配器可提供 `identity_artifacts()`，由统一服务写入并验证 run-local JSON。
+
+runner 只允许调用 `prepare_experiment_data()`，不得直接导入 CIFAR reader、`TorchCifarDataset` 或自行构造 `DataLoader`。新增/修改 runner 后运行 `tests/test_data_service.py` 的静态门禁。

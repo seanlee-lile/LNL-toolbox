@@ -12,6 +12,7 @@ import torch
 from torch.nn import functional as F
 import yaml
 
+from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.algorithms.ca2c import (
     CandidateMemory,
     cross_guidance,
@@ -21,9 +22,10 @@ from lnl_toolbox.algorithms.ca2c import (
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
+from lnl_toolbox.training.data_service import prepare_experiment_data
 from lnl_toolbox.training.experiment import build_optimizer, build_scheduler
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
-from lnl_toolbox.training.reproduction_data import build_reproduction_model, prepare_noisy_classification
+from lnl_toolbox.training.reproduction_data import build_reproduction_model
 
 
 def _confidence_penalty(logits: torch.Tensor) -> torch.Tensor:
@@ -45,7 +47,18 @@ def run_ca2c_experiment(config: dict[str, Any], output_dir=None, resume=None) ->
     config = deepcopy(config); seed = int(config.get("seed", 1)); seed_everything(seed)
     device = resolve_device(str(config.get("trainer", {}).get("device", "auto")))
     run_dir = Path(resume).resolve().parent if resume else Path(output_dir or Path(config.get("output_root", "artifacts/runs")) / datetime.now().strftime("%Y%m%d-%H%M%S")).resolve(); run_dir.mkdir(parents=True, exist_ok=True)
-    data = prepare_noisy_classification(config, run_dir, seed); classes = data.num_classes
+    data = prepare_experiment_data(
+        config,
+        requirements=DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.CLEAN_VALIDATION, DataRole.TEST}),
+            views=("weak", "strong") if bool(config["data"].get("strong_augment", False)) else ("weak",),
+        ),
+        run_dir=run_dir,
+        seed=seed,
+    ); classes = data.num_classes
+    train_loader = data.loader(DataRole.TRAIN, stream=21)
+    validation_loader = data.loader(DataRole.CLEAN_VALIDATION, stream=23, shuffle=False)
+    test_loader = data.loader(DataRole.TEST, stream=24, shuffle=False)
     p_model = build_reproduction_model(config["model"], config["data"], classes).to(device); n_model = build_reproduction_model(config["model"], config["data"], classes).to(device)
     p_optimizer = build_optimizer(p_model, config["optimizer"]); n_optimizer = build_optimizer(n_model, config["optimizer"])
     epochs = int(config["trainer"]["epochs"]); p_scheduler = build_scheduler(p_optimizer, config.get("scheduler"), epochs); n_scheduler = build_scheduler(n_optimizer, config.get("scheduler"), epochs)
@@ -73,7 +86,7 @@ def run_ca2c_experiment(config: dict[str, Any], output_dir=None, resume=None) ->
     robust_weight = float(ca2c_config.get("robust_weight", 0.8))
     for epoch in range(start, epochs):
         p_model.train(); n_model.train(); total = correct = 0; loss_sum = 0.0
-        for batch in data.train_loader:
+        for batch in train_loader:
             inputs, targets, indices = batch["input"].to(device), batch["target"].to(device), batch["index"].to(device); p_logits, n_logits = p_model(inputs), n_model(inputs)
             if epoch < warmup_epochs:
                 p_loss = criterion(p_logits, targets).mean() + _confidence_penalty(p_logits)
@@ -102,7 +115,7 @@ def run_ca2c_experiment(config: dict[str, Any], output_dir=None, resume=None) ->
                 n_loss = robust_weight * n_base + (1.0 - robust_weight) * n_consistency
             p_optimizer.zero_grad(set_to_none=True); p_loss.backward(); p_optimizer.step(); n_optimizer.zero_grad(set_to_none=True); n_loss.backward(); n_optimizer.step()
             ensemble = (p_logits.detach() + n_logits.detach()) / 2; total += targets.numel(); correct += int(ensemble.argmax(1).eq(targets).sum()); loss_sum += float((p_loss.detach() + n_loss.detach()) / 2) * targets.numel()
-        validation = _evaluate((p_model, n_model), data.validation_loader, criterion, device); test = _evaluate((p_model, n_model), data.test_loader, criterion, device)
+        validation = _evaluate((p_model, n_model), validation_loader, criterion, device); test = _evaluate((p_model, n_model), test_loader, criterion, device)
         row = standardize_epoch_row({
             "epoch": epoch + 1,
             "phase": "warmup" if epoch < warmup_epochs else "robust",

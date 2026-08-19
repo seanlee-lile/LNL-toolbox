@@ -17,3 +17,17 @@
 - Ready for history cleanup: yes; no checkpoint cleanup is needed.
 - Ready to push: ready after an explicit commit and publication request.
 - Collaborator note: `cli/main.py`, `training/runners.py`, `docs/file-map.md`, and `pyproject.toml` are shared/high-conflict files; changes are scoped to the approved infrastructure contracts.
+
+## Unified data protocol migration (2026-08-18)
+
+- Current task: one dataset registry, one preparation service, and one data entry for all paper runners.
+- Branch: `codex/cli`.
+- Base commit: `1ed54c4`.
+- Checklist: protocol/registry; runner migration; real-noise adapters; manifest/checkpoint identity; tests; documentation.
+- Completed: 6 / 6 (100%); implementation and validation are complete.
+- Implemented datasets: CIFAR-10/100, CIFAR binary view, CIFAR-10N/100N, MNIST/Fashion-MNIST, Clothing1M, Animal-10N, UCI binary, synthetic binary/multiclass.
+- Implemented safety: no automatic downloads, no clean target in train batches, stable global indices, deterministic epoch loaders, run-local data manifest, checkpoint fingerprint validation.
+- Runner status: all listed experiment runners call `prepare_experiment_data()`; static gate rejects direct concrete loader imports and local `DataLoader` construction.
+- Tests: unified data tests and affected workflow suites pass; full unittest passed 797 / 797; 63 directly available built-in recipes validate and construct their runner successfully. The conditional PCSE reproduction recipe correctly refuses construction without `LNL_PCSE_SOURCE_RUN`.
+- Exact next step: human diff review, then commit only if requested.
+- Collaborator note: `training/experiment.py`, `training/checkpoint.py`, `cli/main.py`, and the four documentation files are high-conflict shared files; edits are limited to generic data construction and identity validation.

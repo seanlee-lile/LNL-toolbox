@@ -53,7 +53,7 @@ class CWDTrainingTest(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             with patch(
-                "lnl_toolbox.training.cwd_experiment.load_cifar10",
+                "lnl_toolbox.data.sources.load_cifar10",
                 side_effect=lambda _root, split: train if split == "train" else test,
             ):
                 result = run_cwd_experiment(config, directory)

@@ -23,12 +23,14 @@ from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 from lnl_toolbox.noise.cal import CALProxyArtifact, build_cal_proxy_artifact
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
+from lnl_toolbox.data import DataRequirements, DataRole
+from lnl_toolbox.training.data_service import prepare_experiment_data
 from lnl_toolbox.training.experiment import (
     build_alpha_scaled_scheduler,
     build_optimizer,
 )
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
-from lnl_toolbox.training.reproduction_data import build_reproduction_model, prepare_noisy_classification
+from lnl_toolbox.training.reproduction_data import build_reproduction_model
 from lnl_toolbox.training.snapshots import collect_posterior_snapshot
 
 
@@ -61,7 +63,18 @@ def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> 
     device = resolve_device(str(config.get("trainer", {}).get("device", "auto")))
     run_dir = Path(resume).resolve().parent if resume else Path(output_dir or Path(config.get("output_root", "artifacts/runs")) / datetime.now().strftime("%Y%m%d-%H%M%S")).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
-    data = prepare_noisy_classification(config, run_dir, seed)
+    data = prepare_experiment_data(
+        config,
+        requirements=DataRequirements(roles=frozenset({
+            DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.CLEAN_VALIDATION, DataRole.TEST,
+        })),
+        run_dir=run_dir,
+        seed=seed,
+    )
+    train_loader = data.loader(DataRole.TRAIN, stream=21)
+    snapshot_loader = data.loader(DataRole.TRAIN_EVAL, stream=22, shuffle=False)
+    validation_loader = data.loader(DataRole.CLEAN_VALIDATION, stream=23, shuffle=False)
+    test_loader = data.loader(DataRole.TEST, stream=24, shuffle=False)
     classes = data.num_classes
     noisy_prior = torch.as_tensor(np.bincount(data.noisy_targets, minlength=classes) / len(data.noisy_targets), dtype=torch.float32, device=device)
     proxy_path = run_dir / "cal_proxy_artifact.npz"
@@ -81,7 +94,7 @@ def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> 
                 float(warmup_cfg["confidence_weight"]),
                 warmup_cfg.get("confidence_schedule"),
             )
-            for batch in data.train_loader:
+            for batch in train_loader:
                 inputs, targets = batch["input"].to(device), batch["target"].to(device)
                 loss = cores2_adjusted_losses(
                     warmup(inputs), targets, noisy_prior, confidence_weight
@@ -110,12 +123,12 @@ def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> 
             },
             run_dir / "cal_warmup.pt",
         )
-        snapshot = collect_posterior_snapshot(warmup, data.snapshot_loader, device, dataset=data.dataset, split="train")
+        snapshot = collect_posterior_snapshot(warmup, snapshot_loader, device, dataset=data.dataset, split="train")
         losses = []
         loss_indices = []
         warmup.eval()
         with torch.inference_mode():
-            for batch in data.snapshot_loader:
+            for batch in snapshot_loader:
                 logits = warmup(batch["input"].to(device)); targets = batch["target"].to(device)
                 losses.append(cores2_adjusted_losses(
                     logits,
@@ -158,7 +171,7 @@ def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> 
         model.train(); total = correct = 0; loss_sum = 0.0
         epoch_loss_sums = torch.zeros_like(means)
         epoch_class_counts = torch.zeros(classes, device=device)
-        for batch in data.train_loader:
+        for batch in train_loader:
             inputs, targets, indices = batch["input"].to(device), batch["target"].to(device), batch["index"].to(device)
             proxy_targets, mask, _ = proxy.lookup(indices); logits = model(inputs)
             confidence_weight = resolve_confidence_weight(
@@ -176,7 +189,7 @@ def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> 
             total += targets.numel(); loss_sum += float(loss.detach()) * targets.numel(); correct += int(logits.argmax(1).eq(targets).sum())
         observed_classes = epoch_class_counts > 0
         means[observed_classes] = epoch_loss_sums[observed_classes] / epoch_class_counts[observed_classes, None]
-        means = means.detach(); validation = evaluate_classification(model, data.validation_loader, criterion, device); test = evaluate_classification(model, data.test_loader, criterion, device)
+        means = means.detach(); validation = evaluate_classification(model, validation_loader, criterion, device); test = evaluate_classification(model, test_loader, criterion, device)
         row = standardize_epoch_row({"epoch": epoch + 1, "train_loss": loss_sum / total, "train_accuracy": correct / total, "validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"], "test_loss": test["loss"], "test_accuracy": test["accuracy"], "learning_rate": optimizer.param_groups[0]["lr"], "method": "cal"}); rows.append(row)
         if scheduler is not None:
             scheduler.step(resolve_confidence_weight(

@@ -15,17 +15,7 @@ import yaml
 
 from lnl_toolbox.algorithms.pcse import PCSEAlgorithm, PCSEConfig
 from lnl_toolbox.evaluation.classification import evaluate_classification
-from lnl_toolbox.data.multiclass_synthetic import (
-    MulticlassTensorDataset,
-    generate_synthetic_multiclass,
-)
-from lnl_toolbox.data.cifar import load_cifar10
-from lnl_toolbox.data.noisy_dataset import NoisyTargetDataset
-from lnl_toolbox.data.torch_cifar import (
-    TorchCifarDataset,
-    build_cifar_transform,
-    train_validation_split,
-)
+from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.noise.generators import generate_pairflip, generate_symmetric
 from lnl_toolbox.noise.manifest import NoiseManifest
 from lnl_toolbox.plugins.builtin import build_builtin_loss
@@ -33,11 +23,11 @@ from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import read_checkpoint
 from lnl_toolbox.training.experiment import (
     _environment,
-    _loader,
     build_model,
     build_optimizer,
     build_scheduler,
 )
+from lnl_toolbox.training.data_service import prepare_experiment_data
 from lnl_toolbox.training.noisy_labels import (
     checkpoint_noise_metadata,
     effective_subset_actual_rate,
@@ -248,41 +238,10 @@ def run_pcse_experiment(
         if method_config.pretraining.mode != "train":
             raise ValueError("synthetic PCSE requires pretraining mode train")
         dimension = int(data.get("dimension", 0))
-        train = generate_synthetic_multiclass(
-            int(data["train_size"]), dimension, num_classes, seed + 11,
-            start_index=0, split="train",
-        )
-        validation = generate_synthetic_multiclass(
-            int(data["validation_size"]), dimension, num_classes, seed + 12,
-            start_index=len(train.labels), split="validation",
-        )
-        test = generate_synthetic_multiclass(
-            int(data["test_size"]), dimension, num_classes, seed + 13,
-            start_index=len(train.labels) + len(validation.labels), split="test",
-        )
-        population_clean = np.concatenate((train.labels, validation.labels))
-        population_indices = np.concatenate(
-            (train.global_indices, validation.global_indices)
-        )
-        manifest, manifest_path = _prepare_synthetic_manifest(
-            config=config, run_dir=run_dir, clean_targets=population_clean,
-            global_indices=population_indices, num_classes=num_classes,
-            resume_payload=resume_payload,
-        )
-        train_observed = _noisy_targets(manifest, train.global_indices)
-        validation_observed = _noisy_targets(manifest, validation.global_indices)
-        train_set = MulticlassTensorDataset(train, train_observed)
-        statistics_set = train_set
-        validation_set = MulticlassTensorDataset(validation, validation_observed)
-        clean_test_set = MulticlassTensorDataset(test)
         if str(model_config.get("name", "")).strip().lower() != "pcse_mlp":
             raise ValueError("PCSE synthetic runner requires model name pcse_mlp")
         model = _PCSEMultilayerPerceptron(
             dimension, int(model_config.get("hidden_width", 16)), num_classes
-        )
-        effective_train_rate = manifest.actual_rate
-        effective_validation_rate = float(
-            np.mean(validation_observed != validation.labels)
         )
         manifest_mode = "generated"
     else:
@@ -299,69 +258,34 @@ def run_pcse_experiment(
         source_model = build_model(model_config, num_classes)
         source_model.load_state_dict(external_source.state_dict, strict=True)
         source_model.to(device)
-        train_data = load_cifar10(data.get("root"), "train")
-        test_data = load_cifar10(data.get("root"), "test")
-        train_indices, validation_indices = train_validation_split(
-            train_data.labels,
-            int(data["validation_size"]),
-            seed,
-            strategy=str(data.get("split_strategy", "stratified")),
-            rng=str(data.get("split_rng", "default_rng")),
-        )
-        expected_indices = np.sort(
-            np.concatenate((train_indices, validation_indices))
-        )
         manifest = external_source.noise_manifest
-        if not np.array_equal(manifest.global_indices, expected_indices):
-            raise ValueError("PCSE source manifest stable-index mismatch")
-        if not np.array_equal(
-            manifest.clean_targets, train_data.labels[expected_indices]
-        ):
-            raise ValueError("PCSE source manifest clean-label identity mismatch")
-        manifest_path = run_dir / "noise_manifest.npz"
-        if resume_payload is None:
-            _persist_source_manifest(
-                Path(external_source.manifest.path), manifest_path
-            )
-        if not manifest_path.is_file() or file_sha256(manifest_path) != (
-            external_source.manifest.sha256
-        ):
-            raise ValueError("PCSE run-local source manifest identity mismatch")
-        transform = build_cifar_transform(False, preprocessing="standard")
-        train_clean = TorchCifarDataset(
-            train_data, train_indices, transform=transform
-        )
-        validation_clean = TorchCifarDataset(
-            train_data, validation_indices, transform=transform
-        )
-        train_set = NoisyTargetDataset(
-            train_clean, manifest.global_indices, manifest.noisy_targets
-        )
-        statistics_set = NoisyTargetDataset(
-            TorchCifarDataset(train_data, train_indices, transform=transform),
-            manifest.global_indices,
-            manifest.noisy_targets,
-        )
-        validation_set = NoisyTargetDataset(
-            validation_clean, manifest.global_indices, manifest.noisy_targets
-        )
-        clean_test_set = TorchCifarDataset(test_data, transform=transform)
-        effective_train_rate = effective_subset_actual_rate(
-            manifest, train_indices
-        )
-        effective_validation_rate = effective_subset_actual_rate(
-            manifest, validation_indices
-        )
+        config["noise"] = {
+            "name": "external",
+            "manifest": str(external_source.manifest.path),
+            "manifest_sha256": external_source.manifest.sha256,
+            "validation_targets": "noisy",
+        }
         manifest_mode = "external"
 
-    train_loader = _loader(train_set, loader, shuffle=True, seed=seed + 101)
-    statistics_loader = _loader(
-        statistics_set, loader, shuffle=False, seed=seed + 102
+    prepared = prepare_experiment_data(
+        config,
+        requirements=DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.NOISY_VALIDATION, DataRole.TEST}),
+            validation_targets="noisy",
+        ),
+        run_dir=run_dir,
+        seed=seed + 10 if data_name == "synthetic_multiclass" else seed,
+        checkpoint_payload=resume_payload,
     )
-    validation_loader = _loader(
-        validation_set, loader, shuffle=False, seed=seed + 103
-    )
-    test_loader = _loader(clean_test_set, loader, shuffle=False, seed=seed + 104)
+    manifest, manifest_path = prepared.manifest, prepared.manifest_path
+    if manifest is None or manifest_path is None:
+        raise ValueError("PCSE requires noisy train and validation labels")
+    effective_train_rate = effective_subset_actual_rate(manifest, prepared.train_indices)
+    effective_validation_rate = effective_subset_actual_rate(manifest, prepared.validation_indices)
+    train_loader = prepared.loader(DataRole.TRAIN, generator_seed=seed + 101)
+    statistics_loader = prepared.loader(DataRole.TRAIN_EVAL, shuffle=False, generator_seed=seed + 102)
+    validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False, generator_seed=seed + 103)
+    test_loader = prepared.loader(DataRole.TEST, shuffle=False, generator_seed=seed + 104)
 
     optimizer = build_optimizer(
         model, method_config.pretraining.optimizer

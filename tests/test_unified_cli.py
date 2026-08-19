@@ -322,7 +322,7 @@ class UnifiedCliTest(unittest.TestCase):
 
             with patch(
                 "lnl_toolbox.training.runners.RunnerSpec.invoke", side_effect=fake_run
-            ):
+            ), patch("lnl_toolbox.cli.main.validate_data_config"):
                 code, _, error = self.invoke(
                     "run",
                     "--config", str(config_path),

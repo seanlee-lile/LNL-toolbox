@@ -12,6 +12,7 @@ import torch
 from torch import nn
 import yaml
 
+from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.algorithms.mc_ldce import MCLDCEObjective
 from lnl_toolbox.algorithms.pcse.volmin import (
     PaperVolMinTransition,
@@ -27,9 +28,10 @@ from lnl_toolbox.noise.statistics import StatisticArtifact
 from lnl_toolbox.noise.transition import TransitionArtifact
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
+from lnl_toolbox.training.data_service import prepare_experiment_data
 from lnl_toolbox.training.experiment import build_optimizer, build_scheduler
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
-from lnl_toolbox.training.reproduction_data import build_reproduction_model, prepare_noisy_classification
+from lnl_toolbox.training.reproduction_data import build_reproduction_model
 from lnl_toolbox.training.snapshots import FeatureSnapshot, collect_feature_snapshot
 
 
@@ -152,7 +154,18 @@ def run_mc_ldce_experiment(config: dict[str, Any], output_dir=None, resume=None)
     seed_everything(seed)
     device = resolve_device(str(config.get("trainer", {}).get("device", "auto")))
     run_dir = _directory(config, output_dir, resume)
-    prepared = prepare_noisy_classification(config, run_dir, seed)
+    prepared = prepare_experiment_data(
+        config,
+        requirements=DataRequirements(roles=frozenset({
+            DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.CLEAN_VALIDATION, DataRole.TEST,
+        })),
+        run_dir=run_dir,
+        seed=seed,
+    )
+    train_loader = prepared.loader(DataRole.TRAIN, stream=21)
+    snapshot_loader = prepared.loader(DataRole.TRAIN_EVAL, stream=22, shuffle=False)
+    validation_loader = prepared.loader(DataRole.CLEAN_VALIDATION, stream=23, shuffle=False)
+    test_loader = prepared.loader(DataRole.TEST, stream=24, shuffle=False)
     lifecycle = _lifecycle(config)
     model = build_reproduction_model(config["model"], config["data"], prepared.num_classes).to(device)
     epochs = int(config["trainer"]["epochs"])
@@ -174,7 +187,7 @@ def run_mc_ldce_experiment(config: dict[str, Any], output_dir=None, resume=None)
             prepared.num_classes,
         ).to(device)
         matrix, transition_metadata = _estimate_volmin(
-            config, estimator_model, prepared.train_loader, device
+            config, estimator_model, train_loader, device
         )
         del estimator_model
         _prepare_fixed_feature_classifier(model)
@@ -183,7 +196,7 @@ def run_mc_ldce_experiment(config: dict[str, Any], output_dir=None, resume=None)
         warmup_optimizer = build_optimizer(model, config["optimizer"])
         for _ in range(warmup_epochs):
             model.train()
-            for batch in prepared.train_loader:
+            for batch in train_loader:
                 inputs, targets = batch["input"].to(device), batch["target"].to(device)
                 loss = criterion(model(inputs), targets).mean()
                 warmup_optimizer.zero_grad(set_to_none=True)
@@ -206,7 +219,7 @@ def run_mc_ldce_experiment(config: dict[str, Any], output_dir=None, resume=None)
         if statistic.artifact_hash != payload["statistic_hash"]:
             raise ValueError("MC-LDCE statistic resume mismatch")
     if statistic is None:
-        snapshot = collect_feature_snapshot(model, prepared.snapshot_loader, device, dataset=prepared.dataset, split="train", feature_extractor=lambda current, inputs: forward_with_features(current, inputs).features)
+        snapshot = collect_feature_snapshot(model, snapshot_loader, device, dataset=prepared.dataset, split="train", feature_extractor=lambda current, inputs: forward_with_features(current, inputs).features)
         if str(config["transition"].get("estimator", "")).lower() == "paper_volmin":
             transition = TransitionArtifact(
                 matrix,
@@ -229,14 +242,14 @@ def run_mc_ldce_experiment(config: dict[str, Any], output_dir=None, resume=None)
             for group in optimizer.param_groups:
                 group["lr"] = base_learning_rate * factor
         model.train(); total = correct = 0; loss_sum = 0.0
-        for batch in prepared.train_loader:
+        for batch in train_loader:
             inputs, targets, indices = batch["input"].to(device), batch["target"].to(device), batch["index"].to(device)
             output = forward_with_features(model, inputs)
             loss = objective.compute(model=model, logits=output.logits, features=output.features, noisy_targets=targets, sample_indices=indices, base_loss=criterion, metadata={})
             optimizer.zero_grad(set_to_none=True); loss.backward(); optimizer.step()
             count = targets.numel(); total += count; loss_sum += float(loss.detach()) * count; correct += int(output.logits.argmax(1).eq(targets).sum())
-        validation = evaluate_classification(model, prepared.validation_loader, criterion, device)
-        test = evaluate_classification(model, prepared.test_loader, criterion, device)
+        validation = evaluate_classification(model, validation_loader, criterion, device)
+        test = evaluate_classification(model, test_loader, criterion, device)
         row = standardize_epoch_row({"epoch": epoch + 1, "train_loss": loss_sum / total, "train_accuracy": correct / total, "validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"], "test_loss": test["loss"], "test_accuracy": test["accuracy"], "learning_rate": optimizer.param_groups[0]["lr"], "method": "mc_ldce"})
         rows.append(row)
         if scheduler is not None: scheduler.step()

@@ -6,23 +6,41 @@ from .cifar import (
     load_cifar100,
     summarize_cifar,
 )
-from .contracts import Sample
+from .contracts import (
+    DataRequirements,
+    DataRole,
+    DataSpec,
+    DatasetAdapter,
+    DatasetIdentity,
+    RawDatasetSplit,
+    Sample,
+)
 from .curriculum import MentorFeatureDataset, MentorFeatureRecord
 from .neighbors import NeighborGraphArtifact
 from .noisy_dataset import NoisyTargetDataset
 from .preprocessing import BinaryPreprocessingConfig, BinaryPreprocessor
+from .registry import DatasetRegistry
 from .semi_supervised import SemiSupervisedBatch
 from .torch_cifar import TorchCifarDataset, build_cifar_transform, stratified_split
+from .views import IndexedDatasetView
 
 __all__ = [
     "BinaryBenchmark",
     "BinaryPreprocessingConfig",
     "BinaryPreprocessor",
     "CifarData",
+    "DataRequirements",
+    "DataRole",
+    "DataSpec",
+    "DatasetAdapter",
+    "DatasetIdentity",
+    "DatasetRegistry",
+    "IndexedDatasetView",
     "MentorFeatureDataset",
     "MentorFeatureRecord",
     "NeighborGraphArtifact",
     "NoisyTargetDataset",
+    "RawDatasetSplit",
     "Sample",
     "SemiSupervisedBatch",
     "TorchCifarDataset",

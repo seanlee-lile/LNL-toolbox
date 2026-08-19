@@ -23,6 +23,7 @@ from lnl_toolbox.plugins.builtin.catalog import (
     build_builtin_weight_provider,
 )
 from lnl_toolbox.training.mentor_artifacts import MentorArtifact
+from lnl_toolbox.training.mentor_learning import prepare_trusted_mentor_features
 from lnl_toolbox.treatments.weights import SupervisedWeightInput
 
 
@@ -145,6 +146,28 @@ class MentorNetTest(unittest.TestCase):
         penalty = model.weighted_parameter_decay(torch.ones(4))
         self.assertGreater(float(penalty.item()), 0.0)
         self.assertTrue(penalty.requires_grad)
+
+    def test_feature_preparation_accepts_shared_non_cifar_data_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = prepare_trusted_mentor_features(
+                {
+                    "seed": 3,
+                    "data": {
+                        "name": "synthetic_binary_2d",
+                        "train_size": 18,
+                        "validation_size": 0,
+                        "test_size": 6,
+                    },
+                    "noise": {"name": "symmetric", "rate": 0.2, "seed": 3},
+                    "trusted_size": 18,
+                    "batch_size": 6,
+                    "student_epochs": 1,
+                    "student_model": "mlp",
+                    "student_width": 8,
+                },
+                directory,
+            )
+            self.assertTrue(output.is_file())
 
 
 if __name__ == "__main__":

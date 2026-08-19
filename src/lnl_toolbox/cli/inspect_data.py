@@ -6,21 +6,36 @@ import json
 from pathlib import Path
 
 from lnl_toolbox.cli import PromptCancelled, PromptSession, command_arguments, repository_root
-from lnl_toolbox.data import load_cifar10, load_cifar100, summarize_cifar
+from lnl_toolbox.data import DataSpec
+from lnl_toolbox.training.data_service import DATASETS
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Validate local CIFAR pickle files")
-    parser.add_argument("dataset", choices=("cifar10", "cifar100"))
+    parser = argparse.ArgumentParser(description="Validate a registered local dataset")
+    parser.add_argument("dataset", choices=DATASETS.names())
     parser.add_argument("--root", type=Path, default=None, help="Dataset directory; uses package data by default")
-    parser.add_argument("--split", choices=("train", "test", "all"), default="all")
+    parser.add_argument("--path", type=Path, default=None, help="Dataset source file")
+    parser.add_argument("--split", choices=("train", "validation", "test", "all"), default="all")
     return parser
 
 
-def _execute(dataset: str, root: Path | None, split: str) -> None:
-    loader = load_cifar10 if dataset == "cifar10" else load_cifar100
-    splits = ("train", "test") if split == "all" else (split,)
-    summaries = [summarize_cifar(loader(root, item)) for item in splits]
+def _execute(dataset: str, root: Path | None, split: str, path: Path | None = None) -> None:
+    spec = DataSpec(dataset, root=root, path=path)
+    DATASETS.validate(spec)
+    splits = ("train", "validation", "test") if split == "all" else (split,)
+    summaries = []
+    for item in splits:
+        try:
+            current = DATASETS.load(spec, item, seed=0)
+        except ValueError:
+            continue
+        summaries.append({
+            "dataset": current.dataset,
+            "split": current.split,
+            "samples": len(current),
+            "classes": current.num_classes,
+            "identity": current.identity.to_dict(),
+        })
     print(json.dumps(summaries, ensure_ascii=False, indent=2))
 
 
@@ -61,7 +76,7 @@ def main(
             _execute(*selection)
         else:
             args = build_parser().parse_args(arguments)
-            _execute(args.dataset, args.root, args.split)
+            _execute(args.dataset, args.root, args.split, args.path)
     except PromptCancelled:
         active_session.write("\n已取消。")
         return 130

@@ -113,7 +113,7 @@ class ImportanceReweightingUCIAdapterTest(unittest.TestCase):
             run_experiment(_config(source, sha256, 1), output_dir=run_dir)
             changed = _config(source, sha256, 2)
             changed["data"]["split"]["seed"] += 1
-            with self.assertRaisesRegex(ValueError, "identity mismatch|configuration mismatch"):
+            with self.assertRaisesRegex(ValueError, "identity mismatch|configuration mismatch|noise manifest|data_manifest"):
                 run_experiment(changed, resume=run_dir / "last.pt")
 
 

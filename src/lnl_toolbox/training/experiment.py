@@ -8,28 +8,18 @@ import json
 import math
 import platform
 from pathlib import Path
-import random
 import sys
 from typing import Any, Mapping
 
 import numpy as np
 import torch
 from torch import nn
-from torch.utils.data import DataLoader
 import yaml
 
 from lnl_toolbox.algorithms.supervised import SupervisedClassificationAlgorithm
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
 from lnl_toolbox.core.hyperparameters import resolve_parameter_sampling
-from lnl_toolbox.data import NoisyTargetDataset
-from lnl_toolbox.data.cifar import load_cifar10, load_cifar100
-from lnl_toolbox.data.torch_cifar import (
-    TorchCifarDataset,
-    build_cifar_transform,
-    cifar_pixel_mean,
-    stratified_split,
-    train_validation_split,
-)
+from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.evaluation.classification import evaluate_classification
 from lnl_toolbox.models.cifar_resnet import (
     cifar_resnet14,
@@ -52,6 +42,7 @@ from lnl_toolbox.plugins.builtin import (
 )
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import load_checkpoint, read_checkpoint, save_checkpoint
+from lnl_toolbox.training.data_service import prepare_experiment_data
 from lnl_toolbox.training.early_stopping import EarlyStopping
 from lnl_toolbox.training.noisy_labels import (
     checkpoint_noise_metadata,
@@ -215,41 +206,6 @@ def build_alpha_scaled_scheduler(optimizer, config: Mapping[str, Any] | None):
     if not config or str(config.get("name", "none")).lower() == "none":
         return None
     return AlphaScaledScheduler(optimizer, config)
-
-
-def _subset(indices: np.ndarray, labels: np.ndarray, size: int | None, seed: int) -> np.ndarray:
-    if size is None or size >= len(indices):
-        return indices
-    _, selected = stratified_split(labels[indices], size, seed)
-    return indices[selected]
-
-
-def _seed_worker(_worker_id: int) -> None:
-    worker_seed = torch.initial_seed() % (2 ** 32)
-    np.random.seed(worker_seed)
-    random.seed(worker_seed)
-
-
-def _loader(
-    dataset,
-    config: Mapping[str, Any],
-    *,
-    shuffle: bool,
-    seed: int,
-    drop_last: bool = False,
-) -> DataLoader:
-    workers = int(config.get("num_workers", 0))
-    return DataLoader(
-        dataset,
-        batch_size=int(config["batch_size"]),
-        shuffle=shuffle,
-        num_workers=workers,
-        pin_memory=bool(config.get("pin_memory", True)),
-        persistent_workers=workers > 0,
-        worker_init_fn=_seed_worker if workers else None,
-        generator=torch.Generator().manual_seed(seed),
-        drop_last=drop_last,
-    )
 
 
 def _environment(seed: int, device: torch.device) -> dict[str, Any]:
@@ -530,123 +486,37 @@ def run_supervised_experiment(
         if parameter_record is not None and saved_config.get("parameter_record") != parameter_record.to_dict():
             raise ValueError("Resume parameter sampling record changed")
 
-    data_config = config["data"]
-    dataset_name = str(data_config.get("name", "cifar10")).lower()
-    if dataset_name not in {"cifar10", "cifar100"}:
-        raise ValueError("Supervised runner supports cifar10 and cifar100")
-    loader_fn = load_cifar10 if dataset_name == "cifar10" else load_cifar100
-    num_classes = 10 if dataset_name == "cifar10" else 100
-    train_data = loader_fn(data_config.get("root"), "train")
-    test_data = loader_fn(data_config.get("root"), "test")
-    validation_size = int(data_config["validation_size"])
-    if validation_size == 0:
-        full_train_indices = np.arange(len(train_data), dtype=np.int64)
-        validation_indices = np.empty(0, dtype=np.int64)
-    else:
-        split_config = data_config.get("validation_split", {}) or {}
-        if not isinstance(split_config, Mapping):
-            raise TypeError("data.validation_split must be a mapping")
-        full_train_indices, validation_indices = train_validation_split(
-            train_data.labels,
-            validation_size,
-            seed,
-            strategy=str(split_config.get("strategy", "stratified")),
-            rng=str(split_config.get("rng", "default_rng")),
-        )
     noise_config = config.get("noise") or {}
     validation_target_source = str(
         noise_config.get("validation_targets", "clean")
     ).strip().lower()
-    manifest_indices = full_train_indices
-    if validation_target_source == "noisy":
-        manifest_indices = np.sort(
-            np.concatenate((full_train_indices, validation_indices))
-        )
-
-    manifest, manifest_path = prepare_noise_manifest(
+    requirements = DataRequirements(
+        roles=frozenset({
+            DataRole.TRAIN,
+            DataRole.NOISY_VALIDATION,
+            DataRole.CLEAN_VALIDATION,
+            DataRole.TEST,
+        }),
+        validation_targets=validation_target_source,
+    )
+    prepared = prepare_experiment_data(
         config,
-        dataset=dataset_name,
-        clean_targets=train_data.labels[manifest_indices],
-        global_indices=manifest_indices,
-        num_classes=num_classes,
+        requirements=requirements,
         run_dir=run_dir,
+        seed=seed,
         checkpoint_payload=checkpoint_payload,
-        dataset_targets=train_data.labels,
     )
-    train_indices = _subset(
-        full_train_indices,
-        train_data.labels,
-        data_config.get("max_train_samples"),
-        seed + 1,
-    )
-    validation_indices = _subset(
-        validation_indices,
-        train_data.labels,
-        data_config.get("max_validation_samples"),
-        seed + 2,
-    )
-    test_indices = _subset(
-        np.arange(len(test_data)),
-        test_data.labels,
-        data_config.get("max_test_samples"),
-        seed + 3,
-    )
-    preprocessing = str(data_config.get("preprocessing", "standard")).lower()
-    normalization = data_config.get("normalization")
-    if normalization is not None and not isinstance(normalization, Mapping):
-        raise TypeError("data.normalization must be a mapping")
-    normalization = dict(normalization or {})
-    if normalization and set(normalization) != {"mean", "std"}:
-        raise ValueError(
-            "data.normalization must contain exactly mean and std"
-        )
-    pixel_mean = (
-        cifar_pixel_mean(train_data.images)
-        if preprocessing == "gce2018"
-        else None
-    )
-    transform_options = {
-        "preprocessing": preprocessing,
-        "pixel_mean": pixel_mean,
-        "normalization_mean": normalization.get("mean"),
-        "normalization_std": normalization.get("std"),
-    }
-
-    clean_train_set = TorchCifarDataset(
-        train_data,
-        train_indices,
-        transform=build_cifar_transform(
-            True,
-            bool(data_config.get("augment", True)),
-            **transform_options,
-        ),
-    )
-    train_set = clean_train_set
+    dataset_name = prepared.dataset
+    num_classes = prepared.num_classes
+    manifest, manifest_path = prepared.manifest, prepared.manifest_path
     noise_metadata = None
-    if manifest is not None:
-        assert manifest_path is not None
-        train_set = NoisyTargetDataset(
-            clean_train_set, manifest.global_indices, manifest.noisy_targets
+    if manifest is not None and manifest_path is not None:
+        effective_rate = effective_subset_actual_rate(manifest, prepared.train_indices)
+        effective_validation_rate = (
+            effective_subset_actual_rate(manifest, prepared.validation_indices)
+            if validation_target_source == "noisy"
+            else None
         )
-        effective_rate = effective_subset_actual_rate(manifest, train_indices)
-    clean_validation_set = TorchCifarDataset(
-        train_data,
-        validation_indices,
-        transform=build_cifar_transform(False, **transform_options),
-    )
-    validation_set = clean_validation_set
-    effective_validation_rate = None
-    if manifest is not None and validation_target_source == "noisy":
-        validation_set = NoisyTargetDataset(
-            clean_validation_set,
-            manifest.global_indices,
-            manifest.noisy_targets,
-        )
-        effective_validation_rate = effective_subset_actual_rate(
-            manifest, validation_indices
-        )
-    if manifest is not None:
-        assert manifest_path is not None
         noise_metadata = checkpoint_noise_metadata(
             manifest,
             manifest_path,
@@ -657,24 +527,14 @@ def run_supervised_experiment(
             effective_validation_rate=effective_validation_rate,
         )
         config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
-
-    test_set = TorchCifarDataset(
-        test_data,
-        test_indices,
-        transform=build_cifar_transform(False, **transform_options),
+    train_loader = prepared.loader(DataRole.TRAIN)
+    validation_role = (
+        DataRole.NOISY_VALIDATION
+        if validation_target_source == "noisy"
+        else DataRole.CLEAN_VALIDATION
     )
-    loader_config = config["loader"]
-    train_loader = _loader(
-        train_set,
-        loader_config,
-        shuffle=True,
-        seed=seed,
-        drop_last=bool(loader_config.get("drop_last", False)),
-    )
-    validation_loader = _loader(
-        validation_set, loader_config, shuffle=False, seed=seed
-    )
-    test_loader = _loader(test_set, loader_config, shuffle=False, seed=seed)
+    validation_loader = prepared.loader(validation_role, shuffle=False)
+    test_loader = prepared.loader(DataRole.TEST, shuffle=False)
     evaluation_config = config.get("evaluation", {}) or {}
     selection_split = str(evaluation_config.get("selection_split", "validation")).lower()
     selection_criterion = build_builtin_loss(

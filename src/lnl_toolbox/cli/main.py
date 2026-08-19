@@ -31,8 +31,16 @@ from lnl_toolbox.composition import (
 from lnl_toolbox.core.config_overrides import apply_override_assignments
 from lnl_toolbox.evaluation.run_comparison import compare_runs, write_report
 from lnl_toolbox.training.runners import apply_epoch_override, resolve_runner, runner_names
+from lnl_toolbox.training.data_service import validate_data_config
 from lnl_toolbox.training.service import ExperimentService
 from lnl_toolbox.training.sweep import run_sweep
+
+
+def _validate_with_registry(config: dict[str, Any], *, check_data: bool):
+    runner = validate_config(config, check_data=False)
+    if check_data:
+        validate_data_config(config)
+    return runner
 
 
 def _source_options(parser: argparse.ArgumentParser) -> None:
@@ -288,7 +296,7 @@ def _doctor(args: argparse.Namespace) -> int:
     if config_path:
         try:
             config = resolve_config_paths(load_yaml(config_path), root)
-            runner = validate_config(config, check_data=args.check_data)
+            runner = _validate_with_registry(config, check_data=args.check_data)
             report(True, "配置", f"{config_path} -> {runner.name}")
         except (ImportError, OSError, TypeError, ValueError, RuntimeError) as exc:
             report(False, "配置", str(exc))
@@ -376,7 +384,7 @@ def _list_components(args: argparse.Namespace) -> int:
 
 def _validate(args: argparse.Namespace) -> int:
     config, path, _recipe, project = _load_source(args)
-    runner = validate_config(config, check_data=args.check_data)
+    runner = _validate_with_registry(config, check_data=args.check_data)
     print(f"配置有效: {path}")
     print(f"执行器: {runner.name}")
     print(f"项目根目录: {project}")
@@ -388,7 +396,7 @@ def _run(args: argparse.Namespace) -> int:
     config = apply_override_assignments(config, args.overrides)
     if args.epochs is not None:
         apply_epoch_override(config, args.epochs)
-    validate_config(config, check_data=(args.check_data or not args.dry_run))
+    _validate_with_registry(config, check_data=(args.check_data or not args.dry_run))
     if args.dry_run:
         _print_plan(config, path, project)
         return 0
@@ -411,7 +419,7 @@ def _resume(args: argparse.Namespace) -> int:
 def _sweep(args: argparse.Namespace) -> int:
     config, _path, recipe, _project = _load_source(args)
     config = apply_override_assignments(config, args.overrides)
-    validate_config(config, check_data=True)
+    _validate_with_registry(config, check_data=True)
     result = run_sweep(
         config,
         args.seeds,

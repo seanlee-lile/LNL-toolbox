@@ -22,14 +22,7 @@ from lnl_toolbox.algorithms.dual_t.evidence import (
 from lnl_toolbox.algorithms.supervised import SupervisedClassificationAlgorithm
 from lnl_toolbox.algorithms.transition_risk import ForwardRiskCorrector
 from lnl_toolbox.core import ExperimentContext, RunState
-from lnl_toolbox.data import NoisyTargetDataset
-from lnl_toolbox.data.cifar import load_cifar10
-from lnl_toolbox.data.torch_cifar import (
-    TorchCifarDataset,
-    build_cifar_transform,
-    cifar_pixel_mean,
-    stratified_split,
-)
+from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.evaluation.classification import evaluate_classification
 from lnl_toolbox.noise.estimators import PosteriorSnapshot
 from lnl_toolbox.noise.transition import TransitionArtifact
@@ -43,18 +36,16 @@ from lnl_toolbox.training.checkpoint import (
 )
 from lnl_toolbox.training.experiment import (
     _environment,
-    _loader,
     _resolved_noise_config,
-    _subset,
     build_model,
     build_optimizer,
     build_scheduler,
 )
+from lnl_toolbox.training.data_service import PreparedData, prepare_experiment_data
 from lnl_toolbox.training.noisy_labels import (
     checkpoint_noise_metadata,
     effective_subset_actual_rate,
     noise_mode,
-    prepare_noise_manifest,
 )
 from lnl_toolbox.training.snapshots import collect_posterior_snapshot
 
@@ -110,10 +101,7 @@ def _run_final_arm(
     scheduler_config: Mapping[str, Any],
     epochs: int,
     num_classes: int,
-    train_dataset: Any,
-    noisy_validation_dataset: Any,
-    clean_test_dataset: Any,
-    loader_config: Mapping[str, Any],
+    prepared_data: PreparedData,
     sampler_seed: int,
     rng_state: Mapping[str, Any],
     device: torch.device,
@@ -129,24 +117,13 @@ def _run_final_arm(
     scheduler = build_scheduler(optimizer, scheduler_config, epochs)
     criterion = build_builtin_loss({"name": "ce"}).to(device)
     train_loader = _RecordingLoader(
-        _loader(
-            train_dataset,
-            loader_config,
-            shuffle=True,
-            seed=sampler_seed,
-        )
+        prepared_data.loader(DataRole.TRAIN, generator_seed=sampler_seed)
     )
-    noisy_validation_loader = _loader(
-        noisy_validation_dataset,
-        loader_config,
-        shuffle=False,
-        seed=sampler_seed,
+    noisy_validation_loader = prepared_data.loader(
+        DataRole.NOISY_VALIDATION, shuffle=False, generator_seed=sampler_seed
     )
-    clean_test_loader = _loader(
-        clean_test_dataset,
-        loader_config,
-        shuffle=False,
-        seed=sampler_seed,
+    clean_test_loader = prepared_data.loader(
+        DataRole.TEST, shuffle=False, generator_seed=sampler_seed
     )
     risk_corrector = None if transition is None else ForwardRiskCorrector()
     algorithm = SupervisedClassificationAlgorithm(
@@ -316,27 +293,17 @@ def run_dual_t_evidence_experiment(
         )
     run_dir.mkdir(parents=True)
 
-    train_data = load_cifar10(data_config.get("root"), "train")
-    test_data = load_cifar10(data_config.get("root"), "test")
-    num_classes = 10
-    full_train_indices, validation_indices = stratified_split(
-        train_data.labels,
-        int(data_config["validation_size"]),
-        seed,
-    )
-    manifest_indices = np.sort(
-        np.concatenate((full_train_indices, validation_indices))
-    )
-    manifest, manifest_path = prepare_noise_manifest(
+    prepared = prepare_experiment_data(
         config,
-        dataset=dataset_name,
-        clean_targets=train_data.labels[manifest_indices],
-        global_indices=manifest_indices,
-        num_classes=num_classes,
+        requirements=DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
+            validation_targets="noisy",
+        ),
         run_dir=run_dir,
-        checkpoint_payload=None,
-        dataset_targets=train_data.labels,
+        seed=seed,
     )
+    dataset_name, num_classes = prepared.dataset, prepared.num_classes
+    manifest, manifest_path = prepared.manifest, prepared.manifest_path
     if (
         manifest is None
         or manifest_path is None
@@ -345,94 +312,19 @@ def run_dual_t_evidence_experiment(
         raise ValueError(
             "Dual-T evidence requires a synthetic manifest transition_matrix"
         )
-    train_indices = _subset(
-        full_train_indices,
-        train_data.labels,
-        data_config.get("max_train_samples"),
-        seed + 1,
-    )
-    validation_indices = _subset(
-        validation_indices,
-        train_data.labels,
-        data_config.get("max_validation_samples"),
-        seed + 2,
-    )
-    test_indices = _subset(
-        np.arange(len(test_data)),
-        test_data.labels,
-        data_config.get("max_test_samples"),
-        seed + 3,
-    )
-    preprocessing = str(
-        data_config.get("preprocessing", "standard")
-    ).lower()
-    pixel_mean = (
-        cifar_pixel_mean(train_data.images)
-        if preprocessing == "gce2018"
-        else None
-    )
-    transform_options = {
-        "preprocessing": preprocessing,
-        "pixel_mean": pixel_mean,
-    }
-    clean_train_set = TorchCifarDataset(
-        train_data,
-        train_indices,
-        transform=build_cifar_transform(
-            True,
-            bool(data_config.get("augment", True)),
-            **transform_options,
-        ),
-    )
-    noisy_train_set = NoisyTargetDataset(
-        clean_train_set,
-        manifest.global_indices,
-        manifest.noisy_targets,
-    )
-    clean_validation_set = TorchCifarDataset(
-        train_data,
-        validation_indices,
-        transform=build_cifar_transform(False, **transform_options),
-    )
-    noisy_validation_set = NoisyTargetDataset(
-        clean_validation_set,
-        manifest.global_indices,
-        manifest.noisy_targets,
-    )
-    clean_test_set = TorchCifarDataset(
-        test_data,
-        test_indices,
-        transform=build_cifar_transform(False, **transform_options),
-    )
-    loader_config = config["loader"]
-    posterior_train_loader = _loader(
-        noisy_train_set,
-        loader_config,
-        shuffle=True,
-        seed=seed,
-    )
-    posterior_validation_loader = _loader(
-        noisy_validation_set,
-        loader_config,
-        shuffle=False,
-        seed=seed,
-    )
-    posterior_test_loader = _loader(
-        clean_test_set,
-        loader_config,
-        shuffle=False,
-        seed=seed,
-    )
+    posterior_train_loader = prepared.loader(DataRole.TRAIN)
+    posterior_validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False)
+    posterior_test_loader = prepared.loader(DataRole.TEST, shuffle=False)
     noise_metadata = checkpoint_noise_metadata(
         manifest,
         manifest_path,
         run_dir,
-        effective_subset_actual_rate(manifest, train_indices),
+        effective_subset_actual_rate(manifest, prepared.train_indices),
         mode=noise_mode(config),
         validation_targets="noisy",
         effective_validation_rate=effective_subset_actual_rate(
             manifest,
-            validation_indices,
+            prepared.validation_indices,
         ),
     )
     config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
@@ -522,7 +414,7 @@ def run_dual_t_evidence_experiment(
         transition_evidence = build_transition_evidence(
             snapshot=persisted_snapshot,
             manifest=manifest,
-            sample_indices=train_indices,
+            sample_indices=prepared.train_indices,
             metadata={
                 "posterior_best_checkpoint_sha256": (
                     posterior_owner.state.best_posterior_checkpoint_sha256
@@ -572,10 +464,7 @@ def run_dual_t_evidence_experiment(
             scheduler_config=method_config.final_stage.scheduler,
             epochs=method_config.final_stage.epochs,
             num_classes=num_classes,
-            train_dataset=noisy_train_set,
-            noisy_validation_dataset=noisy_validation_set,
-            clean_test_dataset=clean_test_set,
-            loader_config=loader_config,
+            prepared_data=prepared,
             sampler_seed=sampler_seed,
             rng_state=arm_rng_state,
             device=device,

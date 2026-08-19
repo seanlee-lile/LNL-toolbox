@@ -89,7 +89,7 @@ class CNLCUWorkflowTest(unittest.TestCase):
         train, test = _cifar(classes * 4, "train", classes), _cifar(classes * 2, "test", classes)
         loader_name = "load_cifar10" if dataset == "cifar10" else "load_cifar100"
         with tempfile.TemporaryDirectory() as directory, patch(
-            f"lnl_toolbox.training.cnlcu_experiment.{loader_name}",
+            f"lnl_toolbox.data.sources.{loader_name}",
             side_effect=lambda _root, split: train if split == "train" else test,
         ):
             run_dir = run_experiment(config_factory(2, dataset), Path(directory) / "run")
@@ -164,7 +164,7 @@ class CNLCUWorkflowTest(unittest.TestCase):
     def test_resume_rejects_method_and_history_configuration_drift(self):
         train, test = _cifar(40, "train"), _cifar(20, "test")
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.cnlcu_experiment.load_cifar10",
+            "lnl_toolbox.data.sources.load_cifar10",
             side_effect=lambda _root, split: train if split == "train" else test,
         ):
             run_dir = run_experiment(_config(1), Path(directory) / "run")
@@ -180,7 +180,7 @@ class CNLCUWorkflowTest(unittest.TestCase):
     def test_soft_hard_resume_and_hard_detector_drift_are_rejected(self):
         train, test = _cifar(40, "train"), _cifar(20, "test")
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.cnlcu_experiment.load_cifar10",
+            "lnl_toolbox.data.sources.load_cifar10",
             side_effect=lambda _root, split: train if split == "train" else test,
         ):
             soft_dir = run_experiment(_config(1), Path(directory) / "soft")

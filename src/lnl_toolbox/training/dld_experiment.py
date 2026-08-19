@@ -33,10 +33,7 @@ from lnl_toolbox.algorithms.dld import (
     sample_labels,
     weighted_neighbor_distribution,
 )
-from lnl_toolbox.data import NoisyTargetDataset
-from lnl_toolbox.data.cifar import load_cifar10, load_cifar100
-from lnl_toolbox.data.multi_view import IndexedMultiViewCifarDataset, build_strong_cifar_transform
-from lnl_toolbox.data.torch_cifar import TorchCifarDataset, build_cifar_transform, stratified_split
+from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.models.feature_output import forward_with_features
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
@@ -46,19 +43,17 @@ from lnl_toolbox.training.dld_pretrained import (
 )
 from lnl_toolbox.training.experiment import (
     _environment,
-    _loader,
     _resolved_noise_config,
-    _subset,
     build_model,
     build_optimizer,
     build_scheduler,
 )
+from lnl_toolbox.training.data_service import PreparedData, prepare_experiment_data
 from lnl_toolbox.training.noisy_labels import (
     checkpoint_noise_metadata,
     effective_subset_actual_rate,
     file_sha256,
     noise_mode,
-    prepare_noise_manifest,
 )
 from lnl_toolbox.training.snapshots import FeatureSnapshot, collect_feature_snapshot
 
@@ -151,6 +146,7 @@ class DLDWorkflow:
         validation_snapshot: FeatureSnapshot,
         test_snapshot: FeatureSnapshot,
         loader_config: Mapping[str, Any],
+        prepared_data: PreparedData,
     ) -> None:
         self.config = dict(config)
         self.method_config = method_config
@@ -170,6 +166,7 @@ class DLDWorkflow:
         self.validation_snapshot = validation_snapshot
         self.test_snapshot = test_snapshot
         self.loader_config = dict(loader_config)
+        self.prepared_data = prepared_data
         self.state = DLDState()
         self.artifact: DLDPreCorrectionArtifact | None = None
         self.algorithm: DLDAlgorithm | None = None
@@ -423,9 +420,9 @@ class DLDWorkflow:
         assert self.algorithm is not None
         while self.state.completed_epochs < self.method_config.epochs:
             epoch = self.state.completed_epochs
-            loader = _loader(
-                _IndexDataset(self.train_indices), self.loader_config,
-                shuffle=True, seed=int(self.config.get("seed", 1)) + 5000 + epoch,
+            loader = self.prepared_data.loader_for_dataset(
+                _IndexDataset(self.train_indices), shuffle=True,
+                epoch=epoch, stream=5000,
             )
             totals = {
                 "direction_loss": 0.0,
@@ -591,56 +588,35 @@ def run_dld_experiment(
             raise ValueError("DLD diffusion epoch target cannot be reduced on resume")
 
     data_config = config["data"]
-    dataset = str(data_config.get("name", "cifar10")).lower()
-    if dataset not in {"cifar10", "cifar100"}:
-        raise ValueError("DLD first version supports CIFAR-10 and CIFAR-100")
-    load = load_cifar10 if dataset == "cifar10" else load_cifar100
-    classes = 10 if dataset == "cifar10" else 100
-    train_data = load(data_config.get("root"), "train")
-    test_data = load(data_config.get("root"), "test")
-    train_indices, validation_indices = stratified_split(
-        train_data.labels, int(data_config["validation_size"]), seed
+    prepared = prepare_experiment_data(
+        config,
+        requirements=DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
+            views=("weak", "strong"),
+            validation_targets="noisy",
+        ),
+        run_dir=run_dir, seed=seed, checkpoint_payload=checkpoint,
     )
-    manifest_indices = np.sort(np.concatenate((train_indices, validation_indices)))
-    manifest, manifest_path = prepare_noise_manifest(
-        config, dataset=dataset,
-        clean_targets=train_data.labels[manifest_indices],
-        global_indices=manifest_indices, num_classes=classes, run_dir=run_dir,
-        checkpoint_payload=checkpoint, dataset_targets=train_data.labels,
-    )
+    dataset, classes = prepared.dataset, prepared.num_classes
+    manifest, manifest_path = prepared.manifest, prepared.manifest_path
     if manifest is None or manifest_path is None:
         raise ValueError("DLD requires noisy train and validation labels")
-    train_indices = _subset(train_indices, train_data.labels, data_config.get("max_train_samples"), seed + 1)
-    validation_indices = _subset(validation_indices, train_data.labels, data_config.get("max_validation_samples"), seed + 2)
-    test_indices = _subset(np.arange(len(test_data)), test_data.labels, data_config.get("max_test_samples"), seed + 3)
-    if int(method.precorrection["k_neighbors"]) >= len(train_indices):
+    if int(method.precorrection["k_neighbors"]) >= len(prepared.train_indices):
         raise ValueError("DLD k_neighbors must be smaller than the effective train set")
     loader_config = config["loader"]
-    noisy_map = {int(index): int(target) for index, target in zip(manifest.global_indices, manifest.noisy_targets)}
-    weak_transform = build_cifar_transform(False)
-    strong_transform = build_strong_cifar_transform(magnitude=10)
-    multi_view = IndexedMultiViewCifarDataset(
-        train_data, train_indices, weak_transform=weak_transform,
-        strong_transform=strong_transform, targets_by_index=noisy_map,
-    )
+    multi_view = prepared.dataset_for(DataRole.TRAIN)
     def dual_view_loader(field: str):
-        return _loader(
-            _ViewDataset(multi_view, field), loader_config,
-            shuffle=False, seed=seed + (10 if field == "input" else 11),
+        return prepared.loader_for_dataset(
+            _ViewDataset(multi_view, field), shuffle=False,
+            stream=10 if field == "input" else 11,
         )
-
-    noisy_validation = NoisyTargetDataset(
-        TorchCifarDataset(train_data, validation_indices, transform=weak_transform),
-        manifest.global_indices, manifest.noisy_targets,
-    )
-    clean_test = TorchCifarDataset(test_data, test_indices, transform=weak_transform)
-    validation_loader = _loader(noisy_validation, loader_config, shuffle=False, seed=seed + 20)
-    test_loader = _loader(clean_test, loader_config, shuffle=False, seed=seed + 21)
+    validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False, stream=20)
+    test_loader = prepared.loader(DataRole.TEST, shuffle=False, stream=21)
     noise_metadata = checkpoint_noise_metadata(
         manifest, manifest_path, run_dir,
-        effective_subset_actual_rate(manifest, train_indices),
+        effective_subset_actual_rate(manifest, prepared.train_indices),
         mode=noise_mode(config), validation_targets="noisy",
-        effective_validation_rate=effective_subset_actual_rate(manifest, validation_indices),
+        effective_validation_rate=effective_subset_actual_rate(manifest, prepared.validation_indices),
     )
     config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
 
@@ -677,9 +653,9 @@ def run_dld_experiment(
         feature_model=feature_model, feature_identity=feature_identity,
         feature_source=feature_source,
         feature_source_provenance=feature_source_provenance,
-        train_indices=train_indices, dual_view_loader=dual_view_loader,
+        train_indices=prepared.train_indices, dual_view_loader=dual_view_loader,
         validation_snapshot=validation_snapshot, test_snapshot=test_snapshot,
-        loader_config=loader_config,
+        loader_config=loader_config, prepared_data=prepared,
     )
     if resume is not None:
         workflow.resume(resume)

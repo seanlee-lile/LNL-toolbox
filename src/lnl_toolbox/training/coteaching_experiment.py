@@ -8,21 +8,12 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-import numpy as np
 import torch
-from torch.utils.data import DataLoader
 import yaml
 
 from lnl_toolbox.algorithms.coteaching import CoTeachingAlgorithm, CoTeachingConfig
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
-from lnl_toolbox.data import NoisyTargetDataset
-from lnl_toolbox.data.cifar import load_cifar10, load_cifar100
-from lnl_toolbox.data.torch_cifar import (
-    TorchCifarDataset,
-    build_cifar_transform,
-    cifar_pixel_mean,
-    train_validation_split,
-)
+from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.losses.torch_losses import validate_per_sample_loss
 from lnl_toolbox.plugins.builtin import build_builtin_loss
 from lnl_toolbox.runtime import resolve_device, seed_everything
@@ -33,19 +24,16 @@ from lnl_toolbox.training.checkpoint import (
 )
 from lnl_toolbox.training.experiment import (
     _environment,
-    _loader,
     _resolved_noise_config,
-    _seed_worker,
-    _subset,
     build_model,
     build_optimizer,
     build_scheduler,
 )
+from lnl_toolbox.training.data_service import prepare_experiment_data
 from lnl_toolbox.training.noisy_labels import (
     checkpoint_noise_metadata,
     effective_subset_actual_rate,
     noise_mode,
-    prepare_noise_manifest,
 )
 
 
@@ -70,22 +58,6 @@ def _build_peer_models(
     ):
         raise RuntimeError("Co-teaching peers must have different initial parameters")
     return model_a, model_b
-
-
-def _train_loader_for_epoch(dataset, config: Mapping[str, Any], seed: int) -> DataLoader:
-    """Build an epoch-seeded loader so epoch-boundary resume is deterministic."""
-
-    workers = int(config.get("num_workers", 0))
-    return DataLoader(
-        dataset,
-        batch_size=int(config["batch_size"]),
-        shuffle=True,
-        num_workers=workers,
-        pin_memory=bool(config.get("pin_memory", True)),
-        persistent_workers=False,
-        worker_init_fn=_seed_worker if workers else None,
-        generator=torch.Generator().manual_seed(seed),
-    )
 
 
 @torch.inference_mode()
@@ -216,86 +188,30 @@ def run_coteaching_experiment(
         _validate_resume_config(config, saved_config)
 
     data_config = config["data"]
-    dataset_name = str(data_config.get("name", "cifar10")).lower()
-    if dataset_name not in {"cifar10", "cifar100"}:
-        raise ValueError("Co-teaching first version supports CIFAR-10 and CIFAR-100")
-    loader_fn = load_cifar10 if dataset_name == "cifar10" else load_cifar100
-    num_classes = 10 if dataset_name == "cifar10" else 100
-    train_data = loader_fn(data_config.get("root"), "train")
-    test_data = loader_fn(data_config.get("root"), "test")
     validation_size = int(data_config["validation_size"])
     if validation_size <= 0:
         raise ValueError("Co-teaching requires a non-empty noisy validation split")
-    split_config = data_config.get("validation_split", {}) or {}
-    full_train_indices, validation_indices = train_validation_split(
-        train_data.labels,
-        validation_size,
-        seed,
-        strategy=str(split_config.get("strategy", "stratified")),
-        rng=str(split_config.get("rng", "default_rng")),
-    )
     if str(config["noise"].get("validation_targets", "")).lower() != "noisy":
         raise ValueError("Co-teaching checkpoint selection requires noisy validation targets")
-    manifest_indices = np.sort(np.concatenate((full_train_indices, validation_indices)))
-    manifest, manifest_path = prepare_noise_manifest(
+    prepared = prepare_experiment_data(
         config,
-        dataset=dataset_name,
-        clean_targets=train_data.labels[manifest_indices],
-        global_indices=manifest_indices,
-        num_classes=num_classes,
+        requirements=DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
+            validation_targets="noisy",
+        ),
         run_dir=run_dir,
+        seed=seed,
         checkpoint_payload=checkpoint_payload,
-        dataset_targets=train_data.labels,
     )
+    dataset_name, num_classes = prepared.dataset, prepared.num_classes
+    manifest, manifest_path = prepared.manifest, prepared.manifest_path
     if manifest is None or manifest_path is None:
         raise ValueError("Co-teaching requires a noisy-label manifest")
+    validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False)
+    test_loader = prepared.loader(DataRole.TEST, shuffle=False)
 
-    train_indices = _subset(
-        full_train_indices, train_data.labels, data_config.get("max_train_samples"), seed + 1
-    )
-    validation_indices = _subset(
-        validation_indices,
-        train_data.labels,
-        data_config.get("max_validation_samples"),
-        seed + 2,
-    )
-    test_indices = _subset(
-        np.arange(len(test_data)),
-        test_data.labels,
-        data_config.get("max_test_samples"),
-        seed + 3,
-    )
-    preprocessing = str(data_config.get("preprocessing", "standard")).lower()
-    pixel_mean = cifar_pixel_mean(train_data.images) if preprocessing == "gce2018" else None
-    transform_options = {"preprocessing": preprocessing, "pixel_mean": pixel_mean}
-    clean_train_set = TorchCifarDataset(
-        train_data,
-        train_indices,
-        transform=build_cifar_transform(
-            True, bool(data_config.get("augment", True)), **transform_options
-        ),
-    )
-    train_set = NoisyTargetDataset(
-        clean_train_set, manifest.global_indices, manifest.noisy_targets
-    )
-    clean_validation_set = TorchCifarDataset(
-        train_data,
-        validation_indices,
-        transform=build_cifar_transform(False, **transform_options),
-    )
-    validation_set = NoisyTargetDataset(
-        clean_validation_set, manifest.global_indices, manifest.noisy_targets
-    )
-    test_set = TorchCifarDataset(
-        test_data,
-        test_indices,
-        transform=build_cifar_transform(False, **transform_options),
-    )
-    validation_loader = _loader(validation_set, config["loader"], shuffle=False, seed=seed)
-    test_loader = _loader(test_set, config["loader"], shuffle=False, seed=seed)
-
-    effective_rate = effective_subset_actual_rate(manifest, train_indices)
-    effective_validation_rate = effective_subset_actual_rate(manifest, validation_indices)
+    effective_rate = effective_subset_actual_rate(manifest, prepared.train_indices)
+    effective_validation_rate = effective_subset_actual_rate(manifest, prepared.validation_indices)
     noise_metadata = checkpoint_noise_metadata(
         manifest,
         manifest_path,
@@ -375,9 +291,7 @@ def run_coteaching_experiment(
             samples = 0.0
             clean_selected_a = 0
             clean_selected_b = 0
-            train_loader = _train_loader_for_epoch(
-                train_set, config["loader"], seed + epoch
-            )
+            train_loader = prepared.loader(DataRole.TRAIN, epoch=epoch)
             for raw_batch in train_loader:
                 result = algorithm.step(Batch(raw_batch), state)
                 count = result.metrics["samples"]

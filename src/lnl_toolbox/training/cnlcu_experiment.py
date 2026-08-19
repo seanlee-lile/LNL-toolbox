@@ -8,32 +8,26 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-import numpy as np
 import torch
 import yaml
 
 from lnl_toolbox.algorithms.cnlcu import CNLCUAlgorithm, CNLCUConfig
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
-from lnl_toolbox.data import NoisyTargetDataset
-from lnl_toolbox.data.cifar import load_cifar10, load_cifar100
-from lnl_toolbox.data.torch_cifar import (
-    TorchCifarDataset, build_cifar_transform, cifar_pixel_mean,
-    train_validation_split,
-)
+from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.plugins.builtin import build_builtin_loss
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import load_checkpoint, read_checkpoint, save_checkpoint
 from lnl_toolbox.training.coteaching_experiment import (
     _best_component_state, _build_peer_models, _evaluate_peers,
-    _resume_noise_spec, _train_loader_for_epoch,
+    _resume_noise_spec,
 )
 from lnl_toolbox.training.experiment import (
-    _environment, _loader, _resolved_noise_config, _subset,
+    _environment, _resolved_noise_config,
     build_optimizer, build_scheduler,
 )
+from lnl_toolbox.training.data_service import prepare_experiment_data
 from lnl_toolbox.training.noisy_labels import (
     checkpoint_noise_metadata, effective_subset_actual_rate, noise_mode,
-    prepare_noise_manifest,
 )
 
 
@@ -81,51 +75,27 @@ def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None =
         _validate_resume_config(config, saved_config)
 
     data_config = config["data"]
-    dataset_name = str(data_config.get("name", "cifar10")).lower()
-    if dataset_name not in {"cifar10", "cifar100"}:
-        raise ValueError("CNLCU supports CIFAR-10 and CIFAR-100")
-    loader_fn = load_cifar10 if dataset_name == "cifar10" else load_cifar100
-    num_classes = 10 if dataset_name == "cifar10" else 100
-    train_data, test_data = loader_fn(data_config.get("root"), "train"), loader_fn(data_config.get("root"), "test")
     validation_size = int(data_config["validation_size"])
     if validation_size <= 0:
         raise ValueError("CNLCU requires a non-empty noisy validation split")
-    split_config = data_config.get("validation_split", {}) or {}
-    full_train_indices, validation_indices = train_validation_split(
-        train_data.labels, validation_size, seed,
-        strategy=str(split_config.get("strategy", "stratified")),
-        rng=str(split_config.get("rng", "default_rng")),
-    )
     if str(config["noise"].get("validation_targets", "")).lower() != "noisy":
         raise ValueError("CNLCU checkpoint selection requires noisy validation targets")
-    manifest_indices = np.sort(np.concatenate((full_train_indices, validation_indices)))
-    manifest, manifest_path = prepare_noise_manifest(
-        config, dataset=dataset_name, clean_targets=train_data.labels[manifest_indices],
-        global_indices=manifest_indices, num_classes=num_classes, run_dir=run_dir,
-        checkpoint_payload=checkpoint_payload, dataset_targets=train_data.labels,
+    prepared = prepare_experiment_data(
+        config,
+        requirements=DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
+            validation_targets="noisy",
+        ),
+        run_dir=run_dir, seed=seed, checkpoint_payload=checkpoint_payload,
     )
+    dataset_name, num_classes = prepared.dataset, prepared.num_classes
+    manifest, manifest_path = prepared.manifest, prepared.manifest_path
     if manifest is None or manifest_path is None:
         raise ValueError("CNLCU requires a noisy-label manifest")
-    train_indices = _subset(full_train_indices, train_data.labels,
-                            data_config.get("max_train_samples"), seed + 1)
-    validation_indices = _subset(validation_indices, train_data.labels,
-                                 data_config.get("max_validation_samples"), seed + 2)
-    test_indices = _subset(np.arange(len(test_data)), test_data.labels,
-                           data_config.get("max_test_samples"), seed + 3)
-    preprocessing = str(data_config.get("preprocessing", "standard")).lower()
-    pixel_mean = cifar_pixel_mean(train_data.images) if preprocessing == "gce2018" else None
-    options = {"preprocessing": preprocessing, "pixel_mean": pixel_mean}
-    clean_train = TorchCifarDataset(train_data, train_indices,
-        transform=build_cifar_transform(True, bool(data_config.get("augment", True)), **options))
-    train_set = NoisyTargetDataset(clean_train, manifest.global_indices, manifest.noisy_targets)
-    clean_validation = TorchCifarDataset(train_data, validation_indices,
-        transform=build_cifar_transform(False, **options))
-    validation_set = NoisyTargetDataset(clean_validation, manifest.global_indices, manifest.noisy_targets)
-    test_set = TorchCifarDataset(test_data, test_indices, transform=build_cifar_transform(False, **options))
-    validation_loader = _loader(validation_set, config["loader"], shuffle=False, seed=seed)
-    test_loader = _loader(test_set, config["loader"], shuffle=False, seed=seed)
-    effective_rate = effective_subset_actual_rate(manifest, train_indices)
-    effective_validation_rate = effective_subset_actual_rate(manifest, validation_indices)
+    validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False)
+    test_loader = prepared.loader(DataRole.TEST, shuffle=False)
+    effective_rate = effective_subset_actual_rate(manifest, prepared.train_indices)
+    effective_validation_rate = effective_subset_actual_rate(manifest, prepared.validation_indices)
     noise_metadata = checkpoint_noise_metadata(
         manifest, manifest_path, run_dir, effective_rate, mode=noise_mode(config),
         validation_targets="noisy", effective_validation_rate=effective_validation_rate,
@@ -141,7 +111,7 @@ def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None =
         model_a=model_a, model_b=model_b, optimizer_a=optimizer_a, optimizer_b=optimizer_b,
         scheduler_a=scheduler_a, scheduler_b=scheduler_b, loss=criterion, device=device,
         method_config=method_config,
-        canonical_global_indices=torch.as_tensor(train_indices, dtype=torch.int64),
+        canonical_global_indices=torch.as_tensor(prepared.train_indices, dtype=torch.int64),
     )
     algorithm.setup(ExperimentContext(run_dir, config, seed))
     state, completed_epoch, best_epoch, best_primary = RunState(phase="train"), -1, -1, float("-inf")
@@ -168,7 +138,7 @@ def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None =
             sums: dict[str, float] = {}; samples = selected_a_total = selected_b_total = 0.0
             extrema: dict[str, float] = {}
             clean_a = clean_b = 0
-            for raw_batch in _train_loader_for_epoch(train_set, config["loader"], seed + epoch):
+            for raw_batch in prepared.loader(DataRole.TRAIN, epoch=epoch):
                 result = algorithm.step(Batch(raw_batch), state)
                 count = result.metrics["samples"]; samples += count
                 selected_a_total += result.metrics["selected_by_a_count"]

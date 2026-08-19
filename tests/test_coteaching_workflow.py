@@ -85,7 +85,7 @@ class CoTeachingWorkflowTest(unittest.TestCase):
 
     def test_fresh_resume_and_completed_resume_preserve_dual_state(self):
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.coteaching_experiment.load_cifar10",
+            "lnl_toolbox.data.sources.load_cifar10",
             side_effect=self._load_data,
         ):
             run_dir = run_experiment(_config(2), Path(directory) / "run")
@@ -129,7 +129,7 @@ class CoTeachingWorkflowTest(unittest.TestCase):
 
     def test_resume_rejects_method_configuration_drift(self):
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.coteaching_experiment.load_cifar10",
+            "lnl_toolbox.data.sources.load_cifar10",
             side_effect=self._load_data,
         ):
             run_dir = run_experiment(_config(1), Path(directory) / "run")

@@ -283,7 +283,7 @@ class KLIEPWorkflowTest(unittest.TestCase):
             changed["data"]["dimension"] = 19
             changed["model"]["in_features"] = 19
             changed["trainer"]["epochs"] = 3
-            with self.assertRaisesRegex(ValueError, "backend identity"):
+            with self.assertRaisesRegex(ValueError, "data_manifest|data identity"):
                 run_experiment(changed, resume=checkpoint)
 
     def test_resume_rejects_checkpoint_backend_hash_corruption(self) -> None:

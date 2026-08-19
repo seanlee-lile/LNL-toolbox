@@ -5,25 +5,16 @@ from __future__ import annotations
 from datetime import datetime
 import json
 from pathlib import Path
-import random
 from typing import Any, Mapping
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
-from torchvision import transforms
 import yaml
 
 from lnl_toolbox.algorithms.multi_model import ModelGroup
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
 from lnl_toolbox.core.hyperparameters import resolve_parameter_sampling
-from lnl_toolbox.data import NoisyTargetDataset
-from lnl_toolbox.data.cifar import load_cifar10, load_cifar100
-from lnl_toolbox.data.torch_cifar import (
-    TorchCifarDataset,
-    build_cifar_transform,
-    train_validation_split,
-)
+from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.evaluation.classification import evaluate_model_group
 from lnl_toolbox.models.cifar_six_conv import CifarSixConvNet
 from lnl_toolbox.plugins.builtin import (
@@ -37,64 +28,18 @@ from lnl_toolbox.training.checkpoint import (
     read_checkpoint,
     save_checkpoint,
 )
+from lnl_toolbox.training.data_service import prepare_experiment_data
 from lnl_toolbox.training.experiment import build_model
 from lnl_toolbox.training.noisy_labels import (
     checkpoint_noise_metadata,
     effective_subset_actual_rate,
     noise_mode,
-    prepare_noise_manifest,
 )
 from lnl_toolbox.training.progress import (
     TerminalTrainingProgress,
     standardize_epoch_row,
     write_training_curves_svg,
 )
-
-
-def _seed_worker(_worker_id: int) -> None:
-    worker_seed = torch.initial_seed() % (2**32)
-    np.random.seed(worker_seed)
-    random.seed(worker_seed)
-
-
-def _loader(dataset, config: Mapping[str, Any], *, shuffle: bool, seed: int):
-    generator = torch.Generator().manual_seed(seed)
-    return DataLoader(
-        dataset,
-        batch_size=int(config["batch_size"]),
-        shuffle=shuffle,
-        num_workers=int(config.get("num_workers", 0)),
-        pin_memory=bool(config.get("pin_memory", True)),
-        drop_last=bool(config.get("drop_last", False)) if shuffle else False,
-        generator=generator,
-        worker_init_fn=_seed_worker,
-        persistent_workers=bool(config.get("persistent_workers", False))
-        and int(config.get("num_workers", 0)) > 0,
-    )
-
-
-def _subset(
-    indices: np.ndarray,
-    labels: np.ndarray,
-    size: int | None,
-    seed: int,
-) -> np.ndarray:
-    if size is None or int(size) >= indices.size:
-        return indices
-    requested = int(size)
-    if requested <= 0:
-        raise ValueError("dataset subset sizes must be positive")
-    rng = np.random.default_rng(seed)
-    selected: list[np.ndarray] = []
-    classes = np.unique(labels[indices])
-    per_class = requested // classes.size
-    remainder = requested % classes.size
-    for position, class_id in enumerate(classes):
-        candidates = indices[labels[indices] == class_id].copy()
-        rng.shuffle(candidates)
-        quota = per_class + int(position < remainder)
-        selected.append(candidates[:quota])
-    return np.sort(np.concatenate(selected)).astype(np.int64, copy=False)
 
 
 def _build_member(config: Mapping[str, Any], num_classes: int):
@@ -174,22 +119,6 @@ def _apply_epoch_optimizer_schedule(
             group["betas"] = (beta1, float(group["betas"][1]))
 
 
-def _transform(data_config: Mapping[str, Any], *, training: bool):
-    preprocessing = str(data_config.get("preprocessing", "standard")).lower()
-    if preprocessing == "tensor_only":
-        if training and bool(data_config.get("augment", False)):
-            raise ValueError("tensor_only preprocessing does not apply augmentation")
-        return transforms.ToTensor()
-    normalization = dict(data_config.get("normalization") or {})
-    return build_cifar_transform(
-        training,
-        bool(data_config.get("augment", True)) if training else False,
-        preprocessing=preprocessing,
-        normalization_mean=normalization.get("mean"),
-        normalization_std=normalization.get("std"),
-    )
-
-
 def _run_directory(config: Mapping[str, Any], output_dir: str | Path | None) -> Path:
     if output_dir is not None:
         path = Path(output_dir)
@@ -246,99 +175,36 @@ def run_multi_model_experiment(
             raise ValueError("Resume configuration changed")
 
     data_config = dict(config["data"])
-    dataset_name = str(data_config["name"]).lower()
-    if dataset_name == "cifar10":
-        train_data = load_cifar10(data_config["root"], split="train")
-        test_data = load_cifar10(data_config["root"], split="test")
-        num_classes = 10
-    elif dataset_name == "cifar100":
-        train_data = load_cifar100(data_config["root"], split="train")
-        test_data = load_cifar100(data_config["root"], split="test")
-        num_classes = 100
-    else:
-        raise ValueError("multi-model runner currently supports CIFAR-10/100")
-
     validation_size = int(data_config.get("validation_size", 0))
-    if validation_size:
-        split = dict(data_config.get("validation_split") or {})
-        train_indices, validation_indices = train_validation_split(
-            train_data.labels,
-            validation_size,
-            seed,
-            strategy=str(split.get("strategy", "stratified")),
-            rng=str(split.get("rng", "default_rng")),
-        )
-    else:
-        train_indices = np.arange(len(train_data), dtype=np.int64)
-        validation_indices = np.empty(0, dtype=np.int64)
-    train_indices = _subset(
-        train_indices,
-        train_data.labels,
-        data_config.get("max_train_samples"),
-        seed + 1,
-    )
-    validation_indices = _subset(
-        validation_indices,
-        train_data.labels,
-        data_config.get("max_validation_samples"),
-        seed + 2,
-    ) if validation_indices.size else validation_indices
-    test_indices = _subset(
-        np.arange(len(test_data), dtype=np.int64),
-        test_data.labels,
-        data_config.get("max_test_samples"),
-        seed + 3,
-    )
-
-    manifest, manifest_path = prepare_noise_manifest(
+    prepared = prepare_experiment_data(
         config,
-        dataset=dataset_name,
-        clean_targets=train_data.labels[train_indices],
-        global_indices=train_indices,
-        num_classes=num_classes,
+        requirements=DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.CLEAN_VALIDATION, DataRole.TEST}),
+            manifest_scope="effective_train",
+        ),
         run_dir=run_dir,
+        seed=seed,
         checkpoint_payload=checkpoint_payload,
-        dataset_targets=train_data.labels,
     )
-    clean_train_set = TorchCifarDataset(
-        train_data, train_indices, transform=_transform(data_config, training=True)
-    )
-    train_set = clean_train_set
+    dataset_name = prepared.dataset
+    num_classes = prepared.num_classes
+    manifest, manifest_path = prepared.manifest, prepared.manifest_path
     noise_metadata = None
-    if manifest is not None:
-        assert manifest_path is not None
-        train_set = NoisyTargetDataset(
-            clean_train_set, manifest.global_indices, manifest.noisy_targets
-        )
+    if manifest is not None and manifest_path is not None:
         noise_metadata = checkpoint_noise_metadata(
             manifest,
             manifest_path,
             run_dir,
-            effective_subset_actual_rate(manifest, train_indices),
+            effective_subset_actual_rate(manifest, prepared.train_indices),
             mode=noise_mode(config),
         )
-    validation_set = (
-        None
-        if validation_indices.size == 0
-        else TorchCifarDataset(
-            train_data,
-            validation_indices,
-            transform=_transform(data_config, training=False),
-        )
-    )
-    test_set = TorchCifarDataset(
-        test_data,
-        test_indices,
-        transform=_transform(data_config, training=False),
-    )
-    loader_config = dict(config["loader"])
-    train_loader = _loader(train_set, loader_config, shuffle=True, seed=seed)
+    train_loader = prepared.loader(DataRole.TRAIN)
     validation_loader = (
         None
-        if validation_set is None
-        else _loader(validation_set, loader_config, shuffle=False, seed=seed)
+        if validation_size == 0
+        else prepared.loader(DataRole.CLEAN_VALIDATION, shuffle=False)
     )
-    test_loader = _loader(test_set, loader_config, shuffle=False, seed=seed)
+    test_loader = prepared.loader(DataRole.TEST, shuffle=False)
 
     model_configs = config.get("models")
     if not isinstance(model_configs, list) or len(model_configs) < 2:

@@ -14,7 +14,7 @@ from lnl_toolbox.catalog import (
     recipe_by_id,
     validate_config,
 )
-from tests.test_t_revision_workflow import _algorithm
+from test_t_revision_workflow import _algorithm
 
 
 class TRevisionReadinessTest(unittest.TestCase):

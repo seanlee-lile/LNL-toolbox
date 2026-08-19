@@ -460,3 +460,22 @@ The current reproduction acceptance status is maintained in `papers/implement/pa
 | `.github/workflows/quality.yml` | Python 3.10/3.12 lint, tests, coverage, CLI, wheel installation. |
 
 Paper mathematics and dedicated experiment runners remain unchanged by this infrastructure pass.
+# 统一数据协议文件图（2026-08-18）
+
+| 文件 | 责任 |
+|---|---|
+| `data/contracts.py` | `DataSpec`、`DatasetIdentity`、`RawDatasetSplit`、`DataRequirements`、角色与适配器协议 |
+| `data/registry.py` | 数据适配器注册、别名解析和未知数据集诊断 |
+| `data/sources.py` | CIFAR、CIFAR 二分类视图、synthetic、UCI 适配器 |
+| `data/cifar_n.py` | CIFAR-10N/100N 人工噪声标签版本与 clean-label 对齐验证 |
+| `data/mnist.py` | 本地 MNIST/Fashion-MNIST 适配器；禁止自动下载 |
+| `data/real_noise.py` | Clothing1M manifest 与 Animal-10N 文件夹懒加载 |
+| `data/views.py` | 稳定 global-index 的单/多视图 Dataset 和动态 overlay |
+| `training/data_service.py` | 唯一 prepare 入口、split/noise/role/view/loader/manifest/resume |
+| `training/reproduction_data.py` | 旧 `prepare_noisy_classification()` 兼容代理 |
+| `training/checkpoint.py` | checkpoint 自动注入并校验 `data_manifest` 指纹 |
+| `cli/inspect_data.py` | 使用同一 Registry 的数据检查入口 |
+| `tests/test_data_service.py` | 协议、泄漏、global index、loader seed、篡改和 runner 静态门禁 |
+| `tests/test_data_adapters.py` | CIFAR-N、MNIST、真实噪声、UCI、synthetic fixture |
+
+所有计划内论文 runner 已直接调用 `prepare_experiment_data()`；论文 objective、模型、优化器和训练阶段定义未移入数据层。

@@ -10,17 +10,10 @@ from typing import Any, Mapping
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
 import yaml
 
 from lnl_toolbox.algorithms.cwd import CWDGlobalObjective
-from lnl_toolbox.data.binary_benchmarks import (
-    cifar_airplane_automobile_view,
-    corrupt_binary_labels,
-    stratified_binary_splits,
-)
-from lnl_toolbox.data.cifar import CifarData, load_cifar10
-from lnl_toolbox.data.torch_cifar import TorchCifarDataset, build_cifar_transform
+from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.estimators.cwd import CWDEstimator
 from lnl_toolbox.evaluation.classification import evaluate_classification
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
@@ -35,51 +28,8 @@ from lnl_toolbox.training.checkpoint import (
     restore_rng_state,
 )
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
+from lnl_toolbox.training.data_service import prepare_experiment_data
 from lnl_toolbox.training.snapshots import collect_feature_snapshot
-
-
-def _loader(dataset, config: Mapping[str, Any], *, shuffle: bool, seed: int) -> DataLoader:
-    workers = int(config.get("num_workers", 0))
-    return DataLoader(
-        dataset,
-        batch_size=int(config["batch_size"]),
-        shuffle=shuffle,
-        num_workers=workers,
-        pin_memory=bool(config.get("pin_memory", True)),
-        persistent_workers=workers > 0,
-        generator=torch.Generator().manual_seed(seed),
-        drop_last=bool(config.get("drop_last", False)) if shuffle else False,
-    )
-
-
-def _binary_cifar_corpus(root: str | Path | None) -> tuple[CifarData, np.ndarray]:
-    train = load_cifar10(root, "train")
-    test = load_cifar10(root, "test")
-    train_images, train_labels, train_source = cifar_airplane_automobile_view(train)
-    test_images, test_labels, test_source = cifar_airplane_automobile_view(test)
-    data = CifarData(
-        np.concatenate((train_images, test_images)),
-        np.concatenate((train_labels, test_labels)),
-        ("airplane", "automobile"),
-        "combined",
-        "cifar10_airplane_automobile",
-    )
-    source_indices = np.concatenate((train_source, len(train) + test_source))
-    return data, source_indices
-
-
-def _limit_indices(labels: np.ndarray, maximum: int | None, seed: int) -> np.ndarray:
-    if maximum is None or int(maximum) >= labels.size:
-        return np.arange(labels.size, dtype=np.int64)
-    if int(maximum) < 4:
-        raise ValueError("CWD max_samples must contain at least four samples")
-    random = np.random.default_rng(seed)
-    parts = []
-    for class_index in (0, 1):
-        candidates = np.flatnonzero(labels == class_index)
-        random.shuffle(candidates)
-        parts.append(candidates[: int(maximum) // 2])
-    return np.sort(np.concatenate(parts))
 
 
 def _build_model(config: Mapping[str, Any]):
@@ -182,66 +132,28 @@ def run_cwd_experiment(
         raise ValueError("CWD resume configuration mismatch")
 
     data_config = config["data"]
-    corpus, source_indices = _binary_cifar_corpus(data_config.get("root"))
-    limited = _limit_indices(corpus.labels, data_config.get("max_samples"), seed)
-    images = corpus.images[limited]
-    clean_labels = corpus.labels[limited]
-    source_indices = source_indices[limited]
     folds = int(data_config.get("folds", 5))
     fold_index = int(data_config.get("fold_index", 0))
-    splits = stratified_binary_splits(clean_labels, folds=folds, seed=seed)
-    if not 0 <= fold_index < len(splits):
-        raise ValueError("CWD fold_index is outside the configured fold range")
-    train_positions, test_positions = splits[fold_index]
-
     noise_config = config["noise"]
     rho_positive = float(noise_config["rho_positive"])
     rho_negative = float(noise_config["rho_negative"])
-    noise_seed = int(noise_config.get("seed", seed))
-    manifest = corrupt_binary_labels(
-        clean_labels[train_positions], rho_positive, rho_negative, noise_seed
+    prepared = prepare_experiment_data(
+        config,
+        requirements=DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.TEST}),
+            manifest_scope="effective_train",
+        ),
+        run_dir=run_dir, seed=seed, checkpoint_payload=checkpoint,
     )
-    manifest.dataset = "cifar10_airplane_automobile"
-    manifest.metadata.update(
-        {
-            "folds": folds,
-            "fold_index": fold_index,
-            "source_global_indices": source_indices[train_positions].tolist(),
-        }
-    )
-    manifest_path = run_dir / "noise_manifest.npz"
-    if checkpoint is None:
-        manifest.save(manifest_path)
-    else:
-        expected = checkpoint.get("noise_mapping_hash")
-        if expected != manifest.mapping_hash:
-            raise ValueError("CWD resume noise manifest mismatch")
-
-    train_data = CifarData(
-        images[train_positions],
-        manifest.noisy_targets,
-        corpus.class_names,
-        "train",
-        corpus.dataset,
-    )
-    test_data = CifarData(
-        images[test_positions],
-        clean_labels[test_positions],
-        corpus.class_names,
-        "test",
-        corpus.dataset,
-    )
-    transform = build_cifar_transform(
-        True, bool(data_config.get("augment", False))
-    )
-    evaluation_transform = build_cifar_transform(False)
-    train_set = TorchCifarDataset(train_data, transform=transform)
-    snapshot_set = TorchCifarDataset(train_data, transform=evaluation_transform)
-    test_set = TorchCifarDataset(test_data, transform=evaluation_transform)
-    loader_config = config["loader"]
-    train_loader = _loader(train_set, loader_config, shuffle=True, seed=seed)
-    snapshot_loader = _loader(snapshot_set, loader_config, shuffle=False, seed=seed)
-    test_loader = _loader(test_set, loader_config, shuffle=False, seed=seed)
+    if prepared.num_classes != 2 or prepared.manifest is None or prepared.manifest_path is None:
+        raise ValueError("CWD requires a noisy binary dataset view")
+    manifest, manifest_path = prepared.manifest, prepared.manifest_path
+    manifest.metadata.update({"folds": folds, "fold_index": fold_index})
+    if checkpoint is not None and checkpoint.get("noise_mapping_hash") != manifest.mapping_hash:
+        raise ValueError("CWD resume noise manifest mismatch")
+    train_loader = prepared.loader(DataRole.TRAIN)
+    snapshot_loader = prepared.loader(DataRole.TRAIN_EVAL, shuffle=False)
+    test_loader = prepared.loader(DataRole.TEST, shuffle=False)
 
     cwd_config = config.get("cwd", {})
     cwd_variant = str(cwd_config.get("variant", "multiclass")).strip().lower()
@@ -294,7 +206,7 @@ def run_cwd_experiment(
             model,
             snapshot_loader,
             device,
-            dataset=corpus.dataset,
+            dataset=prepared.dataset,
             split=f"train_fold_{fold_index}",
             feature_extractor=lambda current, inputs: forward_with_features(current, inputs).features,
         )

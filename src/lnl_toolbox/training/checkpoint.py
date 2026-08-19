@@ -3,6 +3,8 @@ from __future__ import annotations
 """Canonical checkpoint v2 plus safe readers for both historical layouts."""
 
 from dataclasses import asdict
+import hashlib
+import json
 from pathlib import Path
 import random
 from typing import Any, Mapping
@@ -76,11 +78,31 @@ def restore_rng_state(state: Mapping[str, Any]) -> None:
             torch.cuda.set_rng_state_all(normalized_cuda_states)
 
 
+def _data_manifest_fingerprint(directory: Path) -> str | None:
+    manifest_path = directory / "data_manifest.json"
+    if not manifest_path.is_file():
+        return None
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    recorded = manifest.pop("fingerprint", None)
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    actual = hashlib.sha256(canonical.encode()).hexdigest()
+    if recorded != actual:
+        raise ValueError("data_manifest.json fingerprint is invalid")
+    return actual
+
+
 def atomic_save(payload: Mapping[str, Any], path: str | Path) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".tmp")
-    torch.save(dict(payload), temporary)
+    saved = dict(payload)
+    data_fingerprint = _data_manifest_fingerprint(destination.parent)
+    if data_fingerprint is not None:
+        expected = {"data_fingerprint": data_fingerprint}
+        if "data" in saved and dict(saved["data"]) != expected:
+            raise ValueError("checkpoint data identity does not match data_manifest.json")
+        saved["data"] = expected
+    torch.save(saved, temporary)
     temporary.replace(destination)
 
 
@@ -185,9 +207,15 @@ def save_checkpoint(
 
 
 def read_checkpoint(path: str | Path, device: torch.device | str = "cpu") -> dict[str, Any]:
-    payload = torch.load(Path(path), map_location=device, weights_only=False)
+    checkpoint_path = Path(path)
+    payload = torch.load(checkpoint_path, map_location=device, weights_only=False)
     if not isinstance(payload, dict):
         raise ValueError("Checkpoint payload must be a mapping")
+    data_fingerprint = _data_manifest_fingerprint(checkpoint_path.parent)
+    if data_fingerprint is not None and "data" in payload:
+        saved_fingerprint = dict(payload["data"]).get("data_fingerprint")
+        if saved_fingerprint != data_fingerprint:
+            raise ValueError("checkpoint data identity does not match data_manifest.json")
     return payload
 
 

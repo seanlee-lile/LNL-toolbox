@@ -99,7 +99,7 @@ class DivideMixWorkflowTest(unittest.TestCase):
         self.assertEqual(method["objective"]["lambda_r"], 1.0)
 
     def test_fresh_extension_and_completed_noop(self):
-        with tempfile.TemporaryDirectory() as directory, patch("lnl_toolbox.training.dividemix_experiment.load_cifar10", side_effect=self.load), patch("lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator", _FakeEstimator):
+        with tempfile.TemporaryDirectory() as directory, patch("lnl_toolbox.data.sources.load_cifar10", side_effect=self.load), patch("lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator", _FakeEstimator):
             run_dir = run_experiment(_config(1), Path(directory) / "run")
             payload = torch.load(run_dir / "last.pt", map_location="cpu", weights_only=False)
             self.assertEqual(payload["algorithm"]["dividemix_state"]["phase"], "completed")
@@ -117,7 +117,7 @@ class DivideMixWorkflowTest(unittest.TestCase):
             self.assertEqual(final["ensemble"], "official_logits_sum")
 
     def test_corrupt_ready_artifact_fails_instead_of_refitting(self):
-        with tempfile.TemporaryDirectory() as directory, patch("lnl_toolbox.training.dividemix_experiment.load_cifar10", side_effect=self.load), patch("lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator", _FakeEstimator):
+        with tempfile.TemporaryDirectory() as directory, patch("lnl_toolbox.data.sources.load_cifar10", side_effect=self.load), patch("lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator", _FakeEstimator):
             run_dir = run_experiment(_config(1), Path(directory) / "run")
             payload = torch.load(run_dir / "last.pt", map_location="cpu", weights_only=False)
             payload["algorithm"]["dividemix_state"]["phase"] = "co_divide_ready"
@@ -139,13 +139,13 @@ class DivideMixWorkflowTest(unittest.TestCase):
             return original(*args, **kwargs)
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "run"
-            with patch("lnl_toolbox.training.dividemix_experiment.load_cifar10", side_effect=self.load), patch("lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator", _FakeEstimator), patch("lnl_toolbox.training.dividemix_experiment._train_peer_epoch", side_effect=interrupt_b):
+            with patch("lnl_toolbox.data.sources.load_cifar10", side_effect=self.load), patch("lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator", _FakeEstimator), patch("lnl_toolbox.training.dividemix_experiment._train_peer_epoch", side_effect=interrupt_b):
                 with self.assertRaisesRegex(RuntimeError, "controlled B"):
                     run_experiment(_config(1), run_dir)
             interrupted = torch.load(run_dir / "last.pt", map_location="cpu", weights_only=False)
             self.assertEqual(interrupted["algorithm"]["dividemix_state"]["phase"], "network_a_ready")
             steps_a = interrupted["algorithm"]["dividemix_state"]["optimizer_steps_a"]
-            with patch("lnl_toolbox.training.dividemix_experiment.load_cifar10", side_effect=self.load), patch("lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator", _FakeEstimator):
+            with patch("lnl_toolbox.data.sources.load_cifar10", side_effect=self.load), patch("lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator", _FakeEstimator):
                 run_experiment(_config(1), resume=run_dir / "last.pt")
             resumed = torch.load(run_dir / "last.pt", map_location="cpu", weights_only=False)
             self.assertEqual(resumed["algorithm"]["dividemix_state"]["optimizer_steps_a"], steps_a)
@@ -153,7 +153,7 @@ class DivideMixWorkflowTest(unittest.TestCase):
     def test_cifar100_lightweight_workflow(self):
         train, test = _data100(220, "train"), _data100(100, "test")
         value = _config(1); value["data"].update({"name": "cifar100", "validation_size": 100, "max_train_samples": 100, "max_validation_samples": 100, "max_test_samples": 100})
-        with tempfile.TemporaryDirectory() as directory, patch("lnl_toolbox.training.dividemix_experiment.load_cifar100", side_effect=lambda _root, split: train if split == "train" else test), patch("lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator", _FakeEstimator):
+        with tempfile.TemporaryDirectory() as directory, patch("lnl_toolbox.data.sources.load_cifar100", side_effect=lambda _root, split: train if split == "train" else test), patch("lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator", _FakeEstimator):
             run_dir = run_experiment(value, Path(directory) / "run")
             final = json.loads((run_dir / "final_metrics.json").read_text())
             self.assertEqual(final["completed_epochs"], 1)

@@ -78,7 +78,7 @@ class VolMinNetWorkflowTest(unittest.TestCase):
 
     def test_fresh_resume_extension_and_completed_noop(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.volminnet_experiment.load_cifar10", side_effect=self._load
+            "lnl_toolbox.data.sources.load_cifar10", side_effect=self._load
         ):
             run_dir = run_experiment(_config(1), Path(directory) / "run")
             first = torch.load(run_dir / "last.pt", map_location="cpu", weights_only=False)
@@ -113,7 +113,7 @@ class VolMinNetWorkflowTest(unittest.TestCase):
 
     def test_uninterrupted_matches_epoch_boundary_resume(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.volminnet_experiment.load_cifar10", side_effect=self._load
+            "lnl_toolbox.data.sources.load_cifar10", side_effect=self._load
         ):
             direct = run_experiment(_config(2), Path(directory) / "direct")
             resumed = run_experiment(_config(1), Path(directory) / "resumed")
@@ -126,7 +126,7 @@ class VolMinNetWorkflowTest(unittest.TestCase):
 
     def test_resume_rejects_method_drift(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.volminnet_experiment.load_cifar10", side_effect=self._load
+            "lnl_toolbox.data.sources.load_cifar10", side_effect=self._load
         ):
             run_dir = run_experiment(_config(1), Path(directory) / "run")
             changed = _config(2)
@@ -138,7 +138,7 @@ class VolMinNetWorkflowTest(unittest.TestCase):
         train = _cifar(200, "train", 100)
         test = _cifar(100, "test", 100)
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.volminnet_experiment.load_cifar100",
+            "lnl_toolbox.data.sources.load_cifar100",
             side_effect=lambda _root, split: train if split == "train" else test,
         ):
             run_dir = run_experiment(_config(1, "cifar100"), Path(directory) / "run")
@@ -148,7 +148,7 @@ class VolMinNetWorkflowTest(unittest.TestCase):
     def test_test_metrics_do_not_select_best(self) -> None:
         config = _config(1)
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.volminnet_experiment.load_cifar10", side_effect=self._load
+            "lnl_toolbox.data.sources.load_cifar10", side_effect=self._load
         ), patch(
             "lnl_toolbox.training.volminnet_experiment._evaluate_clean",
             return_value={"loss": 999.0, "accuracy": 0.0, "samples": 10.0},

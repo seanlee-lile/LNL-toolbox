@@ -11,31 +11,25 @@ from typing import Any, Mapping
 import numpy as np
 import torch
 import yaml
-from torch.utils.data import Subset
-from torch.utils.data import DataLoader
-from torchvision import transforms
 
 from lnl_toolbox.algorithms.l2rw import meta_reweight
-from lnl_toolbox.data.trusted import TrustedSupervisionManifest, TrustedValidationProvider
-from lnl_toolbox.data import NoisyTargetDataset
-from lnl_toolbox.data.cifar import load_cifar10, load_cifar100
-from lnl_toolbox.data.torch_cifar import TorchCifarDataset
+from lnl_toolbox.data.trusted import TrustedSupervisionManifest
+from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.evaluation.classification import evaluate_classification
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
 from lnl_toolbox.training.experiment import build_optimizer, build_scheduler
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
-from lnl_toolbox.training.reproduction_data import build_reproduction_model, prepare_noisy_classification
-from lnl_toolbox.noise.manifest import NoiseManifest
+from lnl_toolbox.training.reproduction_data import build_reproduction_model
+from lnl_toolbox.training.data_service import prepare_experiment_data
 
 
 def _official_partition(size: int, parts: list[int], seed: int) -> list[np.ndarray]:
     indices = np.arange(size, dtype=np.int64)
     random = np.random.RandomState(seed)
     random.shuffle(indices)
-    result = []
-    offset = 0
+    result, offset = [], 0
     for part in parts:
         result.append(indices[offset:offset + int(part)].copy())
         offset += int(part)
@@ -44,151 +38,39 @@ def _official_partition(size: int, parts: list[int], seed: int) -> list[np.ndarr
     return result
 
 
-def _official_flip_labels(
-    labels: np.ndarray, num_classes: int, rate: float, seed: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Match generate_noisy_cifar_data.py::_flip_data exactly."""
-
-    values = np.asarray(labels, dtype=np.int64)
-    num_noise = int(values.size * float(rate))
-    random = np.random.RandomState(int(seed) + 1)
-    replacements = np.floor(
-        random.uniform(0.0, num_classes - 1, [num_noise])
-    ).astype(np.int64)
-    noisy = np.concatenate([replacements, values[num_noise:]])
-    clean_mask = np.concatenate([
-        np.zeros(num_noise, dtype=np.int64),
-        np.ones(values.size - num_noise, dtype=np.int64),
-    ])
-    order = np.arange(values.size, dtype=np.int64)
-    random.shuffle(order)
-    # The reference serializes ``img[order]`` and ``label[order]`` together.
-    # Return the permutation so callers can keep the original global sample
-    # indices aligned with the shuffled image/label pairs.
-    return noisy[order], clean_mask[order], order
-
-
 def _official_train_subsets(
     train_positions: np.ndarray, num_clean: int, seed: int
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Match generate_noisy_cifar_data.py's clean/noisy train split."""
+    """Match the official generated CIFAR clean/noisy train partition."""
 
-    noisy_positions, clean_positions = _official_partition(
-        int(train_positions.size),
-        [int(train_positions.size) - int(num_clean), int(num_clean)],
+    positions = np.asarray(train_positions, dtype=np.int64)
+    noisy, clean = _official_partition(
+        int(positions.size),
+        [int(positions.size) - int(num_clean), int(num_clean)],
         seed,
     )
-    return train_positions[noisy_positions], train_positions[clean_positions]
+    return positions[noisy], positions[clean]
 
 
-def _loader(dataset, *, batch_size: int, shuffle: bool, seed: int, num_workers: int, drop_last: bool) -> DataLoader:
-    return DataLoader(
-        dataset,
-        batch_size=int(batch_size),
-        shuffle=shuffle,
-        num_workers=int(num_workers),
-        pin_memory=True,
-        drop_last=bool(drop_last),
-        generator=torch.Generator().manual_seed(int(seed)),
-    )
+def _official_flip_labels(labels: np.ndarray, num_classes: int, rate: float, seed: int):
+    values = np.asarray(labels, dtype=np.int64)
+    num_noise = int(values.size * float(rate))
+    random = np.random.RandomState(int(seed) + 1)
+    replacements = np.floor(random.uniform(0.0, num_classes - 1, [num_noise])).astype(np.int64)
+    noisy = np.concatenate((replacements, values[num_noise:]))
+    clean_mask = np.concatenate((np.zeros(num_noise, dtype=np.int64), np.ones(values.size - num_noise, dtype=np.int64)))
+    order = np.arange(values.size, dtype=np.int64)
+    random.shuffle(order)
+    return noisy[order], clean_mask[order], order
 
 
 def _official_l2rw_transform(training: bool, augment: bool = True):
-    """Match Uber's CIFAR pipeline: float conversion followed by (x-.5)*2."""
-
+    from torchvision import transforms
     operations = []
     if training and augment:
-        operations.extend((
-            transforms.Pad(4),
-            transforms.RandomCrop(32),
-            transforms.RandomHorizontalFlip(),
-        ))
-    operations.extend((
-        transforms.ToTensor(),
-        transforms.Lambda(lambda value: (value - 0.5) * 2.0),
-    ))
+        operations.extend((transforms.Pad(4), transforms.RandomCrop(32), transforms.RandomHorizontalFlip()))
+    operations.extend((transforms.ToTensor(), transforms.Lambda(lambda value: (value - 0.5) * 2.0)))
     return transforms.Compose(operations)
-
-
-def _official_cifar_data(config: Mapping[str, Any], run_dir: Path, seed: int):
-    """Build the five official L2RW CIFAR subsets in one deterministic step."""
-
-    data_config = dict(config["data"])
-    name = str(data_config["name"]).lower()
-    if name not in {"cifar10", "cifar100"}:
-        return None
-    loader_config = dict(config.get("loader", {}))
-    root = data_config.get("root")
-    if name == "cifar10":
-        corpus, test_corpus, classes = load_cifar10(root, "train"), load_cifar10(root, "test"), 10
-    else:
-        corpus, test_corpus, classes = load_cifar100(root, "train"), load_cifar100(root, "test"), 100
-    num_val = int(data_config.get("num_val", 5000))
-    num_clean = int(data_config.get("num_clean", 100))
-    if not 0 < num_val < len(corpus) or not 0 < num_clean < len(corpus) - num_val:
-        raise ValueError("official L2RW num_val/num_clean are outside CIFAR bounds")
-    train_positions, validation_positions = _official_partition(
-        len(corpus), [len(corpus) - num_val, num_val], seed
-    )
-    noisy_indices, clean_indices = _official_train_subsets(
-        train_positions, num_clean, seed
-    )
-    noisy_targets, clean_mask, noisy_order = _official_flip_labels(
-        corpus.labels[noisy_indices], classes, float(config["noise"]["rate"]), seed
-    )
-    noisy_indices = noisy_indices[noisy_order]
-    noisy_clean_targets = corpus.labels[noisy_indices]
-    manifest = NoiseManifest(
-        name, "official_uniform_flip", seed, float(config["noise"]["rate"]),
-        noisy_clean_targets, noisy_targets,
-        global_indices=noisy_indices, num_classes=classes,
-        metadata={"source": "uber-research/learning-to-reweight-examples",
-                  "num_val": num_val, "num_clean": num_clean,
-                  "clean_mask_count": int(clean_mask.sum())},
-    )
-    manifest_path = run_dir / "noise_manifest.npz"
-    if manifest_path.is_file():
-        existing = NoiseManifest.load(manifest_path)
-        existing.validate_for(corpus.labels, name, classes, required_indices=noisy_indices)
-        manifest = existing
-    else:
-        manifest.save(manifest_path)
-    input_seed = int(data_config.get("input_seed", 0))
-    def transform(training: bool):
-        return _official_l2rw_transform(
-            training, bool(data_config.get("augment", True)) if training else False
-        )
-    noisy_set = NoisyTargetDataset(
-        TorchCifarDataset(corpus, noisy_indices, transform=transform(True)),
-        noisy_indices, manifest.noisy_targets,
-    )
-    clean_base = TorchCifarDataset(corpus, clean_indices, transform=transform(True))
-    validation_set = TorchCifarDataset(corpus, validation_positions, transform=transform(False))
-    test_set = TorchCifarDataset(test_corpus, transform=transform(False))
-    trusted_manifest = TrustedSupervisionManifest(
-        clean_indices, corpus.labels[clean_indices], name, "train_clean",
-        "official_generated", bool(np.unique(corpus.labels[clean_indices], return_counts=True)[1].min()
-        == np.unique(corpus.labels[clean_indices], return_counts=True)[1].max()),
-        {"source": "generate_noisy_cifar_data.py", "seed": seed},
-    )
-    trusted_path = run_dir / "trusted_validation_manifest.npz"
-    if trusted_path.is_file():
-        existing_trusted = TrustedSupervisionManifest.load(trusted_path)
-        if existing_trusted.fingerprint != trusted_manifest.fingerprint:
-            raise ValueError("official trusted manifest identity mismatch")
-        trusted_manifest = existing_trusted
-    else:
-        trusted_manifest.save(trusted_path)
-    return {
-        "train_loader": _loader(noisy_set, batch_size=int(loader_config.get("batch_size", 100)), shuffle=True, seed=input_seed, num_workers=int(loader_config.get("num_workers", 0)), drop_last=True),
-        "trusted_base": clean_base,
-        "validation_loader": _loader(validation_set, batch_size=int(loader_config.get("batch_size", 100)), shuffle=False, seed=input_seed, num_workers=int(loader_config.get("num_workers", 0)), drop_last=False),
-        "test_loader": _loader(test_set, batch_size=int(loader_config.get("batch_size", 100)), shuffle=False, seed=input_seed, num_workers=int(loader_config.get("num_workers", 0)), drop_last=False),
-        "num_classes": classes,
-        "dataset": name,
-        "manifest": trusted_manifest,
-        "input_seed": input_seed,
-    }
 
 
 def _trusted_manifest(
@@ -254,47 +136,46 @@ def run_l2rw_experiment(
             "seed", config.get("noise", {}).get("seed", 0)
         )
     )
-    official_data = None
-    if str(trusted_config.get("source", "")).strip().lower() == "official_generated":
-        official_data = _official_cifar_data(config, run_dir, data_seed)
-        if official_data is None:
-            raise ValueError(
-                "official_generated trusted supervision is supported only for CIFAR"
-            )
-        train_loader = official_data["train_loader"]
-        validation_loader = official_data["validation_loader"]
-        test_loader = official_data["test_loader"]
-        trusted_base = official_data["trusted_base"]
-        num_classes = int(official_data["num_classes"])
-        dataset_name = str(official_data["dataset"])
-        manifest = official_data["manifest"]
+    official_generated = str(trusted_config.get("source", "")).strip().lower() == "official_generated"
+    prepared = prepare_experiment_data(
+        config,
+        requirements=DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.TRUSTED_VALIDATION, DataRole.CLEAN_VALIDATION, DataRole.TEST}),
+            train_drop_last=True if official_generated else None,
+        ),
+        run_dir=run_dir,
+        seed=data_seed if official_generated else seed,
+    )
+    num_classes, dataset_name = prepared.num_classes, prepared.dataset
+    input_seed = int(config.get("data", {}).get("input_seed", seed))
+    train_loader = prepared.loader(DataRole.TRAIN, generator_seed=input_seed)
+    validation_loader = prepared.loader(DataRole.CLEAN_VALIDATION, shuffle=False, generator_seed=input_seed)
+    test_loader = prepared.loader(DataRole.TEST, shuffle=False, generator_seed=input_seed)
+    trusted_base = prepared.dataset_for(DataRole.TRUSTED_VALIDATION)
+    if official_generated:
+        trusted_indices = np.asarray(getattr(trusted_base, "indices"), dtype=np.int64)
+        trusted_targets = np.asarray([int(trusted_base[index]["target"]) for index in range(len(trusted_base))], dtype=np.int64)
+        counts = np.unique(trusted_targets, return_counts=True)[1]
+        manifest = TrustedSupervisionManifest(
+            trusted_indices, trusted_targets, dataset_name, "train_clean", "official_generated",
+            bool(counts.size and np.all(counts == counts[0])),
+            {"source": "generate_noisy_cifar_data.py", "seed": data_seed},
+        )
+        trusted_path = run_dir / "trusted_validation_manifest.npz"
+        if trusted_path.is_file() and TrustedSupervisionManifest.load(trusted_path).fingerprint != manifest.fingerprint:
+            raise ValueError("official trusted manifest identity mismatch")
+        if not trusted_path.is_file():
+            manifest.save(trusted_path)
     else:
-        data = prepare_noisy_classification(config, run_dir, seed)
-        train_loader = data.train_loader
-        validation_loader = data.validation_loader
-        test_loader = data.test_loader
-        manifest = _trusted_manifest(config, validation_loader.dataset, run_dir, data.dataset)
-        trusted_base = validation_loader.dataset
-        num_classes = int(data.num_classes)
-        dataset_name = str(data.dataset)
-    base_indices = getattr(trusted_base, "indices", None)
-    if base_indices is not None and len(base_indices) != manifest.global_indices.size:
-        position = {int(index): offset for offset, index in enumerate(base_indices)}
-        try:
-            selected_positions = [position[int(index)] for index in manifest.global_indices]
-        except KeyError as exc:
-            raise ValueError("trusted manifest is outside the validation pool") from exc
-        trusted_base = Subset(trusted_base, selected_positions)
-    provider = TrustedValidationProvider(trusted_base, manifest)
-    trusted_loader = provider.loader(
+        manifest = _trusted_manifest(config, trusted_base, run_dir, dataset_name)
+    trusted_loader = prepared.loader(
+        DataRole.TRUSTED_VALIDATION,
         batch_size=int(trusted_config.get("batch_size", config.get("loader", {}).get("batch_size", 128))),
-        shuffle=True,
-        seed=int(trusted_config.get("input_seed", official_data.get("input_seed", 0) if official_data else seed + 1000)),
-        num_workers=int(trusted_config.get("num_workers", 0)),
+        generator_seed=int(trusted_config.get("input_seed", seed + 1000)),
     )
     model = build_reproduction_model(config["model"], config["data"], num_classes).to(device)
     meta_model = model
-    if official_data is not None and str(config["model"].get("name", "")).lower() == "l2rw_resnet32":
+    if official_generated and str(config["model"].get("name", "")).lower() == "l2rw_resnet32":
         # The official assigned-weight replicas use batch statistics and only
         # an offset beta; model C keeps the regular moving-statistics BN.
         from lnl_toolbox.models.cifar_resnet import (

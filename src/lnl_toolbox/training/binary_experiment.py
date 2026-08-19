@@ -12,14 +12,12 @@ from torch.utils.data import DataLoader, Dataset
 
 from lnl_toolbox.algorithms.binary_risk import NatarajanUnbiasedRisk
 from lnl_toolbox.core.hyperparameters import resolve_parameter_sampling
+from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.data.binary_benchmarks import (
     BinaryBenchmark,
-    corrupt_binary_labels,
-    load_binary_npz,
 )
-from lnl_toolbox.data.binary_synthetic import generate_synthetic_binary_2d
-from lnl_toolbox.data.preprocessing import BinaryPreprocessingConfig, BinaryPreprocessor
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
+from lnl_toolbox.training.data_service import prepare_experiment_data
 
 
 class BinaryTensorDataset(Dataset[dict[str, Any]]):
@@ -124,73 +122,30 @@ def run_binary_experiment(config: Mapping[str, Any], output_dir: str | Path | No
     """Run a single configured binary experiment and persist its metrics."""
 
     resolved_config, record = resolve_parameter_sampling(config)
-    data_config = dict(resolved_config.get("data", {}))
-    source = Path(data_config["path"]) if data_config.get("path") else None
-    preprocessor = None
-    noise_manifest = None
-    clean_test_benchmark = None
-    data_name = str(data_config.get("name", "")).strip().lower()
-    if data_name in {"synthetic_binary_2d", "synthetic_binary"}:
-        size = int(data_config.get("train_size", 512))
-        data_seed = int(data_config.get("seed", resolved_config.get("seed", 1)))
-        clean = generate_synthetic_binary_2d(
-            size=size,
-            seed=data_seed,
-            split="train",
-        )
-        noise_config = dict(resolved_config.get("noise", {}))
-        risk_config = dict(resolved_config.get("risk", {}))
-        rho_positive = float(
-            noise_config.get("rho_positive", risk_config.get("rho_positive", 0.2))
-        )
-        rho_negative = float(
-            noise_config.get("rho_negative", risk_config.get("rho_negative", 0.1))
-        )
-        noise_manifest = corrupt_binary_labels(
-            clean.labels,
-            rho_positive,
-            rho_negative,
-            int(noise_config.get("seed", data_seed)),
-        )
-        benchmark = BinaryBenchmark(
-            clean.features,
-            noise_manifest.noisy_targets,
-            data_name,
-            global_indices=clean.global_indices,
-        )
-        test_size = int(data_config.get("test_size", 0))
-        if test_size > 0:
-            clean_test = generate_synthetic_binary_2d(
-                size=test_size,
-                seed=data_seed + 1,
-                split="test",
-                start_index=size,
-            )
-            clean_test_benchmark = BinaryBenchmark(
-                clean_test.features,
-                clean_test.labels,
-                data_name,
-                split="test",
-                global_indices=clean_test.global_indices,
-            )
-    elif source is not None and source.suffix.lower() == ".npz":
-        benchmark = load_binary_npz(source)
-    elif source is not None:
-        preprocessor = BinaryPreprocessor(BinaryPreprocessingConfig.from_mapping(data_config.get("preprocessing")))
-        benchmark = preprocessor.fit_transform(source, dataset=data_config.get("name", source.stem))
-    else:
-        raise ValueError("binary data requires data.path or a supported synthetic data.name")
-    dataset = BinaryTensorDataset(benchmark)
-    loader = DataLoader(
-        dataset,
-        batch_size=int(resolved_config.get("batch_size", 64)),
-        shuffle=True,
-        generator=torch.Generator().manual_seed(int(resolved_config.get("seed", 1))),
+    resolved_config = dict(resolved_config)
+    resolved_config.setdefault("loader", {"batch_size": int(resolved_config.get("batch_size", 64))})
+    destination = Path(output_dir or resolved_config.get("output_root", "artifacts/binary")).resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+    seed = int(resolved_config.get("seed", 1))
+    prepared = prepare_experiment_data(
+        resolved_config,
+        requirements=DataRequirements(roles=frozenset({DataRole.TRAIN, DataRole.TEST})),
+        run_dir=destination,
+        seed=seed,
     )
+    if prepared.num_classes != 2:
+        raise ValueError(
+            "binary experiment requires a registered binary dataset view "
+            f"with exactly two classes; got {prepared.dataset!r} with "
+            f"{prepared.num_classes} classes"
+        )
+    loader = prepared.loader(DataRole.TRAIN)
+    sample = prepared.dataset_for(DataRole.TRAIN)[0]
+    input_dim = int(torch.as_tensor(sample["input"]).numel())
     model_config = dict(resolved_config.get("model", {}))
     if not model_config:
         model_config = {"name": "mlp", "hidden_width": resolved_config.get("hidden_width", 128)}
-    model = build_binary_model(benchmark.features.shape[1], model_config)
+    model = build_binary_model(input_dim, model_config)
     optimizer = torch.optim.SGD(model.parameters(), lr=float(resolved_config.get("learning_rate", 0.01)), momentum=0.9)
     risk = None
     risk_config = resolved_config.get("risk")
@@ -203,26 +158,16 @@ def run_binary_experiment(config: Mapping[str, Any], output_dir: str | Path | No
     for epoch in range(epochs):
         row = train_binary_epoch(model, loader, optimizer, risk=risk)
         row["epoch"] = float(epoch + 1)
-        if clean_test_benchmark is not None:
-            test_loader = DataLoader(
-                BinaryTensorDataset(clean_test_benchmark),
-                batch_size=int(resolved_config.get("batch_size", 64)),
-                shuffle=False,
-            )
+        if len(prepared.dataset_for(DataRole.TEST)) > 0:
+            test_loader = prepared.loader(DataRole.TEST, shuffle=False)
             evaluation = evaluate_binary(model, test_loader)
             row["test_loss"] = evaluation["loss"]
             row["test_accuracy"] = evaluation["accuracy"]
         rows.append(row)
-    destination = Path(output_dir or resolved_config.get("output_root", "artifacts/binary"))
-    destination.mkdir(parents=True, exist_ok=True)
     import json
     (destination / "resolved_config.json").write_text(json.dumps(resolved_config, indent=2), encoding="utf-8")
     if record is not None:
         (destination / "parameter_record.json").write_text(json.dumps(record.to_dict(), indent=2), encoding="utf-8")
-    if preprocessor is not None:
-        preprocessor.save(destination / "preprocessing.json")
-    if noise_manifest is not None:
-        noise_manifest.save(destination / "noise_manifest.npz")
     (destination / "metrics.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
     return destination
 

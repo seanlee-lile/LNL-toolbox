@@ -50,7 +50,7 @@ class NoisyCeBaselineTest(unittest.TestCase):
             return train_data if split == "train" else test_data
 
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.experiment.load_cifar10", side_effect=load_data
+            "lnl_toolbox.data.sources.load_cifar10", side_effect=load_data
         ), patch(
             "lnl_toolbox.training.experiment.evaluate_classification",
             return_value={"loss": 1.0, "accuracy": 0.25, "samples": 10.0},
@@ -89,7 +89,7 @@ class NoisyCeBaselineTest(unittest.TestCase):
             return {"loss": 1.0, "accuracy": 0.25, "samples": float(len(loader.dataset))}
 
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.experiment.load_cifar10", side_effect=load_data
+            "lnl_toolbox.data.sources.load_cifar10", side_effect=load_data
         ), patch("lnl_toolbox.training.experiment.evaluate_classification", side_effect=evaluate):
             run_dir = run_experiment(_config(), directory)
             manifest = NoiseManifest.load(run_dir / "noise_manifest.npz")
@@ -137,7 +137,7 @@ class NoisyCeBaselineTest(unittest.TestCase):
             }
 
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.experiment.load_cifar10", side_effect=load_data
+            "lnl_toolbox.data.sources.load_cifar10", side_effect=load_data
         ), patch(
             "lnl_toolbox.training.experiment.evaluate_classification",
             side_effect=evaluate,
@@ -210,7 +210,7 @@ class NoisyCeBaselineTest(unittest.TestCase):
             return train_data if split == "train" else test_data
 
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.experiment.load_cifar10", side_effect=load_data
+            "lnl_toolbox.data.sources.load_cifar10", side_effect=load_data
         ), patch(
             "lnl_toolbox.training.experiment.evaluate_classification",
             return_value={"loss": 1.0, "accuracy": 0.25, "samples": 10.0},
@@ -229,7 +229,7 @@ class NoisyCeBaselineTest(unittest.TestCase):
             return train_data if split == "train" else test_data
 
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.experiment.load_cifar10", side_effect=load_data
+            "lnl_toolbox.data.sources.load_cifar10", side_effect=load_data
         ), patch(
             "lnl_toolbox.training.experiment.evaluate_classification",
             return_value={"loss": 1.0, "accuracy": 0.25, "samples": 10.0},

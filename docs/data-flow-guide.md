@@ -735,3 +735,21 @@ metrics.jsonl
 ```
 
 参数抽样、regularizer、selector 和风险校正均通过组合接口接入；论文名称不进入统一 `experiment.py` 的训练分支。resume 时必须保持参数记录、组件私有状态和 artifact 身份一致。
+# 统一数据服务（2026-08-18）
+
+所有训练 runner 的数据构建统一进入：
+
+```python
+prepared = prepare_experiment_data(
+    config,
+    requirements=DataRequirements(...),
+    run_dir=run_dir,
+    seed=seed,
+)
+```
+
+`DatasetRegistry` 负责名称/别名到 `DatasetAdapter` 的映射；适配器只验证并读取数据源。`DataRequirements` 由 runner 声明角色、视图、划分和 loader 行为，不包含论文名称。`PreparedData` 统一提供 train、train_eval、noisy/clean/trusted validation、test，以及按 global index 构造的动态子集。
+
+标准训练 batch 为 `input/target/index`，可选包含 `views`、`strong_input` 和动态 overlay。训练角色禁止暴露 `clean_target`。每次运行写入 `data_manifest.json`，checkpoint 自动记录其指纹；数据版本、标签、split、预处理、视图或 loader 身份变化时恢复立即失败。
+
+内置 Registry 当前支持 CIFAR-10/100、CIFAR airplane/automobile、CIFAR-10N/100N、MNIST、Fashion-MNIST、Clothing1M、Animal-10N、UCI binary、synthetic binary/multiclass。训练期间均不自动下载。
