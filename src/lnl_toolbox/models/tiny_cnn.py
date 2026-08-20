@@ -10,11 +10,18 @@ from .feature_output import FeatureOutput
 class TinyCNN(nn.Module):
     """A compact three-block CNN for end-to-end CIFAR validation."""
 
-    def __init__(self, num_classes: int = 10, width: int = 64) -> None:
+    def __init__(
+        self,
+        num_classes: int = 10,
+        width: int = 64,
+        input_channels: int = 3,
+    ) -> None:
         super().__init__()
+        if input_channels <= 0:
+            raise ValueError("input_channels must be positive")
         channels = (width, width * 2, width * 4)
         layers: list[nn.Module] = []
-        incoming = 3
+        incoming = int(input_channels)
         for outgoing in channels:
             layers.extend((
                 nn.Conv2d(incoming, outgoing, 3, padding=1, bias=False),

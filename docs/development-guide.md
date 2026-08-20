@@ -217,3 +217,20 @@ smoke 配置预检。
 必须保证：global index 在 shuffle/subset/view 后稳定；observed 与 clean label 分开保存；真实噪声训练 split 不向 batch 暴露 clean label；缺失数据只输出本地准备说明，不下载、不回退。需要持久化预处理或 split 状态的适配器可提供 `identity_artifacts()`，由统一服务写入并验证 run-local JSON。
 
 runner 只允许调用 `prepare_experiment_data()`，不得直接导入 CIFAR reader、`TorchCifarDataset` 或自行构造 `DataLoader`。新增/修改 runner 后运行 `tests/test_data_service.py` 的静态门禁。
+
+## 机器本地数据登记与可用性证据（2026-08-20）
+
+`data/local_catalog.py` 只保存本机路径和验证证据，不保存数据本身。新增适配器登记项时，
+必须维持 `registered -> layout_validated -> training_verified` 的严格语义；文件签名改变后，
+既有训练证据必须转为 `verification_stale`。不得因为注册成功或一次 `validate()` 成功就宣称
+数据可训练。
+
+CLI、Web、doctor、dry-run、run 和 sweep 不得直接读取 `DatasetRegistry`、
+`LocalDatasetCatalog` 或自行判断文件布局；它们必须调用 `DataService`。新增数据管理能力时，
+readiness 检查必须真实加载 train/test，不能用 `Path.exists()` 代替 adapter 校验。Web
+focused tests 必须与 `tests/` 一起进入 CI。
+
+每个新增文件格式至少需要：官方结构的临时 fixture、通过 `ExperimentService` 的实际
+1 epoch、`data_manifest.json`、epoch 指标，以及训练 batch 不泄漏 clean target 的既有门禁。
+本机真实数据若可用，还应再通过 `lnl data verify`。外部数据格式依据应来自数据集发布方
+或论文课题组官方仓库；未经上述实验，不在文档中标记为训练可用。

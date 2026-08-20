@@ -59,7 +59,11 @@ from lnl_toolbox.training.progress import (
 def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
     name = str(config.get("name", "preact_resnet18")).lower()
     if name == "tiny_cnn":
-        return TinyCNN(num_classes, int(config.get("width", 64)))
+        return TinyCNN(
+            num_classes,
+            int(config.get("width", 64)),
+            int(config.get("input_channels", 3)),
+        )
     if name == "mentor_wide_resnet":
         return MentorWideResNet101(
             num_classes,
@@ -517,16 +521,19 @@ def run_supervised_experiment(
             if validation_target_source == "noisy"
             else None
         )
+        metadata_mode = (
+            "real_world" if manifest.noise_type == "real_world" else noise_mode(config)
+        )
         noise_metadata = checkpoint_noise_metadata(
             manifest,
             manifest_path,
             run_dir,
             effective_rate,
-            mode=noise_mode(config),
+            mode=metadata_mode,
             validation_targets=validation_target_source,
             effective_validation_rate=effective_validation_rate,
         )
-        config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
+        config["noise"] = _resolved_noise_config(noise_config, noise_metadata)
     train_loader = prepared.loader(DataRole.TRAIN)
     validation_role = (
         DataRole.NOISY_VALIDATION
@@ -542,7 +549,16 @@ def run_supervised_experiment(
     ).to(device)
     selection_loader = test_loader if selection_split == "test" else validation_loader
 
-    model = build_model(config["model"], num_classes)
+    model_config = dict(config["model"])
+    if (
+        str(model_config.get("name", "")).lower() == "tiny_cnn"
+        and "input_channels" not in model_config
+    ):
+        sample_input = prepared.dataset_for(DataRole.TRAIN)[0]["input"]
+        sample_shape = tuple(torch.as_tensor(sample_input).shape)
+        if len(sample_shape) == 3:
+            model_config["input_channels"] = int(sample_shape[0])
+    model = build_model(model_config, num_classes)
     criterion = build_builtin_loss(config["loss"]).to(device)
     selector = build_builtin_selector(config["selector"])
     update_policy = build_builtin_parameter_update_policy(

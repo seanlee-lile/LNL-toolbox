@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import uuid
+import webbrowser
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -348,6 +349,105 @@ def _paper_payload() -> list[dict[str, object]]:
     ]
 
 
+def _dataset_payload() -> dict[str, object]:
+    """Expose adapter-backed readiness through the shared DataService."""
+
+    from lnl_toolbox.training.data_service import DataService
+
+    service = DataService()
+    adapters = [
+        name for name in service.registry.names() if not name.startswith("synthetic_")
+    ]
+    return {
+        "catalog": str(service.catalog.path),
+        "adapters": adapters,
+        "datasets": [report.to_dict() for report in service.list_datasets()],
+    }
+
+
+def _dataset_action(payload: object) -> dict[str, object]:
+    """Run a non-training data action directly through DataService."""
+
+    if not isinstance(payload, dict):
+        raise ValueError("dataset request must be a JSON object")
+    action = str(payload.get("action", "")).strip().lower()
+    name = str(payload.get("name", "")).strip()
+    from lnl_toolbox.training.data_service import DataService
+
+    service = DataService()
+    if action == "list":
+        return _dataset_payload()
+    if action == "status":
+        value = service.status(name or None)
+        if isinstance(value, tuple):
+            return {"datasets": [item.to_dict() for item in value]}
+        return {"dataset": value.to_dict()}
+    if action == "path":
+        if not name:
+            raise ValueError("dataset path requires a name")
+        value = service.path(name)
+        return {"name": name, "path": None if value is None else str(value)}
+    if action == "register":
+        adapter = str(payload.get("adapter", "")).strip()
+        if not name or not adapter:
+            raise ValueError("dataset registration requires name and adapter")
+        data = {"name": adapter}
+        for source, target in (
+            ("root", "root"),
+            ("path", "path"),
+            ("labels", "noise_path"),
+            ("noise_variant", "noise_variant"),
+        ):
+            value = payload.get(source)
+            if value not in {None, ""}:
+                data[target] = value
+        return {
+            "dataset": service.register(name, adapter, data).to_dict(),
+            "message": "登记已保存。下一步请执行 inspect，实际加载 train/test。",
+            "next_action": "inspect",
+        }
+    if action == "inspect":
+        if not name:
+            raise ValueError("dataset inspection requires a name")
+        report = service.inspect(name)
+        if report.status != "ready":
+            raise ValueError(report.error or f"dataset is not ready: {name}")
+        return {
+            "dataset": report.to_dict(),
+            "message": "数据检查通过。可继续执行 verify，完成一轮训练验证。",
+            "next_action": "verify",
+        }
+    if action == "remove":
+        if not name:
+            raise ValueError("dataset removal requires a name")
+        service.remove(name)
+        return {
+            "removed": name,
+            "message": f"已删除数据登记：{name}。原始数据文件未被删除。",
+            "next_action": "list",
+        }
+    raise ValueError(f"unsupported dataset action: {action}")
+
+
+def _dataset_verify_job(payload: object) -> Job:
+    """Start the training-backed verify command as a safe background job."""
+
+    if not isinstance(payload, dict):
+        raise ValueError("dataset request must be a JSON object")
+    name = str(payload.get("name", "")).strip()
+    if not name:
+        raise ValueError("dataset verification requires a name")
+    command = resolve_lnl_command() + ["data", "verify", name]
+    recipe = str(payload.get("recipe", "")).strip()
+    output_dir = str(payload.get("output_dir", "")).strip()
+    if recipe:
+        command.extend(("--recipe", recipe))
+    if output_dir:
+        command.extend(("--output-dir", output_dir))
+    display = "lnl " + " ".join(shlex.quote(item) for item in command[len(resolve_lnl_command()):])
+    return _start_process("data-verify", command, display)
+
+
 def _project_path(value: object) -> Path:
     """Resolve a user path while keeping web writes inside this project."""
 
@@ -569,7 +669,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = urlparse(self.path).path
-        if path == "/":
+        if path in {"/", "/recipe", "/recipe/"}:
             self._serve_file(WEB_ROOT / "index.html", "text/html; charset=utf-8")
             return
         if path == "/api/commands":
@@ -595,6 +695,12 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         if path == "/api/papers":
             try:
                 _json_response(self, _paper_payload())
+            except Exception as exc:
+                _json_response(self, {"error": str(exc)}, 500)
+            return
+        if path == "/api/datasets":
+            try:
+                _json_response(self, _dataset_payload())
             except Exception as exc:
                 _json_response(self, {"error": str(exc)}, 500)
             return
@@ -627,6 +733,25 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/datasets":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                if isinstance(payload, dict) and payload.get("action") == "verify":
+                    _json_response(self, _job_payload(_dataset_verify_job(payload)), 202)
+                else:
+                    _json_response(self, _dataset_action(payload))
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+                OSError,
+                json.JSONDecodeError,
+            ) as exc:
+                _json_response(self, {"error": str(exc)}, 400)
+            except Exception as exc:  # Keep the Web client responsive on backend faults.
+                _json_response(self, {"error": f"数据操作失败：{exc}"}, 500)
+            return
         if path == "/api/configs":
             try:
                 length = int(self.headers.get("Content-Length", "0"))
@@ -667,13 +792,23 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
 
-def serve(host: str = "127.0.0.1", port: int = 8765) -> None:
+def serve(
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    *,
+    open_browser: bool = False,
+) -> None:
     server = ThreadingHTTPServer((host, port), ConsoleHandler)
-    print(f"LNL web console: http://{host}:{port}", flush=True)
+    browser_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    url = f"http://{browser_host}:{port}/"
+    print(f"LNL web: {url}", flush=True)
+    if open_browser:
+        threading.Timer(0.25, webbrowser.open, args=(url,)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -686,8 +821,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="LNL local web command console")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--open", action="store_true", dest="open_browser")
     args = parser.parse_args(argv)
-    serve(args.host, args.port)
+    serve(args.host, args.port, open_browser=args.open_browser)
     return 0
 
 

@@ -10,12 +10,47 @@ import unittest
 import numpy as np
 import torch
 
-from lnl_toolbox.data import DataRequirements, DataRole, DataSpec
+from lnl_toolbox.data import (
+    DataRequirements,
+    DataRole,
+    DataSpec,
+    DatasetRegistry,
+    LocalDatasetCatalog,
+    RawDatasetSplit,
+)
 from lnl_toolbox.training.checkpoint import atomic_save, read_checkpoint
 from lnl_toolbox.training.data_service import (
     DATASETS,
+    DataService,
     prepare_experiment_data,
 )
+
+
+class _FixtureAdapter:
+    name = "fixture"
+    aliases = ("fixture-data",)
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+
+    def validate(self, spec: DataSpec) -> None:
+        if self.fail:
+            raise ValueError("broken fixture layout")
+        if spec.root is None or not spec.root.is_dir():
+            raise FileNotFoundError("fixture root missing")
+
+    def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
+        self.validate(spec)
+        count = 8 if split == "train" else 4
+        return RawDatasetSplit(
+            inputs=np.arange(count * 2, dtype=np.float32).reshape(count, 2),
+            observed_targets=np.arange(count, dtype=np.int64) % 2,
+            global_indices=np.arange(count, dtype=np.int64),
+            dataset=self.name,
+            split=split,
+            num_classes=2,
+            source=str(spec.root),
+        )
 
 
 def _config() -> dict:
@@ -45,6 +80,41 @@ def _write_fashion_idx(root: Path, split: str, count: int) -> None:
 
 
 class DataServiceTest(unittest.TestCase):
+    def test_management_status_path_and_real_split_inspection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            registry = DatasetRegistry((_FixtureAdapter(),))
+            catalog = LocalDatasetCatalog(root / "catalog.json")
+            service = DataService(registry, catalog)
+
+            self.assertEqual(service.status("fixture").status, "missing")
+            registered = service.register(
+                "lab-fixture", "fixture-data", {"root": root}
+            )
+            self.assertEqual(registered.status, "incomplete")
+            self.assertEqual(service.path("lab-fixture"), root)
+
+            inspected = service.inspect("lab-fixture")
+            self.assertEqual(inspected.status, "ready")
+            self.assertEqual(inspected.train_samples, 8)
+            self.assertEqual(inspected.test_samples, 4)
+            self.assertEqual(inspected.classes, 2)
+            self.assertEqual(len(inspected.fingerprint or ""), 64)
+            self.assertEqual(service.status("lab-fixture").status, "ready")
+
+    def test_failed_adapter_is_never_reported_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = DataService(
+                DatasetRegistry((_FixtureAdapter(fail=True),)),
+                LocalDatasetCatalog(root / "catalog.json"),
+            )
+            service.register("broken", "fixture", {"root": root})
+            report = service.inspect("broken")
+            self.assertEqual(report.status, "incomplete")
+            self.assertIn("broken fixture layout", report.error or "")
+            self.assertNotEqual(service.status("broken").status, "ready")
+
     def test_registry_alias_and_unknown_dataset(self) -> None:
         self.assertEqual(DATASETS.get("cifar-10").name, "cifar10")
         self.assertEqual(DATASETS.get("fashionmnist").name, "fashion_mnist")

@@ -6,13 +6,12 @@ import json
 from pathlib import Path
 
 from lnl_toolbox.cli import PromptCancelled, PromptSession, command_arguments, repository_root
-from lnl_toolbox.data import DataSpec
-from lnl_toolbox.training.data_service import DATASETS
+from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Validate a registered local dataset")
-    parser.add_argument("dataset", choices=DATASETS.names())
+    parser.add_argument("dataset", choices=DEFAULT_DATA_SERVICE.registry.names())
     parser.add_argument("--root", type=Path, default=None, help="Dataset directory; uses package data by default")
     parser.add_argument("--path", type=Path, default=None, help="Dataset source file")
     parser.add_argument("--split", choices=("train", "validation", "test", "all"), default="all")
@@ -20,13 +19,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _execute(dataset: str, root: Path | None, split: str, path: Path | None = None) -> None:
-    spec = DataSpec(dataset, root=root, path=path)
-    DATASETS.validate(spec)
+    config = {
+        "seed": 0,
+        "data": {"name": dataset, "root": root, "path": path},
+    }
+    spec = DEFAULT_DATA_SERVICE.validate_config(config)
     splits = ("train", "validation", "test") if split == "all" else (split,)
     summaries = []
     for item in splits:
         try:
-            current = DATASETS.load(spec, item, seed=0)
+            current = DEFAULT_DATA_SERVICE.registry.load(spec, item, seed=0)
         except ValueError:
             continue
         summaries.append({

@@ -97,17 +97,33 @@
       white-space: pre-wrap; overflow-wrap: anywhere;
     }
     .note { margin-top: 14px; padding: 10px 12px; border-left: 3px solid #f59e0b; color: #fde68a; background: rgba(120, 80, 0, .18); font-size: 12px; }
+    .data-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0 0 14px; }
+    .data-step { border: 1px solid var(--line); border-radius: 9px; padding: 9px 10px; color: var(--muted); background: #172033; }
+    .data-step.active { border-color: var(--accent); color: #bfdbfe; }
+    .data-step.done { border-color: var(--good); color: var(--good); }
+    .data-feedback { margin: 12px 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; background: #111a2a; }
+    .data-feedback.success { border-color: #226c57; }
+    .data-feedback.failed { border-color: #7f3030; color: #fecaca; }
+    .data-feedback p { margin: 4px 0; }
+    .data-table-wrap { overflow-x: auto; margin-top: 12px; }
+    .data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .data-table th, .data-table td { padding: 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .data-table th { color: var(--muted); }
+    .data-status-ready, .data-status-verified { color: var(--good); }
+    .data-status-incomplete { color: #fbbf24; }
+    .required-field::after { content: " · 必填"; color: #fbbf24; }
+    button.danger { border-color: #b91c1c; background: #5f1d24; }
     @media (max-width: 900px) {
       main { padding: 16px; }
       .layout { grid-template-columns: 1fr; }
-      .form-grid { grid-template-columns: 1fr; }
+      .form-grid, .data-steps { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
   <main>
-    <h1>LNL Toolbox Command Console</h1>
-    <div class="subtitle">左侧选择功能，右侧配置参数并预览指令；参数变化会即时反映在预览中。</div>
+    <h1 id="page-title">LNL Toolbox Command Console</h1>
+    <div id="page-subtitle" class="subtitle">左侧选择功能，右侧配置参数并预览指令；参数变化会即时反映在预览中。</div>
     <div class="layout">
       <aside class="panel">
         <div class="section-title">功能模块</div>
@@ -166,16 +182,22 @@
     </div>
   </main>
   <script>
-    const state = { selected: null, request: null, jobId: null, timer: null, module: "beginner", recipes: [], papers: [], yamlSchema: null };
-    const modules = [
+    const recipeMode = window.location.pathname === "/recipe" || window.location.pathname === "/recipe/";
+    const allModules = [
       { id: "beginner", label: "新手模式", description: "用配方、动作和轮次生成安全的 lnl 指令。", hint: "检查 → 预演 → 训练" },
       { id: "yaml", label: "新建 YAML", description: "从已有 recipe 组合损失、选择器和训练策略参数。", hint: "参数可选，实时预览" },
-      { id: "data", label: "数据与验证", description: "先验证数据与配置，或只做一次 dry-run。", hint: "不训练也能查问题" },
+      { id: "data", label: "本地数据集", description: "登记本机路径，并分别检查布局或完成 1 epoch 训练验证。", hint: "registered ≠ training_verified" },
       { id: "sweep", label: "多 seed Sweep", description: "为同一 recipe 顺序运行多个随机种子。", hint: "支持中断后恢复" },
       { id: "results", label: "运行管理", description: "恢复训练、查看报告或比较训练曲线。", hint: "checkpoint / report / compare" },
       { id: "papers", label: "论文方法", description: "按论文查看方法、配置 profile 与 recipe 变体。", hint: "论文目录" },
       { id: "advanced", label: "自由输入", description: "直接输入一条 lnl 指令，后端仍会安全解析。", hint: "高级用户" },
     ];
+    const modules = allModules;
+    const state = { selected: null, request: null, jobId: null, timer: null, module: recipeMode ? "yaml" : "beginner", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, yamlSchema: null, dataAction: "list", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, removeConfirmed: false };
+    if (recipeMode) {
+      document.getElementById("page-title").textContent = "LNL Toolbox Recipe Editor";
+      document.getElementById("page-subtitle").textContent = "从已有 recipe 组合配置，并查看或保存 YAML。";
+    }
     const moduleList = document.getElementById("module-list");
     const parameterPanel = document.getElementById("parameter-panel");
     const previewNode = document.getElementById("preview");
@@ -268,13 +290,215 @@
       if ([...document.getElementById("yaml-base").options].some(function (option) { return option.value === "cifar10-symmetric-ce-smoke"; })) document.getElementById("yaml-base").value = "cifar10-symmetric-ce-smoke";
       updateYamlFields();
     }
+    const DATASET_GUIDES = {
+      cifar10: {
+        title: "CIFAR-10",
+        root: "将官方压缩包完整解压；根目录直接包含 data_batch_1 到 data_batch_5、test_batch、batches.meta。",
+        action: "选择适配器 cifar10，数据根目录填写包含这些文件的文件夹。无需填写单文件路径或人工标签文件。",
+        note: "不要选择压缩包文件本身，也不要把路径填到上一级目录。"
+      },
+      cifar100: {
+        title: "CIFAR-100",
+        root: "将官方压缩包完整解压；根目录直接包含 train、test、meta。",
+        action: "选择适配器 cifar100，数据根目录填写包含 train/test/meta 的文件夹。",
+        note: "train 和 test 是官方 CIFAR-100 二进制文件，不是普通图片目录。"
+      },
+      cifar10_airplane_automobile: {
+        title: "CIFAR-10 airplane/automobile 二分类视图",
+        root: "准备已解压的 CIFAR-10 官方目录，结构与 CIFAR-10 相同。",
+        action: "选择该适配器，数据根目录填写 CIFAR-10 根目录；工具箱会自动保留 airplane 和 automobile 两类。",
+        note: "不需要另外复制或筛选图片。"
+      },
+      cifar10n: {
+        title: "CIFAR-10N",
+        root: "准备已解压的 CIFAR-10 根目录，并另外保存官方 CIFAR-10_human.pt。",
+        action: "根目录填写 CIFAR-10 文件夹；人工标签文件填写 CIFAR-10_human.pt 的完整路径。",
+        note: "基础 CIFAR 图像和官方人工标签文件都必须存在。"
+      },
+      cifar100n: {
+        title: "CIFAR-100N",
+        root: "准备已解压的 CIFAR-100 根目录，并另外保存官方 CIFAR-100_human.pt。",
+        action: "根目录填写 CIFAR-100 文件夹；人工标签文件填写 CIFAR-100_human.pt 的完整路径。",
+        note: "必须使用官方标签文件，不能用自定义 CSV 替代。"
+      },
+      mnist: {
+        title: "MNIST",
+        root: "准备官方 IDX/IDX.GZ 文件：train-images、train-labels、t10k-images、t10k-labels。",
+        action: "选择适配器 mnist，根目录填写这些文件所在目录，或包含 raw/MNIST/raw 的目录。",
+        note: "工具箱不联网下载数据。"
+      },
+      fashion_mnist: {
+        title: "Fashion-MNIST",
+        root: "准备官方 IDX/IDX.GZ 文件：train-images、train-labels、t10k-images、t10k-labels。",
+        action: "选择适配器 fashion_mnist，根目录填写文件所在目录。",
+        note: "必须是 Fashion-MNIST 的 IDX 文件，不是普通图片目录。"
+      },
+      clothing1m: {
+        title: "Clothing1M",
+        root: "根目录需要包含 noisy_train_key_list.txt、clean_val_key_list.txt、clean_test_key_list.txt、标签映射文件和图片。",
+        action: "选择适配器 clothing1m，根目录填写官方数据目录；相对路径以该目录为基准。",
+        note: "先执行 inspect，再执行 verify；不会自动下载或复制图片。"
+      },
+      animal10n: {
+        title: "Animal-10N",
+        root: "支持官方 data_batch_*.bin/test_batch.bin，或包含 training/testing（也可为 train/test）图片目录的结构。",
+        action: "选择适配器 animal10n，数据根目录填写包含上述文件或子目录的文件夹。",
+        note: "不要把 CIFAR-10 路径与 animal10n 适配器组合。"
+      },
+      uci_binary: {
+        title: "UCI 二分类表格",
+        root: "准备一个 CSV 或空白分隔文件；每行一个样本，并包含特征和二分类目标列。",
+        action: "选择适配器 uci_binary；单文件路径填写数据文件，数据根目录可留空。",
+        note: "不要把文件路径填到根目录字段。"
+      }
+    };
+
+    function datasetGuideHtml(adapter) {
+      const guide = DATASET_GUIDES[adapter] || {
+        title: adapter || "当前适配器",
+        root: "请先确认数据已按该数据集的官方格式完整解压。",
+        action: "根据适配器要求填写数据根目录、单文件路径或人工标签文件。",
+        note: "先执行 inspect；inspect 通过后再执行 verify。"
+      };
+      return '<div class="guide-card">' +
+        '<strong>' + escapeHtml(guide.title) + '</strong>' +
+        '<p><b>文件准备：</b>' + escapeHtml(guide.root) + '</p>' +
+        '<p><b>页面填写：</b>' + escapeHtml(guide.action) + '</p>' +
+        '<p><b>注意：</b>' + escapeHtml(guide.note) + '</p>' +
+        '</div>';
+    }
+
+    function updateDatasetGuideVisibility() {
+      const action = selectValue("data-action", "list");
+      const button = document.getElementById("data-guide-button");
+      const guide = document.getElementById("data-guide");
+      if (!button || !guide) return;
+      const registering = action === "register";
+      button.classList.toggle("hidden", !registering);
+      if (!registering) guide.classList.add("hidden");
+    }
+
+    function dataStatusLabel(item) {
+      if (item.training_evidence) return "训练已验证";
+      if (item.status === "ready") return "检查通过";
+      if (item.status === "incomplete" && item.location && !item.error) return "已登记，待检查";
+      if (item.status === "incomplete") return "检查失败";
+      return "未登记";
+    }
+    function dataStepsHtml(report) {
+      const registered = Boolean(report?.location);
+      const inspected = report?.status === "ready";
+      const verified = Boolean(report?.training_evidence);
+      const active = state.dataAction === "register" ? 0 : state.dataAction === "inspect" ? 1 : state.dataAction === "verify" ? 2 : -1;
+      return '<div class="data-steps" aria-label="数据准备步骤">' + [
+        ["1. 登记路径", registered], ["2. 实际检查", inspected], ["3. 一轮验证", verified]
+      ].map(function (item, index) {
+        return '<div class="data-step ' + (item[1] ? "done" : index === active ? "active" : "") + '">' + item[0] + (item[1] ? " ✓" : "") + '</div>';
+      }).join("") + '</div>';
+    }
+    function dataFeedbackHtml(report) {
+      if (state.dataResult?.error) return '<div class="data-feedback failed"><strong>操作失败</strong><p>' + escapeHtml(state.dataResult.error) + '</p></div>';
+      if (state.dataResult?.message) {
+        let detail = '';
+        if (report?.train_samples != null) detail += '<p>样本：' + report.train_samples + ' train / ' + report.test_samples + ' test；类别：' + report.classes + '</p>';
+        if (report?.fingerprint) detail += '<p>指纹：' + escapeHtml(report.fingerprint) + '</p>';
+        return '<div class="data-feedback success"><strong>操作完成</strong><p>' + escapeHtml(state.dataResult.message) + '</p>' + detail + '</div>';
+      }
+      if (!report) return '<div class="data-feedback"><strong>开始使用</strong><p>先选择“登记本机路径”，保存后依次执行实际检查和一轮验证。</p></div>';
+      if (report.training_evidence) return '<div class="data-feedback success"><strong>训练验证完成</strong><p>' + escapeHtml(report.name) + ' 已通过数据加载和一轮训练验证。</p><p>样本：' + report.train_samples + ' train / ' + report.test_samples + ' test；类别：' + report.classes + '</p><p>指纹：' + escapeHtml(report.fingerprint || "-") + '</p></div>';
+      if (report.status === "ready") return '<div class="data-feedback success"><strong>数据检查通过</strong><p>' + escapeHtml(report.name) + '：' + report.train_samples + ' train / ' + report.test_samples + ' test，' + report.classes + ' 类。</p><p>下一步：选择“verify”，完成一轮训练验证。</p></div>';
+      if (report.location && !report.error) return '<div class="data-feedback"><strong>路径已登记，尚未检查</strong><p>下一步：选择“inspect”，实际加载 train/test。登记成功不等于数据可训练。</p></div>';
+      return '<div class="data-feedback failed"><strong>数据尚未可用</strong><p>' + escapeHtml(report.error || "请登记正确路径后执行 inspect。") + '</p></div>';
+    }
+    function dataTableHtml(reports) {
+      return '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>数据集</th><th>状态</th><th>位置</th><th>Train / Test</th><th>训练验证</th></tr></thead><tbody>' + reports.map(function (item) {
+        const label = dataStatusLabel(item);
+        const statusClass = item.training_evidence ? "data-status-verified" : item.status === "ready" ? "data-status-ready" : item.status === "incomplete" ? "data-status-incomplete" : "";
+        return '<tr><td>' + escapeHtml(item.name) + '<br><span class="helper">' + escapeHtml(item.adapter) + '</span></td><td class="' + statusClass + '">' + escapeHtml(label) + '</td><td>' + escapeHtml(item.location || "-") + '</td><td>' + (item.train_samples ?? "-") + ' / ' + (item.test_samples ?? "-") + '</td><td>' + (item.training_evidence ? "通过" : "-") + '</td></tr>';
+      }).join("") + '</tbody></table></div>';
+    }
+    function updateDataFormVisibility() {
+      const action = selectValue("data-action", state.dataAction || "list");
+      const adapter = selectValue("data-adapter", "cifar10");
+      const visible = {
+        "data-alias": ["status", "path", "inspect", "verify", "run", "remove"].includes(action),
+        "data-new-alias": action === "register", "data-adapter": action === "register",
+        "data-root": action === "register" && adapter !== "uci_binary",
+        "data-path": action === "register" && adapter === "uci_binary",
+        "data-labels": action === "register" && ["cifar10n", "cifar100n"].includes(adapter),
+        "data-recipe": action === "verify" || action === "run", "data-output": action === "verify"
+      };
+      Object.entries(visible).forEach(function (entry) {
+        const node = document.getElementById(entry[0]);
+        if (node) node.closest("label").classList.toggle("hidden", !entry[1]);
+      });
+      ["data-new-alias", "data-adapter"].forEach(function (id) { document.getElementById(id)?.closest("label")?.classList.toggle("required-field", action === "register"); });
+      document.getElementById("data-alias")?.closest("label")?.classList.toggle("required-field", visible["data-alias"]);
+      document.getElementById("data-root")?.closest("label")?.classList.toggle("required-field", visible["data-root"]);
+      document.getElementById("data-path")?.closest("label")?.classList.toggle("required-field", visible["data-path"]);
+      document.getElementById("data-labels")?.closest("label")?.classList.toggle("required-field", visible["data-labels"]);
+      runButton.classList.toggle("danger", action === "remove");
+      runButton.textContent = state.removeConfirmed ? "再次点击，确认删除登记" : "执行此指令";
+      updateDatasetGuideVisibility();
+    }
     function renderData() {
-      parameterPanel.innerHTML = commonFormStart() +
+      const adapters = state.datasets.adapters || [];
+      const reports = state.datasets.datasets || [];
+      const registeredReports = reports.filter(function (item) { return Boolean(item.location); });
+      if (!registeredReports.some(function (item) { return item.name === state.dataAlias; })) state.dataAlias = registeredReports[0]?.name || "";
+      const selectedReport = state.dataAction === "register" ? null : reports.find(function (item) { return item.name === state.dataAlias; });
+      const registered = registeredReports.map(function (item) { return {value:item.name, label:item.name + " · " + item.adapter + " · " + dataStatusLabel(item)}; });
+      parameterPanel.innerHTML = dataStepsHtml(selectedReport) + commonFormStart() +
         field("操作", "data-action", selectControl("__ID__", [
-          {value:"validate", label:"validate · 检查配置和数据"}, {value:"dry-run", label:"dry-run · 预演训练"}
-        ])) + field("配方", "data-recipe", recipesSelect("__ID__")) +
-        commonFormEnd() + '<p class="helper">该模块不会自动下载数据，只通过统一 recipe/数据校验入口检查。</p>';
-      if ([...document.getElementById("data-recipe").options].some(function (option) { return option.value === "cifar10-clean-smoke"; })) document.getElementById("data-recipe").value = "cifar10-clean-smoke";
+          {value:"list", label:"查看全部状态"}, {value:"status", label:"查看单项详情"}, {value:"path", label:"查看数据位置"},
+          {value:"register", label:"1 · 登记本机路径"}, {value:"inspect", label:"2 · 实际加载 train/test"},
+          {value:"verify", label:"3 · 训练 1 epoch 验证"}, {value:"run", label:"使用已登记数据训练"}, {value:"remove", label:"删除登记（不删除原文件）"}
+        ])) +
+        field("已登记数据", "data-alias", selectControl("__ID__", registered.length ? registered : [{value:"", label:"尚未登记"}])) +
+        field("新别名", "data-new-alias", inputControl("__ID__", "local-cifar10")) + field("适配器", "data-adapter", selectControl("__ID__", adapters.length ? adapters : ["cifar10"])) +
+        field("数据根目录", "data-root", inputControl("__ID__", "F:/datasets/cifar10"), true) + field("单文件路径（UCI）", "data-path", inputControl("__ID__", ""), true) +
+        field("人工标签文件（CIFAR-N）", "data-labels", inputControl("__ID__", ""), true) + field("验证/训练配方", "data-recipe", recipesSelect("__ID__"), true) +
+        field("验证输出目录（可选）", "data-output", inputControl("__ID__", ""), true) + commonFormEnd() +
+        dataFeedbackHtml(selectedReport) + '<p class="helper">登记只保存路径；inspect 才会真实加载 train/test；verify 会运行 1 epoch。不会自动下载或删除原始数据。</p>' +
+        '<div class="guide-card"><strong>数据状态</strong>' + dataTableHtml(reports) + '</div>';
+      const actionNode = document.getElementById("data-action");
+      actionNode.value = [...actionNode.options].some(function (option) { return option.value === state.dataAction; }) ? state.dataAction : "list";
+      const aliasNode = document.getElementById("data-alias");
+      if (state.dataAlias) aliasNode.value = state.dataAlias;
+      const adapterNode = document.getElementById("data-adapter");
+      if ([...adapterNode.options].some(function (option) { return option.value === state.dataAdapter; })) adapterNode.value = state.dataAdapter;
+      const recipeNode = document.getElementById("data-recipe");
+      if ([...recipeNode.options].some(function (option) { return option.value === state.dataRecipe; })) recipeNode.value = state.dataRecipe;
+      document.getElementById("data-output").value = state.dataOutput;
+      const guideActions = document.createElement("div"); guideActions.className = "actions";
+      const guideButton = document.createElement("button"); guideButton.id = "data-guide-button"; guideButton.type = "button"; guideButton.className = "secondary hidden"; guideButton.textContent = "查看此适配器的数据说明";
+      const guideNode = document.createElement("div"); guideNode.id = "data-guide"; guideNode.className = "helper hidden";
+      guideActions.appendChild(guideButton); parameterPanel.appendChild(guideActions); parameterPanel.appendChild(guideNode);
+      actionNode.addEventListener("change", function () {
+        state.dataRecipe = selectValue("data-recipe", state.dataRecipe);
+        state.dataOutput = selectValue("data-output", state.dataOutput);
+        state.dataAction = actionNode.value; state.dataResult = null; state.removeConfirmed = false;
+        outputNode.textContent = "尚未执行当前操作。"; statusNode.textContent = "请填写当前操作所需字段，然后执行。"; statusNode.className = "status";
+        updateDataFormVisibility();
+      });
+      aliasNode.addEventListener("change", function () {
+        state.dataRecipe = selectValue("data-recipe", state.dataRecipe);
+        state.dataOutput = selectValue("data-output", state.dataOutput);
+        state.dataAlias = aliasNode.value; state.dataResult = null; state.removeConfirmed = false; renderData(); updateModulePreview();
+      });
+      adapterNode.addEventListener("change", function () {
+        state.dataAdapter = adapterNode.value;
+        updateDataFormVisibility();
+        if (!guideNode.classList.contains("hidden")) guideNode.innerHTML = datasetGuideHtml(adapterNode.value);
+      });
+      guideButton.addEventListener("click", function () { guideNode.innerHTML = datasetGuideHtml(adapterNode.value); guideNode.classList.remove("hidden"); });
+      recipeNode.addEventListener("change", function () { state.dataRecipe = recipeNode.value; });
+      document.getElementById("data-output").addEventListener("input", function (event) { state.dataOutput = event.target.value; });
+      parameterPanel.querySelectorAll("input, select, textarea").forEach(function (node) {
+        node.addEventListener("input", updateModulePreview);
+        node.addEventListener("change", updateModulePreview);
+      });
+      updateDataFormVisibility();
     }
     function renderSweep() {
       parameterPanel.innerHTML = commonFormStart() +
@@ -342,6 +566,11 @@
     }
     function switchModule(module) {
       state.module = module;
+      if (module !== "data") {
+        state.removeConfirmed = false;
+        runButton.classList.remove("danger");
+        runButton.textContent = "执行此指令";
+      }
       renderModuleButtons();
       const meta = modules.find(function (item) { return item.id === module; });
       document.getElementById("module-title").textContent = meta.label;
@@ -349,10 +578,12 @@
       document.getElementById("module-description").textContent = meta.description;
       ({beginner: renderBeginner, yaml: renderYaml, data: renderData, sweep: renderSweep,
         results: renderResults, papers: renderPapers, advanced: renderAdvanced}[module])();
-      parameterPanel.querySelectorAll("input, select, textarea").forEach(function (node) {
-        node.addEventListener("input", updateModulePreview);
-        node.addEventListener("change", updateModulePreview);
-      });
+      if (module !== "data") {
+        parameterPanel.querySelectorAll("input, select, textarea").forEach(function (node) {
+          node.addEventListener("input", updateModulePreview);
+          node.addEventListener("change", updateModulePreview);
+        });
+      }
       const yamlSelectorNode = document.getElementById("yaml-selector");
       const yamlUpdateNode = document.getElementById("yaml-update");
       if (yamlSelectorNode) yamlSelectorNode.addEventListener("change", function () { updateYamlFields(); updateModulePreview(); });
@@ -528,10 +759,32 @@
       if (state.module === "beginner") return buildBeginnerCommand();
       if (state.module === "yaml") return buildYamlCommand();
       if (state.module === "data") {
+        const action = selectValue("data-action", "list");
+        const alias = selectValue("data-alias", "");
         const recipe = selectValue("data-recipe", "cifar10-clean-smoke");
-        if (!recipe) return "";
-        const action = selectValue("data-action", "validate");
-        return action === "validate" ? "lnl validate --recipe " + recipe + " --check-data" : "lnl run --recipe " + recipe + " --dry-run --check-data";
+        if (action === "list") return "lnl data list";
+        if (action === "status") return "lnl data status" + (alias ? " " + quoteArg(alias) : "");
+        if (action === "path") return alias ? "lnl data path " + quoteArg(alias) : "";
+        if (action === "register") {
+          const adapter = selectValue("data-adapter", "cifar10");
+          let command = "lnl data register " + quoteArg(selectValue("data-new-alias", "")) + " --adapter " + adapter;
+          const root = selectValue("data-root", "").trim();
+          const path = selectValue("data-path", "").trim();
+          const labels = selectValue("data-labels", "").trim();
+          if (root) command += " --root " + quoteArg(root);
+          if (path) command += " --path " + quoteArg(path);
+          if (labels) command += " --labels " + quoteArg(labels);
+          return command;
+        }
+        if (!alias) return "";
+        if (action === "inspect" || action === "remove") return "lnl data " + action + " " + quoteArg(alias);
+        if (action === "verify") {
+          let command = "lnl data verify " + quoteArg(alias) + " --recipe " + recipe;
+          const output = selectValue("data-output", "").trim();
+          if (output) command += " --output-dir " + quoteArg(output);
+          return command;
+        }
+        return "lnl run " + recipe + " --data " + quoteArg(alias);
       }
       if (state.module === "sweep") {
         const recipe = selectValue("sweep-recipe", "cifar10-clean-smoke");
@@ -553,9 +806,34 @@
       }
       return selectValue("free-command", "").trim();
     }
+    function buildDataApiRequest() {
+      const action = selectValue("data-action", "list");
+      const alias = selectValue("data-alias", "");
+      if (action === "run") return null;
+      const payload = {action: action};
+      if (action === "register") {
+        payload.name = selectValue("data-new-alias", "");
+        payload.adapter = selectValue("data-adapter", "cifar10");
+        payload.root = selectValue("data-root", "").trim();
+        payload.path = selectValue("data-path", "").trim();
+        payload.labels = selectValue("data-labels", "").trim();
+      } else if (alias) {
+        payload.name = alias;
+      }
+      if (action === "verify") {
+        payload.recipe = selectValue("data-recipe", "cifar10-clean-smoke");
+        payload.output_dir = selectValue("data-output", "").trim();
+      }
+      return payload;
+    }
     function updateModulePreview() {
+      if (state.module === "data" && state.removeConfirmed) {
+        state.removeConfirmed = false;
+        runButton.textContent = "执行此指令";
+      }
       const command = buildModuleCommand();
-      setRequest(command ? {command: command} : null, command);
+      const dataRequest = state.module === "data" ? buildDataApiRequest() : null;
+      setRequest(command ? (dataRequest ? {dataset: dataRequest} : {command: command}) : null, command);
       statusNode.textContent = command ? "参数已更新，请确认右侧预览后执行" : "当前参数组合无法生成有效指令";
       statusNode.className = "status";
     }
@@ -567,20 +845,85 @@
       else if (job.error || job.returncode !== 0) { statusNode.textContent = "失败（退出码 " + job.returncode + "）"; statusNode.className = "status failed"; }
       else { statusNode.textContent = "完成（退出码 0）"; statusNode.className = "status success"; }
     }
+    function formatDatasetResult(result) {
+      if (result.removed) return "已删除登记：" + result.removed + "\n原始数据文件未被删除。";
+      const report = result.dataset;
+      if (!report) return result.message || "数据操作完成。";
+      const lines = [
+        result.message || "数据操作完成。",
+        "数据集：" + report.name,
+        "适配器：" + report.adapter,
+        "状态：" + dataStatusLabel(report),
+        "位置：" + (report.location || "-")
+      ];
+      if (report.train_samples != null) lines.push("样本：" + report.train_samples + " train / " + report.test_samples + " test；" + report.classes + " 类");
+      if (report.fingerprint) lines.push("指纹：" + report.fingerprint);
+      if (result.next_action) lines.push("建议下一步：" + result.next_action);
+      return lines.join("\n");
+    }
+    async function refreshDatasets() {
+      const response = await fetch("/api/datasets");
+      if (!response.ok) return;
+      state.datasets = await response.json();
+      if (state.module === "data") {
+        renderData();
+        updateModulePreview();
+      }
+    }
     async function pollJob() {
       if (!state.jobId) return;
       const response = await fetch("/api/jobs/" + state.jobId);
       if (!response.ok) return;
       const job = await response.json(); showJob(job);
-      if (!job.running && state.timer) { clearInterval(state.timer); state.timer = null; }
+      if (!job.running && state.timer) {
+        clearInterval(state.timer); state.timer = null;
+        if (!job.error && job.returncode === 0 && job.key === "data-verify") {
+          state.dataResult = {message: "一轮训练验证完成。数据登记现在可以用于训练。", next_action: "run"};
+        }
+        await refreshDatasets();
+      }
     }
     runButton.addEventListener("click", async function () {
       if (!state.request) return;
-      runButton.disabled = true; outputNode.textContent = "启动中...";
-      const response = await fetch("/api/run", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(state.request)});
-      const job = await response.json();
-      if (!response.ok) { outputNode.textContent = job.error || "启动失败"; runButton.disabled = false; return; }
-      showJob(job); if (state.timer) clearInterval(state.timer); state.timer = setInterval(pollJob, 350); runButton.disabled = false;
+      const datasetRequest = state.request.dataset;
+      if (datasetRequest?.action === "remove" && !state.removeConfirmed) {
+        state.removeConfirmed = true;
+        runButton.textContent = "再次点击，确认删除登记";
+        statusNode.textContent = "确认删除登记“" + datasetRequest.name + "”。原始数据文件不会被删除。";
+        statusNode.className = "status failed";
+        return;
+      }
+      runButton.disabled = true; outputNode.textContent = "正在执行，请稍候...";
+      const endpoint = state.request.dataset ? "/api/datasets" : "/api/run";
+      const body = state.request.dataset || state.request;
+      try {
+        const response = await fetch(endpoint, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+        let result;
+        try { result = await response.json(); } catch (_error) { throw new Error("后端连接中断，未返回可读错误。请检查 Web 服务终端。 "); }
+        if (!response.ok) throw new Error(result.error || "数据操作失败");
+        if (result.id) {
+          showJob(result); if (state.timer) clearInterval(state.timer); state.timer = setInterval(pollJob, 350);
+        } else {
+          state.dataResult = result;
+          if (result.dataset?.name) state.dataAlias = result.dataset.name;
+          if (result.removed === state.dataAlias) {
+            state.dataAlias = "";
+            state.dataAction = result.next_action || "list";
+          }
+          outputNode.textContent = formatDatasetResult(result);
+          await refreshDatasets();
+          statusNode.textContent = result.message || "数据操作完成"; statusNode.className = "status success";
+        }
+      } catch (error) {
+        state.dataResult = {error: String(error.message || error)};
+        outputNode.textContent = "操作失败：" + state.dataResult.error;
+        statusNode.textContent = "操作失败，请根据提示修正后重试。"; statusNode.className = "status failed";
+        if (state.module === "data") renderData();
+      } finally {
+        state.removeConfirmed = false;
+        runButton.textContent = "执行此指令";
+        runButton.disabled = false;
+      }
     });
     copyButton.addEventListener("click", async function () { if (!state.request) return; await navigator.clipboard.writeText(previewNode.textContent); statusNode.textContent = "指令已复制"; });
     document.getElementById("clear").addEventListener("click", function () { outputNode.textContent = ""; statusNode.textContent = "日志已清空"; });
@@ -598,11 +941,12 @@
     document.getElementById("yaml-validate").addEventListener("click", function () { saveYaml(true, "validate"); });
     document.getElementById("yaml-run").addEventListener("click", function () { saveYaml(true, "run"); });
 
-    Promise.all([fetch("/api/commands"), fetch("/api/recipes"), fetch("/api/papers")])
+    Promise.all([fetch("/api/commands"), fetch("/api/recipes"), fetch("/api/papers"), fetch("/api/datasets")])
       .then(function (responses) { return Promise.all(responses.map(function (response) { if (!response.ok) throw new Error("后端菜单数据加载失败"); return response.json(); })); })
       .then(function (payloads) {
-        state.recipes = payloads[1]; state.papers = payloads[2];
-        renderCommands(payloads[0]); renderYamlSources(); switchModule("beginner");
+        state.recipes = payloads[1]; state.papers = payloads[2]; state.datasets = payloads[3];
+        renderCommands(payloads[0]); renderYamlSources(); switchModule(recipeMode ? "yaml" : "beginner");
+        if (recipeMode) yamlEditorPanel.classList.remove("hidden");
         if (!yamlEditorPanel.classList.contains("hidden")) loadYamlFromRecipe();
       })
       .catch(function (error) { previewNode.textContent = "无法连接后端：" + error; });

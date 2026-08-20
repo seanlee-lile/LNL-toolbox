@@ -64,7 +64,7 @@
 ## Quality workflow dry-run preflight correction (2026-08-20)
 
 - Current task: keep default dry-run data preflight while making planning-only tests and CI smoke independent of local CIFAR files.
-- Branch: `codex/cli`; base commit: `3942558`.
+- Branch: `codex/cli`; base commit: `ee88b26`.
 - Checklist: enumerate dry-run calls; reproduce clean-runner failures; add explicit planning-only bypasses; run full validation.
 - Completed: 4 / 4 (100%).
 - Pre-change evidence: a clean Git archive without `data/cifar10` reproduced 10 failures across unified CLI, Co-teaching, DLD, LEND, and UPM planning tests.
@@ -77,3 +77,56 @@
 - Ready for history cleanup: no cleanup needed.
 - Ready to push: ready after explicit commit and publication approval.
 - Collaborator note: `.github/workflows/quality.yml` is shared; no source, algorithm, data-preflight, Result Contract, or checkpoint behavior changed.
+
+## Local dataset catalog and executable format evidence (2026-08-20)
+
+- Current task: machine-local dataset registration, Web controls, and training-backed format verification.
+- Branch: `codex/cli`; base commit: `3942558`.
+- Checklist: local catalog/CLI; grayscale and real-noise compatibility; Web controls; official-format fixtures and real-data runs; final regression/documentation.
+- Completed: 5 / 5 (100%); implementation and validation are complete.
+- Files added: `data/local_catalog.py`, `tests/test_local_data_catalog.py`, `tests/test_dataset_training_fixtures.py`.
+- Training evidence: official-format temporary fixtures completed 1 epoch for MNIST, Fashion-MNIST, Clothing1M, Animal-10N, and UCI Heart. Real F-drive data completed 1 epoch for CIFAR-10, CIFAR-100, CIFAR-10N, CIFAR-100N, Fashion-MNIST, and the CIFAR airplane/automobile view. Synthetic binary and multiclass runners produced epoch metrics.
+- State semantics: registration and layout inspection never imply trainability; only a completed epoch plus data manifest is recorded as `training_verified`; a changed catalog source signature produces `verification_stale`.
+- Tests executed: local catalog `2/2`, Web `15/15`, dataset training fixtures `5/5`, unified CLI `35/35`, noisy CE `11/11`, clean baseline `5/5`, torch training `39/39`; Ruff passed; full unittest passed `821/821`; `git diff --check` passed.
+- Blockers: none.
+- Exact next step: human diff review; commit only after explicit authorization.
+- Local checkpoint commits: none. No commit or push is authorized.
+
+## Web dataset registration usability pass (2026-08-20)
+
+- Current task: validate and improve the full Web lifecycle for local dataset registration.
+- Branch: `codex/cli`; base commit: `77cd274` plus the existing DataService working-tree changes.
+- Checklist: real register/inspect/verify/remove walkthrough; operation-specific fields; actionable status and summaries; backend error JSON; two-step removal; regression and documentation.
+- Completed: 6 / 6 (100%). Implementation, real-browser lifecycle validation, cleanup, and final regression are complete.
+- Real evidence: a temporary CIFAR-10 alias loaded 50,000 train and 10,000 test samples, completed a one-epoch verification, and was removed without deleting source data.
+- Tests executed: Web tests passed 20/20; full unittest passed 824/824; Ruff on `src tests web`, JavaScript syntax validation, and `git diff --check` passed.
+- Files added: none.
+- Exact next step: human diff review; no commit or push is authorized.
+- Local checkpoint commits: none. No commit or push is authorized.
+- Collaborator note: `README.md`, `cli/main.py`, Web files, and shared progress/file-map documents are high-conflict; changes are scoped to local data source selection and evidence status.
+
+## Unified data management facade and Web API (2026-08-20)
+
+- Current task: Data Phase 1/5/6 — one management facade for CLI, Web and experiment preflight.
+- Branch: `codex/cli`; base commit: `77cd274`.
+- Checklist: status contract; CLI list/status/path/inspect/verify; shared preflight; direct Web data API; CI gate; documentation and regression.
+- Completed: 6 / 6 (100%).
+- Public behavior: `missing/incomplete/ready` describes adapter-backed readiness; one-epoch `training_verified` evidence remains separate. `inspect` loads train/test, while `verify` performs the same inspection before training.
+- Integration: doctor, validate, dry-run, run and sweep reach data validation through `ExperimentService` and the injected `DataService`; existing paper runners retain the compatibility `prepare_experiment_data()` entry.
+- Tests executed: affected suites passed 76/76; Web focused tests passed 17/17 including a real local HTTP API request; full unittest passed 823/823; Ruff on `src tests web`, embedded Web JavaScript syntax, and `git diff --check` passed.
+- Blockers: none. Conda emits a pre-existing missing OpenCL vendor temp-file warning before commands, but the `pytorch` environment and all tests complete successfully.
+- Exact next step: human diff review; commit only after explicit authorization.
+- Local checkpoint commits: none. No commit or push is authorized.
+- Collaborator note: `cli/main.py`, `training/service.py`, `.github/workflows/quality.yml`, Web files, and shared documents are high-conflict; edits are limited to the approved data-management integration.
+
+## Original Web console and Recipe subpage (2026-08-20)
+
+- Current task: retain the original single-page Web console and expose the existing Recipe/YAML editor at `/recipe`.
+- Branch: `codex/cli`; base commit: `77cd274` plus the completed DataService working-tree changes above.
+- Checklist: restore original layout; remove unapproved workspace tabs; `/recipe` entry; `lnl web`; HTTP/CLI tests; documentation.
+- Completed: 6 / 6 checklist items (100%).
+- Public behavior: `lnl web` starts `127.0.0.1:8765` and opens the original console at `/`; `lnl web --no-open` suppresses browser launch; `/recipe` opens the Recipe/YAML editor directly.
+- Files added: none. One route-aware HTML asset is intentionally reused to avoid duplicated UI logic.
+- Validation: Web tests 18/18; unified CLI tests 36/36; full unittest 824/824; Ruff, JavaScript syntax and diff checks passed; `/` and `/recipe` were inspected in the app browser.
+- Exact next step: human diff review, then commit only with separate authorization.
+- Local checkpoint commits: none. No commit or push is authorized.

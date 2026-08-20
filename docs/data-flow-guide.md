@@ -753,3 +753,35 @@ prepared = prepare_experiment_data(
 标准训练 batch 为 `input/target/index`，可选包含 `views`、`strong_input` 和动态 overlay。训练角色禁止暴露 `clean_target`。每次运行写入 `data_manifest.json`，checkpoint 自动记录其指纹；数据版本、标签、split、预处理、视图或 loader 身份变化时恢复立即失败。
 
 内置 Registry 当前支持 CIFAR-10/100、CIFAR airplane/automobile、CIFAR-10N/100N、MNIST、Fashion-MNIST、Clothing1M、Animal-10N、UCI binary、synthetic binary/multiclass。训练期间均不自动下载。
+
+## 机器本地数据目录（2026-08-20）
+
+```text
+recipe / YAML
+    + --data <local alias>
+    -> LocalDatasetCatalog.apply()
+    -> DatasetRegistry
+    -> prepare_experiment_data()
+    -> runner / data_manifest / metrics
+```
+
+本地目录只覆盖 `data` 中的 source 字段，保留 recipe 的模型、算法和训练配置；因此同一
+recipe 可以切换不同本机数据源。登记、布局检查和训练验证分离：`register` 不读取训练，
+`inspect` 调用统一 Registry，`verify` 强制实际完成 1 epoch 并保存数据指纹和结果路径。
+源路径的浅层文件状态变化会使证据变为 `verification_stale`。
+
+已按发布方格式并通过实际训练入口验证的布局包括：CIFAR Python pickle、CIFAR-N 官方
+`.pt` 键、MNIST/Fashion-MNIST IDX.GZ、Clothing1M key-list/label-kv、Animal-10N binary
+record、UCI Heart 空白分隔行，以及内存生成的 synthetic binary/multiclass。这里的
+“训练验证”只证明解析、统一数据服务和 runner 链路可执行，不等同于论文数值复现。
+
+## 统一数据管理门面（2026-08-20）
+
+`DataService` 是 Registry、机器本地 Catalog、CLI、Web 和实验预检之间的公共门面。
+`lnl data list/status/path` 只读取统一状态；`inspect` 调用正式 adapter 的 validate/load 并
+同时加载 train/test；`verify` 在相同检查成功后再完成 1 epoch。`missing/incomplete/ready`
+描述数据 readiness，`training_verified` 是独立训练证据。
+
+`ExperimentService.preflight()` 通过注入的 `DataService.validate_config()` 完成数据预检，
+因此 doctor、validate、dry-run、run 和 sweep 不再维护自己的数据检查逻辑。现有 runner
+继续调用 `prepare_experiment_data()`；该函数是默认 `DataService` 的兼容代理。

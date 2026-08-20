@@ -20,6 +20,15 @@ python -m pip install -e ".[train]"
 lnl --help
 ```
 
+启动本地数据管理网页（默认自动打开浏览器）：
+
+```powershell
+lnl web
+```
+
+主控制台为 `http://127.0.0.1:8765/`；Recipe/YAML 编辑子页面为
+`http://127.0.0.1:8765/recipe`。使用 `lnl web --no-open` 可只启动服务。
+
 原有的 `lnl-train`、`lnl-clean-train`、`lnl-inspect-data` 和 `lnl-make-noise` 命令仍然保留。
 
 ### 准备 CIFAR 数据
@@ -39,6 +48,26 @@ lnl run cifar10-symmetric-ce-smoke --dry-run
 ```
 
 真实 UCI workflow 的数据准备命令见对应 reproduction 文档；数据和训练产物都不应提交到 Git。
+
+### 登记本机数据集
+
+数据路径可以保存在机器本地目录中，不必写入共享 YAML：
+
+```powershell
+lnl data register lab-cifar10 --adapter cifar10 --root F:/datasets/cifar10
+lnl data list
+lnl data status lab-cifar10
+lnl data path lab-cifar10
+lnl data inspect lab-cifar10
+lnl data verify lab-cifar10 --recipe cifar10-clean-smoke
+lnl run cifar10-symmetric-ce-smoke --data lab-cifar10
+```
+
+`list/status/path` 显示所有受支持数据集的 readiness 和本机位置；`inspect` 必须由正式
+adapter 成功加载 train/test 后才标记 `ready`。`verify` 会先执行同一检查，再实际完成
+1 epoch 并保存独立的 `training_verified` 证据。可用 `register/show/remove` 管理登记。
+目录默认保存在 `%LOCALAPPDATA%/lnl-toolbox/datasets.json`，不会提交到 Git；
+也可用 `LNL_DATA_CATALOG` 指向另一台机器自己的目录文件。训练过程不会自动下载数据。
 
 ## 2. Quick Start
 

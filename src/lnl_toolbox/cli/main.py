@@ -7,6 +7,7 @@ from importlib import metadata
 import json
 from pathlib import Path
 import platform
+import subprocess
 import sys
 from typing import Any
 
@@ -30,8 +31,8 @@ from lnl_toolbox.composition import (
     write_composed_config,
 )
 from lnl_toolbox.core.config_overrides import apply_override_assignments
-from lnl_toolbox.data.local_catalog import LocalDatasetCatalog
 from lnl_toolbox.evaluation.run_comparison import compare_runs, write_report
+from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE, DatasetStatusReport
 from lnl_toolbox.training.runners import apply_epoch_override, resolve_runner, runner_names
 from lnl_toolbox.training.service import ExperimentService
 from lnl_toolbox.training.sweep import (
@@ -150,6 +151,10 @@ def build_parser() -> argparse.ArgumentParser:
     data_register.add_argument("--labels", type=Path)
     data_register.add_argument("--noise-variant")
     data_sub.add_parser("list", help="list registration and verification states")
+    data_status = data_sub.add_parser("status", help="show dataset readiness")
+    data_status.add_argument("name", nargs="?")
+    data_path = data_sub.add_parser("path", help="show a registered dataset path")
+    data_path.add_argument("name")
     data_show = data_sub.add_parser("show", help="show one local dataset record")
     data_show.add_argument("alias")
     data_inspect = data_sub.add_parser("inspect", help="load and validate train/test layout")
@@ -161,6 +166,12 @@ def build_parser() -> argparse.ArgumentParser:
     data_verify.add_argument("--recipe")
     data_verify.add_argument("--output-dir", type=Path)
     data_verify.add_argument("--project-root", type=Path)
+
+    web = sub.add_parser("web", help="start the local Data Management Web UI")
+    web.add_argument("--host", default="127.0.0.1")
+    web.add_argument("--port", type=int, default=8765)
+    web.add_argument("--no-open", action="store_true")
+    web.add_argument("--project-root", type=Path)
 
     sweep = sub.add_parser("sweep", help="run multiple seeds sequentially and resumably")
     _source_options(sweep)
@@ -275,7 +286,7 @@ def _load_source(args: argparse.Namespace) -> tuple[dict[str, Any], Path, Recipe
     config = resolve_config_paths(config, project)
     local_dataset = getattr(args, "local_dataset", None)
     if local_dataset:
-        config = LocalDatasetCatalog().apply(config, local_dataset)
+        config = DEFAULT_DATA_SERVICE.apply(config, local_dataset)
     return config, config_path, recipe, project
 
 
@@ -935,26 +946,56 @@ def _print_local_dataset(record) -> None:
         print(f"  error: {record.error}")
 
 
-def _data_command(args: argparse.Namespace) -> int:
-    from lnl_toolbox.training.data_service import DATASETS, validate_data_config
+def _print_dataset_report(report: DatasetStatusReport) -> None:
+    print(f"Dataset          {report.name}")
+    print(f"Adapter          {report.adapter}")
+    print(f"Status           {report.status.upper()}")
+    print(f"Location         {report.location or '-'}")
+    if report.train_samples is not None:
+        print(f"Train samples    {report.train_samples}")
+    if report.test_samples is not None:
+        print(f"Test samples     {report.test_samples}")
+    if report.classes is not None:
+        print(f"Classes          {report.classes}")
+    if report.fingerprint:
+        print(f"Fingerprint      {report.fingerprint}")
+    if report.training_evidence:
+        print("Training check   VERIFIED")
+        if report.training_evidence.get("run_dir"):
+            print(f"Verification run {report.training_evidence['run_dir']}")
+    if report.error:
+        print(f"Error            {report.error}")
 
-    catalog = LocalDatasetCatalog()
+
+def _print_dataset_table(reports) -> None:
+    print(f"{'DATASET':<24} {'ADAPTER':<30} {'STATUS':<12} LOCATION")
+    for report in reports:
+        print(
+            f"{report.name:<24} {report.adapter:<30} "
+            f"{report.status:<12} {report.location or '-'}"
+        )
+
+
+def _data_command(args: argparse.Namespace) -> int:
+    service = DEFAULT_DATA_SERVICE
     if args.data_command == "list":
-        records = catalog.records()
-        if not records:
-            print(f"No local datasets registered. Catalog: {catalog.path}")
-            return 0
-        print(f"Local dataset catalog: {catalog.path}")
-        for record in records:
-            _print_local_dataset(record)
+        _print_dataset_table(service.list_datasets())
+        return 0
+    if args.data_command == "status":
+        if args.name is None:
+            _print_dataset_table(service.status())
+        else:
+            _print_dataset_report(service.status(args.name))
+        return 0
+    if args.data_command == "path":
+        path = service.path(args.name)
+        print("-" if path is None else path)
         return 0
     if args.data_command == "show":
-        _print_local_dataset(catalog.get(args.alias))
+        _print_local_dataset(service.record(args.alias))
         return 0
     if args.data_command == "register":
-        adapter = DATASETS.get(args.adapter).name
-        if adapter.startswith("synthetic_"):
-            raise ValueError("synthetic datasets are generated and do not need local registration")
+        adapter = service.registry.get(args.adapter).name
         data: dict[str, Any] = {"name": adapter}
         if args.root is not None:
             data["root"] = args.root
@@ -964,44 +1005,23 @@ def _data_command(args: argparse.Namespace) -> int:
             data["noise_path"] = args.labels
         if args.noise_variant is not None:
             data["noise_variant"] = args.noise_variant
-        if adapter == "uci_binary":
-            if args.path is None:
-                raise ValueError("uci_binary registration requires --path")
-            data.setdefault("preprocessing", {
-                "format": "whitespace",
-                "target_column": -1,
-                "has_header": False,
-                "standardize": False,
-            })
-            data.setdefault("split", {
-                "validation_fraction": 0.2,
-                "test_fraction": 0.2,
-            })
-        elif args.root is None:
-            raise ValueError(f"{adapter} registration requires --root")
-        if adapter in {"cifar10n", "cifar100n"} and args.labels is None:
-            raise ValueError(f"{adapter} registration requires --labels")
-        record = catalog.register(args.alias, adapter, data)
-        _print_local_dataset(record)
+        service.register(args.alias, adapter, data)
+        _print_local_dataset(service.record(args.alias))
         print("Registration does not prove trainability; run 'lnl data verify'.")
         return 0
     if args.data_command == "remove":
-        catalog.remove(args.alias)
+        service.remove(args.alias)
         print(f"Removed local dataset registration: {args.alias}")
         return 0
     if args.data_command == "inspect":
-        record = catalog.get(args.alias)
-        try:
-            validate_data_config({"seed": 0, "data": dict(record.data)})
-        except Exception as exc:
-            catalog.mark_failed(args.alias, exc)
-            raise
-        record = catalog.mark_layout_validated(args.alias)
-        _print_local_dataset(record)
+        report = service.inspect(args.alias)
+        _print_dataset_report(report)
+        if report.status != "ready":
+            return 2
         print("Layout validated; training has not yet been verified.")
         return 0
     if args.data_command == "verify":
-        record = catalog.get(args.alias)
+        record = service.record(args.alias)
         recipe_id = args.recipe or (
             "binary-risk-natarajan-1epoch"
             if record.adapter == "uci_binary"
@@ -1011,7 +1031,7 @@ def _data_command(args: argparse.Namespace) -> int:
         recipe = recipe_by_id(recipe_id, root)
         project = find_project_root(None, root)
         config = resolve_config_paths(load_recipe_config(recipe), project)
-        config = catalog.apply(config, args.alias)
+        config = service.apply(config, args.alias)
         runner = resolve_runner(config)
         if runner.budget_path is None and "epochs" in config:
             # Internal verification accepts an unambiguous legacy top-level
@@ -1024,56 +1044,34 @@ def _data_command(args: argparse.Namespace) -> int:
             project / "artifacts" / "data-verification"
             / f"{record.alias}-{record.signature[:8]}"
         )
-        service = ExperimentService()
-        try:
-            service.preflight(config, check_data=True)
-            run_dir = Path(service.run(config, destination, recipe=recipe.id)).resolve()
-            metrics_path = run_dir / "metrics.jsonl"
-            epoch_rows: list[dict[str, Any]] = []
-            if metrics_path.is_file():
-                for line in metrics_path.read_text(encoding="utf-8").splitlines():
-                    if not line.strip():
-                        continue
-                    row = json.loads(line)
-                    if isinstance(row, dict) and row.get("event") == "epoch":
-                        epoch_rows.append(row)
-            legacy_metrics_path = run_dir / "metrics.json"
-            if not epoch_rows and legacy_metrics_path.is_file():
-                legacy_rows = json.loads(legacy_metrics_path.read_text(encoding="utf-8"))
-                if isinstance(legacy_rows, list):
-                    epoch_rows = [
-                        row for row in legacy_rows
-                        if isinstance(row, dict) and "epoch" in row
-                    ]
-            if not epoch_rows:
-                raise ValueError("verification run did not complete an epoch")
-            data_manifest = json.loads((run_dir / "data_manifest.json").read_text(encoding="utf-8"))
-            final_path = run_dir / "final_metrics.json"
-            if final_path.is_file():
-                final = json.loads(final_path.read_text(encoding="utf-8"))
-                if final.get("status") not in {None, "completed"}:
-                    raise ValueError("verification run did not produce a completed result")
-                result_path = final_path
-            else:
-                # A small number of legacy runners persist their completed
-                # epoch rows as metrics.json.  The epoch and data-manifest
-                # checks above remain mandatory, so this does not turn a
-                # registration or layout inspection into training evidence.
-                result_path = metrics_path if metrics_path.is_file() else legacy_metrics_path
-            verified = catalog.mark_training_verified(args.alias, {
-                "recipe": recipe.id,
-                "run_dir": str(run_dir),
-                "data_fingerprint": data_manifest["fingerprint"],
-                "result_metrics": str(result_path),
-                "completed_epochs": len(epoch_rows),
-            })
-        except Exception as exc:
-            catalog.mark_failed(args.alias, exc)
-            raise
-        _print_local_dataset(verified)
+        report, _run_dir = service.verify(
+            args.alias,
+            config,
+            destination,
+            recipe=recipe.id,
+        )
+        _print_dataset_report(report)
         print("Training verified by a completed one-epoch run.")
         return 0
     raise ValueError(f"unknown data command: {args.data_command}")
+
+
+def _web(args: argparse.Namespace) -> int:
+    root = find_project_root(None, args.project_root)
+    server = root / "web" / "command_console.py"
+    if not server.is_file():
+        raise FileNotFoundError(f"Web UI server does not exist: {server}")
+    command = [
+        sys.executable,
+        str(server),
+        "--host",
+        args.host,
+        "--port",
+        str(args.port),
+    ]
+    if not args.no_open:
+        command.append("--open")
+    return int(subprocess.call(command, cwd=root))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1092,6 +1090,8 @@ def main(argv: list[str] | None = None) -> int:
             return _resume(args)
         if args.command == "data":
             return _data_command(args)
+        if args.command == "web":
+            return _web(args)
         if args.command == "sweep":
             return _sweep(args)
         if args.command == "compare":

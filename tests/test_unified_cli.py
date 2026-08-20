@@ -191,6 +191,22 @@ class UnifiedCliTest(unittest.TestCase):
             code = main(list(arguments))
         return code, stdout.getvalue(), stderr.getvalue()
 
+    def test_web_command_starts_main_page_and_supports_no_open(self) -> None:
+        with patch("lnl_toolbox.cli.main.subprocess.call", return_value=0) as call:
+            code, _output, error = self.invoke(
+                "web", "--host", "127.0.0.1", "--port", "9000"
+            )
+        self.assertEqual(code, 0, error)
+        command = call.call_args.args[0]
+        self.assertIn("command_console.py", command[1])
+        self.assertIn("--open", command)
+        self.assertIn("9000", command)
+
+        with patch("lnl_toolbox.cli.main.subprocess.call", return_value=0) as call:
+            code, _output, error = self.invoke("web", "--no-open")
+        self.assertEqual(code, 0, error)
+        self.assertNotIn("--open", call.call_args.args[0])
+
     def test_local_dataset_registration_and_recipe_switch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -208,7 +224,16 @@ class UnifiedCliTest(unittest.TestCase):
 
                 code, output, error = self.invoke("data", "list")
                 self.assertEqual(code, 0, error)
-                self.assertIn("lab-cifar100: cifar100", output)
+                self.assertIn("lab-cifar100", output)
+                self.assertIn("incomplete", output)
+
+                code, output, error = self.invoke("data", "status", "lab-cifar100")
+                self.assertEqual(code, 0, error)
+                self.assertIn("Status           INCOMPLETE", output)
+
+                code, output, error = self.invoke("data", "path", "lab-cifar100")
+                self.assertEqual(code, 0, error)
+                self.assertIn(str(source.resolve()), output)
 
                 code, output, error = self.invoke(
                     "run", "cifar10-clean-smoke", "--data", "lab-cifar100",
@@ -235,13 +260,30 @@ class UnifiedCliTest(unittest.TestCase):
                 self.assertIn("requires --labels", error)
 
                 source = Path(directory) / "heart.dat"
-                source.write_text("1 2 1\n", encoding="utf-8")
+                rows = []
+                for row in range(40):
+                    features = [
+                        f"{(row + column) % 11 + column / 10:.1f}"
+                        for column in range(13)
+                    ]
+                    rows.append(" ".join(features + [str(1 + row % 2)]))
+                source.write_text("\n".join(rows) + "\n", encoding="utf-8")
                 code, output, error = self.invoke(
                     "data", "register", "heart", "--adapter", "uci_binary",
                     "--path", str(source),
                 )
                 self.assertEqual(code, 0, error)
                 self.assertIn("heart: uci_binary", output)
+
+                code, output, error = self.invoke(
+                    "data", "verify", "heart",
+                    "--output-dir", str(Path(directory) / "heart-run"),
+                    "--project-root", str(ROOT),
+                )
+                self.assertEqual(code, 0, error)
+                self.assertIn("Training check   VERIFIED", output)
+                self.assertIn("Train samples", output)
+                self.assertIn("completed one-epoch run", output)
 
     def test_list_and_paper_show_are_user_facing(self) -> None:
         code, output, _ = self.invoke("list", "experiments", "--profile", "smoke")

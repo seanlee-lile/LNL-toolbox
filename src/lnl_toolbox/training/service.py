@@ -6,13 +6,23 @@ import json
 from pathlib import Path
 import platform
 import sys
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from lnl_toolbox.training.results import finalize_result, is_completed_result
 from lnl_toolbox.training.runners import resolve_runner
 
+if TYPE_CHECKING:
+    from lnl_toolbox.training.data_service import DataService
+
 
 class ExperimentService:
+    def __init__(self, data_service: "DataService | None" = None) -> None:
+        if data_service is None:
+            from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE
+
+            data_service = DEFAULT_DATA_SERVICE
+        self.data_service = data_service
+
     def preflight(
         self,
         config: Mapping[str, Any],
@@ -25,9 +35,7 @@ class ExperimentService:
 
         runner = validate_config(config, check_data=False)
         if check_data:
-            from lnl_toolbox.training.data_service import validate_data_config
-
-            validate_data_config(config)
+            self.data_service.validate_config(config)
         return runner
 
     def _ensure_metadata(self, run_dir: Path, config: Mapping[str, Any]) -> None:

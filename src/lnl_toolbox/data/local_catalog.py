@@ -196,11 +196,17 @@ class LocalDatasetCatalog:
         self._write_raw(raw)
         return self.get(key)
 
-    def mark_layout_validated(self, alias: object) -> LocalDatasetRecord:
+    def mark_layout_validated(
+        self,
+        alias: object,
+        evidence: Mapping[str, Any] | None = None,
+    ) -> LocalDatasetRecord:
+        value = dict(evidence or {})
+        value["source_signature"] = self.get(alias).signature
         return self._set_state(
             alias,
             "layout_validated",
-            evidence={"source_signature": self.get(alias).signature},
+            evidence=value,
         )
 
     def mark_training_verified(self, alias: object, evidence: Mapping[str, Any]) -> LocalDatasetRecord:
@@ -210,6 +216,21 @@ class LocalDatasetCatalog:
 
     def mark_failed(self, alias: object, error: object) -> LocalDatasetRecord:
         return self._set_state(alias, "failed", error=str(error))
+
+    def mark_training_failed(self, alias: object, error: object) -> LocalDatasetRecord:
+        """Keep valid layout evidence when a one-epoch training check fails."""
+
+        record = self.get(alias)
+        evidence = dict(record.evidence or {})
+        evidence["source_signature"] = record.signature
+        return self._set_state(
+            alias,
+            "training_verified"
+            if record.effective_state == "training_verified"
+            else "layout_validated",
+            evidence=evidence,
+            error=str(error),
+        )
 
     def apply(self, config: Mapping[str, Any], alias: object) -> dict[str, Any]:
         record = self.get(alias)

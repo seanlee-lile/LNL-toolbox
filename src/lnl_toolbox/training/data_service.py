@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Single data-preparation entry point shared by every experiment runner."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
@@ -22,6 +22,7 @@ from lnl_toolbox.data.contracts import (
     RawDatasetSplit,
 )
 from lnl_toolbox.data.mnist import add_mnist_sources
+from lnl_toolbox.data.local_catalog import LocalDatasetCatalog, LocalDatasetRecord
 from lnl_toolbox.data.real_noise import add_real_noise_sources
 from lnl_toolbox.data.registry import DatasetRegistry
 from lnl_toolbox.data.sources import add_existing_sources
@@ -377,7 +378,7 @@ def _write_data_manifest(
     return fingerprint
 
 
-def prepare_experiment_data(
+def _prepare_experiment_data(
     config: Mapping[str, Any],
     *,
     requirements: DataRequirements,
@@ -787,7 +788,10 @@ def prepare_experiment_data(
     return prepared
 
 
-def validate_data_config(config: Mapping[str, Any], registry: DatasetRegistry | None = None) -> DataSpec:
+def _validate_data_config(
+    config: Mapping[str, Any],
+    registry: DatasetRegistry | None = None,
+) -> DataSpec:
     spec = DataSpec.from_mapping(config["data"])
     if spec.root is not None and not spec.root.exists():
         raise FileNotFoundError(f"data path does not exist: {spec.root}")
@@ -800,8 +804,355 @@ def validate_data_config(config: Mapping[str, Any], registry: DatasetRegistry | 
     return spec
 
 
+@dataclass(frozen=True, slots=True)
+class DatasetStatusReport:
+    """Stable user-facing status produced by the shared data service."""
+
+    name: str
+    adapter: str
+    status: str
+    location: str | None = None
+    train_samples: int | None = None
+    test_samples: int | None = None
+    classes: int | None = None
+    train_fingerprint: str | None = None
+    test_fingerprint: str | None = None
+    fingerprint: str | None = None
+    training_evidence: Mapping[str, Any] | None = None
+    error: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "adapter": self.adapter,
+            "status": self.status,
+            "location": self.location,
+            "train_samples": self.train_samples,
+            "test_samples": self.test_samples,
+            "classes": self.classes,
+            "train_fingerprint": self.train_fingerprint,
+            "test_fingerprint": self.test_fingerprint,
+            "fingerprint": self.fingerprint,
+            "training_evidence": (
+                None if self.training_evidence is None else dict(self.training_evidence)
+            ),
+            "error": self.error,
+        }
+
+
+class DataService:
+    """Public data-management and experiment-data facade.
+
+    Dataset adapters remain task-neutral.  This facade owns local registration,
+    readiness reporting, full train/test inspection, and the compatibility
+    entry used by experiment runners.
+    """
+
+    def __init__(
+        self,
+        registry: DatasetRegistry | None = None,
+        catalog: LocalDatasetCatalog | None = None,
+    ) -> None:
+        self.registry = registry or DATASETS
+        self._catalog = catalog
+
+    @property
+    def catalog(self) -> LocalDatasetCatalog:
+        # Resolve the default path at call time so tests, CLI sessions, and the
+        # Web server all honor the current LNL_DATA_CATALOG environment.
+        return self._catalog or LocalDatasetCatalog()
+
+    @staticmethod
+    def _location(record: LocalDatasetRecord) -> str | None:
+        value = record.data.get("root") or record.data.get("path")
+        return None if value in {None, ""} else str(value)
+
+    def _record_for(self, name: object) -> LocalDatasetRecord | None:
+        key = str(name).strip().lower().replace(" ", "-")
+        try:
+            return self.catalog.get(key)
+        except KeyError:
+            adapter = self.registry.get(name).name
+            matches = tuple(
+                record for record in self.catalog.records() if record.adapter == adapter
+            )
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                raise ValueError(
+                    f"multiple local registrations use adapter {adapter!r}; "
+                    "select one by alias"
+                )
+            return None
+
+    def _shallow_report(
+        self,
+        name: str,
+        adapter: str,
+        record: LocalDatasetRecord | None,
+    ) -> DatasetStatusReport:
+        if record is None:
+            return DatasetStatusReport(name, adapter, "missing")
+        location = self._location(record)
+        exists = location is not None and Path(location).expanduser().exists()
+        effective = record.effective_state
+        if not exists:
+            status = "missing"
+        elif effective in {"layout_validated", "training_verified"}:
+            status = "ready"
+        else:
+            status = "incomplete"
+        evidence = dict(record.evidence or {})
+        return DatasetStatusReport(
+            name=record.alias,
+            adapter=record.adapter,
+            status=status,
+            location=location,
+            train_samples=evidence.get("train_samples"),
+            test_samples=evidence.get("test_samples"),
+            classes=evidence.get("classes"),
+            train_fingerprint=evidence.get("train_fingerprint"),
+            test_fingerprint=evidence.get("test_fingerprint"),
+            fingerprint=evidence.get("fingerprint") or evidence.get("data_fingerprint"),
+            training_evidence=evidence if effective == "training_verified" else None,
+            error=record.error,
+        )
+
+    def list_datasets(self) -> tuple[DatasetStatusReport, ...]:
+        records = self.catalog.records()
+        reports = [
+            self._shallow_report(record.alias, record.adapter, record)
+            for record in records
+        ]
+        registered_adapters = {record.adapter for record in records}
+        reports.extend(
+            DatasetStatusReport(name, name, "missing")
+            for name in self.registry.names()
+            if not name.startswith("synthetic_") and name not in registered_adapters
+        )
+        return tuple(sorted(reports, key=lambda item: (item.adapter, item.name)))
+
+    def status(self, name: object | None = None):
+        if name is None:
+            return self.list_datasets()
+        record = self._record_for(name)
+        adapter = record.adapter if record is not None else self.registry.get(name).name
+        return self._shallow_report(str(name), adapter, record)
+
+    def path(self, name: object) -> Path | None:
+        report = self.status(name)
+        return None if report.location is None else Path(report.location)
+
+    def register(
+        self,
+        alias: object,
+        adapter: object,
+        data: Mapping[str, Any],
+    ) -> DatasetStatusReport:
+        canonical = self.registry.get(adapter).name
+        if canonical.startswith("synthetic_"):
+            raise ValueError("synthetic datasets do not need local registration")
+        payload = dict(data)
+        payload["name"] = canonical
+        if canonical == "uci_binary":
+            if payload.get("path") in {None, ""}:
+                raise ValueError("uci_binary registration requires --path")
+            payload.setdefault(
+                "preprocessing",
+                {
+                    "format": "whitespace",
+                    "target_column": -1,
+                    "has_header": False,
+                    "standardize": False,
+                },
+            )
+            payload.setdefault(
+                "split",
+                {"validation_fraction": 0.2, "test_fraction": 0.2},
+            )
+        elif payload.get("root") in {None, ""}:
+            raise ValueError(f"{canonical} registration requires --root")
+        if canonical in {"cifar10n", "cifar100n"} and payload.get("noise_path") in {
+            None,
+            "",
+        }:
+            raise ValueError(f"{canonical} registration requires --labels")
+        record = self.catalog.register(alias, canonical, payload)
+        return self._shallow_report(record.alias, record.adapter, record)
+
+    def remove(self, name: object) -> None:
+        self.catalog.remove(name)
+
+    def record(self, name: object) -> LocalDatasetRecord:
+        return self.catalog.get(name)
+
+    def apply(self, config: Mapping[str, Any], name: object) -> dict[str, Any]:
+        return self.catalog.apply(config, name)
+
+    @staticmethod
+    def _inspection_report(
+        name: str,
+        adapter: str,
+        location: str | None,
+        train: RawDatasetSplit,
+        test: RawDatasetSplit,
+    ) -> DatasetStatusReport:
+        train_fingerprint = train.identity.fingerprint
+        test_fingerprint = test.identity.fingerprint
+        fingerprint = hashlib.sha256(
+            f"{train_fingerprint}:{test_fingerprint}".encode("utf-8")
+        ).hexdigest()
+        return DatasetStatusReport(
+            name=name,
+            adapter=adapter,
+            status="ready",
+            location=location,
+            train_samples=len(train),
+            test_samples=len(test),
+            classes=max(train.num_classes, test.num_classes),
+            train_fingerprint=train_fingerprint,
+            test_fingerprint=test_fingerprint,
+            fingerprint=fingerprint,
+        )
+
+    def inspect(self, source: object, *, seed: int = 0) -> DatasetStatusReport:
+        record: LocalDatasetRecord | None = None
+        if isinstance(source, Mapping):
+            config = dict(source)
+            spec = DataSpec.from_mapping(config["data"])
+            name = spec.name
+            adapter = self.registry.get(spec.name).name
+            location_value = spec.root or spec.path
+            location = None if location_value is None else str(location_value)
+        else:
+            record = self._record_for(source)
+            if record is None:
+                adapter = self.registry.get(source).name
+                return DatasetStatusReport(str(source), adapter, "missing")
+            spec = DataSpec.from_mapping(record.data)
+            name = record.alias
+            adapter = record.adapter
+            location = self._location(record)
+        try:
+            self.registry.validate(spec)
+            train = self.registry.load(spec, "train", seed=seed)
+            test = self.registry.load(spec, "test", seed=seed)
+            report = self._inspection_report(name, adapter, location, train, test)
+            if record is not None:
+                evidence = report.to_dict()
+                evidence.pop("training_evidence", None)
+                if record.effective_state == "training_verified":
+                    combined = {**dict(record.evidence or {}), **evidence}
+                    self.catalog.mark_training_verified(record.alias, combined)
+                    report = replace(report, training_evidence=combined)
+                else:
+                    self.catalog.mark_layout_validated(record.alias, evidence)
+            return report
+        except Exception as exc:
+            if record is not None:
+                self.catalog.mark_failed(record.alias, exc)
+            return DatasetStatusReport(
+                name=name,
+                adapter=adapter,
+                status="incomplete",
+                location=location,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+    def verify(
+        self,
+        name: object,
+        config: Mapping[str, Any],
+        output_dir: str | Path,
+        *,
+        recipe: str | None = None,
+    ) -> tuple[DatasetStatusReport, Path]:
+        report = self.inspect(name, seed=int(config.get("seed", 0)))
+        if report.status != "ready":
+            raise ValueError(report.error or f"dataset is not ready: {name}")
+        from lnl_toolbox.training.service import ExperimentService
+
+        service = ExperimentService(data_service=self)
+        try:
+            service.preflight(config, check_data=True)
+            run_dir = Path(
+                service.run(config, output_dir, recipe=recipe)
+            ).resolve()
+            metrics_path = run_dir / "metrics.jsonl"
+            epoch_rows: list[dict[str, Any]] = []
+            if metrics_path.is_file():
+                for line in metrics_path.read_text(encoding="utf-8").splitlines():
+                    if line.strip():
+                        row = json.loads(line)
+                        if isinstance(row, dict) and row.get("event") == "epoch":
+                            epoch_rows.append(row)
+            legacy_path = run_dir / "metrics.json"
+            if not epoch_rows and legacy_path.is_file():
+                legacy = json.loads(legacy_path.read_text(encoding="utf-8"))
+                if isinstance(legacy, list):
+                    epoch_rows = [
+                        row for row in legacy
+                        if isinstance(row, dict) and "epoch" in row
+                    ]
+            if not epoch_rows:
+                raise ValueError("verification run did not complete an epoch")
+            manifest_path = run_dir / "data_manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            evidence = {
+                **report.to_dict(),
+                "recipe": recipe,
+                "run_dir": str(run_dir),
+                "data_fingerprint": manifest["fingerprint"],
+                "result_metrics": str(
+                    run_dir / "final_metrics.json"
+                    if (run_dir / "final_metrics.json").is_file()
+                    else metrics_path if metrics_path.is_file() else legacy_path
+                ),
+                "completed_epochs": len(epoch_rows),
+            }
+            record = self._record_for(name)
+            assert record is not None
+            self.catalog.mark_training_verified(record.alias, evidence)
+            return replace(report, training_evidence=evidence), run_dir
+        except Exception as exc:
+            record = self._record_for(name)
+            if record is not None:
+                self.catalog.mark_training_failed(record.alias, exc)
+            raise
+
+    def validate_config(self, config: Mapping[str, Any]) -> DataSpec:
+        return _validate_data_config(config, self.registry)
+
+    def prepare_experiment_data(self, *args, **kwargs) -> PreparedData:
+        kwargs.setdefault("registry", self.registry)
+        return _prepare_experiment_data(*args, **kwargs)
+
+
+DEFAULT_DATA_SERVICE = DataService()
+
+
+def prepare_experiment_data(*args, **kwargs) -> PreparedData:
+    """Compatibility entry used by all existing experiment runners."""
+
+    return DEFAULT_DATA_SERVICE.prepare_experiment_data(*args, **kwargs)
+
+
+def validate_data_config(
+    config: Mapping[str, Any],
+    registry: DatasetRegistry | None = None,
+) -> DataSpec:
+    """Compatibility validation entry used by existing callers."""
+
+    if registry is None:
+        return DEFAULT_DATA_SERVICE.validate_config(config)
+    return _validate_data_config(config, registry)
+
+
 __all__ = [
     "DATASETS",
+    "DEFAULT_DATA_SERVICE",
+    "DataService",
+    "DatasetStatusReport",
     "PreparedData",
     "create_dataset_registry",
     "prepare_experiment_data",
