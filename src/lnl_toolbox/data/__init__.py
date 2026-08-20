@@ -15,6 +15,7 @@ from .contracts import (
     RawDatasetSplit,
     Sample,
 )
+from .local_catalog import LocalDatasetCatalog, LocalDatasetRecord
 from .curriculum import MentorFeatureDataset, MentorFeatureRecord
 from .neighbors import NeighborGraphArtifact
 from .noisy_dataset import NoisyTargetDataset
@@ -41,6 +42,8 @@ __all__ = [
     "NeighborGraphArtifact",
     "NoisyTargetDataset",
     "RawDatasetSplit",
+    "LocalDatasetCatalog",
+    "LocalDatasetRecord",
     "Sample",
     "SemiSupervisedBatch",
     "TorchCifarDataset",
