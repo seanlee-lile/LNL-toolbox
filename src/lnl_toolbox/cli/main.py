@@ -31,16 +31,23 @@ from lnl_toolbox.composition import (
 from lnl_toolbox.core.config_overrides import apply_override_assignments
 from lnl_toolbox.evaluation.run_comparison import compare_runs, write_report
 from lnl_toolbox.training.runners import apply_epoch_override, resolve_runner, runner_names
-from lnl_toolbox.training.data_service import validate_data_config
 from lnl_toolbox.training.service import ExperimentService
-from lnl_toolbox.training.sweep import run_sweep
+from lnl_toolbox.training.sweep import (
+    plan_sweep,
+    resolve_planned_config,
+    run_sweep,
+    sweep_status,
+)
 
 
 def _validate_with_registry(config: dict[str, Any], *, check_data: bool):
-    runner = validate_config(config, check_data=False)
-    if check_data:
-        validate_data_config(config)
-    return runner
+    return ExperimentService().preflight(config, check_data=check_data)
+
+
+def _should_check_data(args: argparse.Namespace) -> bool:
+    """Keep run preflight explicit while retaining legacy --check-data syntax."""
+
+    return not bool(getattr(args, "no_check_data", False))
 
 
 def _source_options(parser: argparse.ArgumentParser) -> None:
@@ -57,7 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="LNL Toolbox 统一命令行入口",
         epilog=(
             "推荐顺序: lnl doctor -> lnl list experiments -> "
-            "lnl validate --recipe <name> -> lnl run --recipe <name> --dry-run"
+            "lnl run <source> --dry-run -> lnl run <source>"
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -102,7 +109,17 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--resume", type=Path)
     run.add_argument("--epochs", type=int)
     run.add_argument("--dry-run", action="store_true")
-    run.add_argument("--check-data", action="store_true")
+    data_check = run.add_mutually_exclusive_group()
+    data_check.add_argument(
+        "--check-data",
+        action="store_true",
+        help="compatibility flag; run preflight checks data by default",
+    )
+    data_check.add_argument(
+        "--no-check-data",
+        action="store_true",
+        help="skip dataset path/layout checks during dry-run",
+    )
     run.add_argument(
         "--set",
         dest="overrides",
@@ -118,18 +135,44 @@ def build_parser() -> argparse.ArgumentParser:
 
     sweep = sub.add_parser("sweep", help="run multiple seeds sequentially and resumably")
     _source_options(sweep)
-    sweep.add_argument("--seeds", type=int, nargs="+", required=True)
+    sweep.add_argument(
+        "status_path",
+        nargs="?",
+        type=Path,
+        help="sweep directory when using 'lnl sweep status <path>'",
+    )
+    sweep.add_argument("--seeds", type=int, nargs="+")
     sweep.add_argument("--output-dir", type=Path)
+    sweep.add_argument("--dry-run", action="store_true")
+    sweep.add_argument(
+        "--no-check-data",
+        action="store_true",
+        help="skip dataset path/layout checks during sweep dry-run",
+    )
     sweep.add_argument(
         "--set", dest="overrides", action="append", default=[], metavar="PATH=VALUE"
     )
 
     compare = sub.add_parser("compare", help="compare completed run directories")
     compare.add_argument("path", type=Path)
+    compare.add_argument(
+        "--group-by",
+        action="append",
+        help="grouping field; repeat or provide comma-separated fields",
+    )
+    compare.add_argument(
+        "--require-equal",
+        action="append",
+        help="fairness invariant within comparable groups; repeatable",
+    )
+    compare.add_argument("--strict", action="store_true")
 
     report = sub.add_parser("report", help="write Markdown, CSV, and JSON run reports")
     report.add_argument("path", type=Path)
     report.add_argument("--output-dir", type=Path)
+    report.add_argument("--group-by", action="append")
+    report.add_argument("--require-equal", action="append")
+    report.add_argument("--strict", action="store_true")
 
     compose = sub.add_parser("compose", help="查看兼容组合并生成自定义 YAML")
     compose_sub = compose.add_subparsers(dest="compose_command", required=True)
@@ -396,7 +439,9 @@ def _run(args: argparse.Namespace) -> int:
     config = apply_override_assignments(config, args.overrides)
     if args.epochs is not None:
         apply_epoch_override(config, args.epochs)
-    _validate_with_registry(config, check_data=(args.check_data or not args.dry_run))
+    if args.no_check_data and not args.dry_run:
+        raise ValueError("--no-check-data is only valid together with --dry-run")
+    _validate_with_registry(config, check_data=_should_check_data(args))
     if args.dry_run:
         _print_plan(config, path, project)
         return 0
@@ -417,14 +462,56 @@ def _resume(args: argparse.Namespace) -> int:
 
 
 def _sweep(args: argparse.Namespace) -> int:
-    config, _path, recipe, _project = _load_source(args)
+    if args.source == "status":
+        if args.status_path is None:
+            raise ValueError("provide a sweep directory after 'lnl sweep status'")
+        if args.seeds or args.overrides or args.output_dir or args.dry_run:
+            raise ValueError("sweep status cannot be combined with planning options")
+        value = sweep_status(args.status_path)
+        print("Sweep")
+        print(f"  ID: {value['sweep_id']}")
+        print(f"  Path: {value['root']}")
+        print("\nStatus")
+        for status in ("completed", "running", "failed", "interrupted", "pending"):
+            print(f"  {status:<12} {value['counts'][status]}")
+        print(f"\nProgress\n  {value['completed']} / {value['total']} completed")
+        if value["failed_runs"]:
+            print("\nFAILED RUNS")
+            for item in value["failed_runs"]:
+                overrides = " ".join(
+                    f"{path}={entry}" for path, entry in item["overrides"].items()
+                ) or "-"
+                print(f"  seed={item['seed']} {overrides} reason={item['reason']}")
+        return 0
+    if args.status_path is not None:
+        raise ValueError("unexpected extra sweep path; use 'lnl sweep status <path>'")
+    config, _path, recipe, _project, seeds, matrix = _load_sweep_source(args)
     config = apply_override_assignments(config, args.overrides)
-    _validate_with_registry(config, check_data=True)
-    result = run_sweep(
+    if args.no_check_data and not args.dry_run:
+        raise ValueError("--no-check-data is only valid together with --dry-run")
+    plan = plan_sweep(
         config,
-        args.seeds,
+        seeds,
+        matrix=matrix,
         output_dir=args.output_dir,
         recipe=recipe.id if recipe is not None else None,
+    )
+    service = ExperimentService()
+    for planned in plan.runs:
+        service.preflight(
+            resolve_planned_config(config, planned),
+            check_data=not args.no_check_data,
+        )
+    if args.dry_run:
+        _print_sweep_plan(plan)
+        return 0
+    result = run_sweep(
+        config,
+        seeds,
+        matrix=matrix,
+        output_dir=args.output_dir,
+        recipe=recipe.id if recipe is not None else None,
+        service=service,
     )
     print(f"sweep: {result.root}")
     print(
@@ -433,25 +520,139 @@ def _sweep(args: argparse.Namespace) -> int:
     return 1 if result.failed else 0
 
 
-def _compare(args: argparse.Namespace) -> int:
-    comparison = compare_runs(args.path)
-    print("method\tnoise\tn\tmean\tstd")
-    for row in comparison["summaries"]:
-        print(
-            f"{row['method']}\t{row['noise']}\t{row['n']}\t"
-            f"{row['mean']:.6f}\t{row['std']:.6f}"
+def _load_sweep_source(args: argparse.Namespace):
+    source = args.source
+    if source is None:
+        raise ValueError("provide a recipe name or sweep/experiment YAML path")
+    candidate = Path(source).expanduser()
+    if candidate.is_file() and candidate.suffix.lower() in {".yaml", ".yml"}:
+        value = load_yaml(candidate)
+        if "base" in value or "matrix" in value:
+            if int(value.get("version", 1)) != 1:
+                raise ValueError("sweep spec version must be 1")
+            base = value.get("base")
+            if not isinstance(base, dict):
+                raise ValueError("sweep spec requires a base mapping")
+            choices = [key for key in ("recipe", "config") if base.get(key) is not None]
+            if len(choices) != 1:
+                raise ValueError("sweep base requires exactly one of recipe or config")
+            base_source = str(base[choices[0]])
+            if choices[0] == "config":
+                path = Path(base_source).expanduser()
+                if not path.is_absolute():
+                    base_source = str((candidate.resolve().parent / path).resolve())
+            namespace = argparse.Namespace(
+                source=base_source,
+                recipe=None,
+                config=None,
+                project_root=args.project_root,
+            )
+            config, path, recipe, project = _load_source(namespace)
+            configured_seeds = value.get("seeds")
+            seeds = args.seeds if args.seeds is not None else configured_seeds
+            if not isinstance(seeds, list):
+                raise ValueError("sweep spec requires a seeds list or CLI --seeds")
+            matrix = value.get("matrix", {}) or {}
+            if not isinstance(matrix, dict):
+                raise ValueError("sweep matrix must be a mapping")
+            return config, path, recipe, project, seeds, matrix
+    config, path, recipe, project = _load_source(args)
+    if args.seeds is None:
+        raise ValueError("ordinary experiment sweeps require --seeds")
+    return config, path, recipe, project, args.seeds, {}
+
+
+def _print_sweep_plan(plan) -> None:
+    print("Sweep plan")
+    print(f"\nBase:\n  {plan.recipe}")
+    print("\nMatrix:")
+    if plan.matrix:
+        for path, values in plan.matrix:
+            print(f"  {path:<24} {', '.join(map(str, values))}")
+    else:
+        print("  (none)")
+    print(f"\nSeeds:\n  {', '.join(map(str, plan.seeds))}")
+    print(f"\nTotal runs:\n  {len(plan.runs)}")
+    print(f"\nOutput directory:\n  {plan.root}")
+    print("\nRun plan")
+    indexed = list(enumerate(plan.runs, start=1))
+    preview = indexed if len(indexed) <= 20 else indexed[:10]
+    for index, planned in preview:
+        overrides = " ".join(
+            f"{path}={value}" for path, value in planned.overrides
         )
+        suffix = f" {overrides}" if overrides else ""
+        print(f"  #{index:02d} seed={planned.seed}{suffix}")
+    if len(indexed) > 20:
+        print(f"  ... {len(indexed) - 15} runs omitted ...")
+        for index, planned in indexed[-5:]:
+            overrides = " ".join(
+                f"{path}={value}" for path, value in planned.overrides
+            )
+            suffix = f" {overrides}" if overrides else ""
+            print(f"  #{index:02d} seed={planned.seed}{suffix}")
+
+
+def _compare(args: argparse.Namespace) -> int:
+    comparison = compare_runs(
+        args.path,
+        group_by=_comparison_fields(args.group_by),
+        require_equal=_comparison_fields(args.require_equal),
+        strict=args.strict,
+    )
+    grouping = comparison.get("group_by", ["method", "noise.rate", "primary_metric.name"])
+    dimensions = [field for field in grouping if field != "primary_metric.name"]
+    labels = {"noise.rate": "NOISE", "method": "METHOD"}
+    header = [labels.get(field, field.upper()) for field in dimensions]
+    print("\t".join([*header, "METRIC", "N", "MEAN", "STD", "MEDIAN", "MIN", "MAX"]))
+    for row in comparison["summaries"]:
+        group = row.get("group", {})
+        values = [str(group.get(field, row.get(field, "-"))) for field in dimensions]
+        values.extend(
+            [
+                str(row["metric"]),
+                str(row["n"]),
+                f"{row['mean']:.6f}",
+                f"{row['std']:.6f}",
+                f"{row['median']:.6f}",
+                f"{row['min']:.6f}",
+                f"{row['max']:.6f}",
+            ]
+        )
+        print("\t".join(values))
+    print("\nCompatibility")
+    for field, status in comparison.get("compatibility", {}).items():
+        print(f"  {field:<24} {status}")
     for warning in comparison["warnings"]:
         print(warning)
-    return 0
+    return 1 if args.strict and comparison.get("excluded_runs") else 0
 
 
 def _report(args: argparse.Namespace) -> int:
-    comparison = compare_runs(args.path)
+    comparison = compare_runs(
+        args.path,
+        group_by=_comparison_fields(args.group_by),
+        require_equal=_comparison_fields(args.require_equal),
+        strict=args.strict,
+    )
     output_dir = args.output_dir or args.path
     for path in write_report(comparison, output_dir).values():
         print(path)
-    return 0
+    return 1 if args.strict and comparison.get("excluded_runs") else 0
+
+
+def _comparison_fields(values: list[str] | None):
+    if values is None:
+        return None
+    fields = tuple(
+        field.strip()
+        for value in values
+        for field in value.split(",")
+        if field.strip()
+    )
+    if not fields:
+        raise ValueError("comparison field list must not be empty")
+    return fields
 
 
 def _paper_list(args: argparse.Namespace) -> int:

@@ -32,15 +32,39 @@ data/cifar10/data_batch_1 ... data_batch_5, test_batch, batches.meta
 data/cifar100/train, test, meta
 ```
 
-然后先执行：
+然后执行一次完整但不训练的预检：
 
 ```powershell
-lnl validate --recipe cifar10-symmetric-ce-smoke --check-data
+lnl run cifar10-symmetric-ce-smoke --dry-run
 ```
 
 真实 UCI workflow 的数据准备命令见对应 reproduction 文档；数据和训练产物都不应提交到 Git。
 
-## 2. 第一次运行：按这五步操作
+## 2. Quick Start
+
+新用户推荐按下面的顺序操作：
+
+```powershell
+lnl doctor
+lnl list experiments --profile smoke
+lnl run cifar10-symmetric-ce-smoke --dry-run
+lnl run cifar10-symmetric-ce-smoke
+```
+
+`lnl run <source>` 中的 `<source>` 可以是内置 recipe 名称，也可以是 YAML
+配置文件路径：
+
+```powershell
+lnl run cifar10-symmetric-ce-smoke
+lnl run configs/experiment/cifar10_symmetric_ce_smoke.yaml
+```
+
+原有的显式写法继续兼容，但不再是主要推荐形式：
+
+```powershell
+lnl run --recipe cifar10-symmetric-ce-smoke
+lnl run --config configs/experiment/cifar10_symmetric_ce_smoke.yaml
+```
 
 ### 第一步：检查环境
 
@@ -81,27 +105,15 @@ lnl list experiments --profile smoke --format tsv
 
 第一次建议选择 `cifar10-symmetric-ce-smoke`。
 
-### 第三步：检查配置
+### 第三步：预检实际运行内容
 
 ```powershell
-lnl validate --recipe cifar10-symmetric-ce-smoke
+lnl run cifar10-symmetric-ce-smoke --dry-run
 ```
 
-意义：训练前检查 YAML、执行器、模型、loss、优化器和路径。检查不会开始训练，也不会下载数据。
-
-若还要确认本地数据目录存在：
-
-```powershell
-lnl validate --recipe cifar10-symmetric-ce-smoke --check-data
-```
-
-### 第四步：预览实际运行内容
-
-```powershell
-lnl run --recipe cifar10-symmetric-ce-smoke --dry-run
-```
-
-意义：显示最终数据路径、噪声来源、模型、训练轮数、设备、最佳模型选择依据和输出目录。`--dry-run` 不创建训练产物。
+意义：解析并验证配置、runner、数据路径、外部 artifact 和必要依赖，然后显示
+运行计划。`--dry-run` 不启动训练，也不创建 checkpoint。数据尚未准备、只想检查
+配置结构时，可以显式使用 `--no-check-data`；此时不能据此判断正式训练已经就绪。
 
 请重点确认：
 
@@ -110,10 +122,12 @@ lnl run --recipe cifar10-symmetric-ce-smoke --dry-run
 - `执行器` 是否与方法一致；
 - `输出根目录` 是否正确。
 
-### 第五步：开始训练
+`lnl validate` 保留给配置开发、CI 和高级排错，不是普通用户每次运行前的必经步骤。
+
+### 第四步：开始训练
 
 ```powershell
-lnl run --recipe cifar10-symmetric-ce-smoke
+lnl run cifar10-symmetric-ce-smoke
 ```
 
 意义：按 recipe 启动完整实验，并保存 resolved config、指标、噪声 manifest 和 checkpoint。
@@ -160,13 +174,24 @@ lnl papers config dual-t --profile smoke --variant cifar10-sym20 --path-only
 
 ## 4. 使用自定义 YAML
 
-复制一份现有配置后，可以通过文件路径预检和运行：
+复制一份现有配置后，可以直接把 YAML 路径作为 source：
 
 ```powershell
-lnl validate --config configs/experiment/my_experiment.yaml
-lnl run --config configs/experiment/my_experiment.yaml --dry-run
-lnl run --config configs/experiment/my_experiment.yaml
+lnl run configs/experiment/my_experiment.yaml --dry-run
+lnl run configs/experiment/my_experiment.yaml
 ```
+
+临时修改参数时重复使用 `--set PATH=VALUE`，无需复制 YAML：
+
+```powershell
+lnl run cifar10-symmetric-ce-smoke `
+  --set trainer.epochs=20 `
+  --set optimizer.lr=0.01 `
+  --set seed=42
+```
+
+`--set` 只能覆盖已经存在的 dotted path，路径拼错会在训练前失败。临时实验使用
+`--set`；需要长期保存、评审或复用的配置应创建 YAML 或使用 `lnl compose create`。
 
 每份可运行配置都应明确声明：
 
@@ -184,7 +209,7 @@ PCSE 的真实 CIFAR profile 同样属于 conditional workflow：它要求一个
 `papers/pcse/reproduction.md`，准备 source artifact 并设置
 `LNL_PCSE_SOURCE_RUN`；缺失或 identity 不匹配时，`validate` 和 dry-run 会在训练前失败。
 
-临时覆盖训练轮数或输出位置：
+兼容的显式写法和训练预算快捷参数仍然可用：
 
 ```powershell
 lnl run --config configs/experiment/my_experiment.yaml --epochs 5
@@ -205,7 +230,60 @@ lnl resume artifacts/runs/20260802-120000 --checkpoint best
 
 意义：自动读取运行目录中的 `resolved_config.yaml` 和 checkpoint。恢复时会检查配置、噪声映射和组件身份，避免把 checkpoint 接到不兼容实验。
 
-## 6. 如何理解运行产物
+已完成的 run 执行 `lnl resume` 是严格 no-op；中断的 run 才会从所选 checkpoint
+继续。
+
+## 6. Sweep、比较与报告
+
+顺序运行多个独立 seed：
+
+```powershell
+lnl sweep cifar10-symmetric-ce-smoke --seeds 1 2 3 4 5
+```
+
+每个 seed 都是通过 `ExperimentService` 执行的普通 run，拥有独立的配置、artifact、
+checkpoint 和结果。再次执行同一 sweep 时，已完成任务跳过，失败任务重试，中断且有
+checkpoint 的任务继续。
+
+matrix sweep 使用 YAML 描述研究维度：
+
+```yaml
+version: 1
+base:
+  recipe: cifar10-symmetric-ce-smoke
+matrix:
+  noise.rate: [0.2, 0.4]
+  optimizer.lr: [0.1, 0.01]
+seeds: [1, 2, 3]
+```
+
+先预览展开计划，再执行和检查状态：
+
+```powershell
+lnl sweep experiment.yaml --dry-run
+lnl sweep experiment.yaml
+lnl sweep status artifacts/sweeps/<sweep-id>
+```
+
+比较完成的 run：
+
+```powershell
+lnl compare artifacts/sweeps/<sweep-id>
+lnl compare artifacts/sweeps/<sweep-id> `
+  --group-by method `
+  --group-by noise.rate
+```
+
+每组输出 metric、`n`、mean、std、median、min 和 max，并在可比组内检查数据、
+模型、增强、选择划分与 Noise Manifest。生成复用同一比较结果的报告：
+
+```powershell
+lnl report artifacts/sweeps/<sweep-id>
+```
+
+输出目录包含 `report.md`、`summary.csv` 和 `summary.json`。
+
+## 7. 如何理解运行产物
 
 典型运行目录包含：
 
@@ -227,7 +305,7 @@ lnl resume artifacts/runs/20260802-120000 --checkpoint best
 - `test_accuracy`：最终测试集指标；
 - `noise.effective_train_subset_actual_rate`：实际训练子集中的噪声比例。
 
-## 7. 浏览底层组件
+## 8. 浏览底层组件
 
 ```powershell
 lnl list components
@@ -237,7 +315,7 @@ lnl list components --kind batch_selector
 
 意义：按类型查看可组合的 loss、selector、pipeline 和 parameter-update 组件。默认展示每个组件的能力与论文关联；脚本处理时可追加 `--format tsv`。组件不一定等于完整论文方法；完整论文入口应优先从 `lnl papers list` 或 `lnl list experiments` 获取。
 
-## 8. 组合组件并生成配置
+## 9. 组合组件并生成配置
 
 先查看指定 runner 的组合边界：
 
@@ -270,7 +348,7 @@ lnl run --config configs/experiment/my_gce_small_loss.yaml --dry-run
 
 自定义组合只代表工程实验，不自动对应论文方法或论文复现结果。
 
-## 9. 开发与验证
+## 10. 开发与验证
 
 运行全部测试：
 

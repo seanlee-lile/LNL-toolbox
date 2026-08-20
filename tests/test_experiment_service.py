@@ -28,6 +28,23 @@ class _FakeRunner:
 
 
 class ExperimentServiceTest(unittest.TestCase):
+    def test_preflight_reuses_config_and_data_validation_without_running(self) -> None:
+        service = ExperimentService()
+        config = {"data": {"name": "cifar10", "root": "missing"}}
+        runner = object()
+        with patch("lnl_toolbox.catalog.validate_config", return_value=runner) as validate, patch(
+            "lnl_toolbox.training.data_service.validate_data_config"
+        ) as validate_data:
+            self.assertIs(service.preflight(config), runner)
+        validate.assert_called_once_with(config, check_data=False)
+        validate_data.assert_called_once_with(config)
+
+        with patch("lnl_toolbox.catalog.validate_config", return_value=runner), patch(
+            "lnl_toolbox.training.data_service.validate_data_config"
+        ) as validate_data:
+            self.assertIs(service.preflight(config, check_data=False), runner)
+        validate_data.assert_not_called()
+
     def test_service_invokes_runner_and_writes_standard_artifacts(self) -> None:
         runner = _FakeRunner()
         with tempfile.TemporaryDirectory() as directory, patch(

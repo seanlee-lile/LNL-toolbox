@@ -13,6 +13,23 @@ from lnl_toolbox.training.runners import resolve_runner
 
 
 class ExperimentService:
+    def preflight(
+        self,
+        config: Mapping[str, Any],
+        *,
+        check_data: bool = True,
+    ):
+        """Validate one resolved experiment without creating run artifacts."""
+
+        from lnl_toolbox.catalog import validate_config
+
+        runner = validate_config(config, check_data=False)
+        if check_data:
+            from lnl_toolbox.training.data_service import validate_data_config
+
+            validate_data_config(config)
+        return runner
+
     def _ensure_metadata(self, run_dir: Path, config: Mapping[str, Any]) -> None:
         resolved = run_dir / "resolved_config.yaml"
         if not resolved.is_file():

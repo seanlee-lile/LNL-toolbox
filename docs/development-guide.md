@@ -85,8 +85,9 @@ data/
 `data/` 已加入 `.gitignore`。
 
 下载 CIFAR 官方 Python 版本后，只复制解压目录中的数据文件，不要提交压缩包或数据集。
-统一 CLI 不会在训练时自动下载数据；用 `lnl validate --recipe <recipe> --check-data`
-提前验证路径。
+统一 CLI 不会在训练时自动下载数据；普通用户使用 `lnl run <source> --dry-run`
+执行与正式训练一致的数据 preflight。`lnl validate --check-data` 主要用于配置开发、
+CI 和高级排错。
 
 ## 5. 运行测试
 
@@ -180,7 +181,9 @@ lnl-train --config configs/experiment/cifar10_smoke.yaml
 
 ## 11. 统一实验服务与质量门禁
 
-用户入口统一调用 `ExperimentService`；runner 只负责训练生命周期，服务层负责标准运行元数据和 `final_metrics.json` Result Contract。新增 runner 时应在 `training/runners.py` 注册自身的预算路径与 `RunPlan`，CLI 不得按论文名称分支。
+用户入口统一调用 `ExperimentService`；runner 只负责训练生命周期，服务层负责共享
+preflight、标准运行元数据和 `final_metrics.json` Result Contract。新增 runner 时应在
+`training/runners.py` 注册自身的预算路径与 `RunPlan`，CLI 不得按论文名称分支。
 
 常用命令：
 
@@ -188,9 +191,21 @@ lnl-train --config configs/experiment/cifar10_smoke.yaml
 lnl run cifar10-symmetric-ce-smoke --set trainer.epochs=2 --dry-run
 lnl run configs/experiment/cifar10_symmetric_ce_smoke.yaml
 lnl sweep cifar10-symmetric-ce-smoke --seeds 1 2 3
+lnl sweep sweep-spec.yaml --dry-run
+lnl sweep status artifacts/sweeps/example
 lnl compare artifacts/sweeps/example
 lnl report artifacts/sweeps/example
 ```
+
+`--dry-run` 默认验证数据与外部 artifact，只跳过真正训练和 checkpoint 写入；仅当
+数据尚未准备时才使用 `--no-check-data`。Sweep matrix 必须调用
+`core.config_overrides` 的 dotted-path override，不得自行修改嵌套配置。每个任务由
+seed、resolved override 和 config hash 共同标识。
+
+比较层把 `group_by` 视为允许变化的研究维度，把 `require_equal` 视为同组公平比较
+必须一致的条件。Noise Manifest 只在同一 seed 和可比条件下跨方法核对；不同 seed
+不要求共享 manifest。`lnl report` 必须直接消费 `lnl compare` 使用的同一比较结果，
+不得另写 aggregation 或 fairness 逻辑。
 
 CI 在 Python 3.10 和 3.12 上执行 Ruff、完整 unittest、CLI 测试和 coverage；发布 job
 分别从 wheel 与 sdist 安装，并验证 `lnl --help`、公开 recipe discovery 和 VolMinNet

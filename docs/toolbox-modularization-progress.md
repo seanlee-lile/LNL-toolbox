@@ -42,3 +42,21 @@
 - Focused evidence: official-format adapter and unified-service tests pass 13 / 13; affected data/CLI tests pass 47 / 47; full unittest passes 802 / 802.
 - Exact next step: human diff review, then commit only if requested.
 - Collaborator note: no runner, algorithm, model, configuration, checkpoint, or registry interface changed.
+
+## CLI experiment workflow v2 (2026-08-20)
+
+- Current task: align the documented CLI workflow, full dry-run preflight, matrix sweep/status, and grouping-aware comparison/reporting.
+- Branch: `codex/cli`; base commit: `ccc9dc5`.
+- Checklist: documentation; shared preflight; Sweep v2; Compare v2; final CLI/regression validation.
+- Completed: 5 / 5 (100%); implementation and final validation are complete.
+- Files inspected: README, development/data-flow guidance, CLI, experiment service, sweep, comparison, override engine, Result Contract, and focused tests.
+- Files modified: README, development/file-map/progress documents, CLI, experiment service, sweep/comparison modules, and four existing test files.
+- Files added: none.
+- Local checkpoint commits: none.
+- Tests executed: Task 1 full suite `802/802`; Task 2 focused tests and full suite `804/804`; Task 3 focused tests and full suite `808/808`; Task 4 focused tests and full suite `812/812`; final focused tests, Ruff, CLI help/dry-run checks, `git diff --check`, and final full suite `812/812` all passed.
+- Blockers: none.
+- Assumptions: sweeps remain sequential; duplicate seeds and duplicate resolved matrix configurations fail; strict compare excludes leakage-marked runs.
+- Exact next step: human diff review, then commit only the approved files if requested.
+- Ready for history cleanup: no checkpoint cleanup is needed.
+- Ready to push: ready after explicit commit and publication approval; neither operation has been performed.
+- Collaborator note: `README.md`, `cli/main.py`, and shared progress documents are high-conflict files; changes are limited to CLI experiment infrastructure.

@@ -470,6 +470,22 @@ These adapters remain local-only: they validate existing data and never download
 | `.github/workflows/quality.yml` | Python 3.10/3.12 lint, tests, coverage, CLI, wheel installation. |
 
 Paper mathematics and dedicated experiment runners remain unchanged by this infrastructure pass.
+
+## CLI experiment workflow v2 (2026-08-20)
+
+| Path | Responsibility |
+|---|---|
+| `training/service.py` | Shared, artifact-free preflight for configuration, runner and optional dataset validation, in addition to run/resume. |
+| `training/sweep.py` | Deterministic matrix planner, config-hash run identity, schema-v2 manifest, legacy schema-v1 resume, sequential execution and status inspection. |
+| `evaluation/run_comparison.py` | Metric-safe grouping, within-group fairness invariants, same-seed Noise Manifest checks, strict leakage exclusion and shared report generation. |
+| `cli/main.py` | `run --no-check-data`, sweep spec/dry-run/status, grouping-aware compare/report and concise terminal summaries. |
+| `tests/test_experiment_service.py` | Shared preflight delegation and no-artifact behavior. |
+| `tests/test_sweep.py` | Cartesian expansion, deterministic ordering, fail-before-write override validation, matrix resume and status. |
+| `tests/test_run_comparison.py` | Grouping, fairness, manifest/seed semantics, metric isolation, leakage exclusion and report compatibility. |
+| `tests/test_unified_cli.py` | End-user dry-run, matrix preview, status, compare output and strict exit semantics. |
+
+The v2 workflow does not modify runner invocation, paper objectives, checkpoint semantics,
+clean-label boundaries or existing Result Contract field meanings.
 # 统一数据协议文件图（2026-08-18）
 
 | 文件 | 责任 |

@@ -265,10 +265,43 @@ class UnifiedCliTest(unittest.TestCase):
         self.assertEqual(validate_config(parsed).name, "coteaching")
 
     def test_dry_run_does_not_create_output(self) -> None:
-        code, output, _ = self.invoke("run", "--recipe", "cifar10-symmetric-ce-smoke", "--dry-run")
+        with patch("lnl_toolbox.cli.main.ExperimentService.run") as runner:
+            code, output, _ = self.invoke(
+                "run", "--recipe", "cifar10-symmetric-ce-smoke", "--dry-run"
+            )
         self.assertEqual(code, 0)
         self.assertIn("runner: supervised", output)
         self.assertIn("Dataset: cifar10", output)
+        runner.assert_not_called()
+
+    def test_dry_run_checks_data_unless_explicitly_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "missing-data.yaml"
+            config_path.write_text(
+                yaml.safe_dump(
+                    {
+                        "data": {"name": "cifar10", "root": str(root / "missing")},
+                        "execution": {"runner": "supervised"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            code, _, error = self.invoke("run", str(config_path), "--dry-run")
+            self.assertEqual(code, 2)
+            self.assertIn("data path does not exist", error)
+
+            with patch("lnl_toolbox.cli.main.ExperimentService.run") as runner:
+                code, output, error = self.invoke(
+                    "run", str(config_path), "--dry-run", "--no-check-data"
+                )
+            self.assertEqual(code, 0, error)
+            self.assertIn("runner: supervised", output)
+            runner.assert_not_called()
+
+            code, _, error = self.invoke("run", str(config_path), "--no-check-data")
+            self.assertEqual(code, 2)
+            self.assertIn("only valid together with --dry-run", error)
 
     def test_run_checks_data_before_invoking_runner(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -322,7 +355,7 @@ class UnifiedCliTest(unittest.TestCase):
 
             with patch(
                 "lnl_toolbox.training.runners.RunnerSpec.invoke", side_effect=fake_run
-            ), patch("lnl_toolbox.cli.main.validate_data_config"):
+            ), patch("lnl_toolbox.cli.main.ExperimentService.preflight"):
                 code, _, error = self.invoke(
                     "run",
                     "--config", str(config_path),
@@ -511,11 +544,42 @@ with contextlib.redirect_stdout(io.StringIO()):
         self.assertIn("supervised", output)
 
     def test_compare_and_report_dispatch_to_evaluation_service(self) -> None:
-        summary = {"summaries": [], "warnings": [], "failed_runs": []}
+        summary = {
+            "group_by": ["method", "noise.rate", "primary_metric.name"],
+            "summaries": [
+                {
+                    "group": {
+                        "method": "ce",
+                        "noise.rate": 0.2,
+                        "primary_metric.name": "test_accuracy",
+                    },
+                    "metric": "test_accuracy",
+                    "n": 1,
+                    "mean": 0.8,
+                    "std": 0.0,
+                    "median": 0.8,
+                    "min": 0.8,
+                    "max": 0.8,
+                }
+            ],
+            "compatibility": {"model": "consistent"},
+            "warnings": [],
+            "excluded_runs": [],
+            "failed_runs": [],
+        }
         with patch("lnl_toolbox.cli.main.compare_runs", return_value=summary):
-            code, output, error = self.invoke("compare", str(ROOT))
+            code, output, error = self.invoke(
+                "compare", str(ROOT), "--group-by", "method,noise.rate"
+            )
         self.assertEqual(code, 0, error)
-        self.assertIn("method\tnoise", output)
+        self.assertIn("METHOD\tNOISE\tMETRIC", output)
+        self.assertIn("test_accuracy", output)
+        self.assertIn("Compatibility", output)
+
+        leaked = dict(summary, excluded_runs=[{"run_dir": "x", "reason": "leakage"}])
+        with patch("lnl_toolbox.cli.main.compare_runs", return_value=leaked):
+            code, _, _ = self.invoke("compare", str(ROOT), "--strict")
+        self.assertEqual(code, 1)
 
         with tempfile.TemporaryDirectory() as directory, patch(
             "lnl_toolbox.cli.main.compare_runs", return_value=summary
@@ -526,6 +590,64 @@ with contextlib.redirect_stdout(io.StringIO()):
             code, output, error = self.invoke("report", str(ROOT), "--output-dir", directory)
         self.assertEqual(code, 0, error)
         self.assertIn("report.md", output)
+
+    def test_matrix_sweep_dry_run_and_status_do_not_invoke_runner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output_dir = root / "sweep-output"
+            spec = root / "sweep.yaml"
+            spec.write_text(
+                yaml.safe_dump(
+                    {
+                        "version": 1,
+                        "base": {"recipe": "cifar10-symmetric-ce-smoke"},
+                        "matrix": {"trainer.epochs": [1, 2]},
+                        "seeds": [1, 2],
+                    },
+                    sort_keys=False,
+                ),
+                encoding="utf-8",
+            )
+            with patch("lnl_toolbox.cli.main.ExperimentService.run") as runner:
+                code, output, error = self.invoke(
+                    "sweep",
+                    str(spec),
+                    "--dry-run",
+                    "--no-check-data",
+                    "--output-dir",
+                    str(output_dir),
+                )
+            self.assertEqual(code, 0, error)
+            self.assertIn("Total runs:\n  4", output)
+            self.assertIn("trainer.epochs=1", output)
+            self.assertFalse(output_dir.exists())
+            runner.assert_not_called()
+
+            output_dir.mkdir()
+            (output_dir / "sweep_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "sweep_id": "example",
+                        "status": "running",
+                        "runs": [
+                            {"seed": 1, "status": "completed"},
+                            {
+                                "seed": 2,
+                                "status": "failed",
+                                "overrides": {"trainer.epochs": 2},
+                                "error": "failure",
+                            },
+                            {"seed": 3, "status": "pending"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            code, output, error = self.invoke("sweep", "status", str(output_dir))
+            self.assertEqual(code, 0, error)
+            self.assertIn("1 / 3 completed", output)
+            self.assertIn("trainer.epochs=2", output)
 
 
 if __name__ == "__main__":
