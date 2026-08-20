@@ -1,0 +1,611 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LNL Toolbox Command Console</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #111827;
+      --panel: #1f2937;
+      --panel-2: #263449;
+      --line: #374151;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --accent: #60a5fa;
+      --good: #34d399;
+      --bad: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(circle at 10% 0%, #243b63, var(--bg) 38%);
+      color: var(--text);
+      font: 14px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+    main { max-width: 1440px; margin: 0 auto; padding: 28px; }
+    h1 { margin: 0 0 6px; font-size: 24px; }
+    .subtitle { color: var(--muted); margin-bottom: 22px; }
+    .layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; align-items: start; }
+    .panel {
+      background: rgba(31, 41, 55, .92);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 16px 45px rgba(0, 0, 0, .2);
+    }
+    .section-title { color: var(--muted); font-size: 12px; letter-spacing: .06em; margin: 0 0 10px; }
+    .module-list, .commands { display: grid; gap: 8px; }
+    .module-button { width: 100%; }
+    .module-button.active { border-color: var(--accent); background: #294568; }
+    .label { display: block; color: #bfdbfe; font-weight: 700; }
+    .desc { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
+    button {
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: var(--panel-2);
+      color: var(--text);
+      cursor: pointer;
+      text-align: left;
+      padding: 10px 12px;
+      font: inherit;
+    }
+    button:hover, button.active { border-color: var(--accent); background: #294568; }
+    button.primary { text-align: center; background: #1d4d7b; border-color: #3b82f6; }
+    button.secondary { text-align: center; }
+    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .form-grid label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
+    .form-grid .wide { grid-column: 1 / -1; }
+    select, input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0b1220;
+      color: var(--text);
+      padding: 9px 10px;
+      font: inherit;
+    }
+    input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); }
+    textarea {
+      width: 100%; min-height: 88px; resize: vertical; border: 1px solid var(--line);
+      border-radius: 8px; background: #0b1220; color: var(--text); padding: 10px; font: inherit;
+    }
+    .helper, .module-description { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+    .module-description { margin: 0 0 14px; }
+    .hidden { display: none !important; }
+    .right-stack { display: grid; gap: 16px; }
+    .parameter-panel { min-height: 230px; }
+    .parameter-heading { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+    .parameter-heading h2 { margin: 0; font-size: 18px; }
+    .parameter-heading span { color: var(--muted); font-size: 12px; }
+    .heading-actions { display: flex; align-items: center; gap: 8px; }
+    .yaml-editor-panel textarea { min-height: 420px; font-size: 13px; }
+    .preview {
+      margin: 0 0 14px; padding: 14px; min-height: 54px; white-space: pre-wrap;
+      overflow-wrap: anywhere; color: #bfdbfe; background: #0b1220; border-radius: 9px; border: 1px solid #263b5d;
+    }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+    .status { color: var(--muted); margin: 0 0 8px; }
+    .status.running { color: #fbbf24; }
+    .status.success { color: var(--good); }
+    .status.failed { color: var(--bad); }
+    pre {
+      margin: 0; min-height: 300px; max-height: 48vh; overflow: auto; padding: 14px;
+      background: #080d17; color: #d1d5db; border-radius: 9px; border: 1px solid #1f2937;
+      white-space: pre-wrap; overflow-wrap: anywhere;
+    }
+    .note { margin-top: 14px; padding: 10px 12px; border-left: 3px solid #f59e0b; color: #fde68a; background: rgba(120, 80, 0, .18); font-size: 12px; }
+    @media (max-width: 900px) {
+      main { padding: 16px; }
+      .layout { grid-template-columns: 1fr; }
+      .form-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>LNL Toolbox Command Console</h1>
+    <div class="subtitle">左侧选择功能，右侧配置参数并预览指令；参数变化会即时反映在预览中。</div>
+    <div class="layout">
+      <aside class="panel">
+        <div class="section-title">功能模块</div>
+        <div id="module-list" class="module-list"></div>
+        <div class="section-title" style="margin-top: 20px;">常用快捷命令</div>
+        <div id="commands" class="commands"></div>
+        <div class="note">训练按钮默认面向短测试。正式论文实验请使用对应 reproduction YAML 和论文规定轮次。</div>
+      </aside>
+      <div class="right-stack">
+        <section class="panel parameter-panel">
+          <div class="parameter-heading">
+            <h2 id="module-title">新手模式</h2>
+            <div class="heading-actions">
+              <span id="module-hint">从检查到训练的向导</span>
+              <button id="show-yaml" class="secondary">显示/编辑 YAML</button>
+            </div>
+          </div>
+          <p id="module-description" class="module-description"></p>
+          <div id="parameter-panel"></div>
+        </section>
+        <section id="yaml-editor-panel" class="panel yaml-editor-panel hidden">
+          <div class="section-title">YAML 编辑器</div>
+          <div class="form-grid">
+            <label>从 recipe 加载
+              <select id="yaml-source"></select>
+            </label>
+            <label>另存为路径（项目目录内）
+              <input id="yaml-path" placeholder="例如 configs/experiment/my_clothing1m.yaml" spellcheck="false">
+            </label>
+          </div>
+          <div id="yaml-source-path" class="helper">请选择 recipe 后加载原始 YAML。</div>
+          <div id="yaml-schema-meta" class="helper">加载后这里只显示该方法允许修改的参数。</div>
+          <div id="yaml-fields" class="form-grid"></div>
+          <textarea id="yaml-text" spellcheck="false" readonly placeholder="点击“加载 YAML”查看只读 YAML"></textarea>
+          <div class="actions" style="margin-top: 10px;">
+            <button id="yaml-load" class="secondary">加载 YAML</button>
+            <button id="yaml-save-as" class="primary">另存为 YAML</button>
+            <button id="yaml-overwrite" class="secondary">覆盖保存</button>
+            <button id="yaml-validate" class="secondary">验证此 YAML</button>
+            <button id="yaml-run" class="primary">运行此 YAML</button>
+          </div>
+          <p class="helper">参数只能通过上方菜单修改；组件、runner、方法结构和模型/损失名称不可在此改动。内置 recipe 不允许被覆盖。</p>
+        </section>
+        <section class="panel">
+          <div class="section-title">PREVIEW · 当前模块生成的指令</div>
+          <div id="preview" class="preview">正在加载菜单...</div>
+          <div class="actions">
+            <button id="run" class="primary" disabled>执行此指令</button>
+            <button id="copy" class="secondary" disabled>复制指令</button>
+            <button id="clear" class="secondary">清空日志</button>
+          </div>
+          <div id="status" class="status">尚未执行命令</div>
+          <pre id="output">选择左侧模块或快捷命令后，点击“执行此指令”。</pre>
+        </section>
+      </div>
+    </div>
+  </main>
+  <script>
+    const state = { selected: null, request: null, jobId: null, timer: null, module: "beginner", recipes: [], papers: [], yamlSchema: null };
+    const modules = [
+      { id: "beginner", label: "新手模式", description: "用配方、动作和轮次生成安全的 lnl 指令。", hint: "检查 → 预演 → 训练" },
+      { id: "yaml", label: "新建 YAML", description: "从已有 recipe 组合损失、选择器和训练策略参数。", hint: "参数可选，实时预览" },
+      { id: "data", label: "数据与验证", description: "先验证数据与配置，或只做一次 dry-run。", hint: "不训练也能查问题" },
+      { id: "sweep", label: "多 seed Sweep", description: "为同一 recipe 顺序运行多个随机种子。", hint: "支持中断后恢复" },
+      { id: "results", label: "运行管理", description: "恢复训练、查看报告或比较训练曲线。", hint: "checkpoint / report / compare" },
+      { id: "papers", label: "论文方法", description: "按论文查看方法、配置 profile 与 recipe 变体。", hint: "论文目录" },
+      { id: "advanced", label: "自由输入", description: "直接输入一条 lnl 指令，后端仍会安全解析。", hint: "高级用户" },
+    ];
+    const moduleList = document.getElementById("module-list");
+    const parameterPanel = document.getElementById("parameter-panel");
+    const previewNode = document.getElementById("preview");
+    const outputNode = document.getElementById("output");
+    const statusNode = document.getElementById("status");
+    const runButton = document.getElementById("run");
+    const copyButton = document.getElementById("copy");
+    const yamlEditorPanel = document.getElementById("yaml-editor-panel");
+
+    function quoteArg(value) {
+      const text = String(value ?? "").trim();
+      return /^(?:[A-Za-z0-9_./:=+-]+)$/.test(text) ? text : '"' + text.replaceAll('"', '\\"') + '"';
+    }
+    function setRequest(request, command) {
+      state.request = request;
+      previewNode.textContent = command || "请输入或生成一条指令";
+      runButton.disabled = !command;
+      copyButton.disabled = !command;
+    }
+    function selectValue(id, fallback = "") {
+      const node = document.getElementById(id);
+      return node ? node.value : fallback;
+    }
+    function field(label, id, control, wide = false) {
+      return '<label class="' + (wide ? 'wide' : '') + '">' + label + control.replace("__ID__", id) + '</label>';
+    }
+    function selectControl(id, options, attrs = "") {
+      return '<select id="' + id + '" ' + attrs + '>' + options.map(function (item) {
+        const value = typeof item === "string" ? item : item.value;
+        const label = typeof item === "string" ? item : item.label;
+        return '<option value="' + escapeHtml(value) + '">' + escapeHtml(label) + '</option>';
+      }).join("") + '</select>';
+    }
+    function inputControl(id, value, type = "text", attrs = "") {
+      return '<input id="' + id + '" type="' + type + '" value="' + escapeHtml(value) + '" spellcheck="false" ' + attrs + '>';
+    }
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, function (char) {
+        return ({"&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;"})[char];
+      });
+    }
+    function recipeOptions(runner = "") {
+      return state.recipes.filter(function (item) {
+        return !runner || item.runner === runner;
+      }).map(function (item) {
+        const epochs = item.epochs ? " · " + item.epochs + " ep" : "";
+        return { value: item.id, label: item.id + " · " + item.method + " · " + item.dataset + " · " + item.noise + epochs };
+      });
+    }
+    function recipesSelect(id = "recipe", _fallback = "", runner = "") {
+      const options = recipeOptions(runner);
+      return selectControl(id, options.length ? options : [_fallback]);
+    }
+    function commonFormStart() { return '<div class="form-grid">'; }
+    function commonFormEnd() { return '</div>'; }
+
+    function renderBeginner() {
+      parameterPanel.innerHTML = commonFormStart() +
+        field("我要做什么？", "action", selectControl("__ID__", [
+          {value:"validate", label:"只检查，不训练"}, {value:"dry-run", label:"预演训练流程"},
+          {value:"train", label:"训练几轮"}, {value:"sweep", label:"多 seed Sweep"}
+        ])) +
+        field("选择配方", "recipe", recipesSelect("__ID__")) +
+        field("训练轮次", "epochs", selectControl("__ID__", ["1", "2", "5", "10"])) +
+        field("输出目录", "output-dir", inputControl("__ID__", "artifacts/web-smoke")) +
+        field("随机种子（Sweep 时生效）", "seeds", inputControl("__ID__", "1 2 3"), true) +
+        commonFormEnd() + '<p class="helper">先选择检查或 dry-run；确认无误后再训练。Sweep 会按种子顺序运行。</p>';
+      if ([...document.getElementById("recipe").options].some(function (option) { return option.value === "cifar10-clean-smoke"; })) document.getElementById("recipe").value = "cifar10-clean-smoke";
+      document.getElementById("action").addEventListener("change", function () {
+        document.getElementById("seeds").closest("label").classList.toggle("hidden", this.value !== "sweep");
+        updateModulePreview();
+      });
+      if (document.getElementById("seeds")) document.getElementById("seeds").closest("label").classList.add("hidden");
+    }
+    function renderYaml() {
+      parameterPanel.innerHTML = commonFormStart() +
+        field("基础配方", "yaml-base", recipesSelect("__ID__", "cifar10-symmetric-ce-smoke", "supervised"), true) +
+        field("输出 YAML", "yaml-output", inputControl("__ID__", "configs/experiment/my_train.yaml"), true) +
+        field("损失函数", "yaml-loss", selectControl("__ID__", ["ce", "gce", "nce", "mae", "rce", "apl"])) +
+        field("样本选择器", "yaml-selector", selectControl("__ID__", ["all", "small_loss"])) +
+        field("保留率", "yaml-keep-rate", inputControl("__ID__", "0.8", "number", "step=0.01 min=0 max=1")) +
+        field("参数更新策略", "yaml-update", selectControl("__ID__", [
+          {value:"standard", label:"standard"}, {value:"step_milestone", label:"step_milestone"}, {value:"cdr", label:"cdr"}
+        ])) +
+        field("milestones", "yaml-milestones", inputControl("__ID__", "60 80")) +
+        field("gamma", "yaml-gamma", inputControl("__ID__", "0.1", "number", "step=0.01")) +
+        field("CDR noise rate", "yaml-cdr-noise-rate", inputControl("__ID__", "0.2", "number", "step=0.01 min=0 max=1")) +
+        field("L1 decay", "yaml-l1-decay", inputControl("__ID__", "0.0", "number", "step=0.0001 min=0")) +
+        commonFormEnd() + '<p class="helper">这里只显示 supervised runner 可组合的基础 recipe；输出路径可直接填入 YAML 文件位置。</p>';
+      if ([...document.getElementById("yaml-base").options].some(function (option) { return option.value === "cifar10-symmetric-ce-smoke"; })) document.getElementById("yaml-base").value = "cifar10-symmetric-ce-smoke";
+      updateYamlFields();
+    }
+    function renderData() {
+      parameterPanel.innerHTML = commonFormStart() +
+        field("操作", "data-action", selectControl("__ID__", [
+          {value:"validate", label:"validate · 检查配置和数据"}, {value:"dry-run", label:"dry-run · 预演训练"}
+        ])) + field("配方", "data-recipe", recipesSelect("__ID__")) +
+        commonFormEnd() + '<p class="helper">该模块不会自动下载数据，只通过统一 recipe/数据校验入口检查。</p>';
+      if ([...document.getElementById("data-recipe").options].some(function (option) { return option.value === "cifar10-clean-smoke"; })) document.getElementById("data-recipe").value = "cifar10-clean-smoke";
+    }
+    function renderSweep() {
+      parameterPanel.innerHTML = commonFormStart() +
+        field("Sweep 配方", "sweep-recipe", recipesSelect("__ID__"), true) +
+        field("Seeds", "sweep-seeds", inputControl("__ID__", "1 2 3")) +
+        field("输出目录", "sweep-output", inputControl("__ID__", "artifacts/web-sweep")) +
+        commonFormEnd() + '<p class="helper">例如输入 1 2 3；每个 seed 使用同一个 recipe，并写入独立结果目录。</p>';
+      if ([...document.getElementById("sweep-recipe").options].some(function (option) { return option.value === "cifar10-clean-smoke"; })) document.getElementById("sweep-recipe").value = "cifar10-clean-smoke";
+    }
+    function renderResults() {
+      parameterPanel.innerHTML = commonFormStart() +
+        field("操作", "result-action", selectControl("__ID__", [
+          {value:"resume", label:"resume · 恢复训练"}, {value:"report", label:"report · 查看报告"}, {value:"compare", label:"compare · 比较曲线"}
+        ])) + field("运行目录", "result-path", inputControl("__ID__", "artifacts/web-smoke")) +
+        field("checkpoint", "result-checkpoint", selectControl("__ID__", ["last", "best"])) +
+        commonFormEnd() + '<p class="helper">resume 使用已有 checkpoint；report/compare 读取现有运行产物。</p>';
+    }
+    function renderPapers() {
+      const paperItems = state.papers.map(function (item) {
+        return { value: item.id, label: item.acronym + " · " + item.title };
+      });
+      parameterPanel.innerHTML = commonFormStart() +
+        field("论文方法", "paper-id", selectControl("__ID__", paperItems.length ? paperItems : ["binary-risk"])) +
+        field("操作", "paper-action", selectControl("__ID__", [
+          {value:"list", label:"list · 列出论文方法"}, {value:"show", label:"show · 查看论文信息"}, {value:"config", label:"config · 查看配置"}
+        ])) +
+        field("配置 profile", "paper-profile", selectControl("__ID__", ["smoke", "reproduction", "experiment"])) +
+        field("配置 variant", "paper-variant", inputControl("__ID__", "")) +
+        commonFormEnd() + '<p id="paper-help" class="helper">选择 config 后，variant 会根据论文目录自动填充。</p>';
+      updatePaperVariants();
+    }
+    function renderAdvanced() {
+      parameterPanel.innerHTML = '<label for="free-command">输入一条 lnl 指令</label>' +
+        '<textarea id="free-command" spellcheck="false">lnl doctor</textarea>' +
+        '<p class="helper">例如：lnl run --recipe cifar10-clean-smoke --epochs 1 --output-dir artifacts/web-smoke</p>' +
+        '<p class="helper">只允许 lnl 指令；不支持管道、重定向和其他 shell 命令。</p>';
+    }
+    function renderModuleButtons() {
+      moduleList.replaceChildren();
+      modules.forEach(function (item) {
+        const button = document.createElement("button");
+        button.className = "module-button" + (item.id === state.module ? " active" : "");
+        button.dataset.module = item.id;
+        button.innerHTML = '<span class="label">' + item.label + '</span><span class="desc">' + item.description + '</span>';
+        button.addEventListener("click", function () { switchModule(item.id); });
+        moduleList.appendChild(button);
+      });
+    }
+    function renderCommands(items) {
+      const node = document.getElementById("commands");
+      node.replaceChildren();
+      items.forEach(function (item) {
+        const button = document.createElement("button");
+        button.innerHTML = '<span class="label">' + escapeHtml(item.label) + '</span><span class="desc">' + escapeHtml(item.description) + '</span>';
+        button.addEventListener("click", function () {
+          state.selected = item;
+          document.querySelectorAll("#commands button").forEach(function (entry) { entry.classList.remove("active"); });
+          button.classList.add("active");
+          setRequest({key: item.key}, item.command);
+          statusNode.textContent = "已选择：" + item.label;
+          statusNode.className = "status";
+        });
+        node.appendChild(button);
+      });
+    }
+    function switchModule(module) {
+      state.module = module;
+      renderModuleButtons();
+      const meta = modules.find(function (item) { return item.id === module; });
+      document.getElementById("module-title").textContent = meta.label;
+      document.getElementById("module-hint").textContent = meta.hint;
+      document.getElementById("module-description").textContent = meta.description;
+      ({beginner: renderBeginner, yaml: renderYaml, data: renderData, sweep: renderSweep,
+        results: renderResults, papers: renderPapers, advanced: renderAdvanced}[module])();
+      parameterPanel.querySelectorAll("input, select, textarea").forEach(function (node) {
+        node.addEventListener("input", updateModulePreview);
+        node.addEventListener("change", updateModulePreview);
+      });
+      const yamlSelectorNode = document.getElementById("yaml-selector");
+      const yamlUpdateNode = document.getElementById("yaml-update");
+      if (yamlSelectorNode) yamlSelectorNode.addEventListener("change", function () { updateYamlFields(); updateModulePreview(); });
+      if (yamlUpdateNode) yamlUpdateNode.addEventListener("change", function () { updateYamlFields(); updateModulePreview(); });
+      const paperIdNode = document.getElementById("paper-id");
+      if (paperIdNode) paperIdNode.addEventListener("change", function () { updatePaperVariants(); updateModulePreview(); });
+      updateModulePreview();
+    }
+    function updatePaperVariants() {
+      const paper = state.papers.find(function (item) { return item.id === selectValue("paper-id"); });
+      const variantNode = document.getElementById("paper-variant");
+      if (!paper || !variantNode) return;
+      const variants = paper.configs.map(function (item) { return item.variant; }).filter(Boolean);
+      variantNode.value = variants[0] || "";
+      document.getElementById("paper-help").textContent = variants.length ? "可用 variant：" + variants.join("、") : "该论文暂无配置 variant。";
+    }
+    function toggleYamlField(id, visible) {
+      const node = document.getElementById(id);
+      if (node) node.closest("label").classList.toggle("hidden", !visible);
+    }
+    function updateYamlFields() {
+      if (!document.getElementById("yaml-selector")) return;
+      const selector = selectValue("yaml-selector", "all");
+      const update = selectValue("yaml-update", "standard");
+      toggleYamlField("yaml-keep-rate", selector === "small_loss");
+      toggleYamlField("yaml-milestones", update === "step_milestone");
+      toggleYamlField("yaml-gamma", update === "step_milestone");
+      toggleYamlField("yaml-cdr-noise-rate", update === "cdr");
+      toggleYamlField("yaml-l1-decay", update === "cdr");
+    }
+    function currentRecipeId() {
+      for (const id of ["recipe", "yaml-base", "data-recipe", "sweep-recipe"]) {
+        const value = selectValue(id, "").trim();
+        if (value) return value;
+      }
+      return state.recipes.length ? state.recipes[0].id : "";
+    }
+    function renderYamlSources() {
+      const node = document.getElementById("yaml-source");
+      if (!node) return;
+      node.innerHTML = recipeOptions().map(function (item) {
+        return '<option value="' + escapeHtml(item.value) + '">' + escapeHtml(item.label) + '</option>';
+      }).join("");
+      const current = currentRecipeId();
+      if (current) node.value = current;
+    }
+    function yamlFieldId(path) {
+      return "yaml-field-" + path.replace(/[^A-Za-z0-9_-]/g, "-");
+    }
+    function renderYamlFields(schema) {
+      const node = document.getElementById("yaml-fields");
+      const meta = document.getElementById("yaml-schema-meta");
+      if (!node || !meta) return;
+      state.yamlSchema = schema;
+      node.innerHTML = "";
+      meta.textContent = schema.runner + " / " + (schema.method || "通用") + "：仅显示允许修改的超参数、数据路径和训练设置。";
+      for (const fieldInfo of schema.fields || []) {
+        const id = yamlFieldId(fieldInfo.path);
+        let control;
+        if (fieldInfo.kind === "boolean") {
+          control = '<input id="' + id + '" type="checkbox" ' + (fieldInfo.value ? "checked" : "") + ' data-yaml-path="' + escapeHtml(fieldInfo.path) + '">';
+        } else {
+          const type = fieldInfo.kind === "number" ? "number" : "text";
+          const value = fieldInfo.kind === "list" ? JSON.stringify(fieldInfo.value) : fieldInfo.value ?? "";
+          control = '<input id="' + id + '" type="' + type + '" value="' + escapeHtml(value) + '" spellcheck="false" data-yaml-path="' + escapeHtml(fieldInfo.path) + '">';
+        }
+        node.insertAdjacentHTML("beforeend", '<label>' + escapeHtml(fieldInfo.label) + control + '</label>');
+      }
+      if (!schema.fields || !schema.fields.length) {
+        node.innerHTML = '<p class="helper">此 recipe 没有可由网页安全修改的参数，请使用论文原始配置运行。</p>';
+      }
+    }
+    function collectYamlPatches() {
+      return (state.yamlSchema?.fields || []).map(function (fieldInfo) {
+        const node = document.getElementById(yamlFieldId(fieldInfo.path));
+        let value = fieldInfo.kind === "boolean" ? Boolean(node.checked) : node.value;
+        if (fieldInfo.kind === "number") value = Number(value);
+        if (fieldInfo.kind === "list") {
+          try { value = JSON.parse(value); } catch (_) { throw new Error(fieldInfo.path + " 必须填写 JSON 列表"); }
+        }
+        return {path: fieldInfo.path, value: value};
+      });
+    }
+    async function loadYamlFromRecipe() {
+      const recipe = selectValue("yaml-source", currentRecipeId());
+      if (!recipe) return;
+      const responses = await Promise.all([
+        fetch("/api/configs?recipe=" + encodeURIComponent(recipe)),
+        fetch("/api/config-schema?recipe=" + encodeURIComponent(recipe))
+      ]);
+      const payload = await responses[0].json();
+      const schema = await responses[1].json();
+      if (!responses[0].ok || !responses[1].ok) {
+        statusNode.textContent = payload.error || schema.error || "YAML 加载失败";
+        statusNode.className = "status failed";
+        return;
+      }
+      document.getElementById("yaml-text").value = payload.content;
+      document.getElementById("yaml-path").value = "";
+      renderYamlFields(schema);
+      document.getElementById("yaml-source-path").textContent = "来源：" + payload.path + "；参数通过菜单修改，保存时重新生成 YAML。";
+      statusNode.textContent = "已加载：" + recipe;
+      statusNode.className = "status";
+    }
+    function configCommand(action, path) {
+      const command = "lnl " + action + " --config " + quoteArg(path) + " --check-data";
+      setRequest({command: command}, command);
+      statusNode.textContent = "YAML 已保存，请确认右侧预览后执行";
+      statusNode.className = "status";
+    }
+    async function saveYaml(overwrite, nextAction = "") {
+      const path = document.getElementById("yaml-path").value.trim();
+      if (!path) {
+        statusNode.textContent = "请先填写另存为路径";
+        statusNode.className = "status failed";
+        return;
+      }
+      let patches;
+      try { patches = collectYamlPatches(); } catch (error) {
+        statusNode.textContent = error.message;
+        statusNode.className = "status failed";
+        return;
+      }
+      const response = await fetch("/api/configs", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({path: path, recipe: state.yamlSchema?.recipe, patches: patches, overwrite: overwrite})
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        statusNode.textContent = payload.error || "YAML 保存失败";
+        statusNode.className = "status failed";
+        return;
+      }
+      document.getElementById("yaml-path").value = payload.path;
+      document.getElementById("yaml-text").value = payload.content || document.getElementById("yaml-text").value;
+      statusNode.textContent = "已保存：" + payload.path;
+      statusNode.className = "status success";
+      if (nextAction) configCommand(nextAction, payload.path);
+    }
+    function buildBeginnerCommand() {
+      const action = selectValue("action", "validate");
+      const recipe = selectValue("recipe", "cifar10-clean-smoke");
+      if (!recipe) return "";
+      const output = quoteArg(selectValue("output-dir", "artifacts/web-smoke"));
+      let command = "lnl ";
+      if (action === "validate") command += "validate --recipe " + recipe + " --check-data";
+      else if (action === "dry-run") command += "run --recipe " + recipe + " --dry-run --check-data";
+      else if (action === "sweep") command += "sweep --recipe " + recipe + " --seeds " + selectValue("seeds", "1 2 3") + " --output-dir " + output;
+      else command += "run --recipe " + recipe + " --epochs " + selectValue("epochs", "1") + " --output-dir " + output + " --check-data";
+      return command;
+    }
+    function buildYamlCommand() {
+      const base = selectValue("yaml-base", "cifar10-symmetric-ce-smoke");
+      if (!base) return "";
+      const selector = selectValue("yaml-selector", "all");
+      const update = selectValue("yaml-update", "standard");
+      let command = "lnl compose create --base " + base +
+        " --output " + quoteArg(selectValue("yaml-output", "configs/experiment/my_train.yaml")) +
+        " --loss " + selectValue("yaml-loss", "ce") + " --selector " + selector;
+      if (selector === "small_loss") command += " --keep-rate " + selectValue("yaml-keep-rate", "0.8");
+      command += " --parameter-update " + update;
+      if (update === "step_milestone") {
+        command += " --milestones " + selectValue("yaml-milestones", "60 80") +
+          " --gamma " + selectValue("yaml-gamma", "0.1");
+      } else if (update === "cdr") {
+        command += " --cdr-noise-rate " + selectValue("yaml-cdr-noise-rate", "0.2") +
+          " --l1-decay " + selectValue("yaml-l1-decay", "0.0");
+      }
+      return command;
+    }
+    function buildModuleCommand() {
+      if (state.module === "beginner") return buildBeginnerCommand();
+      if (state.module === "yaml") return buildYamlCommand();
+      if (state.module === "data") {
+        const recipe = selectValue("data-recipe", "cifar10-clean-smoke");
+        if (!recipe) return "";
+        const action = selectValue("data-action", "validate");
+        return action === "validate" ? "lnl validate --recipe " + recipe + " --check-data" : "lnl run --recipe " + recipe + " --dry-run --check-data";
+      }
+      if (state.module === "sweep") {
+        const recipe = selectValue("sweep-recipe", "cifar10-clean-smoke");
+        if (!recipe) return "";
+        return "lnl sweep --recipe " + recipe + " --seeds " + selectValue("sweep-seeds", "1 2 3") + " --output-dir " + quoteArg(selectValue("sweep-output", "artifacts/web-sweep"));
+      }
+      if (state.module === "results") {
+        const action = selectValue("result-action", "resume");
+        const path = quoteArg(selectValue("result-path", "artifacts/web-smoke"));
+        if (action === "resume") return "lnl resume " + path + " --checkpoint " + selectValue("result-checkpoint", "last");
+        return "lnl " + action + " " + path;
+      }
+      if (state.module === "papers") {
+        const action = selectValue("paper-action", "list");
+        const paper = selectValue("paper-id", "binary-risk");
+        if (action === "list") return "lnl papers list --format tsv";
+        if (action === "show") return "lnl papers show " + paper;
+        return "lnl papers config " + paper + " --profile " + selectValue("paper-profile", "reproduction") + " --variant " + selectValue("paper-variant", "");
+      }
+      return selectValue("free-command", "").trim();
+    }
+    function updateModulePreview() {
+      const command = buildModuleCommand();
+      setRequest(command ? {command: command} : null, command);
+      statusNode.textContent = command ? "参数已更新，请确认右侧预览后执行" : "当前参数组合无法生成有效指令";
+      statusNode.className = "status";
+    }
+    function showJob(job) {
+      state.jobId = job.id;
+      outputNode.textContent = job.lines.join("\n") || "(暂无输出)";
+      outputNode.scrollTop = outputNode.scrollHeight;
+      if (job.running) { statusNode.textContent = "运行中：" + job.command; statusNode.className = "status running"; }
+      else if (job.error || job.returncode !== 0) { statusNode.textContent = "失败（退出码 " + job.returncode + "）"; statusNode.className = "status failed"; }
+      else { statusNode.textContent = "完成（退出码 0）"; statusNode.className = "status success"; }
+    }
+    async function pollJob() {
+      if (!state.jobId) return;
+      const response = await fetch("/api/jobs/" + state.jobId);
+      if (!response.ok) return;
+      const job = await response.json(); showJob(job);
+      if (!job.running && state.timer) { clearInterval(state.timer); state.timer = null; }
+    }
+    runButton.addEventListener("click", async function () {
+      if (!state.request) return;
+      runButton.disabled = true; outputNode.textContent = "启动中...";
+      const response = await fetch("/api/run", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(state.request)});
+      const job = await response.json();
+      if (!response.ok) { outputNode.textContent = job.error || "启动失败"; runButton.disabled = false; return; }
+      showJob(job); if (state.timer) clearInterval(state.timer); state.timer = setInterval(pollJob, 350); runButton.disabled = false;
+    });
+    copyButton.addEventListener("click", async function () { if (!state.request) return; await navigator.clipboard.writeText(previewNode.textContent); statusNode.textContent = "指令已复制"; });
+    document.getElementById("clear").addEventListener("click", function () { outputNode.textContent = ""; statusNode.textContent = "日志已清空"; });
+    document.getElementById("show-yaml").addEventListener("click", async function () {
+      yamlEditorPanel.classList.toggle("hidden");
+      if (!yamlEditorPanel.classList.contains("hidden")) {
+        renderYamlSources();
+        await loadYamlFromRecipe();
+      }
+    });
+    document.getElementById("yaml-source").addEventListener("change", loadYamlFromRecipe);
+    document.getElementById("yaml-load").addEventListener("click", loadYamlFromRecipe);
+    document.getElementById("yaml-save-as").addEventListener("click", function () { saveYaml(false); });
+    document.getElementById("yaml-overwrite").addEventListener("click", function () { saveYaml(true); });
+    document.getElementById("yaml-validate").addEventListener("click", function () { saveYaml(true, "validate"); });
+    document.getElementById("yaml-run").addEventListener("click", function () { saveYaml(true, "run"); });
+
+    Promise.all([fetch("/api/commands"), fetch("/api/recipes"), fetch("/api/papers")])
+      .then(function (responses) { return Promise.all(responses.map(function (response) { if (!response.ok) throw new Error("后端菜单数据加载失败"); return response.json(); })); })
+      .then(function (payloads) {
+        state.recipes = payloads[1]; state.papers = payloads[2];
+        renderCommands(payloads[0]); renderYamlSources(); switchModule("beginner");
+        if (!yamlEditorPanel.classList.contains("hidden")) loadYamlFromRecipe();
+      })
+      .catch(function (error) { previewNode.textContent = "无法连接后端：" + error; });
+  </script>
+</body>
+</html>
