@@ -84,7 +84,7 @@ class UPMCliTest(unittest.TestCase):
         output = io.StringIO()
         with redirect_stdout(output):
             result = cli_main.main([
-                "run", "--config", str(config_path), "--dry-run"
+                "run", "--config", str(config_path), "--dry-run", "--no-check-data"
             ])
         self.assertEqual(result, 0)
         text = output.getvalue()

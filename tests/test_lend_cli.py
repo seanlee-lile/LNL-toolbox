@@ -42,7 +42,9 @@ class LENDCliTest(unittest.TestCase):
     def test_dry_run_discloses_all_fidelity_choices(self):
         output = StringIO()
         with redirect_stdout(output):
-            self.assertEqual(main(["run", "--config", str(self.path), "--dry-run"]), 0)
+            self.assertEqual(main([
+                "run", "--config", str(self.path), "--dry-run", "--no-check-data"
+            ]), 0)
         text = output.getvalue()
         for value in ("lend", "2 (LEND)", "k=15", "gamma=1.0",
                       "inner_product", "normalize_features=False", "alpha=0.99",
@@ -102,7 +104,8 @@ class LENDCliTest(unittest.TestCase):
         output = StringIO()
         with redirect_stdout(output):
             self.assertEqual(main([
-                "run", "--recipe", "lend-cifar10-reproduction", "--dry-run"
+                "run", "--recipe", "lend-cifar10-reproduction", "--dry-run",
+                "--no-check-data",
             ]), 0)
         text = output.getvalue()
         for value in (

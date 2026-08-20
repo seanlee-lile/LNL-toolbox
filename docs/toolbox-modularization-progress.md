@@ -60,3 +60,20 @@
 - Ready for history cleanup: no checkpoint cleanup is needed.
 - Ready to push: ready after explicit commit and publication approval; neither operation has been performed.
 - Collaborator note: `README.md`, `cli/main.py`, and shared progress documents are high-conflict files; changes are limited to CLI experiment infrastructure.
+
+## Quality workflow dry-run preflight correction (2026-08-20)
+
+- Current task: keep default dry-run data preflight while making planning-only tests and CI smoke independent of local CIFAR files.
+- Branch: `codex/cli`; base commit: `3942558`.
+- Checklist: enumerate dry-run calls; reproduce clean-runner failures; add explicit planning-only bypasses; run full validation.
+- Completed: 4 / 4 (100%).
+- Pre-change evidence: a clean Git archive without `data/cifar10` reproduced 10 failures across unified CLI, Co-teaching, DLD, LEND, and UPM planning tests.
+- Implementation: planning-only CIFAR dry-runs now pass `--no-check-data`; the missing-data semantic test remains unchanged; the quality workflow uses the same explicit bypass for its final smoke.
+- Tests executed: Ruff passed; clean-runner focused tests passed; coverage full suite passed `812/812` with 75% coverage; unified CLI passed `33/33`; `lnl --help` and the explicit no-data dry-run passed; sdist and wheel builds passed.
+- Files added: none.
+- Local checkpoint commits: none.
+- Blockers: none.
+- Exact next step: human diff review, then commit only the approved files if requested.
+- Ready for history cleanup: no cleanup needed.
+- Ready to push: ready after explicit commit and publication approval.
+- Collaborator note: `.github/workflows/quality.yml` is shared; no source, algorithm, data-preflight, Result Contract, or checkpoint behavior changed.

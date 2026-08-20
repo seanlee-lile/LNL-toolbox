@@ -24,7 +24,8 @@ jobs:
       - run: python -m coverage report
       - run: python -m unittest discover -s tests -p "test_unified_cli.py" -v
       - run: lnl --help
-      - run: lnl run cifar10-symmetric-ce-smoke --dry-run
+      - name: Dry-run built-in CIFAR recipe without local data
+        run: lnl run cifar10-symmetric-ce-smoke --dry-run --no-check-data
 
   wheel:
     runs-on: ubuntu-latest

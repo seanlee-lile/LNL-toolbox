@@ -36,7 +36,9 @@ class DLDCliTest(unittest.TestCase):
     def test_dry_run_discloses_fidelity_and_plan(self) -> None:
         output = StringIO()
         with redirect_stdout(output):
-            self.assertEqual(main(["run", "--config", str(self.path), "--dry-run"]), 0)
+            self.assertEqual(main([
+                "run", "--config", str(self.path), "--dry-run", "--no-check-data"
+            ]), 0)
         text = output.getvalue()
         for value in ("dld", "2 (diffusion)", "K=10", "cosine_similarity", "dld_precorrection.npz", "paper_oriented_v2_cosine_similarity", "DLD inference steps: 5"):
             self.assertIn(value, text)
@@ -47,7 +49,9 @@ class DLDCliTest(unittest.TestCase):
         self.assertEqual(validate_config(config).name, "dld")
         output = StringIO()
         with redirect_stdout(output):
-            self.assertEqual(main(["run", "--config", str(path), "--dry-run"]), 0)
+            self.assertEqual(main([
+                "run", "--config", str(path), "--dry-run", "--no-check-data"
+            ]), 0)
         text = output.getvalue()
         for value in ("dld", "15 (diffusion)", "K=50", "paper_oriented_v2_cosine_similarity"):
             self.assertIn(value, text)

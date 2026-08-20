@@ -191,6 +191,58 @@ class UnifiedCliTest(unittest.TestCase):
             code = main(list(arguments))
         return code, stdout.getvalue(), stderr.getvalue()
 
+    def test_local_dataset_registration_and_recipe_switch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "cifar100"
+            source.mkdir()
+            environment = {"LNL_DATA_CATALOG": str(root / "datasets.json")}
+            with patch.dict(os.environ, environment, clear=False):
+                code, output, error = self.invoke(
+                    "data", "register", "lab-cifar100",
+                    "--adapter", "cifar100", "--root", str(source),
+                )
+                self.assertEqual(code, 0, error)
+                self.assertIn("state: registered", output)
+                self.assertIn("does not prove trainability", output)
+
+                code, output, error = self.invoke("data", "list")
+                self.assertEqual(code, 0, error)
+                self.assertIn("lab-cifar100: cifar100", output)
+
+                code, output, error = self.invoke(
+                    "run", "cifar10-clean-smoke", "--data", "lab-cifar100",
+                    "--dry-run", "--no-check-data",
+                )
+                self.assertEqual(code, 0, error)
+                self.assertIn("Dataset: cifar100", output)
+
+                code, output, error = self.invoke(
+                    "data", "remove", "lab-cifar100"
+                )
+                self.assertEqual(code, 0, error)
+                self.assertIn("Removed", output)
+
+    def test_local_dataset_registration_requires_adapter_specific_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = {"LNL_DATA_CATALOG": str(Path(directory) / "datasets.json")}
+            with patch.dict(os.environ, environment, clear=False):
+                code, _, error = self.invoke(
+                    "data", "register", "human-noise", "--adapter", "cifar10n",
+                    "--root", directory,
+                )
+                self.assertEqual(code, 2)
+                self.assertIn("requires --labels", error)
+
+                source = Path(directory) / "heart.dat"
+                source.write_text("1 2 1\n", encoding="utf-8")
+                code, output, error = self.invoke(
+                    "data", "register", "heart", "--adapter", "uci_binary",
+                    "--path", str(source),
+                )
+                self.assertEqual(code, 0, error)
+                self.assertIn("heart: uci_binary", output)
+
     def test_list_and_paper_show_are_user_facing(self) -> None:
         code, output, _ = self.invoke("list", "experiments", "--profile", "smoke")
         self.assertEqual(code, 0)
@@ -267,7 +319,11 @@ class UnifiedCliTest(unittest.TestCase):
     def test_dry_run_does_not_create_output(self) -> None:
         with patch("lnl_toolbox.cli.main.ExperimentService.run") as runner:
             code, output, _ = self.invoke(
-                "run", "--recipe", "cifar10-symmetric-ce-smoke", "--dry-run"
+                "run",
+                "--recipe",
+                "cifar10-symmetric-ce-smoke",
+                "--dry-run",
+                "--no-check-data",
             )
         self.assertEqual(code, 0)
         self.assertIn("runner: supervised", output)
@@ -509,7 +565,13 @@ with contextlib.redirect_stdout(io.StringIO()):
         code, _, error = self.invoke("validate", "--recipe", "cifar10-volminnet-smoke")
         self.assertEqual(code, 0, error)
         code, output, error = self.invoke(
-            "run", "--recipe", "cifar10-volminnet-smoke", "--dry-run", "--epochs", "3"
+            "run",
+            "--recipe",
+            "cifar10-volminnet-smoke",
+            "--dry-run",
+            "--no-check-data",
+            "--epochs",
+            "3",
         )
         self.assertEqual(code, 0, error)
         self.assertIn("volminnet", output)
@@ -520,7 +582,13 @@ with contextlib.redirect_stdout(io.StringIO()):
         self.assertEqual(code, 0, error)
         self.assertIn("cross-network GMM", output)
         code, output, error = self.invoke(
-            "run", "--recipe", "cifar10-dividemix-smoke", "--dry-run", "--epochs", "3"
+            "run",
+            "--recipe",
+            "cifar10-dividemix-smoke",
+            "--dry-run",
+            "--no-check-data",
+            "--epochs",
+            "3",
         )
         self.assertEqual(code, 0, error)
         self.assertIn("1/3/4 (warmup/main/total)", output)
@@ -533,6 +601,7 @@ with contextlib.redirect_stdout(io.StringIO()):
             "--set",
             "trainer.epochs=2",
             "--dry-run",
+            "--no-check-data",
         )
         self.assertEqual(code, 0, error)
         self.assertIn("Training budget: 2", output)

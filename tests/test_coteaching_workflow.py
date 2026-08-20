@@ -193,6 +193,7 @@ class CoTeachingWorkflowTest(unittest.TestCase):
                 "--recipe",
                 "cifar10-coteaching-reproduction",
                 "--dry-run",
+                "--no-check-data",
             ])
         self.assertEqual(result, 0)
         text = output.getvalue()
