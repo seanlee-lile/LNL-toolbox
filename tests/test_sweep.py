@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from lnl_toolbox.training.results import discover_run_results, load_metric_history
 from lnl_toolbox.training.sweep import plan_sweep, run_sweep, sweep_status
 
 
@@ -65,6 +66,18 @@ class SweepTest(unittest.TestCase):
             first.runs[0].overrides,
             (("noise.rate", 0.2), ("optimizer.lr", 0.1)),
         )
+
+    def test_batch_lr_matrix_and_optional_seeds_have_expected_size(self) -> None:
+        base = {
+            **self._matrix_config(),
+            "loader": {"batch_size": 128},
+        }
+        matrix = {
+            "loader.batch_size": [256, 512],
+            "optimizer.lr": [0.01, 0.001],
+        }
+        self.assertEqual(len(plan_sweep(base, [base["seed"]], matrix=matrix).runs), 4)
+        self.assertEqual(len(plan_sweep(base, [1, 2, 3], matrix=matrix).runs), 12)
 
     def test_invalid_matrix_override_fails_before_output_creation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -128,6 +141,8 @@ class SweepTest(unittest.TestCase):
             self.assertEqual(status["counts"]["completed"], 2)
             self.assertEqual(status["counts"]["failed"], 2)
             self.assertEqual(len(status["failed_runs"]), 2)
+            self.assertEqual(len(status["runs"]), 4)
+            self.assertIn("run_dir", status["runs"][0])
 
             second = run_sweep(
                 self._matrix_config(),
@@ -137,6 +152,29 @@ class SweepTest(unittest.TestCase):
                 service=service,
             )
             self.assertEqual(second.skipped, 2)
+
+    def test_result_discovery_reads_partial_history_and_reports_old_damage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / "run-a"
+            first.mkdir()
+            (first / "metrics.jsonl").write_text(
+                '\n'.join([
+                    json.dumps({"epoch": 1, "validation_accuracy": 0.4}),
+                    "not-json",
+                    json.dumps({"epoch": 2, "validation_accuracy": 0.5}),
+                    '{"epoch": 3',
+                ]),
+                encoding="utf-8",
+            )
+            rows, errors = load_metric_history(first)
+            self.assertEqual([row["epoch"] for row in rows], [1, 2])
+            self.assertEqual(len(errors), 1)
+            discovered = discover_run_results(root)
+            self.assertEqual(len(discovered), 1)
+            self.assertEqual(discovered[0]["status"], "incomplete")
+            self.assertEqual(discovered[0]["current_epoch"], 2)
+            self.assertIn("validation_accuracy", discovered[0]["metric_names"])
 
 
 if __name__ == "__main__":

@@ -1,5 +1,22 @@
 # Toolbox modularization progress
 
+## Web matrix sweep and result visualization (2026-08-21)
+
+- Current task: expose typed Cartesian parameter sweeps, native Windows path selection, structured CLI tables, and run metrics/curves in the local Web console.
+- Branch: `codex/cli`; base: clean working tree at task start.
+- Checklist: Sweep CLI; result contract; Web APIs; Web controls; focused tests; full regression and documentation.
+- Completed: 6 / 6 (100%); implementation, browser acceptance, focused tests, documentation, and final regression are complete.
+- Behavior: `--matrix PATH=JSON_ARRAY` preserves types and defaults to the recipe seed; Web preflights and lists every combination before execution. Run management reads complete and partial artifacts, uses Sweep manifests for authoritative status, and overlays up to five curves by default.
+- Follow-up UI: long run lists can be filtered by name, method, status, or seed and collapsed without clearing selected curves. Native path dialogs fall back to the project root when the current value is empty, relative, or invalid.
+- Paper guidance follow-up: result lists are compare-only; the paper page now explains the method lifecycle and its mapping to YAML fields and implementation modules, with a direct YAML editor shortcut instead of exposing profile/variant identifiers.
+- Resume inspection follow-up: Web resume now requires a read-only inspection of the selected run/checkpoint and shows resolved configuration, file/checkpoint inventory, current epoch/phase, stage schedule, best metrics, and explicit readiness blockers before enabling the command.
+- Browser evidence: the real page generated the two-dimensional batch/LR command, the backend planned exactly four runs, the run manager loaded 144 existing run directories, and structured Smoke recipes rendered as a table.
+- Files changed: Sweep/results contracts, unified CLI, Web backend/page, three focused tests, and three shared documents. No algorithm, runner, model, adapter, YAML, or training default changed.
+- Validation: Sweep 7/7, Web 26/26, unified CLI 43/43, and full unittest 845/845 passed. Ruff, JavaScript syntax, `git diff --check`, and a no-training four-combination Sweep dry-run passed.
+- Exact next step: human diff review; commit only after separate authorization.
+- Local checkpoint commits: none; commit and push are not authorized.
+- Collaborator note: `cli/main.py`, Web files, and shared documents are high-conflict integration surfaces; edits are scoped to CLI/Web presentation and result inspection.
+
 ## Curated public recipe surface (2026-08-21)
 
 - Current task: keep all reproducibility YAMLs while exposing only useful templates to ordinary users.

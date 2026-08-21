@@ -191,6 +191,9 @@ preflight、标准运行元数据和 `final_metrics.json` Result Contract。新�
 lnl run cifar10-symmetric-ce-smoke --set trainer.epochs=2 --dry-run
 lnl run configs/experiment/cifar10_symmetric_ce_smoke.yaml
 lnl sweep cifar10-symmetric-ce-smoke --seeds 1 2 3
+lnl sweep cifar10-clean-smoke `
+  --matrix 'loader.batch_size=[256,512]' `
+  --matrix 'optimizer.lr=[0.01,0.001]'
 lnl sweep sweep-spec.yaml --dry-run
 lnl sweep status artifacts/sweeps/example
 lnl compare artifacts/sweeps/example
@@ -207,6 +210,14 @@ lnl report artifacts/sweeps/example
 数据尚未准备时才使用 `--no-check-data`。Sweep matrix 必须调用
 `core.config_overrides` 的 dotted-path override，不得自行修改嵌套配置。每个任务由
 seed、resolved override 和 config hash 共同标识。
+
+CLI matrix 值必须是 JSON 数组并保持原始数值、布尔或字符串类型。未传 `--seeds`
+时只使用配置自身的 seed；显式 seeds 会与所有参数维度继续做笛卡尔积。Web 的
+“参数 Sweep”从所选 recipe 的实际字段生成路径菜单，并在执行前显示完整运行计划。
+
+Web 的“运行管理”直接读取 `metrics.jsonl`、`final_metrics.json` 和 Sweep manifest，
+可查看最终指标、部分训练进度及多运行逐 epoch 叠加曲线。路径按钮通过本机 Windows
+对话框选择文件或目录；该能力只允许 localhost 请求，非 Windows 环境继续手工输入。
 
 比较层把 `group_by` 视为允许变化的研究维度，把 `require_equal` 视为同组公平比较
 必须一致的条件。Noise Manifest 只在同一 seed 和可比条件下跨方法核对；不同 seed

@@ -89,7 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
     experiments.add_argument("--dataset")
     experiments.add_argument(
         "--format",
-        choices=("human", "tsv"),
+        choices=("human", "tsv", "json"),
         default="human",
         help="输出格式；human 适合阅读，tsv 适合脚本处理（默认: human）",
     )
@@ -108,7 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     components.add_argument("--kind")
     components.add_argument(
         "--format",
-        choices=("human", "tsv"),
+        choices=("human", "tsv", "json"),
         default="human",
         help="输出格式；human 适合阅读，tsv 适合脚本处理（默认: human）",
     )
@@ -156,9 +156,11 @@ def build_parser() -> argparse.ArgumentParser:
     data_register.add_argument("--path", type=Path)
     data_register.add_argument("--labels", type=Path)
     data_register.add_argument("--noise-variant")
-    data_sub.add_parser("list", help="list registration and verification states")
+    data_list = data_sub.add_parser("list", help="list registration and verification states")
+    data_list.add_argument("--format", choices=("human", "json"), default="human")
     data_status = data_sub.add_parser("status", help="show dataset readiness")
     data_status.add_argument("name", nargs="?")
+    data_status.add_argument("--format", choices=("human", "json"), default="human")
     data_path = data_sub.add_parser("path", help="show a registered dataset path")
     data_path.add_argument("name")
     data_show = data_sub.add_parser("show", help="show one local dataset record")
@@ -188,8 +190,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="sweep directory when using 'lnl sweep status <path>'",
     )
     sweep.add_argument("--seeds", type=int, nargs="+")
+    sweep.add_argument(
+        "--matrix",
+        action="append",
+        default=[],
+        metavar="PATH=JSON_ARRAY",
+        help="add a typed parameter dimension; repeatable",
+    )
     sweep.add_argument("--output-dir", type=Path)
     sweep.add_argument("--dry-run", action="store_true")
+    sweep.add_argument("--format", choices=("human", "json"), default="human")
     sweep.add_argument(
         "--no-check-data",
         action="store_true",
@@ -212,6 +222,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="fairness invariant within comparable groups; repeatable",
     )
     compare.add_argument("--strict", action="store_true")
+    compare.add_argument("--format", choices=("human", "json"), default="human")
 
     report = sub.add_parser("report", help="write Markdown, CSV, and JSON run reports")
     report.add_argument("path", type=Path)
@@ -247,7 +258,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_list = paper_sub.add_parser("list", help="列出有可运行 config 的论文")
     paper_list.add_argument(
         "--format",
-        choices=("human", "tsv"),
+        choices=("human", "tsv", "json"),
         default="human",
         help="输出格式；human 适合阅读，tsv 适合脚本处理（默认: human）",
     )
@@ -404,6 +415,20 @@ def _list_experiments(args: argparse.Namespace) -> int:
         recipes = tuple(item for item in recipes if item.profile == args.profile)
     if args.dataset:
         recipes = tuple(item for item in recipes if item.dataset.lower() == args.dataset.lower())
+    if args.format == "json":
+        print(json.dumps([
+            {
+                "recipe": item.id,
+                "profile": item.profile,
+                "dataset": item.dataset,
+                "noise": item.noise,
+                "method": item.method,
+                "runner": item.runner,
+                "epochs": item.epochs,
+            }
+            for item in recipes
+        ], ensure_ascii=False))
+        return 0
     if args.format == "tsv":
         print("recipe\tprofile\tdataset\tnoise\tmethod\trunner\tepochs")
         for item in recipes:
@@ -452,6 +477,17 @@ def _list_components(args: argparse.Namespace) -> int:
     values = catalog.find(kind=args.kind) if args.kind else catalog.find()
     if not values:
         raise ValueError(f"no components found for kind {args.kind!r}")
+    if args.format == "json":
+        print(json.dumps([
+            {
+                "kind": item.kind,
+                "name": item.name,
+                "capabilities": sorted(item.capabilities),
+                "paper": item.metadata.get("paper"),
+            }
+            for item in values
+        ], ensure_ascii=False))
+        return 0
     if args.format == "tsv":
         print("kind\tname\tcapabilities\tpaper")
         for item in values:
@@ -517,9 +553,12 @@ def _sweep(args: argparse.Namespace) -> int:
     if args.source == "status":
         if args.status_path is None:
             raise ValueError("provide a sweep directory after 'lnl sweep status'")
-        if args.seeds or args.overrides or args.output_dir or args.dry_run:
+        if args.seeds or args.matrix or args.overrides or args.output_dir or args.dry_run:
             raise ValueError("sweep status cannot be combined with planning options")
         value = sweep_status(args.status_path)
+        if getattr(args, "format", "human") == "json":
+            print(json.dumps(value, ensure_ascii=False))
+            return 0
         print("Sweep")
         print(f"  ID: {value['sweep_id']}")
         print(f"  Path: {value['root']}")
@@ -538,6 +577,13 @@ def _sweep(args: argparse.Namespace) -> int:
     if args.status_path is not None:
         raise ValueError("unexpected extra sweep path; use 'lnl sweep status <path>'")
     config, _path, recipe, _project, seeds, matrix = _load_sweep_source(args)
+    cli_matrix = _parse_sweep_matrix(args.matrix)
+    duplicates = sorted(set(matrix).intersection(cli_matrix))
+    if duplicates:
+        raise ValueError(
+            "sweep matrix path is defined in YAML and CLI: " + ", ".join(duplicates)
+        )
+    matrix = {**matrix, **cli_matrix}
     config = apply_override_assignments(config, args.overrides)
     if args.no_check_data and not args.dry_run:
         raise ValueError("--no-check-data is only valid together with --dry-run")
@@ -573,7 +619,7 @@ def _sweep(args: argparse.Namespace) -> int:
 
 
 def _load_sweep_source(args: argparse.Namespace):
-    source = args.source
+    source = args.source or args.recipe or args.config
     if source is None:
         raise ValueError("provide a recipe name or sweep/experiment YAML path")
     candidate = Path(source).expanduser()
@@ -603,16 +649,40 @@ def _load_sweep_source(args: argparse.Namespace):
             config, path, recipe, project = _load_source(namespace)
             configured_seeds = value.get("seeds")
             seeds = args.seeds if args.seeds is not None else configured_seeds
+            if seeds is None:
+                seeds = [int(config.get("seed", 1))]
             if not isinstance(seeds, list):
-                raise ValueError("sweep spec requires a seeds list or CLI --seeds")
+                raise ValueError("sweep seeds must be a list")
             matrix = value.get("matrix", {}) or {}
             if not isinstance(matrix, dict):
                 raise ValueError("sweep matrix must be a mapping")
             return config, path, recipe, project, seeds, matrix
     config, path, recipe, project = _load_source(args)
-    if args.seeds is None:
-        raise ValueError("ordinary experiment sweeps require --seeds")
-    return config, path, recipe, project, args.seeds, {}
+    seeds = args.seeds if args.seeds is not None else [int(config.get("seed", 1))]
+    return config, path, recipe, project, seeds, {}
+
+
+def _parse_sweep_matrix(assignments: list[str]) -> dict[str, list[Any]]:
+    matrix: dict[str, list[Any]] = {}
+    for assignment in assignments:
+        if "=" not in assignment:
+            raise ValueError(f"matrix assignment must use PATH=JSON_ARRAY: {assignment}")
+        path, encoded = assignment.split("=", 1)
+        path = path.strip()
+        if not path:
+            raise ValueError("sweep matrix path must not be empty")
+        if path in matrix:
+            raise ValueError(f"duplicate sweep matrix path: {path}")
+        try:
+            values = json.loads(encoded)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid JSON array for sweep matrix {path}: {exc.msg}") from exc
+        if not isinstance(values, list):
+            raise ValueError(f"sweep matrix {path} must be a JSON array")
+        if not values:
+            raise ValueError(f"sweep matrix {path} must not be empty")
+        matrix[path] = values
+    return matrix
 
 
 def _print_sweep_plan(plan) -> None:
@@ -653,6 +723,9 @@ def _compare(args: argparse.Namespace) -> int:
         require_equal=_comparison_fields(args.require_equal),
         strict=args.strict,
     )
+    if args.format == "json":
+        print(json.dumps(comparison, ensure_ascii=False))
+        return 1 if args.strict and comparison.get("excluded_runs") else 0
     grouping = comparison.get("group_by", ["method", "noise.rate", "primary_metric.name"])
     dimensions = [field for field in grouping if field != "primary_metric.name"]
     labels = {"noise.rate": "NOISE", "method": "METHOD"}
@@ -711,6 +784,25 @@ def _comparison_fields(values: list[str] | None):
 def _paper_list(args: argparse.Namespace) -> int:
     recipes = {item.id: item for item in discover_recipes(include_conditional=True)}
     papers = load_papers()
+    if args.format == "json":
+        print(json.dumps([
+            {
+                "id": paper.id,
+                "acronym": paper.acronym,
+                "title": paper.title,
+                "venue": paper.venue,
+                "year": paper.year,
+                "profiles": sorted({item.profile for item in paper.configs}),
+                "fidelity": sorted({item.configuration_fidelity for item in paper.configs}),
+                "runners": sorted({recipes[item.recipe_id].runner for item in paper.configs}),
+                "recommended": next(
+                    (item.recipe_id for item in paper.configs if item.profile == "smoke"),
+                    paper.configs[0].recipe_id if paper.configs else None,
+                ),
+            }
+            for paper in papers
+        ], ensure_ascii=False))
+        return 0
     if args.format == "tsv":
         print("id\tacronym\ttitle\tvenue\tyear\tprofiles\tfidelity\trunners\trecommended")
         for paper in papers:
@@ -1010,9 +1102,17 @@ def _print_dataset_table(reports) -> None:
 def _data_command(args: argparse.Namespace) -> int:
     service = DEFAULT_DATA_SERVICE
     if args.data_command == "list":
-        _print_dataset_table(service.list_datasets())
+        reports = service.list_datasets()
+        if args.format == "json":
+            print(json.dumps([item.to_dict() for item in reports], ensure_ascii=False))
+        else:
+            _print_dataset_table(reports)
         return 0
     if args.data_command == "status":
+        if args.format == "json":
+            reports = service.status() if args.name is None else [service.status(args.name)]
+            print(json.dumps([item.to_dict() for item in reports], ensure_ascii=False))
+            return 0
         if args.name is None:
             _print_dataset_table(service.status())
         else:

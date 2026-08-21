@@ -7,6 +7,7 @@ not execute browser-provided shell strings and never starts a shell.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import shlex
@@ -52,7 +53,7 @@ COMMANDS: dict[str, CommandSpec] = {
         "list-smoke",
         "查看 Smoke 配方",
         "列出可用于短测试的实验配方",
-        ("list", "experiments", "--profile", "smoke"),
+        ("list", "experiments", "--profile", "smoke", "--format", "json"),
     ),
     "validate-clean": CommandSpec(
         "validate-clean",
@@ -123,7 +124,7 @@ COMMANDS: dict[str, CommandSpec] = {
         "compare",
         "查看曲线",
         "比较 web-smoke 的训练曲线",
-        ("compare", "artifacts/web-smoke"),
+        ("compare", "artifacts/web-smoke", "--format", "json"),
         output_dir="artifacts/web-smoke",
     ),
     "compose": CommandSpec(
@@ -149,7 +150,7 @@ COMMANDS: dict[str, CommandSpec] = {
         "papers",
         "列出论文方法",
         "列出工具箱内置的论文方法",
-        ("papers", "list", "--format", "tsv"),
+        ("papers", "list", "--format", "json"),
     ),
     "paper-config": CommandSpec(
         "paper-config",
@@ -178,6 +179,7 @@ class Job:
     lines: list[str] = field(default_factory=list)
     returncode: int | None = None
     error: str | None = None
+    structured: object | None = None
 
     @property
     def done(self) -> bool:
@@ -243,6 +245,11 @@ def _read_output(job: Job) -> None:
     returncode = job.process.wait()
     with JOBS_LOCK:
         job.returncode = returncode
+        if returncode == 0 and "--format" in job.command and "json" in job.command:
+            try:
+                job.structured = json.loads("\n".join(job.lines))
+            except json.JSONDecodeError:
+                job.structured = None
 
 
 def _start_process(key: str, command: list[str], display_command: str) -> Job:
@@ -331,32 +338,66 @@ def _recipe_payload(*, include_all: bool = False) -> list[dict[str, object]]:
 def _paper_payload() -> list[dict[str, object]]:
     """Return paper metadata and available recipe variants for the UI."""
 
-    from lnl_toolbox.catalog import default_paper_config, load_papers
+    from lnl_toolbox.catalog import (
+        discover_recipes,
+        load_papers,
+    )
 
+    recipes = {
+        recipe.id: recipe
+        for recipe in discover_recipes(ROOT, include_conditional=True)
+    }
     payload = []
     for paper in load_papers(ROOT):
-        default_config, default_recipe = default_paper_config(paper, root=ROOT)
+        default_config = next(
+            config for config in paper.configs if config.profile == "reproduction"
+        )
+        default_recipe = recipes[default_config.recipe_id]
         payload.append({
             "id": paper.id,
             "acronym": paper.acronym,
             "title": paper.title,
             "venue": paper.venue,
             "year": paper.year,
+            "source_url": paper.source_url,
+            "summary": paper.summary,
+            "mechanism": paper.mechanism,
+            "lifecycle": list(paper.lifecycle),
+            "limitations": list(paper.limitations),
+            "concept_to_config": [dict(item) for item in paper.concept_to_config],
+            "implementation_paths": list(paper.implementation_paths),
             "implementation_status": paper.implementation_status,
             "reproduction_status": paper.reproduction_status,
             "default_recipe_id": default_recipe.id,
             "default_variant": default_config.variant,
             "default_fidelity": default_config.configuration_fidelity,
-            "configs": [
-                {
-                    "recipe_id": config.recipe_id,
-                    "profile": config.profile,
-                    "variant": config.variant,
-                    "availability": config.availability,
-                }
-                for config in paper.configs
-            ],
+            "configs": [],
         })
+        for config in paper.configs:
+            recipe = recipes[config.recipe_id]
+            profile_label = {
+                "reproduction": "正式复现",
+                "smoke": "快速检查",
+                "experiment": "实验配置",
+            }.get(config.profile, config.profile)
+            noise_label = recipe.noise
+            payload[-1]["configs"].append({
+                "recipe_id": config.recipe_id,
+                "label": f"{profile_label} · {recipe.dataset} · {noise_label} · {recipe.epochs or '-'} ep",
+                "profile": config.profile,
+                "variant": config.variant,
+                "config_path": recipe.config_path.relative_to(ROOT).as_posix(),
+                "runner": recipe.runner,
+                "method": recipe.method,
+                "data": recipe.dataset,
+                "noise": recipe.noise,
+                "noise_rate": None,
+                "epochs": recipe.epochs,
+                "configuration_fidelity": config.configuration_fidelity,
+                "implementation_status": config.implementation_status,
+                "reproduction_status": config.reproduction_status,
+                "availability": config.availability,
+            })
     return payload
 
 
@@ -718,7 +759,117 @@ def _job_payload(job: Job) -> dict[str, object]:
             "returncode": job.returncode,
             "error": job.error,
             "running": not job.done,
+            "structured": job.structured,
         }
+
+
+def _picker_payload(payload: object) -> dict[str, object]:
+    """Open a Windows-native path dialog without executing a shell."""
+
+    if os.name != "nt":
+        raise OSError("Windows native path selection is only available on Windows")
+    if not isinstance(payload, dict):
+        raise TypeError("picker request must be an object")
+    mode = str(payload.get("mode", "folder"))
+    if mode not in {"folder", "open_file", "save_file"}:
+        raise ValueError(f"unknown picker mode: {mode}")
+    kind = str(payload.get("kind", "all"))
+    filters = {
+        "yaml": "YAML files (*.yaml;*.yml)|*.yaml;*.yml|All files (*.*)|*.*",
+        "checkpoint": "PyTorch checkpoints (*.pt;*.pth)|*.pt;*.pth|All files (*.*)|*.*",
+        "labels": "Label files (*.json;*.txt;*.csv)|*.json;*.txt;*.csv|All files (*.*)|*.*",
+        "all": "All files (*.*)|*.*",
+    }
+    if kind not in filters:
+        raise ValueError(f"unknown picker file kind: {kind}")
+    initial = str(payload.get("initial", "")).strip()
+    initial_path = Path(initial).expanduser() if initial else ROOT
+    if not initial or not initial_path.is_absolute() or not initial_path.exists():
+        initial_path = ROOT
+    initial = str(initial_path.resolve())
+    environment = os.environ.copy()
+    environment["LNL_PICKER_INITIAL"] = initial
+    environment["LNL_PICKER_FILTER"] = filters[kind]
+    environment["LNL_PICKER_MODE"] = mode
+    script = (
+        "Add-Type -AssemblyName System.Windows.Forms; "
+        "$mode=$env:LNL_PICKER_MODE; $initial=$env:LNL_PICKER_INITIAL; "
+        "if($mode -eq 'folder'){ $d=New-Object System.Windows.Forms.FolderBrowserDialog; "
+        "if($initial -and (Test-Path -LiteralPath $initial)){ $d.SelectedPath=$initial }; "
+        "if($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Write($d.SelectedPath)} } "
+        "else { if($mode -eq 'save_file'){ $d=New-Object System.Windows.Forms.SaveFileDialog } "
+        "else { $d=New-Object System.Windows.Forms.OpenFileDialog }; "
+        "$d.Filter=$env:LNL_PICKER_FILTER; "
+        "if($initial){ if(Test-Path -LiteralPath $initial -PathType Container){$d.InitialDirectory=$initial} "
+        "elseif(Test-Path -LiteralPath $initial){$d.InitialDirectory=(Split-Path -Parent $initial);$d.FileName=(Split-Path -Leaf $initial)} }; "
+        "if($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Write($d.FileName)} }"
+    )
+    executable = Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    result = subprocess.run(
+        [str(executable), "-NoProfile", "-STA", "-Command", script],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=300,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise OSError(result.stderr.strip() or "Windows path dialog failed")
+    selected = result.stdout.strip()
+    return {"cancelled": not bool(selected), "path": selected or None}
+
+
+def _sweep_plan_payload(payload: object) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        raise TypeError("sweep plan request must be an object")
+    from lnl_toolbox.catalog import load_recipe_config, recipe_by_id, resolve_config_paths
+    from lnl_toolbox.training.service import ExperimentService
+    from lnl_toolbox.training.sweep import plan_sweep, resolve_planned_config
+
+    recipe = recipe_by_id(str(payload.get("recipe", "")), ROOT)
+    config = resolve_config_paths(load_recipe_config(recipe), ROOT)
+    matrix = payload.get("matrix", {}) or {}
+    if not isinstance(matrix, dict):
+        raise TypeError("sweep matrix must be an object")
+    raw_seeds = payload.get("seeds")
+    seeds = [int(config.get("seed", 1))] if raw_seeds in (None, []) else raw_seeds
+    if not isinstance(seeds, list):
+        raise TypeError("sweep seeds must be a list")
+    plan = plan_sweep(
+        config,
+        seeds,
+        matrix=matrix,
+        output_dir=payload.get("output_dir") or None,
+        recipe=recipe.id,
+    )
+    service = ExperimentService()
+    for run in plan.runs:
+        service.preflight(resolve_planned_config(config, run), check_data=False)
+    return {
+        "root": str(plan.root),
+        "seeds": list(plan.seeds),
+        "matrix": {path: list(values) for path, values in plan.matrix},
+        "total": len(plan.runs),
+        "runs": [
+            {"run_id": run.run_id, "seed": run.seed, "overrides": run.override_mapping}
+            for run in plan.runs
+        ],
+    }
+
+
+def _results_payload(path: str) -> dict[str, object]:
+    from lnl_toolbox.training.results import discover_run_results
+
+    return {"root": str(Path(path).expanduser().resolve()), "runs": discover_run_results(path)}
+
+
+def _resume_payload(path: str, checkpoint: str) -> dict[str, object]:
+    from lnl_toolbox.training.results import inspect_resume_run
+
+    return inspect_resume_run(path, checkpoint)
 
 
 class ConsoleHandler(BaseHTTPRequestHandler):
@@ -792,6 +943,27 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 _json_response(self, {"error": str(exc)}, 400)
             return
+        if path == "/api/results":
+            try:
+                query = parse_qs(urlparse(self.path).query)
+                selected = query.get("path", [""])[0].strip()
+                if not selected:
+                    raise ValueError("provide a run directory")
+                _json_response(self, _results_payload(selected))
+            except (OSError, TypeError, ValueError) as exc:
+                _json_response(self, {"error": str(exc)}, 400)
+            return
+        if path == "/api/resume-inspect":
+            try:
+                query = parse_qs(urlparse(self.path).query)
+                selected = query.get("path", [""])[0].strip()
+                checkpoint = query.get("checkpoint", ["last"])[0].strip()
+                if not selected:
+                    raise ValueError("provide a run directory")
+                _json_response(self, _resume_payload(selected, checkpoint))
+            except (OSError, TypeError, ValueError) as exc:
+                _json_response(self, {"error": str(exc)}, 400)
+            return
         if path.startswith("/api/jobs/"):
             job_id = path.rsplit("/", 1)[-1]
             with JOBS_LOCK:
@@ -805,6 +977,26 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path in {"/api/picker", "/api/sweep/plan"}:
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                if path == "/api/picker":
+                    if not ipaddress.ip_address(self.client_address[0]).is_loopback:
+                        raise PermissionError("native path selection is limited to localhost")
+                    value = _picker_payload(payload)
+                else:
+                    value = _sweep_plan_payload(payload)
+                _json_response(self, value)
+            except (
+                json.JSONDecodeError,
+                OSError,
+                PermissionError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                _json_response(self, {"error": str(exc)}, 400)
+            return
         if path == "/api/datasets":
             try:
                 length = int(self.headers.get("Content-Length", "0"))

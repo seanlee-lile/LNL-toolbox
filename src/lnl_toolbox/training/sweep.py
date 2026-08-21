@@ -300,6 +300,17 @@ def sweep_status(path: str | Path) -> dict[str, Any]:
         "counts": counts,
         "completed": counts["completed"],
         "total": len(runs),
+        "runs": [
+            {
+                "run_id": item.get("run_id"),
+                "seed": item.get("seed"),
+                "status": item.get("status", "unknown"),
+                "overrides": dict(item.get("overrides", {}) or {}),
+                "run_dir": item.get("run_dir"),
+                "reason": item.get("error"),
+            }
+            for item in runs
+        ],
         "failed_runs": [
             {
                 "seed": item.get("seed"),

@@ -41,10 +41,124 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertIn("lnl sweep", command)
         self.assertIn("--seeds 1 2 3", command)
 
+    def test_sweep_plan_supports_parameter_matrix_and_optional_seeds(self):
+        payload = command_console._sweep_plan_payload(
+            {
+                "recipe": "cifar10-clean-smoke",
+                "matrix": {
+                    "loader.batch_size": [256, 512],
+                    "optimizer.lr": [0.01, 0.001],
+                },
+                "seeds": [],
+            }
+        )
+        self.assertEqual(payload["total"], 4)
+        payload = command_console._sweep_plan_payload(
+            {
+                "recipe": "cifar10-clean-smoke",
+                "matrix": {
+                    "loader.batch_size": [256, 512],
+                    "optimizer.lr": [0.01, 0.001],
+                },
+                "seeds": [1, 2, 3],
+            }
+        )
+        self.assertEqual(payload["total"], 12)
+
+    def test_windows_picker_returns_selection_or_cancellation(self):
+        completed = mock.Mock(returncode=0, stdout="F:\\runs", stderr="")
+        with mock.patch.object(command_console.os, "name", "nt"), mock.patch.object(
+            command_console.subprocess, "run", return_value=completed
+        ) as run:
+            result = command_console._picker_payload(
+                {"mode": "folder", "initial": "", "kind": "all"}
+            )
+        self.assertEqual(result["path"], "F:\\runs")
+        self.assertFalse(result["cancelled"])
+        self.assertFalse(run.call_args.kwargs["shell"] if "shell" in run.call_args.kwargs else False)
+        self.assertEqual(run.call_args.kwargs["env"]["LNL_PICKER_INITIAL"], str(command_console.ROOT))
+
+        completed.stdout = ""
+        with mock.patch.object(command_console.os, "name", "nt"), mock.patch.object(
+            command_console.subprocess, "run", return_value=completed
+        ):
+            self.assertTrue(command_console._picker_payload({"mode": "open_file"})["cancelled"])
+
+    def test_result_payload_includes_partial_metric_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory) / "run-a"
+            run.mkdir()
+            (run / "metrics.jsonl").write_text(
+                json.dumps({"epoch": 1, "validation_accuracy": 0.5}) + "\n",
+                encoding="utf-8",
+            )
+            payload = command_console._results_payload(directory)
+        self.assertEqual(len(payload["runs"]), 1)
+        self.assertEqual(payload["runs"][0]["current_epoch"], 1)
+
+    def test_resume_payload_reports_config_phase_files_and_readiness(self):
+        import torch
+
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory)
+            (run / "resolved_config.yaml").write_text(
+                "seed: 7\nmethod: supervised\nexecution:\n  runner: supervised\n"
+                "data:\n  name: cifar10\nnoise:\n  name: symmetric\n"
+                "model:\n  name: tiny_cnn\noptimizer:\n  name: sgd\n"
+                "trainer:\n  epochs: 20\n  warmup_epochs: 5\n",
+                encoding="utf-8",
+            )
+            (run / "metrics.jsonl").write_text(
+                json.dumps(
+                    {
+                        "epoch": 4,
+                        "phase": "warmup",
+                        "validation_accuracy": 0.4,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            torch.save(
+                {
+                    "completed_epoch": 3,
+                    "run_state": {"phase": "train", "step": 12},
+                    "best_epoch": 3,
+                    "best_validation_accuracy": 0.4,
+                },
+                run / "last.pt",
+            )
+            payload = command_console._resume_payload(directory, "last")
+            self.assertTrue(payload["resumable"])
+            self.assertEqual(payload["phase"], "warmup")
+            self.assertEqual(payload["current_epoch"], 4)
+            self.assertEqual(payload["target_epoch"], 20)
+            self.assertEqual(payload["config_summary"]["data"], "cifar10")
+            self.assertIn("resolved_config.yaml", {item["name"] for item in payload["files"]})
+
+            completed_config = (run / "resolved_config.yaml").read_text(encoding="utf-8").replace(
+                "epochs: 20", "epochs: 4"
+            )
+            (run / "resolved_config.yaml").write_text(completed_config, encoding="utf-8")
+            completed = command_console._resume_payload(directory, "last")
+            self.assertFalse(completed["resumable"])
+            self.assertEqual(completed["status"], "completed")
+            self.assertIn("target epoch", completed["errors"][-1])
+
+            (run / "resolved_config.yaml").unlink()
+            blocked = command_console._resume_payload(directory, "last")
+            self.assertFalse(blocked["resumable"])
+            self.assertIn("missing resolved_config.yaml", blocked["errors"])
+
     def test_paper_menu_exposes_recipe_variants(self):
         papers = command_console._paper_payload()
         self.assertEqual(len(papers), 26)
         self.assertTrue(all(item["configs"] for item in papers))
+        self.assertTrue(all(item["summary"] for item in papers))
+        self.assertTrue(all(item["mechanism"] for item in papers))
+        self.assertTrue(all(item["concept_to_config"] for item in papers))
+        self.assertTrue(all(item["configs"][0]["config_path"] for item in papers))
+        self.assertTrue(all(item["configs"][0]["label"] for item in papers))
         self.assertTrue(all("id" in item and "title" in item for item in papers))
         self.assertTrue(all(item["default_recipe_id"] for item in papers))
         self.assertTrue(all(item["default_fidelity"] for item in papers))
@@ -177,6 +291,25 @@ class CommandConsoleTest(unittest.TestCase):
                 self.assertIn("await loadYamlFromPath(createdPath)", home)
                 self.assertIn('body.command.startsWith("lnl compose create ")', home)
                 self.assertIn("async function loadYamlFromEditor()", home)
+                self.assertIn("function renderSweepV2()", home)
+                self.assertIn("function drawResultChart()", home)
+                self.assertIn('id="result-list-toggle"', home)
+                self.assertIn('id="result-filter"', home)
+                self.assertIn("const selectedPaths = new Set(state.resultSelected)", home)
+                self.assertIn('id="result-compare-tools"', home)
+                self.assertIn('id="result-resume-inspect"', home)
+                self.assertIn("function renderResumeDashboard()", home)
+                self.assertIn("/api/resume-inspect?path=", home)
+                self.assertIn("state.resumeInspectionKey !== currentResumeKey()", home)
+                self.assertIn("function updateResultVisibility()", home)
+                self.assertIn('id="paper-open-yaml"', home)
+                self.assertIn("论文方法、配置字段与代码的关系", home)
+                self.assertIn("await loadYamlSelection(state.paperRecipe)", home)
+                self.assertNotIn('id="paper-profile"', home)
+                self.assertNotIn('id="paper-variant"', home)
+                self.assertNotIn("配置 profile 与 recipe 变体", home)
+                self.assertIn("/api/picker", home)
+                self.assertIn("/api/results?path=", home)
                 self.assertIn('id="yaml-text" spellcheck="false" placeholder=', home)
                 self.assertNotIn('id="yaml-text" spellcheck="false" readonly', home)
                 self.assertIn('let command = "lnl data verify " + quoteArg(alias);', home)

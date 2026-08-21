@@ -111,6 +111,13 @@
     .data-table th { color: var(--muted); }
     .data-status-ready, .data-status-verified { color: var(--good); }
     .data-status-incomplete { color: #fbbf24; }
+    .path-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+    .path-control button { white-space: nowrap; }
+    .structured-output { margin-top: 10px; }
+    .chart-wrap { margin-top: 14px; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: #0b1220; overflow-x: auto; }
+    .chart-wrap svg { width: 100%; min-width: 640px; height: 330px; }
+    .chart-legend { display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 12px; }
+    .run-select { width: auto; }
     .required-field::after { content: " · 必填"; color: #fbbf24; }
     button.danger { border-color: #b91c1c; background: #5f1d24; }
     @media (max-width: 900px) {
@@ -189,11 +196,13 @@
       { id: "data", label: "本地数据集", description: "登记本机路径，并分别检查布局或完成 1 epoch 训练验证。", hint: "registered ≠ training_verified" },
       { id: "sweep", label: "多 seed Sweep", description: "为同一 recipe 顺序运行多个随机种子。", hint: "支持中断后恢复" },
       { id: "results", label: "运行管理", description: "恢复训练、查看报告或比较训练曲线。", hint: "checkpoint / report / compare" },
-      { id: "papers", label: "论文方法", description: "按论文查看方法、配置 profile 与 recipe 变体。", hint: "论文目录" },
+      { id: "papers", label: "论文方法", description: "理解论文解决的问题、核心方法，以及配置字段和实现代码的对应关系。", hint: "方法 → 配置 → 代码" },
       { id: "advanced", label: "自由输入", description: "直接输入一条 lnl 指令，后端仍会安全解析。", hint: "高级用户" },
     ];
     const modules = allModules;
-    const state = { selected: null, request: null, jobId: null, timer: null, module: recipeMode ? "yaml" : "beginner", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, yamlSchema: null, yamlSourcePath: "", yamlTextDirty: false, pendingYamlPath: "", trainingData: "", dataAction: "list", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, removeConfirmed: false };
+    const sweepModule = modules.find(function (item) { return item.id === "sweep"; });
+    if (sweepModule) { sweepModule.label = "参数 Sweep"; sweepModule.description = "对多个参数取值执行笛卡尔积，可选叠加多个随机种子。"; sweepModule.hint = "参数矩阵 × 可选 seeds"; }
+    const state = { selected: null, request: null, jobId: null, timer: null, resultTimer: null, module: recipeMode ? "yaml" : "beginner", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, yamlSchema: null, yamlSourcePath: "", yamlTextDirty: false, pendingYamlPath: "", trainingData: "", dataAction: "list", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, removeConfirmed: false, sweepSchema: null, sweepRows: [], sweepPlan: null, resultData: null, resultSelected: [], resultFilter: "", resultListCollapsed: false, resultListInitialized: false, resumeData: null, resumeInspectionKey: "", paperId: "", paperRecipe: "" };
     if (recipeMode) {
       document.getElementById("page-title").textContent = "LNL Toolbox Recipe Editor";
       document.getElementById("page-subtitle").textContent = "从已有 recipe 组合配置，并查看或保存 YAML。";
@@ -202,6 +211,10 @@
     const parameterPanel = document.getElementById("parameter-panel");
     const previewNode = document.getElementById("preview");
     const outputNode = document.getElementById("output");
+    const structuredNode = document.createElement("div");
+    structuredNode.id = "structured-output";
+    structuredNode.className = "structured-output hidden";
+    outputNode.parentNode.insertBefore(structuredNode, outputNode);
     const statusNode = document.getElementById("status");
     const runButton = document.getElementById("run");
     const copyButton = document.getElementById("copy");
@@ -233,6 +246,9 @@
     }
     function inputControl(id, value, type = "text", attrs = "") {
       return '<input id="' + id + '" type="' + type + '" value="' + escapeHtml(value) + '" spellcheck="false" ' + attrs + '>';
+    }
+    function pathControl(id, value, mode = "folder", kind = "all") {
+      return '<span class="path-control">' + inputControl(id, value) + '<button type="button" data-picker-target="' + id + '" data-picker-mode="' + mode + '" data-picker-kind="' + kind + '">选择</button></span>';
     }
     function escapeHtml(value) {
       return String(value ?? "").replace(/[&<>"']/g, function (char) {
@@ -434,6 +450,45 @@
       if (report.location && !report.error) return '<div class="data-feedback"><strong>路径已登记，尚未检查</strong><p>下一步：选择“inspect”，实际加载 train/test。登记成功不等于数据可训练。</p></div>';
       return '<div class="data-feedback failed"><strong>数据尚未可用</strong><p>' + escapeHtml(report.error || "请登记正确路径后执行 inspect。") + '</p></div>';
     }
+    function tableHtml(rows, allowHtml = false) {
+      if (!Array.isArray(rows) || !rows.length) return '<p class="helper">没有可显示的记录。</p>';
+      const columns = [...new Set(rows.flatMap(function (row) { return Object.keys(row); }))];
+      return '<div class="data-table-wrap"><table class="data-table"><thead><tr>' + columns.map(function (column) { return '<th>' + escapeHtml(column) + '</th>'; }).join('') + '</tr></thead><tbody>' + rows.map(function (row) { return '<tr>' + columns.map(function (column) { const value = row[column] ?? '-'; const display = Array.isArray(value) ? value.join(', ') : (typeof value === 'object' ? JSON.stringify(value) : value); return '<td>' + (allowHtml && column === 'select' ? value : escapeHtml(display)) + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table></div>';
+    }
+    async function pickPath(target, mode, kind) {
+      const input = document.getElementById(target);
+      const response = await fetch('/api/picker', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({mode:mode, kind:kind, initial:input?.value || ''})});
+      const payload = await response.json();
+      if (!response.ok) { statusNode.textContent = payload.error || '路径选择失败'; statusNode.className = 'status failed'; return; }
+      if (!payload.cancelled && input) { input.value = payload.path; input.dispatchEvent(new Event('input', {bubbles:true})); input.dispatchEvent(new Event('change', {bubbles:true})); }
+    }
+    function installPathPickers(root = document) {
+      const specs = [
+        ['output-dir','folder','all'], ['yaml-path','open_file','yaml'], ['yaml-output','save_file','yaml'], ['data-root','folder','all'],
+        ['data-path','open_file','all'], ['data-labels','open_file','labels'], ['data-output','folder','all'],
+        ['sweep-output','folder','all'], ['result-path','folder','all']
+      ];
+      specs.forEach(function (spec) {
+        const input = root.querySelector('#' + spec[0]);
+        if (!input || input.parentElement?.classList.contains('path-control')) return;
+        const wrapper = document.createElement('span'); wrapper.className = 'path-control';
+        input.parentNode.insertBefore(wrapper, input); wrapper.appendChild(input);
+        const button = document.createElement('button'); button.type='button'; button.textContent='选择';
+        button.addEventListener('click', function () { pickPath(spec[0], spec[1], spec[2]); }); wrapper.appendChild(button);
+      });
+      root.querySelectorAll('[data-picker-target]').forEach(function (button) {
+        if (button.dataset.pickerBound) return; button.dataset.pickerBound='1';
+        button.addEventListener('click', function () { pickPath(button.dataset.pickerTarget, button.dataset.pickerMode, button.dataset.pickerKind); });
+      });
+    }
+    function renderStructured(value) {
+      let rows = value;
+      if (value && !Array.isArray(value) && Array.isArray(value.summaries)) rows = value.summaries;
+      else if (value && !Array.isArray(value) && Array.isArray(value.runs)) rows = value.runs.map(function (run) { return {run:run.run_id || '-', seed:run.seed ?? '-', status:run.status, parameters:Object.entries(run.overrides || {}).map(function (entry) { return entry[0] + '=' + JSON.stringify(entry[1]); }).join('; ') || '-', reason:run.reason || '-'}; });
+      if (!Array.isArray(rows)) rows = [value];
+      structuredNode.innerHTML = tableHtml(rows);
+      structuredNode.classList.remove('hidden'); outputNode.classList.add('hidden');
+    }
     function dataTableHtml(reports) {
       return '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>数据集</th><th>状态</th><th>位置</th><th>Train / Test</th><th>训练验证</th></tr></thead><tbody>' + reports.map(function (item) {
         const label = dataStatusLabel(item);
@@ -540,19 +595,301 @@
         field("checkpoint", "result-checkpoint", selectControl("__ID__", ["last", "best"])) +
         commonFormEnd() + '<p class="helper">resume 使用已有 checkpoint；report/compare 读取现有运行产物。</p>';
     }
+    function sweepFieldOptions(paths) {
+      return paths.map(function (path) { return {value:path, label:path}; });
+    }
+    function currentSweepRows() {
+      return state.sweepRows.map(function (row, index) {
+        const path = selectValue("sweep-path-" + index, row.path);
+        const values = selectValue("sweep-values-" + index, row.values);
+        return {path:path, values:values};
+      });
+    }
+    function renderSweepV2() {
+      const recipe = state.sweepRecipe || "cifar10-clean-smoke";
+      const schema = state.sweepSchema?.recipe === recipe ? state.sweepSchema : null;
+      const paths = (schema?.fields || []).filter(function (item) {
+        return ["number", "string", "boolean", "list"].includes(item.kind);
+      }).map(function (item) { return item.path; });
+      const batchPaths = paths.filter(function (path) { return path.endsWith("batch_size"); });
+      const lrPaths = paths.filter(function (path) { return path === "optimizer.lr" || path.endsWith(".lr") || path.endsWith("learning_rate"); });
+      const allPaths = paths.length ? paths : ["loader.batch_size", "optimizer.lr"];
+      const rows = state.sweepRows.map(function (row, index) {
+        return '<div class="wide path-control"><select id="sweep-path-' + index + '">' + sweepFieldOptions(allPaths).map(function (item) { return '<option value="' + escapeHtml(item.value) + '" ' + (item.value === row.path ? 'selected' : '') + '>' + escapeHtml(item.label) + '</option>'; }).join("") + '</select><input id="sweep-values-' + index + '" value="' + escapeHtml(row.values) + '" placeholder="[1,2]" spellcheck="false"><button type="button" data-sweep-remove="' + index + '">删除</button></div>';
+      }).join("");
+      parameterPanel.innerHTML = commonFormStart() +
+        field("Sweep 配方", "sweep-recipe", recipesSelect("__ID__"), true) +
+        field("Batch size 参数", "sweep-batch-path", selectControl("__ID__", sweepFieldOptions(batchPaths.length ? batchPaths : ["loader.batch_size"]))) +
+        field("Batch size 取值（JSON 数组）", "sweep-batch-values", inputControl("__ID__", state.sweepBatch || "", "text", 'placeholder="[256,512]"')) +
+        field("Learning rate 参数", "sweep-lr-path", selectControl("__ID__", sweepFieldOptions(lrPaths.length ? lrPaths : ["optimizer.lr"]))) +
+        field("Learning rate 取值（JSON 数组）", "sweep-lr-values", inputControl("__ID__", state.sweepLr || "", "text", 'placeholder="[0.01,0.001]"')) +
+        field("Seeds（可选）", "sweep-seeds", inputControl("__ID__", state.sweepSeeds || "", "text", 'placeholder="留空则使用配置 seed"')) +
+        field("输出目录", "sweep-output", inputControl("__ID__", state.sweepOutput || "artifacts/web-sweep"), true) +
+        '<div class="wide"><strong>其他参数维度</strong>' + rows + '<button id="sweep-add" type="button" class="secondary">增加参数</button></div>' +
+        commonFormEnd() + '<div id="sweep-plan-view" class="structured-output"></div>';
+      const recipeNode = document.getElementById("sweep-recipe");
+      if ([...recipeNode.options].some(function (option) { return option.value === recipe; })) recipeNode.value = recipe;
+      recipeNode.addEventListener("change", function () { state.sweepRecipe = this.value; state.sweepSchema = null; state.sweepRows = []; loadSweepSchema(); });
+      document.getElementById("sweep-add").addEventListener("click", function () {
+        state.sweepRows = currentSweepRows();
+        state.sweepRows.push({path:allPaths[0], values:""});
+        captureSweepValues(); renderSweepV2(); updateModulePreview();
+      });
+      parameterPanel.querySelectorAll("[data-sweep-remove]").forEach(function (button) {
+        button.addEventListener("click", function () { state.sweepRows = currentSweepRows(); state.sweepRows.splice(Number(button.dataset.sweepRemove), 1); captureSweepValues(); renderSweepV2(); updateModulePreview(); });
+      });
+      parameterPanel.querySelectorAll("input, select").forEach(function (node) { node.addEventListener("input", function () { captureSweepValues(); updateModulePreview(); }); node.addEventListener("change", function () { captureSweepValues(); updateModulePreview(); }); });
+      installPathPickers(parameterPanel);
+      if (!schema) loadSweepSchema();
+    }
+    function captureSweepValues() {
+      state.sweepBatch = selectValue("sweep-batch-values", state.sweepBatch || "");
+      state.sweepLr = selectValue("sweep-lr-values", state.sweepLr || "");
+      state.sweepSeeds = selectValue("sweep-seeds", state.sweepSeeds || "");
+      state.sweepOutput = selectValue("sweep-output", state.sweepOutput || "artifacts/web-sweep");
+      if (document.getElementById("sweep-path-0")) state.sweepRows = currentSweepRows();
+    }
+    async function loadSweepSchema() {
+      const recipe = state.sweepRecipe || selectValue("sweep-recipe", "cifar10-clean-smoke");
+      const response = await fetch("/api/config-schema?recipe=" + encodeURIComponent(recipe));
+      const payload = await response.json();
+      if (!response.ok) { statusNode.textContent = payload.error || "Sweep 配置读取失败"; statusNode.className = "status failed"; return; }
+      state.sweepRecipe = recipe; state.sweepSchema = payload; renderSweepV2(); updateModulePreview();
+    }
+    function parseSweepValues(text, path) {
+      if (!String(text || "").trim()) return null;
+      let value;
+      try { value = JSON.parse(text); } catch (_) { throw new Error(path + " 必须填写 JSON 数组"); }
+      if (!Array.isArray(value) || !value.length) throw new Error(path + " 必须是非空 JSON 数组");
+      return value;
+    }
+    function collectSweepMatrix() {
+      const matrix = {};
+      const add = function (path, text) {
+        const values = parseSweepValues(text, path);
+        if (values === null) return;
+        if (Object.prototype.hasOwnProperty.call(matrix, path)) throw new Error("参数路径重复：" + path);
+        matrix[path] = values;
+      };
+      add(selectValue("sweep-batch-path", "loader.batch_size"), selectValue("sweep-batch-values", ""));
+      add(selectValue("sweep-lr-path", "optimizer.lr"), selectValue("sweep-lr-values", ""));
+      currentSweepRows().forEach(function (row) { add(row.path, row.values); });
+      return matrix;
+    }
+    function buildSweepCommand() {
+      const recipe = selectValue("sweep-recipe", state.sweepRecipe || "cifar10-clean-smoke");
+      let matrix;
+      try { matrix = collectSweepMatrix(); } catch (error) { statusNode.textContent = error.message; statusNode.className = "status failed"; return ""; }
+      let command = "lnl sweep --recipe " + recipe;
+      Object.entries(matrix).forEach(function (entry) { command += " --matrix " + quoteArg(entry[0] + "=" + JSON.stringify(entry[1])); });
+      const seeds = selectValue("sweep-seeds", "").trim();
+      if (seeds) command += " --seeds " + seeds;
+      command += " --output-dir " + quoteArg(selectValue("sweep-output", "artifacts/web-sweep"));
+      return command;
+    }
+    async function previewSweepPlan() {
+      let matrix;
+      try { matrix = collectSweepMatrix(); } catch (error) { statusNode.textContent = error.message; statusNode.className = "status failed"; return false; }
+      const seedsText = selectValue("sweep-seeds", "").trim();
+      const seeds = seedsText ? seedsText.split(/\s+/).map(Number) : null;
+      const response = await fetch("/api/sweep/plan", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({recipe:selectValue("sweep-recipe"), matrix:matrix, seeds:seeds, output_dir:selectValue("sweep-output")})});
+      const payload = await response.json();
+      if (!response.ok) { statusNode.textContent = payload.error || "Sweep 预检失败"; statusNode.className = "status failed"; return false; }
+      state.sweepPlan = payload;
+      const rows = payload.runs.map(function (run) { return {run:run.run_id, seed:run.seed, parameters:Object.entries(run.overrides).map(function (entry) { return entry[0] + "=" + JSON.stringify(entry[1]); }).join("; ") || "-"}; });
+      document.getElementById("sweep-plan-view").innerHTML = '<strong>共 ' + payload.total + ' 个运行</strong>' + tableHtml(rows);
+      statusNode.textContent = "Sweep 预检通过：" + payload.total + " 个运行"; statusNode.className = "status success";
+      return true;
+    }
+    function renderResultsV2() {
+      parameterPanel.innerHTML = commonFormStart() +
+        field("操作", "result-action", selectControl("__ID__", [{value:"resume",label:"resume · 恢复训练"},{value:"report",label:"report · 生成报告"},{value:"compare",label:"compare · 汇总比较"}])) +
+        field("checkpoint", "result-checkpoint", selectControl("__ID__", ["last", "best"])) +
+        field("运行或 Sweep 目录", "result-path", inputControl("__ID__", state.resultPath || "artifacts"), true) +
+        '<div id="result-resume-tools" class="wide actions"><button id="result-resume-inspect" type="button" class="primary">检查恢复内容</button></div>' +
+        '<div id="result-compare-tools" class="wide actions hidden"><button id="result-load" type="button" class="primary">加载指标与曲线</button><button id="result-list-toggle" type="button" class="secondary">收起列表</button><input id="result-filter" value="' + escapeHtml(state.resultFilter) + '" placeholder="筛选名称 / 方法 / 状态 / seed" spellcheck="false"></div>' + commonFormEnd() +
+        '<div id="result-resume-dashboard"></div><div id="result-dashboard"></div>';
+      document.getElementById("result-resume-inspect").addEventListener("click", loadResumeDetails);
+      document.getElementById("result-load").addEventListener("click", loadResults);
+      document.getElementById("result-list-toggle").addEventListener("click", function () { state.resultListCollapsed = !state.resultListCollapsed; renderResultDashboard(); });
+      document.getElementById("result-filter").addEventListener("input", function (event) { state.resultFilter = event.target.value; renderResultDashboard(); });
+      document.getElementById("result-action").addEventListener("change", updateResultVisibility);
+      document.getElementById("result-checkpoint").addEventListener("change", invalidateResumeInspection);
+      document.getElementById("result-path").addEventListener("input", invalidateResumeInspection);
+      parameterPanel.querySelectorAll("input, select").forEach(function (node) { node.addEventListener("input", function () { state.resultPath = selectValue("result-path"); updateModulePreview(); }); node.addEventListener("change", updateModulePreview); });
+      installPathPickers(parameterPanel);
+      if (state.resultData) renderResultDashboard();
+      if (state.resumeData) renderResumeDashboard();
+      updateResultVisibility();
+    }
+    function currentResumeKey() {
+      return selectValue("result-path", "").trim() + "|" + selectValue("result-checkpoint", "last");
+    }
+    function invalidateResumeInspection() {
+      if (state.resumeInspectionKey === currentResumeKey()) return;
+      state.resumeData = null;
+      state.resumeInspectionKey = "";
+      const node = document.getElementById("result-resume-dashboard");
+      if (node) node.innerHTML = '<p class="helper">路径或 checkpoint 已变化，请重新检查恢复内容。</p>';
+    }
+    function updateResultVisibility() {
+      const action = selectValue("result-action", "resume");
+      const comparing = action === "compare";
+      const resuming = action === "resume";
+      document.getElementById("result-compare-tools")?.classList.toggle("hidden", !comparing);
+      document.getElementById("result-dashboard")?.classList.toggle("hidden", !comparing);
+      document.getElementById("result-resume-tools")?.classList.toggle("hidden", !resuming);
+      document.getElementById("result-resume-dashboard")?.classList.toggle("hidden", !resuming);
+      document.getElementById("result-checkpoint")?.closest("label")?.classList.toggle("hidden", !resuming);
+      if (!comparing && state.resultTimer) { clearInterval(state.resultTimer); state.resultTimer = null; }
+      updateModulePreview();
+    }
+    async function loadResumeDetails() {
+      const path = selectValue("result-path", "").trim();
+      const checkpoint = selectValue("result-checkpoint", "last");
+      if (!path) return;
+      const key = currentResumeKey();
+      const response = await fetch("/api/resume-inspect?path=" + encodeURIComponent(path) + "&checkpoint=" + encodeURIComponent(checkpoint));
+      const payload = await response.json();
+      if (!response.ok) { statusNode.textContent = payload.error || "恢复内容检查失败"; statusNode.className = "status failed"; return; }
+      state.resumeData = payload;
+      state.resumeInspectionKey = key;
+      renderResumeDashboard();
+      updateModulePreview();
+      statusNode.textContent = payload.resumable ? "恢复检查通过，可执行 resume" : "该目录当前不可恢复，请查看原因";
+      statusNode.className = payload.resumable ? "status success" : "status failed";
+    }
+    function renderResumeDashboard() {
+      const node = document.getElementById("result-resume-dashboard");
+      const value = state.resumeData;
+      if (!node || !value) return;
+      const statusLabel = value.resumable ? "可以恢复" : value.completed ? "训练已完成" : "不能恢复";
+      const summaryRows = [{
+        "状态":statusLabel, "方法":value.config_summary.method, "runner":value.config_summary.runner,
+        "数据":value.config_summary.data, "噪声":value.config_summary.noise, "模型":value.config_summary.model,
+        "当前 epoch":value.current_epoch ?? "-", "目标 epoch":value.target_epoch ?? "-", "当前阶段":value.phase,
+        "checkpoint":value.checkpoint
+      }];
+      const bestRows = [value.best || {}];
+      const errors = (value.errors || []).map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("");
+      const statusClass = value.resumable ? "success" : "failed";
+      node.innerHTML = '<div class="data-feedback ' + statusClass + '"><strong>' + statusLabel + '</strong><p>' + escapeHtml(value.run_dir) + '</p>' + (errors ? '<ul>' + errors + '</ul>' : '<p>配置和 checkpoint 均可读取；确认后可执行下方 resume 指令。</p>') + '</div>' +
+        '<div class="guide-card"><strong>恢复摘要</strong>' + tableHtml(summaryRows) + '</div>' +
+        '<div class="guide-card"><strong>最佳记录</strong>' + tableHtml(bestRows) + '</div>' +
+        '<div class="guide-card"><strong>训练阶段来源</strong>' + tableHtml(value.phase_sources || []) + '</div>' +
+        '<div class="guide-card"><strong>配置中的 epoch 阶段</strong>' + tableHtml(value.epoch_schedule || []) + '</div>' +
+        '<div class="guide-card"><strong>Checkpoint 进度字段</strong>' + tableHtml(value.checkpoint_progress || []) + '</div>' +
+        '<div class="guide-card"><strong>可用 checkpoint</strong>' + tableHtml(value.checkpoints || []) + '</div>' +
+        '<details class="guide-card"><summary>查看文件夹内容（' + (value.files || []).length + ' 项）</summary>' + tableHtml(value.files || []) + '</details>' +
+        '<details class="guide-card"><summary>查看本次恢复使用的 resolved_config.yaml</summary><p class="helper">' + escapeHtml(value.config_path) + '</p><pre>' + escapeHtml(value.config_yaml || "未找到 resolved_config.yaml") + '</pre></details>';
+    }
+    async function loadResults() {
+      if (selectValue("result-action", "resume") !== "compare") return;
+      const path = selectValue("result-path", "").trim();
+      if (!path) return;
+      state.resultPath = path;
+      const response = await fetch("/api/results?path=" + encodeURIComponent(path));
+      const payload = await response.json();
+      if (!response.ok) { statusNode.textContent = payload.error || "运行结果读取失败"; statusNode.className = "status failed"; return; }
+      state.resultData = payload;
+      if (!state.resultListInitialized) {
+        state.resultListCollapsed = payload.runs.length > 20;
+        state.resultListInitialized = true;
+      }
+      const available = new Set(payload.runs.map(function (run) { return run.run_dir; }));
+      state.resultSelected = state.resultSelected.filter(function (path) { return available.has(path); });
+      if (!state.resultSelected.length) state.resultSelected = payload.runs.filter(function (run) { return (run.series || []).length; }).slice(0, 5).map(function (run) { return run.run_dir; });
+      renderResultDashboard();
+      if (!state.resultTimer) state.resultTimer = setInterval(function () { if (state.module === "results" && selectValue("result-action", "resume") === "compare") loadResults(); }, 5000);
+      statusNode.textContent = "已读取 " + payload.runs.length + " 个运行"; statusNode.className = "status success";
+    }
+    function renderResultDashboard() {
+      const node = document.getElementById("result-dashboard");
+      if (!node || !state.resultData) return;
+      const runs = state.resultData.runs || [];
+      const query = state.resultFilter.trim().toLowerCase();
+      const visibleRuns = query ? runs.filter(function (run) {
+        return [run.run_id, run.method, run.status, run.seed].some(function (value) { return String(value ?? "").toLowerCase().includes(query); });
+      }) : runs;
+      const metricNames = [...new Set(runs.flatMap(function (run) { return run.metric_names || []; }))];
+      const preferred = metricNames.includes("validation_accuracy") ? "validation_accuracy" : (metricNames.find(function (name) { return name.includes("accuracy"); }) || metricNames[0] || "");
+      const rows = visibleRuns.map(function (run) {
+        const primary = run.primary_metric?.name ? run.primary_metric.name + "=" + Number(run.primary_metric.value).toFixed(4) : "-";
+        const checked = state.resultSelected.includes(run.run_dir) ? ' checked' : '';
+        return {select:'<input class="run-select" type="checkbox" data-run-path="' + escapeHtml(run.run_dir) + '"' + checked + '>', run:run.run_id, method:run.method, seed:run.seed ?? "-", status:run.status, epoch:run.current_epoch ?? "-", best_epoch:run.best_epoch ?? "-", primary:primary};
+      });
+      const summary = '<p class="helper">运行列表：显示 ' + visibleRuns.length + ' / 共 ' + runs.length + ' 项' + (state.resultListCollapsed ? '（已收起）' : '') + '</p>';
+      const listing = state.resultListCollapsed ? '' : tableHtml(rows, true);
+      node.innerHTML = summary + listing + (metricNames.length ? '<div class="form-grid"><label>曲线指标' + selectControl("result-metric", metricNames) + '</label></div><div id="result-chart" class="chart-wrap"></div>' : '<p class="helper">尚无逐 epoch 数值指标。</p>');
+      const toggle = document.getElementById("result-list-toggle");
+      if (toggle) toggle.textContent = state.resultListCollapsed ? "展开列表" : "收起列表";
+      if (document.getElementById("result-metric")) document.getElementById("result-metric").value = preferred;
+      node.querySelectorAll(".run-select").forEach(function (checkbox) { checkbox.addEventListener("change", function () {
+        const path = checkbox.dataset.runPath;
+        if (checkbox.checked && !state.resultSelected.includes(path)) state.resultSelected.push(path);
+        if (!checkbox.checked) state.resultSelected = state.resultSelected.filter(function (item) { return item !== path; });
+        drawResultChart();
+      }); });
+      document.getElementById("result-metric")?.addEventListener("change", drawResultChart);
+      drawResultChart();
+    }
+    function drawResultChart() {
+      const chart = document.getElementById("result-chart");
+      if (!chart || !state.resultData) return;
+      const metric = selectValue("result-metric", "");
+      const selectedPaths = new Set(state.resultSelected);
+      const selected = state.resultData.runs.filter(function (run) { return selectedPaths.has(run.run_dir); });
+      const series = selected.map(function (run) { return {name:run.run_id, points:(run.series || []).filter(function (row) { return Number.isFinite(row.epoch) && Number.isFinite(row.metrics?.[metric]); }).map(function (row) { return [Number(row.epoch), Number(row.metrics[metric])]; })}; }).filter(function (item) { return item.points.length; });
+      if (!series.length) { chart.innerHTML = '<p class="helper">所选运行没有该指标的逐 epoch 数据。</p>'; return; }
+      const points = series.flatMap(function (item) { return item.points; });
+      const xs = points.map(function (point) { return point[0]; }), ys = points.map(function (point) { return point[1]; });
+      const xmin=Math.min(...xs), xmax=Math.max(...xs), ymin=Math.min(...ys), ymax=Math.max(...ys); const width=900, height=300, left=55, top=15, right=15, bottom=35;
+      const sx=function (x) { return left + (x-xmin) / Math.max(1e-12,xmax-xmin) * (width-left-right); }; const sy=function (y) { return top + (ymax-y) / Math.max(1e-12,ymax-ymin) * (height-top-bottom); };
+      const colors=["#60a5fa","#34d399","#f59e0b","#f472b6","#a78bfa","#22d3ee","#fb7185"];
+      const paths=series.map(function (item,index) { return '<polyline fill="none" stroke="' + colors[index%colors.length] + '" stroke-width="2" points="' + item.points.map(function (point) { return sx(point[0]).toFixed(1) + ',' + sy(point[1]).toFixed(1); }).join(' ') + '"><title>' + escapeHtml(item.name) + '</title></polyline>'; }).join('');
+      const svg='<svg viewBox="0 0 '+width+' '+height+'" role="img"><line x1="'+left+'" y1="'+(height-bottom)+'" x2="'+(width-right)+'" y2="'+(height-bottom)+'" stroke="#6b7280"/><line x1="'+left+'" y1="'+top+'" x2="'+left+'" y2="'+(height-bottom)+'" stroke="#6b7280"/><text x="'+left+'" y="'+(height-8)+'" fill="#9ca3af">epoch '+xmin+'</text><text x="'+(width-right-80)+'" y="'+(height-8)+'" fill="#9ca3af">'+xmax+'</text><text x="5" y="'+(top+10)+'" fill="#9ca3af">'+ymax.toFixed(4)+'</text><text x="5" y="'+(height-bottom)+'" fill="#9ca3af">'+ymin.toFixed(4)+'</text>'+paths+'</svg>';
+      const legend='<div class="chart-legend">'+series.map(function (item,index) { return '<span style="color:'+colors[index%colors.length]+'">● '+escapeHtml(item.name)+'</span>'; }).join('')+'</div>';
+      chart.innerHTML=svg+legend;
+    }
     function renderPapers() {
       const paperItems = state.papers.map(function (item) {
         return { value: item.id, label: item.acronym + " · " + item.title };
       });
+      const paper = state.papers.find(function (item) { return item.id === state.paperId; }) || state.papers[0];
+      if (paper) state.paperId = paper.id;
+      const configItems = (paper?.configs || []).map(function (item) { return {value:item.recipe_id, label:item.label}; });
+      if (!configItems.some(function (item) { return item.value === state.paperRecipe; })) state.paperRecipe = paper?.default_recipe_id || configItems[0]?.value || "";
       parameterPanel.innerHTML = commonFormStart() +
         field("论文方法", "paper-id", selectControl("__ID__", paperItems.length ? paperItems : ["binary-risk"])) +
-        field("操作", "paper-action", selectControl("__ID__", [
-          {value:"list", label:"list · 列出论文方法"}, {value:"show", label:"show · 查看论文信息"}, {value:"config", label:"config · 查看配置"}
-        ])) +
-        field("配置 profile", "paper-profile", selectControl("__ID__", ["smoke", "reproduction", "experiment"])) +
-        field("配置 variant", "paper-variant", inputControl("__ID__", "")) +
-        commonFormEnd() + '<p id="paper-help" class="helper">选择 config 后，variant 会根据论文目录自动填充。</p>';
-      updatePaperVariants();
+        field("工具箱配置", "paper-recipe", selectControl("__ID__", configItems.length ? configItems : [""])) +
+        '<div class="wide actions"><button id="paper-open-yaml" type="button" class="primary">查看/编辑此 YAML</button></div>' +
+        commonFormEnd() + '<div id="paper-details"></div>';
+      document.getElementById("paper-id").value = state.paperId;
+      document.getElementById("paper-recipe").value = state.paperRecipe;
+      document.getElementById("paper-id").addEventListener("change", function (event) { state.paperId = event.target.value; state.paperRecipe = ""; renderPapers(); updateModulePreview(); });
+      document.getElementById("paper-recipe").addEventListener("change", function (event) { state.paperRecipe = event.target.value; renderPaperDetails(); updateModulePreview(); });
+      document.getElementById("paper-open-yaml").addEventListener("click", async function () {
+        yamlEditorPanel.classList.remove("hidden");
+        renderYamlSources();
+        await loadYamlSelection(state.paperRecipe);
+        yamlEditorPanel.scrollIntoView({behavior:"smooth", block:"start"});
+      });
+      renderPaperDetails();
+    }
+    function renderPaperDetails() {
+      const node = document.getElementById("paper-details");
+      const paper = state.papers.find(function (item) { return item.id === state.paperId; });
+      const config = paper?.configs.find(function (item) { return item.recipe_id === state.paperRecipe; });
+      if (!node || !paper || !config) return;
+      const lifecycle = (paper.lifecycle || []).map(function (stage, index) { return '<li>' + (index + 1) + '. ' + escapeHtml(stage) + '</li>'; }).join("");
+      const mappingRows = (paper.concept_to_config || []).map(function (item) { return {"论文概念":item.concept, "YAML 配置字段":item.config, "实现模块":item.implementation}; });
+      const configRows = [{"配置文件":config.config_path, "数据集":config.data, "噪声":config.noise + (config.noise_rate == null ? "" : " · " + config.noise_rate), "训练轮次":config.epochs ?? "-", "执行器":config.runner, "方法":config.method || "-"}];
+      const limitations = (paper.limitations || []).map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("");
+      node.innerHTML = '<div class="guide-card"><h3>' + escapeHtml(paper.acronym + "：" + paper.title) + '</h3><p>' + escapeHtml(paper.venue + " " + paper.year) + ' · <a href="' + escapeHtml(paper.source_url) + '" target="_blank" rel="noreferrer">查看论文来源</a></p><p><strong>解决的问题：</strong>' + escapeHtml(paper.summary) + '</p><p><strong>核心方法：</strong>' + escapeHtml(paper.mechanism) + '</p></div>' +
+        '<div class="guide-card"><strong>论文训练流程</strong><ol>' + lifecycle + '</ol></div>' +
+        '<div class="guide-card"><strong>当前配置如何运行这篇论文</strong>' + tableHtml(configRows) + '<p class="helper">下方“执行此指令”会先验证该配置；“查看/编辑此 YAML”可打开完整参数。</p></div>' +
+        '<div class="guide-card"><strong>论文方法、配置字段与代码的关系</strong>' + tableHtml(mappingRows) + '</div>' +
+        (limitations ? '<details class="guide-card"><summary>已知限制</summary><ul>' + limitations + '</ul></details>' : '');
     }
     function renderAdvanced() {
       parameterPanel.innerHTML = '<label for="free-command">输入一条 lnl 指令</label>' +
@@ -589,6 +926,7 @@
       });
     }
     function switchModule(module) {
+      if (state.resultTimer && module !== "results") { clearInterval(state.resultTimer); state.resultTimer = null; }
       state.module = module;
       if (module !== "data") {
         state.removeConfirmed = false;
@@ -600,8 +938,8 @@
       document.getElementById("module-title").textContent = meta.label;
       document.getElementById("module-hint").textContent = meta.hint;
       document.getElementById("module-description").textContent = meta.description;
-      ({beginner: renderBeginner, yaml: renderYaml, data: renderData, sweep: renderSweep,
-        results: renderResults, papers: renderPapers, advanced: renderAdvanced}[module])();
+      ({beginner: renderBeginner, yaml: renderYaml, data: renderData, sweep: renderSweepV2,
+        results: renderResultsV2, papers: renderPapers, advanced: renderAdvanced}[module])();
       if (module !== "data") {
         parameterPanel.querySelectorAll("input, select, textarea").forEach(function (node) {
           node.addEventListener("input", updateModulePreview);
@@ -614,17 +952,8 @@
       if (yamlModeNode) yamlModeNode.addEventListener("change", function () { updateYamlFields(); updateModulePreview(); });
       if (yamlSelectorNode) yamlSelectorNode.addEventListener("change", function () { updateYamlFields(); updateModulePreview(); });
       if (yamlUpdateNode) yamlUpdateNode.addEventListener("change", function () { updateYamlFields(); updateModulePreview(); });
-      const paperIdNode = document.getElementById("paper-id");
-      if (paperIdNode) paperIdNode.addEventListener("change", function () { updatePaperVariants(); updateModulePreview(); });
+      installPathPickers(parameterPanel);
       updateModulePreview();
-    }
-    function updatePaperVariants() {
-      const paper = state.papers.find(function (item) { return item.id === selectValue("paper-id"); });
-      const variantNode = document.getElementById("paper-variant");
-      if (!paper || !variantNode) return;
-      const variants = paper.configs.map(function (item) { return item.variant; }).filter(Boolean);
-      variantNode.value = variants[0] || "";
-      document.getElementById("paper-help").textContent = variants.length ? "可用 variant：" + variants.join("、") : "该论文暂无配置 variant。";
     }
     function toggleYamlField(id, visible) {
       const node = document.getElementById(id);
@@ -870,22 +1199,21 @@
         return "lnl run " + recipe + " --data " + quoteArg(alias);
       }
       if (state.module === "sweep") {
-        const recipe = selectValue("sweep-recipe", "cifar10-clean-smoke");
-        if (!recipe) return "";
-        return "lnl sweep --recipe " + recipe + " --seeds " + selectValue("sweep-seeds", "1 2 3") + " --output-dir " + quoteArg(selectValue("sweep-output", "artifacts/web-sweep"));
+        return buildSweepCommand();
       }
       if (state.module === "results") {
         const action = selectValue("result-action", "resume");
         const path = quoteArg(selectValue("result-path", "artifacts/web-smoke"));
-        if (action === "resume") return "lnl resume " + path + " --checkpoint " + selectValue("result-checkpoint", "last");
+        if (action === "resume") {
+          if (!state.resumeData || !state.resumeData.resumable || state.resumeInspectionKey !== currentResumeKey()) return "";
+          return "lnl resume " + path + " --checkpoint " + selectValue("result-checkpoint", "last");
+        }
+        if (action === "compare") return "lnl compare " + path + " --format json";
         return "lnl " + action + " " + path;
       }
       if (state.module === "papers") {
-        const action = selectValue("paper-action", "list");
-        const paper = selectValue("paper-id", "binary-risk");
-        if (action === "list") return "lnl papers list --format tsv";
-        if (action === "show") return "lnl papers show " + paper;
-        return "lnl papers config " + paper + " --profile " + selectValue("paper-profile", "reproduction") + " --variant " + selectValue("paper-variant", "");
+        const recipe = selectValue("paper-recipe", state.paperRecipe);
+        return recipe ? "lnl validate --recipe " + recipe + " --check-data" : "";
       }
       return selectValue("free-command", "").trim();
     }
@@ -923,6 +1251,8 @@
       state.jobId = job.id;
       outputNode.textContent = job.lines.join("\n") || "(暂无输出)";
       outputNode.scrollTop = outputNode.scrollHeight;
+      if (job.structured != null) renderStructured(job.structured);
+      else { structuredNode.classList.add("hidden"); outputNode.classList.remove("hidden"); }
       if (job.running) { statusNode.textContent = "运行中：" + job.command; statusNode.className = "status running"; }
       else if (job.error || job.returncode !== 0) { statusNode.textContent = "失败（退出码 " + job.returncode + "）"; statusNode.className = "status failed"; }
       else { statusNode.textContent = "完成（退出码 0）"; statusNode.className = "status success"; }
@@ -976,6 +1306,7 @@
     }
     runButton.addEventListener("click", async function () {
       if (!state.request) return;
+      if (state.module === "sweep" && !(await previewSweepPlan())) return;
       const datasetRequest = state.request.dataset;
       if (datasetRequest?.action === "remove" && !state.removeConfirmed) {
         state.removeConfirmed = true;
@@ -1047,6 +1378,7 @@
     });
 
     const recipeEndpoint = "/api/recipes";
+    installPathPickers(document);
     Promise.all([fetch("/api/commands"), fetch(recipeEndpoint), fetch("/api/papers"), fetch("/api/datasets")])
       .then(function (responses) { return Promise.all(responses.map(function (response) { if (!response.ok) throw new Error("后端菜单数据加载失败"); return response.json(); })); })
       .then(function (payloads) {

@@ -844,6 +844,72 @@ with contextlib.redirect_stdout(io.StringIO()):
             self.assertIn("1 / 3 completed", output)
             self.assertIn("trainer.epochs=2", output)
 
+    def test_cli_matrix_is_typed_and_seed_defaults_to_recipe_seed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "lnl_toolbox.cli.main.ExperimentService.run"
+        ) as runner:
+            code, output, error = self.invoke(
+                "sweep",
+                "--recipe",
+                "cifar10-clean-smoke",
+                "--matrix",
+                "loader.batch_size=[256,512]",
+                "--matrix",
+                "optimizer.lr=[0.01,0.001]",
+                "--output-dir",
+                directory,
+                "--dry-run",
+                "--no-check-data",
+            )
+        self.assertEqual(code, 0, error)
+        self.assertIn("Total runs:\n  4", output)
+        self.assertIn("loader.batch_size=256", output)
+        runner.assert_not_called()
+
+    def test_cli_matrix_multiplies_optional_seeds_and_rejects_bad_json(self) -> None:
+        code, output, error = self.invoke(
+            "sweep",
+            "--recipe",
+            "cifar10-clean-smoke",
+            "--matrix",
+            "loader.batch_size=[256,512]",
+            "--matrix",
+            "optimizer.lr=[0.01,0.001]",
+            "--seeds",
+            "1",
+            "2",
+            "3",
+            "--dry-run",
+            "--no-check-data",
+        )
+        self.assertEqual(code, 0, error)
+        self.assertIn("Total runs:\n  12", output)
+        code, _, error = self.invoke(
+            "sweep", "--recipe", "cifar10-clean-smoke", "--matrix", "optimizer.lr=0.1"
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("JSON array", error)
+
+    def test_table_commands_offer_json_contracts(self) -> None:
+        for arguments in (
+            ("list", "experiments", "--format", "json"),
+            ("list", "components", "--format", "json"),
+            ("papers", "list", "--format", "json"),
+            ("data", "list", "--format", "json"),
+        ):
+            code, output, error = self.invoke(*arguments)
+            self.assertEqual(code, 0, error)
+            self.assertIsInstance(json.loads(output), list)
+
+        summary = {
+            "summaries": [], "warnings": [], "excluded_runs": [], "failed_runs": [],
+            "group_by": [], "compatibility": {},
+        }
+        with patch("lnl_toolbox.cli.main.compare_runs", return_value=summary):
+            code, output, error = self.invoke("compare", str(ROOT), "--format", "json")
+        self.assertEqual(code, 0, error)
+        self.assertEqual(json.loads(output)["summaries"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -566,4 +566,20 @@ Recipe/YAML 编辑功能。`lnl web` 由 `cli/main.py` 启动 `web/command_conso
 | `web/index.html` | 编辑器同时显示 4 个新手模板与 26 篇论文正式配置；新建成功后自动打开项目 YAML；支持完整文本编辑、覆盖/另存、验证与运行 |
 | `web/test_command_console.py` | 项目 YAML HTTP round-trip、完整文本校验、非法配置拒绝和前端闭环静态门禁 |
 
+## Web Sweep 与运行结果浏览（2026-08-21）
+
+| 路径 | 职责 |
+|---|---|
+| `training/sweep.py` | 参数矩阵与 seeds 的确定性笛卡尔积、manifest 运行明细和恢复身份 |
+| `training/results.py` | 发现完成或部分运行，读取逐 epoch 指标，并融合 Sweep manifest 状态 |
+| `cli/main.py` | `--matrix PATH=JSON_ARRAY`、默认配置 seed，以及实验/组件/论文/数据/Sweep/Compare 的 JSON 输出 |
+| `web/command_console.py` | Sweep 预检、结果查询、结构化 job 输出和 localhost-only Windows 原生路径选择 API |
+| `web/index.html` | 参数矩阵编辑、组合计划表、统一表格输出、运行指标表和无依赖 SVG 叠加曲线 |
+
+运行结果列表支持按名称、方法、状态和 seed 筛选，也可在保留已选曲线的情况下收起；本机路径选择器在当前输入不是有效绝对路径时从项目根目录打开。
+
+运行列表和曲线只在“汇总比较”操作中显示。论文方法页复用内置论文目录，展示问题、机制、生命周期以及“论文概念 → YAML 字段 → 实现模块”，并可直接打开当前配置的 YAML 编辑器。
+
+恢复训练在生成命令前调用 `training/results.py::inspect_resume_run()`，只读展示目录文件、resolved config、checkpoint、当前 epoch/phase、阶段轮次和可恢复性；路径或 checkpoint 变化后必须重新检查。
+
 项目 YAML 不加入内置 recipe 清单；它在当前页面中按路径出现，并可在之后通过“项目 YAML 路径”重新加载。
