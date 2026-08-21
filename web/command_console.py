@@ -18,9 +18,10 @@ import threading
 import uuid
 import webbrowser
 from dataclasses import dataclass, field
+from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 from urllib.parse import parse_qs, urlparse
 
 
@@ -560,7 +561,7 @@ def _builtin_config_paths() -> set[Path]:
     return {recipe.config_path.resolve() for recipe in discover_recipes(ROOT, include_conditional=True)}
 
 
-_EDITABLE_SECTIONS = {
+_LEGACY_EDITABLE_SECTIONS = {
     "data",
     "noise",
     "loader",
@@ -591,7 +592,7 @@ _EDITABLE_SECTIONS = {
     "meta",
     "evidence",
 }
-_PROTECTED_LEAF_NAMES = {
+_LEGACY_PROTECTED_LEAF_NAMES = {
     "method",
     "runner",
     "name",
@@ -610,8 +611,10 @@ _PROTECTED_LEAF_NAMES = {
 }
 
 
-def _editable_config_fields(config: object, *, prefix: str = "") -> list[dict[str, object]]:
-    """Expose scalar hyperparameters without exposing component wiring."""
+def _legacy_editable_config_fields(
+    config: object, *, prefix: str = ""
+) -> list[dict[str, object]]:
+    """Compatibility policy for non-paper recipes without registry metadata."""
 
     fields: list[dict[str, object]] = []
     if not isinstance(config, dict):
@@ -619,22 +622,216 @@ def _editable_config_fields(config: object, *, prefix: str = "") -> list[dict[st
     for key, value in config.items():
         path = f"{prefix}.{key}" if prefix else str(key)
         if isinstance(value, dict):
-            if prefix or key in _EDITABLE_SECTIONS:
-                fields.extend(_editable_config_fields(value, prefix=path))
+            if prefix or key in _LEGACY_EDITABLE_SECTIONS:
+                fields.extend(_legacy_editable_config_fields(value, prefix=path))
             continue
         if not prefix and key not in {"seed", "output_root"}:
             continue
         root = path.split(".", 1)[0]
-        if root not in _EDITABLE_SECTIONS and path not in {"seed", "output_root"}:
+        if root not in _LEGACY_EDITABLE_SECTIONS and path not in {"seed", "output_root"}:
             continue
-        if str(key) in _PROTECTED_LEAF_NAMES and path != "data.name":
+        if str(key) in _LEGACY_PROTECTED_LEAF_NAMES and path != "data.name":
             continue
         if isinstance(value, (str, int, float, bool)) or value is None:
             kind = "boolean" if isinstance(value, bool) else "number" if isinstance(value, (int, float)) else "text"
-            fields.append({"path": path, "label": path, "value": value, "kind": kind})
+            fields.append(
+                {
+                    "path": path,
+                    "label": path,
+                    "value": value,
+                    "kind": kind,
+                    "level": "basic",
+                    "editable": True,
+                    "default_expanded": True,
+                    "note": "通用配置参数。",
+                }
+            )
         elif isinstance(value, list):
-            fields.append({"path": path, "label": path, "value": value, "kind": "list"})
+            fields.append(
+                {
+                    "path": path,
+                    "label": path,
+                    "value": value,
+                    "kind": "list",
+                    "level": "basic",
+                    "editable": True,
+                    "default_expanded": True,
+                    "note": "通用配置参数。",
+                }
+            )
     return fields
+
+
+_PARAMETER_REGISTRY_PATH = WEB_ROOT / "lnl_parameter_metadata_registry.yaml"
+_PARAMETER_LEVEL_ORDER = ("basic", "paper", "advanced", "locked")
+
+
+@lru_cache(maxsize=1)
+def _parameter_registry() -> dict[str, Any]:
+    """Load and minimally validate the Web parameter authorization registry."""
+
+    try:
+        import yaml
+
+        value = yaml.safe_load(_PARAMETER_REGISTRY_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(f"参数元数据 registry 无法加载：{exc}") from exc
+    if not isinstance(value, dict) or not isinstance(value.get("methods"), dict):
+        raise ValueError("参数元数据 registry 缺少 methods")
+    if not isinstance(value.get("levels"), dict):
+        raise ValueError("参数元数据 registry 缺少 levels")
+    if not isinstance(value.get("formal_recipe_bindings"), dict):
+        raise ValueError("参数元数据 registry 缺少 formal_recipe_bindings")
+    return value
+
+
+def _method_registry_key(method: object) -> str:
+    return str(method or "").strip().lower().replace("-", "_")
+
+
+def _config_method(config: object, fallback: object = "") -> str:
+    if not isinstance(config, dict):
+        return _method_registry_key(fallback)
+    value = config.get("method", fallback)
+    if isinstance(value, dict):
+        value = value.get("name", fallback)
+    method = _method_registry_key(value)
+    registry = _parameter_registry()
+    if method in registry["methods"]:
+        return method
+    record = config.get("parameter_record", {})
+    formal_recipe = record.get("formal_recipe") if isinstance(record, dict) else ""
+    candidate_recipe = str(formal_recipe or fallback or "")
+    for candidate_method, recipe_id in registry["formal_recipe_bindings"].items():
+        if candidate_recipe == str(recipe_id):
+            return str(candidate_method)
+    return method
+
+
+def _config_path_value(config: object, path: str) -> tuple[bool, object]:
+    value = config
+    for part in path.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return False, None
+        value = value[part]
+    return True, value
+
+
+def _value_kind(value: object) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, list):
+        return "list"
+    if isinstance(value, dict):
+        return "object"
+    return "text"
+
+
+@lru_cache(maxsize=1)
+def _registry_recipe_paths() -> dict[str, Path]:
+    from lnl_toolbox.catalog import discover_recipes
+
+    return {
+        recipe.id: recipe.config_path
+        for recipe in discover_recipes(ROOT, include_conditional=True)
+    }
+
+
+@lru_cache(maxsize=None)
+def _formal_registry_config(method: str) -> tuple[str, dict[str, Any]] | None:
+    registry = _parameter_registry()
+    recipe_id = registry["formal_recipe_bindings"].get(method)
+    if not recipe_id:
+        return None
+    from lnl_toolbox.catalog import load_yaml
+
+    try:
+        recipe_path = _registry_recipe_paths()[str(recipe_id)]
+    except KeyError as exc:
+        raise ValueError(f"registry formal recipe 不存在：{recipe_id}") from exc
+    return str(recipe_id), load_yaml(recipe_path)
+
+
+def _registry_config_fields(
+    config: dict[str, Any], method: str
+) -> tuple[list[dict[str, object]], dict[str, object]] | None:
+    registry = _parameter_registry()
+    method_metadata = registry["methods"].get(method)
+    if not isinstance(method_metadata, dict):
+        return None
+    parameters = method_metadata.get("parameters")
+    if not isinstance(parameters, dict):
+        raise ValueError(f"registry method {method} 缺少 parameters")
+    levels = registry["levels"]
+    formal = _formal_registry_config(method)
+    recipe_id, baseline = formal if formal is not None else ("", config)
+    paper_metadata = method_metadata.get("paper", {})
+    evidence = paper_metadata.get("evidence", {}) if isinstance(paper_metadata, dict) else {}
+    fields: list[dict[str, object]] = []
+    for level in _PARAMETER_LEVEL_ORDER:
+        level_metadata = levels.get(level, {})
+        entries = parameters.get(level, {})
+        if not isinstance(entries, dict):
+            raise ValueError(f"registry method {method}.{level} 必须是 mapping")
+        for path, metadata in entries.items():
+            if not isinstance(metadata, dict):
+                raise ValueError(f"registry 参数 {method}.{path} 元数据无效")
+            found, current = _config_path_value(config, str(path))
+            if not found:
+                raise ValueError(f"registry 参数路径不存在：{method}.{path}")
+            baseline_found, baseline_value = _config_path_value(baseline, str(path))
+            evidence_ref = metadata.get("evidence_ref")
+            fields.append(
+                {
+                    "path": str(path),
+                    "label": str(path),
+                    "value": current,
+                    "kind": _value_kind(current),
+                    "level": level,
+                    "level_label": level_metadata.get("label_zh", level),
+                    "editable": bool(level_metadata.get("editable", False)),
+                    "default_expanded": bool(
+                        level_metadata.get("default_expanded", False)
+                    ),
+                    "note": str(metadata.get("note", "")),
+                    "reproduction_impact": str(
+                        metadata.get("reproduction_impact", "")
+                    ),
+                    "origin": str(metadata.get("origin", "")),
+                    "lock_reason": str(metadata.get("lock_reason", "")),
+                    "evidence_ref": str(evidence_ref or ""),
+                    "evidence": str(evidence.get(evidence_ref, "")),
+                    "changed_from": baseline_value if baseline_found else None,
+                    "changed_from_paper": bool(
+                        level == "paper"
+                        and baseline_found
+                        and current != baseline_value
+                    ),
+                }
+            )
+    paper_changes = [
+        field for field in fields if field["level"] == "paper" and field["changed_from_paper"]
+    ]
+    return fields, {
+        "registry_version": str(registry.get("registry_version", "")),
+        "formal_recipe": recipe_id,
+        "paper_title": str(paper_metadata.get("title", "")),
+        "paper_source": str(paper_metadata.get("original_source", "")),
+        "modified_from_paper": bool(paper_changes),
+        "paper_changes": [field["path"] for field in paper_changes],
+        "levels": [
+            {
+                "id": level,
+                "label": str(levels.get(level, {}).get("label_zh", level)),
+                "default_expanded": bool(
+                    levels.get(level, {}).get("default_expanded", False)
+                ),
+            }
+            for level in _PARAMETER_LEVEL_ORDER
+        ],
+    }
 
 
 def _config_schema(
@@ -643,17 +840,50 @@ def _config_schema(
     path_value: object = None,
 ) -> dict[str, object]:
     payload = _config_payload(recipe_id, path_value=path_value)
+    method = _config_method(
+        payload["config"], payload["recipe"] or payload["method"]
+    )
+    formal_recipe = _parameter_registry()["formal_recipe_bindings"].get(method, "")
+    use_registry = not payload["recipe"] or payload["recipe"] == formal_recipe
+    registry_fields = (
+        _registry_config_fields(payload["config"], method) if use_registry else None
+    )
+    fields, metadata = (
+        registry_fields
+        if registry_fields is not None
+        else (
+            _legacy_editable_config_fields(payload["config"]),
+            {
+                "registry_version": "",
+                "formal_recipe": "",
+                "paper_title": "",
+                "paper_source": "",
+                "modified_from_paper": False,
+                "paper_changes": [],
+                "levels": [
+                    {"id": "basic", "label": "基础参数", "default_expanded": True}
+                ],
+            },
+        )
+    )
     return {
         "recipe": payload["recipe"],
         "source_path": payload["path"],
         "runner": payload["runner"],
-        "method": payload["method"],
-        "fields": _editable_config_fields(payload["config"]),
+        "method": method,
+        "fields": fields,
+        **metadata,
     }
 
 
-def _field_map(config: object) -> dict[str, dict[str, object]]:
-    return {field["path"]: field for field in _editable_config_fields(config)}
+def _field_map(config: dict[str, Any], method: str) -> dict[str, dict[str, object]]:
+    registry_fields = _registry_config_fields(config, method)
+    fields = (
+        registry_fields[0]
+        if registry_fields is not None
+        else _legacy_editable_config_fields(config)
+    )
+    return {str(field["path"]): field for field in fields}
 
 
 def _set_config_path(config: dict[str, object], path: str, value: object) -> None:
@@ -688,6 +918,80 @@ def _coerce_patch_value(field: dict[str, object], value: object) -> object:
     return value
 
 
+def _locked_registry_paths(method: str) -> tuple[str, ...]:
+    method_metadata = _parameter_registry()["methods"].get(method, {})
+    parameters = method_metadata.get("parameters", {}) if isinstance(method_metadata, dict) else {}
+    locked = parameters.get("locked", {}) if isinstance(parameters, dict) else {}
+    return tuple(str(path) for path in locked) if isinstance(locked, dict) else ()
+
+
+def _assert_locked_parameters_unchanged(
+    before: dict[str, Any], after: dict[str, Any], method: str
+) -> None:
+    for path in _locked_registry_paths(method):
+        before_found, before_value = _config_path_value(before, path)
+        after_found, after_value = _config_path_value(after, path)
+        if before_found != after_found or before_value != after_value:
+            raise ValueError(f"锁定参数不能通过普通 WebUI 修改：{path}")
+
+
+def _paper_parameter_changes(
+    config: dict[str, Any], method: str
+) -> tuple[str, list[dict[str, object]]]:
+    formal = _formal_registry_config(method)
+    if formal is None:
+        return "", []
+    recipe_id, baseline = formal
+    method_metadata = _parameter_registry()["methods"].get(method, {})
+    parameters = method_metadata.get("parameters", {}) if isinstance(method_metadata, dict) else {}
+    paper = parameters.get("paper", {}) if isinstance(parameters, dict) else {}
+    changes: list[dict[str, object]] = []
+    if isinstance(paper, dict):
+        for path in paper:
+            baseline_found, baseline_value = _config_path_value(baseline, str(path))
+            current_found, current_value = _config_path_value(config, str(path))
+            if not baseline_found or not current_found:
+                raise ValueError(f"论文参数路径不存在：{method}.{path}")
+            if current_value != baseline_value:
+                changes.append(
+                    {
+                        "path": str(path),
+                        "changed_from": baseline_value,
+                        "value": current_value,
+                    }
+                )
+    return recipe_id, changes
+
+
+def _record_paper_parameter_status(
+    config: dict[str, Any], method: str, *, acknowledged: bool
+) -> None:
+    recipe_id, changes = _paper_parameter_changes(config, method)
+    if not recipe_id:
+        return
+    existing = config.get("parameter_record", {})
+    record = dict(existing) if isinstance(existing, dict) else {}
+    previously_acknowledged = bool(record.get("paper_change_acknowledged", False))
+    if changes and not (acknowledged or previously_acknowledged):
+        paths = ", ".join(str(change["path"]) for change in changes)
+        raise ValueError(f"修改论文参数需要确认复现影响：{paths}")
+    record.update(
+        {
+            "parameter_metadata_registry_version": str(
+                _parameter_registry().get("registry_version", "")
+            ),
+            "formal_recipe": recipe_id,
+            "modified_from_paper": bool(changes),
+            "paper_change_acknowledged": bool(changes),
+            "paper_parameter_changes": changes,
+            "effective_reproduction_status": (
+                "modified_from_paper" if changes else "formal_recipe"
+            ),
+        }
+    )
+    config["parameter_record"] = record
+
+
 def _save_config(payload: object) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise ValueError("请求内容必须是 JSON 对象")
@@ -697,6 +1001,19 @@ def _save_config(payload: object) -> dict[str, object]:
     content = payload.get("content")
     patches = payload.get("patches")
     from lnl_toolbox.catalog import load_yaml, recipe_by_id, validate_config
+
+    source_config: dict[str, Any] | None = None
+    source_method = ""
+    if isinstance(recipe_id, str) and recipe_id.strip():
+        source_recipe = recipe_by_id(recipe_id, ROOT)
+        source_config = load_yaml(source_recipe.config_path)
+        source_method = _config_method(source_config, recipe_id or source_recipe.method)
+    elif str(source_path or "").strip():
+        source = _project_path(source_path)
+        if not source.is_file():
+            raise FileNotFoundError("来源 YAML 不存在")
+        source_config = load_yaml(source)
+        source_method = _config_method(source_config)
 
     if content is not None:
         if not isinstance(content, str) or not content.strip():
@@ -709,21 +1026,16 @@ def _save_config(payload: object) -> dict[str, object]:
             raise ValueError(f"YAML 解析失败：{exc}") from exc
         if not isinstance(parsed, dict):
             raise ValueError("YAML 顶层必须是 mapping")
-        validate_config(parsed)
     else:
-        if isinstance(recipe_id, str) and recipe_id.strip():
-            recipe = recipe_by_id(recipe_id, ROOT)
-            parsed = load_yaml(recipe.config_path)
-        elif str(source_path or "").strip():
-            source = _project_path(source_path)
-            if not source.is_file():
-                raise FileNotFoundError("来源 YAML 不存在")
-            parsed = load_yaml(source)
-        else:
+        if source_config is None:
             raise ValueError("保存 YAML 必须指定来源 recipe 或项目 YAML")
+        parsed = load_yaml(recipe_by_id(recipe_id, ROOT).config_path) if (
+            isinstance(recipe_id, str) and recipe_id.strip()
+        ) else load_yaml(_project_path(source_path))
         if not isinstance(patches, list):
             raise ValueError("只能通过参数菜单提交 YAML 修改")
-        fields = _field_map(parsed)
+        method = source_method or _config_method(parsed, recipe_id)
+        fields = _field_map(parsed, method)
         for patch in patches:
             if not isinstance(patch, dict) or not isinstance(patch.get("path"), str):
                 raise ValueError("YAML 参数修改格式错误")
@@ -731,8 +1043,20 @@ def _save_config(payload: object) -> dict[str, object]:
             field = fields.get(path)
             if field is None:
                 raise ValueError(f"不允许修改配置结构或组件：{path}")
+            if not field.get("editable", False):
+                raise ValueError(f"锁定参数不能通过普通 WebUI 修改：{path}")
             _set_config_path(parsed, path, _coerce_patch_value(field, patch.get("value")))
-        validate_config(parsed)
+    method = source_method or _config_method(source_config or parsed, _config_method(parsed))
+    if source_config is None:
+        formal = _formal_registry_config(method)
+        source_config = formal[1] if formal is not None else parsed
+    _assert_locked_parameters_unchanged(source_config, parsed, method)
+    _record_paper_parameter_status(
+        parsed,
+        method,
+        acknowledged=bool(payload.get("acknowledge_paper_impact", False)),
+    )
+    validate_config(parsed)
     try:
         import yaml
 

@@ -82,6 +82,17 @@
     .parameter-heading span { color: var(--muted); font-size: 12px; }
     .heading-actions { display: flex; align-items: center; gap: 8px; }
     .yaml-editor-panel textarea { min-height: 420px; font-size: 13px; }
+    .yaml-parameter-groups { display: grid; gap: 10px; grid-column: 1 / -1; }
+    .yaml-parameter-group { border: 1px solid var(--line); border-radius: 10px; background: #172033; }
+    .yaml-parameter-group > summary { cursor: pointer; padding: 10px 12px; color: #bfdbfe; font-weight: 700; }
+    .yaml-parameter-group-body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 0 12px 12px; }
+    .yaml-field { display: grid; gap: 5px; padding: 9px; border: 1px solid #2d3b50; border-radius: 8px; }
+    .yaml-field-meta { color: var(--muted); font-size: 11px; margin: 0; }
+    .yaml-field-paper { border-color: #7c5c22; background: rgba(120, 80, 0, .12); }
+    .yaml-field-locked { background: #111827; }
+    .yaml-readonly-value { padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; color: #cbd5e1; background: #0b1220; overflow-wrap: anywhere; }
+    .yaml-paper-status { grid-column: 1 / -1; padding: 9px 11px; border-radius: 8px; color: var(--good); background: #10251f; }
+    .yaml-paper-status.modified { color: #fde68a; background: rgba(120, 80, 0, .2); }
     .preview {
       margin: 0 0 14px; padding: 14px; min-height: 54px; white-space: pre-wrap;
       overflow-wrap: anywhere; color: #bfdbfe; background: #0b1220; border-radius: 9px; border: 1px solid #263b5d;
@@ -1018,31 +1029,82 @@
     function yamlFieldId(path) {
       return "yaml-field-" + path.replace(/[^A-Za-z0-9_-]/g, "-");
     }
+    function yamlFieldValue(fieldInfo) {
+      const node = document.getElementById(yamlFieldId(fieldInfo.path));
+      if (!node) return fieldInfo.value;
+      if (fieldInfo.kind === "boolean") return Boolean(node.checked);
+      if (fieldInfo.kind === "number") return Number(node.value);
+      if (fieldInfo.kind === "list") {
+        try { return JSON.parse(node.value); } catch (_) { return node.value; }
+      }
+      return node.value;
+    }
+    function paperChangePaths() {
+      return (state.yamlSchema?.fields || []).filter(function (fieldInfo) {
+        return fieldInfo.level === "paper" && JSON.stringify(yamlFieldValue(fieldInfo)) !== JSON.stringify(fieldInfo.changed_from);
+      }).map(function (fieldInfo) { return fieldInfo.path; });
+    }
+    function updatePaperDeviation() {
+      const node = document.getElementById("yaml-paper-status");
+      if (!node) return;
+      const paths = paperChangePaths();
+      node.classList.toggle("modified", paths.length > 0);
+      node.textContent = paths.length
+        ? "已偏离论文配置：" + paths.join(", ") + "。保存前需要确认复现影响。"
+        : "当前论文参数与正式配置一致。";
+    }
     function renderYamlFields(schema) {
       const node = document.getElementById("yaml-fields");
       const meta = document.getElementById("yaml-schema-meta");
       if (!node || !meta) return;
       state.yamlSchema = schema;
-      node.innerHTML = "";
-      meta.textContent = schema.runner + " / " + (schema.method || "通用") + "：仅显示允许修改的超参数、数据路径和训练设置。";
-      for (const fieldInfo of schema.fields || []) {
-        const id = yamlFieldId(fieldInfo.path);
-        let control;
-        if (fieldInfo.kind === "boolean") {
-          control = '<input id="' + id + '" type="checkbox" ' + (fieldInfo.value ? "checked" : "") + ' data-yaml-path="' + escapeHtml(fieldInfo.path) + '">';
-        } else {
-          const type = fieldInfo.kind === "number" ? "number" : "text";
-          const value = fieldInfo.kind === "list" ? JSON.stringify(fieldInfo.value) : fieldInfo.value ?? "";
-          control = '<input id="' + id + '" type="' + type + '" value="' + escapeHtml(value) + '" spellcheck="false" data-yaml-path="' + escapeHtml(fieldInfo.path) + '">';
+      node.innerHTML = '<div id="yaml-paper-status" class="yaml-paper-status"></div><div class="yaml-parameter-groups" id="yaml-parameter-groups"></div>';
+      meta.innerHTML = escapeHtml(schema.runner + " / " + (schema.method || "通用")) +
+        (schema.paper_title ? " · " + escapeHtml(schema.paper_title) + ' · <a href="' + escapeHtml(schema.paper_source) + '" target="_blank" rel="noopener">论文来源</a>' : "") +
+        "。参数权限由 metadata registry 决定。";
+      const groupsNode = document.getElementById("yaml-parameter-groups");
+      for (const levelInfo of schema.levels || []) {
+        const fields = (schema.fields || []).filter(function (fieldInfo) { return fieldInfo.level === levelInfo.id; });
+        if (!fields.length) continue;
+        const details = document.createElement("details");
+        details.className = "yaml-parameter-group";
+        details.open = Boolean(levelInfo.default_expanded);
+        details.innerHTML = '<summary>' + escapeHtml(levelInfo.label) + '（' + fields.length + '）</summary><div class="yaml-parameter-group-body"></div>';
+        const body = details.querySelector(".yaml-parameter-group-body");
+        for (const fieldInfo of fields) {
+          const id = yamlFieldId(fieldInfo.path);
+          let control;
+          if (!fieldInfo.editable) {
+            const value = typeof fieldInfo.value === "object" ? JSON.stringify(fieldInfo.value) : fieldInfo.value ?? "";
+            control = '<div class="yaml-readonly-value">' + escapeHtml(value) + '</div>';
+          } else if (fieldInfo.kind === "boolean") {
+            control = '<input id="' + id + '" type="checkbox" ' + (fieldInfo.value ? "checked" : "") + ' data-yaml-path="' + escapeHtml(fieldInfo.path) + '">';
+          } else {
+            const type = fieldInfo.kind === "number" ? "number" : "text";
+            const value = fieldInfo.kind === "list" ? JSON.stringify(fieldInfo.value) : fieldInfo.value ?? "";
+            control = '<input id="' + id + '" type="' + type + '" value="' + escapeHtml(value) + '" spellcheck="false" data-yaml-path="' + escapeHtml(fieldInfo.path) + '">';
+          }
+          const explanation = fieldInfo.level === "paper"
+            ? '<p class="yaml-field-meta">含义：' + escapeHtml(fieldInfo.note) + '</p><p class="yaml-field-meta">论文依据：' + escapeHtml(fieldInfo.evidence || "见论文来源") + '</p><p class="yaml-field-meta">复现影响：' + escapeHtml(fieldInfo.reproduction_impact) + '</p>'
+            : fieldInfo.level === "locked"
+              ? '<p class="yaml-field-meta">不可修改：' + escapeHtml(fieldInfo.lock_reason || fieldInfo.note) + '</p>'
+              : '<p class="yaml-field-meta">' + escapeHtml(fieldInfo.note) + '</p>';
+          body.insertAdjacentHTML("beforeend", '<div class="yaml-field yaml-field-' + escapeHtml(fieldInfo.level) + '"><label for="' + id + '">' + escapeHtml(fieldInfo.label) + '</label>' + control + explanation + '</div>');
         }
-        node.insertAdjacentHTML("beforeend", '<label>' + escapeHtml(fieldInfo.label) + control + '</label>');
+        groupsNode.appendChild(details);
       }
       if (!schema.fields || !schema.fields.length) {
         node.innerHTML = '<p class="helper">此 recipe 没有可由网页安全修改的参数，请使用论文原始配置运行。</p>';
       }
+      for (const fieldInfo of schema.fields || []) {
+        if (!fieldInfo.editable) continue;
+        const input = document.getElementById(yamlFieldId(fieldInfo.path));
+        if (input) input.addEventListener("input", updatePaperDeviation);
+      }
+      updatePaperDeviation();
     }
     function collectYamlPatches() {
-      return (state.yamlSchema?.fields || []).map(function (fieldInfo) {
+      return (state.yamlSchema?.fields || []).filter(function (fieldInfo) { return fieldInfo.editable; }).map(function (fieldInfo) {
         const node = document.getElementById(yamlFieldId(fieldInfo.path));
         let value = fieldInfo.kind === "boolean" ? Boolean(node.checked) : node.value;
         if (fieldInfo.kind === "number") value = Number(value);
@@ -1109,8 +1171,20 @@
         return;
       }
       const body = {path: path, recipe: state.yamlSchema?.recipe, source_path: state.yamlSourcePath, overwrite: overwrite};
-      if (state.yamlTextDirty) body.content = document.getElementById("yaml-text").value;
-      else body.patches = patches;
+      const paperChanges = paperChangePaths();
+      if (state.yamlTextDirty) {
+        body.content = document.getElementById("yaml-text").value;
+        if (state.yamlSchema?.formal_recipe) {
+          body.acknowledge_paper_impact = window.confirm("完整 YAML 编辑可能改变论文参数。确认已理解这会使配置偏离论文默认值吗？");
+          if (!body.acknowledge_paper_impact) return;
+        }
+      } else {
+        body.patches = patches;
+        if (paperChanges.length) {
+          body.acknowledge_paper_impact = window.confirm("论文参数已修改：" + paperChanges.join(", ") + "。确认继续并标记为已偏离论文配置吗？");
+          if (!body.acknowledge_paper_impact) return;
+        }
+      }
       const response = await fetch("/api/configs", {
         method: "POST",
         headers: {"Content-Type": "application/json"},

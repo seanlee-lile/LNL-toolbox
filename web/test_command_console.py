@@ -14,6 +14,13 @@ import command_console  # noqa: E402
 
 
 class CommandConsoleTest(unittest.TestCase):
+    def test_parameter_editor_exposes_registry_groups_and_deviation_warning(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn("yaml-parameter-groups", page)
+        self.assertIn("yaml-readonly-value", page)
+        self.assertIn("已偏离论文配置", page)
+        self.assertIn("acknowledge_paper_impact", page)
+
     def test_command_catalog_is_fixed_and_displayable(self):
         self.assertGreaterEqual(len(command_console.COMMANDS), 8)
         for spec in command_console.COMMANDS.values():
@@ -449,17 +456,83 @@ class CommandConsoleTest(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
-    def test_schema_hides_component_wiring(self):
-        schema = command_console._config_schema("fine-cifar100n-smoke")
+    def test_schema_groups_and_shows_locked_component_wiring(self):
+        schema = command_console._config_schema("fine-cifar100n-reproduction")
         paths = {field["path"] for field in schema["fields"]}
         self.assertIn("fine.warmup_epochs", paths)
-        self.assertNotIn("model.name", paths)
-        self.assertNotIn("execution.runner", paths)
+        self.assertIn("model.name", paths)
+        self.assertIn("execution.runner", paths)
+        fields = {field["path"]: field for field in schema["fields"]}
+        self.assertEqual(fields["model.name"]["level"], "locked")
+        self.assertFalse(fields["model.name"]["editable"])
+        self.assertEqual(
+            [level["id"] for level in schema["levels"]],
+            ["basic", "paper", "advanced", "locked"],
+        )
 
-        cdr_schema = command_console._config_schema("cifar10-symmetric-cdr-smoke")
+        cdr_schema = command_console._config_schema("cifar10-symmetric-cdr-reproduction")
         cdr_paths = {field["path"] for field in cdr_schema["fields"]}
         self.assertIn("parameter_update.noise_rate", cdr_paths)
-        self.assertNotIn("parameter_update.name", cdr_paths)
+        self.assertIn("parameter_update.name", cdr_paths)
+
+    def test_all_formal_paper_recipes_have_complete_registry_schemas(self):
+        from lnl_toolbox.catalog import default_paper_config, load_papers
+
+        papers = load_papers(command_console.ROOT)
+        self.assertEqual(len(papers), 26)
+        for paper in papers:
+            config, _ = default_paper_config(paper, root=command_console.ROOT)
+            schema = command_console._config_schema(config.recipe_id)
+            self.assertTrue(schema["formal_recipe"], paper.id)
+            self.assertEqual(
+                [level["id"] for level in schema["levels"]],
+                ["basic", "paper", "advanced", "locked"],
+                paper.id,
+            )
+            self.assertTrue(
+                {field["level"] for field in schema["fields"]}
+                <= {"basic", "paper", "advanced", "locked"},
+                paper.id,
+            )
+            self.assertTrue(
+                all(field["note"] for field in schema["fields"] if field["level"] == "paper"),
+                paper.id,
+            )
+
+    def test_paper_parameter_change_requires_acknowledgement_and_is_recorded(self):
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            destination = Path(directory) / "gce-modified.yaml"
+            request_payload = {
+                "path": str(destination),
+                "recipe": "gce-cifar10-noise02-reproduction",
+                "patches": [{"path": "loss.q", "value": 0.5}],
+            }
+            with self.assertRaisesRegex(ValueError, "需要确认复现影响"):
+                command_console._save_config(request_payload)
+            request_payload["acknowledge_paper_impact"] = True
+            saved = command_console._save_config(request_payload)
+            from lnl_toolbox.catalog import load_yaml
+
+            config = load_yaml(command_console.ROOT / saved["path"])
+            record = config["parameter_record"]
+            self.assertTrue(record["modified_from_paper"])
+            self.assertEqual(record["effective_reproduction_status"], "modified_from_paper")
+            self.assertEqual(record["paper_parameter_changes"][0]["path"], "loss.q")
+
+    def test_complete_yaml_edit_cannot_bypass_locked_parameter_policy(self):
+        source = command_console._config_payload("fine-cifar100n-reproduction")
+        changed = source["content"].replace("runner: fine", "runner: clean", 1)
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            with self.assertRaisesRegex(ValueError, "锁定参数"):
+                command_console._save_config(
+                    {
+                        "path": str(Path(directory) / "bypass.yaml"),
+                        "recipe": "fine-cifar100n-reproduction",
+                        "source_path": source["path"],
+                        "content": changed,
+                        "acknowledge_paper_impact": True,
+                    }
+                )
 
     def test_safe_save_rejects_component_changes(self):
         with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:

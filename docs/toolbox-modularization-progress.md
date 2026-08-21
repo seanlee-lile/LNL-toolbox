@@ -1,5 +1,19 @@
 # Toolbox modularization progress
 
+## Web parameter metadata registry (2026-08-21)
+
+- Current task: make the 26-paper parameter registry the Web authorization, grouping, provenance, and reproduction-deviation source.
+- Branch: `codex/cli`; base commit: `4ace09c`; the supplied registry was the only untracked file at task start.
+- Checklist: registry audit; path/binding repair; backend schema and enforcement; four-level UI; focused tests; full regression and documentation.
+- Completed: 7 / 7 (100%); implementation, focused Web tests, full regression, lint, JavaScript syntax, and browser acceptance are complete.
+- Registry audit: 26 methods and 99 paper parameters were retained; stale T-Revision, DivideMix, split, scheduler, model-list, PCSE, DSS and DLD paths were repaired and each method is bound to its catalog formal recipe.
+- Safety: locked values are visible but cannot be changed by parameter patches or complete-YAML API requests. Paper-level changes require acknowledgement and persist `modified_from_paper`, the formal recipe, and changed-from/value evidence in `parameter_record`.
+- Files changed: the supplied registry, Web backend/page/test, and three shared documents. No recipe, algorithm, runner, model, dataset adapter, catalog, or training default changed.
+- Validation: Web 31/31 and full unittest 845/845 passed; Ruff, JavaScript syntax, and `git diff --check` passed. Browser acceptance confirmed four groups, read-only locked fields, paper provenance, and the paper-deviation warning.
+- Exact next step: human diff review; commit only after separate authorization.
+- Local checkpoint commits: none; commit and push are not authorized.
+- Collaborator note: Web files and shared documents are high-conflict integration surfaces; changes are limited to parameter metadata presentation and authorization.
+
 ## Web matrix sweep and result visualization (2026-08-21)
 
 - Current task: expose typed Cartesian parameter sweeps, native Windows path selection, structured CLI tables, and run metrics/curves in the local Web console.
