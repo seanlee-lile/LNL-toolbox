@@ -219,7 +219,7 @@ Web 的“运行管理”直接读取 `metrics.jsonl`、`final_metrics.json` 和
 可查看最终指标、部分训练进度及多运行逐 epoch 叠加曲线。路径按钮通过本机 Windows
 对话框选择文件或目录；该能力只允许 localhost 请求，非 Windows 环境继续手工输入。
 
-论文正式配置的 Web 参数面板以 `web/lnl_parameter_metadata_registry.yaml` 为权限和
+论文正式配置的 Web 参数面板以 `web/lnl_parameter_metadata_registry_revised.yaml` 为权限和
 解释来源。基础参数与论文参数默认展开，高级参数默认折叠，锁定参数只读展示。修改
 论文参数必须确认复现影响，保存后的 `parameter_record` 会记录原值、新值、formal
 recipe 和 `modified_from_paper`；无论参数控件还是完整 YAML 文本，锁定字段都由服务端

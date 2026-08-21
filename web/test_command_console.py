@@ -456,15 +456,17 @@ class CommandConsoleTest(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
-    def test_schema_groups_and_shows_locked_component_wiring(self):
+    def test_schema_uses_revised_permissions_and_keeps_structural_wiring_locked(self):
         schema = command_console._config_schema("fine-cifar100n-reproduction")
         paths = {field["path"] for field in schema["fields"]}
         self.assertIn("fine.warmup_epochs", paths)
         self.assertIn("model.name", paths)
         self.assertIn("execution.runner", paths)
         fields = {field["path"]: field for field in schema["fields"]}
-        self.assertEqual(fields["model.name"]["level"], "locked")
-        self.assertFalse(fields["model.name"]["editable"])
+        self.assertEqual(fields["model.name"]["level"], "advanced")
+        self.assertTrue(fields["model.name"]["editable"])
+        self.assertEqual(fields["execution.runner"]["level"], "locked")
+        self.assertFalse(fields["execution.runner"]["editable"])
         self.assertEqual(
             [level["id"] for level in schema["levels"]],
             ["basic", "paper", "advanced", "locked"],
@@ -474,6 +476,23 @@ class CommandConsoleTest(unittest.TestCase):
         cdr_paths = {field["path"] for field in cdr_schema["fields"]}
         self.assertIn("parameter_update.noise_rate", cdr_paths)
         self.assertIn("parameter_update.name", cdr_paths)
+
+        binary_schema = command_console._config_schema(
+            "binary-risk-natarajan-reproduction"
+        )
+        binary_fields = {field["path"]: field for field in binary_schema["fields"]}
+        for path in ("noise.rho_positive", "noise.rho_negative"):
+            self.assertEqual(binary_fields[path]["level"], "paper")
+            self.assertTrue(binary_fields[path]["editable"])
+
+    def test_revised_registry_is_the_only_active_web_policy(self):
+        self.assertEqual(
+            command_console._PARAMETER_REGISTRY_PATH.name,
+            "lnl_parameter_metadata_registry_revised.yaml",
+        )
+        registry = command_console._parameter_registry()
+        self.assertEqual(str(registry["registry_version"]), "1.1.0")
+        self.assertIn("permission_policy_revision", registry)
 
     def test_all_formal_paper_recipes_have_complete_registry_schemas(self):
         from lnl_toolbox.catalog import default_paper_config, load_papers

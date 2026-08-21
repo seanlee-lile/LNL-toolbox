@@ -1,5 +1,19 @@
 # Toolbox modularization progress
 
+## Revised Web parameter permission policy (2026-08-21)
+
+- Current task: make `lnl_parameter_metadata_registry_revised.yaml` the only active Web parameter-selection policy without changing recipes, training code, or the page layout.
+- Branch: `codex/cli`; base commit: `840ace1`; the revised registry was the only untracked file at task start.
+- Checklist: compare registries; switch authority; test editable/locked boundaries; focused regression; full regression and documentation.
+- Completed: 6 / 6 (100%); registry comparison, authority switch, boundary tests, focused/full regression, browser acceptance, and documentation are complete.
+- Registry scope: all 26 methods and all 1,231 existing paths are retained. The revised levels contain 120 basic, 137 paper, 809 advanced, and 165 locked parameters.
+- Safety boundary: supported experimental choices are editable under the revised policy, while structural/runtime/integrity fields such as `execution.runner` remain server-enforced locks.
+- Files changed: revised registry, Web backend/test, and three shared documents. No page layout, recipe, algorithm, runner, model, dataset adapter, or training default changed.
+- Validation: Web 32/32 and full unittest 845/845 passed; Ruff passed. Browser acceptance confirmed Binary Risk exposes 6 basic, 6 paper, 6 advanced, and 4 locked fields; `model.name` and both noise rates are editable while `execution.runner` remains read-only.
+- Exact next step: human diff review; commit only after separate authorization.
+- Local checkpoint commits: none; commit and push are not authorized.
+- Collaborator note: `web/command_console.py`, Web tests, and shared documents are high-conflict integration surfaces; edits are limited to the registry authority and permission assertions.
+
 ## Web parameter metadata registry (2026-08-21)
 
 - Current task: make the 26-paper parameter registry the Web authorization, grouping, provenance, and reproduction-deviation source.

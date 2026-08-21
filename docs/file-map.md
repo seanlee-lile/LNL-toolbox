@@ -588,7 +588,8 @@ Recipe/YAML 编辑功能。`lnl web` 由 `cli/main.py` 启动 `web/command_conso
 
 | 路径 | 职责 |
 |---|---|
-| `web/lnl_parameter_metadata_registry.yaml` | 绑定 26 篇论文的默认 formal recipe，并为实际 YAML 路径登记基础、论文、高级、锁定四级权限、论文依据、复现影响及锁定理由 |
+| `web/lnl_parameter_metadata_registry_revised.yaml` | Web 当前唯一使用的参数权限源（v1.1）；绑定 26 篇论文的默认 formal recipe，并为实际 YAML 路径登记基础、论文、高级、锁定四级权限、论文依据、复现影响及锁定理由 |
+| `web/lnl_parameter_metadata_registry.yaml` | v1.0 历史权限快照；Web 不再加载，仅保留用于权限范围变更审查 |
 | `web/command_console.py` | 从 registry 生成配置 schema；服务端同时保护参数 patch 与完整 YAML 编辑；论文参数偏离写入 `parameter_record` |
 | `web/index.html` | 四组参数、论文来源/解释/影响、折叠高级参数、只读锁定值以及“已偏离论文配置”提示 |
 | `web/test_command_console.py` | 26 个 formal schema、论文变更确认/记录、锁定字段 API 防绕过与前端分组门禁 |

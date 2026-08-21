@@ -662,7 +662,7 @@ def _legacy_editable_config_fields(
     return fields
 
 
-_PARAMETER_REGISTRY_PATH = WEB_ROOT / "lnl_parameter_metadata_registry.yaml"
+_PARAMETER_REGISTRY_PATH = WEB_ROOT / "lnl_parameter_metadata_registry_revised.yaml"
 _PARAMETER_LEVEL_ORDER = ("basic", "paper", "advanced", "locked")
 
 
