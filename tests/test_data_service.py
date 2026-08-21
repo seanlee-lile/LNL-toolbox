@@ -189,6 +189,26 @@ class DataServiceTest(unittest.TestCase):
             self.assertNotIn("clean_target", batch)
             self.assertEqual(tuple(batch["input"].shape[1:]), (1, 28, 28))
 
+    def test_registered_fashion_mnist_uses_automatic_training_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data_root = root / "FashionMNIST" / "raw"
+            data_root.mkdir(parents=True)
+            _write_fashion_idx(data_root, "train", 40)
+            _write_fashion_idx(data_root, "test", 20)
+            service = DataService(DATASETS, LocalDatasetCatalog(root / "catalog.json"))
+            service.register("fashion", "fashion_mnist", {"root": root})
+
+            report, run_dir = service.verify("fashion", None, root / "verify")
+
+            self.assertEqual(report.status, "ready")
+            self.assertEqual(report.training_evidence["verification_profile"], "automatic")
+            self.assertIsNone(report.training_evidence["recipe"])
+            final = json.loads((run_dir / "final_metrics.json").read_text(encoding="utf-8"))
+            self.assertEqual(final["completed_epochs"], 1)
+            manifest = json.loads((run_dir / "data_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["dataset"], "fashion_mnist")
+
     def test_manifest_checkpoint_round_trip_and_tamper_failure(self) -> None:
         requirements = DataRequirements(roles=frozenset({DataRole.TRAIN, DataRole.TEST}))
         with tempfile.TemporaryDirectory() as directory:

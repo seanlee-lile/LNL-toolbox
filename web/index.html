@@ -193,7 +193,7 @@
       { id: "advanced", label: "自由输入", description: "直接输入一条 lnl 指令，后端仍会安全解析。", hint: "高级用户" },
     ];
     const modules = allModules;
-    const state = { selected: null, request: null, jobId: null, timer: null, module: recipeMode ? "yaml" : "beginner", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, yamlSchema: null, dataAction: "list", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, removeConfirmed: false };
+    const state = { selected: null, request: null, jobId: null, timer: null, module: recipeMode ? "yaml" : "beginner", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, yamlSchema: null, trainingData: "", dataAction: "list", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, removeConfirmed: false };
     if (recipeMode) {
       document.getElementById("page-title").textContent = "LNL Toolbox Recipe Editor";
       document.getElementById("page-subtitle").textContent = "从已有 recipe 组合配置，并查看或保存 YAML。";
@@ -251,6 +251,15 @@
       const options = recipeOptions(runner);
       return selectControl(id, options.length ? options : [_fallback]);
     }
+    function registeredDatasetOptions(includeDefault = false) {
+      const options = (state.datasets.datasets || []).filter(function (item) {
+        return item.location && item.status === "ready";
+      }).map(function (item) {
+        return {value:item.name, label:item.name + " · " + item.adapter};
+      });
+      if (includeDefault) options.unshift({value:"", label:"使用训练模板的默认数据"});
+      return options;
+    }
     function commonFormStart() { return '<div class="form-grid">'; }
     function commonFormEnd() { return '</div>'; }
 
@@ -260,12 +269,15 @@
           {value:"validate", label:"只检查，不训练"}, {value:"dry-run", label:"预演训练流程"},
           {value:"train", label:"训练几轮"}, {value:"sweep", label:"多 seed Sweep"}
         ])) +
-        field("选择配方", "recipe", recipesSelect("__ID__")) +
+        field("训练模板", "recipe", recipesSelect("__ID__")) +
+        field("本地数据集", "training-data", selectControl("__ID__", registeredDatasetOptions(true))) +
         field("训练轮次", "epochs", selectControl("__ID__", ["1", "2", "5", "10"])) +
         field("输出目录", "output-dir", inputControl("__ID__", "artifacts/web-smoke")) +
         field("随机种子（Sweep 时生效）", "seeds", inputControl("__ID__", "1 2 3"), true) +
-        commonFormEnd() + '<p class="helper">先选择检查或 dry-run；确认无误后再训练。Sweep 会按种子顺序运行。</p>';
+        commonFormEnd() + '<p class="helper">训练模板决定方法和超参数；本地数据集单独选择。改换数据集后不再属于原论文的精确复现配置。</p>';
       if ([...document.getElementById("recipe").options].some(function (option) { return option.value === "cifar10-clean-smoke"; })) document.getElementById("recipe").value = "cifar10-clean-smoke";
+      document.getElementById("training-data").value = state.trainingData;
+      document.getElementById("training-data").addEventListener("change", function () { state.trainingData = this.value; updateModulePreview(); });
       document.getElementById("action").addEventListener("change", function () {
         document.getElementById("seeds").closest("label").classList.toggle("hidden", this.value !== "sweep");
         updateModulePreview();
@@ -426,7 +438,7 @@
         "data-root": action === "register" && adapter !== "uci_binary",
         "data-path": action === "register" && adapter === "uci_binary",
         "data-labels": action === "register" && ["cifar10n", "cifar100n"].includes(adapter),
-        "data-recipe": action === "verify" || action === "run", "data-output": action === "verify"
+        "data-recipe": action === "run", "data-output": action === "verify"
       };
       Object.entries(visible).forEach(function (entry) {
         const node = document.getElementById(entry[0]);
@@ -457,9 +469,9 @@
         field("已登记数据", "data-alias", selectControl("__ID__", registered.length ? registered : [{value:"", label:"尚未登记"}])) +
         field("新别名", "data-new-alias", inputControl("__ID__", "local-cifar10")) + field("适配器", "data-adapter", selectControl("__ID__", adapters.length ? adapters : ["cifar10"])) +
         field("数据根目录", "data-root", inputControl("__ID__", "F:/datasets/cifar10"), true) + field("单文件路径（UCI）", "data-path", inputControl("__ID__", ""), true) +
-        field("人工标签文件（CIFAR-N）", "data-labels", inputControl("__ID__", ""), true) + field("验证/训练配方", "data-recipe", recipesSelect("__ID__"), true) +
+        field("人工标签文件（CIFAR-N）", "data-labels", inputControl("__ID__", ""), true) + field("训练模板", "data-recipe", recipesSelect("__ID__"), true) +
         field("验证输出目录（可选）", "data-output", inputControl("__ID__", ""), true) + commonFormEnd() +
-        dataFeedbackHtml(selectedReport) + '<p class="helper">登记只保存路径；inspect 才会真实加载 train/test；verify 会运行 1 epoch。不会自动下载或删除原始数据。</p>' +
+        dataFeedbackHtml(selectedReport) + '<p class="helper">登记只保存路径；inspect 才会真实加载 train/test；verify 会自动按数据类型运行 1 epoch，不需要 CIFAR 或 MNIST 配方。自定义训练时再选择训练模板。</p>' +
         '<div class="guide-card"><strong>数据状态</strong>' + dataTableHtml(reports) + '</div>';
       const actionNode = document.getElementById("data-action");
       actionNode.value = [...actionNode.options].some(function (option) { return option.value === state.dataAction; }) ? state.dataAction : "list";
@@ -728,12 +740,14 @@
       const action = selectValue("action", "validate");
       const recipe = selectValue("recipe", "cifar10-clean-smoke");
       if (!recipe) return "";
+      const dataset = selectValue("training-data", state.trainingData);
+      const dataOption = dataset ? " --data " + quoteArg(dataset) : "";
       const output = quoteArg(selectValue("output-dir", "artifacts/web-smoke"));
       let command = "lnl ";
-      if (action === "validate") command += "validate --recipe " + recipe + " --check-data";
-      else if (action === "dry-run") command += "run --recipe " + recipe + " --dry-run --check-data";
-      else if (action === "sweep") command += "sweep --recipe " + recipe + " --seeds " + selectValue("seeds", "1 2 3") + " --output-dir " + output;
-      else command += "run --recipe " + recipe + " --epochs " + selectValue("epochs", "1") + " --output-dir " + output + " --check-data";
+      if (action === "validate") command += "validate --recipe " + recipe + dataOption + " --check-data";
+      else if (action === "dry-run") command += "run --recipe " + recipe + dataOption + " --dry-run --check-data";
+      else if (action === "sweep") command += "sweep --recipe " + recipe + dataOption + " --seeds " + selectValue("seeds", "1 2 3") + " --output-dir " + output;
+      else command += "run --recipe " + recipe + dataOption + " --epochs " + selectValue("epochs", "1") + " --output-dir " + output + " --check-data";
       return command;
     }
     function buildYamlCommand() {
@@ -779,7 +793,7 @@
         if (!alias) return "";
         if (action === "inspect" || action === "remove") return "lnl data " + action + " " + quoteArg(alias);
         if (action === "verify") {
-          let command = "lnl data verify " + quoteArg(alias) + " --recipe " + recipe;
+          let command = "lnl data verify " + quoteArg(alias);
           const output = selectValue("data-output", "").trim();
           if (output) command += " --output-dir " + quoteArg(output);
           return command;
@@ -821,7 +835,6 @@
         payload.name = alias;
       }
       if (action === "verify") {
-        payload.recipe = selectValue("data-recipe", "cifar10-clean-smoke");
         payload.output_dir = selectValue("data-output", "").trim();
       }
       return payload;

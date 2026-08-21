@@ -1059,24 +1059,81 @@ class DataService:
                 error=f"{type(exc).__name__}: {exc}",
             )
 
+    def verification_config(
+        self,
+        name: object,
+        report: DatasetStatusReport,
+        *,
+        seed: int = 0,
+    ) -> dict[str, Any]:
+        """Build a one-epoch smoke config from the registered data contract.
+
+        This profile proves that the adapter can enter a real training runner;
+        it is deliberately independent of paper recipes and their datasets.
+        """
+
+        record = self.record(name)
+        data = dict(record.data)
+        if record.adapter == "uci_binary":
+            return {
+                "seed": int(seed),
+                "data": data,
+                "loader": {"batch_size": 64, "num_workers": 0},
+                "model": {"name": "linear"},
+                "learning_rate": 0.01,
+                "epochs": 1,
+                "execution": {"runner": "binary"},
+            }
+        if report.train_samples is None or report.train_samples < 2:
+            raise ValueError("automatic image verification requires at least 2 train samples")
+        validation_size = min(5000, max(1, report.train_samples // 10))
+        data.update({
+            "validation_size": validation_size,
+            "max_train_samples": min(512, report.train_samples - validation_size),
+            "max_validation_samples": min(256, validation_size),
+            "max_test_samples": min(256, report.test_samples or 256),
+            "augment": False,
+        })
+        return {
+            "seed": int(seed),
+            "data": data,
+            "loader": {
+                "batch_size": 128,
+                "num_workers": 0,
+                "pin_memory": bool(torch.cuda.is_available()),
+            },
+            "model": {"name": "tiny_cnn", "width": 32},
+            "loss": {"name": "ce"},
+            "optimizer": {"name": "adamw", "lr": 0.001, "weight_decay": 0.0005},
+            "scheduler": {"name": "none"},
+            "trainer": {"epochs": 1, "device": "auto", "progress": True},
+            "execution": {"runner": "clean"},
+        }
+
     def verify(
         self,
         name: object,
-        config: Mapping[str, Any],
+        config: Mapping[str, Any] | None,
         output_dir: str | Path,
         *,
         recipe: str | None = None,
     ) -> tuple[DatasetStatusReport, Path]:
-        report = self.inspect(name, seed=int(config.get("seed", 0)))
+        seed = int((config or {}).get("seed", 0))
+        report = self.inspect(name, seed=seed)
         if report.status != "ready":
             raise ValueError(report.error or f"dataset is not ready: {name}")
+        resolved_config = (
+            self.verification_config(name, report, seed=seed)
+            if config is None
+            else dict(config)
+        )
         from lnl_toolbox.training.service import ExperimentService
 
         service = ExperimentService(data_service=self)
         try:
-            service.preflight(config, check_data=True)
+            service.preflight(resolved_config, check_data=True)
             run_dir = Path(
-                service.run(config, output_dir, recipe=recipe)
+                service.run(resolved_config, output_dir, recipe=recipe)
             ).resolve()
             metrics_path = run_dir / "metrics.jsonl"
             epoch_rows: list[dict[str, Any]] = []
@@ -1101,6 +1158,7 @@ class DataService:
             evidence = {
                 **report.to_dict(),
                 "recipe": recipe,
+                "verification_profile": "automatic" if config is None else "recipe",
                 "run_dir": str(run_dir),
                 "data_fingerprint": manifest["fingerprint"],
                 "result_metrics": str(

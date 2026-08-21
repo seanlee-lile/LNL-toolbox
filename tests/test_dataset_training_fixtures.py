@@ -60,7 +60,8 @@ def _write_clothing1m(root: Path) -> None:
 
 
 def _animal_record(identifier: int, label: int) -> bytes:
-    pixels = np.full((3, 64, 64), 16 + identifier * 7, dtype=np.uint8)
+    pixel_value = (16 + identifier * 7) % 256
+    pixels = np.full((3, 64, 64), pixel_value, dtype=np.uint8)
     return struct.pack("<II", identifier, label) + pixels.tobytes()
 
 

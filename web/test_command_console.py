@@ -78,6 +78,21 @@ class CommandConsoleTest(unittest.TestCase):
         service.status.assert_called_once_with("lab")
         self.assertEqual(value["dataset"]["status"], "ready")
 
+    def test_dataset_verify_defaults_to_automatic_profile(self):
+        job = mock.Mock()
+        with mock.patch.object(
+            command_console, "resolve_lnl_command", return_value=["python", "-m", "lnl"]
+        ), mock.patch.object(
+            command_console, "_start_process", return_value=job
+        ) as start:
+            result = command_console._dataset_verify_job(
+                {"name": "fashion", "output_dir": "artifacts/fashion-check"}
+            )
+        self.assertIs(result, job)
+        command = start.call_args.args[1]
+        self.assertEqual(command[:6], ["python", "-m", "lnl", "data", "verify", "fashion"])
+        self.assertNotIn("--recipe", command)
+
     def test_dataset_lifecycle_returns_guidance_without_changing_service_contract(self):
         registered = mock.Mock()
         registered.to_dict.return_value = {"name": "lab", "status": "incomplete"}
@@ -135,6 +150,8 @@ class CommandConsoleTest(unittest.TestCase):
                 self.assertIn("再次点击，确认删除登记", home)
                 self.assertIn('dataAdapter: "cifar10"', home)
                 self.assertIn("state.dataOutput = event.target.value", home)
+                self.assertIn('field("本地数据集", "training-data"', home)
+                self.assertIn('let command = "lnl data verify " + quoteArg(alias);', home)
                 body = json.dumps(
                     {"action": "status", "name": "cifar10"}
                 ).encode("utf-8")

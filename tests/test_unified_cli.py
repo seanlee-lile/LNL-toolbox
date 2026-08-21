@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import yaml
 
@@ -25,6 +25,7 @@ from lnl_toolbox.catalog import (
     validate_config,
 )
 from lnl_toolbox.cli.main import main
+from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE, DatasetStatusReport
 from lnl_toolbox.training.runners import resolve_runner, runner_names
 
 
@@ -284,6 +285,31 @@ class UnifiedCliTest(unittest.TestCase):
                 self.assertIn("Training check   VERIFIED", output)
                 self.assertIn("Train samples", output)
                 self.assertIn("completed one-epoch run", output)
+
+    def test_data_verify_uses_automatic_profile_without_a_recipe(self) -> None:
+        record = Mock(alias="fashion", adapter="fashion_mnist", signature="a" * 64)
+        report = DatasetStatusReport(
+            "fashion",
+            "fashion_mnist",
+            "ready",
+            training_evidence={"run_dir": "verify-run"},
+        )
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            DEFAULT_DATA_SERVICE, "record", return_value=record
+        ), patch.object(
+            DEFAULT_DATA_SERVICE,
+            "verify",
+            return_value=(report, Path(directory)),
+        ) as verify:
+            destination = Path(directory) / "run"
+            code, output, error = self.invoke(
+                "data", "verify", "fashion", "--output-dir", str(destination)
+            )
+        self.assertEqual(code, 0, error)
+        verify.assert_called_once_with(
+            "fashion", None, destination, recipe=None
+        )
+        self.assertIn("automatic dataset profile", output)
 
     def test_list_and_paper_show_are_user_facing(self) -> None:
         code, output, _ = self.invoke("list", "experiments", "--profile", "smoke")

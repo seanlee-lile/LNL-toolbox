@@ -1,5 +1,19 @@
 # Toolbox modularization progress
 
+## Dataset-independent training selection (2026-08-21)
+
+- Current task: remove the Web/CLI assumption that every non-tabular dataset verifies through a CIFAR recipe.
+- Branch: `codex/cli`; base commit: `2f3ee42` with pre-existing CI/fixture working-tree edits preserved.
+- Checklist: automatic verification profile; CLI compatibility; separate Web training-template/data selectors; real Fashion-MNIST verification; switched-template training; tests and documentation.
+- Completed: 6 / 6 (100%). Implementation, real-data validation, browser validation, and final regression are complete.
+- Real evidence: registered Fashion-MNIST loaded 60,000 train / 10,000 test samples and completed one automatic GPU epoch without a recipe. `cifar10-clean-smoke --data fashion-mnist` also completed one epoch, proving that template and data selection are independent.
+- Browser evidence: selecting Fashion-MNIST in the beginner page generated `lnl validate --recipe cifar10-clean-smoke --data fashion-mnist --check-data`; data verify generated `lnl data verify fashion-mnist` and hid the recipe field.
+- Files added: none.
+- Tests executed: DataService 10/10, unified CLI 37/37, Web 21/21, full unittest 826/826; Ruff and `git diff --check` passed.
+- Exact next step: human diff review; no commit or push is authorized.
+- Local checkpoint commits: none. No commit or push is authorized.
+- Collaborator note: `cli/main.py`, `training/data_service.py`, Web UI, and shared documents are high-conflict; no paper runner, dataset adapter, model, or recipe was changed.
+
 - Current task: unified experiment service, result contract, overrides, sweep, comparison, runner introspection, and CI.
 - Branch: `codex/cli`
 - Base commit: `5e9c19b`
@@ -130,3 +144,16 @@
 - Validation: Web tests 18/18; unified CLI tests 36/36; full unittest 824/824; Ruff, JavaScript syntax and diff checks passed; `/` and `/recipe` were inspected in the app browser.
 - Exact next step: human diff review, then commit only with separate authorization.
 - Local checkpoint commits: none. No commit or push is authorized.
+
+## CI NumPy compatibility and workflow cleanup (2026-08-21)
+
+- Current task: diagnose the latest `quality` failure and remove redundant CI work without weakening required gates.
+- Branch: `codex/cli`; base commit: `2f3ee42`.
+- Checklist: inspect remote jobs and logs; reproduce the failure across NumPy versions; correct the fixture; audit every workflow step; run focused, full, Web, lint, packaging, and artifact-install checks.
+- Completed: 5 / 5 (100%).
+- Root cause: the Animal-10N test fixture passed pixel value `716` directly to a `uint8` array. NumPy 1.26 silently wrapped it to `204`, while NumPy 2.x correctly raised `OverflowError` in both Python 3.10 and 3.12 CI jobs.
+- Implementation: fixture values now use explicit modulo-256 arithmetic; GitHub Actions use Node-24-based `checkout@v6` and `setup-python@v6`; redundant pip upgrades, duplicate unified-CLI execution, and duplicate editable-install help smoke were removed. The wheel job keeps required training dependencies but no longer installs unrelated test/coverage/lint dependencies.
+- Validation: NumPy 2.3.5 boundary check passed; dataset fixtures passed 5/5; ordinary full unittest passed 824/824; Web tests passed 20/20; Ruff and workflow YAML checks passed; wheel and sdist both built, installed into isolated environments, resolved the installed package, and passed help/list/validate CLI checks.
+- Local limitation: coverage-instrumented tests on Windows intermittently hit an unrelated `PermissionError` while atomically replacing a sweep manifest. The same tests pass without coverage and passed in the failed Ubuntu CI run; no training or sweep code was changed under this task.
+- Files modified by this task: `.github/workflows/quality.yml`, `tests/test_dataset_training_fixtures.py`, and this progress record. Files added: none.
+- Exact next step: review the three-file diff, then commit only with separate authorization.

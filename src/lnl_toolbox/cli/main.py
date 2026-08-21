@@ -1022,24 +1022,22 @@ def _data_command(args: argparse.Namespace) -> int:
         return 0
     if args.data_command == "verify":
         record = service.record(args.alias)
-        recipe_id = args.recipe or (
-            "binary-risk-natarajan-1epoch"
-            if record.adapter == "uci_binary"
-            else "cifar10-clean-smoke"
-        )
         root = args.project_root.expanduser().resolve() if args.project_root else None
-        recipe = recipe_by_id(recipe_id, root)
         project = find_project_root(None, root)
-        config = resolve_config_paths(load_recipe_config(recipe), project)
-        config = service.apply(config, args.alias)
-        runner = resolve_runner(config)
-        if runner.budget_path is None and "epochs" in config:
-            # Internal verification accepts an unambiguous legacy top-level
-            # budget even when the public --epochs shortcut is intentionally
-            # disabled for that runner.
-            config["epochs"] = 1
-        else:
-            apply_epoch_override(config, 1)
+        config = None
+        recipe = None
+        if args.recipe:
+            recipe = recipe_by_id(args.recipe, root)
+            config = resolve_config_paths(load_recipe_config(recipe), project)
+            config = service.apply(config, args.alias)
+            runner = resolve_runner(config)
+            if runner.budget_path is None and "epochs" in config:
+                # Internal verification accepts an unambiguous legacy top-level
+                # budget even when the public --epochs shortcut is intentionally
+                # disabled for that runner.
+                config["epochs"] = 1
+            else:
+                apply_epoch_override(config, 1)
         destination = args.output_dir or (
             project / "artifacts" / "data-verification"
             / f"{record.alias}-{record.signature[:8]}"
@@ -1048,10 +1046,11 @@ def _data_command(args: argparse.Namespace) -> int:
             args.alias,
             config,
             destination,
-            recipe=recipe.id,
+            recipe=None if recipe is None else recipe.id,
         )
         _print_dataset_report(report)
-        print("Training verified by a completed one-epoch run.")
+        profile = "automatic dataset profile" if recipe is None else f"recipe {recipe.id}"
+        print(f"Training verified by a completed one-epoch run ({profile}).")
         return 0
     raise ValueError(f"unknown data command: {args.data_command}")
 

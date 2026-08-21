@@ -511,7 +511,7 @@ clean-label boundaries or existing Result Contract field meanings.
 | 文件 | 责任 |
 |---|---|
 | `data/local_catalog.py` | 机器本地路径登记、source signature、严格验证状态和 recipe data-source 覆盖 |
-| `cli/main.py` 的 `lnl data` | register/list/show/inspect/verify/remove；`run/validate/sweep --data` 使用登记别名 |
+| `cli/main.py` 的 `lnl data` | register/list/show/inspect/verify/remove；verify 默认使用自动数据验证配置；`run/validate/sweep --data` 使用登记别名 |
 | `web/command_console.py`、`web/index.html` | 只读 catalog 状态并生成安全的本地数据 CLI 命令 |
 | `tests/test_local_data_catalog.py` | 登记、状态迁移、失效、恢复和删除 |
 | `tests/test_dataset_training_fixtures.py` | 官方结构的 MNIST、Fashion-MNIST、Clothing1M、Animal-10N、UCI fixture 各训练 1 epoch |
@@ -525,10 +525,10 @@ checkpoint 公共格式。
 
 | 文件 | 责任 |
 |---|---|
-| `training/data_service.py` | `DataService`、`DatasetStatusReport`、list/status/path/inspect/verify、兼容 prepare/validate 代理 |
+| `training/data_service.py` | `DataService`、`DatasetStatusReport`、list/status/path/inspect/verify、按数据契约生成一轮验证配置、兼容 prepare/validate 代理 |
 | `training/service.py` | 将 doctor、validate、dry-run、run、sweep 的 preflight 委托给同一个 `DataService` |
 | `cli/main.py`、`cli/inspect_data.py` | 薄 CLI 展示和参数解析，不直接读取 adapter/Catalog |
-| `web/command_console.py`、`web/index.html` | 直接数据 API、三阶段登记向导、readiness/样本数/类别/指纹展示、错误反馈、删除确认及后台一轮 verify |
+| `web/command_console.py`、`web/index.html` | 直接数据 API、三阶段登记向导、训练模板与本地数据独立选择、错误反馈、删除确认及后台自动一轮 verify |
 | `.github/workflows/quality.yml` | `src/tests/web` Ruff、核心 unittest 和 Web unittest 门禁 |
 
 Web 使用同一 `web/index.html` 保持原有主控制台布局；`/recipe` 直接进入现有
