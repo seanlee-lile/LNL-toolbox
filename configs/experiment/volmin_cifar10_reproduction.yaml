@@ -1,12 +1,49 @@
+schema_version: 1
+kind: experiment
 method: volmin
-execution: {runner: volmin}
+execution:
+  runner: volmin
 seed: 1
 output_root: artifacts/reproductions/volmin-cifar10-symmetric04
-data: {name: cifar10, root: data/cifar10, validation_size: 5000, split_strategy: stratified, split_rng: default_rng, augment: true}
-noise: {type: symmetric, rate: 0.4, seed: 1, sampling: per_class, rng: default_rng, validation_targets: clean}
-loader: {batch_size: 128, num_workers: 4, pin_memory: true, drop_last: false}
-model: {name: resnet18, base_width: 16}
-optimizer: {name: sgd, lr: 0.01, transition_lr: 0.01, momentum: 0.9, weight_decay: 0.0001, transition_weight_decay: 0.0}
-scheduler: {name: multistep, milestones: [30, 60], gamma: 0.1}
-transition: {initial_weight: 4.5, lambda_volume: 0.0001, determinant_tolerance: 1.0e-8, condition_limit: 1.0e8}
-trainer: {epochs: 80, device: cuda}
+data:
+  name: cifar10
+  validation_size: 5000
+  split_strategy: stratified
+  split_rng: default_rng
+  augment: true
+noise:
+  rate: 0.4
+  seed: 1
+  sampling: per_class
+  rng: default_rng
+  validation_targets: clean
+  name: symmetric
+loader:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+  drop_last: false
+model:
+  name: resnet18
+  base_width: 16
+optimizer:
+  name: sgd
+  lr: 0.01
+  transition_lr: 0.01
+  momentum: 0.9
+  weight_decay: 0.0001
+  transition_weight_decay: 0.0
+scheduler:
+  name: multistep
+  milestones:
+  - 30
+  - 60
+  gamma: 0.1
+transition:
+  initial_weight: 4.5
+  lambda_volume: 0.0001
+  determinant_tolerance: 1.0e-08
+  condition_limit: 1.0e8
+trainer:
+  epochs: 80
+  device: cuda

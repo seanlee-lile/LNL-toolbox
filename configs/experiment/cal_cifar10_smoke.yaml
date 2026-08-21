@@ -1,14 +1,45 @@
+schema_version: 1
+kind: experiment
 method: cal
-execution: {runner: cal}
+execution:
+  runner: cal
 seed: 17
 output_root: artifacts/test-runs/cal-smoke
-data: {name: synthetic_multiclass, num_classes: 3, dimension: 6, train_size: 90, validation_size: 30, test_size: 30}
-noise: {type: symmetric, rate: 0.1, seed: 19, sampling: per_class, rng: default_rng}
-loader: {batch_size: 30, num_workers: 0, pin_memory: false}
-model: {name: feature_mlp, hidden_width: 8}
-optimizer: {name: sgd, lr: 0.02, momentum: 0.9, weight_decay: 0.0}
-scheduler: {name: none}
-warmup: {epochs: 1, confidence_weight: 1.0}
-sieve: {lower_threshold: -8.0, upper_threshold: -8.0}
-cal: {confidence_weight: 1.0}
-trainer: {epochs: 1, device: cpu}
+data:
+  name: synthetic_multiclass
+  num_classes: 3
+  dimension: 6
+  train_size: 90
+  validation_size: 30
+  test_size: 30
+noise:
+  rate: 0.1
+  seed: 19
+  sampling: per_class
+  rng: default_rng
+  name: symmetric
+loader:
+  batch_size: 30
+  num_workers: 0
+  pin_memory: false
+model:
+  name: feature_mlp
+  hidden_width: 8
+optimizer:
+  name: sgd
+  lr: 0.02
+  momentum: 0.9
+  weight_decay: 0.0
+scheduler:
+  name: none
+warmup:
+  epochs: 1
+  confidence_weight: 1.0
+sieve:
+  lower_threshold: -8.0
+  upper_threshold: -8.0
+cal:
+  confidence_weight: 1.0
+trainer:
+  epochs: 1
+  device: cpu

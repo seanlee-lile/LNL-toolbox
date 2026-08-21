@@ -1,53 +1,50 @@
-# Single official SED+FINE CIFAR-100 closed-set configuration.
+schema_version: 1
+kind: experiment
 seed: 23
 output_root: artifacts/runs/fine-cifar100-symmetric02
-
 data:
   name: cifar100
-  root: data/cifar100
   validation_size: 0
   augment: true
   strong_policy: official_cifar10
   normalization:
-    mean: [0.485, 0.456, 0.406]
-    std: [0.229, 0.224, 0.225]
-
+    mean:
+    - 0.485
+    - 0.456
+    - 0.406
+    std:
+    - 0.229
+    - 0.224
+    - 0.225
 noise:
   name: symmetric
   rate: 0.2
   seed: 0
   sampling: transition
   rng: numpy_legacy
-
 loader:
   batch_size: 128
   num_workers: 8
   pin_memory: true
   drop_last: false
-
 evaluation:
   batch_size: 16
-
 model:
   name: fine_seven_cnn
   base_width: 64
   dropout: 0.25
-
 optimizer:
   name: sgd
   lr: 0.05
   momentum: 0.9
   nesterov: true
   weight_decay: 0.0005
-
 scheduler:
   name: cosine
   eta_min: 0.0005
-
 trainer:
   epochs: 300
   device: auto
-
 fine:
   warmup_epochs: 200
   warmup_lr: 0.1
@@ -58,11 +55,11 @@ fine:
   alpha: 1.0
   beta: 0.1
   gamma: 0.002
-  probability_floor: 1.0e-7
-
+  probability_floor: 1.0e-07
 parameter_record:
   sampling_seed: 23
   selected_group: cifar100_symmetric_02
   source: official_sed_fine_command
   repeated_runs: 1
-execution: {runner: fine}
+execution:
+  runner: fine

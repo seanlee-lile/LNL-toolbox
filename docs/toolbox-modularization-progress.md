@@ -1,5 +1,34 @@
 # Toolbox modularization progress
 
+## Curated public recipe surface (2026-08-21)
+
+- Current task: keep all reproducibility YAMLs while exposing only useful templates to ordinary users.
+- Branch: `codex/cli`; base commit: `6ed461f` with the approved schema-v1 working tree preserved.
+- Checklist: public manifest; catalog/CLI filtering; Web filtering; tests; docs; final regression.
+- Completed: 6 / 6 (100%); implementation and validation are complete.
+- Public behavior: `lnl list experiments` and the Web beginner page expose four curated templates. `--all`, direct recipe lookup, the paper catalog, and `/recipe` retain access to the complete catalog.
+- Configuration safety: no experiment YAML, runner, algorithm, dataset adapter, or training default was changed.
+- Validation: unified CLI 38/38, Web 21/21, and full unittest 833/833 passed. Ruff, Web JavaScript syntax, and `git diff --check` passed.
+- Runtime evidence: the public `cifar10-clean-smoke` template completed one Fashion-MNIST GPU epoch through the registered alias. Browser inspection showed exactly four beginner templates, while `/recipe` retained all 64 configuration sources.
+- Exact next step: human diff review; commit only after separate authorization.
+- Local checkpoint commits: none; no commit or push is authorized.
+- Collaborator note: the recipe manifest, `catalog.py`, CLI and Web files are shared integration surfaces.
+
+## Versioned YAML contract migration (2026-08-21)
+
+- Current task: audit every YAML parameter category, preserve the old files, and make active recipes portable and directly runnable.
+- Branch: `codex/cli`; base commit: `6ed461f`.
+- Checklist: archive; schema/normalization; 92-file migration; Binary Risk/MentorNet adaptation; tests/docs; final regression.
+- Completed: 6 / 6 (100%); implementation and validation are complete.
+- Configuration result: 92 / 92 active YAMLs use schema v1; 76 are complete experiment/auxiliary configurations and 16 are explicit fragments; all 64 built-in recipes remain internally discoverable and four curated templates are public by default.
+- Data result: machine-local CIFAR/MNIST roots are removed from active recipes and resolved through a unique local registration; the UCI Heart engineering recipe retains its single-file fallback path required by its strict source contract.
+- Legacy recovery: `archive/configs-legacy-2026-08-21/manifest.json` records 92 matching SHA-256 snapshots.
+- Tests executed: config schema 4/4, Binary Risk 5/5, MentorNet 9/9, DataService 12/12, ExperimentService 3/3, runner planning 7/7, unified CLI 37/37, and the full unittest suite 832/832. Ruff and `git diff --check` passed.
+- Runtime evidence: rootless `cifar10-clean-smoke` resolved the unique `local-cifar10` registration, loaded 50,000 train / 10,000 test samples, and completed one GPU epoch. Its persisted resolved configuration remains canonical and does not contain runtime-only aliases.
+- Exact next step: human diff review; commit only after separate authorization.
+- Local checkpoint commits: none; no commit or push is authorized.
+- Collaborator note: `catalog.py`, `training/service.py`, `training/data_service.py`, all active YAMLs, and shared documents are high-conflict files.
+
 ## Dataset-independent training selection (2026-08-21)
 
 - Current task: remove the Web/CLI assumption that every non-tabular dataset verifies through a CIFAR recipe.
@@ -157,3 +186,29 @@
 - Local limitation: coverage-instrumented tests on Windows intermittently hit an unrelated `PermissionError` while atomically replacing a sweep manifest. The same tests pass without coverage and passed in the failed Ubuntu CI run; no training or sweep code was changed under this task.
 - Files modified by this task: `.github/workflows/quality.yml`, `tests/test_dataset_training_fixtures.py`, and this progress record. Files added: none.
 - Exact next step: review the three-file diff, then commit only with separate authorization.
+
+## 26-paper formal YAML exposure (2026-08-21)
+
+- Current task: expose exactly one formal training YAML per paper in Web “New YAML”, while retaining four beginner templates and the full Recipe editor.
+- Branch: `codex/cli`; base commit: `6ed461f` plus the pre-existing approved working-tree changes.
+- Checklist: official protocol audit; missing formal YAMLs; paper-to-recipe defaults; safe dedicated-runner clone; Web mode split; focused/browser/full regression.
+- Completed: 6 / 6 (100%).
+- Public behavior: paper mode lists 26/26 papers and clones the selected formal configuration; generic mode keeps the reusable supervised loss/selector composer.
+- Fidelity boundary: CNLCU and VolMinNet new defaults are `paper_protocol`; DLD remains `paper_oriented` because the official ViT-L/14 feature path is not present in the toolbox.
+- Modular changes: CNLCU architecture is a reusable model, its decay is a generic scheduler, and no paper-name branch was added to the common experiment runner.
+- Focused validation: CNLCU 2/2, DLD 4/4, VolMinNet 6/6, schema 4/4, unified CLI 40/40, Torch training 41/41, Web 21/21; browser interaction verified all 26 options and both creation modes.
+- Final validation: full unittest 840/840; Web 21/21; runner package-data 7/7; Ruff passed; CNLCU, DLD and VolMinNet formal-config dry-runs passed; app-browser interaction verified all 26 options and both creation modes.
+- Exact next step: human diff review and optional commit under separate authorization; no commit or push is authorized.
+
+## Web YAML creation/editor closeout (2026-08-21)
+
+- Current task: close the broken gap between “New YAML” and the Recipe editor.
+- Branch: `codex/cli`; base commit: `6ed461f` plus the approved working-tree changes.
+- Checklist: path-based load API; validated full-text save; 4+26 editor sources; automatic open after create; project-YAML reload; browser and regression verification.
+- Completed: 6 / 6 (100%).
+- Public behavior: a paper YAML created from the main page opens immediately in the editor; the textarea is editable; save, validate and run target the generated project YAML. The editor exposes four beginner templates and all 26 paper defaults without making project files built-in recipes.
+- Safety: paths remain restricted to the repository, built-in recipes cannot be overwritten, and full YAML text is parsed and passed through `validate_config()` before writing.
+- Browser evidence: created a CNLCU project YAML, automatically opened it, changed seed 1 to 23/24, saved it, reloaded it by project path, and completed `lnl validate`; the editor contained 31 options (4 templates + 26 paper defaults + the current project YAML).
+- Final validation: Web 23/23, full unittest 840/840, Ruff, embedded JavaScript syntax and `git diff --check` passed.
+- Cleanup: the browser-created project YAML was removed after validation; no generated training or configuration artifact remains.
+- Exact next step: human diff review and optional commit under separate authorization; no commit or push is authorized.

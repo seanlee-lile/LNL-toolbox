@@ -99,6 +99,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="同时显示需要外部 artifact 的条件可用配置",
     )
     components = list_sub.add_parser("components", help="列出底层可组合组件")
+    experiments.add_argument(
+        "--all",
+        dest="all_recipes",
+        action="store_true",
+        help="show advanced and internal recipes in addition to public templates",
+    )
     components.add_argument("--kind")
     components.add_argument(
         "--format",
@@ -390,7 +396,10 @@ def _doctor(args: argparse.Namespace) -> int:
 
 
 def _list_experiments(args: argparse.Namespace) -> int:
-    recipes = discover_recipes(include_conditional=args.include_conditional)
+    recipes = discover_recipes(
+        include_conditional=args.include_conditional,
+        public_only=not args.all_recipes,
+    )
     if args.profile:
         recipes = tuple(item for item in recipes if item.profile == args.profile)
     if args.dataset:
@@ -901,32 +910,54 @@ def _compose_check(args: argparse.Namespace) -> int:
 def _compose_create(args: argparse.Namespace) -> int:
     root = args.project_root.expanduser().resolve() if args.project_root else None
     recipe = recipe_by_id(args.base, root)
-    if recipe.runner != "supervised":
+    override_values = (
+        args.loss,
+        args.selector,
+        args.keep_rate,
+        args.parameter_update,
+        args.milestones,
+        args.gamma,
+        args.cdr_noise_rate,
+        args.l1_decay,
+    )
+    has_overrides = any(value is not None for value in override_values)
+    if recipe.runner != "supervised" and has_overrides:
         raise ValueError(
             f"base recipe uses dedicated runner {recipe.runner!r}; "
-            "compose create currently supports supervised recipes only"
+            "paper lifecycle recipes can only be copied without component overrides"
         )
     source = load_yaml(recipe.config_path)
-    composed = apply_overrides(
-        source,
-        loss=args.loss,
-        selector=args.selector,
-        keep_rate=args.keep_rate,
-        parameter_update=args.parameter_update,
-        milestones=args.milestones,
-        gamma=args.gamma,
-        cdr_noise_rate=args.cdr_noise_rate,
-        l1_decay=args.l1_decay,
-    )
     project = find_project_root(recipe.config_path, root)
-    summary = validate_composition(resolve_config_paths(composed, project))
+    if recipe.runner == "supervised":
+        composed = apply_overrides(
+            source,
+            loss=args.loss,
+            selector=args.selector,
+            keep_rate=args.keep_rate,
+            parameter_update=args.parameter_update,
+            milestones=args.milestones,
+            gamma=args.gamma,
+            cdr_noise_rate=args.cdr_noise_rate,
+            l1_decay=args.l1_decay,
+        )
+        summary = validate_composition(resolve_config_paths(composed, project))
+    else:
+        composed = source
+        validate_config(resolve_config_paths(composed, project))
+        summary = None
     destination = write_composed_config(composed, args.output)
     print(f"已生成新配置：{destination}")
     print(f"基础 recipe：{recipe.id}")
-    _print_composition_summary(summary)
+    if summary is not None:
+        _print_composition_summary(summary)
+    else:
+        print(f"论文生命周期：{recipe.runner}（未修改组件）")
     print("原 recipe 未修改；已有目标文件不会被覆盖。")
     print("下一步：")
-    print(f"  lnl compose check --config \"{destination}\"")
+    if summary is not None:
+        print(f"  lnl compose check --config \"{destination}\"")
+    else:
+        print(f"  lnl validate --config \"{destination}\"")
     print(f"  lnl run --config \"{destination}\" --dry-run")
     return 0
 

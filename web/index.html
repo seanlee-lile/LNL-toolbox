@@ -150,14 +150,14 @@
             <label>从 recipe 加载
               <select id="yaml-source"></select>
             </label>
-            <label>另存为路径（项目目录内）
+            <label>项目 YAML 路径（加载/另存，项目目录内）
               <input id="yaml-path" placeholder="例如 configs/experiment/my_clothing1m.yaml" spellcheck="false">
             </label>
           </div>
           <div id="yaml-source-path" class="helper">请选择 recipe 后加载原始 YAML。</div>
           <div id="yaml-schema-meta" class="helper">加载后这里只显示该方法允许修改的参数。</div>
           <div id="yaml-fields" class="form-grid"></div>
-          <textarea id="yaml-text" spellcheck="false" readonly placeholder="点击“加载 YAML”查看只读 YAML"></textarea>
+          <textarea id="yaml-text" spellcheck="false" placeholder="加载后可直接编辑完整 YAML"></textarea>
           <div class="actions" style="margin-top: 10px;">
             <button id="yaml-load" class="secondary">加载 YAML</button>
             <button id="yaml-save-as" class="primary">另存为 YAML</button>
@@ -165,7 +165,7 @@
             <button id="yaml-validate" class="secondary">验证此 YAML</button>
             <button id="yaml-run" class="primary">运行此 YAML</button>
           </div>
-          <p class="helper">参数只能通过上方菜单修改；组件、runner、方法结构和模型/损失名称不可在此改动。内置 recipe 不允许被覆盖。</p>
+          <p class="helper">可以使用上方参数菜单，也可以直接编辑完整 YAML；直接编辑时以文本内容为准。保存前会解析并验证，内置 recipe 不允许被覆盖。</p>
         </section>
         <section class="panel">
           <div class="section-title">PREVIEW · 当前模块生成的指令</div>
@@ -193,7 +193,7 @@
       { id: "advanced", label: "自由输入", description: "直接输入一条 lnl 指令，后端仍会安全解析。", hint: "高级用户" },
     ];
     const modules = allModules;
-    const state = { selected: null, request: null, jobId: null, timer: null, module: recipeMode ? "yaml" : "beginner", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, yamlSchema: null, trainingData: "", dataAction: "list", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, removeConfirmed: false };
+    const state = { selected: null, request: null, jobId: null, timer: null, module: recipeMode ? "yaml" : "beginner", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, yamlSchema: null, yamlSourcePath: "", yamlTextDirty: false, pendingYamlPath: "", trainingData: "", dataAction: "list", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, removeConfirmed: false };
     if (recipeMode) {
       document.getElementById("page-title").textContent = "LNL Toolbox Recipe Editor";
       document.getElementById("page-subtitle").textContent = "从已有 recipe 组合配置，并查看或保存 YAML。";
@@ -244,7 +244,8 @@
         return !runner || item.runner === runner;
       }).map(function (item) {
         const epochs = item.epochs ? " · " + item.epochs + " ep" : "";
-        return { value: item.id, label: item.id + " · " + item.method + " · " + item.dataset + " · " + item.noise + epochs };
+        const title = item.label || item.id;
+        return { value: item.id, label: title + " · " + item.method + " · " + item.dataset + " · " + item.noise + epochs };
       });
     }
     function recipesSelect(id = "recipe", _fallback = "", runner = "") {
@@ -285,7 +286,18 @@
       if (document.getElementById("seeds")) document.getElementById("seeds").closest("label").classList.add("hidden");
     }
     function renderYaml() {
+      const paperOptions = state.papers.map(function (paper) {
+        return {
+          value: paper.default_recipe_id,
+          label: paper.acronym + " · " + paper.title + " · " + paper.default_fidelity
+        };
+      });
       parameterPanel.innerHTML = commonFormStart() +
+        field("创建方式", "yaml-mode", selectControl("__ID__", [
+          {value:"paper", label:"论文正式配置"},
+          {value:"supervised", label:"通用监督组合"}
+        ]), true) +
+        field("论文方法", "yaml-paper", selectControl("__ID__", paperOptions), true) +
         field("基础配方", "yaml-base", recipesSelect("__ID__", "cifar10-symmetric-ce-smoke", "supervised"), true) +
         field("输出 YAML", "yaml-output", inputControl("__ID__", "configs/experiment/my_train.yaml"), true) +
         field("损失函数", "yaml-loss", selectControl("__ID__", ["ce", "gce", "nce", "mae", "rce", "apl"])) +
@@ -298,7 +310,7 @@
         field("gamma", "yaml-gamma", inputControl("__ID__", "0.1", "number", "step=0.01")) +
         field("CDR noise rate", "yaml-cdr-noise-rate", inputControl("__ID__", "0.2", "number", "step=0.01 min=0 max=1")) +
         field("L1 decay", "yaml-l1-decay", inputControl("__ID__", "0.0", "number", "step=0.0001 min=0")) +
-        commonFormEnd() + '<p class="helper">这里只显示 supervised runner 可组合的基础 recipe；输出路径可直接填入 YAML 文件位置。</p>';
+        commonFormEnd() + '<p id="yaml-help" class="helper">每篇论文只显示一份默认正式训练配置；复制时保持论文 runner、生命周期和超参数不变。</p>';
       if ([...document.getElementById("yaml-base").options].some(function (option) { return option.value === "cifar10-symmetric-ce-smoke"; })) document.getElementById("yaml-base").value = "cifar10-symmetric-ce-smoke";
       updateYamlFields();
     }
@@ -598,6 +610,8 @@
       }
       const yamlSelectorNode = document.getElementById("yaml-selector");
       const yamlUpdateNode = document.getElementById("yaml-update");
+      const yamlModeNode = document.getElementById("yaml-mode");
+      if (yamlModeNode) yamlModeNode.addEventListener("change", function () { updateYamlFields(); updateModulePreview(); });
       if (yamlSelectorNode) yamlSelectorNode.addEventListener("change", function () { updateYamlFields(); updateModulePreview(); });
       if (yamlUpdateNode) yamlUpdateNode.addEventListener("change", function () { updateYamlFields(); updateModulePreview(); });
       const paperIdNode = document.getElementById("paper-id");
@@ -618,16 +632,25 @@
     }
     function updateYamlFields() {
       if (!document.getElementById("yaml-selector")) return;
+      const paperMode = selectValue("yaml-mode", "paper") === "paper";
+      toggleYamlField("yaml-paper", paperMode);
+      for (const id of ["yaml-base", "yaml-loss", "yaml-selector", "yaml-update"]) {
+        toggleYamlField(id, !paperMode);
+      }
       const selector = selectValue("yaml-selector", "all");
       const update = selectValue("yaml-update", "standard");
-      toggleYamlField("yaml-keep-rate", selector === "small_loss");
-      toggleYamlField("yaml-milestones", update === "step_milestone");
-      toggleYamlField("yaml-gamma", update === "step_milestone");
-      toggleYamlField("yaml-cdr-noise-rate", update === "cdr");
-      toggleYamlField("yaml-l1-decay", update === "cdr");
+      toggleYamlField("yaml-keep-rate", !paperMode && selector === "small_loss");
+      toggleYamlField("yaml-milestones", !paperMode && update === "step_milestone");
+      toggleYamlField("yaml-gamma", !paperMode && update === "step_milestone");
+      toggleYamlField("yaml-cdr-noise-rate", !paperMode && update === "cdr");
+      toggleYamlField("yaml-l1-decay", !paperMode && update === "cdr");
+      const help = document.getElementById("yaml-help");
+      if (help) help.textContent = paperMode
+        ? "每篇论文只显示一份默认正式训练配置；复制时保持论文 runner、生命周期和超参数不变。"
+        : "通用监督组合只修改兼容的 loss、selector 和参数更新策略。";
     }
     function currentRecipeId() {
-      for (const id of ["recipe", "yaml-base", "data-recipe", "sweep-recipe"]) {
+      for (const id of ["recipe", "yaml-paper", "yaml-base", "data-recipe", "sweep-recipe"]) {
         const value = selectValue(id, "").trim();
         if (value) return value;
       }
@@ -636,11 +659,32 @@
     function renderYamlSources() {
       const node = document.getElementById("yaml-source");
       if (!node) return;
-      node.innerHTML = recipeOptions().map(function (item) {
+      const beginner = recipeOptions().map(function (item) {
         return '<option value="' + escapeHtml(item.value) + '">' + escapeHtml(item.label) + '</option>';
       }).join("");
+      const publicIds = new Set(state.recipes.map(function (item) { return item.id; }));
+      const papers = state.papers.filter(function (paper) {
+        return paper.default_recipe_id && !publicIds.has(paper.default_recipe_id);
+      }).map(function (paper) {
+        const label = paper.acronym + " · 正式配置 · " + paper.default_fidelity;
+        return '<option value="' + escapeHtml(paper.default_recipe_id) + '">' + escapeHtml(label) + '</option>';
+      }).join("");
+      node.innerHTML = '<optgroup label="新手模板（4）">' + beginner + '</optgroup>' +
+        '<optgroup label="论文正式配置（26）">' + papers + '</optgroup>';
       const current = currentRecipeId();
-      if (current) node.value = current;
+      if (current && [...node.options].some(function (option) { return option.value === current; })) node.value = current;
+    }
+    function addProjectYamlSource(path) {
+      const node = document.getElementById("yaml-source");
+      const value = "path:" + path;
+      let option = [...node.options].find(function (item) { return item.value === value; });
+      if (!option) {
+        option = document.createElement("option");
+        option.value = value;
+        option.textContent = "项目 YAML · " + path;
+        node.appendChild(option);
+      }
+      node.value = value;
     }
     function yamlFieldId(path) {
       return "yaml-field-" + path.replace(/[^A-Za-z0-9_-]/g, "-");
@@ -679,12 +723,15 @@
         return {path: fieldInfo.path, value: value};
       });
     }
-    async function loadYamlFromRecipe() {
-      const recipe = selectValue("yaml-source", currentRecipeId());
-      if (!recipe) return;
+    async function loadYamlSelection(selection = "") {
+      const source = selection || selectValue("yaml-source", currentRecipeId());
+      if (!source) return;
+      const byPath = source.startsWith("path:");
+      const value = byPath ? source.slice(5) : source;
+      const query = (byPath ? "path=" : "recipe=") + encodeURIComponent(value);
       const responses = await Promise.all([
-        fetch("/api/configs?recipe=" + encodeURIComponent(recipe)),
-        fetch("/api/config-schema?recipe=" + encodeURIComponent(recipe))
+        fetch("/api/configs?" + query),
+        fetch("/api/config-schema?" + query)
       ]);
       const payload = await responses[0].json();
       const schema = await responses[1].json();
@@ -694,11 +741,24 @@
         return;
       }
       document.getElementById("yaml-text").value = payload.content;
-      document.getElementById("yaml-path").value = "";
+      document.getElementById("yaml-path").value = byPath ? payload.path : "";
       renderYamlFields(schema);
-      document.getElementById("yaml-source-path").textContent = "来源：" + payload.path + "；参数通过菜单修改，保存时重新生成 YAML。";
-      statusNode.textContent = "已加载：" + recipe;
+      state.yamlSourcePath = payload.path;
+      state.yamlTextDirty = false;
+      document.getElementById("yaml-source-path").textContent = "来源：" + payload.path + "；可通过参数菜单或下方完整 YAML 编辑。";
+      statusNode.textContent = "已加载：" + (payload.recipe || payload.path);
       statusNode.className = "status";
+    }
+    async function loadYamlFromRecipe() { await loadYamlSelection(); }
+    async function loadYamlFromEditor() {
+      const path = document.getElementById("yaml-path").value.trim();
+      if (path) await loadYamlFromPath(path);
+      else await loadYamlFromRecipe();
+    }
+    async function loadYamlFromPath(path) {
+      addProjectYamlSource(path);
+      yamlEditorPanel.classList.remove("hidden");
+      await loadYamlSelection("path:" + path);
     }
     function configCommand(action, path) {
       const command = "lnl " + action + " --config " + quoteArg(path) + " --check-data";
@@ -719,10 +779,13 @@
         statusNode.className = "status failed";
         return;
       }
+      const body = {path: path, recipe: state.yamlSchema?.recipe, source_path: state.yamlSourcePath, overwrite: overwrite};
+      if (state.yamlTextDirty) body.content = document.getElementById("yaml-text").value;
+      else body.patches = patches;
       const response = await fetch("/api/configs", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({path: path, recipe: state.yamlSchema?.recipe, patches: patches, overwrite: overwrite})
+        body: JSON.stringify(body)
       });
       const payload = await response.json();
       if (!response.ok) {
@@ -730,8 +793,7 @@
         statusNode.className = "status failed";
         return;
       }
-      document.getElementById("yaml-path").value = payload.path;
-      document.getElementById("yaml-text").value = payload.content || document.getElementById("yaml-text").value;
+      await loadYamlFromPath(payload.path);
       statusNode.textContent = "已保存：" + payload.path;
       statusNode.className = "status success";
       if (nextAction) configCommand(nextAction, payload.path);
@@ -751,8 +813,15 @@
       return command;
     }
     function buildYamlCommand() {
-      const base = selectValue("yaml-base", "cifar10-symmetric-ce-smoke");
+      const paperMode = selectValue("yaml-mode", "paper") === "paper";
+      const base = paperMode
+        ? selectValue("yaml-paper", "")
+        : selectValue("yaml-base", "cifar10-symmetric-ce-smoke");
       if (!base) return "";
+      if (paperMode) {
+        return "lnl compose create --base " + base +
+          " --output " + quoteArg(selectValue("yaml-output", "configs/experiment/my_train.yaml"));
+      }
       const selector = selectValue("yaml-selector", "all");
       const update = selectValue("yaml-update", "standard");
       let command = "lnl compose create --base " + base +
@@ -893,6 +962,15 @@
         if (!job.error && job.returncode === 0 && job.key === "data-verify") {
           state.dataResult = {message: "一轮训练验证完成。数据登记现在可以用于训练。", next_action: "run"};
         }
+        if (!job.error && job.returncode === 0 && state.pendingYamlPath) {
+          const createdPath = state.pendingYamlPath;
+          state.pendingYamlPath = "";
+          await loadYamlFromPath(createdPath);
+          statusNode.textContent = "YAML 已创建并打开，可直接编辑：" + createdPath;
+          statusNode.className = "status success";
+        } else if (job.error || job.returncode !== 0) {
+          state.pendingYamlPath = "";
+        }
         await refreshDatasets();
       }
     }
@@ -909,6 +987,14 @@
       runButton.disabled = true; outputNode.textContent = "正在执行，请稍候...";
       const endpoint = state.request.dataset ? "/api/datasets" : "/api/run";
       const body = state.request.dataset || state.request;
+      if (
+        state.module === "yaml" &&
+        !state.request.dataset &&
+        typeof body.command === "string" &&
+        body.command.startsWith("lnl compose create ")
+      ) {
+        state.pendingYamlPath = selectValue("yaml-output", "").trim();
+      }
       try {
         const response = await fetch(endpoint, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
         let result;
@@ -948,13 +1034,20 @@
       }
     });
     document.getElementById("yaml-source").addEventListener("change", loadYamlFromRecipe);
-    document.getElementById("yaml-load").addEventListener("click", loadYamlFromRecipe);
+    document.getElementById("yaml-load").addEventListener("click", loadYamlFromEditor);
     document.getElementById("yaml-save-as").addEventListener("click", function () { saveYaml(false); });
     document.getElementById("yaml-overwrite").addEventListener("click", function () { saveYaml(true); });
     document.getElementById("yaml-validate").addEventListener("click", function () { saveYaml(true, "validate"); });
     document.getElementById("yaml-run").addEventListener("click", function () { saveYaml(true, "run"); });
+    document.getElementById("yaml-text").addEventListener("input", function () {
+      state.yamlTextDirty = true;
+      document.getElementById("yaml-schema-meta").textContent = "已直接编辑完整 YAML；保存时以文本内容为准，并执行配置验证。";
+      statusNode.textContent = "YAML 已修改，尚未保存";
+      statusNode.className = "status running";
+    });
 
-    Promise.all([fetch("/api/commands"), fetch("/api/recipes"), fetch("/api/papers"), fetch("/api/datasets")])
+    const recipeEndpoint = "/api/recipes";
+    Promise.all([fetch("/api/commands"), fetch(recipeEndpoint), fetch("/api/papers"), fetch("/api/datasets")])
       .then(function (responses) { return Promise.all(responses.map(function (response) { if (!response.ok) throw new Error("后端菜单数据加载失败"); return response.json(); })); })
       .then(function (payloads) {
         state.recipes = payloads[1]; state.papers = payloads[2]; state.datasets = payloads[3];

@@ -1,6 +1,5 @@
-# Real CIFAR-10 full-budget Co-teaching usability workflow with symmetric 20% noise.
-# This engineering profile uses the existing CifarCnn8 model, not the paper's
-# exact 9-layer CNN, and does not claim last-ten or five-run numerical reproduction.
+schema_version: 1
+kind: experiment
 method: coteaching
 execution:
   runner: coteaching
@@ -9,7 +8,6 @@ seed: 1
 output_root: artifacts/reproductions/coteaching-cifar10-sym20
 data:
   name: cifar10
-  root: data/cifar10
   validation_size: 5000
   validation_split:
     strategy: stratified

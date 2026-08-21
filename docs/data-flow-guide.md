@@ -114,11 +114,14 @@ run_supervised_experiment(
 ) -> Path
 ```
 
-配置必须是 YAML-compatible mapping。顶层字段：
+配置必须是 YAML-compatible mapping。公共配置先经过
+`core.config_schema.normalize_experiment_config()`；未知顶层字段、旧别名和非法预算会在
+训练前失败。每个完整配置包含 `schema_version: 1`、`kind: experiment` 和显式
+`execution.runner`。顶层字段：
 
 | 字段 | 要求 |
 |---|---|
-| `data` | 必须；dataset、root、划分和可选子集大小 |
+| `data` | 必须；`name` 选择 adapter，划分和可选子集大小；本机 root 通常来自数据登记 |
 | `loader` | 必须；batch size、workers、pin memory |
 | `model` | 必须；当前支持 TinyCNN、ResNet-18、PreActResNet-18 |
 | `optimizer` | 必须；当前支持 SGD、AdamW |
@@ -129,6 +132,10 @@ run_supervised_experiment(
 | `scheduler` | 可选；none、cosine、multistep |
 | `noise` | 可选；省略即 clean |
 | `seed` / `output_root` | 可选；有稳定默认值 |
+
+完整 recipe 不依赖本机 `data.root`：`DataService` 在准备和 preflight 时按 adapter 查找
+唯一的本地登记。零个匹配会给出登记命令，多个匹配会要求 `--data <alias>`，不会静默
+选择。运行期兼容别名只在服务边界内部生成，不写回 YAML 或改变论文参数。
 
 噪声配置只能选择一种模式：
 

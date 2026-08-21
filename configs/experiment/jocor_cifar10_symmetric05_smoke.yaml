@@ -1,30 +1,26 @@
+schema_version: 1
+kind: experiment
 seed: 1
 output_root: artifacts/test-runs
-
 data:
   name: cifar10
-  root: data/cifar10
   validation_size: 100
   max_train_samples: 256
   max_validation_samples: 100
   max_test_samples: 100
   preprocessing: tensor_only
   augment: false
-
 noise:
   name: symmetric
   rate: 0.5
   seed: 0
   sampling: transition
   rng: numpy_legacy
-
 loss:
   name: ce
-
 algorithm:
   name: jocor
   lambda: 0.9
-
 selector:
   name: small_loss
   rounding: floor
@@ -33,34 +29,31 @@ selector:
     start: 1.0
     end: 0.5
     warmup_epochs: 1
-
 models:
-  - name: cifar_six_conv
-  - name: cifar_six_conv
-
+- name: cifar_six_conv
+- name: cifar_six_conv
 optimizer:
   name: adam
   lr: 0.001
-  betas: [0.9, 0.999]
+  betas:
+  - 0.9
+  - 0.999
   weight_decay: 0.0
-
 scheduler:
   name: none
-
 loader:
   batch_size: 32
   num_workers: 0
   pin_memory: false
   drop_last: true
-
 trainer:
   epochs: 2
   device: auto
   progress:
     enabled: false
     curves: true
-
 evaluation:
   selection_split: validation
   report_last_epochs: 0
-execution: {runner: multi_model}
+execution:
+  runner: multi_model

@@ -9,7 +9,9 @@ from unittest.mock import patch
 
 import numpy as np
 import torch
+import yaml
 
+from lnl_toolbox.algorithms.volminnet import VolMinNetConfig
 from lnl_toolbox.data.cifar import CifarData
 from lnl_toolbox.training.experiment import run_experiment
 
@@ -69,6 +71,17 @@ def _sha(path: Path) -> str:
 
 
 class VolMinNetWorkflowTest(unittest.TestCase):
+    def test_formal_config_matches_cifar10_paper_protocol(self) -> None:
+        path = Path(__file__).resolve().parents[1] / "configs/experiment/volminnet_cifar10_reproduction.yaml"
+        config = yaml.safe_load(path.read_text(encoding="utf-8"))
+        parsed = VolMinNetConfig.from_mapping(config)
+        self.assertEqual(config["configuration_fidelity"], "paper_protocol")
+        self.assertEqual(config["volminnet"]["model"]["name"], "resnet18")
+        self.assertEqual(config["loader"]["batch_size"], 128)
+        self.assertEqual(config["trainer"]["epochs"], 150)
+        self.assertEqual(parsed.lambda_volume, 0.0001)
+        self.assertEqual(parsed.classifier_scheduler["milestones"], [30, 60])
+
     def setUp(self) -> None:
         self.train = _cifar(40, "train")
         self.test = _cifar(20, "test")

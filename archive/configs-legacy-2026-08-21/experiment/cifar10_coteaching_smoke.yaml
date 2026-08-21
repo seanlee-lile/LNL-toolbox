@@ -1,0 +1,51 @@
+method: coteaching
+seed: 7
+output_root: artifacts/runs
+data:
+  name: cifar10
+  root: data/cifar10
+  validation_size: 5000
+  max_train_samples: 256
+  max_validation_samples: 128
+  max_test_samples: 128
+  augment: false
+noise:
+  name: symmetric
+  rate: 0.4
+  seed: 17
+  validation_targets: noisy
+  manifest_filename: noise_manifest.npz
+model:
+  name: tiny_cnn
+  width: 16
+optimizer:
+  name: adam
+  lr: 0.001
+  weight_decay: 0.0
+scheduler:
+  name: none
+coteaching:
+  model_count: 2
+  noise_rate: 0.4
+  initialization:
+    peer_seed_offset: 1
+  remember_schedule:
+    name: linear
+    start: 1.0
+    end: 0.6
+    gradual_epochs: 2
+  selection:
+    count_rule: floor
+    tie_break: stable_sample_index
+loader:
+  batch_size: 64
+  num_workers: 0
+  pin_memory: false
+evaluation:
+  selection_split: validation
+  primary: mean_peer_accuracy
+  ensemble: mean_probabilities
+trainer:
+  epochs: 2
+  device: cpu
+execution: {runner: coteaching}

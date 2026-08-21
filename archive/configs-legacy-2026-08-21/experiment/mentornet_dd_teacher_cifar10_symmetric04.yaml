@@ -1,0 +1,20 @@
+seed: 20260729
+feature_data: data/mentornet/cifar10-symmetric04-seed20260729/mentor_features.npz
+data_root: data/cifar10
+trusted_size: 5000
+noise_rate: 0.4
+student_epochs: 20
+student_width: 32
+student_learning_rate: 0.1
+augment: true
+device: cuda
+batch_size: 128
+epochs: 20
+learning_rate: 0.001
+model:
+  num_labels: 1
+  hidden_size: 10
+  sequence_length: 10
+  label_embedding_dim: 2
+  epoch_embedding_dim: 5
+  dense_size: 20

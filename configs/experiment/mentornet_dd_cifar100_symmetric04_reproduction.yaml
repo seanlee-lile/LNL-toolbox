@@ -1,3 +1,5 @@
+schema_version: 1
+kind: experiment
 seed: 20260729
 data:
   name: cifar100
@@ -9,19 +11,28 @@ model:
   leakiness: 0.1
   width_multiplier: 1.0
   weight_decay: 0.0002
-noise: {name: symmetric, rate: 0.4, seed: 20260729}
-loss: {name: ce}
-selector: {name: all}
+noise:
+  name: symmetric
+  rate: 0.4
+  seed: 20260729
+loss:
+  name: ce
+selector:
+  name: all
 parameter_update:
   name: step_milestone
-  milestones: [19500, 25000, 30000]
+  milestones:
+  - 19500
+  - 25000
+  - 30000
   gamma: 0.1
 optimizer:
   name: sgd
   lr: 0.1
   momentum: 0.9
   weight_decay: 0.0
-scheduler: {name: none}
+scheduler:
+  name: none
 pipeline:
   weight_provider:
     name: mentornet
@@ -31,14 +42,26 @@ pipeline:
     decay: 0.5
     burn_in_epoch: 18
     fixed_epoch_after_burn_in: true
-    dropout_schedule: [[0.5, 17], [0.05, 78], [0.9, 5]]
+    dropout_schedule:
+    - - 0.5
+      - 17
+    - - 0.05
+      - 78
+    - - 0.9
+      - 5
     fixed_label: 0
     seed: 20260729
-trainer: {epochs: 100}
-loader: {batch_size: 128, num_workers: 4, drop_last: true}
-evaluation: {selection_split: validation}
+trainer:
+  epochs: 100
+loader:
+  batch_size: 128
+  num_workers: 4
+  drop_last: true
+evaluation:
+  selection_split: validation
 hyperparameters:
   sampling_seed: 20260729
   source: Jiang et al. ICML 2018 supplementary and official repository
   sampled_setting: CIFAR-100 symmetric-40 MentorNet-DD ResNet 39k steps
-execution: {runner: supervised}
+execution:
+  runner: supervised

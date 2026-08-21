@@ -8,6 +8,10 @@ import platform
 import sys
 from typing import TYPE_CHECKING, Any, Mapping
 
+from lnl_toolbox.core.config_schema import (
+    normalize_experiment_config,
+    runtime_experiment_config,
+)
 from lnl_toolbox.training.results import finalize_result, is_completed_result
 from lnl_toolbox.training.runners import resolve_runner
 
@@ -33,9 +37,12 @@ class ExperimentService:
 
         from lnl_toolbox.catalog import validate_config
 
-        runner = validate_config(config, check_data=False)
+        candidate = runtime_experiment_config({"kind": "experiment", **dict(config)})
+        if candidate.get("kind") != "experiment":
+            raise ValueError("ExperimentService requires kind: experiment")
+        runner = validate_config(candidate, check_data=False)
         if check_data:
-            self.data_service.validate_config(config)
+            self.data_service.validate_config(candidate)
         return runner
 
     def _ensure_metadata(self, run_dir: Path, config: Mapping[str, Any]) -> None:
@@ -44,7 +51,10 @@ class ExperimentService:
             import yaml
 
             resolved.write_text(
-                yaml.safe_dump(dict(config), sort_keys=False), encoding="utf-8"
+                yaml.safe_dump(
+                    normalize_experiment_config(config), sort_keys=False
+                ),
+                encoding="utf-8",
             )
         environment = run_dir / "environment.json"
         if not environment.is_file():
@@ -69,8 +79,10 @@ class ExperimentService:
         recipe: str | None = None,
         completed_noop: bool = True,
     ) -> Path:
-        candidate = dict(config)
-        runner = resolve_runner(candidate)
+        runner = resolve_runner(config)
+        candidate = runtime_experiment_config({"kind": "experiment", **dict(config)})
+        if candidate.get("kind") != "experiment":
+            raise ValueError("ExperimentService requires kind: experiment")
         expected_root = None
         if resume is not None:
             expected_root = Path(resume).expanduser().resolve().parent

@@ -6,7 +6,7 @@ import threading
 import unittest
 from pathlib import Path
 from unittest import mock
-from urllib import error, request
+from urllib import error, parse, request
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -21,12 +21,20 @@ class CommandConsoleTest(unittest.TestCase):
             self.assertNotIn("|", spec.args)
             self.assertNotIn(";", spec.args)
 
-    def test_recipe_menu_covers_built_in_recipes(self):
+    def test_recipe_menu_defaults_to_curated_templates(self):
         recipes = command_console._recipe_payload()
-        self.assertGreaterEqual(len(recipes), 26)
+        self.assertEqual(len(recipes), 4)
         recipe_ids = {item["id"] for item in recipes}
         self.assertIn("cifar10-clean-smoke", recipe_ids)
-        self.assertIn("fine-cifar100n-reproduction", recipe_ids)
+        self.assertIn("cifar10-clean-baseline", recipe_ids)
+        self.assertNotIn("fine-cifar100n-reproduction", recipe_ids)
+        self.assertTrue(all(item["visibility"] == "public" for item in recipes))
+        self.assertTrue(all(item["label"] for item in recipes))
+
+        advanced = command_console._recipe_payload(include_all=True)
+        advanced_ids = {item["id"] for item in advanced}
+        self.assertGreaterEqual(len(advanced), 60)
+        self.assertIn("fine-cifar100n-reproduction", advanced_ids)
 
     def test_sweep_shortcut_is_available(self):
         command = command_console.COMMANDS["sweep-smoke"].display_command
@@ -35,9 +43,15 @@ class CommandConsoleTest(unittest.TestCase):
 
     def test_paper_menu_exposes_recipe_variants(self):
         papers = command_console._paper_payload()
-        self.assertGreaterEqual(len(papers), 1)
+        self.assertEqual(len(papers), 26)
         self.assertTrue(all(item["configs"] for item in papers))
         self.assertTrue(all("id" in item and "title" in item for item in papers))
+        self.assertTrue(all(item["default_recipe_id"] for item in papers))
+        self.assertTrue(all(item["default_fidelity"] for item in papers))
+        self.assertEqual(
+            next(item for item in papers if item["id"] == "cnlcu")["default_recipe_id"],
+            "cnlcu-cifar10-reproduction",
+        )
 
     def test_dataset_payload_distinguishes_registration_from_training_evidence(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
@@ -139,6 +153,12 @@ class CommandConsoleTest(unittest.TestCase):
                 with request.urlopen(f"{base}/api/datasets") as response:
                     listing = json.loads(response.read())
                 self.assertIn("cifar10", listing["adapters"])
+                with request.urlopen(f"{base}/api/recipes") as response:
+                    public_recipes = json.loads(response.read())
+                with request.urlopen(f"{base}/api/recipes?all=true") as response:
+                    all_recipes = json.loads(response.read())
+                self.assertEqual(len(public_recipes), 4)
+                self.assertGreater(len(all_recipes), len(public_recipes))
                 with request.urlopen(f"{base}/") as response:
                     home = response.read().decode("utf-8-sig")
                 with request.urlopen(f"{base}/recipe") as response:
@@ -151,6 +171,14 @@ class CommandConsoleTest(unittest.TestCase):
                 self.assertIn('dataAdapter: "cifar10"', home)
                 self.assertIn("state.dataOutput = event.target.value", home)
                 self.assertIn('field("本地数据集", "training-data"', home)
+                self.assertIn('{value:"paper", label:"论文正式配置"}', home)
+                self.assertIn('field("论文方法", "yaml-paper"', home)
+                self.assertIn('label="论文正式配置（26）"', home)
+                self.assertIn("await loadYamlFromPath(createdPath)", home)
+                self.assertIn('body.command.startsWith("lnl compose create ")', home)
+                self.assertIn("async function loadYamlFromEditor()", home)
+                self.assertIn('id="yaml-text" spellcheck="false" placeholder=', home)
+                self.assertNotIn('id="yaml-text" spellcheck="false" readonly', home)
                 self.assertIn('let command = "lnl data verify " + quoteArg(alias);', home)
                 body = json.dumps(
                     {"action": "status", "name": "cifar10"}
@@ -221,6 +249,72 @@ class CommandConsoleTest(unittest.TestCase):
             )
             self.assertEqual(Path(saved["path"]).name, "edited.yaml")
             self.assertTrue(destination.is_file())
+
+            loaded = command_console._config_payload(path_value=saved["path"])
+            self.assertEqual(loaded["recipe"], "")
+            self.assertEqual(loaded["path"], saved["path"])
+            self.assertEqual(loaded["runner"], "clean")
+
+            edited_content = loaded["content"].replace("seed: 7", "seed: 19", 1)
+            overwritten = command_console._save_config(
+                {
+                    "path": saved["path"],
+                    "source_path": saved["path"],
+                    "content": edited_content,
+                    "overwrite": True,
+                }
+            )
+            self.assertIn("seed: 19", overwritten["content"])
+
+    def test_complete_yaml_edit_rejects_invalid_configuration(self):
+        config = command_console._config_payload("cifar10-clean-smoke")
+        invalid = config["content"].replace("runner: clean", "runner: missing", 1)
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            with self.assertRaises(ValueError):
+                command_console._save_config(
+                    {
+                        "path": str(Path(directory) / "invalid.yaml"),
+                        "content": invalid,
+                    }
+                )
+
+    def test_project_yaml_http_round_trip(self):
+        server = command_console.ThreadingHTTPServer(
+            ("127.0.0.1", 0), command_console.ConsoleHandler
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        source = command_console._config_payload("cifar10-clean-smoke")["content"]
+        try:
+            with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+                destination = Path(directory) / "web-created.yaml"
+                relative = destination.relative_to(command_console.ROOT).as_posix()
+                body = json.dumps(
+                    {"path": relative, "content": source, "overwrite": False}
+                ).encode("utf-8")
+                save_request = request.Request(
+                    f"{base}/api/configs",
+                    data=body,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with request.urlopen(save_request) as response:
+                    saved = json.loads(response.read())
+                self.assertEqual(saved["path"], relative)
+
+                query = parse.urlencode({"path": relative})
+                with request.urlopen(f"{base}/api/configs?{query}") as response:
+                    loaded = json.loads(response.read())
+                with request.urlopen(f"{base}/api/config-schema?{query}") as response:
+                    schema = json.loads(response.read())
+                self.assertEqual(loaded["path"], relative)
+                self.assertEqual(schema["source_path"], relative)
+                self.assertTrue(schema["fields"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def test_schema_hides_component_wiring(self):
         schema = command_console._config_schema("fine-cifar100n-smoke")

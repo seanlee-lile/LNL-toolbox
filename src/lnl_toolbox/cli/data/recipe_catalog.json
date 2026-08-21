@@ -14,11 +14,13 @@
     "configs/experiment/cifar10_clean_smoke.yaml",
     "configs/experiment/cifar10_cnlcu_hard_smoke.yaml",
     "configs/experiment/cifar10_cnlcu_soft_smoke.yaml",
+    "configs/experiment/cnlcu_cifar10_reproduction.yaml",
     "configs/experiment/cifar10_coteaching_reproduction.yaml",
     "configs/experiment/cifar10_coteaching_smoke.yaml",
     "configs/experiment/cifar10_dual_t_evidence_smoke.yaml",
     "configs/experiment/cifar10_dual_t_smoke.yaml",
     "configs/experiment/cifar10_dld_smoke.yaml",
+    "configs/experiment/dld_cifar10_reproduction.yaml",
     "configs/experiment/cifar10_dividemix_smoke.yaml",
     "configs/experiment/cifar10_lend_smoke.yaml",
     "configs/experiment/lend_cifar10_reproduction.yaml",
@@ -54,6 +56,7 @@
     "configs/experiment/pcse_multiclass_smoke.yaml",
     "configs/experiment/pcse_multiclass_volmin_smoke.yaml",
     "configs/experiment/cifar10_volminnet_smoke.yaml",
+    "configs/experiment/volminnet_cifar10_reproduction.yaml",
     "configs/experiment/pdl_cifar10_reproduction.yaml",
     "configs/experiment/pdl_cifar10_smoke.yaml",
     "configs/reproduction/cifar10_dual_t_sym20.yaml",
@@ -69,5 +72,27 @@
     "configs/reproduction/cifar10_pcse_reproduction.yaml",
     "configs/experiment/mentornet_dd_cifar100_symmetric04_reproduction.yaml",
     "configs/experiment/mentornet_dd_cifar100_symmetric04_smoke.yaml"
+  ],
+  "public": [
+    {
+      "path": "configs/experiment/cifar10_clean_smoke.yaml",
+      "label": "图像分类快速检查",
+      "description": "用少量样本检查图像训练链路。"
+    },
+    {
+      "path": "configs/experiment/cifar10_clean_baseline.yaml",
+      "label": "图像分类正式训练",
+      "description": "使用完整数据、正式模型和优化器进行干净标签训练。"
+    },
+    {
+      "path": "configs/experiment/cifar10_symmetric_ce_smoke.yaml",
+      "label": "噪声标签分类快速检查",
+      "description": "用少量样本检查可配置标签噪声的监督训练链路。"
+    },
+    {
+      "path": "configs/experiment/importance_reweighting_binary_smoke.yaml",
+      "label": "二分类表格快速检查",
+      "description": "用于表格或合成数据的短二分类训练。"
+    }
   ]
 }

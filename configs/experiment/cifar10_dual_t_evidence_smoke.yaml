@@ -1,9 +1,10 @@
+schema_version: 1
+kind: experiment
 method: dual_t
 seed: 7
 output_root: artifacts/test-runs
 data:
   name: cifar10
-  root: data/cifar10
   validation_size: 5000
   max_train_samples: 2048
   max_validation_samples: 512
@@ -57,4 +58,5 @@ evidence:
   include_noisy_ce: true
   final_seed: 29
   sampler_seed: 1031
-execution: {runner: dual_t}
+execution:
+  runner: dual_t

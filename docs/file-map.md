@@ -6,6 +6,10 @@
 API。`cli/data/recipe_catalog.json` 是显式内置 recipe 清单，配置文件通过 package
 data 安装，避免用户本地 YAML 污染 catalog。
 
+`cli/data/recipe_catalog.json` 同时维护 `public` 展示层。`catalog.py` 的完整发现接口供
+论文目录、按名称运行和测试使用；CLI 默认列表与 Web 新手页仅消费公开模板，显式
+`--all` 或 `/recipe` 才展示内部配方。底层 YAML 没有被删除或合并。
+
 ## 1. 仓库根目录
 
 | 文件 | 作用 |
@@ -23,6 +27,7 @@ data 安装，避免用户本地 YAML 污染 catalog。
 | `core/__init__.py` | 汇总并公开核心类型，调用方可从 `lnl_toolbox.core` 统一导入。 |
 | `core/component.py` | 定义最小 `Component` 生命周期和可选 `Stateful` checkpoint 协议。 |
 | `core/context.py` | 定义 `ExperimentContext`，保存工作目录、配置、seed 和外部服务。 |
+| `core/config_schema.py` | 版本化实验配置规范化与校验；拒绝未知字段和旧式参数层级，并仅在运行边界生成兼容别名。 |
 | `core/batch.py` | 定义通用 `Batch`；payload 不透明，不强制图像或标签格式。 |
 | `core/algorithm.py` | 定义任务无关 `Algorithm` 生命周期协议。 |
 | `core/state.py` | 定义 Runner 管理的 `RunState`，记录 cycle、step、phase、指标和元数据。 |
@@ -154,7 +159,9 @@ data 安装，避免用户本地 YAML 污染 catalog。
 
 | 文件 | 作用 |
 |---|---|
-| `configs/README.md` | 说明 YAML 是 LNL 示例配置，核心只接收 mapping，不依赖 YAML/Hydra。 |
+| `configs/README.md` | 说明 schema v1、experiment/fragment/mentor_artifact 类型、本地数据登记及旧别名淘汰规则。 |
+| `archive/configs-legacy-2026-08-21/` | 迁移前全部 92 个 YAML 的原样恢复副本；`manifest.json` 保存路径、长度和 SHA-256。 |
+| `tests/test_config_schema.py` | 覆盖旧别名规范化、未知字段失败、92 个活动 YAML 及 64 个内置 recipe 门禁；公开展示层另由 recipe catalog 测试覆盖。 |
 | `configs/algorithm/ce.yaml` | CE 示例参数。 |
 | `configs/algorithm/gce.yaml` | 标准 GCE 的 `q` 参数；不包含隐式截断阈值。 |
 | `configs/algorithm/nce.yaml` | NCE 的数值稳定参数。 |
@@ -534,3 +541,29 @@ checkpoint 公共格式。
 Web 使用同一 `web/index.html` 保持原有主控制台布局；`/recipe` 直接进入现有
 Recipe/YAML 编辑功能。`lnl web` 由 `cli/main.py` 启动 `web/command_console.py` 并默认打开
 主页面；`--no-open` 可用于远程终端或手工浏览器访问。
+
+## 论文正式 YAML 暴露（2026-08-21）
+
+| 文件 | 责任 |
+|---|---|
+| `paper_catalog.json`、`catalog.py` | 为每篇论文确定一个 `profile: reproduction` 默认配置，并向 CLI/Web 提供稳定映射 |
+| `cli/data/recipe_catalog.json` | 登记正式 YAML；新手公开模板仍维持四项，不把全部内部配置塞入新手菜单 |
+| `cli/main.py` | `compose create` 对专用 runner 只允许原样复制，拒绝不安全的通用组件覆盖 |
+| `web/index.html`、`web/command_console.py` | “新建 YAML”分为 26 篇论文正式配置和通用监督组合两种模式 |
+| `models/cifar_cnn.py` | `CnlcuCnn9` 实现论文附录的九层 CIFAR CNN |
+| `training/experiment.py` | 注册通用 `cnlcu_cnn9` 模型名和 `linear_after` scheduler，不包含 CNLCU 论文分支 |
+| `configs/experiment/cnlcu_cifar10_reproduction.yaml` | CNLCU-S CIFAR-10 Sym20 单组论文协议配置 |
+| `configs/experiment/volminnet_cifar10_reproduction.yaml` | VolMinNet CIFAR-10 Sym20 单组论文协议配置 |
+| `configs/experiment/dld_cifar10_reproduction.yaml` | DLD 完整预算的当前工具箱配置；因未接入官方 ViT-L/14 特征路径，明确标记 `paper_oriented` |
+
+正式 YAML 表示完整数据规模、模型、优化器、scheduler 与训练预算均已写明，不等价于已完成论文多 seed 数值复现。
+
+## Web YAML 创建与编辑闭环（2026-08-21）
+
+| 文件 | 责任 |
+|---|---|
+| `web/command_console.py` | 在项目边界内按 recipe 或 YAML 路径加载配置；保存完整文本前执行 YAML 解析和 runner 配置验证；禁止覆盖内置 recipe |
+| `web/index.html` | 编辑器同时显示 4 个新手模板与 26 篇论文正式配置；新建成功后自动打开项目 YAML；支持完整文本编辑、覆盖/另存、验证与运行 |
+| `web/test_command_console.py` | 项目 YAML HTTP round-trip、完整文本校验、非法配置拒绝和前端闭环静态门禁 |
+
+项目 YAML 不加入内置 recipe 清单；它在当前页面中按路径出现，并可在之后通过“项目 YAML 路径”重新加载。

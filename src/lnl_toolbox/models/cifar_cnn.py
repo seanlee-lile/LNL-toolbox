@@ -61,3 +61,50 @@ class CifarCnn8(nn.Module):
     ) -> FeatureOutput:
         features = self._representation(inputs)
         return FeatureOutput(self.classifier(features), features)
+
+
+class CnlcuCnn9(nn.Module):
+    """Nine-convolution CIFAR-10 network specified in the CNLCU appendix."""
+
+    def __init__(self, num_classes: int = 10) -> None:
+        super().__init__()
+        channels = (128, 128, 128, 256, 256, 256, 512, 256, 128)
+        layers: list[nn.Module] = []
+        incoming = 3
+        for index, outgoing in enumerate(channels):
+            layers.extend((
+                nn.Conv2d(incoming, outgoing, 3, padding=1),
+                nn.LeakyReLU(negative_slope=0.01, inplace=True),
+            ))
+            if index in (2, 5):
+                layers.extend((nn.MaxPool2d(2), nn.Dropout(p=0.25)))
+            incoming = outgoing
+        layers.append(nn.AdaptiveAvgPool2d(1))
+        self.features = nn.Sequential(*layers)
+        self.classifier = nn.Linear(128, num_classes)
+        self._initialize()
+
+    def _initialize(self) -> None:
+        for module in self.modules():
+            if isinstance(module, nn.Conv2d):
+                nn.init.kaiming_normal_(
+                    module.weight,
+                    a=0.01,
+                    mode="fan_out",
+                    nonlinearity="leaky_relu",
+                )
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+
+    def _representation(self, inputs: torch.Tensor) -> torch.Tensor:
+        return self.features(inputs).flatten(1)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        return self.classifier(self._representation(inputs))
+
+    def forward_with_features(self, inputs: torch.Tensor) -> FeatureOutput:
+        features = self._representation(inputs)
+        return FeatureOutput(self.classifier(features), features)

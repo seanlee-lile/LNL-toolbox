@@ -31,7 +31,7 @@ from lnl_toolbox.models.cifar_resnet import (
     cifar_resnet101,
     preact_resnet18,
 )
-from lnl_toolbox.models.cifar_cnn import CifarCnn8
+from lnl_toolbox.models.cifar_cnn import CifarCnn8, CnlcuCnn9
 from lnl_toolbox.models.tiny_cnn import TinyCNN
 from lnl_toolbox.models.mentor_wide_resnet import MentorWideResNet101
 from lnl_toolbox.plugins.builtin import (
@@ -74,6 +74,8 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
         )
     if name == "cifar_cnn8":
         return CifarCnn8(num_classes)
+    if name == "cnlcu_cnn9":
+        return CnlcuCnn9(num_classes)
     if name == "resnet14":
         return cifar_resnet14(num_classes, int(config.get("base_width", 16)))
     if name == "resnet32":
@@ -153,6 +155,20 @@ def build_scheduler(optimizer, config: Mapping[str, Any] | None, epochs: int):
             milestones=[int(value) for value in config["milestones"]],
             gamma=float(config.get("gamma", 0.1)),
         )
+    if name == "linear_after":
+        start = int(config["start_epoch"])
+        end = int(config.get("end_epoch", epochs))
+        if not 0 <= start < end <= epochs:
+            raise ValueError(
+                "linear_after requires 0 <= start_epoch < end_epoch <= epochs"
+            )
+
+        def multiplier(epoch: int) -> float:
+            if epoch <= start:
+                return 1.0
+            return max(0.0, float(end - epoch) / float(end - start))
+
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=multiplier)
     raise ValueError(f"Unsupported scheduler: {name}")
 
 

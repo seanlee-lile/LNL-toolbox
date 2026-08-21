@@ -1,12 +1,11 @@
-# UPM workflow smoke only. The symmetric noise here does not reproduce the
-# paper's instance-dependent CIFAR-10 relabeling process or numerical results.
+schema_version: 1
+kind: experiment
 method: upm
 execution:
   runner: upm
 seed: 7
 data:
   name: cifar10
-  root: data/cifar10
   validation_size: 100
   max_train_samples: 128
   max_validation_samples: 64

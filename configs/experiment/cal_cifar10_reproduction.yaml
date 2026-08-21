@@ -1,32 +1,74 @@
+schema_version: 1
+kind: experiment
 method: cal
-execution: {runner: cal}
+execution:
+  runner: cal
 seed: 10086
 output_root: artifacts/reproductions/cal-cifar10-idn20
 data:
   name: cifar10
-  root: data/cifar10
   validation_size: 0
   augment: true
   normalization:
-    mean: [0.4914, 0.4882, 0.4465]
-    std: [0.2023, 0.1994, 0.2010]
+    mean:
+    - 0.4914
+    - 0.4882
+    - 0.4465
+    std:
+    - 0.2023
+    - 0.1994
+    - 0.201
 noise:
-  type: external_torch
   rate: 0.2
   seed: 10086
   path: data/cal/IDN_0.2_C10.pt
   clean_key: clean_label_train
   noisy_key: noise_label_train
-loader: {batch_size: 128, num_workers: 0, pin_memory: true}
-model: {name: resnet34, base_width: 64, initialization: torch_default}
-optimizer: {name: sgd, lr: 0.1, momentum: 0.9, weight_decay: 0.0005}
-scheduler: {name: multistep, milestones: [60], gamma: 0.1}
+  name: external_torch
+loader:
+  batch_size: 128
+  num_workers: 0
+  pin_memory: true
+model:
+  name: resnet34
+  base_width: 64
+  initialization: torch_default
+optimizer:
+  name: sgd
+  lr: 0.1
+  momentum: 0.9
+  weight_decay: 0.0005
+scheduler:
+  name: multistep
+  milestones:
+  - 60
+  gamma: 0.1
 warmup:
   epochs: 65
   confidence_weight: 2.0
-  confidence_schedule: {milestones: [10, 40, 80], values: [0.0, 2.0, 2.0]}
-sieve: {lower_threshold: -8.0, upper_threshold: -8.0}
+  confidence_schedule:
+    milestones:
+    - 10
+    - 40
+    - 80
+    values:
+    - 0.0
+    - 2.0
+    - 2.0
+sieve:
+  lower_threshold: -8.0
+  upper_threshold: -8.0
 cal:
   confidence_weight: 1.0
-  confidence_schedule: {milestones: [10, 40, 80], values: [0.0, 1.0, 1.0]}
-trainer: {epochs: 100, device: auto}
+  confidence_schedule:
+    milestones:
+    - 10
+    - 40
+    - 80
+    values:
+    - 0.0
+    - 1.0
+    - 1.0
+trainer:
+  epochs: 100
+  device: auto

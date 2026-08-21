@@ -32,12 +32,18 @@ class ExperimentServiceTest(unittest.TestCase):
     def test_preflight_reuses_config_and_data_validation_without_running(self) -> None:
         data_service = Mock()
         service = ExperimentService(data_service=data_service)
-        config = {"data": {"name": "cifar10", "root": "missing"}}
+        config = {
+            "schema_version": 1,
+            "kind": "experiment",
+            "execution": {"runner": "fake"},
+            "data": {"name": "cifar10", "root": "missing"},
+        }
+        runtime = {**config, "schema_version": 1, "kind": "experiment"}
         runner = object()
         with patch("lnl_toolbox.catalog.validate_config", return_value=runner) as validate:
             self.assertIs(service.preflight(config), runner)
-        validate.assert_called_once_with(config, check_data=False)
-        data_service.validate_config.assert_called_once_with(config)
+        validate.assert_called_once_with(runtime, check_data=False)
+        data_service.validate_config.assert_called_once_with(runtime)
 
         data_service.reset_mock()
         with patch("lnl_toolbox.catalog.validate_config", return_value=runner):
@@ -50,12 +56,27 @@ class ExperimentServiceTest(unittest.TestCase):
             "lnl_toolbox.training.service.resolve_runner", return_value=runner
         ):
             root = ExperimentService().run(
-                {"seed": 2, "method": "fake"}, directory, recipe="fake-smoke"
+                {
+                    "schema_version": 1,
+                    "kind": "experiment",
+                    "seed": 2,
+                    "method": "fake",
+                    "execution": {"runner": "fake"},
+                    "data": {"name": "synthetic_multiclass"},
+                    "noise": {"name": "symmetric", "rate": 0.2},
+                },
+                directory,
+                recipe="fake-smoke",
             )
             result = json.loads((root / "final_metrics.json").read_text(encoding="utf-8"))
             self.assertEqual(runner.calls, 1)
             self.assertEqual(result["recipe"], "fake-smoke")
             self.assertTrue((root / "resolved_config.yaml").is_file())
+            resolved = yaml.safe_load(
+                (root / "resolved_config.yaml").read_text(encoding="utf-8")
+            )
+            self.assertEqual(resolved["noise"]["name"], "symmetric")
+            self.assertNotIn("type", resolved["noise"])
             self.assertTrue((root / "environment.json").is_file())
 
     def test_resume_of_completed_run_is_strict_noop(self) -> None:

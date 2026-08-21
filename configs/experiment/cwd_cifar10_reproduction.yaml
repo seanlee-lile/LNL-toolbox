@@ -1,55 +1,45 @@
-# CWD TPAMI CIFAR-binary experiment: one deterministic fold/run only.
+schema_version: 1
+kind: experiment
 seed: 17
 output_root: artifacts/runs/cwd-cifar10-symmetric02-fold0
-
 data:
   name: cifar10_airplane_automobile
-  root: data/cifar10
   folds: 5
   fold_index: 0
   augment: false
-
 noise:
-  # Paper candidate selected once: symmetric (eta_P, eta_N) = (0.2, 0.2).
   rho_positive: 0.2
   rho_negative: 0.2
   seed: 17
-
+  name: binary_asymmetric_rcn
 loader:
   batch_size: 128
   num_workers: 4
   pin_memory: true
-
 model:
   name: cifar_resnet34
   base_width: 64
-  # Eq. (3)/(18) use h(x)=W^T x; the paper has no classifier bias.
   bias: false
-
 optimizer:
   name: adam
   lr: 0.05
   weight_decay: 0.0001
-
 scheduler:
-  milestones: [40, 120]
+  milestones:
+  - 40
+  - 120
   gamma: 0.1
-
 trainer:
   epochs: 200
   device: auto
-
 cwd:
-  # The paper specifies the Moore-Penrose pseudo-inverse M^dagger.
   pinv_rcond: null
   variant: binary_scalar
-  # Reconstruct the centroid from the current stochastic feature batch so
-  # the end-to-end CNN receives the gradient of Eq. (4)/(18).
   dynamic_centroid: true
-
 parameter_record:
   sampling_seed: 17
   selected_group: cifar_binary_symmetric_02
   source: paper_cifar_binary_protocol
   repeated_runs: 1
-execution: {runner: cwd}
+execution:
+  runner: cwd

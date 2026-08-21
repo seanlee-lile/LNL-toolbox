@@ -1,8 +1,9 @@
+schema_version: 1
+kind: experiment
 seed: 4
 output_root: artifacts/test-runs
 data:
   name: cifar10
-  root: data/cifar10
   validation_size: 5000
   max_train_samples: 256
   max_validation_samples: 128
@@ -28,7 +29,7 @@ pipeline:
     num_samples: 50000
     num_classes: 10
     warmup_epochs: 1
-    alpha: 0.10
+    alpha: 0.1
     prior_decay: 0.99
     mda: true
     ccs: true
@@ -47,7 +48,8 @@ optimizer:
   weight_decay: 0.001
 scheduler:
   name: multistep
-  milestones: [1]
+  milestones:
+  - 1
   gamma: 0.1
 trainer:
   epochs: 2
@@ -55,4 +57,5 @@ trainer:
   progress: false
 evaluation:
   selection_split: validation
-execution: {runner: supervised}
+execution:
+  runner: supervised

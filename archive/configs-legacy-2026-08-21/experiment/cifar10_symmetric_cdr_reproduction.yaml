@@ -1,0 +1,61 @@
+seed: 1
+output_root: artifacts/reproductions
+data:
+  name: cifar10
+  root: data/cifar10
+  validation_size: 5000
+  max_train_samples: null
+  max_validation_samples: null
+  max_test_samples: null
+  augment: true
+  validation_split:
+    strategy: random
+    rng: numpy_legacy
+  normalization:
+    mean: [0.4914, 0.4822, 0.4465]
+    std: [0.2023, 0.1994, 0.2010]
+noise:
+  name: symmetric
+  rate: 0.4
+  seed: 1
+  sampling: transition
+  rng: numpy_legacy
+  validation_targets: noisy
+  manifest_filename: noise_manifest.npz
+loss:
+  name: ce
+selector:
+  name: all
+parameter_update:
+  name: cdr
+  noise_rate: 0.4
+  l1_decay: 0.001
+  critical_scope: all_trainable
+  compatibility_mode: paper
+loader:
+  batch_size: 64
+  num_workers: 0
+  pin_memory: true
+model:
+  name: resnet50
+  base_width: 64
+  stem_padding: 0
+  initialization: torch_default
+optimizer:
+  name: sgd
+  lr: 0.01
+  # Equation-faithful CDR update combined with the official-code-aligned
+  # CIFAR data/model path; this is not a line-by-line or numerical reproduction.
+  momentum: 0.0
+  weight_decay: 0.0
+scheduler:
+  name: multistep
+  milestones: [40, 80]
+  gamma: 0.1
+trainer:
+  epochs: 100
+  device: auto
+  progress: true
+evaluation:
+  selection_split: validation
+execution: {runner: supervised}

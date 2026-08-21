@@ -115,6 +115,30 @@ class DataServiceTest(unittest.TestCase):
             self.assertIn("broken fixture layout", report.error or "")
             self.assertNotEqual(service.status("broken").status, "ready")
 
+    def test_portable_config_resolves_unique_local_registration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = DataService(
+                DatasetRegistry((_FixtureAdapter(),)),
+                LocalDatasetCatalog(root / "catalog.json"),
+            )
+            service.register("lab", "fixture", {"root": root})
+            resolved = service.resolve_config({"data": {"name": "fixture"}})
+            self.assertEqual(Path(resolved["data"]["root"]), root)
+            self.assertEqual(resolved["local_dataset"]["alias"], "lab")
+
+    def test_portable_config_rejects_ambiguous_local_registration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = DataService(
+                DatasetRegistry((_FixtureAdapter(),)),
+                LocalDatasetCatalog(root / "catalog.json"),
+            )
+            service.register("first", "fixture", {"root": root})
+            service.register("second", "fixture", {"root": root})
+            with self.assertRaisesRegex(ValueError, "multiple local registrations"):
+                service.resolve_config({"data": {"name": "fixture"}})
+
     def test_registry_alias_and_unknown_dataset(self) -> None:
         self.assertEqual(DATASETS.get("cifar-10").name, "cifar10")
         self.assertEqual(DATASETS.get("fashionmnist").name, "fashion_mnist")

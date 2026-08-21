@@ -1,5 +1,5 @@
-# Full-data CIFAR-10 short-horizon engineering validation for CNLCU-S.
-# This is not a paper full-budget or numerical reproduction configuration.
+schema_version: 1
+kind: experiment
 method: cnlcu
 execution:
   runner: cnlcu
@@ -8,7 +8,6 @@ seed: 1
 output_root: artifacts/reproductions/cnlcu-cifar10-sym20-short
 data:
   name: cifar10
-  root: data/cifar10
   validation_size: 5000
   validation_split:
     strategy: stratified

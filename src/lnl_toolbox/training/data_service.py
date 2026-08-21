@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Single data-preparation entry point shared by every experiment runner."""
 
+from copy import deepcopy
 from dataclasses import dataclass, replace
 import hashlib
 import json
@@ -989,6 +990,27 @@ class DataService:
     def apply(self, config: Mapping[str, Any], name: object) -> dict[str, Any]:
         return self.catalog.apply(config, name)
 
+    def resolve_config(self, config: Mapping[str, Any]) -> dict[str, Any]:
+        """Resolve one portable data contract through a unique local registration."""
+
+        resolved = deepcopy(dict(config))
+        data = resolved.get("data")
+        if not isinstance(data, Mapping):
+            return resolved
+        data_config = dict(data)
+        name = str(data_config.get("name", "")).strip()
+        if not name or name.startswith("synthetic_"):
+            return resolved
+        if data_config.get("root") or data_config.get("path"):
+            return resolved
+        record = self._record_for(name)
+        if record is None:
+            raise ValueError(
+                f"dataset {name!r} has no local registration; run "
+                f"'lnl data register <alias> --adapter {name} ...' or pass --data"
+            )
+        return self.catalog.apply(resolved, record.alias)
+
     @staticmethod
     def _inspection_report(
         name: str,
@@ -1076,12 +1098,14 @@ class DataService:
         data = dict(record.data)
         if record.adapter == "uci_binary":
             return {
+                "schema_version": 1,
+                "kind": "experiment",
                 "seed": int(seed),
                 "data": data,
                 "loader": {"batch_size": 64, "num_workers": 0},
                 "model": {"name": "linear"},
-                "learning_rate": 0.01,
-                "epochs": 1,
+                "optimizer": {"name": "sgd", "lr": 0.01, "momentum": 0.9},
+                "trainer": {"epochs": 1, "device": "auto"},
                 "execution": {"runner": "binary"},
             }
         if report.train_samples is None or report.train_samples < 2:
@@ -1095,6 +1119,8 @@ class DataService:
             "augment": False,
         })
         return {
+            "schema_version": 1,
+            "kind": "experiment",
             "seed": int(seed),
             "data": data,
             "loader": {
@@ -1179,10 +1205,14 @@ class DataService:
             raise
 
     def validate_config(self, config: Mapping[str, Any]) -> DataSpec:
-        return _validate_data_config(config, self.registry)
+        return _validate_data_config(self.resolve_config(config), self.registry)
 
     def prepare_experiment_data(self, *args, **kwargs) -> PreparedData:
         kwargs.setdefault("registry", self.registry)
+        if args:
+            args = (self.resolve_config(args[0]), *args[1:])
+        elif "config" in kwargs:
+            kwargs["config"] = self.resolve_config(kwargs["config"])
         return _prepare_experiment_data(*args, **kwargs)
 
 

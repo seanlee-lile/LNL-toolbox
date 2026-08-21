@@ -1,8 +1,9 @@
+schema_version: 1
+kind: experiment
 seed: 1
 output_root: artifacts/reproductions
 data:
   name: cifar10
-  root: data/cifar10
   validation_size: 5000
   max_train_samples: null
   max_validation_samples: null
@@ -37,7 +38,9 @@ optimizer:
   weight_decay: 0.0001
 scheduler:
   name: multistep
-  milestones: [40, 80]
+  milestones:
+  - 40
+  - 80
   gamma: 0.1
 trainer:
   epochs: 120
@@ -46,4 +49,5 @@ trainer:
     enabled: true
     update_interval: 20
     curves: true
-execution: {runner: supervised}
+execution:
+  runner: supervised

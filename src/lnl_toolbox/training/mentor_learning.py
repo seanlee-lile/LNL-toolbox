@@ -23,7 +23,6 @@ def _mentor_data_config(config: Mapping[str, Any], seed: int, size: int, noise_r
     """Normalize legacy flat MentorNet options and the shared data contract."""
 
     configured = config.get("data")
-    legacy = not isinstance(configured, Mapping)
     data_config = dict(configured) if isinstance(configured, Mapping) else {}
     data_config.setdefault("name", config.get("dataset", "cifar10"))
     if "root" not in data_config and config.get("data_root") is not None:
@@ -35,7 +34,7 @@ def _mentor_data_config(config: Mapping[str, Any], seed: int, size: int, noise_r
     noise = config.get("noise")
     if isinstance(noise, Mapping):
         noise_config = dict(noise)
-    elif legacy or "noise_rate" in config:
+    elif "noise_rate" in config:
         noise_config = {"name": "symmetric", "rate": noise_rate, "seed": seed}
     else:
         noise_config = {}
@@ -44,8 +43,8 @@ def _mentor_data_config(config: Mapping[str, Any], seed: int, size: int, noise_r
         "data": data_config,
         "noise": noise_config,
         "loader": {
-            "batch_size": int(config.get("batch_size", 128)),
-            "num_workers": int(config.get("num_workers", 0)),
+            "batch_size": int(dict(config.get("loader", {})).get("batch_size", config.get("batch_size", 128))),
+            "num_workers": int(dict(config.get("loader", {})).get("num_workers", config.get("num_workers", 0))),
         },
     }
 
@@ -94,8 +93,10 @@ def prepare_trusted_mentor_features(
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
     seed = int(config.get("seed", 0))
-    size = int(config.get("trusted_size", 5000))
-    noise_rate = float(config.get("noise_rate", 0.4))
+    student_trainer = dict(config.get("student_trainer", {}))
+    student_optimizer = dict(config.get("student_optimizer", {}))
+    size = int(student_trainer.get("trusted_size", config.get("trusted_size", 5000)))
+    noise_rate = float(dict(config.get("noise", {})).get("rate", config.get("noise_rate", 0.4)))
     data_config = _mentor_data_config(config, seed, size, noise_rate)
     prepared = prepare_experiment_data(
         data_config,
@@ -116,13 +117,13 @@ def prepare_trusted_mentor_features(
     clean = np.asarray([clean_source[positions[int(index)]] for index in indices], dtype=np.int64)
     np.savez_compressed(destination / "trusted_indices.npz", indices=indices)
     loader = prepared.loader(DataRole.TRAIN)
-    device = torch.device(str(config.get("device", "cpu")))
+    device = torch.device(str(student_trainer.get("device", config.get("device", "cpu"))))
     sample = prepared.dataset_for(DataRole.TRAIN)[0]["input"]
     model = _build_student_model(sample, prepared.num_classes, config).to(device)
     optimizer = torch.optim.SGD(
         model.parameters(),
-        lr=float(config.get("student_learning_rate", 0.1)),
-        momentum=0.9,
+        lr=float(student_optimizer.get("lr", config.get("student_learning_rate", 0.1))),
+        momentum=float(student_optimizer.get("momentum", 0.9)),
     )
     clean_by_global = dict(zip(indices.tolist(), clean.tolist()))
     losses_out: list[np.ndarray] = []
@@ -131,7 +132,7 @@ def prepare_trusted_mentor_features(
     epochs_out: list[np.ndarray] = []
     labels_out: list[np.ndarray] = []
     moving: float | None = None
-    epochs = int(config.get("student_epochs", 20))
+    epochs = int(student_trainer.get("epochs", config.get("student_epochs", 20)))
     for epoch in range(epochs):
         model.train()
         for batch in loader:
@@ -188,24 +189,27 @@ def train_mentor_artifact(
     seed = int(config.get("seed", 0))
     torch.manual_seed(seed)
     dataset = MentorFeatureDataset.from_npz(config["feature_data"])
+    loader_config = dict(config.get("loader", {}))
+    trainer_config = dict(config.get("trainer", {}))
+    optimizer_config = dict(config.get("optimizer", {}))
     loader = DataLoader(
         dataset,
-        batch_size=int(config.get("batch_size", 128)),
+        batch_size=int(loader_config.get("batch_size", config.get("batch_size", 128))),
         shuffle=True,
         generator=torch.Generator().manual_seed(seed),
     )
     architecture = dict(config.get("model", {}))
-    device = torch.device(str(config.get("device", "cpu")))
+    device = torch.device(str(trainer_config.get("device", config.get("device", "cpu"))))
     model = build_mentor_model(architecture).to(device)
     implementation = str(architecture.get("implementation", "legacy")).lower()
-    learning_rate = float(config.get("learning_rate", 1e-3))
+    learning_rate = float(optimizer_config.get("lr", config.get("learning_rate", 1e-3)))
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    max_steps = config.get("max_steps")
+    max_steps = trainer_config.get("max_steps", config.get("max_steps"))
     if max_steps is not None:
         max_steps = int(max_steps)
         if max_steps <= 0:
             raise ValueError("max_steps must be positive")
-    epochs = int(config.get("epochs", 20))
+    epochs = int(trainer_config.get("epochs", config.get("epochs", 20)))
     if epochs <= 0:
         raise ValueError("MentorNet epochs must be positive")
     model.train()

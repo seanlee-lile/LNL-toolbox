@@ -1,12 +1,11 @@
-# Real-data, full-sample engineering workflow for binary eIW. This follows the
-# paper's asymmetric-RCN pipeline, but is not a paper-exact table reproduction.
+schema_version: 1
+kind: experiment
 configuration_fidelity: engineering
 method: importance_reweighting
 num_classes: 2
 label_convention: zero_one
 seed: 17
 output_root: artifacts/reproductions
-
 data:
   name: uci_statlog_heart
   path: data/uci/statlog-heart/heart.dat
@@ -19,10 +18,20 @@ data:
     url: https://archive.ics.uci.edu/static/public/145/statlog%2Bheart.zip
     license: CC BY 4.0
   schema:
-    feature_columns: [age, sex, chest_pain_type, resting_blood_pressure,
-      serum_cholesterol, fasting_blood_sugar, resting_ecg,
-      maximum_heart_rate, exercise_induced_angina, oldpeak, st_slope,
-      major_vessels, thal]
+    feature_columns:
+    - age
+    - sex
+    - chest_pain_type
+    - resting_blood_pressure
+    - serum_cholesterol
+    - fasting_blood_sugar
+    - resting_ecg
+    - maximum_heart_rate
+    - exercise_induced_angina
+    - oldpeak
+    - st_slope
+    - major_vessels
+    - thal
     target: heart_disease
   preprocessing:
     format: whitespace
@@ -31,36 +40,52 @@ data:
     missing_policy: error
     categorical_policy: error
     standardize: true
-    # UCI: 1 = absence, 2 = presence. Repository: 1 -> 0, 2 -> 1.
-    label_values: ["1", "2"]
-  split: {seed: 23, validation_fraction: 0.20, test_fraction: 0.20}
-
+    label_values:
+    - '1'
+    - '2'
+  split:
+    seed: 23
+    validation_fraction: 0.2
+    test_fraction: 0.2
 noise:
   name: binary_asymmetric_rcn
-  rho_positive: 0.30
-  rho_negative: 0.10
+  rho_positive: 0.3
+  rho_negative: 0.1
   seed: 29
   validation_targets: noisy
-
-# Statlog Heart is 13-dimensional, so it uses the existing KLIEP backend.
-# These KLIEP tuning values are repository implementation choices.
 posterior_stage:
   name: kliep
   bandwidth: 1.0
   max_centers: 24
   max_iterations: 200
   learning_rate: 0.02
-  tolerance: 1.0e-7
+  tolerance: 1.0e-07
   epsilon: 1.0e-12
   seed: 37
   rate_estimator: paper_raw_min
-
-model: {name: linear, in_features: 13, num_classes: 2}
-loss: {name: ce}
-optimizer: {name: sgd, lr: 0.05, momentum: 0.0, weight_decay: 0.0}
-scheduler: {name: none}
-loader: {batch_size: 32, num_workers: 0, pin_memory: false}
-trainer: {epochs: 100, device: auto}
-diagnostics: {max_gradient_norm: 1000000.0}
-evaluation: {selection_split: validation}
-execution: {runner: importance_reweighting}
+model:
+  name: linear
+  in_features: 13
+  num_classes: 2
+loss:
+  name: ce
+optimizer:
+  name: sgd
+  lr: 0.05
+  momentum: 0.0
+  weight_decay: 0.0
+scheduler:
+  name: none
+loader:
+  batch_size: 32
+  num_workers: 0
+  pin_memory: false
+trainer:
+  epochs: 100
+  device: auto
+diagnostics:
+  max_gradient_norm: 1000000.0
+evaluation:
+  selection_split: validation
+execution:
+  runner: importance_reweighting

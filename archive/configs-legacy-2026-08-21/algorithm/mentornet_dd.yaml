@@ -1,0 +1,13 @@
+pipeline:
+  weight_provider:
+    name: mentornet
+    artifact_path: data/mentornet/cifar10-symmetric04-official-port-seed20260729/mentor_artifact.pt
+    total_epochs: 100
+    percentile: 0.6
+    decay: 0.5
+    burn_in_epoch: 18
+    fixed_epoch_after_burn_in: true
+    dropout_schedule: [[0.5, 17], [0.05, 78], [0.9, 5]]
+    fixed_label: 0
+    seed: 20260729
+    zero_weight_policy: error

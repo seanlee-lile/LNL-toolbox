@@ -1,13 +1,11 @@
-# Workflow smoke for paper-oriented LEND. gamma/metric/feature normalization,
-# fixed dilution steps, first-history and empty-selection behavior are explicit
-# engineering choices, not claimed paper defaults.
+schema_version: 1
+kind: experiment
 method: lend
 execution:
   runner: lend
 seed: 73
 data:
   name: cifar10
-  root: data/cifar10
   validation_size: 100
   max_train_samples: 64
   max_validation_samples: 32

@@ -67,6 +67,16 @@ def _source(directory: Path) -> tuple[dict, torch.nn.Module]:
 
 
 class DLDReadinessTest(unittest.TestCase):
+    def test_formal_config_uses_current_contract_and_full_budget(self) -> None:
+        path = ROOT / "configs/experiment/dld_cifar10_reproduction.yaml"
+        config = yaml.safe_load(path.read_text(encoding="utf-8"))
+        parsed = DLDConfig.from_mapping(config)
+        self.assertEqual(config["configuration_fidelity"], "paper_oriented")
+        self.assertEqual(config["loader"]["batch_size"], 200)
+        self.assertEqual(parsed.precorrection["k_neighbors"], 50)
+        self.assertEqual(parsed.diffusion["timesteps"], 1000)
+        self.assertEqual(parsed.epochs, 200)
+
     def test_real_short_config_is_full_data_external_sym20(self) -> None:
         path = ROOT / "configs" / "reproduction" / "cifar10_dld_sym20_short.yaml"
         config = yaml.safe_load(path.read_text(encoding="utf-8"))

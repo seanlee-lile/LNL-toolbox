@@ -1,59 +1,47 @@
-# Maintained low-dimensional workflow for the paper-exact binary asymmetric-RCN
-# importance-weight component. This synthetic run validates the complete KDE
-# path; it is not a reproduction of the paper's UCI tables.
+schema_version: 1
+kind: experiment
 method: importance_reweighting
 num_classes: 2
 label_convention: zero_one
 seed: 17
 output_root: artifacts/reproductions
-
 data:
   name: synthetic_binary_2d
   dimension: 2
   train_size: 4096
   validation_size: 1024
   test_size: 1024
-
 noise:
   name: binary_asymmetric_rcn
-  rho_positive: 0.20
-  rho_negative: 0.10
+  rho_positive: 0.2
+  rho_negative: 0.1
   seed: 29
-  # The current method selects checkpoints on observed/noisy validation labels.
-  # The held-out test split remains clean.
   validation_targets: noisy
-
 posterior_stage:
   name: kde
   bandwidth: 0.15
   rate_estimator: paper_raw_min
-
 model:
   name: linear
   in_features: 2
   num_classes: 2
-
 loss:
   name: ce
-
 optimizer:
   name: sgd
   lr: 0.1
   momentum: 0.0
   weight_decay: 0.0
-
 scheduler:
   name: none
-
 loader:
   batch_size: 128
   num_workers: 0
   pin_memory: false
-
 trainer:
   epochs: 50
   device: auto
-
 evaluation:
   selection_split: validation
-execution: {runner: importance_reweighting}
+execution:
+  runner: importance_reweighting

@@ -1,0 +1,70 @@
+# Formal evidence-chain configuration. The posterior-stage fields identified
+# by the paper match cifar10_dual_t_sym20.yaml. Loader, preprocessing, seeds,
+# and final-arm training choices are documented as implementation choices in
+# papers/dual-t/reproduction.md.
+method: dual_t
+seed: 1
+output_root: artifacts/reproductions
+data:
+  name: cifar10
+  root: data/cifar10
+  validation_size: 10000
+  augment: true
+  preprocessing: standard
+noise:
+  name: symmetric
+  rate: 0.2
+  seed: 1
+  validation_targets: noisy
+  manifest_filename: noise_manifest.npz
+loader:
+  batch_size: 128
+  num_workers: 0
+  pin_memory: true
+trainer:
+  device: auto
+evaluation:
+  selection_split: validation
+posterior_stage:
+  epochs: 100
+  checkpoint_selection: noisy_validation_accuracy
+  model:
+    name: resnet18
+    base_width: 64
+  loss:
+    name: ce
+  optimizer:
+    name: sgd
+    lr: 0.01
+    momentum: 0.9
+    nesterov: false
+    weight_decay: 0.0005
+  scheduler:
+    name: multistep
+    milestones: [50]
+    gamma: 0.1
+transition_stage: {}
+final_stage:
+  classifier: forward
+  epochs: 100
+  fresh_model: true
+  model:
+    name: resnet18
+    base_width: 64
+  loss:
+    name: ce
+  optimizer:
+    name: sgd
+    lr: 0.01
+    momentum: 0.9
+    nesterov: false
+    weight_decay: 0.0005
+  scheduler:
+    name: multistep
+    milestones: [50]
+    gamma: 0.1
+evidence:
+  include_noisy_ce: true
+  final_seed: 1
+  sampler_seed: 1001
+execution: {runner: dual_t}

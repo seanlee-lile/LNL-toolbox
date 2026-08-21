@@ -300,12 +300,16 @@ def _json_response(
     handler.wfile.write(body)
 
 
-def _recipe_payload() -> list[dict[str, object]]:
-    """Return all repository recipes for the beginner menu."""
+def _recipe_payload(*, include_all: bool = False) -> list[dict[str, object]]:
+    """Return curated templates, or the full catalog for advanced editing."""
 
     from lnl_toolbox.catalog import discover_recipes
 
-    recipes = discover_recipes(ROOT, include_conditional=True)
+    recipes = discover_recipes(
+        ROOT,
+        include_conditional=include_all,
+        public_only=not include_all,
+    )
     return [
         {
             "id": recipe.id,
@@ -316,6 +320,9 @@ def _recipe_payload() -> list[dict[str, object]]:
             "runner": recipe.runner,
             "epochs": recipe.epochs,
             "availability": recipe.availability,
+            "visibility": recipe.visibility,
+            "label": recipe.label,
+            "description": recipe.description,
         }
         for recipe in recipes
     ]
@@ -324,10 +331,12 @@ def _recipe_payload() -> list[dict[str, object]]:
 def _paper_payload() -> list[dict[str, object]]:
     """Return paper metadata and available recipe variants for the UI."""
 
-    from lnl_toolbox.catalog import load_papers
+    from lnl_toolbox.catalog import default_paper_config, load_papers
 
-    return [
-        {
+    payload = []
+    for paper in load_papers(ROOT):
+        default_config, default_recipe = default_paper_config(paper, root=ROOT)
+        payload.append({
             "id": paper.id,
             "acronym": paper.acronym,
             "title": paper.title,
@@ -335,6 +344,9 @@ def _paper_payload() -> list[dict[str, object]]:
             "year": paper.year,
             "implementation_status": paper.implementation_status,
             "reproduction_status": paper.reproduction_status,
+            "default_recipe_id": default_recipe.id,
+            "default_variant": default_config.variant,
+            "default_fidelity": default_config.configuration_fidelity,
             "configs": [
                 {
                     "recipe_id": config.recipe_id,
@@ -344,9 +356,8 @@ def _paper_payload() -> list[dict[str, object]]:
                 }
                 for config in paper.configs
             ],
-        }
-        for paper in load_papers(ROOT)
-    ]
+        })
+    return payload
 
 
 def _dataset_payload() -> dict[str, object]:
@@ -465,18 +476,40 @@ def _project_path(value: object) -> Path:
     return destination
 
 
-def _config_payload(recipe_id: object) -> dict[str, object]:
-    from lnl_toolbox.catalog import load_yaml, recipe_by_id
+def _config_payload(
+    recipe_id: object = None,
+    *,
+    path_value: object = None,
+) -> dict[str, object]:
+    from lnl_toolbox.catalog import load_yaml, recipe_by_id, validate_config
 
-    recipe = recipe_by_id(str(recipe_id), ROOT)
-    path = recipe.config_path.resolve()
+    if str(path_value or "").strip():
+        path = _project_path(path_value)
+        if not path.is_file():
+            raise FileNotFoundError(f"YAML 文件不存在：{path.relative_to(ROOT).as_posix()}")
+        config = load_yaml(path)
+        runner = validate_config(config).name
+        method_value = config.get("method", runner)
+        method = (
+            str(method_value.get("name", runner))
+            if isinstance(method_value, dict)
+            else str(method_value)
+        )
+        recipe_name = ""
+    else:
+        recipe = recipe_by_id(str(recipe_id), ROOT)
+        path = recipe.config_path.resolve()
+        config = load_yaml(path)
+        runner = recipe.runner
+        method = recipe.method
+        recipe_name = recipe.id
     return {
-        "recipe": recipe.id,
-        "runner": recipe.runner,
-        "method": recipe.method,
+        "recipe": recipe_name,
+        "runner": runner,
+        "method": method,
         "path": path.relative_to(ROOT).as_posix(),
         "content": path.read_text(encoding="utf-8"),
-        "config": load_yaml(path),
+        "config": config,
     }
 
 
@@ -563,10 +596,15 @@ def _editable_config_fields(config: object, *, prefix: str = "") -> list[dict[st
     return fields
 
 
-def _config_schema(recipe_id: object) -> dict[str, object]:
-    payload = _config_payload(recipe_id)
+def _config_schema(
+    recipe_id: object = None,
+    *,
+    path_value: object = None,
+) -> dict[str, object]:
+    payload = _config_payload(recipe_id, path_value=path_value)
     return {
         "recipe": payload["recipe"],
+        "source_path": payload["path"],
         "runner": payload["runner"],
         "method": payload["method"],
         "fields": _editable_config_fields(payload["config"]),
@@ -614,24 +652,46 @@ def _save_config(payload: object) -> dict[str, object]:
         raise ValueError("请求内容必须是 JSON 对象")
     destination = _project_path(payload.get("path"))
     recipe_id = payload.get("recipe")
+    source_path = payload.get("source_path")
+    content = payload.get("content")
     patches = payload.get("patches")
-    if not isinstance(recipe_id, str) or not recipe_id.strip():
-        raise ValueError("保存 YAML 必须指定来源 recipe")
-    if not isinstance(patches, list):
-        raise ValueError("只能通过参数菜单提交 YAML 修改")
-    from lnl_toolbox.catalog import load_yaml, recipe_by_id
+    from lnl_toolbox.catalog import load_yaml, recipe_by_id, validate_config
 
-    recipe = recipe_by_id(recipe_id, ROOT)
-    parsed = load_yaml(recipe.config_path)
-    fields = _field_map(parsed)
-    for patch in patches:
-        if not isinstance(patch, dict) or not isinstance(patch.get("path"), str):
-            raise ValueError("YAML 参数修改格式错误")
-        path = patch["path"]
-        field = fields.get(path)
-        if field is None:
-            raise ValueError(f"不允许修改配置结构或组件：{path}")
-        _set_config_path(parsed, path, _coerce_patch_value(field, patch.get("value")))
+    if content is not None:
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("YAML 内容不能为空")
+        try:
+            import yaml
+
+            parsed = yaml.safe_load(content)
+        except Exception as exc:
+            raise ValueError(f"YAML 解析失败：{exc}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError("YAML 顶层必须是 mapping")
+        validate_config(parsed)
+    else:
+        if isinstance(recipe_id, str) and recipe_id.strip():
+            recipe = recipe_by_id(recipe_id, ROOT)
+            parsed = load_yaml(recipe.config_path)
+        elif str(source_path or "").strip():
+            source = _project_path(source_path)
+            if not source.is_file():
+                raise FileNotFoundError("来源 YAML 不存在")
+            parsed = load_yaml(source)
+        else:
+            raise ValueError("保存 YAML 必须指定来源 recipe 或项目 YAML")
+        if not isinstance(patches, list):
+            raise ValueError("只能通过参数菜单提交 YAML 修改")
+        fields = _field_map(parsed)
+        for patch in patches:
+            if not isinstance(patch, dict) or not isinstance(patch.get("path"), str):
+                raise ValueError("YAML 参数修改格式错误")
+            path = patch["path"]
+            field = fields.get(path)
+            if field is None:
+                raise ValueError(f"不允许修改配置结构或组件：{path}")
+            _set_config_path(parsed, path, _coerce_patch_value(field, patch.get("value")))
+        validate_config(parsed)
     try:
         import yaml
 
@@ -688,7 +748,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/recipes":
             try:
-                _json_response(self, _recipe_payload())
+                query = parse_qs(urlparse(self.path).query)
+                include_all = query.get("all", [""])[0].lower() in {
+                    "1", "true", "yes"
+                }
+                _json_response(self, _recipe_payload(include_all=include_all))
             except Exception as exc:
                 _json_response(self, {"error": str(exc)}, 500)
             return
@@ -708,7 +772,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             try:
                 query = parse_qs(urlparse(self.path).query)
                 recipe_id = query.get("recipe", [""])[0]
-                _json_response(self, _config_payload(recipe_id))
+                path_value = query.get("path", [""])[0]
+                _json_response(
+                    self,
+                    _config_payload(recipe_id, path_value=path_value),
+                )
             except Exception as exc:
                 _json_response(self, {"error": str(exc)}, 400)
             return
@@ -716,7 +784,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             try:
                 query = parse_qs(urlparse(self.path).query)
                 recipe_id = query.get("recipe", [""])[0]
-                _json_response(self, _config_schema(recipe_id))
+                path_value = query.get("path", [""])[0]
+                _json_response(
+                    self,
+                    _config_schema(recipe_id, path_value=path_value),
+                )
             except Exception as exc:
                 _json_response(self, {"error": str(exc)}, 400)
             return
@@ -757,7 +829,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(length) or b"{}")
                 _json_response(self, _save_config(payload), 201)
-            except (TypeError, ValueError, FileExistsError, json.JSONDecodeError) as exc:
+            except (TypeError, ValueError, OSError, json.JSONDecodeError) as exc:
                 _json_response(self, {"error": str(exc)}, 400)
             return
         if path != "/api/run":

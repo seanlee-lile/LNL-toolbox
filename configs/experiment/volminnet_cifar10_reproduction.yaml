@@ -1,0 +1,71 @@
+schema_version: 1
+kind: experiment
+method: volminnet
+execution:
+  runner: volminnet
+configuration_fidelity: paper_protocol
+seed: 1
+output_root: artifacts/reproductions/volminnet-cifar10-sym20
+data:
+  name: cifar10
+  validation_size: 5000
+  validation_split:
+    strategy: stratified
+    rng: default_rng
+  augment: true
+  preprocessing: standard
+noise:
+  name: symmetric
+  rate: 0.2
+  seed: 1
+  sampling: transition
+  rng: default_rng
+  validation_targets: noisy
+  manifest_filename: noise_manifest.npz
+volminnet:
+  fidelity: paper_positive_logdet
+  model:
+    name: resnet18
+    base_width: 64
+  transition:
+    parameterization: fixed_diagonal_sigmoid_offdiag
+    convention: clean_to_noisy_row
+    normalization_axis: row
+    initialization:
+      mode: paper
+  objective:
+    classification: noisy_nll
+    volume:
+      mode: positive_logdet
+      coefficient: 0.0001
+  optimizer:
+    classifier:
+      name: sgd
+      lr: 0.01
+      momentum: 0.9
+      weight_decay: 0.001
+    transition:
+      name: sgd
+      lr: 0.01
+      momentum: 0.9
+      weight_decay: 0.001
+  scheduler:
+    classifier:
+      name: multistep
+      milestones: [30, 60]
+      gamma: 0.1
+    transition:
+      name: multistep
+      milestones: [30, 60]
+      gamma: 0.1
+  checkpoint_selection:
+    split: noisy_validation
+    metric: loss
+    mode: min
+loader:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+trainer:
+  epochs: 150
+  device: auto

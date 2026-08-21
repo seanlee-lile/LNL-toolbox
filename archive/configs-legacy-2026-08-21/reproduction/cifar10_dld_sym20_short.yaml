@@ -1,0 +1,67 @@
+# Full-data engineering short run for DLD on CIFAR-10 Sym20. The immutable
+# UPM checkpoint supplies pretrained features only; this is not a paper-exact
+# DLD numerical reproduction.
+method: dld
+configuration_fidelity: engineering
+execution: {runner: dld}
+seed: 1
+data:
+  name: cifar10
+  root: data/cifar10
+  validation_size: 5000
+loader: {batch_size: 256, num_workers: 4, pin_memory: true}
+noise:
+  name: symmetric
+  rate: 0.2
+  seed: 1
+  sampling: per_class
+  validation_targets: noisy
+dld:
+  fidelity:
+    name: paper_oriented_v2_cosine_similarity
+    hard_y0: averaged_views
+    direction_endpoint: estimated_yn
+    direction: yn_minus_y0
+    neighbor_metric: cosine_similarity
+    neighbor_weighting: inverse_neighbor_value
+    self_neighbor: include
+    divergence: kl_ps_to_pw
+    divergence_softmax: false
+    hard_yn_zero_denominator: fail
+    schedule: average
+    inference_initialization: zero
+    inference_steps: 5
+  feature_extractor:
+    source: external_checkpoint
+    model: &source_model {name: resnet18, base_width: 16}
+    external:
+      adapter: upm_main_best
+      run_directory_env: LNL_DLD_SOURCE_RUN
+      checkpoint_sha256: edb9387f2bc95b56c61ced551ef387746f1a49c5079f8dfbc966e583b34da062
+      manifest_sha256: fd919619d3ff55619d3e8dc9f937f674fbed0d084c83b5baf8301e51f59e867b
+      mapping_hash: 674b78dd41e2ae3c097ecedb9768eb9274fed8d95e66002bdf119dd263596dd9
+      dataset_fingerprint: 9c53dc2c001574ab3f1b78d48632b8a82d0003c754bf7367f230280068e118a4
+      model: *source_model
+  precorrection:
+    k_neighbors: 50
+    delta: 1.0e-6
+    gmm_components: 2
+    gmm_seed: 0
+    minimum_mean_separation: 1.0e-6
+    # Exact query chunking: the full reference set and stable ordering remain.
+    query_chunk_size: 64
+  diffusion:
+    timesteps: 100
+    epochs: 15
+    model: {independent_predictors: true, hidden_dim: 128, time_dim: 32}
+    optimizer:
+      direction: {name: adam, lr: 0.0001}
+      noise: {name: adam, lr: 0.0001}
+    scheduler:
+      direction: {name: none}
+      noise: {name: none}
+    ema: {enabled: true, decay: 0.999}
+  inference: {steps: 5, deterministic: true, initialization: zero}
+evaluation: {selection_split: validation, primary: accuracy}
+trainer: {device: auto}
+output_root: artifacts/reproductions/dld-cifar10-sym20-short

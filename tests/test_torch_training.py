@@ -33,7 +33,7 @@ from lnl_toolbox.training.checkpoint import (
     restore_rng_state,
     save_checkpoint,
 )
-from lnl_toolbox.training.experiment import build_model
+from lnl_toolbox.training.experiment import build_model, build_scheduler
 
 
 class TorchTrainingTest(unittest.TestCase):
@@ -241,6 +241,36 @@ class TorchTrainingTest(unittest.TestCase):
         convolutions = [module for module in model.modules() if isinstance(module, torch.nn.Conv2d)]
         self.assertEqual([module.out_channels for module in convolutions], [64, 64, 128, 128, 196, 196])
         self.assertEqual(model(torch.randn(2, 3, 32, 32)).shape, (2, 10))
+
+    def test_cnlcu_cnn9_matches_appendix_channels_and_shape(self):
+        model = build_model({"name": "cnlcu_cnn9"}, num_classes=10)
+        convolutions = [
+            module for module in model.modules()
+            if isinstance(module, torch.nn.Conv2d)
+        ]
+        self.assertEqual(
+            [module.out_channels for module in convolutions],
+            [128, 128, 128, 256, 256, 256, 512, 256, 128],
+        )
+        self.assertEqual(model(torch.randn(2, 3, 32, 32)).shape, (2, 10))
+
+    def test_linear_after_scheduler_keeps_then_decays_learning_rate(self):
+        model = torch.nn.Linear(2, 2)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
+        scheduler = build_scheduler(
+            optimizer,
+            {"name": "linear_after", "start_epoch": 2, "end_epoch": 5},
+            epochs=5,
+        )
+        values = [optimizer.param_groups[0]["lr"]]
+        for _ in range(5):
+            optimizer.step()
+            scheduler.step()
+            values.append(optimizer.param_groups[0]["lr"])
+        self.assertEqual(values[:3], [0.001, 0.001, 0.001])
+        self.assertAlmostEqual(values[3], 0.001 * 2 / 3)
+        self.assertAlmostEqual(values[4], 0.001 / 3)
+        self.assertEqual(values[5], 0.0)
 
     def test_existing_models_expose_compatible_feature_output(self):
         models = (

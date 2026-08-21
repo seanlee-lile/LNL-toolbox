@@ -8,9 +8,23 @@ from lnl_toolbox.algorithms.cnlcu import CNLCUConfig
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "configs/reproduction/cifar10_cnlcu_soft_sym20_short.yaml"
+FORMAL_CONFIG = ROOT / "configs/experiment/cnlcu_cifar10_reproduction.yaml"
 
 
 class CNLCUReadinessTest(unittest.TestCase):
+    def test_formal_config_matches_cifar10_paper_protocol(self) -> None:
+        config = yaml.safe_load(FORMAL_CONFIG.read_text(encoding="utf-8"))
+        method = CNLCUConfig.from_mapping(config)
+        self.assertEqual(config["configuration_fidelity"], "paper_protocol")
+        self.assertEqual(config["model"], {"name": "cnlcu_cnn9"})
+        self.assertEqual(config["optimizer"]["lr"], 0.001)
+        self.assertEqual(config["scheduler"], {
+            "name": "linear_after", "start_epoch": 80, "end_epoch": 200,
+        })
+        self.assertEqual(config["loader"]["batch_size"], 128)
+        self.assertEqual(config["trainer"]["epochs"], 200)
+        self.assertEqual(method.variant, "soft")
+
     def test_short_config_is_full_data_cnlcu_soft_sym20(self) -> None:
         config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
         method = CNLCUConfig.from_mapping(config)

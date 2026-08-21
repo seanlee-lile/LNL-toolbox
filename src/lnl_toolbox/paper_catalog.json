@@ -159,11 +159,12 @@
     "summary": "以双网络历史损失和不确定性证据执行 peer sample selection。",
     "mechanism": "CNLCU-S 使用软不确定性；CNLCU-H 使用论文公式修正的 LOF 截断，再执行双网络交叉更新。",
     "lifecycle": ["peer initialization", "history update", "uncertainty-aware selection", "cross update", "checkpointed history"],
-    "limitations": ["S/H smoke 已验证，但尚未完成论文多 seed 数值复现。", "H 明确采用 paper_formula_corrected_lof fidelity policy。"],
+    "limitations": ["提供一组完整预算 CIFAR-10 Sym20 CNLCU-S 正式配置，但尚未完成论文多 seed 数值复现。", "H 明确采用 paper_formula_corrected_lof fidelity policy。"],
     "implementation_status": "user_ready", "reproduction_status": "not_run", "availability": "runnable",
     "configs": [
       {"recipe_id":"cifar10-cnlcu-soft-smoke","profile":"smoke","variant":"cnlcu-s","configuration_fidelity":"smoke","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"},
-      {"recipe_id":"cifar10-cnlcu-hard-smoke","profile":"smoke","variant":"cnlcu-h","configuration_fidelity":"smoke","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}
+      {"recipe_id":"cifar10-cnlcu-hard-smoke","profile":"smoke","variant":"cnlcu-h","configuration_fidelity":"smoke","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"},
+      {"recipe_id":"cnlcu-cifar10-reproduction","profile":"reproduction","variant":"cnlcu-s-cifar10-sym20","configuration_fidelity":"paper_protocol","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}
     ],
     "concept_to_config": [{"concept":"uncertainty-aware peer selection","config":"cnlcu","implementation":"algorithms/cnlcu"}],
     "implementation_paths": ["src/lnl_toolbox/algorithms/cnlcu", "src/lnl_toolbox/training/cnlcu_experiment.py"]
@@ -186,9 +187,9 @@
     "summary": "Builds weak/strong-view label pre-corrections and learns directional and random label-diffusion predictors.",
     "mechanism": "Weighted-neighbor distributions and a divergence GMM form clean/noisy/hard groups; two independent predictors learn the label direction and injected noise for deterministic reverse prediction.",
     "lifecycle": ["frozen weak/strong feature extraction", "pre-correction artifact", "paired diffusion training", "noisy-validation selection", "clean-test evaluation"],
-    "limitations": ["The bundled profile is a workflow smoke with a repository-frozen model and synthetic symmetric noise.", "This is paper-oriented, not a paper numerical or released-code exact reproduction; zero inference initialization is an engineering policy."],
+    "limitations": ["The formal profile provides the full current-toolbox DLD lifecycle and paper training budget with a repository-frozen ResNet feature model and synthetic symmetric noise.", "It remains paper-oriented rather than released-code exact because the official ViT-L/14 feature path is not implemented; zero inference initialization is an engineering policy."],
     "implementation_status": "user_ready", "reproduction_status": "not_run", "availability": "runnable",
-    "configs": [{"recipe_id":"cifar10-dld-smoke","profile":"smoke","variant":"cifar10-workflow","configuration_fidelity":"paper_oriented","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}],
+    "configs": [{"recipe_id":"cifar10-dld-smoke","profile":"smoke","variant":"cifar10-workflow","configuration_fidelity":"paper_oriented","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"},{"recipe_id":"dld-cifar10-reproduction","profile":"reproduction","variant":"cifar10-sym20-full","configuration_fidelity":"paper_oriented","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}],
     "concept_to_config": [{"concept":"label pre-correction","config":"dld.precorrection","implementation":"algorithms/dld/precorrection.py"},{"concept":"directional diffusion","config":"dld.diffusion","implementation":"algorithms/dld/algorithm.py"}],
     "implementation_paths": ["src/lnl_toolbox/algorithms/dld", "src/lnl_toolbox/training/dld_experiment.py"]
   },
@@ -210,9 +211,9 @@
     "summary": "Jointly learns a clean-posterior classifier and a class-conditional transition matrix without anchor points.",
     "mechanism": "Optimizes noisy-label NLL and a positive-logdet minimum-volume term while updating the classifier and paper-parameterized transition together.",
     "lifecycle": ["manifest preparation", "joint classifier-transition training", "noisy-validation selection", "transition artifact publication", "clean-test evaluation"],
-    "limitations": ["The built-in profile is a smoke run, not a paper numerical reproduction.", "The paper formula and author code differ on positive logdet versus log-absolute-determinant; this implementation uses the explicit paper_positive_logdet fidelity."],
+    "limitations": ["A full-budget CIFAR-10 Sym20 paper-protocol configuration is available, but the paper's repeated-run numerical reproduction has not been completed.", "The paper formula and author code differ on positive logdet versus log-absolute-determinant; this implementation uses the explicit paper_positive_logdet fidelity."],
     "implementation_status": "user_ready", "reproduction_status": "not_run", "availability": "runnable",
-    "configs": [{"recipe_id":"cifar10-volminnet-smoke","profile":"smoke","variant":"cifar10-sym40","configuration_fidelity":"paper_oriented","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}],
+    "configs": [{"recipe_id":"cifar10-volminnet-smoke","profile":"smoke","variant":"cifar10-sym40","configuration_fidelity":"paper_oriented","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"},{"recipe_id":"volminnet-cifar10-reproduction","profile":"reproduction","variant":"cifar10-sym20","configuration_fidelity":"paper_protocol","implementation_status":"user_ready","reproduction_status":"not_run","availability":"runnable"}],
     "concept_to_config": [{"concept":"joint minimum-volume objective","config":"volminnet.objective","implementation":"algorithms/volminnet/objective.py"},{"concept":"trainable transition","config":"volminnet.transition","implementation":"algorithms/volminnet/transition.py"}],
     "implementation_paths": ["src/lnl_toolbox/algorithms/volminnet", "src/lnl_toolbox/training/volminnet_experiment.py"]
   },

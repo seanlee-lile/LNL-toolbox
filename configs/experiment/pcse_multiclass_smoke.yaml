@@ -1,6 +1,7 @@
+schema_version: 1
+kind: experiment
 method: pcse
 seed: 17
-
 data:
   name: synthetic_multiclass
   num_classes: 3
@@ -8,17 +9,15 @@ data:
   train_size: 300
   validation_size: 90
   test_size: 90
-
 noise:
   mode: generated
-  type: symmetric
   rate: 0.1
   seed: 29
   sampling: per_class
   rng: default_rng
   validation_targets: noisy
   manifest_filename: noise_manifest.npz
-
+  name: symmetric
 pretraining_stage:
   epochs: 10
   checkpoint_selection: noisy_validation_accuracy
@@ -33,35 +32,28 @@ pretraining_stage:
     weight_decay: 0.0001
   scheduler:
     name: none
-
 transition_stage:
   name: dual_t
-
 feature_stage:
   layers:
-    - name: hidden1
-      pooling: global_average
-    - name: hidden2
-      pooling: global_average
-
+  - name: hidden1
+    pooling: global_average
+  - name: hidden2
+    pooling: global_average
 statistics_stage:
   condition_limit: 100000000.0
-
 gda_stage:
   covariance_ridge: 0.1
-
 ensemble_stage:
   epochs: 3
   learning_rate: 0.05
-
 loader:
   batch_size: 30
   num_workers: 0
   pin_memory: false
-
 trainer:
   device: cpu
-
 evaluation:
   selection_split: validation
-execution: {runner: pcse}
+execution:
+  runner: pcse

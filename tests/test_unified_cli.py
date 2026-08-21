@@ -16,10 +16,12 @@ import yaml
 from lnl_toolbox import catalog as catalog_module
 from lnl_toolbox.catalog import (
     discover_recipes,
+    default_paper_config,
     find_project_root,
     load_papers,
     load_yaml,
     load_recipe_config,
+    recipe_by_id,
     resolve_config_paths,
     select_paper_config,
     validate_config,
@@ -112,6 +114,14 @@ class CatalogTest(unittest.TestCase):
             for item in paper.configs:
                 self.assertIn(item.recipe_id, recipes)
 
+    def test_every_paper_has_one_formal_default(self) -> None:
+        papers = load_papers(ROOT)
+        self.assertEqual(len(papers), 26)
+        defaults = [default_paper_config(paper, root=ROOT) for paper in papers]
+        self.assertEqual(len(defaults), 26)
+        self.assertTrue(all(config.profile == "reproduction" for config, _ in defaults))
+        self.assertEqual(len({paper.id for paper in papers}), 26)
+
     def test_manifest_excludes_local_untracked_yaml_and_conditional_recipes(self) -> None:
         recipes = {item.id for item in discover_recipes(ROOT)}
         self.assertNotIn("cifar10-symmetric40-all-e5", recipes)
@@ -124,6 +134,18 @@ class CatalogTest(unittest.TestCase):
         }
         self.assertIn("mentornet-dd-cifar100-symmetric04-smoke", all_recipes)
         self.assertIn("cifar10-pcse-reproduction", all_recipes)
+
+    def test_public_recipe_catalog_is_small_without_hiding_internal_lookup(self) -> None:
+        public = discover_recipes(ROOT, public_only=True)
+        self.assertEqual(len(public), 4)
+        self.assertTrue(all(item.visibility == "public" for item in public))
+        public_ids = {item.id for item in public}
+        self.assertIn("cifar10-clean-smoke", public_ids)
+        self.assertNotIn("fine-cifar100n-reproduction", public_ids)
+        self.assertEqual(
+            recipe_by_id("fine-cifar100n-reproduction", ROOT).id,
+            "fine-cifar100n-reproduction",
+        )
 
     def test_method_specific_preflight_and_conditional_artifact(self) -> None:
         cnlcu = load_recipe_config(
@@ -582,10 +604,44 @@ class UnifiedCliTest(unittest.TestCase):
             self.assertIn("DSS requires selector.name='all'", error)
             self.assertFalse(output.exists())
 
+    def test_compose_copies_dedicated_paper_recipe_without_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "volminnet.yaml"
+            code, text, error = self.invoke(
+                "compose", "create",
+                "--base", "volminnet-cifar10-reproduction",
+                "--output", str(output),
+            )
+            self.assertEqual((code, error), (0, ""))
+            self.assertIn("论文生命周期：volminnet", text)
+            self.assertEqual(
+                load_yaml(output),
+                load_yaml(ROOT / "configs/experiment/volminnet_cifar10_reproduction.yaml"),
+            )
+
+            rejected = Path(directory) / "invalid.yaml"
+            code, _, error = self.invoke(
+                "compose", "create",
+                "--base", "volminnet-cifar10-reproduction",
+                "--loss", "ce",
+                "--output", str(rejected),
+            )
+            self.assertEqual(code, 2)
+            self.assertIn("only be copied without component overrides", error)
+            self.assertFalse(rejected.exists())
+
     def test_list_experiments_marks_status_and_hides_conditional(self) -> None:
         code, output, _ = self.invoke("list", "experiments", "--profile", "smoke")
         self.assertEqual(code, 0)
         self.assertIn("IMPLEMENTATION", output)
+        self.assertIn("cifar10-clean-smoke", output)
+        self.assertNotIn("cifar10-cnlcu-soft-smoke", output)
+        self.assertNotIn("mentornet", output)
+
+        code, output, _ = self.invoke(
+            "list", "experiments", "--profile", "smoke", "--all"
+        )
+        self.assertEqual(code, 0)
         self.assertIn("cifar10-cnlcu-soft-smoke", output)
         self.assertNotIn("mentornet", output)
 
@@ -616,7 +672,9 @@ with contextlib.redirect_stdout(io.StringIO()):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_volminnet_is_discoverable_and_paper_mapped(self) -> None:
-        code, output, _ = self.invoke("list", "experiments", "--profile", "smoke")
+        code, output, _ = self.invoke(
+            "list", "experiments", "--profile", "smoke", "--all"
+        )
         self.assertEqual(code, 0)
         self.assertIn("cifar10-volminnet-smoke", output)
         code, output, _ = self.invoke("papers", "show", "volminnet")

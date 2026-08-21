@@ -1,12 +1,11 @@
-# Engineering real-data workflow consuming one immutable full-budget UPM
-# CIFAR-10 checkpoint. This is not a paper-exact numerical reproduction.
+schema_version: 1
+kind: experiment
 method: pcse
 configuration_fidelity: engineering
 seed: 1
 output_root: artifacts/reproductions/pcse-cifar10-upm-sym40
 data:
   name: cifar10
-  root: data/cifar10
   num_classes: 10
   validation_size: 5000
   split_strategy: stratified
@@ -16,7 +15,6 @@ data:
 noise:
   mode: external
   name: symmetric
-  type: symmetric
   rate: 0.4
   seed: 1
   sampling: per_class
@@ -27,7 +25,7 @@ pretraining_stage:
   mode: external_checkpoint
   epochs: 0
   checkpoint_selection: noisy_validation_accuracy
-  model: &source_model
+  model: &id001
     name: resnet18
     base_width: 16
   source:
@@ -37,11 +35,16 @@ pretraining_stage:
     manifest_sha256: fd919619d3ff55619d3e8dc9f937f674fbed0d084c83b5baf8301e51f59e867b
     mapping_hash: 674b78dd41e2ae3c097ecedb9768eb9274fed8d95e66002bdf119dd263596dd9
     dataset_fingerprint: 9c53dc2c001574ab3f1b78d48632b8a82d0003c754bf7367f230280068e118a4
-    model: *source_model
-  loss: {name: ce}
-  # Lifecycle owner only; external pretraining performs no optimizer step.
-  optimizer: {name: sgd, lr: 0.05, momentum: 0.9, weight_decay: 0.0001}
-  scheduler: {name: none}
+    model: *id001
+  loss:
+    name: ce
+  optimizer:
+    name: sgd
+    lr: 0.05
+    momentum: 0.9
+    weight_decay: 0.0001
+  scheduler:
+    name: none
 transition_stage:
   name: paper_volmin
   epochs: 1
@@ -51,23 +54,36 @@ transition_stage:
     model_lr: 0.0002
     transition_lr: 0.001
     weight_decay: 0.0001
-  scheduler: {name: none}
+  scheduler:
+    name: none
   parameterization:
     name: diagonal_dominant
     initial_flip_mass: 0.05
     max_flip_mass: 0.49
     temperature: 1.0
     seed: 37
-  determinant_tolerance: 1.0e-6
+  determinant_tolerance: 1.0e-06
   condition_limit: 1000000.0
 feature_stage:
   layers:
-    - {name: layer3, pooling: global_average}
-    - {name: layer4, pooling: global_average}
-statistics_stage: {condition_limit: 100000000.0}
-gda_stage: {covariance_ridge: 0.1}
-ensemble_stage: {epochs: 5, learning_rate: 0.05}
-loader: {batch_size: 128, num_workers: 4, pin_memory: true}
-trainer: {device: auto}
-evaluation: {selection_split: validation}
-execution: {runner: pcse}
+  - name: layer3
+    pooling: global_average
+  - name: layer4
+    pooling: global_average
+statistics_stage:
+  condition_limit: 100000000.0
+gda_stage:
+  covariance_ridge: 0.1
+ensemble_stage:
+  epochs: 5
+  learning_rate: 0.05
+loader:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+trainer:
+  device: auto
+evaluation:
+  selection_split: validation
+execution:
+  runner: pcse

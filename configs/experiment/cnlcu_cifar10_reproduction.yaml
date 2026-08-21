@@ -1,0 +1,67 @@
+schema_version: 1
+kind: experiment
+method: cnlcu
+execution:
+  runner: cnlcu
+configuration_fidelity: paper_protocol
+seed: 1
+output_root: artifacts/reproductions/cnlcu-cifar10-sym20
+data:
+  name: cifar10
+  validation_size: 5000
+  validation_split:
+    strategy: stratified
+    rng: default_rng
+  augment: true
+  preprocessing: standard
+noise:
+  name: symmetric
+  rate: 0.2
+  seed: 1
+  sampling: transition
+  rng: default_rng
+  validation_targets: noisy
+  manifest_filename: noise_manifest.npz
+loss:
+  name: ce
+model:
+  name: cnlcu_cnn9
+optimizer:
+  name: adam
+  lr: 0.001
+  beta1: 0.9
+  weight_decay: 0.0
+scheduler:
+  name: linear_after
+  start_epoch: 80
+  end_epoch: 200
+cnlcu:
+  variant: soft
+  model_count: 2
+  noise_rate: 0.2
+  initialization:
+    peer_seed_offset: 1
+  remember_schedule:
+    name: linear
+    start: 1.0
+    end: 0.8
+    gradual_epochs: 10
+  history:
+    window_size: 5
+    storage_dtype: float32
+  uncertainty:
+    sigma_squared: 0.01
+  selection:
+    count_rule: floor
+    tie_break: stable_sample_index
+loader:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+evaluation:
+  selection_split: validation
+  primary: mean_peer_accuracy
+  ensemble: mean_probabilities
+trainer:
+  epochs: 200
+  device: auto

@@ -1,24 +1,30 @@
+schema_version: 1
+kind: experiment
 seed: 2013
 output_root: artifacts/reproductions/binary-risk-natarajan-formal-50ep
-
 data:
   name: synthetic_binary_2d
   train_size: 512
   test_size: 2048
   seed: 2013
-
 noise:
   rho_positive: 0.4
   rho_negative: 0.4
   seed: 2013
-
+  name: binary_asymmetric_rcn
 risk:
   name: natarajan_unbiased
   rho_positive: 0.4
   rho_negative: 0.4
-
-model: {name: linear}
-batch_size: 64
-learning_rate: 0.01
-epochs: 50
-execution: {runner: binary}
+model:
+  name: linear
+execution:
+  runner: binary
+loader:
+  batch_size: 64
+optimizer:
+  lr: 0.01
+  name: sgd
+  momentum: 0.9
+trainer:
+  epochs: 50

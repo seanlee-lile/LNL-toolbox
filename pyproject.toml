@@ -74,6 +74,7 @@ skip_covered = true
     "configs/experiment/cifar10_clean_smoke.yaml",
     "configs/experiment/cifar10_cnlcu_hard_smoke.yaml",
     "configs/experiment/cifar10_cnlcu_soft_smoke.yaml",
+    "configs/experiment/cnlcu_cifar10_reproduction.yaml",
     "configs/experiment/cifar10_coteaching_reproduction.yaml",
     "configs/experiment/cifar10_coteaching_smoke.yaml",
     "configs/experiment/cifar10_dual_t_evidence_smoke.yaml",
@@ -95,6 +96,7 @@ skip_covered = true
     "configs/experiment/cwd_cifar10_smoke.yaml",
     "configs/experiment/dss_cifar10_symmetric05_reproduction.yaml",
     "configs/experiment/dss_cifar10_symmetric05_smoke.yaml",
+    "configs/experiment/dld_cifar10_reproduction.yaml",
     "configs/experiment/fine_cifar100n_reproduction.yaml",
     "configs/experiment/fine_cifar100n_smoke.yaml",
     "configs/experiment/gce_cifar10_noise02_reproduction.yaml",
@@ -116,6 +118,7 @@ skip_covered = true
     "configs/experiment/pdl_cifar10_reproduction.yaml",
     "configs/experiment/pdl_cifar10_smoke.yaml",
     "configs/experiment/upm_cifar10_reproduction.yaml",
+    "configs/experiment/volminnet_cifar10_reproduction.yaml",
 ]
 "share/lnl-toolbox/configs/reproduction" = [
     "configs/reproduction/cifar10_cnlcu_soft_sym20_short.yaml",

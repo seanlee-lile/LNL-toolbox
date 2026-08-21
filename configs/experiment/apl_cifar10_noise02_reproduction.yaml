@@ -1,8 +1,9 @@
+schema_version: 1
+kind: experiment
 seed: 1
 output_root: artifacts/reproductions
 data:
   name: cifar10
-  root: data/cifar10
   validation_size: 0
   max_train_samples: null
   max_validation_samples: null
@@ -20,11 +21,13 @@ loss:
   name: apl
   alpha: 1.0
   beta: 1.0
-  active: {name: nce}
+  active:
+    name: nce
   passive:
     name: rce
     log_zero: -9.210340371976184
-selector: {name: all}
+selector:
+  name: all
 parameter_update:
   name: standard
   max_grad_norm: 5.0
@@ -54,5 +57,7 @@ trainer:
 evaluation:
   selection_split: test
   allow_test_selection: true
-  loss: {name: ce}
-execution: {runner: supervised}
+  loss:
+    name: ce
+execution:
+  runner: supervised

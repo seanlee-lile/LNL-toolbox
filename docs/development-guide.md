@@ -197,6 +197,12 @@ lnl compare artifacts/sweeps/example
 lnl report artifacts/sweeps/example
 ```
 
+所有活动 YAML 使用 `schema_version: 1`。完整 recipe 写 `kind: experiment`，参数片段写
+`kind: fragment`。不要在公开 recipe 中写本机 CIFAR/MNIST root；先执行
+`lnl data register`，只有在同一 adapter 登记多份数据时才通过 `--data <alias>` 选择。
+配置读取会拒绝未知顶层字段和旧式 `noise.type`、顶层 `epochs/batch_size/learning_rate`。
+原始迁移前配置位于 `archive/configs-legacy-2026-08-21/`，仅供恢复和比对。
+
 `--dry-run` 默认验证数据与外部 artifact，只跳过真正训练和 checkpoint 写入；仅当
 数据尚未准备时才使用 `--no-check-data`。Sweep matrix 必须调用
 `core.config_overrides` 的 dotted-path override，不得自行修改嵌套配置。每个任务由

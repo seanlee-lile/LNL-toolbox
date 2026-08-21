@@ -11,6 +11,7 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
 from lnl_toolbox.algorithms.binary_risk import NatarajanUnbiasedRisk
+from lnl_toolbox.core.config_schema import normalize_experiment_config
 from lnl_toolbox.core.hyperparameters import resolve_parameter_sampling
 from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.data.binary_benchmarks import (
@@ -123,7 +124,8 @@ def run_binary_experiment(config: Mapping[str, Any], output_dir: str | Path | No
 
     resolved_config, record = resolve_parameter_sampling(config)
     resolved_config = dict(resolved_config)
-    resolved_config.setdefault("loader", {"batch_size": int(resolved_config.get("batch_size", 64))})
+    resolved_config.setdefault("execution", {"runner": "binary"})
+    resolved_config = normalize_experiment_config(resolved_config)
     destination = Path(output_dir or resolved_config.get("output_root", "artifacts/binary")).resolve()
     destination.mkdir(parents=True, exist_ok=True)
     seed = int(resolved_config.get("seed", 1))
@@ -143,15 +145,21 @@ def run_binary_experiment(config: Mapping[str, Any], output_dir: str | Path | No
     sample = prepared.dataset_for(DataRole.TRAIN)[0]
     input_dim = int(torch.as_tensor(sample["input"]).numel())
     model_config = dict(resolved_config.get("model", {}))
-    if not model_config:
-        model_config = {"name": "mlp", "hidden_width": resolved_config.get("hidden_width", 128)}
     model = build_binary_model(input_dim, model_config)
-    optimizer = torch.optim.SGD(model.parameters(), lr=float(resolved_config.get("learning_rate", 0.01)), momentum=0.9)
+    optimizer_config = dict(resolved_config["optimizer"])
+    if str(optimizer_config.get("name", "sgd")).lower() != "sgd":
+        raise ValueError("binary experiment currently requires optimizer.name: sgd")
+    optimizer = torch.optim.SGD(
+        model.parameters(),
+        lr=float(optimizer_config["lr"]),
+        momentum=float(optimizer_config.get("momentum", 0.9)),
+        weight_decay=float(optimizer_config.get("weight_decay", 0.0)),
+    )
     risk = None
     risk_config = resolved_config.get("risk")
     if isinstance(risk_config, Mapping):
         risk = NatarajanUnbiasedRisk(float(risk_config["rho_positive"]), float(risk_config["rho_negative"]))
-    epochs = int(resolved_config.get("epochs", 1))
+    epochs = int(resolved_config["trainer"]["epochs"])
     if epochs <= 0:
         raise ValueError("epochs must be positive")
     rows = []

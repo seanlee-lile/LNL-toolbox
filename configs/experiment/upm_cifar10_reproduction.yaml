@@ -1,5 +1,5 @@
-# Real CIFAR-10 full-budget UPM usability workflow with symmetric 40% noise.
-# This engineering profile is not the paper's IDN numerical reproduction.
+schema_version: 1
+kind: experiment
 method: upm
 execution:
   runner: upm
@@ -7,7 +7,6 @@ configuration_fidelity: engineering
 seed: 1
 data:
   name: cifar10
-  root: data/cifar10
   validation_size: 5000
   split_strategy: stratified
   split_rng: default_rng
@@ -37,7 +36,10 @@ upm:
       weight_decay: 0.0001
     scheduler:
       name: multistep
-      milestones: [40, 80, 120]
+      milestones:
+      - 40
+      - 80
+      - 120
       gamma: 0.1
     best_metric: noisy_validation_accuracy
   psi:
@@ -57,12 +59,15 @@ upm:
       weight_decay: 0.0001
     scheduler:
       name: multistep
-      milestones: [40, 80, 120]
+      milestones:
+      - 40
+      - 80
+      - 120
       gamma: 0.1
   confusing_probability:
     initial_value: 0.01
     learning_rate: 0.7
-    epsilon: 1.0e-8
+    epsilon: 1.0e-08
     update_start_epoch: 35
     update_interval_epochs: 5
 evaluation:
