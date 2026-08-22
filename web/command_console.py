@@ -170,6 +170,63 @@ COMMANDS: dict[str, CommandSpec] = {
 }
 
 
+TUTORIAL_STEPS: tuple[dict[str, str], ...] = (
+    {
+        "id": "doctor",
+        "label": "检查环境",
+        "summary": "确认 Python、PyTorch、CUDA、配置目录和输出目录可用。",
+        "why": "先排除环境问题，避免把依赖或 CUDA 错误误认为训练算法错误。",
+        "success": "命令退出码为 0，关键项目均显示 OK。",
+    },
+    {
+        "id": "list",
+        "label": "选择 Smoke 实验",
+        "summary": "浏览公开的短训练 recipe，并选择本教程后续使用的模板。",
+        "why": "Smoke 只用于确认训练链路；它不会被误写成论文数值复现。",
+        "success": "实验表成功加载，所选 recipe 出现在列表中。",
+    },
+    {
+        "id": "validate",
+        "label": "验证配置与数据",
+        "summary": "检查 runner、模型、组件、数据路径和条件依赖。",
+        "why": "在创建模型和训练产物前，先发现配置或数据问题。",
+        "success": "配置验证成功，并显示配置路径和实际 runner。",
+    },
+    {
+        "id": "dry-run",
+        "label": "预演训练计划",
+        "summary": "查看实际 runner、数据、模型、预算和选模协议，但不训练。",
+        "why": "确认即将执行的生命周期与预期一致，同时不生成 checkpoint。",
+        "success": "预览显示所选 recipe 的执行计划，输出目录中没有新增训练状态。",
+    },
+    {
+        "id": "run",
+        "label": "运行 Smoke",
+        "summary": "按所选 recipe 的原始短预算运行，并保存到独立输出目录。",
+        "why": "只有实际经过数据、模型、反向传播和 checkpoint，才能证明训练链路可用。",
+        "success": "训练退出码为 0，并生成 resolved config、指标和 checkpoint。",
+    },
+    {
+        "id": "resume",
+        "label": "检查并恢复",
+        "summary": "读取运行阶段、目标轮次、指标和 checkpoint，再判断是否需要恢复。",
+        "why": "已达到目标的运行不应盲目重启；未完成的运行才从 last checkpoint 继续。",
+        "success": "未完成时恢复成功；已完成时明确显示无需恢复。",
+    },
+)
+
+
+def _tutorial_payload() -> dict[str, object]:
+    """Return the versioned beginner workflow consumed by the local Web UI."""
+
+    return {
+        "version": 1,
+        "guide": "docs/LNL-Toolbox-简明操作教程.md",
+        "sequence": [step["id"] for step in TUTORIAL_STEPS],
+        "steps": [dict(step) for step in TUTORIAL_STEPS],
+    }
+
+
 @dataclass
 class Job:
     job_id: str
@@ -1220,6 +1277,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     for spec in COMMANDS.values()
                 ],
             )
+            return
+        if path == "/api/tutorial":
+            _json_response(self, _tutorial_payload())
             return
         if path == "/api/recipes":
             try:

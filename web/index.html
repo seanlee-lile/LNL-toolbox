@@ -108,6 +108,27 @@
       white-space: pre-wrap; overflow-wrap: anywhere;
     }
     .note { margin-top: 14px; padding: 10px 12px; border-left: 3px solid #f59e0b; color: #fde68a; background: rgba(120, 80, 0, .18); font-size: 12px; }
+    .tutorial-steps { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 7px; margin: 0 0 14px; }
+    .tutorial-step { min-width: 0; padding: 9px 8px; background: #172033; color: var(--muted); }
+    .tutorial-step strong { display: block; color: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tutorial-step.active { border-color: var(--accent); color: #bfdbfe; background: #294568; }
+    .tutorial-step.passed, .tutorial-step.not-needed { border-color: var(--good); color: var(--good); }
+    .tutorial-step.failed { border-color: var(--bad); color: #fecaca; }
+    .tutorial-step:disabled { cursor: not-allowed; opacity: .55; }
+    .tutorial-card { padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: #111a2a; margin-bottom: 12px; }
+    .tutorial-card h3 { margin: 0 0 7px; color: #bfdbfe; font-size: 16px; }
+    .tutorial-card p { margin: 5px 0; }
+    .tutorial-why { color: var(--muted); }
+    .tutorial-success { color: #a7f3d0; }
+    .tutorial-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+    .tutorial-nav .progress-label { margin-left: auto; color: var(--muted); font-size: 12px; }
+    .tutorial-inspection { margin-top: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: #0b1220; }
+    .tutorial-inspection.success { border-color: #226c57; }
+    .tutorial-inspection.failed { border-color: #7f3030; color: #fecaca; }
+    .tutorial-inspection p { margin: 3px 0; }
+    .tutorial-quick { margin-top: 14px; border: 1px solid var(--line); border-radius: 9px; background: #172033; }
+    .tutorial-quick > summary { cursor: pointer; padding: 10px 12px; color: #bfdbfe; }
+    .tutorial-quick-body { padding: 0 12px 12px; }
     .data-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0 0 14px; }
     .data-step { border: 1px solid var(--line); border-radius: 9px; padding: 9px 10px; color: var(--muted); background: #172033; }
     .data-step.active { border-color: var(--accent); color: #bfdbfe; }
@@ -134,7 +155,7 @@
     @media (max-width: 900px) {
       main { padding: 16px; }
       .layout { grid-template-columns: 1fr; }
-      .form-grid, .data-steps { grid-template-columns: 1fr; }
+      .form-grid, .data-steps, .tutorial-steps { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -202,7 +223,7 @@
   <script>
     const recipeMode = window.location.pathname === "/recipe" || window.location.pathname === "/recipe/";
     const allModules = [
-      { id: "beginner", label: "新手模式", description: "用配方、动作和轮次生成安全的 lnl 指令。", hint: "检查 → 预演 → 训练" },
+      { id: "beginner", label: "新手教程", description: "按顺序完成环境检查、实验选择、验证、预演、训练和恢复判断。", hint: "doctor → list → validate → dry-run → run → resume" },
       { id: "yaml", label: "新建 YAML", description: "从已有 recipe 组合损失、选择器和训练策略参数。", hint: "参数可选，实时预览" },
       { id: "data", label: "本地数据集", description: "登记本机路径，并分别检查布局或完成 1 epoch 训练验证。", hint: "registered ≠ training_verified" },
       { id: "sweep", label: "多 seed Sweep", description: "为同一 recipe 顺序运行多个随机种子。", hint: "支持中断后恢复" },
@@ -213,7 +234,7 @@
     const modules = allModules;
     const sweepModule = modules.find(function (item) { return item.id === "sweep"; });
     if (sweepModule) { sweepModule.label = "参数 Sweep"; sweepModule.description = "对多个参数取值执行笛卡尔积，可选叠加多个随机种子。"; sweepModule.hint = "参数矩阵 × 可选 seeds"; }
-    const state = { selected: null, request: null, jobId: null, timer: null, resultTimer: null, module: recipeMode ? "yaml" : "beginner", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, yamlSchema: null, yamlSourcePath: "", yamlTextDirty: false, pendingYamlPath: "", trainingData: "", dataAction: "list", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, removeConfirmed: false, sweepSchema: null, sweepRows: [], sweepPlan: null, resultData: null, resultSelected: [], resultFilter: "", resultListCollapsed: false, resultListInitialized: false, resumeData: null, resumeInspectionKey: "", paperId: "", paperRecipe: "" };
+    const state = { selected: null, request: null, jobId: null, timer: null, resultTimer: null, module: recipeMode ? "yaml" : "beginner", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, tutorial: {steps:[], sequence:[]}, tutorialStep: 0, tutorialCompleted: {}, tutorialRunningStep: "", tutorialRecipe: "cifar10-symmetric-ce-smoke", tutorialData: "", tutorialOutput: "artifacts/runs/tutorial-ce-smoke", tutorialResume: null, tutorialQuickMode: false, tutorialQuickAction: "validate", tutorialQuickEpochs: "1", tutorialQuickSeeds: "1 2 3", yamlSchema: null, yamlSourcePath: "", yamlTextDirty: false, pendingYamlPath: "", trainingData: "", dataAction: "list", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, removeConfirmed: false, sweepSchema: null, sweepRows: [], sweepPlan: null, resultData: null, resultSelected: [], resultFilter: "", resultListCollapsed: false, resultListInitialized: false, resumeData: null, resumeInspectionKey: "", paperId: "", paperRecipe: "" };
     if (recipeMode) {
       document.getElementById("page-title").textContent = "LNL Toolbox Recipe Editor";
       document.getElementById("page-subtitle").textContent = "从已有 recipe 组合配置，并查看或保存 YAML。";
@@ -291,26 +312,114 @@
     function commonFormStart() { return '<div class="form-grid">'; }
     function commonFormEnd() { return '</div>'; }
 
+    function tutorialStatus(stepId) {
+      return state.tutorialCompleted[stepId] || "pending";
+    }
+    function tutorialStepAvailable(index) {
+      if (index <= 0) return true;
+      return (state.tutorial.steps || []).slice(0, index).every(function (step) {
+        return ["passed", "not-needed"].includes(tutorialStatus(step.id));
+      });
+    }
+    function tutorialInspectionHtml() {
+      if (!state.tutorialResume) {
+        return '<div class="tutorial-inspection"><p>训练完成后点击“检查运行目录”，系统会读取配置、指标和 checkpoint，再决定是否允许恢复。</p></div>';
+      }
+      if (state.tutorialResume.error) {
+        return '<div class="tutorial-inspection failed"><strong>检查失败</strong><p>' + escapeHtml(state.tutorialResume.error) + '</p></div>';
+      }
+      const info = state.tutorialResume;
+      const files = (info.files || []).map(function (item) { return item.name; }).join("、") || "-";
+      const outcome = info.status === "completed"
+        ? "已达到目标轮次，无需恢复。这个判断本身就是本步骤的正确结果。"
+        : info.resumable
+          ? "运行尚未完成，可执行下方 resume 指令继续。"
+          : "当前目录不可恢复，请根据错误提示处理。";
+      const errors = (info.errors || []).map(function (item) { return '<p>阻塞：' + escapeHtml(item) + '</p>'; }).join("");
+      return '<div class="tutorial-inspection ' + (info.status === "completed" || info.resumable ? 'success' : 'failed') + '">' +
+        '<p><strong>状态：</strong>' + escapeHtml(info.status || "unknown") + '；<strong>阶段：</strong>' + escapeHtml(info.phase || "-") + '</p>' +
+        '<p><strong>进度：</strong>' + escapeHtml(info.current_epoch ?? "-") + ' / ' + escapeHtml(info.target_epoch ?? "-") + ' epoch；<strong>checkpoint：</strong>' + escapeHtml(info.checkpoint || "last") + '</p>' +
+        '<p><strong>文件：</strong>' + escapeHtml(files) + '</p><p>' + escapeHtml(outcome) + '</p>' + errors + '</div>';
+    }
+    function captureTutorialInputs() {
+      state.tutorialRecipe = selectValue("tutorial-recipe", state.tutorialRecipe);
+      state.tutorialData = selectValue("tutorial-data", state.tutorialData);
+      state.tutorialOutput = selectValue("tutorial-output", state.tutorialOutput).trim();
+      state.tutorialQuickAction = selectValue("tutorial-quick-action", state.tutorialQuickAction);
+      state.tutorialQuickEpochs = selectValue("tutorial-quick-epochs", state.tutorialQuickEpochs);
+      state.tutorialQuickSeeds = selectValue("tutorial-quick-seeds", state.tutorialQuickSeeds);
+    }
+    async function inspectTutorialRun() {
+      captureTutorialInputs();
+      if (!state.tutorialOutput) return;
+      statusNode.textContent = "正在检查运行目录...";
+      statusNode.className = "status running";
+      try {
+        const query = new URLSearchParams({path: state.tutorialOutput, checkpoint: "last"});
+        const response = await fetch("/api/resume-inspect?" + query.toString());
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "运行目录检查失败");
+        state.tutorialResume = payload;
+        if (payload.status === "completed") state.tutorialCompleted.resume = "not-needed";
+        statusNode.textContent = payload.status === "completed" ? "运行已完成，无需恢复" : payload.resumable ? "检查完成，可以恢复" : "检查完成，但当前不可恢复";
+        statusNode.className = payload.status === "completed" || payload.resumable ? "status success" : "status failed";
+      } catch (error) {
+        state.tutorialResume = {error:String(error.message || error)};
+        statusNode.textContent = "运行目录检查失败";
+        statusNode.className = "status failed";
+      }
+      renderBeginner();
+      setRequest(buildBeginnerCommand() ? {command:buildBeginnerCommand()} : null, buildBeginnerCommand());
+    }
     function renderBeginner() {
-      parameterPanel.innerHTML = commonFormStart() +
-        field("我要做什么？", "action", selectControl("__ID__", [
+      const steps = state.tutorial.steps || [];
+      const active = steps[state.tutorialStep] || {id:"doctor", label:"检查环境", summary:"", why:"", success:""};
+      const doneCount = steps.filter(function (step) { return ["passed", "not-needed"].includes(tutorialStatus(step.id)); }).length;
+      const stepButtons = steps.map(function (step, index) {
+        const status = tutorialStatus(step.id);
+        const marker = status === "passed" ? "✓" : status === "not-needed" ? "无需" : status === "failed" ? "×" : String(index + 1);
+        return '<button type="button" class="tutorial-step ' + status + (index === state.tutorialStep ? ' active' : '') + '" data-tutorial-step="' + index + '" ' + (tutorialStepAvailable(index) ? '' : 'disabled') + '><strong>' + marker + ' · ' + escapeHtml(step.label) + '</strong></button>';
+      }).join("");
+      const resumeControls = active.id === "resume"
+        ? '<div class="actions"><button type="button" id="tutorial-inspect" class="secondary">检查运行目录</button><button type="button" id="tutorial-open-results" class="secondary">转到运行管理</button></div>' + tutorialInspectionHtml()
+        : '';
+      parameterPanel.innerHTML =
+        '<div class="tutorial-steps">' + stepButtons + '</div>' +
+        commonFormStart() +
+        field("Smoke 实验", "tutorial-recipe", recipesSelect("__ID__")) +
+        field("本地数据集", "tutorial-data", selectControl("__ID__", registeredDatasetOptions(true))) +
+        field("独立输出目录", "tutorial-output", pathControl("__ID__", state.tutorialOutput), true) +
+        commonFormEnd() +
+        '<p class="helper">教程默认使用 recipe 自带的短预算；数据别名只替换数据来源。Smoke 成功证明训练链路可用，不等于论文数值复现。</p>' +
+        '<div class="tutorial-card"><h3>第 ' + (state.tutorialStep + 1) + ' 步：' + escapeHtml(active.label) + '</h3><p>' + escapeHtml(active.summary) + '</p><p class="tutorial-why"><strong>为什么：</strong>' + escapeHtml(active.why) + '</p><p class="tutorial-success"><strong>成功标准：</strong>' + escapeHtml(active.success) + '</p>' + resumeControls + '</div>' +
+        '<div class="tutorial-nav"><button type="button" id="tutorial-prev" class="secondary" ' + (state.tutorialStep === 0 ? 'disabled' : '') + '>上一步</button><button type="button" id="tutorial-next" class="secondary" ' + (state.tutorialStep >= steps.length - 1 || !["passed", "not-needed"].includes(tutorialStatus(active.id)) ? 'disabled' : '') + '>下一步</button><button type="button" id="tutorial-reset" class="secondary">重新开始教程</button><span class="progress-label">已完成 ' + doneCount + ' / ' + steps.length + '</span></div>' +
+        '<details class="tutorial-quick"><summary>快速命令（跳过逐步教程）</summary><div class="tutorial-quick-body">' + commonFormStart() +
+        field("操作", "tutorial-quick-action", selectControl("__ID__", [
           {value:"validate", label:"只检查，不训练"}, {value:"dry-run", label:"预演训练流程"},
           {value:"train", label:"训练几轮"}, {value:"sweep", label:"多 seed Sweep"}
         ])) +
-        field("训练模板", "recipe", recipesSelect("__ID__")) +
-        field("本地数据集", "training-data", selectControl("__ID__", registeredDatasetOptions(true))) +
-        field("训练轮次", "epochs", selectControl("__ID__", ["1", "2", "5", "10"])) +
-        field("输出目录", "output-dir", inputControl("__ID__", "artifacts/web-smoke")) +
-        field("随机种子（Sweep 时生效）", "seeds", inputControl("__ID__", "1 2 3"), true) +
-        commonFormEnd() + '<p class="helper">训练模板决定方法和超参数；本地数据集单独选择。改换数据集后不再属于原论文的精确复现配置。</p>';
-      if ([...document.getElementById("recipe").options].some(function (option) { return option.value === "cifar10-clean-smoke"; })) document.getElementById("recipe").value = "cifar10-clean-smoke";
-      document.getElementById("training-data").value = state.trainingData;
-      document.getElementById("training-data").addEventListener("change", function () { state.trainingData = this.value; updateModulePreview(); });
-      document.getElementById("action").addEventListener("change", function () {
-        document.getElementById("seeds").closest("label").classList.toggle("hidden", this.value !== "sweep");
-        updateModulePreview();
+        field("训练轮次", "tutorial-quick-epochs", selectControl("__ID__", ["1", "2", "5", "10"])) +
+        field("随机种子（Sweep）", "tutorial-quick-seeds", inputControl("__ID__", state.tutorialQuickSeeds), true) +
+        commonFormEnd() + '<button type="button" id="tutorial-use-quick" class="secondary">使用这条快速命令</button></div></details>';
+      const recipeNode = document.getElementById("tutorial-recipe");
+      if ([...recipeNode.options].some(function (option) { return option.value === state.tutorialRecipe; })) recipeNode.value = state.tutorialRecipe;
+      else if ([...recipeNode.options].some(function (option) { return option.value === "cifar10-symmetric-ce-smoke"; })) recipeNode.value = "cifar10-symmetric-ce-smoke";
+      document.getElementById("tutorial-data").value = state.tutorialData;
+      document.getElementById("tutorial-quick-action").value = state.tutorialQuickAction;
+      document.getElementById("tutorial-quick-epochs").value = state.tutorialQuickEpochs;
+      parameterPanel.querySelectorAll("[data-tutorial-step]").forEach(function (button) {
+        button.addEventListener("click", function () { captureTutorialInputs(); state.tutorialQuickMode = false; state.tutorialStep = Number(button.dataset.tutorialStep); renderBeginner(); updateModulePreview(); installPathPickers(parameterPanel); });
       });
-      if (document.getElementById("seeds")) document.getElementById("seeds").closest("label").classList.add("hidden");
+      document.getElementById("tutorial-prev").addEventListener("click", function () { captureTutorialInputs(); state.tutorialQuickMode = false; state.tutorialStep -= 1; renderBeginner(); updateModulePreview(); installPathPickers(parameterPanel); });
+      document.getElementById("tutorial-next").addEventListener("click", function () { captureTutorialInputs(); state.tutorialQuickMode = false; state.tutorialStep += 1; renderBeginner(); updateModulePreview(); installPathPickers(parameterPanel); });
+      document.getElementById("tutorial-reset").addEventListener("click", function () { state.tutorialCompleted = {}; state.tutorialResume = null; state.tutorialQuickMode = false; state.tutorialStep = 0; renderBeginner(); updateModulePreview(); installPathPickers(parameterPanel); });
+      document.getElementById("tutorial-use-quick").addEventListener("click", function () { captureTutorialInputs(); state.tutorialQuickMode = true; updateModulePreview(); });
+      document.getElementById("tutorial-inspect")?.addEventListener("click", inspectTutorialRun);
+      document.getElementById("tutorial-open-results")?.addEventListener("click", function () { captureTutorialInputs(); state.resultPath = state.tutorialOutput; switchModule("results"); });
+      parameterPanel.querySelectorAll("input, select").forEach(function (node) {
+        node.addEventListener("change", function () { captureTutorialInputs(); state.tutorialQuickMode = false; state.tutorialResume = null; updateModulePreview(); });
+        node.addEventListener("input", function () { captureTutorialInputs(); state.tutorialResume = null; updateModulePreview(); });
+      });
     }
     function renderYaml() {
       const paperOptions = state.papers.map(function (paper) {
@@ -1202,18 +1311,27 @@
       if (nextAction) configCommand(nextAction, payload.path);
     }
     function buildBeginnerCommand() {
-      const action = selectValue("action", "validate");
-      const recipe = selectValue("recipe", "cifar10-clean-smoke");
+      const recipe = selectValue("tutorial-recipe", state.tutorialRecipe || "cifar10-symmetric-ce-smoke");
       if (!recipe) return "";
-      const dataset = selectValue("training-data", state.trainingData);
+      const dataset = selectValue("tutorial-data", state.tutorialData);
       const dataOption = dataset ? " --data " + quoteArg(dataset) : "";
-      const output = quoteArg(selectValue("output-dir", "artifacts/web-smoke"));
-      let command = "lnl ";
-      if (action === "validate") command += "validate --recipe " + recipe + dataOption + " --check-data";
-      else if (action === "dry-run") command += "run --recipe " + recipe + dataOption + " --dry-run --check-data";
-      else if (action === "sweep") command += "sweep --recipe " + recipe + dataOption + " --seeds " + selectValue("seeds", "1 2 3") + " --output-dir " + output;
-      else command += "run --recipe " + recipe + dataOption + " --epochs " + selectValue("epochs", "1") + " --output-dir " + output + " --check-data";
-      return command;
+      const output = quoteArg(selectValue("tutorial-output", state.tutorialOutput || "artifacts/runs/tutorial-ce-smoke"));
+      if (state.tutorialQuickMode) {
+        const action = selectValue("tutorial-quick-action", state.tutorialQuickAction);
+        if (action === "validate") return "lnl validate --recipe " + recipe + dataOption + " --check-data";
+        if (action === "dry-run") return "lnl run --recipe " + recipe + dataOption + " --dry-run --check-data";
+        if (action === "sweep") return "lnl sweep --recipe " + recipe + dataOption + " --seeds " + selectValue("tutorial-quick-seeds", state.tutorialQuickSeeds) + " --output-dir " + output;
+        return "lnl run --recipe " + recipe + dataOption + " --epochs " + selectValue("tutorial-quick-epochs", state.tutorialQuickEpochs) + " --output-dir " + output + " --check-data";
+      }
+      const step = (state.tutorial.steps || [])[state.tutorialStep];
+      if (!step || !tutorialStepAvailable(state.tutorialStep)) return "";
+      if (step.id === "doctor") return "lnl doctor";
+      if (step.id === "list") return "lnl list experiments --profile smoke --format json";
+      if (step.id === "validate") return "lnl validate --recipe " + recipe + dataOption + " --check-data";
+      if (step.id === "dry-run") return "lnl run --recipe " + recipe + dataOption + " --dry-run --check-data";
+      if (step.id === "run") return "lnl run --recipe " + recipe + dataOption + " --output-dir " + output + " --check-data";
+      if (step.id === "resume" && state.tutorialResume?.resumable) return "lnl resume " + output + " --checkpoint last";
+      return "";
     }
     function buildYamlCommand() {
       const paperMode = selectValue("yaml-mode", "paper") === "paper";
@@ -1363,6 +1481,21 @@
       const job = await response.json(); showJob(job);
       if (!job.running && state.timer) {
         clearInterval(state.timer); state.timer = null;
+        if (state.tutorialRunningStep) {
+          const stepId = state.tutorialRunningStep;
+          state.tutorialRunningStep = "";
+          state.tutorialCompleted[stepId] = !job.error && job.returncode === 0 ? "passed" : "failed";
+          if (!job.error && job.returncode === 0) {
+            const index = (state.tutorial.steps || []).findIndex(function (step) { return step.id === stepId; });
+            if (index >= 0 && index < state.tutorial.steps.length - 1) state.tutorialStep = index + 1;
+          }
+          if (state.module === "beginner") {
+            renderBeginner();
+            installPathPickers(parameterPanel);
+            const nextCommand = buildBeginnerCommand();
+            setRequest(nextCommand ? {command:nextCommand} : null, nextCommand);
+          }
+        }
         if (!job.error && job.returncode === 0 && job.key === "data-verify") {
           state.dataResult = {message: "一轮训练验证完成。数据登记现在可以用于训练。", next_action: "run"};
         }
@@ -1381,6 +1514,10 @@
     runButton.addEventListener("click", async function () {
       if (!state.request) return;
       if (state.module === "sweep" && !(await previewSweepPlan())) return;
+      if (state.module === "beginner" && !state.tutorialQuickMode) {
+        const step = (state.tutorial.steps || [])[state.tutorialStep];
+        state.tutorialRunningStep = step ? step.id : "";
+      }
       const datasetRequest = state.request.dataset;
       if (datasetRequest?.action === "remove" && !state.removeConfirmed) {
         state.removeConfirmed = true;
@@ -1419,10 +1556,15 @@
           statusNode.textContent = result.message || "数据操作完成"; statusNode.className = "status success";
         }
       } catch (error) {
+        if (state.tutorialRunningStep) {
+          state.tutorialCompleted[state.tutorialRunningStep] = "failed";
+          state.tutorialRunningStep = "";
+        }
         state.dataResult = {error: String(error.message || error)};
         outputNode.textContent = "操作失败：" + state.dataResult.error;
         statusNode.textContent = "操作失败，请根据提示修正后重试。"; statusNode.className = "status failed";
         if (state.module === "data") renderData();
+        if (state.module === "beginner") renderBeginner();
       } finally {
         state.removeConfirmed = false;
         runButton.textContent = "执行此指令";
@@ -1453,10 +1595,10 @@
 
     const recipeEndpoint = "/api/recipes";
     installPathPickers(document);
-    Promise.all([fetch("/api/commands"), fetch(recipeEndpoint), fetch("/api/papers"), fetch("/api/datasets")])
+    Promise.all([fetch("/api/commands"), fetch(recipeEndpoint), fetch("/api/papers"), fetch("/api/datasets"), fetch("/api/tutorial")])
       .then(function (responses) { return Promise.all(responses.map(function (response) { if (!response.ok) throw new Error("后端菜单数据加载失败"); return response.json(); })); })
       .then(function (payloads) {
-        state.recipes = payloads[1]; state.papers = payloads[2]; state.datasets = payloads[3];
+        state.recipes = payloads[1]; state.papers = payloads[2]; state.datasets = payloads[3]; state.tutorial = payloads[4];
         renderCommands(payloads[0]); renderYamlSources(); switchModule(recipeMode ? "yaml" : "beginner");
         if (recipeMode) yamlEditorPanel.classList.remove("hidden");
         if (!yamlEditorPanel.classList.contains("hidden")) loadYamlFromRecipe();

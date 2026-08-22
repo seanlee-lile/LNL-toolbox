@@ -1,5 +1,19 @@
 # Toolbox modularization progress
 
+## Web beginner tutorial workflow (2026-08-22)
+
+- Current task: implement `docs/LNL-Toolbox-简明操作教程.md` as an executable Web workflow rather than a single action dropdown.
+- Branch: `codex/cli`; base commit: `f99ed98`; the worktree was clean at task start.
+- Checklist: tutorial audit; versioned six-step contract; guided UI and quick-mode compatibility; focused tests; real browser execution; full regression and documentation.
+- Completed: 7 / 7 (100%); implementation, focused tests, JavaScript/Ruff checks, real browser execution, documentation, full regression, and final scope review are complete.
+- Behavior: the default page advances only after successful `doctor → list → validate → dry-run → run`; the final step inspects resolved config, metrics, files, phase, epoch target and `last.pt` before enabling resume. A completed target is marked `not-needed` instead of launching a no-op resume.
+- Runtime evidence: the real Web page used registered `local-cifar10`, ran `cifar10-symmetric-ce-smoke` for its configured 2 epochs, and wrote `artifacts/runs/web-tutorial-acceptance`. Final evidence was epoch `2/2`, validation accuracy `0.16796875`, test accuracy `0.16015625`, complete config/metric/checkpoint files, and no browser errors.
+- Files changed: Web backend/page/test, Web README, concise tutorial, file map, and this progress record. No CLI, runner, algorithm, data service, recipe, or parameter registry changed.
+- Validation: Web 34/34 and full unittest 845/845 passed; Ruff, JavaScript syntax, and `git diff --check` passed. Browser acceptance completed all six tutorial steps and correctly treated resume as unnecessary after reaching epoch `2/2`.
+- Exact next step: human diff review; commit only after separate authorization.
+- Local checkpoint commits: none; commit and push are not authorized.
+- Collaborator note: Web files and shared documents are high-conflict integration surfaces; edits are limited to the beginner tutorial contract and presentation.
+
 ## Revised Web parameter permission policy (2026-08-21)
 
 - Current task: make `lnl_parameter_metadata_registry_revised.yaml` the only active Web parameter-selection policy without changing recipes, training code, or the page layout.

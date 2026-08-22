@@ -14,6 +14,29 @@ import command_console  # noqa: E402
 
 
 class CommandConsoleTest(unittest.TestCase):
+    def test_beginner_tutorial_contract_matches_documented_workflow(self):
+        payload = command_console._tutorial_payload()
+        self.assertEqual(payload["version"], 1)
+        self.assertEqual(
+            payload["sequence"],
+            ["doctor", "list", "validate", "dry-run", "run", "resume"],
+        )
+        self.assertEqual(len(payload["steps"]), 6)
+        self.assertTrue(all(step["why"] for step in payload["steps"]))
+        self.assertTrue(all(step["success"] for step in payload["steps"]))
+        self.assertEqual(payload["guide"], "docs/LNL-Toolbox-简明操作教程.md")
+
+    def test_beginner_page_tracks_steps_and_inspects_before_resume(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn('fetch("/api/tutorial")', page)
+        self.assertIn("tutorialStepAvailable", page)
+        self.assertIn("tutorialRunningStep", page)
+        self.assertIn("inspectTutorialRun", page)
+        self.assertIn("已达到目标轮次，无需恢复", page)
+        self.assertIn("快速命令（跳过逐步教程）", page)
+        self.assertIn('"lnl doctor"', page)
+        self.assertIn("lnl list experiments --profile smoke --format json", page)
+
     def test_parameter_editor_exposes_registry_groups_and_deviation_warning(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
         self.assertIn("yaml-parameter-groups", page)
@@ -291,7 +314,7 @@ class CommandConsoleTest(unittest.TestCase):
                 self.assertIn("再次点击，确认删除登记", home)
                 self.assertIn('dataAdapter: "cifar10"', home)
                 self.assertIn("state.dataOutput = event.target.value", home)
-                self.assertIn('field("本地数据集", "training-data"', home)
+                self.assertIn('field("本地数据集", "tutorial-data"', home)
                 self.assertIn('{value:"paper", label:"论文正式配置"}', home)
                 self.assertIn('field("论文方法", "yaml-paper"', home)
                 self.assertIn('label="论文正式配置（26）"', home)

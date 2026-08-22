@@ -26,7 +26,14 @@ http://127.0.0.1:8765/recipe。`lnl web` 默认打开主页；`lnl web --no-open
 
     python -m unittest discover -s web -p "test_*.py" -v
 
-建议首次使用顺序：查看帮助 → 检查环境 → 查看 Smoke 配方 → 验证 Clean 配置 → 预演一次训练 → 训练 1 epoch。
+主页默认进入“新手教程”，并按以下顺序推进：
+
+    doctor → list → validate → dry-run → run → resume
+
+每一步都显示操作原因和成功标准；只有当前步骤成功后才解锁下一步。教程统一选择
+Smoke recipe、已登记数据和独立输出目录。训练结束后会读取运行目录中的配置、指标、
+阶段和 checkpoint：未完成时才生成 resume 指令，达到目标轮次时明确显示“无需恢复”。
+原有直接验证、预演、训练和 Sweep 操作保留在教程底部的“快速命令”折叠区。
 
 “本地数据集”模块可生成 `lnl data register/inspect/verify/remove` 和
 `lnl run ... --data <alias>`。页面显示机器本地 catalog 的当前状态，但不会读取或上传

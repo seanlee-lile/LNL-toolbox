@@ -563,7 +563,7 @@ Recipe/YAML 编辑功能。`lnl web` 由 `cli/main.py` 启动 `web/command_conso
 | 文件 | 责任 |
 |---|---|
 | `web/command_console.py` | 在项目边界内按 recipe 或 YAML 路径加载配置；保存完整文本前执行 YAML 解析和 runner 配置验证；禁止覆盖内置 recipe |
-| `web/index.html` | 编辑器同时显示 4 个新手模板与 26 篇论文正式配置；新建成功后自动打开项目 YAML；支持完整文本编辑、覆盖/另存、验证与运行 |
+| `web/index.html` | 主页实现 doctor→list→validate→dry-run→run→resume 六步新手教程及完成状态；编辑器同时显示 4 个新手模板与 26 篇论文正式配置；新建成功后自动打开项目 YAML；支持完整文本编辑、覆盖/另存、验证与运行 |
 | `web/test_command_console.py` | 项目 YAML HTTP round-trip、完整文本校验、非法配置拒绝和前端闭环静态门禁 |
 
 ## Web Sweep 与运行结果浏览（2026-08-21）

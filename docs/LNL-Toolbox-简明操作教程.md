@@ -11,6 +11,22 @@ doctor → list → validate → dry-run → run → resume
 
 `smoke` 配置用于快速检查链路，论文配置用于表达更接近论文的实验协议；两者都不等于已经复现论文数值。
 
+### 在 Web 中完成同一教程
+
+运行 `lnl web` 后，主页“新手教程”把本文最短工作流实现为六个连续步骤：
+
+```text
+检查环境 → 选择 Smoke 实验 → 验证配置与数据 → 预演训练计划 → 运行 Smoke → 检查并恢复
+```
+
+先统一选择 Smoke recipe、已登记数据和独立输出目录，再按页面顺序执行。每一步只有在
+对应 CLI 命令退出码为 0 后才会标记完成并解锁下一步。最后一步会实际读取
+`resolved_config.yaml`、`metrics.jsonl` 和 checkpoint：若目标轮次尚未达到，页面才允许
+执行 resume；若已经达到目标，页面会显示“无需恢复”，不会制造一次无意义续跑。
+
+Web 只是本文 CLI 合同的引导界面，不改变 recipe、runner、训练预算或 checkpoint 语义。
+想跳过逐步教学时，可展开页面底部的“快速命令”。
+
 ## 1. 开始之前：安装与环境检查
 
 以下示例以 Windows PowerShell 为主，并假设当前目录是仓库根目录。
