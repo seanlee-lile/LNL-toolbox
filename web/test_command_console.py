@@ -44,6 +44,34 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertIn("已偏离论文配置", page)
         self.assertIn("acknowledge_paper_impact", page)
 
+    def test_config_workflow_links_papers_yaml_sweep_and_results(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        for marker in (
+            "activeConfig",
+            "编辑为项目 YAML",
+            "使用此配置做 Sweep",
+            "保存并转到 Sweep",
+            "openActiveConfigInEditor",
+            "openSweepForSource",
+            "查看此 Sweep 的运行结果",
+            "sweep-load-source",
+            "requestedKey",
+        ):
+            self.assertIn(marker, page)
+        self.assertIn("defaultCustomYamlPath", page)
+        self.assertIn("-custom.yaml", page)
+
+    def test_sweep_ui_reuses_parameter_metadata_groups_and_excludes_locks(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn("sweepGroupsHtml", page)
+        self.assertIn("levelInfo.default_expanded", page)
+        self.assertIn("用途：", page)
+        self.assertIn("论文依据：", page)
+        self.assertIn("复现影响：", page)
+        self.assertIn("不可 Sweep：", page)
+        self.assertIn("fieldInfo.editable && supported", page)
+        self.assertIn("lnl sweep --", page)
+
     def test_command_catalog_is_fixed_and_displayable(self):
         self.assertGreaterEqual(len(command_console.COMMANDS), 8)
         for spec in command_console.COMMANDS.values():
@@ -94,6 +122,60 @@ class CommandConsoleTest(unittest.TestCase):
             }
         )
         self.assertEqual(payload["total"], 12)
+        self.assertEqual(payload["source"]["kind"], "recipe")
+        self.assertTrue(payload["matrix_fields"])
+
+    def test_sweep_plan_accepts_project_yaml_and_reports_paper_deviation(self):
+        source = command_console._config_payload(
+            "gce-cifar10-noise02-reproduction"
+        )["content"]
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            path = Path(directory) / "gce-custom.yaml"
+            relative = path.relative_to(command_console.ROOT).as_posix()
+            command_console._save_config(
+                {
+                    "path": relative,
+                    "recipe": "gce-cifar10-noise02-reproduction",
+                    "content": source,
+                }
+            )
+            payload = command_console._sweep_plan_payload(
+                {
+                    "path": relative,
+                    "matrix": {"loss.q": [0.7, 0.5]},
+                    "seeds": [],
+                }
+            )
+        self.assertEqual(payload["source"], {"kind": "path", "value": relative, "label": relative})
+        self.assertEqual(payload["total"], 2)
+        self.assertTrue(payload["modified_from_paper"])
+        self.assertEqual(payload["paper_deviation_paths"], ["loss.q"])
+        self.assertEqual(payload["matrix_fields"][0]["level"], "paper")
+
+    def test_sweep_plan_requires_one_source_and_rejects_locked_or_wrong_types(self):
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            command_console._sweep_plan_payload({"matrix": {}})
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            command_console._sweep_plan_payload(
+                {
+                    "recipe": "fine-cifar100n-reproduction",
+                    "path": "configs/experiment/fine_cifar100n_reproduction.yaml",
+                }
+            )
+        with self.assertRaisesRegex(ValueError, "locked parameter"):
+            command_console._sweep_plan_payload(
+                {
+                    "recipe": "fine-cifar100n-reproduction",
+                    "matrix": {"execution.runner": ["clean"]},
+                }
+            )
+        with self.assertRaisesRegex(ValueError, "必须是数字"):
+            command_console._sweep_plan_payload(
+                {
+                    "recipe": "gce-cifar10-noise02-reproduction",
+                    "matrix": {"loss.q": ["invalid"]},
+                }
+            )
 
     def test_windows_picker_returns_selection_or_cancellation(self):
         completed = mock.Mock(returncode=0, stdout="F:\\runs", stderr="")
@@ -334,7 +416,7 @@ class CommandConsoleTest(unittest.TestCase):
                 self.assertIn("function updateResultVisibility()", home)
                 self.assertIn('id="paper-open-yaml"', home)
                 self.assertIn("论文方法、配置字段与代码的关系", home)
-                self.assertIn("await loadYamlSelection(state.paperRecipe)", home)
+                self.assertIn("await loadYamlSelection(recipe)", home)
                 self.assertNotIn('id="paper-profile"', home)
                 self.assertNotIn('id="paper-variant"', home)
                 self.assertNotIn("配置 profile 与 recipe 变体", home)
@@ -556,10 +638,36 @@ class CommandConsoleTest(unittest.TestCase):
             from lnl_toolbox.catalog import load_yaml
 
             config = load_yaml(command_console.ROOT / saved["path"])
-            record = config["parameter_record"]
+            record = config["meta"]["web_parameter_record"]
             self.assertTrue(record["modified_from_paper"])
             self.assertEqual(record["effective_reproduction_status"], "modified_from_paper")
             self.assertEqual(record["paper_parameter_changes"][0]["path"], "loss.q")
+            self.assertNotIn("parameter_record", config)
+
+    def test_web_paper_metadata_does_not_replace_training_parameter_record(self):
+        source = command_console._config_payload(
+            "binary-risk-natarajan-reproduction"
+        )["content"]
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            destination = Path(directory) / "binary-copy.yaml"
+            saved = command_console._save_config(
+                {
+                    "path": str(destination),
+                    "recipe": "binary-risk-natarajan-reproduction",
+                    "content": source,
+                }
+            )
+            from lnl_toolbox.catalog import load_yaml
+            from lnl_toolbox.core.hyperparameters import resolve_parameter_sampling
+
+            config = load_yaml(command_console.ROOT / saved["path"])
+            resolved, record = resolve_parameter_sampling(config)
+        self.assertIsNone(record)
+        self.assertNotIn("parameter_record", resolved)
+        self.assertEqual(
+            resolved["meta"]["web_parameter_record"]["formal_recipe"],
+            "binary-risk-natarajan-reproduction",
+        )
 
     def test_complete_yaml_edit_cannot_bypass_locked_parameter_policy(self):
         source = command_console._config_payload("fine-cifar100n-reproduction")

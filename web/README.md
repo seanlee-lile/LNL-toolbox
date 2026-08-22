@@ -35,6 +35,16 @@ Smoke recipe、已登记数据和独立输出目录。训练结束后会读取�
 阶段和 checkpoint：未完成时才生成 resume 指令，达到目标轮次时明确显示“无需恢复”。
 原有直接验证、预演、训练和 Sweep 操作保留在教程底部的“快速命令”折叠区。
 
+页面维护统一的“当前配置”上下文。论文页可准备正式运行、把内置配置另存为项目
+YAML，或直接将内置配置带入参数 Sweep；项目 YAML 保存成功后可继续验证、准备运行
+或转入 Sweep。内置 recipe 永远只读，修改时默认建议保存为
+`configs/experiment/<recipe>-custom.yaml`。有未保存修改时，运行或 Sweep 会先要求保存。
+
+参数 Sweep 同时接受内置 recipe 和项目 YAML。参数列表复用
+`lnl_parameter_metadata_registry_revised.yaml`，按基础、论文、高级和锁定四级展示；锁定
+参数不能加入矩阵，论文参数会显示依据与复现影响，并在预检结果中明确标记偏离。Sweep
+完成后可把输出目录直接带入“运行管理”。
+
 “本地数据集”模块可生成 `lnl data register/inspect/verify/remove` 和
 `lnl run ... --data <alias>`。页面显示机器本地 catalog 的当前状态，但不会读取或上传
 数据内容。`registered`、`layout_validated` 与 `training_verified` 是不同状态；只有后端

@@ -562,8 +562,8 @@ Recipe/YAML 编辑功能。`lnl web` 由 `cli/main.py` 启动 `web/command_conso
 
 | 文件 | 责任 |
 |---|---|
-| `web/command_console.py` | 在项目边界内按 recipe 或 YAML 路径加载配置；保存完整文本前执行 YAML 解析和 runner 配置验证；禁止覆盖内置 recipe |
-| `web/index.html` | 主页实现 doctor→list→validate→dry-run→run→resume 六步新手教程及完成状态；编辑器同时显示 4 个新手模板与 26 篇论文正式配置；新建成功后自动打开项目 YAML；支持完整文本编辑、覆盖/另存、验证与运行 |
+| `web/command_console.py` | 在项目边界内按 recipe 或 YAML 路径加载配置；保存完整文本前执行 YAML 解析和 runner 配置验证；禁止覆盖内置 recipe；项目 YAML 与 recipe 共用 Sweep 预检 |
+| `web/index.html` | 主页实现 doctor→list→validate→dry-run→run→resume 六步新手教程及完成状态；编辑器同时显示 4 个新手模板与 26 篇论文正式配置；新建成功后自动打开项目 YAML；支持完整文本编辑、覆盖/另存、验证、运行与转入 Sweep |
 | `web/test_command_console.py` | 项目 YAML HTTP round-trip、完整文本校验、非法配置拒绝和前端闭环静态门禁 |
 
 ## Web Sweep 与运行结果浏览（2026-08-21）
@@ -573,8 +573,8 @@ Recipe/YAML 编辑功能。`lnl web` 由 `cli/main.py` 启动 `web/command_conso
 | `training/sweep.py` | 参数矩阵与 seeds 的确定性笛卡尔积、manifest 运行明细和恢复身份 |
 | `training/results.py` | 发现完成或部分运行，读取逐 epoch 指标，并融合 Sweep manifest 状态 |
 | `cli/main.py` | `--matrix PATH=JSON_ARRAY`、默认配置 seed，以及实验/组件/论文/数据/Sweep/Compare 的 JSON 输出 |
-| `web/command_console.py` | Sweep 预检、结果查询、结构化 job 输出和 localhost-only Windows 原生路径选择 API |
-| `web/index.html` | 参数矩阵编辑、组合计划表、统一表格输出、运行指标表和无依赖 SVG 叠加曲线 |
+| `web/command_console.py` | recipe/项目 YAML 互斥来源的 Sweep 预检、Registry 权限与类型校验、论文偏离报告、结果查询、结构化 job 输出和 localhost-only Windows 原生路径选择 API |
+| `web/index.html` | 当前配置上下文、四级参数矩阵编辑、组合计划表、论文偏离提示、跨板块链接、统一表格输出、运行指标表和无依赖 SVG 叠加曲线 |
 
 运行结果列表支持按名称、方法、状态和 seed 筛选，也可在保留已选曲线的情况下收起；本机路径选择器在当前输入不是有效绝对路径时从项目根目录打开。
 
@@ -582,7 +582,7 @@ Recipe/YAML 编辑功能。`lnl web` 由 `cli/main.py` 启动 `web/command_conso
 
 恢复训练在生成命令前调用 `training/results.py::inspect_resume_run()`，只读展示目录文件、resolved config、checkpoint、当前 epoch/phase、阶段轮次和可恢复性；路径或 checkpoint 变化后必须重新检查。
 
-项目 YAML 不加入内置 recipe 清单；它在当前页面中按路径出现，并可在之后通过“项目 YAML 路径”重新加载。
+项目 YAML 不加入内置 recipe 清单；它在当前页面中按路径出现，并可在之后通过“项目 YAML 路径”重新加载。论文页、YAML 编辑器、Sweep 与运行管理共享当前配置来源；未保存文本不能直接运行或 Sweep。
 
 ## Web 参数元数据与权限（2026-08-21）
 
@@ -590,8 +590,8 @@ Recipe/YAML 编辑功能。`lnl web` 由 `cli/main.py` 启动 `web/command_conso
 |---|---|
 | `web/lnl_parameter_metadata_registry_revised.yaml` | Web 当前唯一使用的参数权限源（v1.1）；绑定 26 篇论文的默认 formal recipe，并为实际 YAML 路径登记基础、论文、高级、锁定四级权限、论文依据、复现影响及锁定理由 |
 | `web/lnl_parameter_metadata_registry.yaml` | v1.0 历史权限快照；Web 不再加载，仅保留用于权限范围变更审查 |
-| `web/command_console.py` | 从 registry 生成配置 schema；服务端同时保护参数 patch 与完整 YAML 编辑；论文参数偏离写入 `parameter_record` |
-| `web/index.html` | 四组参数、论文来源/解释/影响、折叠高级参数、只读锁定值以及“已偏离论文配置”提示 |
+| `web/command_console.py` | 从 registry 生成配置 schema；服务端同时保护参数 patch、完整 YAML 编辑和 Sweep matrix；论文参数偏离写入 `meta.web_parameter_record`，不占用训练抽样记录 |
+| `web/index.html` | YAML 编辑与 Sweep 共用四组参数、论文来源/解释/影响、折叠高级参数、只读锁定值以及“已偏离论文配置”提示 |
 | `web/test_command_console.py` | 26 个 formal schema、论文变更确认/记录、锁定字段 API 防绕过与前端分组门禁 |
 
 配置当前值始终来自所选 YAML，registry 不覆盖训练值。论文参数数量保持 99 个；T-Revision 与 DivideMix 仅修正迁移后的 dotted path，没有改变其论文参数集合。

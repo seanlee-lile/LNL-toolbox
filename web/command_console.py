@@ -757,7 +757,11 @@ def _config_method(config: object, fallback: object = "") -> str:
     if method in registry["methods"]:
         return method
     record = config.get("parameter_record", {})
-    formal_recipe = record.get("formal_recipe") if isinstance(record, dict) else ""
+    meta = config.get("meta", {})
+    web_record = meta.get("web_parameter_record", {}) if isinstance(meta, dict) else {}
+    formal_recipe = (
+        web_record.get("formal_recipe") if isinstance(web_record, dict) else ""
+    ) or (record.get("formal_recipe") if isinstance(record, dict) else "")
     candidate_recipe = str(formal_recipe or fallback or "")
     for candidate_method, recipe_id in registry["formal_recipe_bindings"].items():
         if candidate_recipe == str(recipe_id):
@@ -1027,7 +1031,19 @@ def _record_paper_parameter_status(
     if not recipe_id:
         return
     existing = config.get("parameter_record", {})
-    record = dict(existing) if isinstance(existing, dict) else {}
+    legacy_web_record = (
+        dict(existing)
+        if isinstance(existing, dict)
+        and "formal_recipe" in existing
+        and not {"paper", "sampling_seed", "parameters", "candidates"}.issubset(existing)
+        else {}
+    )
+    if legacy_web_record:
+        config.pop("parameter_record", None)
+    meta_value = config.get("meta", {})
+    meta = dict(meta_value) if isinstance(meta_value, dict) else {}
+    stored = meta.get("web_parameter_record", {})
+    record = dict(stored) if isinstance(stored, dict) else legacy_web_record
     previously_acknowledged = bool(record.get("paper_change_acknowledged", False))
     if changes and not (acknowledged or previously_acknowledged):
         paths = ", ".join(str(change["path"]) for change in changes)
@@ -1046,7 +1062,8 @@ def _record_paper_parameter_status(
             ),
         }
     )
-    config["parameter_record"] = record
+    meta["web_parameter_record"] = record
+    config["meta"] = meta
 
 
 def _save_config(payload: object) -> dict[str, object]:
@@ -1206,36 +1223,96 @@ def _picker_payload(payload: object) -> dict[str, object]:
 def _sweep_plan_payload(payload: object) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise TypeError("sweep plan request must be an object")
-    from lnl_toolbox.catalog import load_recipe_config, recipe_by_id, resolve_config_paths
+    from lnl_toolbox.catalog import resolve_config_paths
     from lnl_toolbox.training.service import ExperimentService
     from lnl_toolbox.training.sweep import plan_sweep, resolve_planned_config
 
-    recipe = recipe_by_id(str(payload.get("recipe", "")), ROOT)
-    config = resolve_config_paths(load_recipe_config(recipe), ROOT)
+    recipe_value = str(payload.get("recipe") or "").strip()
+    path_value = str(payload.get("path") or "").strip()
+    if bool(recipe_value) == bool(path_value):
+        raise ValueError("sweep source requires exactly one of recipe or path")
+    source_payload = _config_payload(
+        recipe_value or None,
+        path_value=path_value or None,
+    )
+    schema = _config_schema(
+        recipe_value or None,
+        path_value=path_value or None,
+    )
+    config = resolve_config_paths(source_payload["config"], ROOT)
     matrix = payload.get("matrix", {}) or {}
     if not isinstance(matrix, dict):
         raise TypeError("sweep matrix must be an object")
+    fields = {str(field["path"]): field for field in schema.get("fields", [])}
+    normalized_matrix: dict[str, list[object]] = {}
+    for raw_path, raw_values in matrix.items():
+        path = str(raw_path)
+        field = fields.get(path)
+        if field is None:
+            raise ValueError(f"sweep parameter is not registered for this config: {path}")
+        if not field.get("editable", False):
+            raise ValueError(f"locked parameter cannot be swept from WebUI: {path}")
+        if not isinstance(raw_values, list) or not raw_values:
+            raise ValueError(f"sweep matrix {path!r} must be a non-empty list")
+        normalized_matrix[path] = [
+            _coerce_patch_value(field, value) for value in raw_values
+        ]
     raw_seeds = payload.get("seeds")
     seeds = [int(config.get("seed", 1))] if raw_seeds in (None, []) else raw_seeds
     if not isinstance(seeds, list):
         raise TypeError("sweep seeds must be a list")
+    recipe_id = str(source_payload["recipe"] or "")
     plan = plan_sweep(
         config,
         seeds,
-        matrix=matrix,
+        matrix=normalized_matrix,
         output_dir=payload.get("output_dir") or None,
-        recipe=recipe.id,
+        recipe=recipe_id or None,
     )
     service = ExperimentService()
     for run in plan.runs:
         service.preflight(resolve_planned_config(config, run), check_data=False)
+    matrix_fields = [fields[path] for path in normalized_matrix]
+    base_paper_changes = set(schema.get("paper_changes", []))
+    paper_matrix_paths = {
+        str(field["path"])
+        for field in matrix_fields
+        if field.get("level") == "paper"
+        and any(
+            value != field.get("changed_from")
+            for value in normalized_matrix[str(field["path"])]
+        )
+    }
+    paper_deviation_paths = sorted(base_paper_changes | paper_matrix_paths)
     return {
         "root": str(plan.root),
+        "source": {
+            "kind": "recipe" if recipe_id else "path",
+            "value": recipe_id or str(source_payload["path"]),
+            "label": recipe_id or str(source_payload["path"]),
+        },
         "seeds": list(plan.seeds),
         "matrix": {path: list(values) for path, values in plan.matrix},
+        "matrix_fields": matrix_fields,
+        "levels": list(schema.get("levels", [])),
+        "paper_deviation_paths": paper_deviation_paths,
+        "modified_from_paper": bool(paper_deviation_paths),
         "total": len(plan.runs),
         "runs": [
-            {"run_id": run.run_id, "seed": run.seed, "overrides": run.override_mapping}
+            {
+                "run_id": run.run_id,
+                "seed": run.seed,
+                "overrides": run.override_mapping,
+                "paper_deviation_paths": sorted(
+                    base_paper_changes
+                    | {
+                        path
+                        for path, value in run.overrides
+                        if fields[path].get("level") == "paper"
+                        and value != fields[path].get("changed_from")
+                    }
+                ),
+            }
             for run in plan.runs
         ],
     }

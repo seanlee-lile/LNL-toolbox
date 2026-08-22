@@ -1,5 +1,21 @@
 # Toolbox modularization progress
 
+## Web configuration workflow and semantic Sweep (2026-08-22)
+
+- Current task: carry one recipe/project-YAML context through paper guidance, YAML editing, execution, parameter Sweep, and result management.
+- Branch: `codex/cli`; base commit: `7a8c9be`; the committed beginner-tutorial baseline was preserved.
+- Checklist: workflow audit; project-YAML Sweep API; Registry-enforced matrix validation; cross-module UI links; focused/browser acceptance; full regression and documentation.
+- Completed: 6 / 6 (100%); implementation, focused tests, real browser workflow, runtime Sweep evidence, documentation, full regression, and scope audit are complete.
+- Behavior: paper recipes can be prepared for formal execution, copied into a safe project YAML, or passed directly to Sweep. Saved project YAMLs can validate, prepare a run, enter Sweep, and pass the Sweep output to run management without losing source context.
+- Sweep semantics: both recipe and project-YAML sources use the revised four-level Registry. Locked/unknown/type-incompatible paths fail server-side; paper parameters show provenance and reproduction impact and are reported as deviations in every affected planned run.
+- Safety correction: Web reproduction metadata is stored under `meta.web_parameter_record`. The training core's top-level `parameter_record` remains reserved for hyperparameter-sampling records, preventing Web-saved Binary Risk configurations from failing in `ParameterRecord.from_dict()`.
+- Runtime evidence: a project-YAML batch/LR 2×2 Sweep completed 4/4 runs; after the metadata correction, a Binary Risk 1×2 paper-parameter Sweep completed 2/2 runs and reported `risk.rho_positive` as the paper-deviation path.
+- Validation: Web 39/39 and full unittest 845/845 passed; Ruff, embedded JavaScript syntax, and `git diff --check` passed.
+- Files changed: Web backend/page/test and four approved shared documents. No CLI, Sweep engine, recipe, Registry, algorithm, runner, model, dataset adapter, or training default changed.
+- Exact next step: human diff review; commit only after separate authorization.
+- Local checkpoint commits: none; commit and push are not authorized.
+- Collaborator note: Web files and shared documents are high-conflict integration surfaces; changes are scoped to configuration context, Sweep authorization, and documentation.
+
 ## Web beginner tutorial workflow (2026-08-22)
 
 - Current task: implement `docs/LNL-Toolbox-简明操作教程.md` as an executable Web workflow rather than a single action dropdown.
@@ -35,7 +51,7 @@
 - Checklist: registry audit; path/binding repair; backend schema and enforcement; four-level UI; focused tests; full regression and documentation.
 - Completed: 7 / 7 (100%); implementation, focused Web tests, full regression, lint, JavaScript syntax, and browser acceptance are complete.
 - Registry audit: 26 methods and 99 paper parameters were retained; stale T-Revision, DivideMix, split, scheduler, model-list, PCSE, DSS and DLD paths were repaired and each method is bound to its catalog formal recipe.
-- Safety: locked values are visible but cannot be changed by parameter patches or complete-YAML API requests. Paper-level changes require acknowledgement and persist `modified_from_paper`, the formal recipe, and changed-from/value evidence in `parameter_record`.
+- Safety: locked values are visible but cannot be changed by parameter patches or complete-YAML API requests. Paper-level changes require acknowledgement and persist `modified_from_paper`, the formal recipe, and changed-from/value evidence in `meta.web_parameter_record`; the top-level `parameter_record` remains reserved for training hyperparameter sampling.
 - Files changed: the supplied registry, Web backend/page/test, and three shared documents. No recipe, algorithm, runner, model, dataset adapter, catalog, or training default changed.
 - Validation: Web 31/31 and full unittest 845/845 passed; Ruff, JavaScript syntax, and `git diff --check` passed. Browser acceptance confirmed four groups, read-only locked fields, paper provenance, and the paper-deviation warning.
 - Exact next step: human diff review; commit only after separate authorization.

@@ -93,6 +93,21 @@
     .yaml-readonly-value { padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; color: #cbd5e1; background: #0b1220; overflow-wrap: anywhere; }
     .yaml-paper-status { grid-column: 1 / -1; padding: 9px 11px; border-radius: 8px; color: var(--good); background: #10251f; }
     .yaml-paper-status.modified { color: #fde68a; background: rgba(120, 80, 0, .2); }
+    .config-context { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 14px; padding: 10px 12px; border: 1px solid #34506f; border-radius: 10px; background: #132238; }
+    .config-context strong { color: #bfdbfe; }
+    .config-context code { color: #dbeafe; overflow-wrap: anywhere; }
+    .workflow-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+    .sweep-groups { display: grid; gap: 10px; margin-top: 12px; }
+    .sweep-group { border: 1px solid var(--line); border-radius: 10px; background: #172033; }
+    .sweep-group > summary { cursor: pointer; padding: 10px 12px; color: #bfdbfe; font-weight: 700; }
+    .sweep-group-body { display: grid; gap: 8px; padding: 0 12px 12px; }
+    .sweep-field-card { padding: 10px; border: 1px solid #344258; border-radius: 8px; background: #101a2c; }
+    .sweep-field-card.selected { border-color: #38bdf8; }
+    .sweep-field-head { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+    .sweep-field-path { color: #93c5fd; font-size: 12px; overflow-wrap: anywhere; }
+    .parameter-badge { display: inline-block; padding: 2px 7px; border-radius: 999px; background: #29415f; color: #bfdbfe; font-size: 11px; }
+    .sweep-dimension { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr) auto; gap: 8px; align-items: start; padding: 10px; border: 1px solid #34506f; border-radius: 9px; background: #101a2c; }
+    .sweep-warning { margin: 10px 0; padding: 10px 12px; border: 1px solid #b7791f; border-radius: 8px; background: #3a2b13; color: #fde68a; }
     .preview {
       margin: 0 0 14px; padding: 14px; min-height: 54px; white-space: pre-wrap;
       overflow-wrap: anywhere; color: #bfdbfe; background: #0b1220; border-radius: 9px; border: 1px solid #263b5d;
@@ -203,6 +218,7 @@
             <button id="yaml-overwrite" class="secondary">覆盖保存</button>
             <button id="yaml-validate" class="secondary">验证此 YAML</button>
             <button id="yaml-run" class="primary">运行此 YAML</button>
+            <button id="yaml-sweep" class="secondary">保存并转到 Sweep</button>
           </div>
           <p class="helper">可以使用上方参数菜单，也可以直接编辑完整 YAML；直接编辑时以文本内容为准。保存前会解析并验证，内置 recipe 不允许被覆盖。</p>
         </section>
@@ -234,7 +250,7 @@
     const modules = allModules;
     const sweepModule = modules.find(function (item) { return item.id === "sweep"; });
     if (sweepModule) { sweepModule.label = "参数 Sweep"; sweepModule.description = "对多个参数取值执行笛卡尔积，可选叠加多个随机种子。"; sweepModule.hint = "参数矩阵 × 可选 seeds"; }
-    const state = { selected: null, request: null, jobId: null, timer: null, resultTimer: null, module: recipeMode ? "yaml" : "beginner", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, tutorial: {steps:[], sequence:[]}, tutorialStep: 0, tutorialCompleted: {}, tutorialRunningStep: "", tutorialRecipe: "cifar10-symmetric-ce-smoke", tutorialData: "", tutorialOutput: "artifacts/runs/tutorial-ce-smoke", tutorialResume: null, tutorialQuickMode: false, tutorialQuickAction: "validate", tutorialQuickEpochs: "1", tutorialQuickSeeds: "1 2 3", yamlSchema: null, yamlSourcePath: "", yamlTextDirty: false, pendingYamlPath: "", trainingData: "", dataAction: "list", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, removeConfirmed: false, sweepSchema: null, sweepRows: [], sweepPlan: null, resultData: null, resultSelected: [], resultFilter: "", resultListCollapsed: false, resultListInitialized: false, resumeData: null, resumeInspectionKey: "", paperId: "", paperRecipe: "" };
+    const state = { selected: null, request: null, jobId: null, timer: null, resultTimer: null, module: recipeMode ? "yaml" : "beginner", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, tutorial: {steps:[], sequence:[]}, tutorialStep: 0, tutorialCompleted: {}, tutorialRunningStep: "", tutorialRecipe: "cifar10-symmetric-ce-smoke", tutorialData: "", tutorialOutput: "artifacts/runs/tutorial-ce-smoke", tutorialResume: null, tutorialQuickMode: false, tutorialQuickAction: "validate", tutorialQuickEpochs: "1", tutorialQuickSeeds: "1 2 3", yamlSchema: null, yamlSourcePath: "", yamlTextDirty: false, yamlSuggestedPath: "", pendingYamlPath: "", activeConfig: {kind:"recipe", value:"cifar10-symmetric-ce-smoke", label:"cifar10-symmetric-ce-smoke"}, trainingData: "", dataAction: "list", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, removeConfirmed: false, sweepSourceKind: "recipe", sweepRecipe: "cifar10-clean-smoke", sweepPath: "", sweepSchema: null, sweepSchemaKey: "", sweepRows: [], sweepPlan: null, sweepOutput: "artifacts/web-sweep", resultData: null, resultSelected: [], resultFilter: "", resultListCollapsed: false, resultListInitialized: false, resumeData: null, resumeInspectionKey: "", paperId: "", paperRecipe: "" };
     if (recipeMode) {
       document.getElementById("page-title").textContent = "LNL Toolbox Recipe Editor";
       document.getElementById("page-subtitle").textContent = "从已有 recipe 组合配置，并查看或保存 YAML。";
@@ -311,6 +327,34 @@
     }
     function commonFormStart() { return '<div class="form-grid">'; }
     function commonFormEnd() { return '</div>'; }
+    function normalizedConfigSource(kind, value, label = "") {
+      const normalizedKind = kind === "path" ? "path" : "recipe";
+      return {kind:normalizedKind, value:String(value || "").trim(), label:String(label || value || "").trim()};
+    }
+    function setActiveConfig(kind, value, label = "") {
+      const source = normalizedConfigSource(kind, value, label);
+      if (!source.value) return;
+      state.activeConfig = source;
+    }
+    function configContextHtml(source = state.activeConfig) {
+      if (!source?.value) return "";
+      const kind = source.kind === "path" ? "项目 YAML" : "内置 recipe";
+      return '<div class="config-context"><span><strong>当前配置：</strong>' + escapeHtml(kind) + ' · <code>' + escapeHtml(source.label || source.value) + '</code></span></div>';
+    }
+    function defaultCustomYamlPath(recipe) {
+      return "configs/experiment/" + String(recipe || "paper-config").replace(/[^A-Za-z0-9_-]/g, "-") + "-custom.yaml";
+    }
+    function setSweepSource(source) {
+      const normalized = normalizedConfigSource(source.kind, source.value, source.label);
+      setActiveConfig(normalized.kind, normalized.value, normalized.label);
+      state.sweepSourceKind = normalized.kind;
+      if (normalized.kind === "path") state.sweepPath = normalized.value;
+      else state.sweepRecipe = normalized.value;
+      state.sweepSchema = null;
+      state.sweepSchemaKey = "";
+      state.sweepRows = [];
+      state.sweepPlan = null;
+    }
 
     function tutorialStatus(stepId) {
       return state.tutorialCompleted[stepId] || "pending";
@@ -428,7 +472,7 @@
           label: paper.acronym + " · " + paper.title + " · " + paper.default_fidelity
         };
       });
-      parameterPanel.innerHTML = commonFormStart() +
+      parameterPanel.innerHTML = configContextHtml() + commonFormStart() +
         field("创建方式", "yaml-mode", selectControl("__ID__", [
           {value:"paper", label:"论文正式配置"},
           {value:"supervised", label:"通用监督组合"}
@@ -715,66 +759,102 @@
         field("checkpoint", "result-checkpoint", selectControl("__ID__", ["last", "best"])) +
         commonFormEnd() + '<p class="helper">resume 使用已有 checkpoint；report/compare 读取现有运行产物。</p>';
     }
-    function sweepFieldOptions(paths) {
-      return paths.map(function (path) { return {value:path, label:path}; });
+    function currentSweepSource() {
+      const kind = selectValue("sweep-source-kind", state.sweepSourceKind) === "path" ? "path" : "recipe";
+      const value = kind === "path" ? selectValue("sweep-path", state.sweepPath).trim() : selectValue("sweep-recipe", state.sweepRecipe).trim();
+      return normalizedConfigSource(kind, value, value);
     }
+    function sweepSourceKey(source = currentSweepSource()) { return source.kind + ":" + source.value; }
     function currentSweepRows() {
       return state.sweepRows.map(function (row, index) {
-        const path = selectValue("sweep-path-" + index, row.path);
-        const values = selectValue("sweep-values-" + index, row.values);
-        return {path:path, values:values};
+        return {path:row.path, values:selectValue("sweep-values-" + index, row.values)};
       });
+    }
+    function sweepFieldByPath(path) {
+      return (state.sweepSchema?.fields || []).find(function (fieldInfo) { return fieldInfo.path === path; });
+    }
+    function sweepFieldDescription(fieldInfo) {
+      if (!fieldInfo) return "";
+      let html = '<p class="yaml-field-meta">用途：' + escapeHtml(fieldInfo.note || "未提供说明") + '</p><p class="yaml-field-meta">当前值：' + escapeHtml(typeof fieldInfo.value === "object" ? JSON.stringify(fieldInfo.value) : fieldInfo.value) + '</p>';
+      if (fieldInfo.level === "paper") html += '<p class="yaml-field-meta">论文依据：' + escapeHtml(fieldInfo.evidence || "见论文来源") + '</p><p class="yaml-field-meta">复现影响：' + escapeHtml(fieldInfo.reproduction_impact || "修改后偏离论文默认配置") + '</p>';
+      if (fieldInfo.level === "locked") html += '<p class="yaml-field-meta">不可 Sweep：' + escapeHtml(fieldInfo.lock_reason || fieldInfo.note) + '</p>';
+      return html;
+    }
+    function sweepDimensionHtml(row, index) {
+      const fieldInfo = sweepFieldByPath(row.path) || {path:row.path, level:"basic", level_label:"基础参数", note:""};
+      return '<div class="sweep-dimension"><div><span class="parameter-badge">' + escapeHtml(fieldInfo.level_label || fieldInfo.level) + '</span><div class="sweep-field-path">' + escapeHtml(row.path) + '</div>' + sweepFieldDescription(fieldInfo) + '</div><input id="sweep-values-' + index + '" value="' + escapeHtml(row.values) + '" placeholder="JSON 数组，例如 [256,512]" spellcheck="false"><button type="button" data-sweep-remove="' + index + '">删除</button></div>';
+    }
+    function sweepGroupsHtml(schema) {
+      if (!schema) return '<p class="helper">正在读取配置参数和用途说明...</p>';
+      const selected = new Set(state.sweepRows.map(function (row) { return row.path; }));
+      return '<div class="sweep-groups">' + (schema.levels || []).map(function (levelInfo) {
+        const fields = (schema.fields || []).filter(function (fieldInfo) { return fieldInfo.level === levelInfo.id; });
+        if (!fields.length) return "";
+        const cards = fields.map(function (fieldInfo) {
+          const supported = ["number", "text", "boolean", "list"].includes(fieldInfo.kind);
+          const canAdd = fieldInfo.editable && supported && !selected.has(fieldInfo.path);
+          const action = canAdd ? '<button type="button" class="secondary" data-sweep-add="' + escapeHtml(fieldInfo.path) + '">加入 Sweep</button>' : fieldInfo.editable && selected.has(fieldInfo.path) ? '<button type="button" disabled>已加入</button>' : '';
+          return '<div class="sweep-field-card ' + (selected.has(fieldInfo.path) ? 'selected' : '') + '"><div class="sweep-field-head"><div><span class="parameter-badge">' + escapeHtml(fieldInfo.level_label || levelInfo.label) + '</span><div class="sweep-field-path">' + escapeHtml(fieldInfo.path) + '</div></div>' + action + '</div>' + sweepFieldDescription(fieldInfo) + '</div>';
+        }).join("");
+        return '<details class="sweep-group" ' + (levelInfo.default_expanded ? 'open' : '') + '><summary>' + escapeHtml(levelInfo.label) + '（' + fields.length + '）</summary><div class="sweep-group-body">' + cards + '</div></details>';
+      }).join("") + '</div>';
     }
     function renderSweepV2() {
-      const recipe = state.sweepRecipe || "cifar10-clean-smoke";
-      const schema = state.sweepSchema?.recipe === recipe ? state.sweepSchema : null;
-      const paths = (schema?.fields || []).filter(function (item) {
-        return ["number", "string", "boolean", "list"].includes(item.kind);
-      }).map(function (item) { return item.path; });
-      const batchPaths = paths.filter(function (path) { return path.endsWith("batch_size"); });
-      const lrPaths = paths.filter(function (path) { return path === "optimizer.lr" || path.endsWith(".lr") || path.endsWith("learning_rate"); });
-      const allPaths = paths.length ? paths : ["loader.batch_size", "optimizer.lr"];
-      const rows = state.sweepRows.map(function (row, index) {
-        return '<div class="wide path-control"><select id="sweep-path-' + index + '">' + sweepFieldOptions(allPaths).map(function (item) { return '<option value="' + escapeHtml(item.value) + '" ' + (item.value === row.path ? 'selected' : '') + '>' + escapeHtml(item.label) + '</option>'; }).join("") + '</select><input id="sweep-values-' + index + '" value="' + escapeHtml(row.values) + '" placeholder="[1,2]" spellcheck="false"><button type="button" data-sweep-remove="' + index + '">删除</button></div>';
-      }).join("");
-      parameterPanel.innerHTML = commonFormStart() +
-        field("Sweep 配方", "sweep-recipe", recipesSelect("__ID__"), true) +
-        field("Batch size 参数", "sweep-batch-path", selectControl("__ID__", sweepFieldOptions(batchPaths.length ? batchPaths : ["loader.batch_size"]))) +
-        field("Batch size 取值（JSON 数组）", "sweep-batch-values", inputControl("__ID__", state.sweepBatch || "", "text", 'placeholder="[256,512]"')) +
-        field("Learning rate 参数", "sweep-lr-path", selectControl("__ID__", sweepFieldOptions(lrPaths.length ? lrPaths : ["optimizer.lr"]))) +
-        field("Learning rate 取值（JSON 数组）", "sweep-lr-values", inputControl("__ID__", state.sweepLr || "", "text", 'placeholder="[0.01,0.001]"')) +
+      const source = normalizedConfigSource(state.sweepSourceKind, state.sweepSourceKind === "path" ? state.sweepPath : state.sweepRecipe);
+      const schema = state.sweepSchemaKey === sweepSourceKey(source) ? state.sweepSchema : null;
+      const editableFields = (schema?.fields || []).filter(function (fieldInfo) { return fieldInfo.editable; });
+      const batch = editableFields.find(function (fieldInfo) { return fieldInfo.path.endsWith("batch_size"); });
+      const learningRate = editableFields.find(function (fieldInfo) { return fieldInfo.path === "optimizer.lr" || fieldInfo.path.endsWith(".lr") || fieldInfo.path.endsWith("learning_rate"); });
+      const quick = [batch, learningRate].filter(Boolean).filter(function (fieldInfo, index, values) { return values.findIndex(function (item) { return item.path === fieldInfo.path; }) === index; }).map(function (fieldInfo) { return '<button type="button" class="secondary" data-sweep-add="' + escapeHtml(fieldInfo.path) + '">快捷加入 ' + escapeHtml(fieldInfo.path) + '</button>'; }).join("");
+      const rows = state.sweepRows.map(sweepDimensionHtml).join("") || '<p class="helper">尚未加入参数维度；留空时仅按配置 seed 运行一次。</p>';
+      parameterPanel.innerHTML = configContextHtml(source) + commonFormStart() +
+        field("配置来源", "sweep-source-kind", selectControl("__ID__", [{value:"recipe",label:"内置 recipe"},{value:"path",label:"项目 YAML"}])) +
+        field("内置 recipe", "sweep-recipe", recipesSelect("__ID__"), true) +
+        field("项目 YAML", "sweep-path", pathControl("__ID__", state.sweepPath, "open_file", "yaml"), true) +
         field("Seeds（可选）", "sweep-seeds", inputControl("__ID__", state.sweepSeeds || "", "text", 'placeholder="留空则使用配置 seed"')) +
-        field("输出目录", "sweep-output", inputControl("__ID__", state.sweepOutput || "artifacts/web-sweep"), true) +
-        '<div class="wide"><strong>其他参数维度</strong>' + rows + '<button id="sweep-add" type="button" class="secondary">增加参数</button></div>' +
-        commonFormEnd() + '<div id="sweep-plan-view" class="structured-output"></div>';
+        field("输出目录", "sweep-output", pathControl("__ID__", state.sweepOutput || "artifacts/web-sweep"), true) +
+        '<div class="wide workflow-actions"><button id="sweep-load-source" type="button" class="primary">加载配置参数</button><button id="sweep-edit-source" type="button" class="secondary">编辑当前配置</button><button id="sweep-open-results" type="button" class="secondary">查看此 Sweep 的运行结果</button>' + quick + '</div>' +
+        '<div class="wide"><strong>已选参数维度</strong><div id="sweep-dimensions">' + rows + '</div></div>' + commonFormEnd() +
+        '<div id="sweep-parameter-library"><strong>参数用途与分类</strong>' + sweepGroupsHtml(schema) + '</div><div id="sweep-plan-view" class="structured-output"></div>';
+      document.getElementById("sweep-source-kind").value = source.kind;
       const recipeNode = document.getElementById("sweep-recipe");
-      if ([...recipeNode.options].some(function (option) { return option.value === recipe; })) recipeNode.value = recipe;
-      recipeNode.addEventListener("change", function () { state.sweepRecipe = this.value; state.sweepSchema = null; state.sweepRows = []; loadSweepSchema(); });
-      document.getElementById("sweep-add").addEventListener("click", function () {
-        state.sweepRows = currentSweepRows();
-        state.sweepRows.push({path:allPaths[0], values:""});
-        captureSweepValues(); renderSweepV2(); updateModulePreview();
+      if ([...recipeNode.options].some(function (option) { return option.value === state.sweepRecipe; })) recipeNode.value = state.sweepRecipe;
+      recipeNode.closest("label").classList.toggle("hidden", source.kind !== "recipe");
+      document.getElementById("sweep-path").closest("label").classList.toggle("hidden", source.kind !== "path");
+      document.getElementById("sweep-source-kind").addEventListener("change", function () { captureSweepValues(); state.sweepSourceKind = this.value; state.sweepSchema = null; state.sweepRows = []; state.sweepPlan = null; renderSweepV2(); loadSweepSchema(); });
+      recipeNode.addEventListener("change", function () { captureSweepValues(); state.sweepRecipe = this.value; state.sweepSchema = null; state.sweepRows = []; state.sweepPlan = null; setActiveConfig("recipe", this.value); loadSweepSchema(); });
+      document.getElementById("sweep-path").addEventListener("change", function () { captureSweepValues(); state.sweepPath = this.value.trim(); state.sweepSchema = null; state.sweepRows = []; state.sweepPlan = null; if (state.sweepPath) setActiveConfig("path", state.sweepPath); loadSweepSchema(); });
+      document.getElementById("sweep-load-source").addEventListener("click", function () { captureSweepValues(); const selected = currentSweepSource(); setActiveConfig(selected.kind, selected.value); state.sweepSchema = null; state.sweepRows = []; state.sweepPlan = null; loadSweepSchema(); });
+      parameterPanel.querySelectorAll("[data-sweep-add]").forEach(function (button) {
+        button.addEventListener("click", function () { captureSweepValues(); const path = button.dataset.sweepAdd; if (!state.sweepRows.some(function (row) { return row.path === path; })) state.sweepRows.push({path:path, values:""}); renderSweepV2(); updateModulePreview(); });
       });
       parameterPanel.querySelectorAll("[data-sweep-remove]").forEach(function (button) {
-        button.addEventListener("click", function () { state.sweepRows = currentSweepRows(); state.sweepRows.splice(Number(button.dataset.sweepRemove), 1); captureSweepValues(); renderSweepV2(); updateModulePreview(); });
+        button.addEventListener("click", function () { state.sweepRows = currentSweepRows(); state.sweepRows.splice(Number(button.dataset.sweepRemove), 1); renderSweepV2(); updateModulePreview(); });
       });
+      document.getElementById("sweep-edit-source").addEventListener("click", function () { captureSweepValues(); openActiveConfigInEditor(currentSweepSource()); });
+      document.getElementById("sweep-open-results").addEventListener("click", function () { captureSweepValues(); state.resultPath = state.sweepOutput; switchModule("results"); });
       parameterPanel.querySelectorAll("input, select").forEach(function (node) { node.addEventListener("input", function () { captureSweepValues(); updateModulePreview(); }); node.addEventListener("change", function () { captureSweepValues(); updateModulePreview(); }); });
       installPathPickers(parameterPanel);
-      if (!schema) loadSweepSchema();
+      if (!schema && source.value) loadSweepSchema();
     }
     function captureSweepValues() {
-      state.sweepBatch = selectValue("sweep-batch-values", state.sweepBatch || "");
-      state.sweepLr = selectValue("sweep-lr-values", state.sweepLr || "");
+      state.sweepSourceKind = selectValue("sweep-source-kind", state.sweepSourceKind);
+      state.sweepRecipe = selectValue("sweep-recipe", state.sweepRecipe);
+      state.sweepPath = selectValue("sweep-path", state.sweepPath).trim();
       state.sweepSeeds = selectValue("sweep-seeds", state.sweepSeeds || "");
       state.sweepOutput = selectValue("sweep-output", state.sweepOutput || "artifacts/web-sweep");
-      if (document.getElementById("sweep-path-0")) state.sweepRows = currentSweepRows();
+      if (document.getElementById("sweep-values-0")) state.sweepRows = currentSweepRows();
     }
     async function loadSweepSchema() {
-      const recipe = state.sweepRecipe || selectValue("sweep-recipe", "cifar10-clean-smoke");
-      const response = await fetch("/api/config-schema?recipe=" + encodeURIComponent(recipe));
+      const source = currentSweepSource();
+      if (!source.value) { statusNode.textContent = "请选择 recipe 或项目 YAML"; statusNode.className = "status failed"; return; }
+      const requestedKey = sweepSourceKey(source);
+      const query = (source.kind === "path" ? "path=" : "recipe=") + encodeURIComponent(source.value);
+      const response = await fetch("/api/config-schema?" + query);
       const payload = await response.json();
+      if (sweepSourceKey(currentSweepSource()) !== requestedKey) return;
       if (!response.ok) { statusNode.textContent = payload.error || "Sweep 配置读取失败"; statusNode.className = "status failed"; return; }
-      state.sweepRecipe = recipe; state.sweepSchema = payload; renderSweepV2(); updateModulePreview();
+      state.sweepSchema = payload; state.sweepSchemaKey = requestedKey; setActiveConfig(source.kind, source.value); renderSweepV2(); updateModulePreview();
     }
     function parseSweepValues(text, path) {
       if (!String(text || "").trim()) return null;
@@ -791,16 +871,15 @@
         if (Object.prototype.hasOwnProperty.call(matrix, path)) throw new Error("参数路径重复：" + path);
         matrix[path] = values;
       };
-      add(selectValue("sweep-batch-path", "loader.batch_size"), selectValue("sweep-batch-values", ""));
-      add(selectValue("sweep-lr-path", "optimizer.lr"), selectValue("sweep-lr-values", ""));
       currentSweepRows().forEach(function (row) { add(row.path, row.values); });
       return matrix;
     }
     function buildSweepCommand() {
-      const recipe = selectValue("sweep-recipe", state.sweepRecipe || "cifar10-clean-smoke");
+      const source = currentSweepSource();
+      if (!source.value) return "";
       let matrix;
       try { matrix = collectSweepMatrix(); } catch (error) { statusNode.textContent = error.message; statusNode.className = "status failed"; return ""; }
-      let command = "lnl sweep --recipe " + recipe;
+      let command = "lnl sweep --" + (source.kind === "path" ? "config " : "recipe ") + quoteArg(source.value);
       Object.entries(matrix).forEach(function (entry) { command += " --matrix " + quoteArg(entry[0] + "=" + JSON.stringify(entry[1])); });
       const seeds = selectValue("sweep-seeds", "").trim();
       if (seeds) command += " --seeds " + seeds;
@@ -812,12 +891,16 @@
       try { matrix = collectSweepMatrix(); } catch (error) { statusNode.textContent = error.message; statusNode.className = "status failed"; return false; }
       const seedsText = selectValue("sweep-seeds", "").trim();
       const seeds = seedsText ? seedsText.split(/\s+/).map(Number) : null;
-      const response = await fetch("/api/sweep/plan", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({recipe:selectValue("sweep-recipe"), matrix:matrix, seeds:seeds, output_dir:selectValue("sweep-output")})});
+      const source = currentSweepSource();
+      const requestBody = {matrix:matrix, seeds:seeds, output_dir:selectValue("sweep-output")};
+      requestBody[source.kind] = source.value;
+      const response = await fetch("/api/sweep/plan", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(requestBody)});
       const payload = await response.json();
       if (!response.ok) { statusNode.textContent = payload.error || "Sweep 预检失败"; statusNode.className = "status failed"; return false; }
       state.sweepPlan = payload;
       const rows = payload.runs.map(function (run) { return {run:run.run_id, seed:run.seed, parameters:Object.entries(run.overrides).map(function (entry) { return entry[0] + "=" + JSON.stringify(entry[1]); }).join("; ") || "-"}; });
-      document.getElementById("sweep-plan-view").innerHTML = '<strong>共 ' + payload.total + ' 个运行</strong>' + tableHtml(rows);
+      const warning = payload.modified_from_paper ? '<div class="sweep-warning">这些组合修改了论文参数：' + escapeHtml(payload.paper_deviation_paths.join(", ")) + '。结果不得标记为未修改的论文默认配置。</div>' : '';
+      document.getElementById("sweep-plan-view").innerHTML = warning + '<strong>共 ' + payload.total + ' 个运行</strong>' + tableHtml(rows);
       statusNode.textContent = "Sweep 预检通过：" + payload.total + " 个运行"; statusNode.className = "status success";
       return true;
     }
@@ -982,17 +1065,32 @@
       parameterPanel.innerHTML = commonFormStart() +
         field("论文方法", "paper-id", selectControl("__ID__", paperItems.length ? paperItems : ["binary-risk"])) +
         field("工具箱配置", "paper-recipe", selectControl("__ID__", configItems.length ? configItems : [""])) +
-        '<div class="wide actions"><button id="paper-open-yaml" type="button" class="primary">查看/编辑此 YAML</button></div>' +
+        '<div class="wide workflow-actions"><button id="paper-run-config" type="button" class="primary">运行正式配置</button><button id="paper-open-yaml" type="button" class="secondary">编辑为项目 YAML</button><button id="paper-open-sweep" type="button" class="secondary">使用此配置做 Sweep</button></div>' +
         commonFormEnd() + '<div id="paper-details"></div>';
       document.getElementById("paper-id").value = state.paperId;
       document.getElementById("paper-recipe").value = state.paperRecipe;
       document.getElementById("paper-id").addEventListener("change", function (event) { state.paperId = event.target.value; state.paperRecipe = ""; renderPapers(); updateModulePreview(); });
       document.getElementById("paper-recipe").addEventListener("change", function (event) { state.paperRecipe = event.target.value; renderPaperDetails(); updateModulePreview(); });
+      document.getElementById("paper-run-config").addEventListener("click", function () {
+        setActiveConfig("recipe", state.paperRecipe);
+        const command = "lnl run --recipe " + state.paperRecipe + " --check-data";
+        setRequest({command:command}, command);
+        statusNode.textContent = "已准备论文正式配置；确认预览后执行";
+        statusNode.className = "status";
+      });
       document.getElementById("paper-open-yaml").addEventListener("click", async function () {
+        const recipe = state.paperRecipe;
+        setActiveConfig("recipe", recipe);
+        state.yamlSuggestedPath = defaultCustomYamlPath(recipe);
+        switchModule("yaml");
         yamlEditorPanel.classList.remove("hidden");
         renderYamlSources();
-        await loadYamlSelection(state.paperRecipe);
+        await loadYamlSelection(recipe);
         yamlEditorPanel.scrollIntoView({behavior:"smooth", block:"start"});
+      });
+      document.getElementById("paper-open-sweep").addEventListener("click", function () {
+        setSweepSource({kind:"recipe", value:state.paperRecipe, label:state.paperRecipe});
+        switchModule("sweep");
       });
       renderPaperDetails();
     }
@@ -1007,7 +1105,7 @@
       const limitations = (paper.limitations || []).map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("");
       node.innerHTML = '<div class="guide-card"><h3>' + escapeHtml(paper.acronym + "：" + paper.title) + '</h3><p>' + escapeHtml(paper.venue + " " + paper.year) + ' · <a href="' + escapeHtml(paper.source_url) + '" target="_blank" rel="noreferrer">查看论文来源</a></p><p><strong>解决的问题：</strong>' + escapeHtml(paper.summary) + '</p><p><strong>核心方法：</strong>' + escapeHtml(paper.mechanism) + '</p></div>' +
         '<div class="guide-card"><strong>论文训练流程</strong><ol>' + lifecycle + '</ol></div>' +
-        '<div class="guide-card"><strong>当前配置如何运行这篇论文</strong>' + tableHtml(configRows) + '<p class="helper">下方“执行此指令”会先验证该配置；“查看/编辑此 YAML”可打开完整参数。</p></div>' +
+        '<div class="guide-card"><strong>当前配置如何运行这篇论文</strong>' + tableHtml(configRows) + '<p class="helper">可直接准备正式训练指令，也可另存为项目 YAML 后修改或进入参数 Sweep；内置配置不会被覆盖。</p></div>' +
         '<div class="guide-card"><strong>论文方法、配置字段与代码的关系</strong>' + tableHtml(mappingRows) + '</div>' +
         (limitations ? '<details class="guide-card"><summary>已知限制</summary><ul>' + limitations + '</ul></details>' : '');
     }
@@ -1241,10 +1339,12 @@
         return;
       }
       document.getElementById("yaml-text").value = payload.content;
-      document.getElementById("yaml-path").value = byPath ? payload.path : "";
+      document.getElementById("yaml-path").value = byPath ? payload.path : state.yamlSuggestedPath;
       renderYamlFields(schema);
       state.yamlSourcePath = payload.path;
       state.yamlTextDirty = false;
+      setActiveConfig(byPath ? "path" : "recipe", byPath ? payload.path : value, byPath ? payload.path : value);
+      state.yamlSuggestedPath = "";
       document.getElementById("yaml-source-path").textContent = "来源：" + payload.path + "；可通过参数菜单或下方完整 YAML 编辑。";
       statusNode.textContent = "已加载：" + (payload.recipe || payload.path);
       statusNode.className = "status";
@@ -1260,6 +1360,21 @@
       yamlEditorPanel.classList.remove("hidden");
       await loadYamlSelection("path:" + path);
     }
+    async function openActiveConfigInEditor(source = state.activeConfig) {
+      switchModule("yaml");
+      yamlEditorPanel.classList.remove("hidden");
+      renderYamlSources();
+      if (source.kind === "path") await loadYamlFromPath(source.value);
+      else {
+        state.yamlSuggestedPath = defaultCustomYamlPath(source.value);
+        await loadYamlSelection(source.value);
+      }
+      yamlEditorPanel.scrollIntoView({behavior:"smooth", block:"start"});
+    }
+    function openSweepForSource(source) {
+      setSweepSource(source);
+      switchModule("sweep");
+    }
     function configCommand(action, path) {
       const command = "lnl " + action + " --config " + quoteArg(path) + " --check-data";
       setRequest({command: command}, command);
@@ -1271,13 +1386,13 @@
       if (!path) {
         statusNode.textContent = "请先填写另存为路径";
         statusNode.className = "status failed";
-        return;
+        return null;
       }
       let patches;
       try { patches = collectYamlPatches(); } catch (error) {
         statusNode.textContent = error.message;
         statusNode.className = "status failed";
-        return;
+        return null;
       }
       const body = {path: path, recipe: state.yamlSchema?.recipe, source_path: state.yamlSourcePath, overwrite: overwrite};
       const paperChanges = paperChangePaths();
@@ -1285,13 +1400,13 @@
         body.content = document.getElementById("yaml-text").value;
         if (state.yamlSchema?.formal_recipe) {
           body.acknowledge_paper_impact = window.confirm("完整 YAML 编辑可能改变论文参数。确认已理解这会使配置偏离论文默认值吗？");
-          if (!body.acknowledge_paper_impact) return;
+          if (!body.acknowledge_paper_impact) return null;
         }
       } else {
         body.patches = patches;
         if (paperChanges.length) {
           body.acknowledge_paper_impact = window.confirm("论文参数已修改：" + paperChanges.join(", ") + "。确认继续并标记为已偏离论文配置吗？");
-          if (!body.acknowledge_paper_impact) return;
+          if (!body.acknowledge_paper_impact) return null;
         }
       }
       const response = await fetch("/api/configs", {
@@ -1303,12 +1418,14 @@
       if (!response.ok) {
         statusNode.textContent = payload.error || "YAML 保存失败";
         statusNode.className = "status failed";
-        return;
+        return null;
       }
       await loadYamlFromPath(payload.path);
       statusNode.textContent = "已保存：" + payload.path;
       statusNode.className = "status success";
-      if (nextAction) configCommand(nextAction, payload.path);
+      if (nextAction === "sweep") openSweepForSource({kind:"path", value:payload.path, label:payload.path});
+      else if (nextAction) configCommand(nextAction, payload.path);
+      return payload;
     }
     function buildBeginnerCommand() {
       const recipe = selectValue("tutorial-recipe", state.tutorialRecipe || "cifar10-symmetric-ce-smoke");
@@ -1503,7 +1620,8 @@
           const createdPath = state.pendingYamlPath;
           state.pendingYamlPath = "";
           await loadYamlFromPath(createdPath);
-          statusNode.textContent = "YAML 已创建并打开，可直接编辑：" + createdPath;
+          setActiveConfig("path", createdPath);
+          statusNode.textContent = "YAML 已创建并打开；现在可验证、运行或转到参数 Sweep：" + createdPath;
           statusNode.className = "status success";
         } else if (job.error || job.returncode !== 0) {
           state.pendingYamlPath = "";
@@ -1577,7 +1695,8 @@
       yamlEditorPanel.classList.toggle("hidden");
       if (!yamlEditorPanel.classList.contains("hidden")) {
         renderYamlSources();
-        await loadYamlFromRecipe();
+        if (state.activeConfig?.kind === "path") await loadYamlFromPath(state.activeConfig.value);
+        else await loadYamlSelection(state.activeConfig?.value || currentRecipeId());
       }
     });
     document.getElementById("yaml-source").addEventListener("change", loadYamlFromRecipe);
@@ -1586,6 +1705,7 @@
     document.getElementById("yaml-overwrite").addEventListener("click", function () { saveYaml(true); });
     document.getElementById("yaml-validate").addEventListener("click", function () { saveYaml(true, "validate"); });
     document.getElementById("yaml-run").addEventListener("click", function () { saveYaml(true, "run"); });
+    document.getElementById("yaml-sweep").addEventListener("click", function () { saveYaml(true, "sweep"); });
     document.getElementById("yaml-text").addEventListener("input", function () {
       state.yamlTextDirty = true;
       document.getElementById("yaml-schema-meta").textContent = "已直接编辑完整 YAML；保存时以文本内容为准，并执行配置验证。";

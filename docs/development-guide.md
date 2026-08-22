@@ -213,7 +213,10 @@ seed、resolved override 和 config hash 共同标识。
 
 CLI matrix 值必须是 JSON 数组并保持原始数值、布尔或字符串类型。未传 `--seeds`
 时只使用配置自身的 seed；显式 seeds 会与所有参数维度继续做笛卡尔积。Web 的
-“参数 Sweep”从所选 recipe 的实际字段生成路径菜单，并在执行前显示完整运行计划。
+“参数 Sweep”可从内置 recipe 或项目 YAML 生成路径菜单，并在执行前显示完整运行计划。
+参数路径、分组、用途和修改权限均来自参数元数据 Registry；服务端拒绝未知、锁定或
+类型不兼容的矩阵值。项目 YAML 必须先保存并通过配置校验，不能把未保存文本直接交给
+训练或 Sweep。
 
 Web 的“运行管理”直接读取 `metrics.jsonl`、`final_metrics.json` 和 Sweep manifest，
 可查看最终指标、部分训练进度及多运行逐 epoch 叠加曲线。路径按钮通过本机 Windows
@@ -221,10 +224,15 @@ Web 的“运行管理”直接读取 `metrics.jsonl`、`final_metrics.json` 和
 
 论文正式配置的 Web 参数面板以 `web/lnl_parameter_metadata_registry_revised.yaml` 为权限和
 解释来源。基础参数与论文参数默认展开，高级参数默认折叠，锁定参数只读展示。修改
-论文参数必须确认复现影响，保存后的 `parameter_record` 会记录原值、新值、formal
-recipe 和 `modified_from_paper`；无论参数控件还是完整 YAML 文本，锁定字段都由服务端
+论文参数必须确认复现影响，保存后的 `meta.web_parameter_record` 会记录原值、新值、
+formal recipe 和 `modified_from_paper`；该字段专供 Web 展示，不能占用训练参数抽样使用
+的顶层 `parameter_record`。无论参数控件还是完整 YAML 文本，锁定字段都由服务端
 再次比较并拒绝修改。普通 WebUI 不得提供绕过该校验的 runner、variant、protocol、
 fidelity、组件 wiring、模型选择或数据/噪声协议修改入口。
+
+Web 页面维护唯一的当前配置来源（内置 recipe 或项目 YAML 路径）。论文页、YAML
+编辑器、Sweep 和运行管理之间只传递这个来源与输出目录；内置 recipe 的编辑动作必须
+先另存副本，项目 YAML 不得反向注册成内置 recipe。
 
 比较层把 `group_by` 视为允许变化的研究维度，把 `require_equal` 视为同组公平比较
 必须一致的条件。Noise Manifest 只在同一 seed 和可比条件下跨方法核对；不同 seed
