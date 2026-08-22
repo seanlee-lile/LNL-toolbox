@@ -33,6 +33,8 @@ from lnl_toolbox.composition import (
 from lnl_toolbox.core.config_overrides import apply_override_assignments
 from lnl_toolbox.evaluation.run_comparison import compare_runs, write_report
 from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE, DatasetStatusReport
+from lnl_toolbox.data.profile import NoiseRateInfo, NoiseRateStatus
+from lnl_toolbox.training.compatibility import CompatibilityResult, CompatibilityStatus
 from lnl_toolbox.training.runners import apply_epoch_override, resolve_runner, runner_names
 from lnl_toolbox.training.service import ExperimentService
 from lnl_toolbox.training.sweep import (
@@ -167,6 +169,25 @@ def build_parser() -> argparse.ArgumentParser:
     data_show.add_argument("alias")
     data_inspect = data_sub.add_parser("inspect", help="load and validate train/test layout")
     data_inspect.add_argument("alias")
+    data_inspect.add_argument("--format", choices=("human", "json"), default="human")
+    data_declare = data_sub.add_parser("declare", help="record explicit dataset knowledge")
+    data_declare.add_argument("alias")
+    data_declare.add_argument(
+        "--clean-train-labels", choices=("available", "unavailable", "unknown")
+    )
+    data_declare.add_argument("--noise-status", choices=("clean", "noisy", "unknown"))
+    data_declare.add_argument("--noise-origin", choices=("synthetic", "native", "unknown"))
+    data_declare.add_argument("--noise-rate", type=float)
+    data_declare.add_argument(
+        "--noise-rate-status", choices=("known", "estimated", "unknown")
+    )
+    data_declare.add_argument("--noise-rate-provenance")
+    data_declare.add_argument(
+        "--noise-manifest", choices=("available", "unavailable", "unknown")
+    )
+    data_declare.add_argument("--clean-labels-location")
+    data_declare.add_argument("--clean-labels-provenance")
+    data_declare.add_argument("--notes")
     data_remove = data_sub.add_parser("remove", help="remove a local registration")
     data_remove.add_argument("alias")
     data_verify = data_sub.add_parser("verify", help="run one epoch and store evidence")
@@ -174,6 +195,15 @@ def build_parser() -> argparse.ArgumentParser:
     data_verify.add_argument("--recipe")
     data_verify.add_argument("--output-dir", type=Path)
     data_verify.add_argument("--project-root", type=Path)
+
+    methods = sub.add_parser("methods", help="discover dataset/method compatibility")
+    methods_sub = methods.add_subparsers(dest="methods_command", required=True)
+    methods_compatible = methods_sub.add_parser(
+        "compatible", help="compare a registered dataset with all runners"
+    )
+    methods_compatible.add_argument("--dataset", required=True)
+    methods_compatible.add_argument("--noise-rate-prior", type=float)
+    methods_compatible.add_argument("--format", choices=("human", "json"), default="human")
 
     web = sub.add_parser("web", help="start the local Data Management Web UI")
     web.add_argument("--host", default="127.0.0.1")
@@ -353,7 +383,24 @@ def _paper_config_value(config: dict[str, Any], key: str) -> str:
     return "；".join(staged) if staged else "由执行器决定"
 
 
-def _print_plan(config: dict[str, Any], config_path: Path, project: Path) -> None:
+def _print_compatibility_result(result: CompatibilityResult | None) -> None:
+    print("Compatibility:")
+    if result is None:
+        print("  NOT_CHECKED")
+        return
+    print(f"  {result.status.value.upper()}")
+    for reason in result.reasons:
+        print(f"  - {reason.code}: {reason.message}")
+    for required in result.required_user_inputs:
+        print(f"  required: {required}")
+
+
+def _print_plan(
+    config: dict[str, Any],
+    config_path: Path,
+    project: Path,
+    compatibility: CompatibilityResult | None = None,
+) -> None:
     runner = resolve_runner(config)
     plan = runner.describe(config)
     print("Configuration preview")
@@ -364,6 +411,7 @@ def _print_plan(config: dict[str, Any], config_path: Path, project: Path) -> Non
     print(f"  Training budget: {plan.training_budget}")
     for field in plan.fields:
         print(f"  {field.label}: {field.value}")
+    _print_compatibility_result(compatibility)
 
 
 def _doctor(args: argparse.Namespace) -> int:
@@ -515,10 +563,12 @@ def _list_components(args: argparse.Namespace) -> int:
 
 def _validate(args: argparse.Namespace) -> int:
     config, path, _recipe, project = _load_source(args)
-    runner = _validate_with_registry(config, check_data=args.check_data)
+    service = ExperimentService()
+    runner = service.preflight(config, check_data=args.check_data)
     print(f"配置有效: {path}")
     print(f"执行器: {runner.name}")
     print(f"项目根目录: {project}")
+    _print_compatibility_result(service.last_compatibility)
     return 0
 
 
@@ -529,11 +579,12 @@ def _run(args: argparse.Namespace) -> int:
         apply_epoch_override(config, args.epochs)
     if args.no_check_data and not args.dry_run:
         raise ValueError("--no-check-data is only valid together with --dry-run")
-    _validate_with_registry(config, check_data=_should_check_data(args))
+    service = ExperimentService()
+    service.preflight(config, check_data=_should_check_data(args))
     if args.dry_run:
-        _print_plan(config, path, project)
+        _print_plan(config, path, project, service.last_compatibility)
         return 0
-    result = ExperimentService().run(
+    result = service.run(
         config,
         args.output_dir,
         args.resume,
@@ -1090,6 +1141,31 @@ def _print_dataset_report(report: DatasetStatusReport) -> None:
         print(f"Error            {report.error}")
 
 
+def _print_dataset_profile(report: DatasetStatusReport) -> None:
+    _print_dataset_report(report)
+    profile = report.profile
+    if profile is None:
+        return
+    print(f"Task             {profile.task}")
+    print(f"Modality         {profile.modality.value}")
+    print(f"Input shape      {profile.input_shape or '-'}")
+    print(f"Channels         {profile.channels if profile.channels is not None else '-'}")
+    print(f"Available splits {', '.join(profile.available_splits)}")
+    print("Sample counts    " + json.dumps(dict(profile.sample_counts_by_split), sort_keys=True))
+    print("Class distribution " + json.dumps(dict(profile.class_distribution_by_split), sort_keys=True))
+    print(f"Observed labels  {profile.observed_train_labels.value}")
+    print(f"Clean labels     {profile.clean_train_labels.value}")
+    print(f"Noise status     {profile.noise.status.value}")
+    print(f"Noise origin     {profile.noise.origin.value}")
+    print(f"Noise rate       {profile.noise.rate.status.value}")
+    if profile.noise.rate.value is not None:
+        print(f"Noise rate value {profile.noise.rate.value}")
+    if profile.noise.rate.provenance:
+        print(f"Noise provenance {profile.noise.rate.provenance}")
+    print(f"Stable indices   {profile.stable_indices.value}")
+    print(f"Profile fingerprint {profile.fingerprint}")
+
+
 def _print_dataset_table(reports) -> None:
     print(f"{'DATASET':<24} {'ADAPTER':<30} {'STATUS':<12} LOCATION")
     for report in reports:
@@ -1146,10 +1222,45 @@ def _data_command(args: argparse.Namespace) -> int:
         return 0
     if args.data_command == "inspect":
         report = service.inspect(args.alias)
-        _print_dataset_report(report)
+        if args.format == "json":
+            print(json.dumps(report.to_dict(), ensure_ascii=False, sort_keys=True))
+        else:
+            _print_dataset_profile(report)
         if report.status != "ready":
             return 2
-        print("Layout validated; training has not yet been verified.")
+        if args.format == "human":
+            print("Layout validated; training has not yet been verified.")
+        return 0
+    if args.data_command == "declare":
+        updates: dict[str, Any] = {}
+        for argument, field in (
+            (args.clean_train_labels, "clean_train_labels"),
+            (args.noise_status, "noise_status"),
+            (args.noise_origin, "noise_origin"),
+            (args.noise_manifest, "noise_manifest"),
+            (args.clean_labels_location, "clean_labels_location"),
+            (args.clean_labels_provenance, "clean_labels_provenance"),
+            (args.notes, "semantic_notes"),
+        ):
+            if argument is not None:
+                updates[field] = argument
+        if args.noise_rate is not None or args.noise_rate_status is not None:
+            status = args.noise_rate_status or "known"
+            updates["noise_rate"] = NoiseRateInfo(
+                NoiseRateStatus(status),
+                args.noise_rate,
+                args.noise_rate_provenance,
+            ).to_dict()
+        elif args.noise_rate_provenance is not None:
+            raise ValueError("--noise-rate-provenance requires --noise-rate")
+        if not updates:
+            raise ValueError("provide at least one dataset declaration")
+        capabilities = service.update_declarations(args.alias, updates)
+        print(f"Declarations updated: {args.alias}")
+        print(f"  clean train labels: {capabilities.clean_train_labels.value}")
+        print(f"  noise status: {capabilities.noise_status.value}")
+        print(f"  noise origin: {capabilities.noise_origin.value}")
+        print(f"  noise rate: {capabilities.noise_rate.status.value}")
         return 0
     if args.data_command == "verify":
         record = service.record(args.alias)
@@ -1186,6 +1297,37 @@ def _data_command(args: argparse.Namespace) -> int:
     raise ValueError(f"unknown data command: {args.data_command}")
 
 
+def _methods_command(args: argparse.Namespace) -> int:
+    if args.methods_command != "compatible":
+        raise ValueError(f"unknown methods command: {args.methods_command}")
+    results = ExperimentService().list_compatible_methods(
+        args.dataset,
+        method_noise_rate_prior=args.noise_rate_prior,
+    )
+    if args.format == "json":
+        print(json.dumps([item.to_dict() for item in results], ensure_ascii=False))
+        return 0
+    print(f"Dataset: {args.dataset}")
+    labels = (
+        (CompatibilityStatus.COMPATIBLE, "Compatible"),
+        (CompatibilityStatus.COMPATIBLE_WITH_REQUIREMENTS, "Requires additional input"),
+        (CompatibilityStatus.INCOMPATIBLE, "Unavailable"),
+    )
+    for status, label in labels:
+        print(f"\n{label}:")
+        members = [item for item in results if item.status is status]
+        if not members:
+            print("  -")
+            continue
+        for result in members:
+            print(f"  {result.method}")
+            for reason in result.reasons:
+                print(f"    {reason.code}: {reason.message}")
+            for required in result.required_user_inputs:
+                print(f"    required: {required}")
+    return 0
+
+
 def _web(args: argparse.Namespace) -> int:
     root = find_project_root(None, args.project_root)
     server = root / "web" / "command_console.py"
@@ -1220,6 +1362,8 @@ def main(argv: list[str] | None = None) -> int:
             return _resume(args)
         if args.command == "data":
             return _data_command(args)
+        if args.command == "methods":
+            return _methods_command(args)
         if args.command == "web":
             return _web(args)
         if args.command == "sweep":

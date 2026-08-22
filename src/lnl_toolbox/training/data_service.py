@@ -24,6 +24,19 @@ from lnl_toolbox.data.contracts import (
 )
 from lnl_toolbox.data.mnist import add_mnist_sources
 from lnl_toolbox.data.local_catalog import LocalDatasetCatalog, LocalDatasetRecord
+from lnl_toolbox.data.profile import (
+    DatasetCapabilities,
+    DatasetDeclarations,
+    DatasetProfile,
+    KnowledgeState,
+    Modality,
+    NoiseKnowledge,
+    NoiseOrigin,
+    NoiseRateInfo,
+    NoiseRateStatus,
+    NoiseStatus,
+    resolve_dataset_capabilities,
+)
 from lnl_toolbox.data.real_noise import add_real_noise_sources
 from lnl_toolbox.data.registry import DatasetRegistry
 from lnl_toolbox.data.sources import add_existing_sources
@@ -102,6 +115,109 @@ def _is_image_split(split: RawDatasetSplit) -> bool:
     value = split.inputs[0]
     return isinstance(value, (str, Path, Image.Image)) or (
         isinstance(value, np.ndarray) and value.ndim in {2, 3}
+    )
+
+
+def _input_contract(split: RawDatasetSplit) -> tuple[Modality, tuple[int, ...] | None, int | None]:
+    """Inspect the first deterministic sample without applying transforms."""
+
+    if len(split) == 0:
+        return Modality.UNKNOWN, None, None
+    value = split.inputs[0]
+    if isinstance(value, (str, Path)):
+        with Image.open(value) as image:
+            channels = len(image.getbands())
+            return Modality.IMAGE, (image.height, image.width, channels), channels
+    if isinstance(value, Image.Image):
+        channels = len(value.getbands())
+        return Modality.IMAGE, (value.height, value.width, channels), channels
+    shape = tuple(int(item) for item in np.asarray(value).shape)
+    if len(shape) in {2, 3}:
+        channels = 1 if len(shape) == 2 else shape[-1]
+        return Modality.IMAGE, shape if len(shape) == 3 else (*shape, 1), channels
+    if len(shape) == 1:
+        return Modality.TABULAR, shape, None
+    return Modality.UNKNOWN, shape or None, None
+
+
+def _profile_from_splits(
+    *,
+    name: str,
+    adapter: str,
+    source: str | None,
+    splits: Mapping[str, RawDatasetSplit],
+) -> DatasetProfile:
+    train = splits["train"]
+    modality, input_shape, channels = _input_contract(train)
+    classes = max(split.num_classes for split in splits.values())
+    distributions = {
+        split_name: tuple(
+            int(value) for value in np.bincount(split.observed_targets, minlength=classes)
+        )
+        for split_name, split in splits.items()
+    }
+    split_fingerprints = {
+        split_name: split.identity.fingerprint for split_name, split in splits.items()
+    }
+    dataset_fingerprint = hashlib.sha256(
+        json.dumps(split_fingerprints, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    clean_train = (
+        KnowledgeState.AVAILABLE
+        if train.clean_targets is not None
+        else KnowledgeState.UNKNOWN
+    )
+    validation = splits.get("validation")
+    clean_validation = (
+        KnowledgeState.UNAVAILABLE
+        if validation is None
+        else KnowledgeState.AVAILABLE
+        if validation.clean_targets is not None
+        else KnowledgeState.UNKNOWN
+    )
+    if train.clean_targets is None:
+        noise = NoiseKnowledge()
+    else:
+        changed = train.observed_targets != train.clean_targets
+        if bool(changed.any()):
+            noise = NoiseKnowledge(
+                NoiseStatus.NOISY,
+                NoiseOrigin.NATIVE,
+                NoiseRateInfo(
+                    NoiseRateStatus.KNOWN,
+                    float(changed.mean()),
+                    "inspected_aligned_observed_and_clean_train_targets",
+                ),
+            )
+        else:
+            noise = NoiseKnowledge(
+                NoiseStatus.CLEAN,
+                NoiseOrigin.UNKNOWN,
+                NoiseRateInfo(NoiseRateStatus.NOT_APPLICABLE),
+            )
+    class_names = train.class_names or tuple(str(index) for index in range(classes))
+    return DatasetProfile(
+        dataset=name,
+        adapter=adapter,
+        source=source,
+        task="classification",
+        modality=modality,
+        num_classes=classes,
+        input_shape=input_shape,
+        channels=channels,
+        sample_counts_by_split=tuple(
+            (split_name, len(split)) for split_name, split in splits.items()
+        ),
+        available_splits=tuple(splits),
+        class_names=tuple(class_names),
+        class_distribution_by_split=tuple(distributions.items()),
+        observed_train_labels=KnowledgeState.AVAILABLE,
+        clean_train_labels=clean_train,
+        clean_validation_labels=clean_validation,
+        stable_indices=KnowledgeState.AVAILABLE,
+        dataset_fingerprint=dataset_fingerprint,
+        split_fingerprints=tuple(split_fingerprints.items()),
+        noise=noise,
     )
 
 
@@ -839,6 +955,7 @@ class DatasetStatusReport:
     fingerprint: str | None = None
     training_evidence: Mapping[str, Any] | None = None
     error: str | None = None
+    profile: DatasetProfile | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -856,6 +973,7 @@ class DatasetStatusReport:
                 None if self.training_evidence is None else dict(self.training_evidence)
             ),
             "error": self.error,
+            "profile": None if self.profile is None else self.profile.to_dict(),
         }
 
 
@@ -922,6 +1040,14 @@ class DataService:
         else:
             status = "incomplete"
         evidence = dict(record.evidence or {})
+        profile = None
+        if record.profile is not None:
+            candidate = DatasetProfile.from_dict(record.profile)
+            if (
+                candidate.fingerprint == record.profile_fingerprint
+                and candidate.fingerprint == record.profile.get("fingerprint")
+            ):
+                profile = candidate
         return DatasetStatusReport(
             name=record.alias,
             adapter=record.adapter,
@@ -935,6 +1061,7 @@ class DataService:
             fingerprint=evidence.get("fingerprint") or evidence.get("data_fingerprint"),
             training_evidence=evidence if effective == "training_verified" else None,
             error=record.error,
+            profile=profile,
         )
 
     def list_datasets(self) -> tuple[DatasetStatusReport, ...]:
@@ -1034,14 +1161,18 @@ class DataService:
         name: str,
         adapter: str,
         location: str | None,
-        train: RawDatasetSplit,
-        test: RawDatasetSplit,
+        splits: Mapping[str, RawDatasetSplit],
     ) -> DatasetStatusReport:
+        train = splits["train"]
+        test = splits["test"]
         train_fingerprint = train.identity.fingerprint
         test_fingerprint = test.identity.fingerprint
         fingerprint = hashlib.sha256(
             f"{train_fingerprint}:{test_fingerprint}".encode("utf-8")
         ).hexdigest()
+        profile = _profile_from_splits(
+            name=name, adapter=adapter, source=location, splits=splits
+        )
         return DatasetStatusReport(
             name=name,
             adapter=adapter,
@@ -1053,9 +1184,16 @@ class DataService:
             train_fingerprint=train_fingerprint,
             test_fingerprint=test_fingerprint,
             fingerprint=fingerprint,
+            profile=profile,
         )
 
-    def inspect(self, source: object, *, seed: int = 0) -> DatasetStatusReport:
+    def inspect(
+        self,
+        source: object,
+        *,
+        seed: int = 0,
+        persist: bool = True,
+    ) -> DatasetStatusReport:
         record: LocalDatasetRecord | None = None
         if isinstance(source, Mapping):
             config = dict(source)
@@ -1077,19 +1215,37 @@ class DataService:
             self.registry.validate(spec)
             train = self.registry.load(spec, "train", seed=seed)
             test = self.registry.load(spec, "test", seed=seed)
-            report = self._inspection_report(name, adapter, location, train, test)
-            if record is not None:
+            splits = {"train": train, "test": test}
+            try:
+                validation = self.registry.load(spec, "validation", seed=seed)
+            except (FileNotFoundError, KeyError):
+                validation = None
+            except ValueError as exc:
+                if "split must be train or test" not in str(exc):
+                    raise
+                validation = None
+            if validation is not None and validation.split == "validation" and len(validation):
+                splits["validation"] = validation
+            report = self._inspection_report(name, adapter, location, splits)
+            if record is not None and persist:
                 evidence = report.to_dict()
+                evidence.pop("profile", None)
                 evidence.pop("training_evidence", None)
                 if record.effective_state == "training_verified":
                     combined = {**dict(record.evidence or {}), **evidence}
                     self.catalog.mark_training_verified(record.alias, combined)
                     report = replace(report, training_evidence=combined)
                 else:
-                    self.catalog.mark_layout_validated(record.alias, evidence)
+                    self.catalog.mark_layout_validated(
+                        record.alias,
+                        evidence,
+                        profile=report.profile.to_dict(),
+                    )
+                if record.effective_state == "training_verified":
+                    self.catalog.set_profile(record.alias, report.profile.to_dict())
             return report
         except Exception as exc:
-            if record is not None:
+            if record is not None and persist:
                 self.catalog.mark_failed(record.alias, exc)
             return DatasetStatusReport(
                 name=name,
@@ -1098,6 +1254,53 @@ class DataService:
                 location=location,
                 error=f"{type(exc).__name__}: {exc}",
             )
+
+    def set_declarations(
+        self,
+        name: object,
+        declarations: DatasetDeclarations,
+    ) -> DatasetCapabilities:
+        record = self.catalog.set_declarations(name, declarations.to_dict())
+        if record.profile is None:
+            raise ValueError("dataset must be inspected before declarations are resolved")
+        return resolve_dataset_capabilities(
+            DatasetProfile.from_dict(record.profile), declarations
+        )
+
+    def declarations(self, name: object) -> DatasetDeclarations:
+        return DatasetDeclarations.from_dict(self.record(name).declarations)
+
+    def update_declarations(
+        self,
+        name: object,
+        updates: Mapping[str, Any],
+    ) -> DatasetCapabilities:
+        """Persist an explicit, partial user declaration after inspection."""
+
+        payload = self.declarations(name).to_dict()
+        for key, value in updates.items():
+            if key not in payload:
+                raise ValueError(f"unknown dataset declaration field: {key}")
+            payload[key] = value
+        return self.set_declarations(name, DatasetDeclarations.from_dict(payload))
+
+    def capabilities(
+        self,
+        source: object,
+        *,
+        seed: int = 0,
+        persist: bool = False,
+    ) -> DatasetCapabilities:
+        resolved_source = self.resolve_config(source) if isinstance(source, Mapping) else source
+        report = self.inspect(resolved_source, seed=seed, persist=persist)
+        if report.status != "ready" or report.profile is None:
+            raise ValueError(report.error or f"dataset profile is unavailable: {source}")
+        declarations = DatasetDeclarations()
+        if not isinstance(resolved_source, Mapping):
+            record = self._record_for(resolved_source)
+            if record is not None:
+                declarations = DatasetDeclarations.from_dict(record.declarations)
+        return resolve_dataset_capabilities(report.profile, declarations)
 
     def verification_config(
         self,

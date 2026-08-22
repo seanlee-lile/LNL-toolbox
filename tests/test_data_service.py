@@ -24,6 +24,14 @@ from lnl_toolbox.training.data_service import (
     DataService,
     prepare_experiment_data,
 )
+from lnl_toolbox.data.profile import (
+    DatasetDeclarations,
+    KnowledgeState,
+    Modality,
+    NoiseRateInfo,
+    NoiseRateStatus,
+    NoiseStatus,
+)
 
 
 class _FixtureAdapter:
@@ -400,6 +408,80 @@ class DataServiceTest(unittest.TestCase):
             self.assertIn("prepare_experiment_data", source, filename)
             for pattern in forbidden:
                 self.assertNotIn(pattern, source, f"{filename}: {pattern}")
+
+    def test_inspect_generates_deterministic_profile_and_persists_it(self) -> None:
+        registry = DatasetRegistry()
+        registry.add(_FixtureAdapter())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            catalog = LocalDatasetCatalog(root / "catalog.json")
+            service = DataService(registry, catalog)
+            service.register("fixture-local", "fixture", {"root": root})
+
+            first = service.inspect("fixture-local", seed=7)
+            second = service.inspect("fixture-local", seed=7)
+
+            self.assertIsNotNone(first.profile)
+            self.assertEqual(first.profile, second.profile)
+            self.assertEqual(first.profile.modality, Modality.TABULAR)
+            self.assertEqual(first.profile.input_shape, (2,))
+            self.assertEqual(first.profile.available_splits, ("test", "train", "validation"))
+            self.assertEqual(first.profile.observed_train_labels, KnowledgeState.AVAILABLE)
+            self.assertEqual(first.profile.clean_train_labels, KnowledgeState.UNKNOWN)
+            self.assertEqual(first.profile.noise.status, NoiseStatus.UNKNOWN)
+            record = catalog.get("fixture-local")
+            self.assertEqual(record.profile_fingerprint, first.profile.fingerprint)
+            self.assertEqual(record.profile["fingerprint"], first.profile.fingerprint)
+
+    def test_missing_clean_targets_do_not_imply_noisy_dataset(self) -> None:
+        registry = DatasetRegistry()
+        registry.add(_NativeNoisyFixtureAdapter())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = DataService(registry, LocalDatasetCatalog(root / "catalog.json"))
+            service.register("native", "native_noisy_fixture", {"root": root})
+            report = service.inspect("native")
+            self.assertEqual(report.profile.clean_train_labels, KnowledgeState.UNKNOWN)
+            self.assertEqual(report.profile.noise.status, NoiseStatus.UNKNOWN)
+
+            capabilities = service.set_declarations(
+                "native",
+                DatasetDeclarations(
+                    clean_train_labels=KnowledgeState.UNAVAILABLE,
+                    method_noise_rate_prior=NoiseRateInfo(
+                        NoiseRateStatus.KNOWN, 0.2, "user"
+                    ),
+                ),
+            )
+            self.assertEqual(capabilities.clean_train_labels, KnowledgeState.UNAVAILABLE)
+            self.assertEqual(
+                service.capabilities("native").method_noise_rate_prior.value,
+                0.2,
+            )
+
+    def test_old_local_catalog_record_without_profile_remains_loadable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "catalog.json"
+            path.write_text(
+                json.dumps({
+                    "version": 1,
+                    "datasets": {
+                        "legacy": {
+                            "adapter": "fixture",
+                            "data": {"name": "fixture", "root": str(root)},
+                            "state": "registered",
+                            "evidence": None,
+                            "error": None,
+                        }
+                    },
+                }),
+                encoding="utf-8",
+            )
+            record = LocalDatasetCatalog(path).get("legacy")
+            self.assertIsNone(record.profile)
+            self.assertIsNone(record.declarations)
+            self.assertIsNone(record.profile_fingerprint)
 
 
 if __name__ == "__main__":

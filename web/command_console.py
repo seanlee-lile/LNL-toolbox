@@ -22,7 +22,7 @@ from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -473,6 +473,77 @@ def _dataset_payload() -> dict[str, object]:
         "adapters": adapters,
         "datasets": [report.to_dict() for report in service.list_datasets()],
     }
+
+
+def _dataset_profile_payload(name: object) -> dict[str, object]:
+    """Return the Phase-2 profile contract for one registered dataset."""
+
+    from lnl_toolbox.training.service import ExperimentService
+
+    alias = str(name).strip()
+    if not alias:
+        raise ValueError("dataset profile requires a dataset alias")
+    service = ExperimentService()
+    report = service.inspect_dataset(alias)
+    if report.status != "ready" or report.profile is None:
+        raise ValueError(report.error or f"dataset profile is unavailable: {alias}")
+    return {
+        "dataset": alias,
+        "adapter": report.adapter,
+        "source": report.location,
+        "profile": report.profile.to_dict(),
+        "detected": report.profile.to_dict(),
+        "declared": service.data_service.declarations(alias).to_dict(),
+    }
+
+
+def _dataset_compatibility_payload(
+    name: object,
+    *,
+    method_noise_rate_prior: float | None = None,
+) -> dict[str, object]:
+    """Expose the exact ExperimentService compatibility result to Web."""
+
+    from lnl_toolbox.training.service import ExperimentService
+
+    alias = str(name).strip()
+    if not alias:
+        raise ValueError("compatibility query requires a dataset alias")
+    service = ExperimentService()
+    profile = _dataset_profile_payload(alias)
+    methods = service.list_compatible_methods(
+        alias,
+        method_noise_rate_prior=method_noise_rate_prior,
+    )
+    return {
+        "dataset": alias,
+        "profile": profile["profile"],
+        "detected": profile["detected"],
+        "declared": profile["declared"],
+        "method_noise_rate_prior": method_noise_rate_prior,
+        "methods": [result.to_dict() for result in methods],
+    }
+
+
+def _dataset_declarations_payload(name: object, payload: object) -> dict[str, object]:
+    """Persist dataset facts only; method priors remain experiment-local."""
+
+    if not isinstance(payload, dict):
+        raise ValueError("dataset declarations request must be a JSON object")
+    declarations = payload.get("declarations", {})
+    if not isinstance(declarations, dict):
+        raise ValueError("declarations must be a JSON object")
+    if "method_noise_rate_prior" in declarations:
+        raise ValueError("method noise-rate prior is experiment-specific")
+    from lnl_toolbox.training.data_service import DataService
+
+    service = DataService()
+    service.update_declarations(name, declarations)
+    prior = payload.get("method_noise_rate_prior")
+    return _dataset_compatibility_payload(
+        name,
+        method_noise_rate_prior=None if prior in {None, ""} else float(prior),
+    )
 
 
 def _dataset_action(payload: object) -> dict[str, object]:
@@ -1380,6 +1451,32 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 _json_response(self, {"error": str(exc)}, 500)
             return
+        if path.startswith("/api/datasets/"):
+            try:
+                parts = path.split("/")
+                if len(parts) != 5:
+                    raise ValueError("unknown dataset API endpoint")
+                alias = unquote(parts[3])
+                action = parts[4]
+                if action == "profile":
+                    value = _dataset_profile_payload(alias)
+                elif action == "compatible-methods":
+                    query = parse_qs(urlparse(self.path).query)
+                    raw_prior = query.get("method_noise_rate_prior", [""])[0].strip()
+                    value = _dataset_compatibility_payload(
+                        alias,
+                        method_noise_rate_prior=(
+                            None if not raw_prior else float(raw_prior)
+                        ),
+                    )
+                else:
+                    raise ValueError("unknown dataset API endpoint")
+                _json_response(self, value)
+            except (KeyError, OSError, TypeError, ValueError) as exc:
+                _json_response(self, {"error": str(exc)}, 400)
+            except Exception as exc:
+                _json_response(self, {"error": f"dataset backend error: {exc}"}, 500)
+            return
         if path == "/api/configs":
             try:
                 query = parse_qs(urlparse(self.path).query)
@@ -1438,6 +1535,28 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path.startswith("/api/datasets/"):
+            try:
+                parts = path.split("/")
+                if len(parts) != 5 or parts[4] != "declarations":
+                    raise ValueError("unknown dataset API endpoint")
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                _json_response(
+                    self,
+                    _dataset_declarations_payload(unquote(parts[3]), payload),
+                )
+            except (
+                KeyError,
+                OSError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ) as exc:
+                _json_response(self, {"error": str(exc)}, 400)
+            except Exception as exc:
+                _json_response(self, {"error": f"dataset backend error: {exc}"}, 500)
+            return
         if path in {"/api/picker", "/api/sweep/plan"}:
             try:
                 length = int(self.headers.get("Content-Length", "0"))

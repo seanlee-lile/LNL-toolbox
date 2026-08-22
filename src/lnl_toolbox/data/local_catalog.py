@@ -86,6 +86,9 @@ class LocalDatasetRecord:
     state: str = "registered"
     evidence: Mapping[str, Any] | None = None
     error: str | None = None
+    profile: Mapping[str, Any] | None = None
+    declarations: Mapping[str, Any] | None = None
+    profile_fingerprint: str | None = None
 
     @property
     def signature(self) -> str:
@@ -106,6 +109,11 @@ class LocalDatasetRecord:
             "state": self.effective_state,
             "evidence": None if self.evidence is None else deepcopy(dict(self.evidence)),
             "error": self.error,
+            "profile": None if self.profile is None else deepcopy(dict(self.profile)),
+            "declarations": (
+                None if self.declarations is None else deepcopy(dict(self.declarations))
+            ),
+            "profile_fingerprint": self.profile_fingerprint,
         }
 
 
@@ -138,6 +146,9 @@ class LocalDatasetCatalog:
             state=str(value.get("state", "registered")),
             evidence=value.get("evidence"),
             error=value.get("error"),
+            profile=value.get("profile"),
+            declarations=value.get("declarations"),
+            profile_fingerprint=value.get("profile_fingerprint"),
         )
 
     def records(self) -> tuple[LocalDatasetRecord, ...]:
@@ -166,6 +177,9 @@ class LocalDatasetCatalog:
             "state": "registered",
             "evidence": None,
             "error": None,
+            "profile": None,
+            "declarations": None,
+            "profile_fingerprint": None,
         }
         self._write_raw(raw)
         return self.get(key)
@@ -200,14 +214,60 @@ class LocalDatasetCatalog:
         self,
         alias: object,
         evidence: Mapping[str, Any] | None = None,
+        *,
+        profile: Mapping[str, Any] | None = None,
     ) -> LocalDatasetRecord:
         value = dict(evidence or {})
         value["source_signature"] = self.get(alias).signature
-        return self._set_state(
-            alias,
-            "layout_validated",
-            evidence=value,
+        key = normalize_alias(alias)
+        raw = self._load_raw()
+        if key not in raw["datasets"]:
+            raise KeyError(f"local dataset is not registered: {key}")
+        raw["datasets"][key]["state"] = "layout_validated"
+        raw["datasets"][key]["evidence"] = value
+        raw["datasets"][key]["error"] = None
+        if profile is not None:
+            payload = deepcopy(dict(profile))
+            fingerprint = str(payload.get("fingerprint", "")).strip()
+            if len(fingerprint) != 64:
+                raise ValueError("dataset profile must include a SHA-256 fingerprint")
+            raw["datasets"][key]["profile"] = payload
+            raw["datasets"][key]["profile_fingerprint"] = fingerprint
+        self._write_raw(raw)
+        return self.get(key)
+
+    def set_profile(
+        self,
+        alias: object,
+        profile: Mapping[str, Any],
+    ) -> LocalDatasetRecord:
+        key = normalize_alias(alias)
+        raw = self._load_raw()
+        if key not in raw["datasets"]:
+            raise KeyError(f"local dataset is not registered: {key}")
+        payload = deepcopy(dict(profile))
+        fingerprint = str(payload.get("fingerprint", "")).strip()
+        if len(fingerprint) != 64:
+            raise ValueError("dataset profile must include a SHA-256 fingerprint")
+        raw["datasets"][key]["profile"] = payload
+        raw["datasets"][key]["profile_fingerprint"] = fingerprint
+        self._write_raw(raw)
+        return self.get(key)
+
+    def set_declarations(
+        self,
+        alias: object,
+        declarations: Mapping[str, Any] | None,
+    ) -> LocalDatasetRecord:
+        key = normalize_alias(alias)
+        raw = self._load_raw()
+        if key not in raw["datasets"]:
+            raise KeyError(f"local dataset is not registered: {key}")
+        raw["datasets"][key]["declarations"] = (
+            None if declarations is None else deepcopy(dict(declarations))
         )
+        self._write_raw(raw)
+        return self.get(key)
 
     def mark_training_verified(self, alias: object, evidence: Mapping[str, Any]) -> LocalDatasetRecord:
         value = dict(evidence)

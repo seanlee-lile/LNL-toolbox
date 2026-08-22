@@ -14,9 +14,12 @@ import torch
 from lnl_toolbox.data.cifar import CifarData
 from lnl_toolbox.data.cifar_n import CifarNAdapter
 from lnl_toolbox.data.contracts import DataSpec
+from lnl_toolbox.data.profile import KnowledgeState, Modality, NoiseStatus
+from lnl_toolbox.data.registry import DatasetRegistry
 from lnl_toolbox.data.mnist import MnistAdapter
 from lnl_toolbox.data.real_noise import Animal10NAdapter, Clothing1MAdapter
 from lnl_toolbox.data.sources import CifarAdapter, SyntheticAdapter, UciBinaryAdapter
+from lnl_toolbox.training.data_service import DataService
 
 
 def _cifar(size: int, split: str, classes: int = 10) -> CifarData:
@@ -52,6 +55,18 @@ class DataAdapterFixtureTest(unittest.TestCase):
             split = CifarAdapter("cifar10", 10).load(DataSpec("cifar10"), "train", seed=1)
         np.testing.assert_array_equal(split.observed_targets, split.clean_targets)
         self.assertEqual(split.global_indices.tolist(), list(range(6)))
+
+        registry = DatasetRegistry()
+        registry.add(CifarAdapter("cifar10", 10))
+        with patch("lnl_toolbox.data.sources.load_cifar10", return_value=corpus):
+            profile = DataService(registry).inspect(
+                {"data": {"name": "cifar10"}}
+            ).profile
+        self.assertEqual(profile.modality, Modality.IMAGE)
+        self.assertEqual(profile.input_shape, (32, 32, 3))
+        self.assertEqual(profile.channels, 3)
+        self.assertEqual(profile.clean_train_labels, KnowledgeState.AVAILABLE)
+        self.assertEqual(profile.noise.status, NoiseStatus.CLEAN)
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -161,6 +176,16 @@ class DataAdapterFixtureTest(unittest.TestCase):
             self.assertEqual(len(train) + len(validation) + len(test), 20)
             self.assertFalse(set(train.global_indices) & set(validation.global_indices))
             self.assertTrue(np.isfinite(validation.inputs).all())
+            registry = DatasetRegistry()
+            registry.add(adapter)
+            profile = DataService(registry).inspect({"data": {
+                "name": "uci_binary",
+                "path": str(source),
+                **dict(spec.options),
+            }}).profile
+            self.assertEqual(profile.modality, Modality.TABULAR)
+            self.assertEqual(profile.input_shape, (3,))
+            self.assertEqual(profile.available_splits, ("test", "train", "validation"))
 
     def test_synthetic_splits_have_disjoint_stable_indices(self) -> None:
         spec = DataSpec(

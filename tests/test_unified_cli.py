@@ -27,6 +27,17 @@ from lnl_toolbox.catalog import (
     validate_config,
 )
 from lnl_toolbox.cli.main import main
+from lnl_toolbox.data.profile import (
+    DatasetProfile,
+    KnowledgeState,
+    Modality,
+    NoiseKnowledge,
+)
+from lnl_toolbox.training.compatibility import (
+    CompatibilityReason,
+    CompatibilityResult,
+    CompatibilityStatus,
+)
 from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE, DatasetStatusReport
 from lnl_toolbox.training.runners import resolve_runner, runner_names
 
@@ -214,6 +225,131 @@ class UnifiedCliTest(unittest.TestCase):
             code = main(list(arguments))
         return code, stdout.getvalue(), stderr.getvalue()
 
+    @staticmethod
+    def compatibility_profile() -> DatasetProfile:
+        return DatasetProfile(
+            dataset="fixture", adapter="fixture", source="fixture-root",
+            task="classification", modality=Modality.IMAGE, num_classes=3,
+            input_shape=(8, 8, 3), channels=3,
+            sample_counts_by_split=(("train", 6), ("test", 3)),
+            available_splits=("train", "test"),
+            class_names=("a", "b", "c"),
+            class_distribution_by_split=(("train", (2, 2, 2)), ("test", (1, 1, 1))),
+            observed_train_labels=KnowledgeState.AVAILABLE,
+            clean_train_labels=KnowledgeState.UNKNOWN,
+            clean_validation_labels=KnowledgeState.UNAVAILABLE,
+            stable_indices=KnowledgeState.AVAILABLE,
+            dataset_fingerprint="d" * 64,
+            split_fingerprints=(("train", "a" * 64), ("test", "b" * 64)),
+            noise=NoiseKnowledge(),
+        )
+
+    def test_data_inspect_exposes_profile_in_human_and_json_formats(self) -> None:
+        profile = self.compatibility_profile()
+        report = DatasetStatusReport(
+            "fixture", "fixture", "ready", location="fixture-root",
+            train_samples=6, test_samples=3, classes=3,
+            fingerprint=profile.dataset_fingerprint, profile=profile,
+        )
+        with patch.object(DEFAULT_DATA_SERVICE, "inspect", return_value=report):
+            code, output, error = self.invoke("data", "inspect", "fixture")
+            self.assertEqual(code, 0, error)
+            self.assertIn("Modality         image", output)
+            self.assertIn("Clean labels     unknown", output)
+            self.assertIn("Profile fingerprint", output)
+
+            code, output, error = self.invoke(
+                "data", "inspect", "fixture", "--format", "json"
+            )
+        self.assertEqual(code, 0, error)
+        value = json.loads(output)
+        self.assertEqual(value["profile"]["modality"], "image")
+        self.assertEqual(value["profile"]["noise"]["rate"]["status"], "unknown")
+
+    def test_data_declare_uses_persisted_service_contract(self) -> None:
+        capabilities = Mock()
+        capabilities.clean_train_labels = KnowledgeState.AVAILABLE
+        capabilities.noise_status.value = "noisy"
+        capabilities.noise_origin.value = "native"
+        capabilities.noise_rate.status.value = "estimated"
+        with patch.object(
+            DEFAULT_DATA_SERVICE, "update_declarations", return_value=capabilities
+        ) as update:
+            code, output, error = self.invoke(
+                "data", "declare", "fixture",
+                "--clean-train-labels", "available",
+                "--noise-status", "noisy",
+                "--noise-origin", "native",
+                "--noise-rate", "0.2",
+                "--noise-rate-status", "estimated",
+                "--noise-rate-provenance", "user-audit",
+            )
+        self.assertEqual(code, 0, error)
+        updates = update.call_args.args[1]
+        self.assertEqual(updates["clean_train_labels"], "available")
+        self.assertEqual(updates["noise_rate"]["status"], "estimated")
+        self.assertEqual(updates["noise_rate"]["provenance"], "user-audit")
+        self.assertIn("Declarations updated", output)
+
+    def test_methods_compatible_has_grouped_and_machine_readable_results(self) -> None:
+        results = (
+            CompatibilityResult(CompatibilityStatus.COMPATIBLE, "upm", "fixture"),
+            CompatibilityResult(
+                CompatibilityStatus.COMPATIBLE_WITH_REQUIREMENTS,
+                "coteaching", "fixture",
+                reasons=(CompatibilityReason("requires_noise_rate_prior", "prior required"),),
+                required_user_inputs=("noise_rate_prior",),
+            ),
+            CompatibilityResult(
+                CompatibilityStatus.INCOMPATIBLE,
+                "importance_reweighting", "fixture",
+                reasons=(CompatibilityReason("unsupported_modality", "image unsupported"),),
+            ),
+        )
+        with patch(
+            "lnl_toolbox.cli.main.ExperimentService.list_compatible_methods",
+            return_value=results,
+        ):
+            code, output, error = self.invoke(
+                "methods", "compatible", "--dataset", "fixture"
+            )
+            self.assertEqual(code, 0, error)
+            self.assertIn("Compatible:", output)
+            self.assertIn("Requires additional input:", output)
+            self.assertIn("Unavailable:", output)
+            self.assertIn("requires_noise_rate_prior", output)
+
+            code, output, error = self.invoke(
+                "methods", "compatible", "--dataset", "fixture", "--format", "json"
+            )
+        self.assertEqual(code, 0, error)
+        value = json.loads(output)
+        self.assertEqual(value[1]["required_user_inputs"], ["noise_rate_prior"])
+        self.assertEqual(value[2]["reason_codes"], ["unsupported_modality"])
+
+    def test_compatibility_failure_prevents_validate_dry_run_and_run(self) -> None:
+        error = ValueError(
+            "method 'upm' is not ready for dataset 'heart': incompatible; "
+            "unsupported_modality: image required"
+        )
+        with patch(
+            "lnl_toolbox.cli.main.ExperimentService.preflight", side_effect=error
+        ), patch("lnl_toolbox.cli.main.ExperimentService.run") as runner:
+            code, _, stderr = self.invoke(
+                "validate", "--recipe", "cifar10-upm-smoke", "--check-data"
+            )
+            self.assertEqual(code, 2)
+            self.assertIn("unsupported_modality", stderr)
+            code, _, stderr = self.invoke(
+                "run", "--recipe", "cifar10-upm-smoke", "--dry-run"
+            )
+            self.assertEqual(code, 2)
+            self.assertIn("unsupported_modality", stderr)
+            code, _, stderr = self.invoke("run", "--recipe", "cifar10-upm-smoke")
+            self.assertEqual(code, 2)
+            self.assertIn("unsupported_modality", stderr)
+        runner.assert_not_called()
+
     def test_web_command_starts_main_page_and_supports_no_open(self) -> None:
         with patch("lnl_toolbox.cli.main.subprocess.call", return_value=0) as call:
             code, _output, error = self.invoke(
@@ -297,6 +433,27 @@ class UnifiedCliTest(unittest.TestCase):
                 )
                 self.assertEqual(code, 0, error)
                 self.assertIn("heart: uci_binary", output)
+
+                code, output, error = self.invoke(
+                    "data", "inspect", "heart", "--format", "json"
+                )
+                self.assertEqual(code, 0, error)
+                inspected = json.loads(output)
+                self.assertEqual(inspected["profile"]["modality"], "tabular")
+                self.assertEqual(inspected["profile"]["num_classes"], 2)
+
+                code, output, error = self.invoke(
+                    "methods", "compatible", "--dataset", "heart", "--format", "json"
+                )
+                self.assertEqual(code, 0, error)
+                compatibility = {item["method"]: item for item in json.loads(output)}
+                self.assertEqual(
+                    compatibility["importance_reweighting"]["status"], "compatible"
+                )
+                self.assertEqual(compatibility["upm"]["status"], "incompatible")
+                self.assertIn(
+                    "unsupported_modality", compatibility["upm"]["reason_codes"]
+                )
 
                 code, output, error = self.invoke(
                     "data", "verify", "heart",

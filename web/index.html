@@ -250,7 +250,7 @@
     const modules = allModules;
     const sweepModule = modules.find(function (item) { return item.id === "sweep"; });
     if (sweepModule) { sweepModule.label = "参数 Sweep"; sweepModule.description = "对多个参数取值执行笛卡尔积，可选叠加多个随机种子。"; sweepModule.hint = "参数矩阵 × 可选 seeds"; }
-    const state = { selected: null, request: null, jobId: null, timer: null, resultTimer: null, module: recipeMode ? "yaml" : "beginner", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, tutorial: {steps:[], sequence:[]}, tutorialStep: 0, tutorialCompleted: {}, tutorialRunningStep: "", tutorialRecipe: "cifar10-symmetric-ce-smoke", tutorialData: "", tutorialOutput: "artifacts/runs/tutorial-ce-smoke", tutorialResume: null, tutorialQuickMode: false, tutorialQuickAction: "validate", tutorialQuickEpochs: "1", tutorialQuickSeeds: "1 2 3", yamlSchema: null, yamlSourcePath: "", yamlTextDirty: false, yamlSuggestedPath: "", pendingYamlPath: "", activeConfig: {kind:"recipe", value:"cifar10-symmetric-ce-smoke", label:"cifar10-symmetric-ce-smoke"}, trainingData: "", dataAction: "list", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, removeConfirmed: false, sweepSourceKind: "recipe", sweepRecipe: "cifar10-clean-smoke", sweepPath: "", sweepSchema: null, sweepSchemaKey: "", sweepRows: [], sweepPlan: null, sweepOutput: "artifacts/web-sweep", resultData: null, resultSelected: [], resultFilter: "", resultListCollapsed: false, resultListInitialized: false, resumeData: null, resumeInspectionKey: "", paperId: "", paperRecipe: "" };
+    const state = { selected: null, request: null, jobId: null, timer: null, resultTimer: null, module: recipeMode ? "yaml" : "beginner", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, tutorial: {steps:[], sequence:[]}, tutorialStep: 0, tutorialCompleted: {}, tutorialRunningStep: "", tutorialRecipe: "cifar10-symmetric-ce-smoke", tutorialData: "", tutorialOutput: "artifacts/runs/tutorial-ce-smoke", tutorialResume: null, tutorialQuickMode: false, tutorialQuickAction: "validate", tutorialQuickEpochs: "1", tutorialQuickSeeds: "1 2 3", yamlSchema: null, yamlSourcePath: "", yamlTextDirty: false, yamlSuggestedPath: "", pendingYamlPath: "", activeConfig: {kind:"recipe", value:"cifar10-symmetric-ce-smoke", label:"cifar10-symmetric-ce-smoke"}, trainingData: "", dataAction: "list", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, dataCompatibility: null, dataCompatibilityAlias: "", dataCompatibilityError: "", dataCompatibilityLoading: false, dataSelectedMethod: "", dataMethodNoisePrior: "", dataShowUnavailable: false, removeConfirmed: false, sweepSourceKind: "recipe", sweepRecipe: "cifar10-clean-smoke", sweepPath: "", sweepSchema: null, sweepSchemaKey: "", sweepRows: [], sweepPlan: null, sweepOutput: "artifacts/web-sweep", resultData: null, resultSelected: [], resultFilter: "", resultListCollapsed: false, resultListInitialized: false, resumeData: null, resumeInspectionKey: "", paperId: "", paperRecipe: "" };
     if (recipeMode) {
       document.getElementById("page-title").textContent = "LNL Toolbox Recipe Editor";
       document.getElementById("page-subtitle").textContent = "从已有 recipe 组合配置，并查看或保存 YAML。";
@@ -460,6 +460,7 @@
       document.getElementById("tutorial-use-quick").addEventListener("click", function () { captureTutorialInputs(); state.tutorialQuickMode = true; updateModulePreview(); });
       document.getElementById("tutorial-inspect")?.addEventListener("click", inspectTutorialRun);
       document.getElementById("tutorial-open-results")?.addEventListener("click", function () { captureTutorialInputs(); state.resultPath = state.tutorialOutput; switchModule("results"); });
+      document.getElementById("tutorial-data")?.addEventListener("change", function () { captureTutorialInputs(); if (state.tutorialData) { state.dataAlias = state.tutorialData; state.dataCompatibilityAlias = ""; loadDatasetCompatibility(state.tutorialData); } });
       parameterPanel.querySelectorAll("input, select").forEach(function (node) {
         node.addEventListener("change", function () { captureTutorialInputs(); state.tutorialQuickMode = false; state.tutorialResume = null; updateModulePreview(); });
         node.addEventListener("input", function () { captureTutorialInputs(); state.tutorialResume = null; updateModulePreview(); });
@@ -614,6 +615,131 @@
       if (report.location && !report.error) return '<div class="data-feedback"><strong>路径已登记，尚未检查</strong><p>下一步：选择“inspect”，实际加载 train/test。登记成功不等于数据可训练。</p></div>';
       return '<div class="data-feedback failed"><strong>数据尚未可用</strong><p>' + escapeHtml(report.error || "请登记正确路径后执行 inspect。") + '</p></div>';
     }
+    function explicitValue(value) {
+      return value === null || value === undefined || value === "" || String(value).toLowerCase() === "unknown" ? "Unknown" : String(value);
+    }
+    function compatibilityReasonText(item) {
+      const reasons = (item.reasons || []).map(function (reason) { return reason.code + ": " + reason.message; });
+      return reasons.length ? reasons.join("; ") : "No additional requirements";
+    }
+    function compatibilityMethodCard(item, selectable) {
+      const selected = state.dataSelectedMethod === item.method;
+      const required = (item.required_user_inputs || []).map(function (value) {
+        if (value === "noise_rate_prior") return "Method noise-rate prior";
+        if (value.startsWith("pretrained:")) return "External prerequisite: " + value.slice(11);
+        return value;
+      });
+      return '<div class="guide-card compatibility-method" data-status="' + escapeHtml(item.status) + '"><div><strong>' + escapeHtml(item.method) + '</strong> <span class="parameter-badge">' + escapeHtml(item.status) + '</span></div>' +
+        '<p>' + escapeHtml(compatibilityReasonText(item)) + '</p>' +
+        (required.length ? '<p><b>Required:</b> ' + escapeHtml(required.join(", ")) + '</p>' : '') +
+        '<button type="button" data-compat-method="' + escapeHtml(item.method) + '" ' + (selectable ? '' : 'disabled') + '>' + (selected ? 'Selected' : selectable ? 'Select method' : 'Unavailable') + '</button></div>';
+    }
+    function datasetProfileCompatibilityHtml() {
+      if (state.dataCompatibilityLoading) return '<div class="guide-card"><strong>Dataset-first workflow</strong><p>Inspecting dataset and resolving compatibility...</p></div>';
+      if (state.dataCompatibilityError) return '<div class="data-feedback failed"><strong>Dataset compatibility unavailable</strong><p>' + escapeHtml(state.dataCompatibilityError) + '</p></div>';
+      const value = state.dataCompatibility;
+      if (!value) return '<div class="guide-card"><strong>Dataset-first workflow</strong><p>Select an inspected dataset to view its profile and compatible methods.</p></div>';
+      const profile = value.profile || {}, noise = profile.noise || {}, rate = noise.rate || {}, declared = value.declared || {};
+      const counts = profile.sample_counts_by_split || {};
+      const detectedRows = [{
+        Dataset:profile.dataset, Adapter:profile.adapter, Source:profile.source,
+        Task:profile.task, Modality:profile.modality, Classes:profile.num_classes,
+        "Input shape":profile.input_shape || "Unknown", Channels:profile.channels,
+        Train:counts.train, Validation:counts.validation, Test:counts.test,
+        Splits:(profile.available_splits || []).join(", "),
+        "Observed train labels":explicitValue(profile.observed_train_labels),
+        "Clean train labels":explicitValue(profile.clean_train_labels),
+        "Noise status":explicitValue(noise.status), "Noise origin":explicitValue(noise.origin),
+        "Dataset noise rate":rate.status === "known" || rate.status === "estimated" ? rate.status + ": " + rate.value : explicitValue(rate.status),
+        "Stable indices":explicitValue(profile.stable_indices), Fingerprint:profile.fingerprint
+      }];
+      const methods = value.methods || [];
+      const compatible = methods.filter(function (item) { return item.status === "compatible"; });
+      const requirementsUnknown = methods.filter(function (item) { return (item.reason_codes || []).includes("requirements_unavailable"); });
+      const conditional = methods.filter(function (item) { return item.status === "compatible_with_requirements" && !(item.reason_codes || []).includes("requirements_unavailable"); });
+      const unavailable = methods.filter(function (item) { return item.status === "incompatible"; });
+      const selected = methods.find(function (item) { return item.method === state.dataSelectedMethod; });
+      const recipe = selected ? state.recipes.find(function (item) { return item.method === selected.method; }) : null;
+      const ready = selected?.status === "compatible" && Boolean(recipe);
+      const declarations = '<div class="guide-card"><strong>Declared by user</strong><div class="form-grid">' +
+        field("Do you know whether labels are noisy?", "compat-noise-status", selectControl("__ID__", ["unknown","clean","noisy"])) +
+        field("Dataset noise-rate status", "compat-rate-status", selectControl("__ID__", ["unknown","known","estimated"])) +
+        field("Dataset noise-rate value", "compat-rate-value", inputControl("__ID__", "", "number", "min=0 max=1 step=0.001")) +
+        field("Dataset rate provenance", "compat-rate-provenance", inputControl("__ID__", "")) +
+        field("Clean train labels", "compat-clean-labels", selectControl("__ID__", ["unknown","available","unavailable"])) +
+        field("Method noise-rate prior", "compat-method-prior", inputControl("__ID__", state.dataMethodNoisePrior, "number", "min=0 max=1 step=0.001")) +
+        field("Available pretrained roles", "compat-pretrained-roles", inputControl("__ID__", (declared.pretrained_roles || []).join(","))) +
+        '</div><p class="helper">Dataset true noise rate and method noise-rate prior are independent. Unknown is valid and is never converted to zero.</p><button type="button" id="compat-apply-declarations" class="secondary">Apply declarations and re-check</button></div>';
+      const section = function (title, items, selectable) { return '<div class="wide"><h3>' + title + '</h3>' + (items.length ? items.map(function (item) { return compatibilityMethodCard(item, selectable); }).join("") : '<p class="helper">None</p>') + '</div>'; };
+      return '<section id="dataset-compatibility-panel"><h2>Dataset-first workflow</h2><p>Choose dataset → inspect profile → compatible methods → required inputs → validate → dry-run → run.</p>' +
+        '<div class="guide-card"><strong>Detected by system</strong>' + tableHtml(detectedRows) + '</div>' + declarations +
+        section("Compatible methods", compatible, true) + section("Available after additional input", conditional, true) + section("Compatibility unknown", requirementsUnknown, false) +
+        '<label><input type="checkbox" id="compat-show-unavailable" ' + (state.dataShowUnavailable ? 'checked' : '') + '> Show unavailable methods</label>' +
+        '<div id="compat-unavailable" class="' + (state.dataShowUnavailable ? '' : 'hidden') + '">' + section("Unavailable", unavailable, false) + '</div>' +
+        '<div class="guide-card"><strong>Selected method</strong><p>' + escapeHtml(selected ? selected.method + " · " + selected.status : "None") + '</p>' +
+        '<p>Recipe: ' + escapeHtml(recipe?.id || "No public recipe for selected method") + '</p>' +
+        '<div class="actions"><button type="button" data-compat-action="validate" ' + (ready ? '' : 'disabled') + '>Validate</button><button type="button" data-compat-action="dry-run" ' + (ready ? '' : 'disabled') + '>Dry-run</button><button type="button" data-compat-action="run" ' + (ready ? '' : 'disabled') + '>Run</button></div>' +
+        '<p class="helper">Actions remain disabled until backend status is COMPATIBLE. Validate and run preflight remain final safety gates.</p></div></section>';
+    }
+    async function loadDatasetCompatibility(alias = state.dataAlias) {
+      if (!alias) { state.dataCompatibility = null; state.dataCompatibilityAlias = ""; state.dataCompatibilityError = ""; return; }
+      state.dataCompatibilityLoading = true; state.dataCompatibilityError = "";
+      if (state.module === "data") renderData();
+      try {
+        const query = state.dataMethodNoisePrior === "" ? "" : "?method_noise_rate_prior=" + encodeURIComponent(state.dataMethodNoisePrior);
+        const response = await fetch("/api/datasets/" + encodeURIComponent(alias) + "/compatible-methods" + query);
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "Compatibility query failed");
+        if (state.dataAlias !== alias) return;
+        state.dataCompatibility = payload; state.dataCompatibilityAlias = alias; state.dataCompatibilityError = "";
+        if (!(payload.methods || []).some(function (item) { return item.method === state.dataSelectedMethod; })) state.dataSelectedMethod = "";
+      } catch (error) {
+        if (state.dataAlias !== alias) return;
+        state.dataCompatibility = null; state.dataCompatibilityAlias = alias; state.dataCompatibilityError = String(error.message || error);
+      } finally {
+        if (state.dataAlias === alias) state.dataCompatibilityLoading = false;
+        if (state.module === "data") { renderData(); updateModulePreview(); }
+      }
+    }
+    async function applyDatasetDeclarations() {
+      const rateStatus = selectValue("compat-rate-status", "unknown");
+      const rawRate = selectValue("compat-rate-value", "").trim();
+      const rate = {status:rateStatus, value:null, provenance:null};
+      if (["known", "estimated"].includes(rateStatus)) {
+        if (rawRate === "") throw new Error("Dataset noise-rate value is required");
+        rate.value = Number(rawRate);
+        rate.provenance = selectValue("compat-rate-provenance", "").trim() || (rateStatus === "known" ? "user declaration" : null);
+      }
+      state.dataMethodNoisePrior = selectValue("compat-method-prior", "").trim();
+      const body = {
+        method_noise_rate_prior: state.dataMethodNoisePrior,
+        declarations: {
+          noise_status: selectValue("compat-noise-status", "unknown"),
+          noise_rate: rate,
+          clean_train_labels: selectValue("compat-clean-labels", "unknown"),
+          pretrained_roles: selectValue("compat-pretrained-roles", "").split(",").map(function (value) { return value.trim(); }).filter(Boolean)
+        }
+      };
+      const response = await fetch("/api/datasets/" + encodeURIComponent(state.dataAlias) + "/declarations", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Declaration update failed");
+      state.dataCompatibility = payload; state.dataCompatibilityError = ""; renderData(); updateModulePreview();
+    }
+    function compatibilityWorkflowCommand(action) {
+      const selected = (state.dataCompatibility?.methods || []).find(function (item) { return item.method === state.dataSelectedMethod; });
+      const recipe = selected ? state.recipes.find(function (item) { return item.method === selected.method; }) : null;
+      if (!selected || selected.status !== "compatible" || !recipe || !state.dataAlias) return "";
+      const base = action === "validate" ? "lnl validate" : "lnl run";
+      return base + " --recipe " + quoteArg(recipe.id) + " --data " + quoteArg(state.dataAlias) + (action === "dry-run" ? " --dry-run" : "") + " --check-data";
+    }
+    async function startCompatibilityWorkflow(action) {
+      const command = compatibilityWorkflowCommand(action);
+      if (!command) return;
+      const response = await fetch("/api/run", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({command:command})});
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Workflow request failed");
+      showJob(payload); if (state.timer) clearInterval(state.timer); state.timer = setInterval(pollJob, 350);
+    }
     function tableHtml(rows, allowHtml = false) {
       if (!Array.isArray(rows) || !rows.length) return '<p class="helper">没有可显示的记录。</p>';
       const columns = [...new Set(rows.flatMap(function (row) { return Object.keys(row); }))];
@@ -703,7 +829,7 @@
         field("人工标签文件（CIFAR-N）", "data-labels", inputControl("__ID__", ""), true) + field("训练模板", "data-recipe", recipesSelect("__ID__"), true) +
         field("验证输出目录（可选）", "data-output", inputControl("__ID__", ""), true) + commonFormEnd() +
         dataFeedbackHtml(selectedReport) + '<p class="helper">登记只保存路径；inspect 才会真实加载 train/test；verify 会自动按数据类型运行 1 epoch，不需要 CIFAR 或 MNIST 配方。自定义训练时再选择训练模板。</p>' +
-        '<div class="guide-card"><strong>数据状态</strong>' + dataTableHtml(reports) + '</div>';
+        '<div class="guide-card"><strong>数据状态</strong>' + dataTableHtml(reports) + '</div>' + datasetProfileCompatibilityHtml();
       const actionNode = document.getElementById("data-action");
       actionNode.value = [...actionNode.options].some(function (option) { return option.value === state.dataAction; }) ? state.dataAction : "list";
       const aliasNode = document.getElementById("data-alias");
@@ -713,6 +839,14 @@
       const recipeNode = document.getElementById("data-recipe");
       if ([...recipeNode.options].some(function (option) { return option.value === state.dataRecipe; })) recipeNode.value = state.dataRecipe;
       document.getElementById("data-output").value = state.dataOutput;
+      if (state.dataCompatibility) {
+        const declared = state.dataCompatibility.declared || {}, declaredRate = declared.noise_rate || {};
+        if (document.getElementById("compat-noise-status")) document.getElementById("compat-noise-status").value = declared.noise_status || "unknown";
+        if (document.getElementById("compat-rate-status")) document.getElementById("compat-rate-status").value = declaredRate.status || "unknown";
+        if (document.getElementById("compat-rate-value")) document.getElementById("compat-rate-value").value = declaredRate.value ?? "";
+        if (document.getElementById("compat-rate-provenance")) document.getElementById("compat-rate-provenance").value = declaredRate.provenance || "";
+        if (document.getElementById("compat-clean-labels")) document.getElementById("compat-clean-labels").value = declared.clean_train_labels || "unknown";
+      }
       const guideActions = document.createElement("div"); guideActions.className = "actions";
       const guideButton = document.createElement("button"); guideButton.id = "data-guide-button"; guideButton.type = "button"; guideButton.className = "secondary hidden"; guideButton.textContent = "查看此适配器的数据说明";
       const guideNode = document.createElement("div"); guideNode.id = "data-guide"; guideNode.className = "helper hidden";
@@ -727,7 +861,7 @@
       aliasNode.addEventListener("change", function () {
         state.dataRecipe = selectValue("data-recipe", state.dataRecipe);
         state.dataOutput = selectValue("data-output", state.dataOutput);
-        state.dataAlias = aliasNode.value; state.dataResult = null; state.removeConfirmed = false; renderData(); updateModulePreview();
+        state.dataAlias = aliasNode.value; state.dataResult = null; state.dataCompatibility = null; state.dataCompatibilityAlias = ""; state.dataCompatibilityError = ""; state.dataSelectedMethod = ""; state.removeConfirmed = false; renderData(); updateModulePreview(); loadDatasetCompatibility();
       });
       adapterNode.addEventListener("change", function () {
         state.dataAdapter = adapterNode.value;
@@ -735,13 +869,21 @@
         if (!guideNode.classList.contains("hidden")) guideNode.innerHTML = datasetGuideHtml(adapterNode.value);
       });
       guideButton.addEventListener("click", function () { guideNode.innerHTML = datasetGuideHtml(adapterNode.value); guideNode.classList.remove("hidden"); });
-      recipeNode.addEventListener("change", function () { state.dataRecipe = recipeNode.value; });
+      recipeNode.addEventListener("change", function () { state.dataRecipe = recipeNode.value; const recipe = state.recipes.find(function (item) { return item.id === state.dataRecipe; }); state.dataSelectedMethod = recipe?.method || ""; if (state.dataAlias) loadDatasetCompatibility(state.dataAlias); });
       document.getElementById("data-output").addEventListener("input", function (event) { state.dataOutput = event.target.value; });
+      document.getElementById("compat-show-unavailable")?.addEventListener("change", function (event) { state.dataShowUnavailable = event.target.checked; document.getElementById("compat-unavailable")?.classList.toggle("hidden", !state.dataShowUnavailable); });
+      document.getElementById("compat-apply-declarations")?.addEventListener("click", async function () {
+        try { await applyDatasetDeclarations(); statusNode.textContent = "Declarations saved; compatibility recomputed."; statusNode.className = "status success"; }
+        catch (error) { statusNode.textContent = String(error.message || error); statusNode.className = "status failed"; }
+      });
+      parameterPanel.querySelectorAll("[data-compat-method]").forEach(function (button) { button.addEventListener("click", function () { state.dataSelectedMethod = button.dataset.compatMethod; renderData(); updateModulePreview(); }); });
+      parameterPanel.querySelectorAll("[data-compat-action]").forEach(function (button) { button.addEventListener("click", async function () { try { await startCompatibilityWorkflow(button.dataset.compatAction); } catch (error) { statusNode.textContent = String(error.message || error); statusNode.className = "status failed"; } }); });
       parameterPanel.querySelectorAll("input, select, textarea").forEach(function (node) {
         node.addEventListener("input", updateModulePreview);
         node.addEventListener("change", updateModulePreview);
       });
       updateDataFormVisibility();
+      if (selectedReport?.status === "ready" && state.dataCompatibilityAlias !== state.dataAlias && !state.dataCompatibilityLoading) setTimeout(function () { loadDatasetCompatibility(state.dataAlias); }, 0);
     }
     function renderSweep() {
       parameterPanel.innerHTML = commonFormStart() +
@@ -1505,7 +1647,10 @@
           if (output) command += " --output-dir " + quoteArg(output);
           return command;
         }
-        return "lnl run " + recipe + " --data " + quoteArg(alias);
+        const recipeInfo = state.recipes.find(function (item) { return item.id === recipe; });
+        const compatibility = (state.dataCompatibility?.methods || []).find(function (item) { return item.method === recipeInfo?.method; });
+        if (!compatibility || compatibility.status !== "compatible") return "";
+        return "lnl run --recipe " + quoteArg(recipe) + " --data " + quoteArg(alias) + " --check-data";
       }
       if (state.module === "sweep") {
         return buildSweepCommand();

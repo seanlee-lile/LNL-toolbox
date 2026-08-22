@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import sys
@@ -14,6 +16,185 @@ import command_console  # noqa: E402
 
 
 class CommandConsoleTest(unittest.TestCase):
+    def test_dataset_first_page_consumes_backend_compatibility_contract(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        for marker in (
+            "Dataset-first workflow",
+            "Detected by system",
+            "Declared by user",
+            "Compatible methods",
+            "Available after additional input",
+            "Compatibility unknown",
+            "Show unavailable methods",
+            "Method noise-rate prior",
+            "Dataset true noise rate and method noise-rate prior are independent",
+            "data-compat-action",
+            "loadDatasetCompatibility",
+        ):
+            self.assertIn(marker, page)
+        self.assertIn('selected?.status === "compatible"', page)
+        self.assertIn('compatibility.status !== "compatible"', page)
+        self.assertIn('return "lnl run --recipe "', page)
+        self.assertIn("state.dataCompatibilityAlias !== state.dataAlias", page)
+        self.assertIn("loadDatasetCompatibility(state.tutorialData)", page)
+        self.assertNotIn('dataset === "clothing1m"', page.lower())
+
+    def test_web_profile_and_compatibility_helpers_use_experiment_service(self):
+        profile = mock.Mock()
+        profile.to_dict.return_value = {
+            "dataset": "lab",
+            "noise": {"rate": {"status": "unknown", "value": None}},
+        }
+        report = mock.Mock(
+            status="ready", profile=profile, adapter="uci_binary", location="data.txt"
+        )
+        declarations = mock.Mock()
+        declarations.to_dict.return_value = {
+            "clean_train_labels": "unknown",
+            "pretrained_roles": [],
+        }
+        result = mock.Mock()
+        result.to_dict.return_value = {
+            "method": "coteaching",
+            "dataset": "lab",
+            "status": "compatible_with_requirements",
+            "reason_codes": ["requires_noise_rate_prior"],
+            "reasons": [],
+            "warnings": [],
+            "required_user_inputs": ["noise_rate_prior"],
+        }
+        service = mock.Mock()
+        service.inspect_dataset.return_value = report
+        service.data_service.declarations.return_value = declarations
+        service.list_compatible_methods.return_value = (result,)
+        with mock.patch(
+            "lnl_toolbox.training.service.ExperimentService", return_value=service
+        ):
+            value = command_console._dataset_compatibility_payload("lab")
+        self.assertEqual(value["profile"]["noise"]["rate"]["status"], "unknown")
+        self.assertEqual(value["methods"], [result.to_dict.return_value])
+        service.list_compatible_methods.assert_called_once_with(
+            "lab", method_noise_rate_prior=None
+        )
+
+    def test_dataset_compatibility_http_contract_preserves_phase2_statuses(self):
+        profile = {
+            "dataset": "lab",
+            "noise": {"rate": {"status": "unknown", "value": None}},
+        }
+        compatibility = {
+            "dataset": "lab",
+            "profile": profile,
+            "detected": profile,
+            "declared": {},
+            "method_noise_rate_prior": None,
+            "methods": [{
+                "method": "coteaching",
+                "status": "compatible_with_requirements",
+                "reason_codes": ["requires_noise_rate_prior"],
+                "reasons": [],
+                "warnings": [],
+                "required_user_inputs": ["noise_rate_prior"],
+            }],
+        }
+        server = command_console.ThreadingHTTPServer(
+            ("127.0.0.1", 0), command_console.ConsoleHandler
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        try:
+            with mock.patch.object(
+                command_console, "_dataset_profile_payload",
+                return_value={"dataset": "lab", "profile": profile},
+            ), mock.patch.object(
+                command_console, "_dataset_compatibility_payload",
+                return_value=compatibility,
+            ):
+                with request.urlopen(f"{base}/api/datasets/lab/profile") as response:
+                    self.assertEqual(json.loads(response.read())["profile"], profile)
+                with request.urlopen(
+                    f"{base}/api/datasets/lab/compatible-methods"
+                ) as response:
+                    payload = json.loads(response.read())
+            self.assertEqual(payload["methods"][0]["status"], "compatible_with_requirements")
+            self.assertEqual(
+                payload["methods"][0]["required_user_inputs"],
+                ["noise_rate_prior"],
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_web_service_and_cli_json_compatibility_results_match(self):
+        import importlib
+
+        cli_main = importlib.import_module("lnl_toolbox.cli.main")
+        profile = mock.Mock()
+        profile.to_dict.return_value = {"dataset": "lab", "noise": {}}
+        report = mock.Mock(
+            status="ready", profile=profile, adapter="uci_binary", location="data.txt"
+        )
+        declarations = mock.Mock()
+        declarations.to_dict.return_value = {}
+        result = mock.Mock()
+        result.to_dict.return_value = {
+            "method": "importance_reweighting", "dataset": "lab",
+            "status": "compatible", "reason_codes": [], "reasons": [],
+            "warnings": [], "required_user_inputs": [],
+        }
+        service = mock.Mock()
+        service.inspect_dataset.return_value = report
+        service.data_service.declarations.return_value = declarations
+        service.list_compatible_methods.return_value = (result,)
+        with mock.patch(
+            "lnl_toolbox.training.service.ExperimentService", return_value=service
+        ):
+            web_value = command_console._dataset_compatibility_payload("lab")
+        output = io.StringIO()
+        with mock.patch.object(cli_main, "ExperimentService", return_value=service), contextlib.redirect_stdout(output):
+            self.assertEqual(
+                cli_main.main([
+                    "methods", "compatible", "--dataset", "lab",
+                    "--format", "json",
+                ]),
+                0,
+            )
+        cli_value = json.loads(output.getvalue())
+        self.assertEqual(web_value["methods"], cli_value)
+
+    def test_web_declarations_keep_method_prior_out_of_dataset_facts(self):
+        service = mock.Mock()
+        expected = {"dataset": "lab", "methods": []}
+        with mock.patch(
+            "lnl_toolbox.training.data_service.DataService", return_value=service
+        ), mock.patch.object(
+            command_console, "_dataset_compatibility_payload", return_value=expected
+        ) as compatibility:
+            value = command_console._dataset_declarations_payload(
+                "lab",
+                {
+                    "method_noise_rate_prior": 0.2,
+                    "declarations": {
+                        "noise_status": "noisy",
+                        "clean_train_labels": "unknown",
+                    },
+                },
+            )
+        self.assertIs(value, expected)
+        service.update_declarations.assert_called_once_with(
+            "lab",
+            {"noise_status": "noisy", "clean_train_labels": "unknown"},
+        )
+        compatibility.assert_called_once_with(
+            "lab", method_noise_rate_prior=0.2
+        )
+        with self.assertRaisesRegex(ValueError, "experiment-specific"):
+            command_console._dataset_declarations_payload(
+                "lab", {"declarations": {"method_noise_rate_prior": {}}}
+            )
+
     def test_beginner_tutorial_contract_matches_documented_workflow(self):
         payload = command_console._tutorial_payload()
         self.assertEqual(payload["version"], 1)
