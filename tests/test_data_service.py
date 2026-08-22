@@ -53,6 +53,34 @@ class _FixtureAdapter:
         )
 
 
+class _NativeNoisyFixtureAdapter:
+    name = "native_noisy_fixture"
+    aliases = ()
+
+    def validate(self, spec: DataSpec) -> None:
+        if spec.root is None or not spec.root.is_dir():
+            raise FileNotFoundError("native fixture root missing")
+
+    def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
+        del seed
+        self.validate(spec)
+        targets = {
+            "train": np.asarray([5, 6], dtype=np.int64),
+            "validation": np.asarray([8, 9], dtype=np.int64),
+            "test": np.asarray([0, 1], dtype=np.int64),
+        }[split]
+        return RawDatasetSplit(
+            inputs=np.arange(targets.size * 2, dtype=np.float32).reshape(targets.size, 2),
+            observed_targets=targets,
+            global_indices=np.arange(targets.size, dtype=np.int64),
+            dataset=self.name,
+            split=split,
+            num_classes=10,
+            clean_targets=None if split == "train" else targets.copy(),
+            source=str(spec.root),
+        )
+
+
 def _config() -> dict:
     return {
         "seed": 9,
@@ -80,6 +108,85 @@ def _write_fashion_idx(root: Path, split: str, count: int) -> None:
 
 
 class DataServiceTest(unittest.TestCase):
+    def test_native_validation_noisy_targets_use_validation_split_mapping(self) -> None:
+        requirements = DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
+            validation_targets="noisy",
+            needs_noise_manifest=False,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prepared = prepare_experiment_data(
+                {
+                    "data": {"name": "native_noisy_fixture", "root": str(root)},
+                    "loader": {"batch_size": 2, "num_workers": 0},
+                },
+                requirements=requirements,
+                run_dir=root / "run",
+                seed=3,
+                registry=DatasetRegistry((_NativeNoisyFixtureAdapter(),)),
+            )
+
+            validation = prepared.dataset_for(DataRole.NOISY_VALIDATION)
+            self.assertEqual([int(validation[index]["target"]) for index in range(2)], [8, 9])
+            self.assertEqual(prepared.train_split.observed_targets.tolist(), [5, 6])
+
+    def test_native_noisy_data_fails_before_manifest_required_training(self) -> None:
+        requirements = DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
+            validation_targets="noisy",
+            needs_noise_manifest=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaisesRegex(
+                ValueError,
+                "native observed noisy labels without train clean targets",
+            ):
+                prepare_experiment_data(
+                    {
+                        "data": {"name": "native_noisy_fixture", "root": str(root)},
+                        "loader": {"batch_size": 2, "num_workers": 0},
+                    },
+                    requirements=requirements,
+                    run_dir=root / "run",
+                    seed=3,
+                    registry=DatasetRegistry((_NativeNoisyFixtureAdapter(),)),
+                )
+
+    def test_synthetic_noise_manifest_and_validation_mapping_are_preserved(self) -> None:
+        requirements = DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
+            validation_targets="noisy",
+        )
+        config = _config()
+        config["noise"] = {"name": "symmetric", "rate": 0.4, "seed": 9}
+        with tempfile.TemporaryDirectory() as directory:
+            prepared = prepare_experiment_data(
+                config, requirements=requirements, run_dir=directory, seed=9
+            )
+            self.assertIsNotNone(prepared.manifest)
+            assert prepared.manifest is not None
+            noisy_by_index = {
+                int(index): int(target)
+                for index, target in zip(
+                    prepared.manifest.global_indices,
+                    prepared.manifest.noisy_targets,
+                    strict=True,
+                )
+            }
+            train = prepared.dataset_for(DataRole.TRAIN)
+            validation = prepared.dataset_for(DataRole.NOISY_VALIDATION)
+            for dataset in (train, validation):
+                for offset in range(len(dataset)):
+                    sample = dataset[offset]
+                    self.assertEqual(
+                        int(sample["target"]), noisy_by_index[int(sample["index"])]
+                    )
+            self.assertEqual(
+                set(prepared.train_indices) & set(prepared.validation_indices), set()
+            )
+
     def test_management_status_path_and_real_split_inspection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -539,6 +539,18 @@ def _prepare_experiment_data(
     manifest: NoiseManifest | None = None
     manifest_path: Path | None = None
     source_clean = train.clean_targets
+    if (
+        source_clean is None
+        and requirements.needs_noise_manifest
+        and requirements.validation_targets == "noisy"
+    ):
+        raise ValueError(
+            "This method requires a noise manifest derived from aligned "
+            "clean/noisy targets, but dataset "
+            f"{train.dataset!r} provides native observed noisy labels without "
+            "train clean targets. This native-noise workflow is not yet "
+            "supported by this method."
+        )
     if source_clean is not None:
         observed_differs = not np.array_equal(train.observed_targets, source_clean)
         if observed_differs:
@@ -698,14 +710,20 @@ def _prepare_experiment_data(
         else _target_map(manifest.global_indices, manifest.noisy_targets)
     )
     clean_train_map = None if train.clean_targets is None else _target_map(train.global_indices, train.clean_targets)
-    validation_target_map = (
-        noisy_map
-        if requirements.validation_targets == "noisy"
-        else _target_map(
+    if requirements.validation_targets == "noisy":
+        validation_target_map = (
+            noisy_map
+            if manifest is not None or validation_split is train
+            else _target_map(
+                validation_split.global_indices,
+                validation_split.observed_targets,
+            )
+        )
+    else:
+        validation_target_map = _target_map(
             validation_split.global_indices,
             validation_split.clean_targets if validation_split.clean_targets is not None else validation_split.observed_targets,
         )
-    )
     train_transforms = _transforms(train, data_config, requirements, training=True)
     eval_requirements = DataRequirements(
         roles=requirements.roles,
