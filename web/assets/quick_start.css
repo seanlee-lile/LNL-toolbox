@@ -1,0 +1,25 @@
+.qs-root { display: grid; gap: 12px; }
+.qs-root h2 { margin: 0; color: #bfdbfe; }
+.qs-step { padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #111a2a; }
+.qs-step h3 { margin: 0 0 8px; color: #bfdbfe; }
+.qs-step h4 { margin: 10px 0 6px; color: var(--muted); }
+.qs-path-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.qs-noise-inputs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.qs-noise-inputs label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
+.qs-required-inputs { display: grid; gap: 8px; margin: 10px 0; }
+.qs-required-inputs label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
+.qs-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.qs-feedback, .qs-dataset-card, .qs-plan-card { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: #0b1220; }
+.qs-success { border-color: #226c57; color: #a7f3d0; }
+.qs-warning { border-color: #b7791f; color: #fde68a; }
+.qs-error { border-color: #7f3030; color: #fecaca; }
+.qs-candidate { display: block; width: 100%; margin-top: 7px; }
+.qs-method-group { display: grid; gap: 8px; }
+.qs-method-card { display: grid; gap: 3px; width: 100%; text-align: left; }
+.qs-method-card span { color: var(--text); }
+.qs-method-card small, .qs-method-card p { color: var(--muted); margin: 0; }
+.qs-method-card.selected { border-color: var(--accent); background: #294568; }
+.qs-status-ready { border-left: 3px solid var(--good); }
+.qs-status-needs_input { border-left: 3px solid #fbbf24; }
+.qs-status-unsupported, .qs-status-metadata_error { border-left: 3px solid var(--bad); }
+@media (max-width: 900px) { .qs-noise-inputs { grid-template-columns: 1fr; } }

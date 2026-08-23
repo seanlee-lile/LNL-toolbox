@@ -158,9 +158,6 @@
     .data-table th { color: var(--muted); }
     .data-status-ready, .data-status-verified { color: var(--good); }
     .data-status-incomplete { color: #fbbf24; }
-    .quick-start-step { margin: 0 0 14px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #111a2a; }
-    .quick-start-step h3 { margin: 0 0 8px; color: #bfdbfe; font-size: 16px; }
-    .quick-start-step h3 span { color: var(--muted); font-size: 12px; font-weight: 400; }
     .quick-start-summary { margin-top: 14px; padding: 12px; border: 1px solid #34506f; border-radius: 9px; background: #132238; }
     .quick-start-summary strong { color: #bfdbfe; }
     .path-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
@@ -181,12 +178,14 @@
       .form-grid, .data-steps, .tutorial-steps { grid-template-columns: 1fr; }
     }
   </style>
+  <link rel="stylesheet" href="/assets/quick_start.css">
 </head>
 <body>
   <div class="task-stop-control"><button id="stop-task" class="danger" type="button" disabled>停止当前任务</button></div>
   <main>
     <h1 id="page-title">LNL Toolbox Command Console</h1>
     <div id="page-subtitle" class="subtitle">左侧选择功能，右侧配置参数并预览指令；参数变化会即时反映在预览中。</div>
+    <p><a class="secondary" href="/scratch">打开 LNL Scratch 积木搭建器</a></p>
     <div class="layout">
       <aside class="panel">
         <div class="section-title">功能模块</div>
@@ -245,6 +244,7 @@
       </div>
     </div>
   </main>
+  <script src="/assets/quick_start.js"></script>
   <script>
     const recipeMode = window.location.pathname === "/recipe" || window.location.pathname === "/recipe/";
     const allModules = [
@@ -260,7 +260,7 @@
     const modules = allModules;
     const sweepModule = modules.find(function (item) { return item.id === "sweep"; });
     if (sweepModule) { sweepModule.label = "参数 Sweep"; sweepModule.description = "对多个参数取值执行笛卡尔积，可选叠加多个随机种子。"; sweepModule.hint = "参数矩阵 × 可选 seeds"; }
-    const state = { selected: null, request: null, jobId: null, timer: null, resultTimer: null, module: recipeMode ? "yaml" : "quickstart", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, tutorial: {steps:[], sequence:[]}, tutorialStep: 0, tutorialCompleted: {}, tutorialRunningStep: "", tutorialRecipe: "cifar10-symmetric-ce-smoke", tutorialData: "", tutorialOutput: "artifacts/runs/tutorial-ce-smoke", tutorialResume: null, tutorialQuickMode: false, tutorialQuickAction: "validate", tutorialQuickEpochs: "1", tutorialQuickSeeds: "1 2 3", quickDataset: "", quickRegisterOpen: false, quickRegisterAlias: "local-cifar10", quickAdapter: "cifar10", quickRoot: "", quickPath: "", quickLabels: "", quickNoiseMode: "", quickNoiseKey: "", quickMethod: "", quickRecipe: "", quickMethodNoisePrior: "", quickError: "", yamlSchema: null, yamlSourcePath: "", yamlTextDirty: false, yamlFormDirty: false, yamlSuggestedPath: "", yamlDestinationPath: "", yamlDataset: "", yamlMode: "paper", yamlPaper: "", yamlBase: "cifar10-symmetric-ce-smoke", yamlLoss: "ce", yamlSelector: "all", yamlKeepRate: "0.8", yamlUpdate: "standard", yamlMilestones: "60 80", yamlGamma: "0.1", yamlCdrNoiseRate: "0.2", yamlL1Decay: "0.0", yamlRecipeCompatibility: null, yamlCompatibilityLoading: false, yamlCompatibilityError: "", pendingYamlPath: "", activeConfig: {kind:"recipe", value:"cifar10-symmetric-ce-smoke", label:"cifar10-symmetric-ce-smoke"}, trainingData: "", dataAction: "list", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, dataCompatibility: null, dataRecipeCompatibility: null, dataCompatibilityAlias: "", dataCompatibilityError: "", dataCompatibilityLoading: false, dataSelectedMethod: "", dataSelectedRecipe: "", dataMethodNoisePrior: "", dataShowUnavailable: false, removeConfirmed: false, sweepSourceKind: "recipe", sweepRecipe: "cifar10-clean-smoke", sweepPath: "", sweepDataset: "", sweepSchema: null, sweepSchemaKey: "", sweepRows: [], sweepPlan: null, sweepOutput: "artifacts/web-sweep", resultData: null, resultSelected: [], resultFilter: "", resultListCollapsed: false, resultListInitialized: false, resumeData: null, resumeInspectionKey: "", paperId: "", paperRecipe: "" };
+    const state = { selected: null, request: null, jobId: null, timer: null, resultTimer: null, module: recipeMode ? "yaml" : "quickstart", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, tutorial: {steps:[], sequence:[]}, tutorialStep: 0, tutorialCompleted: {}, tutorialRunningStep: "", tutorialRecipe: "cifar10-symmetric-ce-smoke", tutorialData: "", tutorialOutput: "artifacts/runs/tutorial-ce-smoke", tutorialResume: null, tutorialQuickMode: false, tutorialQuickAction: "validate", tutorialQuickEpochs: "1", tutorialQuickSeeds: "1 2 3", yamlSchema: null, yamlSourcePath: "", yamlTextDirty: false, yamlFormDirty: false, yamlSuggestedPath: "", yamlDestinationPath: "", yamlDataset: "", yamlMode: "paper", yamlPaper: "", yamlBase: "cifar10-symmetric-ce-smoke", yamlLoss: "ce", yamlSelector: "all", yamlKeepRate: "0.8", yamlUpdate: "standard", yamlMilestones: "60 80", yamlGamma: "0.1", yamlCdrNoiseRate: "0.2", yamlL1Decay: "0.0", yamlRecipeCompatibility: null, yamlCompatibilityLoading: false, yamlCompatibilityError: "", pendingYamlPath: "", activeConfig: {kind:"recipe", value:"cifar10-symmetric-ce-smoke", label:"cifar10-symmetric-ce-smoke"}, trainingData: "", dataAction: "list", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, dataCompatibility: null, dataRecipeCompatibility: null, dataCompatibilityAlias: "", dataCompatibilityError: "", dataCompatibilityLoading: false, dataSelectedMethod: "", dataSelectedRecipe: "", dataMethodNoisePrior: "", dataShowUnavailable: false, removeConfirmed: false, sweepSourceKind: "recipe", sweepRecipe: "cifar10-clean-smoke", sweepPath: "", sweepDataset: "", sweepSchema: null, sweepSchemaKey: "", sweepRows: [], sweepPlan: null, sweepOutput: "artifacts/web-sweep", resultData: null, resultSelected: [], resultFilter: "", resultListCollapsed: false, resultListInitialized: false, resumeData: null, resumeInspectionKey: "", paperId: "", paperRecipe: "" };
     if (recipeMode) {
       document.getElementById("page-title").textContent = "LNL Toolbox Recipe Editor";
       document.getElementById("page-subtitle").textContent = "从已有 recipe 组合配置，并查看或保存 YAML。";
@@ -439,163 +439,17 @@
       renderBeginner();
       setRequest(buildBeginnerCommand() ? {command:buildBeginnerCommand()} : null, buildBeginnerCommand());
     }
-    function quickStartRegisteredDatasets() {
-      return (state.datasets.datasets || []).filter(function (item) { return item.location && item.status === "ready"; });
-    }
-    function quickStartRecipeMeta(recipeId) {
-      for (const paper of state.papers) {
-        const config = (paper.configs || []).find(function (item) { return item.recipe_id === recipeId; });
-        if (config) return {id:recipeId, profile:config.profile, method:config.method, dataset:config.data, noise:config.noise, epochs:config.epochs, label:config.label};
-      }
-      const direct = state.recipes.find(function (item) { return item.id === recipeId; });
-      if (direct) return direct;
-      return null;
-    }
-    function quickStartCompatibilityRecipes() {
-      return (state.dataRecipeCompatibility?.recipes || []).map(function (item) {
-        return Object.assign({}, item, {meta:quickStartRecipeMeta(item.recipe_id)});
-      }).filter(function (item) { return item.meta && item.meta.profile === "reproduction"; });
-    }
-    function quickStartRecipeEligible(item) {
-      if (!item) return false;
-      if (item.status === "compatible") return true;
-      const required = item.required_user_inputs || [];
-      return item.status === "compatible_with_requirements" && required.length > 0 && required.every(function (value) { return value === "noise_rate_prior"; });
-    }
-    function quickStartNoiseOptions(items, profile) {
-      const noise = profile?.noise || {};
-      if (noise.origin === "native") return [{value:"native", label:"数据集原生噪声", key:null}];
-      const groups = [...new Map(items.filter(quickStartRecipeEligible).map(function (item) { return [String(item.meta.noise || "unknown"), item.meta.noise || "unknown"]; })).keys()];
-      const clean = groups.find(function (key) { return key.toLowerCase() === "clean"; });
-      const options = [];
-      if (noise.status === "clean" && clean) options.push({value:"recipe:" + clean, label:"不添加噪声（已有 clean 配置）", key:clean});
-      groups.filter(function (key) { return key !== clean; }).forEach(function (key) { options.push({value:"recipe:" + key, label:"使用已有方案 · " + key, key:key}); });
-      return options;
-    }
-    function quickStartFilteredRecipes() {
-      const items = quickStartCompatibilityRecipes().filter(quickStartRecipeEligible);
-      if (state.quickNoiseMode === "native") return items;
-      if (!state.quickNoiseMode.startsWith("recipe:")) return [];
-      const key = state.quickNoiseMode.slice(7);
-      return items.filter(function (item) { return String(item.meta.noise || "unknown") === key; });
-    }
-    function quickStartSelectedRecipe() {
-      const items = quickStartFilteredRecipes();
-      if (!items.some(function (item) { return item.recipe_id === state.quickRecipe; })) state.quickRecipe = items[0]?.recipe_id || "";
-      return items.find(function (item) { return item.recipe_id === state.quickRecipe; }) || null;
-    }
-    function quickStartProfile() {
-      return state.dataCompatibility?.profile || state.dataRecipeCompatibility?.profile?.profile || {};
-    }
-    function quickStartRegistrationHtml() {
-      const adapters = (state.datasets.adapters || []).filter(function (item) { return !String(item).startsWith("synthetic_"); });
-      return '<div class="quick-start-step"><h3>1. 数据集</h3><p>还没有已检查通过的数据集。先登记一个本机数据集，Quick Start 会自动完成实际加载检查。</p>' + commonFormStart() +
-        field("数据集类型", "quick-adapter", selectControl("__ID__", adapters.length ? adapters : ["cifar10"])) +
-        field("数据集名称", "quick-register-alias", inputControl("__ID__", state.quickRegisterAlias)) +
-        field("数据根目录", "quick-root", pathControl("__ID__", state.quickRoot, "folder", "all"), true) +
-        field("单文件路径（UCI）", "quick-path", pathControl("__ID__", state.quickPath, "open_file", "all"), true) +
-        field("人工标签文件（CIFAR-N）", "quick-labels", pathControl("__ID__", state.quickLabels, "open_file", "labels"), true) +
-        commonFormEnd() + '<div class="actions"><button type="button" id="quick-register" class="primary">注册并检查</button></div>' + (state.quickError ? '<div class="data-feedback failed"><strong>登记或加载检查失败</strong><p>' + escapeHtml(state.quickError) + '</p></div>' : '') + '<p class="helper">登记只保存路径；检查失败时会显示适配器的真实错误，不会自动下载数据。</p></div>';
-    }
     function renderQuickStart() {
-      const reports = quickStartRegisteredDatasets();
-      if (!reports.some(function (item) { return item.name === state.quickDataset; })) state.quickDataset = reports[0]?.name || "";
-      state.dataAlias = state.quickDataset;
-      if (!reports.length || state.quickRegisterOpen) {
-        parameterPanel.innerHTML = quickStartRegistrationHtml() + '<div class="guide-card"><strong>需要更多控制？</strong><p>也可以打开“本地数据集”查看登记、检查和验证的完整三阶段。</p><div class="workflow-actions"><button type="button" data-quick-module="data" class="secondary">打开本地数据集</button></div></div>';
-        const adapterNode = document.getElementById("quick-adapter");
-        if ([...adapterNode.options].some(function (option) { return option.value === state.quickAdapter; })) adapterNode.value = state.quickAdapter;
-        ["quick-register-alias", "quick-root", "quick-path", "quick-labels"].forEach(function (id) { document.getElementById(id)?.addEventListener("input", function () { state[{"quick-register-alias":"quickRegisterAlias", "quick-root":"quickRoot", "quick-path":"quickPath", "quick-labels":"quickLabels"}[id]] = this.value; }); });
-        adapterNode.addEventListener("change", function () { state.quickAdapter = this.value; });
-        document.getElementById("quick-register").addEventListener("click", quickRegisterAndInspect);
-        parameterPanel.querySelectorAll("[data-quick-module]").forEach(function (button) { button.addEventListener("click", function () { state.quickRegisterOpen = false; switchModule(button.dataset.quickModule); }); });
-        installPathPickers(parameterPanel);
-        setRequest(null, "");
+      if (window.quickStartController) {
+        window.quickStartController.mount(parameterPanel, {
+          setRequest: setRequest,
+          execute: function () { runButton.click(); },
+          status: function (message, kind) { statusNode.textContent = message; statusNode.className = "status " + (kind || ""); },
+          switchModule: switchModule
+        });
         return;
       }
-      const selected = state.datasets.datasets.find(function (item) { return item.name === state.quickDataset; });
-      const profile = quickStartProfile();
-      const noise = profile.noise || {};
-      const items = quickStartCompatibilityRecipes();
-      const noiseOptions = quickStartNoiseOptions(items, profile);
-      if (noise.origin === "native") state.quickNoiseMode = "native";
-      else if (!noiseOptions.some(function (item) { return item.value === state.quickNoiseMode; })) state.quickNoiseMode = noiseOptions[0]?.value || "";
-      const filtered = quickStartFilteredRecipes();
-      const methods = [...new Set(filtered.map(function (item) { return item.meta.method || item.acronym || item.recipe_id; }))];
-      if (!methods.includes(state.quickMethod)) state.quickMethod = methods[0] || "";
-      const methodItems = filtered.filter(function (item) { return (item.meta.method || item.acronym || item.recipe_id) === state.quickMethod; });
-      const recipe = quickStartSelectedRecipe();
-      const profileNoiseText = noise.origin === "native" ? "数据集本身包含真实世界标签噪声" : noise.status === "clean" ? "当前数据集原始标签是干净的" : "当前数据集标签语义已由兼容性系统确认";
-      const noiseBody = state.dataCompatibilityError ? '<div class="data-feedback failed"><strong>兼容性检查失败</strong><p>' + escapeHtml(state.dataCompatibilityError) + '</p></div>' : state.dataCompatibilityLoading ? '<p>正在检查数据集与正式配置的兼容性……</p>' : noise.status === "unknown" && noise.origin !== "native" ? '<p>系统无法自动判断这份数据的标签噪声。</p><div class="form-grid">' + field("标签状态", "quick-noise-declaration", selectControl("__ID__", [{value:"unknown",label:"不知道"},{value:"clean",label:"标签干净"},{value:"noisy",label:"本身有噪声"}])) + field("噪声来源", "quick-noise-origin", selectControl("__ID__", [{value:"unknown",label:"不知道"},{value:"synthetic",label:"人工合成"},{value:"native",label:"数据集原生"}])) + '</div><button type="button" id="quick-confirm-noise" class="secondary">确认并重新检查</button>' : '<p>✓ ' + escapeHtml(profileNoiseText) + '</p>' + (noise.origin === "native" ? '<p class="helper">本流程直接使用原始 noisy labels，不额外叠加人工噪声。</p>' : '<label>本次实验的标签噪声' + selectControl("quick-noise", noiseOptions.length ? noiseOptions : [{value:"",label:"没有匹配的已有正式配置",disabled:true}]) + '</label>');
-      const methodHtml = noise.status === "unknown" && noise.origin !== "native" ? '<p class="helper">确认标签状态后，系统才会列出可用方法。</p>' : methods.length ? '<div class="form-grid">' + field("方法", "quick-method", selectControl("__ID__", methods.map(function (item) { return {value:item, label:item}; }))) + field("已有正式配置", "quick-recipe", selectControl("__ID__", methodItems.map(function (item) { return {value:item.recipe_id, label:(item.meta.label || item.recipe_id) + " · " + (item.meta.epochs || "-") + " ep"}; }))) + '</div>' : '<p class="helper">当前数据集与所选噪声场景没有可直接运行的正式配置。请打开“本地数据集”查看详细兼容性。</p>';
-      const required = recipe?.required_user_inputs || [];
-      const priorHtml = required.includes("noise_rate_prior") ? '<div class="form-grid">' + field("方法噪声率先验", "quick-noise-prior", inputControl("__ID__", state.quickMethodNoisePrior, "number", "min=0 max=1 step=0.001")) + '</div><p class="helper">这是方法输入，不会被写入数据集事实。</p>' : '';
-      const canRun = Boolean(recipe && quickStartRecipeEligible(recipe) && (required.length === 0 || state.quickMethodNoisePrior !== ""));
-      const summary = recipe ? '<div class="quick-start-summary"><strong>即将运行</strong><p>数据集：' + escapeHtml(state.quickDataset) + '</p><p>标签噪声：' + escapeHtml(noise.origin === "native" ? "数据集原生噪声" : recipe.meta.noise || "-") + '</p><p>方法：' + escapeHtml(recipe.meta.method || recipe.acronym || "-") + '</p><p>配置：' + escapeHtml(recipe.recipe_id) + ' · ' + escapeHtml(recipe.meta.epochs || "-") + ' epochs</p></div>' : '';
-      parameterPanel.innerHTML = '<div class="quick-start-step"><h3>1. 数据集 <span>' + escapeHtml(selected?.adapter || "") + '</span></h3><div class="form-grid">' + field("选择已检查数据集", "quick-dataset", selectControl("__ID__", reports.map(function (item) { return {value:item.name, label:item.name + " · " + item.adapter + " · " + dataStatusLabel(item)}; })), true) + '</div><p class="helper">✓ 已登记；✓ 已实际加载 train/test。<button type="button" id="quick-open-data" class="secondary">打开详细数据页面</button></p>' + (state.dataCompatibilityError ? '<div class="data-feedback failed"><strong>兼容性检查失败</strong><p>' + escapeHtml(state.dataCompatibilityError) + '</p></div>' : '') + '</div>' +
-        '<div class="quick-start-step"><h3>2. 标签噪声</h3>' + noiseBody + '</div>' +
-        '<div class="quick-start-step"><h3>3. 已有实验配置</h3>' + methodHtml + priorHtml + (recipe ? '<p class="helper">只显示正式 reproduction 配置；兼容性由现有后端门禁决定。</p><button type="button" id="quick-open-yaml" class="secondary">查看 YAML</button>' : '') + summary + '</div>' +
-        '<div class="actions"><button type="button" id="quick-dry-run" class="secondary" ' + (canRun ? '' : 'disabled') + '>预演</button><button type="button" id="quick-run" class="primary" ' + (canRun ? '' : 'disabled') + '>开始训练</button></div>' +
-        '<div class="guide-card"><strong>需要更多控制？</strong><div class="workflow-actions"><button type="button" data-quick-module="beginner" class="secondary">新手教程</button><button type="button" data-quick-module="yaml" class="secondary">新建 YAML</button><button type="button" data-quick-module="data" class="secondary">本地数据集</button><button type="button" data-quick-module="papers" class="secondary">论文方法</button></div></div>';
-      document.getElementById("quick-dataset").value = state.quickDataset;
-      document.getElementById("quick-noise")?.setAttribute("value", state.quickNoiseMode);
-      if (document.getElementById("quick-noise")) document.getElementById("quick-noise").value = state.quickNoiseMode;
-      if (document.getElementById("quick-method")) document.getElementById("quick-method").value = state.quickMethod;
-      if (document.getElementById("quick-recipe")) document.getElementById("quick-recipe").value = state.quickRecipe;
-      document.getElementById("quick-noise")?.addEventListener("change", function () { state.quickNoiseMode = this.value; state.quickMethod = ""; state.quickRecipe = ""; renderQuickStart(); updateModulePreview(); });
-      document.getElementById("quick-method")?.addEventListener("change", function () { state.quickMethod = this.value; state.quickRecipe = ""; renderQuickStart(); updateModulePreview(); });
-      document.getElementById("quick-recipe")?.addEventListener("change", function () { state.quickRecipe = this.value; setActiveConfig("recipe", this.value); renderQuickStart(); updateModulePreview(); });
-      document.getElementById("quick-noise-prior")?.addEventListener("input", function () { state.quickMethodNoisePrior = this.value; updateModulePreview(); });
-      document.getElementById("quick-dataset").addEventListener("change", function () { state.quickDataset = this.value; state.dataAlias = this.value; state.dataCompatibility = null; state.dataRecipeCompatibility = null; state.dataCompatibilityAlias = ""; state.quickNoiseMode = ""; state.quickMethod = ""; state.quickRecipe = ""; loadDatasetCompatibility(this.value); });
-      document.getElementById("quick-open-data").addEventListener("click", function () { switchModule("data"); });
-      document.getElementById("quick-open-yaml")?.addEventListener("click", function () { openActiveConfigInEditor({kind:"recipe", value:recipe.recipe_id, label:recipe.recipe_id}); });
-      document.getElementById("quick-confirm-noise")?.addEventListener("click", quickConfirmNoise);
-      document.getElementById("quick-dry-run")?.addEventListener("click", function () { state.quickAction = "dry-run"; updateModulePreview(); runButton.click(); });
-      document.getElementById("quick-run")?.addEventListener("click", function () { state.quickAction = "run"; updateModulePreview(); runButton.click(); });
-      parameterPanel.querySelectorAll("[data-quick-module]").forEach(function (button) { button.addEventListener("click", function () { switchModule(button.dataset.quickModule); }); });
-      if (selected?.status === "ready" && state.dataCompatibilityAlias !== state.quickDataset && !state.dataCompatibilityLoading) setTimeout(function () { loadDatasetCompatibility(state.quickDataset); }, 0);
-      updateModulePreview();
-    }
-    async function quickRegisterAndInspect() {
-      const adapter = selectValue("quick-adapter", state.quickAdapter);
-      const name = selectValue("quick-register-alias", state.quickRegisterAlias).trim();
-      const root = selectValue("quick-root", state.quickRoot).trim();
-      const path = selectValue("quick-path", state.quickPath).trim();
-      const labels = selectValue("quick-labels", state.quickLabels).trim();
-      state.quickAdapter = adapter; state.quickRegisterAlias = name; state.quickRoot = root; state.quickPath = path; state.quickLabels = labels;
-      if (!name) { statusNode.textContent = "请填写数据集名称"; statusNode.className = "status failed"; return; }
-      statusNode.textContent = "正在登记并检查数据集……"; statusNode.className = "status running";
-      try {
-        const registerResponse = await fetch("/api/datasets", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"register", name:name, adapter:adapter, root:root, path:path, labels:labels})});
-        const registered = await registerResponse.json();
-        if (!registerResponse.ok) throw new Error(registered.error || "数据集登记失败");
-        const inspectResponse = await fetch("/api/datasets", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action:"inspect", name:name})});
-        const inspected = await inspectResponse.json();
-        if (!inspectResponse.ok) throw new Error(inspected.error || "数据集加载检查失败");
-        state.quickRegisterOpen = false; state.quickError = ""; state.quickDataset = name; state.dataAlias = name; state.dataCompatibility = null; state.dataRecipeCompatibility = null; state.dataCompatibilityAlias = ""; state.quickNoiseMode = ""; state.quickMethod = ""; state.quickRecipe = "";
-        await refreshDatasets();
-        await loadDatasetCompatibility(name);
-        statusNode.textContent = "数据集已登记并通过 train/test 加载检查"; statusNode.className = "status success";
-      } catch (error) {
-        state.quickError = String(error.message || error);
-        statusNode.textContent = "数据集登记或检查失败"; statusNode.className = "status failed";
-        renderQuickStart();
-      }
-    }
-    async function quickConfirmNoise() {
-      const alias = state.quickDataset;
-      if (!alias) return;
-      const current = state.dataCompatibility?.declared || {};
-      const noiseStatus = selectValue("quick-noise-declaration", "unknown");
-      const noiseOrigin = selectValue("quick-noise-origin", "unknown");
-      try {
-        const response = await fetch("/api/datasets/" + encodeURIComponent(alias) + "/declarations", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({declarations:{noise_status:noiseStatus, noise_origin:noiseOrigin, noise_rate:current.noise_rate || {status:"unknown", value:null, provenance:null}, clean_train_labels:current.clean_train_labels || "unknown"}})});
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || "标签噪声声明失败");
-        state.quickNoiseMode = ""; state.quickMethod = ""; state.quickRecipe = "";
-        await loadDatasetCompatibility(alias);
-        statusNode.textContent = "标签噪声声明已保存，兼容性已重新检查"; statusNode.className = "status success";
-      } catch (error) { statusNode.textContent = String(error.message || error); statusNode.className = "status failed"; }
+      parameterPanel.innerHTML = '<p class="helper">Quick Start 加载失败，请刷新页面。</p>';
     }
     function renderBeginner() {
       const steps = state.tutorial.steps || [];
@@ -1167,7 +1021,7 @@
       aliasNode.addEventListener("change", function () {
         state.dataRecipe = selectValue("data-recipe", state.dataRecipe);
         state.dataOutput = selectValue("data-output", state.dataOutput);
-        state.dataAlias = aliasNode.value; state.quickDataset = state.dataAlias; state.dataResult = null; state.dataCompatibility = null; state.dataRecipeCompatibility = null; state.dataCompatibilityAlias = ""; state.dataCompatibilityError = ""; state.dataSelectedMethod = ""; state.dataSelectedRecipe = ""; state.removeConfirmed = false; renderData(); updateModulePreview(); loadDatasetCompatibility();
+        state.dataAlias = aliasNode.value; state.dataResult = null; state.dataCompatibility = null; state.dataRecipeCompatibility = null; state.dataCompatibilityAlias = ""; state.dataCompatibilityError = ""; state.dataSelectedMethod = ""; state.dataSelectedRecipe = ""; state.removeConfirmed = false; renderData(); updateModulePreview(); loadDatasetCompatibility();
       });
       adapterNode.addEventListener("change", function () {
         state.dataAdapter = adapterNode.value;
@@ -1722,10 +1576,13 @@
       const node = document.getElementById("yaml-paper-status");
       if (!node) return;
       const paths = paperChangePaths();
-      node.classList.toggle("modified", paths.length > 0);
+      const dirty = yamlDraftDirty();
+      node.classList.toggle("modified", dirty || paths.length > 0);
       node.textContent = paths.length
         ? "已偏离论文配置：" + paths.join(", ") + "。保存前需要确认复现影响。"
-        : "当前论文参数与正式配置一致。";
+        : dirty
+          ? "配置已修改但尚未暂存；当前配置不能视为与论文正式配置一致。"
+          : "当前论文参数与正式配置一致。";
     }
     function renderYamlFields(schema) {
       const node = document.getElementById("yaml-fields");
@@ -1958,22 +1815,8 @@
       }
       return command;
     }
-    function quickStartCommand(action = "run") {
-      const recipe = quickStartSelectedRecipe();
-      if (!recipe || !state.quickDataset) return "";
-      const required = recipe.required_user_inputs || [];
-      if (!quickStartRecipeEligible(recipe) || (required.includes("noise_rate_prior") && state.quickMethodNoisePrior === "")) return "";
-      let command = "lnl run --recipe " + quoteArg(recipe.recipe_id) + " --data " + quoteArg(state.quickDataset);
-      if (action === "dry-run") command += " --dry-run";
-      command += " --check-data";
-      if (required.includes("noise_rate_prior")) {
-        const paths = (recipe.required_input_paths || {}).noise_rate_prior || [];
-        paths.forEach(function (path) { command += " --set " + quoteArg(path.join(".") + "=" + state.quickMethodNoisePrior); });
-      }
-      return command;
-    }
     function buildModuleCommand() {
-      if (state.module === "quickstart") return quickStartCommand(state.quickAction || "run");
+      if (state.module === "quickstart") return "";
       if (state.module === "beginner") return buildBeginnerCommand();
       if (state.module === "yaml") return buildYamlCommand();
       if (state.module === "data") {
@@ -2046,6 +1889,7 @@
       return payload;
     }
     function updateModulePreview() {
+      if (state.module === "quickstart" && window.quickStartController) return;
       if (state.module === "data" && state.removeConfirmed) {
         state.removeConfirmed = false;
         runButton.textContent = "执行此指令";
@@ -2188,7 +2032,7 @@
           showJob(result); if (state.timer) clearInterval(state.timer); state.timer = setInterval(pollJob, 350);
         } else {
           state.dataResult = result;
-          if (result.dataset?.name) { state.dataAlias = result.dataset.name; state.quickDataset = result.dataset.name; }
+          if (result.dataset?.name) { state.dataAlias = result.dataset.name; }
           if (result.removed === state.dataAlias) {
             state.dataAlias = "";
             state.dataAction = result.next_action || "list";
@@ -2238,6 +2082,7 @@
       document.getElementById("yaml-schema-meta").textContent = "已直接编辑完整 YAML；保存时以文本内容为准，并执行配置验证。";
       statusNode.textContent = "YAML 已修改，尚未保存";
       statusNode.className = "status running";
+      updatePaperDeviation();
       updateYamlEditorButton();
     });
     document.getElementById("yaml-path").addEventListener("input", function () { state.yamlDestinationPath = this.value.trim(); });

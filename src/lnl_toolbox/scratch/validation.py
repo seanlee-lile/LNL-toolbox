@@ -18,6 +18,9 @@ _TYPE_CHECKS = {
     "float": lambda value: isinstance(value, (int, float)) and not isinstance(value, bool),
     "int": lambda value: isinstance(value, int) and not isinstance(value, bool),
     "slot": lambda value: isinstance(value, str) and bool(value.strip()),
+    "enum": lambda value: isinstance(value, str),
+    "dataset": lambda value: isinstance(value, str),
+    "path": lambda value: isinstance(value, str),
     "str": lambda value: isinstance(value, str),
     "value": lambda value: True,
 }
@@ -59,6 +62,11 @@ def _resolve_params(
             raise ScratchValidationError(
                 f"{_path_label(path)} — {definition.name}: parameter `{name}` must be {type_name}"
             )
+        options = schema.get("options")
+        if type_name == "enum" and isinstance(options, (list, tuple, set)) and value not in options:
+            raise ScratchValidationError(
+                f"{_path_label(path)} — {definition.name}: parameter `{name}` must be one of {list(options)}"
+            )
         if type_name in {"int", "float"}:
             if "min" in schema and value < schema["min"]:
                 raise ScratchValidationError(
@@ -92,6 +100,7 @@ def _validate_steps(
     steps: Sequence[Any],
     available: set[str],
     path: tuple[int, ...] = (),
+    context: str = "top",
 ) -> set[str]:
     if not isinstance(steps, list):
         raise ScratchValidationError(f"{_path_label(path) or 'recipe'}: steps must be a list")
@@ -112,6 +121,14 @@ def _validate_steps(
             definition = get_block(block_id)
         except KeyError as exc:
             raise ScratchValidationError(f"{_path_label(step_path)}: {exc.args[0]}") from exc
+        # Legacy paper recipes keep their historical execution shape.  V2 UI
+        # placement is enforced for beginner-visible blocks; hidden legacy
+        # blocks remain executable for compatibility.
+        if definition.beginner_visible and "any" not in definition.placement and context not in definition.placement:
+            raise ScratchValidationError(
+                f"{_path_label(step_path)} — {definition.name}: block `{definition.id}` "
+                f"cannot be placed in {context} context; move it to {', '.join(definition.placement)}"
+            )
         supplied = raw_step.get("params", {})
         if not isinstance(supplied, Mapping):
             raise ScratchValidationError(
@@ -126,7 +143,8 @@ def _validate_steps(
         if missing:
             raise ScratchValidationError(
                 f"{_path_label(step_path)} — {definition.name} cannot run; "
-                f"missing context values: {', '.join(missing)}"
+                f"missing context values: {', '.join(missing)}; "
+                "add an upstream block that provides these keys first"
             )
         children = raw_step.get("steps")
         if definition.kind == "action" and children is not None:
@@ -141,7 +159,13 @@ def _validate_steps(
             child_available = current | {
                 _provided_slot(name, params) for name in definition.provides
             }
-            _validate_steps(children, child_available, step_path)
+            child_context = "epoch" if definition.id == "epoch_loop" else "batch" if definition.id == "batch_loop" else context
+            child_result = _validate_steps(children, child_available, step_path, child_context)
+            # Epoch-level evaluation/selection outputs remain available after
+            # the loop (for example the best validation checkpoint). Batch
+            # intermediates stay scoped to the batch loop.
+            if definition.id == "epoch_loop":
+                current.update(child_result)
         current.update(_provided_slot(name, params) for name in definition.provides)
     return current
 

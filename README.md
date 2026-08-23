@@ -27,7 +27,9 @@ lnl web
 ```
 
 主控制台为 `http://127.0.0.1:8765/`；Recipe/YAML 编辑子页面为
-`http://127.0.0.1:8765/recipe`。使用 `lnl web --no-open` 可只启动服务。
+`http://127.0.0.1:8765/recipe`；Scratch 积木搭建器为
+`http://127.0.0.1:8765/scratch`。这些页面由同一个 `lnl web` 服务提供；使用
+`lnl web --no-open` 可只启动服务。
 
 原有的 `lnl-train`、`lnl-clean-train`、`lnl-inspect-data` 和 `lnl-make-noise` 命令仍然保留。
 

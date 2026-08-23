@@ -1,0 +1,266 @@
+schema_version: 1
+kind: experiment
+seed: 1
+output_root: artifacts/reproductions
+data:
+  name: cifar10
+  validation_size: 5000
+  max_train_samples: ''
+  max_validation_samples: ''
+  max_test_samples: ''
+  augment: true
+  preprocessing: gce2018
+noise:
+  name: class_conditional
+  rate: 0.4
+  seed: 1
+  rng: numpy_legacy
+  validation_targets: noisy
+  manifest_filename: noise_manifest.npz
+  transition_matrix:
+  - - 1
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+  - - 0
+    - 1
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+  - - 0.4
+    - 0
+    - 0.6
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+  - - 0
+    - 0
+    - 0
+    - 0.6
+    - 0
+    - 0.4
+    - 0
+    - 0
+    - 0
+    - 0
+  - - 0
+    - 0
+    - 0
+    - 0
+    - 0.6
+    - 0
+    - 0
+    - 0.4
+    - 0
+    - 0
+  - - 0
+    - 0
+    - 0
+    - 0.4
+    - 0
+    - 0.6
+    - 0
+    - 0
+    - 0
+    - 0
+  - - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 1
+    - 0
+    - 0
+    - 0
+  - - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 1
+    - 0
+    - 0
+  - - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 1
+    - 0
+  - - 0
+    - 0.4
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0
+    - 0.6
+loss:
+  name: ce
+pipeline:
+  name: standard_noisy_erm
+  warmup_epochs: 0
+  transition_estimator:
+    name: known
+    matrix:
+    - - 1
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+    - - 0
+      - 1
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+    - - 0.4
+      - 0
+      - 0.6
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+    - - 0
+      - 0
+      - 0
+      - 0.6
+      - 0
+      - 0.4
+      - 0
+      - 0
+      - 0
+      - 0
+    - - 0
+      - 0
+      - 0
+      - 0
+      - 0.6
+      - 0
+      - 0
+      - 0.4
+      - 0
+      - 0
+    - - 0
+      - 0
+      - 0
+      - 0.4
+      - 0
+      - 0.6
+      - 0
+      - 0
+      - 0
+      - 0
+    - - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 1
+      - 0
+      - 0
+      - 0
+    - - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 1
+      - 0
+      - 0
+    - - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 1
+      - 0
+    - - 0
+      - 0.4
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0
+      - 0.6
+  risk_corrector:
+    name: forward
+loader:
+  batch_size: 128
+  num_workers: 0
+  pin_memory: true
+model:
+  name: resnet32
+  base_width: 16
+optimizer:
+  name: sgd
+  lr: 0.01
+  momentum: 0.9
+  nesterov: false
+  weight_decay: 0.0001
+scheduler:
+  name: multistep
+  milestones:
+  - 40
+  - 80
+  gamma: 0.1
+trainer:
+  epochs: 120
+  device: auto
+  progress:
+    enabled: true
+    update_interval: 20
+    curves: true
+execution:
+  runner: supervised
+meta:
+  web_parameter_record:
+    parameter_metadata_registry_version: 1.1.0
+    formal_recipe: loss-correction-cifar10-asymmetric04
+    modified_from_paper: false
+    paper_change_acknowledged: false
+    paper_parameter_changes: []
+    effective_reproduction_status: formal_recipe

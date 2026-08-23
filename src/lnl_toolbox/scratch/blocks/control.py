@@ -18,6 +18,7 @@ from ..registry import block
         "save_as": {"type": "slot", "default": "value"},
     },
     provides=("save_as",),
+    placement=("any",), stage="setup", ui_group="② 初始化", beginner_visible=False,
 )
 def set_value(ctx: ScratchContext, value: Any, save_as: str = "value") -> None:
     ctx[save_as] = value
@@ -34,6 +35,7 @@ def set_value(ctx: ScratchContext, value: Any, save_as: str = "value") -> None:
         "index_as": {"type": "slot", "default": "repeat_index"},
     },
     provides=("index_as",),
+    placement=("top",), stage="train", ui_group="③ 训练结构", beginner_visible=False,
 )
 def repeat_n(
     ctx: ScratchContext,
@@ -57,6 +59,7 @@ def repeat_n(
         "flag": {"type": "slot", "required": True},
     },
     requires=("flag",),
+    placement=("any",), stage="train", ui_group="③ 训练结构", beginner_visible=False,
 )
 def if_context(
     ctx: ScratchContext,
@@ -77,6 +80,7 @@ def if_context(
     kind="condition",
     params={"epoch": {"type": "int", "required": True, "min": 0}},
     requires=("epoch",),
+    placement=("epoch",), stage="train", ui_group="③ 训练结构", beginner_visible=False,
 )
 def if_epoch_ge(
     ctx: ScratchContext,
@@ -97,6 +101,7 @@ def if_epoch_ge(
     kind="condition",
     params={"epoch": {"type": "int", "required": True, "min": 0}},
     requires=("epoch",),
+    placement=("epoch",), stage="train", ui_group="③ 训练结构", beginner_visible=False,
 )
 def if_epoch_lt(
     ctx: ScratchContext,
@@ -120,6 +125,7 @@ def if_epoch_lt(
         "start_epoch": {"type": "int", "default": 0, "min": 0},
     },
     provides=("epoch",),
+    placement=("top",), stage="train", ui_group="③ 训练结构",
 )
 def epoch_loop(
     ctx: ScratchContext,
@@ -142,6 +148,7 @@ def epoch_loop(
     params={"loader": {"type": "slot", "default": "train_loader"}},
     requires=("loader",),
     provides=("batch_idx", "batch"),
+    placement=("epoch",), stage="train", ui_group="③ 训练结构",
 )
 def batch_loop(
     ctx: ScratchContext,

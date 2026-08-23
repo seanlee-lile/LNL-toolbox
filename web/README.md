@@ -26,6 +26,19 @@ http://127.0.0.1:8765/recipe。`lnl web` 默认打开主页；`lnl web --no-open
 
     python -m unittest discover -s web -p "test_*.py" -v
 
+## Quick Start
+
+Quick Start 的最短流程是：
+
+    数据路径 → 自动识别 → 自动登记与 inspect → 选择标签噪声 → 选择论文方法 → 预演/训练
+
+它不要求用户先手工登记 alias，也不会从已有 recipe 反推噪声选项。若条件完全匹配仓库的
+正式 recipe，页面显示“论文复现配置”；否则显示“Toolbox 适配配置”，说明它只是基于现有
+方法实现和训练模板为当前数据集、噪声条件生成的可运行配置，不等同于论文原始复现。
+
+Quick Start 只负责编排，最终训练仍使用现有 `/api/run`、job polling、日志和停止任务流程。
+复杂数据集或额外 checkpoint、manifest 等资源，继续从“本地数据集”或 YAML 编辑器进入。
+
 主页默认进入“快速开始”，先按数据集 → 标签噪声 → 正式配置开始实验；“新手教程”仍保留，并按以下顺序推进：
 
     doctor → list → validate → dry-run → run → resume

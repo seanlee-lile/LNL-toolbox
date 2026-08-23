@@ -1,0 +1,60 @@
+schema_version: 1
+name: new_algorithm
+description: Scratch default supervised skeleton
+
+steps:
+  - block: set_seed
+    params:
+      seed: 1
+
+  - block: select_device
+    params:
+      device: cpu
+
+  - block: select_dataset
+    params:
+      source_mode: registered
+      dataset: ""
+      path: ""
+      save_as: train_dataset
+
+  - block: configure_noise
+    params:
+      method: none
+      rate: 0.0
+      seed: 1
+
+  - block: create_loader
+    params:
+      dataset: train_dataset
+      batch_size: 128
+      shuffle: true
+      save_as: train_loader
+
+  - block: create_model
+    params:
+      model: resnet18
+      save_as: model
+
+  - block: create_optimizer
+    params:
+      optimizer: sgd
+      model: model
+      lr: 0.1
+      save_as: optimizer
+
+  - block: epoch_loop
+    params:
+      epochs: 200
+    steps:
+      - block: batch_loop
+        params:
+          loader: train_loader
+        steps:
+          - block: get_batch
+
+  - block: evaluate_accuracy
+    params:
+      model: model
+      loader: train_loader
+      save_as: accuracy

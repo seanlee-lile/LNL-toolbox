@@ -28,6 +28,15 @@ from urllib.parse import parse_qs, unquote, urlparse
 ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = Path(__file__).resolve().parent
 SRC_ROOT = ROOT / "src"
+SCRATCH_ROOT = SRC_ROOT / "lnl_toolbox" / "scratch"
+SCRATCH_WEB_ROOT = SCRATCH_ROOT / "web"
+SCRATCH_RECIPE_ROOT = SCRATCH_ROOT / "recipes"
+STATIC_ASSETS = {
+    "/assets/quick_start.js": (WEB_ROOT / "assets" / "quick_start.js", "application/javascript; charset=utf-8"),
+    "/assets/quick_start.css": (WEB_ROOT / "assets" / "quick_start.css", "text/css; charset=utf-8"),
+}
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 if SRC_ROOT.is_dir() and str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
@@ -380,6 +389,101 @@ def _json_response(
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
+
+
+def _scratch_recipe_path(name: str) -> Path:
+    """Resolve a Scratch recipe below the repository's Scratch recipe root."""
+
+    requested = Path(name)
+    candidates = [
+        SCRATCH_RECIPE_ROOT / requested,
+        SCRATCH_RECIPE_ROOT / "examples" / requested.name,
+        SCRATCH_RECIPE_ROOT / "papers" / requested.name,
+    ]
+    root = SCRATCH_RECIPE_ROOT.resolve()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if root not in resolved.parents:
+            continue
+        if candidate.suffix in {".yaml", ".yml"} and candidate.is_file():
+            return candidate
+    raise FileNotFoundError(f"Scratch recipe not found: {name}")
+
+
+def _scratch_error(exc: Exception) -> dict[str, object]:
+    payload: dict[str, object] = {"ok": False, "error": str(exc)}
+    path = getattr(exc, "path", None)
+    block_id = getattr(exc, "block_id", None)
+    if path is not None:
+        payload["path"] = list(path)
+    if block_id is not None:
+        payload["block_id"] = block_id
+    return payload
+
+
+def _scratch_recipe_api_payload() -> list[str]:
+    return sorted(
+        str(path.relative_to(SCRATCH_RECIPE_ROOT)).replace("\\", "/")
+        for path in SCRATCH_RECIPE_ROOT.rglob("*.y*ml")
+    )
+
+
+def _scratch_template_payload() -> list[dict[str, str]]:
+    formula_ready = {"gce", "coteaching"}
+    display_names = {"gce": "GCE", "coteaching": "Co-teaching"}
+    paper_root = SCRATCH_RECIPE_ROOT / "papers"
+    if not paper_root.exists():
+        return []
+    return [
+        {
+            "id": path.stem,
+            "name": display_names.get(path.stem, path.stem.replace("_", " ").title()),
+            "path": f"papers/{path.name}",
+            "status": "formula-ready" if path.stem in formula_ready else "legacy-scratch",
+        }
+        for path in sorted(paper_root.glob("*.y*ml"))
+    ]
+
+
+def _scratch_examples_payload() -> list[dict[str, str]]:
+    return [item for item in _scratch_template_payload() if item["id"] in {"gce", "coteaching"}]
+
+
+def _scratch_request_body(handler: BaseHTTPRequestHandler) -> dict[str, object]:
+    length = int(handler.headers.get("Content-Length", "0"))
+    payload = json.loads(handler.rfile.read(length) or b"{}")
+    if not isinstance(payload, dict):
+        raise TypeError("Scratch request body must be an object")
+    return payload
+
+
+def _scratch_recipe_from_body(payload: dict[str, object]) -> dict[str, object]:
+    from lnl_toolbox.scratch import validate_recipe
+
+    recipe = payload.get("recipe", payload)
+    if not isinstance(recipe, dict):
+        raise TypeError("Scratch recipe must be an object")
+    return validate_recipe(recipe)
+
+
+def _scratch_run(recipe: dict[str, object]) -> dict[str, object]:
+    from lnl_toolbox.scratch import execute_recipe, resolve_recipe, save_recipe
+
+    output = ROOT / "artifacts" / "scratch" / Path(str(recipe["name"])).name
+    output.mkdir(parents=True, exist_ok=True)
+    save_recipe(recipe, output / "recipe.yaml")
+    save_recipe(resolve_recipe(recipe), output / "resolved_recipe.yaml")
+    context = execute_recipe(recipe, {"artifact_dir": str(output)})
+    metrics = context.get("metrics", [])
+    (output / "metrics.jsonl").write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in metrics),
+        encoding="utf-8",
+    )
+    (output / "stdout.log").write_text(
+        json.dumps({"name": recipe["name"], "metrics": metrics}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return {"ok": True, "metrics": metrics, "artifact_dir": str(output)}
 
 
 def _recipe_payload(*, include_all: bool = False) -> list[dict[str, object]]:
@@ -1536,8 +1640,89 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = urlparse(self.path).path
+        if path in STATIC_ASSETS:
+            asset, content_type = STATIC_ASSETS[path]
+            self._serve_file(asset, content_type)
+            return
         if path in {"/", "/recipe", "/recipe/"}:
             self._serve_file(WEB_ROOT / "index.html", "text/html; charset=utf-8")
+            return
+        if path in {"/scratch", "/scratch/"}:
+            self._serve_file(SCRATCH_WEB_ROOT / "index.html", "text/html; charset=utf-8")
+            return
+        if path in {"/scratch.js", "/scratch.css"}:
+            content_type = "application/javascript; charset=utf-8" if path.endswith(".js") else "text/css; charset=utf-8"
+            self._serve_file(SCRATCH_WEB_ROOT / path.lstrip("/"), content_type)
+            return
+        if path == "/api/scratch/blocks":
+            try:
+                from lnl_toolbox.scratch import list_blocks
+
+                _json_response(self, [definition.describe() for definition in list_blocks()])
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 500)
+            return
+        if path == "/api/scratch/default-recipe":
+            try:
+                from lnl_toolbox.scratch import load_recipe
+
+                _json_response(self, load_recipe(SCRATCH_RECIPE_ROOT / "examples" / "default_supervised.yaml"))
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path == "/api/scratch/entry-recipe":
+            try:
+                from lnl_toolbox.scratch import load_recipe
+
+                _json_response(self, load_recipe(SCRATCH_RECIPE_ROOT / "papers" / "gce.yaml"))
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path == "/api/scratch/templates":
+            try:
+                _json_response(self, _scratch_template_payload())
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path == "/api/scratch/examples":
+            try:
+                _json_response(self, _scratch_examples_payload())
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path == "/api/scratch/datasets":
+            try:
+                from lnl_toolbox.scratch.web.data_bridge import dataset_catalog_payload
+
+                _json_response(self, dataset_catalog_payload())
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path.startswith("/api/scratch/dataset/"):
+            try:
+                from lnl_toolbox.scratch.web.data_bridge import dataset_fact_payload
+
+                alias = unquote(path.removeprefix("/api/scratch/dataset/"))
+                _json_response(self, dataset_fact_payload(alias))
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path == "/api/scratch/recipes":
+            try:
+                _json_response(self, _scratch_recipe_api_payload())
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 500)
+            return
+        if path.startswith("/api/scratch/recipe/"):
+            try:
+                from lnl_toolbox.scratch import load_recipe
+
+                name = unquote(path.removeprefix("/api/scratch/recipe/"))
+                _json_response(self, load_recipe(_scratch_recipe_path(name)))
+            except FileNotFoundError as exc:
+                _json_response(self, _scratch_error(exc), 404)
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
             return
         if path == "/api/commands":
             _json_response(
@@ -1555,6 +1740,18 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/tutorial":
             _json_response(self, _tutorial_payload())
+            return
+        if path == "/api/quick-start/noises":
+            try:
+                query = parse_qs(urlparse(self.path).query)
+                alias = query.get("dataset", [""])[0].strip()
+                if not alias:
+                    raise ValueError("provide a dataset alias")
+                from web.quick_start_api import noise_options_payload
+
+                _json_response(self, noise_options_payload(alias))
+            except (KeyError, OSError, TypeError, ValueError) as exc:
+                _json_response(self, {"error": str(exc)}, 400)
             return
         if path == "/api/recipes":
             try:
@@ -1671,6 +1868,49 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path.startswith("/api/quick-start/"):
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                from web import quick_start_api
+
+                handlers = {
+                    "/api/quick-start/probe": quick_start_api.probe_payload,
+                    "/api/quick-start/register": quick_start_api.register_payload,
+                    "/api/quick-start/methods": quick_start_api.method_options_payload,
+                    "/api/quick-start/plan": quick_start_api.plan_payload,
+                }
+                handler = handlers.get(path)
+                if handler is None:
+                    raise ValueError("unknown Quick Start API endpoint")
+                _json_response(self, handler(payload))
+            except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError) as exc:
+                _json_response(self, {"error": str(exc)}, 400)
+            except Exception as exc:
+                _json_response(self, {"error": f"Quick Start backend error: {exc}"}, 500)
+            return
+        if path in {"/api/scratch/validate", "/api/scratch/save", "/api/scratch/run"}:
+            try:
+                payload = _scratch_request_body(self)
+                recipe = _scratch_recipe_from_body(payload)
+                if path == "/api/scratch/validate":
+                    _json_response(self, {"ok": True, "recipe": recipe})
+                elif path == "/api/scratch/save":
+                    from lnl_toolbox.scratch import save_recipe
+
+                    name = Path(str(recipe["name"])).name
+                    destination = SCRATCH_RECIPE_ROOT / "examples" / f"{name}.yaml"
+                    save_recipe(recipe, destination)
+                    _json_response(
+                        self,
+                        {"ok": True, "path": str(destination.relative_to(SCRATCH_RECIPE_ROOT)).replace("\\", "/")},
+                        201,
+                    )
+                else:
+                    _json_response(self, _scratch_run(recipe))
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
         if path.startswith("/api/jobs/") and path.endswith("/cancel"):
             job_id = path.split("/")[3]
             try:

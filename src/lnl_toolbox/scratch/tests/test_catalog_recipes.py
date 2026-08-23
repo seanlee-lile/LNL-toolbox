@@ -22,8 +22,13 @@ class ScratchCatalogRecipeTest(unittest.TestCase):
         self.assertEqual(set(recipes), expected)
         self.assertEqual(len(recipes), 26)
 
-    def test_every_catalog_recipe_executes_synthetic_path(self) -> None:
+    def test_legacy_catalog_recipes_execute_synthetic_path(self) -> None:
         for path in sorted((ROOT / "recipes" / "papers").glob("*.yaml")):
+            if path.name == "gce.yaml":
+                # GCE is the formal CIFAR-10 reproduction recipe.  Its
+                # execution intentionally requires the user's local dataset
+                # and is covered by structural validation instead.
+                continue
             recipe = load_recipe(path)
             context = execute_recipe(recipe)
             self.assertIn("labels", context, path.name)

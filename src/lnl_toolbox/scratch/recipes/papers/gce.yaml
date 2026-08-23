@@ -1,32 +1,62 @@
 schema_version: 1
 name: gce
-description: GCE paper-step recipe on a deterministic synthetic smoke dataset.
+description: "Complete GCE CIFAR-10 reproduction recipe: official split/preprocessing, symmetric noise 0.2, ResNet-34, SGD, MultiStepLR, validation model selection, and 120 epochs."
 steps:
   - block: set_seed
     params: {seed: 1}
   - block: select_device
-    params: {device: cpu}
-  - block: load_synthetic
-    params: {samples: 64, features: 4, classes: 2}
-  - block: create_loader
-    params: {dataset: train_dataset, batch_size: 16, shuffle: true}
+    params: {device: auto}
+  - block: prepare_gce_cifar10
+    params:
+      root: ''
+      validation_size: 5000
+      augment: true
+      noise_method: symmetric
+      noise_rate: 0.2
+      noise_seed: 1
+      batch_size: 128
   - block: create_model
-    params: {model: mlp, num_classes: 2, input_dim: 4, device: device}
+    params: {model: resnet34, num_classes: 10, base_width: 64, device: device}
   - block: create_optimizer
-    params: {optimizer: sgd, model: model, lr: 0.1}
+    params:
+      optimizer: sgd
+      model: model
+      lr: 0.01
+      momentum: 0.9
+      nesterov: false
+      weight_decay: 0.0001
+  - block: create_scheduler
+    params:
+      scheduler: multistep
+      optimizer: optimizer
+      milestones: [40, 80]
+      gamma: 0.1
   - block: epoch_loop
-    params: {epochs: 1}
+    params: {epochs: 120}
     steps:
       - block: batch_loop
         params: {loader: train_loader}
         steps:
           - {block: get_batch}
+          - {block: move_batch_to_device}
           - {block: zero_grad}
           - {block: forward}
-          - block: gce_loss
+          - block: softmax_probability
+          - block: gather_target_probability
+          - block: gce_q_formula
             params: {q: 0.7}
           - {block: mean_loss}
           - {block: backward}
           - {block: optimizer_step}
+      - block: evaluate_accuracy
+        params: {model: model, loader: validation_loader, save_as: validation_accuracy}
+      - block: track_best_model
+        params: {model: model, metric: validation_accuracy}
+      - block: scheduler_step
+        params: {scheduler: scheduler}
+  - block: restore_best_model
+    params: {model: model, state: best_model_state}
+  - block: evaluate_accuracy
+    params: {model: model, loader: test_loader, save_as: test_accuracy}
   - block: record_metrics
-    params: {values: [loss]}
+    params: {values: [test_accuracy, best_validation_accuracy, best_epoch]}

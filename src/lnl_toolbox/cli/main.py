@@ -1331,6 +1331,15 @@ def _methods_command(args: argparse.Namespace) -> int:
 def _web(args: argparse.Namespace) -> int:
     root = find_project_root(None, args.project_root)
     server = root / "web" / "command_console.py"
+    # `lnl web` is a user-facing entry point.  When launched outside the
+    # checkout, project-root discovery starts at the current directory and
+    # cannot find the repository's combined WebUI server; editable installs
+    # still expose the source checkout through this module path.
+    if not server.is_file():
+        source_root = Path(__file__).resolve().parents[3]
+        source_server = source_root / "web" / "command_console.py"
+        if source_server.is_file():
+            root, server = source_root, source_server
     if not server.is_file():
         raise FileNotFoundError(f"Web UI server does not exist: {server}")
     command = [

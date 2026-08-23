@@ -7,12 +7,20 @@
   <link rel="stylesheet" href="/scratch.css">
 </head>
 <body>
-  <header><h1>LNL Scratch</h1><button id="new">新建</button><button id="open">打开</button><button id="save">保存</button><button id="check">检查</button><button id="run">运行</button></header>
+  <header><h1>LNL Scratch</h1><button id="new">新建算法</button><button id="templates">论文范例 / 模板</button><button id="open">我的 Recipe</button><button id="save">保存</button><button id="check">检查</button><button id="run">运行</button></header>
   <main>
     <aside><h2>积木栏</h2><div id="palette"></div></aside>
-    <section><label>算法名称 <input id="recipe-name" value="scratch_recipe"></label><div id="steps" class="steps"></div></section>
+    <section><label>算法名称 <input id="recipe-name" value="scratch_recipe"></label><div id="next-suggestion" class="next-suggestion"></div><div id="steps" class="steps"></div></section>
     <aside class="inspector"><h2>当前积木参数</h2><div id="inspector"></div><pre id="output"></pre></aside>
   </main>
+  <dialog id="template-dialog">
+    <form method="dialog" class="dialog-header"><h2>论文模板</h2><button>关闭</button></form>
+    <input id="template-search" placeholder="搜索论文模板">
+    <h3>置顶论文范例</h3>
+    <div id="featured-examples"></div>
+    <h3>全部模板</h3>
+    <div id="template-list"></div>
+  </dialog>
   <script src="/scratch.js"></script>
 </body>
 </html>

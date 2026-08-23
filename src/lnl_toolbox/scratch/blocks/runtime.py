@@ -23,6 +23,7 @@ def _torch():
     description="Set Python, NumPy, and PyTorch random seeds when available.",
     params={"seed": {"type": "int", "default": 1, "min": 0}},
     provides=("seed",),
+    placement=("top",), stage="setup", ui_group="② 初始化",
 )
 def set_seed(ctx: ScratchContext, seed: int = 1) -> None:
     random.seed(seed)
@@ -50,6 +51,7 @@ def set_seed(ctx: ScratchContext, seed: int = 1) -> None:
     description="Select CUDA when requested and available, otherwise use CPU.",
     params={"device": {"type": "str", "default": "auto"}, "save_as": {"type": "slot", "default": "device"}},
     provides=("save_as",),
+    placement=("top",), stage="setup", ui_group="② 初始化",
 )
 def select_device(ctx: ScratchContext, device: str = "auto", save_as: str = "device") -> None:
     requested = str(device).strip().lower()

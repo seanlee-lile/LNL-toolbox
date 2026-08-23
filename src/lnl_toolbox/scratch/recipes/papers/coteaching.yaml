@@ -1,15 +1,20 @@
 schema_version: 1
 name: coteaching
-description: Co-teaching peer small-loss exchange smoke recipe.
+description: Co-teaching formula-level dual-peer smoke recipe.
 steps:
   - block: set_seed
     params: {seed: 1}
   - block: select_device
     params: {device: cpu}
-  - block: load_synthetic
-    params: {samples: 32, features: 4, classes: 2}
+  - block: select_dataset
+    params:
+      source_mode: builtin
+      dataset: synthetic
+      save_as: train_dataset
+  - block: configure_noise
+    params: {method: none, rate: 0.0, seed: 1}
   - block: create_loader
-    params: {dataset: train_dataset, batch_size: 16, shuffle: true}
+    params: {dataset: train_dataset, batch_size: 16, shuffle: true, save_as: train_loader}
   - block: create_model
     params: {model: mlp, num_classes: 2, input_dim: 4, device: device, save_as: model_a}
   - block: create_model
@@ -21,10 +26,12 @@ steps:
   - block: epoch_loop
     params: {epochs: 1}
     steps:
+      - block: remember_rate_formula
+        params: {noise_rate: 0.2, warmup_epochs: 10, save_as: remember_rate}
       - block: batch_loop
         params: {loader: train_loader}
         steps:
-          - {block: get_batch}
+          - block: get_batch
           - block: zero_grad
             params: {optimizer: optimizer_a}
           - block: zero_grad
@@ -37,11 +44,13 @@ steps:
             params: {logits: logits_a, save_as: loss_a_per_sample}
           - block: per_sample_ce
             params: {logits: logits_b, save_as: loss_b_per_sample}
-          - block: peer_exchange
-            params: {keep_rate: 0.8}
-          - block: select_by_indices
+          - block: small_loss_indices
+            params: {input: loss_a_per_sample, remember_rate: remember_rate, save_as: selected_a}
+          - block: small_loss_indices
+            params: {input: loss_b_per_sample, remember_rate: remember_rate, save_as: selected_b}
+          - block: cross_select_loss_a_from_b
             params: {loss: loss_a_per_sample, indices: selected_b, save_as: loss_a}
-          - block: select_by_indices
+          - block: cross_select_loss_b_from_a
             params: {loss: loss_b_per_sample, indices: selected_a, save_as: loss_b}
           - block: backward
             params: {loss: loss_a}

@@ -17,7 +17,12 @@ def _torch():
     return torch, nn
 
 
-def _resnet18(num_classes: int, preactivation: bool = False):
+def _resnet18(
+    num_classes: int,
+    preactivation: bool = False,
+    layer_counts: tuple[int, int, int, int] = (2, 2, 2, 2),
+    base_width: int = 32,
+):
     torch, nn = _torch()
     import torch.nn.functional as F
 
@@ -43,12 +48,19 @@ def _resnet18(num_classes: int, preactivation: bool = False):
     class ScratchResNet(nn.Module):
         def __init__(self) -> None:
             super().__init__()
-            self.stem = nn.Conv2d(3, 32, 3, 1, 1, bias=False)
-            self.layer1 = nn.Sequential(BasicBlock(32, 32), BasicBlock(32, 32))
-            self.layer2 = nn.Sequential(BasicBlock(32, 64, 2), BasicBlock(64, 64))
-            self.layer3 = nn.Sequential(BasicBlock(64, 128, 2), BasicBlock(128, 128))
-            self.layer4 = nn.Sequential(BasicBlock(128, 256, 2), BasicBlock(256, 256))
-            self.classifier = nn.Linear(256, num_classes)
+            widths = (int(base_width), int(base_width) * 2, int(base_width) * 4, int(base_width) * 8)
+            self.stem = nn.Conv2d(3, widths[0], 3, 1, 1, bias=False)
+
+            def stage(incoming: int, outgoing: int, count: int, stride: int) -> nn.Sequential:
+                blocks = [BasicBlock(incoming, outgoing, stride)]
+                blocks.extend(BasicBlock(outgoing, outgoing) for _ in range(int(count) - 1))
+                return nn.Sequential(*blocks)
+
+            self.layer1 = stage(widths[0], widths[0], layer_counts[0], 1)
+            self.layer2 = stage(widths[0], widths[1], layer_counts[1], 2)
+            self.layer3 = stage(widths[1], widths[2], layer_counts[2], 2)
+            self.layer4 = stage(widths[2], widths[3], layer_counts[3], 2)
+            self.classifier = nn.Linear(widths[3], num_classes)
 
         def forward_with_features(self, x):
             value = self.layer1(self.stem(x))
@@ -74,11 +86,13 @@ def _resnet18(num_classes: int, preactivation: bool = False):
         "num_classes": {"type": "int", "default": 10, "min": 2},
         "input_dim": {"type": "int", "default": 4, "min": 1},
         "hidden": {"type": "int", "default": 128, "min": 1},
+        "base_width": {"type": "int", "default": 64, "min": 1},
         "device": {"type": "slot", "default": "device"},
         "save_as": {"type": "slot", "default": "model"},
     },
     requires=("device",),
     provides=("save_as",),
+    placement=("top",), stage="setup", ui_group="② 初始化",
 )
 def create_model(
     ctx: ScratchContext,
@@ -86,13 +100,20 @@ def create_model(
     num_classes: int = 10,
     input_dim: int = 4,
     hidden: int = 128,
+    base_width: int = 64,
     device: str = "device",
     save_as: str = "model",
 ) -> None:
     _, nn = _torch()
     name = str(model).strip().lower().replace("-", "_")
     if name in {"resnet18", "preact_resnet18"}:
-        network = _resnet18(num_classes, preactivation=name.startswith("preact"))
+        network = _resnet18(num_classes, preactivation=name.startswith("preact"), base_width=int(base_width))
+    elif name in {"resnet34", "cifar_resnet34"}:
+        network = _resnet18(
+            num_classes,
+            layer_counts=(3, 4, 6, 3),
+            base_width=int(base_width),
+        )
     elif name in {"linear", "linear_classifier"}:
         network = nn.Linear(input_dim, num_classes)
     elif name == "mlp":

@@ -35,6 +35,25 @@ def _error_payload(exc: Exception) -> dict[str, object]:
     return payload
 
 
+def _template_catalog() -> list[dict[str, str]]:
+    formula_ready = {"gce", "coteaching"}
+    display_names = {"gce": "GCE", "coteaching": "Co-teaching"}
+    templates = []
+    for path in sorted((RECIPE_ROOT / "papers").glob("*.y*ml")) if (RECIPE_ROOT / "papers").exists() else []:
+        template_id = path.stem
+        templates.append({
+            "id": template_id,
+            "name": display_names.get(template_id, template_id.replace("_", " ").title()),
+            "path": f"papers/{path.name}",
+            "status": "formula-ready" if template_id in formula_ready else "legacy-scratch",
+        })
+    return templates
+
+
+def _paper_examples() -> list[dict[str, str]]:
+    return [item for item in _template_catalog() if item["id"] in {"gce", "coteaching"}]
+
+
 class ScratchHandler(BaseHTTPRequestHandler):
     server_version = "LNL-Scratch/1.0"
 
@@ -56,8 +75,31 @@ class ScratchHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         try:
-            if parsed.path == "/api/blocks":
+            if parsed.path in {"/scratch", "/scratch/"}:
+                # The standalone service serves the editor at `/`.  Keep the
+                # mounted WebUI URL friendly as well instead of returning a
+                # confusing 404 when both launch modes are tried.
+                self.send_response(302)
+                self.send_header("Location", "/")
+                self.end_headers()
+            elif parsed.path == "/api/blocks":
                 self._send([definition.describe() for definition in list_blocks()])
+            elif parsed.path == "/api/default-recipe":
+                self._send(load_recipe(RECIPE_ROOT / "examples" / "default_supervised.yaml"))
+            elif parsed.path == "/api/entry-recipe":
+                self._send(load_recipe(RECIPE_ROOT / "papers" / "gce.yaml"))
+            elif parsed.path == "/api/templates":
+                self._send(_template_catalog())
+            elif parsed.path == "/api/examples":
+                self._send(_paper_examples())
+            elif parsed.path == "/api/datasets":
+                from .data_bridge import dataset_catalog_payload
+
+                self._send(dataset_catalog_payload())
+            elif parsed.path.startswith("/api/dataset/"):
+                from .data_bridge import dataset_fact_payload
+
+                self._send(dataset_fact_payload(unquote(parsed.path.removeprefix("/api/dataset/"))))
             elif parsed.path == "/api/recipes":
                 names = sorted(str(path.relative_to(RECIPE_ROOT)) for path in RECIPE_ROOT.rglob("*.y*ml")) if RECIPE_ROOT.exists() else []
                 self._send(names)

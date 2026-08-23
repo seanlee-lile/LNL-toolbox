@@ -72,6 +72,7 @@ data 安装，避免用户本地 YAML 污染 catalog。
 | `data/cifar.py` | 读取 CIFAR-10/100 官方 pickle，转换为 `[N,32,32,3]` uint8 图像并验证标签。 |
 | `data/torch_cifar.py` | 提供分层、随机及 `classwise_legacy` 可复现划分、可配置 mean/std 的标准变换、GCE 2018 preprocessing 和稳定 `input/target/index`。 |
 | `data/noisy_dataset.py` | 按显式 global-index mapping 包装训练 Dataset 并替换 target；不会向 batch 暴露 clean label。 |
+| `data/probe.py` | Quick Start 的只读数据路径探测；按真实文件布局识别现有 adapter，不注册、不加载完整数据、不运行训练。 |
 | `data/__init__.py` | 公开 CIFAR 读取函数、干净 Dataset 和 noisy wrapper。 |
 | `data/cifar-10-batches-py/` | 用户放入的 CIFAR-10 官方 Python 数据。 |
 | `data/cifar-100-python/` | 用户放入的 CIFAR-100 官方 Python 数据。 |
@@ -99,6 +100,7 @@ data 安装，避免用户本地 YAML 污染 catalog。
 | `noise/transition.py` | 验证 `T[i,j]=P(noisy=j|clean=i)` 行随机矩阵；提供 `KnownTransition`、版本化 `TransitionArtifact`、NPZ roundtrip 和哈希篡改检测。 |
 | `noise/estimators.py` | 定义无 clean-label 的 `PosteriorSnapshot`、`TransitionEstimator` Protocol，并实现 Anchor、Known 与 Dual-T 离线 estimator。 |
 | `noise/__init__.py` | 公开 Noise Manifest、生成器、后验快照、estimator 和转移矩阵产物协议。 |
+| `noise/quickstart_catalog.py` | 将真实噪声生成能力映射为 Quick Start 可读选项；隐藏 external/source-only 标签并复用现有 noise 配置合同。 |
 | `losses/numpy_losses.py` | NumPy 版逐样本 CE 与 GCE，用于数学验证，不执行神经网络反向传播。 |
 | `losses/torch_losses.py` | PyTorch 版逐样本 CE、标准 GCE、NCE、MAE、RCE、严格 P0 APL，以及 `[B]` 输出合同校验。 |
 | `losses/__init__.py` | 公开 NumPy 参考函数；安装 PyTorch 时同时公开可训练 loss。 |
@@ -118,6 +120,17 @@ data 安装，避免用户本地 YAML 污染 catalog。
 | `treatments/selector_adapter.py` | 将现有 hard Selector 适配为 mask 加全一权重，保持旧配置和数值行为。 |
 | `treatments/weights.py` | 定义泛型 WeightProvider、通用 WeightResult 和不依赖具体输入字段的 adapter；BinaryRCNWeightInput 与对应 provider 实现二分类 asymmetric-RCN 的论文精确 importance-weight 公式，不负责 posterior 或噪声率估计。 |
 | `algorithms/mentornet.py` | MentorNet 的移动分位数、burn-in/dropout 和状态化连续权重 Provider；只消费 noisy Student loss 与冻结 MentorArtifact。 |
+
+### Quick Start 编排与 Web 入口
+
+| 文件/目录 | 作用 |
+|---|---|
+| `quickstart/models.py` | Quick Start 的数据集、噪声、方法和计划 DTO；不访问磁盘或训练。 |
+| `quickstart/templates.py` | 从现有论文目录和配置生成方法模板，区分正式 reproduction 与 toolbox-adapted 配置。 |
+| `quickstart/service.py` | 编排路径探测、登记/inspect、噪声选择、方法能力检查和配置计划；复用现有 DataService/ExperimentService。 |
+| `web/quick_start_api.py` | Quick Start HTTP payload 薄适配层，不复制兼容性或训练逻辑。 |
+| `web/assets/quick_start.js` | Quick Start 的局部状态、步骤界面和现有 `/api/run` 对接。 |
+| `web/assets/quick_start.css` | 仅 Quick Start 使用的 `.qs-` 样式。 |
 | `models/mentornet.py` | 可复用 bi-LSTM curriculum model；不拥有 StudentNet 或训练循环。 |
 | `training/mentor_artifacts.py` | 冻结 Mentor 模型的结构、特征 schema、来源和哈希校验。 |
 | `training/mentor_learning.py` | 从隔离的 trusted curriculum feature 数据离线训练 MentorArtifact。 |

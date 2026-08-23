@@ -33,6 +33,8 @@ def _save_loss(ctx: ScratchContext, values: Any, save_as: str) -> None:
     },
     requires=("logits", "labels"),
     provides=("save_as",),
+    placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="CE(z, y) = -log softmax(z)_y", formula_ref="standard cross-entropy definition",
 )
 def per_sample_ce(
     ctx: ScratchContext,
@@ -56,6 +58,7 @@ def per_sample_ce(
     },
     requires=("logits", "labels"),
     provides=("save_as",),
+    placement=("batch",), stage="train", ui_group="⑤ 损失公式", beginner_visible=False,
 )
 def cross_entropy(ctx: ScratchContext, **params: Any) -> None:
     per_sample_ce(ctx, **params)
@@ -74,6 +77,7 @@ def cross_entropy(ctx: ScratchContext, **params: Any) -> None:
     },
     requires=("logits", "labels"),
     provides=("save_as",),
+    placement=("batch",), stage="train", ui_group="⑤ 损失公式", beginner_visible=False,
 )
 def gce_loss(
     ctx: ScratchContext,
@@ -93,6 +97,58 @@ def gce_loss(
 
 
 @block(
+    id="gather_target_probability",
+    name="Gather Target Probability",
+    category="Loss",
+    description="Gather the probability assigned to each example's observed target class.",
+    params={
+        "probabilities": {"type": "slot", "default": "probabilities"},
+        "labels": {"type": "slot", "default": "labels"},
+        "save_as": {"type": "slot", "default": "target_probability"},
+    },
+    requires=("probabilities", "labels"),
+    provides=("save_as",),
+    placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="p_y = f_y(x)", formula_ref="GCE target-class probability definition", paper="Generalized Cross Entropy",
+)
+def gather_target_probability(
+    ctx: ScratchContext,
+    probabilities: str = "probabilities",
+    labels: str = "labels",
+    save_as: str = "target_probability",
+) -> None:
+    ctx[save_as] = ctx[probabilities].gather(1, ctx[labels].long().view(-1, 1)).squeeze(1).clamp_min(1e-12)
+
+
+@block(
+    id="gce_q_formula",
+    name="GCE q Formula",
+    category="Loss",
+    description="Compute the per-sample Generalized Cross Entropy value from target probability.",
+    params={
+        "input": {"type": "slot", "default": "target_probability"},
+        "q": {"type": "float", "default": 0.7, "min": 0.0, "max": 1.0},
+        "save_as": {"type": "slot", "default": "loss_per_sample"},
+    },
+    requires=("input",),
+    provides=("save_as",),
+    placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="L_q(f(x), y) = (1 - p_y^q) / q", formula_ref="Generalized Cross Entropy definition", paper="Generalized Cross Entropy",
+)
+def gce_q_formula(
+    ctx: ScratchContext,
+    input: str = "target_probability",
+    q: float = 0.7,
+    save_as: str = "loss_per_sample",
+) -> None:
+    values = ctx[input].clamp_min(1e-12)
+    if float(q) == 0.0:
+        ctx[save_as] = -values.log()
+    else:
+        ctx[save_as] = (1.0 - values.pow(float(q))) / float(q)
+
+
+@block(
     id="mae_loss",
     name="MAE Loss",
     category="Loss",
@@ -104,6 +160,7 @@ def gce_loss(
     },
     requires=("logits", "labels"),
     provides=("save_as",),
+    placement=("batch",), stage="train", ui_group="⑤ 损失公式", beginner_visible=False,
 )
 def mae_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", save_as: str = "loss_per_sample") -> None:
     torch, _ = _torch()
@@ -124,6 +181,7 @@ def mae_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels"
     },
     requires=("logits", "labels"),
     provides=("save_as",),
+    placement=("batch",), stage="train", ui_group="⑤ 损失公式", beginner_visible=False,
 )
 def nce_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", save_as: str = "loss_per_sample") -> None:
     torch, F = _torch()
@@ -145,6 +203,7 @@ def nce_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels"
     },
     requires=("logits", "labels"),
     provides=("save_as",),
+    placement=("batch",), stage="train", ui_group="⑤ 损失公式", beginner_visible=False,
 )
 def rce_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", log_zero: float = -4.0, save_as: str = "loss_per_sample") -> None:
     torch, _ = _torch()
@@ -188,6 +247,8 @@ def apl_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels"
     params={"input": {"type": "slot", "default": "loss_per_sample"}, "save_as": {"type": "slot", "default": "loss"}},
     requires=("input",),
     provides=("save_as",),
+    placement=("top", "batch"), stage="train", ui_group="⑤ 损失公式",
+    formula="L = mean_i l_i", formula_ref="method definition",
 )
 def mean_loss(ctx: ScratchContext, input: str = "loss_per_sample", save_as: str = "loss") -> None:
     ctx[save_as] = ctx[input].mean()
@@ -207,6 +268,7 @@ def mean_loss(ctx: ScratchContext, input: str = "loss_per_sample", save_as: str 
     },
     requires=("logits", "labels"),
     provides=("save_as",),
+    placement=("batch",), stage="train", ui_group="⑤ 损失公式", beginner_visible=False,
 )
 def binary_risk(
     ctx: ScratchContext,
@@ -235,6 +297,7 @@ def binary_risk(
     params={"logits": {"type": "slot", "default": "logits"}, "labels": {"type": "slot", "default": "labels"}, "transition": {"type": "slot", "default": "transition"}, "save_as": {"type": "slot", "default": "loss_per_sample"}},
     requires=("logits", "labels", "transition"),
     provides=("save_as",),
+    placement=("batch",), stage="train", ui_group="⑦ 标签与矩阵", beginner_visible=False,
 )
 def forward_correction(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", transition: str = "transition", save_as: str = "loss_per_sample") -> None:
     torch, _ = _torch()
@@ -251,6 +314,7 @@ def forward_correction(ctx: ScratchContext, logits: str = "logits", labels: str 
     params={"logits": {"type": "slot", "default": "logits"}, "labels": {"type": "slot", "default": "labels"}, "transition": {"type": "slot", "default": "transition"}, "save_as": {"type": "slot", "default": "loss_per_sample"}},
     requires=("logits", "labels", "transition"),
     provides=("save_as",),
+    placement=("batch",), stage="train", ui_group="⑦ 标签与矩阵", beginner_visible=False,
 )
 def backward_correction(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", transition: str = "transition", save_as: str = "loss_per_sample") -> None:
     torch, F = _torch()

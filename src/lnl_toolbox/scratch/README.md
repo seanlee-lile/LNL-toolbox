@@ -20,4 +20,16 @@ python -m lnl_toolbox.scratch.web.server
 
 The runtime imports only Python's standard library, PyTorch/torchvision, NumPy, PyYAML, and Scratch's own modules. Legacy algorithms are consulted during development but are not runtime dependencies.
 
-The current smoke coverage includes CE, GCE, APL, Co-teaching peer exchange, DivideMix warmup/co-divide/refinement, and all 26 catalog recipe shape/value paths. The paper recipes are intentionally documented in `REFERENCE_MAP.md`: a synthetic recipe validates ordered semantics, but is not a paper-table numerical reproduction until dataset protocols, defaults, repeated seeds, and final metrics are run.
+The smoke coverage includes CE, formula-level GCE, APL, Co-teaching peer exchange, DivideMix warmup/co-divide/refinement, and legacy catalog shape/value paths. The GCE paper recipe is now a formal CIFAR-10 path; its structural tests validate it without launching the 120-epoch run. The separate `recipes/examples/gce_formula_smoke.yaml` remains the fast one-epoch check.
+
+## Formula status
+
+Formula-ready Scratch templates:
+
+- GCE: the formal recipe includes GCE-2018 data preparation, symmetric-0.2 noise, ResNet-34, SGD, MultiStepLR, validation model selection, and the formula chain expanded into forward, probability, target-class probability, q-formula, mean, backward, and optimizer steps.
+- Co-teaching: the dual-peer remember-rate, per-sample losses, small-loss sets, cross-selected losses, and peer updates are expanded.
+
+Legacy Scratch recipes:
+
+- The other paper recipes remain semantically executable and validator-checked smoke recipes.
+- They are not yet expanded into paper-by-paper formula blocks; the WebUI labels them `legacy-scratch`.
