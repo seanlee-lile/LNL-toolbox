@@ -1,8 +1,9 @@
+schema_version: 1
+kind: experiment
 seed: 1
 output_root: artifacts/reproductions
 data:
   name: cifar10
-  root: data/cifar10
   validation_size: 5000
   max_train_samples: null
   max_validation_samples: null
@@ -12,8 +13,14 @@ data:
     strategy: random
     rng: numpy_legacy
   normalization:
-    mean: [0.4914, 0.4822, 0.4465]
-    std: [0.2023, 0.1994, 0.2010]
+    mean:
+    - 0.4914
+    - 0.4822
+    - 0.4465
+    std:
+    - 0.2023
+    - 0.1994
+    - 0.201
 noise:
   name: symmetric
   rate: 0.4
@@ -44,13 +51,13 @@ model:
 optimizer:
   name: sgd
   lr: 0.01
-  # Equation-faithful CDR update combined with the official-code-aligned
-  # CIFAR data/model path; this is not a line-by-line or numerical reproduction.
   momentum: 0.0
   weight_decay: 0.0
 scheduler:
   name: multistep
-  milestones: [40, 80]
+  milestones:
+  - 40
+  - 80
   gamma: 0.1
 trainer:
   epochs: 100
@@ -58,4 +65,5 @@ trainer:
   progress: true
 evaluation:
   selection_split: validation
-execution: {runner: supervised}
+execution:
+  runner: supervised

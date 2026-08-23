@@ -20,12 +20,18 @@ def cross_guidance(
     if not 0 < candidate_k < classes:
         raise ValueError("CA2C candidate_k must satisfy 0 < K < C")
     candidate = torch.zeros_like(n_logits, dtype=torch.bool)
-    candidate.scatter_(1, n_logits.detach().topk(candidate_k, dim=1).indices, True)
+    n_order = torch.argsort(
+        n_logits.detach(), dim=1, descending=True, stable=True
+    )[:, :candidate_k]
+    candidate.scatter_(1, n_order, True)
     # The official implementation marks P's top-K classes and then takes the
     # complement over all C classes.  Constructing the bottom C-K directly is
     # not equivalent under tied logits.
     complement = torch.ones_like(p_logits, dtype=torch.bool)
-    complement.scatter_(1, p_logits.detach().topk(candidate_k, dim=1).indices, False)
+    p_order = torch.argsort(
+        p_logits.detach(), dim=1, descending=True, stable=True
+    )[:, :candidate_k]
+    complement.scatter_(1, p_order, False)
     return candidate, complement
 
 

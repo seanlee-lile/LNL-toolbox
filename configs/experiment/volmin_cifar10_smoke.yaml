@@ -1,11 +1,37 @@
+schema_version: 1
+kind: experiment
 method: volmin
-execution: {runner: volmin}
+execution:
+  runner: volmin
 seed: 1
 output_root: artifacts/test-runs/volmin-smoke
-data: {name: synthetic_multiclass, num_classes: 3, dimension: 6, train_size: 90, validation_size: 30, test_size: 30}
-noise: {type: symmetric, rate: 0.2, seed: 11, sampling: per_class, rng: default_rng}
-loader: {batch_size: 30}
-model: {hidden_width: 16}
-optimizer: {name: sgd, lr: 0.01, momentum: 0.9, weight_decay: 0.0001}
-transition: {initial_weight: 4.5, lambda_volume: 0.0001, determinant_tolerance: 1.0e-8, condition_limit: 1.0e8}
-trainer: {epochs: 2, device: cpu}
+data:
+  name: synthetic_multiclass
+  num_classes: 3
+  dimension: 6
+  train_size: 90
+  validation_size: 30
+  test_size: 30
+noise:
+  rate: 0.2
+  seed: 11
+  sampling: per_class
+  rng: default_rng
+  name: symmetric
+loader:
+  batch_size: 30
+model:
+  hidden_width: 16
+optimizer:
+  name: sgd
+  lr: 0.01
+  momentum: 0.9
+  weight_decay: 0.0001
+transition:
+  initial_weight: 4.5
+  lambda_volume: 0.0001
+  determinant_tolerance: 1.0e-08
+  condition_limit: 1.0e8
+trainer:
+  epochs: 2
+  device: cpu

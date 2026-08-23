@@ -1,0 +1,18 @@
+variant: soft
+model_count: 2
+noise_rate: 0.4
+initialization:
+  peer_seed_offset: 1
+remember_schedule:
+  name: linear
+  start: 1.0
+  end: 0.6
+  gradual_epochs: 10
+history:
+  window_size: 5
+  storage_dtype: float32
+uncertainty:
+  sigma_squared: 0.01
+selection:
+  count_rule: floor
+  tie_break: stable_sample_index

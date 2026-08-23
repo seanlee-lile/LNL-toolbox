@@ -218,7 +218,7 @@ def _fit_pdl_basis_group(
             output = weights if not normalize_output else weights.abs() / weights.abs().sum(
                 dim=1, keepdim=True
             ).clamp_min(1e-12)
-        result[:, class_index, :] = output.cpu().numpy()
+        result[:, class_index, :] = output.detach().cpu().numpy()
     return result
 
 

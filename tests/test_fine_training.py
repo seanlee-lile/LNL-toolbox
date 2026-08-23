@@ -121,7 +121,7 @@ class FINETrainingTest(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             with patch(
-                "lnl_toolbox.training.fine_experiment.load_cifar100",
+                "lnl_toolbox.data.sources.load_cifar100",
                 side_effect=lambda _root, split: train if split == "train" else test,
             ):
                 result = run_fine_experiment(config, directory)

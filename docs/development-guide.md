@@ -52,6 +52,7 @@ pip install -e . --no-deps
 ```
 
 `requirements.txt` 固定版本用于复现实验；`pyproject.toml` 中的版本范围用于描述工具包兼容性。
+两条安装路径都包含需要 RandAugment 的公开方法依赖；修改依赖时必须同步维护二者。
 
 ## 3. 检查环境
 
@@ -82,6 +83,11 @@ data/
 ```
 
 `data/` 已加入 `.gitignore`。
+
+下载 CIFAR 官方 Python 版本后，只复制解压目录中的数据文件，不要提交压缩包或数据集。
+统一 CLI 不会在训练时自动下载数据；普通用户使用 `lnl run <source> --dry-run`
+执行与正式训练一致的数据 preflight。`lnl validate --check-data` 主要用于配置开发、
+CI 和高级排错。
 
 ## 5. 运行测试
 
@@ -145,13 +151,13 @@ lnl-train `
 
 ## 8. 无需激活 Conda 的运行方式
 
-自动化工具可以直接调用环境中的解释器：
+自动化工具可以在激活环境后直接调用解释器：
 
 ```powershell
-& "F:\Miniconda\envs\pytorch\python.exe" -m unittest discover -s tests -v
+python -m unittest discover -s tests -v
 ```
 
-本机绝对路径只用于本地自动调试，不应写进项目配置或源代码。其他开发者应使用自己的环境路径或正常执行 `conda activate lnl-toolbox`。
+不要把本机 Python、数据或临时运行目录的绝对路径写进项目配置、源码或用户文档。
 
 ## 9. 开发约定
 
@@ -172,3 +178,91 @@ lnl-train --config configs/experiment/cifar10_smoke.yaml
 ```
 
 不要直接使用完整 Conda 环境的 `pip freeze` 覆盖 requirements；那会把其他项目的 Cleanlab、OpenCV、Pandas、Ultralytics 等无关依赖一起带入。
+
+## 11. 统一实验服务与质量门禁
+
+用户入口统一调用 `ExperimentService`；runner 只负责训练生命周期，服务层负责共享
+preflight、标准运行元数据和 `final_metrics.json` Result Contract。新增 runner 时应在
+`training/runners.py` 注册自身的预算路径与 `RunPlan`，CLI 不得按论文名称分支。
+
+常用命令：
+
+```powershell
+lnl run cifar10-symmetric-ce-smoke --set trainer.epochs=2 --dry-run
+lnl run configs/experiment/cifar10_symmetric_ce_smoke.yaml
+lnl sweep cifar10-symmetric-ce-smoke --seeds 1 2 3
+lnl sweep cifar10-clean-smoke `
+  --matrix 'loader.batch_size=[256,512]' `
+  --matrix 'optimizer.lr=[0.01,0.001]'
+lnl sweep sweep-spec.yaml --dry-run
+lnl sweep status artifacts/sweeps/example
+lnl compare artifacts/sweeps/example
+lnl report artifacts/sweeps/example
+```
+
+所有活动 YAML 使用 `schema_version: 1`。完整 recipe 写 `kind: experiment`，参数片段写
+`kind: fragment`。不要在公开 recipe 中写本机 CIFAR/MNIST root；先执行
+`lnl data register`，只有在同一 adapter 登记多份数据时才通过 `--data <alias>` 选择。
+配置读取会拒绝未知顶层字段和旧式 `noise.type`、顶层 `epochs/batch_size/learning_rate`。
+原始迁移前配置位于 `archive/configs-legacy-2026-08-21/`，仅供恢复和比对。
+
+`--dry-run` 默认验证数据与外部 artifact，只跳过真正训练和 checkpoint 写入；仅当
+数据尚未准备时才使用 `--no-check-data`。Sweep matrix 必须调用
+`core.config_overrides` 的 dotted-path override，不得自行修改嵌套配置。每个任务由
+seed、resolved override 和 config hash 共同标识。
+
+CLI matrix 值必须是 JSON 数组并保持原始数值、布尔或字符串类型。未传 `--seeds`
+时只使用配置自身的 seed；显式 seeds 会与所有参数维度继续做笛卡尔积。Web 的
+“参数 Sweep”可从内置 recipe 或项目 YAML 生成路径菜单，并在执行前显示完整运行计划。
+参数路径、分组、用途和修改权限均来自参数元数据 Registry；服务端拒绝未知、锁定或
+类型不兼容的矩阵值。项目 YAML 必须先保存并通过配置校验，不能把未保存文本直接交给
+训练或 Sweep。
+
+Web 的“运行管理”直接读取 `metrics.jsonl`、`final_metrics.json` 和 Sweep manifest，
+可查看最终指标、部分训练进度及多运行逐 epoch 叠加曲线。路径按钮通过本机 Windows
+对话框选择文件或目录；该能力只允许 localhost 请求，非 Windows 环境继续手工输入。
+
+论文正式配置的 Web 参数面板以 `web/lnl_parameter_metadata_registry_revised.yaml` 为权限和
+解释来源。基础参数与论文参数默认展开，高级参数默认折叠，锁定参数只读展示。修改
+论文参数必须确认复现影响，保存后的 `meta.web_parameter_record` 会记录原值、新值、
+formal recipe 和 `modified_from_paper`；该字段专供 Web 展示，不能占用训练参数抽样使用
+的顶层 `parameter_record`。无论参数控件还是完整 YAML 文本，锁定字段都由服务端
+再次比较并拒绝修改。普通 WebUI 不得提供绕过该校验的 runner、variant、protocol、
+fidelity、组件 wiring、模型选择或数据/噪声协议修改入口。
+
+Web 页面维护唯一的当前配置来源（内置 recipe 或项目 YAML 路径）。论文页、YAML
+编辑器、Sweep 和运行管理之间只传递这个来源与输出目录；内置 recipe 的编辑动作必须
+先另存副本，项目 YAML 不得反向注册成内置 recipe。
+
+比较层把 `group_by` 视为允许变化的研究维度，把 `require_equal` 视为同组公平比较
+必须一致的条件。Noise Manifest 只在同一 seed 和可比条件下跨方法核对；不同 seed
+不要求共享 manifest。`lnl report` 必须直接消费 `lnl compare` 使用的同一比较结果，
+不得另写 aggregation 或 fairness 逻辑。
+
+CI 在 Python 3.10 和 3.12 上执行 Ruff、完整 unittest、CLI 测试和 coverage；发布 job
+分别从 wheel 与 sdist 安装，并验证 `lnl --help`、公开 recipe discovery 和 VolMinNet
+smoke 配置预检。
+# 注册第三方数据源（2026-08-18）
+
+新增数据集时实现 `DatasetAdapter`：`validate(DataSpec)` 负责路径和布局检查，`load(DataSpec, split, seed=...)` 返回 `RawDatasetSplit`。随后在 `create_dataset_registry()` 的数据源注册函数中登记名称和别名。适配器不得包含论文方法、训练阶段或 optimizer 逻辑。
+
+必须保证：global index 在 shuffle/subset/view 后稳定；observed 与 clean label 分开保存；真实噪声训练 split 不向 batch 暴露 clean label；缺失数据只输出本地准备说明，不下载、不回退。需要持久化预处理或 split 状态的适配器可提供 `identity_artifacts()`，由统一服务写入并验证 run-local JSON。
+
+runner 只允许调用 `prepare_experiment_data()`，不得直接导入 CIFAR reader、`TorchCifarDataset` 或自行构造 `DataLoader`。新增/修改 runner 后运行 `tests/test_data_service.py` 的静态门禁。
+
+## 机器本地数据登记与可用性证据（2026-08-20）
+
+`data/local_catalog.py` 只保存本机路径和验证证据，不保存数据本身。新增适配器登记项时，
+必须维持 `registered -> layout_validated -> training_verified` 的严格语义；文件签名改变后，
+既有训练证据必须转为 `verification_stale`。不得因为注册成功或一次 `validate()` 成功就宣称
+数据可训练。
+
+CLI、Web、doctor、dry-run、run 和 sweep 不得直接读取 `DatasetRegistry`、
+`LocalDatasetCatalog` 或自行判断文件布局；它们必须调用 `DataService`。新增数据管理能力时，
+readiness 检查必须真实加载 train/test，不能用 `Path.exists()` 代替 adapter 校验。Web
+focused tests 必须与 `tests/` 一起进入 CI。
+
+每个新增文件格式至少需要：官方结构的临时 fixture、通过 `ExperimentService` 的实际
+1 epoch、`data_manifest.json`、epoch 指标，以及训练 batch 不泄漏 clean target 的既有门禁。
+本机真实数据若可用，还应再通过 `lnl data verify`。外部数据格式依据应来自数据集发布方
+或论文课题组官方仓库；未经上述实验，不在文档中标记为训练可用。

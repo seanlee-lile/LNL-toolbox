@@ -125,7 +125,9 @@ class InstanceTransitionClassificationAlgorithm:
         else:
             per_sample = pdl_instance_corrected_losses(
                 logits, targets, effective_matrices,
-                detach_importance_weight=False,
+                # The official correction phase re-wraps beta as an
+                # independent Variable; revision instead differentiates it.
+                detach_importance_weight=self.correction == "pdl",
             )
         if per_sample.ndim != 1 or per_sample.shape != targets.shape:
             raise ValueError("corrected risk must return one loss per sample")

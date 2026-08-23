@@ -40,6 +40,7 @@ from lnl_toolbox.treatments import SupervisedWeightInput
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "configs/experiment/importance_reweighting_binary_smoke.yaml"
+UCI_CONFIG = ROOT / "configs/reproduction/uci_heart_importance_reweighting.yaml"
 
 
 def load_config() -> dict:
@@ -47,6 +48,16 @@ def load_config() -> dict:
 
 
 class BinaryMethodBoundaryTest(unittest.TestCase):
+    def test_uci_config_has_strict_binary_schema(self) -> None:
+        config = yaml.safe_load(UCI_CONFIG.read_text(encoding="utf-8"))
+        parsed = ImportanceReweightingConfig.from_mapping(config)
+        self.assertEqual(parsed.data["name"], "uci_statlog_heart")
+        self.assertEqual(parsed.data["dimension"], 13)
+        self.assertEqual(
+            tuple(parsed.data["preprocessing"]["label_values"]), ("1", "2")
+        )
+        self.assertEqual(parsed.posterior_stage["name"], "kliep")
+
     def test_config_rejects_multiclass_and_wrong_model_output(self) -> None:
         for classes in (3, 10):
             config = load_config()

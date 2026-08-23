@@ -1,3 +1,5 @@
+schema_version: 1
+kind: experiment
 seed: 20260729
 data:
   name: cifar100
@@ -8,12 +10,22 @@ data:
 model:
   name: tiny_cnn
   width: 16
-noise: {name: symmetric, rate: 0.4, seed: 20260729}
-loss: {name: ce}
-selector: {name: all}
-parameter_update: {name: standard}
-optimizer: {name: sgd, lr: 0.1, momentum: 0.9}
-scheduler: {name: none}
+noise:
+  name: symmetric
+  rate: 0.4
+  seed: 20260729
+loss:
+  name: ce
+selector:
+  name: all
+parameter_update:
+  name: standard
+optimizer:
+  name: sgd
+  lr: 0.1
+  momentum: 0.9
+scheduler:
+  name: none
 pipeline:
   weight_provider:
     name: mentornet
@@ -24,7 +36,14 @@ pipeline:
     burn_in_fraction: 0.2
     fixed_label: 0
     seed: 20260729
-trainer: {epochs: 2}
-loader: {batch_size: 128, num_workers: 0, drop_last: true}
-evaluation: {selection_split: test, allow_test_selection: true}
-execution: {runner: supervised}
+trainer:
+  epochs: 2
+loader:
+  batch_size: 128
+  num_workers: 0
+  drop_last: true
+evaluation:
+  selection_split: test
+  allow_test_selection: true
+execution:
+  runner: supervised

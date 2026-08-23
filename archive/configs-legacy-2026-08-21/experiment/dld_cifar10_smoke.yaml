@@ -1,0 +1,27 @@
+method: dld
+execution: {runner: dld}
+seed: 123
+output_root: artifacts/test-runs/dld-cifar10-smoke
+data:
+  name: synthetic_multiclass
+  num_classes: 3
+  dimension: 8
+  train_size: 90
+  validation_size: 30
+  test_size: 30
+noise: {type: symmetric, rate: 0.2, seed: 123, sampling: per_class, rng: default_rng}
+loader: {batch_size: 15, num_workers: 0, pin_memory: false}
+feature_model: {name: feature_mlp, hidden_width: 16}
+dld:
+  epochs: 2
+  warmup_epochs: 1
+  k: 5
+  feature_dim: 16
+  num_timesteps: 20
+  sampling_timesteps: 5
+  hidden_width: 32
+  time_dim: 16
+  use_cosine: true
+  ema: 0.999
+  optimizer: {name: adam, lr: 0.0001, weight_decay: 0.0}
+trainer: {epochs: 2, device: cpu}

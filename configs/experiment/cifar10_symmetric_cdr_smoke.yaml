@@ -1,8 +1,9 @@
+schema_version: 1
+kind: experiment
 seed: 7
 output_root: artifacts/runs
 data:
   name: cifar10
-  root: data/cifar10
   validation_size: 5000
   max_train_samples: 512
   max_validation_samples: 256
@@ -33,7 +34,6 @@ model:
 optimizer:
   name: sgd
   lr: 0.01
-  # Strict paper-equation updates require no historical loss-gradient momentum.
   momentum: 0.0
   weight_decay: 0.0
 scheduler:
@@ -42,4 +42,5 @@ scheduler:
 trainer:
   epochs: 2
   device: auto
-execution: {runner: supervised}
+execution:
+  runner: supervised

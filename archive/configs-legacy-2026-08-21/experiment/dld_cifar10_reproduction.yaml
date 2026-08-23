@@ -1,0 +1,39 @@
+method: dld
+execution: {runner: dld}
+seed: 123
+output_root: artifacts/reproductions/dld-cifar10-idn20
+data:
+  name: cifar10
+  root: data/cifar10
+  validation_size: 5000
+  strong_augment: true
+  strong_magnitude: 10
+  normalization:
+    mean: [0.4914, 0.4822, 0.4465]
+    std: [0.2023, 0.1994, 0.2010]
+noise: {type: symmetric, rate: 0.2, seed: 123, sampling: per_class, rng: default_rng}
+loader: {batch_size: 200, num_workers: 0, pin_memory: false, drop_last: false}
+feature_model:
+  name: resnet34
+  initialization: torch_default
+  base_width: 64
+dld:
+  # Official CIFAR-10 IDN-20% labels from the DLD repository.
+  noise_path: data/dld/cifar10-idn-0.2.npy
+  epochs: 200
+  warmup_epochs: 5
+  k: 50
+  feature_dim: 512
+  num_timesteps: 1000
+  sampling_timesteps: 10
+  schedule: cosine
+  lr_input: 0.001
+  image_base_width: 64
+  image_initialization: torch_default
+  hidden_width: 512
+  time_dim: 64
+  use_cosine: true
+  objective: pred_res_noise
+  ema: 0.999
+  optimizer: {name: adam, lr: 0.0001, weight_decay: 0.0}
+trainer: {epochs: 200, device: auto}

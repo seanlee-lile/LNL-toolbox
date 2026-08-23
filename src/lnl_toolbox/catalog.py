@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from lnl_toolbox.cli import repository_root
+from lnl_toolbox.core.config_schema import normalize_experiment_config
 from lnl_toolbox.training.runners import RunnerSpec, resolve_runner
 
 
@@ -28,6 +29,9 @@ class RecipeSpec:
     configuration_fidelity: str
     reproduction_status: str
     availability: str
+    visibility: str
+    label: str
+    description: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +76,7 @@ def load_yaml(path: Path) -> dict[str, Any]:
     value = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(value, Mapping):
         raise ValueError(f"configuration must contain a YAML mapping: {path}")
-    return dict(value)
+    return normalize_experiment_config(dict(value))
 
 
 def _profile(path: Path) -> str:
@@ -116,7 +120,9 @@ def _display_method(config: Mapping[str, Any], runner: str) -> str:
     return runner
 
 
-def _recipe_manifest() -> tuple[tuple[str, ...], frozenset[str]]:
+def _recipe_manifest() -> tuple[
+    tuple[str, ...], frozenset[str], Mapping[str, Mapping[str, str]]
+]:
     text = resources.files("lnl_toolbox.cli").joinpath(
         "data/recipe_catalog.json"
     ).read_text(encoding="utf-8")
@@ -124,7 +130,24 @@ def _recipe_manifest() -> tuple[tuple[str, ...], frozenset[str]]:
     paths = tuple(str(value) for value in raw["recipes"])
     if len(paths) != len(set(paths)):
         raise ValueError("built-in recipe manifest contains duplicate paths")
-    return paths, frozenset(str(value) for value in raw.get("conditional", ()))
+    public_items = raw.get("public", ())
+    public = {
+        str(item["path"]): {
+            "label": str(item["label"]),
+            "description": str(item["description"]),
+        }
+        for item in public_items
+    }
+    unknown = set(public).difference(paths)
+    if unknown:
+        raise ValueError(
+            f"public recipe manifest references unknown paths: {sorted(unknown)}"
+        )
+    return (
+        paths,
+        frozenset(str(value) for value in raw.get("conditional", ())),
+        public,
+    )
 
 
 def _installed_recipe_path(relative: str) -> Path:
@@ -134,7 +157,11 @@ def _installed_recipe_path(relative: str) -> Path:
         raise FileNotFoundError(
             f"built-in recipe is unavailable outside a source checkout: {relative}"
         ) from exc
-    return Path(distribution.locate_file(Path("share/lnl-toolbox") / relative)).resolve()
+    installed_suffix = (Path("share/lnl-toolbox") / relative).as_posix()
+    for entry in distribution.files or ():
+        if entry.as_posix().endswith(installed_suffix):
+            return Path(distribution.locate_file(entry)).resolve()
+    raise FileNotFoundError(f"packaged built-in recipe is missing: {relative}")
 
 
 def _recipe_path(relative: str, project: Path) -> Path:
@@ -175,12 +202,15 @@ def discover_recipes(
     root: Path | None = None,
     *,
     include_conditional: bool = False,
+    public_only: bool = False,
 ) -> tuple[RecipeSpec, ...]:
     project = (root or repository_root()).resolve()
-    manifest_paths, conditional_paths = _recipe_manifest()
+    manifest_paths, conditional_paths, public_recipes = _recipe_manifest()
     recipes: list[RecipeSpec] = []
     seen: set[str] = set()
     for relative in manifest_paths:
+        if public_only and relative not in public_recipes:
+            continue
         conditional = relative in conditional_paths
         if conditional and not include_conditional:
             continue
@@ -211,9 +241,17 @@ def discover_recipes(
                 implementation_status=_implementation_status(
                     _display_method(config, runner), runner
                 ),
-                configuration_fidelity=_configuration_fidelity(path, _profile(path)),
+                configuration_fidelity=str(
+                    config.get(
+                        "configuration_fidelity",
+                        _configuration_fidelity(path, _profile(path)),
+                    )
+                ),
                 reproduction_status="not_run",
                 availability="conditional" if conditional else "runnable",
+                visibility="public" if relative in public_recipes else "internal",
+                label=public_recipes.get(relative, {}).get("label", recipe_id),
+                description=public_recipes.get(relative, {}).get("description", ""),
             )
         )
     return tuple(recipes)
@@ -357,6 +395,24 @@ def select_paper_config(
     return selected, recipe_by_id(selected.recipe_id, root)
 
 
+def default_paper_config(
+    paper: PaperSpec,
+    *,
+    root: Path | None = None,
+) -> tuple[PaperConfig, RecipeSpec]:
+    """Return the single formal Web/CLI default for one paper.
+
+    Catalog order is intentional when a paper publishes several reproduction
+    variants. Smoke profiles are never selected as the formal default.
+    """
+
+    candidates = [item for item in paper.configs if item.profile == "reproduction"]
+    if not candidates:
+        raise ValueError(f"paper {paper.id!r} has no formal reproduction recipe")
+    selected = candidates[0]
+    return selected, recipe_by_id(selected.recipe_id, root)
+
+
 def load_recipe_config(recipe: RecipeSpec) -> dict[str, Any]:
     """Load one explicit built-in recipe without scanning user configuration."""
 
@@ -456,6 +512,7 @@ def _validate_dedicated_runner(config: Mapping[str, Any], runner: str) -> None:
 
 def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> RunnerSpec:
     runner = resolve_runner(config)
+    config = normalize_experiment_config(config)
     data = config.get("data")
     if not isinstance(data, Mapping):
         raise ValueError("configuration requires a data mapping")
@@ -539,7 +596,28 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
         from importlib import import_module
 
         module_name, class_name = validators[method_name]
-        getattr(import_module(module_name), class_name).from_mapping(config)
+        parsed_method_config = getattr(
+            import_module(module_name), class_name
+        ).from_mapping(config)
+        if (
+            method_name == "pcse"
+            and parsed_method_config.pretraining.mode == "external_checkpoint"
+        ):
+            from lnl_toolbox.training.experiment import build_model
+            from lnl_toolbox.training.pcse_pretrained import (
+                load_upm_main_best_source,
+            )
+
+            num_classes = int(_require_mapping(config, "data")["num_classes"])
+            model = build_model(
+                dict(parsed_method_config.pretraining.model), num_classes
+            )
+            source = load_upm_main_best_source(
+                parsed_method_config.pretraining.source,
+                model,
+                num_classes=num_classes,
+            )
+            source.assert_unchanged()
     pipeline = config.get("pipeline", {}) or {}
     if isinstance(pipeline, Mapping):
         provider = pipeline.get("weight_provider", {}) or {}
@@ -562,6 +640,7 @@ __all__ = [
     "load_papers",
     "load_recipe_config",
     "load_yaml",
+    "default_paper_config",
     "paper_by_id",
     "recipe_by_id",
     "resolve_config_paths",

@@ -14,13 +14,12 @@ from typing import Any, Mapping
 
 import torch
 from torch import Tensor, nn
-from torch.utils.data import DataLoader
 
 from lnl_toolbox.algorithms.pcse.volmin import PaperVolMinTransition, paper_volmin_objective
-from lnl_toolbox.data.multiclass_synthetic import MulticlassTensorDataset, generate_synthetic_multiclass
-from lnl_toolbox.noise.generators import generate_symmetric
+from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.runtime import seed_everything
-from lnl_toolbox.training.reproduction_data import build_reproduction_model, prepare_noisy_classification
+from lnl_toolbox.training.reproduction_data import build_reproduction_model
+from lnl_toolbox.training.data_service import prepare_experiment_data
 
 
 class _VolMinMLP(nn.Module):
@@ -44,25 +43,29 @@ def _run_dir(config: Mapping[str, Any], output_dir: str | Path | None, resume: s
     return path
 
 
-def _make_loaders(config: Mapping[str, Any], run_dir: Path) -> tuple[DataLoader, DataLoader, DataLoader, int, int]:
+def _make_loaders(config: Mapping[str, Any], run_dir: Path):
     data = config.get("data", {})
     classes, dimension = int(data.get("num_classes", 3)), int(data.get("dimension", 6))
-    if str(data.get("name", "synthetic_multiclass")).lower() in {"cifar10", "cifar100"}:
-        prepared = prepare_noisy_classification(config, run_dir, int(config.get("seed", 1)))
-        return prepared.train_loader, prepared.validation_loader, prepared.test_loader, 0, prepared.num_classes
-    train_n, val_n, test_n = int(data.get("train_size", 90)), int(data.get("validation_size", 30)), int(data.get("test_size", 30))
     seed = int(config.get("seed", 1))
-    train = generate_synthetic_multiclass(train_n, dimension, classes, seed, start_index=0, split="train")
-    val = generate_synthetic_multiclass(val_n, dimension, classes, seed + 1, start_index=train_n, split="validation")
-    test = generate_synthetic_multiclass(test_n, dimension, classes, seed + 2, start_index=train_n + val_n, split="test")
-    noise = config.get("noise", {})
-    manifest = generate_symmetric(train.labels, classes, float(noise.get("rate", 0.2)), int(noise.get("seed", seed + 10)), "synthetic_multiclass", sampling=str(noise.get("sampling", "per_class")), rng=str(noise.get("rng", "default_rng")))
-    train_set = MulticlassTensorDataset(train, manifest.noisy_targets)
-    batch = int(config.get("loader", {}).get("batch_size", 30))
-    return DataLoader(train_set, batch_size=batch, shuffle=True), DataLoader(MulticlassTensorDataset(val), batch_size=batch), DataLoader(MulticlassTensorDataset(test), batch_size=batch), dimension, classes
+    synthetic = str(data.get("name", "synthetic_multiclass")).lower() == "synthetic_multiclass"
+    prepared = prepare_experiment_data(
+        config,
+        requirements=DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.CLEAN_VALIDATION, DataRole.TEST})
+        ),
+        run_dir=run_dir,
+        seed=seed - 1 if synthetic else seed,
+    )
+    return (
+        prepared.loader(DataRole.TRAIN, generator_seed=seed),
+        prepared.loader(DataRole.CLEAN_VALIDATION, shuffle=False, generator_seed=seed),
+        prepared.loader(DataRole.TEST, shuffle=False, generator_seed=seed),
+        dimension if synthetic else 0,
+        prepared.num_classes,
+    )
 
 
-def _accuracy(model: nn.Module, loader: DataLoader, device: torch.device) -> float:
+def _accuracy(model: nn.Module, loader, device: torch.device) -> float:
     model.eval(); correct = total = 0
     with torch.no_grad():
         for batch in loader:

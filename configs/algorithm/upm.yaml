@@ -1,6 +1,8 @@
+schema_version: 1
+kind: fragment
 name: upm
 eta_init: 0.01
 eta_lr: 0.7
 eta_update_start_epoch: 1
 eta_update_interval: 1
-posterior_eps: 1.0e-8
+posterior_eps: 1.0e-08

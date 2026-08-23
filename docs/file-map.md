@@ -6,6 +6,10 @@
 API。`cli/data/recipe_catalog.json` 是显式内置 recipe 清单，配置文件通过 package
 data 安装，避免用户本地 YAML 污染 catalog。
 
+`cli/data/recipe_catalog.json` 同时维护 `public` 展示层。`catalog.py` 的完整发现接口供
+论文目录、按名称运行和测试使用；CLI 默认列表与 Web 新手页仅消费公开模板，显式
+`--all` 或 `/recipe` 才展示内部配方。底层 YAML 没有被删除或合并。
+
 ## 1. 仓库根目录
 
 | 文件 | 作用 |
@@ -23,6 +27,7 @@ data 安装，避免用户本地 YAML 污染 catalog。
 | `core/__init__.py` | 汇总并公开核心类型，调用方可从 `lnl_toolbox.core` 统一导入。 |
 | `core/component.py` | 定义最小 `Component` 生命周期和可选 `Stateful` checkpoint 协议。 |
 | `core/context.py` | 定义 `ExperimentContext`，保存工作目录、配置、seed 和外部服务。 |
+| `core/config_schema.py` | 版本化实验配置规范化与校验；拒绝未知字段和旧式参数层级，并仅在运行边界生成兼容别名。 |
 | `core/batch.py` | 定义通用 `Batch`；payload 不透明，不强制图像或标签格式。 |
 | `core/algorithm.py` | 定义任务无关 `Algorithm` 生命周期协议。 |
 | `core/state.py` | 定义 Runner 管理的 `RunState`，记录 cycle、step、phase、指标和元数据。 |
@@ -154,7 +159,9 @@ data 安装，避免用户本地 YAML 污染 catalog。
 
 | 文件 | 作用 |
 |---|---|
-| `configs/README.md` | 说明 YAML 是 LNL 示例配置，核心只接收 mapping，不依赖 YAML/Hydra。 |
+| `configs/README.md` | 说明 schema v1、experiment/fragment/mentor_artifact 类型、本地数据登记及旧别名淘汰规则。 |
+| `archive/configs-legacy-2026-08-21/` | 迁移前全部 92 个 YAML 的原样恢复副本；`manifest.json` 保存路径、长度和 SHA-256。 |
+| `tests/test_config_schema.py` | 覆盖旧别名规范化、未知字段失败、92 个活动 YAML 及 64 个内置 recipe 门禁；公开展示层另由 recipe catalog 测试覆盖。 |
 | `configs/algorithm/ce.yaml` | CE 示例参数。 |
 | `configs/algorithm/gce.yaml` | 标准 GCE 的 `q` 参数；不包含隐式截断阈值。 |
 | `configs/algorithm/nce.yaml` | NCE 的数值稳定参数。 |
@@ -445,3 +452,146 @@ The three new runners are registered in `training/runners.py`; no `training/expe
 ## Current paper acceptance status (2026-08-07)
 
 The current reproduction acceptance status is maintained in `papers/implement/paper-reproduction-progress.md`. Only MentorNet and CDR remain incomplete; VolMinNet, UPM, and LEND are completed after source/equation alignment and validation.
+
+## Official dataset-format compatibility audit (2026-08-19)
+
+| File | Maintained official formats |
+|---|---|
+| `data/cifar_n.py` | Official UCSC CIFAR-10N/100N torch files containing NumPy label arrays, loaded through a restricted safe-global list. |
+| `data/mnist.py` | Official uncompressed IDX and downloaded IDX.GZ layouts, either directly under `data.root`, under `raw/`, or under the TorchVision `MNIST/raw` / `FashionMNIST/raw` layout. |
+| `data/real_noise.py` | Clothing1M key lists plus separate noisy/clean label-KV files; ANIMAL-10N official binary records and common official-code flat image layouts. |
+
+These adapters remain local-only: they validate existing data and never download it during training.
+
+## Unified experiment infrastructure (2026-08-11)
+
+| Path | Responsibility |
+|---|---|
+| `core/config_overrides.py` | Typed, fail-closed dotted configuration overrides. |
+| `training/planning.py` | Runner-owned `RunPlan` and display-neutral introspection. |
+| `training/results.py` | Versioned `final_metrics.json` Result Contract. |
+| `training/service.py` | Shared run/resume entry for CLI, Python API, and sweeps. |
+| `training/sweep.py` | Sequential, resumable, failure-isolated multi-seed execution. |
+| `evaluation/run_comparison.py` | Aggregate statistics, fairness warnings, Markdown/CSV/JSON reports. |
+| `cli/main.py` | Thin commands: positional recipe/YAML, `--set`, `sweep`, `compare`, `report`. |
+| `.github/workflows/quality.yml` | Python 3.10/3.12 lint, tests, coverage, CLI, wheel installation. |
+
+Paper mathematics and dedicated experiment runners remain unchanged by this infrastructure pass.
+
+## CLI experiment workflow v2 (2026-08-20)
+
+| Path | Responsibility |
+|---|---|
+| `training/service.py` | Shared, artifact-free preflight for configuration, runner and optional dataset validation, in addition to run/resume. |
+| `training/sweep.py` | Deterministic matrix planner, config-hash run identity, schema-v2 manifest, legacy schema-v1 resume, sequential execution and status inspection. |
+| `evaluation/run_comparison.py` | Metric-safe grouping, within-group fairness invariants, same-seed Noise Manifest checks, strict leakage exclusion and shared report generation. |
+| `cli/main.py` | `run --no-check-data`, sweep spec/dry-run/status, grouping-aware compare/report and concise terminal summaries. |
+| `tests/test_experiment_service.py` | Shared preflight delegation and no-artifact behavior. |
+| `tests/test_sweep.py` | Cartesian expansion, deterministic ordering, fail-before-write override validation, matrix resume and status. |
+| `tests/test_run_comparison.py` | Grouping, fairness, manifest/seed semantics, metric isolation, leakage exclusion and report compatibility. |
+| `tests/test_unified_cli.py` | End-user dry-run, matrix preview, status, compare output and strict exit semantics. |
+
+The v2 workflow does not modify runner invocation, paper objectives, checkpoint semantics,
+clean-label boundaries or existing Result Contract field meanings.
+# 统一数据协议文件图（2026-08-18）
+
+| 文件 | 责任 |
+|---|---|
+| `data/contracts.py` | `DataSpec`、`DatasetIdentity`、`RawDatasetSplit`、`DataRequirements`、角色与适配器协议 |
+| `data/registry.py` | 数据适配器注册、别名解析和未知数据集诊断 |
+| `data/sources.py` | CIFAR、CIFAR 二分类视图、synthetic、UCI 适配器 |
+| `data/cifar_n.py` | CIFAR-10N/100N 人工噪声标签版本与 clean-label 对齐验证 |
+| `data/mnist.py` | 本地 MNIST/Fashion-MNIST 适配器；禁止自动下载 |
+| `data/real_noise.py` | Clothing1M manifest 与 Animal-10N 文件夹懒加载 |
+| `data/views.py` | 稳定 global-index 的单/多视图 Dataset 和动态 overlay |
+| `training/data_service.py` | 唯一 prepare 入口、split/noise/role/view/loader/manifest/resume |
+| `training/reproduction_data.py` | 旧 `prepare_noisy_classification()` 兼容代理 |
+| `training/checkpoint.py` | checkpoint 自动注入并校验 `data_manifest` 指纹 |
+| `cli/inspect_data.py` | 使用同一 Registry 的数据检查入口 |
+| `tests/test_data_service.py` | 协议、泄漏、global index、loader seed、篡改和 runner 静态门禁 |
+| `tests/test_data_adapters.py` | CIFAR-N、MNIST、真实噪声、UCI、synthetic fixture |
+
+所有计划内论文 runner 已直接调用 `prepare_experiment_data()`；论文 objective、模型、优化器和训练阶段定义未移入数据层。
+
+## 本地数据登记与训练证据（2026-08-20）
+
+| 文件 | 责任 |
+|---|---|
+| `data/local_catalog.py` | 机器本地路径登记、source signature、严格验证状态和 recipe data-source 覆盖 |
+| `cli/main.py` 的 `lnl data` | register/list/show/inspect/verify/remove；verify 默认使用自动数据验证配置；`run/validate/sweep --data` 使用登记别名 |
+| `web/command_console.py`、`web/index.html` | 只读 catalog 状态并生成安全的本地数据 CLI 命令 |
+| `tests/test_local_data_catalog.py` | 登记、状态迁移、失效、恢复和删除 |
+| `tests/test_dataset_training_fixtures.py` | 官方结构的 MNIST、Fashion-MNIST、Clothing1M、Animal-10N、UCI fixture 各训练 1 epoch |
+| `tests/test_unified_cli.py` | 数据登记、recipe 切换和 UCI legacy metrics 验证入口 |
+
+`models/tiny_cnn.py` 支持可配置输入通道；`training/experiment.py` 从标准训练 batch 推断
+灰度输入通道，并将真实噪声 manifest 标识为 `real_world`。未改变论文算法、runner 或
+checkpoint 公共格式。
+
+## 统一数据管理入口（2026-08-20）
+
+| 文件 | 责任 |
+|---|---|
+| `training/data_service.py` | `DataService`、`DatasetStatusReport`、list/status/path/inspect/verify、按数据契约生成一轮验证配置、兼容 prepare/validate 代理 |
+| `training/service.py` | 将 doctor、validate、dry-run、run、sweep 的 preflight 委托给同一个 `DataService` |
+| `cli/main.py`、`cli/inspect_data.py` | 薄 CLI 展示和参数解析，不直接读取 adapter/Catalog |
+| `web/command_console.py`、`web/index.html` | 直接数据 API、三阶段登记向导、训练模板与本地数据独立选择、错误反馈、删除确认及后台自动一轮 verify |
+| `.github/workflows/quality.yml` | `src/tests/web` Ruff、核心 unittest 和 Web unittest 门禁 |
+
+Web 使用同一 `web/index.html` 保持原有主控制台布局；`/recipe` 直接进入现有
+Recipe/YAML 编辑功能。`lnl web` 由 `cli/main.py` 启动 `web/command_console.py` 并默认打开
+主页面；`--no-open` 可用于远程终端或手工浏览器访问。
+
+## 论文正式 YAML 暴露（2026-08-21）
+
+| 文件 | 责任 |
+|---|---|
+| `paper_catalog.json`、`catalog.py` | 为每篇论文确定一个 `profile: reproduction` 默认配置，并向 CLI/Web 提供稳定映射 |
+| `cli/data/recipe_catalog.json` | 登记正式 YAML；新手公开模板仍维持四项，不把全部内部配置塞入新手菜单 |
+| `cli/main.py` | `compose create` 对专用 runner 只允许原样复制，拒绝不安全的通用组件覆盖 |
+| `web/index.html`、`web/command_console.py` | “新建 YAML”分为 26 篇论文正式配置和通用监督组合两种模式 |
+| `models/cifar_cnn.py` | `CnlcuCnn9` 实现论文附录的九层 CIFAR CNN |
+| `training/experiment.py` | 注册通用 `cnlcu_cnn9` 模型名和 `linear_after` scheduler，不包含 CNLCU 论文分支 |
+| `configs/experiment/cnlcu_cifar10_reproduction.yaml` | CNLCU-S CIFAR-10 Sym20 单组论文协议配置 |
+| `configs/experiment/volminnet_cifar10_reproduction.yaml` | VolMinNet CIFAR-10 Sym20 单组论文协议配置 |
+| `configs/experiment/dld_cifar10_reproduction.yaml` | DLD 完整预算的当前工具箱配置；因未接入官方 ViT-L/14 特征路径，明确标记 `paper_oriented` |
+
+正式 YAML 表示完整数据规模、模型、优化器、scheduler 与训练预算均已写明，不等价于已完成论文多 seed 数值复现。
+
+## Web YAML 创建与编辑闭环（2026-08-21）
+
+| 文件 | 责任 |
+|---|---|
+| `web/command_console.py` | 在项目边界内按 recipe 或 YAML 路径加载配置；保存完整文本前执行 YAML 解析和 runner 配置验证；禁止覆盖内置 recipe；项目 YAML 与 recipe 共用 Sweep 预检 |
+| `web/index.html` | 主页实现 doctor→list→validate→dry-run→run→resume 六步新手教程及完成状态；编辑器同时显示 4 个新手模板与 26 篇论文正式配置；新建成功后自动打开项目 YAML；支持完整文本编辑、覆盖/另存、验证、运行与转入 Sweep |
+| `web/test_command_console.py` | 项目 YAML HTTP round-trip、完整文本校验、非法配置拒绝和前端闭环静态门禁 |
+
+## Web Sweep 与运行结果浏览（2026-08-21）
+
+| 路径 | 职责 |
+|---|---|
+| `training/sweep.py` | 参数矩阵与 seeds 的确定性笛卡尔积、manifest 运行明细和恢复身份 |
+| `training/results.py` | 发现完成或部分运行，读取逐 epoch 指标，并融合 Sweep manifest 状态 |
+| `cli/main.py` | `--matrix PATH=JSON_ARRAY`、默认配置 seed，以及实验/组件/论文/数据/Sweep/Compare 的 JSON 输出 |
+| `web/command_console.py` | recipe/项目 YAML 互斥来源的 Sweep 预检、Registry 权限与类型校验、论文偏离报告、结果查询、结构化 job 输出和 localhost-only Windows 原生路径选择 API |
+| `web/index.html` | 当前配置上下文、四级参数矩阵编辑、组合计划表、论文偏离提示、跨板块链接、统一表格输出、运行指标表和无依赖 SVG 叠加曲线 |
+
+运行结果列表支持按名称、方法、状态和 seed 筛选，也可在保留已选曲线的情况下收起；本机路径选择器在当前输入不是有效绝对路径时从项目根目录打开。
+
+运行列表和曲线只在“汇总比较”操作中显示。论文方法页复用内置论文目录，展示问题、机制、生命周期以及“论文概念 → YAML 字段 → 实现模块”，并可直接打开当前配置的 YAML 编辑器。
+
+恢复训练在生成命令前调用 `training/results.py::inspect_resume_run()`，只读展示目录文件、resolved config、checkpoint、当前 epoch/phase、阶段轮次和可恢复性；路径或 checkpoint 变化后必须重新检查。
+
+项目 YAML 不加入内置 recipe 清单；它在当前页面中按路径出现，并可在之后通过“项目 YAML 路径”重新加载。论文页、YAML 编辑器、Sweep 与运行管理共享当前配置来源；未保存文本不能直接运行或 Sweep。
+
+## Web 参数元数据与权限（2026-08-21）
+
+| 路径 | 职责 |
+|---|---|
+| `web/lnl_parameter_metadata_registry_revised.yaml` | Web 当前唯一使用的参数权限源（v1.1）；绑定 26 篇论文的默认 formal recipe，并为实际 YAML 路径登记基础、论文、高级、锁定四级权限、论文依据、复现影响及锁定理由 |
+| `web/lnl_parameter_metadata_registry.yaml` | v1.0 历史权限快照；Web 不再加载，仅保留用于权限范围变更审查 |
+| `web/command_console.py` | 从 registry 生成配置 schema；服务端同时保护参数 patch、完整 YAML 编辑和 Sweep matrix；论文参数偏离写入 `meta.web_parameter_record`，不占用训练抽样记录 |
+| `web/index.html` | YAML 编辑与 Sweep 共用四组参数、论文来源/解释/影响、折叠高级参数、只读锁定值以及“已偏离论文配置”提示 |
+| `web/test_command_console.py` | 26 个 formal schema、论文变更确认/记录、锁定字段 API 防绕过与前端分组门禁 |
+
+配置当前值始终来自所选 YAML，registry 不覆盖训练值。论文参数数量保持 99 个；T-Revision 与 DivideMix 仅修正迁移后的 dotted path，没有改变其论文参数集合。

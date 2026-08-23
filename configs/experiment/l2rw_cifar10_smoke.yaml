@@ -1,13 +1,43 @@
+schema_version: 1
+kind: experiment
 method: l2rw
-execution: {runner: l2rw}
+execution:
+  runner: l2rw
 seed: 17
 output_root: artifacts/test-runs/l2rw-smoke
-data: {name: synthetic_multiclass, num_classes: 3, dimension: 6, train_size: 90, validation_size: 30, test_size: 30}
-noise: {type: symmetric, rate: 0.2, seed: 19, sampling: per_class, rng: default_rng}
-loader: {batch_size: 30, num_workers: 0, pin_memory: false}
-trusted_validation: {source: synthetic_fixture, batch_size: 15, seed: 29}
-model: {name: feature_mlp, hidden_width: 8}
-optimizer: {name: sgd, lr: 0.02, momentum: 0.9, weight_decay: 0.0}
-scheduler: {name: none}
-meta: {virtual_learning_rate: 0.02}
-trainer: {epochs: 1, device: cpu}
+data:
+  name: synthetic_multiclass
+  num_classes: 3
+  dimension: 6
+  train_size: 90
+  validation_size: 30
+  test_size: 30
+noise:
+  rate: 0.2
+  seed: 19
+  sampling: per_class
+  rng: default_rng
+  name: symmetric
+loader:
+  batch_size: 30
+  num_workers: 0
+  pin_memory: false
+trusted_validation:
+  source: synthetic_fixture
+  batch_size: 15
+  seed: 29
+model:
+  name: feature_mlp
+  hidden_width: 8
+optimizer:
+  name: sgd
+  lr: 0.02
+  momentum: 0.9
+  weight_decay: 0.0
+scheduler:
+  name: none
+meta:
+  virtual_learning_rate: 0.02
+trainer:
+  epochs: 1
+  device: cpu

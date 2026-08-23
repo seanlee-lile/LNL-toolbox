@@ -89,7 +89,7 @@ class CNLCUWorkflowTest(unittest.TestCase):
         train, test = _cifar(classes * 4, "train", classes), _cifar(classes * 2, "test", classes)
         loader_name = "load_cifar10" if dataset == "cifar10" else "load_cifar100"
         with tempfile.TemporaryDirectory() as directory, patch(
-            f"lnl_toolbox.training.cnlcu_experiment.{loader_name}",
+            f"lnl_toolbox.data.sources.{loader_name}",
             side_effect=lambda _root, split: train if split == "train" else test,
         ):
             run_dir = run_experiment(config_factory(2, dataset), Path(directory) / "run")
@@ -134,6 +134,19 @@ class CNLCUWorkflowTest(unittest.TestCase):
                 if json.loads(line)["event"] == "epoch"
             ]
             self.assertEqual(resumed_epochs, uninterrupted_epochs)
+            for row in resumed_epochs:
+                for key in (
+                    "selected_by_a_ratio", "selected_by_b_ratio",
+                    "train_gradient_norm_a", "train_gradient_norm_b",
+                    "train_gradient_norm_a_max", "train_gradient_norm_b_max",
+                    "train_parameter_norm_a", "train_parameter_norm_b",
+                    "train_uncertainty_score_min_a",
+                    "train_uncertainty_score_max_a",
+                    "train_history_length_min_a", "train_history_length_max_a",
+                    "history_window_start_epoch", "history_window_epoch_count",
+                ):
+                    self.assertIn(key, row)
+                    self.assertTrue(np.isfinite(row[key]), key)
             checkpoint_hash, metrics_hash = _sha(run_dir / "last.pt"), _sha(run_dir / "metrics.jsonl")
             run_experiment(config_factory(3, dataset), resume=run_dir / "last.pt")
             self.assertEqual(_sha(run_dir / "last.pt"), checkpoint_hash)
@@ -151,7 +164,7 @@ class CNLCUWorkflowTest(unittest.TestCase):
     def test_resume_rejects_method_and_history_configuration_drift(self):
         train, test = _cifar(40, "train"), _cifar(20, "test")
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.cnlcu_experiment.load_cifar10",
+            "lnl_toolbox.data.sources.load_cifar10",
             side_effect=lambda _root, split: train if split == "train" else test,
         ):
             run_dir = run_experiment(_config(1), Path(directory) / "run")
@@ -167,7 +180,7 @@ class CNLCUWorkflowTest(unittest.TestCase):
     def test_soft_hard_resume_and_hard_detector_drift_are_rejected(self):
         train, test = _cifar(40, "train"), _cifar(20, "test")
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.cnlcu_experiment.load_cifar10",
+            "lnl_toolbox.data.sources.load_cifar10",
             side_effect=lambda _root, split: train if split == "train" else test,
         ):
             soft_dir = run_experiment(_config(1), Path(directory) / "soft")

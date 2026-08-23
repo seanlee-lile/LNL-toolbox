@@ -17,24 +17,11 @@ from lnl_toolbox.algorithms.importance_reweighting import (
     ImportanceReweightingAlgorithm,
     ImportanceReweightingConfig,
 )
-from lnl_toolbox.data.binary_synthetic import (
-    BinaryTensorDataset,
-    generate_synthetic_binary_2d,
-    generate_synthetic_binary_high_dim,
-)
-from lnl_toolbox.noise.binary_rcn import (
-    generate_binary_asymmetric_rcn,
-    validate_binary_rcn_manifest,
-)
-from lnl_toolbox.noise.manifest import NoiseManifest
+from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.plugins.builtin import build_builtin_loss
 from lnl_toolbox.runtime import resolve_device, seed_everything
-from lnl_toolbox.training.experiment import (
-    _environment,
-    _loader,
-    build_optimizer,
-    build_scheduler,
-)
+from lnl_toolbox.training.data_service import prepare_experiment_data
+from lnl_toolbox.training.experiment import _environment, build_optimizer, build_scheduler
 
 
 def run_importance_reweighting_experiment(
@@ -59,88 +46,43 @@ def run_importance_reweighting_experiment(
         )
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    sizes = method_config.data
-    data_name = str(sizes["name"]).strip().lower()
-    dimension = int(sizes["dimension"])
-    generator = (
-        generate_synthetic_binary_2d
-        if data_name == "synthetic_binary_2d"
-        else generate_synthetic_binary_high_dim
+    prepared = prepare_experiment_data(
+        config,
+        requirements=DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
+            validation_targets="noisy",
+        ),
+        run_dir=run_dir,
+        seed=method_config.seed,
     )
-    dimension_args = () if data_name == "synthetic_binary_2d" else (dimension,)
-    train = generator(
-        int(sizes["train_size"]), *dimension_args, method_config.seed + 11,
-        start_index=0, split="train",
-    )
-    validation = generator(
-        int(sizes["validation_size"]), *dimension_args, method_config.seed + 12,
-        start_index=len(train.labels), split="validation",
-    )
-    test = generator(
-        int(sizes["test_size"]), *dimension_args, method_config.seed + 13,
-        start_index=len(train.labels) + len(validation.labels), split="test",
-    )
-    population_clean = np.concatenate((train.labels, validation.labels))
-    population_indices = np.concatenate((
-        train.global_indices, validation.global_indices
+    data_name = prepared.dataset
+    manifest = prepared.manifest
+    if manifest is None:
+        raise ValueError("importance reweighting requires binary asymmetric noise")
+    positive_rows = manifest.clean_targets == 1
+    negative_rows = manifest.clean_targets == 0
+    realized_rho_positive = float(np.mean(
+        manifest.noisy_targets[positive_rows] == 0
     ))
-    manifest_path = run_dir / "noise_manifest.npz"
-    if resume is None:
-        manifest = generate_binary_asymmetric_rcn(
-            population_clean,
-            population_indices,
-            rho_positive=float(method_config.noise["rho_positive"]),
-            rho_negative=float(method_config.noise["rho_negative"]),
-            seed=int(method_config.noise.get("seed", method_config.seed + 21)),
-        )
-        manifest.save(manifest_path)
-    else:
-        if not manifest_path.exists():
-            raise FileNotFoundError("resume requires noise_manifest.npz")
-        manifest = NoiseManifest.load(manifest_path)
-    validate_binary_rcn_manifest(
-        manifest,
-        expected_indices=population_indices,
-        rho_positive=float(method_config.noise["rho_positive"]),
-        rho_negative=float(method_config.noise["rho_negative"]),
-    )
-    if not np.array_equal(manifest.clean_targets, population_clean):
-        raise ValueError("importance reweighting manifest clean-label identity mismatch")
-
-    position = {
-        int(index): row
-        for row, index in enumerate(manifest.global_indices.tolist())
-    }
-    def noisy_targets(indices: np.ndarray) -> np.ndarray:
-        try:
-            rows = np.asarray([position[int(index)] for index in indices])
-        except KeyError as exc:
-            raise ValueError("noise manifest is missing a stable sample index") from exc
-        return manifest.noisy_targets[rows]
-
-    train_noisy = noisy_targets(train.global_indices)
-    validation_noisy = noisy_targets(validation.global_indices)
-    train_dataset = BinaryTensorDataset(train, train_noisy)
-    validation_dataset = BinaryTensorDataset(validation, validation_noisy)
-    test_dataset = BinaryTensorDataset(test)
-    loader_config = method_config.loader
+    realized_rho_negative = float(np.mean(
+        manifest.noisy_targets[negative_rows] == 1
+    ))
 
     def train_loader_factory(epoch: int):
-        return _loader(
-            train_dataset,
-            loader_config,
-            shuffle=True,
-            seed=method_config.seed + 1000 + int(epoch),
-        )
+        return prepared.loader(DataRole.TRAIN, epoch=int(epoch), stream=1000)
 
-    validation_loader = _loader(
-        validation_dataset, loader_config, shuffle=False,
-        seed=method_config.seed + 2000,
-    )
-    test_loader = _loader(
-        test_dataset, loader_config, shuffle=False,
-        seed=method_config.seed + 3000,
-    )
+    validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False, stream=2000)
+    test_loader = prepared.loader(DataRole.TEST, shuffle=False, stream=3000)
+    train_dataset = prepared.dataset_for(DataRole.TRAIN)
+    posterior_inputs = np.stack([
+        np.asarray(train_dataset[index]["input"], dtype=np.float32)
+        for index in range(len(train_dataset))
+    ])
+    posterior_targets = np.asarray([
+        int(train_dataset[index]["target"]) for index in range(len(train_dataset))
+    ], dtype=np.int64)
+    posterior_indices = prepared.train_indices.copy()
+    dimension = int(posterior_inputs.shape[1])
 
     def model_factory() -> nn.Module:
         model = nn.Linear(dimension, 2)
@@ -163,14 +105,28 @@ def run_importance_reweighting_experiment(
         "noise_type": manifest.noise_type,
         "num_classes": manifest.num_classes,
         "label_convention": manifest.metadata.get("label_convention"),
+        "data_fingerprint": prepared.data_fingerprint,
+        "realized_rho_positive": realized_rho_positive,
+        "realized_rho_negative": realized_rho_negative,
     }
+    for artifact_name, hash_name in (
+        ("preprocessing_state.json", "preprocessing_state_hash"),
+        ("split_manifest.json", "split_hash"),
+    ):
+        artifact_path = run_dir / artifact_name
+        if artifact_path.is_file():
+            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+            manifest_identity[hash_name] = artifact.get(
+                "state_hash" if artifact_name.startswith("preprocessing") else "split_hash",
+                "",
+            )
     algorithm = ImportanceReweightingAlgorithm(
         config=config,
         run_dir=run_dir,
         manifest_identity=manifest_identity,
-        posterior_features=train.features,
-        posterior_targets=train_noisy,
-        posterior_indices=train.global_indices,
+        posterior_features=posterior_inputs,
+        posterior_targets=posterior_targets,
+        posterior_indices=posterior_indices,
         model_factory=model_factory,
         optimizer_factory=optimizer_factory,
         scheduler_factory=scheduler_factory,
@@ -196,7 +152,11 @@ def run_importance_reweighting_experiment(
             "rho_negative": float(method_config.noise["rho_negative"]),
             "manifest_actual_rate": manifest.actual_rate,
             "mapping_hash": manifest.mapping_hash,
+            "data_fingerprint": prepared.data_fingerprint,
+            "realized_rho_positive": realized_rho_positive,
+            "realized_rho_negative": realized_rho_negative,
         }, indent=2, sort_keys=True),
         encoding="utf-8",
     )
-    return algorithm.run()
+    result = algorithm.run()
+    return result

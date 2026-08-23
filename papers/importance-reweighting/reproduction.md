@@ -38,7 +38,8 @@ contract, while the test labels remain clean.
 
 This version does not include:
 
-- UCI datasets;
+- the full set of UCI datasets and paper cross-validation protocols beyond
+  the maintained Statlog Heart engineering workflow;
 - hinge loss;
 - multiclass importance reweighting;
 - automatic KDE or KLIEP bandwidth selection;
@@ -94,6 +95,33 @@ normalization is an explicit repository implementation choice.
 |---|---|
 | low-dimensional KDE | `configs/reproduction/importance_reweighting_binary_low_dim.yaml` |
 | high-dimensional KLIEP | `configs/reproduction/importance_reweighting_binary_high_dim.yaml` |
+| real UCI Statlog Heart + KLIEP | `configs/reproduction/uci_heart_importance_reweighting.yaml` |
+
+## Real UCI engineering workflow
+
+The public recipe `uci-heart-importance-reweighting` uses UCI Statlog Heart
+(dataset 145, DOI `10.24432/C57303`, CC BY 4.0). The preparation command is:
+
+```powershell
+python scripts/prepare_uci_statlog_heart.py
+python -m lnl_toolbox.cli.main validate --recipe uci-heart-importance-reweighting --check-data
+python -m lnl_toolbox.cli.main run --recipe uci-heart-importance-reweighting
+python -m lnl_toolbox.cli.main resume <run-directory>
+```
+
+The raw `heart.dat` SHA-256 is
+`f5f3b4204c285bafadd85cb735f38b47689f2be7047feb172dcbeab648110bf9`.
+Its 13 columns follow the UCI schema, and target `1` (absence) maps to repository
+label 0 while target `2` (presence) maps to label 1. Preprocessing statistics are
+fit on the training split only. The fixed stratified split, preprocessing state,
+raw hash, and noise mapping are bound into checkpoint identity.
+
+This is a real-data, full-sample engineering/paper-oriented workflow. It does
+not claim paper-exact cross-validation or reproduce a published table. KLIEP
+bandwidth, centers, optimizer settings, fixed split, and training budget remain
+repository implementation choices. Clean labels are used only to perform the
+controlled asymmetric corruption and to evaluate the final held-out clean test;
+they are never exposed by the posterior, rate, weight, or training datasets.
 
 Both maintained configurations use 4,096 training examples, 1,024 noisy
 validation examples, 1,024 clean test examples, 50 final-training epochs,
@@ -124,8 +152,7 @@ hyperparameters.
 Low-dimensional KDE:
 
 ```powershell
-$env:PYTHONPATH = "src"
-python -m lnl_toolbox.cli.train `
+lnl run `
   --config configs/reproduction/importance_reweighting_binary_low_dim.yaml `
   --output-dir artifacts/reproductions/importance-reweighting-low-dim-seed17
 ```
@@ -133,8 +160,7 @@ python -m lnl_toolbox.cli.train `
 High-dimensional KLIEP:
 
 ```powershell
-$env:PYTHONPATH = "src"
-python -m lnl_toolbox.cli.train `
+lnl run `
   --config configs/reproduction/importance_reweighting_binary_high_dim.yaml `
   --output-dir artifacts/reproductions/importance-reweighting-high-dim-seed17
 ```
@@ -147,19 +173,13 @@ must not be committed.
 Resume an interrupted low-dimensional run:
 
 ```powershell
-$env:PYTHONPATH = "src"
-python -m lnl_toolbox.cli.train `
-  --config configs/reproduction/importance_reweighting_binary_low_dim.yaml `
-  --resume artifacts/reproductions/importance-reweighting-low-dim-seed17/last.pt
+lnl resume artifacts/reproductions/importance-reweighting-low-dim-seed17
 ```
 
 Resume an interrupted high-dimensional run:
 
 ```powershell
-$env:PYTHONPATH = "src"
-python -m lnl_toolbox.cli.train `
-  --config configs/reproduction/importance_reweighting_binary_high_dim.yaml `
-  --resume artifacts/reproductions/importance-reweighting-high-dim-seed17/last.pt
+lnl resume artifacts/reproductions/importance-reweighting-high-dim-seed17
 ```
 
 `--epochs <total>` may be used only when deliberately extending the total

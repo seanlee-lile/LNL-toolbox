@@ -1,3 +1,5 @@
+schema_version: 1
+kind: fragment
 variant: hard
 hard_fidelity: paper_formula_corrected_lof
 model_count: 2

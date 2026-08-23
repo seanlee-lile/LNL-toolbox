@@ -1,4 +1,5 @@
-# Method fragment for the complete dual-model Co-teaching workflow.
+schema_version: 1
+kind: fragment
 model_count: 2
 noise_rate: 0.4
 initialization:

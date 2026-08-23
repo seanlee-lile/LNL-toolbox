@@ -2,8 +2,7 @@
 
 > 只讲怎么操作，以及每一步为什么要做
 
-本教程对应 `integration` 分支、提交
-`fcd3de376e0ab3847178600d3ea14c36f02bced1` 的实际命令行行为。
+本教程对应当前发布版统一 CLI 的实际命令行合同。
 推荐按下面的顺序操作：
 
 ```text
@@ -11,6 +10,22 @@ doctor → list → validate → dry-run → run → resume
 ```
 
 `smoke` 配置用于快速检查链路，论文配置用于表达更接近论文的实验协议；两者都不等于已经复现论文数值。
+
+### 在 Web 中完成同一教程
+
+运行 `lnl web` 后，主页“新手教程”把本文最短工作流实现为六个连续步骤：
+
+```text
+检查环境 → 选择 Smoke 实验 → 验证配置与数据 → 预演训练计划 → 运行 Smoke → 检查并恢复
+```
+
+先统一选择 Smoke recipe、已登记数据和独立输出目录，再按页面顺序执行。每一步只有在
+对应 CLI 命令退出码为 0 后才会标记完成并解锁下一步。最后一步会实际读取
+`resolved_config.yaml`、`metrics.jsonl` 和 checkpoint：若目标轮次尚未达到，页面才允许
+执行 resume；若已经达到目标，页面会显示“无需恢复”，不会制造一次无意义续跑。
+
+Web 只是本文 CLI 合同的引导界面，不改变 recipe、runner、训练预算或 checkpoint 语义。
+想跳过逐步教学时，可展开页面底部的“快速命令”。
 
 ## 1. 开始之前：安装与环境检查
 
@@ -29,7 +44,14 @@ python -m pip install -e ".[train]"
 如果你使用的环境名称不是 `pytorch`，请替换为自己的 Conda 环境名。本项目要求
 Python 3.10 或更高版本。
 
-### 1.2 找不到 `lnl` 时怎么办
+### 1.2 准备 CIFAR 数据
+
+内置 CIFAR recipe 使用官方 Python pickle，不自动联网下载。把 CIFAR-10 解压后的
+`data_batch_1` 至 `data_batch_5`、`test_batch` 和 `batches.meta` 放到
+`data/cifar10/`；CIFAR-100 的 `train`、`test`、`meta` 放到 `data/cifar100/`。
+运行前使用 `validate --check-data`，避免直到训练启动才发现路径错误。
+
+### 1.3 找不到 `lnl` 时怎么办
 
 先确认安装命令是在当前环境中执行的：
 
@@ -49,7 +71,7 @@ python -m lnl_toolbox.cli.main --help
 python -m lnl_toolbox.cli.main
 ```
 
-### 1.3 检查环境
+### 1.4 检查环境
 
 ```powershell
 lnl doctor
@@ -125,6 +147,11 @@ lnl validate --recipe mentornet-dd-cifar100-symmetric04-smoke
 ```
 
 如果 artifact 缺失，`validate` 会报告所需路径。不要把 conditional 当成普通 runnable recipe。
+
+真实 CIFAR PCSE profile 也属于 conditional：它需要严格匹配的 UPM `main_best`
+checkpoint 与 noise manifest。使用 `--include-conditional` 查找它，并按
+`papers/pcse/reproduction.md` 准备来源；缺失或 hash/provenance 不匹配会在
+`validate`/dry-run 阶段失败。
 
 ## 3. 先检查，再运行
 

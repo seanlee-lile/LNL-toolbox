@@ -12,7 +12,7 @@ import torch
 try:
     import tomllib
 except ModuleNotFoundError:  # Python 3.10
-    tomllib = None
+    import tomli as tomllib
 
 from lnl_toolbox.estimators import (
     DivideMixGMMCleanProbabilityEstimator,
@@ -107,7 +107,6 @@ print("lazy-import-ok")
         self.assertEqual(completed.stdout.strip(), "lazy-import-ok")
         self.assertNotIn("ModuleNotFoundError", completed.stderr)
 
-    @unittest.skipIf(tomllib is None, "tomllib requires Python 3.11+")
     def test_pyproject_has_one_parseable_optional_dependency_table(self):
         repository_root = Path(__file__).resolve().parents[1]
         pyproject_path = repository_root / "pyproject.toml"

@@ -1,3 +1,5 @@
+schema_version: 1
+kind: fragment
 pipeline:
   weight_provider:
     name: mentornet
@@ -7,7 +9,13 @@ pipeline:
     decay: 0.5
     burn_in_epoch: 18
     fixed_epoch_after_burn_in: true
-    dropout_schedule: [[0.5, 17], [0.05, 78], [0.9, 5]]
+    dropout_schedule:
+    - - 0.5
+      - 17
+    - - 0.05
+      - 78
+    - - 0.9
+      - 5
     fixed_label: 0
     seed: 20260729
     zero_weight_policy: error

@@ -1,54 +1,46 @@
+schema_version: 1
+kind: experiment
 method: importance_reweighting
 num_classes: 2
 label_convention: zero_one
 seed: 17
-
 data:
   name: synthetic_binary_2d
   train_size: 128
   validation_size: 64
   test_size: 64
-
 noise:
   name: binary_asymmetric_rcn
-  rho_positive: 0.20
-  rho_negative: 0.10
+  rho_positive: 0.2
+  rho_negative: 0.1
   seed: 29
   validation_targets: noisy
-
 posterior_stage:
   name: kde
   bandwidth: 0.15
   rate_estimator: paper_raw_min
-
 model:
   name: linear
   in_features: 2
   num_classes: 2
-
 loss:
   name: ce
-
 optimizer:
   name: sgd
   lr: 0.1
   momentum: 0.0
   weight_decay: 0.0
-
 scheduler:
   name: none
-
 loader:
   batch_size: 32
   num_workers: 0
   pin_memory: false
-
 trainer:
   epochs: 2
   device: cpu
-
 evaluation:
   selection_split: validation
-
 output_root: artifacts/runs
-execution: {runner: importance_reweighting}
+execution:
+  runner: importance_reweighting

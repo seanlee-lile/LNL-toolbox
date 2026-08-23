@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 import numpy as np
+import torch
+from torch.utils.data import Dataset
 
 
 @dataclass(frozen=True)
@@ -90,6 +92,36 @@ def load_uci_binary(
         path,
         dataset=name or Path(path).stem,
     )
+
+
+class BinaryBenchmarkTensorDataset(Dataset[dict[str, Any]]):
+    """Training-safe view that never exposes the benchmark's clean labels."""
+
+    def __init__(
+        self,
+        benchmark: BinaryBenchmark,
+        targets: np.ndarray | None = None,
+    ) -> None:
+        values = benchmark.targets if targets is None else np.asarray(targets)
+        if (
+            values.shape != benchmark.targets.shape
+            or not np.issubdtype(values.dtype, np.integer)
+            or set(np.unique(values)) - {0, 1}
+        ):
+            raise ValueError("binary training targets must be aligned labels 0 and 1")
+        self.features = torch.as_tensor(benchmark.features, dtype=torch.float32)
+        self.targets = torch.as_tensor(values, dtype=torch.long)
+        self.indices = torch.as_tensor(benchmark.global_indices, dtype=torch.long)
+
+    def __len__(self) -> int:
+        return int(self.targets.numel())
+
+    def __getitem__(self, item: int) -> dict[str, Any]:
+        return {
+            "input": self.features[item],
+            "target": int(self.targets[item]),
+            "index": int(self.indices[item]),
+        }
 
 
 def load_binary_npz(
@@ -187,6 +219,7 @@ def cifar_airplane_automobile_view(
 
 __all__ = [
     "BinaryBenchmark",
+    "BinaryBenchmarkTensorDataset",
     "cifar_airplane_automobile_view",
     "corrupt_binary_labels",
     "load_binary_npz",

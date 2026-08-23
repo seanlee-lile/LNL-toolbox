@@ -174,6 +174,104 @@ class ImportanceReweightingAlgorithm:
         self.scheduler = None
         self.run_state = RunState()
 
+    def _method_diagnostics(self) -> dict[str, Any]:
+        """Summarize estimator output without changing any estimator math."""
+
+        if self.snapshot is None or self.rates is None:
+            raise ValueError("importance diagnostics require snapshot and rates")
+        probabilities = np.asarray(
+            self.snapshot.noisy_probabilities, dtype=np.float64
+        )
+        row_errors = np.abs(probabilities.sum(axis=1) - 1.0)
+        targets = torch.as_tensor(
+            np.asarray(self.snapshot.noisy_targets).copy(), dtype=torch.long
+        )
+        result = BinaryRCNImportanceWeightProvider(
+            rho_positive=self.rates.rho_positive,
+            rho_negative=self.rates.rho_negative,
+        ).compute(BinaryRCNWeightInput(
+            posterior_probabilities=torch.as_tensor(
+                probabilities.copy(), dtype=torch.float64
+            ),
+            observed_targets=targets,
+        ))
+        weights = result.sample_weights.detach().cpu().numpy().astype(np.float64)
+        weight_sum = float(weights.sum())
+        squared_sum = float(np.square(weights).sum())
+        ess = 0.0 if squared_sum == 0.0 else weight_sum * weight_sum / squared_sum
+        quantiles = np.quantile(weights, [0.5, 0.9, 0.95, 0.99])
+        return {
+            "posterior": {
+                "backend": str(self.config.posterior_stage["name"]),
+                "minimum": float(probabilities.min()),
+                "mean": float(probabilities.mean()),
+                "maximum": float(probabilities.max()),
+                "finite_count": int(np.isfinite(probabilities).sum()),
+                "value_count": int(probabilities.size),
+                "row_sum_max_error": float(row_errors.max()),
+                "observed_class_prior": [
+                    float(np.mean(self.snapshot.noisy_targets == label))
+                    for label in (0, 1)
+                ],
+            },
+            "noise_rates": {
+                "rho_positive_hat": float(self.rates.rho_positive),
+                "rho_negative_hat": float(self.rates.rho_negative),
+                "rho_sum": float(
+                    self.rates.rho_positive + self.rates.rho_negative
+                ),
+                "configured_rho_positive": float(
+                    self.config.noise["rho_positive"]
+                ),
+                "configured_rho_negative": float(
+                    self.config.noise["rho_negative"]
+                ),
+                "realized_rho_positive": float(
+                    self.manifest_identity.get("realized_rho_positive", float("nan"))
+                ),
+                "realized_rho_negative": float(
+                    self.manifest_identity.get("realized_rho_negative", float("nan"))
+                ),
+                "configured_error_positive": float(
+                    self.rates.rho_positive
+                    - float(self.config.noise["rho_positive"])
+                ),
+                "configured_error_negative": float(
+                    self.rates.rho_negative
+                    - float(self.config.noise["rho_negative"])
+                ),
+            },
+            "weights": {
+                "minimum": float(weights.min()),
+                "mean": float(weights.mean()),
+                "p50": float(quantiles[0]),
+                "p90": float(quantiles[1]),
+                "p95": float(quantiles[2]),
+                "p99": float(quantiles[3]),
+                "maximum": float(weights.max()),
+                "zero_ratio": float(np.mean(weights == 0.0)),
+                "negative_count": int(np.sum(weights < 0.0)),
+                "nonfinite_count": int(np.sum(~np.isfinite(weights))),
+                "ess": float(ess),
+                "ess_fraction": float(ess / max(1, weights.size)),
+            },
+        }
+
+    @staticmethod
+    def _parameter_vector(model: nn.Module) -> torch.Tensor:
+        return torch.cat([
+            parameter.detach().reshape(-1).cpu()
+            for parameter in model.parameters()
+        ])
+
+    @staticmethod
+    def _gradient_norm(model: nn.Module) -> float:
+        squared = 0.0
+        for parameter in model.parameters():
+            if parameter.grad is not None:
+                squared += float(parameter.grad.detach().square().sum().item())
+        return float(squared ** 0.5)
+
     @property
     def snapshot_path(self) -> Path:
         return self.run_dir / "posterior_snapshot.npz"
@@ -412,8 +510,25 @@ class ImportanceReweightingAlgorithm:
             self.final_algorithm.on_cycle_start(self.run_state)
             totals: dict[str, float] = {}
             samples = 0.0
+            objective_values: list[float] = []
+            gradient_norms: list[float] = []
+            update_norms: list[float] = []
+            relative_updates: list[float] = []
             for raw_batch in self.train_loader_factory(epoch):
+                before = self._parameter_vector(self.final_algorithm.model)
                 result = self.final_algorithm.step(Batch(payload=raw_batch), self.run_state)
+                after = self._parameter_vector(self.final_algorithm.model)
+                update_norm = float(torch.linalg.vector_norm(after - before).item())
+                parameter_norm = float(torch.linalg.vector_norm(before).item())
+                gradient_norm = self._gradient_norm(self.final_algorithm.model)
+                if not np.isfinite(gradient_norm):
+                    raise ValueError("importance reweighting gradient norm is non-finite")
+                if gradient_norm > float(self.config.diagnostics["max_gradient_norm"]):
+                    raise ValueError("importance reweighting gradient explosion detected")
+                objective_values.append(float(result.metrics["loss"]))
+                gradient_norms.append(gradient_norm)
+                update_norms.append(update_norm)
+                relative_updates.append(update_norm / max(parameter_norm, 1.0e-12))
                 count = float(result.metrics["samples"])
                 samples += count
                 for name, value in result.metrics.items():
@@ -441,6 +556,15 @@ class ImportanceReweightingAlgorithm:
                 **{f"train_{key}": value for key, value in train_metrics.items()},
                 "validation_observed_ce_loss": validation["loss"],
                 "validation_accuracy": validation["accuracy"],
+                "objective_min": float(min(objective_values)),
+                "objective_max": float(max(objective_values)),
+                "gradient_norm_mean": float(np.mean(gradient_norms)),
+                "gradient_norm_max": float(max(gradient_norms)),
+                "parameter_norm": float(torch.linalg.vector_norm(
+                    self._parameter_vector(self.final_algorithm.model)
+                ).item()),
+                "update_norm_mean": float(np.mean(update_norms)),
+                "relative_update_mean": float(np.mean(relative_updates)),
             }
             with metrics_path.open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps(record, sort_keys=True) + "\n")
@@ -470,6 +594,29 @@ class ImportanceReweightingAlgorithm:
             "rho_positive_hat": self.rates.rho_positive,
             "rho_negative_hat": self.rates.rho_negative,
             "reduction": "batch_mean",
+            **self._method_diagnostics(),
+        }
+        records = [
+            json.loads(line)
+            for line in (self.run_dir / "metrics.jsonl").read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        ]
+        final["optimization"] = {
+            "objective_min": float(min(row["objective_min"] for row in records)),
+            "objective_max": float(max(row["objective_max"] for row in records)),
+            "gradient_norm_max": float(
+                max(row["gradient_norm_max"] for row in records)
+            ),
+            "parameter_norm_final": float(records[-1]["parameter_norm"]),
+            "relative_update_mean": float(np.mean([
+                row["relative_update_mean"] for row in records
+            ])),
+            "optimizer_stall": bool(all(
+                row["update_norm_mean"] == 0.0 for row in records
+            )),
+            "nonfinite_count": 0,
         }
         (self.run_dir / "final_metrics.json").write_text(
             json.dumps(final, indent=2, sort_keys=True), encoding="utf-8"

@@ -1,8 +1,9 @@
+schema_version: 1
+kind: experiment
 seed: 7
 output_root: artifacts/runs
 data:
   name: cifar10
-  root: data/cifar10
   validation_size: 5000
   max_train_samples: 512
   max_validation_samples: 256
@@ -24,4 +25,5 @@ optimizer:
 trainer:
   epochs: 2
   device: auto
-execution: {runner: supervised}
+execution:
+  runner: supervised

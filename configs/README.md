@@ -1,8 +1,42 @@
 # 配置目录说明
 
-这里的 YAML 都是 LNL 示例插件配置，不是核心框架 schema。
+这里的 YAML 使用版本化公共合同。每个文件必须显式写出：
 
-通用核心只要求最终向 `ExperimentContext.config` 提供一个只读 mapping；配置来源可以是 YAML、JSON、Hydra、命令行、数据库或调用方直接构造的字典。后续若采用 Hydra，也应通过 adapter 接入，不能让 core 直接依赖 Hydra。
+```yaml
+schema_version: 1
+kind: experiment  # 或 fragment / mentor_artifact
+```
+
+## 用户可见配方
+
+活动 YAML 是内部可复现资产，不等于都需要出现在用户菜单中。
+`src/lnl_toolbox/cli/data/recipe_catalog.json` 的 `public` 清单维护默认公开模板：
+
+- `lnl list experiments` 只显示少量公开模板；
+- `lnl list experiments --all` 显示全部内置实验配置；
+- Web 新手模式只显示公开模板；
+- Web“新建 YAML”默认按 26 篇论文各显示一份正式配置；“通用监督组合”模式继续使用少量公开模板；
+- Web 的 Recipe 编辑页仍可访问全部内部配置。
+
+论文正式配置模式只复制论文目录指定的完整 YAML，不把专用 runner 改写成通用监督配置，
+也不允许在复制时混入 loss/selector 等跨生命周期覆盖。生成后可在 Recipe 编辑页审阅和修改。
+界面同时显示 `paper_protocol`、`paper_oriented` 或 `engineering` 等 fidelity，避免把完整预算
+误称为已完成论文数值复现。
+
+Smoke 配置会缩小数据、模型或训练预算以检查链路；正式配置还定义模型、优化器、
+scheduler、数据规模和论文生命周期，不能只通过修改 epoch 将 Smoke 当作正式复现。
+
+`kind: experiment` 表示可直接交给 `lnl run` 的完整配置；`kind: fragment` 仅保存参数
+片段，不能独立运行。历史版本原样保存在
+`archive/configs-legacy-2026-08-21/`，并由 SHA-256 清单保护。
+
+完整实验统一使用 `execution.runner`、`data.name`、`loader`、`model`、`optimizer` 和
+`trainer`。论文特有阶段仍保留独立 mapping，不得为了外观统一而改变训练生命周期。
+`noise.type` 以及顶层 `epochs/batch_size/learning_rate` 已废弃。
+
+`data.name` 选择数据适配器；本机位置由 `lnl data register` 登记。完整 recipe 通常不写
+`data.root`。当同一适配器只有一个本地登记时会自动解析；存在多个登记时必须用
+`lnl run ... --data <alias>` 明确选择。
 
 训练实验通过顶层 `loss` mapping 选择逐样本 PyTorch objective，缺省时兼容为 CE：
 
@@ -12,7 +46,8 @@ loss:
   q: 0.7
 ```
 
-`configs/algorithm/` 保存可复用的组件片段；当前入口尚未实现 Hydra defaults 合并，因此完整实验 YAML 需要显式包含所选 loss 配置。
+`configs/algorithm/` 保存标记为 `kind: fragment` 的参考片段；当前入口未实现 Hydra
+defaults 合并，因此完整实验 YAML 必须显式包含所需参数。
 
 顶层 `selector` mapping 选择单 batch 的 hard sample selector。缺省时使用 `all`，与原有全样本均值训练一致：
 

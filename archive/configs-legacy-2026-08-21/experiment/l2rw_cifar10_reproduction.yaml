@@ -1,0 +1,17 @@
+method: l2rw
+execution: {runner: l2rw}
+seed: 1234
+output_root: artifacts/reproductions/l2rw-cifar10-uniform40
+data: {name: cifar10, root: data/cifar10, num_val: 5000, num_clean: 100, augment: true, input_seed: 0, seed: 0}
+noise: {type: official_uniform_flip, rate: 0.4, seed: 0}
+loader: {batch_size: 100, num_workers: 4, pin_memory: true}
+trusted_validation:
+  source: official_generated
+  batch_size: 100
+  seed: 1234
+  input_seed: 0
+model: {name: l2rw_resnet32, base_width: 16}
+optimizer: {name: sgd, lr: 0.1, momentum: 0.9, weight_decay: 0.0002}
+scheduler: {name: none, step_milestones: [40000, 60000], gamma: 0.1}
+meta: {virtual_learning_rate: 1.0, implementation: official}
+trainer: {epochs: 180, max_steps: 80000, device: auto}

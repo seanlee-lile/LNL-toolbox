@@ -14,10 +14,8 @@ from torch import nn
 import yaml
 
 from lnl_toolbox.algorithms.pcse import PCSEAlgorithm, PCSEConfig
-from lnl_toolbox.data.multiclass_synthetic import (
-    MulticlassTensorDataset,
-    generate_synthetic_multiclass,
-)
+from lnl_toolbox.evaluation.classification import evaluate_classification
+from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.noise.generators import generate_pairflip, generate_symmetric
 from lnl_toolbox.noise.manifest import NoiseManifest
 from lnl_toolbox.plugins.builtin import build_builtin_loss
@@ -25,14 +23,17 @@ from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import read_checkpoint
 from lnl_toolbox.training.experiment import (
     _environment,
-    _loader,
+    build_model,
     build_optimizer,
     build_scheduler,
 )
+from lnl_toolbox.training.data_service import prepare_experiment_data
 from lnl_toolbox.training.noisy_labels import (
     checkpoint_noise_metadata,
+    effective_subset_actual_rate,
     file_sha256,
 )
+from lnl_toolbox.training.pcse_pretrained import load_upm_main_best_source
 
 
 class _PCSEMultilayerPerceptron(nn.Module):
@@ -93,6 +94,23 @@ def _noisy_targets(
             "PCSE noise manifest is missing a stable sample index"
         ) from exc
     return manifest.noisy_targets[rows]
+
+
+def _persist_source_manifest(source: Path, destination: Path) -> None:
+    temporary = destination.with_name(destination.name + ".tmp")
+    if temporary.exists():
+        raise FileExistsError(
+            f"PCSE temporary source manifest already exists: {temporary}"
+        )
+    try:
+        temporary.write_bytes(source.read_bytes())
+        loaded = NoiseManifest.load(temporary)
+        if loaded.mapping_hash != NoiseManifest.load(source).mapping_hash:
+            raise ValueError("PCSE source manifest temporary validation failed")
+        temporary.replace(destination)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def _prepare_synthetic_manifest(
@@ -204,91 +222,82 @@ def run_pcse_experiment(
     data = config.get("data")
     if not isinstance(data, Mapping):
         raise TypeError("PCSE data configuration must be a mapping")
-    if str(data.get("name", "")).strip().lower() != "synthetic_multiclass":
-        raise ValueError(
-            "PCSE first runner currently supports synthetic_multiclass"
-        )
+    data_name = str(data.get("name", "")).strip().lower()
+    if data_name not in {"synthetic_multiclass", "cifar10"}:
+        raise ValueError("PCSE runner supports synthetic_multiclass and cifar10")
     num_classes = int(data.get("num_classes", 0))
-    dimension = int(data.get("dimension", 0))
     if num_classes < 3:
         raise ValueError("PCSE requires at least three classes")
-    train = generate_synthetic_multiclass(
-        int(data["train_size"]),
-        dimension,
-        num_classes,
-        seed + 11,
-        start_index=0,
-        split="train",
-    )
-    validation = generate_synthetic_multiclass(
-        int(data["validation_size"]),
-        dimension,
-        num_classes,
-        seed + 12,
-        start_index=len(train.labels),
-        split="validation",
-    )
-    test = generate_synthetic_multiclass(
-        int(data["test_size"]),
-        dimension,
-        num_classes,
-        seed + 13,
-        start_index=len(train.labels) + len(validation.labels),
-        split="test",
-    )
-    population_clean = np.concatenate((train.labels, validation.labels))
-    population_indices = np.concatenate(
-        (train.global_indices, validation.global_indices)
-    )
-    manifest, manifest_path = _prepare_synthetic_manifest(
-        config=config,
-        run_dir=run_dir,
-        clean_targets=population_clean,
-        global_indices=population_indices,
-        num_classes=num_classes,
-        resume_payload=resume_payload,
-    )
-    train_observed = _noisy_targets(manifest, train.global_indices)
-    validation_observed = _noisy_targets(
-        manifest, validation.global_indices
-    )
-    train_set = MulticlassTensorDataset(train, train_observed)
-    validation_set = MulticlassTensorDataset(
-        validation, validation_observed
-    )
-    clean_test_set = MulticlassTensorDataset(test)
-
     loader = config.get("loader")
     if not isinstance(loader, Mapping):
         raise TypeError("PCSE loader configuration must be a mapping")
-    train_loader = _loader(train_set, loader, shuffle=True, seed=seed + 101)
-    statistics_loader = _loader(
-        train_set, loader, shuffle=False, seed=seed + 102
-    )
-    validation_loader = _loader(
-        validation_set, loader, shuffle=False, seed=seed + 103
-    )
-    test_loader = _loader(
-        clean_test_set, loader, shuffle=False, seed=seed + 104
-    )
-
     model_config = method_config.pretraining.model
-    if str(model_config.get("name", "")).strip().lower() != "pcse_mlp":
-        raise ValueError(
-            "PCSE synthetic first runner requires model name pcse_mlp"
+    external_source = None
+    source_model = None
+    if data_name == "synthetic_multiclass":
+        if method_config.pretraining.mode != "train":
+            raise ValueError("synthetic PCSE requires pretraining mode train")
+        dimension = int(data.get("dimension", 0))
+        if str(model_config.get("name", "")).strip().lower() != "pcse_mlp":
+            raise ValueError("PCSE synthetic runner requires model name pcse_mlp")
+        model = _PCSEMultilayerPerceptron(
+            dimension, int(model_config.get("hidden_width", 16)), num_classes
         )
-    model = _PCSEMultilayerPerceptron(
-        dimension,
-        int(model_config.get("hidden_width", 16)),
-        num_classes,
+        manifest_mode = "generated"
+    else:
+        if method_config.pretraining.mode != "external_checkpoint":
+            raise ValueError(
+                "PCSE CIFAR-10 requires pretraining mode external_checkpoint"
+            )
+        if num_classes != 10:
+            raise ValueError("PCSE CIFAR-10 requires data.num_classes: 10")
+        model = build_model(model_config, num_classes)
+        external_source = load_upm_main_best_source(
+            method_config.pretraining.source, model, num_classes=num_classes
+        )
+        source_model = build_model(model_config, num_classes)
+        source_model.load_state_dict(external_source.state_dict, strict=True)
+        source_model.to(device)
+        manifest = external_source.noise_manifest
+        config["noise"] = {
+            "name": "external",
+            "manifest": str(external_source.manifest.path),
+            "manifest_sha256": external_source.manifest.sha256,
+            "validation_targets": "noisy",
+        }
+        manifest_mode = "external"
+
+    prepared = prepare_experiment_data(
+        config,
+        requirements=DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.NOISY_VALIDATION, DataRole.TEST}),
+            validation_targets="noisy",
+        ),
+        run_dir=run_dir,
+        seed=seed + 10 if data_name == "synthetic_multiclass" else seed,
+        checkpoint_payload=resume_payload,
     )
+    manifest, manifest_path = prepared.manifest, prepared.manifest_path
+    if manifest is None or manifest_path is None:
+        raise ValueError("PCSE requires noisy train and validation labels")
+    effective_train_rate = effective_subset_actual_rate(manifest, prepared.train_indices)
+    effective_validation_rate = effective_subset_actual_rate(manifest, prepared.validation_indices)
+    train_loader = prepared.loader(DataRole.TRAIN, generator_seed=seed + 101)
+    statistics_loader = prepared.loader(DataRole.TRAIN_EVAL, shuffle=False, generator_seed=seed + 102)
+    validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False, generator_seed=seed + 103)
+    test_loader = prepared.loader(DataRole.TEST, shuffle=False, generator_seed=seed + 104)
+
     optimizer = build_optimizer(
         model, method_config.pretraining.optimizer
     )
-    scheduler = build_scheduler(
-        optimizer,
-        method_config.pretraining.scheduler,
-        method_config.pretraining.epochs,
+    scheduler = (
+        build_scheduler(
+            optimizer,
+            method_config.pretraining.scheduler,
+            method_config.pretraining.epochs,
+        )
+        if method_config.pretraining.mode == "train"
+        else None
     )
     loss = build_builtin_loss({"name": "ce"}).to(device)
 
@@ -296,12 +305,10 @@ def run_pcse_experiment(
         manifest,
         manifest_path,
         run_dir,
-        manifest.actual_rate,
-        mode="generated",
+        effective_train_rate,
+        mode=manifest_mode,
         validation_targets="noisy",
-        effective_validation_rate=float(
-            np.mean(validation_observed != validation.labels)
-        ),
+        effective_validation_rate=effective_validation_rate,
     )
     config["noise"] = {**dict(config["noise"]), **noise_metadata}
     (run_dir / "resolved_config.yaml").write_text(
@@ -327,14 +334,31 @@ def run_pcse_experiment(
         device=device,
         run_dir=run_dir,
         config=config,
-        dataset="synthetic_multiclass",
+        dataset=data_name,
         num_classes=num_classes,
         noise_metadata=noise_metadata,
+        external_source_provenance=(
+            None if external_source is None else external_source.provenance
+        ),
+        external_source_model=source_model,
     )
     try:
         if resume is not None:
             algorithm.resume(resume)
+        elif external_source is not None:
+            validation = evaluate_classification(
+                model, validation_loader, loss, device
+            )
+            algorithm.adopt_external_pretrained(
+                completed_epochs=external_source.source_completed_epochs,
+                global_step=external_source.source_global_step,
+                best_epoch=external_source.best_epoch,
+                validation_accuracy=external_source.best_validation_accuracy,
+                validation_loss=float(validation["loss"]),
+            )
         algorithm.run()
     finally:
         algorithm.close()
+        if external_source is not None:
+            external_source.assert_unchanged()
     return run_dir

@@ -10,9 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import numpy as np
-from PIL import Image
 import torch
-from torch.utils.data import DataLoader, Dataset
 import yaml
 
 from lnl_toolbox.algorithms.dividemix import (
@@ -24,14 +22,13 @@ from lnl_toolbox.algorithms.dividemix import (
     load_co_divide_artifact,
     save_co_divide_artifact,
 )
-from lnl_toolbox.data import NoisyTargetDataset
-from lnl_toolbox.data.cifar import load_cifar10, load_cifar100
-from lnl_toolbox.data.torch_cifar import TorchCifarDataset, build_cifar_transform, train_validation_split
+from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.losses.torch_losses import validate_per_sample_loss
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
-from lnl_toolbox.training.experiment import _environment, _loader, _resolved_noise_config, _seed_worker, _subset, build_model, build_optimizer, build_scheduler
-from lnl_toolbox.training.noisy_labels import checkpoint_noise_metadata, effective_subset_actual_rate, noise_mode, prepare_noise_manifest
+from lnl_toolbox.training.data_service import PreparedData, prepare_experiment_data
+from lnl_toolbox.training.experiment import _environment, _resolved_noise_config, build_model, build_optimizer, build_scheduler
+from lnl_toolbox.training.noisy_labels import checkpoint_noise_metadata, effective_subset_actual_rate, noise_mode
 
 
 def _state_hash(model: torch.nn.Module) -> str:
@@ -40,29 +37,6 @@ def _state_hash(model: torch.nn.Module) -> str:
         tensor = value.detach().cpu().contiguous()
         digest.update(name.encode()); digest.update(tensor.numpy().tobytes())
     return digest.hexdigest()
-
-
-class _MultiViewDataset(Dataset[dict[str, Any]]):
-    def __init__(self, data, indices, targets_by_index, transform, views: int, probabilities=None):
-        self.data = data; self.indices = np.asarray(indices, dtype=np.int64)
-        if self.indices.ndim != 1 or self.indices.size == 0 or np.unique(self.indices).size != self.indices.size:
-            raise ValueError("DivideMix view dataset indices must be non-empty and unique")
-        self.targets = {int(k): int(v) for k, v in targets_by_index.items()}
-        self.probabilities = None if probabilities is None else {int(k): float(v) for k, v in probabilities.items()}
-        self.transform, self.views = transform, int(views)
-
-    def __len__(self): return int(self.indices.size)
-
-    def __getitem__(self, item):
-        index = int(self.indices[item]); image = Image.fromarray(self.data.images[index], mode="RGB")
-        result = {"views": tuple(self.transform(image) for _ in range(self.views)), "target": self.targets[index], "index": index}
-        if self.probabilities is not None: result["clean_probability"] = self.probabilities[index]
-        return result
-
-
-def _epoch_loader(dataset, loader_config, seed, *, shuffle=True):
-    workers = int(loader_config.get("num_workers", 0))
-    return DataLoader(dataset, batch_size=int(loader_config["batch_size"]), shuffle=shuffle, num_workers=workers, pin_memory=bool(loader_config.get("pin_memory", True)), persistent_workers=False, worker_init_fn=_seed_worker if workers else None, generator=torch.Generator().manual_seed(seed))
 
 
 def _build_peers(model_config, num_classes, seed, offset):
@@ -116,22 +90,28 @@ def _validate_resume(current, saved):
         raise ValueError("Resume configuration changed noise settings")
 
 
-def _train_peer_epoch(algorithm, peer, artifact, train_data, noisy_by_index, transform, loader_config, epoch, seed):
+def _train_peer_epoch(algorithm, peer, artifact, prepared: PreparedData, noisy_by_index, epoch, seed):
     if peer == "a": mask, probabilities = artifact.labeled_for_a, artifact.clean_probability_b
     else: mask, probabilities = artifact.labeled_for_b, artifact.clean_probability_a
     indices = artifact.sample_indices.numpy(); labeled = indices[mask.numpy()]; unlabeled = indices[~mask.numpy()]
     probability_map = {int(index): float(value) for index, value in zip(indices, probabilities)}
-    labeled_set = _MultiViewDataset(train_data, labeled, noisy_by_index, transform, algorithm.config.augmentations, probability_map)
-    unlabeled_set = _MultiViewDataset(train_data, unlabeled, noisy_by_index, transform, algorithm.config.augmentations)
+    view_names = tuple(f"view_{index}" for index in range(algorithm.config.augmentations))
+    labeled_set = prepared.dynamic_dataset(
+        labeled, views=view_names, targets_by_index=noisy_by_index,
+        overlays={"clean_probability": probability_map},
+    )
+    unlabeled_set = prepared.dynamic_dataset(
+        unlabeled, views=view_names, targets_by_index=noisy_by_index,
+    )
     peer_offset = 0 if peer == "a" else 100000
-    labeled_loader = _epoch_loader(labeled_set, loader_config, seed + peer_offset + epoch * 2)
-    unlabeled_loader = _epoch_loader(unlabeled_set, loader_config, seed + peer_offset + epoch * 2 + 1)
+    labeled_loader = prepared.loader_for_dataset(labeled_set, generator_seed=seed + peer_offset + epoch * 2)
+    unlabeled_loader = prepared.loader_for_dataset(unlabeled_set, generator_seed=seed + peer_offset + epoch * 2 + 1)
     unlabeled_iterator = iter(unlabeled_loader); totals: dict[str, float] = {}; count = 0
     rng = np.random.default_rng(seed + peer_offset + epoch)
     for batch_index, labeled_batch in enumerate(labeled_loader):
         try: unlabeled_batch = next(unlabeled_iterator)
         except StopIteration: unlabeled_iterator = iter(unlabeled_loader); unlabeled_batch = next(unlabeled_iterator)
-        metrics = algorithm.train_peer_step(peer, tuple(value.to(algorithm.device) for value in labeled_batch["views"]), tuple(value.to(algorithm.device) for value in unlabeled_batch["views"]), labeled_batch["target"], labeled_batch["clean_probability"], epoch=epoch, batch_index=batch_index, num_batches=len(labeled_loader), rng=rng)
+        metrics = algorithm.train_peer_step(peer, tuple(value.to(algorithm.device) for value in labeled_batch["views"].values()), tuple(value.to(algorithm.device) for value in unlabeled_batch["views"].values()), labeled_batch["target"], labeled_batch["clean_probability"], epoch=epoch, batch_index=batch_index, num_batches=len(labeled_loader), rng=rng)
         for key, value in metrics.items(): totals[key] = totals.get(key, 0.0) + value
         count += 1
     return {key: value / count for key, value in totals.items()} | {"batches": float(count), "labeled_count": float(len(labeled)), "unlabeled_count": float(len(unlabeled))}
@@ -146,23 +126,23 @@ def run_dividemix_experiment(config: dict[str, Any], output_dir: str | Path | No
     if checkpoint:
         if checkpoint.get("method") != "dividemix": raise ValueError("checkpoint method is not DivideMix")
         _validate_resume(config, checkpoint["config"])
-    data_config = config["data"]; dataset_name = str(data_config.get("name", "cifar10")).lower()
-    if dataset_name not in {"cifar10", "cifar100"}: raise ValueError("DivideMix supports CIFAR-10 and CIFAR-100")
-    load = load_cifar10 if dataset_name == "cifar10" else load_cifar100; num_classes = 10 if dataset_name == "cifar10" else 100
-    train_data, test_data = load(data_config.get("root"), "train"), load(data_config.get("root"), "test")
-    train_indices, validation_indices = train_validation_split(train_data.labels, int(data_config["validation_size"]), seed)
-    manifest_indices = np.sort(np.concatenate((train_indices, validation_indices)))
-    manifest, manifest_path = prepare_noise_manifest(config, dataset=dataset_name, clean_targets=train_data.labels[manifest_indices], global_indices=manifest_indices, num_classes=num_classes, run_dir=run_dir, checkpoint_payload=checkpoint, dataset_targets=train_data.labels)
+    data_config = config["data"]
+    prepared = prepare_experiment_data(
+        config,
+        requirements=DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.NOISY_VALIDATION, DataRole.TEST}),
+            validation_targets="noisy",
+        ),
+        run_dir=run_dir, seed=seed, checkpoint_payload=checkpoint,
+    )
+    dataset_name, num_classes = prepared.dataset, prepared.num_classes
+    manifest, manifest_path = prepared.manifest, prepared.manifest_path
     if manifest is None or manifest_path is None: raise ValueError("DivideMix requires a NoiseManifest")
-    train_indices = _subset(train_indices, train_data.labels, data_config.get("max_train_samples"), seed + 1); validation_indices = _subset(validation_indices, train_data.labels, data_config.get("max_validation_samples"), seed + 2); test_indices = _subset(np.arange(len(test_data)), test_data.labels, data_config.get("max_test_samples"), seed + 3)
     noisy_by_index = {int(index): int(target) for index, target in zip(manifest.global_indices, manifest.noisy_targets)}
-    train_transform = build_cifar_transform(True, bool(data_config.get("augment", True)), normalization_mean=data_config.get("normalization_mean"), normalization_std=data_config.get("normalization_std"))
-    eval_transform = build_cifar_transform(False, normalization_mean=data_config.get("normalization_mean"), normalization_std=data_config.get("normalization_std"))
-    eval_train_set = NoisyTargetDataset(TorchCifarDataset(train_data, train_indices, transform=eval_transform), manifest.global_indices, manifest.noisy_targets)
-    validation_set = NoisyTargetDataset(TorchCifarDataset(train_data, validation_indices, transform=eval_transform), manifest.global_indices, manifest.noisy_targets)
-    test_set = TorchCifarDataset(test_data, test_indices, transform=eval_transform)
-    eval_train_loader = _epoch_loader(eval_train_set, config["loader"], seed, shuffle=False); validation_loader = _loader(validation_set, config["loader"], shuffle=False, seed=seed); test_loader = _loader(test_set, config["loader"], shuffle=False, seed=seed)
-    noise_metadata = checkpoint_noise_metadata(manifest, manifest_path, run_dir, effective_subset_actual_rate(manifest, train_indices), mode=noise_mode(config), validation_targets="noisy", effective_validation_rate=effective_subset_actual_rate(manifest, validation_indices)); config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
+    eval_train_loader = prepared.loader(DataRole.TRAIN_EVAL, shuffle=False)
+    validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False)
+    test_loader = prepared.loader(DataRole.TEST, shuffle=False)
+    noise_metadata = checkpoint_noise_metadata(manifest, manifest_path, run_dir, effective_subset_actual_rate(manifest, prepared.train_indices), mode=noise_mode(config), validation_targets="noisy", effective_validation_rate=effective_subset_actual_rate(manifest, prepared.validation_indices)); config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
     model_a, model_b = _build_peers(config["model"], num_classes, seed, method.peer_seed_offset); optimizer_a, optimizer_b = build_optimizer(model_a, config["optimizer"]), build_optimizer(model_b, config["optimizer"])
     total_epochs = method.warmup_epochs + method.training_epochs; scheduler_a, scheduler_b = build_scheduler(optimizer_a, config.get("scheduler"), total_epochs), build_scheduler(optimizer_b, config.get("scheduler"), total_epochs)
     algorithm = DivideMixAlgorithm(model_a=model_a, model_b=model_b, optimizer_a=optimizer_a, optimizer_b=optimizer_b, scheduler_a=scheduler_a, scheduler_b=scheduler_b, config=method, device=device)
@@ -177,10 +157,10 @@ def run_dividemix_experiment(config: dict[str, Any], output_dir: str | Path | No
     with metrics_path.open("a", encoding="utf-8") as metrics_file:
         while algorithm.state.warmup_completed_epochs < method.warmup_epochs:
             epoch = algorithm.state.warmup_completed_epochs; sums = {peer: {"objective": 0.0, "confidence_penalty": 0.0} for peer in ("a", "b")}; batches = 0
-            warm_set = _MultiViewDataset(train_data, train_indices, noisy_by_index, train_transform, 1)
-            for batch in _epoch_loader(warm_set, config["loader"], seed + epoch):
+            warm_set = prepared.dynamic_dataset(prepared.train_indices, views=("view_0",), targets_by_index=noisy_by_index)
+            for batch in prepared.loader_for_dataset(warm_set, generator_seed=seed + epoch):
                 for peer in ("a", "b"):
-                    result = algorithm.warmup_step(peer, batch["views"][0], batch["target"], asymmetric=str(config["noise"].get("name", "")).lower() == "asymmetric")
+                    result = algorithm.warmup_step(peer, batch["views"]["view_0"], batch["target"], asymmetric=str(config["noise"].get("name", "")).lower() == "asymmetric")
                     for key in sums[peer]: sums[peer][key] += result[key]
                 batches += 1
             algorithm.step_schedulers(); algorithm.state.warmup_completed_epochs += 1
@@ -208,9 +188,9 @@ def run_dividemix_experiment(config: dict[str, Any], output_dir: str | Path | No
             metrics_a = {}
             if algorithm.state.phase in {DivideMixPhase.CO_DIVIDE_READY, DivideMixPhase.TRAIN_NETWORK_A}:
                 if algorithm.state.phase == DivideMixPhase.CO_DIVIDE_READY: algorithm.state.transition(DivideMixPhase.TRAIN_NETWORK_A)
-                metrics_a = _train_peer_epoch(algorithm, "a", artifact, train_data, noisy_by_index, train_transform, config["loader"], epoch, seed); algorithm.state.transition(DivideMixPhase.NETWORK_A_READY); _save_last(run_dir, algorithm, config, noise_metadata, best_epoch, best_metric, best_metrics)
+                metrics_a = _train_peer_epoch(algorithm, "a", artifact, prepared, noisy_by_index, epoch, seed); algorithm.state.transition(DivideMixPhase.NETWORK_A_READY); _save_last(run_dir, algorithm, config, noise_metadata, best_epoch, best_metric, best_metrics)
             if algorithm.state.phase == DivideMixPhase.NETWORK_A_READY: algorithm.state.transition(DivideMixPhase.TRAIN_NETWORK_B)
-            metrics_b = _train_peer_epoch(algorithm, "b", artifact, train_data, noisy_by_index, train_transform, config["loader"], epoch, seed); algorithm.state.transition(DivideMixPhase.EPOCH_READY); algorithm.step_schedulers(); algorithm.state.main_completed_epochs += 1
+            metrics_b = _train_peer_epoch(algorithm, "b", artifact, prepared, noisy_by_index, epoch, seed); algorithm.state.transition(DivideMixPhase.EPOCH_READY); algorithm.step_schedulers(); algorithm.state.main_completed_epochs += 1
             validation = _evaluate(algorithm, validation_loader, device); improved = validation["accuracy_ensemble"] > best_metric
             if improved: best_epoch, best_metric, best_metrics = epoch, validation["accuracy_ensemble"], validation
             row = {"event": "epoch", "epoch": epoch + 1, "global_step_a": algorithm.state.optimizer_steps_a, "global_step_b": algorithm.state.optimizer_steps_b, "validation_accuracy_a": validation["accuracy_a"], "validation_accuracy_b": validation["accuracy_b"], "validation_accuracy_ensemble": validation["accuracy_ensemble"], "artifact_hash": artifact_hash, **{f"train_a_{k}": v for k, v in metrics_a.items()}, **{f"train_b_{k}": v for k, v in metrics_b.items()}}

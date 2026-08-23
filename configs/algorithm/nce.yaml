@@ -1,2 +1,4 @@
+schema_version: 1
+kind: fragment
 name: nce
-eps: 1.0e-8
+eps: 1.0e-08

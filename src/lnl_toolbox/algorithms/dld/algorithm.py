@@ -99,6 +99,12 @@ class DLDAlgorithm:
             "noise_loss": float(objective.noise_loss.detach()),
             "direction_gradient_norm": direction_norm,
             "noise_gradient_norm": noise_norm,
+            "direction_parameter_norm": self._parameter_norm(self.direction_model),
+            "noise_parameter_norm": self._parameter_norm(self.noise_model),
+            "predicted_direction_rms": self._tensor_rms(predicted_direction),
+            "predicted_noise_rms": self._tensor_rms(predicted_noise),
+            "target_direction_rms": self._tensor_rms(yd),
+            "target_noise_rms": self._tensor_rms(epsilon),
             "samples": float(batch),
         }
 
@@ -110,6 +116,21 @@ class DLDAlgorithm:
         result = float(torch.stack(values).sum().sqrt())
         if not np.isfinite(result):
             raise ValueError("DLD gradient norm is non-finite")
+        return result
+
+    @staticmethod
+    def _parameter_norm(model: nn.Module) -> float:
+        values = [parameter.detach().square().sum() for parameter in model.parameters()]
+        result = float(torch.stack(values).sum().sqrt())
+        if not np.isfinite(result):
+            raise ValueError("DLD parameter norm is non-finite")
+        return result
+
+    @staticmethod
+    def _tensor_rms(value: Tensor) -> float:
+        result = float(value.detach().square().mean().sqrt())
+        if not np.isfinite(result):
+            raise ValueError("DLD predictor telemetry is non-finite")
         return result
 
     def prediction_models(self) -> tuple[nn.Module, nn.Module]:

@@ -1,8 +1,9 @@
+schema_version: 1
+kind: experiment
 seed: 1
 output_root: artifacts/runs
 data:
   name: cifar10
-  root: data/cifar10
   validation_size: 5000
   max_train_samples: null
   max_validation_samples: null
@@ -26,8 +27,9 @@ optimizer:
 scheduler:
   name: cosine
   t_max: 200
-  eta_min: 0.000001
+  eta_min: 1.0e-06
 trainer:
   epochs: 200
   device: auto
-execution: {runner: clean}
+execution:
+  runner: clean

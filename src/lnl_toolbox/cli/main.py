@@ -7,6 +7,7 @@ from importlib import metadata
 import json
 from pathlib import Path
 import platform
+import subprocess
 import sys
 from typing import Any
 
@@ -29,14 +30,42 @@ from lnl_toolbox.composition import (
     validate_composition,
     write_composed_config,
 )
+from lnl_toolbox.core.config_overrides import apply_override_assignments
+from lnl_toolbox.evaluation.run_comparison import compare_runs, write_report
+from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE, DatasetStatusReport
+from lnl_toolbox.data.profile import NoiseRateInfo, NoiseRateStatus
+from lnl_toolbox.training.compatibility import CompatibilityResult, CompatibilityStatus
 from lnl_toolbox.training.runners import apply_epoch_override, resolve_runner, runner_names
+from lnl_toolbox.training.service import ExperimentService
+from lnl_toolbox.training.sweep import (
+    plan_sweep,
+    resolve_planned_config,
+    run_sweep,
+    sweep_status,
+)
+
+
+def _validate_with_registry(config: dict[str, Any], *, check_data: bool):
+    return ExperimentService().preflight(config, check_data=check_data)
+
+
+def _should_check_data(args: argparse.Namespace) -> bool:
+    """Keep run preflight explicit while retaining legacy --check-data syntax."""
+
+    return not bool(getattr(args, "no_check_data", False))
 
 
 def _source_options(parser: argparse.ArgumentParser) -> None:
-    group = parser.add_mutually_exclusive_group(required=True)
+    parser.add_argument("source", nargs="?", help="recipe name or YAML path")
+    group = parser.add_mutually_exclusive_group()
     group.add_argument("--recipe", help="内置实验配置名称")
     group.add_argument("--config", type=Path, help="自定义 YAML 配置")
     parser.add_argument("--project-root", type=Path, help="显式指定项目根目录")
+    parser.add_argument(
+        "--data",
+        dest="local_dataset",
+        help="machine-local dataset alias registered with 'lnl data register'",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="LNL Toolbox 统一命令行入口",
         epilog=(
             "推荐顺序: lnl doctor -> lnl list experiments -> "
-            "lnl validate --recipe <name> -> lnl run --recipe <name> --dry-run"
+            "lnl run <source> --dry-run -> lnl run <source>"
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -62,7 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
     experiments.add_argument("--dataset")
     experiments.add_argument(
         "--format",
-        choices=("human", "tsv"),
+        choices=("human", "tsv", "json"),
         default="human",
         help="输出格式；human 适合阅读，tsv 适合脚本处理（默认: human）",
     )
@@ -72,10 +101,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="同时显示需要外部 artifact 的条件可用配置",
     )
     components = list_sub.add_parser("components", help="列出底层可组合组件")
+    experiments.add_argument(
+        "--all",
+        dest="all_recipes",
+        action="store_true",
+        help="show advanced and internal recipes in addition to public templates",
+    )
     components.add_argument("--kind")
     components.add_argument(
         "--format",
-        choices=("human", "tsv"),
+        choices=("human", "tsv", "json"),
         default="human",
         help="输出格式；human 适合阅读，tsv 适合脚本处理（默认: human）",
     )
@@ -90,11 +125,141 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--resume", type=Path)
     run.add_argument("--epochs", type=int)
     run.add_argument("--dry-run", action="store_true")
-    run.add_argument("--check-data", action="store_true")
+    data_check = run.add_mutually_exclusive_group()
+    data_check.add_argument(
+        "--check-data",
+        action="store_true",
+        help="compatibility flag; run preflight checks data by default",
+    )
+    data_check.add_argument(
+        "--no-check-data",
+        action="store_true",
+        help="skip dataset path/layout checks during dry-run",
+    )
+    run.add_argument(
+        "--set",
+        dest="overrides",
+        action="append",
+        default=[],
+        metavar="PATH=VALUE",
+        help="override an existing dotted configuration value; repeatable",
+    )
 
     resume = sub.add_parser("resume", help="从运行目录自动恢复")
     resume.add_argument("run_dir", type=Path)
     resume.add_argument("--checkpoint", choices=("last", "best"), default="last")
+
+    data = sub.add_parser("data", help="register and verify machine-local datasets")
+    data_sub = data.add_subparsers(dest="data_command", required=True)
+    data_register = data_sub.add_parser("register", help="register a local dataset path")
+    data_register.add_argument("alias")
+    data_register.add_argument("--adapter", required=True)
+    data_register.add_argument("--root", type=Path)
+    data_register.add_argument("--path", type=Path)
+    data_register.add_argument("--labels", type=Path)
+    data_register.add_argument("--noise-variant")
+    data_list = data_sub.add_parser("list", help="list registration and verification states")
+    data_list.add_argument("--format", choices=("human", "json"), default="human")
+    data_status = data_sub.add_parser("status", help="show dataset readiness")
+    data_status.add_argument("name", nargs="?")
+    data_status.add_argument("--format", choices=("human", "json"), default="human")
+    data_path = data_sub.add_parser("path", help="show a registered dataset path")
+    data_path.add_argument("name")
+    data_show = data_sub.add_parser("show", help="show one local dataset record")
+    data_show.add_argument("alias")
+    data_inspect = data_sub.add_parser("inspect", help="load and validate train/test layout")
+    data_inspect.add_argument("alias")
+    data_inspect.add_argument("--format", choices=("human", "json"), default="human")
+    data_declare = data_sub.add_parser("declare", help="record explicit dataset knowledge")
+    data_declare.add_argument("alias")
+    data_declare.add_argument(
+        "--clean-train-labels", choices=("available", "unavailable", "unknown")
+    )
+    data_declare.add_argument("--noise-status", choices=("clean", "noisy", "unknown"))
+    data_declare.add_argument("--noise-origin", choices=("synthetic", "native", "unknown"))
+    data_declare.add_argument("--noise-rate", type=float)
+    data_declare.add_argument(
+        "--noise-rate-status", choices=("known", "estimated", "unknown")
+    )
+    data_declare.add_argument("--noise-rate-provenance")
+    data_declare.add_argument(
+        "--noise-manifest", choices=("available", "unavailable", "unknown")
+    )
+    data_declare.add_argument("--clean-labels-location")
+    data_declare.add_argument("--clean-labels-provenance")
+    data_declare.add_argument("--notes")
+    data_remove = data_sub.add_parser("remove", help="remove a local registration")
+    data_remove.add_argument("alias")
+    data_verify = data_sub.add_parser("verify", help="run one epoch and store evidence")
+    data_verify.add_argument("alias")
+    data_verify.add_argument("--recipe")
+    data_verify.add_argument("--output-dir", type=Path)
+    data_verify.add_argument("--project-root", type=Path)
+
+    methods = sub.add_parser("methods", help="discover dataset/method compatibility")
+    methods_sub = methods.add_subparsers(dest="methods_command", required=True)
+    methods_compatible = methods_sub.add_parser(
+        "compatible", help="compare a registered dataset with all runners"
+    )
+    methods_compatible.add_argument("--dataset", required=True)
+    methods_compatible.add_argument("--noise-rate-prior", type=float)
+    methods_compatible.add_argument("--format", choices=("human", "json"), default="human")
+
+    web = sub.add_parser("web", help="start the local Data Management Web UI")
+    web.add_argument("--host", default="127.0.0.1")
+    web.add_argument("--port", type=int, default=8765)
+    web.add_argument("--no-open", action="store_true")
+    web.add_argument("--project-root", type=Path)
+
+    sweep = sub.add_parser("sweep", help="run multiple seeds sequentially and resumably")
+    _source_options(sweep)
+    sweep.add_argument(
+        "status_path",
+        nargs="?",
+        type=Path,
+        help="sweep directory when using 'lnl sweep status <path>'",
+    )
+    sweep.add_argument("--seeds", type=int, nargs="+")
+    sweep.add_argument(
+        "--matrix",
+        action="append",
+        default=[],
+        metavar="PATH=JSON_ARRAY",
+        help="add a typed parameter dimension; repeatable",
+    )
+    sweep.add_argument("--output-dir", type=Path)
+    sweep.add_argument("--dry-run", action="store_true")
+    sweep.add_argument("--format", choices=("human", "json"), default="human")
+    sweep.add_argument(
+        "--no-check-data",
+        action="store_true",
+        help="skip dataset path/layout checks during sweep dry-run",
+    )
+    sweep.add_argument(
+        "--set", dest="overrides", action="append", default=[], metavar="PATH=VALUE"
+    )
+
+    compare = sub.add_parser("compare", help="compare completed run directories")
+    compare.add_argument("path", type=Path)
+    compare.add_argument(
+        "--group-by",
+        action="append",
+        help="grouping field; repeat or provide comma-separated fields",
+    )
+    compare.add_argument(
+        "--require-equal",
+        action="append",
+        help="fairness invariant within comparable groups; repeatable",
+    )
+    compare.add_argument("--strict", action="store_true")
+    compare.add_argument("--format", choices=("human", "json"), default="human")
+
+    report = sub.add_parser("report", help="write Markdown, CSV, and JSON run reports")
+    report.add_argument("path", type=Path)
+    report.add_argument("--output-dir", type=Path)
+    report.add_argument("--group-by", action="append")
+    report.add_argument("--require-equal", action="append")
+    report.add_argument("--strict", action="store_true")
 
     compose = sub.add_parser("compose", help="查看兼容组合并生成自定义 YAML")
     compose_sub = compose.add_subparsers(dest="compose_command", required=True)
@@ -123,7 +288,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_list = paper_sub.add_parser("list", help="列出有可运行 config 的论文")
     paper_list.add_argument(
         "--format",
-        choices=("human", "tsv"),
+        choices=("human", "tsv", "json"),
         default="human",
         help="输出格式；human 适合阅读，tsv 适合脚本处理（默认: human）",
     )
@@ -141,18 +306,34 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _load_source(args: argparse.Namespace) -> tuple[dict[str, Any], Path, RecipeSpec | None, Path]:
     root = args.project_root.expanduser().resolve() if args.project_root else None
-    if args.recipe:
-        recipe = recipe_by_id(args.recipe, root)
+    source = getattr(args, "source", None)
+    recipe_name = getattr(args, "recipe", None)
+    config_arg = getattr(args, "config", None)
+    if source is not None and (recipe_name is not None or config_arg is not None):
+        raise ValueError("positional source cannot be combined with --recipe or --config")
+    if source is not None:
+        candidate = Path(source).expanduser()
+        if candidate.suffix.lower() in {".yaml", ".yml"} or candidate.is_file():
+            config_arg = candidate
+        else:
+            recipe_name = source
+    if recipe_name:
+        recipe = recipe_by_id(recipe_name, root)
         config_path = recipe.config_path
         config = load_recipe_config(recipe)
-    else:
+    elif config_arg is not None:
         recipe = None
-        config_path = args.config.expanduser().resolve()
+        config_path = config_arg.expanduser().resolve()
         if not config_path.is_file():
             raise FileNotFoundError(f"configuration does not exist: {config_path}")
         config = load_yaml(config_path)
+    else:
+        raise ValueError("provide a recipe name or YAML path")
     project = find_project_root(None if recipe is not None else config_path, root)
     config = resolve_config_paths(config, project)
+    local_dataset = getattr(args, "local_dataset", None)
+    if local_dataset:
+        config = DEFAULT_DATA_SERVICE.apply(config, local_dataset)
     return config, config_path, recipe, project
 
 
@@ -202,135 +383,35 @@ def _paper_config_value(config: dict[str, Any], key: str) -> str:
     return "；".join(staged) if staged else "由执行器决定"
 
 
-def _epoch_description(config: dict[str, Any]) -> str:
-    method = config.get("method", "")
-    if isinstance(method, dict):
-        method = method.get("name", "")
-    method = str(method).strip().lower()
-    if method == "t_revision":
-        values = config.get("t_revision", {}) or {}
-        return "/".join(
-            str((values.get(stage, {}) or {}).get("epochs", "-"))
-            for stage in ("stage1", "classifier_initialization", "revision")
-        ) + " (stage1/classifier/revision)"
-    if method == "dual_t":
-        return "/".join(
-            str((config.get(stage, {}) or {}).get("epochs", "-"))
-            for stage in ("posterior_stage", "final_stage")
-        ) + " (posterior/final)"
-    if method == "pcse":
-        return "/".join(
-            str((config.get(stage, {}) or {}).get("epochs", "-"))
-            for stage in ("pretraining_stage", "ensemble_stage")
-        ) + " (pretraining/ensemble)"
-    if method == "upm":
-        values = config.get("upm", {}) or {}
-        return "/".join(
-            str((values.get(stage, {}) or {}).get("epochs", "-"))
-            for stage in ("stage1", "main")
-        ) + " (stage1/main)"
-    if method == "dld":
-        values = config.get("dld", {}) or {}
-        return str((values.get("diffusion", {}) or {}).get("epochs", "-")) + " (diffusion)"
-    if method == "dividemix":
-        values = config.get("dividemix", {}) or {}
-        warmup = (values.get("warmup", {}) or {}).get("epochs", "-")
-        main = (values.get("training", {}) or {}).get("epochs", "-")
-        total = warmup + main if isinstance(warmup, int) and isinstance(main, int) else "-"
-        return f"{warmup}/{main}/{total} (warmup/main/total)"
-    if method == "lend":
-        values = config.get("lend", {}) or {}
-        return str((values.get("training", {}) or {}).get("epochs", "-")) + " (LEND)"
-    trainer = config.get("trainer", {}) or {}
-    return str(trainer.get("epochs", config.get("epochs", "runner default")))
+def _print_compatibility_result(result: CompatibilityResult | None) -> None:
+    print("Compatibility:")
+    if result is None:
+        print("  NOT_CHECKED")
+        return
+    print(f"  {result.status.value.upper()}")
+    for reason in result.reasons:
+        print(f"  - {reason.code}: {reason.message}")
+    for required in result.required_user_inputs:
+        print(f"  required: {required}")
 
 
-def _print_plan(config: dict[str, Any], config_path: Path, project: Path) -> None:
+def _print_plan(
+    config: dict[str, Any],
+    config_path: Path,
+    project: Path,
+    compatibility: CompatibilityResult | None = None,
+) -> None:
     runner = resolve_runner(config)
-    data = config.get("data", {}) or {}
-    trainer = config.get("trainer", {}) or {}
-    print("配置预览")
-    print(f"  配置文件: {config_path}")
-    print(f"  项目根目录: {project}")
-    print(f"  执行器: {runner.name}")
-    print(f"  数据集: {data.get('name', 'unknown')}")
-    print(f"  数据路径: {data.get('root') or data.get('path') or '由数据适配器生成'}")
-    print(f"  标签来源: {_noise_description(config)}")
-    print(f"  模型: {(config.get('model', {}) or {}).get('name', 'runner default')}")
-    print(f"  训练轮数: {_epoch_description(config)}")
-    print(f"  设备: {trainer.get('device', 'auto')}")
-    print(f"  最佳模型依据: {_selection_description(config)}")
-    print(f"  输出根目录: {config.get('output_root', 'artifacts/runs')}")
-    method = config.get("method", "")
-    if isinstance(method, dict):
-        method = method.get("name", "")
-    if str(method).strip().lower() == "upm":
-        upm = config.get("upm", {}) or {}
-        psi = upm.get("psi", {}) or {}
-        eta = upm.get("confusing_probability", {}) or {}
-        print(f"  UPM psi source: {psi.get('source', '-')}")
-        print(f"  UPM eta initial value: {eta.get('initial_value', '-')}")
-        print(f"  UPM eta update start epoch: {eta.get('update_start_epoch', '-')}")
-        print(f"  UPM eta update interval: {eta.get('update_interval_epochs', '-')}")
-    if str(method).strip().lower() == "dld":
-        dld = config.get("dld", {}) or {}
-        feature = dld.get("feature_extractor", {}) or {}
-        pre = dld.get("precorrection", {}) or {}
-        diffusion = dld.get("diffusion", {}) or {}
-        inference = dld.get("inference", {}) or {}
-        fidelity = dld.get("fidelity", {}) or {}
-        print(f"  DLD feature extractor: {feature.get('source', '-')}")
-        print(
-            "  DLD pre-correction: "
-            f"K={pre.get('k_neighbors', '-')} / "
-            f"metric={fidelity.get('neighbor_metric', '-')} / "
-            f"self={fidelity.get('self_neighbor', '-')} / "
-            f"divergence={fidelity.get('divergence', '-')} / GMM"
-        )
-        print(f"  DLD artifact: dld_precorrection.npz")
-        print(f"  DLD timesteps: {diffusion.get('timesteps', '-')}")
-        print(f"  DLD inference steps: {inference.get('steps', '-')}")
-        print(f"  DLD fidelity: {fidelity.get('name', '-')}")
-    if str(method).strip().lower() == "dividemix":
-        values = config.get("dividemix", {}) or {}
-        gmm = values.get("gmm", {}) or {}; history = gmm.get("loss_history", {}) or {}
-        mixmatch = values.get("mixmatch", {}) or {}; objective = values.get("objective", {}) or {}; inference = values.get("inference", {}) or {}
-        print("  DivideMix models: 2")
-        print(f"  DivideMix GMM threshold/history: {gmm.get('threshold', '-')} / {history.get('name', '-')}")
-        print(f"  DivideMix M/T/alpha: {mixmatch.get('augmentations', '-')} / {mixmatch.get('temperature', '-')} / {mixmatch.get('mixup_alpha', '-')}")
-        print(f"  DivideMix lambda_u/ramp-up: {objective.get('lambda_u', '-')} / {objective.get('rampup_epochs', '-')}")
-        print(f"  DivideMix ensemble: {inference.get('ensemble', '-')}")
-    if str(method).strip().lower() == "lend":
-        values = config.get("lend", {}) or {}
-        graph = values.get("graph", {}) or {}
-        dilution = values.get("dilution", {}) or {}
-        history = values.get("history", {}) or {}
-        selection = values.get("selection", {}) or {}
-        loader = config.get("loader", {}) or {}
-        print(f"  LEND batch size: {loader.get('batch_size', '-')}")
-        print(
-            "  LEND graph: "
-            f"k={graph.get('k', '-')} / gamma={graph.get('gamma', '-')} / "
-            f"metric={graph.get('metric', '-')} / "
-            f"normalize_features={graph.get('normalize_features', '-')} / "
-            f"zero_degree={graph.get('zero_degree_policy', '-')}"
-        )
-        print(
-            "  LEND dilution: "
-            f"alpha={dilution.get('alpha', '-')} / "
-            f"policy={dilution.get('policy', '-')} / steps={dilution.get('steps', '-')}"
-        )
-        print(
-            "  LEND history: "
-            f"beta={history.get('beta', '-')} / "
-            f"first={history.get('first_observation', '-')}"
-        )
-        print(
-            "  LEND selection: "
-            f"rule={selection.get('rule', '-')} / "
-            f"reduction={selection.get('reduction', '-')} / "
-            f"empty={selection.get('empty_batch', '-')}"
-        )
+    plan = runner.describe(config)
+    print("Configuration preview")
+    print(f"  configuration: {config_path}")
+    print(f"  project root: {project}")
+    print(f"  runner: {plan.runner}")
+    print(f"  method: {plan.method}")
+    print(f"  Training budget: {plan.training_budget}")
+    for field in plan.fields:
+        print(f"  {field.label}: {field.value}")
+    _print_compatibility_result(compatibility)
 
 
 def _doctor(args: argparse.Namespace) -> int:
@@ -366,7 +447,7 @@ def _doctor(args: argparse.Namespace) -> int:
     if config_path:
         try:
             config = resolve_config_paths(load_yaml(config_path), root)
-            runner = validate_config(config, check_data=args.check_data)
+            runner = _validate_with_registry(config, check_data=args.check_data)
             report(True, "配置", f"{config_path} -> {runner.name}")
         except (ImportError, OSError, TypeError, ValueError, RuntimeError) as exc:
             report(False, "配置", str(exc))
@@ -374,11 +455,28 @@ def _doctor(args: argparse.Namespace) -> int:
 
 
 def _list_experiments(args: argparse.Namespace) -> int:
-    recipes = discover_recipes(include_conditional=args.include_conditional)
+    recipes = discover_recipes(
+        include_conditional=args.include_conditional,
+        public_only=not args.all_recipes,
+    )
     if args.profile:
         recipes = tuple(item for item in recipes if item.profile == args.profile)
     if args.dataset:
         recipes = tuple(item for item in recipes if item.dataset.lower() == args.dataset.lower())
+    if args.format == "json":
+        print(json.dumps([
+            {
+                "recipe": item.id,
+                "profile": item.profile,
+                "dataset": item.dataset,
+                "noise": item.noise,
+                "method": item.method,
+                "runner": item.runner,
+                "epochs": item.epochs,
+            }
+            for item in recipes
+        ], ensure_ascii=False))
+        return 0
     if args.format == "tsv":
         print("recipe\tprofile\tdataset\tnoise\tmethod\trunner\tepochs")
         for item in recipes:
@@ -427,6 +525,17 @@ def _list_components(args: argparse.Namespace) -> int:
     values = catalog.find(kind=args.kind) if args.kind else catalog.find()
     if not values:
         raise ValueError(f"no components found for kind {args.kind!r}")
+    if args.format == "json":
+        print(json.dumps([
+            {
+                "kind": item.kind,
+                "name": item.name,
+                "capabilities": sorted(item.capabilities),
+                "paper": item.metadata.get("paper"),
+            }
+            for item in values
+        ], ensure_ascii=False))
+        return 0
     if args.format == "tsv":
         print("kind\tname\tcapabilities\tpaper")
         for item in values:
@@ -454,48 +563,297 @@ def _list_components(args: argparse.Namespace) -> int:
 
 def _validate(args: argparse.Namespace) -> int:
     config, path, _recipe, project = _load_source(args)
-    runner = validate_config(config, check_data=args.check_data)
+    service = ExperimentService()
+    runner = service.preflight(config, check_data=args.check_data)
     print(f"配置有效: {path}")
     print(f"执行器: {runner.name}")
     print(f"项目根目录: {project}")
+    _print_compatibility_result(service.last_compatibility)
     return 0
 
 
 def _run(args: argparse.Namespace) -> int:
-    config, path, _recipe, project = _load_source(args)
+    config, path, recipe, project = _load_source(args)
+    config = apply_override_assignments(config, args.overrides)
     if args.epochs is not None:
         apply_epoch_override(config, args.epochs)
-    validate_config(config, check_data=args.check_data)
+    if args.no_check_data and not args.dry_run:
+        raise ValueError("--no-check-data is only valid together with --dry-run")
+    service = ExperimentService()
+    service.preflight(config, check_data=_should_check_data(args))
     if args.dry_run:
-        _print_plan(config, path, project)
+        _print_plan(config, path, project, service.last_compatibility)
         return 0
-    from lnl_toolbox.training.experiment import run_experiment
-
-    result = run_experiment(config, args.output_dir, args.resume)
+    result = service.run(
+        config,
+        args.output_dir,
+        args.resume,
+        recipe=recipe.id if recipe is not None else None,
+    )
     print(f"运行完成: {result}")
     return 0
 
 
 def _resume(args: argparse.Namespace) -> int:
-    run_dir = args.run_dir.expanduser().resolve()
-    config_path = run_dir / "resolved_config.yaml"
-    if not config_path.is_file():
-        raise ValueError(f"run directory is missing resolved_config.yaml: {run_dir}")
-    checkpoint = run_dir / f"{args.checkpoint}.pt"
-    if not checkpoint.is_file():
-        raise ValueError(f"checkpoint does not exist: {checkpoint}")
-    config = load_yaml(config_path)
-    validate_config(config)
-    from lnl_toolbox.training.experiment import run_experiment
-
-    result = run_experiment(config, run_dir, checkpoint)
-    print(f"恢复完成: {result}")
+    result = ExperimentService().resume(args.run_dir, args.checkpoint)
+    print(f"resume complete: {result}")
     return 0
+
+
+def _sweep(args: argparse.Namespace) -> int:
+    if args.source == "status":
+        if args.status_path is None:
+            raise ValueError("provide a sweep directory after 'lnl sweep status'")
+        if args.seeds or args.matrix or args.overrides or args.output_dir or args.dry_run:
+            raise ValueError("sweep status cannot be combined with planning options")
+        value = sweep_status(args.status_path)
+        if getattr(args, "format", "human") == "json":
+            print(json.dumps(value, ensure_ascii=False))
+            return 0
+        print("Sweep")
+        print(f"  ID: {value['sweep_id']}")
+        print(f"  Path: {value['root']}")
+        print("\nStatus")
+        for status in ("completed", "running", "failed", "interrupted", "pending"):
+            print(f"  {status:<12} {value['counts'][status]}")
+        print(f"\nProgress\n  {value['completed']} / {value['total']} completed")
+        if value["failed_runs"]:
+            print("\nFAILED RUNS")
+            for item in value["failed_runs"]:
+                overrides = " ".join(
+                    f"{path}={entry}" for path, entry in item["overrides"].items()
+                ) or "-"
+                print(f"  seed={item['seed']} {overrides} reason={item['reason']}")
+        return 0
+    if args.status_path is not None:
+        raise ValueError("unexpected extra sweep path; use 'lnl sweep status <path>'")
+    config, _path, recipe, _project, seeds, matrix = _load_sweep_source(args)
+    cli_matrix = _parse_sweep_matrix(args.matrix)
+    duplicates = sorted(set(matrix).intersection(cli_matrix))
+    if duplicates:
+        raise ValueError(
+            "sweep matrix path is defined in YAML and CLI: " + ", ".join(duplicates)
+        )
+    matrix = {**matrix, **cli_matrix}
+    config = apply_override_assignments(config, args.overrides)
+    if args.no_check_data and not args.dry_run:
+        raise ValueError("--no-check-data is only valid together with --dry-run")
+    plan = plan_sweep(
+        config,
+        seeds,
+        matrix=matrix,
+        output_dir=args.output_dir,
+        recipe=recipe.id if recipe is not None else None,
+    )
+    service = ExperimentService()
+    for planned in plan.runs:
+        service.preflight(
+            resolve_planned_config(config, planned),
+            check_data=not args.no_check_data,
+        )
+    if args.dry_run:
+        _print_sweep_plan(plan)
+        return 0
+    result = run_sweep(
+        config,
+        seeds,
+        matrix=matrix,
+        output_dir=args.output_dir,
+        recipe=recipe.id if recipe is not None else None,
+        service=service,
+    )
+    print(f"sweep: {result.root}")
+    print(
+        f"completed={result.completed} skipped={result.skipped} failed={result.failed}"
+    )
+    return 1 if result.failed else 0
+
+
+def _load_sweep_source(args: argparse.Namespace):
+    source = args.source or args.recipe or args.config
+    if source is None:
+        raise ValueError("provide a recipe name or sweep/experiment YAML path")
+    candidate = Path(source).expanduser()
+    if candidate.is_file() and candidate.suffix.lower() in {".yaml", ".yml"}:
+        value = load_yaml(candidate)
+        if "base" in value or "matrix" in value:
+            if int(value.get("version", 1)) != 1:
+                raise ValueError("sweep spec version must be 1")
+            base = value.get("base")
+            if not isinstance(base, dict):
+                raise ValueError("sweep spec requires a base mapping")
+            choices = [key for key in ("recipe", "config") if base.get(key) is not None]
+            if len(choices) != 1:
+                raise ValueError("sweep base requires exactly one of recipe or config")
+            base_source = str(base[choices[0]])
+            if choices[0] == "config":
+                path = Path(base_source).expanduser()
+                if not path.is_absolute():
+                    base_source = str((candidate.resolve().parent / path).resolve())
+            namespace = argparse.Namespace(
+                source=base_source,
+                recipe=None,
+                config=None,
+                project_root=args.project_root,
+                local_dataset=args.local_dataset,
+            )
+            config, path, recipe, project = _load_source(namespace)
+            configured_seeds = value.get("seeds")
+            seeds = args.seeds if args.seeds is not None else configured_seeds
+            if seeds is None:
+                seeds = [int(config.get("seed", 1))]
+            if not isinstance(seeds, list):
+                raise ValueError("sweep seeds must be a list")
+            matrix = value.get("matrix", {}) or {}
+            if not isinstance(matrix, dict):
+                raise ValueError("sweep matrix must be a mapping")
+            return config, path, recipe, project, seeds, matrix
+    config, path, recipe, project = _load_source(args)
+    seeds = args.seeds if args.seeds is not None else [int(config.get("seed", 1))]
+    return config, path, recipe, project, seeds, {}
+
+
+def _parse_sweep_matrix(assignments: list[str]) -> dict[str, list[Any]]:
+    matrix: dict[str, list[Any]] = {}
+    for assignment in assignments:
+        if "=" not in assignment:
+            raise ValueError(f"matrix assignment must use PATH=JSON_ARRAY: {assignment}")
+        path, encoded = assignment.split("=", 1)
+        path = path.strip()
+        if not path:
+            raise ValueError("sweep matrix path must not be empty")
+        if path in matrix:
+            raise ValueError(f"duplicate sweep matrix path: {path}")
+        try:
+            values = json.loads(encoded)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid JSON array for sweep matrix {path}: {exc.msg}") from exc
+        if not isinstance(values, list):
+            raise ValueError(f"sweep matrix {path} must be a JSON array")
+        if not values:
+            raise ValueError(f"sweep matrix {path} must not be empty")
+        matrix[path] = values
+    return matrix
+
+
+def _print_sweep_plan(plan) -> None:
+    print("Sweep plan")
+    print(f"\nBase:\n  {plan.recipe}")
+    print("\nMatrix:")
+    if plan.matrix:
+        for path, values in plan.matrix:
+            print(f"  {path:<24} {', '.join(map(str, values))}")
+    else:
+        print("  (none)")
+    print(f"\nSeeds:\n  {', '.join(map(str, plan.seeds))}")
+    print(f"\nTotal runs:\n  {len(plan.runs)}")
+    print(f"\nOutput directory:\n  {plan.root}")
+    print("\nRun plan")
+    indexed = list(enumerate(plan.runs, start=1))
+    preview = indexed if len(indexed) <= 20 else indexed[:10]
+    for index, planned in preview:
+        overrides = " ".join(
+            f"{path}={value}" for path, value in planned.overrides
+        )
+        suffix = f" {overrides}" if overrides else ""
+        print(f"  #{index:02d} seed={planned.seed}{suffix}")
+    if len(indexed) > 20:
+        print(f"  ... {len(indexed) - 15} runs omitted ...")
+        for index, planned in indexed[-5:]:
+            overrides = " ".join(
+                f"{path}={value}" for path, value in planned.overrides
+            )
+            suffix = f" {overrides}" if overrides else ""
+            print(f"  #{index:02d} seed={planned.seed}{suffix}")
+
+
+def _compare(args: argparse.Namespace) -> int:
+    comparison = compare_runs(
+        args.path,
+        group_by=_comparison_fields(args.group_by),
+        require_equal=_comparison_fields(args.require_equal),
+        strict=args.strict,
+    )
+    if args.format == "json":
+        print(json.dumps(comparison, ensure_ascii=False))
+        return 1 if args.strict and comparison.get("excluded_runs") else 0
+    grouping = comparison.get("group_by", ["method", "noise.rate", "primary_metric.name"])
+    dimensions = [field for field in grouping if field != "primary_metric.name"]
+    labels = {"noise.rate": "NOISE", "method": "METHOD"}
+    header = [labels.get(field, field.upper()) for field in dimensions]
+    print("\t".join([*header, "METRIC", "N", "MEAN", "STD", "MEDIAN", "MIN", "MAX"]))
+    for row in comparison["summaries"]:
+        group = row.get("group", {})
+        values = [str(group.get(field, row.get(field, "-"))) for field in dimensions]
+        values.extend(
+            [
+                str(row["metric"]),
+                str(row["n"]),
+                f"{row['mean']:.6f}",
+                f"{row['std']:.6f}",
+                f"{row['median']:.6f}",
+                f"{row['min']:.6f}",
+                f"{row['max']:.6f}",
+            ]
+        )
+        print("\t".join(values))
+    print("\nCompatibility")
+    for field, status in comparison.get("compatibility", {}).items():
+        print(f"  {field:<24} {status}")
+    for warning in comparison["warnings"]:
+        print(warning)
+    return 1 if args.strict and comparison.get("excluded_runs") else 0
+
+
+def _report(args: argparse.Namespace) -> int:
+    comparison = compare_runs(
+        args.path,
+        group_by=_comparison_fields(args.group_by),
+        require_equal=_comparison_fields(args.require_equal),
+        strict=args.strict,
+    )
+    output_dir = args.output_dir or args.path
+    for path in write_report(comparison, output_dir).values():
+        print(path)
+    return 1 if args.strict and comparison.get("excluded_runs") else 0
+
+
+def _comparison_fields(values: list[str] | None):
+    if values is None:
+        return None
+    fields = tuple(
+        field.strip()
+        for value in values
+        for field in value.split(",")
+        if field.strip()
+    )
+    if not fields:
+        raise ValueError("comparison field list must not be empty")
+    return fields
 
 
 def _paper_list(args: argparse.Namespace) -> int:
     recipes = {item.id: item for item in discover_recipes(include_conditional=True)}
     papers = load_papers()
+    if args.format == "json":
+        print(json.dumps([
+            {
+                "id": paper.id,
+                "acronym": paper.acronym,
+                "title": paper.title,
+                "venue": paper.venue,
+                "year": paper.year,
+                "profiles": sorted({item.profile for item in paper.configs}),
+                "fidelity": sorted({item.configuration_fidelity for item in paper.configs}),
+                "runners": sorted({recipes[item.recipe_id].runner for item in paper.configs}),
+                "recommended": next(
+                    (item.recipe_id for item in paper.configs if item.profile == "smoke"),
+                    paper.configs[0].recipe_id if paper.configs else None,
+                ),
+            }
+            for paper in papers
+        ], ensure_ascii=False))
+        return 0
     if args.format == "tsv":
         print("id\tacronym\ttitle\tvenue\tyear\tprofiles\tfidelity\trunners\trecommended")
         for paper in papers:
@@ -695,34 +1053,297 @@ def _compose_check(args: argparse.Namespace) -> int:
 def _compose_create(args: argparse.Namespace) -> int:
     root = args.project_root.expanduser().resolve() if args.project_root else None
     recipe = recipe_by_id(args.base, root)
-    if recipe.runner != "supervised":
+    override_values = (
+        args.loss,
+        args.selector,
+        args.keep_rate,
+        args.parameter_update,
+        args.milestones,
+        args.gamma,
+        args.cdr_noise_rate,
+        args.l1_decay,
+    )
+    has_overrides = any(value is not None for value in override_values)
+    if recipe.runner != "supervised" and has_overrides:
         raise ValueError(
             f"base recipe uses dedicated runner {recipe.runner!r}; "
-            "compose create currently supports supervised recipes only"
+            "paper lifecycle recipes can only be copied without component overrides"
         )
     source = load_yaml(recipe.config_path)
-    composed = apply_overrides(
-        source,
-        loss=args.loss,
-        selector=args.selector,
-        keep_rate=args.keep_rate,
-        parameter_update=args.parameter_update,
-        milestones=args.milestones,
-        gamma=args.gamma,
-        cdr_noise_rate=args.cdr_noise_rate,
-        l1_decay=args.l1_decay,
-    )
     project = find_project_root(recipe.config_path, root)
-    summary = validate_composition(resolve_config_paths(composed, project))
+    if recipe.runner == "supervised":
+        composed = apply_overrides(
+            source,
+            loss=args.loss,
+            selector=args.selector,
+            keep_rate=args.keep_rate,
+            parameter_update=args.parameter_update,
+            milestones=args.milestones,
+            gamma=args.gamma,
+            cdr_noise_rate=args.cdr_noise_rate,
+            l1_decay=args.l1_decay,
+        )
+        summary = validate_composition(resolve_config_paths(composed, project))
+    else:
+        composed = source
+        validate_config(resolve_config_paths(composed, project))
+        summary = None
     destination = write_composed_config(composed, args.output)
     print(f"已生成新配置：{destination}")
     print(f"基础 recipe：{recipe.id}")
-    _print_composition_summary(summary)
+    if summary is not None:
+        _print_composition_summary(summary)
+    else:
+        print(f"论文生命周期：{recipe.runner}（未修改组件）")
     print("原 recipe 未修改；已有目标文件不会被覆盖。")
     print("下一步：")
-    print(f"  lnl compose check --config \"{destination}\"")
+    if summary is not None:
+        print(f"  lnl compose check --config \"{destination}\"")
+    else:
+        print(f"  lnl validate --config \"{destination}\"")
     print(f"  lnl run --config \"{destination}\" --dry-run")
     return 0
+
+
+def _print_local_dataset(record) -> None:
+    print(f"{record.alias}: {record.adapter}")
+    print(f"  state: {record.effective_state}")
+    for key in ("root", "path", "noise_path", "noise_variant"):
+        if record.data.get(key) not in {None, ""}:
+            print(f"  {key}: {record.data[key]}")
+    if record.evidence:
+        if record.evidence.get("run_dir"):
+            print(f"  verification run: {record.evidence['run_dir']}")
+        if record.evidence.get("data_fingerprint"):
+            print(f"  data fingerprint: {record.evidence['data_fingerprint']}")
+    if record.error:
+        print(f"  error: {record.error}")
+
+
+def _print_dataset_report(report: DatasetStatusReport) -> None:
+    print(f"Dataset          {report.name}")
+    print(f"Adapter          {report.adapter}")
+    print(f"Status           {report.status.upper()}")
+    print(f"Location         {report.location or '-'}")
+    if report.train_samples is not None:
+        print(f"Train samples    {report.train_samples}")
+    if report.test_samples is not None:
+        print(f"Test samples     {report.test_samples}")
+    if report.classes is not None:
+        print(f"Classes          {report.classes}")
+    if report.fingerprint:
+        print(f"Fingerprint      {report.fingerprint}")
+    if report.training_evidence:
+        print("Training check   VERIFIED")
+        if report.training_evidence.get("run_dir"):
+            print(f"Verification run {report.training_evidence['run_dir']}")
+    if report.error:
+        print(f"Error            {report.error}")
+
+
+def _print_dataset_profile(report: DatasetStatusReport) -> None:
+    _print_dataset_report(report)
+    profile = report.profile
+    if profile is None:
+        return
+    print(f"Task             {profile.task}")
+    print(f"Modality         {profile.modality.value}")
+    print(f"Input shape      {profile.input_shape or '-'}")
+    print(f"Channels         {profile.channels if profile.channels is not None else '-'}")
+    print(f"Available splits {', '.join(profile.available_splits)}")
+    print("Sample counts    " + json.dumps(dict(profile.sample_counts_by_split), sort_keys=True))
+    print("Class distribution " + json.dumps(dict(profile.class_distribution_by_split), sort_keys=True))
+    print(f"Observed labels  {profile.observed_train_labels.value}")
+    print(f"Clean labels     {profile.clean_train_labels.value}")
+    print(f"Noise status     {profile.noise.status.value}")
+    print(f"Noise origin     {profile.noise.origin.value}")
+    print(f"Noise rate       {profile.noise.rate.status.value}")
+    if profile.noise.rate.value is not None:
+        print(f"Noise rate value {profile.noise.rate.value}")
+    if profile.noise.rate.provenance:
+        print(f"Noise provenance {profile.noise.rate.provenance}")
+    print(f"Stable indices   {profile.stable_indices.value}")
+    print(f"Profile fingerprint {profile.fingerprint}")
+
+
+def _print_dataset_table(reports) -> None:
+    print(f"{'DATASET':<24} {'ADAPTER':<30} {'STATUS':<12} LOCATION")
+    for report in reports:
+        print(
+            f"{report.name:<24} {report.adapter:<30} "
+            f"{report.status:<12} {report.location or '-'}"
+        )
+
+
+def _data_command(args: argparse.Namespace) -> int:
+    service = DEFAULT_DATA_SERVICE
+    if args.data_command == "list":
+        reports = service.list_datasets()
+        if args.format == "json":
+            print(json.dumps([item.to_dict() for item in reports], ensure_ascii=False))
+        else:
+            _print_dataset_table(reports)
+        return 0
+    if args.data_command == "status":
+        if args.format == "json":
+            reports = service.status() if args.name is None else [service.status(args.name)]
+            print(json.dumps([item.to_dict() for item in reports], ensure_ascii=False))
+            return 0
+        if args.name is None:
+            _print_dataset_table(service.status())
+        else:
+            _print_dataset_report(service.status(args.name))
+        return 0
+    if args.data_command == "path":
+        path = service.path(args.name)
+        print("-" if path is None else path)
+        return 0
+    if args.data_command == "show":
+        _print_local_dataset(service.record(args.alias))
+        return 0
+    if args.data_command == "register":
+        adapter = service.registry.get(args.adapter).name
+        data: dict[str, Any] = {"name": adapter}
+        if args.root is not None:
+            data["root"] = args.root
+        if args.path is not None:
+            data["path"] = args.path
+        if args.labels is not None:
+            data["noise_path"] = args.labels
+        if args.noise_variant is not None:
+            data["noise_variant"] = args.noise_variant
+        service.register(args.alias, adapter, data)
+        _print_local_dataset(service.record(args.alias))
+        print("Registration does not prove trainability; run 'lnl data verify'.")
+        return 0
+    if args.data_command == "remove":
+        service.remove(args.alias)
+        print(f"Removed local dataset registration: {args.alias}")
+        return 0
+    if args.data_command == "inspect":
+        report = service.inspect(args.alias)
+        if args.format == "json":
+            print(json.dumps(report.to_dict(), ensure_ascii=False, sort_keys=True))
+        else:
+            _print_dataset_profile(report)
+        if report.status != "ready":
+            return 2
+        if args.format == "human":
+            print("Layout validated; training has not yet been verified.")
+        return 0
+    if args.data_command == "declare":
+        updates: dict[str, Any] = {}
+        for argument, field in (
+            (args.clean_train_labels, "clean_train_labels"),
+            (args.noise_status, "noise_status"),
+            (args.noise_origin, "noise_origin"),
+            (args.noise_manifest, "noise_manifest"),
+            (args.clean_labels_location, "clean_labels_location"),
+            (args.clean_labels_provenance, "clean_labels_provenance"),
+            (args.notes, "semantic_notes"),
+        ):
+            if argument is not None:
+                updates[field] = argument
+        if args.noise_rate is not None or args.noise_rate_status is not None:
+            status = args.noise_rate_status or "known"
+            updates["noise_rate"] = NoiseRateInfo(
+                NoiseRateStatus(status),
+                args.noise_rate,
+                args.noise_rate_provenance,
+            ).to_dict()
+        elif args.noise_rate_provenance is not None:
+            raise ValueError("--noise-rate-provenance requires --noise-rate")
+        if not updates:
+            raise ValueError("provide at least one dataset declaration")
+        capabilities = service.update_declarations(args.alias, updates)
+        print(f"Declarations updated: {args.alias}")
+        print(f"  clean train labels: {capabilities.clean_train_labels.value}")
+        print(f"  noise status: {capabilities.noise_status.value}")
+        print(f"  noise origin: {capabilities.noise_origin.value}")
+        print(f"  noise rate: {capabilities.noise_rate.status.value}")
+        return 0
+    if args.data_command == "verify":
+        record = service.record(args.alias)
+        root = args.project_root.expanduser().resolve() if args.project_root else None
+        project = find_project_root(None, root)
+        config = None
+        recipe = None
+        if args.recipe:
+            recipe = recipe_by_id(args.recipe, root)
+            config = resolve_config_paths(load_recipe_config(recipe), project)
+            config = service.apply(config, args.alias)
+            runner = resolve_runner(config)
+            if runner.budget_path is None and "epochs" in config:
+                # Internal verification accepts an unambiguous legacy top-level
+                # budget even when the public --epochs shortcut is intentionally
+                # disabled for that runner.
+                config["epochs"] = 1
+            else:
+                apply_epoch_override(config, 1)
+        destination = args.output_dir or (
+            project / "artifacts" / "data-verification"
+            / f"{record.alias}-{record.signature[:8]}"
+        )
+        report, _run_dir = service.verify(
+            args.alias,
+            config,
+            destination,
+            recipe=None if recipe is None else recipe.id,
+        )
+        _print_dataset_report(report)
+        profile = "automatic dataset profile" if recipe is None else f"recipe {recipe.id}"
+        print(f"Training verified by a completed one-epoch run ({profile}).")
+        return 0
+    raise ValueError(f"unknown data command: {args.data_command}")
+
+
+def _methods_command(args: argparse.Namespace) -> int:
+    if args.methods_command != "compatible":
+        raise ValueError(f"unknown methods command: {args.methods_command}")
+    results = ExperimentService().list_compatible_methods(
+        args.dataset,
+        method_noise_rate_prior=args.noise_rate_prior,
+    )
+    if args.format == "json":
+        print(json.dumps([item.to_dict() for item in results], ensure_ascii=False))
+        return 0
+    print(f"Dataset: {args.dataset}")
+    labels = (
+        (CompatibilityStatus.COMPATIBLE, "Compatible"),
+        (CompatibilityStatus.COMPATIBLE_WITH_REQUIREMENTS, "Requires additional input"),
+        (CompatibilityStatus.INCOMPATIBLE, "Unavailable"),
+    )
+    for status, label in labels:
+        print(f"\n{label}:")
+        members = [item for item in results if item.status is status]
+        if not members:
+            print("  -")
+            continue
+        for result in members:
+            print(f"  {result.method}")
+            for reason in result.reasons:
+                print(f"    {reason.code}: {reason.message}")
+            for required in result.required_user_inputs:
+                print(f"    required: {required}")
+    return 0
+
+
+def _web(args: argparse.Namespace) -> int:
+    root = find_project_root(None, args.project_root)
+    server = root / "web" / "command_console.py"
+    if not server.is_file():
+        raise FileNotFoundError(f"Web UI server does not exist: {server}")
+    command = [
+        sys.executable,
+        str(server),
+        "--host",
+        args.host,
+        "--port",
+        str(args.port),
+    ]
+    if not args.no_open:
+        command.append("--open")
+    return int(subprocess.call(command, cwd=root))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -739,6 +1360,18 @@ def main(argv: list[str] | None = None) -> int:
             return _run(args)
         if args.command == "resume":
             return _resume(args)
+        if args.command == "data":
+            return _data_command(args)
+        if args.command == "methods":
+            return _methods_command(args)
+        if args.command == "web":
+            return _web(args)
+        if args.command == "sweep":
+            return _sweep(args)
+        if args.command == "compare":
+            return _compare(args)
+        if args.command == "report":
+            return _report(args)
         if args.command == "compose":
             if args.compose_command == "list":
                 return _compose_list(args)

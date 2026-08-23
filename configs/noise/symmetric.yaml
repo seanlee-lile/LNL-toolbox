@@ -1,4 +1,5 @@
+schema_version: 1
+kind: fragment
 name: symmetric
 rate: 0.4
 seed: 1
-

@@ -495,3 +495,11 @@ Per the project's practical acceptance rule (code/math path aligned, training ef
 - **CDR**: incomplete; the aligned paper-scale run and result comparison are still pending.
 
 This section is the current authoritative override for older historical rows in this document. VolMinNet, UPM, and LEND are completed following their source/equation alignment pass.
+
+## Release/user-ready contract update (2026-08-16)
+
+- Algorithm engineering acceptance and unified source-checkout CLI acceptance are complete; this does not change historical numerical-reproduction claims above.
+- `cifar10-pcse-reproduction` is conditional because it consumes an immutable, identity-pinned UPM `main_best` checkpoint and noise manifest. Missing or mismatched source provenance now fails during `validate` and dry-run, before training.
+- The real UCI Statlog Heart Importance Reweighting workflow is available as an engineering/paper-oriented run; it is not the paper's full UCI table or cross-validation reproduction.
+- Wheel and sdist release gates require every explicit recipe-catalog path to be packaged and exercise installed recipe discovery. VolMinNet smoke is included in that exhaustive contract.
+- `implementation_status`, `configuration_fidelity`, `reproduction_status`, and `availability` remain separate; a user-ready or paper-oriented workflow is not automatically a completed paper-exact numerical reproduction.

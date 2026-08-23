@@ -1,0 +1,27 @@
+variant: hard
+hard_fidelity: paper_formula_corrected_lof
+model_count: 2
+noise_rate: 0.4
+initialization:
+  peer_seed_offset: 1
+remember_schedule:
+  name: linear
+  start: 1.0
+  end: 0.6
+  gradual_epochs: 10
+history:
+  window_size: 7
+  storage_dtype: float32
+uncertainty:
+  tau_min: 0.0001
+  loss_upper_bound:
+    mode: fixed
+    value: 10.0
+truncation:
+  method: lof
+  n_neighbors: 2
+  contamination: 0.1
+  minimum_observations: 5
+selection:
+  count_rule: floor
+  tie_break: stable_sample_index

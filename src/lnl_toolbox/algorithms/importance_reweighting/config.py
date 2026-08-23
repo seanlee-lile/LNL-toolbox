@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+from pathlib import Path
+import re
 from typing import Any, Mapping
 
 
@@ -26,6 +28,7 @@ class ImportanceReweightingConfig:
     scheduler: Mapping[str, Any]
     loader: Mapping[str, Any]
     trainer: Mapping[str, Any]
+    diagnostics: Mapping[str, Any]
     epochs: int
     seed: int
 
@@ -59,10 +62,11 @@ class ImportanceReweightingConfig:
         if data_name not in {
             "synthetic_binary_2d",
             "synthetic_binary_high_dim",
+            "uci_statlog_heart",
         }:
             raise ValueError(
-                "importance reweighting first version only supports "
-                "synthetic_binary_2d or synthetic_binary_high_dim"
+                "importance reweighting supports synthetic_binary_2d, "
+                "synthetic_binary_high_dim, or uci_statlog_heart"
             )
         dimension = int(data.get("dimension", 2))
         if data_name == "synthetic_binary_2d" and dimension != 2:
@@ -71,11 +75,78 @@ class ImportanceReweightingConfig:
             raise ValueError(
                 "synthetic_binary_high_dim requires data.dimension greater than 2"
             )
+        if data_name == "uci_statlog_heart":
+            if dimension != 13:
+                raise ValueError("uci_statlog_heart requires data.dimension: 13")
+            source = str(data.get("path", "")).strip()
+            if not source:
+                raise ValueError("uci_statlog_heart requires data.path")
+            data["path"] = str(Path(source))
+            sha256 = str(data.get("sha256", "")).strip().lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", sha256):
+                raise ValueError(
+                    "uci_statlog_heart requires a 64-character data.sha256"
+                )
+            data["sha256"] = sha256
+            expected_samples = int(data.get("expected_samples", 0))
+            if expected_samples < 6:
+                raise ValueError(
+                    "uci_statlog_heart data.expected_samples must be at least 6"
+                )
+            data["expected_samples"] = expected_samples
+            split = _mapping(data.get("split"), owner="data.split")
+            validation_fraction = float(split.get("validation_fraction", 0.0))
+            test_fraction = float(split.get("test_fraction", 0.0))
+            if (
+                not math.isfinite(validation_fraction)
+                or not math.isfinite(test_fraction)
+                or validation_fraction <= 0.0
+                or test_fraction <= 0.0
+                or validation_fraction + test_fraction >= 1.0
+            ):
+                raise ValueError(
+                    "UCI validation/test fractions must be positive and sum to less than 1"
+                )
+            split.update({
+                "seed": int(split.get("seed", value.get("seed", 1))),
+                "validation_fraction": validation_fraction,
+                "test_fraction": test_fraction,
+            })
+            data["split"] = split
+            preprocessing = _mapping(
+                data.get("preprocessing"), owner="data.preprocessing"
+            )
+            if str(preprocessing.get("format", "")).strip().lower() != "whitespace":
+                raise ValueError(
+                    "uci_statlog_heart requires whitespace preprocessing"
+                )
+            labels = tuple(str(item) for item in preprocessing.get("label_values", ()))
+            if labels != ("1", "2"):
+                raise ValueError(
+                    "uci_statlog_heart label_values must map 1 -> 0 and 2 -> 1"
+                )
+            preprocessing["label_values"] = labels
+            data["preprocessing"] = preprocessing
+            schema = _mapping(data.get("schema"), owner="data.schema")
+            feature_columns = schema.get("feature_columns")
+            if (
+                not isinstance(feature_columns, list)
+                or len(feature_columns) != 13
+                or any(not str(name).strip() for name in feature_columns)
+                or len({str(name) for name in feature_columns}) != 13
+                or str(schema.get("target", "")).strip() != "heart_disease"
+            ):
+                raise ValueError(
+                    "uci_statlog_heart schema requires 13 unique features and "
+                    "target: heart_disease"
+                )
+            data["schema"] = schema
         data["dimension"] = dimension
-        for name in ("train_size", "validation_size", "test_size"):
-            size = int(data.get(name, 0))
-            if size < 2 or size % 2:
-                raise ValueError(f"data.{name} must be a positive even integer")
+        if data_name != "uci_statlog_heart":
+            for name in ("train_size", "validation_size", "test_size"):
+                size = int(data.get(name, 0))
+                if size < 2 or size % 2:
+                    raise ValueError(f"data.{name} must be a positive even integer")
 
         noise = _mapping(value.get("noise"), owner="noise")
         if str(noise.get("name", "")).strip().lower() != "binary_asymmetric_rcn":
@@ -175,6 +246,14 @@ class ImportanceReweightingConfig:
         epochs = int(trainer.get("epochs", 0))
         if epochs <= 0:
             raise ValueError("trainer.epochs must be positive")
+        diagnostics = _mapping(
+            value.get("diagnostics", {"max_gradient_norm": 1.0e6}),
+            owner="diagnostics",
+        )
+        max_gradient_norm = float(diagnostics.get("max_gradient_norm", 1.0e6))
+        if not math.isfinite(max_gradient_norm) or max_gradient_norm <= 0.0:
+            raise ValueError("diagnostics.max_gradient_norm must be positive")
+        diagnostics["max_gradient_norm"] = max_gradient_norm
         evaluation = _mapping(
             value.get("evaluation", {"selection_split": "validation"}),
             owner="evaluation",
@@ -195,6 +274,7 @@ class ImportanceReweightingConfig:
             scheduler=scheduler,
             loader=loader,
             trainer=trainer,
+            diagnostics=diagnostics,
             epochs=epochs,
             seed=int(value.get("seed", 1)),
         )

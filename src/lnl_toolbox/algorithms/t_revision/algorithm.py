@@ -445,6 +445,26 @@ class TRevisionAlgorithm:
             return None
         return float(np.abs(values - self.diagnostic_transition).sum() / denominator)
 
+    @staticmethod
+    def _matrix_diagnostics(
+        matrix: np.ndarray | Tensor, *, prefix: str
+    ) -> dict[str, Any]:
+        values = (
+            matrix.detach().cpu().numpy()
+            if torch.is_tensor(matrix)
+            else np.asarray(matrix, dtype=np.float64)
+        )
+        off_diagonal = values[~np.eye(values.shape[0], dtype=bool)]
+        return {
+            f"{prefix}_min": float(values.min()),
+            f"{prefix}_max": float(values.max()),
+            f"{prefix}_row_sums": values.sum(axis=1).tolist(),
+            f"{prefix}_negative_entry_count": int((values < 0.0).sum()),
+            f"{prefix}_diagonal": np.diag(values).tolist(),
+            f"{prefix}_off_diagonal_min": float(off_diagonal.min()),
+            f"{prefix}_off_diagonal_max": float(off_diagonal.max()),
+        }
+
     def train_stage1(self, *, max_epochs: int | None = None) -> None:
         if self.state.phase is not TRevisionPhase.STAGE1_TRAINING:
             raise ValueError("stage1 training is not active")
@@ -554,6 +574,8 @@ class TRevisionAlgorithm:
         self.state.snapshot_hash = persisted_snapshot.snapshot_hash
         self.state.initial_transition_hash = persisted_transition.artifact_hash
         self.state.advance(TRevisionPhase.TRANSITION_INITIALIZED)
+        posterior_probabilities = persisted_snapshot.noisy_probabilities
+        posterior_row_sums = posterior_probabilities.sum(axis=1)
         transition_metrics = {
             "event": "transition_initialization",
             "stage": "transition_initialization",
@@ -561,11 +583,24 @@ class TRevisionAlgorithm:
             "transition_initial_hash": self.state.initial_transition_hash,
             "pseudo_anchor_indices": persisted_transition.metadata["anchor_global_indices"],
             "pseudo_anchor_scores": persisted_transition.metadata["anchor_scores"],
+            "posterior_finite_count": int(np.isfinite(posterior_probabilities).sum()),
+            "posterior_value_count": int(posterior_probabilities.size),
+            "posterior_min": float(posterior_probabilities.min()),
+            "posterior_mean": float(posterior_probabilities.mean()),
+            "posterior_max": float(posterior_probabilities.max()),
+            "posterior_row_sum_max_error": float(
+                np.abs(posterior_row_sums - 1.0).max()
+            ),
+            "posterior_classwise_max": posterior_probabilities.max(axis=0).tolist(),
+            "initial_transition": persisted_transition.matrix.tolist(),
             "row_sums": persisted_transition.matrix.sum(axis=1).tolist(),
             "minimum": float(persisted_transition.matrix.min()),
             "maximum": float(persisted_transition.matrix.max()),
             "diagonal": np.diag(persisted_transition.matrix).tolist(),
             "condition_number": float(np.linalg.cond(persisted_transition.matrix)),
+            **self._matrix_diagnostics(
+                persisted_transition.matrix, prefix="initial_transition"
+            ),
         }
         true_error = self._diagnostic_relative_l1(persisted_transition.matrix)
         if true_error is not None:
@@ -593,10 +628,36 @@ class TRevisionAlgorithm:
             device=self.device, dtype=next(self.model.parameters()).dtype
         )
 
-    def _train_reweight_epoch(self, transition_provider: Callable[[], Tensor]) -> dict[str, float]:
+    def _train_reweight_epoch(
+        self,
+        transition_provider: Callable[[], Tensor],
+        *,
+        detach_ratio: bool,
+    ) -> dict[str, float | int | bool]:
         self.model.train()
         totals: dict[str, float] = {}
         sample_count = 0
+        optimizer_steps = 0
+        gradient_norm_sum = 0.0
+        gradient_norm_max = 0.0
+        sample_weights: list[Tensor] = []
+        sample_denominators: list[Tensor] = []
+        optimized_parameters = [
+            parameter
+            for group in self.optimizer.param_groups
+            for parameter in group["params"]
+            if parameter.requires_grad
+        ]
+        parameter_ids = [id(parameter) for parameter in optimized_parameters]
+        if len(parameter_ids) != len(set(parameter_ids)):
+            raise ValueError("T-Revision optimizer contains duplicate parameters")
+        starting_parameters = [
+            parameter.detach().clone() for parameter in optimized_parameters
+        ]
+        starting_norm_squared = sum(
+            float(value.double().square().sum().item())
+            for value in starting_parameters
+        )
         for raw_batch in self.train_loader:
             batch = Batch(raw_batch)
             inputs = batch.payload["input"].to(self.device, non_blocking=True)
@@ -607,10 +668,24 @@ class TRevisionAlgorithm:
                 targets,
                 transition_provider(),
                 denominator_floor=self.method_config.denominator_floor,
+                detach_ratio=detach_ratio,
             )
             self.optimizer.zero_grad(set_to_none=True)
             result.objective.backward()
+            gradient_norm_squared = sum(
+                float(parameter.grad.detach().double().square().sum().item())
+                for parameter in optimized_parameters
+                if parameter.grad is not None
+            )
+            gradient_norm = float(np.sqrt(gradient_norm_squared))
+            if not np.isfinite(gradient_norm):
+                raise ValueError("T-Revision gradient norm must be finite")
+            gradient_norm_sum += gradient_norm
+            gradient_norm_max = max(gradient_norm_max, gradient_norm)
             self.optimizer.step()
+            optimizer_steps += 1
+            sample_weights.append(result.sample_weights.cpu())
+            sample_denominators.append(result.sample_denominators.cpu())
             count = int(targets.numel())
             sample_count += count
             for name, value in result.metrics.items():
@@ -618,7 +693,80 @@ class TRevisionAlgorithm:
             self.run_state.step += 1
         if sample_count == 0:
             raise RuntimeError("T-Revision training loader is empty")
-        return {name: value / sample_count for name, value in totals.items()}
+        if optimizer_steps == 0:
+            raise RuntimeError("T-Revision optimizer did not perform any steps")
+        ending_norm_squared = sum(
+            float(parameter.detach().double().square().sum().item())
+            for parameter in optimized_parameters
+        )
+        update_norm_squared = sum(
+            float(
+                (parameter.detach() - starting)
+                .double()
+                .square()
+                .sum()
+                .item()
+            )
+            for parameter, starting in zip(
+                optimized_parameters, starting_parameters, strict=True
+            )
+        )
+        parameter_norm = float(np.sqrt(ending_norm_squared))
+        update_norm = float(np.sqrt(update_norm_squared))
+        relative_update_norm = update_norm / max(
+            float(np.sqrt(starting_norm_squared)), np.finfo(np.float64).tiny
+        )
+        if not all(
+            np.isfinite(value)
+            for value in (parameter_norm, update_norm, relative_update_norm)
+        ):
+            raise ValueError("T-Revision parameter/update diagnostics must be finite")
+
+        weights = torch.cat(sample_weights).to(dtype=torch.float64)
+        denominators = torch.cat(sample_denominators).to(dtype=torch.float64)
+        finite_weights = torch.isfinite(weights)
+        nonfinite_count = int((~finite_weights).sum().item())
+        if nonfinite_count:
+            raise ValueError("T-Revision epoch weights must be finite")
+        weight_sum = float(weights.sum().item())
+        weight_square_sum = float(weights.square().sum().item())
+        ess = (
+            weight_sum * weight_sum / weight_square_sum
+            if weight_square_sum > 0.0
+            else 0.0
+        )
+        quantiles = torch.quantile(
+            weights, torch.tensor([0.50, 0.90, 0.95, 0.99], dtype=torch.float64)
+        )
+        metrics: dict[str, float | int | bool] = {
+            name: value / sample_count for name, value in totals.items()
+        }
+        metrics.update(
+            {
+                "weight_min": float(weights.min().item()),
+                "weight_mean": float(weights.mean().item()),
+                "weight_p50": float(quantiles[0].item()),
+                "weight_p90": float(quantiles[1].item()),
+                "weight_p95": float(quantiles[2].item()),
+                "weight_p99": float(quantiles[3].item()),
+                "weight_max": float(weights.max().item()),
+                "weight_zero_count": int((weights == 0).sum().item()),
+                "weight_negative_count": int((weights < 0).sum().item()),
+                "weight_nonfinite_count": nonfinite_count,
+                "weight_ess": float(ess),
+                "weight_ess_fraction": float(ess / sample_count),
+                "denominator_min": float(denominators.min().item()),
+                "gradient_norm": float(gradient_norm_sum / optimizer_steps),
+                "gradient_norm_max": float(gradient_norm_max),
+                "parameter_norm": parameter_norm,
+                "update_norm": update_norm,
+                "relative_update_norm": float(relative_update_norm),
+                "optimizer_step_count": optimizer_steps,
+                "optimized_parameter_count": len(optimized_parameters),
+                "nan_or_inf": False,
+            }
+        )
+        return metrics
 
     def _evaluate_noisy(self, transition: Tensor) -> dict[str, float]:
         self.model.eval()
@@ -655,7 +803,9 @@ class TRevisionAlgorithm:
             epoch = self.state.stage2a_completed_epochs
             self._seed_train_loader(20_000, epoch)
             learning_rate = float(self.optimizer.param_groups[0]["lr"])
-            train = self._train_reweight_epoch(lambda: transition)
+            train = self._train_reweight_epoch(
+                lambda: transition, detach_ratio=True
+            )
             validation = self._evaluate_noisy(transition)
             if self.scheduler is not None:
                 self.scheduler.step()
@@ -673,6 +823,10 @@ class TRevisionAlgorithm:
                 "revised_noisy_validation_loss": validation["loss"],
                 "revised_noisy_validation_accuracy": validation["accuracy"],
                 "best_epoch": self.state.stage2a_best_epoch + 1,
+                "initial_transition": self.initial_transition.matrix.tolist(),
+                **self._matrix_diagnostics(
+                    self.initial_transition.matrix, prefix="initial_transition"
+                ),
             }
             true_error = self._diagnostic_relative_l1(transition)
             if true_error is not None:
@@ -708,7 +862,9 @@ class TRevisionAlgorithm:
             epoch = self.state.revision_completed_epochs
             self._seed_train_loader(30_000, epoch)
             learning_rate = float(self.optimizer.param_groups[0]["lr"])
-            train = self._train_reweight_epoch(self.revision)
+            train = self._train_reweight_epoch(
+                self.revision, detach_ratio=False
+            )
             transition = self.revision()
             validation = self._evaluate_noisy(transition)
             if self.scheduler is not None:
@@ -732,6 +888,18 @@ class TRevisionAlgorithm:
                 "revised_noisy_validation_loss": validation["loss"],
                 "revised_noisy_validation_accuracy": validation["accuracy"],
                 **self.revision.diagnostics(),
+                "initial_transition": self.initial_transition.matrix.tolist(),
+                "delta_transition": self.revision.delta.detach().cpu().tolist(),
+                "revised_transition": transition.detach().cpu().tolist(),
+                **self._matrix_diagnostics(
+                    self.initial_transition.matrix, prefix="initial_transition"
+                ),
+                **self._matrix_diagnostics(
+                    self.revision.delta, prefix="delta_transition"
+                ),
+                **self._matrix_diagnostics(
+                    transition, prefix="revised_transition"
+                ),
             }
             true_error = self._diagnostic_relative_l1(transition)
             if true_error is not None:
@@ -855,6 +1023,10 @@ class TRevisionAlgorithm:
         true_error = self._diagnostic_relative_l1(persisted.revised_transition)
         if true_error is not None:
             final["true_T_relative_L1_error"] = true_error
+            final["initial_true_T_relative_L1_error"] = (
+                self._diagnostic_relative_l1(self.initial_transition.matrix)
+            )
+            final["revised_true_T_relative_L1_error"] = true_error
         self._append_metrics(final)
         final_path = self.run_dir / "final_metrics.json"
         temporary_final = final_path.with_suffix(".json.tmp")

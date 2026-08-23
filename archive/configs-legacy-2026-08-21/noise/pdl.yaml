@@ -1,0 +1,4 @@
+name: pdl
+rate: 0.4
+seed: 1
+manifest_filename: noise_manifest.npz

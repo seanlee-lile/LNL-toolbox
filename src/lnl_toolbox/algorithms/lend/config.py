@@ -39,16 +39,16 @@ class LENDConfig:
             raise ValueError("LEND requires method: lend")
         values = _mapping(config.get("lend"), "lend configuration")
         graph = _mapping(values.get("graph"), "lend.graph")
-        required_graph = {
-            "k", "gamma", "metric", "normalize_features", "zero_degree_policy"
-        }
+        required_graph = {"k", "gamma", "metric", "normalize_features"}
         if set(graph) != required_graph:
-            raise ValueError("lend.graph requires k/gamma/metric/normalize_features/zero_degree_policy")
+            raise ValueError("lend.graph requires k/gamma/metric/normalize_features")
         k = int(graph["k"])
         gamma = float(graph["gamma"])
         metric = str(graph["metric"]).strip().lower()
         normalize_features = graph["normalize_features"]
-        zero_degree_policy = str(graph["zero_degree_policy"]).strip().lower()
+        # Zero degree is a valid boundary of a sparse directed kNN graph.  It
+        # has one fixed normalization meaning rather than a user-tunable policy.
+        zero_degree_policy = "zero_inverse"
         if k < 1:
             raise ValueError("lend.graph.k must be at least one")
         if not math.isfinite(gamma) or gamma <= 0:
@@ -57,9 +57,6 @@ class LENDConfig:
             raise ValueError("lend.graph.metric must be inner_product, cosine, or euclidean")
         if type(normalize_features) is not bool:
             raise TypeError("lend.graph.normalize_features must be boolean")
-        if zero_degree_policy != "error":
-            raise ValueError("LEND first version requires zero_degree_policy: error")
-
         dilution = _mapping(values.get("dilution"), "lend.dilution")
         if set(dilution) != {"alpha", "policy", "steps"}:
             raise ValueError("lend.dilution requires alpha/policy/steps")
@@ -89,8 +86,8 @@ class LENDConfig:
         empty = str(selection["empty_batch"]).strip().lower()
         if rule != "noisy_equals_diluted_argmax":
             raise ValueError("unsupported LEND selection rule")
-        if reduction != "paper_sum":
-            raise ValueError("LEND first version requires paper_sum reduction")
+        if reduction != "batch_mean":
+            raise ValueError("LEND requires batch_mean reduction")
         if empty != "skip_update":
             raise ValueError("LEND first version requires empty_batch: skip_update")
         training = _mapping(values.get("training"), "lend.training")

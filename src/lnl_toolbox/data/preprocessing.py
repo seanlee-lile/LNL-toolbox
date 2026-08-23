@@ -269,6 +269,27 @@ class BinaryPreprocessor:
             str(value): index for index, value in enumerate(labels)
         }
 
+    def read_targets(self, path: str | Path) -> np.ndarray:
+        """Read only target values for split construction, without fitting features."""
+
+        rows, file_format = self._read_rows(path)
+        rows, header = self._drop_header(rows, self.config.has_header)
+        target_column = (
+            0
+            if file_format == "libsvm" and self.config.target_column == -1
+            else self._resolve_target_column(header)
+        )
+        observed = [str(row[target_column]).strip() for row in rows]
+        labels = (
+            _stable_unique(observed)
+            if self.config.label_values is None
+            else list(self.config.label_values)
+        )
+        if len(labels) != 2 or set(labels) != set(observed):
+            raise ValueError("binary targets must contain exactly the configured labels")
+        mapping = {str(label): index for index, label in enumerate(labels)}
+        return np.asarray([mapping[value] for value in observed], dtype=np.int64)
+
     def _fit_columns(
         self,
         rows: Sequence[Sequence[str]],
@@ -408,12 +429,47 @@ class BinaryPreprocessor:
             )
         return result, labels
 
-    def fit(self, path: str | Path) -> "BinaryPreprocessor":
+    @staticmethod
+    def _select_rows(
+        rows: Sequence[Sequence[str]],
+        row_indices: Sequence[int] | np.ndarray | None,
+        *,
+        owner: str,
+    ) -> list[list[str]]:
+        materialized = [list(row) for row in rows]
+        if row_indices is None:
+            return materialized
+        indices = np.asarray(row_indices)
+        if (
+            indices.ndim != 1
+            or indices.size == 0
+            or not np.issubdtype(indices.dtype, np.integer)
+        ):
+            raise ValueError(f"{owner} row indices must be non-empty integers")
+        indices = indices.astype(np.int64, copy=False)
+        if (
+            indices.min() < 0
+            or indices.max() >= len(materialized)
+            or np.unique(indices).size != indices.size
+        ):
+            raise ValueError(
+                f"{owner} row indices must be unique and within the source file"
+            )
+        return [materialized[int(index)] for index in indices]
+
+    def fit(
+        self,
+        path: str | Path,
+        *,
+        row_indices: Sequence[int] | np.ndarray | None = None,
+    ) -> "BinaryPreprocessor":
         rows, file_format = self._read_rows(path)
         rows, header = self._drop_header(
             rows,
             self.config.has_header,
         )
+        source_rows = rows
+        rows = self._select_rows(rows, row_indices, owner="fit")
         target_column = (
             0
             if file_format == "libsvm"
@@ -437,7 +493,7 @@ class BinaryPreprocessor:
         self.target_column_index = target_column
         self.feature_columns = feature_columns
         self.fitted = True
-        self.source_fingerprint = self._fingerprint(rows, header)
+        self.source_fingerprint = self._fingerprint(source_rows, header)
         return self
 
     def transform(
@@ -446,6 +502,7 @@ class BinaryPreprocessor:
         *,
         dataset: str | None = None,
         split: str = "train",
+        row_indices: Sequence[int] | np.ndarray | None = None,
     ):
         if not self.fitted:
             raise RuntimeError(
@@ -486,6 +543,7 @@ class BinaryPreprocessor:
             raise ValueError(
                 "target column does not match the fitted schema"
             )
+        rows = self._select_rows(rows, row_indices, owner=split)
         features, targets = self._transform_rows(rows, target_column)
         from .binary_benchmarks import BinaryBenchmark
 
@@ -494,6 +552,7 @@ class BinaryPreprocessor:
             targets,
             dataset or Path(path).stem,
             split,
+            None if row_indices is None else np.asarray(row_indices, dtype=np.int64),
         )
 
     def fit_transform(

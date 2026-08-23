@@ -1,14 +1,10 @@
-# Paper-specified setup: CIFAR-10, symmetric 20% label noise, a 20%
-# noisy-validation split, and a ResNet-18 posterior model trained for
-# 100 epochs with SGD at LR 0.01, decayed by 10x after epoch 50.
-# Other optimizer, loader, preprocessing, seed, and final-stage choices are
-# documented as implementation choices in papers/dual-t/reproduction.md.
+schema_version: 1
+kind: experiment
 method: dual_t
 seed: 1
 output_root: artifacts/reproductions
 data:
   name: cifar10
-  root: data/cifar10
   validation_size: 10000
   augment: true
   preprocessing: standard
@@ -42,7 +38,8 @@ posterior_stage:
     weight_decay: 0.0005
   scheduler:
     name: multistep
-    milestones: [50]
+    milestones:
+    - 50
     gamma: 0.1
 transition_stage: {}
 final_stage:
@@ -62,6 +59,8 @@ final_stage:
     weight_decay: 0.0005
   scheduler:
     name: multistep
-    milestones: [50]
+    milestones:
+    - 50
     gamma: 0.1
-execution: {runner: dual_t}
+execution:
+  runner: dual_t

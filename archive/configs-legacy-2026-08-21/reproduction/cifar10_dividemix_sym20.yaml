@@ -1,0 +1,77 @@
+# Full-data CIFAR-10 DivideMix usability workflow for symmetric 20% noise.
+# This is paper-oriented but not paper-exact: the toolbox uses fixed-count
+# forced-flip noise, a noisy-validation split, and a closely compatible
+# (not official-code-identical) PreActResNet-18 implementation.
+method: dividemix
+execution:
+  runner: dividemix
+configuration_fidelity: paper_oriented
+seed: 1
+output_root: artifacts/reproductions/dividemix-cifar10-sym20
+data:
+  name: cifar10
+  root: data/cifar10
+  validation_size: 5000
+  augment: true
+  preprocessing: standard
+noise:
+  name: symmetric
+  rate: 0.2
+  seed: 1
+  sampling: global
+  rng: default_rng
+  validation_targets: noisy
+  manifest_filename: noise_manifest.npz
+model:
+  name: preact_resnet18
+  base_width: 64
+optimizer:
+  name: sgd
+  lr: 0.02
+  momentum: 0.9
+  weight_decay: 0.0005
+scheduler:
+  name: multistep
+  milestones: [150]
+  gamma: 0.1
+loader:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+evaluation:
+  selection_split: validation
+  primary: ensemble_accuracy
+dividemix:
+  fidelity: official_cifar_v1
+  model_count: 2
+  initialization:
+    peer_seed_offset: 1
+  warmup:
+    epochs: 10
+    confidence_penalty_weight: 1.0
+  gmm:
+    threshold: 0.5
+    random_seed: 0
+    max_iterations: 10
+    tolerance: 0.01
+    covariance_regularization: 0.0005
+    minimum_mean_separation: 0.000001
+    loss_history:
+      name: official_auto
+      high_noise_rate: 0.9
+      window_epochs: 5
+  mixmatch:
+    augmentations: 2
+    temperature: 0.5
+    mixup_alpha: 4.0
+    mixup_lambda_scope: minibatch
+  objective:
+    lambda_u: 25.0
+    lambda_r: 1.0
+    rampup_epochs: 16
+  training:
+    epochs: 300
+  inference:
+    ensemble: official_logits_sum
+trainer:
+  device: auto

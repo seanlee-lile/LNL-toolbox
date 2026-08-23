@@ -1,0 +1,41 @@
+seed: 17
+output_root: artifacts/test-runs/cwd-cifar10-smoke
+
+data:
+  name: cifar10_airplane_automobile
+  root: data/cifar10
+  folds: 5
+  fold_index: 0
+  max_samples: 100
+  augment: false
+
+noise:
+  rho_positive: 0.2
+  rho_negative: 0.2
+  seed: 17
+
+loader:
+  batch_size: 20
+  num_workers: 0
+  pin_memory: false
+
+model:
+  name: tiny_cnn
+  width: 4
+
+optimizer:
+  name: adam
+  lr: 0.001
+  weight_decay: 0.0001
+
+scheduler:
+  milestones: []
+  gamma: 0.1
+
+trainer:
+  epochs: 1
+  device: auto
+
+cwd:
+  ridge: 1.0e-8
+execution: {runner: cwd}

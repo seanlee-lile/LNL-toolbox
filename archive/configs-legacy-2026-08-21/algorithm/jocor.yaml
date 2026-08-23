@@ -1,0 +1,13 @@
+algorithm:
+  name: jocor
+  lambda: 0.9
+
+selector:
+  name: small_loss
+  rounding: floor
+  keep_rate:
+    name: linear
+    start: 1.0
+    end: 0.5
+    # Official num_gradual=10 uses ten endpoints: epochs 0..9.
+    warmup_epochs: 9

@@ -1,0 +1,49 @@
+seed: 1
+output_root: artifacts/test-runs
+data:
+  name: cifar10
+  root: data/cifar10
+  validation_size: 5000
+  max_train_samples: 512
+  max_validation_samples: 256
+  max_test_samples: 256
+  augment: true
+  preprocessing: gce2018
+noise:
+  name: symmetric
+  rate: 0.2
+  seed: 1
+  validation_targets: noisy
+  manifest_filename: noise_manifest.npz
+loss:
+  name: gce
+  q: 0.7
+selector:
+  name: all
+parameter_update:
+  name: standard
+loader:
+  batch_size: 128
+  num_workers: 0
+  pin_memory: true
+model:
+  name: resnet34
+  base_width: 64
+optimizer:
+  name: sgd
+  lr: 0.01
+  momentum: 0.9
+  nesterov: false
+  weight_decay: 0.0001
+scheduler:
+  name: multistep
+  milestones: [40, 80]
+  gamma: 0.1
+trainer:
+  epochs: 2
+  device: auto
+  progress:
+    enabled: true
+    update_interval: 1
+    curves: true
+execution: {runner: supervised}

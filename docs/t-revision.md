@@ -119,6 +119,32 @@ validation, and unsupported objective/transition/ratio policies. During
 training, non-finite logits, transition values, denominators, weights, delta,
 or objective fail at the consuming stage.
 
+## Full-data short-horizon stability profile
+
+`cifar10-t-revision-sym20-short` is a real CIFAR-10 engineering gate. It uses
+the complete 45k noisy-train / 5k noisy-validation / 10k clean-test split,
+symmetric 20% transition sampling, ResNet-18, batch size 128, and standard
+CIFAR augmentation. Its 15/15/20 epoch budget is intentionally shorter than
+the released code's 20/200/200 lifecycle and must not be reported as a paper
+numerical reproduction.
+
+```powershell
+python -m lnl_toolbox.cli.main validate `
+  --recipe cifar10-t-revision-sym20-short
+python -m lnl_toolbox.cli.main run `
+  --recipe cifar10-t-revision-sym20-short --dry-run
+python -m lnl_toolbox.cli.main run `
+  --recipe cifar10-t-revision-sym20-short
+```
+
+Weighted stages additionally record detached diagnostics for exact epoch-wide
+weight quantiles and effective sample size, gradient and parameter norms,
+relative parameter updates, optimizer steps, denominators, and transition
+health. For the controlled symmetric-noise manifest, transition error is an
+oracle diagnostic only; it never enters optimization or checkpoint selection.
+The raw revised matrix remains intentionally unconstrained, so negative-entry
+counts and row sums must be inspected before accepting a real-data run.
+
 ## Fidelity boundary
 
 This is a complete callable Reweight-R workflow with corrected vectorized Eq.

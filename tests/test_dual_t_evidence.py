@@ -45,6 +45,22 @@ class _FixedImageDataset(torch.utils.data.Dataset):
         }
 
 
+class _PreparedFixture:
+    def __init__(self, dataset) -> None:
+        self.dataset = dataset
+
+    def loader(self, role, *, generator_seed, shuffle=True):
+        del role
+        generator = torch.Generator().manual_seed(int(generator_seed))
+        return torch.utils.data.DataLoader(
+            self.dataset,
+            batch_size=4,
+            shuffle=shuffle,
+            num_workers=0,
+            generator=generator,
+        )
+
+
 class DualTEvidenceContractTest(unittest.TestCase):
     @staticmethod
     def _snapshot() -> PosteriorSnapshot:
@@ -180,14 +196,7 @@ class DualTEvidenceFairnessTest(unittest.TestCase):
             "scheduler_config": {"name": "none"},
             "epochs": 2,
             "num_classes": 3,
-            "train_dataset": dataset,
-            "noisy_validation_dataset": dataset,
-            "clean_test_dataset": dataset,
-            "loader_config": {
-                "batch_size": 4,
-                "num_workers": 0,
-                "pin_memory": False,
-            },
+            "prepared_data": _PreparedFixture(dataset),
             "sampler_seed": 101,
             "rng_state": rng_state,
             "device": torch.device("cpu"),

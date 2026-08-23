@@ -1,0 +1,5 @@
+name: instance_dependent
+rate: 0.4
+seed: 1
+generator: score_weighted_idn
+

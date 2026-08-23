@@ -1,10 +1,12 @@
+schema_version: 1
+kind: experiment
 method: cnlcu
-execution: {runner: cnlcu}
+execution:
+  runner: cnlcu
 seed: 7
 output_root: artifacts/runs
 data:
   name: cifar10
-  root: data/cifar10
   validation_size: 100
   max_train_samples: 200
   max_validation_samples: 100

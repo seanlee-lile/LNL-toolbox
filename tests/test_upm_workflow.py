@@ -72,7 +72,7 @@ class UPMWorkflowTest(unittest.TestCase):
 
     def test_fresh_resume_extension_and_completed_noop(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.upm_experiment.load_cifar10", side_effect=self._load
+            "lnl_toolbox.data.sources.load_cifar10", side_effect=self._load
         ):
             run_dir = run_experiment(_config(2), Path(directory) / "run")
             payload = torch.load(run_dir / "last.pt", map_location="cpu", weights_only=False)
@@ -113,7 +113,7 @@ class UPMWorkflowTest(unittest.TestCase):
 
     def test_snapshot_corruption_and_identity_drift_fail(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.upm_experiment.load_cifar10", side_effect=self._load
+            "lnl_toolbox.data.sources.load_cifar10", side_effect=self._load
         ):
             run_dir = run_experiment(_config(1), Path(directory) / "run")
             changed = _config(2)
@@ -136,7 +136,7 @@ class UPMWorkflowTest(unittest.TestCase):
 
         config = _config(2, stage1_epochs=2)
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.upm_experiment.load_cifar10", side_effect=self._load
+            "lnl_toolbox.data.sources.load_cifar10", side_effect=self._load
         ):
             stage1_dir = Path(directory) / "stage1"
             with patch.object(UPMWorkflow, "train_stage1", one_stage1):
@@ -164,7 +164,7 @@ class UPMWorkflowTest(unittest.TestCase):
 
     def test_uninterrupted_matches_completed_extension(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.upm_experiment.load_cifar10", side_effect=self._load
+            "lnl_toolbox.data.sources.load_cifar10", side_effect=self._load
         ):
             direct = run_experiment(_config(2), Path(directory) / "direct")
             resumed = run_experiment(_config(1), Path(directory) / "resumed")
@@ -179,7 +179,7 @@ class UPMWorkflowTest(unittest.TestCase):
 
     def test_clean_test_does_not_select_best(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.upm_experiment.load_cifar10", side_effect=self._load
+            "lnl_toolbox.data.sources.load_cifar10", side_effect=self._load
         ), patch(
             "lnl_toolbox.training.upm_experiment.evaluate_classification",
             side_effect=[
@@ -198,7 +198,7 @@ class UPMWorkflowTest(unittest.TestCase):
         train = _cifar(200, "train", 100)
         test = _cifar(100, "test", 100)
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.upm_experiment.load_cifar100",
+            "lnl_toolbox.data.sources.load_cifar100",
             side_effect=lambda _root, split: train if split == "train" else test,
         ):
             run_dir = run_experiment(
@@ -211,7 +211,7 @@ class UPMWorkflowTest(unittest.TestCase):
         config = _config(1)
         config["trainer"]["device"] = "cuda"
         with tempfile.TemporaryDirectory() as directory, patch(
-            "lnl_toolbox.training.upm_experiment.load_cifar10", side_effect=self._load
+            "lnl_toolbox.data.sources.load_cifar10", side_effect=self._load
         ):
             run_dir = run_experiment(config, Path(directory) / "run")
             payload = torch.load(

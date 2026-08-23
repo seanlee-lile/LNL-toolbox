@@ -14,31 +14,22 @@ from torch import nn
 import yaml
 
 from lnl_toolbox.algorithms.t_revision import TRevisionAlgorithm, TRevisionConfig
-from lnl_toolbox.data import NoisyTargetDataset
-from lnl_toolbox.data.cifar import load_cifar10, load_cifar100
-from lnl_toolbox.data.torch_cifar import (
-    TorchCifarDataset,
-    build_cifar_transform,
-    cifar_pixel_mean,
-    stratified_split,
-)
+from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.plugins.builtin import build_builtin_loss
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import read_checkpoint
 from lnl_toolbox.training.experiment import (
     _environment,
-    _loader,
     _resolved_noise_config,
-    _subset,
     build_model,
     build_optimizer,
     build_scheduler,
 )
+from lnl_toolbox.training.data_service import prepare_experiment_data
 from lnl_toolbox.training.noisy_labels import (
     checkpoint_noise_metadata,
     effective_subset_actual_rate,
     noise_mode,
-    prepare_noise_manifest,
 )
 
 
@@ -107,29 +98,18 @@ def run_t_revision_experiment(
             raise ValueError("Resume checkpoint is not a T-Revision run")
 
     data_config = config["data"]
-    dataset_name = str(data_config.get("name", "cifar10")).lower()
-    if dataset_name not in {"cifar10", "cifar100"}:
-        raise ValueError("T-Revision first version supports CIFAR-10 and CIFAR-100")
-    loader_fn = load_cifar10 if dataset_name == "cifar10" else load_cifar100
-    num_classes = 10 if dataset_name == "cifar10" else 100
-    train_data = loader_fn(data_config.get("root"), "train")
-    test_data = loader_fn(data_config.get("root"), "test")
-    full_train_indices, validation_indices = stratified_split(
-        train_data.labels, int(data_config["validation_size"]), seed
-    )
-    if np.intersect1d(full_train_indices, validation_indices).size:
-        raise ValueError("T-Revision train and validation indices must be disjoint")
-    manifest_indices = np.sort(np.concatenate((full_train_indices, validation_indices)))
-    manifest, manifest_path = prepare_noise_manifest(
+    prepared = prepare_experiment_data(
         config,
-        dataset=dataset_name,
-        clean_targets=train_data.labels[manifest_indices],
-        global_indices=manifest_indices,
-        num_classes=num_classes,
+        requirements=DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.NOISY_VALIDATION, DataRole.TEST}),
+            validation_targets="noisy",
+        ),
         run_dir=run_dir,
+        seed=seed,
         checkpoint_payload=checkpoint_payload,
-        dataset_targets=train_data.labels,
     )
+    dataset_name, num_classes = prepared.dataset, prepared.num_classes
+    manifest, manifest_path = prepared.manifest, prepared.manifest_path
     if manifest is None or manifest_path is None:
         raise ValueError("T-Revision requires an enabled noisy-label manifest")
     if manifest.num_classes != num_classes:
@@ -140,30 +120,12 @@ def run_t_revision_experiment(
             "sample-dependent transitions are unsupported"
         )
 
-    train_indices = _subset(
-        full_train_indices,
-        train_data.labels,
-        data_config.get("max_train_samples"),
-        seed + 1,
-    )
-    validation_indices = _subset(
-        validation_indices,
-        train_data.labels,
-        data_config.get("max_validation_samples"),
-        seed + 2,
-    )
-    test_indices = _subset(
-        np.arange(len(test_data)),
-        test_data.labels,
-        data_config.get("max_test_samples"),
-        seed + 3,
-    )
     manifest_position = {
         int(index): position
         for position, index in enumerate(manifest.global_indices.tolist())
     }
     observed_train_targets = np.asarray(
-        [manifest.noisy_targets[manifest_position[int(index)]] for index in train_indices],
+        [manifest.noisy_targets[manifest_position[int(index)]] for index in prepared.train_indices],
         dtype=np.int64,
     )
     observed_classes = np.unique(observed_train_targets)
@@ -173,53 +135,13 @@ def run_t_revision_experiment(
             "T-Revision noisy training split is missing observed classes: "
             f"{missing}"
         )
-    preprocessing = str(data_config.get("preprocessing", "standard")).lower()
-    pixel_mean = cifar_pixel_mean(train_data.images) if preprocessing == "gce2018" else None
-    transform_options = {"preprocessing": preprocessing, "pixel_mean": pixel_mean}
+    train_loader = prepared.loader(DataRole.TRAIN)
+    posterior_loader = prepared.loader(DataRole.TRAIN_EVAL, shuffle=False)
+    validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False)
+    test_loader = prepared.loader(DataRole.TEST, shuffle=False)
 
-    augmented_clean_train = TorchCifarDataset(
-        train_data,
-        train_indices,
-        transform=build_cifar_transform(
-            True, bool(data_config.get("augment", True)), **transform_options
-        ),
-    )
-    deterministic_clean_train = TorchCifarDataset(
-        train_data,
-        train_indices,
-        transform=build_cifar_transform(False, **transform_options),
-    )
-    noisy_train = NoisyTargetDataset(
-        augmented_clean_train, manifest.global_indices, manifest.noisy_targets
-    )
-    posterior_train = NoisyTargetDataset(
-        deterministic_clean_train, manifest.global_indices, manifest.noisy_targets
-    )
-    clean_validation = TorchCifarDataset(
-        train_data,
-        validation_indices,
-        transform=build_cifar_transform(False, **transform_options),
-    )
-    noisy_validation = NoisyTargetDataset(
-        clean_validation, manifest.global_indices, manifest.noisy_targets
-    )
-    clean_test = TorchCifarDataset(
-        test_data,
-        test_indices,
-        transform=build_cifar_transform(False, **transform_options),
-    )
-    loader_config = config["loader"]
-    train_loader = _loader(noisy_train, loader_config, shuffle=True, seed=seed)
-    posterior_loader = _loader(
-        posterior_train, loader_config, shuffle=False, seed=seed
-    )
-    validation_loader = _loader(
-        noisy_validation, loader_config, shuffle=False, seed=seed
-    )
-    test_loader = _loader(clean_test, loader_config, shuffle=False, seed=seed)
-
-    effective_train_rate = effective_subset_actual_rate(manifest, train_indices)
-    effective_validation_rate = effective_subset_actual_rate(manifest, validation_indices)
+    effective_train_rate = effective_subset_actual_rate(manifest, prepared.train_indices)
+    effective_validation_rate = effective_subset_actual_rate(manifest, prepared.validation_indices)
     noise_metadata = checkpoint_noise_metadata(
         manifest,
         manifest_path,

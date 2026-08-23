@@ -33,28 +33,27 @@ from lnl_toolbox.algorithms.dld import (
     sample_labels,
     weighted_neighbor_distribution,
 )
-from lnl_toolbox.data import NoisyTargetDataset
-from lnl_toolbox.data.cifar import load_cifar10, load_cifar100
-from lnl_toolbox.data.multi_view import IndexedMultiViewCifarDataset, build_strong_cifar_transform
-from lnl_toolbox.data.torch_cifar import TorchCifarDataset, build_cifar_transform, stratified_split
+from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.models.feature_output import forward_with_features
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
+from lnl_toolbox.training.dld_pretrained import (
+    DLDUPMMainBestSource,
+    load_upm_main_best_feature_source,
+)
 from lnl_toolbox.training.experiment import (
     _environment,
-    _loader,
     _resolved_noise_config,
-    _subset,
     build_model,
     build_optimizer,
     build_scheduler,
 )
+from lnl_toolbox.training.data_service import PreparedData, prepare_experiment_data
 from lnl_toolbox.training.noisy_labels import (
     checkpoint_noise_metadata,
     effective_subset_actual_rate,
     file_sha256,
     noise_mode,
-    prepare_noise_manifest,
 )
 from lnl_toolbox.training.snapshots import FeatureSnapshot, collect_feature_snapshot
 
@@ -140,11 +139,14 @@ class DLDWorkflow:
         noise_metadata: Mapping[str, Any],
         feature_model: torch.nn.Module,
         feature_identity: str,
+        feature_source: DLDUPMMainBestSource | None,
+        feature_source_provenance: Mapping[str, Any],
         train_indices: np.ndarray,
         dual_view_loader: Any,
         validation_snapshot: FeatureSnapshot,
         test_snapshot: FeatureSnapshot,
         loader_config: Mapping[str, Any],
+        prepared_data: PreparedData,
     ) -> None:
         self.config = dict(config)
         self.method_config = method_config
@@ -157,11 +159,14 @@ class DLDWorkflow:
         for parameter in self.feature_model.parameters():
             parameter.requires_grad_(False)
         self.feature_identity = feature_identity
+        self.feature_source = feature_source
+        self.feature_source_provenance = dict(feature_source_provenance)
         self.train_indices = np.sort(np.asarray(train_indices, dtype=np.int64))
         self.dual_view_loader = dual_view_loader
         self.validation_snapshot = validation_snapshot
         self.test_snapshot = test_snapshot
         self.loader_config = dict(loader_config)
+        self.prepared_data = prepared_data
         self.state = DLDState()
         self.artifact: DLDPreCorrectionArtifact | None = None
         self.algorithm: DLDAlgorithm | None = None
@@ -188,6 +193,7 @@ class DLDWorkflow:
             "best_algorithm_state": self.best_algorithm_state,
             "noise": self.noise_metadata,
             "feature_identity": self.feature_identity,
+            "feature_source": self.feature_source_provenance,
             "schedule_identity_hash": None if self.algorithm is None else self.algorithm.schedule.identity_hash,
             "rng_state": capture_rng_state(),
         }
@@ -226,9 +232,10 @@ class DLDWorkflow:
             "reference_indices": indices,
             "num_classes": self.num_classes,
             "k": int(pre["k_neighbors"]),
-            "metric": "cosine_distance",
+            "metric": str(self.method_config.fidelity["neighbor_metric"]),
             "delta": float(pre["delta"]),
-            "self_neighbor": "include",
+            "self_neighbor": str(self.method_config.fidelity["self_neighbor"]),
+            "query_chunk_size": pre.get("query_chunk_size"),
         }
         p_w = weighted_neighbor_distribution(feature_w, feature_w, **common).probabilities
         p_s = weighted_neighbor_distribution(feature_s, feature_s, **common).probabilities
@@ -247,14 +254,18 @@ class DLDWorkflow:
             "mapping_hash": self.noise_metadata.get("mapping_hash", ""),
             "feature_extractor_identity": self.feature_identity,
             "feature_extractor": dict(self.method_config.feature_extractor),
+            "feature_source": self.feature_source_provenance,
             "transform_identity": {
                 "weak": "cifar_eval_standard",
                 "strong": "crop_flip_randaugment_2_10_standard",
                 "extraction": "seeded_eval_inference_stable_index",
             },
             "k": int(pre["k_neighbors"]),
-            "metric": "cosine_distance",
-            "self_neighbor": "include",
+            "metric": str(self.method_config.fidelity["neighbor_metric"]),
+            "neighbor_weighting": str(
+                self.method_config.fidelity["neighbor_weighting"]
+            ),
+            "self_neighbor": str(self.method_config.fidelity["self_neighbor"]),
             "delta": float(pre["delta"]),
             "divergence": "kl_ps_to_pw_no_softmax",
             "gmm_seed": int(pre["gmm_seed"]),
@@ -304,6 +315,13 @@ class DLDWorkflow:
         checks = {
             "sample mapping": np.array_equal(artifact.global_indices, self.train_indices),
             "feature identity": artifact.metadata.get("feature_extractor_identity") == self.feature_identity,
+            "feature source": (
+                artifact.metadata.get("feature_source") == self.feature_source_provenance
+                or (
+                    artifact.metadata.get("feature_source") is None
+                    and self.feature_source is None
+                )
+            ),
             "manifest": artifact.metadata.get("manifest_sha256") == self.noise_metadata.get("manifest_sha256", ""),
             "mapping": artifact.metadata.get("mapping_hash") == self.noise_metadata.get("mapping_hash", ""),
             "fidelity": artifact.metadata.get("fidelity_policy") == dict(self.method_config.fidelity),
@@ -352,10 +370,14 @@ class DLDWorkflow:
             self.state.advance(DLDPhase.DIFFUSION_TRAINING)
             self._save_last()
 
-    def _evaluate(self, snapshot: FeatureSnapshot) -> float:
+    def _evaluate_metrics(self, snapshot: FeatureSnapshot) -> dict[str, float]:
         assert self.algorithm is not None
         direction, noise = self.algorithm.prediction_models()
         total = correct = 0
+        generated_sum = generated_square_sum = 0.0
+        generated_min = float("inf")
+        generated_max = float("-inf")
+        prediction_counts = np.zeros(self.num_classes, dtype=np.int64)
         batch_size = int(self.loader_config["batch_size"])
         for start in range(0, snapshot.features.shape[0], batch_size):
             stop = min(start + batch_size, snapshot.features.shape[0])
@@ -365,22 +387,55 @@ class DLDWorkflow:
                 inference_steps=int(self.method_config.inference["steps"]),
             )
             predicted = generated.argmax(1).cpu().numpy()
+            detached = generated.detach()
+            generated_sum += float(detached.sum())
+            generated_square_sum += float(detached.square().sum())
+            generated_min = min(generated_min, float(detached.min()))
+            generated_max = max(generated_max, float(detached.max()))
+            prediction_counts += np.bincount(predicted, minlength=self.num_classes)
             correct += int((predicted == snapshot.noisy_targets[start:stop]).sum())
             total += stop - start
         if total <= 0:
             raise ValueError("DLD evaluation snapshot is empty")
-        return correct / total
+        values = prediction_counts[prediction_counts > 0] / total
+        entropy = float(-(values * np.log(values)).sum()) if values.size else 0.0
+        element_count = total * self.num_classes
+        mean = generated_sum / element_count
+        variance = max(generated_square_sum / element_count - mean * mean, 0.0)
+        result = {
+            "accuracy": correct / total,
+            "reverse_output_min": generated_min,
+            "reverse_output_max": generated_max,
+            "reverse_output_mean": mean,
+            "reverse_output_std": variance ** 0.5,
+            "reverse_prediction_class_count": float(np.count_nonzero(prediction_counts)),
+            "reverse_prediction_entropy": entropy,
+        }
+        if not all(np.isfinite(value) for value in result.values()):
+            raise ValueError("DLD reverse inference telemetry is non-finite")
+        return result
 
     def train(self) -> None:
         self._prepare_algorithm()
         assert self.algorithm is not None
         while self.state.completed_epochs < self.method_config.epochs:
             epoch = self.state.completed_epochs
-            loader = _loader(
-                _IndexDataset(self.train_indices), self.loader_config,
-                shuffle=True, seed=int(self.config.get("seed", 1)) + 5000 + epoch,
+            loader = self.prepared_data.loader_for_dataset(
+                _IndexDataset(self.train_indices), shuffle=True,
+                epoch=epoch, stream=5000,
             )
-            totals = {"direction_loss": 0.0, "noise_loss": 0.0, "direction_gradient_norm": 0.0, "noise_gradient_norm": 0.0}
+            totals = {
+                "direction_loss": 0.0,
+                "noise_loss": 0.0,
+                "direction_gradient_norm": 0.0,
+                "noise_gradient_norm": 0.0,
+                "direction_parameter_norm": 0.0,
+                "noise_parameter_norm": 0.0,
+                "predicted_direction_rms": 0.0,
+                "predicted_noise_rms": 0.0,
+                "target_direction_rms": 0.0,
+                "target_noise_rms": 0.0,
+            }
             samples = 0.0
             for batch in loader:
                 metrics = self.algorithm.train_step(batch["index"].to(self.device))
@@ -391,7 +446,8 @@ class DLDWorkflow:
                 self.state.global_step += 1
             if samples <= 0:
                 raise RuntimeError("DLD training epoch contains no samples")
-            validation_accuracy = self._evaluate(self.validation_snapshot)
+            validation_metrics = self._evaluate_metrics(self.validation_snapshot)
+            validation_accuracy = validation_metrics["accuracy"]
             self.state.completed_epochs = epoch + 1
             if validation_accuracy > self.state.best_validation_accuracy:
                 self.state.best_epoch = epoch
@@ -413,6 +469,11 @@ class DLDWorkflow:
                 "artifact_hash": self.state.precorrection_artifact_hash,
                 "fidelity_policy": self.method_config.fidelity["name"],
                 "inference_steps": int(self.method_config.inference["steps"]),
+                **{
+                    f"validation_{name}": value
+                    for name, value in validation_metrics.items()
+                    if name != "accuracy"
+                },
             })
             self._save_last()
 
@@ -422,7 +483,8 @@ class DLDWorkflow:
         assert self.algorithm is not None
         current = deepcopy(self.algorithm.state_dict())
         self.algorithm.load_state_dict(self.best_algorithm_state)
-        test_accuracy = self._evaluate(self.test_snapshot)
+        test_metrics = self._evaluate_metrics(self.test_snapshot)
+        test_accuracy = test_metrics["accuracy"]
         self.algorithm.load_state_dict(current)
         self.state.advance(DLDPhase.COMPLETED)
         final = {
@@ -441,6 +503,11 @@ class DLDWorkflow:
             "test_selection_leakage": False,
             "paper_numerical_reproduction": False,
             "released_code_exact_reproduction": False,
+            **{
+                f"test_{name}": value
+                for name, value in test_metrics.items()
+                if name != "accuracy"
+            },
         }
         (self.run_dir / "final_metrics.json").write_text(json.dumps(final, indent=2), encoding="utf-8")
         self._save_last()
@@ -453,6 +520,15 @@ class DLDWorkflow:
             raise ValueError("DLD identity configuration changed on resume")
         if payload.get("feature_identity") != self.feature_identity:
             raise ValueError("DLD feature extractor identity changed on resume")
+        saved_feature_source = payload.get("feature_source")
+        if (
+            saved_feature_source is None
+            and self.feature_source is not None
+        ) or (
+            saved_feature_source is not None
+            and dict(saved_feature_source) != self.feature_source_provenance
+        ):
+            raise ValueError("DLD feature source provenance changed on resume")
         if dict(payload.get("noise", {})) != self.noise_metadata:
             raise ValueError("DLD noise provenance changed on resume")
         self.state = DLDState.from_mapping(payload["dld_state"])
@@ -470,6 +546,8 @@ class DLDWorkflow:
         restore_rng_state(payload["rng_state"])
 
     def run(self) -> None:
+        if self.feature_source is not None:
+            self.feature_source.assert_unchanged()
         if self.state.phase is DLDPhase.COMPLETED:
             if self.state.completed_epochs >= self.method_config.epochs:
                 return
@@ -480,6 +558,8 @@ class DLDWorkflow:
             self.train()
         if self.state.completed_epochs >= self.method_config.epochs and self.state.phase is DLDPhase.DIFFUSION_TRAINING:
             self.complete()
+        if self.feature_source is not None:
+            self.feature_source.assert_unchanged()
 
 
 def run_dld_experiment(
@@ -508,61 +588,55 @@ def run_dld_experiment(
             raise ValueError("DLD diffusion epoch target cannot be reduced on resume")
 
     data_config = config["data"]
-    dataset = str(data_config.get("name", "cifar10")).lower()
-    if dataset not in {"cifar10", "cifar100"}:
-        raise ValueError("DLD first version supports CIFAR-10 and CIFAR-100")
-    load = load_cifar10 if dataset == "cifar10" else load_cifar100
-    classes = 10 if dataset == "cifar10" else 100
-    train_data = load(data_config.get("root"), "train")
-    test_data = load(data_config.get("root"), "test")
-    train_indices, validation_indices = stratified_split(
-        train_data.labels, int(data_config["validation_size"]), seed
+    prepared = prepare_experiment_data(
+        config,
+        requirements=DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
+            views=("weak", "strong"),
+            validation_targets="noisy",
+        ),
+        run_dir=run_dir, seed=seed, checkpoint_payload=checkpoint,
     )
-    manifest_indices = np.sort(np.concatenate((train_indices, validation_indices)))
-    manifest, manifest_path = prepare_noise_manifest(
-        config, dataset=dataset,
-        clean_targets=train_data.labels[manifest_indices],
-        global_indices=manifest_indices, num_classes=classes, run_dir=run_dir,
-        checkpoint_payload=checkpoint, dataset_targets=train_data.labels,
-    )
+    dataset, classes = prepared.dataset, prepared.num_classes
+    manifest, manifest_path = prepared.manifest, prepared.manifest_path
     if manifest is None or manifest_path is None:
         raise ValueError("DLD requires noisy train and validation labels")
-    train_indices = _subset(train_indices, train_data.labels, data_config.get("max_train_samples"), seed + 1)
-    validation_indices = _subset(validation_indices, train_data.labels, data_config.get("max_validation_samples"), seed + 2)
-    test_indices = _subset(np.arange(len(test_data)), test_data.labels, data_config.get("max_test_samples"), seed + 3)
-    if int(method.precorrection["k_neighbors"]) >= len(train_indices):
+    if int(method.precorrection["k_neighbors"]) >= len(prepared.train_indices):
         raise ValueError("DLD k_neighbors must be smaller than the effective train set")
     loader_config = config["loader"]
-    noisy_map = {int(index): int(target) for index, target in zip(manifest.global_indices, manifest.noisy_targets)}
-    weak_transform = build_cifar_transform(False)
-    strong_transform = build_strong_cifar_transform(magnitude=10)
-    multi_view = IndexedMultiViewCifarDataset(
-        train_data, train_indices, weak_transform=weak_transform,
-        strong_transform=strong_transform, targets_by_index=noisy_map,
-    )
+    multi_view = prepared.dataset_for(DataRole.TRAIN)
     def dual_view_loader(field: str):
-        return _loader(
-            _ViewDataset(multi_view, field), loader_config,
-            shuffle=False, seed=seed + (10 if field == "input" else 11),
+        return prepared.loader_for_dataset(
+            _ViewDataset(multi_view, field), shuffle=False,
+            stream=10 if field == "input" else 11,
         )
-
-    noisy_validation = NoisyTargetDataset(
-        TorchCifarDataset(train_data, validation_indices, transform=weak_transform),
-        manifest.global_indices, manifest.noisy_targets,
-    )
-    clean_test = TorchCifarDataset(test_data, test_indices, transform=weak_transform)
-    validation_loader = _loader(noisy_validation, loader_config, shuffle=False, seed=seed + 20)
-    test_loader = _loader(clean_test, loader_config, shuffle=False, seed=seed + 21)
+    validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False, stream=20)
+    test_loader = prepared.loader(DataRole.TEST, shuffle=False, stream=21)
     noise_metadata = checkpoint_noise_metadata(
         manifest, manifest_path, run_dir,
-        effective_subset_actual_rate(manifest, train_indices),
+        effective_subset_actual_rate(manifest, prepared.train_indices),
         mode=noise_mode(config), validation_targets="noisy",
-        effective_validation_rate=effective_subset_actual_rate(manifest, validation_indices),
+        effective_validation_rate=effective_subset_actual_rate(manifest, prepared.validation_indices),
     )
     config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
 
     seed_everything(seed + 3000)
     feature_model = build_model(method.feature_extractor["model"], classes).to(device).eval()
+    feature_source: DLDUPMMainBestSource | None = None
+    source_name = str(method.feature_extractor["source"]).strip().lower()
+    if source_name == "external_checkpoint":
+        feature_source = load_upm_main_best_feature_source(
+            method.feature_extractor["external"],
+            feature_model,
+            num_classes=classes,
+        )
+        feature_source_provenance = feature_source.provenance
+    else:
+        feature_source_provenance = {
+            "source": "repository_frozen_model",
+            "model": dict(method.feature_extractor["model"]),
+            "initialization_seed": seed + 3000,
+        }
     for parameter in feature_model.parameters():
         parameter.requires_grad_(False)
     feature_identity = _model_identity(feature_model)
@@ -577,9 +651,11 @@ def run_dld_experiment(
         config=config, method_config=method, run_dir=run_dir, device=device,
         dataset=dataset, num_classes=classes, noise_metadata=noise_metadata,
         feature_model=feature_model, feature_identity=feature_identity,
-        train_indices=train_indices, dual_view_loader=dual_view_loader,
+        feature_source=feature_source,
+        feature_source_provenance=feature_source_provenance,
+        train_indices=prepared.train_indices, dual_view_loader=dual_view_loader,
         validation_snapshot=validation_snapshot, test_snapshot=test_snapshot,
-        loader_config=loader_config,
+        loader_config=loader_config, prepared_data=prepared,
     )
     if resume is not None:
         workflow.resume(resume)

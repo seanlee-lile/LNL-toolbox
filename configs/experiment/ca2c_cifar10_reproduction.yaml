@@ -1,12 +1,44 @@
+schema_version: 1
+kind: experiment
 method: ca2c
-execution: {runner: ca2c}
+execution:
+  runner: ca2c
 seed: 123
 output_root: artifacts/reproductions/ca2c-cifar100-sym20
-data: {name: cifar100, root: data/cifar100, validation_size: 0, augment: true, strong_augment: true, strong_magnitude: 10}
-noise: {type: symmetric, rate: 0.2, seed: 123, sampling: per_class, rng: default_rng}
-loader: {batch_size: 128, num_workers: 4, pin_memory: true, drop_last: true}
-model: {name: ca2c_seven_cnn}
-optimizer: {name: sgd, lr: 0.02, momentum: 0.9, nesterov: true, weight_decay: 0.0005}
-scheduler: {name: cosine, t_max: 700, eta_min: 0.0}
-ca2c: {warmup_epochs: 400, candidate_k: 2, lambda: 0.99, robust_weight: 0.8}
-trainer: {epochs: 700, device: auto}
+data:
+  name: cifar100
+  validation_size: 0
+  augment: true
+  strong_augment: true
+  strong_magnitude: 10
+noise:
+  rate: 0.2
+  seed: 123
+  sampling: per_class
+  rng: default_rng
+  name: symmetric
+loader:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+  drop_last: true
+model:
+  name: ca2c_seven_cnn
+optimizer:
+  name: sgd
+  lr: 0.02
+  momentum: 0.9
+  nesterov: true
+  weight_decay: 0.0005
+scheduler:
+  name: cosine
+  t_max: 700
+  eta_min: 0.0
+ca2c:
+  warmup_epochs: 400
+  candidate_k: 2
+  lambda: 0.99
+  robust_weight: 0.8
+trainer:
+  epochs: 700
+  device: auto

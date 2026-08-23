@@ -114,11 +114,14 @@ run_supervised_experiment(
 ) -> Path
 ```
 
-配置必须是 YAML-compatible mapping。顶层字段：
+配置必须是 YAML-compatible mapping。公共配置先经过
+`core.config_schema.normalize_experiment_config()`；未知顶层字段、旧别名和非法预算会在
+训练前失败。每个完整配置包含 `schema_version: 1`、`kind: experiment` 和显式
+`execution.runner`。顶层字段：
 
 | 字段 | 要求 |
 |---|---|
-| `data` | 必须；dataset、root、划分和可选子集大小 |
+| `data` | 必须；`name` 选择 adapter，划分和可选子集大小；本机 root 通常来自数据登记 |
 | `loader` | 必须；batch size、workers、pin memory |
 | `model` | 必须；当前支持 TinyCNN、ResNet-18、PreActResNet-18 |
 | `optimizer` | 必须；当前支持 SGD、AdamW |
@@ -129,6 +132,10 @@ run_supervised_experiment(
 | `scheduler` | 可选；none、cosine、multistep |
 | `noise` | 可选；省略即 clean |
 | `seed` / `output_root` | 可选；有稳定默认值 |
+
+完整 recipe 不依赖本机 `data.root`：`DataService` 在准备和 preflight 时按 adapter 查找
+唯一的本地登记。零个匹配会给出登记命令，多个匹配会要求 `--data <alias>`，不会静默
+选择。运行期兼容别名只在服务边界内部生成，不写回 YAML 或改变论文参数。
 
 噪声配置只能选择一种模式：
 
@@ -672,6 +679,26 @@ Evaluator 使用独立 clean validation/test loader；在 `inference_mode` 下�
 - 在 `training/experiment.py` 写入某篇论文算法的内部数学；
 - 把研究文档中的建议接口当作已经实现的生产合同。
 
+## 12. 运行、结果与批量比较数据流
+
+```text
+recipe/YAML
+  -> dotted --set overrides
+  -> config validation
+  -> RunnerSpec.describe/apply_training_budget
+  -> ExperimentService
+  -> runner lifecycle
+  -> Result Contract (final_metrics.json)
+
+base config + ordered seeds
+  -> sequential resumable sweep
+  -> per-seed run directories + sweep_manifest.json
+  -> compare fairness audit
+  -> report.md + summary.csv + summary.json
+```
+
+`ExperimentService` 是 CLI、Python API 和 sweep 的共同入口。已完成运行的 resume 是严格 no-op；比较层只消费 Result Contract，并对数据集、模型、增强、训练预算、噪声率/manifest、模型选择划分和测试集泄漏标记进行公平性告警。
+
 ### 7.9 L2RW 可信监督例外
 
 2026-08-03 已由用户批准 L2RW 所需的 clean meta-batch 例外。该例外仅限：
@@ -715,3 +742,53 @@ metrics.jsonl
 ```
 
 参数抽样、regularizer、selector 和风险校正均通过组合接口接入；论文名称不进入统一 `experiment.py` 的训练分支。resume 时必须保持参数记录、组件私有状态和 artifact 身份一致。
+# 统一数据服务（2026-08-18）
+
+所有训练 runner 的数据构建统一进入：
+
+```python
+prepared = prepare_experiment_data(
+    config,
+    requirements=DataRequirements(...),
+    run_dir=run_dir,
+    seed=seed,
+)
+```
+
+`DatasetRegistry` 负责名称/别名到 `DatasetAdapter` 的映射；适配器只验证并读取数据源。`DataRequirements` 由 runner 声明角色、视图、划分和 loader 行为，不包含论文名称。`PreparedData` 统一提供 train、train_eval、noisy/clean/trusted validation、test，以及按 global index 构造的动态子集。
+
+标准训练 batch 为 `input/target/index`，可选包含 `views`、`strong_input` 和动态 overlay。训练角色禁止暴露 `clean_target`。每次运行写入 `data_manifest.json`，checkpoint 自动记录其指纹；数据版本、标签、split、预处理、视图或 loader 身份变化时恢复立即失败。
+
+内置 Registry 当前支持 CIFAR-10/100、CIFAR airplane/automobile、CIFAR-10N/100N、MNIST、Fashion-MNIST、Clothing1M、Animal-10N、UCI binary、synthetic binary/multiclass。训练期间均不自动下载。
+
+## 机器本地数据目录（2026-08-20）
+
+```text
+recipe / YAML
+    + --data <local alias>
+    -> LocalDatasetCatalog.apply()
+    -> DatasetRegistry
+    -> prepare_experiment_data()
+    -> runner / data_manifest / metrics
+```
+
+本地目录只覆盖 `data` 中的 source 字段，保留 recipe 的模型、算法和训练配置；因此同一
+recipe 可以切换不同本机数据源。登记、布局检查和训练验证分离：`register` 不读取训练，
+`inspect` 调用统一 Registry，`verify` 强制实际完成 1 epoch 并保存数据指纹和结果路径。
+源路径的浅层文件状态变化会使证据变为 `verification_stale`。
+
+已按发布方格式并通过实际训练入口验证的布局包括：CIFAR Python pickle、CIFAR-N 官方
+`.pt` 键、MNIST/Fashion-MNIST IDX.GZ、Clothing1M key-list/label-kv、Animal-10N binary
+record、UCI Heart 空白分隔行，以及内存生成的 synthetic binary/multiclass。这里的
+“训练验证”只证明解析、统一数据服务和 runner 链路可执行，不等同于论文数值复现。
+
+## 统一数据管理门面（2026-08-20）
+
+`DataService` 是 Registry、机器本地 Catalog、CLI、Web 和实验预检之间的公共门面。
+`lnl data list/status/path` 只读取统一状态；`inspect` 调用正式 adapter 的 validate/load 并
+同时加载 train/test；`verify` 在相同检查成功后再完成 1 epoch。`missing/incomplete/ready`
+描述数据 readiness，`training_verified` 是独立训练证据。
+
+`ExperimentService.preflight()` 通过注入的 `DataService.validate_config()` 完成数据预检，
+因此 doctor、validate、dry-run、run 和 sweep 不再维护自己的数据检查逻辑。现有 runner
+继续调用 `prepare_experiment_data()`；该函数是默认 `DataService` 的兼容代理。
