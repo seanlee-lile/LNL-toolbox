@@ -1,0 +1,18 @@
+:root { color-scheme: dark; font: 14px system-ui, sans-serif; --bg: #111827; --panel: #1f2937; --line: #374151; --accent: #38bdf8; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: #e5e7eb; }
+header { height: 58px; display: flex; align-items: center; gap: 8px; padding: 0 18px; border-bottom: 1px solid var(--line); }
+h1 { margin-right: auto; font-size: 20px; }
+button, input, select { color: inherit; background: #111827; border: 1px solid #4b5563; border-radius: 5px; padding: 7px 10px; }
+button { cursor: pointer; } button:hover { border-color: var(--accent); }
+main { display: grid; grid-template-columns: 220px minmax(360px, 1fr) 280px; min-height: calc(100vh - 58px); }
+aside, section { padding: 16px; border-right: 1px solid var(--line); overflow: auto; }
+h2 { font-size: 14px; color: #93c5fd; margin-top: 0; }
+.palette-block, .step { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; margin: 8px 0; padding: 10px; cursor: grab; }
+.palette-block:hover, .step.selected { border-color: var(--accent); }
+.step { cursor: pointer; position: relative; } .step .kind { color: #9ca3af; font-size: 11px; float: right; }
+.nested { margin: 8px 0 0 18px; padding-left: 10px; border-left: 2px solid #475569; }
+.drop-target { min-height: 26px; border: 1px dashed #64748b; border-radius: 5px; margin: 8px 0; padding: 3px; }
+.param { display: grid; gap: 5px; margin: 12px 0; } .param label { color: #cbd5e1; }
+pre { white-space: pre-wrap; color: #bae6fd; max-height: 45vh; overflow: auto; }
+.error { border-color: #f87171 !important; } .ok { color: #86efac; }

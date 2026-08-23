@@ -167,6 +167,9 @@
     .run-select { width: auto; }
     .required-field::after { content: " · 必填"; color: #fbbf24; }
     button.danger { border-color: #b91c1c; background: #5f1d24; }
+    .task-stop-control { position: fixed; top: 18px; right: 22px; z-index: 20; }
+    .task-stop-control button { box-shadow: 0 8px 24px rgba(0, 0, 0, .28); }
+    .task-stop-control button:disabled { opacity: .55; cursor: not-allowed; }
     @media (max-width: 900px) {
       main { padding: 16px; }
       .layout { grid-template-columns: 1fr; }
@@ -175,6 +178,7 @@
   </style>
 </head>
 <body>
+  <div class="task-stop-control"><button id="stop-task" class="danger" type="button" disabled>停止当前任务</button></div>
   <main>
     <h1 id="page-title">LNL Toolbox Command Console</h1>
     <div id="page-subtitle" class="subtitle">左侧选择功能，右侧配置参数并预览指令；参数变化会即时反映在预览中。</div>
@@ -265,6 +269,7 @@
     outputNode.parentNode.insertBefore(structuredNode, outputNode);
     const statusNode = document.getElementById("status");
     const runButton = document.getElementById("run");
+    const stopTaskButton = document.getElementById("stop-task");
     const copyButton = document.getElementById("copy");
     const yamlEditorPanel = document.getElementById("yaml-editor-panel");
 
@@ -1874,6 +1879,8 @@
       state.jobId = job.id;
       outputNode.textContent = job.lines.join("\n") || "(暂无输出)";
       outputNode.scrollTop = outputNode.scrollHeight;
+      stopTaskButton.disabled = !job.running || !job.id;
+      stopTaskButton.textContent = job.cancel_requested ? "正在停止…" : "停止当前任务";
       if (job.structured != null) renderStructured(job.structured);
       else { structuredNode.classList.add("hidden"); outputNode.classList.remove("hidden"); }
       if (job.running) { statusNode.textContent = "运行中：" + job.command; statusNode.className = "status running"; }
@@ -1943,6 +1950,24 @@
         await refreshDatasets();
       }
     }
+    stopTaskButton.addEventListener("click", async function () {
+      if (!state.jobId || stopTaskButton.disabled) return;
+      if (!window.confirm("确定停止当前 WebUI 任务吗？训练将不会自动恢复。")) return;
+      stopTaskButton.disabled = true;
+      stopTaskButton.textContent = "正在停止…";
+      try {
+        const response = await fetch("/api/jobs/" + state.jobId + "/cancel", {method:"POST"});
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "停止任务失败");
+        showJob(result);
+        statusNode.textContent = result.running ? "已发出停止请求，等待进程退出…" : "任务已停止";
+        statusNode.className = "status failed";
+      } catch (error) {
+        statusNode.textContent = "停止失败：" + String(error.message || error);
+        statusNode.className = "status failed";
+        stopTaskButton.disabled = false;
+      }
+    });
     runButton.addEventListener("click", async function () {
       if (!state.request) return;
       if (state.module === "sweep" && !(await previewSweepPlan())) return;

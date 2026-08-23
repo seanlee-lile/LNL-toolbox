@@ -990,6 +990,26 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertEqual(payload["returncode"], 0)
         json.dumps(payload)
 
+    def test_cancel_job_terminates_running_web_child(self):
+        process = mock.Mock()
+        process.poll.return_value = None
+        job = command_console.Job(
+            job_id="cancel-me",
+            key="custom",
+            command=["python", "-c", ""],
+            display_command="python -c ...",
+            process=process,
+        )
+        with command_console.JOBS_LOCK:
+            command_console.JOBS[job.job_id] = job
+        try:
+            result = command_console.cancel_job(job.job_id)
+            process.terminate.assert_called_once_with()
+            self.assertTrue(result.cancel_requested)
+        finally:
+            with command_console.JOBS_LOCK:
+                command_console.JOBS.pop(job.job_id, None)
+
 
 if __name__ == "__main__":
     unittest.main()

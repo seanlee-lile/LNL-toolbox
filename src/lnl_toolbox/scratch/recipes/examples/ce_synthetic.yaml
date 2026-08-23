@@ -1,0 +1,49 @@
+schema_version: 1
+name: ce_synthetic
+description: Minimal supervised training recipe using Scratch blocks.
+steps:
+  - block: set_seed
+    params:
+      seed: 1
+  - block: select_device
+    params:
+      device: cpu
+  - block: load_synthetic
+    params:
+      samples: 64
+      features: 4
+      classes: 2
+  - block: create_loader
+    params:
+      dataset: train_dataset
+      batch_size: 16
+      shuffle: true
+  - block: create_model
+    params:
+      model: mlp
+      num_classes: 2
+      input_dim: 4
+      device: device
+  - block: create_optimizer
+    params:
+      optimizer: sgd
+      model: model
+      lr: 0.1
+  - block: epoch_loop
+    params:
+      epochs: 1
+    steps:
+      - block: batch_loop
+        params:
+          loader: train_loader
+        steps:
+          - block: get_batch
+          - block: zero_grad
+          - block: forward
+          - block: per_sample_ce
+          - block: mean_loss
+          - block: backward
+          - block: optimizer_step
+  - block: record_metrics
+    params:
+      values: [loss]

@@ -1,0 +1,53 @@
+schema_version: 1
+name: coteaching
+description: Co-teaching peer small-loss exchange smoke recipe.
+steps:
+  - block: set_seed
+    params: {seed: 1}
+  - block: select_device
+    params: {device: cpu}
+  - block: load_synthetic
+    params: {samples: 32, features: 4, classes: 2}
+  - block: create_loader
+    params: {dataset: train_dataset, batch_size: 16, shuffle: true}
+  - block: create_model
+    params: {model: mlp, num_classes: 2, input_dim: 4, device: device, save_as: model_a}
+  - block: create_model
+    params: {model: mlp, num_classes: 2, input_dim: 4, device: device, save_as: model_b}
+  - block: create_optimizer
+    params: {optimizer: sgd, model: model_a, lr: 0.1, save_as: optimizer_a}
+  - block: create_optimizer
+    params: {optimizer: sgd, model: model_b, lr: 0.1, save_as: optimizer_b}
+  - block: epoch_loop
+    params: {epochs: 1}
+    steps:
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - block: zero_grad
+            params: {optimizer: optimizer_a}
+          - block: zero_grad
+            params: {optimizer: optimizer_b}
+          - block: forward
+            params: {model: model_a, save_as: logits_a}
+          - block: forward
+            params: {model: model_b, save_as: logits_b}
+          - block: per_sample_ce
+            params: {logits: logits_a, save_as: loss_a_per_sample}
+          - block: per_sample_ce
+            params: {logits: logits_b, save_as: loss_b_per_sample}
+          - block: peer_exchange
+            params: {keep_rate: 0.8}
+          - block: select_by_indices
+            params: {loss: loss_a_per_sample, indices: selected_b, save_as: loss_a}
+          - block: select_by_indices
+            params: {loss: loss_b_per_sample, indices: selected_a, save_as: loss_b}
+          - block: backward
+            params: {loss: loss_a}
+          - block: optimizer_step
+            params: {optimizer: optimizer_a}
+          - block: backward
+            params: {loss: loss_b}
+          - block: optimizer_step
+            params: {optimizer: optimizer_b}

@@ -39,7 +39,7 @@ checkpoints/
 # Temporary extraction, previews, and scratch work
 tmp/
 temp/
-scratch/
+/scratch/
 
 # Downloaded papers are local research inputs; keep README and manifest
 papers/**/*.pdf

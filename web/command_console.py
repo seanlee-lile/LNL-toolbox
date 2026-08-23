@@ -238,6 +238,7 @@ class Job:
     returncode: int | None = None
     error: str | None = None
     structured: object | None = None
+    cancel_requested: bool = False
 
     @property
     def done(self) -> bool:
@@ -352,6 +353,22 @@ def start_job(key: str) -> Job:
 def start_free_job(raw: str) -> Job:
     command = parse_free_command(raw)
     return _start_process("custom", command, raw.strip())
+
+
+def cancel_job(job_id: str) -> Job:
+    """Request termination of one WebUI-owned child process."""
+
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if job is None:
+            raise KeyError("job not found")
+        if job.done:
+            return job
+        process = job.process
+        job.cancel_requested = True
+    if process is not None and process.poll() is None:
+        process.terminate()
+    return job
 
 
 def _json_response(
@@ -1334,6 +1351,7 @@ def _job_payload(job: Job) -> dict[str, object]:
             "returncode": job.returncode,
             "error": job.error,
             "running": not job.done,
+            "cancel_requested": job.cancel_requested,
             "structured": job.structured,
         }
 
@@ -1653,6 +1671,15 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path.startswith("/api/jobs/") and path.endswith("/cancel"):
+            job_id = path.split("/")[3]
+            try:
+                _json_response(self, _job_payload(cancel_job(job_id)), 202)
+            except KeyError as exc:
+                _json_response(self, {"error": str(exc)}, 404)
+            except OSError as exc:
+                _json_response(self, {"error": str(exc)}, 409)
+            return
         if path.startswith("/api/datasets/"):
             try:
                 parts = path.split("/")

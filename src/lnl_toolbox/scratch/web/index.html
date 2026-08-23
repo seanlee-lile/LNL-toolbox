@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LNL Scratch</title>
+  <link rel="stylesheet" href="/scratch.css">
+</head>
+<body>
+  <header><h1>LNL Scratch</h1><button id="new">新建</button><button id="open">打开</button><button id="save">保存</button><button id="check">检查</button><button id="run">运行</button></header>
+  <main>
+    <aside><h2>积木栏</h2><div id="palette"></div></aside>
+    <section><label>算法名称 <input id="recipe-name" value="scratch_recipe"></label><div id="steps" class="steps"></div></section>
+    <aside class="inspector"><h2>当前积木参数</h2><div id="inspector"></div><pre id="output"></pre></aside>
+  </main>
+  <script src="/scratch.js"></script>
+</body>
+</html>
