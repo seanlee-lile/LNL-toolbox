@@ -345,6 +345,34 @@ class _data_service__CrossSplitCollisionAdapter:
             source=str(spec.root),
         )
 
+
+class _data_service__DerivedValidationFixtureAdapter:
+    name = 'derived_validation_fixture'
+    aliases = ()
+
+    def validate(self, spec: DataSpec) -> None:
+        if spec.root is None or not spec.root.is_dir():
+            raise FileNotFoundError('derived validation fixture root missing')
+
+    def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
+        del seed
+        self.validate(spec)
+        if split == 'validation':
+            raise ValueError('derived validation fixture has no native validation split')
+        count = 50000 if split == 'train' else 10000
+        targets = np.arange(count, dtype=np.int64) % 10
+        return RawDatasetSplit(
+            inputs=np.zeros((count, 2), dtype=np.float32),
+            observed_targets=targets,
+            global_indices=np.arange(count, dtype=np.int64),
+            dataset=self.name,
+            split=split,
+            num_classes=10,
+            clean_targets=targets.copy(),
+            source=str(spec.root),
+        )
+
+
 # --- merged from test_data_service.py ---
 def _data_service__config() -> dict:
     return {'seed': 9, 'data': {'name': 'synthetic_multiclass', 'num_classes': 3, 'dimension': 4, 'train_size': 30, 'validation_size': 12, 'test_size': 12}, 'noise': {'name': 'clean', 'rate': 0.0, 'seed': 9}, 'loader': {'batch_size': 6, 'num_workers': 0, 'drop_last': False}}
@@ -397,6 +425,56 @@ class _data_service_DataServiceTest(unittest.TestCase):
                 prepared.validation_split.observed_targets.tolist(),
             )
             self.assertEqual(set(prepared.train_indices) & set(prepared.validation_indices), set())
+
+    def test_derived_noisy_validation_extends_manifest_coverage(self) -> None:
+        requirements = DataRequirements(
+            roles=frozenset(
+                {DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}
+            ),
+            validation_targets='noisy',
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prepared = prepare_experiment_data(
+                {
+                    'seed': 1,
+                    'data': {
+                        'name': 'derived_validation_fixture',
+                        'root': str(root),
+                        'validation_size': 5000,
+                        'validation_split': {
+                            'strategy': 'stratified',
+                            'rng': 'default_rng',
+                        },
+                    },
+                    'noise': {
+                        'name': 'symmetric',
+                        'rate': 0.2,
+                        'seed': 1,
+                        'sampling': 'transition',
+                    },
+                    'loader': {'batch_size': 128, 'num_workers': 0},
+                },
+                requirements=requirements,
+                run_dir=root / 'run',
+                seed=1,
+                registry=DatasetRegistry(
+                    (_data_service__DerivedValidationFixtureAdapter(),)
+                ),
+            )
+            assert prepared.manifest is not None
+            manifest_indices = set(map(int, prepared.manifest.global_indices))
+            train_indices = set(map(int, prepared.train_indices))
+            validation_indices = set(map(int, prepared.validation_indices))
+            self.assertEqual(len(prepared.train_indices), 45000)
+            self.assertEqual(len(prepared.validation_indices), 5000)
+            self.assertEqual(len(manifest_indices), 50000)
+            self.assertEqual(len(train_indices & manifest_indices), 45000)
+            self.assertEqual(len(validation_indices & manifest_indices), 5000)
+            self.assertEqual(len(prepared.dataset_for(DataRole.TRAIN)), 45000)
+            self.assertEqual(
+                len(prepared.dataset_for(DataRole.NOISY_VALIDATION)), 5000
+            )
 
     def test_independent_validation_indices_do_not_override_train_manifest(self) -> None:
         requirements = DataRequirements(

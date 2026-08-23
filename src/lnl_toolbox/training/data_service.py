@@ -727,6 +727,22 @@ def _prepare_experiment_data(
                 if requirements.manifest_scope == "effective_train"
                 else full_train_indices
             )
+            if (
+                requirements.validation_targets == "noisy"
+                and validation_split is train
+            ):
+                manifest_index_set = set(map(int, manifest_indices))
+                validation_extension = np.asarray(
+                    [
+                        int(index)
+                        for index in validation_indices
+                        if int(index) not in manifest_index_set
+                    ],
+                    dtype=np.int64,
+                )
+                manifest_indices = np.concatenate(
+                    (manifest_indices, validation_extension)
+                )
             clean_lookup = _target_map(train.global_indices, source_clean)
             manifest_clean = np.asarray([clean_lookup[int(index)] for index in manifest_indices], dtype=np.int64)
             # A manifest is scoped to train.  Independent validation splits may

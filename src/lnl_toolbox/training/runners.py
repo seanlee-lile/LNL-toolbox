@@ -289,9 +289,16 @@ def _l2rw_requirements(config: Mapping[str, Any]) -> MethodRequirements:
             ("trusted_validation", "manifest"),
             description="audited L2RW supervision requires a trusted manifest",
         ))
+    synthetic_feature_smoke = (
+        source == "synthetic_fixture"
+        and _component_name(config, "data") == "synthetic_multiclass"
+        and _component_name(config, "model") == "feature_mlp"
+    )
     return MethodRequirements(
         method="l2rw",
-        supported_modalities=frozenset({Modality.IMAGE}),
+        supported_modalities=frozenset({
+            Modality.TABULAR if synthetic_feature_smoke else Modality.IMAGE
+        }),
         requires_clean_train_labels=source == "official_generated",
         requires_clean_validation=True,
         validation_target="clean",

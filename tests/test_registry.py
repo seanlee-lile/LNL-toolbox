@@ -45,7 +45,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 # --- merged from test_compatibility.py ---
-from lnl_toolbox.catalog import default_paper_config, load_papers, load_recipe_config
+from lnl_toolbox.catalog import default_paper_config, load_papers, load_recipe_config, recipe_by_id
 
 # --- merged from test_compatibility.py ---
 from lnl_toolbox.data.profile import DatasetDeclarationConflict, DatasetDeclarations, DatasetProfile, KnowledgeState, Modality, NoiseKnowledge, NoiseOrigin, NoiseRateInfo, NoiseRateStatus, NoiseStatus, resolve_dataset_capabilities
@@ -230,6 +230,38 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
         audited = registry.get('l2rw').requirements({'trusted_validation': {'source': 'audited_manifest'}})
         self.assertFalse(audited.requires_clean_train_labels)
         self.assertEqual({item.code for item in audited.required_config_inputs}, {'requires_trusted_validation', 'requires_trusted_manifest'})
+
+    def test_l2rw_tabular_support_is_limited_to_synthetic_feature_smoke(self) -> None:
+        registry = create_runner_registry()
+        smoke = load_recipe_config(recipe_by_id('l2rw-cifar10-smoke'))
+        smoke_requirements = registry.get('l2rw').requirements(smoke)
+        self.assertEqual(
+            smoke_requirements.supported_modalities,
+            frozenset({Modality.TABULAR}),
+        )
+        service = ExperimentService()
+        service.preflight(smoke, check_data=True)
+        self.assertEqual(
+            service.last_compatibility.status,
+            CompatibilityStatus.COMPATIBLE,
+        )
+
+        reproduction = load_recipe_config(recipe_by_id('l2rw-cifar10-reproduction'))
+        reproduction_requirements = registry.get('l2rw').requirements(reproduction)
+        self.assertEqual(
+            reproduction_requirements.supported_modalities,
+            frozenset({Modality.IMAGE}),
+        )
+
+        unknown_tabular = {
+            'data': {'name': 'another_tabular_dataset'},
+            'model': {'name': 'feature_mlp'},
+            'trusted_validation': {'source': 'synthetic_fixture'},
+        }
+        self.assertEqual(
+            registry.get('l2rw').requirements(unknown_tabular).supported_modalities,
+            frozenset({Modality.IMAGE}),
+        )
 
     def test_shared_runner_detection_is_component_driven(self) -> None:
         registry = create_runner_registry()
