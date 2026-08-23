@@ -26,7 +26,7 @@ http://127.0.0.1:8765/recipe。`lnl web` 默认打开主页；`lnl web --no-open
 
     python -m unittest discover -s web -p "test_*.py" -v
 
-主页默认进入“新手教程”，并按以下顺序推进：
+主页默认进入“快速开始”，先按数据集 → 标签噪声 → 正式配置开始实验；“新手教程”仍保留，并按以下顺序推进：
 
     doctor → list → validate → dry-run → run → resume
 

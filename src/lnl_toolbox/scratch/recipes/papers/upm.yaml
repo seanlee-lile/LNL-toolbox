@@ -1,0 +1,7 @@
+schema_version: 1
+name: upm
+description: UPM projected confusing-probability update smoke recipe.
+steps:
+  - {block: set_seed, params: {seed: 1}}
+  - {block: prepare_paper_batch}
+  - {block: upm_eta_update}

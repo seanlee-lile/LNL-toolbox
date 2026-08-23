@@ -1,0 +1,8 @@
+schema_version: 1
+name: mc-ldce
+description: MC-LDCE centroid risk smoke recipe.
+steps:
+  - {block: set_seed, params: {seed: 1}}
+  - {block: prepare_paper_batch}
+  - {block: mc_ldce_centroid_risk}
+  - {block: mean_loss, params: {input: mc_ldce_loss, save_as: loss}}

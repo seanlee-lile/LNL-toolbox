@@ -1,0 +1,7 @@
+schema_version: 1
+name: cnlcu
+description: CNLCU uncertainty selection smoke recipe.
+steps:
+  - {block: set_seed, params: {seed: 1}}
+  - {block: prepare_paper_batch}
+  - {block: cnlcu_uncertainty}

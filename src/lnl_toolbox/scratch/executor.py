@@ -90,8 +90,12 @@ def execute_recipe(
     recipe: Mapping[str, Any],
     context: ScratchContext | None = None,
 ) -> ScratchContext:
-    result = ScratchContext(recipe.get("settings", {}))
+    initial: dict[str, Any] = {}
+    if isinstance(recipe, Mapping) and isinstance(recipe.get("settings", {}), Mapping):
+        initial.update(recipe.get("settings", {}))
     if context is not None:
-        result.update(context)
-    validated = validate_recipe(recipe, initial_slots=set(result))
+        initial.update(context)
+    validated = validate_recipe(recipe, initial_slots=set(initial))
+    result = ScratchContext(validated.get("settings", {}))
+    result.update(initial)
     return execute_steps(validated["steps"], result)

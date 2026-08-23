@@ -1,0 +1,8 @@
+schema_version: 1
+name: dss
+description: DSS evidence scoring smoke recipe.
+steps:
+  - {block: set_seed, params: {seed: 1}}
+  - {block: prepare_paper_batch}
+  - {block: dss_evidence}
+  - {block: top_k_confidence, params: {input: dss_score, save_as: selected_indices}}

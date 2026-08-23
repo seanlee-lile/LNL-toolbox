@@ -1,0 +1,7 @@
+schema_version: 1
+name: cdr
+description: CDR critical update mask smoke recipe.
+steps:
+  - {block: set_seed, params: {seed: 1}}
+  - {block: prepare_paper_batch}
+  - {block: cdr_parameter_mask}

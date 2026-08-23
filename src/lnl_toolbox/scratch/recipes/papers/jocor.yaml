@@ -1,0 +1,8 @@
+schema_version: 1
+name: jocor
+description: JoCoR joint agreement and small-loss selection smoke recipe.
+steps:
+  - {block: set_seed, params: {seed: 1}}
+  - {block: prepare_paper_batch, params: {classes: 3}}
+  - {block: jocor_agreement}
+  - {block: small_loss, params: {input: joint_loss_per_sample, save_as: loss}}

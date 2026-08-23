@@ -1,0 +1,8 @@
+schema_version: 1
+name: dual-t
+description: Dual-T transition composition smoke recipe.
+steps:
+  - {block: set_seed, params: {seed: 1}}
+  - {block: prepare_paper_batch}
+  - {block: compose_transition, params: {first: transition_a, second: transition_b, save_as: transition}}
+  - {block: forward_correction}

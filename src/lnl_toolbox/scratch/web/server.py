@@ -8,7 +8,7 @@ from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse
 
-from .. import execute_recipe, list_blocks, load_recipe, resolve_recipe, save_recipe, validate_recipe
+from .. import ScratchExecutionError, execute_recipe, list_blocks, load_recipe, resolve_recipe, save_recipe, validate_recipe
 
 
 ROOT = Path(__file__).resolve().parent
@@ -16,12 +16,23 @@ RECIPE_ROOT = ROOT.parent / "recipes"
 
 
 def _recipe_path(name: str) -> Path:
-    safe = Path(name).name
-    candidates = [RECIPE_ROOT / safe, RECIPE_ROOT / "examples" / safe, RECIPE_ROOT / "papers" / safe]
+    requested = Path(name)
+    candidates = [RECIPE_ROOT / requested, RECIPE_ROOT / "examples" / requested.name, RECIPE_ROOT / "papers" / requested.name]
+    root = RECIPE_ROOT.resolve()
     for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved != root and root not in resolved.parents:
+            continue
         if candidate.suffix in {".yaml", ".yml"} and candidate.exists():
             return candidate
     raise FileNotFoundError(name)
+
+
+def _error_payload(exc: Exception) -> dict[str, object]:
+    payload: dict[str, object] = {"ok": False, "error": str(exc)}
+    if isinstance(exc, ScratchExecutionError):
+        payload.update({"path": list(exc.path), "block_id": exc.block_id, "params": exc.params})
+    return payload
 
 
 class ScratchHandler(BaseHTTPRequestHandler):
@@ -89,7 +100,7 @@ class ScratchHandler(BaseHTTPRequestHandler):
             else:
                 self._send({"error": "not found"}, 404)
         except Exception as exc:
-            self._send({"ok": False, "error": str(exc)}, 400)
+            self._send(_error_payload(exc), 400)
 
 
 def main(argv: list[str] | None = None) -> int:

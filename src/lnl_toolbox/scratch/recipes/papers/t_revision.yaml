@@ -1,0 +1,7 @@
+schema_version: 1
+name: t-revision
+description: T-Revision stochastic transition revision smoke recipe.
+steps:
+  - {block: set_seed, params: {seed: 1}}
+  - {block: prepare_paper_batch}
+  - {block: revise_transition}

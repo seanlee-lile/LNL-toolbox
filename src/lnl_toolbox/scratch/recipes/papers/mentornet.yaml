@@ -1,0 +1,7 @@
+schema_version: 1
+name: mentornet
+description: MentorNet curriculum weight smoke recipe.
+steps:
+  - {block: set_seed, params: {seed: 1}}
+  - {block: prepare_paper_batch}
+  - {block: mentor_weight}

@@ -1,0 +1,9 @@
+schema_version: 1
+name: binary-risk
+description: Natarajan binary unbiased risk smoke recipe.
+steps:
+  - {block: set_seed, params: {seed: 1}}
+  - {block: prepare_paper_batch, params: {classes: 2}}
+  - block: binary_risk
+    params: {rho_positive: 0.1, rho_negative: 0.2}
+  - {block: mean_loss}

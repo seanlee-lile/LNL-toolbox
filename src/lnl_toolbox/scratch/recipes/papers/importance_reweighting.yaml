@@ -1,0 +1,8 @@
+schema_version: 1
+name: importance-reweighting
+description: Importance reweighted per-sample risk smoke recipe.
+steps:
+  - {block: set_seed, params: {seed: 1}}
+  - {block: prepare_paper_batch}
+  - {block: importance_reweight}
+  - {block: mean_loss, params: {input: weighted_loss, save_as: loss}}

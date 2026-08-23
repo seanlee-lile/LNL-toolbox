@@ -1,0 +1,7 @@
+schema_version: 1
+name: l2rw
+description: L2RW normalized meta-example weight smoke recipe.
+steps:
+  - {block: set_seed, params: {seed: 1}}
+  - {block: prepare_paper_batch}
+  - {block: l2rw_meta_weight}

@@ -1,0 +1,8 @@
+schema_version: 1
+name: cwd
+description: CWD class-wise centroid objective smoke recipe.
+steps:
+  - {block: set_seed, params: {seed: 1}}
+  - {block: prepare_paper_batch}
+  - {block: cwd_statistics}
+  - {block: mean_loss, params: {input: cwd_loss, save_as: loss}}

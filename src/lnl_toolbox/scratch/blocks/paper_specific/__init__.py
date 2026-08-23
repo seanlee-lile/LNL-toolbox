@@ -2,3 +2,4 @@
 
 from . import coteaching
 from . import dividemix
+from . import research

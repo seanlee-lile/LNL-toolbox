@@ -254,6 +254,19 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertIn('"lnl doctor"', page)
         self.assertIn("lnl list experiments --profile smoke --format json", page)
 
+    def test_quick_start_is_first_entry_and_reuses_existing_execution_flow(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertLess(page.index('id: "quickstart"'), page.index('id: "beginner"'))
+        for marker in (
+            "quickRegisterAndInspect",
+            "quickStartNoiseOptions",
+            "quickStartCompatibilityRecipes",
+            "quickStartCommand",
+            "openActiveConfigInEditor",
+            'fetch("/api/run"',
+        ):
+            self.assertIn(marker, page)
+
     def test_parameter_editor_exposes_registry_groups_and_deviation_warning(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
         self.assertIn("yaml-parameter-groups", page)

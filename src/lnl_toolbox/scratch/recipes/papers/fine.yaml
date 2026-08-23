@@ -1,0 +1,7 @@
+schema_version: 1
+name: fine
+description: FINE feature filtering smoke recipe.
+steps:
+  - {block: set_seed, params: {seed: 1}}
+  - {block: prepare_paper_batch}
+  - {block: fine_feature_filter}

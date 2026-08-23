@@ -1,0 +1,8 @@
+schema_version: 1
+name: pdl
+description: PDL feature-dependent instance transition smoke recipe.
+steps:
+  - {block: set_seed, params: {seed: 1}}
+  - {block: prepare_paper_batch, params: {classes: 3}}
+  - {block: pdl_instance_transition}
+  - {block: mean_loss, params: {input: pdl_loss, save_as: loss}}
