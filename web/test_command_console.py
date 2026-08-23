@@ -253,6 +253,8 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertIn("快速命令（跳过逐步教程）", page)
         self.assertIn('"lnl doctor"', page)
         self.assertIn("lnl list experiments --profile smoke --format json", page)
+        self.assertIn('href="http://127.0.0.1:8795/scratch"', page)
+        self.assertIn('control.replaceAll("__ID__", id)', page)
 
     def test_quick_start_is_first_entry_and_reuses_existing_execution_flow(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
@@ -422,6 +424,19 @@ class CommandConsoleTest(unittest.TestCase):
             command_console.subprocess, "run", return_value=completed
         ):
             self.assertTrue(command_console._picker_payload({"mode": "open_file"})["cancelled"])
+
+    def test_windows_picker_falls_back_to_root_for_relative_output_path(self):
+        completed = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(command_console.os, "name", "nt"), mock.patch.object(
+            command_console.subprocess, "run", return_value=completed
+        ) as run:
+            command_console._picker_payload(
+                {"mode": "folder", "initial": "artifacts/runs/new-output"}
+            )
+        self.assertEqual(
+            run.call_args.kwargs["env"]["LNL_PICKER_INITIAL"],
+            str(command_console.ROOT),
+        )
 
     def test_result_payload_includes_partial_metric_history(self):
         with tempfile.TemporaryDirectory() as directory:
