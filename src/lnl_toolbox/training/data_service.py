@@ -338,6 +338,7 @@ class PreparedData:
     spec: DataSpec
     requirements: DataRequirements
     train_split: RawDatasetSplit
+    validation_split: RawDatasetSplit
     test_split: RawDatasetSplit
     train_indices: np.ndarray
     validation_indices: np.ndarray
@@ -934,6 +935,7 @@ def _prepare_experiment_data(
         spec=spec,
         requirements=requirements,
         train_split=train,
+        validation_split=validation_split,
         test_split=test,
         train_indices=train_indices,
         validation_indices=validation_indices,
