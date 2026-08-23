@@ -185,7 +185,7 @@
   <main>
     <h1 id="page-title">LNL Toolbox Command Console</h1>
     <div id="page-subtitle" class="subtitle">左侧选择功能，右侧配置参数并预览指令；参数变化会即时反映在预览中。</div>
-    <p><a class="secondary" href="/scratch">打开 LNL Scratch 积木搭建器</a></p>
+    <p><a class="secondary" href="http://127.0.0.1:8795/scratch" target="_blank" rel="noopener">打开 LNL Scratch 积木搭建器</a></p>
     <div class="layout">
       <aside class="panel">
         <div class="section-title">功能模块</div>
@@ -294,7 +294,7 @@
       return node ? node.value : fallback;
     }
     function field(label, id, control, wide = false) {
-      return '<label class="' + (wide ? 'wide' : '') + '">' + label + control.replace("__ID__", id) + '</label>';
+      return '<label class="' + (wide ? 'wide' : '') + '">' + label + control.replaceAll("__ID__", id) + '</label>';
     }
     function selectControl(id, options, attrs = "") {
       return '<select id="' + id + '" ' + attrs + '>' + options.map(function (item) {
