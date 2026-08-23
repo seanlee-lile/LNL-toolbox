@@ -1013,7 +1013,33 @@ class CommandConsoleTest(unittest.TestCase):
         )
         payload = command_console._job_payload(job)
         self.assertEqual(payload["returncode"], 0)
+        self.assertIsNone(payload["training"])
         json.dumps(payload)
+
+    def test_training_job_payload_contains_best_effort_snapshot(self):
+        from web.training_status import TrainingContext
+
+        job = command_console.Job(
+            job_id="training",
+            key="custom",
+            command=["lnl", "run"],
+            display_command="lnl run",
+            lines=['{"event":"epoch","epoch":1}'],
+            training_context=TrainingContext(None, None, "run", 2),
+        )
+        payload = command_console._job_payload(job)
+        self.assertEqual(payload["training"]["completed_epoch"], 1)
+        self.assertEqual(payload["training"]["total_epochs"], 2)
+
+    def test_web_training_without_output_receives_a_unique_run_directory(self):
+        with mock.patch.object(command_console.subprocess, "Popen") as popen:
+            popen.return_value.stdout = None
+            job = command_console._start_process(
+                "custom", ["lnl", "run", "--recipe", "cifar10-clean-smoke"], "lnl run --recipe cifar10-clean-smoke"
+            )
+        self.assertIn("--output-dir", job.command)
+        self.assertIn("artifacts/web-runs/", job.display_command.replace("\\", "/"))
+        self.assertIsNotNone(job.training_context)
 
     def test_completed_job_polling_returns_without_reentrant_lock_deadlock(self):
         job = command_console.Job(

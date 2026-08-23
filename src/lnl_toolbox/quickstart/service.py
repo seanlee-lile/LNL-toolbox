@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+from threading import RLock
 from typing import Any, Mapping
 import uuid
 
-from lnl_toolbox.catalog import load_papers, recipe_by_id, load_recipe_config
+from lnl_toolbox.catalog import discover_recipes, load_papers, recipe_by_id, load_recipe_config
 from lnl_toolbox.data.probe import DatasetProbeResult, probe_dataset_path, suggest_dataset_alias
 from lnl_toolbox.data.profile import KnowledgeState, NoiseOrigin
 from lnl_toolbox.noise.quickstart_catalog import quick_start_noise_specs, visible_synthetic_noise_specs
@@ -23,7 +25,32 @@ from .models import (
     QuickStartNoiseSelection,
     QuickStartPlan,
 )
-from .templates import adapt_method_template, find_exact_reproduction, method_template_for_paper
+from .templates import MethodTemplate, adapt_method_template, find_exact_reproduction, method_template_for_paper
+
+
+class _CachedDatasetService:
+    """Provide one local-dataset overlay without rereading the catalog per paper."""
+
+    _SOURCE_KEYS = {"root", "path", "noise_path", "labels_path", "annotation_root"}
+
+    def __init__(self, service: DataService, alias: str) -> None:
+        self._service = service
+        self._alias = alias
+        applied = service.apply({}, alias)
+        self._data = dict(applied.get("data", {}) or {})
+        self._local_dataset = dict(applied.get("local_dataset", {}) or {})
+
+    def apply(self, config: Mapping[str, Any], alias: object) -> dict[str, Any]:
+        if str(alias) != self._alias:
+            return self._service.apply(config, alias)
+        result = deepcopy(dict(config))
+        data = dict(result.get("data", {}) or {})
+        for key in self._SOURCE_KEYS:
+            data.pop(key, None)
+        data.update(self._data)
+        result["data"] = data
+        result["local_dataset"] = dict(self._local_dataset)
+        return result
 
 
 def _split_size(profile, name: str) -> int | None:
@@ -59,6 +86,65 @@ class QuickStartService:
         self.data_service = data_service or DEFAULT_DATA_SERVICE
         self.experiment_service = ExperimentService(data_service=self.data_service)
         self.artifact_root = Path(artifact_root or "artifacts/web-quick-start").expanduser().resolve()
+        self._method_cache: dict[str, tuple[QuickStartMethodOption, ...]] = {}
+        self._method_cache_lock = RLock()
+        self._template_cache: dict[str, object] = {}
+        self._recipe_cache: dict[str, object] | None = None
+
+    def _recipes(self) -> dict[str, object]:
+        with self._method_cache_lock:
+            if self._recipe_cache is None:
+                self._recipe_cache = {
+                    item.id: item
+                    for item in discover_recipes(include_conditional=True)
+                }
+            return self._recipe_cache
+
+    def _template(self, paper, recipes: Mapping[str, object]) -> MethodTemplate:
+        with self._method_cache_lock:
+            cached = self._template_cache.get(paper.id)
+        if cached is not None:
+            return cached  # type: ignore[return-value]
+        selected = next(
+            (item for item in paper.configs if item.profile == "reproduction"),
+            None,
+        )
+        if selected is None:
+            raise ValueError(f"paper {paper.id!r} has no formal reproduction recipe")
+        recipe = recipes.get(selected.recipe_id)
+        if recipe is None:
+            raise ValueError(f"unknown recipe {selected.recipe_id!r}")
+        template = MethodTemplate(
+            paper.id, selected.recipe_id, recipe, load_recipe_config(recipe)
+        )
+        with self._method_cache_lock:
+            self._template_cache[paper.id] = template
+        return template
+
+    @staticmethod
+    def _exact_reproduction(paper, recipes, dataset_adapter: str, noise_selection) -> str | None:
+        wanted_noise = "clean" if noise_selection.kind in {"clean", "native"} else noise_selection.key
+        normalized_adapter = str(dataset_adapter).lower().replace("-", "_")
+        for item in paper.configs:
+            if item.profile != "reproduction":
+                continue
+            recipe = recipes.get(item.recipe_id)
+            if recipe is None:
+                continue
+            config = load_recipe_config(recipe)
+            data = config.get("data", {}) or {}
+            noise = config.get("noise", {}) or {}
+            data_name = str(data.get("name", "")).lower().replace("-", "_")
+            if data_name != normalized_adapter:
+                continue
+            if str(noise.get("name", "clean")) != wanted_noise:
+                continue
+            configured_rate = noise.get("rate")
+            if noise_selection.rate is not None and configured_rate is not None:
+                if float(configured_rate) != float(noise_selection.rate):
+                    continue
+            return recipe.id
+        return None
 
     def probe(self, path: str) -> DatasetProbeResult:
         return probe_dataset_path(path, data_service=self.data_service)
@@ -105,6 +191,9 @@ class QuickStartService:
         aliases = [record.alias for record in self.data_service.catalog.records()]
         alias = suggest_dataset_alias(candidate.adapter, result.path, aliases)
         self.data_service.register(alias, candidate.adapter, candidate.data)
+        with self._method_cache_lock:
+            self._method_cache.clear()
+            self._template_cache.clear()
         report = self.data_service.inspect(alias)
         return self._summary(alias, report)
 
@@ -145,40 +234,85 @@ class QuickStartService:
         dataset_alias: str,
         noise_selection: QuickStartNoiseSelection,
     ) -> tuple[QuickStartMethodOption, ...]:
-        options: list[QuickStartMethodOption] = []
+        cache_key = json.dumps({
+            "dataset": dataset_alias,
+            "noise": noise_selection.to_dict(),
+        }, sort_keys=True)
+        with self._method_cache_lock:
+            cached = self._method_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         profile = self.data_service.inspect(dataset_alias).profile
         profile_data = {} if profile is None else profile.to_dict()
-        for paper in load_papers():
+        dataset_service = _CachedDatasetService(self.data_service, dataset_alias)
+        options: list[QuickStartMethodOption] = []
+        metadata_errors: dict[str, QuickStartMethodOption] = {}
+        candidates: dict[str, Mapping[str, Any]] = {}
+        templates: dict[str, object] = {}
+        papers = load_papers()
+        recipes = self._recipes()
+        for paper in papers:
             try:
-                template = method_template_for_paper(paper)
-                candidate = adapt_method_template(
+                template = self._template(paper, recipes)
+                templates[paper.id] = template
+                candidates[paper.id] = adapt_method_template(
                     template.config,
                     dataset_alias=dataset_alias,
                     dataset_profile=profile_data,
                     noise_selection=noise_selection,
-                    data_service=self.data_service,
+                    data_service=dataset_service,
                 )
-                result = self.experiment_service.list_config_compatibility(
-                    dataset_alias, {paper.id: candidate}
-                )[0][1]
-                options.append(QuickStartMethodOption(
-                    paper.id, paper.acronym, paper.title, paper.summary, paper.venue, paper.year,
-                    self._status(result),
-                    tuple(item.message for item in result.reasons),
-                    tuple(result.required_user_inputs),
-                    template.recipe_id,
-                    "paper_reproduction" if find_exact_reproduction(
-                        paper, dataset_adapter=str(profile_data.get("adapter", "")), noise_selection=noise_selection
-                    ) else "toolbox_adapted",
-                    candidate,
-                    tuple(result.required_input_paths),
-                ))
             except Exception as exc:
-                options.append(QuickStartMethodOption(
+                metadata_errors[paper.id] = QuickStartMethodOption(
                     paper.id, paper.acronym, paper.title, paper.summary, paper.venue, paper.year,
                     "metadata_error", (str(exc),), (), None, None, None, (),
+                )
+        try:
+            compatibility = dict(self.experiment_service.list_config_compatibility(
+                dataset_alias, candidates
+            ))
+        except Exception:
+            # Preserve the old per-paper failure isolation if one candidate is malformed.
+            compatibility = {}
+            for paper_id, candidate in candidates.items():
+                try:
+                    compatibility[paper_id] = self.experiment_service.list_config_compatibility(
+                        dataset_alias, {paper_id: candidate}
+                    )[0][1]
+                except Exception as exc:
+                    compatibility[paper_id] = exc
+
+        for paper in papers:
+            if paper.id in metadata_errors:
+                options.append(metadata_errors[paper.id])
+                continue
+            candidate = candidates[paper.id]
+            result = compatibility.get(paper.id)
+            if isinstance(result, Exception) or result is None:
+                reason = str(result) if isinstance(result, Exception) else "兼容性检查未返回结果"
+                options.append(QuickStartMethodOption(
+                    paper.id, paper.acronym, paper.title, paper.summary, paper.venue, paper.year,
+                    "metadata_error", (reason,), (), None, None, None, (),
                 ))
-        return tuple(options)
+                continue
+            template = templates[paper.id]
+            options.append(QuickStartMethodOption(
+                paper.id, paper.acronym, paper.title, paper.summary, paper.venue, paper.year,
+                self._status(result),
+                tuple(item.message for item in result.reasons),
+                tuple(result.required_user_inputs),
+                template.recipe_id,
+                "paper_reproduction" if self._exact_reproduction(
+                    paper, recipes, dataset_adapter=str(profile_data.get("adapter", "")), noise_selection=noise_selection
+                ) else "toolbox_adapted",
+                candidate,
+                tuple(result.required_input_paths),
+            ))
+        final = tuple(options)
+        with self._method_cache_lock:
+            self._method_cache[cache_key] = final
+        return final
 
     @staticmethod
     def _plan_id(dataset_alias: str, paper_id: str) -> str:

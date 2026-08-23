@@ -239,12 +239,22 @@
             <button id="clear" class="secondary">清空日志</button>
           </div>
           <div id="status" class="status">尚未执行命令</div>
+          <section id="training-output" class="hidden" aria-live="polite">
+            <div class="section-title">TRAINING · 已确认的阶段输出</div>
+            <div id="training-summary" class="helper"></div>
+            <div class="actions" style="margin-top: 8px;">
+              <button id="training-simple" class="secondary">简洁状态</button>
+              <button id="training-detail" class="secondary">详细输出</button>
+            </div>
+            <pre id="training-metrics" class="hidden"></pre>
+          </section>
           <pre id="output">选择左侧模块或快捷命令后，点击“执行此指令”。</pre>
         </section>
       </div>
     </div>
   </main>
   <script src="/assets/quick_start.js"></script>
+  <script src="/assets/run_output.js"></script>
   <script>
     const recipeMode = window.location.pathname === "/recipe" || window.location.pathname === "/recipe/";
     const allModules = [
@@ -1908,6 +1918,7 @@
       stopTaskButton.textContent = job.cancel_requested ? "正在停止…" : "停止当前任务";
       if (job.structured != null) renderStructured(job.structured);
       else { structuredNode.classList.add("hidden"); outputNode.classList.remove("hidden"); }
+      if (window.trainingOutput) window.trainingOutput.render(job);
       if (job.running) { statusNode.textContent = "运行中：" + job.command; statusNode.className = "status running"; }
       else if (job.error || job.returncode !== 0) { statusNode.textContent = "失败（退出码 " + job.returncode + "）"; statusNode.className = "status failed"; }
       else { statusNode.textContent = "完成（退出码 0）"; statusNode.className = "status success"; }
@@ -2059,6 +2070,8 @@
     });
     copyButton.addEventListener("click", async function () { if (!state.request) return; await navigator.clipboard.writeText(previewNode.textContent); statusNode.textContent = "指令已复制"; });
     document.getElementById("clear").addEventListener("click", function () { outputNode.textContent = ""; statusNode.textContent = "日志已清空"; });
+    document.getElementById("training-simple").addEventListener("click", function () { if (window.trainingOutput) window.trainingOutput.toggle(false); });
+    document.getElementById("training-detail").addEventListener("click", function () { if (window.trainingOutput) window.trainingOutput.toggle(true); });
     document.getElementById("show-yaml").addEventListener("click", async function () {
       if (!yamlEditorPanel.classList.contains("hidden")) { hideYamlEditor(); return; }
       yamlEditorPanel.classList.remove("hidden");

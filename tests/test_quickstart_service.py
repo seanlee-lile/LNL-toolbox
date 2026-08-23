@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -70,6 +71,30 @@ class QuickStartServiceTests(unittest.TestCase):
         self.assertTrue(all(item.acronym for item in result))
         fine = next(item for item in result if item.paper_id == "fine")
         self.assertEqual(fine.status, "unsupported")
+
+    def test_method_options_batches_compatibility_and_reuses_cache(self) -> None:
+        selection = QuickStartNoiseSelection("clean", "clean")
+        original = self.service.experiment_service.list_config_compatibility
+        with patch.object(
+            self.service.experiment_service,
+            "list_config_compatibility",
+            wraps=original,
+        ) as checker:
+            first = self.service.method_options("local-cifar10", selection)
+            second = self.service.method_options("local-cifar10", selection)
+        self.assertEqual(first, second)
+        self.assertEqual(checker.call_count, 1)
+        self.assertGreater(len(first), 5)
+
+    def test_method_options_cache_skips_second_dataset_inspection(self) -> None:
+        selection = QuickStartNoiseSelection("clean", "clean")
+        original = self.service.data_service.inspect
+        with patch.object(self.service.data_service, "inspect", wraps=original) as inspector:
+            self.service.method_options("local-cifar10", selection)
+            first_calls = inspector.call_count
+            self.service.method_options("local-cifar10", selection)
+        self.assertGreaterEqual(first_calls, 1)
+        self.assertEqual(inspector.call_count, first_calls)
 
     def test_unknown_path_is_not_marked_ready(self) -> None:
         result = self.service.register_and_inspect(str(Path(self.temp.name) / "missing"))

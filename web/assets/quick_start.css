@@ -1,5 +1,12 @@
 .qs-root { display: grid; gap: 12px; }
 .qs-root h2 { margin: 0; color: #bfdbfe; }
+.qs-loading { display: flex; align-items: center; gap: 10px; padding: 11px 13px; border: 1px solid #315b86; border-radius: 9px; color: #dbeafe; background: #10243a; }
+.qs-loading strong { display: block; }
+.qs-loading p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+.qs-spinner { width: 18px; height: 18px; flex: 0 0 18px; border: 2px solid #41617f; border-top-color: #93c5fd; border-radius: 50%; animation: qs-spin .8s linear infinite; }
+.qs-is-loading { position: relative; }
+.qs-is-loading button, .qs-is-loading input, .qs-is-loading select { pointer-events: none; opacity: .62; }
+@keyframes qs-spin { to { transform: rotate(360deg); } }
 .qs-step { padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #111a2a; }
 .qs-step h3 { margin: 0 0 8px; color: #bfdbfe; }
 .qs-step h4 { margin: 10px 0 6px; color: var(--muted); }

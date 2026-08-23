@@ -143,12 +143,14 @@ def run_ca2c_experiment(config: dict[str, Any], output_dir=None, resume=None) ->
             "candidate_memory_hash": memory.fingerprint(),
         })
         rows.append(row)
-        print(
-            f"CA2C epoch {epoch + 1}/{epochs} phase={row['phase']} "
-            f"loss={row['train_loss']:.5f} val={row['validation_accuracy']:.4f} "
-            f"test={row['test_accuracy']:.4f}",
-            flush=True,
+        # Keep the live Web console and offline artifacts on the same
+        # structured event contract.  Rewriting this small file each epoch
+        # also makes interruption/resume display the complete history.
+        (run_dir / "metrics.jsonl").write_text(
+            "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in rows),
+            encoding="utf-8",
         )
+        print(json.dumps(row, ensure_ascii=False), flush=True)
         if p_scheduler is not None: p_scheduler.step(); n_scheduler.step()
         atomic_save({
             "method": "ca2c",

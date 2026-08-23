@@ -34,6 +34,7 @@ SCRATCH_RECIPE_ROOT = SCRATCH_ROOT / "recipes"
 STATIC_ASSETS = {
     "/assets/quick_start.js": (WEB_ROOT / "assets" / "quick_start.js", "application/javascript; charset=utf-8"),
     "/assets/quick_start.css": (WEB_ROOT / "assets" / "quick_start.css", "text/css; charset=utf-8"),
+    "/assets/run_output.js": (WEB_ROOT / "assets" / "run_output.js", "application/javascript; charset=utf-8"),
 }
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -248,6 +249,7 @@ class Job:
     error: str | None = None
     structured: object | None = None
     cancel_requested: bool = False
+    training_context: object | None = None
 
     @property
     def done(self) -> bool:
@@ -332,6 +334,24 @@ def _start_process(key: str, command: list[str], display_command: str) -> Job:
         command=command,
         display_command=display_command,
     )
+    from web.training_status import infer_training_context
+
+    context = infer_training_context(command, ROOT)
+    if (
+        context is not None
+        and context.command_kind == "run"
+        and context.run_dir is None
+        and "--dry-run" not in command
+    ):
+        # A recipe's output_root can produce a runner-defined subdirectory.
+        # Give Web-owned formal runs a unique explicit location instead, so
+        # polling never guesses from the newest artifact directory.
+        web_output = ROOT / "artifacts" / "web-runs" / job.job_id
+        command = [*command, "--output-dir", str(web_output.relative_to(ROOT))]
+        job.command = command
+        job.display_command = f"{display_command} --output-dir {web_output.relative_to(ROOT)}"
+        context = infer_training_context(command, ROOT)
+    job.training_context = context
     try:
         job.process = subprocess.Popen(
             command,
@@ -1447,7 +1467,7 @@ def _save_config(payload: object) -> dict[str, object]:
 
 def _job_payload(job: Job) -> dict[str, object]:
     with JOBS_LOCK:
-        return {
+        payload: dict[str, object] = {
             "id": job.job_id,
             "key": job.key,
             "command": job.display_command,
@@ -1458,6 +1478,25 @@ def _job_payload(job: Job) -> dict[str, object]:
             "cancel_requested": job.cancel_requested,
             "structured": job.structured,
         }
+        context = job.training_context
+        lines = list(job.lines)
+        running = not job.done
+        returncode = job.returncode
+        cancel_requested = job.cancel_requested
+    if context is not None:
+        from web.training_status import training_snapshot
+
+        snapshot = training_snapshot(
+            context,
+            lines=lines,
+            running=running,
+            returncode=returncode,
+            cancel_requested=cancel_requested,
+        )
+        payload["training"] = None if snapshot is None else snapshot.to_dict()
+    else:
+        payload["training"] = None
+    return payload
 
 
 def _picker_payload(payload: object) -> dict[str, object]:

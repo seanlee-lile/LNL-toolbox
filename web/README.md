@@ -39,6 +39,12 @@ Quick Start 的最短流程是：
 Quick Start 只负责编排，最终训练仍使用现有 `/api/run`、job polling、日志和停止任务流程。
 复杂数据集或额外 checkpoint、manifest 等资源，继续从“本地数据集”或 YAML 编辑器进入。
 
+## 长训练输出
+
+训练任务默认显示简洁状态：当前/最后完成的阶段、最近完成的 epoch，以及仅在已知时显示的总 epoch。它只读取已 flush 的 `metrics.jsonl`，因此不展示 batch 进度、百分比或 ETA。
+
+点击“详细输出”可同时查看原始合并 stdout/stderr 与最近 100 条指标事件。读取半写入的 JSON 行失败时会忽略该行并保留上一次有效状态；状态展示失败不会中断训练，也不会改变 runner、checkpoint 或训练数学。
+
 主页默认进入“快速开始”，先按数据集 → 标签噪声 → 正式配置开始实验；“新手教程”仍保留，并按以下顺序推进：
 
     doctor → list → validate → dry-run → run → resume
