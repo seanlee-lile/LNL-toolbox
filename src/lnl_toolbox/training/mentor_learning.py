@@ -230,7 +230,7 @@ def train_mentor_artifact(
                 batch["label"].to(device),
                 batch["epoch_percentage"].to(device),
             )
-            objective = torch.nn.functional.mse_loss(
+            objective = torch.nn.functional.binary_cross_entropy(
                 prediction, batch["curriculum_target"].to(device)
             )
             optimizer.zero_grad(set_to_none=True)
@@ -246,7 +246,7 @@ def train_mentor_artifact(
                     batch["label"].to(device),
                     batch["epoch_percentage"].to(device),
                 )
-                objective = torch.nn.functional.mse_loss(
+                objective = torch.nn.functional.binary_cross_entropy(
                     prediction, batch["curriculum_target"].to(device)
                 )
                 optimizer.zero_grad(set_to_none=True)

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from lnl_toolbox.data.profile import Modality
-from lnl_toolbox.training.compatibility import MethodRequirements
+from lnl_toolbox.training.compatibility import ConfigInputRequirement, MethodRequirements
 from lnl_toolbox.training.planning import (
     RunPlan,
     coteaching_plan,
@@ -25,7 +25,7 @@ from lnl_toolbox.training.planning import (
 
 Runner = Callable[[dict[str, Any], str | Path | None, str | Path | None], Path]
 Planner = Callable[[Mapping[str, Any], str, tuple[str, ...] | None], RunPlan]
-RequirementsProvider = Callable[[Mapping[str, Any]], MethodRequirements]
+RequirementsProvider = Callable[[Mapping[str, Any]], MethodRequirements | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,6 +160,214 @@ def _image_requirements(
     return provide
 
 
+def _config_input(
+    code: str,
+    *paths: tuple[str, ...],
+    mode: str = "all",
+    description: str,
+) -> ConfigInputRequirement:
+    return ConfigInputRequirement(
+        code=code, paths=tuple(paths), mode=mode, description=description
+    )
+
+
+def _component_name(config: Mapping[str, Any], *path: str) -> str:
+    value: Any = config
+    for part in path:
+        if not isinstance(value, Mapping):
+            return ""
+        value = value.get(part, {})
+    if isinstance(value, Mapping):
+        value = value.get("name", "")
+    return str(value).strip().lower().replace("-", "_")
+
+
+def _supervised_requirements(config: Mapping[str, Any]) -> MethodRequirements | None:
+    risk = _component_name(config, "pipeline", "risk_corrector")
+    weight = _component_name(config, "pipeline", "weight_provider")
+    objective = _component_name(config, "pipeline", "objective_consumer")
+    update = _component_name(config, "parameter_update")
+    loss = _component_name(config, "loss")
+
+    if risk in {"forward", "backward"}:
+        estimator = _component_name(config, "pipeline", "transition_estimator")
+        inputs = ()
+        if estimator == "known":
+            inputs = (_config_input(
+                "requires_transition_matrix",
+                ("pipeline", "transition_estimator", "matrix"),
+                description="known-T loss correction requires a transition matrix",
+            ),)
+        return MethodRequirements(
+            method="loss_correction",
+            supported_modalities=frozenset({Modality.IMAGE}),
+            validation_target="noisy",
+            required_config_inputs=inputs,
+        )
+    if weight == "mentornet":
+        return MethodRequirements(
+            method="mentornet",
+            supported_modalities=frozenset({Modality.IMAGE}),
+            requires_clean_validation=True,
+            validation_target="clean",
+            required_config_inputs=(_config_input(
+                "requires_mentor_artifact",
+                ("pipeline", "weight_provider", "artifact_path"),
+                description="MentorNet requires a configured MentorArtifact",
+            ),),
+        )
+    if objective == "dss":
+        return MethodRequirements(
+            method="dss",
+            supported_modalities=frozenset({Modality.IMAGE}),
+            validation_target="noisy",
+        )
+    if update == "cdr":
+        return MethodRequirements(
+            method="cdr",
+            supported_modalities=frozenset({Modality.IMAGE}),
+            requires_method_noise_prior=True,
+            method_noise_prior_paths=(("parameter_update", "noise_rate"),),
+            validation_target="noisy",
+        )
+    if loss in {"apl", "gce"}:
+        validation_target = str(
+            (config.get("noise", {}) or {}).get("validation_targets", "clean")
+        ).strip().lower()
+        return MethodRequirements(
+            method=loss,
+            supported_modalities=frozenset({Modality.IMAGE}),
+            validation_target=validation_target,
+        )
+    return None
+
+
+def _binary_requirements(config: Mapping[str, Any]) -> MethodRequirements:
+    risk = _component_name(config, "risk")
+    inputs = ()
+    if risk in {"natarajan", "natarajan_unbiased"}:
+        inputs = (_config_input(
+            "requires_binary_noise_prior",
+            ("risk", "rho_positive"),
+            ("risk", "rho_negative"),
+            description="Natarajan risk requires both class-conditional noise rates",
+        ),)
+    return MethodRequirements(
+        method="binary",
+        supported_modalities=frozenset({Modality.TABULAR}),
+        min_classes=2,
+        max_classes=2,
+        exact_classes=frozenset({2}),
+        validation_target="any",
+        required_config_inputs=inputs,
+    )
+
+
+def _l2rw_requirements(config: Mapping[str, Any]) -> MethodRequirements:
+    trusted = config.get("trusted_validation", {}) or {}
+    source = (
+        str(trusted.get("source", "")).strip().lower()
+        if isinstance(trusted, Mapping) else ""
+    )
+    inputs = [_config_input(
+        "requires_trusted_validation",
+        ("trusted_validation", "source"),
+        description="L2RW requires an explicit trusted-validation source",
+    )]
+    if source == "audited_manifest":
+        inputs.append(_config_input(
+            "requires_trusted_manifest",
+            ("trusted_validation", "manifest"),
+            description="audited L2RW supervision requires a trusted manifest",
+        ))
+    return MethodRequirements(
+        method="l2rw",
+        supported_modalities=frozenset({Modality.IMAGE}),
+        requires_clean_train_labels=source == "official_generated",
+        requires_clean_validation=True,
+        validation_target="clean",
+        required_config_inputs=tuple(inputs),
+    )
+
+
+def _cal_requirements(_config: Mapping[str, Any]) -> MethodRequirements:
+    return MethodRequirements(
+        method="cal",
+        supported_modalities=frozenset({Modality.IMAGE}),
+        requires_clean_train_labels=True,
+        requires_clean_validation=True,
+        requires_aligned_clean_noisy_targets=True,
+        validation_target="clean",
+        required_config_inputs=(_config_input(
+            "requires_external_noise_labels",
+            ("noise", "path"), ("noise", "clean_key"), ("noise", "noisy_key"),
+            description="CAL requires aligned external clean/noisy label vectors",
+        ),),
+    )
+
+
+def _cwd_requirements(_config: Mapping[str, Any]) -> MethodRequirements:
+    return MethodRequirements(
+        method="cwd",
+        supported_modalities=frozenset({Modality.IMAGE}),
+        min_classes=2,
+        max_classes=2,
+        exact_classes=frozenset({2}),
+        validation_target="any",
+        required_config_inputs=(_config_input(
+            "requires_binary_noise_prior",
+            ("noise", "rho_positive"), ("noise", "rho_negative"),
+            description="CWD requires both class-conditional noise rates",
+        ),),
+    )
+
+
+def _mc_ldce_requirements(config: Mapping[str, Any]) -> MethodRequirements:
+    estimator = str(
+        (config.get("transition", {}) or {}).get("estimator", "")
+    ).strip().lower()
+    inputs = ()
+    if estimator and estimator != "paper_volmin":
+        inputs = (_config_input(
+            "requires_transition_source",
+            ("transition", "artifact"), ("transition", "matrix"),
+            mode="any",
+            description="MC-LDCE requires a transition artifact or matrix",
+        ),)
+    return MethodRequirements(
+        method="mc_ldce",
+        supported_modalities=frozenset({Modality.IMAGE}),
+        min_classes=3,
+        requires_clean_validation=True,
+        validation_target="clean",
+        required_config_inputs=inputs,
+    )
+
+
+def _fine_requirements(_config: Mapping[str, Any]) -> MethodRequirements:
+    return MethodRequirements(
+        method="fine",
+        supported_modalities=frozenset({Modality.IMAGE}),
+        min_classes=100,
+        max_classes=100,
+        exact_classes=frozenset({100}),
+        requires_clean_validation=True,
+        validation_target="clean",
+    )
+
+
+def _jocor_requirements(config: Mapping[str, Any]) -> MethodRequirements | None:
+    if _component_name(config, "algorithm") != "jocor":
+        return None
+    return MethodRequirements(
+        method="jocor",
+        supported_modalities=frozenset({Modality.IMAGE}),
+        requires_method_noise_prior=True,
+        method_noise_prior_paths=(("noise", "rate"),),
+        validation_target="clean",
+    )
+
+
 def _importance_reweighting_requirements(_config: Mapping[str, Any]) -> MethodRequirements:
     return MethodRequirements(
         method="importance_reweighting",
@@ -211,6 +419,7 @@ def create_runner_registry() -> RunnerRegistry:
         "lnl_toolbox.training.experiment",
         "run_supervised_experiment",
         planner=supervised_plan,
+        requirements_provider=_supervised_requirements,
     )
     registry.add(
         "clean",
@@ -218,15 +427,25 @@ def create_runner_registry() -> RunnerRegistry:
         "run_clean_experiment",
         planner=supervised_plan,
     )
-    registry.add("multi_model", "lnl_toolbox.training.multi_model_experiment", "run_multi_model_experiment")
-    registry.add("cwd", "lnl_toolbox.training.cwd_experiment", "run_cwd_experiment")
-    registry.add("fine", "lnl_toolbox.training.fine_experiment", "run_fine_experiment")
+    registry.add(
+        "multi_model", "lnl_toolbox.training.multi_model_experiment",
+        "run_multi_model_experiment", requirements_provider=_jocor_requirements,
+    )
+    registry.add(
+        "cwd", "lnl_toolbox.training.cwd_experiment", "run_cwd_experiment",
+        requirements_provider=_cwd_requirements,
+    )
+    registry.add(
+        "fine", "lnl_toolbox.training.fine_experiment", "run_fine_experiment",
+        requirements_provider=_fine_requirements,
+    )
     registry.add(
         "binary",
         "lnl_toolbox.training.binary_experiment",
         "run_binary_experiment",
         supports_resume=False,
         budget_path=None,
+        requirements_provider=_binary_requirements,
     )
     registry.add(
         "instance_transition",
@@ -250,6 +469,7 @@ def create_runner_registry() -> RunnerRegistry:
         "lnl_toolbox.training.dual_t_experiment",
         "run_dual_t_experiment",
         budget_path=None,
+        requirements_provider=_image_requirements("dual_t"),
     )
     registry.add(
         "importance_reweighting",
@@ -264,13 +484,22 @@ def create_runner_registry() -> RunnerRegistry:
         budget_path=None,
         requirements_provider=_pcse_requirements,
     )
-    registry.add("mc_ldce", "lnl_toolbox.training.mc_ldce_experiment", "run_mc_ldce_experiment")
-    registry.add("cal", "lnl_toolbox.training.cal_experiment", "run_cal_experiment")
+    registry.add(
+        "mc_ldce", "lnl_toolbox.training.mc_ldce_experiment", "run_mc_ldce_experiment",
+        requirements_provider=_mc_ldce_requirements,
+    )
+    registry.add(
+        "cal", "lnl_toolbox.training.cal_experiment", "run_cal_experiment",
+        requirements_provider=_cal_requirements,
+    )
     registry.add(
         "ca2c", "lnl_toolbox.training.ca2c_experiment", "run_ca2c_experiment",
         requirements_provider=_image_requirements("ca2c", clean_validation=True),
     )
-    registry.add("l2rw", "lnl_toolbox.training.l2rw_experiment", "run_l2rw_experiment")
+    registry.add(
+        "l2rw", "lnl_toolbox.training.l2rw_experiment", "run_l2rw_experiment",
+        requirements_provider=_l2rw_requirements,
+    )
     registry.add(
         "volminnet",
         "lnl_toolbox.training.volminnet_experiment",

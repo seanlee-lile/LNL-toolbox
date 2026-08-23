@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from collections.abc import Collection
 
 from lnl_toolbox.data.profile import (
     DatasetCapabilities,
@@ -12,6 +13,28 @@ from lnl_toolbox.data.profile import (
     NoiseOrigin,
     NoiseRateStatus,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigInputRequirement:
+    """Declarative, non-executing requirement for experiment configuration."""
+
+    code: str
+    paths: tuple[tuple[str, ...], ...]
+    mode: str = "all"
+    description: str = "required method configuration is missing"
+
+    def __post_init__(self) -> None:
+        code = str(self.code).strip()
+        paths = tuple(tuple(str(part) for part in path) for path in self.paths)
+        if not code:
+            raise ValueError("config input requirement code must not be empty")
+        if not paths or any(not path for path in paths):
+            raise ValueError("config input requirement paths must not be empty")
+        if self.mode not in {"all", "any"}:
+            raise ValueError("config input requirement mode must be all or any")
+        object.__setattr__(self, "code", code)
+        object.__setattr__(self, "paths", paths)
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +58,7 @@ class MethodRequirements:
     required_source_roles: tuple[str, ...] = ("train", "test")
     method_noise_prior_paths: tuple[tuple[str, ...], ...] = ()
     pretrained_role_paths: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    required_config_inputs: tuple[ConfigInputRequirement, ...] = ()
 
     def __post_init__(self) -> None:
         modalities = frozenset(Modality(item) for item in self.supported_modalities)
@@ -66,6 +90,16 @@ class MethodRequirements:
                 for role, path in self.pretrained_role_paths
             ),
         )
+        object.__setattr__(
+            self,
+            "required_config_inputs",
+            tuple(
+                item
+                if isinstance(item, ConfigInputRequirement)
+                else ConfigInputRequirement(**item)
+                for item in self.required_config_inputs
+            ),
+        )
 
 
 class CompatibilityStatus(str, Enum):
@@ -88,6 +122,13 @@ class CompatibilityResult:
     reasons: tuple[CompatibilityReason, ...] = ()
     warnings: tuple[CompatibilityReason, ...] = ()
     required_user_inputs: tuple[str, ...] = ()
+    required_input_paths: tuple[tuple[str, tuple[tuple[str, ...], ...]], ...] = ()
+
+    def __post_init__(self) -> None:
+        normalized = []
+        for code, paths in self.required_input_paths:
+            normalized.append((str(code), tuple(tuple(str(part) for part in path) for path in paths)))
+        object.__setattr__(self, "required_input_paths", tuple(sorted(normalized)))
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -104,6 +145,10 @@ class CompatibilityResult:
                 for item in self.warnings
             ],
             "required_user_inputs": list(self.required_user_inputs),
+            "required_input_paths": {
+                code: [list(path) for path in paths]
+                for code, paths in self.required_input_paths
+            },
         }
 
 
@@ -111,7 +156,7 @@ def requirements_unavailable_result(method: str, dataset: str) -> CompatibilityR
     """Represent missing runner metadata without claiming compatibility."""
 
     reason = CompatibilityReason(
-        "requirements_unavailable",
+        "method_metadata_error",
         f"runner {method!r} does not publish dataset compatibility requirements",
     )
     return CompatibilityResult(
@@ -119,13 +164,16 @@ def requirements_unavailable_result(method: str, dataset: str) -> CompatibilityR
         method=method,
         dataset=dataset,
         reasons=(reason,),
-        required_user_inputs=("method_requirements",),
+        required_user_inputs=(),
     )
 
 
 def resolve_compatibility(
     dataset: DatasetCapabilities,
     method: MethodRequirements,
+    *,
+    method_noise_rate_prior: object | None = None,
+    available_pretrained_roles: Collection[str] = (),
 ) -> CompatibilityResult:
     """Compare metadata only; this function performs no I/O or training."""
 
@@ -133,10 +181,10 @@ def resolve_compatibility(
     requirements: list[CompatibilityReason] = []
     warnings: list[CompatibilityReason] = []
     inputs: set[str] = set()
+    input_paths: dict[str, tuple[tuple[str, ...], ...]] = {}
 
     if dataset.modality is Modality.UNKNOWN:
         requirements.append(CompatibilityReason("unknown_modality", "dataset modality must be confirmed"))
-        inputs.add("modality")
     elif dataset.modality not in method.supported_modalities:
         incompatible.append(CompatibilityReason("unsupported_modality", f"{method.method} does not support {dataset.modality.value} data"))
 
@@ -155,8 +203,7 @@ def resolve_compatibility(
     if dataset.observed_train_labels is KnowledgeState.UNAVAILABLE:
         incompatible.append(CompatibilityReason("missing_observed_train_labels", "observed training labels are unavailable"))
     elif dataset.observed_train_labels is KnowledgeState.UNKNOWN:
-        requirements.append(CompatibilityReason("unknown_observed_train_labels", "observed training-label availability must be confirmed"))
-        inputs.add("observed_train_labels")
+        requirements.append(CompatibilityReason("unknown_observed_train_labels", "adapter/inspection metadata does not establish observed training-label availability"))
 
     if method.requires_clean_train_labels or method.requires_aligned_clean_noisy_targets:
         if dataset.clean_train_labels is KnowledgeState.UNAVAILABLE:
@@ -168,16 +215,14 @@ def resolve_compatibility(
         if dataset.aligned_clean_noisy_targets is KnowledgeState.UNAVAILABLE:
             incompatible.append(CompatibilityReason("unaligned_clean_noisy_targets", "aligned clean/noisy targets are unavailable"))
         elif dataset.aligned_clean_noisy_targets is KnowledgeState.UNKNOWN:
-            requirements.append(CompatibilityReason("unknown_clean_noisy_alignment", "clean/noisy target alignment must be confirmed"))
-            inputs.add("aligned_clean_noisy_targets")
+            requirements.append(CompatibilityReason("unknown_clean_noisy_alignment", "adapter/inspection metadata does not establish clean/noisy target alignment"))
 
     if method.requires_clean_validation:
         clean_validation = dataset.clean_validation_labels
         if clean_validation is KnowledgeState.UNAVAILABLE and dataset.clean_train_labels is not KnowledgeState.AVAILABLE:
             incompatible.append(CompatibilityReason("missing_clean_validation", "clean validation labels cannot be provided"))
         elif clean_validation is KnowledgeState.UNKNOWN and dataset.clean_train_labels is KnowledgeState.UNKNOWN:
-            requirements.append(CompatibilityReason("unknown_clean_validation", "clean validation labels or splittable clean train labels must be confirmed"))
-            inputs.add("clean_validation_labels")
+            requirements.append(CompatibilityReason("unknown_clean_validation", "adapter/inspection metadata does not establish a clean validation source"))
 
     if (
         dataset.noise_origin is NoiseOrigin.NATIVE
@@ -205,20 +250,30 @@ def resolve_compatibility(
         requirements.append(CompatibilityReason("unknown_noise_rate", "this method does not accept an unknown dataset noise rate"))
         inputs.add("dataset_noise_rate")
 
-    if method.requires_method_noise_prior and dataset.method_noise_rate_prior.status not in {NoiseRateStatus.KNOWN, NoiseRateStatus.ESTIMATED}:
+    prior_status = getattr(method_noise_rate_prior, "status", NoiseRateStatus.UNKNOWN)
+    if method.requires_method_noise_prior and not method.method_noise_prior_paths:
+        requirements.append(CompatibilityReason(
+            "method_metadata_error",
+            "method declares a noise-rate prior but does not publish its config path",
+        ))
+    elif method.requires_method_noise_prior and prior_status not in {NoiseRateStatus.KNOWN, NoiseRateStatus.ESTIMATED}:
         requirements.append(CompatibilityReason("requires_noise_rate_prior", "method noise-rate prior is required independently of the dataset true rate"))
         inputs.add("noise_rate_prior")
+        input_paths["noise_rate_prior"] = method.method_noise_prior_paths
 
-    missing_pretrained = sorted(set(method.required_pretrained_roles) - set(dataset.pretrained_roles))
+    missing_pretrained = sorted(set(method.required_pretrained_roles) - set(available_pretrained_roles))
     if missing_pretrained:
         requirements.append(CompatibilityReason("missing_pretrained_source", "missing pretrained role(s): " + ", ".join(missing_pretrained)))
         inputs.update(f"pretrained:{role}" for role in missing_pretrained)
+        for role in missing_pretrained:
+            paths = tuple(path for candidate_role, path in method.pretrained_role_paths if candidate_role == role)
+            if paths:
+                input_paths[f"pretrained:{role}"] = paths
 
     if dataset.stable_indices is KnowledgeState.UNAVAILABLE:
         incompatible.append(CompatibilityReason("missing_stable_indices", "stable sample indices are unavailable"))
     elif dataset.stable_indices is KnowledgeState.UNKNOWN:
-        requirements.append(CompatibilityReason("unknown_stable_indices", "stable sample indices must be confirmed"))
-        inputs.add("stable_indices")
+        requirements.append(CompatibilityReason("unknown_stable_indices", "adapter/inspection metadata does not establish stable sample indices"))
 
     if incompatible:
         status = CompatibilityStatus.INCOMPATIBLE
@@ -233,11 +288,12 @@ def resolve_compatibility(
         status=status, method=method.method, dataset=dataset.dataset,
         reasons=reasons, warnings=tuple(warnings),
         required_user_inputs=tuple(sorted(inputs)),
+        required_input_paths=tuple(input_paths.items()),
     )
 
 
 __all__ = [
     "CompatibilityReason", "CompatibilityResult", "CompatibilityStatus",
-    "MethodRequirements", "requirements_unavailable_result",
+    "ConfigInputRequirement", "MethodRequirements", "requirements_unavailable_result",
     "resolve_compatibility",
 ]

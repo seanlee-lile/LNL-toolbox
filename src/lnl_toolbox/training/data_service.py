@@ -27,6 +27,7 @@ from lnl_toolbox.data.local_catalog import LocalDatasetCatalog, LocalDatasetReco
 from lnl_toolbox.data.profile import (
     DatasetCapabilities,
     DatasetDeclarations,
+    DatasetSemanticHints,
     DatasetProfile,
     KnowledgeState,
     Modality,
@@ -146,6 +147,7 @@ def _profile_from_splits(
     adapter: str,
     source: str | None,
     splits: Mapping[str, RawDatasetSplit],
+    semantic_hints: DatasetSemanticHints | None = None,
 ) -> DatasetProfile:
     train = splits["train"]
     modality, input_shape, channels = _input_contract(train)
@@ -196,7 +198,7 @@ def _profile_from_splits(
                 NoiseRateInfo(NoiseRateStatus.NOT_APPLICABLE),
             )
     class_names = train.class_names or tuple(str(index) for index in range(classes))
-    return DatasetProfile(
+    profile = DatasetProfile(
         dataset=name,
         adapter=adapter,
         source=source,
@@ -218,6 +220,40 @@ def _profile_from_splits(
         dataset_fingerprint=dataset_fingerprint,
         split_fingerprints=tuple(split_fingerprints.items()),
         noise=noise,
+    )
+    hints = semantic_hints or DatasetSemanticHints()
+
+    def fill_state(current: KnowledgeState, hinted: KnowledgeState, field_name: str) -> KnowledgeState:
+        if getattr(hinted, "value", hinted) == "unknown":
+            return current
+        if getattr(current, "value", current) != "unknown" and current != hinted:
+            raise ValueError(f"adapter semantic hint conflicts with inspected {field_name}")
+        return hinted
+
+    modality = profile.modality
+    if hints.modality is not Modality.UNKNOWN:
+        if modality is not Modality.UNKNOWN and modality is not hints.modality:
+            raise ValueError("adapter semantic hint conflicts with inspected modality")
+        modality = hints.modality
+    hinted_noise = hints.noise
+    noise_value = profile.noise
+    noise_status = fill_state(noise_value.status, hinted_noise.status, "noise_status")
+    noise_origin = fill_state(noise_value.origin, hinted_noise.origin, "noise_origin")
+    noise_rate = noise_value.rate
+    if hinted_noise.rate.status is not NoiseRateStatus.UNKNOWN:
+        if noise_rate.status is not NoiseRateStatus.UNKNOWN and noise_rate != hinted_noise.rate:
+            raise ValueError("adapter semantic hint conflicts with inspected noise_rate")
+        if noise_rate.status is NoiseRateStatus.UNKNOWN:
+            noise_rate = hinted_noise.rate
+    noise_value = NoiseKnowledge(noise_status, noise_origin, noise_rate)
+    return replace(
+        profile,
+        modality=modality,
+        observed_train_labels=fill_state(profile.observed_train_labels, hints.observed_train_labels, "observed_train_labels"),
+        clean_train_labels=fill_state(profile.clean_train_labels, hints.clean_train_labels, "clean_train_labels"),
+        clean_validation_labels=fill_state(profile.clean_validation_labels, hints.clean_validation_labels, "clean_validation_labels"),
+        stable_indices=fill_state(profile.stable_indices, hints.stable_indices, "stable_indices"),
+        noise=noise_value,
     )
 
 
@@ -1162,6 +1198,7 @@ class DataService:
         adapter: str,
         location: str | None,
         splits: Mapping[str, RawDatasetSplit],
+        semantic_hints: DatasetSemanticHints | None = None,
     ) -> DatasetStatusReport:
         train = splits["train"]
         test = splits["test"]
@@ -1171,7 +1208,8 @@ class DataService:
             f"{train_fingerprint}:{test_fingerprint}".encode("utf-8")
         ).hexdigest()
         profile = _profile_from_splits(
-            name=name, adapter=adapter, source=location, splits=splits
+            name=name, adapter=adapter, source=location, splits=splits,
+            semantic_hints=semantic_hints,
         )
         return DatasetStatusReport(
             name=name,
@@ -1226,7 +1264,15 @@ class DataService:
                 validation = None
             if validation is not None and validation.split == "validation" and len(validation):
                 splits["validation"] = validation
-            report = self._inspection_report(name, adapter, location, splits)
+            adapter_impl = self.registry.get(spec.name)
+            semantic_hints = getattr(adapter_impl, "semantic_hints", None)
+            if callable(semantic_hints):
+                semantic_hints = semantic_hints()
+            if semantic_hints is not None and not isinstance(semantic_hints, DatasetSemanticHints):
+                raise TypeError("adapter semantic_hints must be DatasetSemanticHints")
+            report = self._inspection_report(
+                name, adapter, location, splits, semantic_hints=semantic_hints
+            )
             if record is not None and persist:
                 evidence = report.to_dict()
                 evidence.pop("profile", None)
@@ -1277,6 +1323,10 @@ class DataService:
     ) -> DatasetCapabilities:
         """Persist an explicit, partial user declaration after inspection."""
 
+        forbidden = {"method_noise_rate_prior", "pretrained_roles"}.intersection(updates)
+        if forbidden:
+            names = ", ".join(sorted(forbidden))
+            raise ValueError(f"{names} are experiment inputs, not dataset declarations")
         payload = self.declarations(name).to_dict()
         for key, value in updates.items():
             if key not in payload:

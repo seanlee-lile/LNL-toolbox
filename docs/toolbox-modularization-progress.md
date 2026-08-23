@@ -287,3 +287,37 @@
 - Final validation: Web 23/23, full unittest 840/840, Ruff, embedded JavaScript syntax and `git diff --check` passed.
 - Cleanup: the browser-created project YAML was removed after validation; no generated training or configuration artifact remains.
 - Exact next step: human diff review and optional commit under separate authorization; no commit or push is authorized.
+
+## 26-paper noise compatibility preflight (2026-08-22)
+
+- Current task: add the missing compatibility requirements for 14 papers without changing algorithms, experiment runners, adapters, YAML, CLI or Web.
+- Branch/base: `codex/cli` at `7eaa452`.
+- Checklist: declarative config-input contract; component-driven shared-runner providers; dedicated-runner providers; 26-paper/native-noise regression; full validation.
+- Completed: 5 / 5 (100%).
+- Public behavior: all 26 formal paper recipes now publish config-specific requirements during preflight. Missing rate pairs, known-T matrix, trusted supervision or external artifacts produce stable requirement codes before runner invocation.
+- Safety boundary: compatibility describes the current executable path. Observed-only native noise is rejected when that path requires a manifest or aligned clean/noisy evidence; no formula, lifecycle, data adapter or clean-label boundary changed.
+- Tests executed: compatibility 23/23, experiment service 3/3, unified CLI 47/47, full unittest 878/878; focused Ruff and `git diff --check` passed.
+- Files added: none. Blockers: none. Local checkpoint commits: none.
+- Exact next step: human review of the eight-file diff; commit or push requires separate authorization.
+- Collaborator note: `training/runners.py`, `training/service.py` and shared documents are high-conflict; changes are limited to requirements providers, preflight validation and documentation.
+
+## Web dataset-aware YAML workflow (2026-08-22)
+
+- Current task: remove the duplicate YAML destination, make the editor contextual, and surface dataset/method compatibility while constructing YAML.
+- Branch/base: `codex/cli` at `7eaa452`, layered on the approved uncommitted 26-paper compatibility work.
+- Checklist: concrete-recipe batch query; server-side save gate; one-path editor; draft-preserving module switch; dataset-to-YAML link; focused/browser/full regression; documentation.
+- Completed: 6 / 7 (86%); focused service 4/4 and Web 47/47 tests pass, and browser checks confirm CIFAR disables Binary Risk/FINE while enabling Loss Correction, a single YAML path, automatic editor collapse, and draft restoration.
+- Safety boundary: dataset selection is a runtime `--data` override and is labeled as migration training; locked paper data/noise protocol fields, algorithms, runners, adapters and formal YAML remain unchanged.
+- Files added: none. Local checkpoint commits: none. Push is not authorized.
+- Exact next step: run full unittest/Ruff/final browser check, then update this record to 7/7 and hand off the reviewed diff.
+
+## Dataset-first workflow 输入重构（2026-08-23）
+
+- Current task: 按 Dataset-first 计划区分适配器事实、UNKNOWN 数据集声明和具体 recipe 实验输入。
+- Branch: `codex/cli`; base: 当前工作区既有兼容性与 Web 修改；未提交、未推送。
+- Checklist: adapter semantic hints；UNKNOWN-only 声明；具体 formal recipe；方法先验配置注入；实际预训练资源；Web 三段式 UI；测试与文档。
+- Completed: 7 / 7（100%）。
+- Public behavior: Web 不再允许把 method prior 或 pretrained role 写入 dataset catalog；正式 recipe 必须显式选择；兼容结果返回真实 input paths；原生 Clothing1M/Animal-10N 语义由 adapter hints 提供。
+- Validation: Web `test_command_console.py` 47/47；数据适配器 46/46；Python 编译检查通过。完整 registry 测试当前受仓库既有缺失模块 `test_t_revision_workflow` 阻塞，未归因于本任务。
+- Files modified in this task: `README.md`, `web/README.md`, `web/index.html`, `web/command_console.py`, `docs/data-flow-guide.md`, `docs/development-guide.md`, `docs/file-map.md`, `docs/toolbox-modularization-progress.md`, `src/lnl_toolbox/data/profile.py`, `src/lnl_toolbox/data/real_noise.py`, `src/lnl_toolbox/training/data_service.py`, `src/lnl_toolbox/training/compatibility.py`, `src/lnl_toolbox/training/service.py`, `tests/test_data_adapters.py`, `tests/test_registry.py`, `web/test_command_console.py`。其中多份文件已有协作者工作，本次只做局部增量。
+- Exact next step: review final diff and resolve the pre-existing merged-test import issue before considering commit/push.

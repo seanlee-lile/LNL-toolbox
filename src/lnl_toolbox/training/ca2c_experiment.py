@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from torch.nn import functional as F
 import yaml
 
 from lnl_toolbox.data import DataRequirements, DataRole
@@ -28,11 +27,6 @@ from lnl_toolbox.training.progress import standardize_epoch_row, write_training_
 from lnl_toolbox.training.reproduction_data import build_reproduction_model
 
 
-def _confidence_penalty(logits: torch.Tensor) -> torch.Tensor:
-    probability = torch.softmax(logits, dim=1)
-    return torch.sum(probability * torch.log(probability.clamp_min(1e-8)), dim=1).mean()
-
-
 @torch.inference_mode()
 def _evaluate(models, loader, criterion, device):
     for model in models: model.eval()
@@ -41,6 +35,40 @@ def _evaluate(models, loader, criterion, device):
         targets = batch["target"].to(device); logits = sum(model(batch["input"].to(device)) for model in models) / len(models)
         loss_sum += float(criterion(logits, targets).sum()); total += targets.numel(); correct += int(logits.argmax(1).eq(targets).sum())
     return {"loss": loss_sum / total, "accuracy": correct / total}
+
+
+def _ca2c_batch_objectives(
+    p_logits: torch.Tensor,
+    n_logits: torch.Tensor,
+    targets: torch.Tensor,
+    indices: torch.Tensor,
+    criterion: CrossEntropyLoss,
+    memory: CandidateMemory,
+    *,
+    candidate_k: int,
+    hard_weight: float,
+    robust: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if not robust:
+        return (
+            criterion(p_logits, targets).mean(),
+            criterion(n_logits, targets).mean(),
+        )
+    candidates, complements = cross_guidance(
+        p_logits, n_logits, candidate_k
+    )
+    memory.update_(indices, candidates)
+    soft_targets = memory.targets(indices)
+    confidence_weights = memory.confidence_weights(indices)
+    return (
+        partial_label_objective(
+            p_logits,
+            soft_targets,
+            hard_weight,
+            confidence_weights=confidence_weights,
+        ),
+        negative_label_objective(n_logits, complements),
+    )
 
 
 def run_ca2c_experiment(config: dict[str, Any], output_dir=None, resume=None) -> Path:
@@ -83,36 +111,21 @@ def run_ca2c_experiment(config: dict[str, Any], output_dir=None, resume=None) ->
             ca2c_config.get("lambda", ca2c_config.get("hard_weight", 0.99)),
         )
     )
-    robust_weight = float(ca2c_config.get("robust_weight", 0.8))
     for epoch in range(start, epochs):
         p_model.train(); n_model.train(); total = correct = 0; loss_sum = 0.0
         for batch in train_loader:
             inputs, targets, indices = batch["input"].to(device), batch["target"].to(device), batch["index"].to(device); p_logits, n_logits = p_model(inputs), n_model(inputs)
-            if epoch < warmup_epochs:
-                p_loss = criterion(p_logits, targets).mean() + _confidence_penalty(p_logits)
-                n_loss = criterion(n_logits, targets).mean() + _confidence_penalty(n_logits)
-                p_candidates = torch.zeros_like(p_logits, dtype=torch.bool)
-                n_candidates = torch.zeros_like(n_logits, dtype=torch.bool)
-                p_candidates.scatter_(1, p_logits.detach().topk(k, dim=1).indices, True)
-                n_candidates.scatter_(1, n_logits.detach().topk(k, dim=1).indices, True)
-                memory.update_(indices, p_candidates); memory.update_(indices, n_candidates)
-            else:
-                candidates, complements = cross_guidance(p_logits, n_logits, k); memory.update_(indices, candidates); soft_targets = memory.targets(indices)
-                confidence = soft_targets.max(dim=1).values
-                p_base = partial_label_objective(
-                    p_logits,
-                    soft_targets,
-                    mixing,
-                    confidence=confidence,
-                )
-                probability = torch.softmax(n_logits, dim=1)
-                n_base = negative_label_objective(n_logits, complements)
-                strong = batch.get("strong_input", batch["input"]).to(device)
-                p_strong = p_model(strong); n_strong = n_model(strong)
-                p_consistency = F.cross_entropy(p_strong, p_logits.detach().argmax(1))
-                n_consistency = F.cross_entropy(n_strong, n_logits.detach().argmax(1))
-                p_loss = robust_weight * p_base + (1.0 - robust_weight) * p_consistency
-                n_loss = robust_weight * n_base + (1.0 - robust_weight) * n_consistency
+            p_loss, n_loss = _ca2c_batch_objectives(
+                p_logits,
+                n_logits,
+                targets,
+                indices,
+                criterion,
+                memory,
+                candidate_k=k,
+                hard_weight=mixing,
+                robust=epoch >= warmup_epochs,
+            )
             p_optimizer.zero_grad(set_to_none=True); p_loss.backward(); p_optimizer.step(); n_optimizer.zero_grad(set_to_none=True); n_loss.backward(); n_optimizer.step()
             ensemble = (p_logits.detach() + n_logits.detach()) / 2; total += targets.numel(); correct += int(ensemble.argmax(1).eq(targets).sum()); loss_sum += float((p_loss.detach() + n_loss.detach()) / 2) * targets.numel()
         validation = _evaluate((p_model, n_model), validation_loader, criterion, device); test = _evaluate((p_model, n_model), test_loader, criterion, device)

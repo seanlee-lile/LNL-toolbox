@@ -58,6 +58,40 @@ def _assert_finite_warmup_gradients(model) -> None:
             )
 
 
+def _reference_transition_means(
+    proxy: CALProxyArtifact,
+    train_indices: np.ndarray,
+    noisy_targets: np.ndarray,
+    num_classes: int,
+) -> torch.Tensor:
+    """Estimate fixed proxy-to-noisy transition means over retained samples."""
+
+    indices = np.asarray(train_indices, dtype=np.int64)
+    targets = np.asarray(noisy_targets, dtype=np.int64)
+    if indices.shape != targets.shape or np.unique(indices).size != indices.size:
+        raise ValueError("CAL train indices and noisy targets must align uniquely")
+    order = np.argsort(indices, kind="stable")
+    sorted_indices = indices[order]
+    positions = np.searchsorted(sorted_indices, proxy.global_indices)
+    if (
+        np.any(positions >= sorted_indices.size)
+        or not np.array_equal(sorted_indices[positions], proxy.global_indices)
+    ):
+        raise ValueError("CAL proxy indices do not align with noisy targets")
+    observed = targets[order[positions]]
+    retained = proxy.sample_status != 2
+    counts = np.zeros((num_classes, num_classes), dtype=np.float64)
+    np.add.at(
+        counts,
+        (proxy.proxy_targets[retained], observed[retained]),
+        1.0,
+    )
+    totals = counts.sum(axis=1, keepdims=True)
+    nonempty = totals[:, 0] > 0
+    counts[nonempty] /= totals[nonempty]
+    return torch.as_tensor(counts, dtype=torch.float32)
+
+
 def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> Path:
     config = deepcopy(config); seed = int(config.get("seed", 1)); seed_everything(seed)
     device = resolve_device(str(config.get("trainer", {}).get("device", "auto")))
@@ -151,6 +185,12 @@ def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> 
         if payload.get("method") != "cal" or payload.get("config") != config: raise ValueError("CAL resume identity mismatch")
         proxy = CALProxyArtifact.load(proxy_path)
         if proxy.artifact_hash != payload["proxy_hash"]: raise ValueError("CAL proxy resume mismatch")
+    transition_means = _reference_transition_means(
+        proxy,
+        np.asarray(data.train_indices),
+        np.asarray(data.noisy_targets),
+        classes,
+    ).to(device)
     model = build_reproduction_model(config["model"], config["data"], classes).to(device)
     optimizer = build_optimizer(model, config["optimizer"]); epochs = int(config["trainer"]["epochs"])
     scheduler = build_alpha_scaled_scheduler(optimizer, config.get("scheduler"))
@@ -166,7 +206,13 @@ def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> 
     if payload is not None:
         model.load_state_dict(payload["model"]); optimizer.load_state_dict(payload["optimizer"])
         if scheduler is not None: scheduler.load_state_dict(payload["scheduler"])
-        means = payload["reference_loss_means"].to(device); rows = list(payload.get("metrics", [])); start = int(payload["completed_epoch"]) + 1; restore_rng_state(payload["rng_state"])
+        means = payload["reference_loss_means"].to(device)
+        saved_transition_means = payload.get("reference_transition_means")
+        if saved_transition_means is None or not torch.equal(
+            saved_transition_means.cpu(), transition_means.cpu()
+        ):
+            raise ValueError("CAL reference transition checkpoint mismatch")
+        rows = list(payload.get("metrics", [])); start = int(payload["completed_epoch"]) + 1; restore_rng_state(payload["rng_state"])
     for epoch in range(start, epochs):
         model.train(); total = correct = 0; loss_sum = 0.0
         epoch_loss_sums = torch.zeros_like(means)
@@ -179,7 +225,17 @@ def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> 
                 float(cal_cfg["confidence_weight"]),
                 cal_schedule,
             )
-            loss, _ = cal_objective(logits, targets, proxy_targets, mask, noisy_prior, proxy_prior, means, confidence_weight=confidence_weight)
+            loss, _ = cal_objective(
+                logits,
+                targets,
+                proxy_targets,
+                mask,
+                noisy_prior,
+                proxy_prior,
+                means,
+                transition_means,
+                confidence_weight=confidence_weight,
+            )
             detached_all_losses = cal_all_class_losses(logits.detach())
             for proxy_class in range(classes):
                 class_mask = mask & proxy_targets.eq(proxy_class)
@@ -197,7 +253,7 @@ def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> 
                 float(cal_cfg["confidence_weight"]),
                 cal_schedule,
             ))
-        atomic_save({"method": "cal", "config": config, "model": model.state_dict(), "optimizer": optimizer.state_dict(), "scheduler": None if scheduler is None else scheduler.state_dict(), "completed_epoch": epoch, "metrics": rows, "proxy_hash": proxy.artifact_hash, "reference_loss_means": means.cpu(), "rng_state": capture_rng_state()}, run_dir / "last.pt")
+        atomic_save({"method": "cal", "config": config, "model": model.state_dict(), "optimizer": optimizer.state_dict(), "scheduler": None if scheduler is None else scheduler.state_dict(), "completed_epoch": epoch, "metrics": rows, "proxy_hash": proxy.artifact_hash, "reference_loss_means": means.cpu(), "reference_transition_means": transition_means.cpu(), "rng_state": capture_rng_state()}, run_dir / "last.pt")
     (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8"); (run_dir / "metrics.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     if rows: write_training_curves_svg(rows, run_dir / "training_curves.svg")
     return run_dir

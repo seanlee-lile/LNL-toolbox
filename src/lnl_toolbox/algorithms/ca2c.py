@@ -75,6 +75,13 @@ class CandidateMemory:
             raise ValueError("CA2C candidate memory contains an empty row")
         return values / total
 
+    def confidence_weights(self, indices: Tensor) -> Tensor:
+        values = self.counts[self._positions(indices)].to(indices.device)
+        maximum = values.max(dim=1, keepdim=True).values
+        if bool((maximum <= 0).any()):
+            raise ValueError("CA2C candidate memory contains an empty row")
+        return values / maximum
+
     def state_dict(self) -> dict[str, Tensor]:
         return {"global_indices": self.global_indices.clone(), "counts": self.counts.clone()}
 
@@ -108,22 +115,29 @@ def partial_label_objective(
     soft_targets: Tensor,
     hard_weight: float,
     *,
-    confidence: Tensor | None = None,
+    confidence_weights: Tensor | None = None,
 ) -> Tensor:
     if logits.shape != soft_targets.shape:
         raise ValueError("CA2C logits and soft targets must align")
-    if confidence is not None and confidence.shape != (logits.shape[0],):
-        raise ValueError("CA2C confidence must have shape [B]")
+    if confidence_weights is not None and confidence_weights.shape != logits.shape:
+        raise ValueError("CA2C confidence weights must have shape [B,C]")
     weight = float(hard_weight)
     if not 0.0 <= weight <= 1.0:
         raise ValueError("CA2C hard_weight must be in [0,1]")
-    soft = -(soft_targets * F.log_softmax(logits, dim=1)).sum(dim=1)
-    hard = F.cross_entropy(logits, soft_targets.argmax(dim=1), reduction="none")
+    log_probability = F.log_softmax(logits, dim=1)
+    class_weights = (
+        torch.ones_like(log_probability)
+        if confidence_weights is None
+        else confidence_weights.to(log_probability)
+    )
+    if not bool(torch.isfinite(class_weights).all()) or bool((class_weights < 0).any()):
+        raise ValueError("CA2C confidence weights must be finite and non-negative")
+    hard_targets = F.one_hot(
+        soft_targets.argmax(dim=1), num_classes=logits.shape[1]
+    ).to(log_probability.dtype)
+    soft = -(class_weights * soft_targets * log_probability).sum(dim=1)
+    hard = -(class_weights * hard_targets * log_probability).sum(dim=1)
     losses = weight * hard + (1.0 - weight) * soft
-    if confidence is not None:
-        if not bool(torch.isfinite(confidence).all()) or bool((confidence < 0).any()):
-            raise ValueError("CA2C confidence must be finite and non-negative")
-        losses = losses * confidence.to(losses)
     return losses.mean()
 
 

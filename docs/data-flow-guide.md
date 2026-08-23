@@ -792,3 +792,27 @@ record、UCI Heart 空白分隔行，以及内存生成的 synthetic binary/mult
 `ExperimentService.preflight()` 通过注入的 `DataService.validate_config()` 完成数据预检，
 因此 doctor、validate、dry-run、run 和 sweep 不再维护自己的数据检查逻辑。现有 runner
 继续调用 `prepare_experiment_data()`；该函数是默认 `DataService` 的兼容代理。
+
+## 论文方法的数据兼容性门禁（2026-08-22）
+
+`MethodRequirements` 只声明当前 runner 已实现的数据边界，不改变论文 objective 或
+`DataRequirements`。共享 `supervised` runner 根据已配置的 loss、risk corrector、weight
+provider、objective consumer 和 parameter-update policy 解析具体方法；无法识别的空配置
+继续报告 requirements unavailable，不猜测论文身份。
+
+噪声率对、known-T 矩阵、trusted manifest 和外部 artifact 使用声明型配置输入检查。
+检查只判断必需字段是否存在；矩阵方向、数值范围、artifact 身份和论文公式仍由原有组件
+验证。observed-only 天然噪声数据若不能提供当前路径要求的 manifest 或 clean/noisy 对齐
+证据，必须在训练调用前失败，不能因为理论上可扩展而宣称当前实现兼容。
+
+## Dataset-first 兼容性解析（2026-08-23）
+
+兼容性查询先读取 adapter 的硬事实和可选 `DatasetSemanticHints`，只用用户声明填充
+UNKNOWN；声明与已检查事实冲突时失败，UNKNOWN 不等于 UNAVAILABLE。适配器可以声明
+原生噪声、干净验证集和缺失干净训练标签，而不会从 `clean_targets is None` 推断噪声。
+
+Web 必须选择具体 formal recipe 后再检查方法。数据集真实噪声率、方法噪声率先验和预训练
+资源分属不同层：前者是数据声明，后两者是实验配置输入。`CompatibilityResult` 返回
+`required_user_inputs` 及实际 `required_input_paths`；先验由 `ExperimentService` 注入
+配置后再进入 validate/dry-run/run。旧 catalog 中的先验和 `pretrained_roles` 仅可读取，
+不再作为新兼容性证据。

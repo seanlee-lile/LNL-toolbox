@@ -1,51 +1,45 @@
+"""Merged unit tests; source modules were consolidated without changing assertions."""
+
+# --- merged from test_losses.py ---
 import unittest
 
+# --- merged from test_losses.py ---
 import numpy as np
+
+# --- merged from test_losses.py ---
 import torch
+
+# --- merged from test_losses.py ---
 from torch.nn import functional as F
 
-from lnl_toolbox.losses import (
-    ActivePassiveLoss,
-    CrossEntropyLoss,
-    GeneralizedCrossEntropyLoss,
-    MeanAbsoluteErrorLoss,
-    NormalizedCrossEntropyLoss,
-    ReverseCrossEntropyLoss,
-    cross_entropy,
-    generalized_cross_entropy,
-)
+# --- merged from test_losses.py ---
+from lnl_toolbox.losses import ActivePassiveLoss, CrossEntropyLoss, GeneralizedCrossEntropyLoss, MeanAbsoluteErrorLoss, NormalizedCrossEntropyLoss, ReverseCrossEntropyLoss, cross_entropy, generalized_cross_entropy
+
+# --- merged from test_losses.py ---
 from lnl_toolbox.losses.torch_losses import loss_for_all_targets
+
+# --- merged from test_losses.py ---
 from lnl_toolbox.plugins.builtin import build_builtin_loss
 
+# --- merged from test_losses.py ---
+class _losses_LossTest(unittest.TestCase):
 
-class LossTest(unittest.TestCase):
     def test_loss_for_all_targets_reuses_per_sample_loss_contract(self) -> None:
         logits = torch.tensor([[2.0, 0.0, -1.0], [0.0, 1.0, 2.0]])
         values = loss_for_all_targets(CrossEntropyLoss(), logits)
-        expected = torch.stack(
-            [
-                CrossEntropyLoss()(logits, torch.zeros(2, dtype=torch.long)),
-                CrossEntropyLoss()(logits, torch.ones(2, dtype=torch.long)),
-                CrossEntropyLoss()(logits, torch.full((2,), 2, dtype=torch.long)),
-            ],
-            dim=1,
-        )
+        expected = torch.stack([CrossEntropyLoss()(logits, torch.zeros(2, dtype=torch.long)), CrossEntropyLoss()(logits, torch.ones(2, dtype=torch.long)), CrossEntropyLoss()(logits, torch.full((2,), 2, dtype=torch.long))], dim=1)
         torch.testing.assert_close(values, expected)
+
     def test_gce_approaches_ce(self) -> None:
         probabilities = np.array([[0.8, 0.2], [0.3, 0.7]])
         targets = np.array([0, 1])
-        np.testing.assert_allclose(
-            generalized_cross_entropy(probabilities, targets, q=1e-7),
-            cross_entropy(probabilities, targets),
-            rtol=1e-6,
-            atol=1e-6,
-        )
+        np.testing.assert_allclose(generalized_cross_entropy(probabilities, targets, q=1e-07), cross_entropy(probabilities, targets), rtol=1e-06, atol=1e-06)
 
     def test_torch_ce_matches_pytorch_per_sample(self) -> None:
         logits = torch.tensor([[2.0, -1.0, 0.5], [-0.5, 1.5, 0.0]])
         targets = torch.tensor([0, 2])
         actual = CrossEntropyLoss()(logits, targets)
-        expected = F.cross_entropy(logits, targets, reduction="none")
+        expected = F.cross_entropy(logits, targets, reduction='none')
         torch.testing.assert_close(actual, expected)
         self.assertEqual(actual.shape, (2,))
 
@@ -53,9 +47,7 @@ class LossTest(unittest.TestCase):
         logits = torch.tensor([[1.2, -0.3, 0.1], [0.2, 0.8, -1.0]], dtype=torch.float64)
         targets = torch.tensor([0, 1])
         ce = CrossEntropyLoss()(logits, targets)
-        torch.testing.assert_close(
-            GeneralizedCrossEntropyLoss(q=1e-7)(logits, targets), ce, rtol=1e-6, atol=1e-7
-        )
+        torch.testing.assert_close(GeneralizedCrossEntropyLoss(q=1e-07)(logits, targets), ce, rtol=1e-06, atol=1e-07)
         p_y = F.softmax(logits, dim=1).gather(1, targets[:, None]).squeeze(1)
         torch.testing.assert_close(GeneralizedCrossEntropyLoss(q=1.0)(logits, targets), 1.0 - p_y)
 
@@ -65,12 +57,10 @@ class LossTest(unittest.TestCase):
         targets = torch.tensor([1])
         actual = GeneralizedCrossEntropyLoss(q=q)(logits, targets)
         actual_gradient = torch.autograd.grad(actual.sum(), logits, retain_graph=True)[0]
-
         p_y = F.softmax(logits, dim=1).gather(1, targets[:, None]).squeeze(1)
         expected = (1.0 - p_y.pow(q)) / q
         expected_gradient = torch.autograd.grad(expected.sum(), logits)[0]
-
-        self.assertLess(float(p_y.item()), 1e-8)
+        self.assertLess(float(p_y.item()), 1e-08)
         torch.testing.assert_close(actual, expected)
         torch.testing.assert_close(actual_gradient, expected_gradient)
         self.assertGreater(float(actual_gradient.abs().max().item()), 0.0)
@@ -91,25 +81,13 @@ class LossTest(unittest.TestCase):
         torch.testing.assert_close(rce, 4.0 * (1.0 - p_y))
         active = NormalizedCrossEntropyLoss()
         apl = ActivePassiveLoss(active, ReverseCrossEntropyLoss(), alpha=2.0, beta=0.5)
-        torch.testing.assert_close(
-            apl(logits, targets), 2.0 * active(logits, targets) + 0.5 * rce
-        )
+        torch.testing.assert_close(apl(logits, targets), 2.0 * active(logits, targets) + 0.5 * rce)
 
     def test_extreme_logits_have_finite_values_and_gradients(self) -> None:
-        configs = [
-            {"name": "ce"},
-            {"name": "gce", "q": 0.7},
-            {"name": "nce"},
-            {"name": "mae"},
-            {"name": "rce"},
-            {"name": "apl"},
-        ]
+        configs = [{'name': 'ce'}, {'name': 'gce', 'q': 0.7}, {'name': 'nce'}, {'name': 'mae'}, {'name': 'rce'}, {'name': 'apl'}]
         for config in configs:
-            with self.subTest(name=config["name"]):
-                logits = torch.tensor(
-                    [[10000.0, -10000.0, 0.0], [-10000.0, 10000.0, 0.0]],
-                    requires_grad=True,
-                )
+            with self.subTest(name=config['name']):
+                logits = torch.tensor([[10000.0, -10000.0, 0.0], [-10000.0, 10000.0, 0.0]], requires_grad=True)
                 values = build_builtin_loss(config)(logits, torch.tensor([1, 1]))
                 self.assertTrue(torch.isfinite(values).all())
                 values.mean().backward()
@@ -122,12 +100,10 @@ class LossTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             ReverseCrossEntropyLoss(log_zero=0.0)
         with self.assertRaises(ValueError):
-            NormalizedCrossEntropyLoss(eps=float("nan"))
+            NormalizedCrossEntropyLoss(eps=float('nan'))
         for alpha, beta in ((0.0, 1.0), (1.0, 0.0), (-1.0, 1.0)):
             with self.subTest(alpha=alpha, beta=beta), self.assertRaises(ValueError):
-                ActivePassiveLoss(
-                    NormalizedCrossEntropyLoss(), MeanAbsoluteErrorLoss(), alpha, beta
-                )
+                ActivePassiveLoss(NormalizedCrossEntropyLoss(), MeanAbsoluteErrorLoss(), alpha, beta)
         with self.assertRaises(TypeError):
             ActivePassiveLoss(CrossEntropyLoss(), MeanAbsoluteErrorLoss())
         with self.assertRaises(TypeError):
@@ -136,8 +112,3 @@ class LossTest(unittest.TestCase):
             CrossEntropyLoss()(torch.randn(2, 3, 1), torch.tensor([0, 1]))
         with self.assertRaises(TypeError):
             CrossEntropyLoss()(torch.randn(2, 3), torch.tensor([0.0, 1.0]))
-
-
-if __name__ == "__main__":
-    unittest.main()
-

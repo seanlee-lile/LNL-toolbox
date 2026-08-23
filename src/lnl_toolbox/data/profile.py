@@ -112,6 +112,32 @@ class NoiseKnowledge:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class DatasetSemanticHints:
+    """Optional, adapter-owned semantics for facts absent from raw samples.
+
+    Hints only fill ``UNKNOWN`` profile fields.  They are never allowed to
+    override a fact obtained by inspecting an adapter's actual splits.
+    """
+
+    modality: Modality = Modality.UNKNOWN
+    observed_train_labels: KnowledgeState = KnowledgeState.UNKNOWN
+    clean_train_labels: KnowledgeState = KnowledgeState.UNKNOWN
+    clean_validation_labels: KnowledgeState = KnowledgeState.UNKNOWN
+    stable_indices: KnowledgeState = KnowledgeState.UNKNOWN
+    noise: NoiseKnowledge = field(default_factory=NoiseKnowledge)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "modality", Modality(self.modality))
+        for name in (
+            "observed_train_labels", "clean_train_labels",
+            "clean_validation_labels", "stable_indices",
+        ):
+            object.__setattr__(self, name, KnowledgeState(getattr(self, name)))
+        if not isinstance(self.noise, NoiseKnowledge):
+            object.__setattr__(self, "noise", NoiseKnowledge.from_dict(self.noise))
+
+
 def _pairs(value: Mapping[str, Any] | tuple[tuple[str, Any], ...]) -> tuple[tuple[str, Any], ...]:
     source = value.items() if isinstance(value, Mapping) else value
     return tuple(sorted(((str(key), item) for key, item in source), key=lambda pair: pair[0]))
@@ -231,6 +257,12 @@ class DatasetProfile:
 
 @dataclass(frozen=True, slots=True)
 class DatasetDeclarations:
+    """Persisted declarations for facts that inspection cannot determine.
+
+    ``method_noise_rate_prior`` and ``pretrained_roles`` are retained only for
+    reading old catalogs.  New compatibility resolution deliberately ignores
+    them because they are experiment inputs, not dataset facts.
+    """
     clean_train_labels: KnowledgeState = KnowledgeState.UNKNOWN
     noise_status: NoiseStatus = NoiseStatus.UNKNOWN
     noise_origin: NoiseOrigin = NoiseOrigin.UNKNOWN
@@ -333,6 +365,30 @@ class DatasetCapabilities:
         object.__setattr__(self, "available_splits", tuple(sorted(set(self.available_splits))))
         object.__setattr__(self, "pretrained_roles", tuple(sorted(set(self.pretrained_roles))))
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize resolved capabilities for CLI/Web discovery consumers."""
+
+        return {
+            "dataset": self.dataset,
+            "task": self.task,
+            "modality": self.modality.value,
+            "num_classes": self.num_classes,
+            "input_shape": None if self.input_shape is None else list(self.input_shape),
+            "channels": self.channels,
+            "available_splits": list(self.available_splits),
+            "observed_train_labels": self.observed_train_labels.value,
+            "clean_train_labels": self.clean_train_labels.value,
+            "clean_validation_labels": self.clean_validation_labels.value,
+            "noise_status": self.noise_status.value,
+            "noise_origin": self.noise_origin.value,
+            "noise_rate": self.noise_rate.to_dict(),
+            "noise_manifest": self.noise_manifest.value,
+            "aligned_clean_noisy_targets": self.aligned_clean_noisy_targets.value,
+            "stable_indices": self.stable_indices.value,
+            "supports_synthetic_corruption": self.supports_synthetic_corruption,
+            "pretrained_roles": list(self.pretrained_roles),
+        }
+
 
 class DatasetDeclarationConflict(ValueError):
     """Raised when a user declaration contradicts an inspected hard fact."""
@@ -385,17 +441,20 @@ def resolve_dataset_capabilities(
         clean_validation_labels=profile.clean_validation_labels,
         noise_status=status, noise_origin=origin, noise_rate=rate,
         noise_manifest=declared.noise_manifest,
-        method_noise_rate_prior=declared.method_noise_rate_prior,
+        # Legacy catalog values are intentionally not trusted as experiment
+        # evidence.  Method priors and pretrained artifacts are supplied by
+        # the concrete experiment configuration/resource resolver instead.
+        method_noise_rate_prior=NoiseRateInfo(),
         supports_synthetic_corruption=clean is KnowledgeState.AVAILABLE,
         aligned_clean_noisy_targets=aligned,
         stable_indices=profile.stable_indices,
-        pretrained_roles=declared.pretrained_roles,
+        pretrained_roles=(),
     )
 
 
 __all__ = [
     "DatasetCapabilities", "DatasetDeclarationConflict", "DatasetDeclarations",
-    "DatasetProfile", "KnowledgeState", "Modality", "NoiseKnowledge",
+    "DatasetProfile", "DatasetSemanticHints", "KnowledgeState", "Modality", "NoiseKnowledge",
     "NoiseOrigin", "NoiseRateInfo", "NoiseRateStatus", "NoiseStatus",
     "resolve_dataset_capabilities",
 ]

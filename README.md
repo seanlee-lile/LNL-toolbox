@@ -398,3 +398,11 @@ python -m unittest discover -s tests -v
 - [论文实现进度](papers/implement/paper-reproduction-progress.md)
 
 本地数据放在 `data/`，训练产物放在 `artifacts/`；二者均不应提交到 Git。
+
+### Dataset-first 数据集兼容性
+
+Web 和 CLI 的数据集检查都经过统一 `DataService`。适配器/实际加载得到的事实（例如
+模态、观测标签、稳定索引、原生噪声来源）只读展示；只有无法由数据源确定的 UNKNOWN
+事实才需要用户确认。数据集真实噪声率与某个方法的噪声率先验是两个不同输入：前者属于
+数据集声明，后者属于所选正式 recipe，并会写入该 recipe 声明的配置路径。预训练资源也
+必须是实际 checkpoint、运行目录或 YAML 路径，不能用角色名称冒充资源。

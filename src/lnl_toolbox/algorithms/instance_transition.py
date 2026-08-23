@@ -16,12 +16,14 @@ from .transition_risk import (
 )
 
 
-def _row_abs_normalize(transitions: torch.Tensor) -> torch.Tensor:
-    """Match PDL ``tools.norm`` for a batch of transition matrices."""
+def _row_positive_normalize(transitions: torch.Tensor) -> torch.Tensor:
+    """Project PDL's revised transition onto the non-negative row simplex."""
 
-    return transitions.abs() / transitions.abs().sum(dim=2, keepdim=True).clamp_min(
-        torch.finfo(transitions.dtype).tiny
-    )
+    projected = transitions.clamp_min(0.0)
+    row_sum = projected.sum(dim=2, keepdim=True)
+    if bool((row_sum <= 0).any()):
+        raise ValueError("PDL revision produced an all-zero transition row")
+    return projected / row_sum
 
 
 def pdl_instance_corrected_losses(
@@ -109,7 +111,7 @@ class InstanceTransitionClassificationAlgorithm:
                 raise TypeError(
                     "PDL revision requires a bias-free model.T_revision Linear head"
                 )
-            effective_matrices = _row_abs_normalize(
+            effective_matrices = _row_positive_normalize(
                 matrices + revision.weight.to(matrices).unsqueeze(0)
             )
         if self.correction == "forward":

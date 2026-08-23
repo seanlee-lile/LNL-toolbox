@@ -487,13 +487,27 @@ def _dataset_profile_payload(name: object) -> dict[str, object]:
     report = service.inspect_dataset(alias)
     if report.status != "ready" or report.profile is None:
         raise ValueError(report.error or f"dataset profile is unavailable: {alias}")
+    profile = report.profile.to_dict()
+    declared = service.data_service.declarations(alias).to_dict()
+    capabilities = service.data_service.capabilities(alias, persist=False)
+    unresolved = []
+    for field, value in (
+        ("clean_train_labels", capabilities.clean_train_labels.value),
+        ("noise_status", capabilities.noise_status.value),
+        ("noise_origin", capabilities.noise_origin.value),
+        ("dataset_noise_rate", capabilities.noise_rate.status.value),
+    ):
+        if value == "unknown":
+            unresolved.append(field)
     return {
         "dataset": alias,
         "adapter": report.adapter,
         "source": report.location,
-        "profile": report.profile.to_dict(),
-        "detected": report.profile.to_dict(),
-        "declared": service.data_service.declarations(alias).to_dict(),
+        "profile": profile,
+        "detected": profile,
+        "capabilities": capabilities.to_dict(),
+        "unresolved_dataset_facts": unresolved,
+        "declared": declared,
     }
 
 
@@ -519,9 +533,82 @@ def _dataset_compatibility_payload(
         "dataset": alias,
         "profile": profile["profile"],
         "detected": profile["detected"],
+        "capabilities": profile.get("capabilities", {}),
+        "unresolved_dataset_facts": profile.get("unresolved_dataset_facts", []),
         "declared": profile["declared"],
         "method_noise_rate_prior": method_noise_rate_prior,
         "methods": [result.to_dict() for result in methods],
+    }
+
+
+def _dataset_recipe_compatibility_payload(
+    name: object,
+    *,
+    method_noise_rate_prior: float | None = None,
+) -> dict[str, object]:
+    """Resolve each paper's concrete formal recipe for one local dataset."""
+
+    from lnl_toolbox.catalog import load_yaml, recipe_by_id
+    from lnl_toolbox.training.service import ExperimentService
+
+    alias = str(name).strip()
+    if not alias:
+        raise ValueError("recipe compatibility query requires a dataset alias")
+    papers = _paper_payload()
+    recipe_meta: dict[str, dict[str, object]] = {}
+    for paper in papers:
+        paper_configs = paper.get("configs") or [{
+            "recipe_id": paper["default_recipe_id"],
+            "profile": "reproduction",
+            "configuration_fidelity": paper["default_fidelity"],
+        }]
+        formal_configs = [item for item in paper_configs if item.get("profile") == "reproduction"]
+        if not formal_configs:
+            formal_configs = [next(item for item in paper_configs if item.get("recipe_id") == paper["default_recipe_id"])]
+        for config_meta in formal_configs:
+            recipe_id = str(config_meta["recipe_id"])
+            recipe_meta[recipe_id] = {
+                "paper_id": paper["id"],
+                "acronym": paper["acronym"],
+                "title": paper["title"],
+                "fidelity": config_meta.get("configuration_fidelity", paper["default_fidelity"]),
+            }
+    configs = {
+        recipe_id: load_yaml(recipe_by_id(recipe_id, ROOT).config_path)
+        for recipe_id in recipe_meta
+    }
+    service = ExperimentService()
+    results = dict(service.list_config_compatibility(
+        alias,
+        configs,
+        method_noise_rate_prior=method_noise_rate_prior,
+    ))
+    recipes = []
+    for recipe_id, meta in recipe_meta.items():
+        result = results[recipe_id].to_dict()
+        recipes.append({
+            "paper_id": meta["paper_id"],
+            "acronym": meta["acronym"],
+            "title": meta["title"],
+            "recipe_id": recipe_id,
+            "profile": "reproduction",
+            "fidelity": meta["fidelity"],
+            **result,
+        })
+    grouped: dict[str, dict[str, object]] = {}
+    for item in recipes:
+        group = grouped.setdefault(str(item["paper_id"]), {
+            "paper_id": item["paper_id"],
+            "acronym": item["acronym"],
+            "title": item["title"],
+            "recipes": [],
+        })
+        group["recipes"].append(item)
+    return {
+        "dataset": alias,
+        "profile": _dataset_profile_payload(alias),
+        "methods": list(grouped.values()),
+        "recipes": recipes,
     }
 
 
@@ -533,17 +620,15 @@ def _dataset_declarations_payload(name: object, payload: object) -> dict[str, ob
     declarations = payload.get("declarations", {})
     if not isinstance(declarations, dict):
         raise ValueError("declarations must be a JSON object")
-    if "method_noise_rate_prior" in declarations:
-        raise ValueError("method noise-rate prior is experiment-specific")
+    if "method_noise_rate_prior" in declarations or "pretrained_roles" in declarations:
+        raise ValueError("method noise-rate prior and pretrained roles are experiment-specific")
+    if "method_noise_rate_prior" in payload:
+        raise ValueError("method noise-rate prior is an experiment input, not a dataset declaration")
     from lnl_toolbox.training.data_service import DataService
 
     service = DataService()
     service.update_declarations(name, declarations)
-    prior = payload.get("method_noise_rate_prior")
-    return _dataset_compatibility_payload(
-        name,
-        method_noise_rate_prior=None if prior in {None, ""} else float(prior),
-    )
+    return _dataset_compatibility_payload(name)
 
 
 def _dataset_action(payload: object) -> dict[str, object]:
@@ -1202,6 +1287,22 @@ def _save_config(payload: object) -> dict[str, object]:
         acknowledged=bool(payload.get("acknowledge_paper_impact", False)),
     )
     validate_config(parsed)
+    dataset_alias = str(payload.get("dataset_alias") or "").strip()
+    if dataset_alias:
+        from lnl_toolbox.training.service import ExperimentService
+
+        service = ExperimentService()
+        _, compatibility = service.list_config_compatibility(
+            dataset_alias, {"candidate": parsed}
+        )[0]
+        if compatibility.status.value != "compatible":
+            reasons = "; ".join(
+                f"{item.code}: {item.message}" for item in compatibility.reasons
+            )
+            raise ValueError(
+                f"所选数据集 {dataset_alias!r} 与当前配置不兼容："
+                f"{compatibility.status.value}; {reasons}"
+            )
     try:
         import yaml
 
@@ -1215,7 +1316,12 @@ def _save_config(payload: object) -> dict[str, object]:
         raise FileExistsError("目标文件已存在；如需修改请使用覆盖保存")
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(content, encoding="utf-8")
-    return {"path": destination.relative_to(ROOT).as_posix(), "bytes": destination.stat().st_size, "content": content}
+    return {
+        "path": destination.relative_to(ROOT).as_posix(),
+        "bytes": destination.stat().st_size,
+        "content": content,
+        "dataset_alias": dataset_alias or None,
+    }
 
 
 def _job_payload(job: Job) -> dict[str, object]:
@@ -1311,6 +1417,9 @@ def _sweep_plan_payload(payload: object) -> dict[str, object]:
         path_value=path_value or None,
     )
     config = resolve_config_paths(source_payload["config"], ROOT)
+    dataset_alias = str(payload.get("dataset_alias") or "").strip()
+    if dataset_alias:
+        config = ExperimentService().data_service.apply(config, dataset_alias)
     matrix = payload.get("matrix", {}) or {}
     if not isinstance(matrix, dict):
         raise TypeError("sweep matrix must be an object")
@@ -1464,6 +1573,15 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     query = parse_qs(urlparse(self.path).query)
                     raw_prior = query.get("method_noise_rate_prior", [""])[0].strip()
                     value = _dataset_compatibility_payload(
+                        alias,
+                        method_noise_rate_prior=(
+                            None if not raw_prior else float(raw_prior)
+                        ),
+                    )
+                elif action == "compatible-recipes":
+                    query = parse_qs(urlparse(self.path).query)
+                    raw_prior = query.get("method_noise_rate_prior", [""])[0].strip()
+                    value = _dataset_recipe_compatibility_payload(
                         alias,
                         method_noise_rate_prior=(
                             None if not raw_prior else float(raw_prior)

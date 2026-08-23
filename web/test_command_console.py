@@ -19,25 +19,75 @@ class CommandConsoleTest(unittest.TestCase):
     def test_dataset_first_page_consumes_backend_compatibility_contract(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
         for marker in (
-            "Dataset-first workflow",
-            "Detected by system",
-            "Declared by user",
-            "Compatible methods",
-            "Available after additional input",
-            "Compatibility unknown",
-            "Show unavailable methods",
-            "Method noise-rate prior",
-            "Dataset true noise rate and method noise-rate prior are independent",
+            "数据集优先流程",
+            "数据集信息",
+            "需要确认的数据集信息",
+            "可直接使用的正式配置",
+            "补充方法输入后可用",
+            "显示不兼容配置",
+            "当前方法噪声率先验",
+            "实验输入，不会保存为数据集事实",
             "data-compat-action",
             "loadDatasetCompatibility",
         ):
             self.assertIn(marker, page)
-        self.assertIn('selected?.status === "compatible"', page)
-        self.assertIn('compatibility.status !== "compatible"', page)
-        self.assertIn('return "lnl run --recipe "', page)
+        self.assertIn('selectedRecipe?.status === "compatible"', page)
+        self.assertIn('recipe.status !== "compatible"', page)
+        self.assertIn('let command = base + " --recipe "', page)
         self.assertIn("state.dataCompatibilityAlias !== state.dataAlias", page)
         self.assertIn("loadDatasetCompatibility(state.tutorialData)", page)
         self.assertNotIn('dataset === "clothing1m"', page.lower())
+
+    def test_yaml_builder_has_one_path_and_contextual_editor_lifecycle(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertEqual(page.count('id="yaml-path"'), 1)
+        self.assertNotIn('id="yaml-output"', page)
+        for marker in (
+            "hideYamlEditor",
+            "yamlDraftDirty",
+            "继续编辑 YAML（未保存）",
+            "目标已登记数据集（可选）",
+            "compatible-recipes",
+            "使用此数据集编辑 YAML",
+        ):
+            self.assertIn(marker, page)
+
+    def test_concrete_recipe_compatibility_preserves_paper_identity(self):
+        result = mock.Mock()
+        result.to_dict.return_value = {
+            "method": "fine",
+            "dataset": "lab",
+            "status": "incompatible",
+            "reason_codes": ["wrong_class_count"],
+            "reasons": [{"code": "wrong_class_count", "message": "needs 100"}],
+            "warnings": [],
+            "required_user_inputs": [],
+        }
+        service = mock.Mock()
+        service.list_config_compatibility.return_value = (("fine-formal", result),)
+        recipe = mock.Mock(config_path=Path("fine.yaml"))
+        paper = {
+            "id": "fine",
+            "acronym": "FINE",
+            "title": "Fine paper",
+            "default_recipe_id": "fine-formal",
+            "default_fidelity": "paper-protocol",
+        }
+        with mock.patch.object(command_console, "_paper_payload", return_value=[paper]), mock.patch(
+            "lnl_toolbox.catalog.recipe_by_id", return_value=recipe
+        ), mock.patch(
+            "lnl_toolbox.catalog.load_yaml", return_value={"execution": {"runner": "fine"}}
+        ), mock.patch(
+            "command_console._dataset_profile_payload",
+            return_value={"dataset": "lab", "profile": {}, "detected": {}, "capabilities": {}, "unresolved_dataset_facts": [], "declared": {}},
+        ), mock.patch(
+            "lnl_toolbox.training.service.ExperimentService", return_value=service
+        ):
+            value = command_console._dataset_recipe_compatibility_payload("lab")
+        self.assertEqual(value["recipes"][0]["recipe_id"], "fine-formal")
+        self.assertEqual(value["recipes"][0]["acronym"], "FINE")
+        self.assertEqual(value["recipes"][0]["status"], "incompatible")
+        service.list_config_compatibility.assert_called_once()
 
     def test_web_profile_and_compatibility_helpers_use_experiment_service(self):
         profile = mock.Mock()
@@ -66,6 +116,13 @@ class CommandConsoleTest(unittest.TestCase):
         service = mock.Mock()
         service.inspect_dataset.return_value = report
         service.data_service.declarations.return_value = declarations
+        capabilities = mock.Mock()
+        capabilities.clean_train_labels.value = "unknown"
+        capabilities.noise_status.value = "unknown"
+        capabilities.noise_origin.value = "unknown"
+        capabilities.noise_rate.status.value = "unknown"
+        capabilities.to_dict.return_value = {}
+        service.data_service.capabilities.return_value = capabilities
         service.list_compatible_methods.return_value = (result,)
         with mock.patch(
             "lnl_toolbox.training.service.ExperimentService", return_value=service
@@ -165,34 +222,13 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertEqual(web_value["methods"], cli_value)
 
     def test_web_declarations_keep_method_prior_out_of_dataset_facts(self):
-        service = mock.Mock()
-        expected = {"dataset": "lab", "methods": []}
-        with mock.patch(
-            "lnl_toolbox.training.data_service.DataService", return_value=service
-        ), mock.patch.object(
-            command_console, "_dataset_compatibility_payload", return_value=expected
-        ) as compatibility:
-            value = command_console._dataset_declarations_payload(
-                "lab",
-                {
-                    "method_noise_rate_prior": 0.2,
-                    "declarations": {
-                        "noise_status": "noisy",
-                        "clean_train_labels": "unknown",
-                    },
-                },
-            )
-        self.assertIs(value, expected)
-        service.update_declarations.assert_called_once_with(
-            "lab",
-            {"noise_status": "noisy", "clean_train_labels": "unknown"},
-        )
-        compatibility.assert_called_once_with(
-            "lab", method_noise_rate_prior=0.2
-        )
         with self.assertRaisesRegex(ValueError, "experiment-specific"):
             command_console._dataset_declarations_payload(
                 "lab", {"declarations": {"method_noise_rate_prior": {}}}
+            )
+        with self.assertRaisesRegex(ValueError, "experiment input"):
+            command_console._dataset_declarations_payload(
+                "lab", {"method_noise_rate_prior": 0.2, "declarations": {}}
             )
 
     def test_beginner_tutorial_contract_matches_documented_workflow(self):
@@ -887,6 +923,27 @@ class CommandConsoleTest(unittest.TestCase):
                     "overwrite": True,
                 }
             )
+
+    def test_yaml_save_rechecks_selected_dataset_compatibility(self):
+        compatibility = mock.Mock()
+        compatibility.status.value = "incompatible"
+        compatibility.reasons = (
+            mock.Mock(code="wrong_class_count", message="requires 100 classes"),
+        )
+        service = mock.Mock()
+        service.list_config_compatibility.return_value = (("candidate", compatibility),)
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory, mock.patch(
+            "lnl_toolbox.training.service.ExperimentService", return_value=service
+        ):
+            destination = Path(directory) / "blocked.yaml"
+            with self.assertRaisesRegex(ValueError, "与当前配置不兼容"):
+                command_console._save_config({
+                    "path": str(destination),
+                    "recipe": "fine-cifar100n-reproduction",
+                    "patches": [],
+                    "dataset_alias": "local-cifar10",
+                })
+            self.assertFalse(destination.exists())
 
     def test_unknown_command_is_rejected(self):
         with self.assertRaises(KeyError):

@@ -595,3 +595,40 @@ Recipe/YAML 编辑功能。`lnl web` 由 `cli/main.py` 启动 `web/command_conso
 | `web/test_command_console.py` | 26 个 formal schema、论文变更确认/记录、锁定字段 API 防绕过与前端分组门禁 |
 
 配置当前值始终来自所选 YAML，registry 不覆盖训练值。论文参数数量保持 99 个；T-Revision 与 DivideMix 仅修正迁移后的 dotted path，没有改变其论文参数集合。
+
+## 26 篇论文兼容性门禁（2026-08-22）
+
+| 路径 | 职责 |
+|---|---|
+| `training/compatibility.py` | 数据能力与方法要求的纯合同，以及 all/any 声明型配置输入；不执行训练或论文数学 |
+| `training/runners.py` | 26 篇正式 recipe 的 requirements provider；共享 runner 按组件配置识别具体方法 |
+| `training/service.py` | 数据能力检查后验证必需配置输入，并在 runner 调用前返回稳定 reason code |
+| `tests/test_compatibility.py` | 26 篇覆盖、14 篇新增边界、observed-only native noise 拒绝和已有 12 篇回归 |
+
+本门禁没有修改算法、experiment runner、DatasetAdapter、`data_service.py`、正式 YAML、CLI
+或 Web。兼容结论描述当前工具箱实际通路，不代表论文方法理论能力的上限。
+
+## Web 数据集约束与 YAML 编辑器联动（2026-08-22）
+
+| 路径 | 职责 |
+|---|---|
+| `training/service.py` | 对同一数据能力批量解析具体配置兼容性，避免用空 runner 配置代表论文 recipe |
+| `web/command_console.py` | 暴露 26 份正式 recipe 的数据兼容结果，并在 YAML 保存时服务端复核所选数据别名 |
+| `web/index.html` | 单一 YAML 路径、上下文编辑器收起/草稿恢复、数据页到 YAML 的入口，以及兼容 recipe 的禁用与原因提示 |
+| `tests/test_experiment_service.py`、`web/test_command_console.py` | 单次能力加载、recipe 身份、服务端防绕过和前端交互门禁 |
+
+数据集覆盖仅通过 CLI `--data` 传给运行或 Sweep，不改写 Registry 锁定的论文数据/噪声协议。
+
+## Dataset-first 输入与兼容性（2026-08-23）
+
+| 路径 | 职责 |
+|---|---|
+| `data/profile.py` | `DatasetSemanticHints`、数据能力和声明合同；旧 method prior/pretrained role 仅兼容读取 |
+| `data/real_noise.py` | Clothing1M/Animal-10N 的原生噪声、干净验证集和不可用干净训练标签语义 |
+| `training/data_service.py` | 读取 adapter hints，仅填充 UNKNOWN；拒绝把方法先验或角色名写成数据声明 |
+| `training/compatibility.py` | 纯兼容性结果、开发者元数据错误、用户输入和真实配置路径 |
+| `training/service.py` | 解析具体 recipe、验证实际 checkpoint 路径，并把方法先验注入配置 |
+| `web/command_console.py` | 返回 profile/capabilities/未决事实和每个 formal recipe 的兼容结果 |
+| `web/index.html` | 只读数据集事实、UNKNOWN 声明、当前 recipe 实验输入三段式展示 |
+| `tests/test_data_adapters.py` | 原生噪声 semantic hints、标签可用性和统一数据服务回归 |
+| `web/test_command_console.py` | 具体 recipe、先验不入 catalog、Web 输入分组和命令生成回归 |
