@@ -1,0 +1,106 @@
+current_index: 0
+
+papers:
+  - index: 0
+    id: gce
+    status: REPAIR_FIRST
+
+  - index: 1
+    id: coteaching
+    status: REAUDIT
+
+  - index: 2
+    id: apl
+    status: PENDING
+
+  - index: 3
+    id: binary-risk
+    status: PENDING
+
+  - index: 4
+    id: loss-correction
+    status: PENDING
+
+  - index: 5
+    id: jocor
+    status: PENDING
+
+  - index: 6
+    id: importance-reweighting
+    status: PENDING
+
+  - index: 7
+    id: cdr
+    status: PENDING
+
+  - index: 8
+    id: dual-t
+    status: PENDING
+
+  - index: 9
+    id: pdl
+    status: PENDING
+
+  - index: 10
+    id: volminnet
+    status: PENDING
+
+  - index: 11
+    id: t-revision
+    status: PENDING
+
+  - index: 12
+    id: cwd
+    status: PENDING
+
+  - index: 13
+    id: pcse
+    status: PENDING
+
+  - index: 14
+    id: dss
+    status: PENDING
+
+  - index: 15
+    id: cnlcu
+    status: PENDING
+
+  - index: 16
+    id: mentornet
+    status: PENDING
+
+  - index: 17
+    id: fine
+    status: PENDING
+
+  - index: 18
+    id: lend
+    status: PENDING
+
+  - index: 19
+    id: l2rw
+    status: PENDING
+
+  - index: 20
+    id: cal
+    status: PENDING
+
+  - index: 21
+    id: mc-ldce
+    status: PENDING
+
+  - index: 22
+    id: upm
+    status: PENDING
+
+  - index: 23
+    id: dividemix
+    status: PENDING
+
+  - index: 24
+    id: dld
+    status: PENDING
+
+  - index: 25
+    id: ca2c
+    status: PENDING

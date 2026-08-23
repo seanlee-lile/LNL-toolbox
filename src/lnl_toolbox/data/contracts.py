@@ -25,6 +25,22 @@ class Sample:
         return {"input": self.image, "target": self.target, "index": self.index}
 
 
+@dataclass(frozen=True, slots=True)
+class SampleKey:
+    """Cross-split sample identity; ``index`` alone is split-scoped."""
+
+    dataset: str
+    version: str
+    split: str
+    index: int
+
+    def __post_init__(self) -> None:
+        if not self.dataset.strip() or not self.version.strip() or not self.split.strip():
+            raise ValueError("sample key namespace strings must not be empty")
+        if self.index < 0:
+            raise ValueError("sample key index must be non-negative")
+
+
 class DataRole(str, Enum):
     TRAIN = "train"
     TRAIN_EVAL = "train_eval"
@@ -141,7 +157,11 @@ def inputs_sha256(values: Any) -> str:
 
 @dataclass(frozen=True, slots=True)
 class RawDatasetSplit:
-    """Adapter output before transforms, noise overlays, and loader creation."""
+    """Adapter output before transforms, noise overlays, and loader creation.
+
+    ``global_indices`` is a historical name: values are unique only within this
+    split's ``(dataset, version, split)`` namespace, not across dataset splits.
+    """
 
     inputs: Any
     observed_targets: np.ndarray
@@ -179,6 +199,16 @@ class RawDatasetSplit:
 
     def __len__(self) -> int:
         return int(self.observed_targets.size)
+
+    @property
+    def sample_namespace(self) -> tuple[str, str, str]:
+        return (self.dataset, self.version, self.split)
+
+    def sample_key(self, index: int) -> SampleKey:
+        value = int(index)
+        if not bool(np.any(self.global_indices == value)):
+            raise KeyError(f"sample index {value} is outside split {self.split!r}")
+        return SampleKey(self.dataset, self.version, self.split, value)
 
     @property
     def identity(self) -> DatasetIdentity:
@@ -239,6 +269,7 @@ __all__ = [
     "DatasetIdentity",
     "RawDatasetSplit",
     "Sample",
+    "SampleKey",
     "array_sha256",
     "inputs_sha256",
 ]

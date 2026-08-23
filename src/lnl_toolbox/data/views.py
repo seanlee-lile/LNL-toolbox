@@ -56,6 +56,12 @@ class IndexedDatasetView(Dataset[dict[str, Any]]):
             for index, target in zip(split.global_indices, split.observed_targets)
         }
         if targets_by_index is not None:
+            foreign = set(map(int, targets_by_index)) - set(lookup)
+            if foreign:
+                raise KeyError(
+                    f"target overlay contains {len(foreign)} indices outside "
+                    f"the {split.split!r} split namespace"
+                )
             missing = set(map(int, requested)) - set(map(int, targets_by_index))
             if missing:
                 raise KeyError(f"target overlay is missing {len(missing)} requested indices")
@@ -68,6 +74,12 @@ class IndexedDatasetView(Dataset[dict[str, Any]]):
             for name, values in (overlays or {}).items()
         }
         for name, values in self.overlays.items():
+            foreign = set(values) - set(lookup)
+            if foreign:
+                raise KeyError(
+                    f"overlay {name!r} contains {len(foreign)} indices outside "
+                    f"the {split.split!r} split namespace"
+                )
             missing = set(map(int, requested)) - set(values)
             if missing:
                 raise KeyError(f"overlay {name!r} is missing {len(missing)} requested indices")

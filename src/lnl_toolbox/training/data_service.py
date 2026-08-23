@@ -727,19 +727,10 @@ def _prepare_experiment_data(
                 else full_train_indices
             )
             clean_lookup = _target_map(train.global_indices, source_clean)
-            if requirements.validation_targets == "noisy":
-                validation_clean = (
-                    validation_split.clean_targets
-                    if validation_split.clean_targets is not None
-                    else validation_split.observed_targets
-                )
-                clean_lookup.update(_target_map(validation_split.global_indices, validation_clean))
-                manifest_indices = np.unique(np.concatenate((manifest_indices, validation_indices)))
             manifest_clean = np.asarray([clean_lookup[int(index)] for index in manifest_indices], dtype=np.int64)
-            dataset_targets = np.zeros(int(manifest_indices.max()) + 1, dtype=np.int64)
-            for index, target in clean_lookup.items():
-                if index < dataset_targets.size:
-                    dataset_targets[index] = target
+            # A manifest is scoped to train.  Independent validation splits may
+            # reuse integer positions, so their targets must never enter this map.
+            dataset_targets = source_clean
             noise_name = str(noise_config.get("name", "clean")).lower()
             if noise_name == "pdl":
                 from lnl_toolbox.noise import generate_pdl_idn
@@ -855,6 +846,7 @@ def _prepare_experiment_data(
                 run_dir=run_dir,
                 checkpoint_payload=checkpoint_payload,
                 dataset_targets=dataset_targets,
+                dataset_indices=train.global_indices,
                 )
     noisy_map = (
         _target_map(train.global_indices, train.observed_targets)
@@ -865,7 +857,7 @@ def _prepare_experiment_data(
     if requirements.validation_targets == "noisy":
         validation_target_map = (
             noisy_map
-            if manifest is not None or validation_split is train
+            if manifest is not None and validation_split is train
             else _target_map(
                 validation_split.global_indices,
                 validation_split.observed_targets,

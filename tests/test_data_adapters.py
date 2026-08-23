@@ -275,7 +275,7 @@ import numpy as np
 import torch
 
 # --- merged from test_data_service.py ---
-from lnl_toolbox.data import DataRequirements, DataRole, DataSpec, DatasetRegistry, LocalDatasetCatalog, RawDatasetSplit
+from lnl_toolbox.data import DataRequirements, DataRole, DataSpec, DatasetRegistry, IndexedDatasetView, LocalDatasetCatalog, RawDatasetSplit
 
 # --- merged from test_data_service.py ---
 from lnl_toolbox.training.checkpoint import atomic_save, read_checkpoint
@@ -319,6 +319,31 @@ class _data_service__NativeNoisyFixtureAdapter:
         self.validate(spec)
         targets = {'train': np.asarray([5, 6], dtype=np.int64), 'validation': np.asarray([8, 9], dtype=np.int64), 'test': np.asarray([0, 1], dtype=np.int64)}[split]
         return RawDatasetSplit(inputs=np.arange(targets.size * 2, dtype=np.float32).reshape(targets.size, 2), observed_targets=targets, global_indices=np.arange(targets.size, dtype=np.int64), dataset=self.name, split=split, num_classes=10, clean_targets=None if split == 'train' else targets.copy(), source=str(spec.root))
+
+
+class _data_service__CrossSplitCollisionAdapter:
+    name = 'cross_split_collision_fixture'
+    aliases = ()
+
+    def validate(self, spec: DataSpec) -> None:
+        if spec.root is None or not spec.root.is_dir():
+            raise FileNotFoundError('collision fixture root missing')
+
+    def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
+        del seed
+        self.validate(spec)
+        observed = {'train': [1, 2], 'validation': [8, 9], 'test': [3, 4]}[split]
+        targets = np.asarray(observed, dtype=np.int64)
+        return RawDatasetSplit(
+            inputs=np.arange(targets.size * 2, dtype=np.float32).reshape(targets.size, 2),
+            observed_targets=targets,
+            global_indices=np.arange(targets.size, dtype=np.int64),
+            dataset=self.name,
+            split=split,
+            num_classes=10,
+            clean_targets=targets.copy(),
+            source=str(spec.root),
+        )
 
 # --- merged from test_data_service.py ---
 def _data_service__config() -> dict:
@@ -364,11 +389,53 @@ class _data_service_DataServiceTest(unittest.TestCase):
             noisy_by_index = {int(index): int(target) for index, target in zip(prepared.manifest.global_indices, prepared.manifest.noisy_targets, strict=True)}
             train = prepared.dataset_for(DataRole.TRAIN)
             validation = prepared.dataset_for(DataRole.NOISY_VALIDATION)
-            for dataset in (train, validation):
-                for offset in range(len(dataset)):
-                    sample = dataset[offset]
-                    self.assertEqual(int(sample['target']), noisy_by_index[int(sample['index'])])
+            for offset in range(len(train)):
+                sample = train[offset]
+                self.assertEqual(int(sample['target']), noisy_by_index[int(sample['index'])])
+            self.assertEqual(
+                [int(validation[offset]['target']) for offset in range(len(validation))],
+                prepared.validation_split.observed_targets.tolist(),
+            )
             self.assertEqual(set(prepared.train_indices) & set(prepared.validation_indices), set())
+
+    def test_independent_validation_indices_do_not_override_train_manifest(self) -> None:
+        requirements = DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
+            validation_targets='noisy',
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prepared = prepare_experiment_data(
+                {
+                    'data': {'name': 'cross_split_collision_fixture', 'root': str(root)},
+                    'noise': {'name': 'symmetric', 'rate': 0.5, 'seed': 7},
+                    'loader': {'batch_size': 2, 'num_workers': 0},
+                },
+                requirements=requirements,
+                run_dir=root / 'run',
+                seed=7,
+                registry=DatasetRegistry((_data_service__CrossSplitCollisionAdapter(),)),
+            )
+            assert prepared.manifest is not None
+            self.assertEqual(prepared.manifest.split, 'train')
+            self.assertEqual(prepared.manifest.global_indices.tolist(), [0, 1])
+            noisy_by_index = dict(zip(prepared.manifest.global_indices.tolist(), prepared.manifest.noisy_targets.tolist()))
+            train = prepared.dataset_for(DataRole.TRAIN)
+            validation = prepared.dataset_for(DataRole.NOISY_VALIDATION)
+            self.assertEqual([int(train[index]['target']) for index in range(2)], [noisy_by_index[0], noisy_by_index[1]])
+            self.assertEqual([int(validation[index]['target']) for index in range(2)], [8, 9])
+
+    def test_raw_split_sample_keys_include_the_split_namespace(self) -> None:
+        train = RawDatasetSplit(np.zeros((1, 2)), np.array([0]), np.array([0]), 'fixture', 'train', 2)
+        validation = RawDatasetSplit(np.zeros((1, 2)), np.array([1]), np.array([0]), 'fixture', 'validation', 2)
+        self.assertNotEqual(train.sample_key(0), validation.sample_key(0))
+        with self.assertRaisesRegex(KeyError, 'outside split'):
+            train.sample_key(1)
+
+    def test_indexed_view_rejects_targets_from_another_namespace(self) -> None:
+        split = RawDatasetSplit(np.zeros((1, 2)), np.array([0]), np.array([0]), 'fixture', 'train', 2)
+        with self.assertRaisesRegex(KeyError, 'outside'):
+            IndexedDatasetView(split, targets_by_index={1: 0})
 
     def test_management_status_path_and_real_split_inspection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -14,6 +14,7 @@ from .contracts import (
     DatasetIdentity,
     RawDatasetSplit,
     Sample,
+    SampleKey,
 )
 from .local_catalog import LocalDatasetCatalog, LocalDatasetRecord
 from .curriculum import MentorFeatureDataset, MentorFeatureRecord
@@ -45,6 +46,7 @@ __all__ = [
     "LocalDatasetCatalog",
     "LocalDatasetRecord",
     "Sample",
+    "SampleKey",
     "SemiSupervisedBatch",
     "TorchCifarDataset",
     "build_cifar_transform",
