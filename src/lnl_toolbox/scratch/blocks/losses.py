@@ -47,6 +47,36 @@ def per_sample_ce(
 
 
 @block(
+    id="weighted_loss",
+    name="Apply Sample Weights",
+    category="Weighting",
+    description="Multiply a detached per-sample weight by a per-sample loss before the common reduction.",
+    params={
+        "losses": {"type": "slot", "default": "loss_per_sample"},
+        "weights": {"type": "slot", "default": "sample_weights"},
+        "save_as": {"type": "slot", "default": "weighted_loss_per_sample"},
+    },
+    requires=("losses", "weights"),
+    provides=("save_as",),
+    placement=("batch",), stage="train", ui_group="⑥ 后验与权重",
+    formula="l_i^weighted = w_i l_i",
+    formula_ref="Li et al., importance-weighted empirical risk minimization",
+    paper="Learning from Noisy Labels with Importance Reweighting",
+)
+def weighted_loss(
+    ctx: ScratchContext,
+    losses: str = "loss_per_sample",
+    weights: str = "sample_weights",
+    save_as: str = "weighted_loss_per_sample",
+) -> None:
+    values = ctx[losses]
+    factors = ctx[weights].detach()
+    if values.shape != factors.shape:
+        raise ValueError("sample weights and per-sample losses must have the same shape")
+    _save_loss(ctx, values * factors, save_as)
+
+
+@block(
     id="cross_entropy",
     name="Cross Entropy",
     category="Loss",
@@ -173,7 +203,7 @@ def mae_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels"
     id="nce_loss",
     name="NCE Loss",
     category="Loss",
-    description="Normalized cross entropy, per sample.",
+    description="Normalized cross entropy active loss, one value per sample.",
     params={
         "logits": {"type": "slot", "default": "logits"},
         "labels": {"type": "slot", "default": "labels"},
@@ -181,7 +211,10 @@ def mae_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels"
     },
     requires=("logits", "labels"),
     provides=("save_as",),
-    placement=("batch",), stage="train", ui_group="⑤ 损失公式", beginner_visible=False,
+    placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="L_NCE = -log p_y / Σ_j(-log p_j)",
+    formula_ref="Normalized Cross Entropy definition in Ma et al. (2020), Eq. (2)",
+    paper="Normalized Loss Functions for Deep Learning with Noisy Labels",
 )
 def nce_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", save_as: str = "loss_per_sample") -> None:
     torch, F = _torch()
@@ -194,7 +227,7 @@ def nce_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels"
     id="rce_loss",
     name="RCE Loss",
     category="Loss",
-    description="Reverse cross entropy against clipped one-hot labels.",
+    description="Reverse cross entropy passive loss with clipped one-hot labels, one value per sample.",
     params={
         "logits": {"type": "slot", "default": "logits"},
         "labels": {"type": "slot", "default": "labels"},
@@ -203,13 +236,50 @@ def nce_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels"
     },
     requires=("logits", "labels"),
     provides=("save_as",),
-    placement=("batch",), stage="train", ui_group="⑤ 损失公式", beginner_visible=False,
+    placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="L_RCE = -Σ_j p_j log(ŷ_j), where log(ŷ_y)=0 and log(ŷ_j)=log_zero otherwise",
+    formula_ref="Reverse Cross Entropy definition in Wang et al. (2019), as used by Ma et al. (2020)",
+    paper="Normalized Loss Functions for Deep Learning with Noisy Labels",
 )
 def rce_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", log_zero: float = -4.0, save_as: str = "loss_per_sample") -> None:
     torch, _ = _torch()
     probabilities = torch.softmax(ctx[logits], dim=-1).clamp_min(1e-12)
     target = torch.full_like(probabilities, float(log_zero)).scatter_(1, ctx[labels].long().view(-1, 1), 0.0)
     _save_loss(ctx, -(probabilities * target).sum(dim=1), save_as)
+
+
+@block(
+    id="active_passive_composition",
+    name="Active-Passive Composition",
+    category="Loss",
+    description="Combine two per-sample active and passive losses before the common reduction.",
+    params={
+        "active": {"type": "slot", "default": "active_loss_per_sample"},
+        "passive": {"type": "slot", "default": "passive_loss_per_sample"},
+        "alpha": {"type": "float", "default": 1.0},
+        "beta": {"type": "float", "default": 1.0},
+        "save_as": {"type": "slot", "default": "loss_per_sample"},
+    },
+    requires=("active", "passive"),
+    provides=("save_as",),
+    placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="L_APL = α L_active + β L_passive",
+    formula_ref="Active-passive loss composition in Ma et al. (2020), Eq. (5)",
+    paper="Normalized Loss Functions for Deep Learning with Noisy Labels",
+)
+def active_passive_composition(
+    ctx: ScratchContext,
+    active: str = "active_loss_per_sample",
+    passive: str = "passive_loss_per_sample",
+    alpha: float = 1.0,
+    beta: float = 1.0,
+    save_as: str = "loss_per_sample",
+) -> None:
+    active_values = ctx[active]
+    passive_values = ctx[passive]
+    if active_values.shape != passive_values.shape:
+        raise ValueError("active and passive losses must have the same per-sample shape")
+    ctx[save_as] = float(alpha) * active_values + float(beta) * passive_values
 
 
 @block(
@@ -225,7 +295,7 @@ def rce_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels"
         "save_as": {"type": "slot", "default": "loss_per_sample"},
     },
     requires=("logits", "labels"),
-    provides=("save_as",),
+    provides=("save_as",), beginner_visible=False,
 )
 def apl_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", alpha: float = 1.0, beta: float = 1.0, save_as: str = "loss_per_sample") -> None:
     torch, F = _torch()
@@ -258,7 +328,7 @@ def mean_loss(ctx: ScratchContext, input: str = "loss_per_sample", save_as: str 
     id="binary_risk",
     name="Binary Risk",
     category="Correction",
-    description="Natarajan's unbiased binary risk for known class-dependent noise rates.",
+    description="Natarajan's unbiased binary risk for known class-dependent noise rates, one value per sample.",
     params={
         "logits": {"type": "slot", "default": "logits"},
         "labels": {"type": "slot", "default": "labels"},
@@ -268,7 +338,10 @@ def mean_loss(ctx: ScratchContext, input: str = "loss_per_sample", save_as: str 
     },
     requires=("logits", "labels"),
     provides=("save_as",),
-    placement=("batch",), stage="train", ui_group="⑤ 损失公式", beginner_visible=False,
+    placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="l̃_0=((1-ρ₊)l_0-ρ₋l_1)/(1-ρ₊-ρ₋); l̃_1=(-ρ₊l_0+(1-ρ₋)l_1)/(1-ρ₊-ρ₋)",
+    formula_ref="Natarajan et al. (2013), unbiased risk estimator for class-dependent label noise",
+    paper="Learning with Noisy Labels",
 )
 def binary_risk(
     ctx: ScratchContext,
@@ -297,7 +370,10 @@ def binary_risk(
     params={"logits": {"type": "slot", "default": "logits"}, "labels": {"type": "slot", "default": "labels"}, "transition": {"type": "slot", "default": "transition"}, "save_as": {"type": "slot", "default": "loss_per_sample"}},
     requires=("logits", "labels", "transition"),
     provides=("save_as",),
-    placement=("batch",), stage="train", ui_group="⑦ 标签与矩阵", beginner_visible=False,
+    placement=("batch",), stage="train", ui_group="⑦ 标签与矩阵", beginner_visible=True,
+    formula="p_tilde = p T; L_forward = -log p_tilde[y_tilde]",
+    formula_ref="Patrini et al. (CVPR 2017), Forward correction risk",
+    paper="Making Deep Neural Networks Robust to Label Noise: A Loss Correction Approach",
 )
 def forward_correction(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", transition: str = "transition", save_as: str = "loss_per_sample") -> None:
     torch, _ = _torch()

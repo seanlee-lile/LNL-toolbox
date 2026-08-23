@@ -40,6 +40,35 @@ def forward(
 
 
 @block(
+    id="forward_two_models",
+    name="Forward Two Models",
+    category="Forward",
+    description="Run two peer models on the same batch and save both logits tensors.",
+    params={
+        "model_a": {"type": "slot", "default": "model_a"},
+        "model_b": {"type": "slot", "default": "model_b"},
+        "input": {"type": "slot", "default": "images"},
+        "save_as_a": {"type": "slot", "default": "logits_a"},
+        "save_as_b": {"type": "slot", "default": "logits_b"},
+    },
+    requires=("model_a", "model_b", "input"),
+    provides=("save_as_a", "save_as_b"),
+    placement=("batch",), stage="train", ui_group="④ 前向与概率",
+)
+def forward_two_models(
+    ctx: ScratchContext,
+    model_a: str = "model_a",
+    model_b: str = "model_b",
+    input: str = "images",
+    save_as_a: str = "logits_a",
+    save_as_b: str = "logits_b",
+) -> None:
+    values = ctx[input]
+    ctx[save_as_a] = ctx[model_a](values)
+    ctx[save_as_b] = ctx[model_b](values)
+
+
+@block(
     id="forward_feature",
     name="Forward + Feature",
     category="Forward",

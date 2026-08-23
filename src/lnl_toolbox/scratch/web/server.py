@@ -135,10 +135,11 @@ class ScratchHandler(BaseHTTPRequestHandler):
                 output.mkdir(parents=True, exist_ok=True)
                 save_recipe(recipe, output / "recipe.yaml")
                 save_recipe(resolve_recipe(recipe), output / "resolved_recipe.yaml")
-                context = execute_recipe(recipe, {"artifact_dir": str(output)})
+                limits = body.get("runtime_limits", {})
+                context = execute_recipe(recipe, {"artifact_dir": str(output)}, runtime_limits=limits)
                 metrics = context.get("metrics", [])
                 (output / "stdout.log").write_text(json.dumps({"name": recipe["name"], "metrics": metrics}, ensure_ascii=False) + "\n", encoding="utf-8")
-                self._send({"ok": True, "metrics": metrics, "artifact_dir": str(output)})
+                self._send({"ok": True, "metrics": metrics, "artifact_dir": str(output), "runtime_limits": limits})
             else:
                 self._send({"error": "not found"}, 404)
         except Exception as exc:

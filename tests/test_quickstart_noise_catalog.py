@@ -35,9 +35,10 @@ class QuickStartNoiseCatalogTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_noise_config("pairflip", rate=None, seed=1)
 
-    def test_artifact_backed_visible_capabilities_do_not_fabricate_config(self) -> None:
-        self.assertIsNone(build_noise_config("class_conditional", rate=0.2, seed=1))
-        self.assertIsNone(build_noise_config("instance_dependent", rate=0.2, seed=1))
+    def test_every_visible_synthetic_capability_builds_a_config(self) -> None:
+        for spec in visible_synthetic_noise_specs():
+            with self.subTest(spec=spec.key):
+                self.assertIsNotNone(build_noise_config(spec.key, rate=0.2, seed=1))
 
 
 if __name__ == "__main__":

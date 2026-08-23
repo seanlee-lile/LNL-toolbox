@@ -171,7 +171,7 @@ def _profile_from_splits(
     )
     validation = splits.get("validation")
     clean_validation = (
-        KnowledgeState.UNAVAILABLE
+        KnowledgeState.UNKNOWN
         if validation is None
         else KnowledgeState.AVAILABLE
         if validation.clean_targets is not None
@@ -727,6 +727,13 @@ def _prepare_experiment_data(
                 if requirements.manifest_scope == "effective_train"
                 else full_train_indices
             )
+            # A validation split drawn from the training source has the same
+            # sample namespace.  When the declared protocol selects on noisy
+            # validation labels, its indices must be represented by the same
+            # persisted noise mapping; otherwise the validation view cannot
+            # resolve targets at all.
+            if requirements.validation_targets == "noisy" and validation_split is train:
+                manifest_indices = np.concatenate((manifest_indices, validation_indices))
             clean_lookup = _target_map(train.global_indices, source_clean)
             manifest_clean = np.asarray([clean_lookup[int(index)] for index in manifest_indices], dtype=np.int64)
             # A manifest is scoped to train.  Independent validation splits may
