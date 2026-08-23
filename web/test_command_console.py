@@ -1000,6 +1000,58 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertEqual(payload["returncode"], 0)
         json.dumps(payload)
 
+    def test_completed_job_polling_returns_without_reentrant_lock_deadlock(self):
+        job = command_console.Job(
+            job_id="tutorial-complete",
+            key="doctor",
+            command=["lnl", "doctor"],
+            display_command="lnl doctor",
+            lines=["ok"],
+            returncode=0,
+        )
+        with command_console.JOBS_LOCK:
+            command_console.JOBS[job.job_id] = job
+        server = command_console.ThreadingHTTPServer(
+            ("127.0.0.1", 0), command_console.ConsoleHandler
+        )
+        server.daemon_threads = True
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            with request.urlopen(
+                f"{base}/api/jobs/{job.job_id}", timeout=2
+            ) as response:
+                payload = json.loads(response.read())
+            self.assertFalse(payload["running"])
+            self.assertEqual(payload["returncode"], 0)
+            self.assertIsNone(payload["error"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            with command_console.JOBS_LOCK:
+                command_console.JOBS.pop(job.job_id, None)
+
+    def test_tutorial_success_handler_advances_progress_and_unlocks_next_step(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn(
+            'state.tutorialCompleted[stepId] = !job.error && job.returncode === 0 ? "passed" : "failed";',
+            page,
+        )
+        self.assertIn(
+            'state.timer = setInterval(pollJob, 350)',
+            page,
+        )
+        self.assertIn(
+            '["passed", "not-needed"].includes(tutorialStatus(active.id))',
+            page,
+        )
+        self.assertIn(
+            'const doneCount = steps.filter(function (step) { return ["passed", "not-needed"].includes(tutorialStatus(step.id)); }).length;',
+            page,
+        )
+
     def test_cancel_job_terminates_running_web_child(self):
         process = mock.Mock()
         process.poll.return_value = None

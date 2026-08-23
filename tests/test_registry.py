@@ -234,7 +234,11 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
     def test_shared_runner_detection_is_component_driven(self) -> None:
         registry = create_runner_registry()
         supervised = registry.get('supervised')
-        self.assertIsNone(supervised.requirements({}))
+        plain_ce = supervised.requirements({})
+        self.assertEqual(plain_ce.method, 'ce')
+        self.assertEqual(plain_ce.supported_modalities, frozenset({Modality.IMAGE, Modality.TABULAR}))
+        self.assertFalse(plain_ce.requires_noise_manifest)
+        self.assertTrue(plain_ce.supports_native_noisy_labels)
         cases = (({'loss': {'name': 'gce'}}, 'gce'), ({'loss': {'name': 'apl'}}, 'apl'), ({'parameter_update': {'name': 'cdr'}}, 'cdr'), ({'pipeline': {'objective_consumer': {'name': 'dss'}}}, 'dss'), ({'pipeline': {'weight_provider': {'name': 'mentornet'}}}, 'mentornet'), ({'pipeline': {'risk_corrector': {'name': 'forward'}}}, 'loss_correction'))
         for config, expected in cases:
             with self.subTest(expected=expected):

@@ -212,7 +212,7 @@ from lnl_toolbox.catalog import discover_recipes, default_paper_config, find_pro
 from lnl_toolbox.cli.main import main
 
 # --- merged from test_unified_cli.py ---
-from lnl_toolbox.data.profile import DatasetProfile, KnowledgeState, Modality, NoiseKnowledge
+from lnl_toolbox.data.profile import DatasetProfile, KnowledgeState, Modality, NoiseKnowledge, resolve_dataset_capabilities
 
 # --- merged from test_unified_cli.py ---
 from lnl_toolbox.training.compatibility import CompatibilityReason, CompatibilityResult, CompatibilityStatus
@@ -222,6 +222,8 @@ from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE, DatasetStatu
 
 # --- merged from test_unified_cli.py ---
 from lnl_toolbox.training.runners import resolve_runner, runner_names
+
+from lnl_toolbox.training.service import ExperimentService
 
 # --- merged from test_unified_cli.py ---
 _unified_cli_ROOT = Path(__file__).resolve().parents[1]
@@ -419,6 +421,21 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
             self.assertEqual(code, 2)
             self.assertIn('unsupported_modality', stderr)
         runner.assert_not_called()
+
+    def test_plain_ce_validate_check_data_reports_compatible(self) -> None:
+        data_service = Mock()
+        data_service.capabilities.return_value = resolve_dataset_capabilities(
+            self.compatibility_profile()
+        )
+        service = ExperimentService(data_service=data_service)
+        with patch('lnl_toolbox.cli.main.ExperimentService', return_value=service):
+            code, output, error = self.invoke(
+                'validate', '--recipe', 'cifar10-symmetric-ce-smoke', '--check-data'
+            )
+        self.assertEqual(code, 0, error)
+        self.assertIn('Compatibility:\n  COMPATIBLE', output)
+        self.assertNotIn('NOT_CHECKED', output)
+        data_service.validate_config.assert_called_once()
 
     def test_web_command_starts_main_page_and_supports_no_open(self) -> None:
         with patch('lnl_toolbox.cli.main.subprocess.call', return_value=0) as call:

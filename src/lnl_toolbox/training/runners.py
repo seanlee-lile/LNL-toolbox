@@ -239,7 +239,16 @@ def _supervised_requirements(config: Mapping[str, Any]) -> MethodRequirements | 
             supported_modalities=frozenset({Modality.IMAGE}),
             validation_target=validation_target,
         )
-    return None
+    validation_target = str(
+        (config.get("noise", {}) or {}).get("validation_targets", "clean")
+    ).strip().lower()
+    return MethodRequirements(
+        method="ce",
+        supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
+        requires_noise_manifest=False,
+        supports_native_noisy_labels=True,
+        validation_target=validation_target,
+    )
 
 
 def _binary_requirements(config: Mapping[str, Any]) -> MethodRequirements:
