@@ -263,6 +263,102 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
             frozenset({Modality.IMAGE}),
         )
 
+    def test_cal_mc_ldce_and_ca2c_preserve_their_synthetic_smokes(self) -> None:
+        registry = create_runner_registry()
+        service = ExperimentService()
+        cases = (
+            ('cal-cifar10-smoke', 'cal'),
+            ('mc-ldce-cifar10-smoke', 'mc_ldce'),
+            ('ca2c-cifar10-smoke', 'ca2c'),
+        )
+        for recipe_id, runner_name in cases:
+            with self.subTest(recipe=recipe_id):
+                config = load_recipe_config(recipe_by_id(recipe_id))
+                requirements = registry.get(runner_name).requirements(config)
+                self.assertEqual(
+                    requirements.supported_modalities,
+                    frozenset({Modality.TABULAR}),
+                )
+                service.preflight(config, check_data=True)
+                self.assertEqual(
+                    service.last_compatibility.status,
+                    CompatibilityStatus.COMPATIBLE,
+                )
+
+    def test_cal_mc_ldce_and_ca2c_formal_and_unknown_contracts_stay_strict(self) -> None:
+        registry = create_runner_registry()
+        formal_cases = (
+            ('cal-cifar10-reproduction', 'cal'),
+            ('mc-ldce-cifar10-reproduction', 'mc_ldce'),
+            ('ca2c-cifar10-reproduction', 'ca2c'),
+        )
+        for recipe_id, runner_name in formal_cases:
+            with self.subTest(recipe=recipe_id):
+                config = load_recipe_config(recipe_by_id(recipe_id))
+                requirements = registry.get(runner_name).requirements(config)
+                self.assertEqual(
+                    requirements.supported_modalities,
+                    frozenset({Modality.IMAGE}),
+                )
+
+        cal = registry.get('cal').requirements(
+            load_recipe_config(recipe_by_id('cal-cifar10-reproduction'))
+        )
+        self.assertEqual(
+            {item.code for item in cal.required_config_inputs},
+            {'requires_external_noise_labels'},
+        )
+        mc_ldce = registry.get('mc_ldce').requirements({
+            'data': {'name': 'synthetic_multiclass'},
+            'model': {'name': 'feature_mlp'},
+            'transition': {'estimator': 'known_smoke'},
+        })
+        self.assertEqual(
+            {item.code for item in mc_ldce.required_config_inputs},
+            {'requires_transition_source'},
+        )
+
+        tabular = resolve_dataset_capabilities(
+            _compatibility__profile(
+                modality=Modality.TABULAR,
+                classes=3,
+                clean=KnowledgeState.AVAILABLE,
+                clean_validation=KnowledgeState.AVAILABLE,
+            )
+        )
+        unknown_configs = {
+            'cal': {
+                'data': {'name': 'unknown_tabular'},
+                'model': {'name': 'feature_mlp'},
+                'noise': {'name': 'symmetric'},
+                'cal': {'confidence_weight': 1.0},
+            },
+            'mc_ldce': {
+                'data': {'name': 'unknown_tabular'},
+                'model': {'name': 'feature_mlp'},
+                'transition': {
+                    'estimator': 'known_smoke',
+                    'matrix': [[1.0, 0.0, 0.0]] * 3,
+                },
+            },
+            'ca2c': {
+                'data': {'name': 'unknown_tabular'},
+                'model': {'name': 'feature_mlp'},
+                'ca2c': {
+                    'warmup_epochs': 1,
+                    'candidate_k': 1,
+                    'hard_weight': 0.5,
+                },
+            },
+        }
+        for runner_name, config in unknown_configs.items():
+            with self.subTest(runner=runner_name):
+                requirements = registry.get(runner_name).requirements(config)
+                self.assertEqual(
+                    resolve_compatibility(tabular, requirements).status,
+                    CompatibilityStatus.INCOMPATIBLE,
+                )
+
     def test_shared_runner_detection_is_component_driven(self) -> None:
         registry = create_runner_registry()
         supervised = registry.get('supervised')

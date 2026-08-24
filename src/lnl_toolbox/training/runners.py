@@ -306,19 +306,31 @@ def _l2rw_requirements(config: Mapping[str, Any]) -> MethodRequirements:
     )
 
 
-def _cal_requirements(_config: Mapping[str, Any]) -> MethodRequirements:
+def _cal_requirements(config: Mapping[str, Any]) -> MethodRequirements:
+    noise = config.get("noise", {}) or {}
+    synthetic_feature_smoke = (
+        _component_name(config, "data") == "synthetic_multiclass"
+        and _component_name(config, "model") == "feature_mlp"
+        and _component_name(config, "noise") == "symmetric"
+        and isinstance(noise, Mapping)
+        and not any(noise.get(key) for key in ("path", "clean_key", "noisy_key"))
+        and isinstance(config.get("cal"), Mapping)
+    )
+    inputs = () if synthetic_feature_smoke else (_config_input(
+        "requires_external_noise_labels",
+        ("noise", "path"), ("noise", "clean_key"), ("noise", "noisy_key"),
+        description="CAL requires aligned external clean/noisy label vectors",
+    ),)
     return MethodRequirements(
         method="cal",
-        supported_modalities=frozenset({Modality.IMAGE}),
+        supported_modalities=frozenset({
+            Modality.TABULAR if synthetic_feature_smoke else Modality.IMAGE
+        }),
         requires_clean_train_labels=True,
         requires_clean_validation=True,
         requires_aligned_clean_noisy_targets=True,
         validation_target="clean",
-        required_config_inputs=(_config_input(
-            "requires_external_noise_labels",
-            ("noise", "path"), ("noise", "clean_key"), ("noise", "noisy_key"),
-            description="CAL requires aligned external clean/noisy label vectors",
-        ),),
+        required_config_inputs=inputs,
     )
 
 
@@ -339,9 +351,15 @@ def _cwd_requirements(_config: Mapping[str, Any]) -> MethodRequirements:
 
 
 def _mc_ldce_requirements(config: Mapping[str, Any]) -> MethodRequirements:
-    estimator = str(
-        (config.get("transition", {}) or {}).get("estimator", "")
-    ).strip().lower()
+    transition = config.get("transition", {}) or {}
+    estimator = str(transition.get("estimator", "")).strip().lower()
+    synthetic_feature_smoke = (
+        _component_name(config, "data") == "synthetic_multiclass"
+        and _component_name(config, "model") == "feature_mlp"
+        and estimator == "known_smoke"
+        and isinstance(transition, Mapping)
+        and transition.get("matrix") is not None
+    )
     inputs = ()
     if estimator and estimator != "paper_volmin":
         inputs = (_config_input(
@@ -352,11 +370,31 @@ def _mc_ldce_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         ),)
     return MethodRequirements(
         method="mc_ldce",
-        supported_modalities=frozenset({Modality.IMAGE}),
+        supported_modalities=frozenset({
+            Modality.TABULAR if synthetic_feature_smoke else Modality.IMAGE
+        }),
         min_classes=3,
         requires_clean_validation=True,
         validation_target="clean",
         required_config_inputs=inputs,
+    )
+
+
+def _ca2c_requirements(config: Mapping[str, Any]) -> MethodRequirements:
+    ca2c = config.get("ca2c", {}) or {}
+    synthetic_feature_smoke = (
+        _component_name(config, "data") == "synthetic_multiclass"
+        and _component_name(config, "model") == "feature_mlp"
+        and isinstance(ca2c, Mapping)
+        and {"warmup_epochs", "candidate_k", "hard_weight"} <= set(ca2c)
+    )
+    return MethodRequirements(
+        method="ca2c",
+        supported_modalities=frozenset({
+            Modality.TABULAR if synthetic_feature_smoke else Modality.IMAGE
+        }),
+        requires_clean_validation=True,
+        validation_target="clean",
     )
 
 
@@ -510,7 +548,7 @@ def create_runner_registry() -> RunnerRegistry:
     )
     registry.add(
         "ca2c", "lnl_toolbox.training.ca2c_experiment", "run_ca2c_experiment",
-        requirements_provider=_image_requirements("ca2c", clean_validation=True),
+        requirements_provider=_ca2c_requirements,
     )
     registry.add(
         "l2rw", "lnl_toolbox.training.l2rw_experiment", "run_l2rw_experiment",
