@@ -396,7 +396,18 @@ def cancel_job(job_id: str) -> Job:
         process = job.process
         job.cancel_requested = True
     if process is not None and process.poll() is None:
-        process.terminate()
+        # ``lnl`` may be a Windows console wrapper which starts the actual
+        # Python worker as a child.  Terminating only the wrapper leaks that
+        # worker into the next batch case, so cancel the complete process tree.
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        else:
+            process.terminate()
     return job
 
 
