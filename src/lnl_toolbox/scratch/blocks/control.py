@@ -115,6 +115,27 @@ def if_epoch_lt(
 
 
 @block(
+    id="if_epoch_eq",
+    name="If Epoch =",
+    category="Control",
+    description="Execute child blocks exactly at one training epoch.",
+    kind="condition",
+    params={"epoch": {"type": "int", "required": True, "min": 0}},
+    requires=(),
+    placement=("epoch",), stage="train", ui_group="③ 训练结构", beginner_visible=False,
+)
+def if_epoch_eq(
+    ctx: ScratchContext,
+    *,
+    params: Mapping[str, Any],
+    children: Sequence[Mapping[str, Any]],
+    execute: Callable[..., ScratchContext],
+) -> None:
+    if int(ctx["epoch"]) == int(params["epoch"]):
+        execute(children, ctx)
+
+
+@block(
     id="epoch_loop",
     name="Epoch Loop",
     category="Control",
@@ -150,9 +171,13 @@ def epoch_loop(
     category="Control",
     description="Iterate a loader; use Get Batch inside for explicit slot assignment.",
     kind="loop",
-    params={"loader": {"type": "slot", "default": "train_loader"}},
+    params={
+        "loader": {"type": "slot", "default": "train_loader"},
+        "max_steps": {"type": "int", "default": 0, "min": 0},
+        "global_step_as": {"type": "slot", "default": "global_step"},
+    },
     requires=("loader",),
-    provides=("batch_idx", "batch"),
+    provides=("batch_idx", "batch", "global_step_as"),
     placement=("epoch",), stage="train", ui_group="③ 训练结构",
 )
 def batch_loop(
@@ -164,9 +189,16 @@ def batch_loop(
 ) -> None:
     loader = ctx[str(params["loader"])]
     limit = ctx.get("_runtime_limits", {}).get("max_batches")
+    max_steps = int(params.get("max_steps", 0))
+    global_step_as = str(params.get("global_step_as", "global_step"))
+    if global_step_as not in ctx:
+        ctx[global_step_as] = 0
     for batch_idx, batch in enumerate(loader):
         if limit is not None and batch_idx >= int(limit):
+            break
+        if max_steps and int(ctx[global_step_as]) >= max_steps:
             break
         ctx["batch_idx"] = batch_idx
         ctx["batch"] = batch
         execute(children, ctx)
+        ctx[global_step_as] = int(ctx[global_step_as]) + 1

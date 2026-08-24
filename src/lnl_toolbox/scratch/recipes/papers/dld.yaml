@@ -18,8 +18,11 @@ steps:
           - {block: move_batch_to_device}
           - {block: zero_grad}
           - {block: forward_feature}
-          - {block: dld_label_diffusion, params: {features: features, labels: labels, save_as: dld_labels}}
-          - {block: per_sample_ce}
-          - {block: mean_loss}
+          - {block: dld_prepare_targets, params: {logits: logits, labels: labels, num_classes: 10}}
+          - {block: dld_construct_direction, params: {y0: y0, yn: yn, save_as: direction}}
+          - {block: dld_sample_forward_state, params: {y0: y0, direction: direction, timestep: timestep, epsilon: epsilon, timesteps: 1000, save_as: yd}}
+          - {block: dld_direction_loss, params: {predicted: logits, target: direction, save_as: dld_direction_loss}}
+          - {block: dld_noise_loss, params: {predicted: logits, target: epsilon, save_as: dld_noise_loss}}
+          - {block: dld_objective_composition, params: {direction_loss: dld_direction_loss, noise_loss: dld_noise_loss, save_as: loss}}
           - {block: backward}
           - {block: optimizer_step}

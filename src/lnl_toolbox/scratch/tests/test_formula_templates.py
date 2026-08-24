@@ -76,6 +76,96 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
         self.assertEqual(epoch["params"]["epochs"], config["trainer"]["epochs"])
         self.assertEqual([step["block"] for step in epoch["steps"][-2:]], ["evaluate_peer_ensemble", "track_best_peer_models"])
 
+    def test_cnlcu_persists_peer_selection_counts(self) -> None:
+        recipe = load_recipe(ROOT / "recipes" / "papers" / "cnlcu.yaml")
+        validate_recipe(recipe)
+        blocks = _batch_blocks(recipe)
+        first = blocks.index("small_loss_indices")
+        self.assertEqual(
+            blocks[first:first + 4],
+            [
+                "small_loss_indices",
+                "small_loss_indices",
+                "update_cnlcu_selected_count",
+                "update_cnlcu_selected_count",
+            ],
+        )
+
+    def test_fine_recipe_matches_warmup_and_cosine_protocol(self) -> None:
+        recipe = load_recipe(ROOT / "recipes" / "papers" / "fine.yaml")
+        validate_recipe(recipe)
+        config_path = ROOT.parents[2] / "configs" / "experiment" / "fine_cifar100n_reproduction.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        steps = recipe["steps"]
+        optimizer = next(step for step in steps if step["block"] == "create_optimizer")["params"]
+        self.assertEqual(optimizer["lr"], config["fine"]["warmup_lr"])
+        scheduler = next(step for step in steps if step["block"] == "create_scheduler")["params"]
+        self.assertEqual(
+            (scheduler["scheduler"], scheduler["t_max"], scheduler["eta_min"]),
+            (
+                config["scheduler"]["name"],
+                config["trainer"]["epochs"] - config["fine"]["warmup_epochs"],
+                config["scheduler"]["eta_min"],
+            ),
+        )
+        epoch = next(step for step in steps if step["block"] == "epoch_loop")
+        warmup_epochs = config["fine"]["warmup_epochs"]
+        self.assertEqual(epoch["params"]["epochs"], config["trainer"]["epochs"])
+        self.assertEqual(epoch["steps"][0]["block"], "if_epoch_eq")
+        self.assertEqual(epoch["steps"][0]["params"]["epoch"], warmup_epochs)
+        self.assertEqual(epoch["steps"][0]["steps"], [{"block": "set_optimizer_learning_rate", "params": {"optimizer": "optimizer", "learning_rate": config["optimizer"]["lr"]}}])
+        self.assertEqual(epoch["steps"][-2]["block"], "if_epoch_ge")
+        self.assertEqual(epoch["steps"][-2]["params"]["epoch"], warmup_epochs)
+        self.assertEqual(epoch["steps"][-2]["steps"], [{"block": "scheduler_step"}])
+
+    def test_lend_recipe_selects_and_restores_noisy_validation_best(self) -> None:
+        recipe = load_recipe(ROOT / "recipes" / "papers" / "lend.yaml")
+        validate_recipe(recipe)
+        config_path = ROOT.parents[2] / "configs" / "experiment" / "lend_cifar10_reproduction.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        epoch = next(step for step in recipe["steps"] if step["block"] == "epoch_loop")
+        self.assertEqual(epoch["params"]["epochs"], config["lend"]["training"]["epochs"])
+        self.assertEqual(
+            [step["block"] for step in epoch["steps"][-3:]],
+            ["evaluate_accuracy", "track_best_model", "scheduler_step"],
+        )
+        self.assertEqual(epoch["steps"][-2]["params"]["metric_name"], "validation_accuracy")
+        self.assertEqual(recipe["steps"][-2], {"block": "restore_best_model", "params": {"model": "model", "state": "best_model_state"}})
+        self.assertEqual(recipe["steps"][-1]["params"]["loader"], "test_loader")
+
+    def test_l2rw_recipe_enforces_official_global_step_schedule(self) -> None:
+        recipe = load_recipe(ROOT / "recipes" / "papers" / "l2rw.yaml")
+        validate_recipe(recipe)
+        config_path = ROOT.parents[2] / "configs" / "experiment" / "l2rw_cifar10_reproduction.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        epoch = next(step for step in recipe["steps"] if step["block"] == "epoch_loop")
+        self.assertEqual(epoch["params"]["epochs"], config["trainer"]["epochs"])
+        batch = next(step for step in epoch["steps"] if step["block"] == "batch_loop")
+        self.assertEqual(batch["params"]["max_steps"], config["trainer"]["max_steps"])
+        self.assertEqual(batch["params"]["global_step_as"], "l2rw_global_step")
+        schedule = batch["steps"][2]
+        self.assertEqual(schedule["block"], "step_milestone_update")
+        self.assertEqual(
+            (schedule["params"]["milestones"], schedule["params"]["gamma"], schedule["params"]["global_step"]),
+            (config["scheduler"]["step_milestones"], config["scheduler"]["gamma"], "l2rw_global_step"),
+        )
+
+    def test_cal_recipe_keeps_external_proxy_stage_separate(self) -> None:
+        recipe = load_recipe(ROOT / "recipes" / "papers" / "cal.yaml")
+        validate_recipe(recipe)
+        config_path = ROOT.parents[2] / "configs" / "experiment" / "cal_cifar10_reproduction.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        steps = recipe["steps"]
+        data = next(step for step in steps if step["block"] == "prepare_cal_cifar10")["params"]
+        self.assertEqual(data["artifact_path"], config["noise"]["path"])
+        warmup = next(step for step in steps if step["block"] == "epoch_loop")
+        self.assertEqual(warmup["params"]["epochs"], config["warmup"]["epochs"])
+        self.assertEqual(next(step for step in steps if step["block"] == "cal_materialize_proxy_artifact")["params"]["model"], "warmup_model")
+        main = [step for step in steps if step["block"] == "epoch_loop"][1]
+        self.assertEqual(main["params"]["epochs"], config["trainer"]["epochs"])
+        batch = next(step for step in main["steps"] if step["block"] == "batch_loop")
+        self.assertEqual([step["block"] for step in batch["steps"]][4:6], ["cal_prepare_proxy_batch", "cal_second_order_objective"])
+
     def test_apl_recipe_matches_formal_protocol(self) -> None:
         recipe = load_recipe(ROOT / "recipes" / "papers" / "apl.yaml")
         config_path = ROOT.parents[2] / "configs" / "experiment" / "apl_cifar10_noise02_reproduction.yaml"

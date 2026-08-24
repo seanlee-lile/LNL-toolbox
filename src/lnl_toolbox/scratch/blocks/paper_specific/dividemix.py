@@ -89,27 +89,73 @@ def co_refine(ctx: ScratchContext, probability: str = "clean_probability", label
 
 
 @block(
-    id="mixmatch_step",
-    name="DivideMix: MixMatch Step",
-    category="Paper Specific",
-    description="Compute the supervised part of a MixMatch-style update from refined labels.",
-    params={"logits": {"type": "slot", "default": "logits"}, "targets": {"type": "slot", "default": "refined_labels"}, "save_as": {"type": "slot", "default": "loss"}},
-    requires=("logits", "targets"),
-    provides=("save_as",),
+    id="dividemix_supervised_loss",
+    name="DivideMix: Supervised MixMatch Loss",
+    category="Loss",
+    description="Compute the labeled cross-entropy term on refined labels.",
+    params={"logits": {"type": "slot", "default": "logits"}, "targets": {"type": "slot", "default": "refined_labels"}, "mask": {"type": "slot", "default": "clean_mask"}, "save_as": {"type": "slot", "default": "dividemix_loss_x"}},
+    requires=("logits", "targets"), provides=("save_as",), placement=("batch",),
+    formula="L_x=-mean_{i in C} sum_c q_ic log softmax(z_i)_c", formula_ref="DivideMix MixMatch supervised term", paper="DivideMix",
 )
-def mixmatch_step(ctx: ScratchContext, logits: str = "logits", targets: str = "refined_labels", save_as: str = "loss") -> None:
+def dividemix_supervised_loss(ctx: ScratchContext, logits: str = "logits", targets: str = "refined_labels", mask: str = "clean_mask", save_as: str = "dividemix_loss_x") -> None:
+    torch, F = _torch()
+    values, soft_targets = ctx[logits], ctx[targets]
+    selected = ctx.get(mask)
+    if selected is None or not bool(selected.any()):
+        selected = torch.ones(values.shape[0], dtype=torch.bool, device=values.device)
+    ctx[save_as] = -(soft_targets[selected] * F.log_softmax(values[selected], dim=1)).sum(1).mean()
+
+
+@block(
+    id="dividemix_unsupervised_loss",
+    name="DivideMix: Unsupervised MixMatch Loss",
+    category="Loss",
+    description="Compute the unlabeled consistency MSE term on refined labels.",
+    params={"logits": {"type": "slot", "default": "logits"}, "targets": {"type": "slot", "default": "refined_labels"}, "mask": {"type": "slot", "default": "clean_mask"}, "save_as": {"type": "slot", "default": "dividemix_loss_u"}},
+    requires=("logits", "targets"), provides=("save_as",), placement=("batch",),
+    formula="L_u=mean ||softmax(z_U)-q_U||^2", formula_ref="DivideMix MixMatch unsupervised term", paper="DivideMix",
+)
+def dividemix_unsupervised_loss(ctx: ScratchContext, logits: str = "logits", targets: str = "refined_labels", mask: str = "clean_mask", save_as: str = "dividemix_loss_u") -> None:
+    torch, F = _torch()
+    values, soft_targets = ctx[logits], ctx[targets]
+    selected = ctx.get(mask)
+    if selected is None or not bool((~selected).any()):
+        selected = torch.zeros(values.shape[0], dtype=torch.bool, device=values.device)
+    if bool(selected.any()):
+        selected = ~selected
+    else:
+        selected = torch.ones(values.shape[0], dtype=torch.bool, device=values.device)
+    ctx[save_as] = (F.softmax(values[selected], dim=1) - soft_targets[selected]).square().mean()
+
+
+@block(
+    id="dividemix_prior_regularizer",
+    name="DivideMix: Prior Regularizer",
+    category="Loss",
+    description="Match the mean prediction to the uniform class prior.",
+    params={"logits": {"type": "slot", "default": "logits"}, "save_as": {"type": "slot", "default": "dividemix_loss_r"}},
+    requires=("logits",), provides=("save_as",), placement=("batch",),
+    formula="L_r=KL(U || mean_i softmax(z_i))", formula_ref="DivideMix prior regularization term", paper="DivideMix",
+)
+def dividemix_prior_regularizer(ctx: ScratchContext, logits: str = "logits", save_as: str = "dividemix_loss_r") -> None:
+    torch, F = _torch()
+    mean_probability = F.softmax(ctx[logits], dim=1).mean(0)
+    prior = torch.full_like(mean_probability, 1.0 / mean_probability.numel())
+    ctx[save_as] = (prior * (prior / mean_probability.clamp_min(torch.finfo(mean_probability.dtype).tiny)).log()).sum()
+
+
+@block(
+    id="dividemix_objective_composition",
+    name="DivideMix: Compose MixMatch Objective",
+    category="Loss",
+    description="Compose supervised, unsupervised, and prior terms with the formal coefficients.",
+    params={"supervised": {"type": "slot", "default": "dividemix_loss_x"}, "unsupervised": {"type": "slot", "default": "dividemix_loss_u"}, "regularizer": {"type": "slot", "default": "dividemix_loss_r"}, "lambda_u": {"type": "float", "default": 25.0, "min": 0.0}, "lambda_r": {"type": "float", "default": 1.0, "min": 0.0}, "save_as": {"type": "slot", "default": "loss"}},
+    requires=("supervised", "unsupervised", "regularizer"), provides=("save_as",), placement=("batch",),
+    formula="L=L_x+lambda_u L_u+lambda_r L_r", formula_ref="DivideMix MixMatch composition", paper="DivideMix",
+)
+def dividemix_objective_composition(ctx: ScratchContext, supervised: str = "dividemix_loss_x", unsupervised: str = "dividemix_loss_u", regularizer: str = "dividemix_loss_r", lambda_u: float = 25.0, lambda_r: float = 1.0, save_as: str = "loss") -> None:
     torch, _ = _torch()
-    from lnl_toolbox.algorithms.dividemix.objective import dividemix_objective, unsupervised_weight
-    mask = ctx.get("clean_mask")
-    if mask is None or not bool(mask.any()) or not bool((~mask).any()):
-        mask = __import__("torch").ones(ctx[logits].shape[0], dtype=torch.bool, device=ctx[logits].device)
-    labeled_logits, labeled_targets = ctx[logits][mask], ctx[targets][mask]
-    unlabeled_logits, unlabeled_targets = ctx[logits][~mask], ctx[targets][~mask]
-    if unlabeled_logits.numel() == 0:
-        unlabeled_logits, unlabeled_targets = labeled_logits, labeled_targets
-    objective, metrics = dividemix_objective(
-        labeled_logits, labeled_targets, unlabeled_logits, unlabeled_targets, ctx[logits],
-        lambda_u=unsupervised_weight(25.0, float(ctx.get("epoch", 0)), 10, 16), lambda_r=1.0,
-    )
+    objective = ctx[supervised] + float(lambda_u) * ctx[unsupervised] + float(lambda_r) * ctx[regularizer]
+    if not bool(torch.isfinite(objective).item()):
+        raise FloatingPointError("DivideMix objective is not finite")
     ctx[save_as] = objective
-    ctx["dividemix_metrics"] = metrics

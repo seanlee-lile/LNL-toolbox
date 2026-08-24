@@ -6,12 +6,16 @@ steps:
   - {block: select_device, params: {device: auto}}
   - {block: prepare_formal_cifar, params: {dataset: cifar100, validation_size: 0, train_eval: true, clean_validation: true, augment: true, noise_rate: 0.2, noise_seed: 0, preprocessing: official_cifar10, batch_size: 128, num_workers: 8}}
   - {block: create_model, params: {model: fine_seven_cnn, num_classes: 100, base_width: 64, device: device, save_as: model}}
-  - {block: create_optimizer, params: {optimizer: sgd, model: model, lr: 0.05, momentum: 0.9, nesterov: true, weight_decay: 0.0005, save_as: optimizer}}
-  - {block: create_scheduler, params: {scheduler: cosine, optimizer: optimizer, t_max: 300, eta_min: 0.0005, save_as: scheduler}}
+  - {block: create_optimizer, params: {optimizer: sgd, model: model, lr: 0.1, momentum: 0.9, nesterov: true, weight_decay: 0.0005, save_as: optimizer}}
+  - {block: create_scheduler, params: {scheduler: cosine, optimizer: optimizer, t_max: 100, eta_min: 0.0005, save_as: scheduler}}
   - {block: create_fine_state, params: {model: model, num_classes: 100, ema_momentum: 0.95, momentum_scs: 0.999, momentum_scr: 0.99, maximum_threshold: 0.95, beta: 0.1, gamma: 0.002, probability_floor: 0.0000001, seed: 23, save_as: fine_state}}
   - block: epoch_loop
     params: {epochs: 300}
     steps:
+      - block: if_epoch_eq
+        params: {epoch: 200}
+        steps:
+          - {block: set_optimizer_learning_rate, params: {optimizer: optimizer, learning_rate: 0.05}}
       - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}}
       - {block: refresh_epoch_loader, params: {data: prepared_data, role: train_eval, batch_size: 128, save_as: train_eval_loader}}
       - block: if_epoch_ge
@@ -41,6 +45,9 @@ steps:
           - {block: backward}
           - {block: optimizer_step}
           - {block: fine_ema_update, params: {model: model, state: fine_state}}
-      - {block: scheduler_step}
+      - block: if_epoch_ge
+        params: {epoch: 200}
+        steps:
+          - {block: scheduler_step}
       - {block: evaluate_accuracy, params: {model: model, loader: validation_loader, save_as: validation_accuracy}}
   - {block: evaluate_accuracy, params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}}

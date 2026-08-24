@@ -353,32 +353,29 @@ papers:
     hashes, so no smoke substitution or download was used.'
 - index: 14
   id: dss
-  status: BLOCKED
+  status: READY
   protocol_source: configs/experiment/dss_cifar10_symmetric05_reproduction.yaml
   paper_source: 'catalog entry: Debiased Sample Selection for Learning with Noisy Labels'
   legacy_sources:
   - src/lnl_toolbox/algorithms/dss.py
   - src/lnl_toolbox/selectors/dss.py
   - src/lnl_toolbox/training/experiment.py
-  missing_capabilities:
-  - prepare_dss_cifar10
-  - preact_resnet18_base_width64
-  - dss_indexed_epoch_state
+  missing_capabilities: []
+  new_public_blocks:
+  - create_dss_state
+  - dss_warmup_lifecycle
   - dss_mda_marginal_adjustment
   - dss_ccs_trend_exclusion
-  - dss_warmup_lifecycle
-  - dss_masked_cross_entropy
-  - formal_sgd_multistep_recipe
-  new_public_blocks: []
+  - dss_masked_training_loss
   new_paper_blocks: []
-  protocol_check: FAIL
-  formula_check: PENDING
-  runtime_check: PENDING
-  ui_check: PENDING
-  notes: SKIPPED per user instruction. Existing Scratch DSS recipe is smoke-only and lacks the formal CIFAR-10/PreAct-ResNet18/150-epoch
-    protocol, indexed state lifecycle, MDA, CCS, warmup, and formal optimizer schedule. No substitution was made.
+  protocol_check: PASS
+  formula_check: PASS
+  runtime_check: PASS
+  ui_check: PASS
+  notes: 'Formal DSS CIFAR-10 symmetric-50 protocol retained: PreAct-ResNet18 base width 64, SGD 0.02/momentum 0.9/weight decay 0.001, MultiStep milestone 80, 150 epochs, 30-epoch warm-up, stable-index state, MDA prior decay 0.99, CCS alpha 0.1, and masked training loss. Conda fixture-limited runtime passed; direct MDA normalization check passed; WebUI loaded DSS and Validate passed.'
 - index: 15
   id: cnlcu
+  status: READY
   protocol_source: configs/experiment/cnlcu_cifar10_reproduction.yaml
   paper_source: catalog/paper_catalog.json (Sample Selection with Uncertainty of Losses)
   legacy_sources:
@@ -396,15 +393,15 @@ papers:
   - cnlcu_soft_robust_mean
   - cnlcu_soft_score
   - cnlcu_cnn9 model entry
+  new_paper_blocks: []
   protocol_check: PASS
   formula_check: PASS
   runtime_check: PASS
   ui_check: PASS
-  status: READY
-  notes: 'Formal CNLCU-S CIFAR-10 symmetric-20 protocol retained: CNN9 peer models, Adam, linear-after scheduler, fixed W=5 stable-index history, Eq. (2)/(3)/(7), floor stable selection, noisy validation. Conda runtime-limited formal recipe passed with max_epochs=1/max_batches=1; direct formula comparison matched legacy; WebUI 8875 loaded the formal recipe, displayed CNLCU blocks, and Validate passed.'
+  notes: 'Revalidated from PENDING: formal CNLCU-S protocol and the legacy selection-count lifecycle were manually mapped to Recipe particles. The previously omitted update_cnlcu_selected_count calls now persist each peer selection after scoring. Conda two-epoch fixture runtime observed effective selection counts advance from 1 to 2; focused CNLCU/formula tests and WebUI Validate passed.'
 - index: 16
   id: mentornet
-  status: READY
+  status: BLOCKED
   protocol_source: configs/experiment/mentornet_dd_cifar100_symmetric04_reproduction.yaml
   paper_source: https://proceedings.mlr.press/v80/jiang18c/jiang18c.pdf
   legacy_sources:
@@ -421,11 +418,11 @@ papers:
   - step_milestone_update
   - mentor_wide_resnet formal parameters
   new_paper_blocks: []
-  protocol_check: PASS
-  formula_check: PASS
-  runtime_check: PASS
-  ui_check: PASS
-  notes: 'Formal MentorNet-DD CIFAR-100 symmetric-40 protocol retained: 100 epochs, mentor_wide_resnet with 9 residual units/leakiness 0.1/width 1.0, SGD lr 0.1 momentum 0.9, external official MentorArtifact, moving percentile 0.6 decay 0.5, burn-in epoch 18, fixed label 0, configured dropout schedule, and step milestones [19500,25000,30000] gamma 0.1. Conda runtime-limited formal recipe passed max_epochs=1/max_batches=1 with fixture limits; direct provider output matched the legacy MentorNetWeightProvider lifecycle/formula; WebUI 8875 loaded the updated recipe, displayed MentorNet and step-milestone blocks, and Validate passed.'
+  protocol_check: FAIL
+  formula_check: PENDING
+  runtime_check: PENDING
+  ui_check: PENDING
+  notes: 'BLOCKED during source audit: formal config is CIFAR-100 symmetric-40 for 100 epochs, but the only configured MentorArtifact is cifar10-symmetric04 and its embedded source metadata records 20 epochs. A fixture or schema load is not an acceptable substitute. Requires a provenance-checked CIFAR-100 MentorNet-DD artifact matching the formal protocol before Recipe repair and acceptance can continue.'
 - index: 17
   id: fine
   status: READY
@@ -454,7 +451,7 @@ papers:
   formula_check: PASS
   runtime_check: PASS
   ui_check: PASS
-  notes: 'Formal FINE CIFAR-100N protocol retained: CIFAR-100 symmetric-20, official CIFAR-10 preprocessing, SevenCNN base width 64, SGD lr 0.05/nesterov/weight decay 0.0005, 300 epochs with 200-epoch warm-up at lr 0.1, EMA momentum 0.95, SCS/SCR momenta 0.999/0.99, beta 0.1, gamma 0.002, and cosine eta_min 0.0005. Conda runtime-limited formal recipe passed max_epochs=1/max_batches=1; direct SCS/SCR/FINE regularizer checks matched legacy implementations; WebUI 8875 loaded the updated Fine recipe, displayed lifecycle blocks, and Validate passed.'
+  notes: 'Revalidated from PENDING: corrected the legacy lifecycle mismatch so SGD uses warmup_lr=0.1 through epoch 199, switches to formal lr=0.05 at epoch 200, and only then advances CosineAnnealingLR with T_max=100. Formal config/legacy mapping, focused formula test, Conda fixture warmup runtime, and freshly restarted WebUI Validate passed.'
 - index: 18
   id: lend
   status: READY
@@ -480,7 +477,7 @@ papers:
   formula_check: PASS
   runtime_check: PASS
   ui_check: PASS
-  notes: 'Formal LEND CIFAR-10 symmetric-40 protocol retained: ResNet-18 base width 64, batch 256, k=8 inner-product graph, gamma 1.0, no feature normalization, alpha 0.99 for 10 dilution steps, beta 0.9 stable-index history, noisy-equals-diluted-argmax selection with batch-mean objective, SGD 0.05/momentum 0.9/weight decay 0.0005, MultiStep milestone 100, 200 epochs, and noisy validation selection. Conda runtime-limited formal recipe passed max_epochs=1/max_batches=1; direct graph/dilution/history/selection checks passed against legacy modules; WebUI 8875 loaded the updated LEND recipe, displayed graph/history blocks, and Validate passed.'
+  notes: 'Revalidated from PENDING: retained the existing graph, dilution, indexed-history, and agreement particles; restored the legacy epoch order of noisy-validation evaluation, best-model capture, and scheduler advance, then restored that selected model before clean testing. Focused formula test, Conda fixture runtime, and WebUI Validate passed.'
 - index: 19
   id: l2rw
   status: READY
@@ -494,13 +491,14 @@ papers:
   new_public_blocks:
   - prepare_formal_cifar trusted_validation support
   - l2rw_get_trusted_batch
-  - l2rw_meta_weight
+  - l2rw_meta_gradient
+  - l2rw_normalize_weights
   new_paper_blocks: []
   protocol_check: PASS
   formula_check: PASS
   runtime_check: PASS
   ui_check: PASS
-  notes: 'Formal L2RW CIFAR-10 uniform-40 protocol retained: official_generated class-balanced trusted validation with num_clean=100, L2RW ResNet-32 base width 16, SGD lr 0.1/momentum 0.9/weight decay 0.0002, official one-step meta implementation with virtual learning rate 1.0, 180 epochs and 80000-step horizon, and step milestones 40000/60000 gamma 0.1. Conda runtime-limited formal recipe passed max_epochs=1/max_batches=1; direct meta_reweight output matched the legacy implementation; WebUI 8875 loaded the updated L2RW recipe, displayed trusted-meta blocks, and Validate passed.'
+  notes: 'Revalidated from PENDING: retained the existing official bilevel meta-gradient and normalization particles, and repaired the missing global-step lifecycle. The Recipe now stops at max_steps=80000 and applies the 40000/60000 fixed learning-rate drops before their corresponding updates. Focused formula test, Conda fixture runtime, and freshly restarted WebUI Validate passed.'
 - index: 20
   id: cal
   status: READY
@@ -522,10 +520,10 @@ papers:
   formula_check: PASS
   runtime_check: PASS
   ui_check: PASS
-  notes: 'Formal CAL CIFAR-10 IDN-20 protocol retained: external IDN_0.2_C10.pt clean/noisy label artifact loader, ResNet-34 base width 64, SGD lr 0.1/momentum 0.9/weight decay 0.0005, 65-epoch warm-up, CAL 100 epochs, confidence schedules [10,40,80], sieve thresholds -8, and MultiStep milestone 60. Conda runtime-limited formal recipe passed max_epochs=1/max_batches=1; direct CAL objective and confidence schedule matched legacy algorithms; WebUI 8875 loaded the updated CAL recipe, displayed warm-up/proxy/second-order blocks, and Validate passed.'
+  notes: 'Revalidated from PENDING: replaced the invalid current-batch proxy shortcut with formal external_torch data preparation, a separate CORES2 warm-up model, stable-index warm-up proxy artifact, fixed proxy-to-noisy transition means, and detached epoch-level reference-loss updates. CAL alpha-scaled scheduling now consumes the next epoch confidence weight. Focused formula test, Conda fixture runtime, and freshly restarted WebUI Validate passed.'
 - index: 21
   id: mc-ldce
-  status: READY
+  status: BLOCKED
   protocol_source: configs/experiment/mc_ldce_cifar10_reproduction.yaml
   paper_source: catalog/paper_catalog.json (MC-LDCE)
   legacy_sources:
@@ -539,14 +537,14 @@ papers:
   - mc_ldce_objective
   - create_model classifier_bias
   new_paper_blocks: []
-  protocol_check: PASS
-  formula_check: PASS
-  runtime_check: PASS
-  ui_check: PASS
-  notes: 'Formal MC-LDCE CIFAR-10 symmetric-20 lifecycle retained: separate paper-VolMin transition stage contract, fixed feature mode, bias-free MC-LDCE CNN classifier, Adam lr 0.001, transition model/optimizer/schedule parameters, and 200-epoch classifier stage. Conda runtime-limited formal recipe passed max_epochs=1/max_batches=1; direct global squared centroid risk matched MCLDCEObjective and estimator statistic contract; WebUI 8875 loaded the updated recipe, displayed fixed-feature/statistic blocks, and Validate passed.'
+  protocol_check: FAIL
+  formula_check: PENDING
+  runtime_check: PENDING
+  ui_check: PENDING
+  notes: 'BLOCKED after source recheck: the Recipe still uses one model and re-estimates centroids every classifier epoch. Formal lifecycle requires a separate 150-epoch PaperVolMin transition estimator, then a frozen-feature, bias-free main classifier whose statistic is estimated from that independent transition artifact. New transition particles exist but are not yet wired into a complete Recipe.'
 - index: 22
   id: upm
-  status: READY
+  status: BLOCKED
   protocol_source: configs/experiment/upm_cifar10_reproduction.yaml
   paper_source: catalog/paper_catalog.json (Universal Probability Model for Label Noise)
   legacy_sources:
@@ -560,14 +558,15 @@ papers:
   - upm_update_eta
   - upm_soft_target_loss
   - prepare_formal_cifar train_eval support
-  protocol_check: PASS
-  formula_check: PASS
-  runtime_check: PASS
-  ui_check: PASS
-  notes: 'Formal UPM CIFAR-10 symmetric-40 two-stage protocol retained: stage-1 ResNet-18 base width 16 with SGD 0.05/momentum 0.9/weight decay 0.0001 and MultiStep [40,80,120], stage-1 posterior publication keyed by stable train indices, fresh main ResNet-18 stage, Eq. (8) clean posterior, Eq. (11)-(12) projected eta update, detached soft-target objective, and noisy validation. Conda runtime-limited formal recipe passed with fixture limits; direct posterior and soft-target outputs matched legacy UPM objective functions; WebUI 8875 loaded UPM and Validate passed.'
+  new_paper_blocks: []
+  protocol_check: FAIL
+  formula_check: PENDING
+  runtime_check: PENDING
+  ui_check: PENDING
+  notes: 'BLOCKED after source recheck: the fresh main-stage Recipe updates confusing probabilities in every batch from epoch 0 and omits its formal MultiStep scheduler. Config requires updates only from epoch 35, once every 5 epochs, and milestones 40/80/120.'
 - index: 23
   id: dividemix
-  status: READY
+  status: BLOCKED
   protocol_source: configs/reproduction/cifar10_dividemix_sym20.yaml
   paper_source: catalog/paper_catalog.json (DivideMix)
   legacy_sources:
@@ -578,14 +577,16 @@ papers:
   missing_capabilities: []
   new_public_blocks:
   - DivideMix GMM estimator-backed clean probability
-  - DivideMix co-refinement and MixMatch objective
-  - formal two-peer/scheduler recipe structure
+  - dividemix_supervised_loss
+  - dividemix_unsupervised_loss
+  - dividemix_prior_regularizer
+  - dividemix_objective_composition
   new_paper_blocks: []
-  protocol_check: PASS
-  formula_check: PASS
-  runtime_check: PASS
-  ui_check: PASS
-  notes: 'Formal DivideMix CIFAR-10 symmetric-20 protocol retained: two PreAct-ResNet18 peers, peer SGD 0.02/momentum 0.9/weight decay 0.0005, warm-up and GMM clean-probability lifecycle, cross-peer refinement, MixMatch objective with lambda_u 25/ramp-up 16 and lambda_r 1, scheduler milestone 150, 300 epochs, and validation selection. Conda runtime-limited formal recipe passed with fixture limits; direct MixMatch objective matched legacy DivideMix objective; WebUI 8875 loaded DivideMix and Validate passed.'
+  protocol_check: FAIL
+  formula_check: PENDING
+  runtime_check: PENDING
+  ui_check: PENDING
+  notes: 'BLOCKED after source recheck: the Recipe fits GMMs from current minibatch losses without the formal 10-epoch warmup/full stable-index loss history, lacks peer-specific clean/noisy streams and MixMatch augmentations/mixup, and schedules only peer A without validation/best ensemble inference.'
 - index: 24
   id: dld
   status: BLOCKED
@@ -606,10 +607,10 @@ papers:
   formula_check: PENDING
   runtime_check: PENDING
   ui_check: PENDING
-  notes: 'BLOCKED after inspecting the formal config and legacy implementation: the existing Scratch recipe is a one-model ResNet34 Adam label-diffusion shortcut and does not implement the required frozen ResNet34 feature/pre-correction stage, y_n-y_0 directional diffusion schedule, independent direction/noise predictors, EMA, or five-step deterministic inference. No smoke or static substitute was promoted to READY; current_index advances to CA2C.'
+  notes: 'BLOCKED after this repair pass: the formal config and legacy contract require a frozen ResNet34 feature/pre-correction stage, y_n-y_0 directional diffusion schedule, independent direction/noise predictors, EMA, and five-step deterministic inference; current Scratch particles validate/run but do not satisfy that protocol. No smoke/static/API substitute promoted this paper to READY.'
 - index: 25
   id: ca2c
-  status: READY
+  status: BLOCKED
   protocol_source: configs/experiment/ca2c_cifar10_reproduction.yaml
   paper_source: catalog/paper_catalog.json (CA2C)
   legacy_sources:
@@ -618,12 +619,14 @@ papers:
   - src/lnl_toolbox/models/ca2c_cnn.py
   missing_capabilities: []
   new_public_blocks:
-  - ca2c_co_learning_objective
-  - ca2c_candidate_memory
-  - formal two-network CA2C recipe structure
+  - ca2c_warmup_loss
+  - ca2c_cross_guidance
+  - ca2c_partial_label_loss
+  - ca2c_negative_label_loss
+  - ca2c_objective_composition
   new_paper_blocks: []
-  protocol_check: PASS
-  formula_check: PASS
-  runtime_check: PASS
-  ui_check: PASS
-  notes: 'Formal CA2C CIFAR-100 symmetric-20 protocol retained: two SevenCNN peers, strong augmentation-compatible data, SGD 0.02/momentum 0.9/Nesterov/weight decay 0.0005, 400-epoch warm-up, candidate K=2 memory, lambda 0.99, robust asymmetric positive partial-label and complementary negative objectives, cosine schedule to 700 epochs. Conda runtime-limited formal recipe passed with fixture limits; direct cross-guidance/partial-label/negative objective matched legacy CA2C functions; WebUI 8875 loaded CA2C and Validate passed.'
+  protocol_check: FAIL
+  formula_check: PENDING
+  runtime_check: PENDING
+  ui_check: PENDING
+  notes: 'BLOCKED after source recheck: the Recipe recomputes cross-guidance from only the current minibatch and has no persistent candidate memory; it also does not implement the formal robust-weight term or validation/best-model lifecycle. The existing objective blocks alone are insufficient.'

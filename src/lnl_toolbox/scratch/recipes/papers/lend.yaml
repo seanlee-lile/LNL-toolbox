@@ -28,6 +28,8 @@ steps:
           - {block: lend_selected_objective, params: {losses: loss_per_sample, selected: lend_selected, save_as: loss}}
           - {block: backward}
           - {block: optimizer_step}
-      - {block: scheduler_step}
       - {block: evaluate_accuracy, params: {model: model, loader: validation_loader, save_as: validation_accuracy}}
+      - {block: track_best_model, params: {model: model, metric: validation_accuracy, metric_name: validation_accuracy}}
+      - {block: scheduler_step}
+  - {block: restore_best_model, params: {model: model, state: best_model_state}}
   - {block: evaluate_accuracy, params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}}

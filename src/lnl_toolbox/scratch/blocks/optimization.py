@@ -63,6 +63,55 @@ def create_optimizer(
 
 
 @block(
+    id="set_optimizer_learning_rate",
+    name="Set Optimizer Learning Rate",
+    category="Optimization",
+    description="Set the learning rate of every parameter group in an existing optimizer.",
+    params={
+        "optimizer": {"type": "slot", "default": "optimizer"},
+        "learning_rate": {"type": "float", "required": True, "min": 0.0},
+    },
+    requires=("optimizer",),
+    placement=("epoch",), stage="train", ui_group="⑩ 论文专用", beginner_visible=False,
+)
+def set_optimizer_learning_rate(
+    ctx: ScratchContext,
+    optimizer: str = "optimizer",
+    learning_rate: float = 0.0,
+) -> None:
+    value = ctx[optimizer]
+    if not hasattr(value, "param_groups"):
+        raise TypeError("set_optimizer_learning_rate requires a torch optimizer")
+    for group in value.param_groups:
+        group["lr"] = float(learning_rate)
+
+
+@block(
+    id="create_alpha_scaled_scheduler",
+    name="Create Alpha-scaled Scheduler",
+    category="Optimization",
+    description="Create the CAL scheduler whose learning rate is divided by 1 + the scheduled confidence weight.",
+    params={"optimizer": {"type": "slot", "default": "optimizer"}, "milestones": {"type": "value", "default": [60]}, "gamma": {"type": "float", "default": 0.1, "min": 0.0}, "save_as": {"type": "slot", "default": "scheduler"}},
+    requires=("optimizer",), provides=("save_as",), placement=("top",), stage="setup", ui_group="② 初始化", beginner_visible=False,
+)
+def create_alpha_scaled_scheduler(ctx: ScratchContext, optimizer: str = "optimizer", milestones: Any = (60,), gamma: float = 0.1, save_as: str = "scheduler") -> None:
+    from lnl_toolbox.training.experiment import build_alpha_scaled_scheduler
+    ctx[save_as] = build_alpha_scaled_scheduler(ctx[optimizer], {"name": "multistep", "milestones": list(milestones), "gamma": float(gamma)})
+
+
+@block(
+    id="alpha_scaled_scheduler_step",
+    name="Alpha-scaled Scheduler Step",
+    category="Optimization",
+    description="Advance a CAL alpha-scaled scheduler using the next epoch's confidence weight.",
+    params={"scheduler": {"type": "slot", "default": "scheduler"}, "confidence_weight": {"type": "slot", "default": "confidence_weight"}},
+    requires=("scheduler", "confidence_weight"), placement=("epoch",), stage="train", ui_group="⑩ 论文专用", beginner_visible=False,
+)
+def alpha_scaled_scheduler_step(ctx: ScratchContext, scheduler: str = "scheduler", confidence_weight: str = "confidence_weight") -> None:
+    ctx[scheduler].step(float(ctx[confidence_weight]))
+
+
+@block(
     id="create_joint_optimizer",
     name="Create Joint Optimizer",
     category="Optimization",

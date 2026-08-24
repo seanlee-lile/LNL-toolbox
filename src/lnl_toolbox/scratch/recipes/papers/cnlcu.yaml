@@ -40,6 +40,8 @@ steps:
           - {block: cnlcu_soft_score, params: {robust_mean: robust_b, history_length: length_b, selected_count: counts_b, sigma_squared: 0.01, save_as: score_b}}
           - {block: small_loss_indices, params: {input: score_a, remember_rate: remember_rate, sample_indices: indices, save_as: selected_a}}
           - {block: small_loss_indices, params: {input: score_b, remember_rate: remember_rate, sample_indices: indices, save_as: selected_b}}
+          - {block: update_cnlcu_selected_count, params: {history: history_a, rows: rows_a, selected_mask: selected_mask_a}}
+          - {block: update_cnlcu_selected_count, params: {history: history_b, rows: rows_b, selected_mask: selected_mask_b}}
           - {block: cross_select_loss_a_from_b, params: {loss: loss_a_per_sample, indices: selected_b, save_as: loss_a}}
           - {block: cross_select_loss_b_from_a, params: {loss: loss_b_per_sample, indices: selected_a, save_as: loss_b}}
           - {block: backward, params: {loss: loss_a}}

@@ -12,15 +12,17 @@ steps:
     steps:
       - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 100, save_as: train_loader}}
       - block: batch_loop
-        params: {loader: train_loader}
+        params: {loader: train_loader, max_steps: 80000, global_step_as: l2rw_global_step}
         steps:
           - {block: get_batch}
           - {block: move_batch_to_device}
+          - {block: step_milestone_update, params: {optimizer: optimizer, milestones: [40000, 60000], gamma: 0.1, steps_per_epoch: 450, global_step: l2rw_global_step}}
           - {block: zero_grad}
           - {block: forward}
           - {block: per_sample_ce}
           - {block: l2rw_get_trusted_batch, params: {loader: trusted_loader, input_as: trusted_images, label_as: trusted_labels}}
-          - {block: l2rw_meta_weight, params: {model: model, inputs: images, labels: labels, trusted_inputs: trusted_images, trusted_labels: trusted_labels, virtual_learning_rate: 1.0, weight_decay: 0.0002, implementation: official, save_as: meta_weights}}
+          - {block: l2rw_meta_gradient, params: {model: model, inputs: images, labels: labels, trusted_inputs: trusted_images, trusted_labels: trusted_labels, virtual_learning_rate: 1.0, weight_decay: 0.0002, implementation: official, save_as: meta_gradient}}
+          - {block: l2rw_normalize_weights, params: {gradient: meta_gradient, implementation: official, save_as: meta_weights}}
           - {block: weighted_loss, params: {weights: meta_weights, save_as: weighted_loss_per_sample}}
           - {block: mean_loss, params: {input: weighted_loss_per_sample, save_as: loss}}
           - {block: backward}

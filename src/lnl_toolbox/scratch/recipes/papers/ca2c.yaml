@@ -22,9 +22,17 @@ steps:
           - {block: zero_grad}
           - {block: zero_grad, params: {optimizer: optimizer_n}}
           - {block: forward_two_models, params: {model_a: model_p, model_b: model_n, save_as_a: logits_p, save_as_b: logits_n}}
-          - {block: per_sample_ce, params: {logits: logits_p, save_as: loss_per_sample}}
-          - {block: ca2c_candidate_memory, params: {losses: loss_per_sample, keep_rate: 0.8, save_as: ca2c_mask}}
-          - {block: ca2c_co_learning_objective, params: {positive_logits: logits_p, negative_logits: logits_n, labels: labels, candidate_k: 2, hard_weight: 0.99, warmup_epochs: 400, save_as: loss}}
+          - block: if_epoch_lt
+            params: {epoch: 400}
+            steps:
+              - {block: ca2c_warmup_loss, params: {positive_logits: logits_p, negative_logits: logits_n, labels: labels, save_as: loss}}
+          - block: if_epoch_ge
+            params: {epoch: 400}
+            steps:
+              - {block: ca2c_cross_guidance, params: {positive_logits: logits_p, negative_logits: logits_n, candidate_k: 2, candidate_as: ca2c_candidates, complement_as: ca2c_complements}}
+              - {block: ca2c_partial_label_loss, params: {logits: logits_p, candidates: ca2c_candidates, hard_weight: 0.99, save_as: ca2c_positive_loss}}
+              - {block: ca2c_negative_label_loss, params: {logits: logits_n, complements: ca2c_complements, save_as: ca2c_negative_loss}}
+              - {block: ca2c_objective_composition, params: {positive: ca2c_positive_loss, negative: ca2c_negative_loss, save_as: loss}}
           - {block: backward}
           - {block: optimizer_step}
           - {block: optimizer_step, params: {optimizer: optimizer_n}}

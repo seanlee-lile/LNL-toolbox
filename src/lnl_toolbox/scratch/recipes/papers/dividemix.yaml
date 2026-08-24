@@ -28,10 +28,16 @@ steps:
           - {block: split_clean_noisy}
           - {block: softmax, params: {logits: logits_a, save_as: probabilities}}
           - {block: co_refine}
-          - {block: mixmatch_step, params: {logits: logits_a}}
+          - {block: dividemix_supervised_loss, params: {logits: logits_a, targets: refined_labels, mask: clean_mask, save_as: loss_x_a}}
+          - {block: dividemix_unsupervised_loss, params: {logits: logits_a, targets: refined_labels, mask: clean_mask, save_as: loss_u_a}}
+          - {block: dividemix_prior_regularizer, params: {logits: logits_a, save_as: loss_r_a}}
+          - {block: dividemix_objective_composition, params: {supervised: loss_x_a, unsupervised: loss_u_a, regularizer: loss_r_a, lambda_u: 25.0, lambda_r: 1.0, save_as: loss}}
           - {block: backward, params: {loss: loss}}
           - {block: optimizer_step, params: {optimizer: optimizer_a}}
-          - {block: mixmatch_step, params: {logits: logits_b, targets: refined_labels, save_as: loss_b}}
+          - {block: dividemix_supervised_loss, params: {logits: logits_b, targets: refined_labels, mask: clean_mask, save_as: loss_x_b}}
+          - {block: dividemix_unsupervised_loss, params: {logits: logits_b, targets: refined_labels, mask: clean_mask, save_as: loss_u_b}}
+          - {block: dividemix_prior_regularizer, params: {logits: logits_b, save_as: loss_r_b}}
+          - {block: dividemix_objective_composition, params: {supervised: loss_x_b, unsupervised: loss_u_b, regularizer: loss_r_b, lambda_u: 25.0, lambda_r: 1.0, save_as: loss_b}}
           - {block: backward, params: {loss: loss_b}}
           - {block: optimizer_step, params: {optimizer: optimizer_b}}
       - {block: scheduler_step, params: {scheduler: scheduler_a}}
