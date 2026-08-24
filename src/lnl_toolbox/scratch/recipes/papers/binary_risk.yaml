@@ -1,9 +1,46 @@
 schema_version: 1
 name: binary-risk
-description: Natarajan binary unbiased risk smoke recipe.
+description: "Complete Natarajan binary-risk reproduction recipe: synthetic_binary_2d, known asymmetric class-conditional noise, linear classifier, SGD, and 50 epochs."
 steps:
-  - {block: set_seed, params: {seed: 1}}
-  - {block: prepare_paper_batch, params: {classes: 2}}
-  - block: binary_risk
-    params: {rho_positive: 0.1, rho_negative: 0.2}
-  - {block: mean_loss}
+  - block: set_seed
+    params: {seed: 2013}
+  - block: select_device
+    params: {device: cpu}
+  - block: prepare_binary_risk_data
+    params:
+      train_size: 512
+      test_size: 2048
+      data_seed: 2013
+      rho_positive: 0.4
+      rho_negative: 0.4
+      noise_seed: 2013
+      batch_size: 64
+  - block: create_model
+    params: {model: linear, input_dim: 2, num_classes: 2, device: device}
+  - block: create_optimizer
+    params:
+      optimizer: sgd
+      model: model
+      lr: 0.01
+      momentum: 0.9
+      nesterov: false
+      weight_decay: 0.0
+  - block: epoch_loop
+    params: {epochs: 50}
+    steps:
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad}
+          - {block: forward}
+          - block: binary_risk
+            params: {rho_positive: 0.4, rho_negative: 0.4, save_as: loss_per_sample}
+          - {block: mean_loss}
+          - {block: backward}
+          - {block: optimizer_step}
+      - block: evaluate_accuracy
+        params: {model: model, loader: test_loader, save_as: test_accuracy}
+  - block: record_metrics
+    params: {values: [test_accuracy]}

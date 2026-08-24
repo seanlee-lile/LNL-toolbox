@@ -3,6 +3,7 @@
 body { margin: 0; background: var(--bg); color: #e5e7eb; }
 header { height: 58px; display: flex; align-items: center; gap: 8px; padding: 0 18px; border-bottom: 1px solid var(--line); }
 h1 { margin-right: auto; font-size: 20px; }
+.runtime-limits { color: #fef08a; font-size: 12px; }
 button, input, select { color: inherit; background: #111827; border: 1px solid #4b5563; border-radius: 5px; padding: 7px 10px; }
 button { cursor: pointer; } button:hover { border-color: var(--accent); }
 button:disabled { cursor: not-allowed; opacity: .5; }

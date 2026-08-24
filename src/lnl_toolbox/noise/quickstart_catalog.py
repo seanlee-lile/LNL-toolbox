@@ -26,8 +26,8 @@ _SPECS: tuple[QuickStartNoiseSpec, ...] = (
     QuickStartNoiseSpec("clean", "保持干净", "直接使用数据集提供的训练标签。", None, True, False, False, "clean"),
     QuickStartNoiseSpec("symmetric", "对称噪声", "按给定比例随机翻转到其他类别。", "symmetric", True, True, True, "synthetic"),
     QuickStartNoiseSpec("pairflip", "Pair-flip 噪声", "按类别顺序将标签翻转到下一个类别。", "pairflip", True, True, True, "synthetic"),
-    QuickStartNoiseSpec("class_conditional", "类条件噪声", "使用配置的类别转移矩阵生成标签噪声。", "class_conditional", True, True, True, "synthetic"),
-    QuickStartNoiseSpec("instance_dependent", "实例依赖噪声", "噪声概率由每个样本的输入特征决定。", "instance_dependent", True, True, True, "synthetic"),
+    QuickStartNoiseSpec("class_conditional", "类条件噪声", "使用配置的类别转移矩阵生成标签噪声。", "class_conditional", False, True, True, "synthetic"),
+    QuickStartNoiseSpec("instance_dependent", "实例依赖噪声", "噪声概率由每个样本的输入特征决定。", "instance_dependent", False, True, True, "synthetic"),
     QuickStartNoiseSpec("pdl", "PDL 实例依赖噪声", "使用 PDL 论文规定的实例依赖噪声生成流程。", "pdl", True, True, True, "synthetic"),
     QuickStartNoiseSpec("external_torch", "外部标签文件", "由已有实验资源提供的外部标签映射。", "external_torch", False, False, False, "source_only"),
     QuickStartNoiseSpec("official_uniform_flip", "官方固定标签源", "特定论文或官方数据发布的固定标签来源。", "official_uniform_flip", False, True, True, "source_only"),
@@ -72,11 +72,6 @@ def build_noise_config(
     if spec.requires_seed and seed is None:
         raise ValueError(f"noise capability {spec.key!r} requires a random seed")
 
-    # These two generators require additional method/data artifacts that are
-    # not represented by the beginner form.  Keep them visible, but do not
-    # fabricate an incomplete config.
-    if spec.key in {"class_conditional", "instance_dependent"}:
-        return None
     config: dict[str, object] = {
         "name": spec.backend_name,
         "rate": float(rate) if rate is not None else None,

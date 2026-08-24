@@ -1,7 +1,134 @@
 schema_version: 1
 name: t-revision
-description: T-Revision stochastic transition revision smoke recipe.
+description: "Complete T-Revision Reweight-R reproduction: CIFAR-10 symmetric-20, stage-1 noisy classifier, pseudo-anchor transition initialization, classifier initialization, additive transition revision, noisy-validation selection, and clean-test evaluation."
 steps:
-  - {block: set_seed, params: {seed: 1}}
-  - {block: prepare_paper_batch}
-  - {block: revise_transition}
+  - block: set_seed
+    params: {seed: 1}
+  - block: select_device
+    params: {device: auto}
+  - block: prepare_t_revision_cifar10
+    params:
+      root: ''
+      validation_size: 5000
+      augment: true
+      noise_rate: 0.2
+      noise_seed: 1
+      batch_size: 128
+      num_workers: 4
+  - block: create_model
+    params: {model: resnet18, num_classes: 10, base_width: 64, device: device, save_as: model}
+  - block: create_optimizer
+    params: {optimizer: sgd, model: model, lr: 0.01, momentum: 0.0, nesterov: false, weight_decay: 0.0001, save_as: stage1_optimizer}
+  - block: epoch_loop
+    params: {epochs: 15}
+    steps:
+      - block: refresh_epoch_loader
+        params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - block: zero_grad
+            params: {optimizer: stage1_optimizer}
+          - block: forward
+            params: {model: model, input: images, save_as: logits}
+          - block: per_sample_ce
+            params: {logits: logits, labels: labels, save_as: loss_per_sample}
+          - block: mean_loss
+            params: {input: loss_per_sample, save_as: loss}
+          - {block: backward}
+          - block: optimizer_step
+            params: {optimizer: stage1_optimizer}
+      - block: evaluate_accuracy
+        params: {model: model, loader: validation_loader, save_as: stage1_validation_accuracy}
+      - block: track_best_model
+        params: {model: model, metric: stage1_validation_accuracy, metric_name: stage1_validation_accuracy, save_as: best_stage1_state}
+  - block: restore_best_model
+    params: {model: model, state: best_stage1_state}
+  - block: snapshot_t_revision_posterior
+    params: {model: model, prepared_data: prepared_data, device: device, save_as: t_revision_posterior}
+  - block: initialize_t_revision_transition
+    params: {posterior: t_revision_posterior, device: device, save_as: transition}
+  - block: create_optimizer
+    params: {optimizer: sgd, model: model, lr: 0.01, momentum: 0.9, nesterov: false, weight_decay: 0.0001, save_as: classifier_optimizer}
+  - block: create_scheduler
+    params: {scheduler: multistep, optimizer: classifier_optimizer, milestones: [40, 80], gamma: 0.1, save_as: classifier_scheduler}
+  - block: epoch_loop
+    params: {epochs: 15}
+    steps:
+      - block: refresh_epoch_loader
+        params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - block: zero_grad
+            params: {optimizer: classifier_optimizer}
+          - block: forward
+            params: {model: model, input: images, save_as: logits}
+          - block: softmax_probability
+            params: {logits: logits, save_as: probabilities}
+          - block: t_revision_noisy_probability
+            params: {probabilities: probabilities, transition: transition, save_as: noisy_probabilities}
+          - block: t_revision_importance_ratio
+            params: {probabilities: probabilities, noisy_probabilities: noisy_probabilities, labels: labels, denominator_floor: 1.0e-12, save_as: sample_weights}
+          - block: per_sample_ce
+            params: {logits: logits, labels: labels, save_as: loss_per_sample}
+          - block: t_revision_weighted_objective
+            params: {losses: loss_per_sample, weights: sample_weights, detach_ratio: true, save_as: loss}
+          - {block: backward}
+          - block: optimizer_step
+            params: {optimizer: classifier_optimizer}
+      - block: evaluate_t_revision_noisy
+        params: {model: model, transition: transition, loader: validation_loader, device: device, save_as: classifier_validation_loss}
+      - block: track_best_model
+        params: {model: model, metric: validation_accuracy, metric_name: revised_noisy_validation_accuracy, save_as: best_classifier_state}
+      - block: scheduler_step
+        params: {scheduler: classifier_scheduler}
+  - block: restore_best_model
+    params: {model: model, state: best_classifier_state}
+  - block: create_t_revision_revision
+    params: {transition: transition, device: device, save_as: revision}
+  - block: create_t_revision_optimizer
+    params: {model: model, revision: revision, lr: 0.0000005, weight_decay: 0.0001, save_as: revision_optimizer}
+  - block: epoch_loop
+    params: {epochs: 20}
+    steps:
+      - block: refresh_epoch_loader
+        params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - block: zero_grad
+            params: {optimizer: revision_optimizer}
+          - block: forward
+            params: {model: model, input: images, save_as: logits}
+          - block: softmax_probability
+            params: {logits: logits, save_as: probabilities}
+          - block: t_revision_revised_transition
+            params: {revision: revision, save_as: current_transition}
+          - block: t_revision_noisy_probability
+            params: {probabilities: probabilities, transition: current_transition, save_as: noisy_probabilities}
+          - block: t_revision_importance_ratio
+            params: {probabilities: probabilities, noisy_probabilities: noisy_probabilities, labels: labels, denominator_floor: 1.0e-12, save_as: sample_weights}
+          - block: per_sample_ce
+            params: {logits: logits, labels: labels, save_as: loss_per_sample}
+          - block: t_revision_weighted_objective
+            params: {losses: loss_per_sample, weights: sample_weights, detach_ratio: false, save_as: loss}
+          - {block: backward}
+          - block: optimizer_step
+            params: {optimizer: revision_optimizer}
+      - block: evaluate_t_revision_noisy
+        params: {model: model, transition: revision, loader: validation_loader, device: device, save_as: revision_validation_loss}
+      - block: track_best_t_revision
+        params: {model: model, revision: revision, metric: validation_accuracy, save_as: best_t_revision_state}
+  - block: restore_best_t_revision
+    params: {model: model, revision: revision, state: best_t_revision_state}
+  - block: evaluate_accuracy
+    params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}
+  - block: record_metrics
+    params: {values: [test_accuracy, stage1_validation_accuracy, classifier_validation_loss, revision_validation_loss, best_epoch]}

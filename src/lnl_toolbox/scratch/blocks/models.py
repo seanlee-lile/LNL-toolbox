@@ -30,7 +30,7 @@ def _resnet18(
         def __init__(self, incoming: int, outgoing: int, stride: int = 1) -> None:
             super().__init__()
             self.pre = bool(preactivation)
-            self.bn1 = nn.BatchNorm2d(incoming)
+            self.bn1 = nn.BatchNorm2d(incoming if self.pre else outgoing)
             self.conv1 = nn.Conv2d(incoming, outgoing, 3, stride, 1, bias=False)
             self.bn2 = nn.BatchNorm2d(outgoing)
             self.conv2 = nn.Conv2d(outgoing, outgoing, 3, 1, 1, bias=False)
@@ -87,6 +87,8 @@ def _resnet18(
         "input_dim": {"type": "int", "default": 4, "min": 1},
         "hidden": {"type": "int", "default": 128, "min": 1},
         "base_width": {"type": "int", "default": 64, "min": 1},
+        "stem_padding": {"type": "int", "default": 1, "min": 0, "max": 3},
+        "initialization": {"type": "str", "default": "kaiming"},
         "device": {"type": "slot", "default": "device"},
         "save_as": {"type": "slot", "default": "model"},
     },
@@ -101,6 +103,8 @@ def create_model(
     input_dim: int = 4,
     hidden: int = 128,
     base_width: int = 64,
+    stem_padding: int = 1,
+    initialization: str = "kaiming",
     device: str = "device",
     save_as: str = "model",
 ) -> None:
@@ -108,12 +112,35 @@ def create_model(
     name = str(model).strip().lower().replace("-", "_")
     if name in {"resnet18", "preact_resnet18"}:
         network = _resnet18(num_classes, preactivation=name.startswith("preact"), base_width=int(base_width))
+    elif name == "cifar_resnet18":
+        from lnl_toolbox.models.cifar_resnet import cifar_resnet18
+
+        network = cifar_resnet18(num_classes, base_width=int(base_width), initialization="torch_default")
+    elif name == "cifar_cnn8":
+        from lnl_toolbox.models.cifar_cnn import CifarCnn8
+
+        network = CifarCnn8(num_classes)
+    elif name == "cifar_six_conv":
+        from lnl_toolbox.models.cifar_six_conv import CifarSixConvNet
+
+        network = CifarSixConvNet(num_classes, batch_norm_momentum=0.1)
     elif name in {"resnet34", "cifar_resnet34"}:
-        network = _resnet18(
+        from lnl_toolbox.models.cifar_resnet import cifar_resnet34
+
+        network = cifar_resnet34(
             num_classes,
-            layer_counts=(3, 4, 6, 3),
             base_width=int(base_width),
+            stem_padding=int(stem_padding),
+            initialization=str(initialization),
         )
+    elif name in {"resnet50", "cifar_resnet50"}:
+        from lnl_toolbox.models.cifar_resnet import cifar_resnet50
+
+        network = cifar_resnet50(num_classes, base_width=int(base_width), stem_padding=0, initialization="torch_default")
+    elif name in {"resnet32", "cifar_resnet32"}:
+        from lnl_toolbox.models.cifar_resnet import cifar_resnet32
+
+        network = cifar_resnet32(num_classes, base_width=int(base_width))
     elif name in {"linear", "linear_classifier"}:
         network = nn.Linear(input_dim, num_classes)
     elif name == "mlp":

@@ -19,6 +19,9 @@ def _parser() -> argparse.ArgumentParser:
     run = commands.add_parser("run", help="execute a YAML recipe")
     run.add_argument("recipe", type=Path)
     run.add_argument("--output", type=Path, default=None, help="artifact directory")
+    run.add_argument("--max-epochs", type=int, default=None, help="runtime-only cap; does not modify the recipe")
+    run.add_argument("--max-batches", type=int, default=None, help="runtime-only cap for each loader loop")
+    run.add_argument("--skip-final-test", action="store_true", help="skip the final test evaluation for structural validation")
     return parser
 
 
@@ -37,14 +40,19 @@ def main(argv: list[str] | None = None) -> int:
         output.mkdir(parents=True, exist_ok=True)
         save_recipe(recipe, output / "recipe.yaml")
         save_recipe(resolve_recipe(validated), output / "resolved_recipe.yaml")
-        context = execute_recipe(validated, {"artifact_dir": str(output)})
+        limits = {
+            "max_epochs": args.max_epochs,
+            "max_batches": args.max_batches,
+            "skip_final_test": bool(args.skip_final_test),
+        }
+        context = execute_recipe(validated, {"artifact_dir": str(output)}, runtime_limits=limits)
         metrics = context.get("metrics", [])
         stdout = json.dumps({"name": recipe["name"], "metrics": metrics}, ensure_ascii=False) + "\n"
         (output / "stdout.log").write_text(stdout, encoding="utf-8")
         (output / "metrics.jsonl").write_text(
             "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in metrics), encoding="utf-8"
         )
-        print(json.dumps({"name": recipe["name"], "artifact_dir": str(output), "metrics": metrics}, ensure_ascii=False))
+        print(json.dumps({"name": recipe["name"], "artifact_dir": str(output), "metrics": metrics, "runtime_limits": limits}, ensure_ascii=False))
         return 0
     except Exception as exc:
         print(f"Scratch error: {exc}", file=sys.stderr)

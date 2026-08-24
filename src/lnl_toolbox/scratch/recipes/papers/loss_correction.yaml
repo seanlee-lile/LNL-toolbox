@@ -1,9 +1,60 @@
 schema_version: 1
 name: loss-correction
-description: Transition estimation followed by Forward correction smoke recipe.
+description: "Complete Loss Correction CIFAR-10 reproduction recipe: GCE-2018 preprocessing, asymmetric class-conditional noise 0.4, known transition artifact, ResNet-32, Forward correction, MultiStepLR, and 120 epochs."
 steps:
-  - {block: set_seed, params: {seed: 1}}
-  - {block: prepare_paper_batch}
-  - {block: estimate_transition, params: {save_as: estimated_transition}}
-  - {block: forward_correction, params: {transition: estimated_transition}}
-  - {block: mean_loss}
+  - block: set_seed
+    params: {seed: 1}
+  - block: select_device
+    params: {device: auto}
+  - block: prepare_loss_correction_cifar10
+    params:
+      root: ''
+      validation_size: 5000
+      augment: true
+      noise_seed: 1
+      batch_size: 128
+  - block: create_model
+    params: {model: resnet32, num_classes: 10, base_width: 16, device: device}
+  - block: create_optimizer
+    params:
+      optimizer: sgd
+      model: model
+      lr: 0.01
+      momentum: 0.9
+      nesterov: false
+      weight_decay: 0.0001
+  - block: create_scheduler
+    params:
+      scheduler: multistep
+      optimizer: optimizer
+      milestones: [40, 80]
+      gamma: 0.1
+  - block: epoch_loop
+    params: {epochs: 120}
+    steps:
+      - block: refresh_epoch_loader
+        params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad}
+          - {block: forward}
+          - block: forward_correction
+            params: {transition: transition, save_as: loss_per_sample}
+          - {block: mean_loss}
+          - {block: backward}
+          - {block: optimizer_step}
+      - block: evaluate_accuracy
+        params: {model: model, loader: validation_loader, save_as: validation_accuracy}
+      - block: track_best_model
+        params: {model: model, metric: validation_accuracy}
+      - block: scheduler_step
+        params: {scheduler: scheduler}
+  - block: restore_best_model
+    params: {model: model, state: best_model_state}
+  - block: evaluate_accuracy
+    params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}
+  - block: record_metrics
+    params: {values: [test_accuracy, best_validation_accuracy, best_epoch]}

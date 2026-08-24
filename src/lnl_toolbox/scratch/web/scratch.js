@@ -10,6 +10,7 @@ const state = {
   validated: false,
   errorStepId: null,
   errorMessage: '',
+  runtimeLimits: { max_epochs: 1, max_batches: 1, skip_final_test: true },
 };
 const $ = (id) => document.getElementById(id);
 const apiBase = location.pathname.startsWith('/scratch') ? '/api/scratch' : '/api';
@@ -226,6 +227,12 @@ function updateRunState() {
   if (run) run.disabled = !(state.validated && recipeDataReady());
 }
 
+function renderRuntimeLimits() {
+  const epochStep = flatRecipeSteps().find((step) => step.block === 'epoch_loop');
+  const formalEpochs = epochStep?.params?.epochs ?? blockInfo('epoch_loop')?.params?.epochs?.default ?? '—';
+  $('runtime-limits').textContent = `正式配置：${formalEpochs} epochs；本次结构验证：${state.runtimeLimits.max_epochs} epoch / ${state.runtimeLimits.max_batches} batch（跳过最终测试）`;
+}
+
 function selectedTarget(step) {
   const location = step ? findParentArrayAndIndex(step._uiId) : null;
   return { parentId: location?.parentId || '__root__', index: location?.index || 0 };
@@ -253,7 +260,11 @@ function optionValues(name, schema, step) {
     }
     return schema.options || [];
   }
-  if (kind === 'model') return ['resnet18', 'resnet34', 'preact_resnet18', 'mlp', 'linear'];
+  if (kind === 'model') return [
+    'cifar_cnn8', 'cifar_six_conv', 'cifar_resnet18', 'cifar_resnet34',
+    'cifar_resnet32', 'cifar_resnet50', 'resnet18', 'resnet34', 'resnet32',
+    'resnet50', 'preact_resnet18', 'mlp', 'linear',
+  ];
   if (kind === 'optimizer') return ['sgd', 'adam'];
   if (kind === 'dataset') {
     const mode = String(step.params?.source_mode || 'registered');
@@ -536,7 +547,7 @@ function renderStepSummary(step, info) {
   const lines = [];
   if (info.formula) lines.push(info.formula);
   const keyNames = ['q', 'noise_rate', 'warmup_epochs', 'remember_rate', 'keep_rate'];
-  const values = keyNames.filter((name) => info.params?.[name]).map((name) => `${name}=${step.params[name] ?? info.params[name].default ?? ''}`);
+  const values = keyNames.filter((name) => info.params?.[name]).map((name) => `${name}=${step.params?.[name] ?? info.params[name].default ?? ''}`);
   if (values.length) lines.push(values.join(' · '));
   const outputs = (info.provides || []).map((name) => slotValue(info, step, name));
   if (outputs.length) lines.push(`→ ${outputs.join(', ')}`);
@@ -714,6 +725,7 @@ function renderInspector() {
 
 function draw() {
   $('recipe-name').value = state.recipe.name;
+  renderRuntimeLimits();
   $('next-suggestion').textContent = getNextSuggestion();
   renderPalette();
   drawSteps();
@@ -734,6 +746,10 @@ async function loadDefaultRecipe() {
 function payload() {
   state.recipe.name = $('recipe-name').value.trim() || 'scratch_recipe';
   return { recipe: stripUiFields(state.recipe) };
+}
+
+function runPayload() {
+  return { ...payload(), runtime_limits: state.runtimeLimits };
 }
 
 function highlightError(message) {
@@ -809,7 +825,7 @@ $('check').onclick = async () => {
   }
 };
 $('save').onclick = async () => { try { const result = await api('/api/save', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload()) }); showMessage(`已保存: ${result.path}`); } catch (error) { showError(error); } };
-$('run').onclick = async () => { if ($('run').disabled) return; try { const result = await api('/api/run', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload()) }); showMessage(JSON.stringify(result, null, 2)); } catch (error) { showError(error); } };
+$('run').onclick = async () => { if ($('run').disabled) return; try { const result = await api('/api/run', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(runPayload()) }); showMessage(JSON.stringify(result, null, 2)); } catch (error) { showError(error); } };
 $('open').onclick = async () => { try { const names = await api('/api/recipes'); showMessage(`我的 Recipe：${names.join('、') || '暂无已保存 Recipe'}`); } catch (error) { showError(error); } };
 $('templates').onclick = async () => {
   try {

@@ -239,7 +239,12 @@ class KnownTransitionEstimator:
 class DualTransitionEstimator:
     """Yao et al. (NeurIPS 2020), Algorithm 1, in row-vector convention."""
 
-    def estimate(self, snapshot: PosteriorSnapshot) -> TransitionArtifact:
+    def estimate(
+        self,
+        snapshot: PosteriorSnapshot,
+        *,
+        allow_empty_intermediate: bool = False,
+    ) -> TransitionArtifact:
         t_club_artifact = AnchorTransitionEstimator().estimate(snapshot)
         probabilities = snapshot.noisy_probabilities
         intermediate_targets = probabilities.argmax(axis=1)
@@ -250,14 +255,18 @@ class DualTransitionEstimator:
         np.add.at(counts, (intermediate_targets, snapshot.noisy_targets), 1)
         totals = counts.sum(axis=1)
         missing = np.flatnonzero(totals == 0)
-        if missing.size:
+        if missing.size and not allow_empty_intermediate:
             missing_values = ", ".join(str(int(value)) for value in missing)
             raise ValueError(
                 "Dual-T cannot estimate intermediate-to-noisy rows for empty "
                 f"intermediate classes: {missing_values}"
             )
 
-        t_spade = counts / totals[:, None]
+        t_spade = np.zeros_like(counts, dtype=np.float64)
+        present = totals > 0
+        t_spade[present] = counts[present] / totals[present, None]
+        if missing.size:
+            t_spade[missing] = 1.0 / snapshot.num_classes
         matrix = t_club_artifact.matrix @ t_spade
         return TransitionArtifact(
             matrix=matrix,
@@ -276,6 +285,9 @@ class DualTransitionEstimator:
                     "anchor_global_indices"
                 ],
                 "intermediate_assignment": "argmax_tie_min_class_index",
+                "empty_intermediate_policy": (
+                    "uniform_runtime_fallback" if missing.size else "error_if_empty"
+                ),
                 "paper": "Yao et al., NeurIPS 2020, Algorithm 1",
             },
         )
