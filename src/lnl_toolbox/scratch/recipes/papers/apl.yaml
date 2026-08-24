@@ -1,31 +1,69 @@
 schema_version: 1
 name: apl
-description: APL active-passive loss recipe on a deterministic synthetic smoke dataset.
+description: "Complete APL CIFAR-10 reproduction recipe: standard preprocessing, per-class symmetric noise 0.2, CifarCnn8, SGD, CosineAnnealingLR, test selection, and 120 epochs."
 steps:
   - block: set_seed
     params: {seed: 1}
   - block: select_device
-    params: {device: cpu}
-  - block: load_synthetic
-    params: {samples: 64, features: 4, classes: 2}
-  - block: create_loader
-    params: {dataset: train_dataset, batch_size: 16, shuffle: true}
+    params: {device: auto}
+  - block: prepare_apl_cifar10
+    params:
+      root: ''
+      validation_size: 0
+      augment: true
+      noise_method: symmetric
+      noise_rate: 0.2
+      noise_seed: 1
+      batch_size: 128
+      num_workers: 8
   - block: create_model
-    params: {model: mlp, num_classes: 2, input_dim: 4, device: device}
+    params: {model: cifar_cnn8, num_classes: 10, device: device}
   - block: create_optimizer
-    params: {optimizer: sgd, model: model, lr: 0.1}
+    params:
+      optimizer: sgd
+      model: model
+      lr: 0.01
+      momentum: 0.9
+      nesterov: false
+      weight_decay: 0.0001
+  - block: create_scheduler
+    params:
+      scheduler: cosine
+      optimizer: optimizer
+      t_max: 120
+      eta_min: 0.0
   - block: epoch_loop
-    params: {epochs: 1}
+    params: {epochs: 120}
     steps:
+      - block: refresh_epoch_loader
+        params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}
       - block: batch_loop
         params: {loader: train_loader}
         steps:
           - {block: get_batch}
+          - {block: move_batch_to_device}
           - {block: zero_grad}
           - {block: forward}
-          - {block: apl_loss}
+          - block: nce_loss
+            params: {save_as: active_loss_per_sample}
+          - block: rce_loss
+            params: {log_zero: -9.210340371976184, save_as: passive_loss_per_sample}
+          - block: active_passive_composition
+            params: {alpha: 1.0, beta: 1.0, save_as: loss_per_sample}
           - {block: mean_loss}
           - {block: backward}
+          - block: clip_grad_norm
+            params: {model: model, max_norm: 5.0}
           - {block: optimizer_step}
+      - block: evaluate_accuracy
+        params: {model: model, loader: test_loader, save_as: selection_accuracy}
+      - block: track_best_model
+        params: {model: model, metric: selection_accuracy, metric_name: selection_accuracy}
+      - block: scheduler_step
+        params: {scheduler: scheduler}
+  - block: restore_best_model
+    params: {model: model, state: best_model_state}
+  - block: evaluate_accuracy
+    params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}
   - block: record_metrics
-    params: {values: [loss]}
+    params: {values: [test_accuracy, best_selection_accuracy, best_epoch]}

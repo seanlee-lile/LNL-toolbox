@@ -76,6 +76,54 @@ def _epoch_details(config: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(values)
 
 
+def _class_space_problems(
+    config: Mapping[str, Any], *, num_classes: int
+) -> tuple[str, ...]:
+    """Find fixed template objects that cannot cross dataset class spaces.
+
+    Quick Start may bind a local dataset to an existing method template, but it
+    must not invent class-dependent protocol objects.  This covers explicit
+    ``num_classes`` declarations as well as fixed transition matrices.
+    """
+
+    problems: list[str] = []
+
+    def visit(value: object, path: tuple[str, ...] = ()) -> None:
+        if not isinstance(value, Mapping):
+            return
+        for key, child in value.items():
+            child_path = path + (str(key),)
+            key_text = str(key).lower()
+            if key_text == "num_classes" and isinstance(child, int) and not isinstance(child, bool):
+                if child != num_classes:
+                    problems.append(
+                        f"{'.'.join(child_path)} 固定为 {child} 类，"
+                        f"不能用于当前 {num_classes} 类数据集。"
+                    )
+            if (
+                key_text in {"matrix", "transition_matrix"}
+                and "transition" in ".".join(child_path).lower()
+                and isinstance(child, (list, tuple))
+                and (
+                    len(child) != num_classes
+                    or any(
+                        not isinstance(row, (list, tuple)) or len(row) != num_classes
+                        for row in child
+                    )
+                )
+            ):
+                problems.append(
+                    f"{'.'.join(child_path)} 固定为 {len(child)}×"
+                    f"{len(child[0]) if child and isinstance(child[0], (list, tuple)) else 0} "
+                    f"转移矩阵，不能用于当前 {num_classes} 类数据集；"
+                    "Quick Start 不会伪造新的转移矩阵。"
+                )
+            visit(child, child_path)
+
+    visit(config)
+    return tuple(problems)
+
+
 class QuickStartService:
     def __init__(
         self,
@@ -150,6 +198,16 @@ class QuickStartService:
         return probe_dataset_path(path, data_service=self.data_service)
 
     @staticmethod
+    def _require_ready_report(report, alias: str):
+        """Stop the Quick Start flow before it consumes an incomplete inspect."""
+
+        if report.status != "ready":
+            raise ValueError(report.error or f"dataset inspect failed: {alias}")
+        if report.profile is None:
+            raise ValueError(f"dataset profile is unavailable after inspect: {alias}")
+        return report
+
+    @staticmethod
     def _summary(alias: str, report) -> QuickStartDatasetSummary:
         profile = report.profile
         noise = profile.noise if profile is not None else None
@@ -178,7 +236,9 @@ class QuickStartService:
         result = self.probe(path)
         if result.status == "already_registered":
             assert result.existing_alias is not None
-            report = self.data_service.inspect(result.existing_alias)
+            report = self._require_ready_report(
+                self.data_service.inspect(result.existing_alias), result.existing_alias
+            )
             return self._summary(result.existing_alias, report)
         candidates = list(result.candidates)
         if selected_adapter is not None:
@@ -194,7 +254,7 @@ class QuickStartService:
         with self._method_cache_lock:
             self._method_cache.clear()
             self._template_cache.clear()
-        report = self.data_service.inspect(alias)
+        report = self._require_ready_report(self.data_service.inspect(alias), alias)
         return self._summary(alias, report)
 
     def noise_options(self, dataset_alias: str) -> dict[str, object]:
@@ -243,60 +303,87 @@ class QuickStartService:
         if cached is not None:
             return cached
 
-        profile = self.data_service.inspect(dataset_alias).profile
-        profile_data = {} if profile is None else profile.to_dict()
+        report = self._require_ready_report(
+            self.data_service.inspect(dataset_alias, persist=False), dataset_alias
+        )
+        profile_data = report.profile.to_dict()
         dataset_service = _CachedDatasetService(self.data_service, dataset_alias)
-        options: list[QuickStartMethodOption] = []
-        metadata_errors: dict[str, QuickStartMethodOption] = {}
-        candidates: dict[str, Mapping[str, Any]] = {}
-        templates: dict[str, object] = {}
         papers = load_papers()
         recipes = self._recipes()
+        prepared: list[
+            tuple[
+                object,
+                object | None,
+                Mapping[str, Any] | None,
+                tuple[str, ...] | None,
+                tuple[str, ...] | None,
+            ]
+        ] = []
+        compatibility_configs: dict[str, Mapping[str, Any]] = {}
         for paper in papers:
             try:
                 template = self._template(paper, recipes)
-                templates[paper.id] = template
-                candidates[paper.id] = adapt_method_template(
+                candidate = adapt_method_template(
                     template.config,
                     dataset_alias=dataset_alias,
                     dataset_profile=profile_data,
                     noise_selection=noise_selection,
                     data_service=dataset_service,
                 )
-            except Exception as exc:
-                metadata_errors[paper.id] = QuickStartMethodOption(
-                    paper.id, paper.acronym, paper.title, paper.summary, paper.venue, paper.year,
-                    "metadata_error", (str(exc),), (), None, None, None, (),
+                class_space_problems = _class_space_problems(
+                    candidate, num_classes=report.profile.num_classes
                 )
-        try:
-            compatibility = dict(self.experiment_service.list_config_compatibility(
-                dataset_alias, candidates
-            ))
-        except Exception:
-            # Preserve the old per-paper failure isolation if one candidate is malformed.
-            compatibility = {}
-            for paper_id, candidate in candidates.items():
-                try:
-                    compatibility[paper_id] = self.experiment_service.list_config_compatibility(
-                        dataset_alias, {paper_id: candidate}
-                    )[0][1]
-                except Exception as exc:
-                    compatibility[paper_id] = exc
+                if class_space_problems:
+                    prepared.append((paper, template, candidate, None, class_space_problems))
+                    continue
+                prepared.append((paper, template, candidate, None, None))
+                compatibility_configs[paper.id] = candidate
+            except Exception as exc:
+                prepared.append((paper, None, None, (str(exc),), None))
 
-        for paper in papers:
-            if paper.id in metadata_errors:
-                options.append(metadata_errors[paper.id])
+        results: dict[str, object] = {}
+        if compatibility_configs:
+            try:
+                batch = self.experiment_service.list_config_compatibility(
+                    dataset_alias, compatibility_configs
+                )
+                results = dict(batch)
+            except Exception:
+                # Keep failures isolated so one malformed paper does not hide all methods.
+                for paper_id, candidate in compatibility_configs.items():
+                    try:
+                        results[paper_id] = self.experiment_service.list_config_compatibility(
+                            dataset_alias, {paper_id: candidate}
+                        )[0][1]
+                    except Exception as exc:
+                        results[paper_id] = exc
+
+        options: list[QuickStartMethodOption] = []
+        for paper, template, candidate, error, class_space_problems in prepared:
+            if error is not None:
+                options.append(QuickStartMethodOption(
+                    paper.id, paper.acronym, paper.title, paper.summary, paper.venue, paper.year,
+                    "metadata_error", error, (), None, None, None, (),
+                ))
                 continue
-            candidate = candidates[paper.id]
-            result = compatibility.get(paper.id)
+            assert template is not None and candidate is not None
+            if class_space_problems is not None:
+                options.append(QuickStartMethodOption(
+                    paper.id, paper.acronym, paper.title, paper.summary,
+                    paper.venue, paper.year, "unsupported",
+                    class_space_problems, (), template.recipe_id,
+                    "toolbox_adapted", candidate, (),
+                ))
+                continue
+            result = results.get(paper.id)
             if isinstance(result, Exception) or result is None:
                 reason = str(result) if isinstance(result, Exception) else "兼容性检查未返回结果"
                 options.append(QuickStartMethodOption(
                     paper.id, paper.acronym, paper.title, paper.summary, paper.venue, paper.year,
-                    "metadata_error", (reason,), (), None, None, None, (),
+                    "metadata_error", (reason,), (), template.recipe_id,
+                    "toolbox_adapted", candidate, (),
                 ))
                 continue
-            template = templates[paper.id]
             options.append(QuickStartMethodOption(
                 paper.id, paper.acronym, paper.title, paper.summary, paper.venue, paper.year,
                 self._status(result),
@@ -329,16 +416,45 @@ class QuickStartService:
         from lnl_toolbox.catalog import paper_by_id
 
         paper = paper_by_id(paper_id)
-        profile = self.data_service.inspect(dataset_alias).profile
-        if profile is None:
-            raise ValueError(f"dataset profile is unavailable: {dataset_alias}")
+        report = self._require_ready_report(
+            self.data_service.inspect(dataset_alias, persist=False), dataset_alias
+        )
+        profile = report.profile
+        profile_data = profile.to_dict()
         exact = find_exact_reproduction(
-            paper, dataset_adapter=profile.adapter, noise_selection=noise_selection
+            paper,
+            dataset_adapter=str(profile_data.get("adapter", "")),
+            noise_selection=noise_selection,
         )
         if exact is not None:
             plan_id = self._plan_id(dataset_alias, paper.id)
-            config = load_recipe_config(recipe_by_id(exact))
+            config = self.data_service.apply(
+                load_recipe_config(recipe_by_id(exact)), dataset_alias
+            )
             output_dir = self.artifact_root / "runs" / plan_id
+            result = self.experiment_service.list_config_compatibility(
+                dataset_alias, {paper.id: config}
+            )[0][1]
+            status = self._status(result)
+            details = tuple(item.message for item in result.reasons)
+            if status != "ready":
+                return QuickStartPlan(
+                    plan_id, dataset_alias, paper.id, paper.acronym,
+                    noise_selection, "paper_reproduction", exact, None, status,
+                    tuple(result.required_user_inputs),
+                    summary="正式复现配置与当前数据集不兼容或仍需补充输入。",
+                    details=details,
+                )
+            try:
+                self.experiment_service.preflight(config, check_data=True)
+            except Exception as exc:
+                return QuickStartPlan(
+                    plan_id, dataset_alias, paper.id, paper.acronym,
+                    noise_selection, "paper_reproduction", exact, None,
+                    "unsupported", (),
+                    summary="正式复现配置未通过训练前检查。",
+                    details=(str(exc),),
+                )
             details = tuple(f"训练轮次：{item}" for item in _epoch_details(config)) + (
                 f"输出目录：{output_dir}",
             )
@@ -354,11 +470,22 @@ class QuickStartService:
         candidate = adapt_method_template(
             template.config,
             dataset_alias=dataset_alias,
-            dataset_profile=profile.to_dict(),
+            dataset_profile=profile_data,
             noise_selection=noise_selection,
             data_service=self.data_service,
             method_inputs=user_inputs,
         )
+        class_space_problems = _class_space_problems(
+            candidate, num_classes=profile.num_classes
+        )
+        if class_space_problems:
+            return QuickStartPlan(
+                self._plan_id(dataset_alias, paper.id), dataset_alias,
+                paper.id, paper.acronym, noise_selection, "toolbox_adapted",
+                None, None, "unsupported", (),
+                summary="适配配置包含与当前数据类别数不匹配的固定对象。",
+                details=class_space_problems,
+            )
         result = self.experiment_service.list_config_compatibility(
             dataset_alias, {paper.id: candidate}
         )[0][1]

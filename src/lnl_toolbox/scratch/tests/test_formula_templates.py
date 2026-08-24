@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import unittest
 
+import yaml
+
 from lnl_toolbox.scratch import execute_recipe, load_recipe, validate_recipe
 from lnl_toolbox.scratch.registry import get_block
 
@@ -43,9 +45,10 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
         recipe = load_recipe(ROOT / "recipes" / "papers" / "coteaching.yaml")
         validate_recipe(recipe)
         epoch = next(step for step in recipe["steps"] if step["block"] == "epoch_loop")
-        self.assertEqual(epoch["steps"][0]["block"], "remember_rate_formula")
+        self.assertEqual(epoch["steps"][0]["block"], "refresh_epoch_loader")
+        self.assertEqual(epoch["steps"][1]["block"], "remember_rate_formula")
         self.assertEqual(
-            _batch_blocks(recipe)[7:],
+            _batch_blocks(recipe)[8:],
             [
                 "small_loss_indices",
                 "small_loss_indices",
@@ -58,6 +61,99 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
             ],
         )
 
+    def test_coteaching_recipe_matches_formal_protocol(self) -> None:
+        recipe = load_recipe(ROOT / "recipes" / "papers" / "coteaching.yaml")
+        config_path = ROOT.parents[2] / "configs" / "experiment" / "cifar10_coteaching_reproduction.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        steps = recipe["steps"]
+        data = next(step for step in steps if step["block"] == "prepare_coteaching_cifar10")["params"]
+        self.assertEqual((data["validation_size"], data["augment"], data["noise_rate"], data["noise_seed"], data["batch_size"], data["num_workers"]), (config["data"]["validation_size"], config["data"]["augment"], config["noise"]["rate"], config["noise"]["seed"], config["loader"]["batch_size"], config["loader"]["num_workers"]))
+        models = [step for step in steps if step["block"] == "create_model"]
+        self.assertEqual([step["params"]["model"] for step in models], [config["model"]["name"]] * 2)
+        optimizers = [step for step in steps if step["block"] == "create_optimizer"]
+        self.assertEqual([step["params"]["optimizer"] for step in optimizers], [config["optimizer"]["name"]] * 2)
+        epoch = next(step for step in steps if step["block"] == "epoch_loop")
+        self.assertEqual(epoch["params"]["epochs"], config["trainer"]["epochs"])
+        self.assertEqual([step["block"] for step in epoch["steps"][-2:]], ["evaluate_peer_ensemble", "track_best_peer_models"])
+
+    def test_apl_recipe_matches_formal_protocol(self) -> None:
+        recipe = load_recipe(ROOT / "recipes" / "papers" / "apl.yaml")
+        config_path = ROOT.parents[2] / "configs" / "experiment" / "apl_cifar10_noise02_reproduction.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        steps = recipe["steps"]
+        data = next(step for step in steps if step["block"] == "prepare_apl_cifar10")["params"]
+        self.assertEqual((data["validation_size"], data["augment"], data["noise_method"], data["noise_rate"], data["noise_seed"], data["batch_size"], data["num_workers"]), (config["data"]["validation_size"], config["data"]["augment"], config["noise"]["name"], config["noise"]["rate"], config["noise"]["seed"], config["loader"]["batch_size"], config["loader"]["num_workers"]))
+        self.assertEqual(next(step for step in steps if step["block"] == "create_model")["params"], {"model": config["model"]["name"], "num_classes": 10, "device": "device"})
+        optimizer = next(step for step in steps if step["block"] == "create_optimizer")["params"]
+        self.assertEqual({key: optimizer[key] for key in ("optimizer", "lr", "momentum", "nesterov", "weight_decay")}, {"optimizer": config["optimizer"]["name"], "lr": config["optimizer"]["lr"], "momentum": config["optimizer"]["momentum"], "nesterov": config["optimizer"]["nesterov"], "weight_decay": config["optimizer"]["weight_decay"]})
+        scheduler = next(step for step in steps if step["block"] == "create_scheduler")["params"]
+        self.assertEqual((scheduler["scheduler"], scheduler["t_max"], scheduler["eta_min"]), (config["scheduler"]["name"], config["scheduler"]["t_max"], config["scheduler"]["eta_min"]))
+        epoch = next(step for step in steps if step["block"] == "epoch_loop")
+        self.assertEqual(epoch["params"]["epochs"], config["trainer"]["epochs"])
+        self.assertEqual(_batch_blocks(recipe), ["get_batch", "move_batch_to_device", "zero_grad", "forward", "nce_loss", "rce_loss", "active_passive_composition", "mean_loss", "backward", "clip_grad_norm", "optimizer_step"])
+        self.assertEqual([step["block"] for step in epoch["steps"][-3:]], ["evaluate_accuracy", "track_best_model", "scheduler_step"])
+        self.assertEqual(epoch["steps"][-2]["params"]["metric_name"], "selection_accuracy")
+
+    def test_binary_risk_recipe_matches_formal_protocol(self) -> None:
+        recipe = load_recipe(ROOT / "recipes" / "papers" / "binary_risk.yaml")
+        config_path = ROOT.parents[2] / "configs" / "experiment" / "binary_risk_natarajan_reproduction.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        steps = recipe["steps"]
+        data = next(step for step in steps if step["block"] == "prepare_binary_risk_data")["params"]
+        self.assertEqual((data["train_size"], data["test_size"], data["data_seed"], data["rho_positive"], data["rho_negative"], data["noise_seed"], data["batch_size"]), (config["data"]["train_size"], config["data"]["test_size"], config["data"]["seed"], config["risk"]["rho_positive"], config["risk"]["rho_negative"], config["noise"]["seed"], config["loader"]["batch_size"]))
+        self.assertEqual(next(step for step in steps if step["block"] == "create_model")["params"], {"model": config["model"]["name"], "input_dim": 2, "num_classes": 2, "device": "device"})
+        optimizer = next(step for step in steps if step["block"] == "create_optimizer")["params"]
+        self.assertEqual((optimizer["optimizer"], optimizer["lr"], optimizer["momentum"]), (config["optimizer"]["name"], config["optimizer"]["lr"], config["optimizer"]["momentum"]))
+        epoch = next(step for step in steps if step["block"] == "epoch_loop")
+        self.assertEqual(epoch["params"]["epochs"], config["trainer"]["epochs"])
+        self.assertEqual(_batch_blocks(recipe), ["get_batch", "move_batch_to_device", "zero_grad", "forward", "binary_risk", "mean_loss", "backward", "optimizer_step"])
+        self.assertEqual(epoch["steps"][-1]["block"], "evaluate_accuracy")
+
+    def test_loss_correction_recipe_matches_formal_protocol(self) -> None:
+        recipe = load_recipe(ROOT / "recipes" / "papers" / "loss_correction.yaml")
+        config_path = ROOT.parents[2] / "configs" / "experiment" / "loss_correction_cifar10_asymmetric04.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        steps = recipe["steps"]
+        data = next(step for step in steps if step["block"] == "prepare_loss_correction_cifar10")["params"]
+        self.assertEqual(
+            (data["validation_size"], data["augment"], data["noise_seed"], data["batch_size"]),
+            (config["data"]["validation_size"], config["data"]["augment"], config["noise"]["seed"], config["loader"]["batch_size"]),
+        )
+        self.assertEqual(
+            next(step for step in steps if step["block"] == "create_model")["params"],
+            {"model": config["model"]["name"], "num_classes": 10, "base_width": config["model"]["base_width"], "device": "device"},
+        )
+        optimizer = next(step for step in steps if step["block"] == "create_optimizer")["params"]
+        self.assertEqual(
+            {key: optimizer[key] for key in ("optimizer", "lr", "momentum", "nesterov", "weight_decay")},
+            {"optimizer": config["optimizer"]["name"], "lr": config["optimizer"]["lr"], "momentum": config["optimizer"]["momentum"], "nesterov": config["optimizer"]["nesterov"], "weight_decay": config["optimizer"]["weight_decay"]},
+        )
+        scheduler = next(step for step in steps if step["block"] == "create_scheduler")["params"]
+        self.assertEqual((scheduler["scheduler"], scheduler["milestones"], scheduler["gamma"]), (config["scheduler"]["name"], config["scheduler"]["milestones"], config["scheduler"]["gamma"]))
+        epoch = next(step for step in steps if step["block"] == "epoch_loop")
+        self.assertEqual(epoch["params"]["epochs"], config["trainer"]["epochs"])
+        self.assertEqual(_batch_blocks(recipe), ["get_batch", "move_batch_to_device", "zero_grad", "forward", "forward_correction", "mean_loss", "backward", "optimizer_step"])
+        correction = next(step for step in epoch["steps"][1]["steps"] if step["block"] == "forward_correction")
+        self.assertEqual(correction["params"]["transition"], "transition")
+
+    def test_jocor_recipe_matches_formal_protocol(self) -> None:
+        recipe = load_recipe(ROOT / "recipes" / "papers" / "jocor.yaml")
+        config_path = ROOT.parents[2] / "configs" / "experiment" / "jocor_cifar10_symmetric05_reproduction.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        steps = recipe["steps"]
+        data = next(step for step in steps if step["block"] == "prepare_jocor_cifar10")["params"]
+        self.assertEqual((data["noise_rate"], data["noise_seed"], data["batch_size"], data["num_workers"]), (config["noise"]["rate"], config["noise"]["seed"], config["loader"]["batch_size"], config["loader"]["num_workers"]))
+        models = [step for step in steps if step["block"] == "create_model"]
+        self.assertEqual([step["params"]["model"] for step in models], [config_model["name"] for config_model in config["models"]])
+        optimizer = next(step for step in steps if step["block"] == "create_joint_optimizer")["params"]
+        self.assertEqual((optimizer["optimizer"], optimizer["lr"], optimizer["beta1"], optimizer["beta2"], optimizer["weight_decay"]), (config["optimizer"]["name"], config["optimizer"]["lr"], config["optimizer"]["betas"][0], config["optimizer"]["betas"][1], config["optimizer"]["weight_decay"]))
+        scheduler = next(step for step in steps if step["block"] == "create_scheduler")["params"]
+        self.assertEqual((scheduler["scheduler"], scheduler["start_epoch"], scheduler["end_epoch"], scheduler["initial_lr"], scheduler["final_lr"], scheduler["beta1_before"], scheduler["beta1_after"]), (config["scheduler"]["name"], config["scheduler"]["start_epoch"], config["scheduler"]["end_epoch"], config["scheduler"]["initial_lr"], config["scheduler"]["final_lr"], config["scheduler"]["beta1_before"], config["scheduler"]["beta1_after"]))
+        epoch = next(step for step in steps if step["block"] == "epoch_loop")
+        self.assertEqual(epoch["params"]["epochs"], config["trainer"]["epochs"])
+        self.assertEqual(_batch_blocks(recipe), ["get_batch", "move_batch_to_device", "zero_grad", "forward_two_models", "per_sample_ce", "per_sample_ce", "jocor_symmetric_kl", "jocor_joint_composition", "jocor_small_loss_indices", "mean_selected_loss", "backward", "optimizer_step"])
+        self.assertEqual([step["block"] for step in epoch["steps"][-2:]], ["track_best_peer_models", "scheduler_step"])
+
     def test_formula_metadata_is_complete(self) -> None:
         for block_id in (
             "softmax_probability",
@@ -67,6 +163,16 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
             "small_loss_indices",
             "cross_select_loss_a_from_b",
             "cross_select_loss_b_from_a",
+            "nce_loss",
+            "rce_loss",
+            "active_passive_composition",
+            "binary_risk",
+            "forward_correction",
+            "jocor_symmetric_kl",
+            "jocor_joint_composition",
+            "jocor_keep_rate_formula",
+            "jocor_small_loss_indices",
+            "mean_selected_loss",
         ):
             definition = get_block(block_id)
             self.assertTrue(definition.formula, block_id)
@@ -76,7 +182,6 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
     def test_formula_templates_execute_smoke(self) -> None:
         for name, context_key in (
             (ROOT / "recipes" / "examples" / "gce_formula_smoke.yaml", "model"),
-            (ROOT / "recipes" / "papers" / "coteaching.yaml", "model_a"),
         ):
             recipe = load_recipe(name)
             context = execute_recipe(recipe)

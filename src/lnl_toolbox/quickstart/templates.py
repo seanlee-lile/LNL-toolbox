@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Mapping
 
 from lnl_toolbox.catalog import (
     PaperSpec,
     RecipeSpec,
-    default_paper_config,
     load_recipe_config,
     recipe_by_id,
 )
@@ -25,8 +25,26 @@ class MethodTemplate:
 
 
 def method_template_for_paper(paper: PaperSpec) -> MethodTemplate:
-    selected, recipe = default_paper_config(paper)
-    return MethodTemplate(paper.id, selected.recipe_id, recipe, load_recipe_config(recipe))
+    selected = next(
+        (item for item in paper.configs if item.profile == "reproduction"),
+        None,
+    )
+    if selected is None:
+        raise ValueError(f"paper {paper.id!r} has no formal reproduction recipe")
+    recipe = _cached_recipe_by_id(selected.recipe_id)
+    return MethodTemplate(
+        paper.id, selected.recipe_id, recipe, _cached_recipe_config(selected.recipe_id)
+    )
+
+
+@lru_cache(maxsize=None)
+def _cached_recipe_by_id(recipe_id: str) -> RecipeSpec:
+    return recipe_by_id(recipe_id)
+
+
+@lru_cache(maxsize=None)
+def _cached_recipe_config(recipe_id: str) -> dict[str, Any]:
+    return load_recipe_config(_cached_recipe_by_id(recipe_id))
 
 
 def _get(config: Mapping[str, Any], path: tuple[str, ...], default: Any = None) -> Any:
@@ -115,8 +133,7 @@ def find_exact_reproduction(
     for item in paper.configs:
         if item.profile != "reproduction":
             continue
-        recipe = recipe_by_id(item.recipe_id)
-        config = load_recipe_config(recipe)
+        config = _cached_recipe_config(item.recipe_id)
         data_name = str(_get(config, ("data", "name"), "")).lower().replace("-", "_")
         noise_name = str(_get(config, ("noise", "name"), "clean"))
         if data_name != str(dataset_adapter).lower().replace("-", "_"):

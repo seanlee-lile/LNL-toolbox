@@ -1,37 +1,40 @@
 schema_version: 1
 name: coteaching
-description: Co-teaching formula-level dual-peer smoke recipe.
+description: "Complete Co-teaching CIFAR-10 reproduction recipe: formal transition noise, dual CifarCnn8 peers, remember-rate schedule, peer cross-update, ensemble validation selection, and 200 epochs."
 steps:
   - block: set_seed
     params: {seed: 1}
   - block: select_device
-    params: {device: cpu}
-  - block: select_dataset
+    params: {device: auto}
+  - block: prepare_coteaching_cifar10
     params:
-      source_mode: builtin
-      dataset: synthetic
-      save_as: train_dataset
-  - block: configure_noise
-    params: {method: none, rate: 0.0, seed: 1}
-  - block: create_loader
-    params: {dataset: train_dataset, batch_size: 16, shuffle: true, save_as: train_loader}
+      root: ''
+      validation_size: 5000
+      augment: true
+      noise_rate: 0.2
+      noise_seed: 1
+      batch_size: 128
+      num_workers: 4
   - block: create_model
-    params: {model: mlp, num_classes: 2, input_dim: 4, device: device, save_as: model_a}
+    params: {model: cifar_cnn8, num_classes: 10, device: device, save_as: model_a}
   - block: create_model
-    params: {model: mlp, num_classes: 2, input_dim: 4, device: device, save_as: model_b}
+    params: {model: cifar_cnn8, num_classes: 10, device: device, save_as: model_b}
   - block: create_optimizer
-    params: {optimizer: sgd, model: model_a, lr: 0.1, save_as: optimizer_a}
+    params: {optimizer: adam, model: model_a, lr: 0.001, weight_decay: 0.0, save_as: optimizer_a}
   - block: create_optimizer
-    params: {optimizer: sgd, model: model_b, lr: 0.1, save_as: optimizer_b}
+    params: {optimizer: adam, model: model_b, lr: 0.001, weight_decay: 0.0, save_as: optimizer_b}
   - block: epoch_loop
-    params: {epochs: 1}
+    params: {epochs: 200}
     steps:
+      - block: refresh_epoch_loader
+        params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}
       - block: remember_rate_formula
         params: {noise_rate: 0.2, warmup_epochs: 10, save_as: remember_rate}
       - block: batch_loop
         params: {loader: train_loader}
         steps:
-          - block: get_batch
+          - {block: get_batch}
+          - {block: move_batch_to_device}
           - block: zero_grad
             params: {optimizer: optimizer_a}
           - block: zero_grad
@@ -45,9 +48,9 @@ steps:
           - block: per_sample_ce
             params: {logits: logits_b, save_as: loss_b_per_sample}
           - block: small_loss_indices
-            params: {input: loss_a_per_sample, remember_rate: remember_rate, save_as: selected_a}
+            params: {input: loss_a_per_sample, remember_rate: remember_rate, sample_indices: indices, save_as: selected_a}
           - block: small_loss_indices
-            params: {input: loss_b_per_sample, remember_rate: remember_rate, save_as: selected_b}
+            params: {input: loss_b_per_sample, remember_rate: remember_rate, sample_indices: indices, save_as: selected_b}
           - block: cross_select_loss_a_from_b
             params: {loss: loss_a_per_sample, indices: selected_b, save_as: loss_a}
           - block: cross_select_loss_b_from_a
@@ -60,3 +63,13 @@ steps:
             params: {loss: loss_b}
           - block: optimizer_step
             params: {optimizer: optimizer_b}
+      - block: evaluate_peer_ensemble
+        params: {model_a: model_a, model_b: model_b, loader: validation_loader, save_as: ensemble_accuracy}
+      - block: track_best_peer_models
+        params: {model_a: model_a, model_b: model_b, metric: ensemble_accuracy, save_as: best_peer_model_state}
+  - block: restore_best_peer_models
+    params: {model_a: model_a, model_b: model_b, state: best_peer_model_state}
+  - block: evaluate_peer_ensemble
+    params: {model_a: model_a, model_b: model_b, loader: test_loader, save_as: test_ensemble_accuracy, final: true}
+  - block: record_metrics
+    params: {values: [test_ensemble_accuracy, best_ensemble_accuracy, best_epoch]}

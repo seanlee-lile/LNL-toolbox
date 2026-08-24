@@ -1390,16 +1390,20 @@
       if (paper) state.paperId = paper.id;
       const configItems = (paper?.configs || []).map(function (item) { return {value:item.recipe_id, label:item.label}; });
       if (!configItems.some(function (item) { return item.value === state.paperRecipe; })) state.paperRecipe = paper?.default_recipe_id || configItems[0]?.value || "";
+      const activePaperConfig = (paper?.configs || []).find(function (item) { return item.recipe_id === state.paperRecipe; });
+      const studentReady = !activePaperConfig?.preparation || activePaperConfig.preparation.artifact_ready;
       parameterPanel.innerHTML = commonFormStart() +
         field("论文方法", "paper-id", selectControl("__ID__", paperItems.length ? paperItems : ["binary-risk"])) +
         field("工具箱配置", "paper-recipe", selectControl("__ID__", configItems.length ? configItems : [""])) +
-        '<div class="wide workflow-actions"><button id="paper-run-config" type="button" class="primary">运行正式配置</button><button id="paper-open-yaml" type="button" class="secondary">编辑为项目 YAML</button><button id="paper-open-sweep" type="button" class="secondary">使用此配置做 Sweep</button></div>' +
+        '<div class="wide workflow-actions"><button id="paper-run-config" type="button" class="primary" ' + (studentReady ? '' : 'disabled') + '>运行正式配置</button><button id="paper-open-yaml" type="button" class="secondary">编辑为项目 YAML</button><button id="paper-open-sweep" type="button" class="secondary">使用此配置做 Sweep</button></div>' +
         commonFormEnd() + '<div id="paper-details"></div>';
       document.getElementById("paper-id").value = state.paperId;
       document.getElementById("paper-recipe").value = state.paperRecipe;
       document.getElementById("paper-id").addEventListener("change", function (event) { state.paperId = event.target.value; state.paperRecipe = ""; renderPapers(); updateModulePreview(); });
-      document.getElementById("paper-recipe").addEventListener("change", function (event) { state.paperRecipe = event.target.value; renderPaperDetails(); updateModulePreview(); });
+      document.getElementById("paper-recipe").addEventListener("change", function (event) { state.paperRecipe = event.target.value; renderPapers(); updateModulePreview(); });
       document.getElementById("paper-run-config").addEventListener("click", function () {
+        const selected = paper?.configs.find(function (item) { return item.recipe_id === state.paperRecipe; });
+        if (selected?.preparation && !selected.preparation.artifact_ready) return;
         setActiveConfig("recipe", state.paperRecipe);
         const command = "lnl run --recipe " + state.paperRecipe + " --check-data";
         setRequest({command:command}, command);
@@ -1431,11 +1435,29 @@
       const mappingRows = (paper.concept_to_config || []).map(function (item) { return {"论文概念":item.concept, "YAML 配置字段":item.config, "实现模块":item.implementation}; });
       const configRows = [{"配置文件":config.config_path, "数据集":config.data, "噪声":config.noise + (config.noise_rate == null ? "" : " · " + config.noise_rate), "训练轮次":config.epochs ?? "-", "执行器":config.runner, "方法":config.method || "-"}];
       const limitations = (paper.limitations || []).map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("");
+      const preparation = config.preparation;
+      const preparationCard = preparation ? '<div class="guide-card"><strong>MentorArtifact: ' + (preparation.artifact_ready ? 'READY' : 'NOT READY') + '</strong>' +
+        '<p class="helper">' + escapeHtml(preparation.artifact_path) + '</p>' +
+        '<p>Step 1 · Mentor features: ' + (preparation.feature_ready ? 'READY' : 'NOT READY') + '</p>' +
+        '<p>Step 2 · Frozen MentorArtifact: ' + (preparation.artifact_ready ? 'READY' : 'NOT READY') + '</p>' +
+        '<p>Step 3 · Student training: ' + (preparation.artifact_ready ? 'AVAILABLE' : 'BLOCKED') + '</p>' +
+        (preparation.artifact_error ? '<p class="status failed">' + escapeHtml(preparation.artifact_error) + '</p>' : '') +
+        (preparation.preparation_available ? '<div class="actions"><button type="button" data-mentor-step="prepare" class="secondary" ' + (preparation.feature_ready ? 'disabled' : '') + '>准备 Mentor 数据</button><button type="button" data-mentor-step="train" class="secondary" ' + (!preparation.feature_ready || preparation.artifact_ready ? 'disabled' : '') + '>训练 MentorArtifact</button></div>' : '<p class="helper">This configuration requires an externally prepared, identity-compatible MentorArtifact.</p>') +
+        '</div>' : '';
       node.innerHTML = '<div class="guide-card"><h3>' + escapeHtml(paper.acronym + "：" + paper.title) + '</h3><p>' + escapeHtml(paper.venue + " " + paper.year) + ' · <a href="' + escapeHtml(paper.source_url) + '" target="_blank" rel="noreferrer">查看论文来源</a></p><p><strong>解决的问题：</strong>' + escapeHtml(paper.summary) + '</p><p><strong>核心方法：</strong>' + escapeHtml(paper.mechanism) + '</p></div>' +
         '<div class="guide-card"><strong>论文训练流程</strong><ol>' + lifecycle + '</ol></div>' +
+        preparationCard +
         '<div class="guide-card"><strong>当前配置如何运行这篇论文</strong>' + tableHtml(configRows) + '<p class="helper">可直接准备正式训练指令，也可另存为项目 YAML 后修改或进入参数 Sweep；内置配置不会被覆盖。</p></div>' +
         '<div class="guide-card"><strong>论文方法、配置字段与代码的关系</strong>' + tableHtml(mappingRows) + '</div>' +
         (limitations ? '<details class="guide-card"><summary>已知限制</summary><ul>' + limitations + '</ul></details>' : '');
+      node.querySelectorAll("[data-mentor-step]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          const command = preparation?.commands?.[button.dataset.mentorStep];
+          if (!command) return;
+          setRequest({command:command}, command);
+          runButton.click();
+        });
+      });
     }
     function renderAdvanced() {
       parameterPanel.innerHTML = '<label for="free-command">输入一条 lnl 指令</label>' +
@@ -1952,6 +1974,15 @@
         updateModulePreview();
       }
     }
+    async function refreshPapers() {
+      const response = await fetch("/api/papers");
+      if (!response.ok) return;
+      state.papers = await response.json();
+      if (state.module === "papers") {
+        renderPapers();
+        updateModulePreview();
+      }
+    }
     async function pollJob() {
       if (!state.jobId) return;
       const response = await fetch("/api/jobs/" + state.jobId);
@@ -1988,6 +2019,9 @@
           state.pendingYamlPath = "";
         }
         await refreshDatasets();
+        if (!job.error && job.returncode === 0 && job.command.startsWith("lnl mentor ")) {
+          await refreshPapers();
+        }
       }
     }
     stopTaskButton.addEventListener("click", async function () {

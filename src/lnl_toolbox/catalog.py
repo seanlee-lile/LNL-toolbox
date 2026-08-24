@@ -8,11 +8,18 @@ from dataclasses import dataclass
 from importlib import metadata, resources
 import json
 from pathlib import Path
+import pickle
 from typing import Any
 
 from lnl_toolbox.cli import repository_root
 from lnl_toolbox.core.config_schema import normalize_experiment_config
 from lnl_toolbox.training.runners import RunnerSpec, resolve_runner
+
+
+_MENTORNET_TEACHER_CONFIG = Path(
+    "configs/experiment/mentornet_dd_teacher_cifar10_symmetric04.yaml"
+)
+_MENTORNET_SMOKE_RECIPE = "mentornet-dd-cifar100-symmetric04-smoke"
 
 
 @dataclass(frozen=True, slots=True)
@@ -459,6 +466,114 @@ def resolve_config_paths(config: Mapping[str, Any], project_root: Path) -> dict[
     return resolved
 
 
+def _display_path(path: Path, project_root: Path) -> str:
+    try:
+        return path.resolve().relative_to(project_root.resolve()).as_posix()
+    except ValueError:
+        return str(path.resolve())
+
+
+def _quoted_command_path(path: Path, project_root: Path) -> str:
+    value = _display_path(path, project_root)
+    return f'"{value}"' if any(character.isspace() for character in value) else value
+
+
+def mentornet_preparation_status(
+    config: Mapping[str, Any],
+    project_root: Path | None = None,
+    *,
+    student_recipe: str | None = None,
+) -> dict[str, Any] | None:
+    """Describe the explicit offline Mentor preparation required by a Student run."""
+
+    pipeline = config.get("pipeline", {}) or {}
+    if not isinstance(pipeline, Mapping):
+        return None
+    provider = pipeline.get("weight_provider", {}) or {}
+    if (
+        not isinstance(provider, Mapping)
+        or str(provider.get("name", "")).strip().lower() != "mentornet"
+    ):
+        return None
+    root = (project_root or find_project_root()).resolve()
+    artifact = Path(str(provider.get("artifact_path", ""))).expanduser()
+    artifact = artifact if artifact.is_absolute() else (root / artifact).resolve()
+    artifact_ready = False
+    artifact_error: str | None = None
+    if artifact.is_file():
+        try:
+            from lnl_toolbox.training.mentor_artifacts import MentorArtifact
+
+            MentorArtifact.load(artifact)
+            artifact_ready = True
+        except (
+            EOFError,
+            KeyError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            pickle.UnpicklingError,
+        ) as exc:
+            artifact_error = str(exc)
+
+    teacher_config = root / _MENTORNET_TEACHER_CONFIG
+    if not teacher_config.is_file():
+        try:
+            teacher_config = _installed_recipe_path(
+                _MENTORNET_TEACHER_CONFIG.as_posix()
+            )
+        except FileNotFoundError:
+            pass
+    feature_data = root / "data/mentornet/cifar10-symmetric04-seed20260729/mentor_features.npz"
+    if teacher_config.is_file():
+        teacher = load_yaml(teacher_config)
+        configured_feature = Path(str(teacher.get("feature_data", feature_data)))
+        feature_data = (
+            configured_feature
+            if configured_feature.is_absolute()
+            else (root / configured_feature).resolve()
+        )
+    expected_artifact = feature_data.parent / "mentor_artifact.pt"
+    preparation_available = (
+        teacher_config.is_file()
+        and artifact.resolve() == expected_artifact.resolve()
+    )
+    recipe_id = student_recipe or (
+        _MENTORNET_SMOKE_RECIPE if preparation_available else None
+    )
+    commands: dict[str, str] = {}
+    if preparation_available:
+        teacher_arg = _quoted_command_path(teacher_config, root)
+        output_dir_arg = _quoted_command_path(feature_data.parent, root)
+        artifact_arg = _quoted_command_path(artifact, root)
+        commands = {
+            "prepare": (
+                f"lnl mentor prepare --config {teacher_arg} "
+                f"--output-dir {output_dir_arg}"
+            ),
+            "train": (
+                f"lnl mentor train --config {teacher_arg} --output {artifact_arg}"
+            ),
+        }
+        if recipe_id:
+            commands["student"] = (
+                f"lnl run --recipe {recipe_id} --check-data"
+            )
+    return {
+        "status": "ready" if artifact_ready else "not_ready",
+        "artifact_ready": artifact_ready,
+        "artifact_path": str(artifact),
+        "artifact_error": artifact_error,
+        "feature_ready": feature_data.is_file(),
+        "feature_path": str(feature_data),
+        "teacher_config": str(teacher_config),
+        "preparation_available": preparation_available,
+        "student_recipe": recipe_id,
+        "commands": commands,
+    }
+
+
 def _require_mapping(config: Mapping[str, Any], key: str) -> Mapping[str, Any]:
     value = config.get(key)
     if not isinstance(value, Mapping):
@@ -622,11 +737,25 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
     if isinstance(pipeline, Mapping):
         provider = pipeline.get("weight_provider", {}) or {}
         if isinstance(provider, Mapping) and str(provider.get("name", "")).lower() == "mentornet":
-            artifact = Path(str(provider.get("artifact_path", "")))
-            if not artifact.is_file():
+            status = mentornet_preparation_status(config)
+            assert status is not None
+            if not status["artifact_ready"]:
+                guidance = ""
+                commands = status["commands"]
+                if commands:
+                    guidance = (
+                        f"; Step 1 prepare Mentor features: {commands['prepare']}"
+                        f"; Step 2 train MentorArtifact: {commands['train']}"
+                        f"; Step 3 run Student: {commands['student']}"
+                    )
+                invalid = (
+                    f"; artifact validation failed: {status['artifact_error']}"
+                    if status["artifact_error"]
+                    else ""
+                )
                 raise ValueError(
-                    "MentorNet recipe is conditional and requires a prepared "
-                    f"MentorArtifact: {artifact}"
+                    "MentorNet recipe is conditional; MentorArtifact: NOT READY: "
+                    f"{status['artifact_path']}{invalid}{guidance}"
                 )
     return runner
 
@@ -640,6 +769,7 @@ __all__ = [
     "load_papers",
     "load_recipe_config",
     "load_yaml",
+    "mentornet_preparation_status",
     "default_paper_config",
     "paper_by_id",
     "recipe_by_id",

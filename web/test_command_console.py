@@ -520,6 +520,48 @@ class CommandConsoleTest(unittest.TestCase):
             next(item for item in papers if item["id"] == "cnlcu")["default_recipe_id"],
             "cnlcu-cifar10-reproduction",
         )
+        mentornet = next(item for item in papers if item["id"] == "mentornet")
+        preparation = mentornet["configs"][0]["preparation"]
+        self.assertIn(preparation["status"], {"ready", "not_ready"})
+        self.assertIn("artifact_ready", preparation)
+
+    def test_mentornet_paper_ui_exposes_guided_artifact_readiness(self):
+        status = {
+            "status": "not_ready",
+            "artifact_ready": False,
+            "artifact_path": "mentor_artifact.pt",
+            "artifact_error": None,
+            "feature_ready": False,
+            "feature_path": "mentor_features.npz",
+            "teacher_config": "teacher.yaml",
+            "preparation_available": True,
+            "student_recipe": "mentornet-dd-cifar100-symmetric04-smoke",
+            "commands": {
+                "prepare": "lnl mentor prepare --config teacher.yaml --output-dir mentor",
+                "train": "lnl mentor train --config teacher.yaml --output mentor_artifact.pt",
+                "student": "lnl run --recipe mentornet-dd-cifar100-symmetric04-smoke --check-data",
+            },
+        }
+        with mock.patch(
+            "lnl_toolbox.catalog.mentornet_preparation_status",
+            return_value=status,
+        ):
+            papers = command_console._paper_payload()
+        mentornet = next(item for item in papers if item["id"] == "mentornet")
+        self.assertEqual(
+            mentornet["configs"][0]["preparation"]["status"], "not_ready"
+        )
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        for marker in (
+            "MentorArtifact: ",
+            "data-mentor-step",
+            "准备 Mentor 数据",
+            "训练 MentorArtifact",
+            "studentReady",
+            "refreshPapers",
+            'job.command.startsWith("lnl mentor ")',
+        ):
+            self.assertIn(marker, page)
 
     def test_dataset_payload_distinguishes_registration_from_training_evidence(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
@@ -1106,8 +1148,19 @@ class CommandConsoleTest(unittest.TestCase):
         with command_console.JOBS_LOCK:
             command_console.JOBS[job.job_id] = job
         try:
-            result = command_console.cancel_job(job.job_id)
-            process.terminate.assert_called_once_with()
+            with mock.patch.object(command_console.subprocess, "run") as taskkill:
+                result = command_console.cancel_job(job.job_id)
+            if command_console.os.name == "nt":
+                taskkill.assert_called_once_with(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=command_console.subprocess.DEVNULL,
+                    stderr=command_console.subprocess.DEVNULL,
+                    check=False,
+                )
+                process.terminate.assert_not_called()
+            else:
+                taskkill.assert_not_called()
+                process.terminate.assert_called_once_with()
             self.assertTrue(result.cancel_requested)
         finally:
             with command_console.JOBS_LOCK:

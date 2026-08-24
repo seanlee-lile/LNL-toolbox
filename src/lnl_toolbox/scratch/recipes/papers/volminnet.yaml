@@ -1,7 +1,104 @@
 schema_version: 1
 name: volminnet
-description: VolMinNet noisy NLL plus minimum-volume objective smoke recipe.
+description: "Complete VolMinNet reproduction: CIFAR-10 symmetric-20, joint classifier/transition training, positive logdet minimum-volume objective, noisy-validation minimum-loss selection, and clean-test evaluation."
 steps:
-  - {block: set_seed, params: {seed: 1}}
-  - {block: prepare_paper_batch}
-  - {block: volminnet_objective}
+  - block: set_seed
+    params: {seed: 1}
+  - block: select_device
+    params: {device: auto}
+  - block: prepare_volminnet_cifar10
+    params:
+      root: ''
+      validation_size: 5000
+      augment: true
+      noise_rate: 0.2
+      noise_seed: 1
+      batch_size: 128
+      num_workers: 4
+  - block: create_model
+    params:
+      model: resnet18
+      num_classes: 10
+      base_width: 64
+      device: device
+      save_as: model
+  - block: create_volmin_transition
+    params: {num_classes: 10, device: device, save_as: transition}
+  - block: create_optimizer
+    params:
+      optimizer: sgd
+      model: model
+      lr: 0.01
+      momentum: 0.9
+      weight_decay: 0.001
+      save_as: classifier_optimizer
+  - block: create_optimizer
+    params:
+      optimizer: sgd
+      model: transition
+      lr: 0.01
+      momentum: 0.9
+      weight_decay: 0.001
+      save_as: transition_optimizer
+  - block: create_scheduler
+    params:
+      scheduler: multistep
+      optimizer: classifier_optimizer
+      milestones: [30, 60]
+      gamma: 0.1
+      save_as: classifier_scheduler
+  - block: create_scheduler
+    params:
+      scheduler: multistep
+      optimizer: transition_optimizer
+      milestones: [30, 60]
+      gamma: 0.1
+      save_as: transition_scheduler
+  - block: epoch_loop
+    params: {epochs: 150}
+    steps:
+      - block: refresh_epoch_loader
+        params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - block: zero_grad
+            params: {optimizer: classifier_optimizer}
+          - block: zero_grad
+            params: {optimizer: transition_optimizer}
+          - block: forward
+            params: {model: model, input: images, save_as: logits}
+          - block: volmin_transition_matrix
+            params: {transition: transition, logits: logits, save_as: transition_matrix}
+          - block: volmin_noisy_nll
+            params: {logits: logits, labels: labels, transition: transition_matrix, save_as: loss_per_sample}
+          - block: volmin_positive_logdet
+            params: {transition: transition_matrix, save_as: volume_logdet}
+          - block: volmin_objective_composition
+            params: {classification_loss: loss_per_sample, volume: volume_logdet, volume_weight: 0.0001, save_as: loss}
+          - {block: backward}
+          - block: optimizer_step
+            params: {optimizer: classifier_optimizer}
+          - block: optimizer_step
+            params: {optimizer: transition_optimizer}
+      - block: evaluate_volminnet_noisy
+        params:
+          model: model
+          transition: transition
+          loader: validation_loader
+          device: device
+          save_as: validation_loss
+      - block: track_best_volminnet
+        params: {model: model, transition: transition, metric: validation_loss, save_as: best_volmin_state}
+      - block: scheduler_step
+        params: {scheduler: classifier_scheduler}
+      - block: scheduler_step
+        params: {scheduler: transition_scheduler}
+  - block: restore_best_volminnet
+    params: {model: model, transition: transition, state: best_volmin_state}
+  - block: evaluate_accuracy
+    params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}
+  - block: record_metrics
+    params: {values: [test_accuracy, validation_loss, validation_accuracy, best_epoch]}

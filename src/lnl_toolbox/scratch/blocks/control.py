@@ -134,7 +134,12 @@ def epoch_loop(
     children: Sequence[Mapping[str, Any]],
     execute: Callable[..., ScratchContext],
 ) -> None:
-    for epoch in range(int(params["start_epoch"]), int(params["start_epoch"]) + int(params["epochs"])):
+    start_epoch = int(params["start_epoch"])
+    epochs = int(params["epochs"])
+    limit = ctx.get("_runtime_limits", {}).get("max_epochs")
+    if limit is not None:
+        epochs = min(epochs, int(limit))
+    for epoch in range(start_epoch, start_epoch + epochs):
         ctx["epoch"] = epoch
         execute(children, ctx)
 
@@ -158,7 +163,10 @@ def batch_loop(
     execute: Callable[..., ScratchContext],
 ) -> None:
     loader = ctx[str(params["loader"])]
+    limit = ctx.get("_runtime_limits", {}).get("max_batches")
     for batch_idx, batch in enumerate(loader):
+        if limit is not None and batch_idx >= int(limit):
+            break
         ctx["batch_idx"] = batch_idx
         ctx["batch"] = batch
         execute(children, ctx)

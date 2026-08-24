@@ -171,7 +171,7 @@ def _profile_from_splits(
     )
     validation = splits.get("validation")
     clean_validation = (
-        KnowledgeState.UNAVAILABLE
+        KnowledgeState.UNKNOWN
         if validation is None
         else KnowledgeState.AVAILABLE
         if validation.clean_targets is not None
