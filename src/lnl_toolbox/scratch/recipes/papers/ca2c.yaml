@@ -1,7 +1,31 @@
 schema_version: 1
 name: ca2c
-description: CA2C candidate-memory selection smoke recipe.
+description: "Formal CA2C CIFAR-100 symmetric-20 recipe with SevenCNN, warmup/candidate memory, asymmetric co-learning objective, and cosine SGD."
 steps:
-  - {block: set_seed, params: {seed: 1}}
-  - {block: prepare_paper_batch}
-  - {block: ca2c_candidate_memory}
+  - {block: set_seed, params: {seed: 123}}
+  - {block: select_device, params: {device: auto}}
+  - {block: prepare_formal_cifar, params: {dataset: cifar100, validation_size: 0, augment: true, noise_rate: 0.2, noise_seed: 123, batch_size: 128, num_workers: 4}}
+  - {block: create_model, params: {model: ca2c_seven_cnn, num_classes: 100, device: device, save_as: model_p}}
+  - {block: create_model, params: {model: ca2c_seven_cnn, num_classes: 100, device: device, save_as: model_n}}
+  - {block: create_optimizer, params: {optimizer: sgd, model: model_p, lr: 0.02, momentum: 0.9, nesterov: true, weight_decay: 0.0005, save_as: optimizer}}
+  - {block: create_optimizer, params: {optimizer: sgd, model: model_n, lr: 0.02, momentum: 0.9, nesterov: true, weight_decay: 0.0005, save_as: optimizer_n}}
+  - {block: create_scheduler, params: {scheduler: cosine, optimizer: optimizer, t_max: 700, eta_min: 0.0, save_as: scheduler}}
+  - block: epoch_loop
+    params: {epochs: 700}
+    steps:
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad}
+          - {block: zero_grad, params: {optimizer: optimizer_n}}
+          - {block: forward_two_models, params: {model_a: model_p, model_b: model_n, save_as_a: logits_p, save_as_b: logits_n}}
+          - {block: per_sample_ce, params: {logits: logits_p, save_as: loss_per_sample}}
+          - {block: ca2c_candidate_memory, params: {losses: loss_per_sample, keep_rate: 0.8, save_as: ca2c_mask}}
+          - {block: ca2c_co_learning_objective, params: {positive_logits: logits_p, negative_logits: logits_n, labels: labels, candidate_k: 2, hard_weight: 0.99, warmup_epochs: 400, save_as: loss}}
+          - {block: backward}
+          - {block: optimizer_step}
+          - {block: optimizer_step, params: {optimizer: optimizer_n}}
+      - {block: scheduler_step}

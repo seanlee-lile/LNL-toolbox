@@ -73,9 +73,10 @@ def small_loss(ctx: ScratchContext, input: str = "loss_per_sample", keep_rate: f
         "remember_rate": {"type": "slot", "default": "remember_rate"},
         "sample_indices": {"type": "slot", "default": "indices"},
         "save_as": {"type": "slot", "default": "selected_indices"},
+        "mask_as": {"type": "slot", "default": "selected_mask"},
     },
     requires=("input", "remember_rate"),
-    provides=("save_as", "selected_mask"),
+    provides=("save_as", "mask_as", "selected_mask", "selected_mask_a", "selected_mask_b"),
     placement=("batch",), stage="train", ui_group="⑥ 样本选择",
     formula="selected = lowest_loss(loss_per_sample, floor(R(T) × batch_size))",
     formula_ref="Co-teaching stable small-loss selection",
@@ -87,6 +88,7 @@ def small_loss_indices(
     remember_rate: str = "remember_rate",
     sample_indices: str = "indices",
     save_as: str = "selected_indices",
+    mask_as: str = "selected_mask",
 ) -> None:
     torch = _torch()
     values = ctx[input].detach().reshape(-1)
@@ -101,6 +103,11 @@ def small_loss_indices(
     mask = torch.zeros(values.numel(), dtype=torch.bool, device=values.device)
     mask[selected] = True
     ctx[save_as] = selected
+    ctx[mask_as] = mask
+    if str(save_as).endswith("_a"):
+        ctx["selected_mask_a"] = mask
+    elif str(save_as).endswith("_b"):
+        ctx["selected_mask_b"] = mask
     ctx["selected_mask"] = mask
 
 

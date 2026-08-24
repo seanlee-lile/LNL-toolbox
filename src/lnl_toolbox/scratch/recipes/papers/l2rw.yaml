@@ -1,7 +1,29 @@
 schema_version: 1
 name: l2rw
-description: L2RW normalized meta-example weight smoke recipe.
+description: "Formal L2RW CIFAR-10 uniform-40 recipe with L2RW ResNet32, trusted-meta weighting, SGD, and official long horizon."
 steps:
-  - {block: set_seed, params: {seed: 1}}
-  - {block: prepare_paper_batch}
-  - {block: l2rw_meta_weight}
+  - {block: set_seed, params: {seed: 1234}}
+  - {block: select_device, params: {device: auto}}
+  - {block: prepare_formal_cifar, params: {dataset: cifar10, validation_size: 5000, trusted_validation: true, num_clean: 100, trusted_seed: 1234, augment: true, noise_rate: 0.4, noise_seed: 0, batch_size: 100, num_workers: 4}}
+  - {block: create_model, params: {model: l2rw_resnet32, num_classes: 10, base_width: 16, device: device, save_as: model}}
+  - {block: create_optimizer, params: {optimizer: sgd, model: model, lr: 0.1, momentum: 0.9, weight_decay: 0.0002, save_as: optimizer}}
+  - block: epoch_loop
+    params: {epochs: 180}
+    steps:
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 100, save_as: train_loader}}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad}
+          - {block: forward}
+          - {block: per_sample_ce}
+          - {block: l2rw_get_trusted_batch, params: {loader: trusted_loader, input_as: trusted_images, label_as: trusted_labels}}
+          - {block: l2rw_meta_weight, params: {model: model, inputs: images, labels: labels, trusted_inputs: trusted_images, trusted_labels: trusted_labels, virtual_learning_rate: 1.0, weight_decay: 0.0002, implementation: official, save_as: meta_weights}}
+          - {block: weighted_loss, params: {weights: meta_weights, save_as: weighted_loss_per_sample}}
+          - {block: mean_loss, params: {input: weighted_loss_per_sample, save_as: loss}}
+          - {block: backward}
+          - {block: optimizer_step}
+      - {block: evaluate_accuracy, params: {model: model, loader: validation_loader, save_as: validation_accuracy}}
+  - {block: evaluate_accuracy, params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}}

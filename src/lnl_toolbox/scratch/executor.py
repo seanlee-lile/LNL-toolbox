@@ -100,7 +100,7 @@ def execute_recipe(
     if runtime_limits is not None:
         if not isinstance(runtime_limits, Mapping):
             raise TypeError("runtime_limits must be a mapping")
-        allowed = {"max_epochs", "max_batches", "skip_final_test"}
+        allowed = {"max_epochs", "max_batches", "skip_final_test", "fixture"}
         unknown = set(runtime_limits) - allowed
         if unknown:
             raise ValueError(f"unknown runtime limits: {sorted(unknown)}")
@@ -112,6 +112,8 @@ def execute_recipe(
                 raise ValueError(f"runtime limit `{name}` must be a positive integer or null")
         if "skip_final_test" in limits and not isinstance(limits["skip_final_test"], bool):
             raise ValueError("runtime limit `skip_final_test` must be boolean")
+        if "fixture" in limits and not isinstance(limits["fixture"], bool):
+            raise ValueError("runtime limit `fixture` must be boolean")
         initial["_runtime_limits"] = limits
     validated = validate_recipe(recipe, initial_slots=set(initial))
     result = ScratchContext(validated.get("settings", {}))

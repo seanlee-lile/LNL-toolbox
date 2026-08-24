@@ -1,7 +1,67 @@
 schema_version: 1
 name: pcse
-description: PCSE per-class feature statistics smoke recipe.
+description: "Formal PCSE CIFAR-10 reproduction: external UPM main-best source, standard preprocessing, symmetric-40 manifest, paper VolMin transition stage, layer3/layer4 snapshots, per-class statistic recovery, GDA, and validation-selected ensemble."
 steps:
-  - {block: set_seed, params: {seed: 1}}
-  - {block: prepare_paper_batch}
-  - {block: pcse_statistics}
+  - block: set_seed
+    params: {seed: 1}
+  - block: select_device
+    params: {device: auto}
+  - block: prepare_pcse_cifar10
+    params: {root: '', source_env: LNL_PCSE_SOURCE_RUN, batch_size: 128, num_workers: 4}
+  - block: create_model
+    params: {model: resnet18, num_classes: 10, base_width: 16, device: device, save_as: model}
+  - block: load_pcse_source_model
+    params:
+      model: model
+      checkpoint_sha256: edb9387f2bc95b56c61ced551ef387746f1a49c5079f8dfbc966e583b34da062
+      manifest_sha256: fd919619d3ff55619d3e8dc9f937f674fbed0d084c83b5baf8301e51f59e867b
+      mapping_hash: 674b78dd41e2ae3c097ecedb9768eb9274fed8d95e66002bdf119dd263596dd9
+      dataset_fingerprint: 9c53dc2c001574ab3f1b78d48632b8a82d0003c754bf7367f230280068e118a4
+      source_env: LNL_PCSE_SOURCE_RUN
+      save_as: pcse_source
+  - block: create_volmin_transition
+    params: {num_classes: 10, device: device, save_as: transition}
+  - block: create_pcse_joint_optimizer
+    params: {model: model, transition: transition, model_lr: 0.0002, transition_lr: 0.001, weight_decay: 0.0001, save_as: transition_optimizer}
+  - block: epoch_loop
+    params: {epochs: 1}
+    steps:
+      - block: refresh_epoch_loader
+        params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - block: zero_grad
+            params: {optimizer: transition_optimizer}
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - block: forward_feature
+            params: {model: model, input: images, logits_as: logits, features_as: features}
+          - block: volmin_transition_matrix
+            params: {transition: transition, logits: logits, save_as: transition_matrix}
+          - block: volmin_noisy_nll
+            params: {logits: logits, labels: labels, transition: transition_matrix, save_as: loss_per_sample}
+          - block: volmin_positive_logdet
+            params: {transition: transition_matrix, save_as: volume_logdet}
+          - block: volmin_objective_composition
+            params: {classification_loss: loss_per_sample, volume: volume_logdet, volume_weight: 0.001, save_as: loss}
+          - {block: backward, params: {loss: loss}}
+          - {block: optimizer_step, params: {optimizer: transition_optimizer}}
+      - block: snapshot_pcse_features
+        params: {model: model, prepared_data: prepared_data, device: device, save_as: pcse_snapshots}
+      - block: pcse_materialize_transition
+        params: {transition: transition, save_as: transition_matrix}
+      - block: pcse_recover_layer_statistics
+        params: {snapshots: pcse_snapshots, layer_names: [layer3, layer4], transition: transition_matrix, save_as: pcse_statistics}
+      - block: pcse_fit_gda
+        params: {statistics: pcse_statistics, covariance_ridge: 0.1, save_as: pcse_gda}
+      - block: snapshot_pcse_validation_features
+        params: {model: model, prepared_data: prepared_data, device: device, save_as: pcse_validation_snapshots}
+      - block: pcse_fit_ensemble_weights
+        params: {gda: pcse_gda, snapshots: pcse_validation_snapshots, epochs: 5, learning_rate: 0.05, save_as: pcse_ensemble_weights}
+      - block: snapshot_pcse_test_features
+        params: {model: model, prepared_data: prepared_data, device: device, save_as: pcse_test_snapshots}
+      - block: pcse_evaluate_ensemble
+        params: {gda: pcse_gda, snapshots: pcse_test_snapshots, weights: pcse_ensemble_weights, save_as: pcse_test_metrics}
+  - block: record_metrics
+    params: {values: [epoch]}

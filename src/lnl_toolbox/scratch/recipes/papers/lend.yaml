@@ -1,7 +1,33 @@
 schema_version: 1
 name: lend
-description: LEND feature-based label dilution smoke recipe.
+description: "Formal LEND CIFAR-10 symmetric-40 recipe with ResNet18 features, graph-style label dilution, SGD, and multi-step schedule."
 steps:
   - {block: set_seed, params: {seed: 1}}
-  - {block: prepare_paper_batch}
-  - {block: lend_label_dilution}
+  - {block: select_device, params: {device: auto}}
+  - {block: prepare_formal_cifar, params: {dataset: cifar10, validation_size: 5000, augment: true, noise_rate: 0.4, noise_seed: 1, batch_size: 256, num_workers: 4}}
+  - {block: create_model, params: {model: resnet18, num_classes: 10, base_width: 64, device: device, save_as: model}}
+  - {block: create_optimizer, params: {optimizer: sgd, model: model, lr: 0.05, momentum: 0.9, weight_decay: 0.0005, save_as: optimizer}}
+  - {block: create_scheduler, params: {scheduler: multistep, optimizer: optimizer, milestones: [100], gamma: 0.1, save_as: scheduler}}
+  - {block: create_lend_state, params: {prepared_data: prepared_data, num_classes: 10, save_as: lend_state}}
+  - block: epoch_loop
+    params: {epochs: 200}
+    steps:
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 256, save_as: train_loader}}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad}
+          - {block: forward_feature}
+          - {block: per_sample_ce}
+          - {block: lend_feature_graph, params: {features: features, indices: indices, k: 8, gamma: 1.0, metric: inner_product, normalize_features: false, graph_as: lend_graph}}
+          - {block: lend_dilute_labels, params: {graph: lend_graph, labels: labels, num_classes: 10, alpha: 0.99, steps: 10, save_as: diluted_labels}}
+          - {block: lend_history_update, params: {state: lend_state, indices: indices, diluted: diluted_labels, beta: 0.9, save_as: history_values}}
+          - {block: lend_select_agreement, params: {state: lend_state, labels: labels, history: history_values, save_as: lend_selected}}
+          - {block: lend_selected_objective, params: {losses: loss_per_sample, selected: lend_selected, save_as: loss}}
+          - {block: backward}
+          - {block: optimizer_step}
+      - {block: scheduler_step}
+      - {block: evaluate_accuracy, params: {model: model, loader: validation_loader, save_as: validation_accuracy}}
+  - {block: evaluate_accuracy, params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}}

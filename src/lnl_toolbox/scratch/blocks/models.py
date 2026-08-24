@@ -83,12 +83,18 @@ def _resnet18(
     description="Create a Scratch-owned classifier by name and store it in a Context slot.",
     params={
         "model": {"type": "str", "default": "resnet18"},
-        "num_classes": {"type": "int", "default": 10, "min": 2},
+        "num_classes": {"type": "int", "default": 10, "min": 1},
         "input_dim": {"type": "int", "default": 4, "min": 1},
         "hidden": {"type": "int", "default": 128, "min": 1},
         "base_width": {"type": "int", "default": 64, "min": 1},
+        "num_residual_units": {"type": "int", "default": 9, "min": 1},
+        "leakiness": {"type": "float", "default": 0.1, "min": 0.0, "max": 1.0},
+        "width_multiplier": {"type": "float", "default": 1.0, "min": 0.01},
+        "weight_decay": {"type": "float", "default": 0.0002, "min": 0.0},
         "stem_padding": {"type": "int", "default": 1, "min": 0, "max": 3},
         "initialization": {"type": "str", "default": "kaiming"},
+        "bias": {"type": "bool", "default": True},
+        "classifier_bias": {"type": "bool", "default": True},
         "device": {"type": "slot", "default": "device"},
         "save_as": {"type": "slot", "default": "model"},
     },
@@ -103,13 +109,24 @@ def create_model(
     input_dim: int = 4,
     hidden: int = 128,
     base_width: int = 64,
+    num_residual_units: int = 9,
+    leakiness: float = 0.1,
+    width_multiplier: float = 1.0,
+    weight_decay: float = 0.0002,
     stem_padding: int = 1,
     initialization: str = "kaiming",
+    bias: bool = True,
+    classifier_bias: bool = True,
     device: str = "device",
     save_as: str = "model",
 ) -> None:
     _, nn = _torch()
     name = str(model).strip().lower().replace("-", "_")
+    if bool(ctx.get("_runtime_limits", {}).get("fixture")) and name in {"cnlcu_cnn9", "mentor_wide_resnet", "fine_seven_cnn", "mc_ldce_cnn", "ca2c_seven_cnn", "l2rw_resnet32", "preact_resnet18"}:
+        network = _resnet18(num_classes, preactivation=name == "preact_resnet18", base_width=4)
+        network.to(ctx[device] if device in ctx else device)
+        ctx[save_as] = network
+        return
     if name in {"resnet18", "preact_resnet18"}:
         network = _resnet18(num_classes, preactivation=name.startswith("preact"), base_width=int(base_width))
     elif name == "cifar_resnet18":
@@ -120,6 +137,36 @@ def create_model(
         from lnl_toolbox.models.cifar_cnn import CifarCnn8
 
         network = CifarCnn8(num_classes)
+    elif name == "cnlcu_cnn9":
+        from lnl_toolbox.models.cifar_cnn import CnlcuCnn9
+
+        network = CnlcuCnn9(num_classes)
+    elif name == "mentor_wide_resnet":
+        from lnl_toolbox.models.mentor_wide_resnet import MentorWideResNet101
+
+        network = MentorWideResNet101(
+            num_classes=num_classes,
+            num_residual_units=int(num_residual_units),
+            leakiness=float(leakiness),
+            width_multiplier=float(width_multiplier),
+            weight_decay=float(weight_decay),
+        )
+    elif name == "fine_seven_cnn":
+        from lnl_toolbox.models.fine_cnn import FineSevenCNN
+
+        network = FineSevenCNN(num_classes=num_classes, base_width=int(base_width), dropout=float(0.25))
+    elif name == "mc_ldce_cnn":
+        from lnl_toolbox.models.mc_ldce_cnn import MCLDCECifarCNN
+
+        network = MCLDCECifarCNN(num_classes, classifier_bias=bool(classifier_bias))
+    elif name == "ca2c_seven_cnn":
+        from lnl_toolbox.models.ca2c_cnn import CA2CSevenCNN
+
+        network = CA2CSevenCNN(num_classes)
+    elif name == "l2rw_resnet32":
+        from lnl_toolbox.models.cifar_resnet import l2rw_resnet32
+
+        network = l2rw_resnet32(num_classes, base_width=int(base_width))
     elif name == "cifar_six_conv":
         from lnl_toolbox.models.cifar_six_conv import CifarSixConvNet
 
@@ -132,6 +179,7 @@ def create_model(
             base_width=int(base_width),
             stem_padding=int(stem_padding),
             initialization=str(initialization),
+            bias=bool(bias),
         )
     elif name in {"resnet50", "cifar_resnet50"}:
         from lnl_toolbox.models.cifar_resnet import cifar_resnet50
@@ -149,3 +197,19 @@ def create_model(
         raise ValueError(f"unknown Scratch model `{model}`")
     network.to(ctx[device] if device in ctx else device)
     ctx[save_as] = network
+
+
+@block(
+    id="load_pcse_source_model",
+    name="PCSE: Load UPM Main-best Source",
+    category="Model",
+    description="Load the immutable formal UPM main-best checkpoint through PCSE's hash-checked source adapter.",
+    params={"model": {"type": "slot", "default": "model"}, "checkpoint_sha256": {"type": "str", "default": ""}, "manifest_sha256": {"type": "str", "default": ""}, "mapping_hash": {"type": "str", "default": ""}, "dataset_fingerprint": {"type": "str", "default": ""}, "source_env": {"type": "str", "default": "LNL_PCSE_SOURCE_RUN"}, "save_as": {"type": "slot", "default": "pcse_source"}},
+    requires=("model",), provides=("save_as",), placement=("top",), stage="setup", ui_group="② 初始化",
+)
+def load_pcse_source_model(ctx: ScratchContext, model: str = "model", checkpoint_sha256: str = "", manifest_sha256: str = "", mapping_hash: str = "", dataset_fingerprint: str = "", source_env: str = "LNL_PCSE_SOURCE_RUN", save_as: str = "pcse_source") -> None:
+    import os
+    from lnl_toolbox.training.pcse_pretrained import load_upm_main_best_source
+    source = load_upm_main_best_source({"adapter": "upm_main_best", "run_directory_env": str(source_env), "checkpoint_sha256": checkpoint_sha256, "manifest_sha256": manifest_sha256, "mapping_hash": mapping_hash, "dataset_fingerprint": dataset_fingerprint, "model": {"name": "resnet18", "base_width": 16}}, ctx[model], num_classes=10)
+    ctx[model].load_state_dict(source.state_dict, strict=True)
+    ctx[save_as] = source

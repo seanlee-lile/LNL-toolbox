@@ -1,7 +1,50 @@
 schema_version: 1
 name: upm
-description: UPM projected confusing-probability update smoke recipe.
+description: "Formal UPM CIFAR-10 symmetric-40 two-stage recipe: stage-1 best-source contract, confusing-probability update, and fresh main model."
 steps:
   - {block: set_seed, params: {seed: 1}}
-  - {block: prepare_paper_batch}
-  - {block: upm_eta_update}
+  - {block: select_device, params: {device: auto}}
+  - {block: prepare_formal_cifar, params: {dataset: cifar10, validation_size: 5000, augment: true, noise_rate: 0.4, noise_seed: 1, batch_size: 128, num_workers: 4, train_eval: true}}
+  - {block: create_model, params: {model: resnet18, num_classes: 10, base_width: 16, device: device, save_as: stage1_model}}
+  - {block: create_optimizer, params: {optimizer: sgd, model: stage1_model, lr: 0.05, momentum: 0.9, weight_decay: 0.0001, save_as: stage1_optimizer}}
+  - {block: create_scheduler, params: {scheduler: multistep, optimizer: stage1_optimizer, milestones: [40, 80, 120], gamma: 0.1, save_as: stage1_scheduler}}
+  - block: epoch_loop
+    params: {epochs: 160}
+    steps:
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad, params: {optimizer: stage1_optimizer}}
+          - {block: forward, params: {model: stage1_model, input: images, save_as: logits}}
+          - {block: per_sample_ce}
+          - {block: mean_loss}
+          - {block: backward}
+          - {block: optimizer_step, params: {optimizer: stage1_optimizer}}
+      - {block: scheduler_step, params: {scheduler: stage1_scheduler}}
+      - {block: evaluate_accuracy, params: {model: stage1_model, loader: validation_loader, save_as: stage1_validation_accuracy}}
+      - {block: track_best_model, params: {model: stage1_model, metric: stage1_validation_accuracy, metric_name: stage1_validation_accuracy, save_as: stage1_best_model_state}}
+  - {block: restore_best_model, params: {model: stage1_model, state: stage1_best_model_state}}
+  - {block: create_upm_state, params: {prepared_data: prepared_data, model: stage1_model, loader: train_eval_loader, num_classes: 10, eta_init: 0.01, save_as: upm_state}}
+  - {block: create_model, params: {model: resnet18, num_classes: 10, base_width: 16, device: device, save_as: model}}
+  - {block: create_optimizer, params: {optimizer: sgd, model: model, lr: 0.05, momentum: 0.9, weight_decay: 0.0001, save_as: optimizer}}
+  - block: epoch_loop
+    params: {epochs: 160}
+    steps:
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad}
+          - {block: forward}
+          - {block: upm_clean_posterior, params: {state: upm_state, logits: logits, labels: labels, indices: indices, save_as: clean_posterior}}
+          - {block: upm_update_eta, params: {state: upm_state, indices: indices, posterior: clean_posterior, labels: labels, learning_rate: 0.7}}
+          - {block: upm_soft_target_loss, params: {logits: logits, posterior: clean_posterior, save_as: loss}}
+          - {block: backward}
+          - {block: optimizer_step}
+      - {block: evaluate_accuracy, params: {model: model, loader: validation_loader, save_as: validation_accuracy}}
+  - {block: evaluate_accuracy, params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}}

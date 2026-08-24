@@ -1,8 +1,26 @@
 schema_version: 1
 name: mc-ldce
-description: MC-LDCE centroid risk smoke recipe.
+description: "Formal MC-LDCE CIFAR-10 symmetric-20 lifecycle with fixed features, bias-free classifier contract, centroid risk, and separate transition stage."
 steps:
   - {block: set_seed, params: {seed: 1}}
-  - {block: prepare_paper_batch}
-  - {block: mc_ldce_centroid_risk}
-  - {block: mean_loss, params: {input: mc_ldce_loss, save_as: loss}}
+  - {block: select_device, params: {device: auto}}
+  - {block: prepare_formal_cifar, params: {dataset: cifar10, validation_size: 0, augment: true, noise_rate: 0.2, noise_seed: 1, batch_size: 128, num_workers: 4}}
+  - {block: create_model, params: {model: mc_ldce_cnn, num_classes: 10, classifier_bias: false, device: device, save_as: model}}
+  - {block: create_optimizer, params: {optimizer: adam, model: model, lr: 0.001, weight_decay: 0.0, save_as: optimizer}}
+  - block: epoch_loop
+    params: {epochs: 200}
+    steps:
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}}
+      - {block: mc_ldce_prepare_statistic, params: {model: model, loader: train_loader, num_classes: 10, save_as: mc_ldce_statistic}}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad}
+          - {block: forward_feature}
+          - {block: mc_ldce_objective, params: {model: model, logits: logits, features: features, statistic: mc_ldce_statistic, save_as: loss}}
+          - {block: backward}
+          - {block: optimizer_step}
+      - {block: evaluate_accuracy, params: {model: model, loader: validation_loader, save_as: validation_accuracy}}
+  - {block: evaluate_accuracy, params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}}

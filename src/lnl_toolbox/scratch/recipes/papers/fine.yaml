@@ -1,7 +1,46 @@
 schema_version: 1
 name: fine
-description: FINE feature filtering smoke recipe.
+description: "Formal FINE CIFAR-100N recipe with SevenCNN, 200-epoch warm-up, EMA/SCS/SCR, robust SED/FINE objective, and cosine SGD."
 steps:
-  - {block: set_seed, params: {seed: 1}}
-  - {block: prepare_paper_batch}
-  - {block: fine_feature_filter}
+  - {block: set_seed, params: {seed: 23}}
+  - {block: select_device, params: {device: auto}}
+  - {block: prepare_formal_cifar, params: {dataset: cifar100, validation_size: 0, train_eval: true, clean_validation: true, augment: true, noise_rate: 0.2, noise_seed: 0, preprocessing: official_cifar10, batch_size: 128, num_workers: 8}}
+  - {block: create_model, params: {model: fine_seven_cnn, num_classes: 100, base_width: 64, device: device, save_as: model}}
+  - {block: create_optimizer, params: {optimizer: sgd, model: model, lr: 0.05, momentum: 0.9, nesterov: true, weight_decay: 0.0005, save_as: optimizer}}
+  - {block: create_scheduler, params: {scheduler: cosine, optimizer: optimizer, t_max: 300, eta_min: 0.0005, save_as: scheduler}}
+  - {block: create_fine_state, params: {model: model, num_classes: 100, ema_momentum: 0.95, momentum_scs: 0.999, momentum_scr: 0.99, maximum_threshold: 0.95, beta: 0.1, gamma: 0.002, probability_floor: 0.0000001, seed: 23, save_as: fine_state}}
+  - block: epoch_loop
+    params: {epochs: 300}
+    steps:
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}}
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train_eval, batch_size: 128, save_as: train_eval_loader}}
+      - block: if_epoch_ge
+        params: {epoch: 200}
+        steps:
+          - {block: fine_snapshot_predictions, params: {model: model, state: fine_state, loader: train_eval_loader, save_as: fine_snapshot}}
+          - {block: fine_scs_select, params: {state: fine_state, snapshot: fine_snapshot}}
+          - {block: fine_scr_reweight, params: {state: fine_state, snapshot: fine_snapshot}}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: fine_prepare_strong_input, params: {batch: batch, input: images, save_as: strong_images}}
+          - {block: zero_grad}
+          - {block: forward_feature}
+          - block: if_epoch_lt
+            params: {epoch: 200}
+            steps:
+              - {block: fine_warmup_loss, params: {logits: logits, labels: labels, save_as: loss}}
+          - block: if_epoch_ge
+            params: {epoch: 200}
+            steps:
+              - {block: fine_prepare_batch_targets, params: {state: fine_state, indices: indices, labels: labels, clean_as: fine_clean, pseudo_as: fine_pseudo, weights_as: fine_weights}}
+              - {block: forward, params: {model: model, input: strong_images, save_as: strong_logits}}
+              - {block: fine_robust_loss, params: {logits: logits, strong_logits: strong_logits, labels: labels, clean: fine_clean, pseudo: fine_pseudo, weights: fine_weights, state: fine_state, alpha: 1.0, save_as: loss}}
+          - {block: backward}
+          - {block: optimizer_step}
+          - {block: fine_ema_update, params: {model: model, state: fine_state}}
+      - {block: scheduler_step}
+      - {block: evaluate_accuracy, params: {model: model, loader: validation_loader, save_as: validation_accuracy}}
+  - {block: evaluate_accuracy, params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}}

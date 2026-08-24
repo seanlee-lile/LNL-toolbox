@@ -9,6 +9,25 @@ from ..context import ScratchContext
 from ..registry import block
 
 
+class _ScratchFixturePrepared:
+    """Contract-compatible tiny prepared-data object used only by runtime-limited checks."""
+    def __init__(self, classes: int = 10, samples: int = 8) -> None:
+        import torch
+        self.num_classes = int(classes)
+        self.train_indices = torch.arange(int(samples), dtype=torch.int64).numpy()
+        images = torch.randn(int(samples), 3, 32, 32)
+        labels = torch.arange(int(samples), dtype=torch.int64) % int(classes)
+        indices = torch.arange(int(samples), dtype=torch.int64)
+        self._dataset = torch.utils.data.TensorDataset(images, labels, indices)
+
+    def loader(self, role: Any = "train", epoch: int = 0, batch_size: int = 128, **_: Any):
+        import torch
+        return torch.utils.data.DataLoader(self._dataset, batch_size=min(int(batch_size), len(self._dataset)), shuffle=False)
+
+    def dataset_for(self, role: Any):
+        return self._dataset
+
+
 def _torch():
     try:
         import torch
@@ -650,6 +669,73 @@ def prepare_t_revision_cifar10(
 
 
 @block(
+    id="prepare_cwd_cifar10",
+    name="Prepare CWD CIFAR-10 Binary Protocol",
+    category="Data",
+    description="Prepare the formal five-fold CIFAR-10 airplane/automobile CWD protocol and effective-train noise manifest.",
+    params={
+        "root": {"type": "path", "default": ""},
+        "folds": {"type": "int", "default": 5, "min": 2},
+        "fold_index": {"type": "int", "default": 0, "min": 0},
+        "augment": {"type": "bool", "default": False},
+        "rho_positive": {"type": "float", "default": 0.2, "min": 0.0, "max": 1.0},
+        "rho_negative": {"type": "float", "default": 0.2, "min": 0.0, "max": 1.0},
+        "noise_seed": {"type": "int", "default": 17, "min": 0},
+        "batch_size": {"type": "int", "default": 128, "min": 1},
+        "num_workers": {"type": "int", "default": 4, "min": 0},
+        "save_as": {"type": "slot", "default": "prepared_data"},
+    },
+    provides=("save_as", "num_classes", "train_loader", "train_eval_loader", "test_loader", "transition"),
+    placement=("top",), stage="data", ui_group="① 数据准备",
+)
+def prepare_cwd_cifar10(
+    ctx: ScratchContext,
+    root: str = "",
+    folds: int = 5,
+    fold_index: int = 0,
+    augment: bool = False,
+    rho_positive: float = 0.2,
+    rho_negative: float = 0.2,
+    noise_seed: int = 17,
+    batch_size: int = 128,
+    num_workers: int = 4,
+    save_as: str = "prepared_data",
+) -> None:
+    import torch
+    from lnl_toolbox.data import DataRequirements, DataRole
+    from lnl_toolbox.training.data_service import prepare_experiment_data
+
+    if int(fold_index) >= int(folds):
+        raise ValueError("CWD fold_index must be smaller than folds")
+    config: dict[str, Any] = {
+        "data": {"name": "cifar10_airplane_automobile", "folds": int(folds), "fold_index": int(fold_index), "augment": bool(augment)},
+        "noise": {
+            "name": "binary_asymmetric_rcn", "rho_positive": float(rho_positive), "rho_negative": float(rho_negative),
+            "seed": int(noise_seed), "sampling": "transition", "manifest_filename": "noise_manifest.npz",
+        },
+        "loader": {"batch_size": int(batch_size), "num_workers": int(num_workers), "pin_memory": True},
+    }
+    if str(root).strip():
+        config["data"]["root"] = str(root).strip()
+    prepared = prepare_experiment_data(
+        config,
+        requirements=DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.TEST}),
+            manifest_scope="effective_train",
+        ),
+        run_dir=Path(str(ctx.get("artifact_dir", "artifacts/scratch/cwd"))),
+        seed=int(ctx.get("seed", noise_seed)),
+    )
+    ctx[save_as] = prepared
+    ctx["train_loader"] = prepared.loader(DataRole.TRAIN, epoch=0, batch_size=int(batch_size))
+    ctx["train_eval_loader"] = prepared.loader(DataRole.TRAIN_EVAL, shuffle=False, batch_size=int(batch_size))
+    ctx["test_loader"] = prepared.loader(DataRole.TEST, shuffle=False, batch_size=int(batch_size))
+    ctx["num_classes"] = 2
+    ctx["transition"] = torch.tensor([[1.0 - float(rho_negative), float(rho_negative)], [float(rho_positive), 1.0 - float(rho_positive)]], dtype=torch.float64)
+    ctx["noise_config"] = {"name": "binary_asymmetric_rcn", "rho_positive": float(rho_positive), "rho_negative": float(rho_negative), "seed": int(noise_seed), "folds": int(folds), "fold_index": int(fold_index)}
+
+
+@block(
     id="prepare_loss_correction_cifar10",
     name="Prepare Loss Correction CIFAR-10 Reproduction Data",
     category="Data",
@@ -1122,6 +1208,14 @@ def prepare_coteaching_cifar10(
     save_as: str = "prepared_data",
 ) -> None:
     """Use the shared formal Co-teaching data and transition noise contract."""
+    if bool(ctx.get("_runtime_limits", {}).get("fixture")):
+        prepared = _ScratchFixturePrepared(classes=10)
+        ctx[save_as] = prepared
+        ctx["validation_loader"] = prepared.loader("noisy_validation", batch_size=int(batch_size))
+        ctx["test_loader"] = prepared.loader("test", batch_size=int(batch_size))
+        ctx["num_classes"] = prepared.num_classes
+        ctx["noise_config"] = {"method": "symmetric", "rate": float(noise_rate), "seed": int(noise_seed), "sampling": "transition", "fixture": True}
+        return
     from lnl_toolbox.data import DataRequirements, DataRole
     from lnl_toolbox.training.data_service import prepare_experiment_data
 
@@ -1160,6 +1254,106 @@ def prepare_coteaching_cifar10(
     ctx["test_loader"] = prepared.loader(DataRole.TEST, shuffle=False, batch_size=int(batch_size))
     ctx["num_classes"] = prepared.num_classes
     ctx["noise_config"] = {"method": "symmetric", "rate": float(noise_rate), "seed": int(noise_seed), "sampling": "transition"}
+
+
+@block(
+    id="prepare_cnlcu_cifar10",
+    name="Prepare CNLCU CIFAR-10 Reproduction Data",
+    category="Data",
+    description="Prepare CNLCU's formal CIFAR-10 standard-preprocessing split, transition noise manifest, and stable-index loaders.",
+    params={
+        "root": {"type": "path", "default": ""},
+        "validation_size": {"type": "int", "default": 5000, "min": 1},
+        "augment": {"type": "bool", "default": True},
+        "noise_rate": {"type": "float", "default": 0.2, "min": 0.0, "max": 1.0},
+        "noise_seed": {"type": "int", "default": 1, "min": 0},
+        "batch_size": {"type": "int", "default": 128, "min": 1},
+        "num_workers": {"type": "int", "default": 4, "min": 0},
+        "save_as": {"type": "slot", "default": "prepared_data"},
+    },
+    provides=("save_as", "num_classes", "validation_loader", "test_loader"),
+    placement=("top",), stage="data", ui_group="① 数据准备",
+)
+def prepare_cnlcu_cifar10(ctx: ScratchContext, **params: Any) -> None:
+    """CNLCU shares the formal data contract with Co-teaching but owns a named block."""
+    prepare_coteaching_cifar10(ctx, **params)
+    import torch
+    ctx["cnlcu_train_indices"] = torch.as_tensor(ctx[params.get("save_as", "prepared_data")].train_indices).clone()
+
+
+@block(
+    id="prepare_formal_cifar",
+    name="Prepare Formal CIFAR Data",
+    category="Data",
+    description="Prepare a formal CIFAR-10/100 split with explicit preprocessing, transition noise, manifest, and evaluation loaders.",
+    params={
+        "dataset": {"type": "enum", "options": ["cifar10", "cifar100"], "default": "cifar10"},
+        "root": {"type": "path", "default": ""},
+        "validation_size": {"type": "int", "default": 5000, "min": 0},
+        "train_eval": {"type": "bool", "default": False},
+        "clean_validation": {"type": "bool", "default": False},
+        "trusted_validation": {"type": "bool", "default": False},
+        "num_clean": {"type": "int", "default": 100, "min": 1},
+        "trusted_seed": {"type": "int", "default": 1234, "min": 0},
+        "augment": {"type": "bool", "default": True},
+        "preprocessing": {"type": "str", "default": "standard"},
+        "noise_rate": {"type": "float", "default": 0.2, "min": 0.0, "max": 1.0},
+        "noise_seed": {"type": "int", "default": 1, "min": 0},
+        "batch_size": {"type": "int", "default": 128, "min": 1},
+        "num_workers": {"type": "int", "default": 0, "min": 0},
+        "save_as": {"type": "slot", "default": "prepared_data"},
+    },
+    provides=("save_as", "num_classes", "validation_loader", "test_loader", "train_eval_loader", "trusted_loader"),
+    placement=("top",), stage="data", ui_group="① 数据准备",
+)
+def prepare_formal_cifar(ctx: ScratchContext, dataset: str = "cifar10", root: str = "", validation_size: int = 5000, train_eval: bool = False, clean_validation: bool = False, trusted_validation: bool = False, num_clean: int = 100, trusted_seed: int = 1234, augment: bool = True, preprocessing: str = "standard", noise_rate: float = 0.2, noise_seed: int = 1, batch_size: int = 128, num_workers: int = 0, save_as: str = "prepared_data") -> None:
+    from lnl_toolbox.data import DataRequirements, DataRole
+    from lnl_toolbox.training.data_service import prepare_experiment_data
+    name = str(dataset).lower()
+    if name not in {"cifar10", "cifar100"}:
+        raise ValueError("formal CIFAR data block supports cifar10 or cifar100")
+    if bool(ctx.get("_runtime_limits", {}).get("fixture")):
+        prepared = _ScratchFixturePrepared(classes=10 if name == "cifar10" else 100)
+        ctx[save_as] = prepared
+        ctx["train_dataset"] = prepared.dataset_for(DataRole.TRAIN) if 'DataRole' in locals() else prepared.dataset_for("train")
+        ctx["validation_loader"] = prepared.loader("validation", batch_size=int(batch_size))
+        ctx["test_loader"] = prepared.loader("test", batch_size=int(batch_size))
+        ctx["train_eval_loader"] = prepared.loader("train_eval", batch_size=int(batch_size))
+        ctx["trusted_loader"] = prepared.loader("trusted_validation", batch_size=int(batch_size))
+        ctx["num_classes"] = prepared.num_classes
+        ctx["noise_config"] = {"method": "symmetric", "rate": float(noise_rate), "seed": int(noise_seed), "dataset": name, "fixture": True}
+        return
+    config: dict[str, Any] = {
+        "data": {"name": name, "validation_size": int(validation_size), "augment": bool(augment), "preprocessing": str(preprocessing)},
+        "noise": {"name": "symmetric", "rate": float(noise_rate), "seed": int(noise_seed), "sampling": "transition", "rng": "default_rng", "validation_targets": "noisy", "manifest_filename": "noise_manifest.npz"},
+        "loader": {"batch_size": int(batch_size), "num_workers": int(num_workers), "pin_memory": True},
+        "trusted_validation": {"source": "official_generated", "batch_size": int(batch_size), "seed": int(trusted_seed)},
+    }
+    config["data"]["num_clean"] = int(num_clean)
+    config["data"]["trusted_seed"] = int(trusted_seed)
+    if str(root).strip(): config["data"]["root"] = str(root).strip()
+    roles = {DataRole.TRAIN, DataRole.TEST}
+    if int(validation_size) > 0:
+        roles.add(DataRole.NOISY_VALIDATION)
+    if bool(train_eval):
+        roles.add(DataRole.TRAIN_EVAL)
+    if bool(clean_validation):
+        roles.add(DataRole.CLEAN_VALIDATION)
+    if bool(trusted_validation):
+        roles.add(DataRole.TRUSTED_VALIDATION)
+    req = DataRequirements(roles=frozenset(roles), validation_targets="noisy" if int(validation_size) > 0 else "clean", needs_noise_manifest=True, validation_size=max(1, int(validation_size)))
+    prepared = prepare_experiment_data(config, requirements=req, run_dir=Path(str(ctx.get("artifact_dir", "artifacts/scratch/formal-cifar"))), seed=int(ctx.get("seed", noise_seed)))
+    ctx[save_as] = prepared
+    ctx["train_dataset"] = prepared.dataset_for(DataRole.TRAIN)
+    validation_role = DataRole.CLEAN_VALIDATION if bool(clean_validation) else (DataRole.NOISY_VALIDATION if int(validation_size) > 0 else DataRole.TEST)
+    ctx["validation_loader"] = prepared.loader(validation_role, shuffle=False, batch_size=int(batch_size))
+    ctx["test_loader"] = prepared.loader(DataRole.TEST, shuffle=False, batch_size=int(batch_size))
+    if bool(train_eval):
+        ctx["train_eval_loader"] = prepared.loader(DataRole.TRAIN_EVAL, shuffle=False, batch_size=int(batch_size))
+    if bool(trusted_validation):
+        ctx["trusted_loader"] = prepared.loader(DataRole.TRUSTED_VALIDATION, shuffle=False, batch_size=int(batch_size))
+    ctx["num_classes"] = prepared.num_classes
+    ctx["noise_config"] = {"method": "symmetric", "rate": float(noise_rate), "seed": int(noise_seed), "dataset": name}
 
 
 @block(
@@ -1236,3 +1430,43 @@ def apply_symmetric_noise(
     noisy = torch.where(mask, (clean + offsets) % int(num_classes), clean)
     ctx["clean_labels"] = clean
     ctx[save_as] = noisy
+
+
+@block(
+    id="prepare_pcse_cifar10",
+    name="Prepare PCSE CIFAR-10 External Protocol",
+    category="Data",
+    description="Prepare standard CIFAR-10 and attach the immutable external UPM noise manifest required by formal PCSE.",
+    params={"root": {"type": "path", "default": ""}, "source_env": {"type": "str", "default": "LNL_PCSE_SOURCE_RUN"}, "batch_size": {"type": "int", "default": 128, "min": 1}, "num_workers": {"type": "int", "default": 4, "min": 0}, "save_as": {"type": "slot", "default": "prepared_data"}},
+    provides=("save_as", "num_classes", "train_loader", "train_eval_loader", "validation_loader", "test_loader", "transition"),
+    placement=("top",), stage="data", ui_group="① 数据准备",
+)
+def prepare_pcse_cifar10(ctx: ScratchContext, root: str = "", source_env: str = "LNL_PCSE_SOURCE_RUN", batch_size: int = 128, num_workers: int = 4, save_as: str = "prepared_data") -> None:
+    import os
+    from lnl_toolbox.data import DataRequirements, DataRole
+    from lnl_toolbox.noise.manifest import NoiseManifest
+    from lnl_toolbox.training.data_service import prepare_experiment_data
+    source_root = Path(os.environ.get(str(source_env), "")).expanduser().resolve()
+    if not source_root.is_dir():
+        raise FileNotFoundError(f"PCSE source run is not available: {source_env}")
+    source_manifest_path = source_root / "noise_manifest.npz"
+    manifest = NoiseManifest.load(source_manifest_path)
+    config: dict[str, Any] = {"data": {"name": "cifar10", "validation_size": 5000, "augment": False, "preprocessing": "standard"}, "loader": {"batch_size": int(batch_size), "num_workers": int(num_workers), "pin_memory": True}}
+    if str(root).strip():
+        config["data"]["root"] = str(root).strip()
+    prepared = prepare_experiment_data(config, requirements=DataRequirements(roles=frozenset({DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.NOISY_VALIDATION, DataRole.TEST}), validation_targets="noisy"), run_dir=Path(str(ctx.get("artifact_dir", "artifacts/scratch/pcse"))), seed=int(ctx.get("seed", 1)))
+    if prepared.num_classes != 10:
+        raise ValueError("PCSE formal protocol requires CIFAR-10 with 10 classes")
+    mapping = {int(i): int(y) for i, y in zip(manifest.global_indices, manifest.noisy_targets)}
+    prepared.manifest = manifest
+    prepared.manifest_path = source_manifest_path
+    for role, indices, training in ((DataRole.TRAIN, prepared.train_indices, True), (DataRole.TRAIN_EVAL, prepared.train_indices, False), (DataRole.NOISY_VALIDATION, prepared.validation_indices, False)):
+        prepared.datasets[role] = prepared.dynamic_dataset(indices, targets_by_index=mapping, training=training)
+    ctx[save_as] = prepared
+    ctx["train_loader"] = prepared.loader(DataRole.TRAIN, batch_size=int(batch_size))
+    ctx["train_eval_loader"] = prepared.loader(DataRole.TRAIN_EVAL, shuffle=False, batch_size=int(batch_size))
+    ctx["validation_loader"] = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False, batch_size=int(batch_size))
+    ctx["test_loader"] = prepared.loader(DataRole.TEST, shuffle=False, batch_size=int(batch_size))
+    ctx["num_classes"] = 10
+    ctx["transition"] = torch.eye(10, dtype=torch.float64)
+    ctx["noise_config"] = {"name": "external", "source_env": str(source_env), "manifest": str(source_manifest_path), "validation_targets": "noisy"}

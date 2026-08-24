@@ -1,8 +1,62 @@
 schema_version: 1
 name: cwd
-description: CWD class-wise centroid objective smoke recipe.
+description: "Complete CWD reproduction: five-fold CIFAR-10 airplane/automobile binary protocol, virtual auxiliary statistics, unregularized pseudoinverse, dynamic centroids, and binary scalar squared objective."
 steps:
-  - {block: set_seed, params: {seed: 1}}
-  - {block: prepare_paper_batch}
-  - {block: cwd_statistics}
-  - {block: mean_loss, params: {input: cwd_loss, save_as: loss}}
+  - block: set_seed
+    params: {seed: 17}
+  - block: select_device
+    params: {device: auto}
+  - block: prepare_cwd_cifar10
+    params:
+      root: ''
+      folds: 5
+      fold_index: 0
+      augment: false
+      rho_positive: 0.2
+      rho_negative: 0.2
+      noise_seed: 17
+      batch_size: 128
+      num_workers: 4
+  - block: create_model
+    params: {model: cifar_resnet34, num_classes: 1, base_width: 64, bias: false, device: device, save_as: model}
+  - block: create_optimizer
+    params: {optimizer: adam, model: model, lr: 0.05, weight_decay: 0.0001, save_as: optimizer}
+  - block: create_scheduler
+    params: {scheduler: multistep, optimizer: optimizer, milestones: [40, 120], gamma: 0.1, save_as: scheduler}
+  - block: epoch_loop
+    params: {epochs: 200}
+    steps:
+      - block: refresh_epoch_loader
+        params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}
+      - block: snapshot_cwd_features
+        params: {model: model, loader: train_eval_loader, device: device, save_as: cwd_snapshot}
+      - block: cwd_observed_statistics
+        params: {snapshot: cwd_snapshot, transition: transition, save_as: cwd_observed}
+      - block: cwd_clean_prior
+        params: {observed_prior: observed_prior, transition: transition, save_as: clean_prior}
+      - block: cwd_virtual_systems
+        params: {clean_prior: clean_prior, transition: transition, save_as: cwd_systems}
+      - block: cwd_coefficient_pseudoinverse
+        params: {systems: cwd_systems, save_as: cwd_pseudoinverses}
+      - block: cwd_recover_centroids
+        params: {observed_centroids: observed_centroids, pseudoinverses: cwd_pseudoinverses, save_as: cwd_centroids}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad}
+          - block: forward_feature
+            params: {model: model, input: images, logits_as: logits, features_as: features}
+          - block: cwd_global_objective
+            params: {model: model, features: features, labels: labels, centroids: cwd_centroids, clean_prior: clean_prior, pseudoinverses: cwd_pseudoinverses, save_as: loss}
+          - {block: backward}
+          - {block: optimizer_step}
+      - block: evaluate_cwd_binary
+        params: {model: model, loader: test_loader, save_as: test_accuracy}
+      - block: scheduler_step
+        params: {scheduler: scheduler}
+  - block: evaluate_cwd_binary
+    params: {model: model, loader: test_loader, save_as: final_test_accuracy, final: true}
+  - block: record_metrics
+    params: {values: [final_test_accuracy, test_accuracy]}

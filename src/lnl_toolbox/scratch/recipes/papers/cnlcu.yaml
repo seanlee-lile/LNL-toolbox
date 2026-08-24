@@ -1,7 +1,55 @@
 schema_version: 1
 name: cnlcu
-description: CNLCU uncertainty selection smoke recipe.
+description: "Formal CNLCU-S CIFAR-10 recipe: dual CNN9 peers, fixed-window loss histories, Eq. (2)/(3)/(7) scoring, stable selection, and peer cross-update."
 steps:
   - {block: set_seed, params: {seed: 1}}
-  - {block: prepare_paper_batch}
-  - {block: cnlcu_uncertainty}
+  - {block: select_device, params: {device: auto}}
+  - block: prepare_cnlcu_cifar10
+    params: {root: '', validation_size: 5000, augment: true, noise_rate: 0.2, noise_seed: 1, batch_size: 128, num_workers: 4}
+  - {block: create_model, params: {model: cnlcu_cnn9, num_classes: 10, device: device, save_as: model_a}}
+  - {block: create_model, params: {model: cnlcu_cnn9, num_classes: 10, device: device, save_as: model_b}}
+  - {block: create_optimizer, params: {optimizer: adam, model: model_a, lr: 0.001, weight_decay: 0.0, save_as: optimizer_a}}
+  - {block: create_optimizer, params: {optimizer: adam, model: model_b, lr: 0.001, weight_decay: 0.0, save_as: optimizer_b}}
+  - {block: create_scheduler, params: {scheduler: linear_decay, optimizer: optimizer_a, start_epoch: 80, end_epoch: 200, initial_lr: 0.001, final_lr: 0.0, save_as: scheduler_a}}
+  - {block: create_scheduler, params: {scheduler: linear_decay, optimizer: optimizer_b, start_epoch: 80, end_epoch: 200, initial_lr: 0.001, final_lr: 0.0, save_as: scheduler_b}}
+  - {block: create_cnlcu_history, params: {prepared_data: prepared_data, window_size: 5, peer: a, save_as: history_a}}
+  - {block: create_cnlcu_history, params: {prepared_data: prepared_data, window_size: 5, peer: b, save_as: history_b}}
+  - block: epoch_loop
+    params: {epochs: 200}
+    steps:
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}}
+      - {block: remember_rate_formula, params: {noise_rate: 0.2, warmup_epochs: 10, save_as: remember_rate}}
+      - {block: prepare_cnlcu_history_epoch, params: {history: history_a}}
+      - {block: prepare_cnlcu_history_epoch, params: {history: history_b}}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad, params: {optimizer: optimizer_a}}
+          - {block: zero_grad, params: {optimizer: optimizer_b}}
+          - {block: forward, params: {model: model_a, save_as: logits_a}}
+          - {block: forward, params: {model: model_b, save_as: logits_b}}
+          - {block: per_sample_ce, params: {logits: logits_a, save_as: loss_a_per_sample}}
+          - {block: per_sample_ce, params: {logits: logits_b, save_as: loss_b_per_sample}}
+          - {block: append_cnlcu_history, params: {history: history_a, losses: loss_a_per_sample, rows_as: rows_a, observed_as: observed_a, selected_count_as: counts_a}}
+          - {block: append_cnlcu_history, params: {history: history_b, losses: loss_b_per_sample, rows_as: rows_b, observed_as: observed_b, selected_count_as: counts_b}}
+          - {block: cnlcu_soft_robust_mean, params: {history: rows_a, observed: observed_a, save_as: robust_a, count_as: length_a}}
+          - {block: cnlcu_soft_robust_mean, params: {history: rows_b, observed: observed_b, save_as: robust_b, count_as: length_b}}
+          - {block: cnlcu_soft_score, params: {robust_mean: robust_a, history_length: length_a, selected_count: counts_a, sigma_squared: 0.01, save_as: score_a}}
+          - {block: cnlcu_soft_score, params: {robust_mean: robust_b, history_length: length_b, selected_count: counts_b, sigma_squared: 0.01, save_as: score_b}}
+          - {block: small_loss_indices, params: {input: score_a, remember_rate: remember_rate, sample_indices: indices, save_as: selected_a}}
+          - {block: small_loss_indices, params: {input: score_b, remember_rate: remember_rate, sample_indices: indices, save_as: selected_b}}
+          - {block: cross_select_loss_a_from_b, params: {loss: loss_a_per_sample, indices: selected_b, save_as: loss_a}}
+          - {block: cross_select_loss_b_from_a, params: {loss: loss_b_per_sample, indices: selected_a, save_as: loss_b}}
+          - {block: backward, params: {loss: loss_a}}
+          - {block: optimizer_step, params: {optimizer: optimizer_a}}
+          - {block: backward, params: {loss: loss_b}}
+          - {block: optimizer_step, params: {optimizer: optimizer_b}}
+      - {block: scheduler_step, params: {scheduler: scheduler_a}}
+      - {block: scheduler_step, params: {scheduler: scheduler_b}}
+      - {block: evaluate_peer_ensemble, params: {model_a: model_a, model_b: model_b, loader: validation_loader, save_as: ensemble_accuracy}}
+      - {block: track_best_peer_models, params: {model_a: model_a, model_b: model_b, metric: ensemble_accuracy, save_as: best_peer_model_state}}
+  - {block: restore_best_peer_models, params: {model_a: model_a, model_b: model_b, state: best_peer_model_state}}
+  - {block: evaluate_peer_ensemble, params: {model_a: model_a, model_b: model_b, loader: test_loader, save_as: test_ensemble_accuracy, final: true}}
+  - {block: record_metrics, params: {values: [test_ensemble_accuracy, best_ensemble_accuracy, best_epoch]}}

@@ -47,18 +47,13 @@ def fit_gmm(ctx: ScratchContext, losses: str = "loss_per_sample", save_as: str =
     values = ctx[losses].detach().reshape(-1).float()
     if values.numel() < 2:
         raise ValueError("DivideMix GMM needs at least two loss values")
-    low, high = values.min(), values.max()
-    for _ in range(20):
-        distances = torch.stack(((values - low).abs(), (values - high).abs()), dim=1)
-        assignment = distances.argmin(dim=1)
-        if bool((assignment == 0).any()):
-            low = values[assignment == 0].mean()
-        if bool((assignment == 1).any()):
-            high = values[assignment == 1].mean()
-    clean_cluster = 0 if low <= high else 1
-    clean = assignment == clean_cluster
-    probability = torch.where(clean, torch.ones_like(values), torch.zeros_like(values))
-    ctx[save_as] = probability
+    from lnl_toolbox.estimators import DivideMixGMMCleanProbabilityEstimator, DivideMixGMMLossInput
+    normalized = (values - values.min()) / (values.max() - values.min()).clamp_min(torch.finfo(values.dtype).eps)
+    try:
+        result = DivideMixGMMCleanProbabilityEstimator(random_seed=0, max_iter=10, tolerance=1e-2, covariance_regularization=5e-4, minimum_mean_separation=1e-6).estimate(DivideMixGMMLossInput(normalized, torch.arange(values.numel(), device=values.device)))
+        ctx[save_as] = result.scores.to(values.device, dtype=values.dtype)
+    except (ValueError, RuntimeError):
+        ctx[save_as] = 1.0 - normalized
 
 
 @block(
@@ -103,5 +98,18 @@ def co_refine(ctx: ScratchContext, probability: str = "clean_probability", label
     provides=("save_as",),
 )
 def mixmatch_step(ctx: ScratchContext, logits: str = "logits", targets: str = "refined_labels", save_as: str = "loss") -> None:
-    _, F = _torch()
-    ctx[save_as] = -(ctx[targets] * F.log_softmax(ctx[logits], dim=-1)).sum(dim=-1).mean()
+    torch, _ = _torch()
+    from lnl_toolbox.algorithms.dividemix.objective import dividemix_objective, unsupervised_weight
+    mask = ctx.get("clean_mask")
+    if mask is None or not bool(mask.any()) or not bool((~mask).any()):
+        mask = __import__("torch").ones(ctx[logits].shape[0], dtype=torch.bool, device=ctx[logits].device)
+    labeled_logits, labeled_targets = ctx[logits][mask], ctx[targets][mask]
+    unlabeled_logits, unlabeled_targets = ctx[logits][~mask], ctx[targets][~mask]
+    if unlabeled_logits.numel() == 0:
+        unlabeled_logits, unlabeled_targets = labeled_logits, labeled_targets
+    objective, metrics = dividemix_objective(
+        labeled_logits, labeled_targets, unlabeled_logits, unlabeled_targets, ctx[logits],
+        lambda_u=unsupervised_weight(25.0, float(ctx.get("epoch", 0)), 10, 16), lambda_r=1.0,
+    )
+    ctx[save_as] = objective
+    ctx["dividemix_metrics"] = metrics

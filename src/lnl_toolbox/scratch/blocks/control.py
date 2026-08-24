@@ -79,7 +79,7 @@ def if_context(
     description="Execute child blocks when the current epoch reaches a threshold.",
     kind="condition",
     params={"epoch": {"type": "int", "required": True, "min": 0}},
-    requires=("epoch",),
+    requires=(), provides=("loss",),
     placement=("epoch",), stage="train", ui_group="③ 训练结构", beginner_visible=False,
 )
 def if_epoch_ge(
@@ -100,7 +100,7 @@ def if_epoch_ge(
     description="Execute child blocks while the current epoch is below a threshold.",
     kind="condition",
     params={"epoch": {"type": "int", "required": True, "min": 0}},
-    requires=("epoch",),
+    requires=(), provides=("loss",),
     placement=("epoch",), stage="train", ui_group="③ 训练结构", beginner_visible=False,
 )
 def if_epoch_lt(

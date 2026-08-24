@@ -104,6 +104,42 @@ def create_joint_optimizer(
     ctx[save_as] = value
 
 
+@block(
+    id="create_pcse_joint_optimizer",
+    name="Create PCSE Joint AdamW",
+    category="Optimization",
+    description="Create the PCSE VolMin transition-stage AdamW with separate classifier and transition learning rates.",
+    params={
+        "model": {"type": "slot", "default": "model"},
+        "transition": {"type": "slot", "default": "transition"},
+        "model_lr": {"type": "float", "default": 0.0002, "min": 0.0},
+        "transition_lr": {"type": "float", "default": 0.001, "min": 0.0},
+        "weight_decay": {"type": "float", "default": 0.0001, "min": 0.0},
+        "save_as": {"type": "slot", "default": "optimizer"},
+    },
+    requires=("model", "transition"),
+    provides=("save_as",),
+    placement=("top",), stage="setup", ui_group="② 初始化",
+)
+def create_pcse_joint_optimizer(
+    ctx: ScratchContext,
+    model: str = "model",
+    transition: str = "transition",
+    model_lr: float = 0.0002,
+    transition_lr: float = 0.001,
+    weight_decay: float = 0.0001,
+    save_as: str = "optimizer",
+) -> None:
+    torch = _torch()
+    ctx[save_as] = torch.optim.AdamW(
+        [
+            {"params": ctx[model].parameters(), "lr": float(model_lr)},
+            {"params": ctx[transition].parameters(), "lr": float(transition_lr)},
+        ],
+        weight_decay=float(weight_decay),
+    )
+
+
 class _LinearDecayBetaScheduler:
     def __init__(self, optimizer, start_epoch, end_epoch, initial_lr, final_lr, beta1_before, beta1_after):
         self.optimizer = optimizer

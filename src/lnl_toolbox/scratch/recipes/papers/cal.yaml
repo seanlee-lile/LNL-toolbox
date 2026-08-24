@@ -1,8 +1,36 @@
 schema_version: 1
 name: cal
-description: CAL centered second-order risk smoke recipe.
+description: "Formal CAL CIFAR-10 IDN-20 recipe with ResNet34, external-noise-compatible data contract, warmup, and second-order risk."
 steps:
-  - {block: set_seed, params: {seed: 1}}
-  - {block: prepare_paper_batch}
-  - {block: cal_second_order_risk}
-  - {block: mean_loss, params: {input: cal_loss, save_as: loss}}
+  - {block: set_seed, params: {seed: 10086}}
+  - {block: select_device, params: {device: auto}}
+  - {block: prepare_cal_cifar10, params: {artifact_path: data/cal/IDN_0.2_C10.pt, batch_size: 128, num_workers: 0}}
+  - {block: create_model, params: {model: resnet34, num_classes: 10, base_width: 64, initialization: torch_default, device: device, save_as: model}}
+  - {block: create_optimizer, params: {optimizer: sgd, model: model, lr: 0.1, momentum: 0.9, weight_decay: 0.0005, save_as: optimizer}}
+  - {block: create_scheduler, params: {scheduler: multistep, optimizer: optimizer, milestones: [60], gamma: 0.1, save_as: scheduler}}
+  - block: epoch_loop
+    params: {epochs: 100}
+    steps:
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}}
+      - {block: cal_confidence_schedule, params: {default: 1.0, milestones: [10, 40, 80], values: [0.0, 1.0, 1.0], save_as: confidence_weight}}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad}
+          - {block: forward_feature}
+          - block: if_epoch_lt
+            params: {epoch: 65}
+            steps:
+              - {block: cal_warmup_objective, params: {logits: logits, labels: labels, confidence_weight: confidence_weight, save_as: loss}}
+          - block: if_epoch_ge
+            params: {epoch: 65}
+            steps:
+              - {block: cal_prepare_proxy_batch, params: {logits: logits, labels: labels, num_classes: 10}}
+              - {block: cal_second_order_objective, params: {logits: logits, labels: labels, proxy_targets: cal_proxy_targets, retained: cal_retained, noisy_prior: cal_noisy_prior, proxy_prior: cal_proxy_prior, reference_losses: cal_reference_losses, reference_transition: cal_reference_transition, confidence_weight: confidence_weight, save_as: loss}}
+          - {block: backward}
+          - {block: optimizer_step}
+      - {block: scheduler_step}
+      - {block: evaluate_accuracy, params: {model: model, loader: validation_loader, save_as: validation_accuracy}}
+  - {block: evaluate_accuracy, params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}}

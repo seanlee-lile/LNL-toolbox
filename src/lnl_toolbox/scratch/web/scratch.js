@@ -115,6 +115,27 @@ function slotValue(info, step, name) {
   return typeof value === 'string' && value.trim() ? value : name;
 }
 
+function inferAvailableSlot(info, name, available) {
+  const schema = info?.params?.[name] || {};
+  const configured = schema.default;
+  if (configured && available.has(configured)) return configured;
+  if (info?.id === 'small_loss_indices' && name === 'input') {
+    return [...available].sort().find((key) => /(?:^|_)loss(?:_[ab])?_per_sample$/.test(key)) || null;
+  }
+  return null;
+}
+
+function inferOutputSlot(info, name, target) {
+  if (info?.id !== 'small_loss_indices' || name !== 'save_as') return null;
+  const siblings = getChildrenArray(target?.parentId) || [];
+  const outputs = siblings
+    .filter((step) => step.block === 'small_loss_indices')
+    .map((step) => step.params?.save_as || blockInfo(step.block)?.params?.save_as?.default);
+  if (outputs.includes('selected_b') && !outputs.includes('selected_a')) return 'selected_a';
+  if (outputs.includes('selected_a') && !outputs.includes('selected_b')) return 'selected_b';
+  return null;
+}
+
 function addProvidedKeys(keys, step) {
   const info = blockInfo(step.block);
   (info?.provides || []).forEach((name) => keys.add(slotValue(info, step, name)));
@@ -165,8 +186,8 @@ function availabilityReason(info, target, movingId = null) {
   if (movingId && target.parentId !== '__root__' && containsStep(findStepById(movingId), target.parentId)) return '不能把循环拖入自己的子层';
   const available = availableKeysBefore(target);
   const missing = (info.requires || [])
-    .map((name) => slotValue(info, null, name))
-    .filter((slot) => !available.has(slot));
+    .filter((name) => !inferAvailableSlot(info, name, available))
+    .map((name) => slotValue(info, null, name));
   if (missing.length) return `前置 slot 不完整：${missing.join(', ')}`;
   return null;
 }
@@ -445,6 +466,16 @@ function addStepAtTarget(blockId, target) {
   const info = blockInfo(blockId);
   if (!canInsert(info, target?.parentId, null, target?.index || 0)) return false;
   const step = newStep(blockId);
+  const available = availableKeysBefore(target);
+  (info.requires || []).forEach((name) => {
+    const current = slotValue(info, step, name);
+    const inferred = inferAvailableSlot(info, name, available);
+    if (inferred && !available.has(current)) step.params[name] = inferred;
+  });
+  (info.provides || []).forEach((name) => {
+    const inferred = inferOutputSlot(info, name, target);
+    if (inferred) step.params[name] = inferred;
+  });
   if (!insertStep(target.parentId, target.index, step)) return false;
   markDirty();
   state.selected = step;

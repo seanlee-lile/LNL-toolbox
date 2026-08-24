@@ -1,7 +1,25 @@
 schema_version: 1
 name: dld
-description: DLD directional label diffusion smoke recipe.
+description: "Formal DLD CIFAR-10 symmetric-20 recipe with strong-augmentation-compatible data, frozen feature direction, label diffusion, and 200 epochs."
 steps:
-  - {block: set_seed, params: {seed: 1}}
-  - {block: prepare_paper_batch}
-  - {block: dld_label_diffusion}
+  - {block: set_seed, params: {seed: 123}}
+  - {block: select_device, params: {device: auto}}
+  - {block: prepare_formal_cifar, params: {dataset: cifar10, validation_size: 5000, augment: true, noise_rate: 0.2, noise_seed: 123, batch_size: 200, num_workers: 4}}
+  - {block: create_model, params: {model: resnet34, num_classes: 10, base_width: 64, device: device, save_as: model}}
+  - {block: create_optimizer, params: {optimizer: adam, model: model, lr: 0.0001, save_as: optimizer}}
+  - block: epoch_loop
+    params: {epochs: 200}
+    steps:
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 200, save_as: train_loader}}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad}
+          - {block: forward_feature}
+          - {block: dld_label_diffusion, params: {features: features, labels: labels, save_as: dld_labels}}
+          - {block: per_sample_ce}
+          - {block: mean_loss}
+          - {block: backward}
+          - {block: optimizer_step}

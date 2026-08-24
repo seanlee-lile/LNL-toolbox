@@ -1,33 +1,37 @@
 schema_version: 1
 name: dividemix
-description: DivideMix warmup/co-divide/refinement smoke recipe.
+description: "Formal DivideMix CIFAR-10 symmetric-20 recipe: two preactivation ResNet18 peers, warmup/co-divide GMM, co-refinement, MixMatch, and 300 epochs."
 steps:
-  - block: set_seed
-    params: {seed: 1}
-  - block: select_device
-    params: {device: cpu}
-  - block: load_synthetic
-    params: {samples: 32, features: 4, classes: 2}
-  - block: create_loader
-    params: {dataset: train_dataset, batch_size: 16, shuffle: true}
-  - block: create_model
-    params: {model: mlp, num_classes: 2, input_dim: 4, device: device}
-  - block: create_optimizer
-    params: {optimizer: sgd, model: model, lr: 0.1}
+  - {block: set_seed, params: {seed: 1}}
+  - {block: select_device, params: {device: auto}}
+  - {block: prepare_formal_cifar, params: {dataset: cifar10, validation_size: 5000, augment: true, noise_rate: 0.2, noise_seed: 1, batch_size: 128, num_workers: 4}}
+  - {block: create_model, params: {model: preact_resnet18, num_classes: 10, base_width: 64, device: device, save_as: model_a}}
+  - {block: create_model, params: {model: preact_resnet18, num_classes: 10, base_width: 64, device: device, save_as: model_b}}
+  - {block: create_optimizer, params: {optimizer: sgd, model: model_a, lr: 0.02, momentum: 0.9, weight_decay: 0.0005, save_as: optimizer_a}}
+  - {block: create_optimizer, params: {optimizer: sgd, model: model_b, lr: 0.02, momentum: 0.9, weight_decay: 0.0005, save_as: optimizer_b}}
+  - {block: create_scheduler, params: {scheduler: multistep, optimizer: optimizer_a, milestones: [150], gamma: 0.1, save_as: scheduler_a}}
   - block: epoch_loop
-    params: {epochs: 1}
+    params: {epochs: 300}
     steps:
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}}
       - block: batch_loop
         params: {loader: train_loader}
         steps:
           - {block: get_batch}
-          - {block: zero_grad}
-          - {block: forward}
-          - {block: per_sample_ce}
+          - {block: move_batch_to_device}
+          - {block: zero_grad, params: {optimizer: optimizer_a}}
+          - {block: zero_grad, params: {optimizer: optimizer_b}}
+          - {block: forward_two_models, params: {model_a: model_a, model_b: model_b, save_as_a: logits_a, save_as_b: logits_b}}
+          - {block: per_sample_ce, params: {logits: logits_a, save_as: loss_per_sample}}
+          - {block: per_sample_ce, params: {logits: logits_b, save_as: loss_per_sample_b}}
           - {block: fit_gmm}
           - {block: split_clean_noisy}
-          - {block: softmax}
+          - {block: softmax, params: {logits: logits_a, save_as: probabilities}}
           - {block: co_refine}
-          - {block: mixmatch_step}
-          - {block: backward}
-          - {block: optimizer_step}
+          - {block: mixmatch_step, params: {logits: logits_a}}
+          - {block: backward, params: {loss: loss}}
+          - {block: optimizer_step, params: {optimizer: optimizer_a}}
+          - {block: mixmatch_step, params: {logits: logits_b, targets: refined_labels, save_as: loss_b}}
+          - {block: backward, params: {loss: loss_b}}
+          - {block: optimizer_step, params: {optimizer: optimizer_b}}
+      - {block: scheduler_step, params: {scheduler: scheduler_a}}

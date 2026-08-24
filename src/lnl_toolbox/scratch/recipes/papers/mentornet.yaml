@@ -1,7 +1,30 @@
 schema_version: 1
 name: mentornet
-description: MentorNet curriculum weight smoke recipe.
+description: "Formal MentorNet-DD CIFAR-100 symmetric-40 recipe with Wide-ResNet student, SGD schedule, and curriculum weighting."
 steps:
-  - {block: set_seed, params: {seed: 1}}
-  - {block: prepare_paper_batch}
-  - {block: mentor_weight}
+  - {block: set_seed, params: {seed: 20260729}}
+  - {block: select_device, params: {device: auto}}
+  - {block: prepare_formal_cifar, params: {dataset: cifar100, validation_size: 5000, augment: true, noise_rate: 0.4, noise_seed: 20260729, batch_size: 128, num_workers: 4}}
+  - {block: create_model, params: {model: mentor_wide_resnet, num_classes: 100, num_residual_units: 9, leakiness: 0.1, width_multiplier: 1.0, weight_decay: 0.0002, device: device, save_as: model}}
+  - {block: create_optimizer, params: {optimizer: sgd, model: model, lr: 0.1, momentum: 0.9, weight_decay: 0.0, save_as: optimizer}}
+  - {block: create_mentor_provider, params: {artifact_path: data/mentornet/cifar10-symmetric04-official-port-seed20260729/mentor_artifact.pt, total_epochs: 100, percentile: 0.6, decay: 0.5, burn_in_epoch: 18, fixed_epoch_after_burn_in: true, fixed_label: 0, dropout_schedule: [[0.5, 17], [0.05, 78], [0.9, 5]], seed: 20260729, save_as: mentor_provider}}
+  - block: epoch_loop
+    params: {epochs: 100}
+    steps:
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad}
+          - {block: forward}
+          - {block: per_sample_ce}
+          - {block: mentor_compute_weights, params: {provider: mentor_provider, logits: logits, labels: labels, indices: indices, losses: loss_per_sample, save_as: sample_weights}}
+          - {block: weighted_loss}
+          - {block: mean_loss, params: {input: weighted_loss_per_sample, save_as: loss}}
+          - {block: backward}
+          - {block: optimizer_step}
+          - {block: step_milestone_update, params: {optimizer: optimizer, milestones: [19500, 25000, 30000], gamma: 0.1, steps_per_epoch: 391}}
+      - {block: evaluate_accuracy, params: {model: model, loader: validation_loader, save_as: validation_accuracy}}
+  - {block: evaluate_accuracy, params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}}
