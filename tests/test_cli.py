@@ -206,7 +206,11 @@ import yaml
 from lnl_toolbox import catalog as catalog_module
 
 # --- merged from test_unified_cli.py ---
-from lnl_toolbox.catalog import discover_recipes, default_paper_config, find_project_root, load_papers, load_yaml, load_recipe_config, recipe_by_id, resolve_config_paths, select_paper_config, validate_config
+from lnl_toolbox.catalog import discover_recipes, default_paper_config, find_project_root, load_papers, load_yaml, load_recipe_config, mentornet_preparation_status, recipe_by_id, resolve_config_paths, select_paper_config, validate_config
+
+from lnl_toolbox.models.mentornet import MentorNet
+
+from lnl_toolbox.training.mentor_artifacts import MentorArtifact
 
 # --- merged from test_unified_cli.py ---
 from lnl_toolbox.cli.main import main
@@ -314,14 +318,57 @@ class _unified_cli_CatalogTest(unittest.TestCase):
         cnlcu = load_recipe_config(next((item for item in discover_recipes(_unified_cli_ROOT) if item.id == 'cifar10-cnlcu-soft-smoke')))
         self.assertEqual(validate_config(cnlcu).name, 'cnlcu')
         mentor = load_recipe_config(next((item for item in discover_recipes(_unified_cli_ROOT, include_conditional=True) if item.id == 'mentornet-dd-cifar100-symmetric04-smoke')))
+        preparation = mentornet_preparation_status(
+            resolve_config_paths(mentor, _unified_cli_ROOT),
+            _unified_cli_ROOT,
+            student_recipe='mentornet-dd-cifar100-symmetric04-smoke',
+        )
+        self.assertIn('lnl mentor prepare', preparation['commands']['prepare'])
+        self.assertIn('lnl mentor train', preparation['commands']['train'])
+        self.assertIn('mentornet_dd_teacher_cifar10_symmetric04.yaml', preparation['commands']['prepare'])
         mentor['pipeline']['weight_provider']['artifact_path'] = str(_unified_cli_ROOT / 'data/mentornet/missing-artifact-for-test.pt')
-        with self.assertRaisesRegex(ValueError, 'conditional.*MentorArtifact'):
+        with self.assertRaisesRegex(ValueError, 'conditional.*MentorArtifact') as raised:
             validate_config(resolve_config_paths(mentor, _unified_cli_ROOT))
+        self.assertIn('MentorArtifact: NOT READY', str(raised.exception))
         pcse = load_recipe_config(next((item for item in discover_recipes(_unified_cli_ROOT, include_conditional=True) if item.id == 'cifar10-pcse-reproduction')))
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop('LNL_PCSE_SOURCE_RUN', None)
             with self.assertRaisesRegex(ValueError, 'source environment variable is not set'):
                 validate_config(resolve_config_paths(pcse, _unified_cli_ROOT))
+
+    def test_mentornet_ready_requires_a_valid_artifact_and_keeps_cross_dataset_contract(self) -> None:
+        recipe = recipe_by_id('mentornet-dd-cifar100-symmetric04-smoke', _unified_cli_ROOT)
+        config = load_recipe_config(recipe)
+        self.assertEqual(config['data']['name'], 'cifar100')
+        with tempfile.TemporaryDirectory() as directory:
+            artifact_path = Path(directory) / 'mentor_artifact.pt'
+            provider = config['pipeline']['weight_provider']
+            provider['artifact_path'] = str(artifact_path)
+            status = mentornet_preparation_status(config, _unified_cli_ROOT, student_recipe=recipe.id)
+            self.assertFalse(status['artifact_ready'])
+            artifact_path.write_bytes(b'not a MentorArtifact')
+            status = mentornet_preparation_status(config, _unified_cli_ROOT, student_recipe=recipe.id)
+            self.assertFalse(status['artifact_ready'])
+            self.assertTrue(status['artifact_error'])
+            model = MentorNet(num_labels=1)
+            MentorArtifact.create(
+                architecture=model.architecture(),
+                feature_schema={'label': 'fixed_zero'},
+                source={'dataset': 'cifar10', 'role': 'trusted_mentor'},
+                model_state=model.state_dict(),
+            ).save(artifact_path)
+            status = mentornet_preparation_status(config, _unified_cli_ROOT, student_recipe=recipe.id)
+            self.assertTrue(status['artifact_ready'])
+            self.assertIn('cifar10', Path(status['teacher_config']).name)
+            self.assertEqual(validate_config(config).name, 'supervised')
+
+    def test_mentor_teacher_config_is_packaged(self) -> None:
+        relative = 'configs/experiment/mentornet_dd_teacher_cifar10_symmetric04.yaml'
+        self.assertTrue((_unified_cli_ROOT / relative).is_file())
+        self.assertIn(
+            f'"{relative}"',
+            (_unified_cli_ROOT / 'pyproject.toml').read_text(encoding='utf-8'),
+        )
 
     def test_multiple_paper_variants_require_selection(self) -> None:
         paper = next((item for item in load_papers(_unified_cli_ROOT) if item.id == 'apl'))
@@ -358,6 +405,88 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
         with redirect_stdout(stdout), redirect_stderr(stderr):
             code = main(list(arguments))
         return (code, stdout.getvalue(), stderr.getvalue())
+
+    def test_unified_mentor_commands_reuse_prepare_and_train_producers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            feature_dir = root / 'mentor'
+            feature_path = feature_dir / 'mentor_features.npz'
+            artifact_path = feature_dir / 'mentor_artifact.pt'
+            config_path = root / 'teacher.yaml'
+            config_path.write_text(yaml.safe_dump({
+                'schema_version': 1,
+                'kind': 'mentor_artifact',
+                'seed': 3,
+                'feature_data': str(feature_path),
+                'data': {'name': 'synthetic_binary_2d', 'train_size': 18, 'validation_size': 0, 'test_size': 6},
+                'noise': {'name': 'symmetric', 'rate': 0.2, 'seed': 3},
+                'loader': {'batch_size': 6, 'num_workers': 0},
+                'student_model': {'name': 'mlp', 'width': 8},
+                'student_optimizer': {'name': 'sgd', 'lr': 0.1},
+                'student_trainer': {'trusted_size': 18, 'epochs': 1, 'device': 'cpu'},
+                'model': {'num_labels': 1, 'hidden_size': 2, 'sequence_length': 2, 'label_embedding_dim': 2, 'epoch_embedding_dim': 2, 'dense_size': 4},
+                'optimizer': {'name': 'adam', 'lr': 0.001},
+                'trainer': {'epochs': 1, 'device': 'cpu'},
+                'execution': {'runner': 'mentor_artifact'},
+            }, sort_keys=False), encoding='utf-8')
+            code, output, error = self.invoke(
+                'mentor', 'prepare', '--config', str(config_path),
+                '--output-dir', str(feature_dir), '--project-root', str(root),
+            )
+            self.assertEqual(code, 0, error)
+            self.assertIn('Mentor features: READY', output)
+            self.assertTrue(feature_path.is_file())
+            code, output, error = self.invoke(
+                'mentor', 'train', '--config', str(config_path),
+                '--output', str(artifact_path), '--project-root', str(root),
+            )
+            self.assertEqual(code, 0, error)
+            self.assertIn('MentorArtifact: READY', output)
+            self.assertTrue(artifact_path.is_file())
+            MentorArtifact.load(artifact_path)
+            student = load_recipe_config(
+                recipe_by_id(
+                    'mentornet-dd-cifar100-symmetric04-smoke',
+                    _unified_cli_ROOT,
+                )
+            )
+            student['pipeline']['weight_provider']['artifact_path'] = str(artifact_path)
+            student_path = root / 'student.yaml'
+            student_path.write_text(
+                yaml.safe_dump(student, sort_keys=False), encoding='utf-8'
+            )
+            code, output, error = self.invoke(
+                'validate', '--config', str(student_path),
+                '--project-root', str(_unified_cli_ROOT),
+            )
+            self.assertEqual(code, 0, error)
+            self.assertIn('supervised', output)
+            code, output, error = self.invoke(
+                'run', '--config', str(student_path), '--dry-run',
+                '--no-check-data', '--project-root', str(_unified_cli_ROOT),
+            )
+            self.assertEqual(code, 0, error)
+            self.assertIn('supervised', output)
+
+    def test_mentor_status_reports_readiness_without_starting_student(self) -> None:
+        recipe = Mock(id='mentor-smoke')
+        status = {
+            'status': 'not_ready', 'artifact_ready': False,
+            'artifact_path': 'mentor_artifact.pt', 'artifact_error': None,
+            'feature_ready': False,
+            'commands': {'prepare': 'lnl mentor prepare ...', 'train': 'lnl mentor train ...', 'student': 'lnl run ...'},
+        }
+        with patch('lnl_toolbox.cli.main.recipe_by_id', return_value=recipe), patch(
+            'lnl_toolbox.cli.main.load_recipe_config', return_value={}
+        ), patch(
+            'lnl_toolbox.cli.main.resolve_config_paths', return_value={}
+        ), patch(
+            'lnl_toolbox.cli.main.mentornet_preparation_status', return_value=status
+        ):
+            code, output, error = self.invoke('mentor', 'status', '--recipe', 'mentor-smoke')
+        self.assertEqual(code, 1, error)
+        self.assertIn('MentorArtifact: NOT_READY', output)
+        self.assertIn('prepare: lnl mentor prepare', output)
 
     @staticmethod
     def compatibility_profile() -> DatasetProfile:

@@ -519,7 +519,10 @@ def _paper_payload() -> list[dict[str, object]]:
 
     from lnl_toolbox.catalog import (
         discover_recipes,
+        load_recipe_config,
         load_papers,
+        mentornet_preparation_status,
+        resolve_config_paths,
     )
 
     recipes = {
@@ -577,6 +580,15 @@ def _paper_payload() -> list[dict[str, object]]:
                 "reproduction_status": config.reproduction_status,
                 "availability": config.availability,
             })
+            if paper.id == "mentornet":
+                resolved = resolve_config_paths(load_recipe_config(recipe), ROOT)
+                payload[-1]["configs"][-1]["preparation"] = (
+                    mentornet_preparation_status(
+                        resolved,
+                        ROOT,
+                        student_recipe=config.recipe_id,
+                    )
+                )
     return payload
 
 
