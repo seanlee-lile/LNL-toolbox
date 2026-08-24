@@ -18,6 +18,7 @@ import numpy as np
 
 # --- merged from test_torch_training.py ---
 import torch
+from torchvision import transforms
 
 # --- merged from test_torch_training.py ---
 from lnl_toolbox.algorithms.supervised import SupervisedClassificationAlgorithm
@@ -262,6 +263,29 @@ class _torch_training_TorchTrainingTest(unittest.TestCase):
         data = CifarData(images, np.array([0, 1]), ('a', 'b'), 'train', 'fixture')
         sample = TorchCifarDataset(data, [0], transform=transform)[0]
         torch.testing.assert_close(sample['input'], torch.zeros_like(sample['input']))
+
+    def test_tensor_only_preprocessing_is_unnormalized_and_unaugmented(self):
+        transform = build_cifar_transform(
+            False,
+            augment=False,
+            preprocessing='tensor_only',
+        )
+        self.assertEqual(len(transform.transforms), 1)
+        self.assertIsInstance(transform.transforms[0], transforms.ToTensor)
+        image = np.full((32, 32, 3), 128, dtype=np.uint8)
+        output = transform(image)
+        torch.testing.assert_close(
+            output,
+            torch.full_like(output, 128.0 / 255.0),
+        )
+
+    def test_tensor_only_preprocessing_rejects_augmentation(self):
+        with self.assertRaisesRegex(ValueError, 'does not support augmentation'):
+            build_cifar_transform(
+                True,
+                augment=True,
+                preprocessing='tensor_only',
+            )
 
     def test_standard_preprocessing_accepts_explicit_normalization(self):
         transform = build_cifar_transform(False, normalization_mean=(0.5, 0.5, 0.5), normalization_std=(0.25, 0.25, 0.25))
