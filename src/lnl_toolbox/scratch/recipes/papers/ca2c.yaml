@@ -10,6 +10,8 @@ steps:
   - {block: create_optimizer, params: {optimizer: sgd, model: model_p, lr: 0.02, momentum: 0.9, nesterov: true, weight_decay: 0.0005, save_as: optimizer}}
   - {block: create_optimizer, params: {optimizer: sgd, model: model_n, lr: 0.02, momentum: 0.9, nesterov: true, weight_decay: 0.0005, save_as: optimizer_n}}
   - {block: create_scheduler, params: {scheduler: cosine, optimizer: optimizer, t_max: 700, eta_min: 0.0, save_as: scheduler}}
+  - {block: create_scheduler, params: {scheduler: cosine, optimizer: optimizer_n, t_max: 700, eta_min: 0.0, save_as: scheduler_n}}
+  - {block: create_ca2c_candidate_memory, params: {prepared_data: prepared_data, num_classes: 100, save_as: ca2c_memory}}
   - block: epoch_loop
     params: {epochs: 700}
     steps:
@@ -29,7 +31,9 @@ steps:
           - block: if_epoch_ge
             params: {epoch: 400}
             steps:
-              - {block: ca2c_cross_guidance, params: {positive_logits: logits_p, negative_logits: logits_n, candidate_k: 2, candidate_as: ca2c_candidates, complement_as: ca2c_complements}}
+              - {block: ca2c_peer_candidates, params: {peer_logits: logits_n, candidate_k: 2, save_as: ca2c_candidates}}
+              - {block: ca2c_peer_complements, params: {peer_logits: logits_p, candidate_k: 2, save_as: ca2c_complements}}
+              - {block: ca2c_update_candidate_memory, params: {memory: ca2c_memory, indices: indices, candidates: ca2c_candidates, complements: ca2c_complements}}
               - {block: ca2c_partial_label_loss, params: {logits: logits_p, candidates: ca2c_candidates, hard_weight: 0.99, save_as: ca2c_positive_loss}}
               - {block: ca2c_negative_label_loss, params: {logits: logits_n, complements: ca2c_complements, save_as: ca2c_negative_loss}}
               - {block: ca2c_objective_composition, params: {positive: ca2c_positive_loss, negative: ca2c_negative_loss, save_as: loss}}
@@ -37,3 +41,4 @@ steps:
           - {block: optimizer_step}
           - {block: optimizer_step, params: {optimizer: optimizer_n}}
       - {block: scheduler_step}
+      - {block: scheduler_step, params: {scheduler: scheduler_n}}

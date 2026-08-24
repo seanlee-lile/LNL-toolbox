@@ -88,6 +88,27 @@ def co_refine(ctx: ScratchContext, probability: str = "clean_probability", label
     ctx[save_as] = weight * target + (1.0 - weight) * ctx[probs].detach()
 
 
+@block(id="create_dividemix_loss_history", name="DivideMix: Create Loss History", category="State", description="Create stable-index peer loss histories used by the epoch-level co-divide GMM.", params={"prepared_data":{"type":"slot","default":"prepared_data"},"save_as_a":{"type":"slot","default":"loss_history_a"},"save_as_b":{"type":"slot","default":"loss_history_b"}}, requires=("prepared_data",), provides=("save_as_a","save_as_b"), placement=("top",), stage="setup", ui_group="② 初始化", formula="H_i^A=H_i^B=[]", formula_ref="DivideMix per-example loss history", paper="DivideMix")
+def create_dividemix_loss_history(ctx: ScratchContext, prepared_data: str="prepared_data", save_as_a: str="loss_history_a", save_as_b: str="loss_history_b") -> None:
+    torch,_=_torch(); indices=torch.as_tensor(ctx[prepared_data].train_indices,dtype=torch.long); size=int(indices.max().item())+1
+    ctx[save_as_a]={"loss":torch.zeros(size),"seen":torch.zeros(size,dtype=torch.bool)}; ctx[save_as_b]={"loss":torch.zeros(size),"seen":torch.zeros(size,dtype=torch.bool)}
+
+
+@block(id="dividemix_update_loss_history", name="DivideMix: Update Peer Loss History", category="State", description="Write detached per-example losses into a stable-index peer history.", params={"history":{"type":"slot","default":"loss_history_a"},"indices":{"type":"slot","default":"indices"},"losses":{"type":"slot","default":"loss_per_sample"},"save_as":{"type":"slot","default":"history_losses"}}, requires=("history","indices","losses"), provides=("save_as",), placement=("batch",), stage="train", ui_group="④ 状态更新", formula="H[index_i]<-ell_i", formula_ref="DivideMix loss modeling", paper="DivideMix")
+def dividemix_update_loss_history(ctx: ScratchContext, history: str="loss_history_a", indices: str="indices", losses: str="loss_per_sample", save_as: str="history_losses") -> None:
+    rows=ctx[indices].detach().long().cpu(); state=ctx[history]; state["loss"][rows]=ctx[losses].detach().float().cpu(); state["seen"][rows]=True; ctx[save_as]=state["loss"][state["seen"]].to(ctx[losses].device)
+
+
+@block(id="dividemix_sharpen_targets", name="DivideMix: Sharpen Guessed Targets", category="Paper Specific", description="Sharpen normalized guessed or refined class probabilities with the MixMatch temperature.", params={"targets":{"type":"slot","default":"refined_labels"},"temperature":{"type":"float","default":0.5,"min":0.0001},"save_as":{"type":"slot","default":"sharpened_labels"}}, requires=("targets",), provides=("save_as",), placement=("batch",), formula="q_c<-q_c^(1/T)/sum_j q_j^(1/T)", formula_ref="DivideMix MixMatch sharpening", paper="DivideMix")
+def dividemix_sharpen_targets(ctx: ScratchContext, targets: str="refined_labels", temperature: float=0.5, save_as: str="sharpened_labels") -> None:
+    values=ctx[targets].clamp_min(0).pow(1.0/float(temperature)); ctx[save_as]=values/values.sum(1,keepdim=True).clamp_min(1e-12)
+
+
+@block(id="dividemix_peer_clean_probability", name="DivideMix: Publish Peer Clean Probability", category="Sample Selection", description="Use one peer's clean probability to partition data for training the other peer.", params={"peer_probability":{"type":"slot","default":"clean_probability_b"},"save_as":{"type":"slot","default":"clean_probability"}}, requires=("peer_probability",), provides=("save_as",), placement=("batch",), formula="w^A<-GMM(H^B), w^B<-GMM(H^A)", formula_ref="DivideMix co-divide", paper="DivideMix")
+def dividemix_peer_clean_probability(ctx: ScratchContext, peer_probability: str="clean_probability_b", save_as: str="clean_probability") -> None:
+    ctx[save_as]=ctx[peer_probability].detach()
+
+
 @block(
     id="dividemix_supervised_loss",
     name="DivideMix: Supervised MixMatch Loss",

@@ -117,6 +117,13 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
         self.assertEqual(epoch["steps"][-2]["block"], "if_epoch_ge")
         self.assertEqual(epoch["steps"][-2]["params"]["epoch"], warmup_epochs)
         self.assertEqual(epoch["steps"][-2]["steps"], [{"block": "scheduler_step"}])
+        batch = next(step for step in epoch["steps"] if step["block"] == "batch_loop")
+        robust = next(step for step in batch["steps"] if step["block"] == "if_epoch_ge")
+        self.assertEqual(
+            [step["block"] for step in robust["steps"][-4:]],
+            ["masked_cross_entropy", "weighted_pseudo_label_cross_entropy", "sed_rejected_regularizer", "compose_three_objectives"],
+        )
+        self.assertNotIn("fine_robust_loss", [step["block"] for step in robust["steps"]])
 
     def test_lend_recipe_selects_and_restores_noisy_validation_best(self) -> None:
         recipe = load_recipe(ROOT / "recipes" / "papers" / "lend.yaml")
@@ -132,6 +139,11 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
         self.assertEqual(epoch["steps"][-2]["params"]["metric_name"], "validation_accuracy")
         self.assertEqual(recipe["steps"][-2], {"block": "restore_best_model", "params": {"model": "model", "state": "best_model_state"}})
         self.assertEqual(recipe["steps"][-1]["params"]["loader"], "test_loader")
+        batch = next(step for step in epoch["steps"] if step["block"] == "batch_loop")
+        blocks = [step["block"] for step in batch["steps"]]
+        graph = blocks.index("lend_build_neighbor_graph")
+        self.assertEqual(blocks[graph:graph + 2], ["lend_build_neighbor_graph", "lend_normalize_neighbor_graph"])
+        self.assertNotIn("lend_feature_graph", blocks)
 
     def test_l2rw_recipe_enforces_official_global_step_schedule(self) -> None:
         recipe = load_recipe(ROOT / "recipes" / "papers" / "l2rw.yaml")
@@ -149,6 +161,14 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
             (schedule["params"]["milestones"], schedule["params"]["gamma"], schedule["params"]["global_step"]),
             (config["scheduler"]["step_milestones"], config["scheduler"]["gamma"], "l2rw_global_step"),
         )
+        blocks = [step["block"] for step in batch["steps"]]
+        chain = blocks.index("l2rw_initialize_epsilon")
+        self.assertEqual(
+            blocks[chain:chain + 7],
+            ["l2rw_initialize_epsilon", "l2rw_virtual_weighted_loss", "l2rw_virtual_update", "l2rw_trusted_meta_loss", "l2rw_epsilon_gradient", "nonnegative_projection", "normalize_nonnegative_weights"],
+        )
+        self.assertNotIn("l2rw_meta_gradient", blocks)
+        self.assertNotIn("l2rw_normalize_weights", blocks)
 
     def test_cal_recipe_keeps_external_proxy_stage_separate(self) -> None:
         recipe = load_recipe(ROOT / "recipes" / "papers" / "cal.yaml")
@@ -164,7 +184,10 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
         main = [step for step in steps if step["block"] == "epoch_loop"][1]
         self.assertEqual(main["params"]["epochs"], config["trainer"]["epochs"])
         batch = next(step for step in main["steps"] if step["block"] == "batch_loop")
-        self.assertEqual([step["block"] for step in batch["steps"]][4:6], ["cal_prepare_proxy_batch", "cal_second_order_objective"])
+        blocks = [step["block"] for step in batch["steps"]]
+        proxy = blocks.index("cal_prepare_proxy_batch")
+        self.assertEqual(blocks[proxy:proxy + 4], ["cal_prepare_proxy_batch", "cal_cores2_adjusted_risk", "cal_covariance_correction", "subtract_objectives"])
+        self.assertNotIn("cal_second_order_objective", blocks)
 
     def test_apl_recipe_matches_formal_protocol(self) -> None:
         recipe = load_recipe(ROOT / "recipes" / "papers" / "apl.yaml")

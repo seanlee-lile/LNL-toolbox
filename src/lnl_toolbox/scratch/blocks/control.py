@@ -136,6 +136,30 @@ def if_epoch_eq(
 
 
 @block(
+    id="if_epoch_periodic",
+    name="If Epoch Is Periodic",
+    category="Control",
+    description="Execute child blocks at a fixed interval from an inclusive start epoch.",
+    kind="condition",
+    params={"start": {"type": "int", "default": 0, "min": 0}, "interval": {"type": "int", "default": 1, "min": 1}},
+    requires=(), provides=(),
+    placement=("epoch",), stage="train", ui_group="③ 训练结构", beginner_visible=False,
+)
+def if_epoch_periodic(
+    ctx: ScratchContext,
+    *,
+    params: Mapping[str, Any],
+    children: Sequence[Mapping[str, Any]],
+    execute: Callable[..., ScratchContext],
+) -> None:
+    epoch = int(ctx["epoch"])
+    start = int(params.get("start", 0))
+    interval = int(params.get("interval", 1))
+    if epoch >= start and (epoch - start) % interval == 0:
+        execute(children, ctx)
+
+
+@block(
     id="epoch_loop",
     name="Epoch Loop",
     category="Control",

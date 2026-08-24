@@ -27,9 +27,12 @@ steps:
       - {block: evaluate_accuracy, params: {model: stage1_model, loader: validation_loader, save_as: stage1_validation_accuracy}}
       - {block: track_best_model, params: {model: stage1_model, metric: stage1_validation_accuracy, metric_name: stage1_validation_accuracy, save_as: stage1_best_model_state}}
   - {block: restore_best_model, params: {model: stage1_model, state: stage1_best_model_state}}
-  - {block: create_upm_state, params: {prepared_data: prepared_data, model: stage1_model, loader: train_eval_loader, num_classes: 10, eta_init: 0.01, save_as: upm_state}}
+  - {block: upm_snapshot_stage1_posterior, params: {model: stage1_model, loader: train_eval_loader, save_as: upm_stage1_posterior}}
+  - {block: upm_build_psi, params: {prepared_data: prepared_data, posterior: upm_stage1_posterior, num_classes: 10, indices_as: upm_indices, save_as: upm_psi}}
+  - {block: upm_initialize_eta, params: {indices: upm_indices, psi: upm_psi, num_classes: 10, eta_init: 0.01, save_as: upm_state}}
   - {block: create_model, params: {model: resnet18, num_classes: 10, base_width: 16, device: device, save_as: model}}
   - {block: create_optimizer, params: {optimizer: sgd, model: model, lr: 0.05, momentum: 0.9, weight_decay: 0.0001, save_as: optimizer}}
+  - {block: create_scheduler, params: {scheduler: multistep, optimizer: optimizer, milestones: [40, 80, 120], gamma: 0.1, save_as: scheduler}}
   - block: epoch_loop
     params: {epochs: 160}
     steps:
@@ -42,9 +45,13 @@ steps:
           - {block: zero_grad}
           - {block: forward}
           - {block: upm_clean_posterior, params: {state: upm_state, logits: logits, labels: labels, indices: indices, save_as: clean_posterior}}
-          - {block: upm_update_eta, params: {state: upm_state, indices: indices, posterior: clean_posterior, labels: labels, learning_rate: 0.7}}
+          - block: if_epoch_periodic
+            params: {start: 35, interval: 5}
+            steps:
+              - {block: upm_update_eta, params: {state: upm_state, indices: indices, posterior: clean_posterior, labels: labels, learning_rate: 0.7}}
           - {block: upm_soft_target_loss, params: {logits: logits, posterior: clean_posterior, save_as: loss}}
           - {block: backward}
           - {block: optimizer_step}
       - {block: evaluate_accuracy, params: {model: model, loader: validation_loader, save_as: validation_accuracy}}
+      - {block: scheduler_step, params: {scheduler: scheduler}}
   - {block: evaluate_accuracy, params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}}

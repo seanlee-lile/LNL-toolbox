@@ -10,6 +10,8 @@ steps:
   - {block: create_optimizer, params: {optimizer: sgd, model: model_a, lr: 0.02, momentum: 0.9, weight_decay: 0.0005, save_as: optimizer_a}}
   - {block: create_optimizer, params: {optimizer: sgd, model: model_b, lr: 0.02, momentum: 0.9, weight_decay: 0.0005, save_as: optimizer_b}}
   - {block: create_scheduler, params: {scheduler: multistep, optimizer: optimizer_a, milestones: [150], gamma: 0.1, save_as: scheduler_a}}
+  - {block: create_scheduler, params: {scheduler: multistep, optimizer: optimizer_b, milestones: [150], gamma: 0.1, save_as: scheduler_b}}
+  - {block: create_dividemix_loss_history, params: {prepared_data: prepared_data, save_as_a: loss_history_a, save_as_b: loss_history_b}}
   - block: epoch_loop
     params: {epochs: 300}
     steps:
@@ -24,20 +26,31 @@ steps:
           - {block: forward_two_models, params: {model_a: model_a, model_b: model_b, save_as_a: logits_a, save_as_b: logits_b}}
           - {block: per_sample_ce, params: {logits: logits_a, save_as: loss_per_sample}}
           - {block: per_sample_ce, params: {logits: logits_b, save_as: loss_per_sample_b}}
-          - {block: fit_gmm}
-          - {block: split_clean_noisy}
+          - {block: dividemix_update_loss_history, params: {history: loss_history_a, indices: indices, losses: loss_per_sample, save_as: history_losses_a}}
+          - {block: dividemix_update_loss_history, params: {history: loss_history_b, indices: indices, losses: loss_per_sample_b, save_as: history_losses_b}}
+          - {block: fit_gmm, params: {losses: loss_per_sample, save_as: clean_probability_a}}
+          - {block: fit_gmm, params: {losses: loss_per_sample_b, save_as: clean_probability_b}}
+          - {block: dividemix_peer_clean_probability, params: {peer_probability: clean_probability_b, save_as: clean_probability}}
+          - {block: split_clean_noisy, params: {probability: clean_probability}}
           - {block: softmax, params: {logits: logits_a, save_as: probabilities}}
-          - {block: co_refine}
+          - {block: co_refine, params: {probability: clean_probability, probs: probabilities, save_as: refined_labels}}
+          - {block: dividemix_sharpen_targets, params: {targets: refined_labels, temperature: 0.5, save_as: refined_labels}}
           - {block: dividemix_supervised_loss, params: {logits: logits_a, targets: refined_labels, mask: clean_mask, save_as: loss_x_a}}
           - {block: dividemix_unsupervised_loss, params: {logits: logits_a, targets: refined_labels, mask: clean_mask, save_as: loss_u_a}}
           - {block: dividemix_prior_regularizer, params: {logits: logits_a, save_as: loss_r_a}}
           - {block: dividemix_objective_composition, params: {supervised: loss_x_a, unsupervised: loss_u_a, regularizer: loss_r_a, lambda_u: 25.0, lambda_r: 1.0, save_as: loss}}
           - {block: backward, params: {loss: loss}}
           - {block: optimizer_step, params: {optimizer: optimizer_a}}
-          - {block: dividemix_supervised_loss, params: {logits: logits_b, targets: refined_labels, mask: clean_mask, save_as: loss_x_b}}
-          - {block: dividemix_unsupervised_loss, params: {logits: logits_b, targets: refined_labels, mask: clean_mask, save_as: loss_u_b}}
+          - {block: dividemix_peer_clean_probability, params: {peer_probability: clean_probability_a, save_as: clean_probability}}
+          - {block: split_clean_noisy, params: {probability: clean_probability}}
+          - {block: softmax, params: {logits: logits_b, save_as: probabilities_b}}
+          - {block: co_refine, params: {probability: clean_probability, probs: probabilities_b, save_as: refined_labels_b}}
+          - {block: dividemix_sharpen_targets, params: {targets: refined_labels_b, temperature: 0.5, save_as: refined_labels_b}}
+          - {block: dividemix_supervised_loss, params: {logits: logits_b, targets: refined_labels_b, mask: clean_mask, save_as: loss_x_b}}
+          - {block: dividemix_unsupervised_loss, params: {logits: logits_b, targets: refined_labels_b, mask: clean_mask, save_as: loss_u_b}}
           - {block: dividemix_prior_regularizer, params: {logits: logits_b, save_as: loss_r_b}}
           - {block: dividemix_objective_composition, params: {supervised: loss_x_b, unsupervised: loss_u_b, regularizer: loss_r_b, lambda_u: 25.0, lambda_r: 1.0, save_as: loss_b}}
           - {block: backward, params: {loss: loss_b}}
           - {block: optimizer_step, params: {optimizer: optimizer_b}}
       - {block: scheduler_step, params: {scheduler: scheduler_a}}
+      - {block: scheduler_step, params: {scheduler: scheduler_b}}

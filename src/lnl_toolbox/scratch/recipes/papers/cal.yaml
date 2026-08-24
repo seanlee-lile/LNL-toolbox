@@ -44,7 +44,9 @@ steps:
           - {block: zero_grad}
           - {block: forward}
           - {block: cal_prepare_proxy_batch, params: {indices: indices, state: cal_state}}
-          - {block: cal_second_order_objective, params: {logits: logits, labels: labels, proxy_targets: cal_proxy_targets, retained: cal_retained, noisy_prior: cal_noisy_prior, proxy_prior: cal_proxy_prior, reference_losses: cal_reference_losses, reference_transition: cal_reference_transition, confidence_weight: confidence_weight, save_as: loss}}
+          - {block: cal_cores2_adjusted_risk, params: {logits: logits, labels: labels, noisy_prior: cal_noisy_prior, confidence_weight: confidence_weight, save_as: cal_adjusted_risk}}
+          - {block: cal_covariance_correction, params: {logits: logits, labels: labels, proxy_targets: cal_proxy_targets, retained: cal_retained, proxy_prior: cal_proxy_prior, reference_losses: cal_reference_losses, reference_transition: cal_reference_transition, save_as: cal_covariance}}
+          - {block: subtract_objectives, params: {minuend: cal_adjusted_risk, subtrahend: cal_covariance, save_as: loss}}
           - {block: cal_accumulate_reference_losses, params: {state: cal_state, logits: logits, proxy_targets: cal_proxy_targets, retained: cal_retained}}
           - {block: backward}
           - {block: optimizer_step}

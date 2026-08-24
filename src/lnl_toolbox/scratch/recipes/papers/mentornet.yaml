@@ -20,7 +20,9 @@ steps:
           - {block: zero_grad}
           - {block: forward}
           - {block: per_sample_ce}
-          - {block: mentor_compute_weights, params: {provider: mentor_provider, logits: logits, labels: labels, indices: indices, losses: loss_per_sample, save_as: sample_weights}}
+          - {block: mentor_update_curriculum_threshold, params: {provider: mentor_provider, losses: loss_per_sample, save_as: mentor_threshold}}
+          - {block: mentor_build_features, params: {provider: mentor_provider, losses: loss_per_sample, labels: labels, threshold: mentor_threshold, save_as: mentor_features}}
+          - {block: mentor_predict_sample_weights, params: {provider: mentor_provider, features: mentor_features, save_as: sample_weights}}
           - {block: weighted_loss}
           - {block: mean_loss, params: {input: weighted_loss_per_sample, save_as: loss}}
           - {block: backward}

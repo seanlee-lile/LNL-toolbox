@@ -855,6 +855,35 @@ def mentor_compute_weights(
     ctx["mentor_metrics"] = dict(result.metrics)
 
 
+@block(id="mentor_update_curriculum_threshold", name="MentorNet: Update Curriculum Threshold", category="State", description="Update the moving loss percentile independently from MentorNet prediction.", params={"provider":{"type":"slot","default":"mentor_provider"},"losses":{"type":"slot","default":"loss_per_sample"},"save_as":{"type":"slot","default":"mentor_threshold"}}, requires=("provider","losses"), provides=("save_as",), placement=("batch",), formula="q_t=decay q_{t-1}+(1-decay) percentile(loss)", formula_ref="MentorNet moving-percentile curriculum", paper="MentorNet")
+def mentor_update_curriculum_threshold(ctx: ScratchContext, provider: str="mentor_provider", losses: str="loss_per_sample", save_as: str="mentor_threshold") -> None:
+    ctx[save_as]=float(ctx[provider].moving.update(ctx[losses].detach()))
+
+
+@block(id="mentor_build_features", name="MentorNet: Build Mentor Features", category="Weighting", description="Expose loss, loss deviation, label and curriculum epoch features consumed by the frozen mentor.", params={"provider":{"type":"slot","default":"mentor_provider"},"losses":{"type":"slot","default":"loss_per_sample"},"labels":{"type":"slot","default":"labels"},"threshold":{"type":"slot","default":"mentor_threshold"},"save_as":{"type":"slot","default":"mentor_features"}}, requires=("provider","losses","labels","threshold"), provides=("save_as",), placement=("batch",), formula="v_i=(loss_i,loss_i-q_t,y_i,e_t)", formula_ref="MentorNet feature construction", paper="MentorNet")
+def mentor_build_features(ctx: ScratchContext, provider: str="mentor_provider", losses: str="loss_per_sample", labels: str="labels", threshold: str="mentor_threshold", save_as: str="mentor_features") -> None:
+    torch,_=_torch(); holder=ctx[provider]; epoch=int(ctx.get("epoch",0)); mentor_epoch=min(epoch,int(holder.burn_in_epoch)) if holder.burn_in_epoch is not None and holder.fixed_epoch_after_burn_in else epoch
+    mentor_labels=torch.full_like(ctx[labels].long(),int(holder.fixed_label)) if holder.fixed_label is not None else ctx[labels].long()
+    ctx[save_as]={"losses":ctx[losses].detach(),"deviation":ctx[losses].detach()-float(ctx[threshold]),"labels":mentor_labels,"epochs":torch.full_like(ctx[losses].detach(),float(mentor_epoch)),"mentor_epoch":mentor_epoch}
+
+
+@block(id="mentor_predict_sample_weights", name="MentorNet: Predict Sample Weights", category="Weighting", description="Apply burn-in, frozen mentor prediction, and configured dropout to exposed mentor features.", params={"provider":{"type":"slot","default":"mentor_provider"},"features":{"type":"slot","default":"mentor_features"},"save_as":{"type":"slot","default":"sample_weights"}}, requires=("provider","features"), provides=("save_as",), placement=("batch",), formula="w_i=M(v_i) with burn-in and dropout", formula_ref="MentorNet curriculum prediction", paper="MentorNet")
+def mentor_predict_sample_weights(ctx: ScratchContext, provider: str="mentor_provider", features: str="mentor_features", save_as: str="sample_weights") -> None:
+    torch,_=_torch(); holder=ctx[provider]; values=ctx[features]; mentor_epoch=int(values["mentor_epoch"]); burn=holder.burn_in_epoch is not None and mentor_epoch < max(0,int(holder.burn_in_epoch)-1)
+    if burn: weights=torch.ones_like(values["losses"])
+    else:
+        model = getattr(holder, "model", None)
+        if model is None:
+            weights = torch.sigmoid(-values["deviation"])
+        else:
+            model.to(values["losses"].device)
+            with torch.no_grad(): weights=model(values["losses"],values["deviation"],values["labels"],values["epochs"])
+    rate=float(holder._dropout_rate(mentor_epoch)) if hasattr(holder, "_dropout_rate") else 0.0
+    if rate: weights=weights*(torch.rand(weights.shape,generator=holder.generator,device="cpu").to(weights.device)>=rate)
+    if not bool((weights>0).any()): weights=torch.ones_like(weights)
+    ctx[save_as]=weights.clamp(0,1).detach()
+
+
 @block(
     id="step_milestone_update",
     name="Step-Milestone Parameter Update",
@@ -1700,23 +1729,56 @@ def fine_warmup_loss(ctx: ScratchContext, logits: str = "logits", labels: str = 
 
 
 @block(
-    id="fine_robust_loss",
-    name="FINE: Robust SED/FINE Objective",
-    category="Paper Specific",
-    description="Compose clean CE, SCR-weighted pseudo-label consistency, and the official FINE MU/NL regularizer.",
-    params={"logits": {"type": "slot", "default": "logits"}, "strong_logits": {"type": "slot", "default": "strong_logits"}, "labels": {"type": "slot", "default": "labels"}, "clean": {"type": "slot", "default": "fine_clean"}, "pseudo": {"type": "slot", "default": "fine_pseudo"}, "weights": {"type": "slot", "default": "fine_weights"}, "state": {"type": "slot", "default": "fine_state"}, "alpha": {"type": "float", "default": 1.0, "min": 0.0}, "save_as": {"type": "slot", "default": "loss"}},
-    requires=("logits", "strong_logits", "labels", "clean", "pseudo", "weights", "state"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="L=CE_clean+alpha w_i CE(strong_i,pseudo_i)+FINE_MU/NL(rejected)",
-    formula_ref="FINE robust phase objective and Active Forgetting/Noise Suppression regularizers",
-    paper="FINE: Filtering Noise in the Feature Space for Robust Learning with Noisy Labels",
+    id="masked_cross_entropy",
+    name="Masked Cross Entropy",
+    category="Loss",
+    description="Average cross entropy over the samples selected by an explicit Boolean mask.",
+    params={"logits": {"type": "slot", "default": "logits"}, "labels": {"type": "slot", "default": "labels"}, "mask": {"type": "slot", "default": "mask"}, "save_as": {"type": "slot", "default": "masked_ce"}},
+    requires=("logits", "labels", "mask"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="mean_{i:m_i=1} CE(z_i,y_i)", formula_ref="masked supervised objective",
 )
-def fine_robust_loss(ctx: ScratchContext, logits: str = "logits", strong_logits: str = "strong_logits", labels: str = "labels", clean: str = "fine_clean", pseudo: str = "fine_pseudo", weights: str = "fine_weights", state: str = "fine_state", alpha: float = 1.0, save_as: str = "loss") -> None:
-    torch, F = _torch()
-    clean_mask, rejected = ctx[clean].bool(), ~ctx[clean].bool()
-    clean_loss = F.cross_entropy(ctx[logits][clean_mask], ctx[labels][clean_mask].long()) if bool(clean_mask.any()) else ctx[logits].sum() * 0.0
-    ssl = (F.cross_entropy(ctx[strong_logits], ctx[pseudo].long(), reduction="none") * ctx[weights].detach()).mean()
-    fine_loss = ctx[state]["regularizer"](ctx[logits], ctx[labels], rejected_mask=rejected, pseudo_labels=ctx[pseudo])
-    ctx[save_as] = clean_loss + float(alpha) * ssl + fine_loss
+def masked_cross_entropy(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", mask: str = "mask", save_as: str = "masked_ce") -> None:
+    torch, F = _torch(); selected = ctx[mask].bool()
+    ctx[save_as] = F.cross_entropy(ctx[logits][selected], ctx[labels][selected].long()) if bool(selected.any()) else ctx[logits].sum() * 0.0
+
+
+@block(
+    id="weighted_pseudo_label_cross_entropy",
+    name="Weighted Pseudo-label Cross Entropy",
+    category="Loss",
+    description="Average pseudo-label cross entropy weighted by detached per-example confidence values.",
+    params={"logits": {"type": "slot", "default": "logits"}, "pseudo_labels": {"type": "slot", "default": "pseudo_labels"}, "weights": {"type": "slot", "default": "weights"}, "save_as": {"type": "slot", "default": "weighted_pseudo_ce"}},
+    requires=("logits", "pseudo_labels", "weights"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="mean_i w_i CE(z_i,yhat_i)", formula_ref="confidence-weighted pseudo-label objective",
+)
+def weighted_pseudo_label_cross_entropy(ctx: ScratchContext, logits: str = "logits", pseudo_labels: str = "pseudo_labels", weights: str = "weights", save_as: str = "weighted_pseudo_ce") -> None:
+    _, F = _torch(); ctx[save_as] = (F.cross_entropy(ctx[logits], ctx[pseudo_labels].long(), reduction="none") * ctx[weights].detach()).mean()
+
+
+@block(
+    id="sed_rejected_regularizer",
+    name="SED Rejected-sample Regularizer",
+    category="Loss",
+    description="Evaluate the SED/FINE rejected-sample regularizer independently of the supervised objectives.",
+    params={"logits": {"type": "slot", "default": "logits"}, "labels": {"type": "slot", "default": "labels"}, "clean": {"type": "slot", "default": "clean"}, "pseudo_labels": {"type": "slot", "default": "pseudo_labels"}, "state": {"type": "slot", "default": "sed_state"}, "save_as": {"type": "slot", "default": "sed_regularizer"}},
+    requires=("logits", "labels", "clean", "pseudo_labels", "state"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="R=MU/NL(rejected; yhat)", formula_ref="SED active-forgetting/noise-suppression regularizer",
+)
+def sed_rejected_regularizer(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", clean: str = "clean", pseudo_labels: str = "pseudo_labels", state: str = "sed_state", save_as: str = "sed_regularizer") -> None:
+    ctx[save_as] = ctx[state]["regularizer"](ctx[logits], ctx[labels], rejected_mask=~ctx[clean].bool(), pseudo_labels=ctx[pseudo_labels])
+
+
+@block(
+    id="compose_three_objectives",
+    name="Compose Three Objectives",
+    category="Loss",
+    description="Sum two primary scalar objectives and an explicitly weighted third scalar objective.",
+    params={"first": {"type": "slot", "default": "first_loss"}, "second": {"type": "slot", "default": "second_loss"}, "third": {"type": "slot", "default": "third_loss"}, "third_weight": {"type": "float", "default": 1.0, "min": 0.0}, "save_as": {"type": "slot", "default": "loss"}},
+    requires=("first", "second", "third"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="L=L_1+L_2+alpha L_3", formula_ref="explicit scalar-objective composition",
+)
+def compose_three_objectives(ctx: ScratchContext, first: str = "first_loss", second: str = "second_loss", third: str = "third_loss", third_weight: float = 1.0, save_as: str = "loss") -> None:
+    ctx[save_as] = ctx[first] + ctx[second] + float(third_weight) * ctx[third]
 
 
 @block(
@@ -2178,6 +2240,31 @@ def create_upm_state(ctx: ScratchContext, prepared_data: str = "prepared_data", 
     ctx[save_as] = UPMNoiseState(expected, psi, torch.full((expected.numel(),), float(eta_init)), int(num_classes))
 
 
+@block(id="upm_snapshot_stage1_posterior", name="UPM: Snapshot Stage-1 Posterior", category="State", description="Collect the observed-class posterior of the restored stage-1 model by stable sample index.", params={"model":{"type":"slot","default":"stage1_model"},"loader":{"type":"slot","default":"train_eval_loader"},"save_as":{"type":"slot","default":"upm_stage1_posterior"}}, requires=("model","loader"), provides=("save_as",), placement=("top",), stage="setup", ui_group="④ 状态更新", formula="s_i=P_stage1(y~_i|x_i)", formula_ref="UPM stage-1 posterior snapshot", paper="Universal Probability Model for Label Noise")
+def upm_snapshot_stage1_posterior(ctx: ScratchContext, model: str="stage1_model", loader: str="train_eval_loader", save_as: str="upm_stage1_posterior") -> None:
+    torch,F=_torch(); network=ctx[model]; device=ctx.get("device",torch.device("cpu")); values={}; network.eval()
+    with torch.no_grad():
+        for batch in ctx[loader]:
+            if isinstance(batch,dict): images=batch.get("input",batch.get("images")); labels=batch.get("target",batch.get("labels")); indices=batch.get("index",batch.get("indices"))
+            else: images,labels,indices=batch[:3]
+            logits=network(images.to(device)); logits=logits[0] if isinstance(logits,tuple) else logits
+            posterior=F.softmax(logits,1).gather(1,labels.to(device).long()[:,None]).squeeze(1).cpu()
+            values.update({int(i):float(p) for i,p in zip(indices.long().cpu().tolist(),posterior.tolist())})
+    ctx[save_as]=values
+
+
+@block(id="upm_build_psi", name="UPM: Build Frozen Psi", category="State", description="Align the stage-1 posterior snapshot to canonical training indices and fill only unavailable entries with the uniform prior.", params={"prepared_data":{"type":"slot","default":"prepared_data"},"posterior":{"type":"slot","default":"upm_stage1_posterior"},"num_classes":{"type":"int","default":10,"min":2},"indices_as":{"type":"slot","default":"upm_indices"},"save_as":{"type":"slot","default":"upm_psi"}}, requires=("prepared_data","posterior"), provides=("indices_as","save_as"), placement=("top",), stage="setup", ui_group="④ 状态更新", formula="psi_i=s_i", formula_ref="UPM psi publication", paper="Universal Probability Model for Label Noise")
+def upm_build_psi(ctx: ScratchContext, prepared_data: str="prepared_data", posterior: str="upm_stage1_posterior", num_classes: int=10, indices_as: str="upm_indices", save_as: str="upm_psi") -> None:
+    torch,_=_torch(); indices=torch.as_tensor(ctx[prepared_data].train_indices,dtype=torch.long); snapshot=ctx[posterior]
+    ctx[indices_as]=indices; ctx[save_as]=torch.tensor([snapshot.get(int(i),1.0/float(num_classes)) for i in indices.tolist()],dtype=torch.float32)
+
+
+@block(id="upm_initialize_eta", name="UPM: Initialize Eta State", category="State", description="Create the stable-index UPM state from an exposed frozen psi vector and a reusable eta initialization.", params={"indices":{"type":"slot","default":"upm_indices"},"psi":{"type":"slot","default":"upm_psi"},"num_classes":{"type":"int","default":10,"min":2},"eta_init":{"type":"float","default":0.01,"min":0.0,"max":1.0},"save_as":{"type":"slot","default":"upm_state"}}, requires=("indices","psi"), provides=("save_as",), placement=("top",), stage="setup", ui_group="② 初始化", formula="eta_i=eta_0", formula_ref="UPM confusing-probability initialization", paper="Universal Probability Model for Label Noise")
+def upm_initialize_eta(ctx: ScratchContext, indices: str="upm_indices", psi: str="upm_psi", num_classes: int=10, eta_init: float=0.01, save_as: str="upm_state") -> None:
+    torch,_=_torch(); from lnl_toolbox.noise.upm import UPMNoiseState
+    ctx[save_as]=UPMNoiseState(ctx[indices],ctx[psi],torch.full((ctx[indices].numel(),),float(eta_init)),int(num_classes))
+
+
 @block(
     id="upm_clean_posterior",
     name="UPM: Estimate Clean Posterior",
@@ -2250,23 +2337,33 @@ def create_lend_state(ctx: ScratchContext, prepared_data: str = "prepared_data",
 
 
 @block(
-    id="lend_feature_graph",
-    name="LEND: Build Feature Graph",
+    id="lend_build_neighbor_graph",
+    name="LEND: Build Neighbor Similarity",
     category="Paper Specific",
-    description="Construct deterministic kNN similarity and normalized AᵀA graph from detached embeddings.",
-    params={"features": {"type": "slot", "default": "features"}, "indices": {"type": "slot", "default": "indices"}, "k": {"type": "int", "default": 8, "min": 1}, "gamma": {"type": "float", "default": 1.0, "min": 0.0001}, "metric": {"type": "enum", "options": ["inner_product", "cosine", "euclidean"], "default": "inner_product"}, "normalize_features": {"type": "bool", "default": False}, "graph_as": {"type": "slot", "default": "lend_graph"}},
-    requires=("features", "indices"), provides=("graph_as",), placement=("batch",), stage="train", ui_group="⑥ 后验与权重",
-    formula="A_{ij}=<h_i,h_j>^gamma for kNN; W=D^-1/2 A^T A D^-1/2",
-    formula_ref="LEND Eq. (1)-(2)",
-    paper="Learning with Noisy Labels by Exploiting the Label Distribution of Neighbors",
+    description="Construct the detached deterministic kNN similarity adjacency from embeddings.",
+    params={"features": {"type": "slot", "default": "features"}, "indices": {"type": "slot", "default": "indices"}, "k": {"type": "int", "default": 8, "min": 1}, "gamma": {"type": "float", "default": 1.0, "min": 0.0001}, "metric": {"type": "enum", "options": ["inner_product", "cosine", "euclidean"], "default": "inner_product"}, "normalize_features": {"type": "bool", "default": False}, "save_as": {"type": "slot", "default": "lend_adjacency"}},
+    requires=("features", "indices"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑥ 后验与权重",
+    formula="A_ij=<h_i,h_j>^gamma for kNN", formula_ref="LEND Eq. (1)", paper="Learning with Noisy Labels by Exploiting the Label Distribution of Neighbors",
 )
-def lend_feature_graph(ctx: ScratchContext, features: str = "features", indices: str = "indices", k: int = 8, gamma: float = 1.0, metric: str = "inner_product", normalize_features: bool = False, graph_as: str = "lend_graph") -> None:
-    from lnl_toolbox.algorithms.lend.graph import build_lend_similarity, normalize_lend_graph
+def lend_build_neighbor_graph(ctx: ScratchContext, features: str = "features", indices: str = "indices", k: int = 8, gamma: float = 1.0, metric: str = "inner_product", normalize_features: bool = False, save_as: str = "lend_adjacency") -> None:
+    from lnl_toolbox.algorithms.lend.graph import build_lend_similarity
     effective_k = min(int(k), int(ctx[features].shape[0]) - 1) if bool((ctx.get("_runtime_limits") or {}).get("fixture")) else int(k)
     sample_indices = ctx[indices].detach().to(ctx[features].device)
-    adjacency = build_lend_similarity(ctx[features].detach(), sample_indices, k=effective_k, gamma=float(gamma), metric=str(metric), normalize_features=bool(normalize_features))
-    ctx[graph_as] = normalize_lend_graph(adjacency)
-    ctx["lend_adjacency"] = adjacency
+    ctx[save_as] = build_lend_similarity(ctx[features].detach(), sample_indices, k=effective_k, gamma=float(gamma), metric=str(metric), normalize_features=bool(normalize_features))
+
+
+@block(
+    id="lend_normalize_neighbor_graph",
+    name="LEND: Normalize Neighbor Graph",
+    category="Paper Specific",
+    description="Convert a neighbor similarity adjacency into the normalized A-transpose-A propagation graph.",
+    params={"adjacency": {"type": "slot", "default": "lend_adjacency"}, "save_as": {"type": "slot", "default": "lend_graph"}},
+    requires=("adjacency",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑥ 后验与权重",
+    formula="W=D^-1/2 A^T A D^-1/2", formula_ref="LEND Eq. (2)", paper="Learning with Noisy Labels by Exploiting the Label Distribution of Neighbors",
+)
+def lend_normalize_neighbor_graph(ctx: ScratchContext, adjacency: str = "lend_adjacency", save_as: str = "lend_graph") -> None:
+    from lnl_toolbox.algorithms.lend.graph import normalize_lend_graph
+    ctx[save_as] = normalize_lend_graph(ctx[adjacency])
 
 
 @block(
@@ -2543,19 +2640,25 @@ def cal_finalize_reference_losses(ctx: ScratchContext, state: str = "cal_state")
     values["reference_losses"] = values["reference_losses"].detach()
 
 
-@block(
-    id="cal_second_order_objective",
-    name="CAL: Second-order Risk Objective",
-    category="Paper Specific",
-    description="Apply the exact CAL CORES² adjusted loss and covariance correction using the current proxy statistics.",
-    params={"logits": {"type": "slot", "default": "logits"}, "labels": {"type": "slot", "default": "labels"}, "proxy_targets": {"type": "slot", "default": "cal_proxy_targets"}, "retained": {"type": "slot", "default": "cal_retained"}, "noisy_prior": {"type": "slot", "default": "cal_noisy_prior"}, "proxy_prior": {"type": "slot", "default": "cal_proxy_prior"}, "reference_losses": {"type": "slot", "default": "cal_reference_losses"}, "reference_transition": {"type": "slot", "default": "cal_reference_transition"}, "confidence_weight": {"type": "slot", "default": "confidence_weight"}, "save_as": {"type": "slot", "default": "loss"}},
-    requires=("logits", "labels", "proxy_targets", "retained", "noisy_prior", "proxy_prior", "reference_losses", "reference_transition", "confidence_weight"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="J=mean(CORES²-adjusted)-covariance_correction", formula_ref="CAL objective Eq. (7)-(9)", paper="CAL",
-)
-def cal_second_order_objective(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", proxy_targets: str = "cal_proxy_targets", retained: str = "cal_retained", noisy_prior: str = "cal_noisy_prior", proxy_prior: str = "cal_proxy_prior", reference_losses: str = "cal_reference_losses", reference_transition: str = "cal_reference_transition", confidence_weight: str = "confidence_weight", save_as: str = "loss") -> None:
-    from lnl_toolbox.algorithms.cal import cal_objective
-    objective, means = cal_objective(ctx[logits], ctx[labels], ctx[proxy_targets], ctx[retained], ctx[noisy_prior], ctx[proxy_prior], ctx[reference_losses], ctx[reference_transition], confidence_weight=float(ctx[confidence_weight]))
-    ctx[save_as] = objective; ctx["cal_reference_losses"] = means.detach()
+@block(id="cal_cores2_adjusted_risk", name="CAL: CORES2 Adjusted Risk", category="Loss", description="Compute the Eq. (7) noisy-label risk corrected by the noisy-label prior.", params={"logits":{"type":"slot","default":"logits"},"labels":{"type":"slot","default":"labels"},"noisy_prior":{"type":"slot","default":"cal_noisy_prior"},"confidence_weight":{"type":"slot","default":"confidence_weight"},"save_as":{"type":"slot","default":"cal_adjusted_risk"}}, requires=("logits","labels","noisy_prior","confidence_weight"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式", formula="mean[-log p_y-alpha sum_c pi_tilde_c log p_c]", formula_ref="CAL Eq. (7)", paper="Learning from Noisy Labels with Core-loss and Second-order Risk")
+def cal_cores2_adjusted_risk(ctx: ScratchContext, logits: str="logits", labels: str="labels", noisy_prior: str="cal_noisy_prior", confidence_weight: str="confidence_weight", save_as: str="cal_adjusted_risk") -> None:
+    torch,F=_torch(); probability=F.softmax(ctx[logits],dim=1); observed=-torch.log(probability+1.0e-8).gather(1,ctx[labels].long()[:,None]).squeeze(1); all_losses=-torch.log(probability+1.0e-5); prior=ctx[noisy_prior].to(all_losses); prior=prior/prior.sum().clamp_min(torch.finfo(all_losses.dtype).tiny); ctx[save_as]=(observed-float(ctx[confidence_weight])*(all_losses*prior).sum(1)).mean()
+
+
+@block(id="cal_covariance_correction", name="CAL: Covariance Correction", category="Loss", description="Compute the Eq. (8)-(9) retained-proxy covariance correction from detached reference matrices.", params={"logits":{"type":"slot","default":"logits"},"labels":{"type":"slot","default":"labels"},"proxy_targets":{"type":"slot","default":"cal_proxy_targets"},"retained":{"type":"slot","default":"cal_retained"},"proxy_prior":{"type":"slot","default":"cal_proxy_prior"},"reference_losses":{"type":"slot","default":"cal_reference_losses"},"reference_transition":{"type":"slot","default":"cal_reference_transition"},"save_as":{"type":"slot","default":"cal_covariance"}}, requires=("logits","labels","proxy_targets","retained","proxy_prior","reference_losses","reference_transition"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式", formula="sum_c pi_hat_c Cov(1[y~=j],ell_j | yhat=c)", formula_ref="CAL Eq. (8)-(9)", paper="Learning from Noisy Labels with Core-loss and Second-order Risk")
+def cal_covariance_correction(ctx: ScratchContext, logits: str="logits", labels: str="labels", proxy_targets: str="cal_proxy_targets", retained: str="cal_retained", proxy_prior: str="cal_proxy_prior", reference_losses: str="cal_reference_losses", reference_transition: str="cal_reference_transition", save_as: str="cal_covariance") -> None:
+    torch,F=_torch(); losses=-torch.log(F.softmax(ctx[logits],dim=1)+1.0e-5); classes=losses.shape[1]; correction=losses.sum()*0.0; prior=ctx[proxy_prior].to(losses); means=ctx[reference_losses].detach().to(losses); transition=ctx[reference_transition].detach().to(losses)
+    for c in range(classes):
+        mask=ctx[retained].bool() & ctx[proxy_targets].eq(c)
+        if not bool(mask.any()): continue
+        selected=losses[mask]; observed=ctx[labels][mask].long()
+        for j in range(classes): correction=correction+prior[c]*((observed.eq(j).to(losses.dtype)-transition[c,j])*(selected[:,j]-means[c,j])).mean()
+    ctx[save_as]=correction
+
+
+@block(id="subtract_objectives", name="Subtract Objectives", category="Loss", description="Subtract one scalar objective term from another explicitly.", params={"minuend":{"type":"slot","default":"first_loss"},"subtrahend":{"type":"slot","default":"second_loss"},"save_as":{"type":"slot","default":"loss"}}, requires=("minuend","subtrahend"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式", formula="L=A-B", formula_ref="scalar objective composition")
+def subtract_objectives(ctx: ScratchContext, minuend: str="first_loss", subtrahend: str="second_loss", save_as: str="loss") -> None:
+    ctx[save_as]=ctx[minuend]-ctx[subtrahend]
 
 
 @block(
@@ -2666,6 +2769,28 @@ def mc_ldce_freeze_features(ctx: ScratchContext, model: str = "model") -> None:
     if hasattr(network, "freeze_feature_extractor"): network.freeze_feature_extractor()
 
 
+@block(id="mc_ldce_recover_statistic", name="MC-LDCE: Recover Clean Centroids", category="Paper Specific", description="Recover the fixed clean class-centroid statistic from noisy feature centroids and the separately learned transition matrix.", params={"model":{"type":"slot","default":"model"},"loader":{"type":"slot","default":"train_eval_loader"},"transition":{"type":"slot","default":"mc_ldce_transition"},"num_classes":{"type":"int","default":10,"min":2},"save_as":{"type":"slot","default":"mc_ldce_statistic"}}, requires=("model","loader","transition"), provides=("save_as",), placement=("top",), stage="setup", ui_group="⑥ 后验与权重", formula="mu=mu_tilde pinv(sum_i pi_i sum_j T_ij swap(i,j)^T)", formula_ref="MC-LDCE centroid recovery", paper="MC-LDCE")
+def mc_ldce_recover_statistic(ctx: ScratchContext, model: str="model", loader: str="train_eval_loader", transition: str="mc_ldce_transition", num_classes: int=10, save_as: str="mc_ldce_statistic") -> None:
+    from types import SimpleNamespace
+    torch,F=_torch(); network=ctx[model]; device=ctx.get("device",next(network.parameters()).device); feats=[]; targets=[]; network.eval()
+    with torch.no_grad():
+        for batch in ctx[loader]:
+            if isinstance(batch,dict): x=batch.get("input",batch.get("images")); y=batch.get("target",batch.get("labels"))
+            else: x,y=batch[:2]
+            output=network.forward_with_features(x.to(device)); feature=output.features if hasattr(output,"features") else output[1]
+            feats.append(feature.detach()); targets.append(y.to(device).long())
+    features=torch.cat(feats); labels=torch.cat(targets); classes=int(num_classes); onehot=F.one_hot(labels,classes).to(features)
+    noisy_centroid=features.T@onehot/float(labels.numel()); observed=onehot.mean(0); matrix=ctx[transition].matrix().detach().to(features)
+    clean_prior=torch.linalg.lstsq(matrix.T,observed[:,None]).solution[:,0].clamp_min(0); clean_prior=clean_prior/clean_prior.sum().clamp_min(torch.finfo(features.dtype).eps)
+    imputation=torch.zeros((classes,classes),device=features.device,dtype=features.dtype)
+    eye=torch.eye(classes,device=features.device,dtype=features.dtype)
+    for i in range(classes):
+        for j in range(classes):
+            swap=eye.clone(); swap[[i,j]]=swap[[j,i]]; imputation+=clean_prior[i]*matrix[i,j]*swap.T
+    centroids=(noisy_centroid@torch.linalg.pinv(imputation)).T
+    ctx[save_as]=SimpleNamespace(values=centroids.detach().cpu().numpy(),clean_prior=clean_prior.detach().cpu().numpy())
+
+
 @block(
     id="ca2c_warmup_loss",
     name="CA2C: Warm-up Cross Entropy",
@@ -2694,6 +2819,28 @@ def ca2c_cross_guidance(ctx: ScratchContext, positive_logits: str = "logits_p", 
     from lnl_toolbox.algorithms.ca2c import cross_guidance
     candidates, complements = cross_guidance(ctx[positive_logits], ctx[negative_logits], int(candidate_k))
     ctx[candidate_as], ctx[complement_as] = candidates, complements
+
+
+@block(id="create_ca2c_candidate_memory", name="CA2C: Create Candidate Memory", category="State", description="Create persistent candidate and complementary label masks keyed by canonical training index.", params={"prepared_data":{"type":"slot","default":"prepared_data"},"num_classes":{"type":"int","default":100,"min":2},"save_as":{"type":"slot","default":"ca2c_memory"}}, requires=("prepared_data",), provides=("save_as",), placement=("top",), stage="setup", ui_group="② 初始化", formula="M_i^+=0, M_i^-=0", formula_ref="CA2C candidate-memory initialization", paper="CA2C")
+def create_ca2c_candidate_memory(ctx: ScratchContext, prepared_data: str="prepared_data", num_classes: int=100, save_as: str="ca2c_memory") -> None:
+    torch,_=_torch(); indices=torch.as_tensor(ctx[prepared_data].train_indices,dtype=torch.long); size=int(indices.max().item())+1
+    ctx[save_as]={"candidate":torch.zeros((size,int(num_classes)),dtype=torch.bool),"complement":torch.zeros((size,int(num_classes)),dtype=torch.bool)}
+
+
+@block(id="ca2c_peer_candidates", name="CA2C: Peer Candidate Set", category="Sample Selection", description="Select the top-k positive candidate classes from the negative peer.", params={"peer_logits":{"type":"slot","default":"logits_n"},"candidate_k":{"type":"int","default":2,"min":1},"save_as":{"type":"slot","default":"ca2c_candidates"}}, requires=("peer_logits",), provides=("save_as",), placement=("batch",), formula="C_i=TopK(p_n(x_i))", formula_ref="CA2C positive peer guidance", paper="CA2C")
+def ca2c_peer_candidates(ctx: ScratchContext, peer_logits: str="logits_n", candidate_k: int=2, save_as: str="ca2c_candidates") -> None:
+    torch,_=_torch(); logits=ctx[peer_logits]; mask=torch.zeros_like(logits,dtype=torch.bool); mask.scatter_(1,logits.topk(min(int(candidate_k),logits.shape[1]),1).indices,True); ctx[save_as]=mask
+
+
+@block(id="ca2c_peer_complements", name="CA2C: Peer Complement Set", category="Sample Selection", description="Select complementary classes by excluding the positive peer's top-k prediction set.", params={"peer_logits":{"type":"slot","default":"logits_p"},"candidate_k":{"type":"int","default":2,"min":1},"save_as":{"type":"slot","default":"ca2c_complements"}}, requires=("peer_logits",), provides=("save_as",), placement=("batch",), formula="Cbar_i=1-TopK(p_p(x_i))", formula_ref="CA2C negative peer guidance", paper="CA2C")
+def ca2c_peer_complements(ctx: ScratchContext, peer_logits: str="logits_p", candidate_k: int=2, save_as: str="ca2c_complements") -> None:
+    torch,_=_torch(); logits=ctx[peer_logits]; mask=torch.ones_like(logits,dtype=torch.bool); mask.scatter_(1,logits.topk(min(int(candidate_k),logits.shape[1]),1).indices,False); ctx[save_as]=mask
+
+
+@block(id="ca2c_update_candidate_memory", name="CA2C: Update Candidate Memory", category="State", description="Persist peer-derived candidate masks and publish their stable-index values for the current batch.", params={"memory":{"type":"slot","default":"ca2c_memory"},"indices":{"type":"slot","default":"indices"},"candidates":{"type":"slot","default":"ca2c_candidates"},"complements":{"type":"slot","default":"ca2c_complements"}}, requires=("memory","indices","candidates","complements"), provides=("ca2c_candidates","ca2c_complements"), placement=("batch",), stage="train", ui_group="④ 状态更新", formula="M_i^+<-C_i; M_i^-<-Cbar_i", formula_ref="CA2C persistent candidate update", paper="CA2C")
+def ca2c_update_candidate_memory(ctx: ScratchContext, memory: str="ca2c_memory", indices: str="indices", candidates: str="ca2c_candidates", complements: str="ca2c_complements") -> None:
+    rows=ctx[indices].detach().long().cpu(); state=ctx[memory]; state["candidate"][rows]=ctx[candidates].detach().cpu(); state["complement"][rows]=ctx[complements].detach().cpu()
+    ctx[candidates]=state["candidate"][rows].to(ctx[candidates].device); ctx[complements]=state["complement"][rows].to(ctx[complements].device)
 
 
 @block(
@@ -2740,37 +2887,50 @@ def ca2c_objective_composition(ctx: ScratchContext, positive: str = "ca2c_positi
     ctx[save_as] = ctx[positive] + ctx[negative]
 
 
-@block(
-    id="l2rw_meta_gradient",
-    name="L2RW: Compute Meta-gradient",
-    category="Weighting",
-    description="Differentiate trusted loss through the official one-step L2RW virtual model.",
-    params={"model": {"type": "slot", "default": "model"}, "inputs": {"type": "slot", "default": "images"}, "labels": {"type": "slot", "default": "labels"}, "trusted_inputs": {"type": "slot", "default": "trusted_images"}, "trusted_labels": {"type": "slot", "default": "trusted_labels"}, "virtual_learning_rate": {"type": "float", "default": 1.0, "min": 0.000001}, "weight_decay": {"type": "float", "default": 0.0002, "min": 0.0}, "implementation": {"type": "enum", "options": ["paper", "official"], "default": "official"}, "save_as": {"type": "slot", "default": "meta_gradient"}},
-    requires=("model", "inputs", "labels", "trusted_inputs", "trusted_labels"), provides=("save_as",), placement=("batch",),
-    formula="g=d L_val(theta-epsilon dL_train)/d epsilon", formula_ref="Ren et al. ICML 2018 meta_gradient", paper="Learning to Reweight Examples for Robust Deep Learning",
-)
-def l2rw_meta_gradient(ctx: ScratchContext, model: str = "model", inputs: str = "images", labels: str = "labels", trusted_inputs: str = "trusted_images", trusted_labels: str = "trusted_labels", virtual_learning_rate: float = 1.0, weight_decay: float = 0.0002, implementation: str = "official", save_as: str = "meta_gradient") -> None:
-    from lnl_toolbox.algorithms.l2rw import meta_gradient
-    ctx[save_as] = meta_gradient(ctx[model], ctx[inputs], ctx[labels].long(), ctx[trusted_inputs], ctx[trusted_labels].long(), virtual_learning_rate=float(virtual_learning_rate), weight_decay=float(weight_decay), implementation=str(implementation)).detach()
+@block(id="l2rw_initialize_epsilon", name="L2RW: Initialize Example Weights", category="Weighting", description="Create differentiable zero-valued epsilon weights for the current noisy minibatch.", params={"losses": {"type":"slot","default":"loss_per_sample"}, "save_as":{"type":"slot","default":"l2rw_epsilon"}}, requires=("losses",), provides=("save_as",), placement=("batch",), formula="epsilon_i=0", formula_ref="Ren et al. ICML 2018 bilevel initialization", paper="Learning to Reweight Examples for Robust Deep Learning")
+def l2rw_initialize_epsilon(ctx: ScratchContext, losses: str="loss_per_sample", save_as: str="l2rw_epsilon") -> None:
+    ctx[save_as] = __import__("torch").zeros_like(ctx[losses], requires_grad=True)
 
 
-@block(
-    id="l2rw_normalize_weights",
-    name="L2RW: Normalize Meta-weights",
-    category="Weighting",
-    description="Rectify the meta-gradient and normalize example weights according to the selected implementation.",
-    params={"gradient": {"type": "slot", "default": "meta_gradient"}, "implementation": {"type": "enum", "options": ["paper", "official"], "default": "official"}, "save_as": {"type": "slot", "default": "meta_weights"}},
-    requires=("gradient",), provides=("save_as",), placement=("batch",),
-    formula="w=relu(g)/sum relu(g) (official); w=relu(-g)/sum relu(-g) (paper)", formula_ref="Ren et al. ICML 2018 weight normalization", paper="Learning to Reweight Examples for Robust Deep Learning",
-)
-def l2rw_normalize_weights(ctx: ScratchContext, gradient: str = "meta_gradient", implementation: str = "official", save_as: str = "meta_weights") -> None:
-    torch, _ = _torch()
-    values = ctx[gradient]
-    raw = torch.relu(values if str(implementation).strip().lower() == "official" else -values).detach()
-    total = raw.sum()
-    weights = raw / total if bool(total > 0) else torch.zeros_like(raw)
-    ctx[save_as] = weights
-    ctx["l2rw_metrics"] = {"positive_weight_count": float(weights.gt(0).sum().item()), "weight_sum": float(weights.sum().item()), "meta_gradient_norm": float(values.detach().norm().item())}
+@block(id="l2rw_virtual_weighted_loss", name="L2RW: Virtual Weighted Train Loss", category="Loss", description="Form the differentiable epsilon-weighted noisy training loss.", params={"epsilon":{"type":"slot","default":"l2rw_epsilon"}, "losses":{"type":"slot","default":"loss_per_sample"}, "save_as":{"type":"slot","default":"l2rw_virtual_loss"}}, requires=("epsilon","losses"), provides=("save_as",), placement=("batch",), formula="L_v=sum_i epsilon_i ell_i", formula_ref="Ren et al. ICML 2018 Eq. (2)", paper="Learning to Reweight Examples for Robust Deep Learning")
+def l2rw_virtual_weighted_loss(ctx: ScratchContext, epsilon: str="l2rw_epsilon", losses: str="loss_per_sample", save_as: str="l2rw_virtual_loss") -> None:
+    ctx[save_as] = (ctx[epsilon] * ctx[losses]).sum()
+
+
+@block(id="l2rw_virtual_update", name="L2RW: Virtual Parameter Update", category="Weighting", description="Differentiate the virtual loss and expose the paper or official functional model state.", params={"model":{"type":"slot","default":"model"}, "virtual_loss":{"type":"slot","default":"l2rw_virtual_loss"}, "learning_rate":{"type":"float","default":1.0,"min":0.000001}, "implementation":{"type":"enum","options":["paper","official"],"default":"official"}, "save_as":{"type":"slot","default":"l2rw_virtual_state"}}, requires=("model","virtual_loss"), provides=("save_as",), placement=("batch",), formula="theta'=theta-alpha grad_theta L_v", formula_ref="Ren et al. ICML 2018 virtual update", paper="Learning to Reweight Examples for Robust Deep Learning")
+def l2rw_virtual_update(ctx: ScratchContext, model: str="model", virtual_loss: str="l2rw_virtual_loss", learning_rate: float=1.0, implementation: str="official", save_as: str="l2rw_virtual_state") -> None:
+    torch = __import__("torch"); network=ctx[model]; parameters=dict(network.named_parameters()); gradients=torch.autograd.grad(ctx[virtual_loss], tuple(parameters.values()), create_graph=True)
+    buffers={name: value.detach().clone() for name,value in network.named_buffers()}; mode=str(implementation)
+    virtual = parameters if mode == "official" else {name: value-float(learning_rate)*gradient for (name,value),gradient in zip(parameters.items(),gradients)}
+    ctx[save_as] = {"parameters": parameters, "gradients": gradients, "state": {**virtual, **buffers}, "implementation": mode}
+
+
+@block(id="l2rw_trusted_meta_loss", name="L2RW: Trusted Meta Loss", category="Loss", description="Evaluate trusted cross entropy through the exposed functional virtual model state.", params={"model":{"type":"slot","default":"model"}, "state":{"type":"slot","default":"l2rw_virtual_state"}, "inputs":{"type":"slot","default":"trusted_images"}, "labels":{"type":"slot","default":"trusted_labels"}, "weight_decay":{"type":"float","default":0.0002,"min":0.0}, "save_as":{"type":"slot","default":"l2rw_meta_loss"}}, requires=("model","state","inputs","labels"), provides=("save_as",), placement=("batch",), formula="L_meta=CE(f_theta'(x_v),y_v)+wd/2||theta||²", formula_ref="Ren et al. ICML 2018 validation objective", paper="Learning to Reweight Examples for Robust Deep Learning")
+def l2rw_trusted_meta_loss(ctx: ScratchContext, model: str="model", state: str="l2rw_virtual_state", inputs: str="trusted_images", labels: str="trusted_labels", weight_decay: float=0.0002, save_as: str="l2rw_meta_loss") -> None:
+    torch=__import__("torch"); from torch.func import functional_call; import torch.nn.functional as F
+    holder=ctx[state]; logits=functional_call(ctx[model],holder["state"],(ctx[inputs],),strict=True); value=F.cross_entropy(logits,ctx[labels].long())
+    if weight_decay: value=value+0.5*float(weight_decay)*sum(p.square().sum() for p in holder["parameters"].values())
+    ctx[save_as]=value
+
+
+@block(id="l2rw_epsilon_gradient", name="L2RW: Differentiate Meta Loss", category="Weighting", description="Differentiate the trusted meta loss with respect to epsilon, including the official second-order path.", params={"state":{"type":"slot","default":"l2rw_virtual_state"}, "meta_loss":{"type":"slot","default":"l2rw_meta_loss"}, "epsilon":{"type":"slot","default":"l2rw_epsilon"}, "save_as":{"type":"slot","default":"l2rw_meta_gradient"}}, requires=("state","meta_loss","epsilon"), provides=("save_as",), placement=("batch",), formula="g=d L_meta/d epsilon", formula_ref="Ren et al. ICML 2018 meta gradient", paper="Learning to Reweight Examples for Robust Deep Learning")
+def l2rw_epsilon_gradient(ctx: ScratchContext, state: str="l2rw_virtual_state", meta_loss: str="l2rw_meta_loss", epsilon: str="l2rw_epsilon", save_as: str="l2rw_meta_gradient") -> None:
+    torch=__import__("torch"); holder=ctx[state]
+    if holder["implementation"] == "official":
+        trusted=torch.autograd.grad(ctx[meta_loss],tuple(holder["parameters"].values()),retain_graph=True); value=torch.autograd.grad(holder["gradients"],ctx[epsilon],grad_outputs=trusted,only_inputs=True)[0]
+    else: value=torch.autograd.grad(ctx[meta_loss],ctx[epsilon],only_inputs=True)[0]
+    if not bool(torch.isfinite(value).all()): raise ValueError("L2RW meta-gradient is non-finite")
+    ctx[save_as]=value
+
+
+@block(id="nonnegative_projection", name="Nonnegative Projection", category="Weighting", description="Project a vector or its negation onto the nonnegative orthant.", params={"input":{"type":"slot","default":"l2rw_meta_gradient"}, "negate":{"type":"bool","default":False}, "save_as":{"type":"slot","default":"l2rw_raw_weights"}}, requires=("input",), provides=("save_as",), placement=("batch",), formula="wbar=max(0,+/-g)", formula_ref="nonnegative meta-weight projection")
+def nonnegative_projection(ctx: ScratchContext, input: str="l2rw_meta_gradient", negate: bool=False, save_as: str="l2rw_raw_weights") -> None:
+    torch,_=_torch(); ctx[save_as]=torch.relu(-ctx[input] if negate else ctx[input]).detach()
+
+
+@block(id="normalize_nonnegative_weights", name="Normalize Nonnegative Weights", category="Weighting", description="Normalize nonnegative weights to sum to one while preserving the all-zero case.", params={"weights":{"type":"slot","default":"l2rw_raw_weights"}, "save_as":{"type":"slot","default":"meta_weights"}}, requires=("weights",), provides=("save_as",), placement=("batch",), formula="w=wbar/sum wbar", formula_ref="L2RW weight normalization")
+def normalize_nonnegative_weights(ctx: ScratchContext, weights: str="l2rw_raw_weights", save_as: str="meta_weights") -> None:
+    values=ctx[weights]; total=values.sum(); ctx[save_as]=values/total if bool(total>0) else __import__("torch").zeros_like(values)
 
 
 @block(

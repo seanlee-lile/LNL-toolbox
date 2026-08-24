@@ -375,7 +375,7 @@ papers:
   notes: 'Formal DSS CIFAR-10 symmetric-50 protocol retained: PreAct-ResNet18 base width 64, SGD 0.02/momentum 0.9/weight decay 0.001, MultiStep milestone 80, 150 epochs, 30-epoch warm-up, stable-index state, MDA prior decay 0.99, CCS alpha 0.1, and masked training loss. Conda fixture-limited runtime passed; direct MDA normalization check passed; WebUI loaded DSS and Validate passed.'
 - index: 15
   id: cnlcu
-  status: READY
+  status: PENDING
   protocol_source: configs/experiment/cnlcu_cifar10_reproduction.yaml
   paper_source: catalog/paper_catalog.json (Sample Selection with Uncertainty of Losses)
   legacy_sources:
@@ -401,7 +401,7 @@ papers:
   notes: 'Revalidated from PENDING: formal CNLCU-S protocol and the legacy selection-count lifecycle were manually mapped to Recipe particles. The previously omitted update_cnlcu_selected_count calls now persist each peer selection after scoring. Conda two-epoch fixture runtime observed effective selection counts advance from 1 to 2; focused CNLCU/formula tests and WebUI Validate passed.'
 - index: 16
   id: mentornet
-  status: BLOCKED
+  status: PENDING
   protocol_source: configs/experiment/mentornet_dd_cifar100_symmetric04_reproduction.yaml
   paper_source: https://proceedings.mlr.press/v80/jiang18c/jiang18c.pdf
   legacy_sources:
@@ -422,10 +422,10 @@ papers:
   formula_check: PENDING
   runtime_check: PENDING
   ui_check: PENDING
-  notes: 'BLOCKED during source audit: formal config is CIFAR-100 symmetric-40 for 100 epochs, but the only configured MentorArtifact is cifar10-symmetric04 and its embedded source metadata records 20 epochs. A fixture or schema load is not an acceptable substitute. Requires a provenance-checked CIFAR-100 MentorNet-DD artifact matching the formal protocol before Recipe repair and acceptance can continue.'
+  notes: 'IMPLEMENTED_UNVERIFIED: MentorNet curriculum threshold, feature construction, and sample-weight prediction are explicit Recipe particles. Validation was intentionally skipped per user instruction; status remains PENDING.'
 - index: 17
   id: fine
-  status: READY
+  status: PENDING
   protocol_source: configs/experiment/fine_cifar100n_reproduction.yaml
   paper_source: 'catalog/paper_catalog.json (FINE: Filtering Noise in the Feature Space)'
   legacy_sources:
@@ -451,10 +451,10 @@ papers:
   formula_check: PASS
   runtime_check: PASS
   ui_check: PASS
-  notes: 'Revalidated from PENDING: corrected the legacy lifecycle mismatch so SGD uses warmup_lr=0.1 through epoch 199, switches to formal lr=0.05 at epoch 200, and only then advances CosineAnnealingLR with T_max=100. Formal config/legacy mapping, focused formula test, Conda fixture warmup runtime, and freshly restarted WebUI Validate passed.'
+  notes: 'IMPLEMENTED_UNVERIFIED: FINE objective composition is split into masked CE, pseudo-label CE, rejected-sample SED regularization, and explicit composition. Validation was intentionally skipped; status remains PENDING.'
 - index: 18
   id: lend
-  status: READY
+  status: PENDING
   protocol_source: configs/experiment/lend_cifar10_reproduction.yaml
   paper_source: https://doi.org/10.1007/s10994-022-06197-6
   legacy_sources:
@@ -477,10 +477,10 @@ papers:
   formula_check: PASS
   runtime_check: PASS
   ui_check: PASS
-  notes: 'Revalidated from PENDING: retained the existing graph, dilution, indexed-history, and agreement particles; restored the legacy epoch order of noisy-validation evaluation, best-model capture, and scheduler advance, then restored that selected model before clean testing. Focused formula test, Conda fixture runtime, and WebUI Validate passed.'
+  notes: 'IMPLEMENTED_UNVERIFIED: LEND adjacency construction, graph normalization, dilution, history, agreement selection, and selected objective are separate Recipe particles. Validation was intentionally skipped; status remains PENDING.'
 - index: 19
   id: l2rw
-  status: READY
+  status: PENDING
   protocol_source: configs/experiment/l2rw_cifar10_reproduction.yaml
   paper_source: https://proceedings.mlr.press/v80/ren18a.html
   legacy_sources:
@@ -498,10 +498,10 @@ papers:
   formula_check: PASS
   runtime_check: PASS
   ui_check: PASS
-  notes: 'Revalidated from PENDING: retained the existing official bilevel meta-gradient and normalization particles, and repaired the missing global-step lifecycle. The Recipe now stops at max_steps=80000 and applies the 40000/60000 fixed learning-rate drops before their corresponding updates. Focused formula test, Conda fixture runtime, and freshly restarted WebUI Validate passed.'
+  notes: 'IMPLEMENTED_UNVERIFIED: L2RW is expanded into epsilon initialization, virtual loss/update, trusted meta loss, epsilon gradient, projection, normalization, and weighted objective. Validation was intentionally skipped; status remains PENDING.'
 - index: 20
   id: cal
-  status: READY
+  status: PENDING
   protocol_source: configs/experiment/cal_cifar10_reproduction.yaml
   paper_source: https://openaccess.thecvf.com/content/CVPR2021/html/Zhu_A_Second-Order_Approach_to_Learning_With_Instance-Dependent_Label_Noise_CVPR_2021_paper.html
   legacy_sources:
@@ -520,10 +520,10 @@ papers:
   formula_check: PASS
   runtime_check: PASS
   ui_check: PASS
-  notes: 'Revalidated from PENDING: replaced the invalid current-batch proxy shortcut with formal external_torch data preparation, a separate CORES2 warm-up model, stable-index warm-up proxy artifact, fixed proxy-to-noisy transition means, and detached epoch-level reference-loss updates. CAL alpha-scaled scheduling now consumes the next epoch confidence weight. Focused formula test, Conda fixture runtime, and freshly restarted WebUI Validate passed.'
+  notes: 'IMPLEMENTED_UNVERIFIED: CAL proxy/reference state and Eq. (7)-(9) risk, covariance correction, and subtraction are explicit Recipe particles. Validation was intentionally skipped; status remains PENDING.'
 - index: 21
   id: mc-ldce
-  status: BLOCKED
+  status: PENDING
   protocol_source: configs/experiment/mc_ldce_cifar10_reproduction.yaml
   paper_source: catalog/paper_catalog.json (MC-LDCE)
   legacy_sources:
@@ -541,10 +541,10 @@ papers:
   formula_check: PENDING
   runtime_check: PENDING
   ui_check: PENDING
-  notes: 'BLOCKED after source recheck: the Recipe still uses one model and re-estimates centroids every classifier epoch. Formal lifecycle requires a separate 150-epoch PaperVolMin transition estimator, then a frozen-feature, bias-free main classifier whose statistic is estimated from that independent transition artifact. New transition particles exist but are not yet wired into a complete Recipe.'
+  notes: 'IMPLEMENTED_UNVERIFIED: Recipe now has the separate 150-epoch PaperVolMin transition stage, recovered centroid statistic, and fresh frozen-feature bias-free classifier stage. Validation was intentionally skipped; status remains PENDING.'
 - index: 22
   id: upm
-  status: BLOCKED
+  status: PENDING
   protocol_source: configs/experiment/upm_cifar10_reproduction.yaml
   paper_source: catalog/paper_catalog.json (Universal Probability Model for Label Noise)
   legacy_sources:
@@ -563,10 +563,10 @@ papers:
   formula_check: PENDING
   runtime_check: PENDING
   ui_check: PENDING
-  notes: 'BLOCKED after source recheck: the fresh main-stage Recipe updates confusing probabilities in every batch from epoch 0 and omits its formal MultiStep scheduler. Config requires updates only from epoch 35, once every 5 epochs, and milestones 40/80/120.'
+  notes: 'IMPLEMENTED_UNVERIFIED: stage-1 posterior snapshot, psi construction, eta initialization, epoch-35/five-epoch eta updates, and the main MultiStep scheduler are explicit. Validation was intentionally skipped; status remains PENDING.'
 - index: 23
   id: dividemix
-  status: BLOCKED
+  status: PENDING
   protocol_source: configs/reproduction/cifar10_dividemix_sym20.yaml
   paper_source: catalog/paper_catalog.json (DivideMix)
   legacy_sources:
@@ -586,10 +586,10 @@ papers:
   formula_check: PENDING
   runtime_check: PENDING
   ui_check: PENDING
-  notes: 'BLOCKED after source recheck: the Recipe fits GMMs from current minibatch losses without the formal 10-epoch warmup/full stable-index loss history, lacks peer-specific clean/noisy streams and MixMatch augmentations/mixup, and schedules only peer A without validation/best ensemble inference.'
+  notes: 'IMPLEMENTED_UNVERIFIED: stable-index peer histories, peer-specific clean probabilities, co-refinement/sharpening, decomposed objectives, and both schedulers are represented as Recipe particles. Validation was intentionally skipped; status remains PENDING.'
 - index: 24
   id: dld
-  status: BLOCKED
+  status: PENDING
   protocol_source: configs/experiment/dld_cifar10_reproduction.yaml
   paper_source: catalog/paper_catalog.json (Directional Label Diffusion)
   legacy_sources:
@@ -597,20 +597,15 @@ papers:
   - src/lnl_toolbox/algorithms/dld/precorrection.py
   - src/lnl_toolbox/algorithms/dld/sampling.py
   - src/lnl_toolbox/training/dld_experiment.py
-  missing_capabilities:
-  - dld_frozen_feature_snapshot
-  - dld_pre_correction_direction
-  - dld_directional_diffusion_schedule
-  - dld_independent_direction_noise_predictors
-  - dld_ema_and_sampling_inference
+  missing_capabilities: []
   protocol_check: FAIL
   formula_check: PENDING
   runtime_check: PENDING
   ui_check: PENDING
-  notes: 'BLOCKED after this repair pass: the formal config and legacy contract require a frozen ResNet34 feature/pre-correction stage, y_n-y_0 directional diffusion schedule, independent direction/noise predictors, EMA, and five-step deterministic inference; current Scratch particles validate/run but do not satisfy that protocol. No smoke/static/API substitute promoted this paper to READY.'
+  notes: 'IMPLEMENTED_UNVERIFIED: start/endpoint/direction, stochastic forward state, independent predictors and optimizers, EMA, and five-step accelerated inference are explicit Recipe particles. Validation was intentionally skipped; status remains PENDING.'
 - index: 25
   id: ca2c
-  status: BLOCKED
+  status: PENDING
   protocol_source: configs/experiment/ca2c_cifar10_reproduction.yaml
   paper_source: catalog/paper_catalog.json (CA2C)
   legacy_sources:
@@ -629,4 +624,4 @@ papers:
   formula_check: PENDING
   runtime_check: PENDING
   ui_check: PENDING
-  notes: 'BLOCKED after source recheck: the Recipe recomputes cross-guidance from only the current minibatch and has no persistent candidate memory; it also does not implement the formal robust-weight term or validation/best-model lifecycle. The existing objective blocks alone are insufficient.'
+  notes: 'IMPLEMENTED_UNVERIFIED: persistent stable-index candidate memory, separate peer candidate/complement construction, asymmetric objectives, and both cosine schedulers are explicit. Validation was intentionally skipped; status remains PENDING.'

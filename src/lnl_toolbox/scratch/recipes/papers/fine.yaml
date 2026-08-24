@@ -41,7 +41,10 @@ steps:
             steps:
               - {block: fine_prepare_batch_targets, params: {state: fine_state, indices: indices, labels: labels, clean_as: fine_clean, pseudo_as: fine_pseudo, weights_as: fine_weights}}
               - {block: forward, params: {model: model, input: strong_images, save_as: strong_logits}}
-              - {block: fine_robust_loss, params: {logits: logits, strong_logits: strong_logits, labels: labels, clean: fine_clean, pseudo: fine_pseudo, weights: fine_weights, state: fine_state, alpha: 1.0, save_as: loss}}
+              - {block: masked_cross_entropy, params: {logits: logits, labels: labels, mask: fine_clean, save_as: fine_clean_ce}}
+              - {block: weighted_pseudo_label_cross_entropy, params: {logits: strong_logits, pseudo_labels: fine_pseudo, weights: fine_weights, save_as: fine_strong_pseudo_ce}}
+              - {block: sed_rejected_regularizer, params: {logits: logits, labels: labels, clean: fine_clean, pseudo_labels: fine_pseudo, state: fine_state, save_as: fine_regularizer}}
+              - {block: compose_three_objectives, params: {first: fine_clean_ce, second: fine_regularizer, third: fine_strong_pseudo_ce, third_weight: 1.0, save_as: loss}}
           - {block: backward}
           - {block: optimizer_step}
           - {block: fine_ema_update, params: {model: model, state: fine_state}}
