@@ -321,6 +321,10 @@ from lnl_toolbox.algorithms.pcse.volmin import DiagonallyDominantTransition, bui
 # --- merged from test_pcse_volmin.py ---
 from lnl_toolbox.data.multiclass_synthetic import MulticlassTensorDataset, generate_synthetic_multiclass
 
+from lnl_toolbox.data.contracts import DataSpec, RawDatasetSplit
+
+from lnl_toolbox.training.data_service import DATASETS
+
 # --- merged from test_pcse_volmin.py ---
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 
@@ -612,8 +616,74 @@ class _pcse_workflow__FixedPCSEModel(nn.Module):
     def forward(self, values: torch.Tensor) -> torch.Tensor:
         return self.classifier(self.hidden2(self.hidden1(values)))
 
+
+class _pcse_workflow__GenericTabularAdapter:
+    name = 'pcse_generic_tabular_fixture'
+    aliases: tuple[str, ...] = ()
+
+    def validate(self, spec: DataSpec) -> None:
+        if int(spec.options.get('num_classes', 0)) != 3:
+            raise ValueError('PCSE fixture requires three classes')
+
+    def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
+        if split == 'validation':
+            raise ValueError('fixture intentionally uses a train-derived validation split')
+        sizes = {'train': 120, 'test': 30}
+        offsets = {'train': 0, 'test': 0}
+        if split not in sizes:
+            raise ValueError(f'unsupported fixture split: {split}')
+        generated = generate_synthetic_multiclass(
+            sizes[split], 6, 3, seed + offsets[split],
+            start_index=offsets[split], split=split,
+        )
+        return RawDatasetSplit(
+            generated.features,
+            generated.labels,
+            generated.global_indices,
+            self.name,
+            split,
+            3,
+            clean_targets=generated.labels,
+            source='test_fixture',
+        )
+
 # --- merged from test_pcse_workflow.py ---
 class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
+
+    def test_train_mode_runs_with_a_generic_registered_tabular_adapter(self) -> None:
+        try:
+            DATASETS.get(_pcse_workflow__GenericTabularAdapter.name)
+        except ValueError:
+            DATASETS.add(_pcse_workflow__GenericTabularAdapter())
+        config = _pcse_workflow__load_smoke_config()
+        config['data'] = {
+            'name': _pcse_workflow__GenericTabularAdapter.name,
+            'root': 'unused',
+            'num_classes': 3,
+            'validation_size': 30,
+        }
+        config['pretraining_stage']['epochs'] = 2
+        config['ensemble_stage']['epochs'] = 1
+        with tempfile.TemporaryDirectory() as directory:
+            def run_first_real_stage(algorithm: PCSEAlgorithm) -> None:
+                algorithm.train_pretraining(max_epochs=1)
+
+            with mock.patch.object(
+                PCSEAlgorithm,
+                'run',
+                autospec=True,
+                side_effect=run_first_real_stage,
+            ):
+                run_dir = run_pcse_experiment(
+                    config, output_dir=Path(directory) / 'run'
+                )
+            checkpoint = torch.load(
+                run_dir / 'last.pt', map_location='cpu', weights_only=False
+            )
+            self.assertEqual(
+                checkpoint['pcse_state']['pretraining_completed_epochs'], 1
+            )
+            self.assertTrue((run_dir / 'last.pt').is_file())
 
     def test_config_requires_multilayer_and_valid_backend(self) -> None:
         config = _pcse_workflow__load_smoke_config()

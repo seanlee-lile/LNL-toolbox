@@ -96,16 +96,16 @@ def _train_peer_epoch(algorithm, peer, artifact, prepared: PreparedData, noisy_b
     indices = artifact.sample_indices.numpy(); labeled = indices[mask.numpy()]; unlabeled = indices[~mask.numpy()]
     probability_map = {int(index): float(value) for index, value in zip(indices, probabilities)}
     view_names = tuple(f"view_{index}" for index in range(algorithm.config.augmentations))
-    labeled_set = prepared.dynamic_dataset(
+    peer_offset = 0 if peer == "a" else 100000
+    labeled_loader = prepared.subset_loader(
         labeled, views=view_names, targets_by_index=noisy_by_index,
         overlays={"clean_probability": probability_map},
+        generator_seed=seed + peer_offset + epoch * 2,
     )
-    unlabeled_set = prepared.dynamic_dataset(
+    unlabeled_loader = prepared.subset_loader(
         unlabeled, views=view_names, targets_by_index=noisy_by_index,
+        generator_seed=seed + peer_offset + epoch * 2 + 1,
     )
-    peer_offset = 0 if peer == "a" else 100000
-    labeled_loader = prepared.loader_for_dataset(labeled_set, generator_seed=seed + peer_offset + epoch * 2)
-    unlabeled_loader = prepared.loader_for_dataset(unlabeled_set, generator_seed=seed + peer_offset + epoch * 2 + 1)
     unlabeled_iterator = iter(unlabeled_loader); totals: dict[str, float] = {}; count = 0
     rng = np.random.default_rng(seed + peer_offset + epoch)
     for batch_index, labeled_batch in enumerate(labeled_loader):
@@ -157,8 +157,13 @@ def run_dividemix_experiment(config: dict[str, Any], output_dir: str | Path | No
     with metrics_path.open("a", encoding="utf-8") as metrics_file:
         while algorithm.state.warmup_completed_epochs < method.warmup_epochs:
             epoch = algorithm.state.warmup_completed_epochs; sums = {peer: {"objective": 0.0, "confidence_penalty": 0.0} for peer in ("a", "b")}; batches = 0
-            warm_set = prepared.dynamic_dataset(prepared.train_indices, views=("view_0",), targets_by_index=noisy_by_index)
-            for batch in prepared.loader_for_dataset(warm_set, generator_seed=seed + epoch):
+            warm_loader = prepared.subset_loader(
+                prepared.train_indices,
+                views=("view_0",),
+                targets_by_index=noisy_by_index,
+                generator_seed=seed + epoch,
+            )
+            for batch in warm_loader:
                 for peer in ("a", "b"):
                     result = algorithm.warmup_step(peer, batch["views"]["view_0"], batch["target"], asymmetric=str(config["noise"].get("name", "")).lower() == "asymmetric")
                     for key in sums[peer]: sums[peer][key] += result[key]

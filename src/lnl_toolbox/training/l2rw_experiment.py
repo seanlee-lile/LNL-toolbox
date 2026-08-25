@@ -149,7 +149,7 @@ def run_l2rw_experiment(
     num_classes, dataset_name = prepared.num_classes, prepared.dataset
     input_seed = int(config.get("data", {}).get("input_seed", seed))
     train_loader = prepared.loader(DataRole.TRAIN, generator_seed=input_seed)
-    validation_loader = prepared.loader(DataRole.CLEAN_VALIDATION, shuffle=False, generator_seed=input_seed)
+    validation_loader = prepared.validation_loader(shuffle=False, generator_seed=input_seed)
     test_loader = prepared.loader(DataRole.TEST, shuffle=False, generator_seed=input_seed)
     trusted_base = prepared.dataset_for(DataRole.TRUSTED_VALIDATION)
     if official_generated:

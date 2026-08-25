@@ -275,7 +275,7 @@ import numpy as np
 import torch
 
 # --- merged from test_data_service.py ---
-from lnl_toolbox.data import DataRequirements, DataRole, DataSpec, DatasetRegistry, IndexedDatasetView, LocalDatasetCatalog, RawDatasetSplit
+from lnl_toolbox.data import DataProtocol, DataRequirements, DataRole, DataSpec, DatasetRegistry, IndexedDatasetView, InputSpec, LocalDatasetCatalog, NoiseDescriptor, RawDatasetSplit
 
 # --- merged from test_data_service.py ---
 from lnl_toolbox.training.checkpoint import atomic_save, read_checkpoint
@@ -586,11 +586,108 @@ class _data_service_DataServiceTest(unittest.TestCase):
             self.assertTrue(torch.equal(first, repeated))
             self.assertFalse(torch.equal(first, another))
             self.assertEqual(set(first.tolist()), set(prepared.train_indices.tolist()))
+            weak_batch = next(
+                iter(prepared.view_loader(DataRole.TRAIN, 'weak', shuffle=False))
+            )
+            strong_batch = next(
+                iter(prepared.view_loader(DataRole.TRAIN, 'strong', shuffle=False))
+            )
+            self.assertEqual(set(weak_batch), {'input', 'target', 'index'})
+            self.assertTrue(torch.equal(weak_batch['index'], strong_batch['index']))
+            self.assertTrue(torch.equal(weak_batch['target'], strong_batch['target']))
             chosen = prepared.train_indices[::2]
             probabilities = {int(index): float(offset) for offset, index in enumerate(chosen)}
-            dynamic = prepared.dynamic_dataset(chosen, overlays={'clean_probability': probabilities})
-            self.assertEqual(dynamic.indices.tolist(), chosen.tolist())
-            self.assertIn('clean_probability', dynamic[0])
+            subset_loader = prepared.subset_loader(
+                chosen,
+                overlays={'clean_probability': probabilities},
+                shuffle=False,
+            )
+            subset_batch = next(iter(subset_loader))
+            self.assertEqual(
+                set(subset_batch), {'input', 'target', 'index', 'views', 'strong_input', 'clean_probability'}
+            )
+            self.assertNotIn('clean_target', subset_batch)
+            self.assertEqual(
+                torch.cat([value['index'] for value in subset_loader]).tolist(),
+                chosen.tolist(),
+            )
+
+    def test_prepared_data_exposes_dataset_neutral_contracts(self) -> None:
+        requirements = DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
+            validation_targets='noisy',
+        )
+        config = _data_service__config()
+        config['noise'] = {'name': 'symmetric', 'rate': 0.4, 'seed': 9}
+        protocol = DataProtocol(
+            name='generic-tabular',
+            transform_identity='identity-v1',
+            options={'normalization': 'none'},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            prepared = prepare_experiment_data(
+                config,
+                requirements=requirements,
+                data_protocol=protocol,
+                run_dir=directory,
+                seed=9,
+            )
+            self.assertEqual(prepared.protocol, protocol)
+            self.assertEqual(prepared.input_spec.modality, 'tabular')
+            self.assertEqual(prepared.input_spec.shape, (4,))
+            self.assertEqual(prepared.input_spec.feature_dim, 4)
+            self.assertIsNone(prepared.input_spec.channels)
+            self.assertEqual(
+                prepared.available_roles,
+                frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
+            )
+            validation_batch = next(iter(prepared.validation_loader()))
+            self.assertEqual(set(validation_batch), {'input', 'target', 'index'})
+            descriptor = prepared.noise_descriptor
+            self.assertEqual(descriptor.noise_type, 'symmetric')
+            self.assertEqual(descriptor.nominal_rate, 0.4)
+            self.assertAlmostEqual(descriptor.realized_rate, prepared.manifest.actual_rate)
+            self.assertEqual(descriptor.mapping_hash, prepared.manifest.mapping_hash)
+            self.assertFalse(descriptor.transition_matrix.flags.writeable)
+            self.assertFalse(hasattr(descriptor, 'clean_targets'))
+            persisted = json.loads((Path(directory) / 'data_manifest.json').read_text(encoding='utf-8'))
+            self.assertEqual(persisted['data_protocol'], protocol.to_dict())
+
+    def test_data_protocol_identity_and_validation_role_fail_closed(self) -> None:
+        requirements = DataRequirements(roles=frozenset({DataRole.TRAIN, DataRole.TEST}))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = prepare_experiment_data(
+                _data_service__config(),
+                requirements=requirements,
+                data_protocol=DataProtocol(name='generic', transform_identity='identity-v1'),
+                run_dir=root / 'first',
+                seed=9,
+            )
+            second = prepare_experiment_data(
+                _data_service__config(),
+                requirements=requirements,
+                data_protocol=DataProtocol(name='official', transform_identity='paper-v1'),
+                run_dir=root / 'second',
+                seed=9,
+            )
+            self.assertNotEqual(first.data_fingerprint, second.data_fingerprint)
+            with self.assertRaisesRegex(KeyError, 'validation role'):
+                first.validation_loader()
+        self.assertEqual(DataRole.UNLABELED.value, 'unlabeled')
+        self.assertEqual(DataRole.CURRICULUM.value, 'curriculum')
+
+    def test_dataset_neutral_contracts_reject_invalid_values(self) -> None:
+        with self.assertRaisesRegex(ValueError, 'shape dimensions'):
+            InputSpec(modality='image', shape=(3, 0, 32), channels=3)
+        with self.assertRaisesRegex(ValueError, 'nominal_rate'):
+            NoiseDescriptor(noise_type='symmetric', nominal_rate=1.1)
+        with self.assertRaisesRegex(ValueError, 'square'):
+            NoiseDescriptor(noise_type='class_dependent', transition_matrix=np.ones((2, 3)))
+        with self.assertRaisesRegex(ValueError, 'sum to one'):
+            NoiseDescriptor(noise_type='class_dependent', transition_matrix=np.eye(2) * 0.5)
+        with self.assertRaisesRegex(ValueError, 'validation_size'):
+            DataProtocol(validation_size=-1)
 
     def test_official_fashion_idx_enters_unified_service(self) -> None:
         requirements = DataRequirements(roles=frozenset({DataRole.TRAIN, DataRole.TEST}))

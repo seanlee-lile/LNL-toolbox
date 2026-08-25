@@ -219,24 +219,33 @@ def _supervised_requirements(config: Mapping[str, Any]) -> MethodRequirements | 
     if objective == "dss":
         return MethodRequirements(
             method="dss",
-            supported_modalities=frozenset({Modality.IMAGE}),
+            supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
             validation_target="noisy",
         )
     if update == "cdr":
         return MethodRequirements(
             method="cdr",
-            supported_modalities=frozenset({Modality.IMAGE}),
+            supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
             requires_method_noise_prior=True,
             method_noise_prior_paths=(("parameter_update", "noise_rate"),),
             validation_target="noisy",
         )
     if loss in {"apl", "gce"}:
+        noise_config = config.get("noise", {}) or {}
         validation_target = str(
-            (config.get("noise", {}) or {}).get("validation_targets", "clean")
+            noise_config.get("validation_targets", "clean")
         ).strip().lower()
+        noise_name = str(noise_config.get("name", "clean")).strip().lower()
+        requires_manifest = bool(noise_config.get("manifest")) or noise_name not in {
+            "",
+            "clean",
+            "external",
+        }
         return MethodRequirements(
             method=loss,
-            supported_modalities=frozenset({Modality.IMAGE}),
+            supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
+            requires_noise_manifest=requires_manifest,
+            supports_native_noisy_labels=True,
             validation_target=validation_target,
         )
     validation_target = str(
@@ -381,18 +390,9 @@ def _mc_ldce_requirements(config: Mapping[str, Any]) -> MethodRequirements:
 
 
 def _ca2c_requirements(config: Mapping[str, Any]) -> MethodRequirements:
-    ca2c = config.get("ca2c", {}) or {}
-    synthetic_feature_smoke = (
-        _component_name(config, "data") == "synthetic_multiclass"
-        and _component_name(config, "model") == "feature_mlp"
-        and isinstance(ca2c, Mapping)
-        and {"warmup_epochs", "candidate_k", "hard_weight"} <= set(ca2c)
-    )
     return MethodRequirements(
         method="ca2c",
-        supported_modalities=frozenset({
-            Modality.TABULAR if synthetic_feature_smoke else Modality.IMAGE
-        }),
+        supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
         requires_clean_validation=True,
         validation_target="clean",
     )
@@ -446,6 +446,15 @@ def _pcse_requirements(config: Mapping[str, Any]) -> MethodRequirements:
             (("upm_main_best", ("pretraining_stage", "source", "adapter")),)
             if external else ()
         ),
+    )
+
+
+def _volminnet_requirements(_config: Mapping[str, Any]) -> MethodRequirements:
+    return MethodRequirements(
+        method="volminnet",
+        supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
+        min_classes=3,
+        validation_target="noisy",
     )
 
 
@@ -558,9 +567,7 @@ def create_runner_registry() -> RunnerRegistry:
         "volminnet",
         "lnl_toolbox.training.volminnet_experiment",
         "run_volminnet_experiment",
-        requirements_provider=_image_requirements(
-            "volminnet", min_classes=3, exact_classes=frozenset({10, 100})
-        ),
+        requirements_provider=_volminnet_requirements,
     )
     registry.add(
         "upm",

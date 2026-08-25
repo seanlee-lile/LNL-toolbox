@@ -757,6 +757,87 @@ prepared = prepare_experiment_data(
 
 `DatasetRegistry` 负责名称/别名到 `DatasetAdapter` 的映射；适配器只验证并读取数据源。`DataRequirements` 由 runner 声明角色、视图、划分和 loader 行为，不包含论文名称。`PreparedData` 统一提供 train、train_eval、noisy/clean/trusted validation、test，以及按 global index 构造的动态子集。
 
+## 数据要求与复现协议边界（2026-08-25）
+
+数据入口现在使用三层语义，禁止混写：
+
+```text
+DataRequirements  = 算法真正需要的 role / view / label 条件
+DataProtocol      = generic 或论文复现使用的 split / transform / augmentation 身份
+PreparedData      = DataService 对算法交付的实际数据对象
+```
+
+`PreparedData` 的公共消费面是：
+
+```python
+prepared.input_spec          # modality / shape / channels / feature_dim
+prepared.num_classes         # 不从 dataset 名称推断
+prepared.available_roles     # 本次实际构造的 DataRole
+prepared.loader(role)        # TRAIN / TRAIN_EVAL / validation / TEST
+prepared.validation_loader() # 严格按 DataRequirements 选择 clean 或 noisy validation
+prepared.noise_descriptor    # rate / rho / T / instance information / provenance / hash
+```
+
+训练 batch 仍只有 `input/target/index` 和方法明确请求的 view/overlay；
+`NoiseDescriptor` 不包含 clean target。`UNLABELED`、`CURRICULUM` 已进入角色词汇，只有在
+对应数据源和方法迁移完成后才允许 runner 请求，不能静默用 TRAIN 或 validation 冒充。
+
+未显式传入 `DataProtocol` 的旧 runner 保持原 manifest/checkpoint 指纹；显式协议会写入
+`data_manifest.json` 并参与数据指纹，防止 resume 时更换 split/transform 协议。
+
+### 共享监督训练入口
+
+CE、GCE、APL 走同一个数据接头，不再把 loss 公式与 CIFAR 或图像输入绑定：
+
+```text
+DatasetAdapter -> DataService -> PreparedData
+                              -> TRAIN + 所选 validation role + TEST
+                              -> input_spec -> model builder
+                              -> observed target -> per-sample loss[B]
+```
+
+- GCE/APL 接受数学兼容的 IMAGE 或 TABULAR 数据；tabular 输入由 `feature_mlp` 消费。
+- runner 只请求配置选定的 clean/noisy validation，不同时强制构造两套验证集。
+- 生成噪声和外部 manifest 仍保留 manifest 身份；原生 observed target 可直接训练，不要求 clean target 或工具箱私有 manifest。
+- `TinyCNN.input_channels` 和 `feature_mlp.input_dim` 从 `PreparedData.input_spec` 获得，不再读取一个样本或按数据集名称猜测。
+- loss、selector、optimizer、epoch loop、checkpoint 和正式 reproduction YAML 的数学与状态逻辑保持不变。
+
+### 特殊角色与动态视图
+
+特殊方法仍只通过 `PreparedData` 取得数据，不在 runner 内重新解释数据集：
+
+```python
+prepared.loader(DataRole.TRAIN_EVAL)       # 同一 sample_id，evaluation transform
+prepared.loader(DataRole.TRUSTED_VALIDATION)
+prepared.view_loader(DataRole.TRAIN, "weak")
+prepared.view_loader(DataRole.TRAIN, "strong")
+prepared.subset_loader(indices, views=(...), overlays={...})
+```
+
+`view_loader` 只投影一个已存在的输入 view，保留 observed target 与 global index；输出不会
+携带其他 view、overlay 或 clean target。`subset_loader` 只接受训练 split 的 global index，
+由统一服务完成 view、target overlay、随机种子和 loader 构造。
+
+DLD 使用固定对齐的 weak/strong view；L2RW 使用独立 trusted validation；DivideMix 的
+labeled/unlabeled 成员由每轮 GMM 结果动态决定，因此通过 `subset_loader` 构造，不能登记为
+静态 `DataRole.UNLABELED`。论文算法的特征提取、meta gradient、GMM、MixMatch 和双网络
+状态机均不属于数据服务。
+
+### 通用表格输入与剩余专用 runner 首批迁移
+
+- CDR、DSS 和 CA2C 的能力声明不再把 IMAGE 当作工具箱硬限制；IMAGE/TABULAR 都通过
+  `InputSpec` 和现有模型 builder 进入原训练逻辑。CDR 的参数更新、DSS 的 stable-index
+  history、CA2C 的双网络 memory 均未迁入数据层。
+- PCSE 的 `pretraining_stage.mode: train` 不再按 dataset 名称分支；它从
+  `PreparedData.num_classes` 和 `input_spec.feature_dim` 构造已有 MLP。外部 UPM checkpoint
+  路径仍是独立的 CIFAR-10 reproduction adapter，不冒充通用算法要求。
+- VolMinNet 接受任意显式 `data.num_classes >= 3` 的 IMAGE/TABULAR 数据；`C>=3` 来自当前
+  transition 参数化中的数学分母。旧 CIFAR recipe 在缺少显式类别数时仅保留兼容推断，
+  不构成对新数据集名称的限制。
+- 需要 noisy validation 的方法若使用生成噪声，validation 必须来自同一 train index
+  namespace，或由数据源直接提供 observed noisy labels；不得用独立 validation index
+  查询仅覆盖 TRAIN 的 Noise Manifest。
+
 标准训练 batch 为 `input/target/index`，可选包含 `views`、`strong_input` 和动态 overlay。训练角色禁止暴露 `clean_target`。每次运行写入 `data_manifest.json`，checkpoint 自动记录其指纹；数据版本、标签、split、预处理、视图或 loader 身份变化时恢复立即失败。
 
 内置 Registry 当前支持 CIFAR-10/100、CIFAR airplane/automobile、CIFAR-10N/100N、MNIST、Fashion-MNIST、Clothing1M、Animal-10N、UCI binary、synthetic binary/multiclass。训练期间均不自动下载。

@@ -710,6 +710,10 @@ import torch
 # --- merged from test_noisy_ce_baseline.py ---
 from lnl_toolbox.data.cifar import CifarData
 
+from lnl_toolbox.data.contracts import DataSpec, RawDatasetSplit
+
+from lnl_toolbox.data.multiclass_synthetic import generate_synthetic_multiclass
+
 # --- merged from test_noisy_ce_baseline.py ---
 from lnl_toolbox.noise.manifest import NoiseManifest
 
@@ -718,6 +722,8 @@ from lnl_toolbox.training.experiment import _validate_resume_config, run_experim
 
 # --- merged from test_noisy_ce_baseline.py ---
 from lnl_toolbox.training.noisy_labels import prepare_noise_manifest
+
+from lnl_toolbox.training.data_service import DATASETS
 
 # --- merged from test_noisy_ce_baseline.py ---
 def _noisy_ce_baseline__cifar(size: int, split: str) -> CifarData:
@@ -728,6 +734,36 @@ def _noisy_ce_baseline__cifar(size: int, split: str) -> CifarData:
 # --- merged from test_noisy_ce_baseline.py ---
 def _noisy_ce_baseline__config(epochs: int=1) -> dict:
     return {'seed': 7, 'data': {'name': 'cifar10', 'root': 'unused', 'validation_size': 10, 'max_train_samples': 20, 'max_validation_samples': 10, 'max_test_samples': 10, 'augment': False}, 'noise': {'name': 'symmetric', 'rate': 0.4, 'seed': 17}, 'loss': {'name': 'ce'}, 'loader': {'batch_size': 10, 'num_workers': 0, 'pin_memory': False}, 'model': {'name': 'tiny_cnn', 'width': 4}, 'optimizer': {'name': 'adamw', 'lr': 0.001}, 'scheduler': {'name': 'cosine', 't_max': 2}, 'trainer': {'epochs': epochs, 'device': 'cpu'}}
+
+
+class _noisy_ce_baseline__GenericTabularAdapter:
+    name = 'supervised_generic_tabular_fixture'
+    aliases: tuple[str, ...] = ()
+
+    def validate(self, spec: DataSpec) -> None:
+        if int(spec.options.get('num_classes', 0)) != 4:
+            raise ValueError('supervised fixture requires four classes')
+
+    def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
+        if split == 'validation':
+            raise ValueError('fixture intentionally uses a train-derived validation split')
+        sizes = {'train': 40, 'test': 12}
+        if split not in sizes:
+            raise ValueError(f'unsupported fixture split: {split}')
+        generated = generate_synthetic_multiclass(
+            sizes[split], 6, 4, seed + (0 if split == 'train' else 100),
+            start_index=0, split=split,
+        )
+        return RawDatasetSplit(
+            generated.features,
+            generated.labels,
+            generated.global_indices,
+            self.name,
+            split,
+            4,
+            clean_targets=generated.labels,
+            source='test_fixture',
+        )
 
 # --- merged from test_noisy_ce_baseline.py ---
 class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
@@ -846,6 +882,125 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
             run_dir = run_experiment(config, directory)
             checkpoint = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
         self.assertEqual(checkpoint['loss'], {'name': 'gce', 'q': 0.7})
+
+    def test_gce_and_apl_train_on_generic_tabular_data(self) -> None:
+        base = {
+            'seed': 7,
+            'data': {
+                'name': 'synthetic_multiclass',
+                'num_classes': 4,
+                'dimension': 6,
+                'train_size': 32,
+                'validation_size': 12,
+                'test_size': 12,
+            },
+            'noise': {'name': 'symmetric', 'rate': 0.25, 'seed': 17},
+            'loader': {'batch_size': 8, 'num_workers': 0},
+            'model': {'name': 'feature_mlp', 'hidden_width': 8},
+            'optimizer': {'name': 'adamw', 'lr': 0.001},
+            'scheduler': {'name': 'none'},
+            'trainer': {'epochs': 1, 'device': 'cpu'},
+        }
+        losses = (
+            {'name': 'gce', 'q': 0.7},
+            {
+                'name': 'apl',
+                'alpha': 1.0,
+                'beta': 1.0,
+                'active': {'name': 'nce'},
+                'passive': {'name': 'rce', 'log_zero': -4.0},
+            },
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for loss in losses:
+                with self.subTest(loss=loss['name']):
+                    config = deepcopy(base)
+                    config['loss'] = loss
+                    run_dir = run_experiment(config, Path(directory) / loss['name'])
+                    checkpoint = torch.load(
+                        run_dir / 'last.pt', map_location='cpu', weights_only=False
+                    )
+                    final = json.loads(
+                        (run_dir / 'final_metrics.json').read_text(encoding='utf-8')
+                    )
+                    self.assertEqual(checkpoint['loss'], loss)
+                    self.assertEqual(final['completed_epochs'], 1)
+                    self.assertTrue(np.isfinite(final['test_loss']))
+
+    def test_cdr_and_dss_train_on_generic_tabular_data(self) -> None:
+        try:
+            DATASETS.get(_noisy_ce_baseline__GenericTabularAdapter.name)
+        except ValueError:
+            DATASETS.add(_noisy_ce_baseline__GenericTabularAdapter())
+        base = {
+            'seed': 7,
+            'data': {
+                'name': _noisy_ce_baseline__GenericTabularAdapter.name,
+                'root': 'unused',
+                'num_classes': 4,
+                'validation_size': 8,
+            },
+            'noise': {
+                'name': 'symmetric',
+                'rate': 0.25,
+                'seed': 17,
+                'validation_targets': 'noisy',
+            },
+            'loss': {'name': 'ce'},
+            'selector': {'name': 'all'},
+            'parameter_update': {'name': 'standard'},
+            'loader': {'batch_size': 8, 'num_workers': 0},
+            'model': {'name': 'feature_mlp', 'hidden_width': 8},
+            'optimizer': {'name': 'adamw', 'lr': 0.001},
+            'scheduler': {'name': 'none'},
+            'trainer': {'epochs': 1, 'device': 'cpu'},
+            'execution': {'runner': 'supervised'},
+        }
+        methods = {
+            'cdr': {
+                'optimizer': {
+                    'name': 'sgd',
+                    'lr': 0.01,
+                    'momentum': 0.0,
+                    'weight_decay': 0.0,
+                },
+                'parameter_update': {
+                    'name': 'cdr',
+                    'noise_rate': 0.25,
+                    'l1_decay': 0.001,
+                    'critical_scope': 'all_trainable',
+                    'compatibility_mode': 'paper',
+                },
+            },
+            'dss': {
+                'pipeline': {
+                    'name': 'standard_noisy_erm',
+                    'objective_consumer': {
+                        'name': 'dss',
+                        # DSS state is addressed by stable source index, so its
+                        # capacity covers the complete 40-sample train namespace.
+                        'num_samples': 40,
+                        'num_classes': 4,
+                        'warmup_epochs': 1,
+                        'alpha': 0.1,
+                        'prior_decay': 0.99,
+                        'mda': True,
+                        'ccs': True,
+                    },
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            for method, additions in methods.items():
+                with self.subTest(method=method):
+                    config = deepcopy(base)
+                    config.update(additions)
+                    run_dir = run_experiment(config, Path(directory) / method)
+                    final = json.loads(
+                        (run_dir / 'final_metrics.json').read_text(encoding='utf-8')
+                    )
+                    self.assertEqual(final['completed_epochs'], 1)
+                    self.assertTrue(np.isfinite(final['test_loss']))
 
     def test_small_loss_selector_is_applied_and_resume_config_is_checked(self) -> None:
         config = _noisy_ce_baseline__config()

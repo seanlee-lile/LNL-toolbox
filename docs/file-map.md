@@ -510,14 +510,16 @@ clean-label boundaries or existing Result Contract field meanings.
 
 | 文件 | 责任 |
 |---|---|
-| `data/contracts.py` | `DataSpec`、`DatasetIdentity`、`RawDatasetSplit`、`DataRequirements`、角色与适配器协议 |
+| `data/contracts.py` | `DataSpec`、`DatasetIdentity`、`RawDatasetSplit`、`InputSpec`、`NoiseDescriptor`、`DataRequirements`、`DataProtocol`、角色与适配器协议 |
 | `data/registry.py` | 数据适配器注册、别名解析和未知数据集诊断 |
 | `data/sources.py` | CIFAR、CIFAR 二分类视图、synthetic、UCI 适配器 |
 | `data/cifar_n.py` | CIFAR-10N/100N 人工噪声标签版本与 clean-label 对齐验证 |
 | `data/mnist.py` | 本地 MNIST/Fashion-MNIST 适配器；禁止自动下载 |
 | `data/real_noise.py` | Clothing1M manifest 与 Animal-10N 文件夹懒加载 |
-| `data/views.py` | 稳定 global-index 的单/多视图 Dataset 和动态 overlay |
-| `training/data_service.py` | 唯一 prepare 入口、split/noise/role/view/loader/manifest/resume |
+| `data/views.py` | 稳定 global-index 的单/多视图 Dataset、动态 overlay，以及不泄漏其他字段的单 view 输入投影 |
+| `training/data_service.py` | 唯一 prepare 入口、split/noise/role/view/loader/manifest/resume；`PreparedData` 提供 role loader、`view_loader` 和 `subset_loader` |
+| `training/runners.py` | runner 能力声明；GCE/APL 的通用能力为 IMAGE/TABULAR，manifest 需求由具体 noise 配置决定 |
+| `training/experiment.py` | CE/GCE/APL 共享监督训练入口；只消费所需 role，并通过 `input_spec` 构造 TinyCNN 或通用 feature MLP |
 | `training/reproduction_data.py` | 旧 `prepare_noisy_classification()` 兼容代理 |
 | `training/checkpoint.py` | checkpoint 自动注入并校验 `data_manifest` 指纹 |
 | `cli/inspect_data.py` | 使用同一 Registry 的数据检查入口 |
@@ -525,6 +527,30 @@ clean-label boundaries or existing Result Contract field meanings.
 | `tests/test_data_adapters.py` | CIFAR-N、MNIST、真实噪声、UCI、synthetic fixture |
 
 所有计划内论文 runner 已直接调用 `prepare_experiment_data()`；论文 objective、模型、优化器和训练阶段定义未移入数据层。
+
+`DataRequirements` 只描述方法需要什么；`DataProtocol` 描述 generic 或论文复现怎样切分和
+变换数据。旧 runner 仍通过兼容入口工作，后续按方法迁移，不允许把 CIFAR 名称、官方
+augmentation 或固定类别数重新写入公共 `PreparedData` 接口。
+
+第二阶段共享入口迁移范围为 CE/GCE/APL；第三阶段只迁移下列三个专用 runner 的数据
+组装。其余 runner 仍需逐个核对真正需要的 role、view、clean/noise knowledge。
+
+特殊接头首批覆盖 DLD、DivideMix 和 L2RW：DLD 消费统一的 view loader，DivideMix 消费
+动态 subset loader，L2RW 通过 requirements 选择 validation 并保留独立 trusted role。
+这些修改仅替换 runner 开头的数据组装，不改变三个方法的算法或训练状态机。
+
+专用 runner 迁移首批（Phase 5A）继续复用同一文件层级，不新增目录：
+
+| 文件 | 本批职责变化 |
+|---|---|
+| `training/runners.py` | CDR、DSS、CA2C、VolMinNet 发布数学兼容的 IMAGE/TABULAR 能力；VolMinNet 只保留 `C>=3` |
+| `training/pcse_experiment.py` | train-mode PCSE 从 `PreparedData` 获取 dataset、类别数和 feature dimension；external UPM reproduction 边界保持不变 |
+| `algorithms/volminnet/config.py` | 通用数据读取显式类别数；旧 CIFAR recipe 缺省类别数仅作向后兼容 |
+| `tests/test_training.py` | CDR/DSS 在已注册四分类表格数据上完成真实 CPU epoch |
+| `tests/test_pcse.py` | 非内置名称的表格 adapter 进入 PCSE 第一个真实预训练 epoch |
+| `tests/test_estimators.py` | VolMinNet 在四分类表格数据上完成完整一轮并生成 `[4,4]` transition |
+
+算法公式、loss、selector、checkpoint 状态机、正式 YAML、CLI 和 Web 均未因本批数据迁移修改。
 
 ## 本地数据登记与训练证据（2026-08-20）
 

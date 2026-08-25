@@ -75,23 +75,6 @@ def _move_optimizer_state(optimizer: torch.optim.Optimizer, device: torch.device
                 state[name] = value.to(device)
 
 
-class _ViewDataset(Dataset[dict[str, Any]]):
-    def __init__(self, source: Dataset[dict[str, Any]], field: str) -> None:
-        self.source = source
-        self.field = field
-
-    def __len__(self) -> int:
-        return len(self.source)
-
-    def __getitem__(self, index: int) -> dict[str, Any]:
-        sample = self.source[index]
-        return {
-            "input": sample[self.field],
-            "target": sample["target"],
-            "index": sample["index"],
-        }
-
-
 class _IndexDataset(Dataset[dict[str, int]]):
     def __init__(self, indices: np.ndarray) -> None:
         self.indices = np.asarray(indices, dtype=np.int64)
@@ -604,11 +587,13 @@ def run_dld_experiment(
     if int(method.precorrection["k_neighbors"]) >= len(prepared.train_indices):
         raise ValueError("DLD k_neighbors must be smaller than the effective train set")
     loader_config = config["loader"]
-    multi_view = prepared.dataset_for(DataRole.TRAIN)
     def dual_view_loader(field: str):
-        return prepared.loader_for_dataset(
-            _ViewDataset(multi_view, field), shuffle=False,
-            stream=10 if field == "input" else 11,
+        view = "weak" if field == "input" else "strong"
+        return prepared.view_loader(
+            DataRole.TRAIN,
+            view,
+            shuffle=False,
+            stream=10 if view == "weak" else 11,
         )
     validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False, stream=20)
     test_loader = prepared.loader(DataRole.TEST, shuffle=False, stream=21)

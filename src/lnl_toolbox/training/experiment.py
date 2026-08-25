@@ -58,6 +58,16 @@ from lnl_toolbox.training.progress import (
 
 def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
     name = str(config.get("name", "preact_resnet18")).lower()
+    if name == "feature_mlp":
+        input_dim = int(config.get("input_dim", 0))
+        hidden_width = int(config.get("hidden_width", 16))
+        if input_dim <= 0 or hidden_width <= 0:
+            raise ValueError("feature_mlp requires positive input_dim and hidden_width")
+        return nn.Sequential(
+            nn.Linear(input_dim, hidden_width),
+            nn.ReLU(),
+            nn.Linear(hidden_width, num_classes),
+        )
     if name == "tiny_cnn":
         return TinyCNN(
             num_classes,
@@ -510,14 +520,19 @@ def run_supervised_experiment(
     validation_target_source = str(
         noise_config.get("validation_targets", "clean")
     ).strip().lower()
+    validation_role = (
+        DataRole.NOISY_VALIDATION
+        if validation_target_source == "noisy"
+        else DataRole.CLEAN_VALIDATION
+    )
     requirements = DataRequirements(
         roles=frozenset({
             DataRole.TRAIN,
-            DataRole.NOISY_VALIDATION,
-            DataRole.CLEAN_VALIDATION,
+            validation_role,
             DataRole.TEST,
         }),
         validation_targets=validation_target_source,
+        needs_noise_manifest=noise_mode(config) != "clean",
     )
     prepared = prepare_experiment_data(
         config,
@@ -551,12 +566,7 @@ def run_supervised_experiment(
         )
         config["noise"] = _resolved_noise_config(noise_config, noise_metadata)
     train_loader = prepared.loader(DataRole.TRAIN)
-    validation_role = (
-        DataRole.NOISY_VALIDATION
-        if validation_target_source == "noisy"
-        else DataRole.CLEAN_VALIDATION
-    )
-    validation_loader = prepared.loader(validation_role, shuffle=False)
+    validation_loader = prepared.validation_loader(shuffle=False)
     test_loader = prepared.loader(DataRole.TEST, shuffle=False)
     evaluation_config = config.get("evaluation", {}) or {}
     selection_split = str(evaluation_config.get("selection_split", "validation")).lower()
@@ -567,13 +577,18 @@ def run_supervised_experiment(
 
     model_config = dict(config["model"])
     if (
+        str(model_config.get("name", "")).lower() == "feature_mlp"
+        and "input_dim" not in model_config
+    ):
+        if prepared.input_spec.feature_dim is None:
+            raise ValueError("feature_mlp requires tabular input with a known feature_dim")
+        model_config["input_dim"] = prepared.input_spec.feature_dim
+    if (
         str(model_config.get("name", "")).lower() == "tiny_cnn"
         and "input_channels" not in model_config
     ):
-        sample_input = prepared.dataset_for(DataRole.TRAIN)[0]["input"]
-        sample_shape = tuple(torch.as_tensor(sample_input).shape)
-        if len(sample_shape) == 3:
-            model_config["input_channels"] = int(sample_shape[0])
+        if prepared.input_spec.channels is not None:
+            model_config["input_channels"] = prepared.input_spec.channels
     model = build_model(model_config, num_classes)
     criterion = build_builtin_loss(config["loss"]).to(device)
     selector = build_builtin_selector(config["selector"])

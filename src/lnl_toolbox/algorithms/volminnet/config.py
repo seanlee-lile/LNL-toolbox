@@ -46,13 +46,17 @@ class VolMinNetConfig:
         if str(execution.get("runner", "")).strip().lower() != "volminnet":
             raise ValueError("VolMinNet requires execution.runner: volminnet")
         data = _mapping(value.get("data"), owner="data")
-        dataset = str(data.get("name", "")).strip().lower()
-        expected_classes = {"cifar10": 10, "cifar100": 100}
-        if dataset not in expected_classes:
-            raise ValueError("VolMinNet first version supports CIFAR-10 and CIFAR-100")
-        num_classes = int(data.get("num_classes", expected_classes[dataset]))
-        if num_classes != expected_classes[dataset] or num_classes < 3:
-            raise ValueError("VolMinNet class count must match the CIFAR dataset and be >= 3")
+        configured_classes = data.get("num_classes")
+        if configured_classes is None:
+            # Backward compatibility for the existing official CIFAR recipes;
+            # arbitrary datasets must declare their class count explicitly.
+            configured_classes = {
+                "cifar10": 10,
+                "cifar100": 100,
+            }.get(str(data.get("name", "")).strip().lower(), 0)
+        num_classes = int(configured_classes)
+        if num_classes < 3:
+            raise ValueError("VolMinNet requires data.num_classes >= 3")
         trainer = _mapping(value.get("trainer"), owner="trainer")
         if int(trainer.get("epochs", 0)) <= 0:
             raise ValueError("trainer.epochs must be positive")

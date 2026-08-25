@@ -275,9 +275,14 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
             with self.subTest(recipe=recipe_id):
                 config = load_recipe_config(recipe_by_id(recipe_id))
                 requirements = registry.get(runner_name).requirements(config)
+                expected = (
+                    frozenset({Modality.IMAGE, Modality.TABULAR})
+                    if runner_name == 'ca2c'
+                    else frozenset({Modality.TABULAR})
+                )
                 self.assertEqual(
                     requirements.supported_modalities,
-                    frozenset({Modality.TABULAR}),
+                    expected,
                 )
                 service.preflight(config, check_data=True)
                 self.assertEqual(
@@ -285,7 +290,7 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
                     CompatibilityStatus.COMPATIBLE,
                 )
 
-    def test_cal_mc_ldce_and_ca2c_formal_and_unknown_contracts_stay_strict(self) -> None:
+    def test_cal_and_mc_ldce_stay_strict_while_ca2c_is_dataset_neutral(self) -> None:
         registry = create_runner_registry()
         formal_cases = (
             ('cal-cifar10-reproduction', 'cal'),
@@ -296,10 +301,12 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
             with self.subTest(recipe=recipe_id):
                 config = load_recipe_config(recipe_by_id(recipe_id))
                 requirements = registry.get(runner_name).requirements(config)
-                self.assertEqual(
-                    requirements.supported_modalities,
-                    frozenset({Modality.IMAGE}),
+                expected = (
+                    frozenset({Modality.IMAGE, Modality.TABULAR})
+                    if runner_name == 'ca2c'
+                    else frozenset({Modality.IMAGE})
                 )
+                self.assertEqual(requirements.supported_modalities, expected)
 
         cal = registry.get('cal').requirements(
             load_recipe_config(recipe_by_id('cal-cifar10-reproduction'))
@@ -354,9 +361,14 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
         for runner_name, config in unknown_configs.items():
             with self.subTest(runner=runner_name):
                 requirements = registry.get(runner_name).requirements(config)
+                expected = (
+                    CompatibilityStatus.COMPATIBLE
+                    if runner_name == 'ca2c'
+                    else CompatibilityStatus.INCOMPATIBLE
+                )
                 self.assertEqual(
                     resolve_compatibility(tabular, requirements).status,
-                    CompatibilityStatus.INCOMPATIBLE,
+                    expected,
                 )
 
     def test_shared_runner_detection_is_component_driven(self) -> None:
@@ -370,7 +382,27 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
         cases = (({'loss': {'name': 'gce'}}, 'gce'), ({'loss': {'name': 'apl'}}, 'apl'), ({'parameter_update': {'name': 'cdr'}}, 'cdr'), ({'pipeline': {'objective_consumer': {'name': 'dss'}}}, 'dss'), ({'pipeline': {'weight_provider': {'name': 'mentornet'}}}, 'mentornet'), ({'pipeline': {'risk_corrector': {'name': 'forward'}}}, 'loss_correction'))
         for config, expected in cases:
             with self.subTest(expected=expected):
-                self.assertEqual(supervised.requirements(config).method, expected)
+                requirements = supervised.requirements(config)
+                self.assertEqual(requirements.method, expected)
+                if expected in {'gce', 'apl'}:
+                    self.assertEqual(
+                        requirements.supported_modalities,
+                        frozenset({Modality.IMAGE, Modality.TABULAR}),
+                    )
+                    self.assertFalse(requirements.requires_noise_manifest)
+                    self.assertTrue(requirements.supports_native_noisy_labels)
+                if expected in {'cdr', 'dss'}:
+                    self.assertEqual(
+                        requirements.supported_modalities,
+                        frozenset({Modality.IMAGE, Modality.TABULAR}),
+                    )
+        volminnet = registry.get('volminnet').requirements({})
+        self.assertEqual(
+            volminnet.supported_modalities,
+            frozenset({Modality.IMAGE, Modality.TABULAR}),
+        )
+        self.assertEqual(volminnet.min_classes, 3)
+        self.assertEqual(volminnet.exact_classes, frozenset())
         multi_model = registry.get('multi_model')
         self.assertIsNone(multi_model.requirements({}))
         self.assertEqual(multi_model.requirements({'algorithm': {'name': 'jocor'}}).method, 'jocor')
@@ -378,7 +410,7 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
     def test_remaining_papers_reject_observed_only_native_noise(self) -> None:
         native_noise = NoiseKnowledge(status=NoiseStatus.NOISY, origin=NoiseOrigin.NATIVE, rate=NoiseRateInfo())
         papers = {paper.id: paper for paper in load_papers()}
-        for paper_id in {'binary-risk', 'loss-correction', 'gce', 'l2rw', 'mentornet', 'apl', 'dual-t', 'jocor', 'cal', 'cdr', 'cwd', 'mc-ldce', 'dss', 'fine'}:
+        for paper_id in {'binary-risk', 'loss-correction', 'l2rw', 'mentornet', 'dual-t', 'jocor', 'cal', 'cdr', 'cwd', 'mc-ldce', 'dss', 'fine'}:
             with self.subTest(paper=paper_id):
                 _, recipe = default_paper_config(papers[paper_id])
                 config = load_recipe_config(recipe)
@@ -388,6 +420,32 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
                 capabilities = resolve_dataset_capabilities(_compatibility__profile(modality=modality, classes=classes, clean=KnowledgeState.UNAVAILABLE, clean_validation=KnowledgeState.UNAVAILABLE, noise=native_noise))
                 result = resolve_compatibility(capabilities, requirements)
                 self.assertEqual(result.status, CompatibilityStatus.INCOMPATIBLE)
+
+    def test_loss_only_methods_accept_native_noise_without_clean_labels(self) -> None:
+        native_noise = NoiseKnowledge(
+            status=NoiseStatus.NOISY,
+            origin=NoiseOrigin.NATIVE,
+            rate=NoiseRateInfo(),
+        )
+        capabilities = resolve_dataset_capabilities(
+            _compatibility__profile(
+                modality=Modality.TABULAR,
+                classes=4,
+                clean=KnowledgeState.UNAVAILABLE,
+                clean_validation=KnowledgeState.UNAVAILABLE,
+                noise=native_noise,
+            )
+        )
+        supervised = create_runner_registry().get('supervised')
+        for loss in ('gce', 'apl'):
+            with self.subTest(loss=loss):
+                requirements = supervised.requirements(
+                    {'loss': {'name': loss}, 'noise': {'validation_targets': 'noisy'}}
+                )
+                self.assertEqual(
+                    resolve_compatibility(capabilities, requirements).status,
+                    CompatibilityStatus.COMPATIBLE,
+                )
 
 # --- merged from test_compatibility.py ---
 class _compatibility_ExperimentCompatibilityServiceTest(unittest.TestCase):

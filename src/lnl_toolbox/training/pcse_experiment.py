@@ -222,33 +222,21 @@ def run_pcse_experiment(
     data = config.get("data")
     if not isinstance(data, Mapping):
         raise TypeError("PCSE data configuration must be a mapping")
-    data_name = str(data.get("name", "")).strip().lower()
-    if data_name not in {"synthetic_multiclass", "cifar10"}:
-        raise ValueError("PCSE runner supports synthetic_multiclass and cifar10")
-    num_classes = int(data.get("num_classes", 0))
-    if num_classes < 3:
-        raise ValueError("PCSE requires at least three classes")
     loader = config.get("loader")
     if not isinstance(loader, Mapping):
         raise TypeError("PCSE loader configuration must be a mapping")
     model_config = method_config.pretraining.model
     external_source = None
     source_model = None
-    if data_name == "synthetic_multiclass":
-        if method_config.pretraining.mode != "train":
-            raise ValueError("synthetic PCSE requires pretraining mode train")
-        dimension = int(data.get("dimension", 0))
-        if str(model_config.get("name", "")).strip().lower() != "pcse_mlp":
-            raise ValueError("PCSE synthetic runner requires model name pcse_mlp")
-        model = _PCSEMultilayerPerceptron(
-            dimension, int(model_config.get("hidden_width", 16)), num_classes
-        )
+    model: nn.Module | None = None
+    pretraining_mode = method_config.pretraining.mode
+    if pretraining_mode == "train":
         manifest_mode = "generated"
-    else:
-        if method_config.pretraining.mode != "external_checkpoint":
-            raise ValueError(
-                "PCSE CIFAR-10 requires pretraining mode external_checkpoint"
-            )
+    elif pretraining_mode == "external_checkpoint":
+        data_name = str(data.get("name", "")).strip().lower()
+        num_classes = int(data.get("num_classes", 0))
+        if data_name != "cifar10":
+            raise ValueError("PCSE external UPM source currently requires CIFAR-10")
         if num_classes != 10:
             raise ValueError("PCSE CIFAR-10 requires data.num_classes: 10")
         model = build_model(model_config, num_classes)
@@ -266,6 +254,8 @@ def run_pcse_experiment(
             "validation_targets": "noisy",
         }
         manifest_mode = "external"
+    else:
+        raise ValueError(f"unsupported PCSE pretraining mode: {pretraining_mode}")
 
     prepared = prepare_experiment_data(
         config,
@@ -274,9 +264,25 @@ def run_pcse_experiment(
             validation_targets="noisy",
         ),
         run_dir=run_dir,
-        seed=seed + 10 if data_name == "synthetic_multiclass" else seed,
+        seed=seed + 10 if pretraining_mode == "train" else seed,
         checkpoint_payload=resume_payload,
     )
+    data_name, num_classes = prepared.dataset, prepared.num_classes
+    if pretraining_mode == "train":
+        if str(model_config.get("name", "")).strip().lower() != "pcse_mlp":
+            raise ValueError("PCSE tabular pretraining requires model name pcse_mlp")
+        dimension = prepared.input_spec.feature_dim
+        if dimension is None:
+            raise ValueError(
+                "PCSE pcse_mlp pretraining requires tabular input with feature_dim"
+            )
+        model = _PCSEMultilayerPerceptron(
+            dimension, int(model_config.get("hidden_width", 16)), num_classes
+        )
+    elif num_classes != 10:
+        raise ValueError("PCSE external UPM source class count mismatch")
+    if model is None:
+        raise RuntimeError("PCSE model construction did not complete")
     manifest, manifest_path = prepared.manifest, prepared.manifest_path
     if manifest is None or manifest_path is None:
         raise ValueError("PCSE requires noisy train and validation labels")

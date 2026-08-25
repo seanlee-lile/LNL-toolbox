@@ -17,9 +17,12 @@ from torch.utils.data import DataLoader, Dataset
 
 from lnl_toolbox.data.cifar_n import add_cifar_n_sources
 from lnl_toolbox.data.contracts import (
+    DataProtocol,
     DataRequirements,
     DataRole,
     DataSpec,
+    InputSpec,
+    NoiseDescriptor,
     RawDatasetSplit,
 )
 from lnl_toolbox.data.mnist import add_mnist_sources
@@ -337,6 +340,7 @@ def _transforms(
 class PreparedData:
     spec: DataSpec
     requirements: DataRequirements
+    protocol: DataProtocol
     train_split: RawDatasetSplit
     validation_split: RawDatasetSplit
     test_split: RawDatasetSplit
@@ -347,6 +351,7 @@ class PreparedData:
     manifest_path: Path | None
     datasets: dict[DataRole, Dataset]
     loader_config: Mapping[str, Any]
+    noise_config: Mapping[str, Any]
     seed: int
     data_manifest_path: Path
     data_fingerprint: str
@@ -358,6 +363,53 @@ class PreparedData:
     @property
     def dataset(self) -> str:
         return self.train_split.dataset
+
+    @property
+    def input_spec(self) -> InputSpec:
+        modality, shape, channels = _input_contract(self.train_split)
+        feature_dim = shape[0] if modality is Modality.TABULAR and shape is not None else None
+        return InputSpec(
+            modality=modality.value,
+            shape=shape,
+            channels=channels,
+            feature_dim=feature_dim,
+        )
+
+    @property
+    def available_roles(self) -> frozenset[DataRole]:
+        return frozenset(self.datasets)
+
+    @property
+    def noise_descriptor(self) -> NoiseDescriptor:
+        if self.manifest is None:
+            return NoiseDescriptor(
+                noise_type=str(
+                    self.noise_config.get(
+                        "name",
+                        "unknown" if self.train_split.clean_targets is None else "clean",
+                    )
+                ),
+                nominal_rate=self.noise_config.get("rate"),
+                realized_rate=(
+                    0.0
+                    if self.train_split.clean_targets is not None and not self.noise_config
+                    else None
+                ),
+                rho_positive=self.noise_config.get("rho_positive"),
+                rho_negative=self.noise_config.get("rho_negative"),
+                provenance=self.train_split.source,
+            )
+        return NoiseDescriptor(
+            noise_type=self.manifest.noise_type,
+            nominal_rate=self.manifest.requested_rate,
+            realized_rate=self.manifest.actual_rate,
+            rho_positive=self.noise_config.get("rho_positive"),
+            rho_negative=self.noise_config.get("rho_negative"),
+            transition_matrix=self.manifest.transition_matrix,
+            instance_transition=self.manifest.per_sample_transition,
+            provenance=str(self.manifest.metadata.get("source", "noise_manifest")),
+            mapping_hash=self.manifest.mapping_hash,
+        )
 
     @property
     def noisy_targets(self) -> np.ndarray:
@@ -408,6 +460,36 @@ class PreparedData:
             worker_init_fn=_seed_worker,
         )
 
+    def validation_loader(self, **loader_options: Any) -> DataLoader:
+        """Return the validation role declared by the method contract."""
+
+        preferred = (
+            DataRole.NOISY_VALIDATION
+            if self.requirements.validation_targets == "noisy"
+            else DataRole.CLEAN_VALIDATION
+        )
+        if preferred not in self.datasets:
+            raise KeyError(
+                f"validation role {preferred.value!r} was not requested; "
+                f"available roles are {sorted(role.value for role in self.datasets)}"
+            )
+        return self.loader(preferred, **loader_options)
+
+    def view_loader(
+        self,
+        role: DataRole | str,
+        view: str,
+        **loader_options: Any,
+    ) -> DataLoader:
+        """Load one named input view without changing target or global index."""
+
+        from lnl_toolbox.data.views import InputViewDataset
+
+        return self.loader_for_dataset(
+            InputViewDataset(self.dataset_for(role), view),
+            **loader_options,
+        )
+
     def dynamic_dataset(
         self,
         indices: Sequence[int] | np.ndarray,
@@ -432,6 +514,27 @@ class PreparedData:
             transforms=_transforms(self.train_split, data_config, requested, training=training),
             overlays=overlays,
         )
+
+    def subset_loader(
+        self,
+        indices: Sequence[int] | np.ndarray,
+        *,
+        views: tuple[str, ...] | None = None,
+        targets_by_index: Mapping[int, int] | None = None,
+        overlays: Mapping[str, Mapping[int, Any]] | None = None,
+        training: bool = True,
+        **loader_options: Any,
+    ) -> DataLoader:
+        """Build a stable-index dynamic training subset and its loader."""
+
+        dataset = self.dynamic_dataset(
+            indices,
+            views=views,
+            targets_by_index=targets_by_index,
+            overlays=overlays,
+            training=training,
+        )
+        return self.loader_for_dataset(dataset, **loader_options)
 
     def loader_for_dataset(
         self,
@@ -480,6 +583,7 @@ def _write_data_manifest(
     noise_manifest: NoiseManifest | None,
     loader_config: Mapping[str, Any],
     requirements: DataRequirements,
+    data_protocol: DataProtocol | None = None,
 ) -> str:
     def jsonable(value: Any) -> Any:
         if isinstance(value, Mapping):
@@ -519,6 +623,8 @@ def _write_data_manifest(
             "train_drop_last": requirements.train_drop_last,
         },
     }
+    if data_protocol is not None:
+        payload["data_protocol"] = jsonable(data_protocol.to_dict())
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     fingerprint = hashlib.sha256(canonical.encode()).hexdigest()
     payload["fingerprint"] = fingerprint
@@ -540,6 +646,7 @@ def _prepare_experiment_data(
     seed: int,
     checkpoint_payload: Mapping[str, Any] | None = None,
     registry: DatasetRegistry | None = None,
+    data_protocol: DataProtocol | None = None,
 ) -> PreparedData:
     """Normalize, validate, split, corrupt, view, and identify experiment data."""
 
@@ -552,6 +659,30 @@ def _prepare_experiment_data(
         noise_config["name"] = "binary_asymmetric_rcn"
     if noise_config:
         effective_config["noise"] = noise_config
+    explicit_data_protocol = data_protocol is not None
+    if data_protocol is None:
+        protocol_options = {
+            key: data_config[key]
+            for key in (
+                "augment",
+                "image_size",
+                "normalization",
+                "normalization_mean",
+                "normalization_std",
+                "strong_policy",
+                "strong_magnitude",
+            )
+            if key in data_config
+        }
+        data_protocol = DataProtocol(
+            name=str(data_config.get("protocol", "generic")),
+            transform_identity=str(data_config.get("preprocessing", "standard")),
+            validation_size=requirements.validation_size,
+            split_strategy=requirements.split_strategy,
+            options=protocol_options,
+        )
+    else:
+        data_config.update(dict(data_protocol.options))
     spec = DataSpec.from_mapping(data_config)
     registry = registry or DATASETS
     run_dir = Path(run_dir).resolve()
@@ -591,8 +722,11 @@ def _prepare_experiment_data(
         validation_indices = native_validation.global_indices.copy()
         validation_split = native_validation
     else:
+        protocol_validation_size = data_protocol.validation_size
         validation_size = int(
-            requirements.validation_size
+            protocol_validation_size
+            if protocol_validation_size is not None
+            else requirements.validation_size
             if requirements.validation_size is not None
             else data_config.get("validation_size", data_config.get("num_val", 0))
         )
@@ -603,7 +737,7 @@ def _prepare_experiment_data(
                     [len(source_train_indices) - validation_size, validation_size],
                     int(data_config.get("seed", seed)),
                 )
-            elif requirements.split_strategy == "numpy_choice_complement":
+            elif (data_protocol.split_strategy or requirements.split_strategy) == "numpy_choice_complement":
                 np.random.seed(int(seed))
                 chosen = np.random.choice(
                     source_train_indices.size,
@@ -935,6 +1069,7 @@ def _prepare_experiment_data(
         manifest,
         dict(config.get("loader", {})),
         requirements,
+        data_protocol if explicit_data_protocol else None,
     )
     adapter = registry.get(spec.name)
     artifact_provider = getattr(adapter, "identity_artifacts", None)
@@ -950,6 +1085,7 @@ def _prepare_experiment_data(
     prepared = PreparedData(
         spec=spec,
         requirements=requirements,
+        protocol=data_protocol,
         train_split=train,
         validation_split=validation_split,
         test_split=test,
@@ -960,6 +1096,7 @@ def _prepare_experiment_data(
         manifest_path=manifest_path,
         datasets=datasets,
         loader_config=dict(config.get("loader", {})),
+        noise_config=noise_config,
         seed=int(seed),
         data_manifest_path=data_manifest_path,
         data_fingerprint=fingerprint,
