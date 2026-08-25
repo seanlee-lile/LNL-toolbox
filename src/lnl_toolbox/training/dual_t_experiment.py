@@ -22,6 +22,7 @@ from lnl_toolbox.training.checkpoint import read_checkpoint
 from lnl_toolbox.training.experiment import (
     _environment,
     _resolved_noise_config,
+    bind_model_input,
     build_model,
     build_optimizer,
     build_scheduler,
@@ -38,6 +39,8 @@ def run_dual_t_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    requirements: DataRequirements | None = None,
 ) -> Path:
     """Build and run the first paper-specific Dual-T + Forward workflow."""
 
@@ -71,12 +74,12 @@ def run_dual_t_experiment(
         if checkpoint_payload.get("method") != "dual_t":
             raise ValueError("Resume checkpoint is not a Dual-T run")
 
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        requirements = resolve_data_requirements(config, expected_runner="dual_t")
     prepared = prepare_experiment_data(
         config,
-        requirements=DataRequirements(
-            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
-            validation_targets="noisy",
-        ),
+        requirements=requirements,
         run_dir=run_dir,
         seed=seed,
         checkpoint_payload=checkpoint_payload,
@@ -108,7 +111,8 @@ def run_dual_t_experiment(
     config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
 
     posterior_model = build_model(
-        method_config.posterior_stage.model, num_classes
+        bind_model_input(method_config.posterior_stage.model, prepared.input_spec),
+        num_classes,
     )
     posterior_optimizer = build_optimizer(
         posterior_model, method_config.posterior_stage.optimizer
@@ -118,7 +122,10 @@ def run_dual_t_experiment(
         method_config.posterior_stage.scheduler,
         method_config.posterior_stage.epochs,
     )
-    final_model = build_model(method_config.final_stage.model, num_classes)
+    final_model = build_model(
+        bind_model_input(method_config.final_stage.model, prepared.input_spec),
+        num_classes,
+    )
     final_optimizer = build_optimizer(
         final_model, method_config.final_stage.optimizer
     )

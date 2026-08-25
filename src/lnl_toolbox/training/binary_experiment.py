@@ -119,7 +119,10 @@ def evaluate_binary(model: nn.Module, loader: DataLoader, device: torch.device |
     return {"loss": total_loss / samples, "accuracy": correct / samples, "samples": float(samples)}
 
 
-def run_binary_experiment(config: Mapping[str, Any], output_dir: str | Path | None = None) -> Path:
+def run_binary_experiment(
+    config: Mapping[str, Any], output_dir: str | Path | None = None, *,
+    requirements: DataRequirements | None = None,
+) -> Path:
     """Run a single configured binary experiment and persist its metrics."""
 
     resolved_config, record = resolve_parameter_sampling(config)
@@ -129,9 +132,13 @@ def run_binary_experiment(config: Mapping[str, Any], output_dir: str | Path | No
     destination = Path(output_dir or resolved_config.get("output_root", "artifacts/binary")).resolve()
     destination.mkdir(parents=True, exist_ok=True)
     seed = int(resolved_config.get("seed", 1))
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+
+        requirements = resolve_data_requirements(resolved_config, expected_runner="binary")
     prepared = prepare_experiment_data(
         resolved_config,
-        requirements=DataRequirements(roles=frozenset({DataRole.TRAIN, DataRole.TEST})),
+        requirements=requirements,
         run_dir=destination,
         seed=seed,
     )
@@ -142,10 +149,13 @@ def run_binary_experiment(config: Mapping[str, Any], output_dir: str | Path | No
             f"{prepared.num_classes} classes"
         )
     loader = prepared.loader(DataRole.TRAIN)
-    sample = prepared.dataset_for(DataRole.TRAIN)[0]
-    input_dim = int(torch.as_tensor(sample["input"]).numel())
+    if prepared.input_spec.shape is None:
+        sample = prepared.dataset_for(DataRole.TRAIN)[0]
+        input_dim = int(torch.as_tensor(sample["input"]).numel())
+    else:
+        input_dim = int(np.prod(prepared.input_spec.shape))
     model_config = dict(resolved_config.get("model", {}))
-    model = build_binary_model(input_dim, model_config)
+    model = nn.Sequential(nn.Flatten(start_dim=1), build_binary_model(input_dim, model_config))
     optimizer_config = dict(resolved_config["optimizer"])
     if str(optimizer_config.get("name", "sgd")).lower() != "sgd":
         raise ValueError("binary experiment currently requires optimizer.name: sgd")

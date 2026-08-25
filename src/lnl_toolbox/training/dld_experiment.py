@@ -549,6 +549,8 @@ def run_dld_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    requirements: DataRequirements | None = None,
 ) -> Path:
     config = deepcopy(config)
     method = DLDConfig.from_mapping(config)
@@ -570,14 +572,12 @@ def run_dld_experiment(
         if method.epochs < saved.epochs:
             raise ValueError("DLD diffusion epoch target cannot be reduced on resume")
 
-    data_config = config["data"]
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        requirements = resolve_data_requirements(config, expected_runner="dld")
     prepared = prepare_experiment_data(
         config,
-        requirements=DataRequirements(
-            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
-            views=("weak", "strong"),
-            validation_targets="noisy",
-        ),
+        requirements=requirements,
         run_dir=run_dir, seed=seed, checkpoint_payload=checkpoint,
     )
     dataset, classes = prepared.dataset, prepared.num_classes
@@ -601,7 +601,7 @@ def run_dld_experiment(
         manifest, manifest_path, run_dir,
         effective_subset_actual_rate(manifest, prepared.train_indices),
         mode=noise_mode(config), validation_targets="noisy",
-        effective_validation_rate=effective_subset_actual_rate(manifest, prepared.validation_indices),
+        effective_validation_rate=prepared.realized_noise_rate(DataRole.NOISY_VALIDATION),
     )
     config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
 

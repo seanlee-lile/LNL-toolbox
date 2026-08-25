@@ -25,6 +25,7 @@ from lnl_toolbox.training.checkpoint import (
 from lnl_toolbox.training.experiment import (
     _environment,
     _resolved_noise_config,
+    bind_model_input,
     build_model,
     build_optimizer,
     build_scheduler,
@@ -153,6 +154,8 @@ def run_coteaching_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    requirements: DataRequirements | None = None,
 ) -> Path:
     """Run Co-teaching with exact peer cross-update and epoch-boundary resume."""
 
@@ -193,12 +196,12 @@ def run_coteaching_experiment(
         raise ValueError("Co-teaching requires a non-empty noisy validation split")
     if str(config["noise"].get("validation_targets", "")).lower() != "noisy":
         raise ValueError("Co-teaching checkpoint selection requires noisy validation targets")
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        requirements = resolve_data_requirements(config, expected_runner="coteaching")
     prepared = prepare_experiment_data(
         config,
-        requirements=DataRequirements(
-            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
-            validation_targets="noisy",
-        ),
+        requirements=requirements,
         run_dir=run_dir,
         seed=seed,
         checkpoint_payload=checkpoint_payload,
@@ -211,7 +214,7 @@ def run_coteaching_experiment(
     test_loader = prepared.loader(DataRole.TEST, shuffle=False)
 
     effective_rate = effective_subset_actual_rate(manifest, prepared.train_indices)
-    effective_validation_rate = effective_subset_actual_rate(manifest, prepared.validation_indices)
+    effective_validation_rate = prepared.realized_noise_rate(DataRole.NOISY_VALIDATION)
     noise_metadata = checkpoint_noise_metadata(
         manifest,
         manifest_path,
@@ -224,7 +227,8 @@ def run_coteaching_experiment(
     config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
 
     model_a, model_b = _build_peer_models(
-        config["model"], num_classes, seed, method_config.peer_seed_offset
+        bind_model_input(config["model"], prepared.input_spec),
+        num_classes, seed, method_config.peer_seed_offset
     )
     optimizer_a = build_optimizer(model_a, config["optimizer"])
     optimizer_b = build_optimizer(model_b, config["optimizer"])

@@ -632,8 +632,8 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
                 self.assertEqual(code, 0, error)
                 compatibility = {item['method']: item for item in json.loads(output)}
                 self.assertEqual(compatibility['importance_reweighting']['status'], 'compatible')
-                self.assertEqual(compatibility['upm']['status'], 'incompatible')
-                self.assertIn('unsupported_modality', compatibility['upm']['reason_codes'])
+                self.assertEqual(compatibility['upm']['status'], 'compatible')
+                self.assertNotIn('unsupported_modality', compatibility['upm']['reason_codes'])
                 code, output, error = self.invoke('data', 'verify', 'heart', '--output-dir', str(Path(directory) / 'heart-run'), '--project-root', str(_unified_cli_ROOT))
                 self.assertEqual(code, 0, error)
                 self.assertIn('Training check   VERIFIED', output)

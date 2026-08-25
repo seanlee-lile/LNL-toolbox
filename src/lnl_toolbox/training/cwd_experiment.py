@@ -43,6 +43,16 @@ def _build_model(config: Mapping[str, Any]):
         )
     if name == "tiny_cnn":
         return TinyCNN(2, int(config.get("width", 8)))
+    if name == "feature_mlp":
+        input_dim = int(config.get("input_dim", 0))
+        hidden_width = int(config.get("hidden_width", 16))
+        if input_dim <= 0 or hidden_width <= 0:
+            raise ValueError("CWD feature_mlp requires positive input dimensions")
+        return torch.nn.Sequential(
+            torch.nn.Linear(input_dim, hidden_width),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_width, int(config.get("num_outputs", 2))),
+        )
     raise ValueError(f"Unsupported CWD model: {name}")
 
 
@@ -110,6 +120,8 @@ def run_cwd_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    requirements: DataRequirements | None = None,
 ) -> Path:
     """Run one configured fold of the paper's five-fold CIFAR-binary protocol."""
 
@@ -130,6 +142,10 @@ def run_cwd_experiment(
     checkpoint = None if resume is None else read_checkpoint(resume, "cpu")
     if checkpoint is not None and checkpoint.get("config") != config:
         raise ValueError("CWD resume configuration mismatch")
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+
+        requirements = resolve_data_requirements(config, expected_runner="cwd")
 
     data_config = config["data"]
     folds = int(data_config.get("folds", 5))
@@ -139,10 +155,7 @@ def run_cwd_experiment(
     rho_negative = float(noise_config["rho_negative"])
     prepared = prepare_experiment_data(
         config,
-        requirements=DataRequirements(
-            roles=frozenset({DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.TEST}),
-            manifest_scope="effective_train",
-        ),
+        requirements=requirements,
         run_dir=run_dir, seed=seed, checkpoint_payload=checkpoint,
     )
     if prepared.num_classes != 2 or prepared.manifest is None or prepared.manifest_path is None:
@@ -158,6 +171,10 @@ def run_cwd_experiment(
     cwd_config = config.get("cwd", {})
     cwd_variant = str(cwd_config.get("variant", "multiclass")).strip().lower()
     model_config = dict(config["model"])
+    if str(model_config.get("name", "")).lower() == "feature_mlp" and "input_dim" not in model_config:
+        if prepared.input_spec.feature_dim is None:
+            raise ValueError("CWD feature_mlp requires a known feature dimension")
+        model_config["input_dim"] = prepared.input_spec.feature_dim
     if cwd_variant == "binary_scalar":
         model_config["num_outputs"] = 1
     model = _build_model(model_config).to(device)

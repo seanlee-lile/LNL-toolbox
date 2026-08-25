@@ -36,7 +36,7 @@ from lnl_toolbox.plugins.builtin import (
 )
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import load_checkpoint, read_checkpoint, save_checkpoint
-from lnl_toolbox.training.experiment import build_model, build_optimizer, build_scheduler
+from lnl_toolbox.training.experiment import bind_model_input, build_model, build_optimizer, build_scheduler
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
 from lnl_toolbox.training.data_service import prepare_experiment_data
 from lnl_toolbox.training.snapshots import (
@@ -396,6 +396,8 @@ def run_instance_transition_experiment(
     raw_config: Mapping[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    requirements: DataRequirements | None = None,
 ) -> Path:
     """Run warm-up → snapshots → instance estimator → corrected training."""
 
@@ -412,22 +414,12 @@ def run_instance_transition_experiment(
     if checkpoint_payload is not None and dict(checkpoint_payload.get("config") or {}) != config:
         raise ValueError("Resume configuration changed")
 
-    data_config = dict(config["data"])
-    noisy_validation_size = int(config["warmup"]["noisy_validation_size"])
-    official_pdl = (
-        str(config.get("algorithm", {}).get("correction", "")).lower()
-        in {"pdl", "pdl_revision"}
-        or "phases" in config
-    )
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        requirements = resolve_data_requirements(config, expected_runner="instance_transition")
     prepared = prepare_experiment_data(
         config,
-        requirements=DataRequirements(
-            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
-            validation_targets="noisy",
-            validation_size=noisy_validation_size,
-            split_strategy="numpy_choice_complement" if official_pdl else None,
-            subset_before_split=True,
-        ),
+        requirements=requirements,
         run_dir=run_dir, seed=seed, checkpoint_payload=checkpoint_payload,
     )
     dataset_name, num_classes = prepared.dataset, prepared.num_classes
@@ -460,11 +452,15 @@ def run_instance_transition_experiment(
         else:
             validation_artifact = artifact
             revision_validation_artifact = artifact
-        model = _build_instance_model(config["model"], num_classes)
+        model = _build_instance_model(
+            bind_model_input(config["model"], prepared.input_spec), num_classes
+        )
         if official_pdl:
             _attach_pdl_revision_head(model, num_classes)
     else:
-        warmup_model = _build_instance_model(config["model"], num_classes)
+        warmup_model = _build_instance_model(
+            bind_model_input(config["model"], prepared.input_spec), num_classes
+        )
         if official_pdl:
             _attach_pdl_revision_head(warmup_model, num_classes)
         warmup_optimizer = build_optimizer(warmup_model, config["warmup"]["optimizer"])
@@ -636,7 +632,9 @@ def run_instance_transition_experiment(
             resume=resume,
         )
 
-    model = _build_instance_model(config["model"], num_classes)
+    model = _build_instance_model(
+        bind_model_input(config["model"], prepared.input_spec), num_classes
+    )
     optimizer = build_optimizer(model, config["optimizer"])
     scheduler = build_scheduler(optimizer, config.get("scheduler"), epochs)
     criterion = build_builtin_loss(config.get("loss", {"name": "ce"})).to(device)

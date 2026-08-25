@@ -29,7 +29,7 @@ from lnl_toolbox.training.checkpoint import (
     save_checkpoint,
 )
 from lnl_toolbox.training.data_service import prepare_experiment_data
-from lnl_toolbox.training.experiment import build_model
+from lnl_toolbox.training.experiment import bind_model_input, build_model
 from lnl_toolbox.training.noisy_labels import (
     checkpoint_noise_metadata,
     effective_subset_actual_rate,
@@ -150,6 +150,8 @@ def run_multi_model_experiment(
     raw_config: Mapping[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    requirements: DataRequirements | None = None,
 ) -> Path:
     """Run one configured multi-model algorithm without paper-name branches."""
 
@@ -174,14 +176,12 @@ def run_multi_model_experiment(
         if saved != config:
             raise ValueError("Resume configuration changed")
 
-    data_config = dict(config["data"])
-    validation_size = int(data_config.get("validation_size", 0))
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        requirements = resolve_data_requirements(config, expected_runner="multi_model")
     prepared = prepare_experiment_data(
         config,
-        requirements=DataRequirements(
-            roles=frozenset({DataRole.TRAIN, DataRole.CLEAN_VALIDATION, DataRole.TEST}),
-            manifest_scope="effective_train",
-        ),
+        requirements=requirements,
         run_dir=run_dir,
         seed=seed,
         checkpoint_payload=checkpoint_payload,
@@ -213,7 +213,9 @@ def run_multi_model_experiment(
     for index, model_config in enumerate(model_configs, start=1):
         if not isinstance(model_config, Mapping):
             raise TypeError("each model configuration must be a mapping")
-        members[f"model_{index}"] = _build_member(model_config, num_classes)
+        members[f"model_{index}"] = _build_member(
+            bind_model_input(model_config, prepared.input_spec), num_classes
+        )
     models = ModelGroup(members)
     optimizer = _build_optimizer(models.parameters(), config["optimizer"])
     criterion = build_builtin_loss(config.get("loss", {"name": "ce"})).to(device)

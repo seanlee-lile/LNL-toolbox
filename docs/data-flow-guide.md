@@ -897,3 +897,35 @@ Web 必须选择具体 formal recipe 后再检查方法。数据集真实噪声�
 `required_user_inputs` 及实际 `required_input_paths`；先验由 `ExperimentService` 注入
 配置后再进入 validate/dry-run/run。旧 catalog 中的先验和 `pretrained_roles` 仅可读取，
 不再作为新兼容性证据。
+
+## 26 篇论文统一数据接头（2026-08-25）
+
+唯一的数据要求来源是 `training/runners.py::RunnerSpec`：
+
+```text
+RunnerSpec
+  → MethodRequirements
+      ├─ compatibility
+      └─ data_requirements ─→ runner ─→ prepare_experiment_data
+```
+
+`MethodRequirements` 分开记录 `implemented_variant`、该 variant 的
+`data_requirements` 和非论文理论边界 `implementation_limits`。兼容性检查与实际训练
+均调用同一个 provider；`RunnerSpec.invoke()` 将解析出的同一 `DataRequirements` 对象传给
+runner。直接调用 runner 时，只能在 runner 层通过 `resolve_data_requirements()` 取得合同。
+`DataService` 不导入 runner、不了解 method，也不提供隐式默认要求。
+
+公开论文 runner 不得再次构造 `DataRequirements`。用户明确保留的 legacy
+`volmin_experiment.py` 与 evidence-only `dual_t_evidence_experiment.py` 不属于该生产门禁。
+`clean` 只是 supervised engine 的兼容包装，不维护第二份合同。
+
+模型输入维度由 `PreparedData.input_spec` 经 `bind_model_input()` 绑定；算法不再根据
+dataset 名称猜测类别数或 shape。正式 reproduction YAML、split、augmentation 与训练数学
+保持不变。FINE/DLD 的强视图/特征路径仍保留 IMAGE variant 边界；CWD 与 Importance
+Reweighting 保留 binary variant；VolMinNet 保留当前 parameterization 的 `C >= 3`；
+MC-LDCE 的 `C >= 3` 继续标记为论文证据未决。
+
+普通 noisy `TRAIN` batch 仍只提供 `input/target/index`，其中 target 是 observed target。
+trusted role 只能来自 source 的真实 clean target 或已校验 manifest，禁止用 observed target
+补洞。独立 validation 的实际噪声率由 `PreparedData.realized_noise_rate(role)` 从该 role
+自身身份空间计算，不能拿 train manifest 的 index 推断。

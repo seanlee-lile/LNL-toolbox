@@ -19,7 +19,7 @@ from lnl_toolbox.evaluation.classification import evaluate_classification
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
-from lnl_toolbox.training.experiment import build_optimizer, build_scheduler
+from lnl_toolbox.training.experiment import bind_model_input, build_optimizer, build_scheduler
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
 from lnl_toolbox.training.reproduction_data import build_reproduction_model
 from lnl_toolbox.training.data_service import prepare_experiment_data
@@ -118,6 +118,7 @@ def _trusted_manifest(
 def run_l2rw_experiment(
     config: dict[str, Any], output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *, requirements: DataRequirements | None = None,
 ) -> Path:
     config = deepcopy(config)
     seed = int(config.get("seed", 1)); seed_everything(seed)
@@ -137,12 +138,12 @@ def run_l2rw_experiment(
         )
     )
     official_generated = str(trusted_config.get("source", "")).strip().lower() == "official_generated"
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        requirements = resolve_data_requirements(config, expected_runner="l2rw")
     prepared = prepare_experiment_data(
         config,
-        requirements=DataRequirements(
-            roles=frozenset({DataRole.TRAIN, DataRole.TRUSTED_VALIDATION, DataRole.CLEAN_VALIDATION, DataRole.TEST}),
-            train_drop_last=True if official_generated else None,
-        ),
+        requirements=requirements,
         run_dir=run_dir,
         seed=data_seed if official_generated else seed,
     )
@@ -173,7 +174,10 @@ def run_l2rw_experiment(
         batch_size=int(trusted_config.get("batch_size", config.get("loader", {}).get("batch_size", 128))),
         generator_seed=int(trusted_config.get("input_seed", seed + 1000)),
     )
-    model = build_reproduction_model(config["model"], config["data"], num_classes).to(device)
+    model = build_reproduction_model(
+        bind_model_input(config["model"], prepared.input_spec),
+        config["data"], num_classes,
+    ).to(device)
     meta_model = model
     if official_generated and str(config["model"].get("name", "")).lower() == "l2rw_resnet32":
         # The official assigned-weight replicas use batch statistics and only

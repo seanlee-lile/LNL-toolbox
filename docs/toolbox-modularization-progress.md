@@ -341,3 +341,19 @@
 - Validation: Web `test_command_console.py` 47/47；数据适配器 46/46；Python 编译检查通过。完整 registry 测试当前受仓库既有缺失模块 `test_t_revision_workflow` 阻塞，未归因于本任务。
 - Files modified in this task: `README.md`, `web/README.md`, `web/index.html`, `web/command_console.py`, `docs/data-flow-guide.md`, `docs/development-guide.md`, `docs/file-map.md`, `docs/toolbox-modularization-progress.md`, `src/lnl_toolbox/data/profile.py`, `src/lnl_toolbox/data/real_noise.py`, `src/lnl_toolbox/training/data_service.py`, `src/lnl_toolbox/training/compatibility.py`, `src/lnl_toolbox/training/service.py`, `tests/test_data_adapters.py`, `tests/test_registry.py`, `web/test_command_console.py`。其中多份文件已有协作者工作，本次只做局部增量。
 - Exact next step: review final diff and resolve the pre-existing merged-test import issue before considering commit/push.
+
+## 26 篇论文统一数据接头收口（2026-08-25）
+
+- Current task: 以 `RunnerSpec` 为唯一 method requirement 真源，让 compatibility 与真实 runner 共享同一个 `DataRequirements`，并仅解除不改变现有数学流程的数据限制。
+- Branch/base: `new-cli` at `3382934`; no branch creation, commit, or push is authorized.
+- Checklist: canonical requirement source；RunnerSpec→runner identity；第一批六方法；其余二十方法；label/role boundary；tests/docs。Completed: 6 / 6（100%）。
+- Public contract: `RunnerSpec.data_requirements(config)` 同时供 compatibility 与 `RunnerSpec.invoke()` 使用；`prepare_experiment_data(..., requirements=...)` 保持显式必填，DataService 不认识 method/runner。
+- Safe removals: 可由 role/view/model input adapter 支持的 dataset-name、CIFAR、IMAGE、固定类别数和手工 feature snapshot 限制已解除。CWD binary、VolMinNet `C>=3`、Binary Risk/Importance binary、DLD multi-view、FINE robust strong-view、L2RW trusted supervision 等仍按 `implemented_variant_limit` 或算法 requirement 保留；没有新增论文 variant 或数学流程。
+- Label boundary: noisy TRAIN 始终使用 observed target 且 batch 不暴露 clean label；clean/trusted labels 只在显式 evaluation、trusted/meta/curriculum role 使用。协议 TEST source 可提供 clean evaluation ground truth，TRAIN 派生 clean validation 仍须真实 clean target。
+- Focused validation: registry `49/49`；data adapters `54/54`；CLI `89/89`；Quick Start `10/10`；training `72/72`（1 skipped）；estimators `49/49`；各 dedicated method suites已通过。
+- Full validation: `949` tests executed; `946` passed, `1` skipped, and the two known baseline assertions below failed. All focused suites affected by this task pass.
+- Known baseline failures outside this task: `test_config.py` still hard-codes 94 YAMLs although 95 are tracked; `test_noise.py` expects a generic length error while manifest validation raises the more specific out-of-namespace index error. Neither file nor noise/config implementation was modified.
+- Files added: none. Four pre-existing untracked WebUI audit files remain untouched.
+- Local checkpoint commits: none.
+- Exact next step: human review of the final diff and the two explicitly recorded baseline failures; commit or publication requires separate authorization.
+- Collaborator note: `training/runners.py`, `training/compatibility.py`, `training/data_service.py`, `training/experiment.py`, and shared docs are high-conflict; algorithms, losses, selectors, estimators, reproduction YAML, CLI/Web/Scratch, and legacy evidence runners remain unchanged.

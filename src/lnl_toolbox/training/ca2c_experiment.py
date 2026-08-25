@@ -22,7 +22,7 @@ from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
 from lnl_toolbox.training.data_service import prepare_experiment_data
-from lnl_toolbox.training.experiment import build_optimizer, build_scheduler
+from lnl_toolbox.training.experiment import bind_model_input, build_optimizer, build_scheduler
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
 from lnl_toolbox.training.reproduction_data import build_reproduction_model
 
@@ -71,23 +71,27 @@ def _ca2c_batch_objectives(
     )
 
 
-def run_ca2c_experiment(config: dict[str, Any], output_dir=None, resume=None) -> Path:
+def run_ca2c_experiment(
+    config: dict[str, Any], output_dir=None, resume=None, *,
+    requirements: DataRequirements | None = None,
+) -> Path:
     config = deepcopy(config); seed = int(config.get("seed", 1)); seed_everything(seed)
     device = resolve_device(str(config.get("trainer", {}).get("device", "auto")))
     run_dir = Path(resume).resolve().parent if resume else Path(output_dir or Path(config.get("output_root", "artifacts/runs")) / datetime.now().strftime("%Y%m%d-%H%M%S")).resolve(); run_dir.mkdir(parents=True, exist_ok=True)
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        requirements = resolve_data_requirements(config, expected_runner="ca2c")
     data = prepare_experiment_data(
         config,
-        requirements=DataRequirements(
-            roles=frozenset({DataRole.TRAIN, DataRole.CLEAN_VALIDATION, DataRole.TEST}),
-            views=("weak", "strong") if bool(config["data"].get("strong_augment", False)) else ("weak",),
-        ),
+        requirements=requirements,
         run_dir=run_dir,
         seed=seed,
     ); classes = data.num_classes
     train_loader = data.loader(DataRole.TRAIN, stream=21)
     validation_loader = data.loader(DataRole.CLEAN_VALIDATION, stream=23, shuffle=False)
     test_loader = data.loader(DataRole.TEST, stream=24, shuffle=False)
-    p_model = build_reproduction_model(config["model"], config["data"], classes).to(device); n_model = build_reproduction_model(config["model"], config["data"], classes).to(device)
+    model_config = bind_model_input(config["model"], data.input_spec)
+    p_model = build_reproduction_model(model_config, config["data"], classes).to(device); n_model = build_reproduction_model(model_config, config["data"], classes).to(device)
     p_optimizer = build_optimizer(p_model, config["optimizer"]); n_optimizer = build_optimizer(n_model, config["optimizer"])
     epochs = int(config["trainer"]["epochs"]); p_scheduler = build_scheduler(p_optimizer, config.get("scheduler"), epochs); n_scheduler = build_scheduler(n_optimizer, config.get("scheduler"), epochs)
     memory = CandidateMemory.create(torch.as_tensor(data.train_indices), classes); criterion = CrossEntropyLoss().to(device); start = 0; rows = []

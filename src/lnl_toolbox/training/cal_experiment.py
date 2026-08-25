@@ -26,6 +26,7 @@ from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read
 from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.training.data_service import prepare_experiment_data
 from lnl_toolbox.training.experiment import (
+    bind_model_input,
     build_alpha_scaled_scheduler,
     build_optimizer,
 )
@@ -92,29 +93,49 @@ def _reference_transition_means(
     return torch.as_tensor(counts, dtype=torch.float32)
 
 
-def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> Path:
+def run_cal_experiment(
+    config: dict[str, Any], output_dir=None, resume=None, *,
+    requirements: DataRequirements | None = None,
+) -> Path:
     config = deepcopy(config); seed = int(config.get("seed", 1)); seed_everything(seed)
     device = resolve_device(str(config.get("trainer", {}).get("device", "auto")))
     run_dir = Path(resume).resolve().parent if resume else Path(output_dir or Path(config.get("output_root", "artifacts/runs")) / datetime.now().strftime("%Y%m%d-%H%M%S")).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+
+        requirements = resolve_data_requirements(config, expected_runner="cal")
     data = prepare_experiment_data(
         config,
-        requirements=DataRequirements(roles=frozenset({
-            DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.CLEAN_VALIDATION, DataRole.TEST,
-        })),
+        requirements=requirements,
         run_dir=run_dir,
         seed=seed,
     )
     train_loader = data.loader(DataRole.TRAIN, stream=21)
-    snapshot_loader = data.loader(DataRole.TRAIN_EVAL, stream=22, shuffle=False)
-    validation_loader = data.loader(DataRole.CLEAN_VALIDATION, stream=23, shuffle=False)
+    target_map = {
+        int(index): int(target)
+        for index, target in zip(data.train_indices, data.noisy_targets)
+    }
+    snapshot_loader = data.loader_for_dataset(
+        data.dynamic_dataset(
+            data.train_indices,
+            views=("weak",),
+            targets_by_index=target_map,
+            training=False,
+        ),
+        stream=22,
+        shuffle=False,
+    )
     test_loader = data.loader(DataRole.TEST, stream=24, shuffle=False)
+    validation_loader = test_loader
     classes = data.num_classes
     noisy_prior = torch.as_tensor(np.bincount(data.noisy_targets, minlength=classes) / len(data.noisy_targets), dtype=torch.float32, device=device)
     proxy_path = run_dir / "cal_proxy_artifact.npz"
     payload = read_checkpoint(resume, device) if resume else None
     if payload is None:
-        warmup = build_reproduction_model(config["model"], config["data"], classes).to(device)
+        warmup = build_reproduction_model(
+            bind_model_input(config["model"], data.input_spec), config["data"], classes
+        ).to(device)
         warmup_optimizer = build_optimizer(warmup, config["optimizer"])
         warmup_cfg = dict(config["warmup"])
         warmup_epochs = int(warmup_cfg["epochs"])
@@ -191,7 +212,9 @@ def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> 
         np.asarray(data.noisy_targets),
         classes,
     ).to(device)
-    model = build_reproduction_model(config["model"], config["data"], classes).to(device)
+    model = build_reproduction_model(
+        bind_model_input(config["model"], data.input_spec), config["data"], classes
+    ).to(device)
     optimizer = build_optimizer(model, config["optimizer"]); epochs = int(config["trainer"]["epochs"])
     scheduler = build_alpha_scaled_scheduler(optimizer, config.get("scheduler"))
     cal_cfg = dict(config["cal"])

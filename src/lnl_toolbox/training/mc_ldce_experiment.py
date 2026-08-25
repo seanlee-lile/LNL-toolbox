@@ -29,7 +29,7 @@ from lnl_toolbox.noise.transition import TransitionArtifact
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
 from lnl_toolbox.training.data_service import prepare_experiment_data
-from lnl_toolbox.training.experiment import build_optimizer, build_scheduler
+from lnl_toolbox.training.experiment import bind_model_input, build_optimizer, build_scheduler
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
 from lnl_toolbox.training.reproduction_data import build_reproduction_model
 from lnl_toolbox.training.snapshots import FeatureSnapshot, collect_feature_snapshot
@@ -148,17 +148,21 @@ def _estimate_volmin(config, model, loader, device):
     }
 
 
-def run_mc_ldce_experiment(config: dict[str, Any], output_dir=None, resume=None) -> Path:
+def run_mc_ldce_experiment(
+    config: dict[str, Any], output_dir=None, resume=None, *,
+    requirements: DataRequirements | None = None,
+) -> Path:
     config = deepcopy(config)
     seed = int(config.get("seed", 1))
     seed_everything(seed)
     device = resolve_device(str(config.get("trainer", {}).get("device", "auto")))
     run_dir = _directory(config, output_dir, resume)
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        requirements = resolve_data_requirements(config, expected_runner="mc_ldce")
     prepared = prepare_experiment_data(
         config,
-        requirements=DataRequirements(roles=frozenset({
-            DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.CLEAN_VALIDATION, DataRole.TEST,
-        })),
+        requirements=requirements,
         run_dir=run_dir,
         seed=seed,
     )
@@ -167,7 +171,10 @@ def run_mc_ldce_experiment(config: dict[str, Any], output_dir=None, resume=None)
     validation_loader = prepared.loader(DataRole.CLEAN_VALIDATION, stream=23, shuffle=False)
     test_loader = prepared.loader(DataRole.TEST, stream=24, shuffle=False)
     lifecycle = _lifecycle(config)
-    model = build_reproduction_model(config["model"], config["data"], prepared.num_classes).to(device)
+    model = build_reproduction_model(
+        bind_model_input(config["model"], prepared.input_spec),
+        config["data"], prepared.num_classes,
+    ).to(device)
     epochs = int(config["trainer"]["epochs"])
     criterion = CrossEntropyLoss().to(device)
     start_epoch = 0
@@ -182,7 +189,10 @@ def run_mc_ldce_experiment(config: dict[str, Any], output_dir=None, resume=None)
         _prepare_fixed_feature_classifier(model)
     elif str(config["transition"].get("estimator", "")).lower() == "paper_volmin":
         estimator_model = build_reproduction_model(
-            dict(config["transition"].get("model", {"name": "resnet18"})),
+            bind_model_input(
+                dict(config["transition"].get("model", {"name": "resnet18"})),
+                prepared.input_spec,
+            ),
             config["data"],
             prepared.num_classes,
         ).to(device)

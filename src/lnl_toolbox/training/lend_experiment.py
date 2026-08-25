@@ -21,7 +21,7 @@ from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import load_checkpoint, read_checkpoint, save_checkpoint
 from lnl_toolbox.training.experiment import (
     _environment, _resolved_noise_config,
-    build_model, build_optimizer, build_scheduler,
+    bind_model_input, build_model, build_optimizer, build_scheduler,
 )
 from lnl_toolbox.training.data_service import prepare_experiment_data
 from lnl_toolbox.training.noisy_labels import (
@@ -73,7 +73,8 @@ def _validate_resume_config(current: Mapping[str, Any], saved: Mapping[str, Any]
 
 
 def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = None,
-                        resume: str | Path | None = None) -> Path:
+                        resume: str | Path | None = None, *,
+                        requirements: DataRequirements | None = None) -> Path:
     """Run the paper-oriented, online LEND workflow."""
 
     config = deepcopy(config)
@@ -105,12 +106,12 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
         raise ValueError("LEND requires a non-empty noisy validation split")
     if str(config["noise"].get("validation_targets", "")).lower() != "noisy":
         raise ValueError("LEND best-checkpoint selection requires noisy validation targets")
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        requirements = resolve_data_requirements(config, expected_runner="lend")
     prepared = prepare_experiment_data(
         config,
-        requirements=DataRequirements(
-            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
-            validation_targets="noisy",
-        ),
+        requirements=requirements,
         run_dir=run_dir, seed=seed, checkpoint_payload=checkpoint_payload,
     )
     dataset_name, num_classes = prepared.dataset, prepared.num_classes
@@ -125,14 +126,14 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
     validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False)
     test_loader = prepared.loader(DataRole.TEST, shuffle=False)
     effective_rate = effective_subset_actual_rate(manifest, prepared.train_indices)
-    effective_validation_rate = effective_subset_actual_rate(manifest, prepared.validation_indices)
+    effective_validation_rate = prepared.realized_noise_rate(DataRole.NOISY_VALIDATION)
     noise_metadata = checkpoint_noise_metadata(
         manifest, manifest_path, run_dir, effective_rate, mode=noise_mode(config),
         validation_targets="noisy", effective_validation_rate=effective_validation_rate,
     )
     config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
 
-    model = build_model(config["model"], num_classes)
+    model = build_model(bind_model_input(config["model"], prepared.input_spec), num_classes)
     if not callable(getattr(model, "forward_with_features", None)):
         raise ValueError("LEND model must support forward_with_features()")
     # Runtime shape proof before any training or checkpoint mutation.

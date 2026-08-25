@@ -398,6 +398,7 @@ class _data_service_DataServiceTest(unittest.TestCase):
             validation = prepared.dataset_for(DataRole.NOISY_VALIDATION)
             self.assertEqual([int(validation[index]['target']) for index in range(2)], [8, 9])
             self.assertEqual(prepared.train_split.observed_targets.tolist(), [5, 6])
+            self.assertEqual(prepared.realized_noise_rate(DataRole.NOISY_VALIDATION), 0.0)
 
     def test_native_noisy_data_fails_before_manifest_required_training(self) -> None:
         requirements = DataRequirements(roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}), validation_targets='noisy', needs_noise_manifest=True)
@@ -424,6 +425,7 @@ class _data_service_DataServiceTest(unittest.TestCase):
                 [int(validation[offset]['target']) for offset in range(len(validation))],
                 prepared.validation_split.observed_targets.tolist(),
             )
+            self.assertEqual(prepared.realized_noise_rate(DataRole.NOISY_VALIDATION), 0.0)
             self.assertEqual(set(prepared.train_indices) & set(prepared.validation_indices), set())
 
     def test_derived_noisy_validation_extends_manifest_coverage(self) -> None:
@@ -676,6 +678,32 @@ class _data_service_DataServiceTest(unittest.TestCase):
                 first.validation_loader()
         self.assertEqual(DataRole.UNLABELED.value, 'unlabeled')
         self.assertEqual(DataRole.CURRICULUM.value, 'curriculum')
+
+    def test_explicit_test_split_supplies_clean_evaluation_targets(self) -> None:
+        requirements = DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.CLEAN_VALIDATION, DataRole.TEST}),
+            validation_targets='clean',
+            needs_noise_manifest=False,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prepared = prepare_experiment_data(
+                {
+                    'data': {'name': 'fixture', 'root': str(root), 'validation_size': 0},
+                    'noise': {'name': 'clean', 'validation_targets': 'clean'},
+                    'loader': {'batch_size': 2, 'num_workers': 0},
+                },
+                requirements=requirements,
+                run_dir=root / 'run',
+                seed=3,
+                registry=DatasetRegistry((_data_service__FixtureAdapter(),)),
+            )
+            validation = prepared.dataset_for(DataRole.CLEAN_VALIDATION)
+            test = prepared.dataset_for(DataRole.TEST)
+            self.assertEqual(
+                [int(validation[index]['target']) for index in range(len(validation))],
+                [int(test[index]['target']) for index in range(len(test))],
+            )
 
     def test_dataset_neutral_contracts_reject_invalid_values(self) -> None:
         with self.assertRaisesRegex(ValueError, 'shape dimensions'):

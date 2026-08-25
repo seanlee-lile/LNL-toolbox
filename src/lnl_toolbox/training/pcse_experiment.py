@@ -200,6 +200,8 @@ def run_pcse_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    requirements: DataRequirements | None = None,
 ) -> Path:
     """Run noisy pretraining, estimated transition and PCSE post-processing."""
 
@@ -257,12 +259,12 @@ def run_pcse_experiment(
     else:
         raise ValueError(f"unsupported PCSE pretraining mode: {pretraining_mode}")
 
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        requirements = resolve_data_requirements(config, expected_runner="pcse")
     prepared = prepare_experiment_data(
         config,
-        requirements=DataRequirements(
-            roles=frozenset({DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.NOISY_VALIDATION, DataRole.TEST}),
-            validation_targets="noisy",
-        ),
+        requirements=requirements,
         run_dir=run_dir,
         seed=seed + 10 if pretraining_mode == "train" else seed,
         checkpoint_payload=resume_payload,
@@ -287,7 +289,7 @@ def run_pcse_experiment(
     if manifest is None or manifest_path is None:
         raise ValueError("PCSE requires noisy train and validation labels")
     effective_train_rate = effective_subset_actual_rate(manifest, prepared.train_indices)
-    effective_validation_rate = effective_subset_actual_rate(manifest, prepared.validation_indices)
+    effective_validation_rate = prepared.realized_noise_rate(DataRole.NOISY_VALIDATION)
     train_loader = prepared.loader(DataRole.TRAIN, generator_seed=seed + 101)
     statistics_loader = prepared.loader(DataRole.TRAIN_EVAL, shuffle=False, generator_seed=seed + 102)
     validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False, generator_seed=seed + 103)

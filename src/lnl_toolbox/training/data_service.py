@@ -419,6 +419,25 @@ class PreparedData:
             lookup = _target_map(self.manifest.global_indices, self.manifest.noisy_targets)
         return np.asarray([lookup[int(index)] for index in self.train_indices], dtype=np.int64)
 
+    def realized_noise_rate(self, role: DataRole | str) -> float | None:
+        """Return a role-level diagnostic without exposing clean labels in batches."""
+
+        dataset = self.dataset_for(role)
+        if not isinstance(dataset, IndexedDatasetView):
+            raise TypeError("role noise diagnostics require an indexed dataset view")
+        clean = dataset.split.clean_targets
+        if clean is None:
+            return None
+        clean_by_index = _target_map(dataset.split.global_indices, clean)
+        changed = np.asarray(
+            [
+                dataset.targets[int(index)] != clean_by_index[int(index)]
+                for index in dataset.indices
+            ],
+            dtype=np.bool_,
+        )
+        return None if changed.size == 0 else float(changed.mean())
+
     def dataset_for(self, role: DataRole | str) -> Dataset:
         key = role if isinstance(role, DataRole) else DataRole(str(role))
         try:
@@ -764,6 +783,16 @@ def _prepare_experiment_data(
             full_train_indices = source_train_indices.copy()
             validation_indices = test.global_indices.copy()
             validation_split = test
+    if (
+        DataRole.CLEAN_VALIDATION in requirements.roles
+        and validation_split is not train
+        and validation_split.clean_targets is None
+        and validation_split is not test
+    ):
+        # An unverified native validation split cannot be promoted to clean
+        # supervision.  Use the data protocol's explicit TEST source instead.
+        validation_split = test
+        validation_indices = test.global_indices.copy()
     train_indices = _subset(
         full_train_indices,
         train.clean_targets if train.clean_targets is not None else train.observed_targets,
@@ -789,7 +818,11 @@ def _prepare_experiment_data(
         elif trusted_source == "synthetic_fixture":
             trusted_indices = validation_indices.copy()
             trusted_split = validation_split
-            trusted_values = validation_split.clean_targets if validation_split.clean_targets is not None else validation_split.observed_targets
+            if validation_split.clean_targets is None:
+                raise ValueError(
+                    "trusted_validation cannot substitute observed targets for missing clean targets"
+                )
+            trusted_values = validation_split.clean_targets
             trusted_target_map = _target_map(validation_split.global_indices, trusted_values)
         else:
             trusted_size = int(data_config.get("num_clean", data_config.get("trusted_size", 0)))
@@ -801,7 +834,11 @@ def _prepare_experiment_data(
                 int(data_config.get("seed", seed)),
             )
             if not ("num_val" in data_config and "num_clean" in data_config):
-                labels = train.clean_targets if train.clean_targets is not None else train.observed_targets
+                if train.clean_targets is None:
+                    raise ValueError(
+                        "trusted_validation requires source clean targets or an audited manifest"
+                    )
+                labels = train.clean_targets
                 positions = {int(index): position for position, index in enumerate(train.global_indices)}
                 combined = np.concatenate((train_indices, trusted_indices))
                 aligned = np.asarray([labels[positions[int(index)]] for index in combined], dtype=np.int64)
@@ -826,6 +863,10 @@ def _prepare_experiment_data(
     manifest: NoiseManifest | None = None
     manifest_path: Path | None = None
     source_clean = train.clean_targets
+    configured_noise_name = str(noise_config.get("name", "clean")).strip().lower()
+    requests_noise_materialization = bool(noise_config.get("manifest")) or (
+        configured_noise_name not in {"", "clean", "none", "native", "real_world"}
+    )
     if (
         source_clean is None
         and requirements.needs_noise_manifest
@@ -855,7 +896,7 @@ def _prepare_experiment_data(
             manifest_path = run_dir / "noise_manifest.npz"
             if not manifest_path.exists():
                 manifest.save(manifest_path)
-        elif requirements.needs_noise_manifest:
+        elif requirements.needs_noise_manifest or requests_noise_materialization:
             manifest_indices = (
                 train_indices
                 if requirements.manifest_scope == "effective_train"
@@ -1041,10 +1082,19 @@ def _prepare_experiment_data(
         if validation_split is train and clean_train_map is not None:
             datasets[DataRole.CLEAN_VALIDATION] = IndexedDatasetView(train, validation_indices, targets_by_index=clean_train_map, transforms=validation_transforms)
         else:
+            # An explicit protocol TEST split carries evaluation truth in
+            # observed_targets even when clean_targets is not duplicated.
+            # A split derived from noisy TRAIN must still prove clean labels.
+            if validation_split.clean_targets is None and validation_split is not test:
+                raise ValueError("clean_validation requires genuine clean targets")
             datasets[DataRole.CLEAN_VALIDATION] = validation_view
     if DataRole.TRUSTED_VALIDATION in requirements.roles:
         if trusted_target_map is None:
-            trusted_values = trusted_split.clean_targets if trusted_split.clean_targets is not None else trusted_split.observed_targets
+            if trusted_split.clean_targets is None:
+                raise ValueError(
+                    "trusted_validation requires source clean targets or an audited manifest"
+                )
+            trusted_values = trusted_split.clean_targets
             trusted_target_map = _target_map(trusted_split.global_indices, trusted_values)
         if trusted_target_map is None:
             raise ValueError("trusted_validation requires clean or trusted targets")

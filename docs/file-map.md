@@ -671,3 +671,19 @@ Recipe/YAML 编辑功能。`lnl web` 由 `cli/main.py` 启动 `web/command_conso
 | `web/index.html` | 只读数据集事实、UNKNOWN 声明、当前 recipe 实验输入三段式展示 |
 | `tests/test_data_adapters.py` | 原生噪声 semantic hints、标签可用性和统一数据服务回归 |
 | `web/test_command_console.py` | 具体 recipe、先验不入 catalog、Web 输入分组和命令生成回归 |
+
+## 统一 Method/Data Requirements（2026-08-25）
+
+| 路径 | 当前职责 |
+|---|---|
+| `training/compatibility.py` | `MethodRequirements`：variant、唯一 `DataRequirements`、实现限制及兼容原因来源 |
+| `training/runners.py` | 26 篇论文 requirement provider 的唯一真源；`invoke()` 把合同传给实际 runner |
+| `training/data_service.py` | 只消费显式 `DataRequirements`；物化 role/view/noise/identity，不识别论文名 |
+| `training/experiment.py` | supervised 组装及 `bind_model_input()`；从 `PreparedData.input_spec` 绑定模型维度 |
+| `training/*_experiment.py` | 消费 runner 传入的合同；直接调用时仅向 runner registry 请求，不自建第二套合同 |
+| `tests/test_registry.py` | 26/26 provider、variant/implementation limit、兼容与 invoke 同源检查 |
+| `tests/test_data_adapters.py` | role 标签边界、真实 clean trusted source、独立 validation 噪声率与统一入口检查 |
+
+高冲突文件是 `training/runners.py`、`training/compatibility.py`、本文件和
+`data-flow-guide.md`。算法、Loss、Selector、Estimator、正式 YAML、CLI、Web 与 Scratch
+不属于本轮修改范围。

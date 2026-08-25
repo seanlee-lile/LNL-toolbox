@@ -93,7 +93,7 @@ class QuickStartServiceTests(unittest.TestCase):
         self.assertGreater(len(result), 5)
         self.assertTrue(all(item.acronym for item in result))
         fine = next(item for item in result if item.paper_id == "fine")
-        self.assertEqual(fine.status, "unsupported")
+        self.assertEqual(fine.status, "ready")
 
     def test_method_options_batches_compatibility_and_reuses_cache(self) -> None:
         selection = QuickStartNoiseSelection("clean", "clean")
