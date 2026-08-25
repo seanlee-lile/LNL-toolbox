@@ -2436,46 +2436,6 @@ def lend_selected_objective(ctx: ScratchContext, losses: str = "loss_per_sample"
 
 
 @block(
-    id="prepare_cal_cifar10",
-    name="Prepare CAL CIFAR-10 External IDN",
-    category="Data",
-    description="Load CAL's immutable IDN-20 clean/noisy label artifact and prepare the CIFAR-10 training/evaluation contract.",
-    params={"artifact_path": {"type": "path", "default": "data/cal/IDN_0.2_C10.pt"}, "batch_size": {"type": "int", "default": 128, "min": 1}, "num_workers": {"type": "int", "default": 0, "min": 0}, "save_as": {"type": "slot", "default": "prepared_data"}},
-    provides=("save_as", "num_classes", "validation_loader", "test_loader", "train_eval_loader"), placement=("top",), stage="data", ui_group="① 数据准备",
-    formula="y~ <- external_torch[noise_label_train], y <- external_torch[clean_label_train]",
-    formula_ref="CAL formal external_torch noise artifact",
-    paper="Learning from Noisy Labels with Core-loss and Second-order Risk",
-)
-def prepare_cal_cifar10(ctx: ScratchContext, artifact_path: str = "data/cal/IDN_0.2_C10.pt", batch_size: int = 128, num_workers: int = 0, save_as: str = "prepared_data") -> None:
-    from pathlib import Path
-    from lnl_toolbox.data import DataRequirements, DataRole
-    from lnl_toolbox.scratch.blocks.data import prepare_formal_cifar
-    from lnl_toolbox.training.data_service import prepare_experiment_data
-    path = Path(str(artifact_path))
-    if not path.is_absolute(): path = Path.cwd() / path
-    fixture = bool((ctx.get("_runtime_limits") or {}).get("fixture"))
-    if not path.exists() and not fixture:
-        raise FileNotFoundError(f"CAL external label artifact not found: {path}")
-    if fixture:
-        prepare_formal_cifar(ctx, dataset="cifar10", validation_size=0, train_eval=True, clean_validation=True, augment=True, noise_rate=0.0, noise_seed=10086, batch_size=int(batch_size), num_workers=int(num_workers), save_as=save_as)
-        ctx["cal_external_labels"] = {"path": str(path), "fixture": True}
-        return
-    config = {
-        "data": {"name": "cifar10", "validation_size": 0, "augment": True, "normalization": {"mean": [0.4914, 0.4882, 0.4465], "std": [0.2023, 0.1994, 0.201]}},
-        "noise": {"name": "external_torch", "path": str(path), "clean_key": "clean_label_train", "noisy_key": "noise_label_train", "seed": 10086, "manifest_filename": "noise_manifest.npz"},
-        "loader": {"batch_size": int(batch_size), "num_workers": int(num_workers), "pin_memory": True},
-    }
-    requirements = DataRequirements(roles=frozenset({DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.CLEAN_VALIDATION, DataRole.TEST}), validation_targets="clean", needs_noise_manifest=True, validation_size=1)
-    prepared = prepare_experiment_data(config, requirements=requirements, run_dir=Path(str(ctx.get("artifact_dir", "artifacts/scratch/cal"))), seed=10086)
-    ctx[save_as] = prepared
-    ctx["num_classes"] = prepared.num_classes
-    ctx["validation_loader"] = prepared.loader(DataRole.CLEAN_VALIDATION, shuffle=False, batch_size=int(batch_size))
-    ctx["test_loader"] = prepared.loader(DataRole.TEST, shuffle=False, batch_size=int(batch_size))
-    ctx["train_eval_loader"] = prepared.loader(DataRole.TRAIN_EVAL, shuffle=False, batch_size=int(batch_size))
-    ctx["cal_external_labels"] = {"path": str(path), "manifest_hash": prepared.manifest.mapping_hash if prepared.manifest is not None else None}
-
-
-@block(
     id="cal_confidence_schedule",
     name="CAL: Confidence Schedule",
     category="Paper Specific",

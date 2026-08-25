@@ -45,13 +45,13 @@ def _template_catalog() -> list[dict[str, str]]:
             "id": template_id,
             "name": display_names.get(template_id, template_id.replace("_", " ").title()),
             "path": f"papers/{path.name}",
-            "status": "formula-ready" if template_id in formula_ready else "legacy-scratch",
+            "status": "formula-ready" if template_id in formula_ready else "template-ready",
         })
     return templates
 
 
 def _paper_examples() -> list[dict[str, str]]:
-    return [item for item in _template_catalog() if item["id"] in {"gce", "coteaching"}]
+    return _template_catalog()
 
 
 class ScratchHandler(BaseHTTPRequestHandler):

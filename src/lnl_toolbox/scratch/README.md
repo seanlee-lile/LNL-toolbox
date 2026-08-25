@@ -24,12 +24,8 @@ The smoke coverage includes CE, formula-level GCE, APL, Co-teaching peer exchang
 
 ## Formula status
 
-Formula-ready Scratch templates:
+Scratch Paper templates:
 
 - GCE: the formal recipe includes GCE-2018 data preparation, symmetric-0.2 noise, ResNet-34, SGD, MultiStepLR, validation model selection, and the formula chain expanded into forward, probability, target-class probability, q-formula, mean, backward, and optimizer steps.
 - Co-teaching: the dual-peer remember-rate, per-sample losses, small-loss sets, cross-selected losses, and peer updates are expanded.
-
-Legacy Scratch recipes:
-
-- The other paper recipes remain semantically executable and validator-checked smoke recipes.
-- They are not yet expanded into paper-by-paper formula blocks; the WebUI labels them `legacy-scratch`.
+- The other 24 Paper Recipes are available as editable `template-ready` Scratch templates. Their formal recipe structure and data-particle composition remain visible, while their paper-specific formulas are not claimed to be fully expanded.

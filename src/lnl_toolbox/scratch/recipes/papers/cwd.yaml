@@ -14,7 +14,7 @@ steps:
   - {block: build_noise_manifest}
   - {block: configure_preprocessing, params: {preprocessing: standard, augment: false}}
   - {block: configure_views, params: {views: [weak]}}
-  - {block: assign_data_roles, params: {roles: [train, test]}}
+  - {block: assign_data_roles, params: {roles: [train, train_eval, test]}}
   - {block: configure_loader, params: {batch_size: 128, num_workers: 4, pin_memory: true}}
   - {block: build_prepared_data}
   - {block: build_loaders}

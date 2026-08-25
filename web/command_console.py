@@ -439,14 +439,14 @@ def _scratch_template_payload() -> list[dict[str, str]]:
             "id": path.stem,
             "name": display_names.get(path.stem, path.stem.replace("_", " ").title()),
             "path": f"papers/{path.name}",
-            "status": "formula-ready" if path.stem in formula_ready else "legacy-scratch",
+            "status": "formula-ready" if path.stem in formula_ready else "template-ready",
         }
         for path in sorted(paper_root.glob("*.y*ml"))
     ]
 
 
 def _scratch_examples_payload() -> list[dict[str, str]]:
-    return [item for item in _scratch_template_payload() if item["id"] in {"gce", "coteaching"}]
+    return _scratch_template_payload()
 
 
 def _scratch_request_body(handler: BaseHTTPRequestHandler) -> dict[str, object]:

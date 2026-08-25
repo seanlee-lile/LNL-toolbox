@@ -9,6 +9,12 @@ button { cursor: pointer; } button:hover { border-color: var(--accent); }
 button:disabled { cursor: not-allowed; opacity: .5; }
 main { display: grid; grid-template-columns: 220px minmax(360px, 1fr) 280px; min-height: calc(100vh - 58px); }
 aside, section { padding: 16px; border-right: 1px solid var(--line); overflow: auto; }
+.inspector { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.inspector > h2, .module-explanation, .inspector > #output { flex: 0 0 auto; }
+.module-explanation { background: #0c3040; border: 1px solid #25617a; border-radius: 7px; padding: 10px; margin: 0 0 10px; color: #dbeafe; }
+.module-explanation strong { display: block; color: #bae6fd; }
+.module-explanation p { margin: 6px 0 0; color: #cbd5e1; }
+#inspector { flex: 1 1 auto; min-height: 0; overflow: auto; padding-right: 4px; }
 h2 { font-size: 14px; color: #93c5fd; margin-top: 0; }
 .palette-block, .step { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; margin: 8px 0; padding: 10px; cursor: grab; }
 .palette-block:hover, .step.selected { border-color: var(--accent); }

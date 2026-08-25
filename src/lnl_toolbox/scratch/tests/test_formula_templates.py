@@ -66,8 +66,12 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
         config_path = ROOT.parents[2] / "configs" / "experiment" / "cifar10_coteaching_reproduction.yaml"
         config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         steps = recipe["steps"]
-        data = next(step for step in steps if step["block"] == "prepare_coteaching_cifar10")["params"]
-        self.assertEqual((data["validation_size"], data["augment"], data["noise_rate"], data["noise_seed"], data["batch_size"], data["num_workers"]), (config["data"]["validation_size"], config["data"]["augment"], config["noise"]["rate"], config["noise"]["seed"], config["loader"]["batch_size"], config["loader"]["num_workers"]))
+        data = {step["block"]: step.get("params", {}) for step in steps[:14]}
+        self.assertEqual(data["create_dataset_split"]["validation_size"], config["data"]["validation_size"])
+        self.assertEqual(data["apply_noise"]["rate"], config["noise"]["rate"])
+        self.assertEqual(data["apply_noise"]["seed"], config["noise"]["seed"])
+        self.assertEqual(data["configure_loader"]["batch_size"], config["loader"]["batch_size"])
+        self.assertEqual(data["configure_loader"]["num_workers"], config["loader"]["num_workers"])
         models = [step for step in steps if step["block"] == "create_model"]
         self.assertEqual([step["params"]["model"] for step in models], [config["model"]["name"]] * 2)
         optimizers = [step for step in steps if step["block"] == "create_optimizer"]
@@ -176,8 +180,8 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
         config_path = ROOT.parents[2] / "configs" / "experiment" / "cal_cifar10_reproduction.yaml"
         config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         steps = recipe["steps"]
-        data = next(step for step in steps if step["block"] == "prepare_cal_cifar10")["params"]
-        self.assertEqual(data["artifact_path"], config["noise"]["path"])
+        data = {step["block"]: step.get("params", {}) for step in steps[:16]}
+        self.assertEqual(data["apply_noise"]["options"]["artifact_path"], config["noise"]["path"])
         warmup = next(step for step in steps if step["block"] == "epoch_loop")
         self.assertEqual(warmup["params"]["epochs"], config["warmup"]["epochs"])
         self.assertEqual(next(step for step in steps if step["block"] == "cal_materialize_proxy_artifact")["params"]["model"], "warmup_model")
@@ -194,8 +198,14 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
         config_path = ROOT.parents[2] / "configs" / "experiment" / "apl_cifar10_noise02_reproduction.yaml"
         config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         steps = recipe["steps"]
-        data = next(step for step in steps if step["block"] == "prepare_apl_cifar10")["params"]
-        self.assertEqual((data["validation_size"], data["augment"], data["noise_method"], data["noise_rate"], data["noise_seed"], data["batch_size"], data["num_workers"]), (config["data"]["validation_size"], config["data"]["augment"], config["noise"]["name"], config["noise"]["rate"], config["noise"]["seed"], config["loader"]["batch_size"], config["loader"]["num_workers"]))
+        data = {step["block"]: step.get("params", {}) for step in steps[:19]}
+        self.assertEqual(data["create_dataset_split"]["validation_size"], config["data"]["validation_size"])
+        self.assertEqual(data["configure_preprocessing"]["augment"], config["data"]["augment"])
+        self.assertEqual(data["apply_noise"]["name"], config["noise"]["name"])
+        self.assertEqual(data["apply_noise"]["rate"], config["noise"]["rate"])
+        self.assertEqual(data["apply_noise"]["seed"], config["noise"]["seed"])
+        self.assertEqual(data["configure_loader"]["batch_size"], config["loader"]["batch_size"])
+        self.assertEqual(data["configure_loader"]["num_workers"], config["loader"]["num_workers"])
         self.assertEqual(next(step for step in steps if step["block"] == "create_model")["params"], {"model": config["model"]["name"], "num_classes": 10, "device": "device"})
         optimizer = next(step for step in steps if step["block"] == "create_optimizer")["params"]
         self.assertEqual({key: optimizer[key] for key in ("optimizer", "lr", "momentum", "nesterov", "weight_decay")}, {"optimizer": config["optimizer"]["name"], "lr": config["optimizer"]["lr"], "momentum": config["optimizer"]["momentum"], "nesterov": config["optimizer"]["nesterov"], "weight_decay": config["optimizer"]["weight_decay"]})
@@ -212,8 +222,10 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
         config_path = ROOT.parents[2] / "configs" / "experiment" / "binary_risk_natarajan_reproduction.yaml"
         config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         steps = recipe["steps"]
-        data = next(step for step in steps if step["block"] == "prepare_binary_risk_data")["params"]
-        self.assertEqual((data["train_size"], data["test_size"], data["data_seed"], data["rho_positive"], data["rho_negative"], data["noise_seed"], data["batch_size"]), (config["data"]["train_size"], config["data"]["test_size"], config["data"]["seed"], config["risk"]["rho_positive"], config["risk"]["rho_negative"], config["noise"]["seed"], config["loader"]["batch_size"]))
+        data = {step["block"]: step.get("params", {}) for step in steps[:20]}
+        options = data["load_dataset"]["options"]
+        self.assertEqual((options["train_size"], options["test_size"], options["data_seed"]), (config["data"]["train_size"], config["data"]["test_size"], config["data"]["seed"]))
+        self.assertEqual((data["apply_noise"]["options"]["rho_positive"], data["apply_noise"]["options"]["rho_negative"], data["apply_noise"]["seed"], data["configure_loader"]["batch_size"]), (config["risk"]["rho_positive"], config["risk"]["rho_negative"], config["noise"]["seed"], config["loader"]["batch_size"]))
         self.assertEqual(next(step for step in steps if step["block"] == "create_model")["params"], {"model": config["model"]["name"], "input_dim": 2, "num_classes": 2, "device": "device"})
         optimizer = next(step for step in steps if step["block"] == "create_optimizer")["params"]
         self.assertEqual((optimizer["optimizer"], optimizer["lr"], optimizer["momentum"]), (config["optimizer"]["name"], config["optimizer"]["lr"], config["optimizer"]["momentum"]))
@@ -227,9 +239,9 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
         config_path = ROOT.parents[2] / "configs" / "experiment" / "loss_correction_cifar10_asymmetric04.yaml"
         config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         steps = recipe["steps"]
-        data = next(step for step in steps if step["block"] == "prepare_loss_correction_cifar10")["params"]
+        data = {step["block"]: step.get("params", {}) for step in steps[:19]}
         self.assertEqual(
-            (data["validation_size"], data["augment"], data["noise_seed"], data["batch_size"]),
+            (data["create_dataset_split"]["validation_size"], data["configure_preprocessing"]["augment"], data["apply_noise"]["seed"], data["configure_loader"]["batch_size"]),
             (config["data"]["validation_size"], config["data"]["augment"], config["noise"]["seed"], config["loader"]["batch_size"]),
         )
         self.assertEqual(
@@ -254,8 +266,8 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
         config_path = ROOT.parents[2] / "configs" / "experiment" / "jocor_cifar10_symmetric05_reproduction.yaml"
         config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         steps = recipe["steps"]
-        data = next(step for step in steps if step["block"] == "prepare_jocor_cifar10")["params"]
-        self.assertEqual((data["noise_rate"], data["noise_seed"], data["batch_size"], data["num_workers"]), (config["noise"]["rate"], config["noise"]["seed"], config["loader"]["batch_size"], config["loader"]["num_workers"]))
+        data = {step["block"]: step.get("params", {}) for step in steps[:19]}
+        self.assertEqual((data["apply_noise"]["rate"], data["apply_noise"]["seed"], data["configure_loader"]["batch_size"], data["configure_loader"]["num_workers"]), (config["noise"]["rate"], config["noise"]["seed"], config["loader"]["batch_size"], config["loader"]["num_workers"]))
         models = [step for step in steps if step["block"] == "create_model"]
         self.assertEqual([step["params"]["model"] for step in models], [config_model["name"] for config_model in config["models"]])
         optimizer = next(step for step in steps if step["block"] == "create_joint_optimizer")["params"]

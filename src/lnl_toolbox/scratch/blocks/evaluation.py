@@ -31,12 +31,12 @@ def _batch(batch: Any) -> tuple[Any, Any]:
     name="Evaluate Accuracy",
     category="Evaluation",
     description="Evaluate a model on a loader and append an accuracy metric.",
-    params={"model": {"type": "slot", "default": "model"}, "loader": {"type": "slot", "default": "test_loader"}, "save_as": {"type": "slot", "default": "accuracy"}, "final": {"type": "bool", "default": False}},
+    params={"model": {"type": "slot", "default": "model"}, "loader": {"type": "slot", "default": "test_loader"}, "save_as": {"type": "slot", "default": "accuracy"}, "final": {"type": "bool", "default": False}, "target_source": {"type": "enum", "options": ["observed", "clean"], "default": "observed"}},
     requires=("model", "loader"),
     provides=("save_as", "metrics"),
     placement=("top", "epoch"), stage="evaluate", ui_group="⑨ 评估",
 )
-def evaluate_accuracy(ctx: ScratchContext, model: str = "model", loader: str = "test_loader", save_as: str = "accuracy", final: bool = False) -> None:
+def evaluate_accuracy(ctx: ScratchContext, model: str = "model", loader: str = "test_loader", save_as: str = "accuracy", final: bool = False, target_source: str = "observed") -> None:
     torch, _ = _torch()
     if bool(final) and bool(ctx.get("_runtime_limits", {}).get("skip_final_test")) and str(loader) == "test_loader":
         ctx.setdefault("metrics", []).append({"epoch": int(ctx.get("epoch", 0)), "test_skipped": True})
@@ -52,6 +52,10 @@ def evaluate_accuracy(ctx: ScratchContext, model: str = "model", loader: str = "
             if max_batches is not None and batch_idx >= int(max_batches):
                 break
             inputs, labels = _batch(batch)
+            if str(target_source) == "clean":
+                labels = batch.get("clean_targets") if isinstance(batch, dict) else None
+                if labels is None:
+                    raise ValueError("clean evaluation requires complete clean_targets")
             inputs = inputs.to(device)
             labels = labels.to(device)
             predictions = network(inputs).argmax(dim=-1)
@@ -69,11 +73,11 @@ def evaluate_accuracy(ctx: ScratchContext, model: str = "model", loader: str = "
     name="Evaluate CWD Binary Scalar",
     category="Evaluation",
     description="Evaluate a one-output CWD classifier by the paper's zero-margin binary decision rule.",
-    params={"model": {"type": "slot", "default": "model"}, "loader": {"type": "slot", "default": "test_loader"}, "save_as": {"type": "slot", "default": "accuracy"}, "final": {"type": "bool", "default": False}},
+    params={"model": {"type": "slot", "default": "model"}, "loader": {"type": "slot", "default": "test_loader"}, "save_as": {"type": "slot", "default": "accuracy"}, "final": {"type": "bool", "default": False}, "target_source": {"type": "enum", "options": ["observed", "clean"], "default": "observed"}},
     requires=("model", "loader"), provides=("save_as", "metrics"), placement=("top", "epoch"), stage="evaluate", ui_group="⑨ 评估",
     formula="y_hat = 1[m(x) >= 0]", formula_ref="CWD binary scalar evaluation", paper="Class-Wise Denoising",
 )
-def evaluate_cwd_binary(ctx: ScratchContext, model: str = "model", loader: str = "test_loader", save_as: str = "accuracy", final: bool = False) -> None:
+def evaluate_cwd_binary(ctx: ScratchContext, model: str = "model", loader: str = "test_loader", save_as: str = "accuracy", final: bool = False, target_source: str = "observed") -> None:
     torch, _ = _torch()
     if bool(final) and bool(ctx.get("_runtime_limits", {}).get("skip_final_test")) and str(loader) == "test_loader":
         ctx.setdefault("metrics", []).append({"epoch": int(ctx.get("epoch", 0)), "test_skipped": True})
@@ -89,6 +93,10 @@ def evaluate_cwd_binary(ctx: ScratchContext, model: str = "model", loader: str =
             if max_batches is not None and batch_idx >= int(max_batches):
                 break
             inputs, labels = _batch(batch)
+            if str(target_source) == "clean":
+                labels = batch.get("clean_targets") if isinstance(batch, dict) else None
+                if labels is None:
+                    raise ValueError("clean evaluation requires complete clean_targets")
             logits = network(inputs.to(device))
             predictions = (logits[:, 0] >= 0).long()
             labels = labels.to(device).long()
@@ -152,12 +160,12 @@ def restore_best_model(ctx: ScratchContext, model: str = "model", state: str = "
     name="Evaluate Peer Ensemble",
     category="Evaluation",
     description="Evaluate two peer models and their mean-probability ensemble on a loader.",
-    params={"model_a": {"type": "slot", "default": "model_a"}, "model_b": {"type": "slot", "default": "model_b"}, "loader": {"type": "slot", "default": "validation_loader"}, "save_as": {"type": "slot", "default": "ensemble_accuracy"}, "final": {"type": "bool", "default": False}},
+    params={"model_a": {"type": "slot", "default": "model_a"}, "model_b": {"type": "slot", "default": "model_b"}, "loader": {"type": "slot", "default": "validation_loader"}, "save_as": {"type": "slot", "default": "ensemble_accuracy"}, "final": {"type": "bool", "default": False}, "target_source": {"type": "enum", "options": ["observed", "clean"], "default": "observed"}},
     requires=("model_a", "model_b", "loader"),
     provides=("save_as", "peer_accuracy_a", "peer_accuracy_b", "metrics"),
     placement=("top", "epoch"), stage="evaluate", ui_group="⑨ 评估", beginner_visible=False,
 )
-def evaluate_peer_ensemble(ctx: ScratchContext, model_a: str = "model_a", model_b: str = "model_b", loader: str = "validation_loader", save_as: str = "ensemble_accuracy", final: bool = False) -> None:
+def evaluate_peer_ensemble(ctx: ScratchContext, model_a: str = "model_a", model_b: str = "model_b", loader: str = "validation_loader", save_as: str = "ensemble_accuracy", final: bool = False, target_source: str = "observed") -> None:
     torch, _ = _torch()
     if bool(final) and bool(ctx.get("_runtime_limits", {}).get("skip_final_test")) and str(loader) == "test_loader":
         ctx.setdefault("metrics", []).append({"epoch": int(ctx.get("epoch", 0)), "test_skipped": True})
@@ -173,6 +181,10 @@ def evaluate_peer_ensemble(ctx: ScratchContext, model_a: str = "model_a", model_
             if max_batches is not None and batch_idx >= int(max_batches):
                 break
             inputs, labels = _batch(batch)
+            if str(target_source) == "clean":
+                labels = batch.get("clean_targets") if isinstance(batch, dict) else None
+                if labels is None:
+                    raise ValueError("clean evaluation requires complete clean_targets")
             inputs, labels = inputs.to(device), labels.to(device)
             logits_a, logits_b = network_a(inputs), network_b(inputs)
             ensemble = (torch.softmax(logits_a, dim=-1) + torch.softmax(logits_b, dim=-1)) / 2.0

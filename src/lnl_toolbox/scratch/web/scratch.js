@@ -708,11 +708,13 @@ function drawSteps(steps = state.recipe.steps, parent = $('steps'), parentId = '
 
 function renderInspector() {
   const target = $('inspector');
+  const explanationTarget = $('module-explanation');
   target.innerHTML = '';
+  explanationTarget.innerHTML = '';
   const step = state.selected;
-  if (!step) { target.textContent = '点击一个积木编辑参数'; return; }
+  if (!step) { explanationTarget.textContent = '点击一个积木查看说明'; target.textContent = '选择积木后可编辑参数'; return; }
   const info = blockInfo(step.block);
-  if (!info) return;
+  if (!info) { explanationTarget.textContent = '暂无模块说明'; target.textContent = '无法加载该积木参数'; return; }
   if (state.errorMessage) {
     const error = document.createElement('div'); error.className = 'inspector-error'; error.textContent = state.errorMessage; target.appendChild(error);
   }
@@ -728,7 +730,7 @@ function renderInspector() {
   const identity = document.createElement('div');
   const name = document.createElement('strong'); name.textContent = info.name; identity.appendChild(name);
   const description = document.createElement('p'); description.textContent = info.description || '暂无说明'; identity.appendChild(description);
-  addSection('1. 名称和说明', identity);
+  explanationTarget.appendChild(identity);
 
   const formula = document.createElement('div');
   const formulaText = document.createElement('div'); formulaText.textContent = info.formula || '暂无独立公式'; formula.className = 'formula'; formula.appendChild(formulaText);
@@ -809,7 +811,9 @@ function renderTemplateList(templates, query = '') {
   templates.filter((item) => !needle || `${item.name} ${item.id} ${item.status}`.toLowerCase().includes(needle)).forEach((item) => {
     const card = document.createElement('div'); card.className = 'template-card';
     const name = document.createElement('strong'); name.textContent = item.name; card.appendChild(name);
-    const status = document.createElement('small'); status.textContent = item.status === 'formula-ready' ? '公式积木已展开' : '旧版积木模板，尚未逐公式展开'; card.appendChild(status);
+    const status = document.createElement('small');
+    status.textContent = item.status === 'formula-ready' ? '公式积木已展开' : item.status === 'template-ready' ? '论文模板' : '旧版积木模板，尚未逐公式展开';
+    card.appendChild(status);
     const open = document.createElement('button'); open.textContent = '打开';
     open.onclick = () => openTemplate(item);
     card.appendChild(open); list.appendChild(card);

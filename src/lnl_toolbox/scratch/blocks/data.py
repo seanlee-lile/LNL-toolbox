@@ -2,41 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from collections.abc import Mapping, Sequence
-import hashlib
 from typing import Any
 
 from ..context import ScratchContext
 from ..registry import block
-
-
-class _ScratchFixturePrepared:
-    """Contract-compatible tiny prepared-data object used only by runtime-limited checks."""
-    def __init__(self, classes: int = 10, samples: int = 8, features: int | None = None,
-                 dataset: str = "synthetic") -> None:
-        import torch
-        self.num_classes = int(classes)
-        self.dataset = str(dataset)
-        self.manifest = None
-        self.manifest_path = None
-        self.train_indices = torch.arange(int(samples), dtype=torch.int64).numpy()
-        shape = (int(features),) if features is not None else (3, 32, 32)
-        images = torch.randn(int(samples), *shape)
-        labels = torch.arange(int(samples), dtype=torch.int64) % int(classes)
-        indices = torch.arange(int(samples), dtype=torch.int64)
-        self._dataset = torch.utils.data.TensorDataset(images, labels, indices)
-        self.datasets = {name: self._dataset for name in (
-            "train", "train_eval", "noisy_validation", "clean_validation",
-            "trusted_validation", "test")}
-        self.loader_config = {"batch_size": 128, "num_workers": 0}
-
-    def loader(self, role: Any = "train", epoch: int = 0, batch_size: int = 128, **_: Any):
-        import torch
-        return torch.utils.data.DataLoader(self._dataset, batch_size=min(int(batch_size), len(self._dataset)), shuffle=False)
-
-    def dataset_for(self, role: Any):
-        return self._dataset
+from ..data_runtime import materialize_plan
 
 
 def _torch():
@@ -106,120 +77,6 @@ def _dataset_num_classes(name: str) -> int:
             "synthetic_classification": 2}.get(key, 2)
 
 
-class _ScratchIndexedDataset:
-    """Dataset view that owns indices and observed/clean target separation."""
-
-    def __init__(self, base: Any, indices: Sequence[int], *, clean_targets: Any,
-                 noisy_targets: Any | None = None, transform: Any = None) -> None:
-        self.base = base
-        self.indices = [int(i) for i in indices]
-        self.clean_targets = clean_targets
-        self.noisy_targets = noisy_targets
-        self.transform = transform
-
-    def __len__(self) -> int:
-        return len(self.indices)
-
-    def __getitem__(self, item: int) -> tuple[Any, Any, int]:
-        torch = _torch()
-        global_index = self.indices[int(item)]
-        value = self.base[global_index]
-        if isinstance(value, Mapping):
-            image = value.get("images", value.get("inputs", value.get("x")))
-        else:
-            image = value[0]
-        if self.transform is not None:
-            image = self.transform(image)
-        targets = self.noisy_targets if self.noisy_targets is not None else self.clean_targets
-        target = targets[global_index]
-        return image, torch.as_tensor(target, dtype=torch.long), global_index
-
-
-class _ScratchPrepared:
-    """Minimal PreparedData-shaped object owned by Scratch runtime."""
-
-    def __init__(self, datasets: Mapping[str, Any], *, num_classes: int,
-                 loader_config: Mapping[str, Any], plan: Mapping[str, Any]) -> None:
-        self.datasets = dict(datasets)
-        self.num_classes = int(num_classes)
-        self.dataset = str(plan.get("data", {}).get("name", "synthetic"))
-        self.manifest = None
-        self.manifest_path = None
-        self.loader_config = dict(loader_config)
-        self.plan = dict(plan)
-        self.train_indices = getattr(self.datasets.get("train"), "indices", [])
-        self.validation_indices = getattr(
-            self.datasets.get("noisy_validation", self.datasets.get("clean_validation")),
-            "indices", [],
-        )
-
-    def dataset_for(self, role: Any) -> Any:
-        name = _role_name(role)
-        if name not in self.datasets:
-            raise KeyError(f"role `{name}` is not configured")
-        return self.datasets[name]
-
-    def loader(self, role: Any = "train", *, batch_size: int | None = None,
-               shuffle: bool | None = None, drop_last: bool | None = None,
-               **_: Any) -> Any:
-        torch = _torch()
-        cfg = self.loader_config
-        return torch.utils.data.DataLoader(
-            self.dataset_for(role),
-            batch_size=int(batch_size or cfg.get("batch_size", 128)),
-            shuffle=bool(cfg.get("shuffle", _role_name(role) == "train") if shuffle is None else shuffle),
-            drop_last=bool(cfg.get("drop_last", False) if drop_last is None else drop_last),
-            num_workers=int(cfg.get("num_workers", 0)),
-            pin_memory=bool(cfg.get("pin_memory", False)),
-        )
-
-
-class _ScratchNoiseManifest:
-    """Small aligned manifest value object owned by Scratch runtime."""
-
-    def __init__(self, global_indices: Any, clean_targets: Any, noisy_targets: Any) -> None:
-        self.global_indices = global_indices
-        self.clean_targets = clean_targets
-        self.noisy_targets = noisy_targets
-        payload = repr((getattr(global_indices, "tolist", lambda: global_indices)(),
-                        getattr(noisy_targets, "tolist", lambda: noisy_targets)())).encode()
-        self.mapping_hash = hashlib.sha256(payload).hexdigest()
-
-
-def _scratch_source(ctx: ScratchContext, plan: Mapping[str, Any]) -> tuple[Any, int]:
-    """Resolve a source without consulting the legacy registry/service."""
-    data = plan.get("data", {})
-    source = data.get("source")
-    if source is not None and hasattr(source, "__len__") and hasattr(source, "__getitem__"):
-        return source, int(data.get("num_classes") or ctx.get("num_classes") or 2)
-    name = str(data.get("name", "")).lower()
-    if name in {"synthetic", "synthetic_classification", "synthetic_binary_2d"}:
-        torch = _torch()
-        n = int(data.get("samples", data.get("train_size", 64)))
-        features = int(data.get("features", 2 if name == "synthetic_binary_2d" else 4))
-        classes = int(data.get("classes", 2))
-        generator = torch.Generator().manual_seed(int(plan.get("seed", ctx.get("seed", 1))))
-        inputs = torch.randn(n, features, generator=generator)
-        weights = torch.randn(features, classes, generator=generator)
-        labels = (inputs @ weights).argmax(dim=1).long()
-        return torch.utils.data.TensorDataset(inputs, labels), classes
-    if name in {"cifar10", "cifar100", "mnist", "fashion_mnist"}:
-        try:
-            from torchvision import datasets, transforms
-        except ImportError as exc:  # pragma: no cover - optional runtime dependency
-            raise RuntimeError("Scratch vision data requires torchvision") from exc
-        root = str(data.get("root") or data.get("path") or "data")
-        cls = {"cifar10": datasets.CIFAR10, "cifar100": datasets.CIFAR100,
-               "mnist": datasets.MNIST, "fashion_mnist": datasets.FashionMNIST}[name]
-        kwargs = {"root": root, "train": True, "download": bool(data.get("download", False))}
-        if name.startswith("cifar"):
-            kwargs["transform"] = transforms.ToTensor()
-        else:
-            kwargs["transform"] = transforms.ToTensor()
-        return cls(**kwargs), _dataset_num_classes(name)
-    raise ValueError(f"Scratch cannot materialize dataset `{name}` without a Scratch source")
-
-
 @block(
     id="load_dataset", name="Load Dataset", category="Data",
     description="Create a Scratch-native dataset plan without selecting a paper-specific bundle.",
@@ -258,8 +115,18 @@ def inspect_dataset_semantics(ctx: ScratchContext, data_plan: str = "data_plan",
     plan = _plan(ctx, data_plan)
     data = plan.get("data", {})
     name = str(data.get("name", ""))
-    ctx[save_as] = {"dataset": name, "num_classes": int(data.get("num_classes") or _dataset_num_classes(name)),
-                    "has_clean_targets": True, "has_observed_targets": True,
+    clean_available = data.get("clean_targets_available")
+    if clean_available is None:
+        source = data.get("source")
+        if isinstance(source, Mapping):
+            clean_available = source.get("clean_targets_available", True)
+        else:
+            # Built-in supervised datasets expose their ground-truth labels;
+            # custom sources must opt out explicitly when they do not.
+            clean_available = True
+    num_classes = 2 if isinstance(data.get("binary_classes"), (list, tuple)) and len(data["binary_classes"]) == 2 else int(data.get("num_classes") or _dataset_num_classes(name))
+    ctx[save_as] = {"dataset": name, "num_classes": num_classes,
+                    "has_clean_targets": bool(clean_available), "has_observed_targets": True,
                     "source": "context" if data.get("source") is not None else "scratch-native"}
     plan["semantics"] = dict(ctx[save_as])
 
@@ -435,76 +302,12 @@ def configure_loader(ctx: ScratchContext, data_plan: str = "data_plan", batch_si
 def build_prepared_data(ctx: ScratchContext, data_plan: str = "data_plan", artifact_dir: str = "",
                         save_as: str = "prepared_data") -> None:
     plan = _plan(ctx, data_plan)
-    data_name = str(plan.get("data", {}).get("name", ""))
-    classes = int(plan.get("semantics", {}).get("num_classes") or
-                  plan.get("data", {}).get("num_classes") or _dataset_num_classes(data_name))
-    limits = ctx.get("_runtime_limits", {})
-    if isinstance(limits, Mapping) and bool(limits.get("fixture")):
-        prepared = _ScratchFixturePrepared(
-            classes=classes,
-            features=2 if data_name == "synthetic_binary_2d" else None,
-            dataset=data_name or "synthetic",
-        )
-        manifest = _ScratchNoiseManifest(prepared.train_indices, prepared._dataset.tensors[1], prepared._dataset.tensors[1])
-        prepared.manifest = manifest
-        ctx["noise_manifest"] = manifest
-        prepared.plan = dict(plan)
-        ctx[save_as] = prepared
-        ctx["num_classes"] = classes
-        torch = _torch()
-        ctx["transition"] = torch.eye(classes)
-        ctx["posterior_features"] = torch.empty((0, 0))
-        ctx["posterior_targets"] = torch.empty((0,), dtype=torch.long)
-        ctx["posterior_indices"] = torch.empty((0,), dtype=torch.long)
-        ctx["data_materialization"] = "fixture"
-        return
-    base, classes = _scratch_source(ctx, plan)
-    torch = _torch()
-    total = len(base)
-    split = plan.get("split", {})
-    validation_size = max(0, min(int(split.get("validation_size", 0)), total))
-    generator = torch.Generator().manual_seed(int(split.get("seed", plan.get("seed", 1))))
-    order = torch.randperm(total, generator=generator).tolist()
-    validation_indices = order[:validation_size]
-    train_indices = order[validation_size:]
-    clean_targets = torch.as_tensor([int(base[i][1] if not isinstance(base[i], Mapping) else base[i]["target"]) for i in range(total)])
-    noise = plan.get("noise", {})
-    noisy_targets = clean_targets.clone()
-    rate = float(noise.get("rate", 0.0))
-    if rate > 0.0 and str(noise.get("name", "none")).lower() not in {"none", "clean"}:
-        gen = torch.Generator().manual_seed(int(noise.get("seed", 1)))
-        mask = torch.rand(total, generator=gen) < rate
-        offsets = torch.randint(1, max(classes, 2), (total,), generator=gen)
-        noisy_targets = torch.where(mask, (clean_targets + offsets) % classes, clean_targets)
-    labels = plan.get("labels", {})
-    train_targets = noisy_targets if labels.get("train", "observed") == "observed" else clean_targets
-    validation_role = "noisy_validation" if labels.get("validation") == "observed" else "clean_validation"
-    datasets: dict[str, Any] = {"train": _ScratchIndexedDataset(base, train_indices, clean_targets=clean_targets, noisy_targets=train_targets)}
-    if validation_size:
-        validation_targets = noisy_targets if validation_role == "noisy_validation" else clean_targets
-        datasets[validation_role] = _ScratchIndexedDataset(base, validation_indices, clean_targets=clean_targets, noisy_targets=validation_targets)
-    test_indices = list(range(total))
-    datasets["test"] = _ScratchIndexedDataset(base, test_indices, clean_targets=clean_targets, noisy_targets=clean_targets)
-    if "clean_validation" in plan.get("roles", []) and "clean_validation" not in datasets:
-        datasets["clean_validation"] = _ScratchIndexedDataset(base, validation_indices or test_indices,
-                                                               clean_targets=clean_targets, noisy_targets=clean_targets)
-    if "noisy_validation" in plan.get("roles", []) and "noisy_validation" not in datasets:
-        datasets["noisy_validation"] = _ScratchIndexedDataset(base, validation_indices or test_indices,
-                                                               clean_targets=clean_targets, noisy_targets=noisy_targets)
-    if "train_eval" in plan.get("roles", []):
-        datasets["train_eval"] = _ScratchIndexedDataset(base, train_indices, clean_targets=clean_targets, noisy_targets=clean_targets)
-    if "trusted_validation" in plan.get("roles", []):
-        datasets["trusted_validation"] = _ScratchIndexedDataset(base, validation_indices, clean_targets=clean_targets, noisy_targets=clean_targets)
-    prepared = _ScratchPrepared(datasets, num_classes=classes, loader_config=plan.get("loader", {}), plan=plan)
-    train_index_tensor = torch.as_tensor(train_indices, dtype=torch.long)
-    manifest = _ScratchNoiseManifest(train_index_tensor,
-                                     clean_targets[train_index_tensor],
-                                     noisy_targets[train_index_tensor])
-    prepared.manifest = manifest
-    ctx["noise_manifest"] = manifest
+    prepared, manifest = materialize_plan(plan, ctx)
     ctx[save_as] = prepared
-    ctx["num_classes"] = classes
-    ctx["transition"] = torch.eye(classes)
+    ctx["noise_manifest"] = manifest
+    ctx["num_classes"] = int(prepared.num_classes)
+    torch = _torch()
+    ctx["transition"] = torch.eye(prepared.num_classes)
     ctx["posterior_features"] = torch.empty((0, 0))
     ctx["posterior_targets"] = torch.empty((0,), dtype=torch.long)
     ctx["posterior_indices"] = torch.empty((0,), dtype=torch.long)
@@ -610,9 +413,10 @@ def configure_noise(
         "input_as": {"type": "slot", "default": "images"},
         "label_as": {"type": "slot", "default": "labels"},
         "index_as": {"type": "slot", "default": "indices"},
+        "clean_as": {"type": "slot", "default": "clean_targets"},
     },
     requires=("batch",),
-    provides=("input_as", "label_as", "index_as"),
+    provides=("input_as", "label_as", "index_as", "clean_as"),
     placement=("batch",), stage="data", ui_group="① 数据准备",
 )
 def get_batch(
@@ -621,12 +425,15 @@ def get_batch(
     input_as: str = "images",
     label_as: str = "labels",
     index_as: str = "indices",
+    clean_as: str = "clean_targets",
 ) -> None:
     inputs, labels, indices = _batch_values(ctx[batch])
     ctx[input_as] = inputs
     ctx[label_as] = labels
     if indices is not None:
         ctx[index_as] = indices
+    if isinstance(ctx[batch], Mapping):
+        ctx[clean_as] = ctx[batch].get("clean_targets")
 
 
 @block(
@@ -733,63 +540,6 @@ def refresh_epoch_loader(ctx: ScratchContext, data: str = "prepared_data", role:
     ctx[save_as] = prepared.loader(role, epoch=int(ctx.get("epoch", 0)), batch_size=int(batch_size))
 
 
-# Deprecated names retained only for import compatibility. They compose the
-# Scratch-native particles above and never call the legacy data service.
-def _compat_prepare(ctx: ScratchContext, *, dataset: str, validation_size: int = 0,
-                    noise: str = "none", noise_rate: float = 0.0, noise_seed: int = 1,
-                    augment: bool = False, preprocessing: str = "standard",
-                    batch_size: int = 128, num_workers: int = 0,
-                    roles: Sequence[str] = ("train", "test"),
-                    save_as: str = "prepared_data", options: Mapping[str, Any] | None = None) -> None:
-    load_dataset(ctx, dataset=dataset, options=options or {})
-    inspect_dataset_semantics(ctx)
-    create_dataset_split(ctx, validation_size=validation_size, split_seed=noise_seed)
-    select_label_source(ctx, validation="observed" if validation_size else "clean")
-    apply_noise(ctx, name=noise, rate=noise_rate, seed=noise_seed, options=options or {})
-    build_noise_manifest(ctx)
-    configure_preprocessing(ctx, preprocessing=preprocessing, augment=augment)
-    configure_views(ctx)
-    assign_data_roles(ctx, roles=roles)
-    configure_loader(ctx, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
-    build_prepared_data(ctx, save_as=save_as)
-    build_loaders(ctx, prepared_data=save_as, batch_size=batch_size)
-
-def prepare_gce_cifar10(ctx: ScratchContext, **params: Any) -> None:
-    _compat_prepare(ctx, dataset="cifar10", validation_size=int(params.get("validation_size", 5000)), noise=str(params.get("noise_method", "symmetric")), noise_rate=float(params.get("noise_rate", 0.2)), noise_seed=int(params.get("noise_seed", 1)), augment=bool(params.get("augment", True)), preprocessing="gce2018", batch_size=int(params.get("batch_size", 128)), roles=("train", "noisy_validation", "test"), save_as=str(params.get("save_as", "prepared_data")))
-def prepare_apl_cifar10(ctx: ScratchContext, **params: Any) -> None:
-    _compat_prepare(ctx, dataset="cifar10", validation_size=int(params.get("validation_size", 0)), noise=str(params.get("noise_method", "symmetric")), noise_rate=float(params.get("noise_rate", 0.2)), noise_seed=int(params.get("noise_seed", 1)), augment=bool(params.get("augment", True)), batch_size=int(params.get("batch_size", 128)), num_workers=int(params.get("num_workers", 8)), roles=("train", "test"), save_as=str(params.get("save_as", "prepared_data")))
-def prepare_binary_risk_data(ctx: ScratchContext, **params: Any) -> None:
-    _compat_prepare(ctx, dataset="synthetic_binary_2d", noise="binary_asymmetric_rcn", noise_rate=float(params.get("rho_positive", 0.4)), noise_seed=int(params.get("noise_seed", params.get("data_seed", 2013))), batch_size=int(params.get("batch_size", 64)), roles=("train", "test"), save_as=str(params.get("save_as", "prepared_data")), options={k: params[k] for k in ("train_size", "test_size", "data_seed", "rho_positive", "rho_negative") if k in params})
-def prepare_cdr_cifar10(ctx: ScratchContext, **params: Any) -> None:
-    _compat_prepare(ctx, dataset="cifar10", validation_size=int(params.get("validation_size", 5000)), noise="symmetric", noise_rate=float(params.get("noise_rate", 0.4)), noise_seed=int(params.get("noise_seed", 1)), augment=bool(params.get("augment", True)), preprocessing="gce2018", batch_size=int(params.get("batch_size", 64)), roles=("train", "noisy_validation", "test"), save_as=str(params.get("save_as", "prepared_data")))
-def prepare_dual_t_cifar10(ctx: ScratchContext, **params: Any) -> None:
-    _compat_prepare(ctx, dataset="cifar10", validation_size=int(params.get("validation_size", 10000)), noise="symmetric", noise_rate=float(params.get("noise_rate", 0.2)), noise_seed=int(params.get("noise_seed", 1)), augment=bool(params.get("augment", True)), batch_size=int(params.get("batch_size", 128)), roles=("train", "noisy_validation", "test"), save_as=str(params.get("save_as", "prepared_data")))
-def prepare_pdl_cifar10(ctx: ScratchContext, **params: Any) -> None:
-    _compat_prepare(ctx, dataset="cifar10", validation_size=int(params.get("validation_size", 5000)), noise="pdl", noise_rate=float(params.get("noise_rate", 0.4)), noise_seed=int(params.get("noise_seed", 1)), batch_size=int(params.get("batch_size", 128)), roles=("train", "noisy_validation", "test"), save_as=str(params.get("save_as", "prepared_data")))
-def prepare_volminnet_cifar10(ctx: ScratchContext, **params: Any) -> None:
-    _compat_prepare(ctx, dataset="cifar10", validation_size=int(params.get("validation_size", 5000)), noise="symmetric", noise_rate=float(params.get("noise_rate", 0.2)), noise_seed=int(params.get("noise_seed", 1)), augment=bool(params.get("augment", True)), batch_size=int(params.get("batch_size", 128)), num_workers=int(params.get("num_workers", 4)), roles=("train", "noisy_validation", "test"), save_as=str(params.get("save_as", "prepared_data")))
-def prepare_t_revision_cifar10(ctx: ScratchContext, **params: Any) -> None:
-    prepare_volminnet_cifar10(ctx, **params)
-def prepare_cwd_cifar10(ctx: ScratchContext, **params: Any) -> None:
-    _compat_prepare(ctx, dataset="cifar10", noise="binary_asymmetric_rcn", noise_rate=float(params.get("rho_positive", 0.2)), noise_seed=int(params.get("noise_seed", 17)), batch_size=int(params.get("batch_size", 128)), num_workers=int(params.get("num_workers", 4)), roles=("train", "test"), save_as=str(params.get("save_as", "prepared_data")), options={k: params[k] for k in ("folds", "fold_index", "rho_positive", "rho_negative") if k in params})
-def prepare_loss_correction_cifar10(ctx: ScratchContext, **params: Any) -> None:
-    _compat_prepare(ctx, dataset="cifar10", validation_size=int(params.get("validation_size", 5000)), noise="class_conditional", noise_rate=0.4, noise_seed=int(params.get("noise_seed", 1)), augment=bool(params.get("augment", True)), preprocessing="gce2018", batch_size=int(params.get("batch_size", 128)), roles=("train", "noisy_validation", "test"), save_as=str(params.get("save_as", "prepared_data")))
-def prepare_jocor_cifar10(ctx: ScratchContext, **params: Any) -> None:
-    _compat_prepare(ctx, dataset="cifar10", noise="symmetric", noise_rate=float(params.get("noise_rate", 0.5)), noise_seed=int(params.get("noise_seed", 0)), preprocessing="tensor_only", batch_size=int(params.get("batch_size", 128)), num_workers=int(params.get("num_workers", 4)), roles=("train", "test"), save_as=str(params.get("save_as", "prepared_data")))
-def prepare_coteaching_cifar10(ctx: ScratchContext, **params: Any) -> None:
-    _compat_prepare(ctx, dataset="cifar10", validation_size=int(params.get("validation_size", 5000)), noise="symmetric", noise_rate=float(params.get("noise_rate", 0.2)), noise_seed=int(params.get("noise_seed", 1)), augment=bool(params.get("augment", True)), batch_size=int(params.get("batch_size", 128)), num_workers=int(params.get("num_workers", 4)), roles=("train", "noisy_validation", "test"), save_as=str(params.get("save_as", "prepared_data")))
-def prepare_cnlcu_cifar10(ctx: ScratchContext, **params: Any) -> None:
-    prepare_coteaching_cifar10(ctx, **params)
-def prepare_formal_cifar(ctx: ScratchContext, dataset: str = "cifar10", root: str = "", validation_size: int = 5000, train_eval: bool = False, clean_validation: bool = False, trusted_validation: bool = False, num_clean: int = 100, trusted_seed: int = 1234, augment: bool = True, preprocessing: str = "standard", noise_rate: float = 0.2, noise_seed: int = 1, batch_size: int = 128, num_workers: int = 0, save_as: str = "prepared_data") -> None:
-    roles = ["train", "test"]
-    if validation_size > 0: roles.append("clean_validation" if clean_validation else "noisy_validation")
-    if train_eval: roles.append("train_eval")
-    if trusted_validation: roles.append("trusted_validation")
-    _compat_prepare(ctx, dataset=dataset, validation_size=validation_size, noise="symmetric", noise_rate=noise_rate, noise_seed=noise_seed, augment=augment, preprocessing=preprocessing, batch_size=batch_size, num_workers=num_workers, roles=tuple(roles), save_as=save_as)
-def prepare_importance_reweighting_binary(ctx: ScratchContext, **params: Any) -> None:
-    _compat_prepare(ctx, dataset="synthetic_binary_2d", validation_size=int(params.get("validation_size", 1024)), noise="binary_asymmetric_rcn", noise_rate=float(params.get("rho_positive", 0.2)), noise_seed=int(params.get("noise_seed", 29)), batch_size=int(params.get("batch_size", 128)), roles=("train", "noisy_validation", "test"), save_as=str(params.get("save_as", "prepared_data")))
-def prepare_pcse_cifar10(ctx: ScratchContext, **params: Any) -> None:
-    _compat_prepare(ctx, dataset="cifar10", validation_size=5000, noise="external", noise_rate=0.4, noise_seed=int(params.get("noise_seed", 1)), batch_size=int(params.get("batch_size", 128)), num_workers=int(params.get("num_workers", 4)), roles=("train", "train_eval", "noisy_validation", "test"), save_as=str(params.get("save_as", "prepared_data")), options={"source_env": params.get("source_env", "LNL_PCSE_SOURCE_RUN")})
 @block(
     id="load_cifar100",
     name="Load CIFAR-100",

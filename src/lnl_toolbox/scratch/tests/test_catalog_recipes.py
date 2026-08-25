@@ -31,7 +31,7 @@ class ScratchCatalogRecipeTest(unittest.TestCase):
                 # execution tests.
                 continue
             recipe = load_recipe(path)
-            context = execute_recipe(recipe)
+            context = execute_recipe(recipe, runtime_limits={"fixture": True})
             self.assertIn("labels", context, path.name)
 
 

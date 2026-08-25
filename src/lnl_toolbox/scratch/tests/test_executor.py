@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import patch
 from pathlib import Path
 
 import yaml
 
 from lnl_toolbox.scratch import ScratchContext, ScratchExecutionError, execute_recipe, load_recipe
-from lnl_toolbox.scratch.blocks.data import prepare_apl_cifar10, prepare_binary_risk_data, prepare_gce_cifar10
 from lnl_toolbox.scratch.blocks.evaluation import evaluate_accuracy
 from lnl_toolbox.scratch.blocks.forward import softmax_probability
 from lnl_toolbox.scratch.blocks.losses import (
@@ -118,47 +116,6 @@ class ScratchExecutorTest(unittest.TestCase):
         execute_recipe(recipe, {"prepared": prepared})
         self.assertEqual(prepared.calls, [("train", 0, 128), ("train", 1, 128)])
 
-    def test_gce_data_block_uses_formal_manifest_pipeline(self) -> None:
-        prepared = _PreparedData()
-        with patch("lnl_toolbox.training.data_service.prepare_experiment_data", return_value=prepared) as prepare:
-            context = ScratchContext({"seed": 1, "artifact_dir": "artifacts/scratch/gce-test"})
-            prepare_gce_cifar10(context)
-        config = prepare.call_args.args[0]
-        requirements = prepare.call_args.kwargs["requirements"]
-        self.assertEqual(config["data"]["preprocessing"], "gce2018")
-        self.assertEqual(config["noise"]["manifest_filename"], "noise_manifest.npz")
-        self.assertEqual(requirements.validation_targets, "noisy")
-        self.assertTrue(requirements.needs_noise_manifest)
-        self.assertEqual(prepared.calls, [("noisy_validation", 0, 128), ("test", 0, 128)])
-
-    def test_apl_data_block_uses_formal_manifest_pipeline(self) -> None:
-        prepared = _PreparedData()
-        with patch("lnl_toolbox.training.data_service.prepare_experiment_data", return_value=prepared) as prepare:
-            context = ScratchContext({"seed": 1, "artifact_dir": "artifacts/scratch/apl-test"})
-            prepare_apl_cifar10(context)
-        config = prepare.call_args.args[0]
-        requirements = prepare.call_args.kwargs["requirements"]
-        self.assertEqual(config["data"], {"name": "cifar10", "validation_size": 0, "augment": True, "preprocessing": "standard"})
-        self.assertEqual(config["noise"]["sampling"], "per_class")
-        self.assertEqual(config["noise"]["validation_targets"], "clean")
-        self.assertEqual(requirements.validation_targets, "clean")
-        self.assertTrue(requirements.needs_noise_manifest)
-        self.assertEqual(prepared.calls, [("test", 0, 128)])
-
-    def test_binary_risk_data_block_uses_formal_manifest_pipeline(self) -> None:
-        prepared = _PreparedData()
-        with patch("lnl_toolbox.training.data_service.prepare_experiment_data", return_value=prepared) as prepare:
-            context = ScratchContext({"artifact_dir": "artifacts/scratch/binary-risk-test"})
-            prepare_binary_risk_data(context)
-        config = prepare.call_args.args[0]
-        requirements = prepare.call_args.kwargs["requirements"]
-        self.assertEqual(config["data"], {"name": "synthetic_binary_2d", "train_size": 512, "test_size": 2048, "seed": 2013})
-        self.assertEqual(config["noise"]["name"], "binary_asymmetric_rcn")
-        self.assertEqual((config["noise"]["rho_positive"], config["noise"]["rho_negative"]), (0.4, 0.4))
-        self.assertEqual({role.value for role in requirements.roles}, {"train", "test"})
-        self.assertTrue(requirements.needs_noise_manifest)
-        self.assertEqual(prepared.calls, [("train", 0, 64), ("test", 0, 64)])
-
     def test_resnet34_uses_the_formal_cifar_model(self) -> None:
         context = ScratchContext({"device": "cpu"})
         create_model(context, model="resnet34", num_classes=10, base_width=4)
@@ -183,8 +140,10 @@ class ScratchExecutorTest(unittest.TestCase):
         recipe = load_recipe(root / "src" / "lnl_toolbox" / "scratch" / "recipes" / "papers" / "gce.yaml")
         config = yaml.safe_load((root / "configs" / "experiment" / "gce_cifar10_noise02_reproduction.yaml").read_text(encoding="utf-8"))
         top = {step["block"]: step.get("params", {}) for step in recipe["steps"]}
-        data = top["prepare_gce_cifar10"]
-        self.assertEqual((data["validation_size"], data["augment"], data["noise_method"], data["noise_rate"], data["noise_seed"], data["batch_size"]), (config["data"]["validation_size"], config["data"]["augment"], config["noise"]["name"], config["noise"]["rate"], config["noise"]["seed"], config["loader"]["batch_size"]))
+        data = top
+        self.assertEqual(data["create_dataset_split"]["validation_size"], config["data"]["validation_size"])
+        self.assertEqual(data["configure_preprocessing"]["augment"], config["data"]["augment"])
+        self.assertEqual((data["apply_noise"]["name"], data["apply_noise"]["rate"], data["apply_noise"]["seed"], data["configure_loader"]["batch_size"]), (config["noise"]["name"], config["noise"]["rate"], config["noise"]["seed"], config["loader"]["batch_size"]))
         self.assertEqual(top["create_model"], {"model": config["model"]["name"], "num_classes": 10, "base_width": config["model"]["base_width"], "device": "device"})
         self.assertEqual({key: top["create_optimizer"][key] for key in ("optimizer", "lr", "momentum", "nesterov", "weight_decay")}, {"optimizer": config["optimizer"]["name"], "lr": config["optimizer"]["lr"], "momentum": config["optimizer"]["momentum"], "nesterov": config["optimizer"]["nesterov"], "weight_decay": config["optimizer"]["weight_decay"]})
         self.assertEqual({key: top["create_scheduler"][key] for key in ("scheduler", "milestones", "gamma")}, {"scheduler": config["scheduler"]["name"], "milestones": config["scheduler"]["milestones"], "gamma": config["scheduler"]["gamma"]})
