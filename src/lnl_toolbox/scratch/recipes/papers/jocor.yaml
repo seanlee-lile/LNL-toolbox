@@ -6,13 +6,18 @@ steps:
     params: {seed: 1}
   - block: select_device
     params: {device: auto}
-  - block: prepare_jocor_cifar10
-    params:
-      root: ''
-      noise_rate: 0.5
-      noise_seed: 0
-      batch_size: 128
-      num_workers: 4
+  - {block: load_dataset, params: {dataset: cifar10}}
+  - {block: inspect_dataset_semantics}
+  - {block: create_dataset_split, params: {validation_size: 0, split_seed: 0}}
+  - {block: select_label_source}
+  - {block: apply_noise, params: {name: symmetric, rate: 0.5, seed: 0, sampling: transition, options: {rng: numpy_legacy}}}
+  - {block: build_noise_manifest}
+  - {block: configure_preprocessing, params: {preprocessing: tensor_only, augment: false}}
+  - {block: configure_views, params: {views: [weak]}}
+  - {block: assign_data_roles, params: {roles: [train, test], train_drop_last: true}}
+  - {block: configure_loader, params: {batch_size: 128, num_workers: 4, pin_memory: true, drop_last: true}}
+  - {block: build_prepared_data}
+  - {block: build_loaders}
   - block: create_model
     params: {model: cifar_six_conv, num_classes: 10, device: device, save_as: model_a}
   - block: create_model

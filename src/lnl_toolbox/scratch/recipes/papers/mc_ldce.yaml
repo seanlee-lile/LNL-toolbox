@@ -4,7 +4,18 @@ description: "Formal MC-LDCE CIFAR-10 symmetric-20 lifecycle with fixed features
 steps:
   - {block: set_seed, params: {seed: 1}}
   - {block: select_device, params: {device: auto}}
-  - {block: prepare_formal_cifar, params: {dataset: cifar10, validation_size: 0, augment: true, noise_rate: 0.2, noise_seed: 1, batch_size: 128, num_workers: 4, train_eval: true}}
+  - {block: load_dataset, params: {dataset: cifar10}}
+  - {block: inspect_dataset_semantics}
+  - {block: create_dataset_split, params: {validation_size: 0, split_seed: 1}}
+  - {block: select_label_source}
+  - {block: apply_noise, params: {name: symmetric, rate: 0.2, seed: 1}}
+  - {block: build_noise_manifest}
+  - {block: configure_preprocessing, params: {preprocessing: standard, augment: true}}
+  - {block: configure_views, params: {views: [weak]}}
+  - {block: assign_data_roles, params: {roles: [train, train_eval, test]}}
+  - {block: configure_loader, params: {batch_size: 128, num_workers: 4, pin_memory: true}}
+  - {block: build_prepared_data}
+  - {block: build_loaders}
   - {block: create_model, params: {model: mc_ldce_cnn, num_classes: 10, classifier_bias: false, device: device, save_as: transition_model}}
   - {block: create_mc_ldce_volmin_transition, params: {num_classes: 10, initial_weight: -2.0794415416798357, seed: 1, device: device, save_as: mc_ldce_transition}}
   - {block: create_mc_ldce_volmin_optimizer, params: {model: transition_model, transition: mc_ldce_transition, learning_rate: 0.01, momentum: 0.9, weight_decay: 0.001, save_as: transition_optimizer}}

@@ -4,7 +4,18 @@ description: "Formal DivideMix CIFAR-10 symmetric-20 recipe: two preactivation R
 steps:
   - {block: set_seed, params: {seed: 1}}
   - {block: select_device, params: {device: auto}}
-  - {block: prepare_formal_cifar, params: {dataset: cifar10, validation_size: 5000, augment: true, noise_rate: 0.2, noise_seed: 1, batch_size: 128, num_workers: 4}}
+  - {block: load_dataset, params: {dataset: cifar10}}
+  - {block: inspect_dataset_semantics}
+  - {block: create_dataset_split, params: {validation_size: 5000, split_seed: 1}}
+  - {block: select_label_source, params: {validation: observed}}
+  - {block: apply_noise, params: {name: symmetric, rate: 0.2, seed: 1}}
+  - {block: build_noise_manifest}
+  - {block: configure_preprocessing, params: {preprocessing: standard, augment: true}}
+  - {block: configure_views, params: {views: [weak, strong]}}
+  - {block: assign_data_roles, params: {roles: [train, noisy_validation, test]}}
+  - {block: configure_loader, params: {batch_size: 128, num_workers: 4, pin_memory: true}}
+  - {block: build_prepared_data}
+  - {block: build_loaders}
   - {block: create_model, params: {model: preact_resnet18, num_classes: 10, base_width: 64, device: device, save_as: model_a}}
   - {block: create_model, params: {model: preact_resnet18, num_classes: 10, base_width: 64, device: device, save_as: model_b}}
   - {block: create_optimizer, params: {optimizer: sgd, model: model_a, lr: 0.02, momentum: 0.9, weight_decay: 0.0005, save_as: optimizer_a}}

@@ -4,7 +4,18 @@ description: "Formal UPM CIFAR-10 symmetric-40 two-stage recipe: stage-1 best-so
 steps:
   - {block: set_seed, params: {seed: 1}}
   - {block: select_device, params: {device: auto}}
-  - {block: prepare_formal_cifar, params: {dataset: cifar10, validation_size: 5000, augment: true, noise_rate: 0.4, noise_seed: 1, batch_size: 128, num_workers: 4, train_eval: true}}
+  - {block: load_dataset, params: {dataset: cifar10}}
+  - {block: inspect_dataset_semantics}
+  - {block: create_dataset_split, params: {validation_size: 5000, split_seed: 1}}
+  - {block: select_label_source, params: {validation: observed}}
+  - {block: apply_noise, params: {name: symmetric, rate: 0.4, seed: 1}}
+  - {block: build_noise_manifest}
+  - {block: configure_preprocessing, params: {preprocessing: standard, augment: true}}
+  - {block: configure_views, params: {views: [weak]}}
+  - {block: assign_data_roles, params: {roles: [train, train_eval, noisy_validation, test]}}
+  - {block: configure_loader, params: {batch_size: 128, num_workers: 4, pin_memory: true}}
+  - {block: build_prepared_data}
+  - {block: build_loaders}
   - {block: create_model, params: {model: resnet18, num_classes: 10, base_width: 16, device: device, save_as: stage1_model}}
   - {block: create_optimizer, params: {optimizer: sgd, model: stage1_model, lr: 0.05, momentum: 0.9, weight_decay: 0.0001, save_as: stage1_optimizer}}
   - {block: create_scheduler, params: {scheduler: multistep, optimizer: stage1_optimizer, milestones: [40, 80, 120], gamma: 0.1, save_as: stage1_scheduler}}

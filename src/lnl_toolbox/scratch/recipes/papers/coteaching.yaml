@@ -6,15 +6,18 @@ steps:
     params: {seed: 1}
   - block: select_device
     params: {device: auto}
-  - block: prepare_coteaching_cifar10
-    params:
-      root: ''
-      validation_size: 5000
-      augment: true
-      noise_rate: 0.2
-      noise_seed: 1
-      batch_size: 128
-      num_workers: 4
+  - {block: load_dataset, params: {dataset: cifar10}}
+  - {block: inspect_dataset_semantics}
+  - {block: create_dataset_split, params: {validation_size: 5000, split_seed: 1}}
+  - {block: select_label_source, params: {validation: observed}}
+  - {block: apply_noise, params: {name: symmetric, rate: 0.2, seed: 1, sampling: transition}}
+  - {block: build_noise_manifest}
+  - {block: configure_preprocessing, params: {preprocessing: standard, augment: true}}
+  - {block: configure_views, params: {views: [weak]}}
+  - {block: assign_data_roles, params: {roles: [train, noisy_validation, test]}}
+  - {block: configure_loader, params: {batch_size: 128, num_workers: 4, pin_memory: true}}
+  - {block: build_prepared_data}
+  - {block: build_loaders}
   - block: create_model
     params: {model: cifar_cnn8, num_classes: 10, device: device, save_as: model_a}
   - block: create_model

@@ -6,16 +6,18 @@ steps:
     params: {seed: 17}
   - block: select_device
     params: {device: auto}
-  - block: prepare_importance_reweighting_binary
-    params:
-      train_size: 4096
-      validation_size: 1024
-      test_size: 1024
-      data_seed: 17
-      rho_positive: 0.2
-      rho_negative: 0.1
-      noise_seed: 29
-      batch_size: 128
+  - {block: load_dataset, params: {dataset: synthetic_binary_2d, options: {train_size: 4096, validation_size: 1024, test_size: 1024, data_seed: 17}}}
+  - {block: inspect_dataset_semantics}
+  - {block: create_dataset_split, params: {validation_size: 1024, split_seed: 17}}
+  - {block: select_label_source, params: {validation: observed}}
+  - {block: apply_noise, params: {name: binary_asymmetric_rcn, rate: 0.2, seed: 29, options: {rho_positive: 0.2, rho_negative: 0.1}}}
+  - {block: build_noise_manifest}
+  - {block: configure_preprocessing, params: {preprocessing: binary_raw, augment: false}}
+  - {block: configure_views, params: {views: [weak]}}
+  - {block: assign_data_roles, params: {roles: [train, noisy_validation, test]}}
+  - {block: configure_loader, params: {batch_size: 128, num_workers: 0}}
+  - {block: build_prepared_data}
+  - {block: build_loaders}
   - block: estimate_noisy_posterior
     params:
       backend: kde

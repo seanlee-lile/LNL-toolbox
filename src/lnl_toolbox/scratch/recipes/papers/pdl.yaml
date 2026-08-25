@@ -6,14 +6,18 @@ steps:
     params: {seed: 1}
   - block: select_device
     params: {device: auto}
-  - block: prepare_pdl_cifar10
-    params:
-      root: ''
-      validation_size: 5000
-      augment: false
-      noise_rate: 0.4
-      noise_seed: 1
-      batch_size: 128
+  - {block: load_dataset, params: {dataset: cifar10}}
+  - {block: inspect_dataset_semantics}
+  - {block: create_dataset_split, params: {validation_size: 5000, split_strategy: official, split_seed: 1, subset_before_split: true}}
+  - {block: select_label_source, params: {validation: observed}}
+  - {block: apply_noise, params: {name: pdl, rate: 0.4, seed: 1}}
+  - {block: build_noise_manifest}
+  - {block: configure_preprocessing, params: {preprocessing: standard, augment: false}}
+  - {block: configure_views, params: {views: [weak]}}
+  - {block: assign_data_roles, params: {roles: [train, noisy_validation, test]}}
+  - {block: configure_loader, params: {batch_size: 128, num_workers: 0, pin_memory: true}}
+  - {block: build_prepared_data}
+  - {block: build_loaders}
   - block: create_model
     params:
       model: resnet34

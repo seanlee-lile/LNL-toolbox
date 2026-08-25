@@ -4,7 +4,18 @@ description: "Formal CAL CIFAR-10 IDN-20 recipe with immutable external labels, 
 steps:
   - {block: set_seed, params: {seed: 10086}}
   - {block: select_device, params: {device: auto}}
-  - {block: prepare_cal_cifar10, params: {artifact_path: data/cal/IDN_0.2_C10.pt, batch_size: 128, num_workers: 0}}
+  - {block: load_dataset, params: {dataset: cifar10, options: {artifact_path: data/cal/IDN_0.2_C10.pt}}}
+  - {block: inspect_dataset_semantics}
+  - {block: create_dataset_split, params: {validation_size: 0, split_seed: 10086}}
+  - {block: select_label_source, params: {validation: clean}}
+  - {block: apply_noise, params: {name: external, rate: 0.2, seed: 10086, options: {artifact_path: data/cal/IDN_0.2_C10.pt}}}
+  - {block: build_noise_manifest, params: {external_path: data/cal/IDN_0.2_C10.pt}}
+  - {block: configure_preprocessing, params: {preprocessing: standard, augment: true}}
+  - {block: configure_views, params: {views: [weak]}}
+  - {block: assign_data_roles, params: {roles: [train, train_eval, clean_validation, test]}}
+  - {block: configure_loader, params: {batch_size: 128, num_workers: 0, pin_memory: true}}
+  - {block: build_prepared_data}
+  - {block: build_loaders}
   - {block: create_cal_state, params: {prepared_data: prepared_data, num_classes: 10, save_as: cal_state}}
   - {block: create_model, params: {model: resnet34, num_classes: 10, base_width: 64, initialization: torch_default, device: device, save_as: warmup_model}}
   - {block: create_optimizer, params: {optimizer: sgd, model: warmup_model, lr: 0.1, momentum: 0.9, weight_decay: 0.0005, save_as: warmup_optimizer}}

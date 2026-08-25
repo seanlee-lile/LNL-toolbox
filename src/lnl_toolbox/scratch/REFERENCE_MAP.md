@@ -6,7 +6,7 @@ This is a development audit trail, not a runtime import map. Scratch blocks are 
 
 | Method | Old sources inspected | Scratch blocks / recipe | Status |
 |---|---|---|---|
-| GCE | `src/lnl_toolbox/losses/torch_losses.py`; `src/lnl_toolbox/training/experiment.py`; `src/lnl_toolbox/training/data_service.py`; `src/lnl_toolbox/models/cifar_resnet.py` | `prepare_gce_cifar10`, `resnet34`, `forward`, `softmax_probability`, `gather_target_probability`, `gce_q_formula`, `mean_loss`, `backward`, `optimizer_step`, validation selection, and MultiStepLR; `recipes/papers/gce.yaml` | complete formal CIFAR-10 path; `recipes/examples/gce_formula_smoke.yaml` remains the one-epoch smoke |
+| GCE | `src/lnl_toolbox/losses/torch_losses.py`; `src/lnl_toolbox/training/experiment.py`; `src/lnl_toolbox/training/data_service.py`; `src/lnl_toolbox/models/cifar_resnet.py` | Scratch-native `load_dataset → inspect_dataset_semantics → create_dataset_split → select_label_source → apply_noise → build_noise_manifest → configure_preprocessing → configure_views → assign_data_roles → configure_loader → build_prepared_data → build_loaders`, followed by `resnet34`, formula, optimization, and selection blocks; `recipes/papers/gce.yaml` | complete formal CIFAR-10 data plan; legacy data service is reference-only |
 | APL | `src/lnl_toolbox/losses/torch_losses.py`; `src/lnl_toolbox/training/experiment.py` | `apl_loss`, `mean_loss`; `recipes/papers/apl.yaml` | smoke checked |
 | Co-teaching | `src/lnl_toolbox/algorithms/coteaching/`; `src/lnl_toolbox/training/coteaching_experiment.py` | `remember_rate_formula`, `small_loss_indices`, `cross_select_loss_a_from_b`, `cross_select_loss_b_from_a`, plus shared forward/CE/backward/update blocks; `recipes/papers/coteaching.yaml` | formula-ready; short lifecycle smoke |
 | DivideMix | `src/lnl_toolbox/algorithms/dividemix`; `src/lnl_toolbox/training/dividemix_experiment.py` | `fit_gmm`, `split_clean_noisy`, `co_refine`, `dividemix_supervised_loss`, `dividemix_unsupervised_loss`, `dividemix_prior_regularizer`, `dividemix_objective_composition`; `recipes/papers/dividemix.yaml` | formal lifecycle |
@@ -49,7 +49,7 @@ Every catalog entry now has a recipe under `recipes/papers/`. The GCE entry is w
 | `coteaching` | `coteaching.yaml` | `peer_exchange`, `select_by_indices` | `algorithms/coteaching/`; `training/coteaching_experiment.py` |
 | `loss-correction` | `loss_correction.yaml` | `estimate_transition`, `forward_correction` | `noise/estimators.py`; `algorithms/transition_risk.py` |
 | `apl` | `apl.yaml` | `apl_loss`, `mean_loss` | `losses/torch_losses.py`; `training/experiment.py` |
-| `gce` | `gce.yaml` | `prepare_gce_cifar10`, ResNet-34, GCE formula blocks, validation selection, MultiStepLR | `losses/torch_losses.py`; `training/experiment.py`; `training/data_service.py`; `models/cifar_resnet.py` |
+| `gce` | `gce.yaml` | Scratch data particles, ResNet-34, GCE formula blocks, validation selection, MultiStepLR | `losses/torch_losses.py`; `training/experiment.py`; `training/data_service.py`; `models/cifar_resnet.py` |
 | `dual-t` | `dual_t.yaml` | `compose_transition`, `forward_correction` | `algorithms/dual_t/`; `training/dual_t_experiment.py` |
 | `importance-reweighting` | `importance_reweighting.yaml` | `importance_reweight`, `mean_loss` | `algorithms/importance_reweighting/`; `training/importance_reweighting_experiment.py` |
 | `cwd` | `cwd.yaml` | `cwd_statistics`, `mean_loss` | `estimators/cwd.py`; `training/cwd_experiment.py` |
@@ -68,4 +68,4 @@ Every catalog entry now has a recipe under `recipes/papers/`. The GCE entry is w
 | `ca2c` | `ca2c.yaml` | `ca2c_warmup_loss`, `ca2c_cross_guidance`, `ca2c_partial_label_loss`, `ca2c_negative_label_loss`, `ca2c_objective_composition` | `algorithms/ca2c.py`; `training/ca2c_experiment.py` |
 | `l2rw` | `l2rw.yaml` | `l2rw_get_trusted_batch`, `l2rw_meta_gradient`, `l2rw_normalize_weights` | `algorithms/l2rw.py`; `training/l2rw_experiment.py` |
 
-No Scratch block imports these legacy modules at runtime. The source paths above are reference-only and correspond to the `implementation_paths` in `src/lnl_toolbox/paper_catalog.json`.
+Scratch data particles do not import the legacy data service at runtime. The source paths above are reference-only; algorithm/model blocks retain their existing implementation audits and are outside this data-particle migration.
