@@ -8,7 +8,7 @@ steps:
     params: {device: auto}
   - {block: load_dataset, params: {dataset: cifar10}}
   - {block: inspect_dataset_semantics}
-  - {block: create_dataset_split, params: {validation_size: 5000, split_strategy: official, split_seed: 1, subset_before_split: true}}
+  - {block: create_dataset_split, params: {validation_size: 5000, split_strategy: random, split_seed: 1, subset_before_split: true}}
   - {block: select_label_source, params: {validation: observed}}
   - {block: apply_noise, params: {name: pdl, rate: 0.4, seed: 1}}
   - {block: build_noise_manifest}

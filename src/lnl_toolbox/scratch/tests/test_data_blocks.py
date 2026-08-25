@@ -6,6 +6,7 @@ from pathlib import Path
 import torch
 
 from lnl_toolbox.scratch import ScratchContext
+from lnl_toolbox.scratch.registry import describe_block
 from lnl_toolbox.scratch.blocks.data import (
     assign_data_roles,
     build_loaders,
@@ -20,7 +21,7 @@ from lnl_toolbox.scratch.blocks.data import (
     select_label_source,
     apply_noise,
 )
-from lnl_toolbox.scratch.data_runtime import ScratchSample, ScratchSplit
+from lnl_toolbox.scratch.data_runtime import ScratchSample, ScratchSplit, apply_noise_to_split
 
 
 def _same_index_source() -> dict[str, ScratchSplit]:
@@ -57,6 +58,65 @@ def _run_blocks(source: dict[str, ScratchSplit], *, validation_size: int = 1,
 
 
 class DataBlockExecutionTest(unittest.TestCase):
+    def test_data_block_metadata_exposes_real_slots(self) -> None:
+        expected = {
+            "load_dataset": ((), ("save_as", "data_spec", "train_source", "validation_source", "test_source", "num_classes")),
+            "create_dataset_split": (("train_source",), ("train_split", "validation_split")),
+            "apply_noise": (("train_split",), ("noisy_train_split", "noise_state")),
+            "build_noise_manifest": (("noise_state",), ("noise_manifest",)),
+            "configure_preprocessing": (("train_split",), ("preprocessing_transform", "preprocessed_datasets")),
+            "configure_views": (("preprocessed_datasets", "preprocessing_transform"), ("view_transforms", "view_datasets")),
+            "assign_data_roles": (("noisy_train_split", "validation_split", "test_source", "preprocessing_transform", "view_transforms"), ("role_datasets",)),
+            "configure_loader": ((), ("loader_spec",)),
+            "build_loaders": (("role_datasets", "loader_spec"), ("train_loader", "train_eval_loader", "validation_loader", "trusted_loader", "test_loader")),
+        }
+        for block_id, (requires, provides) in expected.items():
+            metadata = describe_block(block_id)
+            self.assertEqual(tuple(metadata["requires"]), requires, block_id)
+            self.assertEqual(tuple(metadata["provides"]), provides, block_id)
+
+    def test_manifest_build_does_not_rematerialize_noise(self) -> None:
+        ctx = ScratchContext(seed=3)
+        load_dataset(ctx, "custom", options={"source": _same_index_source()})
+        create_dataset_split(ctx, validation_size=1)
+        apply_noise(ctx, name="pairflip", rate=1.0, seed=5)
+        noisy_before = ctx["noisy_train_split"]
+        targets_before = tuple(sample.observed_target for sample in noisy_before.samples)
+        build_noise_manifest(ctx)
+        self.assertIs(ctx["noisy_train_split"], noisy_before)
+        self.assertEqual(tuple(sample.observed_target for sample in noisy_before.samples), targets_before)
+
+    def test_roles_consume_configured_transform_objects(self) -> None:
+        ctx = _run_blocks(_same_index_source())
+        train_dataset = ctx["role_datasets"]["train"]
+        self.assertIs(train_dataset.transform, ctx["preprocessing_transform"])
+        self.assertIs(train_dataset.views["weak"], ctx["view_transforms"]["weak"])
+
+    def test_instance_dependent_noise_requires_scores_and_is_feature_conditioned(self) -> None:
+        train = ScratchSplit("toy", "train", tuple(
+            ScratchSample(torch.tensor([float(i), 0.0]), i, i % 3, i % 3) for i in range(6)
+        ), 3)
+        with self.assertRaisesRegex(ValueError, "class_scores"):
+            apply_noise_to_split(train, {"name": "instance_dependent", "rate": 0.5, "seed": 1})
+        scores = torch.tensor([[5.0, 0.0, 0.0], [0.0, 5.0, 0.0], [2.0, 1.0, 0.0], [1.0, 2.0, 0.0], [0.0, 2.0, 1.0], [0.0, 1.0, 2.0]])
+        noisy, manifest, _ = apply_noise_to_split(
+            train, {"name": "instance_dependent", "rate": 0.5, "seed": 1, "class_scores": scores}
+        )
+        self.assertEqual(tuple(manifest.per_sample_transition.shape), (6, 3))
+        self.assertFalse(torch.equal(manifest.per_sample_transition[0], manifest.per_sample_transition[3]))
+        self.assertTrue(any(a.observed_target != b.observed_target for a, b in zip(train.samples, noisy.samples)))
+
+    def test_pdl_noise_uses_input_features_and_publishes_transitions(self) -> None:
+        def make(value: float) -> ScratchSplit:
+            return ScratchSplit("toy", "train", tuple(
+                ScratchSample(torch.tensor([value, float(i + 1), float((i + 1) ** 2)]), i, i % 3, i % 3) for i in range(6)
+            ), 3)
+        first, manifest, _ = apply_noise_to_split(make(0.0), {"name": "pdl", "rate": 0.5, "seed": 7})
+        second, manifest_two, _ = apply_noise_to_split(make(3.0), {"name": "pdl", "rate": 0.5, "seed": 7})
+        self.assertEqual(tuple(manifest.per_sample_transition.shape), (6, 3))
+        self.assertFalse(torch.equal(manifest.per_sample_transition, manifest_two.per_sample_transition))
+        self.assertEqual(len(first.samples), len(second.samples))
+
     def test_symbolic_transition_matrix_is_resolved_and_exposed(self) -> None:
         train = ScratchSplit("cifar10", "train", tuple(
             ScratchSample(torch.zeros(3, 4, 4), i, i, i) for i in range(10)

@@ -221,7 +221,8 @@ def collate_scratch_batch(rows: Sequence[Mapping[str, Any]]) -> ScratchBatch:
 class ScratchNoiseManifest:
     def __init__(self, split: str, indices: Any, clean_targets: Any, observed_targets: Any,
                  noise_type: str = "none", seed: int = 0, rate: float = 0.0,
-                 transition_matrix: Any | None = None, dataset: str = "") -> None:
+                 transition_matrix: Any | None = None, dataset: str = "",
+                 per_sample_transition: Any | None = None, metadata: Mapping[str, Any] | None = None) -> None:
         self.dataset = str(dataset)
         self.split = str(split)
         self.global_indices = indices
@@ -231,8 +232,11 @@ class ScratchNoiseManifest:
         self.seed = int(seed)
         self.requested_rate = float(rate)
         self.transition_matrix = transition_matrix
+        self.per_sample_transition = per_sample_transition
+        self.metadata = dict(metadata or {})
         payload = json.dumps({"dataset": self.dataset, "split": self.split, "indices": _tolist(indices),
-                              "clean": _tolist(clean_targets), "observed": _tolist(observed_targets)},
+                              "clean": _tolist(clean_targets), "observed": _tolist(observed_targets),
+                              "transition": _tolist(per_sample_transition), "metadata": self.metadata},
                              sort_keys=True).encode()
         self.mapping_hash = hashlib.sha256(payload).hexdigest()
 
@@ -433,6 +437,8 @@ def split_source(train: ScratchSplit, validation_source: ScratchSplit | None,
     strategy = str(config.get("strategy", "random")).lower()
     if strategy == "official":
         if validation_source is None:
+            if int(config.get("validation_size", 0)) == 0:
+                return train, ScratchSplit(train.dataset, "validation", tuple(), train.num_classes, train.version)
             raise ValueError("official split requires a source validation split")
         return train, validation_source
     train_split, validation = _split_train(train, plan)
@@ -493,6 +499,101 @@ def _load_external_payload(path: Path) -> Mapping[str, Any]:
     return payload
 
 
+def _instance_class_scores(config: Mapping[str, Any], samples: Sequence[ScratchSample], classes: int) -> Any:
+    """Return explicitly supplied per-sample class scores, aligned by index."""
+    torch = _torch()
+    value = config.get("class_scores", config.get("instance_scores"))
+    if value is None:
+        raise ValueError("instance_dependent noise requires aligned class_scores")
+    if isinstance(value, Mapping):
+        try:
+            value = [value[int(sample.index)] for sample in samples]
+        except KeyError as exc:
+            raise ValueError("instance class_scores are missing a Scratch sample index") from exc
+    scores = torch.as_tensor(value, dtype=torch.float64)
+    if scores.ndim != 2 or tuple(scores.shape) != (len(samples), classes):
+        raise ValueError(f"class_scores must have shape [{len(samples)}, {classes}]")
+    if not torch.isfinite(scores).all():
+        raise ValueError("class_scores must be finite")
+    return scores
+
+
+def _sample_truncated_normal(size: int, mean: float, std: float, generator: Any) -> Any:
+    torch = _torch()
+    if std <= 0:
+        raise ValueError("pdl rate_std must be positive")
+    result = torch.empty(size, dtype=torch.float64)
+    filled = 0
+    while filled < size:
+        draw = torch.normal(float(mean), float(std), (max(size - filled, 1) * 2,), generator=generator,
+                             dtype=torch.float64)
+        accepted = draw[(draw >= 0.0) & (draw <= 1.0)]
+        take = min(int(accepted.numel()), size - filled)
+        if take:
+            result[filled:filled + take] = accepted[:take]
+            filled += take
+    return result
+
+
+def _sample_instance_dependent(samples: Sequence[ScratchSample], clean: Any,
+                               classes: int, rate: float, seed: int,
+                               config: Mapping[str, Any]) -> tuple[Any, Any]:
+    torch = _torch()
+    scores = _instance_class_scores(config, samples, classes)
+    shifted = scores - scores.max(dim=1, keepdim=True).values
+    probabilities = torch.exp(shifted)
+    probabilities[torch.arange(len(samples)), clean] = 0.0
+    probabilities = probabilities / probabilities.sum(dim=1, keepdim=True).clamp_min(1e-12)
+    ambiguity = 1.0 - probabilities.max(dim=1).values
+    ambiguity = ambiguity / ambiguity.mean().clamp_min(1e-12)
+    flip_probability = (float(rate) * ambiguity).clamp(0.0, 1.0)
+    generator = torch.Generator().manual_seed(int(seed))
+    flip = torch.rand(len(samples), generator=generator) < flip_probability
+    noisy = clean.clone()
+    for position in torch.nonzero(flip, as_tuple=False).flatten().tolist():
+        noisy[position] = torch.multinomial(probabilities[position].float(), 1, generator=generator)
+    transition = probabilities * flip_probability[:, None]
+    transition[torch.arange(len(samples)), clean] = 1.0 - flip_probability
+    return noisy, transition
+
+
+def _sample_pdl(samples: Sequence[ScratchSample], clean: Any, classes: int,
+                rate: float, seed: int, config: Mapping[str, Any]) -> tuple[Any, Any]:
+    """Scratch-native implementation of PDL Algorithm 2 over raw sample inputs."""
+    torch = _torch()
+    features = []
+    for sample in samples:
+        value = _decode_input(sample.input)
+        if not isinstance(value, torch.Tensor):
+            import numpy as np
+            value = torch.as_tensor(np.asarray(value))
+        features.append(value.detach().to(dtype=torch.float64).reshape(-1))
+    if not features:
+        return clean.clone(), torch.empty((0, classes, classes), dtype=torch.float64)
+    width = int(features[0].numel())
+    if any(int(value.numel()) != width for value in features):
+        raise ValueError("pdl inputs must have a consistent flattened feature shape")
+    matrix = torch.stack(features)
+    if not torch.isfinite(matrix).all():
+        raise ValueError("pdl inputs must be finite")
+    generator = torch.Generator().manual_seed(int(seed))
+    rate_std = float(config.get("rate_std", 0.1))
+    flip_rate = _sample_truncated_normal(len(samples), float(rate), rate_std, generator)
+    weights = torch.randn((classes, width, classes), generator=generator, dtype=torch.float64)
+    transitions = torch.zeros((len(samples), classes), dtype=torch.float64)
+    for position, clean_class in enumerate(clean.tolist()):
+        scores = matrix[position].reshape(1, -1).mm(weights[int(clean_class)]).squeeze(0)
+        scores[int(clean_class)] = -float("inf")
+        row = float(flip_rate[position]) * torch.softmax(scores, dim=0)
+        row[int(clean_class)] += 1.0 - float(flip_rate[position])
+        transitions[position] = row
+    noisy = torch.stack([
+        torch.multinomial(transitions[position].float(), 1, generator=generator).to(dtype=torch.long).squeeze(0)
+        for position in range(len(samples))
+    ])
+    return noisy, transitions
+
+
 def _noise_targets(samples: Sequence[ScratchSample], config: Mapping[str, Any], classes: int) -> tuple[list[int], ScratchNoiseManifest, dict[int, int]]:
     torch = _torch()
     name = str(config.get("name", "none")).lower()
@@ -529,10 +630,10 @@ def _noise_targets(samples: Sequence[ScratchSample], config: Mapping[str, Any], 
             raise ValueError("transition_matrix must be square and every row must sum to one")
         sampled = [int(torch.multinomial(rows[int(label)], 1, generator=generator)) for label in clean]
         noisy = torch.as_tensor(sampled, dtype=torch.long)
-    elif name in {"instance_dependent", "pdl"}:
-        generator = torch.Generator().manual_seed(seed)
-        scores = torch.rand(len(samples), generator=generator)
-        noisy = torch.where(scores < rate, (clean + 1 + torch.arange(len(samples)) % max(classes - 1, 1)) % classes, clean)
+    elif name == "instance_dependent":
+        noisy, per_sample_transition = _sample_instance_dependent(samples, clean, classes, rate, seed, config)
+    elif name == "pdl":
+        noisy, per_sample_transition = _sample_pdl(samples, clean, classes, rate, seed, config)
     elif name in {"external", "external_torch"}:
         path = _resolve_external_path(config)
         payload = _load_external_payload(path)
@@ -581,18 +682,26 @@ def _noise_targets(samples: Sequence[ScratchSample], config: Mapping[str, Any], 
     else:
         raise ValueError(f"unsupported Scratch noise type `{name}`")
     transition = None
+    per_sample_transition = locals().get("per_sample_transition")
     if name == "class_conditional":
         transition = _resolve_transition_matrix(config.get("transition_matrix"), classes=classes, rate=rate)
     elif name in {"external", "external_torch"} and "payload" in locals() and payload.get("transition_matrix") is not None:
         transition = payload.get("transition_matrix")
-    manifest = ScratchNoiseManifest("train", torch.as_tensor([sample.index for sample in samples]), clean, noisy, name, seed, rate, transition, str(config.get("_dataset", "")))
+    manifest = ScratchNoiseManifest(
+        "train", torch.as_tensor([sample.index for sample in samples]), clean, noisy,
+        name, seed, rate, transition, str(config.get("_dataset", "")),
+        per_sample_transition=per_sample_transition,
+        metadata={"generator": "scratch_instance_dependent" if name == "instance_dependent" else "scratch_pdl"}
+        if name in {"instance_dependent", "pdl"} else {},
+    )
     clean_by_index = {} if clean is None else {
         int(sample.index): int(value) for sample, value in zip(samples, clean)
     }
     return [int(value) for value in noisy], manifest, clean_by_index
 
 
-def _transform_pair(plan: Mapping[str, Any], train: ScratchSplit) -> tuple[Callable[[Any], Any] | None, dict[str, Callable[[Any], Any] | None]]:
+def _transform_pair(plan: Mapping[str, Any], train: ScratchSplit,
+                    preprocessing_transform: Callable[[Any], Any] | None = None) -> tuple[Callable[[Any], Any] | None, dict[str, Callable[[Any], Any] | None]]:
     data = dict(plan.get("data", {})); preprocessing = dict(plan.get("preprocessing", {}))
     name = str(preprocessing.get("name", "standard")).lower()
     augment = bool(preprocessing.get("augment", False))
@@ -622,7 +731,7 @@ def _transform_pair(plan: Mapping[str, Any], train: ScratchSplit) -> tuple[Calla
         pass
     elif name:
         raise ValueError(f"unsupported Scratch preprocessing `{name}`")
-    weak = transforms.Compose(ops)
+    weak = preprocessing_transform if preprocessing_transform is not None else transforms.Compose(ops)
     result = {"weak": weak if "weak" in views else None}
     if "strong" in views:
         result["strong"] = transforms.Compose((transforms.RandomCrop(crop_size, padding=padding), transforms.RandomHorizontalFlip(), transforms.Lambda(_to_uint8_image), transforms.RandAugment(), transforms.Lambda(_to_tensor_input)))
@@ -647,9 +756,10 @@ def apply_noise_to_split(split: ScratchSplit, config: Mapping[str, Any]) -> tupl
     return noisy, manifest, clean_by_index
 
 
-def build_transforms(plan: Mapping[str, Any], source: ScratchSplit) -> tuple[Callable[[Any], Any] | None, dict[str, Callable[[Any], Any] | None]]:
+def build_transforms(plan: Mapping[str, Any], source: ScratchSplit,
+                     preprocessing_transform: Callable[[Any], Any] | None = None) -> tuple[Callable[[Any], Any] | None, dict[str, Callable[[Any], Any] | None]]:
     """Build concrete input transforms for one preprocessing/views step."""
-    return _transform_pair(plan, source)
+    return _transform_pair(plan, source, preprocessing_transform)
 
 
 def build_role_datasets(
@@ -660,10 +770,14 @@ def build_role_datasets(
     test_split: ScratchSplit,
     roles: Sequence[str],
     data_config: Mapping[str, Any],
-    preprocessing_plan: Mapping[str, Any],
+    preprocessing_transform: Callable[[Any], Any] | None,
+    view_transforms: Mapping[str, Callable[[Any], Any] | None],
+    preprocessed_datasets: Mapping[str, Any] | None = None,
+    view_datasets: Mapping[str, Any] | None = None,
 ) -> dict[str, ScratchRoleDataset]:
     """Select concrete role datasets from already materialised splits."""
-    weak, views = _transform_pair(preprocessing_plan, train_split)
+    weak = preprocessing_transform
+    views = dict(view_transforms)
     trusted: ScratchSplit | None = None
     learning_train = noisy_train
     if "trusted_validation" in roles:

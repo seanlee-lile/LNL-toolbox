@@ -93,7 +93,7 @@ def _dataset_num_classes(name: str) -> int:
             "path": {"type": "path", "default": ""},
             "options": {"type": "value", "default": {}},
             "save_as": {"type": "slot", "default": "data_plan"}},
-    provides=("save_as", "data_spec"), placement=("top",), stage="data", ui_group="① 数据准备",
+    requires=(), provides=("save_as", "data_spec", "train_source", "validation_source", "test_source", "num_classes"), placement=("top",), stage="data", ui_group="① 数据准备",
 )
 def load_dataset(ctx: ScratchContext, dataset: str, root: str = "", path: str = "",
                  options: Mapping[str, Any] | None = None, save_as: str = "data_plan") -> None:
@@ -132,7 +132,7 @@ def load_dataset(ctx: ScratchContext, dataset: str, root: str = "", path: str = 
     description="Record dataset capabilities and label semantics for an explicit recipe audit.",
     params={"data_plan": {"type": "slot", "default": "data_plan"},
             "save_as": {"type": "slot", "default": "dataset_semantics"}},
-    requires=("data_plan",), provides=("save_as",), placement=("top",), stage="data", ui_group="① 数据准备",
+    requires=("train_source", "test_source"), provides=("save_as",), placement=("top",), stage="data", ui_group="① 数据准备",
 )
 def inspect_dataset_semantics(ctx: ScratchContext, data_plan: str = "data_plan",
                               save_as: str = "dataset_semantics") -> None:
@@ -158,7 +158,7 @@ def inspect_dataset_semantics(ctx: ScratchContext, data_plan: str = "data_plan",
             "split_strategy": {"type": "enum", "options": ["random", "stratified", "official"], "default": "random"},
             "split_seed": {"type": "int", "default": 1, "min": 0},
             "subset_before_split": {"type": "bool", "default": False}},
-    requires=("data_plan",), provides=("data_plan",), placement=("top",), stage="data", ui_group="① 数据准备",
+    requires=("train_source",), provides=("train_split", "validation_split"), placement=("top",), stage="data", ui_group="① 数据准备",
 )
 def create_dataset_split(ctx: ScratchContext, data_plan: str = "data_plan", validation_size: int = 0,
                          split_strategy: str = "random", split_seed: int = 1,
@@ -191,7 +191,7 @@ def create_dataset_split(ctx: ScratchContext, data_plan: str = "data_plan", vali
             "validation": {"type": "enum", "options": ["clean", "observed"], "default": "clean"},
             "test": {"type": "enum", "options": ["clean", "observed"], "default": "clean"},
             "trusted": {"type": "enum", "options": ["clean", "observed"], "default": "clean"}},
-    requires=("data_plan",), provides=("data_plan",), placement=("top",), stage="data", ui_group="① 数据准备",
+    requires=("train_split", "validation_split", "test_source"), provides=("label_policy",), placement=("top",), stage="data", ui_group="① 数据准备",
 )
 def select_label_source(ctx: ScratchContext, data_plan: str = "data_plan", train: str = "observed",
                         validation: str = "clean", test: str = "clean", trusted: str = "clean") -> None:
@@ -216,7 +216,7 @@ def select_label_source(ctx: ScratchContext, data_plan: str = "data_plan", train
             "seed": {"type": "int", "default": 1, "min": 0},
             "sampling": {"type": "str", "default": "transition"},
             "options": {"type": "value", "default": {}}},
-    requires=("data_plan",), provides=("data_plan",), placement=("top",), stage="data", ui_group="① 数据准备",
+    requires=("train_split",), provides=("noisy_train_split", "noise_state"), placement=("top",), stage="data", ui_group="① 数据准备",
 )
 def apply_noise(ctx: ScratchContext, data_plan: str = "data_plan", name: str = "none",
                 rate: float = 0.0, seed: int = 1, sampling: str = "transition",
@@ -233,19 +233,24 @@ def apply_noise(ctx: ScratchContext, data_plan: str = "data_plan", name: str = "
     if train_split is None:
         raise ValueError("apply_noise requires train_split from create_dataset_split")
     noise_config = plan["noise"]
-    pending_external = str(noise_config.get("name", name)).lower() in {"external", "external_torch"} and not any(
-        noise_config.get(key) for key in ("path", "artifact_path", "external_path")
-    )
-    if pending_external:
-        noisy_train = train_split
-        manifest = None
-        clean_by_index = {}
-    else:
-        noisy_train, manifest, clean_by_index = apply_noise_to_split(train_split, noise_config)
+    noisy_train, manifest, clean_by_index = apply_noise_to_split(train_split, noise_config)
     plan["noisy_train_split"] = noisy_train
-    plan["noise_state"] = {"manifest": manifest, "clean_by_index": clean_by_index}
+    clean_train = train_split
+    if clean_by_index and not train_split.has_clean_targets:
+        clean_train = ScratchSplit(
+            train_split.dataset,
+            train_split.split,
+            tuple(type(sample)(sample.input, sample.index, sample.observed_target,
+                               clean_by_index[int(sample.index)]) for sample in train_split.samples),
+            train_split.num_classes,
+            train_split.version,
+        )
+    plan["clean_train_split"] = clean_train
+    plan["noise_state"] = {"manifest": manifest, "clean_by_index": clean_by_index,
+                            "clean_train_split": clean_train}
     ctx["noisy_train_split"] = noisy_train
     ctx["noise_state"] = plan["noise_state"]
+    ctx["clean_train_split"] = clean_train
     ctx["noise_manifest"] = manifest
     labels = dict(plan.get("labels", {}))
     validation = plan.get("validation_split")
@@ -263,7 +268,7 @@ def apply_noise(ctx: ScratchContext, data_plan: str = "data_plan", name: str = "
             "scope": {"type": "enum", "options": ["train_split", "effective_train"], "default": "train_split"},
             "filename": {"type": "str", "default": "noise_manifest.npz"},
             "external_path": {"type": "path", "default": ""}},
-    requires=("data_plan",), provides=("data_plan",), placement=("top",), stage="data", ui_group="① 数据准备",
+    requires=("noise_state",), provides=("noise_manifest",), placement=("top",), stage="data", ui_group="① 数据准备",
 )
 def build_noise_manifest(ctx: ScratchContext, data_plan: str = "data_plan", required: bool = True,
                          scope: str = "train_split", filename: str = "noise_manifest.npz",
@@ -274,19 +279,20 @@ def build_noise_manifest(ctx: ScratchContext, data_plan: str = "data_plan", requ
         if required:
             raise ValueError("build_noise_manifest requires noise_state from apply_noise")
     manifest = None if state is None else state.get("manifest")
+    noisy_train = ctx.get("noisy_train_split")
+    if manifest is not None and noisy_train is not None:
+        manifest_indices = [int(value) for value in getattr(manifest, "global_indices", [])]
+        split_indices = [int(sample.index) for sample in noisy_train.samples]
+        manifest_targets = [int(value) for value in getattr(manifest, "noisy_targets", [])]
+        split_targets = [int(sample.observed_target) for sample in noisy_train.samples]
+        if manifest_indices != split_indices or manifest_targets != split_targets:
+            raise ValueError("noise manifest is not aligned with noisy_train_split")
     plan["manifest"] = {"required": bool(required), "scope": str(scope), "filename": str(filename),
                         "external_path": str(external_path)}
     plan["requirements"]["needs_noise_manifest"] = bool(required)
     plan["requirements"]["manifest_scope"] = str(scope)
     if external_path:
-        plan["noise"]["external_path"] = str(external_path)
-        if str(plan["noise"].get("name", "")).lower() in {"external", "external_torch"}:
-            noisy_train, manifest, clean_by_index = apply_noise_to_split(plan["train_split"], plan["noise"])
-            plan["noisy_train_split"] = noisy_train
-            plan["noise_state"] = {"manifest": manifest, "clean_by_index": clean_by_index}
-            plan["noise_manifest"] = manifest
-            ctx["noisy_train_split"] = noisy_train
-            ctx["noise_state"] = plan["noise_state"]
+        plan["manifest"]["external_path"] = str(external_path)
     plan["noise_manifest"] = manifest
     ctx["noise_manifest"] = manifest
 
@@ -299,7 +305,7 @@ def build_noise_manifest(ctx: ScratchContext, data_plan: str = "data_plan", requ
             "augment": {"type": "bool", "default": False},
             "strong_augment": {"type": "bool", "default": False},
             "options": {"type": "value", "default": {}}},
-    requires=("data_plan",), provides=("data_plan",), placement=("top",), stage="data", ui_group="① 数据准备",
+    requires=("train_split",), provides=("preprocessing_transform", "preprocessed_datasets"), placement=("top",), stage="data", ui_group="① 数据准备",
 )
 def configure_preprocessing(ctx: ScratchContext, data_plan: str = "data_plan", preprocessing: str = "standard",
                             augment: bool = False, strong_augment: bool = False,
@@ -313,7 +319,13 @@ def configure_preprocessing(ctx: ScratchContext, data_plan: str = "data_plan", p
     weak, views = build_transforms(plan, source)
     plan["preprocessing_transform"] = weak
     plan["view_transforms"] = views
+    plan["preprocessed_datasets"] = {
+        "train": plan.get("train_split"),
+        "validation": plan.get("validation_split"),
+        "test": plan.get("test_source"),
+    }
     ctx["preprocessing_transform"] = weak
+    ctx["preprocessed_datasets"] = plan["preprocessed_datasets"]
 
 
 @block(
@@ -321,7 +333,7 @@ def configure_preprocessing(ctx: ScratchContext, data_plan: str = "data_plan", p
     description="Declare weak/strong or other explicit dataset views.",
     params={"data_plan": {"type": "slot", "default": "data_plan"},
             "views": {"type": "value", "default": ["weak"]}},
-    requires=("data_plan",), provides=("data_plan",), placement=("top",), stage="data", ui_group="① 数据准备",
+    requires=("preprocessed_datasets", "preprocessing_transform"), provides=("view_transforms", "view_datasets"), placement=("top",), stage="data", ui_group="① 数据准备",
 )
 def configure_views(ctx: ScratchContext, data_plan: str = "data_plan", views: Sequence[str] = ("weak",)) -> None:
     values = [str(value) for value in views]
@@ -333,10 +345,15 @@ def configure_views(ctx: ScratchContext, data_plan: str = "data_plan", views: Se
     source = plan.get("train_split") or plan.get("train_source")
     if source is None:
         raise ValueError("configure_views requires a loaded/split source")
-    weak, view_transforms = build_transforms(plan, source)
-    plan["preprocessing_transform"] = weak
+    preprocessing_transform = ctx.get("preprocessing_transform")
+    if "preprocessing_transform" not in ctx:
+        raise ValueError("configure_views requires preprocessing_transform from configure_preprocessing")
+    _, view_transforms = build_transforms({**plan, "views": values}, source, preprocessing_transform=preprocessing_transform)
+    plan["preprocessing_transform"] = preprocessing_transform
     plan["view_transforms"] = view_transforms
+    plan["view_datasets"] = dict(ctx.get("preprocessed_datasets", {}))
     ctx["view_transforms"] = view_transforms
+    ctx["view_datasets"] = plan["view_datasets"]
 
 
 @block(
@@ -345,7 +362,7 @@ def configure_views(ctx: ScratchContext, data_plan: str = "data_plan", views: Se
     params={"data_plan": {"type": "slot", "default": "data_plan"},
             "roles": {"type": "value", "default": ["train", "clean_validation", "test"]},
             "train_drop_last": {"type": "bool", "default": False}},
-    requires=("data_plan",), provides=("data_plan",), placement=("top",), stage="data", ui_group="① 数据准备",
+    requires=("noisy_train_split", "validation_split", "test_source", "preprocessing_transform", "view_transforms"), provides=("role_datasets",), placement=("top",), stage="data", ui_group="① 数据准备",
 )
 def assign_data_roles(ctx: ScratchContext, data_plan: str = "data_plan",
                       roles: Sequence[str] = ("train", "clean_validation", "test"),
@@ -362,18 +379,7 @@ def assign_data_roles(ctx: ScratchContext, data_plan: str = "data_plan",
         raise ValueError("assign_data_roles requires split and noise Block outputs")
     if plan.get("test_source") is None and "test" in plan["roles"]:
         raise ValueError("test role requires an explicit test source")
-    train_split = plan["train_split"]
-    clean_by_index = dict(plan.get("noise_state", {}).get("clean_by_index", {}))
-    if clean_by_index and not train_split.has_clean_targets:
-        train_split = ScratchSplit(
-            train_split.dataset,
-            train_split.split,
-            tuple(type(sample)(sample.input, sample.index, sample.observed_target,
-                               clean_by_index.get(sample.index, sample.clean_target))
-                  for sample in train_split.samples),
-            train_split.num_classes,
-            train_split.version,
-        )
+    train_split = plan.get("clean_train_split") or plan["train_split"]
     datasets = build_role_datasets(
         train_split=train_split,
         noisy_train=plan["noisy_train_split"],
@@ -384,7 +390,10 @@ def assign_data_roles(ctx: ScratchContext, data_plan: str = "data_plan",
         test_split=plan["test_source"],
         roles=plan["roles"],
         data_config=plan.get("data", {}),
-        preprocessing_plan=plan,
+        preprocessing_transform=ctx["preprocessing_transform"],
+        view_transforms=ctx["view_transforms"],
+        preprocessed_datasets=ctx.get("preprocessed_datasets", {}),
+        view_datasets=ctx.get("view_datasets", {}),
     )
     plan["role_datasets"] = datasets
     ctx["role_datasets"] = datasets
@@ -399,7 +408,7 @@ def assign_data_roles(ctx: ScratchContext, data_plan: str = "data_plan",
             "pin_memory": {"type": "bool", "default": False},
             "drop_last": {"type": "bool", "default": False},
             "options": {"type": "value", "default": {}}},
-    requires=("data_plan",), provides=("data_plan",), placement=("top",), stage="data", ui_group="① 数据准备",
+    requires=(), provides=("loader_spec",), placement=("top",), stage="data", ui_group="① 数据准备",
 )
 def configure_loader(ctx: ScratchContext, data_plan: str = "data_plan", batch_size: int = 128,
                      num_workers: int = 0, pin_memory: bool = False, drop_last: bool = False,
@@ -420,7 +429,7 @@ def configure_loader(ctx: ScratchContext, data_plan: str = "data_plan", batch_si
     params={"data_plan": {"type": "slot", "default": "data_plan"},
             "artifact_dir": {"type": "path", "default": ""},
             "save_as": {"type": "slot", "default": "prepared_data"}},
-    requires=("data_plan",), provides=("save_as", "num_classes", "transition", "posterior_features", "posterior_targets", "posterior_indices"), placement=("top",), stage="data", ui_group="① 数据准备",
+    requires=("role_datasets", "noise_manifest", "loader_spec"), provides=("save_as", "num_classes", "transition", "posterior_features", "posterior_targets", "posterior_indices"), placement=("top",), stage="data", ui_group="① 数据准备",
 )
 def build_prepared_data(ctx: ScratchContext, data_plan: str = "data_plan", artifact_dir: str = "",
                         save_as: str = "prepared_data") -> None:
@@ -453,7 +462,7 @@ def build_prepared_data(ctx: ScratchContext, data_plan: str = "data_plan", artif
     description="Expose role-specific loaders from Scratch PreparedData.",
     params={"prepared_data": {"type": "slot", "default": "prepared_data"},
             "batch_size": {"type": "int", "default": 0, "min": 0}},
-    requires=("prepared_data",), provides=("train_loader", "train_eval_loader", "validation_loader", "trusted_loader", "test_loader"),
+    requires=("role_datasets", "loader_spec"), provides=("train_loader", "train_eval_loader", "validation_loader", "trusted_loader", "test_loader"),
     placement=("top",), stage="data", ui_group="① 数据准备",
 )
 def build_loaders(ctx: ScratchContext, prepared_data: str = "prepared_data", batch_size: int = 0) -> None:
