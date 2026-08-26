@@ -120,26 +120,3 @@ def softmax(
 ) -> None:
     torch = _torch()
     ctx[save_as] = torch.softmax(ctx[logits] / float(temperature), dim=-1)
-
-
-@block(
-    id="softmax_probability",
-    name="Softmax Probability",
-    category="Forward",
-    description="Convert logits to class probabilities for a formula-level loss block.",
-    params={
-        "logits": {"type": "slot", "default": "logits"},
-        "save_as": {"type": "slot", "default": "probabilities"},
-    },
-    requires=("logits",),
-    provides=("save_as",),
-    placement=("batch",), stage="train", ui_group="④ 前向与概率",
-    formula="p = softmax(z)", formula_ref="GCE paper probability definition", paper="Generalized Cross Entropy",
-)
-def softmax_probability(
-    ctx: ScratchContext,
-    logits: str = "logits",
-    save_as: str = "probabilities",
-) -> None:
-    torch = _torch()
-    ctx[save_as] = torch.softmax(ctx[logits], dim=-1)

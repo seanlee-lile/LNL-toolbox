@@ -44,7 +44,7 @@ steps:
   - block: epoch_loop
     params: {epochs: 200}
     steps:
-      - block: jocor_keep_rate_formula
+      - block: linear_rate_schedule
         params: {start: 1.0, end: 0.5, warmup_epochs: 9}
       - block: refresh_epoch_loader
         params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}
@@ -62,8 +62,10 @@ steps:
           - {block: jocor_symmetric_kl}
           - block: jocor_joint_composition
             params: {lambda_: 0.9, save_as: joint_loss_per_sample}
-          - {block: jocor_small_loss_indices}
-          - {block: mean_selected_loss}
+          - block: select_lowest_scores
+            params: {scores: joint_loss_per_sample, keep_fraction: keep_rate, stable_sample_indices: indices, rounding: floor, minimum_count: 1, save_as: selected_indices}
+          - block: mean_by_indices
+            params: {values: joint_loss_per_sample, indices: selected_indices, save_as: loss}
           - {block: backward}
           - {block: optimizer_step}
       - block: evaluate_peer_ensemble

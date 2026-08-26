@@ -31,9 +31,11 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
                 "move_batch_to_device",
                 "zero_grad",
                 "forward",
-                "softmax_probability",
-                "gather_target_probability",
-                "gce_q_formula",
+                "softmax",
+                "gather_by_label",
+                "clamp_min",
+                "elementwise_power",
+                "affine_transform",
                 "mean_loss",
                 "backward",
                 "optimizer_step",
@@ -46,14 +48,16 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
         validate_recipe(recipe)
         epoch = next(step for step in recipe["steps"] if step["block"] == "epoch_loop")
         self.assertEqual(epoch["steps"][0]["block"], "refresh_epoch_loader")
-        self.assertEqual(epoch["steps"][1]["block"], "remember_rate_formula")
+        self.assertEqual(epoch["steps"][1]["block"], "linear_rate_schedule")
         self.assertEqual(
             _batch_blocks(recipe)[8:],
             [
-                "small_loss_indices",
-                "small_loss_indices",
-                "cross_select_loss_a_from_b",
-                "cross_select_loss_b_from_a",
+                "select_lowest_scores",
+                "select_lowest_scores",
+                "select_by_indices",
+                "mean_loss",
+                "select_by_indices",
+                "mean_loss",
                 "backward",
                 "optimizer_step",
                 "backward",
@@ -84,12 +88,14 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
         recipe = load_recipe(ROOT / "recipes" / "papers" / "cnlcu.yaml")
         validate_recipe(recipe)
         blocks = _batch_blocks(recipe)
-        first = blocks.index("small_loss_indices")
+        first = blocks.index("select_lowest_scores")
         self.assertEqual(
-            blocks[first:first + 4],
+            blocks[first:first + 6],
             [
-                "small_loss_indices",
-                "small_loss_indices",
+                "select_lowest_scores",
+                "select_lowest_scores",
+                "indices_to_mask",
+                "indices_to_mask",
                 "update_cnlcu_selected_count",
                 "update_cnlcu_selected_count",
             ],
@@ -118,9 +124,9 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
         self.assertEqual(epoch["steps"][0]["block"], "if_epoch_eq")
         self.assertEqual(epoch["steps"][0]["params"]["epoch"], warmup_epochs)
         self.assertEqual(epoch["steps"][0]["steps"], [{"block": "set_optimizer_learning_rate", "params": {"optimizer": "optimizer", "learning_rate": config["optimizer"]["lr"]}}])
-        self.assertEqual(epoch["steps"][-2]["block"], "if_epoch_ge")
-        self.assertEqual(epoch["steps"][-2]["params"]["epoch"], warmup_epochs)
-        self.assertEqual(epoch["steps"][-2]["steps"], [{"block": "scheduler_step"}])
+        self.assertEqual(epoch["steps"][-1]["block"], "if_epoch_ge")
+        self.assertEqual(epoch["steps"][-1]["params"]["epoch"], warmup_epochs)
+        self.assertEqual(epoch["steps"][-1]["steps"], [{"block": "scheduler_step"}])
         batch = next(step for step in epoch["steps"] if step["block"] == "batch_loop")
         robust = next(step for step in batch["steps"] if step["block"] == "if_epoch_ge")
         self.assertEqual(
@@ -276,18 +282,26 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
         self.assertEqual((scheduler["scheduler"], scheduler["start_epoch"], scheduler["end_epoch"], scheduler["initial_lr"], scheduler["final_lr"], scheduler["beta1_before"], scheduler["beta1_after"]), (config["scheduler"]["name"], config["scheduler"]["start_epoch"], config["scheduler"]["end_epoch"], config["scheduler"]["initial_lr"], config["scheduler"]["final_lr"], config["scheduler"]["beta1_before"], config["scheduler"]["beta1_after"]))
         epoch = next(step for step in steps if step["block"] == "epoch_loop")
         self.assertEqual(epoch["params"]["epochs"], config["trainer"]["epochs"])
-        self.assertEqual(_batch_blocks(recipe), ["get_batch", "move_batch_to_device", "zero_grad", "forward_two_models", "per_sample_ce", "per_sample_ce", "jocor_symmetric_kl", "jocor_joint_composition", "jocor_small_loss_indices", "mean_selected_loss", "backward", "optimizer_step"])
+        self.assertEqual(_batch_blocks(recipe), ["get_batch", "move_batch_to_device", "zero_grad", "forward_two_models", "per_sample_ce", "per_sample_ce", "jocor_symmetric_kl", "jocor_joint_composition", "select_lowest_scores", "mean_by_indices", "backward", "optimizer_step"])
         self.assertEqual([step["block"] for step in epoch["steps"][-2:]], ["track_best_peer_models", "scheduler_step"])
 
     def test_formula_metadata_is_complete(self) -> None:
+        common = (
+            "softmax",
+            "gather_by_label",
+            "clamp_min",
+            "elementwise_power",
+            "affine_transform",
+            "linear_rate_schedule",
+            "select_lowest_scores",
+            "select_by_indices",
+            "mean_by_indices",
+        )
+        for block_id in common:
+            definition = get_block(block_id)
+            self.assertTrue(definition.formula, block_id)
+            self.assertTrue(definition.formula_ref, block_id)
         for block_id in (
-            "softmax_probability",
-            "gather_target_probability",
-            "gce_q_formula",
-            "remember_rate_formula",
-            "small_loss_indices",
-            "cross_select_loss_a_from_b",
-            "cross_select_loss_b_from_a",
             "nce_loss",
             "rce_loss",
             "active_passive_composition",
@@ -295,9 +309,6 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
             "forward_correction",
             "jocor_symmetric_kl",
             "jocor_joint_composition",
-            "jocor_keep_rate_formula",
-            "jocor_small_loss_indices",
-            "mean_selected_loss",
         ):
             definition = get_block(block_id)
             self.assertTrue(definition.formula, block_id)

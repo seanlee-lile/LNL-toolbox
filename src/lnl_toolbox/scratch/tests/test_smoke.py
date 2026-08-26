@@ -6,6 +6,7 @@ import unittest
 import torch
 
 from lnl_toolbox.scratch import ScratchContext, execute_recipe, load_recipe, validate_recipe
+from lnl_toolbox.scratch.blocks.selection import select_lowest_scores
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,16 +21,10 @@ class ScratchSmokeTest(unittest.TestCase):
             self.assertIn("model", context)
             self.assertTrue(context["loss"].ndim == 0)
 
-    def test_peer_exchange_uses_string_slots(self) -> None:
-        recipe = {
-            "schema_version": 1,
-            "name": "peer",
-            "steps": [{
-                "block": "peer_exchange",
-                "params": {"loss_a": "a", "loss_b": "b", "keep_rate": 0.5},
-            }],
-        }
-        context = execute_recipe(recipe, ScratchContext({"a": torch.tensor([3.0, 1.0, 2.0, 4.0]), "b": torch.tensor([1.0, 4.0, 2.0, 3.0])}))
+    def test_common_selection_uses_string_slots(self) -> None:
+        context = ScratchContext({"a": torch.tensor([3.0, 1.0, 2.0, 4.0]), "b": torch.tensor([1.0, 4.0, 2.0, 3.0]), "rate": 0.5})
+        select_lowest_scores(context, scores="a", keep_fraction="rate", save_as="selected_a")
+        select_lowest_scores(context, scores="b", keep_fraction="rate", save_as="selected_b")
         self.assertEqual(context["selected_a"].tolist(), [1, 2])
         self.assertEqual(context["selected_b"].tolist(), [0, 2])
 

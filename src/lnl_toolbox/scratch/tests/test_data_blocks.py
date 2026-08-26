@@ -62,11 +62,11 @@ class DataBlockExecutionTest(unittest.TestCase):
         expected = {
             "load_dataset": ((), ("save_as", "data_spec", "train_source", "validation_source", "test_source", "num_classes")),
             "create_dataset_split": (("train_source",), ("train_split", "validation_split")),
-            "apply_noise": (("train_split",), ("noisy_train_split", "noise_state")),
+            "apply_noise": (("train_split",), ("noisy_train_split", "clean_train_split", "noise_state", "transition")),
             "build_noise_manifest": (("noise_state",), ("noise_manifest",)),
-            "configure_preprocessing": (("train_split",), ("preprocessing_transform", "preprocessed_datasets")),
-            "configure_views": (("preprocessed_datasets", "preprocessing_transform"), ("view_transforms", "view_datasets")),
-            "assign_data_roles": (("noisy_train_split", "validation_split", "test_source", "preprocessing_transform", "view_transforms"), ("role_datasets",)),
+            "configure_preprocessing": (("train_split",), ("preprocessing_transform",)),
+            "configure_views": (("train_split", "preprocessing_transform"), ("view_transforms",)),
+            "assign_data_roles": (("train_split", "clean_train_split", "noisy_train_split", "validation_split", "test_source", "preprocessing_transform", "view_transforms"), ("role_datasets",)),
             "configure_loader": ((), ("loader_spec",)),
             "build_loaders": (("role_datasets", "loader_spec"), ("train_loader", "train_eval_loader", "validation_loader", "trusted_loader", "test_loader")),
         }
@@ -85,6 +85,36 @@ class DataBlockExecutionTest(unittest.TestCase):
         build_noise_manifest(ctx)
         self.assertIs(ctx["noisy_train_split"], noisy_before)
         self.assertEqual(tuple(sample.observed_target for sample in noisy_before.samples), targets_before)
+
+    def test_context_slots_are_authoritative_over_audit_plan(self) -> None:
+        ctx = ScratchContext(seed=3)
+        load_dataset(ctx, "custom", options={"source": _same_index_source()})
+        plan = ctx["data_plan"]
+        self.assertNotIn("train_source", plan)
+        create_dataset_split(ctx, validation_size=1)
+        self.assertNotIn("train_split", plan)
+        select_label_source(ctx, validation="observed")
+        apply_noise(ctx, name="pairflip", rate=1.0, seed=5)
+        for key in ("noisy_train_split", "clean_train_split", "noise_state"):
+            self.assertNotIn(key, plan)
+        build_noise_manifest(ctx)
+        configure_preprocessing(ctx, preprocessing="tensor_only")
+        configure_views(ctx, views=["weak"])
+        self.assertNotIn("preprocessing_transform", plan)
+        self.assertNotIn("view_transforms", plan)
+        assign_data_roles(ctx, roles=["train", "noisy_validation", "test"])
+        self.assertNotIn("role_datasets", plan)
+
+    def test_build_loaders_consumes_roles_without_prepared_data(self) -> None:
+        ctx = _run_blocks(_same_index_source())
+        ctx.pop("prepared_data", None)
+        build_loaders(ctx)
+        self.assertIn("train_loader", ctx)
+        self.assertIn("test_loader", ctx)
+
+    def test_prepared_data_does_not_guess_identity_transition(self) -> None:
+        ctx = _run_blocks(_same_index_source())
+        self.assertNotIn("transition", ctx)
 
     def test_roles_consume_configured_transform_objects(self) -> None:
         ctx = _run_blocks(_same_index_source())

@@ -71,7 +71,7 @@ steps:
             params: {optimizer: classifier_optimizer}
           - block: forward
             params: {model: model, input: images, save_as: logits}
-          - block: softmax_probability
+          - block: softmax
             params: {logits: logits, save_as: probabilities}
           - block: t_revision_noisy_probability
             params: {probabilities: probabilities, transition: transition, save_as: noisy_probabilities}
@@ -110,7 +110,7 @@ steps:
             params: {optimizer: revision_optimizer}
           - block: forward
             params: {model: model, input: images, save_as: logits}
-          - block: softmax_probability
+          - block: softmax
             params: {logits: logits, save_as: probabilities}
           - block: t_revision_revised_transition
             params: {revision: revision, save_as: current_transition}

@@ -28,7 +28,7 @@ steps:
     params: {epochs: 200}
     steps:
       - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}}
-      - {block: remember_rate_formula, params: {noise_rate: 0.2, warmup_epochs: 10, save_as: remember_rate}}
+      - {block: linear_rate_schedule, params: {start: 1.0, end: 0.8, warmup_epochs: 10, save_as: remember_rate}}
       - {block: prepare_cnlcu_history_epoch, params: {history: history_a}}
       - {block: prepare_cnlcu_history_epoch, params: {history: history_b}}
       - block: batch_loop
@@ -48,12 +48,16 @@ steps:
           - {block: cnlcu_soft_robust_mean, params: {history: rows_b, observed: observed_b, save_as: robust_b, count_as: length_b}}
           - {block: cnlcu_soft_score, params: {robust_mean: robust_a, history_length: length_a, selected_count: counts_a, sigma_squared: 0.01, save_as: score_a}}
           - {block: cnlcu_soft_score, params: {robust_mean: robust_b, history_length: length_b, selected_count: counts_b, sigma_squared: 0.01, save_as: score_b}}
-          - {block: small_loss_indices, params: {input: score_a, remember_rate: remember_rate, sample_indices: indices, save_as: selected_a}}
-          - {block: small_loss_indices, params: {input: score_b, remember_rate: remember_rate, sample_indices: indices, save_as: selected_b}}
+          - {block: select_lowest_scores, params: {scores: score_a, keep_fraction: remember_rate, stable_sample_indices: indices, rounding: floor, minimum_count: 1, save_as: selected_a}}
+          - {block: select_lowest_scores, params: {scores: score_b, keep_fraction: remember_rate, stable_sample_indices: indices, rounding: floor, minimum_count: 1, save_as: selected_b}}
+          - {block: indices_to_mask, params: {indices: selected_a, reference: score_a, save_as: selected_mask_a}}
+          - {block: indices_to_mask, params: {indices: selected_b, reference: score_b, save_as: selected_mask_b}}
           - {block: update_cnlcu_selected_count, params: {history: history_a, rows: rows_a, selected_mask: selected_mask_a}}
           - {block: update_cnlcu_selected_count, params: {history: history_b, rows: rows_b, selected_mask: selected_mask_b}}
-          - {block: cross_select_loss_a_from_b, params: {loss: loss_a_per_sample, indices: selected_b, save_as: loss_a}}
-          - {block: cross_select_loss_b_from_a, params: {loss: loss_b_per_sample, indices: selected_a, save_as: loss_b}}
+          - {block: select_by_indices, params: {values: loss_a_per_sample, indices: selected_b, save_as: selected_loss_a}}
+          - {block: mean_loss, params: {input: selected_loss_a, save_as: loss_a}}
+          - {block: select_by_indices, params: {values: loss_b_per_sample, indices: selected_a, save_as: selected_loss_b}}
+          - {block: mean_loss, params: {input: selected_loss_b, save_as: loss_b}}
           - {block: backward, params: {loss: loss_a}}
           - {block: optimizer_step, params: {optimizer: optimizer_a}}
           - {block: backward, params: {loss: loss_b}}

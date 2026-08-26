@@ -581,24 +581,6 @@ def jocor_joint_composition(ctx: ScratchContext, loss_a: str = "loss_a_per_sampl
 
 
 @block(
-    id="jocor_keep_rate_formula",
-    name="JoCoR Keep-rate Formula",
-    category="Paper Specific",
-    description="Compute JoCoR's linear small-loss keep rate from the formal epoch schedule.",
-    params={"epoch": {"type": "slot", "default": "epoch"}, "start": {"type": "float", "default": 1.0, "min": 0.0, "max": 1.0}, "end": {"type": "float", "default": 0.5, "min": 0.0, "max": 1.0}, "warmup_epochs": {"type": "int", "default": 9, "min": 1}, "save_as": {"type": "slot", "default": "keep_rate"}},
-    requires=("epoch",),
-    provides=("save_as",),
-    placement=("epoch",), stage="train", ui_group="⑩ 论文专用",
-    formula="R(t)=start+min(t/T_k,1)(end-start)",
-    formula_ref="JoCoR formal selector keep_rate linear schedule",
-    paper="Combating Noisy Labels by Agreement: A Joint Training Method with Co-Regularization",
-)
-def jocor_keep_rate_formula(ctx: ScratchContext, epoch: str = "epoch", start: float = 1.0, end: float = 0.5, warmup_epochs: int = 9, save_as: str = "keep_rate") -> None:
-    progress = min(max(float(ctx[epoch]), 0.0) / max(int(warmup_epochs), 1), 1.0)
-    ctx[save_as] = float(start) + progress * (float(end) - float(start))
-
-
-@block(
     id="dss_evidence",
     name="DSS: Evidence Update",
     category="Paper Specific",

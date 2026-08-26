@@ -119,20 +119,10 @@ function inferAvailableSlot(info, name, available) {
   const schema = info?.params?.[name] || {};
   const configured = schema.default;
   if (configured && available.has(configured)) return configured;
-  if (info?.id === 'small_loss_indices' && name === 'input') {
-    return [...available].sort().find((key) => /(?:^|_)loss(?:_[ab])?_per_sample$/.test(key)) || null;
-  }
   return null;
 }
 
 function inferOutputSlot(info, name, target) {
-  if (info?.id !== 'small_loss_indices' || name !== 'save_as') return null;
-  const siblings = getChildrenArray(target?.parentId) || [];
-  const outputs = siblings
-    .filter((step) => step.block === 'small_loss_indices')
-    .map((step) => step.params?.save_as || blockInfo(step.block)?.params?.save_as?.default);
-  if (outputs.includes('selected_b') && !outputs.includes('selected_a')) return 'selected_a';
-  if (outputs.includes('selected_a') && !outputs.includes('selected_b')) return 'selected_b';
   return null;
 }
 

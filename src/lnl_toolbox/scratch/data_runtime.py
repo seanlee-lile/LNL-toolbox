@@ -685,6 +685,10 @@ def _noise_targets(samples: Sequence[ScratchSample], config: Mapping[str, Any], 
     per_sample_transition = locals().get("per_sample_transition")
     if name == "class_conditional":
         transition = _resolve_transition_matrix(config.get("transition_matrix"), classes=classes, rate=rate)
+    elif name in {"binary_asymmetric_rcn", "asymmetric_rcn"}:
+        positive = float(config.get("rho_positive", rate))
+        negative = float(config.get("rho_negative", rate))
+        transition = [[1.0 - negative, negative], [positive, 1.0 - positive]]
     elif name in {"external", "external_torch"} and "payload" in locals() and payload.get("transition_matrix") is not None:
         transition = payload.get("transition_matrix")
     manifest = ScratchNoiseManifest(
@@ -700,12 +704,13 @@ def _noise_targets(samples: Sequence[ScratchSample], config: Mapping[str, Any], 
     return [int(value) for value in noisy], manifest, clean_by_index
 
 
-def _transform_pair(plan: Mapping[str, Any], train: ScratchSplit,
+def _transform_pair(preprocessing: Mapping[str, Any], train: ScratchSplit,
+                    views: Sequence[str],
                     preprocessing_transform: Callable[[Any], Any] | None = None) -> tuple[Callable[[Any], Any] | None, dict[str, Callable[[Any], Any] | None]]:
-    data = dict(plan.get("data", {})); preprocessing = dict(plan.get("preprocessing", {}))
+    preprocessing = dict(preprocessing)
     name = str(preprocessing.get("name", "standard")).lower()
     augment = bool(preprocessing.get("augment", False))
-    views = [str(value) for value in plan.get("views", ["weak"])]
+    views = [str(value) for value in views]
     try:
         from torchvision import transforms
     except ImportError:
@@ -756,10 +761,11 @@ def apply_noise_to_split(split: ScratchSplit, config: Mapping[str, Any]) -> tupl
     return noisy, manifest, clean_by_index
 
 
-def build_transforms(plan: Mapping[str, Any], source: ScratchSplit,
+def build_transforms(preprocessing: Mapping[str, Any], source: ScratchSplit,
+                     views: Sequence[str] = ("weak",),
                      preprocessing_transform: Callable[[Any], Any] | None = None) -> tuple[Callable[[Any], Any] | None, dict[str, Callable[[Any], Any] | None]]:
     """Build concrete input transforms for one preprocessing/views step."""
-    return _transform_pair(plan, source, preprocessing_transform)
+    return _transform_pair(preprocessing, source, views, preprocessing_transform)
 
 
 def build_role_datasets(
@@ -772,8 +778,6 @@ def build_role_datasets(
     data_config: Mapping[str, Any],
     preprocessing_transform: Callable[[Any], Any] | None,
     view_transforms: Mapping[str, Callable[[Any], Any] | None],
-    preprocessed_datasets: Mapping[str, Any] | None = None,
-    view_datasets: Mapping[str, Any] | None = None,
 ) -> dict[str, ScratchRoleDataset]:
     """Select concrete role datasets from already materialised splits."""
     weak = preprocessing_transform

@@ -7,13 +7,15 @@ import yaml
 
 from lnl_toolbox.scratch import ScratchContext, ScratchExecutionError, execute_recipe, load_recipe
 from lnl_toolbox.scratch.blocks.evaluation import evaluate_accuracy
-from lnl_toolbox.scratch.blocks.forward import softmax_probability
+from lnl_toolbox.scratch.blocks.forward import softmax
 from lnl_toolbox.scratch.blocks.losses import (
     active_passive_composition,
     binary_risk,
     forward_correction,
-    gather_target_probability,
-    gce_q_formula,
+    affine_transform,
+    clamp_min,
+    elementwise_power,
+    gather_by_label,
     nce_loss,
     rce_loss,
 )
@@ -157,9 +159,11 @@ class ScratchExecutorTest(unittest.TestCase):
         logits = torch.tensor([[1.0, -2.0, 0.5], [-1.0, 3.0, 0.0]])
         labels = torch.tensor([2, 1])
         context = ScratchContext({"logits": logits, "labels": labels})
-        softmax_probability(context)
-        gather_target_probability(context)
-        gce_q_formula(context, q=0.7)
+        softmax(context)
+        gather_by_label(context, values="probabilities", save_as="target_probability")
+        clamp_min(context, input="target_probability", save_as="clamped_target_probability")
+        elementwise_power(context, input="clamped_target_probability", q=0.7, save_as="powered_target_probability")
+        affine_transform(context, input="powered_target_probability", scale=-1.0 / 0.7, bias=1.0 / 0.7)
         expected = GeneralizedCrossEntropyLoss(q=0.7)(logits, labels)
         self.assertTrue(torch.allclose(context["loss_per_sample"], expected))
 
@@ -237,14 +241,14 @@ class ScratchExecutorTest(unittest.TestCase):
 
     def test_coteaching_small_loss_selection_uses_stable_sample_indices(self) -> None:
         import torch
-        from lnl_toolbox.scratch.blocks.selection import small_loss_indices
+        from lnl_toolbox.scratch.blocks.selection import select_lowest_scores
 
         context = ScratchContext({
             "losses": torch.tensor([1.0, 1.0, 0.5]),
             "remember_rate": 2 / 3,
             "indices": torch.tensor([9, 3, 7]),
         })
-        small_loss_indices(context, input="losses", remember_rate="remember_rate", sample_indices="indices", save_as="selected")
+        select_lowest_scores(context, scores="losses", keep_fraction="remember_rate", stable_sample_indices="indices", save_as="selected")
         self.assertEqual(context["selected"].tolist(), [2, 1])
 
 

@@ -12,7 +12,7 @@ steps:
   - {block: build_noise_manifest, params: {external_path: data/cal/IDN_0.2_C10.pt}}
   - {block: configure_preprocessing, params: {preprocessing: standard, augment: true}}
   - {block: configure_views, params: {views: [weak]}}
-  - {block: assign_data_roles, params: {roles: [train, train_eval, clean_validation, test]}}
+  - {block: assign_data_roles, params: {roles: [train, train_eval, test]}}
   - {block: configure_loader, params: {batch_size: 128, num_workers: 0, pin_memory: true}}
   - {block: build_prepared_data}
   - {block: build_loaders}
@@ -64,5 +64,4 @@ steps:
       - {block: cal_finalize_reference_losses, params: {state: cal_state}}
       - {block: cal_confidence_schedule, params: {default: 1.0, milestones: [10, 40, 80], values: [0.0, 1.0, 1.0], epoch_offset: 1, save_as: next_confidence_weight}}
       - {block: alpha_scaled_scheduler_step, params: {scheduler: scheduler, confidence_weight: next_confidence_weight}}
-      - {block: evaluate_accuracy, params: {model: model, loader: validation_loader, save_as: validation_accuracy}}
   - {block: evaluate_accuracy, params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}}

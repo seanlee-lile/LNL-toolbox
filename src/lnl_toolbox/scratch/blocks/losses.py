@@ -77,24 +77,6 @@ def weighted_loss(
 
 
 @block(
-    id="cross_entropy",
-    name="Cross Entropy",
-    category="Loss",
-    description="Compute standard per-sample cross entropy for later reduction.",
-    params={
-        "logits": {"type": "slot", "default": "logits"},
-        "labels": {"type": "slot", "default": "labels"},
-        "save_as": {"type": "slot", "default": "loss_per_sample"},
-    },
-    requires=("logits", "labels"),
-    provides=("save_as",),
-    placement=("batch",), stage="train", ui_group="⑤ 损失公式", beginner_visible=False,
-)
-def cross_entropy(ctx: ScratchContext, **params: Any) -> None:
-    per_sample_ce(ctx, **params)
-
-
-@block(
     id="gce_loss",
     name="GCE Loss",
     category="Loss",
@@ -127,55 +109,65 @@ def gce_loss(
 
 
 @block(
-    id="gather_target_probability",
-    name="Gather Target Probability",
-    category="Loss",
-    description="Gather the probability assigned to each example's observed target class.",
+    id="gather_by_label",
+    name="Gather By Label",
+    category="Tensor Operation",
+    description="Gather one value per row using the corresponding integer label.",
     params={
-        "probabilities": {"type": "slot", "default": "probabilities"},
+        "values": {"type": "slot", "default": "probabilities"},
         "labels": {"type": "slot", "default": "labels"},
-        "save_as": {"type": "slot", "default": "target_probability"},
+        "save_as": {"type": "slot", "default": "gathered_values"},
     },
-    requires=("probabilities", "labels"),
+    requires=("values", "labels"),
     provides=("save_as",),
     placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="p_y = f_y(x)", formula_ref="GCE target-class probability definition", paper="Generalized Cross Entropy",
+    formula="v_i=values[i,labels_i]", formula_ref="row-wise indexed gather",
 )
-def gather_target_probability(
-    ctx: ScratchContext,
-    probabilities: str = "probabilities",
-    labels: str = "labels",
-    save_as: str = "target_probability",
-) -> None:
-    ctx[save_as] = ctx[probabilities].gather(1, ctx[labels].long().view(-1, 1)).squeeze(1).clamp_min(1e-12)
+def gather_by_label(ctx: ScratchContext, values: str = "probabilities", labels: str = "labels", save_as: str = "gathered_values") -> None:
+    ctx[save_as] = ctx[values].gather(1, ctx[labels].long().view(-1, 1)).squeeze(1)
 
 
 @block(
-    id="gce_q_formula",
-    name="GCE q Formula",
-    category="Loss",
-    description="Compute the per-sample Generalized Cross Entropy value from target probability.",
-    params={
-        "input": {"type": "slot", "default": "target_probability"},
-        "q": {"type": "float", "default": 0.7, "min": 0.0, "max": 1.0},
-        "save_as": {"type": "slot", "default": "loss_per_sample"},
-    },
-    requires=("input",),
-    provides=("save_as",),
-    placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="L_q(f(x), y) = (1 - p_y^q) / q", formula_ref="Generalized Cross Entropy definition", paper="Generalized Cross Entropy",
+    id="clamp_min",
+    name="Clamp Minimum",
+    category="Tensor Operation",
+    description="Apply an explicit lower bound to a tensor.",
+    params={"input": {"type": "slot", "default": "gathered_values"}, "minimum": {"type": "float", "default": 1e-12}, "save_as": {"type": "slot", "default": "clamped_values"}},
+    requires=("input",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="x'=max(x,c)", formula_ref="explicit numerical lower bound",
 )
-def gce_q_formula(
-    ctx: ScratchContext,
-    input: str = "target_probability",
-    q: float = 0.7,
-    save_as: str = "loss_per_sample",
-) -> None:
-    values = ctx[input].clamp_min(1e-12)
-    if float(q) == 0.0:
-        ctx[save_as] = -values.log()
-    else:
-        ctx[save_as] = (1.0 - values.pow(float(q))) / float(q)
+def clamp_min(ctx: ScratchContext, input: str = "gathered_values", minimum: float = 1e-12, save_as: str = "clamped_values") -> None:
+    ctx[save_as] = ctx[input].clamp_min(float(minimum))
+
+
+@block(
+    id="elementwise_power",
+    name="Elementwise Power",
+    category="Tensor Operation",
+    description="Raise each tensor element to an explicit scalar exponent.",
+    params={
+        "input": {"type": "slot", "default": "clamped_values"},
+        "q": {"type": "float", "default": 0.7, "min": 0.0, "max": 1.0},
+        "save_as": {"type": "slot", "default": "powered_values"},
+    },
+    requires=("input",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="z=x^q", formula_ref="elementwise power operation",
+)
+def elementwise_power(ctx: ScratchContext, input: str = "clamped_values", q: float = 0.7, save_as: str = "powered_values") -> None:
+    ctx[save_as] = ctx[input].pow(float(q))
+
+
+@block(
+    id="affine_transform",
+    name="Affine Transform",
+    category="Tensor Operation",
+    description="Apply scale times input plus bias without changing reduction or gradient semantics.",
+    params={"input": {"type": "slot", "default": "powered_values"}, "scale": {"type": "float", "default": 1.0}, "bias": {"type": "float", "default": 0.0}, "save_as": {"type": "slot", "default": "loss_per_sample"}},
+    requires=("input",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="z=scale*x+bias", formula_ref="explicit affine combination",
+)
+def affine_transform(ctx: ScratchContext, input: str = "powered_values", scale: float = 1.0, bias: float = 0.0, save_as: str = "loss_per_sample") -> None:
+    ctx[save_as] = float(scale) * ctx[input] + float(bias)
 
 
 @block(

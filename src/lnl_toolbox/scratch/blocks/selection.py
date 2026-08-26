@@ -64,93 +64,121 @@ def small_loss(ctx: ScratchContext, input: str = "loss_per_sample", keep_rate: f
 
 
 @block(
-    id="small_loss_indices",
-    name="Co-teaching Small-loss Set",
-    category="Sample Selection",
-    description="Select the lowest-loss examples using the current Co-teaching remember rate.",
+    id="linear_rate_schedule",
+    name="Linear Rate Schedule",
+    category="Schedule",
+    description="Interpolate a scalar rate between explicit endpoints during warm-up.",
     params={
-        "input": {"type": "slot", "default": "loss_per_sample"},
-        "remember_rate": {"type": "slot", "default": "remember_rate"},
-        "sample_indices": {"type": "slot", "default": "indices"},
-        "save_as": {"type": "slot", "default": "selected_indices"},
-        "mask_as": {"type": "slot", "default": "selected_mask"},
+        "epoch": {"type": "slot", "default": "epoch"},
+        "start": {"type": "float", "default": 1.0},
+        "end": {"type": "float", "default": 0.5},
+        "warmup_epochs": {"type": "int", "default": 10, "min": 0},
+        "save_as": {"type": "slot", "default": "keep_rate"},
     },
-    requires=("input", "remember_rate"),
-    provides=("save_as", "mask_as", "selected_mask", "selected_mask_a", "selected_mask_b"),
-    placement=("batch",), stage="train", ui_group="⑥ 样本选择",
-    formula="selected = lowest_loss(loss_per_sample, floor(R(T) × batch_size))",
-    formula_ref="Co-teaching stable small-loss selection",
-    paper="Co-teaching",
+    requires=("epoch",),
+    provides=("save_as",),
+    placement=("epoch",), stage="train", ui_group="⑥ 样本选择",
+    formula="r(t)=start+clip(t/T,0,1)(end-start)",
+    formula_ref="shared linear keep-rate schedule",
 )
-def small_loss_indices(
-    ctx: ScratchContext,
-    input: str = "loss_per_sample",
-    remember_rate: str = "remember_rate",
-    sample_indices: str = "indices",
-    save_as: str = "selected_indices",
-    mask_as: str = "selected_mask",
-) -> None:
-    torch = _torch()
-    values = ctx[input].detach().reshape(-1)
-    if values.numel() == 0:
-        raise ValueError("cannot select from an empty loss vector")
-    count = max(1, min(values.numel(), int(torch.floor(torch.tensor(values.numel() * float(ctx[remember_rate]))).item())))
-    if sample_indices in ctx:
-        stable_order = torch.argsort(ctx[sample_indices].reshape(-1).to(values.device), stable=True)
-        selected = stable_order[torch.argsort(values[stable_order], stable=True)[:count]]
+def linear_rate_schedule(ctx: ScratchContext, epoch: str = "epoch", start: float = 1.0,
+                         end: float = 0.5, warmup_epochs: int = 10,
+                         save_as: str = "keep_rate") -> None:
+    if int(warmup_epochs) <= 0:
+        progress = 1.0
     else:
-        selected = torch.argsort(values, stable=True)[:count]
-    mask = torch.zeros(values.numel(), dtype=torch.bool, device=values.device)
-    mask[selected] = True
-    ctx[save_as] = selected
-    ctx[mask_as] = mask
-    if str(save_as).endswith("_a"):
-        ctx["selected_mask_a"] = mask
-    elif str(save_as).endswith("_b"):
-        ctx["selected_mask_b"] = mask
-    ctx["selected_mask"] = mask
+        progress = min(max(float(ctx[epoch]), 0.0) / int(warmup_epochs), 1.0)
+    ctx[save_as] = float(start) + progress * (float(end) - float(start))
 
 
 @block(
-    id="jocor_small_loss_indices",
-    name="JoCoR Small-loss Set",
+    id="select_lowest_scores",
+    name="Select Lowest Scores",
     category="Sample Selection",
-    description="Select the lowest joint JoCoR scores using the formal floor keep-rate and stable sample indices.",
-    params={"input": {"type": "slot", "default": "joint_loss_per_sample"}, "keep_rate": {"type": "slot", "default": "keep_rate"}, "sample_indices": {"type": "slot", "default": "indices"}, "save_as": {"type": "slot", "default": "selected_indices"}},
-    requires=("input", "keep_rate"),
-    provides=("save_as", "selected_mask"),
-    placement=("batch",), stage="train", ui_group="⑥ 样本选择",
-    formula="S=arg top-floor(R(t)|B|) smallest joint scores",
-    formula_ref="JoCoR formal small-loss selector",
-    paper="Combating Noisy Labels by Agreement: A Joint Training Method with Co-Regularization",
-)
-def jocor_small_loss_indices(ctx: ScratchContext, input: str = "joint_loss_per_sample", keep_rate: str = "keep_rate", sample_indices: str = "indices", save_as: str = "selected_indices") -> None:
-    torch = _torch()
-    values = ctx[input].detach().reshape(-1)
-    count = max(1, min(values.numel(), int(torch.floor(torch.tensor(values.numel() * float(ctx[keep_rate]))).item())))
-    order = torch.argsort(ctx[sample_indices].reshape(-1).to(values.device), stable=True) if sample_indices in ctx else torch.arange(values.numel(), device=values.device)
-    selected = order[torch.argsort(values[order], stable=True)[:count]]
-    mask = torch.zeros(values.numel(), dtype=torch.bool, device=values.device)
-    mask[selected] = True
-    ctx[save_as] = selected
-    ctx["selected_mask"] = mask
-
-
-@block(
-    id="mean_selected_loss",
-    name="Mean Selected Loss",
-    category="Sample Selection",
-    description="Reduce a per-sample loss over the selected local batch positions.",
-    params={"input": {"type": "slot", "default": "joint_loss_per_sample"}, "indices": {"type": "slot", "default": "selected_indices"}, "save_as": {"type": "slot", "default": "loss"}},
-    requires=("input", "indices"),
+    description="Select stable local indices for the lowest score values.",
+    params={
+        "scores": {"type": "slot", "default": "loss_per_sample"},
+        "keep_fraction": {"type": "slot", "default": "keep_rate"},
+        "stable_sample_indices": {"type": "slot", "default": "indices"},
+        "rounding": {"type": "enum", "options": ["floor", "ceil"], "default": "floor"},
+        "minimum_count": {"type": "int", "default": 1, "min": 0},
+        "detach": {"type": "bool", "default": True},
+        "save_as": {"type": "slot", "default": "selected_indices"},
+    },
+    requires=("scores", "keep_fraction"),
     provides=("save_as",),
     placement=("batch",), stage="train", ui_group="⑥ 样本选择",
-    formula="L_selected=mean(J[selected])",
-    formula_ref="JoCoR selected joint objective",
-    paper="Combating Noisy Labels by Agreement: A Joint Training Method with Co-Regularization",
+    formula="S=arg lowest_k(score), k=rounding(N·fraction)",
+    formula_ref="stable lowest-score selection",
 )
-def mean_selected_loss(ctx: ScratchContext, input: str = "joint_loss_per_sample", indices: str = "selected_indices", save_as: str = "loss") -> None:
-    ctx[save_as] = ctx[input].reshape(-1)[ctx[indices]].mean()
+def select_lowest_scores(ctx: ScratchContext, scores: str = "loss_per_sample",
+                         keep_fraction: str = "keep_rate",
+                         stable_sample_indices: str = "indices",
+                         rounding: str = "floor", minimum_count: int = 1,
+                         detach: bool = True, save_as: str = "selected_indices") -> None:
+    torch = _torch()
+    values = ctx[scores].reshape(-1)
+    if bool(detach):
+        values = values.detach()
+    if values.numel() == 0:
+        raise ValueError("cannot select from an empty score vector")
+    fraction = float(ctx[keep_fraction])
+    raw = values.numel() * fraction
+    count = int(torch.ceil(torch.tensor(raw)).item()) if str(rounding) == "ceil" else int(torch.floor(torch.tensor(raw)).item())
+    count = min(values.numel(), max(int(minimum_count), count))
+    if stable_sample_indices in ctx:
+        stable = ctx[stable_sample_indices].reshape(-1).to(values.device)
+        order = torch.argsort(stable, stable=True)
+        selected = order[torch.argsort(values[order], stable=True)[:count]]
+    else:
+        selected = torch.argsort(values, stable=True)[:count]
+    ctx[save_as] = selected
+
+
+@block(
+    id="select_by_indices",
+    name="Select By Indices",
+    category="Sample Selection",
+    description="Gather selected local values without reducing them.",
+    params={"values": {"type": "slot", "default": "loss_per_sample"}, "indices": {"type": "slot", "default": "selected_indices"}, "save_as": {"type": "slot", "default": "selected_values"}},
+    requires=("values", "indices"), provides=("save_as",),
+    placement=("batch",), stage="train", ui_group="⑥ 样本选择",
+    formula="v_selected=v[indices]", formula_ref="indexed selection",
+)
+def select_by_indices(ctx: ScratchContext, values: str = "loss_per_sample", indices: str = "selected_indices", save_as: str = "selected_values") -> None:
+    ctx[save_as] = ctx[values].reshape(-1)[ctx[indices]]
+
+
+@block(
+    id="indices_to_mask",
+    name="Indices To Mask",
+    category="Sample Selection",
+    description="Convert local selected indices into a boolean mask for an explicit reference vector.",
+    params={"indices": {"type": "slot", "default": "selected_indices"}, "reference": {"type": "slot", "default": "loss_per_sample"}, "save_as": {"type": "slot", "default": "selected_mask"}},
+    requires=("indices", "reference"), provides=("save_as",),
+    placement=("batch",), stage="train", ui_group="⑥ 样本选择",
+    formula="m_j=1[j in indices]", formula_ref="explicit index-to-mask conversion",
+)
+def indices_to_mask(ctx: ScratchContext, indices: str = "selected_indices", reference: str = "loss_per_sample", save_as: str = "selected_mask") -> None:
+    torch = _torch()
+    values = ctx[reference].reshape(-1)
+    mask = torch.zeros(values.numel(), dtype=torch.bool, device=values.device)
+    mask[ctx[indices].to(values.device)] = True
+    ctx[save_as] = mask
+
+
+@block(
+    id="mean_by_indices",
+    name="Mean By Indices",
+    category="Sample Selection",
+    description="Reduce selected local values to their scalar mean.",
+    params={"values": {"type": "slot", "default": "loss_per_sample"}, "indices": {"type": "slot", "default": "selected_indices"}, "save_as": {"type": "slot", "default": "loss"}},
+    requires=("values", "indices"), provides=("save_as",),
+    placement=("batch",), stage="train", ui_group="⑥ 样本选择",
+    formula="mean(v[indices])", formula_ref="indexed mean reduction",
+)
+def mean_by_indices(ctx: ScratchContext, values: str = "loss_per_sample", indices: str = "selected_indices", save_as: str = "loss") -> None:
+    ctx[save_as] = ctx[values].reshape(-1)[ctx[indices]].mean()
 
 
 @block(

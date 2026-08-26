@@ -12,7 +12,7 @@ steps:
   - {block: build_noise_manifest}
   - {block: configure_preprocessing, params: {preprocessing: official_cifar10, augment: true}}
   - {block: configure_views, params: {views: [weak]}}
-  - {block: assign_data_roles, params: {roles: [train, train_eval, clean_validation, test]}}
+  - {block: assign_data_roles, params: {roles: [train, train_eval, test]}}
   - {block: configure_loader, params: {batch_size: 128, num_workers: 8, pin_memory: true}}
   - {block: build_prepared_data}
   - {block: build_loaders}
@@ -63,5 +63,4 @@ steps:
         params: {epoch: 200}
         steps:
           - {block: scheduler_step}
-      - {block: evaluate_accuracy, params: {model: model, loader: validation_loader, save_as: validation_accuracy}}
   - {block: evaluate_accuracy, params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}}
