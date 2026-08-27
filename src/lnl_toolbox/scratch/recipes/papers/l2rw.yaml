@@ -31,9 +31,10 @@ steps:
           - {block: zero_grad}
           - {block: forward}
           - {block: per_sample_ce}
-          - {block: l2rw_get_trusted_batch, params: {loader: trusted_loader, input_as: trusted_images, label_as: trusted_labels}}
-          - {block: l2rw_initialize_epsilon, params: {losses: loss_per_sample, save_as: l2rw_epsilon}}
-          - {block: l2rw_virtual_weighted_loss, params: {epsilon: l2rw_epsilon, losses: loss_per_sample, save_as: l2rw_virtual_loss}}
+          - {block: get_next_batch, params: {loader: trusted_loader, input_as: trusted_images, label_as: trusted_labels}}
+          - {block: zeros_like, params: {input: loss_per_sample, requires_grad: true, save_as: l2rw_epsilon}}
+          - {block: elementwise_multiply, params: {left: l2rw_epsilon, right: loss_per_sample, save_as: l2rw_weighted_losses}}
+          - {block: sum_values, params: {input: l2rw_weighted_losses, save_as: l2rw_virtual_loss}}
           - {block: l2rw_virtual_update, params: {model: model, virtual_loss: l2rw_virtual_loss, learning_rate: 1.0, implementation: official, save_as: l2rw_virtual_state}}
           - {block: l2rw_trusted_meta_loss, params: {model: model, state: l2rw_virtual_state, inputs: trusted_images, labels: trusted_labels, weight_decay: 0.0002, save_as: l2rw_meta_loss}}
           - {block: l2rw_epsilon_gradient, params: {state: l2rw_virtual_state, meta_loss: l2rw_meta_loss, epsilon: l2rw_epsilon, save_as: l2rw_meta_gradient}}

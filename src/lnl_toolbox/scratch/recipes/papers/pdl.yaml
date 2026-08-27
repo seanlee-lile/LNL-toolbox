@@ -128,7 +128,7 @@ steps:
             params: {optimizer: correction_optimizer}
           - block: forward
             params: {model: model, input: images, save_as: logits}
-          - block: pdl_corrected_loss
+          - block: transition_corrected_risk
             params: {logits: logits, labels: labels, indices: indices, transition: pdl_transition, save_as: loss_per_sample}
           - block: mean_loss
             params: {input: loss_per_sample, save_as: loss}
@@ -164,8 +164,10 @@ steps:
             params: {optimizer: revision_optimizer}
           - block: forward
             params: {model: model, input: images, save_as: logits}
-          - block: pdl_revision_loss
-            params: {model: model, logits: logits, labels: labels, indices: indices, transition: pdl_transition, save_as: loss_per_sample}
+          - block: compose_revision_transition
+            params: {model: model, indices: indices, transition: pdl_transition, save_as: revised_transition}
+          - block: transition_corrected_risk
+            params: {logits: logits, labels: labels, indices: indices, transition: revised_transition, save_as: loss_per_sample}
           - block: mean_loss
             params: {input: loss_per_sample, save_as: loss}
           - {block: backward}

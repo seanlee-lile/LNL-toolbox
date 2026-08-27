@@ -32,19 +32,19 @@ steps:
           - {block: get_batch}
           - {block: move_batch_to_device}
           - {block: forward_feature}
-          - {block: dld_onehot_start, params: {labels: labels, num_classes: 10, save_as: y0}}
-          - {block: dld_estimate_endpoint, params: {logits: logits, save_as: yn}}
-          - {block: dld_construct_direction, params: {y0: y0, yn: yn, save_as: direction}}
-          - {block: dld_sample_timestep_noise, params: {reference: y0, timesteps: 1000, timestep_as: timestep, noise_as: epsilon}}
+          - {block: one_hot, params: {labels: labels, num_classes: 10, save_as: y0}}
+          - {block: softmax, params: {logits: logits, detach: true, save_as: yn}}
+          - {block: subtract, params: {minuend: yn, subtrahend: y0, save_as: direction}}
+          - {block: sample_timestep_noise, params: {reference: y0, timesteps: 1000, timestep_as: timestep, noise_as: epsilon}}
           - {block: dld_sample_forward_state, params: {y0: y0, direction: direction, timestep: timestep, epsilon: epsilon, timesteps: 1000, save_as: yd}}
           - {block: dld_ensure_independent_predictors, params: {features: features, num_classes: 10, hidden_dim: 64, time_dim: 16, learning_rate: 0.0001}}
           - {block: zero_grad, params: {optimizer: direction_optimizer}}
           - {block: zero_grad, params: {optimizer: noise_optimizer}}
           - {block: dld_predict_quantity, params: {predictor: direction_predictor, state: yd, endpoint: yn, features: features, timestep: timestep, save_as: predicted_direction}}
           - {block: dld_predict_quantity, params: {predictor: noise_predictor, state: yd, endpoint: yn, features: features, timestep: timestep, save_as: predicted_noise}}
-          - {block: dld_direction_loss, params: {predicted: predicted_direction, target: direction, save_as: dld_direction_loss}}
-          - {block: dld_noise_loss, params: {predicted: predicted_noise, target: epsilon, save_as: dld_noise_loss}}
-          - {block: dld_objective_composition, params: {direction_loss: dld_direction_loss, noise_loss: dld_noise_loss, save_as: loss}}
+          - {block: mean_squared_error, params: {predicted: predicted_direction, target: direction, reduction: scalar, save_as: direction_loss}}
+          - {block: mean_squared_error, params: {predicted: predicted_noise, target: epsilon, reduction: scalar, save_as: noise_loss}}
+          - {block: weighted_sum, params: {terms: [direction_loss, noise_loss], weights: [1.0, 1.0], save_as: loss}}
           - {block: backward}
           - {block: optimizer_step, params: {optimizer: direction_optimizer}}
           - {block: optimizer_step, params: {optimizer: noise_optimizer}}

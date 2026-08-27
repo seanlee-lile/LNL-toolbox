@@ -51,10 +51,10 @@ steps:
           - block: mean_loss
             params: {input: loss_per_sample, save_as: loss}
           - {block: backward}
-          - block: cdr_criticality_score
+          - block: parameter_criticality_mask
             params: {model: model, noise_rate: 0.4, save_as: cdr_masks}
-          - block: cdr_masked_gradient_update
-            params: {model: model, masks: cdr_masks, noise_rate: 0.4, l1_decay: 0.001}
+          - block: masked_gradient_update
+            params: {model: model, masks: cdr_masks, scale: 0.6, l1_decay: 0.001}
           - {block: optimizer_step}
       - block: evaluate_accuracy
         params: {model: model, loader: validation_loader, save_as: validation_accuracy}

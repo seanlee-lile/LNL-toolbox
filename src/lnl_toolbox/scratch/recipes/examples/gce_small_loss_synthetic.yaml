@@ -29,6 +29,10 @@ steps:
       optimizer: sgd
       model: model
       lr: 0.1
+  - block: set_value
+    params:
+      value: 0.8
+      save_as: keep_rate
   - block: epoch_loop
     params:
       epochs: 1
@@ -43,9 +47,24 @@ steps:
           - block: gce_loss
             params:
               q: 0.7
-          - block: small_loss
+          - block: select_lowest_scores
             params:
-              keep_rate: 0.8
+              scores: loss_per_sample
+              keep_fraction: keep_rate
+              stable_sample_indices: indices
+              rounding: ceil
+              minimum_count: 1
+              save_as: selected_indices
+          - block: select_by_indices
+            params:
+              values: loss_per_sample
+              indices: selected_indices
+              save_as: selected_loss
+          - block: mean_by_indices
+            params:
+              values: loss_per_sample
+              indices: selected_indices
+              save_as: loss
           - block: backward
           - block: optimizer_step
   - block: record_metrics

@@ -464,8 +464,9 @@ def build_loaders(ctx: ScratchContext, role_datasets: str = "role_datasets",
     from ..data_runtime import collate_scratch_batch
 
     def make_loader(role: str, *, shuffle: bool = False) -> Any:
+        dataset = datasets[role]
         return torch.utils.data.DataLoader(
-            datasets[role], batch_size=size, shuffle=shuffle,
+            dataset, batch_size=size, shuffle=bool(shuffle and len(dataset) > 0),
             drop_last=bool(config.get("drop_last", False)),
             num_workers=int(config.get("num_workers", 0)),
             pin_memory=bool(config.get("pin_memory", False)),
@@ -580,6 +581,46 @@ def get_batch(
         ctx[index_as] = indices
     if isinstance(ctx[batch], Mapping):
         ctx[clean_as] = ctx[batch].get("clean_targets")
+
+
+@block(
+    id="get_next_batch",
+    name="Get Next Batch",
+    category="Data",
+    description="Fetch and unpack the next batch from any configured role loader.",
+    params={"loader": {"type": "slot", "default": "loader"}, "input_as": {"type": "slot", "default": "images"}, "label_as": {"type": "slot", "default": "labels"}, "index_as": {"type": "slot", "default": "indices"}, "clean_as": {"type": "slot", "default": "clean_targets"}},
+    requires=("loader",), provides=("input_as", "label_as", "index_as", "clean_as"), placement=("batch",), stage="data", ui_group="① 数据准备",
+)
+def get_next_batch(ctx: ScratchContext, loader: str = "loader", input_as: str = "images", label_as: str = "labels", index_as: str = "indices", clean_as: str = "clean_targets") -> None:
+    iterator_key = f"_scratch_iterator:{loader}"
+    iterator = ctx.get(iterator_key)
+    if iterator is None:
+        iterator = iter(ctx[loader]); ctx[iterator_key] = iterator
+    try:
+        batch = next(iterator)
+    except StopIteration:
+        iterator = iter(ctx[loader]); ctx[iterator_key] = iterator; batch = next(iterator)
+    inputs, labels, indices = _batch_values(batch)
+    ctx[input_as], ctx[label_as] = inputs, labels
+    if indices is not None:
+        ctx[index_as] = indices
+    if isinstance(batch, Mapping):
+        ctx[clean_as] = batch.get("clean_targets")
+
+
+@block(
+    id="select_batch_view",
+    name="Select Batch View",
+    category="Data",
+    description="Select a named view from the current batch, falling back to the primary input when absent.",
+    params={"batch": {"type": "slot", "default": "batch"}, "input": {"type": "slot", "default": "images"}, "view": {"type": "str", "default": "strong_input"}, "save_as": {"type": "slot", "default": "view_input"}},
+    requires=("batch", "input"), provides=("save_as",), placement=("batch",), stage="data", ui_group="① 数据准备",
+)
+def select_batch_view(ctx: ScratchContext, batch: str = "batch", input: str = "images", view: str = "strong_input", save_as: str = "view_input") -> None:
+    value = ctx[batch].get(view) if isinstance(ctx[batch], Mapping) else None
+    if value is None and isinstance(ctx[batch], Mapping) and view == "strong_input":
+        value = ctx[batch].get("strong_images")
+    ctx[save_as] = ctx[input] if value is None else value
 
 
 @block(

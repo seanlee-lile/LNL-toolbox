@@ -105,6 +105,7 @@ def forward_feature(
     params={
         "logits": {"type": "slot", "default": "logits"},
         "temperature": {"type": "float", "default": 1.0, "min": 0.000001},
+        "detach": {"type": "bool", "default": False},
         "save_as": {"type": "slot", "default": "probabilities"},
     },
     requires=("logits",),
@@ -116,7 +117,9 @@ def softmax(
     ctx: ScratchContext,
     logits: str = "logits",
     temperature: float = 1.0,
+    detach: bool = False,
     save_as: str = "probabilities",
 ) -> None:
     torch = _torch()
-    ctx[save_as] = torch.softmax(ctx[logits] / float(temperature), dim=-1)
+    values = ctx[logits].detach() if bool(detach) else ctx[logits]
+    ctx[save_as] = torch.softmax(values / float(temperature), dim=-1)

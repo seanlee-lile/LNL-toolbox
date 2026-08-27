@@ -47,6 +47,100 @@ def per_sample_ce(
 
 
 @block(
+    id="symmetric_kl",
+    name="Symmetric KL",
+    category="Loss",
+    description="Compute the per-sample symmetric KL divergence between two logits distributions.",
+    params={
+        "logits_a": {"type": "slot", "default": "logits_a"},
+        "logits_b": {"type": "slot", "default": "logits_b"},
+        "save_as": {"type": "slot", "default": "symmetric_kl_per_sample"},
+    },
+    requires=("logits_a", "logits_b"),
+    provides=("save_as",),
+    placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="D_SKL(p_a,p_b)=KL(p_a||p_b)+KL(p_b||p_a)",
+    formula_ref="symmetric KL divergence definition",
+)
+def symmetric_kl(
+    ctx: ScratchContext,
+    logits_a: str = "logits_a",
+    logits_b: str = "logits_b",
+    save_as: str = "symmetric_kl_per_sample",
+) -> None:
+    torch, F = _torch()
+    log_a = F.log_softmax(ctx[logits_a], dim=-1)
+    log_b = F.log_softmax(ctx[logits_b], dim=-1)
+    values = F.kl_div(log_a, log_b.exp(), reduction="none").sum(-1)
+    values = values + F.kl_div(log_b, log_a.exp(), reduction="none").sum(-1)
+    if not bool(torch.isfinite(values).all().item()):
+        raise ValueError("symmetric KL produced non-finite values")
+    _save_loss(ctx, values, save_as)
+
+
+@block(
+    id="masked_cross_entropy",
+    name="Masked Cross Entropy",
+    category="Loss",
+    description="Average cross entropy over samples selected by an explicit Boolean mask.",
+    params={
+        "logits": {"type": "slot", "default": "logits"},
+        "labels": {"type": "slot", "default": "labels"},
+        "mask": {"type": "slot", "default": "mask"},
+        "save_as": {"type": "slot", "default": "masked_ce"},
+    },
+    requires=("logits", "labels", "mask"),
+    provides=("save_as",),
+    placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="mean_{i:m_i=1} CE(z_i,y_i)", formula_ref="masked cross-entropy reduction",
+)
+def masked_cross_entropy(
+    ctx: ScratchContext,
+    logits: str = "logits",
+    labels: str = "labels",
+    mask: str = "mask",
+    save_as: str = "masked_ce",
+) -> None:
+    _, F = _torch()
+    selected = ctx[mask].bool()
+    ctx[save_as] = (
+        F.cross_entropy(ctx[logits][selected], ctx[labels][selected].long())
+        if bool(selected.any()) else ctx[logits].sum() * 0.0
+    )
+
+
+@block(
+    id="weighted_pseudo_label_cross_entropy",
+    name="Weighted Pseudo-label Cross Entropy",
+    category="Loss",
+    description="Average pseudo-label cross entropy weighted by detached per-example confidence values.",
+    params={
+        "logits": {"type": "slot", "default": "logits"},
+        "pseudo_labels": {"type": "slot", "default": "pseudo_labels"},
+        "weights": {"type": "slot", "default": "weights"},
+        "save_as": {"type": "slot", "default": "weighted_pseudo_ce"},
+    },
+    requires=("logits", "pseudo_labels", "weights"),
+    provides=("save_as",),
+    placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="mean_i w_i CE(z_i,yhat_i)", formula_ref="confidence-weighted pseudo-label cross entropy",
+)
+def weighted_pseudo_label_cross_entropy(
+    ctx: ScratchContext,
+    logits: str = "logits",
+    pseudo_labels: str = "pseudo_labels",
+    weights: str = "weights",
+    save_as: str = "weighted_pseudo_ce",
+) -> None:
+    _, F = _torch()
+    values = F.cross_entropy(ctx[logits], ctx[pseudo_labels].long(), reduction="none")
+    factors = ctx[weights].detach()
+    if values.shape != factors.shape:
+        raise ValueError("pseudo-label weights and losses must have the same shape")
+    ctx[save_as] = (values * factors).mean()
+
+
+@block(
     id="weighted_loss",
     name="Apply Sample Weights",
     category="Weighting",

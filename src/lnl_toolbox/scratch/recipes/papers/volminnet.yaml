@@ -75,12 +75,20 @@ steps:
             params: {model: model, input: images, save_as: logits}
           - block: volmin_transition_matrix
             params: {transition: transition, logits: logits, save_as: transition_matrix}
-          - block: volmin_noisy_nll
-            params: {logits: logits, labels: labels, transition: transition_matrix, save_as: loss_per_sample}
+          - block: softmax
+            params: {logits: logits, save_as: probabilities}
+          - block: apply_transition
+            params: {probabilities: probabilities, transition: transition_matrix, save_as: noisy_probabilities}
+          - block: gather_by_label
+            params: {values: noisy_probabilities, labels: labels, save_as: noisy_target_probability}
+          - block: negative_log
+            params: {input: noisy_target_probability, save_as: loss_per_sample}
+          - block: mean_loss
+            params: {input: loss_per_sample, save_as: classification_loss}
           - block: volmin_positive_logdet
             params: {transition: transition_matrix, save_as: volume_logdet}
-          - block: volmin_objective_composition
-            params: {classification_loss: loss_per_sample, volume: volume_logdet, volume_weight: 0.0001, save_as: loss}
+          - block: weighted_sum
+            params: {terms: [classification_loss, volume_logdet], weights: [1.0, 0.0001], save_as: loss}
           - {block: backward}
           - block: optimizer_step
             params: {optimizer: classifier_optimizer}
@@ -93,14 +101,14 @@ steps:
           loader: validation_loader
           device: device
           save_as: validation_loss
-      - block: track_best_volminnet
-        params: {model: model, transition: transition, metric: validation_loss, save_as: best_volmin_state}
+      - block: track_best_state
+        params: {model: model, auxiliary: transition, metric: validation_loss, metric_name: validation_loss, mode: min, save_as: best_volmin_state}
       - block: scheduler_step
         params: {scheduler: classifier_scheduler}
       - block: scheduler_step
         params: {scheduler: transition_scheduler}
-  - block: restore_best_volminnet
-    params: {model: model, transition: transition, state: best_volmin_state}
+  - block: restore_best_state
+    params: {model: model, auxiliary: transition, state: best_volmin_state}
   - block: evaluate_accuracy
     params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}
   - block: record_metrics

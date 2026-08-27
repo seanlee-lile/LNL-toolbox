@@ -28,6 +28,8 @@ class ScratchBlockCoverageTest(unittest.TestCase):
             for field in ("state_mutation", "detach", "reduction", "rounding", "stable_tiebreak"):
                 self.assertTrue(row[field], f"missing audit value for {row['block_id']}:{field}")
                 self.assertNotEqual("unknown", row[field], f"placeholder audit value for {row['block_id']}:{field}")
+            self.assertIn(row.get("classification"), {"COMMON", "COMPOSABLE", "PAPER_SPECIFIC"})
+            self.assertNotEqual("missing", row.get("body_sha256"))
         by_id = {row["block_id"]: row for row in rows}
         # These are all nested under epoch/batch loop steps; a top-level-only
         # scanner would leave the references empty.
@@ -37,12 +39,12 @@ class ScratchBlockCoverageTest(unittest.TestCase):
         self.assertIn("recipes/papers/jocor.yaml", by_id["linear_rate_schedule"]["recipe_refs"])
         self.assertIn(".steps[", by_id["select_lowest_scores"]["recipe_refs"])
 
-    def test_lend_masking_is_strict_fail_not_legacy_success(self) -> None:
+    def test_lend_masking_uses_public_graph_and_state_operations(self) -> None:
         report = (AUDIT / "block_dedup_report.md").read_text(encoding="utf-8")
         self.assertIn("LEND masking", report)
-        self.assertIn("PAPER_SPECIFIC_ONLY", report)
-        self.assertIn("strict masking test must report FAIL", report)
-        self.assertTrue({"lend_build_neighbor_graph", "lend_normalize_neighbor_graph", "lend_dilute_labels"}.issubset(BLOCKS))
+        self.assertIn("PASS", report)
+        self.assertTrue({"pairwise_similarity", "topk_neighborhood", "normalize_graph", "propagate_labels", "indexed_ema", "agreement_mask", "masked_mean"}.issubset(BLOCKS))
+        self.assertFalse(any(block_id.startswith("lend_") for block_id in BLOCKS))
 
     def test_canonical_palette_has_separate_contracts(self) -> None:
         self.assertEqual(BLOCKS["gather_by_label"].requires, ("values", "labels"))

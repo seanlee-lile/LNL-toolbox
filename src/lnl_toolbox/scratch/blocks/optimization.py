@@ -341,3 +341,37 @@ def optimizer_step(ctx: ScratchContext, optimizer: str = "optimizer") -> None:
 )
 def scheduler_step(ctx: ScratchContext, scheduler: str = "scheduler") -> None:
     ctx[scheduler].step()
+
+
+@block(
+    id="step_milestone_update",
+    name="Step-Milestone Learning-Rate Update",
+    category="Optimization",
+    description="Apply optimizer learning-rate drops at explicit global-step milestones.",
+    params={
+        "optimizer": {"type": "slot", "default": "optimizer"},
+        "milestones": {"type": "value", "default": [19500, 25000, 30000]},
+        "gamma": {"type": "float", "default": 0.1, "min": 0.0, "max": 1.0},
+        "steps_per_epoch": {"type": "int", "default": 391, "min": 1},
+        "global_step": {"type": "slot", "default": "global_step"},
+    },
+    requires=("optimizer",), placement=("batch",), stage="train", ui_group="⑧ 反向传播与更新", beginner_visible=False,
+    formula="lr_t=lr_0 gamma^{|{m: m<=t}|}, t=epoch*S+batch+1",
+    formula_ref="step-milestone learning-rate schedule",
+)
+def step_milestone_update(
+    ctx: ScratchContext,
+    optimizer: str = "optimizer",
+    milestones: Any = (19500, 25000, 30000),
+    gamma: float = 0.1,
+    steps_per_epoch: int = 391,
+    global_step: str = "global_step",
+) -> None:
+    step = int(ctx[global_step]) + 1 if global_step in ctx else int(ctx.get("epoch", 0)) * int(steps_per_epoch) + int(ctx.get("batch_idx", 0)) + 1
+    count = sum(step >= int(milestone) for milestone in milestones)
+    optimizer_value = ctx[optimizer]
+    if not hasattr(optimizer_value, "param_groups"):
+        raise TypeError("step-milestone update requires a torch optimizer")
+    for group in optimizer_value.param_groups:
+        base = group.setdefault("_scratch_base_lr", float(group["lr"]))
+        group["lr"] = float(base) * float(gamma) ** count

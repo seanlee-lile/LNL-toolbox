@@ -23,44 +23,13 @@ def _torch():
     description="Select every sample in an input score vector.",
     params={"input": {"type": "slot", "default": "loss_per_sample"}, "save_as": {"type": "slot", "default": "selected_indices"}},
     requires=("input",),
-    provides=("save_as", "selected_mask"),
+    provides=("save_as",),
     placement=("batch",), stage="train", ui_group="⑥ 样本选择", beginner_visible=False,
 )
 def select_all(ctx: ScratchContext, input: str = "loss_per_sample", save_as: str = "selected_indices") -> None:
     torch = _torch()
     values = ctx[input].reshape(-1)
     ctx[save_as] = torch.arange(values.numel(), device=values.device)
-    ctx["selected_mask"] = torch.ones(values.numel(), dtype=torch.bool, device=values.device)
-
-
-@block(
-    id="small_loss",
-    name="Small-Loss Selection",
-    category="Sample Selection",
-    description="Keep the lowest-loss examples and reduce them for Backward.",
-    params={
-        "input": {"type": "slot", "default": "loss_per_sample"},
-        "keep_rate": {"type": "float", "default": 0.8, "min": 0.0, "max": 1.0},
-        "save_as": {"type": "slot", "default": "loss"},
-    },
-    requires=("input",),
-    provides=("save_as", "selected_indices", "selected_mask"),
-    placement=("batch",), stage="train", ui_group="⑥ 样本选择", beginner_visible=False,
-    formula="选择逐样本损失最小的前 R(T) 比例", formula_ref="small-loss selection step",
-)
-def small_loss(ctx: ScratchContext, input: str = "loss_per_sample", keep_rate: float = 0.8, save_as: str = "loss") -> None:
-    torch = _torch()
-    values = ctx[input].reshape(-1)
-    if values.numel() == 0:
-        raise ValueError("cannot select from an empty loss vector")
-    count = max(1, int(torch.ceil(torch.tensor(values.numel() * float(keep_rate))).item()))
-    count = min(values.numel(), count)
-    selected = torch.argsort(values, stable=True)[:count]
-    mask = torch.zeros(values.numel(), dtype=torch.bool, device=values.device)
-    mask[selected] = True
-    ctx["selected_indices"] = selected
-    ctx["selected_mask"] = mask
-    ctx[save_as] = values[selected].mean()
 
 
 @block(
@@ -168,6 +137,54 @@ def indices_to_mask(ctx: ScratchContext, indices: str = "selected_indices", refe
 
 
 @block(
+    id="mask_to_indices",
+    name="Mask To Indices",
+    category="Sample Selection",
+    description="Convert a boolean selection mask into stable local indices.",
+    params={"mask": {"type": "slot", "default": "selected_mask"}, "save_as": {"type": "slot", "default": "selected_indices"}},
+    requires=("mask",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑥ 样本选择",
+)
+def mask_to_indices(ctx: ScratchContext, mask: str = "selected_mask", save_as: str = "selected_indices") -> None:
+    torch = _torch()
+    ctx[save_as] = torch.where(ctx[mask].bool())[0]
+
+
+@block(
+    id="invert_mask",
+    name="Invert Mask",
+    category="Sample Selection",
+    description="Invert a boolean selection mask explicitly.",
+    params={"mask": {"type": "slot", "default": "selected_mask"}, "save_as": {"type": "slot", "default": "inverted_mask"}},
+    requires=("mask",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑥ 样本选择",
+)
+def invert_mask(ctx: ScratchContext, mask: str = "selected_mask", save_as: str = "inverted_mask") -> None:
+    ctx[save_as] = ~ctx[mask].bool()
+
+
+@block(
+    id="threshold_mask",
+    name="Threshold Mask",
+    category="Sample Selection",
+    description="Select values using an explicit scalar threshold comparison.",
+    params={"values": {"type": "slot", "default": "scores"}, "threshold": {"type": "float", "default": 0.5}, "comparison": {"type": "enum", "options": ["ge", "gt", "le", "lt"], "default": "ge"}, "save_as": {"type": "slot", "default": "selected_mask"}},
+    requires=("values",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑥ 样本选择",
+)
+def threshold_mask(ctx: ScratchContext, values: str = "scores", threshold: float = 0.5, comparison: str = "ge", save_as: str = "selected_mask") -> None:
+    tensor = ctx[values].reshape(-1)
+    if str(comparison) == "ge":
+        mask = tensor >= float(threshold)
+    elif str(comparison) == "gt":
+        mask = tensor > float(threshold)
+    elif str(comparison) == "le":
+        mask = tensor <= float(threshold)
+    elif str(comparison) == "lt":
+        mask = tensor < float(threshold)
+    else:
+        raise ValueError(f"unsupported threshold comparison: {comparison}")
+    ctx[save_as] = mask
+
+
+@block(
     id="mean_by_indices",
     name="Mean By Indices",
     category="Sample Selection",
@@ -188,7 +205,7 @@ def mean_by_indices(ctx: ScratchContext, values: str = "loss_per_sample", indice
     description="Select the highest confidence examples from a probability slot.",
     params={"input": {"type": "slot", "default": "probabilities"}, "keep_rate": {"type": "float", "default": 0.8, "min": 0.0, "max": 1.0}, "save_as": {"type": "slot", "default": "selected_indices"}},
     requires=("input",),
-    provides=("save_as", "selected_mask"),
+    provides=("save_as",),
     placement=("batch",), stage="train", ui_group="⑥ 样本选择", beginner_visible=False,
 )
 def top_k_confidence(ctx: ScratchContext, input: str = "probabilities", keep_rate: float = 0.8, save_as: str = "selected_indices") -> None:
@@ -196,7 +213,4 @@ def top_k_confidence(ctx: ScratchContext, input: str = "probabilities", keep_rat
     confidence = ctx[input].max(dim=-1).values.reshape(-1)
     count = max(1, min(confidence.numel(), int(torch.ceil(torch.tensor(confidence.numel() * float(keep_rate))).item())))
     selected = torch.argsort(confidence, descending=True, stable=True)[:count]
-    mask = torch.zeros(confidence.numel(), dtype=torch.bool, device=confidence.device)
-    mask[selected] = True
     ctx[save_as] = selected
-    ctx["selected_mask"] = mask

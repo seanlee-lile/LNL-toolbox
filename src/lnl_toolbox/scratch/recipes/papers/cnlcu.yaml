@@ -65,7 +65,7 @@ steps:
       - {block: scheduler_step, params: {scheduler: scheduler_a}}
       - {block: scheduler_step, params: {scheduler: scheduler_b}}
       - {block: evaluate_peer_ensemble, params: {model_a: model_a, model_b: model_b, loader: validation_loader, save_as: ensemble_accuracy}}
-      - {block: track_best_peer_models, params: {model_a: model_a, model_b: model_b, metric: ensemble_accuracy, save_as: best_peer_model_state}}
-  - {block: restore_best_peer_models, params: {model_a: model_a, model_b: model_b, state: best_peer_model_state}}
+      - {block: track_best_state, params: {model: model_a, auxiliary: model_b, metric: ensemble_accuracy, metric_name: ensemble_accuracy, mode: max, save_as: best_peer_model_state}}
+  - {block: restore_best_state, params: {model: model_a, auxiliary: model_b, state: best_peer_model_state}}
   - {block: evaluate_peer_ensemble, params: {model_a: model_a, model_b: model_b, loader: test_loader, save_as: test_ensemble_accuracy, final: true}}
   - {block: record_metrics, params: {values: [test_ensemble_accuracy, best_ensemble_accuracy, best_epoch]}}

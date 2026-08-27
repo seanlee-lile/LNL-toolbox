@@ -16,6 +16,17 @@ PARTICLES = {
 
 
 class DataRecipeProtocolTest(unittest.TestCase):
+    def test_no_paper_specific_data_construction_blocks(self) -> None:
+        import lnl_toolbox.scratch.blocks  # noqa: F401
+        from lnl_toolbox.scratch.registry import BLOCKS
+        forbidden = {"data", "dataset", "loader"}
+        offenders = [
+            block_id for block_id, definition in BLOCKS.items()
+            if definition.execute.__module__.startswith("lnl_toolbox.scratch.blocks.paper_specific")
+            and (definition.category.lower() in forbidden or definition.stage == "data")
+        ]
+        self.assertEqual(offenders, [])
+
     def test_all_paper_data_entries_are_particle_sequences(self) -> None:
         for path in PAPERS.glob("*.yaml"):
             recipe = load_recipe(path)

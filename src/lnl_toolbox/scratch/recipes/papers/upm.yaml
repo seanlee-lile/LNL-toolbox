@@ -60,7 +60,7 @@ steps:
             params: {start: 35, interval: 5}
             steps:
               - {block: upm_update_eta, params: {state: upm_state, indices: indices, posterior: clean_posterior, labels: labels, learning_rate: 0.7}}
-          - {block: upm_soft_target_loss, params: {logits: logits, posterior: clean_posterior, save_as: loss}}
+          - {block: soft_target_cross_entropy, params: {logits: logits, targets: clean_posterior, reduction: mean, save_as: loss}}
           - {block: backward}
           - {block: optimizer_step}
       - {block: evaluate_accuracy, params: {model: model, loader: validation_loader, save_as: validation_accuracy}}

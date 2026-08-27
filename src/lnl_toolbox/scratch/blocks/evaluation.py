@@ -156,6 +156,76 @@ def restore_best_model(ctx: ScratchContext, model: str = "model", state: str = "
 
 
 @block(
+    id="track_best_state",
+    name="Keep Best Multi-Module State",
+    category="Evaluation",
+    description="Keep model and auxiliary module states from the best validation metric.",
+    params={
+        "model": {"type": "slot", "default": "model"},
+        "auxiliary": {"type": "slot", "default": "auxiliary"},
+        "metric": {"type": "slot", "default": "validation_accuracy"},
+        "metric_name": {"type": "str", "default": "validation_accuracy"},
+        "mode": {"type": "enum", "options": ["max", "min"], "default": "max"},
+        "save_as": {"type": "slot", "default": "best_state"},
+    },
+    requires=("model", "auxiliary", "metric"),
+    provides=("save_as", "best_epoch"),
+    placement=("epoch",), stage="evaluate", ui_group="⑨ 评估", beginner_visible=False,
+)
+def track_best_state(
+    ctx: ScratchContext,
+    model: str = "model",
+    auxiliary: str = "auxiliary",
+    metric: str = "validation_accuracy",
+    metric_name: str = "validation_accuracy",
+    mode: str = "max",
+    save_as: str = "best_state",
+) -> None:
+    """Snapshot two cooperating modules using an explicit max/min metric policy."""
+    value = float(ctx[metric])
+    mode_name = str(mode).strip().lower()
+    if mode_name not in {"max", "min"}:
+        raise ValueError("mode must be 'max' or 'min'")
+    best_key = f"best_{str(metric_name).strip()}_{mode_name}"
+    previous = float(ctx.get(best_key, float("-inf") if mode_name == "max" else float("inf")))
+    improved = value > previous if mode_name == "max" else value < previous
+    if improved:
+        ctx[best_key] = value
+        # Keep the metric slot name stable for Recipe metric recording while
+        # the mode-qualified key prevents max/min trackers from colliding.
+        ctx[f"best_{str(metric_name).strip()}"] = value
+        ctx["best_epoch"] = int(ctx.get("epoch", 0))
+        ctx[save_as] = {
+            "model": deepcopy(ctx[model].state_dict()),
+            "auxiliary": deepcopy(ctx[auxiliary].state_dict()),
+        }
+
+
+@block(
+    id="restore_best_state",
+    name="Restore Best Multi-Module State",
+    category="Evaluation",
+    description="Restore model and auxiliary module states selected by a metric.",
+    params={
+        "model": {"type": "slot", "default": "model"},
+        "auxiliary": {"type": "slot", "default": "auxiliary"},
+        "state": {"type": "slot", "default": "best_state"},
+    },
+    requires=("model", "auxiliary", "state"),
+    placement=("top",), stage="evaluate", ui_group="⑨ 评估", beginner_visible=False,
+)
+def restore_best_state(
+    ctx: ScratchContext,
+    model: str = "model",
+    auxiliary: str = "auxiliary",
+    state: str = "best_state",
+) -> None:
+    snapshot = ctx[state]
+    ctx[model].load_state_dict(snapshot["model"])
+    ctx[auxiliary].load_state_dict(snapshot["auxiliary"])
+
+
+@block(
     id="evaluate_peer_ensemble",
     name="Evaluate Peer Ensemble",
     category="Evaluation",
@@ -199,38 +269,6 @@ def evaluate_peer_ensemble(ctx: ScratchContext, model_a: str = "model_a", model_
     ctx["peer_accuracy_b"] = correct_b / denominator
     ctx[save_as] = correct_ensemble / denominator
     ctx.setdefault("metrics", []).append({"epoch": int(ctx.get("epoch", 0)), "peer_accuracy_a": ctx["peer_accuracy_a"], "peer_accuracy_b": ctx["peer_accuracy_b"], "ensemble_accuracy": ctx[save_as]})
-
-
-@block(
-    id="track_best_peer_models",
-    name="Keep Best Peer Ensemble",
-    category="Evaluation",
-    description="Keep both peer states from the epoch with the highest ensemble validation accuracy.",
-    params={"model_a": {"type": "slot", "default": "model_a"}, "model_b": {"type": "slot", "default": "model_b"}, "metric": {"type": "slot", "default": "ensemble_accuracy"}, "save_as": {"type": "slot", "default": "best_peer_model_state"}},
-    requires=("model_a", "model_b", "metric"),
-    provides=("save_as", "best_epoch"),
-    placement=("epoch",), stage="evaluate", ui_group="⑨ 评估", beginner_visible=False,
-)
-def track_best_peer_models(ctx: ScratchContext, model_a: str = "model_a", model_b: str = "model_b", metric: str = "ensemble_accuracy", save_as: str = "best_peer_model_state") -> None:
-    value = float(ctx[metric])
-    if value > float(ctx.get("best_ensemble_accuracy", float("-inf"))):
-        ctx["best_ensemble_accuracy"] = value
-        ctx["best_epoch"] = int(ctx.get("epoch", 0))
-        ctx[save_as] = {"a": deepcopy(ctx[model_a].state_dict()), "b": deepcopy(ctx[model_b].state_dict())}
-
-
-@block(
-    id="restore_best_peer_models",
-    name="Restore Best Peer Ensemble",
-    category="Evaluation",
-    description="Restore both peer checkpoints selected by ensemble validation accuracy.",
-    params={"model_a": {"type": "slot", "default": "model_a"}, "model_b": {"type": "slot", "default": "model_b"}, "state": {"type": "slot", "default": "best_peer_model_state"}},
-    requires=("model_a", "model_b", "state"),
-    placement=("top",), stage="evaluate", ui_group="⑨ 评估", beginner_visible=False,
-)
-def restore_best_peer_models(ctx: ScratchContext, model_a: str = "model_a", model_b: str = "model_b", state: str = "best_peer_model_state") -> None:
-    ctx[model_a].load_state_dict(ctx[state]["a"])
-    ctx[model_b].load_state_dict(ctx[state]["b"])
 
 
 @block(

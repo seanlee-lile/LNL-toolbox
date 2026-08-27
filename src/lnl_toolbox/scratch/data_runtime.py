@@ -389,7 +389,14 @@ def _fixture_source_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
     fixture_plan = dict(plan)
     fixture_data = dict(plan.get("data", {}))
     original_name = str(fixture_data.get("name", "")).lower()
-    fixture_classes = 2 if original_name in {"synthetic_binary_2d"} else int(plan.get("semantics", {}).get("num_classes", 10))
+    # Binary CIFAR recipes request named classes (airplane/automobile).  The
+    # bounded fixture must still contain both requested classes; sampling a
+    # sparse ten-class fixture can otherwise produce an empty train_eval
+    # loader and make downstream snapshot blocks fail before any batch exists.
+    fixture_classes = 2 if (
+        original_name in {"synthetic_binary_2d"}
+        or bool(fixture_data.get("binary_classes"))
+    ) else int(plan.get("semantics", {}).get("num_classes", 10))
     fixture_data.update({
         "name": "synthetic",
         "train_size": 8,
@@ -848,9 +855,10 @@ class ScratchPrepared:
 
     def loader(self, role: Any = "train", *, batch_size: int | None = None, shuffle: bool | None = None,
                drop_last: bool | None = None, **_: Any) -> Any:
-        torch = _torch(); name = str(getattr(role, "value", role)); cfg = self.loader_config
-        return torch.utils.data.DataLoader(self.dataset_for(name), batch_size=int(batch_size or cfg.get("batch_size", 128)),
-            shuffle=bool((name == "train") if shuffle is None else shuffle),
+        torch = _torch(); name = str(getattr(role, "value", role)); cfg = self.loader_config; dataset = self.dataset_for(name)
+        use_shuffle = bool((name == "train") if shuffle is None else shuffle) and len(dataset) > 0
+        return torch.utils.data.DataLoader(dataset, batch_size=int(batch_size or cfg.get("batch_size", 128)),
+            shuffle=use_shuffle,
             drop_last=bool(cfg.get("drop_last", False) if drop_last is None else drop_last),
             num_workers=int(cfg.get("num_workers", 0)), pin_memory=bool(cfg.get("pin_memory", False)), collate_fn=collate_scratch_batch)
 

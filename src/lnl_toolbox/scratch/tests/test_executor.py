@@ -19,8 +19,9 @@ from lnl_toolbox.scratch.blocks.losses import (
     nce_loss,
     rce_loss,
 )
-from lnl_toolbox.scratch.blocks.paper_specific.research import jocor_joint_composition, jocor_symmetric_kl
-from lnl_toolbox.algorithms.jocor import jocor_joint_scores, symmetric_kl_per_sample
+from lnl_toolbox.scratch.blocks.losses import symmetric_kl
+from lnl_toolbox.scratch.blocks.tensor_ops import weighted_sum
+from lnl_toolbox.algorithms.jocor import symmetric_kl_per_sample
 from lnl_toolbox.scratch.blocks.models import create_model
 from lnl_toolbox.losses.torch_losses import GeneralizedCrossEntropyLoss
 from lnl_toolbox.algorithms.transition_risk import ForwardRiskCorrector
@@ -232,10 +233,10 @@ class ScratchExecutorTest(unittest.TestCase):
         from lnl_toolbox.scratch.blocks.losses import per_sample_ce
         per_sample_ce(context, logits="logits_a", labels="labels", save_as="loss_a")
         per_sample_ce(context, logits="logits_b", labels="labels", save_as="loss_b")
-        jocor_symmetric_kl(context)
-        jocor_joint_composition(context, loss_a="loss_a", loss_b="loss_b", lambda_=0.9)
+        symmetric_kl(context, logits_a="logits_a", logits_b="logits_b", save_as="agreement_per_sample")
+        weighted_sum(context, terms=["loss_a", "loss_b", "agreement_per_sample"], weights=[0.1, 0.1, 0.9], save_as="joint_loss_per_sample")
         expected_agreement = symmetric_kl_per_sample(logits_a, logits_b)
-        expected_joint = jocor_joint_scores(context["loss_a"], context["loss_b"], logits_a, logits_b, 0.9)
+        expected_joint = 0.1 * (context["loss_a"] + context["loss_b"]) + 0.9 * expected_agreement
         self.assertTrue(torch.allclose(context["agreement_per_sample"], expected_agreement))
         self.assertTrue(torch.allclose(context["joint_loss_per_sample"], expected_joint))
 

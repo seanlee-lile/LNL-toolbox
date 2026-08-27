@@ -40,7 +40,7 @@ steps:
         steps:
           - {block: get_batch}
           - {block: move_batch_to_device}
-          - {block: fine_prepare_strong_input, params: {batch: batch, input: images, save_as: strong_images}}
+          - {block: select_batch_view, params: {batch: batch, input: images, view: strong_input, save_as: strong_images}}
           - {block: zero_grad}
           - {block: forward_feature}
           - block: if_epoch_lt
@@ -55,7 +55,7 @@ steps:
               - {block: masked_cross_entropy, params: {logits: logits, labels: labels, mask: fine_clean, save_as: fine_clean_ce}}
               - {block: weighted_pseudo_label_cross_entropy, params: {logits: strong_logits, pseudo_labels: fine_pseudo, weights: fine_weights, save_as: fine_strong_pseudo_ce}}
               - {block: sed_rejected_regularizer, params: {logits: logits, labels: labels, clean: fine_clean, pseudo_labels: fine_pseudo, state: fine_state, save_as: fine_regularizer}}
-              - {block: compose_three_objectives, params: {first: fine_clean_ce, second: fine_regularizer, third: fine_strong_pseudo_ce, third_weight: 1.0, save_as: loss}}
+              - {block: weighted_sum, params: {terms: [fine_clean_ce, fine_regularizer, fine_strong_pseudo_ce], weights: [1.0, 1.0, 1.0], save_as: loss}}
           - {block: backward}
           - {block: optimizer_step}
           - {block: fine_ema_update, params: {model: model, state: fine_state}}

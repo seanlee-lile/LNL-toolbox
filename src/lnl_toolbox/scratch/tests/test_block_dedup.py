@@ -76,6 +76,17 @@ class ScratchBlockDedupTest(unittest.TestCase):
         ctx["loss_per_sample"].mean().backward()
         self.assertIsNotNone(logits.grad)
 
+    def test_common_masked_and_weighted_cross_entropy(self) -> None:
+        logits = torch.tensor([[2.0, 0.0], [0.0, 2.0], [1.0, 1.0]], requires_grad=True)
+        labels = torch.tensor([0, 1, 0])
+        ctx = ScratchContext({"logits": logits, "labels": labels, "mask": torch.tensor([True, False, True]), "pseudo": labels, "weights": torch.tensor([1.0, 0.5, 2.0])})
+        BLOCKS["masked_cross_entropy"].execute(ctx, logits="logits", labels="labels", mask="mask", save_as="masked")
+        BLOCKS["weighted_pseudo_label_cross_entropy"].execute(ctx, logits="logits", pseudo_labels="pseudo", weights="weights", save_as="weighted")
+        expected_masked = torch.nn.functional.cross_entropy(logits[[0, 2]], labels[[0, 2]])
+        expected_weighted = (torch.nn.functional.cross_entropy(logits, labels, reduction="none") * ctx["weights"]).mean()
+        self.assertTrue(torch.allclose(ctx["masked"], expected_masked))
+        self.assertTrue(torch.allclose(ctx["weighted"], expected_weighted))
+
     def test_linear_schedule_replaces_both_formal_rate_shapes(self) -> None:
         for epoch, expected in ((0, 1.0), (5, 0.75), (10, 0.5), (20, 0.5)):
             ctx = ScratchContext({"epoch": epoch})
@@ -89,6 +100,13 @@ class ScratchBlockDedupTest(unittest.TestCase):
             "mean_selected_" + "loss", "cross_select_loss_a_" + "from_b",
             "cross_select_loss_b_" + "from_a", "gather_target_" + "probability",
             "softmax_" + "probability", "gce_" + "q_formula", "peer_" + "exchange",
+            "track_best_" + "peer_models", "restore_best_" + "peer_models",
+            "upm_" + "soft_target_loss",
+            "small_loss",
+            "l2rw_" + "initialize_epsilon", "l2rw_" + "virtual_weighted_loss",
+            "t_revision_" + "weighted_objective",
+            "jocor_" + "agreement", "jocor_" + "symmetric_kl",
+            "volminnet_" + "objective", "cnlcu_" + "soft_influence",
         }
         self.assertTrue(deleted.isdisjoint(BLOCKS))
 
@@ -97,7 +115,7 @@ class ScratchBlockDedupTest(unittest.TestCase):
             recipe = load_recipe(ROOT / "recipes" / "papers" / name)
             validate_recipe(recipe)
             text = str(recipe)
-            for old in ("remember_" + "rate_formula", "jocor_" + "keep_rate_formula", "small_" + "loss_indices", "jocor_small_" + "loss_indices", "gather_target_" + "probability", "softmax_" + "probability"):
+            for old in ("remember_" + "rate_formula", "jocor_" + "keep_rate_formula", "small_" + "loss_indices", "jocor_small_" + "loss_indices", "gather_target_" + "probability", "softmax_" + "probability", "track_best_" + "peer_models", "restore_best_" + "peer_models"):
                 self.assertNotIn(old, text, name)
 
 

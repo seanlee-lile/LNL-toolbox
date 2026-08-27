@@ -79,8 +79,12 @@ steps:
             params: {probabilities: probabilities, noisy_probabilities: noisy_probabilities, labels: labels, denominator_floor: 1.0e-12, save_as: sample_weights}
           - block: per_sample_ce
             params: {logits: logits, labels: labels, save_as: loss_per_sample}
-          - block: t_revision_weighted_objective
-            params: {losses: loss_per_sample, weights: sample_weights, detach_ratio: true, save_as: loss}
+          - block: detach
+            params: {input: sample_weights, save_as: detached_sample_weights}
+          - block: elementwise_multiply
+            params: {left: loss_per_sample, right: detached_sample_weights, save_as: weighted_loss_per_sample}
+          - block: mean_loss
+            params: {input: weighted_loss_per_sample, save_as: loss}
           - {block: backward}
           - block: optimizer_step
             params: {optimizer: classifier_optimizer}
@@ -120,17 +124,19 @@ steps:
             params: {probabilities: probabilities, noisy_probabilities: noisy_probabilities, labels: labels, denominator_floor: 1.0e-12, save_as: sample_weights}
           - block: per_sample_ce
             params: {logits: logits, labels: labels, save_as: loss_per_sample}
-          - block: t_revision_weighted_objective
-            params: {losses: loss_per_sample, weights: sample_weights, detach_ratio: false, save_as: loss}
+          - block: elementwise_multiply
+            params: {left: loss_per_sample, right: sample_weights, save_as: weighted_loss_per_sample}
+          - block: mean_loss
+            params: {input: weighted_loss_per_sample, save_as: loss}
           - {block: backward}
           - block: optimizer_step
             params: {optimizer: revision_optimizer}
       - block: evaluate_t_revision_noisy
         params: {model: model, transition: revision, loader: validation_loader, device: device, save_as: revision_validation_loss}
-      - block: track_best_t_revision
-        params: {model: model, revision: revision, metric: validation_accuracy, save_as: best_t_revision_state}
-  - block: restore_best_t_revision
-    params: {model: model, revision: revision, state: best_t_revision_state}
+      - block: track_best_state
+        params: {model: model, auxiliary: revision, metric: validation_accuracy, metric_name: validation_accuracy, mode: max, save_as: best_t_revision_state}
+  - block: restore_best_state
+    params: {model: model, auxiliary: revision, state: best_t_revision_state}
   - block: evaluate_accuracy
     params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}
   - block: record_metrics

@@ -59,9 +59,10 @@ steps:
             params: {logits: logits_a, labels: labels, save_as: loss_a_per_sample}
           - block: per_sample_ce
             params: {logits: logits_b, labels: labels, save_as: loss_b_per_sample}
-          - {block: jocor_symmetric_kl}
-          - block: jocor_joint_composition
-            params: {lambda_: 0.9, save_as: joint_loss_per_sample}
+          - block: symmetric_kl
+            params: {logits_a: logits_a, logits_b: logits_b, save_as: agreement_per_sample}
+          - block: weighted_sum
+            params: {terms: [loss_a_per_sample, loss_b_per_sample, agreement_per_sample], weights: [0.1, 0.1, 0.9], save_as: joint_loss_per_sample}
           - block: select_lowest_scores
             params: {scores: joint_loss_per_sample, keep_fraction: keep_rate, stable_sample_indices: indices, rounding: floor, minimum_count: 1, save_as: selected_indices}
           - block: mean_by_indices
@@ -70,12 +71,12 @@ steps:
           - {block: optimizer_step}
       - block: evaluate_peer_ensemble
         params: {model_a: model_a, model_b: model_b, loader: test_loader, save_as: ensemble_accuracy}
-      - block: track_best_peer_models
-        params: {model_a: model_a, model_b: model_b, metric: ensemble_accuracy}
+      - block: track_best_state
+        params: {model: model_a, auxiliary: model_b, metric: ensemble_accuracy, metric_name: ensemble_accuracy, mode: max, save_as: best_peer_model_state}
       - block: scheduler_step
         params: {scheduler: scheduler}
-  - block: restore_best_peer_models
-    params: {model_a: model_a, model_b: model_b, state: best_peer_model_state}
+  - block: restore_best_state
+    params: {model: model_a, auxiliary: model_b, state: best_peer_model_state}
   - block: evaluate_peer_ensemble
     params: {model_a: model_a, model_b: model_b, loader: test_loader, save_as: test_accuracy, final: true}
   - block: record_metrics
