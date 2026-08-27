@@ -423,7 +423,34 @@ class CommandConsoleTest(unittest.TestCase):
         with mock.patch.object(command_console.os, "name", "nt"), mock.patch.object(
             command_console.subprocess, "run", return_value=completed
         ):
-            self.assertTrue(command_console._picker_payload({"mode": "open_file"})["cancelled"])
+            self.assertEqual(
+                command_console._picker_payload({"mode": "open_file"}),
+                {"cancelled": True, "path": None},
+            )
+
+    def test_windows_picker_uses_disposable_foreground_owner_for_every_mode(self):
+        completed = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(command_console.os, "name", "nt"), mock.patch.object(
+            command_console.subprocess, "run", return_value=completed
+        ) as run:
+            for mode in ("folder", "open_file", "save_file"):
+                with self.subTest(mode=mode):
+                    self.assertEqual(
+                        command_console._picker_payload({"mode": mode}),
+                        {"cancelled": True, "path": None},
+                    )
+                    script = run.call_args.args[0][-1]
+                    self.assertIn("$owner=New-Object System.Windows.Forms.Form", script)
+                    self.assertIn("$owner.ShowInTaskbar=$false", script)
+                    self.assertIn("$owner.TopMost=$true", script)
+                    self.assertIn("$d.ShowDialog($owner)", script)
+                    self.assertIn("finally", script)
+                    self.assertIn("$d.Dispose()", script)
+                    self.assertIn("$owner.Close()", script)
+                    self.assertIn("$owner.Dispose()", script)
+                    self.assertEqual(
+                        run.call_args.kwargs["env"]["LNL_PICKER_MODE"], mode
+                    )
 
     def test_windows_picker_falls_back_to_root_for_relative_output_path(self):
         completed = mock.Mock(returncode=0, stdout="", stderr="")
