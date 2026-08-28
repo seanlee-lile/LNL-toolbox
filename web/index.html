@@ -65,8 +65,8 @@
       font: 16px/1.65 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     }
     main { max-width: 1520px; margin: 0 auto; padding: 36px 32px 48px; }
-    h1 { margin: 0 0 8px; font-size: 30px; line-height: 1.25; letter-spacing: -.02em; }
-    .subtitle { color: var(--text-secondary); margin-bottom: 26px; font-size: 16px; }
+    h1 { margin: 0 0 8px; font-size: 34px; line-height: 1.25; letter-spacing: -.02em; }
+    .subtitle { color: var(--text-secondary); margin-bottom: 26px; font-size: 17px; }
     .layout { display: grid; grid-template-columns: 370px minmax(0, 1fr); gap: 24px; align-items: start; }
     .panel {
       background: var(--bg-card);
@@ -260,7 +260,7 @@
   <div class="task-stop-control"><button id="stop-task" class="danger" type="button" disabled>停止当前任务</button></div>
   <main>
     <h1 id="page-title">LNL Toolbox Command Console</h1>
-    <div id="page-subtitle" class="subtitle">左侧选择功能，右侧配置参数并预览指令；参数变化会即时反映在预览中。</div>
+    <div id="page-subtitle" class="subtitle">左侧选择功能，右侧配置参数；对应指令会显示在下方 Preview 模块中，点击“执行此指令”即可完成操作。</div>
     <p><a class="secondary" href="http://127.0.0.1:8795/scratch" target="_blank" rel="noopener">打开 LNL Scratch 积木搭建器</a></p>
     <div class="layout">
       <aside class="panel">
@@ -844,11 +844,9 @@
         if (report?.fingerprint) detail += '<p>指纹：' + escapeHtml(report.fingerprint) + '</p>';
         return '<div class="data-feedback success"><strong>操作完成</strong><p>' + escapeHtml(state.dataResult.message) + '</p>' + detail + '</div>';
       }
-      if (!report) return '<div class="data-feedback"><strong>开始使用</strong><p>先选择“登记本机路径”，保存后依次执行实际检查和一轮验证。</p></div>';
-      if (report.training_evidence) return '<div class="data-feedback success"><strong>训练验证完成</strong><p>' + escapeHtml(report.name) + ' 已通过数据加载和一轮训练验证。</p><p>样本：' + report.train_samples + ' train / ' + report.test_samples + ' test；类别：' + report.classes + '</p><p>指纹：' + escapeHtml(report.fingerprint || "-") + '</p></div>';
-      if (report.status === "ready") return '<div class="data-feedback success"><strong>数据检查通过</strong><p>' + escapeHtml(report.name) + '：' + report.train_samples + ' train / ' + report.test_samples + ' test，' + report.classes + ' 类。</p><p>下一步：选择“verify”，完成一轮训练验证。</p></div>';
-      if (report.location && !report.error) return '<div class="data-feedback"><strong>路径已登记，尚未检查</strong><p>下一步：选择“inspect”，实际加载 train/test。登记成功不等于数据可训练。</p></div>';
-      return '<div class="data-feedback failed"><strong>数据尚未可用</strong><p>' + escapeHtml(report.error || "请登记正确路径后执行 inspect。") + '</p></div>';
+      if (state.dataAction !== "run" || !report) return '';
+      return '<div class="data-feedback"><strong>已登记数据</strong><p>' + escapeHtml(report.name) + ' · ' + escapeHtml(report.adapter) + ' · ' + escapeHtml(dataStatusLabel(report)) + '</p>' +
+        (report.train_samples == null ? '' : '<p>样本：' + report.train_samples + ' train / ' + report.test_samples + ' test；类别：' + report.classes + '</p>') + '</div>';
     }
     function explicitValue(value) {
       return value === null || value === undefined || value === "" || String(value).toLowerCase() === "unknown" ? "Unknown" : String(value);
@@ -1098,6 +1096,7 @@
       if (!registeredReports.some(function (item) { return item.name === state.dataAlias; })) state.dataAlias = registeredReports[0]?.name || "";
       const selectedReport = state.dataAction === "register" ? null : reports.find(function (item) { return item.name === state.dataAlias; });
       const registered = registeredReports.map(function (item) { return {value:item.name, label:item.name + " · " + item.adapter + " · " + dataStatusLabel(item)}; });
+      const trainingFlow = state.dataAction === "run" ? datasetProfileCompatibilityHtml() : "";
       parameterPanel.innerHTML = dataStepsHtml(selectedReport) + commonFormStart() +
         field("操作", "data-action", selectControl("__ID__", [
           {value:"list", label:"查看全部状态"}, {value:"status", label:"查看单项详情"}, {value:"path", label:"查看数据位置"},
@@ -1110,7 +1109,7 @@
         field("人工标签文件（CIFAR-N）", "data-labels", inputControl("__ID__", ""), true) + field("训练模板", "data-recipe", recipesSelect("__ID__"), true) +
         field("验证输出目录（可选）", "data-output", inputControl("__ID__", ""), true) + commonFormEnd() +
         dataFeedbackHtml(selectedReport) + '<p class="helper">登记只保存路径；inspect 才会真实加载 train/test；verify 会自动按数据类型运行 1 epoch，不需要 CIFAR 或 MNIST 配方。自定义训练时再选择训练模板。</p>' +
-        '<div class="guide-card"><strong>数据状态</strong>' + dataTableHtml(reports) + '</div>' + datasetProfileCompatibilityHtml();
+        '<div class="guide-card"><strong>数据状态</strong>' + dataTableHtml(reports) + '</div>' + trainingFlow;
       const actionNode = document.getElementById("data-action");
       actionNode.value = [...actionNode.options].some(function (option) { return option.value === state.dataAction; }) ? state.dataAction : "status";
       const statusPanel = [...parameterPanel.querySelectorAll(".guide-card")].find(function (node) { return Boolean(node.querySelector("table")); });
@@ -1153,8 +1152,8 @@
         state.dataOutput = selectValue("data-output", state.dataOutput);
         state.dataAction = actionNode.value; state.dataResult = null; state.removeConfirmed = false;
         outputNode.textContent = "尚未执行当前操作。"; statusNode.textContent = "请填写当前操作所需字段，然后执行。"; statusNode.className = "status";
-        updateDataFormVisibility();
-        updateDatasetStatusVisibility();
+        renderData();
+        updateModulePreview();
       });
       statusCollapse.addEventListener("click", function () {
         state.dataAction = "status";

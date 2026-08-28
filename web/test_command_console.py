@@ -739,6 +739,42 @@ class CommandConsoleTest(unittest.TestCase):
         for heading in ("数据集", "状态", "位置", "Train / Test", "训练验证"):
             self.assertIn(f"<th>{heading}</th>", page)
 
+    def test_dataset_training_flow_and_feedback_are_scoped_to_current_action(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        render_data = page[
+            page.index("function renderData()"):
+            page.index("function renderSweep()")
+        ]
+        feedback = page[
+            page.index("function dataFeedbackHtml(report)"):
+            page.index("function explicitValue(value)")
+        ]
+
+        self.assertIn(
+            'const trainingFlow = state.dataAction === "run" ? '
+            'datasetProfileCompatibilityHtml() : "";',
+            render_data,
+        )
+        self.assertIn("+ trainingFlow;", render_data)
+        self.assertNotIn("+ datasetProfileCompatibilityHtml();", render_data)
+        for action in ("list", "status", "path", "register", "inspect", "verify", "remove"):
+            self.assertIn(f'{{value:"{action}"', render_data)
+        self.assertIn('{value:"run", label:"使用已登记数据训练"}', render_data)
+
+        self.assertIn('if (state.dataAction !== "run" || !report) return \'\';', feedback)
+        self.assertNotIn("训练验证完成", feedback)
+        self.assertNotIn("数据检查通过", feedback)
+        self.assertIn(
+            "state.dataAction = actionNode.value; state.dataResult = null;",
+            render_data,
+        )
+        action_change = render_data[
+            render_data.index('actionNode.addEventListener("change"'):
+            render_data.index('statusCollapse.addEventListener("click"')
+        ]
+        self.assertIn("renderData();", action_change)
+        self.assertIn("updateModulePreview();", action_change)
+
     def test_dataset_http_api_uses_shared_status_contract(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
             os.environ,
