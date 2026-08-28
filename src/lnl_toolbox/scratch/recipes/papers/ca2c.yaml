@@ -46,8 +46,9 @@ steps:
           - block: if_epoch_ge
             params: {epoch: 400}
             steps:
-              - {block: ca2c_peer_candidates, params: {peer_logits: logits_n, candidate_k: 2, save_as: ca2c_candidates}}
-              - {block: ca2c_peer_complements, params: {peer_logits: logits_p, candidate_k: 2, save_as: ca2c_complements}}
+              - {block: top_k_mask, params: {scores: logits_n, k: 2, save_as: ca2c_candidates}}
+              - {block: top_k_mask, params: {scores: logits_p, k: 2, save_as: ca2c_positive_mask}}
+              - {block: invert_mask, params: {mask: ca2c_positive_mask, save_as: ca2c_complements}}
               - {block: ca2c_update_candidate_memory, params: {memory: ca2c_memory, indices: indices, candidates: ca2c_candidates, complements: ca2c_complements}}
               - {block: ca2c_partial_label_loss, params: {logits: logits_p, candidates: ca2c_candidates, hard_weight: 0.99, save_as: ca2c_positive_loss}}
               - {block: ca2c_negative_label_loss, params: {logits: logits_n, complements: ca2c_complements, save_as: ca2c_negative_loss}}

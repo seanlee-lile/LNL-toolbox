@@ -114,6 +114,13 @@ def execute_recipe(
             raise ValueError("runtime limit `skip_final_test` must be boolean")
         if "fixture" in limits and not isinstance(limits["fixture"], bool):
             raise ValueError("runtime limit `fixture` must be boolean")
+        # Fixture/catalog runs are deliberately bounded unless the caller
+        # supplies explicit limits.  This keeps the formal recipe settings
+        # intact while preventing a tiny synthetic source from entering a
+        # paper's full multi-epoch training horizon during validation.
+        if limits.get("fixture"):
+            limits.setdefault("max_epochs", 1)
+            limits.setdefault("max_batches", 1)
         initial["_runtime_limits"] = limits
     validated = validate_recipe(recipe, initial_slots=set(initial))
     result = ScratchContext(validated.get("settings", {}))

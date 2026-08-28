@@ -41,19 +41,56 @@ def pairwise_similarity(ctx: ScratchContext, features: str = "features", metric:
     id="topk_neighborhood",
     name="Top-k Neighborhood",
     category="Graph",
-    description="Keep a stable top-k neighbor adjacency from a similarity matrix.",
-    params={"similarity": {"type": "slot", "default": "similarity"}, "k": {"type": "int", "default": 8, "min": 1}, "gamma": {"type": "float", "default": 1.0, "min": 0.0001}, "save_as": {"type": "slot", "default": "adjacency"}},
+    description="Select stable top-k neighbour indices from a ranking metric. Edge weights are constructed by a separate operation.",
+    params={"similarity": {"type": "slot", "default": "similarity"}, "stable_sample_indices": {"type": "slot", "default": "indices"}, "k": {"type": "int", "default": 8, "min": 1}, "save_as": {"type": "slot", "default": "neighbor_indices"}},
     requires=("similarity",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑥ 后验与权重",
 )
-def topk_neighborhood(ctx: ScratchContext, similarity: str = "similarity", k: int = 8, gamma: float = 1.0, save_as: str = "adjacency") -> None:
+def topk_neighborhood(ctx: ScratchContext, similarity: str = "similarity", stable_sample_indices: str = "indices", k: int = 8, save_as: str = "neighbor_indices") -> None:
     torch, _ = _torch()
-    values = ctx[similarity].detach().clone()
-    values.fill_diagonal_(-torch.inf)
-    count = min(int(k), max(int(values.shape[1]) - 1, 1))
-    order = torch.argsort(values, dim=1, descending=True, stable=True)[:, :count]
-    adjacency = torch.zeros_like(values)
-    weights = values.gather(1, order).clamp_min(0).pow(float(gamma))
-    adjacency.scatter_(1, order, weights)
+    values = ctx[similarity].detach()
+    if values.ndim != 2 or values.shape[0] != values.shape[1]:
+        raise ValueError("topk_neighborhood expects a square ranking matrix")
+    n = int(values.shape[0])
+    sample_indices = ctx.get(stable_sample_indices)
+    if sample_indices is None:
+        sample_indices = torch.arange(n, device=values.device)
+    sample_indices = torch.as_tensor(sample_indices, device=values.device).reshape(-1)
+    if sample_indices.numel() != n or len(set(sample_indices.detach().cpu().tolist())) != n:
+        raise ValueError("stable_sample_indices must be unique and aligned with similarity rows")
+    count = min(int(k), max(n - 1, 0))
+    selected = torch.empty((n, count), dtype=torch.long, device=values.device)
+    for row in range(n):
+        candidates = [column for column in range(n) if column != row]
+        candidates.sort(key=lambda column: (-float(values[row, column]), int(sample_indices[column])))
+        if count:
+            selected[row] = torch.as_tensor(candidates[:count], dtype=torch.long, device=values.device)
+    ctx[save_as] = selected
+
+
+@block(
+    id="neighbor_edge_weights",
+    name="Neighbour Edge Weights",
+    category="Graph",
+    description="Construct inner-product edge weights for selected neighbours; ranking and weighting remain separate operations.",
+    params={"features": {"type": "slot", "default": "features"}, "neighbor_indices": {"type": "slot", "default": "neighbor_indices"}, "gamma": {"type": "float", "default": 1.0, "min": 0.0001}, "normalize_features": {"type": "bool", "default": False}, "save_as": {"type": "slot", "default": "adjacency"}},
+    requires=("features", "neighbor_indices"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑥ 后验与权重",
+)
+def neighbor_edge_weights(ctx: ScratchContext, features: str = "features", neighbor_indices: str = "neighbor_indices", gamma: float = 1.0, normalize_features: bool = False, save_as: str = "adjacency") -> None:
+    torch, F = _torch()
+    values = ctx[features].detach()
+    if values.ndim != 2:
+        raise ValueError("neighbor edge weights expect a [N,D] feature matrix")
+    if bool(normalize_features):
+        values = F.normalize(values, dim=1)
+    neighbors = torch.as_tensor(ctx[neighbor_indices], device=values.device, dtype=torch.long)
+    if neighbors.ndim != 2 or neighbors.shape[0] != values.shape[0]:
+        raise ValueError("neighbor_indices must align with feature rows")
+    selected = values[neighbors]
+    source = values[:, None, :]
+    weights = (source * selected).sum(dim=-1).clamp_min(0).pow(float(gamma))
+    adjacency = torch.zeros((values.shape[0], values.shape[0]), dtype=values.dtype, device=values.device)
+    rows = torch.arange(values.shape[0], device=values.device)[:, None].expand_as(neighbors)
+    adjacency[rows, neighbors] = weights
     ctx[save_as] = adjacency
 
 

@@ -152,7 +152,7 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
         batch = next(step for step in epoch["steps"] if step["block"] == "batch_loop")
         blocks = [step["block"] for step in batch["steps"]]
         graph = blocks.index("pairwise_similarity")
-        self.assertEqual(blocks[graph:graph + 4], ["pairwise_similarity", "topk_neighborhood", "normalize_graph", "propagate_labels"])
+        self.assertEqual(blocks[graph:graph + 5], ["pairwise_similarity", "topk_neighborhood", "neighbor_edge_weights", "normalize_graph", "propagate_labels"])
         self.assertNotIn("lend_build_neighbor_graph", blocks)
 
     def test_l2rw_recipe_enforces_official_global_step_schedule(self) -> None:

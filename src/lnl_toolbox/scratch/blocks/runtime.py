@@ -57,7 +57,13 @@ def select_device(ctx: ScratchContext, device: str = "auto", save_as: str = "dev
     requested = str(device).strip().lower()
     try:
         torch = _torch()
-        resolved = "cuda" if requested in {"auto", "cuda", "gpu"} and torch.cuda.is_available() else "cpu"
+        # Fixture/catalog executions use tiny CPU-backed sources and are
+        # intentionally device-neutral.  Keep them on CPU even on hosts
+        # where CUDA is available so auxiliary batches (for example trusted
+        # meta batches) cannot mix CPU inputs with CUDA model parameters.
+        fixture = isinstance(ctx.get("_runtime_limits"), dict) and bool(ctx.get("_runtime_limits", {}).get("fixture"))
+        cuda_requested = requested in {"cuda", "gpu"} or (requested == "auto" and not fixture)
+        resolved = "cuda" if cuda_requested and torch.cuda.is_available() else "cpu"
         if requested == "mps" and getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
             resolved = "mps"
         if requested not in {"auto", "cuda", "gpu", "cpu", "mps"}:

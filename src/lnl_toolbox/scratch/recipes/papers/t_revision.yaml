@@ -14,7 +14,7 @@ steps:
   - {block: build_noise_manifest}
   - {block: configure_preprocessing, params: {preprocessing: standard, augment: true}}
   - {block: configure_views, params: {views: [weak]}}
-  - {block: assign_data_roles, params: {roles: [train, noisy_validation, test]}}
+  - {block: assign_data_roles, params: {roles: [train, train_eval, noisy_validation, test]}}
   - {block: configure_loader, params: {batch_size: 128, num_workers: 4, pin_memory: true}}
   - {block: build_prepared_data}
   - {block: build_loaders}
@@ -73,7 +73,7 @@ steps:
             params: {model: model, input: images, save_as: logits}
           - block: softmax
             params: {logits: logits, save_as: probabilities}
-          - block: t_revision_noisy_probability
+          - block: apply_transition
             params: {probabilities: probabilities, transition: transition, save_as: noisy_probabilities}
           - block: t_revision_importance_ratio
             params: {probabilities: probabilities, noisy_probabilities: noisy_probabilities, labels: labels, denominator_floor: 1.0e-12, save_as: sample_weights}
@@ -98,8 +98,11 @@ steps:
     params: {model: model, state: best_classifier_state}
   - block: create_t_revision_revision
     params: {transition: transition, device: device, save_as: revision}
-  - block: create_t_revision_optimizer
-    params: {model: model, revision: revision, lr: 0.0000005, weight_decay: 0.0001, save_as: revision_optimizer}
+  - block: create_parameter_group_optimizer
+    params:
+      optimizer_spec: {name: adam, weight_decay: 0.0001}
+      groups: [{source: model, lr: 0.0000005}, {source: revision, lr: 0.0000005}]
+      save_as: revision_optimizer
   - block: epoch_loop
     params: {epochs: 20}
     steps:
@@ -118,7 +121,7 @@ steps:
             params: {logits: logits, save_as: probabilities}
           - block: t_revision_revised_transition
             params: {revision: revision, save_as: current_transition}
-          - block: t_revision_noisy_probability
+          - block: apply_transition
             params: {probabilities: probabilities, transition: current_transition, save_as: noisy_probabilities}
           - block: t_revision_importance_ratio
             params: {probabilities: probabilities, noisy_probabilities: noisy_probabilities, labels: labels, denominator_floor: 1.0e-12, save_as: sample_weights}

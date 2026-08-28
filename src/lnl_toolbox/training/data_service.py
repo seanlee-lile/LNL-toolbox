@@ -367,6 +367,31 @@ class PreparedData:
             lookup = _target_map(self.manifest.global_indices, self.manifest.noisy_targets)
         return np.asarray([lookup[int(index)] for index in self.train_indices], dtype=np.int64)
 
+    def realized_noise_rate(self, role: DataRole | str) -> float | None:
+        """Return the observed-vs-clean disagreement for one materialized role.
+
+        A noise manifest is scoped to its source split.  Consequently an
+        independently loaded validation split cannot be measured by looking
+        up its indices in the training manifest; the role view is the
+        authoritative aligned target mapping for this diagnostic.
+        """
+
+        dataset = self.dataset_for(role)
+        if not isinstance(dataset, IndexedDatasetView):
+            raise TypeError("role noise diagnostics require an indexed dataset view")
+        clean = dataset.split.clean_targets
+        if clean is None:
+            return None
+        clean_by_index = _target_map(dataset.split.global_indices, clean)
+        changed = np.asarray(
+            [
+                dataset.targets[int(index)] != clean_by_index[int(index)]
+                for index in dataset.indices
+            ],
+            dtype=np.bool_,
+        )
+        return None if changed.size == 0 else float(changed.mean())
+
     def dataset_for(self, role: DataRole | str) -> Dataset:
         key = role if isinstance(role, DataRole) else DataRole(str(role))
         try:

@@ -179,7 +179,9 @@ def weighted_sum(ctx: ScratchContext, terms: Any = (), weights: Any = (), save_a
 def nonnegative_projection(ctx: ScratchContext, input: str = "gradient", negate: bool = False, save_as: str = "nonnegative_values") -> None:
     torch, _ = _torch()
     values = -ctx[input] if bool(negate) else ctx[input]
-    ctx[save_as] = torch.relu(values).detach()
+    # Projection is a value operation.  Detachment, where required by a
+    # method, is an explicit downstream ``detach`` block.
+    ctx[save_as] = torch.relu(values)
 
 
 @block(
@@ -281,6 +283,10 @@ def soft_target_cross_entropy(ctx: ScratchContext, logits: str = "logits", targe
 def apply_transition(ctx: ScratchContext, probabilities: str = "probabilities", transition: str = "transition", save_as: str = "noisy_probabilities") -> None:
     values = ctx[probabilities]
     matrix = ctx[transition]
+    if hasattr(matrix, "transition_for"):
+        if "indices" not in ctx:
+            raise ValueError("transition artifacts require aligned indices; materialize_transition first")
+        matrix = matrix.transition_for(None, ctx["indices"], device=values.device, dtype=values.dtype)
     if matrix.ndim == 2:
         ctx[save_as] = values @ matrix
     elif matrix.ndim == 3:
@@ -332,6 +338,44 @@ def transition_corrected_risk(ctx: ScratchContext, logits: str = "logits", label
     observed_y = observed.gather(1, labels_value).squeeze(1)
     floor = torch.finfo(clean.dtype).tiny
     ctx[save_as] = (clean_y / observed_y.clamp_min(floor)) * (-torch.log(clean_y.clamp_min(floor)))
+
+
+@block(
+    id="materialize_transition",
+    name="Materialize Transition",
+    category="Transition",
+    description="Materialize an explicit transition artifact for aligned indices without fitting or estimating it.",
+    params={"artifact": {"type": "slot", "default": "transition"}, "indices": {"type": "slot", "default": "indices"}, "dtype": {"type": "value", "default": None}, "device": {"type": "slot", "default": "device"}, "save_as": {"type": "slot", "default": "transition_matrix"}},
+    requires=("artifact",), provides=("save_as",), placement=("batch", "top", "epoch"), stage="setup", ui_group="⑥ 后验与权重",
+)
+def materialize_transition(ctx: ScratchContext, artifact: str = "transition", indices: str = "indices", dtype: Any = None, device: str = "device", save_as: str = "transition_matrix") -> None:
+    torch, _ = _torch()
+    source = ctx[artifact]
+    target_device = ctx.get(device)
+    kwargs = {}
+    if target_device is not None:
+        kwargs["device"] = target_device
+    if dtype is not None and isinstance(dtype, torch.dtype):
+        kwargs["dtype"] = dtype
+    if hasattr(source, "transition_for"):
+        if indices not in ctx:
+            raise ValueError("materialize_transition requires aligned indices for transition artifacts")
+        result = source.transition_for(None, ctx[indices], **kwargs)
+    elif hasattr(source, "matrix") and callable(source.matrix):
+        # Scratch-native trainable/artifact objects expose an explicit matrix
+        # materializer.  Keep this operation limited to materialization; any
+        # fitting or estimation belongs to the upstream estimator block.
+        matrix_kwargs = {}
+        if "dtype" in kwargs:
+            matrix_kwargs["dtype"] = kwargs["dtype"]
+        result = source.matrix(**matrix_kwargs)
+        if target_device is not None:
+            result = result.to(device=target_device)
+    else:
+        result = torch.as_tensor(source, **kwargs)
+        if result.ndim not in (2, 3):
+            raise ValueError("transition must have shape [C,C] or [N,C,C]")
+    ctx[save_as] = result
 
 
 @block(

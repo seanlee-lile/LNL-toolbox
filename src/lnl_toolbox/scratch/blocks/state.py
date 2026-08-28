@@ -17,6 +17,61 @@ def _torch():
 
 
 @block(
+    id="create_indexed_state",
+    name="Create Indexed State",
+    category="State",
+    description="Create a paper-independent state table keyed by stable sample indices.",
+    params={"indices": {"type": "slot", "default": "indices"}, "size": {"type": "int", "default": 0, "min": 0}, "width": {"type": "int", "default": 1, "min": 1}, "initial_value": {"type": "float", "default": 0.0}, "save_as": {"type": "slot", "default": "state"}},
+    provides=("save_as",), placement=("top",), stage="setup", ui_group="④ 状态更新",
+)
+def create_indexed_state(ctx: ScratchContext, indices: str = "indices", size: int = 0,
+                         width: int = 1, initial_value: float = 0.0,
+                         save_as: str = "state") -> None:
+    torch = _torch()
+    if indices in ctx:
+        values = torch.as_tensor(ctx[indices]).reshape(-1)
+        if values.numel():
+            size = max(int(size), int(values.max().item()) + 1)
+    ctx[save_as] = {"values": torch.full((int(size), int(width)), float(initial_value)),
+                    "seen": torch.zeros(int(size), dtype=torch.bool)}
+
+
+@block(
+    id="indexed_read",
+    name="Indexed Read",
+    category="State",
+    description="Read state rows by stable local/sample indices.",
+    params={"state": {"type": "slot", "default": "state"}, "indices": {"type": "slot", "default": "indices"}, "save_as": {"type": "slot", "default": "state_values"}},
+    requires=("state", "indices"), provides=("save_as",), placement=("batch",), stage="train", ui_group="④ 状态更新",
+)
+def indexed_read(ctx: ScratchContext, state: str = "state", indices: str = "indices", save_as: str = "state_values") -> None:
+    table = ctx[state]
+    rows = _torch().as_tensor(ctx[indices], dtype=_torch().long).reshape(-1)
+    if rows.numel() and (int(rows.min()) < 0 or int(rows.max()) >= int(table["values"].shape[0])):
+        raise IndexError("indexed_read index out of range")
+    ctx[save_as] = table["values"][rows].clone()
+
+
+@block(
+    id="indexed_write",
+    name="Indexed Write",
+    category="State",
+    description="Write values into a generic indexed state and publish the same mutated state.",
+    params={"state": {"type": "slot", "default": "state"}, "indices": {"type": "slot", "default": "indices"}, "values": {"type": "slot", "default": "values"}, "save_as": {"type": "slot", "default": "state"}},
+    requires=("state", "indices", "values"), provides=("save_as",), placement=("batch",), stage="train", ui_group="④ 状态更新",
+)
+def indexed_write(ctx: ScratchContext, state: str = "state", indices: str = "indices", values: str = "values", save_as: str = "state") -> None:
+    table = ctx[state]
+    rows = _torch().as_tensor(ctx[indices], dtype=_torch().long).reshape(-1).cpu()
+    incoming = ctx[values].detach().reshape(rows.numel(), -1).cpu()
+    if incoming.shape[1] != table["values"].shape[1]:
+        raise ValueError("indexed_write value width does not match state")
+    table["values"][rows] = incoming
+    table["seen"][rows] = True
+    ctx[save_as] = table
+
+
+@block(
     id="create_indexed_history",
     name="Create Indexed History",
     category="State",
@@ -60,14 +115,15 @@ def indexed_history(ctx: ScratchContext, state: str = "indexed_history", indices
     name="Indexed EMA",
     category="State",
     description="Update persistent values by stable index with an epoch-aware exponential moving average.",
-    params={"state": {"type": "slot", "default": "indexed_history"}, "indices": {"type": "slot", "default": "indices"}, "values": {"type": "slot", "default": "values"}, "beta": {"type": "float", "default": 0.9, "min": 0.0, "max": 1.0}, "epoch": {"type": "slot", "default": "epoch"}, "save_as": {"type": "slot", "default": "history_values"}},
+    params={"state": {"type": "slot", "default": "indexed_history"}, "indices": {"type": "slot", "default": "indices"}, "values": {"type": "slot", "default": "values"}, "beta": {"type": "float", "default": 0.9, "min": 0.0, "max": 1.0}, "momentum": {"type": "value", "default": None}, "epoch": {"type": "slot", "default": "epoch"}, "save_as": {"type": "slot", "default": "history_values"}},
     requires=("state", "indices", "values"), provides=("save_as",), placement=("batch",), stage="train", ui_group="④ 状态更新",
 )
-def indexed_ema(ctx: ScratchContext, state: str = "indexed_history", indices: str = "indices", values: str = "values", beta: float = 0.9, epoch: str = "epoch", save_as: str = "history_values") -> None:
+def indexed_ema(ctx: ScratchContext, state: str = "indexed_history", indices: str = "indices", values: str = "values", beta: float = 0.9, momentum: float | None = None, epoch: str = "epoch", save_as: str = "history_values") -> None:
     state_value = ctx[state]
     rows = ctx[indices].detach().long().cpu()
     incoming = ctx[values].detach().float().cpu()
     current_epoch = int(ctx.get(epoch, 0))
+    beta = float(beta if momentum is None else momentum)
     if incoming.ndim == 1:
         incoming = incoming[:, None]
     if int(state_value["values"].shape[1]) != int(incoming.shape[1]):

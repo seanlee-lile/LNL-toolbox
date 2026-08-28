@@ -11,6 +11,45 @@ def _torch():
     return torch
 
 
+class _ScratchDSSState:
+    """Small Scratch-native indexed DSS state (no legacy selector object)."""
+    def __init__(self, num_samples, num_classes, total_epochs, warmup_epochs=30, alpha=0.1, prior_decay=0.99):
+        torch = _torch()
+        self.num_samples = int(num_samples); self.num_classes = int(num_classes)
+        self.total_epochs = int(total_epochs); self.warmup_epochs = int(warmup_epochs)
+        self.alpha = float(alpha); self.prior_decay = float(prior_decay); self.current_epoch = -1
+        self.labels = torch.full((self.num_samples,), -1, dtype=torch.long)
+        self.current_prediction = torch.full((self.num_samples, self.num_classes), 1.0 / self.num_classes)
+        self.marginal = torch.full((self.num_classes,), 1.0 / self.num_classes)
+        self.selected = torch.ones(self.num_samples, dtype=torch.bool)
+        self.excluded = torch.zeros((self.num_samples, self.num_classes), dtype=torch.bool)
+
+    def on_cycle_start(self, epoch):
+        if int(epoch) < 0 or int(epoch) >= self.total_epochs:
+            raise ValueError("DSS epoch is outside total_epochs")
+        self.current_epoch = int(epoch)
+
+    def on_cycle_end(self, epoch):
+        if int(epoch) != self.current_epoch: raise ValueError("DSS cycle end does not match current epoch")
+        if int(epoch) >= self.warmup_epochs:
+            known = self.labels >= 0
+            self.selected[known] = self.current_prediction[known].argmax(1).eq(self.labels[known])
+
+    def observe(self, indices, labels, probabilities, epoch):
+        torch = _torch(); rows = torch.as_tensor(indices).long().cpu(); targets = torch.as_tensor(labels).long().cpu()
+        values = torch.as_tensor(probabilities).detach().float().cpu()
+        if values.shape != (rows.numel(), self.num_classes): raise ValueError("DSS probabilities shape mismatch")
+        self.marginal.mul_(self.prior_decay).add_(values.mean(0), alpha=1.0 - self.prior_decay)
+        values = values / (self.num_classes * self.marginal).clamp_min(torch.finfo(values.dtype).tiny)
+        self.current_prediction[rows] = values / values.sum(1, keepdim=True).clamp_min(torch.finfo(values.dtype).tiny)
+        self.labels[rows] = targets
+
+    def masks(self, indices, labels):
+        rows = _torch().as_tensor(indices).long().cpu(); excluded = self.excluded[rows].clone()
+        excluded[_torch().arange(rows.numel()), _torch().as_tensor(labels).long().cpu()] = False
+        return self.selected[rows].clone(), excluded
+
+
 @block(
     id="create_dss_state",
     name="DSS: Create Indexed State",
@@ -21,8 +60,7 @@ def _torch():
     formula="S={history, marginal, trend, selected, excluded}", formula_ref="DSS indexed selector lifecycle", paper="Debiased Sample Selection",
 )
 def create_dss_state(ctx: ScratchContext, num_samples: int = 50000, num_classes: int = 10, total_epochs: int = 150, warmup_epochs: int = 30, alpha: float = 0.1, prior_decay: float = 0.99, save_as: str = "dss_state") -> None:
-    from lnl_toolbox.selectors.dss import DSSSelectorState
-    ctx[save_as] = DSSSelectorState(int(num_samples), int(num_classes), int(total_epochs), warmup_epochs=int(warmup_epochs), alpha=float(alpha), prior_decay=float(prior_decay), mda=True, ccs=True)
+    ctx[save_as] = _ScratchDSSState(int(num_samples), int(num_classes), int(total_epochs), warmup_epochs=int(warmup_epochs), alpha=float(alpha), prior_decay=float(prior_decay))
 
 
 @block(

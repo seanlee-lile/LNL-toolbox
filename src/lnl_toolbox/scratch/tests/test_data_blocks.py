@@ -63,7 +63,7 @@ class DataBlockExecutionTest(unittest.TestCase):
             "load_dataset": ((), ("save_as", "data_spec", "train_source", "validation_source", "test_source", "num_classes")),
             "create_dataset_split": (("train_source",), ("train_split", "validation_split")),
             "apply_noise": (("train_split",), ("noisy_train_split", "clean_train_split", "noise_state", "transition")),
-            "build_noise_manifest": (("noise_state",), ("noise_manifest",)),
+            "build_noise_manifest": (("noise_state", "noisy_train_split"), ("noise_manifest",)),
             "configure_preprocessing": (("train_split",), ("preprocessing_transform",)),
             "configure_views": (("train_split", "preprocessing_transform"), ("view_transforms",)),
             "assign_data_roles": (("train_split", "clean_train_split", "noisy_train_split", "validation_split", "test_source", "preprocessing_transform", "view_transforms"), ("role_datasets",)),
@@ -196,14 +196,16 @@ class DataBlockExecutionTest(unittest.TestCase):
         self.assertIn("strong", row["views"])
         self.assertEqual(tuple(row["inputs"].shape), (3, 4, 4))
 
-    def test_convenience_blocks_are_retained_only_for_existing_distinct_references(self) -> None:
+    def test_noncanonical_data_convenience_blocks_are_removed(self) -> None:
         root = Path(__file__).parents[1]
         data_source = (root / "blocks" / "data.py").read_text(encoding="utf-8")
         examples = list((root / "recipes" / "examples").glob("*.yaml"))
         example_text = "\n".join(path.read_text(encoding="utf-8") for path in examples)
-        for block_id in ("select_dataset", "configure_noise", "create_loader", "load_synthetic"):
-            self.assertIn(block_id, data_source)
-            self.assertIn(block_id, example_text)
+        for block_id in ("select_" + "dataset", "configure_" + "noise", "create_" + "loader"):
+            self.assertNotIn(f'id="{block_id}"', data_source)
+            self.assertNotIn(f"block: {block_id}", example_text)
+        self.assertIn("load_synthetic", data_source)
+        self.assertNotIn("create_" + "loader", example_text)
 
 
 if __name__ == "__main__":

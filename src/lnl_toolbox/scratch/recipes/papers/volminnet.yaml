@@ -73,8 +73,8 @@ steps:
             params: {optimizer: transition_optimizer}
           - block: forward
             params: {model: model, input: images, save_as: logits}
-          - block: volmin_transition_matrix
-            params: {transition: transition, logits: logits, save_as: transition_matrix}
+          - block: materialize_transition
+            params: {artifact: transition, save_as: transition_matrix}
           - block: softmax
             params: {logits: logits, save_as: probabilities}
           - block: apply_transition

@@ -31,8 +31,11 @@ steps:
       save_as: pcse_source
   - block: create_volmin_transition
     params: {num_classes: 10, device: device, save_as: transition}
-  - block: create_pcse_joint_optimizer
-    params: {model: model, transition: transition, model_lr: 0.0002, transition_lr: 0.001, weight_decay: 0.0001, save_as: transition_optimizer}
+  - block: create_parameter_group_optimizer
+    params:
+      optimizer_spec: {name: adamw, weight_decay: 0.0001}
+      groups: [{source: model, lr: 0.0002}, {source: transition, lr: 0.001}]
+      save_as: transition_optimizer
   - block: epoch_loop
     params: {epochs: 1}
     steps:
@@ -47,8 +50,8 @@ steps:
           - {block: move_batch_to_device}
           - block: forward_feature
             params: {model: model, input: images, logits_as: logits, features_as: features}
-          - block: volmin_transition_matrix
-            params: {transition: transition, logits: logits, save_as: transition_matrix}
+          - block: materialize_transition
+            params: {artifact: transition, save_as: transition_matrix}
           - block: softmax
             params: {logits: logits, save_as: probabilities}
           - block: apply_transition
@@ -67,8 +70,8 @@ steps:
           - {block: optimizer_step, params: {optimizer: transition_optimizer}}
       - block: snapshot_pcse_features
         params: {model: model, prepared_data: prepared_data, device: device, save_as: pcse_snapshots}
-      - block: pcse_materialize_transition
-        params: {transition: transition, save_as: transition_matrix}
+      - block: materialize_transition
+        params: {artifact: transition, save_as: transition_matrix}
       - block: pcse_recover_layer_statistics
         params: {snapshots: pcse_snapshots, layer_names: [layer3, layer4], transition: transition_matrix, save_as: pcse_statistics}
       - block: pcse_fit_gda

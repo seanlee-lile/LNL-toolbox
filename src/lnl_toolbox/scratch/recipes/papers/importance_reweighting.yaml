@@ -18,13 +18,15 @@ steps:
   - {block: configure_loader, params: {batch_size: 128, num_workers: 0}}
   - {block: build_prepared_data}
   - {block: build_loaders}
+  - block: create_model
+    params: {model: linear, input_dim: 2, num_classes: 2, device: device}
+  - block: snapshot_model_outputs
+    params: {model: model, loader: train_loader, features_as: posterior_features, posterior_as: posterior_probabilities, targets_as: posterior_targets, indices_as: posterior_indices}
   - block: estimate_noisy_posterior
     params:
       backend: kde
       bandwidth: 0.15
   - block: estimate_raw_min_noise_rates
-  - block: create_model
-    params: {model: linear, input_dim: 2, num_classes: 2, device: device}
   - block: create_optimizer
     params:
       optimizer: sgd

@@ -63,6 +63,48 @@ def create_optimizer(
 
 
 @block(
+    id="create_parameter_group_optimizer",
+    name="Create Parameter-group Optimizer",
+    category="Optimization",
+    description="Construct one optimizer from explicit parameter/module slots and group specifications.",
+    params={"optimizer_spec": {"type": "value", "default": {"name": "adam"}},
+            "groups": {"type": "value", "default": []},
+            "save_as": {"type": "slot", "default": "optimizer"}},
+    requires=(), provides=("save_as",), placement=("top",), stage="setup", ui_group="② 初始化",
+)
+def create_parameter_group_optimizer(ctx: ScratchContext, optimizer_spec: Any | None = None,
+                                     groups: Any = (), save_as: str = "optimizer") -> None:
+    """Build an optimizer without creating or mutating the referenced modules.
+
+    Each group is a serialisable mapping with either ``source`` (a Context
+    slot containing a module/parameter iterable) or ``parameters`` (a slot
+    containing parameters), plus optimizer options such as ``lr``.
+    """
+    torch = _torch()
+    spec = dict(optimizer_spec or {}) if isinstance(optimizer_spec, dict) else {"name": str(optimizer_spec or "adam")}
+    name = str(spec.pop("name", spec.pop("optimizer", "adam"))).lower()
+    parameter_groups = []
+    for raw in groups or ():
+        if not isinstance(raw, dict):
+            raise TypeError("optimizer groups must be mappings")
+        group = dict(raw)
+        source = group.pop("source", group.pop("parameters", None))
+        if source is None:
+            raise ValueError("each optimizer group requires a source slot")
+        value = ctx[source] if isinstance(source, str) else source
+        parameters = value.parameters() if hasattr(value, "parameters") else value
+        group["params"] = parameters
+        parameter_groups.append(group)
+    if not parameter_groups:
+        raise ValueError("create_parameter_group_optimizer requires at least one group")
+    optimizer_cls = {"adam": torch.optim.Adam, "adamw": torch.optim.AdamW,
+                     "sgd": torch.optim.SGD}.get(name)
+    if optimizer_cls is None:
+        raise ValueError(f"unknown Scratch optimizer `{name}`")
+    ctx[save_as] = optimizer_cls(parameter_groups, **spec)
+
+
+@block(
     id="set_optimizer_learning_rate",
     name="Set Optimizer Learning Rate",
     category="Optimization",
@@ -87,28 +129,49 @@ def set_optimizer_learning_rate(
 
 
 @block(
-    id="create_alpha_scaled_scheduler",
-    name="Create Alpha-scaled Scheduler",
+    id="create_scaled_scheduler",
+    name="Create Scaled Scheduler",
     category="Optimization",
-    description="Create the CAL scheduler whose learning rate is divided by 1 + the scheduled confidence weight.",
+    description="Create a generic milestone scheduler whose learning rate can be scaled by an explicit value at step time.",
     params={"optimizer": {"type": "slot", "default": "optimizer"}, "milestones": {"type": "value", "default": [60]}, "gamma": {"type": "float", "default": 0.1, "min": 0.0}, "save_as": {"type": "slot", "default": "scheduler"}},
     requires=("optimizer",), provides=("save_as",), placement=("top",), stage="setup", ui_group="② 初始化", beginner_visible=False,
 )
-def create_alpha_scaled_scheduler(ctx: ScratchContext, optimizer: str = "optimizer", milestones: Any = (60,), gamma: float = 0.1, save_as: str = "scheduler") -> None:
-    from lnl_toolbox.training.experiment import build_alpha_scaled_scheduler
-    ctx[save_as] = build_alpha_scaled_scheduler(ctx[optimizer], {"name": "multistep", "milestones": list(milestones), "gamma": float(gamma)})
+def create_scaled_scheduler(ctx: ScratchContext, optimizer: str = "optimizer", milestones: Any = (60,), gamma: float = 0.1, save_as: str = "scheduler") -> None:
+    torch = _torch()
+    # Keep this block generic: alpha is supplied at step time and only scales
+    # the current learning rate.  No legacy experiment helper is imported.
+    class _ScaledScheduler:
+        def __init__(self, value):
+            self.optimizer = value
+            self.base = torch.optim.lr_scheduler.MultiStepLR(
+                value, milestones=list(milestones), gamma=float(gamma))
+            self.last_epoch = -1
+
+        def step(self, confidence_weight: float = 0.0):
+            self.base.step()
+            self.last_epoch = self.base.last_epoch
+            scale = 1.0 / (1.0 + max(float(confidence_weight), 0.0))
+            for group, base_lr in zip(self.optimizer.param_groups, self.base.get_last_lr()):
+                group["lr"] = base_lr * scale
+
+        def state_dict(self):
+            return {"base": self.base.state_dict()}
+
+        def load_state_dict(self, state):
+            self.base.load_state_dict(state["base"])
+    ctx[save_as] = _ScaledScheduler(ctx[optimizer])
 
 
 @block(
-    id="alpha_scaled_scheduler_step",
-    name="Alpha-scaled Scheduler Step",
+    id="scaled_scheduler_step",
+    name="Scaled Scheduler Step",
     category="Optimization",
-    description="Advance a CAL alpha-scaled scheduler using the next epoch's confidence weight.",
-    params={"scheduler": {"type": "slot", "default": "scheduler"}, "confidence_weight": {"type": "slot", "default": "confidence_weight"}},
+    description="Advance a scaled scheduler using an explicit nonnegative scaling value.",
+    params={"scheduler": {"type": "slot", "default": "scheduler"}, "scale_value": {"type": "slot", "default": "confidence_weight"}},
     requires=("scheduler", "confidence_weight"), placement=("epoch",), stage="train", ui_group="⑩ 论文专用", beginner_visible=False,
 )
-def alpha_scaled_scheduler_step(ctx: ScratchContext, scheduler: str = "scheduler", confidence_weight: str = "confidence_weight") -> None:
-    ctx[scheduler].step(float(ctx[confidence_weight]))
+def scaled_scheduler_step(ctx: ScratchContext, scheduler: str = "scheduler", scale_value: str = "confidence_weight") -> None:
+    ctx[scheduler].step(float(ctx[scale_value]))
 
 
 @block(
@@ -151,42 +214,6 @@ def create_joint_optimizer(
     else:
         raise ValueError(f"unknown Scratch joint optimizer `{optimizer}`")
     ctx[save_as] = value
-
-
-@block(
-    id="create_pcse_joint_optimizer",
-    name="Create PCSE Joint AdamW",
-    category="Optimization",
-    description="Create the PCSE VolMin transition-stage AdamW with separate classifier and transition learning rates.",
-    params={
-        "model": {"type": "slot", "default": "model"},
-        "transition": {"type": "slot", "default": "transition"},
-        "model_lr": {"type": "float", "default": 0.0002, "min": 0.0},
-        "transition_lr": {"type": "float", "default": 0.001, "min": 0.0},
-        "weight_decay": {"type": "float", "default": 0.0001, "min": 0.0},
-        "save_as": {"type": "slot", "default": "optimizer"},
-    },
-    requires=("model", "transition"),
-    provides=("save_as",),
-    placement=("top",), stage="setup", ui_group="② 初始化",
-)
-def create_pcse_joint_optimizer(
-    ctx: ScratchContext,
-    model: str = "model",
-    transition: str = "transition",
-    model_lr: float = 0.0002,
-    transition_lr: float = 0.001,
-    weight_decay: float = 0.0001,
-    save_as: str = "optimizer",
-) -> None:
-    torch = _torch()
-    ctx[save_as] = torch.optim.AdamW(
-        [
-            {"params": ctx[model].parameters(), "lr": float(model_lr)},
-            {"params": ctx[transition].parameters(), "lr": float(transition_lr)},
-        ],
-        weight_decay=float(weight_decay),
-    )
 
 
 class _LinearDecayBetaScheduler:

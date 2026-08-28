@@ -185,6 +185,25 @@ def threshold_mask(ctx: ScratchContext, values: str = "scores", threshold: float
 
 
 @block(
+    id="top_k_mask",
+    name="Top-k Class Mask",
+    category="Sample Selection",
+    description="Select the top-k classes in each row and return only a boolean mask.",
+    params={"scores": {"type": "slot", "default": "logits"}, "k": {"type": "int", "default": 1, "min": 0}, "save_as": {"type": "slot", "default": "top_k_mask"}},
+    requires=("scores",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑥ 样本选择",
+)
+def top_k_mask(ctx: ScratchContext, scores: str = "logits", k: int = 1, save_as: str = "top_k_mask") -> None:
+    values = ctx[scores]
+    if values.ndim != 2:
+        raise ValueError("top_k_mask expects a [N,C] score matrix")
+    count = min(max(int(k), 0), int(values.shape[1]))
+    mask = _torch().zeros_like(values, dtype=_torch().bool)
+    if count:
+        mask.scatter_(1, _torch().topk(values, count, dim=1).indices, True)
+    ctx[save_as] = mask
+
+
+@block(
     id="mean_by_indices",
     name="Mean By Indices",
     category="Sample Selection",

@@ -53,5 +53,4 @@ steps:
           - {block: mc_ldce_objective, params: {model: model, logits: logits, features: features, statistic: mc_ldce_statistic, save_as: loss}}
           - {block: backward}
           - {block: optimizer_step}
-      - {block: evaluate_accuracy, params: {model: model, loader: validation_loader, save_as: validation_accuracy}}
   - {block: evaluate_accuracy, params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}}

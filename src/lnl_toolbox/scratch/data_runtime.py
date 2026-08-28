@@ -401,9 +401,16 @@ def _fixture_source_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
         "name": "synthetic",
         "train_size": 8,
         "test_size": 4,
-        "features": 4,
+        "features": 2 if original_name == "synthetic_binary_2d" else 4,
         "classes": fixture_classes,
     })
+    # Keep at least one learning sample when a formal recipe requests a
+    # trusted subset larger than the bounded fixture.  This only affects
+    # ``runtime_limits.fixture`` substitution; formal data sizes remain
+    # untouched.
+    if "num_clean" in fixture_data or "trusted_size" in fixture_data:
+        key = "num_clean" if "num_clean" in fixture_data else "trusted_size"
+        fixture_data[key] = min(int(fixture_data.get(key, 0)), 7)
     if original_name in {"cifar10", "cifar100"}:
         fixture_data["image_shape"] = (3, 32, 32)
     elif original_name in {"mnist", "fashion_mnist"}:

@@ -25,6 +25,16 @@ async function api(path, options = {}) {
 }
 
 function blockInfo(id) { return state.blocks.find((item) => item.id === id); }
+function stepsWithInfo() {
+  return flatRecipeSteps().map((step) => ({ step, info: blockInfo(step.block) }));
+}
+function stepProviding(slot) {
+  return stepsWithInfo().find(({ step, info }) =>
+    (info?.provides || []).some((name) => slotValue(info, step, name) === slot));
+}
+function isDatasetSourceInfo(info) {
+  return Boolean(info && (info.provides || []).some((name) => name === 'train_source'));
+}
 function makeUiId() {
   if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') return globalThis.crypto.randomUUID();
   uiIdCounter += 1;
@@ -166,13 +176,6 @@ function availabilityReason(info, target, movingId = null) {
   if (info.id === 'epoch_loop' && target.parentId !== '__root__') return 'Epoch Loop 只能放在根层';
   if (info.id === 'batch_loop' && getPlacementContext(target.parentId) !== 'epoch') return 'Batch Loop 只能放入 Epoch Loop';
   if ((info.id === 'epoch_loop' || info.id === 'batch_loop') && loopAlreadyExists(info.id, target.parentId, movingId)) return `${info.name} 当前只允许一个`;
-  if (info.id === 'configure_noise') {
-    const selectedDataset = flatRecipeSteps().find((step) => step.block === 'select_dataset');
-    const alias = String(selectedDataset?.params?.dataset ?? '').trim();
-    const facts = alias === 'synthetic' ? syntheticFacts() : state.datasetFacts[alias];
-    if (!alias || !facts || facts.status !== 'ready') return '请先选择并成功识别数据集。';
-    if (!(facts.noise_methods || []).length) return '当前数据集没有可用的标签噪声实现。';
-  }
   if (movingId && target.parentId !== '__root__' && containsStep(findStepById(movingId), target.parentId)) return '不能把循环拖入自己的子层';
   const available = availableKeysBefore(target);
   const missing = (info.requires || [])
@@ -223,14 +226,14 @@ function markDirty() {
 }
 
 function recipeDataReady() {
-  const dataset = flatRecipeSteps().find((step) => step.block === 'select_dataset');
+  const dataset = stepsWithInfo().find(({ info }) => isDatasetSourceInfo(info));
   if (dataset) {
-    const alias = String(dataset.params?.dataset ?? '').trim();
+    const alias = String(dataset.step.params?.dataset ?? dataset.step.params?.name ?? '').trim();
     if (!alias) return false;
     if (alias === 'synthetic') return true;
     return Boolean(state.datasets.find((item) => item.alias === alias && item.status === 'ready'));
   }
-  return flatRecipeSteps().some((step) => step.block.startsWith('load_') || step.block.startsWith('prepare_'));
+  return false;
 }
 
 function updateRunState() {
@@ -263,12 +266,6 @@ function controlKind(name, schema) {
 function optionValues(name, schema, step) {
   const kind = controlKind(name, schema);
   if (kind === 'enum') {
-    if (step.block === 'configure_noise' && name === 'method') {
-      const dataset = flatRecipeSteps().find((item) => item.block === 'select_dataset');
-      const alias = String(dataset?.params?.dataset ?? '').trim();
-      const facts = alias === 'synthetic' ? syntheticFacts() : state.datasetFacts[alias];
-      return facts?.noise_methods || ['none'];
-    }
     return schema.options || [];
   }
   if (kind === 'model') return [
@@ -333,7 +330,7 @@ function renderParamControl(name, schema, step) {
     else step.params[name] = input.value;
     markDirty();
     renderPalette();
-    if (step.block === 'select_dataset' && (name === 'source_mode' || name === 'dataset')) {
+    if (isDatasetSourceInfo(blockInfo(step.block)) && (name === 'dataset' || name === 'root' || name === 'path')) {
       renderInspector();
       if (name === 'dataset') loadDatasetFacts(step.params[name]);
     }
@@ -411,7 +408,7 @@ function renderDatasetFacts(step) {
 function renderNoiseFacts(step) {
   const section = document.createElement('div'); section.className = 'inspector-section';
   const heading = document.createElement('h3'); heading.textContent = '噪声数据流'; section.appendChild(heading);
-  const dataset = flatRecipeSteps().find((item) => item.block === 'select_dataset');
+  const dataset = stepsWithInfo().find(({ info }) => isDatasetSourceInfo(info))?.step;
   const alias = String(dataset?.params?.dataset ?? '').trim();
   const facts = alias === 'synthetic' ? syntheticFacts() : state.datasetFacts[alias];
   const method = String(step.params?.method || 'none');
@@ -580,18 +577,20 @@ function flatRecipeSteps(steps = state.recipe.steps) {
 }
 
 function getNextSuggestion() {
-  const ids = new Set(flatRecipeSteps().map((step) => step.block));
-  const hasDataset = [...ids].some((id) => id.startsWith('load_') || id === 'select_dataset');
-  const datasetStep = flatRecipeSteps().find((step) => step.block === 'select_dataset');
-  if (!hasDataset || (datasetStep && !String(datasetStep.params?.dataset ?? '').trim())) return '下一步：选择数据集';
-  if (!ids.has('configure_noise') && !ids.has('apply_symmetric_noise')) return '下一步：决定是否添加标签噪声';
-  if (!ids.has('create_model')) return '下一步：确认模型';
-  if (!ids.has('create_optimizer')) return '下一步：确认优化器';
-  if (!ids.has('epoch_loop') || !ids.has('batch_loop')) return '下一步：建立 Epoch / Batch Loop';
-  if (!ids.has('forward') && !ids.has('forward_feature')) return '下一步：进入 Batch Loop 添加 Forward';
-  if (!ids.has('mean_loss')) return '下一步：添加概率/损失公式';
-  if (!ids.has('backward')) return '下一步：添加 Backward';
-  if (!ids.has('optimizer_step')) return '下一步：添加 Optimizer Step';
+  const entries = stepsWithInfo();
+  const hasOutput = (slot) => entries.some(({ step, info }) =>
+    (info?.provides || []).some((name) => slotValue(info, step, name) === slot));
+  const hasId = (id) => entries.some(({ info }) => info?.id === id);
+  const dataset = entries.find(({ info }) => isDatasetSourceInfo(info))?.step;
+  if (!dataset || !String(dataset.params?.dataset ?? '').trim()) return '下一步：选择数据集';
+  if (!hasOutput('noise_state')) return '下一步：决定是否添加标签噪声';
+  if (!hasId('create_model')) return '下一步：确认模型';
+  if (!hasId('create_optimizer') && !hasId('create_parameter_group_optimizer')) return '下一步：确认优化器';
+  if (!hasId('epoch_loop') || !hasId('batch_loop')) return '下一步：建立 Epoch / Batch Loop';
+  if (!hasId('forward') && !hasId('forward_feature')) return '下一步：进入 Batch Loop 添加 Forward';
+  if (!hasId('mean_loss')) return '下一步：添加概率/损失公式';
+  if (!hasId('backward')) return '下一步：添加 Backward';
+  if (!hasId('optimizer_step')) return '下一步：添加 Optimizer Step';
   return '下一步：检查 recipe，然后运行 smoke';
 }
 
@@ -735,15 +734,15 @@ function renderInspector() {
 
   const params = document.createElement('div');
   info.params && Object.entries(info.params).forEach(([name, schema]) => {
-    if (step.block === 'select_dataset' && name === 'path' && step.params?.source_mode !== 'custom_path') return;
+    if (isDatasetSourceInfo(info) && name === 'path' && step.params?.source_mode !== 'custom_path') return;
     const wrap = document.createElement('div'); wrap.className = 'param';
     const label = document.createElement('label'); label.textContent = name; wrap.appendChild(label);
     wrap.appendChild(renderParamControl(name, schema, step));
     params.appendChild(wrap);
   });
   addSection('4. 参数', params);
-  if (step.block === 'select_dataset') target.appendChild(renderDatasetFacts(step));
-  if (step.block === 'configure_noise') target.appendChild(renderNoiseFacts(step));
+  if (isDatasetSourceInfo(info)) target.appendChild(renderDatasetFacts(step));
+  if ((info.provides || []).some((name) => name === 'noise_state' || name === 'noisy_train_split')) target.appendChild(renderNoiseFacts(step));
 }
 
 function draw() {
@@ -874,6 +873,6 @@ api('/api/blocks').then((blocks) => {
   ensureUiIds(state.recipe.steps);
   state.activeInsertionTarget = defaultInsertionTarget();
   draw();
-  const selectedDataset = flatRecipeSteps().find((step) => step.block === 'select_dataset');
+  const selectedDataset = stepsWithInfo().find(({ info }) => isDatasetSourceInfo(info))?.step;
   if (selectedDataset?.params?.dataset) loadDatasetFacts(selectedDataset.params.dataset);
 }).catch((error) => { showMessage(error.message, 'error'); });

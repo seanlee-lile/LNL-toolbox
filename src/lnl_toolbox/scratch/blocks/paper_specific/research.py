@@ -11,6 +11,7 @@ from typing import Any
 
 from ...context import ScratchContext
 from ...registry import block
+from ...data_runtime import collate_scratch_batch
 
 
 def _torch():
@@ -30,6 +31,44 @@ def _row_normalize(value):
 def _ce(logits, labels):
     _, F = _torch()
     return F.cross_entropy(logits, labels.long(), reduction="none")
+
+
+def _feature_output(network, inputs):
+    """Extract the feature tensor from either Scratch model output form."""
+    output = network.forward_with_features(inputs)
+    if hasattr(output, "features"):
+        return output.features
+    if isinstance(output, (tuple, list)):
+        return output[-1] if len(output) > 1 else output[0]
+    return output
+
+
+class _ScratchVolMinTransition:
+    """Trainable row-stochastic transition parameterization owned by Scratch."""
+    def __init__(self, classes: int, device: Any = "cpu"):
+        import torch
+        self._parameter = torch.nn.Parameter(torch.zeros((int(classes), int(classes)), device=device))
+        self.num_classes = int(classes)
+    def parameters(self):
+        return [self._parameter]
+    def to(self, device):
+        self._parameter.data = self._parameter.data.to(device); return self
+    def eval(self):
+        return self
+    def train(self, mode: bool = True):
+        return self
+    def state_dict(self):
+        return {"parameter": self._parameter.detach().clone()}
+    def load_state_dict(self, state):
+        if isinstance(state, dict) and "parameter" in state:
+            self._parameter.data.copy_(state["parameter"].to(self._parameter.device, self._parameter.dtype))
+        return self
+    def matrix(self, dtype=None):
+        import torch
+        values = torch.sigmoid(self._parameter)
+        values = values * (1.0 - torch.eye(self.num_classes, device=values.device)) + torch.eye(self.num_classes, device=values.device)
+        result = values / values.sum(dim=1, keepdim=True).clamp_min(torch.finfo(values.dtype).tiny)
+        return result.to(dtype=dtype) if dtype is not None else result
 
 
 @block(
@@ -55,7 +94,7 @@ def pdl_instance_transition(ctx: ScratchContext, logits: str = "logits", feature
 
 def _pdl_subset_snapshot(snapshot, indices):
     import numpy as np
-    from lnl_toolbox.noise.estimators import PosteriorSnapshot
+    from ...native_stats import PosteriorSnapshot
     requested = np.asarray(indices, dtype=np.int64)
     sorted_indices = np.sort(requested, kind="stable")
     positions = np.searchsorted(snapshot.global_indices, sorted_indices)
@@ -74,7 +113,7 @@ def _pdl_subset_snapshot(snapshot, indices):
 
 def _pdl_subset_features(snapshot, indices):
     import numpy as np
-    from lnl_toolbox.training.snapshots import FeatureSnapshot
+    from ...native_stats import FeatureSnapshot
     requested = np.asarray(indices, dtype=np.int64)
     sorted_indices = np.sort(requested, kind="stable")
     positions = np.searchsorted(snapshot.global_indices, sorted_indices)
@@ -116,19 +155,25 @@ def snapshot_pdl_features(
 ) -> None:
     import itertools
     import numpy as np
-    from lnl_toolbox.data import DataRole
-    from lnl_toolbox.training.snapshots import collect_feature_snapshot, collect_posterior_snapshot
+    from torch.utils.data import ConcatDataset, DataLoader
+    from ...native_stats import collect_feature_snapshot, collect_posterior_snapshot
 
     prepared = ctx[prepared_data]
     manifest = prepared.manifest
     if manifest is None:
         raise ValueError("PDL snapshot requires a persisted noise manifest")
-    noisy_map = {int(index): int(target) for index, target in zip(manifest.global_indices, manifest.noisy_targets)}
     train_indices = np.asarray(prepared.train_indices, dtype=np.int64)
     validation_indices = np.asarray(prepared.validation_indices, dtype=np.int64)
-    union_indices = np.concatenate([train_indices, validation_indices])
-    union = prepared.dynamic_dataset(union_indices, targets_by_index=noisy_map, training=False)
-    loader = prepared.loader_for_dataset(union, shuffle=False)
+    # The prepared container already owns the role datasets and their
+    # transforms.  Compose those concrete outputs directly; do not re-create
+    # a hidden dynamic dataset from the manifest.
+    role_parts = [prepared.datasets["train"]]
+    if "noisy_validation" in prepared.datasets:
+        role_parts.append(prepared.datasets["noisy_validation"])
+    union = ConcatDataset(role_parts)
+    loader = DataLoader(union, batch_size=int(prepared.loader_config.get("batch_size", 128)),
+                        shuffle=False, drop_last=False, num_workers=0,
+                        collate_fn=collate_scratch_batch)
     runtime_limits = ctx.get("_runtime_limits") or {}
     # A runtime cap may shorten training loops, but the artifact must still cover
     # every train/validation index used by the formal corrected lifecycle.
@@ -137,12 +182,14 @@ def snapshot_pdl_features(
     posterior = collect_posterior_snapshot(
         ctx[model], loader, ctx[device], dataset="cifar10", split="train"
     )
-    loader = prepared.loader_for_dataset(union, shuffle=False)
+    loader = DataLoader(union, batch_size=int(prepared.loader_config.get("batch_size", 128)),
+                        shuffle=False, drop_last=False, num_workers=0,
+                        collate_fn=collate_scratch_batch)
     if runtime_limits.get("snapshot_batches") is not None:
         loader = itertools.islice(loader, int(runtime_limits["snapshot_batches"]))
     features = collect_feature_snapshot(
         ctx[model], loader, ctx[device], dataset="cifar10", split="train",
-        feature_extractor=lambda network, inputs: network.forward_with_features(inputs).features,
+        feature_extractor=_feature_output,
     )
     if not np.array_equal(posterior.global_indices, features.global_indices):
         raise ValueError("PDL feature and posterior snapshots are not index aligned")
@@ -189,8 +236,13 @@ def pdl_fit_part_representation(
     coefficients_as: str = "pdl_coefficients",
     indices_as: str = "pdl_representation_indices",
 ) -> None:
-    from lnl_toolbox.noise.pdl import fit_part_representation
+    from ...native_stats import fit_part_representation
     snapshot = ctx[features]
+    if bool((ctx.get("_runtime_limits") or {}).get("fixture")):
+        # The bounded fixture uses a four-dimensional representation; cap the
+        # formal part count only for this synthetic run so factorisation is
+        # well-defined without changing the formal recipe.
+        num_parts = min(int(num_parts), min(int(snapshot.features.shape[0]), int(snapshot.features.shape[1])))
     seed = None if bool(official_raw) else int(representation_seed)
     parts, coefficients = fit_part_representation(
         snapshot.features, int(num_parts), seed=seed,
@@ -228,7 +280,7 @@ def pdl_select_anchor_candidates(
     train_as: str = "pdl_train_anchor_positions",
     validation_as: str = "pdl_validation_anchor_positions",
 ) -> None:
-    from lnl_toolbox.noise.pdl import select_pdl_anchor_candidates
+    from ...native_stats import select_pdl_anchor_candidates
     levels = list(percentages) if percentages else list(__import__("numpy").linspace(97.0, 99.0, 20))
     ctx[train_as] = select_pdl_anchor_candidates(ctx[train_posterior].noisy_probabilities, levels)
     ctx[validation_as] = select_pdl_anchor_candidates(ctx[validation_posterior].noisy_probabilities, levels)
@@ -276,7 +328,7 @@ def pdl_fit_basis_matrices(
     validation_as: str = "pdl_validation_basis",
 ) -> None:
     import numpy as np
-    from lnl_toolbox.noise.pdl import fit_pdl_basis_matrices_pair
+    from ...native_stats import fit_pdl_basis_matrices_pair
     coeff = ctx[coefficients]
     rep_indices = np.asarray(ctx[representation_indices], dtype=np.int64)
     train = ctx[train_posterior]
@@ -344,7 +396,7 @@ def pdl_estimate_instance_transition(
     validation_as: str = "pdl_validation_transition",
     revision_validation_as: str = "pdl_revision_validation_transition",
 ) -> None:
-    from lnl_toolbox.noise.pdl import PartTransitionEstimator
+    from ...native_stats import PartTransitionEstimator
     estimator = PartTransitionEstimator(int(num_parts), int(num_parts), representation_seed=int(representation_seed))
     train_artifact = estimator.estimate_from_shared_representation(
         ctx[train_features], ctx[train_posterior],
@@ -488,7 +540,7 @@ def create_mentor_provider(
 ) -> None:
     import os
     from pathlib import Path
-    from lnl_toolbox.algorithms.mentornet import MentorNetWeightProvider
+    from ...native_stats import MentorNetWeightProvider
 
     path = Path(str(artifact_path))
     if not path.is_absolute():
@@ -526,7 +578,7 @@ def create_mentor_provider(
                     weights = weights * keep
                 if not bool((weights > 0).any()):
                     weights = torch.ones_like(weights)
-                from lnl_toolbox.treatments.weights import WeightResult
+                from ...native_stats import WeightResult
                 return WeightResult(weights.clamp(0, 1).detach(), {"weight_mean": float(weights.mean().item()), "moving_percentile": float(self.moving)})
         provider = _FixtureMentorProvider()
     else:
@@ -563,7 +615,7 @@ def mentor_compute_weights(
     losses: str = "loss_per_sample",
     save_as: str = "sample_weights",
 ) -> None:
-    from lnl_toolbox.treatments.weights import SupervisedWeightInput
+    from ...native_stats import SupervisedWeightInput
     torch, _ = _torch()
     sample_indices = ctx.get(indices)
     if sample_indices is None:
@@ -579,7 +631,21 @@ def mentor_compute_weights(
 
 @block(id="mentor_update_curriculum_threshold", name="MentorNet: Update Curriculum Threshold", category="State", description="Update the moving loss percentile independently from MentorNet prediction.", params={"provider":{"type":"slot","default":"mentor_provider"},"losses":{"type":"slot","default":"loss_per_sample"},"save_as":{"type":"slot","default":"mentor_threshold"}}, requires=("provider","losses"), provides=("save_as",), placement=("batch",), formula="q_t=decay q_{t-1}+(1-decay) percentile(loss)", formula_ref="MentorNet moving-percentile curriculum", paper="MentorNet")
 def mentor_update_curriculum_threshold(ctx: ScratchContext, provider: str="mentor_provider", losses: str="loss_per_sample", save_as: str="mentor_threshold") -> None:
-    ctx[save_as]=float(ctx[provider].moving.update(ctx[losses].detach()))
+    holder = ctx[provider]
+    moving = getattr(holder, "moving", None)
+    if hasattr(moving, "update"):
+        value = moving.update(ctx[losses].detach())
+    else:
+        torch, _ = _torch()
+        percentile = float(getattr(holder, "percentile", 0.6))
+        decay = float(getattr(holder, "decay", 0.5))
+        current = float(torch.quantile(ctx[losses].detach(), percentile).item())
+        value = current if moving is None else decay * float(moving) + (1.0 - decay) * current
+        try:
+            holder.moving = value
+        except Exception:
+            pass
+    ctx[save_as] = float(value)
 
 
 @block(id="mentor_build_features", name="MentorNet: Build Mentor Features", category="Weighting", description="Expose loss, loss deviation, label and curriculum epoch features consumed by the frozen mentor.", params={"provider":{"type":"slot","default":"mentor_provider"},"losses":{"type":"slot","default":"loss_per_sample"},"labels":{"type":"slot","default":"labels"},"threshold":{"type":"slot","default":"mentor_threshold"},"save_as":{"type":"slot","default":"mentor_features"}}, requires=("provider","losses","labels","threshold"), provides=("save_as",), placement=("batch",), formula="v_i=(loss_i,loss_i-q_t,y_i,e_t)", formula_ref="MentorNet feature construction", paper="MentorNet")
@@ -653,7 +719,7 @@ def snapshot_posterior_model(
     device: str = "device",
     save_as: str = "posterior_snapshot",
 ) -> None:
-    from lnl_toolbox.training.snapshots import collect_posterior_snapshot
+    from ...native_stats import collect_posterior_snapshot
 
     prepared = ctx[prepared_data]
     ctx[save_as] = collect_posterior_snapshot(
@@ -687,7 +753,7 @@ def dual_t_transition_estimation(
     save_as: str = "transition",
 ) -> None:
     import torch
-    from lnl_toolbox.noise.estimators import DualTransitionEstimator
+    from ...native_stats import DualTransitionEstimator
 
     runtime_limits = ctx.get("_runtime_limits")
     artifact = DualTransitionEstimator().estimate(
@@ -729,9 +795,7 @@ def estimate_noisy_posterior(
 ) -> None:
     import torch
 
-    from lnl_toolbox.algorithms.importance_reweighting import (
-        build_binary_noisy_posterior_backend,
-    )
+    from ...native_stats import build_binary_noisy_posterior_backend
 
     feature_values = ctx[features]
     label_values = ctx[labels]
@@ -789,7 +853,7 @@ def estimate_raw_min_noise_rates(
     positive_as: str = "rho_positive",
     negative_as: str = "rho_negative",
 ) -> None:
-    from lnl_toolbox.algorithms.importance_reweighting import PaperRawMinNoiseRateEstimator
+    from ...native_stats import PaperRawMinNoiseRateEstimator
 
     artifact = PaperRawMinNoiseRateEstimator().estimate(ctx[posterior])
     ctx[positive_as] = float(artifact.rho_positive)
@@ -913,11 +977,11 @@ def _cwd_swap_matrix(classes: int, source: int, target: int, *, device, dtype):
     formula="h_i = f_theta(x_i)", formula_ref="CWD feature snapshot before each epoch", paper="Class-Wise Denoising",
 )
 def snapshot_cwd_features(ctx: ScratchContext, model: str = "model", loader: str = "train_eval_loader", device: str = "device", save_as: str = "cwd_snapshot") -> None:
-    from lnl_toolbox.training.snapshots import collect_feature_snapshot
+    from ...native_stats import collect_feature_snapshot
     ctx[save_as] = collect_feature_snapshot(
         ctx[model], ctx[loader], ctx[device], dataset="cifar10_airplane_automobile",
         split=f"train_fold_{int(ctx.get('fold_index', 0))}",
-        feature_extractor=lambda network, inputs: network.forward_with_features(inputs).features,
+        feature_extractor=_feature_output,
     )
 
 
@@ -1087,7 +1151,7 @@ def pcse_statistics(ctx: ScratchContext, features: str = "features", labels: str
 )
 def pcse_recover_clean_priors(ctx: ScratchContext, noisy_priors: str = "noisy_priors", transition: str = "transition", save_as: str = "clean_priors") -> None:
     import numpy as np
-    from lnl_toolbox.algorithms.pcse.statistics import recover_clean_priors
+    from ...native_stats import recover_clean_priors
     ctx[save_as] = recover_clean_priors(np.asarray(ctx[noisy_priors]), np.asarray(ctx[transition])).astype(np.float32)
 
 
@@ -1102,7 +1166,7 @@ def pcse_recover_clean_priors(ctx: ScratchContext, noisy_priors: str = "noisy_pr
 )
 def pcse_coefficient_matrix(ctx: ScratchContext, clean_priors: str = "clean_priors", transition: str = "transition", save_as: str = "pcse_coefficient") -> None:
     import numpy as np
-    from lnl_toolbox.algorithms.pcse.statistics import build_coefficient_matrix
+    from ...native_stats import build_coefficient_matrix
     ctx[save_as] = build_coefficient_matrix(np.asarray(ctx[clean_priors]), np.asarray(ctx[transition])).astype(np.float32)
 
 
@@ -1117,8 +1181,15 @@ def pcse_coefficient_matrix(ctx: ScratchContext, clean_priors: str = "clean_prio
 )
 def pcse_recover_layer_statistics(ctx: ScratchContext, snapshots: str = "pcse_snapshots", layer_names: list[str] | tuple[str, ...] = ("layer3", "layer4"), transition: str = "transition", save_as: str = "pcse_statistics") -> None:
     import numpy as np
-    from lnl_toolbox.algorithms.pcse.statistics import estimate_pcse_statistics
-    result = estimate_pcse_statistics(ctx[snapshots], tuple(layer_names), np.asarray(ctx[transition]))
+    from ...native_stats import estimate_pcse_statistics
+    matrix = ctx[transition]
+    if hasattr(matrix, "detach"):
+        matrix = matrix.detach().cpu().numpy()
+    elif hasattr(matrix, "matrix"):
+        matrix = matrix.matrix()
+        if hasattr(matrix, "detach"):
+            matrix = matrix.detach().cpu().numpy()
+    result = estimate_pcse_statistics(ctx[snapshots], tuple(layer_names), np.asarray(matrix))
     ctx[save_as] = result
 
 
@@ -1132,8 +1203,7 @@ def pcse_recover_layer_statistics(ctx: ScratchContext, snapshots: str = "pcse_sn
     formula="h_l(x)=pool(layer_l(f_theta(x)))", formula_ref="PCSE feature-stage snapshots", paper="Estimating Per-Class Statistics",
 )
 def snapshot_pcse_features(ctx: ScratchContext, model: str = "model", prepared_data: str = "prepared_data", device: str = "device", save_as: str = "pcse_snapshots") -> None:
-    from lnl_toolbox.algorithms.pcse.config import PCSEFeatureLayerConfig
-    from lnl_toolbox.algorithms.pcse.features import collect_pcse_features
+    from ...native_stats import PCSEFeatureLayerConfig, collect_pcse_features
     prepared = ctx[prepared_data]
     loader = prepared.loader("train_eval", shuffle=False)
     result = collect_pcse_features(
@@ -1153,8 +1223,7 @@ def snapshot_pcse_features(ctx: ScratchContext, model: str = "model", prepared_d
     formula="h_l(x_val)=pool(layer_l(f_theta(x_val)))", formula_ref="PCSE noisy-validation feature lifecycle", paper="Estimating Per-Class Statistics",
 )
 def snapshot_pcse_validation_features(ctx: ScratchContext, model: str = "model", prepared_data: str = "prepared_data", device: str = "device", save_as: str = "pcse_validation_snapshots") -> None:
-    from lnl_toolbox.algorithms.pcse.config import PCSEFeatureLayerConfig
-    from lnl_toolbox.algorithms.pcse.features import collect_pcse_features
+    from ...native_stats import PCSEFeatureLayerConfig, collect_pcse_features
     prepared = ctx[prepared_data]
     loader = prepared.loader("noisy_validation", shuffle=False)
     result = collect_pcse_features(ctx[model], loader, ctx[device], dataset="cifar10", split="validation", layers=(PCSEFeatureLayerConfig("layer3", "global_average"), PCSEFeatureLayerConfig("layer4", "global_average")))
@@ -1171,8 +1240,7 @@ def snapshot_pcse_validation_features(ctx: ScratchContext, model: str = "model",
     formula="h_l(x_test)=pool(layer_l(f_theta(x_test)))", formula_ref="PCSE clean-test feature lifecycle", paper="Estimating Per-Class Statistics",
 )
 def snapshot_pcse_test_features(ctx: ScratchContext, model: str = "model", prepared_data: str = "prepared_data", device: str = "device", save_as: str = "pcse_test_snapshots") -> None:
-    from lnl_toolbox.algorithms.pcse.config import PCSEFeatureLayerConfig
-    from lnl_toolbox.algorithms.pcse.features import collect_pcse_features
+    from ...native_stats import PCSEFeatureLayerConfig, collect_pcse_features
     prepared = ctx[prepared_data]
     result = collect_pcse_features(ctx[model], prepared.loader("test", shuffle=False), ctx[device], dataset="cifar10", split="test", layers=(PCSEFeatureLayerConfig("layer3", "global_average"), PCSEFeatureLayerConfig("layer4", "global_average")))
     ctx[save_as] = result.snapshots
@@ -1188,7 +1256,7 @@ def snapshot_pcse_test_features(ctx: ScratchContext, model: str = "model", prepa
     formula="Sigma_shared=sum_c p_c Sigma_c + lambda I; p(c|h)=softmax(delta_c(h))", formula_ref="PCSE GDA stage", paper="Estimating Per-Class Statistics",
 )
 def pcse_fit_gda(ctx: ScratchContext, statistics: str = "pcse_statistics", covariance_ridge: float = 0.1, save_as: str = "pcse_gda") -> None:
-    from lnl_toolbox.algorithms.pcse.gda import fit_gda_layers
+    from ...native_stats import fit_gda_layers
     ctx[save_as] = fit_gda_layers(ctx[statistics], covariance_ridge=float(covariance_ridge))
 
 
@@ -1203,7 +1271,7 @@ def pcse_fit_gda(ctx: ScratchContext, statistics: str = "pcse_statistics", covar
 )
 def pcse_fit_ensemble_weights(ctx: ScratchContext, gda: str = "pcse_gda", snapshots: str = "pcse_validation_snapshots", epochs: int = 5, learning_rate: float = 0.05, save_as: str = "pcse_ensemble_weights") -> None:
     import numpy as np
-    from lnl_toolbox.algorithms.pcse.gda import fit_ensemble_weights
+    from ...native_stats import fit_ensemble_weights
     values = np.stack([layer.posterior(snapshot.features) for layer, snapshot in zip(ctx[gda], ctx[snapshots])], axis=0)
     targets = np.asarray(ctx[snapshots][0].noisy_targets)
     raw, _optimizer, losses = fit_ensemble_weights(values, targets, epochs=int(epochs), learning_rate=float(learning_rate))
@@ -1265,9 +1333,7 @@ def create_fine_state(
     seed: int = 23,
     save_as: str = "fine_state",
 ) -> None:
-    from lnl_toolbox.selectors.sed import SelfAdaptiveClassSelector, SelfAdaptiveConfidenceReweighting
-    from lnl_toolbox.algorithms.fine import FINERegularizer
-    from lnl_toolbox.training.model_ema import ModelEMA
+    from ...native_stats import SelfAdaptiveClassSelector, SelfAdaptiveConfidenceReweighting, FINERegularizer, ModelEMA
     ctx[save_as] = {
         "ema": ModelEMA(ctx[model], float(ema_momentum), update_buffers=False),
         "scs": SelfAdaptiveClassSelector(int(num_classes), float(momentum_scs), quantile=0.8, maximum_threshold=float(maximum_threshold)),
@@ -1446,34 +1512,7 @@ def revise_transition(ctx: ScratchContext, transition: str = "transition", stren
     paper="Provably End-to-end Label-noise Learning without Anchor Points",
 )
 def create_volmin_transition(ctx: ScratchContext, num_classes: int = 10, device: str = "device", save_as: str = "transition") -> None:
-    from lnl_toolbox.algorithms.volminnet.transition import VolMinTransition
-    ctx[save_as] = VolMinTransition(int(num_classes)).to(ctx[device])
-
-
-@block(
-    id="volmin_transition_matrix",
-    name="VolMinNet Transition Matrix",
-    category="Transition",
-    description="Materialize the current trainable VolMinNet transition with the classifier dtype.",
-    params={"transition": {"type": "slot", "default": "transition"}, "logits": {"type": "slot", "default": "logits"}, "save_as": {"type": "slot", "default": "transition_matrix"}},
-    requires=("transition", "logits"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑥ 后验与权重",
-    formula="T=A/row_sum(A)", formula_ref="VolMinNet paper transition normalization", paper="Provably End-to-end Label-noise Learning without Anchor Points",
-)
-def volmin_transition_matrix(ctx: ScratchContext, transition: str = "transition", logits: str = "logits", save_as: str = "transition_matrix") -> None:
-    ctx[save_as] = ctx[transition].matrix(dtype=ctx[logits].dtype)
-
-
-@block(
-    id="pcse_materialize_transition",
-    name="PCSE: Materialize Transition",
-    category="Transition",
-    description="Materialize the learned paper-VolMin transition before PCSE statistic recovery.",
-    params={"transition": {"type": "slot", "default": "transition"}, "save_as": {"type": "slot", "default": "transition_matrix"}},
-    requires=("transition",), provides=("save_as",), placement=("top", "epoch"), stage="setup", ui_group="⑥ 后验与权重",
-    formula="T=A/row_sum(A)", formula_ref="PCSE transition_stage.paper_volmin", paper="Estimating Per-Class Statistics",
-)
-def pcse_materialize_transition(ctx: ScratchContext, transition: str = "transition", save_as: str = "transition_matrix") -> None:
-    ctx[save_as] = ctx[transition].matrix(dtype=__import__("torch").float64)
+    ctx[save_as] = _ScratchVolMinTransition(int(num_classes), ctx[device])
 
 
 @block(
@@ -1543,11 +1582,10 @@ def evaluate_volminnet_noisy(ctx: ScratchContext, model: str = "model", transiti
     formula="q(x)=softmax(f_theta*(x)); snapshot=(q(x), y_tilde, index)", formula_ref="T-Revision Algorithm 1, Stage 1 posterior estimation", paper="Are Anchor Points Really Indispensable in Label-Noise Learning?",
 )
 def snapshot_t_revision_posterior(ctx: ScratchContext, model: str = "model", prepared_data: str = "prepared_data", device: str = "device", save_as: str = "t_revision_posterior") -> None:
-    from lnl_toolbox.data import DataRole
-    from lnl_toolbox.training.snapshots import collect_posterior_snapshot
+    from ...native_stats import collect_posterior_snapshot
 
     prepared = ctx[prepared_data]
-    loader = prepared.loader(DataRole.TRAIN_EVAL, shuffle=False)
+    loader = prepared.loader("train_eval", shuffle=False)
     ctx[save_as] = collect_posterior_snapshot(
         ctx[model], loader, ctx[device], dataset=str(prepared.dataset), split="train"
     )
@@ -1564,7 +1602,7 @@ def snapshot_t_revision_posterior(ctx: ScratchContext, model: str = "model", pre
 )
 def initialize_t_revision_transition(ctx: ScratchContext, posterior: str = "t_revision_posterior", device: str = "device", save_as: str = "transition") -> None:
     import torch
-    from lnl_toolbox.noise.estimators import AnchorTransitionEstimator
+    from ...native_stats import AnchorTransitionEstimator
 
     artifact = AnchorTransitionEstimator().estimate(ctx[posterior])
     ctx[save_as] = torch.tensor(artifact.matrix, dtype=torch.float32, device=ctx[device])
@@ -1581,7 +1619,7 @@ def initialize_t_revision_transition(ctx: ScratchContext, posterior: str = "t_re
     formula="T=T_hat+Delta T; Delta T_0=0", formula_ref="T-Revision paper Section 3.3 transition revision", paper="Are Anchor Points Really Indispensable in Label-Noise Learning?",
 )
 def create_t_revision_revision(ctx: ScratchContext, transition: str = "transition", device: str = "device", save_as: str = "revision") -> None:
-    from lnl_toolbox.algorithms.t_revision.transition import AdditiveTransitionRevision
+    from ...native_stats import AdditiveTransitionRevision
 
     ctx[save_as] = AdditiveTransitionRevision(ctx[transition]).to(ctx[device])
 
@@ -1597,19 +1635,6 @@ def create_t_revision_revision(ctx: ScratchContext, transition: str = "transitio
 )
 def t_revision_revised_transition(ctx: ScratchContext, revision: str = "revision", save_as: str = "transition") -> None:
     ctx[save_as] = ctx[revision]()
-
-
-@block(
-    id="t_revision_noisy_probability",
-    name="T-Revision Noisy Probability",
-    category="Correction",
-    description="Map clean posterior g(x) through the row-vector clean-to-noisy transition.",
-    params={"probabilities": {"type": "slot", "default": "probabilities"}, "transition": {"type": "slot", "default": "transition"}, "save_as": {"type": "slot", "default": "noisy_probabilities"}},
-    requires=("probabilities", "transition"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="p_hat(Y_tilde|x)=g(x)T", formula_ref="T-Revision paper Eq. (3) denominator model T^T g in column notation", paper="Are Anchor Points Really Indispensable in Label-Noise Learning?",
-)
-def t_revision_noisy_probability(ctx: ScratchContext, probabilities: str = "probabilities", transition: str = "transition", save_as: str = "noisy_probabilities") -> None:
-    ctx[save_as] = ctx[probabilities] @ ctx[transition].to(ctx[probabilities])
 
 
 @block(
@@ -1635,19 +1660,6 @@ def t_revision_importance_ratio(ctx: ScratchContext, probabilities: str = "proba
         raise ValueError("T-Revision importance ratios must be finite")
     ctx[save_as] = weights
     ctx[denominators_as] = denominator
-
-
-@block(
-    id="create_t_revision_optimizer",
-    name="Create T-Revision Joint Optimizer",
-    category="Optimization",
-    description="Create the formal Adam optimizer over classifier parameters and additive transition slack.",
-    params={"model": {"type": "slot", "default": "model"}, "revision": {"type": "slot", "default": "revision"}, "lr": {"type": "float", "default": 5.0e-7, "min": 0.0}, "weight_decay": {"type": "float", "default": 0.0001, "min": 0.0}, "save_as": {"type": "slot", "default": "optimizer"}},
-    requires=("model", "revision"), provides=("save_as",), placement=("top",), stage="setup", ui_group="② 初始化",
-)
-def create_t_revision_optimizer(ctx: ScratchContext, model: str = "model", revision: str = "revision", lr: float = 5.0e-7, weight_decay: float = 0.0001, save_as: str = "optimizer") -> None:
-    torch, _ = _torch()
-    ctx[save_as] = torch.optim.Adam(list(ctx[model].parameters()) + list(ctx[revision].parameters()), lr=float(lr), weight_decay=float(weight_decay))
 
 
 @block(
@@ -1708,7 +1720,7 @@ def evaluate_t_revision_noisy(ctx: ScratchContext, model: str = "model", transit
 )
 def create_upm_state(ctx: ScratchContext, prepared_data: str = "prepared_data", model: str = "stage1_model", loader: str = "train_eval_loader", num_classes: int = 10, eta_init: float = 0.01, save_as: str = "upm_state") -> None:
     import torch
-    from lnl_toolbox.noise.upm import UPMNoiseState
+    from ...native_stats import UPMNoiseState
     prepared = ctx[prepared_data]
     expected = torch.as_tensor(prepared.train_indices, dtype=torch.long)
     probabilities = {}
@@ -1754,7 +1766,7 @@ def upm_build_psi(ctx: ScratchContext, prepared_data: str="prepared_data", poste
 
 @block(id="upm_initialize_eta", name="UPM: Initialize Eta State", category="State", description="Create the stable-index UPM state from an exposed frozen psi vector and a reusable eta initialization.", params={"indices":{"type":"slot","default":"upm_indices"},"psi":{"type":"slot","default":"upm_psi"},"num_classes":{"type":"int","default":10,"min":2},"eta_init":{"type":"float","default":0.01,"min":0.0,"max":1.0},"save_as":{"type":"slot","default":"upm_state"}}, requires=("indices","psi"), provides=("save_as",), placement=("top",), stage="setup", ui_group="② 初始化", formula="eta_i=eta_0", formula_ref="UPM confusing-probability initialization", paper="Universal Probability Model for Label Noise")
 def upm_initialize_eta(ctx: ScratchContext, indices: str="upm_indices", psi: str="upm_psi", num_classes: int=10, eta_init: float=0.01, save_as: str="upm_state") -> None:
-    torch,_=_torch(); from lnl_toolbox.noise.upm import UPMNoiseState
+    torch,_=_torch(); from ...native_stats import UPMNoiseState
     ctx[save_as]=UPMNoiseState(ctx[indices],ctx[psi],torch.full((ctx[indices].numel(),),float(eta_init)),int(num_classes))
 
 
@@ -1770,7 +1782,7 @@ def upm_initialize_eta(ctx: ScratchContext, indices: str="upm_indices", psi: str
 )
 def upm_clean_posterior(ctx: ScratchContext, state: str = "upm_state", logits: str = "logits", labels: str = "labels", indices: str = "indices", save_as: str = "clean_posterior") -> None:
     import torch
-    from lnl_toolbox.algorithms.upm.objective import predict_true_posterior
+    from ...native_stats import predict_true_posterior
     psi, eta = ctx[state].lookup(ctx[indices].detach())
     probabilities = torch.softmax(ctx[logits].detach(), dim=1)
     ctx[save_as] = predict_true_posterior(probabilities, ctx[labels].long(), psi.to(probabilities), eta.to(probabilities))
@@ -1787,7 +1799,7 @@ def upm_clean_posterior(ctx: ScratchContext, state: str = "upm_state", logits: s
 )
 def upm_update_eta(ctx: ScratchContext, state: str = "upm_state", indices: str = "indices", posterior: str = "clean_posterior", labels: str = "labels", learning_rate: float = 0.7) -> None:
     import torch
-    from lnl_toolbox.algorithms.upm.objective import update_confusing_probability
+    from ...native_stats import update_confusing_probability
     psi, eta = ctx[state].lookup(ctx[indices].detach())
     updated = update_confusing_probability(eta.to(ctx[posterior]), ctx[posterior].detach(), ctx[labels].detach(), psi.to(ctx[posterior]), learning_rate=float(learning_rate), epsilon=1e-8)
     updated = updated.to(torch.device("cpu"))
@@ -1827,10 +1839,7 @@ def create_cal_state(ctx: ScratchContext, prepared_data: str = "prepared_data", 
 def cal_materialize_proxy_artifact(ctx: ScratchContext, model: str = "warmup_model", loader: str = "train_eval_loader", prepared_data: str = "prepared_data", state: str = "cal_state", confidence_weight: str = "confidence_weight", lower_threshold: float = -8.0, upper_threshold: float = -8.0) -> None:
     import numpy as np
     import torch
-    from lnl_toolbox.algorithms.cal import cores2_adjusted_losses
-    from lnl_toolbox.noise.cal import CALProxyArtifact, build_cal_proxy_artifact
-    from lnl_toolbox.training.cal_experiment import _reference_transition_means
-    from lnl_toolbox.training.snapshots import collect_posterior_snapshot
+    from ...native_stats import cores2_adjusted_losses, CALProxyArtifact, build_cal_proxy_artifact, _reference_transition_means, collect_posterior_snapshot
     values = ctx[state]; prepared = ctx[prepared_data]; classes = int(prepared.num_classes)
     if bool((ctx.get("_runtime_limits") or {}).get("fixture")):
         indices = np.asarray(prepared.train_indices, dtype=np.int64)
@@ -1872,7 +1881,7 @@ def cal_materialize_proxy_artifact(ctx: ScratchContext, model: str = "warmup_mod
     formula="L_warmup=mean[-log p_y-alpha_t sum_c pi_tilde_c log p_c]", formula_ref="CAL CORES2 adjusted warm-up risk", paper="Learning from Noisy Labels with Core-loss and Second-order Risk",
 )
 def cal_warmup_objective(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", noisy_prior: str = "cal_noisy_prior", confidence_weight: str = "confidence_weight", save_as: str = "loss") -> None:
-    from lnl_toolbox.algorithms.cal import cores2_adjusted_losses
+    from ...native_stats import cores2_adjusted_losses
     ctx[save_as] = cores2_adjusted_losses(ctx[logits], ctx[labels].long(), ctx[noisy_prior], float(ctx[confidence_weight])).mean()
 
 
@@ -1921,7 +1930,7 @@ def cal_reset_reference_accumulator(ctx: ScratchContext, state: str = "cal_state
     formula="S_c+=sum_{i:keep,yhat=c} ell(x_i); n_c+=count", formula_ref="CAL reference loss means lifecycle", paper="Learning from Noisy Labels with Core-loss and Second-order Risk",
 )
 def cal_accumulate_reference_losses(ctx: ScratchContext, state: str = "cal_state", logits: str = "logits", proxy_targets: str = "cal_proxy_targets", retained: str = "cal_retained") -> None:
-    from lnl_toolbox.algorithms.cal import cal_all_class_losses
+    from ...native_stats import cal_all_class_losses
     values = ctx[state]; losses = cal_all_class_losses(ctx[logits].detach()).cpu(); targets = ctx[proxy_targets].detach().cpu(); keep = ctx[retained].detach().cpu()
     for proxy_class in range(losses.shape[1]):
         mask = keep & targets.eq(proxy_class)
@@ -1972,7 +1981,7 @@ def cal_covariance_correction(ctx: ScratchContext, logits: str="logits", labels:
 )
 def mc_ldce_prepare_statistic(ctx: ScratchContext, model: str = "model", loader: str = "train_loader", num_classes: int = 10, save_as: str = "mc_ldce_statistic") -> None:
     import numpy as np
-    from lnl_toolbox.noise.statistics import StatisticArtifact
+    from ...native_stats import StatisticArtifact
     network = ctx[model]; device = next(network.parameters()).device; feats, labels = [], []
     max_batches = (ctx.get("_runtime_limits") or {}).get("max_batches")
     with __import__("torch").no_grad():
@@ -2019,7 +2028,7 @@ def mc_ldce_objective(ctx: ScratchContext, model: str = "model", logits: str = "
     formula="T=PaperVolMinTransition(sigmoid off-diagonal)", formula_ref="MC-LDCE paper_volmin transition parameterization", paper="MC-LDCE",
 )
 def create_mc_ldce_volmin_transition(ctx: ScratchContext, num_classes: int = 10, initial_weight: float = -2.0794415416798357, seed: int = 1, device: str = "device", save_as: str = "mc_ldce_transition") -> None:
-    from lnl_toolbox.algorithms.pcse.volmin import PaperVolMinTransition
+    from ...native_stats import PaperVolMinTransition
     ctx[save_as] = PaperVolMinTransition(int(num_classes), initial_weight=float(initial_weight), seed=int(seed)).to(ctx[device])
 
 
@@ -2032,7 +2041,7 @@ def create_mc_ldce_volmin_transition(ctx: ScratchContext, num_classes: int = 10,
     requires=("model", "transition"), provides=("save_as",), placement=("top",), stage="setup", ui_group="② 初始化",
 )
 def create_mc_ldce_volmin_optimizer(ctx: ScratchContext, model: str = "transition_model", transition: str = "mc_ldce_transition", learning_rate: float = 0.01, momentum: float = 0.9, weight_decay: float = 0.001, save_as: str = "transition_optimizer") -> None:
-    from lnl_toolbox.algorithms.pcse.volmin import build_paper_volmin_optimizer
+    from ...native_stats import build_paper_volmin_optimizer
     ctx[save_as] = build_paper_volmin_optimizer(ctx[model], ctx[transition], {"name": "sgd", "lr": float(learning_rate), "momentum": float(momentum), "weight_decay": float(weight_decay)})
 
 
@@ -2046,7 +2055,7 @@ def create_mc_ldce_volmin_optimizer(ctx: ScratchContext, model: str = "transitio
     formula="L=-log((T^T p)_y)+lambda logdet(T)", formula_ref="MC-LDCE PaperVolMin transition stage", paper="MC-LDCE",
 )
 def mc_ldce_volmin_objective(ctx: ScratchContext, logits: str = "transition_logits", labels: str = "labels", transition: str = "mc_ldce_transition", lambda_volume: float = 0.0001, determinant_tolerance: float = 1.0e-8, condition_limit: float = 1.0e8, save_as: str = "loss") -> None:
-    from lnl_toolbox.algorithms.pcse.volmin import paper_volmin_objective
+    from ...native_stats import paper_volmin_objective
     loss, diagnostics = paper_volmin_objective(ctx[logits].to(dtype=__import__("torch").float64), ctx[labels], ctx[transition].matrix(), lambda_volume=float(lambda_volume), determinant_tolerance=float(determinant_tolerance), condition_limit=float(condition_limit))
     ctx[save_as], ctx["mc_ldce_volmin_metrics"] = loss, diagnostics
 
@@ -2101,7 +2110,7 @@ def mc_ldce_recover_statistic(ctx: ScratchContext, model: str="model", loader: s
     formula="C_n=TopK(z_n); C_p^c=1-TopK(z_p)", formula_ref="CA2C cross guidance", paper="CA2C",
 )
 def ca2c_cross_guidance(ctx: ScratchContext, positive_logits: str = "logits_p", negative_logits: str = "logits_n", candidate_k: int = 2, candidate_as: str = "ca2c_candidates", complement_as: str = "ca2c_complements") -> None:
-    from lnl_toolbox.algorithms.ca2c import cross_guidance
+    from ...native_stats import cross_guidance
     candidates, complements = cross_guidance(ctx[positive_logits], ctx[negative_logits], int(candidate_k))
     ctx[candidate_as], ctx[complement_as] = candidates, complements
 
@@ -2110,16 +2119,6 @@ def ca2c_cross_guidance(ctx: ScratchContext, positive_logits: str = "logits_p", 
 def create_ca2c_candidate_memory(ctx: ScratchContext, prepared_data: str="prepared_data", num_classes: int=100, save_as: str="ca2c_memory") -> None:
     torch,_=_torch(); indices=torch.as_tensor(ctx[prepared_data].train_indices,dtype=torch.long); size=int(indices.max().item())+1
     ctx[save_as]={"candidate":torch.zeros((size,int(num_classes)),dtype=torch.bool),"complement":torch.zeros((size,int(num_classes)),dtype=torch.bool)}
-
-
-@block(id="ca2c_peer_candidates", name="CA2C: Peer Candidate Set", category="Sample Selection", description="Select the top-k positive candidate classes from the negative peer.", params={"peer_logits":{"type":"slot","default":"logits_n"},"candidate_k":{"type":"int","default":2,"min":1},"save_as":{"type":"slot","default":"ca2c_candidates"}}, requires=("peer_logits",), provides=("save_as",), placement=("batch",), formula="C_i=TopK(p_n(x_i))", formula_ref="CA2C positive peer guidance", paper="CA2C")
-def ca2c_peer_candidates(ctx: ScratchContext, peer_logits: str="logits_n", candidate_k: int=2, save_as: str="ca2c_candidates") -> None:
-    torch,_=_torch(); logits=ctx[peer_logits]; mask=torch.zeros_like(logits,dtype=torch.bool); mask.scatter_(1,logits.topk(min(int(candidate_k),logits.shape[1]),1).indices,True); ctx[save_as]=mask
-
-
-@block(id="ca2c_peer_complements", name="CA2C: Peer Complement Set", category="Sample Selection", description="Select complementary classes by excluding the positive peer's top-k prediction set.", params={"peer_logits":{"type":"slot","default":"logits_p"},"candidate_k":{"type":"int","default":2,"min":1},"save_as":{"type":"slot","default":"ca2c_complements"}}, requires=("peer_logits",), provides=("save_as",), placement=("batch",), formula="Cbar_i=1-TopK(p_p(x_i))", formula_ref="CA2C negative peer guidance", paper="CA2C")
-def ca2c_peer_complements(ctx: ScratchContext, peer_logits: str="logits_p", candidate_k: int=2, save_as: str="ca2c_complements") -> None:
-    torch,_=_torch(); logits=ctx[peer_logits]; mask=torch.ones_like(logits,dtype=torch.bool); mask.scatter_(1,logits.topk(min(int(candidate_k),logits.shape[1]),1).indices,False); ctx[save_as]=mask
 
 
 @block(id="ca2c_update_candidate_memory", name="CA2C: Update Candidate Memory", category="State", description="Persist peer-derived candidate masks and publish their stable-index values for the current batch.", params={"memory":{"type":"slot","default":"ca2c_memory"},"indices":{"type":"slot","default":"indices"},"candidates":{"type":"slot","default":"ca2c_candidates"},"complements":{"type":"slot","default":"ca2c_complements"}}, requires=("memory","indices","candidates","complements"), provides=("ca2c_candidates","ca2c_complements"), placement=("batch",), stage="train", ui_group="④ 状态更新", formula="M_i^+<-C_i; M_i^-<-Cbar_i", formula_ref="CA2C persistent candidate update", paper="CA2C")
@@ -2139,7 +2138,7 @@ def ca2c_update_candidate_memory(ctx: ScratchContext, memory: str="ca2c_memory",
 )
 def ca2c_partial_label_loss(ctx: ScratchContext, logits: str = "logits_p", candidates: str = "ca2c_candidates", hard_weight: float = 0.99, save_as: str = "ca2c_positive_loss") -> None:
     import torch
-    from lnl_toolbox.algorithms.ca2c import partial_label_objective
+    from ...native_stats import partial_label_objective
     masks = ctx[candidates]
     soft_targets = masks.to(ctx[logits].dtype) / masks.sum(1, keepdim=True).clamp_min(1.0)
     ctx[save_as] = partial_label_objective(ctx[logits], soft_targets, float(hard_weight))
@@ -2155,7 +2154,7 @@ def ca2c_partial_label_loss(ctx: ScratchContext, logits: str = "logits_p", candi
     formula="L_n=-mean sum_{c in C_p^c} log(1-p_c)", formula_ref="CA2C complementary negative objective", paper="CA2C",
 )
 def ca2c_negative_label_loss(ctx: ScratchContext, logits: str = "logits_n", complements: str = "ca2c_complements", save_as: str = "ca2c_negative_loss") -> None:
-    from lnl_toolbox.algorithms.ca2c import negative_label_objective
+    from ...native_stats import negative_label_objective
     ctx[save_as] = negative_label_objective(ctx[logits], ctx[complements])
 
 
@@ -2195,7 +2194,7 @@ def l2rw_epsilon_gradient(ctx: ScratchContext, state: str="l2rw_virtual_state", 
     formula="H_i,t=loss_i,t over a fixed W-epoch window keyed by global sample index", formula_ref="CNLCU persistent history", paper="CNLCU",
 )
 def create_cnlcu_history(ctx: ScratchContext, prepared_data: str = "prepared_data", window_size: int = 5, peer: str = "a", save_as: str = "cnlcu_history_state") -> None:
-    from lnl_toolbox.algorithms.cnlcu.history import PeerLossHistory
+    from ...native_stats import PeerLossHistory
     indices = ctx[prepared_data].train_indices
     ctx[save_as] = PeerLossHistory(indices, int(window_size), str(peer))
 
@@ -2253,7 +2252,7 @@ def append_cnlcu_history(ctx: ScratchContext, history: str = "history_a", indice
     formula="r_i=(1/|H_i|)Σ_{t∈H_i}psi(l_i,t)", formula_ref="CNLCU Eq. (3)", paper="CNLCU",
 )
 def cnlcu_soft_robust_mean(ctx: ScratchContext, history: str = "cnlcu_history", observed: str = "cnlcu_observed", save_as: str = "cnlcu_robust_mean", count_as: str = "cnlcu_history_length", length_as: str = "cnlcu_history_length", values_as: str = "history_values") -> None:
-    from lnl_toolbox.algorithms.cnlcu.estimators import soft_robust_mean
+    from ...native_stats import soft_robust_mean
     mean, length = soft_robust_mean(ctx[history], ctx[observed])
     ctx[save_as], ctx[count_as], ctx[length_as] = mean, length, length
     ctx[values_as] = ctx[history]
@@ -2269,7 +2268,7 @@ def cnlcu_soft_robust_mean(ctx: ScratchContext, history: str = "cnlcu_history", 
     formula="score=r-σ(t+σ log(2t)/t²)/(n-σ)", formula_ref="CNLCU Eq. (7)", paper="CNLCU",
 )
 def cnlcu_soft_score(ctx: ScratchContext, robust_mean: str = "cnlcu_robust_mean", history_length: str = "cnlcu_history_length", selected_count: str = "history_selected_count", sigma_squared: float = 0.01, save_as: str = "cnlcu_score") -> None:
-    from lnl_toolbox.algorithms.cnlcu.scoring import cnlcu_soft_score as score_fn
+    from ...native_stats import cnlcu_soft_score as score_fn
     score, bonus = score_fn(ctx[robust_mean], ctx[history_length], ctx[selected_count] + 1, float(sigma_squared))
     ctx[save_as], ctx["cnlcu_bonus"] = score, bonus
 

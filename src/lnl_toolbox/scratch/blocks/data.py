@@ -252,7 +252,6 @@ def apply_noise(ctx: ScratchContext, data_plan: str = "data_plan", name: str = "
     ctx["noisy_train_split"] = noisy_train
     ctx["noise_state"] = noise_state
     ctx["clean_train_split"] = clean_train
-    ctx["noise_manifest"] = manifest
     transition = getattr(manifest, "transition_matrix", None)
     if transition is not None:
         ctx["transition"] = _torch().as_tensor(transition, dtype=_torch().float32)
@@ -271,7 +270,7 @@ def apply_noise(ctx: ScratchContext, data_plan: str = "data_plan", name: str = "
             "scope": {"type": "enum", "options": ["train_split", "effective_train"], "default": "train_split"},
             "filename": {"type": "str", "default": "noise_manifest.npz"},
             "external_path": {"type": "path", "default": ""}},
-    requires=("noise_state",), provides=("noise_manifest",), placement=("top",), stage="data", ui_group="① 数据准备",
+    requires=("noise_state", "noisy_train_split"), provides=("noise_manifest",), placement=("top",), stage="data", ui_group="① 数据准备",
 )
 def build_noise_manifest(ctx: ScratchContext, data_plan: str = "data_plan", required: bool = True,
                          scope: str = "train_split", filename: str = "noise_manifest.npz",
@@ -371,6 +370,22 @@ def assign_data_roles(ctx: ScratchContext, data_plan: str = "data_plan",
     if ctx.get("test_source") is None and "test" in plan["roles"]:
         raise ValueError("test role requires an explicit test source")
     train_split = ctx.get("clean_train_split") or ctx["train_split"]
+    data_config = dict(plan.get("data", {}))
+    # Fixture sources are intentionally tiny.  When a recipe requests a
+    # trusted subset, keep at least one sample in the learning-train role so
+    # downstream fixture blocks can observe a real train batch.  This is
+    # strictly a bounded-runtime adjustment; formal recipe values are left
+    # untouched outside ``runtime_limits.fixture``.
+    runtime_limits = ctx.get("_runtime_limits", {})
+    if isinstance(runtime_limits, Mapping) and runtime_limits.get("fixture") and "trusted_validation" in plan["roles"]:
+        train_count = len(ctx["train_split"].samples)
+        if train_count > 1:
+            requested = int(data_config.get("num_clean", data_config.get("trusted_size", 0)))
+            capped = min(requested, train_count - 1)
+            if "num_clean" in data_config:
+                data_config["num_clean"] = capped
+            else:
+                data_config["trusted_size"] = capped
     datasets = build_role_datasets(
         train_split=train_split,
         noisy_train=ctx["noisy_train_split"],
@@ -380,7 +395,7 @@ def assign_data_roles(ctx: ScratchContext, data_plan: str = "data_plan",
         ),
         test_split=ctx["test_source"],
         roles=plan["roles"],
-        data_config=plan.get("data", {}),
+        data_config=data_config,
         preprocessing_transform=ctx["preprocessing_transform"],
         view_transforms=ctx["view_transforms"],
     )
@@ -405,6 +420,11 @@ def configure_loader(ctx: ScratchContext, data_plan: str = "data_plan", batch_si
     runtime_limits = ctx.get("_runtime_limits", {})
     if isinstance(runtime_limits, Mapping) and runtime_limits.get("fixture"):
         num_workers = 0
+        # Bounded fixture sources are intentionally tiny.  Keeping formal
+        # ``drop_last`` here would silently skip every batch when the recipe
+        # batch size exceeds the fixture size, preventing downstream Blocks
+        # from observing the canonical batch contract.
+        drop_last = False
     plan["loader"] = {"batch_size": int(batch_size), "num_workers": int(num_workers),
                       "pin_memory": bool(pin_memory), "drop_last": bool(drop_last), **dict(options or {})}
     plan["loader_spec"] = dict(plan["loader"])
@@ -417,7 +437,7 @@ def configure_loader(ctx: ScratchContext, data_plan: str = "data_plan", batch_si
     params={"data_plan": {"type": "slot", "default": "data_plan"},
             "artifact_dir": {"type": "path", "default": ""},
             "save_as": {"type": "slot", "default": "prepared_data"}},
-    requires=("role_datasets", "noise_manifest", "loader_spec", "num_classes"), provides=("save_as", "posterior_features", "posterior_targets", "posterior_indices"), placement=("top",), stage="data", ui_group="① 数据准备",
+    requires=("role_datasets", "noise_manifest", "loader_spec", "num_classes"), provides=("save_as",), placement=("top",), stage="data", ui_group="① 数据准备",
 )
 def build_prepared_data(ctx: ScratchContext, data_plan: str = "data_plan", artifact_dir: str = "",
                         save_as: str = "prepared_data") -> None:
@@ -432,17 +452,11 @@ def build_prepared_data(ctx: ScratchContext, data_plan: str = "data_plan", artif
         plan=plan,
         manifest=ctx.get("noise_manifest"),
     )
-    manifest = ctx.get("noise_manifest")
     ctx[save_as] = prepared
-    ctx["noise_manifest"] = manifest
     ctx["num_classes"] = int(prepared.num_classes)
-    torch = _torch()
-    transition = getattr(manifest, "transition_matrix", None) if manifest is not None else None
-    if transition is not None:
-        ctx["transition"] = torch.as_tensor(transition, dtype=torch.float32)
-    ctx["posterior_features"] = torch.empty((0, 0))
-    ctx["posterior_targets"] = torch.empty((0,), dtype=torch.long)
-    ctx["posterior_indices"] = torch.empty((0,), dtype=torch.long)
+    # A transition is an explicit upstream artifact.  Assembly may expose it
+    # when one was already materialised, but must never infer an identity
+    # matrix (or fabricate posterior snapshots) as a side effect.
     ctx["data_materialization"] = "scratch-native"
 
 
@@ -482,72 +496,67 @@ def build_loaders(ctx: ScratchContext, role_datasets: str = "role_datasets",
     for role, slot in (("train_eval", "train_eval_loader"), ("trusted_validation", "trusted_loader")):
         if role in datasets:
             ctx[slot] = make_loader(role, shuffle=False)
-    ctx["train_dataset"] = datasets["train"]
 
 
 @block(
-    id="select_dataset",
-    name="Select Dataset",
-    category="Data",
-    description="Select a registered or built-in dataset for the recipe.",
-    params={
-        "source_mode": {"type": "enum", "options": ["registered", "builtin", "custom_path"], "default": "registered"},
-        "dataset": {"type": "dataset", "default": ""},
-        "path": {"type": "path", "default": ""},
-        "save_as": {"type": "slot", "default": "train_dataset"},
-    },
-    provides=("save_as",),
-    placement=("top",), stage="data", ui_group="① 数据准备",
+    id="snapshot_model_outputs",
+    name="Snapshot Model Outputs",
+    category="Statistics",
+    description="Collect detached features/posteriors with canonical targets and split-local indices from a model and loader.",
+    params={"model": {"type": "slot", "default": "model"},
+            "loader": {"type": "slot", "default": "loader"},
+            "device": {"type": "slot", "default": "device"},
+            "features_as": {"type": "slot", "default": "features"},
+            "posterior_as": {"type": "slot", "default": "posterior"},
+            "targets_as": {"type": "slot", "default": "snapshot_targets"},
+            "indices_as": {"type": "slot", "default": "snapshot_indices"},
+            "save_as": {"type": "slot", "default": "snapshot"}},
+    requires=("model", "loader"),
+    provides=("save_as", "features_as", "posterior_as", "targets_as", "indices_as"),
+    placement=("top", "epoch"), stage="evaluate", ui_group="⑥ 后验与权重",
 )
-def select_dataset(
-    ctx: ScratchContext,
-    source_mode: str = "registered",
-    dataset: str = "",
-    path: str = "",
-    save_as: str = "train_dataset",
-) -> None:
-    """Resolve a dataset supplied by the catalog or a small built-in option.
-
-    The WebUI normally supplies registered dataset objects through the context.
-    Keeping the lookup here deliberately strict prevents a recipe from silently
-    guessing what a filesystem path contains.
-    """
-    name = str(dataset).strip()
-    if not name:
-        raise ValueError("select_dataset needs a dataset selection")
-    catalog = ctx.get("dataset_catalog", {})
-    if isinstance(catalog, dict) and name in catalog:
-        ctx[save_as] = catalog[name]
-        return
-    if str(source_mode) == "builtin" and name.lower() in {"synthetic", "synthetic_classification"}:
-        load_synthetic(ctx, save_as=save_as)
-        return
-    if str(source_mode) == "custom_path":
-        raise ValueError(f"custom dataset path is not available to Scratch yet: {path or name}")
-    raise ValueError(f"dataset `{name}` is not present in the Scratch data catalog")
-
-
-@block(
-    id="configure_noise",
-    name="Configure Label Noise",
-    category="Data",
-    description="Attach an explicit label-noise policy to the selected dataset.",
-    params={
-        "method": {"type": "enum", "options": ["none", "symmetric", "pairflip", "class_conditional", "instance_dependent", "external"], "default": "none"},
-        "rate": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0},
-        "seed": {"type": "int", "default": 1, "min": 0},
-    },
-    requires=("train_dataset",),
-    provides=("noise_config",),
-    placement=("top",), stage="data", ui_group="① 数据准备",
-)
-def configure_noise(
-    ctx: ScratchContext,
-    method: str = "none",
-    rate: float = 0.0,
-    seed: int = 1,
-) -> None:
-    ctx["noise_config"] = {"method": str(method), "rate": float(rate), "seed": int(seed)}
+def snapshot_model_outputs(ctx: ScratchContext, model: str = "model", loader: str = "loader",
+                           device: str = "device", features_as: str = "features",
+                           posterior_as: str = "posterior", targets_as: str = "snapshot_targets",
+                           indices_as: str = "snapshot_indices", save_as: str = "snapshot") -> None:
+    torch = _torch()
+    network = ctx[model]
+    target_device = ctx.get(device)
+    was_training = bool(getattr(network, "training", False))
+    network.eval()
+    features, posteriors, targets, indices = [], [], [], []
+    with torch.no_grad():
+        for batch in ctx[loader]:
+            inputs = batch["inputs"] if isinstance(batch, Mapping) else batch[0]
+            labels = batch["targets"] if isinstance(batch, Mapping) else batch[1]
+            sample_indices = batch.get("indices") if isinstance(batch, Mapping) else (batch[2] if len(batch) > 2 else None)
+            if target_device is not None and hasattr(inputs, "to"):
+                inputs = inputs.to(target_device)
+            output = network.forward_with_features(inputs) if hasattr(network, "forward_with_features") else network(inputs)
+            if hasattr(output, "logits"):
+                logits = output.logits
+                hidden = output.features
+            elif isinstance(output, (tuple, list)) and len(output) >= 2:
+                logits, hidden = output[0], output[1]
+            else:
+                logits, hidden = output, output
+            features.append(hidden.detach().cpu())
+            posteriors.append(torch.softmax(logits, dim=-1).detach().cpu())
+            targets.append(torch.as_tensor(labels).detach().cpu().long())
+            indices.append(torch.arange(len(labels), dtype=torch.long) if sample_indices is None
+                           else torch.as_tensor(sample_indices).detach().cpu().long())
+    if was_training:
+        network.train()
+    feature_values = torch.cat(features, dim=0) if features else torch.empty((0, 0))
+    posterior_values = torch.cat(posteriors, dim=0) if posteriors else torch.empty((0, 0))
+    target_values = torch.cat(targets, dim=0) if targets else torch.empty((0,), dtype=torch.long)
+    index_values = torch.cat(indices, dim=0) if indices else torch.empty((0,), dtype=torch.long)
+    ctx[features_as] = feature_values
+    ctx[posterior_as] = posterior_values
+    ctx[targets_as] = target_values
+    ctx[indices_as] = index_values
+    ctx[save_as] = {"features": feature_values, "posterior": posterior_values,
+                    "targets": target_values, "indices": index_values}
 
 
 @block(
@@ -652,14 +661,14 @@ def move_batch_to_device(
     id="load_synthetic",
     name="Load Synthetic Classification",
     category="Data",
-    description="Create a deterministic tensor dataset for fast local smoke tests.",
+    description="Create a deterministic Scratch source for fixture/example recipes; continue through the canonical data vocabulary.",
     params={
         "samples": {"type": "int", "default": 64, "min": 1},
         "features": {"type": "int", "default": 4, "min": 1},
         "classes": {"type": "int", "default": 2, "min": 2},
-        "save_as": {"type": "slot", "default": "train_dataset"},
+        "save_as": {"type": "slot", "default": "data_plan"},
     },
-    provides=("save_as",),
+    provides=("save_as", "data_spec", "train_source", "test_source", "num_classes"),
     placement=("top",), stage="data", ui_group="① 数据准备",
 )
 def load_synthetic(
@@ -667,16 +676,17 @@ def load_synthetic(
     samples: int = 64,
     features: int = 4,
     classes: int = 2,
-    save_as: str = "train_dataset",
+    save_as: str = "data_plan",
 ) -> None:
-    torch = _torch()
-    generator = torch.Generator().manual_seed(int(ctx.get("seed", 1)))
-    inputs = torch.randn(samples, features, generator=generator)
-    weights = torch.randn(features, classes, generator=generator)
-    labels = (inputs @ weights).argmax(dim=1).long()
-    indices = torch.arange(samples)
-    ctx[save_as] = torch.utils.data.TensorDataset(inputs, labels, indices)
-    ctx["num_classes"] = int(classes)
+    # Synthetic data is a source constructor only.  It deliberately delegates
+    # to the same source loader used by ``load_dataset`` so it cannot create a
+    # second ``dataset -> loader`` dialect.
+    load_dataset(
+        ctx,
+        dataset="synthetic",
+        options={"samples": int(samples), "features": int(features), "classes": int(classes)},
+        save_as=save_as,
+    )
 
 
 @block(
@@ -693,29 +703,3 @@ def refresh_epoch_loader(ctx: ScratchContext, data: str = "prepared_data", role:
                          batch_size: int = 128, save_as: str = "train_loader") -> None:
     prepared = ctx[data]
     ctx[save_as] = prepared.loader(role, epoch=int(ctx.get("epoch", 0)), batch_size=int(batch_size))
-
-
-@block(
-    id="create_loader",
-    name="Create Data Loader",
-    category="Data",
-    description="Wrap a dataset in a PyTorch DataLoader.",
-    params={
-        "dataset": {"type": "slot", "required": True},
-        "batch_size": {"type": "int", "default": 128, "min": 1},
-        "shuffle": {"type": "bool", "default": True},
-        "save_as": {"type": "slot", "default": "train_loader"},
-    },
-    requires=("dataset",),
-    provides=("save_as",),
-    placement=("top",), stage="data", ui_group="① 数据准备",
-)
-def create_loader(
-    ctx: ScratchContext,
-    dataset: str,
-    batch_size: int = 128,
-    shuffle: bool = True,
-    save_as: str = "train_loader",
-) -> None:
-    torch = _torch()
-    ctx[save_as] = torch.utils.data.DataLoader(ctx[dataset], batch_size=batch_size, shuffle=shuffle)

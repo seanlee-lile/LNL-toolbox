@@ -153,7 +153,8 @@ class ScratchOperationMigrationTest(unittest.TestCase):
     def test_lend_masked_graph_state_chain(self) -> None:
         ctx = ScratchContext(features=torch.tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]), labels=torch.tensor([0, 1, 0]), indices=torch.tensor([0, 1, 2]), epoch=0)
         run("pairwise_similarity", ctx, features="features", metric="cosine", save_as="similarity")
-        run("topk_neighborhood", ctx, similarity="similarity", k=1, save_as="adjacency")
+        run("topk_neighborhood", ctx, similarity="similarity", stable_sample_indices="indices", k=1, save_as="neighbors")
+        run("neighbor_edge_weights", ctx, features="features", neighbor_indices="neighbors", save_as="adjacency")
         run("normalize_graph", ctx, adjacency="adjacency", save_as="graph")
         run("propagate_labels", ctx, graph="graph", labels="labels", num_classes=2, steps=2, save_as="diluted")
         run("create_indexed_history", ctx, size=3, width=2, save_as="history")

@@ -59,7 +59,7 @@ Every catalog entry now has a recipe under `recipes/papers/`. The GCE entry is w
 | `dual-t` | `dual_t.yaml` | `compose_transition`, `forward_correction` | `algorithms/dual_t/`; `training/dual_t_experiment.py` |
 | `importance-reweighting` | `importance_reweighting.yaml` | `importance_reweight`, `mean_loss` | `algorithms/importance_reweighting/`; `training/importance_reweighting_experiment.py` |
 | `cwd` | `cwd.yaml` | `cwd_statistics`, `mean_loss` | `estimators/cwd.py`; `training/cwd_experiment.py` |
-| `pcse` | `pcse.yaml` | `volmin_transition_matrix`, `softmax`, `apply_transition`, `gather_by_label`, `negative_log`, `volmin_positive_logdet`, `pcse_statistics` | `algorithms/pcse/`; `training/pcse_experiment.py` |
+| `pcse` | `pcse.yaml` | `create_volmin_transition`, `materialize_transition`, `softmax`, `apply_transition`, `gather_by_label`, `negative_log`, `volmin_positive_logdet`, `pcse_statistics` | `algorithms/pcse/`; `training/pcse_experiment.py` |
 | `fine` | `fine.yaml` | `create_fine_state`, `fine_snapshot_predictions`, `fine_scs_select`, `fine_scr_reweight`, `select_batch_view`, `fine_prepare_batch_targets`, `fine_warmup_loss`, `fine_robust_loss`, `fine_ema_update` | `algorithms/fine.py`; `training/fine_experiment.py` |
 | `cnlcu` | `cnlcu.yaml` | `create_cnlcu_history`, `append_cnlcu_history`, `cnlcu_soft_robust_mean`, `cnlcu_soft_score`, `select_lowest_scores`, `indices_to_mask`, `track_best_state`, `restore_best_state` | `algorithms/cnlcu/`; `training/cnlcu_experiment.py` |
 | `t-revision` | `t_revision.yaml` | `revise_transition`, `track_best_state`, `restore_best_state` | `algorithms/t_revision/`; `training/t_revision_experiment.py` |

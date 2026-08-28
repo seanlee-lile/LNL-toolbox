@@ -33,7 +33,8 @@ steps:
           - {block: forward_feature}
           - {block: per_sample_ce}
           - {block: pairwise_similarity, params: {features: features, metric: inner_product, normalize_features: false, save_as: lend_similarity}}
-          - {block: topk_neighborhood, params: {similarity: lend_similarity, k: 8, gamma: 1.0, save_as: lend_adjacency}}
+          - {block: topk_neighborhood, params: {similarity: lend_similarity, stable_sample_indices: indices, k: 8, save_as: lend_neighbor_indices}}
+          - {block: neighbor_edge_weights, params: {features: features, neighbor_indices: lend_neighbor_indices, gamma: 1.0, save_as: lend_adjacency}}
           - {block: normalize_graph, params: {adjacency: lend_adjacency, save_as: lend_graph}}
           - {block: propagate_labels, params: {graph: lend_graph, labels: labels, num_classes: 10, alpha: 0.99, steps: 10, save_as: diluted_labels}}
           - {block: indexed_ema, params: {state: lend_state, indices: indices, values: diluted_labels, beta: 0.9, save_as: history_values}}
