@@ -35,9 +35,13 @@ steps:
           - {block: zeros_like, params: {input: loss_per_sample, requires_grad: true, save_as: l2rw_epsilon}}
           - {block: elementwise_multiply, params: {left: l2rw_epsilon, right: loss_per_sample, save_as: l2rw_weighted_losses}}
           - {block: sum_values, params: {input: l2rw_weighted_losses, save_as: l2rw_virtual_loss}}
-          - {block: l2rw_virtual_update, params: {model: model, virtual_loss: l2rw_virtual_loss, learning_rate: 1.0, implementation: official, save_as: l2rw_virtual_state}}
-          - {block: l2rw_trusted_meta_loss, params: {model: model, state: l2rw_virtual_state, inputs: trusted_images, labels: trusted_labels, weight_decay: 0.0002, save_as: l2rw_meta_loss}}
-          - {block: l2rw_epsilon_gradient, params: {state: l2rw_virtual_state, meta_loss: l2rw_meta_loss, epsilon: l2rw_epsilon, save_as: l2rw_meta_gradient}}
+          - {block: virtual_parameter_update, params: {model: model, loss: l2rw_virtual_loss, learning_rate: 1.0, create_graph: true, save_as: l2rw_virtual_state}}
+          - {block: functional_forward_with_state, params: {model: model, state: l2rw_virtual_state, inputs: trusted_images, save_as: l2rw_trusted_logits}}
+          - {block: per_sample_ce, params: {logits: l2rw_trusted_logits, labels: trusted_labels, save_as: l2rw_trusted_loss_per_sample}}
+          - {block: mean_loss, params: {input: l2rw_trusted_loss_per_sample, save_as: l2rw_trusted_loss}}
+          - {block: parameter_squared_norm, params: {model: model, save_as: l2rw_parameter_norm}}
+          - {block: weighted_sum, params: {terms: [l2rw_trusted_loss, l2rw_parameter_norm], weights: [1.0, 0.0001], save_as: l2rw_meta_loss}}
+          - {block: gradient_wrt, params: {loss: l2rw_meta_loss, input: l2rw_epsilon, create_graph: false, save_as: l2rw_meta_gradient}}
           - {block: nonnegative_projection, params: {input: l2rw_meta_gradient, negate: false, save_as: l2rw_raw_weights}}
           - {block: normalize_nonnegative_weights, params: {weights: l2rw_raw_weights, save_as: meta_weights}}
           - {block: weighted_loss, params: {weights: meta_weights, save_as: weighted_loss_per_sample}}

@@ -38,7 +38,7 @@ steps:
       - {block: evaluate_accuracy, params: {model: stage1_model, loader: validation_loader, save_as: stage1_validation_accuracy}}
       - {block: track_best_model, params: {model: stage1_model, metric: stage1_validation_accuracy, metric_name: stage1_validation_accuracy, save_as: stage1_best_model_state}}
   - {block: restore_best_model, params: {model: stage1_model, state: stage1_best_model_state}}
-  - {block: upm_snapshot_stage1_posterior, params: {model: stage1_model, loader: train_eval_loader, save_as: upm_stage1_posterior}}
+  - {block: collect_posterior_snapshot, params: {model: stage1_model, loader: train_eval_loader, device: device, dataset: cifar10, split: train, save_as: upm_stage1_posterior}}
   - {block: upm_build_psi, params: {prepared_data: prepared_data, posterior: upm_stage1_posterior, num_classes: 10, indices_as: upm_indices, save_as: upm_psi}}
   - {block: upm_initialize_eta, params: {indices: upm_indices, psi: upm_psi, num_classes: 10, eta_init: 0.01, save_as: upm_state}}
   - {block: create_model, params: {model: resnet18, num_classes: 10, base_width: 16, device: device, save_as: model}}

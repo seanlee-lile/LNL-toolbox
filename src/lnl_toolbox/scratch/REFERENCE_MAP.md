@@ -47,7 +47,7 @@ Every catalog entry now has a recipe under `recipes/papers/`. The GCE entry is w
 
 | Catalog id | Recipe | Scratch semantic blocks | Legacy sources inspected |
 |---|---|---|---|
-| `pdl` | `pdl.yaml` | `pdl_instance_transition`, `transition_corrected_risk`, `compose_revision_transition` | `training/instance_transition_experiment.py`; `algorithms/instance_transition.py` |
+| `pdl` | `pdl.yaml` | Public `collect_feature_snapshot`/`collect_posterior_snapshot` on train and noisy-validation loaders, merged for the shared representation; explicit `softmax → materialize_transition → apply_transition → gather_by_label → clamp_min → safe_divide → negative_log → elementwise_multiply`, `compose_revision_transition` | `training/instance_transition_experiment.py`; `algorithms/instance_transition.py` |
 | `jocor` | `jocor.yaml` | `symmetric_kl`, `select_lowest_scores`, `select_by_indices`, `mean_by_indices` | `algorithms/jocor.py`; `training/multi_model_experiment.py` |
 | `dss` | `dss.yaml` | `dss_evidence`, `top_k_confidence` | `algorithms/dss.py`; `selectors/dss.py` |
 | `cdr` | `cdr.yaml` | `parameter_criticality_mask`, `masked_gradient_update` | `algorithms/cdr.py`; `training/experiment.py` |
@@ -56,22 +56,22 @@ Every catalog entry now has a recipe under `recipes/papers/`. The GCE entry is w
 | `loss-correction` | `loss_correction.yaml` | `estimate_transition`, `forward_correction` | `noise/estimators.py`; `algorithms/transition_risk.py` |
 | `apl` | `apl.yaml` | `apl_loss`, `mean_loss` | `losses/torch_losses.py`; `training/experiment.py` |
 | `gce` | `gce.yaml` | Scratch data particles, ResNet-34, GCE formula blocks, validation selection, MultiStepLR | `losses/torch_losses.py`; `training/experiment.py`; `training/data_service.py`; `models/cifar_resnet.py` |
-| `dual-t` | `dual_t.yaml` | `compose_transition`, `forward_correction` | `algorithms/dual_t/`; `training/dual_t_experiment.py` |
+| `dual-t` | `dual_t.yaml` | `collect_posterior_snapshot`, `dual_t_transition_estimation`, `compose_transition`, `forward_correction` | `algorithms/dual_t/`; `training/dual_t_experiment.py` |
 | `importance-reweighting` | `importance_reweighting.yaml` | `importance_reweight`, `mean_loss` | `algorithms/importance_reweighting/`; `training/importance_reweighting_experiment.py` |
-| `cwd` | `cwd.yaml` | `cwd_statistics`, `mean_loss` | `estimators/cwd.py`; `training/cwd_experiment.py` |
-| `pcse` | `pcse.yaml` | `create_volmin_transition`, `materialize_transition`, `softmax`, `apply_transition`, `gather_by_label`, `negative_log`, `volmin_positive_logdet`, `pcse_statistics` | `algorithms/pcse/`; `training/pcse_experiment.py` |
+| `cwd` | `cwd.yaml` | `collect_feature_snapshot`, `cwd_statistics`, `mean_loss` | `estimators/cwd.py`; `training/cwd_experiment.py` |
+| `pcse` | `pcse.yaml` | Public layer-aware `collect_feature_snapshot` for train/validation/test, `create_volmin_transition`, `materialize_transition`, `softmax`, `apply_transition`, `gather_by_label`, `negative_log`, `volmin_positive_logdet`, `pcse_statistics` | `algorithms/pcse/`; `training/pcse_experiment.py` |
 | `fine` | `fine.yaml` | `create_fine_state`, `fine_snapshot_predictions`, `fine_scs_select`, `fine_scr_reweight`, `select_batch_view`, `fine_prepare_batch_targets`, `fine_warmup_loss`, `fine_robust_loss`, `fine_ema_update` | `algorithms/fine.py`; `training/fine_experiment.py` |
 | `cnlcu` | `cnlcu.yaml` | `create_cnlcu_history`, `append_cnlcu_history`, `cnlcu_soft_robust_mean`, `cnlcu_soft_score`, `select_lowest_scores`, `indices_to_mask`, `track_best_state`, `restore_best_state` | `algorithms/cnlcu/`; `training/cnlcu_experiment.py` |
-| `t-revision` | `t_revision.yaml` | `revise_transition`, `track_best_state`, `restore_best_state` | `algorithms/t_revision/`; `training/t_revision_experiment.py` |
+| `t-revision` | `t_revision.yaml` | `collect_posterior_snapshot`, `revise_transition`, `track_best_state`, `restore_best_state` | `algorithms/t_revision/`; `training/t_revision_experiment.py` |
 | `dld` | `dld.yaml` | `one_hot`, `softmax`, `subtract`, `sample_timestep_noise`, `dld_sample_forward_state`, `mean_squared_error`, `weighted_sum` | DLD diffusion predictor lifecycle remains a paper-level operation; tensor/loss composition is Scratch-native. |
 | `binary-risk` | `binary_risk.yaml` | `binary_risk`, `mean_loss` | `algorithms/binary_risk.py`; `training/binary_experiment.py` |
 | `volminnet` | `volminnet.yaml` | `softmax`, `apply_transition`, `gather_by_label`, `negative_log`, `mean_loss`, `volmin_positive_logdet`, `track_best_state`, `restore_best_state` | `algorithms/volminnet/`; `training/volminnet_experiment.py` |
-| `upm` | `upm.yaml` | `create_upm_state`, `upm_clean_posterior`, `upm_update_eta`, `soft_target_cross_entropy` | `algorithms/upm/`; `training/upm_experiment.py` |
+| `upm` | `upm.yaml` | `collect_posterior_snapshot`, `upm_build_psi`, `upm_initialize_eta`, `upm_clean_posterior`, `upm_update_eta`, `soft_target_cross_entropy` | `algorithms/upm/`; `training/upm_experiment.py` |
 | `dividemix` | `dividemix.yaml` | `fit_gmm`, `threshold_mask`, `mask_to_indices`, `one_hot`, `weighted_blend`, `sharpen_distribution`, `soft_target_cross_entropy`, `mean_squared_error`, `prior_kl`, `weighted_sum` | `algorithms/dividemix/`; `training/dividemix_experiment.py` |
 | `lend` | `lend.yaml` | `create_indexed_history`, `pairwise_similarity`, `topk_neighborhood`, `normalize_graph`, `propagate_labels`, `indexed_ema`, `agreement_mask`, `masked_mean` | `algorithms/lend/`; `training/lend_experiment.py` |
 | `cal` | `cal.yaml` | `piecewise_rate_schedule`, `cal_warmup_objective`, `cal_prepare_proxy_batch`, `weighted_sum` | `algorithms/cal.py`; `training/cal_experiment.py` |
 | `mc-ldce` | `mc_ldce.yaml` | `mc_ldce_prepare_statistic`, `mc_ldce_objective` | `estimators/mc_ldce.py`; `training/mc_ldce_experiment.py` |
 | `ca2c` | `ca2c.yaml` | `per_sample_ce`, `mean_loss`, `weighted_sum`, `ca2c_cross_guidance`, `ca2c_partial_label_loss`, `ca2c_negative_label_loss` | `algorithms/ca2c.py`; `training/ca2c_experiment.py` |
-| `l2rw` | `l2rw.yaml` | `get_next_batch`, `zeros_like`, `elementwise_multiply`, `sum_values`, `l2rw_virtual_update`, `l2rw_trusted_meta_loss`, `l2rw_epsilon_gradient`, `nonnegative_projection`, `normalize_nonnegative_weights` | `algorithms/l2rw.py`; `training/l2rw_experiment.py` |
+| `l2rw` | `l2rw.yaml` | `get_next_batch`, `virtual_parameter_update`, `functional_forward_with_state`, `per_sample_ce`, `mean_loss`, `parameter_squared_norm`, `weighted_sum`, `gradient_wrt`, `nonnegative_projection`, `normalize_nonnegative_weights` | `algorithms/l2rw.py`; `training/l2rw_experiment.py` |
 
 Scratch data particles do not import the legacy data service at runtime. The source paths above are reference-only; algorithm/model blocks retain their existing implementation audits and are outside this data-particle migration.

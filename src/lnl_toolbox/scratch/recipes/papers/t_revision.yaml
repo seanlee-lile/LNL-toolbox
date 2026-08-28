@@ -49,8 +49,8 @@ steps:
         params: {model: model, metric: stage1_validation_accuracy, metric_name: stage1_validation_accuracy, save_as: best_stage1_state}
   - block: restore_best_model
     params: {model: model, state: best_stage1_state}
-  - block: snapshot_t_revision_posterior
-    params: {model: model, prepared_data: prepared_data, device: device, save_as: t_revision_posterior}
+  - block: collect_posterior_snapshot
+    params: {model: model, loader: train_eval_loader, device: device, dataset: cifar10, split: train, save_as: t_revision_posterior}
   - block: initialize_t_revision_transition
     params: {posterior: t_revision_posterior, device: device, save_as: transition}
   - block: create_optimizer

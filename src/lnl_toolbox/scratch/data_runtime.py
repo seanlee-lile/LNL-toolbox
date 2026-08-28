@@ -576,7 +576,14 @@ def _sample_pdl(samples: Sequence[ScratchSample], clean: Any, classes: int,
     """Scratch-native implementation of PDL Algorithm 2 over raw sample inputs."""
     torch = _torch()
     features = []
-    for sample in samples:
+    supplied_features = config.get("features")
+    if supplied_features is not None:
+        matrix = torch.as_tensor(supplied_features, dtype=torch.float64)
+        if matrix.ndim != 2 or tuple(matrix.shape[:1]) != (len(samples),):
+            raise ValueError(f"pdl features must have shape [{len(samples)}, D]")
+        features = [row.reshape(-1) for row in matrix]
+    iter_samples = samples if supplied_features is None else ()
+    for sample in iter_samples:
         value = _decode_input(sample.input)
         if not isinstance(value, torch.Tensor):
             import numpy as np

@@ -26,12 +26,20 @@ def _torch():
 def pairwise_similarity(ctx: ScratchContext, features: str = "features", metric: str = "inner_product", normalize_features: bool = False, save_as: str = "similarity") -> None:
     torch, F = _torch()
     values = ctx[features].detach()
-    if bool(normalize_features) or str(metric) == "cosine":
+    metric = str(metric).lower()
+    if values.ndim != 2 or not bool(values.numel()) or not bool(torch.isfinite(values).all()):
+        raise ValueError("pairwise_similarity expects finite feature rows [N,D]")
+    original = values
+    if bool(normalize_features) or metric == "cosine":
         values = F.normalize(values, dim=1)
-    if str(metric) in {"inner_product", "cosine"}:
+    if metric in {"inner_product", "cosine"}:
         result = values @ values.T
-    elif str(metric) == "euclidean":
-        result = -torch.cdist(values, values).square()
+    elif metric == "euclidean":
+        # LEND ranks by Euclidean distance (not squared distance); edge
+        # weights remain a separate inner-product operation.  The formal
+        # metric is computed on the original feature geometry even when
+        # ``normalize_features`` is requested for edge weights.
+        result = -torch.cdist(original, original)
     else:
         raise ValueError(f"unsupported similarity metric: {metric}")
     ctx[save_as] = result
@@ -50,11 +58,21 @@ def topk_neighborhood(ctx: ScratchContext, similarity: str = "similarity", stabl
     values = ctx[similarity].detach()
     if values.ndim != 2 or values.shape[0] != values.shape[1]:
         raise ValueError("topk_neighborhood expects a square ranking matrix")
+    if not torch.is_floating_point(values):
+        raise ValueError("topk_neighborhood ranking values must be floating point")
+    # ``-inf`` is a valid ranking sentinel (the formal LEND oracle uses it
+    # on the diagonal before excluding self-neighbours).  NaN and +inf are
+    # never meaningful ranking values and would make the deterministic sort
+    # ambiguous, so reject only those values here.
+    if bool(torch.isnan(values).any()) or bool(torch.isposinf(values).any()):
+        raise ValueError("topk_neighborhood ranking values must not contain NaN or +inf")
     n = int(values.shape[0])
     sample_indices = ctx.get(stable_sample_indices)
     if sample_indices is None:
         sample_indices = torch.arange(n, device=values.device)
     sample_indices = torch.as_tensor(sample_indices, device=values.device).reshape(-1)
+    if sample_indices.dtype not in {torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8}:
+        raise ValueError("stable_sample_indices must use an integer dtype")
     if sample_indices.numel() != n or len(set(sample_indices.detach().cpu().tolist())) != n:
         raise ValueError("stable_sample_indices must be unique and aligned with similarity rows")
     count = min(int(k), max(n - 1, 0))
@@ -85,6 +103,8 @@ def neighbor_edge_weights(ctx: ScratchContext, features: str = "features", neigh
     neighbors = torch.as_tensor(ctx[neighbor_indices], device=values.device, dtype=torch.long)
     if neighbors.ndim != 2 or neighbors.shape[0] != values.shape[0]:
         raise ValueError("neighbor_indices must align with feature rows")
+    if neighbors.numel() and (int(neighbors.min()) < 0 or int(neighbors.max()) >= values.shape[0]):
+        raise ValueError("neighbor_indices contain an out-of-range row")
     selected = values[neighbors]
     source = values[:, None, :]
     weights = (source * selected).sum(dim=-1).clamp_min(0).pow(float(gamma))
@@ -103,10 +123,17 @@ def neighbor_edge_weights(ctx: ScratchContext, features: str = "features", neigh
     requires=("adjacency",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑥ 后验与权重",
 )
 def normalize_graph(ctx: ScratchContext, adjacency: str = "adjacency", save_as: str = "graph") -> None:
+    torch, _ = _torch()
     values = ctx[adjacency]
+    if values.ndim != 2 or values.shape[0] != values.shape[1]:
+        raise ValueError("normalize_graph expects a square adjacency matrix")
+    if not torch.is_floating_point(values) or not bool(torch.isfinite(values).all()) or bool((values < 0).any()):
+        raise ValueError("normalize_graph adjacency must be finite, floating and non-negative")
     gram = values.T @ values
-    degree = gram.sum(dim=1).clamp_min(1e-12)
-    inv_sqrt = degree.rsqrt()
+    degree = gram.sum(dim=1)
+    inv_sqrt = torch.zeros_like(degree)
+    positive = degree > 0
+    inv_sqrt[positive] = degree[positive].rsqrt()
     ctx[save_as] = inv_sqrt[:, None] * gram * inv_sqrt[None, :]
 
 

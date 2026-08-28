@@ -44,6 +44,12 @@ def create_optimizer(
     weight_decay: float = 0.0,
     save_as: str = "optimizer",
 ) -> None:
+    # Recipes that discover feature width on the first batch may invoke this
+    # construction block inside a bounded batch loop.  Reusing an explicitly
+    # named slot keeps optimizer state (momentum/Adam moments) intact while
+    # preserving the single-module construction contract.
+    if save_as in ctx:
+        return
     torch = _torch()
     name = str(optimizer).strip().lower()
     parameters = ctx[model].parameters()
@@ -102,6 +108,64 @@ def create_parameter_group_optimizer(ctx: ScratchContext, optimizer_spec: Any | 
     if optimizer_cls is None:
         raise ValueError(f"unknown Scratch optimizer `{name}`")
     ctx[save_as] = optimizer_cls(parameter_groups, **spec)
+
+
+class _ScratchModelEMA:
+    """Small model-agnostic EMA container owned by Scratch."""
+
+    def __init__(self, model: Any, momentum: float, update_buffers: bool = False) -> None:
+        import copy
+        self.model = copy.deepcopy(model)
+        self.momentum = float(momentum)
+        self.update_buffers = bool(update_buffers)
+        self.model.eval()
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return self.model(*args, **kwargs)
+
+    def eval(self):
+        self.model.eval()
+        return self
+
+    def train(self, mode: bool = True):
+        self.model.train(mode)
+        return self
+
+    def update(self, model: Any) -> None:
+        torch = _torch()
+        with torch.no_grad():
+            for target, source in zip(self.model.parameters(), model.parameters()):
+                target.mul_(self.momentum).add_(source.detach(), alpha=1.0 - self.momentum)
+            if self.update_buffers:
+                for target, source in zip(self.model.buffers(), model.buffers()):
+                    target.copy_(source)
+
+
+@block(
+    id="create_model_ema",
+    name="Create Model EMA",
+    category="State",
+    description="Create an independent exponential moving-average copy for one model slot.",
+    params={"model": {"type": "slot", "default": "model"}, "momentum": {"type": "float", "default": 0.999, "min": 0.0, "max": 1.0}, "update_buffers": {"type": "bool", "default": False}, "save_as": {"type": "slot", "default": "ema_model"}},
+    requires=("model",), provides=("save_as",), placement=("top",), stage="setup", ui_group="④ 状态更新",
+)
+def create_model_ema(ctx: ScratchContext, model: str = "model", momentum: float = 0.999, update_buffers: bool = False, save_as: str = "ema_model") -> None:
+    ctx[save_as] = _ScratchModelEMA(ctx[model], float(momentum), bool(update_buffers))
+
+
+@block(
+    id="update_model_ema",
+    name="Update Model EMA",
+    category="State",
+    description="Update one model EMA from its corresponding live model; parameter and buffer mutation is explicit.",
+    params={"model": {"type": "slot", "default": "model"}, "ema": {"type": "slot", "default": "ema_model"}},
+    requires=("model", "ema"), provides=(), placement=("batch", "epoch"), stage="train", ui_group="④ 状态更新",
+)
+def update_model_ema(ctx: ScratchContext, model: str = "model", ema: str = "ema_model") -> None:
+    value = ctx[ema]
+    if not hasattr(value, "update") or not hasattr(value, "model"):
+        raise TypeError("update_model_ema requires a Scratch model EMA container")
+    value.update(ctx[model])
 
 
 @block(
@@ -168,9 +232,11 @@ def create_scaled_scheduler(ctx: ScratchContext, optimizer: str = "optimizer", m
     category="Optimization",
     description="Advance a scaled scheduler using an explicit nonnegative scaling value.",
     params={"scheduler": {"type": "slot", "default": "scheduler"}, "scale_value": {"type": "slot", "default": "confidence_weight"}},
-    requires=("scheduler", "confidence_weight"), placement=("epoch",), stage="train", ui_group="⑩ 论文专用", beginner_visible=False,
+    requires=("scheduler",), placement=("epoch",), stage="train", ui_group="⑩ 论文专用", beginner_visible=False,
 )
 def scaled_scheduler_step(ctx: ScratchContext, scheduler: str = "scheduler", scale_value: str = "confidence_weight") -> None:
+    if scale_value not in ctx:
+        raise ValueError(f"scaled_scheduler_step requires scale slot `{scale_value}`")
     ctx[scheduler].step(float(ctx[scale_value]))
 
 

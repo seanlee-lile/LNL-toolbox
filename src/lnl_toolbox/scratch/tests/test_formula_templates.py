@@ -175,10 +175,12 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
         chain = blocks.index("zeros_like")
         self.assertEqual(
             blocks[chain:chain + 7],
-            ["zeros_like", "elementwise_multiply", "sum_values", "l2rw_virtual_update", "l2rw_trusted_meta_loss", "l2rw_epsilon_gradient", "nonnegative_projection"],
+            ["zeros_like", "elementwise_multiply", "sum_values", "virtual_parameter_update", "functional_forward_with_state", "per_sample_ce", "mean_loss"],
         )
-        self.assertNotIn("l2rw_meta_gradient", blocks)
-        self.assertNotIn("l2rw_normalize_weights", blocks)
+        self.assertIn("gradient_wrt", blocks)
+        self.assertNotIn("l2rw_virtual_update", blocks)
+        self.assertNotIn("l2rw_trusted_meta_loss", blocks)
+        self.assertNotIn("l2rw_epsilon_gradient", blocks)
 
     def test_cal_recipe_keeps_external_proxy_stage_separate(self) -> None:
         recipe = load_recipe(ROOT / "recipes" / "papers" / "cal.yaml")

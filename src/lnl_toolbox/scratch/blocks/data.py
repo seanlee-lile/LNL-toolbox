@@ -55,6 +55,33 @@ _VALID_ROLES = {
 }
 
 
+def _serializable(value: Any) -> Any:
+    """Keep ``data_plan`` an audit/config object, never a runtime object.
+
+    Recipe options are user supplied, so this boundary is deliberately
+    defensive: primitive values and nested containers are retained while
+    tensors, datasets, transforms and other live objects are represented by a
+    stable type marker.  Runtime values always travel through Context slots.
+    """
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _serializable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_serializable(item) for item in value]
+    try:
+        from pathlib import Path
+        if isinstance(value, Path):
+            return str(value)
+    except Exception:
+        pass
+    return {"type": f"{type(value).__module__}.{type(value).__qualname__}"}
+
+
+def _serializable_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
+    return _serializable(dict(plan))
+
+
 def _plan(ctx: ScratchContext, slot: str = "data_plan") -> dict[str, Any]:
     current = ctx.get(slot)
     if current is None:
@@ -67,6 +94,13 @@ def _plan(ctx: ScratchContext, slot: str = "data_plan") -> dict[str, Any]:
         ctx[slot] = current
     if not isinstance(current, dict):
         raise TypeError(f"{slot} must contain a mutable data plan")
+    # Existing plans may have been produced by an older runtime.  Scrub live
+    # objects once at the boundary; subsequent Blocks use Context slots for
+    # every runtime value and only append serialisable configuration here.
+    cleaned = _serializable_plan(current)
+    if cleaned != current:
+        current.clear()
+        current.update(cleaned)
     return current
 
 
@@ -105,7 +139,7 @@ def load_dataset(ctx: ScratchContext, dataset: str, root: str = "", path: str = 
     catalog = ctx.get("dataset_catalog")
     if isinstance(catalog, Mapping) and data["name"] in catalog:
         data["source"] = catalog[data["name"]]
-    plan["data"] = {key: value for key, value in data.items() if key != "source"}
+    plan["data"] = _serializable({key: value for key, value in data.items() if key != "source"})
     plan.setdefault("seed", int(ctx.get("seed", 1)))
     load_plan = dict(plan)
     load_plan["data"] = data
@@ -113,11 +147,11 @@ def load_dataset(ctx: ScratchContext, dataset: str, root: str = "", path: str = 
     # Fixture substitution is a source-loading concern. Keep the requested
     # recipe metadata, but make the concrete sources available immediately.
     if effective is not plan:
-        plan["data"] = {key: value for key, value in dict(effective.get("data", {})).items()
-                         if key != "source"}
-        plan["split"] = dict(effective.get("split", plan.get("split", {})))
-        plan["loader"] = dict(effective.get("loader", plan.get("loader", {})))
-        plan["noise"] = dict(effective.get("noise", plan.get("noise", {})))
+        plan["data"] = _serializable({key: value for key, value in dict(effective.get("data", {})).items()
+                                       if key != "source"})
+        plan["split"] = _serializable(dict(effective.get("split", plan.get("split", {}))))
+        plan["loader"] = _serializable(dict(effective.get("loader", plan.get("loader", {}))))
+        plan["noise"] = _serializable(dict(effective.get("noise", plan.get("noise", {}))))
     plan["num_classes"] = int(train_source.num_classes)
     ctx[save_as] = plan
     ctx["data_spec"] = {k: v for k, v in data.items() if k != "source"}
@@ -218,24 +252,49 @@ def select_label_source(ctx: ScratchContext, data_plan: str = "data_plan", train
             "rate": {"type": "float", "default": 0.0, "min": 0.0, "max": 1.0},
             "seed": {"type": "int", "default": 1, "min": 0},
             "sampling": {"type": "str", "default": "transition"},
-            "options": {"type": "value", "default": {}}},
+            "options": {"type": "value", "default": {}},
+            # Optional runtime evidence for instance-dependent noise.  When
+            # supplied, the value must name an existing Context slot; when
+            # omitted the block fails explicitly if the selected noise type
+            # requires evidence rather than silently fabricating it.
+            "class_scores": {"type": "slot"},
+            "features": {"type": "slot"}},
     requires=("train_split",), provides=("noisy_train_split", "clean_train_split", "noise_state", "transition"), placement=("top",), stage="data", ui_group="① 数据准备",
 )
 def apply_noise(ctx: ScratchContext, data_plan: str = "data_plan", name: str = "none",
                 rate: float = 0.0, seed: int = 1, sampling: str = "transition",
-                options: Mapping[str, Any] | None = None) -> None:
+                options: Mapping[str, Any] | None = None,
+                class_scores: str = "", features: str = "") -> None:
     if not 0.0 <= float(rate) <= 1.0:
         raise ValueError("noise rate must be between 0 and 1")
     plan = _plan(ctx, data_plan)
-    plan["noise"] = {"name": str(name), "rate": float(rate), "seed": int(seed),
-                     "sampling": str(sampling), **dict(options or {})}
+    raw_options = dict(options or {})
+    plan["noise"] = _serializable({"name": str(name), "rate": float(rate), "seed": int(seed),
+                                    "sampling": str(sampling), **raw_options})
     runtime_limits = ctx.get("_runtime_limits", {})
     if isinstance(runtime_limits, Mapping) and runtime_limits.get("fixture") and str(name).lower() in {"external", "external_torch"}:
         plan["noise"] = {"name": "symmetric", "rate": float(rate), "seed": int(seed)}
     train_split = ctx.get("train_split")
     if train_split is None:
         raise ValueError("apply_noise requires train_split from create_dataset_split")
-    noise_config = plan["noise"]
+    # Runtime-only score/feature matrices are explicit Context inputs.  They
+    # are never copied into the serialisable audit plan.
+    noise_config = {"name": str(name), "rate": float(rate), "seed": int(seed),
+                    "sampling": str(sampling), **raw_options}
+    if isinstance(runtime_limits, Mapping) and runtime_limits.get("fixture") and str(name).lower() in {"external", "external_torch"}:
+        noise_config = {"name": "symmetric", "rate": float(rate), "seed": int(seed)}
+    if class_scores:
+        if class_scores not in ctx:
+            raise ValueError(f"apply_noise requires class-score slot `{class_scores}`")
+        noise_config["class_scores"] = ctx[class_scores]
+    if features:
+        if features not in ctx:
+            raise ValueError(f"apply_noise requires feature slot `{features}`")
+        noise_config["features"] = ctx[features]
+    if class_scores:
+        plan["noise"]["class_scores_slot"] = str(class_scores)
+    if features:
+        plan["noise"]["features_slot"] = str(features)
     noisy_train, manifest, clean_by_index = apply_noise_to_split(train_split, noise_config)
     clean_train = train_split
     if clean_by_index and not train_split.has_clean_targets:
@@ -312,8 +371,8 @@ def configure_preprocessing(ctx: ScratchContext, data_plan: str = "data_plan", p
                             augment: bool = False, strong_augment: bool = False,
                             options: Mapping[str, Any] | None = None) -> None:
     plan = _plan(ctx, data_plan)
-    plan["preprocessing"] = {"name": str(preprocessing), "augment": bool(augment),
-                             "strong_augment": bool(strong_augment), **dict(options or {})}
+    plan["preprocessing"] = _serializable({"name": str(preprocessing), "augment": bool(augment),
+                                            "strong_augment": bool(strong_augment), **dict(options or {})})
     source = ctx.get("train_split")
     if source is None:
         raise ValueError("configure_preprocessing requires a loaded/split source")
@@ -333,7 +392,7 @@ def configure_views(ctx: ScratchContext, data_plan: str = "data_plan", views: Se
     if not values or len(values) != len(set(values)):
         raise ValueError("views must be a non-empty list of unique names")
     plan = _plan(ctx, data_plan)
-    plan["views"] = values
+    plan["views"] = list(values)
     plan["requirements"]["views"] = list(values)
     source = ctx.get("train_split")
     if source is None:
@@ -425,8 +484,8 @@ def configure_loader(ctx: ScratchContext, data_plan: str = "data_plan", batch_si
         # batch size exceeds the fixture size, preventing downstream Blocks
         # from observing the canonical batch contract.
         drop_last = False
-    plan["loader"] = {"batch_size": int(batch_size), "num_workers": int(num_workers),
-                      "pin_memory": bool(pin_memory), "drop_last": bool(drop_last), **dict(options or {})}
+    plan["loader"] = _serializable({"batch_size": int(batch_size), "num_workers": int(num_workers),
+                                     "pin_memory": bool(pin_memory), "drop_last": bool(drop_last), **dict(options or {})})
     plan["loader_spec"] = dict(plan["loader"])
     ctx["loader_spec"] = plan["loader_spec"]
 
@@ -499,64 +558,80 @@ def build_loaders(ctx: ScratchContext, role_datasets: str = "role_datasets",
 
 
 @block(
-    id="snapshot_model_outputs",
-    name="Snapshot Model Outputs",
-    category="Statistics",
-    description="Collect detached features/posteriors with canonical targets and split-local indices from a model and loader.",
-    params={"model": {"type": "slot", "default": "model"},
-            "loader": {"type": "slot", "default": "loader"},
-            "device": {"type": "slot", "default": "device"},
-            "features_as": {"type": "slot", "default": "features"},
-            "posterior_as": {"type": "slot", "default": "posterior"},
-            "targets_as": {"type": "slot", "default": "snapshot_targets"},
-            "indices_as": {"type": "slot", "default": "snapshot_indices"},
-            "save_as": {"type": "slot", "default": "snapshot"}},
-    requires=("model", "loader"),
-    provides=("save_as", "features_as", "posterior_as", "targets_as", "indices_as"),
-    placement=("top", "epoch"), stage="evaluate", ui_group="⑥ 后验与权重",
+    id="collect_posterior_snapshot", name="Collect Posterior Snapshot", category="Statistics",
+    description="Collect detached class probabilities, observed targets and stable indices from a model/loader pair.",
+    params={"model": {"type": "slot", "default": "model"}, "loader": {"type": "slot", "default": "loader"}, "device": {"type": "slot", "default": "device"}, "dataset": {"type": "str", "default": "dataset"}, "split": {"type": "str", "default": "split"}, "save_as": {"type": "slot", "default": "posterior_snapshot"}, "probabilities_as": {"type": "slot", "default": "posterior"}, "targets_as": {"type": "slot", "default": "snapshot_targets"}, "indices_as": {"type": "slot", "default": "snapshot_indices"}},
+    requires=("model", "loader"), provides=("save_as", "probabilities_as", "targets_as", "indices_as"), placement=("top", "epoch"), stage="evaluate", ui_group="⑥ 后验与权重",
 )
-def snapshot_model_outputs(ctx: ScratchContext, model: str = "model", loader: str = "loader",
-                           device: str = "device", features_as: str = "features",
-                           posterior_as: str = "posterior", targets_as: str = "snapshot_targets",
-                           indices_as: str = "snapshot_indices", save_as: str = "snapshot") -> None:
-    torch = _torch()
-    network = ctx[model]
-    target_device = ctx.get(device)
-    was_training = bool(getattr(network, "training", False))
-    network.eval()
-    features, posteriors, targets, indices = [], [], [], []
-    with torch.no_grad():
-        for batch in ctx[loader]:
-            inputs = batch["inputs"] if isinstance(batch, Mapping) else batch[0]
-            labels = batch["targets"] if isinstance(batch, Mapping) else batch[1]
-            sample_indices = batch.get("indices") if isinstance(batch, Mapping) else (batch[2] if len(batch) > 2 else None)
-            if target_device is not None and hasattr(inputs, "to"):
-                inputs = inputs.to(target_device)
-            output = network.forward_with_features(inputs) if hasattr(network, "forward_with_features") else network(inputs)
-            if hasattr(output, "logits"):
-                logits = output.logits
-                hidden = output.features
-            elif isinstance(output, (tuple, list)) and len(output) >= 2:
-                logits, hidden = output[0], output[1]
-            else:
-                logits, hidden = output, output
-            features.append(hidden.detach().cpu())
-            posteriors.append(torch.softmax(logits, dim=-1).detach().cpu())
-            targets.append(torch.as_tensor(labels).detach().cpu().long())
-            indices.append(torch.arange(len(labels), dtype=torch.long) if sample_indices is None
-                           else torch.as_tensor(sample_indices).detach().cpu().long())
-    if was_training:
-        network.train()
-    feature_values = torch.cat(features, dim=0) if features else torch.empty((0, 0))
-    posterior_values = torch.cat(posteriors, dim=0) if posteriors else torch.empty((0, 0))
-    target_values = torch.cat(targets, dim=0) if targets else torch.empty((0,), dtype=torch.long)
-    index_values = torch.cat(indices, dim=0) if indices else torch.empty((0,), dtype=torch.long)
-    ctx[features_as] = feature_values
-    ctx[posterior_as] = posterior_values
-    ctx[targets_as] = target_values
-    ctx[indices_as] = index_values
-    ctx[save_as] = {"features": feature_values, "posterior": posterior_values,
-                    "targets": target_values, "indices": index_values}
+def collect_posterior_snapshot(ctx: ScratchContext, model: str = "model", loader: str = "loader", device: str = "device", dataset: str = "dataset", split: str = "split", save_as: str = "posterior_snapshot", probabilities_as: str = "posterior", targets_as: str = "snapshot_targets", indices_as: str = "snapshot_indices") -> None:
+    from ..native_stats import collect_posterior_snapshot as collect
+    target_device = ctx.get(device, "cpu")
+    value = collect(ctx[model], ctx[loader], target_device, dataset=str(ctx.get(dataset, dataset)), split=str(ctx.get(split, split)))
+    ctx[save_as] = value
+    ctx[probabilities_as] = value.noisy_probabilities
+    ctx[targets_as] = value.noisy_targets
+    ctx[indices_as] = value.global_indices
+
+
+@block(
+    id="collect_feature_snapshot", name="Collect Feature Snapshot", category="Statistics",
+    description="Collect detached feature vectors, observed targets and stable indices from a model/loader pair.",
+    params={"model": {"type": "slot", "default": "model"}, "loader": {"type": "slot", "default": "loader"}, "device": {"type": "slot", "default": "device"}, "dataset": {"type": "str", "default": "dataset"}, "split": {"type": "str", "default": "split"}, "layers": {"type": "value", "default": []}, "save_as": {"type": "slot", "default": "feature_snapshot"}, "features_as": {"type": "slot", "default": "features"}, "targets_as": {"type": "slot", "default": "snapshot_targets"}, "indices_as": {"type": "slot", "default": "snapshot_indices"}},
+    requires=("model", "loader"), provides=("save_as", "features_as", "targets_as", "indices_as"), placement=("top", "epoch"), stage="evaluate", ui_group="⑥ 后验与权重",
+)
+def collect_feature_snapshot(ctx: ScratchContext, model: str = "model", loader: str = "loader", device: str = "device", dataset: str = "dataset", split: str = "split", layers: Sequence[str] = (), save_as: str = "feature_snapshot", features_as: str = "features", targets_as: str = "snapshot_targets", indices_as: str = "snapshot_indices") -> None:
+    from ..native_stats import PCSEFeatureLayerConfig, collect_feature_snapshot as collect, collect_pcse_features
+    target_device = ctx.get(device, "cpu")
+    layer_names = tuple(str(value) for value in (layers or ()))
+    if layer_names:
+        value = collect_pcse_features(
+            ctx[model], ctx[loader], target_device,
+            dataset=str(ctx.get(dataset, dataset)), split=str(ctx.get(split, split)),
+            layers=tuple(PCSEFeatureLayerConfig(name, "global_average") for name in layer_names),
+        ).snapshots
+    else:
+        value = collect(ctx[model], ctx[loader], target_device, dataset=str(ctx.get(dataset, dataset)), split=str(ctx.get(split, split)))
+    ctx[save_as] = value
+    if isinstance(value, tuple):
+        ctx[features_as] = tuple(item.features for item in value)
+        ctx[targets_as] = tuple(item.noisy_targets for item in value)
+        ctx[indices_as] = tuple(item.global_indices for item in value)
+    else:
+        ctx[features_as] = value.features
+        ctx[targets_as] = value.noisy_targets
+        ctx[indices_as] = value.global_indices
+
+
+def _resolve_snapshot_values(ctx: ScratchContext, snapshots: Any) -> tuple[Any, ...]:
+    values = ctx[snapshots] if isinstance(snapshots, str) else snapshots
+    if not isinstance(values, (list, tuple)):
+        values = (values,)
+    resolved = tuple(ctx[item] if isinstance(item, str) else item for item in values)
+    if not resolved:
+        raise ValueError("snapshot merge requires at least one snapshot")
+    return resolved
+
+
+@block(
+    id="merge_feature_snapshots", name="Merge Feature Snapshots", category="Statistics",
+    description="Concatenate public feature snapshots without rerunning inference or an estimator.",
+    params={"snapshots": {"type": "value", "default": []}, "save_as": {"type": "slot", "default": "feature_snapshot"}},
+    requires=(), provides=("save_as",), placement=("top", "epoch"), stage="evaluate", ui_group="⑥ 后验与权重",
+)
+def merge_feature_snapshots(ctx: ScratchContext, snapshots: Any = (), save_as: str = "feature_snapshot") -> None:
+    from ..native_stats import merge_feature_snapshots as merge
+    ctx[save_as] = merge(_resolve_snapshot_values(ctx, snapshots))
+
+
+@block(
+    id="merge_posterior_snapshots", name="Merge Posterior Snapshots", category="Statistics",
+    description="Concatenate public posterior snapshots without fitting a transition estimator.",
+    params={"snapshots": {"type": "value", "default": []}, "save_as": {"type": "slot", "default": "posterior_snapshot"}},
+    requires=(), provides=("save_as",), placement=("top", "epoch"), stage="evaluate", ui_group="⑥ 后验与权重",
+)
+def merge_posterior_snapshots(ctx: ScratchContext, snapshots: Any = (), save_as: str = "posterior_snapshot") -> None:
+    from ..native_stats import merge_posterior_snapshots as merge
+    ctx[save_as] = merge(_resolve_snapshot_values(ctx, snapshots))
 
 
 @block(

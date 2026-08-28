@@ -29,8 +29,8 @@ steps:
     steps:
       - block: refresh_epoch_loader
         params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}
-      - block: snapshot_cwd_features
-        params: {model: model, loader: train_eval_loader, device: device, save_as: cwd_snapshot}
+      - block: collect_feature_snapshot
+        params: {model: model, loader: train_eval_loader, device: device, dataset: cifar10_airplane_automobile, split: train_fold_0, save_as: cwd_snapshot, features_as: cwd_features, targets_as: cwd_snapshot_targets, indices_as: cwd_snapshot_indices}
       - block: cwd_observed_statistics
         params: {snapshot: cwd_snapshot, transition: transition, save_as: cwd_observed}
       - block: cwd_clean_prior

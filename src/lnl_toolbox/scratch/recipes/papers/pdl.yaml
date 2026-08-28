@@ -65,8 +65,20 @@ steps:
         params: {model: model, metric: warmup_validation_accuracy, metric_name: warmup_validation_accuracy, save_as: best_warmup_state}
   - block: restore_best_model
     params: {model: model, state: best_warmup_state}
-  - block: snapshot_pdl_features
-    params: {model: model, prepared_data: prepared_data, device: device}
+  # Snapshot collection is a public model+loader operation.  PDL only
+  # assembles the two split snapshots before fitting its representation.
+  - block: collect_posterior_snapshot
+    params: {model: model, loader: train_loader, device: device, dataset: cifar10, split: train, save_as: pdl_train_posteriors, probabilities_as: pdl_train_posterior_values, targets_as: pdl_train_snapshot_targets, indices_as: pdl_train_snapshot_indices}
+  - block: collect_posterior_snapshot
+    params: {model: model, loader: validation_loader, device: device, dataset: cifar10, split: noisy_validation, save_as: pdl_validation_posteriors, probabilities_as: pdl_validation_posterior_values, targets_as: pdl_validation_snapshot_targets, indices_as: pdl_validation_snapshot_indices}
+  - block: merge_posterior_snapshots
+    params: {snapshots: [pdl_train_posteriors, pdl_validation_posteriors], save_as: pdl_representation_posteriors}
+  - block: collect_feature_snapshot
+    params: {model: model, loader: train_loader, device: device, dataset: cifar10, split: train, save_as: pdl_train_features, features_as: pdl_train_feature_values, targets_as: pdl_train_feature_targets, indices_as: pdl_train_feature_indices}
+  - block: collect_feature_snapshot
+    params: {model: model, loader: validation_loader, device: device, dataset: cifar10, split: noisy_validation, save_as: pdl_validation_features, features_as: pdl_validation_feature_values, targets_as: pdl_validation_feature_targets, indices_as: pdl_validation_feature_indices}
+  - block: merge_feature_snapshots
+    params: {snapshots: [pdl_train_features, pdl_validation_features], save_as: pdl_representation_features}
   - block: pdl_fit_part_representation
     params:
       features: pdl_representation_features
@@ -128,8 +140,26 @@ steps:
             params: {optimizer: correction_optimizer}
           - block: forward
             params: {model: model, input: images, save_as: logits}
-          - block: transition_corrected_risk
-            params: {logits: logits, labels: labels, indices: indices, transition: pdl_transition, save_as: loss_per_sample}
+          - block: softmax
+            params: {logits: logits, detach: false, save_as: pdl_clean_probabilities}
+          - block: materialize_transition
+            params: {artifact: pdl_transition, indices: indices, device: device, save_as: pdl_transition_matrix}
+          - block: apply_transition
+            params: {probabilities: pdl_clean_probabilities, transition: pdl_transition_matrix, save_as: pdl_observed_probabilities}
+          - block: gather_by_label
+            params: {values: pdl_clean_probabilities, labels: labels, save_as: pdl_clean_target_probability}
+          - block: gather_by_label
+            params: {values: pdl_observed_probabilities, labels: labels, save_as: pdl_observed_target_probability}
+          - block: clamp_min
+            params: {input: pdl_clean_target_probability, minimum: 1.0e-12, save_as: pdl_clean_target_probability_safe}
+          - block: clamp_min
+            params: {input: pdl_observed_target_probability, minimum: 1.0e-12, save_as: pdl_observed_target_probability_safe}
+          - block: safe_divide
+            params: {numerator: pdl_clean_target_probability_safe, denominator: pdl_observed_target_probability_safe, minimum: 1.0e-12, save_as: pdl_correction_weight}
+          - block: negative_log
+            params: {input: pdl_clean_target_probability_safe, minimum: 1.0e-12, save_as: pdl_negative_log_probability}
+          - block: elementwise_multiply
+            params: {left: pdl_correction_weight, right: pdl_negative_log_probability, save_as: loss_per_sample}
           - block: mean_loss
             params: {input: loss_per_sample, save_as: loss}
           - {block: backward}
@@ -166,8 +196,26 @@ steps:
             params: {model: model, input: images, save_as: logits}
           - block: compose_revision_transition
             params: {model: model, indices: indices, transition: pdl_transition, save_as: revised_transition}
-          - block: transition_corrected_risk
-            params: {logits: logits, labels: labels, indices: indices, transition: revised_transition, save_as: loss_per_sample}
+          - block: softmax
+            params: {logits: logits, detach: false, save_as: pdl_clean_probabilities}
+          - block: materialize_transition
+            params: {artifact: revised_transition, indices: indices, device: device, save_as: pdl_revised_transition_matrix}
+          - block: apply_transition
+            params: {probabilities: pdl_clean_probabilities, transition: pdl_revised_transition_matrix, save_as: pdl_observed_probabilities}
+          - block: gather_by_label
+            params: {values: pdl_clean_probabilities, labels: labels, save_as: pdl_clean_target_probability}
+          - block: gather_by_label
+            params: {values: pdl_observed_probabilities, labels: labels, save_as: pdl_observed_target_probability}
+          - block: clamp_min
+            params: {input: pdl_clean_target_probability, minimum: 1.0e-12, save_as: pdl_clean_target_probability_safe}
+          - block: clamp_min
+            params: {input: pdl_observed_target_probability, minimum: 1.0e-12, save_as: pdl_observed_target_probability_safe}
+          - block: safe_divide
+            params: {numerator: pdl_clean_target_probability_safe, denominator: pdl_observed_target_probability_safe, minimum: 1.0e-12, save_as: pdl_revision_correction_weight}
+          - block: negative_log
+            params: {input: pdl_clean_target_probability_safe, minimum: 1.0e-12, save_as: pdl_revision_negative_log_probability}
+          - block: elementwise_multiply
+            params: {left: pdl_revision_correction_weight, right: pdl_revision_negative_log_probability, save_as: loss_per_sample}
           - block: mean_loss
             params: {input: loss_per_sample, save_as: loss}
           - {block: backward}

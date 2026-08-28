@@ -65,8 +65,8 @@ steps:
         params: {scheduler: posterior_scheduler}
   - block: restore_best_model
     params: {model: posterior_model, state: best_posterior_state}
-  - block: snapshot_posterior_model
-    params: {model: posterior_model, loader: train_loader, prepared_data: prepared_data, device: device}
+  - block: collect_posterior_snapshot
+    params: {model: posterior_model, loader: train_loader, device: device, dataset: cifar10, split: train, save_as: posterior_snapshot}
   - block: dual_t_transition_estimation
     params: {posterior: posterior_snapshot, save_as: transition}
   - block: create_model

@@ -136,6 +136,19 @@ class DataBlockExecutionTest(unittest.TestCase):
         self.assertFalse(torch.equal(manifest.per_sample_transition[0], manifest.per_sample_transition[3]))
         self.assertTrue(any(a.observed_target != b.observed_target for a, b in zip(train.samples, noisy.samples)))
 
+    def test_runtime_instance_scores_stay_out_of_serializable_data_plan(self) -> None:
+        scores = torch.tensor([[4.0, 0.0, 0.0], [0.0, 4.0, 0.0], [0.0, 0.0, 4.0]])
+        source = {"train": ScratchSplit("scores", "train", tuple(
+            ScratchSample(torch.tensor([float(i)]), i, i % 3, i % 3) for i in range(3)), 3),
+                  "test": ScratchSplit("scores", "test", tuple((
+            ScratchSample(torch.tensor([0.0]), 0, 0, 0),)), 3)}
+        ctx = ScratchContext(scores=scores)
+        load_dataset(ctx, "custom", options={"source": source})
+        create_dataset_split(ctx, validation_size=0)
+        apply_noise(ctx, name="instance_dependent", rate=0.5, seed=2, class_scores="scores")
+        self.assertNotIn("class_scores", ctx["data_plan"]["noise"])
+        self.assertNotIsInstance(ctx["data_plan"]["noise"], torch.Tensor)
+
     def test_pdl_noise_uses_input_features_and_publishes_transitions(self) -> None:
         def make(value: float) -> ScratchSplit:
             return ScratchSplit("toy", "train", tuple(

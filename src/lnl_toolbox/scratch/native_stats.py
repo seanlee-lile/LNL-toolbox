@@ -20,16 +20,22 @@ def _torch():
     return torch
 
 
-def _batch_fields(batch: Mapping[str, Any]):
-    inputs = batch.get("inputs", batch.get("input", batch.get("images")))
-    targets = batch.get("targets", batch.get("target", batch.get("labels")))
-    indices = batch.get("indices", batch.get("index"))
+def _batch_fields(batch: Mapping[str, Any], *, index_offset: int = 0):
+    if isinstance(batch, Mapping):
+        inputs = batch.get("inputs", batch.get("input", batch.get("images")))
+        targets = batch.get("targets", batch.get("target", batch.get("labels")))
+        indices = batch.get("indices", batch.get("index"))
+    elif isinstance(batch, (tuple, list)) and len(batch) >= 2:
+        inputs, targets = batch[0], batch[1]
+        indices = batch[2] if len(batch) >= 3 else None
+    else:
+        raise ValueError("snapshot batch must be a mapping or (inputs, targets, indices) tuple")
     if inputs is None or targets is None:
         raise ValueError("snapshot batch requires inputs and targets")
     torch = _torch()
     targets = torch.as_tensor(targets).long()
     if indices is None:
-        indices = torch.arange(targets.numel(), device=targets.device)
+        indices = torch.arange(int(index_offset), int(index_offset) + targets.numel(), device=targets.device)
     return inputs, targets, torch.as_tensor(indices).long()
 
 
@@ -115,6 +121,11 @@ class FeatureSnapshot:
 
 def _model_outputs(model: Any, inputs: Any):
     output = model(inputs)
+    if isinstance(output, Mapping):
+        logits = output.get("logits", output.get("output"))
+        if logits is None:
+            raise ValueError("model output mapping must contain `logits`")
+        return logits, output.get("features", logits)
     if hasattr(output, "logits"):
         return output.logits, getattr(output, "features", output.logits)
     if isinstance(output, (tuple, list)):
@@ -128,14 +139,18 @@ def collect_posterior_snapshot(model: Any, loader: Iterable[Mapping[str, Any]], 
     torch = _torch()
     was_training = bool(getattr(model, "training", False)); model.eval()
     probs, targets, indices = [], [], []
-    with torch.no_grad():
-        for batch in loader:
-            inputs, labels, sample_indices = _batch_fields(batch)
-            logits, _ = _model_outputs(model, inputs.to(device))
-            probs.append(torch.softmax(logits, -1).detach().cpu().numpy())
-            targets.append(labels.detach().cpu().numpy())
-            indices.append(sample_indices.detach().cpu().numpy())
-    model.train(was_training)
+    try:
+        with torch.no_grad():
+            offset = 0
+            for batch in loader:
+                inputs, labels, sample_indices = _batch_fields(batch, index_offset=offset)
+                logits, _ = _model_outputs(model, inputs.to(device))
+                probs.append(torch.softmax(logits, -1).detach().cpu().numpy())
+                targets.append(labels.detach().cpu().numpy())
+                indices.append(sample_indices.detach().cpu().numpy())
+                offset += int(labels.numel())
+    finally:
+        model.train(was_training)
     if not probs:
         raise ValueError("snapshot loader is empty")
     return PosteriorSnapshot(np.concatenate(probs), np.concatenate(targets), np.concatenate(indices), dataset, split)
@@ -145,24 +160,87 @@ def collect_feature_snapshot(model: Any, loader: Iterable[Mapping[str, Any]], de
     torch = _torch()
     was_training = bool(getattr(model, "training", False)); model.eval()
     features, targets, indices = [], [], []
-    with torch.no_grad():
-        for batch in loader:
-            inputs, labels, sample_indices = _batch_fields(batch)
-            inputs = inputs.to(device)
-            output = model(inputs) if feature_extractor is None else feature_extractor(model, inputs)
-            if hasattr(output, "features"):
-                output = output.features
-            elif isinstance(output, (tuple, list)):
-                output = output[-1]
-            if not torch.is_tensor(output):
-                output = torch.as_tensor(output)
-            features.append(output.detach().flatten(start_dim=1).cpu().numpy())
-            targets.append(labels.detach().cpu().numpy())
-            indices.append(sample_indices.detach().cpu().numpy())
-    model.train(was_training)
+    try:
+        with torch.no_grad():
+            offset = 0
+            for batch in loader:
+                inputs, labels, sample_indices = _batch_fields(batch, index_offset=offset)
+                inputs = inputs.to(device)
+                if feature_extractor is not None:
+                    output = feature_extractor(model, inputs)
+                elif hasattr(model, "forward_with_features"):
+                    output = model.forward_with_features(inputs)
+                else:
+                    output = model(inputs)
+                if isinstance(output, Mapping):
+                    output = output.get("features", output.get("logits"))
+                elif hasattr(output, "features"):
+                    output = output.features
+                elif isinstance(output, (tuple, list)):
+                    output = output[-1]
+                if output is None:
+                    raise ValueError("model output mapping must contain `features` or `logits`")
+                if not torch.is_tensor(output):
+                    output = torch.as_tensor(output)
+                features.append(output.detach().flatten(start_dim=1).cpu().numpy())
+                targets.append(labels.detach().cpu().numpy())
+                indices.append(sample_indices.detach().cpu().numpy())
+                offset += int(labels.numel())
+    finally:
+        model.train(was_training)
     if not features:
         raise ValueError("snapshot loader is empty")
     return FeatureSnapshot(np.concatenate(features), np.concatenate(targets), np.concatenate(indices), dataset, split)
+
+
+def merge_posterior_snapshots(snapshots: Iterable[PosteriorSnapshot]) -> PosteriorSnapshot:
+    """Concatenate aligned posterior snapshots without fitting an estimator.
+
+    Snapshot collection and snapshot assembly are intentionally separate from
+    transition/statistics estimation.  Numeric sample indices must remain
+    unambiguous in the merged view; callers that need to combine independent
+    namespaces should first materialize an explicit namespace mapping.
+    """
+    values = tuple(snapshots)
+    if not values or not all(isinstance(item, PosteriorSnapshot) for item in values):
+        raise TypeError("merge_posterior_snapshots requires PosteriorSnapshot values")
+    dataset = values[0].dataset
+    classes = values[0].num_classes
+    if any(item.dataset != dataset or item.num_classes != classes for item in values):
+        raise ValueError("posterior snapshots must share dataset and class dimensions")
+    indices = np.concatenate([item.global_indices for item in values])
+    if np.unique(indices).size != indices.size:
+        raise ValueError("posterior snapshot indices must be unique in the merged view")
+    split = "+".join(item.split for item in values)
+    return PosteriorSnapshot(
+        np.concatenate([item.noisy_probabilities for item in values], axis=0),
+        np.concatenate([item.noisy_targets for item in values], axis=0),
+        indices,
+        dataset,
+        split,
+    )
+
+
+def merge_feature_snapshots(snapshots: Iterable[FeatureSnapshot]) -> FeatureSnapshot:
+    """Concatenate aligned feature snapshots without running a model again."""
+    values = tuple(snapshots)
+    if not values or not all(isinstance(item, FeatureSnapshot) for item in values):
+        raise TypeError("merge_feature_snapshots requires FeatureSnapshot values")
+    dataset = values[0].dataset
+    width = values[0].features.shape[1]
+    if any(item.dataset != dataset or item.features.shape[1] != width for item in values):
+        raise ValueError("feature snapshots must share dataset and feature dimensions")
+    indices = np.concatenate([item.global_indices for item in values])
+    if np.unique(indices).size != indices.size:
+        raise ValueError("feature snapshot indices must be unique in the merged view")
+    split = "+".join(item.split for item in values)
+    return FeatureSnapshot(
+        np.concatenate([item.features for item in values], axis=0),
+        np.concatenate([item.noisy_targets for item in values], axis=0),
+        indices,
+        dataset,
+        split,
+    )
 
 
 def fit_part_representation(features: Any, num_parts: int, *, seed: int | None = 0, iterations: int = 200, error_tolerance: float = 1e-5):
@@ -354,8 +432,78 @@ class PCSEFeatureLayerConfig:
 
 
 def collect_pcse_features(model, loader, device, *, dataset: str, split: str, layers: Iterable[PCSEFeatureLayerConfig]):
-    snapshot = collect_feature_snapshot(model, loader, device, dataset=dataset, split=split)
-    return SimpleNamespace(snapshots=[snapshot for _ in layers])
+    """Collect one aligned feature snapshot per named hidden layer.
+
+    This is deliberately a thin layer-specific view over the public feature
+    snapshot primitive.  Each requested layer is captured with a temporary
+    forward hook; no estimator, transition fitting or paper state is created
+    here.  In particular, never duplicate the final feature snapshot for
+    multiple layer names: PCSE's statistics are layer-dependent.
+    """
+    torch = _torch()
+    import torch.nn.functional as functional
+
+    requested = tuple(layers)
+    if not requested:
+        raise ValueError("PCSE requires at least one feature layer")
+    names = tuple(str(layer.name) for layer in requested)
+    if len(set(names)) != len(names):
+        raise ValueError("PCSE feature layer names must be unique")
+
+    def extract_named_activation(current_model, inputs, layer):
+        try:
+            module = current_model.get_submodule(str(layer.name))
+        except (AttributeError, KeyError) as exc:
+            raise ValueError(f"Unknown PCSE feature layer: {layer.name!r}") from exc
+        captured = []
+        handle = module.register_forward_hook(lambda _module, _inputs, output: captured.append(output))
+        try:
+            model_output = current_model(inputs)
+        finally:
+            handle.remove()
+        if len(captured) != 1:
+            raise ValueError(f"PCSE feature layer {layer.name!r} was invoked {len(captured)} times")
+        logits = model_output.logits if hasattr(model_output, "logits") else (
+            model_output[0] if isinstance(model_output, (tuple, list)) else model_output
+        )
+        value = captured[0]
+        if value is logits:
+            raise ValueError(f"PCSE feature layer {layer.name!r} is the model logits output; model logits output cannot be used as a hidden feature")
+        if isinstance(value, (tuple, list)):
+            if not value:
+                raise ValueError(f"PCSE feature layer {layer.name!r} returned an empty sequence")
+            value = value[0]
+        if not torch.is_tensor(value) or value.ndim < 2:
+            raise ValueError(f"PCSE hidden activation {layer.name!r} must have shape [B, ...]")
+        pooling = str(layer.pooling)
+        if pooling == "global_average":
+            if value.ndim == 2:
+                return value
+            if value.ndim == 4:
+                return functional.adaptive_avg_pool2d(value, 1).flatten(1)
+            return value.flatten(start_dim=2).mean(dim=2)
+        if pooling == "flatten":
+            return value.flatten(start_dim=1)
+        raise ValueError(f"Unsupported PCSE feature pooling: {pooling}")
+
+    snapshots = tuple(
+        collect_feature_snapshot(
+            model,
+            loader,
+            device,
+            dataset=dataset,
+            split=f"{split}:{name}",
+            feature_extractor=(lambda current_model, inputs, layer=layer: extract_named_activation(current_model, inputs, layer)),
+        )
+        for layer, name in zip(requested, names)
+    )
+    reference = snapshots[0]
+    for snapshot in snapshots[1:]:
+        if not np.array_equal(snapshot.global_indices, reference.global_indices):
+            raise ValueError("PCSE feature layer stable indices are misaligned")
+        if not np.array_equal(snapshot.noisy_targets, reference.noisy_targets):
+            raise ValueError("PCSE feature layer noisy targets are misaligned")
+    return SimpleNamespace(layer_names=names, snapshots=snapshots)
 
 
 def recover_clean_priors(noisy_priors: Any, transition: Any):
@@ -380,12 +528,25 @@ def estimate_pcse_statistics(snapshots: Any, layer_names: Iterable[str], transit
 class _GDA:
     def __init__(self, statistics): self.statistics = statistics
     def posterior(self, features):
-        values = np.asarray(features); first = next(iter(self.statistics.values())) if isinstance(self.statistics, dict) else self.statistics
-        means = np.asarray(first.get("means", first)); distances = -((values[:, None, :] - means[None, :, :]) ** 2).sum(-1)
+        values = np.asarray(features)
+        if isinstance(self.statistics, Mapping):
+            # A layer estimator receives one ``{means, covariance}`` mapping,
+            # while older callers may still pass the complete layer mapping.
+            # Distinguish those shapes before selecting the first value.
+            first = self.statistics if "means" in self.statistics else next(iter(self.statistics.values()))
+        else:
+            first = self.statistics
+        means = np.asarray(first.get("means", first) if isinstance(first, Mapping) else first)
+        distances = -((values[:, None, :] - means[None, :, :]) ** 2).sum(-1)
         e = np.exp(distances - distances.max(1, keepdims=True)); return e / np.maximum(e.sum(1, keepdims=True), 1e-12)
 
 
 def fit_gda_layers(statistics: Any, *, covariance_ridge: float = 0.1):
+    if isinstance(statistics, Mapping):
+        # One estimator per recovered feature layer.  Passing the complete
+        # mapping to every estimator silently made the ensemble use the first
+        # layer twice, which defeated the public multi-layer snapshot chain.
+        return [_GDA(value) for value in statistics.values()]
     return [_GDA(statistics)]
 
 

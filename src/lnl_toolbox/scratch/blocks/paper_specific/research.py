@@ -7,11 +7,10 @@ composed in a recipe and are useful for shape/value smoke checks.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 from ...context import ScratchContext
 from ...registry import block
-from ...data_runtime import collate_scratch_batch
 
 
 def _torch():
@@ -69,136 +68,6 @@ class _ScratchVolMinTransition:
         values = values * (1.0 - torch.eye(self.num_classes, device=values.device)) + torch.eye(self.num_classes, device=values.device)
         result = values / values.sum(dim=1, keepdim=True).clamp_min(torch.finfo(values.dtype).tiny)
         return result.to(dtype=dtype) if dtype is not None else result
-
-
-@block(
-    id="pdl_instance_transition",
-    name="PDL: Instance Transition",
-    category="Paper Specific",
-    description="Build feature-dependent row-stochastic transition matrices and corrected per-sample risk.",
-    params={"logits": {"type": "slot", "default": "logits"}, "features": {"type": "slot", "default": "features"}, "labels": {"type": "slot", "default": "labels"}, "save_as": {"type": "slot", "default": "pdl_loss"}},
-    requires=("logits", "features", "labels"),
-    provides=("save_as", "instance_transition"),
-)
-def pdl_instance_transition(ctx: ScratchContext, logits: str = "logits", features: str = "features", labels: str = "labels", save_as: str = "pdl_loss") -> None:
-    torch, _ = _torch()
-    classes = ctx[logits].shape[-1]
-    scale = torch.sigmoid(ctx[features].mean(dim=-1, keepdim=True))
-    base = torch.eye(classes, device=ctx[logits].device).expand(ctx[logits].shape[0], -1, -1).clone()
-    base = base * (0.7 + 0.2 * scale.unsqueeze(-1)) + (1.0 - base) * (0.3 - 0.2 * scale.unsqueeze(-1)) / (classes - 1)
-    base = _row_normalize(base)
-    observed = torch.bmm(torch.softmax(ctx[logits], -1).unsqueeze(1), base).squeeze(1)
-    ctx["instance_transition"] = base
-    ctx[save_as] = -torch.log(observed.gather(1, ctx[labels].long()[:, None]).squeeze(1).clamp_min(1e-12))
-
-
-def _pdl_subset_snapshot(snapshot, indices):
-    import numpy as np
-    from ...native_stats import PosteriorSnapshot
-    requested = np.asarray(indices, dtype=np.int64)
-    sorted_indices = np.sort(requested, kind="stable")
-    positions = np.searchsorted(snapshot.global_indices, sorted_indices)
-    if np.any(positions >= snapshot.global_indices.size) or not np.array_equal(
-        snapshot.global_indices[positions], sorted_indices
-    ):
-        raise KeyError("PDL snapshot does not cover requested split indices")
-    return PosteriorSnapshot(
-        snapshot.noisy_probabilities[positions],
-        snapshot.noisy_targets[positions],
-        sorted_indices,
-        dataset=snapshot.dataset,
-        split=snapshot.split,
-    )
-
-
-def _pdl_subset_features(snapshot, indices):
-    import numpy as np
-    from ...native_stats import FeatureSnapshot
-    requested = np.asarray(indices, dtype=np.int64)
-    sorted_indices = np.sort(requested, kind="stable")
-    positions = np.searchsorted(snapshot.global_indices, sorted_indices)
-    if np.any(positions >= snapshot.global_indices.size) or not np.array_equal(
-        snapshot.global_indices[positions], sorted_indices
-    ):
-        raise KeyError("PDL feature snapshot does not cover requested split indices")
-    return FeatureSnapshot(
-        snapshot.features[positions],
-        snapshot.noisy_targets[positions],
-        sorted_indices,
-        dataset=snapshot.dataset,
-        split=snapshot.split,
-    )
-
-
-@block(
-    id="snapshot_pdl_features",
-    name="Snapshot PDL Features and Posteriors",
-    category="Transition",
-    description="Collect stable-index feature and noisy-posterior snapshots for PDL train and noisy-validation splits.",
-    params={
-        "model": {"type": "slot", "default": "model"},
-        "prepared_data": {"type": "slot", "default": "prepared_data"},
-        "device": {"type": "slot", "default": "device"},
-    },
-    requires=("model", "prepared_data", "device"),
-    provides=("pdl_train_features", "pdl_train_posteriors", "pdl_validation_features", "pdl_validation_posteriors", "pdl_representation_features", "pdl_representation_posteriors"),
-    placement=("top",), stage="setup", ui_group="⑥ 后验与权重",
-    formula="q(x)=softmax(f_theta*(x)); h(x)=representation(f_theta*,x)",
-    formula_ref="PDL warm-up feature/posterior snapshot lifecycle",
-    paper="Part-dependent Label Noise",
-)
-def snapshot_pdl_features(
-    ctx: ScratchContext,
-    model: str = "model",
-    prepared_data: str = "prepared_data",
-    device: str = "device",
-) -> None:
-    import itertools
-    import numpy as np
-    from torch.utils.data import ConcatDataset, DataLoader
-    from ...native_stats import collect_feature_snapshot, collect_posterior_snapshot
-
-    prepared = ctx[prepared_data]
-    manifest = prepared.manifest
-    if manifest is None:
-        raise ValueError("PDL snapshot requires a persisted noise manifest")
-    train_indices = np.asarray(prepared.train_indices, dtype=np.int64)
-    validation_indices = np.asarray(prepared.validation_indices, dtype=np.int64)
-    # The prepared container already owns the role datasets and their
-    # transforms.  Compose those concrete outputs directly; do not re-create
-    # a hidden dynamic dataset from the manifest.
-    role_parts = [prepared.datasets["train"]]
-    if "noisy_validation" in prepared.datasets:
-        role_parts.append(prepared.datasets["noisy_validation"])
-    union = ConcatDataset(role_parts)
-    loader = DataLoader(union, batch_size=int(prepared.loader_config.get("batch_size", 128)),
-                        shuffle=False, drop_last=False, num_workers=0,
-                        collate_fn=collate_scratch_batch)
-    runtime_limits = ctx.get("_runtime_limits") or {}
-    # A runtime cap may shorten training loops, but the artifact must still cover
-    # every train/validation index used by the formal corrected lifecycle.
-    if runtime_limits.get("snapshot_batches") is not None:
-        loader = itertools.islice(loader, int(runtime_limits["snapshot_batches"]))
-    posterior = collect_posterior_snapshot(
-        ctx[model], loader, ctx[device], dataset="cifar10", split="train"
-    )
-    loader = DataLoader(union, batch_size=int(prepared.loader_config.get("batch_size", 128)),
-                        shuffle=False, drop_last=False, num_workers=0,
-                        collate_fn=collate_scratch_batch)
-    if runtime_limits.get("snapshot_batches") is not None:
-        loader = itertools.islice(loader, int(runtime_limits["snapshot_batches"]))
-    features = collect_feature_snapshot(
-        ctx[model], loader, ctx[device], dataset="cifar10", split="train",
-        feature_extractor=_feature_output,
-    )
-    if not np.array_equal(posterior.global_indices, features.global_indices):
-        raise ValueError("PDL feature and posterior snapshots are not index aligned")
-    ctx["pdl_train_posteriors"] = _pdl_subset_snapshot(posterior, train_indices)
-    ctx["pdl_validation_posteriors"] = _pdl_subset_snapshot(posterior, validation_indices)
-    ctx["pdl_train_features"] = _pdl_subset_features(features, train_indices)
-    ctx["pdl_validation_features"] = _pdl_subset_features(features, validation_indices)
-    ctx["pdl_representation_features"] = features
-    ctx["pdl_representation_posteriors"] = posterior
 
 
 @block(
@@ -693,45 +562,6 @@ def estimate_transition(ctx: ScratchContext, logits: str = "logits", labels: str
 
 
 @block(
-    id="snapshot_posterior_model",
-    name="Snapshot Posterior Model",
-    category="Transition",
-    description="Collect P(noisy label | x) from the best posterior-stage model with stable sample indices.",
-    params={
-        "model": {"type": "slot", "default": "posterior_model"},
-        "loader": {"type": "slot", "default": "train_loader"},
-        "prepared_data": {"type": "slot", "default": "prepared_data"},
-        "device": {"type": "slot", "default": "device"},
-        "save_as": {"type": "slot", "default": "posterior_snapshot"},
-    },
-    requires=("model", "loader", "prepared_data", "device"),
-    provides=("save_as",),
-    placement=("top",), stage="setup", ui_group="⑥ 后验与权重",
-    formula="q(x) = softmax(f_theta*(x)); snapshot=(q(x), y_tilde, index)",
-    formula_ref="Dual-T posterior snapshot lifecycle before transition estimation",
-    paper="Dual T: Reducing Estimation Error for Transition Matrix in Label-noise Learning",
-)
-def snapshot_posterior_model(
-    ctx: ScratchContext,
-    model: str = "posterior_model",
-    loader: str = "train_loader",
-    prepared_data: str = "prepared_data",
-    device: str = "device",
-    save_as: str = "posterior_snapshot",
-) -> None:
-    from ...native_stats import collect_posterior_snapshot
-
-    prepared = ctx[prepared_data]
-    ctx[save_as] = collect_posterior_snapshot(
-        ctx[model],
-        ctx[loader],
-        ctx[device],
-        dataset=str(prepared.dataset),
-        split="train",
-    )
-
-
-@block(
     id="dual_t_transition_estimation",
     name="Dual-T Transition Estimation",
     category="Transition",
@@ -966,26 +796,6 @@ def _cwd_swap_matrix(classes: int, source: int, target: int, *, device, dtype):
 
 
 @block(
-    id="snapshot_cwd_features",
-    name="CWD: Snapshot Train Features",
-    category="Paper Specific",
-    description="Collect the full train-evaluation feature snapshot used by CWD before each epoch.",
-    params={"model": {"type": "slot", "default": "model"}, "loader": {"type": "slot", "default": "train_eval_loader"}, "device": {"type": "slot", "default": "device"}, "save_as": {"type": "slot", "default": "cwd_snapshot"}},
-    requires=("model", "loader", "device"),
-    provides=("save_as",),
-    placement=("top", "epoch"), stage="setup", ui_group="⑥ 后验与权重",
-    formula="h_i = f_theta(x_i)", formula_ref="CWD feature snapshot before each epoch", paper="Class-Wise Denoising",
-)
-def snapshot_cwd_features(ctx: ScratchContext, model: str = "model", loader: str = "train_eval_loader", device: str = "device", save_as: str = "cwd_snapshot") -> None:
-    from ...native_stats import collect_feature_snapshot
-    ctx[save_as] = collect_feature_snapshot(
-        ctx[model], ctx[loader], ctx[device], dataset="cifar10_airplane_automobile",
-        split=f"train_fold_{int(ctx.get('fold_index', 0))}",
-        feature_extractor=_feature_output,
-    )
-
-
-@block(
     id="cwd_observed_statistics",
     name="CWD: Observed Class Statistics",
     category="Paper Specific",
@@ -1191,59 +1001,6 @@ def pcse_recover_layer_statistics(ctx: ScratchContext, snapshots: str = "pcse_sn
             matrix = matrix.detach().cpu().numpy()
     result = estimate_pcse_statistics(ctx[snapshots], tuple(layer_names), np.asarray(matrix))
     ctx[save_as] = result
-
-
-@block(
-    id="snapshot_pcse_features",
-    name="PCSE: Snapshot Feature Layers",
-    category="Paper Specific",
-    description="Collect aligned layer3/layer4 feature snapshots from the formal train-evaluation loader.",
-    params={"model": {"type": "slot", "default": "model"}, "prepared_data": {"type": "slot", "default": "prepared_data"}, "device": {"type": "slot", "default": "device"}, "save_as": {"type": "slot", "default": "pcse_snapshots"}},
-    requires=("model", "prepared_data", "device"), provides=("save_as",), placement=("top", "epoch"), stage="setup", ui_group="⑥ 后验与权重",
-    formula="h_l(x)=pool(layer_l(f_theta(x)))", formula_ref="PCSE feature-stage snapshots", paper="Estimating Per-Class Statistics",
-)
-def snapshot_pcse_features(ctx: ScratchContext, model: str = "model", prepared_data: str = "prepared_data", device: str = "device", save_as: str = "pcse_snapshots") -> None:
-    from ...native_stats import PCSEFeatureLayerConfig, collect_pcse_features
-    prepared = ctx[prepared_data]
-    loader = prepared.loader("train_eval", shuffle=False)
-    result = collect_pcse_features(
-        ctx[model], loader, ctx[device], dataset="cifar10", split="train",
-        layers=(PCSEFeatureLayerConfig("layer3", "global_average"), PCSEFeatureLayerConfig("layer4", "global_average")),
-    )
-    ctx[save_as] = result.snapshots
-
-
-@block(
-    id="snapshot_pcse_validation_features",
-    name="PCSE: Snapshot Noisy Validation Features",
-    category="Paper Specific",
-    description="Collect aligned layer snapshots on the noisy validation split for GDA ensemble selection.",
-    params={"model": {"type": "slot", "default": "model"}, "prepared_data": {"type": "slot", "default": "prepared_data"}, "device": {"type": "slot", "default": "device"}, "save_as": {"type": "slot", "default": "pcse_validation_snapshots"}},
-    requires=("model", "prepared_data", "device"), provides=("save_as",), placement=("top", "epoch"), stage="evaluate", ui_group="⑨ 评估",
-    formula="h_l(x_val)=pool(layer_l(f_theta(x_val)))", formula_ref="PCSE noisy-validation feature lifecycle", paper="Estimating Per-Class Statistics",
-)
-def snapshot_pcse_validation_features(ctx: ScratchContext, model: str = "model", prepared_data: str = "prepared_data", device: str = "device", save_as: str = "pcse_validation_snapshots") -> None:
-    from ...native_stats import PCSEFeatureLayerConfig, collect_pcse_features
-    prepared = ctx[prepared_data]
-    loader = prepared.loader("noisy_validation", shuffle=False)
-    result = collect_pcse_features(ctx[model], loader, ctx[device], dataset="cifar10", split="validation", layers=(PCSEFeatureLayerConfig("layer3", "global_average"), PCSEFeatureLayerConfig("layer4", "global_average")))
-    ctx[save_as] = result.snapshots
-
-
-@block(
-    id="snapshot_pcse_test_features",
-    name="PCSE: Snapshot Clean Test Features",
-    category="Paper Specific",
-    description="Collect aligned layer snapshots on the clean test split for final ensemble evaluation.",
-    params={"model": {"type": "slot", "default": "model"}, "prepared_data": {"type": "slot", "default": "prepared_data"}, "device": {"type": "slot", "default": "device"}, "save_as": {"type": "slot", "default": "pcse_test_snapshots"}},
-    requires=("model", "prepared_data", "device"), provides=("save_as",), placement=("top", "epoch"), stage="evaluate", ui_group="⑨ 评估",
-    formula="h_l(x_test)=pool(layer_l(f_theta(x_test)))", formula_ref="PCSE clean-test feature lifecycle", paper="Estimating Per-Class Statistics",
-)
-def snapshot_pcse_test_features(ctx: ScratchContext, model: str = "model", prepared_data: str = "prepared_data", device: str = "device", save_as: str = "pcse_test_snapshots") -> None:
-    from ...native_stats import PCSEFeatureLayerConfig, collect_pcse_features
-    prepared = ctx[prepared_data]
-    result = collect_pcse_features(ctx[model], prepared.loader("test", shuffle=False), ctx[device], dataset="cifar10", split="test", layers=(PCSEFeatureLayerConfig("layer3", "global_average"), PCSEFeatureLayerConfig("layer4", "global_average")))
-    ctx[save_as] = result.snapshots
 
 
 @block(
@@ -1573,25 +1330,6 @@ def evaluate_volminnet_noisy(ctx: ScratchContext, model: str = "model", transiti
 
 
 @block(
-    id="snapshot_t_revision_posterior",
-    name="T-Revision Posterior Snapshot",
-    category="Transition",
-    description="Collect the stage-1 noisy posterior on the non-augmented train-eval split with stable sample indices.",
-    params={"model": {"type": "slot", "default": "model"}, "prepared_data": {"type": "slot", "default": "prepared_data"}, "device": {"type": "slot", "default": "device"}, "save_as": {"type": "slot", "default": "t_revision_posterior"}},
-    requires=("model", "prepared_data", "device"), provides=("save_as",), placement=("top",), stage="setup", ui_group="⑥ 后验与权重",
-    formula="q(x)=softmax(f_theta*(x)); snapshot=(q(x), y_tilde, index)", formula_ref="T-Revision Algorithm 1, Stage 1 posterior estimation", paper="Are Anchor Points Really Indispensable in Label-Noise Learning?",
-)
-def snapshot_t_revision_posterior(ctx: ScratchContext, model: str = "model", prepared_data: str = "prepared_data", device: str = "device", save_as: str = "t_revision_posterior") -> None:
-    from ...native_stats import collect_posterior_snapshot
-
-    prepared = ctx[prepared_data]
-    loader = prepared.loader("train_eval", shuffle=False)
-    ctx[save_as] = collect_posterior_snapshot(
-        ctx[model], loader, ctx[device], dataset=str(prepared.dataset), split="train"
-    )
-
-
-@block(
     id="initialize_t_revision_transition",
     name="T-Revision Pseudo-Anchor Transition",
     category="Transition",
@@ -1745,23 +1483,34 @@ def create_upm_state(ctx: ScratchContext, prepared_data: str = "prepared_data", 
     ctx[save_as] = UPMNoiseState(expected, psi, torch.full((expected.numel(),), float(eta_init)), int(num_classes))
 
 
-@block(id="upm_snapshot_stage1_posterior", name="UPM: Snapshot Stage-1 Posterior", category="State", description="Collect the observed-class posterior of the restored stage-1 model by stable sample index.", params={"model":{"type":"slot","default":"stage1_model"},"loader":{"type":"slot","default":"train_eval_loader"},"save_as":{"type":"slot","default":"upm_stage1_posterior"}}, requires=("model","loader"), provides=("save_as",), placement=("top",), stage="setup", ui_group="④ 状态更新", formula="s_i=P_stage1(y~_i|x_i)", formula_ref="UPM stage-1 posterior snapshot", paper="Universal Probability Model for Label Noise")
-def upm_snapshot_stage1_posterior(ctx: ScratchContext, model: str="stage1_model", loader: str="train_eval_loader", save_as: str="upm_stage1_posterior") -> None:
-    torch,F=_torch(); network=ctx[model]; device=ctx.get("device",torch.device("cpu")); values={}; network.eval()
-    with torch.no_grad():
-        for batch in ctx[loader]:
-            if isinstance(batch,dict): images=batch.get("input",batch.get("images")); labels=batch.get("target",batch.get("labels")); indices=batch.get("index",batch.get("indices"))
-            else: images,labels,indices=batch[:3]
-            logits=network(images.to(device)); logits=logits[0] if isinstance(logits,tuple) else logits
-            posterior=F.softmax(logits,1).gather(1,labels.to(device).long()[:,None]).squeeze(1).cpu()
-            values.update({int(i):float(p) for i,p in zip(indices.long().cpu().tolist(),posterior.tolist())})
-    ctx[save_as]=values
-
-
 @block(id="upm_build_psi", name="UPM: Build Frozen Psi", category="State", description="Align the stage-1 posterior snapshot to canonical training indices and fill only unavailable entries with the uniform prior.", params={"prepared_data":{"type":"slot","default":"prepared_data"},"posterior":{"type":"slot","default":"upm_stage1_posterior"},"num_classes":{"type":"int","default":10,"min":2},"indices_as":{"type":"slot","default":"upm_indices"},"save_as":{"type":"slot","default":"upm_psi"}}, requires=("prepared_data","posterior"), provides=("indices_as","save_as"), placement=("top",), stage="setup", ui_group="④ 状态更新", formula="psi_i=s_i", formula_ref="UPM psi publication", paper="Universal Probability Model for Label Noise")
 def upm_build_psi(ctx: ScratchContext, prepared_data: str="prepared_data", posterior: str="upm_stage1_posterior", num_classes: int=10, indices_as: str="upm_indices", save_as: str="upm_psi") -> None:
-    torch,_=_torch(); indices=torch.as_tensor(ctx[prepared_data].train_indices,dtype=torch.long); snapshot=ctx[posterior]
-    ctx[indices_as]=indices; ctx[save_as]=torch.tensor([snapshot.get(int(i),1.0/float(num_classes)) for i in indices.tolist()],dtype=torch.float32)
+    torch, _ = _torch()
+    indices = torch.as_tensor(ctx[prepared_data].train_indices, dtype=torch.long)
+    snapshot = ctx[posterior]
+    # The canonical posterior snapshot carries the full class distribution;
+    # UPM's psi is the probability assigned to each sample's observed label.
+    # Keep the mapping fallback for old user-authored fixtures, but do not
+    # silently reinterpret an arbitrary object as a snapshot.
+    if hasattr(snapshot, "global_indices") and hasattr(snapshot, "noisy_probabilities") and hasattr(snapshot, "noisy_targets"):
+        snapshot_indices = torch.as_tensor(snapshot.global_indices, dtype=torch.long)
+        probabilities = torch.as_tensor(snapshot.noisy_probabilities, dtype=torch.float32)
+        observed = torch.as_tensor(snapshot.noisy_targets, dtype=torch.long)
+        if probabilities.ndim != 2 or observed.numel() != probabilities.shape[0] or snapshot_indices.numel() != observed.numel():
+            raise ValueError("UPM posterior snapshot fields are not aligned")
+        positions = torch.searchsorted(snapshot_indices, indices)
+        covered = positions < snapshot_indices.numel()
+        if bool(covered.any()) and not torch.equal(snapshot_indices[positions[covered]], indices[covered]):
+            raise ValueError("UPM posterior snapshot does not cover canonical training indices")
+        psi_values = torch.full((indices.numel(),), 1.0 / float(num_classes), dtype=torch.float32)
+        if bool(covered.any()):
+            psi_values[covered] = probabilities[positions[covered], observed[positions[covered]]]
+    elif isinstance(snapshot, Mapping):
+        psi_values = torch.tensor([float(snapshot.get(int(index), 1.0 / float(num_classes))) for index in indices.tolist()], dtype=torch.float32)
+    else:
+        raise TypeError("UPM posterior must be a PosteriorSnapshot or an index-to-probability mapping")
+    ctx[indices_as] = indices
+    ctx[save_as] = psi_values
 
 
 @block(id="upm_initialize_eta", name="UPM: Initialize Eta State", category="State", description="Create the stable-index UPM state from an exposed frozen psi vector and a reusable eta initialization.", params={"indices":{"type":"slot","default":"upm_indices"},"psi":{"type":"slot","default":"upm_psi"},"num_classes":{"type":"int","default":10,"min":2},"eta_init":{"type":"float","default":0.01,"min":0.0,"max":1.0},"save_as":{"type":"slot","default":"upm_state"}}, requires=("indices","psi"), provides=("save_as",), placement=("top",), stage="setup", ui_group="② 初始化", formula="eta_i=eta_0", formula_ref="UPM confusing-probability initialization", paper="Universal Probability Model for Label Noise")
@@ -2158,32 +1907,6 @@ def ca2c_negative_label_loss(ctx: ScratchContext, logits: str = "logits_n", comp
     ctx[save_as] = negative_label_objective(ctx[logits], ctx[complements])
 
 
-@block(id="l2rw_virtual_update", name="L2RW: Virtual Parameter Update", category="Weighting", description="Differentiate the virtual loss and expose the paper or official functional model state.", params={"model":{"type":"slot","default":"model"}, "virtual_loss":{"type":"slot","default":"l2rw_virtual_loss"}, "learning_rate":{"type":"float","default":1.0,"min":0.000001}, "implementation":{"type":"enum","options":["paper","official"],"default":"official"}, "save_as":{"type":"slot","default":"l2rw_virtual_state"}}, requires=("model","virtual_loss"), provides=("save_as",), placement=("batch",), formula="theta'=theta-alpha grad_theta L_v", formula_ref="Ren et al. ICML 2018 virtual update", paper="Learning to Reweight Examples for Robust Deep Learning")
-def l2rw_virtual_update(ctx: ScratchContext, model: str="model", virtual_loss: str="l2rw_virtual_loss", learning_rate: float=1.0, implementation: str="official", save_as: str="l2rw_virtual_state") -> None:
-    torch = __import__("torch"); network=ctx[model]; parameters=dict(network.named_parameters()); gradients=torch.autograd.grad(ctx[virtual_loss], tuple(parameters.values()), create_graph=True)
-    buffers={name: value.detach().clone() for name,value in network.named_buffers()}; mode=str(implementation)
-    virtual = parameters if mode == "official" else {name: value-float(learning_rate)*gradient for (name,value),gradient in zip(parameters.items(),gradients)}
-    ctx[save_as] = {"parameters": parameters, "gradients": gradients, "state": {**virtual, **buffers}, "implementation": mode}
-
-
-@block(id="l2rw_trusted_meta_loss", name="L2RW: Trusted Meta Loss", category="Loss", description="Evaluate trusted cross entropy through the exposed functional virtual model state.", params={"model":{"type":"slot","default":"model"}, "state":{"type":"slot","default":"l2rw_virtual_state"}, "inputs":{"type":"slot","default":"trusted_images"}, "labels":{"type":"slot","default":"trusted_labels"}, "weight_decay":{"type":"float","default":0.0002,"min":0.0}, "save_as":{"type":"slot","default":"l2rw_meta_loss"}}, requires=("model","state","inputs","labels"), provides=("save_as",), placement=("batch",), formula="L_meta=CE(f_theta'(x_v),y_v)+wd/2||theta||²", formula_ref="Ren et al. ICML 2018 validation objective", paper="Learning to Reweight Examples for Robust Deep Learning")
-def l2rw_trusted_meta_loss(ctx: ScratchContext, model: str="model", state: str="l2rw_virtual_state", inputs: str="trusted_images", labels: str="trusted_labels", weight_decay: float=0.0002, save_as: str="l2rw_meta_loss") -> None:
-    torch=__import__("torch"); from torch.func import functional_call; import torch.nn.functional as F
-    holder=ctx[state]; logits=functional_call(ctx[model],holder["state"],(ctx[inputs],),strict=True); value=F.cross_entropy(logits,ctx[labels].long())
-    if weight_decay: value=value+0.5*float(weight_decay)*sum(p.square().sum() for p in holder["parameters"].values())
-    ctx[save_as]=value
-
-
-@block(id="l2rw_epsilon_gradient", name="L2RW: Differentiate Meta Loss", category="Weighting", description="Differentiate the trusted meta loss with respect to epsilon, including the official second-order path.", params={"state":{"type":"slot","default":"l2rw_virtual_state"}, "meta_loss":{"type":"slot","default":"l2rw_meta_loss"}, "epsilon":{"type":"slot","default":"l2rw_epsilon"}, "save_as":{"type":"slot","default":"l2rw_meta_gradient"}}, requires=("state","meta_loss","epsilon"), provides=("save_as",), placement=("batch",), formula="g=d L_meta/d epsilon", formula_ref="Ren et al. ICML 2018 meta gradient", paper="Learning to Reweight Examples for Robust Deep Learning")
-def l2rw_epsilon_gradient(ctx: ScratchContext, state: str="l2rw_virtual_state", meta_loss: str="l2rw_meta_loss", epsilon: str="l2rw_epsilon", save_as: str="l2rw_meta_gradient") -> None:
-    torch=__import__("torch"); holder=ctx[state]
-    if holder["implementation"] == "official":
-        trusted=torch.autograd.grad(ctx[meta_loss],tuple(holder["parameters"].values()),retain_graph=True); value=torch.autograd.grad(holder["gradients"],ctx[epsilon],grad_outputs=trusted,only_inputs=True)[0]
-    else: value=torch.autograd.grad(ctx[meta_loss],ctx[epsilon],only_inputs=True)[0]
-    if not bool(torch.isfinite(value).all()): raise ValueError("L2RW meta-gradient is non-finite")
-    ctx[save_as]=value
-
-
 @block(
     id="create_cnlcu_history",
     name="Create CNLCU Peer History",
@@ -2194,9 +1917,14 @@ def l2rw_epsilon_gradient(ctx: ScratchContext, state: str="l2rw_virtual_state", 
     formula="H_i,t=loss_i,t over a fixed W-epoch window keyed by global sample index", formula_ref="CNLCU persistent history", paper="CNLCU",
 )
 def create_cnlcu_history(ctx: ScratchContext, prepared_data: str = "prepared_data", window_size: int = 5, peer: str = "a", save_as: str = "cnlcu_history_state") -> None:
-    from ...native_stats import PeerLossHistory
-    indices = ctx[prepared_data].train_indices
-    ctx[save_as] = PeerLossHistory(indices, int(window_size), str(peer))
+    import torch
+    indices = torch.as_tensor(ctx[prepared_data].train_indices).long().cpu()
+    if indices.numel() == 0 or torch.unique(indices).numel() != indices.numel():
+        raise ValueError("CNLCU history requires unique train indices")
+    order = torch.argsort(indices, stable=True)
+    indices = indices[order]
+    width = int(window_size)
+    ctx[save_as] = {"indices": indices, "values": torch.zeros((indices.numel(), width)), "observed": torch.zeros((indices.numel(), width), dtype=torch.bool), "selected": torch.zeros(indices.numel()), "window_size": width, "peer": str(peer), "epoch": 0}
 
 
 @block(
@@ -2211,7 +1939,9 @@ def create_cnlcu_history(ctx: ScratchContext, prepared_data: str = "prepared_dat
 def prepare_cnlcu_history_epoch(ctx: ScratchContext, history: str = "cnlcu_history_state", epoch: str = "epoch") -> None:
     state = ctx[history]
     if isinstance(state, dict):
-        for value in state.values(): value.prepare_epoch(int(ctx[epoch]))
+        slot = int(ctx[epoch]) % int(state["window_size"])
+        state["epoch"] = slot
+        state["observed"][:, slot] = False
     else:
         state.prepare_epoch(int(ctx[epoch]))
 
@@ -2227,8 +1957,15 @@ def prepare_cnlcu_history_epoch(ctx: ScratchContext, history: str = "cnlcu_histo
 )
 def append_cnlcu_history(ctx: ScratchContext, history: str = "history_a", indices: str = "indices", losses: str = "loss_per_sample", rows_as: str = "rows", observed_as: str = "observed", selected_count_as: str = "cnlcu_selected_count", values_as: str = "history_values") -> None:
     state = ctx[history]
-    rows = state.append(ctx[indices], ctx[losses])
-    values, observed, counts = state.lookup_rows(rows)
+    import torch
+    requested = torch.as_tensor(ctx[indices]).long().cpu()
+    rows = torch.searchsorted(state["indices"], requested)
+    if bool((rows >= state["indices"].numel()).any()) or not bool(torch.equal(state["indices"][rows], requested)):
+        raise KeyError("CNLCU history does not cover requested indices")
+    slot = int(state["epoch"])
+    state["values"][rows, slot] = torch.as_tensor(ctx[losses]).detach().float().cpu()
+    state["observed"][rows, slot] = True
+    values, observed, counts = state["values"][rows], state["observed"][rows], state["observed"][rows].sum(1)
     device = ctx[losses].device
     # The public Scratch contract exposes the active history rows through the
     # rows slot; keep the integer mapping privately for the selected-count update.
@@ -2283,7 +2020,8 @@ def cnlcu_soft_score(ctx: ScratchContext, robust_mean: str = "cnlcu_robust_mean"
     formula="n_i←n_i+1[selected_i]", formula_ref="CNLCU selected-count lifecycle", paper="CNLCU",
 )
 def update_cnlcu_selected_count(ctx: ScratchContext, history: str = "history_a", rows: str = "history_rows", selected_mask: str = "selected_mask") -> None:
+    import torch
     value = ctx[rows]
-    if getattr(value, "is_floating_point", lambda: False)():
-        value = ctx["_cnlcu_rows_" + str(history)]
-    ctx[history].increment_selected(value, ctx[selected_mask])
+    if getattr(value, "is_floating_point", lambda: False)(): value = ctx["_cnlcu_rows_" + str(history)]
+    state = ctx[history]
+    rows_value = torch.as_tensor(value).long().cpu(); state["selected"][rows_value] += torch.as_tensor(ctx[selected_mask]).detach().cpu().float()

@@ -1,11 +1,6 @@
 schema_version: 1
 name: dld
 description: "Formal DLD CIFAR-10 symmetric-20 recipe with strong-augmentation-compatible data, frozen feature direction, label diffusion, and 200 epochs."
-settings:
-  # The predictors are initialised lazily inside the batch loop; declaring the
-  # slots here keeps the top-level recipe contract explicit for validation.
-  direction_predictor: null
-  noise_predictor: null
 steps:
   - {block: set_seed, params: {seed: 123}}
   - {block: select_device, params: {device: auto}}
@@ -22,6 +17,12 @@ steps:
   - {block: build_prepared_data}
   - {block: build_loaders}
   - {block: create_model, params: {model: resnet34, num_classes: 10, base_width: 64, device: device, save_as: model}}
+  - {block: create_predictor, params: {input_dim: 512, output_dim: 10, hidden_dim: 64, conditioning_dim: 20, time_dim: 16, device: device, save_as: direction_predictor}}
+  - {block: create_predictor, params: {input_dim: 512, output_dim: 10, hidden_dim: 64, conditioning_dim: 20, time_dim: 16, device: device, save_as: noise_predictor}}
+  - {block: create_optimizer, params: {optimizer: adam, model: direction_predictor, lr: 0.0001, save_as: direction_optimizer}}
+  - {block: create_optimizer, params: {optimizer: adam, model: noise_predictor, lr: 0.0001, save_as: noise_optimizer}}
+  - {block: create_model_ema, params: {model: direction_predictor, momentum: 0.999, save_as: direction_ema}}
+  - {block: create_model_ema, params: {model: noise_predictor, momentum: 0.999, save_as: noise_ema}}
   - block: epoch_loop
     params: {epochs: 200}
     steps:
@@ -37,7 +38,6 @@ steps:
           - {block: subtract, params: {minuend: yn, subtrahend: y0, save_as: direction}}
           - {block: sample_timestep_noise, params: {reference: y0, timesteps: 1000, timestep_as: timestep, noise_as: epsilon}}
           - {block: dld_sample_forward_state, params: {y0: y0, direction: direction, timestep: timestep, epsilon: epsilon, timesteps: 1000, save_as: yd}}
-          - {block: dld_ensure_independent_predictors, params: {features: features, num_classes: 10, hidden_dim: 64, time_dim: 16, learning_rate: 0.0001}}
           - {block: zero_grad, params: {optimizer: direction_optimizer}}
           - {block: zero_grad, params: {optimizer: noise_optimizer}}
           - {block: dld_predict_quantity, params: {predictor: direction_predictor, state: yd, endpoint: yn, features: features, timestep: timestep, save_as: predicted_direction}}
@@ -48,5 +48,6 @@ steps:
           - {block: backward}
           - {block: optimizer_step, params: {optimizer: direction_optimizer}}
           - {block: optimizer_step, params: {optimizer: noise_optimizer}}
-          - {block: dld_update_ema, params: {direction: direction_predictor, noise: noise_predictor, decay: 0.999}}
-  - {block: dld_accelerated_inference, params: {feature_model: model, direction: direction_predictor, noise: noise_predictor, loader: test_loader, timesteps: 1000, steps: 5, save_as: test_accuracy}}
+          - {block: update_model_ema, params: {model: direction_predictor, ema: direction_ema}}
+          - {block: update_model_ema, params: {model: noise_predictor, ema: noise_ema}}
+  - {block: dld_accelerated_inference, params: {feature_model: model, direction: direction_ema, noise: noise_ema, loader: test_loader, timesteps: 1000, steps: 5, save_as: test_accuracy}}

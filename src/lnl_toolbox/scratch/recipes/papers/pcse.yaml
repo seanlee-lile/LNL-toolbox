@@ -68,20 +68,20 @@ steps:
             params: {terms: [classification_loss, volume_logdet], weights: [1.0, 0.001], save_as: loss}
           - {block: backward, params: {loss: loss}}
           - {block: optimizer_step, params: {optimizer: transition_optimizer}}
-      - block: snapshot_pcse_features
-        params: {model: model, prepared_data: prepared_data, device: device, save_as: pcse_snapshots}
+      - block: collect_feature_snapshot
+        params: {model: model, loader: train_eval_loader, device: device, dataset: cifar10, split: train, layers: [layer3, layer4], save_as: pcse_snapshots}
       - block: materialize_transition
         params: {artifact: transition, save_as: transition_matrix}
       - block: pcse_recover_layer_statistics
         params: {snapshots: pcse_snapshots, layer_names: [layer3, layer4], transition: transition_matrix, save_as: pcse_statistics}
       - block: pcse_fit_gda
         params: {statistics: pcse_statistics, covariance_ridge: 0.1, save_as: pcse_gda}
-      - block: snapshot_pcse_validation_features
-        params: {model: model, prepared_data: prepared_data, device: device, save_as: pcse_validation_snapshots}
+      - block: collect_feature_snapshot
+        params: {model: model, loader: validation_loader, device: device, dataset: cifar10, split: validation, layers: [layer3, layer4], save_as: pcse_validation_snapshots}
       - block: pcse_fit_ensemble_weights
         params: {gda: pcse_gda, snapshots: pcse_validation_snapshots, epochs: 5, learning_rate: 0.05, save_as: pcse_ensemble_weights}
-      - block: snapshot_pcse_test_features
-        params: {model: model, prepared_data: prepared_data, device: device, save_as: pcse_test_snapshots}
+      - block: collect_feature_snapshot
+        params: {model: model, loader: test_loader, device: device, dataset: cifar10, split: test, layers: [layer3, layer4], save_as: pcse_test_snapshots}
       - block: pcse_evaluate_ensemble
         params: {gda: pcse_gda, snapshots: pcse_test_snapshots, weights: pcse_ensemble_weights, save_as: pcse_test_metrics}
   - block: record_metrics

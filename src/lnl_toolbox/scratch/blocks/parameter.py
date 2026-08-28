@@ -64,3 +64,17 @@ def masked_gradient_update(ctx: ScratchContext, model: str = "model", masks: str
             parameter.grad.mul_(float(scale))
             if float(l1_decay):
                 parameter.grad.add_(parameter.sign(), alpha=float(l1_decay))
+
+
+@block(
+    id="parameter_squared_norm",
+    name="Parameter Squared Norm",
+    category="Parameter Update",
+    description="Reduce a module's trainable parameters to one differentiable squared-norm scalar.",
+    params={"model": {"type": "slot", "default": "model"}, "save_as": {"type": "slot", "default": "parameter_norm"}},
+    requires=("model",), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式",
+)
+def parameter_squared_norm(ctx: ScratchContext, model: str = "model", save_as: str = "parameter_norm") -> None:
+    parameters = [parameter for parameter in ctx[model].parameters() if parameter.requires_grad]
+    if not parameters: raise ValueError("parameter_squared_norm requires trainable parameters")
+    ctx[save_as] = sum((parameter.square().sum() for parameter in parameters))

@@ -92,11 +92,25 @@ def select_lowest_scores(ctx: ScratchContext, scores: str = "loss_per_sample",
     if values.numel() == 0:
         raise ValueError("cannot select from an empty score vector")
     fraction = float(ctx[keep_fraction])
+    if not torch.isfinite(torch.tensor(fraction)) or not 0.0 <= fraction <= 1.0:
+        raise ValueError("keep_fraction must be a finite value in [0, 1]")
+    if not bool(torch.isfinite(values).all()):
+        raise ValueError("scores must be finite for stable lowest-score selection")
+    if str(rounding) not in {"floor", "ceil"}:
+        raise ValueError("rounding must be 'floor' or 'ceil'")
+    if int(minimum_count) < 0:
+        raise ValueError("minimum_count must be non-negative")
     raw = values.numel() * fraction
     count = int(torch.ceil(torch.tensor(raw)).item()) if str(rounding) == "ceil" else int(torch.floor(torch.tensor(raw)).item())
     count = min(values.numel(), max(int(minimum_count), count))
     if stable_sample_indices in ctx:
         stable = ctx[stable_sample_indices].reshape(-1).to(values.device)
+        if stable.numel() != values.numel() or stable.dtype not in {
+            torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8
+        }:
+            raise ValueError("stable_sample_indices must be integer values aligned with scores")
+        if torch.unique(stable).numel() != stable.numel():
+            raise ValueError("stable_sample_indices must be unique")
         order = torch.argsort(stable, stable=True)
         selected = order[torch.argsort(values[order], stable=True)[:count]]
     else:

@@ -12,6 +12,11 @@ AUDIT = ROOT.parents[2] / "artifacts" / "scratch_block_audit"
 
 
 class ScratchBlockCoverageTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        from lnl_toolbox.scratch.audit import generate_audit_artifacts
+        generate_audit_artifacts(ROOT.parents[2])
+
     def test_audit_artifacts_exist_and_have_required_columns(self) -> None:
         inventory = (AUDIT / "block_inventory.tsv").read_text(encoding="utf-8").splitlines()
         coverage = (AUDIT / "block_coverage_matrix.tsv").read_text(encoding="utf-8").splitlines()
@@ -25,7 +30,9 @@ class ScratchBlockCoverageTest(unittest.TestCase):
             rows = list(csv.DictReader(handle, delimiter="\t"))
         self.assertGreater(len(rows), 200)
         for row in rows:
-            for field in ("state_mutation", "detach", "reduction", "rounding", "stable_tiebreak"):
+            for field in ("state_mutation", "detach", "reduction", "rounding", "stable_tiebreak",
+                          "atomic_operation", "common_blocks_stripped", "legacy_runtime_imports",
+                          "retained_reason", "blind_build_necessity"):
                 self.assertTrue(row[field], f"missing audit value for {row['block_id']}:{field}")
                 self.assertNotEqual("unknown", row[field], f"placeholder audit value for {row['block_id']}:{field}")
             self.assertIn(row.get("classification"), {"COMMON", "COMPOSABLE", "PAPER_SPECIFIC"})

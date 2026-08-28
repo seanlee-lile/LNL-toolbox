@@ -33,7 +33,8 @@ def create_indexed_state(ctx: ScratchContext, indices: str = "indices", size: in
         if values.numel():
             size = max(int(size), int(values.max().item()) + 1)
     ctx[save_as] = {"values": torch.full((int(size), int(width)), float(initial_value)),
-                    "seen": torch.zeros(int(size), dtype=torch.bool)}
+                    "seen": torch.zeros(int(size), dtype=torch.bool),
+                    "last_epoch": torch.full((int(size),), -1, dtype=torch.long)}
 
 
 @block(
@@ -68,6 +69,8 @@ def indexed_write(ctx: ScratchContext, state: str = "state", indices: str = "ind
         raise ValueError("indexed_write value width does not match state")
     table["values"][rows] = incoming
     table["seen"][rows] = True
+    if "last_epoch" in table:
+        table["last_epoch"][rows] = int(ctx.get("epoch", -1))
     ctx[save_as] = table
 
 
@@ -114,16 +117,22 @@ def indexed_history(ctx: ScratchContext, state: str = "indexed_history", indices
     id="indexed_ema",
     name="Indexed EMA",
     category="State",
-    description="Update persistent values by stable index with an epoch-aware exponential moving average.",
-    params={"state": {"type": "slot", "default": "indexed_history"}, "indices": {"type": "slot", "default": "indices"}, "values": {"type": "slot", "default": "values"}, "beta": {"type": "float", "default": 0.9, "min": 0.0, "max": 1.0}, "momentum": {"type": "value", "default": None}, "epoch": {"type": "slot", "default": "epoch"}, "save_as": {"type": "slot", "default": "history_values"}},
+    description="Update persistent values by stable index with an explicit duplicate policy.",
+    params={"state": {"type": "slot", "default": "indexed_history"}, "indices": {"type": "slot", "default": "indices"}, "values": {"type": "slot", "default": "values"}, "beta": {"type": "float", "default": 0.9, "min": 0.0, "max": 1.0}, "momentum": {"type": "value", "default": None}, "epoch": {"type": "slot", "default": "epoch"}, "duplicate_policy": {"type": "enum", "options": ["update", "skip", "error"], "default": "update"}, "save_as": {"type": "slot", "default": "history_values"}},
     requires=("state", "indices", "values"), provides=("save_as",), placement=("batch",), stage="train", ui_group="④ 状态更新",
 )
-def indexed_ema(ctx: ScratchContext, state: str = "indexed_history", indices: str = "indices", values: str = "values", beta: float = 0.9, momentum: float | None = None, epoch: str = "epoch", save_as: str = "history_values") -> None:
+def indexed_ema(ctx: ScratchContext, state: str = "indexed_history", indices: str = "indices", values: str = "values", beta: float = 0.9, momentum: float | None = None, epoch: str = "epoch", duplicate_policy: str = "update", save_as: str = "history_values") -> None:
     state_value = ctx[state]
     rows = ctx[indices].detach().long().cpu()
     incoming = ctx[values].detach().float().cpu()
     current_epoch = int(ctx.get(epoch, 0))
     beta = float(beta if momentum is None else momentum)
+    duplicate_policy = str(duplicate_policy)
+    # ``duplicate_policy`` is a data parameter, not a hidden LEND/CAL rule.
+    # Keep the public operation's default as ordinary EMA updates; callers
+    # that require one observation per epoch must opt into skip/error.
+    if duplicate_policy not in {"update", "skip", "error"}:
+        raise ValueError("duplicate_policy must be 'update', 'skip' or 'error'")
     if incoming.ndim == 1:
         incoming = incoming[:, None]
     if int(state_value["values"].shape[1]) != int(incoming.shape[1]):
@@ -131,7 +140,10 @@ def indexed_ema(ctx: ScratchContext, state: str = "indexed_history", indices: st
     for row, value in zip(rows.tolist(), incoming):
         if row < 0 or row >= int(state_value["values"].shape[0]):
             raise IndexError(f"indexed history row out of range: {row}")
-        if bool(state_value["seen"][row]) and int(state_value["last_epoch"][row]) == current_epoch:
+        duplicate = bool(state_value["seen"][row]) and int(state_value["last_epoch"][row]) == current_epoch
+        if duplicate and duplicate_policy == "error":
+            raise ValueError(f"indexed_ema received duplicate row {row} in epoch {current_epoch}")
+        if duplicate and duplicate_policy == "skip":
             continue
         if bool(state_value["seen"][row]):
             state_value["values"][row].mul_(float(beta)).add_(value, alpha=1.0 - float(beta))
@@ -219,3 +231,92 @@ def finalize_grouped_accumulator(ctx: ScratchContext, state: str = "grouped_stat
     seen = state_value["counts"] > 0
     means[seen] = means[seen] / state_value["counts"][seen, None]
     ctx[save_as] = means
+
+
+@block(
+    id="grouped_accumulate",
+    name="Grouped Accumulate",
+    category="State",
+    description="Accumulate detached values by group label using the public grouped-state contract.",
+    params={"state": {"type": "slot", "default": "grouped_state"}, "groups": {"type": "slot", "default": "groups"}, "values": {"type": "slot", "default": "values"}},
+    requires=("state", "groups", "values"), provides=(), placement=("batch",), stage="train", ui_group="④ 状态更新",
+)
+def grouped_accumulate(ctx: ScratchContext, state: str = "grouped_state", groups: str = "groups", values: str = "values") -> None:
+    # Keep the historical spelling as a compatibility implementation while
+    # exposing the unambiguous canonical operation to new Recipes.
+    grouped_accumulator(ctx, state=state, groups=groups, values=values)
+
+
+@block(
+    id="reset_grouped_accumulator",
+    name="Reset Grouped Accumulator",
+    category="State",
+    description="Clear sums and counts in an existing grouped accumulator.",
+    params={"state": {"type": "slot", "default": "grouped_state"}},
+    requires=("state",), provides=(), placement=("epoch", "top"), stage="train", ui_group="④ 状态更新",
+)
+def reset_grouped_accumulator(ctx: ScratchContext, state: str = "grouped_state") -> None:
+    value = ctx[state]
+    value["sums"].zero_(); value["counts"].zero_()
+
+
+@block(
+    id="create_indexed_window",
+    name="Create Indexed Window",
+    category="State",
+    description="Create a fixed-size per-index history window; rows are addressed by stable sample indices.",
+    params={"indices": {"type": "slot", "default": "indices"}, "size": {"type": "int", "default": 0, "min": 0}, "window_size": {"type": "int", "default": 5, "min": 1}, "width": {"type": "int", "default": 1, "min": 1}, "save_as": {"type": "slot", "default": "indexed_window"}},
+    provides=("save_as",), placement=("top",), stage="setup", ui_group="④ 状态更新",
+)
+def create_indexed_window(ctx: ScratchContext, indices: str = "indices", size: int = 0, window_size: int = 5, width: int = 1, save_as: str = "indexed_window") -> None:
+    torch = _torch(); size = int(size)
+    if indices in ctx:
+        values = torch.as_tensor(ctx[indices]).reshape(-1)
+        if values.numel(): size = max(size, int(values.max().item()) + 1)
+    ctx[save_as] = {"values": torch.zeros((size, int(window_size), int(width))), "counts": torch.zeros(size, dtype=torch.long), "cursor": torch.zeros(size, dtype=torch.long), "window_size": int(window_size)}
+
+
+@block(
+    id="append_indexed_window",
+    name="Append Indexed Window",
+    category="State",
+    description="Append detached per-index values to a bounded rolling window.",
+    params={"state": {"type": "slot", "default": "indexed_window"}, "indices": {"type": "slot", "default": "indices"}, "values": {"type": "slot", "default": "values"}},
+    requires=("state", "indices", "values"), provides=(), placement=("batch",), stage="train", ui_group="④ 状态更新",
+)
+def append_indexed_window(ctx: ScratchContext, state: str = "indexed_window", indices: str = "indices", values: str = "values") -> None:
+    table = ctx[state]; rows = _torch().as_tensor(ctx[indices]).long().reshape(-1).cpu(); incoming = ctx[values].detach().float().reshape(rows.numel(), -1).cpu()
+    if incoming.shape[1] != int(table["values"].shape[2]): raise ValueError("indexed window value width does not match state")
+    for row, value in zip(rows.tolist(), incoming):
+        if row < 0 or row >= int(table["values"].shape[0]): raise IndexError("indexed window row out of range")
+        position = int(table["cursor"][row]); table["values"][row, position] = value; table["cursor"][row] = (position + 1) % int(table["window_size"]); table["counts"][row] = min(int(table["counts"][row]) + 1, int(table["window_size"]))
+
+
+@block(
+    id="read_indexed_window",
+    name="Read Indexed Window",
+    category="State",
+    description="Read rolling history rows and counts without creating paper-specific state objects.",
+    params={"state": {"type": "slot", "default": "indexed_window"}, "indices": {"type": "slot", "default": "indices"}, "values_as": {"type": "slot", "default": "window_values"}, "counts_as": {"type": "slot", "default": "window_counts"}},
+    requires=("state", "indices"), provides=("values_as", "counts_as"), placement=("batch",), stage="train", ui_group="④ 状态更新",
+)
+def read_indexed_window(ctx: ScratchContext, state: str = "indexed_window", indices: str = "indices", values_as: str = "window_values", counts_as: str = "window_counts") -> None:
+    table = ctx[state]; rows = _torch().as_tensor(ctx[indices]).long().reshape(-1).cpu(); ctx[values_as] = table["values"][rows].clone(); ctx[counts_as] = table["counts"][rows].clone()
+
+
+@block(
+    id="reset_indexed_window",
+    name="Reset Indexed Window",
+    category="State",
+    description="Reset selected rows of a fixed-size indexed history window.",
+    params={"state": {"type": "slot", "default": "indexed_window"}, "indices": {"type": "slot", "default": "indices"}},
+    requires=("state", "indices"), provides=(), placement=("epoch", "top"), stage="train", ui_group="④ 状态更新",
+)
+def reset_indexed_window(ctx: ScratchContext, state: str = "indexed_window", indices: str = "indices") -> None:
+    table = ctx[state]
+    rows = _torch().as_tensor(ctx[indices]).long().reshape(-1).cpu()
+    if rows.numel() and (int(rows.min()) < 0 or int(rows.max()) >= int(table["values"].shape[0])):
+        raise IndexError("indexed window row out of range")
+    table["values"][rows] = 0
+    table["counts"][rows] = 0
+    table["cursor"][rows] = 0

@@ -287,6 +287,8 @@ def apply_transition(ctx: ScratchContext, probabilities: str = "probabilities", 
         if "indices" not in ctx:
             raise ValueError("transition artifacts require aligned indices; materialize_transition first")
         matrix = matrix.transition_for(None, ctx["indices"], device=values.device, dtype=values.dtype)
+    elif hasattr(matrix, "to"):
+        matrix = matrix.to(device=values.device, dtype=values.dtype)
     if matrix.ndim == 2:
         ctx[save_as] = values @ matrix
     elif matrix.ndim == 3:
@@ -308,36 +310,6 @@ def compose_transition(ctx: ScratchContext, first: str = "transition_a", second:
     matrix = ctx[first] @ ctx[second]
     torch = __import__("torch")
     ctx[save_as] = matrix / matrix.sum(dim=-1, keepdim=True).clamp_min(torch.finfo(matrix.dtype).tiny)
-
-
-@block(
-    id="transition_corrected_risk",
-    name="Transition-corrected Risk",
-    category="Correction",
-    description="Compute beta-weighted clean posterior risk under a shared or per-sample transition.",
-    params={"logits": {"type": "slot", "default": "logits"}, "labels": {"type": "slot", "default": "labels"}, "indices": {"type": "slot", "default": "indices"}, "transition": {"type": "slot", "default": "transition"}, "save_as": {"type": "slot", "default": "loss_per_sample"}},
-    requires=("logits", "labels", "indices", "transition"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 纠错风险",
-    formula="beta=p(y|x)/p(yt|x); l=beta[-log p(yt|x)]", formula_ref="instance-transition corrected risk",
-)
-def transition_corrected_risk(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", indices: str = "indices", transition: str = "transition", save_as: str = "loss_per_sample") -> None:
-    import torch
-
-    clean = torch.softmax(ctx[logits], dim=-1)
-    source = ctx[transition]
-    if hasattr(source, "transition_for"):
-        matrices = source.transition_for(None, ctx[indices], device=clean.device, dtype=clean.dtype)
-    elif source.ndim == 2:
-        matrices = source.to(device=clean.device, dtype=clean.dtype).unsqueeze(0).expand(clean.shape[0], -1, -1)
-    elif source.ndim == 3:
-        matrices = source.to(device=clean.device, dtype=clean.dtype)
-    else:
-        raise ValueError("transition must be a matrix, per-sample matrix, or transition artifact")
-    observed = torch.bmm(clean.unsqueeze(1), matrices).squeeze(1)
-    labels_value = ctx[labels].long()[:, None]
-    clean_y = clean.gather(1, labels_value).squeeze(1)
-    observed_y = observed.gather(1, labels_value).squeeze(1)
-    floor = torch.finfo(clean.dtype).tiny
-    ctx[save_as] = (clean_y / observed_y.clamp_min(floor)) * (-torch.log(clean_y.clamp_min(floor)))
 
 
 @block(
