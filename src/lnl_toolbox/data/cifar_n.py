@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 from .cifar import load_cifar10, load_cifar100
-from .contracts import DataSpec, RawDatasetSplit
+from .contracts import DataSpec, RawDatasetSplit, UnsupportedDatasetSplitError
 from .registry import DatasetRegistry
 
 
@@ -73,6 +73,10 @@ class CifarNAdapter:
 
     def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
         del seed
+        if split not in {"train", "test"}:
+            raise UnsupportedDatasetSplitError(
+                "CIFAR-N source split must be train or test"
+            )
         loader = load_cifar10 if self.classes == 10 else load_cifar100
         corpus = loader(spec.root, split)
         clean = corpus.labels

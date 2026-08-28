@@ -99,6 +99,8 @@ class _fine_FINETest(unittest.TestCase):
 # --- merged from test_fine_training.py ---
 import tempfile
 
+import json
+
 # --- merged from test_fine_training.py ---
 import unittest
 
@@ -217,3 +219,31 @@ class _fine_training_FINETrainingTest(unittest.TestCase):
             self.assertIn('ema', payload)
             self.assertIn('scs', payload)
             self.assertIn('scr', payload)
+            rows = [json.loads(line) for line in (result / 'metrics.jsonl').read_text(encoding='utf-8').splitlines()]
+            self.assertEqual([row['event'] for row in rows], ['epoch', 'epoch', 'final'])
+            self.assertNotIn('test_loss', rows[0])
+            self.assertIn('validation_loss', rows[0])
+            self.assertEqual(rows[-1]['selection_split'], 'none')
+            self.assertFalse(rows[-1]['test_selection_leakage'])
+
+    def test_no_validation_evaluates_test_once_after_training(self) -> None:
+        train = _fine_training__cifar('train', 1)
+        test = _fine_training__cifar('test', 1)
+        config = {'seed': 3, 'data': {'name': 'cifar100', 'root': 'unused', 'validation_size': 0, 'max_test_samples': 100, 'augment': False, 'strong_magnitude': 1}, 'noise': {'name': 'symmetric', 'rate': 0.2, 'seed': 3}, 'loader': {'batch_size': 100, 'num_workers': 0, 'pin_memory': False}, 'model': {'name': 'tiny_cnn', 'width': 2}, 'optimizer': {'name': 'sgd', 'lr': 0.01, 'momentum': 0.0}, 'scheduler': {'eta_min': 0.0005}, 'trainer': {'epochs': 1, 'device': 'cpu'}, 'fine': {'warmup_epochs': 1, 'warmup_lr': 0.01, 'ema_momentum': 0.9, 'momentum_scs': 0.9, 'momentum_scr': 0.9, 'beta': 0.1, 'gamma': 0.002, 'alpha': 1.0}}
+        calls = []
+
+        def evaluate(_model, loader, _criterion, _device):
+            calls.append(loader)
+            return {'loss': 1.0, 'accuracy': 0.25, 'samples': float(len(loader.dataset))}
+
+        with tempfile.TemporaryDirectory() as directory:
+            with patch('lnl_toolbox.data.sources.load_cifar100', side_effect=lambda _root, split: train if split == 'train' else test), patch('lnl_toolbox.training.fine_experiment.evaluate_classification', side_effect=evaluate):
+                result = run_fine_experiment(config, directory)
+                run_fine_experiment(config, resume=result / 'last.pt')
+            rows = [json.loads(line) for line in (result / 'metrics.jsonl').read_text(encoding='utf-8').splitlines()]
+        self.assertEqual(len(calls), 2)
+        self.assertEqual([row['event'] for row in rows], ['epoch', 'final'])
+        self.assertEqual(sum(row['event'] == 'final' for row in rows), 1)
+        self.assertNotIn('validation_loss', rows[0])
+        self.assertNotIn('test_loss', rows[0])
+        self.assertEqual(rows[-1]['test_loss'], 1.0)

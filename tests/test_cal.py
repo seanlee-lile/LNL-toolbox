@@ -4,6 +4,8 @@ from __future__ import annotations
 # --- merged from test_cal.py ---
 import tempfile
 
+import json
+
 # --- merged from test_cal.py ---
 from pathlib import Path
 
@@ -26,7 +28,7 @@ from lnl_toolbox.noise.cal import DROP, KEEP, RELABEL, CALProxyArtifact, build_c
 from lnl_toolbox.noise.estimators import PosteriorSnapshot
 
 # --- merged from test_cal.py ---
-from lnl_toolbox.training.cal_experiment import _assert_finite_warmup_gradients, _build_warmup_scheduler, _reference_transition_means
+from lnl_toolbox.training.cal_experiment import _assert_finite_warmup_gradients, _build_warmup_scheduler, _reference_transition_means, run_cal_experiment
 
 # --- merged from test_cal.py ---
 from lnl_toolbox.training.experiment import build_alpha_scaled_scheduler
@@ -140,3 +142,52 @@ class _cal_CALTest(unittest.TestCase):
         model.weight.grad = torch.full_like(model.weight, float('nan'))
         with self.assertRaises(ValueError):
             _assert_finite_warmup_gradients(model)
+
+    def test_validation_and_test_are_separate_and_test_is_final_only(self) -> None:
+        import yaml
+
+        config = yaml.safe_load(
+            (Path(__file__).resolve().parents[1] / 'configs' / 'experiment' / 'cal_cifar10_smoke.yaml').read_text(encoding='utf-8')
+        )
+        calls = []
+
+        def evaluate(_model, loader, _criterion, _device):
+            split = loader.dataset.split
+            calls.append(split.identity.fingerprint)
+            return {'loss': 1.0, 'accuracy': 0.25, 'samples': float(len(loader.dataset))}
+
+        with tempfile.TemporaryDirectory() as directory:
+            from unittest.mock import patch
+
+            with patch('lnl_toolbox.training.cal_experiment.evaluate_classification', side_effect=evaluate):
+                run_dir = run_cal_experiment(config, directory)
+            rows = [json.loads(line) for line in (run_dir / 'metrics.jsonl').read_text(encoding='utf-8').splitlines()]
+        self.assertEqual(len(calls), 2)
+        self.assertNotEqual(calls[0], calls[1])
+        self.assertEqual([row['event'] for row in rows], ['epoch', 'final'])
+        self.assertIn('validation_loss', rows[0])
+        self.assertNotIn('test_loss', rows[0])
+        self.assertFalse(rows[-1]['test_selection_leakage'])
+
+    def test_no_validation_has_train_only_epoch_and_one_test_call(self) -> None:
+        import yaml
+        from unittest.mock import patch
+
+        config = yaml.safe_load(
+            (Path(__file__).resolve().parents[1] / 'configs' / 'experiment' / 'cal_cifar10_smoke.yaml').read_text(encoding='utf-8')
+        )
+        config['data']['validation_size'] = 0
+        calls = []
+
+        def evaluate(_model, loader, _criterion, _device):
+            calls.append(loader)
+            return {'loss': 1.0, 'accuracy': 0.25, 'samples': float(len(loader.dataset))}
+
+        with tempfile.TemporaryDirectory() as directory:
+            with patch('lnl_toolbox.training.cal_experiment.evaluate_classification', side_effect=evaluate):
+                run_dir = run_cal_experiment(config, directory)
+            rows = [json.loads(line) for line in (run_dir / 'metrics.jsonl').read_text(encoding='utf-8').splitlines()]
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn('validation_loss', rows[0])
+        self.assertNotIn('test_loss', rows[0])
+        self.assertEqual(rows[-1]['event'], 'final')

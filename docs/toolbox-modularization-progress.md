@@ -1,5 +1,31 @@
 # Toolbox modularization progress
 
+## Five startup-boundary fixes (2026-08-25)
+
+- Current task: repair only the five confirmed startup/data-role defects reported by the Web formal-run path.
+- Branch/base: `new-cli` at `3a7582d`; no commit or push performed.
+- Completed: 5 / 5 code fixes and focused regression checks.
+- JoCoR now derives `validation_size` from its data configuration before choosing the validation loader. PDL now derives `official_pdl` from the configured correction/phase variant before loading revision artifacts. The paper algorithms are unchanged.
+- CWD's folded CIFAR adapter is correctly treated as a train/test-only source during inspection; the absence of a native validation split no longer aborts preflight.
+- MC-LDCE and CA2C requirements and runners no longer request or materialize a validation loader when `validation_size` is zero. They retain validation metrics when an explicit validation role exists.
+- MentorNet remains fail-closed: a missing or hash-mismatched MentorArtifact is an external resource readiness failure, not a reason to bypass validation.
+- Validation: Ruff passed; data adapters `54/54`; registry `52/52`; training `74/74` with one CUDA skip; CWD data inspection against the existing F-drive CIFAR source returned `ready`; zero-validation role inspection showed no validation role for MC-LDCE/CA2C. Full unittest ran `957` tests: `954` passed, `1` skipped, and the same two baseline failures remain (95-vs-94 YAML count and the pre-existing NoiseManifest error-text mismatch).
+- Exact next step: run the formal Web paths for JoCoR, PDL, CWD, MC-LDCE and CA2C with available data/resources, then separately prepare the pinned MentorArtifact/PCSE resources for the remaining external-resource cases.
+
+## Unified data connector final semantic closeout (2026-08-25)
+
+- Current task: close the last validation/TEST and compatibility-origin semantics without changing DataService or paper algorithms.
+- Branch/base: `new-cli` at `3a7582d`; no branch creation, commit, or push is authorized.
+- Checklist: FINE role declaration; CAL role declaration; train-only progress; final-only TEST; compatibility origin table; focused/full acceptance. Completed: 5 / 6 (83%); code regression is complete, but the all-paper formal-runtime acceptance is not.
+- Result: FINE/CAL request validation only when `data.validation_size` or `data.num_val` is positive. Their runners never alias TEST as validation. Epoch rows are train-only or use a real independent validation role; TEST is evaluated once after training and appears only in one final event with leakage flags.
+- Compatibility: class-count limits for CWD, Importance Reweighting, PCSE, VolMinNet and unresolved MC-LDCE are reported as `implemented_variant_limit`; FINE/DLD modality and MentorArtifact interface limits use the same origin. Binary Risk and L2RW trusted supervision remain algorithm requirements.
+- Files added: none. DataService, algorithms, YAML, CLI/Web/Scratch, taxonomy/guideline, data sources and the four pre-existing untracked files remain unchanged.
+- Focused tests: FINE `14/14`; CAL `13/13`; registry `52/52`; training `74/74` with one CUDA skip. Both validation modes, resume final-row replacement and train-only/train+validation SVGs are covered. Ruff and `git diff --check` pass.
+- Full regression: `957` tests executed; `954` passed, `1` skipped, and only the two already-recorded baseline assertions failed (95 vs 94 YAML count; manifest namespace error text vs `length`).
+- Formal preflight: `24/26` formal recipes are compatible after injecting the existing MentorArtifact. CWD is blocked before training because the folded CIFAR adapter's validation probe raises `folded CIFAR binary view exposes train and test`; PCSE is blocked because no discovered UPM run matches its pinned checkpoint SHA-256. These are pre-existing acceptance-resource/data-adapter blockers outside this task's allowlist. Formal FINE/CAL also cannot be reduced to one stage solely through their current public `trainer.epochs` budget because their fixed warm-up budgets would then exceed the total budget; their unchanged formal protocols were therefore not rewritten for this check.
+- Exact next step: separately approve the CWD validation-probe fix and provide the pinned PCSE source run (or approve a formal acceptance protocol that records stage-specific budget overrides). Then run all 26 first real stages and compatible alternate-data cases before marking 6/6.
+- Ready for history cleanup/push: no; neither commit nor publication is authorized.
+
 ## 26-paper unified data boundary (2026-08-25)
 
 - Current task: separate method data requirements from reproduction protocols, then migrate 26 paper methods without changing their training engines.
@@ -357,3 +383,15 @@
 - Local checkpoint commits: none.
 - Exact next step: human review of the final diff and the two explicitly recorded baseline failures; commit or publication requires separate authorization.
 - Collaborator note: `training/runners.py`, `training/compatibility.py`, `training/data_service.py`, `training/experiment.py`, and shared docs are high-conflict; algorithms, losses, selectors, estimators, reproduction YAML, CLI/Web/Scratch, and legacy evidence runners remain unchanged.
+
+## Quick Start 与 validation 语义收口（2026-08-28）
+
+- Current task: 修复 Quick Start exact formal recipe、typed unsupported split、TEST-as-validation、JoCoR validation-size 和 PDL variant predicate 问题；禁用不可选方法卡片。
+- Branch/base: `new-cli` at `3a7582d`; 不创建分支、不提交、不推送；工作区原有未提交内容保持不动。
+- Completed: 7 / 7（100%）：exact matcher；typed split contract；无 validation 时不伪造 TEST；JoCoR；PDL predicate；Web 状态保护；回归验证（仅剩一项既有断言文本不一致）。
+- Public behavior: Quick Start 的 `clean/native` 语义不再混同，formal 命中返回真实 recipe id；validation 仅来自 native validation 或 TRAIN 派生 split，零 validation 时 `PreparedData.validation_split=None` 且 manifest 省略 validation。
+- Focused validation: data adapters 57/57；Quick Start service 11/11；PDL 20/20；JoCoR 7/7；Web assets/integration 6/6；CLI 89/89；data-contract 及 training focused suites通过。
+- Full validation: 963/963 tests 通过；`test_noise` 的错误文本断言已更新为匹配当前更具体的 index-namespace 错误。未放宽生产代码的 typed-exception 边界。
+- Files modified in this task: `src/lnl_toolbox/quickstart/templates.py`, `src/lnl_toolbox/quickstart/service.py`, `src/lnl_toolbox/data/contracts.py`, `src/lnl_toolbox/data/sources.py`, `src/lnl_toolbox/data/cifar_n.py`, `src/lnl_toolbox/data/real_noise.py`, `src/lnl_toolbox/training/data_service.py`, `src/lnl_toolbox/training/multi_model_experiment.py`, `src/lnl_toolbox/training/runners.py`, `src/lnl_toolbox/training/instance_transition_experiment.py`, `web/assets/quick_start.js`, `tests/test_data_adapters.py`, `tests/test_data_capability_contract.py`, `tests/test_experiment_service_data_contract.py`, `tests/test_pdl.py`, `tests/test_quickstart_service.py`, `tests/test_training.py`, `web/test_quick_start_assets.py`, `web/test_quick_start_integration.py`, and this progress record. No new files.
+- Known collaborator scope: shared `training/data_service.py`, `training/runners.py`, Quick Start assets and progress documentation are high-conflict; no algorithm/loss/selector implementation was changed.
+- Exact next step: human review；本轮功能和回归均已收口。无 commit 或 push 授权。

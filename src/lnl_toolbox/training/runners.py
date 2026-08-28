@@ -190,10 +190,23 @@ def _config_input(
     *paths: tuple[str, ...],
     mode: str = "all",
     description: str,
+    implementation_limit: str | None = None,
 ) -> ConfigInputRequirement:
     return ConfigInputRequirement(
-        code=code, paths=tuple(paths), mode=mode, description=description
+        code=code,
+        paths=tuple(paths),
+        mode=mode,
+        description=description,
+        implementation_limit=implementation_limit,
     )
+
+
+def _validation_target(config: Mapping[str, Any]) -> str:
+    data = config.get("data", {}) or {}
+    size = data.get("validation_size", data.get("num_val", 0))
+    if int(size or 0) <= 0:
+        return "none"
+    return str((config.get("noise", {}) or {}).get("validation_targets", "clean")).strip().lower()
 
 
 def _component_name(config: Mapping[str, Any], *path: str) -> str:
@@ -273,6 +286,7 @@ def _supervised_requirements(config: Mapping[str, Any]) -> MethodRequirements | 
                 "requires_mentor_artifact",
                 ("pipeline", "weight_provider", "artifact_path"),
                 description="MentorNet requires a configured MentorArtifact",
+                implementation_limit="mentor_artifact",
             ),),
         )
     if objective == "dss":
@@ -380,12 +394,12 @@ def _l2rw_requirements(config: Mapping[str, Any]) -> MethodRequirements:
     )
 
 
-def _cal_requirements(_config: Mapping[str, Any]) -> MethodRequirements:
+def _cal_requirements(config: Mapping[str, Any]) -> MethodRequirements:
     return MethodRequirements(
         method="cal",
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
         data_requirements=_classification_data(
-            validation="none",
+            validation=_validation_target(config),
             needs_manifest=False,
         ),
         implemented_variant="proxy_label_sieve",
@@ -430,7 +444,7 @@ def _mc_ldce_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         method="mc_ldce",
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
         data_requirements=_classification_data(
-            validation="clean",
+            validation=_validation_target(config),
             extra_roles=(DataRole.TRAIN_EVAL,),
         ),
         implemented_variant="centroid_decomposition",
@@ -445,7 +459,7 @@ def _ca2c_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         method="ca2c",
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
         data_requirements=_classification_data(
-            validation="clean",
+            validation=_validation_target(config),
             views=("weak", "strong")
             if bool((config.get("data", {}) or {}).get("strong_augment", False))
             else ("weak",),
@@ -460,7 +474,7 @@ def _fine_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         method="fine",
         supported_modalities=frozenset({Modality.IMAGE}),
         data_requirements=_classification_data(
-            validation="none",
+            validation=_validation_target(config),
             views=("weak", "strong"),
             manifest_scope="effective_train",
         ),
@@ -557,10 +571,7 @@ def _dld_requirements(config: Mapping[str, Any]) -> MethodRequirements:
 
 
 def _pdl_requirements(config: Mapping[str, Any]) -> MethodRequirements:
-    official = (
-        _component_name(config, "algorithm", "correction") in {"pdl", "pdl_revision"}
-        or "phases" in config
-    )
+    official = is_official_pdl_config(config)
     validation_size = int(
         (config.get("warmup", {}) or {}).get("noisy_validation_size", 0)
     ) or None
@@ -574,6 +585,14 @@ def _pdl_requirements(config: Mapping[str, Any]) -> MethodRequirements:
             subset_before_split=True,
         ),
         implemented_variant="part_dependent_transition",
+    )
+
+
+def is_official_pdl_config(config: Mapping[str, Any]) -> bool:
+    """Return the canonical predicate for the official PDL phase variant."""
+    return (
+        _component_name(config, "algorithm", "correction") in {"pdl", "pdl_revision"}
+        or "phases" in config
     )
 
 

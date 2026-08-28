@@ -24,6 +24,7 @@ class ConfigInputRequirement:
     paths: tuple[tuple[str, ...], ...]
     mode: str = "all"
     description: str = "required method configuration is missing"
+    implementation_limit: str | None = None
 
     def __post_init__(self) -> None:
         code = str(self.code).strip()
@@ -34,8 +35,16 @@ class ConfigInputRequirement:
             raise ValueError("config input requirement paths must not be empty")
         if self.mode not in {"all", "any"}:
             raise ValueError("config input requirement mode must be all or any")
+        implementation_limit = (
+            None
+            if self.implementation_limit is None
+            else str(self.implementation_limit).strip()
+        )
+        if self.implementation_limit is not None and not implementation_limit:
+            raise ValueError("implementation_limit must not be empty")
         object.__setattr__(self, "code", code)
         object.__setattr__(self, "paths", paths)
+        object.__setattr__(self, "implementation_limit", implementation_limit)
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,7 +228,11 @@ def resolve_compatibility(
     input_paths: dict[str, tuple[tuple[str, ...], ...]] = {}
 
     def reason(code: str, message: str, limit: str | None = None) -> CompatibilityReason:
-        if limit is not None and limit in method.implementation_limits:
+        aliases = {
+            "class_count": frozenset({"class_count", "class_count_evidence_unresolved"}),
+        }
+        limit_names = aliases.get(limit, frozenset({limit}) if limit is not None else frozenset())
+        if limit_names.intersection(method.implementation_limits):
             return CompatibilityReason(
                 code,
                 f"implemented variant {method.implemented_variant!r}: {message}",

@@ -24,6 +24,7 @@ from lnl_toolbox.data.contracts import (
     InputSpec,
     NoiseDescriptor,
     RawDatasetSplit,
+    UnsupportedDatasetSplitError,
 )
 from lnl_toolbox.data.mnist import add_mnist_sources
 from lnl_toolbox.data.local_catalog import LocalDatasetCatalog, LocalDatasetRecord
@@ -342,7 +343,7 @@ class PreparedData:
     requirements: DataRequirements
     protocol: DataProtocol
     train_split: RawDatasetSplit
-    validation_split: RawDatasetSplit
+    validation_split: RawDatasetSplit | None
     test_split: RawDatasetSplit
     train_indices: np.ndarray
     validation_indices: np.ndarray
@@ -595,7 +596,7 @@ class PreparedData:
 def _write_data_manifest(
     path: Path,
     spec: DataSpec,
-    splits: Mapping[str, RawDatasetSplit],
+    splits: Mapping[str, RawDatasetSplit | None],
     train_indices: np.ndarray,
     validation_indices: np.ndarray,
     trusted_indices: np.ndarray,
@@ -618,7 +619,11 @@ def _write_data_manifest(
         "dataset": spec.name,
         "source": {"root": None if spec.root is None else str(spec.root), "path": None if spec.path is None else str(spec.path)},
         "options": jsonable(spec.options),
-        "splits": {name: split.identity.to_dict() for name, split in splits.items()},
+        "splits": {
+            name: split.identity.to_dict()
+            for name, split in splits.items()
+            if split is not None
+        },
         "train_indices": train_indices.tolist(),
         "validation_indices": validation_indices.tolist(),
         "trusted_indices": trusted_indices.tolist(),
@@ -722,9 +727,30 @@ def _prepare_experiment_data(
             tuple(train.class_names[value] for value in requirements.class_subset) if train.class_names else (),
             train.source,
         )
-    try:
-        native_validation = registry.load(spec, "validation", seed=seed)
-    except (ValueError, FileNotFoundError):
+    protocol_validation_size = data_protocol.validation_size
+    validation_size = int(
+        protocol_validation_size
+        if protocol_validation_size is not None
+        else requirements.validation_size
+        if requirements.validation_size is not None
+        else data_config.get("validation_size", data_config.get("num_val", 0))
+        or 0
+    )
+    validation_roles = {
+        DataRole.CLEAN_VALIDATION,
+        DataRole.NOISY_VALIDATION,
+    }
+    probe_native_validation = bool(
+        requirements.roles.intersection(validation_roles)
+        or validation_size > 0
+        or DataRole.TRUSTED_VALIDATION in requirements.roles
+    )
+    if probe_native_validation:
+        try:
+            native_validation = registry.load(spec, "validation", seed=seed)
+        except (UnsupportedDatasetSplitError, FileNotFoundError, KeyError):
+            native_validation = None
+    else:
         native_validation = None
     test = registry.load(spec, "test", seed=seed)
     source_train_indices = train.global_indices.copy()
@@ -741,14 +767,6 @@ def _prepare_experiment_data(
         validation_indices = native_validation.global_indices.copy()
         validation_split = native_validation
     else:
-        protocol_validation_size = data_protocol.validation_size
-        validation_size = int(
-            protocol_validation_size
-            if protocol_validation_size is not None
-            else requirements.validation_size
-            if requirements.validation_size is not None
-            else data_config.get("validation_size", data_config.get("num_val", 0))
-        )
         if validation_size:
             if "num_val" in data_config and "num_clean" in data_config:
                 full_train_indices, validation_indices = _random_partition(
@@ -781,18 +799,25 @@ def _prepare_experiment_data(
             validation_split = train
         else:
             full_train_indices = source_train_indices.copy()
-            validation_indices = test.global_indices.copy()
-            validation_split = test
+            # A zero-sized validation protocol has no validation source.  Do
+            # not use TEST as a placeholder: doing so leaks TEST identity into
+            # role metadata and makes downstream runners treat it as a split.
+            validation_indices = np.empty(0, dtype=np.int64)
+            validation_split = None
+    if validation_split is None and requirements.roles.intersection(validation_roles):
+        raise ValueError(
+            "the requested validation role has no genuine validation source; "
+            "set data.validation_size/num_val or provide a validation split"
+        )
     if (
         DataRole.CLEAN_VALIDATION in requirements.roles
-        and validation_split is not train
+        and validation_split is not None
         and validation_split.clean_targets is None
-        and validation_split is not test
     ):
-        # An unverified native validation split cannot be promoted to clean
-        # supervision.  Use the data protocol's explicit TEST source instead.
-        validation_split = test
-        validation_indices = test.global_indices.copy()
+        raise ValueError(
+            "clean_validation requires genuine clean targets; "
+            "an observed-only validation split cannot be promoted"
+        )
     train_indices = _subset(
         full_train_indices,
         train.clean_targets if train.clean_targets is not None else train.observed_targets,
@@ -816,6 +841,10 @@ def _prepare_experiment_data(
             elif not set(map(int, trusted_indices)) <= set(map(int, train.global_indices)):
                 raise ValueError("trusted manifest indices are outside configured data")
         elif trusted_source == "synthetic_fixture":
+            if validation_split is None:
+                raise ValueError(
+                    "synthetic trusted_validation requires a validation source"
+                )
             trusted_indices = validation_indices.copy()
             trusted_split = validation_split
             if validation_split.clean_targets is None:
@@ -847,12 +876,15 @@ def _prepare_experiment_data(
                 )
                 train_indices = combined[remaining_positions]
                 trusted_indices = combined[trusted_positions]
-    validation_indices = _subset(
-        validation_indices,
-        validation_split.clean_targets if validation_split.clean_targets is not None else validation_split.observed_targets,
-        data_config.get("max_validation_samples"),
-        seed + 12,
-    )
+    if validation_split is not None:
+        validation_indices = _subset(
+            validation_indices,
+            validation_split.clean_targets
+            if validation_split.clean_targets is not None
+            else validation_split.observed_targets,
+            data_config.get("max_validation_samples"),
+            seed + 12,
+        )
     test_indices = _subset(
         test.global_indices,
         test.clean_targets if test.clean_targets is not None else test.observed_targets,
@@ -1046,7 +1078,9 @@ def _prepare_experiment_data(
         else _target_map(manifest.global_indices, manifest.noisy_targets)
     )
     clean_train_map = None if train.clean_targets is None else _target_map(train.global_indices, train.clean_targets)
-    if requirements.validation_targets == "noisy":
+    if validation_split is None:
+        validation_target_map = None
+    elif requirements.validation_targets == "noisy":
         validation_target_map = (
             noisy_map
             if manifest is not None and validation_split is train
@@ -1068,25 +1102,35 @@ def _prepare_experiment_data(
         needs_noise_manifest=requirements.needs_noise_manifest,
     )
     train_eval_transforms = _transforms(train, data_config, eval_requirements, training=False)
-    validation_transforms = _transforms(validation_split, data_config, eval_requirements, training=False)
+    validation_transforms = (
+        None
+        if validation_split is None
+        else _transforms(validation_split, data_config, eval_requirements, training=False)
+    )
     test_transforms = _transforms(test, data_config, eval_requirements, training=False)
     datasets: dict[DataRole, Dataset] = {}
     if DataRole.TRAIN in requirements.roles:
         datasets[DataRole.TRAIN] = IndexedDatasetView(train, train_indices, targets_by_index=noisy_map, transforms=train_transforms)
     if DataRole.TRAIN_EVAL in requirements.roles:
         datasets[DataRole.TRAIN_EVAL] = IndexedDatasetView(train, train_indices, targets_by_index=noisy_map, transforms=train_eval_transforms)
-    validation_view = IndexedDatasetView(validation_split, validation_indices, targets_by_index=validation_target_map, transforms=validation_transforms)
+    validation_view = None
+    if validation_split is not None:
+        validation_view = IndexedDatasetView(
+            validation_split,
+            validation_indices,
+            targets_by_index=validation_target_map,
+            transforms=validation_transforms,
+        )
     if DataRole.NOISY_VALIDATION in requirements.roles:
+        if validation_view is None:
+            raise ValueError("noisy_validation requires a genuine validation source")
         datasets[DataRole.NOISY_VALIDATION] = validation_view
     if DataRole.CLEAN_VALIDATION in requirements.roles:
+        if validation_view is None or validation_split is None:
+            raise ValueError("clean_validation requires a genuine validation source")
         if validation_split is train and clean_train_map is not None:
             datasets[DataRole.CLEAN_VALIDATION] = IndexedDatasetView(train, validation_indices, targets_by_index=clean_train_map, transforms=validation_transforms)
         else:
-            # An explicit protocol TEST split carries evaluation truth in
-            # observed_targets even when clean_targets is not duplicated.
-            # A split derived from noisy TRAIN must still prove clean labels.
-            if validation_split.clean_targets is None and validation_split is not test:
-                raise ValueError("clean_validation requires genuine clean targets")
             datasets[DataRole.CLEAN_VALIDATION] = validation_view
     if DataRole.TRUSTED_VALIDATION in requirements.roles:
         if trusted_target_map is None:
@@ -1455,9 +1499,7 @@ class DataService:
                 validation = self.registry.load(spec, "validation", seed=seed)
             except (FileNotFoundError, KeyError):
                 validation = None
-            except ValueError as exc:
-                if "split must be train or test" not in str(exc):
-                    raise
+            except UnsupportedDatasetSplitError:
                 validation = None
             if validation is not None and validation.split == "validation" and len(validation):
                 splits["validation"] = validation

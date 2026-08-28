@@ -115,7 +115,20 @@ class ExperimentService:
             method=result.method,
             dataset=result.dataset,
             reasons=result.reasons + tuple(
-                CompatibilityReason(item.code, item.description)
+                CompatibilityReason(
+                    item.code,
+                    (
+                        f"implemented variant {requirements.implemented_variant!r}: "
+                        f"{item.description}"
+                        if item.implementation_limit in requirements.implementation_limits
+                        else item.description
+                    ),
+                    (
+                        "implemented_variant_limit"
+                        if item.implementation_limit in requirements.implementation_limits
+                        else "algorithm_requirement"
+                    ),
+                )
                 for item in missing_inputs
             ),
             warnings=result.warnings,

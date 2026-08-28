@@ -88,7 +88,11 @@ def run_ca2c_experiment(
         seed=seed,
     ); classes = data.num_classes
     train_loader = data.loader(DataRole.TRAIN, stream=21)
-    validation_loader = data.loader(DataRole.CLEAN_VALIDATION, stream=23, shuffle=False)
+    validation_loader = (
+        data.loader(DataRole.CLEAN_VALIDATION, stream=23, shuffle=False)
+        if DataRole.CLEAN_VALIDATION in data.available_roles
+        else None
+    )
     test_loader = data.loader(DataRole.TEST, stream=24, shuffle=False)
     model_config = bind_model_input(config["model"], data.input_spec)
     p_model = build_reproduction_model(model_config, config["data"], classes).to(device); n_model = build_reproduction_model(model_config, config["data"], classes).to(device)
@@ -132,20 +136,22 @@ def run_ca2c_experiment(
             )
             p_optimizer.zero_grad(set_to_none=True); p_loss.backward(); p_optimizer.step(); n_optimizer.zero_grad(set_to_none=True); n_loss.backward(); n_optimizer.step()
             ensemble = (p_logits.detach() + n_logits.detach()) / 2; total += targets.numel(); correct += int(ensemble.argmax(1).eq(targets).sum()); loss_sum += float((p_loss.detach() + n_loss.detach()) / 2) * targets.numel()
-        validation = _evaluate((p_model, n_model), validation_loader, criterion, device); test = _evaluate((p_model, n_model), test_loader, criterion, device)
-        row = standardize_epoch_row({
+        test = _evaluate((p_model, n_model), test_loader, criterion, device)
+        row_values = {
             "epoch": epoch + 1,
             "phase": "warmup" if epoch < warmup_epochs else "robust",
             "train_loss": loss_sum / total,
             "train_accuracy": correct / total,
-            "validation_loss": validation["loss"],
-            "validation_accuracy": validation["accuracy"],
             "test_loss": test["loss"],
             "test_accuracy": test["accuracy"],
             "learning_rate": p_optimizer.param_groups[0]["lr"],
             "method": "ca2c",
             "candidate_memory_hash": memory.fingerprint(),
-        })
+        }
+        if validation_loader is not None:
+            validation = _evaluate((p_model, n_model), validation_loader, criterion, device)
+            row_values.update({"validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"]})
+        row = standardize_epoch_row(row_values, require_validation=validation_loader is not None)
         rows.append(row)
         # Keep the live Web console and offline artifacts on the same
         # structured event contract.  Rewriting this small file each epoch

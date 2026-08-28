@@ -217,7 +217,14 @@ def run_fine_experiment(
         config.get("evaluation", {}).get("batch_size", loader_config["batch_size"])
     )
     test_loader = prepared.loader(DataRole.TEST, shuffle=False, batch_size=evaluation_batch_size)
-    validation_loader = test_loader
+    validation_loader = (
+        prepared.validation_loader(shuffle=False, batch_size=evaluation_batch_size)
+        if {
+            DataRole.CLEAN_VALIDATION,
+            DataRole.NOISY_VALIDATION,
+        }.intersection(prepared.available_roles)
+        else None
+    )
 
     model_config = dict(config["model"])
     if str(model_config.get("name", "")).lower() == "feature_mlp" and "input_dim" not in model_config:
@@ -317,20 +324,23 @@ def run_fine_experiment(
                 alpha=float(fine_config.get("alpha", 1.0)),
             )
             clean_ratio = float(clean_mask.float().mean())
-        validation = evaluate_classification(model, validation_loader, criterion, device)
-        test = evaluate_classification(model, test_loader, criterion, device)
-        row = standardize_epoch_row({
+        row_values = {
             "epoch": epoch + 1,
             "phase": "warmup" if epoch < warmup_epochs else "robust",
             "train_loss": train_loss,
             "train_accuracy": train_accuracy,
-            "validation_loss": validation["loss"],
-            "validation_accuracy": validation["accuracy"],
-            "test_loss": test["loss"],
-            "test_accuracy": test["accuracy"],
             "selected_ratio": clean_ratio,
             "learning_rate": float(optimizer.param_groups[0]["lr"]),
-        })
+        }
+        if validation_loader is not None:
+            validation = evaluate_classification(model, validation_loader, criterion, device)
+            row_values.update({
+                "validation_loss": validation["loss"],
+                "validation_accuracy": validation["accuracy"],
+            })
+        row = standardize_epoch_row(
+            row_values, require_validation=validation_loader is not None
+        )
         rows.append(row)
         metrics_path.write_text(
             "".join(json.dumps(value, sort_keys=True) + "\n" for value in rows),
@@ -359,6 +369,23 @@ def run_fine_experiment(
     )
     if rows:
         write_training_curves_svg(rows, run_dir / "training_curves.svg")
+    test = evaluate_classification(model, test_loader, criterion, device)
+    final_row = {
+        "event": "final",
+        "completed_epochs": epochs,
+        "test_loss": test["loss"],
+        "test_accuracy": test["accuracy"],
+        "selection_split": "none",
+        "test_selection_leakage": False,
+        "method": "fine_sed",
+    }
+    metrics_path.write_text(
+        "".join(
+            json.dumps(value, sort_keys=True) + "\n"
+            for value in [*rows, final_row]
+        ),
+        encoding="utf-8",
+    )
     return run_dir
 
 

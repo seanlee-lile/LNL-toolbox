@@ -169,31 +169,6 @@ class QuickStartService:
             self._template_cache[paper.id] = template
         return template
 
-    @staticmethod
-    def _exact_reproduction(paper, recipes, dataset_adapter: str, noise_selection) -> str | None:
-        wanted_noise = "clean" if noise_selection.kind in {"clean", "native"} else noise_selection.key
-        normalized_adapter = str(dataset_adapter).lower().replace("-", "_")
-        for item in paper.configs:
-            if item.profile != "reproduction":
-                continue
-            recipe = recipes.get(item.recipe_id)
-            if recipe is None:
-                continue
-            config = load_recipe_config(recipe)
-            data = config.get("data", {}) or {}
-            noise = config.get("noise", {}) or {}
-            data_name = str(data.get("name", "")).lower().replace("-", "_")
-            if data_name != normalized_adapter:
-                continue
-            if str(noise.get("name", "clean")) != wanted_noise:
-                continue
-            configured_rate = noise.get("rate")
-            if noise_selection.rate is not None and configured_rate is not None:
-                if float(configured_rate) != float(noise_selection.rate):
-                    continue
-            return recipe.id
-        return None
-
     def probe(self, path: str) -> DatasetProbeResult:
         return probe_dataset_path(path, data_service=self.data_service)
 
@@ -390,8 +365,10 @@ class QuickStartService:
                 tuple(item.message for item in result.reasons),
                 tuple(result.required_user_inputs),
                 template.recipe_id,
-                "paper_reproduction" if self._exact_reproduction(
-                    paper, recipes, dataset_adapter=str(profile_data.get("adapter", "")), noise_selection=noise_selection
+                "paper_reproduction" if find_exact_reproduction(
+                    paper,
+                    dataset_adapter=str(profile_data.get("adapter", "")),
+                    noise_selection=noise_selection,
                 ) else "toolbox_adapted",
                 candidate,
                 tuple(result.required_input_paths),

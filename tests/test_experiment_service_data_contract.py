@@ -6,7 +6,11 @@ import unittest
 
 import numpy as np
 
-from lnl_toolbox.data.contracts import DataSpec, RawDatasetSplit
+from lnl_toolbox.data.contracts import (
+    DataSpec,
+    RawDatasetSplit,
+    UnsupportedDatasetSplitError,
+)
 from lnl_toolbox.data.local_catalog import LocalDatasetCatalog
 from lnl_toolbox.data.registry import DatasetRegistry
 from lnl_toolbox.training.data_service import DataService
@@ -24,7 +28,7 @@ class _Adapter:
     def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
         del spec, seed
         if split == "validation":
-            raise ValueError("split must be train or test")
+            raise UnsupportedDatasetSplitError("split must be train or test")
         count = 20 if split == "train" else 10
         labels = np.arange(count, dtype=np.int64) % 10
         return RawDatasetSplit(

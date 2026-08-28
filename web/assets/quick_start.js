@@ -101,7 +101,8 @@
   }
   function methodCard(item) {
     const selected = item.paper_id === state.selectedPaperId ? " selected" : "";
-    return '<button type="button" class="qs-method-card qs-status-' + esc(item.status) + selected + '" data-paper="' + esc(item.paper_id) + '"><strong>' + esc(item.acronym) + '</strong><span>' + esc(item.title) + '</span><small>' + esc(item.venue) + ' ' + esc(item.year) + ' · ' + esc(statusLabel(item.status)) + '</small><p>' + esc(item.summary) + '</p>' + (item.reasons && item.reasons.length ? '<small>' + esc(item.reasons.join("；")) + '</small>' : "") + '</button>';
+    const selectable = item.status === "ready" || item.status === "needs_input";
+    return '<button type="button" class="qs-method-card qs-status-' + esc(item.status) + selected + '" data-paper="' + esc(item.paper_id) + '"' + (selectable ? "" : ' disabled aria-disabled="true"') + '><strong>' + esc(item.acronym) + '</strong><span>' + esc(item.title) + '</span><small>' + esc(item.venue) + ' ' + esc(item.year) + ' · ' + esc(statusLabel(item.status)) + '</small><p>' + esc(item.summary) + '</p>' + (item.reasons && item.reasons.length ? '<small>' + esc(item.reasons.join("；")) + '</small>' : "") + '</button>';
   }
   function renderMethods() {
     if (!state.dataset || !state.methods.length) return "";
@@ -147,7 +148,7 @@
     document.getElementById("qs-rate")?.addEventListener("change", updateNoise);
     document.getElementById("qs-seed")?.addEventListener("change", updateNoise);
     document.getElementById("qs-confirm-labels")?.addEventListener("click", function () { state.labelsConfirmed = true; render(); loadMethods(); });
-    panel.querySelectorAll(".qs-method-card").forEach(function (button) { button.addEventListener("click", function () { state.selectedPaperId = this.dataset.paper; state.methodInputs = {}; buildPlan(); }); });
+    panel.querySelectorAll(".qs-method-card").forEach(function (button) { button.addEventListener("click", function () { const item = state.methods.find(function (entry) { return entry.paper_id === button.dataset.paper; }); if (!item || !["ready", "needs_input"].includes(item.status)) return; state.selectedPaperId = this.dataset.paper; state.methodInputs = {}; buildPlan(); }); });
     panel.querySelectorAll(".qs-required-input").forEach(function (input) { input.addEventListener("input", function () { state.methodInputs[this.dataset.inputKey] = this.value; }); });
     document.getElementById("qs-apply-inputs")?.addEventListener("click", buildPlan);
     document.getElementById("qs-dry")?.addEventListener("click", function () { if (state.plan) { context.setRequest({command:state.plan.dry_run_command}, state.plan.dry_run_command); context.execute(); } });

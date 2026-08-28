@@ -246,6 +246,61 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
         self.assertFalse(audited.requires_clean_train_labels)
         self.assertEqual({item.code for item in audited.required_config_inputs}, {'requires_trusted_validation', 'requires_trusted_manifest'})
 
+    def test_preserved_implementation_limits_have_the_correct_origin(self) -> None:
+        registry = create_runner_registry()
+        class_cases = (
+            ('cwd', 3),
+            ('importance_reweighting', 3),
+            ('pcse', 2),
+            ('volminnet', 2),
+            ('mc_ldce', 2),
+        )
+        for runner_name, classes in class_cases:
+            with self.subTest(runner=runner_name):
+                capabilities = resolve_dataset_capabilities(
+                    _compatibility__profile(classes=classes)
+                )
+                result = resolve_compatibility(
+                    capabilities, registry.get(runner_name).requirements({})
+                )
+                reason = next(item for item in result.reasons if item.code == 'wrong_class_count')
+                self.assertEqual(reason.origin, 'implemented_variant_limit')
+
+        tabular = resolve_dataset_capabilities(
+            _compatibility__profile(modality=Modality.TABULAR)
+        )
+        modality_requirements = {
+            'fine': registry.get('fine').requirements({}),
+            'dld': registry.get('dld').requirements({}),
+            'mentornet': registry.get('supervised').requirements(
+                {'pipeline': {'weight_provider': {'name': 'mentornet'}}}
+            ),
+        }
+        for runner_name, requirements in modality_requirements.items():
+            with self.subTest(runner=runner_name):
+                result = resolve_compatibility(tabular, requirements)
+                reason = next(item for item in result.reasons if item.code == 'unsupported_modality')
+                self.assertEqual(reason.origin, 'implemented_variant_limit')
+
+        binary = resolve_compatibility(
+            resolve_dataset_capabilities(_compatibility__profile(classes=3)),
+            registry.get('binary').requirements({}),
+        )
+        reason = next(item for item in binary.reasons if item.code == 'wrong_class_count')
+        self.assertEqual(reason.origin, 'algorithm_requirement')
+
+    def test_zero_validation_dedicated_requirements_do_not_publish_validation_roles(self) -> None:
+        registry = create_runner_registry()
+        cases = (
+            ('mc_ldce', {'data': {'validation_size': 0}}),
+            ('ca2c', {'data': {'validation_size': 0}}),
+        )
+        for runner_name, config in cases:
+            with self.subTest(runner=runner_name):
+                requirements = registry.get(runner_name).requirements(config)
+                self.assertNotIn(DataRole.CLEAN_VALIDATION, requirements.data_requirements.roles)
+                self.assertNotIn(DataRole.NOISY_VALIDATION, requirements.data_requirements.roles)
+
     def test_l2rw_uses_one_modality_contract_and_keeps_trusted_supervision(self) -> None:
         registry = create_runner_registry()
         smoke = load_recipe_config(recipe_by_id('l2rw-cifar10-smoke'))
@@ -474,6 +529,49 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
 
 # --- merged from test_compatibility.py ---
 class _compatibility_ExperimentCompatibilityServiceTest(unittest.TestCase):
+
+    def test_mentor_artifact_is_reported_as_an_implementation_limit(self) -> None:
+        capabilities = resolve_dataset_capabilities(
+            _compatibility__profile(clean=KnowledgeState.AVAILABLE)
+        )
+        data_service = Mock()
+        data_service.capabilities.return_value = capabilities
+        service = ExperimentService(data_service=data_service)
+        config = {
+            'execution': {'runner': 'supervised'},
+            'data': {'name': 'fixture'},
+            'pipeline': {'weight_provider': {'name': 'mentornet'}},
+        }
+        result = service.resolve_method_compatibility(config, config)
+        reason = next(
+            item for item in result.reasons
+            if item.code == 'requires_mentor_artifact'
+        )
+        self.assertEqual(reason.origin, 'implemented_variant_limit')
+        serialized = result.to_dict()
+        serialized_reason = next(
+            item for item in serialized['reasons']
+            if item['code'] == 'requires_mentor_artifact'
+        )
+        self.assertEqual(serialized_reason['origin'], 'implemented_variant_limit')
+
+    def test_l2rw_trusted_supervision_remains_an_algorithm_requirement(self) -> None:
+        capabilities = resolve_dataset_capabilities(
+            _compatibility__profile(clean=KnowledgeState.AVAILABLE)
+        )
+        data_service = Mock()
+        data_service.capabilities.return_value = capabilities
+        service = ExperimentService(data_service=data_service)
+        config = {
+            'execution': {'runner': 'l2rw'},
+            'data': {'name': 'fixture'},
+        }
+        result = service.resolve_method_compatibility(config, config)
+        reason = next(
+            item for item in result.reasons
+            if item.code == 'requires_trusted_validation'
+        )
+        self.assertEqual(reason.origin, 'algorithm_requirement')
 
     def test_service_and_direct_resolver_agree(self) -> None:
         capabilities = resolve_dataset_capabilities(_compatibility__profile(modality=Modality.TABULAR, classes=2))

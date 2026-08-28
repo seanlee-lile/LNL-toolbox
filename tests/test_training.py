@@ -557,7 +557,7 @@ import unittest
 from pathlib import Path
 
 # --- merged from test_training_progress.py ---
-from lnl_toolbox.training.progress import TerminalTrainingProgress, write_training_curves_svg
+from lnl_toolbox.training.progress import TerminalTrainingProgress, standardize_epoch_row, write_training_curves_svg
 
 # --- merged from test_training_progress.py ---
 class _training_progress_TrainingProgressTest(unittest.TestCase):
@@ -603,6 +603,40 @@ class _training_progress_TrainingProgressTest(unittest.TestCase):
             TerminalTrainingProgress(epoch=0, total_epochs=1, total_batches=1)
         with self.assertRaises(ValueError):
             write_training_curves_svg([], Path('unused.svg'))
+
+    def test_train_only_epoch_and_svg_are_supported_explicitly(self) -> None:
+        row = standardize_epoch_row(
+            {
+                'epoch': 1,
+                'train_loss': 1.0,
+                'train_accuracy': 0.5,
+                'learning_rate': 0.01,
+            },
+            require_validation=False,
+        )
+        self.assertNotIn('validation_loss', row)
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_training_curves_svg([row], Path(directory) / 'train-only.svg')
+            text = path.read_text(encoding='utf-8')
+        self.assertIn('Training progress', text)
+        self.assertNotIn('>validation</text>', text)
+        self.assertEqual(text.count('<polyline'), 3)
+
+    def test_partial_or_mixed_validation_metrics_are_rejected(self) -> None:
+        base = {'train_loss': 1.0, 'train_accuracy': 0.5, 'learning_rate': 0.01}
+        with self.assertRaisesRegex(ValueError, 'provided together'):
+            standardize_epoch_row(
+                {**base, 'validation_loss': 1.1}, require_validation=False
+            )
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, 'every epoch or none'):
+                write_training_curves_svg(
+                    [
+                        {**base, 'validation_loss': 1.1, 'validation_accuracy': 0.4},
+                        base,
+                    ],
+                    Path(directory) / 'mixed.svg',
+                )
 
 # --- merged from test_clean_baseline.py ---
 import tempfile
@@ -710,7 +744,11 @@ import torch
 # --- merged from test_noisy_ce_baseline.py ---
 from lnl_toolbox.data.cifar import CifarData
 
-from lnl_toolbox.data.contracts import DataSpec, RawDatasetSplit
+from lnl_toolbox.data.contracts import (
+    DataSpec,
+    RawDatasetSplit,
+    UnsupportedDatasetSplitError,
+)
 
 from lnl_toolbox.data.multiclass_synthetic import generate_synthetic_multiclass
 
@@ -746,7 +784,7 @@ class _noisy_ce_baseline__GenericTabularAdapter:
 
     def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
         if split == 'validation':
-            raise ValueError('fixture intentionally uses a train-derived validation split')
+            raise UnsupportedDatasetSplitError('fixture intentionally uses a train-derived validation split')
         sizes = {'train': 40, 'test': 12}
         if split not in sizes:
             raise ValueError(f'unsupported fixture split: {split}')

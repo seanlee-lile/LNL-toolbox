@@ -129,13 +129,13 @@ def find_exact_reproduction(
 ) -> str | None:
     """Find a formal recipe whose dataset adapter and noise choice match."""
 
-    wanted_noise = "clean" if noise_selection.kind in {"clean", "native"} else noise_selection.key
+    wanted_noise = str(noise_selection.key).strip().lower()
     for item in paper.configs:
         if item.profile != "reproduction":
             continue
         config = _cached_recipe_config(item.recipe_id)
         data_name = str(_get(config, ("data", "name"), "")).lower().replace("-", "_")
-        noise_name = str(_get(config, ("noise", "name"), "clean"))
+        noise_name = str(_get(config, ("noise", "name"), "clean")).strip().lower()
         if data_name != str(dataset_adapter).lower().replace("-", "_"):
             continue
         if noise_name != wanted_noise:
@@ -144,7 +144,7 @@ def find_exact_reproduction(
         if noise_selection.rate is not None and configured_rate is not None:
             if float(configured_rate) != float(noise_selection.rate):
                 continue
-        return recipe.id
+        return item.recipe_id
     return None
 
 

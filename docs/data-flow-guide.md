@@ -200,6 +200,21 @@ global index 的当前用途：
 
 ## 5. Dataset 与 Batch 合同
 
+### 5.0 validation 与 TEST 边界
+
+`RunnerSpec.data_requirements(config)` 只有在 `data.validation_size` 或
+`data.num_val` 大于 0 时才为 FINE/CAL 声明 validation role；其 target source 由
+`noise.validation_targets` 决定，缺省为 clean。runner 只能通过
+`PreparedData.validation_loader()` 获取该独立 role，禁止把 TEST loader 复用为
+validation。
+
+- 没有 validation role：epoch 行只写训练指标；训练结束后评测一次 TEST。
+- 有 validation role：每个 epoch 评测真实 validation；训练结束后另评测一次 TEST。
+- TEST 结果只写入末尾 `event: final`，并记录
+  `selection_split: none`、`test_selection_leakage: false`。
+- 曲线允许 train-only 或 train+validation 两种完整形态；同一次运行不得混用或只提供
+  一半 validation 字段。
+
 单样本必须返回且只能依赖以下公共字段：
 
 ```python

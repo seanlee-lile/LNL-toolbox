@@ -179,6 +179,13 @@ def run_multi_model_experiment(
     if requirements is None:
         from lnl_toolbox.training.runners import resolve_data_requirements
         requirements = resolve_data_requirements(config, expected_runner="multi_model")
+    data_config = dict(config.get("data", {}) or {})
+    validation_size = int(
+        requirements.validation_size
+        if requirements.validation_size is not None
+        else data_config.get("validation_size", data_config.get("num_val", 0))
+        or 0
+    )
     prepared = prepare_experiment_data(
         config,
         requirements=requirements,

@@ -321,7 +321,11 @@ from lnl_toolbox.algorithms.pcse.volmin import DiagonallyDominantTransition, bui
 # --- merged from test_pcse_volmin.py ---
 from lnl_toolbox.data.multiclass_synthetic import MulticlassTensorDataset, generate_synthetic_multiclass
 
-from lnl_toolbox.data.contracts import DataSpec, RawDatasetSplit
+from lnl_toolbox.data.contracts import (
+    DataSpec,
+    RawDatasetSplit,
+    UnsupportedDatasetSplitError,
+)
 
 from lnl_toolbox.training.data_service import DATASETS
 
@@ -627,7 +631,9 @@ class _pcse_workflow__GenericTabularAdapter:
 
     def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
         if split == 'validation':
-            raise ValueError('fixture intentionally uses a train-derived validation split')
+            raise UnsupportedDatasetSplitError(
+                'fixture intentionally uses a train-derived validation split'
+            )
         sizes = {'train': 120, 'test': 30}
         offsets = {'train': 0, 'test': 0}
         if split not in sizes:

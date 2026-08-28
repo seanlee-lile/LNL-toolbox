@@ -127,7 +127,14 @@ def run_cal_experiment(
         shuffle=False,
     )
     test_loader = data.loader(DataRole.TEST, stream=24, shuffle=False)
-    validation_loader = test_loader
+    validation_loader = (
+        data.validation_loader(stream=23, shuffle=False)
+        if {
+            DataRole.CLEAN_VALIDATION,
+            DataRole.NOISY_VALIDATION,
+        }.intersection(data.available_roles)
+        else None
+    )
     classes = data.num_classes
     noisy_prior = torch.as_tensor(np.bincount(data.noisy_targets, minlength=classes) / len(data.noisy_targets), dtype=torch.float32, device=device)
     proxy_path = run_dir / "cal_proxy_artifact.npz"
@@ -268,8 +275,14 @@ def run_cal_experiment(
             total += targets.numel(); loss_sum += float(loss.detach()) * targets.numel(); correct += int(logits.argmax(1).eq(targets).sum())
         observed_classes = epoch_class_counts > 0
         means[observed_classes] = epoch_loss_sums[observed_classes] / epoch_class_counts[observed_classes, None]
-        means = means.detach(); validation = evaluate_classification(model, validation_loader, criterion, device); test = evaluate_classification(model, test_loader, criterion, device)
-        row = standardize_epoch_row({"epoch": epoch + 1, "train_loss": loss_sum / total, "train_accuracy": correct / total, "validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"], "test_loss": test["loss"], "test_accuracy": test["accuracy"], "learning_rate": optimizer.param_groups[0]["lr"], "method": "cal"}); rows.append(row)
+        means = means.detach()
+        row_values = {"epoch": epoch + 1, "train_loss": loss_sum / total, "train_accuracy": correct / total, "learning_rate": optimizer.param_groups[0]["lr"], "method": "cal"}
+        if validation_loader is not None:
+            validation = evaluate_classification(model, validation_loader, criterion, device)
+            row_values.update({"validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"]})
+        row = standardize_epoch_row(
+            row_values, require_validation=validation_loader is not None
+        ); rows.append(row)
         if scheduler is not None:
             scheduler.step(resolve_confidence_weight(
                 epoch + 1,
@@ -277,8 +290,14 @@ def run_cal_experiment(
                 cal_schedule,
             ))
         atomic_save({"method": "cal", "config": config, "model": model.state_dict(), "optimizer": optimizer.state_dict(), "scheduler": None if scheduler is None else scheduler.state_dict(), "completed_epoch": epoch, "metrics": rows, "proxy_hash": proxy.artifact_hash, "reference_loss_means": means.cpu(), "reference_transition_means": transition_means.cpu(), "rng_state": capture_rng_state()}, run_dir / "last.pt")
-    (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8"); (run_dir / "metrics.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     if rows: write_training_curves_svg(rows, run_dir / "training_curves.svg")
+    test = evaluate_classification(model, test_loader, criterion, device)
+    final_row = {"event": "final", "completed_epochs": epochs, "test_loss": test["loss"], "test_accuracy": test["accuracy"], "selection_split": "none", "test_selection_leakage": False, "method": "cal"}
+    (run_dir / "metrics.jsonl").write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in [*rows, final_row]),
+        encoding="utf-8",
+    )
     return run_dir
 
 

@@ -17,6 +17,7 @@ from lnl_toolbox.training.data_service import DataService
 from lnl_toolbox.quickstart.models import QuickStartNoiseSelection
 from lnl_toolbox.quickstart.service import QuickStartService, _class_space_problems
 from lnl_toolbox.quickstart.templates import adapt_method_template, method_template_for_paper
+from lnl_toolbox.quickstart.templates import find_exact_reproduction
 from lnl_toolbox.training.compatibility import CompatibilityStatus
 
 
@@ -164,6 +165,28 @@ class QuickStartServiceTests(unittest.TestCase):
         self.assertEqual(plan.status, "unsupported")
         self.assertIsNone(plan.command)
         self.assertIn("preflight failed", plan.details)
+
+    def test_exact_reproduction_preserves_native_noise_and_returns_recipe_id(self) -> None:
+        clean_paper = SimpleNamespace(configs=(SimpleNamespace(profile="reproduction", recipe_id="formal-clean"),))
+        native_paper = SimpleNamespace(configs=(SimpleNamespace(profile="reproduction", recipe_id="formal-native"),))
+        def config_for(recipe_id):
+            return {"data": {"name": "cifar10"}} if recipe_id == "formal-clean" else {
+                "data": {"name": "cifar10"}, "noise": {"name": "native"},
+            }
+        with patch("lnl_toolbox.quickstart.templates._cached_recipe_config", side_effect=config_for):
+            self.assertIsNone(find_exact_reproduction(
+                clean_paper, dataset_adapter="cifar10",
+                noise_selection=QuickStartNoiseSelection("native", "native"),
+            ))
+            self.assertEqual(find_exact_reproduction(
+                native_paper, dataset_adapter="cifar10",
+                noise_selection=QuickStartNoiseSelection("synthetic", "native"),
+            ), "formal-native")
+            self.assertEqual(find_exact_reproduction(
+                clean_paper, dataset_adapter="cifar10",
+                noise_selection=QuickStartNoiseSelection("clean", "clean"),
+            ), "formal-clean")
+
 
     def test_all_visible_noise_choices_respect_registered_class_spaces(self) -> None:
         root = Path(self.temp.name)

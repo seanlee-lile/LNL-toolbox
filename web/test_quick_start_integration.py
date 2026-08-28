@@ -10,7 +10,11 @@ from unittest.mock import patch
 
 import numpy as np
 
-from lnl_toolbox.data.contracts import DataSpec, RawDatasetSplit
+from lnl_toolbox.data.contracts import (
+    DataSpec,
+    RawDatasetSplit,
+    UnsupportedDatasetSplitError,
+)
 from lnl_toolbox.data.local_catalog import LocalDatasetCatalog
 from lnl_toolbox.data.probe import DatasetProbeResult, ProbeCandidate
 from lnl_toolbox.data.registry import DatasetRegistry
@@ -31,7 +35,7 @@ class _CifarFixtureAdapter:
     def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
         del spec, seed
         if split == "validation":
-            raise ValueError("split must be train or test")
+            raise UnsupportedDatasetSplitError("split must be train or test")
         count = 40 if split == "train" else 20
         labels = np.arange(count, dtype=np.int64) % 10
         return RawDatasetSplit(

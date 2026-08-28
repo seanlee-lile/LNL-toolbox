@@ -544,7 +544,11 @@ from lnl_toolbox.algorithms.volminnet import VolMinNetConfig
 # --- merged from test_volminnet_workflow.py ---
 from lnl_toolbox.data.cifar import CifarData
 
-from lnl_toolbox.data.contracts import DataSpec, RawDatasetSplit
+from lnl_toolbox.data.contracts import (
+    DataSpec,
+    RawDatasetSplit,
+    UnsupportedDatasetSplitError,
+)
 
 from lnl_toolbox.data.multiclass_synthetic import generate_synthetic_multiclass
 
@@ -580,7 +584,9 @@ class _volminnet_workflow__GenericTabularAdapter:
 
     def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
         if split == 'validation':
-            raise ValueError('fixture intentionally uses a train-derived validation split')
+            raise UnsupportedDatasetSplitError(
+                'fixture intentionally uses a train-derived validation split'
+            )
         sizes = {'train': 48, 'test': 12}
         if split not in sizes:
             raise ValueError(f'unsupported fixture split: {split}')

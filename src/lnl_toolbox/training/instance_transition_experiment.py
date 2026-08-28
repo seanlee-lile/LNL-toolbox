@@ -403,6 +403,9 @@ def run_instance_transition_experiment(
 
     config, parameter_record = resolve_parameter_sampling(raw_config)
     config = dict(config)
+    from lnl_toolbox.training.runners import is_official_pdl_config
+
+    official_pdl = is_official_pdl_config(config)
     seed = int(config.get("seed", 1))
     epochs = int(config["trainer"]["epochs"])
     if epochs <= 0:

@@ -168,7 +168,11 @@ def run_mc_ldce_experiment(
     )
     train_loader = prepared.loader(DataRole.TRAIN, stream=21)
     snapshot_loader = prepared.loader(DataRole.TRAIN_EVAL, stream=22, shuffle=False)
-    validation_loader = prepared.loader(DataRole.CLEAN_VALIDATION, stream=23, shuffle=False)
+    validation_loader = (
+        prepared.loader(DataRole.CLEAN_VALIDATION, stream=23, shuffle=False)
+        if DataRole.CLEAN_VALIDATION in prepared.available_roles
+        else None
+    )
     test_loader = prepared.loader(DataRole.TEST, stream=24, shuffle=False)
     lifecycle = _lifecycle(config)
     model = build_reproduction_model(
@@ -258,9 +262,12 @@ def run_mc_ldce_experiment(
             loss = objective.compute(model=model, logits=output.logits, features=output.features, noisy_targets=targets, sample_indices=indices, base_loss=criterion, metadata={})
             optimizer.zero_grad(set_to_none=True); loss.backward(); optimizer.step()
             count = targets.numel(); total += count; loss_sum += float(loss.detach()) * count; correct += int(output.logits.argmax(1).eq(targets).sum())
-        validation = evaluate_classification(model, validation_loader, criterion, device)
         test = evaluate_classification(model, test_loader, criterion, device)
-        row = standardize_epoch_row({"epoch": epoch + 1, "train_loss": loss_sum / total, "train_accuracy": correct / total, "validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"], "test_loss": test["loss"], "test_accuracy": test["accuracy"], "learning_rate": optimizer.param_groups[0]["lr"], "method": "mc_ldce"})
+        row_values = {"epoch": epoch + 1, "train_loss": loss_sum / total, "train_accuracy": correct / total, "test_loss": test["loss"], "test_accuracy": test["accuracy"], "learning_rate": optimizer.param_groups[0]["lr"], "method": "mc_ldce"}
+        if validation_loader is not None:
+            validation = evaluate_classification(model, validation_loader, criterion, device)
+            row_values.update({"validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"]})
+        row = standardize_epoch_row(row_values, require_validation=validation_loader is not None)
         rows.append(row)
         if scheduler is not None: scheduler.step()
         atomic_save({"method": "mc_ldce", "lifecycle_version": lifecycle["lifecycle_version"], "config": config, "model": model.state_dict(), "optimizer": optimizer.state_dict(), "scheduler": None if scheduler is None else scheduler.state_dict(), "completed_epoch": epoch, "metrics": rows, "statistic_hash": statistic.artifact_hash, "rng_state": capture_rng_state()}, run_dir / "last.pt")

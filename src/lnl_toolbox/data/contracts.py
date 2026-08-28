@@ -11,6 +11,10 @@ from typing import Any, Mapping, Protocol, runtime_checkable
 import numpy as np
 
 
+class UnsupportedDatasetSplitError(ValueError):
+    """The dataset adapter does not expose the requested split."""
+
+
 @dataclass(frozen=True, slots=True)
 class Sample:
     """Stable dataset protocol; clean fields are evaluator-only."""
@@ -368,6 +372,7 @@ __all__ = [
     "DataRequirements",
     "DataRole",
     "DataSpec",
+    "UnsupportedDatasetSplitError",
     "DatasetAdapter",
     "DatasetIdentity",
     "InputSpec",

@@ -103,6 +103,10 @@ class _data_adapters_DataAdapterFixtureTest(unittest.TestCase):
             self.assertEqual(split.clean_targets.tolist(), corpus.labels.tolist())
             self.assertIn('human_annotation', split.source)
 
+    def test_cifar_adapter_uses_typed_error_for_unsupported_validation(self) -> None:
+        with self.assertRaises(UnsupportedDatasetSplitError):
+            CifarAdapter('cifar10', 10).load(DataSpec('cifar10'), 'validation', seed=1)
+
     def test_mnist_official_idx_gzip_layout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -275,7 +279,7 @@ import numpy as np
 import torch
 
 # --- merged from test_data_service.py ---
-from lnl_toolbox.data import DataProtocol, DataRequirements, DataRole, DataSpec, DatasetRegistry, IndexedDatasetView, InputSpec, LocalDatasetCatalog, NoiseDescriptor, RawDatasetSplit
+from lnl_toolbox.data import DataProtocol, DataRequirements, DataRole, DataSpec, DatasetRegistry, IndexedDatasetView, InputSpec, LocalDatasetCatalog, NoiseDescriptor, RawDatasetSplit, UnsupportedDatasetSplitError
 
 # --- merged from test_data_service.py ---
 from lnl_toolbox.training.checkpoint import atomic_save, read_checkpoint
@@ -304,6 +308,15 @@ class _data_service__FixtureAdapter:
         self.validate(spec)
         count = 8 if split == 'train' else 4
         return RawDatasetSplit(inputs=np.arange(count * 2, dtype=np.float32).reshape(count, 2), observed_targets=np.arange(count, dtype=np.int64) % 2, global_indices=np.arange(count, dtype=np.int64), dataset=self.name, split=split, num_classes=2, source=str(spec.root))
+
+# --- merged from test_data_service.py ---
+class _data_service__BrokenValidationFixtureAdapter(_data_service__FixtureAdapter):
+    name = 'broken_validation_fixture'
+
+    def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
+        if split == 'validation':
+            raise ValueError('validation fixture has an invalid shape')
+        return super().load(spec, split, seed=seed)
 
 # --- merged from test_data_service.py ---
 class _data_service__NativeNoisyFixtureAdapter:
@@ -358,7 +371,7 @@ class _data_service__DerivedValidationFixtureAdapter:
         del seed
         self.validate(spec)
         if split == 'validation':
-            raise ValueError('derived validation fixture has no native validation split')
+            raise UnsupportedDatasetSplitError('derived validation fixture has no native validation split')
         count = 50000 if split == 'train' else 10000
         targets = np.arange(count, dtype=np.int64) % 10
         return RawDatasetSplit(
@@ -545,6 +558,18 @@ class _data_service_DataServiceTest(unittest.TestCase):
             self.assertIn('broken fixture layout', report.error or '')
             self.assertNotEqual(service.status('broken').status, 'ready')
 
+    def test_invalid_native_validation_is_not_treated_as_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = DataService(
+                DatasetRegistry((_data_service__BrokenValidationFixtureAdapter(),)),
+                LocalDatasetCatalog(root / 'catalog.json'),
+            )
+            service.register('broken-validation', 'broken_validation_fixture', {'root': root})
+            report = service.inspect('broken-validation')
+            self.assertEqual(report.status, 'incomplete')
+            self.assertIn('invalid shape', report.error or '')
+
     def test_portable_config_resolves_unique_local_registration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -679,7 +704,7 @@ class _data_service_DataServiceTest(unittest.TestCase):
         self.assertEqual(DataRole.UNLABELED.value, 'unlabeled')
         self.assertEqual(DataRole.CURRICULUM.value, 'curriculum')
 
-    def test_explicit_test_split_supplies_clean_evaluation_targets(self) -> None:
+    def test_test_split_is_never_promoted_to_clean_validation(self) -> None:
         requirements = DataRequirements(
             roles=frozenset({DataRole.TRAIN, DataRole.CLEAN_VALIDATION, DataRole.TEST}),
             validation_targets='clean',
@@ -687,23 +712,43 @@ class _data_service_DataServiceTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            with self.assertRaisesRegex(ValueError, 'clean_validation requires genuine clean targets'):
+                prepare_experiment_data(
+                    {
+                        'data': {'name': 'fixture', 'root': str(root), 'validation_size': 0},
+                        'noise': {'name': 'clean', 'validation_targets': 'clean'},
+                        'loader': {'batch_size': 2, 'num_workers': 0},
+                    },
+                    requirements=requirements,
+                    run_dir=root / 'run',
+                    seed=3,
+                    registry=DatasetRegistry((_data_service__FixtureAdapter(),)),
+                )
+
+    def test_zero_validation_omits_validation_split_and_role(self) -> None:
+        requirements = DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.TEST}),
+            validation_targets='clean',
+            needs_noise_manifest=False,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
             prepared = prepare_experiment_data(
                 {
-                    'data': {'name': 'fixture', 'root': str(root), 'validation_size': 0},
-                    'noise': {'name': 'clean', 'validation_targets': 'clean'},
+                    'data': {'name': 'derived_validation_fixture', 'root': str(root), 'validation_size': 0},
+                    'noise': {'name': 'clean'},
                     'loader': {'batch_size': 2, 'num_workers': 0},
                 },
                 requirements=requirements,
                 run_dir=root / 'run',
                 seed=3,
-                registry=DatasetRegistry((_data_service__FixtureAdapter(),)),
+                registry=DatasetRegistry((_data_service__DerivedValidationFixtureAdapter(),)),
             )
-            validation = prepared.dataset_for(DataRole.CLEAN_VALIDATION)
-            test = prepared.dataset_for(DataRole.TEST)
-            self.assertEqual(
-                [int(validation[index]['target']) for index in range(len(validation))],
-                [int(test[index]['target']) for index in range(len(test))],
-            )
+            self.assertIsNone(prepared.validation_split)
+            self.assertEqual(prepared.validation_indices.size, 0)
+            self.assertNotIn(DataRole.CLEAN_VALIDATION, prepared.available_roles)
+            manifest = json.loads((root / 'run' / 'data_manifest.json').read_text(encoding='utf-8'))
+            self.assertNotIn('validation', manifest['splits'])
 
     def test_dataset_neutral_contracts_reject_invalid_values(self) -> None:
         with self.assertRaisesRegex(ValueError, 'shape dimensions'):
@@ -961,7 +1006,11 @@ class _dataset_training_fixtures_DatasetTrainingFixturesTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             _dataset_training_fixtures__write_animal10n(root)
-            self._assert_trained(_dataset_training_fixtures__image_config('animal10n', root), root / 'run')
+            config = _dataset_training_fixtures__image_config('animal10n', root)
+            # Animal-10N exposes noisy train labels and no clean validation
+            # split; clean baseline must fail rather than promote TEST.
+            with self.assertRaisesRegex(ValueError, 'clean_validation requires genuine clean targets'):
+                ExperimentService().run(config, root / 'run')
 
     def test_official_uci_heart_whitespace_rows_train_one_epoch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
