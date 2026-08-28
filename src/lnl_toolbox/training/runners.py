@@ -443,7 +443,7 @@ def _pcse_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         validation_target="noisy",
         required_pretrained_roles=("upm_main_best",) if external else (),
         pretrained_role_paths=(
-            (("upm_main_best", ("pretraining_stage", "source", "adapter")),)
+            (("upm_main_best", ("pretraining_stage", "source", "run_directory_env")),)
             if external else ()
         ),
     )
@@ -460,7 +460,7 @@ def _dld_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         validation_target="noisy",
         required_pretrained_roles=("upm_main_best",) if source == "external_checkpoint" else (),
         pretrained_role_paths=(
-            (("upm_main_best", ("dld", "feature_extractor", "external", "adapter")),)
+            (("upm_main_best", ("dld", "feature_extractor", "external", "run_directory_env")),)
             if source == "external_checkpoint" else ()
         ),
     )

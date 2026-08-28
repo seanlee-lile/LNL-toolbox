@@ -171,6 +171,7 @@
     .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
     .status { color: var(--text-muted); margin: 0 0 10px; font-size: 15px; font-weight: 650; }
     .status.running { color: var(--warning); }
+    .status.warning { color: var(--warning); }
     .status.success { color: var(--good); }
     .status.failed { color: var(--bad); }
     pre {
@@ -362,7 +363,7 @@
       "papers": "浏览工具箱内置的论文方法目录。",
       "paper-config": "查看论文正式配置与映射。"
     };
-    const state = { selected: null, request: null, jobId: null, timer: null, resultTimer: null, module: recipeMode ? "yaml" : "quickstart", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, tutorial: {steps:[], sequence:[]}, tutorialStep: 0, tutorialCompleted: {}, tutorialRunningStep: "", tutorialRecipe: "cifar10-symmetric-ce-smoke", tutorialData: "", tutorialOutput: "artifacts/runs/tutorial-ce-smoke", tutorialResume: null, tutorialQuickMode: false, tutorialQuickAction: "validate", tutorialQuickEpochs: "1", tutorialQuickSeeds: "1 2 3", yamlSchema: null, yamlSourcePath: "", yamlTextDirty: false, yamlFormDirty: false, yamlSuggestedPath: "", yamlDestinationPath: "", yamlDataset: "", yamlMode: "paper", yamlPaper: "", yamlBase: "cifar10-symmetric-ce-smoke", yamlLoss: "ce", yamlSelector: "all", yamlKeepRate: "0.8", yamlUpdate: "standard", yamlMilestones: "60 80", yamlGamma: "0.1", yamlCdrNoiseRate: "0.2", yamlL1Decay: "0.0", yamlRecipeCompatibility: null, yamlCompatibilityLoading: false, yamlCompatibilityError: "", pendingYamlPath: "", activeConfig: {kind:"recipe", value:"cifar10-symmetric-ce-smoke", label:"cifar10-symmetric-ce-smoke"}, trainingData: "", dataAction: "list", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, dataCompatibility: null, dataRecipeCompatibility: null, dataCompatibilityAlias: "", dataCompatibilityError: "", dataCompatibilityLoading: false, dataSelectedMethod: "", dataSelectedRecipe: "", dataMethodNoisePrior: "", dataShowUnavailable: false, removeConfirmed: false, sweepSourceKind: "recipe", sweepRecipe: "cifar10-clean-smoke", sweepPath: "", sweepDataset: "", sweepSchema: null, sweepSchemaKey: "", sweepRows: [], sweepPlan: null, sweepOutput: "artifacts/web-sweep", resultData: null, resultSelected: [], resultFilter: "", resultListCollapsed: false, resultListInitialized: false, resumeData: null, resumeInspectionKey: "", paperId: "", paperRecipe: "" };
+    const state = { selected: null, request: null, jobId: null, timer: null, resultTimer: null, module: recipeMode ? "yaml" : "quickstart", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, tutorial: {steps:[], sequence:[]}, tutorialStep: 0, tutorialCompleted: {}, tutorialRunningStep: "", tutorialRecipe: "cifar10-symmetric-ce-smoke", tutorialData: "", tutorialOutput: "artifacts/runs/tutorial-ce-smoke", tutorialResume: null, tutorialQuickMode: false, tutorialQuickAction: "validate", tutorialQuickEpochs: "1", tutorialQuickSeeds: "1 2 3", yamlSchema: null, yamlSourcePath: "", yamlTextDirty: false, yamlFormDirty: false, yamlSuggestedPath: "", yamlDestinationPath: "", yamlDataset: "", yamlMode: "paper", yamlPaper: "", yamlBase: "cifar10-symmetric-ce-smoke", yamlLoss: "ce", yamlSelector: "all", yamlKeepRate: "0.8", yamlUpdate: "standard", yamlMilestones: "60 80", yamlGamma: "0.1", yamlCdrNoiseRate: "0.2", yamlL1Decay: "0.0", yamlRecipeCompatibility: null, yamlCompatibilityLoading: false, yamlCompatibilityError: "", pendingYamlPath: "", activeConfig: {kind:"recipe", value:"cifar10-symmetric-ce-smoke", label:"cifar10-symmetric-ce-smoke"}, trainingData: "", dataAction: "status", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, dataCompatibility: null, dataRecipeCompatibility: null, dataCompatibilityAlias: "", dataCompatibilityError: "", dataCompatibilityLoading: false, dataSelectedMethod: "", dataSelectedRecipe: "", dataMethodNoisePrior: "", dataShowUnavailable: false, removeConfirmed: false, sweepSourceKind: "recipe", sweepRecipe: "cifar10-clean-smoke", sweepPath: "", sweepDataset: "", sweepSchema: null, sweepSchemaKey: "", sweepRows: [], sweepPlan: null, sweepOutput: "artifacts/web-sweep", resultData: null, resultSelected: [], resultFilter: "", resultListCollapsed: false, resultListInitialized: false, resumeData: null, resumeInspectionKey: "", paperId: "", paperRecipe: "" };
     if (recipeMode) {
       document.getElementById("page-title").textContent = "LNL Toolbox Recipe Editor";
       document.getElementById("page-subtitle").textContent = "从已有 recipe 组合配置，并查看或保存 YAML。";
@@ -874,6 +875,30 @@
         (required.length ? '<p><b>还需要：</b> ' + escapeHtml(required.join("、")) + '</p>' : '') +
         (developerIssue ? '<p class="helper">这是方法元数据问题，不是用户应填写的数据事实。</p>' : '') + '</div>';
     }
+    function compatibilityGuidanceCard(item) {
+      const category = item.category === "dataset_fact" ? "数据集事实" : item.category === "developer_error" ? "开发者配置错误" : item.category === "dataset_preparation" ? "数据准备" : "方法输入";
+      const paths = (item.config_paths || []).map(function (path) { return path.join("."); });
+      return '<div class="guide-card compatibility-requirement"><div><strong>' + escapeHtml(item.label || item.id) + '</strong> <span class="parameter-badge">' + escapeHtml(category) + '</span></div>' +
+        '<p><b>缺少：</b>' + escapeHtml(item.missing || item.id) + '</p>' +
+        '<p><b>你需要提供：</b>' + escapeHtml(item.expected_value || "请按方法配置要求提供输入") + '</p>' +
+        '<p><b>提供方式：</b>' + escapeHtml(item.provision || "请检查方法配置") + '</p>' +
+        (item.environment_variable ? '<p><b>环境变量：</b><code>' + escapeHtml(item.environment_variable) + '=&lt;run directory&gt;</code></p>' : '') +
+        (paths.length ? '<p class="helper">配置定位：' + escapeHtml(paths.join(" 或 ")) + '</p>' : '') + '</div>';
+    }
+    function selectedRecipeCompatibilityHtml(recipe) {
+      if (!recipe) return '<p>尚未选择正式 recipe</p>';
+      if (recipe.status === "compatible") return '<p class="status success">✓ 当前 recipe 与该数据集兼容</p>';
+      if (recipe.status === "incompatible") {
+        const reasons = recipe.reasons || [];
+        return '<p class="status failed">当前 recipe 与该数据集不兼容</p><p><b>不兼容原因：</b></p><ul>' +
+          reasons.map(function (reason) { return '<li>' + escapeHtml(reason.message || reason.code) + '</li>'; }).join("") + '</ul>';
+      }
+      const guidance = recipe.input_guidance || [];
+      const details = guidance.length
+        ? guidance.map(compatibilityGuidanceCard).join("")
+        : '<div class="data-feedback failed"><strong>缺少可执行指引</strong><p>' + escapeHtml(compatibilitySummary(recipe)) + '</p><p>Backend 尚未发布安全的输入位置；请勿猜测或伪造数据事实。</p></div>';
+      return '<p class="status warning">当前 recipe 需要补充条件</p><div><b>需要补充：</b></div>' + details;
+    }
     function datasetProfileCompatibilityHtml() {
       if (state.dataCompatibilityLoading) return '<div class="guide-card"><strong>数据集优先流程</strong><p>正在读取适配器事实并检查正式 recipe……</p></div>';
       if (state.dataCompatibilityError) return '<div class="data-feedback failed"><strong>数据集兼容性不可用</strong><p>' + escapeHtml(state.dataCompatibilityError) + '</p></div>';
@@ -909,28 +934,18 @@
       state.dataSelectedMethod = selectedRecipe?.method || "";
       const selectedInputs = selectedRecipe?.required_user_inputs || [];
       const needsPrior = selectedInputs.includes("noise_rate_prior");
-      const methodInputs = selectedInputs.filter(function (item) { return item !== "noise_rate_prior"; }).map(compatibilityInputLabel);
       const priorEditor = needsPrior ? '<div class="form-grid">' + field("当前方法噪声率先验", "compat-method-prior", inputControl("__ID__", state.dataMethodNoisePrior, "number", "min=0 max=1 step=0.001")) + '</div><p class="helper">这是所选 recipe 的实验输入，不会保存为数据集事实；提交时会写入该 recipe 声明的真实配置路径。</p>' : '';
       const recipeWorkflow = '<div class="guide-card"><strong>选择正式论文配置</strong><p>必须明确选择具体 recipe；兼容性由后端加载该 recipe 的真实 YAML 后计算。</p>' +
         (recipeOptions.length ? field("正式 recipe", "compat-recipe-select", selectControl("__ID__", recipeOptions), true) : '<p class="helper">没有可检查的正式 recipe。</p>') +
-        '<p>' + escapeHtml(selectedRecipe ? compatibilitySummary(selectedRecipe) : "请选择一个正式 recipe") + '</p>' + priorEditor +
-        (methodInputs.length ? '<p><b>当前方法还需要：</b> ' + escapeHtml(methodInputs.join("、")) + '。请在 YAML 编辑器中提供实际路径或字段。</p>' : '') +
-        '<button type="button" id="compat-create-yaml" ' + (selectedRecipe ? '' : 'disabled') + '>使用此数据集编辑 YAML</button></div>';
-      const methods = value.methods || [];
-      const flatMethods = methods.flatMap(function (group) { return group.recipes || []; });
-      const unavailable = flatMethods.filter(function (item) { return item.status === "incompatible"; });
-      const conditional = flatMethods.filter(function (item) { return item.status === "compatible_with_requirements"; });
-      const compatible = flatMethods.filter(function (item) { return item.status === "compatible"; });
-      const section = function (title, items) { return '<div class="wide"><h3>' + title + '</h3>' + (items.length ? items.map(compatibilityMethodCard).join("") : '<p class="helper">没有记录。</p>') + '</div>'; };
+        '</div>';
       const actionsReady = selectedRecipe?.status === "compatible";
       return '<section id="dataset-compatibility-panel"><h2>数据集优先流程</h2><p>先读取数据集事实，再选择正式 recipe；只有具体配置兼容时才允许 validate、dry-run 和 run。</p>' +
         '<div class="guide-card"><strong>数据集信息</strong>' + tableHtml(detectedRows) + '<p class="helper">这些字段来自 adapter 和实际 train/test 加载，不可由普通 Web 表单伪造。</p></div>' + declarations + recipeWorkflow +
-        section("可直接使用的正式配置", compatible) + section("补充方法输入后可用", conditional) +
-        '<label><input type="checkbox" id="compat-show-unavailable" ' + (state.dataShowUnavailable ? 'checked' : '') + '> 显示不兼容配置</label>' +
-        '<div id="compat-unavailable" class="' + (state.dataShowUnavailable ? '' : 'hidden') + '">' + section("不兼容配置", unavailable) + '</div>' +
-        '<div class="guide-card"><strong>当前选择</strong><p>' + escapeHtml(selectedRecipe ? selectedRecipe.acronym + " · " + selectedRecipe.recipe_id + " · " + compatibilityStatusLabel(selectedRecipe.status) : "尚未选择正式 recipe") + '</p>' +
+        '<div class="guide-card compatibility-method" data-status="' + escapeHtml(selectedRecipe?.status || "unchecked") + '"><strong>当前选择</strong><p>' + escapeHtml(selectedRecipe ? selectedRecipe.acronym + " · " + selectedRecipe.recipe_id + " · " + compatibilityStatusLabel(selectedRecipe.status) : "尚未选择正式 recipe") + '</p>' +
+        selectedRecipeCompatibilityHtml(selectedRecipe) + priorEditor +
+        (selectedRecipe?.status === "compatible_with_requirements" ? '<button type="button" id="compat-create-yaml">打开 YAML/配置说明</button>' : '') +
         '<div class="actions"><button type="button" data-compat-action="validate" ' + (actionsReady ? '' : 'disabled') + '>检查</button><button type="button" data-compat-action="dry-run" ' + (actionsReady ? '' : 'disabled') + '>预演</button><button type="button" data-compat-action="run" ' + (actionsReady ? '' : 'disabled') + '>运行</button></div>' +
-        '<p class="helper">未满足的字段会在上方显示；method_requirements 等开发者元数据问题不会要求用户填写。</p></div></section>';
+        '</div></section>';
     }
     async function loadDatasetCompatibility(alias = state.dataAlias) {
       if (!alias) { state.dataCompatibility = null; state.dataRecipeCompatibility = null; state.dataCompatibilityAlias = ""; state.dataCompatibilityError = ""; return; }
@@ -1070,6 +1085,12 @@
       runButton.textContent = state.removeConfirmed ? "再次点击，确认删除登记" : "执行此指令";
       updateDatasetGuideVisibility();
     }
+    function updateDatasetStatusVisibility() {
+      document.getElementById("data-status-panel")?.classList.toggle(
+        "hidden",
+        selectValue("data-action", state.dataAction) !== "list"
+      );
+    }
     function renderData() {
       const adapters = state.datasets.adapters || [];
       const reports = state.datasets.datasets || [];
@@ -1091,7 +1112,21 @@
         dataFeedbackHtml(selectedReport) + '<p class="helper">登记只保存路径；inspect 才会真实加载 train/test；verify 会自动按数据类型运行 1 epoch，不需要 CIFAR 或 MNIST 配方。自定义训练时再选择训练模板。</p>' +
         '<div class="guide-card"><strong>数据状态</strong>' + dataTableHtml(reports) + '</div>' + datasetProfileCompatibilityHtml();
       const actionNode = document.getElementById("data-action");
-      actionNode.value = [...actionNode.options].some(function (option) { return option.value === state.dataAction; }) ? state.dataAction : "list";
+      actionNode.value = [...actionNode.options].some(function (option) { return option.value === state.dataAction; }) ? state.dataAction : "status";
+      const statusPanel = [...parameterPanel.querySelectorAll(".guide-card")].find(function (node) { return Boolean(node.querySelector("table")); });
+      statusPanel.id = "data-status-panel";
+      statusPanel.classList.toggle("hidden", state.dataAction !== "list");
+      const statusHeading = statusPanel.querySelector("strong");
+      const statusHeadingRow = document.createElement("div");
+      statusHeadingRow.className = "actions";
+      statusHeading.before(statusHeadingRow);
+      statusHeadingRow.appendChild(statusHeading);
+      const statusCollapse = document.createElement("button");
+      statusCollapse.id = "data-status-collapse";
+      statusCollapse.type = "button";
+      statusCollapse.className = "secondary";
+      statusCollapse.textContent = "收起";
+      statusHeadingRow.appendChild(statusCollapse);
       const aliasNode = document.getElementById("data-alias");
       if (state.dataAlias) aliasNode.value = state.dataAlias;
       const adapterNode = document.getElementById("data-adapter");
@@ -1119,6 +1154,14 @@
         state.dataAction = actionNode.value; state.dataResult = null; state.removeConfirmed = false;
         outputNode.textContent = "尚未执行当前操作。"; statusNode.textContent = "请填写当前操作所需字段，然后执行。"; statusNode.className = "status";
         updateDataFormVisibility();
+        updateDatasetStatusVisibility();
+      });
+      statusCollapse.addEventListener("click", function () {
+        state.dataAction = "status";
+        actionNode.value = "status";
+        updateDataFormVisibility();
+        updateDatasetStatusVisibility();
+        updateModulePreview();
       });
       aliasNode.addEventListener("change", function () {
         state.dataRecipe = selectValue("data-recipe", state.dataRecipe);
@@ -1133,7 +1176,6 @@
       guideButton.addEventListener("click", function () { guideNode.innerHTML = datasetGuideHtml(adapterNode.value); guideNode.classList.remove("hidden"); });
       recipeNode.addEventListener("change", function () { state.dataRecipe = recipeNode.value; const recipe = state.recipes.find(function (item) { return item.id === state.dataRecipe; }); state.dataSelectedMethod = recipe?.method || ""; if (state.dataAlias) loadDatasetCompatibility(state.dataAlias); });
       document.getElementById("data-output").addEventListener("input", function (event) { state.dataOutput = event.target.value; });
-      document.getElementById("compat-show-unavailable")?.addEventListener("change", function (event) { state.dataShowUnavailable = event.target.checked; document.getElementById("compat-unavailable")?.classList.toggle("hidden", !state.dataShowUnavailable); });
       document.getElementById("compat-apply-declarations")?.addEventListener("click", async function () {
         try { await applyDatasetDeclarations(); statusNode.textContent = "Declarations saved; compatibility recomputed."; statusNode.className = "status success"; }
         catch (error) { statusNode.textContent = String(error.message || error); statusNode.className = "status failed"; }
@@ -1590,6 +1632,7 @@
       const previousModule = state.module;
       if (state.resultTimer && module !== "results") { clearInterval(state.resultTimer); state.resultTimer = null; }
       if (module !== previousModule && !yamlEditorPanel.classList.contains("hidden")) hideYamlEditor();
+      if (module === "data" && previousModule !== "data" && state.dataAction === "list") state.dataAction = "status";
       state.module = module;
       if (module !== "data") {
         state.removeConfirmed = false;
@@ -1940,6 +1983,16 @@
       }
       return command;
     }
+    function datasetRegistrationSources(adapter) {
+      const sources = {root:"", path:"", labels:""};
+      if (adapter === "uci_binary") {
+        sources.path = selectValue("data-path", "").trim();
+      } else {
+        sources.root = selectValue("data-root", "").trim();
+        if (["cifar10n", "cifar100n"].includes(adapter)) sources.labels = selectValue("data-labels", "").trim();
+      }
+      return sources;
+    }
     function buildModuleCommand() {
       if (state.module === "quickstart") return "";
       if (state.module === "beginner") return buildBeginnerCommand();
@@ -1948,18 +2001,16 @@
         const action = selectValue("data-action", "list");
         const alias = selectValue("data-alias", "");
         const recipe = selectValue("data-recipe", "cifar10-clean-smoke");
-        if (action === "list") return "lnl data list";
+        if (action === "list") return "";
         if (action === "status") return "lnl data status" + (alias ? " " + quoteArg(alias) : "");
         if (action === "path") return alias ? "lnl data path " + quoteArg(alias) : "";
         if (action === "register") {
           const adapter = selectValue("data-adapter", "cifar10");
           let command = "lnl data register " + quoteArg(selectValue("data-new-alias", "")) + " --adapter " + adapter;
-          const root = selectValue("data-root", "").trim();
-          const path = selectValue("data-path", "").trim();
-          const labels = selectValue("data-labels", "").trim();
-          if (root) command += " --root " + quoteArg(root);
-          if (path) command += " --path " + quoteArg(path);
-          if (labels) command += " --labels " + quoteArg(labels);
+          const sources = datasetRegistrationSources(adapter);
+          if (sources.root) command += " --root " + quoteArg(sources.root);
+          if (sources.path) command += " --path " + quoteArg(sources.path);
+          if (sources.labels) command += " --labels " + quoteArg(sources.labels);
           return command;
         }
         if (!alias) return "";
@@ -2002,9 +2053,10 @@
       if (action === "register") {
         payload.name = selectValue("data-new-alias", "");
         payload.adapter = selectValue("data-adapter", "cifar10");
-        payload.root = selectValue("data-root", "").trim();
-        payload.path = selectValue("data-path", "").trim();
-        payload.labels = selectValue("data-labels", "").trim();
+        const sources = datasetRegistrationSources(payload.adapter);
+        if (sources.root) payload.root = sources.root;
+        if (sources.path) payload.path = sources.path;
+        if (sources.labels) payload.labels = sources.labels;
       } else if (alias) {
         payload.name = alias;
       }
@@ -2015,6 +2067,12 @@
     }
     function updateModulePreview() {
       if (state.module === "quickstart" && window.quickStartController) return;
+      if (state.module === "data" && selectValue("data-action", state.dataAction) === "list") {
+        setRequest(null, "");
+        statusNode.textContent = "正在查看已有数据状态，无需执行指令。";
+        statusNode.className = "status";
+        return;
+      }
       if (state.module === "data" && state.removeConfirmed) {
         state.removeConfirmed = false;
         runButton.textContent = "执行此指令";
@@ -2173,7 +2231,7 @@
           if (result.dataset?.name) { state.dataAlias = result.dataset.name; }
           if (result.removed === state.dataAlias) {
             state.dataAlias = "";
-            state.dataAction = result.next_action || "list";
+            state.dataAction = result.next_action === "list" ? "status" : (result.next_action || "status");
           }
           outputNode.textContent = formatDatasetResult(result);
           await refreshDatasets();

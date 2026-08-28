@@ -51,7 +51,7 @@ from lnl_toolbox.catalog import default_paper_config, load_papers, load_recipe_c
 from lnl_toolbox.data.profile import DatasetDeclarationConflict, DatasetDeclarations, DatasetProfile, KnowledgeState, Modality, NoiseKnowledge, NoiseOrigin, NoiseRateInfo, NoiseRateStatus, NoiseStatus, resolve_dataset_capabilities
 
 # --- merged from test_compatibility.py ---
-from lnl_toolbox.training.compatibility import ConfigInputRequirement, CompatibilityReason, CompatibilityResult, CompatibilityStatus, MethodRequirements, resolve_compatibility
+from lnl_toolbox.training.compatibility import ConfigInputRequirement, CompatibilityReason, CompatibilityResult, CompatibilityStatus, MethodRequirements, build_input_guidance, resolve_compatibility
 from test_t_revision import _t_revision_workflow__algorithm as _algorithm
 
 # --- merged from test_compatibility.py ---
@@ -197,8 +197,10 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
             self.assertFalse(requirement.requires_dataset_true_noise_rate)
         pcse = registry.get('pcse').requirements({'pretraining_stage': {'mode': 'external_checkpoint'}})
         self.assertEqual(pcse.required_pretrained_roles, ('upm_main_best',))
+        self.assertEqual(pcse.pretrained_role_paths, (('upm_main_best', ('pretraining_stage', 'source', 'run_directory_env')),))
         dld = registry.get('dld').requirements({'dld': {'feature_extractor': {'source': 'external_checkpoint'}}})
         self.assertEqual(dld.required_pretrained_roles, ('upm_main_best',))
+        self.assertEqual(dld.pretrained_role_paths, (('upm_main_best', ('dld', 'feature_extractor', 'external', 'run_directory_env')),))
 
     def test_all_formal_papers_publish_config_specific_requirements(self) -> None:
         expected = {'binary-risk': 'binary', 'importance-reweighting': 'importance_reweighting', 'loss-correction': 'loss_correction', 'coteaching': 'coteaching', 'gce': 'gce', 'l2rw': 'l2rw', 'mentornet': 'mentornet', 't-revision': 't_revision', 'apl': 'apl', 'dividemix': 'dividemix', 'dual-t': 'dual_t', 'jocor': 'jocor', 'pdl': 'pdl', 'cal': 'cal', 'cdr': 'cdr', 'upm': 'upm', 'volminnet': 'volminnet', 'cnlcu': 'cnlcu', 'cwd': 'cwd', 'lend': 'lend', 'mc-ldce': 'mc_ldce', 'pcse': 'pcse', 'ca2c': 'ca2c', 'dld': 'dld', 'dss': 'dss', 'fine': 'fine'}
@@ -230,6 +232,59 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
         audited = registry.get('l2rw').requirements({'trusted_validation': {'source': 'audited_manifest'}})
         self.assertFalse(audited.requires_clean_train_labels)
         self.assertEqual({item.code for item in audited.required_config_inputs}, {'requires_trusted_validation', 'requires_trusted_manifest'})
+
+    def test_user_fixable_config_requirements_publish_real_yaml_locations(self) -> None:
+        registry = create_runner_registry()
+        requirements = (
+            registry.get('supervised').requirements({
+                'pipeline': {
+                    'risk_corrector': {'name': 'forward'},
+                    'transition_estimator': {'name': 'known'},
+                },
+            }),
+            registry.get('supervised').requirements({
+                'pipeline': {'weight_provider': {'name': 'mentornet'}},
+            }),
+            registry.get('binary').requirements({
+                'risk': {'name': 'natarajan_unbiased'},
+            }),
+            registry.get('l2rw').requirements({
+                'trusted_validation': {'source': 'audited_manifest'},
+            }),
+            registry.get('cal').requirements({}),
+            registry.get('mc_ldce').requirements({
+                'transition': {'estimator': 'known_smoke'},
+            }),
+        )
+        published = {
+            item.code: item.paths
+            for requirement in requirements
+            for item in requirement.required_config_inputs
+        }
+        expected = {
+            'requires_transition_matrix',
+            'requires_mentor_artifact',
+            'requires_binary_noise_prior',
+            'requires_trusted_validation',
+            'requires_trusted_manifest',
+            'requires_external_noise_labels',
+            'requires_transition_source',
+        }
+        self.assertEqual(set(published), expected)
+        for code, paths in published.items():
+            with self.subTest(code=code):
+                result = CompatibilityResult(
+                    CompatibilityStatus.COMPATIBLE_WITH_REQUIREMENTS,
+                    'fixture_method',
+                    'fixture',
+                    reasons=(CompatibilityReason(code, 'missing method input'),),
+                    required_user_inputs=(f'config:{code}',),
+                    required_input_paths=((f'config:{code}', paths),),
+                )
+                guidance = build_input_guidance(result)[0]
+                self.assertEqual(guidance.category, 'method_input')
+                self.assertEqual(guidance.config_paths, paths)
+                self.assertIn('YAML：', guidance.provision)
 
     def test_l2rw_tabular_support_is_limited_to_synthetic_feature_smoke(self) -> None:
         registry = create_runner_registry()
@@ -466,11 +521,110 @@ class _compatibility_ExperimentCompatibilityServiceTest(unittest.TestCase):
         service = ExperimentService(data_service=data_service)
         missing = service.resolve_method_compatibility({'data': {'name': 'fixture'}, 'execution': {'runner': 'binary'}, 'risk': {'name': 'natarajan_unbiased'}}, {'data': {'name': 'fixture'}, 'execution': {'runner': 'binary'}, 'risk': {'name': 'natarajan_unbiased'}})
         self.assertIn('requires_binary_noise_prior', {reason.code for reason in missing.reasons})
+        binary_guidance = {item.input_id: item for item in missing.input_guidance}
+        self.assertEqual(binary_guidance['config:requires_binary_noise_prior'].category, 'method_input')
+        self.assertEqual(
+            binary_guidance['config:requires_binary_noise_prior'].config_paths,
+            (('risk', 'rho_positive'), ('risk', 'rho_negative')),
+        )
         configured = {'data': {'name': 'fixture'}, 'execution': {'runner': 'binary'}, 'risk': {'name': 'natarajan_unbiased', 'rho_positive': 0.2, 'rho_negative': 0.3}}
         result = service.resolve_method_compatibility(configured, configured)
         self.assertEqual(result.status, CompatibilityStatus.COMPATIBLE)
         requirement = ConfigInputRequirement(code='source', paths=(('a',), ('b',)), mode='any')
         self.assertEqual(requirement.mode, 'any')
+
+    def test_pretrained_run_guidance_uses_environment_not_adapter(self) -> None:
+        capabilities = resolve_dataset_capabilities(
+            _compatibility__profile(clean=KnowledgeState.AVAILABLE)
+        )
+        requirements = _compatibility__method(
+            method='pcse',
+            required_pretrained_roles=('upm_main_best',),
+            pretrained_role_paths=((
+                'upm_main_best',
+                ('pretraining_stage', 'source', 'run_directory_env'),
+            ),),
+        )
+        runner = Mock(name='pcse')
+        runner.requirements.return_value = requirements
+        config = {
+            'pretraining_stage': {
+                'source': {
+                    'adapter': 'upm_main_best',
+                    'run_directory_env': 'LNL_PCSE_SOURCE_RUN',
+                },
+            },
+        }
+        service = ExperimentService(data_service=Mock())
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('LNL_PCSE_SOURCE_RUN', None)
+            missing = service._resolve_for_capabilities(capabilities, runner, config)
+        self.assertEqual(missing.status, CompatibilityStatus.COMPATIBLE_WITH_REQUIREMENTS)
+        guidance = {item.input_id: item for item in missing.input_guidance}
+        source = guidance['pretrained:upm_main_best']
+        self.assertEqual(source.environment_variable, 'LNL_PCSE_SOURCE_RUN')
+        self.assertIn('best.pt', source.expected_value)
+        self.assertIn('noise_manifest.npz', source.expected_value)
+        self.assertNotIn('adapter', source.provision)
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {'LNL_PCSE_SOURCE_RUN': directory}, clear=False,
+        ):
+            ready = service._resolve_for_capabilities(capabilities, runner, config)
+        self.assertEqual(ready.status, CompatibilityStatus.COMPATIBLE)
+
+        dld_requirements = _compatibility__method(
+            method='dld',
+            required_pretrained_roles=('upm_main_best',),
+            pretrained_role_paths=((
+                'upm_main_best',
+                ('dld', 'feature_extractor', 'external', 'run_directory_env'),
+            ),),
+        )
+        runner.requirements.return_value = dld_requirements
+        dld_config = {
+            'dld': {'feature_extractor': {'external': {
+                'adapter': 'upm_main_best',
+                'run_directory_env': 'LNL_DLD_SOURCE_RUN',
+            }}},
+        }
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('LNL_DLD_SOURCE_RUN', None)
+            dld_missing = service._resolve_for_capabilities(
+                capabilities, runner, dld_config,
+            )
+        dld_source = {
+            item.input_id: item for item in dld_missing.input_guidance
+        }['pretrained:upm_main_best']
+        self.assertEqual(dld_source.environment_variable, 'LNL_DLD_SOURCE_RUN')
+        self.assertNotIn('adapter', dld_source.provision)
+
+    def test_developer_metadata_error_is_not_a_user_input(self) -> None:
+        capabilities = resolve_dataset_capabilities(
+            _compatibility__profile(clean=KnowledgeState.AVAILABLE)
+        )
+        runner = Mock(name='missing_metadata')
+        runner.requirements.return_value = None
+        result = ExperimentService(data_service=Mock())._resolve_for_capabilities(
+            capabilities, runner, {},
+        )
+        self.assertEqual(result.required_user_inputs, ())
+        self.assertEqual(result.input_guidance[0].category, 'developer_error')
+        self.assertEqual(
+            result.input_guidance[0].input_kind,
+            'developer_configuration_error',
+        )
+
+    def test_dataset_fact_guidance_stays_out_of_method_configuration(self) -> None:
+        result = CompatibilityResult(
+            CompatibilityStatus.COMPATIBLE_WITH_REQUIREMENTS,
+            'fixture_method',
+            'fixture',
+            reasons=(CompatibilityReason('unknown_noise_rate', 'rate is unknown'),),
+            required_user_inputs=('dataset_noise_rate',),
+        )
+        guidance = build_input_guidance(result)
+        self.assertEqual(guidance[0].category, 'dataset_fact')
+        self.assertEqual(guidance[0].provision, '需要确认的数据集信息')
 
 # --- merged from test_cnlcu_readiness.py ---
 from pathlib import Path

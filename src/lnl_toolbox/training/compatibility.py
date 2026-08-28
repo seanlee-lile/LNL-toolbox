@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Pure dataset/method compatibility contracts used by discovery surfaces."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 
 from lnl_toolbox.data.profile import (
     DatasetCapabilities,
@@ -115,6 +115,34 @@ class CompatibilityReason:
 
 
 @dataclass(frozen=True, slots=True)
+class CompatibilityInputGuidance:
+    """Human-readable resolution guidance without changing compatibility status."""
+
+    input_id: str
+    category: str
+    label: str
+    missing: str
+    expected_value: str
+    provision: str
+    input_kind: str
+    config_paths: tuple[tuple[str, ...], ...] = ()
+    environment_variable: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.input_id,
+            "category": self.category,
+            "label": self.label,
+            "missing": self.missing,
+            "expected_value": self.expected_value,
+            "provision": self.provision,
+            "input_kind": self.input_kind,
+            "config_paths": [list(path) for path in self.config_paths],
+            "environment_variable": self.environment_variable,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class CompatibilityResult:
     status: CompatibilityStatus
     method: str
@@ -123,6 +151,7 @@ class CompatibilityResult:
     warnings: tuple[CompatibilityReason, ...] = ()
     required_user_inputs: tuple[str, ...] = ()
     required_input_paths: tuple[tuple[str, tuple[tuple[str, ...], ...]], ...] = ()
+    input_guidance: tuple[CompatibilityInputGuidance, ...] = ()
 
     def __post_init__(self) -> None:
         normalized = []
@@ -149,7 +178,173 @@ class CompatibilityResult:
                 code: [list(path) for path in paths]
                 for code, paths in self.required_input_paths
             },
+            "input_guidance": [item.to_dict() for item in self.input_guidance],
         }
+
+
+_INPUT_GUIDANCE: dict[str, tuple[str, str, str, str, str]] = {
+    "clean_train_labels": (
+        "dataset_fact", "干净训练标签可用性", "尚未确认是否有干净训练标签",
+        "确认该数据集是否提供干净训练标签", "需要确认的数据集信息",
+    ),
+    "dataset_noise_rate": (
+        "dataset_fact", "数据集真实噪声率", "数据集真实噪声率仍为 Unknown",
+        "提供已知或估计的真实噪声率及其来源", "需要确认的数据集信息",
+    ),
+    "noise_rate_prior": (
+        "method_input", "方法噪声率先验", "所选方法缺少独立的噪声率先验",
+        "提供 0 到 1 之间的方法噪声率先验", "当前方法噪声率先验输入框",
+    ),
+    "noise_manifest": (
+        "method_input", "噪声 manifest", "缺少可用且对齐的噪声 manifest",
+        "提供可生成 manifest 的对齐标签/合成噪声数据，或方法要求的 manifest artifact",
+        "数据准备或该方法的噪声配置；当前没有通用 YAML 路径",
+    ),
+    "config:requires_transition_matrix": (
+        "method_input", "Transition Matrix", "缺少已知转移矩阵",
+        "提供与类别数一致的 K×K transition matrix", "YAML 方法配置字段",
+    ),
+    "config:requires_transition_source": (
+        "method_input", "Transition source", "缺少转移矩阵来源",
+        "提供 transition artifact 或显式 K×K matrix", "YAML 方法配置字段",
+    ),
+    "config:requires_mentor_artifact": (
+        "method_input", "MentorArtifact", "缺少冻结的 MentorArtifact",
+        "提供由 Mentor preparation workflow 生成的合法 artifact 文件", "YAML 方法配置字段",
+    ),
+    "config:requires_binary_noise_prior": (
+        "method_input", "类别条件噪声率", "缺少二分类正/负类噪声率",
+        "同时提供 rho_positive 和 rho_negative", "YAML 方法配置字段",
+    ),
+    "config:requires_trusted_validation": (
+        "method_input", "Trusted validation source", "缺少可信验证集来源",
+        "声明受支持的 trusted-validation source", "YAML 方法配置字段",
+    ),
+    "config:requires_trusted_manifest": (
+        "method_input", "Trusted validation manifest", "缺少可信样本 manifest",
+        "提供与训练数据身份匹配的 trusted manifest 文件", "YAML 方法配置字段",
+    ),
+    "config:requires_external_noise_labels": (
+        "method_input", "外部 clean/noisy labels", "缺少对齐的外部标签输入",
+        "提供标签文件路径以及 clean/noisy key", "YAML 方法配置字段",
+    ),
+}
+
+_REASON_GUIDANCE: dict[str, tuple[str, str, str, str, str, str]] = {
+    "unknown_modality": (
+        "dataset_preparation", "数据模态", "数据模态仍为 Unknown",
+        "使用可识别该数据的 adapter，或补充 adapter semantic hints",
+        "重新登记/检查数据或完善 adapter", "adapter_metadata",
+    ),
+    "unknown_observed_train_labels": (
+        "dataset_preparation", "观测训练标签", "尚未确认观测训练标签是否可用",
+        "使用能够实际读取观测训练标签的 adapter", "重新检查数据或完善 adapter", "adapter_metadata",
+    ),
+    "unknown_clean_noisy_alignment": (
+        "dataset_preparation", "clean/noisy 标签对齐", "标签对齐状态仍为 Unknown",
+        "提供稳定索引和可验证的 clean/noisy 对齐关系", "数据准备或 adapter", "adapter_metadata",
+    ),
+    "unknown_clean_validation": (
+        "dataset_preparation", "干净验证集", "尚未建立干净验证来源",
+        "提供原生干净验证集，或可从干净标签派生的验证 split", "数据准备或 adapter", "adapter_metadata",
+    ),
+    "unknown_stable_indices": (
+        "dataset_preparation", "稳定样本索引", "稳定索引状态仍为 Unknown",
+        "使用能够提供稳定 global indices 的 adapter", "重新检查数据或完善 adapter", "adapter_metadata",
+    ),
+    "method_metadata_error": (
+        "developer_error", "方法兼容性元数据", "runner 的 requirement metadata 不完整",
+        "该问题需要开发者修正，用户不应伪造输入", "开发者配置", "developer_configuration_error",
+    ),
+    "requirements_unavailable": (
+        "developer_error", "方法兼容性元数据", "runner 未发布 compatibility requirements",
+        "该问题需要开发者修正，用户不应伪造输入", "开发者配置", "developer_configuration_error",
+    ),
+}
+
+
+def build_input_guidance(
+    result: "CompatibilityResult",
+    *,
+    environment_variables: Mapping[str, str] | None = None,
+) -> tuple[CompatibilityInputGuidance, ...]:
+    """Describe how to resolve existing requirements without re-evaluating them."""
+
+    paths = dict(result.required_input_paths)
+    environments = dict(environment_variables or {})
+    reason_messages = {item.code: item.message for item in result.reasons}
+    guidance: list[CompatibilityInputGuidance] = []
+    covered_reason_codes: set[str] = set()
+    for input_id in result.required_user_inputs:
+        if input_id.startswith("pretrained:"):
+            role = input_id.split(":", 1)[1]
+            environment = environments.get(input_id)
+            provision = (
+                f"设置环境变量 {environment}=<run directory>"
+                if environment else "按 recipe 的 pretrained source 配置提供运行目录"
+            )
+            guidance.append(CompatibilityInputGuidance(
+                input_id=input_id,
+                category="method_input",
+                label=f"预训练运行结果：{role}",
+                missing=f"缺少 pretrained role：{role}",
+                expected_value="兼容的预训练 run directory，其中包含 best.pt 和 noise_manifest.npz",
+                provision=provision,
+                input_kind="environment_directory" if environment else "artifact_directory",
+                config_paths=paths.get(input_id, ()),
+                environment_variable=environment,
+            ))
+            covered_reason_codes.add("missing_pretrained_source")
+            continue
+        spec = _INPUT_GUIDANCE.get(input_id)
+        if spec is None and input_id.startswith("config:"):
+            code = input_id.split(":", 1)[1]
+            description = reason_messages.get(code, "缺少方法配置输入")
+            spec = (
+                "method_input", code, description, "提供该方法要求的配置值", "YAML 方法配置字段",
+            )
+        if spec is None:
+            spec = (
+                "method_input", input_id, reason_messages.get(input_id, f"缺少 {input_id}"),
+                "提供该方法要求的输入", "YAML 或方法配置",
+            )
+        category, label, missing, expected, provision = spec
+        input_paths = paths.get(input_id, ())
+        if input_paths and category == "method_input" and input_id != "noise_rate_prior":
+            provision = "YAML：" + " 或 ".join(".".join(path) for path in input_paths)
+        guidance.append(CompatibilityInputGuidance(
+            input_id=input_id,
+            category=category,
+            label=label,
+            missing=missing,
+            expected_value=expected,
+            provision=provision,
+            input_kind=("dataset_declaration" if category == "dataset_fact" else "config_value"),
+            config_paths=input_paths,
+        ))
+        covered_reason_codes.add({
+            "clean_train_labels": "unknown_clean_train_labels",
+            "dataset_noise_rate": "unknown_noise_rate",
+            "noise_rate_prior": "requires_noise_rate_prior",
+            "noise_manifest": "missing_noise_manifest",
+        }.get(input_id, input_id.removeprefix("config:")))
+    for reason in result.reasons:
+        if reason.code in covered_reason_codes:
+            continue
+        spec = _REASON_GUIDANCE.get(reason.code)
+        if spec is None:
+            continue
+        category, label, missing, expected, provision, input_kind = spec
+        guidance.append(CompatibilityInputGuidance(
+            input_id=reason.code,
+            category=category,
+            label=label,
+            missing=missing,
+            expected_value=expected,
+            provision=provision,
+            input_kind=input_kind,
+        ))
+    return tuple(guidance)
 
 
 def requirements_unavailable_result(method: str, dataset: str) -> CompatibilityResult:
@@ -284,16 +479,18 @@ def resolve_compatibility(
     else:
         status = CompatibilityStatus.COMPATIBLE
         reasons = ()
-    return CompatibilityResult(
+    result = CompatibilityResult(
         status=status, method=method.method, dataset=dataset.dataset,
         reasons=reasons, warnings=tuple(warnings),
         required_user_inputs=tuple(sorted(inputs)),
         required_input_paths=tuple(input_paths.items()),
     )
+    return replace(result, input_guidance=build_input_guidance(result))
 
 
 __all__ = [
-    "CompatibilityReason", "CompatibilityResult", "CompatibilityStatus",
+    "CompatibilityInputGuidance", "CompatibilityReason", "CompatibilityResult",
+    "CompatibilityStatus", "build_input_guidance",
     "ConfigInputRequirement", "MethodRequirements", "requirements_unavailable_result",
     "resolve_compatibility",
 ]

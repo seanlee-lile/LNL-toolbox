@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from dataclasses import replace
+import os
 from pathlib import Path
 import platform
 import sys
@@ -19,6 +21,7 @@ from lnl_toolbox.training.compatibility import (
     CompatibilityReason,
     CompatibilityResult,
     CompatibilityStatus,
+    build_input_guidance,
     requirements_unavailable_result,
     resolve_compatibility,
 )
@@ -72,7 +75,8 @@ class ExperimentService:
     ) -> CompatibilityResult:
         requirements = runner.requirements(config)
         if requirements is None:
-            return requirements_unavailable_result(runner.name, capabilities.dataset)
+            result = requirements_unavailable_result(runner.name, capabilities.dataset)
+            return replace(result, input_guidance=build_input_guidance(result))
 
         prior = method_noise_rate_prior
         prior_source = "compatibility API input"
@@ -102,34 +106,44 @@ class ExperimentService:
             satisfied = all(present) if required.mode == "all" else any(present)
             if not satisfied:
                 missing_inputs.append(required)
-        if not missing_inputs:
-            return result
-
-        status = (
-            result.status
-            if result.status is CompatibilityStatus.INCOMPATIBLE
-            else CompatibilityStatus.COMPATIBLE_WITH_REQUIREMENTS
-        )
-        return CompatibilityResult(
-            status=status,
-            method=result.method,
-            dataset=result.dataset,
-            reasons=result.reasons + tuple(
-                CompatibilityReason(item.code, item.description)
-                for item in missing_inputs
-            ),
-            warnings=result.warnings,
-            required_user_inputs=tuple(sorted(
-                set(result.required_user_inputs).union(
-                    f"config:{item.code}" for item in missing_inputs
-                )
-            )),
-            required_input_paths=tuple(
-                list(result.required_input_paths)
-                + [
-                    (f"config:{item.code}", item.paths)
+        if missing_inputs:
+            status = (
+                result.status
+                if result.status is CompatibilityStatus.INCOMPATIBLE
+                else CompatibilityStatus.COMPATIBLE_WITH_REQUIREMENTS
+            )
+            result = CompatibilityResult(
+                status=status,
+                method=result.method,
+                dataset=result.dataset,
+                reasons=result.reasons + tuple(
+                    CompatibilityReason(item.code, item.description)
                     for item in missing_inputs
-                ]
+                ),
+                warnings=result.warnings,
+                required_user_inputs=tuple(sorted(
+                    set(result.required_user_inputs).union(
+                        f"config:{item.code}" for item in missing_inputs
+                    )
+                )),
+                required_input_paths=tuple(
+                    list(result.required_input_paths)
+                    + [
+                        (f"config:{item.code}", item.paths)
+                        for item in missing_inputs
+                    ]
+                ),
+            )
+        environments = {
+            f"pretrained:{role}": str(self._config_value(config, path)).strip()
+            for role, path in requirements.pretrained_role_paths
+            if path[-1] == "run_directory_env"
+            and self._config_value(config, path) is not None
+        }
+        return replace(
+            result,
+            input_guidance=build_input_guidance(
+                result, environment_variables=environments,
             ),
         )
 
@@ -180,6 +194,10 @@ class ExperimentService:
             text = str(value).strip()
             if not text or text == role:
                 continue
+            if path[-1] == "run_directory_env":
+                text = os.environ.get(text, "").strip()
+                if not text:
+                    continue
             candidate = Path(text).expanduser()
             if candidate.is_file() or candidate.is_dir():
                 available.add(role)

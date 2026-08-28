@@ -22,17 +22,31 @@ class CommandConsoleTest(unittest.TestCase):
             "数据集优先流程",
             "数据集信息",
             "需要确认的数据集信息",
-            "可直接使用的正式配置",
-            "补充方法输入后可用",
-            "显示不兼容配置",
+            "选择正式论文配置",
+            "当前选择",
+            "需要补充：",
+            "你需要提供：",
+            "提供方式：",
             "当前方法噪声率先验",
             "实验输入，不会保存为数据集事实",
             "data-compat-action",
             "loadDatasetCompatibility",
         ):
             self.assertIn(marker, page)
+        for removed in (
+            "可直接使用的正式配置",
+            "补充方法输入后可用",
+            "显示不兼容配置",
+            'id="compat-unavailable"',
+        ):
+            self.assertNotIn(removed, page)
         self.assertIn('selectedRecipe?.status === "compatible"', page)
-        self.assertIn('recipe.status !== "compatible"', page)
+        self.assertIn('recipe.status === "incompatible"', page)
+        self.assertIn('recipe.input_guidance || []', page)
+        self.assertIn('item.category === "dataset_fact"', page)
+        self.assertIn('item.category === "developer_error"', page)
+        self.assertIn('item.environment_variable', page)
+        self.assertIn('path.join(".")', page)
         self.assertIn('let command = base + " --recipe "', page)
         self.assertIn("state.dataCompatibilityAlias !== state.dataAlias", page)
         self.assertIn("loadDatasetCompatibility(state.tutorialData)", page)
@@ -48,7 +62,7 @@ class CommandConsoleTest(unittest.TestCase):
             "继续编辑 YAML（未保存）",
             "目标已登记数据集（可选）",
             "compatible-recipes",
-            "使用此数据集编辑 YAML",
+            "打开 YAML/配置说明",
         ):
             self.assertIn(marker, page)
 
@@ -673,6 +687,57 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertEqual(inspection["next_action"], "verify")
         self.assertIn("原始数据文件未被删除", removal["message"])
         service.remove.assert_called_once_with("lab")
+
+    def test_dataset_registration_sources_follow_adapter_contract(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        helper = page[
+            page.index("function datasetRegistrationSources(adapter)"):
+            page.index("function buildModuleCommand()")
+        ]
+        self.assertIn('if (adapter === "uci_binary")', helper)
+        self.assertIn('sources.path = selectValue("data-path", "").trim()', helper)
+        self.assertNotIn('sources.root = selectValue("data-root", "").trim()', helper.split("} else {")[0])
+        self.assertIn('sources.root = selectValue("data-root", "").trim()', helper)
+        self.assertIn('["cifar10n", "cifar100n"].includes(adapter)', helper)
+
+        command_builder = page[
+            page.index("function buildModuleCommand()"):
+            page.index("function buildDataApiRequest()")
+        ]
+        api_builder = page[
+            page.index("function buildDataApiRequest()"):
+            page.index("function updateModulePreview()")
+        ]
+        self.assertIn("const sources = datasetRegistrationSources(adapter);", command_builder)
+        self.assertIn('if (sources.root) command += " --root "', command_builder)
+        self.assertIn('if (sources.path) command += " --path "', command_builder)
+        self.assertIn("const sources = datasetRegistrationSources(payload.adapter);", api_builder)
+        self.assertIn("if (sources.root) payload.root = sources.root;", api_builder)
+        self.assertIn("if (sources.path) payload.path = sources.path;", api_builder)
+        self.assertNotIn('selectValue("data-root"', api_builder)
+        self.assertNotIn('selectValue("data-path"', api_builder)
+
+    def test_dataset_status_table_is_a_direct_collapsed_web_view(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn('dataAction: "status"', page)
+        self.assertIn('statusPanel.id = "data-status-panel";', page)
+        self.assertIn(
+            'statusPanel.classList.toggle("hidden", state.dataAction !== "list");',
+            page,
+        )
+        self.assertIn('statusCollapse.id = "data-status-collapse";', page)
+        self.assertIn('statusCollapse.textContent = "收起";', page)
+        self.assertIn('state.dataAction = "status";', page)
+        self.assertIn('actionNode.value = "status";', page)
+        self.assertIn("updateDatasetStatusVisibility();", page)
+        self.assertIn('if (action === "list") return "";', page)
+        self.assertIn("正在查看已有数据状态，无需执行指令。", page)
+        self.assertIn(
+            'module === "data" && previousModule !== "data" && state.dataAction === "list"',
+            page,
+        )
+        for heading in ("数据集", "状态", "位置", "Train / Test", "训练验证"):
+            self.assertIn(f"<th>{heading}</th>", page)
 
     def test_dataset_http_api_uses_shared_status_contract(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
