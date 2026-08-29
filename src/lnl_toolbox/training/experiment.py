@@ -87,20 +87,30 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
     if name == "cnlcu_cnn9":
         return CnlcuCnn9(num_classes)
     if name == "resnet14":
-        return cifar_resnet14(num_classes, int(config.get("base_width", 16)))
+        return cifar_resnet14(
+            num_classes,
+            int(config.get("base_width", 16)),
+            input_channels=int(config.get("input_channels", 3)),
+        )
     if name == "resnet32":
-        return cifar_resnet32(num_classes, int(config.get("base_width", 16)))
+        return cifar_resnet32(
+            num_classes,
+            int(config.get("base_width", 16)),
+            input_channels=int(config.get("input_channels", 3)),
+        )
     if name == "resnet18":
         return cifar_resnet18(
             num_classes,
             int(config.get("base_width", 64)),
             initialization=str(config.get("initialization", "kaiming")),
+            input_channels=int(config.get("input_channels", 3)),
         )
     if name == "resnet34":
         return cifar_resnet34(
             num_classes,
             int(config.get("base_width", 64)),
             initialization=str(config.get("initialization", "kaiming")),
+            input_channels=int(config.get("input_channels", 3)),
         )
     if name == "resnet50":
         return cifar_resnet50(
@@ -108,6 +118,7 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
             int(config.get("base_width", 64)),
             stem_padding=int(config.get("stem_padding", 1)),
             initialization=str(config.get("initialization", "kaiming")),
+            input_channels=int(config.get("input_channels", 3)),
         )
     if name == "resnet101":
         return cifar_resnet101(
@@ -115,9 +126,14 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
             int(config.get("base_width", 64)),
             stem_padding=int(config.get("stem_padding", 1)),
             initialization=str(config.get("initialization", "kaiming")),
+            input_channels=int(config.get("input_channels", 3)),
         )
     if name == "preact_resnet18":
-        return preact_resnet18(num_classes, int(config.get("base_width", 64)))
+        return preact_resnet18(
+            num_classes,
+            int(config.get("base_width", 64)),
+            input_channels=int(config.get("input_channels", 3)),
+        )
     raise ValueError(f"Unsupported model: {name}")
 
 

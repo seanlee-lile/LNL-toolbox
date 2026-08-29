@@ -245,6 +245,22 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
         audited = registry.get('l2rw').requirements({'trusted_validation': {'source': 'audited_manifest'}})
         self.assertFalse(audited.requires_clean_train_labels)
         self.assertEqual({item.code for item in audited.required_config_inputs}, {'requires_trusted_validation', 'requires_trusted_manifest'})
+        noisy_only = ('coteaching', 'dual_t', 'upm', 'dividemix', 'cnlcu', 't_revision')
+        for runner_name in noisy_only:
+            with self.subTest(runner=runner_name):
+                requirements = registry.get(runner_name).requirements({})
+                self.assertIn(
+                    'requires_noisy_training_labels',
+                    {item.code for item in requirements.required_config_inputs},
+                )
+        external_pcse = registry.get('pcse').requirements(
+            {'pretraining_stage': {'mode': 'external_checkpoint'}}
+        )
+        self.assertEqual(external_pcse.exact_classes, frozenset({10}))
+        train_pcse = registry.get('pcse').requirements(
+            {'pretraining_stage': {'mode': 'train'}}
+        )
+        self.assertEqual(train_pcse.exact_classes, frozenset())
 
     def test_preserved_implementation_limits_have_the_correct_origin(self) -> None:
         registry = create_runner_registry()
@@ -578,17 +594,26 @@ class _compatibility_ExperimentCompatibilityServiceTest(unittest.TestCase):
         data_service = Mock()
         data_service.capabilities.return_value = capabilities
         service = ExperimentService(data_service=data_service)
-        result = service.resolve_method_compatibility('fixture', 'importance_reweighting')
-        direct = resolve_compatibility(capabilities, create_runner_registry().get('importance_reweighting').requirements({}))
+        config = {
+            'method': 'importance_reweighting',
+            'execution': {'runner': 'importance_reweighting'},
+            'data': {'name': 'fixture'},
+            'noise': {'rho_positive': 0.2, 'rho_negative': 0.1},
+        }
+        result = service.resolve_method_compatibility(config, config)
+        direct = resolve_compatibility(
+            capabilities,
+            create_runner_registry().get('importance_reweighting').requirements(config),
+        )
         self.assertEqual(result, direct)
-        data_service.capabilities.assert_called_once_with('fixture', seed=0, persist=False)
+        data_service.capabilities.assert_called_once_with(config, seed=0, persist=False)
 
     def test_config_prior_is_not_treated_as_dataset_true_rate(self) -> None:
         capabilities = resolve_dataset_capabilities(_compatibility__profile(clean=KnowledgeState.AVAILABLE))
         data_service = Mock()
         data_service.capabilities.return_value = capabilities
         service = ExperimentService(data_service=data_service)
-        config = {'method': 'coteaching', 'execution': {'runner': 'coteaching'}, 'data': {'name': 'fixture'}, 'coteaching': {'noise_rate': 0.2}}
+        config = {'method': 'coteaching', 'execution': {'runner': 'coteaching'}, 'data': {'name': 'fixture'}, 'noise': {'name': 'symmetric', 'rate': 0.2}, 'coteaching': {'noise_rate': 0.2}}
         result = service.resolve_method_compatibility(config, config)
         self.assertEqual(result.status, CompatibilityStatus.COMPATIBLE)
         self.assertEqual(capabilities.noise_rate.status, NoiseRateStatus.UNKNOWN)
@@ -613,7 +638,7 @@ class _compatibility_ExperimentCompatibilityServiceTest(unittest.TestCase):
         data_service.capabilities.return_value = capabilities
         runner = create_runner_registry().get('coteaching')
         service = ExperimentService(data_service=data_service)
-        base = {'schema_version': 1, 'kind': 'experiment', 'method': 'coteaching', 'execution': {'runner': 'coteaching'}, 'data': {'name': 'fixture'}}
+        base = {'schema_version': 1, 'kind': 'experiment', 'method': 'coteaching', 'execution': {'runner': 'coteaching'}, 'data': {'name': 'fixture'}, 'noise': {'name': 'symmetric', 'rate': 0.2}}
         with patch('lnl_toolbox.catalog.validate_config', return_value=runner):
             with self.assertRaisesRegex(ValueError, 'requires_noise_rate_prior'):
                 service.preflight(base, check_data=True)
@@ -627,7 +652,13 @@ class _compatibility_ExperimentCompatibilityServiceTest(unittest.TestCase):
         data_service = Mock()
         data_service.capabilities.return_value = capabilities
         service = ExperimentService(data_service=data_service)
-        result = service.resolve_method_compatibility('fixture', 'upm')
+        config = {
+            'method': 'upm',
+            'execution': {'runner': 'upm'},
+            'data': {'name': 'fixture'},
+            'noise': {'name': 'symmetric', 'rate': 0.2},
+        }
+        result = service.resolve_method_compatibility(config, config)
         self.assertEqual(result.status, CompatibilityStatus.COMPATIBLE)
 
     def test_method_discovery_uses_every_central_runner(self) -> None:

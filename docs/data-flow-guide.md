@@ -934,8 +934,9 @@ runner。直接调用 runner 时，只能在 runner 层通过 `resolve_data_requ
 `volmin_experiment.py` 与 evidence-only `dual_t_evidence_experiment.py` 不属于该生产门禁。
 `clean` 只是 supervised engine 的兼容包装，不维护第二份合同。
 
-模型输入维度由 `PreparedData.input_spec` 经 `bind_model_input()` 绑定；算法不再根据
-dataset 名称猜测类别数或 shape。正式 reproduction YAML、split、augmentation 与训练数学
+模型输入维度由 `PreparedData.input_spec` 经 `bind_model_input()` 绑定；TinyCNN、CIFAR
+ResNet/PreActResNet 与 MLP 分别消费 channels 或 feature_dim，算法不再根据 dataset 名称猜测
+类别数或 shape。正式 reproduction YAML、split、augmentation 与训练数学
 保持不变。FINE/DLD 的强视图/特征路径仍保留 IMAGE variant 边界；CWD 与 Importance
 Reweighting 保留 binary variant；VolMinNet 保留当前 parameterization 的 `C >= 3`；
 MC-LDCE 的 `C >= 3` 继续标记为论文证据未决。
@@ -944,3 +945,30 @@ MC-LDCE 的 `C >= 3` 继续标记为论文证据未决。
 trusted role 只能来自 source 的真实 clean target 或已校验 manifest，禁止用 observed target
 补洞。独立 validation 的实际噪声率由 `PreparedData.realized_noise_rate(role)` 从该 role
 自身身份空间计算，不能拿 train manifest 的 index 推断。
+
+## Quick Start 方法—数据可移植性（2026-08-28）
+
+Quick Start 的两条路径必须分开：
+
+```text
+Formal parity    = 原始 Method + 原始 reproduction DataProtocol
+Generic portable = 同一 Method + 当前 DatasetCapabilities + 用户选择的 noise
+```
+
+Formal 命中时使用完整 recipe，不能改写原始 dataset、split、transform 或论文参数。Generic
+路径只复用方法配置，不把 formal YAML 中的 CIFAR 名称、固定类别数或转移矩阵当成数据要求。
+它将当前数据集的 `num_classes` 写入通用 data 合同，并仅在 `MethodRequirements` 允许该
+类别空间时递归绑定组件中的同名标量；不属于当前数据/噪声身份的固定 transition matrix
+会被丢弃，后续由唯一 compatibility/preflight 路径判定是否需要用户提供新 artifact。
+
+Quick Start 不维护私有 compatibility 规则。菜单和计划都调用
+`ExperimentService → RunnerSpec.requirements(config)`，状态含义固定为：
+
+- `COMPATIBLE/ready`：计划必须通过真实 preflight，并能进入该 runner 的首个训练阶段；
+- `INCOMPATIBLE/unsupported`：必须返回算法要求或当前 implemented-variant limit；
+- `NEEDS_INPUT/needs_input`：仅用于缺 noise、trusted source、checkpoint、matrix 等外部输入。
+
+因此公共不变量是 `ready option → ready plan → same runner preflight`。Noisy-only 方法在 clean
+选择下不能显示 ready；需要 class-dependent noise 的方法不能把 PDL 等不兼容噪声配置误判
+为可运行。模型构造继续通过 `bind_model_input()` 消费 `PreparedData.input_spec`；CIFAR
+ResNet 系列的三通道默认保持不变，同时可由 generic 数据协议绑定单通道输入。

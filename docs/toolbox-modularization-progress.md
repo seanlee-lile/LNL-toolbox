@@ -1,5 +1,21 @@
 # Toolbox modularization progress
 
+## Quick Start method–dataset portability closeout (2026-08-28)
+
+- Current task: make Quick Start select datasets from the same `MethodRequirements × DatasetCapabilities` contract used by real preflight, while preserving formal reproduction recipes and paper training stages.
+- Branch/base: `new-cli` at `62892f5`; no branch creation, commit, or push was authorized. The pre-existing `training/runners.py`/`tests/test_jocor.py` working-tree changes and five unrelated untracked files were preserved.
+- Checklist: remove the private class-space gate; bind generic class-dependent config; publish noisy/artifact requirements; prove READY→plan/preflight; run real-data/focused/full acceptance. Completed: 5 / 5 (100%).
+- Public behavior: formal parity still uses the exact recipe. Generic Quick Start binds the selected dataset's class count, discards stale transition matrices, and delegates all READY/INCOMPATIBLE/NEEDS_INPUT decisions to `ExperimentService` and the runner requirement provider. Importance Reweighting no longer rejects a binary dataset by name; missing binary rates remain explicit user inputs. Noisy-only methods require noisy labels, T-Revision rejects incompatible non-class-dependent noise, and external PCSE retains its exact implemented-variant boundary.
+- Input binding: existing CIFAR ResNet/PreActResNet families now consume `input_channels` from `PreparedData.input_spec`, defaulting to three channels. This removes the hidden Fashion-MNIST failure without changing CIFAR formal behavior or any paper objective.
+- Real compatibility matrix: CIFAR-10, CIFAR-100 and Fashion-MNIST were checked with clean and symmetric-0.2 selections across all 26 papers. Every menu item marked READY produced a READY plan; other entries remained typed INCOMPATIBLE or NEEDS_INPUT. Real `supervised → GCE → ResNet-34` runs completed one optimization epoch on all three datasets (global steps 1, 2 and 1 respectively) using temporary artifacts.
+- Files inspected: Quick Start templates/service/models, runner registry, ExperimentService, ResNet builders, Importance Reweighting config, local dataset catalog, affected tests, and the shared data-flow/progress documents.
+- Files modified: `src/lnl_toolbox/quickstart/templates.py`, `src/lnl_toolbox/quickstart/service.py`, `src/lnl_toolbox/training/runners.py`, `src/lnl_toolbox/training/service.py`, `src/lnl_toolbox/training/experiment.py`, `src/lnl_toolbox/models/cifar_resnet.py`, `src/lnl_toolbox/algorithms/importance_reweighting/config.py`, `tests/test_quickstart_service.py`, `tests/test_registry.py`, `tests/test_training.py`, `tests/test_cli.py`, `tests/test_importance_reweighting.py`, `web/test_quick_start_integration.py`, `docs/data-flow-guide.md`, and this progress record. Files added: none.
+- Tests executed: Quick Start `13/13`; registry `53/53`; Web integration `2/2`; training `75/75`; CLI `89/89`; Importance Reweighting `50/50`; nine affected method suites `257/257`; full unittest `969/969`; Python compile and `git diff --check` passed.
+- Blockers: none. Assumption: shortened real runs validate data portability and first-stage execution, not paper numerical reproduction.
+- Local checkpoint commits: none. History cleanup: not needed. Push readiness: implementation is reviewable, but commit and publication remain unapproved.
+- Collaborator integration: `training/runners.py`, `training/service.py`, `training/experiment.py`, Quick Start files and both shared documents are high-conflict. `tests/test_jocor.py` is pre-existing collaborator work and was not modified by this task.
+- Exact next step: human review of the scoped diff; request separate authorization before staging or committing.
+
 ## Five startup-boundary fixes (2026-08-25)
 
 - Current task: repair only the five confirmed startup/data-role defects reported by the Web formal-run path.

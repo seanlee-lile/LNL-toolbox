@@ -161,6 +161,14 @@ class _torch_training_TorchTrainingTest(unittest.TestCase):
         self.assertEqual(tuple((len(layer) for layer in (model.layer1, model.layer2, model.layer3, model.layer4))), (3, 4, 6, 3))
         self.assertEqual(model(torch.randn(2, 3, 32, 32)).shape, (2, 10))
 
+    def test_cifar_resnet34_accepts_dataset_bound_input_channels(self):
+        model = build_model(
+            {"name": "resnet34", "base_width": 8, "input_channels": 1},
+            num_classes=10,
+        )
+        self.assertEqual(model.stem[0].in_channels, 1)
+        self.assertEqual(model(torch.randn(2, 1, 28, 28)).shape, (2, 10))
+
     def test_cifar_resnet34_can_use_torch_default_initialization(self):
         torch.manual_seed(123)
         reference = torch.nn.Conv2d(3, 8, 3, padding=1, bias=False)

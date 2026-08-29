@@ -15,7 +15,7 @@ from lnl_toolbox.data.registry import DatasetRegistry
 from lnl_toolbox.catalog import load_papers
 from lnl_toolbox.training.data_service import DataService
 from lnl_toolbox.quickstart.models import QuickStartNoiseSelection
-from lnl_toolbox.quickstart.service import QuickStartService, _class_space_problems
+from lnl_toolbox.quickstart.service import QuickStartService
 from lnl_toolbox.quickstart.templates import adapt_method_template, method_template_for_paper
 from lnl_toolbox.quickstart.templates import find_exact_reproduction
 from lnl_toolbox.training.compatibility import CompatibilityStatus
@@ -188,7 +188,7 @@ class QuickStartServiceTests(unittest.TestCase):
             ), "formal-clean")
 
 
-    def test_all_visible_noise_choices_respect_registered_class_spaces(self) -> None:
+    def test_all_ready_options_build_ready_plans_across_registered_class_spaces(self) -> None:
         root = Path(self.temp.name)
         cifar100_service = DataService(
             registry=DatasetRegistry((_FakeCifar100Adapter(),)),
@@ -205,12 +205,13 @@ class QuickStartServiceTests(unittest.TestCase):
             "fashion-mnist", "fashion_mnist", {"root": str(self.data_root)}
         )
         scenarios = (
-            ("local-cifar10", self.data_service, "cifar10", 10,
-             {"importance-reweighting"}),
-            ("local-cifar100", cifar100_service, "cifar100", 100,
-             {"importance-reweighting", "loss-correction", "mc-ldce", "pcse", "dss"}),
-            ("fashion-mnist", fashion_service, "fashion_mnist", 10,
-             {"importance-reweighting"}),
+            ("local-cifar10", self.service),
+            ("local-cifar100", QuickStartService(
+                cifar100_service, artifact_root=root / "cifar100-artifacts"
+            )),
+            ("fashion-mnist", QuickStartService(
+                fashion_service, artifact_root=root / "fashion-artifacts"
+            )),
         )
         noises = (
             QuickStartNoiseSelection("clean", "clean"),
@@ -218,52 +219,77 @@ class QuickStartServiceTests(unittest.TestCase):
             QuickStartNoiseSelection("synthetic", "pairflip", rate=0.2, seed=1),
             QuickStartNoiseSelection("synthetic", "pdl", rate=0.2, seed=1),
         )
-        no_requirements_runner = SimpleNamespace(requirements=lambda config: None)
-        with patch(
-            "lnl_toolbox.training.runners.resolve_runner",
-            return_value=no_requirements_runner,
-        ):
-            for noise in noises:
-                for alias, data_service, adapter, num_classes, fixed_templates in scenarios:
-                    for paper in load_papers():
-                        template = method_template_for_paper(paper)
-                        candidate = adapt_method_template(
-                            template.config,
+        for noise in noises:
+            for alias, service in scenarios:
+                options = service.method_options(alias, noise)
+                self.assertEqual(len(options), 26)
+                for option in options:
+                    if option.status != "ready":
+                        continue
+                    with self.subTest(
+                        dataset=alias, noise=noise.key, paper=option.paper_id,
+                    ):
+                        plan = service.build_plan(
                             dataset_alias=alias,
-                            dataset_profile={"adapter": adapter},
                             noise_selection=noise,
-                            data_service=data_service,
+                            paper_id=option.paper_id,
                         )
-                        problems = _class_space_problems(candidate, num_classes=num_classes)
-                        with self.subTest(
-                            dataset=alias, noise=noise.key, paper=paper.id,
-                        ):
-                            self.assertEqual(
-                                bool(problems), paper.id in fixed_templates,
-                            )
+                        self.assertEqual(plan.status, "ready", plan.details)
 
-        loss_correction = next(item for item in load_papers() if item.id == "loss-correction")
-        service = QuickStartService(cifar100_service)
-        report = SimpleNamespace(
-            status="ready",
-            error=None,
-            profile=SimpleNamespace(num_classes=100, to_dict=lambda: {"adapter": "cifar100"}),
+    def test_generic_templates_rebind_classes_and_discard_stale_transition_matrix(self) -> None:
+        root = Path(self.temp.name)
+        service = DataService(
+            registry=DatasetRegistry((_FakeCifar100Adapter(),)),
+            catalog=LocalDatasetCatalog(root / "class-binding-catalog.json"),
         )
-        with patch.object(cifar100_service, "inspect", return_value=report), \
-             patch("lnl_toolbox.quickstart.service.load_papers", return_value=(loss_correction,)):
-            option = service.method_options(
-                "local-cifar100", QuickStartNoiseSelection("clean", "clean")
-            )[0]
-        self.assertEqual(option.status, "unsupported")
-        self.assertIn("100 类", option.reasons[0])
-        with patch.object(cifar100_service, "inspect", return_value=report):
-            plan = service.build_plan(
+        service.register("local-cifar100", "cifar100", {"root": str(self.data_root)})
+        profile = service.inspect("local-cifar100").profile.to_dict()
+        noise = QuickStartNoiseSelection("synthetic", "symmetric", rate=0.2, seed=1)
+        candidates = {}
+        for paper_id in ("mc-ldce", "dss", "loss-correction"):
+            paper = next(item for item in load_papers() if item.id == paper_id)
+            template = method_template_for_paper(paper)
+            candidates[paper_id] = adapt_method_template(
+                template.config,
                 dataset_alias="local-cifar100",
-                noise_selection=QuickStartNoiseSelection("clean", "clean"),
-                paper_id="loss-correction",
+                dataset_profile=profile,
+                noise_selection=noise,
+                data_service=service,
             )
-        self.assertEqual(plan.status, "unsupported")
-        self.assertIsNone(plan.command)
+        self.assertTrue(all(
+            candidate["data"]["num_classes"] == 100
+            for candidate in candidates.values()
+        ))
+        self.assertEqual(candidates["mc-ldce"]["transition"]["num_classes"], 100)
+        self.assertEqual(
+            candidates["dss"]["pipeline"]["objective_consumer"]["num_classes"], 100
+        )
+        estimator = candidates["loss-correction"]["pipeline"]["transition_estimator"]
+        self.assertNotIn("matrix", estimator)
+
+    def test_clean_upm_needs_input_and_symmetric_upm_builds_ready_plan(self) -> None:
+        clean = QuickStartNoiseSelection("clean", "clean")
+        clean_option = next(
+            item for item in self.service.method_options("local-cifar10", clean)
+            if item.paper_id == "upm"
+        )
+        self.assertEqual(clean_option.status, "needs_input")
+        self.assertIn("config:requires_noisy_training_labels", clean_option.required_user_inputs)
+
+        symmetric = QuickStartNoiseSelection(
+            "synthetic", "symmetric", rate=0.2, seed=1
+        )
+        option = next(
+            item for item in self.service.method_options("local-cifar10", symmetric)
+            if item.paper_id == "upm"
+        )
+        self.assertEqual(option.status, "ready")
+        plan = self.service.build_plan(
+            dataset_alias="local-cifar10",
+            noise_selection=symmetric,
+            paper_id="upm",
+        )
+        self.assertEqual(plan.status, "ready", plan.details)
 
 
 if __name__ == "__main__":

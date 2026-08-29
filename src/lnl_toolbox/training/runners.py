@@ -160,8 +160,29 @@ def _image_requirements(
     clean_validation: bool = False,
     extra_roles: tuple[DataRole, ...] = (),
     views: tuple[str, ...] = ("weak",),
+    requires_configured_noise: bool = False,
+    requires_class_dependent_noise: bool = False,
 ) -> RequirementsProvider:
-    def provide(_config: Mapping[str, Any]) -> MethodRequirements:
+    def provide(config: Mapping[str, Any]) -> MethodRequirements:
+        required_inputs = ()
+        implementation_limits = frozenset()
+        if requires_configured_noise:
+            required_inputs = required_inputs + (_config_input(
+                "requires_noisy_training_labels",
+                ("noise", "name"),
+                description="the current runner variant requires configured noisy training labels",
+                implementation_limit="configured_noise",
+            ),)
+            implementation_limits = frozenset({"configured_noise"})
+        if requires_class_dependent_noise:
+            required_inputs = required_inputs + (_config_input(
+                "requires_class_dependent_noise",
+                ("noise", "name"),
+                description=(
+                    "T-Revision requires symmetric, pairflip, or an external "
+                    "class-dependent transition source"
+                ),
+            ),)
         return MethodRequirements(
             method=method,
             supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
@@ -177,10 +198,12 @@ def _image_requirements(
                 needs_noise_manifest=True,
             ),
             implemented_variant="current",
+            implementation_limits=implementation_limits,
             min_classes=min_classes,
             exact_classes=exact_classes,
             requires_method_noise_prior=method_noise_prior,
             method_noise_prior_paths=method_noise_prior_paths,
+            required_config_inputs=required_inputs,
         )
     return provide
 
@@ -494,7 +517,7 @@ def _jocor_requirements(config: Mapping[str, Any]) -> MethodRequirements | None:
         method="jocor",
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
         data_requirements=_classification_data(
-            validation=str((config.get("noise", {}) or {}).get("validation_targets", "clean")),
+            validation=_validation_target(config),
             manifest_scope="effective_train",
         ),
         implemented_variant="joint_coregularization",
@@ -513,6 +536,13 @@ def _importance_reweighting_requirements(_config: Mapping[str, Any]) -> MethodRe
         min_classes=2,
         max_classes=2,
         exact_classes=frozenset({2}),
+        required_config_inputs=(_config_input(
+            "requires_binary_noise_prior",
+            ("noise", "rho_positive"), ("noise", "rho_negative"),
+            description=(
+                "Importance Reweighting requires both asymmetric binary noise rates"
+            ),
+        ),),
     )
 
 
@@ -529,6 +559,7 @@ def _pcse_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         implemented_variant="per_class_statistics",
         implementation_limits=frozenset({"class_count"}),
         min_classes=3,
+        exact_classes=frozenset({10}) if external else frozenset(),
         required_pretrained_roles=("upm_main_best",) if external else (),
         pretrained_role_paths=(
             (("upm_main_best", ("pretraining_stage", "source", "adapter")),)
@@ -543,8 +574,14 @@ def _volminnet_requirements(_config: Mapping[str, Any]) -> MethodRequirements:
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
         data_requirements=_classification_data(validation="noisy"),
         implemented_variant="fixed_diagonal_sigmoid_offdiag",
-        implementation_limits=frozenset({"class_count"}),
+        implementation_limits=frozenset({"class_count", "configured_noise"}),
         min_classes=3,
+        required_config_inputs=(_config_input(
+            "requires_noisy_training_labels",
+            ("noise", "name"),
+            description="the current VolMinNet runner requires configured noisy training labels",
+            implementation_limit="configured_noise",
+        ),),
     )
 
 
@@ -646,6 +683,7 @@ def create_runner_registry() -> RunnerRegistry:
             "coteaching",
             method_noise_prior=True,
             method_noise_prior_paths=(("coteaching", "noise_rate"),),
+            requires_configured_noise=True,
         ),
     )
     registry.add(
@@ -653,7 +691,7 @@ def create_runner_registry() -> RunnerRegistry:
         "lnl_toolbox.training.dual_t_experiment",
         "run_dual_t_experiment",
         budget_path=None,
-        requirements_provider=_image_requirements("dual_t"),
+        requirements_provider=_image_requirements("dual_t", requires_configured_noise=True),
     )
     registry.add(
         "importance_reweighting",
@@ -696,7 +734,9 @@ def create_runner_registry() -> RunnerRegistry:
         "run_upm_experiment",
         budget_path=("upm", "main", "epochs"),
         planner=upm_plan,
-        requirements_provider=_image_requirements("upm", extra_roles=(DataRole.TRAIN_EVAL,)),
+        requirements_provider=_image_requirements(
+            "upm", extra_roles=(DataRole.TRAIN_EVAL,), requires_configured_noise=True,
+        ),
     )
     registry.add(
         "dld",
@@ -717,6 +757,7 @@ def create_runner_registry() -> RunnerRegistry:
             method_noise_prior=True,
             method_noise_prior_paths=(("noise", "rate"),),
             extra_roles=(DataRole.TRAIN_EVAL,),
+            requires_configured_noise=True,
         ),
     )
     registry.add(
@@ -733,6 +774,7 @@ def create_runner_registry() -> RunnerRegistry:
             "cnlcu",
             method_noise_prior=True,
             method_noise_prior_paths=(("cnlcu", "noise_rate"),),
+            requires_configured_noise=True,
         ),
     )
     registry.add(
@@ -741,7 +783,9 @@ def create_runner_registry() -> RunnerRegistry:
         "run_t_revision_experiment",
         budget_path=("t_revision", "revision", "epochs"),
         requirements_provider=_image_requirements(
-            "t_revision", extra_roles=(DataRole.TRAIN_EVAL,)
+            "t_revision", extra_roles=(DataRole.TRAIN_EVAL,),
+            requires_configured_noise=True,
+            requires_class_dependent_noise=True,
         ),
     )
     registry.add("volmin", "lnl_toolbox.training.volmin_experiment", "run_volmin_experiment")

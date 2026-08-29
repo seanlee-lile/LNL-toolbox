@@ -76,54 +76,6 @@ def _epoch_details(config: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(values)
 
 
-def _class_space_problems(
-    config: Mapping[str, Any], *, num_classes: int
-) -> tuple[str, ...]:
-    """Find fixed template objects that cannot cross dataset class spaces.
-
-    Quick Start may bind a local dataset to an existing method template, but it
-    must not invent class-dependent protocol objects.  This covers explicit
-    ``num_classes`` declarations as well as fixed transition matrices.
-    """
-
-    problems: list[str] = []
-
-    def visit(value: object, path: tuple[str, ...] = ()) -> None:
-        if not isinstance(value, Mapping):
-            return
-        for key, child in value.items():
-            child_path = path + (str(key),)
-            key_text = str(key).lower()
-            if key_text == "num_classes" and isinstance(child, int) and not isinstance(child, bool):
-                if child != num_classes:
-                    problems.append(
-                        f"{'.'.join(child_path)} 固定为 {child} 类，"
-                        f"不能用于当前 {num_classes} 类数据集。"
-                    )
-            if (
-                key_text in {"matrix", "transition_matrix"}
-                and "transition" in ".".join(child_path).lower()
-                and isinstance(child, (list, tuple))
-                and (
-                    len(child) != num_classes
-                    or any(
-                        not isinstance(row, (list, tuple)) or len(row) != num_classes
-                        for row in child
-                    )
-                )
-            ):
-                problems.append(
-                    f"{'.'.join(child_path)} 固定为 {len(child)}×"
-                    f"{len(child[0]) if child and isinstance(child[0], (list, tuple)) else 0} "
-                    f"转移矩阵，不能用于当前 {num_classes} 类数据集；"
-                    "Quick Start 不会伪造新的转移矩阵。"
-                )
-            visit(child, child_path)
-
-    visit(config)
-    return tuple(problems)
-
-
 class QuickStartService:
     def __init__(
         self,
@@ -305,12 +257,6 @@ class QuickStartService:
                     noise_selection=noise_selection,
                     data_service=dataset_service,
                 )
-                class_space_problems = _class_space_problems(
-                    candidate, num_classes=report.profile.num_classes
-                )
-                if class_space_problems:
-                    prepared.append((paper, template, candidate, None, class_space_problems))
-                    continue
                 prepared.append((paper, template, candidate, None, None))
                 compatibility_configs[paper.id] = candidate
             except Exception as exc:
@@ -452,17 +398,6 @@ class QuickStartService:
             data_service=self.data_service,
             method_inputs=user_inputs,
         )
-        class_space_problems = _class_space_problems(
-            candidate, num_classes=profile.num_classes
-        )
-        if class_space_problems:
-            return QuickStartPlan(
-                self._plan_id(dataset_alias, paper.id), dataset_alias,
-                paper.id, paper.acronym, noise_selection, "toolbox_adapted",
-                None, None, "unsupported", (),
-                summary="适配配置包含与当前数据类别数不匹配的固定对象。",
-                details=class_space_problems,
-            )
         result = self.experiment_service.list_config_compatibility(
             dataset_alias, {paper.id: candidate}
         )[0][1]

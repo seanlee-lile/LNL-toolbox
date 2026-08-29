@@ -123,6 +123,26 @@ class QuickStartIntegrationTests(unittest.TestCase):
         self.assertEqual(plan["status"], "ready")
         self.assertTrue(plan["command"])
 
+    def test_http_never_turns_a_needs_input_method_into_a_runnable_plan(self) -> None:
+        status, registered = self._request(
+            "POST", "/api/quick-start/register", {"path": str(self.dataset_root)}
+        )
+        self.assertEqual(status, 200)
+        alias = registered["dataset"]["alias"]
+        noise = {"kind": "clean", "key": "clean"}
+        status, methods = self._request(
+            "POST", "/api/quick-start/methods", {"dataset": alias, "noise": noise}
+        )
+        self.assertEqual(status, 200)
+        upm = next(item for item in methods["methods"] if item["paper_id"] == "upm")
+        self.assertEqual(upm["status"], "needs_input")
+        status, plan = self._request("POST", "/api/quick-start/plan", {
+            "dataset": alias, "noise": noise, "paper_id": "upm",
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(plan["status"], "needs_input")
+        self.assertFalse(plan["command"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,7 +14,7 @@ from lnl_toolbox.core.config_schema import (
     runtime_experiment_config,
 )
 from lnl_toolbox.training.results import finalize_result, is_completed_result
-from lnl_toolbox.data.profile import NoiseRateInfo, NoiseRateStatus
+from lnl_toolbox.data.profile import NoiseOrigin, NoiseRateInfo, NoiseRateStatus
 from lnl_toolbox.training.compatibility import (
     CompatibilityReason,
     CompatibilityResult,
@@ -94,7 +94,24 @@ class ExperimentService:
             available_pretrained_roles=pretrained_roles,
         )
         missing_inputs = []
+        incompatible_config = []
         for required in requirements.required_config_inputs:
+            if (
+                required.code == "requires_noisy_training_labels"
+                and capabilities.noise_origin is NoiseOrigin.NATIVE
+            ):
+                continue
+            if required.code == "requires_class_dependent_noise":
+                noise = config.get("noise", {}) or {}
+                name = str(noise.get("name", "")).strip().lower() if isinstance(noise, Mapping) else ""
+                has_manifest = bool(noise.get("manifest")) if isinstance(noise, Mapping) else False
+                if name and name not in {"symmetric", "pairflip", "external"} and not has_manifest:
+                    incompatible_config.append(CompatibilityReason(
+                        required.code,
+                        required.description,
+                        "algorithm_requirement",
+                    ))
+                    continue
             present = [
                 self._config_value_present(self._config_value(config, path))
                 for path in required.paths
@@ -102,6 +119,16 @@ class ExperimentService:
             satisfied = all(present) if required.mode == "all" else any(present)
             if not satisfied:
                 missing_inputs.append(required)
+        if incompatible_config:
+            return CompatibilityResult(
+                status=CompatibilityStatus.INCOMPATIBLE,
+                method=result.method,
+                dataset=result.dataset,
+                reasons=result.reasons + tuple(incompatible_config),
+                warnings=result.warnings,
+                required_user_inputs=result.required_user_inputs,
+                required_input_paths=result.required_input_paths,
+            )
         if not missing_inputs:
             return result
 

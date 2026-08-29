@@ -631,9 +631,19 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
                 code, output, error = self.invoke('methods', 'compatible', '--dataset', 'heart', '--format', 'json')
                 self.assertEqual(code, 0, error)
                 compatibility = {item['method']: item for item in json.loads(output)}
-                self.assertEqual(compatibility['importance_reweighting']['status'], 'compatible')
-                self.assertEqual(compatibility['upm']['status'], 'compatible')
-                self.assertNotIn('unsupported_modality', compatibility['upm']['reason_codes'])
+                importance = compatibility['importance_reweighting']
+                self.assertEqual(importance['status'], 'compatible_with_requirements')
+                self.assertIn(
+                    'requires_binary_noise_prior', importance['reason_codes']
+                )
+                self.assertIn(
+                    'config:requires_binary_noise_prior',
+                    importance['required_user_inputs'],
+                )
+                upm = compatibility['upm']
+                self.assertEqual(upm['status'], 'compatible_with_requirements')
+                self.assertIn('requires_noisy_training_labels', upm['reason_codes'])
+                self.assertNotIn('unsupported_modality', upm['reason_codes'])
                 code, output, error = self.invoke('data', 'verify', 'heart', '--output-dir', str(Path(directory) / 'heart-run'), '--project-root', str(_unified_cli_ROOT))
                 self.assertEqual(code, 0, error)
                 self.assertIn('Training check   VERIFIED', output)
