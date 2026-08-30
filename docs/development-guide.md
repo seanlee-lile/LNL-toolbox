@@ -118,7 +118,7 @@ lnl-train --config configs/experiment/cifar10_smoke.yaml
 等价的模块运行方式：
 
 ```powershell
-python -m lnl_toolbox.cli.train `
+lnl run `
   --config configs/experiment/cifar10_smoke.yaml
 ```
 

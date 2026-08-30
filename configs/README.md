@@ -101,3 +101,13 @@ noise:
 
 `manifest` 不能与 `name/rate/seed` 混用。缺少 `noise` 时保持干净标签训练；配置后仅训练集按 global index 使用噪声标签，validation/test 仍使用干净标签。最终映射固定保存到运行目录，恢复时不重新生成、也不重新依赖外部源文件。`lnl-clean-train` 是 clean-only 包装，会拒绝 `noise`；噪声实验使用 `lnl-train`。
 
+## Conditional recipes / prerequisites
+
+有些 recipe 是 conditional：配置文件存在不表示当前机器已经能够运行。PCSE、DLD、CAL 和 MentorNet 等流程可能分别需要 checkpoint/source run、真实 pretrained feature extractor、对齐的 external clean/noisy label artifact 或已验证的 MentorArtifact。
+
+来源可由 YAML 中的路径、run directory/environment、external label artifact 或 MentorArtifact 提供。readiness 至少会经过配置、schema、identity compatibility 和 consumer validation；仅 `PATH_EXISTS` 不等于 `READY`。不要把任意 `.pt` 文件、随机冻结模型或未对齐标签文件当作正式来源。
+
+本地数据登记同样按 adapter source contract 进行：单文件 adapter 使用 `lnl data register ... --path <file>`，目录 adapter 使用 `lnl data register ... --root <directory>`。不要同时传递无关的 source 参数。
+
+这里仅说明配置合同；Web 操作、DatasetProfile 和具体方法的 prerequisite 指引请见 [Toolbox 使用手册](../docs/toolbox-usage-manual.md)。
+
