@@ -883,10 +883,175 @@
         (item.environment_variable ? '<p><b>环境变量：</b><code>' + escapeHtml(item.environment_variable) + '=&lt;run directory&gt;</code></p>' : '') +
         (paths.length ? '<p class="helper">配置定位：' + escapeHtml(paths.join(" 或 ")) + '</p>' : '') + '</div>';
     }
+    const paperPresentationCopy = {
+      "pdl": {lifecycle:["预热训练", "提取特征快照", "估计样本级标签转移关系", "使用校正损失训练", "评估模型"]},
+      "jocor": {lifecycle:["初始化双模型", "联合前向计算", "施加一致性正则", "选择小损失样本", "联合更新双模型"]},
+      "dss": {lifecycle:["更新逐样本证据", "校正证据偏差", "构建候选标签", "使用掩码风险更新模型"]},
+      "cdr": {lifecycle:["进行标准早期学习", "计算关键分数", "按掩码更新参数", "保存训练策略状态"]},
+      "mentornet": {
+        summary:"由 Mentor 网络学习课程权重，再指导学生模型训练。",
+        mechanism:"先用可信数据生成 MentorArtifact；双向长短期记忆网络（bi-LSTM）根据损失、训练轮次和标签历史生成逐样本权重。",
+        lifecycle:["准备可信 Mentor 特征", "训练 Mentor 模型", "验证 MentorArtifact", "使用课程权重训练学生模型"]
+      },
+      "coteaching": {lifecycle:["初始化两个网络", "分别计算样本损失", "稳定选择小损失样本", "交叉更新两个网络", "评估单模型和集成结果"]},
+      "loss-correction": {lifecycle:["获取标签转移矩阵", "验证转移矩阵产物", "计算逐样本校正风险", "执行监督优化"]},
+      "apl": {lifecycle:["计算逐样本主动损失", "计算逐样本被动损失", "加权组合两类损失", "执行标准监督更新"]},
+      "gce": {lifecycle:["计算逐样本 GCE 损失", "汇总批次损失", "更新模型", "根据验证集选择模型"]},
+      "dual-t": {lifecycle:["训练后验分类模型", "保存最佳模型快照", "估计双转移矩阵", "记录产物身份哈希", "训练新的校正分类模型"]},
+      "importance-reweighting": {
+        lifecycle:["估计类别后验概率", "估计噪声率", "验证噪声率产物", "使用重要性权重训练"],
+        limitations:["当前仅支持二分类 asymmetric RCN。", "Statlog Heart 流程属于工程化、论文导向实现，尚未验证论文表格中的数值结果。"]
+      },
+      "cwd": {lifecycle:["构建二分类折叠", "统计各类别信息", "计算系数矩阵的伪逆", "优化全局目标", "评估各折叠结果"]},
+      "pcse": {
+        summary:"利用多个训练阶段的特征快照和类别统计，恢复各类别的干净数据分布。",
+        mechanism:"先训练基础分类模型并收集中间层特征快照，估计标签转移关系，再依据论文公式恢复类别统计并完成后处理。",
+        lifecycle:["在带噪数据上训练基础分类模型", "提取多个中间层特征", "估计标签转移关系", "恢复各类别的干净统计量", "构建生成式分类器并进行后处理"]
+      },
+      "fine": {lifecycle:["预热训练", "更新指数移动平均模型（EMA）", "划分 SCS/SCR 样本集合", "生成强增强视图", "优化主动遗忘目标"]},
+      "cnlcu": {lifecycle:["初始化两个网络", "更新逐样本历史", "根据不确定性选择样本", "交叉更新两个网络", "保存历史状态"]},
+      "t-revision": {
+        lifecycle:["完成第一阶段训练", "初始化标签转移矩阵", "初始化分类器", "修订并继续训练", "在干净测试集上评估"],
+        limitations:["正式配置使用估计后再修订的转移矩阵。", "全量 Sym20 短配置只用于工程稳定性验证，不等同于论文的 20/200/200 轮次或五随机种子数值复现。"]
+      },
+      "dld": {
+        summary:"在标签存在噪声时，利用样本特征和标签扩散获得更可靠的分类结果。",
+        mechanism:"先利用弱增强和强增强视图的邻域信息进行标签预校正，再通过方向扩散和随机扩散学习标签恢复过程。",
+        lifecycle:["提取弱增强和强增强视图的特征", "完成标签预校正", "训练方向扩散与随机噪声预测网络", "使用带噪验证集选择模型", "在干净测试集上评估"],
+        limitations:["正式配置需要真实的 ImageNet-1K 预训练 ResNet34 权重；未准备时暂不可运行。", "当前实现属于论文方法对齐版本，尚未接入论文官方使用的 ViT-L/14 特征路径，因此不能视为官方代码的完全复现；零值推理初始化属于工具箱工程策略。"]
+      },
+      "binary-risk": {lifecycle:["提供已知二分类噪声率", "计算逐样本校正风险", "优化二分类模型"]},
+      "volminnet": {
+        summary:"在不依赖锚点样本的情况下，同时学习干净标签后验分类器和类别条件转移矩阵。",
+        mechanism:"联合优化带噪标签负对数似然和正对数行列式最小体积项，同时更新分类器与论文参数化的转移矩阵。",
+        lifecycle:["准备噪声 manifest", "联合训练分类器和转移矩阵", "使用带噪验证集选择模型", "发布转移矩阵产物", "在干净测试集上评估"],
+        limitations:["已提供 CIFAR-10 Sym20 全预算论文流程配置，但尚未完成论文要求的重复运行数值复现。", "论文公式与作者代码在正对数行列式和对数绝对行列式上存在差异；当前实现采用论文明确给出的正对数行列式定义。"]
+      },
+      "upm": {
+        summary:"为每个具有稳定索引的训练样本学习一个实例相关的标签混淆概率。",
+        mechanism:"先由带噪标签分类器估计观测类别概率，再训练新的主分类器，交替执行真实后验预测、受约束的噪声参数更新和固定软目标学习。",
+        lifecycle:["完成带噪交叉熵预训练", "从最佳 checkpoint 提取确定性概率快照", "按稳定样本索引初始化噪声参数", "执行 UPM 交替优化", "在干净测试集上评估"],
+        limitations:["内置配置使用对称噪声，不是论文中的 CIFAR 实例相关重标注或数值复现；全预算配置用于验证真实 CIFAR-10 工程流程。", "从最佳 checkpoint 提取确定性快照是工具箱的可复现性约定，因为论文没有完整规定该生命周期细节。"]
+      },
+      "dividemix": {
+        summary:"将逐样本损失分布视为混合模型，把可能的噪声样本作为无标签数据进行双网络半监督学习。",
+        mechanism:"两个网络独立预热后，交叉执行 GMM 样本划分、标签修正、标签猜测和 MixMatch 训练，并以双模型完成推理。",
+        lifecycle:["分别预热两个网络", "记录全数据集的对侧网络损失", "生成交叉样本划分产物", "依次执行两个网络的 MixMatch 训练", "使用带噪验证集选择双模型", "在干净测试集上评估集成结果"],
+        limitations:["正式配置是全数据、论文导向的可用性流程，尚未验证论文数值；其强制翻转噪声遵循论文附录判据，且 10 轮预热加 300 轮主训练共计 310 轮。", "工具箱的 PreActResNet-18 与论文架构高度兼容但并非逐位一致；确定性 GMM 种子、严格产物验证和带噪验证集选择属于工具箱安全约定。"]
+      },
+      "lend": {
+        summary:"利用当前批次的特征图传播标签，并选择传播结果仍与观测标签一致的样本。",
+        mechanism:"单次前向同时产生 logits 和倒数第二层特征，随后构建批内有向近邻图，执行标签稀释、跨 epoch 历史更新和一致性筛选，再用带噪标签交叉熵更新模型。",
+        lifecycle:["在线提取样本特征", "构建批内局部图", "传播并稀释标签", "更新跨轮次历史", "选择标签一致样本", "使用带噪标签更新模型"],
+        limitations:["由于未找到可验证的作者实现，且论文未明确部分图构建与收敛细节，当前属于论文导向流程。", "全预算 CIFAR-10 配置使用工具箱定义的固定稀释步数、带噪验证集 checkpoint 选择和单一随机种子，尚未验证论文数值复现。"]
+      },
+      "cal": {
+        summary:"通过统一执行器提供二阶校正风险训练流程。",
+        mechanism:"先构建代理标签统计，再使用二阶风险校正目标训练模型。",
+        lifecycle:["构建代理标签统计", "执行二阶校正风险训练", "评估模型"],
+        limitations:["Smoke 配置只验证工程流程，不代表论文数值复现。"]
+      },
+      "mc-ldce": {
+        summary:"通过统一执行器提供固定特征的类别中心风险训练流程。",
+        mechanism:"先估计标签转移模型并恢复干净类别中心统计量，再优化固定特征风险。",
+        lifecycle:["估计标签转移关系", "恢复类别中心", "训练固定特征风险模型", "评估模型"],
+        limitations:["Smoke 配置只验证工程流程，不代表论文数值复现。"]
+      },
+      "ca2c": {
+        summary:"通过统一执行器提供非对称双网络协同学习流程。",
+        mechanism:"维护双网络候选样本记忆，并通过非对称交叉指导目标更新模型。",
+        lifecycle:["预热两个网络", "更新候选样本记忆", "执行非对称协同学习", "评估模型"],
+        limitations:["Smoke 配置只验证工程流程，不代表论文数值复现。"]
+      },
+      "l2rw": {
+        summary:"通过统一执行器提供基于元梯度的样本重加权流程。",
+        mechanism:"使用可信元数据批次，对虚拟参数更新中的样本权重进行求导。",
+        lifecycle:["读取可信元数据批次", "执行虚拟参数更新", "计算元梯度样本权重", "更新训练模型", "评估模型"],
+        limitations:["Smoke 配置只验证工程流程，不代表论文数值复现。"]
+      }
+    };
+    const prerequisitePresentationCopy = {
+      "pretrained_classifier": {
+        name:"已训练分类模型（pretrained classifier）",
+        requirement:"一个已经训练好的分类模型，用于提取中间层特征，并进行后续类别统计恢复。",
+        provide:"选择一个已有且兼容的训练结果，并在项目 YAML 中配置模型来源。",
+        sources:{"supervised_best":"交叉熵训练模型（CE）", "coteaching_peer_a_best":"Co-teaching 的 A 网络最佳模型", "upm_main_best":"UPM 最佳主模型"}
+      },
+      "dld_feature_extractor": {
+        name:"预训练特征提取器（pretrained feature extractor）",
+        requirement:"一个高质量预训练特征提取器，用于比较样本邻域并完成标签预校正。",
+        provide:"请先准备本地预训练权重，或在项目 YAML 中配置兼容的外部特征模型；工具箱不会自动联网下载外部模型。",
+        sources:{"torchvision_resnet34_imagenet1k_v1":"ImageNet-1K 预训练 ResNet34", "upm_main_best":"兼容的 UPM 特征模型"}
+      },
+      "cal_external_labels": {
+        name:"对齐的干净/带噪标签文件",
+        requirement:"一份与当前数据集逐项对应的干净标签和带噪标签文件，用于验证实验数据的身份和对齐关系。",
+        provide:"在项目 YAML 中配置标签文件路径，以及干净标签和带噪标签对应的字段名。",
+        sources:{"external_torch":"外部 PyTorch 标签文件"},
+        cleanUsage:"说明：干净标签只用于数据身份检查、对齐和评估，不会参与 CAL 的训练更新。"
+      }
+    };
+    function paperPresentation(paper) {
+      const copy = paperPresentationCopy[paper.id] || {};
+      return {
+        summary: copy.summary || paper.summary,
+        mechanism: copy.mechanism || paper.mechanism,
+        lifecycle: copy.lifecycle || paper.lifecycle || [],
+        limitations: copy.limitations || paper.limitations || []
+      };
+    }
+    const paperConceptCopy = {
+      "label pre-correction":"标签预校正",
+      "directional diffusion":"方向标签扩散",
+      "transition backend":"标签转移估计",
+      "per-class recovery":"逐类别统计恢复",
+      "second-order corrected risk":"二阶校正风险",
+      "learned curriculum":"学习得到的课程权重",
+      "student schedule":"学生模型训练计划"
+    };
+    function paperConceptLabel(value) {
+      return paperConceptCopy[value] || value;
+    }
+    function readinessStatusLabel(value) {
+      const status = String(value || "needs_input").toLowerCase();
+      if (status === "ready") return "已就绪（READY）";
+      if (status === "invalid") return "当前输入无效（INVALID）";
+      return "尚需配置（NEEDS_INPUT）";
+    }
+    function prerequisiteStatusText(item) {
+      if (item.status === "ready") return "已完成来源、格式、身份和使用方式验证，可以正式运行。";
+      if (item.key === "pretrained_classifier") return "尚未配置前置模型，正式运行暂不可用。";
+      if (item.key === "dld_feature_extractor") return "未找到或未验证可用的预训练权重，正式运行暂不可用。";
+      if (item.key === "cal_external_labels") {
+        if (!item.path_exists) return "外部标签文件未找到，正式运行暂不可用。";
+        if (!item.schema_valid) return "文件格式尚未通过验证，正式运行暂不可用。";
+        if (!item.identity_compatible) return "标签与当前数据集尚未确认对齐，正式运行暂不可用。";
+      }
+      return item.status === "invalid" ? "当前输入未通过验证，正式运行暂不可用。" : "尚未提供运行所需的前置输入。";
+    }
+    function prerequisiteSummary(item, copy) {
+      const configured = (item.configured_source || []).map(function (entry) { return entry.value; });
+      if (item.key === "pretrained_classifier") {
+        const source = configured.find(function (value) { return value && typeof value === "object"; }) || {};
+        const model = source.model || {};
+        const sourceName = copy.sources[source.adapter] || source.adapter || "尚未选择";
+        const modelName = model.name === "resnet18" ? "ResNet-18" : (model.name || "待确认");
+        return '<p><b>当前来源：</b>' + escapeHtml(sourceName) + '</p><p><b>模型结构：</b>' + escapeHtml(modelName) + '</p><p><b>运行目录：</b>' + (item.configured ? '已配置' : '尚未指定') + '</p>';
+      }
+      if (item.key === "dld_feature_extractor") {
+        const source = configured.find(function (value) { return value && typeof value === "object"; }) || {};
+        return '<p><b>特征模型：</b>ResNet34</p><p><b>预训练来源：</b>ImageNet-1K</p><p><b>权重状态：</b>' + (item.consumer_validated ? '已验证' : item.path_exists ? '待完成使用验证' : '未找到') + '</p>';
+      }
+      if (item.key === "cal_external_labels") {
+        const pathEntry = (item.configured_source || []).find(function (entry) { return entry.path === "noise.path"; });
+        return '<p><b>标签文件：</b>' + escapeHtml(pathEntry?.value || "尚未配置") + '</p><p><b>文件格式：</b>' + (item.schema_valid ? '已验证' : '待验证') + '</p><p><b>数据对齐：</b>' + (item.identity_compatible ? '已验证' : '待验证') + '</p>';
+      }
+      return "";
+    }
     function prerequisiteReadinessCard(item) {
       const sources = item.supported_sources || [];
+      const copy = prerequisitePresentationCopy[item.key] || {};
       const provenance = item.provenance || {};
-      const identity = [provenance.source_method || provenance.method, provenance.dataset, provenance.source_checkpoint_role || provenance.checkpoint_role, provenance.adapter].filter(Boolean);
       const configured = (item.configured_source || []).map(function (entry) {
         const value = typeof entry.value === "object" ? JSON.stringify(entry.value) : String(entry.value);
         return entry.path + " = " + value;
@@ -894,17 +1059,18 @@
       const provenanceDetails = Object.entries(provenance).filter(function (entry) {
         return entry[1] !== null && entry[1] !== undefined && typeof entry[1] !== "object";
       }).map(function (entry) { return entry[0] + " = " + entry[1]; });
+      const sourceLabels = sources.map(function (source) { return copy.sources?.[source] || source; });
+      const technicalDetails = configured.concat(provenanceDetails);
       return '<div class="guide-card prerequisite-readiness" data-status="' + escapeHtml(item.status || "needs_input") + '">' +
-        '<div><strong>前置要求 · ' + escapeHtml(item.name || item.key) + '</strong> <span class="parameter-badge">' + escapeHtml((item.status || "needs_input").toUpperCase()) + '</span></div>' +
-        '<p><b>需要：</b>' + escapeHtml(item.requirement || "") + '</p>' +
-        '<p><b>当前层级：</b>' + escapeHtml(item.level || "NOT_CONFIGURED") + ' · ' + escapeHtml(item.message || "") + '</p>' +
-        (sources.length ? '<p><b>真实支持来源：</b>' + escapeHtml(sources.join(" / ")) + '</p>' : '') +
-        '<p><b>如何提供：</b>' + escapeHtml(item.provide || "") + '</p>' +
-        (item.environment_variable ? '<p><b>环境变量：</b><code>' + escapeHtml(item.environment_variable) + '=&lt;source&gt;</code></p>' : '') +
-        (configured.length ? '<p><b>当前配置：</b>' + escapeHtml(configured.join(" · ")) + '</p>' : '') +
-        (identity.length ? '<p><b>已验证身份：</b>' + escapeHtml(identity.join(" · ")) + '</p>' : '') +
-        (provenanceDetails.length ? '<p><b>来源与验证：</b>' + escapeHtml(provenanceDetails.join(" · ")) + '</p>' : '') +
-        (item.clean_data_usage ? '<p class="helper">' + escapeHtml(item.clean_data_usage) + '</p>' : '') + '</div>';
+        '<div><strong>前置要求 · ' + escapeHtml(copy.name || item.name || item.key) + '</strong> <span class="parameter-badge">' + escapeHtml(readinessStatusLabel(item.status)) + '</span></div>' +
+        '<p><b>需要：</b>' + escapeHtml(copy.requirement || item.requirement || "") + '</p>' +
+        '<p><b>当前状态：</b>' + escapeHtml(prerequisiteStatusText(item)) + '</p>' +
+        (sourceLabels.length ? '<p><b>支持来源：</b>' + escapeHtml(sourceLabels.join("、")) + '</p>' : '') +
+        '<p><b>如何提供：</b>' + escapeHtml(copy.provide || item.provide || "") + '</p>' +
+        prerequisiteSummary(item, copy) +
+        (item.environment_variable ? '<p><b>环境变量：</b><code>' + escapeHtml(item.environment_variable) + '=&lt;运行目录&gt;</code></p>' : '') +
+        (copy.cleanUsage || item.clean_data_usage ? '<p class="helper">' + escapeHtml(copy.cleanUsage || item.clean_data_usage) + '</p>' : '') +
+        (technicalDetails.length || item.level ? '<details><summary>详细配置</summary><p class="helper">内部状态：' + escapeHtml(item.level || "NOT_CONFIGURED") + '</p>' + (technicalDetails.length ? '<p class="helper">' + escapeHtml(technicalDetails.join(" · ")) + '</p>' : '') + '</details>' : '') + '</div>';
     }
     function selectedRecipeCompatibilityHtml(recipe) {
       if (!recipe) return '<p>尚未选择正式 recipe</p>';
@@ -1598,23 +1764,26 @@
       const paper = state.papers.find(function (item) { return item.id === state.paperId; });
       const config = paper?.configs.find(function (item) { return item.recipe_id === state.paperRecipe; });
       if (!node || !paper || !config) return;
-      const lifecycle = (paper.lifecycle || []).map(function (stage, index) { return '<li>' + (index + 1) + '. ' + escapeHtml(stage) + '</li>'; }).join("");
-      const mappingRows = (paper.concept_to_config || []).map(function (item) { return {"论文概念":item.concept, "YAML 配置字段":item.config, "实现模块":item.implementation}; });
+      const presentation = paperPresentation(paper);
+      const lifecycle = presentation.lifecycle.map(function (stage) {
+        return '<li>' + escapeHtml(String(stage).replace(/^\s*\d+\s*[.、]\s*/, "")) + '</li>';
+      }).join("");
+      const mappingRows = (paper.concept_to_config || []).map(function (item) { return {"论文概念":paperConceptLabel(item.concept), "YAML 配置字段":item.config, "实现模块":item.implementation}; });
       const configRows = [{"配置文件":config.config_path, "数据集":config.data, "噪声":config.noise + (config.noise_rate == null ? "" : " · " + config.noise_rate), "训练轮次":config.epochs ?? "-", "执行器":config.runner, "方法":config.method || "-"}];
-      const limitations = (paper.limitations || []).map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("");
+      const limitations = presentation.limitations.map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("");
       const preparation = config.preparation;
       const prerequisites = config.prerequisites || [];
       const prerequisiteCards = prerequisites.map(prerequisiteReadinessCard).join("");
-      const prerequisiteSection = prerequisiteCards ? '<section class="paper-prerequisites"><h3>运行前置要求 · ' + escapeHtml(config.prerequisite_status || "NEEDS_INPUT") + '</h3>' + prerequisiteCards + '<p class="helper">如需补充或更换 source/artifact，请使用上方“编辑为项目 YAML”入口配置真实字段；当前页面不会虚构或自动下载外部输入。</p></section>' : '';
-      const preparationCard = preparation ? '<div class="guide-card mentor-preparation ' + (preparation.artifact_ready ? 'is-ready' : 'is-pending') + '"><strong>MentorArtifact: <span class="mentor-status ' + (preparation.artifact_ready ? 'ready' : 'not-ready') + '">' + (preparation.artifact_ready ? 'READY' : 'NOT READY') + '</span></strong>' +
+      const prerequisiteSection = prerequisiteCards ? '<section class="paper-prerequisites"><h3>运行前置要求 · ' + escapeHtml(readinessStatusLabel(config.prerequisite_status)) + '</h3>' + prerequisiteCards + '<p class="helper">如需补充或更换外部模型、权重或数据文件，请使用上方“编辑为项目 YAML”入口填写真实来源；当前页面不会虚构或自动下载外部输入。</p></section>' : '';
+      const preparationCard = preparation ? '<div class="guide-card mentor-preparation ' + (preparation.artifact_ready ? 'is-ready' : 'is-pending') + '"><strong>MentorArtifact：<span class="mentor-status ' + (preparation.artifact_ready ? 'ready' : 'not-ready') + '">' + (preparation.artifact_ready ? '已就绪（READY）' : '未就绪（NOT READY）') + '</span></strong>' +
         '<p class="helper">' + escapeHtml(preparation.artifact_path) + '</p>' +
-        '<p>Step 1 · Mentor features: <span class="mentor-status ' + (preparation.feature_ready ? 'ready' : 'not-ready') + '">' + (preparation.feature_ready ? 'READY' : 'NOT READY') + '</span></p>' +
-        '<p>Step 2 · Frozen MentorArtifact: <span class="mentor-status ' + (preparation.artifact_ready ? 'ready' : 'not-ready') + '">' + (preparation.artifact_ready ? 'READY' : 'NOT READY') + '</span></p>' +
-        '<p>Step 3 · Student training: <span class="mentor-status ' + (preparation.artifact_ready ? 'available' : 'blocked') + '">' + (preparation.artifact_ready ? 'AVAILABLE' : 'BLOCKED') + '</span></p>' +
+        '<p>步骤 1 · 准备 Mentor 特征：<span class="mentor-status ' + (preparation.feature_ready ? 'ready' : 'not-ready') + '">' + (preparation.feature_ready ? '已就绪（READY）' : '未就绪（NOT READY）') + '</span></p>' +
+        '<p>步骤 2 · 生成冻结的 MentorArtifact：<span class="mentor-status ' + (preparation.artifact_ready ? 'ready' : 'not-ready') + '">' + (preparation.artifact_ready ? '已就绪（READY）' : '未就绪（NOT READY）') + '</span></p>' +
+        '<p>步骤 3 · 训练学生模型：<span class="mentor-status ' + (preparation.artifact_ready ? 'available' : 'blocked') + '">' + (preparation.artifact_ready ? '可以运行（AVAILABLE）' : '暂不可运行（BLOCKED）') + '</span></p>' +
         (preparation.artifact_error ? '<p class="status failed">' + escapeHtml(preparation.artifact_error) + '</p>' : '') +
-        (preparation.preparation_available ? '<div class="actions"><button type="button" data-mentor-step="prepare" class="secondary" ' + (preparation.feature_ready ? 'disabled' : '') + '>准备 Mentor 数据</button><button type="button" data-mentor-step="train" class="secondary" ' + (!preparation.feature_ready || preparation.artifact_ready ? 'disabled' : '') + '>训练 MentorArtifact</button></div>' : '<p class="helper">This configuration requires an externally prepared, identity-compatible MentorArtifact.</p>') +
+        (preparation.preparation_available ? '<div class="actions"><button type="button" data-mentor-step="prepare" class="secondary" ' + (preparation.feature_ready ? 'disabled' : '') + '>准备 Mentor 数据</button><button type="button" data-mentor-step="train" class="secondary" ' + (!preparation.feature_ready || preparation.artifact_ready ? 'disabled' : '') + '>训练 MentorArtifact</button></div>' : '<p class="helper">此配置需要从外部准备与当前数据身份一致的 MentorArtifact。</p>') +
         '</div>' : '';
-      node.innerHTML = '<div class="guide-card"><h3>' + escapeHtml(paper.acronym + "：" + paper.title) + '</h3><p>' + escapeHtml(paper.venue + " " + paper.year) + ' · <a href="' + escapeHtml(paper.source_url) + '" target="_blank" rel="noreferrer">查看论文来源</a></p><p><strong>解决的问题：</strong>' + escapeHtml(paper.summary) + '</p><p><strong>核心方法：</strong>' + escapeHtml(paper.mechanism) + '</p></div>' +
+      node.innerHTML = '<div class="guide-card"><h3>' + escapeHtml(paper.acronym + "：" + paper.title) + '</h3><p>' + escapeHtml(paper.venue + " " + paper.year) + ' · <a href="' + escapeHtml(paper.source_url) + '" target="_blank" rel="noreferrer">查看论文来源</a></p><p><strong>解决的问题：</strong>' + escapeHtml(presentation.summary) + '</p><p><strong>核心方法：</strong>' + escapeHtml(presentation.mechanism) + '</p></div>' +
         '<div class="guide-card"><strong>论文训练流程</strong><ol>' + lifecycle + '</ol></div>' +
         preparationCard +
         prerequisiteSection +

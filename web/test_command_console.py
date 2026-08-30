@@ -45,7 +45,7 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertIn('recipe.input_guidance || []', page)
         self.assertIn('recipe.prerequisites || []', page)
         self.assertIn('function prerequisiteReadinessCard', page)
-        self.assertIn('真实支持来源', page)
+        self.assertIn('支持来源', page)
         self.assertIn('clean_data_usage', page)
         self.assertIn('item.category === "dataset_fact"', page)
         self.assertIn('item.category === "developer_error"', page)
@@ -623,7 +623,7 @@ class CommandConsoleTest(unittest.TestCase):
             'config.prerequisite_status === "READY"',
             "prerequisites.map(prerequisiteReadinessCard)",
             "运行前置要求 · ",
-            "如需补充或更换 source/artifact",
+            "如需补充或更换外部模型、权重或数据文件",
             "编辑为项目 YAML",
             "if (!paperConfigRunReady(selected)) return;",
         ):
@@ -631,6 +631,50 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertIn("!config.preparation || Boolean(config.preparation.artifact_ready)", page)
         self.assertIn('config.availability !== "conditional"', page)
         self.assertNotIn("repository_frozen_model</b>", page)
+
+    def test_paper_page_localizes_copy_and_uses_single_ordered_list_numbering(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        for marker in (
+            '"pcse": {',
+            'lifecycle:["在带噪数据上训练基础分类模型"',
+            'summary:"利用多个训练阶段的特征快照和类别统计，恢复各类别的干净数据分布。"',
+            'mechanism:"先训练基础分类模型并收集中间层特征快照',
+            '"dld": {',
+            'summary:"在标签存在噪声时，利用样本特征和标签扩散获得更可靠的分类结果。"',
+            '"cal_external_labels": {',
+            'name:"对齐的干净/带噪标签文件"',
+            'name:"已训练分类模型（pretrained classifier）"',
+            'name:"预训练特征提取器（pretrained feature extractor）"',
+            '"supervised_best":"交叉熵训练模型（CE）"',
+            '"coteaching_peer_a_best":"Co-teaching 的 A 网络最佳模型"',
+            '"torchvision_resnet34_imagenet1k_v1":"ImageNet-1K 预训练 ResNet34"',
+            "当前状态：",
+            "支持来源：",
+            "详细配置",
+            "步骤 1 · 准备 Mentor 特征",
+            "步骤 2 · 生成冻结的 MentorArtifact",
+            "步骤 3 · 训练学生模型",
+            "此配置需要从外部准备与当前数据身份一致的 MentorArtifact。",
+            'mechanism:"先用可信数据生成 MentorArtifact；双向长短期记忆网络（bi-LSTM）',
+            '"label pre-correction":"标签预校正"',
+            '"second-order corrected risk":"二阶校正风险"',
+            "干净标签只用于数据身份检查、对齐和评估，不会参与 CAL 的训练更新。",
+            'replace(/^\\s*\\d+\\s*[.、]\\s*/, "")',
+            "<ol>' + lifecycle + '</ol>",
+        ):
+            self.assertIn(marker, page)
+        for removed in (
+            "(index + 1) + '. '",
+            "Step 1 · Mentor features",
+            "Step 2 · Frozen MentorArtifact",
+            "Step 3 · Student training",
+            "This configuration requires an externally prepared",
+            "Builds weak/strong-view label pre-corrections",
+            "Weighted-neighbor distributions and a divergence GMM",
+        ):
+            self.assertNotIn(removed, page)
+        self.assertNotIn("1. 1.", page)
+        self.assertNotIn("2. 2.", page)
 
     def test_mentornet_paper_ui_exposes_guided_artifact_readiness(self):
         status = {
@@ -660,7 +704,7 @@ class CommandConsoleTest(unittest.TestCase):
         )
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
         for marker in (
-            "MentorArtifact: ",
+            "MentorArtifact：",
             "data-mentor-step",
             "准备 Mentor 数据",
             "训练 MentorArtifact",
