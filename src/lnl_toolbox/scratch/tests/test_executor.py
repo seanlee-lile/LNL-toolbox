@@ -9,9 +9,7 @@ from lnl_toolbox.scratch import ScratchContext, ScratchExecutionError, execute_r
 from lnl_toolbox.scratch.blocks.evaluation import evaluate_accuracy
 from lnl_toolbox.scratch.blocks.forward import softmax
 from lnl_toolbox.scratch.blocks.losses import (
-    active_passive_composition,
     binary_risk,
-    forward_correction,
     affine_transform,
     clamp_min,
     elementwise_power,
@@ -20,7 +18,7 @@ from lnl_toolbox.scratch.blocks.losses import (
     rce_loss,
 )
 from lnl_toolbox.scratch.blocks.losses import symmetric_kl
-from lnl_toolbox.scratch.blocks.tensor_ops import weighted_sum
+from lnl_toolbox.scratch.blocks.tensor_ops import apply_transition, negative_log, weighted_sum
 from lnl_toolbox.algorithms.jocor import symmetric_kl_per_sample
 from lnl_toolbox.scratch.blocks.models import create_model
 from lnl_toolbox.losses.torch_losses import GeneralizedCrossEntropyLoss
@@ -181,7 +179,7 @@ class ScratchExecutorTest(unittest.TestCase):
         context = ScratchContext({"logits": logits, "labels": labels})
         nce_loss(context, save_as="active")
         rce_loss(context, log_zero=-9.210340371976184, save_as="passive")
-        active_passive_composition(context, active="active", passive="passive", save_as="loss_per_sample")
+        weighted_sum(context, terms=["active", "passive"], weights=[1.0, 1.0], save_as="loss_per_sample")
         expected = ActivePassiveLoss(
             NormalizedCrossEntropyLoss(),
             ReverseCrossEntropyLoss(log_zero=-9.210340371976184),
@@ -214,7 +212,10 @@ class ScratchExecutorTest(unittest.TestCase):
             [0.1, 0.0, 0.9],
         ])
         context = ScratchContext({"logits": logits, "labels": labels, "transition": transition})
-        forward_correction(context)
+        softmax(context, logits="logits", save_as="probabilities")
+        apply_transition(context, probabilities="probabilities", transition="transition", save_as="noisy_probabilities")
+        gather_by_label(context, values="noisy_probabilities", labels="labels", save_as="target_probability")
+        negative_log(context, input="target_probability", save_as="loss_per_sample")
         expected = ForwardRiskCorrector().per_sample_risk(
             logits=logits,
             noisy_targets=labels,

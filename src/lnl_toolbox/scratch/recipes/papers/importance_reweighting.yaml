@@ -51,8 +51,10 @@ steps:
             params: {logits: logits, labels: labels, save_as: loss_per_sample}
           - block: importance_weight_formula
             params: {save_as: sample_weights}
-          - block: weighted_loss
-            params: {losses: loss_per_sample, weights: sample_weights, save_as: weighted_loss_per_sample}
+          - block: detach
+            params: {input: sample_weights, save_as: detached_sample_weights}
+          - block: elementwise_multiply
+            params: {left: loss_per_sample, right: detached_sample_weights, save_as: weighted_loss_per_sample}
           - block: mean_loss
             params: {input: weighted_loss_per_sample, save_as: loss}
           - {block: backward}

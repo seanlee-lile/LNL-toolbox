@@ -47,6 +47,28 @@ def functional_forward_with_state(ctx: ScratchContext, model: str = "model", sta
 
 
 @block(
+    id="functional_forward",
+    name="Functional Forward",
+    category="Meta",
+    description="Evaluate a module with an explicit parameter/buffer mapping.",
+    params={"model": {"type": "slot", "default": "model"},
+            "state": {"type": "slot", "default": "parameters"},
+            "inputs": {"type": "slot", "default": "images"},
+            "save_as": {"type": "slot", "default": "logits"}},
+    requires=("model", "state", "inputs"), provides=("save_as",), placement=("batch",), stage="train", ui_group="④ 前向与概率",
+)
+def functional_forward(ctx: ScratchContext, model: str = "model", state: str = "parameters",
+                       inputs: str = "images", save_as: str = "logits") -> None:
+    from torch.func import functional_call
+    mapping = ctx[state]
+    if isinstance(mapping, dict) and "state" in mapping and "parameters" in mapping:
+        mapping = mapping["state"]
+    if not isinstance(mapping, dict):
+        raise TypeError("functional_forward state must be a parameter/buffer mapping")
+    ctx[save_as] = functional_call(ctx[model], mapping, (ctx[inputs],), strict=True)
+
+
+@block(
     id="gradient_wrt",
     name="Gradient With Respect To",
     category="Meta",
@@ -60,4 +82,3 @@ def gradient_wrt(ctx: ScratchContext, loss: str = "loss", input: str = "input", 
     result = torch.autograd.grad(ctx[loss], value, create_graph=bool(create_graph), retain_graph=True, allow_unused=False)[0]
     if not torch.isfinite(result).all(): raise ValueError("gradient_wrt produced a non-finite gradient")
     ctx[save_as] = result
-

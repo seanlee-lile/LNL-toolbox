@@ -44,7 +44,7 @@ steps:
           - {block: gradient_wrt, params: {loss: l2rw_meta_loss, input: l2rw_epsilon, create_graph: false, save_as: l2rw_meta_gradient}}
           - {block: nonnegative_projection, params: {input: l2rw_meta_gradient, negate: false, save_as: l2rw_raw_weights}}
           - {block: normalize_nonnegative_weights, params: {weights: l2rw_raw_weights, save_as: meta_weights}}
-          - {block: weighted_loss, params: {weights: meta_weights, save_as: weighted_loss_per_sample}}
+          - {block: elementwise_multiply, params: {left: loss_per_sample, right: meta_weights, save_as: weighted_loss_per_sample}}
           - {block: mean_loss, params: {input: weighted_loss_per_sample, save_as: loss}}
           - {block: backward}
           - {block: optimizer_step}

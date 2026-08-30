@@ -20,7 +20,7 @@ steps:
   - {block: build_loaders}
   - block: create_model
     params: {model: resnet18, num_classes: 10, base_width: 16, device: device, save_as: model}
-  - block: load_pcse_source_model
+  - block: load_model_artifact
     params:
       model: model
       checkpoint_sha256: edb9387f2bc95b56c61ced551ef387746f1a49c5079f8dfbc966e583b34da062
@@ -29,7 +29,7 @@ steps:
       dataset_fingerprint: 9c53dc2c001574ab3f1b78d48632b8a82d0003c754bf7367f230280068e118a4
       source_env: LNL_PCSE_SOURCE_RUN
       save_as: pcse_source
-  - block: create_volmin_transition
+  - block: create_sigmoid_offdiagonal_transition
     params: {num_classes: 10, device: device, save_as: transition}
   - block: create_parameter_group_optimizer
     params:
@@ -62,8 +62,8 @@ steps:
             params: {input: noisy_target_probability, save_as: loss_per_sample}
           - block: mean_loss
             params: {input: loss_per_sample, save_as: classification_loss}
-          - block: volmin_positive_logdet
-            params: {transition: transition_matrix, save_as: volume_logdet}
+          - block: positive_logdet
+            params: {matrix: transition_matrix, save_as: volume_logdet}
           - block: weighted_sum
             params: {terms: [classification_loss, volume_logdet], weights: [1.0, 0.001], save_as: loss}
           - {block: backward, params: {loss: loss}}

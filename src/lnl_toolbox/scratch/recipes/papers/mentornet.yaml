@@ -34,7 +34,8 @@ steps:
           - {block: mentor_update_curriculum_threshold, params: {provider: mentor_provider, losses: loss_per_sample, save_as: mentor_threshold}}
           - {block: mentor_build_features, params: {provider: mentor_provider, losses: loss_per_sample, labels: labels, threshold: mentor_threshold, save_as: mentor_features}}
           - {block: mentor_predict_sample_weights, params: {provider: mentor_provider, features: mentor_features, save_as: sample_weights}}
-          - {block: weighted_loss}
+          - {block: detach, params: {input: sample_weights, save_as: detached_sample_weights}}
+          - {block: elementwise_multiply, params: {left: loss_per_sample, right: detached_sample_weights, save_as: weighted_loss_per_sample}}
           - {block: mean_loss, params: {input: weighted_loss_per_sample, save_as: loss}}
           - {block: backward}
           - {block: optimizer_step}

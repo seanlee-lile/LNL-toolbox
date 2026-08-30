@@ -15,6 +15,7 @@ from . import state
 from . import tensor_ops
 from . import parameter
 from . import meta
+from . import statistics
 from . import paper_specific
 
 __all__ = ["control"]

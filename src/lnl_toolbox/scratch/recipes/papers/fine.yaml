@@ -17,9 +17,10 @@ steps:
   - {block: build_prepared_data}
   - {block: build_loaders}
   - {block: create_model, params: {model: fine_seven_cnn, num_classes: 100, base_width: 64, device: device, save_as: model}}
+  - {block: create_model_ema, params: {model: model, momentum: 0.95, update_buffers: false, save_as: fine_ema}}
   - {block: create_optimizer, params: {optimizer: sgd, model: model, lr: 0.1, momentum: 0.9, nesterov: true, weight_decay: 0.0005, save_as: optimizer}}
   - {block: create_scheduler, params: {scheduler: cosine, optimizer: optimizer, t_max: 100, eta_min: 0.0005, save_as: scheduler}}
-  - {block: create_fine_state, params: {model: model, num_classes: 100, ema_momentum: 0.95, momentum_scs: 0.999, momentum_scr: 0.99, maximum_threshold: 0.95, beta: 0.1, gamma: 0.002, probability_floor: 0.0000001, seed: 23, save_as: fine_state}}
+  - {block: create_fine_state, params: {model: model, ema_model: fine_ema, prepared_data: prepared_data, num_classes: 100, ema_momentum: 0.95, momentum_scs: 0.999, momentum_scr: 0.99, maximum_threshold: 0.95, beta: 0.1, gamma: 0.002, probability_floor: 0.0000001, seed: 23, save_as: fine_state}}
   - block: epoch_loop
     params: {epochs: 300}
     steps:
@@ -50,15 +51,21 @@ steps:
           - block: if_epoch_ge
             params: {epoch: 200}
             steps:
-              - {block: fine_prepare_batch_targets, params: {state: fine_state, indices: indices, labels: labels, clean_as: fine_clean, pseudo_as: fine_pseudo, weights_as: fine_weights}}
+              - {block: indexed_read, params: {state: fine_clean_state, indices: indices, save_as: fine_clean}}
+              - {block: indexed_read, params: {state: fine_pseudo_state, indices: indices, save_as: fine_pseudo}}
+              - {block: indexed_read, params: {state: fine_weight_state, indices: indices, save_as: fine_weights}}
               - {block: forward, params: {model: model, input: strong_images, save_as: strong_logits}}
-              - {block: masked_cross_entropy, params: {logits: logits, labels: labels, mask: fine_clean, save_as: fine_clean_ce}}
-              - {block: weighted_pseudo_label_cross_entropy, params: {logits: strong_logits, pseudo_labels: fine_pseudo, weights: fine_weights, save_as: fine_strong_pseudo_ce}}
+              - {block: per_sample_ce, params: {logits: logits, labels: labels, save_as: fine_clean_ce_per_sample}}
+              - {block: masked_mean, params: {values: fine_clean_ce_per_sample, mask: fine_clean, denominator: selected, empty: zero, save_as: fine_clean_ce}}
+              - {block: per_sample_ce, params: {logits: strong_logits, labels: fine_pseudo, save_as: fine_strong_pseudo_ce_per_sample}}
+              - {block: detach, params: {input: fine_weights, save_as: fine_detached_weights}}
+              - {block: elementwise_multiply, params: {left: fine_strong_pseudo_ce_per_sample, right: fine_detached_weights, save_as: fine_weighted_pseudo_ce_per_sample}}
+              - {block: mean_loss, params: {input: fine_weighted_pseudo_ce_per_sample, save_as: fine_strong_pseudo_ce}}
               - {block: sed_rejected_regularizer, params: {logits: logits, labels: labels, clean: fine_clean, pseudo_labels: fine_pseudo, state: fine_state, save_as: fine_regularizer}}
               - {block: weighted_sum, params: {terms: [fine_clean_ce, fine_regularizer, fine_strong_pseudo_ce], weights: [1.0, 1.0, 1.0], save_as: loss}}
           - {block: backward}
           - {block: optimizer_step}
-          - {block: fine_ema_update, params: {model: model, state: fine_state}}
+          - {block: update_model_ema, params: {model: model, ema: fine_ema}}
       - block: if_epoch_ge
         params: {epoch: 200}
         steps:

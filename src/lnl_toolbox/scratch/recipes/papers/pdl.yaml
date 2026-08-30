@@ -27,8 +27,8 @@ steps:
       initialization: torch_default
       device: device
       save_as: model
-  - block: attach_pdl_revision_head
-    params: {model: model, num_classes: 10}
+  - block: attach_trainable_head
+    params: {model: model, input_dim: 10, output_dim: 10, head_name: T_revision, bias: false}
   - block: create_optimizer
     params:
       optimizer: sgd
@@ -87,11 +87,18 @@ steps:
       error_tolerance: 1.0e-5
       representation_seed: 1
       official_raw: true
-  - block: pdl_select_anchor_candidates
+  - block: classwise_percentile_anchor_candidates
     params:
-      train_posterior: pdl_train_posteriors
-      validation_posterior: pdl_validation_posteriors
-      percentages: [97.0, 97.1052631579, 97.2105263158, 97.3157894737, 97.4210526316, 97.5263157895, 97.6315789474, 97.7368421053, 97.8421052632, 97.9473684211, 98.0526315789, 98.1578947368, 98.2631578947, 98.3684210526, 98.4736842105, 98.5789473684, 98.6842105263, 98.7894736842, 98.8947368421, 99.0]
+      scores: pdl_train_posteriors
+      stable_sample_indices: pdl_train_snapshot_indices
+      percentiles: [97.0, 97.1052631579, 97.2105263158, 97.3157894737, 97.4210526316, 97.5263157895, 97.6315789474, 97.7368421053, 97.8421052632, 97.9473684211, 98.0526315789, 98.1578947368, 98.2631578947, 98.3684210526, 98.4736842105, 98.5789473684, 98.6842105263, 98.7894736842, 98.8947368421, 99.0]
+      save_as: pdl_train_anchor_positions
+  - block: classwise_percentile_anchor_candidates
+    params:
+      scores: pdl_validation_posteriors
+      stable_sample_indices: pdl_validation_snapshot_indices
+      percentiles: [97.0, 97.1052631579, 97.2105263158, 97.3157894737, 97.4210526316, 97.5263157895, 97.6315789474, 97.7368421053, 97.8421052632, 97.9473684211, 98.0526315789, 98.1578947368, 98.2631578947, 98.3684210526, 98.4736842105, 98.5789473684, 98.6842105263, 98.7894736842, 98.8947368421, 99.0]
+      save_as: pdl_validation_anchor_positions
   - block: pdl_fit_basis_matrices
     params:
       coefficients: pdl_coefficients
@@ -165,14 +172,14 @@ steps:
           - {block: backward}
           - block: optimizer_step
             params: {optimizer: correction_optimizer}
-      - block: evaluate_pdl_accuracy
+      - block: evaluate_transition_accuracy
         params: {model: model, loader: validation_loader, transition: pdl_validation_transition, device: device, save_as: correction_validation_accuracy}
       - block: track_best_model
         params: {model: model, metric: correction_validation_accuracy, metric_name: correction_validation_accuracy, save_as: best_correction_state}
   - block: restore_best_model
     params: {model: model, state: best_correction_state}
-  - block: reset_pdl_revision
-    params: {model: model}
+  - block: zero_module_parameters
+    params: {module: model, submodule: T_revision}
   - block: create_optimizer
     params:
       optimizer: adam
@@ -221,7 +228,7 @@ steps:
           - {block: backward}
           - block: optimizer_step
             params: {optimizer: revision_optimizer}
-      - block: evaluate_pdl_accuracy
+      - block: evaluate_transition_accuracy
         params: {model: model, loader: validation_loader, transition: pdl_revision_validation_transition, device: device, revision: true, save_as: revision_validation_accuracy}
       - block: track_best_model
         params: {model: model, metric: revision_validation_accuracy, metric_name: revision_validation_accuracy, save_as: best_revision_state}

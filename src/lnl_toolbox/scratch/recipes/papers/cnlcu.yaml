@@ -22,15 +22,17 @@ steps:
   - {block: create_optimizer, params: {optimizer: adam, model: model_b, lr: 0.001, weight_decay: 0.0, save_as: optimizer_b}}
   - {block: create_scheduler, params: {scheduler: linear_decay, optimizer: optimizer_a, start_epoch: 80, end_epoch: 200, initial_lr: 0.001, final_lr: 0.0, save_as: scheduler_a}}
   - {block: create_scheduler, params: {scheduler: linear_decay, optimizer: optimizer_b, start_epoch: 80, end_epoch: 200, initial_lr: 0.001, final_lr: 0.0, save_as: scheduler_b}}
-  - {block: create_cnlcu_history, params: {prepared_data: prepared_data, window_size: 5, peer: a, save_as: history_a}}
-  - {block: create_cnlcu_history, params: {prepared_data: prepared_data, window_size: 5, peer: b, save_as: history_b}}
+  - {block: create_indexed_window, params: {prepared_data: prepared_data, window_size: 5, width: 1, epoch_indexed: true, save_as: history_a}}
+  - {block: create_indexed_window, params: {prepared_data: prepared_data, window_size: 5, width: 1, epoch_indexed: true, save_as: history_b}}
+  - {block: create_indexed_state, params: {prepared_data: prepared_data, width: 1, save_as: selected_count_a}}
+  - {block: create_indexed_state, params: {prepared_data: prepared_data, width: 1, save_as: selected_count_b}}
   - block: epoch_loop
     params: {epochs: 200}
     steps:
       - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}}
       - {block: linear_rate_schedule, params: {start: 1.0, end: 0.8, warmup_epochs: 10, save_as: remember_rate}}
-      - {block: prepare_cnlcu_history_epoch, params: {history: history_a}}
-      - {block: prepare_cnlcu_history_epoch, params: {history: history_b}}
+      - {block: advance_indexed_window_epoch, params: {state: history_a}}
+      - {block: advance_indexed_window_epoch, params: {state: history_b}}
       - block: batch_loop
         params: {loader: train_loader}
         steps:
@@ -42,18 +44,28 @@ steps:
           - {block: forward, params: {model: model_b, save_as: logits_b}}
           - {block: per_sample_ce, params: {logits: logits_a, save_as: loss_a_per_sample}}
           - {block: per_sample_ce, params: {logits: logits_b, save_as: loss_b_per_sample}}
-          - {block: append_cnlcu_history, params: {history: history_a, losses: loss_a_per_sample, rows_as: rows_a, observed_as: observed_a, selected_count_as: counts_a}}
-          - {block: append_cnlcu_history, params: {history: history_b, losses: loss_b_per_sample, rows_as: rows_b, observed_as: observed_b, selected_count_as: counts_b}}
-          - {block: cnlcu_soft_robust_mean, params: {history: rows_a, observed: observed_a, save_as: robust_a, count_as: length_a}}
-          - {block: cnlcu_soft_robust_mean, params: {history: rows_b, observed: observed_b, save_as: robust_b, count_as: length_b}}
+          - {block: append_indexed_window, params: {state: history_a, values: loss_a_per_sample, indices: indices}}
+          - {block: append_indexed_window, params: {state: history_b, values: loss_b_per_sample, indices: indices}}
+          - {block: read_indexed_window, params: {state: history_a, indices: indices, values_as: values_a, observed_as: observed_a, counts_as: length_a}}
+          - {block: read_indexed_window, params: {state: history_b, indices: indices, values_as: values_b, observed_as: observed_b, counts_as: length_b}}
+          - {block: robust_window_mean, params: {values: values_a, observed: observed_a, save_as: robust_a, counts_as: length_a}}
+          - {block: robust_window_mean, params: {values: values_b, observed: observed_b, save_as: robust_b, counts_as: length_b}}
+          - {block: indexed_read, params: {state: selected_count_a, indices: indices, save_as: counts_a}}
+          - {block: indexed_read, params: {state: selected_count_b, indices: indices, save_as: counts_b}}
           - {block: cnlcu_soft_score, params: {robust_mean: robust_a, history_length: length_a, selected_count: counts_a, sigma_squared: 0.01, save_as: score_a}}
           - {block: cnlcu_soft_score, params: {robust_mean: robust_b, history_length: length_b, selected_count: counts_b, sigma_squared: 0.01, save_as: score_b}}
           - {block: select_lowest_scores, params: {scores: score_a, keep_fraction: remember_rate, stable_sample_indices: indices, rounding: floor, minimum_count: 1, save_as: selected_a}}
           - {block: select_lowest_scores, params: {scores: score_b, keep_fraction: remember_rate, stable_sample_indices: indices, rounding: floor, minimum_count: 1, save_as: selected_b}}
           - {block: indices_to_mask, params: {indices: selected_a, reference: score_a, save_as: selected_mask_a}}
           - {block: indices_to_mask, params: {indices: selected_b, reference: score_b, save_as: selected_mask_b}}
-          - {block: update_cnlcu_selected_count, params: {history: history_a, rows: rows_a, selected_mask: selected_mask_a}}
-          - {block: update_cnlcu_selected_count, params: {history: history_b, rows: rows_b, selected_mask: selected_mask_b}}
+          - {block: mask_to_indices, params: {mask: selected_mask_a, save_as: selected_rows_a}}
+          - {block: mask_to_indices, params: {mask: selected_mask_b, save_as: selected_rows_b}}
+          - {block: ones_like, params: {input: selected_rows_a, save_as: selected_increments_a}}
+          - {block: ones_like, params: {input: selected_rows_b, save_as: selected_increments_b}}
+          - {block: indexed_increment, params: {state: selected_count_a, indices: selected_rows_a, values: selected_increments_a}}
+          - {block: indexed_increment, params: {state: selected_count_b, indices: selected_rows_b, values: selected_increments_b}}
+          - {block: indexed_read, params: {state: selected_count_a, indices: indices, save_as: counts_a}}
+          - {block: indexed_read, params: {state: selected_count_b, indices: indices, save_as: counts_b}}
           - {block: select_by_indices, params: {values: loss_a_per_sample, indices: selected_b, save_as: selected_loss_a}}
           - {block: mean_loss, params: {input: selected_loss_a, save_as: loss_a}}
           - {block: select_by_indices, params: {values: loss_b_per_sample, indices: selected_a, save_as: selected_loss_b}}

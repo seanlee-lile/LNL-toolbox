@@ -58,9 +58,16 @@ steps:
           - block: get_batch
           - block: zero_grad
           - block: forward
-          - block: gce_loss
-            params:
-              q: 0.7
+          - block: softmax
+            params: {logits: logits, save_as: probabilities}
+          - block: gather_by_label
+            params: {values: probabilities, labels: labels, save_as: target_probability}
+          - block: clamp_min
+            params: {input: target_probability, minimum: 1.0e-12, save_as: clamped_target_probability}
+          - block: elementwise_power
+            params: {input: clamped_target_probability, q: 0.7, save_as: powered_target_probability}
+          - block: affine_transform
+            params: {input: powered_target_probability, scale: -1.4285714285714286, bias: 1.4285714285714286, save_as: loss_per_sample}
           - block: select_lowest_scores
             params:
               scores: loss_per_sample

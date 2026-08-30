@@ -32,32 +32,10 @@ def select_all(ctx: ScratchContext, input: str = "loss_per_sample", save_as: str
     ctx[save_as] = torch.arange(values.numel(), device=values.device)
 
 
-@block(
-    id="linear_rate_schedule",
-    name="Linear Rate Schedule",
-    category="Schedule",
-    description="Interpolate a scalar rate between explicit endpoints during warm-up.",
-    params={
-        "epoch": {"type": "slot", "default": "epoch"},
-        "start": {"type": "float", "default": 1.0},
-        "end": {"type": "float", "default": 0.5},
-        "warmup_epochs": {"type": "int", "default": 10, "min": 0},
-        "save_as": {"type": "slot", "default": "keep_rate"},
-    },
-    requires=("epoch",),
-    provides=("save_as",),
-    placement=("epoch",), stage="train", ui_group="⑥ 样本选择",
-    formula="r(t)=start+clip(t/T,0,1)(end-start)",
-    formula_ref="shared linear keep-rate schedule",
-)
-def linear_rate_schedule(ctx: ScratchContext, epoch: str = "epoch", start: float = 1.0,
-                         end: float = 0.5, warmup_epochs: int = 10,
-                         save_as: str = "keep_rate") -> None:
-    if int(warmup_epochs) <= 0:
-        progress = 1.0
-    else:
-        progress = min(max(float(ctx[epoch]), 0.0) / int(warmup_epochs), 1.0)
-    ctx[save_as] = float(start) + progress * (float(end) - float(start))
+# Kept as a Python import alias for callers that historically imported this
+# helper from ``selection``; the registered block lives in ``schedule`` where
+# it belongs semantically.
+from .schedule import linear_rate_schedule
 
 
 @block(
@@ -176,6 +154,18 @@ def invert_mask(ctx: ScratchContext, mask: str = "selected_mask", save_as: str =
 
 
 @block(
+    id="agreement_mask",
+    name="Agreement Mask",
+    category="Sample Selection",
+    description="Select rows whose hard label agrees with the argmax of a soft history.",
+    params={"labels": {"type": "slot", "default": "labels"}, "history": {"type": "slot", "default": "history_values"}, "save_as": {"type": "slot", "default": "selected_mask"}},
+    requires=("labels", "history"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑦ 样本选择",
+)
+def agreement_mask(ctx: ScratchContext, labels: str = "labels", history: str = "history_values", save_as: str = "selected_mask") -> None:
+    ctx[save_as] = ctx[history].detach().argmax(dim=-1).eq(ctx[labels].long())
+
+
+@block(
     id="threshold_mask",
     name="Threshold Mask",
     category="Sample Selection",
@@ -196,6 +186,111 @@ def threshold_mask(ctx: ScratchContext, values: str = "scores", threshold: float
     else:
         raise ValueError(f"unsupported threshold comparison: {comparison}")
     ctx[save_as] = mask
+
+
+@block(
+    id="quantile",
+    name="Quantile",
+    category="Sample Selection",
+    description="Compute a tensor quantile without embedding a threshold or selection policy.",
+    params={"values": {"type": "slot", "default": "values"},
+            "q": {"type": "float", "default": 0.5, "min": 0.0, "max": 1.0},
+            "dim": {"type": "int", "default": -1},
+            "save_as": {"type": "slot", "default": "quantile_value"}},
+    requires=("values",), provides=("save_as",), placement=("batch", "epoch"), stage="train", ui_group="⑥ 样本选择",
+)
+def quantile(ctx: ScratchContext, values: str = "values", q: float = 0.5, dim: int = -1,
+             save_as: str = "quantile_value") -> None:
+    torch = _torch()
+    if not 0.0 <= float(q) <= 1.0:
+        raise ValueError("quantile q must be in [0, 1]")
+    ctx[save_as] = torch.quantile(ctx[values], float(q), dim=None if int(dim) == -1 else int(dim))
+
+
+@block(
+    id="mask_logits",
+    name="Mask Logits",
+    category="Sample Selection",
+    description="Set logits for masked classes to negative infinity without changing the mask.",
+    params={"logits": {"type": "slot", "default": "logits"},
+            "mask": {"type": "slot", "default": "mask"},
+            "masked_value": {"type": "float", "default": float("-inf")},
+            "save_as": {"type": "slot", "default": "masked_logits"}},
+    requires=("logits", "mask"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑥ 样本选择",
+)
+def mask_logits(ctx: ScratchContext, logits: str = "logits", mask: str = "mask",
+                masked_value: float = float("-inf"), save_as: str = "masked_logits") -> None:
+    values = ctx[logits]
+    selector = ctx[mask].bool()
+    if selector.shape != values.shape:
+        raise ValueError("mask_logits mask and logits must have identical shapes")
+    ctx[save_as] = values.masked_fill(selector, float(masked_value))
+
+
+@block(
+    id="classwise_percentile_anchor_candidates",
+    name="Classwise Percentile Anchor Candidates",
+    category="Sample Selection",
+    description="Choose one highest-scoring stable sample per class and percentile level.",
+    params={"scores": {"type": "slot", "default": "posterior"},
+            "percentiles": {"type": "value", "default": [0.97, 0.98, 0.99]},
+            "stable_sample_indices": {"type": "slot", "default": "indices"},
+            "save_as": {"type": "slot", "default": "anchor_indices"}},
+    requires=("scores",), provides=("save_as",), placement=("top",), stage="setup", ui_group="⑥ 样本选择",
+)
+def classwise_percentile_anchor_candidates(ctx: ScratchContext, scores: str = "posterior",
+                                           percentiles: Any = (0.97, 0.98, 0.99),
+                                           stable_sample_indices: str = "indices",
+                                           save_as: str = "anchor_indices") -> None:
+    torch = _torch(); source = ctx[scores]
+    # Posterior snapshots are a public statistics output.  Accepting one here
+    # keeps selection composable without making callers unpack its fields by
+    # hand; plain score tensors remain the canonical operation input.
+    if hasattr(source, "noisy_probabilities"):
+        values = source.noisy_probabilities
+        if stable_sample_indices not in ctx and hasattr(source, "global_indices"):
+            stable = source.global_indices
+        else:
+            stable = None
+    elif isinstance(source, dict) and "noisy_probabilities" in source:
+        values = source["noisy_probabilities"]
+        if stable_sample_indices not in ctx:
+            stable = source.get("global_indices", source.get("indices"))
+        else:
+            stable = None
+    else:
+        values = source
+        stable = None
+    values = torch.as_tensor(values)
+    if values.ndim != 2 or values.shape[0] == 0:
+        raise ValueError("classwise_percentile_anchor_candidates expects a non-empty [N,C] matrix")
+    levels = [float(value) for value in (percentiles or (0.97, 0.98, 0.99))]
+    if any(value > 1.0 for value in levels):
+        levels = [value / 100.0 for value in levels]
+    if any(not 0.0 <= value <= 1.0 for value in levels):
+        raise ValueError("percentiles must lie in [0,1] or [0,100]")
+    if stable is not None:
+        stable = torch.as_tensor(stable, device=values.device).reshape(-1)
+    elif stable_sample_indices in ctx:
+        stable = torch.as_tensor(ctx[stable_sample_indices], device=values.device).reshape(-1)
+        if stable.numel() != values.shape[0] or stable.dtype not in (torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8):
+            raise ValueError("stable_sample_indices must be integer values aligned with scores")
+    else:
+        stable = torch.arange(values.shape[0], device=values.device)
+    import numpy as np
+    result = torch.empty((values.shape[1], len(levels)), dtype=stable.dtype, device=values.device)
+    for cls in range(values.shape[1]):
+        column = values[:, cls].detach().cpu().numpy()
+        ids = stable.detach().cpu().numpy()
+        for pos, level in enumerate(levels):
+            threshold = float(np.quantile(column, level, method="higher"))
+            eligible = np.flatnonzero(column >= threshold)
+            if eligible.size == 0:
+                eligible = np.arange(column.size)
+            # Highest score wins; stable sample identity resolves ties.
+            best = sorted(eligible.tolist(), key=lambda row: (-float(column[row]), int(ids[row])))[0]
+            result[cls, pos] = stable[best]
+    ctx[save_as] = result
 
 
 @block(

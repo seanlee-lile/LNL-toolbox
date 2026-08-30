@@ -40,8 +40,8 @@ steps:
           - {block: dld_sample_forward_state, params: {y0: y0, direction: direction, timestep: timestep, epsilon: epsilon, timesteps: 1000, save_as: yd}}
           - {block: zero_grad, params: {optimizer: direction_optimizer}}
           - {block: zero_grad, params: {optimizer: noise_optimizer}}
-          - {block: dld_predict_quantity, params: {predictor: direction_predictor, state: yd, endpoint: yn, features: features, timestep: timestep, save_as: predicted_direction}}
-          - {block: dld_predict_quantity, params: {predictor: noise_predictor, state: yd, endpoint: yn, features: features, timestep: timestep, save_as: predicted_noise}}
+          - {block: module_forward, params: {module: direction_predictor, inputs: [yd, yn, features, timestep], save_as: predicted_direction}}
+          - {block: module_forward, params: {module: noise_predictor, inputs: [yd, yn, features, timestep], save_as: predicted_noise}}
           - {block: mean_squared_error, params: {predicted: predicted_direction, target: direction, reduction: scalar, save_as: direction_loss}}
           - {block: mean_squared_error, params: {predicted: predicted_noise, target: epsilon, reduction: scalar, save_as: noise_loss}}
           - {block: weighted_sum, params: {terms: [direction_loss, noise_loss], weights: [1.0, 1.0], save_as: loss}}

@@ -43,6 +43,19 @@ def zeros_like(ctx: ScratchContext, input: str = "values", requires_grad: bool =
 
 
 @block(
+    id="ones_like",
+    name="Ones Like",
+    category="Tensor Operation",
+    description="Create a floating-point tensor of ones matching an input tensor's shape.",
+    params={"input": {"type": "slot", "default": "values"}, "save_as": {"type": "slot", "default": "ones"}},
+    requires=("input",), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式",
+)
+def ones_like(ctx: ScratchContext, input: str = "values", save_as: str = "ones") -> None:
+    import torch
+    ctx[save_as] = torch.ones_like(ctx[input], dtype=torch.float32)
+
+
+@block(
     id="elementwise_multiply",
     name="Elementwise Multiply",
     category="Tensor Operation",
@@ -298,6 +311,46 @@ def apply_transition(ctx: ScratchContext, probabilities: str = "probabilities", 
 
 
 @block(
+    id="row_normalize",
+    name="Row Normalize",
+    category="Tensor Operation",
+    description="Normalize the last dimension of a tensor with an explicit positive floor.",
+    params={"input": {"type": "slot", "default": "values"},
+            "minimum": {"type": "float", "default": 1e-12, "min": 0.0},
+            "save_as": {"type": "slot", "default": "normalized"}},
+    requires=("input",), provides=("save_as",), placement=("batch", "top"), stage="setup", ui_group="⑤ 损失公式",
+)
+def row_normalize(ctx: ScratchContext, input: str = "values", minimum: float = 1e-12,
+                  save_as: str = "normalized") -> None:
+    values = ctx[input]
+    denominator = values.sum(dim=-1, keepdim=True)
+    floor = float(minimum)
+    if floor < 0:
+        raise ValueError("row_normalize minimum must be non-negative")
+    ctx[save_as] = values / denominator.clamp_min(floor)
+
+
+@block(
+    id="positive_logdet",
+    name="Positive Log Determinant",
+    category="Tensor Operation",
+    description="Return log-determinants only for matrices with a strictly positive determinant.",
+    params={"matrix": {"type": "slot", "default": "matrix"},
+            "save_as": {"type": "slot", "default": "logdet"}},
+    requires=("matrix",), provides=("save_as",), placement=("top", "batch"), stage="setup", ui_group="⑤ 损失公式",
+)
+def positive_logdet(ctx: ScratchContext, matrix: str = "matrix", save_as: str = "logdet") -> None:
+    torch = __import__("torch")
+    values = ctx[matrix]
+    if values.ndim < 2 or values.shape[-1] != values.shape[-2]:
+        raise ValueError("positive_logdet expects square matrices")
+    sign, logabs = torch.linalg.slogdet(values)
+    if bool((sign <= 0).any()) or not bool(torch.isfinite(logabs).all()):
+        raise ValueError("positive_logdet requires finite matrices with positive determinant")
+    ctx[save_as] = logabs
+
+
+@block(
     id="compose_transition",
     name="Compose Transition Matrices",
     category="Transition",
@@ -343,6 +396,12 @@ def materialize_transition(ctx: ScratchContext, artifact: str = "transition", in
         result = source.matrix(**matrix_kwargs)
         if target_device is not None:
             result = result.to(device=target_device)
+    elif callable(source):
+        # A transition revision may be exposed as a zero-argument callable
+        # rather than a module with ``matrix``.  Calling it is the only
+        # materialization step; fitting remains the upstream operation.
+        result = source()
+        result = torch.as_tensor(result, **kwargs)
     else:
         result = torch.as_tensor(source, **kwargs)
         if result.ndim not in (2, 3):

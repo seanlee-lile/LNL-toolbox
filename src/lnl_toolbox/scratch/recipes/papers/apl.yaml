@@ -50,8 +50,8 @@ steps:
             params: {save_as: active_loss_per_sample}
           - block: rce_loss
             params: {log_zero: -9.210340371976184, save_as: passive_loss_per_sample}
-          - block: active_passive_composition
-            params: {alpha: 1.0, beta: 1.0, save_as: loss_per_sample}
+          - block: weighted_sum
+            params: {terms: [active_loss_per_sample, passive_loss_per_sample], weights: [1.0, 1.0], save_as: loss_per_sample}
           - {block: mean_loss}
           - {block: backward}
           - block: clip_grad_norm

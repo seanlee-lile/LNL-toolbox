@@ -110,64 +110,6 @@ def create_parameter_group_optimizer(ctx: ScratchContext, optimizer_spec: Any | 
     ctx[save_as] = optimizer_cls(parameter_groups, **spec)
 
 
-class _ScratchModelEMA:
-    """Small model-agnostic EMA container owned by Scratch."""
-
-    def __init__(self, model: Any, momentum: float, update_buffers: bool = False) -> None:
-        import copy
-        self.model = copy.deepcopy(model)
-        self.momentum = float(momentum)
-        self.update_buffers = bool(update_buffers)
-        self.model.eval()
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        return self.model(*args, **kwargs)
-
-    def eval(self):
-        self.model.eval()
-        return self
-
-    def train(self, mode: bool = True):
-        self.model.train(mode)
-        return self
-
-    def update(self, model: Any) -> None:
-        torch = _torch()
-        with torch.no_grad():
-            for target, source in zip(self.model.parameters(), model.parameters()):
-                target.mul_(self.momentum).add_(source.detach(), alpha=1.0 - self.momentum)
-            if self.update_buffers:
-                for target, source in zip(self.model.buffers(), model.buffers()):
-                    target.copy_(source)
-
-
-@block(
-    id="create_model_ema",
-    name="Create Model EMA",
-    category="State",
-    description="Create an independent exponential moving-average copy for one model slot.",
-    params={"model": {"type": "slot", "default": "model"}, "momentum": {"type": "float", "default": 0.999, "min": 0.0, "max": 1.0}, "update_buffers": {"type": "bool", "default": False}, "save_as": {"type": "slot", "default": "ema_model"}},
-    requires=("model",), provides=("save_as",), placement=("top",), stage="setup", ui_group="④ 状态更新",
-)
-def create_model_ema(ctx: ScratchContext, model: str = "model", momentum: float = 0.999, update_buffers: bool = False, save_as: str = "ema_model") -> None:
-    ctx[save_as] = _ScratchModelEMA(ctx[model], float(momentum), bool(update_buffers))
-
-
-@block(
-    id="update_model_ema",
-    name="Update Model EMA",
-    category="State",
-    description="Update one model EMA from its corresponding live model; parameter and buffer mutation is explicit.",
-    params={"model": {"type": "slot", "default": "model"}, "ema": {"type": "slot", "default": "ema_model"}},
-    requires=("model", "ema"), provides=(), placement=("batch", "epoch"), stage="train", ui_group="④ 状态更新",
-)
-def update_model_ema(ctx: ScratchContext, model: str = "model", ema: str = "ema_model") -> None:
-    value = ctx[ema]
-    if not hasattr(value, "update") or not hasattr(value, "model"):
-        raise TypeError("update_model_ema requires a Scratch model EMA container")
-    value.update(ctx[model])
-
-
 @block(
     id="set_optimizer_learning_rate",
     name="Set Optimizer Learning Rate",
@@ -238,48 +180,6 @@ def scaled_scheduler_step(ctx: ScratchContext, scheduler: str = "scheduler", sca
     if scale_value not in ctx:
         raise ValueError(f"scaled_scheduler_step requires scale slot `{scale_value}`")
     ctx[scheduler].step(float(ctx[scale_value]))
-
-
-@block(
-    id="create_joint_optimizer",
-    name="Create Joint Optimizer",
-    category="Optimization",
-    description="Create one optimizer over two peer model parameter sets.",
-    params={
-        "optimizer": {"type": "enum", "options": ["adam", "sgd"], "default": "adam"},
-        "model_a": {"type": "slot", "default": "model_a"},
-        "model_b": {"type": "slot", "default": "model_b"},
-        "lr": {"type": "float", "default": 0.001, "min": 0.0},
-        "weight_decay": {"type": "float", "default": 0.0, "min": 0.0},
-        "beta1": {"type": "float", "default": 0.9, "min": 0.0, "max": 1.0},
-        "beta2": {"type": "float", "default": 0.999, "min": 0.0, "max": 1.0},
-        "save_as": {"type": "slot", "default": "optimizer"},
-    },
-    requires=("model_a", "model_b"),
-    provides=("save_as",),
-    placement=("top",), stage="setup", ui_group="② 初始化",
-)
-def create_joint_optimizer(
-    ctx: ScratchContext,
-    optimizer: str = "adam",
-    model_a: str = "model_a",
-    model_b: str = "model_b",
-    lr: float = 0.001,
-    weight_decay: float = 0.0,
-    beta1: float = 0.9,
-    beta2: float = 0.999,
-    save_as: str = "optimizer",
-) -> None:
-    torch = _torch()
-    parameters = list(ctx[model_a].parameters()) + list(ctx[model_b].parameters())
-    name = str(optimizer).strip().lower()
-    if name == "adam":
-        value = torch.optim.Adam(parameters, lr=float(lr), betas=(float(beta1), float(beta2)), weight_decay=float(weight_decay))
-    elif name == "sgd":
-        value = torch.optim.SGD(parameters, lr=float(lr), weight_decay=float(weight_decay))
-    else:
-        raise ValueError(f"unknown Scratch joint optimizer `{optimizer}`")
-    ctx[save_as] = value
 
 
 class _LinearDecayBetaScheduler:

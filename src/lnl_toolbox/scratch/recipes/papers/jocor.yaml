@@ -22,15 +22,11 @@ steps:
     params: {model: cifar_six_conv, num_classes: 10, device: device, save_as: model_a}
   - block: create_model
     params: {model: cifar_six_conv, num_classes: 10, device: device, save_as: model_b}
-  - block: create_joint_optimizer
+  - block: create_parameter_group_optimizer
     params:
-      optimizer: adam
-      model_a: model_a
-      model_b: model_b
-      lr: 0.001
-      beta1: 0.9
-      beta2: 0.999
-      weight_decay: 0.0
+      optimizer_spec: {name: adam, betas: [0.9, 0.999], weight_decay: 0.0}
+      groups: [{source: model_a, lr: 0.001}, {source: model_b, lr: 0.001}]
+      save_as: optimizer
   - block: create_scheduler
     params:
       scheduler: linear_decay
@@ -54,7 +50,8 @@ steps:
           - {block: get_batch}
           - {block: move_batch_to_device}
           - {block: zero_grad}
-          - {block: forward_two_models}
+          - {block: forward, params: {model: model_a, save_as: logits_a}}
+          - {block: forward, params: {model: model_b, save_as: logits_b}}
           - block: per_sample_ce
             params: {logits: logits_a, labels: labels, save_as: loss_a_per_sample}
           - block: per_sample_ce

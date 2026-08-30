@@ -164,7 +164,7 @@ class ScratchOperationMigrationTest(unittest.TestCase):
         run("neighbor_edge_weights", ctx, features="features", neighbor_indices="neighbors", save_as="adjacency")
         run("normalize_graph", ctx, adjacency="adjacency", save_as="graph")
         run("propagate_labels", ctx, graph="graph", labels="labels", num_classes=2, steps=2, save_as="diluted")
-        run("create_indexed_history", ctx, size=3, width=2, save_as="history")
+        run("create_indexed_state", ctx, size=3, width=2, save_as="history")
         run("indexed_ema", ctx, state="history", indices="indices", values="diluted", save_as="history_values")
         # The core public graph operations are executable without any lend_* symbol.
         self.assertEqual(tuple(ctx["diluted"].shape), (3, 2))

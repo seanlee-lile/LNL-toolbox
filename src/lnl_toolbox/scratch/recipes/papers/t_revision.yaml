@@ -88,16 +88,16 @@ steps:
           - {block: backward}
           - block: optimizer_step
             params: {optimizer: classifier_optimizer}
-      - block: evaluate_t_revision_noisy
-        params: {model: model, transition: transition, loader: validation_loader, device: device, save_as: classifier_validation_loss}
+      - block: evaluate_transition_accuracy
+        params: {model: model, transition: transition, loader: validation_loader, device: device, metric: loss, save_as: classifier_validation_loss}
       - block: track_best_model
         params: {model: model, metric: validation_accuracy, metric_name: revised_noisy_validation_accuracy, save_as: best_classifier_state}
       - block: scheduler_step
         params: {scheduler: classifier_scheduler}
   - block: restore_best_model
     params: {model: model, state: best_classifier_state}
-  - block: create_t_revision_revision
-    params: {transition: transition, device: device, save_as: revision}
+  - block: create_additive_transition_revision
+    params: {transition: transition, save_as: revision}
   - block: create_parameter_group_optimizer
     params:
       optimizer_spec: {name: adam, weight_decay: 0.0001}
@@ -119,8 +119,8 @@ steps:
             params: {model: model, input: images, save_as: logits}
           - block: softmax
             params: {logits: logits, save_as: probabilities}
-          - block: t_revision_revised_transition
-            params: {revision: revision, save_as: current_transition}
+          - block: materialize_transition
+            params: {artifact: revision, save_as: current_transition}
           - block: apply_transition
             params: {probabilities: probabilities, transition: current_transition, save_as: noisy_probabilities}
           - block: t_revision_importance_ratio
@@ -134,8 +134,8 @@ steps:
           - {block: backward}
           - block: optimizer_step
             params: {optimizer: revision_optimizer}
-      - block: evaluate_t_revision_noisy
-        params: {model: model, transition: revision, loader: validation_loader, device: device, save_as: revision_validation_loss}
+      - block: evaluate_transition_accuracy
+        params: {model: model, transition: revision, loader: validation_loader, device: device, metric: loss, save_as: revision_validation_loss}
       - block: track_best_state
         params: {model: model, auxiliary: revision, metric: validation_accuracy, metric_name: validation_accuracy, mode: max, save_as: best_t_revision_state}
   - block: restore_best_state

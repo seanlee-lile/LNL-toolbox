@@ -40,32 +40,25 @@ def forward(
 
 
 @block(
-    id="forward_two_models",
-    name="Forward Two Models",
+    id="module_forward",
+    name="Module Forward",
     category="Forward",
-    description="Run two peer models on the same batch and save both logits tensors.",
-    params={
-        "model_a": {"type": "slot", "default": "model_a"},
-        "model_b": {"type": "slot", "default": "model_b"},
-        "input": {"type": "slot", "default": "images"},
-        "save_as_a": {"type": "slot", "default": "logits_a"},
-        "save_as_b": {"type": "slot", "default": "logits_b"},
-    },
-    requires=("model_a", "model_b", "input"),
-    provides=("save_as_a", "save_as_b"),
-    placement=("batch",), stage="train", ui_group="④ 前向与概率",
+    description="Run one module with an explicit ordered list of input slots.",
+    params={"module": {"type": "slot", "default": "module"},
+            "inputs": {"type": "value", "default": []},
+            "save_as": {"type": "slot", "default": "output"}},
+    requires=("module",), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="④ 前向与概率",
 )
-def forward_two_models(
-    ctx: ScratchContext,
-    model_a: str = "model_a",
-    model_b: str = "model_b",
-    input: str = "images",
-    save_as_a: str = "logits_a",
-    save_as_b: str = "logits_b",
-) -> None:
-    values = ctx[input]
-    ctx[save_as_a] = ctx[model_a](values)
-    ctx[save_as_b] = ctx[model_b](values)
+def module_forward(ctx: ScratchContext, module: str = "module", inputs: Any = (), save_as: str = "output") -> None:
+    """Call a module without embedding paper-specific predictor semantics."""
+    if isinstance(inputs, str):
+        inputs = [inputs]
+    if inputs is None:
+        inputs = []
+    if not isinstance(inputs, (list, tuple)):
+        raise TypeError("module_forward inputs must be a sequence of slot names")
+    arguments = [ctx[item] if isinstance(item, str) and item in ctx else item for item in inputs]
+    ctx[save_as] = ctx[module](*arguments)
 
 
 @block(

@@ -46,8 +46,10 @@ steps:
           - {block: move_batch_to_device}
           - {block: zero_grad}
           - {block: forward}
-          - block: forward_correction
-            params: {transition: transition, save_as: loss_per_sample}
+          - {block: softmax, params: {logits: logits, save_as: clean_probabilities}}
+          - {block: apply_transition, params: {probabilities: clean_probabilities, transition: transition, save_as: noisy_probabilities}}
+          - {block: gather_by_label, params: {values: noisy_probabilities, labels: labels, save_as: target_probability}}
+          - {block: negative_log, params: {input: target_probability, save_as: loss_per_sample}}
           - {block: mean_loss}
           - {block: backward}
           - {block: optimizer_step}

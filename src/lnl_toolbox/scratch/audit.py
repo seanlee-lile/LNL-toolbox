@@ -50,9 +50,6 @@ def _semantics(definition) -> dict[str, str]:
     if definition.execute.__module__.startswith("lnl_toolbox.scratch.blocks.paper_specific"):
         classification = "PAPER_SPECIFIC"
         evidence = "Scratch-native paper lifecycle/artifact/estimator primitive; body evidence is recorded for blind-build review."
-    elif any(token in definition.id for token in ("composition", "blend", "corrected", "objective")):
-        classification = "COMPOSABLE"
-        evidence = "Explicit composition operation with no legacy runtime dependency."
     else:
         classification = "COMMON"
         evidence = "Scratch-native reusable operation."

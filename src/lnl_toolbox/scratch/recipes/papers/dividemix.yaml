@@ -22,8 +22,8 @@ steps:
   - {block: create_optimizer, params: {optimizer: sgd, model: model_b, lr: 0.02, momentum: 0.9, weight_decay: 0.0005, save_as: optimizer_b}}
   - {block: create_scheduler, params: {scheduler: multistep, optimizer: optimizer_a, milestones: [150], gamma: 0.1, save_as: scheduler_a}}
   - {block: create_scheduler, params: {scheduler: multistep, optimizer: optimizer_b, milestones: [150], gamma: 0.1, save_as: scheduler_b}}
-  - {block: create_indexed_history, params: {prepared_data: prepared_data, width: 1, save_as: loss_history_a}}
-  - {block: create_indexed_history, params: {prepared_data: prepared_data, width: 1, save_as: loss_history_b}}
+  - {block: create_indexed_state, params: {prepared_data: prepared_data, width: 1, save_as: loss_history_a}}
+  - {block: create_indexed_state, params: {prepared_data: prepared_data, width: 1, save_as: loss_history_b}}
   - block: epoch_loop
     params: {epochs: 300}
     steps:
@@ -35,11 +35,12 @@ steps:
           - {block: move_batch_to_device}
           - {block: zero_grad, params: {optimizer: optimizer_a}}
           - {block: zero_grad, params: {optimizer: optimizer_b}}
-          - {block: forward_two_models, params: {model_a: model_a, model_b: model_b, save_as_a: logits_a, save_as_b: logits_b}}
+          - {block: forward, params: {model: model_a, save_as: logits_a}}
+          - {block: forward, params: {model: model_b, save_as: logits_b}}
           - {block: per_sample_ce, params: {logits: logits_a, save_as: loss_per_sample}}
           - {block: per_sample_ce, params: {logits: logits_b, save_as: loss_per_sample_b}}
-          - {block: indexed_history, params: {state: loss_history_a, indices: indices, values: loss_per_sample, save_as: history_losses_a}}
-          - {block: indexed_history, params: {state: loss_history_b, indices: indices, values: loss_per_sample_b, save_as: history_losses_b}}
+          - {block: indexed_write, params: {state: loss_history_a, indices: indices, values: loss_per_sample, save_as: loss_history_a}}
+          - {block: indexed_write, params: {state: loss_history_b, indices: indices, values: loss_per_sample_b, save_as: loss_history_b}}
           - {block: fit_gmm, params: {losses: loss_per_sample, save_as: clean_probability_a}}
           - {block: fit_gmm, params: {losses: loss_per_sample_b, save_as: clean_probability_b}}
           - {block: detach, params: {input: clean_probability_b, save_as: clean_probability}}

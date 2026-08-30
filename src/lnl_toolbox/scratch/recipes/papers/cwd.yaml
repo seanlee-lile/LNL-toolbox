@@ -33,8 +33,8 @@ steps:
         params: {model: model, loader: train_eval_loader, device: device, dataset: cifar10_airplane_automobile, split: train_fold_0, save_as: cwd_snapshot, features_as: cwd_features, targets_as: cwd_snapshot_targets, indices_as: cwd_snapshot_indices}
       - block: cwd_observed_statistics
         params: {snapshot: cwd_snapshot, transition: transition, save_as: cwd_observed}
-      - block: cwd_clean_prior
-        params: {observed_prior: observed_prior, transition: transition, save_as: clean_prior}
+      - block: recover_clean_prior
+        params: {noisy_prior: observed_prior, transition: transition, save_as: clean_prior}
       - block: cwd_virtual_systems
         params: {clean_prior: clean_prior, transition: transition, save_as: cwd_systems}
       - block: cwd_coefficient_pseudoinverse
@@ -53,11 +53,11 @@ steps:
             params: {model: model, features: features, labels: labels, centroids: cwd_centroids, clean_prior: clean_prior, pseudoinverses: cwd_pseudoinverses, save_as: loss}
           - {block: backward}
           - {block: optimizer_step}
-      - block: evaluate_cwd_binary
+      - block: evaluate_binary_accuracy
         params: {model: model, loader: test_loader, save_as: test_accuracy}
       - block: scheduler_step
         params: {scheduler: scheduler}
-  - block: evaluate_cwd_binary
+  - block: evaluate_binary_accuracy
     params: {model: model, loader: test_loader, save_as: final_test_accuracy, final: true}
   - block: record_metrics
     params: {values: [final_test_accuracy, test_accuracy]}

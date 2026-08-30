@@ -22,54 +22,6 @@ def _torch():
     return torch, F
 
 
-def _row_normalize(value):
-    torch, _ = _torch()
-    return value / value.sum(dim=-1, keepdim=True).clamp_min(torch.finfo(value.dtype).tiny)
-
-
-def _ce(logits, labels):
-    _, F = _torch()
-    return F.cross_entropy(logits, labels.long(), reduction="none")
-
-
-def _feature_output(network, inputs):
-    """Extract the feature tensor from either Scratch model output form."""
-    output = network.forward_with_features(inputs)
-    if hasattr(output, "features"):
-        return output.features
-    if isinstance(output, (tuple, list)):
-        return output[-1] if len(output) > 1 else output[0]
-    return output
-
-
-class _ScratchVolMinTransition:
-    """Trainable row-stochastic transition parameterization owned by Scratch."""
-    def __init__(self, classes: int, device: Any = "cpu"):
-        import torch
-        self._parameter = torch.nn.Parameter(torch.zeros((int(classes), int(classes)), device=device))
-        self.num_classes = int(classes)
-    def parameters(self):
-        return [self._parameter]
-    def to(self, device):
-        self._parameter.data = self._parameter.data.to(device); return self
-    def eval(self):
-        return self
-    def train(self, mode: bool = True):
-        return self
-    def state_dict(self):
-        return {"parameter": self._parameter.detach().clone()}
-    def load_state_dict(self, state):
-        if isinstance(state, dict) and "parameter" in state:
-            self._parameter.data.copy_(state["parameter"].to(self._parameter.device, self._parameter.dtype))
-        return self
-    def matrix(self, dtype=None):
-        import torch
-        values = torch.sigmoid(self._parameter)
-        values = values * (1.0 - torch.eye(self.num_classes, device=values.device)) + torch.eye(self.num_classes, device=values.device)
-        result = values / values.sum(dim=1, keepdim=True).clamp_min(torch.finfo(values.dtype).tiny)
-        return result.to(dtype=dtype) if dtype is not None else result
-
-
 @block(
     id="pdl_fit_part_representation",
     name="PDL Part Representation",
@@ -123,39 +75,6 @@ def pdl_fit_part_representation(
 
 
 @block(
-    id="pdl_select_anchor_candidates",
-    name="PDL Anchor Candidates",
-    category="Transition",
-    description="Select PDL high-posterior anchor samples independently for train and noisy validation.",
-    params={
-        "train_posterior": {"type": "slot", "default": "pdl_train_posteriors"},
-        "validation_posterior": {"type": "slot", "default": "pdl_validation_posteriors"},
-        "percentages": {"type": "value", "default": [97.0, 97.1052631579, 97.2105263158, 97.3157894737, 97.4210526316, 97.5263157895, 97.6315789474, 97.7368421053, 97.8421052632, 97.9473684211, 98.0526315789, 98.1578947368, 98.2631578947, 98.3684210526, 98.4736842105, 98.5789473684, 98.6842105263, 98.7894736842, 98.8947368421, 99.0]},
-        "train_as": {"type": "slot", "default": "pdl_train_anchor_positions"},
-        "validation_as": {"type": "slot", "default": "pdl_validation_anchor_positions"},
-    },
-    requires=("train_posterior", "validation_posterior"),
-    provides=("train_as", "validation_as"),
-    placement=("top",), stage="setup", ui_group="⑥ 后验与权重",
-    formula="a_c(r)=argmax_i h_i 1[q_i(c)>=percentile_r(q(c))]",
-    formula_ref="PDL official tools.fit(filter_outlier=True)",
-    paper="Part-dependent Label Noise",
-)
-def pdl_select_anchor_candidates(
-    ctx: ScratchContext,
-    train_posterior: str = "pdl_train_posteriors",
-    validation_posterior: str = "pdl_validation_posteriors",
-    percentages: list[float] | tuple[float, ...] = (),
-    train_as: str = "pdl_train_anchor_positions",
-    validation_as: str = "pdl_validation_anchor_positions",
-) -> None:
-    from ...native_stats import select_pdl_anchor_candidates
-    levels = list(percentages) if percentages else list(__import__("numpy").linspace(97.0, 99.0, 20))
-    ctx[train_as] = select_pdl_anchor_candidates(ctx[train_posterior].noisy_probabilities, levels)
-    ctx[validation_as] = select_pdl_anchor_candidates(ctx[validation_posterior].noisy_probabilities, levels)
-
-
-@block(
     id="pdl_fit_basis_matrices",
     name="PDL Basis Matrices",
     category="Transition",
@@ -202,17 +121,30 @@ def pdl_fit_basis_matrices(
     rep_indices = np.asarray(ctx[representation_indices], dtype=np.int64)
     train = ctx[train_posterior]
     validation = ctx[validation_posterior]
-    train_positions = np.searchsorted(rep_indices, train.global_indices)
-    validation_positions = np.searchsorted(rep_indices, validation.global_indices)
+    train_global = np.asarray(train.global_indices, dtype=np.int64)
+    validation_global = np.asarray(validation.global_indices, dtype=np.int64)
+    train_positions = np.searchsorted(rep_indices, train_global)
+    validation_positions = np.searchsorted(rep_indices, validation_global)
     if np.any(train_positions >= rep_indices.size) or np.any(validation_positions >= rep_indices.size):
         raise KeyError("PDL representation does not cover train/validation snapshots")
+    # The common anchor-selection block publishes stable sample identities,
+    # not local array positions.  Resolve those identities explicitly at the
+    # paper primitive boundary before selecting rows from each snapshot.
+    train_anchor_ids = np.asarray(ctx[train_anchors], dtype=np.int64)
+    validation_anchor_ids = np.asarray(ctx[validation_anchors], dtype=np.int64)
+    train_anchor_positions = np.searchsorted(train_global, train_anchor_ids)
+    validation_anchor_positions = np.searchsorted(validation_global, validation_anchor_ids)
+    if np.any(train_anchor_positions >= train_global.size) or not np.array_equal(train_global[train_anchor_positions], train_anchor_ids):
+        raise KeyError("PDL train anchors are not aligned to train snapshot indices")
+    if np.any(validation_anchor_positions >= validation_global.size) or not np.array_equal(validation_global[validation_anchor_positions], validation_anchor_ids):
+        raise KeyError("PDL validation anchors are not aligned to validation snapshot indices")
     limits = ctx.get("_runtime_limits") or {}
     effective_epochs = int(basis_epochs)
     if limits:
         effective_epochs = min(effective_epochs, max(1, int(limits.get("max_epochs", 1))))
     train_basis, validation_basis = fit_pdl_basis_matrices_pair(
-        coeff[train_positions][ctx[train_anchors]], train.noisy_probabilities[ctx[train_anchors]],
-        coeff[validation_positions][ctx[validation_anchors]], validation.noisy_probabilities[ctx[validation_anchors]],
+        coeff[train_positions][train_anchor_positions], train.noisy_probabilities[train_anchor_positions],
+        coeff[validation_positions][validation_anchor_positions], validation.noisy_probabilities[validation_anchor_positions],
         epochs=effective_epochs, learning_rate=float(basis_learning_rate),
         loss_threshold=float(basis_loss_threshold), seed=int(representation_seed), official_raw=True,
     )
@@ -283,93 +215,6 @@ def pdl_estimate_instance_transition(
         train_artifact.part_matrices, role="revision_validation",
         source_artifact_hash=train_artifact.artifact_hash,
     )
-
-
-@block(
-    id="attach_pdl_revision_head",
-    name="Attach PDL Revision Head",
-    category="Model",
-    description="Attach the official bias-free global T_revision parameter to the classifier.",
-    params={"model": {"type": "slot", "default": "model"}, "num_classes": {"type": "int", "default": 10}},
-    requires=("model",),
-    provides=(),
-    placement=("top",), stage="setup", ui_group="② 初始化",
-    formula="T_revision in R^{C x C}, bias-free",
-    formula_ref="PDL official train_revision parameterization",
-    paper="Part-dependent Label Noise",
-)
-def attach_pdl_revision_head(ctx: ScratchContext, model: str = "model", num_classes: int = 10) -> None:
-    import torch.nn as nn
-    if not hasattr(ctx[model], "T_revision"):
-        setattr(ctx[model], "T_revision", nn.Linear(int(num_classes), int(num_classes), bias=False))
-
-
-@block(
-    id="reset_pdl_revision",
-    name="Reset PDL Revision",
-    category="Model",
-    description="Reset T_revision to zero before the official revision phase.",
-    params={"model": {"type": "slot", "default": "model"}},
-    requires=("model",), placement=("top",), stage="setup", ui_group="② 初始化",
-)
-def reset_pdl_revision(ctx: ScratchContext, model: str = "model") -> None:
-    with _torch()[0].no_grad():
-        ctx[model].T_revision.weight.zero_()
-
-
-@block(
-    id="evaluate_pdl_accuracy",
-    name="Evaluate PDL Accuracy",
-    category="Evaluation",
-    description="Evaluate PDL corrected probabilities on noisy validation or test data.",
-    params={"model": {"type": "slot", "default": "model"}, "loader": {"type": "slot", "default": "validation_loader"}, "transition": {"type": "slot", "default": "pdl_validation_transition"}, "device": {"type": "slot", "default": "device"}, "revision": {"type": "bool", "default": False}, "final": {"type": "bool", "default": False}, "save_as": {"type": "slot", "default": "validation_accuracy"}},
-    requires=("model", "loader", "transition", "device"), provides=("save_as",), placement=("epoch", "top"), stage="evaluate", ui_group="⑨ 评估",
-)
-def evaluate_pdl_accuracy(ctx: ScratchContext, model: str = "model", loader: str = "validation_loader", transition: str = "pdl_validation_transition", device: str = "device", revision: bool = False, final: bool = False, save_as: str = "validation_accuracy") -> None:
-    import torch
-    if final and ctx.get("_runtime_limits", {}).get("skip_final_test") and str(loader) == "test_loader":
-        ctx[save_as] = float("nan")
-        ctx["pdl_test_skipped"] = True
-        return
-    network = ctx[model]
-    was_training = network.training
-    network.eval()
-    correct = total = 0
-    with torch.inference_mode():
-        for batch in ctx[loader]:
-            inputs = batch["input"].to(ctx[device])
-            labels = batch["target"].to(ctx[device])
-            logits = network(inputs)
-            matrices = ctx[transition].transition_for(None, batch["index"], device=logits.device, dtype=logits.dtype)
-            if revision:
-                matrices = matrices + network.T_revision.weight.to(logits)
-            matrices = matrices.abs()
-            matrices = matrices / matrices.sum(dim=2, keepdim=True).clamp_min(torch.finfo(logits.dtype).tiny)
-            observed = torch.bmm(torch.softmax(logits, dim=1).unsqueeze(1), matrices).squeeze(1)
-            correct += int(observed.argmax(1).eq(labels).sum())
-            total += int(labels.numel())
-    network.train(was_training)
-    ctx[save_as] = float(correct / total) if total else 0.0
-
-
-@block(
-    id="dss_evidence",
-    name="DSS: Evidence Update",
-    category="Paper Specific",
-    description="Convert per-sample loss evidence into a stable debiased selection score.",
-    params={"losses": {"type": "slot", "default": "loss_per_sample"}, "save_as": {"type": "slot", "default": "dss_score"}},
-    requires=("losses",),
-    provides=("save_as",),
-)
-def dss_evidence(ctx: ScratchContext, losses: str = "loss_per_sample", save_as: str = "dss_score") -> None:
-    values = ctx[losses].detach()
-    normalized = (values - values.mean()) / values.std(unbiased=False).clamp_min(1e-6)
-    ctx[save_as] = torch_sigmoid(-normalized)
-
-
-def torch_sigmoid(value):
-    torch, _ = _torch()
-    return torch.sigmoid(value)
 
 
 @block(
@@ -456,48 +301,6 @@ def create_mentor_provider(
     ctx["mentor_artifact_path"] = os.fspath(path)
 
 
-@block(
-    id="mentor_compute_weights",
-    name="MentorNet: Compute Curriculum Weights",
-    category="Paper Specific",
-    description="Build the typed SupervisedWeightInput and invoke the frozen MentorNet provider for one batch.",
-    params={
-        "provider": {"type": "slot", "default": "mentor_provider"},
-        "logits": {"type": "slot", "default": "logits"},
-        "labels": {"type": "slot", "default": "labels"},
-        "indices": {"type": "slot", "default": "indices"},
-        "losses": {"type": "slot", "default": "loss_per_sample"},
-        "save_as": {"type": "slot", "default": "sample_weights"},
-    },
-    requires=("provider", "logits", "labels", "losses"), provides=("save_as",),
-    placement=("batch",), stage="train", ui_group="⑥ 后验与权重",
-    formula="w=MentorNet(l, l-EMA_p(l), y, epoch)",
-    formula_ref="MentorNetWeightProvider.compute; Jiang et al. ICML 2018",
-    paper="MentorNet: Learning Data-Driven Curriculum for Very Deep Neural Networks on Noisy Labels",
-)
-def mentor_compute_weights(
-    ctx: ScratchContext,
-    provider: str = "mentor_provider",
-    logits: str = "logits",
-    labels: str = "labels",
-    indices: str = "indices",
-    losses: str = "loss_per_sample",
-    save_as: str = "sample_weights",
-) -> None:
-    from ...native_stats import SupervisedWeightInput
-    torch, _ = _torch()
-    sample_indices = ctx.get(indices)
-    if sample_indices is None:
-        sample_indices = torch.arange(ctx[losses].shape[0], device=ctx[losses].device)
-    result = ctx[provider].compute(SupervisedWeightInput(
-        logits=ctx[logits].detach(), noisy_targets=ctx[labels].detach(),
-        sample_indices=sample_indices.detach(), per_sample_loss=ctx[losses],
-        metadata={"epoch": int(ctx.get("epoch", 0)), "paper": "mentornet"},
-    ))
-    ctx[save_as] = result.sample_weights.detach()
-    ctx["mentor_metrics"] = dict(result.metrics)
-
-
 @block(id="mentor_update_curriculum_threshold", name="MentorNet: Update Curriculum Threshold", category="State", description="Update the moving loss percentile independently from MentorNet prediction.", params={"provider":{"type":"slot","default":"mentor_provider"},"losses":{"type":"slot","default":"loss_per_sample"},"save_as":{"type":"slot","default":"mentor_threshold"}}, requires=("provider","losses"), provides=("save_as",), placement=("batch",), formula="q_t=decay q_{t-1}+(1-decay) percentile(loss)", formula_ref="MentorNet moving-percentile curriculum", paper="MentorNet")
 def mentor_update_curriculum_threshold(ctx: ScratchContext, provider: str="mentor_provider", losses: str="loss_per_sample", save_as: str="mentor_threshold") -> None:
     holder = ctx[provider]
@@ -542,26 +345,6 @@ def mentor_predict_sample_weights(ctx: ScratchContext, provider: str="mentor_pro
 
 
 @block(
-    id="estimate_transition",
-    name="Estimate Transition Matrix",
-    category="Transition",
-    description="Estimate a class-conditional transition matrix from model predictions and observed labels.",
-    params={"logits": {"type": "slot", "default": "logits"}, "labels": {"type": "slot", "default": "labels"}, "save_as": {"type": "slot", "default": "estimated_transition"}},
-    requires=("logits", "labels"),
-    provides=("save_as",),
-)
-def estimate_transition(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", save_as: str = "estimated_transition") -> None:
-    torch, F = _torch()
-    probabilities = F.softmax(ctx[logits].detach(), -1)
-    classes = probabilities.shape[-1]
-    result = torch.zeros(classes, classes, device=probabilities.device)
-    for label in range(classes):
-        mask = ctx[labels].long() == label
-        result[label] = probabilities[mask].mean(0) if bool(mask.any()) else torch.full((classes,), 1.0 / classes, device=probabilities.device)
-    ctx[save_as] = _row_normalize(result)
-
-
-@block(
     id="dual_t_transition_estimation",
     name="Dual-T Transition Estimation",
     category="Transition",
@@ -592,121 +375,6 @@ def dual_t_transition_estimation(
     )
     ctx[save_as] = torch.tensor(artifact.matrix, dtype=torch.float32)
     ctx["dual_t_transition_artifact"] = artifact
-
-
-@block(
-    id="estimate_noisy_posterior",
-    name="Estimate Noisy Posterior",
-    category="Posterior",
-    description="Estimate P(noisy label | x) with the configured binary KDE or KLIEP backend and preserve stable sample indices.",
-    params={
-        "features": {"type": "slot", "default": "posterior_features"},
-        "labels": {"type": "slot", "default": "posterior_targets"},
-        "indices": {"type": "slot", "default": "posterior_indices"},
-        "backend": {"type": "enum", "options": ["kde", "kliep"], "default": "kde"},
-        "bandwidth": {"type": "float", "default": 0.15, "min": 0.0},
-        "save_as": {"type": "slot", "default": "posterior_snapshot"},
-    },
-    requires=("features", "labels", "indices"),
-    provides=("save_as", "posterior_probabilities", "posterior_indices", "posterior_targets"),
-    placement=("top",), stage="setup", ui_group="⑥ 后验与权重",
-    formula="q_j(x) = P(tilde Y=j | X=x)",
-    formula_ref="Li et al., Learning from Noisy Labels with Importance Reweighting, posterior-estimation stage",
-    paper="Learning from Noisy Labels with Importance Reweighting",
-)
-def estimate_noisy_posterior(
-    ctx: ScratchContext,
-    features: str = "posterior_features",
-    labels: str = "posterior_targets",
-    indices: str = "posterior_indices",
-    backend: str = "kde",
-    bandwidth: float = 0.15,
-    save_as: str = "posterior_snapshot",
-) -> None:
-    import torch
-
-    from ...native_stats import build_binary_noisy_posterior_backend
-
-    feature_values = ctx[features]
-    label_values = ctx[labels]
-    index_values = ctx[indices]
-    config: dict[str, Any] = {"name": str(backend), "bandwidth": float(bandwidth)}
-    if str(backend).strip().lower() == "kliep":
-        config.update({
-            "max_centers": 24,
-            "max_iterations": 200,
-            "learning_rate": 0.02,
-            "tolerance": 1.0e-7,
-            "epsilon": 1.0e-12,
-            "seed": int(ctx.get("seed", 1)),
-        })
-    estimator = build_binary_noisy_posterior_backend(config)
-    snapshot = estimator.fit_predict(
-        feature_values,
-        label_values,
-        index_values,
-        dataset="synthetic_binary_2d",
-        split="train",
-    )
-    ctx[save_as] = snapshot
-    ctx["posterior_probabilities"] = torch.tensor(
-        snapshot.noisy_probabilities, dtype=torch.float32
-    )
-    ctx["posterior_indices"] = torch.tensor(
-        snapshot.global_indices, dtype=torch.long
-    )
-    ctx["posterior_targets"] = torch.tensor(
-        snapshot.noisy_targets, dtype=torch.long
-    )
-
-
-@block(
-    id="estimate_raw_min_noise_rates",
-    name="Estimate Raw-min Noise Rates",
-    category="Weighting",
-    description="Estimate asymmetric binary RCN rates from the minimum noisy posterior for each observed class.",
-    params={
-        "posterior": {"type": "slot", "default": "posterior_snapshot"},
-        "positive_as": {"type": "slot", "default": "rho_positive"},
-        "negative_as": {"type": "slot", "default": "rho_negative"},
-    },
-    requires=("posterior",),
-    provides=("positive_as", "negative_as"),
-    placement=("top",), stage="setup", ui_group="⑥ 后验与权重",
-    formula="rho_hat_0 = min_x q_0(x), rho_hat_1 = min_x q_1(x)",
-    formula_ref="Li et al., raw-min noise-rate estimator",
-    paper="Learning from Noisy Labels with Importance Reweighting",
-)
-def estimate_raw_min_noise_rates(
-    ctx: ScratchContext,
-    posterior: str = "posterior_snapshot",
-    positive_as: str = "rho_positive",
-    negative_as: str = "rho_negative",
-) -> None:
-    from ...native_stats import PaperRawMinNoiseRateEstimator
-
-    artifact = PaperRawMinNoiseRateEstimator().estimate(ctx[posterior])
-    ctx[positive_as] = float(artifact.rho_positive)
-    ctx[negative_as] = float(artifact.rho_negative)
-    ctx["noise_rate_artifact"] = artifact
-
-
-@block(
-    id="importance_reweight",
-    name="Importance Reweight",
-    category="Weighting",
-    description="Weight per-sample CE by clean posterior over observed noisy posterior.",
-    params={"logits": {"type": "slot", "default": "logits"}, "labels": {"type": "slot", "default": "labels"}, "transition": {"type": "slot", "default": "transition"}, "save_as": {"type": "slot", "default": "weighted_loss"}},
-    requires=("logits", "labels", "transition"),
-    provides=("save_as",), beginner_visible=False,
-)
-def importance_reweight(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", transition: str = "transition", save_as: str = "weighted_loss") -> None:
-    torch, F = _torch()
-    clean = F.softmax(ctx[logits], -1)
-    noisy = clean @ ctx[transition].to(clean)
-    target = ctx[labels].long()[:, None]
-    weights = clean.gather(1, target).squeeze(1) / noisy.gather(1, target).squeeze(1).clamp_min(torch.finfo(clean.dtype).tiny)
-    ctx[save_as] = _ce(ctx[logits], ctx[labels]) * weights.detach()
 
 
 @block(
@@ -770,24 +438,6 @@ def importance_weight_formula(
     ctx[save_as] = weights.clamp_min(0.0).detach()
 
 
-@block(
-    id="cwd_statistics",
-    name="CWD: Class-wise Statistics",
-    category="Paper Specific",
-    description="Compute class centroids and a global denoising objective from features.",
-    params={"features": {"type": "slot", "default": "features"}, "labels": {"type": "slot", "default": "labels"}, "save_as": {"type": "slot", "default": "cwd_loss"}},
-    requires=("features", "labels"),
-    provides=("save_as", "class_centroids"),
-)
-def cwd_statistics(ctx: ScratchContext, features: str = "features", labels: str = "labels", save_as: str = "cwd_loss") -> None:
-    torch, _ = _torch()
-    values, targets = ctx[features], ctx[labels].long()
-    classes = int(ctx.get("num_classes", int(targets.max().item()) + 1))
-    centroids = torch.stack([values[targets == c].mean(0) if bool((targets == c).any()) else torch.zeros(values.shape[1], device=values.device) for c in range(classes)])
-    ctx["class_centroids"] = centroids
-    ctx[save_as] = ((values - centroids[targets]) ** 2).mean(dim=1)
-
-
 def _cwd_swap_matrix(classes: int, source: int, target: int, *, device, dtype):
     torch, _ = _torch()
     value = torch.eye(classes, device=device, dtype=dtype)
@@ -819,23 +469,6 @@ def cwd_observed_statistics(ctx: ScratchContext, snapshot: str = "cwd_snapshot",
     ctx[save_as] = result
     ctx["observed_prior"] = prior
     ctx["observed_centroids"] = means
-
-
-@block(
-    id="cwd_clean_prior",
-    name="CWD: Recover Clean Prior",
-    category="Paper Specific",
-    description="Solve the clean-prior relation from the observed prior and label transition matrix.",
-    params={"observed_prior": {"type": "slot", "default": "observed_prior"}, "transition": {"type": "slot", "default": "transition"}, "save_as": {"type": "slot", "default": "clean_prior"}},
-    requires=("observed_prior", "transition"), provides=("save_as",), placement=("top", "epoch"), stage="setup", ui_group="⑥ 后验与权重",
-    formula="p~ = T^T p; p = solve(T^T,p~)", formula_ref="CWD Eq. (19)", paper="Class-Wise Denoising",
-)
-def cwd_clean_prior(ctx: ScratchContext, observed_prior: str = "observed_prior", transition: str = "transition", save_as: str = "clean_prior") -> None:
-    torch, _ = _torch()
-    prior = torch.linalg.solve(torch.as_tensor(ctx[transition], dtype=torch.float64).transpose(0, 1), torch.as_tensor(ctx[observed_prior], dtype=torch.float64))
-    if bool((prior < -1e-8).any()) or not bool(torch.isfinite(prior).all()):
-        raise ValueError("CWD clean prior is invalid")
-    ctx[save_as] = prior.clamp_min(0.0) / prior.sum().clamp_min(torch.finfo(prior.dtype).tiny)
 
 
 @block(
@@ -931,56 +564,6 @@ def cwd_global_objective(ctx: ScratchContext, model: str = "model", features: st
 
 
 @block(
-    id="pcse_statistics",
-    name="PCSE: Recover Per-class Statistics",
-    category="Paper Specific",
-    description="Recover means and variances from feature snapshots grouped by observed class.",
-    params={"features": {"type": "slot", "default": "features"}, "labels": {"type": "slot", "default": "labels"}, "save_as": {"type": "slot", "default": "pcse_statistics"}},
-    requires=("features", "labels"),
-    provides=("save_as",),
-)
-def pcse_statistics(ctx: ScratchContext, features: str = "features", labels: str = "labels", save_as: str = "pcse_statistics") -> None:
-    torch, _ = _torch()
-    values, targets = ctx[features], ctx[labels].long()
-    classes = int(ctx.get("num_classes", int(targets.max().item()) + 1))
-    rows = []
-    for c in range(classes):
-        group = values[targets == c]
-        rows.append(torch.cat((group.mean(0), group.var(0, unbiased=False)) if group.numel() else (torch.zeros(values.shape[1], device=values.device), torch.zeros(values.shape[1], device=values.device))))
-    ctx[save_as] = torch.stack(rows)
-
-
-@block(
-    id="pcse_recover_clean_priors",
-    name="PCSE: Recover Clean Priors",
-    category="Paper Specific",
-    description="Recover strictly positive clean class priors from noisy priors and a transition matrix.",
-    params={"noisy_priors": {"type": "slot", "default": "noisy_priors"}, "transition": {"type": "slot", "default": "transition"}, "save_as": {"type": "slot", "default": "clean_priors"}},
-    requires=("noisy_priors", "transition"), provides=("save_as",), placement=("top", "epoch"), stage="setup", ui_group="⑥ 后验与权重",
-    formula="T^T p = p~; p = solve(T^T,p~)", formula_ref="PCSE Eq. (17)", paper="Estimating Per-Class Statistics",
-)
-def pcse_recover_clean_priors(ctx: ScratchContext, noisy_priors: str = "noisy_priors", transition: str = "transition", save_as: str = "clean_priors") -> None:
-    import numpy as np
-    from ...native_stats import recover_clean_priors
-    ctx[save_as] = recover_clean_priors(np.asarray(ctx[noisy_priors]), np.asarray(ctx[transition])).astype(np.float32)
-
-
-@block(
-    id="pcse_coefficient_matrix",
-    name="PCSE: Coefficient Matrix",
-    category="Paper Specific",
-    description="Build PCSE's row-swap coefficient matrix from clean priors and transition probabilities.",
-    params={"clean_priors": {"type": "slot", "default": "clean_priors"}, "transition": {"type": "slot", "default": "transition"}, "save_as": {"type": "slot", "default": "pcse_coefficient"}},
-    requires=("clean_priors", "transition"), provides=("save_as",), placement=("top", "epoch"), stage="setup", ui_group="⑥ 后验与权重",
-    formula="M = sum_ij p_i T_ij K_ij^T", formula_ref="PCSE Eq. (19)", paper="Estimating Per-Class Statistics",
-)
-def pcse_coefficient_matrix(ctx: ScratchContext, clean_priors: str = "clean_priors", transition: str = "transition", save_as: str = "pcse_coefficient") -> None:
-    import numpy as np
-    from ...native_stats import build_coefficient_matrix
-    ctx[save_as] = build_coefficient_matrix(np.asarray(ctx[clean_priors]), np.asarray(ctx[transition])).astype(np.float32)
-
-
-@block(
     id="pcse_recover_layer_statistics",
     name="PCSE: Recover Layer Statistics",
     category="Paper Specific",
@@ -1060,6 +643,8 @@ def pcse_evaluate_ensemble(ctx: ScratchContext, gda: str = "pcse_gda", snapshots
     description="Create the official EMA teacher, self-adaptive class selector, confidence reweighting, and FINE regularizer state.",
     params={
         "model": {"type": "slot", "default": "model"},
+        "ema_model": {"type": "value", "default": None},
+        "prepared_data": {"type": "value", "default": None},
         "num_classes": {"type": "int", "default": 100, "min": 2},
         "ema_momentum": {"type": "float", "default": 0.95, "min": 0.0, "max": 0.999999},
         "momentum_scs": {"type": "float", "default": 0.999, "min": 0.0, "max": 0.999999},
@@ -1071,7 +656,7 @@ def pcse_evaluate_ensemble(ctx: ScratchContext, gda: str = "pcse_gda", snapshots
         "seed": {"type": "int", "default": 23, "min": 0},
         "save_as": {"type": "slot", "default": "fine_state"},
     },
-    requires=("model",), provides=("save_as",), placement=("top",), stage="setup", ui_group="⑥ 后验与权重",
+    requires=("model",), provides=("save_as", "fine_clean_state", "fine_pseudo_state", "fine_weight_state"), placement=("top",), stage="setup", ui_group="⑥ 后验与权重",
     formula="EMA_t=m EMA_{t-1}+(1-m)f_t; SCS/SCR operate on epoch snapshots",
     formula_ref="FINE official SED warm-up/EMA/SCS/SCR lifecycle",
     paper="FINE: Filtering Noise in the Feature Space for Robust Learning with Noisy Labels",
@@ -1079,6 +664,8 @@ def pcse_evaluate_ensemble(ctx: ScratchContext, gda: str = "pcse_gda", snapshots
 def create_fine_state(
     ctx: ScratchContext,
     model: str = "model",
+    ema_model: Any = None,
+    prepared_data: Any = None,
     num_classes: int = 100,
     ema_momentum: float = 0.95,
     momentum_scs: float = 0.999,
@@ -1090,14 +677,51 @@ def create_fine_state(
     seed: int = 23,
     save_as: str = "fine_state",
 ) -> None:
+    torch, _ = _torch()
     from ...native_stats import SelfAdaptiveClassSelector, SelfAdaptiveConfidenceReweighting, FINERegularizer, ModelEMA
+    ema = ctx[ema_model] if isinstance(ema_model, str) and ema_model in ctx else ModelEMA(ctx[model], float(ema_momentum), update_buffers=False)
     ctx[save_as] = {
-        "ema": ModelEMA(ctx[model], float(ema_momentum), update_buffers=False),
+        "ema": ema,
         "scs": SelfAdaptiveClassSelector(int(num_classes), float(momentum_scs), quantile=0.8, maximum_threshold=float(maximum_threshold)),
         "scr": SelfAdaptiveConfidenceReweighting(int(num_classes), float(momentum_scr)),
         "regularizer": FINERegularizer(beta=float(beta), gamma=float(gamma), probability_floor=float(probability_floor), seed=int(seed)),
-        "clean_by_index": {}, "pseudo_by_index": {}, "weight_by_index": {},
+        # Per-sample decisions are published as generic indexed tables by the
+        # epoch selection blocks below.  Keeping the table contract here
+        # prevents a paper-specific batch lookup object from becoming part of
+        # the public State language.
     }
+    prepared = ctx[prepared_data] if isinstance(prepared_data, str) and prepared_data in ctx else prepared_data
+    train_indices = getattr(prepared, "train_indices", None) if prepared is not None else None
+    rows = torch.as_tensor(train_indices, dtype=torch.long).reshape(-1).cpu() if train_indices is not None else torch.empty(0, dtype=torch.long)
+    size = int(rows.max().item()) + 1 if rows.numel() else 0
+    ctx["fine_clean_state"] = {"values": torch.ones(size, dtype=torch.bool), "seen": torch.zeros(size, dtype=torch.bool), "last_epoch": torch.full((size,), -1, dtype=torch.long)}
+    ctx["fine_pseudo_state"] = {"values": torch.zeros(size, dtype=torch.long), "seen": torch.zeros(size, dtype=torch.bool), "last_epoch": torch.full((size,), -1, dtype=torch.long)}
+    ctx["fine_weight_state"] = {"values": torch.ones(size, dtype=torch.float32), "seen": torch.zeros(size, dtype=torch.bool), "last_epoch": torch.full((size,), -1, dtype=torch.long)}
+
+
+def _ensure_fine_indexed_table(holder: dict[str, Any], name: str, indices: Any, *, dtype: Any, initial: Any) -> dict[str, Any]:
+    """Return a generic ``create_indexed_state``-compatible table.
+
+    FINE's SCS/SCR algorithms compute their values in an epoch snapshot, but
+    the training batch consumes them by stable sample index.  This helper only
+    allocates the public indexed-table shape; it does not implement selection
+    or weighting semantics.
+    """
+    torch, _ = _torch()
+    rows = torch.as_tensor(indices, dtype=torch.long).reshape(-1).cpu()
+    size = int(rows.max().item()) + 1 if rows.numel() else 0
+    table = holder.get(name)
+    if table is None or int(table["values"].shape[0]) < size:
+        fill = bool(initial) if dtype == torch.bool else initial
+        table = {
+            # A scalar indexed value is represented as [N], so the canonical
+            # indexed_read operation publishes the batch shape directly.
+            "values": torch.full((size,), fill, dtype=dtype),
+            "seen": torch.zeros(size, dtype=torch.bool),
+            "last_epoch": torch.full((size,), -1, dtype=torch.long),
+        }
+        holder[name] = table
+    return table
 
 
 @block(
@@ -1150,16 +774,27 @@ def fine_snapshot_predictions(ctx: ScratchContext, model: str = "model", state: 
     category="Paper Specific",
     description="Update the class-adaptive SCS threshold and store clean/noisy decisions by stable index.",
     params={"state": {"type": "slot", "default": "fine_state"}, "snapshot": {"type": "slot", "default": "fine_snapshot"}},
-    requires=("state", "snapshot"), provides=(), placement=("epoch",), stage="train", ui_group="⑦ 样本选择",
+    requires=("state", "snapshot"), provides=("fine_clean_state", "fine_pseudo_state"), placement=("epoch",), stage="train", ui_group="⑦ 样本选择",
     formula="clean_i=1[p_tilde_i(y_tilde_i) >= tau_global * local_class_modulation]",
     formula_ref="FINE Self-Adaptive Class Selection (SCS)",
     paper="FINE: Filtering Noise in the Feature Space for Robust Learning with Noisy Labels",
 )
 def fine_scs_select(ctx: ScratchContext, state: str = "fine_state", snapshot: str = "fine_snapshot") -> None:
+    torch, _ = _torch()
     values = ctx[snapshot]
     mask = ctx[state]["scs"].select_epoch(values["ema_probabilities"], values["targets"])
-    ctx[state]["clean_by_index"] = {int(i): bool(v) for i, v in zip(values["indices"], mask)}
-    ctx[state]["pseudo_by_index"] = {int(i): int(v) for i, v in zip(values["indices"], values["ema_probabilities"].argmax(1))}
+    rows = torch.as_tensor(values["indices"], dtype=torch.long).reshape(-1).cpu()
+    clean_table = _ensure_fine_indexed_table(ctx[state], "clean_state", rows, dtype=torch.bool, initial=True)
+    pseudo_table = _ensure_fine_indexed_table(ctx[state], "pseudo_state", rows, dtype=torch.long, initial=0)
+    clean_table["values"][rows] = torch.as_tensor(mask, dtype=torch.bool).reshape(-1).cpu()
+    clean_table["seen"][rows] = True
+    clean_table["last_epoch"][rows] = int(ctx.get("epoch", -1))
+    pseudo = torch.as_tensor(values["ema_probabilities"]).argmax(1).to(torch.long).reshape(-1).cpu()
+    pseudo_table["values"][rows] = pseudo
+    pseudo_table["seen"][rows] = True
+    pseudo_table["last_epoch"][rows] = int(ctx.get("epoch", -1))
+    ctx["fine_clean_state"] = clean_table
+    ctx["fine_pseudo_state"] = pseudo_table
 
 
 @block(
@@ -1168,32 +803,21 @@ def fine_scs_select(ctx: ScratchContext, state: str = "fine_state", snapshot: st
     category="Paper Specific",
     description="Update class-wise confidence statistics and store SCR weights by stable index.",
     params={"state": {"type": "slot", "default": "fine_state"}, "snapshot": {"type": "slot", "default": "fine_snapshot"}},
-    requires=("state", "snapshot"), provides=(), placement=("epoch",), stage="train", ui_group="⑥ 后验与权重",
+    requires=("state", "snapshot"), provides=("fine_weight_state",), placement=("epoch",), stage="train", ui_group="⑥ 后验与权重",
     formula="w_i=exp(-(max p_i-mu_hat_c)^2/(2 sigma_hat_c^2/n_sigma^2))",
     formula_ref="FINE Self-Adaptive Confidence Reweighting (SCR)",
     paper="FINE: Filtering Noise in the Feature Space for Robust Learning with Noisy Labels",
 )
 def fine_scr_reweight(ctx: ScratchContext, state: str = "fine_state", snapshot: str = "fine_snapshot") -> None:
+    torch, _ = _torch()
     values = ctx[snapshot]
     weights = ctx[state]["scr"].weights(values["ema_probabilities"])
-    ctx[state]["weight_by_index"] = {int(i): float(v) for i, v in zip(values["indices"], weights)}
-
-
-@block(
-    id="fine_prepare_batch_targets",
-    name="FINE: Prepare Stable Batch Targets",
-    category="Paper Specific",
-    description="Lookup SCS clean masks, EMA pseudo labels, and SCR weights for the current stable-index batch.",
-    params={"state": {"type": "slot", "default": "fine_state"}, "indices": {"type": "slot", "default": "indices"}, "labels": {"type": "slot", "default": "labels"}, "clean_as": {"type": "slot", "default": "fine_clean"}, "pseudo_as": {"type": "slot", "default": "fine_pseudo"}, "weights_as": {"type": "slot", "default": "fine_weights"}},
-    requires=("state", "indices", "labels"), provides=("clean_as", "pseudo_as", "weights_as"), placement=("batch",), stage="train", ui_group="⑦ 样本选择",
-)
-def fine_prepare_batch_targets(ctx: ScratchContext, state: str = "fine_state", indices: str = "indices", labels: str = "labels", clean_as: str = "fine_clean", pseudo_as: str = "fine_pseudo", weights_as: str = "fine_weights") -> None:
-    torch, _ = _torch()
-    values = [int(i) for i in ctx[indices].detach().cpu()] if ctx.get(indices) is not None else list(range(int(ctx[labels].shape[0])))
-    holder = ctx[state]
-    ctx[clean_as] = torch.as_tensor([holder["clean_by_index"].get(i, True) for i in values], dtype=torch.bool, device=ctx[labels].device)
-    ctx[pseudo_as] = torch.as_tensor([holder["pseudo_by_index"].get(i, int(ctx[labels][j])) for j, i in enumerate(values)], dtype=torch.long, device=ctx[labels].device)
-    ctx[weights_as] = torch.as_tensor([holder["weight_by_index"].get(i, 1.0) for i in values], dtype=torch.float32, device=ctx[labels].device)
+    rows = torch.as_tensor(values["indices"], dtype=torch.long).reshape(-1).cpu()
+    weight_table = _ensure_fine_indexed_table(ctx[state], "weight_state", rows, dtype=torch.float32, initial=1.0)
+    weight_table["values"][rows] = torch.as_tensor(weights, dtype=torch.float32).reshape(-1).cpu()
+    weight_table["seen"][rows] = True
+    weight_table["last_epoch"][rows] = int(ctx.get("epoch", -1))
+    ctx["fine_weight_state"] = weight_table
 
 
 @block(
@@ -1227,109 +851,6 @@ def sed_rejected_regularizer(ctx: ScratchContext, logits: str = "logits", labels
 
 
 @block(
-    id="fine_ema_update",
-    name="FINE: Update EMA Teacher",
-    category="Paper Specific",
-    description="Update the non-trainable EMA copy after each student optimizer step.",
-    params={"model": {"type": "slot", "default": "model"}, "state": {"type": "slot", "default": "fine_state"}},
-    requires=("model", "state"), provides=(), placement=("batch",), stage="train", ui_group="⑩ 论文专用",
-    formula="EMA_t=m EMA_{t-1}+(1-m)theta_t",
-    formula_ref="FINE model_ema lifecycle",
-    paper="FINE: Filtering Noise in the Feature Space for Robust Learning with Noisy Labels",
-)
-def fine_ema_update(ctx: ScratchContext, model: str = "model", state: str = "fine_state") -> None:
-    ctx[state]["ema"].update(ctx[model])
-
-
-@block(
-    id="revise_transition",
-    name="T-Revision: Revise Transition",
-    category="Transition",
-    description="Blend an estimated transition matrix with its row-stochastic identity prior.",
-    params={"transition": {"type": "slot", "default": "transition"}, "strength": {"type": "float", "default": 0.5, "min": 0.0, "max": 1.0}, "save_as": {"type": "slot", "default": "revised_transition"}},
-    requires=("transition",),
-    provides=("save_as",),
-)
-def revise_transition(ctx: ScratchContext, transition: str = "transition", strength: float = 0.5, save_as: str = "revised_transition") -> None:
-    torch, _ = _torch()
-    matrix = ctx[transition]
-    identity = torch.eye(matrix.shape[-1], device=matrix.device, dtype=matrix.dtype)
-    ctx[save_as] = _row_normalize((1.0 - float(strength)) * matrix + float(strength) * identity)
-
-
-@block(
-    id="create_volmin_transition",
-    name="VolMinNet Trainable Transition",
-    category="Transition",
-    description="Create VolMinNet's fixed-diagonal sigmoid off-diagonal transition parameterization.",
-    params={"num_classes": {"type": "int", "default": 10, "min": 3}, "device": {"type": "slot", "default": "device"}, "save_as": {"type": "slot", "default": "transition"}},
-    requires=("device",), provides=("save_as",), placement=("top",), stage="setup", ui_group="⑥ 后验与权重",
-    formula="A_ii=1; A_ij=sigmoid(w_ij), then T=A/row_sum(A)",
-    formula_ref="VolMinNet paper transition parameterization and initialization",
-    paper="Provably End-to-end Label-noise Learning without Anchor Points",
-)
-def create_volmin_transition(ctx: ScratchContext, num_classes: int = 10, device: str = "device", save_as: str = "transition") -> None:
-    ctx[save_as] = _ScratchVolMinTransition(int(num_classes), ctx[device])
-
-
-@block(
-    id="volmin_positive_logdet",
-    name="VolMinNet Positive Logdet",
-    category="Correction",
-    description="Compute the positive log-determinant minimum-volume term from the current transition.",
-    params={"transition": {"type": "slot", "default": "transition_matrix"}, "save_as": {"type": "slot", "default": "volume_logdet"}},
-    requires=("transition",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="V(T)=log det(T), det(T)>0", formula_ref="VolMinNet paper_positive_logdet fidelity", paper="Provably End-to-end Label-noise Learning without Anchor Points",
-)
-def volmin_positive_logdet(ctx: ScratchContext, transition: str = "transition_matrix", save_as: str = "volume_logdet") -> None:
-    torch, _ = _torch()
-    sign, logdet = torch.linalg.slogdet(ctx[transition])
-    if not bool(torch.isfinite(sign).item()) or float(sign.detach().item()) <= 0.0 or not bool(torch.isfinite(logdet).item()):
-        raise ValueError("VolMinNet transition determinant must be finite and positive")
-    ctx[save_as] = logdet
-
-
-@block(
-    id="evaluate_volminnet_noisy",
-    name="Evaluate VolMinNet Noisy Validation",
-    category="Evaluation",
-    description="Evaluate noisy-validation loss and observed-label accuracy under the learned transition.",
-    params={"model": {"type": "slot", "default": "model"}, "transition": {"type": "slot", "default": "transition"}, "loader": {"type": "slot", "default": "validation_loader"}, "device": {"type": "slot", "default": "device"}, "save_as": {"type": "slot", "default": "validation_loss"}},
-    requires=("model", "transition", "loader", "device"), provides=("save_as", "validation_accuracy", "metrics"), placement=("epoch", "top"), stage="evaluate", ui_group="⑨ 评估",
-    formula="L_val=mean[-log sum_c p(c|x)T_c,y_tilde]", formula_ref="VolMinNet noisy-validation checkpoint criterion", paper="Provably End-to-end Label-noise Learning without Anchor Points",
-)
-def evaluate_volminnet_noisy(ctx: ScratchContext, model: str = "model", transition: str = "transition", loader: str = "validation_loader", device: str = "device", save_as: str = "validation_loss") -> None:
-    torch, F = _torch()
-    network = ctx[model]
-    matrix_module = ctx[transition]
-    was_training = network.training
-    network.eval()
-    matrix_module.eval()
-    loss_sum = 0.0
-    correct = total = 0
-    max_batches = (ctx.get("_runtime_limits") or {}).get("max_batches")
-    with torch.inference_mode():
-        for batch_idx, batch in enumerate(ctx[loader]):
-            if max_batches is not None and batch_idx >= int(max_batches):
-                break
-            inputs = batch["input"].to(ctx[device])
-            labels = batch["target"].to(ctx[device]).long()
-            logits = network(inputs)
-            matrix = matrix_module.matrix(dtype=logits.dtype)
-            noisy_log_probability = torch.logsumexp(F.log_softmax(logits, dim=1)[:, :, None] + torch.log(matrix)[None, :, :], dim=1)
-            loss_sum += float(F.nll_loss(noisy_log_probability, labels, reduction="sum").item())
-            correct += int(noisy_log_probability.argmax(1).eq(labels).sum().item())
-            total += int(labels.numel())
-    network.train(was_training)
-    if total == 0:
-        raise ValueError("VolMinNet validation loader is empty")
-    value = loss_sum / total
-    ctx[save_as] = value
-    ctx["validation_accuracy"] = correct / total
-    ctx.setdefault("metrics", []).append({"epoch": int(ctx.get("epoch", 0)), "validation_loss": value, "validation_accuracy": correct / total})
-
-
-@block(
     id="initialize_t_revision_transition",
     name="T-Revision Pseudo-Anchor Transition",
     category="Transition",
@@ -1345,34 +866,6 @@ def initialize_t_revision_transition(ctx: ScratchContext, posterior: str = "t_re
     artifact = AnchorTransitionEstimator().estimate(ctx[posterior])
     ctx[save_as] = torch.tensor(artifact.matrix, dtype=torch.float32, device=ctx[device])
     ctx["t_revision_transition_artifact"] = artifact
-
-
-@block(
-    id="create_t_revision_revision",
-    name="T-Revision Additive Slack",
-    category="Transition",
-    description="Create the unconstrained zero-initialized additive transition slack Delta T while keeping T-hat fixed.",
-    params={"transition": {"type": "slot", "default": "transition"}, "device": {"type": "slot", "default": "device"}, "save_as": {"type": "slot", "default": "revision"}},
-    requires=("transition", "device"), provides=("save_as",), placement=("top",), stage="setup", ui_group="⑥ 后验与权重",
-    formula="T=T_hat+Delta T; Delta T_0=0", formula_ref="T-Revision paper Section 3.3 transition revision", paper="Are Anchor Points Really Indispensable in Label-Noise Learning?",
-)
-def create_t_revision_revision(ctx: ScratchContext, transition: str = "transition", device: str = "device", save_as: str = "revision") -> None:
-    from ...native_stats import AdditiveTransitionRevision
-
-    ctx[save_as] = AdditiveTransitionRevision(ctx[transition]).to(ctx[device])
-
-
-@block(
-    id="t_revision_revised_transition",
-    name="T-Revision Current Transition",
-    category="Transition",
-    description="Materialize T-hat plus the learned additive slack for the revision objective.",
-    params={"revision": {"type": "slot", "default": "revision"}, "save_as": {"type": "slot", "default": "transition"}},
-    requires=("revision",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑥ 后验与权重",
-    formula="T=T_hat+Delta T", formula_ref="T-Revision paper Section 3.3 transition revision", paper="Are Anchor Points Really Indispensable in Label-Noise Learning?",
-)
-def t_revision_revised_transition(ctx: ScratchContext, revision: str = "revision", save_as: str = "transition") -> None:
-    ctx[save_as] = ctx[revision]()
 
 
 @block(
@@ -1398,89 +891,6 @@ def t_revision_importance_ratio(ctx: ScratchContext, probabilities: str = "proba
         raise ValueError("T-Revision importance ratios must be finite")
     ctx[save_as] = weights
     ctx[denominators_as] = denominator
-
-
-@block(
-    id="evaluate_t_revision_noisy",
-    name="Evaluate T-Revision Noisy Validation",
-    category="Evaluation",
-    description="Evaluate noisy-validation likelihood and observed-label accuracy under a fixed or revised transition.",
-    params={"model": {"type": "slot", "default": "model"}, "transition": {"type": "slot", "default": "transition"}, "loader": {"type": "slot", "default": "validation_loader"}, "device": {"type": "slot", "default": "device"}, "denominator_floor": {"type": "float", "default": 1.0e-12, "min": 0.0}, "save_as": {"type": "slot", "default": "validation_loss"}},
-    requires=("model", "transition", "loader", "device"), provides=("save_as", "validation_accuracy", "metrics"), placement=("top", "epoch"), stage="evaluate", ui_group="⑨ 评估",
-    formula="L_val=mean[-log(g(x)T)_ytilde]", formula_ref="T-Revision paper Algorithm 1 noisy validation criterion", paper="Are Anchor Points Really Indispensable in Label-Noise Learning?",
-)
-def evaluate_t_revision_noisy(ctx: ScratchContext, model: str = "model", transition: str = "transition", loader: str = "validation_loader", device: str = "device", denominator_floor: float = 1.0e-12, save_as: str = "validation_loss") -> None:
-    torch, _ = _torch()
-    network = ctx[model]
-    matrix_source = ctx[transition]
-    matrix = matrix_source() if callable(matrix_source) and not torch.is_tensor(matrix_source) else matrix_source
-    matrix = matrix.to(ctx[device])
-    was_training = network.training
-    network.eval()
-    total = 0
-    loss_sum = 0.0
-    correct = 0
-    max_batches = (ctx.get("_runtime_limits") or {}).get("max_batches")
-    with torch.inference_mode():
-        for batch_idx, batch in enumerate(ctx[loader]):
-            if max_batches is not None and batch_idx >= int(max_batches):
-                break
-            inputs = batch["input"].to(ctx[device])
-            labels = batch["target"].to(ctx[device]).long()
-            clean = torch.softmax(network(inputs), dim=1)
-            noisy = clean @ matrix.to(clean)
-            observed = noisy.gather(1, labels[:, None]).squeeze(1)
-            if bool((observed <= float(denominator_floor)).any().item()) or not bool(torch.isfinite(observed).all().item()):
-                raise ValueError("T-Revision validation noisy probability is invalid")
-            loss_sum += float((-observed.log()).sum().item())
-            correct += int(noisy.argmax(1).eq(labels).sum().item())
-            total += int(labels.numel())
-    if was_training:
-        network.train()
-    if total == 0:
-        raise ValueError("T-Revision validation loader is empty")
-    value = loss_sum / total
-    ctx[save_as] = value
-    ctx["validation_accuracy"] = correct / total
-    ctx.setdefault("metrics", []).append({"epoch": int(ctx.get("epoch", 0)), "validation_loss": value, "validation_accuracy": correct / total})
-
-
-@block(
-    id="create_upm_state",
-    name="UPM: Create Confusing-Probability State",
-    category="State",
-    description="Publish the stage-1 posterior-derived psi and initialize per-example eta keyed by stable training indices.",
-    params={"prepared_data": {"type": "slot", "default": "prepared_data"}, "model": {"type": "slot", "default": "stage1_model"}, "loader": {"type": "slot", "default": "train_eval_loader"}, "num_classes": {"type": "int", "default": 10, "min": 2}, "eta_init": {"type": "float", "default": 0.01, "min": 0.0, "max": 1.0}, "save_as": {"type": "slot", "default": "upm_state"}},
-    requires=("prepared_data", "model", "loader"), provides=("save_as",), placement=("top",), stage="setup", ui_group="② 初始化",
-    formula="psi_i=P_stage1(y~_i|x_i); eta_i<-eta_0",
-    formula_ref="UPM Stage-1 best source and psi publication",
-    paper="Universal Probability Model for Label Noise",
-)
-def create_upm_state(ctx: ScratchContext, prepared_data: str = "prepared_data", model: str = "stage1_model", loader: str = "train_eval_loader", num_classes: int = 10, eta_init: float = 0.01, save_as: str = "upm_state") -> None:
-    import torch
-    from ...native_stats import UPMNoiseState
-    prepared = ctx[prepared_data]
-    expected = torch.as_tensor(prepared.train_indices, dtype=torch.long)
-    probabilities = {}
-    network = ctx[model]
-    network.eval()
-    device = ctx.get("device", torch.device("cpu"))
-    with torch.no_grad():
-        for batch in ctx[loader]:
-            if isinstance(batch, dict):
-                images = batch.get("images", batch.get("inputs", batch.get("x")))
-                labels = batch.get("labels", batch.get("targets", batch.get("y")))
-                indices = batch.get("indices", batch.get("index"))
-            else:
-                images, labels, indices = batch[:3]
-            logits = network(images.to(device))
-            if isinstance(logits, tuple):
-                logits = logits[0]
-            values = torch.softmax(logits, dim=1).gather(1, labels.to(device).long()[:, None]).squeeze(1).cpu()
-            for index, value in zip(indices.long().cpu().tolist(), values.tolist()):
-                probabilities[int(index)] = float(value)
-    psi = torch.tensor([probabilities.get(int(index), 1.0 / float(num_classes)) for index in expected], dtype=torch.float32)
-    ctx[save_as] = UPMNoiseState(expected, psi, torch.full((expected.numel(),), float(eta_init)), int(num_classes))
 
 
 @block(id="upm_build_psi", name="UPM: Build Frozen Psi", category="State", description="Align the stage-1 posterior snapshot to canonical training indices and fill only unavailable entries with the uniform prior.", params={"prepared_data":{"type":"slot","default":"prepared_data"},"posterior":{"type":"slot","default":"upm_stage1_posterior"},"num_classes":{"type":"int","default":10,"min":2},"indices_as":{"type":"slot","default":"upm_indices"},"save_as":{"type":"slot","default":"upm_psi"}}, requires=("prepared_data","posterior"), provides=("indices_as","save_as"), placement=("top",), stage="setup", ui_group="④ 状态更新", formula="psi_i=s_i", formula_ref="UPM psi publication", paper="Universal Probability Model for Label Noise")
@@ -1720,35 +1130,6 @@ def cal_covariance_correction(ctx: ScratchContext, logits: str="logits", labels:
 
 
 @block(
-    id="mc_ldce_prepare_statistic",
-    name="MC-LDCE: Estimate Clean Centroid Statistic",
-    category="Paper Specific",
-    description="Build the fixed-feature centroid statistic used by the separate transition stage and Eq. (30) risk.",
-    params={"model": {"type": "slot", "default": "model"}, "loader": {"type": "slot", "default": "train_loader"}, "num_classes": {"type": "int", "default": 10, "min": 2}, "save_as": {"type": "slot", "default": "mc_ldce_statistic"}},
-    requires=("model", "loader"), provides=("save_as",), placement=("top", "epoch"), stage="setup", ui_group="⑥ 后验与权重",
-    formula="mu_clean=mu_noisy pinv(M(clean_prior,T))", formula_ref="MCLDCEEstimator", paper="MC-LDCE",
-)
-def mc_ldce_prepare_statistic(ctx: ScratchContext, model: str = "model", loader: str = "train_loader", num_classes: int = 10, save_as: str = "mc_ldce_statistic") -> None:
-    import numpy as np
-    from ...native_stats import StatisticArtifact
-    network = ctx[model]; device = next(network.parameters()).device; feats, labels = [], []
-    max_batches = (ctx.get("_runtime_limits") or {}).get("max_batches")
-    with __import__("torch").no_grad():
-        for batch_idx, batch in enumerate(ctx[loader]):
-            if max_batches is not None and batch_idx >= int(max_batches): break
-            if isinstance(batch, dict): inputs, targets = batch.get("input", batch.get("images")), batch.get("target", batch.get("labels"))
-            else: inputs, targets = batch[0], batch[1]
-            output = network.forward_with_features(inputs.to(device)); feature_values = output.features if hasattr(output, "features") else output[1]; feats.append(feature_values.detach().cpu()); labels.append(targets.long().cpu())
-    values, targets = __import__("torch").cat(feats), __import__("torch").cat(labels)
-    centroids = values.new_zeros((int(num_classes), values.shape[1]))
-    for c in range(int(num_classes)):
-        if bool((targets == c).any()): centroids[c] = values[targets == c].mean(0)
-    artifact = StatisticArtifact(centroids.numpy(), "mc_ldce", {"num_classes": int(num_classes), "fixture": bool((ctx.get("_runtime_limits") or {}).get("fixture"))})
-    ctx[save_as] = artifact
-    if hasattr(network, "freeze_feature_extractor"): network.freeze_feature_extractor()
-
-
-@block(
     id="mc_ldce_objective",
     name="MC-LDCE: Fixed-feature Global Risk",
     category="Loss",
@@ -1768,33 +1149,6 @@ def mc_ldce_objective(ctx: ScratchContext, model: str = "model", logits: str = "
 
 
 @block(
-    id="create_mc_ldce_volmin_transition",
-    name="MC-LDCE: Create Paper VolMin Transition",
-    category="Transition",
-    description="Create the independent sigmoid-off-diagonal PaperVolMin transition estimator used before fixed-feature MC-LDCE training.",
-    params={"num_classes": {"type": "int", "default": 10, "min": 2}, "initial_weight": {"type": "float", "default": -2.0794415416798357}, "seed": {"type": "int", "default": 1, "min": 0}, "device": {"type": "slot", "default": "device"}, "save_as": {"type": "slot", "default": "mc_ldce_transition"}},
-    requires=("device",), provides=("save_as",), placement=("top",), stage="setup", ui_group="⑥ 后验与权重",
-    formula="T=PaperVolMinTransition(sigmoid off-diagonal)", formula_ref="MC-LDCE paper_volmin transition parameterization", paper="MC-LDCE",
-)
-def create_mc_ldce_volmin_transition(ctx: ScratchContext, num_classes: int = 10, initial_weight: float = -2.0794415416798357, seed: int = 1, device: str = "device", save_as: str = "mc_ldce_transition") -> None:
-    from ...native_stats import PaperVolMinTransition
-    ctx[save_as] = PaperVolMinTransition(int(num_classes), initial_weight=float(initial_weight), seed=int(seed)).to(ctx[device])
-
-
-@block(
-    id="create_mc_ldce_volmin_optimizer",
-    name="MC-LDCE: Create VolMin Optimizer",
-    category="Optimization",
-    description="Optimize the independent transition-estimator model and PaperVolMin transition together.",
-    params={"model": {"type": "slot", "default": "transition_model"}, "transition": {"type": "slot", "default": "mc_ldce_transition"}, "learning_rate": {"type": "float", "default": 0.01, "min": 0.0}, "momentum": {"type": "float", "default": 0.9, "min": 0.0}, "weight_decay": {"type": "float", "default": 0.001, "min": 0.0}, "save_as": {"type": "slot", "default": "transition_optimizer"}},
-    requires=("model", "transition"), provides=("save_as",), placement=("top",), stage="setup", ui_group="② 初始化",
-)
-def create_mc_ldce_volmin_optimizer(ctx: ScratchContext, model: str = "transition_model", transition: str = "mc_ldce_transition", learning_rate: float = 0.01, momentum: float = 0.9, weight_decay: float = 0.001, save_as: str = "transition_optimizer") -> None:
-    from ...native_stats import build_paper_volmin_optimizer
-    ctx[save_as] = build_paper_volmin_optimizer(ctx[model], ctx[transition], {"name": "sgd", "lr": float(learning_rate), "momentum": float(momentum), "weight_decay": float(weight_decay)})
-
-
-@block(
     id="mc_ldce_volmin_objective",
     name="MC-LDCE: Paper VolMin Objective",
     category="Loss",
@@ -1807,24 +1161,6 @@ def mc_ldce_volmin_objective(ctx: ScratchContext, logits: str = "transition_logi
     from ...native_stats import paper_volmin_objective
     loss, diagnostics = paper_volmin_objective(ctx[logits].to(dtype=__import__("torch").float64), ctx[labels], ctx[transition].matrix(), lambda_volume=float(lambda_volume), determinant_tolerance=float(determinant_tolerance), condition_limit=float(condition_limit))
     ctx[save_as], ctx["mc_ldce_volmin_metrics"] = loss, diagnostics
-
-
-@block(
-    id="mc_ldce_freeze_features",
-    name="MC-LDCE: Freeze Features",
-    category="Model",
-    description="Freeze the main model feature extractor and leave only its bias-free classifier trainable.",
-    params={"model": {"type": "slot", "default": "model"}},
-    requires=("model",), placement=("top",), stage="setup", ui_group="② 初始化",
-)
-def mc_ldce_freeze_features(ctx: ScratchContext, model: str = "model") -> None:
-    import torch
-    network = ctx[model]; classifier = getattr(network, "classifier", None)
-    if not isinstance(classifier, torch.nn.Linear) or classifier.bias is not None:
-        raise ValueError("MC-LDCE requires a direct bias-free linear classifier")
-    for parameter in network.parameters(): parameter.requires_grad_(False)
-    for parameter in classifier.parameters(): parameter.requires_grad_(True)
-    if hasattr(network, "freeze_feature_extractor"): network.freeze_feature_extractor()
 
 
 @block(id="mc_ldce_recover_statistic", name="MC-LDCE: Recover Clean Centroids", category="Paper Specific", description="Recover the fixed clean class-centroid statistic from noisy feature centroids and the separately learned transition matrix.", params={"model":{"type":"slot","default":"model"},"loader":{"type":"slot","default":"train_eval_loader"},"transition":{"type":"slot","default":"mc_ldce_transition"},"num_classes":{"type":"int","default":10,"min":2},"save_as":{"type":"slot","default":"mc_ldce_statistic"}}, requires=("model","loader","transition"), provides=("save_as",), placement=("top",), stage="setup", ui_group="⑥ 后验与权重", formula="mu=mu_tilde pinv(sum_i pi_i sum_j T_ij swap(i,j)^T)", formula_ref="MC-LDCE centroid recovery", paper="MC-LDCE")
@@ -1850,152 +1186,6 @@ def mc_ldce_recover_statistic(ctx: ScratchContext, model: str="model", loader: s
 
 
 @block(
-    id="ca2c_cross_guidance",
-    name="CA2C: Cross Guidance",
-    category="Sample Selection",
-    description="Build positive candidate and negative complementary masks from peer logits.",
-    params={"positive_logits": {"type": "slot", "default": "logits_p"}, "negative_logits": {"type": "slot", "default": "logits_n"}, "candidate_k": {"type": "int", "default": 2, "min": 1}, "candidate_as": {"type": "slot", "default": "ca2c_candidates"}, "complement_as": {"type": "slot", "default": "ca2c_complements"}},
-    requires=("positive_logits", "negative_logits"), provides=("candidate_as", "complement_as"), placement=("batch",),
-    formula="C_n=TopK(z_n); C_p^c=1-TopK(z_p)", formula_ref="CA2C cross guidance", paper="CA2C",
-)
-def ca2c_cross_guidance(ctx: ScratchContext, positive_logits: str = "logits_p", negative_logits: str = "logits_n", candidate_k: int = 2, candidate_as: str = "ca2c_candidates", complement_as: str = "ca2c_complements") -> None:
-    from ...native_stats import cross_guidance
-    candidates, complements = cross_guidance(ctx[positive_logits], ctx[negative_logits], int(candidate_k))
-    ctx[candidate_as], ctx[complement_as] = candidates, complements
-
-
-@block(id="create_ca2c_candidate_memory", name="CA2C: Create Candidate Memory", category="State", description="Create persistent candidate and complementary label masks keyed by canonical training index.", params={"prepared_data":{"type":"slot","default":"prepared_data"},"num_classes":{"type":"int","default":100,"min":2},"save_as":{"type":"slot","default":"ca2c_memory"}}, requires=("prepared_data",), provides=("save_as",), placement=("top",), stage="setup", ui_group="② 初始化", formula="M_i^+=0, M_i^-=0", formula_ref="CA2C candidate-memory initialization", paper="CA2C")
-def create_ca2c_candidate_memory(ctx: ScratchContext, prepared_data: str="prepared_data", num_classes: int=100, save_as: str="ca2c_memory") -> None:
-    torch,_=_torch(); indices=torch.as_tensor(ctx[prepared_data].train_indices,dtype=torch.long); size=int(indices.max().item())+1
-    ctx[save_as]={"candidate":torch.zeros((size,int(num_classes)),dtype=torch.bool),"complement":torch.zeros((size,int(num_classes)),dtype=torch.bool)}
-
-
-@block(id="ca2c_update_candidate_memory", name="CA2C: Update Candidate Memory", category="State", description="Persist peer-derived candidate masks and publish their stable-index values for the current batch.", params={"memory":{"type":"slot","default":"ca2c_memory"},"indices":{"type":"slot","default":"indices"},"candidates":{"type":"slot","default":"ca2c_candidates"},"complements":{"type":"slot","default":"ca2c_complements"}}, requires=("memory","indices","candidates","complements"), provides=("ca2c_candidates","ca2c_complements"), placement=("batch",), stage="train", ui_group="④ 状态更新", formula="M_i^+<-C_i; M_i^-<-Cbar_i", formula_ref="CA2C persistent candidate update", paper="CA2C")
-def ca2c_update_candidate_memory(ctx: ScratchContext, memory: str="ca2c_memory", indices: str="indices", candidates: str="ca2c_candidates", complements: str="ca2c_complements") -> None:
-    rows=ctx[indices].detach().long().cpu(); state=ctx[memory]; state["candidate"][rows]=ctx[candidates].detach().cpu(); state["complement"][rows]=ctx[complements].detach().cpu()
-    ctx[candidates]=state["candidate"][rows].to(ctx[candidates].device); ctx[complements]=state["complement"][rows].to(ctx[complements].device)
-
-
-@block(
-    id="ca2c_partial_label_loss",
-    name="CA2C: Partial-label Positive Loss",
-    category="Loss",
-    description="Apply the hard/soft weighted positive partial-label objective to candidate classes.",
-    params={"logits": {"type": "slot", "default": "logits_p"}, "candidates": {"type": "slot", "default": "ca2c_candidates"}, "hard_weight": {"type": "float", "default": 0.99, "min": 0.0, "max": 1.0}, "save_as": {"type": "slot", "default": "ca2c_positive_loss"}},
-    requires=("logits", "candidates"), provides=("save_as",), placement=("batch",),
-    formula="L_p=lambda CE(argmax C_n)+(1-lambda)CE(C_n)", formula_ref="CA2C partial-label positive objective", paper="CA2C",
-)
-def ca2c_partial_label_loss(ctx: ScratchContext, logits: str = "logits_p", candidates: str = "ca2c_candidates", hard_weight: float = 0.99, save_as: str = "ca2c_positive_loss") -> None:
-    import torch
-    from ...native_stats import partial_label_objective
-    masks = ctx[candidates]
-    soft_targets = masks.to(ctx[logits].dtype) / masks.sum(1, keepdim=True).clamp_min(1.0)
-    ctx[save_as] = partial_label_objective(ctx[logits], soft_targets, float(hard_weight))
-
-
-@block(
-    id="ca2c_negative_label_loss",
-    name="CA2C: Complementary Negative Loss",
-    category="Loss",
-    description="Penalize positive probability on the peer-derived complementary classes.",
-    params={"logits": {"type": "slot", "default": "logits_n"}, "complements": {"type": "slot", "default": "ca2c_complements"}, "save_as": {"type": "slot", "default": "ca2c_negative_loss"}},
-    requires=("logits", "complements"), provides=("save_as",), placement=("batch",),
-    formula="L_n=-mean sum_{c in C_p^c} log(1-p_c)", formula_ref="CA2C complementary negative objective", paper="CA2C",
-)
-def ca2c_negative_label_loss(ctx: ScratchContext, logits: str = "logits_n", complements: str = "ca2c_complements", save_as: str = "ca2c_negative_loss") -> None:
-    from ...native_stats import negative_label_objective
-    ctx[save_as] = negative_label_objective(ctx[logits], ctx[complements])
-
-
-@block(
-    id="create_cnlcu_history",
-    name="Create CNLCU Peer History",
-    category="State",
-    description="Create persistent fixed-window, stable-global-index loss histories for both CNLCU peers.",
-    params={"prepared_data": {"type": "slot", "default": "prepared_data"}, "window_size": {"type": "int", "default": 5, "min": 1}, "peer": {"type": "enum", "options": ["a", "b"], "default": "a"}, "save_as": {"type": "slot", "default": "cnlcu_history_state"}},
-    requires=("prepared_data",), provides=("save_as",), placement=("top",), stage="setup", ui_group="② 初始化",
-    formula="H_i,t=loss_i,t over a fixed W-epoch window keyed by global sample index", formula_ref="CNLCU persistent history", paper="CNLCU",
-)
-def create_cnlcu_history(ctx: ScratchContext, prepared_data: str = "prepared_data", window_size: int = 5, peer: str = "a", save_as: str = "cnlcu_history_state") -> None:
-    import torch
-    indices = torch.as_tensor(ctx[prepared_data].train_indices).long().cpu()
-    if indices.numel() == 0 or torch.unique(indices).numel() != indices.numel():
-        raise ValueError("CNLCU history requires unique train indices")
-    order = torch.argsort(indices, stable=True)
-    indices = indices[order]
-    width = int(window_size)
-    ctx[save_as] = {"indices": indices, "values": torch.zeros((indices.numel(), width)), "observed": torch.zeros((indices.numel(), width), dtype=torch.bool), "selected": torch.zeros(indices.numel()), "window_size": width, "peer": str(peer), "epoch": 0}
-
-
-@block(
-    id="prepare_cnlcu_history_epoch",
-    name="Prepare CNLCU History Epoch",
-    category="State",
-    description="Advance both CNLCU histories to the current epoch and reset the fixed window when needed.",
-    params={"history": {"type": "slot", "default": "cnlcu_history_state"}, "epoch": {"type": "slot", "default": "epoch"}},
-    requires=("history", "epoch"), provides=(), placement=("epoch",), stage="train", ui_group="③ 训练结构",
-    formula="window_start=t-floor(t/W)W", formula_ref="CNLCU history lifecycle", paper="CNLCU",
-)
-def prepare_cnlcu_history_epoch(ctx: ScratchContext, history: str = "cnlcu_history_state", epoch: str = "epoch") -> None:
-    state = ctx[history]
-    if isinstance(state, dict):
-        slot = int(ctx[epoch]) % int(state["window_size"])
-        state["epoch"] = slot
-        state["observed"][:, slot] = False
-    else:
-        state.prepare_epoch(int(ctx[epoch]))
-
-
-@block(
-    id="append_cnlcu_history",
-    name="Append CNLCU Peer History",
-    category="State",
-    description="Append detached peer losses by stable sample index and expose the active window rows.",
-    params={"history": {"type": "slot", "default": "history_a"}, "indices": {"type": "slot", "default": "indices"}, "losses": {"type": "slot", "default": "loss_per_sample"}, "rows_as": {"type": "slot", "default": "rows"}, "observed_as": {"type": "slot", "default": "observed"}, "selected_count_as": {"type": "slot", "default": "cnlcu_selected_count"}, "values_as": {"type": "slot", "default": "history_values"}},
-    requires=("history", "indices", "losses"), provides=("rows_as", "observed_as", "selected_count_as", "values_as"), placement=("batch",), stage="train", ui_group="④ 状态更新",
-    formula="append(H_i,t, loss_i,t) by global index", formula_ref="CNLCU history update", paper="CNLCU",
-)
-def append_cnlcu_history(ctx: ScratchContext, history: str = "history_a", indices: str = "indices", losses: str = "loss_per_sample", rows_as: str = "rows", observed_as: str = "observed", selected_count_as: str = "cnlcu_selected_count", values_as: str = "history_values") -> None:
-    state = ctx[history]
-    import torch
-    requested = torch.as_tensor(ctx[indices]).long().cpu()
-    rows = torch.searchsorted(state["indices"], requested)
-    if bool((rows >= state["indices"].numel()).any()) or not bool(torch.equal(state["indices"][rows], requested)):
-        raise KeyError("CNLCU history does not cover requested indices")
-    slot = int(state["epoch"])
-    state["values"][rows, slot] = torch.as_tensor(ctx[losses]).detach().float().cpu()
-    state["observed"][rows, slot] = True
-    values, observed, counts = state["values"][rows], state["observed"][rows], state["observed"][rows].sum(1)
-    device = ctx[losses].device
-    # The public Scratch contract exposes the active history rows through the
-    # rows slot; keep the integer mapping privately for the selected-count update.
-    ctx["_cnlcu_rows_" + str(history)] = rows
-    ctx[rows_as] = values.to(device=device)
-    value_slot = str(rows_as).replace("rows", "values")
-    ctx[value_slot] = values.to(device=device)
-    ctx[values_as] = values.to(device=device)
-    ctx["history_values"] = values.to(device=device)
-    ctx[observed_as] = observed.to(device=device)
-    ctx[selected_count_as] = counts.to(device=device)
-
-
-@block(
-    id="cnlcu_soft_robust_mean",
-    name="CNLCU Soft Robust Mean",
-    category="Paper Specific",
-    description="Compute the observed-window robust mean for every sample.",
-    params={"history": {"type": "slot", "default": "cnlcu_history"}, "observed": {"type": "slot", "default": "cnlcu_observed"}, "save_as": {"type": "slot", "default": "cnlcu_robust_mean"}, "count_as": {"type": "slot", "default": "cnlcu_history_length"}, "length_as": {"type": "slot", "default": "cnlcu_history_length"}, "values_as": {"type": "slot", "default": "history_values"}},
-    requires=("history", "observed"), provides=("save_as", "count_as", "length_as"), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="r_i=(1/|H_i|)Σ_{t∈H_i}psi(l_i,t)", formula_ref="CNLCU Eq. (3)", paper="CNLCU",
-)
-def cnlcu_soft_robust_mean(ctx: ScratchContext, history: str = "cnlcu_history", observed: str = "cnlcu_observed", save_as: str = "cnlcu_robust_mean", count_as: str = "cnlcu_history_length", length_as: str = "cnlcu_history_length", values_as: str = "history_values") -> None:
-    from ...native_stats import soft_robust_mean
-    mean, length = soft_robust_mean(ctx[history], ctx[observed])
-    ctx[save_as], ctx[count_as], ctx[length_as] = mean, length, length
-    ctx[values_as] = ctx[history]
-
-
-@block(
     id="cnlcu_soft_score",
     name="CNLCU Soft Selection Score",
     category="Sample Selection",
@@ -2006,22 +1196,14 @@ def cnlcu_soft_robust_mean(ctx: ScratchContext, history: str = "cnlcu_history", 
 )
 def cnlcu_soft_score(ctx: ScratchContext, robust_mean: str = "cnlcu_robust_mean", history_length: str = "cnlcu_history_length", selected_count: str = "history_selected_count", sigma_squared: float = 0.01, save_as: str = "cnlcu_score") -> None:
     from ...native_stats import cnlcu_soft_score as score_fn
-    score, bonus = score_fn(ctx[robust_mean], ctx[history_length], ctx[selected_count] + 1, float(sigma_squared))
+    robust = ctx[robust_mean]
+    length = ctx[history_length]
+    selected = ctx[selected_count]
+    # Indexed state reads expose scalar tables as [N,1]; the CNLCU formula is
+    # elementwise over samples, so remove that storage-only dimension here.
+    if getattr(length, "ndim", 0) > 1 and int(length.shape[-1]) == 1:
+        length = length.squeeze(-1)
+    if getattr(selected, "ndim", 0) > 1 and int(selected.shape[-1]) == 1:
+        selected = selected.squeeze(-1)
+    score, bonus = score_fn(robust, length, selected + 1, float(sigma_squared))
     ctx[save_as], ctx["cnlcu_bonus"] = score, bonus
-
-
-@block(
-    id="update_cnlcu_selected_count",
-    name="Update CNLCU Selection Count",
-    category="State",
-    description="Persist selected-count statistics after the peer selection decision.",
-    params={"history": {"type": "slot", "default": "history_a"}, "rows": {"type": "slot", "default": "history_rows"}, "selected_mask": {"type": "slot", "default": "selected_mask"}},
-    requires=("history", "rows", "selected_mask"), provides=(), placement=("batch",), stage="train", ui_group="④ 状态更新",
-    formula="n_i←n_i+1[selected_i]", formula_ref="CNLCU selected-count lifecycle", paper="CNLCU",
-)
-def update_cnlcu_selected_count(ctx: ScratchContext, history: str = "history_a", rows: str = "history_rows", selected_mask: str = "selected_mask") -> None:
-    import torch
-    value = ctx[rows]
-    if getattr(value, "is_floating_point", lambda: False)(): value = ctx["_cnlcu_rows_" + str(history)]
-    state = ctx[history]
-    rows_value = torch.as_tensor(value).long().cpu(); state["selected"][rows_value] += torch.as_tensor(ctx[selected_mask]).detach().cpu().float()

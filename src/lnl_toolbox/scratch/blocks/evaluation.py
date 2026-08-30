@@ -69,47 +69,6 @@ def evaluate_accuracy(ctx: ScratchContext, model: str = "model", loader: str = "
 
 
 @block(
-    id="evaluate_cwd_binary",
-    name="Evaluate CWD Binary Scalar",
-    category="Evaluation",
-    description="Evaluate a one-output CWD classifier by the paper's zero-margin binary decision rule.",
-    params={"model": {"type": "slot", "default": "model"}, "loader": {"type": "slot", "default": "test_loader"}, "save_as": {"type": "slot", "default": "accuracy"}, "final": {"type": "bool", "default": False}, "target_source": {"type": "enum", "options": ["observed", "clean"], "default": "observed"}},
-    requires=("model", "loader"), provides=("save_as", "metrics"), placement=("top", "epoch"), stage="evaluate", ui_group="⑨ 评估",
-    formula="y_hat = 1[m(x) >= 0]", formula_ref="CWD binary scalar evaluation", paper="Class-Wise Denoising",
-)
-def evaluate_cwd_binary(ctx: ScratchContext, model: str = "model", loader: str = "test_loader", save_as: str = "accuracy", final: bool = False, target_source: str = "observed") -> None:
-    torch, _ = _torch()
-    if bool(final) and bool(ctx.get("_runtime_limits", {}).get("skip_final_test")) and str(loader) == "test_loader":
-        ctx.setdefault("metrics", []).append({"epoch": int(ctx.get("epoch", 0)), "test_skipped": True})
-        return
-    network = ctx[model]
-    was_training = network.training
-    network.eval()
-    device = next(network.parameters()).device
-    correct = total = 0
-    max_batches = ctx.get("_runtime_limits", {}).get("max_batches")
-    with torch.no_grad():
-        for batch_idx, batch in enumerate(ctx[loader]):
-            if max_batches is not None and batch_idx >= int(max_batches):
-                break
-            inputs, labels = _batch(batch)
-            if str(target_source) == "clean":
-                labels = batch.get("clean_targets") if isinstance(batch, dict) else None
-                if labels is None:
-                    raise ValueError("clean evaluation requires complete clean_targets")
-            logits = network(inputs.to(device))
-            predictions = (logits[:, 0] >= 0).long()
-            labels = labels.to(device).long()
-            correct += int((predictions == labels).sum().item())
-            total += int(labels.numel())
-    if was_training:
-        network.train()
-    value = float(correct / total) if total else 0.0
-    ctx[save_as] = value
-    ctx.setdefault("metrics", []).append({"epoch": int(ctx.get("epoch", 0)), "cwd_accuracy": value})
-
-
-@block(
     id="track_best_model",
     name="Keep Best Model",
     category="Evaluation",

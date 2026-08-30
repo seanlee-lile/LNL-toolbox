@@ -16,23 +16,94 @@ def _torch():
     return torch
 
 
+class _ScratchModelEMA:
+    """Model-agnostic EMA state kept with the other Scratch state blocks."""
+
+    def __init__(self, model: Any, momentum: float, update_buffers: bool = False) -> None:
+        import copy
+        self.model = copy.deepcopy(model)
+        self.momentum = float(momentum)
+        self.update_buffers = bool(update_buffers)
+        self.model.eval()
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return self.model(*args, **kwargs)
+
+    def eval(self):
+        self.model.eval()
+        return self
+
+    def train(self, mode: bool = True):
+        self.model.train(mode)
+        return self
+
+    def update(self, model: Any) -> None:
+        torch = _torch()
+        with torch.no_grad():
+            for target, source in zip(self.model.parameters(), model.parameters()):
+                target.mul_(self.momentum).add_(source.detach(), alpha=1.0 - self.momentum)
+            if self.update_buffers:
+                for target, source in zip(self.model.buffers(), model.buffers()):
+                    target.copy_(source)
+
+
+@block(
+    id="create_model_ema",
+    name="Create Model EMA",
+    category="State",
+    description="Create an independent exponential moving-average copy for one model slot.",
+    params={"model": {"type": "slot", "default": "model"}, "momentum": {"type": "float", "default": 0.999, "min": 0.0, "max": 1.0}, "update_buffers": {"type": "bool", "default": False}, "save_as": {"type": "slot", "default": "ema_model"}},
+    requires=("model",), provides=("save_as",), placement=("top",), stage="setup", ui_group="④ 状态更新",
+)
+def create_model_ema(ctx: ScratchContext, model: str = "model", momentum: float = 0.999, update_buffers: bool = False, save_as: str = "ema_model") -> None:
+    ctx[save_as] = _ScratchModelEMA(ctx[model], float(momentum), bool(update_buffers))
+
+
+@block(
+    id="update_model_ema",
+    name="Update Model EMA",
+    category="State",
+    description="Update one model EMA from its corresponding live model; parameter and buffer mutation is explicit.",
+    params={"model": {"type": "slot", "default": "model"}, "ema": {"type": "slot", "default": "ema_model"}},
+    requires=("model", "ema"), provides=(), placement=("batch", "epoch"), stage="train", ui_group="④ 状态更新",
+)
+def update_model_ema(ctx: ScratchContext, model: str = "model", ema: str = "ema_model") -> None:
+    value = ctx[ema]
+    if not hasattr(value, "update") or not hasattr(value, "model"):
+        raise TypeError("update_model_ema requires a Scratch model EMA container")
+    value.update(ctx[model])
+
+
 @block(
     id="create_indexed_state",
     name="Create Indexed State",
     category="State",
     description="Create a paper-independent state table keyed by stable sample indices.",
-    params={"indices": {"type": "slot", "default": "indices"}, "size": {"type": "int", "default": 0, "min": 0}, "width": {"type": "int", "default": 1, "min": 1}, "initial_value": {"type": "float", "default": 0.0}, "save_as": {"type": "slot", "default": "state"}},
+    params={"indices": {"type": "slot", "default": "indices"}, "prepared_data": {"type": "value", "default": None}, "size": {"type": "int", "default": 0, "min": 0}, "width": {"type": "int", "default": 1, "min": 1}, "initial_value": {"type": "float", "default": 0.0}, "dtype": {"type": "value", "default": "float32"}, "save_as": {"type": "slot", "default": "state"}},
     provides=("save_as",), placement=("top",), stage="setup", ui_group="④ 状态更新",
 )
 def create_indexed_state(ctx: ScratchContext, indices: str = "indices", size: int = 0,
-                         width: int = 1, initial_value: float = 0.0,
-                         save_as: str = "state") -> None:
+                         prepared_data: Any = None, width: int = 1, initial_value: float = 0.0,
+                         dtype: Any = "float32", save_as: str = "state") -> None:
     torch = _torch()
+    if isinstance(prepared_data, str) and prepared_data in ctx:
+        prepared = ctx[prepared_data]
+        train_indices = getattr(prepared, "train_indices", None)
+        if train_indices is not None and len(train_indices):
+            size = max(int(size), int(max(train_indices)) + 1)
     if indices in ctx:
         values = torch.as_tensor(ctx[indices]).reshape(-1)
         if values.numel():
             size = max(int(size), int(values.max().item()) + 1)
-    ctx[save_as] = {"values": torch.full((int(size), int(width)), float(initial_value)),
+    if isinstance(dtype, str):
+        try:
+            dtype = getattr(torch, dtype.replace("torch.", ""))
+        except AttributeError as exc:
+            raise ValueError(f"unknown indexed state dtype: {dtype}") from exc
+    if not isinstance(dtype, torch.dtype):
+        raise TypeError("indexed state dtype must be a torch.dtype or dtype name")
+    fill = bool(initial_value) if dtype == torch.bool else initial_value
+    ctx[save_as] = {"values": torch.full((int(size), int(width)), fill, dtype=dtype),
                     "seen": torch.zeros(int(size), dtype=torch.bool),
                     "last_epoch": torch.full((int(size),), -1, dtype=torch.long)}
 
@@ -75,53 +146,14 @@ def indexed_write(ctx: ScratchContext, state: str = "state", indices: str = "ind
 
 
 @block(
-    id="create_indexed_history",
-    name="Create Indexed History",
-    category="State",
-    description="Create a stable-index tensor history for persistent per-example values.",
-    params={"size": {"type": "int", "default": 0, "min": 0}, "prepared_data": {"type": "value", "default": None}, "width": {"type": "int", "default": 1, "min": 1}, "save_as": {"type": "slot", "default": "indexed_history"}},
-    provides=("save_as",), placement=("top",), stage="setup", ui_group="④ 状态更新",
-)
-def create_indexed_history(ctx: ScratchContext, size: int = 0, prepared_data: Any = None, width: int = 1, save_as: str = "indexed_history") -> None:
-    torch = _torch()
-    if isinstance(prepared_data, str) and prepared_data in ctx:
-        prepared = ctx[prepared_data]
-        indices = getattr(prepared, "train_indices", None)
-        if indices is not None and len(indices):
-            size = int(max(indices)) + 1
-    shape = (int(size), int(width))
-    ctx[save_as] = {"values": torch.zeros(shape), "seen": torch.zeros(int(size), dtype=torch.bool), "last_epoch": torch.full((int(size),), -1, dtype=torch.long)}
-
-
-@block(
-    id="indexed_history",
-    name="Indexed History Update",
-    category="State",
-    description="Write detached per-example values into a stable-index history.",
-    params={"state": {"type": "slot", "default": "indexed_history"}, "indices": {"type": "slot", "default": "indices"}, "values": {"type": "slot", "default": "values"}, "save_as": {"type": "slot", "default": "history_values"}},
-    requires=("state", "indices", "values"), provides=("save_as",), placement=("batch",), stage="train", ui_group="④ 状态更新",
-)
-def indexed_history(ctx: ScratchContext, state: str = "indexed_history", indices: str = "indices", values: str = "values", save_as: str = "history_values") -> None:
-    state_value = ctx[state]
-    rows = ctx[indices].detach().long().cpu()
-    incoming_value = ctx[values].detach().float()
-    incoming = incoming_value.reshape(incoming_value.shape[0], -1).cpu()
-    if int(state_value["values"].shape[1]) != int(incoming.shape[1]):
-        raise ValueError("indexed history value width does not match state width")
-    state_value["values"][rows] = incoming
-    state_value["seen"][rows] = True
-    ctx[save_as] = state_value["values"][rows].squeeze(-1).to(ctx[values].device)
-
-
-@block(
     id="indexed_ema",
     name="Indexed EMA",
     category="State",
     description="Update persistent values by stable index with an explicit duplicate policy.",
-    params={"state": {"type": "slot", "default": "indexed_history"}, "indices": {"type": "slot", "default": "indices"}, "values": {"type": "slot", "default": "values"}, "beta": {"type": "float", "default": 0.9, "min": 0.0, "max": 1.0}, "momentum": {"type": "value", "default": None}, "epoch": {"type": "slot", "default": "epoch"}, "duplicate_policy": {"type": "enum", "options": ["update", "skip", "error"], "default": "update"}, "save_as": {"type": "slot", "default": "history_values"}},
+    params={"state": {"type": "slot", "default": "state"}, "indices": {"type": "slot", "default": "indices"}, "values": {"type": "slot", "default": "values"}, "beta": {"type": "float", "default": 0.9, "min": 0.0, "max": 1.0}, "momentum": {"type": "value", "default": None}, "epoch": {"type": "slot", "default": "epoch"}, "duplicate_policy": {"type": "enum", "options": ["update", "skip", "error"], "default": "update"}, "save_as": {"type": "slot", "default": "history_values"}},
     requires=("state", "indices", "values"), provides=("save_as",), placement=("batch",), stage="train", ui_group="④ 状态更新",
 )
-def indexed_ema(ctx: ScratchContext, state: str = "indexed_history", indices: str = "indices", values: str = "values", beta: float = 0.9, momentum: float | None = None, epoch: str = "epoch", duplicate_policy: str = "update", save_as: str = "history_values") -> None:
+def indexed_ema(ctx: ScratchContext, state: str = "state", indices: str = "indices", values: str = "values", beta: float = 0.9, momentum: float | None = None, epoch: str = "epoch", duplicate_policy: str = "update", save_as: str = "history_values") -> None:
     state_value = ctx[state]
     rows = ctx[indices].detach().long().cpu()
     incoming = ctx[values].detach().float().cpu()
@@ -154,16 +186,10 @@ def indexed_ema(ctx: ScratchContext, state: str = "indexed_history", indices: st
     ctx[save_as] = state_value["values"][rows].to(ctx[values].device)
 
 
-@block(
-    id="agreement_mask",
-    name="Agreement Mask",
-    category="Sample Selection",
-    description="Select rows whose hard label agrees with the argmax of a soft history.",
-    params={"labels": {"type": "slot", "default": "labels"}, "history": {"type": "slot", "default": "history_values"}, "save_as": {"type": "slot", "default": "selected_mask"}},
-    requires=("labels", "history"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑦ 样本选择",
-)
-def agreement_mask(ctx: ScratchContext, labels: str = "labels", history: str = "history_values", save_as: str = "selected_mask") -> None:
-    ctx[save_as] = ctx[history].detach().argmax(dim=-1).eq(ctx[labels].long())
+# Compatibility import alias.  The registered operation is defined in the
+# selection module so the physical module matches its Sample Selection
+# semantics.
+from .selection import agreement_mask
 
 
 @block(
@@ -200,24 +226,6 @@ def create_grouped_accumulator(ctx: ScratchContext, groups: int = 10, width: int
 
 
 @block(
-    id="grouped_accumulator",
-    name="Grouped Accumulator",
-    category="State",
-    description="Accumulate detached values by integer group label.",
-    params={"state": {"type": "slot", "default": "grouped_state"}, "groups": {"type": "slot", "default": "groups"}, "values": {"type": "slot", "default": "values"}},
-    requires=("state", "groups", "values"), provides=(), placement=("batch",), stage="train", ui_group="④ 状态更新",
-)
-def grouped_accumulator(ctx: ScratchContext, state: str = "grouped_state", groups: str = "groups", values: str = "values") -> None:
-    state_value = ctx[state]
-    labels = ctx[groups].detach().long().reshape(-1).cpu()
-    tensor = ctx[values].detach().float().reshape(labels.numel(), -1).cpu()
-    for group in labels.unique().tolist():
-        mask = labels == int(group)
-        state_value["sums"][int(group)] += tensor[mask].sum(dim=0)
-        state_value["counts"][int(group)] += mask.sum()
-
-
-@block(
     id="finalize_grouped_accumulator",
     name="Finalize Grouped Accumulator",
     category="State",
@@ -242,9 +250,13 @@ def finalize_grouped_accumulator(ctx: ScratchContext, state: str = "grouped_stat
     requires=("state", "groups", "values"), provides=(), placement=("batch",), stage="train", ui_group="④ 状态更新",
 )
 def grouped_accumulate(ctx: ScratchContext, state: str = "grouped_state", groups: str = "groups", values: str = "values") -> None:
-    # Keep the historical spelling as a compatibility implementation while
-    # exposing the unambiguous canonical operation to new Recipes.
-    grouped_accumulator(ctx, state=state, groups=groups, values=values)
+    state_value = ctx[state]
+    labels = ctx[groups].detach().long().reshape(-1).cpu()
+    tensor = ctx[values].detach().float().reshape(labels.numel(), -1).cpu()
+    for group in labels.unique().tolist():
+        mask = labels == int(group)
+        state_value["sums"][int(group)] += tensor[mask].sum(dim=0)
+        state_value["counts"][int(group)] += mask.sum()
 
 
 @block(
@@ -265,15 +277,29 @@ def reset_grouped_accumulator(ctx: ScratchContext, state: str = "grouped_state")
     name="Create Indexed Window",
     category="State",
     description="Create a fixed-size per-index history window; rows are addressed by stable sample indices.",
-    params={"indices": {"type": "slot", "default": "indices"}, "size": {"type": "int", "default": 0, "min": 0}, "window_size": {"type": "int", "default": 5, "min": 1}, "width": {"type": "int", "default": 1, "min": 1}, "save_as": {"type": "slot", "default": "indexed_window"}},
+    params={"indices": {"type": "slot", "default": "indices"}, "prepared_data": {"type": "value", "default": None}, "size": {"type": "int", "default": 0, "min": 0}, "window_size": {"type": "int", "default": 5, "min": 1}, "width": {"type": "int", "default": 1, "min": 1}, "epoch_indexed": {"type": "bool", "default": False}, "save_as": {"type": "slot", "default": "indexed_window"}},
     provides=("save_as",), placement=("top",), stage="setup", ui_group="④ 状态更新",
 )
-def create_indexed_window(ctx: ScratchContext, indices: str = "indices", size: int = 0, window_size: int = 5, width: int = 1, save_as: str = "indexed_window") -> None:
+def create_indexed_window(ctx: ScratchContext, indices: str = "indices", prepared_data: Any = None, size: int = 0, window_size: int = 5, width: int = 1, epoch_indexed: bool = False, save_as: str = "indexed_window") -> None:
     torch = _torch(); size = int(size)
+    if isinstance(prepared_data, str) and prepared_data in ctx:
+        prepared = ctx[prepared_data]
+        train_indices = getattr(prepared, "train_indices", None)
+        if train_indices is not None and len(train_indices):
+            size = max(size, int(max(train_indices)) + 1)
     if indices in ctx:
         values = torch.as_tensor(ctx[indices]).reshape(-1)
         if values.numel(): size = max(size, int(values.max().item()) + 1)
-    ctx[save_as] = {"values": torch.zeros((size, int(window_size), int(width))), "counts": torch.zeros(size, dtype=torch.long), "cursor": torch.zeros(size, dtype=torch.long), "window_size": int(window_size)}
+    ctx[save_as] = {
+        "values": torch.zeros((size, int(window_size), int(width))),
+        "observed": torch.zeros((size, int(window_size)), dtype=torch.bool),
+        "counts": torch.zeros(size, dtype=torch.long),
+        "cursor": torch.zeros(size, dtype=torch.long),
+        "window_size": int(window_size),
+        "epoch": 0,
+        "active_slot": 0,
+        "epoch_indexed": bool(epoch_indexed),
+    }
 
 
 @block(
@@ -289,7 +315,12 @@ def append_indexed_window(ctx: ScratchContext, state: str = "indexed_window", in
     if incoming.shape[1] != int(table["values"].shape[2]): raise ValueError("indexed window value width does not match state")
     for row, value in zip(rows.tolist(), incoming):
         if row < 0 or row >= int(table["values"].shape[0]): raise IndexError("indexed window row out of range")
-        position = int(table["cursor"][row]); table["values"][row, position] = value; table["cursor"][row] = (position + 1) % int(table["window_size"]); table["counts"][row] = min(int(table["counts"][row]) + 1, int(table["window_size"]))
+        position = int(table["active_slot"]) if table.get("epoch_indexed") else int(table["cursor"][row])
+        table["values"][row, position] = value
+        if not table.get("epoch_indexed"):
+            table["cursor"][row] = (position + 1) % int(table["window_size"])
+        table["counts"][row] = min(int(table["counts"][row]) + 1, int(table["window_size"]))
+        table["observed"][row, position] = True
 
 
 @block(
@@ -297,11 +328,11 @@ def append_indexed_window(ctx: ScratchContext, state: str = "indexed_window", in
     name="Read Indexed Window",
     category="State",
     description="Read rolling history rows and counts without creating paper-specific state objects.",
-    params={"state": {"type": "slot", "default": "indexed_window"}, "indices": {"type": "slot", "default": "indices"}, "values_as": {"type": "slot", "default": "window_values"}, "counts_as": {"type": "slot", "default": "window_counts"}},
-    requires=("state", "indices"), provides=("values_as", "counts_as"), placement=("batch",), stage="train", ui_group="④ 状态更新",
+    params={"state": {"type": "slot", "default": "indexed_window"}, "indices": {"type": "slot", "default": "indices"}, "values_as": {"type": "slot", "default": "window_values"}, "counts_as": {"type": "slot", "default": "window_counts"}, "observed_as": {"type": "slot", "default": "window_observed"}},
+    requires=("state", "indices"), provides=("values_as", "counts_as", "observed_as"), placement=("batch",), stage="train", ui_group="④ 状态更新",
 )
-def read_indexed_window(ctx: ScratchContext, state: str = "indexed_window", indices: str = "indices", values_as: str = "window_values", counts_as: str = "window_counts") -> None:
-    table = ctx[state]; rows = _torch().as_tensor(ctx[indices]).long().reshape(-1).cpu(); ctx[values_as] = table["values"][rows].clone(); ctx[counts_as] = table["counts"][rows].clone()
+def read_indexed_window(ctx: ScratchContext, state: str = "indexed_window", indices: str = "indices", values_as: str = "window_values", counts_as: str = "window_counts", observed_as: str = "window_observed") -> None:
+    table = ctx[state]; rows = _torch().as_tensor(ctx[indices]).long().reshape(-1).cpu(); ctx[values_as] = table["values"][rows].clone(); ctx[counts_as] = table["counts"][rows].clone(); ctx[observed_as] = table["observed"][rows].clone()
 
 
 @block(
@@ -318,5 +349,96 @@ def reset_indexed_window(ctx: ScratchContext, state: str = "indexed_window", ind
     if rows.numel() and (int(rows.min()) < 0 or int(rows.max()) >= int(table["values"].shape[0])):
         raise IndexError("indexed window row out of range")
     table["values"][rows] = 0
+    table["observed"][rows] = False
     table["counts"][rows] = 0
     table["cursor"][rows] = 0
+
+
+@block(
+    id="advance_indexed_window_epoch",
+    name="Advance Indexed Window Epoch",
+    category="State",
+    description="Advance a fixed-window history to a new epoch and clear only the active slot.",
+    params={"state": {"type": "slot", "default": "indexed_window"},
+            "epoch": {"type": "slot", "default": "epoch"}},
+    requires=("state", "epoch"), provides=(), placement=("epoch",), stage="train", ui_group="④ 状态更新",
+)
+def advance_indexed_window_epoch(ctx: ScratchContext, state: str = "indexed_window", epoch: str = "epoch") -> None:
+    table = ctx[state]
+    if "window_size" not in table or "values" not in table:
+        raise TypeError("advance_indexed_window_epoch requires an indexed window state")
+    slot = int(ctx[epoch]) % int(table["window_size"])
+    table["values"][:, slot] = 0
+    if "observed" in table:
+        table["observed"][:, slot] = False
+    table["epoch"] = int(ctx[epoch])
+    table["active_slot"] = slot
+
+
+@block(
+    id="indexed_increment",
+    name="Indexed Increment",
+    category="State",
+    description="Increment a scalar indexed table at stable sample indices.",
+    params={"state": {"type": "slot", "default": "state"},
+            "indices": {"type": "slot", "default": "indices"},
+            "values": {"type": "slot", "default": "increments"}},
+    requires=("state", "indices", "values"), provides=(), placement=("batch",), stage="train", ui_group="④ 状态更新",
+)
+def indexed_increment(ctx: ScratchContext, state: str = "state", indices: str = "indices", values: str = "increments") -> None:
+    table = ctx[state]
+    rows = _torch().as_tensor(ctx[indices], dtype=_torch().long).reshape(-1).cpu()
+    raw = ctx[values] if isinstance(values, str) and values in ctx else values
+    increments = _torch().as_tensor(raw).reshape(-1).detach().cpu()
+    if increments.numel() == 1 and rows.numel() != 1:
+        increments = increments.expand(rows.numel())
+    if rows.numel() != increments.numel() or int(table["values"].shape[1]) != 1:
+        raise ValueError("indexed_increment requires one scalar value per index")
+    if rows.numel() and (int(rows.min()) < 0 or int(rows.max()) >= int(table["values"].shape[0])):
+        raise IndexError("indexed_increment index out of range")
+    table["values"][rows] += increments.to(table["values"].dtype).reshape(-1, 1)
+    if "seen" in table:
+        table["seen"][rows] = True
+
+
+@block(
+    id="ema_update",
+    name="EMA Update",
+    category="State",
+    description="Compute an exponential moving-average value without owning paper-specific state.",
+    params={"previous": {"type": "slot", "default": "previous"},
+            "current": {"type": "slot", "default": "current"},
+            "momentum": {"type": "float", "default": 0.9, "min": 0.0, "max": 1.0},
+            "save_as": {"type": "slot", "default": "updated"}},
+    requires=("previous", "current"), provides=("save_as",), placement=("batch", "epoch"), stage="train", ui_group="④ 状态更新",
+)
+def ema_update(ctx: ScratchContext, previous: str = "previous", current: str = "current",
+               momentum: float = 0.9, save_as: str = "updated") -> None:
+    value = ctx[previous]
+    target = ctx[current]
+    ctx[save_as] = value * float(momentum) + target * (1.0 - float(momentum))
+
+
+@block(
+    id="robust_window_mean",
+    name="Robust Window Mean",
+    category="State",
+    description="Average observed values in an indexed window, excluding unobserved entries.",
+    params={"values": {"type": "slot", "default": "window_values"},
+            "observed": {"type": "slot", "default": "window_observed"},
+            "save_as": {"type": "slot", "default": "robust_mean"},
+            "counts_as": {"type": "slot", "default": "window_counts"}},
+    requires=("values", "observed"), provides=("save_as", "counts_as"), placement=("batch",), stage="train", ui_group="④ 状态更新",
+)
+def robust_window_mean(ctx: ScratchContext, values: str = "window_values", observed: str = "window_observed",
+                       save_as: str = "robust_mean", counts_as: str = "window_counts") -> None:
+    tensor = ctx[values]
+    mask = ctx[observed].bool()
+    if tensor.ndim == mask.ndim + 1 and tensor.shape[-1] == 1:
+        tensor = tensor.squeeze(-1)
+    if tensor.shape != mask.shape:
+        raise ValueError("robust_window_mean values and observed shapes must match")
+    counts = mask.sum(dim=-1)
+    denominator = counts.clamp_min(1).to(tensor.dtype)
+    ctx[save_as] = (tensor * mask.to(tensor.dtype)).sum(dim=-1) / denominator
+    ctx[counts_as] = counts

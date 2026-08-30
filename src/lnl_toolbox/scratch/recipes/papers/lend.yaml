@@ -19,7 +19,7 @@ steps:
   - {block: create_model, params: {model: resnet18, num_classes: 10, base_width: 64, device: device, save_as: model}}
   - {block: create_optimizer, params: {optimizer: sgd, model: model, lr: 0.05, momentum: 0.9, weight_decay: 0.0005, save_as: optimizer}}
   - {block: create_scheduler, params: {scheduler: multistep, optimizer: optimizer, milestones: [100], gamma: 0.1, save_as: scheduler}}
-  - {block: create_indexed_history, params: {prepared_data: prepared_data, width: 10, save_as: lend_state}}
+  - {block: create_indexed_state, params: {prepared_data: prepared_data, width: 10, save_as: lend_state}}
   - block: epoch_loop
     params: {epochs: 200}
     steps:

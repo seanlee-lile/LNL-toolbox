@@ -594,30 +594,140 @@ def create_model(
 
 
 @block(
-    id="load_pcse_source_model",
-    name="PCSE: Load UPM Main-best Source",
+    id="attach_trainable_head",
+    name="Attach Trainable Head",
     category="Model",
-    description="Load the immutable formal UPM main-best checkpoint through PCSE's hash-checked source adapter.",
-    params={"model": {"type": "slot", "default": "model"}, "checkpoint_sha256": {"type": "str", "default": ""}, "manifest_sha256": {"type": "str", "default": ""}, "mapping_hash": {"type": "str", "default": ""}, "dataset_fingerprint": {"type": "str", "default": ""}, "source_env": {"type": "str", "default": "LNL_PCSE_SOURCE_RUN"}, "save_as": {"type": "slot", "default": "pcse_source"}},
+    description="Attach a named trainable linear head to an existing model without changing its base parameters.",
+    params={"model": {"type": "slot", "default": "model"},
+            "input_dim": {"type": "int", "default": 0, "min": 0},
+            "output_dim": {"type": "int", "default": 0, "min": 1},
+            "head_name": {"type": "str", "default": "head"},
+            "bias": {"type": "bool", "default": False}},
+    requires=("model",), provides=(), placement=("top",), stage="setup", ui_group="② 初始化",
+)
+def attach_trainable_head(ctx: ScratchContext, model: str = "model", input_dim: int = 0,
+                          output_dim: int = 0, head_name: str = "head",
+                          bias: bool = False) -> None:
+    torch, nn = _torch()
+    module = ctx[model]
+    name = str(head_name).strip()
+    if not name or not name.isidentifier():
+        raise ValueError("head_name must be a valid attribute name")
+    if hasattr(module, name):
+        return
+    incoming = int(input_dim)
+    if incoming <= 0:
+        classifier = getattr(module, "classifier", None)
+        incoming = int(getattr(classifier, "in_features", 0))
+    outgoing = int(output_dim)
+    if incoming <= 0 or outgoing <= 0:
+        raise ValueError("attach_trainable_head requires positive input_dim and output_dim")
+    setattr(module, name, nn.Linear(incoming, outgoing, bias=bool(bias)))
+
+
+@block(
+    id="zero_module_parameters",
+    name="Zero Module Parameters",
+    category="Model",
+    description="Set all parameters of a module or named submodule to zero.",
+    params={"module": {"type": "slot", "default": "model"},
+            "submodule": {"type": "str", "default": ""}},
+    requires=("module",), provides=(), placement=("top", "epoch"), stage="setup", ui_group="② 初始化",
+)
+def zero_module_parameters(ctx: ScratchContext, module: str = "model", submodule: str = "") -> None:
+    value = ctx[module]
+    target = value
+    if str(submodule).strip():
+        for part in str(submodule).split("."):
+            target = getattr(target, part)
+    parameters = list(target.parameters()) if hasattr(target, "parameters") else []
+    if not parameters:
+        raise ValueError("zero_module_parameters target has no parameters")
+    torch, _ = _torch()
+    with torch.no_grad():
+        for parameter in parameters:
+            parameter.zero_()
+
+
+@block(
+    id="set_module_trainability",
+    name="Set Module Trainability",
+    category="Model",
+    description="Freeze or unfreeze all parameters in a module or named submodule.",
+    params={"module": {"type": "slot", "default": "model"},
+            "submodule": {"type": "str", "default": ""},
+            "trainable": {"type": "bool", "default": True}},
+    requires=("module",), provides=(), placement=("top", "epoch"), stage="setup", ui_group="② 初始化",
+)
+def set_module_trainability(ctx: ScratchContext, module: str = "model", submodule: str = "",
+                            trainable: bool = True) -> None:
+    value = ctx[module]
+    target = value
+    if str(submodule).strip():
+        for part in str(submodule).split("."):
+            target = getattr(target, part)
+    if not hasattr(target, "parameters"):
+        raise TypeError("set_module_trainability requires a torch module")
+    for parameter in target.parameters():
+        parameter.requires_grad_(bool(trainable))
+
+
+@block(
+    id="load_model_artifact",
+    name="Load Model Artifact",
+    category="Model",
+    description="Load a checkpoint into an existing model with optional SHA-256 and provenance validation.",
+    params={"model": {"type": "slot", "default": "model"},
+            "path": {"type": "str", "default": ""},
+            "source_env": {"type": "str", "default": ""},
+            "checkpoint_sha256": {"type": "str", "default": ""},
+            "manifest_sha256": {"type": "str", "default": ""},
+            "mapping_hash": {"type": "str", "default": ""},
+            "dataset_fingerprint": {"type": "str", "default": ""},
+            "strict": {"type": "bool", "default": True},
+            "save_as": {"type": "slot", "default": "loaded_model"}},
     requires=("model",), provides=("save_as",), placement=("top",), stage="setup", ui_group="② 初始化",
 )
-def load_pcse_source_model(ctx: ScratchContext, model: str = "model", checkpoint_sha256: str = "", manifest_sha256: str = "", mapping_hash: str = "", dataset_fingerprint: str = "", source_env: str = "LNL_PCSE_SOURCE_RUN", save_as: str = "pcse_source") -> None:
+def load_model_artifact(ctx: ScratchContext, model: str = "model", path: str = "",
+                        source_env: str = "", checkpoint_sha256: str = "",
+                        manifest_sha256: str = "", mapping_hash: str = "",
+                        dataset_fingerprint: str = "", strict: bool = True,
+                        save_as: str = "loaded_model") -> None:
+    import hashlib
     import os
-    # Checkpoint loading is kept Scratch-native and explicit.  The source
-    # artifact is an optional external input; no legacy loader is invoked.
-    if bool((ctx.get("_runtime_limits") or {}).get("fixture")):
-        # Catalog fixtures do not have the user's immutable UPM artifact.
-        # Reuse the freshly-created Scratch model as a bounded stand-in while
-        # preserving the explicit source slot and formal path for real runs.
+    from pathlib import Path
+    import torch
+    if bool((ctx.get("_runtime_limits") or {}).get("fixture")) and not str(path).strip() and not str(source_env).strip():
+        # Bounded catalog runs intentionally omit immutable external artifacts.
+        # The formal path still validates a real checkpoint; fixture mode only
+        # supplies an explicitly marked local stand-in for structural tests.
+        ctx.setdefault("artifact_provenance", {})[save_as] = {"fixture": True}
         ctx[save_as] = ctx[model]
         return
-    path = os.environ.get(str(source_env))
-    if not path:
-        raise ValueError(f"PCSE source environment variable `{source_env}` is not set")
-    import torch
-    payload = torch.load(path, map_location="cpu", weights_only=True)
+    resolved = str(path).strip() or (os.environ.get(str(source_env).strip()) if str(source_env).strip() else "")
+    if not resolved and bool((ctx.get("_runtime_limits") or {}).get("fixture")):
+        ctx.setdefault("artifact_provenance", {})[save_as] = {"fixture": True, "source_env": str(source_env)}
+        ctx[save_as] = ctx[model]
+        return
+    if not resolved:
+        raise ValueError("load_model_artifact requires path or source_env")
+    artifact_path = Path(resolved)
+    if not artifact_path.is_file():
+        raise FileNotFoundError(str(artifact_path))
+    if str(checkpoint_sha256).strip():
+        digest = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+        if digest.lower() != str(checkpoint_sha256).strip().lower():
+            raise ValueError("model artifact SHA-256 does not match checkpoint_sha256")
+    payload = torch.load(artifact_path, map_location="cpu", weights_only=True)
     state = payload.get("state_dict", payload) if isinstance(payload, dict) else payload
     if not isinstance(state, dict):
-        raise TypeError("PCSE source checkpoint must contain a state dictionary")
-    ctx[model].load_state_dict(state, strict=False)
+        raise TypeError("model artifact must contain a state_dict mapping")
+    ctx[model].load_state_dict(state, strict=bool(strict))
+    # Preserve provenance values in the context for downstream audit/reporting.
+    ctx.setdefault("artifact_provenance", {})[save_as] = {
+        "checkpoint_sha256": str(checkpoint_sha256),
+        "manifest_sha256": str(manifest_sha256),
+        "mapping_hash": str(mapping_hash),
+        "dataset_fingerprint": str(dataset_fingerprint),
+    }
     ctx[save_as] = ctx[model]

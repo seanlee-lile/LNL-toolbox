@@ -9,6 +9,34 @@ from ..registry import block
 
 
 @block(
+    id="linear_rate_schedule",
+    name="Linear Rate Schedule",
+    category="Schedule",
+    description="Interpolate a scalar rate between explicit endpoints during warm-up.",
+    params={
+        "epoch": {"type": "slot", "default": "epoch"},
+        "start": {"type": "float", "default": 1.0},
+        "end": {"type": "float", "default": 0.5},
+        "warmup_epochs": {"type": "int", "default": 10, "min": 0},
+        "save_as": {"type": "slot", "default": "keep_rate"},
+    },
+    requires=("epoch",),
+    provides=("save_as",),
+    placement=("epoch",), stage="train", ui_group="⑥ 样本选择",
+    formula="r(t)=start+clip(t/T,0,1)(end-start)",
+    formula_ref="shared linear keep-rate schedule",
+)
+def linear_rate_schedule(ctx: ScratchContext, epoch: str = "epoch", start: float = 1.0,
+                         end: float = 0.5, warmup_epochs: int = 10,
+                         save_as: str = "keep_rate") -> None:
+    if int(warmup_epochs) <= 0:
+        progress = 1.0
+    else:
+        progress = min(max(float(ctx[epoch]), 0.0) / int(warmup_epochs), 1.0)
+    ctx[save_as] = float(start) + progress * (float(end) - float(start))
+
+
+@block(
     id="piecewise_rate_schedule",
     name="Piecewise Rate Schedule",
     category="Schedule",
