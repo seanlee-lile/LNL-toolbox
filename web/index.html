@@ -991,8 +991,38 @@
         cleanUsage:"说明：干净标签只用于数据身份检查、对齐和评估，不会参与 CAL 的训练更新。"
       }
     };
+    // Keep catalog metadata machine-readable. This layer is solely the concise
+    // Chinese copy shown on the paper page.
+    const localizedPaperPresentationCopy = {
+      "binary-risk": {summary:"在类别相关噪声率（class-dependent noise rates）已知时，构造不受标签翻转影响的二分类训练风险。", mechanism:"先根据已知噪声率校正每个样本的训练损失，再用校正后的风险优化二分类模型。", lifecycle:["提供已知的二分类噪声率", "计算逐样本校正损失", "训练二分类模型"], limitations:["当前提供的是风险校正组件与二分类训练流程，不是完整的论文基准复现。", "尚未提供可直接运行的默认正式配置。"]},
+      "importance-reweighting": {summary:"在二分类非对称随机分类噪声下，估计样本受噪声影响的程度并进行重加权训练。", mechanism:"先估计类别后验和噪声率，再使用停止梯度的重要性权重对交叉熵损失进行加权。", lifecycle:["估计类别后验概率", "估计噪声率", "验证噪声率结果", "使用重要性权重训练模型"], limitations:["当前仅支持二分类非对称随机分类噪声。", "Statlog Heart 流程是论文导向的工程实现，尚未验证论文表格中的数值结果。"]},
+      "loss-correction": {summary:"利用已知或估计的类别转移矩阵，减少错误标签对训练损失的影响。", mechanism:"先获得类别条件标签转移矩阵，再用前向或后向损失校正训练分类模型。", lifecycle:["获取标签转移矩阵", "验证转移矩阵", "计算逐样本校正损失", "执行监督训练"], limitations:["当前配置只覆盖一次 CIFAR-10 非对称噪声实验。", "尚未覆盖论文中的全部数据集和噪声组合。"]},
+      "coteaching": {summary:"让两个网络互相交换各自认为更可靠的低损失样本，以减轻错误标签的干扰。", mechanism:"两个网络独立初始化；每轮分别挑选低损失样本，再将这些样本交给另一网络更新。", lifecycle:["初始化两个网络", "分别计算样本损失", "选择低损失样本", "交叉更新两个网络", "评估单模型和集成结果"], limitations:["已提供完整预算训练流程，但当前网络结构、随机数控制和预处理尚未与论文逐项完全一致。", "尚未提供论文所需的末期模型平均、多次重复运行或严格数值复现。"]},
+      "gce": {summary:"通过调节 q 参数，在交叉熵与平均绝对误差之间取得抗噪性和学习速度的平衡。", mechanism:"使用广义交叉熵（GCE）逐样本损失，并接入统一的监督训练流程。", lifecycle:["计算逐样本 GCE 损失", "汇总批次损失", "更新模型", "根据验证集选择模型"], limitations:["当前只实现标准 GCE。", "未包含截断 GCE 的参数更新策略。"]},
+      "l2rw": {summary:"利用可信验证数据的反馈，为训练样本自动学习更合适的权重。", mechanism:"在虚拟参数更新中计算元梯度，再据此调整各训练样本对模型更新的贡献。", lifecycle:["读取可信验证数据", "执行虚拟参数更新", "计算元梯度样本权重", "更新训练模型", "评估模型"], limitations:["Smoke 配置只验证工程流程，不代表论文数值复现。"]},
+      "mentornet": {summary:"由 Mentor 网络学习课程权重，再用这些权重指导学生模型训练。", mechanism:"先用可信数据生成 MentorArtifact；双向长短期记忆网络（bi-LSTM）根据损失、训练轮次和标签历史生成逐样本权重。", lifecycle:["准备可信 Mentor 特征", "训练 Mentor 模型", "验证 MentorArtifact", "使用课程权重训练学生模型"], limitations:["Mentor 的特征准备和训练是独立的前置阶段。", "正式配置仍需要与当前数据身份匹配的外部 MentorArtifact。"]},
+      "t-revision": {summary:"先估计标签转移矩阵，再通过联合修订提升带噪标签分类的可靠性。", mechanism:"先训练带噪基础分类模型并初始化转移矩阵，然后同时修订分类器与标签转移参数。", lifecycle:["完成第一阶段训练", "初始化标签转移矩阵", "初始化分类器", "修订并继续训练", "在干净测试集上评估"], limitations:["正式配置使用先估计、再修订的标签转移矩阵。", "全量 Sym20 短配置只用于工程稳定性验证，不等同于论文的轮次设置或多随机种子数值复现。"]},
+      "apl": {summary:"组合主动鲁棒损失与被动鲁棒损失，以兼顾学习速度和抗噪能力。", mechanism:"分别计算主动损失和被动损失，再按权重组合为逐样本训练损失。", lifecycle:["计算逐样本主动损失", "计算逐样本被动损失", "加权组合两类损失", "执行监督训练"], limitations:["当前重点覆盖 NCE 与 RCE 的组合。", "配置结果不代表论文中的全部组合与多次重复结果。"]},
+      "dividemix": {summary:"根据样本损失把可能带噪的样本视为无标签数据，并用双网络半监督学习训练。", mechanism:"两个网络分别预热后，交叉进行混合模型划分、标签修正、标签猜测和 MixMatch 训练。", lifecycle:["分别预热两个网络", "记录对侧网络的全数据集损失", "生成交叉样本划分", "依次训练两个网络", "使用带噪验证集选择模型", "在干净测试集上评估集成结果"], limitations:["正式配置提供完整的论文导向流程，但尚未完成论文数值复现。", "当前网络结构与论文高度兼容但并非逐项一致；确定性混合模型种子和产物验证属于工具箱工程约定。"]},
+      "dual-t": {summary:"把难以直接估计的标签噪声转移矩阵分解为两个较易估计的矩阵。", mechanism:"先训练后验分类模型并估计双转移矩阵，再训练新的前向校正分类模型。", lifecycle:["训练后验分类模型", "保存最佳模型快照", "估计双转移矩阵", "记录产物身份信息", "训练新的校正分类模型"], limitations:["证据配置会增加审计信息，但不改变论文核心参数。", "正式结果仍需要按论文要求进行多随机种子比较。"]},
+      "jocor": {summary:"通过两个网络的预测一致性和共同的低损失样本选择，降低错误标签的影响。", mechanism:"联合计算监督损失和一致性正则项，按联合样本分数选择可靠样本并同时更新两个网络。", lifecycle:["初始化双模型", "联合前向计算", "施加一致性正则", "选择低损失样本", "联合更新双模型"], limitations:["正式配置不代表已完成论文所需的多次重复运行。", "其双模型生命周期与 Co-teaching 的交叉样本交换不同。"]},
+      "pdl": {summary:"使用样本相关的分部转移结构，描述实例依赖的标签噪声。", mechanism:"估计多个基础转移矩阵与逐样本混合系数，再用样本级转移矩阵进行前向损失校正。", lifecycle:["预热训练", "提取特征快照", "估计样本级标签转移关系", "使用校正损失训练", "评估模型"], limitations:["当前配置只覆盖 CIFAR-10 的实例依赖噪声路径。", "尚未包含共享的 T-Revision 扩展。"]},
+      "cal": {summary:"通过统一执行器提供二阶校正风险训练流程。", mechanism:"先构建代理标签统计，再使用二阶风险校正目标训练模型。", lifecycle:["构建代理标签统计", "执行二阶校正风险训练", "评估模型"], limitations:["Smoke 配置只验证工程流程，不代表论文数值复现。"]},
+      "cdr": {summary:"只更新关键参数，减轻网络在训练后期记忆错误标签的问题。", mechanism:"根据梯度和参数幅值计算关键分数，再按论文公式或作者代码兼容模式限制参数更新。", lifecycle:["进行标准早期学习", "计算关键分数", "按掩码更新参数", "保存训练策略状态"], limitations:["论文公式模式与作者代码兼容模式的参数更新规则存在差异。", "单次复现实验不提供五次运行的均值和标准差。"]},
+      "upm": {summary:"为每个具有稳定索引的训练样本学习实例相关的标签混淆概率。", mechanism:"先用带噪标签分类器估计观测类别概率，再交替更新主分类器、噪声参数和软标签目标。", lifecycle:["完成带噪交叉熵预训练", "从最佳模型提取确定性概率快照", "按稳定样本索引初始化噪声参数", "执行 UPM 交替优化", "在干净测试集上评估"], limitations:["内置配置使用对称噪声，不是论文中的 CIFAR 实例相关重标注或数值复现。", "从最佳模型提取确定性快照是工具箱的可复现性约定，论文没有完整规定该生命周期细节。"]},
+      "volminnet": {summary:"不依赖锚点样本，同时学习干净标签后验分类器和类别条件标签转移矩阵。", mechanism:"联合优化带噪标签负对数似然与最小体积项，同时更新分类器和标签转移矩阵。", lifecycle:["准备噪声清单", "联合训练分类器和转移矩阵", "使用带噪验证集选择模型", "发布转移矩阵产物", "在干净测试集上评估"], limitations:["已提供 CIFAR-10 Sym20 全预算论文流程配置，但尚未完成论文要求的重复运行数值复现。", "论文公式与作者代码的行列式定义存在差异；当前实现采用论文明确给出的正对数行列式定义。"]},
+      "cnlcu": {summary:"利用双网络的历史损失和不确定性证据，选择更可靠的训练样本。", mechanism:"CNLCU-S 使用软不确定性；CNLCU-H 使用按论文公式校正后的 LOF 截断，然后进行双网络交叉更新。", lifecycle:["初始化两个网络", "更新逐样本历史", "根据不确定性选择样本", "交叉更新两个网络", "保存历史状态"], limitations:["已提供完整预算的 CIFAR-10 Sym20 CNLCU-S 配置，但尚未完成论文多随机种子数值复现。", "CNLCU-H 使用按论文公式校正后的 LOF 截断规则。"]},
+      "cwd": {summary:"从类别统计量恢复去噪风险，并按论文的 CIFAR 二分类协议训练。", mechanism:"估计类别先验、虚拟翻转矩阵和系数矩阵的伪逆，再优化全局平方目标。", lifecycle:["构建二分类折叠", "统计各类别信息", "计算系数矩阵伪逆", "优化全局目标", "评估各折叠结果"], limitations:["当前一次只运行论文五折协议中的一个折叠。", "需要分别运行全部折叠，才能形成正式汇总。"]},
+      "lend": {summary:"在当前批次的特征图上传播标签，并选择传播结果仍与观测标签一致的样本。", mechanism:"单次前向同时得到分类输出和倒数第二层特征；随后构建批内近邻图，传播标签、更新历史并筛选一致样本。", lifecycle:["在线提取样本特征", "构建批内局部图", "传播并稀释标签", "更新跨轮次历史", "选择标签一致样本", "使用带噪标签更新模型"], limitations:["由于未找到可验证的作者实现，且论文未明确部分图构建和收敛细节，当前属于论文导向流程。", "全预算 CIFAR-10 配置采用工具箱定义的稀释步数、带噪验证集模型选择和单一随机种子，尚未验证论文数值复现。"]},
+      "mc-ldce": {summary:"通过固定特征的类别中心统计，训练更稳健的分类风险模型。", mechanism:"先估计标签转移关系并恢复干净类别中心统计量，再优化固定特征上的风险模型。", lifecycle:["估计标签转移关系", "恢复类别中心", "训练固定特征风险模型", "评估模型"], limitations:["Smoke 配置只验证工程流程，不代表论文数值复现。"]},
+      "pcse": {summary:"利用多个训练阶段的特征快照和类别统计，恢复各类别的干净数据分布。", mechanism:"先训练基础分类模型并收集中间层特征快照，估计标签转移关系，再依据论文公式恢复类别统计并完成后处理。", lifecycle:["在带噪数据上训练基础分类模型", "提取多个中间层特征", "估计标签转移关系", "恢复各类别的干净统计量", "构建生成式分类器并进行后处理"], limitations:["合成多分类 Smoke 配置不是论文数据集上的数值复现。", "当前最小体积转移矩阵参数化比论文允许的通用非奇异矩阵更严格。"]},
+      "ca2c": {summary:"通过非对称的双网络协同学习，减少带噪标签对训练的影响。", mechanism:"维护两个网络的候选样本记忆，并通过非对称交叉指导目标更新模型。", lifecycle:["预热两个网络", "更新候选样本记忆", "执行非对称协同学习", "评估模型"], limitations:["Smoke 配置只验证工程流程，不代表论文数值复现。"]},
+      "dld": {summary:"在标签存在噪声时，利用样本特征和标签扩散获得更可靠的分类结果。", mechanism:"先利用弱增强和强增强视图的邻域信息进行标签预校正，再通过方向扩散和随机扩散学习标签恢复过程。", lifecycle:["提取弱增强和强增强视图的特征", "完成标签预校正", "训练方向扩散与随机噪声预测网络", "使用带噪验证集选择模型", "在干净测试集上评估"], limitations:["正式配置需要真实的 ImageNet-1K 预训练 ResNet34 权重；未准备时暂不可运行。", "当前实现属于论文方法对齐版本，尚未接入论文官方使用的 ViT-L/14 特征路径，因此不能视为官方代码的完全复现；零值推理初始化属于工具箱工程策略。"]},
+      "dss": {summary:"利用类别与实例层面的去偏证据，改进带噪标签样本选择。", mechanism:"维护基础、去偏和一致性证据，生成候选监督集合，再用掩码风险训练模型。", lifecycle:["更新逐样本证据", "校正证据偏差", "构建候选标签", "使用掩码风险更新模型"], limitations:["当前是基础单网络 DSS，不是 DSS+ 扩展版本。", "复现配置不等同于论文要求的多次数值复现。"]},
+      "fine": {summary:"通过主动遗忘和噪声抑制，划分并处理可疑训练样本。", mechanism:"预热后使用指数移动平均模型、样本评分和强增强，将样本划分为可接受与拒绝两部分并施加额外训练目标。", lifecycle:["预热训练", "更新指数移动平均模型（EMA）", "划分 SCS/SCR 样本集合", "生成强增强视图", "优化主动遗忘目标"], limitations:["正式配置是单次 CIFAR-100 对称噪声实验。", "尚未形成论文曲线和多随机种子汇总。"]}
+    };
     function paperPresentation(paper) {
-      const copy = paperPresentationCopy[paper.id] || {};
+      const copy = localizedPaperPresentationCopy[paper.id] || paperPresentationCopy[paper.id] || {};
       return {
         summary: copy.summary || paper.summary,
         mechanism: copy.mechanism || paper.mechanism,
@@ -1007,7 +1037,45 @@
       "per-class recovery":"逐类别统计恢复",
       "second-order corrected risk":"二阶校正风险",
       "learned curriculum":"学习得到的课程权重",
-      "student schedule":"学生模型训练计划"
+      "student schedule":"学生模型训练计划",
+      "unbiased binary risk":"无偏二分类风险",
+      "noise-rate estimation":"噪声率估计",
+      "importance weights":"重要性权重",
+      "transition estimator":"标签转移矩阵估计",
+      "forward correction":"前向损失校正",
+      "remember-rate":"样本保留比例",
+      "cross update":"双网络交叉更新",
+      "Lq loss":"Lq 鲁棒损失",
+      "meta-gradient example weights":"元梯度样本权重",
+      "transition revision":"标签转移矩阵修订",
+      "active-passive composition":"主动—被动鲁棒损失组合",
+      "cross-network loss-mixture co-divide":"双网络损失混合划分",
+      "co-refinement and co-guessing":"协同标签修正与标签猜测",
+      "MixMatch objective":"MixMatch 半监督训练目标",
+      "two-stage transition":"两阶段标签转移估计",
+      "Forward correction":"前向损失校正",
+      "joint loss":"联合损失",
+      "sample selection":"样本选择",
+      "part-dependent transition":"分部标签转移结构",
+      "corrected risk":"校正风险",
+      "critical parameter update":"关键参数更新",
+      "naive observed-label probability":"观测标签概率",
+      "confusing probability PGA":"标签混淆概率优化",
+      "true-posterior soft supervision":"真实后验软监督",
+      "joint minimum-volume objective":"联合最小体积目标",
+      "trainable transition":"可训练标签转移矩阵",
+      "uncertainty-aware peer selection":"基于不确定性的双网络样本选择",
+      "class-wise statistics":"类别统计量",
+      "global objective":"全局训练目标",
+      "online feature graph":"在线特征图",
+      "label dilution and history":"标签稀释与历史信息",
+      "agreement selection":"一致性样本选择",
+      "clean centroid statistic":"干净类别中心统计",
+      "asymmetric co-learning":"非对称协同学习",
+      "DSS objective":"DSS 训练目标",
+      "selection evidence":"样本选择证据",
+      "active forgetting":"主动遗忘",
+      "two-stage training":"两阶段训练"
     };
     function paperConceptLabel(value) {
       return paperConceptCopy[value] || value;

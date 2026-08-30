@@ -676,6 +676,37 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertNotIn("1. 1.", page)
         self.assertNotIn("2. 2.", page)
 
+    def test_all_paper_pages_have_chinese_presentation_and_concept_mappings(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        paper_ids = (
+            "binary-risk", "importance-reweighting", "loss-correction",
+            "coteaching", "gce", "l2rw", "mentornet", "t-revision",
+            "apl", "dividemix", "dual-t", "jocor", "pdl", "cal",
+            "cdr", "upm", "volminnet", "cnlcu", "cwd", "lend",
+            "mc-ldce", "pcse", "ca2c", "dld", "dss", "fine",
+        )
+        self.assertIn("const localizedPaperPresentationCopy", page)
+        for paper_id in paper_ids:
+            self.assertIn('"' + paper_id + '": {summary:', page)
+
+        for marker in (
+            '"unbiased binary risk":"无偏二分类风险"',
+            '"meta-gradient example weights":"元梯度样本权重"',
+            '"active-passive composition":"主动—被动鲁棒损失组合"',
+            '"uncertainty-aware peer selection":"基于不确定性的双网络样本选择"',
+            '"clean centroid statistic":"干净类别中心统计"',
+            '"asymmetric co-learning":"非对称协同学习"',
+            '"critical parameter update":"关键参数更新"',
+            '"DSS objective":"DSS 训练目标"',
+        ):
+            self.assertIn(marker, page)
+
+        self.assertIn(
+            "localizedPaperPresentationCopy[paper.id] || paperPresentationCopy[paper.id]",
+            page,
+        )
+        self.assertIn('replace(/^\\s*\\d+\\s*[.、]\\s*/, "")', page)
+
     def test_mentornet_paper_ui_exposes_guided_artifact_readiness(self):
         status = {
             "status": "not_ready",
