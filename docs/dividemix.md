@@ -1,7 +1,8 @@
 # DivideMix workflow
 
-The public `method: dividemix` runner implements a paper/official-oriented
-two-network workflow. Both peers are warmed up independently. At the start of
+The public `method: dividemix` runner implements a 论文方法对齐（paper-oriented）
+工程流程（engineering workflow）, rather than a claim of numerical reproduction.
+Both peers are warmed up independently. At the start of
 each main epoch, both full-training loss snapshots are frozen before either
 peer is updated. The existing two-component GMM estimator produces continuous
 clean probabilities. Probabilities produced by A divide data for B, and those
@@ -24,6 +25,9 @@ lnl run --recipe cifar10-dividemix-smoke --dry-run
 lnl run --recipe cifar10-dividemix-smoke
 lnl resume <run-directory>
 ```
+
+These are the current recommended CLI entrypoints. The detailed profile and
+fidelity boundaries are in [the DivideMix reproduction guide](../papers/dividemix/reproduction.md).
 
 `--epochs N` changes only `dividemix.training.epochs`; it does not change the
 warmup budget. Noisy validation selects the paired best checkpoint. Clean test

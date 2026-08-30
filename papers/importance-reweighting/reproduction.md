@@ -30,6 +30,10 @@ The current implementation supports:
 - checkpoint selection on observed/noisy validation labels and final
   evaluation on a clean test split.
 
+Here, `paper-exact` is limited to that binary importance-weight formula. It
+does not claim a paper-exact data protocol, complete workflow, or numerical
+reproduction.
+
 Clean labels are not supplied to the training algorithm. The current runner
 does not use clean validation targets: validation labels are noisy by
 contract, while the test labels remain clean.
@@ -104,9 +108,9 @@ The public recipe `uci-heart-importance-reweighting` uses UCI Statlog Heart
 
 ```powershell
 python scripts/prepare_uci_statlog_heart.py
-python -m lnl_toolbox.cli.main validate --recipe uci-heart-importance-reweighting --check-data
-python -m lnl_toolbox.cli.main run --recipe uci-heart-importance-reweighting
-python -m lnl_toolbox.cli.main resume <run-directory>
+lnl validate --recipe uci-heart-importance-reweighting --check-data
+lnl run --recipe uci-heart-importance-reweighting
+lnl resume <run-directory>
 ```
 
 The raw `heart.dat` SHA-256 is

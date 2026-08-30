@@ -1,7 +1,8 @@
 # LEND reproduction and maintenance
 
-The toolbox implements a **paper-oriented LEND workflow**. It is not described
-as paper-exact, released-code exact, or a numerical reproduction because no
+The toolbox implements a **论文方法对齐（paper-oriented）工程流程（engineering workflow）**.
+It is not described as paper-exact, released-code exact, or a numerical
+reproduction because no
 verifiable author implementation was found and the paper leaves several runtime
 choices unspecified.
 
@@ -45,20 +46,23 @@ column zero, and leaves every positive-degree result unchanged.
 ## Unified commands
 
 ```powershell
-python -m lnl_toolbox.cli.main doctor
-python -m lnl_toolbox.cli.main list experiments --profile smoke
-python -m lnl_toolbox.cli.main papers show lend
-python -m lnl_toolbox.cli.main papers config lend --profile smoke --path-only
-python -m lnl_toolbox.cli.main validate --recipe cifar10-lend-smoke
-python -m lnl_toolbox.cli.main run --recipe cifar10-lend-smoke --dry-run
-python -m lnl_toolbox.cli.main run --recipe cifar10-lend-smoke
-python -m lnl_toolbox.cli.main resume <run-directory>
+lnl doctor
+lnl list experiments --profile smoke
+lnl papers show lend
+lnl papers config lend --profile smoke --path-only
+lnl validate --recipe cifar10-lend-smoke
+lnl run --recipe cifar10-lend-smoke --dry-run
+lnl run --recipe cifar10-lend-smoke
+lnl resume <run-directory>
 ```
 
 `--epochs N` overrides only `lend.training.epochs`. Resume validates the method,
 graph, dilution, history and selection policies; model/optimizer/scheduler;
 stable sample mapping; and noise manifest. A completed resume with the same
 epoch target is a no-op. Increasing the epoch target is supported.
+
+`python -m lnl_toolbox.cli.main ...` remains a developer-equivalent entrypoint;
+the `lnl ...` commands above are the current recommended user entrypoint.
 
 ## Outputs and limits
 
@@ -70,8 +74,8 @@ checkpoint selection.
 ## Full-budget CIFAR-10 profile
 
 The public `lend-cifar10-reproduction` recipe is a real CIFAR-10, single-seed,
-full-budget **paper-oriented** workflow. It is not a paper-exact numerical
-reproduction and has not yet been run to completion.
+full-budget **论文方法对齐（paper-oriented）工程流程**. It is not a paper-exact
+numerical reproduction and has not yet been run to completion; 尚未完成数值复现验证.
 
 Paper-specified or paper-recommended settings retained by this profile are:
 
@@ -106,11 +110,11 @@ paper-exact implementation detail.
 Run the formal profile through the same unified lifecycle:
 
 ```powershell
-python -m lnl_toolbox.cli.main list experiments --profile reproduction
-python -m lnl_toolbox.cli.main validate --recipe lend-cifar10-reproduction
-python -m lnl_toolbox.cli.main run --recipe lend-cifar10-reproduction --dry-run
-python -m lnl_toolbox.cli.main run --recipe lend-cifar10-reproduction
-python -m lnl_toolbox.cli.main resume <run-directory>
+lnl list experiments --profile reproduction
+lnl validate --recipe lend-cifar10-reproduction
+lnl run --recipe lend-cifar10-reproduction --dry-run
+lnl run --recipe lend-cifar10-reproduction
+lnl resume <run-directory>
 ```
 
 Before a 200-epoch run, perform a separately authorized short GPU sanity at
