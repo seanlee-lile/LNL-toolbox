@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from lnl_toolbox.data.profile import Modality
 from lnl_toolbox.training.compatibility import ConfigInputRequirement, MethodRequirements
+from lnl_toolbox.training.prerequisites import SourceDescriptor
 from lnl_toolbox.training.planning import (
     RunPlan,
     coteaching_plan,
@@ -331,6 +332,25 @@ def _cal_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         requires_aligned_clean_noisy_targets=True,
         validation_target="clean",
         required_config_inputs=inputs,
+        prerequisites=(() if synthetic_feature_smoke else (SourceDescriptor(
+            key="cal_external_labels",
+            kind="external_label_artifact",
+            name="Aligned CAL clean/noisy label artifact",
+            requirement="aligned external clean/noisy label vectors",
+            obtain="obtain the benchmark IDN label artifact",
+            provide="set noise.path, noise.clean_key, and noise.noisy_key",
+            validator="cal_external_labels",
+            supported_sources=("external_torch",),
+            config_paths=(
+                ("noise", "path"),
+                ("noise", "clean_key"),
+                ("noise", "noisy_key"),
+            ),
+            clean_data_usage=(
+                "Clean labels are used only for identity, alignment, and evaluation; "
+                "they are not an input to CAL optimizer updates."
+            ),
+        ),)),
     )
 
 
@@ -441,11 +461,30 @@ def _pcse_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
         min_classes=3,
         validation_target="noisy",
-        required_pretrained_roles=("upm_main_best",) if external else (),
+        required_pretrained_roles=("pretrained_classifier",) if external else (),
         pretrained_role_paths=(
-            (("upm_main_best", ("pretraining_stage", "source", "run_directory_env")),)
+            (("pretrained_classifier", ("pretraining_stage", "source", "run_directory_env")),)
             if external else ()
         ),
+        prerequisites=(() if not external else (SourceDescriptor(
+            key="pretrained_classifier",
+            kind="pretrained_classifier",
+            name="PCSE pretrained classifier",
+            requirement="a compatible trained classifier with hidden-layer features",
+            obtain="finish a supported CE, Co-teaching peer A, or UPM run",
+            provide="select the immutable producer run and configure its hashes",
+            validator="pcse_classifier",
+            supported_sources=(
+                "supervised_best",
+                "coteaching_peer_a_best",
+                "upm_main_best",
+            ),
+            config_paths=(("pretraining_stage", "source"),),
+            environment_variable=(
+                str(pretraining.get("source", {}).get("run_directory_env", "")) or None
+                if isinstance(pretraining.get("source"), Mapping) else None
+            ),
+        ),)),
     )
 
 
@@ -458,11 +497,25 @@ def _dld_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         supported_modalities=frozenset({Modality.IMAGE}),
         min_classes=2,
         validation_target="noisy",
-        required_pretrained_roles=("upm_main_best",) if source == "external_checkpoint" else (),
-        pretrained_role_paths=(
-            (("upm_main_best", ("dld", "feature_extractor", "external", "run_directory_env")),)
-            if source == "external_checkpoint" else ()
-        ),
+        required_pretrained_roles=("dld_feature_extractor",) if source == "external_checkpoint" else (),
+        prerequisites=(() if source != "external_checkpoint" else (SourceDescriptor(
+            key="dld_feature_extractor",
+            kind="pretrained_feature_extractor",
+            name="DLD pretrained feature extractor",
+            requirement="a high-quality frozen pretrained feature extractor",
+            obtain="provide cached official ResNet34 weights or a validated UPM run",
+            provide="select one of the explicitly supported extractor adapters",
+            validator="dld_feature_extractor",
+            supported_sources=(
+                "torchvision_resnet34_imagenet1k_v1",
+                "upm_main_best",
+            ),
+            config_paths=(("dld", "feature_extractor", "external"),),
+            environment_variable=(
+                str(feature.get("external", {}).get("run_directory_env", "")) or None
+                if isinstance(feature.get("external"), Mapping) else None
+            ),
+        ),)),
     )
 
 

@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 from urllib.parse import parse_qs, unquote, urlparse
 
 
@@ -544,11 +544,29 @@ def _paper_payload() -> list[dict[str, object]]:
         mentornet_preparation_status,
         resolve_config_paths,
     )
+    from lnl_toolbox.training.prerequisites import ReadinessStatus
+    from lnl_toolbox.training.service import ExperimentService
+
+    def configured_values(
+        config: Mapping[str, object], paths: tuple[tuple[str, ...], ...]
+    ) -> list[dict[str, object]]:
+        values = []
+        for path in paths:
+            current: object = config
+            for part in path:
+                if not isinstance(current, Mapping) or part not in current:
+                    current = None
+                    break
+                current = current[part]
+            if current is not None:
+                values.append({"path": ".".join(path), "value": current})
+        return values
 
     recipes = {
         recipe.id: recipe
         for recipe in discover_recipes(ROOT, include_conditional=True)
     }
+    prerequisite_service = ExperimentService()
     payload = []
     for paper in load_papers(ROOT):
         default_config = next(
@@ -577,6 +595,7 @@ def _paper_payload() -> list[dict[str, object]]:
         })
         for config in paper.configs:
             recipe = recipes[config.recipe_id]
+            resolved = resolve_config_paths(load_recipe_config(recipe), ROOT)
             profile_label = {
                 "reproduction": "正式复现",
                 "smoke": "快速检查",
@@ -600,8 +619,34 @@ def _paper_payload() -> list[dict[str, object]]:
                 "reproduction_status": config.reproduction_status,
                 "availability": config.availability,
             })
+            readiness = prerequisite_service.prerequisite_readiness(resolved)
+            if readiness:
+                serialized = []
+                for item in readiness:
+                    value = item.to_dict()
+                    value.update({
+                        "id": item.descriptor.key,
+                        "display_name": item.descriptor.name,
+                        "readiness_level": value["level"],
+                        "required_source": item.descriptor.requirement,
+                        "provision_method": item.descriptor.provide,
+                        "configured_source": configured_values(
+                            resolved, item.descriptor.config_paths
+                        ),
+                        "validation_message": item.message,
+                    })
+                    serialized.append(value)
+                statuses = {item.status for item in readiness}
+                aggregate = (
+                    "INVALID"
+                    if ReadinessStatus.INVALID in statuses
+                    else "NEEDS_INPUT"
+                    if ReadinessStatus.NEEDS_INPUT in statuses
+                    else "READY"
+                )
+                payload[-1]["configs"][-1]["prerequisites"] = serialized
+                payload[-1]["configs"][-1]["prerequisite_status"] = aggregate
             if paper.id == "mentornet":
-                resolved = resolve_config_paths(load_recipe_config(recipe), ROOT)
                 payload[-1]["configs"][-1]["preparation"] = (
                     mentornet_preparation_status(
                         resolved,

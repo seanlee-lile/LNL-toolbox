@@ -43,6 +43,10 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertIn('selectedRecipe?.status === "compatible"', page)
         self.assertIn('recipe.status === "incompatible"', page)
         self.assertIn('recipe.input_guidance || []', page)
+        self.assertIn('recipe.prerequisites || []', page)
+        self.assertIn('function prerequisiteReadinessCard', page)
+        self.assertIn('真实支持来源', page)
+        self.assertIn('clean_data_usage', page)
         self.assertIn('item.category === "dataset_fact"', page)
         self.assertIn('item.category === "developer_error"', page)
         self.assertIn('item.environment_variable', page)
@@ -565,6 +569,68 @@ class CommandConsoleTest(unittest.TestCase):
         preparation = mentornet["configs"][0]["preparation"]
         self.assertIn(preparation["status"], {"ready", "not_ready"})
         self.assertIn("artifact_ready", preparation)
+
+    def test_paper_payload_wires_shared_prerequisite_readiness(self):
+        papers = {item["id"]: item for item in command_console._paper_payload()}
+
+        pcse = next(
+            item for item in papers["pcse"]["configs"]
+            if item["recipe_id"] == "cifar10-pcse-reproduction"
+        )
+        self.assertEqual(pcse["availability"], "conditional")
+        self.assertIn(pcse["prerequisite_status"], {"READY", "NEEDS_INPUT", "INVALID"})
+        pcse_source = pcse["prerequisites"][0]
+        self.assertEqual(pcse_source["kind"], "pretrained_classifier")
+        self.assertEqual(
+            set(pcse_source["supported_sources"]),
+            {"supervised_best", "coteaching_peer_a_best", "upm_main_best"},
+        )
+        self.assertNotIn("must use UPM", pcse_source["required_source"])
+
+        dld = next(
+            item for item in papers["dld"]["configs"]
+            if item["recipe_id"] == "dld-cifar10-reproduction"
+        )
+        dld_source = dld["prerequisites"][0]
+        self.assertEqual(dld_source["kind"], "pretrained_feature_extractor")
+        self.assertIn("torchvision_resnet34_imagenet1k_v1", dld_source["supported_sources"])
+        self.assertNotIn("repository_frozen_model", dld_source["supported_sources"])
+        self.assertIn(dld["prerequisite_status"], {"READY", "NEEDS_INPUT", "INVALID"})
+
+        cal = next(
+            item for item in papers["cal"]["configs"]
+            if item["recipe_id"] == "cal-cifar10-reproduction"
+        )
+        cal_source = cal["prerequisites"][0]
+        self.assertEqual(cal_source["kind"], "external_label_artifact")
+        self.assertIn("identity", cal_source["clean_data_usage"].lower())
+        self.assertIn("not an input", cal_source["clean_data_usage"].lower())
+        self.assertNotEqual(cal_source["kind"], "pretrained_classifier")
+
+        for config in (pcse, dld, cal):
+            source = config["prerequisites"][0]
+            for key in (
+                "id", "display_name", "readiness_level", "required_source",
+                "provision_method", "configured_source", "provenance",
+                "validation_message",
+            ):
+                self.assertIn(key, source)
+
+    def test_paper_page_reuses_prerequisite_card_and_gates_run(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        for marker in (
+            "function paperConfigRunReady(config)",
+            'config.prerequisite_status === "READY"',
+            "prerequisites.map(prerequisiteReadinessCard)",
+            "运行前置要求 · ",
+            "如需补充或更换 source/artifact",
+            "编辑为项目 YAML",
+            "if (!paperConfigRunReady(selected)) return;",
+        ):
+            self.assertIn(marker, page)
+        self.assertIn("!config.preparation || Boolean(config.preparation.artifact_ready)", page)
+        self.assertIn('config.availability !== "conditional"', page)
+        self.assertNotIn("repository_frozen_model</b>", page)
 
     def test_mentornet_paper_ui_exposes_guided_artifact_readiness(self):
         status = {

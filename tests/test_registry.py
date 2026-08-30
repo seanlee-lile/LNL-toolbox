@@ -196,11 +196,11 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
             self.assertTrue(requirement.requires_method_noise_prior)
             self.assertFalse(requirement.requires_dataset_true_noise_rate)
         pcse = registry.get('pcse').requirements({'pretraining_stage': {'mode': 'external_checkpoint'}})
-        self.assertEqual(pcse.required_pretrained_roles, ('upm_main_best',))
-        self.assertEqual(pcse.pretrained_role_paths, (('upm_main_best', ('pretraining_stage', 'source', 'run_directory_env')),))
+        self.assertEqual(pcse.required_pretrained_roles, ('pretrained_classifier',))
+        self.assertEqual(pcse.prerequisites[0].supported_sources, ('supervised_best', 'coteaching_peer_a_best', 'upm_main_best'))
         dld = registry.get('dld').requirements({'dld': {'feature_extractor': {'source': 'external_checkpoint'}}})
-        self.assertEqual(dld.required_pretrained_roles, ('upm_main_best',))
-        self.assertEqual(dld.pretrained_role_paths, (('upm_main_best', ('dld', 'feature_extractor', 'external', 'run_directory_env')),))
+        self.assertEqual(dld.required_pretrained_roles, ('dld_feature_extractor',))
+        self.assertEqual(dld.prerequisites[0].supported_sources, ('torchvision_resnet34_imagenet1k_v1', 'upm_main_best'))
 
     def test_all_formal_papers_publish_config_specific_requirements(self) -> None:
         expected = {'binary-risk': 'binary', 'importance-reweighting': 'importance_reweighting', 'loss-correction': 'loss_correction', 'coteaching': 'coteaching', 'gce': 'gce', 'l2rw': 'l2rw', 'mentornet': 'mentornet', 't-revision': 't_revision', 'apl': 'apl', 'dividemix': 'dividemix', 'dual-t': 'dual_t', 'jocor': 'jocor', 'pdl': 'pdl', 'cal': 'cal', 'cdr': 'cdr', 'upm': 'upm', 'volminnet': 'volminnet', 'cnlcu': 'cnlcu', 'cwd': 'cwd', 'lend': 'lend', 'mc-ldce': 'mc_ldce', 'pcse': 'pcse', 'ca2c': 'ca2c', 'dld': 'dld', 'dss': 'dss', 'fine': 'fine'}

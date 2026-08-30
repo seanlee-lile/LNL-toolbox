@@ -193,31 +193,36 @@ class _dld_precorrection_DLDPreCorrectionTest(unittest.TestCase):
         for index, probability in zip(indices[order], permuted.probabilities):
             self.assertTrue(torch.allclose(probability, by_index[int(index)]))
 
-    def test_cosine_similarity_weights_match_released_formula(self) -> None:
+    def test_cosine_similarity_uses_inverse_distance_weights(self) -> None:
         features = torch.tensor([[1.0, 0.0], [0.8, 0.6], [0.6, 0.8], [0.4, 3.0 ** 0.5 * 0.4]], dtype=torch.float64)
         targets = torch.tensor([0, 1, 1, 0])
         indices = torch.tensor([30, 10, 20, 40])
         delta = 1e-06
         result = weighted_neighbor_distribution(features[:1], features, targets, indices[:1], indices, num_classes=2, k=3, metric='cosine_similarity', delta=delta, self_neighbor='include')
         expected_similarity = torch.tensor([[1.0, 0.8, 0.6]], dtype=torch.float64)
-        expected_raw = 1.0 / (expected_similarity + delta)
+        expected_raw = 1.0 / (1.0 - expected_similarity + delta)
         expected_weights = expected_raw / expected_raw.sum(dim=1, keepdim=True)
         torch.testing.assert_close(result.neighbor_values, expected_similarity)
         torch.testing.assert_close(result.unnormalized_weights, expected_raw)
         torch.testing.assert_close(result.weights, expected_weights)
         torch.testing.assert_close(result.probabilities, torch.tensor([[expected_weights[0, 0], expected_weights[0, 1:].sum()]], dtype=torch.float64))
-        self.assertAlmostEqual(float(result.neighbor_values[0, 0]), 1.0)
-        self.assertAlmostEqual(float(result.unnormalized_weights[0, 0]), 1.0, places=5)
-        self.assertLess(float(result.unnormalized_weights[0, 0]), 2.0)
+        self.assertGreater(
+            float(result.unnormalized_weights[0, 0]),
+            float(result.unnormalized_weights[0, 1]),
+        )
+        self.assertGreater(
+            float(result.unnormalized_weights[0, 1]),
+            float(result.unnormalized_weights[0, 2]),
+        )
 
-    def test_cosine_similarity_invalid_weight_denominator_fails(self) -> None:
+    def test_cosine_similarity_negative_values_are_valid_distances(self) -> None:
         query = torch.tensor([[1.0, 0.0]], dtype=torch.float64)
         references = torch.tensor([[-1.0, 0.0], [-0.5, 3.0 ** 0.5 / 2.0]], dtype=torch.float64)
-        with self.assertRaisesRegex(ValueError, 'denominator'):
-            weighted_neighbor_distribution(query, references, torch.tensor([0, 1]), torch.tensor([10]), torch.tensor([20, 30]), num_classes=2, k=1, metric='cosine_similarity', delta=1e-06)
+        result = weighted_neighbor_distribution(query, references, torch.tensor([0, 1]), torch.tensor([10]), torch.tensor([20, 30]), num_classes=2, k=1, metric='cosine_similarity', delta=1e-06)
+        self.assertTrue(torch.isfinite(result.weights).all())
         zeros = torch.zeros((2, 2), dtype=torch.float64)
-        with self.assertRaisesRegex(ValueError, 'weights'):
-            weighted_neighbor_distribution(zeros[:1], zeros, torch.tensor([0, 1]), torch.tensor([10]), torch.tensor([20, 30]), num_classes=2, k=1, metric='cosine_similarity', delta=float.fromhex('0x0.0000000000001p-1022'))
+        zero_result = weighted_neighbor_distribution(zeros[:1], zeros, torch.tensor([0, 1]), torch.tensor([10]), torch.tensor([20, 30]), num_classes=2, k=1, metric='cosine_similarity', delta=float.fromhex('0x0.0000000000001p-1022'))
+        self.assertTrue(torch.isfinite(zero_result.weights).all())
 
     def test_exact_chunking_matches_dense_end_to_end(self) -> None:
         generator = torch.Generator().manual_seed(413)
@@ -500,7 +505,7 @@ from lnl_toolbox.noise.manifest import fingerprint_labels
 from lnl_toolbox.training.checkpoint import atomic_save
 
 # --- merged from test_dld_readiness.py ---
-from lnl_toolbox.training.dld_pretrained import load_upm_main_best_feature_source
+from lnl_toolbox.training.dld_pretrained import load_torchvision_resnet34_imagenet1k_v1_source, load_upm_main_best_feature_source
 
 # --- merged from test_dld_readiness.py ---
 from lnl_toolbox.training.experiment import build_model
@@ -539,6 +544,45 @@ class _dld_readiness_DLDReadinessTest(unittest.TestCase):
         self.assertEqual(parsed.precorrection['k_neighbors'], 50)
         self.assertEqual(parsed.diffusion['timesteps'], 1000)
         self.assertEqual(parsed.epochs, 200)
+        self.assertEqual(parsed.feature_extractor['source'], 'external_checkpoint')
+        self.assertEqual(parsed.feature_extractor['external']['adapter'], 'torchvision_resnet34_imagenet1k_v1')
+
+    def test_torchvision_resnet34_source_is_pretrained_frozen_and_explicit(self) -> None:
+        from torchvision.models import resnet34
+
+        with tempfile.TemporaryDirectory() as directory:
+            cached = Path(directory) / 'resnet34-b627a593.pth'
+            cached.write_bytes(b'official-cache-fixture')
+            model = resnet34(weights=None)
+            config = {
+                'adapter': 'torchvision_resnet34_imagenet1k_v1',
+                'weights': 'IMAGENET1K_V1',
+                'input_contract': 'cifar10_standard_normalized',
+            }
+            with mock.patch(
+                'lnl_toolbox.training.dld_pretrained._cached_torchvision_weight',
+                return_value=cached,
+            ), mock.patch('torchvision.models.resnet34', return_value=model) as factory:
+                source = load_torchvision_resnet34_imagenet1k_v1_source(config)
+            self.assertEqual(factory.call_args.kwargs['weights'].name, 'IMAGENET1K_V1')
+            self.assertEqual(source.provenance['feature_dimension'], 512)
+            self.assertEqual(source.provenance['input_contract'], 'cifar10_standard_normalized')
+            self.assertTrue(source.provenance['frozen'])
+            self.assertTrue(all(not parameter.requires_grad for parameter in source.model.parameters()))
+            output = source.model.forward_with_features(torch.zeros(1, 3, 32, 32))
+            self.assertEqual(tuple(output.features.shape), (1, 512))
+
+    def test_torchvision_source_does_not_download_missing_weights(self) -> None:
+        config = {
+            'adapter': 'torchvision_resnet34_imagenet1k_v1',
+            'weights': 'IMAGENET1K_V1',
+            'input_contract': 'cifar10_standard_normalized',
+        }
+        with tempfile.TemporaryDirectory() as directory, mock.patch(
+            'torch.hub.get_dir', return_value=directory
+        ):
+            with self.assertRaisesRegex(FileNotFoundError, 'not cached'):
+                load_torchvision_resnet34_imagenet1k_v1_source(config)
 
     def test_real_short_config_is_full_data_external_sym20(self) -> None:
         path = _dld_readiness_ROOT / 'configs' / 'reproduction' / 'cifar10_dld_sym20_short.yaml'

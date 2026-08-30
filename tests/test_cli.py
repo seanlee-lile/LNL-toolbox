@@ -1033,7 +1033,10 @@ class _dld_cli_DLDCliTest(unittest.TestCase):
         self.assertEqual(resolve_runner(self.config).name, 'dld')
         self.assertEqual(validate_config(self.config).name, 'dld')
         self.assertEqual(recipe_by_id('cifar10-dld-smoke').runner, 'dld')
-        self.assertEqual(paper_by_id('dld').implementation_status, 'user_ready')
+        paper = paper_by_id('dld')
+        self.assertEqual(paper.implementation_status, 'conditional')
+        formal = next(item for item in paper.configs if item.recipe_id == 'dld-cifar10-reproduction')
+        self.assertEqual(formal.availability, 'conditional')
 
     def test_epoch_override_only_changes_diffusion(self) -> None:
         config = deepcopy(self.config)

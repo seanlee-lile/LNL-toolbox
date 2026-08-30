@@ -33,7 +33,7 @@ from lnl_toolbox.training.noisy_labels import (
     effective_subset_actual_rate,
     file_sha256,
 )
-from lnl_toolbox.training.pcse_pretrained import load_upm_main_best_source
+from lnl_toolbox.training.pcse_pretrained import load_pretrained_classifier_source
 
 
 class _PCSEMultilayerPerceptron(nn.Module):
@@ -252,7 +252,7 @@ def run_pcse_experiment(
         if num_classes != 10:
             raise ValueError("PCSE CIFAR-10 requires data.num_classes: 10")
         model = build_model(model_config, num_classes)
-        external_source = load_upm_main_best_source(
+        external_source = load_pretrained_classifier_source(
             method_config.pretraining.source, model, num_classes=num_classes
         )
         source_model = build_model(model_config, num_classes)
@@ -281,7 +281,11 @@ def run_pcse_experiment(
     if manifest is None or manifest_path is None:
         raise ValueError("PCSE requires noisy train and validation labels")
     effective_train_rate = effective_subset_actual_rate(manifest, prepared.train_indices)
-    effective_validation_rate = effective_subset_actual_rate(manifest, prepared.validation_indices)
+    effective_validation_rate = (
+        effective_subset_actual_rate(manifest, prepared.validation_indices)
+        if prepared.validation_uses_train_manifest
+        else None
+    )
     train_loader = prepared.loader(DataRole.TRAIN, generator_seed=seed + 101)
     statistics_loader = prepared.loader(DataRole.TRAIN_EVAL, shuffle=False, generator_seed=seed + 102)
     validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False, generator_seed=seed + 103)

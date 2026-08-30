@@ -50,7 +50,10 @@ from lnl_toolbox.training.experiment import build_model
 from lnl_toolbox.training.noisy_labels import file_sha256
 
 # --- merged from test_pcse_pretrained_adapter.py ---
-from lnl_toolbox.training.pcse_pretrained import load_upm_main_best_source
+from lnl_toolbox.training.pcse_pretrained import (
+    load_pretrained_classifier_source,
+    load_upm_main_best_source,
+)
 
 # --- merged from test_pcse_pretrained_adapter.py ---
 class _pcse_pretrained_adapter__CifarFixture:
@@ -79,8 +82,119 @@ def _pcse_pretrained_adapter__source(directory: Path) -> tuple[dict, torch.nn.Mo
     config = {'adapter': 'upm_main_best', 'run_directory_env': 'PCSE_TEST_SOURCE', 'checkpoint_sha256': file_sha256(checkpoint_path), 'manifest_sha256': file_sha256(manifest_path), 'mapping_hash': manifest.mapping_hash, 'dataset_fingerprint': manifest.dataset_fingerprint, 'model': model_config}
     return (config, model)
 
+
+def _pcse_pretrained_adapter__standard_source(
+    directory: Path, adapter: str
+) -> tuple[dict, torch.nn.Module]:
+    model_config = {'name': 'resnet18', 'base_width': 16}
+    model = build_model(model_config, 10)
+    labels = np.arange(20, dtype=np.int64) % 10
+    manifest = generate_symmetric(
+        labels, 10, 0.4, 1, 'cifar10', sampling='per_class'
+    )
+    manifest.global_indices = np.arange(labels.size, dtype=np.int64)
+    manifest.dataset_fingerprint = fingerprint_labels(labels)
+    manifest_path = directory / 'noise_manifest.npz'
+    manifest.save(manifest_path)
+    noise = {
+        'dataset': 'cifar10',
+        'num_classes': 10,
+        'mapping_hash': manifest.mapping_hash,
+        'dataset_fingerprint': manifest.dataset_fingerprint,
+        'manifest_sha256': file_sha256(manifest_path),
+    }
+    if adapter == 'supervised_best':
+        config = {
+            'execution': {'runner': 'supervised'},
+            'loss': {'name': 'ce'},
+            'model': model_config,
+        }
+        state = model.state_dict()
+    elif adapter == 'coteaching_peer_a_best':
+        config = {'method': 'coteaching', 'model': model_config}
+        peer_b = build_model(model_config, 10)
+        state = {'a': model.state_dict(), 'b': peer_b.state_dict()}
+    else:
+        raise AssertionError(f'unsupported test adapter: {adapter}')
+    payload = {
+        'config': config,
+        'noise': noise,
+        'model': state,
+        'completed_epoch': 2,
+        'run_state': {'step': 9},
+        'best_epoch': 1,
+        'best_validation_accuracy': 0.5,
+    }
+    checkpoint_path = directory / 'best.pt'
+    atomic_save(payload, checkpoint_path)
+    source_config = {
+        'adapter': adapter,
+        'run_directory_env': 'PCSE_TEST_SOURCE',
+        'checkpoint_sha256': file_sha256(checkpoint_path),
+        'manifest_sha256': file_sha256(manifest_path),
+        'mapping_hash': manifest.mapping_hash,
+        'dataset_fingerprint': manifest.dataset_fingerprint,
+        'model': model_config,
+    }
+    return source_config, model
+
 # --- merged from test_pcse_pretrained_adapter.py ---
 class _pcse_pretrained_adapter_PCSEPretrainedAdapterTest(unittest.TestCase):
+
+    def test_supported_standard_classifier_sources_are_loaded_strictly(self) -> None:
+        for adapter, method, role in (
+            ('supervised_best', 'ce', 'best'),
+            ('coteaching_peer_a_best', 'coteaching', 'peer_a_best'),
+        ):
+            with self.subTest(adapter=adapter), tempfile.TemporaryDirectory() as directory:
+                config, expected_model = _pcse_pretrained_adapter__standard_source(
+                    Path(directory), adapter
+                )
+                target_model = build_model(config['model'], 10)
+                with mock.patch.dict(os.environ, {'PCSE_TEST_SOURCE': directory}):
+                    source = load_pretrained_classifier_source(
+                        config, target_model, num_classes=10
+                    )
+                self.assertEqual(source.adapter, adapter)
+                self.assertEqual(source.source_method, method)
+                self.assertEqual(source.checkpoint_role, role)
+                for actual, expected in zip(
+                    target_model.state_dict().values(),
+                    expected_model.state_dict().values(),
+                ):
+                    torch.testing.assert_close(actual, expected)
+                source.assert_unchanged()
+
+    def test_standard_sources_reject_wrong_method_or_ambiguous_peer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config, _ = _pcse_pretrained_adapter__standard_source(
+                root, 'supervised_best'
+            )
+            payload = torch.load(root / 'best.pt', map_location='cpu', weights_only=False)
+            payload['config']['loss']['name'] = 'gce'
+            atomic_save(payload, root / 'best.pt')
+            invalid = {**config, 'checkpoint_sha256': file_sha256(root / 'best.pt')}
+            with mock.patch.dict(os.environ, {'PCSE_TEST_SOURCE': directory}):
+                with self.assertRaisesRegex(ValueError, 'must use CE'):
+                    load_pretrained_classifier_source(
+                        invalid, build_model(config['model'], 10), num_classes=10
+                    )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config, _ = _pcse_pretrained_adapter__standard_source(
+                root, 'coteaching_peer_a_best'
+            )
+            payload = torch.load(root / 'best.pt', map_location='cpu', weights_only=False)
+            payload['model'] = {'b': payload['model']['b']}
+            atomic_save(payload, root / 'best.pt')
+            invalid = {**config, 'checkpoint_sha256': file_sha256(root / 'best.pt')}
+            with mock.patch.dict(os.environ, {'PCSE_TEST_SOURCE': directory}):
+                with self.assertRaisesRegex(ValueError, 'peer A'):
+                    load_pretrained_classifier_source(
+                        invalid, build_model(config['model'], 10), num_classes=10
+                    )
 
     def test_valid_source_and_identity_failures(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -474,6 +588,9 @@ class _pcse_volmin_PCSEVolMinWorkflowTest(unittest.TestCase):
             run_pcse_experiment(config, output_dir=run_dir)
             final = json.loads((run_dir / 'final_metrics.json').read_text(encoding='utf-8'))
             self.assertEqual(final['transition_backend'], 'paper_volmin')
+            noise_summary = json.loads((run_dir / 'noise_summary.json').read_text(encoding='utf-8'))
+            self.assertEqual(noise_summary['validation_targets'], 'noisy')
+            self.assertIsNone(noise_summary['effective_validation_subset_actual_rate'])
             names = ('volmin_final.pt', 'transition_artifact.npz', 'pcse_statistics.npz', 'pcse_gda.npz', 'pcse_ensemble.npz')
             before = {name: ((run_dir / name).read_bytes(), (run_dir / name).stat().st_mtime_ns) for name in names}
             run_pcse_experiment(config, resume=run_dir / 'last.pt')

@@ -26,6 +26,13 @@ from lnl_toolbox.training.compatibility import (
     resolve_compatibility,
 )
 from lnl_toolbox.training.runners import resolve_runner, runner_specs
+from lnl_toolbox.training.prerequisites import (
+    PrerequisiteRegistry,
+    ReadinessLevel,
+    ReadinessStatus,
+    SourceDescriptor,
+    ValidationMetadata,
+)
 
 if TYPE_CHECKING:
     from lnl_toolbox.training.data_service import DataService
@@ -40,6 +47,117 @@ class ExperimentService:
         self.data_service = data_service
         self.last_compatibility: CompatibilityResult | None = None
         self._last_compatibility_config: dict[str, Any] | None = None
+        self.prerequisites = PrerequisiteRegistry()
+        self.prerequisites.register("pcse_classifier", self._validate_pcse_source)
+        self.prerequisites.register("dld_feature_extractor", self._validate_dld_source)
+        self.prerequisites.register("cal_external_labels", self._validate_cal_source)
+
+    @staticmethod
+    def _source_mapping(
+        config: Mapping[str, Any], path: tuple[str, ...]
+    ) -> Mapping[str, Any] | None:
+        value = ExperimentService._config_value(config, path)
+        return value if isinstance(value, Mapping) else None
+
+    @staticmethod
+    def _invalid_prerequisite(
+        descriptor: SourceDescriptor,
+        error: Exception,
+        *,
+        path_exists: bool,
+    ) -> ValidationMetadata:
+        level = ReadinessLevel.PATH_EXISTS if path_exists else ReadinessLevel.CONFIGURED
+        return ValidationMetadata.invalid(descriptor, level, str(error))
+
+    def _validate_pcse_source(
+        self, descriptor: SourceDescriptor, config: Mapping[str, Any]
+    ) -> ValidationMetadata:
+        source = self._source_mapping(config, ("pretraining_stage", "source"))
+        if source is None:
+            return ValidationMetadata.needs_input(descriptor, "PCSE source is not configured")
+        environment = str(source.get("run_directory_env", "")).strip()
+        run_value = os.environ.get(environment, "").strip() if environment else ""
+        path_exists = bool(run_value and Path(run_value).expanduser().is_dir())
+        if not run_value:
+            return ValidationMetadata.needs_input(
+                descriptor, f"set {environment or 'the configured source environment variable'}"
+            )
+        try:
+            from lnl_toolbox.training.experiment import build_model
+            from lnl_toolbox.training.pcse_pretrained import (
+                load_pretrained_classifier_source,
+            )
+
+            num_classes = int(config.get("data", {}).get("num_classes", 10))
+            model = build_model(dict(source.get("model", {})), num_classes)
+            value = load_pretrained_classifier_source(
+                source, model, num_classes=num_classes
+            )
+        except (FileNotFoundError, TypeError, ValueError) as error:
+            return self._invalid_prerequisite(
+                descriptor, error, path_exists=path_exists
+            )
+        return ValidationMetadata.ready(
+            descriptor, "PCSE classifier source is consumer-validated",
+            provenance=value.provenance,
+        )
+
+    def _validate_dld_source(
+        self, descriptor: SourceDescriptor, config: Mapping[str, Any]
+    ) -> ValidationMetadata:
+        extractor = self._source_mapping(config, ("dld", "feature_extractor"))
+        if extractor is None or not isinstance(extractor.get("external"), Mapping):
+            return ValidationMetadata.needs_input(
+                descriptor, "DLD feature extractor source is not configured"
+            )
+        external = extractor["external"]
+        adapter = str(external.get("adapter", "")).strip().lower()
+        path_exists = False
+        if adapter == "upm_main_best":
+            environment = str(external.get("run_directory_env", "")).strip()
+            value = os.environ.get(environment, "").strip() if environment else ""
+            path_exists = bool(value and Path(value).expanduser().is_dir())
+            if not value:
+                return ValidationMetadata.needs_input(
+                    descriptor, f"set {environment or 'the DLD source environment variable'}"
+                )
+        try:
+            from lnl_toolbox.training.dld_pretrained import load_dld_feature_source
+
+            value = load_dld_feature_source(
+                extractor,
+                num_classes=int(config.get("data", {}).get("num_classes", 10)),
+            )
+        except (FileNotFoundError, TypeError, ValueError) as error:
+            return self._invalid_prerequisite(
+                descriptor, error, path_exists=path_exists
+            )
+        return ValidationMetadata.ready(
+            descriptor, "DLD feature extractor is consumer-validated",
+            provenance=value.provenance,
+        )
+
+    def _validate_cal_source(
+        self, descriptor: SourceDescriptor, config: Mapping[str, Any]
+    ) -> ValidationMetadata:
+        noise = self._source_mapping(config, ("noise",))
+        if noise is None or not all(
+            str(noise.get(key, "")).strip() for key in ("path", "clean_key", "noisy_key")
+        ):
+            return ValidationMetadata.needs_input(
+                descriptor, "configure noise.path, noise.clean_key, and noise.noisy_key"
+            )
+        source = Path(str(noise["path"])).expanduser()
+        try:
+            provenance = self.data_service.validate_cal_external_labels(config)
+        except (FileNotFoundError, KeyError, TypeError, ValueError) as error:
+            return self._invalid_prerequisite(
+                descriptor, error, path_exists=source.is_file()
+            )
+        return ValidationMetadata.ready(
+            descriptor, "CAL label artifact is schema-valid and identity-compatible",
+            provenance=provenance,
+        )
 
     @staticmethod
     def _config_value(config: Mapping[str, Any], path: tuple[str, ...]) -> Any:
@@ -64,6 +182,20 @@ class ExperimentService:
         """Inspect without persisting catalog state or creating artifacts."""
 
         return self.data_service.inspect(source, seed=seed, persist=False)
+
+    def prerequisite_readiness(
+        self, config: Mapping[str, Any]
+    ) -> tuple[ValidationMetadata, ...]:
+        """Evaluate configured external prerequisites without running training."""
+
+        runner = resolve_runner(config)
+        requirements = runner.requirements(config)
+        if requirements is None:
+            return ()
+        return tuple(
+            self.prerequisites.evaluate(descriptor, config)
+            for descriptor in requirements.prerequisites
+        )
 
     def _resolve_for_capabilities(
         self,
@@ -90,7 +222,17 @@ class ExperimentService:
         prior_info = None if prior is None else NoiseRateInfo(
             NoiseRateStatus.KNOWN, prior, prior_source
         )
-        pretrained_roles = self._available_pretrained_roles(config, requirements)
+        prerequisite_results = tuple(
+            self.prerequisites.evaluate(descriptor, config)
+            for descriptor in requirements.prerequisites
+        )
+        pretrained_roles = frozenset(
+            item.descriptor.key
+            for item in prerequisite_results
+            if item.status == ReadinessStatus.READY
+        )
+        if not requirements.prerequisites:
+            pretrained_roles = self._available_pretrained_roles(config, requirements)
         result = resolve_compatibility(
             capabilities,
             requirements,
@@ -133,7 +275,31 @@ class ExperimentService:
                         for item in missing_inputs
                     ]
                 ),
+                prerequisites=prerequisite_results,
             )
+        invalid_prerequisites = tuple(
+            item for item in prerequisite_results
+            if item.status == ReadinessStatus.INVALID
+        )
+        if invalid_prerequisites:
+            result = CompatibilityResult(
+                status=CompatibilityStatus.INCOMPATIBLE,
+                method=result.method,
+                dataset=result.dataset,
+                reasons=result.reasons + tuple(
+                    CompatibilityReason(
+                        "invalid_prerequisite",
+                        f"{item.descriptor.name}: {item.message}",
+                    )
+                    for item in invalid_prerequisites
+                ),
+                warnings=result.warnings,
+                required_user_inputs=result.required_user_inputs,
+                required_input_paths=result.required_input_paths,
+                prerequisites=prerequisite_results,
+            )
+        elif prerequisite_results and not result.prerequisites:
+            result = replace(result, prerequisites=prerequisite_results)
         environments = {
             f"pretrained:{role}": str(self._config_value(config, path)).strip()
             for role, path in requirements.pretrained_role_paths

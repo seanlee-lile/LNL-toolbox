@@ -38,10 +38,16 @@ dld:
     inference_initialization: zero
     inference_steps: 5
   feature_extractor:
-    source: repository_frozen_model
+    source: external_checkpoint
     model:
-      name: resnet34
+      name: torchvision_resnet34
       base_width: 64
+      weights: IMAGENET1K_V1
+      feature_dimension: 512
+    external:
+      adapter: torchvision_resnet34_imagenet1k_v1
+      weights: IMAGENET1K_V1
+      input_contract: cifar10_standard_normalized
   precorrection:
     k_neighbors: 50
     delta: 1.0e-6

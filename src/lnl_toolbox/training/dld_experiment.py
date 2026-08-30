@@ -38,8 +38,9 @@ from lnl_toolbox.models.feature_output import forward_with_features
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
 from lnl_toolbox.training.dld_pretrained import (
+    DLDTorchvisionResNet34Source,
     DLDUPMMainBestSource,
-    load_upm_main_best_feature_source,
+    load_dld_feature_source,
 )
 from lnl_toolbox.training.experiment import (
     _environment,
@@ -139,7 +140,7 @@ class DLDWorkflow:
         noise_metadata: Mapping[str, Any],
         feature_model: torch.nn.Module,
         feature_identity: str,
-        feature_source: DLDUPMMainBestSource | None,
+        feature_source: DLDUPMMainBestSource | DLDTorchvisionResNet34Source | None,
         feature_source_provenance: Mapping[str, Any],
         train_indices: np.ndarray,
         dual_view_loader: Any,
@@ -621,17 +622,18 @@ def run_dld_experiment(
     config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
 
     seed_everything(seed + 3000)
-    feature_model = build_model(method.feature_extractor["model"], classes).to(device).eval()
-    feature_source: DLDUPMMainBestSource | None = None
+    feature_source: DLDUPMMainBestSource | DLDTorchvisionResNet34Source | None = None
     source_name = str(method.feature_extractor["source"]).strip().lower()
     if source_name == "external_checkpoint":
-        feature_source = load_upm_main_best_feature_source(
-            method.feature_extractor["external"],
-            feature_model,
-            num_classes=classes,
+        feature_source = load_dld_feature_source(
+            method.feature_extractor, num_classes=classes,
         )
+        feature_model = feature_source.model.to(device).eval()
         feature_source_provenance = feature_source.provenance
     else:
+        feature_model = build_model(
+            method.feature_extractor["model"], classes
+        ).to(device).eval()
         feature_source_provenance = {
             "source": "repository_frozen_model",
             "model": dict(method.feature_extractor["model"]),
