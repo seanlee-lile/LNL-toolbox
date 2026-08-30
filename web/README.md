@@ -6,13 +6,13 @@
 
 在仓库根目录运行：
 
-    lnl web
+    lnl web --host 127.0.0.1 --port 8765
 
 然后打开 http://127.0.0.1:8765。
 根路径是原有主控制台；Recipe/YAML 编辑器保留为独立子页面：
 http://127.0.0.1:8765/recipe。`lnl web` 默认打开主页；`lnl web --no-open` 只启动服务。
 
-直接开发后端时仍可运行：
+`lnl web` 是普通用户和本地使用的推荐入口。直接开发后端时仍可运行：
 
     python web/command_console.py
 
@@ -38,6 +38,17 @@ Quick Start 的最短流程是：
 
 Quick Start 只负责编排，最终训练仍使用现有 `/api/run`、job polling、日志和停止任务流程。
 复杂数据集或额外 checkpoint、manifest 等资源，继续从“本地数据集”或 YAML 编辑器进入。
+
+主页面左侧导航当前依次为：**快速开始**、**新手教程**、**新建 YAML**、**本地数据集**、**参数 Sweep**、**运行管理**、**论文方法**、**自由输入**。用户填写当前模块字段后，真实命令会在右侧内容区下方的 **Preview** 显示；执行、复制、清空日志和常用快捷命令也都位于该 Preview 组块中。
+
+## 论文方法与前置条件
+
+论文页面使用具体 recipe 的“当前选择”卡片显示 **可用**、**需补充条件** 或 **不兼容**，不再显示旧的兼容性分类列表。缺少 prerequisite 时 Run 保持禁用；满足真实条件后会恢复可用。
+
+- **PCSE** 仅支持角色明确、身份兼容的 UPM 主模型、监督 CE 模型和 Co-teaching peer A 模型。可用 `LNL_PCSE_SOURCE_RUN` 提供来源运行目录，但不能把任意 checkpoint 当作来源。
+- **DLD** 的 formal/paper-oriented 配置需要真实的 pretrained feature extractor；Toolbox 不自动联网下载 torchvision 权重，random frozen 模型只属于 engineering/smoke。
+- **CAL** 需要对齐的 external clean/noisy label artifact，不是 pretrained model；clean vector 仅用于 identity、alignment 和 evaluation，不参与训练更新。
+- **MentorNet** 保持单独的准备流程：准备 Mentor 特征 → 训练 MentorArtifact → 运行 Student。缺少 artifact 时 Student 被阻止，不会自动训练 Mentor。
 
 ## 长训练输出
 
@@ -89,8 +100,9 @@ YAML，或直接将内置配置带入参数 Sweep；项目 YAML 保存成功后�
 数据别名作为 `--data` 运行时覆盖传递，不改写论文 YAML 中锁定的数据/噪声协议，因此该
 组合明确属于数据迁移训练。
 
-数据页的兼容性面板分为三部分：`数据集信息` 是 adapter 和实际 train/test 加载得到的
-只读事实；`需要确认的数据集信息` 只列 UNKNOWN 的数据集声明；`当前方法还需要` 只列
-所选具体正式 recipe 的实验输入。噪声来源使用受限选项，估计噪声率必须同时说明来源。
-方法噪声率先验不会写入本地数据 catalog，输入后会通过 recipe 的真实 dotted path 进入
-validate、dry-run 或 run。预训练角色必须解析为实际文件/目录，角色字符串本身不构成证据。
+数据页面在选择 **使用已登记数据训练** 时显示数据集优先流程：`数据集信息` 是 adapter 和
+实际 train/test 加载得到的只读事实；`需要确认的数据集信息` 只列 UNKNOWN 的数据集声明；
+具体 recipe 的“当前选择”卡片再说明方法输入。其他数据操作不会常驻显示训练流程。噪声来源
+使用受限选项，估计噪声率必须同时说明来源。方法噪声率先验、checkpoint 和外部 artifact
+不会写入本地数据 catalog，而是通过 YAML/recipe 的真实配置路径进入 Validate、Dry-run 或
+Run。预训练角色必须解析为实际文件/目录，角色字符串本身不构成证据。

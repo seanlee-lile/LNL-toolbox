@@ -18,8 +18,9 @@ optimization; noisy-label NLL; `lambda=1e-4`; and noisy-validation selection.
 
 The paper's CIFAR-10 experiment uses ResNet-18, batch size 128, SGD, initial
 learning rate 0.01, momentum 0.9, learning-rate drops after epochs 30 and 60,
-and 150 epochs. A formal reproduction configuration and repeated-seed results
-remain future work. The author's released code uses `log(abs(det(T)))`, while
+and 150 epochs. The catalog now includes a reproduction profile, but its
+existence is not evidence of completed numerical reproduction or repeated-seed
+results. The author's released code uses `log(abs(det(T)))`, while
 this implementation deliberately follows the paper-facing positive-logdet
 contract and rejects non-positive determinants.
 

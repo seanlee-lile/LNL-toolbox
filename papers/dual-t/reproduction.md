@@ -28,7 +28,7 @@ Run the production Dual-T workflow:
 
 ```powershell
 $env:PYTHONPATH = "src"
-python -m lnl_toolbox.cli.train `
+lnl run `
   --config configs/reproduction/cifar10_dual_t_sym20.yaml `
   --output-dir artifacts/reproductions/cifar10-dual-t-sym20-seed1
 ```
@@ -119,11 +119,11 @@ Run the validation sequence in this order:
 5. Repeat the formal configurations for five explicitly recorded seeds and
    report mean and standard deviation.
 
-At the time this document was added, production and evidence-chain smoke
-tests had passed. No full formal run had been completed. The repository may
-claim a tested Dual-T + Forward workflow and a tested evidence-chain
-implementation; it must not yet claim reproduction of the paper's reported
-classification accuracy or five-seed statistics.
+Smoke and evidence-chain checks establish engineering workflow coverage only.
+They do not establish paper numerical reproduction. A claim about reported
+classification accuracy or five-seed statistics requires separately recorded
+formal runs and comparison evidence; consult the current catalog status rather
+than inferring it from recipe availability.
 
 ## Source
 

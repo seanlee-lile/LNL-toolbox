@@ -20,11 +20,18 @@ python -m pip install -e ".[train]"
 lnl --help
 ```
 
-启动本地数据管理网页（默认自动打开浏览器）：
+启动本地 Web 控制台（默认自动打开浏览器）：
 
 ```powershell
 lnl web
 ```
+
+首次使用可以任选一种入口：
+
+- **Web-first**：打开首页后，从“快速开始”输入本地数据路径，完成识别、登记、实际加载、方法选择、预演和运行；完整步骤见 [Web 使用手册](docs/toolbox-usage-manual.md)。
+- **CLI-first**：依次执行 `lnl doctor`、`lnl list experiments --profile smoke`、`lnl validate --recipe <recipe> --check-data`、Dry-run 和 `lnl run`；命令速查见 [CLI 简明操作教程](docs/LNL-Toolbox-简明操作教程.md)。
+
+两条入口使用同一套数据、兼容性和训练合同。配置存在、Dry-run 通过或 smoke 成功只说明相应工程链路可用，不自动代表论文数值已经复现。
 
 主控制台为 `http://127.0.0.1:8765/`；Recipe/YAML 编辑子页面为
 `http://127.0.0.1:8765/recipe`；Scratch 积木搭建器为
@@ -235,10 +242,12 @@ execution:
 
 MentorNet 等依赖外部训练 artifact 的 recipe 默认不会出现在直接可运行列表中；使用 `lnl list experiments --include-conditional` 查看，并先运行 `lnl validate` 获取缺失 artifact 的明确提示。
 
-PCSE 的真实 CIFAR profile 同样属于 conditional workflow：它要求一个严格匹配的 UPM
-`main_best` checkpoint 和 noise manifest。先阅读
-`papers/pcse/reproduction.md`，准备 source artifact 并设置
-`LNL_PCSE_SOURCE_RUN`；缺失或 identity 不匹配时，`validate` 和 dry-run 会在训练前失败。
+PCSE 的真实 CIFAR profile 同样属于 conditional workflow。当前只接受角色明确且身份兼容的
+来源：UPM 主模型、监督 CE 模型或 Co-teaching 的 peer A；不会把任意 checkpoint 猜作合法来源。
+可用 `LNL_PCSE_SOURCE_RUN` 指向来源运行目录，并按
+`papers/pcse/reproduction.md` 中的 source identity 配置 YAML；缺失或不匹配时，`validate` 和 Dry-run 会在训练前失败。
+
+DLD 的 formal/paper-oriented 流程需要真实、可验证的预训练特征提取器；Toolbox 不会自动联网下载 torchvision 权重。随机冻结模型只可用于 engineering/smoke 链路，不能当作 formal pretrained source。CAL 则需要对齐的外部 clean/noisy label artifact，而不是预训练模型；其中 clean vector 仅用于 identity、alignment 和 evaluation，不参与训练更新。
 
 兼容的显式写法和训练预算快捷参数仍然可用：
 
