@@ -1,0 +1,44 @@
+id: builtin/gce
+name: Generalized Cross Entropy
+description: GCE expressed as public probability, gather, power and affine operations.
+inputs:
+  logits: {description: model logits}
+  targets: {description: observed labels, type: labels}
+parameters:
+  q: {type: float, default: 0.7, minimum: 0.0, maximum: 1.0}
+  epsilon: {type: float, default: 1.0e-12, minimum: 0.0}
+steps:
+  - id: probabilities
+    block: softmax
+    bindings: {logits: logits}
+  - id: target_probability
+    block: gather_by_label
+    bindings: {values: probabilities, labels: targets}
+  - id: safe_probability
+    block: clamp_min
+    bindings: {input: target_probability}
+    parameters: {minimum: epsilon}
+  - id: powered_probability
+    block: elementwise_power
+    bindings: {input: safe_probability}
+    parameters: {q: q}
+  - id: one
+    block: ones_like
+    bindings: {input: powered_probability}
+  - id: one_minus_power
+    block: subtract
+    bindings: {minuend: one, subtrahend: powered_probability}
+  - id: divided_by_q
+    block: safe_divide
+    bindings: {numerator: one_minus_power, denominator: q}
+    parameters: {minimum: 1.0e-12}
+  - id: sample_loss
+    block: affine_transform
+    bindings: {input: divided_by_q}
+    parameters: {scale: 1.0, bias: 0.0}
+  - id: loss
+    block: mean_loss
+    bindings: {input: sample_loss}
+outputs:
+  loss: {source: loss}
+metadata: {kind: loss, formula_group: probability}

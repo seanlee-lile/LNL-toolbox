@@ -16,7 +16,7 @@ steps:
   - {block: configure_loader, params: {batch_size: 128, num_workers: 0, pin_memory: true}}
   - {block: build_prepared_data}
   - {block: build_loaders}
-  - {block: create_cal_state, params: {prepared_data: prepared_data, num_classes: 10, save_as: cal_state}}
+  - {block: estimate_class_prior, params: {labels: noisy_train_split, num_classes: 10, save_as: cal_noisy_prior}}
   - {block: create_model, params: {model: resnet34, num_classes: 10, base_width: 64, initialization: torch_default, device: device, save_as: warmup_model}}
   - {block: create_optimizer, params: {optimizer: sgd, model: warmup_model, lr: 0.1, momentum: 0.9, weight_decay: 0.0005, save_as: warmup_optimizer}}
   - {block: create_scaled_scheduler, params: {optimizer: warmup_optimizer, milestones: [60], gamma: 0.1, save_as: warmup_scheduler}}
@@ -32,12 +32,13 @@ steps:
           - {block: move_batch_to_device}
           - {block: zero_grad, params: {optimizer: warmup_optimizer}}
           - {block: forward, params: {model: warmup_model}}
-          - {block: cal_warmup_objective, params: {logits: logits, labels: labels, noisy_prior: cal_noisy_prior, confidence_weight: confidence_weight, save_as: loss}}
-          - {block: backward}
+          - {block: cal_cores2_adjusted_risk, params: {logits: logits, labels: labels, noisy_prior: cal_noisy_prior, confidence_weight: confidence_weight, save_as: loss}}
+          - {block: backward, params: {model: warmup_model}}
           - {block: optimizer_step, params: {optimizer: warmup_optimizer}}
       - {block: piecewise_rate_schedule, params: {default: 2.0, milestones: [10, 40, 80], values: [0.0, 2.0, 2.0], epoch_offset: 1, save_as: next_confidence_weight}}
       - {block: scaled_scheduler_step, params: {scheduler: warmup_scheduler, scale_value: next_confidence_weight}}
-  - {block: cal_materialize_proxy_artifact, params: {model: warmup_model, loader: train_eval_loader, prepared_data: prepared_data, state: cal_state, confidence_weight: confidence_weight, lower_threshold: -8.0, upper_threshold: -8.0}}
+  - {block: cal_materialize_proxy_artifact, params: {model: warmup_model, loader: train_eval_loader, prepared_data: prepared_data, noisy_prior: cal_noisy_prior, confidence_weight: confidence_weight, lower_threshold: -8.0, upper_threshold: -8.0, proxy_as: cal_proxy_artifact, proxy_prior_as: cal_proxy_prior, reference_transition_as: cal_reference_transition, reference_losses_as: cal_reference_losses, proxy_targets_state_as: cal_proxy_targets_state, retained_state_as: cal_retained_state}}
+  - {block: create_grouped_accumulator, params: {groups: 10, width: 10, save_as: cal_reference_accumulator}}
   - {block: create_model, params: {model: resnet34, num_classes: 10, base_width: 64, initialization: torch_default, device: device, save_as: model}}
   - {block: create_optimizer, params: {optimizer: sgd, model: model, lr: 0.1, momentum: 0.9, weight_decay: 0.0005, save_as: optimizer}}
   - {block: create_scaled_scheduler, params: {optimizer: optimizer, milestones: [60], gamma: 0.1, save_as: scheduler}}
@@ -46,7 +47,7 @@ steps:
     steps:
       - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}}
       - {block: piecewise_rate_schedule, params: {default: 1.0, milestones: [10, 40, 80], values: [0.0, 1.0, 1.0], save_as: confidence_weight}}
-      - {block: cal_reset_reference_accumulator, params: {state: cal_state}}
+      - {block: reset_grouped_accumulator, params: {state: cal_reference_accumulator}}
       - block: batch_loop
         params: {loader: train_loader}
         steps:
@@ -54,14 +55,17 @@ steps:
           - {block: move_batch_to_device}
           - {block: zero_grad}
           - {block: forward}
-          - {block: cal_prepare_proxy_batch, params: {indices: indices, state: cal_state}}
+          - {block: indexed_read, params: {state: cal_proxy_targets_state, indices: indices, save_as: cal_proxy_targets}}
+          - {block: indexed_read, params: {state: cal_retained_state, indices: indices, save_as: cal_retained}}
           - {block: cal_cores2_adjusted_risk, params: {logits: logits, labels: labels, noisy_prior: cal_noisy_prior, confidence_weight: confidence_weight, save_as: cal_adjusted_risk}}
           - {block: cal_covariance_correction, params: {logits: logits, labels: labels, proxy_targets: cal_proxy_targets, retained: cal_retained, proxy_prior: cal_proxy_prior, reference_losses: cal_reference_losses, reference_transition: cal_reference_transition, save_as: cal_covariance}}
           - {block: weighted_sum, params: {terms: [cal_adjusted_risk, cal_covariance], weights: [1.0, -1.0], save_as: loss}}
-          - {block: cal_accumulate_reference_losses, params: {state: cal_state, logits: logits, proxy_targets: cal_proxy_targets, retained: cal_retained}}
-          - {block: backward}
+          - {block: softmax, params: {logits: logits, detach: true, save_as: cal_all_probabilities}}
+          - {block: negative_log, params: {input: cal_all_probabilities, minimum: 0.00001, save_as: cal_all_class_losses}}
+          - {block: grouped_accumulate, params: {state: cal_reference_accumulator, groups: cal_proxy_targets, values: cal_all_class_losses, mask: cal_retained}}
+          - {block: backward, params: {model: model}}
           - {block: optimizer_step}
-      - {block: cal_finalize_reference_losses, params: {state: cal_state}}
+      - {block: finalize_grouped_accumulator, params: {state: cal_reference_accumulator, save_as: cal_reference_losses}}
       - {block: piecewise_rate_schedule, params: {default: 1.0, milestones: [10, 40, 80], values: [0.0, 1.0, 1.0], epoch_offset: 1, save_as: next_confidence_weight}}
       - {block: scaled_scheduler_step, params: {scheduler: scheduler, scale_value: next_confidence_weight}}
   - {block: evaluate_accuracy, params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}}

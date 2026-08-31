@@ -208,8 +208,21 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
         self.assertEqual(main["params"]["epochs"], config["trainer"]["epochs"])
         batch = next(step for step in main["steps"] if step["block"] == "batch_loop")
         blocks = [step["block"] for step in batch["steps"]]
-        proxy = blocks.index("cal_prepare_proxy_batch")
-        self.assertEqual(blocks[proxy:proxy + 4], ["cal_prepare_proxy_batch", "cal_cores2_adjusted_risk", "cal_covariance_correction", "weighted_sum"])
+        top_blocks = [step["block"] for step in steps]
+        removed = {
+            "create_" + "cal_state",
+            "cal_" + "prepare_proxy_batch",
+            "cal_" + "warmup_objective",
+            "cal_" + "reset_reference_accumulator",
+            "cal_" + "accumulate_reference_losses",
+            "cal_" + "finalize_reference_losses",
+        }
+        self.assertTrue(removed.isdisjoint(blocks))
+        self.assertIn("estimate_class_prior", top_blocks)
+        self.assertIn("cal_cores2_adjusted_risk", blocks)
+        self.assertIn("cal_covariance_correction", blocks)
+        self.assertIn("grouped_accumulate", blocks)
+        self.assertIn("finalize_grouped_accumulator", [step["block"] for step in main["steps"]])
         self.assertNotIn("cal_second_order_objective", blocks)
 
     def test_apl_recipe_matches_formal_protocol(self) -> None:

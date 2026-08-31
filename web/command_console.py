@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import math
 import os
 import shlex
 import shutil
@@ -383,7 +384,16 @@ def cancel_job(job_id: str) -> Job:
 def _json_response(
     handler: BaseHTTPRequestHandler, payload: object, status: int = 200
 ) -> None:
-    body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
+    def json_safe(value: object) -> object:
+        if isinstance(value, float):
+            return value if math.isfinite(value) else None
+        if isinstance(value, dict):
+            return {key: json_safe(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [json_safe(item) for item in value]
+        return value
+
+    body = json.dumps(json_safe(payload), ensure_ascii=True, allow_nan=False).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
@@ -449,6 +459,20 @@ def _scratch_examples_payload() -> list[dict[str, str]]:
     return _scratch_template_payload()
 
 
+def _scratch_formula_payload(spec: object) -> dict[str, object]:
+    from lnl_toolbox.scratch.formula.runtime import formula_hash
+
+    payload = spec.to_dict()
+    payload.update({"formula_hash": formula_hash(spec), "block_id": "formula/" + spec.id})
+    return payload
+
+
+def _scratch_reload_formulas() -> None:
+    from lnl_toolbox.scratch.formula.registry import reload_formulas
+
+    reload_formulas()
+
+
 def _scratch_request_body(handler: BaseHTTPRequestHandler) -> dict[str, object]:
     length = int(handler.headers.get("Content-Length", "0"))
     payload = json.loads(handler.rfile.read(length) or b"{}")
@@ -468,11 +492,14 @@ def _scratch_recipe_from_body(payload: dict[str, object]) -> dict[str, object]:
 
 def _scratch_run(recipe: dict[str, object]) -> dict[str, object]:
     from lnl_toolbox.scratch import execute_recipe, resolve_recipe, save_recipe
+    from lnl_toolbox.scratch.formula.registry import collect_formula_provenance
 
     output = ROOT / "artifacts" / "scratch" / Path(str(recipe["name"])).name
     output.mkdir(parents=True, exist_ok=True)
     save_recipe(recipe, output / "recipe.yaml")
     save_recipe(resolve_recipe(recipe), output / "resolved_recipe.yaml")
+    provenance = collect_formula_provenance(recipe)
+    (output / "formula_provenance.json").write_text(json.dumps(provenance, ensure_ascii=False, indent=2), encoding="utf-8")
     context = execute_recipe(recipe, {"artifact_dir": str(output)})
     metrics = context.get("metrics", [])
     (output / "metrics.jsonl").write_text(
@@ -483,7 +510,7 @@ def _scratch_run(recipe: dict[str, object]) -> dict[str, object]:
         json.dumps({"name": recipe["name"], "metrics": metrics}, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
-    return {"ok": True, "metrics": metrics, "artifact_dir": str(output)}
+    return {"ok": True, "metrics": metrics, "artifact_dir": str(output), "formula_provenance": provenance}
 
 
 def _recipe_payload(*, include_all: bool = False) -> list[dict[str, object]]:
@@ -1656,11 +1683,39 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/scratch/blocks":
             try:
+                _scratch_reload_formulas()
                 from lnl_toolbox.scratch import list_blocks
 
                 _json_response(self, [definition.describe() for definition in list_blocks()])
             except Exception as exc:
                 _json_response(self, _scratch_error(exc), 500)
+            return
+        if path == "/api/scratch/formulas":
+            try:
+                _scratch_reload_formulas()
+                from lnl_toolbox.scratch.formula.registry import list_formulas
+
+                _json_response(self, [_scratch_formula_payload(spec) for spec in list_formulas()])
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path.startswith("/api/scratch/formula/") and not path.endswith("/export"):
+            try:
+                from lnl_toolbox.scratch.formula.registry import get_formula
+
+                formula_id = unquote(path.removeprefix("/api/scratch/formula/"))
+                _json_response(self, _scratch_formula_payload(get_formula(formula_id)))
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 404)
+            return
+        if path.startswith("/api/scratch/formula/") and path.endswith("/export"):
+            try:
+                from lnl_toolbox.scratch.formula.storage import export_formula
+
+                formula_id = unquote(path.removeprefix("/api/scratch/formula/").removesuffix("/export"))
+                _json_response(self, export_formula(formula_id))
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 404)
             return
         if path == "/api/scratch/default-recipe":
             try:
@@ -1908,6 +1963,61 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     )
                 else:
                     _json_response(self, _scratch_run(recipe))
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path == "/api/scratch/formulas":
+            try:
+                payload = _scratch_request_body(self)
+                from lnl_toolbox.scratch.formula.registry import validate_and_register_formula
+                from lnl_toolbox.scratch.formula.storage import save_formula
+
+                spec = validate_and_register_formula(payload.get("formula", payload), replace=bool(payload.get("replace", False)))
+                destination = save_formula(spec, overwrite=True)
+                _json_response(self, {"ok": True, "formula": _scratch_formula_payload(spec), "path": str(destination)}, 201)
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path == "/api/scratch/formula/delete":
+            try:
+                payload = _scratch_request_body(self)
+                from lnl_toolbox.scratch.formula.registry import unregister_formula
+                from lnl_toolbox.scratch.formula.storage import delete_formula, find_formula_references
+
+                formula_id = str(payload.get("id", ""))
+                references = find_formula_references(SCRATCH_RECIPE_ROOT, formula_id)
+                spec = delete_formula(formula_id, referenced_by=tuple(references))
+                unregister_formula(spec.id)
+                _json_response(self, {"ok": True, "id": spec.id})
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path == "/api/scratch/formula/import":
+            try:
+                payload = _scratch_request_body(self)
+                from lnl_toolbox.scratch.formula.registry import validate_and_register_formula
+                from lnl_toolbox.scratch.formula.storage import import_formula
+
+                spec = import_formula(payload.get("formula", payload.get("yaml", "")), overwrite=bool(payload.get("replace", False)))
+                validate_and_register_formula(spec, replace=True)
+                _json_response(self, {"ok": True, "formula": _scratch_formula_payload(spec)}, 201)
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path == "/api/scratch/formula/rename":
+            try:
+                payload = _scratch_request_body(self)
+                from lnl_toolbox.scratch.formula.registry import register_formula, unregister_formula
+                from lnl_toolbox.scratch.formula.storage import rename_formula
+
+                old_id, new_id = str(payload.get("old_id", "")), str(payload.get("new_id", ""))
+                spec = rename_formula(old_id, new_id)
+                try:
+                    unregister_formula(old_id)
+                except KeyError:
+                    pass
+                register_formula(spec, replace=True)
+                _json_response(self, {"ok": True, "formula": _scratch_formula_payload(spec)}, 201)
             except Exception as exc:
                 _json_response(self, _scratch_error(exc), 400)
             return

@@ -54,7 +54,7 @@ steps:
             params: {logits: logits, labels: labels, save_as: loss_per_sample}
           - block: mean_loss
             params: {input: loss_per_sample, save_as: loss}
-          - {block: backward}
+          - {block: backward, params: {model: posterior_model}}
           - block: optimizer_step
             params: {optimizer: posterior_optimizer}
       - block: evaluate_accuracy
@@ -107,7 +107,7 @@ steps:
           - {block: negative_log, params: {input: target_probability, save_as: loss_per_sample}}
           - block: mean_loss
             params: {input: loss_per_sample, save_as: loss}
-          - {block: backward}
+          - {block: backward, params: {model: final_model}}
           - block: optimizer_step
             params: {optimizer: final_optimizer}
       - block: evaluate_accuracy

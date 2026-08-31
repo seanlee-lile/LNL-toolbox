@@ -1,0 +1,33 @@
+id: builtin/transition_corrected_risk
+name: Transition Corrected Risk
+description: Correct class probabilities through an explicit transition matrix before NLL.
+inputs:
+  logits: {description: model logits}
+  targets: {description: observed labels, type: labels}
+  transition: {description: class transition matrix, type: transition}
+parameters:
+  epsilon: {type: float, default: 1.0e-12, minimum: 0.0}
+steps:
+  - id: probabilities
+    block: softmax
+    bindings: {logits: logits}
+  - id: noisy_probabilities
+    block: apply_transition
+    bindings: {probabilities: probabilities, transition: transition}
+  - id: target_probability
+    block: gather_by_label
+    bindings: {values: noisy_probabilities, labels: targets}
+  - id: safe_probability
+    block: clamp_min
+    bindings: {input: target_probability}
+    parameters: {minimum: epsilon}
+  - id: sample_loss
+    block: negative_log
+    bindings: {input: safe_probability}
+    parameters: {minimum: 0.0}
+  - id: loss
+    block: mean_loss
+    bindings: {input: sample_loss}
+outputs:
+  loss: {source: loss}
+metadata: {kind: loss, formula_group: transition}

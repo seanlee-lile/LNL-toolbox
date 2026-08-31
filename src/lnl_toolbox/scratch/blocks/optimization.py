@@ -23,7 +23,7 @@ def _torch():
     description="Create SGD or Adam for a model slot.",
     params={
         "optimizer": {"type": "str", "default": "sgd"},
-        "model": {"type": "slot", "default": "model"},
+        "model": {"type": "str", "default": "model"},
         "lr": {"type": "float", "default": 0.1, "min": 0.0},
         "momentum": {"type": "float", "default": 0.9, "min": 0.0},
         "nesterov": {"type": "bool", "default": False},
@@ -282,12 +282,15 @@ def zero_grad(ctx: ScratchContext, optimizer: str = "optimizer") -> None:
     id="backward",
     name="Backward",
     category="Optimization",
-    description="Backpropagate the scalar loss.",
-    params={"loss": {"type": "slot", "default": "loss"}},
+    description="Backpropagate the scalar loss for the explicitly named model. The model field documents the graph/optimizer association; autograd still follows the loss graph.",
+    params={
+        "loss": {"type": "slot", "default": "loss"},
+        "model": {"type": "slot", "default": "model"},
+    },
     requires=("loss",),
     placement=("batch",), stage="train", ui_group="⑧ 反向传播与更新",
 )
-def backward(ctx: ScratchContext, loss: str = "loss") -> None:
+def backward(ctx: ScratchContext, loss: str = "loss", model: str = "model") -> None:
     ctx[loss].backward()
 
 

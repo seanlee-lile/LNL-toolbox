@@ -13,6 +13,12 @@ class ScratchRegistryTest(unittest.TestCase):
         self.assertEqual(describe_block("set_value")["category"], "Runtime")
         self.assertIn("repeat_n", {value.id for value in list_blocks("Control")})
 
+    def test_backward_exposes_model_annotation_for_dual_model_recipes(self) -> None:
+        definition = get_block("backward")
+        self.assertIn("loss", definition.params)
+        self.assertIn("model", definition.params)
+        self.assertIn("explicitly named model", definition.description)
+
     def test_duplicate_id_is_rejected(self) -> None:
         existing = get_block("set_value")
         duplicate = BlockDefinition(

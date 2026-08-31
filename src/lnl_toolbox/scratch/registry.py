@@ -31,6 +31,8 @@ class BlockDefinition:
     formula_ref: str | None = None
     paper: str | None = None
     beginner_visible: bool = True
+    formula_safe: bool = False
+    formula_group: str | None = None
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -49,6 +51,8 @@ class BlockDefinition:
             "formula_ref": self.formula_ref,
             "paper": self.paper,
             "beginner_visible": self.beginner_visible,
+            "formula_safe": self.formula_safe,
+            "formula_group": self.formula_group,
         }
 
 
@@ -92,8 +96,23 @@ def block(
     formula_ref: str | None = None,
     paper: str | None = None,
     beginner_visible: bool = True,
+    formula_safe: bool | None = None,
+    formula_group: str | None = None,
 ) -> Callable[[BlockCallable], BlockCallable]:
     def decorate(function: BlockCallable) -> BlockCallable:
+        # Existing canonical tensor/loss/selection operations predate the
+        # explicit flag.  Infer a conservative default for those operations,
+        # while allowing stateful/model/data blocks to remain opt-in only.
+        safe_default = (
+            kind == "action"
+            and paper is None
+            and category in {"Forward", "Tensor Operation", "Loss", "Correction", "Transition", "Sample Selection", "Weighting"}
+            and any(place in {"batch", "any"} for place in placement)
+            and id not in {
+                "forward", "module_forward", "forward_feature", "compose_revision_transition",
+                "classwise_percentile_anchor_candidates",
+            }
+        )
         register_block(BlockDefinition(
             id=id,
             name=name,
@@ -111,6 +130,8 @@ def block(
             formula_ref=formula_ref,
             paper=paper,
             beginner_visible=beginner_visible,
+            formula_safe=safe_default if formula_safe is None else bool(formula_safe),
+            formula_group=formula_group or (category.lower().replace(" ", "_") if safe_default else None),
         ))
         return function
 
@@ -118,6 +139,12 @@ def block(
 
 
 def get_block(block_id: str) -> BlockDefinition:
+    # Formula YAML uses the readable ``formula/user/name`` identifier while
+    # the single Block Registry stores a filesystem-safe internal id.
+    if block_id.startswith("formula/"):
+        internal_id = "formula__" + block_id.removeprefix("formula/").replace("/", "__")
+        if internal_id in BLOCKS:
+            return BLOCKS[internal_id]
     try:
         return BLOCKS[block_id]
     except KeyError as exc:

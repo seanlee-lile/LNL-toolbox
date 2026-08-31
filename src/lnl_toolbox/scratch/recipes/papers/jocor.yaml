@@ -64,7 +64,7 @@ steps:
             params: {scores: joint_loss_per_sample, keep_fraction: keep_rate, stable_sample_indices: indices, rounding: floor, minimum_count: 1, save_as: selected_indices}
           - block: mean_by_indices
             params: {values: joint_loss_per_sample, indices: selected_indices, save_as: loss}
-          - {block: backward}
+          - {block: backward, params: {model: model_a + model_b}}
           - {block: optimizer_step}
       - block: evaluate_peer_ensemble
         params: {model_a: model_a, model_b: model_b, loader: test_loader, save_as: ensemble_accuracy}

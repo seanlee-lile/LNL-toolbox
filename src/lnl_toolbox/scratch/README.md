@@ -41,3 +41,19 @@ Scratch Paper templates:
 The DSS and LEND formal-semantics gates compare Scratch state/graph outputs to
 their legacy implementations in tests only; those legacy modules are never
 loaded by Scratch production code.
+
+## Research Formula Composer
+
+Click **新建公式** in the Scratch page to save a user formula as YAML under
+the Scratch user workspace (`$LNL_SCRATCH_WORKSPACE/formulas/`, or
+`~/.lnl_toolbox/scratch/formulas/`). A formula contains declared inputs and
+parameters, an ordered list of existing `formula_safe` Registry operations,
+and named outputs. It is validated, registered immediately as a normal
+`formula/user/...` Scratch Block, and can be referenced by any Recipe or by a
+nested formula. No Python, `eval`, implicit detach, reduction, state mutation,
+model construction, or loader creation is permitted inside a formula.
+
+Five built-in YAML examples are shipped in `scratch/formula/examples`: standard
+cross entropy, GCE, weighted cross entropy, transition-corrected risk, and a
+per-sample confidence score. Run artifacts record each formula's content hash
+and YAML snapshot for reproducibility.

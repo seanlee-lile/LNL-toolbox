@@ -58,7 +58,7 @@ steps:
               - {block: partial_label_loss, params: {logits: logits_p, candidates: ca2c_candidates, hard_weight: 0.99, save_as: ca2c_positive_loss}}
               - {block: complementary_negative_loss, params: {logits: logits_n, complements: ca2c_complements, save_as: ca2c_negative_loss}}
               - {block: weighted_sum, params: {terms: [ca2c_positive_loss, ca2c_negative_loss], weights: [1.0, 1.0], save_as: loss}}
-          - {block: backward}
+          - {block: backward, params: {model: model_p + model_n}}
           - {block: optimizer_step}
           - {block: optimizer_step, params: {optimizer: optimizer_n}}
       - {block: scheduler_step}

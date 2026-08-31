@@ -45,7 +45,7 @@ steps:
           - {block: mean_squared_error, params: {predicted: predicted_direction, target: direction, reduction: scalar, save_as: direction_loss}}
           - {block: mean_squared_error, params: {predicted: predicted_noise, target: epsilon, reduction: scalar, save_as: noise_loss}}
           - {block: weighted_sum, params: {terms: [direction_loss, noise_loss], weights: [1.0, 1.0], save_as: loss}}
-          - {block: backward}
+          - {block: backward, params: {model: direction_predictor + noise_predictor}}
           - {block: optimizer_step, params: {optimizer: direction_optimizer}}
           - {block: optimizer_step, params: {optimizer: noise_optimizer}}
           - {block: update_model_ema, params: {model: direction_predictor, ema: direction_ema}}

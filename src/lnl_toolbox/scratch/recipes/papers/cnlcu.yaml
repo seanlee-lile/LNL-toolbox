@@ -70,9 +70,9 @@ steps:
           - {block: mean_loss, params: {input: selected_loss_a, save_as: loss_a}}
           - {block: select_by_indices, params: {values: loss_b_per_sample, indices: selected_a, save_as: selected_loss_b}}
           - {block: mean_loss, params: {input: selected_loss_b, save_as: loss_b}}
-          - {block: backward, params: {loss: loss_a}}
+          - {block: backward, params: {loss: loss_a, model: model_a}}
           - {block: optimizer_step, params: {optimizer: optimizer_a}}
-          - {block: backward, params: {loss: loss_b}}
+          - {block: backward, params: {loss: loss_b, model: model_b}}
           - {block: optimizer_step, params: {optimizer: optimizer_b}}
       - {block: scheduler_step, params: {scheduler: scheduler_a}}
       - {block: scheduler_step, params: {scheduler: scheduler_b}}

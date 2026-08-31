@@ -74,15 +74,19 @@ steps:
         params: {artifact: transition, save_as: transition_matrix}
       - block: pcse_recover_layer_statistics
         params: {snapshots: pcse_snapshots, layer_names: [layer3, layer4], transition: transition_matrix, save_as: pcse_statistics}
-      - block: pcse_fit_gda
-        params: {statistics: pcse_statistics, covariance_ridge: 0.1, save_as: pcse_gda}
+      - block: fit_shared_covariance_gda
+        params: {statistics: pcse_statistics, save_as: pcse_gda}
       - block: collect_feature_snapshot
         params: {model: model, loader: validation_loader, device: device, dataset: cifar10, split: validation, layers: [layer3, layer4], save_as: pcse_validation_snapshots}
-      - block: pcse_fit_ensemble_weights
-        params: {gda: pcse_gda, snapshots: pcse_validation_snapshots, epochs: 5, learning_rate: 0.05, save_as: pcse_ensemble_weights}
+      - block: predict_gda_layers
+        params: {estimators: pcse_gda, snapshots: pcse_validation_snapshots, save_as: pcse_validation_predictions, targets_as: pcse_validation_targets}
+      - block: fit_simplex_ensemble_weights
+        params: {predictions: pcse_validation_predictions, targets: pcse_validation_targets, epochs: 5, learning_rate: 0.05, save_as: pcse_ensemble_weights}
       - block: collect_feature_snapshot
         params: {model: model, loader: test_loader, device: device, dataset: cifar10, split: test, layers: [layer3, layer4], save_as: pcse_test_snapshots}
-      - block: pcse_evaluate_ensemble
-        params: {gda: pcse_gda, snapshots: pcse_test_snapshots, weights: pcse_ensemble_weights, save_as: pcse_test_metrics}
+      - block: predict_gda_layers
+        params: {estimators: pcse_gda, snapshots: pcse_test_snapshots, save_as: pcse_test_predictions, targets_as: pcse_test_targets}
+      - block: evaluate_weighted_ensemble
+        params: {predictions: pcse_test_predictions, targets: pcse_test_targets, weights: pcse_ensemble_weights, save_as: pcse_test_metrics}
   - block: record_metrics
     params: {values: [epoch]}

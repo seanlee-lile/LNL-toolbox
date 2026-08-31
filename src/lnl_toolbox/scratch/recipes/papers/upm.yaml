@@ -32,15 +32,17 @@ steps:
           - {block: forward, params: {model: stage1_model, input: images, save_as: logits}}
           - {block: per_sample_ce}
           - {block: mean_loss}
-          - {block: backward}
+          - {block: backward, params: {model: stage1_model}}
           - {block: optimizer_step, params: {optimizer: stage1_optimizer}}
       - {block: scheduler_step, params: {scheduler: stage1_scheduler}}
       - {block: evaluate_accuracy, params: {model: stage1_model, loader: validation_loader, save_as: stage1_validation_accuracy}}
       - {block: track_best_model, params: {model: stage1_model, metric: stage1_validation_accuracy, metric_name: stage1_validation_accuracy, save_as: stage1_best_model_state}}
   - {block: restore_best_model, params: {model: stage1_model, state: stage1_best_model_state}}
-  - {block: collect_posterior_snapshot, params: {model: stage1_model, loader: train_eval_loader, device: device, dataset: cifar10, split: train, save_as: upm_stage1_posterior}}
-  - {block: upm_build_psi, params: {prepared_data: prepared_data, posterior: upm_stage1_posterior, num_classes: 10, indices_as: upm_indices, save_as: upm_psi}}
-  - {block: upm_initialize_eta, params: {indices: upm_indices, psi: upm_psi, num_classes: 10, eta_init: 0.01, save_as: upm_state}}
+  - {block: collect_posterior_snapshot, params: {model: stage1_model, loader: train_eval_loader, device: device, dataset: cifar10, split: train, save_as: upm_stage1_posterior, probabilities_as: upm_posterior, targets_as: upm_observed_labels, indices_as: upm_indices}}
+  - {block: gather_by_label, params: {values: upm_posterior, labels: upm_observed_labels, save_as: upm_psi}}
+  - {block: create_indexed_state, params: {indices: upm_indices, width: 1, initial_value: 0.0, save_as: upm_psi_state}}
+  - {block: indexed_write, params: {state: upm_psi_state, indices: upm_indices, values: upm_psi, save_as: upm_psi_state}}
+  - {block: create_indexed_state, params: {indices: upm_indices, width: 1, initial_value: 0.01, save_as: upm_eta_state}}
   - {block: create_model, params: {model: resnet18, num_classes: 10, base_width: 16, device: device, save_as: model}}
   - {block: create_optimizer, params: {optimizer: sgd, model: model, lr: 0.05, momentum: 0.9, weight_decay: 0.0001, save_as: optimizer}}
   - {block: create_scheduler, params: {scheduler: multistep, optimizer: optimizer, milestones: [40, 80, 120], gamma: 0.1, save_as: scheduler}}
@@ -55,13 +57,19 @@ steps:
           - {block: move_batch_to_device}
           - {block: zero_grad}
           - {block: forward}
-          - {block: upm_clean_posterior, params: {state: upm_state, logits: logits, labels: labels, indices: indices, save_as: clean_posterior}}
+          - {block: indexed_read, params: {state: upm_eta_state, indices: indices, save_as: upm_eta}}
+          - {block: indexed_read, params: {state: upm_psi_state, indices: indices, save_as: upm_psi_batch}}
+          - {block: softmax, params: {logits: logits, detach: true, save_as: upm_probabilities}}
+          - {block: one_hot, params: {labels: labels, num_classes: 10, save_as: upm_one_hot}}
+          - {block: weighted_blend, params: {left: upm_psi_batch, right: upm_one_hot, weight: upm_eta, save_as: upm_factor}}
+          - {block: elementwise_multiply, params: {left: upm_probabilities, right: upm_factor, save_as: upm_weighted_posterior}}
+          - {block: row_normalize, params: {input: upm_weighted_posterior, save_as: clean_posterior}}
           - block: if_epoch_periodic
             params: {start: 35, interval: 5}
             steps:
-              - {block: upm_update_eta, params: {state: upm_state, indices: indices, posterior: clean_posterior, labels: labels, learning_rate: 0.7}}
+              - {block: upm_update_eta, params: {state: upm_eta_state, psi_state: upm_psi_state, indices: indices, posterior: clean_posterior, labels: labels, learning_rate: 0.7}}
           - {block: soft_target_cross_entropy, params: {logits: logits, targets: clean_posterior, reduction: mean, save_as: loss}}
-          - {block: backward}
+          - {block: backward, params: {model: model}}
           - {block: optimizer_step}
       - {block: evaluate_accuracy, params: {model: model, loader: validation_loader, save_as: validation_accuracy}}
       - {block: scheduler_step, params: {scheduler: scheduler}}

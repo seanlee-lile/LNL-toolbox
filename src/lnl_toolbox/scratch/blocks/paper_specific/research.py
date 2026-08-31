@@ -233,8 +233,9 @@ def pdl_estimate_instance_transition(
         "dropout_schedule": {"type": "value", "default": [[0.5, 17], [0.05, 78], [0.9, 5]]},
         "seed": {"type": "int", "default": 20260729, "min": 0},
         "save_as": {"type": "slot", "default": "mentor_provider"},
+        "threshold_as": {"type": "slot", "default": "mentor_threshold"},
     },
-    provides=("save_as",), placement=("top",), stage="setup", ui_group="⑥ 后验与权重",
+    provides=("save_as", "threshold_as"), placement=("top",), stage="setup", ui_group="⑥ 后验与权重",
     formula="q_t=EMA_p(loss), w_i=M(loss_i,loss_i-q_t,y_i,e_t) with burn-in/dropout lifecycle",
     formula_ref="Jiang et al., MentorNet, ICML 2018; formal pipeline.weight_provider",
     paper="MentorNet: Learning Data-Driven Curriculum for Very Deep Neural Networks on Noisy Labels",
@@ -251,6 +252,7 @@ def create_mentor_provider(
     dropout_schedule: Any = ((0.5, 17), (0.05, 78), (0.9, 5)),
     seed: int = 20260729,
     save_as: str = "mentor_provider",
+    threshold_as: str = "mentor_threshold",
 ) -> None:
     import os
     from pathlib import Path
@@ -298,26 +300,8 @@ def create_mentor_provider(
     else:
         raise FileNotFoundError(f"MentorArtifact not found: {path}")
     ctx[save_as] = provider
+    ctx[threshold_as] = None
     ctx["mentor_artifact_path"] = os.fspath(path)
-
-
-@block(id="mentor_update_curriculum_threshold", name="MentorNet: Update Curriculum Threshold", category="State", description="Update the moving loss percentile independently from MentorNet prediction.", params={"provider":{"type":"slot","default":"mentor_provider"},"losses":{"type":"slot","default":"loss_per_sample"},"save_as":{"type":"slot","default":"mentor_threshold"}}, requires=("provider","losses"), provides=("save_as",), placement=("batch",), formula="q_t=decay q_{t-1}+(1-decay) percentile(loss)", formula_ref="MentorNet moving-percentile curriculum", paper="MentorNet")
-def mentor_update_curriculum_threshold(ctx: ScratchContext, provider: str="mentor_provider", losses: str="loss_per_sample", save_as: str="mentor_threshold") -> None:
-    holder = ctx[provider]
-    moving = getattr(holder, "moving", None)
-    if hasattr(moving, "update"):
-        value = moving.update(ctx[losses].detach())
-    else:
-        torch, _ = _torch()
-        percentile = float(getattr(holder, "percentile", 0.6))
-        decay = float(getattr(holder, "decay", 0.5))
-        current = float(torch.quantile(ctx[losses].detach(), percentile).item())
-        value = current if moving is None else decay * float(moving) + (1.0 - decay) * current
-        try:
-            holder.moving = value
-        except Exception:
-            pass
-    ctx[save_as] = float(value)
 
 
 @block(id="mentor_build_features", name="MentorNet: Build Mentor Features", category="Weighting", description="Expose loss, loss deviation, label and curriculum epoch features consumed by the frozen mentor.", params={"provider":{"type":"slot","default":"mentor_provider"},"losses":{"type":"slot","default":"loss_per_sample"},"labels":{"type":"slot","default":"labels"},"threshold":{"type":"slot","default":"mentor_threshold"},"save_as":{"type":"slot","default":"mentor_features"}}, requires=("provider","losses","labels","threshold"), provides=("save_as",), placement=("batch",), formula="v_i=(loss_i,loss_i-q_t,y_i,e_t)", formula_ref="MentorNet feature construction", paper="MentorNet")
@@ -587,56 +571,6 @@ def pcse_recover_layer_statistics(ctx: ScratchContext, snapshots: str = "pcse_sn
 
 
 @block(
-    id="pcse_fit_gda",
-    name="PCSE: Fit Shared-Covariance GDA",
-    category="Paper Specific",
-    description="Fit one shared-covariance GDA classifier per recovered feature layer.",
-    params={"statistics": {"type": "slot", "default": "pcse_statistics"}, "covariance_ridge": {"type": "float", "default": 0.1, "min": 0.0}, "save_as": {"type": "slot", "default": "pcse_gda"}},
-    requires=("statistics",), provides=("save_as",), placement=("top", "epoch"), stage="evaluate", ui_group="⑨ 评估",
-    formula="Sigma_shared=sum_c p_c Sigma_c + lambda I; p(c|h)=softmax(delta_c(h))", formula_ref="PCSE GDA stage", paper="Estimating Per-Class Statistics",
-)
-def pcse_fit_gda(ctx: ScratchContext, statistics: str = "pcse_statistics", covariance_ridge: float = 0.1, save_as: str = "pcse_gda") -> None:
-    from ...native_stats import fit_gda_layers
-    ctx[save_as] = fit_gda_layers(ctx[statistics], covariance_ridge=float(covariance_ridge))
-
-
-@block(
-    id="pcse_fit_ensemble_weights",
-    name="PCSE: Fit Validation Ensemble Weights",
-    category="Paper Specific",
-    description="Optimize positive simplex weights for the two GDA layers on noisy-validation NLL.",
-    params={"gda": {"type": "slot", "default": "pcse_gda"}, "snapshots": {"type": "slot", "default": "pcse_validation_snapshots"}, "epochs": {"type": "int", "default": 5, "min": 1}, "learning_rate": {"type": "float", "default": 0.05, "min": 0.0}, "save_as": {"type": "slot", "default": "pcse_ensemble_weights"}},
-    requires=("gda", "snapshots"), provides=("save_as",), placement=("top", "epoch"), stage="evaluate", ui_group="⑨ 评估",
-    formula="w=softmax(a); min_a -mean log(sum_l w_l p_l(y~|x))", formula_ref="PCSE ensemble validation objective", paper="Estimating Per-Class Statistics",
-)
-def pcse_fit_ensemble_weights(ctx: ScratchContext, gda: str = "pcse_gda", snapshots: str = "pcse_validation_snapshots", epochs: int = 5, learning_rate: float = 0.05, save_as: str = "pcse_ensemble_weights") -> None:
-    import numpy as np
-    from ...native_stats import fit_ensemble_weights
-    values = np.stack([layer.posterior(snapshot.features) for layer, snapshot in zip(ctx[gda], ctx[snapshots])], axis=0)
-    targets = np.asarray(ctx[snapshots][0].noisy_targets)
-    raw, _optimizer, losses = fit_ensemble_weights(values, targets, epochs=int(epochs), learning_rate=float(learning_rate))
-    ctx[save_as] = {"raw_weights": raw, "weights": raw.softmax(dim=0), "losses": losses}
-
-
-@block(
-    id="pcse_evaluate_ensemble",
-    name="PCSE: Evaluate Ensemble",
-    category="Paper Specific",
-    description="Evaluate the validation-selected weighted GDA posterior on a clean target snapshot.",
-    params={"gda": {"type": "slot", "default": "pcse_gda"}, "snapshots": {"type": "slot", "default": "pcse_test_snapshots"}, "weights": {"type": "slot", "default": "pcse_ensemble_weights"}, "save_as": {"type": "slot", "default": "pcse_test_metrics"}},
-    requires=("gda", "snapshots", "weights"), provides=("save_as",), placement=("top", "epoch"), stage="evaluate", ui_group="⑨ 评估",
-    formula="p(y|x)=sum_l w_l p_l(y|h_l(x)); accuracy=mean[argmax p=y]", formula_ref="PCSE final clean-test ensemble", paper="Estimating Per-Class Statistics",
-)
-def pcse_evaluate_ensemble(ctx: ScratchContext, gda: str = "pcse_gda", snapshots: str = "pcse_test_snapshots", weights: str = "pcse_ensemble_weights", save_as: str = "pcse_test_metrics") -> None:
-    import numpy as np
-    probabilities = np.stack([layer.posterior(snapshot.features) for layer, snapshot in zip(ctx[gda], ctx[snapshots])], axis=0)
-    values = np.asarray(ctx[weights]["weights"].detach().cpu().numpy())
-    posterior = np.einsum("l,lnc->nc", values, probabilities)
-    targets = np.asarray(ctx[snapshots][0].noisy_targets)
-    ctx[save_as] = {"accuracy": float(np.mean(posterior.argmax(axis=1) == targets)), "samples": int(targets.size), "weights": values.tolist()}
-
-
-@block(
     id="create_fine_state",
     name="FINE: Create EMA/SED State",
     category="Paper Specific",
@@ -893,97 +827,27 @@ def t_revision_importance_ratio(ctx: ScratchContext, probabilities: str = "proba
     ctx[denominators_as] = denominator
 
 
-@block(id="upm_build_psi", name="UPM: Build Frozen Psi", category="State", description="Align the stage-1 posterior snapshot to canonical training indices and fill only unavailable entries with the uniform prior.", params={"prepared_data":{"type":"slot","default":"prepared_data"},"posterior":{"type":"slot","default":"upm_stage1_posterior"},"num_classes":{"type":"int","default":10,"min":2},"indices_as":{"type":"slot","default":"upm_indices"},"save_as":{"type":"slot","default":"upm_psi"}}, requires=("prepared_data","posterior"), provides=("indices_as","save_as"), placement=("top",), stage="setup", ui_group="④ 状态更新", formula="psi_i=s_i", formula_ref="UPM psi publication", paper="Universal Probability Model for Label Noise")
-def upm_build_psi(ctx: ScratchContext, prepared_data: str="prepared_data", posterior: str="upm_stage1_posterior", num_classes: int=10, indices_as: str="upm_indices", save_as: str="upm_psi") -> None:
-    torch, _ = _torch()
-    indices = torch.as_tensor(ctx[prepared_data].train_indices, dtype=torch.long)
-    snapshot = ctx[posterior]
-    # The canonical posterior snapshot carries the full class distribution;
-    # UPM's psi is the probability assigned to each sample's observed label.
-    # Keep the mapping fallback for old user-authored fixtures, but do not
-    # silently reinterpret an arbitrary object as a snapshot.
-    if hasattr(snapshot, "global_indices") and hasattr(snapshot, "noisy_probabilities") and hasattr(snapshot, "noisy_targets"):
-        snapshot_indices = torch.as_tensor(snapshot.global_indices, dtype=torch.long)
-        probabilities = torch.as_tensor(snapshot.noisy_probabilities, dtype=torch.float32)
-        observed = torch.as_tensor(snapshot.noisy_targets, dtype=torch.long)
-        if probabilities.ndim != 2 or observed.numel() != probabilities.shape[0] or snapshot_indices.numel() != observed.numel():
-            raise ValueError("UPM posterior snapshot fields are not aligned")
-        positions = torch.searchsorted(snapshot_indices, indices)
-        covered = positions < snapshot_indices.numel()
-        if bool(covered.any()) and not torch.equal(snapshot_indices[positions[covered]], indices[covered]):
-            raise ValueError("UPM posterior snapshot does not cover canonical training indices")
-        psi_values = torch.full((indices.numel(),), 1.0 / float(num_classes), dtype=torch.float32)
-        if bool(covered.any()):
-            psi_values[covered] = probabilities[positions[covered], observed[positions[covered]]]
-    elif isinstance(snapshot, Mapping):
-        psi_values = torch.tensor([float(snapshot.get(int(index), 1.0 / float(num_classes))) for index in indices.tolist()], dtype=torch.float32)
-    else:
-        raise TypeError("UPM posterior must be a PosteriorSnapshot or an index-to-probability mapping")
-    ctx[indices_as] = indices
-    ctx[save_as] = psi_values
-
-
-@block(id="upm_initialize_eta", name="UPM: Initialize Eta State", category="State", description="Create the stable-index UPM state from an exposed frozen psi vector and a reusable eta initialization.", params={"indices":{"type":"slot","default":"upm_indices"},"psi":{"type":"slot","default":"upm_psi"},"num_classes":{"type":"int","default":10,"min":2},"eta_init":{"type":"float","default":0.01,"min":0.0,"max":1.0},"save_as":{"type":"slot","default":"upm_state"}}, requires=("indices","psi"), provides=("save_as",), placement=("top",), stage="setup", ui_group="② 初始化", formula="eta_i=eta_0", formula_ref="UPM confusing-probability initialization", paper="Universal Probability Model for Label Noise")
-def upm_initialize_eta(ctx: ScratchContext, indices: str="upm_indices", psi: str="upm_psi", num_classes: int=10, eta_init: float=0.01, save_as: str="upm_state") -> None:
-    torch,_=_torch(); from ...native_stats import UPMNoiseState
-    ctx[save_as]=UPMNoiseState(ctx[indices],ctx[psi],torch.full((ctx[indices].numel(),),float(eta_init)),int(num_classes))
-
-
-@block(
-    id="upm_clean_posterior",
-    name="UPM: Estimate Clean Posterior",
-    category="Paper Specific",
-    description="Compute Eq. (8) clean-label posterior from classifier logits, frozen psi, and current eta.",
-    params={"state": {"type": "slot", "default": "upm_state"}, "logits": {"type": "slot", "default": "logits"}, "labels": {"type": "slot", "default": "labels"}, "indices": {"type": "slot", "default": "indices"}, "save_as": {"type": "slot", "default": "clean_posterior"}},
-    requires=("state", "logits", "labels", "indices"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑥ 后验与权重",
-    formula="q(y|x,y~) ∝ h(y|x)[(1-eta)1[y=y~]+eta psi]",
-    formula_ref="UPM Eq. (8)", paper="Universal Probability Model for Label Noise",
-)
-def upm_clean_posterior(ctx: ScratchContext, state: str = "upm_state", logits: str = "logits", labels: str = "labels", indices: str = "indices", save_as: str = "clean_posterior") -> None:
-    import torch
-    from ...native_stats import predict_true_posterior
-    psi, eta = ctx[state].lookup(ctx[indices].detach())
-    probabilities = torch.softmax(ctx[logits].detach(), dim=1)
-    ctx[save_as] = predict_true_posterior(probabilities, ctx[labels].long(), psi.to(probabilities), eta.to(probabilities))
-
-
 @block(
     id="upm_update_eta",
     name="UPM: Update Confusing Probabilities",
     category="Paper Specific",
     description="Apply Eq. (11) eta ascent and [0,1] projection after posterior estimation.",
-    params={"state": {"type": "slot", "default": "upm_state"}, "indices": {"type": "slot", "default": "indices"}, "posterior": {"type": "slot", "default": "clean_posterior"}, "labels": {"type": "slot", "default": "labels"}, "learning_rate": {"type": "float", "default": 0.7, "min": 0.0}},
-    requires=("state", "indices", "posterior", "labels"), provides=(), placement=("batch",), stage="train", ui_group="⑩ 论文专用",
+    params={"state": {"type": "slot", "default": "upm_eta_state"}, "psi_state": {"type": "slot", "default": "upm_psi_state"}, "indices": {"type": "slot", "default": "indices"}, "posterior": {"type": "slot", "default": "clean_posterior"}, "labels": {"type": "slot", "default": "labels"}, "learning_rate": {"type": "float", "default": 0.7, "min": 0.0}},
+    requires=("state", "psi_state", "indices", "posterior", "labels"), provides=(), placement=("batch",), stage="train", ui_group="⑩ 论文专用",
     formula="eta<-Pi_[0,1](eta+lr d log p(y~|x)/d eta)", formula_ref="UPM Eq. (11)-(12)", paper="Universal Probability Model for Label Noise",
 )
-def upm_update_eta(ctx: ScratchContext, state: str = "upm_state", indices: str = "indices", posterior: str = "clean_posterior", labels: str = "labels", learning_rate: float = 0.7) -> None:
+def upm_update_eta(ctx: ScratchContext, state: str = "upm_eta_state", psi_state: str = "upm_psi_state", indices: str = "indices", posterior: str = "clean_posterior", labels: str = "labels", learning_rate: float = 0.7) -> None:
     import torch
     from ...native_stats import update_confusing_probability
-    psi, eta = ctx[state].lookup(ctx[indices].detach())
-    updated = update_confusing_probability(eta.to(ctx[posterior]), ctx[posterior].detach(), ctx[labels].detach(), psi.to(ctx[posterior]), learning_rate=float(learning_rate), epsilon=1e-8)
-    updated = updated.to(torch.device("cpu"))
-    ctx[state].update_eta(ctx[indices].detach(), updated)
-
-
-@block(
-    id="create_cal_state",
-    name="CAL: Create Noisy-prior State",
-    category="State",
-    description="Record the formal externally supplied noisy-label prior before CAL warm-up.",
-    params={"prepared_data": {"type": "slot", "default": "prepared_data"}, "num_classes": {"type": "int", "default": 10, "min": 2}, "save_as": {"type": "slot", "default": "cal_state"}},
-    requires=("prepared_data",), provides=("save_as", "cal_noisy_prior"), placement=("top",), stage="setup", ui_group="② 初始化",
-    formula="pi_tilde=hist(y_tilde)/N", formula_ref="CAL formal noisy-label prior", paper="Learning from Noisy Labels with Core-loss and Second-order Risk",
-)
-def create_cal_state(ctx: ScratchContext, prepared_data: str = "prepared_data", num_classes: int = 10, save_as: str = "cal_state") -> None:
-    torch, _ = _torch()
-    prepared = ctx[prepared_data]
-    if hasattr(prepared, "noisy_targets"):
-        targets = torch.as_tensor(prepared.noisy_targets, dtype=torch.long)
-    else:
-        targets = torch.arange(8, dtype=torch.long) % int(num_classes)
-    prior = torch.bincount(targets, minlength=int(num_classes)).float()
-    ctx[save_as] = {"noisy_prior": prior / prior.sum().clamp_min(1.0)}
-    ctx["cal_noisy_prior"] = ctx[save_as]["noisy_prior"]
+    rows = torch.as_tensor(ctx[indices], dtype=torch.long).reshape(-1).cpu()
+    eta_table, psi_table = ctx[state], ctx[psi_state]
+    if rows.numel() and (int(rows.min()) < 0 or int(rows.max()) >= int(eta_table["values"].shape[0])):
+        raise IndexError("UPM eta state does not cover requested indices")
+    eta = eta_table["values"][rows].reshape(-1)
+    psi = psi_table["values"][rows].reshape(-1)
+    updated = update_confusing_probability(eta.to(ctx[posterior]), ctx[posterior].detach(), ctx[labels].detach(), psi.to(ctx[posterior]), learning_rate=float(learning_rate), epsilon=1e-8).to(torch.device("cpu"))
+    eta_table["values"][rows] = updated.reshape(-1, 1)
+    eta_table["seen"][rows] = True
 
 
 @block(
@@ -991,15 +855,15 @@ def create_cal_state(ctx: ScratchContext, prepared_data: str = "prepared_data", 
     name="CAL: Materialize Warm-up Proxy Artifact",
     category="Posterior",
     description="Freeze the warm-up posterior into the stable-index CORES² proxy artifact used by the second stage.",
-    params={"model": {"type": "slot", "default": "warmup_model"}, "loader": {"type": "slot", "default": "train_eval_loader"}, "prepared_data": {"type": "slot", "default": "prepared_data"}, "state": {"type": "slot", "default": "cal_state"}, "confidence_weight": {"type": "slot", "default": "confidence_weight"}, "lower_threshold": {"type": "float", "default": -8.0}, "upper_threshold": {"type": "float", "default": -8.0}},
-    requires=("model", "loader", "prepared_data", "state", "confidence_weight"), provides=(), placement=("top",), stage="setup", ui_group="⑥ 后验与权重",
+    params={"model": {"type": "slot", "default": "warmup_model"}, "loader": {"type": "slot", "default": "train_eval_loader"}, "prepared_data": {"type": "slot", "default": "prepared_data"}, "noisy_prior": {"type": "slot", "default": "cal_noisy_prior"}, "confidence_weight": {"type": "slot", "default": "confidence_weight"}, "lower_threshold": {"type": "float", "default": -8.0}, "upper_threshold": {"type": "float", "default": -8.0}, "proxy_as": {"type": "slot", "default": "cal_proxy_artifact"}, "proxy_prior_as": {"type": "slot", "default": "cal_proxy_prior"}, "reference_transition_as": {"type": "slot", "default": "cal_reference_transition"}, "reference_losses_as": {"type": "slot", "default": "cal_reference_losses"}, "proxy_targets_state_as": {"type": "slot", "default": "cal_proxy_targets_state"}, "retained_state_as": {"type": "slot", "default": "cal_retained_state"}},
+    requires=("model", "loader", "prepared_data", "noisy_prior", "confidence_weight"), provides=("proxy_as", "proxy_prior_as", "reference_transition_as", "reference_losses_as", "proxy_targets_state_as", "retained_state_as"), placement=("top",), stage="setup", ui_group="⑥ 后验与权重",
     formula="proxy=CORES2(argmax f_warmup(x), adjusted_loss, lower, upper)", formula_ref="CAL proxy artifact lifecycle", paper="Learning from Noisy Labels with Core-loss and Second-order Risk",
 )
-def cal_materialize_proxy_artifact(ctx: ScratchContext, model: str = "warmup_model", loader: str = "train_eval_loader", prepared_data: str = "prepared_data", state: str = "cal_state", confidence_weight: str = "confidence_weight", lower_threshold: float = -8.0, upper_threshold: float = -8.0) -> None:
+def cal_materialize_proxy_artifact(ctx: ScratchContext, model: str = "warmup_model", loader: str = "train_eval_loader", prepared_data: str = "prepared_data", noisy_prior: str = "cal_noisy_prior", confidence_weight: str = "confidence_weight", lower_threshold: float = -8.0, upper_threshold: float = -8.0, proxy_as: str = "cal_proxy_artifact", proxy_prior_as: str = "cal_proxy_prior", reference_transition_as: str = "cal_reference_transition", reference_losses_as: str = "cal_reference_losses", proxy_targets_state_as: str = "cal_proxy_targets_state", retained_state_as: str = "cal_retained_state") -> None:
     import numpy as np
     import torch
     from ...native_stats import cores2_adjusted_losses, CALProxyArtifact, build_cal_proxy_artifact, _reference_transition_means, collect_posterior_snapshot
-    values = ctx[state]; prepared = ctx[prepared_data]; classes = int(prepared.num_classes)
+    prepared = ctx[prepared_data]; classes = int(prepared.num_classes)
     if bool((ctx.get("_runtime_limits") or {}).get("fixture")):
         indices = np.asarray(prepared.train_indices, dtype=np.int64)
         targets = np.arange(indices.size, dtype=np.int64) % classes
@@ -1012,7 +876,7 @@ def cal_materialize_proxy_artifact(ctx: ScratchContext, model: str = "warmup_mod
         with torch.inference_mode():
             for batch in ctx[loader]:
                 logits = ctx[model](batch["input"].to(device))
-                all_losses.append(cores2_adjusted_losses(logits, batch["target"].to(device), values["noisy_prior"].to(device), float(ctx[confidence_weight])).cpu().numpy())
+                all_losses.append(cores2_adjusted_losses(logits, batch["target"].to(device), ctx[noisy_prior].to(device), float(ctx[confidence_weight])).cpu().numpy())
                 all_indices.append(batch["index"].cpu().numpy())
         ctx[model].train(was_training)
         losses, indices = np.concatenate(all_losses), np.concatenate(all_indices)
@@ -1024,93 +888,26 @@ def cal_materialize_proxy_artifact(ctx: ScratchContext, model: str = "warmup_mod
     proxy_prior = np.bincount(artifact.proxy_targets[retained], minlength=classes).astype(np.float32)
     if proxy_prior.sum() <= 0:
         raise ValueError("CAL proxy artifact retained no samples")
-    values["proxy"] = artifact
-    values["proxy_prior"] = torch.as_tensor(proxy_prior / proxy_prior.sum(), dtype=torch.float32)
-    values["reference_transition"] = _reference_transition_means(artifact, np.asarray(prepared.train_indices), np.asarray(prepared.noisy_targets) if hasattr(prepared, "noisy_targets") else np.arange(len(prepared.train_indices)) % classes, classes)
-    values["reference_losses"] = torch.zeros(classes, classes, dtype=torch.float32)
-
-
-@block(
-    id="cal_warmup_objective",
-    name="CAL: Warm-up Objective",
-    category="Loss",
-    description="Compute the formal CORES² adjusted noisy-label warm-up risk.",
-    params={"logits": {"type": "slot", "default": "logits"}, "labels": {"type": "slot", "default": "labels"}, "noisy_prior": {"type": "slot", "default": "cal_noisy_prior"}, "confidence_weight": {"type": "slot", "default": "confidence_weight"}, "save_as": {"type": "slot", "default": "loss"}},
-    requires=("logits", "labels", "noisy_prior", "confidence_weight"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="L_warmup=mean[-log p_y-alpha_t sum_c pi_tilde_c log p_c]", formula_ref="CAL CORES2 adjusted warm-up risk", paper="Learning from Noisy Labels with Core-loss and Second-order Risk",
-)
-def cal_warmup_objective(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", noisy_prior: str = "cal_noisy_prior", confidence_weight: str = "confidence_weight", save_as: str = "loss") -> None:
-    from ...native_stats import cores2_adjusted_losses
-    ctx[save_as] = cores2_adjusted_losses(ctx[logits], ctx[labels].long(), ctx[noisy_prior], float(ctx[confidence_weight])).mean()
-
-
-@block(
-    id="cal_prepare_proxy_batch",
-    name="CAL: Prepare Proxy Statistics",
-    category="Paper Specific",
-    description="Look up stable-index proxy labels and fixed reference statistics from the warm-up artifact.",
-    params={"indices": {"type": "slot", "default": "indices"}, "state": {"type": "slot", "default": "cal_state"}},
-    requires=("indices", "state"), provides=("cal_proxy_targets", "cal_retained", "cal_noisy_prior", "cal_proxy_prior", "cal_reference_losses", "cal_reference_transition"), placement=("batch",), stage="train", ui_group="⑥ 后验与权重",
-    formula="(y_hat,keep)=ProxyArtifact[index]; pi, M, Lbar are warm-up-stage state", formula_ref="CAL proxy artifact lifecycle", paper="CAL",
-)
-def cal_prepare_proxy_batch(ctx: ScratchContext, indices: str = "indices", state: str = "cal_state") -> None:
-    values = ctx[state]
-    proxy_targets, retained, _ = values["proxy"].lookup(ctx[indices])
-    ctx["cal_proxy_targets"], ctx["cal_retained"] = proxy_targets, retained
-    ctx["cal_noisy_prior"] = values["noisy_prior"].to(proxy_targets.device)
-    ctx["cal_proxy_prior"] = values["proxy_prior"].to(proxy_targets.device)
-    ctx["cal_reference_losses"] = values["reference_losses"].to(proxy_targets.device)
-    ctx["cal_reference_transition"] = values["reference_transition"].to(proxy_targets.device)
-
-
-@block(
-    id="cal_reset_reference_accumulator",
-    name="CAL: Reset Epoch Reference Accumulator",
-    category="State",
-    description="Start the detached per-proxy-class all-loss accumulation used for the next CAL epoch.",
-    params={"state": {"type": "slot", "default": "cal_state"}},
-    requires=("state",), placement=("epoch",), stage="train", ui_group="⑩ 论文专用",
-    formula="S_c=0, n_c=0 at epoch start", formula_ref="CAL reference loss means lifecycle", paper="Learning from Noisy Labels with Core-loss and Second-order Risk",
-)
-def cal_reset_reference_accumulator(ctx: ScratchContext, state: str = "cal_state") -> None:
-    torch, _ = _torch()
-    classes = int(ctx[state]["reference_losses"].shape[0])
-    ctx[state]["epoch_loss_sums"] = torch.zeros(classes, classes, dtype=torch.float32)
-    ctx[state]["epoch_class_counts"] = torch.zeros(classes, dtype=torch.float32)
-
-
-@block(
-    id="cal_accumulate_reference_losses",
-    name="CAL: Accumulate Detached Reference Losses",
-    category="State",
-    description="Accumulate retained all-class losses by frozen proxy class without differentiating through the reference state.",
-    params={"state": {"type": "slot", "default": "cal_state"}, "logits": {"type": "slot", "default": "logits"}, "proxy_targets": {"type": "slot", "default": "cal_proxy_targets"}, "retained": {"type": "slot", "default": "cal_retained"}},
-    requires=("state", "logits", "proxy_targets", "retained"), placement=("batch",), stage="train", ui_group="⑩ 论文专用",
-    formula="S_c+=sum_{i:keep,yhat=c} ell(x_i); n_c+=count", formula_ref="CAL reference loss means lifecycle", paper="Learning from Noisy Labels with Core-loss and Second-order Risk",
-)
-def cal_accumulate_reference_losses(ctx: ScratchContext, state: str = "cal_state", logits: str = "logits", proxy_targets: str = "cal_proxy_targets", retained: str = "cal_retained") -> None:
-    from ...native_stats import cal_all_class_losses
-    values = ctx[state]; losses = cal_all_class_losses(ctx[logits].detach()).cpu(); targets = ctx[proxy_targets].detach().cpu(); keep = ctx[retained].detach().cpu()
-    for proxy_class in range(losses.shape[1]):
-        mask = keep & targets.eq(proxy_class)
-        if bool(mask.any()):
-            values["epoch_loss_sums"][proxy_class] += losses[mask].sum(dim=0)
-            values["epoch_class_counts"][proxy_class] += mask.sum()
-
-
-@block(
-    id="cal_finalize_reference_losses",
-    name="CAL: Finalize Epoch Reference Losses",
-    category="State",
-    description="Publish only observed proxy-class means for use as the detached reference matrix in the next CAL epoch.",
-    params={"state": {"type": "slot", "default": "cal_state"}},
-    requires=("state",), placement=("epoch",), stage="train", ui_group="⑩ 论文专用",
-    formula="Lbar_c=S_c/n_c for n_c>0", formula_ref="CAL reference loss means lifecycle", paper="Learning from Noisy Labels with Core-loss and Second-order Risk",
-)
-def cal_finalize_reference_losses(ctx: ScratchContext, state: str = "cal_state") -> None:
-    values = ctx[state]; observed = values["epoch_class_counts"] > 0
-    values["reference_losses"][observed] = values["epoch_loss_sums"][observed] / values["epoch_class_counts"][observed, None]
-    values["reference_losses"] = values["reference_losses"].detach()
+    proxy_prior_value = torch.as_tensor(proxy_prior / proxy_prior.sum(), dtype=torch.float32)
+    reference_transition_value = _reference_transition_means(artifact, np.asarray(prepared.train_indices), np.asarray(prepared.noisy_targets) if hasattr(prepared, "noisy_targets") else np.arange(len(prepared.train_indices)) % classes, classes)
+    reference_losses_value = torch.zeros(classes, classes, dtype=torch.float32)
+    # Publish the artifact and its stable-index tables as independent slots;
+    # subsequent recipes consume them through the public indexed state blocks.
+    indices = torch.as_tensor(artifact.global_indices, dtype=torch.long)
+    size = int(indices.max().item()) + 1 if indices.numel() else 0
+    def _table(values):
+        values = torch.as_tensor(values)
+        if values.ndim == 1:
+            values = values[:, None]
+        table = {"values": torch.zeros((size, values.shape[1]), dtype=values.dtype), "seen": torch.zeros(size, dtype=torch.bool), "last_epoch": torch.full((size,), -1, dtype=torch.long)}
+        table["values"][indices] = values.detach().cpu(); table["seen"][indices] = True
+        return table
+    ctx[proxy_as] = artifact
+    ctx[proxy_prior_as] = proxy_prior_value
+    ctx[reference_transition_as] = torch.as_tensor(reference_transition_value, dtype=torch.float32)
+    ctx[reference_losses_as] = reference_losses_value
+    ctx[proxy_targets_state_as] = _table(artifact.proxy_targets)
+    ctx[retained_state_as] = _table(retained)
 
 
 @block(id="cal_cores2_adjusted_risk", name="CAL: CORES2 Adjusted Risk", category="Loss", description="Compute the Eq. (7) noisy-label risk corrected by the noisy-label prior.", params={"logits":{"type":"slot","default":"logits"},"labels":{"type":"slot","default":"labels"},"noisy_prior":{"type":"slot","default":"cal_noisy_prior"},"confidence_weight":{"type":"slot","default":"confidence_weight"},"save_as":{"type":"slot","default":"cal_adjusted_risk"}}, requires=("logits","labels","noisy_prior","confidence_weight"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式", formula="mean[-log p_y-alpha sum_c pi_tilde_c log p_c]", formula_ref="CAL Eq. (7)", paper="Learning from Noisy Labels with Core-loss and Second-order Risk")
@@ -1120,9 +917,9 @@ def cal_cores2_adjusted_risk(ctx: ScratchContext, logits: str="logits", labels: 
 
 @block(id="cal_covariance_correction", name="CAL: Covariance Correction", category="Loss", description="Compute the Eq. (8)-(9) retained-proxy covariance correction from detached reference matrices.", params={"logits":{"type":"slot","default":"logits"},"labels":{"type":"slot","default":"labels"},"proxy_targets":{"type":"slot","default":"cal_proxy_targets"},"retained":{"type":"slot","default":"cal_retained"},"proxy_prior":{"type":"slot","default":"cal_proxy_prior"},"reference_losses":{"type":"slot","default":"cal_reference_losses"},"reference_transition":{"type":"slot","default":"cal_reference_transition"},"save_as":{"type":"slot","default":"cal_covariance"}}, requires=("logits","labels","proxy_targets","retained","proxy_prior","reference_losses","reference_transition"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式", formula="sum_c pi_hat_c Cov(1[y~=j],ell_j | yhat=c)", formula_ref="CAL Eq. (8)-(9)", paper="Learning from Noisy Labels with Core-loss and Second-order Risk")
 def cal_covariance_correction(ctx: ScratchContext, logits: str="logits", labels: str="labels", proxy_targets: str="cal_proxy_targets", retained: str="cal_retained", proxy_prior: str="cal_proxy_prior", reference_losses: str="cal_reference_losses", reference_transition: str="cal_reference_transition", save_as: str="cal_covariance") -> None:
-    torch,F=_torch(); losses=-torch.log(F.softmax(ctx[logits],dim=1)+1.0e-5); classes=losses.shape[1]; correction=losses.sum()*0.0; prior=ctx[proxy_prior].to(losses); means=ctx[reference_losses].detach().to(losses); transition=ctx[reference_transition].detach().to(losses)
+    torch,F=_torch(); losses=-torch.log(F.softmax(ctx[logits],dim=1)+1.0e-5); classes=losses.shape[1]; correction=losses.sum()*0.0; prior=ctx[proxy_prior].to(losses); means=ctx[reference_losses].detach().to(losses); transition=ctx[reference_transition].detach().to(losses); proxy_values=ctx[proxy_targets].reshape(-1); retained_values=ctx[retained].bool().reshape(-1)
     for c in range(classes):
-        mask=ctx[retained].bool() & ctx[proxy_targets].eq(c)
+        mask=retained_values & proxy_values.eq(c)
         if not bool(mask.any()): continue
         selected=losses[mask]; observed=ctx[labels][mask].long()
         for j in range(classes): correction=correction+prior[c]*((observed.eq(j).to(losses.dtype)-transition[c,j])*(selected[:,j]-means[c,j])).mean()

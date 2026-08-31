@@ -31,6 +31,21 @@ def one_hot(ctx: ScratchContext, labels: str = "labels", num_classes: int = 10, 
 
 
 @block(
+    id="one_hot_like",
+    name="One-hot Like",
+    category="Tensor Operation",
+    description="Convert labels to one-hot vectors using the class dimension of a reference tensor.",
+    params={"labels": {"type": "slot", "default": "labels"}, "reference": {"type": "slot", "default": "logits"}, "save_as": {"type": "slot", "default": "one_hot_labels"}},
+    requires=("labels", "reference"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="one_hot(y, reference.shape[-1])", formula_ref="reference-shaped one-hot encoding",
+)
+def one_hot_like(ctx: ScratchContext, labels: str = "labels", reference: str = "logits", save_as: str = "one_hot_labels") -> None:
+    torch, F = _torch()
+    classes = int(ctx[reference].shape[-1])
+    ctx[save_as] = F.one_hot(ctx[labels].long(), classes).to(dtype=torch.float32)
+
+
+@block(
     id="zeros_like",
     name="Zeros Like",
     category="Tensor Operation",
@@ -84,6 +99,19 @@ def sum_values(ctx: ScratchContext, input: str = "values", save_as: str = "sum")
 
 
 @block(
+    id="sum_last_dimension",
+    name="Sum Last Dimension",
+    category="Tensor Operation",
+    description="Reduce only the last tensor dimension, preserving leading sample dimensions.",
+    params={"input": {"type": "slot", "default": "values"}, "save_as": {"type": "slot", "default": "summed_values"}},
+    requires=("input",), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式",
+    formula="z_i=Σ_c x_{i,c}", formula_ref="explicit last-dimension reduction",
+)
+def sum_last_dimension(ctx: ScratchContext, input: str = "values", save_as: str = "summed_values") -> None:
+    ctx[save_as] = ctx[input].sum(dim=-1)
+
+
+@block(
     id="detach",
     name="Detach Tensor",
     category="Tensor Operation",
@@ -119,6 +147,19 @@ def uniform_prior(ctx: ScratchContext, reference: str = "probabilities", num_cla
 )
 def subtract(ctx: ScratchContext, minuend: str = "first", subtrahend: str = "second", save_as: str = "difference") -> None:
     ctx[save_as] = ctx[minuend] - ctx[subtrahend]
+
+
+@block(
+    id="negate",
+    name="Negate",
+    category="Tensor Operation",
+    description="Multiply a tensor or scalar by -1 without reduction.",
+    params={"input": {"type": "slot", "default": "input"}, "save_as": {"type": "slot", "default": "negated"}},
+    requires=("input",), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式",
+    formula="z=-x", formula_ref="explicit negation",
+)
+def negate(ctx: ScratchContext, input: str = "input", save_as: str = "negated") -> None:
+    ctx[save_as] = -ctx[input]
 
 
 @block(
@@ -233,7 +274,10 @@ def negative_log(ctx: ScratchContext, input: str = "probabilities", minimum: flo
     requires=("numerator", "denominator"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
 )
 def safe_divide(ctx: ScratchContext, numerator: str = "numerator", denominator: str = "denominator", minimum: float = 1e-12, save_as: str = "quotient") -> None:
-    ctx[save_as] = ctx[numerator] / ctx[denominator].clamp_min(float(minimum))
+    denominator_value = ctx[denominator]
+    if not hasattr(denominator_value, "clamp_min"):
+        denominator_value = __import__("torch").as_tensor(denominator_value, dtype=ctx[numerator].dtype, device=ctx[numerator].device)
+    ctx[save_as] = ctx[numerator] / denominator_value.clamp_min(float(minimum))
 
 
 @block(

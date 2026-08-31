@@ -178,6 +178,12 @@ def estimate_class_prior(ctx: ScratchContext, labels: str = "labels", num_classe
     value = ctx[labels]
     if hasattr(value, "noisy_targets"):
         value = value.noisy_targets
+    elif hasattr(value, "observed_targets"):
+        value = value.observed_targets
+    elif hasattr(value, "samples"):
+        value = [sample.observed_target for sample in value.samples]
+    elif isinstance(value, Mapping):
+        value = value.get("observed_targets", value.get("noisy_targets", value.get("targets", value)))
     value = torch.as_tensor(value, dtype=torch.long).reshape(-1)
     if value.numel() == 0 or bool((value < 0).any()) or bool((value >= int(num_classes)).any()):
         raise ValueError("estimate_class_prior labels are outside the class range")
@@ -269,32 +275,77 @@ def matrix_pseudoinverse(ctx: ScratchContext, matrix: str = "matrix", save_as: s
 
 @block(
     id="fit_shared_covariance_gda", name="Fit Shared-covariance GDA", category="Statistics",
-    description="Fit class means, shared covariance and priors for a Gaussian discriminant model.",
-    params={"features": {"type": "slot", "default": "features"}, "labels": {"type": "slot", "default": "labels"}, "num_classes": {"type": "int", "default": 10, "min": 2}, "save_as": {"type": "slot", "default": "gda"}},
-    requires=("features", "labels"), provides=("save_as",), placement=("top",), stage="setup", ui_group="⑥ 后验与权重",
+    description="Fit one shared-covariance GDA estimator per recovered class-statistics mapping.",
+    params={"statistics": {"type": "slot", "default": "statistics"}, "covariance_ridge": {"type": "float", "default": 0.1, "min": 0.0}, "save_as": {"type": "slot", "default": "gda"}},
+    requires=("statistics",), provides=("save_as",), placement=("top", "epoch"), stage="setup", ui_group="⑥ 后验与权重",
 )
-def fit_shared_covariance_gda(ctx: ScratchContext, features: str = "features", labels: str = "labels", num_classes: int = 10, save_as: str = "gda") -> None:
-    stats_name = "_gda_statistics"
-    classwise_feature_statistics(ctx, features=features, labels=labels, num_classes=num_classes, save_as=stats_name)
-    stats = ctx.pop(stats_name)
-    counts = stats.counts
-    ctx[save_as] = SimpleNamespace(means=stats.means, covariance=stats.covariance, priors=counts / counts.sum().clamp_min(1.0))
+def fit_shared_covariance_gda(ctx: ScratchContext, statistics: str = "statistics", covariance_ridge: float = 0.1, save_as: str = "gda") -> None:
+    """Fit GDA estimators from already materialized class statistics.
+
+    Statistics recovery and estimator construction are deliberately separate:
+    this block never collects a loader snapshot or reinterprets raw labels.
+    A mapping produces one estimator per feature layer, which is the contract
+    consumed by ``predict_gda_layers`` and the public ensemble operations.
+    """
+    from ..native_stats import fit_gda_layers
+    source = ctx[statistics]
+    if not isinstance(source, Mapping) and not hasattr(source, "means"):
+        raise TypeError("fit_shared_covariance_gda expects recovered class statistics")
+    ctx[save_as] = fit_gda_layers(source, covariance_ridge=float(covariance_ridge))
+
+
+@block(
+    id="predict_gda_layers", name="Predict GDA Layers", category="Statistics",
+    description="Evaluate fitted GDA estimators on aligned feature snapshots and publish [N,E,C] predictions.",
+    params={"estimators": {"type": "slot", "default": "gda"}, "snapshots": {"type": "slot", "default": "feature_snapshots"}, "save_as": {"type": "slot", "default": "predictions"}, "targets_as": {"type": "slot", "default": "targets"}},
+    requires=("estimators", "snapshots"), provides=("save_as", "targets_as"), placement=("top", "epoch"), stage="evaluate", ui_group="⑥ 后验与权重",
+)
+def predict_gda_layers(ctx: ScratchContext, estimators: str = "gda", snapshots: str = "feature_snapshots", save_as: str = "predictions", targets_as: str = "targets") -> None:
+    import numpy as np
+    estimators_value = ctx[estimators]
+    snapshots_value = ctx[snapshots]
+    if not isinstance(estimators_value, (list, tuple)) or not isinstance(snapshots_value, (list, tuple)):
+        raise TypeError("predict_gda_layers expects estimator and snapshot sequences")
+    if len(estimators_value) != len(snapshots_value) or not estimators_value:
+        raise ValueError("predict_gda_layers estimator/snapshot counts must match")
+    reference = snapshots_value[0]
+    reference_indices = np.asarray(reference.global_indices, dtype=np.int64)
+    reference_targets = np.asarray(reference.noisy_targets, dtype=np.int64)
+    predictions = []
+    for estimator, snapshot in zip(estimators_value, snapshots_value):
+        indices = np.asarray(snapshot.global_indices, dtype=np.int64)
+        targets = np.asarray(snapshot.noisy_targets, dtype=np.int64)
+        if not np.array_equal(indices, reference_indices) or not np.array_equal(targets, reference_targets):
+            raise ValueError("predict_gda_layers snapshots must share stable indices and targets")
+        if not hasattr(estimator, "posterior"):
+            raise TypeError("GDA estimator must expose posterior(features)")
+        predictions.append(np.asarray(estimator.posterior(snapshot.features), dtype=np.float32))
+    values = _torch().as_tensor(np.stack(predictions, axis=1), dtype=_torch().float32)
+    ctx[save_as] = values
+    ctx[targets_as] = _torch().as_tensor(reference_targets, dtype=_torch().long)
 
 
 @block(
     id="fit_simplex_ensemble_weights", name="Fit Simplex Ensemble Weights", category="Statistics",
-    description="Fit nonnegative ensemble weights that sum to one from validation predictions and targets.",
-    params={"predictions": {"type": "slot", "default": "predictions"}, "targets": {"type": "slot", "default": "targets"}, "save_as": {"type": "slot", "default": "ensemble_weights"}},
-    requires=("predictions", "targets"), provides=("save_as",), placement=("top",), stage="setup", ui_group="⑥ 后验与权重",
+    description="Optimize nonnegative simplex weights against validation negative log-likelihood.",
+    params={"predictions": {"type": "slot", "default": "predictions"}, "targets": {"type": "slot", "default": "targets"}, "epochs": {"type": "int", "default": 5, "min": 1}, "learning_rate": {"type": "float", "default": 0.05, "min": 0.0}, "save_as": {"type": "slot", "default": "ensemble_weights"}},
+    requires=("predictions", "targets"), provides=("save_as",), placement=("top", "epoch"), stage="setup", ui_group="⑥ 后验与权重",
 )
-def fit_simplex_ensemble_weights(ctx: ScratchContext, predictions: str = "predictions", targets: str = "targets", save_as: str = "ensemble_weights") -> None:
+def fit_simplex_ensemble_weights(ctx: ScratchContext, predictions: str = "predictions", targets: str = "targets", epochs: int = 5, learning_rate: float = 0.05, save_as: str = "ensemble_weights") -> None:
     torch = _torch(); values = torch.as_tensor(ctx[predictions]); target = torch.as_tensor(ctx[targets]).long().reshape(-1)
     if values.ndim != 3 or values.shape[0] != target.numel():
         raise ValueError("fit_simplex_ensemble_weights expects [N,E,C] probabilities/logits")
     probabilities = values.softmax(-1) if values.min() < 0 or values.max() > 1 else values
-    correct = probabilities.argmax(-1).eq(target[:, None]).to(torch.float32).mean(0)
-    weights = correct.clamp_min(0)
-    ctx[save_as] = weights / weights.sum().clamp_min(torch.finfo(weights.dtype).tiny)
+    if not bool(torch.isfinite(probabilities).all()) or bool((probabilities < 0).any()):
+        raise ValueError("fit_simplex_ensemble_weights predictions must be finite probabilities or logits")
+    raw = torch.zeros(int(probabilities.shape[1]), dtype=probabilities.dtype, device=probabilities.device, requires_grad=True)
+    optimizer = torch.optim.Adam([raw], lr=float(learning_rate))
+    for _ in range(int(epochs)):
+        weights = torch.softmax(raw, dim=0)
+        mixture = (probabilities * weights[None, :, None]).sum(dim=1)
+        loss = -mixture.clamp_min(torch.finfo(mixture.dtype).tiny).log().gather(1, target[:, None]).mean()
+        optimizer.zero_grad(); loss.backward(); optimizer.step()
+    ctx[save_as] = torch.softmax(raw.detach(), dim=0)
 
 
 @block(
@@ -304,7 +355,10 @@ def fit_simplex_ensemble_weights(ctx: ScratchContext, predictions: str = "predic
     requires=("predictions", "weights", "targets"), provides=("save_as",), placement=("top", "epoch"), stage="evaluate", ui_group="⑨ 评估",
 )
 def evaluate_weighted_ensemble(ctx: ScratchContext, predictions: str = "predictions", weights: str = "ensemble_weights", targets: str = "targets", save_as: str = "accuracy") -> None:
-    torch = _torch(); values = torch.as_tensor(ctx[predictions]); factors = torch.as_tensor(ctx[weights], device=values.device, dtype=values.dtype); target = torch.as_tensor(ctx[targets], device=values.device).long()
+    torch = _torch(); values = torch.as_tensor(ctx[predictions]); raw_weights = ctx[weights];
+    if isinstance(raw_weights, Mapping) and "weights" in raw_weights:
+        raw_weights = raw_weights["weights"]
+    factors = torch.as_tensor(raw_weights, device=values.device, dtype=values.dtype); target = torch.as_tensor(ctx[targets], device=values.device).long()
     if values.ndim != 3 or values.shape[1] != factors.numel() or values.shape[0] != target.numel():
         raise ValueError("evaluate_weighted_ensemble input shapes are inconsistent")
     probabilities = values.softmax(-1) if values.min() < 0 or values.max() > 1 else values

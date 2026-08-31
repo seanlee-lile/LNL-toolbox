@@ -1,0 +1,52 @@
+schema_version: 1
+name: custom_formula_method
+description: A user-composable method assembled from public Scratch Blocks and Formula Blocks.
+steps:
+  - block: set_seed
+    params: {seed: 7}
+  - block: select_device
+    params: {device: cpu}
+  - block: load_dataset
+    params: {dataset: synthetic, options: {samples: 32, features: 4, classes: 2}}
+  - block: inspect_dataset_semantics
+  - block: create_dataset_split
+    params: {validation_size: 0}
+  - block: select_label_source
+    params: {validation: observed, test: observed}
+  - block: apply_noise
+    params: {name: none, rate: 0.0, seed: 7}
+  - block: build_noise_manifest
+    params: {required: false}
+  - block: configure_preprocessing
+    params: {preprocessing: tensor_only}
+  - block: configure_views
+    params: {views: [weak]}
+  - block: assign_data_roles
+    params: {roles: [train, test]}
+  - block: configure_loader
+    params: {batch_size: 8}
+  - block: build_prepared_data
+  - block: build_loaders
+  - block: create_model
+    params: {model: mlp, num_classes: 2, input_dim: 4, hidden: 16, device: device}
+  - block: create_optimizer
+    params: {optimizer: sgd, model: model, lr: 0.1}
+  - block: epoch_loop
+    params: {epochs: 1}
+    steps:
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - block: get_batch
+          - block: zero_grad
+          - block: forward
+          - block: formula/builtin/confidence_score
+            params: {logits: logits, targets: labels, save_as: confidence_score}
+          - block: threshold_mask
+            params: {values: confidence_score, threshold: 0.5, save_as: confident_mask}
+          - block: formula/builtin/standard_ce
+            params: {logits: logits, targets: labels, save_as: loss}
+          - block: backward
+          - block: optimizer_step
+  - block: record_metrics
+    params: {values: [loss]}

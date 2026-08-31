@@ -141,11 +141,14 @@ def complementary_negative_loss(ctx: ScratchContext, logits: str = "logits", com
     },
     requires=("values", "labels"),
     provides=("save_as",),
-    placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式",
     formula="v_i=values[i,labels_i]", formula_ref="row-wise indexed gather",
 )
 def gather_by_label(ctx: ScratchContext, values: str = "probabilities", labels: str = "labels", save_as: str = "gathered_values") -> None:
-    ctx[save_as] = ctx[values].gather(1, ctx[labels].long().view(-1, 1)).squeeze(1)
+    torch = __import__("torch")
+    matrix = torch.as_tensor(ctx[values])
+    target = torch.as_tensor(ctx[labels], device=matrix.device).long().view(-1, 1)
+    ctx[save_as] = matrix.gather(1, target).squeeze(1)
 
 
 @block(

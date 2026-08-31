@@ -58,7 +58,7 @@ steps:
           - {block: uniform_prior, params: {reference: prior_probabilities_a, save_as: uniform_prior_a}}
           - {block: prior_kl, params: {probabilities: prior_probabilities_a, prior: uniform_prior_a, save_as: loss_r_a}}
           - {block: weighted_sum, params: {terms: [loss_x_a, loss_u_a, loss_r_a], weights: [1.0, 25.0, 1.0], save_as: loss}}
-          - {block: backward, params: {loss: loss}}
+          - {block: backward, params: {loss: loss, model: model_a}}
           - {block: optimizer_step, params: {optimizer: optimizer_a}}
           - {block: detach, params: {input: clean_probability_a, save_as: clean_probability}}
           - {block: threshold_mask, params: {values: clean_probability, threshold: 0.5, comparison: ge, save_as: clean_mask}}
@@ -75,7 +75,7 @@ steps:
           - {block: uniform_prior, params: {reference: prior_probabilities_b, save_as: uniform_prior_b}}
           - {block: prior_kl, params: {probabilities: prior_probabilities_b, prior: uniform_prior_b, save_as: loss_r_b}}
           - {block: weighted_sum, params: {terms: [loss_x_b, loss_u_b, loss_r_b], weights: [1.0, 25.0, 1.0], save_as: loss_b}}
-          - {block: backward, params: {loss: loss_b}}
+          - {block: backward, params: {loss: loss_b, model: model_b}}
           - {block: optimizer_step, params: {optimizer: optimizer_b}}
       - {block: scheduler_step, params: {scheduler: scheduler_a}}
       - {block: scheduler_step, params: {scheduler: scheduler_b}}

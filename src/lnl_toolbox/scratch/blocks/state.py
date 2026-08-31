@@ -130,12 +130,12 @@ def indexed_read(ctx: ScratchContext, state: str = "state", indices: str = "indi
     category="State",
     description="Write values into a generic indexed state and publish the same mutated state.",
     params={"state": {"type": "slot", "default": "state"}, "indices": {"type": "slot", "default": "indices"}, "values": {"type": "slot", "default": "values"}, "save_as": {"type": "slot", "default": "state"}},
-    requires=("state", "indices", "values"), provides=("save_as",), placement=("batch",), stage="train", ui_group="④ 状态更新",
+    requires=("state", "indices", "values"), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="④ 状态更新",
 )
 def indexed_write(ctx: ScratchContext, state: str = "state", indices: str = "indices", values: str = "values", save_as: str = "state") -> None:
     table = ctx[state]
     rows = _torch().as_tensor(ctx[indices], dtype=_torch().long).reshape(-1).cpu()
-    incoming = ctx[values].detach().reshape(rows.numel(), -1).cpu()
+    incoming = _torch().as_tensor(ctx[values]).detach().reshape(rows.numel(), -1).to(dtype=table["values"].dtype).cpu()
     if incoming.shape[1] != table["values"].shape[1]:
         raise ValueError("indexed_write value width does not match state")
     table["values"][rows] = incoming
@@ -246,13 +246,18 @@ def finalize_grouped_accumulator(ctx: ScratchContext, state: str = "grouped_stat
     name="Grouped Accumulate",
     category="State",
     description="Accumulate detached values by group label using the public grouped-state contract.",
-    params={"state": {"type": "slot", "default": "grouped_state"}, "groups": {"type": "slot", "default": "groups"}, "values": {"type": "slot", "default": "values"}},
+    params={"state": {"type": "slot", "default": "grouped_state"}, "groups": {"type": "slot", "default": "groups"}, "values": {"type": "slot", "default": "values"}, "mask": {"type": "slot", "default": None}},
     requires=("state", "groups", "values"), provides=(), placement=("batch",), stage="train", ui_group="④ 状态更新",
 )
-def grouped_accumulate(ctx: ScratchContext, state: str = "grouped_state", groups: str = "groups", values: str = "values") -> None:
+def grouped_accumulate(ctx: ScratchContext, state: str = "grouped_state", groups: str = "groups", values: str = "values", mask: str | None = None) -> None:
     state_value = ctx[state]
     labels = ctx[groups].detach().long().reshape(-1).cpu()
     tensor = ctx[values].detach().float().reshape(labels.numel(), -1).cpu()
+    if mask is not None and mask in ctx:
+        selected = ctx[mask].detach().bool().reshape(-1).cpu()
+        if selected.numel() != labels.numel():
+            raise ValueError("grouped_accumulate mask must align with groups and values")
+        labels, tensor = labels[selected], tensor[selected]
     for group in labels.unique().tolist():
         mask = labels == int(group)
         state_value["sums"][int(group)] += tensor[mask].sum(dim=0)
@@ -416,7 +421,10 @@ def ema_update(ctx: ScratchContext, previous: str = "previous", current: str = "
                momentum: float = 0.9, save_as: str = "updated") -> None:
     value = ctx[previous]
     target = ctx[current]
-    ctx[save_as] = value * float(momentum) + target * (1.0 - float(momentum))
+    # ``None`` is the explicit initialization state for a running EMA.  The
+    # first observation must be published unchanged; subsequent calls use the
+    # ordinary momentum recurrence.
+    ctx[save_as] = target if value is None else value * float(momentum) + target * (1.0 - float(momentum))
 
 
 @block(

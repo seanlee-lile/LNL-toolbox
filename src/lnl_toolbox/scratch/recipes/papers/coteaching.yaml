@@ -63,11 +63,11 @@ steps:
           - block: mean_loss
             params: {input: selected_loss_b, save_as: loss_b}
           - block: backward
-            params: {loss: loss_a}
+            params: {loss: loss_a, model: model_a}
           - block: optimizer_step
             params: {optimizer: optimizer_a}
           - block: backward
-            params: {loss: loss_b}
+            params: {loss: loss_b, model: model_b}
           - block: optimizer_step
             params: {optimizer: optimizer_b}
       - block: evaluate_peer_ensemble

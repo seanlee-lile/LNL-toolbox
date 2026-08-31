@@ -7,12 +7,45 @@
   <link rel="stylesheet" href="/scratch.css">
 </head>
 <body>
-  <header><h1>LNL Scratch</h1><span id="runtime-limits" class="runtime-limits"></span><button id="new">新建算法</button><button id="templates">论文范例 / 模板</button><button id="open">我的 Recipe</button><button id="save">保存</button><button id="check">检查</button><button id="run">运行结构验证</button></header>
+  <header><h1>LNL Scratch</h1><span id="runtime-limits" class="runtime-limits"></span><button id="new">新建算法</button><button id="templates">论文范例 / 模板</button><button id="formula-builder">公式组合器</button><button id="new-formula">新建公式</button><button id="my-formulas">我的公式</button><button id="open">我的 Recipe</button><button id="help">使用教程</button><button id="save">保存</button><button id="check">检查</button><button id="run">运行结构验证</button></header>
+  <nav id="workflow-guide" class="workflow-guide" aria-label="Scratch 创建流程">
+    <div class="workflow-step" data-workflow="data"><span>1</span><strong>数据</strong><small>数据、划分、噪声、Loader</small></div>
+    <div class="workflow-arrow" aria-hidden="true">›</div>
+    <div class="workflow-step" data-workflow="model"><span>2</span><strong>模型</strong><small>模型、优化器、调度</small></div>
+    <div class="workflow-arrow" aria-hidden="true">›</div>
+    <div class="workflow-step" data-workflow="train"><span>3</span><strong>训练循环</strong><small>Epoch / Batch</small></div>
+    <div class="workflow-arrow" aria-hidden="true">›</div>
+    <div class="workflow-step" data-workflow="formula"><span>4</span><strong>公式与损失</strong><small>公式组合器、前向、反向</small></div>
+    <div class="workflow-arrow" aria-hidden="true">›</div>
+    <div class="workflow-step" data-workflow="check"><span>5</span><strong>检查</strong><small>确认插口和参数</small></div>
+    <div class="workflow-arrow" aria-hidden="true">›</div>
+    <div class="workflow-step" data-workflow="run"><span>6</span><strong>运行</strong><small>结构验证</small></div>
+    <div class="workflow-arrow" aria-hidden="true">›</div>
+    <div class="workflow-step" data-workflow="result"><span>7</span><strong>结果</strong><small>指标与产物</small></div>
+  </nav>
   <main>
-    <aside><h2>积木栏</h2><div id="palette"></div></aside>
-    <section><label>算法名称 <input id="recipe-name" value="scratch_recipe"></label><div id="next-suggestion" class="next-suggestion"></div><div id="steps" class="steps"></div></section>
-    <aside class="inspector"><h2>当前积木参数</h2><div id="module-explanation" class="module-explanation">点击一个积木查看说明</div><div id="inspector"></div><pre id="output"></pre></aside>
+    <aside class="palette-panel">
+      <h2>积木栏</h2>
+      <label class="palette-search-label" for="palette-search">搜索积木</label>
+      <input id="palette-search" class="palette-search" type="search" placeholder="名称、分类、参数或输出">
+      <p class="palette-help">单击查看说明；拖动到绿色插入位置</p>
+      <div id="palette"></div>
+    </aside>
+    <section><label>算法名称 <input id="recipe-name" value="scratch_recipe"></label><div id="first-use-guide" class="first-use-guide"><div><strong>第一次使用 Scratch？</strong><span>按上方流程从左到右搭建：先选数据，再放入模型和训练循环；在 Batch 的绿色插入位打开“公式组合器”添加损失与前向步骤，最后点击“检查”再运行。</span></div><div class="first-use-actions"><button id="open-tutorial" type="button">查看完整教程</button><button id="dismiss-guide" type="button">隐藏提示</button></div></div><div id="next-suggestion" class="next-suggestion"></div><div id="steps" class="steps"></div></section>
+    <aside class="inspector"><h2>当前积木参数</h2><div id="module-explanation" class="module-explanation">点击一个积木查看说明</div><div id="inspector"></div><section id="result-panel" class="result-panel" aria-live="polite"><div class="result-header"><h3>运行结果</h3><span id="result-status" class="result-status">尚未运行</span></div><div id="result-summary" class="result-summary">先点击“检查”，确认结构无误后再运行。</div><div id="result-metrics" class="result-metrics"></div><div id="result-artifacts" class="result-artifacts"></div><details id="result-details"><summary>原始输出</summary><pre id="output"></pre></details></section></aside>
   </main>
+  <dialog id="onboarding-dialog" class="onboarding-dialog">
+    <form method="dialog" class="dialog-header"><h2>Scratch 使用教程</h2><button>关闭</button></form>
+    <p class="onboarding-intro">Scratch 的每一块都代表一个明确操作。把左侧积木拖到中间的绿色插入位，右侧会显示它的输入、输出和全部参数。</p>
+    <ol class="onboarding-steps">
+      <li><strong>从模板开始（可选）</strong><span>点击“论文范例 / 模板”打开 26 篇 Paper Recipe，或点击“新建算法”从空白流程开始。</span></li>
+      <li><strong>先搭数据链</strong><span>依次放入数据源、划分、标签/噪声、预处理、视图、角色和 Loader。后面的积木只能连接已有的输出 slot。</span></li>
+      <li><strong>再搭训练链</strong><span>把模型、优化器和 Epoch / Batch Loop 放到中间画布；进入 Batch Loop 后，绿色插入位会提示下一步。</span></li>
+      <li><strong>用公式组合器创建损失</strong><span>选中 Batch 内的插入位，点击“公式组合器”，选择 Softmax、CE、MSE、Weighted Sum 等公共操作，并绑定输入/输出 slot。</span></li>
+      <li><strong>检查、运行、看结果</strong><span>先点“检查”修复缺少的插口或参数，再点“运行结构验证”。右侧“运行结果”会显示状态、指标、产物目录和原始输出。</span></li>
+    </ol>
+    <div class="formula-actions"><button id="tutorial-done" type="button">开始搭建</button></div>
+  </dialog>
   <dialog id="template-dialog">
     <form method="dialog" class="dialog-header"><h2>论文模板</h2><button>关闭</button></form>
     <input id="template-search" placeholder="搜索论文模板">
@@ -20,6 +53,35 @@
     <div id="featured-examples"></div>
     <h3>全部模板</h3>
     <div id="template-list"></div>
+  </dialog>
+  <dialog id="formula-dialog">
+    <form method="dialog" class="dialog-header"><h2>Batch 公式组合器</h2><button>关闭</button></form>
+    <p class="formula-help">选择一个公共公式运算，配置输入和输出 slot；添加后会生成普通 Scratch 积木，可继续拖动和组合。</p>
+    <label for="formula-operation">运算</label>
+    <select id="formula-operation"></select>
+    <div id="formula-operation-preview" class="formula-operation-preview"></div>
+    <div id="formula-target" class="formula-target"></div>
+    <div id="formula-fields"></div>
+    <div class="formula-actions">
+      <button id="formula-add" type="button">添加到当前 Batch</button>
+      <button id="formula-cancel" type="button">取消</button>
+    </div>
+  </dialog>
+  <dialog id="formula-editor-dialog" class="formula-editor-dialog">
+    <form method="dialog" class="dialog-header"><h2>新建公式</h2><button>关闭</button></form>
+    <div class="formula-editor-grid">
+      <section class="formula-editor-section" id="formula-info-section"><h3>A. 公式信息</h3><label>ID（user/xxx）<input id="formula-id" placeholder="user/my_robust_loss"></label><label>名称<input id="formula-name" placeholder="My Robust Loss"></label><label>描述<textarea id="formula-description"></textarea></label></section>
+      <section class="formula-editor-section" id="formula-inputs-section"><h3>B. Inputs</h3><label>输入名称（逗号或换行分隔）<textarea id="formula-inputs" placeholder="logits, targets"></textarea><small>Formula 只接收来自 Recipe / State / Statistics 的 slot。</small></section>
+      <section class="formula-editor-section" id="formula-parameters-section"><h3>C. Parameters</h3><label>参数（每行 name:type=default）<textarea id="formula-parameters" placeholder="epsilon:float=1e-8&#10;q:float=0.7"></textarea><small>支持 float、int、bool、enum。</small></section>
+      <section class="formula-editor-section formula-steps-section" id="formula-steps-section"><h3>D. Formula Steps</h3><div class="formula-editor-step-controls"><select id="formula-editor-block"></select><input id="formula-editor-step-id" placeholder="step_id"><div id="formula-editor-binding-fields" class="formula-editor-binding-fields"></div><textarea id="formula-editor-step-parameters" placeholder='参数 JSON（可选），例如 {"minimum":"epsilon"}'></textarea><button id="formula-editor-add-step" type="button">添加步骤</button></div><div id="formula-editor-step-list"></div></section>
+      <section class="formula-editor-section" id="formula-outputs-section"><h3>E. Outputs</h3><label>输出名称<input id="formula-output-name" value="loss"></label><label>来源<select id="formula-output-source"></select></label><div id="formula-preview" class="formula-preview">公式预览：尚未添加步骤</div></section>
+    </div>
+    <div id="formula-editor-validation" class="formula-editor-validation"></div>
+    <div class="formula-actions"><button id="formula-editor-save" type="button">保存公式</button><button id="formula-editor-cancel" type="button">取消</button></div>
+  </dialog>
+  <dialog id="formula-list-dialog">
+    <form method="dialog" class="dialog-header"><h2>我的公式</h2><button>关闭</button></form>
+    <div id="formula-list"></div>
   </dialog>
   <script src="/scratch.js"></script>
 </body>

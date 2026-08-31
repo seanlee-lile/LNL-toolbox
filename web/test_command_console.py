@@ -253,7 +253,7 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertIn("快速命令（跳过逐步教程）", page)
         self.assertIn('"lnl doctor"', page)
         self.assertIn("lnl list experiments --profile smoke --format json", page)
-        self.assertIn('href="http://127.0.0.1:8795/scratch"', page)
+        self.assertIn('href="http://127.0.0.1:8765/scratch"', page)
         self.assertIn('control.replaceAll("__ID__", id)', page)
 
     def test_quick_start_is_first_entry_and_reuses_existing_execution_flow(self):
