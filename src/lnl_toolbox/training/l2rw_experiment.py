@@ -69,8 +69,21 @@ def _official_l2rw_transform(training: bool, augment: bool = True):
     operations = []
     if training and augment:
         operations.extend((transforms.Pad(4), transforms.RandomCrop(32), transforms.RandomHorizontalFlip()))
-    operations.extend((transforms.ToTensor(), transforms.Lambda(lambda value: (value - 0.5) * 2.0)))
+    operations.extend((transforms.ToTensor(), transforms.Lambda(_scale_l2rw_tensor)))
     return transforms.Compose(operations)
+
+
+def _scale_l2rw_tensor(value: torch.Tensor) -> torch.Tensor:
+    """Scale an official L2RW image without creating a worker-local lambda."""
+
+    return (value - 0.5) * 2.0
+
+
+def _write_epoch_metrics(rows: list[Mapping[str, Any]], path: Path) -> None:
+    path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
 
 
 def _trusted_manifest(
@@ -202,6 +215,7 @@ def run_l2rw_experiment(
     scheduler = build_scheduler(optimizer, config.get("scheduler"), epochs)
     criterion = CrossEntropyLoss().to(device)
     start = 0; rows: list[dict[str, Any]] = []
+    metrics_path = run_dir / "metrics.jsonl"
     payload = read_checkpoint(resume, device) if resume else None
     if payload is not None:
         if payload.get("method") != "l2rw" or payload.get("config") != config:
@@ -218,7 +232,15 @@ def run_l2rw_experiment(
         if trusted_loader.generator is not None:
             trusted_loader.generator.set_state(payload["trusted_loader_rng"])
         start = int(payload["completed_epoch"]) + 1
-        rows = list(payload.get("metrics", []))
+        rows = [
+            dict(row)
+            for row in payload.get("metrics", [])
+            if isinstance(row, Mapping) and row.get("event", "epoch") == "epoch"
+        ]
+    # Resume always starts from the checkpoint's complete epoch history.  This
+    # intentionally rewrites the stream so an existing final row or a partial
+    # append from an interrupted process cannot duplicate epochs.
+    _write_epoch_metrics(rows, metrics_path)
     meta_config = dict(config.get("meta", {}))
     alpha = float(meta_config["virtual_learning_rate"])
     meta_implementation = str(meta_config.get("implementation", "paper"))
@@ -262,21 +284,20 @@ def run_l2rw_experiment(
             correct += int(logits.argmax(1).eq(targets).sum())
             weight_sum += float(weights.sample_weights.sum()); positive_sum += weights.metrics["positive_weight_count"]
         validation = evaluate_classification(model, validation_loader, criterion, device)
-        test = evaluate_classification(model, test_loader, criterion, device)
         row = standardize_epoch_row({
             "epoch": epoch + 1, "train_loss": loss_sum / total,
             "train_accuracy": correct / total, "validation_loss": validation["loss"],
-            "validation_accuracy": validation["accuracy"], "test_loss": test["loss"],
-            "test_accuracy": test["accuracy"], "learning_rate": optimizer.param_groups[0]["lr"],
+            "validation_accuracy": validation["accuracy"], "learning_rate": optimizer.param_groups[0]["lr"],
             "method": "l2rw", "mean_weight_sum": weight_sum / len(train_loader),
             "mean_positive_weights": positive_sum / len(train_loader),
             "trusted_fingerprint": manifest.fingerprint, "global_step": global_step,
         })
         rows.append(row)
+        _write_epoch_metrics(rows, metrics_path)
         print(
             f"L2RW epoch {epoch + 1}/{epochs} steps={global_step} "
             f"loss={row['train_loss']:.5f} val={row['validation_accuracy']:.4f} "
-            f"test={row['test_accuracy']:.4f}",
+            f"weights={row['mean_positive_weights']:.1f}",
             flush=True,
         )
         if scheduler is not None: scheduler.step()
@@ -293,8 +314,26 @@ def run_l2rw_experiment(
         }, run_dir / "last.pt")
         start += 1
     (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
-    (run_dir / "metrics.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     if rows: write_training_curves_svg(rows, run_dir / "training_curves.svg")
+    test = evaluate_classification(model, test_loader, criterion, device)
+    final = {
+        "event": "final",
+        "completed_epochs": len(rows),
+        "global_step": global_step,
+        "test_loss": test["loss"],
+        "test_accuracy": test["accuracy"],
+        "selection_split": "none",
+        "test_selection_leakage": False,
+        "trusted_fingerprint": manifest.fingerprint,
+        "method": "l2rw",
+    }
+    metrics_path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in [*rows, final]),
+        encoding="utf-8",
+    )
+    (run_dir / "final_metrics.json").write_text(
+        json.dumps(final, indent=2, sort_keys=True), encoding="utf-8"
+    )
     return run_dir
 
 

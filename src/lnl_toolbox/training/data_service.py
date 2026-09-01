@@ -68,6 +68,12 @@ def create_dataset_registry() -> DatasetRegistry:
 DATASETS = create_dataset_registry()
 
 
+def _scale_cifar_tensor(value: torch.Tensor) -> torch.Tensor:
+    """Scale a CIFAR tensor without capturing a local function in workers."""
+
+    return (value - 0.5) * 2.0
+
+
 def _seed_worker(_worker_id: int) -> None:
     worker_seed = torch.initial_seed() % (2**32)
     np.random.seed(worker_seed)
@@ -282,7 +288,7 @@ def _transforms(
             operations: list[Any] = []
             if training and bool(data.get("augment", True)):
                 operations.extend((transforms.Pad(4), transforms.RandomCrop(32), transforms.RandomHorizontalFlip()))
-            operations.extend((transforms.ToTensor(), transforms.Lambda(lambda value: (value - 0.5) * 2.0)))
+            operations.extend((transforms.ToTensor(), transforms.Lambda(_scale_cifar_tensor)))
             weak = transforms.Compose(operations)
         else:
             weak = build_cifar_transform(

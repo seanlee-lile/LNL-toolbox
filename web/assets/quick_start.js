@@ -28,7 +28,10 @@
     });
   }
   function statusLabel(status) {
-    return ({ready:"可直接运行", needs_input:"补充输入后可运行", unsupported:"当前实现不适用", metadata_error:"兼容性元数据不完整"})[status] || status;
+    return ({ready:"基础条件满足", needs_input:"需要补充输入", unsupported:"当前实现不适用", metadata_error:"兼容性元数据不完整"})[status] || status;
+  }
+  function planStatusLabel(status) {
+    return status === "ready" ? "已通过训练前检查 / 可运行" : statusLabel(status);
   }
   function beginLoading(message) {
     state.loading = true;
@@ -132,7 +135,7 @@
     });
     const inputs = fields.length ? '<div class="qs-feedback qs-warning"><strong>补充方法输入</strong><div class="qs-required-inputs">' + fields.join("") + '</div><button type="button" id="qs-apply-inputs" class="secondary">应用并重新检查</button></div>' : "";
     const manualNote = manual.length ? '<div class="qs-feedback qs-warning">以下条件属于数据集事实或外部产物，不能在 Quick Start 中伪造：' + esc(manual.join("、")) + '。请先在“本地数据集”或 YAML 编辑器中补齐。</div>' : "";
-    return '<section class="qs-step"><h3>4. 配置来源与运行</h3><div class="qs-plan-card"><strong>' + esc(plan.config_kind === "paper_reproduction" ? "论文复现配置" : "Toolbox 适配配置") + '</strong><p>' + esc(plan.summary) + '</p><p>状态：' + esc(statusLabel(plan.status)) + '</p>' + (plan.details || []).map(function (item) { return '<p class="helper">' + esc(item) + '</p>'; }).join("") + '</div>' + inputs + manualNote + '<div class="qs-actions"><button type="button" id="qs-dry" class="secondary" ' + (plan.status === "ready" ? "" : "disabled") + '>预演</button><button type="button" id="qs-run" class="primary" ' + (plan.status === "ready" ? "" : "disabled") + '>确认并开始训练</button></div></section>';
+    return '<section class="qs-step"><h3>4. 配置来源与运行</h3><div class="qs-plan-card"><strong>' + esc(plan.config_kind === "paper_reproduction" ? "论文复现配置" : "Toolbox 适配配置") + '</strong><p>' + esc(plan.summary) + '</p><p>状态：' + esc(planStatusLabel(plan.status)) + '</p>' + (plan.details || []).map(function (item) { return '<p class="helper">' + esc(item) + '</p>'; }).join("") + '</div>' + inputs + manualNote + '<div class="qs-actions"><button type="button" id="qs-dry" class="secondary" ' + (plan.status === "ready" ? "" : "disabled") + '>预演</button><button type="button" id="qs-run" class="primary" ' + (plan.status === "ready" ? "" : "disabled") + '>确认并开始训练</button></div></section>';
   }
   function render() {
     if (!panel) return;

@@ -337,14 +337,24 @@ import yaml
 from lnl_toolbox.training.volmin_experiment import run_volmin_experiment
 
 # --- merged from test_volmin_training.py ---
+from lnl_toolbox.training.experiment import run_experiment
+
+# --- merged from test_volmin_training.py ---
 class _volmin_training_VolMinTrainingTest(unittest.TestCase):
 
     def test_smoke_and_resume(self) -> None:
         config = yaml.safe_load(Path('configs/experiment/volmin_cifar10_smoke.yaml').read_text())
+        config['trainer']['epochs'] = 2
         with tempfile.TemporaryDirectory() as directory:
-            run = run_volmin_experiment(config, output_dir=directory)
+            run = run_experiment(config, Path(directory) / 'run')
             self.assertTrue((run / 'last.pt').is_file())
-            run_volmin_experiment(config, resume=run / 'last.pt')
+            rows = [json.loads(line) for line in (run / 'metrics.jsonl').read_text().splitlines()]
+            self.assertEqual([row['event'] for row in rows], ['epoch', 'epoch', 'final'])
+            self.assertTrue(all(not {'test_loss', 'test_accuracy'}.intersection(row) for row in rows[:2]))
+            self.assertIn('test_accuracy', rows[-1])
+            run_experiment(config, resume=run / 'last.pt')
+            resumed = [json.loads(line) for line in (run / 'metrics.jsonl').read_text().splitlines()]
+            self.assertEqual([row['event'] for row in resumed], ['epoch', 'epoch', 'final'])
 
 # --- merged from test_volminnet_algorithm.py ---
 import copy

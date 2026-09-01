@@ -418,6 +418,24 @@ def _l2rw_requirements(config: Mapping[str, Any]) -> MethodRequirements:
 
 
 def _cal_requirements(config: Mapping[str, Any]) -> MethodRequirements:
+    noise = config.get("noise", {}) or {}
+    synthetic_feature_smoke = (
+        _component_name(config, "data") == "synthetic_multiclass"
+        and _component_name(config, "model") == "feature_mlp"
+        and _component_name(config, "noise") == "symmetric"
+        and isinstance(noise, Mapping)
+        and not any(noise.get(key) for key in ("path", "clean_key", "noisy_key"))
+        and isinstance(config.get("cal"), Mapping)
+    )
+    external_labels_configured = isinstance(noise, Mapping) and all(
+        _component_name(config, "noise", key) != ""
+        for key in ("path", "clean_key", "noisy_key")
+    )
+    inputs = () if synthetic_feature_smoke or external_labels_configured else (_config_input(
+        "requires_external_noise_labels",
+        ("noise", "path"), ("noise", "clean_key"), ("noise", "noisy_key"),
+        description="CAL requires aligned external clean/noisy label vectors",
+    ),)
     return MethodRequirements(
         method="cal",
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
@@ -427,6 +445,7 @@ def _cal_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         ),
         implemented_variant="proxy_label_sieve",
         supports_native_noisy_labels=True,
+        required_config_inputs=inputs,
     )
 
 
@@ -562,7 +581,7 @@ def _pcse_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         exact_classes=frozenset({10}) if external else frozenset(),
         required_pretrained_roles=("upm_main_best",) if external else (),
         pretrained_role_paths=(
-            (("upm_main_best", ("pretraining_stage", "source", "adapter")),)
+            (("upm_main_best", ("pretraining_stage", "source", "run_directory_env")),)
             if external else ()
         ),
     )
@@ -585,6 +604,16 @@ def _volminnet_requirements(_config: Mapping[str, Any]) -> MethodRequirements:
     )
 
 
+def _volmin_requirements(_config: Mapping[str, Any]) -> MethodRequirements:
+    return MethodRequirements(
+        method="volmin",
+        supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
+        data_requirements=_classification_data(validation="clean"),
+        implemented_variant="volmin_transition",
+        min_classes=3,
+    )
+
+
 def _dld_requirements(config: Mapping[str, Any]) -> MethodRequirements:
     dld = config.get("dld", {}) or {}
     feature = dld.get("feature_extractor", {}) if isinstance(dld, Mapping) else {}
@@ -601,7 +630,7 @@ def _dld_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         min_classes=2,
         required_pretrained_roles=("upm_main_best",) if source == "external_checkpoint" else (),
         pretrained_role_paths=(
-            (("upm_main_best", ("dld", "feature_extractor", "external", "adapter")),)
+            (("upm_main_best", ("dld", "feature_extractor", "external", "run_directory_env")),)
             if source == "external_checkpoint" else ()
         ),
     )
@@ -788,7 +817,12 @@ def create_runner_registry() -> RunnerRegistry:
             requires_class_dependent_noise=True,
         ),
     )
-    registry.add("volmin", "lnl_toolbox.training.volmin_experiment", "run_volmin_experiment")
+    registry.add(
+        "volmin",
+        "lnl_toolbox.training.volmin_experiment",
+        "run_volmin_experiment",
+        requirements_provider=_volmin_requirements,
+    )
     return registry
 
 

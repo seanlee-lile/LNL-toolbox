@@ -11,7 +11,6 @@ import ipaddress
 import json
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 import threading
@@ -261,11 +260,8 @@ JOBS_LOCK = threading.Lock()
 
 
 def resolve_lnl_command() -> list[str]:
-    """Prefer the installed lnl shortcut, then fall back to the module CLI."""
+    """Run the CLI with the interpreter serving the current Web process."""
 
-    executable = shutil.which("lnl")
-    if executable:
-        return [executable]
     return [sys.executable, "-m", "lnl_toolbox.cli.main"]
 
 
@@ -1553,15 +1549,22 @@ def _picker_payload(payload: object) -> dict[str, object]:
     script = (
         "Add-Type -AssemblyName System.Windows.Forms; "
         "$mode=$env:LNL_PICKER_MODE; $initial=$env:LNL_PICKER_INITIAL; "
+        "$owner=New-Object System.Windows.Forms.Form; $d=$null; "
+        "$owner.ShowInTaskbar=$false; $owner.TopMost=$true; "
+        "$owner.FormBorderStyle=[System.Windows.Forms.FormBorderStyle]::None; "
+        "$owner.StartPosition=[System.Windows.Forms.FormStartPosition]::CenterScreen; "
+        "$owner.Width=1; $owner.Height=1; $owner.Opacity=0; "
+        "try { [void]$owner.Show(); [void]$owner.Activate(); "
         "if($mode -eq 'folder'){ $d=New-Object System.Windows.Forms.FolderBrowserDialog; "
         "if($initial -and (Test-Path -LiteralPath $initial)){ $d.SelectedPath=$initial }; "
-        "if($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Write($d.SelectedPath)} } "
+        "if($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Write($d.SelectedPath)} } "
         "else { if($mode -eq 'save_file'){ $d=New-Object System.Windows.Forms.SaveFileDialog } "
         "else { $d=New-Object System.Windows.Forms.OpenFileDialog }; "
         "$d.Filter=$env:LNL_PICKER_FILTER; "
         "if($initial){ if(Test-Path -LiteralPath $initial -PathType Container){$d.InitialDirectory=$initial} "
         "elseif(Test-Path -LiteralPath $initial){$d.InitialDirectory=(Split-Path -Parent $initial);$d.FileName=(Split-Path -Leaf $initial)} }; "
-        "if($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Write($d.FileName)} }"
+        "if($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Write($d.FileName)} } } "
+        "finally { if($null -ne $d){$d.Dispose()}; $owner.Close(); $owner.Dispose() }"
     )
     executable = Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
     result = subprocess.run(

@@ -234,7 +234,11 @@ class QuickStartServiceTests(unittest.TestCase):
                             noise_selection=noise,
                             paper_id=option.paper_id,
                         )
-                        self.assertEqual(plan.status, "ready", plan.details)
+                        if option.paper_id == "mentornet":
+                            self.assertIn(plan.status, {"needs_input", "unsupported"})
+                            self.assertFalse(plan.command)
+                        else:
+                            self.assertEqual(plan.status, "ready", plan.details)
 
     def test_generic_templates_rebind_classes_and_discard_stale_transition_matrix(self) -> None:
         root = Path(self.temp.name)
