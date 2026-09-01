@@ -100,14 +100,22 @@ def write_training_curves_svg(
 
     if not rows:
         raise ValueError("At least one epoch row is required")
-    required = (
-        "train_loss",
-        "validation_loss",
-        "train_accuracy",
-        "validation_accuracy",
-        "learning_rate",
-    )
+    validation_presence = {
+        name: [name in row for row in rows]
+        for name in ("validation_loss", "validation_accuracy")
+    }
+    if validation_presence["validation_loss"] != validation_presence["validation_accuracy"]:
+        raise ValueError("validation loss and accuracy must be provided together")
+    if any(validation_presence["validation_loss"]) and not all(
+        validation_presence["validation_loss"]
+    ):
+        raise ValueError("validation metrics must be present for every epoch or none")
+    has_validation = all(validation_presence["validation_loss"])
+    required = ("train_loss", "train_accuracy", "learning_rate")
     series = {name: _finite_series(rows, name) for name in required}
+    if has_validation:
+        series["validation_loss"] = _finite_series(rows, "validation_loss")
+        series["validation_accuracy"] = _finite_series(rows, "validation_accuracy")
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
 
@@ -130,8 +138,8 @@ def write_training_curves_svg(
     ]
 
     panels = (
-        ("Loss", series["train_loss"], series["validation_loss"]),
-        ("Accuracy", series["train_accuracy"], series["validation_accuracy"]),
+        ("Loss", series["train_loss"], series.get("validation_loss")),
+        ("Accuracy", series["train_accuracy"], series.get("validation_accuracy")),
         ("Learning rate", series["learning_rate"], None),
     )
     for panel_index, (title, first, second) in enumerate(panels):
@@ -158,7 +166,7 @@ def write_training_curves_svg(
             f'font-size="11">{plot_max:.4g}</text>',
             f'<text x="{left - 8}" y="{top + panel_height + 4}" '
             f'text-anchor="end" font-size="11">{plot_min:.4g}</text>',
-            f'<polyline class="line" stroke="{colors["train"] if second is not None else colors["lr"]}" '
+            f'<polyline class="line" stroke="{colors["lr"] if title == "Learning rate" else colors["train"]}" '
             f'points="{_points(first, left=left, top=top, width=plot_width, height=panel_height, minimum=plot_min, maximum=plot_max)}"/>',
         ))
         if second is not None:
@@ -171,9 +179,14 @@ def write_training_curves_svg(
         '<line x1="690" y1="35" x2="720" y2="35" '
         f'stroke="{colors["train"]}" stroke-width="3"/>',
         '<text x="728" y="39" font-size="12">train</text>',
-        '<line x1="785" y1="35" x2="815" y2="35" '
-        f'stroke="{colors["validation"]}" stroke-width="3"/>',
-        '<text x="823" y="39" font-size="12">validation</text>',
+    ))
+    if has_validation:
+        parts.extend((
+            '<line x1="785" y1="35" x2="815" y2="35" '
+            f'stroke="{colors["validation"]}" stroke-width="3"/>',
+            '<text x="823" y="39" font-size="12">validation</text>',
+        ))
+    parts.extend((
         f'<text x="900" y="705" text-anchor="end" font-size="11">'
         f"epochs: {len(rows)}</text>",
         "</svg>",
@@ -182,7 +195,9 @@ def write_training_curves_svg(
     return target
 
 
-def standardize_epoch_row(row: Mapping[str, object]) -> dict[str, object]:
+def standardize_epoch_row(
+    row: Mapping[str, object], *, require_validation: bool = True
+) -> dict[str, object]:
     """Normalize runner metrics to the shared curve-comparison field names."""
 
     result = dict(row)
@@ -191,7 +206,13 @@ def standardize_epoch_row(row: Mapping[str, object]) -> dict[str, object]:
         result["validation_accuracy"] = result["selection_accuracy"]
     if "validation_loss" not in result and "selection_loss" in result:
         result["validation_loss"] = result["selection_loss"]
-    required = ("train_loss", "validation_loss", "train_accuracy", "validation_accuracy", "learning_rate")
+    validation_fields = ("validation_loss", "validation_accuracy")
+    present = tuple(name in result for name in validation_fields)
+    if present[0] != present[1]:
+        raise ValueError("validation loss and accuracy must be provided together")
+    required = ("train_loss", "train_accuracy", "learning_rate")
+    if require_validation:
+        required += validation_fields
     missing = [name for name in required if name not in result]
     if missing:
         raise ValueError(f"epoch row is missing standard fields: {missing}")

@@ -30,6 +30,7 @@ from lnl_toolbox.algorithms.pcse.features import collect_pcse_features
 
 # --- merged from test_pcse_pretrained_adapter.py ---
 from lnl_toolbox.data.noisy_dataset import NoisyTargetDataset
+from lnl_toolbox.data.contracts import InputSpec
 
 # --- merged from test_pcse_pretrained_adapter.py ---
 from lnl_toolbox.data.torch_cifar import TorchCifarDataset
@@ -321,6 +322,14 @@ from lnl_toolbox.algorithms.pcse.volmin import DiagonallyDominantTransition, bui
 # --- merged from test_pcse_volmin.py ---
 from lnl_toolbox.data.multiclass_synthetic import MulticlassTensorDataset, generate_synthetic_multiclass
 
+from lnl_toolbox.data.contracts import (
+    DataSpec,
+    RawDatasetSplit,
+    UnsupportedDatasetSplitError,
+)
+
+from lnl_toolbox.training.data_service import DATASETS
+
 # --- merged from test_pcse_volmin.py ---
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 
@@ -331,7 +340,11 @@ from lnl_toolbox.noise.transition import TransitionArtifact
 from lnl_toolbox.training.checkpoint import read_checkpoint
 
 # --- merged from test_pcse_volmin.py ---
-from lnl_toolbox.training.pcse_experiment import _PCSEMultilayerPerceptron, run_pcse_experiment
+from lnl_toolbox.training.pcse_experiment import (
+    _PCSEMultilayerPerceptron,
+    _build_pcse_pretraining_model,
+    run_pcse_experiment,
+)
 
 # --- merged from test_pcse_volmin.py ---
 _pcse_volmin_ROOT = Path(__file__).resolve().parents[1]
@@ -612,12 +625,84 @@ class _pcse_workflow__FixedPCSEModel(nn.Module):
     def forward(self, values: torch.Tensor) -> torch.Tensor:
         return self.classifier(self.hidden2(self.hidden1(values)))
 
+
+class _pcse_workflow__GenericTabularAdapter:
+    name = 'pcse_generic_tabular_fixture'
+    aliases: tuple[str, ...] = ()
+
+    def validate(self, spec: DataSpec) -> None:
+        if int(spec.options.get('num_classes', 0)) != 3:
+            raise ValueError('PCSE fixture requires three classes')
+
+    def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
+        if split == 'validation':
+            raise UnsupportedDatasetSplitError(
+                'fixture intentionally uses a train-derived validation split'
+            )
+        sizes = {'train': 120, 'test': 30}
+        offsets = {'train': 0, 'test': 0}
+        if split not in sizes:
+            raise ValueError(f'unsupported fixture split: {split}')
+        generated = generate_synthetic_multiclass(
+            sizes[split], 6, 3, seed + offsets[split],
+            start_index=offsets[split], split=split,
+        )
+        return RawDatasetSplit(
+            generated.features,
+            generated.labels,
+            generated.global_indices,
+            self.name,
+            split,
+            3,
+            clean_targets=generated.labels,
+            source='test_fixture',
+        )
+
 # --- merged from test_pcse_workflow.py ---
 class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
+
+    def test_train_mode_runs_with_a_generic_registered_tabular_adapter(self) -> None:
+        try:
+            DATASETS.get(_pcse_workflow__GenericTabularAdapter.name)
+        except ValueError:
+            DATASETS.add(_pcse_workflow__GenericTabularAdapter())
+        config = _pcse_workflow__load_smoke_config()
+        config['data'] = {
+            'name': _pcse_workflow__GenericTabularAdapter.name,
+            'root': 'unused',
+            'num_classes': 3,
+            'validation_size': 30,
+        }
+        config['pretraining_stage']['epochs'] = 2
+        config['ensemble_stage']['epochs'] = 1
+        with tempfile.TemporaryDirectory() as directory:
+            def run_first_real_stage(algorithm: PCSEAlgorithm) -> None:
+                algorithm.train_pretraining(max_epochs=1)
+
+            with mock.patch.object(
+                PCSEAlgorithm,
+                'run',
+                autospec=True,
+                side_effect=run_first_real_stage,
+            ):
+                run_dir = run_pcse_experiment(
+                    config, output_dir=Path(directory) / 'run'
+                )
+            checkpoint = torch.load(
+                run_dir / 'last.pt', map_location='cpu', weights_only=False
+            )
+            self.assertEqual(
+                checkpoint['pcse_state']['pretraining_completed_epochs'], 1
+            )
+            self.assertEqual(checkpoint['pretraining_method'], 'cross_entropy')
+            self.assertEqual(checkpoint['pretraining_model'], 'pcse_mlp')
+            self.assertEqual(checkpoint['pretraining_source'], 'internal_training')
+            self.assertTrue((run_dir / 'last.pt').is_file())
 
     def test_config_requires_multilayer_and_valid_backend(self) -> None:
         config = _pcse_workflow__load_smoke_config()
         parsed = PCSEConfig.from_mapping(config)
+        self.assertEqual(parsed.pretraining.method, 'cross_entropy')
         self.assertEqual(parsed.transition_backend, 'dual_t')
         self.assertEqual(tuple((layer.name for layer in parsed.feature_layers)), ('hidden1', 'hidden2'))
         single = deepcopy(config)
@@ -644,10 +729,29 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
         external['pretraining_stage']['source'] = {'adapter': 'upm_main_best', 'run_directory_env': 'LNL_PCSE_SOURCE_RUN', 'checkpoint_sha256': 'a' * 64, 'manifest_sha256': 'b' * 64, 'mapping_hash': 'c' * 64, 'dataset_fingerprint': 'd' * 64, 'model': model}
         parsed = PCSEConfig.from_mapping(external)
         self.assertEqual(parsed.pretraining.mode, 'external_checkpoint')
+        self.assertEqual(parsed.pretraining.method, 'cross_entropy')
         invalid = deepcopy(external)
         invalid['pretraining_stage']['source']['adapter'] = 'generic'
         with self.assertRaisesRegex(ValueError, 'upm_main_best'):
             PCSEConfig.from_mapping(invalid)
+        invalid_method = deepcopy(config)
+        invalid_method['pretraining_stage']['method'] = 'upm'
+        with self.assertRaisesRegex(ValueError, 'pretraining_stage.method'):
+            PCSEConfig.from_mapping(invalid_method)
+        invalid_loss = deepcopy(config)
+        invalid_loss['pretraining_stage']['loss'] = {'name': 'bce'}
+        with self.assertRaisesRegex(ValueError, 'requires CE'):
+            PCSEConfig.from_mapping(invalid_loss)
+
+    def test_internal_resnet18_binds_image_input_channels(self) -> None:
+        model = _build_pcse_pretraining_model(
+            {'name': 'resnet18', 'base_width': 1},
+            InputSpec('image', shape=(3, 32, 32), channels=3),
+            10,
+        )
+        self.assertEqual(model.stem[0].in_channels, 3)
+        self.assertTrue(hasattr(model, 'layer3'))
+        self.assertTrue(hasattr(model, 'layer4'))
 
     def test_external_adoption_persists_provenance_and_resumes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -665,6 +769,15 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
             self.assertEqual(algorithm.state.phase, PCSEPhase.PRETRAINED)
             checkpoint = torch.load(Path(directory) / 'last.pt', map_location='cpu', weights_only=False)
             self.assertEqual(checkpoint['external_source_provenance'], source)
+            self.assertEqual(checkpoint['pretraining_method'], 'cross_entropy')
+            self.assertEqual(checkpoint['pretraining_model'], 'pcse_mlp')
+            self.assertEqual(checkpoint['pretraining_source'], 'upm_main_best')
+            rows = [
+                json.loads(line)
+                for line in (Path(directory) / 'metrics.jsonl').read_text(encoding='utf-8').splitlines()
+            ]
+            self.assertEqual(rows[-1]['event'], 'external_checkpoint')
+            self.assertEqual(rows[-1]['pretraining_source'], 'upm_main_best')
             algorithm.close()
 
     def test_phase_machine_rejects_illegal_transition(self) -> None:
@@ -704,6 +817,22 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
             first.train_pretraining(max_epochs=1)
             self.assertEqual(first.state.phase, PCSEPhase.PRETRAINING)
             self.assertEqual(first.state.pretraining_completed_epochs, 1)
+            best = torch.load(
+                Path(directory) / 'pretrained_best.pt',
+                map_location='cpu',
+                weights_only=False,
+            )
+            self.assertEqual(best['pretraining_method'], 'cross_entropy')
+            self.assertEqual(best['pretraining_model'], 'pcse_mlp')
+            self.assertEqual(best['pretraining_source'], 'internal_training')
+            rows = [
+                json.loads(line)
+                for line in (Path(directory) / 'metrics.jsonl').read_text(encoding='utf-8').splitlines()
+            ]
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]['event'], 'epoch')
+            self.assertEqual(rows[0]['pretraining_method'], 'cross_entropy')
+            self.assertEqual(rows[0]['pretraining_source'], 'internal_training')
             first.close()
             resumed = _pcse_workflow__pretraining_algorithm(Path(directory))
             resumed.resume(Path(directory) / 'last.pt')
@@ -769,6 +898,9 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
             self.assertEqual(result, run_dir.resolve())
             final = json.loads((run_dir / 'final_metrics.json').read_text(encoding='utf-8'))
             self.assertEqual(final['method'], 'pcse')
+            self.assertEqual(final['pretraining_method'], 'cross_entropy')
+            self.assertEqual(final['pretraining_model'], 'pcse_mlp')
+            self.assertEqual(final['pretraining_source'], 'internal_training')
             self.assertEqual(final['transition_backend'], 'dual_t')
             self.assertEqual(len(final['ensemble_weights']), 2)
             self.assertTrue(all((value > 0 for value in final['ensemble_weights'])))

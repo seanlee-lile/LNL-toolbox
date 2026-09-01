@@ -58,6 +58,16 @@ from lnl_toolbox.training.progress import (
 
 def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
     name = str(config.get("name", "preact_resnet18")).lower()
+    if name == "feature_mlp":
+        input_dim = int(config.get("input_dim", 0))
+        hidden_width = int(config.get("hidden_width", 16))
+        if input_dim <= 0 or hidden_width <= 0:
+            raise ValueError("feature_mlp requires positive input_dim and hidden_width")
+        return nn.Sequential(
+            nn.Linear(input_dim, hidden_width),
+            nn.ReLU(),
+            nn.Linear(hidden_width, num_classes),
+        )
     if name == "tiny_cnn":
         return TinyCNN(
             num_classes,
@@ -77,20 +87,30 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
     if name == "cnlcu_cnn9":
         return CnlcuCnn9(num_classes)
     if name == "resnet14":
-        return cifar_resnet14(num_classes, int(config.get("base_width", 16)))
+        return cifar_resnet14(
+            num_classes,
+            int(config.get("base_width", 16)),
+            input_channels=int(config.get("input_channels", 3)),
+        )
     if name == "resnet32":
-        return cifar_resnet32(num_classes, int(config.get("base_width", 16)))
+        return cifar_resnet32(
+            num_classes,
+            int(config.get("base_width", 16)),
+            input_channels=int(config.get("input_channels", 3)),
+        )
     if name == "resnet18":
         return cifar_resnet18(
             num_classes,
             int(config.get("base_width", 64)),
             initialization=str(config.get("initialization", "kaiming")),
+            input_channels=int(config.get("input_channels", 3)),
         )
     if name == "resnet34":
         return cifar_resnet34(
             num_classes,
             int(config.get("base_width", 64)),
             initialization=str(config.get("initialization", "kaiming")),
+            input_channels=int(config.get("input_channels", 3)),
         )
     if name == "resnet50":
         return cifar_resnet50(
@@ -98,6 +118,7 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
             int(config.get("base_width", 64)),
             stem_padding=int(config.get("stem_padding", 1)),
             initialization=str(config.get("initialization", "kaiming")),
+            input_channels=int(config.get("input_channels", 3)),
         )
     if name == "resnet101":
         return cifar_resnet101(
@@ -105,10 +126,29 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
             int(config.get("base_width", 64)),
             stem_padding=int(config.get("stem_padding", 1)),
             initialization=str(config.get("initialization", "kaiming")),
+            input_channels=int(config.get("input_channels", 3)),
         )
     if name == "preact_resnet18":
-        return preact_resnet18(num_classes, int(config.get("base_width", 64)))
+        return preact_resnet18(
+            num_classes,
+            int(config.get("base_width", 64)),
+            input_channels=int(config.get("input_channels", 3)),
+        )
     raise ValueError(f"Unsupported model: {name}")
+
+
+def bind_model_input(config: Mapping[str, Any], input_spec: Any) -> dict[str, Any]:
+    """Bind dataset-derived dimensions without making model code dataset-aware."""
+
+    resolved = deepcopy(dict(config))
+    name = str(resolved.get("name", "preact_resnet18")).lower()
+    if name == "feature_mlp" and "input_dim" not in resolved:
+        if input_spec.feature_dim is None:
+            raise ValueError("feature_mlp requires tabular input with a known feature_dim")
+        resolved["input_dim"] = int(input_spec.feature_dim)
+    if input_spec.channels is not None:
+        resolved.setdefault("input_channels", int(input_spec.channels))
+    return resolved
 
 
 def build_optimizer(model: nn.Module, config: Mapping[str, Any]):
@@ -468,6 +508,8 @@ def run_supervised_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    requirements: DataRequirements | None = None,
 ) -> Path:
     """Run one reproducible clean or noisy-label supervised experiment."""
 
@@ -477,6 +519,10 @@ def run_supervised_experiment(
     config.setdefault("parameter_update", {"name": "standard"})
     _validate_supervised_config(config)
     config.setdefault("selector", {"name": "all"})
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+
+        requirements = resolve_data_requirements(config, expected_runner="supervised")
     seed = int(config.get("seed", 1))
     epochs = int(config["trainer"]["epochs"])
     _resolve_dss_epoch_contract(config, epochs)
@@ -510,15 +556,6 @@ def run_supervised_experiment(
     validation_target_source = str(
         noise_config.get("validation_targets", "clean")
     ).strip().lower()
-    requirements = DataRequirements(
-        roles=frozenset({
-            DataRole.TRAIN,
-            DataRole.NOISY_VALIDATION,
-            DataRole.CLEAN_VALIDATION,
-            DataRole.TEST,
-        }),
-        validation_targets=validation_target_source,
-    )
     prepared = prepare_experiment_data(
         config,
         requirements=requirements,
@@ -533,7 +570,7 @@ def run_supervised_experiment(
     if manifest is not None and manifest_path is not None:
         effective_rate = effective_subset_actual_rate(manifest, prepared.train_indices)
         effective_validation_rate = (
-            effective_subset_actual_rate(manifest, prepared.validation_indices)
+            prepared.realized_noise_rate(DataRole.NOISY_VALIDATION)
             if validation_target_source == "noisy"
             else None
         )
@@ -551,12 +588,7 @@ def run_supervised_experiment(
         )
         config["noise"] = _resolved_noise_config(noise_config, noise_metadata)
     train_loader = prepared.loader(DataRole.TRAIN)
-    validation_role = (
-        DataRole.NOISY_VALIDATION
-        if validation_target_source == "noisy"
-        else DataRole.CLEAN_VALIDATION
-    )
-    validation_loader = prepared.loader(validation_role, shuffle=False)
+    validation_loader = prepared.validation_loader(shuffle=False)
     test_loader = prepared.loader(DataRole.TEST, shuffle=False)
     evaluation_config = config.get("evaluation", {}) or {}
     selection_split = str(evaluation_config.get("selection_split", "validation")).lower()
@@ -565,15 +597,7 @@ def run_supervised_experiment(
     ).to(device)
     selection_loader = test_loader if selection_split == "test" else validation_loader
 
-    model_config = dict(config["model"])
-    if (
-        str(model_config.get("name", "")).lower() == "tiny_cnn"
-        and "input_channels" not in model_config
-    ):
-        sample_input = prepared.dataset_for(DataRole.TRAIN)[0]["input"]
-        sample_shape = tuple(torch.as_tensor(sample_input).shape)
-        if len(sample_shape) == 3:
-            model_config["input_channels"] = int(sample_shape[0])
+    model_config = bind_model_input(config["model"], prepared.input_spec)
     model = build_model(model_config, num_classes)
     criterion = build_builtin_loss(config["loss"]).to(device)
     selector = build_builtin_selector(config["selector"])

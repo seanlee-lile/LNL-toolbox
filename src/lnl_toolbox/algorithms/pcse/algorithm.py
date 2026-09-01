@@ -257,6 +257,23 @@ class PCSEAlgorithm:
     def metrics_path(self) -> Path:
         return self.run_dir / "metrics.jsonl"
 
+    def _pretraining_audit(self) -> dict[str, str]:
+        pretraining = self.method_config.pretraining
+        source = (
+            "internal_training"
+            if pretraining.mode == "train"
+            else str(
+                (pretraining.source or {}).get(
+                    "adapter", "external_checkpoint"
+                )
+            )
+        )
+        return {
+            "pretraining_method": pretraining.method,
+            "pretraining_model": str(pretraining.model.get("name", "")),
+            "pretraining_source": source,
+        }
+
     def _checkpoint_payload(self, *, role: str) -> dict[str, Any]:
         return {
             "format_version": 2,
@@ -297,6 +314,7 @@ class PCSEAlgorithm:
             ),
             "noise": self.noise_metadata,
             "external_source_provenance": self.external_source_provenance,
+            **self._pretraining_audit(),
             "rng_state": capture_rng_state(),
         }
 
@@ -375,6 +393,7 @@ class PCSEAlgorithm:
             self._append_metrics({
                 "event": "epoch",
                 "stage": "pretraining",
+                **self._pretraining_audit(),
                 "epoch": epoch + 1,
                 "global_step": self.state.pretraining_global_step,
                 "learning_rate": learning_rate,
@@ -445,6 +464,7 @@ class PCSEAlgorithm:
         self._append_metrics({
             "event": "external_checkpoint",
             "stage": "pretraining",
+            **self._pretraining_audit(),
             "adapter": self.external_source_provenance.get("adapter"),
             "source_checkpoint_sha256": self.external_source_provenance.get(
                 "checkpoint", {}
@@ -1057,6 +1077,7 @@ class PCSEAlgorithm:
         final = {
             "event": "final",
             "method": "pcse",
+            **self._pretraining_audit(),
             "transition_backend": self.method_config.transition_backend,
             "completed_pretraining_epochs": (
                 self.state.pretraining_completed_epochs

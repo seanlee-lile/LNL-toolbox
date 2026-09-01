@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from collections.abc import Collection, Mapping
 
+from lnl_toolbox.data.contracts import DataRequirements, DataRole
 from lnl_toolbox.data.profile import (
     DatasetCapabilities,
     KnowledgeState,
@@ -23,6 +24,7 @@ class ConfigInputRequirement:
     paths: tuple[tuple[str, ...], ...]
     mode: str = "all"
     description: str = "required method configuration is missing"
+    implementation_limit: str | None = None
 
     def __post_init__(self) -> None:
         code = str(self.code).strip()
@@ -33,27 +35,38 @@ class ConfigInputRequirement:
             raise ValueError("config input requirement paths must not be empty")
         if self.mode not in {"all", "any"}:
             raise ValueError("config input requirement mode must be all or any")
+        implementation_limit = (
+            None
+            if self.implementation_limit is None
+            else str(self.implementation_limit).strip()
+        )
+        if self.implementation_limit is not None and not implementation_limit:
+            raise ValueError("implementation_limit must not be empty")
         object.__setattr__(self, "code", code)
         object.__setattr__(self, "paths", paths)
+        object.__setattr__(self, "implementation_limit", implementation_limit)
 
 
 @dataclass(frozen=True, slots=True)
 class MethodRequirements:
     method: str
     supported_modalities: frozenset[Modality]
+    data_requirements: DataRequirements
+    implemented_variant: str = "default"
+    implementation_limits: frozenset[str] = frozenset()
     min_classes: int | None = 2
     max_classes: int | None = None
     exact_classes: frozenset[int] = frozenset()
-    requires_noise_manifest: bool = True
+    requires_noise_manifest: bool | None = None
     requires_dataset_true_noise_rate: bool = False
     requires_method_noise_prior: bool = False
     requires_clean_train_labels: bool = False
-    requires_clean_validation: bool = False
+    requires_clean_validation: bool | None = None
     requires_aligned_clean_noisy_targets: bool = False
     supports_native_noisy_labels: bool = False
     supports_synthetic_noise: bool = True
     supports_unknown_noise_rate: bool = True
-    validation_target: str = "noisy"
+    validation_target: str | None = None
     required_pretrained_roles: tuple[str, ...] = ()
     required_source_roles: tuple[str, ...] = ("train", "test")
     method_noise_prior_paths: tuple[tuple[str, ...], ...] = ()
@@ -61,6 +74,19 @@ class MethodRequirements:
     required_config_inputs: tuple[ConfigInputRequirement, ...] = ()
 
     def __post_init__(self) -> None:
+        method = str(self.method).strip()
+        variant = str(self.implemented_variant).strip()
+        if not method or not variant:
+            raise ValueError("method and implemented_variant must not be empty")
+        if not isinstance(self.data_requirements, DataRequirements):
+            raise TypeError("data_requirements must be a DataRequirements instance")
+        object.__setattr__(self, "method", method)
+        object.__setattr__(self, "implemented_variant", variant)
+        object.__setattr__(
+            self,
+            "implementation_limits",
+            frozenset(str(item).strip() for item in self.implementation_limits if str(item).strip()),
+        )
         modalities = frozenset(Modality(item) for item in self.supported_modalities)
         if not modalities:
             raise ValueError("method requirements need at least one supported modality")
@@ -73,6 +99,23 @@ class MethodRequirements:
             raise ValueError("min_classes must not exceed max_classes")
         if any(value < 2 for value in self.exact_classes):
             raise ValueError("exact class counts must be at least two")
+        derived_manifest = bool(self.data_requirements.needs_noise_manifest)
+        if self.requires_noise_manifest is not None and bool(self.requires_noise_manifest) != derived_manifest:
+            raise ValueError("requires_noise_manifest conflicts with data_requirements")
+        object.__setattr__(self, "requires_noise_manifest", derived_manifest)
+        clean_validation = DataRole.CLEAN_VALIDATION in self.data_requirements.roles
+        if self.requires_clean_validation is not None and bool(self.requires_clean_validation) != clean_validation:
+            raise ValueError("requires_clean_validation conflicts with data_requirements")
+        object.__setattr__(self, "requires_clean_validation", clean_validation)
+        if DataRole.CLEAN_VALIDATION in self.data_requirements.roles:
+            derived_target = "clean"
+        elif DataRole.NOISY_VALIDATION in self.data_requirements.roles:
+            derived_target = "noisy"
+        else:
+            derived_target = "any"
+        if self.validation_target is not None and self.validation_target != derived_target:
+            raise ValueError("validation_target conflicts with data_requirements")
+        object.__setattr__(self, "validation_target", derived_target)
         if self.validation_target not in {"clean", "noisy", "any"}:
             raise ValueError("validation_target must be clean, noisy, or any")
         object.__setattr__(self, "required_pretrained_roles", tuple(sorted(set(self.required_pretrained_roles))))
@@ -112,6 +155,7 @@ class CompatibilityStatus(str, Enum):
 class CompatibilityReason:
     code: str
     message: str
+    origin: str = "algorithm_requirement"
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,11 +210,11 @@ class CompatibilityResult:
             "status": self.status.value,
             "reason_codes": [item.code for item in self.reasons],
             "reasons": [
-                {"code": item.code, "message": item.message}
+                {"code": item.code, "message": item.message, "origin": item.origin}
                 for item in self.reasons
             ],
             "warnings": [
-                {"code": item.code, "message": item.message}
+                {"code": item.code, "message": item.message, "origin": item.origin}
                 for item in self.warnings
             ],
             "required_user_inputs": list(self.required_user_inputs),
@@ -378,18 +422,31 @@ def resolve_compatibility(
     inputs: set[str] = set()
     input_paths: dict[str, tuple[tuple[str, ...], ...]] = {}
 
+    def reason(code: str, message: str, limit: str | None = None) -> CompatibilityReason:
+        aliases = {
+            "class_count": frozenset({"class_count", "class_count_evidence_unresolved"}),
+        }
+        limit_names = aliases.get(limit, frozenset({limit}) if limit is not None else frozenset())
+        if limit_names.intersection(method.implementation_limits):
+            return CompatibilityReason(
+                code,
+                f"implemented variant {method.implemented_variant!r}: {message}",
+                "implemented_variant_limit",
+            )
+        return CompatibilityReason(code, message)
+
     if dataset.modality is Modality.UNKNOWN:
         requirements.append(CompatibilityReason("unknown_modality", "dataset modality must be confirmed"))
     elif dataset.modality not in method.supported_modalities:
-        incompatible.append(CompatibilityReason("unsupported_modality", f"{method.method} does not support {dataset.modality.value} data"))
+        incompatible.append(reason("unsupported_modality", f"does not support {dataset.modality.value} data", "modality"))
 
     classes = dataset.num_classes
     if method.exact_classes and classes not in method.exact_classes:
-        incompatible.append(CompatibilityReason("wrong_class_count", f"{method.method} requires class count in {sorted(method.exact_classes)}"))
+        incompatible.append(reason("wrong_class_count", f"requires class count in {sorted(method.exact_classes)}", "class_count"))
     elif method.min_classes is not None and classes < method.min_classes:
-        incompatible.append(CompatibilityReason("wrong_class_count", f"{method.method} requires at least {method.min_classes} classes"))
+        incompatible.append(reason("wrong_class_count", f"requires at least {method.min_classes} classes", "class_count"))
     elif method.max_classes is not None and classes > method.max_classes:
-        incompatible.append(CompatibilityReason("wrong_class_count", f"{method.method} supports at most {method.max_classes} classes"))
+        incompatible.append(reason("wrong_class_count", f"supports at most {method.max_classes} classes", "class_count"))
 
     missing_roles = sorted(set(method.required_source_roles) - set(dataset.available_splits))
     if missing_roles:
@@ -414,9 +471,18 @@ def resolve_compatibility(
 
     if method.requires_clean_validation:
         clean_validation = dataset.clean_validation_labels
-        if clean_validation is KnowledgeState.UNAVAILABLE and dataset.clean_train_labels is not KnowledgeState.AVAILABLE:
+        has_protocol_test = "test" in dataset.available_splits
+        if (
+            clean_validation is KnowledgeState.UNAVAILABLE
+            and dataset.clean_train_labels is not KnowledgeState.AVAILABLE
+            and not has_protocol_test
+        ):
             incompatible.append(CompatibilityReason("missing_clean_validation", "clean validation labels cannot be provided"))
-        elif clean_validation is KnowledgeState.UNKNOWN and dataset.clean_train_labels is KnowledgeState.UNKNOWN:
+        elif (
+            clean_validation is KnowledgeState.UNKNOWN
+            and dataset.clean_train_labels is KnowledgeState.UNKNOWN
+            and not has_protocol_test
+        ):
             requirements.append(CompatibilityReason("unknown_clean_validation", "adapter/inspection metadata does not establish a clean validation source"))
 
     if (

@@ -11,7 +11,6 @@ import ipaddress
 import json
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 import threading
@@ -261,11 +260,8 @@ JOBS_LOCK = threading.Lock()
 
 
 def resolve_lnl_command() -> list[str]:
-    """Prefer the installed lnl shortcut, then fall back to the module CLI."""
+    """Run the CLI with the interpreter serving the current Web process."""
 
-    executable = shutil.which("lnl")
-    if executable:
-        return [executable]
     return [sys.executable, "-m", "lnl_toolbox.cli.main"]
 
 
@@ -396,7 +392,18 @@ def cancel_job(job_id: str) -> Job:
         process = job.process
         job.cancel_requested = True
     if process is not None and process.poll() is None:
-        process.terminate()
+        # ``lnl`` may be a Windows console wrapper which starts the actual
+        # Python worker as a child.  Terminating only the wrapper leaks that
+        # worker into the next batch case, so cancel the complete process tree.
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        else:
+            process.terminate()
     return job
 
 

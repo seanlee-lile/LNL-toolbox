@@ -337,14 +337,24 @@ import yaml
 from lnl_toolbox.training.volmin_experiment import run_volmin_experiment
 
 # --- merged from test_volmin_training.py ---
+from lnl_toolbox.training.experiment import run_experiment
+
+# --- merged from test_volmin_training.py ---
 class _volmin_training_VolMinTrainingTest(unittest.TestCase):
 
     def test_smoke_and_resume(self) -> None:
         config = yaml.safe_load(Path('configs/experiment/volmin_cifar10_smoke.yaml').read_text())
+        config['trainer']['epochs'] = 2
         with tempfile.TemporaryDirectory() as directory:
-            run = run_volmin_experiment(config, output_dir=directory)
+            run = run_experiment(config, Path(directory) / 'run')
             self.assertTrue((run / 'last.pt').is_file())
-            run_volmin_experiment(config, resume=run / 'last.pt')
+            rows = [json.loads(line) for line in (run / 'metrics.jsonl').read_text().splitlines()]
+            self.assertEqual([row['event'] for row in rows], ['epoch', 'epoch', 'final'])
+            self.assertTrue(all(not {'test_loss', 'test_accuracy'}.intersection(row) for row in rows[:2]))
+            self.assertIn('test_accuracy', rows[-1])
+            run_experiment(config, resume=run / 'last.pt')
+            resumed = [json.loads(line) for line in (run / 'metrics.jsonl').read_text().splitlines()]
+            self.assertEqual([row['event'] for row in resumed], ['epoch', 'epoch', 'final'])
 
 # --- merged from test_volminnet_algorithm.py ---
 import copy
@@ -544,6 +554,16 @@ from lnl_toolbox.algorithms.volminnet import VolMinNetConfig
 # --- merged from test_volminnet_workflow.py ---
 from lnl_toolbox.data.cifar import CifarData
 
+from lnl_toolbox.data.contracts import (
+    DataSpec,
+    RawDatasetSplit,
+    UnsupportedDatasetSplitError,
+)
+
+from lnl_toolbox.data.multiclass_synthetic import generate_synthetic_multiclass
+
+from lnl_toolbox.training.data_service import DATASETS
+
 # --- merged from test_volminnet_workflow.py ---
 from lnl_toolbox.training.experiment import run_experiment
 
@@ -563,8 +583,63 @@ def _volminnet_workflow__config(epochs: int=2, dataset: str='cifar10') -> dict:
 def _volminnet_workflow__sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
+
+class _volminnet_workflow__GenericTabularAdapter:
+    name = 'volminnet_generic_tabular_fixture'
+    aliases: tuple[str, ...] = ()
+
+    def validate(self, spec: DataSpec) -> None:
+        if int(spec.options.get('num_classes', 0)) != 4:
+            raise ValueError('VolMinNet fixture requires four classes')
+
+    def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
+        if split == 'validation':
+            raise UnsupportedDatasetSplitError(
+                'fixture intentionally uses a train-derived validation split'
+            )
+        sizes = {'train': 48, 'test': 12}
+        if split not in sizes:
+            raise ValueError(f'unsupported fixture split: {split}')
+        generated = generate_synthetic_multiclass(
+            sizes[split], 6, 4, seed + (0 if split == 'train' else 100),
+            start_index=0, split=split,
+        )
+        return RawDatasetSplit(
+            generated.features,
+            generated.labels,
+            generated.global_indices,
+            self.name,
+            split,
+            4,
+            clean_targets=generated.labels,
+            source='test_fixture',
+        )
+
 # --- merged from test_volminnet_workflow.py ---
 class _volminnet_workflow_VolMinNetWorkflowTest(unittest.TestCase):
+
+    def test_generic_four_class_tabular_data_reaches_training(self) -> None:
+        try:
+            DATASETS.get(_volminnet_workflow__GenericTabularAdapter.name)
+        except ValueError:
+            DATASETS.add(_volminnet_workflow__GenericTabularAdapter())
+        config = _volminnet_workflow__config(1)
+        config['data'] = {
+            'name': _volminnet_workflow__GenericTabularAdapter.name,
+            'root': 'unused',
+            'num_classes': 4,
+            'validation_size': 8,
+        }
+        config['volminnet']['model'] = {
+            'name': 'feature_mlp',
+            'input_dim': 6,
+            'hidden_width': 8,
+        }
+        config['loader']['batch_size'] = 8
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = run_experiment(config, Path(directory) / 'run')
+            final = json.loads((run_dir / 'final_metrics.json').read_text())
+            self.assertEqual(len(final['learned_transition']), 4)
 
     def test_formal_config_matches_cifar10_paper_protocol(self) -> None:
         path = Path(__file__).resolve().parents[1] / 'configs/experiment/volminnet_cifar10_reproduction.yaml'

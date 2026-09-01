@@ -96,6 +96,7 @@ class CifarResNetBottleneck(nn.Module):
         base_width: int = 64,
         layer_counts: tuple[int, int, int, int] = (3, 4, 6, 3),
         *,
+        input_channels: int = 3,
         stem_padding: int = 1,
         initialization: str = "kaiming",
     ) -> None:
@@ -104,6 +105,8 @@ class CifarResNetBottleneck(nn.Module):
             raise ValueError("layer_counts must contain four positive integers")
         if stem_padding < 0:
             raise ValueError("stem_padding must be non-negative")
+        if int(input_channels) <= 0:
+            raise ValueError("input_channels must be positive")
         initialization = str(initialization).strip().lower()
         if initialization not in {"kaiming", "torch_default"}:
             raise ValueError(
@@ -112,7 +115,7 @@ class CifarResNetBottleneck(nn.Module):
         self.incoming = base_width
         self.stem = nn.Sequential(
             nn.Conv2d(
-                3,
+                int(input_channels),
                 base_width,
                 3,
                 padding=stem_padding,
@@ -183,7 +186,8 @@ class CifarResNet(nn.Module):
                  layer_counts: tuple[int, int, int, int] = (2, 2, 2, 2),
                  initialization: str = "kaiming",
                  classifier_bias: bool = True,
-                 stem_padding: int = 1) -> None:
+                 stem_padding: int = 1,
+                 input_channels: int = 3) -> None:
         super().__init__()
         if len(layer_counts) != 4 or any(count <= 0 for count in layer_counts):
             raise ValueError("layer_counts must contain four positive integers")
@@ -192,9 +196,12 @@ class CifarResNet(nn.Module):
             raise ValueError("initialization must be 'kaiming' or 'torch_default'")
         if int(stem_padding) < 0:
             raise ValueError("stem_padding must be non-negative")
+        if int(input_channels) <= 0:
+            raise ValueError("input_channels must be positive")
         self.incoming = base_width
         stem: nn.Module = nn.Conv2d(
-            3, base_width, 3, padding=int(stem_padding), bias=False
+            int(input_channels), base_width, 3,
+            padding=int(stem_padding), bias=False
         )
         if not preactivation:
             stem = nn.Sequential(stem, nn.BatchNorm2d(base_width), nn.ReLU(inplace=True))
@@ -253,6 +260,7 @@ def cifar_resnet18(
     base_width: int = 64,
     *,
     initialization: str = "kaiming",
+    input_channels: int = 3,
 ) -> CifarResNet:
     return CifarResNet(
         BasicBlock,
@@ -260,6 +268,7 @@ def cifar_resnet18(
         base_width,
         preactivation=False,
         initialization=initialization,
+        input_channels=input_channels,
     )
 
 
@@ -270,6 +279,7 @@ def cifar_resnet34(
     initialization: str = "kaiming",
     bias: bool = True,
     stem_padding: int = 1,
+    input_channels: int = 3,
 ) -> CifarResNet:
     """Return the [3, 4, 6, 3] ResNet-34 used by the GCE CIFAR experiments."""
 
@@ -282,6 +292,7 @@ def cifar_resnet34(
         initialization=initialization,
         classifier_bias=bias,
         stem_padding=stem_padding,
+        input_channels=input_channels,
     )
 
 
@@ -291,6 +302,7 @@ def cifar_resnet50(
     *,
     stem_padding: int = 1,
     initialization: str = "kaiming",
+    input_channels: int = 3,
 ) -> CifarResNetBottleneck:
     """Return ResNet-50 without changing existing model defaults."""
 
@@ -299,6 +311,7 @@ def cifar_resnet50(
         base_width,
         stem_padding=stem_padding,
         initialization=initialization,
+        input_channels=input_channels,
     )
 
 
@@ -308,6 +321,7 @@ def cifar_resnet101(
     *,
     stem_padding: int = 1,
     initialization: str = "kaiming",
+    input_channels: int = 3,
 ) -> CifarResNetBottleneck:
     """Return a reusable CIFAR ResNet-101 bottleneck StudentNet."""
 
@@ -317,23 +331,46 @@ def cifar_resnet101(
         layer_counts=(3, 4, 23, 3),
         stem_padding=stem_padding,
         initialization=initialization,
+        input_channels=input_channels,
     )
 
 
-def preact_resnet18(num_classes: int = 10, base_width: int = 64) -> CifarResNet:
-    return CifarResNet(PreActBlock, num_classes, base_width, preactivation=True)
+def preact_resnet18(
+    num_classes: int = 10,
+    base_width: int = 64,
+    *,
+    input_channels: int = 3,
+) -> CifarResNet:
+    return CifarResNet(
+        PreActBlock,
+        num_classes,
+        base_width,
+        preactivation=True,
+        input_channels=input_channels,
+    )
 
 
 class CifarResNetDepth(nn.Module):
     """The standard three-stage CIFAR depth family (depth = 6n + 2)."""
 
-    def __init__(self, depth: int, num_classes: int = 10, base_width: int = 16) -> None:
+    def __init__(
+        self,
+        depth: int,
+        num_classes: int = 10,
+        base_width: int = 16,
+        *,
+        input_channels: int = 3,
+    ) -> None:
         super().__init__()
         if depth < 8 or (depth - 2) % 6:
             raise ValueError("CIFAR depth must satisfy depth = 6*n + 2 and be at least 8")
+        if int(input_channels) <= 0:
+            raise ValueError("input_channels must be positive")
         blocks = (depth - 2) // 6
         widths = (base_width, base_width * 2, base_width * 4)
-        self.stem = nn.Conv2d(3, widths[0], 3, padding=1, bias=False)
+        self.stem = nn.Conv2d(
+            int(input_channels), widths[0], 3, padding=1, bias=False
+        )
         self.bn = nn.BatchNorm2d(widths[0])
         incoming = widths[0]
         stages = []
@@ -365,16 +402,38 @@ class CifarResNetDepth(nn.Module):
         return FeatureOutput(self.classifier(features), features)
 
 
-def cifar_resnet_depth(depth: int, num_classes: int = 10, base_width: int = 16) -> CifarResNetDepth:
-    return CifarResNetDepth(depth, num_classes, base_width)
+def cifar_resnet_depth(
+    depth: int,
+    num_classes: int = 10,
+    base_width: int = 16,
+    *,
+    input_channels: int = 3,
+) -> CifarResNetDepth:
+    return CifarResNetDepth(
+        depth, num_classes, base_width, input_channels=input_channels
+    )
 
 
-def cifar_resnet14(num_classes: int = 10, base_width: int = 16) -> CifarResNetDepth:
-    return cifar_resnet_depth(14, num_classes, base_width)
+def cifar_resnet14(
+    num_classes: int = 10,
+    base_width: int = 16,
+    *,
+    input_channels: int = 3,
+) -> CifarResNetDepth:
+    return cifar_resnet_depth(
+        14, num_classes, base_width, input_channels=input_channels
+    )
 
 
-def cifar_resnet32(num_classes: int = 10, base_width: int = 16) -> CifarResNetDepth:
-    return cifar_resnet_depth(32, num_classes, base_width)
+def cifar_resnet32(
+    num_classes: int = 10,
+    base_width: int = 16,
+    *,
+    input_channels: int = 3,
+) -> CifarResNetDepth:
+    return cifar_resnet_depth(
+        32, num_classes, base_width, input_channels=input_channels
+    )
 
 
 class _L2RWBatchNorm2d(nn.Module):

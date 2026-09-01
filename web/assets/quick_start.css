@@ -1,5 +1,12 @@
 .qs-root { display: grid; gap: 16px; }
 .qs-root h2 { margin: 0; color: var(--text-primary); font-size: 23px; line-height: 1.3; }
+.qs-loading { display: flex; align-items: center; gap: 10px; padding: 11px 13px; border: 1px solid var(--border); border-radius: var(--radius-md); color: var(--text-primary); background: var(--bg-soft); }
+.qs-loading strong { display: block; }
+.qs-loading p { margin: 3px 0 0; color: var(--text-muted); font-size: 12px; }
+.qs-spinner { width: 18px; height: 18px; flex: 0 0 18px; border: 2px solid #c6d4e1; border-top-color: var(--accent-orange); border-radius: 50%; animation: qs-spin .8s linear infinite; }
+.qs-is-loading { position: relative; }
+.qs-is-loading button, .qs-is-loading input, .qs-is-loading select { pointer-events: none; opacity: .62; }
+@keyframes qs-spin { to { transform: rotate(360deg); } }
 .qs-step { padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-md); background: #fffdf7; }
 .qs-step h3 { margin: 0 0 10px; color: var(--text-primary); font-size: 19px; }
 .qs-step h4 { margin: 13px 0 8px; color: var(--text-secondary); font-size: 15px; }

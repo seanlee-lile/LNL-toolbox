@@ -300,7 +300,7 @@ class _unified_cli_CatalogTest(unittest.TestCase):
         self.assertNotIn('cifar10-symmetric40-all-e5', recipes)
         self.assertNotIn('cifar10-symmetric40-small-loss-e5', recipes)
         self.assertFalse(any(('mentornet' in recipe for recipe in recipes)))
-        self.assertNotIn('cifar10-pcse-reproduction', recipes)
+        self.assertIn('cifar10-pcse-reproduction', recipes)
         all_recipes = {item.id for item in discover_recipes(_unified_cli_ROOT, include_conditional=True)}
         self.assertIn('mentornet-dd-cifar100-symmetric04-smoke', all_recipes)
         self.assertIn('cifar10-pcse-reproduction', all_recipes)
@@ -333,8 +333,10 @@ class _unified_cli_CatalogTest(unittest.TestCase):
         pcse = load_recipe_config(next((item for item in discover_recipes(_unified_cli_ROOT, include_conditional=True) if item.id == 'cifar10-pcse-reproduction')))
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop('LNL_PCSE_SOURCE_RUN', None)
-            with self.assertRaisesRegex(ValueError, 'source environment variable is not set'):
-                validate_config(resolve_config_paths(pcse, _unified_cli_ROOT))
+            self.assertEqual(
+                validate_config(resolve_config_paths(pcse, _unified_cli_ROOT)).name,
+                'pcse',
+            )
 
     def test_mentornet_ready_requires_a_valid_artifact_and_keeps_cross_dataset_contract(self) -> None:
         recipe = recipe_by_id('mentornet-dd-cifar100-symmetric04-smoke', _unified_cli_ROOT)
@@ -631,9 +633,19 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
                 code, output, error = self.invoke('methods', 'compatible', '--dataset', 'heart', '--format', 'json')
                 self.assertEqual(code, 0, error)
                 compatibility = {item['method']: item for item in json.loads(output)}
-                self.assertEqual(compatibility['importance_reweighting']['status'], 'compatible')
-                self.assertEqual(compatibility['upm']['status'], 'incompatible')
-                self.assertIn('unsupported_modality', compatibility['upm']['reason_codes'])
+                importance = compatibility['importance_reweighting']
+                self.assertEqual(importance['status'], 'compatible_with_requirements')
+                self.assertIn(
+                    'requires_binary_noise_prior', importance['reason_codes']
+                )
+                self.assertIn(
+                    'config:requires_binary_noise_prior',
+                    importance['required_user_inputs'],
+                )
+                upm = compatibility['upm']
+                self.assertEqual(upm['status'], 'compatible_with_requirements')
+                self.assertIn('requires_noisy_training_labels', upm['reason_codes'])
+                self.assertNotIn('unsupported_modality', upm['reason_codes'])
                 code, output, error = self.invoke('data', 'verify', 'heart', '--output-dir', str(Path(directory) / 'heart-run'), '--project-root', str(_unified_cli_ROOT))
                 self.assertEqual(code, 0, error)
                 self.assertIn('Training check   VERIFIED', output)
@@ -1205,28 +1217,30 @@ class _pcse_cli_PCSECliTest(unittest.TestCase):
         self.assertEqual(recipe.profile, 'reproduction')
         self.assertEqual(recipe.runner, 'pcse')
         self.assertEqual(recipe.configuration_fidelity, 'engineering')
-        self.assertEqual(recipe.availability, 'conditional')
+        self.assertEqual(recipe.availability, 'runnable')
         config = load_recipe_config(recipe)
         parsed = PCSEConfig.from_mapping(config)
-        self.assertEqual(parsed.pretraining.mode, 'external_checkpoint')
-        self.assertEqual(parsed.pretraining.source['adapter'], 'upm_main_best')
+        self.assertEqual(parsed.pretraining.mode, 'train')
+        self.assertEqual(parsed.pretraining.method, 'cross_entropy')
+        self.assertIsNone(parsed.pretraining.source)
+        self.assertEqual(config['noise']['mode'], 'generated')
+        self.assertEqual(config['pretraining_stage']['epochs'], 100)
         self.assertEqual(config['data']['name'], 'cifar10')
         self.assertNotIn('max_train_samples', config['data'])
         self.assertEqual([(item.name, item.pooling) for item in parsed.feature_layers], [('layer3', 'global_average'), ('layer4', 'global_average')])
         self.assertEqual(parsed.transition_backend, 'paper_volmin')
 
-    def test_real_cifar_recipe_is_hidden_without_conditional_flag(self) -> None:
-        public_ids = {item.id for item in discover_recipes()}
+    def test_real_cifar_recipe_is_discoverable_without_conditional_flag(self) -> None:
+        default_ids = {item.id for item in discover_recipes()}
         all_ids = {item.id for item in discover_recipes(include_conditional=True)}
-        self.assertNotIn('cifar10-pcse-reproduction', public_ids)
+        self.assertIn('cifar10-pcse-reproduction', default_ids)
         self.assertIn('cifar10-pcse-reproduction', all_ids)
 
-    def test_real_cifar_preflight_rejects_missing_source_environment(self) -> None:
+    def test_real_cifar_preflight_does_not_require_source_environment(self) -> None:
         config = load_recipe_config(recipe_by_id('cifar10-pcse-reproduction'))
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop('LNL_PCSE_SOURCE_RUN', None)
-            with self.assertRaisesRegex(ValueError, 'source environment variable is not set'):
-                validate_config(config)
+            self.assertEqual(validate_config(config).name, 'pcse')
 
     def test_paper_catalog_does_not_claim_numerical_reproduction(self) -> None:
         paper = paper_by_id('pcse')
@@ -1234,7 +1248,7 @@ class _pcse_cli_PCSECliTest(unittest.TestCase):
         self.assertIn('cifar10-pcse-reproduction', recipe_ids)
         self.assertEqual(paper.reproduction_status, 'not_run')
         real_config = next((item for item in paper.configs if item.recipe_id == 'cifar10-pcse-reproduction'))
-        self.assertEqual(real_config.availability, 'conditional')
+        self.assertEqual(real_config.availability, 'runnable')
 
 # --- merged from test_upm_cli.py ---
 from contextlib import redirect_stdout

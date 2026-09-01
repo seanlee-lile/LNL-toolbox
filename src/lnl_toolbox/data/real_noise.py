@@ -7,7 +7,7 @@ import re
 
 import numpy as np
 
-from .contracts import DataSpec, RawDatasetSplit
+from .contracts import DataSpec, RawDatasetSplit, UnsupportedDatasetSplitError
 from .profile import (
     DatasetSemanticHints,
     KnowledgeState,
@@ -275,9 +275,13 @@ class Animal10NAdapter:
     def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
         del seed
         if split == "validation":
-            split = "test"
+            raise UnsupportedDatasetSplitError(
+                "Animal-10N source exposes train and test only"
+            )
         if split not in {"train", "test"}:
-            raise ValueError("Animal-10N split must be train or test")
+            raise UnsupportedDatasetSplitError(
+                "Animal-10N source exposes train and test only"
+            )
         if spec.root is None:
             raise ValueError("Animal-10N requires data.root")
         layout = self._layout(spec.root)

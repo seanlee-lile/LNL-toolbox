@@ -52,6 +52,7 @@ class PCSEFeatureLayerConfig:
 
 @dataclass(frozen=True)
 class PCSEPretrainingConfig:
+    method: str
     mode: str
     model: Mapping[str, Any]
     optimizer: Mapping[str, Any]
@@ -105,6 +106,14 @@ class PCSEConfig:
         if mode == "external_checkpoint" and epochs != 0:
             raise ValueError(
                 "external PCSE pretraining_stage.epochs must be zero"
+            )
+        pretraining_method = str(
+            pretraining.get("method", "cross_entropy")
+        ).strip().lower()
+        if pretraining_method != "cross_entropy":
+            raise ValueError(
+                "PCSE first version requires pretraining_stage.method: "
+                "cross_entropy"
             )
         loss = _mapping(
             pretraining.get("loss", {"name": "ce"}),
@@ -188,6 +197,7 @@ class PCSEConfig:
                 "pretraining_stage.source is only valid for external_checkpoint"
             )
         pretraining_config = PCSEPretrainingConfig(
+            method=pretraining_method,
             mode=mode,
             model=_mapping(pretraining.get("model"), owner="pretraining_stage.model"),
             optimizer=_mapping(

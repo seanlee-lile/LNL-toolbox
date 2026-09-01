@@ -14,7 +14,7 @@ from .binary_synthetic import (
 )
 from .binary_benchmarks import stratified_binary_splits
 from .cifar import load_cifar10, load_cifar100
-from .contracts import DataSpec, RawDatasetSplit
+from .contracts import DataSpec, RawDatasetSplit, UnsupportedDatasetSplitError
 from .multiclass_synthetic import generate_synthetic_multiclass
 from .preprocessing import BinaryPreprocessingConfig, BinaryPreprocessor
 from .registry import DatasetRegistry
@@ -35,7 +35,7 @@ class CifarAdapter:
     def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
         del seed
         if split not in {"train", "test"}:
-            raise ValueError("CIFAR source split must be train or test")
+            raise UnsupportedDatasetSplitError("CIFAR source split must be train or test")
         corpus = (
             load_cifar10(spec.root, split)
             if self.name == "cifar10"
@@ -58,6 +58,7 @@ class CifarAdapter:
 class CifarBinaryViewAdapter:
     name = "cifar10_airplane_automobile"
     aliases = ("cifar10_binary", "cifar_10_airplane_automobile")
+    source_adapter = "cifar10"
 
     def validate(self, spec: DataSpec) -> None:
         CifarAdapter("cifar10", 10).validate(spec)
@@ -65,7 +66,7 @@ class CifarBinaryViewAdapter:
     def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
         if "folds" in spec.options:
             if split not in {"train", "test"}:
-                raise ValueError("folded CIFAR binary view exposes train and test")
+                raise UnsupportedDatasetSplitError("folded CIFAR binary view exposes train and test")
             source_train = CifarAdapter("cifar10", 10).load(spec, "train", seed=seed)
             source_test = CifarAdapter("cifar10", 10).load(spec, "test", seed=seed)
             train_positions = np.flatnonzero(np.isin(source_train.observed_targets, (0, 1)))

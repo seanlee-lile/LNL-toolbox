@@ -2084,11 +2084,12 @@
     }
     function showJob(job) {
       state.jobId = job.id;
-      outputNode.textContent = job.lines.join("\n") || "(暂无输出)";
+      const output = job.lines.join("\n") || "(暂无输出)";
+      outputNode.textContent = job.error ? output + "\n\n启动错误：" + job.error : output;
       outputNode.scrollTop = outputNode.scrollHeight;
       stopTaskButton.disabled = !job.running || !job.id;
       stopTaskButton.textContent = job.cancel_requested ? "正在停止…" : "停止当前任务";
-      if (job.structured != null) renderStructured(job.structured);
+      if (job.structured != null && !job.error) renderStructured(job.structured);
       else { structuredNode.classList.add("hidden"); outputNode.classList.remove("hidden"); }
       if (window.trainingOutput) window.trainingOutput.render(job);
       if (job.running) { statusNode.textContent = "运行中：" + job.command; statusNode.className = "status running"; }

@@ -392,6 +392,12 @@ def _importance_reweighting_method_load_config() -> dict:
 # --- merged from test_importance_reweighting_method.py ---
 class _importance_reweighting_method_BinaryMethodBoundaryTest(unittest.TestCase):
 
+    def test_config_accepts_an_arbitrary_binary_dataset_identity(self) -> None:
+        config = _importance_reweighting_method_load_config()
+        config['data']['name'] = 'custom_binary_images'
+        parsed = ImportanceReweightingConfig.from_mapping(config)
+        self.assertEqual(parsed.data['name'], 'custom_binary_images')
+
     def test_uci_config_has_strict_binary_schema(self) -> None:
         config = yaml.safe_load(_importance_reweighting_method_UCI_CONFIG.read_text(encoding='utf-8'))
         parsed = ImportanceReweightingConfig.from_mapping(config)

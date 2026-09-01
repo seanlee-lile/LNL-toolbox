@@ -22,12 +22,15 @@ from lnl_toolbox.plugins.builtin import build_builtin_loss
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.data_service import prepare_experiment_data
 from lnl_toolbox.training.experiment import _environment, build_optimizer, build_scheduler
+from lnl_toolbox.training.snapshots import collect_feature_snapshot
 
 
 def run_importance_reweighting_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    requirements: DataRequirements | None = None,
 ) -> Path:
     """Run the paper-scoped binary KDE/raw-min/weighted-CE workflow."""
 
@@ -45,13 +48,16 @@ def run_importance_reweighting_experiment(
             datetime.now().strftime("%Y%m%d-%H%M%S")
         )
     run_dir.mkdir(parents=True, exist_ok=True)
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+
+        requirements = resolve_data_requirements(
+            config, expected_runner="importance_reweighting"
+        )
 
     prepared = prepare_experiment_data(
         config,
-        requirements=DataRequirements(
-            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
-            validation_targets="noisy",
-        ),
+        requirements=requirements,
         run_dir=run_dir,
         seed=method_config.seed,
     )
@@ -59,36 +65,28 @@ def run_importance_reweighting_experiment(
     manifest = prepared.manifest
     if manifest is None:
         raise ValueError("importance reweighting requires binary asymmetric noise")
-    positive_rows = manifest.clean_targets == 1
-    negative_rows = manifest.clean_targets == 0
-    realized_rho_positive = float(np.mean(
-        manifest.noisy_targets[positive_rows] == 0
-    ))
-    realized_rho_negative = float(np.mean(
-        manifest.noisy_targets[negative_rows] == 1
-    ))
+    realized_rho_positive = float(method_config.noise["rho_positive"])
+    realized_rho_negative = float(method_config.noise["rho_negative"])
 
     def train_loader_factory(epoch: int):
         return prepared.loader(DataRole.TRAIN, epoch=int(epoch), stream=1000)
 
     validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False, stream=2000)
     test_loader = prepared.loader(DataRole.TEST, shuffle=False, stream=3000)
-    train_dataset = prepared.dataset_for(DataRole.TRAIN)
-    posterior_inputs = np.stack([
-        np.asarray(train_dataset[index]["input"], dtype=np.float32)
-        for index in range(len(train_dataset))
-    ])
-    posterior_targets = np.asarray([
-        int(train_dataset[index]["target"]) for index in range(len(train_dataset))
-    ], dtype=np.int64)
-    posterior_indices = prepared.train_indices.copy()
+    feature_snapshot = collect_feature_snapshot(
+        nn.Flatten(start_dim=1),
+        prepared.loader(DataRole.TRAIN, shuffle=False, stream=4000),
+        "cpu",
+        dataset=prepared.dataset,
+        split="train",
+    )
+    posterior_inputs = feature_snapshot.features.astype(np.float32, copy=False)
+    posterior_targets = feature_snapshot.noisy_targets
+    posterior_indices = feature_snapshot.global_indices
     dimension = int(posterior_inputs.shape[1])
 
     def model_factory() -> nn.Module:
-        model = nn.Linear(dimension, 2)
-        if model.out_features != 2:
-            raise ValueError("importance reweighting model must output two logits")
-        return model
+        return nn.Sequential(nn.Flatten(start_dim=1), nn.Linear(dimension, 2))
 
     def optimizer_factory(model: nn.Module):
         return build_optimizer(model, method_config.optimizer)

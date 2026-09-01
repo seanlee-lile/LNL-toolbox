@@ -37,7 +37,7 @@ class _config_schema_ConfigSchemaTest(unittest.TestCase):
     def test_every_active_yaml_is_versioned_and_canonical(self) -> None:
         root = Path(__file__).resolve().parents[1]
         paths = sorted((root / 'configs').rglob('*.yaml'))
-        self.assertEqual(len(paths), 94)
+        self.assertEqual(len(paths), 95)
         for path in paths:
             value = load_yaml(path)
             self.assertEqual(value['schema_version'], 1, path)

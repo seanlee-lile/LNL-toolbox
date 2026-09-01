@@ -103,6 +103,10 @@ class _data_adapters_DataAdapterFixtureTest(unittest.TestCase):
             self.assertEqual(split.clean_targets.tolist(), corpus.labels.tolist())
             self.assertIn('human_annotation', split.source)
 
+    def test_cifar_adapter_uses_typed_error_for_unsupported_validation(self) -> None:
+        with self.assertRaises(UnsupportedDatasetSplitError):
+            CifarAdapter('cifar10', 10).load(DataSpec('cifar10'), 'validation', seed=1)
+
     def test_mnist_official_idx_gzip_layout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -275,7 +279,7 @@ import numpy as np
 import torch
 
 # --- merged from test_data_service.py ---
-from lnl_toolbox.data import DataRequirements, DataRole, DataSpec, DatasetRegistry, IndexedDatasetView, LocalDatasetCatalog, RawDatasetSplit
+from lnl_toolbox.data import DataProtocol, DataRequirements, DataRole, DataSpec, DatasetRegistry, IndexedDatasetView, InputSpec, LocalDatasetCatalog, NoiseDescriptor, RawDatasetSplit, UnsupportedDatasetSplitError
 
 # --- merged from test_data_service.py ---
 from lnl_toolbox.training.checkpoint import atomic_save, read_checkpoint
@@ -304,6 +308,15 @@ class _data_service__FixtureAdapter:
         self.validate(spec)
         count = 8 if split == 'train' else 4
         return RawDatasetSplit(inputs=np.arange(count * 2, dtype=np.float32).reshape(count, 2), observed_targets=np.arange(count, dtype=np.int64) % 2, global_indices=np.arange(count, dtype=np.int64), dataset=self.name, split=split, num_classes=2, source=str(spec.root))
+
+# --- merged from test_data_service.py ---
+class _data_service__BrokenValidationFixtureAdapter(_data_service__FixtureAdapter):
+    name = 'broken_validation_fixture'
+
+    def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
+        if split == 'validation':
+            raise ValueError('validation fixture has an invalid shape')
+        return super().load(spec, split, seed=seed)
 
 # --- merged from test_data_service.py ---
 class _data_service__NativeNoisyFixtureAdapter:
@@ -358,7 +371,7 @@ class _data_service__DerivedValidationFixtureAdapter:
         del seed
         self.validate(spec)
         if split == 'validation':
-            raise ValueError('derived validation fixture has no native validation split')
+            raise UnsupportedDatasetSplitError('derived validation fixture has no native validation split')
         count = 50000 if split == 'train' else 10000
         targets = np.arange(count, dtype=np.int64) % 10
         return RawDatasetSplit(
@@ -398,6 +411,7 @@ class _data_service_DataServiceTest(unittest.TestCase):
             validation = prepared.dataset_for(DataRole.NOISY_VALIDATION)
             self.assertEqual([int(validation[index]['target']) for index in range(2)], [8, 9])
             self.assertEqual(prepared.train_split.observed_targets.tolist(), [5, 6])
+            self.assertEqual(prepared.realized_noise_rate(DataRole.NOISY_VALIDATION), 0.0)
 
     def test_native_noisy_data_fails_before_manifest_required_training(self) -> None:
         requirements = DataRequirements(roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}), validation_targets='noisy', needs_noise_manifest=True)
@@ -424,6 +438,7 @@ class _data_service_DataServiceTest(unittest.TestCase):
                 [int(validation[offset]['target']) for offset in range(len(validation))],
                 prepared.validation_split.observed_targets.tolist(),
             )
+            self.assertEqual(prepared.realized_noise_rate(DataRole.NOISY_VALIDATION), 0.0)
             self.assertEqual(set(prepared.train_indices) & set(prepared.validation_indices), set())
 
     def test_derived_noisy_validation_extends_manifest_coverage(self) -> None:
@@ -543,6 +558,18 @@ class _data_service_DataServiceTest(unittest.TestCase):
             self.assertIn('broken fixture layout', report.error or '')
             self.assertNotEqual(service.status('broken').status, 'ready')
 
+    def test_invalid_native_validation_is_not_treated_as_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = DataService(
+                DatasetRegistry((_data_service__BrokenValidationFixtureAdapter(),)),
+                LocalDatasetCatalog(root / 'catalog.json'),
+            )
+            service.register('broken-validation', 'broken_validation_fixture', {'root': root})
+            report = service.inspect('broken-validation')
+            self.assertEqual(report.status, 'incomplete')
+            self.assertIn('invalid shape', report.error or '')
+
     def test_portable_config_resolves_unique_local_registration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -586,11 +613,154 @@ class _data_service_DataServiceTest(unittest.TestCase):
             self.assertTrue(torch.equal(first, repeated))
             self.assertFalse(torch.equal(first, another))
             self.assertEqual(set(first.tolist()), set(prepared.train_indices.tolist()))
+            weak_batch = next(
+                iter(prepared.view_loader(DataRole.TRAIN, 'weak', shuffle=False))
+            )
+            strong_batch = next(
+                iter(prepared.view_loader(DataRole.TRAIN, 'strong', shuffle=False))
+            )
+            self.assertEqual(set(weak_batch), {'input', 'target', 'index'})
+            self.assertTrue(torch.equal(weak_batch['index'], strong_batch['index']))
+            self.assertTrue(torch.equal(weak_batch['target'], strong_batch['target']))
             chosen = prepared.train_indices[::2]
             probabilities = {int(index): float(offset) for offset, index in enumerate(chosen)}
-            dynamic = prepared.dynamic_dataset(chosen, overlays={'clean_probability': probabilities})
-            self.assertEqual(dynamic.indices.tolist(), chosen.tolist())
-            self.assertIn('clean_probability', dynamic[0])
+            subset_loader = prepared.subset_loader(
+                chosen,
+                overlays={'clean_probability': probabilities},
+                shuffle=False,
+            )
+            subset_batch = next(iter(subset_loader))
+            self.assertEqual(
+                set(subset_batch), {'input', 'target', 'index', 'views', 'strong_input', 'clean_probability'}
+            )
+            self.assertNotIn('clean_target', subset_batch)
+            self.assertEqual(
+                torch.cat([value['index'] for value in subset_loader]).tolist(),
+                chosen.tolist(),
+            )
+
+    def test_prepared_data_exposes_dataset_neutral_contracts(self) -> None:
+        requirements = DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
+            validation_targets='noisy',
+        )
+        config = _data_service__config()
+        config['noise'] = {'name': 'symmetric', 'rate': 0.4, 'seed': 9}
+        protocol = DataProtocol(
+            name='generic-tabular',
+            transform_identity='identity-v1',
+            options={'normalization': 'none'},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            prepared = prepare_experiment_data(
+                config,
+                requirements=requirements,
+                data_protocol=protocol,
+                run_dir=directory,
+                seed=9,
+            )
+            self.assertEqual(prepared.protocol, protocol)
+            self.assertEqual(prepared.input_spec.modality, 'tabular')
+            self.assertEqual(prepared.input_spec.shape, (4,))
+            self.assertEqual(prepared.input_spec.feature_dim, 4)
+            self.assertIsNone(prepared.input_spec.channels)
+            self.assertEqual(
+                prepared.available_roles,
+                frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
+            )
+            validation_batch = next(iter(prepared.validation_loader()))
+            self.assertEqual(set(validation_batch), {'input', 'target', 'index'})
+            descriptor = prepared.noise_descriptor
+            self.assertEqual(descriptor.noise_type, 'symmetric')
+            self.assertEqual(descriptor.nominal_rate, 0.4)
+            self.assertAlmostEqual(descriptor.realized_rate, prepared.manifest.actual_rate)
+            self.assertEqual(descriptor.mapping_hash, prepared.manifest.mapping_hash)
+            self.assertFalse(descriptor.transition_matrix.flags.writeable)
+            self.assertFalse(hasattr(descriptor, 'clean_targets'))
+            persisted = json.loads((Path(directory) / 'data_manifest.json').read_text(encoding='utf-8'))
+            self.assertEqual(persisted['data_protocol'], protocol.to_dict())
+
+    def test_data_protocol_identity_and_validation_role_fail_closed(self) -> None:
+        requirements = DataRequirements(roles=frozenset({DataRole.TRAIN, DataRole.TEST}))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = prepare_experiment_data(
+                _data_service__config(),
+                requirements=requirements,
+                data_protocol=DataProtocol(name='generic', transform_identity='identity-v1'),
+                run_dir=root / 'first',
+                seed=9,
+            )
+            second = prepare_experiment_data(
+                _data_service__config(),
+                requirements=requirements,
+                data_protocol=DataProtocol(name='official', transform_identity='paper-v1'),
+                run_dir=root / 'second',
+                seed=9,
+            )
+            self.assertNotEqual(first.data_fingerprint, second.data_fingerprint)
+            with self.assertRaisesRegex(KeyError, 'validation role'):
+                first.validation_loader()
+        self.assertEqual(DataRole.UNLABELED.value, 'unlabeled')
+        self.assertEqual(DataRole.CURRICULUM.value, 'curriculum')
+
+    def test_test_split_is_never_promoted_to_clean_validation(self) -> None:
+        requirements = DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.CLEAN_VALIDATION, DataRole.TEST}),
+            validation_targets='clean',
+            needs_noise_manifest=False,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaisesRegex(ValueError, 'clean_validation requires genuine clean targets'):
+                prepare_experiment_data(
+                    {
+                        'data': {'name': 'fixture', 'root': str(root), 'validation_size': 0},
+                        'noise': {'name': 'clean', 'validation_targets': 'clean'},
+                        'loader': {'batch_size': 2, 'num_workers': 0},
+                    },
+                    requirements=requirements,
+                    run_dir=root / 'run',
+                    seed=3,
+                    registry=DatasetRegistry((_data_service__FixtureAdapter(),)),
+                )
+
+    def test_zero_validation_omits_validation_split_and_role(self) -> None:
+        requirements = DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.TEST}),
+            validation_targets='clean',
+            needs_noise_manifest=False,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prepared = prepare_experiment_data(
+                {
+                    'data': {'name': 'derived_validation_fixture', 'root': str(root), 'validation_size': 0},
+                    'noise': {'name': 'clean'},
+                    'loader': {'batch_size': 2, 'num_workers': 0},
+                },
+                requirements=requirements,
+                run_dir=root / 'run',
+                seed=3,
+                registry=DatasetRegistry((_data_service__DerivedValidationFixtureAdapter(),)),
+            )
+            self.assertIsNone(prepared.validation_split)
+            self.assertEqual(prepared.validation_indices.size, 0)
+            self.assertNotIn(DataRole.CLEAN_VALIDATION, prepared.available_roles)
+            manifest = json.loads((root / 'run' / 'data_manifest.json').read_text(encoding='utf-8'))
+            self.assertNotIn('validation', manifest['splits'])
+
+    def test_dataset_neutral_contracts_reject_invalid_values(self) -> None:
+        with self.assertRaisesRegex(ValueError, 'shape dimensions'):
+            InputSpec(modality='image', shape=(3, 0, 32), channels=3)
+        with self.assertRaisesRegex(ValueError, 'nominal_rate'):
+            NoiseDescriptor(noise_type='symmetric', nominal_rate=1.1)
+        with self.assertRaisesRegex(ValueError, 'square'):
+            NoiseDescriptor(noise_type='class_dependent', transition_matrix=np.ones((2, 3)))
+        with self.assertRaisesRegex(ValueError, 'sum to one'):
+            NoiseDescriptor(noise_type='class_dependent', transition_matrix=np.eye(2) * 0.5)
+        with self.assertRaisesRegex(ValueError, 'validation_size'):
+            DataProtocol(validation_size=-1)
 
     def test_official_fashion_idx_enters_unified_service(self) -> None:
         requirements = DataRequirements(roles=frozenset({DataRole.TRAIN, DataRole.TEST}))
@@ -836,7 +1006,11 @@ class _dataset_training_fixtures_DatasetTrainingFixturesTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             _dataset_training_fixtures__write_animal10n(root)
-            self._assert_trained(_dataset_training_fixtures__image_config('animal10n', root), root / 'run')
+            config = _dataset_training_fixtures__image_config('animal10n', root)
+            # Animal-10N exposes noisy train labels and no clean validation
+            # split; clean baseline must fail rather than promote TEST.
+            with self.assertRaisesRegex(ValueError, 'clean_validation requires genuine clean targets'):
+                ExperimentService().run(config, root / 'run')
 
     def test_official_uci_heart_whitespace_rows_train_one_epoch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -34,6 +34,7 @@ from lnl_toolbox.training.checkpoint import (
 from lnl_toolbox.training.experiment import (
     _environment,
     _resolved_noise_config,
+    bind_model_input,
     build_model,
     build_optimizer,
     build_scheduler,
@@ -212,9 +213,10 @@ def run_volminnet_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    requirements: DataRequirements | None = None,
 ) -> Path:
     config = deepcopy(config)
-    method_config = VolMinNetConfig.from_mapping(config)
     seed = int(config.get("seed", 1))
     epochs = int(config["trainer"]["epochs"])
     seed_everything(seed)
@@ -235,32 +237,35 @@ def run_volminnet_experiment(
         resume_payload = read_checkpoint(resume, "cpu")
         if resume_payload.get("method") != "volminnet" or resume_payload.get("checkpoint_role") != "run_state":
             raise ValueError("Only a VolMinNet last.pt checkpoint may be resumed")
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+
+        requirements = resolve_data_requirements(config, expected_runner="volminnet")
+
+    prepared = prepare_experiment_data(
+        config,
+        requirements=requirements,
+        run_dir=run_dir,
+        seed=seed,
+        checkpoint_payload=resume_payload,
+    )
+    dataset_name, num_classes = prepared.dataset, prepared.num_classes
+    config["data"].setdefault("num_classes", num_classes)
+    method_config = VolMinNetConfig.from_mapping(config)
+    if resume_payload is not None:
         saved_config = resume_payload.get("config")
         if not isinstance(saved_config, Mapping):
             raise ValueError("VolMinNet checkpoint resolved config is missing")
         _validate_resume_config(config, saved_config)
         if resume_payload.get("config_identity_hash") != _stable_hash(_resume_identity(config)):
             raise ValueError("VolMinNet checkpoint config identity hash mismatch")
-
-    data_config = config["data"]
-    prepared = prepare_experiment_data(
-        config,
-        requirements=DataRequirements(
-            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
-            validation_targets="noisy",
-        ),
-        run_dir=run_dir,
-        seed=seed,
-        checkpoint_payload=resume_payload,
-    )
-    dataset_name, num_classes = prepared.dataset, prepared.num_classes
     manifest, manifest_path = prepared.manifest, prepared.manifest_path
     if manifest is None or manifest_path is None:
         raise ValueError("VolMinNet requires noisy train and validation labels")
     validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False, stream=20)
     test_loader = prepared.loader(DataRole.TEST, shuffle=False, stream=21)
     effective_rate = effective_subset_actual_rate(manifest, prepared.train_indices)
-    effective_validation_rate = effective_subset_actual_rate(manifest, prepared.validation_indices)
+    effective_validation_rate = prepared.realized_noise_rate(DataRole.NOISY_VALIDATION)
     noise_metadata = checkpoint_noise_metadata(
         manifest,
         manifest_path,
@@ -274,7 +279,7 @@ def run_volminnet_experiment(
         raise ValueError("VolMinNet resume noise provenance changed")
     config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
 
-    model_config = config["volminnet"]["model"]
+    model_config = bind_model_input(config["volminnet"]["model"], prepared.input_spec)
     model = build_model(model_config, num_classes)
     transition = VolMinTransition(num_classes)
     classifier_optimizer = build_optimizer(model, method_config.classifier_optimizer)

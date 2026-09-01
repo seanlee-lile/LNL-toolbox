@@ -36,6 +36,14 @@ class QuickStartAssetsTests(unittest.TestCase):
         self.assertIn('payload.status === "already_registered"', script)
         self.assertIn("qs-required-input", script)
         self.assertIn("window.confirm", script)
+        self.assertIn("loadingMarkup", script)
+        self.assertIn("请勿重复点击", script)
+        self.assertIn("finally(endLoading)", script)
+        self.assertIn("item.key === state.noiseSelection.key", script)
+        self.assertIn('qs-rate")?.addEventListener("change", updateNoise)', script)
+        self.assertIn('qs-seed")?.addEventListener("change", updateNoise)', script)
+        self.assertIn('disabled aria-disabled="true"', script)
+        self.assertIn('["ready", "needs_input"].includes(item.status)', script)
         self.assertIn("训练轮次", (ROOT / "src" / "lnl_toolbox" / "quickstart" / "service.py").read_text(encoding="utf-8"))
 
 

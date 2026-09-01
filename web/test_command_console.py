@@ -1145,11 +1145,10 @@ class CommandConsoleTest(unittest.TestCase):
             command_console.build_command("not-allowed")
 
     def test_free_command_is_parsed_without_shell(self):
-        with mock.patch.object(command_console.shutil, "which", return_value="lnl"):
-            command = command_console.parse_free_command(
-                'lnl run --recipe "cifar10-clean-smoke" --epochs 1'
-            )
-        self.assertEqual(command[0], "lnl")
+        command = command_console.parse_free_command(
+            'lnl run --recipe "cifar10-clean-smoke" --epochs 1'
+        )
+        self.assertEqual(command[:3], [sys.executable, "-m", "lnl_toolbox.cli.main"])
         self.assertIn("--epochs", command)
         self.assertIn("1", command)
 
@@ -1158,19 +1157,22 @@ class CommandConsoleTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 command_console.parse_free_command(raw)
 
-    def test_fallback_command_uses_current_python(self):
-        with mock.patch.object(command_console.shutil, "which", return_value=None):
-            self.assertEqual(
-                command_console.resolve_lnl_command(),
-                [sys.executable, "-m", "lnl_toolbox.cli.main"],
-            )
+    def test_command_always_uses_current_python(self):
+        self.assertEqual(
+            command_console.resolve_lnl_command(),
+            [sys.executable, "-m", "lnl_toolbox.cli.main"],
+        )
 
     def test_command_builder_does_not_use_shell(self):
-        with mock.patch.object(command_console.shutil, "which", return_value="lnl"):
-            command = command_console.build_command("train-one")
-        self.assertEqual(command[:1], ["lnl"])
+        command = command_console.build_command("train-one")
+        self.assertEqual(command[:3], [sys.executable, "-m", "lnl_toolbox.cli.main"])
         self.assertIn("--epochs", command)
         self.assertIn("1", command)
+
+    def test_job_error_is_rendered_in_web_output(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn('output + "\\n\\n启动错误：" + job.error', page)
+        self.assertIn('job.structured != null && !job.error', page)
 
     def test_job_payload_is_json_serializable(self):
         job = command_console.Job(
@@ -1276,8 +1278,19 @@ class CommandConsoleTest(unittest.TestCase):
         with command_console.JOBS_LOCK:
             command_console.JOBS[job.job_id] = job
         try:
-            result = command_console.cancel_job(job.job_id)
-            process.terminate.assert_called_once_with()
+            with mock.patch.object(command_console.subprocess, "run") as taskkill:
+                result = command_console.cancel_job(job.job_id)
+            if command_console.os.name == "nt":
+                taskkill.assert_called_once_with(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=command_console.subprocess.DEVNULL,
+                    stderr=command_console.subprocess.DEVNULL,
+                    check=False,
+                )
+                process.terminate.assert_not_called()
+            else:
+                taskkill.assert_not_called()
+                process.terminate.assert_called_once_with()
             self.assertTrue(result.cancel_requested)
         finally:
             with command_console.JOBS_LOCK:

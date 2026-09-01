@@ -186,7 +186,7 @@ class _noise_NoiseTest(unittest.TestCase):
         self.assertIs(manifest.validate_for(self.labels, 'CIFAR-10', 10), manifest)
         with self.assertRaisesRegex(ValueError, 'dataset'):
             manifest.validate_for(self.labels, 'cifar100', 10)
-        with self.assertRaisesRegex(ValueError, 'length'):
+        with self.assertRaisesRegex(ValueError, 'index.*outside.*namespace'):
             manifest.validate_for(self.labels[:-1], 'cifar10', 10)
         shifted = np.roll(self.labels, 1)
         with self.assertRaisesRegex(ValueError, 'fingerprint'):

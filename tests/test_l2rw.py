@@ -5,6 +5,9 @@ from __future__ import annotations
 from copy import deepcopy
 
 # --- merged from test_l2rw.py ---
+import json
+
+# --- merged from test_l2rw.py ---
 import unittest
 
 # --- merged from test_l2rw.py ---
@@ -130,8 +133,10 @@ class _l2rw_training_L2RWTrainingTest(unittest.TestCase):
         torch.testing.assert_close(actual, expected)
 
     def test_official_preprocessing_maps_zero_and_max_pixels_to_minus_one_and_one(self) -> None:
+        import pickle
         from PIL import Image
         transform = _official_l2rw_transform(False, False)
+        pickle.loads(pickle.dumps(transform))
         np.testing.assert_allclose(transform(Image.fromarray(np.zeros((32, 32, 3), dtype=np.uint8))).numpy(), -1.0)
         np.testing.assert_allclose(transform(Image.fromarray(np.full((32, 32, 3), 255, dtype=np.uint8))).numpy(), 1.0)
 
@@ -215,9 +220,16 @@ class _l2rw_training_L2RWTrainingTest(unittest.TestCase):
 
     def test_smoke_and_completed_resume(self) -> None:
         config = yaml.safe_load((_l2rw_training_ROOT / 'configs/experiment/l2rw_cifar10_smoke.yaml').read_text(encoding='utf-8'))
+        config['trainer']['epochs'] = 2
         with tempfile.TemporaryDirectory() as directory:
             run_dir = run_experiment(config, Path(directory) / 'run')
             checkpoint = run_dir / 'last.pt'
             self.assertTrue(checkpoint.is_file())
             self.assertTrue((run_dir / 'trusted_validation_manifest.npz').is_file())
+            rows = [json.loads(line) for line in (run_dir / 'metrics.jsonl').read_text().splitlines()]
+            self.assertEqual([row['event'] for row in rows], ['epoch', 'epoch', 'final'])
+            self.assertTrue(all(not {'test_loss', 'test_accuracy'}.intersection(row) for row in rows[:2]))
+            self.assertIn('test_accuracy', rows[-1])
             self.assertEqual(run_experiment(config, resume=checkpoint), run_dir)
+            resumed = [json.loads(line) for line in (run_dir / 'metrics.jsonl').read_text().splitlines()]
+            self.assertEqual([row['event'] for row in resumed], ['epoch', 'epoch', 'final'])

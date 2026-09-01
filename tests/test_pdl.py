@@ -45,9 +45,19 @@ from lnl_toolbox.training.snapshots import FeatureSnapshot
 
 # --- merged from test_pdl.py ---
 from lnl_toolbox.training.instance_transition_experiment import _official_pdl_split, _pdl_official_raw_features
+from lnl_toolbox.training.runners import is_official_pdl_config
 
 # --- merged from test_pdl.py ---
 class _pdl_PDLTest(unittest.TestCase):
+
+    def test_official_variant_predicate_is_shared_by_requirement_and_runner(self) -> None:
+        self.assertTrue(is_official_pdl_config({
+            'algorithm': {'correction': 'pdl'},
+        }))
+        self.assertTrue(is_official_pdl_config({'phases': {'warmup': 1}}))
+        self.assertFalse(is_official_pdl_config({
+            'algorithm': {'correction': 'forward'},
+        }))
 
     def test_revision_projects_negative_entries_to_zero(self) -> None:
         actual = _row_positive_normalize(

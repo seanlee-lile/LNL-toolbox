@@ -6,7 +6,11 @@ import unittest
 
 import numpy as np
 
-from lnl_toolbox.data.contracts import DataSpec, RawDatasetSplit
+from lnl_toolbox.data.contracts import (
+    DataSpec,
+    RawDatasetSplit,
+    UnsupportedDatasetSplitError,
+)
 from lnl_toolbox.data.local_catalog import LocalDatasetCatalog
 from lnl_toolbox.data.profile import (
     DatasetSemanticHints,
@@ -36,7 +40,7 @@ class _Adapter:
         if self.fail:
             raise RuntimeError("fixture load failed")
         if split == "validation":
-            raise ValueError("split must be train or test")
+            raise UnsupportedDatasetSplitError("split must be train or test")
         count = 20 if split == "train" else 10
         labels = np.arange(count, dtype=np.int64) % 2
         return RawDatasetSplit(
