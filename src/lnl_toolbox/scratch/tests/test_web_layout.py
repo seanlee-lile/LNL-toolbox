@@ -15,7 +15,8 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
         self.assertLess(html.index('id="module-explanation"'), html.index('id="inspector"'))
 
         css = (WEB_ROOT / "scratch.css").read_text(encoding="utf-8")
-        self.assertIn(".inspector { display: flex; flex-direction: column;", css)
+        self.assertIn(".inspector {", css)
+        self.assertIn("display: flex; flex-direction: column;", css)
         self.assertIn("#inspector { flex: 1 1 auto;", css)
         self.assertIn("overflow: auto", css)
 
@@ -51,40 +52,71 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
         self.assertIn('id="my-formulas"', html)
         self.assertIn('id="formula-editor-dialog"', html)
         self.assertIn('id="formula-editor-binding-fields"', html)
+        self.assertIn('id="formula-editor-current-preview"', html)
         self.assertNotIn('id="formula-editor-bindings"', html)
         self.assertIn('id="formula-editor-block"', html)
         self.assertIn('id="formula-editor-save"', html)
         self.assertIn("data-formula-binding", javascript)
+        self.assertIn('id="formula-dialog"', html)
+        self.assertIn("<h2>快速插入运算</h2>", html)
+        self.assertNotIn("<h2>Batch 公式组合器</h2>", html)
+        self.assertIn("function renderNestedFormulaPreview", javascript)
+        self.assertIn("function formatFormulaCall", javascript)
+        self.assertIn("function renderMathFormula", javascript)
+        self.assertIn("const MATH_NS", javascript)
+        self.assertIn("renderMathFormula(formulaText", javascript)
+        self.assertIn("renderFormulaPreview", javascript)
+        self.assertIn("formula-chain-step", javascript)
+        self.assertIn("formula-palette-formula", javascript)
 
     def test_inspector_and_main_columns_are_viewport_bounded(self) -> None:
         css = (WEB_ROOT / "scratch.css").read_text(encoding="utf-8")
-        self.assertIn("height: calc(100vh - 58px)", css)
-        self.assertIn(".inspector > h2 { position: sticky", css)
+        self.assertIn("height: calc(100vh - 64px)", css)
+        self.assertIn(".inspector-tabs { position: sticky", css)
         self.assertIn(".module-explanation { position: sticky", css)
 
-    def test_workflow_guide_onboarding_and_result_panel_are_present(self) -> None:
+    def test_scratch_toolbar_onboarding_and_result_panel_are_present(self) -> None:
         html = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
         for marker in (
-            'id="workflow-guide"', 'data-workflow="data"', 'data-workflow="result"',
-            'id="first-use-guide"', 'id="open-tutorial"', 'id="onboarding-dialog"',
+            'id="category-rail"', 'id="new-menu"', 'id="new-single"',
+            'id="empty-onboarding"', 'id="onboarding-dialog"',
+            'data-inspector-tab="blocks"', 'data-inspector-tab="run"',
             'id="result-panel"', 'id="result-status"', 'id="result-metrics"',
             'id="result-artifacts"', 'id="result-details"', 'id="output"',
+            'id="run-guidance"', 'class="preflight-guide"',
+            'id="stop-run"', 'id="refresh-run"', 'id="run-progress"',
+            'id="progress-bar"', 'id="progress-stage"',
         ):
             self.assertIn(marker, html)
 
         javascript = (WEB_ROOT / "scratch.js").read_text(encoding="utf-8")
         for marker in (
-            "function updateWorkflowGuide()", "function renderRunResult(result)",
+            "function setInspectorTab(tab = 'blocks')", "function renderRunResult(result)",
             "setResultState('运行中…')", "renderRunResult(result)",
-            "$('result-metrics')", "localStorage.setItem('lnl-scratch-first-use-guide-dismissed'",
+            "function pollRunJob(jobId)", "async function stopRun()", "renderRunProgress(job)",
+            "$('result-metrics')", "function detectCompositeRanges(steps)",
+            "function applySkeleton(kind)", "await validateCurrentRecipe()",
+            "function datasetReadiness()", "function guideForError(error)",
+            "function renderGuidance()", "function focusDatasetSource()",
+            "function chooseSyntheticDataset()", "当前状态：${facts.status || 'unknown'}",
+            "USABLE_DATASET_STATUSES", "datasetIsUsable(item)",
+            "name: '全部'", "state.paletteCategory === '全部'", "color: '#84cc16'",
+            "async function refreshDatasets",
         ):
             self.assertIn(marker, javascript)
 
         css = (WEB_ROOT / "scratch.css").read_text(encoding="utf-8")
-        self.assertIn(".workflow-guide", css)
-        self.assertIn(".first-use-guide", css)
+        self.assertIn(".category-rail", css)
+        self.assertIn('.category-rail button[data-category="全部"]', css)
+        self.assertIn(".dataset-refresh", css)
+        self.assertIn(".composite-block", css)
         self.assertIn(".result-panel", css)
-        self.assertIn(".workflow-step.active", css)
+        self.assertIn(".run-progress", css)
+        self.assertIn(".run-controls", css)
+        self.assertIn(".run-button", css)
+        self.assertIn(".math-rendered math", css)
+        self.assertIn(".formula-chain-step", css)
+        self.assertIn(".formula-editor-current-preview", css)
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@ steps:
   - {block: create_model_ema, params: {model: model, momentum: 0.95, update_buffers: false, save_as: fine_ema}}
   - {block: create_optimizer, params: {optimizer: sgd, model: model, lr: 0.1, momentum: 0.9, nesterov: true, weight_decay: 0.0005, save_as: optimizer}}
   - {block: create_scheduler, params: {scheduler: cosine, optimizer: optimizer, t_max: 100, eta_min: 0.0005, save_as: scheduler}}
-  - {block: create_fine_state, params: {model: model, ema_model: fine_ema, prepared_data: prepared_data, num_classes: 100, ema_momentum: 0.95, momentum_scs: 0.999, momentum_scr: 0.99, maximum_threshold: 0.95, beta: 0.1, gamma: 0.002, probability_floor: 0.0000001, seed: 23, save_as: fine_state}}
+  - {block: create_fine_state, params: {model: model, ema_model: fine_ema, prepared_data: prepared_data, num_classes: 100, ema_momentum: 0.95, momentum_scs: 0.999, momentum_scr: 0.99, quantile: 0.8, maximum_threshold: 0.95, beta: 0.1, gamma: 0.002, probability_floor: 0.0000001, seed: 23, save_as: fine_state}}
   - block: epoch_loop
     params: {epochs: 300}
     steps:

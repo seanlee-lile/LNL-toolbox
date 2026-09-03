@@ -149,14 +149,9 @@ def build_cifar_transform(
 ) -> Callable[[Image.Image], torch.Tensor]:
     preprocessing = str(preprocessing).strip().lower()
     if preprocessing == "tensor_only":
-        operations: list[Any] = [transforms.ToTensor()]
-        if training and augment:
-            operations.extend((
-                transforms.Pad(4),
-                transforms.RandomCrop(32),
-                transforms.RandomHorizontalFlip(),
-            ))
-        return transforms.Compose(operations)
+        if augment:
+            raise ValueError("tensor_only preprocessing does not support augmentation")
+        return transforms.Compose((transforms.ToTensor(),))
     if preprocessing == "gce2018":
         if pixel_mean is None or tuple(pixel_mean.shape) != (3, 32, 32):
             raise ValueError(

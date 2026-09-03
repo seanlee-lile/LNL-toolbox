@@ -3,7 +3,7 @@ import unittest
 import torch
 
 from lnl_toolbox.scratch import ScratchContext
-from lnl_toolbox.scratch.formula import execute_formula, get_formula, register_formula, unregister_formula
+from lnl_toolbox.scratch.formula import execute_formula, get_formula, merge_formula_provenance, register_formula, unregister_formula
 
 
 class FormulaRuntimeTest(unittest.TestCase):
@@ -74,3 +74,9 @@ class FormulaRuntimeTest(unittest.TestCase):
         finally:
             unregister_formula("user/provenance_outer")
             unregister_formula("user/provenance_inner")
+
+    def test_merge_formula_provenance_deduplicates_by_id_and_hash(self):
+        first = {"formula_id": "user/a", "formula_hash": "hash-a", "formula_snapshot": {"name": "A"}}
+        second = {"formula_id": "user/b", "formula_hash": "hash-b", "formula_snapshot": {"name": "B"}}
+        merged = merge_formula_provenance([first], [first, second])
+        self.assertEqual([item["formula_id"] for item in merged], ["user/a", "user/b"])

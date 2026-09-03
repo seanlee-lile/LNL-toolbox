@@ -86,7 +86,7 @@ steps:
       iterations: 10
       error_tolerance: 1.0e-5
       representation_seed: 1
-      official_raw: true
+      seed_policy: stochastic
   - block: classwise_percentile_anchor_candidates
     params:
       scores: pdl_train_posteriors

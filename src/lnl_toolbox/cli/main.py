@@ -22,6 +22,7 @@ from lnl_toolbox.catalog import (
     recipe_by_id,
     resolve_config_paths,
     load_recipe_config,
+    mentornet_preparation_status,
     select_paper_config,
     validate_config,
 )
@@ -195,6 +196,28 @@ def build_parser() -> argparse.ArgumentParser:
     data_verify.add_argument("--recipe")
     data_verify.add_argument("--output-dir", type=Path)
     data_verify.add_argument("--project-root", type=Path)
+
+    mentor = sub.add_parser(
+        "mentor", help="prepare and inspect the offline MentorNet artifact"
+    )
+    mentor_sub = mentor.add_subparsers(dest="mentor_command", required=True)
+    mentor_status = mentor_sub.add_parser(
+        "status", help="show MentorArtifact readiness for a Student recipe"
+    )
+    mentor_status.add_argument("--recipe", required=True)
+    mentor_status.add_argument("--project-root", type=Path)
+    mentor_prepare = mentor_sub.add_parser(
+        "prepare", help="prepare trusted Mentor feature records"
+    )
+    mentor_prepare.add_argument("--config", type=Path, required=True)
+    mentor_prepare.add_argument("--output-dir", type=Path, required=True)
+    mentor_prepare.add_argument("--project-root", type=Path)
+    mentor_train = mentor_sub.add_parser(
+        "train", help="train and freeze a reusable MentorArtifact"
+    )
+    mentor_train.add_argument("--config", type=Path, required=True)
+    mentor_train.add_argument("--output", type=Path, required=True)
+    mentor_train.add_argument("--project-root", type=Path)
 
     methods = sub.add_parser("methods", help="discover dataset/method compatibility")
     methods_sub = methods.add_subparsers(dest="methods_command", required=True)
@@ -1328,6 +1351,66 @@ def _methods_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _mentor_command(args: argparse.Namespace) -> int:
+    root = find_project_root(None, args.project_root)
+    if args.mentor_command == "status":
+        recipe = recipe_by_id(args.recipe, root)
+        config = resolve_config_paths(load_recipe_config(recipe), root)
+        status = mentornet_preparation_status(
+            config, root, student_recipe=recipe.id
+        )
+        if status is None:
+            raise ValueError(f"recipe {recipe.id!r} is not a MentorNet workflow")
+        print(f"MentorArtifact: {str(status['status']).upper()}")
+        print(f"  artifact: {status['artifact_path']}")
+        print(
+            "  artifact validation: "
+            + ("PASS" if status["artifact_ready"] else "NOT READY")
+        )
+        print(
+            "  Mentor features: "
+            + ("READY" if status["feature_ready"] else "NOT READY")
+        )
+        if status["artifact_error"]:
+            print(f"  error: {status['artifact_error']}")
+        for step, command in status["commands"].items():
+            print(f"  {step}: {command}")
+        return 0 if status["artifact_ready"] else 1
+
+    config_path = args.config.expanduser().resolve()
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Mentor configuration does not exist: {config_path}")
+    config = load_yaml(config_path)
+    if args.mentor_command == "prepare":
+        from lnl_toolbox.training.mentor_learning import (
+            prepare_trusted_mentor_features,
+        )
+
+        output_dir = args.output_dir.expanduser()
+        if not output_dir.is_absolute():
+            output_dir = (root / output_dir).resolve()
+        feature_path = prepare_trusted_mentor_features(config, output_dir)
+        print(f"Mentor features: READY")
+        print(feature_path)
+        return 0
+    if args.mentor_command == "train":
+        from lnl_toolbox.training.mentor_learning import train_mentor_artifact
+
+        feature_data = Path(str(config.get("feature_data", ""))).expanduser()
+        if not feature_data.is_absolute():
+            feature_data = (root / feature_data).resolve()
+        config = dict(config)
+        config["feature_data"] = str(feature_data)
+        output = args.output.expanduser()
+        if not output.is_absolute():
+            output = (root / output).resolve()
+        train_mentor_artifact(config, output)
+        print("MentorArtifact: READY")
+        print(output)
+        return 0
+    raise ValueError(f"unknown mentor command: {args.mentor_command}")
+
+
 def _web(args: argparse.Namespace) -> int:
     root = find_project_root(None, args.project_root)
     server = root / "web" / "command_console.py"
@@ -1373,6 +1456,8 @@ def main(argv: list[str] | None = None) -> int:
             return _data_command(args)
         if args.command == "methods":
             return _methods_command(args)
+        if args.command == "mentor":
+            return _mentor_command(args)
         if args.command == "web":
             return _web(args)
         if args.command == "sweep":

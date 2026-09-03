@@ -23,6 +23,7 @@ from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import read_checkpoint
 from lnl_toolbox.training.experiment import (
     _environment,
+    bind_model_input,
     build_model,
     build_optimizer,
     build_scheduler,
@@ -58,6 +59,27 @@ class _PCSEMultilayerPerceptron(nn.Module):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.classifier(self.hidden2(self.hidden1(inputs)))
+
+
+def _build_pcse_pretraining_model(
+    model_config: Mapping[str, Any], input_spec: Any, num_classes: int
+) -> nn.Module:
+    """Build the internal PCSE pretraining model from prepared input facts."""
+
+    bound_model_config = bind_model_input(model_config, input_spec)
+    if str(model_config.get("name", "")).strip().lower() == "pcse_mlp":
+        dimension = input_spec.feature_dim
+        if dimension is None:
+            raise ValueError(
+                "PCSE pcse_mlp pretraining requires tabular input with "
+                "feature_dim"
+            )
+        return _PCSEMultilayerPerceptron(
+            dimension,
+            int(model_config.get("hidden_width", 16)),
+            num_classes,
+        )
+    return build_model(bound_model_config, num_classes)
 
 
 def _resolve_run_dir(
@@ -200,11 +222,16 @@ def run_pcse_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    requirements: DataRequirements | None = None,
 ) -> Path:
     """Run noisy pretraining, estimated transition and PCSE post-processing."""
 
     config = deepcopy(config)
     method_config = PCSEConfig.from_mapping(config)
+    pretraining_stage = dict(config.get("pretraining_stage", {}))
+    pretraining_stage["method"] = method_config.pretraining.method
+    config["pretraining_stage"] = pretraining_stage
     seed = int(config.get("seed", 1))
     seed_everything(seed)
     trainer = config.get("trainer", {})
@@ -222,33 +249,21 @@ def run_pcse_experiment(
     data = config.get("data")
     if not isinstance(data, Mapping):
         raise TypeError("PCSE data configuration must be a mapping")
-    data_name = str(data.get("name", "")).strip().lower()
-    if data_name not in {"synthetic_multiclass", "cifar10"}:
-        raise ValueError("PCSE runner supports synthetic_multiclass and cifar10")
-    num_classes = int(data.get("num_classes", 0))
-    if num_classes < 3:
-        raise ValueError("PCSE requires at least three classes")
     loader = config.get("loader")
     if not isinstance(loader, Mapping):
         raise TypeError("PCSE loader configuration must be a mapping")
     model_config = method_config.pretraining.model
     external_source = None
     source_model = None
-    if data_name == "synthetic_multiclass":
-        if method_config.pretraining.mode != "train":
-            raise ValueError("synthetic PCSE requires pretraining mode train")
-        dimension = int(data.get("dimension", 0))
-        if str(model_config.get("name", "")).strip().lower() != "pcse_mlp":
-            raise ValueError("PCSE synthetic runner requires model name pcse_mlp")
-        model = _PCSEMultilayerPerceptron(
-            dimension, int(model_config.get("hidden_width", 16)), num_classes
-        )
+    model: nn.Module | None = None
+    pretraining_mode = method_config.pretraining.mode
+    if pretraining_mode == "train":
         manifest_mode = "generated"
-    else:
-        if method_config.pretraining.mode != "external_checkpoint":
-            raise ValueError(
-                "PCSE CIFAR-10 requires pretraining mode external_checkpoint"
-            )
+    elif pretraining_mode == "external_checkpoint":
+        data_name = str(data.get("name", "")).strip().lower()
+        num_classes = int(data.get("num_classes", 0))
+        if data_name != "cifar10":
+            raise ValueError("PCSE external UPM source currently requires CIFAR-10")
         if num_classes != 10:
             raise ValueError("PCSE CIFAR-10 requires data.num_classes: 10")
         model = build_model(model_config, num_classes)
@@ -266,17 +281,28 @@ def run_pcse_experiment(
             "validation_targets": "noisy",
         }
         manifest_mode = "external"
+    else:
+        raise ValueError(f"unsupported PCSE pretraining mode: {pretraining_mode}")
 
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        requirements = resolve_data_requirements(config, expected_runner="pcse")
     prepared = prepare_experiment_data(
         config,
-        requirements=DataRequirements(
-            roles=frozenset({DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.NOISY_VALIDATION, DataRole.TEST}),
-            validation_targets="noisy",
-        ),
+        requirements=requirements,
         run_dir=run_dir,
-        seed=seed + 10 if data_name == "synthetic_multiclass" else seed,
+        seed=seed + 10 if pretraining_mode == "train" else seed,
         checkpoint_payload=resume_payload,
     )
+    data_name, num_classes = prepared.dataset, prepared.num_classes
+    if pretraining_mode == "train":
+        model = _build_pcse_pretraining_model(
+            model_config, prepared.input_spec, num_classes
+        )
+    elif num_classes != 10:
+        raise ValueError("PCSE external UPM source class count mismatch")
+    if model is None:
+        raise RuntimeError("PCSE model construction did not complete")
     manifest, manifest_path = prepared.manifest, prepared.manifest_path
     if manifest is None or manifest_path is None:
         raise ValueError("PCSE requires noisy train and validation labels")

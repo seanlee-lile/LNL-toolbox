@@ -29,6 +29,78 @@ def _torch():
     return torch
 
 
+def _is_missing(value: Any) -> bool:
+    return value is None or value == ""
+
+
+def _dataset_catalog_path() -> Path:
+    """Resolve the shared local dataset catalog without importing legacy code."""
+
+    configured = os.environ.get("LNL_DATA_CATALOG")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        return (Path(local) / "lnl-toolbox" / "datasets.json").resolve()
+    return (Path.home() / ".lnl-toolbox" / "datasets.json").resolve()
+
+
+def registered_dataset_catalog() -> dict[str, dict[str, Any]]:
+    """Read the shared registration catalog as plain, runtime-safe metadata.
+
+    Registration is stored as JSON by the data-management page. Reading that
+    file here keeps Scratch independent from the legacy DataService while
+    allowing a selected alias to resolve to its registered adapter/path.
+    """
+
+    path = _dataset_catalog_path()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return {}
+    records = raw.get("datasets") if isinstance(raw, Mapping) else None
+    if not isinstance(records, Mapping):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for alias, value in records.items():
+        if not isinstance(value, Mapping):
+            continue
+        key = str(alias).strip().lower().replace(" ", "-")
+        if not key:
+            continue
+        data = value.get("data", {})
+        data = dict(data) if isinstance(data, Mapping) else {}
+        adapter = str(value.get("adapter") or data.get("name") or "").strip().lower().replace("-", "_")
+        if not adapter:
+            continue
+        profile = value.get("profile")
+        evidence = value.get("evidence")
+        if isinstance(profile, Mapping):
+            if profile.get("num_classes") is not None and _is_missing(data.get("num_classes")):
+                data["num_classes"] = profile["num_classes"]
+            if profile.get("input_shape") is not None and _is_missing(data.get("input_shape")):
+                data["input_shape"] = profile["input_shape"]
+        if isinstance(evidence, Mapping) and evidence.get("classes") is not None and _is_missing(data.get("num_classes")):
+            data["num_classes"] = evidence["classes"]
+        result[key] = {
+            "alias": key,
+            "adapter": adapter,
+            "data": data,
+            "state": str(value.get("state", "registered")),
+            "error": value.get("error"),
+            "profile": profile if isinstance(profile, Mapping) else None,
+            "evidence": evidence if isinstance(evidence, Mapping) else None,
+        }
+    return result
+
+
+def registered_dataset_config(alias: object) -> dict[str, Any] | None:
+    """Return one registered alias and its adapter-backed source config."""
+
+    key = str(alias).strip().lower().replace(" ", "-")
+    return registered_dataset_catalog().get(key)
+
+
 def _as_input(value: Any) -> Any:
     if isinstance(value, Mapping):
         for key in ("input", "inputs", "image", "images", "x"):
@@ -312,13 +384,404 @@ def _synthetic_source(data: Mapping[str, Any], seed: int) -> dict[str, ScratchSp
     return {"train": make(train_size, "train", 0), "test": make(test_size, "test", train_size)}
 
 
+def _registered_uci_source(data: Mapping[str, Any], name: str, seed: int) -> tuple[ScratchSplit, ScratchSplit | None, ScratchSplit]:
+    """Load a registered UCI-style binary file using only Scratch primitives."""
+
+    import numpy as np
+
+    path = data.get("path")
+    if not path:
+        raise ValueError("registered uci_binary requires a file path")
+    preprocessing = data.get("preprocessing", {})
+    preprocessing = dict(preprocessing) if isinstance(preprocessing, Mapping) else {}
+    file_format = str(preprocessing.get("format", "delimited")).lower()
+    delimiter = None if file_format in {"whitespace", "space", "text"} else str(preprocessing.get("delimiter", data.get("delimiter", ",")))
+    raw = np.genfromtxt(
+        str(path), delimiter=delimiter, skip_header=1 if bool(preprocessing.get("has_header", False)) else 0,
+    )
+    if raw.ndim != 2 or raw.shape[0] < 3 or raw.shape[1] < 2 or not np.isfinite(raw).all():
+        raise ValueError("registered uci_binary must contain a finite 2-D feature/label table")
+    target_column = int(preprocessing.get("target_column", data.get("target_column", -1)))
+    target_column = target_column if target_column >= 0 else raw.shape[1] + target_column
+    if not 0 <= target_column < raw.shape[1]:
+        raise ValueError("uci_binary target_column is outside the table")
+    labels = raw[:, target_column].astype(np.int64)
+    unique = np.unique(labels)
+    if unique.size != 2:
+        raise ValueError("registered uci_binary must contain exactly two target classes")
+    labels = np.searchsorted(unique, labels).astype(np.int64)
+    features = np.delete(raw, target_column, axis=1).astype(np.float32)
+    split_cfg = data.get("split", {})
+    split_cfg = dict(split_cfg) if isinstance(split_cfg, Mapping) else {}
+    validation_fraction = float(split_cfg.get("validation_fraction", 0.0))
+    test_fraction = float(split_cfg.get("test_fraction", 0.2))
+    if validation_fraction < 0 or test_fraction < 0 or validation_fraction + test_fraction >= 1:
+        raise ValueError("uci_binary split fractions must be non-negative and sum to less than one")
+    rng = np.random.default_rng(int(split_cfg.get("seed", seed)))
+    groups: dict[str, list[np.ndarray]] = {"train": [], "validation": [], "test": []}
+    for label in np.unique(labels):
+        positions = np.flatnonzero(labels == label)
+        rng.shuffle(positions)
+        validation_count = int(round(len(positions) * validation_fraction))
+        test_count = int(round(len(positions) * test_fraction))
+        if validation_fraction and validation_count == 0:
+            validation_count = 1
+        if test_fraction and test_count == 0:
+            test_count = 1
+        if validation_count + test_count >= len(positions):
+            raise ValueError("uci_binary split fractions leave no training samples")
+        groups["validation"].append(positions[:validation_count])
+        groups["test"].append(positions[validation_count:validation_count + test_count])
+        groups["train"].append(positions[validation_count + test_count:])
+    indices_by_split = {
+        split: np.sort(np.concatenate(parts)).astype(np.int64, copy=False)
+        for split, parts in groups.items()
+    }
+    if bool(preprocessing.get("standardize", False)):
+        train_values = features[indices_by_split["train"]]
+        mean, std = train_values.mean(axis=0), train_values.std(axis=0)
+        std[std == 0] = 1.0
+        features = (features - mean) / std
+    def make(split: str) -> ScratchSplit:
+        positions = indices_by_split[split]
+        return ScratchSplit(name, split, tuple(
+            ScratchSample(_torch().as_tensor(features[position], dtype=_torch().float32), int(position), int(labels[position]), int(labels[position]))
+            for position in positions
+        ), 2)
+    return make("train"), make("validation"), make("test")
+
+
+_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+
+def _registered_cifar_source(data: Mapping[str, Any], name: str, adapter_name: str) -> tuple[ScratchSplit, ScratchSplit | None, ScratchSplit] | None:
+    """Read extracted CIFAR files directly from a registered local root.
+
+    The data-registration page accepts both the torchvision download layout
+    and the official extracted layout (``data_batch_1``/``test_batch``).  The
+    latter is deliberately handled here instead of relying on torchvision's
+    directory convention so a registered path is usable as-is.
+    """
+
+    import pickle
+    import numpy as np
+
+    root_value = data.get("root") or data.get("path")
+    if not root_value:
+        return None
+    root = Path(str(root_value)).expanduser()
+    base_name = "cifar100" if adapter_name in {"cifar100", "cifar100n"} else "cifar10"
+    candidates = [root]
+    if base_name == "cifar10":
+        candidates.append(root / "cifar-10-batches-py")
+    else:
+        candidates.append(root / "cifar-100-python")
+    layout = next((candidate for candidate in candidates if candidate.is_dir()), None)
+    if layout is None:
+        return None
+
+    def read(path: Path) -> Mapping[Any, Any]:
+        if not path.is_file():
+            raise FileNotFoundError(f"missing CIFAR file: {path}")
+        with path.open("rb") as handle:
+            value = pickle.load(handle, encoding="bytes")
+        if not isinstance(value, Mapping):
+            raise ValueError(f"CIFAR file must contain a mapping: {path}")
+        return value
+
+    def value(record: Mapping[Any, Any], key: str) -> Any:
+        if key in record:
+            return record[key]
+        encoded = key.encode()
+        if encoded in record:
+            return record[encoded]
+        raise KeyError(f"CIFAR file is missing {key!r}")
+
+    def split_arrays(split: str) -> tuple[np.ndarray, np.ndarray]:
+        if base_name == "cifar10":
+            files = [layout / f"data_batch_{index}" for index in range(1, 6)] if split == "train" else [layout / "test_batch"]
+            records = [read(path) for path in files]
+            images = np.concatenate([np.asarray(value(record, "data"), dtype=np.uint8) for record in records])
+            labels = np.concatenate([np.asarray(value(record, "labels"), dtype=np.int64) for record in records])
+        else:
+            record = read(layout / split)
+            images = np.asarray(value(record, "data"), dtype=np.uint8)
+            labels = np.asarray(value(record, "fine_labels"), dtype=np.int64)
+        if images.ndim != 2 or images.shape[1] != 3072 or labels.shape != (images.shape[0],):
+            raise ValueError(f"invalid {base_name} {split} payload under {layout}")
+        images = images.reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1).copy()
+        return images, labels
+
+    train_inputs, train_labels = split_arrays("train")
+    test_inputs, test_labels = split_arrays("test")
+    classes = 100 if base_name == "cifar100" else 10
+    def make(split: str, inputs: np.ndarray, labels: np.ndarray, clean: Any | None = None) -> ScratchSplit:
+        clean_values = labels if clean is None else clean
+        samples = tuple(ScratchSample(inputs[index], index, int(labels[index]), int(clean_values[index]))
+                        for index in range(labels.size))
+        return ScratchSplit(name, split, samples, classes)
+
+    train = make("train", train_inputs, train_labels)
+    test = make("test", test_inputs, test_labels)
+    if adapter_name in {"cifar10n", "cifar100n"}:
+        noise_path = data.get("noise_path") or data.get("labels_path")
+        if not noise_path:
+            raise ValueError(f"registered {adapter_name} requires noise_path/labels_path")
+        labels_payload = _load_external_payload(Path(str(noise_path)))
+        variant = str(data.get("noise_variant", "aggre_label" if adapter_name == "cifar10n" else "noisy_label"))
+        if "clean_label" not in labels_payload or variant not in labels_payload:
+            raise KeyError(f"{adapter_name} labels must contain 'clean_label' and {variant!r}")
+        noisy = _torch().as_tensor(labels_payload[variant], dtype=_torch().long)
+        clean = _torch().as_tensor(labels_payload["clean_label"], dtype=_torch().long)
+        if noisy.numel() != len(train.samples) or clean.numel() != len(train.samples):
+            raise ValueError(f"{adapter_name} labels must align with the full training split")
+        train = ScratchSplit(name, "train", tuple(
+            ScratchSample(sample.input, sample.index, int(noisy[index]), int(clean[index]))
+            for index, sample in enumerate(train.samples)
+        ), classes)
+    return train, None, test
+
+
+def _registered_mnist_source(data: Mapping[str, Any], name: str, adapter_name: str) -> tuple[ScratchSplit, ScratchSplit | None, ScratchSplit] | None:
+    """Read official MNIST/Fashion-MNIST IDX files from a registered root."""
+
+    import gzip
+    import struct
+    import numpy as np
+
+    root_value = data.get("root") or data.get("path")
+    if not root_value:
+        return None
+    root = Path(str(root_value)).expanduser()
+    directory_name = "FashionMNIST" if adapter_name == "fashion_mnist" else "MNIST"
+    directories = (root, root / "raw", root / directory_name / "raw")
+
+    def find_pair(split: str) -> tuple[Path, Path] | None:
+        prefix = "train" if split == "train" else "t10k"
+        names = (f"{prefix}-images-idx3-ubyte", f"{prefix}-labels-idx1-ubyte")
+        for directory in directories:
+            for suffix in ("", ".gz"):
+                pair = (directory / f"{names[0]}{suffix}", directory / f"{names[1]}{suffix}")
+                if all(path.is_file() for path in pair):
+                    return pair
+        return None
+
+    def read_bytes(path: Path) -> bytes:
+        return gzip.open(path, "rb").read() if path.suffix.lower() == ".gz" else path.read_bytes()
+
+    def read_split(split: str) -> tuple[np.ndarray, np.ndarray] | None:
+        pair = find_pair(split)
+        if pair is None:
+            return None
+        image_payload, label_payload = read_bytes(pair[0]), read_bytes(pair[1])
+        if len(image_payload) < 16 or len(label_payload) < 8:
+            raise ValueError(f"{adapter_name} IDX files are truncated under {root}")
+        image_magic, count, rows, columns = struct.unpack(">IIII", image_payload[:16])
+        label_magic, label_count = struct.unpack(">II", label_payload[:8])
+        if image_magic != 2051 or label_magic != 2049 or count != label_count or rows != 28 or columns != 28:
+            raise ValueError(f"{adapter_name} IDX dimensions or magic numbers are invalid")
+        if len(image_payload) != 16 + count * rows * columns or len(label_payload) != 8 + count:
+            raise ValueError(f"{adapter_name} IDX payload lengths are invalid")
+        images = np.frombuffer(image_payload, dtype=np.uint8, offset=16).reshape(count, rows, columns).copy()
+        labels = np.frombuffer(label_payload, dtype=np.uint8, offset=8).astype(np.int64, copy=True)
+        if labels.size and labels.max() >= 10:
+            raise ValueError(f"{adapter_name} labels are outside the class range")
+        return images, labels
+
+    train_values, test_values = read_split("train"), read_split("test")
+    if train_values is None or test_values is None:
+        return None
+    def make(split: str, values: tuple[np.ndarray, np.ndarray]) -> ScratchSplit:
+        images, labels = values
+        return ScratchSplit(name, split, tuple(
+            ScratchSample(images[index], index, int(labels[index]), int(labels[index]))
+            for index in range(labels.size)
+        ), 10)
+    return make("train", train_values), None, make("test", test_values)
+
+
+def _registered_clothing_source(data: Mapping[str, Any], name: str) -> tuple[ScratchSplit, ScratchSplit | None, ScratchSplit]:
+    """Load the key-list/label-map layout used by registered Clothing1M data."""
+
+    root_value = data.get("root") or data.get("path")
+    if not root_value:
+        raise ValueError("registered clothing1m requires a dataset root")
+    root = Path(str(root_value)).expanduser()
+    manifests = {
+        "train": data.get("train_manifest", "noisy_train_key_list.txt"),
+        "validation": data.get("validation_manifest", "clean_val_key_list.txt"),
+        "test": data.get("test_manifest", "clean_test_key_list.txt"),
+    }
+    labels = {
+        "train": data.get("train_labels", data.get("noisy_labels", "noisy_label_kv.txt")),
+        "validation": data.get("validation_labels", data.get("clean_labels", "clean_label_kv.txt")),
+        "test": data.get("test_labels", data.get("clean_labels", "clean_label_kv.txt")),
+    }
+
+    def resolve(value: Any) -> Path:
+        path = Path(str(value))
+        return path if path.is_absolute() else root / path
+
+    def read_split(split: str) -> ScratchSplit:
+        manifest_path, label_path = resolve(manifests[split]), resolve(labels[split])
+        if not manifest_path.is_file() or not label_path.is_file():
+            raise FileNotFoundError(
+                f"clothing1m {split} requires key list and label map under {root}"
+            )
+        keys = [line.strip().replace("\\", "/").removeprefix("./")
+                for line in manifest_path.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.lstrip().startswith("#")]
+        if not keys or len(keys) != len(set(keys)):
+            raise ValueError(f"clothing1m {split} key list must be non-empty and unique")
+        mapping: dict[str, int] = {}
+        for line_number, line in enumerate(label_path.read_text(encoding="utf-8").splitlines(), 1):
+            value = line.strip()
+            if not value or value.startswith("#"):
+                continue
+            try:
+                key, label = value.rsplit(maxsplit=1)
+                key = key.replace("\\", "/").removeprefix("./")
+                label = int(label)
+            except (ValueError, TypeError) as exc:
+                raise ValueError(f"invalid clothing1m label row {label_path}:{line_number}") from exc
+            if not 0 <= label < 14:
+                raise ValueError(f"clothing1m label outside [0, 14) at {label_path}:{line_number}")
+            if key in mapping:
+                raise ValueError(f"duplicate clothing1m image label at {label_path}:{line_number}")
+            mapping[key] = label
+        samples: list[ScratchSample] = []
+        for index, key in enumerate(keys):
+            if key not in mapping:
+                raise KeyError(f"clothing1m label map does not cover image {key}")
+            image = Path(key)
+            image = image if image.is_absolute() else root / image
+            if not image.is_file():
+                raise FileNotFoundError(f"clothing1m image does not exist: {image}")
+            observed = int(mapping[key])
+            clean = observed if split != "train" else None
+            samples.append(ScratchSample(image, index, observed, clean))
+        return ScratchSplit(name, split, tuple(samples), 14)
+
+    return read_split("train"), read_split("validation"), read_split("test")
+
+
+def _registered_animal_source(data: Mapping[str, Any], name: str) -> tuple[ScratchSplit, ScratchSplit | None, ScratchSplit]:
+    """Load the official binary or image-folder layout used by Animal-10N."""
+
+    import re
+    import numpy as np
+
+    root_value = data.get("root") or data.get("path")
+    if not root_value:
+        raise ValueError("registered animal10n requires a dataset root")
+    root = Path(str(root_value)).expanduser()
+    class_names = ("cat", "lynx", "wolf", "coyote", "cheetah", "jaguar",
+                   "chimpanzee", "orangutan", "hamster", "guinea pig")
+    record_size = 4 + 4 + 3 * 64 * 64
+
+    def binary_files(split: str) -> list[Path]:
+        if split == "test":
+            path = root / "test_batch.bin"
+            return [path] if path.is_file() else []
+        return sorted(root.glob("data_batch_*.bin"),
+                      key=lambda value: int(re.search(r"(\d+)$", value.stem).group(1)))
+
+    def folder(split: str) -> Path | None:
+        names = ("training", "train") if split == "train" else ("testing", "test")
+        return next((root / value for value in names if (root / value).is_dir()), None)
+
+    def read_binary(split: str) -> tuple[Any, Any]:
+        files = binary_files(split)
+        if not files:
+            raise FileNotFoundError(f"animal10n {split} binary files are missing under {root}")
+        images, labels = [], []
+        for path in files:
+            payload = np.fromfile(path, dtype=np.uint8)
+            if payload.size == 0 or payload.size % record_size:
+                raise ValueError(f"animal10n binary file has invalid size: {path}")
+            records = payload.reshape(-1, record_size)
+            packed = np.ascontiguousarray(records[:, 4:8])
+            candidates = (packed.view("<u4").reshape(-1), packed.view(">u4").reshape(-1))
+            label = next((candidate.astype(np.int64) for candidate in candidates
+                          if candidate.size and candidate.min() >= 0 and candidate.max() < 10), None)
+            if label is None:
+                raise ValueError(f"animal10n binary labels are invalid: {path}")
+            labels.append(label)
+            images.append(records[:, 8:].reshape(-1, 3, 64, 64).transpose(0, 2, 3, 1).copy())
+        return np.concatenate(images), np.concatenate(labels)
+
+    def directory_label(value: str) -> int | None:
+        normalized = re.sub(r"[\s_-]+", " ", value.strip().lower())
+        match = re.fullmatch(r"(?:class\s*)?(\d+)", normalized)
+        if match and 0 <= int(match.group(1)) < 10:
+            return int(match.group(1))
+        return {value: index for index, value in enumerate(class_names)}.get(normalized)
+
+    def read_images(split: str) -> tuple[Any, Any]:
+        directory = folder(split)
+        if directory is None:
+            raise FileNotFoundError(f"animal10n {split} image directory is missing under {root}")
+        class_dirs = [value for value in directory.iterdir() if value.is_dir()]
+        paths: list[Path] = []
+        labels: list[int] = []
+        if class_dirs:
+            mapped = [(directory_label(value.name), value) for value in class_dirs]
+            if len(mapped) != 10 or any(label is None for label, _ in mapped):
+                raise ValueError(f"animal10n requires ten recognized class directories under {directory}")
+            for label, class_dir in sorted(mapped):
+                for image in sorted(class_dir.rglob("*")):
+                    if image.is_file() and image.suffix.lower() in _IMAGE_SUFFIXES:
+                        paths.append(image)
+                        labels.append(int(label))
+        else:
+            for image in sorted(directory.iterdir()):
+                if image.is_file() and image.suffix.lower() in _IMAGE_SUFFIXES:
+                    if not image.name or not image.name[0].isdigit() or int(image.name[0]) >= 10:
+                        raise ValueError(f"animal10n flat filename must begin with class 0-9: {image}")
+                    paths.append(image)
+                    labels.append(int(image.name[0]))
+        if not paths:
+            raise ValueError(f"animal10n {split} split contains no images")
+        return tuple(paths), np.asarray(labels, dtype=np.int64)
+
+    use_binary = bool(binary_files("train") and binary_files("test"))
+
+    def make(split: str) -> ScratchSplit:
+        inputs, labels = read_binary(split) if use_binary else read_images(split)
+        clean_default = split != "train"
+        samples = tuple(ScratchSample(inputs[index], index, int(label), int(label) if clean_default else None)
+                        for index, label in enumerate(labels))
+        return ScratchSplit(name, split, samples, 10)
+
+    return make("train"), None, make("test")
+
+
 def _load_source(plan: Mapping[str, Any], ctx: Mapping[str, Any]) -> tuple[ScratchSplit, ScratchSplit | None, ScratchSplit | None]:
     data = dict(plan.get("data", {}))
     name = str(data.get("name", "synthetic")).lower()
-    classes = int(data.get("num_classes") or plan.get("semantics", {}).get("num_classes") or {"cifar10": 10, "cifar100": 100, "mnist": 10, "fashion_mnist": 10}.get(name, 2))
-    if data.get("binary_classes") and name in {"cifar10", "cifar100"}:
-        classes = 100 if name == "cifar100" else 10
+    adapter_name = str(data.get("adapter") or name).lower().replace("-", "_")
+    classes = int(data.get("num_classes") or plan.get("semantics", {}).get("num_classes") or {
+        "cifar10": 10, "cifar100": 100, "cifar10n": 10, "cifar100n": 100,
+        "cifar10_airplane_automobile": 10, "cifar10_binary": 10,
+        "cifar_10_airplane_automobile": 10, "mnist": 10, "fashion_mnist": 10,
+    }.get(adapter_name, 2))
+    if data.get("binary_classes") and adapter_name in {"cifar10", "cifar100"}:
+        classes = 100 if adapter_name == "cifar100" else 10
     source = data.get("source")
+    # A context-provided catalog may contain the same JSON record shape as the
+    # shared catalog. Treat it as adapter/path configuration, not as a split
+    # mapping, so mounted WebUI runs follow the same path as standalone runs.
+    if isinstance(source, Mapping) and "train" not in source and "test" not in source:
+        source_data = source.get("data", source)
+        if isinstance(source_data, Mapping) and (source_data.get("adapter") or source_data.get("name")):
+            data.update({key: value for key, value in source_data.items() if not _is_missing(value)})
+            adapter_name = str(data.get("adapter") or data.get("name") or name).lower().replace("-", "_")
+            classes = int(data.get("num_classes") or plan.get("semantics", {}).get("num_classes") or {
+                "cifar10": 10, "cifar100": 100, "cifar10n": 10, "cifar100n": 100,
+                "cifar10_airplane_automobile": 10, "cifar10_binary": 10,
+                "cifar_10_airplane_automobile": 10, "mnist": 10, "fashion_mnist": 10,
+            }.get(adapter_name, 2))
+            source = None
     if source is not None:
         clean_default = bool(source.get("clean_targets_available", True)) if isinstance(source, Mapping) else bool(getattr(source, "clean_targets_available", True))
         train = _normalise_split(_source_split(source, "train"), dataset=name, split="train", classes=classes, clean_default=clean_default)
@@ -330,24 +793,78 @@ def _load_source(plan: Mapping[str, Any], ctx: Mapping[str, Any]) -> tuple[Scrat
             pass
         requested = data.get("binary_classes")
         return _restrict_binary(train, requested), (_restrict_binary(validation, requested) if validation is not None else None), _restrict_binary(test, requested)
-    if name in {"synthetic", "synthetic_classification", "synthetic_binary_2d"}:
+    if adapter_name == "uci_binary":
+        return _registered_uci_source(data, name, int(plan.get("seed", ctx.get("seed", 1))))
+    if adapter_name in {"clothing1m", "clothing_1m"}:
+        return _registered_clothing_source(data, name)
+    if adapter_name in {"animal10n", "animal_10n"}:
+        return _registered_animal_source(data, name)
+    if adapter_name in {"synthetic", "synthetic_classification", "synthetic_binary_2d",
+                        "synthetic_binary_high_dim", "synthetic_multiclass"}:
+        if adapter_name == "synthetic_multiclass":
+            data = {**data, "classes": data.get("classes", data.get("num_classes", 3)),
+                    "features": data.get("features", data.get("dimension", 8))}
+        elif adapter_name == "synthetic_binary_high_dim":
+            data = {**data, "classes": 2,
+                    "features": data.get("features", data.get("dimension", 16))}
         values = _synthetic_source(data, int(plan.get("seed", ctx.get("seed", 1))))
         requested = data.get("binary_classes")
         return _restrict_binary(values["train"], requested), None, _restrict_binary(values["test"], requested)
-    if name in {"cifar10", "cifar100", "mnist", "fashion_mnist"}:
+    if adapter_name in {"cifar10_airplane_automobile", "cifar10_binary", "cifar_10_airplane_automobile",
+                        "cifar10", "cifar100", "cifar10n", "cifar100n", "mnist", "fashion_mnist"}:
+        if adapter_name in {"cifar10_airplane_automobile", "cifar10_binary", "cifar_10_airplane_automobile",
+                            "cifar10", "cifar100", "cifar10n", "cifar100n"}:
+            direct = _registered_cifar_source(data, name, adapter_name)
+            if direct is not None:
+                train, validation, test = direct
+                requested = data.get("binary_classes")
+                if adapter_name in {"cifar10_airplane_automobile", "cifar10_binary", "cifar_10_airplane_automobile"}:
+                    requested = requested or ("airplane", "automobile")
+                return _restrict_binary(train, requested), validation, _restrict_binary(test, requested)
+        if adapter_name in {"mnist", "fashion_mnist"}:
+            direct = _registered_mnist_source(data, name, adapter_name)
+            if direct is not None:
+                train, validation, test = direct
+                return train, validation, test
         try:
             from torchvision import datasets, transforms
         except ImportError as exc:  # pragma: no cover
             raise RuntimeError("Scratch vision data requires torchvision") from exc
         root = str(data.get("root") or data.get("path") or "data")
+        base_name = {"cifar10n": "cifar10", "cifar100n": "cifar100",
+                     "cifar10_airplane_automobile": "cifar10",
+                     "cifar10_binary": "cifar10",
+                     "cifar_10_airplane_automobile": "cifar10"}.get(adapter_name, adapter_name)
         cls = {"cifar10": datasets.CIFAR10, "cifar100": datasets.CIFAR100,
-               "mnist": datasets.MNIST, "fashion_mnist": datasets.FashionMNIST}[name]
+               "mnist": datasets.MNIST, "fashion_mnist": datasets.FashionMNIST}[base_name]
         kwargs = {"root": root, "download": bool(data.get("download", False)), "transform": transforms.ToTensor()}
         train = _normalise_split(cls(train=True, **kwargs), dataset=name, split="train", classes=classes, clean_default=True)
         test = _normalise_split(cls(train=False, **kwargs), dataset=name, split="test", classes=classes, clean_default=True)
+        if adapter_name in {"cifar10n", "cifar100n"}:
+            noise_path = data.get("noise_path") or data.get("labels_path")
+            if not noise_path:
+                raise ValueError(f"registered {adapter_name} requires noise_path/labels_path")
+            labels_payload = _load_external_payload(Path(str(noise_path)))
+            variant = str(data.get("noise_variant", "aggre_label" if adapter_name == "cifar10n" else "noisy_label"))
+            clean_key = "clean_label"
+            if clean_key not in labels_payload or variant not in labels_payload:
+                raise KeyError(f"{adapter_name} labels must contain {clean_key!r} and {variant!r}")
+            noisy = _torch().as_tensor(labels_payload[variant], dtype=_torch().long)
+            clean = _torch().as_tensor(labels_payload[clean_key], dtype=_torch().long)
+            if noisy.numel() != len(train.samples) or clean.numel() != len(train.samples):
+                raise ValueError(f"{adapter_name} labels must align with the full training split")
+            train = ScratchSplit(train.dataset, train.split, tuple(
+                ScratchSample(sample.input, sample.index, int(noisy[position]), int(clean[position]))
+                for position, sample in enumerate(train.samples)
+            ), train.num_classes, train.version)
         requested = data.get("binary_classes")
+        if adapter_name in {"cifar10_airplane_automobile", "cifar10_binary", "cifar_10_airplane_automobile"}:
+            requested = requested or ("airplane", "automobile")
         return _restrict_binary(train, requested), None, _restrict_binary(test, requested)
-    raise ValueError(f"Scratch cannot materialize dataset `{name}` without a train/test source")
+    raise ValueError(
+        f"Scratch cannot materialize dataset `{name}` with adapter `{adapter_name}`; "
+        "registered datasets must use a supported Scratch adapter or provide explicit train/test source slots"
+    )
 
 
 def _split_train(train: ScratchSplit, plan: Mapping[str, Any]) -> tuple[ScratchSplit, ScratchSplit]:
@@ -393,8 +910,10 @@ def _fixture_source_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
     # bounded fixture must still contain both requested classes; sampling a
     # sparse ten-class fixture can otherwise produce an empty train_eval
     # loader and make downstream snapshot blocks fail before any batch exists.
+    fixture_adapter = str(fixture_data.get("adapter", "")).lower().replace("-", "_")
     fixture_classes = 2 if (
-        original_name in {"synthetic_binary_2d"}
+        original_name in {"synthetic_binary_2d", "synthetic_binary_high_dim"}
+        or fixture_adapter in {"cifar10_airplane_automobile", "cifar10_binary", "cifar_10_airplane_automobile"}
         or bool(fixture_data.get("binary_classes"))
     ) else int(plan.get("semantics", {}).get("num_classes", 10))
     fixture_data.update({
@@ -404,6 +923,11 @@ def _fixture_source_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
         "features": 2 if original_name == "synthetic_binary_2d" else 4,
         "classes": fixture_classes,
     })
+    # A registered alias carries its real adapter in the plan.  Fixture runs
+    # intentionally replace that source with the bounded Scratch generator;
+    # leaving the adapter behind would route the synthetic fixture back into a
+    # real CIFAR/MNIST loader and fail before the recipe can be exercised.
+    fixture_data.pop("adapter", None)
     # Keep at least one learning sample when a formal recipe requests a
     # trusted subset larger than the bounded fixture.  This only affects
     # ``runtime_limits.fixture`` substitution; formal data sizes remain
@@ -881,5 +1405,5 @@ __all__ = [
     "ScratchBatch", "ScratchNoiseManifest", "ScratchPrepared", "ScratchRoleDataset",
     "ScratchSample", "ScratchSplit", "apply_noise_to_split", "assemble_prepared",
     "build_role_datasets", "build_transforms", "collate_scratch_batch", "load_sources",
-    "split_source",
+    "split_source", "registered_dataset_catalog", "registered_dataset_config",
 ]

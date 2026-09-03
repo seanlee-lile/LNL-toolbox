@@ -27,7 +27,7 @@ from lnl_toolbox.losses.torch_losses import validate_per_sample_loss
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
 from lnl_toolbox.training.data_service import PreparedData, prepare_experiment_data
-from lnl_toolbox.training.experiment import _environment, _resolved_noise_config, build_model, build_optimizer, build_scheduler
+from lnl_toolbox.training.experiment import _environment, _resolved_noise_config, bind_model_input, build_model, build_optimizer, build_scheduler
 from lnl_toolbox.training.noisy_labels import checkpoint_noise_metadata, effective_subset_actual_rate, noise_mode
 
 
@@ -96,16 +96,16 @@ def _train_peer_epoch(algorithm, peer, artifact, prepared: PreparedData, noisy_b
     indices = artifact.sample_indices.numpy(); labeled = indices[mask.numpy()]; unlabeled = indices[~mask.numpy()]
     probability_map = {int(index): float(value) for index, value in zip(indices, probabilities)}
     view_names = tuple(f"view_{index}" for index in range(algorithm.config.augmentations))
-    labeled_set = prepared.dynamic_dataset(
+    peer_offset = 0 if peer == "a" else 100000
+    labeled_loader = prepared.subset_loader(
         labeled, views=view_names, targets_by_index=noisy_by_index,
         overlays={"clean_probability": probability_map},
+        generator_seed=seed + peer_offset + epoch * 2,
     )
-    unlabeled_set = prepared.dynamic_dataset(
+    unlabeled_loader = prepared.subset_loader(
         unlabeled, views=view_names, targets_by_index=noisy_by_index,
+        generator_seed=seed + peer_offset + epoch * 2 + 1,
     )
-    peer_offset = 0 if peer == "a" else 100000
-    labeled_loader = prepared.loader_for_dataset(labeled_set, generator_seed=seed + peer_offset + epoch * 2)
-    unlabeled_loader = prepared.loader_for_dataset(unlabeled_set, generator_seed=seed + peer_offset + epoch * 2 + 1)
     unlabeled_iterator = iter(unlabeled_loader); totals: dict[str, float] = {}; count = 0
     rng = np.random.default_rng(seed + peer_offset + epoch)
     for batch_index, labeled_batch in enumerate(labeled_loader):
@@ -117,7 +117,11 @@ def _train_peer_epoch(algorithm, peer, artifact, prepared: PreparedData, noisy_b
     return {key: value / count for key, value in totals.items()} | {"batches": float(count), "labeled_count": float(len(labeled)), "unlabeled_count": float(len(unlabeled))}
 
 
-def run_dividemix_experiment(config: dict[str, Any], output_dir: str | Path | None = None, resume: str | Path | None = None) -> Path:
+def run_dividemix_experiment(
+    config: dict[str, Any], output_dir: str | Path | None = None,
+    resume: str | Path | None = None, *,
+    requirements: DataRequirements | None = None,
+) -> Path:
     config = deepcopy(config); method = DivideMixConfig.from_mapping(config); seed = int(config.get("seed", 1)); seed_everything(seed)
     device = resolve_device(config.get("trainer", {}).get("device", "auto"))
     if device.type == "cuda": torch.cuda.reset_peak_memory_stats(device)
@@ -126,13 +130,12 @@ def run_dividemix_experiment(config: dict[str, Any], output_dir: str | Path | No
     if checkpoint:
         if checkpoint.get("method") != "dividemix": raise ValueError("checkpoint method is not DivideMix")
         _validate_resume(config, checkpoint["config"])
-    data_config = config["data"]
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        requirements = resolve_data_requirements(config, expected_runner="dividemix")
     prepared = prepare_experiment_data(
         config,
-        requirements=DataRequirements(
-            roles=frozenset({DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.NOISY_VALIDATION, DataRole.TEST}),
-            validation_targets="noisy",
-        ),
+        requirements=requirements,
         run_dir=run_dir, seed=seed, checkpoint_payload=checkpoint,
     )
     dataset_name, num_classes = prepared.dataset, prepared.num_classes
@@ -142,8 +145,8 @@ def run_dividemix_experiment(config: dict[str, Any], output_dir: str | Path | No
     eval_train_loader = prepared.loader(DataRole.TRAIN_EVAL, shuffle=False)
     validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False)
     test_loader = prepared.loader(DataRole.TEST, shuffle=False)
-    noise_metadata = checkpoint_noise_metadata(manifest, manifest_path, run_dir, effective_subset_actual_rate(manifest, prepared.train_indices), mode=noise_mode(config), validation_targets="noisy", effective_validation_rate=effective_subset_actual_rate(manifest, prepared.validation_indices)); config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
-    model_a, model_b = _build_peers(config["model"], num_classes, seed, method.peer_seed_offset); optimizer_a, optimizer_b = build_optimizer(model_a, config["optimizer"]), build_optimizer(model_b, config["optimizer"])
+    noise_metadata = checkpoint_noise_metadata(manifest, manifest_path, run_dir, effective_subset_actual_rate(manifest, prepared.train_indices), mode=noise_mode(config), validation_targets="noisy", effective_validation_rate=prepared.realized_noise_rate(DataRole.NOISY_VALIDATION)); config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
+    model_a, model_b = _build_peers(bind_model_input(config["model"], prepared.input_spec), num_classes, seed, method.peer_seed_offset); optimizer_a, optimizer_b = build_optimizer(model_a, config["optimizer"]), build_optimizer(model_b, config["optimizer"])
     total_epochs = method.warmup_epochs + method.training_epochs; scheduler_a, scheduler_b = build_scheduler(optimizer_a, config.get("scheduler"), total_epochs), build_scheduler(optimizer_b, config.get("scheduler"), total_epochs)
     algorithm = DivideMixAlgorithm(model_a=model_a, model_b=model_b, optimizer_a=optimizer_a, optimizer_b=optimizer_b, scheduler_a=scheduler_a, scheduler_b=scheduler_b, config=method, device=device)
     best_epoch, best_metric, best_metrics = -1, float("-inf"), {"accuracy_a": float("-inf"), "accuracy_b": float("-inf"), "accuracy_ensemble": float("-inf")}
@@ -157,8 +160,13 @@ def run_dividemix_experiment(config: dict[str, Any], output_dir: str | Path | No
     with metrics_path.open("a", encoding="utf-8") as metrics_file:
         while algorithm.state.warmup_completed_epochs < method.warmup_epochs:
             epoch = algorithm.state.warmup_completed_epochs; sums = {peer: {"objective": 0.0, "confidence_penalty": 0.0} for peer in ("a", "b")}; batches = 0
-            warm_set = prepared.dynamic_dataset(prepared.train_indices, views=("view_0",), targets_by_index=noisy_by_index)
-            for batch in prepared.loader_for_dataset(warm_set, generator_seed=seed + epoch):
+            warm_loader = prepared.subset_loader(
+                prepared.train_indices,
+                views=("view_0",),
+                targets_by_index=noisy_by_index,
+                generator_seed=seed + epoch,
+            )
+            for batch in warm_loader:
                 for peer in ("a", "b"):
                     result = algorithm.warmup_step(peer, batch["views"]["view_0"], batch["target"], asymmetric=str(config["noise"].get("name", "")).lower() == "asymmetric")
                     for key in sums[peer]: sums[peer][key] += result[key]

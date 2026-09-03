@@ -28,6 +28,26 @@ operation.  Model names in formal recipes construct their corresponding
 Scratch-owned topology (the bounded fixture limits data/steps only, never the
 architecture).
 
+The Scratch data picker is linked to the same local dataset catalog used by the
+main data-registration page.  After registering a source there, open the
+`load_dataset` block and choose its alias from the `dataset` selector.  If the
+Scratch page was already open, click **同步已登记数据集** in the dataset
+inspector to refresh the list.  The selected alias carries its registered
+adapter and path into the Scratch-native loader; the loader still performs the
+real layout/file checks and reports a precise error when the source is not
+usable.  The shared catalog is `%LOCALAPPDATA%\\lnl-toolbox\\datasets.json`
+on Windows (or the path in `LNL_DATA_CATALOG`).
+
+The WebUI starts a run as a background Scratch job.  The **运行** panel polls
+the job for the current block, epoch/batch position, and progress fraction;
+**停止运行** requests cancellation and keeps the partial artifact directory.
+When a dataset is missing, unregistered, unavailable, or incompatible with the
+model class count, the same panel opens a concrete guidance card that points
+back to the `load_dataset` or `create_model` parameters instead of showing only
+the raw traceback.  The standalone service exposes these controls through
+`/api/run`, `/api/jobs/<id>`, and `/api/jobs/<id>/cancel`; the mounted console
+uses the corresponding `/api/scratch/...` routes.
+
 The smoke coverage includes CE, formula-level GCE, APL, Co-teaching peer exchange, DivideMix warmup/co-divide/refinement, and legacy catalog shape/value paths. The GCE paper recipe is now a formal CIFAR-10 path; its structural tests validate it without launching the 120-epoch run. The separate `recipes/examples/gce_formula_smoke.yaml` remains the fast one-epoch check.
 
 ## Formula status
@@ -41,6 +61,11 @@ Scratch Paper templates:
 The DSS and LEND formal-semantics gates compare Scratch state/graph outputs to
 their legacy implementations in tests only; those legacy modules are never
 loaded by Scratch production code.
+
+User-created Recipes are saved outside the package source tree under
+`$LNL_SCRATCH_WORKSPACE/recipes/` (or `~/.lnl_toolbox/scratch/recipes/` when the
+environment variable is unset). System Paper Recipes and bundled examples
+remain read-only package resources.
 
 ## Research Formula Composer
 

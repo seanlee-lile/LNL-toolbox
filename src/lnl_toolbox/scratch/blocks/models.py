@@ -548,6 +548,19 @@ def create_model(
     save_as: str = "model",
 ) -> None:
     _, nn = _torch()
+    # A loaded Scratch dataset publishes its class cardinality as a runtime
+    # contract.  Refuse an incompatible classifier before the first CUDA
+    # kernel is launched; otherwise an out-of-range target only surfaces later
+    # as an asynchronous device-side assert in a gather/loss block.
+    dataset_classes = ctx.get("num_classes")
+    runtime_limits = ctx.get("_runtime_limits")
+    fixture_run = isinstance(runtime_limits, dict) and bool(runtime_limits.get("fixture"))
+    if dataset_classes is not None and not fixture_run and int(dataset_classes) != int(num_classes):
+        raise ValueError(
+            f"model num_classes={int(num_classes)} does not match the loaded "
+            f"dataset num_classes={int(dataset_classes)}; select a dataset with "
+            "the matching class count or update the model num_classes parameter"
+        )
     name = str(model).strip().lower().replace("-", "_")
     effective_classifier_bias = bool(classifier_bias and bias)
     if name in {"resnet18", "cifar_resnet18", "preact_resnet18"}:

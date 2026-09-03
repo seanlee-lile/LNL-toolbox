@@ -14,6 +14,7 @@ from ..data_runtime import (
     build_transforms,
     build_role_datasets,
     load_sources,
+    registered_dataset_config,
     split_source,
 )
 
@@ -136,6 +137,16 @@ def load_dataset(ctx: ScratchContext, dataset: str, root: str = "", path: str = 
     data = {"name": str(dataset).strip(), "root": str(root), "path": str(path), **opts}
     if not data["name"]:
         raise ValueError("load_dataset needs a dataset name")
+    registered = registered_dataset_config(data["name"])
+    if registered is not None:
+        registered_data = dict(registered.get("data", {}))
+        for key, value in registered_data.items():
+            if key == "name" or value is None or value == "":
+                continue
+            if data.get(key) is None or data.get(key) == "":
+                data[key] = value
+        data["adapter"] = str(registered.get("adapter") or data.get("adapter") or "").strip().lower()
+        data["registered_alias"] = str(registered.get("alias") or data["name"])
     catalog = ctx.get("dataset_catalog")
     if isinstance(catalog, Mapping) and data["name"] in catalog:
         data["source"] = catalog[data["name"]]

@@ -11,6 +11,10 @@ from typing import Any, Mapping, Protocol, runtime_checkable
 import numpy as np
 
 
+class UnsupportedDatasetSplitError(ValueError):
+    """The dataset adapter does not expose the requested split."""
+
+
 @dataclass(frozen=True, slots=True)
 class Sample:
     """Stable dataset protocol; clean fields are evaluator-only."""
@@ -47,7 +51,109 @@ class DataRole(str, Enum):
     NOISY_VALIDATION = "noisy_validation"
     CLEAN_VALIDATION = "clean_validation"
     TRUSTED_VALIDATION = "trusted_validation"
+    UNLABELED = "unlabeled"
+    CURRICULUM = "curriculum"
     TEST = "test"
+
+
+@dataclass(frozen=True, slots=True)
+class InputSpec:
+    """Dataset input facts exposed to algorithms without dataset-name checks."""
+
+    modality: str
+    shape: tuple[int, ...] | None = None
+    channels: int | None = None
+    feature_dim: int | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        modality = str(getattr(self.modality, "value", self.modality)).strip().lower()
+        if not modality:
+            raise ValueError("input modality must not be empty")
+        shape = None if self.shape is None else tuple(int(value) for value in self.shape)
+        if shape is not None and (not shape or any(value <= 0 for value in shape)):
+            raise ValueError("input shape dimensions must be positive")
+        if self.channels is not None and int(self.channels) <= 0:
+            raise ValueError("input channels must be positive")
+        if self.feature_dim is not None and int(self.feature_dim) <= 0:
+            raise ValueError("input feature_dim must be positive")
+        object.__setattr__(self, "modality", modality)
+        object.__setattr__(self, "shape", shape)
+        object.__setattr__(self, "channels", None if self.channels is None else int(self.channels))
+        object.__setattr__(self, "feature_dim", None if self.feature_dim is None else int(self.feature_dim))
+        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+
+
+@dataclass(frozen=True, slots=True)
+class NoiseDescriptor:
+    """Read-only noise metadata; it never exposes clean training labels."""
+
+    noise_type: str = "unknown"
+    nominal_rate: float | None = None
+    realized_rate: float | None = None
+    rho_positive: float | None = None
+    rho_negative: float | None = None
+    transition_matrix: np.ndarray | None = None
+    instance_transition: np.ndarray | None = None
+    provenance: str | None = None
+    mapping_hash: str | None = None
+
+    def __post_init__(self) -> None:
+        noise_type = str(self.noise_type).strip().lower()
+        if not noise_type:
+            raise ValueError("noise_type must not be empty")
+        object.__setattr__(self, "noise_type", noise_type)
+        for name in ("nominal_rate", "realized_rate", "rho_positive", "rho_negative"):
+            value = getattr(self, name)
+            if value is not None and (not np.isfinite(float(value)) or not 0.0 <= float(value) <= 1.0):
+                raise ValueError(f"{name} must be finite and in [0, 1]")
+            if value is not None:
+                object.__setattr__(self, name, float(value))
+        for name in ("transition_matrix", "instance_transition"):
+            value = getattr(self, name)
+            if value is not None:
+                array = np.asarray(value, dtype=np.float64).copy()
+                if not np.isfinite(array).all() or (array < 0.0).any():
+                    raise ValueError(f"{name} must contain finite non-negative values")
+                if name == "transition_matrix" and (
+                    array.ndim != 2 or array.shape[0] != array.shape[1]
+                ):
+                    raise ValueError("transition_matrix must be square [C, C]")
+                if name == "instance_transition" and array.ndim not in {2, 3}:
+                    raise ValueError("instance_transition must have shape [N, C] or [N, C, C]")
+                if not np.allclose(array.sum(axis=-1), 1.0, rtol=1e-6, atol=1e-8):
+                    raise ValueError(f"every {name} probability row must sum to one")
+                array.setflags(write=False)
+                object.__setattr__(self, name, array)
+
+
+@dataclass(frozen=True, slots=True)
+class DataProtocol:
+    """Reproduction or generic data policy, separate from method requirements."""
+
+    name: str = "generic"
+    transform_identity: str = "generic"
+    validation_size: int | None = None
+    split_strategy: str | None = None
+    options: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.name.strip() or not self.transform_identity.strip():
+            raise ValueError("data protocol name and transform_identity must not be empty")
+        if self.validation_size is not None and int(self.validation_size) < 0:
+            raise ValueError("data protocol validation_size must be non-negative")
+        object.__setattr__(self, "validation_size", None if self.validation_size is None else int(self.validation_size))
+        object.__setattr__(self, "split_strategy", None if self.split_strategy is None else str(self.split_strategy).strip() or None)
+        object.__setattr__(self, "options", MappingProxyType(dict(self.options)))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "transform_identity": self.transform_identity,
+            "validation_size": self.validation_size,
+            "split_strategy": self.split_strategy,
+            "options": dict(self.options),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,15 +368,18 @@ class DatasetAdapter(Protocol):
 
 
 __all__ = [
+    "DataProtocol",
     "DataRequirements",
     "DataRole",
     "DataSpec",
+    "UnsupportedDatasetSplitError",
     "DatasetAdapter",
     "DatasetIdentity",
+    "InputSpec",
+    "NoiseDescriptor",
     "RawDatasetSplit",
     "Sample",
     "SampleKey",
     "array_sha256",
     "inputs_sha256",
 ]
-

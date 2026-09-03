@@ -12,7 +12,6 @@ import json
 import math
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 import threading
@@ -35,6 +34,7 @@ SCRATCH_RECIPE_ROOT = SCRATCH_ROOT / "recipes"
 STATIC_ASSETS = {
     "/assets/quick_start.js": (WEB_ROOT / "assets" / "quick_start.js", "application/javascript; charset=utf-8"),
     "/assets/quick_start.css": (WEB_ROOT / "assets" / "quick_start.css", "text/css; charset=utf-8"),
+    "/assets/run_output.js": (WEB_ROOT / "assets" / "run_output.js", "application/javascript; charset=utf-8"),
 }
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -249,6 +249,7 @@ class Job:
     error: str | None = None
     structured: object | None = None
     cancel_requested: bool = False
+    training_context: object | None = None
 
     @property
     def done(self) -> bool:
@@ -260,11 +261,8 @@ JOBS_LOCK = threading.Lock()
 
 
 def resolve_lnl_command() -> list[str]:
-    """Prefer the installed lnl shortcut, then fall back to the module CLI."""
+    """Run the CLI with the interpreter serving the current Web process."""
 
-    executable = shutil.which("lnl")
-    if executable:
-        return [executable]
     return [sys.executable, "-m", "lnl_toolbox.cli.main"]
 
 
@@ -333,6 +331,24 @@ def _start_process(key: str, command: list[str], display_command: str) -> Job:
         command=command,
         display_command=display_command,
     )
+    from web.training_status import infer_training_context
+
+    context = infer_training_context(command, ROOT)
+    if (
+        context is not None
+        and context.command_kind == "run"
+        and context.run_dir is None
+        and "--dry-run" not in command
+    ):
+        # A recipe's output_root can produce a runner-defined subdirectory.
+        # Give Web-owned formal runs a unique explicit location instead, so
+        # polling never guesses from the newest artifact directory.
+        web_output = ROOT / "artifacts" / "web-runs" / job.job_id
+        command = [*command, "--output-dir", str(web_output.relative_to(ROOT))]
+        job.command = command
+        job.display_command = f"{display_command} --output-dir {web_output.relative_to(ROOT)}"
+        context = infer_training_context(command, ROOT)
+    job.training_context = context
     try:
         job.process = subprocess.Popen(
             command,
@@ -377,7 +393,18 @@ def cancel_job(job_id: str) -> Job:
         process = job.process
         job.cancel_requested = True
     if process is not None and process.poll() is None:
-        process.terminate()
+        # ``lnl`` may be a Windows console wrapper which starts the actual
+        # Python worker as a child.  Terminating only the wrapper leaks that
+        # worker into the next batch case, so cancel the complete process tree.
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        else:
+            process.terminate()
     return job
 
 
@@ -404,15 +431,19 @@ def _json_response(
 def _scratch_recipe_path(name: str) -> Path:
     """Resolve a Scratch recipe below the repository's Scratch recipe root."""
 
+    from lnl_toolbox.scratch import recipe_workspace_root
+
     requested = Path(name)
+    user_root = recipe_workspace_root()
     candidates = [
-        SCRATCH_RECIPE_ROOT / requested,
-        SCRATCH_RECIPE_ROOT / "examples" / requested.name,
-        SCRATCH_RECIPE_ROOT / "papers" / requested.name,
+        (user_root, user_root / requested),
+        (SCRATCH_RECIPE_ROOT, SCRATCH_RECIPE_ROOT / requested),
+        (SCRATCH_RECIPE_ROOT, SCRATCH_RECIPE_ROOT / "examples" / requested.name),
+        (SCRATCH_RECIPE_ROOT, SCRATCH_RECIPE_ROOT / "papers" / requested.name),
     ]
-    root = SCRATCH_RECIPE_ROOT.resolve()
-    for candidate in candidates:
+    for root, candidate in candidates:
         resolved = candidate.resolve()
+        root = root.resolve()
         if root not in resolved.parents:
             continue
         if candidate.suffix in {".yaml", ".yml"} and candidate.is_file():
@@ -422,6 +453,12 @@ def _scratch_recipe_path(name: str) -> Path:
 
 def _scratch_error(exc: Exception) -> dict[str, object]:
     payload: dict[str, object] = {"ok": False, "error": str(exc)}
+    try:
+        from lnl_toolbox.scratch.web.server import _job_error_code
+
+        payload["code"] = _job_error_code(str(exc))
+    except Exception:
+        pass
     path = getattr(exc, "path", None)
     block_id = getattr(exc, "block_id", None)
     if path is not None:
@@ -432,10 +469,10 @@ def _scratch_error(exc: Exception) -> dict[str, object]:
 
 
 def _scratch_recipe_api_payload() -> list[str]:
-    return sorted(
-        str(path.relative_to(SCRATCH_RECIPE_ROOT)).replace("\\", "/")
-        for path in SCRATCH_RECIPE_ROOT.rglob("*.y*ml")
-    )
+    from lnl_toolbox.scratch import recipe_workspace_root
+
+    root = recipe_workspace_root()
+    return sorted(str(path.relative_to(root)).replace("\\", "/") for path in root.rglob("*.y*ml"))
 
 
 def _scratch_template_payload() -> list[dict[str, str]]:
@@ -492,15 +529,16 @@ def _scratch_recipe_from_body(payload: dict[str, object]) -> dict[str, object]:
 
 def _scratch_run(recipe: dict[str, object]) -> dict[str, object]:
     from lnl_toolbox.scratch import execute_recipe, resolve_recipe, save_recipe
-    from lnl_toolbox.scratch.formula.registry import collect_formula_provenance
+    from lnl_toolbox.scratch.formula.registry import collect_formula_provenance, merge_formula_provenance
 
     output = ROOT / "artifacts" / "scratch" / Path(str(recipe["name"])).name
     output.mkdir(parents=True, exist_ok=True)
     save_recipe(recipe, output / "recipe.yaml")
     save_recipe(resolve_recipe(recipe), output / "resolved_recipe.yaml")
-    provenance = collect_formula_provenance(recipe)
-    (output / "formula_provenance.json").write_text(json.dumps(provenance, ensure_ascii=False, indent=2), encoding="utf-8")
+    static_provenance = collect_formula_provenance(recipe)
     context = execute_recipe(recipe, {"artifact_dir": str(output)})
+    provenance = merge_formula_provenance(static_provenance, context.get("_formula_provenance", []))
+    (output / "formula_provenance.json").write_text(json.dumps(provenance, ensure_ascii=False, indent=2), encoding="utf-8")
     metrics = context.get("metrics", [])
     (output / "metrics.jsonl").write_text(
         "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in metrics),
@@ -546,7 +584,10 @@ def _paper_payload() -> list[dict[str, object]]:
 
     from lnl_toolbox.catalog import (
         discover_recipes,
+        load_recipe_config,
         load_papers,
+        mentornet_preparation_status,
+        resolve_config_paths,
     )
 
     recipes = {
@@ -604,6 +645,15 @@ def _paper_payload() -> list[dict[str, object]]:
                 "reproduction_status": config.reproduction_status,
                 "availability": config.availability,
             })
+            if paper.id == "mentornet":
+                resolved = resolve_config_paths(load_recipe_config(recipe), ROOT)
+                payload[-1]["configs"][-1]["preparation"] = (
+                    mentornet_preparation_status(
+                        resolved,
+                        ROOT,
+                        student_recipe=config.recipe_id,
+                    )
+                )
     return payload
 
 
@@ -1474,7 +1524,7 @@ def _save_config(payload: object) -> dict[str, object]:
 
 def _job_payload(job: Job) -> dict[str, object]:
     with JOBS_LOCK:
-        return {
+        payload: dict[str, object] = {
             "id": job.job_id,
             "key": job.key,
             "command": job.display_command,
@@ -1485,6 +1535,25 @@ def _job_payload(job: Job) -> dict[str, object]:
             "cancel_requested": job.cancel_requested,
             "structured": job.structured,
         }
+        context = job.training_context
+        lines = list(job.lines)
+        running = not job.done
+        returncode = job.returncode
+        cancel_requested = job.cancel_requested
+    if context is not None:
+        from web.training_status import training_snapshot
+
+        snapshot = training_snapshot(
+            context,
+            lines=lines,
+            running=running,
+            returncode=returncode,
+            cancel_requested=cancel_requested,
+        )
+        payload["training"] = None if snapshot is None else snapshot.to_dict()
+    else:
+        payload["training"] = None
+    return payload
 
 
 def _picker_payload(payload: object) -> dict[str, object]:
@@ -1518,15 +1587,22 @@ def _picker_payload(payload: object) -> dict[str, object]:
     script = (
         "Add-Type -AssemblyName System.Windows.Forms; "
         "$mode=$env:LNL_PICKER_MODE; $initial=$env:LNL_PICKER_INITIAL; "
+        "$owner=New-Object System.Windows.Forms.Form; $d=$null; "
+        "$owner.ShowInTaskbar=$false; $owner.TopMost=$true; "
+        "$owner.FormBorderStyle=[System.Windows.Forms.FormBorderStyle]::None; "
+        "$owner.StartPosition=[System.Windows.Forms.FormStartPosition]::CenterScreen; "
+        "$owner.Width=1; $owner.Height=1; $owner.Opacity=0; "
+        "try { [void]$owner.Show(); [void]$owner.Activate(); "
         "if($mode -eq 'folder'){ $d=New-Object System.Windows.Forms.FolderBrowserDialog; "
         "if($initial -and (Test-Path -LiteralPath $initial)){ $d.SelectedPath=$initial }; "
-        "if($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Write($d.SelectedPath)} } "
+        "if($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Write($d.SelectedPath)} } "
         "else { if($mode -eq 'save_file'){ $d=New-Object System.Windows.Forms.SaveFileDialog } "
         "else { $d=New-Object System.Windows.Forms.OpenFileDialog }; "
         "$d.Filter=$env:LNL_PICKER_FILTER; "
         "if($initial){ if(Test-Path -LiteralPath $initial -PathType Container){$d.InitialDirectory=$initial} "
         "elseif(Test-Path -LiteralPath $initial){$d.InitialDirectory=(Split-Path -Parent $initial);$d.FileName=(Split-Path -Leaf $initial)} }; "
-        "if($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Write($d.FileName)} }"
+        "if($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Write($d.FileName)} } } "
+        "finally { if($null -ne $d){$d.Dispose()}; $owner.Close(); $owner.Dispose() }"
     )
     executable = Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
     result = subprocess.run(
@@ -1910,6 +1986,20 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             except (OSError, TypeError, ValueError) as exc:
                 _json_response(self, {"error": str(exc)}, 400)
             return
+        if path.startswith("/api/scratch/jobs/"):
+            try:
+                from lnl_toolbox.scratch.web.server import SCRATCH_JOBS, SCRATCH_JOBS_LOCK, _scratch_job_payload
+
+                job_id = path.removeprefix("/api/scratch/jobs/").strip("/")
+                with SCRATCH_JOBS_LOCK:
+                    job = SCRATCH_JOBS.get(job_id)
+                if job is None:
+                    _json_response(self, {"error": "Scratch job not found"}, 404)
+                else:
+                    _json_response(self, _scratch_job_payload(job))
+            except Exception as exc:
+                _json_response(self, {"error": str(exc)}, 400)
+            return
         if path.startswith("/api/jobs/"):
             job_id = path.rsplit("/", 1)[-1]
             with JOBS_LOCK:
@@ -1951,20 +2041,34 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 if path == "/api/scratch/validate":
                     _json_response(self, {"ok": True, "recipe": recipe})
                 elif path == "/api/scratch/save":
-                    from lnl_toolbox.scratch import save_recipe
+                    from lnl_toolbox.scratch import recipe_workspace_root, save_recipe
 
                     name = Path(str(recipe["name"])).name
-                    destination = SCRATCH_RECIPE_ROOT / "examples" / f"{name}.yaml"
+                    destination = recipe_workspace_root() / f"{name}.yaml"
                     save_recipe(recipe, destination)
                     _json_response(
                         self,
-                        {"ok": True, "path": str(destination.relative_to(SCRATCH_RECIPE_ROOT)).replace("\\", "/")},
+                        {"ok": True, "path": str(destination)},
                         201,
                     )
                 else:
-                    _json_response(self, _scratch_run(recipe))
+                    from lnl_toolbox.scratch.web.server import _scratch_job_payload, start_scratch_job
+
+                    job = start_scratch_job(recipe, payload.get("runtime_limits", {}))
+                    _json_response(self, _scratch_job_payload(job), 202)
             except Exception as exc:
                 _json_response(self, _scratch_error(exc), 400)
+            return
+        if path.startswith("/api/scratch/jobs/") and path.endswith("/cancel"):
+            try:
+                from lnl_toolbox.scratch.web.server import _scratch_job_payload, cancel_scratch_job
+
+                job_id = path.removeprefix("/api/scratch/jobs/").removesuffix("/cancel").strip("/")
+                _json_response(self, _scratch_job_payload(cancel_scratch_job(job_id)), 202)
+            except KeyError:
+                _json_response(self, {"error": "Scratch job not found"}, 404)
+            except Exception as exc:
+                _json_response(self, {"error": str(exc)}, 400)
             return
         if path == "/api/scratch/formulas":
             try:
@@ -1985,7 +2089,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 from lnl_toolbox.scratch.formula.storage import delete_formula, find_formula_references
 
                 formula_id = str(payload.get("id", ""))
+                from lnl_toolbox.scratch import recipe_workspace_root
+
                 references = find_formula_references(SCRATCH_RECIPE_ROOT, formula_id)
+                references.extend(find_formula_references(recipe_workspace_root(), formula_id))
                 spec = delete_formula(formula_id, referenced_by=tuple(references))
                 unregister_formula(spec.id)
                 _json_response(self, {"ok": True, "id": spec.id})

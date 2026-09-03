@@ -9,6 +9,7 @@ registered block callables in order.
 from .registry import (
     FORMULA_BLOCK_PREFIX,
     collect_formula_provenance,
+    merge_formula_provenance,
     get_formula,
     list_formulas,
     register_formula,
@@ -36,6 +37,7 @@ __all__ = [
     "FormulaStepSpec",
     "FormulaValidationError",
     "collect_formula_provenance",
+    "merge_formula_provenance",
     "execute_formula",
     "formula_hash",
     "get_formula",

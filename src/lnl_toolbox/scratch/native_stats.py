@@ -273,7 +273,7 @@ def select_pdl_anchor_candidates(probabilities: Any, percentages: Any):
     return positions
 
 
-def fit_pdl_basis_matrices_pair(train_coefficients: Any, train_targets: Any, validation_coefficients: Any, validation_targets: Any, *, epochs: int = 1500, learning_rate: float = 0.001, loss_threshold: float = 0.02, seed: int = 0, official_raw: bool = False):
+def fit_pdl_basis_matrices_pair(train_coefficients: Any, train_targets: Any, validation_coefficients: Any, validation_targets: Any, *, epochs: int, learning_rate: float, loss_threshold: float, seed: int):
     torch = _torch(); torch.manual_seed(int(seed))
     def fit(coefficients, targets):
         c, basis, feature_dim = np.asarray(coefficients).shape
@@ -324,7 +324,7 @@ class _TransitionArtifact:
 class PartTransitionEstimator:
     def __init__(self, num_parts: int, num_classes: int, representation_seed: int = 0):
         self.num_parts = int(num_parts); self.num_classes = int(num_classes)
-    def estimate_from_shared_representation(self, features, posterior, *, representation_parts, representation_coefficients, representation_indices, part_matrices, official_raw_basis=True):
+    def estimate_from_shared_representation(self, features, posterior, *, representation_parts, representation_coefficients, representation_indices, part_matrices):
         values = np.asarray(posterior.noisy_probabilities if hasattr(posterior, "noisy_probabilities") else posterior)
         n, classes = values.shape
         matrices = np.asarray(part_matrices)
@@ -356,7 +356,7 @@ class SupervisedWeightInput:
 
 
 class MentorNetWeightProvider:
-    def __init__(self, artifact_path: str | None = None, total_epochs: int = 100, percentile: float = 0.6, decay: float = 0.5, burn_in_epoch: int = 18, fixed_epoch_after_burn_in: bool = True, fixed_label: int = 0, dropout_schedule: Any = (), seed: int = 0, **_: Any):
+    def __init__(self, artifact_path: str, total_epochs: int, percentile: float, decay: float, burn_in_epoch: int, fixed_epoch_after_burn_in: bool, fixed_label: int, dropout_schedule: Any, seed: int, **_: Any):
         self.total_epochs = int(total_epochs); self.percentile = float(percentile); self.decay = float(decay)
         self.burn_in_epoch = int(burn_in_epoch); self.fixed_epoch_after_burn_in = bool(fixed_epoch_after_burn_in); self.fixed_label = int(fixed_label)
         self.dropout_schedule = tuple(dropout_schedule); self.generator = _torch().Generator().manual_seed(int(seed)); self.moving = None; self.model = None
@@ -569,7 +569,7 @@ class ModelEMA:
 
 
 class SelfAdaptiveClassSelector:
-    def __init__(self, classes: int, momentum: float, quantile: float = 0.8, maximum_threshold: float = 0.95): self.maximum_threshold = float(maximum_threshold)
+    def __init__(self, classes: int, momentum: float, quantile: float, maximum_threshold: float): self.maximum_threshold = float(maximum_threshold)
     def select_epoch(self, probabilities, labels): return probabilities.gather(1, labels[:, None]).squeeze(1) >= self.maximum_threshold
 
 

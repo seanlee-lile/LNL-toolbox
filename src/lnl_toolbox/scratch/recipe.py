@@ -3,10 +3,26 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import os
 from pathlib import Path
 from typing import Any, Mapping
 
 import yaml
+
+
+def recipe_workspace_root(root: str | Path | None = None) -> Path:
+    """Return the writable workspace used for user-created Scratch recipes.
+
+    System examples and paper recipes live in the package tree and remain
+    read-only.  User recipes deliberately live beside user formulas under the
+    configured Scratch workspace (or the user's home directory by default).
+    """
+
+    value = root or os.environ.get("LNL_SCRATCH_WORKSPACE")
+    base = Path(value).expanduser() if value else Path.home() / ".lnl_toolbox" / "scratch"
+    destination = base / "recipes"
+    destination.mkdir(parents=True, exist_ok=True)
+    return destination
 
 
 def resolve_recipe(recipe: Mapping[str, Any]) -> dict[str, Any]:

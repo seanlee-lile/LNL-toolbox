@@ -1,4 +1,136 @@
 [build-system]
-requires = []
-build-backend = "_build_backend"
-backend-path = ["."]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lnl-toolbox"
+version = "0.1.0"
+description = "A reproducible research toolbox for learning with noisy labels"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "pyyaml>=6.0"]
+
+[project.optional-dependencies]
+train = [
+    "torch>=2.2",
+    "torchvision>=0.17",
+    "randaugment==1.0.2",
+    "pyyaml>=6.0",
+    "scikit-learn>=1.7,<2",
+]
+dev = [
+    "build>=1.2",
+    "coverage[toml]>=7.6",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.9",
+    "tomli; python_version < '3.11'",
+]
+
+[project.scripts]
+lnl = "lnl_toolbox.cli.main:main"
+lnl-clean-train = "lnl_toolbox.cli.clean_train:main"
+lnl-inspect-data = "lnl_toolbox.cli.inspect_data:main"
+lnl-make-noise = "lnl_toolbox.cli.make_noise:main"
+lnl-train = "lnl_toolbox.cli.train:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+lnl_toolbox = ["paper_catalog.json"]
+"lnl_toolbox.cli" = ["data/recipe_catalog.json"]
+"lnl_toolbox.scratch" = ["recipes/**/*.yaml", "web/*.html", "web/*.js", "web/*.css"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+# Initial repository-wide gate: syntax and invalid-control-flow errors.
+# Broader style/unused-import enforcement is intentionally ratcheted later.
+select = ["E9", "F63", "F7"]
+
+[tool.coverage.run]
+source = ["lnl_toolbox"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[tool.setuptools.data-files]
+"share/lnl-toolbox/configs/experiment" = [
+    "configs/experiment/apl_cifar10_noise02_reproduction.yaml",
+    "configs/experiment/apl_cifar10_noise02_smoke.yaml",
+    "configs/experiment/apl_cifar10_noise04_reproduction.yaml",
+    "configs/experiment/binary_risk_natarajan_1epoch.yaml",
+    "configs/experiment/binary_risk_natarajan_reproduction.yaml",
+    "configs/experiment/ca2c_cifar10_reproduction.yaml",
+    "configs/experiment/ca2c_cifar10_smoke.yaml",
+    "configs/experiment/cal_cifar10_reproduction.yaml",
+    "configs/experiment/cal_cifar10_smoke.yaml",
+    "configs/experiment/cifar10_clean.yaml",
+    "configs/experiment/cifar10_clean_baseline.yaml",
+    "configs/experiment/cifar10_clean_smoke.yaml",
+    "configs/experiment/cifar10_cnlcu_hard_smoke.yaml",
+    "configs/experiment/cifar10_cnlcu_soft_smoke.yaml",
+    "configs/experiment/cnlcu_cifar10_reproduction.yaml",
+    "configs/experiment/cifar10_coteaching_reproduction.yaml",
+    "configs/experiment/cifar10_coteaching_smoke.yaml",
+    "configs/experiment/cifar10_dual_t_evidence_smoke.yaml",
+    "configs/experiment/cifar10_dual_t_smoke.yaml",
+    "configs/experiment/cifar10_dld_smoke.yaml",
+    "configs/experiment/cifar10_dividemix_smoke.yaml",
+    "configs/experiment/cifar10_lend_smoke.yaml",
+    "configs/experiment/cifar10_foundation_smoke.yaml",
+    "configs/experiment/cifar10_smoke.yaml",
+    "configs/experiment/cifar10_symmetric_cdr_reproduction.yaml",
+    "configs/experiment/cifar10_symmetric_cdr_smoke.yaml",
+    "configs/experiment/cifar10_symmetric_ce_smoke.yaml",
+    "configs/experiment/cifar10_symmetric_small_loss_linear_smoke.yaml",
+    "configs/experiment/cifar10_symmetric_small_loss_smoke.yaml",
+    "configs/experiment/cifar10_t_revision_smoke.yaml",
+    "configs/experiment/cifar10_upm_smoke.yaml",
+    "configs/experiment/cifar10_volminnet_smoke.yaml",
+    "configs/experiment/cwd_cifar10_reproduction.yaml",
+    "configs/experiment/cwd_cifar10_smoke.yaml",
+    "configs/experiment/dss_cifar10_symmetric05_reproduction.yaml",
+    "configs/experiment/dss_cifar10_symmetric05_smoke.yaml",
+    "configs/experiment/dld_cifar10_reproduction.yaml",
+    "configs/experiment/fine_cifar100n_reproduction.yaml",
+    "configs/experiment/fine_cifar100n_smoke.yaml",
+    "configs/experiment/gce_cifar10_noise02_reproduction.yaml",
+    "configs/experiment/gce_cifar10_noise02_smoke.yaml",
+    "configs/experiment/importance_reweighting_binary_high_dim_smoke.yaml",
+    "configs/experiment/importance_reweighting_binary_smoke.yaml",
+    "configs/experiment/jocor_cifar10_symmetric05_reproduction.yaml",
+    "configs/experiment/jocor_cifar10_symmetric05_smoke.yaml",
+    "configs/experiment/loss_correction_cifar10_asymmetric04.yaml",
+    "configs/experiment/l2rw_cifar10_reproduction.yaml",
+    "configs/experiment/l2rw_cifar10_smoke.yaml",
+    "configs/experiment/lend_cifar10_reproduction.yaml",
+    "configs/experiment/mc_ldce_cifar10_reproduction.yaml",
+    "configs/experiment/mc_ldce_cifar10_smoke.yaml",
+    "configs/experiment/mentornet_dd_cifar100_symmetric04_reproduction.yaml",
+    "configs/experiment/mentornet_dd_cifar100_symmetric04_smoke.yaml",
+    "configs/experiment/mentornet_dd_teacher_cifar10_symmetric04.yaml",
+    "configs/experiment/pcse_multiclass_smoke.yaml",
+    "configs/experiment/pcse_multiclass_volmin_smoke.yaml",
+    "configs/experiment/pdl_cifar10_reproduction.yaml",
+    "configs/experiment/pdl_cifar10_smoke.yaml",
+    "configs/experiment/upm_cifar10_reproduction.yaml",
+    "configs/experiment/volminnet_cifar10_reproduction.yaml",
+]
+"share/lnl-toolbox/configs/reproduction" = [
+    "configs/reproduction/cifar10_cnlcu_soft_sym20_short.yaml",
+    "configs/reproduction/cifar10_dividemix_sym20.yaml",
+    "configs/reproduction/cifar10_dld_sym20_short.yaml",
+    "configs/reproduction/cifar10_dual_t_sym20.yaml",
+    "configs/reproduction/cifar10_dual_t_sym20_evidence.yaml",
+    "configs/reproduction/cifar10_pcse_reproduction.yaml",
+    "configs/reproduction/cifar10_t_revision_sym20_short.yaml",
+    "configs/reproduction/importance_reweighting_binary_high_dim.yaml",
+    "configs/reproduction/importance_reweighting_binary_low_dim.yaml",
+    "configs/reproduction/uci_heart_importance_reweighting.yaml",
+]

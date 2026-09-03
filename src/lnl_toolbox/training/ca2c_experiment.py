@@ -22,7 +22,7 @@ from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
 from lnl_toolbox.training.data_service import prepare_experiment_data
-from lnl_toolbox.training.experiment import build_optimizer, build_scheduler
+from lnl_toolbox.training.experiment import bind_model_input, build_optimizer, build_scheduler
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
 from lnl_toolbox.training.reproduction_data import build_reproduction_model
 
@@ -71,23 +71,31 @@ def _ca2c_batch_objectives(
     )
 
 
-def run_ca2c_experiment(config: dict[str, Any], output_dir=None, resume=None) -> Path:
+def run_ca2c_experiment(
+    config: dict[str, Any], output_dir=None, resume=None, *,
+    requirements: DataRequirements | None = None,
+) -> Path:
     config = deepcopy(config); seed = int(config.get("seed", 1)); seed_everything(seed)
     device = resolve_device(str(config.get("trainer", {}).get("device", "auto")))
     run_dir = Path(resume).resolve().parent if resume else Path(output_dir or Path(config.get("output_root", "artifacts/runs")) / datetime.now().strftime("%Y%m%d-%H%M%S")).resolve(); run_dir.mkdir(parents=True, exist_ok=True)
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        requirements = resolve_data_requirements(config, expected_runner="ca2c")
     data = prepare_experiment_data(
         config,
-        requirements=DataRequirements(
-            roles=frozenset({DataRole.TRAIN, DataRole.CLEAN_VALIDATION, DataRole.TEST}),
-            views=("weak", "strong") if bool(config["data"].get("strong_augment", False)) else ("weak",),
-        ),
+        requirements=requirements,
         run_dir=run_dir,
         seed=seed,
     ); classes = data.num_classes
     train_loader = data.loader(DataRole.TRAIN, stream=21)
-    validation_loader = data.loader(DataRole.CLEAN_VALIDATION, stream=23, shuffle=False)
+    validation_loader = (
+        data.loader(DataRole.CLEAN_VALIDATION, stream=23, shuffle=False)
+        if DataRole.CLEAN_VALIDATION in data.available_roles
+        else None
+    )
     test_loader = data.loader(DataRole.TEST, stream=24, shuffle=False)
-    p_model = build_reproduction_model(config["model"], config["data"], classes).to(device); n_model = build_reproduction_model(config["model"], config["data"], classes).to(device)
+    model_config = bind_model_input(config["model"], data.input_spec)
+    p_model = build_reproduction_model(model_config, config["data"], classes).to(device); n_model = build_reproduction_model(model_config, config["data"], classes).to(device)
     p_optimizer = build_optimizer(p_model, config["optimizer"]); n_optimizer = build_optimizer(n_model, config["optimizer"])
     epochs = int(config["trainer"]["epochs"]); p_scheduler = build_scheduler(p_optimizer, config.get("scheduler"), epochs); n_scheduler = build_scheduler(n_optimizer, config.get("scheduler"), epochs)
     memory = CandidateMemory.create(torch.as_tensor(data.train_indices), classes); criterion = CrossEntropyLoss().to(device); start = 0; rows = []
@@ -128,27 +136,31 @@ def run_ca2c_experiment(config: dict[str, Any], output_dir=None, resume=None) ->
             )
             p_optimizer.zero_grad(set_to_none=True); p_loss.backward(); p_optimizer.step(); n_optimizer.zero_grad(set_to_none=True); n_loss.backward(); n_optimizer.step()
             ensemble = (p_logits.detach() + n_logits.detach()) / 2; total += targets.numel(); correct += int(ensemble.argmax(1).eq(targets).sum()); loss_sum += float((p_loss.detach() + n_loss.detach()) / 2) * targets.numel()
-        validation = _evaluate((p_model, n_model), validation_loader, criterion, device); test = _evaluate((p_model, n_model), test_loader, criterion, device)
-        row = standardize_epoch_row({
+        test = _evaluate((p_model, n_model), test_loader, criterion, device)
+        row_values = {
             "epoch": epoch + 1,
             "phase": "warmup" if epoch < warmup_epochs else "robust",
             "train_loss": loss_sum / total,
             "train_accuracy": correct / total,
-            "validation_loss": validation["loss"],
-            "validation_accuracy": validation["accuracy"],
             "test_loss": test["loss"],
             "test_accuracy": test["accuracy"],
             "learning_rate": p_optimizer.param_groups[0]["lr"],
             "method": "ca2c",
             "candidate_memory_hash": memory.fingerprint(),
-        })
+        }
+        if validation_loader is not None:
+            validation = _evaluate((p_model, n_model), validation_loader, criterion, device)
+            row_values.update({"validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"]})
+        row = standardize_epoch_row(row_values, require_validation=validation_loader is not None)
         rows.append(row)
-        print(
-            f"CA2C epoch {epoch + 1}/{epochs} phase={row['phase']} "
-            f"loss={row['train_loss']:.5f} val={row['validation_accuracy']:.4f} "
-            f"test={row['test_accuracy']:.4f}",
-            flush=True,
+        # Keep the live Web console and offline artifacts on the same
+        # structured event contract.  Rewriting this small file each epoch
+        # also makes interruption/resume display the complete history.
+        (run_dir / "metrics.jsonl").write_text(
+            "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in rows),
+            encoding="utf-8",
         )
+        print(json.dumps(row, ensure_ascii=False), flush=True)
         if p_scheduler is not None: p_scheduler.step(); n_scheduler.step()
         atomic_save({
             "method": "ca2c",

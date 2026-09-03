@@ -21,6 +21,37 @@ def _save_loss(ctx: ScratchContext, values: Any, save_as: str) -> None:
     ctx[save_as] = values
 
 
+def _class_labels(value: Any, classes: int, *, device: Any, slot: str) -> Any:
+    """Validate class ids before an indexed CUDA operation.
+
+    CUDA scatter/gather and cross-entropy report out-of-range labels as an
+    asynchronous ``device-side assert``.  Moving a small copy to CPU for the
+    precondition check lets Scratch report the actual contract violation
+    (usually a dataset/model class-count mismatch) at the originating block.
+    The returned tensor remains an ordinary long class-id tensor on the
+    operation's device; no label value is changed.
+    """
+    torch, _ = _torch()
+    raw = torch.as_tensor(value)
+    flat = raw.detach().to("cpu").reshape(-1)
+    if flat.numel() == 0:
+        raise ValueError(f"label slot '{slot}' is empty")
+    if flat.dtype.is_floating_point:
+        if not bool(torch.isfinite(flat).all().item()):
+            raise ValueError(f"label slot '{slot}' contains non-finite class ids")
+        if not bool(torch.equal(flat, flat.round())):
+            raise ValueError(f"label slot '{slot}' contains non-integral class ids")
+    labels_cpu = flat.to(torch.long)
+    minimum, maximum = int(labels_cpu.min().item()), int(labels_cpu.max().item())
+    if minimum < 0 or maximum >= int(classes):
+        raise ValueError(
+            f"label slot '{slot}' contains class ids in [{minimum}, {maximum}], "
+            f"but the logits/probability tensor has {int(classes)} classes; "
+            "check that the selected dataset and model num_classes match"
+        )
+    return labels_cpu.to(device=device).view(-1)
+
+
 @block(
     id="per_sample_ce",
     name="Per-sample Cross Entropy",
@@ -42,8 +73,10 @@ def per_sample_ce(
     labels: str = "labels",
     save_as: str = "loss_per_sample",
 ) -> None:
-    _, F = _torch()
-    _save_loss(ctx, F.cross_entropy(ctx[logits], ctx[labels].long(), reduction="none"), save_as)
+    torch, F = _torch()
+    scores = ctx[logits]
+    targets = _class_labels(ctx[labels], scores.shape[-1], device=scores.device, slot=labels)
+    _save_loss(ctx, F.cross_entropy(scores, targets, reduction="none"), save_as)
 
 
 @block(
@@ -147,7 +180,12 @@ def complementary_negative_loss(ctx: ScratchContext, logits: str = "logits", com
 def gather_by_label(ctx: ScratchContext, values: str = "probabilities", labels: str = "labels", save_as: str = "gathered_values") -> None:
     torch = __import__("torch")
     matrix = torch.as_tensor(ctx[values])
-    target = torch.as_tensor(ctx[labels], device=matrix.device).long().view(-1, 1)
+    target = _class_labels(ctx[labels], matrix.shape[1], device=matrix.device, slot=labels).view(-1, 1)
+    if target.shape[0] != matrix.shape[0]:
+        raise ValueError(
+            f"gather_by_label expects one label per row: values has {matrix.shape[0]} rows, "
+            f"but '{labels}' has {target.shape[0]} labels"
+        )
     ctx[save_as] = matrix.gather(1, target).squeeze(1)
 
 
@@ -211,7 +249,8 @@ def affine_transform(ctx: ScratchContext, input: str = "powered_values", scale: 
 def mae_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", save_as: str = "loss_per_sample") -> None:
     torch, _ = _torch()
     probabilities = torch.softmax(ctx[logits], dim=-1)
-    target = torch.zeros_like(probabilities).scatter_(1, ctx[labels].long().view(-1, 1), 1.0)
+    target_labels = _class_labels(ctx[labels], probabilities.shape[1], device=probabilities.device, slot=labels)
+    target = torch.zeros_like(probabilities).scatter_(1, target_labels.view(-1, 1), 1.0)
     _save_loss(ctx, (probabilities - target).abs().mean(dim=1), save_as)
 
 
@@ -234,8 +273,10 @@ def mae_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels"
 )
 def nce_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", save_as: str = "loss_per_sample") -> None:
     torch, F = _torch()
-    log_probabilities = F.log_softmax(ctx[logits], dim=-1)
-    ce = -log_probabilities.gather(1, ctx[labels].long().view(-1, 1)).squeeze(1)
+    scores = ctx[logits]
+    log_probabilities = F.log_softmax(scores, dim=-1)
+    target_labels = _class_labels(ctx[labels], scores.shape[-1], device=scores.device, slot=labels)
+    ce = -log_probabilities.gather(1, target_labels.view(-1, 1)).squeeze(1)
     _save_loss(ctx, ce / (-log_probabilities).sum(dim=1).clamp_min(1e-12), save_as)
 
 
@@ -260,7 +301,8 @@ def nce_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels"
 def rce_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", log_zero: float = -4.0, save_as: str = "loss_per_sample") -> None:
     torch, _ = _torch()
     probabilities = torch.softmax(ctx[logits], dim=-1).clamp_min(1e-12)
-    target = torch.full_like(probabilities, float(log_zero)).scatter_(1, ctx[labels].long().view(-1, 1), 0.0)
+    target_labels = _class_labels(ctx[labels], probabilities.shape[1], device=probabilities.device, slot=labels)
+    target = torch.full_like(probabilities, float(log_zero)).scatter_(1, target_labels.view(-1, 1), 0.0)
     _save_loss(ctx, -(probabilities * target).sum(dim=1), save_as)
 
 
@@ -314,7 +356,8 @@ def binary_risk(
     losses = -log_probabilities
     zero = ((1.0 - float(rho_positive)) * losses[:, 0] - float(rho_negative) * losses[:, 1]) / gap
     one = (-float(rho_positive) * losses[:, 0] + (1.0 - float(rho_negative)) * losses[:, 1]) / gap
-    _save_loss(ctx, torch.where(ctx[labels].long() == 0, zero, one), save_as)
+    target_labels = _class_labels(ctx[labels], 2, device=losses.device, slot=labels)
+    _save_loss(ctx, torch.where(target_labels == 0, zero, one), save_as)
 
 
 @block(
@@ -329,7 +372,9 @@ def binary_risk(
 )
 def backward_correction(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", transition: str = "transition", save_as: str = "loss_per_sample") -> None:
     torch, F = _torch()
-    log_probabilities = F.log_softmax(ctx[logits], dim=-1)
+    scores = ctx[logits]
+    log_probabilities = F.log_softmax(scores, dim=-1)
     all_losses = -log_probabilities
-    corrected = torch.linalg.solve(ctx[transition].to(ctx[logits]), all_losses.transpose(0, 1)).transpose(0, 1)
-    _save_loss(ctx, corrected.gather(1, ctx[labels].long().view(-1, 1)).squeeze(1), save_as)
+    corrected = torch.linalg.solve(ctx[transition].to(scores), all_losses.transpose(0, 1)).transpose(0, 1)
+    target_labels = _class_labels(ctx[labels], corrected.shape[1], device=corrected.device, slot=labels)
+    _save_loss(ctx, corrected.gather(1, target_labels.view(-1, 1)).squeeze(1), save_as)

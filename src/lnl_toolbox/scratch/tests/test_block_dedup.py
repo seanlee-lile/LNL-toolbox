@@ -13,6 +13,7 @@ from lnl_toolbox.scratch.blocks.losses import (
     elementwise_power,
     gather_by_label,
 )
+from lnl_toolbox.scratch.blocks.models import create_model
 from lnl_toolbox.scratch.blocks.selection import (
     linear_rate_schedule,
     mean_by_indices,
@@ -32,6 +33,19 @@ class ScratchBlockDedupTest(unittest.TestCase):
         ctx = ScratchContext({"values": values, "labels": labels})
         gather_by_label(ctx, values="values", labels="labels", save_as="gathered")
         self.assertTrue(torch.equal(ctx["gathered"], torch.tensor([-1.0e-20, -2.0e-20])))
+
+    def test_gather_by_label_reports_class_mismatch_before_indexing(self) -> None:
+        ctx = ScratchContext({
+            "values": torch.zeros((2, 10)),
+            "labels": torch.tensor([87, 2]),
+        })
+        with self.assertRaisesRegex(ValueError, "logits/probability tensor has 10 classes"):
+            gather_by_label(ctx, values="values", labels="labels", save_as="gathered")
+
+    def test_create_model_rejects_loaded_dataset_class_mismatch(self) -> None:
+        ctx = ScratchContext({"device": "cpu", "num_classes": 100})
+        with self.assertRaisesRegex(ValueError, "model num_classes=10.*dataset num_classes=100"):
+            create_model(ctx, model="linear", num_classes=10, input_dim=4)
 
     def test_select_and_mean_are_distinct_operations(self) -> None:
         ctx = ScratchContext({"values": torch.tensor([1.0, 4.0, 9.0]), "indices": torch.tensor([2, 0])})

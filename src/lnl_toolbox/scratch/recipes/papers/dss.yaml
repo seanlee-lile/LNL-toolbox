@@ -19,7 +19,7 @@ steps:
   - {block: create_model, params: {model: preact_resnet18, num_classes: 10, base_width: 64, device: device, save_as: model}}
   - {block: create_optimizer, params: {optimizer: sgd, model: model, lr: 0.02, momentum: 0.9, weight_decay: 0.001, save_as: optimizer}}
   - {block: create_scheduler, params: {scheduler: multistep, optimizer: optimizer, milestones: [80], gamma: 0.1, save_as: scheduler}}
-  - {block: create_dss_state, params: {num_samples: 50000, num_classes: 10, total_epochs: 150, warmup_epochs: 30, alpha: 0.1, prior_decay: 0.99, save_as: dss_state}}
+  - {block: create_dss_state, params: {total_epochs: 150, warmup_epochs: 30, alpha: 0.1, prior_decay: 0.99, save_as: dss_state}}
   - block: epoch_loop
     params: {epochs: 150}
     steps:

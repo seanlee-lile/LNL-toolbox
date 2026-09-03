@@ -125,11 +125,25 @@ class _ScratchDSSState:
     name="DSS: Create Indexed State",
     category="State",
     description="Create the stable-index DSS state used by the epoch lifecycle.",
-    params={"num_samples": {"type": "int", "default": 50000, "min": 1}, "num_classes": {"type": "int", "default": 10, "min": 2}, "total_epochs": {"type": "int", "default": 150, "min": 1}, "warmup_epochs": {"type": "int", "default": 30, "min": 0}, "alpha": {"type": "float", "default": 0.1, "min": 0.000001, "max": 0.999999}, "prior_decay": {"type": "float", "default": 0.99, "min": 0.0, "max": 0.999999}, "mda": {"type": "bool", "default": True}, "ccs": {"type": "bool", "default": True}, "save_as": {"type": "slot", "default": "dss_state"}},
+    params={"prepared_data": {"type": "slot", "default": "prepared_data"}, "total_epochs": {"type": "int", "required": True, "min": 1}, "warmup_epochs": {"type": "int", "required": True, "min": 0}, "alpha": {"type": "float", "required": True, "min": 0.000001, "max": 0.999999}, "prior_decay": {"type": "float", "required": True, "min": 0.0, "max": 0.999999}, "mda": {"type": "bool", "default": True}, "ccs": {"type": "bool", "default": True}, "save_as": {"type": "slot", "default": "dss_state"}},
+    requires=("prepared_data",),
     provides=("save_as",), placement=("top",), stage="setup", ui_group="② 初始化",
     formula="S={history, marginal, trend, selected, excluded}", formula_ref="DSS indexed selector lifecycle", paper="Debiased Sample Selection",
 )
-def create_dss_state(ctx: ScratchContext, num_samples: int = 50000, num_classes: int = 10, total_epochs: int = 150, warmup_epochs: int = 30, alpha: float = 0.1, prior_decay: float = 0.99, mda: bool = True, ccs: bool = True, save_as: str = "dss_state") -> None:
+def create_dss_state(ctx: ScratchContext, prepared_data: str = "prepared_data", total_epochs: int | None = None, warmup_epochs: int | None = None, alpha: float | None = None, prior_decay: float | None = None, mda: bool = True, ccs: bool = True, save_as: str = "dss_state") -> None:
+    prepared = ctx[prepared_data]
+    train_indices = getattr(prepared, "train_indices", None)
+    if train_indices is not None:
+        values = _torch().as_tensor(train_indices, dtype=_torch().long).reshape(-1)
+        num_samples = int(values.max().item()) + 1 if values.numel() else 0
+    else:
+        train_dataset = getattr(prepared, "datasets", {}).get("train")
+        num_samples = len(train_dataset) if train_dataset is not None else 0
+    num_classes = getattr(prepared, "num_classes", None)
+    if num_classes is None:
+        num_classes = ctx.get("num_classes")
+    if not num_samples or num_classes is None or total_epochs is None or warmup_epochs is None or alpha is None or prior_decay is None:
+        raise ValueError("DSS state requires prepared_data-derived sizes and explicit lifecycle parameters")
     fixture = bool((ctx.get("_runtime_limits") or {}).get("fixture"))
     ctx[save_as] = _ScratchDSSState(int(num_samples), int(num_classes), int(total_epochs), warmup_epochs=int(warmup_epochs), alpha=float(alpha), prior_decay=float(prior_decay), strict=not fixture, mda=bool(mda), ccs=bool(ccs))
 

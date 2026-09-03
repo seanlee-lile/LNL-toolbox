@@ -8,7 +8,7 @@ import struct
 
 import numpy as np
 
-from .contracts import DataSpec, RawDatasetSplit
+from .contracts import DataSpec, RawDatasetSplit, UnsupportedDatasetSplitError
 from .registry import DatasetRegistry
 
 
@@ -84,7 +84,7 @@ class MnistAdapter:
     def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
         del seed
         if split not in {"train", "test"}:
-            raise ValueError("MNIST-family split must be train or test")
+            raise UnsupportedDatasetSplitError("MNIST-family split must be train or test")
         if spec.root is None:
             raise ValueError(f"{self.name} requires data.root")
         images, labels, source = self._read_idx(spec.root, split)

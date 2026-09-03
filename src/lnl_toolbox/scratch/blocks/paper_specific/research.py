@@ -29,11 +29,11 @@ def _torch():
     description="Fit PDL's multiplicative-update nonnegative part representation once on train plus noisy-validation features.",
     params={
         "features": {"type": "slot", "default": "pdl_representation_features"},
-        "num_parts": {"type": "int", "default": 20, "min": 1},
-        "iterations": {"type": "int", "default": 10, "min": 1},
+        "num_parts": {"type": "int", "required": True, "min": 1},
+        "iterations": {"type": "int", "required": True, "min": 1},
         "error_tolerance": {"type": "float", "default": 1.0e-5, "min": 0.0},
-        "representation_seed": {"type": "int", "default": 1, "min": 0},
-        "official_raw": {"type": "bool", "default": True},
+        "representation_seed": {"type": "int", "required": True, "min": 0},
+        "seed_policy": {"type": "enum", "required": True, "options": ["stochastic", "deterministic"]},
         "parts_as": {"type": "slot", "default": "pdl_parts"},
         "coefficients_as": {"type": "slot", "default": "pdl_coefficients"},
         "indices_as": {"type": "slot", "default": "pdl_representation_indices"},
@@ -48,23 +48,25 @@ def _torch():
 def pdl_fit_part_representation(
     ctx: ScratchContext,
     features: str = "pdl_representation_features",
-    num_parts: int = 20,
-    iterations: int = 10,
+    num_parts: int | None = None,
+    iterations: int | None = None,
     error_tolerance: float = 1.0e-5,
-    representation_seed: int = 1,
-    official_raw: bool = True,
+    representation_seed: int | None = None,
+    seed_policy: str | None = None,
     parts_as: str = "pdl_parts",
     coefficients_as: str = "pdl_coefficients",
     indices_as: str = "pdl_representation_indices",
 ) -> None:
     from ...native_stats import fit_part_representation
+    if num_parts is None or iterations is None or representation_seed is None or seed_policy is None:
+        raise ValueError("PDL part representation requires num_parts, iterations, representation_seed, and seed_policy")
     snapshot = ctx[features]
     if bool((ctx.get("_runtime_limits") or {}).get("fixture")):
         # The bounded fixture uses a four-dimensional representation; cap the
         # formal part count only for this synthetic run so factorisation is
         # well-defined without changing the formal recipe.
         num_parts = min(int(num_parts), min(int(snapshot.features.shape[0]), int(snapshot.features.shape[1])))
-    seed = None if bool(official_raw) else int(representation_seed)
+    seed = None if seed_policy == "stochastic" else int(representation_seed)
     parts, coefficients = fit_part_representation(
         snapshot.features, int(num_parts), seed=seed,
         iterations=int(iterations), error_tolerance=float(error_tolerance),
@@ -86,10 +88,10 @@ def pdl_fit_part_representation(
         "validation_posterior": {"type": "slot", "default": "pdl_validation_posteriors"},
         "train_anchors": {"type": "slot", "default": "pdl_train_anchor_positions"},
         "validation_anchors": {"type": "slot", "default": "pdl_validation_anchor_positions"},
-        "basis_epochs": {"type": "int", "default": 1500, "min": 1},
-        "basis_learning_rate": {"type": "float", "default": 0.001, "min": 0.0},
-        "basis_loss_threshold": {"type": "float", "default": 0.02, "min": 0.0},
-        "representation_seed": {"type": "int", "default": 1, "min": 0},
+        "basis_epochs": {"type": "int", "required": True, "min": 1},
+        "basis_learning_rate": {"type": "float", "required": True, "min": 0.0},
+        "basis_loss_threshold": {"type": "float", "required": True, "min": 0.0},
+        "representation_seed": {"type": "int", "required": True, "min": 0},
         "train_as": {"type": "slot", "default": "pdl_train_basis"},
         "validation_as": {"type": "slot", "default": "pdl_validation_basis"},
     },
@@ -108,14 +110,16 @@ def pdl_fit_basis_matrices(
     validation_posterior: str = "pdl_validation_posteriors",
     train_anchors: str = "pdl_train_anchor_positions",
     validation_anchors: str = "pdl_validation_anchor_positions",
-    basis_epochs: int = 1500,
-    basis_learning_rate: float = 0.001,
-    basis_loss_threshold: float = 0.02,
-    representation_seed: int = 1,
+    basis_epochs: int | None = None,
+    basis_learning_rate: float | None = None,
+    basis_loss_threshold: float | None = None,
+    representation_seed: int | None = None,
     train_as: str = "pdl_train_basis",
     validation_as: str = "pdl_validation_basis",
 ) -> None:
     import numpy as np
+    if basis_epochs is None or basis_learning_rate is None or basis_loss_threshold is None or representation_seed is None:
+        raise ValueError("PDL basis fitting requires basis_epochs, basis_learning_rate, basis_loss_threshold, and representation_seed")
     from ...native_stats import fit_pdl_basis_matrices_pair
     coeff = ctx[coefficients]
     rep_indices = np.asarray(ctx[representation_indices], dtype=np.int64)
@@ -146,7 +150,7 @@ def pdl_fit_basis_matrices(
         coeff[train_positions][train_anchor_positions], train.noisy_probabilities[train_anchor_positions],
         coeff[validation_positions][validation_anchor_positions], validation.noisy_probabilities[validation_anchor_positions],
         epochs=effective_epochs, learning_rate=float(basis_learning_rate),
-        loss_threshold=float(basis_loss_threshold), seed=int(representation_seed), official_raw=True,
+        loss_threshold=float(basis_loss_threshold), seed=int(representation_seed),
     )
     ctx[train_as] = train_basis
     ctx[validation_as] = validation_basis
@@ -167,8 +171,8 @@ def pdl_fit_basis_matrices(
         "validation_posterior": {"type": "slot", "default": "pdl_validation_posteriors"},
         "train_basis": {"type": "slot", "default": "pdl_train_basis"},
         "validation_basis": {"type": "slot", "default": "pdl_validation_basis"},
-        "num_parts": {"type": "int", "default": 20, "min": 1},
-        "representation_seed": {"type": "int", "default": 1, "min": 0},
+        "num_parts": {"type": "int", "required": True, "min": 1},
+        "representation_seed": {"type": "int", "required": True, "min": 0},
         "train_as": {"type": "slot", "default": "pdl_transition"},
         "validation_as": {"type": "slot", "default": "pdl_validation_transition"},
         "revision_validation_as": {"type": "slot", "default": "pdl_revision_validation_transition"},
@@ -191,23 +195,25 @@ def pdl_estimate_instance_transition(
     validation_posterior: str = "pdl_validation_posteriors",
     train_basis: str = "pdl_train_basis",
     validation_basis: str = "pdl_validation_basis",
-    num_parts: int = 20,
-    representation_seed: int = 1,
+    num_parts: int | None = None,
+    representation_seed: int | None = None,
     train_as: str = "pdl_transition",
     validation_as: str = "pdl_validation_transition",
     revision_validation_as: str = "pdl_revision_validation_transition",
 ) -> None:
     from ...native_stats import PartTransitionEstimator
+    if num_parts is None or representation_seed is None:
+        raise ValueError("PDL transition estimation requires num_parts and representation_seed")
     estimator = PartTransitionEstimator(int(num_parts), int(num_parts), representation_seed=int(representation_seed))
     train_artifact = estimator.estimate_from_shared_representation(
         ctx[train_features], ctx[train_posterior],
         representation_parts=ctx[parts], representation_coefficients=ctx[coefficients],
-        representation_indices=ctx[representation_indices], part_matrices=ctx[train_basis], official_raw_basis=True,
+        representation_indices=ctx[representation_indices], part_matrices=ctx[train_basis],
     )
     validation_artifact = estimator.estimate_from_shared_representation(
         ctx[validation_features], ctx[validation_posterior],
         representation_parts=ctx[parts], representation_coefficients=ctx[coefficients],
-        representation_indices=ctx[representation_indices], part_matrices=ctx[validation_basis], official_raw_basis=True,
+        representation_indices=ctx[representation_indices], part_matrices=ctx[validation_basis],
     )
     ctx[train_as] = train_artifact
     ctx[validation_as] = validation_artifact
@@ -223,15 +229,15 @@ def pdl_estimate_instance_transition(
     category="Paper Specific",
     description="Load the frozen MentorArtifact and configure the moving-percentile, burn-in, label, and dropout lifecycle from the formal recipe.",
     params={
-        "artifact_path": {"type": "str", "default": "data/mentornet/cifar10-symmetric04-official-port-seed20260729/mentor_artifact.pt"},
-        "total_epochs": {"type": "int", "default": 100, "min": 1},
-        "percentile": {"type": "float", "default": 0.6, "min": 0.0001, "max": 0.9999},
-        "decay": {"type": "float", "default": 0.5, "min": 0.0, "max": 0.9999},
-        "burn_in_epoch": {"type": "int", "default": 18, "min": 0, "max": 100},
-        "fixed_epoch_after_burn_in": {"type": "bool", "default": True},
-        "fixed_label": {"type": "int", "default": 0, "min": 0},
-        "dropout_schedule": {"type": "value", "default": [[0.5, 17], [0.05, 78], [0.9, 5]]},
-        "seed": {"type": "int", "default": 20260729, "min": 0},
+        "artifact_path": {"type": "str", "required": True},
+        "total_epochs": {"type": "int", "required": True, "min": 1},
+        "percentile": {"type": "float", "required": True, "min": 0.0001, "max": 0.9999},
+        "decay": {"type": "float", "required": True, "min": 0.0, "max": 0.9999},
+        "burn_in_epoch": {"type": "int", "required": True, "min": 0},
+        "fixed_epoch_after_burn_in": {"type": "bool", "required": True},
+        "fixed_label": {"type": "int", "required": True, "min": 0},
+        "dropout_schedule": {"type": "value", "required": True},
+        "seed": {"type": "int", "required": True, "min": 0},
         "save_as": {"type": "slot", "default": "mentor_provider"},
         "threshold_as": {"type": "slot", "default": "mentor_threshold"},
     },
@@ -242,15 +248,15 @@ def pdl_estimate_instance_transition(
 )
 def create_mentor_provider(
     ctx: ScratchContext,
-    artifact_path: str = "data/mentornet/cifar10-symmetric04-official-port-seed20260729/mentor_artifact.pt",
-    total_epochs: int = 100,
-    percentile: float = 0.6,
-    decay: float = 0.5,
-    burn_in_epoch: int = 18,
-    fixed_epoch_after_burn_in: bool = True,
-    fixed_label: int = 0,
-    dropout_schedule: Any = ((0.5, 17), (0.05, 78), (0.9, 5)),
-    seed: int = 20260729,
+    artifact_path: str | None = None,
+    total_epochs: int | None = None,
+    percentile: float | None = None,
+    decay: float | None = None,
+    burn_in_epoch: int | None = None,
+    fixed_epoch_after_burn_in: bool | None = None,
+    fixed_label: int | None = None,
+    dropout_schedule: Any = None,
+    seed: int | None = None,
     save_as: str = "mentor_provider",
     threshold_as: str = "mentor_threshold",
 ) -> None:
@@ -258,6 +264,8 @@ def create_mentor_provider(
     from pathlib import Path
     from ...native_stats import MentorNetWeightProvider
 
+    if not artifact_path or total_epochs is None or percentile is None or decay is None or burn_in_epoch is None or fixed_epoch_after_burn_in is None or fixed_label is None or dropout_schedule is None or seed is None:
+        raise ValueError("MentorNet provider requires artifact_path and all curriculum parameters")
     path = Path(str(artifact_path))
     if not path.is_absolute():
         path = Path.cwd() / path
@@ -552,13 +560,21 @@ def cwd_global_objective(ctx: ScratchContext, model: str = "model", features: st
     name="PCSE: Recover Layer Statistics",
     category="Paper Specific",
     description="Recover clean per-class means, second moments, and covariances for aligned feature snapshots.",
-    params={"snapshots": {"type": "slot", "default": "pcse_snapshots"}, "layer_names": {"type": "value", "default": ["layer3", "layer4"]}, "transition": {"type": "slot", "default": "transition"}, "save_as": {"type": "slot", "default": "pcse_statistics"}},
+    params={"snapshots": {"type": "slot", "default": "pcse_snapshots"}, "layer_names": {"type": "value", "required": True}, "transition": {"type": "slot", "default": "transition"}, "save_as": {"type": "slot", "default": "pcse_statistics"}},
     requires=("snapshots", "transition"), provides=("save_as",), placement=("top", "epoch"), stage="setup", ui_group="⑥ 后验与权重",
     formula="mu=R^T mu~; S=R^T S~; Sigma=S-mu mu^T", formula_ref="PCSE Eqs. (20)-(23)", paper="Estimating Per-Class Statistics",
 )
-def pcse_recover_layer_statistics(ctx: ScratchContext, snapshots: str = "pcse_snapshots", layer_names: list[str] | tuple[str, ...] = ("layer3", "layer4"), transition: str = "transition", save_as: str = "pcse_statistics") -> None:
+def pcse_recover_layer_statistics(ctx: ScratchContext, snapshots: str = "pcse_snapshots", layer_names: list[str] | tuple[str, ...] | None = None, transition: str = "transition", save_as: str = "pcse_statistics") -> None:
     import numpy as np
     from ...native_stats import estimate_pcse_statistics
+    if not layer_names:
+        snapshot_value = ctx[snapshots]
+        if isinstance(snapshot_value, Mapping):
+            layer_names = tuple(str(name) for name in snapshot_value)
+        else:
+            layer_names = tuple(str(name) for name in getattr(snapshot_value, "layer_names", ()))
+        if not layer_names:
+            raise ValueError("PCSE layer_names must be supplied by the Recipe or snapshot metadata")
     matrix = ctx[transition]
     if hasattr(matrix, "detach"):
         matrix = matrix.detach().cpu().numpy()
@@ -579,15 +595,16 @@ def pcse_recover_layer_statistics(ctx: ScratchContext, snapshots: str = "pcse_sn
         "model": {"type": "slot", "default": "model"},
         "ema_model": {"type": "value", "default": None},
         "prepared_data": {"type": "value", "default": None},
-        "num_classes": {"type": "int", "default": 100, "min": 2},
-        "ema_momentum": {"type": "float", "default": 0.95, "min": 0.0, "max": 0.999999},
-        "momentum_scs": {"type": "float", "default": 0.999, "min": 0.0, "max": 0.999999},
-        "momentum_scr": {"type": "float", "default": 0.99, "min": 0.0, "max": 0.999999},
-        "maximum_threshold": {"type": "float", "default": 0.95, "min": 0.0, "max": 1.0},
-        "beta": {"type": "float", "default": 0.1, "min": 0.0},
-        "gamma": {"type": "float", "default": 0.002, "min": 0.0},
+        "num_classes": {"type": "int", "min": 2},
+        "ema_momentum": {"type": "float", "required": True, "min": 0.0, "max": 0.999999},
+        "momentum_scs": {"type": "float", "required": True, "min": 0.0, "max": 0.999999},
+        "momentum_scr": {"type": "float", "required": True, "min": 0.0, "max": 0.999999},
+        "quantile": {"type": "float", "required": True, "min": 0.0001, "max": 0.9999},
+        "maximum_threshold": {"type": "float", "required": True, "min": 0.0, "max": 1.0},
+        "beta": {"type": "float", "required": True, "min": 0.0},
+        "gamma": {"type": "float", "required": True, "min": 0.0},
         "probability_floor": {"type": "float", "default": 1.0e-7, "min": 1.0e-12},
-        "seed": {"type": "int", "default": 23, "min": 0},
+        "seed": {"type": "int", "required": True, "min": 0},
         "save_as": {"type": "slot", "default": "fine_state"},
     },
     requires=("model",), provides=("save_as", "fine_clean_state", "fine_pseudo_state", "fine_weight_state"), placement=("top",), stage="setup", ui_group="⑥ 后验与权重",
@@ -600,23 +617,31 @@ def create_fine_state(
     model: str = "model",
     ema_model: Any = None,
     prepared_data: Any = None,
-    num_classes: int = 100,
-    ema_momentum: float = 0.95,
-    momentum_scs: float = 0.999,
-    momentum_scr: float = 0.99,
-    maximum_threshold: float = 0.95,
-    beta: float = 0.1,
-    gamma: float = 0.002,
+    num_classes: int | None = None,
+    ema_momentum: float | None = None,
+    momentum_scs: float | None = None,
+    momentum_scr: float | None = None,
+    quantile: float | None = None,
+    maximum_threshold: float | None = None,
+    beta: float | None = None,
+    gamma: float | None = None,
     probability_floor: float = 1.0e-7,
-    seed: int = 23,
+    seed: int | None = None,
     save_as: str = "fine_state",
 ) -> None:
     torch, _ = _torch()
     from ...native_stats import SelfAdaptiveClassSelector, SelfAdaptiveConfidenceReweighting, FINERegularizer, ModelEMA
+    prepared = ctx[prepared_data] if isinstance(prepared_data, str) and prepared_data in ctx else prepared_data
+    if num_classes is None:
+        num_classes = getattr(prepared, "num_classes", None) if prepared is not None else None
+        if num_classes is None:
+            num_classes = ctx.get("num_classes")
+    if num_classes is None or ema_momentum is None or momentum_scs is None or momentum_scr is None or quantile is None or maximum_threshold is None or beta is None or gamma is None or seed is None:
+        raise ValueError("FINE state requires class count and all SCS/SCR/EMA parameters")
     ema = ctx[ema_model] if isinstance(ema_model, str) and ema_model in ctx else ModelEMA(ctx[model], float(ema_momentum), update_buffers=False)
     ctx[save_as] = {
         "ema": ema,
-        "scs": SelfAdaptiveClassSelector(int(num_classes), float(momentum_scs), quantile=0.8, maximum_threshold=float(maximum_threshold)),
+        "scs": SelfAdaptiveClassSelector(int(num_classes), float(momentum_scs), quantile=float(quantile), maximum_threshold=float(maximum_threshold)),
         "scr": SelfAdaptiveConfidenceReweighting(int(num_classes), float(momentum_scr)),
         "regularizer": FINERegularizer(beta=float(beta), gamma=float(gamma), probability_floor=float(probability_floor), seed=int(seed)),
         # Per-sample decisions are published as generic indexed tables by the
@@ -624,7 +649,6 @@ def create_fine_state(
         # prevents a paper-specific batch lookup object from becoming part of
         # the public State language.
     }
-    prepared = ctx[prepared_data] if isinstance(prepared_data, str) and prepared_data in ctx else prepared_data
     train_indices = getattr(prepared, "train_indices", None) if prepared is not None else None
     rows = torch.as_tensor(train_indices, dtype=torch.long).reshape(-1).cpu() if train_indices is not None else torch.empty(0, dtype=torch.long)
     size = int(rows.max().item()) + 1 if rows.numel() else 0
@@ -832,13 +856,15 @@ def t_revision_importance_ratio(ctx: ScratchContext, probabilities: str = "proba
     name="UPM: Update Confusing Probabilities",
     category="Paper Specific",
     description="Apply Eq. (11) eta ascent and [0,1] projection after posterior estimation.",
-    params={"state": {"type": "slot", "default": "upm_eta_state"}, "psi_state": {"type": "slot", "default": "upm_psi_state"}, "indices": {"type": "slot", "default": "indices"}, "posterior": {"type": "slot", "default": "clean_posterior"}, "labels": {"type": "slot", "default": "labels"}, "learning_rate": {"type": "float", "default": 0.7, "min": 0.0}},
+    params={"state": {"type": "slot", "default": "upm_eta_state"}, "psi_state": {"type": "slot", "default": "upm_psi_state"}, "indices": {"type": "slot", "default": "indices"}, "posterior": {"type": "slot", "default": "clean_posterior"}, "labels": {"type": "slot", "default": "labels"}, "learning_rate": {"type": "float", "required": True, "min": 0.0}},
     requires=("state", "psi_state", "indices", "posterior", "labels"), provides=(), placement=("batch",), stage="train", ui_group="⑩ 论文专用",
     formula="eta<-Pi_[0,1](eta+lr d log p(y~|x)/d eta)", formula_ref="UPM Eq. (11)-(12)", paper="Universal Probability Model for Label Noise",
 )
-def upm_update_eta(ctx: ScratchContext, state: str = "upm_eta_state", psi_state: str = "upm_psi_state", indices: str = "indices", posterior: str = "clean_posterior", labels: str = "labels", learning_rate: float = 0.7) -> None:
+def upm_update_eta(ctx: ScratchContext, state: str = "upm_eta_state", psi_state: str = "upm_psi_state", indices: str = "indices", posterior: str = "clean_posterior", labels: str = "labels", learning_rate: float | None = None) -> None:
     import torch
     from ...native_stats import update_confusing_probability
+    if learning_rate is None:
+        raise ValueError("UPM eta update requires an explicit learning_rate")
     rows = torch.as_tensor(ctx[indices], dtype=torch.long).reshape(-1).cpu()
     eta_table, psi_table = ctx[state], ctx[psi_state]
     if rows.numel() and (int(rows.min()) < 0 or int(rows.max()) >= int(eta_table["values"].shape[0])):
@@ -855,14 +881,16 @@ def upm_update_eta(ctx: ScratchContext, state: str = "upm_eta_state", psi_state:
     name="CAL: Materialize Warm-up Proxy Artifact",
     category="Posterior",
     description="Freeze the warm-up posterior into the stable-index CORES² proxy artifact used by the second stage.",
-    params={"model": {"type": "slot", "default": "warmup_model"}, "loader": {"type": "slot", "default": "train_eval_loader"}, "prepared_data": {"type": "slot", "default": "prepared_data"}, "noisy_prior": {"type": "slot", "default": "cal_noisy_prior"}, "confidence_weight": {"type": "slot", "default": "confidence_weight"}, "lower_threshold": {"type": "float", "default": -8.0}, "upper_threshold": {"type": "float", "default": -8.0}, "proxy_as": {"type": "slot", "default": "cal_proxy_artifact"}, "proxy_prior_as": {"type": "slot", "default": "cal_proxy_prior"}, "reference_transition_as": {"type": "slot", "default": "cal_reference_transition"}, "reference_losses_as": {"type": "slot", "default": "cal_reference_losses"}, "proxy_targets_state_as": {"type": "slot", "default": "cal_proxy_targets_state"}, "retained_state_as": {"type": "slot", "default": "cal_retained_state"}},
+    params={"model": {"type": "slot", "default": "warmup_model"}, "loader": {"type": "slot", "default": "train_eval_loader"}, "prepared_data": {"type": "slot", "default": "prepared_data"}, "noisy_prior": {"type": "slot", "default": "cal_noisy_prior"}, "confidence_weight": {"type": "slot", "default": "confidence_weight"}, "lower_threshold": {"type": "float", "required": True}, "upper_threshold": {"type": "float", "required": True}, "proxy_as": {"type": "slot", "default": "cal_proxy_artifact"}, "proxy_prior_as": {"type": "slot", "default": "cal_proxy_prior"}, "reference_transition_as": {"type": "slot", "default": "cal_reference_transition"}, "reference_losses_as": {"type": "slot", "default": "cal_reference_losses"}, "proxy_targets_state_as": {"type": "slot", "default": "cal_proxy_targets_state"}, "retained_state_as": {"type": "slot", "default": "cal_retained_state"}},
     requires=("model", "loader", "prepared_data", "noisy_prior", "confidence_weight"), provides=("proxy_as", "proxy_prior_as", "reference_transition_as", "reference_losses_as", "proxy_targets_state_as", "retained_state_as"), placement=("top",), stage="setup", ui_group="⑥ 后验与权重",
     formula="proxy=CORES2(argmax f_warmup(x), adjusted_loss, lower, upper)", formula_ref="CAL proxy artifact lifecycle", paper="Learning from Noisy Labels with Core-loss and Second-order Risk",
 )
-def cal_materialize_proxy_artifact(ctx: ScratchContext, model: str = "warmup_model", loader: str = "train_eval_loader", prepared_data: str = "prepared_data", noisy_prior: str = "cal_noisy_prior", confidence_weight: str = "confidence_weight", lower_threshold: float = -8.0, upper_threshold: float = -8.0, proxy_as: str = "cal_proxy_artifact", proxy_prior_as: str = "cal_proxy_prior", reference_transition_as: str = "cal_reference_transition", reference_losses_as: str = "cal_reference_losses", proxy_targets_state_as: str = "cal_proxy_targets_state", retained_state_as: str = "cal_retained_state") -> None:
+def cal_materialize_proxy_artifact(ctx: ScratchContext, model: str = "warmup_model", loader: str = "train_eval_loader", prepared_data: str = "prepared_data", noisy_prior: str = "cal_noisy_prior", confidence_weight: str = "confidence_weight", lower_threshold: float | None = None, upper_threshold: float | None = None, proxy_as: str = "cal_proxy_artifact", proxy_prior_as: str = "cal_proxy_prior", reference_transition_as: str = "cal_reference_transition", reference_losses_as: str = "cal_reference_losses", proxy_targets_state_as: str = "cal_proxy_targets_state", retained_state_as: str = "cal_retained_state") -> None:
     import numpy as np
     import torch
     from ...native_stats import cores2_adjusted_losses, CALProxyArtifact, build_cal_proxy_artifact, _reference_transition_means, collect_posterior_snapshot
+    if lower_threshold is None or upper_threshold is None:
+        raise ValueError("CAL proxy artifact requires explicit lower_threshold and upper_threshold")
     prepared = ctx[prepared_data]; classes = int(prepared.num_classes)
     if bool((ctx.get("_runtime_limits") or {}).get("fixture")):
         indices = np.asarray(prepared.train_indices, dtype=np.int64)

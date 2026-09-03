@@ -30,6 +30,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "list-blocks":
         print(json.dumps([definition.describe() for definition in list_blocks()], ensure_ascii=False, indent=2))
         return 0
+    output: Path | None = None
     try:
         recipe = load_recipe(args.recipe)
         validated = validate_recipe(recipe)
@@ -45,7 +46,11 @@ def main(argv: list[str] | None = None) -> int:
             "max_batches": args.max_batches,
             "skip_final_test": bool(args.skip_final_test),
         }
-        context = execute_recipe(validated, {"artifact_dir": str(output)}, runtime_limits=limits)
+        context = execute_recipe(
+            validated,
+            {"artifact_dir": str(output), "_progress_path": str(output / "progress.json")},
+            runtime_limits=limits,
+        )
         metrics = context.get("metrics", [])
         stdout = json.dumps({"name": recipe["name"], "metrics": metrics}, ensure_ascii=False) + "\n"
         (output / "stdout.log").write_text(stdout, encoding="utf-8")
@@ -55,6 +60,21 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"name": recipe["name"], "artifact_dir": str(output), "metrics": metrics, "runtime_limits": limits}, ensure_ascii=False))
         return 0
     except Exception as exc:
+        if output is not None:
+            try:
+                progress_path = output / "progress.json"
+                progress = {}
+                if progress_path.is_file():
+                    try:
+                        existing = json.loads(progress_path.read_text(encoding="utf-8"))
+                        if isinstance(existing, dict):
+                            progress.update(existing)
+                    except (OSError, json.JSONDecodeError):
+                        pass
+                progress.update({"state": "failed", "error": str(exc)})
+                progress_path.write_text(json.dumps(progress, ensure_ascii=False), encoding="utf-8")
+            except OSError:
+                pass
         print(f"Scratch error: {exc}", file=sys.stderr)
         return 1
 

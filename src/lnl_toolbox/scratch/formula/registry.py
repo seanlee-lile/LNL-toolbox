@@ -202,3 +202,21 @@ def collect_formula_provenance(recipe: Mapping[str, Any]) -> list[dict[str, Any]
 
     visit(recipe.get("steps", []))
     return result
+
+
+def merge_formula_provenance(*collections: Any) -> list[dict[str, Any]]:
+    """Merge immutable static/runtime formula snapshots by id and hash."""
+
+    merged: list[dict[str, Any]] = []
+    for collection in collections:
+        if not isinstance(collection, (list, tuple)):
+            continue
+        for item in collection:
+            if not isinstance(item, Mapping):
+                continue
+            record = deepcopy(dict(item))
+            key = (record.get("formula_id"), record.get("formula_hash"))
+            if any((old.get("formula_id"), old.get("formula_hash")) == key for old in merged):
+                continue
+            merged.append(record)
+    return merged

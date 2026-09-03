@@ -26,6 +26,7 @@ from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read
 from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.training.data_service import prepare_experiment_data
 from lnl_toolbox.training.experiment import (
+    bind_model_input,
     build_alpha_scaled_scheduler,
     build_optimizer,
 )
@@ -38,6 +39,15 @@ def _build_warmup_scheduler(optimizer, config: dict[str, Any], epochs: int):
     """Build the configured scheduler for the separate CORES² warm-up."""
 
     return build_alpha_scaled_scheduler(optimizer, config.get("scheduler"))
+
+
+def _write_epoch_metrics(rows: list[dict[str, Any]], path: Path) -> None:
+    """Rewrite the complete epoch history so WebUI and resume see one stream."""
+
+    path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
 
 
 def _assert_finite_warmup_state(model, loss: torch.Tensor) -> None:
@@ -92,29 +102,56 @@ def _reference_transition_means(
     return torch.as_tensor(counts, dtype=torch.float32)
 
 
-def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> Path:
+def run_cal_experiment(
+    config: dict[str, Any], output_dir=None, resume=None, *,
+    requirements: DataRequirements | None = None,
+) -> Path:
     config = deepcopy(config); seed = int(config.get("seed", 1)); seed_everything(seed)
     device = resolve_device(str(config.get("trainer", {}).get("device", "auto")))
     run_dir = Path(resume).resolve().parent if resume else Path(output_dir or Path(config.get("output_root", "artifacts/runs")) / datetime.now().strftime("%Y%m%d-%H%M%S")).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+
+        requirements = resolve_data_requirements(config, expected_runner="cal")
     data = prepare_experiment_data(
         config,
-        requirements=DataRequirements(roles=frozenset({
-            DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.CLEAN_VALIDATION, DataRole.TEST,
-        })),
+        requirements=requirements,
         run_dir=run_dir,
         seed=seed,
     )
     train_loader = data.loader(DataRole.TRAIN, stream=21)
-    snapshot_loader = data.loader(DataRole.TRAIN_EVAL, stream=22, shuffle=False)
-    validation_loader = data.loader(DataRole.CLEAN_VALIDATION, stream=23, shuffle=False)
+    target_map = {
+        int(index): int(target)
+        for index, target in zip(data.train_indices, data.noisy_targets)
+    }
+    snapshot_loader = data.loader_for_dataset(
+        data.dynamic_dataset(
+            data.train_indices,
+            views=("weak",),
+            targets_by_index=target_map,
+            training=False,
+        ),
+        stream=22,
+        shuffle=False,
+    )
     test_loader = data.loader(DataRole.TEST, stream=24, shuffle=False)
+    validation_loader = (
+        data.validation_loader(stream=23, shuffle=False)
+        if {
+            DataRole.CLEAN_VALIDATION,
+            DataRole.NOISY_VALIDATION,
+        }.intersection(data.available_roles)
+        else None
+    )
     classes = data.num_classes
     noisy_prior = torch.as_tensor(np.bincount(data.noisy_targets, minlength=classes) / len(data.noisy_targets), dtype=torch.float32, device=device)
     proxy_path = run_dir / "cal_proxy_artifact.npz"
     payload = read_checkpoint(resume, device) if resume else None
     if payload is None:
-        warmup = build_reproduction_model(config["model"], config["data"], classes).to(device)
+        warmup = build_reproduction_model(
+            bind_model_input(config["model"], data.input_spec), config["data"], classes
+        ).to(device)
         warmup_optimizer = build_optimizer(warmup, config["optimizer"])
         warmup_cfg = dict(config["warmup"])
         warmup_epochs = int(warmup_cfg["epochs"])
@@ -191,12 +228,15 @@ def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> 
         np.asarray(data.noisy_targets),
         classes,
     ).to(device)
-    model = build_reproduction_model(config["model"], config["data"], classes).to(device)
+    model = build_reproduction_model(
+        bind_model_input(config["model"], data.input_spec), config["data"], classes
+    ).to(device)
     optimizer = build_optimizer(model, config["optimizer"]); epochs = int(config["trainer"]["epochs"])
     scheduler = build_alpha_scaled_scheduler(optimizer, config.get("scheduler"))
     cal_cfg = dict(config["cal"])
     cal_schedule = cal_cfg.get("confidence_schedule")
     criterion = CrossEntropyLoss().to(device); means = torch.zeros(classes, classes, device=device); start = 0; rows = []
+    metrics_path = run_dir / "metrics.jsonl"
     retained = proxy.sample_status != 2
     proxy_prior_np = np.bincount(proxy.proxy_targets[retained], minlength=classes).astype(np.float64)
     if proxy_prior_np.sum() <= 0:
@@ -213,6 +253,7 @@ def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> 
         ):
             raise ValueError("CAL reference transition checkpoint mismatch")
         rows = list(payload.get("metrics", [])); start = int(payload["completed_epoch"]) + 1; restore_rng_state(payload["rng_state"])
+    _write_epoch_metrics(rows, metrics_path)
     for epoch in range(start, epochs):
         model.train(); total = correct = 0; loss_sum = 0.0
         epoch_loss_sums = torch.zeros_like(means)
@@ -245,8 +286,15 @@ def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> 
             total += targets.numel(); loss_sum += float(loss.detach()) * targets.numel(); correct += int(logits.argmax(1).eq(targets).sum())
         observed_classes = epoch_class_counts > 0
         means[observed_classes] = epoch_loss_sums[observed_classes] / epoch_class_counts[observed_classes, None]
-        means = means.detach(); validation = evaluate_classification(model, validation_loader, criterion, device); test = evaluate_classification(model, test_loader, criterion, device)
-        row = standardize_epoch_row({"epoch": epoch + 1, "train_loss": loss_sum / total, "train_accuracy": correct / total, "validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"], "test_loss": test["loss"], "test_accuracy": test["accuracy"], "learning_rate": optimizer.param_groups[0]["lr"], "method": "cal"}); rows.append(row)
+        means = means.detach()
+        row_values = {"epoch": epoch + 1, "train_loss": loss_sum / total, "train_accuracy": correct / total, "learning_rate": optimizer.param_groups[0]["lr"], "method": "cal"}
+        if validation_loader is not None:
+            validation = evaluate_classification(model, validation_loader, criterion, device)
+            row_values.update({"validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"]})
+        row = standardize_epoch_row(
+            row_values, require_validation=validation_loader is not None
+        ); rows.append(row)
+        _write_epoch_metrics(rows, metrics_path)
         if scheduler is not None:
             scheduler.step(resolve_confidence_weight(
                 epoch + 1,
@@ -254,8 +302,11 @@ def run_cal_experiment(config: dict[str, Any], output_dir=None, resume=None) -> 
                 cal_schedule,
             ))
         atomic_save({"method": "cal", "config": config, "model": model.state_dict(), "optimizer": optimizer.state_dict(), "scheduler": None if scheduler is None else scheduler.state_dict(), "completed_epoch": epoch, "metrics": rows, "proxy_hash": proxy.artifact_hash, "reference_loss_means": means.cpu(), "reference_transition_means": transition_means.cpu(), "rng_state": capture_rng_state()}, run_dir / "last.pt")
-    (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8"); (run_dir / "metrics.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     if rows: write_training_curves_svg(rows, run_dir / "training_curves.svg")
+    test = evaluate_classification(model, test_loader, criterion, device)
+    final_row = {"event": "final", "completed_epochs": epochs, "test_loss": test["loss"], "test_accuracy": test["accuracy"], "selection_split": "none", "test_selection_leakage": False, "method": "cal"}
+    _write_epoch_metrics([*rows, final_row], metrics_path)
     return run_dir
 
 

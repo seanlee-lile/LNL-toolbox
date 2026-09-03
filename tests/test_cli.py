@@ -206,13 +206,17 @@ import yaml
 from lnl_toolbox import catalog as catalog_module
 
 # --- merged from test_unified_cli.py ---
-from lnl_toolbox.catalog import discover_recipes, default_paper_config, find_project_root, load_papers, load_yaml, load_recipe_config, recipe_by_id, resolve_config_paths, select_paper_config, validate_config
+from lnl_toolbox.catalog import discover_recipes, default_paper_config, find_project_root, load_papers, load_yaml, load_recipe_config, mentornet_preparation_status, recipe_by_id, resolve_config_paths, select_paper_config, validate_config
+
+from lnl_toolbox.models.mentornet import MentorNet
+
+from lnl_toolbox.training.mentor_artifacts import MentorArtifact
 
 # --- merged from test_unified_cli.py ---
 from lnl_toolbox.cli.main import main
 
 # --- merged from test_unified_cli.py ---
-from lnl_toolbox.data.profile import DatasetProfile, KnowledgeState, Modality, NoiseKnowledge
+from lnl_toolbox.data.profile import DatasetProfile, KnowledgeState, Modality, NoiseKnowledge, resolve_dataset_capabilities
 
 # --- merged from test_unified_cli.py ---
 from lnl_toolbox.training.compatibility import CompatibilityReason, CompatibilityResult, CompatibilityStatus
@@ -222,6 +226,8 @@ from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE, DatasetStatu
 
 # --- merged from test_unified_cli.py ---
 from lnl_toolbox.training.runners import resolve_runner, runner_names
+
+from lnl_toolbox.training.service import ExperimentService
 
 # --- merged from test_unified_cli.py ---
 _unified_cli_ROOT = Path(__file__).resolve().parents[1]
@@ -294,7 +300,7 @@ class _unified_cli_CatalogTest(unittest.TestCase):
         self.assertNotIn('cifar10-symmetric40-all-e5', recipes)
         self.assertNotIn('cifar10-symmetric40-small-loss-e5', recipes)
         self.assertFalse(any(('mentornet' in recipe for recipe in recipes)))
-        self.assertNotIn('cifar10-pcse-reproduction', recipes)
+        self.assertIn('cifar10-pcse-reproduction', recipes)
         all_recipes = {item.id for item in discover_recipes(_unified_cli_ROOT, include_conditional=True)}
         self.assertIn('mentornet-dd-cifar100-symmetric04-smoke', all_recipes)
         self.assertIn('cifar10-pcse-reproduction', all_recipes)
@@ -312,14 +318,59 @@ class _unified_cli_CatalogTest(unittest.TestCase):
         cnlcu = load_recipe_config(next((item for item in discover_recipes(_unified_cli_ROOT) if item.id == 'cifar10-cnlcu-soft-smoke')))
         self.assertEqual(validate_config(cnlcu).name, 'cnlcu')
         mentor = load_recipe_config(next((item for item in discover_recipes(_unified_cli_ROOT, include_conditional=True) if item.id == 'mentornet-dd-cifar100-symmetric04-smoke')))
+        preparation = mentornet_preparation_status(
+            resolve_config_paths(mentor, _unified_cli_ROOT),
+            _unified_cli_ROOT,
+            student_recipe='mentornet-dd-cifar100-symmetric04-smoke',
+        )
+        self.assertIn('lnl mentor prepare', preparation['commands']['prepare'])
+        self.assertIn('lnl mentor train', preparation['commands']['train'])
+        self.assertIn('mentornet_dd_teacher_cifar10_symmetric04.yaml', preparation['commands']['prepare'])
         mentor['pipeline']['weight_provider']['artifact_path'] = str(_unified_cli_ROOT / 'data/mentornet/missing-artifact-for-test.pt')
-        with self.assertRaisesRegex(ValueError, 'conditional.*MentorArtifact'):
+        with self.assertRaisesRegex(ValueError, 'conditional.*MentorArtifact') as raised:
             validate_config(resolve_config_paths(mentor, _unified_cli_ROOT))
+        self.assertIn('MentorArtifact: NOT READY', str(raised.exception))
         pcse = load_recipe_config(next((item for item in discover_recipes(_unified_cli_ROOT, include_conditional=True) if item.id == 'cifar10-pcse-reproduction')))
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop('LNL_PCSE_SOURCE_RUN', None)
-            with self.assertRaisesRegex(ValueError, 'source environment variable is not set'):
-                validate_config(resolve_config_paths(pcse, _unified_cli_ROOT))
+            self.assertEqual(
+                validate_config(resolve_config_paths(pcse, _unified_cli_ROOT)).name,
+                'pcse',
+            )
+
+    def test_mentornet_ready_requires_a_valid_artifact_and_keeps_cross_dataset_contract(self) -> None:
+        recipe = recipe_by_id('mentornet-dd-cifar100-symmetric04-smoke', _unified_cli_ROOT)
+        config = load_recipe_config(recipe)
+        self.assertEqual(config['data']['name'], 'cifar100')
+        with tempfile.TemporaryDirectory() as directory:
+            artifact_path = Path(directory) / 'mentor_artifact.pt'
+            provider = config['pipeline']['weight_provider']
+            provider['artifact_path'] = str(artifact_path)
+            status = mentornet_preparation_status(config, _unified_cli_ROOT, student_recipe=recipe.id)
+            self.assertFalse(status['artifact_ready'])
+            artifact_path.write_bytes(b'not a MentorArtifact')
+            status = mentornet_preparation_status(config, _unified_cli_ROOT, student_recipe=recipe.id)
+            self.assertFalse(status['artifact_ready'])
+            self.assertTrue(status['artifact_error'])
+            model = MentorNet(num_labels=1)
+            MentorArtifact.create(
+                architecture=model.architecture(),
+                feature_schema={'label': 'fixed_zero'},
+                source={'dataset': 'cifar10', 'role': 'trusted_mentor'},
+                model_state=model.state_dict(),
+            ).save(artifact_path)
+            status = mentornet_preparation_status(config, _unified_cli_ROOT, student_recipe=recipe.id)
+            self.assertTrue(status['artifact_ready'])
+            self.assertIn('cifar10', Path(status['teacher_config']).name)
+            self.assertEqual(validate_config(config).name, 'supervised')
+
+    def test_mentor_teacher_config_is_packaged(self) -> None:
+        relative = 'configs/experiment/mentornet_dd_teacher_cifar10_symmetric04.yaml'
+        self.assertTrue((_unified_cli_ROOT / relative).is_file())
+        self.assertIn(
+            f'"{relative}"',
+            (_unified_cli_ROOT / 'pyproject.toml').read_text(encoding='utf-8'),
+        )
 
     def test_multiple_paper_variants_require_selection(self) -> None:
         paper = next((item for item in load_papers(_unified_cli_ROOT) if item.id == 'apl'))
@@ -356,6 +407,88 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
         with redirect_stdout(stdout), redirect_stderr(stderr):
             code = main(list(arguments))
         return (code, stdout.getvalue(), stderr.getvalue())
+
+    def test_unified_mentor_commands_reuse_prepare_and_train_producers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            feature_dir = root / 'mentor'
+            feature_path = feature_dir / 'mentor_features.npz'
+            artifact_path = feature_dir / 'mentor_artifact.pt'
+            config_path = root / 'teacher.yaml'
+            config_path.write_text(yaml.safe_dump({
+                'schema_version': 1,
+                'kind': 'mentor_artifact',
+                'seed': 3,
+                'feature_data': str(feature_path),
+                'data': {'name': 'synthetic_binary_2d', 'train_size': 18, 'validation_size': 0, 'test_size': 6},
+                'noise': {'name': 'symmetric', 'rate': 0.2, 'seed': 3},
+                'loader': {'batch_size': 6, 'num_workers': 0},
+                'student_model': {'name': 'mlp', 'width': 8},
+                'student_optimizer': {'name': 'sgd', 'lr': 0.1},
+                'student_trainer': {'trusted_size': 18, 'epochs': 1, 'device': 'cpu'},
+                'model': {'num_labels': 1, 'hidden_size': 2, 'sequence_length': 2, 'label_embedding_dim': 2, 'epoch_embedding_dim': 2, 'dense_size': 4},
+                'optimizer': {'name': 'adam', 'lr': 0.001},
+                'trainer': {'epochs': 1, 'device': 'cpu'},
+                'execution': {'runner': 'mentor_artifact'},
+            }, sort_keys=False), encoding='utf-8')
+            code, output, error = self.invoke(
+                'mentor', 'prepare', '--config', str(config_path),
+                '--output-dir', str(feature_dir), '--project-root', str(root),
+            )
+            self.assertEqual(code, 0, error)
+            self.assertIn('Mentor features: READY', output)
+            self.assertTrue(feature_path.is_file())
+            code, output, error = self.invoke(
+                'mentor', 'train', '--config', str(config_path),
+                '--output', str(artifact_path), '--project-root', str(root),
+            )
+            self.assertEqual(code, 0, error)
+            self.assertIn('MentorArtifact: READY', output)
+            self.assertTrue(artifact_path.is_file())
+            MentorArtifact.load(artifact_path)
+            student = load_recipe_config(
+                recipe_by_id(
+                    'mentornet-dd-cifar100-symmetric04-smoke',
+                    _unified_cli_ROOT,
+                )
+            )
+            student['pipeline']['weight_provider']['artifact_path'] = str(artifact_path)
+            student_path = root / 'student.yaml'
+            student_path.write_text(
+                yaml.safe_dump(student, sort_keys=False), encoding='utf-8'
+            )
+            code, output, error = self.invoke(
+                'validate', '--config', str(student_path),
+                '--project-root', str(_unified_cli_ROOT),
+            )
+            self.assertEqual(code, 0, error)
+            self.assertIn('supervised', output)
+            code, output, error = self.invoke(
+                'run', '--config', str(student_path), '--dry-run',
+                '--no-check-data', '--project-root', str(_unified_cli_ROOT),
+            )
+            self.assertEqual(code, 0, error)
+            self.assertIn('supervised', output)
+
+    def test_mentor_status_reports_readiness_without_starting_student(self) -> None:
+        recipe = Mock(id='mentor-smoke')
+        status = {
+            'status': 'not_ready', 'artifact_ready': False,
+            'artifact_path': 'mentor_artifact.pt', 'artifact_error': None,
+            'feature_ready': False,
+            'commands': {'prepare': 'lnl mentor prepare ...', 'train': 'lnl mentor train ...', 'student': 'lnl run ...'},
+        }
+        with patch('lnl_toolbox.cli.main.recipe_by_id', return_value=recipe), patch(
+            'lnl_toolbox.cli.main.load_recipe_config', return_value={}
+        ), patch(
+            'lnl_toolbox.cli.main.resolve_config_paths', return_value={}
+        ), patch(
+            'lnl_toolbox.cli.main.mentornet_preparation_status', return_value=status
+        ):
+            code, output, error = self.invoke('mentor', 'status', '--recipe', 'mentor-smoke')
+        self.assertEqual(code, 1, error)
+        self.assertIn('MentorArtifact: NOT_READY', output)
+        self.assertIn('prepare: lnl mentor prepare', output)
 
     @staticmethod
     def compatibility_profile() -> DatasetProfile:
@@ -419,6 +552,21 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
             self.assertEqual(code, 2)
             self.assertIn('unsupported_modality', stderr)
         runner.assert_not_called()
+
+    def test_plain_ce_validate_check_data_reports_compatible(self) -> None:
+        data_service = Mock()
+        data_service.capabilities.return_value = resolve_dataset_capabilities(
+            self.compatibility_profile()
+        )
+        service = ExperimentService(data_service=data_service)
+        with patch('lnl_toolbox.cli.main.ExperimentService', return_value=service):
+            code, output, error = self.invoke(
+                'validate', '--recipe', 'cifar10-symmetric-ce-smoke', '--check-data'
+            )
+        self.assertEqual(code, 0, error)
+        self.assertIn('Compatibility:\n  COMPATIBLE', output)
+        self.assertNotIn('NOT_CHECKED', output)
+        data_service.validate_config.assert_called_once()
 
     def test_web_command_starts_main_page_and_supports_no_open(self) -> None:
         with patch('lnl_toolbox.cli.main.subprocess.call', return_value=0) as call:
@@ -485,9 +633,19 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
                 code, output, error = self.invoke('methods', 'compatible', '--dataset', 'heart', '--format', 'json')
                 self.assertEqual(code, 0, error)
                 compatibility = {item['method']: item for item in json.loads(output)}
-                self.assertEqual(compatibility['importance_reweighting']['status'], 'compatible')
-                self.assertEqual(compatibility['upm']['status'], 'incompatible')
-                self.assertIn('unsupported_modality', compatibility['upm']['reason_codes'])
+                importance = compatibility['importance_reweighting']
+                self.assertEqual(importance['status'], 'compatible_with_requirements')
+                self.assertIn(
+                    'requires_binary_noise_prior', importance['reason_codes']
+                )
+                self.assertIn(
+                    'config:requires_binary_noise_prior',
+                    importance['required_user_inputs'],
+                )
+                upm = compatibility['upm']
+                self.assertEqual(upm['status'], 'compatible_with_requirements')
+                self.assertIn('requires_noisy_training_labels', upm['reason_codes'])
+                self.assertNotIn('unsupported_modality', upm['reason_codes'])
                 code, output, error = self.invoke('data', 'verify', 'heart', '--output-dir', str(Path(directory) / 'heart-run'), '--project-root', str(_unified_cli_ROOT))
                 self.assertEqual(code, 0, error)
                 self.assertIn('Training check   VERIFIED', output)
@@ -1059,28 +1217,30 @@ class _pcse_cli_PCSECliTest(unittest.TestCase):
         self.assertEqual(recipe.profile, 'reproduction')
         self.assertEqual(recipe.runner, 'pcse')
         self.assertEqual(recipe.configuration_fidelity, 'engineering')
-        self.assertEqual(recipe.availability, 'conditional')
+        self.assertEqual(recipe.availability, 'runnable')
         config = load_recipe_config(recipe)
         parsed = PCSEConfig.from_mapping(config)
-        self.assertEqual(parsed.pretraining.mode, 'external_checkpoint')
-        self.assertEqual(parsed.pretraining.source['adapter'], 'upm_main_best')
+        self.assertEqual(parsed.pretraining.mode, 'train')
+        self.assertEqual(parsed.pretraining.method, 'cross_entropy')
+        self.assertIsNone(parsed.pretraining.source)
+        self.assertEqual(config['noise']['mode'], 'generated')
+        self.assertEqual(config['pretraining_stage']['epochs'], 100)
         self.assertEqual(config['data']['name'], 'cifar10')
         self.assertNotIn('max_train_samples', config['data'])
         self.assertEqual([(item.name, item.pooling) for item in parsed.feature_layers], [('layer3', 'global_average'), ('layer4', 'global_average')])
         self.assertEqual(parsed.transition_backend, 'paper_volmin')
 
-    def test_real_cifar_recipe_is_hidden_without_conditional_flag(self) -> None:
-        public_ids = {item.id for item in discover_recipes()}
+    def test_real_cifar_recipe_is_discoverable_without_conditional_flag(self) -> None:
+        default_ids = {item.id for item in discover_recipes()}
         all_ids = {item.id for item in discover_recipes(include_conditional=True)}
-        self.assertNotIn('cifar10-pcse-reproduction', public_ids)
+        self.assertIn('cifar10-pcse-reproduction', default_ids)
         self.assertIn('cifar10-pcse-reproduction', all_ids)
 
-    def test_real_cifar_preflight_rejects_missing_source_environment(self) -> None:
+    def test_real_cifar_preflight_does_not_require_source_environment(self) -> None:
         config = load_recipe_config(recipe_by_id('cifar10-pcse-reproduction'))
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop('LNL_PCSE_SOURCE_RUN', None)
-            with self.assertRaisesRegex(ValueError, 'source environment variable is not set'):
-                validate_config(config)
+            self.assertEqual(validate_config(config).name, 'pcse')
 
     def test_paper_catalog_does_not_claim_numerical_reproduction(self) -> None:
         paper = paper_by_id('pcse')
@@ -1088,7 +1248,7 @@ class _pcse_cli_PCSECliTest(unittest.TestCase):
         self.assertIn('cifar10-pcse-reproduction', recipe_ids)
         self.assertEqual(paper.reproduction_status, 'not_run')
         real_config = next((item for item in paper.configs if item.recipe_id == 'cifar10-pcse-reproduction'))
-        self.assertEqual(real_config.availability, 'conditional')
+        self.assertEqual(real_config.availability, 'runnable')
 
 # --- merged from test_upm_cli.py ---
 from contextlib import redirect_stdout

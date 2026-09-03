@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Framework-neutral binary experiment utilities for UCI and CIFAR views."""
 
+import json
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -119,7 +120,10 @@ def evaluate_binary(model: nn.Module, loader: DataLoader, device: torch.device |
     return {"loss": total_loss / samples, "accuracy": correct / samples, "samples": float(samples)}
 
 
-def run_binary_experiment(config: Mapping[str, Any], output_dir: str | Path | None = None) -> Path:
+def run_binary_experiment(
+    config: Mapping[str, Any], output_dir: str | Path | None = None, *,
+    requirements: DataRequirements | None = None,
+) -> Path:
     """Run a single configured binary experiment and persist its metrics."""
 
     resolved_config, record = resolve_parameter_sampling(config)
@@ -129,9 +133,13 @@ def run_binary_experiment(config: Mapping[str, Any], output_dir: str | Path | No
     destination = Path(output_dir or resolved_config.get("output_root", "artifacts/binary")).resolve()
     destination.mkdir(parents=True, exist_ok=True)
     seed = int(resolved_config.get("seed", 1))
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+
+        requirements = resolve_data_requirements(resolved_config, expected_runner="binary")
     prepared = prepare_experiment_data(
         resolved_config,
-        requirements=DataRequirements(roles=frozenset({DataRole.TRAIN, DataRole.TEST})),
+        requirements=requirements,
         run_dir=destination,
         seed=seed,
     )
@@ -142,10 +150,13 @@ def run_binary_experiment(config: Mapping[str, Any], output_dir: str | Path | No
             f"{prepared.num_classes} classes"
         )
     loader = prepared.loader(DataRole.TRAIN)
-    sample = prepared.dataset_for(DataRole.TRAIN)[0]
-    input_dim = int(torch.as_tensor(sample["input"]).numel())
+    if prepared.input_spec.shape is None:
+        sample = prepared.dataset_for(DataRole.TRAIN)[0]
+        input_dim = int(torch.as_tensor(sample["input"]).numel())
+    else:
+        input_dim = int(np.prod(prepared.input_spec.shape))
     model_config = dict(resolved_config.get("model", {}))
-    model = build_binary_model(input_dim, model_config)
+    model = nn.Sequential(nn.Flatten(start_dim=1), build_binary_model(input_dim, model_config))
     optimizer_config = dict(resolved_config["optimizer"])
     if str(optimizer_config.get("name", "sgd")).lower() != "sgd":
         raise ValueError("binary experiment currently requires optimizer.name: sgd")
@@ -163,6 +174,9 @@ def run_binary_experiment(config: Mapping[str, Any], output_dir: str | Path | No
     if epochs <= 0:
         raise ValueError("epochs must be positive")
     rows = []
+    web_rows = []
+    metrics_path = destination / "metrics.jsonl"
+    metrics_path.write_text("", encoding="utf-8")
     for epoch in range(epochs):
         row = train_binary_epoch(model, loader, optimizer, risk=risk)
         row["epoch"] = float(epoch + 1)
@@ -172,7 +186,13 @@ def run_binary_experiment(config: Mapping[str, Any], output_dir: str | Path | No
             row["test_loss"] = evaluation["loss"]
             row["test_accuracy"] = evaluation["accuracy"]
         rows.append(row)
-    import json
+        web_row = {"event": "epoch", **row, "epoch": epoch + 1}
+        web_rows.append(web_row)
+        metrics_path.write_text(
+            "".join(json.dumps(item, sort_keys=True) + "\n" for item in web_rows),
+            encoding="utf-8",
+        )
+
     (destination / "resolved_config.json").write_text(json.dumps(resolved_config, indent=2), encoding="utf-8")
     if record is not None:
         (destination / "parameter_record.json").write_text(json.dumps(record.to_dict(), indent=2), encoding="utf-8")

@@ -3,7 +3,7 @@ kind: experiment
 method: pcse
 configuration_fidelity: engineering
 seed: 1
-output_root: artifacts/reproductions/pcse-cifar10-upm-sym40
+output_root: artifacts/reproductions/pcse-cifar10-ce-sym40
 data:
   name: cifar10
   num_classes: 10
@@ -13,7 +13,7 @@ data:
   augment: false
   preprocessing: standard
 noise:
-  mode: external
+  mode: generated
   name: symmetric
   rate: 0.4
   seed: 1
@@ -22,20 +22,13 @@ noise:
   validation_targets: noisy
   manifest_filename: noise_manifest.npz
 pretraining_stage:
-  mode: external_checkpoint
-  epochs: 0
+  mode: train
+  method: cross_entropy
+  epochs: 100
   checkpoint_selection: noisy_validation_accuracy
-  model: &id001
+  model:
     name: resnet18
     base_width: 16
-  source:
-    adapter: upm_main_best
-    run_directory_env: LNL_PCSE_SOURCE_RUN
-    checkpoint_sha256: edb9387f2bc95b56c61ced551ef387746f1a49c5079f8dfbc966e583b34da062
-    manifest_sha256: fd919619d3ff55619d3e8dc9f937f674fbed0d084c83b5baf8301e51f59e867b
-    mapping_hash: 674b78dd41e2ae3c097ecedb9768eb9274fed8d95e66002bdf119dd263596dd9
-    dataset_fingerprint: 9c53dc2c001574ab3f1b78d48632b8a82d0003c754bf7367f230280068e118a4
-    model: *id001
   loss:
     name: ce
   optimizer:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from . import blocks as _builtin_blocks  # noqa: F401
@@ -28,6 +30,73 @@ class ScratchExecutionError(RuntimeError):
             f"{label} — {definition.name} ({definition.id}) failed. "
             f"Available context: {sorted(context)}. Original error: {cause}"
         )
+
+
+def _publish_progress(
+    context: ScratchContext,
+    *,
+    block_id: str | None = None,
+    path: tuple[int, ...] = (),
+    state: str = "running",
+    error: str | None = None,
+) -> None:
+    """Write a small, JSON-safe execution snapshot for the WebUI.
+
+    The progress file is deliberately separate from ``ScratchContext``'s
+    runtime objects.  It is an observation channel only; it never controls
+    execution and never serializes tensors, models, loaders, or datasets.
+    """
+
+    destination_value = context.get("_progress_path")
+    if not destination_value:
+        return
+    destination = Path(str(destination_value))
+    previous: dict[str, Any] = {}
+    # The outer recipe handler publishes a terminal state after a block has
+    # already published its precise failure location.  Retain that location
+    # when the terminal call does not provide a new block/path.
+    if state == "failed" and block_id is None and not path:
+        try:
+            existing = json.loads(destination.read_text(encoding="utf-8"))
+            if isinstance(existing, dict):
+                previous = existing
+        except (OSError, json.JSONDecodeError):
+            pass
+    payload: dict[str, Any] = {
+        "state": state,
+        "block": block_id if block_id is not None else previous.get("block"),
+        "path": list(path) if path else previous.get("path", []),
+        "epoch": context.get("epoch", previous.get("epoch")),
+        "batch_idx": context.get("batch_idx", previous.get("batch_idx")),
+        "global_step": context.get("global_step", previous.get("global_step")),
+        "total_epochs": context.get("_progress_total_epochs", previous.get("total_epochs")),
+        "total_batches": context.get("_progress_total_batches", previous.get("total_batches")),
+    }
+    total_epochs = payload["total_epochs"]
+    epoch = payload["epoch"]
+    total_batches = payload["total_batches"]
+    batch_idx = payload["batch_idx"]
+    try:
+        if isinstance(total_epochs, int) and total_epochs > 0 and isinstance(epoch, int):
+            epoch_offset = max(0, epoch - int(context.get("_progress_start_epoch", 0)))
+            within_epoch = 0.0
+            if isinstance(total_batches, int) and total_batches > 0 and isinstance(batch_idx, int):
+                within_epoch = min(max((batch_idx + 1) / total_batches, 0.0), 1.0)
+            payload["fraction"] = min(max((epoch_offset + within_epoch) / total_epochs, 0.0), 1.0)
+            payload["completed_epoch"] = min(epoch_offset + (1 if within_epoch >= 1.0 else 0), total_epochs)
+    except (TypeError, ValueError, ZeroDivisionError):
+        payload["fraction"] = None
+    if error:
+        payload["error"] = str(error)
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(destination.name + ".tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(destination)
+    except OSError:
+        # Progress is best-effort and must never turn a valid Scratch run into
+        # a failure merely because the UI status file is unavailable.
+        return
 
 
 def _resolved_params(definition: BlockDefinition, step: Mapping[str, Any]) -> dict[str, Any]:
@@ -64,6 +133,7 @@ def execute_steps(
         definition = get_block(str(step["block"]))
         params = _resolved_params(definition, step)
         children = step.get("steps", [])
+        _publish_progress(context, block_id=definition.id, path=path)
         try:
             _runtime_requirements(definition, context, params)
             if definition.kind == "action":
@@ -80,6 +150,7 @@ def execute_steps(
         except ScratchExecutionError:
             raise
         except Exception as exc:
+            _publish_progress(context, block_id=definition.id, path=path, state="failed", error=str(exc))
             raise ScratchExecutionError(
                 path, definition, params, context, exc
             ) from exc
@@ -125,4 +196,10 @@ def execute_recipe(
     validated = validate_recipe(recipe, initial_slots=set(initial))
     result = ScratchContext(validated.get("settings", {}))
     result.update(initial)
-    return execute_steps(validated["steps"], result)
+    try:
+        executed = execute_steps(validated["steps"], result)
+    except Exception as exc:
+        _publish_progress(result, state="failed", error=str(exc))
+        raise
+    _publish_progress(result, state="completed", path=())
+    return executed

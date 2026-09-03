@@ -184,6 +184,8 @@ def epoch_loop(
     limit = ctx.get("_runtime_limits", {}).get("max_epochs")
     if limit is not None:
         epochs = min(epochs, int(limit))
+    ctx["_progress_total_epochs"] = epochs
+    ctx["_progress_start_epoch"] = start_epoch
     for epoch in range(start_epoch, start_epoch + epochs):
         ctx["epoch"] = epoch
         execute(children, ctx)
@@ -217,6 +219,16 @@ def batch_loop(
     global_step_as = str(params.get("global_step_as", "global_step"))
     if global_step_as not in ctx:
         ctx[global_step_as] = 0
+    try:
+        total_batches = len(loader)
+        if limit is not None:
+            total_batches = min(total_batches, max(0, int(limit)))
+        if max_steps:
+            remaining = max(0, max_steps - int(ctx[global_step_as]))
+            total_batches = min(total_batches, remaining)
+        ctx["_progress_total_batches"] = total_batches
+    except (TypeError, AttributeError):
+        ctx.pop("_progress_total_batches", None)
     for batch_idx, batch in enumerate(loader):
         if limit is not None and batch_idx >= int(limit):
             break

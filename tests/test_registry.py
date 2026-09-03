@@ -45,17 +45,18 @@ import unittest
 from unittest.mock import Mock, patch
 
 # --- merged from test_compatibility.py ---
-from lnl_toolbox.catalog import default_paper_config, load_papers, load_recipe_config
+from lnl_toolbox.catalog import default_paper_config, load_papers, load_recipe_config, recipe_by_id
 
 # --- merged from test_compatibility.py ---
 from lnl_toolbox.data.profile import DatasetDeclarationConflict, DatasetDeclarations, DatasetProfile, KnowledgeState, Modality, NoiseKnowledge, NoiseOrigin, NoiseRateInfo, NoiseRateStatus, NoiseStatus, resolve_dataset_capabilities
+from lnl_toolbox.data.contracts import DataRequirements, DataRole
 
 # --- merged from test_compatibility.py ---
-from lnl_toolbox.training.compatibility import ConfigInputRequirement, CompatibilityReason, CompatibilityResult, CompatibilityStatus, MethodRequirements, resolve_compatibility
+from lnl_toolbox.training.compatibility import ConfigInputRequirement, CompatibilityReason, CompatibilityResult, CompatibilityStatus, MethodRequirements, build_input_guidance, resolve_compatibility
 from test_t_revision import _t_revision_workflow__algorithm as _algorithm
 
 # --- merged from test_compatibility.py ---
-from lnl_toolbox.training.runners import create_runner_registry, resolve_runner, runner_names
+from lnl_toolbox.training.runners import RunnerSpec, create_runner_registry, method_names, resolve_runner, runner_names
 
 # --- merged from test_compatibility.py ---
 from lnl_toolbox.training.service import ExperimentService
@@ -66,7 +67,14 @@ def _compatibility__profile(*, modality: Modality=Modality.IMAGE, classes: int=1
 
 # --- merged from test_compatibility.py ---
 def _compatibility__method(**overrides) -> MethodRequirements:
-    values = {'method': 'fixture_method', 'supported_modalities': frozenset({Modality.IMAGE}), 'requires_noise_manifest': False}
+    values = {
+        'method': 'fixture_method',
+        'supported_modalities': frozenset({Modality.IMAGE}),
+        'data_requirements': DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.TEST}),
+            needs_noise_manifest=False,
+        ),
+    }
     values.update(overrides)
     if values.get('requires_method_noise_prior') and 'method_noise_prior_paths' not in values:
         values['method_noise_prior_paths'] = (('noise', 'rate'),)
@@ -197,8 +205,10 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
             self.assertFalse(requirement.requires_dataset_true_noise_rate)
         pcse = registry.get('pcse').requirements({'pretraining_stage': {'mode': 'external_checkpoint'}})
         self.assertEqual(pcse.required_pretrained_roles, ('upm_main_best',))
+        self.assertEqual(pcse.pretrained_role_paths, (('upm_main_best', ('pretraining_stage', 'source', 'run_directory_env')),))
         dld = registry.get('dld').requirements({'dld': {'feature_extractor': {'source': 'external_checkpoint'}}})
         self.assertEqual(dld.required_pretrained_roles, ('upm_main_best',))
+        self.assertEqual(dld.pretrained_role_paths, (('upm_main_best', ('dld', 'feature_extractor', 'external', 'run_directory_env')),))
 
     def test_all_formal_papers_publish_config_specific_requirements(self) -> None:
         expected = {'binary-risk': 'binary', 'importance-reweighting': 'importance_reweighting', 'loss-correction': 'loss_correction', 'coteaching': 'coteaching', 'gce': 'gce', 'l2rw': 'l2rw', 'mentornet': 'mentornet', 't-revision': 't_revision', 'apl': 'apl', 'dividemix': 'dividemix', 'dual-t': 'dual_t', 'jocor': 'jocor', 'pdl': 'pdl', 'cal': 'cal', 'cdr': 'cdr', 'upm': 'upm', 'volminnet': 'volminnet', 'cnlcu': 'cnlcu', 'cwd': 'cwd', 'lend': 'lend', 'mc-ldce': 'mc_ldce', 'pcse': 'pcse', 'ca2c': 'ca2c', 'dld': 'dld', 'dss': 'dss', 'fine': 'fine'}
@@ -211,34 +221,319 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
                 requirements = resolve_runner(config).requirements(config)
                 self.assertIsNotNone(requirements)
                 self.assertEqual(requirements.method, expected[paper.id])
-                self.assertTrue(requirements.requires_noise_manifest)
+                self.assertIsInstance(requirements.data_requirements, DataRequirements)
+                if paper.id == 'cal':
+                    self.assertFalse(requirements.requires_noise_manifest)
+                else:
+                    self.assertTrue(requirements.requires_noise_manifest)
 
-    def test_new_requirements_preserve_paper_specific_boundaries(self) -> None:
+    def test_requirements_separate_algorithm_needs_from_implementation_limits(self) -> None:
         registry = create_runner_registry()
         binary = registry.get('binary').requirements({'risk': {'name': 'natarajan_unbiased'}})
         self.assertEqual(binary.exact_classes, frozenset({2}))
-        self.assertEqual(binary.supported_modalities, frozenset({Modality.TABULAR}))
+        self.assertEqual(binary.supported_modalities, frozenset({Modality.IMAGE, Modality.TABULAR}))
+        self.assertEqual(binary.implemented_variant, 'binary_risk')
         self.assertEqual(binary.required_config_inputs[0].mode, 'all')
         fine = registry.get('fine').requirements({})
-        self.assertEqual(fine.exact_classes, frozenset({100}))
-        self.assertTrue(fine.requires_clean_validation)
+        self.assertEqual(fine.exact_classes, frozenset())
+        self.assertFalse(fine.requires_clean_validation)
+        self.assertEqual(fine.implementation_limits, frozenset({'modality', 'strong_view'}))
         cal = registry.get('cal').requirements({})
-        self.assertTrue(cal.requires_clean_train_labels)
-        self.assertTrue(cal.requires_aligned_clean_noisy_targets)
+        self.assertFalse(cal.requires_clean_train_labels)
+        self.assertFalse(cal.requires_aligned_clean_noisy_targets)
+        self.assertTrue(cal.supports_native_noisy_labels)
         l2rw = registry.get('l2rw').requirements({'trusted_validation': {'source': 'official_generated'}})
         self.assertTrue(l2rw.requires_clean_train_labels)
         audited = registry.get('l2rw').requirements({'trusted_validation': {'source': 'audited_manifest'}})
         self.assertFalse(audited.requires_clean_train_labels)
         self.assertEqual({item.code for item in audited.required_config_inputs}, {'requires_trusted_validation', 'requires_trusted_manifest'})
+        noisy_only = ('coteaching', 'dual_t', 'upm', 'dividemix', 'cnlcu', 't_revision')
+        for runner_name in noisy_only:
+            with self.subTest(runner=runner_name):
+                requirements = registry.get(runner_name).requirements({})
+                self.assertIn(
+                    'requires_noisy_training_labels',
+                    {item.code for item in requirements.required_config_inputs},
+                )
+        external_pcse = registry.get('pcse').requirements(
+            {'pretraining_stage': {'mode': 'external_checkpoint'}}
+        )
+        self.assertEqual(external_pcse.exact_classes, frozenset({10}))
+        train_pcse = registry.get('pcse').requirements(
+            {'pretraining_stage': {'mode': 'train'}}
+        )
+        self.assertEqual(train_pcse.exact_classes, frozenset())
+        self.assertEqual(train_pcse.required_pretrained_roles, ())
+        self.assertEqual(train_pcse.pretrained_role_paths, ())
+
+    def test_preserved_implementation_limits_have_the_correct_origin(self) -> None:
+        registry = create_runner_registry()
+        class_cases = (
+            ('cwd', 3),
+            ('importance_reweighting', 3),
+            ('pcse', 2),
+            ('volminnet', 2),
+            ('mc_ldce', 2),
+        )
+        for runner_name, classes in class_cases:
+            with self.subTest(runner=runner_name):
+                capabilities = resolve_dataset_capabilities(
+                    _compatibility__profile(classes=classes)
+                )
+                result = resolve_compatibility(
+                    capabilities, registry.get(runner_name).requirements({})
+                )
+                reason = next(item for item in result.reasons if item.code == 'wrong_class_count')
+                self.assertEqual(reason.origin, 'implemented_variant_limit')
+
+        tabular = resolve_dataset_capabilities(
+            _compatibility__profile(modality=Modality.TABULAR)
+        )
+        modality_requirements = {
+            'fine': registry.get('fine').requirements({}),
+            'dld': registry.get('dld').requirements({}),
+            'mentornet': registry.get('supervised').requirements(
+                {'pipeline': {'weight_provider': {'name': 'mentornet'}}}
+            ),
+        }
+        for runner_name, requirements in modality_requirements.items():
+            with self.subTest(runner=runner_name):
+                result = resolve_compatibility(tabular, requirements)
+                reason = next(item for item in result.reasons if item.code == 'unsupported_modality')
+                self.assertEqual(reason.origin, 'implemented_variant_limit')
+
+        binary = resolve_compatibility(
+            resolve_dataset_capabilities(_compatibility__profile(classes=3)),
+            registry.get('binary').requirements({}),
+        )
+        reason = next(item for item in binary.reasons if item.code == 'wrong_class_count')
+        self.assertEqual(reason.origin, 'algorithm_requirement')
+
+    def test_zero_validation_dedicated_requirements_do_not_publish_validation_roles(self) -> None:
+        registry = create_runner_registry()
+        cases = (
+            ('mc_ldce', {'data': {'validation_size': 0}}),
+            ('ca2c', {'data': {'validation_size': 0}}),
+        )
+        for runner_name, config in cases:
+            with self.subTest(runner=runner_name):
+                requirements = registry.get(runner_name).requirements(config)
+                self.assertNotIn(DataRole.CLEAN_VALIDATION, requirements.data_requirements.roles)
+                self.assertNotIn(DataRole.NOISY_VALIDATION, requirements.data_requirements.roles)
+
+    def test_user_fixable_config_requirements_publish_real_yaml_locations(self) -> None:
+        registry = create_runner_registry()
+        requirements = (
+            registry.get('supervised').requirements({
+                'pipeline': {
+                    'risk_corrector': {'name': 'forward'},
+                    'transition_estimator': {'name': 'known'},
+                },
+            }),
+            registry.get('supervised').requirements({
+                'pipeline': {'weight_provider': {'name': 'mentornet'}},
+            }),
+            registry.get('binary').requirements({
+                'risk': {'name': 'natarajan_unbiased'},
+            }),
+            registry.get('l2rw').requirements({
+                'trusted_validation': {'source': 'audited_manifest'},
+            }),
+            registry.get('cal').requirements({}),
+            registry.get('mc_ldce').requirements({
+                'transition': {'estimator': 'known_smoke'},
+            }),
+        )
+        published = {
+            item.code: item.paths
+            for requirement in requirements
+            for item in requirement.required_config_inputs
+        }
+        expected = {
+            'requires_transition_matrix',
+            'requires_mentor_artifact',
+            'requires_binary_noise_prior',
+            'requires_trusted_validation',
+            'requires_trusted_manifest',
+            'requires_external_noise_labels',
+            'requires_transition_source',
+        }
+        self.assertEqual(set(published), expected)
+        for code, paths in published.items():
+            with self.subTest(code=code):
+                result = CompatibilityResult(
+                    CompatibilityStatus.COMPATIBLE_WITH_REQUIREMENTS,
+                    'fixture_method',
+                    'fixture',
+                    reasons=(CompatibilityReason(code, 'missing method input'),),
+                    required_user_inputs=(f'config:{code}',),
+                    required_input_paths=((f'config:{code}', paths),),
+                )
+                guidance = build_input_guidance(result)[0]
+                self.assertEqual(guidance.category, 'method_input')
+                self.assertEqual(guidance.config_paths, paths)
+                self.assertIn('YAML：', guidance.provision)
+
+    def test_l2rw_uses_one_modality_contract_and_keeps_trusted_supervision(self) -> None:
+        registry = create_runner_registry()
+        smoke = load_recipe_config(recipe_by_id('l2rw-cifar10-smoke'))
+        smoke_requirements = registry.get('l2rw').requirements(smoke)
+        self.assertEqual(
+            smoke_requirements.supported_modalities,
+            frozenset({Modality.IMAGE, Modality.TABULAR}),
+        )
+        service = ExperimentService()
+        service.preflight(smoke, check_data=True)
+        self.assertEqual(
+            service.last_compatibility.status,
+            CompatibilityStatus.COMPATIBLE,
+        )
+
+        reproduction = load_recipe_config(recipe_by_id('l2rw-cifar10-reproduction'))
+        reproduction_requirements = registry.get('l2rw').requirements(reproduction)
+        self.assertEqual(
+            reproduction_requirements.supported_modalities,
+            frozenset({Modality.IMAGE, Modality.TABULAR}),
+        )
+
+        unknown_tabular = {
+            'data': {'name': 'another_tabular_dataset'},
+            'model': {'name': 'feature_mlp'},
+            'trusted_validation': {'source': 'synthetic_fixture'},
+        }
+        self.assertEqual(
+            registry.get('l2rw').requirements(unknown_tabular).supported_modalities,
+            frozenset({Modality.IMAGE, Modality.TABULAR}),
+        )
+
+    def test_cal_mc_ldce_and_ca2c_preserve_their_synthetic_smokes(self) -> None:
+        registry = create_runner_registry()
+        service = ExperimentService()
+        cases = (
+            ('cal-cifar10-smoke', 'cal'),
+            ('mc-ldce-cifar10-smoke', 'mc_ldce'),
+            ('ca2c-cifar10-smoke', 'ca2c'),
+        )
+        for recipe_id, runner_name in cases:
+            with self.subTest(recipe=recipe_id):
+                config = load_recipe_config(recipe_by_id(recipe_id))
+                requirements = registry.get(runner_name).requirements(config)
+                expected = frozenset({Modality.IMAGE, Modality.TABULAR})
+                self.assertEqual(
+                    requirements.supported_modalities,
+                    expected,
+                )
+                service.preflight(config, check_data=True)
+                self.assertEqual(
+                    service.last_compatibility.status,
+                    CompatibilityStatus.COMPATIBLE,
+                )
+
+    def test_cal_mc_ldce_and_ca2c_are_dataset_neutral(self) -> None:
+        registry = create_runner_registry()
+        formal_cases = (
+            ('cal-cifar10-reproduction', 'cal'),
+            ('mc-ldce-cifar10-reproduction', 'mc_ldce'),
+            ('ca2c-cifar10-reproduction', 'ca2c'),
+        )
+        for recipe_id, runner_name in formal_cases:
+            with self.subTest(recipe=recipe_id):
+                config = load_recipe_config(recipe_by_id(recipe_id))
+                requirements = registry.get(runner_name).requirements(config)
+                expected = frozenset({Modality.IMAGE, Modality.TABULAR})
+                self.assertEqual(requirements.supported_modalities, expected)
+
+        cal = registry.get('cal').requirements(
+            load_recipe_config(recipe_by_id('cal-cifar10-reproduction'))
+        )
+        self.assertEqual(
+            {item.code for item in cal.required_config_inputs},
+            set(),
+        )
+        mc_ldce = registry.get('mc_ldce').requirements({
+            'data': {'name': 'synthetic_multiclass'},
+            'model': {'name': 'feature_mlp'},
+            'transition': {'estimator': 'known_smoke'},
+        })
+        self.assertEqual(
+            {item.code for item in mc_ldce.required_config_inputs},
+            {'requires_transition_source'},
+        )
+
+        tabular = resolve_dataset_capabilities(
+            _compatibility__profile(
+                modality=Modality.TABULAR,
+                classes=3,
+                clean=KnowledgeState.AVAILABLE,
+                clean_validation=KnowledgeState.AVAILABLE,
+            )
+        )
+        unknown_configs = {
+            'cal': {
+                'data': {'name': 'unknown_tabular'},
+                'model': {'name': 'feature_mlp'},
+                'noise': {'name': 'symmetric'},
+                'cal': {'confidence_weight': 1.0},
+            },
+            'mc_ldce': {
+                'data': {'name': 'unknown_tabular'},
+                'model': {'name': 'feature_mlp'},
+                'transition': {
+                    'estimator': 'known_smoke',
+                    'matrix': [[1.0, 0.0, 0.0]] * 3,
+                },
+            },
+            'ca2c': {
+                'data': {'name': 'unknown_tabular'},
+                'model': {'name': 'feature_mlp'},
+                'ca2c': {
+                    'warmup_epochs': 1,
+                    'candidate_k': 1,
+                    'hard_weight': 0.5,
+                },
+            },
+        }
+        for runner_name, config in unknown_configs.items():
+            with self.subTest(runner=runner_name):
+                requirements = registry.get(runner_name).requirements(config)
+                expected = CompatibilityStatus.COMPATIBLE
+                self.assertEqual(
+                    resolve_compatibility(tabular, requirements).status,
+                    expected,
+                )
 
     def test_shared_runner_detection_is_component_driven(self) -> None:
         registry = create_runner_registry()
         supervised = registry.get('supervised')
-        self.assertIsNone(supervised.requirements({}))
+        plain_ce = supervised.requirements({})
+        self.assertEqual(plain_ce.method, 'ce')
+        self.assertEqual(plain_ce.supported_modalities, frozenset({Modality.IMAGE, Modality.TABULAR}))
+        self.assertFalse(plain_ce.requires_noise_manifest)
+        self.assertTrue(plain_ce.supports_native_noisy_labels)
         cases = (({'loss': {'name': 'gce'}}, 'gce'), ({'loss': {'name': 'apl'}}, 'apl'), ({'parameter_update': {'name': 'cdr'}}, 'cdr'), ({'pipeline': {'objective_consumer': {'name': 'dss'}}}, 'dss'), ({'pipeline': {'weight_provider': {'name': 'mentornet'}}}, 'mentornet'), ({'pipeline': {'risk_corrector': {'name': 'forward'}}}, 'loss_correction'))
         for config, expected in cases:
             with self.subTest(expected=expected):
-                self.assertEqual(supervised.requirements(config).method, expected)
+                requirements = supervised.requirements(config)
+                self.assertEqual(requirements.method, expected)
+                if expected in {'gce', 'apl'}:
+                    self.assertEqual(
+                        requirements.supported_modalities,
+                        frozenset({Modality.IMAGE, Modality.TABULAR}),
+                    )
+                    self.assertFalse(requirements.requires_noise_manifest)
+                    self.assertTrue(requirements.supports_native_noisy_labels)
+                if expected in {'cdr', 'dss'}:
+                    self.assertEqual(
+                        requirements.supported_modalities,
+                        frozenset({Modality.IMAGE, Modality.TABULAR}),
+                    )
+        volminnet = registry.get('volminnet').requirements({})
+        self.assertEqual(
+            volminnet.supported_modalities,
+            frozenset({Modality.IMAGE, Modality.TABULAR}),
+        )
+        self.assertEqual(volminnet.min_classes, 3)
+        self.assertEqual(volminnet.exact_classes, frozenset())
         multi_model = registry.get('multi_model')
         self.assertIsNone(multi_model.requirements({}))
         self.assertEqual(multi_model.requirements({'algorithm': {'name': 'jocor'}}).method, 'jocor')
@@ -246,7 +541,7 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
     def test_remaining_papers_reject_observed_only_native_noise(self) -> None:
         native_noise = NoiseKnowledge(status=NoiseStatus.NOISY, origin=NoiseOrigin.NATIVE, rate=NoiseRateInfo())
         papers = {paper.id: paper for paper in load_papers()}
-        for paper_id in {'binary-risk', 'loss-correction', 'gce', 'l2rw', 'mentornet', 'apl', 'dual-t', 'jocor', 'cal', 'cdr', 'cwd', 'mc-ldce', 'dss', 'fine'}:
+        for paper_id in {'binary-risk', 'loss-correction', 'l2rw', 'mentornet', 'dual-t', 'jocor', 'cdr', 'cwd', 'mc-ldce', 'dss', 'fine'}:
             with self.subTest(paper=paper_id):
                 _, recipe = default_paper_config(papers[paper_id])
                 config = load_recipe_config(recipe)
@@ -257,25 +552,125 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
                 result = resolve_compatibility(capabilities, requirements)
                 self.assertEqual(result.status, CompatibilityStatus.INCOMPATIBLE)
 
+    def test_cal_accepts_observed_only_native_noise(self) -> None:
+        native_noise = NoiseKnowledge(status=NoiseStatus.NOISY, origin=NoiseOrigin.NATIVE, rate=NoiseRateInfo())
+        capabilities = resolve_dataset_capabilities(_compatibility__profile(modality=Modality.TABULAR, classes=3, clean=KnowledgeState.UNAVAILABLE, noise=native_noise))
+        requirements = create_runner_registry().get('cal').requirements({})
+        self.assertEqual(resolve_compatibility(capabilities, requirements).status, CompatibilityStatus.COMPATIBLE)
+
+    def test_runner_invoke_passes_the_canonical_data_requirement_object(self) -> None:
+        requirement = _compatibility__method()
+        provider = Mock(return_value=requirement)
+        runner = Mock(return_value=Path('run'))
+        spec = RunnerSpec('fixture', 'unused', 'unused', requirements_provider=provider)
+        with patch.object(RunnerSpec, 'load', return_value=runner):
+            spec.invoke({'seed': 1})
+        self.assertIs(runner.call_args.kwargs['requirements'], requirement.data_requirements)
+
+    def test_data_service_does_not_import_runner_or_method_registry(self) -> None:
+        import inspect
+        import lnl_toolbox.training.data_service as data_service_module
+        source = inspect.getsource(data_service_module)
+        self.assertNotIn('training.runners', source)
+        self.assertNotIn('resolve_runner', source)
+
+    def test_loss_only_methods_accept_native_noise_without_clean_labels(self) -> None:
+        native_noise = NoiseKnowledge(
+            status=NoiseStatus.NOISY,
+            origin=NoiseOrigin.NATIVE,
+            rate=NoiseRateInfo(),
+        )
+        capabilities = resolve_dataset_capabilities(
+            _compatibility__profile(
+                modality=Modality.TABULAR,
+                classes=4,
+                clean=KnowledgeState.UNAVAILABLE,
+                clean_validation=KnowledgeState.UNAVAILABLE,
+                noise=native_noise,
+            )
+        )
+        supervised = create_runner_registry().get('supervised')
+        for loss in ('gce', 'apl'):
+            with self.subTest(loss=loss):
+                requirements = supervised.requirements(
+                    {'loss': {'name': loss}, 'noise': {'validation_targets': 'noisy'}}
+                )
+                self.assertEqual(
+                    resolve_compatibility(capabilities, requirements).status,
+                    CompatibilityStatus.COMPATIBLE,
+                )
+
 # --- merged from test_compatibility.py ---
 class _compatibility_ExperimentCompatibilityServiceTest(unittest.TestCase):
+
+    def test_mentor_artifact_is_reported_as_an_implementation_limit(self) -> None:
+        capabilities = resolve_dataset_capabilities(
+            _compatibility__profile(clean=KnowledgeState.AVAILABLE)
+        )
+        data_service = Mock()
+        data_service.capabilities.return_value = capabilities
+        service = ExperimentService(data_service=data_service)
+        config = {
+            'execution': {'runner': 'supervised'},
+            'data': {'name': 'fixture'},
+            'pipeline': {'weight_provider': {'name': 'mentornet'}},
+        }
+        result = service.resolve_method_compatibility(config, config)
+        reason = next(
+            item for item in result.reasons
+            if item.code == 'requires_mentor_artifact'
+        )
+        self.assertEqual(reason.origin, 'implemented_variant_limit')
+        serialized = result.to_dict()
+        serialized_reason = next(
+            item for item in serialized['reasons']
+            if item['code'] == 'requires_mentor_artifact'
+        )
+        self.assertEqual(serialized_reason['origin'], 'implemented_variant_limit')
+
+    def test_l2rw_trusted_supervision_remains_an_algorithm_requirement(self) -> None:
+        capabilities = resolve_dataset_capabilities(
+            _compatibility__profile(clean=KnowledgeState.AVAILABLE)
+        )
+        data_service = Mock()
+        data_service.capabilities.return_value = capabilities
+        service = ExperimentService(data_service=data_service)
+        config = {
+            'execution': {'runner': 'l2rw'},
+            'data': {'name': 'fixture'},
+        }
+        result = service.resolve_method_compatibility(config, config)
+        reason = next(
+            item for item in result.reasons
+            if item.code == 'requires_trusted_validation'
+        )
+        self.assertEqual(reason.origin, 'algorithm_requirement')
 
     def test_service_and_direct_resolver_agree(self) -> None:
         capabilities = resolve_dataset_capabilities(_compatibility__profile(modality=Modality.TABULAR, classes=2))
         data_service = Mock()
         data_service.capabilities.return_value = capabilities
         service = ExperimentService(data_service=data_service)
-        result = service.resolve_method_compatibility('fixture', 'importance_reweighting')
-        direct = resolve_compatibility(capabilities, create_runner_registry().get('importance_reweighting').requirements({}))
+        config = {
+            'method': 'importance_reweighting',
+            'execution': {'runner': 'importance_reweighting'},
+            'data': {'name': 'fixture'},
+            'noise': {'rho_positive': 0.2, 'rho_negative': 0.1},
+        }
+        result = service.resolve_method_compatibility(config, config)
+        direct = resolve_compatibility(
+            capabilities,
+            create_runner_registry().get('importance_reweighting').requirements(config),
+        )
         self.assertEqual(result, direct)
-        data_service.capabilities.assert_called_once_with('fixture', seed=0, persist=False)
+        data_service.capabilities.assert_called_once_with(config, seed=0, persist=False)
 
     def test_config_prior_is_not_treated_as_dataset_true_rate(self) -> None:
         capabilities = resolve_dataset_capabilities(_compatibility__profile(clean=KnowledgeState.AVAILABLE))
         data_service = Mock()
         data_service.capabilities.return_value = capabilities
         service = ExperimentService(data_service=data_service)
-        config = {'method': 'coteaching', 'execution': {'runner': 'coteaching'}, 'data': {'name': 'fixture'}, 'coteaching': {'noise_rate': 0.2}}
+        config = {'method': 'coteaching', 'execution': {'runner': 'coteaching'}, 'data': {'name': 'fixture'}, 'noise': {'name': 'symmetric', 'rate': 0.2}, 'coteaching': {'noise_rate': 0.2}}
         result = service.resolve_method_compatibility(config, config)
         self.assertEqual(result.status, CompatibilityStatus.COMPATIBLE)
         self.assertEqual(capabilities.noise_rate.status, NoiseRateStatus.UNKNOWN)
@@ -290,7 +685,7 @@ class _compatibility_ExperimentCompatibilityServiceTest(unittest.TestCase):
         service = ExperimentService(data_service=data_service)
         config = {'method': 'upm', 'execution': {'runner': 'upm'}, 'data': {'name': 'fixture'}}
         with patch('lnl_toolbox.catalog.validate_config', return_value=runner):
-            with self.assertRaisesRegex(ValueError, 'unsupported_modality'):
+            with self.assertRaisesRegex(ValueError, 'missing_noise_manifest'):
                 service.preflight(config, check_data=True)
         runner.invoke.assert_not_called()
 
@@ -300,7 +695,7 @@ class _compatibility_ExperimentCompatibilityServiceTest(unittest.TestCase):
         data_service.capabilities.return_value = capabilities
         runner = create_runner_registry().get('coteaching')
         service = ExperimentService(data_service=data_service)
-        base = {'schema_version': 1, 'kind': 'experiment', 'method': 'coteaching', 'execution': {'runner': 'coteaching'}, 'data': {'name': 'fixture'}}
+        base = {'schema_version': 1, 'kind': 'experiment', 'method': 'coteaching', 'execution': {'runner': 'coteaching'}, 'data': {'name': 'fixture'}, 'noise': {'name': 'symmetric', 'rate': 0.2}}
         with patch('lnl_toolbox.catalog.validate_config', return_value=runner):
             with self.assertRaisesRegex(ValueError, 'requires_noise_rate_prior'):
                 service.preflight(base, check_data=True)
@@ -314,7 +709,13 @@ class _compatibility_ExperimentCompatibilityServiceTest(unittest.TestCase):
         data_service = Mock()
         data_service.capabilities.return_value = capabilities
         service = ExperimentService(data_service=data_service)
-        result = service.resolve_method_compatibility('fixture', 'upm')
+        config = {
+            'method': 'upm',
+            'execution': {'runner': 'upm'},
+            'data': {'name': 'fixture'},
+            'noise': {'name': 'symmetric', 'rate': 0.2},
+        }
+        result = service.resolve_method_compatibility(config, config)
         self.assertEqual(result.status, CompatibilityStatus.COMPATIBLE)
 
     def test_method_discovery_uses_every_central_runner(self) -> None:
@@ -327,6 +728,28 @@ class _compatibility_ExperimentCompatibilityServiceTest(unittest.TestCase):
         self.assertIn('upm', by_method)
         self.assertNotIn('requirements_unavailable', {reason.code for reason in by_method['binary'].reasons})
 
+    def test_public_methods_publish_requirements_but_wrappers_do_not(self) -> None:
+        registry = create_runner_registry()
+        for method in method_names():
+            with self.subTest(method=method):
+                requirements = registry.get(method).requirements({})
+                self.assertIsNotNone(requirements)
+                self.assertIsInstance(requirements.data_requirements, DataRequirements)
+        self.assertIsNone(registry.get('clean').requirements({}))
+        self.assertIsNone(registry.get('multi_model').requirements({}))
+
+    def test_volmin_runner_invoke_receives_its_data_requirements(self) -> None:
+        registry = create_runner_registry()
+        spec = registry.get('volmin')
+        runner = Mock(return_value=Path('run'))
+        config = {'execution': {'runner': 'volmin'}, 'data': {'name': 'synthetic_multiclass'}}
+        with patch.object(RunnerSpec, 'load', return_value=runner):
+            spec.invoke(config)
+        self.assertEqual(
+            runner.call_args.kwargs['requirements'],
+            spec.requirements(config).data_requirements,
+        )
+
     def test_required_config_inputs_support_all_and_any_modes(self) -> None:
         capabilities = resolve_dataset_capabilities(_compatibility__profile(modality=Modality.TABULAR, classes=2, clean=KnowledgeState.AVAILABLE))
         data_service = Mock()
@@ -334,11 +757,110 @@ class _compatibility_ExperimentCompatibilityServiceTest(unittest.TestCase):
         service = ExperimentService(data_service=data_service)
         missing = service.resolve_method_compatibility({'data': {'name': 'fixture'}, 'execution': {'runner': 'binary'}, 'risk': {'name': 'natarajan_unbiased'}}, {'data': {'name': 'fixture'}, 'execution': {'runner': 'binary'}, 'risk': {'name': 'natarajan_unbiased'}})
         self.assertIn('requires_binary_noise_prior', {reason.code for reason in missing.reasons})
+        binary_guidance = {item.input_id: item for item in missing.input_guidance}
+        self.assertEqual(binary_guidance['config:requires_binary_noise_prior'].category, 'method_input')
+        self.assertEqual(
+            binary_guidance['config:requires_binary_noise_prior'].config_paths,
+            (('risk', 'rho_positive'), ('risk', 'rho_negative')),
+        )
         configured = {'data': {'name': 'fixture'}, 'execution': {'runner': 'binary'}, 'risk': {'name': 'natarajan_unbiased', 'rho_positive': 0.2, 'rho_negative': 0.3}}
         result = service.resolve_method_compatibility(configured, configured)
         self.assertEqual(result.status, CompatibilityStatus.COMPATIBLE)
         requirement = ConfigInputRequirement(code='source', paths=(('a',), ('b',)), mode='any')
         self.assertEqual(requirement.mode, 'any')
+
+    def test_pretrained_run_guidance_uses_environment_not_adapter(self) -> None:
+        capabilities = resolve_dataset_capabilities(
+            _compatibility__profile(clean=KnowledgeState.AVAILABLE)
+        )
+        requirements = _compatibility__method(
+            method='pcse',
+            required_pretrained_roles=('upm_main_best',),
+            pretrained_role_paths=((
+                'upm_main_best',
+                ('pretraining_stage', 'source', 'run_directory_env'),
+            ),),
+        )
+        runner = Mock(name='pcse')
+        runner.requirements.return_value = requirements
+        config = {
+            'pretraining_stage': {
+                'source': {
+                    'adapter': 'upm_main_best',
+                    'run_directory_env': 'LNL_PCSE_SOURCE_RUN',
+                },
+            },
+        }
+        service = ExperimentService(data_service=Mock())
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('LNL_PCSE_SOURCE_RUN', None)
+            missing = service._resolve_for_capabilities(capabilities, runner, config)
+        self.assertEqual(missing.status, CompatibilityStatus.COMPATIBLE_WITH_REQUIREMENTS)
+        guidance = {item.input_id: item for item in missing.input_guidance}
+        source = guidance['pretrained:upm_main_best']
+        self.assertEqual(source.environment_variable, 'LNL_PCSE_SOURCE_RUN')
+        self.assertIn('best.pt', source.expected_value)
+        self.assertIn('noise_manifest.npz', source.expected_value)
+        self.assertNotIn('adapter', source.provision)
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {'LNL_PCSE_SOURCE_RUN': directory}, clear=False,
+        ):
+            ready = service._resolve_for_capabilities(capabilities, runner, config)
+        self.assertEqual(ready.status, CompatibilityStatus.COMPATIBLE)
+
+        dld_requirements = _compatibility__method(
+            method='dld',
+            required_pretrained_roles=('upm_main_best',),
+            pretrained_role_paths=((
+                'upm_main_best',
+                ('dld', 'feature_extractor', 'external', 'run_directory_env'),
+            ),),
+        )
+        runner.requirements.return_value = dld_requirements
+        dld_config = {
+            'dld': {'feature_extractor': {'external': {
+                'adapter': 'upm_main_best',
+                'run_directory_env': 'LNL_DLD_SOURCE_RUN',
+            }}},
+        }
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('LNL_DLD_SOURCE_RUN', None)
+            dld_missing = service._resolve_for_capabilities(
+                capabilities, runner, dld_config,
+            )
+        dld_source = {
+            item.input_id: item for item in dld_missing.input_guidance
+        }['pretrained:upm_main_best']
+        self.assertEqual(dld_source.environment_variable, 'LNL_DLD_SOURCE_RUN')
+        self.assertNotIn('adapter', dld_source.provision)
+
+    def test_developer_metadata_error_is_not_a_user_input(self) -> None:
+        capabilities = resolve_dataset_capabilities(
+            _compatibility__profile(clean=KnowledgeState.AVAILABLE)
+        )
+        runner = Mock(name='missing_metadata')
+        runner.requirements.return_value = None
+        result = ExperimentService(data_service=Mock())._resolve_for_capabilities(
+            capabilities, runner, {},
+        )
+        self.assertEqual(result.required_user_inputs, ())
+        self.assertEqual(result.input_guidance[0].category, 'developer_error')
+        self.assertEqual(
+            result.input_guidance[0].input_kind,
+            'developer_configuration_error',
+        )
+
+    def test_dataset_fact_guidance_stays_out_of_method_configuration(self) -> None:
+        result = CompatibilityResult(
+            CompatibilityStatus.COMPATIBLE_WITH_REQUIREMENTS,
+            'fixture_method',
+            'fixture',
+            reasons=(CompatibilityReason('unknown_noise_rate', 'rate is unknown'),),
+            required_user_inputs=('dataset_noise_rate',),
+        )
+        guidance = build_input_guidance(result)
+        self.assertEqual(guidance[0].category, 'dataset_fact')
+        self.assertEqual(guidance[0].provision, '需要确认的数据集信息')
 
 # --- merged from test_cnlcu_readiness.py ---
 from pathlib import Path
