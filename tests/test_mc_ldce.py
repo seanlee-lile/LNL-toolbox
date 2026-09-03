@@ -8,6 +8,12 @@ import unittest
 import math
 
 # --- merged from test_mc_ldce.py ---
+from pathlib import Path
+
+# --- merged from test_mc_ldce.py ---
+import tempfile
+
+# --- merged from test_mc_ldce.py ---
 import numpy as np
 
 # --- merged from test_mc_ldce.py ---
@@ -35,7 +41,7 @@ from lnl_toolbox.models.feature_output import forward_with_features
 from lnl_toolbox.models.mc_ldce_cnn import MCLDCECifarCNN
 
 # --- merged from test_mc_ldce.py ---
-from lnl_toolbox.training.mc_ldce_experiment import _prepare_fixed_feature_classifier
+from lnl_toolbox.training.mc_ldce_experiment import _prepare_fixed_feature_classifier, _write_epoch_metrics
 
 # --- merged from test_mc_ldce.py ---
 from lnl_toolbox.training.snapshots import FeatureSnapshot
@@ -52,6 +58,19 @@ class _mc_ldce__LinearFeatures(nn.Module):
 
 # --- merged from test_mc_ldce.py ---
 class _mc_ldce_MCLDCETest(unittest.TestCase):
+
+    def test_epoch_metrics_writer_rewrites_complete_history(self) -> None:
+        import json
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'metrics.jsonl'
+            _write_epoch_metrics([{'event': 'epoch', 'epoch': 1}], path)
+            _write_epoch_metrics(
+                [{'event': 'epoch', 'epoch': 1}, {'event': 'epoch', 'epoch': 2}],
+                path,
+            )
+            rows = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+        self.assertEqual([row['epoch'] for row in rows], [1, 2])
 
     def test_reproduction_config_uses_exact_volmin_initialization(self) -> None:
         import yaml

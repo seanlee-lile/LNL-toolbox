@@ -135,12 +135,20 @@ class _dual_t_evidence_DualTEvidenceFairnessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             first = _run_final_arm(name='first', run_dir=Path(directory) / 'first', **arguments)
             second = _run_final_arm(name='second', run_dir=Path(directory) / 'second', **arguments)
+            first_rows = [json.loads(line) for line in (Path(directory) / 'first' / 'metrics.jsonl').read_text(encoding='utf-8').splitlines()]
+            second_rows = [json.loads(line) for line in (Path(directory) / 'second' / 'metrics.jsonl').read_text(encoding='utf-8').splitlines()]
         self.assertEqual(first.initial_state_hash, initial_hash)
         self.assertEqual(second.initial_state_hash, initial_hash)
         self.assertEqual(first.sampler_seed, second.sampler_seed)
         self.assertEqual(first.batch_index_hashes, second.batch_index_hashes)
         self.assertEqual(first.input_tensor_hashes, second.input_tensor_hashes)
         self.assertEqual(len(first.batch_index_hashes), 2)
+        self.assertEqual([row['event'] for row in first_rows], ['epoch', 'epoch'])
+        self.assertEqual([row['epoch'] for row in first_rows], [1, 2])
+        self.assertEqual(
+            [{key: value for key, value in row.items() if key != 'arm'} for row in first_rows],
+            [{key: value for key, value in row.items() if key != 'arm'} for row in second_rows],
+        )
 
 # --- merged from test_dual_t_forward.py ---
 from pathlib import Path

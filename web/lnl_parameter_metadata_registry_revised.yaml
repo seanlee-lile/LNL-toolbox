@@ -2467,8 +2467,8 @@ methods:
           to a noisy-label pretrained network.
         gda: The method uses class-conditional Gaussian/GDA-style statistics with shared covariance; covariance regularization
           in code is numerical stabilization.
-        pretrain: PCSE is a post-processing strategy on a pretrained noisy classifier, so the source checkpoint and stage
-          handoff are protocol, not tune knobs.
+        pretrain: PCSE is a post-processing strategy on a noisy classifier pretrained internally with the configured
+          CrossEntropy objective; the stage handoff is protocol, not a tune knob.
     repository_recipe:
       branch: codex/cli
       role: formal/reproduction recipe selected by the paper catalog
@@ -2715,7 +2715,7 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: preprocessing protocol
         noise.mode:
-          current: external
+          current: generated
           value_type: string
           ui_control: text
           reproduction_impact: high
@@ -2763,7 +2763,7 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: noise provenance
         pretraining_stage.mode:
-          current: external_checkpoint
+          current: train
           value_type: string
           ui_control: text
           reproduction_impact: high
@@ -2772,14 +2772,14 @@ methods:
           evidence_ref: pretrain
           reproduction_context: PCSE lifecycle
         pretraining_stage.epochs:
-          current: 0
+          current: 100
           value_type: integer
           ui_control: number
           reproduction_impact: high
           origin: advanced_experiment_or_implementation_control
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           evidence_ref: pretrain
-          reproduction_context: external-checkpoint lifecycle
+          reproduction_context: internal-training lifecycle
         pretraining_stage.checkpoint_selection:
           current: noisy_validation_accuracy
           value_type: string
@@ -2799,33 +2799,6 @@ methods:
           evidence_ref: pretrain
           reproduction_context: source model protocol
         pretraining_stage.model.base_width:
-          current: 16
-          value_type: integer
-          ui_control: number
-          reproduction_impact: high
-          origin: advanced_experiment_or_implementation_control
-          note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
-          evidence_ref: pretrain
-          reproduction_context: source model architecture
-        pretraining_stage.source.run_directory_env:
-          current: LNL_PCSE_SOURCE_RUN
-          value_type: string
-          ui_control: text
-          reproduction_impact: high
-          origin: advanced_experiment_or_implementation_control
-          note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
-          evidence_ref: pretrain
-          reproduction_context: external source contract
-        pretraining_stage.source.model.name:
-          current: preact_resnet18
-          value_type: string
-          ui_control: text
-          reproduction_impact: high
-          origin: advanced_experiment_or_implementation_control
-          note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
-          evidence_ref: pretrain
-          reproduction_context: source model contract
-        pretraining_stage.source.model.base_width:
           current: 16
           value_type: integer
           ui_control: number
@@ -2947,51 +2920,15 @@ methods:
           origin: structural_or_integrity_contract
           note: 结构性运行契约；普通参数面板中的独立修改会破坏 schema、runner、组件 wiring、label-space/cardinality 或 lifecycle 契约。
           lock_reason: label-space protocol
-        pretraining_stage.source.adapter:
-          current: upm_main_best
+        pretraining_stage.method:
+          current: cross_entropy
           value_type: string
           ui_control: readonly
           reproduction_impact: high
           origin: structural_or_integrity_contract
-          note: 结构性运行契约；普通参数面板中的独立修改会破坏 schema、runner、组件 wiring、label-space/cardinality 或 lifecycle 契约。
+          note: PCSE 正式前置训练方法固定为内部 CrossEntropy。
           evidence_ref: pretrain
-          lock_reason: source adapter
-        pretraining_stage.source.checkpoint_sha256:
-          current: <recipe hash>
-          value_type: string
-          ui_control: readonly
-          reproduction_impact: high
-          origin: structural_or_integrity_contract
-          note: 只读完整性校验字段；单独修改会使外部 artifact/manifest 的完整性验证失效。
-          evidence_ref: pretrain
-          lock_reason: artifact integrity contract
-        pretraining_stage.source.manifest_sha256:
-          current: <recipe hash>
-          value_type: string
-          ui_control: readonly
-          reproduction_impact: high
-          origin: structural_or_integrity_contract
-          note: 只读完整性校验字段；单独修改会使外部 artifact/manifest 的完整性验证失效。
-          evidence_ref: pretrain
-          lock_reason: artifact integrity contract
-        pretraining_stage.source.mapping_hash:
-          current: <recipe hash>
-          value_type: string
-          ui_control: readonly
-          reproduction_impact: high
-          origin: structural_or_integrity_contract
-          note: 只读完整性校验字段；单独修改会使外部 artifact/manifest 的完整性验证失效。
-          evidence_ref: pretrain
-          lock_reason: artifact integrity contract
-        pretraining_stage.source.dataset_fingerprint:
-          current: <recipe fingerprint>
-          value_type: string
-          ui_control: readonly
-          reproduction_impact: high
-          origin: structural_or_integrity_contract
-          note: 只读完整性校验字段；单独修改会使外部 artifact/manifest 的完整性验证失效。
-          evidence_ref: pretrain
-          lock_reason: artifact integrity contract
+          lock_reason: pretraining method contract
         transition_stage.name:
           current: paper_volmin
           value_type: string
@@ -3010,16 +2947,16 @@ methods:
           note: 结构性运行契约；普通参数面板中的独立修改会破坏 schema、runner、组件 wiring、label-space/cardinality 或 lifecycle 契约。
           lock_reason: dedicated runner
     coverage:
-      parameter_count: 66
+      parameter_count: 60
       by_level:
         basic: 3
         paper: 4
-        advanced: 48
-        locked: 11
+        advanced: 45
+        locked: 8
     paper_comparison:
       audit_status: checked_against_original_paper
       alignment_status: engineering_fidelity_not_claimed_exact
-      summary: Repository marks this configuration engineering; external pretrained-checkpoint adapter and transition/statistics
+      summary: Repository marks this configuration engineering; internal CrossEntropy pretraining and transition/statistics
         stages are not presented as an exact numerical reproduction.
       permission_policy: execution_validity_lock_rule_v1_1
   fine:

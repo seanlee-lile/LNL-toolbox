@@ -58,6 +58,7 @@ class CifarAdapter:
 class CifarBinaryViewAdapter:
     name = "cifar10_airplane_automobile"
     aliases = ("cifar10_binary", "cifar_10_airplane_automobile")
+    source_adapter = "cifar10"
 
     def validate(self, spec: DataSpec) -> None:
         CifarAdapter("cifar10", 10).validate(spec)

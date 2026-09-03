@@ -23,6 +23,7 @@ from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import read_checkpoint
 from lnl_toolbox.training.experiment import (
     _environment,
+    bind_model_input,
     build_model,
     build_optimizer,
     build_scheduler,
@@ -58,6 +59,27 @@ class _PCSEMultilayerPerceptron(nn.Module):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.classifier(self.hidden2(self.hidden1(inputs)))
+
+
+def _build_pcse_pretraining_model(
+    model_config: Mapping[str, Any], input_spec: Any, num_classes: int
+) -> nn.Module:
+    """Build the internal PCSE pretraining model from prepared input facts."""
+
+    bound_model_config = bind_model_input(model_config, input_spec)
+    if str(model_config.get("name", "")).strip().lower() == "pcse_mlp":
+        dimension = input_spec.feature_dim
+        if dimension is None:
+            raise ValueError(
+                "PCSE pcse_mlp pretraining requires tabular input with "
+                "feature_dim"
+            )
+        return _PCSEMultilayerPerceptron(
+            dimension,
+            int(model_config.get("hidden_width", 16)),
+            num_classes,
+        )
+    return build_model(bound_model_config, num_classes)
 
 
 def _resolve_run_dir(
@@ -207,6 +229,9 @@ def run_pcse_experiment(
 
     config = deepcopy(config)
     method_config = PCSEConfig.from_mapping(config)
+    pretraining_stage = dict(config.get("pretraining_stage", {}))
+    pretraining_stage["method"] = method_config.pretraining.method
+    config["pretraining_stage"] = pretraining_stage
     seed = int(config.get("seed", 1))
     seed_everything(seed)
     trainer = config.get("trainer", {})
@@ -271,15 +296,8 @@ def run_pcse_experiment(
     )
     data_name, num_classes = prepared.dataset, prepared.num_classes
     if pretraining_mode == "train":
-        if str(model_config.get("name", "")).strip().lower() != "pcse_mlp":
-            raise ValueError("PCSE tabular pretraining requires model name pcse_mlp")
-        dimension = prepared.input_spec.feature_dim
-        if dimension is None:
-            raise ValueError(
-                "PCSE pcse_mlp pretraining requires tabular input with feature_dim"
-            )
-        model = _PCSEMultilayerPerceptron(
-            dimension, int(model_config.get("hidden_width", 16)), num_classes
+        model = _build_pcse_pretraining_model(
+            model_config, prepared.input_spec, num_classes
         )
     elif num_classes != 10:
         raise ValueError("PCSE external UPM source class count mismatch")

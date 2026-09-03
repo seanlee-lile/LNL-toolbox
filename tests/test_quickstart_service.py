@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -95,6 +96,30 @@ class QuickStartServiceTests(unittest.TestCase):
         self.assertTrue(all(item.acronym for item in result))
         fine = next(item for item in result if item.paper_id == "fine")
         self.assertEqual(fine.status, "ready")
+
+    def test_internal_pcse_does_not_require_upm_environment(self) -> None:
+        root = Path(self.temp.name)
+        service = DataService(
+            registry=DatasetRegistry((_FakeCifar100Adapter(),)),
+            catalog=LocalDatasetCatalog(root / "pcse-catalog.json"),
+        )
+        service.register(
+            "local-cifar100", "cifar100", {"root": str(self.data_root)}
+        )
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LNL_PCSE_SOURCE_RUN", None)
+            option = next(
+                item
+                for item in QuickStartService(
+                    service, artifact_root=root / "pcse-artifacts"
+                ).method_options(
+                    "local-cifar100",
+                    QuickStartNoiseSelection("synthetic", "symmetric", rate=0.2, seed=1),
+                )
+                if item.paper_id == "pcse"
+            )
+        self.assertNotEqual(option.status, "needs_input")
+        self.assertNotIn("LNL_PCSE_SOURCE_RUN", option.required_user_inputs)
 
     def test_method_options_batches_compatibility_and_reuses_cache(self) -> None:
         selection = QuickStartNoiseSelection("clean", "clean")
@@ -234,9 +259,15 @@ class QuickStartServiceTests(unittest.TestCase):
                             noise_selection=noise,
                             paper_id=option.paper_id,
                         )
-                        if option.paper_id == "mentornet":
-                            self.assertIn(plan.status, {"needs_input", "unsupported"})
+                        if option.paper_id == "pcse" and noise.kind == "clean":
+                            self.assertEqual(plan.status, "unsupported")
                             self.assertFalse(plan.command)
+                        elif option.paper_id == "mentornet":
+                            if plan.status == "ready":
+                                self.assertTrue(plan.command)
+                            else:
+                                self.assertIn(plan.status, {"needs_input", "unsupported"})
+                                self.assertFalse(plan.command)
                         else:
                             self.assertEqual(plan.status, "ready", plan.details)
 

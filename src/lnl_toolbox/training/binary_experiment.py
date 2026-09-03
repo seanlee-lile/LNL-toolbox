@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Framework-neutral binary experiment utilities for UCI and CIFAR views."""
 
+import json
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -173,6 +174,9 @@ def run_binary_experiment(
     if epochs <= 0:
         raise ValueError("epochs must be positive")
     rows = []
+    web_rows = []
+    metrics_path = destination / "metrics.jsonl"
+    metrics_path.write_text("", encoding="utf-8")
     for epoch in range(epochs):
         row = train_binary_epoch(model, loader, optimizer, risk=risk)
         row["epoch"] = float(epoch + 1)
@@ -182,7 +186,13 @@ def run_binary_experiment(
             row["test_loss"] = evaluation["loss"]
             row["test_accuracy"] = evaluation["accuracy"]
         rows.append(row)
-    import json
+        web_row = {"event": "epoch", **row, "epoch": epoch + 1}
+        web_rows.append(web_row)
+        metrics_path.write_text(
+            "".join(json.dumps(item, sort_keys=True) + "\n" for item in web_rows),
+            encoding="utf-8",
+        )
+
     (destination / "resolved_config.json").write_text(json.dumps(resolved_config, indent=2), encoding="utf-8")
     if record is not None:
         (destination / "parameter_record.json").write_text(json.dumps(record.to_dict(), indent=2), encoding="utf-8")

@@ -41,6 +41,15 @@ def _build_warmup_scheduler(optimizer, config: dict[str, Any], epochs: int):
     return build_alpha_scaled_scheduler(optimizer, config.get("scheduler"))
 
 
+def _write_epoch_metrics(rows: list[dict[str, Any]], path: Path) -> None:
+    """Rewrite the complete epoch history so WebUI and resume see one stream."""
+
+    path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+
 def _assert_finite_warmup_state(model, loss: torch.Tensor) -> None:
     if not bool(torch.isfinite(loss.detach()).item()):
         raise ValueError("CAL warm-up produced a non-finite loss")
@@ -227,6 +236,7 @@ def run_cal_experiment(
     cal_cfg = dict(config["cal"])
     cal_schedule = cal_cfg.get("confidence_schedule")
     criterion = CrossEntropyLoss().to(device); means = torch.zeros(classes, classes, device=device); start = 0; rows = []
+    metrics_path = run_dir / "metrics.jsonl"
     retained = proxy.sample_status != 2
     proxy_prior_np = np.bincount(proxy.proxy_targets[retained], minlength=classes).astype(np.float64)
     if proxy_prior_np.sum() <= 0:
@@ -243,6 +253,7 @@ def run_cal_experiment(
         ):
             raise ValueError("CAL reference transition checkpoint mismatch")
         rows = list(payload.get("metrics", [])); start = int(payload["completed_epoch"]) + 1; restore_rng_state(payload["rng_state"])
+    _write_epoch_metrics(rows, metrics_path)
     for epoch in range(start, epochs):
         model.train(); total = correct = 0; loss_sum = 0.0
         epoch_loss_sums = torch.zeros_like(means)
@@ -283,6 +294,7 @@ def run_cal_experiment(
         row = standardize_epoch_row(
             row_values, require_validation=validation_loader is not None
         ); rows.append(row)
+        _write_epoch_metrics(rows, metrics_path)
         if scheduler is not None:
             scheduler.step(resolve_confidence_weight(
                 epoch + 1,
@@ -294,10 +306,7 @@ def run_cal_experiment(
     if rows: write_training_curves_svg(rows, run_dir / "training_curves.svg")
     test = evaluate_classification(model, test_loader, criterion, device)
     final_row = {"event": "final", "completed_epochs": epochs, "test_loss": test["loss"], "test_accuracy": test["accuracy"], "selection_split": "none", "test_selection_leakage": False, "method": "cal"}
-    (run_dir / "metrics.jsonl").write_text(
-        "".join(json.dumps(row, sort_keys=True) + "\n" for row in [*rows, final_row]),
-        encoding="utf-8",
-    )
+    _write_epoch_metrics([*rows, final_row], metrics_path)
     return run_dir
 
 

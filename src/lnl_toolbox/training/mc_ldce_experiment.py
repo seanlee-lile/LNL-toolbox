@@ -41,6 +41,15 @@ def _directory(config, output_dir, resume) -> Path:
     return path
 
 
+def _write_epoch_metrics(rows: list[dict[str, Any]], path: Path) -> None:
+    """Rewrite the complete epoch history for live WebUI reads and resume."""
+
+    path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+
 def _transition(config, snapshot_hash: str) -> TransitionArtifact:
     value = dict(config["transition"])
     if value.get("artifact"):
@@ -248,6 +257,8 @@ def run_mc_ldce_experiment(
     objective = MCLDCEObjective(statistic)
     base_learning_rate = float(config["optimizer"]["lr"])
     decay_start = int(config.get("scheduler", {}).get("decay_start", epochs))
+    metrics_path = run_dir / "metrics.jsonl"
+    _write_epoch_metrics(rows, metrics_path)
     for epoch in range(start_epoch, epochs):
         if str(config.get("scheduler", {}).get("name", "none")).lower() == "linear_after":
             factor = 1.0 if epoch < decay_start else max(
@@ -269,10 +280,11 @@ def run_mc_ldce_experiment(
             row_values.update({"validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"]})
         row = standardize_epoch_row(row_values, require_validation=validation_loader is not None)
         rows.append(row)
+        _write_epoch_metrics(rows, metrics_path)
         if scheduler is not None: scheduler.step()
         atomic_save({"method": "mc_ldce", "lifecycle_version": lifecycle["lifecycle_version"], "config": config, "model": model.state_dict(), "optimizer": optimizer.state_dict(), "scheduler": None if scheduler is None else scheduler.state_dict(), "completed_epoch": epoch, "metrics": rows, "statistic_hash": statistic.artifact_hash, "rng_state": capture_rng_state()}, run_dir / "last.pt")
     (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
-    (run_dir / "metrics.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    _write_epoch_metrics(rows, metrics_path)
     if rows: write_training_curves_svg(rows, run_dir / "training_curves.svg")
     return run_dir
 

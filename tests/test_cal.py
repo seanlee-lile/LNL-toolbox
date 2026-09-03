@@ -191,3 +191,25 @@ class _cal_CALTest(unittest.TestCase):
         self.assertNotIn('validation_loss', rows[0])
         self.assertNotIn('test_loss', rows[0])
         self.assertEqual(rows[-1]['event'], 'final')
+
+    def test_epoch_metrics_are_written_before_final_evaluation(self) -> None:
+        import yaml
+        from unittest.mock import patch
+
+        from lnl_toolbox.training import cal_experiment as cal_module
+
+        config = yaml.safe_load(
+            (Path(__file__).resolve().parents[1] / 'configs' / 'experiment' / 'cal_cifar10_smoke.yaml').read_text(encoding='utf-8')
+        )
+        writes = []
+        original_writer = cal_module._write_epoch_metrics
+
+        def record_write(rows, path):
+            writes.append([row.get('event', 'epoch') for row in rows])
+            original_writer(rows, path)
+
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(cal_module, '_write_epoch_metrics', side_effect=record_write):
+                run_cal_experiment(config, directory)
+        self.assertIn(['epoch'], writes)
+        self.assertEqual(writes[-1], ['epoch', 'final'])

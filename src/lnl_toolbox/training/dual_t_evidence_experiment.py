@@ -142,6 +142,8 @@ def _run_final_arm(
     best_epoch = -1
     best_state: dict[str, torch.Tensor] | None = None
     metric_rows: list[dict[str, Any]] = []
+    metrics_path = run_dir / "metrics.jsonl"
+    metrics_path.write_text("", encoding="utf-8")
     try:
         for epoch in range(epochs):
             learning_rate = float(optimizer.param_groups[0]["lr"])
@@ -176,6 +178,10 @@ def _run_final_arm(
                 "noisy_validation_loss": validation["loss"],
                 "noisy_validation_accuracy": validation["accuracy"],
             })
+            metrics_path.write_text(
+                "".join(json.dumps(row) + "\n" for row in metric_rows),
+                encoding="utf-8",
+            )
         if best_state is None:
             raise RuntimeError(f"evidence arm {name!r} has no best checkpoint")
         final_test = evaluate_classification(
@@ -223,7 +229,7 @@ def _run_final_arm(
             batch_index_hashes=tuple(train_loader.batch_index_hashes),
             input_tensor_hashes=tuple(train_loader.input_tensor_hashes),
         )
-        (run_dir / "metrics.jsonl").write_text(
+        metrics_path.write_text(
             "".join(json.dumps(row) + "\n" for row in metric_rows),
             encoding="utf-8",
         )

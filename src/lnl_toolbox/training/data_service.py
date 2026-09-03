@@ -67,6 +67,20 @@ def create_dataset_registry() -> DatasetRegistry:
 
 DATASETS = create_dataset_registry()
 
+_LOCAL_SOURCE_KEYS = {
+    "root",
+    "path",
+    "noise_path",
+    "labels_path",
+    "annotation_root",
+}
+
+
+def _scale_cifar_tensor(value: torch.Tensor) -> torch.Tensor:
+    """Scale a CIFAR tensor without capturing a local function in workers."""
+
+    return (value - 0.5) * 2.0
+
 
 def _scale_cifar_tensor(value: torch.Tensor) -> torch.Tensor:
     """Scale a CIFAR tensor without capturing a local function in workers."""
@@ -1433,10 +1447,44 @@ class DataService:
             return resolved
         record = self._record_for(name)
         if record is None:
-            raise ValueError(
-                f"dataset {name!r} has no local registration; run "
-                f"'lnl data register <alias> --adapter {name} ...' or pass --data"
+            adapter = self.registry.get(name)
+            source_adapter_name = str(
+                getattr(adapter, "source_adapter", "")
+            ).strip()
+            if not source_adapter_name:
+                raise ValueError(
+                    f"dataset {name!r} has no local registration; run "
+                    f"'lnl data register <alias> --adapter {name} ...' or pass --data"
+                )
+            source_adapter = self.registry.get(source_adapter_name).name
+            matches = tuple(
+                candidate
+                for candidate in self.catalog.records()
+                if candidate.adapter == source_adapter
             )
+            if not matches:
+                raise ValueError(
+                    f"dataset {name!r} has no local registration and its source "
+                    f"adapter {source_adapter!r} is not registered"
+                )
+            if len(matches) > 1:
+                raise ValueError(
+                    f"dataset {name!r} can reuse source adapter {source_adapter!r}, "
+                    "but multiple local registrations match; set data.root explicitly "
+                    f"or register {name!r} as a separate local dataset"
+                )
+            source_record = matches[0]
+            for key in _LOCAL_SOURCE_KEYS:
+                value = source_record.data.get(key)
+                if value not in {None, ""}:
+                    data_config[key] = deepcopy(value)
+            resolved["data"] = data_config
+            resolved["local_dataset"] = {
+                "alias": source_record.alias,
+                "adapter": adapter.name,
+                "source_signature": source_record.signature,
+            }
+            return resolved
         return self.catalog.apply(resolved, record.alias)
 
     @staticmethod

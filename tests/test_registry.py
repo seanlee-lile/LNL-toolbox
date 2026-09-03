@@ -263,6 +263,8 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
             {'pretraining_stage': {'mode': 'train'}}
         )
         self.assertEqual(train_pcse.exact_classes, frozenset())
+        self.assertEqual(train_pcse.required_pretrained_roles, ())
+        self.assertEqual(train_pcse.pretrained_role_paths, ())
 
     def test_preserved_implementation_limits_have_the_correct_origin(self) -> None:
         registry = create_runner_registry()
