@@ -13,6 +13,21 @@ PARTICLES = {
     "configure_preprocessing", "configure_views", "assign_data_roles",
     "configure_loader", "build_prepared_data", "build_loaders",
 }
+DATA_SEQUENCE = (
+    "load_dataset", "inspect_dataset_semantics", "create_dataset_split",
+    "select_label_source", "apply_noise", "build_noise_manifest",
+    "configure_preprocessing", "configure_views", "assign_data_roles",
+    "configure_loader", "build_prepared_data", "build_loaders",
+)
+
+
+def _walk_steps(steps):
+    """Yield nested Recipe steps so contract checks cannot miss loop bodies."""
+    for step in steps or []:
+        if not isinstance(step, dict):
+            continue
+        yield step
+        yield from _walk_steps(step.get("steps", []))
 
 
 class DataRecipeProtocolTest(unittest.TestCase):
@@ -34,6 +49,28 @@ class DataRecipeProtocolTest(unittest.TestCase):
             ids = [str(step["block"]) for step in recipe["steps"]]
             self.assertFalse(any(block.startswith("prepare_") for block in ids), path.name)
             self.assertTrue(PARTICLES.issubset(ids), path.name)
+
+    def test_all_papers_share_data_and_batch_contract(self) -> None:
+        """Every paper uses the same data slots; only protocol parameters vary."""
+        for path in PAPERS.glob("*.yaml"):
+            recipe = load_recipe(path)
+            ids = [str(step["block"]) for step in recipe["steps"]]
+            positions = [ids.index(block) for block in DATA_SEQUENCE]
+            self.assertEqual(
+                positions,
+                list(range(positions[0], positions[0] + len(DATA_SEQUENCE))),
+                path.name,
+            )
+            for step in _walk_steps(recipe["steps"]):
+                if step.get("block") != "batch_loop":
+                    continue
+                params = step.get("params", {})
+                loader = params.get("loader", "train_loader")
+                self.assertTrue(str(loader).endswith("_loader"), (path.name, loader))
+                children = step.get("steps", [])
+                get_batch = [child for child in children if child.get("block") == "get_batch"]
+                self.assertEqual(len(get_batch), 1, (path.name, "batch_loop must unpack ScratchBatch once"))
+                self.assertEqual(get_batch[0].get("params", {}), {}, path.name)
 
     def test_zero_validation_recipes_have_no_validation_role_or_epoch_eval(self) -> None:
         for name in ("cal.yaml", "fine.yaml"):

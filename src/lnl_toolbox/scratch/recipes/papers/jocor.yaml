@@ -61,7 +61,7 @@ steps:
           - block: weighted_sum
             params: {terms: [loss_a_per_sample, loss_b_per_sample, agreement_per_sample], weights: [0.1, 0.1, 0.9], save_as: joint_loss_per_sample}
           - block: select_lowest_scores
-            params: {scores: joint_loss_per_sample, keep_fraction: keep_rate, stable_sample_indices: indices, rounding: floor, minimum_count: 1, save_as: selected_indices}
+            params: {scores: joint_loss_per_sample, keep_fraction: keep_rate, stable_sample_indices: indices, rounding: ceil, minimum_count: 1, save_as: selected_indices}
           - block: mean_by_indices
             params: {values: joint_loss_per_sample, indices: selected_indices, save_as: loss}
           - {block: backward, params: {model: model_a + model_b}}

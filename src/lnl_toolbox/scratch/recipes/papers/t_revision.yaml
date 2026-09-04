@@ -79,10 +79,8 @@ steps:
             params: {probabilities: probabilities, noisy_probabilities: noisy_probabilities, labels: labels, denominator_floor: 1.0e-12, save_as: sample_weights}
           - block: per_sample_ce
             params: {logits: logits, labels: labels, save_as: loss_per_sample}
-          - block: detach
-            params: {input: sample_weights, save_as: detached_sample_weights}
           - block: elementwise_multiply
-            params: {left: loss_per_sample, right: detached_sample_weights, save_as: weighted_loss_per_sample}
+            params: {left: loss_per_sample, right: sample_weights, save_as: weighted_loss_per_sample}
           - block: mean_loss
             params: {input: weighted_loss_per_sample, save_as: loss}
           - {block: backward}
@@ -97,7 +95,7 @@ steps:
   - block: restore_best_model
     params: {model: model, state: best_classifier_state}
   - block: create_additive_transition_revision
-    params: {transition: transition, save_as: revision}
+    params: {transition: transition, project_nonnegative: false, normalize: false, save_as: revision}
   - block: create_parameter_group_optimizer
     params:
       optimizer_spec: {name: adam, weight_decay: 0.0001}

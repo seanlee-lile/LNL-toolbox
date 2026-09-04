@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -101,6 +103,25 @@ class ScratchExecutorTest(unittest.TestCase):
         result = execute_recipe(recipe, runtime_limits={"max_epochs": 2, "max_batches": 1})
         self.assertEqual(result["count"], 2)
         self.assertEqual(recipe["steps"][0]["params"]["epochs"], 3)
+
+    def test_progress_publishes_each_completed_epoch_output(self) -> None:
+        recipe = {
+            "schema_version": 1,
+            "name": "epoch-progress",
+            "steps": [{
+                "block": "epoch_loop", "params": {"epochs": 2}, "steps": [{
+                    "block": "set_value", "params": {"value": 1.25, "save_as": "loss"},
+                }],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            progress_path = Path(tmp) / "progress.json"
+            execute_recipe(recipe, {"_progress_path": str(progress_path)})
+            payload = json.loads(progress_path.read_text(encoding="utf-8"))
+        rows = payload.get("epoch_outputs")
+        self.assertEqual([row["epoch"] for row in rows], [0, 1])
+        self.assertEqual([row["loss"] for row in rows], [1.25, 1.25])
+        self.assertEqual(payload.get("state"), "completed")
 
     def test_refresh_epoch_loader_uses_epoch_seeded_prepared_data(self) -> None:
         prepared = _PreparedData()

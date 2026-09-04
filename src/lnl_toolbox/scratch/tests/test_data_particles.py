@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import unittest
 
+import torch
+
 from lnl_toolbox.scratch import ScratchContext, execute_recipe, validate_recipe
+from lnl_toolbox.scratch.data_runtime import ScratchSample, ScratchSplit, build_transforms
 
 
 def _recipe() -> dict:
@@ -27,6 +30,18 @@ def _recipe() -> dict:
 
 
 class DataParticleTest(unittest.TestCase):
+    def test_gce_preprocessing_uses_mean_subtraction_without_std_scaling(self) -> None:
+        source = ScratchSplit(
+            "cifar10", "train", (ScratchSample(torch.zeros(3, 32, 32), 0, 0, 0),), 10
+        )
+        transform, _ = build_transforms(
+            {"name": "gce2018", "augment": False}, source, ("weak",)
+        )
+        self.assertIsNotNone(transform)
+        value = transform(torch.tensor([[[0.0]], [[0.0]], [[0.0]]]).expand(3, 32, 32))
+        expected = -torch.tensor([0.49139968, 0.48215827, 0.44653124])[:, None, None]
+        self.assertTrue(torch.allclose(value, expected.expand_as(value), atol=1e-6))
+
     def test_composition_keeps_formal_slots_explicit(self) -> None:
         recipe = _recipe()
         validate_recipe(recipe)

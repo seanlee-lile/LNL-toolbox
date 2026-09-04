@@ -259,9 +259,17 @@ def cancel_scratch_job(job_id: str) -> ScratchJob:
 
 def _recipe_path(name: str) -> Path:
     requested = Path(name)
-    user_root = recipe_workspace_root()
-    candidates = [
+    # Loading a read-only paper template must not depend on the optional user
+    # recipe directory being writable.  On locked-down Windows profiles,
+    # recipe_workspace_root() can raise PermissionError while the packaged
+    # paper files are still perfectly readable.
+    try:
+        user_root = recipe_workspace_root()
+    except OSError:
+        user_root = None
+    candidates = ([
         (user_root, user_root / requested),
+    ] if user_root is not None else []) + [
         (RECIPE_ROOT, RECIPE_ROOT / requested),
         (RECIPE_ROOT, RECIPE_ROOT / "examples" / requested.name),
         (RECIPE_ROOT, RECIPE_ROOT / "papers" / requested.name),
@@ -315,7 +323,10 @@ def _paper_examples() -> list[dict[str, str]]:
 
 
 def _user_recipe_catalog() -> list[str]:
-    root = recipe_workspace_root()
+    try:
+        root = recipe_workspace_root()
+    except OSError:
+        return []
     return sorted(str(path.relative_to(root)).replace("\\", "/") for path in root.rglob("*.y*ml"))
 
 

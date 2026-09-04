@@ -84,14 +84,25 @@
         <section id="result-panel" class="result-panel" aria-live="polite">
           <div class="result-header"><h3>运行结果</h3><span id="result-status" class="result-status">尚未运行</span></div>
           <div class="run-controls" aria-label="运行控制">
+            <label class="run-mode-control" for="run-mode">运行模式
+              <select id="run-mode" aria-describedby="run-mode-help">
+                <option value="check">结构验证（1 epoch / 1 batch）</option>
+                <option value="full">完整运行（正式 epochs / 全部 batch）</option>
+              </select>
+            </label>
             <button id="stop-run" type="button" class="danger" disabled>■ 停止运行</button>
             <button id="refresh-run" type="button" class="secondary" disabled>↻ 刷新进度</button>
           </div>
+          <p id="run-mode-help" class="run-mode-help">默认只跑一轮做结构验证；切换到“完整运行”后会按当前 Recipe 的正式轮次和 batch 执行。</p>
           <div id="run-progress" class="run-progress" hidden aria-live="polite">
             <div class="progress-heading"><strong>实时进度</strong><span id="progress-percent">—</span></div>
             <progress id="progress-bar" max="1" value="0"></progress>
             <div class="progress-facts"><span id="progress-stage">等待启动</span><span id="progress-position">尚无 epoch / batch</span></div>
             <div id="progress-block" class="progress-block"></div>
+            <section id="epoch-output" class="epoch-output" aria-live="polite">
+              <div class="epoch-output-heading"><strong>每轮输出</strong><span id="epoch-output-count">0 轮</span></div>
+              <div id="epoch-output-list" class="epoch-output-list">完成一个 epoch 后，这里会实时显示该轮的标量输出。</div>
+            </section>
           </div>
           <div id="result-summary" class="result-summary">点击绿色“运行”会先自动检查，再执行当前 Recipe。</div>
           <div id="run-guidance" class="run-guidance" hidden></div>
@@ -103,6 +114,7 @@
               <li>训练：模型、优化器、Loader 和 Training Loop 已连接；双模型要分别指定 model / optimizer。</li>
               <li>参数：数字在允许范围内，路径、manifest 和外部资源真实存在。</li>
               <li>公式：最终 loss 已连接到 backward；修改后重新运行结构检查。</li>
+              <li>运行模式：默认只做 1 epoch / 1 batch 结构验证；需要正式实验时切换为“完整运行”。</li>
               <li>协议：validation_size=0 时不要添加 validation role，也不要在每个 epoch 做 validation。</li>
               <li>标签：clean / trusted role 只能使用真实存在的 clean target，不能用 observed target 补齐。</li>
             </ol>
@@ -122,6 +134,7 @@
       <li>先从“数据”分类放入“加载数据集”；点击它后，在右侧“积木”标签的 <code>dataset</code> 下拉框选择数据源。</li>
       <li>中间搭算法，论文方法主要放在 Training Loop 内。</li>
       <li>点击绿色“运行”，系统会先检查结构。</li>
+      <li>右侧“运行”面板可切换“结构验证”或“完整运行”；完整运行按 Recipe 的正式 epochs 和 batch 执行。</li>
       <li>红色积木表示错误，右边查看缺失输入和参数。</li>
       <li>右边“运行”标签查看真实指标、产物和日志。</li>
     </ol>

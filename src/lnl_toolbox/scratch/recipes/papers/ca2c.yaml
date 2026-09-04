@@ -22,8 +22,7 @@ steps:
   - {block: create_optimizer, params: {optimizer: sgd, model: model_n, lr: 0.02, momentum: 0.9, nesterov: true, weight_decay: 0.0005, save_as: optimizer_n}}
   - {block: create_scheduler, params: {scheduler: cosine, optimizer: optimizer, t_max: 700, eta_min: 0.0, save_as: scheduler}}
   - {block: create_scheduler, params: {scheduler: cosine, optimizer: optimizer_n, t_max: 700, eta_min: 0.0, save_as: scheduler_n}}
-  - {block: create_indexed_state, params: {prepared_data: prepared_data, width: 100, dtype: bool, save_as: ca2c_candidate_memory}}
-  - {block: create_indexed_state, params: {prepared_data: prepared_data, width: 100, dtype: bool, save_as: ca2c_complement_memory}}
+  - {block: create_indexed_state, params: {prepared_data: prepared_data, width: 100, dtype: float32, initial_value: 0.0, save_as: ca2c_candidate_memory}}
   - block: epoch_loop
     params: {epochs: 700}
     steps:
@@ -51,10 +50,8 @@ steps:
               - {block: top_k_mask, params: {scores: logits_n, k: 2, save_as: ca2c_candidates}}
               - {block: top_k_mask, params: {scores: logits_p, k: 2, save_as: ca2c_positive_mask}}
               - {block: invert_mask, params: {mask: ca2c_positive_mask, save_as: ca2c_complements}}
-              - {block: indexed_write, params: {state: ca2c_candidate_memory, indices: indices, values: ca2c_candidates, save_as: ca2c_candidate_memory}}
-              - {block: indexed_write, params: {state: ca2c_complement_memory, indices: indices, values: ca2c_complements, save_as: ca2c_complement_memory}}
+              - {block: indexed_accumulate, params: {state: ca2c_candidate_memory, indices: indices, values: ca2c_candidates, save_as: ca2c_candidate_memory}}
               - {block: indexed_read, params: {state: ca2c_candidate_memory, indices: indices, save_as: ca2c_candidates}}
-              - {block: indexed_read, params: {state: ca2c_complement_memory, indices: indices, save_as: ca2c_complements}}
               - {block: partial_label_loss, params: {logits: logits_p, candidates: ca2c_candidates, hard_weight: 0.99, save_as: ca2c_positive_loss}}
               - {block: complementary_negative_loss, params: {logits: logits_n, complements: ca2c_complements, save_as: ca2c_negative_loss}}
               - {block: weighted_sum, params: {terms: [ca2c_positive_loss, ca2c_negative_loss], weights: [1.0, 1.0], save_as: loss}}

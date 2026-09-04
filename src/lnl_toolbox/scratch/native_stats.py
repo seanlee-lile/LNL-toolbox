@@ -245,55 +245,104 @@ def merge_feature_snapshots(snapshots: Iterable[FeatureSnapshot]) -> FeatureSnap
 
 def fit_part_representation(features: Any, num_parts: int, *, seed: int | None = 0, iterations: int = 200, error_tolerance: float = 1e-5):
     values = np.asarray(features, dtype=np.float64)
-    if values.ndim != 2 or values.shape[0] == 0 or (values < 0).any() or not np.isfinite(values).all():
+    if values.ndim != 2 or values.shape[0] == 0 or values.shape[1] == 0 or (values < 0).any() or not np.isfinite(values).all():
         raise ValueError("PDL features must be finite nonnegative [N,D]")
     parts = int(num_parts)
     if parts < 1 or parts > min(values.shape):
         raise ValueError("num_parts must be within feature dimensions")
-    rng = np.random.default_rng(seed)
+    if int(iterations) < 1 or not np.isfinite(error_tolerance) or float(error_tolerance) < 0.0:
+        raise ValueError("invalid PDL representation optimization hyperparameters")
+    # Scratch-native reproduction of the official ``train_m`` multiplicative
+    # updates.  ``seed=None`` intentionally uses NumPy's module RNG, matching
+    # the formal runner; an integer keeps non-official callers deterministic.
+    rng = np.random if seed is None else np.random.RandomState(int(seed))
     coefficients = rng.random((values.shape[0], parts))
     basis = rng.random((parts, values.shape[1]))
     for _ in range(int(iterations)):
-        coefficients *= (values @ basis.T) / np.maximum((coefficients @ basis) @ basis.T, 1e-12)
-        basis *= (coefficients.T @ values) / np.maximum((coefficients.T @ coefficients) @ basis, 1e-12)
-        if np.square(values - coefficients @ basis).mean() <= float(error_tolerance):
+        error = values - coefficients @ basis
+        if float(np.square(error).sum()) < float(error_tolerance):
             break
+        numerator = coefficients.T @ values
+        denominator = (coefficients.T @ coefficients) @ basis
+        basis *= np.divide(numerator, denominator, out=np.zeros_like(numerator), where=denominator != 0.0)
+        numerator = values @ basis.T
+        denominator = (coefficients @ basis) @ basis.T
+        coefficients *= np.divide(numerator, denominator, out=np.zeros_like(numerator), where=denominator != 0.0)
     coefficients /= np.maximum(coefficients.sum(1, keepdims=True), 1e-12)
     return basis.T, coefficients
 
 
 def select_pdl_anchor_candidates(probabilities: Any, percentages: Any):
     values = np.asarray(probabilities, dtype=np.float64); levels = np.asarray(percentages, dtype=np.float64)
+    if values.ndim != 2 or values.shape[0] == 0 or not np.isfinite(values).all() or (values < 0).any():
+        raise ValueError("PDL anchor probabilities must be finite nonnegative [N,C]")
+    if levels.ndim != 1 or levels.size == 0 or np.any((levels < 0) | (levels > 100)):
+        raise ValueError("PDL anchor percentiles must lie in [0,100]")
     positions = np.empty((values.shape[1], levels.size), dtype=np.int64)
     for c in range(values.shape[1]):
         for j, level in enumerate(levels):
             threshold = np.percentile(values[:, c], float(level), method="higher")
-            eligible = np.flatnonzero(values[:, c] >= threshold)
-            positions[c, j] = int(eligible[np.argmax(values[eligible, c])]) if eligible.size else int(np.argmax(values[:, c]))
+            # The formal helper excludes the upper tail (the robust candidate
+            # is the largest value below the percentile threshold), rather
+            # than always selecting the global maximum.
+            robust = values[:, c].copy()
+            robust[robust >= threshold] = 0.0
+            positions[c, j] = int(np.argmax(robust))
     return positions
 
 
 def fit_pdl_basis_matrices_pair(train_coefficients: Any, train_targets: Any, validation_coefficients: Any, validation_targets: Any, *, epochs: int, learning_rate: float, loss_threshold: float, seed: int):
-    torch = _torch(); torch.manual_seed(int(seed))
-    def fit(coefficients, targets):
-        c, basis, feature_dim = np.asarray(coefficients).shape
-        target_dim = int(np.asarray(targets).shape[-1])
-        # Coefficients are [class, anchor, part/feature].  Fit a matrix from
-        # that feature dimension into posterior classes; the previous
-        # implementation accidentally used [anchor, class] and failed on
-        # bounded fixtures when the part count was capped.
-        values = torch.nn.Parameter(torch.rand((feature_dim, target_dim)))
-        optimizer = torch.optim.Adam([values], lr=float(learning_rate))
-        for _ in range(min(int(epochs), 100)):
-            loss = torch.zeros(())
-            for i in range(c):
-                pred = torch.as_tensor(coefficients[i], dtype=torch.float32) @ values
-                target = torch.as_tensor(targets[i], dtype=torch.float32)
-                loss = loss + (pred - target).square().mean()
-            optimizer.zero_grad(); loss.backward(); optimizer.step()
-            if float(loss.detach()) <= float(loss_threshold): break
-        return values.detach().abs().div(values.detach().abs().sum(1, keepdim=True).clamp_min(1e-12)).cpu().numpy()
-    return fit(train_coefficients, train_targets), fit(validation_coefficients, validation_targets)
+    torch = _torch()
+    import torch.nn.functional as functional
+    train_coefficients = np.asarray(train_coefficients, dtype=np.float64)
+    train_targets = np.asarray(train_targets, dtype=np.float64)
+    validation_coefficients = np.asarray(validation_coefficients, dtype=np.float64)
+    validation_targets = np.asarray(validation_targets, dtype=np.float64)
+    if train_coefficients.ndim != 3 or train_targets.ndim != 3 or validation_coefficients.ndim != 3 or validation_targets.ndim != 3:
+        raise ValueError("PDL basis inputs must be rank-three arrays")
+    classes, basis, parts = train_coefficients.shape
+    if parts != basis or train_targets.shape != (classes, basis, classes):
+        raise ValueError("PDL train basis dimensions do not match")
+    if validation_coefficients.shape[1:] != (basis, parts) or validation_targets.shape != (classes, basis, classes):
+        raise ValueError("PDL validation basis dimensions do not match")
+    if int(epochs) < 1 or float(learning_rate) <= 0.0 or float(loss_threshold) < 0.0:
+        raise ValueError("invalid PDL basis optimization hyperparameters")
+    if not all(np.isfinite(value).all() for value in (train_coefficients, train_targets, validation_coefficients, validation_targets)):
+        raise ValueError("PDL basis inputs must be finite")
+
+    # Matrix_optimize in the formal implementation keeps one Adam optimizer
+    # alive across clean-class groups and resets only the parameter rows.
+    torch.manual_seed(int(seed))
+    weights = torch.nn.Parameter(torch.empty((basis, classes), dtype=torch.float32))
+    torch.nn.init.normal_(weights, mean=0.0, std=0.1)
+    optimizer = torch.optim.Adam([weights], lr=float(learning_rate))
+
+    def fit_group(coefficients, targets):
+        result = np.empty((basis, classes, classes), dtype=np.float64)
+        for class_index in range(classes):
+            with torch.no_grad():
+                torch.nn.init.normal_(weights, mean=0.0, std=0.1)
+            class_coefficients = torch.as_tensor(coefficients[class_index], dtype=torch.float32)
+            class_targets = torch.as_tensor(targets[class_index], dtype=torch.float32)
+            for _ in range(int(epochs)):
+                loss_total = torch.zeros((), dtype=torch.float32)
+                for basis_index in range(basis):
+                    with torch.no_grad():
+                        normalized = weights.abs() / weights.abs().sum(dim=1, keepdim=True).clamp_min(1e-12)
+                        weights.copy_(normalized)
+                    prediction = (class_coefficients[basis_index, :, None] * weights).sum(dim=0)
+                    optimizer.zero_grad(set_to_none=True)
+                    loss = functional.mse_loss(prediction, class_targets[basis_index])
+                    loss.backward()
+                    optimizer.step()
+                    loss_total = loss_total + loss.detach()
+                if float(loss_total.item()) < float(loss_threshold):
+                    break
+            with torch.no_grad():
+                result[:, class_index, :] = (weights.abs() / weights.abs().sum(dim=1, keepdim=True).clamp_min(1e-12)).cpu().numpy()
+        return result
+
+    return fit_group(train_coefficients, train_targets), fit_group(validation_coefficients, validation_targets)
 
 
 class _TransitionArtifact:
@@ -323,21 +372,81 @@ class _TransitionArtifact:
 
 class PartTransitionEstimator:
     def __init__(self, num_parts: int, num_classes: int, representation_seed: int = 0):
-        self.num_parts = int(num_parts); self.num_classes = int(num_classes)
+        self.num_parts = int(num_parts); self.num_classes = int(num_classes); self.representation_seed = int(representation_seed)
+
     def estimate_from_shared_representation(self, features, posterior, *, representation_parts, representation_coefficients, representation_indices, part_matrices):
-        values = np.asarray(posterior.noisy_probabilities if hasattr(posterior, "noisy_probabilities") else posterior)
-        n, classes = values.shape
-        matrices = np.asarray(part_matrices)
-        base = matrices.mean(axis=0) if matrices.ndim == 3 else np.eye(classes)
-        weights = np.asarray(representation_coefficients)
-        if weights.ndim == 2 and weights.shape[0] >= n:
-            scale = weights[:n].mean(axis=1)
-            matrix = np.repeat(base[None, :, :], n, axis=0) * (0.75 + 0.25 * scale[:, None, None])
-        else:
-            matrix = np.repeat(base[None, :, :], n, axis=0)
-        matrix /= np.maximum(matrix.sum(-1, keepdims=True), 1e-12)
-        indices = getattr(posterior, "global_indices", None)
-        return _TransitionArtifact(matrix, indices, {"estimator": "pdl"})
+        if not hasattr(features, "global_indices") or not hasattr(posterior, "global_indices"):
+            raise TypeError("PDL transition estimation requires feature and posterior snapshots")
+        if features.dataset != posterior.dataset or features.split != posterior.split:
+            raise ValueError("PDL feature and posterior snapshots must share dataset and split")
+        if not np.array_equal(features.global_indices, posterior.global_indices):
+            raise ValueError("PDL feature and posterior snapshot indices must align")
+        parts = np.asarray(representation_parts, dtype=np.float64)
+        coefficients = np.asarray(representation_coefficients, dtype=np.float64)
+        source_indices = np.asarray(representation_indices, dtype=np.int64)
+        matrices = np.asarray(part_matrices, dtype=np.float64)
+        if parts.ndim != 2 or parts.shape[1] != self.num_parts:
+            raise ValueError("PDL representation_parts must have shape [D,R]")
+        if coefficients.ndim != 2 or coefficients.shape[1] != self.num_parts or source_indices.shape != (coefficients.shape[0],):
+            raise ValueError("PDL representation coefficients/indices are not aligned")
+        if matrices.shape != (self.num_parts, self.num_classes, self.num_classes):
+            raise ValueError("PDL part matrices must have shape [R,C,C]")
+        if not np.isfinite(parts).all() or not np.isfinite(coefficients).all() or not np.isfinite(matrices).all():
+            raise ValueError("PDL transition inputs must be finite")
+        if (coefficients < -1e-10).any() or not np.allclose(coefficients.sum(axis=1), 1.0, atol=1e-6):
+            raise ValueError("PDL representation coefficients must be probabilities")
+        order = np.argsort(source_indices, kind="stable")
+        sorted_indices = source_indices[order]
+        positions = np.searchsorted(sorted_indices, features.global_indices)
+        if np.any(positions >= sorted_indices.size) or not np.array_equal(sorted_indices[positions], features.global_indices):
+            raise KeyError("PDL representation does not cover every snapshot index")
+        split_coefficients = coefficients[order][positions]
+        return _PDLTransitionArtifact(
+            parts,
+            split_coefficients,
+            matrices,
+            np.asarray(features.global_indices, dtype=np.int64),
+            {"estimator": "pdl", "representation_seed": self.representation_seed},
+        )
+
+
+class _PDLTransitionArtifact:
+    """Scratch-native index-aligned PDL artifact for T(x)=sum_r beta_r(x)M_r."""
+
+    def __init__(self, parts, coefficients, part_matrices, indices, metadata=None):
+        self.parts = np.asarray(parts, dtype=np.float64)
+        self.coefficients = np.asarray(coefficients, dtype=np.float64)
+        self.part_matrices = np.asarray(part_matrices, dtype=np.float64)
+        self.global_indices = np.asarray(indices, dtype=np.int64)
+        self.metadata = dict(metadata or {})
+        if self.coefficients.ndim != 2 or self.part_matrices.ndim != 3:
+            raise ValueError("invalid PDL artifact dimensions")
+        if self.coefficients.shape[0] != self.global_indices.size or self.coefficients.shape[1] != self.part_matrices.shape[0]:
+            raise ValueError("PDL artifact coefficients do not align with indices")
+        if np.unique(self.global_indices).size != self.global_indices.size:
+            raise ValueError("PDL artifact indices must be unique")
+
+    @property
+    def artifact_hash(self):
+        import hashlib
+        digest = hashlib.sha256()
+        for value in (self.parts, self.coefficients, self.part_matrices, self.global_indices):
+            digest.update(value.tobytes(order="C"))
+        return digest.hexdigest()
+
+    def transition_for(self, _namespace, indices, **kwargs):
+        torch = _torch()
+        requested = np.asarray(indices.detach().cpu() if hasattr(indices, "detach") else indices, dtype=np.int64).reshape(-1)
+        positions = np.searchsorted(self.global_indices, requested)
+        if np.any(positions >= self.global_indices.size) or not np.array_equal(self.global_indices[positions], requested):
+            raise KeyError("PDL transition artifact does not cover requested indices")
+        transitions = np.einsum("br,rcd->bcd", self.coefficients[positions], self.part_matrices)
+        transitions = transitions / np.maximum(transitions.sum(axis=2, keepdims=True), 1e-12)
+        return torch.as_tensor(transitions, **kwargs)
+
+    def with_part_matrices(self, matrices, **kwargs):
+        metadata = {**self.metadata, **kwargs}
+        return _PDLTransitionArtifact(self.parts, self.coefficients, matrices, self.global_indices, metadata)
 
 
 @dataclass
@@ -583,14 +692,47 @@ class SelfAdaptiveConfidenceReweighting:
 
 
 class FINERegularizer:
-    def __init__(self, beta: float = 0.1, gamma: float = 0.002, probability_floor: float = 1e-7, seed: int = 0): self.beta = float(beta); self.gamma = float(gamma); self.probability_floor = float(probability_floor)
+    def __init__(self, beta: float = 0.001, gamma: float = 0.1, probability_floor: float = 1e-7, seed: int = 0):
+        self.beta = float(beta)
+        self.gamma = float(gamma)
+        self.probability_floor = float(probability_floor)
+        self.seed = int(seed)
+        # Eq. (4) samples one complementary class per rejected example.  Keep
+        # the generator local so FINE's explicit seed does not perturb the
+        # caller's global RNG state.
+        torch = _torch()
+        self._generator = torch.Generator(device="cpu")
+        self._generator.manual_seed(self.seed)
+
     def __call__(self, logits, labels, *, rejected_mask=None, pseudo_labels=None):
         torch = _torch()
         mask = torch.ones(logits.shape[0], dtype=torch.bool, device=logits.device) if rejected_mask is None else torch.as_tensor(rejected_mask, device=logits.device).bool()
         if not bool(mask.any()):
             return logits.sum() * 0.0
-        targets = labels if pseudo_labels is None else pseudo_labels
-        return torch.nn.functional.cross_entropy(logits[mask], torch.as_tensor(targets, device=logits.device).long()[mask]) * self.gamma
+        noisy = torch.as_tensor(labels, device=logits.device).long().reshape(-1)
+        if noisy.numel() != logits.shape[0]:
+            raise ValueError("FINE noisy labels must align with logits")
+        classes = int(logits.shape[1])
+        if classes <= 1:
+            raise ValueError("FINE requires at least two classes")
+        probabilities = torch.softmax(logits, dim=1)
+        if bool((noisy < 0).any()) or bool((noisy >= classes).any()):
+            raise ValueError("FINE labels must be valid class indices")
+
+        # Eq. (4): draw exactly one class uniformly from the C-1 classes that
+        # are not the observed label.  Sampling on CPU keeps the seeded stream
+        # device-independent; the selected class is then moved to logits.
+        draws = torch.randint(classes - 1, (noisy.numel(),), generator=self._generator)
+        noisy_cpu = noisy.detach().cpu()
+        complementary_cpu = draws + (draws >= noisy_cpu).long()
+        complementary = complementary_cpu.to(device=logits.device)
+        p_complementary = probabilities.gather(1, complementary[:, None]).squeeze(1)
+
+        # Eq. (2) is machine unlearning (negative CE) and Eq. (3) is negative
+        # learning.  Eq. (5) weights them as beta * LMU + gamma * LNL.
+        machine_unlearning = torch.log_softmax(logits, dim=1).gather(1, noisy[:, None]).squeeze(1) / classes
+        negative_learning = -torch.log((1.0 - p_complementary).clamp_min(self.probability_floor)) / classes
+        return self.beta * machine_unlearning[mask].mean() + self.gamma * negative_learning[mask].mean()
 
 
 class UPMNoiseState:
@@ -673,8 +815,40 @@ def build_cal_proxy_artifact(snapshot, losses=None, *, lower_threshold: float, u
 
 
 def _reference_transition_means(artifact, indices, targets, classes):
-    result = np.eye(int(classes), dtype=np.float32)
-    return _torch().as_tensor(result)
+    """Estimate proxy-to-observed transition means on retained samples.
+
+    CAL's covariance correction uses the empirical conditional distribution
+    ``P(tilde y=j | proxy y=c)`` computed from the retained proxy set.  The
+    previous Scratch implementation returned an identity matrix, which made
+    the correction silently assume perfect labels regardless of the actual
+    proxy/noisy pairing.  Keep the operation Scratch-native while enforcing
+    stable-index alignment exactly as the formal training path does.
+    """
+    classes = int(classes)
+    index_values = np.asarray(indices, dtype=np.int64).reshape(-1)
+    target_values = np.asarray(targets, dtype=np.int64).reshape(-1)
+    proxy_indices = np.asarray(getattr(artifact, "global_indices"), dtype=np.int64).reshape(-1)
+    proxy_targets = np.asarray(getattr(artifact, "proxy_targets"), dtype=np.int64).reshape(-1)
+    status = np.asarray(getattr(artifact, "sample_status"), dtype=np.int8).reshape(-1)
+    if index_values.shape != target_values.shape or np.unique(index_values).size != index_values.size:
+        raise ValueError("CAL train indices and noisy targets must align uniquely")
+    if proxy_indices.shape != proxy_targets.shape or proxy_indices.shape != status.shape:
+        raise ValueError("CAL proxy artifact fields must have matching lengths")
+    order = np.argsort(index_values, kind="stable")
+    sorted_indices = index_values[order]
+    positions = np.searchsorted(sorted_indices, proxy_indices)
+    if np.any(positions >= sorted_indices.size) or not np.array_equal(sorted_indices[positions], proxy_indices):
+        raise ValueError("CAL proxy indices do not align with noisy targets")
+    observed = target_values[order[positions]]
+    retained = status != 2
+    if np.any((proxy_targets < 0) | (proxy_targets >= classes)) or np.any((observed < 0) | (observed >= classes)):
+        raise ValueError("CAL proxy/noisy labels are outside the declared class range")
+    counts = np.zeros((classes, classes), dtype=np.float64)
+    np.add.at(counts, (proxy_targets[retained], observed[retained]), 1.0)
+    totals = counts.sum(axis=1, keepdims=True)
+    nonempty = totals[:, 0] > 0
+    counts[nonempty] /= totals[nonempty]
+    return _torch().as_tensor(counts, dtype=_torch().float32)
 
 
 class StatisticArtifact:
@@ -738,7 +912,33 @@ def soft_robust_mean(history, observed):
 
 
 def cnlcu_soft_score(robust_mean, history_length, selected_count, sigma_squared: float):
-    torch = _torch(); length = torch.as_tensor(history_length).float().clamp_min(1); count = torch.as_tensor(selected_count).float(); bonus = float(sigma_squared) * torch.sqrt(torch.log2(length + 1) / length); return torch.as_tensor(robust_mean) - bonus / (count + 1), bonus
+    torch = _torch()
+    robust = torch.as_tensor(robust_mean)
+    if robust.ndim != 1 or not robust.is_floating_point():
+        raise ValueError("CNLCU robust_mean must be a floating [B] tensor")
+    length = torch.as_tensor(history_length, device=robust.device)
+    count = torch.as_tensor(selected_count, device=robust.device)
+    if length.shape != robust.shape or count.shape != robust.shape:
+        raise ValueError("CNLCU score inputs must align as [B]")
+    sigma = float(sigma_squared)
+    if not np.isfinite(sigma) or not 0.0 < sigma < 1.0:
+        raise ValueError("CNLCU sigma_squared must be finite and in (0,1)")
+    if not bool(torch.isfinite(robust).all()):
+        raise ValueError("CNLCU robust_mean must be finite")
+    t = length.to(dtype=robust.dtype)
+    n = count.to(dtype=robust.dtype)
+    if bool((t <= 0).any()) or bool((n <= 0).any()):
+        raise ValueError("CNLCU history length and selected count must be positive")
+    denominator = n - sigma
+    if bool((denominator <= 0).any()):
+        raise ValueError("CNLCU Eq. (7) denominator must be strictly positive")
+    # CNLCU Eq. (7): l*_s = mu~_s - sigma^2 *
+    # (t + sigma^2 log(2t) / t^2) / (n_t - sigma^2).
+    bonus = sigma * (t + sigma * torch.log(2.0 * t) / t.square()) / denominator
+    score = robust - bonus
+    if not bool(torch.isfinite(bonus).all()) or not bool(torch.isfinite(score).all()):
+        raise ValueError("CNLCU score must be finite")
+    return score, bonus
 
 
 __all__ = [name for name in globals() if not name.startswith("_")]

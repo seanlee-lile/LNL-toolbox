@@ -125,17 +125,26 @@ def symmetric_kl(
 )
 def partial_label_loss(ctx: ScratchContext, logits: str = "logits", candidates: str = "candidate_mask",
                       hard_weight: float = 0.99, reduction: str = "mean", save_as: str = "loss") -> None:
-    torch, F = _torch(); values = ctx[candidates].bool(); scores = ctx[logits]
-    if scores.ndim != 2 or values.shape != scores.shape:
+    torch, F = _torch(); scores = ctx[logits]
+    raw_candidates = torch.as_tensor(ctx[candidates])
+    if scores.ndim != 2 or raw_candidates.shape != scores.shape:
         raise ValueError("partial_label_loss expects aligned [N,C] logits and candidate mask")
-    count = values.sum(dim=1)
-    if bool((count == 0).any()):
+    if raw_candidates.dtype == torch.bool:
+        candidate_mass = raw_candidates.to(device=scores.device, dtype=scores.dtype)
+        class_weights = torch.ones_like(candidate_mass)
+    else:
+        candidate_mass = raw_candidates.to(device=scores.device, dtype=scores.dtype).clamp_min(0.0)
+        maximum = candidate_mass.max(dim=1, keepdim=True).values
+        class_weights = candidate_mass / maximum.clamp_min(torch.finfo(scores.dtype).tiny)
+    count = candidate_mass.sum(dim=1)
+    if bool((count <= 0).any()):
         raise ValueError("partial_label_loss requires at least one candidate class per sample")
-    soft_targets = values.to(scores.dtype) / count[:, None].to(scores.dtype)
+    soft_targets = candidate_mass / count[:, None]
     logp = F.log_softmax(scores, dim=-1)
-    soft = -(soft_targets * logp).sum(dim=1)
-    hard_labels = soft_targets.argmax(dim=1)
-    hard = F.nll_loss(logp, hard_labels, reduction="none")
+    soft = -(class_weights * soft_targets * logp).sum(dim=1)
+    hard_labels = candidate_mass.argmax(dim=1)
+    hard_targets = F.one_hot(hard_labels, num_classes=scores.shape[1]).to(logp.dtype)
+    hard = -(class_weights * hard_targets * logp).sum(dim=1)
     result = float(hard_weight) * hard + (1.0 - float(hard_weight)) * soft
     ctx[save_as] = result if str(reduction) == "per_sample" else result.mean()
 

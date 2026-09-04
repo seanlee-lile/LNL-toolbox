@@ -20,7 +20,7 @@ def _torch():
     category="Paper Specific",
     description="Fit the formal two-cluster loss mixture and publish per-sample clean probabilities.",
     params={"losses": {"type": "slot", "default": "loss_per_sample"}, "save_as": {"type": "slot", "default": "clean_probability"}},
-    requires=("losses",), provides=("save_as",), placement=("batch",), stage="train",
+    requires=("losses",), provides=("save_as",), placement=("batch", "epoch", "top"), stage="train",
     formula="w_i=P(clean|loss_i)", formula_ref="DivideMix co-divide GMM", paper="DivideMix",
 )
 def fit_gmm(ctx: ScratchContext, losses: str = "loss_per_sample", save_as: str = "clean_probability") -> None:

@@ -189,6 +189,16 @@ def epoch_loop(
     for epoch in range(start_epoch, start_epoch + epochs):
         ctx["epoch"] = epoch
         execute(children, ctx)
+        # Publish a compact scalar snapshot after every completed epoch.  The
+        # executor owns the observation channel; importing lazily here keeps
+        # the control block independent during registry initialisation.
+        try:
+            from ..executor import publish_epoch_output
+
+            publish_epoch_output(ctx)
+        except Exception:
+            # Progress is best-effort and must never change recipe semantics.
+            pass
 
 
 @block(

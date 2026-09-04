@@ -130,7 +130,7 @@ def indexed_read(ctx: ScratchContext, state: str = "state", indices: str = "indi
     category="State",
     description="Write values into a generic indexed state and publish the same mutated state.",
     params={"state": {"type": "slot", "default": "state"}, "indices": {"type": "slot", "default": "indices"}, "values": {"type": "slot", "default": "values"}, "save_as": {"type": "slot", "default": "state"}},
-    requires=("state", "indices", "values"), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="④ 状态更新",
+    requires=("state", "indices", "values"), provides=("save_as",), placement=("batch", "epoch", "top"), stage="train", ui_group="④ 状态更新",
 )
 def indexed_write(ctx: ScratchContext, state: str = "state", indices: str = "indices", values: str = "values", save_as: str = "state") -> None:
     table = ctx[state]
@@ -142,6 +142,33 @@ def indexed_write(ctx: ScratchContext, state: str = "state", indices: str = "ind
     table["seen"][rows] = True
     if "last_epoch" in table:
         table["last_epoch"][rows] = int(ctx.get("epoch", -1))
+    ctx[save_as] = table
+
+
+@block(
+    id="indexed_accumulate",
+    name="Indexed Accumulate",
+    category="State",
+    description="Add aligned values to a generic indexed state without replacing prior observations.",
+    params={"state": {"type": "slot", "default": "state"}, "indices": {"type": "slot", "default": "indices"}, "values": {"type": "slot", "default": "values"}, "save_as": {"type": "slot", "default": "state"}},
+    requires=("state", "indices", "values"), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="④ 状态更新",
+    formula="S[i] <- S[i] + v_i", formula_ref="indexed cumulative state update",
+)
+def indexed_accumulate(ctx: ScratchContext, state: str = "state", indices: str = "indices", values: str = "values", save_as: str = "state") -> None:
+    torch = _torch()
+    table = ctx[state]
+    rows = torch.as_tensor(ctx[indices], dtype=torch.long).reshape(-1).cpu()
+    incoming = torch.as_tensor(ctx[values]).detach().reshape(rows.numel(), -1).to(dtype=table["values"].dtype).cpu()
+    if incoming.shape[1] != table["values"].shape[1]:
+        raise ValueError("indexed_accumulate value width does not match state")
+    if rows.numel() and (int(rows.min()) < 0 or int(rows.max()) >= int(table["values"].shape[0])):
+        raise IndexError("indexed_accumulate index out of range")
+    for row, value in zip(rows.tolist(), incoming):
+        table["values"][int(row)] += value
+        if "seen" in table:
+            table["seen"][int(row)] = True
+        if "last_epoch" in table:
+            table["last_epoch"][int(row)] = int(ctx.get("epoch", -1))
     ctx[save_as] = table
 
 

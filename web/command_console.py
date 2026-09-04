@@ -434,9 +434,16 @@ def _scratch_recipe_path(name: str) -> Path:
     from lnl_toolbox.scratch import recipe_workspace_root
 
     requested = Path(name)
-    user_root = recipe_workspace_root()
-    candidates = [
+    # Paper templates are packaged read-only assets.  Do not make opening one
+    # depend on the optional user recipe directory being writable (which can
+    # fail with PermissionError on locked-down Windows profiles).
+    try:
+        user_root = recipe_workspace_root()
+    except OSError:
+        user_root = None
+    candidates = ([
         (user_root, user_root / requested),
+    ] if user_root is not None else []) + [
         (SCRATCH_RECIPE_ROOT, SCRATCH_RECIPE_ROOT / requested),
         (SCRATCH_RECIPE_ROOT, SCRATCH_RECIPE_ROOT / "examples" / requested.name),
         (SCRATCH_RECIPE_ROOT, SCRATCH_RECIPE_ROOT / "papers" / requested.name),
@@ -471,7 +478,10 @@ def _scratch_error(exc: Exception) -> dict[str, object]:
 def _scratch_recipe_api_payload() -> list[str]:
     from lnl_toolbox.scratch import recipe_workspace_root
 
-    root = recipe_workspace_root()
+    try:
+        root = recipe_workspace_root()
+    except OSError:
+        return []
     return sorted(str(path.relative_to(root)).replace("\\", "/") for path in root.rglob("*.y*ml"))
 
 

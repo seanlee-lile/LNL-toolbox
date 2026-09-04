@@ -635,7 +635,13 @@ def get_next_batch(ctx: ScratchContext, loader: str = "loader", input_as: str = 
     requires=("batch", "input"), provides=("save_as",), placement=("batch",), stage="data", ui_group="① 数据准备",
 )
 def select_batch_view(ctx: ScratchContext, batch: str = "batch", input: str = "images", view: str = "strong_input", save_as: str = "view_input") -> None:
-    value = ctx[batch].get(view) if isinstance(ctx[batch], Mapping) else None
+    current = ctx[batch]
+    value = current.get(view) if isinstance(current, Mapping) else None
+    # View names are stored under the canonical ``views`` mapping.  Accepting
+    # the direct alias as well keeps the block useful for both the primary
+    # ``strong_input`` convenience field and arbitrary weak/strong views.
+    if value is None and isinstance(current, Mapping) and isinstance(current.get("views"), Mapping):
+        value = current["views"].get(view)
     if value is None and isinstance(ctx[batch], Mapping) and view == "strong_input":
         value = ctx[batch].get("strong_images")
     ctx[save_as] = ctx[input] if value is None else value

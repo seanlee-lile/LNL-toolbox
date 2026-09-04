@@ -12,7 +12,7 @@ steps:
   - {block: build_noise_manifest}
   - {block: configure_preprocessing, params: {preprocessing: standard, augment: true}}
   - {block: configure_views, params: {views: [weak, strong]}}
-  - {block: assign_data_roles, params: {roles: [train, noisy_validation, test]}}
+  - {block: assign_data_roles, params: {roles: [train, train_eval, noisy_validation, test]}}
   - {block: configure_loader, params: {batch_size: 128, num_workers: 4, pin_memory: true}}
   - {block: build_prepared_data}
   - {block: build_loaders}
@@ -22,11 +22,18 @@ steps:
   - {block: create_optimizer, params: {optimizer: sgd, model: model_b, lr: 0.02, momentum: 0.9, weight_decay: 0.0005, save_as: optimizer_b}}
   - {block: create_scheduler, params: {scheduler: multistep, optimizer: optimizer_a, milestones: [150], gamma: 0.1, save_as: scheduler_a}}
   - {block: create_scheduler, params: {scheduler: multistep, optimizer: optimizer_b, milestones: [150], gamma: 0.1, save_as: scheduler_b}}
-  - {block: create_indexed_state, params: {prepared_data: prepared_data, width: 1, save_as: loss_history_a}}
-  - {block: create_indexed_state, params: {prepared_data: prepared_data, width: 1, save_as: loss_history_b}}
+  - {block: create_indexed_state, params: {prepared_data: prepared_data, width: 1, save_as: clean_probability_state_a}}
+  - {block: create_indexed_state, params: {prepared_data: prepared_data, width: 1, save_as: clean_probability_state_b}}
   - block: epoch_loop
     params: {epochs: 300}
     steps:
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train_eval, batch_size: 128, save_as: train_eval_loader}}
+      - {block: collect_loss_snapshot, params: {model: model_a, loader: train_eval_loader, device: device, save_as: loss_snapshot_a, losses_as: snapshot_losses_a, targets_as: snapshot_targets_a, indices_as: snapshot_indices_a}}
+      - {block: collect_loss_snapshot, params: {model: model_b, loader: train_eval_loader, device: device, save_as: loss_snapshot_b, losses_as: snapshot_losses_b, targets_as: snapshot_targets_b, indices_as: snapshot_indices_b}}
+      - {block: fit_gmm, params: {losses: snapshot_losses_a, save_as: clean_probability_a}}
+      - {block: fit_gmm, params: {losses: snapshot_losses_b, save_as: clean_probability_b}}
+      - {block: indexed_write, params: {state: clean_probability_state_a, indices: snapshot_indices_a, values: clean_probability_a, save_as: clean_probability_state_a}}
+      - {block: indexed_write, params: {state: clean_probability_state_b, indices: snapshot_indices_b, values: clean_probability_b, save_as: clean_probability_state_b}}
       - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}}
       - block: batch_loop
         params: {loader: train_loader}
@@ -37,13 +44,8 @@ steps:
           - {block: zero_grad, params: {optimizer: optimizer_b}}
           - {block: forward, params: {model: model_a, save_as: logits_a}}
           - {block: forward, params: {model: model_b, save_as: logits_b}}
-          - {block: per_sample_ce, params: {logits: logits_a, save_as: loss_per_sample}}
-          - {block: per_sample_ce, params: {logits: logits_b, save_as: loss_per_sample_b}}
-          - {block: indexed_write, params: {state: loss_history_a, indices: indices, values: loss_per_sample, save_as: loss_history_a}}
-          - {block: indexed_write, params: {state: loss_history_b, indices: indices, values: loss_per_sample_b, save_as: loss_history_b}}
-          - {block: fit_gmm, params: {losses: loss_per_sample, save_as: clean_probability_a}}
-          - {block: fit_gmm, params: {losses: loss_per_sample_b, save_as: clean_probability_b}}
-          - {block: detach, params: {input: clean_probability_b, save_as: clean_probability}}
+          - {block: indexed_read, params: {state: clean_probability_state_b, indices: indices, save_as: clean_probability}}
+          - {block: detach, params: {input: clean_probability, save_as: clean_probability}}
           - {block: threshold_mask, params: {values: clean_probability, threshold: 0.5, comparison: ge, save_as: clean_mask}}
           - {block: mask_to_indices, params: {mask: clean_mask, save_as: clean_indices}}
           - {block: softmax, params: {logits: logits_a, save_as: probabilities}}
@@ -60,7 +62,7 @@ steps:
           - {block: weighted_sum, params: {terms: [loss_x_a, loss_u_a, loss_r_a], weights: [1.0, 25.0, 1.0], save_as: loss}}
           - {block: backward, params: {loss: loss, model: model_a}}
           - {block: optimizer_step, params: {optimizer: optimizer_a}}
-          - {block: detach, params: {input: clean_probability_a, save_as: clean_probability}}
+          - {block: indexed_read, params: {state: clean_probability_state_a, indices: indices, save_as: clean_probability}}
           - {block: threshold_mask, params: {values: clean_probability, threshold: 0.5, comparison: ge, save_as: clean_mask}}
           - {block: mask_to_indices, params: {mask: clean_mask, save_as: clean_indices}}
           - {block: softmax, params: {logits: logits_b, save_as: probabilities_b}}

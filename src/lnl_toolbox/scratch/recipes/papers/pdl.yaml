@@ -34,7 +34,7 @@ steps:
       optimizer: sgd
       model: model
       lr: 0.01
-      momentum: 0.0
+      momentum: 0.9
       nesterov: false
       weight_decay: 0.0001
       save_as: warmup_optimizer

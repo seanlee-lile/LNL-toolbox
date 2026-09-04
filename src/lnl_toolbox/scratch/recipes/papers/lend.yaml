@@ -32,7 +32,7 @@ steps:
           - {block: zero_grad}
           - {block: forward_feature}
           - {block: per_sample_ce}
-          - {block: pairwise_similarity, params: {features: features, metric: inner_product, normalize_features: false, save_as: lend_similarity}}
+          - {block: pairwise_similarity, params: {features: features, metric: euclidean, normalize_features: false, save_as: lend_similarity}}
           - {block: topk_neighborhood, params: {similarity: lend_similarity, stable_sample_indices: indices, k: 8, save_as: lend_neighbor_indices}}
           - {block: neighbor_edge_weights, params: {features: features, neighbor_indices: lend_neighbor_indices, gamma: 1.0, save_as: lend_adjacency}}
           - {block: normalize_graph, params: {adjacency: lend_adjacency, save_as: lend_graph}}

@@ -14,6 +14,7 @@ const state = {
   errorPayload: null,
   errorGuide: null,
   lastRun: null,
+  runMode: 'check',
   runtimeLimits: { max_epochs: 1, max_batches: 1, skip_final_test: true },
   paletteQuery: '',
   paletteCategory: '数据',
@@ -31,6 +32,10 @@ const state = {
 const $ = (id) => document.getElementById(id);
 const apiBase = location.pathname.startsWith('/scratch') ? '/api/scratch' : '/api';
 let uiIdCounter = 0;
+// Epoch snapshots are written by the worker; the UI only needs to read them
+// every few seconds. Stopping remains faster so the button feels responsive.
+const RUN_PROGRESS_POLL_MS = 4000;
+const RUN_STOP_POLL_MS = 500;
 const USABLE_DATASET_STATUSES = new Set(['ready', 'available', 'built-in', 'builtin']);
 
 async function api(path, options = {}) {
@@ -305,6 +310,7 @@ function renderRunProgress(job = null) {
   const block = $('progress-block');
   if (!panel || !bar || !percent || !stage || !position || !block) return;
   const progress = job?.progress || state.runProgress || {};
+  renderEpochOutputs(progress);
   const rawFraction = Number(progress.fraction);
   const fraction = Number.isFinite(rawFraction)
     ? Math.min(Math.max(rawFraction, 0), 1)
@@ -322,6 +328,54 @@ function renderRunProgress(job = null) {
   const batchText = batch === null ? 'batch —' : `batch ${batch}${totalBatches === null ? '' : ` / ${totalBatches}`}`;
   position.textContent = `${epochText} · ${batchText} · global step ${Number.isInteger(progress.global_step) ? progress.global_step : '—'}`;
   block.textContent = progress.block ? `当前积木：${progress.block}` : (progress.error ? `错误：${progress.error}` : '正在准备执行…');
+}
+
+function renderEpochOutputs(progress = {}) {
+  const list = $('epoch-output-list');
+  const count = $('epoch-output-count');
+  if (!list || !count) return;
+  const rows = Array.isArray(progress.epoch_outputs) ? progress.epoch_outputs : [];
+  count.textContent = `${rows.length} 轮`;
+  list.replaceChildren();
+  if (!rows.length) {
+    const empty = document.createElement('div');
+    empty.className = 'epoch-output-empty';
+    empty.textContent = '完成一个 epoch 后，这里会实时显示该轮的标量输出。';
+    list.appendChild(empty);
+    return;
+  }
+  rows.forEach((row, index) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return;
+    const card = document.createElement('article');
+    card.className = 'epoch-output-card';
+    const heading = document.createElement('header');
+    const title = document.createElement('strong');
+    const epoch = Number.isInteger(row.epoch) ? row.epoch + 1 : index + 1;
+    title.textContent = `Epoch ${epoch}`;
+    const ordinal = document.createElement('span');
+    ordinal.textContent = `第 ${index + 1} 次完成`;
+    heading.append(title, ordinal);
+    card.appendChild(heading);
+    const values = document.createElement('div');
+    values.className = 'epoch-output-values';
+    Object.entries(row).forEach(([name, value]) => {
+      if (name === 'epoch') return;
+      const item = document.createElement('div');
+      item.className = 'epoch-output-value';
+      const label = document.createElement('strong');
+      label.textContent = `${name}: `;
+      const rendered = document.createElement('code');
+      rendered.textContent = formatResultValue(value);
+      item.append(label, rendered);
+      values.appendChild(item);
+    });
+    if (!values.childElementCount) {
+      values.textContent = '本轮没有可显示的标量输出。';
+    }
+    card.appendChild(values);
+    list.appendChild(card);
+  });
+  list.scrollTop = list.scrollHeight;
 }
 
 function renderRunJob(job) {
@@ -368,7 +422,7 @@ async function pollRunJob(jobId) {
   try {
     const job = await api(`/jobs/${encodeURIComponent(jobId)}`);
     renderRunJob(job);
-    if (job.running) state.runPollTimer = window.setTimeout(() => pollRunJob(jobId), 400);
+    if (job.running) state.runPollTimer = window.setTimeout(() => pollRunJob(jobId), RUN_PROGRESS_POLL_MS);
   } catch (error) {
     clearRunPolling(); state.running = false; updateRunState(); showError(error);
   }
@@ -382,7 +436,7 @@ async function stopRun() {
   try {
     const job = await api(`/jobs/${encodeURIComponent(state.jobId)}/cancel`, {method: 'POST'});
     renderRunJob(job);
-    if (job.running) state.runPollTimer = window.setTimeout(() => pollRunJob(state.jobId), 250);
+    if (job.running) state.runPollTimer = window.setTimeout(() => pollRunJob(state.jobId), RUN_STOP_POLL_MS);
   } catch (error) {
     state.runStopping = false;
     if (button) { button.disabled = false; button.textContent = '■ 停止运行'; }
@@ -609,7 +663,11 @@ function appendMetricCard(name, value) {
 
 function renderRunResult(result) {
   state.lastRun = result;
+  state.errorStepId = null;
+  state.errorMessage = '';
+  state.errorPayload = null;
   state.errorGuide = null;
+  clearErrorPresentation();
   clearResultDetails();
   const metrics = Array.isArray(result?.metrics) ? result.metrics : (result?.metrics ? [result.metrics] : []);
   metrics.forEach((item, index) => {
@@ -640,13 +698,26 @@ function renderRunResult(result) {
 }
 
 function markDirty() {
+  const hadError = Boolean(state.errorMessage || state.errorStepId || state.errorPayload || state.errorGuide);
   state.validated = false;
   state.lastRun = null;
   state.errorStepId = null;
   state.errorMessage = '';
   state.errorPayload = null;
   state.errorGuide = null;
+  clearErrorPresentation();
+  if (hadError) {
+    setResultState('待重新运行');
+    const summary = $('result-summary');
+    if (summary) summary.textContent = '已修改，旧错误已清除；请重新运行检查。';
+  }
   updateRunState();
+}
+
+function clearErrorPresentation() {
+  document.querySelectorAll('.inspector-error').forEach((node) => node.remove());
+  document.querySelectorAll('.error-step').forEach((node) => node.classList.remove('error-step'));
+  renderGuidance();
 }
 
 function recipeDataReady() {
@@ -758,12 +829,22 @@ function updateRunState() {
   }
   const refresh = $('refresh-run');
   if (refresh) refresh.disabled = !state.jobId;
+  const mode = $('run-mode');
+  if (mode) mode.disabled = Boolean(state.running);
 }
 
 function renderRuntimeLimits() {
   const epochStep = flatRecipeSteps().find((step) => step.block === 'epoch_loop');
   const formalEpochs = epochStep?.params?.epochs ?? blockInfo('epoch_loop')?.params?.epochs?.default ?? '—';
-  $('runtime-limits').textContent = `正式配置：${formalEpochs} epochs；本次结构验证：${state.runtimeLimits.max_epochs} epoch / ${state.runtimeLimits.max_batches} batch（跳过最终测试）`;
+  const mode = state.runMode === 'full' ? '完整运行：按 Recipe 正式 epochs / 全部 batch' : `结构验证：${state.runtimeLimits.max_epochs} epoch / ${state.runtimeLimits.max_batches} batch（跳过最终测试）`;
+  const banner = $('runtime-limits');
+  if (banner) banner.textContent = `正式配置：${formalEpochs} epochs；${mode}`;
+  const help = $('run-mode-help');
+  if (help) help.textContent = state.runMode === 'full'
+    ? '完整运行将使用正式轮次和 batch；数据量较大时可能需要较长时间，可随时点击“停止运行”。'
+    : '默认只跑一轮做结构验证；切换到“完整运行”后会按当前 Recipe 的正式轮次和 batch 执行。';
+  const selector = $('run-mode');
+  if (selector && selector.value !== state.runMode) selector.value = state.runMode;
 }
 
 function selectedTarget(step) {
@@ -1436,13 +1517,45 @@ function flatRecipeSteps(steps = state.recipe.steps) {
 const COMPOSITE_DEFINITIONS = [
   { id: 'environment', label: '实验环境', icon: '⚙', blocks: ['set_seed', 'select_device'], description: '固定随机性并选择运行设备。' },
   { id: 'prepare-data', label: '准备数据', icon: '▦', blocks: ['load_dataset', 'inspect_dataset_semantics', 'create_dataset_split', 'select_label_source', 'apply_noise', 'build_noise_manifest', 'configure_preprocessing', 'configure_views', 'assign_data_roles', 'configure_loader', 'build_prepared_data', 'build_loaders'], description: '统一的数据源、划分、噪声、视图、角色和 Loader 链。' },
-  { id: 'model-optimization', label: '模型与优化', icon: '◈', blocks: ['create_model', 'create_optimizer'], description: '创建模型并连接其优化器。' },
+  { id: 'model-optimization', label: '模型与优化', icon: '◈', blocks: ['create_model', 'create_optimizer'], description: '按模型/优化器依赖将连续的单模型或多模型初始化步骤成组展示。' },
   { id: 'training-loop', label: '训练循环', icon: '↻', blocks: ['epoch_loop'], description: 'Epoch / Batch 的 C 形训练容器。' },
   { id: 'prepare-batch', label: '准备 Batch', icon: '▤', blocks: ['get_batch', 'move_batch_to_device'], description: '读取 Batch 并移动到当前设备。' },
   { id: 'update-model', label: '更新模型', icon: '↟', blocks: ['backward', 'optimizer_step'], description: '反向传播并执行优化器更新。' },
   { id: 'validate-best', label: '验证并保留最佳', icon: '✓', blocks: ['evaluate_accuracy', 'track_best_model'], description: '评估当前模型并按指标保留最佳状态。' },
   { id: 'final-evaluation', label: '最终评估', icon: '◒', blocks: ['restore_best_model', 'evaluate_accuracy', 'record_metrics'], description: '恢复最佳状态并记录最终测试指标。', optionalPrefix: true },
 ];
+
+const MODEL_OPTIMIZATION_BLOCKS = new Set(['create_model', 'create_optimizer', 'create_parameter_group_optimizer']);
+
+function detectModelOptimizationRange(steps, start) {
+  if (steps?.[start]?.block !== 'create_model') return null;
+  let end = start;
+  let modelCount = 0;
+  let optimizerCount = 0;
+  while (end < (steps || []).length && MODEL_OPTIMIZATION_BLOCKS.has(steps[end]?.block)) {
+    if (steps[end].block === 'create_model') modelCount += 1;
+    else optimizerCount += 1;
+    end += 1;
+  }
+  // A model-only prefix is not an optimization group. Keeping it as a normal
+  // step also avoids swallowing a later, unrelated optimizer setup.
+  if (modelCount === 0 || optimizerCount === 0) return null;
+  const modelSlots = new Set();
+  for (let index = start; index < end; index += 1) {
+    const step = steps[index];
+    if (step.block === 'create_model') {
+      modelSlots.add(String(step.params?.save_as || 'model'));
+      continue;
+    }
+    // Parameter-group optimizers resolve their source slots from `groups`;
+    // the model/optimizer composite should not second-guess that list.
+    if (step.block === 'create_parameter_group_optimizer') continue;
+    // A single-module optimizer is only part of this group when its model has
+    // already been created in the same contiguous setup segment.
+    if (!modelSlots.has(String(step.params?.model || 'model'))) return null;
+  }
+  return { start, end, modelCount, optimizerCount };
+}
 
 function detectCompositeRanges(steps) {
   const ranges = [];
@@ -1451,6 +1564,12 @@ function detectCompositeRanges(steps) {
     let match = null;
     for (const definition of COMPOSITE_DEFINITIONS) {
       const ids = definition.blocks;
+      if (definition.id === 'model-optimization') {
+        const dynamic = detectModelOptimizationRange(steps, index);
+        if (dynamic) match = { definition, ...dynamic };
+        if (match) break;
+        continue;
+      }
       const exact = ids.every((id, offset) => steps[index + offset]?.block === id);
       const optional = definition.optionalPrefix && steps[index]?.block === 'evaluate_accuracy'
         && Boolean(steps[index]?.params?.final) && steps[index + 1]?.block === 'record_metrics';
@@ -1545,7 +1664,10 @@ function createCompositeShell(range, steps, parentId, context, key) {
   const accent = {environment: '#f59e0b', 'prepare-data': '#38bdf8', 'model-optimization': '#a78bfa', 'training-loop': '#f59e0b', 'prepare-batch': '#38bdf8', 'update-model': '#facc15', 'validate-best': '#c4b5fd', 'final-evaluation': '#2dd4bf'}[definition.id] || '#38bdf8';
   shell.style.setProperty('--composite-accent', accent);
   const header = document.createElement('div'); header.className = 'composite-header';
-  const title = document.createElement('div'); title.className = 'composite-title'; title.innerHTML = `<span class="composite-icon">${definition.icon}</span><strong>${definition.label}</strong><small>${range.end - range.start} 个步骤</small>`;
+  const countLabel = definition.id === 'model-optimization' && range.modelCount
+    ? `${range.modelCount} 个模型 · ${range.optimizerCount} 个优化器 · ${range.end - range.start} 个步骤`
+    : `${range.end - range.start} 个步骤`;
+  const title = document.createElement('div'); title.className = 'composite-title'; title.innerHTML = `<span class="composite-icon">${definition.icon}</span><strong>${definition.label}</strong><small>${countLabel}</small>`;
   const actions = document.createElement('div'); actions.className = 'composite-actions';
   const toggle = document.createElement('button'); toggle.type = 'button'; toggle.textContent = state.compositeExpanded.has(key) ? '收起' : '展开';
   toggle.onclick = (event) => { event.stopPropagation(); if (state.compositeExpanded.has(key)) state.compositeExpanded.delete(key); else state.compositeExpanded.add(key); draw(); };
@@ -2233,7 +2355,8 @@ function payload() {
 }
 
 function runPayload() {
-  return { ...payload(), runtime_limits: state.runtimeLimits };
+  const runtime_limits = state.runMode === 'full' ? {} : {...state.runtimeLimits};
+  return { ...payload(), runtime_limits };
 }
 
 function highlightError(message, payload = null) {
@@ -2280,12 +2403,13 @@ function renderTemplateList(templates, query = '') {
   const needle = query.trim().toLowerCase();
   templates.filter((item) => !needle || `${item.name} ${item.id} ${item.status}`.toLowerCase().includes(needle)).forEach((item) => {
     const card = document.createElement('div'); card.className = 'template-card';
+    makeTemplateCardActivatable(card, item);
     const name = document.createElement('strong'); name.textContent = item.name; card.appendChild(name);
     const status = document.createElement('small');
     status.textContent = templateStatusLabel(item.status);
     card.appendChild(status);
     const open = document.createElement('button'); open.textContent = '打开';
-    open.onclick = () => openTemplate(item);
+    open.onclick = (event) => { event.stopPropagation(); openTemplate(item); };
     card.appendChild(open); list.appendChild(card);
   });
   if (!list.children.length) list.textContent = '没有匹配的模板';
@@ -2300,11 +2424,29 @@ function renderFeaturedExamples(examples) {
   list.innerHTML = '';
   examples.forEach((item) => {
     const card = document.createElement('div'); card.className = 'template-card featured-example';
+    makeTemplateCardActivatable(card, item);
     const name = document.createElement('strong'); name.textContent = `${item.name} 论文范例`; card.appendChild(name);
     const status = document.createElement('small'); status.textContent = `${templateStatusLabel(item.status)}，可直接查看和运行`; card.appendChild(status);
-    const open = document.createElement('button'); open.textContent = '打开范例'; open.onclick = () => openTemplate(item);
+    const open = document.createElement('button'); open.textContent = '打开范例'; open.onclick = (event) => { event.stopPropagation(); openTemplate(item); };
     card.appendChild(open); list.appendChild(card);
   });
+}
+
+function makeTemplateCardActivatable(card, item) {
+  // The whole paper row is an open target; the explicit button remains for
+  // discoverability and keyboard users. This avoids requiring a precise click
+  // on a small button in the New → paper template flow.
+  card.tabIndex = 0;
+  card.setAttribute('role', 'button');
+  card.onclick = (event) => {
+    if (!event.target.closest('button')) openTemplate(item);
+  };
+  card.onkeydown = (event) => {
+    if ((event.key === 'Enter' || event.key === ' ') && event.target === card) {
+      event.preventDefault();
+      openTemplate(item);
+    }
+  };
 }
 
 async function openTemplate(item) {
@@ -2343,7 +2485,7 @@ document.addEventListener('click', (event) => { if (!event.target.closest('.new-
 if ($('new-single')) $('new-single').onclick = () => applySkeleton('single');
 if ($('new-dual')) $('new-dual').onclick = () => applySkeleton('dual');
 if ($('new-blank')) $('new-blank').onclick = () => applySkeleton('blank');
-if ($('new-template')) $('new-template').onclick = () => $('templates').click();
+if ($('new-template')) $('new-template').onclick = openTemplateDialog;
 if ($('empty-single')) $('empty-single').onclick = () => applySkeleton('single');
 if ($('empty-dual')) $('empty-dual').onclick = () => applySkeleton('dual');
 if ($('empty-blank')) $('empty-blank').onclick = () => applySkeleton('blank');
@@ -2362,6 +2504,11 @@ async function validateCurrentRecipe() {
     error.payload = {ok: false, error: readiness.message, code: readiness.code, block_id: readiness.step?.block || 'load_dataset'};
     throw error;
   }
+  state.errorStepId = null;
+  state.errorMessage = '';
+  state.errorPayload = null;
+  state.errorGuide = null;
+  clearErrorPresentation();
   return true;
 }
 
@@ -2375,6 +2522,10 @@ if ($('check')) $('check').onclick = async () => {
   }
 };
 if ($('save')) $('save').onclick = async () => { try { const result = await api('/api/save', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload()) }); showMessage(`已保存: ${result.path}`); } catch (error) { showError(error); } };
+if ($('run-mode')) $('run-mode').onchange = (event) => {
+  state.runMode = event.target.value === 'full' ? 'full' : 'check';
+  renderRuntimeLimits();
+};
 if ($('stop-run')) $('stop-run').onclick = stopRun;
 if ($('refresh-run')) $('refresh-run').onclick = () => state.jobId && pollRunJob(state.jobId);
 if ($('run')) $('run').onclick = async () => {
@@ -2400,8 +2551,11 @@ if ($('run')) $('run').onclick = async () => {
   }
 };
 if ($('open')) $('open').onclick = async () => { try { const names = await api('/api/recipes'); renderRecipeList(names); $('recipe-dialog').showModal(); } catch (error) { showError(error); } };
-if ($('templates')) $('templates').onclick = async () => {
+async function openTemplateDialog() {
   try {
+    const menu = $('new-menu');
+    if (menu) menu.hidden = true;
+    if ($('new')) $('new').setAttribute('aria-expanded', 'false');
     const [templates, examples] = await Promise.all([api('/api/templates'), api('/api/examples')]);
     renderFeaturedExamples(examples);
     renderTemplateList(templates);
@@ -2409,7 +2563,8 @@ if ($('templates')) $('templates').onclick = async () => {
     $('template-search').oninput = () => renderTemplateList(templates, $('template-search').value);
     $('template-dialog').showModal();
   } catch (error) { showError(error); }
-};
+}
+if ($('templates')) $('templates').onclick = openTemplateDialog;
 if ($('formula-builder')) $('formula-builder').onclick = () => {
   renderFormulaBuilderFields();
   $('formula-dialog').showModal();

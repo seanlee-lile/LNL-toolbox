@@ -102,6 +102,86 @@ def collect_feature_snapshot(ctx: ScratchContext, model: str = "model", loader: 
         ctx[indices_as] = value.global_indices
 
 
+@block(
+    id="collect_loss_snapshot", name="Collect Loss Snapshot", category="Statistics",
+    description="Collect one detached per-example loss for an entire loader, aligned by stable sample index.",
+    params={
+        "model": {"type": "slot", "default": "model"},
+        "loader": {"type": "slot", "default": "loader"},
+        "device": {"type": "slot", "default": "device"},
+        "save_as": {"type": "slot", "default": "loss_snapshot"},
+        "losses_as": {"type": "slot", "default": "snapshot_losses"},
+        "targets_as": {"type": "slot", "default": "snapshot_targets"},
+        "indices_as": {"type": "slot", "default": "snapshot_indices"},
+    },
+    requires=("model", "loader"),
+    provides=("save_as", "losses_as", "targets_as", "indices_as"),
+    placement=("top", "epoch"), stage="evaluate", ui_group="⑥ 后验与权重",
+)
+def collect_loss_snapshot(
+    ctx: ScratchContext,
+    model: str = "model",
+    loader: str = "loader",
+    device: str = "device",
+    save_as: str = "loss_snapshot",
+    losses_as: str = "snapshot_losses",
+    targets_as: str = "snapshot_targets",
+    indices_as: str = "snapshot_indices",
+) -> None:
+    """Collect full-dataset losses without fitting a downstream estimator.
+
+    DivideMix's co-divide stage fits its mixture on the complete training
+    loss distribution.  Keeping this snapshot operation separate from GMM
+    fitting prevents a minibatch from silently becoming the estimator's
+    population and makes the stable-index contract explicit.
+    """
+    torch = _torch()
+    import torch.nn.functional as F
+
+    network = ctx[model]
+    target_device = ctx.get(device, "cpu")
+    was_training = bool(getattr(network, "training", False))
+    losses, targets, indices = [], [], []
+    network.eval()
+    try:
+        with torch.no_grad():
+            for batch in ctx[loader]:
+                if isinstance(batch, Mapping):
+                    inputs = batch.get("inputs", batch.get("images", batch.get("input")))
+                    labels = batch.get("targets", batch.get("labels", batch.get("target")))
+                    sample_indices = batch.get("indices", batch.get("index"))
+                else:
+                    inputs, labels, sample_indices = batch[0], batch[1], batch[2] if len(batch) > 2 else None
+                if inputs is None or labels is None or sample_indices is None:
+                    raise ValueError("collect_loss_snapshot requires inputs, targets and stable indices")
+                inputs = inputs.to(target_device) if hasattr(inputs, "to") else inputs
+                labels = torch.as_tensor(labels, device=target_device, dtype=torch.long).reshape(-1)
+                sample_indices = torch.as_tensor(sample_indices, dtype=torch.long).reshape(-1)
+                logits = network(inputs)
+                per_sample = F.cross_entropy(logits, labels, reduction="none")
+                if per_sample.numel() != sample_indices.numel():
+                    raise ValueError("collect_loss_snapshot outputs are not sample aligned")
+                losses.append(per_sample.detach().cpu())
+                targets.append(labels.detach().cpu())
+                indices.append(sample_indices.detach().cpu())
+    finally:
+        network.train(was_training)
+    if not losses:
+        raise ValueError("collect_loss_snapshot loader is empty")
+    loss_values = torch.cat(losses)
+    target_values = torch.cat(targets)
+    index_values = torch.cat(indices)
+    order = torch.argsort(index_values, stable=True)
+    index_values = index_values[order]
+    if torch.unique(index_values).numel() != index_values.numel():
+        raise ValueError("collect_loss_snapshot indices must be unique")
+    loss_values, target_values = loss_values[order], target_values[order]
+    ctx[losses_as] = loss_values
+    ctx[targets_as] = target_values
+    ctx[indices_as] = index_values
+    ctx[save_as] = SimpleNamespace(losses=loss_values, targets=target_values, global_indices=index_values)
+
+
 def _resolve_snapshot_values(ctx: ScratchContext, snapshots: Any) -> tuple[Any, ...]:
     values = ctx[snapshots] if isinstance(snapshots, str) else snapshots
     if not isinstance(values, (list, tuple)):
@@ -405,17 +485,22 @@ def create_sigmoid_offdiagonal_transition(ctx: ScratchContext, num_classes: int 
 
 
 class _AdditiveTransitionRevision:
-    def __init__(self, transition: Any):
+    def __init__(self, transition: Any, *, project_nonnegative: bool = True, normalize: bool = True):
         torch = _torch(); self.base = transition.matrix() if hasattr(transition, "matrix") else torch.as_tensor(transition); self.delta = torch.nn.Parameter(torch.zeros_like(self.base))
+        self.project_nonnegative = bool(project_nonnegative)
+        self.normalize = bool(normalize)
     def parameters(self):
         return [self.delta]
     def state_dict(self):
-        return {"base": self.base.detach().clone(), "delta": self.delta.detach().clone()}
+        return {"base": self.base.detach().clone(), "delta": self.delta.detach().clone(), "project_nonnegative": self.project_nonnegative, "normalize": self.normalize}
     def load_state_dict(self, state):
         if isinstance(state, dict) and "delta" in state:
             self.delta.data.copy_(state["delta"].to(self.delta))
         if isinstance(state, dict) and "base" in state:
             self.base = state["base"].to(self.delta)
+        if isinstance(state, dict):
+            if "project_nonnegative" in state: self.project_nonnegative = bool(state["project_nonnegative"])
+            if "normalize" in state: self.normalize = bool(state["normalize"])
         return self
     def train(self, mode: bool = True):
         return self
@@ -426,7 +511,11 @@ class _AdditiveTransitionRevision:
         self.delta.data = self.delta.data.to(device)
         return self
     def matrix(self, dtype=None, device=None):
-        torch = _torch(); value = (self.base.to(self.delta) + self.delta).clamp_min(0); value = value / value.sum(-1, keepdim=True).clamp_min(torch.finfo(value.dtype).tiny)
+        torch = _torch(); value = self.base.to(self.delta) + self.delta
+        if self.project_nonnegative:
+            value = value.clamp_min(0)
+        if self.normalize:
+            value = value / value.sum(-1, keepdim=True).clamp_min(torch.finfo(value.dtype).tiny)
         if device is not None: value = value.to(device)
         return value.to(dtype=dtype) if dtype is not None else value
     def __call__(self):
@@ -436,11 +525,11 @@ class _AdditiveTransitionRevision:
 @block(
     id="create_additive_transition_revision", name="Create Additive Transition Revision", category="Transition",
     description="Create a zero-initialized additive transition revision around a fixed transition.",
-    params={"transition": {"type": "slot", "default": "transition"}, "save_as": {"type": "slot", "default": "revision"}},
+    params={"transition": {"type": "slot", "default": "transition"}, "project_nonnegative": {"type": "bool", "default": True}, "normalize": {"type": "bool", "default": True}, "save_as": {"type": "slot", "default": "revision"}},
     requires=("transition",), provides=("save_as",), placement=("top",), stage="setup", ui_group="⑥ 后验与权重",
 )
-def create_additive_transition_revision(ctx: ScratchContext, transition: str = "transition", save_as: str = "revision") -> None:
-    ctx[save_as] = _AdditiveTransitionRevision(ctx[transition])
+def create_additive_transition_revision(ctx: ScratchContext, transition: str = "transition", project_nonnegative: bool = True, normalize: bool = True, save_as: str = "revision") -> None:
+    ctx[save_as] = _AdditiveTransitionRevision(ctx[transition], project_nonnegative=bool(project_nonnegative), normalize=bool(normalize))
 
 
 def _batch(batch):

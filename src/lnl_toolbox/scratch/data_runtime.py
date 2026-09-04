@@ -1275,8 +1275,10 @@ def _transform_pair(preprocessing: Mapping[str, Any], train: ScratchSplit,
         ops = [transforms.RandomCrop(crop_size, padding=padding), transforms.RandomHorizontalFlip(), transforms.Lambda(_to_tensor_input)]
     if name == "standard" and image_like:
         ops.append(transforms.Normalize((0.49139968, 0.48215827, 0.44653124), (0.24703233, 0.24348505, 0.26158768)))
-    elif name == "gce2018":
-        pass
+    elif name == "gce2018" and image_like:
+        # GCE specifies per-pixel mean subtraction (not variance
+        # standardisation) before its 32x32 crop/flip augmentation.
+        ops.append(transforms.Normalize((0.49139968, 0.48215827, 0.44653124), (1.0, 1.0, 1.0)))
     elif name in {"tensor_only", "binary_raw", "official_cifar10"}:
         pass
     elif name:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -32,6 +33,63 @@ class ScratchExecutionError(RuntimeError):
         )
 
 
+_PROGRESS_NON_METRICS = {
+    "epoch", "batch_idx", "global_step", "num_classes", "seed", "device",
+}
+
+
+def _progress_scalar(value: Any) -> int | float | None:
+    """Return a JSON-safe scalar without serialising runtime objects."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value) if isinstance(value, float) else int(value)
+        return number if not isinstance(number, float) or math.isfinite(number) else None
+    # Scalar tensors are common for losses and accuracies.  Avoid importing
+    # torch here: checking ``ndim``/``item`` keeps the progress channel
+    # optional and independent from the training extra.
+    if getattr(value, "ndim", None) == 0 and callable(getattr(value, "item", None)):
+        try:
+            number = value.item()
+        except Exception:
+            return None
+        if isinstance(number, bool) or not isinstance(number, (int, float)):
+            return None
+        if isinstance(number, float) and not math.isfinite(number):
+            return None
+        return float(number) if isinstance(number, float) else int(number)
+    return None
+
+
+def _snapshot_epoch_output(context: ScratchContext) -> dict[str, Any]:
+    """Collect the scalar outputs visible after one completed epoch.
+
+    Models, loaders, tensors with more than one element and private runtime
+    slots are intentionally excluded.  This keeps the observation channel
+    small while making the values useful for every Paper Recipe, regardless
+    of whether it has an explicit ``record_metrics`` block.
+    """
+    row: dict[str, Any] = {"epoch": int(context.get("epoch", 0))}
+    for name, value in context.items():
+        key = str(name)
+        if key.startswith("_") or key in _PROGRESS_NON_METRICS or key == "metrics":
+            continue
+        scalar = _progress_scalar(value)
+        if scalar is not None:
+            row[key] = scalar
+    metrics = context.get("metrics")
+    if isinstance(metrics, list) and metrics:
+        latest = metrics[-1]
+        if isinstance(latest, Mapping):
+            for name, value in latest.items():
+                if str(name) == "epoch":
+                    continue
+                scalar = _progress_scalar(value)
+                if scalar is not None:
+                    row[str(name)] = scalar
+    return row
+
+
 def _publish_progress(
     context: ScratchContext,
     *,
@@ -39,6 +97,7 @@ def _publish_progress(
     path: tuple[int, ...] = (),
     state: str = "running",
     error: str | None = None,
+    epoch_output: Mapping[str, Any] | None = None,
 ) -> None:
     """Write a small, JSON-safe execution snapshot for the WebUI.
 
@@ -88,6 +147,13 @@ def _publish_progress(
         payload["fraction"] = None
     if error:
         payload["error"] = str(error)
+    epoch_outputs = context.get("_progress_epoch_outputs")
+    if isinstance(epoch_outputs, list):
+        payload["epoch_outputs"] = list(epoch_outputs)
+    elif isinstance(previous.get("epoch_outputs"), list):
+        payload["epoch_outputs"] = previous["epoch_outputs"]
+    if epoch_output is not None:
+        payload["epoch_output"] = dict(epoch_output)
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = destination.with_name(destination.name + ".tmp")
@@ -97,6 +163,17 @@ def _publish_progress(
         # Progress is best-effort and must never turn a valid Scratch run into
         # a failure merely because the UI status file is unavailable.
         return
+
+
+def publish_epoch_output(context: ScratchContext) -> None:
+    """Append and publish the completed epoch's scalar observation."""
+    row = _snapshot_epoch_output(context)
+    outputs = context.setdefault("_progress_epoch_outputs", [])
+    if not isinstance(outputs, list):
+        outputs = []
+        context["_progress_epoch_outputs"] = outputs
+    outputs.append(row)
+    _publish_progress(context, block_id="epoch_loop", state="running", epoch_output=row)
 
 
 def _resolved_params(definition: BlockDefinition, step: Mapping[str, Any]) -> dict[str, Any]:
@@ -196,6 +273,7 @@ def execute_recipe(
     validated = validate_recipe(recipe, initial_slots=set(initial))
     result = ScratchContext(validated.get("settings", {}))
     result.update(initial)
+    result.setdefault("_progress_epoch_outputs", [])
     try:
         executed = execute_steps(validated["steps"], result)
     except Exception as exc:

@@ -51,9 +51,9 @@ steps:
           - block: per_sample_ce
             params: {logits: logits_b, save_as: loss_b_per_sample}
           - block: select_lowest_scores
-            params: {scores: loss_a_per_sample, keep_fraction: remember_rate, stable_sample_indices: indices, rounding: floor, minimum_count: 1, save_as: selected_a}
+            params: {scores: loss_a_per_sample, keep_fraction: remember_rate, stable_sample_indices: indices, rounding: ceil, minimum_count: 1, save_as: selected_a}
           - block: select_lowest_scores
-            params: {scores: loss_b_per_sample, keep_fraction: remember_rate, stable_sample_indices: indices, rounding: floor, minimum_count: 1, save_as: selected_b}
+            params: {scores: loss_b_per_sample, keep_fraction: remember_rate, stable_sample_indices: indices, rounding: ceil, minimum_count: 1, save_as: selected_b}
           - block: select_by_indices
             params: {values: loss_a_per_sample, indices: selected_b, save_as: selected_loss_a}
           - block: mean_loss

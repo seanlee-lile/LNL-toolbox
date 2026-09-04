@@ -39,13 +39,11 @@ steps:
           - {block: functional_forward_with_state, params: {model: model, state: l2rw_virtual_state, inputs: trusted_images, save_as: l2rw_trusted_logits}}
           - {block: per_sample_ce, params: {logits: l2rw_trusted_logits, labels: trusted_labels, save_as: l2rw_trusted_loss_per_sample}}
           - {block: mean_loss, params: {input: l2rw_trusted_loss_per_sample, save_as: l2rw_trusted_loss}}
-          - {block: parameter_squared_norm, params: {model: model, save_as: l2rw_parameter_norm}}
-          - {block: weighted_sum, params: {terms: [l2rw_trusted_loss, l2rw_parameter_norm], weights: [1.0, 0.0001], save_as: l2rw_meta_loss}}
-          - {block: gradient_wrt, params: {loss: l2rw_meta_loss, input: l2rw_epsilon, create_graph: false, save_as: l2rw_meta_gradient}}
-          - {block: nonnegative_projection, params: {input: l2rw_meta_gradient, negate: false, save_as: l2rw_raw_weights}}
+          - {block: gradient_wrt, params: {loss: l2rw_trusted_loss, input: l2rw_epsilon, create_graph: false, save_as: l2rw_meta_gradient}}
+          - {block: nonnegative_projection, params: {input: l2rw_meta_gradient, negate: true, save_as: l2rw_raw_weights}}
           - {block: normalize_nonnegative_weights, params: {weights: l2rw_raw_weights, save_as: meta_weights}}
           - {block: elementwise_multiply, params: {left: loss_per_sample, right: meta_weights, save_as: weighted_loss_per_sample}}
-          - {block: mean_loss, params: {input: weighted_loss_per_sample, save_as: loss}}
+          - {block: sum_values, params: {input: weighted_loss_per_sample, save_as: loss}}
           - {block: backward}
           - {block: optimizer_step}
       - {block: evaluate_accuracy, params: {model: model, loader: validation_loader, save_as: validation_accuracy}}

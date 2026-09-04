@@ -85,7 +85,9 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
             'id="result-artifacts"', 'id="result-details"', 'id="output"',
             'id="run-guidance"', 'class="preflight-guide"',
             'id="stop-run"', 'id="refresh-run"', 'id="run-progress"',
+            'id="run-mode"', 'id="run-mode-help"',
             'id="progress-bar"', 'id="progress-stage"',
+            'id="epoch-output"', 'id="epoch-output-list"', 'id="epoch-output-count"',
         ):
             self.assertIn(marker, html)
 
@@ -94,14 +96,26 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
             "function setInspectorTab(tab = 'blocks')", "function renderRunResult(result)",
             "setResultState('运行中…')", "renderRunResult(result)",
             "function pollRunJob(jobId)", "async function stopRun()", "renderRunProgress(job)",
+            "function renderEpochOutputs(progress = {})", "epoch_outputs",
+            "const RUN_PROGRESS_POLL_MS = 4000", "const RUN_STOP_POLL_MS = 500",
+            "function makeTemplateCardActivatable(card, item)",
+            "async function openTemplateDialog()",
+            "$('new-template').onclick = openTemplateDialog",
+            "card.setAttribute('role', 'button')", "card.onkeydown",
             "$('result-metrics')", "function detectCompositeRanges(steps)",
             "function applySkeleton(kind)", "await validateCurrentRecipe()",
             "function datasetReadiness()", "function guideForError(error)",
             "function renderGuidance()", "function focusDatasetSource()",
+            "function clearErrorPresentation()", "state.runMode === 'full' ? {}",
+            "state.runMode = event.target.value === 'full' ? 'full' : 'check'",
+            "已修改，旧错误已清除；请重新运行检查。",
             "function chooseSyntheticDataset()", "当前状态：${facts.status || 'unknown'}",
             "USABLE_DATASET_STATUSES", "datasetIsUsable(item)",
             "name: '全部'", "state.paletteCategory === '全部'", "color: '#84cc16'",
             "async function refreshDatasets",
+            "const MODEL_OPTIMIZATION_BLOCKS = new Set",
+            "function detectModelOptimizationRange(steps, start)",
+            "range.modelCount", "range.optimizerCount",
         ):
             self.assertIn(marker, javascript)
 
@@ -112,6 +126,7 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
         self.assertIn(".composite-block", css)
         self.assertIn(".result-panel", css)
         self.assertIn(".run-progress", css)
+        self.assertIn(".epoch-output-card", css)
         self.assertIn(".run-controls", css)
         self.assertIn(".run-button", css)
         self.assertIn(".math-rendered math", css)

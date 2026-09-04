@@ -32,10 +32,13 @@ steps:
         steps:
           - {block: get_batch}
           - {block: move_batch_to_device}
-          - {block: forward_feature}
-          - {block: one_hot, params: {labels: labels, num_classes: 10, save_as: y0}}
-          - {block: softmax, params: {logits: logits, detach: true, save_as: yn}}
-          - {block: subtract, params: {minuend: yn, subtrahend: y0, save_as: direction}}
+          - {block: select_batch_view, params: {batch: batch, input: images, view: weak, save_as: weak_images}}
+          - {block: select_batch_view, params: {batch: batch, input: images, view: strong, save_as: strong_images}}
+          - {block: forward_feature, params: {input: weak_images, logits_as: weak_logits, features_as: features}}
+          - {block: forward, params: {input: strong_images, model: model, save_as: strong_logits}}
+          - {block: softmax, params: {logits: weak_logits, detach: true, save_as: weak_probabilities}}
+          - {block: softmax, params: {logits: strong_logits, detach: true, save_as: strong_probabilities}}
+          - {block: dld_pre_correct_labels, params: {weak_probabilities: weak_probabilities, strong_probabilities: strong_probabilities, noisy_labels: labels, gmm_iterations: 10, y0_as: y0, yn_as: yn, direction_as: direction, partition_as: dld_partition, divergence_as: dld_divergence}}
           - {block: sample_timestep_noise, params: {reference: y0, timesteps: 1000, timestep_as: timestep, noise_as: epsilon}}
           - {block: dld_sample_forward_state, params: {y0: y0, direction: direction, timestep: timestep, epsilon: epsilon, timesteps: 1000, save_as: yd}}
           - {block: zero_grad, params: {optimizer: direction_optimizer}}

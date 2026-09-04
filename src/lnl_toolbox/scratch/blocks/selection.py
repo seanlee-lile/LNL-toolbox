@@ -308,7 +308,11 @@ def top_k_mask(ctx: ScratchContext, scores: str = "logits", k: int = 1, save_as:
     count = min(max(int(k), 0), int(values.shape[1]))
     mask = _torch().zeros_like(values, dtype=_torch().bool)
     if count:
-        mask.scatter_(1, _torch().topk(values, count, dim=1).indices, True)
+        # Stable sorting is part of the public selection contract.  ``topk``
+        # does not define tie ordering across devices, while argsort(stable)
+        # preserves the input/sample order for equal scores.
+        indices = _torch().argsort(values, dim=1, descending=True, stable=True)[:, :count]
+        mask.scatter_(1, indices, True)
     ctx[save_as] = mask
 
 

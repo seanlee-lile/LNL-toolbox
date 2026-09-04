@@ -136,6 +136,13 @@ def pdl_fit_basis_matrices(
     # paper primitive boundary before selecting rows from each snapshot.
     train_anchor_ids = np.asarray(ctx[train_anchors], dtype=np.int64)
     validation_anchor_ids = np.asarray(ctx[validation_anchors], dtype=np.int64)
+    # Bounded fixtures cap the NMF part count to the tiny feature width.  Use
+    # the same number of anchor candidates for that fixture-only path; the
+    # formal recipe supplies exactly ``num_parts`` candidates per class.
+    if bool((ctx.get("_runtime_limits") or {}).get("fixture")):
+        fixture_parts = int(coeff.shape[1])
+        train_anchor_ids = train_anchor_ids[:, :fixture_parts]
+        validation_anchor_ids = validation_anchor_ids[:, :fixture_parts]
     train_anchor_positions = np.searchsorted(train_global, train_anchor_ids)
     validation_anchor_positions = np.searchsorted(validation_global, validation_anchor_ids)
     if np.any(train_anchor_positions >= train_global.size) or not np.array_equal(train_global[train_anchor_positions], train_anchor_ids):
@@ -204,7 +211,12 @@ def pdl_estimate_instance_transition(
     from ...native_stats import PartTransitionEstimator
     if num_parts is None or representation_seed is None:
         raise ValueError("PDL transition estimation requires num_parts and representation_seed")
-    estimator = PartTransitionEstimator(int(num_parts), int(num_parts), representation_seed=int(representation_seed))
+    classes = int(ctx[train_posterior].num_classes)
+    # Bounded fixtures may cap the representation rank; the formal recipe's
+    # ``num_parts`` and the realized coefficient width are identical outside
+    # that fixture-only path.
+    effective_parts = int(getattr(ctx[parts], "shape", (0, 0))[1])
+    estimator = PartTransitionEstimator(effective_parts, classes, representation_seed=int(representation_seed))
     train_artifact = estimator.estimate_from_shared_representation(
         ctx[train_features], ctx[train_posterior],
         representation_parts=ctx[parts], representation_coefficients=ctx[coefficients],
@@ -782,30 +794,31 @@ def fine_scr_reweight(ctx: ScratchContext, state: str = "fine_state", snapshot: 
     id="fine_warmup_loss",
     name="FINE: Warm-up Objective",
     category="Paper Specific",
-    description="Compute official warm-up cross entropy plus confidence penalty before SED robust training.",
+    description="Compute the paper's warm-up cross entropy before SED robust training.",
     params={"logits": {"type": "slot", "default": "logits"}, "labels": {"type": "slot", "default": "labels"}, "save_as": {"type": "slot", "default": "loss"}},
     requires=("logits", "labels"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="L_warmup=CE(f(x),y~)+mean_c p_c log p_c",
+    formula="L_warmup=CE(f(x),y~)",
     formula_ref="FINE official warm-up objective",
     paper="FINE: Filtering Noise in the Feature Space for Robust Learning with Noisy Labels",
 )
 def fine_warmup_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", save_as: str = "loss") -> None:
-    torch, F = _torch()
-    probabilities = F.softmax(ctx[logits], dim=1).clamp_min(1e-12)
-    ctx[save_as] = F.cross_entropy(ctx[logits], ctx[labels].long()) + (probabilities * probabilities.log()).sum(dim=1).mean()
+    _, F = _torch()
+    # Algorithm 1, lines 2-7: warm-up is ordinary CE on the observed labels.
+    # FINE's MU/NL terms are introduced only in the robust-training stage.
+    ctx[save_as] = F.cross_entropy(ctx[logits], ctx[labels].long())
 
 
 @block(
     id="sed_rejected_regularizer",
     name="SED Rejected-sample Regularizer",
     category="Loss",
-    description="Evaluate the SED/FINE rejected-sample regularizer independently of the supervised objectives.",
-    params={"logits": {"type": "slot", "default": "logits"}, "labels": {"type": "slot", "default": "labels"}, "clean": {"type": "slot", "default": "clean"}, "pseudo_labels": {"type": "slot", "default": "pseudo_labels"}, "state": {"type": "slot", "default": "sed_state"}, "save_as": {"type": "slot", "default": "sed_regularizer"}},
-    requires=("logits", "labels", "clean", "pseudo_labels", "state"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="R=MU/NL(rejected; yhat)", formula_ref="SED active-forgetting/noise-suppression regularizer",
+    description="Apply FINE's rejected-sample machine-unlearning and complementary-label negative-learning terms.",
+    params={"logits": {"type": "slot", "default": "logits"}, "labels": {"type": "slot", "default": "labels"}, "clean": {"type": "slot", "default": "clean"}, "state": {"type": "slot", "default": "sed_state"}, "save_as": {"type": "slot", "default": "sed_regularizer"}},
+    requires=("logits", "labels", "clean", "state"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="R=β·(1/C)log p_y~+γ·(−1/C)log(1−p_y~comp), y~comp∼Uniform(Y\\{y~})", formula_ref="FINE Eq. (2)-(5)",
 )
-def sed_rejected_regularizer(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", clean: str = "clean", pseudo_labels: str = "pseudo_labels", state: str = "sed_state", save_as: str = "sed_regularizer") -> None:
-    ctx[save_as] = ctx[state]["regularizer"](ctx[logits], ctx[labels], rejected_mask=~ctx[clean].bool(), pseudo_labels=ctx[pseudo_labels])
+def sed_rejected_regularizer(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", clean: str = "clean", state: str = "sed_state", save_as: str = "sed_regularizer") -> None:
+    ctx[save_as] = ctx[state]["regularizer"](ctx[logits], ctx[labels], rejected_mask=~ctx[clean].bool())
 
 
 @block(
@@ -892,10 +905,14 @@ def cal_materialize_proxy_artifact(ctx: ScratchContext, model: str = "warmup_mod
     if lower_threshold is None or upper_threshold is None:
         raise ValueError("CAL proxy artifact requires explicit lower_threshold and upper_threshold")
     prepared = ctx[prepared_data]; classes = int(prepared.num_classes)
+    train_role = getattr(prepared, "datasets", {}).get("train")
+    train_samples = tuple(getattr(train_role, "samples", ())) if train_role is not None else ()
+    if len(train_samples) != len(getattr(prepared, "train_indices", ())):
+        raise ValueError("CAL proxy artifact requires a train role with observed targets")
+    observed_targets = np.asarray([int(sample.observed_target) for sample in train_samples], dtype=np.int64)
     if bool((ctx.get("_runtime_limits") or {}).get("fixture")):
         indices = np.asarray(prepared.train_indices, dtype=np.int64)
-        targets = np.arange(indices.size, dtype=np.int64) % classes
-        artifact = CALProxyArtifact(indices, targets, np.zeros(indices.size, dtype=np.int8), "fixture", float(lower_threshold), float(upper_threshold))
+        artifact = CALProxyArtifact(indices, observed_targets, np.zeros(indices.size, dtype=np.int8), "fixture", float(lower_threshold), float(upper_threshold))
     else:
         device = next(ctx[model].parameters()).device
         snapshot = collect_posterior_snapshot(ctx[model], ctx[loader], device, dataset=prepared.dataset, split="train")
@@ -917,7 +934,7 @@ def cal_materialize_proxy_artifact(ctx: ScratchContext, model: str = "warmup_mod
     if proxy_prior.sum() <= 0:
         raise ValueError("CAL proxy artifact retained no samples")
     proxy_prior_value = torch.as_tensor(proxy_prior / proxy_prior.sum(), dtype=torch.float32)
-    reference_transition_value = _reference_transition_means(artifact, np.asarray(prepared.train_indices), np.asarray(prepared.noisy_targets) if hasattr(prepared, "noisy_targets") else np.arange(len(prepared.train_indices)) % classes, classes)
+    reference_transition_value = _reference_transition_means(artifact, np.asarray(prepared.train_indices), observed_targets, classes)
     reference_losses_value = torch.zeros(classes, classes, dtype=torch.float32)
     # Publish the artifact and its stable-index tables as independent slots;
     # subsequent recipes consume them through the public indexed state blocks.
@@ -938,9 +955,9 @@ def cal_materialize_proxy_artifact(ctx: ScratchContext, model: str = "warmup_mod
     ctx[retained_state_as] = _table(retained)
 
 
-@block(id="cal_cores2_adjusted_risk", name="CAL: CORES2 Adjusted Risk", category="Loss", description="Compute the Eq. (7) noisy-label risk corrected by the noisy-label prior.", params={"logits":{"type":"slot","default":"logits"},"labels":{"type":"slot","default":"labels"},"noisy_prior":{"type":"slot","default":"cal_noisy_prior"},"confidence_weight":{"type":"slot","default":"confidence_weight"},"save_as":{"type":"slot","default":"cal_adjusted_risk"}}, requires=("logits","labels","noisy_prior","confidence_weight"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式", formula="mean[-log p_y-alpha sum_c pi_tilde_c log p_c]", formula_ref="CAL Eq. (7)", paper="Learning from Noisy Labels with Core-loss and Second-order Risk")
+@block(id="cal_cores2_adjusted_risk", name="CAL: CORES2 Adjusted Risk", category="Loss", description="Compute CAL Eq. (7) with the square-root noisy prior used by the paper's confidence regularizer.", params={"logits":{"type":"slot","default":"logits"},"labels":{"type":"slot","default":"labels"},"noisy_prior":{"type":"slot","default":"cal_noisy_prior"},"confidence_weight":{"type":"slot","default":"confidence_weight"},"save_as":{"type":"slot","default":"cal_adjusted_risk"}}, requires=("logits","labels","noisy_prior","confidence_weight"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式", formula="mean[-log p_y-alpha sum_c sqrt(pi_c)/sum_j sqrt(pi_j) log p_c]", formula_ref="CAL Eq. (7)", paper="Learning from Noisy Labels with Core-loss and Second-order Risk")
 def cal_cores2_adjusted_risk(ctx: ScratchContext, logits: str="logits", labels: str="labels", noisy_prior: str="cal_noisy_prior", confidence_weight: str="confidence_weight", save_as: str="cal_adjusted_risk") -> None:
-    torch,F=_torch(); probability=F.softmax(ctx[logits],dim=1); observed=-torch.log(probability+1.0e-8).gather(1,ctx[labels].long()[:,None]).squeeze(1); all_losses=-torch.log(probability+1.0e-5); prior=ctx[noisy_prior].to(all_losses); prior=prior/prior.sum().clamp_min(torch.finfo(all_losses.dtype).tiny); ctx[save_as]=(observed-float(ctx[confidence_weight])*(all_losses*prior).sum(1)).mean()
+    torch,F=_torch(); probability=F.softmax(ctx[logits],dim=1); observed=-torch.log(probability+1.0e-8).gather(1,ctx[labels].long()[:,None]).squeeze(1); all_losses=-torch.log(probability+1.0e-5); prior=ctx[noisy_prior].to(all_losses).clamp_min(0).sqrt(); prior=prior/prior.sum().clamp_min(torch.finfo(all_losses.dtype).tiny); ctx[save_as]=(observed-float(ctx[confidence_weight])*(all_losses*prior).sum(1)).mean()
 
 
 @block(id="cal_covariance_correction", name="CAL: Covariance Correction", category="Loss", description="Compute the Eq. (8)-(9) retained-proxy covariance correction from detached reference matrices.", params={"logits":{"type":"slot","default":"logits"},"labels":{"type":"slot","default":"labels"},"proxy_targets":{"type":"slot","default":"cal_proxy_targets"},"retained":{"type":"slot","default":"cal_retained"},"proxy_prior":{"type":"slot","default":"cal_proxy_prior"},"reference_losses":{"type":"slot","default":"cal_reference_losses"},"reference_transition":{"type":"slot","default":"cal_reference_transition"},"save_as":{"type":"slot","default":"cal_covariance"}}, requires=("logits","labels","proxy_targets","retained","proxy_prior","reference_losses","reference_transition"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式", formula="sum_c pi_hat_c Cov(1[y~=j],ell_j | yhat=c)", formula_ref="CAL Eq. (8)-(9)", paper="Learning from Noisy Labels with Core-loss and Second-order Risk")
@@ -1017,7 +1034,7 @@ def mc_ldce_recover_statistic(ctx: ScratchContext, model: str="model", loader: s
     description="Compute CNLCU Eq. (7)'s uncertainty-aware lower-bound score.",
     params={"robust_mean": {"type": "slot", "default": "cnlcu_robust_mean"}, "history_length": {"type": "slot", "default": "cnlcu_history_length"}, "selected_count": {"type": "slot", "default": "history_selected_count"}, "sigma_squared": {"type": "float", "default": 0.01, "min": 0.000001, "max": 0.999999}, "save_as": {"type": "slot", "default": "cnlcu_score"}},
     requires=("robust_mean", "history_length", "selected_count"), provides=("save_as", "cnlcu_bonus"), placement=("batch",), stage="train", ui_group="⑥ 样本选择",
-    formula="score=r-σ(t+σ log(2t)/t²)/(n-σ)", formula_ref="CNLCU Eq. (7)", paper="CNLCU",
+    formula="score=r-σ²(t+σ² log(2t)/t²)/(n-σ²)", formula_ref="CNLCU Eq. (7)", paper="CNLCU",
 )
 def cnlcu_soft_score(ctx: ScratchContext, robust_mean: str = "cnlcu_robust_mean", history_length: str = "cnlcu_history_length", selected_count: str = "history_selected_count", sigma_squared: float = 0.01, save_as: str = "cnlcu_score") -> None:
     from ...native_stats import cnlcu_soft_score as score_fn

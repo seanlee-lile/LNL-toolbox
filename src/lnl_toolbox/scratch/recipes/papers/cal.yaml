@@ -37,7 +37,7 @@ steps:
           - {block: optimizer_step, params: {optimizer: warmup_optimizer}}
       - {block: piecewise_rate_schedule, params: {default: 2.0, milestones: [10, 40, 80], values: [0.0, 2.0, 2.0], epoch_offset: 1, save_as: next_confidence_weight}}
       - {block: scaled_scheduler_step, params: {scheduler: warmup_scheduler, scale_value: next_confidence_weight}}
-  - {block: cal_materialize_proxy_artifact, params: {model: warmup_model, loader: train_eval_loader, prepared_data: prepared_data, noisy_prior: cal_noisy_prior, confidence_weight: confidence_weight, lower_threshold: -8.0, upper_threshold: -8.0, proxy_as: cal_proxy_artifact, proxy_prior_as: cal_proxy_prior, reference_transition_as: cal_reference_transition, reference_losses_as: cal_reference_losses, proxy_targets_state_as: cal_proxy_targets_state, retained_state_as: cal_retained_state}}
+  - {block: cal_materialize_proxy_artifact, params: {model: warmup_model, loader: train_eval_loader, prepared_data: prepared_data, noisy_prior: cal_noisy_prior, confidence_weight: confidence_weight, lower_threshold: -8.3, upper_threshold: -8.3, proxy_as: cal_proxy_artifact, proxy_prior_as: cal_proxy_prior, reference_transition_as: cal_reference_transition, reference_losses_as: cal_reference_losses, proxy_targets_state_as: cal_proxy_targets_state, retained_state_as: cal_retained_state}}
   - {block: create_grouped_accumulator, params: {groups: 10, width: 10, save_as: cal_reference_accumulator}}
   - {block: create_model, params: {model: resnet34, num_classes: 10, base_width: 64, initialization: torch_default, device: device, save_as: model}}
   - {block: create_optimizer, params: {optimizer: sgd, model: model, lr: 0.1, momentum: 0.9, weight_decay: 0.0005, save_as: optimizer}}

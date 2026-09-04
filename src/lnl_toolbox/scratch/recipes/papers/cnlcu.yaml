@@ -54,8 +54,8 @@ steps:
           - {block: indexed_read, params: {state: selected_count_b, indices: indices, save_as: counts_b}}
           - {block: cnlcu_soft_score, params: {robust_mean: robust_a, history_length: length_a, selected_count: counts_a, sigma_squared: 0.01, save_as: score_a}}
           - {block: cnlcu_soft_score, params: {robust_mean: robust_b, history_length: length_b, selected_count: counts_b, sigma_squared: 0.01, save_as: score_b}}
-          - {block: select_lowest_scores, params: {scores: score_a, keep_fraction: remember_rate, stable_sample_indices: indices, rounding: floor, minimum_count: 1, save_as: selected_a}}
-          - {block: select_lowest_scores, params: {scores: score_b, keep_fraction: remember_rate, stable_sample_indices: indices, rounding: floor, minimum_count: 1, save_as: selected_b}}
+          - {block: select_lowest_scores, params: {scores: score_a, keep_fraction: remember_rate, stable_sample_indices: indices, rounding: ceil, minimum_count: 1, save_as: selected_a}}
+          - {block: select_lowest_scores, params: {scores: score_b, keep_fraction: remember_rate, stable_sample_indices: indices, rounding: ceil, minimum_count: 1, save_as: selected_b}}
           - {block: indices_to_mask, params: {indices: selected_a, reference: score_a, save_as: selected_mask_a}}
           - {block: indices_to_mask, params: {indices: selected_b, reference: score_b, save_as: selected_mask_b}}
           - {block: mask_to_indices, params: {mask: selected_mask_a, save_as: selected_rows_a}}
