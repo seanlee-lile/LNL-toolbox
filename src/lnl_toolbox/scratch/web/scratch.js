@@ -23,6 +23,9 @@ const state = {
   paletteCategory: '数据',
   paletteCollapsed: new Set(),
   compositeExpanded: new Set(),
+  dataExecutionView: new Set(),
+  dataBlockMode: 'concepts',
+  dataOverviewSelection: null,
   compositeUngrouped: new Set(),
   deletedStep: null,
   inspectorTab: 'blocks',
@@ -31,7 +34,7 @@ const state = {
   runPollTimer: null,
   runProgress: null,
   runStopping: false,
-  formulaEditor: { steps: [], editingId: null },
+  formulaEditor: { steps: [], editingId: null, paletteExpanded: true },
 };
 const $ = (id) => document.getElementById(id);
 const apiBase = location.pathname.startsWith('/scratch') ? '/api/scratch' : '/api';
@@ -1294,6 +1297,25 @@ function addStepAtTarget(blockId, target) {
   return true;
 }
 
+function addDataConceptAtTarget(group, target) {
+  if (!group || !target) return false;
+  if (getPlacementContext(target.parentId) !== 'top') return false;
+  const inserted = [];
+  for (let offset = 0; offset < group.blocks.length; offset += 1) {
+    const blockId = group.blocks[offset];
+    const info = blockInfo(blockId);
+    const stepTarget = {...target, index: target.index + offset};
+    if (!info || !canInsert(info, stepTarget.parentId, null, stepTarget.index, true)) return false;
+    if (!addStepAtTarget(blockId, stepTarget)) return false;
+    inserted.push(state.selected);
+  }
+  state.dataOverviewSelection = {groupId: group.id, stepIds: inserted.map((step) => step._uiId)};
+  state.selected = inserted[0] || null;
+  state.paletteSelection = null;
+  state.activeInsertionTarget = {...target, index: target.index + group.blocks.length};
+  return Boolean(inserted.length);
+}
+
 function markDropZones() {
   document.querySelectorAll('.drop-target').forEach((zone) => {
     const target = findDropTarget(zone);
@@ -1325,12 +1347,18 @@ function markDropZones() {
 function handleDrop(event, zone) {
   event.preventDefault();
   const target = findDropTarget(zone);
+  const dataGroupId = event.dataTransfer.getData('application/x-lnl-data-group');
   const newBlockId = event.dataTransfer.getData('application/x-lnl-new-block');
   const stepId = event.dataTransfer.getData('application/x-lnl-step');
-  const reason = newBlockId
+  const dataGroup = dataGroupId ? DATA_OVERVIEW_GROUPS.find((group) => group.id === dataGroupId) : null;
+  const reason = dataGroup
+    ? availabilityReason(dataConceptInfo(dataGroup), target)
+    : newBlockId
     ? availabilityReason(blockInfo(newBlockId), target, null, null, true)
     : stepId ? availabilityReason(blockInfo(findStepById(stepId)?.block), target, stepId) : '未识别拖动内容';
-  const success = !reason && (newBlockId ? addStepAtTarget(newBlockId, target) : moveStepToTarget(stepId, target));
+  const success = !reason && (dataGroup
+    ? addDataConceptAtTarget(dataGroup, target)
+    : newBlockId ? addStepAtTarget(newBlockId, target) : moveStepToTarget(stepId, target));
   state.drag = null;
   if (!success) {
     showMessage(`✕ 不能插入到${target.context}层：${reason || '插入失败'}`, 'error');
@@ -1386,7 +1414,8 @@ function renderPalette() {
   const target = state.activeInsertionTarget;
   const categoryMatches = (item) => state.paletteCategory === '全部'
     || (state.paletteCategory === '我的' ? isUserOwnedInfo(item) : uiCategory(item) === state.paletteCategory);
-  const searchable = state.blocks.filter((item) => item.beginner_visible && (!query || [
+  const paletteItems = dataPaletteItems();
+  const searchable = paletteItems.filter((item) => item.beginner_visible && (!query || [
     item.name, item.id, item.category, item.ui_group, item.description,
     ...(item.requires || []), ...(item.provides || []),
   ].join(' ').toLowerCase().includes(query)) && categoryMatches(item));
@@ -1435,11 +1464,19 @@ function renderPalette() {
   });
   const count = $('palette-count');
   if (count) count.textContent = `${visible.length} 个${hiddenByPlacement ? `（隐藏 ${hiddenByPlacement} 个位置不符）` : ''}`;
+  if (state.paletteCategory === '数据') {
+    const modeNote = document.createElement('div');
+    modeNote.className = 'palette-data-mode-note';
+    modeNote.textContent = state.dataBlockMode === 'canonical'
+      ? '当前数据视图：原始 12 个执行积木'
+      : '当前数据视图：5 个合并数据积木（插入后仍展开为原始执行步骤）';
+    palette.appendChild(modeNote);
+  }
 
   if (state.paletteCategory === '我的') {
     const actions = document.createElement('div'); actions.className = 'my-palette-actions';
     [['新建公式', '创建一个 Formula-safe 用户公式', () => { resetFormulaEditor(); $('formula-editor-dialog').showModal(); }],
-      ['我的公式', '编辑或导出已保存公式', showMyFormulas],
+      ['公式模板与我的公式', '打开内置公式模板，或编辑已保存的用户公式', showMyFormulas],
       ['我的组合块', '组合块只在界面中折叠，不会新增运行时 Block', () => showMessage('组合块是 UI 视图；展开或解除组合不会改变 Recipe。')]].forEach(([name, description, action]) => {
       const card = document.createElement('button'); card.type = 'button'; card.className = 'my-palette-card';
       card.innerHTML = `<strong>${name}</strong><small>${description}</small>`; card.onclick = action; actions.appendChild(card);
@@ -1510,6 +1547,7 @@ function renderPalette() {
     palette.appendChild(title);
     if (collapsed) return;
     items.forEach((item) => {
+      const dataGroup = item.dataGroupId ? DATA_OVERVIEW_GROUPS.find((group) => group.id === item.dataGroupId) : null;
       const node = document.createElement('div');
       node.className = 'palette-block';
       node.dataset.category = blockCategory(item);
@@ -1540,10 +1578,12 @@ function renderPalette() {
         paletteDraftFor(item);
         if (!placeable && recommended) {
           revealInsertionTarget(recommended);
-          if (addStepAtTarget(item.id, recommended)) { state.paletteSelection = null; draw(); return; }
+          const inserted = dataGroup ? addDataConceptAtTarget(dataGroup, recommended) : addStepAtTarget(item.id, recommended);
+          if (inserted) { state.paletteSelection = null; draw(); return; }
         }
         if (!placeable) { renderInspector(); renderPalette(); setInspectorTab('blocks'); return; }
-        if (addStepAtTarget(item.id, target)) { state.paletteSelection = null; draw(); }
+        const inserted = dataGroup ? addDataConceptAtTarget(dataGroup, target) : addStepAtTarget(item.id, target);
+        if (inserted) { state.paletteSelection = null; draw(); }
         else showMessage('添加失败：请重新选择一个绿色插入位置', 'error');
       };
       actions.appendChild(add); node.appendChild(actions);
@@ -1553,7 +1593,8 @@ function renderPalette() {
         state.selected = null;
         renderInspector();
         state.drag = { type: 'new', id: item.id, info: item };
-        event.dataTransfer.setData('application/x-lnl-new-block', item.id);
+        if (dataGroup) event.dataTransfer.setData('application/x-lnl-data-group', dataGroup.id);
+        else event.dataTransfer.setData('application/x-lnl-new-block', item.id);
         event.dataTransfer.effectAllowed = 'copy';
         markDropZones();
       };
@@ -1564,6 +1605,7 @@ function renderPalette() {
         // action or a drag from the handle.
         state.paletteSelection = item;
         state.selected = null;
+        state.dataOverviewSelection = null;
         renderInspector();
         renderPalette();
       };
@@ -1685,6 +1727,7 @@ const DISPLAY_FORMULAS = Object.freeze({
   create_dss_state: String.raw`S=(H,M,Z,A,E)\quad\text{(indexed history, marginal, trend, selected, excluded)}`,
   indexed_accumulate: String.raw`S_i\leftarrow S_i+v_i`,
   affine_transform: String.raw`z=\alpha x+\beta`,
+  add: String.raw`z=x+y`,
   clamp_min: String.raw`z=\max(x,c)\quad\text{(elementwise)}`,
   elementwise_multiply: String.raw`z_i=x_i y_i`,
   elementwise_power: String.raw`z_i=x_i^{q}`,
@@ -1923,7 +1966,7 @@ function flatRecipeSteps(steps = state.recipe.steps) {
 
 const COMPOSITE_DEFINITIONS = [
   { id: 'environment', label: '实验环境', icon: '⚙', blocks: ['set_seed', 'select_device'], description: '固定随机性并选择运行设备。' },
-  { id: 'prepare-data', label: '准备数据', icon: '▦', blocks: ['load_dataset', 'inspect_dataset_semantics', 'create_dataset_split', 'select_label_source', 'apply_noise', 'build_noise_manifest', 'configure_preprocessing', 'configure_views', 'assign_data_roles', 'configure_loader', 'build_prepared_data', 'build_loaders'], description: '统一的数据源、划分、噪声、视图、角色和 Loader 链。' },
+  { id: 'prepare-data', label: '数据', icon: '▦', blocks: ['load_dataset', 'inspect_dataset_semantics', 'create_dataset_split', 'select_label_source', 'apply_noise', 'build_noise_manifest', 'configure_preprocessing', 'configure_views', 'assign_data_roles', 'configure_loader', 'build_prepared_data', 'build_loaders'], description: '用五个用户概念配置数据；展开后可查看完整的 Scratch 数据执行步骤。' },
   { id: 'model-optimization', label: '模型与优化', icon: '◈', blocks: ['create_model', 'create_optimizer'], description: '按模型/优化器依赖将连续的单模型或多模型初始化步骤成组展示。' },
   { id: 'training-loop', label: '训练循环', icon: '↻', blocks: ['epoch_loop'], description: 'Epoch / Batch 的 C 形训练容器。' },
   { id: 'prepare-batch', label: '准备 Batch', icon: '▤', blocks: ['get_batch', 'move_batch_to_device'], description: '读取 Batch 并移动到当前设备。' },
@@ -1931,6 +1974,218 @@ const COMPOSITE_DEFINITIONS = [
   { id: 'validate-best', label: '验证并保留最佳', icon: '✓', blocks: ['evaluate_accuracy', 'track_best_model'], description: '评估当前模型并按指标保留最佳状态。' },
   { id: 'final-evaluation', label: '最终评估', icon: '◒', blocks: ['restore_best_model', 'evaluate_accuracy', 'record_metrics'], description: '恢复最佳状态并记录最终测试指标。', optionalPrefix: true },
 ];
+
+// Data remains a single executable composite, but its collapsed presentation
+// follows the concepts a noise-learning researcher actually configures.  The
+// mapping is display-only: the canonical twelve data blocks and their slots
+// remain unchanged underneath.
+const DATA_OVERVIEW_GROUPS = [
+  { id: 'dataset', label: '数据集', icon: '▦', blocks: ['load_dataset', 'inspect_dataset_semantics'], description: '选择训练源和测试源，并确认类别与标签能力。' },
+  { id: 'split', label: '数据划分', icon: '÷', blocks: ['create_dataset_split', 'select_label_source'], description: '决定训练/验证如何划分，以及各角色使用哪种标签。' },
+  { id: 'noise', label: '标签噪声', icon: '≈', blocks: ['apply_noise', 'build_noise_manifest'], description: '设置噪声类型、比例和随机种子；manifest 自动记录样本对应关系。' },
+  { id: 'input', label: '输入与增强', icon: '✣', blocks: ['configure_preprocessing', 'configure_views'], description: '把原始样本变成模型输入，并按需要提供 weak/strong 视图。' },
+  { id: 'batch', label: '训练批次', icon: '▤', blocks: ['assign_data_roles', 'configure_loader', 'build_prepared_data', 'build_loaders'], description: '设置 batch 并把数据交给 train、validation、test 等用途。' },
+];
+const DATA_CANONICAL_BLOCK_IDS = new Set(DATA_OVERVIEW_GROUPS.flatMap((group) => group.blocks));
+const DATA_CONCEPT_PREFIX = 'data-concept:';
+
+function dataConceptInfo(group) {
+  return {
+    id: `${DATA_CONCEPT_PREFIX}${group.id}`,
+    dataGroupId: group.id,
+    name: group.label,
+    category: 'Data',
+    ui_group: '① 数据准备',
+    stage: 'data',
+    kind: 'action',
+    beginner_visible: true,
+    description: group.description,
+    requires: [],
+    provides: [],
+    placement: ['top'],
+    params: {},
+  };
+}
+
+function isDataConceptInfo(info) {
+  return Boolean(info?.dataGroupId && String(info.id || '').startsWith(DATA_CONCEPT_PREFIX));
+}
+
+function dataConceptById(id) {
+  const group = DATA_OVERVIEW_GROUPS.find((item) => `${DATA_CONCEPT_PREFIX}${item.id}` === id);
+  return group ? dataConceptInfo(group) : null;
+}
+
+function dataPaletteItems() {
+  const canonical = state.blocks.filter((item) => !DATA_CANONICAL_BLOCK_IDS.has(item.id));
+  if (state.dataBlockMode === 'canonical') return state.blocks;
+  return [...canonical, ...DATA_OVERVIEW_GROUPS.map(dataConceptInfo)];
+}
+
+function dataOverviewStep(steps, block) {
+  return (steps || []).find((step) => step?.block === block) || null;
+}
+
+function dataOverviewSummary(group, steps) {
+  const first = dataOverviewStep(steps, group.blocks[0]);
+  const find = (block) => dataOverviewStep(steps, block);
+  if (group.id === 'dataset') return `数据集：${first?.params?.dataset || '未选择'}`;
+  if (group.id === 'split') {
+    const split = find('create_dataset_split');
+    const size = split?.params?.validation_size;
+    return `验证集：${size === undefined ? '自动' : size} · 标签按 Recipe 保护`;
+  }
+  if (group.id === 'noise') {
+    const noise = find('apply_noise');
+    const name = noise?.params?.name || 'none';
+    const rate = noise?.params?.rate;
+    return `类型：${name} · 比例：${rate === undefined ? '—' : rate}`;
+  }
+  if (group.id === 'input') {
+    const preprocessing = find('configure_preprocessing');
+    const views = find('configure_views');
+    const viewNames = Array.isArray(views?.params?.views) ? views.params.views.join(' / ') : 'weak';
+    return `预处理：${preprocessing?.params?.preprocessing || 'standard'} · 视图：${viewNames}`;
+  }
+  const loader = find('configure_loader');
+  const roles = find('assign_data_roles');
+  const roleNames = Array.isArray(roles?.params?.roles) ? roles.params.roles.join('、') : 'train / test';
+  return `Batch：${loader?.params?.batch_size || '—'} · 用途：${roleNames}`;
+}
+
+function selectDataOverviewGroup(group, steps) {
+  const members = group.blocks.map((block) => dataOverviewStep(steps, block)).filter(Boolean);
+  if (!members.length) return;
+  state.dataOverviewSelection = {groupId: group.id, stepIds: members.map((step) => step._uiId)};
+  state.selected = members[0];
+  state.paletteSelection = null;
+  state.adjacentSelection = null;
+  draw();
+}
+
+function renderDataConcepts(steps) {
+  const overview = document.createElement('div');
+  overview.className = 'data-concepts';
+  overview.setAttribute('aria-label', '数据设置模块');
+  DATA_OVERVIEW_GROUPS.forEach((group) => {
+    const item = document.createElement('div');
+    const members = group.blocks.map((block) => dataOverviewStep(steps, block)).filter(Boolean);
+    const selected = state.dataOverviewSelection?.groupId === group.id
+      && members.some((step) => state.dataOverviewSelection.stepIds?.includes(step._uiId));
+    item.className = `data-submodule${selected ? ' selected' : ''}`;
+    item.dataset.dataGroup = group.id;
+    item.setAttribute('role', 'button');
+    item.setAttribute('tabindex', '0');
+    item.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    item.title = '点击查看并编辑该数据模块的参数';
+    const heading = document.createElement('div');
+    heading.className = 'data-submodule-heading';
+    const icon = document.createElement('span');
+    icon.className = 'data-submodule-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = group.icon;
+    const title = document.createElement('strong');
+    title.textContent = group.label;
+    heading.append(icon, title);
+    const summary = document.createElement('span');
+    summary.className = 'data-submodule-summary';
+    summary.textContent = dataOverviewSummary(group, steps);
+    const description = document.createElement('small');
+    description.textContent = group.description;
+    const edit = document.createElement('span');
+    edit.className = 'data-submodule-edit';
+    edit.textContent = members.length ? '点击编辑参数 →' : '暂无可编辑步骤';
+    item.append(heading, summary, description, edit);
+    item.onclick = () => selectDataOverviewGroup(group, steps);
+    item.onkeydown = (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        selectDataOverviewGroup(group, steps);
+      }
+    };
+    overview.appendChild(item);
+  });
+  const hint = document.createElement('p');
+  hint.className = 'data-concepts-hint';
+  hint.textContent = '五个模块按执行顺序排列。点击任一模块即可在右侧编辑其中每个实际数据积木的参数；底层 12 步仍保持不变。';
+  overview.appendChild(hint);
+  return overview;
+}
+
+function renderDataOverviewInspector(selection, target, explanationTarget) {
+  const group = DATA_OVERVIEW_GROUPS.find((item) => item.id === selection?.groupId);
+  if (!group) return false;
+  const members = (selection.stepIds || []).map((id) => findStepById(id)).filter(Boolean);
+  if (!members.length) return false;
+  const title = document.createElement('strong');
+  title.textContent = group.label;
+  const description = document.createElement('p');
+  description.textContent = `${group.description} 下面的参数直接写回对应的 Scratch 数据积木。`;
+  explanationTarget.append(title, description);
+  members.forEach((step) => {
+    const info = blockInfo(step.block);
+    if (!info) return;
+    const section = document.createElement('section');
+    section.className = 'inspector-section data-overview-inspector-section';
+    const heading = document.createElement('h3');
+    heading.textContent = info.name || step.block;
+    section.appendChild(heading);
+    const detail = document.createElement('p');
+    detail.className = 'data-overview-step-description';
+    detail.textContent = info.description || '';
+    section.appendChild(detail);
+    Object.entries(info.params || {}).forEach(([name, schema]) => {
+      if (isDatasetSourceInfo(info) && name === 'path' && step.params?.source_mode !== 'custom_path') return;
+      const wrap = document.createElement('div');
+      wrap.className = 'param';
+      const label = document.createElement('label');
+      label.textContent = isDatasetSourceInfo(info) && name === 'dataset' ? 'dataset（必选）' : name;
+      wrap.append(label, renderParamControl(name, schema, step));
+      section.appendChild(wrap);
+    });
+    target.appendChild(section);
+    if (isDatasetSourceInfo(info)) target.appendChild(renderDatasetFacts(step));
+    if ((info.provides || []).some((name) => name === 'noise_state' || name === 'noisy_train_split')) {
+      target.appendChild(renderNoiseFacts(step));
+    }
+  });
+  return true;
+}
+
+function renderDataAdvancedSummary(steps) {
+  const details = document.createElement('details');
+  details.className = 'data-advanced-settings';
+  const summary = document.createElement('summary');
+  summary.textContent = '高级数据设置';
+  details.appendChild(summary);
+  const body = document.createElement('div');
+  body.className = 'data-advanced-body';
+  const label = dataOverviewStep(steps, 'select_label_source');
+  const roles = dataOverviewStep(steps, 'assign_data_roles');
+  const views = dataOverviewStep(steps, 'configure_views');
+  const loader = dataOverviewStep(steps, 'configure_loader');
+  const rows = [
+    ['标签使用', `训练：${label?.params?.train || 'observed'} · 验证：${label?.params?.validation || 'clean'} · 测试：${label?.params?.test || 'clean'}`],
+    ['数据用途', Array.isArray(roles?.params?.roles) ? roles.params.roles.join('、') : 'train、test'],
+    ['视图', Array.isArray(views?.params?.views) ? views.params.views.join('、') : 'weak'],
+    ['Loader 细节', `workers：${loader?.params?.num_workers ?? 'auto'} · drop_last：${loader?.params?.drop_last ? '是' : '否'}`],
+  ];
+  rows.forEach(([name, value]) => {
+    const row = document.createElement('div');
+    row.className = 'data-advanced-row';
+    const label = document.createElement('strong');
+    label.textContent = name;
+    const content = document.createElement('span');
+    content.textContent = value;
+    row.append(label, content);
+    body.appendChild(row);
+  });
+  const hint = document.createElement('p');
+  hint.textContent = '这些选项影响实验语义或防止标签泄漏；论文模板可由 Recipe 自动锁定。需要修改时，请展开实际执行步骤后编辑对应积木。';
+  body.appendChild(hint);
+  details.appendChild(body);
+  return details;
+}
 
 const MODEL_OPTIMIZATION_BLOCKS = new Set(['create_model', 'create_optimizer', 'create_parameter_group_optimizer']);
 
@@ -2150,6 +2405,7 @@ function renderStepNode(step, index, steps, parent, parentId, context, options =
   node.onclick = (event) => {
     if (event.target.closest('button, input, select, textarea, .drag-handle')) return;
     event.stopPropagation();
+    state.dataOverviewSelection = null;
     state.selected = step;
     state.paletteSelection = null;
     state.activeInsertionTarget = {parentId, index: index + 1, context: getPlacementContext(parentId), compositeId: step._uiComposite?.id || null};
@@ -2225,6 +2481,7 @@ function renderAdjacentPair(pair, index, steps, parent, parentId, context) {
   const header = document.createElement('div'); header.className = 'step-header';
   const title = document.createElement('strong'); title.className = 'step-title'; title.textContent = pair.name;
   const inspect = () => {
+    state.dataOverviewSelection = null;
     state.selected = first;
     state.adjacentSelection = pair;
     state.paletteSelection = null;
@@ -2277,6 +2534,8 @@ function renderPairInspector(pair, target, explanationTarget) {
 
 function createCompositeShell(range, steps, parentId, context, key) {
   const definition = range.definition;
+  const isDataComposite = definition.id === 'prepare-data';
+  const showingDataSteps = isDataComposite && state.dataBlockMode === 'canonical';
   const shell = document.createElement('section'); shell.className = 'composite-block'; shell.dataset.compositeId = definition.id; shell.dataset.uiCategory = uiCategory({category: definition.id});
   const accent = {environment: '#f59e0b', 'prepare-data': '#38bdf8', 'model-optimization': '#a78bfa', 'training-loop': '#f59e0b', 'prepare-batch': '#38bdf8', 'update-model': '#facc15', 'validate-best': '#c4b5fd', 'final-evaluation': '#2dd4bf'}[definition.id] || '#38bdf8';
   shell.style.setProperty('--composite-accent', accent);
@@ -2289,17 +2548,56 @@ function createCompositeShell(range, steps, parentId, context, key) {
     appendEpochAdvancedOptions(title, steps[range.start]);
   }
   const actions = document.createElement('div'); actions.className = 'composite-actions';
-  const toggle = document.createElement('button'); toggle.type = 'button'; toggle.textContent = state.compositeExpanded.has(key) ? '收起' : '展开';
+  const toggle = document.createElement('button'); toggle.type = 'button';
+  toggle.textContent = state.compositeExpanded.has(key) ? '收起' : '展开';
   toggle.onclick = (event) => { event.stopPropagation(); if (state.compositeExpanded.has(key)) state.compositeExpanded.delete(key); else state.compositeExpanded.add(key); draw(); };
   const ungroup = document.createElement('button'); ungroup.type = 'button'; ungroup.textContent = '解除组合';
   ungroup.onclick = (event) => { event.stopPropagation(); state.compositeUngrouped.add(key); draw(); };
-  actions.append(toggle, ungroup); header.append(title, actions); shell.appendChild(header);
+  actions.append(toggle);
+  if (isDataComposite && state.compositeExpanded.has(key)) {
+    const switchView = document.createElement('button');
+    switchView.type = 'button';
+    switchView.textContent = showingDataSteps ? '返回 5 个数据模块' : '查看原始 12 步';
+    switchView.title = showingDataSteps ? '返回数据区的用户概念视图' : '切换到可编辑的底层数据积木';
+    switchView.onclick = (event) => {
+      event.stopPropagation();
+      if (showingDataSteps) {
+        state.dataBlockMode = 'concepts';
+        state.dataExecutionView.delete(key);
+      } else {
+        state.dataBlockMode = 'canonical';
+        state.dataExecutionView.add(key);
+      }
+      state.dataOverviewSelection = null;
+      state.paletteSelection = null;
+      draw();
+    };
+    actions.appendChild(switchView);
+  }
+  actions.appendChild(ungroup); header.append(title, actions); shell.appendChild(header);
+  if (isDataComposite && state.compositeExpanded.has(key) && !showingDataSteps) {
+    const dataSteps = steps.slice(range.start, range.end);
+    shell.appendChild(renderDataConcepts(dataSteps));
+    shell.appendChild(renderDataAdvancedSummary(dataSteps));
+  }
   const hint = document.createElement('p'); hint.className = 'composite-hint'; hint.textContent = definition.description; shell.appendChild(hint);
-  if (state.compositeExpanded.has(key)) {
+  if (state.compositeExpanded.has(key) && (!isDataComposite || showingDataSteps)) {
     const body = document.createElement('div'); body.className = 'composite-body';
+    if (isDataComposite && showingDataSteps) {
+      const heading = document.createElement('div');
+      heading.className = 'data-execution-heading';
+      heading.innerHTML = '<strong>实际执行步骤</strong><span>以下仍是原来的 Scratch 数据积木，顺序和插口不变。</span>';
+      body.appendChild(heading);
+    }
     for (let index = range.start; index < range.end; index += 1) {
       body.appendChild(createDropZone(parentId, index, context, range.groupId));
-      const pair = index + 1 < range.end ? adjacentPairAt(steps, index) : null;
+      // The canonical data view is intentionally lossless: do not collapse
+      // the first two data operations into the generic adjacent-pair card.
+      // Users who chose “原始 12 步” must see and edit every operation as an
+      // independent Scratch block.
+      const pair = isDataComposite && showingDataSteps
+        ? null
+        : index + 1 < range.end ? adjacentPairAt(steps, index) : null;
       if (pair) { renderAdjacentPair(pair, index, steps, body, parentId, context); index += 1; }
       else renderStepNode(steps[index], index, steps, body, parentId, context, {suppressEpochAdvanced: true});
     }
@@ -2334,6 +2632,11 @@ function renderInspector() {
   const explanationTarget = $('module-explanation');
   target.innerHTML = '';
   explanationTarget.innerHTML = '';
+  if (state.dataOverviewSelection
+    && state.selected?._uiId
+    && state.dataOverviewSelection.stepIds?.includes(state.selected._uiId)
+    && renderDataOverviewInspector(state.dataOverviewSelection, target, explanationTarget)) return;
+  state.dataOverviewSelection = null;
   const pairLocation = state.selected ? findParentArrayAndIndex(state.selected._uiId) : null;
   const pair = pairLocation ? adjacentPairAt(pairLocation.array, pairLocation.index) : null;
   if (pair && state.adjacentSelection?.members[0] === state.selected) {
@@ -2353,6 +2656,29 @@ function renderInspector() {
   }
   const info = paletteInfo || blockInfo(step.block);
   if (!info) { explanationTarget.textContent = '暂无模块说明'; target.textContent = '无法加载该积木参数'; return; }
+  if (isDataConceptInfo(info)) {
+    const group = DATA_OVERVIEW_GROUPS.find((item) => item.id === info.dataGroupId);
+    const existing = group
+      ? group.blocks.map((block) => flatRecipeSteps().find((candidate) => candidate.block === block)).filter(Boolean)
+      : [];
+    if (group && existing.length === group.blocks.length) {
+      renderDataOverviewInspector({groupId: group.id, stepIds: existing.map((candidate) => candidate._uiId)}, target, explanationTarget);
+    } else {
+      const identity = document.createElement('div');
+      const name = document.createElement('strong'); name.textContent = info.name;
+      const description = document.createElement('p'); description.textContent = `${info.description} 添加后会展开为对应的底层数据积木，并可逐项编辑参数。`;
+      identity.append(name, description);
+      explanationTarget.appendChild(identity);
+      const section = document.createElement('section'); section.className = 'inspector-section';
+      const heading = document.createElement('h3'); heading.textContent = '包含的执行步骤'; section.appendChild(heading);
+      (group?.blocks || []).forEach((block) => {
+        const canonical = blockInfo(block);
+        if (canonical) section.appendChild(Object.assign(document.createElement('p'), {textContent: `• ${canonical.name}`}));
+      });
+      target.appendChild(section);
+    }
+    return;
+  }
   if (state.errorMessage) {
     const error = document.createElement('div'); error.className = 'inspector-error';
     const reason = document.createElement('strong'); reason.textContent = '⚠ ' + state.errorMessage; error.appendChild(reason);
@@ -2642,6 +2968,132 @@ function parseEditorParameters() {
   return result;
 }
 
+function formulaParameterRows() {
+  const rows = [];
+  String($('formula-parameters')?.value || '').split(/\n/).map((item) => item.trim()).filter(Boolean).forEach((line) => {
+    const match = line.match(/^([A-Za-z][A-Za-z0-9_]*)\s*(?::\s*([A-Za-z]+))?\s*=\s*(.+)$/);
+    if (match) rows.push({name: match[1], type: match[2] || 'float', raw: match[3].trim()});
+  });
+  return rows;
+}
+
+function updateFormulaParameterText() {
+  const field = $('formula-parameters');
+  const rows = $('formula-parameter-fields')?.querySelectorAll('[data-formula-parameter-row]') || [];
+  if (!field || !rows.length) return;
+  const lines = [];
+  rows.forEach((row) => {
+    const name = row.querySelector('[data-formula-parameter-name]')?.value.trim() || '';
+    const type = row.querySelector('[data-formula-parameter-type]')?.value || 'float';
+    const value = row.querySelector('[data-formula-parameter-default]')?.value ?? '';
+    if (name) lines.push(`${name}:${type}=${value}`);
+  });
+  field.value = lines.join('\n');
+  renderFormulaEditorBindingFields();
+  renderFormulaEditorStepParameterFields();
+  renderFormulaCanvas();
+}
+
+function renderFormulaParameterFields() {
+  const container = $('formula-parameter-fields');
+  if (!container) return;
+  container.replaceChildren();
+  const rows = formulaParameterRows();
+  if (!rows.length) {
+    const empty = document.createElement('div'); empty.className = 'formula-parameter-empty'; empty.textContent = '暂无参数；点击“＋ 添加参数”创建一个。'; container.appendChild(empty); return;
+  }
+  rows.forEach((item) => {
+    const row = document.createElement('div'); row.className = 'formula-parameter-row'; row.dataset.formulaParameterRow = '1';
+    const nameLabel = document.createElement('label'); nameLabel.textContent = '名称';
+    const name = document.createElement('input'); name.value = item.name; name.dataset.formulaParameterName = '1'; name.placeholder = 'q'; name.autocomplete = 'off'; nameLabel.appendChild(name);
+    const valueLabel = document.createElement('label'); valueLabel.textContent = '默认值';
+    const value = document.createElement('input'); value.value = item.raw; value.dataset.formulaParameterDefault = '1'; value.placeholder = '0.7'; value.autocomplete = 'off'; valueLabel.appendChild(value);
+    const typeLabel = document.createElement('label'); typeLabel.textContent = '类型';
+    const type = document.createElement('select'); type.dataset.formulaParameterType = '1';
+    [['float', '小数'], ['int', '整数'], ['bool', '开关'], ['value', 'JSON 值']].forEach(([key, label]) => { const option = document.createElement('option'); option.value = key; option.textContent = label; type.appendChild(option); });
+    type.value = ['float', 'int', 'bool', 'value'].includes(item.type) ? item.type : 'float'; typeLabel.appendChild(type);
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'secondary-button'; remove.textContent = '删除'; remove.title = `删除参数 ${item.name}`;
+    remove.onclick = () => { row.remove(); updateFormulaParameterText(); if (!container.querySelector('[data-formula-parameter-row]')) renderFormulaParameterFields(); };
+    [name, value, type].forEach((fieldInput) => { fieldInput.oninput = updateFormulaParameterText; fieldInput.onchange = updateFormulaParameterText; });
+    row.append(nameLabel, valueLabel, typeLabel, remove); container.appendChild(row);
+  });
+}
+
+function addFormulaEditorParameter() {
+  const field = $('formula-parameters');
+  if (!field) return;
+  const existing = formulaParameterRows().map((item) => item.name);
+  let index = existing.length + 1;
+  let name = `parameter_${index}`;
+  while (existing.includes(name)) { index += 1; name = `parameter_${index}`; }
+  field.value = [...String(field.value || '').split(/\n/).map((item) => item.trim()).filter(Boolean), `${name}:float=0`].join('\n');
+  renderFormulaParameterFields();
+  const inputs = $('formula-parameter-fields')?.querySelectorAll('[data-formula-parameter-name]') || [];
+  const input = inputs[inputs.length - 1];
+  if (input) { input.focus(); input.select(); }
+}
+
+function renderFormulaCanvas() {
+  const canvas = $('formula-canvas');
+  if (!canvas) return;
+  canvas.replaceChildren();
+  if (!state.formulaEditor.steps.length) {
+    canvas.textContent = '公式画布：尚未添加步骤';
+    return;
+  }
+  const heading = document.createElement('div'); heading.className = 'formula-canvas-heading'; heading.textContent = `${$('formula-output-name')?.value.trim() || '输出'} =`;
+  canvas.appendChild(heading);
+  const expression = document.createElement('code'); expression.className = 'formula-canvas-expression'; expression.textContent = renderNestedFormulaPreview(state.formulaEditor.steps); canvas.appendChild(expression);
+}
+
+function formulaEquationSources() {
+  const sources = parseEditorInputs();
+  sources.push(...state.formulaEditor.steps.map((step) => step.id));
+  return [...new Set(sources)];
+}
+
+function renderFormulaEquationBuilder() {
+  const left = $('formula-equation-left');
+  const right = $('formula-equation-right');
+  if (!left || !right) return;
+  const sources = formulaEquationSources();
+  const previousLeft = left.value;
+  const previousRight = right.value;
+  [left, right].forEach((select) => {
+    select.replaceChildren();
+    sources.forEach((source) => { const option = document.createElement('option'); option.value = source; option.textContent = source; select.appendChild(option); });
+  });
+  if (sources.includes(previousLeft)) left.value = previousLeft;
+  if (sources.includes(previousRight)) right.value = previousRight;
+  if (!left.value && sources.length) left.value = sources[0];
+  if (!right.value && sources.length > 1) right.value = sources[1];
+  const apply = $('formula-apply-equation');
+  if (apply) apply.disabled = sources.length < 2;
+}
+
+function addFormulaEquation() {
+  const left = $('formula-equation-left')?.value || '';
+  const right = $('formula-equation-right')?.value || '';
+  const block = $('formula-equation-operator')?.value || 'add';
+  const outputName = $('formula-output-name')?.value.trim() || 'loss';
+  const validation = $('formula-editor-validation');
+  if (!left || !right) { if (validation) validation.textContent = '请先定义至少两个输入变量，再组合等式'; return; }
+  const base = outputName.replace(/[^A-Za-z0-9_]/g, '_').replace(/^[^A-Za-z]+/, '') || 'sum';
+  let id = base;
+  let suffix = 2;
+  while (state.formulaEditor.steps.some((step) => step.id === id)) id = `${base}_${suffix++}`;
+  const bindings = block === 'safe_divide'
+    ? {numerator: left, denominator: right}
+    : {left, right};
+  state.formulaEditor.steps.push({id, block, bindings, parameters: {}});
+  renderFormulaEditor();
+  const output = $('formula-output-source');
+  if (output) output.value = id;
+  renderFormulaCanvas();
+  const operator = {add: '＋', subtract: '−', elementwise_multiply: '×', safe_divide: '÷'}[block] || '运算';
+  if (validation) validation.textContent = `已添加等式：${outputName} = ${left} ${operator} ${right}`;
+}
+
 function formulaEditorSources() {
   const sources = [...parseEditorInputs()];
   try { sources.push(...Object.keys(parseEditorParameters())); } catch (error) { /* save reports the format error */ }
@@ -2747,14 +3199,32 @@ function renderFormulaEditor() {
   const editorPalette = $('formula-editor-palette');
   if (editorPalette) {
     editorPalette.innerHTML = '';
+    const disclosure = document.createElement('details');
+    disclosure.className = 'formula-palette-disclosure';
+    disclosure.open = state.formulaEditor.paletteExpanded !== false;
+    disclosure.addEventListener('toggle', () => { state.formulaEditor.paletteExpanded = disclosure.open; });
+    const summary = document.createElement('summary');
+    summary.textContent = `全部公式（${candidates.length}）`;
+    summary.title = '展开或收起全部 Formula-safe 运算';
+    const body = document.createElement('div');
+    body.className = 'formula-palette-body';
     candidates.forEach((info) => {
-      const button = document.createElement('button'); button.type = 'button'; button.className = 'formula-palette-block';
-      const name = document.createElement('strong'); name.textContent = info.name; button.appendChild(name);
-      const formula = document.createElement('div'); formula.className = 'formula-palette-formula'; renderMathFormula(formula, formulaDisplayText(info) || '无独立公式', {compact: true}); button.appendChild(formula);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'formula-palette-block';
+      const name = document.createElement('strong');
+      name.textContent = info.name;
+      button.appendChild(name);
+      const formula = document.createElement('div');
+      formula.className = 'formula-palette-formula';
+      renderMathFormula(formula, formulaDisplayText(info) || '无独立公式', {compact: true});
+      button.appendChild(formula);
       button.title = info.description || info.id;
       button.onclick = () => { select.value = info.id; renderFormulaEditor(); };
-      editorPalette.appendChild(button);
+      body.appendChild(button);
     });
+    disclosure.append(summary, body);
+    editorPalette.appendChild(disclosure);
   }
   const list = $('formula-editor-step-list'); list.innerHTML = '';
   state.formulaEditor.steps.forEach((step, index) => {
@@ -2790,10 +3260,13 @@ function renderFormulaEditor() {
     expression.appendChild(Object.assign(document.createElement('code'), {textContent: renderNestedFormulaPreview(state.formulaEditor.steps)}));
     preview.appendChild(expression);
   }
+  renderFormulaParameterFields();
+  renderFormulaEquationBuilder();
+  renderFormulaCanvas();
 }
 
 function resetFormulaEditor() {
-  state.formulaEditor.steps = []; state.formulaEditor.editingId = null;
+  state.formulaEditor.steps = []; state.formulaEditor.editingId = null; state.formulaEditor.paletteExpanded = true;
   $('formula-id').value = 'user/my_formula'; $('formula-name').value = 'My Formula'; $('formula-description').value = '';
   $('formula-inputs').value = 'logits\ntargets'; $('formula-parameters').value = 'epsilon:float=1e-8'; $('formula-output-name').value = 'loss';
   $('formula-editor-step-id').value = '';
@@ -2815,11 +3288,36 @@ function loadFormulaIntoEditor(item) {
   $('formula-editor-dialog').showModal();
 }
 
+function openBuiltinFormulaCopy(item, formulas = []) {
+  const used = new Set(formulas.map((formula) => formula.id));
+  const base = String(item.id || 'formula').replace(/^builtin\//, '').replace(/[^A-Za-z0-9_]/g, '_') || 'formula';
+  let id = `user/${base}`;
+  let suffix = 2;
+  while (used.has(id)) id = `user/${base}_${suffix++}`;
+  const copy = JSON.parse(JSON.stringify(item));
+  copy.id = id;
+  copy.name = `${item.name || base}（我的副本）`;
+  delete copy.formula_hash;
+  delete copy.block_id;
+  loadFormulaIntoEditor(copy);
+  state.formulaEditor.editingId = null;
+  $('formula-editor-validation').textContent = `已复制为 ${id}；保存后写入“我的公式”`;
+}
+
 function addFormulaEditorStep() {
   const block = $('formula-editor-block').value;
   const info = blockInfo(block);
-  const id = $('formula-editor-step-id').value.trim();
-  if (!info || !id) { $('formula-editor-validation').textContent = '步骤需要选择公共 Formula-safe Block 并填写唯一 step id'; return; }
+  const validation = $('formula-editor-validation');
+  if (!info) { validation.textContent = '请先选择一个公共 Formula-safe Block'; return; }
+  const idInput = $('formula-editor-step-id');
+  let id = idInput.value.trim();
+  if (!id) {
+    const base = String(block || 'step').replace(/[^A-Za-z0-9_]/g, '_').replace(/^[^A-Za-z]+/, '') || 'step';
+    id = base;
+    let suffix = 2;
+    while (state.formulaEditor.steps.some((step) => step.id === id)) id = `${base}_${suffix++}`;
+    idInput.value = id;
+  }
   if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(id) || state.formulaEditor.steps.some((step) => step.id === id)) { $('formula-editor-validation').textContent = 'step id 必须唯一且为字母/数字/下划线'; return; }
   const bindings = {};
   $('formula-editor-binding-fields').querySelectorAll('[data-formula-binding]').forEach((input) => {
@@ -2833,7 +3331,7 @@ function addFormulaEditorStep() {
   } catch (error) { $('formula-editor-validation').textContent = error.message; return; }
   state.formulaEditor.steps.push({ id, block, bindings, parameters });
   $('formula-editor-step-id').value = '';
-  $('formula-editor-validation').textContent = '';
+  validation.textContent = `已添加步骤：${id}`;
   renderFormulaEditor();
 }
 
@@ -2865,18 +3363,25 @@ async function showMyFormulas() {
     state.blocks = await api('/api/blocks');
     renderPalette();
     const list = $('formula-list'); list.innerHTML = '';
-    formulas.filter((item) => item.id.startsWith('user/')).forEach((item) => {
-      const row = document.createElement('div'); row.className = 'formula-list-item';
-      const text = document.createElement('span'); text.innerHTML = `<strong>${item.name}</strong><small>${item.id} · ${item.formula_hash.slice(0, 12)}</small>`;
+    formulas.forEach((item) => {
+      const builtin = item.id.startsWith('builtin/');
+      const row = document.createElement('div'); row.className = `formula-list-item${builtin ? ' builtin-formula-item' : ''}`;
+      const text = document.createElement('span'); text.innerHTML = `<strong>${item.name}</strong><small>${builtin ? '内置模板' : '我的公式'} · ${item.id} · ${(item.formula_hash || '').slice(0, 12)}</small>`;
       const actions = document.createElement('span');
-      const editButton = document.createElement('button'); editButton.textContent = '编辑'; editButton.onclick = () => loadFormulaIntoEditor(item);
-      const copyButton = document.createElement('button'); copyButton.textContent = '复制'; copyButton.onclick = async () => { const copy = {...item, id: item.id + '_copy', name: `${item.name} Copy`}; delete copy.formula_hash; delete copy.block_id; await api('/api/formulas', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({formula: copy}) }); await refreshBlocksAfterFormulaChange(); showMyFormulas(); };
-      const renameButton = document.createElement('button'); renameButton.textContent = '重命名'; renameButton.onclick = async () => { const next = window.prompt('新的 Formula ID（user/xxx）', item.id); if (!next || next === item.id) return; await api('/api/formula/rename', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({old_id: item.id, new_id: next}) }); await refreshBlocksAfterFormulaChange(); showMyFormulas(); };
-      const exportButton = document.createElement('button'); exportButton.textContent = '导出'; exportButton.onclick = async () => { const value = await api('/api/formula/' + encodeURIComponent(item.id) + '/export'); const blob = new Blob([value], {type: 'text/yaml'}); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = item.id.split('/').pop() + '.yaml'; link.click(); URL.revokeObjectURL(link.href); };
-      const deleteButton = document.createElement('button'); deleteButton.textContent = '删除'; deleteButton.onclick = async () => { if (!window.confirm(`删除 ${item.name}？`)) return; await api('/api/formula/delete', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: item.id}) }); await refreshBlocksAfterFormulaChange(); showMyFormulas(); };
-      actions.append(editButton, copyButton, renameButton, exportButton, deleteButton); row.append(text, actions); list.appendChild(row);
+      if (builtin) {
+        const useButton = document.createElement('button'); useButton.textContent = '使用此模板'; useButton.title = '复制为 user/ 公式后打开编辑器'; useButton.onclick = () => openBuiltinFormulaCopy(item, formulas);
+        actions.appendChild(useButton);
+      } else {
+        const editButton = document.createElement('button'); editButton.textContent = '编辑'; editButton.onclick = () => loadFormulaIntoEditor(item);
+        const copyButton = document.createElement('button'); copyButton.textContent = '复制'; copyButton.onclick = async () => { const copy = {...item, id: item.id + '_copy', name: `${item.name} Copy`}; delete copy.formula_hash; delete copy.block_id; await api('/api/formulas', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({formula: copy}) }); await refreshBlocksAfterFormulaChange(); showMyFormulas(); };
+        const renameButton = document.createElement('button'); renameButton.textContent = '重命名'; renameButton.onclick = async () => { const next = window.prompt('新的 Formula ID（user/xxx）', item.id); if (!next || next === item.id) return; await api('/api/formula/rename', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({old_id: item.id, new_id: next}) }); await refreshBlocksAfterFormulaChange(); showMyFormulas(); };
+        const exportButton = document.createElement('button'); exportButton.textContent = '导出'; exportButton.onclick = async () => { const value = await api('/api/formula/' + encodeURIComponent(item.id) + '/export'); const blob = new Blob([value], {type: 'text/yaml'}); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = item.id.split('/').pop() + '.yaml'; link.click(); URL.revokeObjectURL(link.href); };
+        const deleteButton = document.createElement('button'); deleteButton.textContent = '删除'; deleteButton.onclick = async () => { if (!window.confirm(`删除 ${item.name}？`)) return; await api('/api/formula/delete', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: item.id}) }); await refreshBlocksAfterFormulaChange(); showMyFormulas(); };
+        actions.append(editButton, copyButton, renameButton, exportButton, deleteButton);
+      }
+      row.append(text, actions); list.appendChild(row);
     });
-    if (!list.children.length) list.textContent = '暂无用户公式；点击“新建公式”创建。';
+    if (!list.children.length) list.textContent = '暂无公式模板；点击“新建公式”创建。';
     $('formula-list-dialog').showModal();
   } catch (error) { showError(error); }
 }
@@ -2956,7 +3461,7 @@ function blankRecipe() { return {schema_version: 1, name: '空白 Scratch 算法
 function applySkeleton(kind) {
   resetRunTracking();
   state.recipe = kind === 'single' ? singleSkeletonRecipe() : kind === 'dual' ? dualSkeletonRecipe() : blankRecipe();
-  ensureUiIds(state.recipe.steps); state.selected = null; state.paletteSelection = null; state.deletedStep = null; state.lastRun = null; state.validated = false; state.errorStepId = null; state.errorMessage = ''; state.errorPayload = null; state.errorGuide = null; state.activeInsertionTarget = defaultInsertionTarget(); state.compositeExpanded.clear(); state.compositeUngrouped.clear();
+  ensureUiIds(state.recipe.steps); state.selected = null; state.paletteSelection = null; state.dataOverviewSelection = null; state.dataBlockMode = 'concepts'; state.deletedStep = null; state.lastRun = null; state.validated = false; state.errorStepId = null; state.errorMessage = ''; state.errorPayload = null; state.errorGuide = null; state.activeInsertionTarget = defaultInsertionTarget(); state.compositeExpanded.clear(); state.dataExecutionView.clear(); state.compositeUngrouped.clear();
   const menu = $('new-menu'); if (menu) menu.hidden = true; const newButton = $('new'); if (newButton) newButton.setAttribute('aria-expanded', 'false');
   draw();
 }
@@ -2964,7 +3469,7 @@ function applySkeleton(kind) {
 function renderRecipeList(names) {
   const list = $('recipe-list'); if (!list) return; list.innerHTML = '';
   if (!names.length) { list.textContent = '暂无已保存 Recipe'; return; }
-  names.forEach((name) => { const row = document.createElement('button'); row.type = 'button'; row.className = 'recipe-list-row'; row.textContent = name; row.onclick = async () => { try { resetRunTracking(); state.recipe = await api('/api/recipe/' + encodeURIComponent(name)); ensureUiIds(state.recipe.steps); state.selected = null; state.paletteSelection = null; state.deletedStep = null; state.validated = false; state.lastRun = null; state.errorMessage = ''; state.errorPayload = null; state.errorGuide = null; state.errorStepId = null; $('recipe-dialog').close(); draw(); } catch (error) { showError(error); } }; list.appendChild(row); });
+  names.forEach((name) => { const row = document.createElement('button'); row.type = 'button'; row.className = 'recipe-list-row'; row.textContent = name; row.onclick = async () => { try { resetRunTracking(); state.recipe = await api('/api/recipe/' + encodeURIComponent(name)); ensureUiIds(state.recipe.steps); state.selected = null; state.paletteSelection = null; state.dataOverviewSelection = null; state.dataBlockMode = 'concepts'; state.deletedStep = null; state.validated = false; state.lastRun = null; state.errorMessage = ''; state.errorPayload = null; state.errorGuide = null; state.errorStepId = null; state.dataExecutionView.clear(); $('recipe-dialog').close(); draw(); } catch (error) { showError(error); } }; list.appendChild(row); });
 }
 
 async function loadDefaultRecipe() {
@@ -2972,6 +3477,8 @@ async function loadDefaultRecipe() {
   state.recipe = await api('/api/default-recipe');
   ensureUiIds(state.recipe.steps);
   state.selected = null;
+  state.dataOverviewSelection = null;
+  state.dataBlockMode = 'concepts';
   state.paletteSelection = null;
   state.deletedStep = null;
   state.lastRun = null;
@@ -2979,6 +3486,7 @@ async function loadDefaultRecipe() {
   state.errorMessage = '';
   state.errorPayload = null;
   state.errorGuide = null;
+  state.dataExecutionView.clear();
   state.errorStepId = null;
   state.activeInsertionTarget = defaultInsertionTarget();
   draw();
@@ -3091,12 +3599,15 @@ async function openTemplate(item) {
     ensureUiIds(state.recipe.steps);
     state.selected = null;
     state.paletteSelection = null;
+    state.dataOverviewSelection = null;
+    state.dataBlockMode = 'concepts';
     state.deletedStep = null;
     state.lastRun = null;
     state.validated = false;
     state.errorMessage = '';
     state.errorPayload = null;
     state.errorGuide = null;
+    state.dataExecutionView.clear();
     state.errorStepId = null;
     state.activeInsertionTarget = defaultInsertionTarget();
     $('template-dialog').close();
@@ -3214,9 +3725,12 @@ if ($('formula-add')) $('formula-add').onclick = addFormulaFromDialog;
 if ($('formula-cancel')) $('formula-cancel').onclick = () => $('formula-dialog').close();
 if ($('new-formula')) $('new-formula').onclick = () => { resetFormulaEditor(); $('formula-editor-dialog').showModal(); };
 if ($('formula-editor-block')) $('formula-editor-block').onchange = renderFormulaEditor;
-if ($('formula-inputs')) $('formula-inputs').oninput = renderFormulaEditorBindingFields;
-if ($('formula-parameters')) $('formula-parameters').oninput = renderFormulaEditorBindingFields;
+if ($('formula-inputs')) $('formula-inputs').oninput = () => { renderFormulaEditorBindingFields(); renderFormulaEquationBuilder(); renderFormulaCanvas(); };
+if ($('formula-parameters')) $('formula-parameters').oninput = () => { renderFormulaParameterFields(); renderFormulaEditorBindingFields(); renderFormulaCanvas(); };
 if ($('formula-output-source')) $('formula-output-source').onchange = renderFormulaEditor;
+if ($('formula-output-name')) $('formula-output-name').oninput = renderFormulaCanvas;
+if ($('formula-add-parameter')) $('formula-add-parameter').onclick = addFormulaEditorParameter;
+if ($('formula-apply-equation')) $('formula-apply-equation').onclick = addFormulaEquation;
 if ($('formula-editor-add-step')) $('formula-editor-add-step').onclick = addFormulaEditorStep;
 if ($('formula-editor-save')) $('formula-editor-save').onclick = saveFormulaEditor;
 if ($('formula-editor-cancel')) $('formula-editor-cancel').onclick = () => $('formula-editor-dialog').close();

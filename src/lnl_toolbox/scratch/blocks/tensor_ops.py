@@ -86,6 +86,19 @@ def elementwise_multiply(ctx: ScratchContext, left: str = "left", right: str = "
 
 
 @block(
+    id="add",
+    name="Add",
+    category="Tensor Operation",
+    description="Add two aligned tensor or scalar slots without reduction.",
+    params={"left": {"type": "slot", "default": "left"}, "right": {"type": "slot", "default": "right"}, "save_as": {"type": "slot", "default": "sum"}},
+    requires=("left", "right"), provides=("save_as",), placement=("batch", "top", "epoch"), stage="train", ui_group="⑤ 损失公式",
+    formula="z=x+y", formula_ref="elementwise addition",
+)
+def add(ctx: ScratchContext, left: str = "left", right: str = "right", save_as: str = "sum") -> None:
+    ctx[save_as] = ctx[left] + ctx[right]
+
+
+@block(
     id="sum_values",
     name="Sum Values",
     category="Tensor Operation",

@@ -93,6 +93,39 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
         self.assertIn("renderFormulaPreview", javascript)
         self.assertIn("formula-chain-step", javascript)
         self.assertIn("formula-palette-formula", javascript)
+        self.assertIn("formula-palette-disclosure", javascript)
+        self.assertIn("全部公式（${candidates.length}）", javascript)
+        self.assertIn("disclosure.append(summary, body)", javascript)
+        self.assertIn("已添加步骤：${id}", javascript)
+        self.assertIn("while (state.formulaEditor.steps.some", javascript)
+        self.assertIn('id="formula-canvas"', html)
+        self.assertIn('id="formula-parameter-fields"', html)
+        self.assertIn('id="formula-editor-advanced"', html)
+        self.assertIn('class="formula-editor-advanced-inline"', html)
+        self.assertIn('id="formula-add-parameter"', html)
+        self.assertIn("function renderFormulaCanvas", javascript)
+        self.assertIn("id=\"formula-equation-builder\"", html)
+        self.assertIn("id=\"formula-apply-equation\"", html)
+        self.assertIn('value="subtract"', html)
+        self.assertIn('value="elementwise_multiply"', html)
+        self.assertIn('value="safe_divide"', html)
+        self.assertIn("function addFormulaEquation", javascript)
+        self.assertIn("openBuiltinFormulaCopy", javascript)
+        self.assertIn("使用此模板", javascript)
+        self.assertIn("formulas.forEach((item) =>", javascript)
+        self.assertIn("builtin-formula-item", javascript)
+        self.assertIn("user/${base}", javascript)
+        self.assertIn("function renderFormulaParameterFields", javascript)
+        self.assertIn("function addFormulaEditorParameter", javascript)
+        self.assertIn("renderFormulaParameterFields();", javascript)
+        self.assertIn("paletteExpanded", javascript)
+        self.assertIn("disclosure.open = state.formulaEditor.paletteExpanded", javascript)
+        self.assertIn("disclosure.addEventListener('toggle'", javascript)
+        self.assertIn("formula-editor-advanced > summary", css)
+        self.assertIn(".formula-canvas", css)
+        self.assertIn(".formula-parameter-row", css)
+        self.assertIn(".formula-editor-palette { align-self: stretch;", css)
+        self.assertIn("overflow-y: auto", css)
 
     def test_inspector_and_main_columns_are_viewport_bounded(self) -> None:
         css = (WEB_ROOT / "scratch.css").read_text(encoding="utf-8")
@@ -141,6 +174,11 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
             "const MODEL_OPTIMIZATION_BLOCKS = new Set",
             "function detectModelOptimizationRange(steps, start)",
             "range.modelCount", "range.optimizerCount",
+            "const DATA_OVERVIEW_GROUPS = [",
+            "label: '数据集'", "label: '数据划分'", "label: '标签噪声'",
+            "label: '输入与增强'", "label: '训练批次'",
+            "function renderDataConcepts", "function renderDataAdvancedSummary",
+            "查看原始 12 步", "返回 5 个数据模块",
         ):
             self.assertIn(marker, javascript)
 
@@ -157,6 +195,12 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
         self.assertIn(".math-rendered math", css)
         self.assertIn(".formula-chain-step", css)
         self.assertIn(".formula-editor-current-preview", css)
+        self.assertIn(".formula-palette-disclosure", css)
+        self.assertIn(".formula-palette-disclosure[open] > summary::before", css)
+        self.assertIn(".data-concepts", css)
+        self.assertIn(".data-submodule", css)
+        self.assertIn(".data-advanced-settings", css)
+        self.assertIn(".data-execution-heading", css)
 
     def test_loop_epochs_are_editable_and_scheduler_is_an_explicit_advanced_action(self) -> None:
         html = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
@@ -176,6 +220,28 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
         self.assertIn("className = 'loop-iterations'", javascript)
         self.assertIn(".loop-iterations-input", css)
         self.assertIn(".epoch-advanced", css)
+
+    def test_data_overview_modules_are_vertical_and_editable(self) -> None:
+        javascript = (WEB_ROOT / "scratch.js").read_text(encoding="utf-8")
+        css = (WEB_ROOT / "scratch.css").read_text(encoding="utf-8")
+        self.assertIn("function selectDataOverviewGroup(group, steps)", javascript)
+        self.assertIn("state.dataOverviewSelection = {groupId: group.id", javascript)
+        self.assertIn("item.setAttribute('role', 'button')", javascript)
+        self.assertIn("item.onclick = () => selectDataOverviewGroup(group, steps)", javascript)
+        self.assertIn("function renderDataOverviewInspector(selection, target, explanationTarget)", javascript)
+        self.assertIn("renderParamControl(name, schema, step)", javascript)
+        self.assertIn("五个模块按执行顺序排列", javascript)
+        self.assertIn("dataBlockMode: 'concepts'", javascript)
+        self.assertIn("function dataPaletteItems()", javascript)
+        self.assertIn("function addDataConceptAtTarget(group, target)", javascript)
+        self.assertIn("application/x-lnl-data-group", javascript)
+        self.assertIn("state.dataBlockMode = 'canonical'", javascript)
+        self.assertIn("当前数据视图：5 个合并数据积木", javascript)
+        self.assertIn("canonical data view is intentionally lossless", javascript)
+        self.assertIn("isDataComposite && showingDataSteps", javascript)
+        self.assertIn(".data-concepts { display: flex; flex-direction: column;", css)
+        self.assertIn(".data-submodule.selected", css)
+        self.assertIn(".data-submodule-edit", css)
 
 
 if __name__ == "__main__":

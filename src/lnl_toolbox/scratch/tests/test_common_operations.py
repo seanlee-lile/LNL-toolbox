@@ -35,6 +35,10 @@ class CommonOperationTest(unittest.TestCase):
         context["labels"] = labels
         run("gather_by_label", context, values="logits", labels="labels", save_as="gathered")
         self.assertTrue(torch.equal(context["gathered"], torch.tensor([1.0, 1.0])))
+        context["left"] = torch.tensor([1.0, 2.0])
+        context["right"] = torch.tensor([3.0, 4.0])
+        run("add", context, left="left", right="right", save_as="sum")
+        self.assertTrue(torch.equal(context["sum"], torch.tensor([4.0, 6.0])))
         run("partial_label_loss", context, logits="logits", candidates="mask", save_as="partial")
         run("complementary_negative_loss", context, logits="logits", complements="mask", save_as="negative")
         self.assertTrue(torch.isfinite(context["partial"]))
