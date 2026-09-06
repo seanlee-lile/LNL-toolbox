@@ -102,7 +102,7 @@ COMMANDS: dict[str, CommandSpec] = {
     ),
     "sweep-smoke": CommandSpec(
         "sweep-smoke",
-        "多 seed Sweep",
+        "多 seed 参数组合实验",
         "按多个随机种子顺序运行同一个 recipe，并支持中断后恢复",
         (
             "sweep",
@@ -1812,12 +1812,13 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 _json_response(self, _scratch_error(exc), 400)
             return
         if path == "/api/scratch/entry-recipe":
-            try:
-                from lnl_toolbox.scratch import load_recipe
-
-                _json_response(self, load_recipe(SCRATCH_RECIPE_ROOT / "papers" / "gce.yaml"))
-            except Exception as exc:
-                _json_response(self, _scratch_error(exc), 400)
+            _json_response(self, {
+                "schema_version": 1,
+                "name": "空白 Scratch 算法",
+                "description": "选择单模型、双模型、论文模板或从空白开始。",
+                "settings": {},
+                "steps": [],
+            })
             return
         if path == "/api/scratch/templates":
             try:

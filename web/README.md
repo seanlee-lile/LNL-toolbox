@@ -12,6 +12,13 @@
 根路径是原有主控制台；Recipe/YAML 编辑器保留为独立子页面：
 http://127.0.0.1:8765/recipe。`lnl web` 默认打开主页；`lnl web --no-open` 只启动服务。
 
+若要先清理当前 Web 端口上残留的 LNL 进程再启动，可运行 `lnl web restart`；也可附加
+`--port`、`--host` 或 `--no-open`。
+
+若服务异常退出后端口仍被旧进程占用，可运行 `lnl ports cleanup`。该命令只清理
+当前监听且命令行确认为 LNL Web 服务的进程；先查看候选项可使用
+`lnl ports cleanup --dry-run`。
+
 直接开发后端时仍可运行：
 
     python web/command_console.py
@@ -52,17 +59,17 @@ Quick Start 只负责编排，最终训练仍使用现有 `/api/run`、job polli
 每一步都显示操作原因和成功标准；只有当前步骤成功后才解锁下一步。教程统一选择
 Smoke recipe、已登记数据和独立输出目录。训练结束后会读取运行目录中的配置、指标、
 阶段和 checkpoint：未完成时才生成 resume 指令，达到目标轮次时明确显示“无需恢复”。
-原有直接验证、预演、训练和 Sweep 操作保留在教程底部的“快速命令”折叠区。
+原有直接验证、预演、训练和参数组合实验操作保留在教程底部的“快速命令”折叠区。
 
 页面维护统一的“当前配置”上下文。论文页可准备正式运行、把内置配置另存为项目
-YAML，或直接将内置配置带入参数 Sweep；项目 YAML 保存成功后可继续验证、准备运行
-或转入 Sweep。内置 recipe 永远只读，修改时默认建议保存为
-`configs/experiment/<recipe>-custom.yaml`。有未保存修改时，运行或 Sweep 会先要求保存。
+YAML，或直接将内置配置带入参数组合实验；项目 YAML 保存成功后可继续验证、准备运行
+或转入参数组合实验。内置 recipe 永远只读，修改时默认建议保存为
+`configs/experiment/<recipe>-custom.yaml`。有未保存修改时，运行或参数组合实验会先要求保存。
 
-参数 Sweep 同时接受内置 recipe 和项目 YAML。参数列表复用
+参数组合实验同时接受内置 recipe 和项目 YAML。参数列表复用
 `lnl_parameter_metadata_registry_revised.yaml`，按基础、论文、高级和锁定四级展示；锁定
-参数不能加入矩阵，论文参数会显示依据与复现影响，并在预检结果中明确标记偏离。Sweep
-完成后可把输出目录直接带入“运行管理”。
+参数不能加入矩阵，论文参数会显示依据与复现影响，并在预检结果中明确标记偏离。参数组合实验
+参数组合实验完成后可把输出目录直接带入“运行管理”。
 
 “本地数据集”模块可生成 `lnl data register/inspect/verify/remove` 和
 `lnl run ... --data <alias>`。页面显示机器本地 catalog 的当前状态，但不会读取或上传

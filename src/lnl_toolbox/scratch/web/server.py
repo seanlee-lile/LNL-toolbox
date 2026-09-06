@@ -393,7 +393,13 @@ class ScratchHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/default-recipe":
                 self._send(load_recipe(RECIPE_ROOT / "examples" / "default_supervised.yaml"))
             elif parsed.path == "/api/entry-recipe":
-                self._send(load_recipe(RECIPE_ROOT / "papers" / "gce.yaml"))
+                self._send({
+                    "schema_version": 1,
+                    "name": "空白 Scratch 算法",
+                    "description": "选择单模型、双模型、论文模板或从空白开始。",
+                    "settings": {},
+                    "steps": [],
+                })
             elif parsed.path == "/api/templates":
                 self._send(_template_catalog())
             elif parsed.path == "/api/examples":

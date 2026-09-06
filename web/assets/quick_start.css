@@ -10,6 +10,17 @@
 .qs-step { padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-md); background: #fffdf7; }
 .qs-step h3 { margin: 0 0 10px; color: var(--text-primary); font-size: 19px; }
 .qs-step h4 { margin: 13px 0 8px; color: var(--text-secondary); font-size: 15px; }
+.qs-methods-panel { padding: 0; overflow: hidden; }
+.qs-methods-panel > summary { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 14px; cursor: pointer; padding: 18px; color: var(--text-primary); list-style: none; }
+.qs-methods-panel > summary::-webkit-details-marker { display: none; }
+.qs-methods-panel > summary::before { content: "▸"; color: var(--accent-text); font-size: 16px; }
+.qs-methods-panel[open] > summary::before { content: "▾"; }
+.qs-methods-panel[open] > summary { border-bottom: 1px solid var(--border); }
+.qs-method-selection { flex: 1 1 280px; color: var(--text-muted); font-size: 14px; font-weight: 500; }
+.qs-methods-body { padding: 0 18px 18px; }
+.qs-next-actions > .qs-step { margin-top: 14px; border-color: var(--border); background: var(--bg-soft); }
+.qs-advanced-actions { margin-top: 18px; padding-top: 13px; border-top: 1px solid var(--border); }
+.qs-advanced-actions > summary { cursor: pointer; color: var(--text-secondary); font-weight: 700; }
 .qs-path-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
 .qs-noise-inputs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 13px; }
 .qs-noise-inputs label { display: grid; gap: 7px; color: var(--text-secondary); font-size: 14px; font-weight: 650; }

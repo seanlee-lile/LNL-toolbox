@@ -13,6 +13,8 @@
     methodInputs: {},
     labelsConfirmed: false,
     plan: null,
+    showAdvancedActions: false,
+    methodListExpanded: false,
     loading: false,
     loadingMessage: "",
     loadingSlow: false,
@@ -88,7 +90,7 @@
     if (state.probe.status === "detected") return '<div class="qs-feedback qs-success">✓ 检测到 ' + esc(state.probe.candidates[0].adapter) + '，可以继续登记并 inspect。</div>';
     if (state.probe.status === "already_registered") return '<div class="qs-feedback qs-success">✓ 已登记：' + esc(state.probe.existing_alias) + '</div>';
     if (state.probe.status === "ambiguous") return '<div class="qs-feedback qs-warning"><strong>检测到多个可能格式</strong>' + state.probe.candidates.map(function (item) { return '<button type="button" class="secondary qs-candidate" data-adapter="' + esc(item.adapter) + '">' + esc(item.adapter) + ' · ' + esc(item.reason) + '</button>'; }).join("") + '</div>';
-    return '<div class="qs-feedback qs-error">暂时无法自动识别此路径。可以转到“本地数据集”手动登记。</div>';
+    return '<div class="qs-feedback qs-error">暂时无法自动识别此路径。可以转到“数据集”工作区手动登记。</div>';
   }
   function renderDataset() {
     const registered = state.registered.length ? '<label>使用已登记数据集<select id="qs-registered"><option value="">选择一个</option>' + state.registered.map(function (item) { return '<option value="' + esc(item.location) + '">' + esc(item.name + " · " + item.adapter) + '</option>'; }).join("") + '</select></label>' : "";
@@ -110,7 +112,13 @@
   function renderMethods() {
     if (!state.dataset || !state.methods.length) return "";
     const groups = ["ready", "needs_input", "unsupported", "metadata_error"];
-    return '<section class="qs-step"><h3>3. 方法</h3>' + groups.map(function (status) { const items = state.methods.filter(function (item) { return item.status === status; }); return items.length ? '<div class="qs-method-group"><h4>' + statusLabel(status) + '</h4>' + items.map(methodCard).join("") + '</div>' : ""; }).join("") + '</section>';
+    const selected = state.methods.find(function (item) { return item.paper_id === state.selectedPaperId; });
+    const expanded = !state.selectedPaperId || state.methodListExpanded;
+    const selectedSummary = selected
+      ? '<span class="qs-method-selection">已选择：' + esc(selected.acronym || selected.paper_id) + ' · ' + esc(selected.title || '') + '；点击标题可更换论文</span>'
+      : '<span class="qs-method-selection">请选择一篇论文方法；兼容性状态会按数据集和噪声显示</span>';
+    const cards = groups.map(function (status) { const items = state.methods.filter(function (item) { return item.status === status; }); return items.length ? '<div class="qs-method-group"><h4>' + statusLabel(status) + '</h4>' + items.map(methodCard).join("") + '</div>' : ""; }).join("");
+    return '<details id="qs-methods-panel" class="qs-step qs-methods-panel"' + (expanded ? ' open' : '') + '><summary><strong>3. 方法（' + state.methods.length + '）</strong>' + selectedSummary + '</summary><div class="qs-methods-body">' + cards + '</div></details>';
   }
   function renderPlan() {
     if (!state.plan) return "";
@@ -137,30 +145,44 @@
     const manualNote = manual.length ? '<div class="qs-feedback qs-warning">以下条件属于数据集事实或外部产物，不能在 Quick Start 中伪造：' + esc(manual.join("、")) + '。请先在“本地数据集”或 YAML 编辑器中补齐。</div>' : "";
     return '<section class="qs-step"><h3>4. 配置来源与运行</h3><div class="qs-plan-card"><strong>' + esc(plan.config_kind === "paper_reproduction" ? "论文复现配置" : "Toolbox 适配配置") + '</strong><p>' + esc(plan.summary) + '</p><p>状态：' + esc(planStatusLabel(plan.status)) + '</p>' + (plan.details || []).map(function (item) { return '<p class="helper">' + esc(item) + '</p>'; }).join("") + '</div>' + inputs + manualNote + '<div class="qs-actions"><button type="button" id="qs-dry" class="secondary" ' + (plan.status === "ready" ? "" : "disabled") + '>预演</button><button type="button" id="qs-run" class="primary" ' + (plan.status === "ready" ? "" : "disabled") + '>确认并开始训练</button></div></section>';
   }
+  function renderNextActions() {
+    if (!state.dataset || !context || !context.compact) return "";
+    return '<section class="qs-step qs-next-actions"><h3>完整方法兼容性引导</h3><p>数据集已登记并通过基础加载检查。下面会依次确认标签噪声、论文方法兼容性和可执行训练计划。</p>' + renderNoise() + renderMethods() + renderPlan() + '<details class="qs-advanced-actions"' + (state.showAdvancedActions ? ' open' : '') + '><summary>高级模式：其他工作区</summary><p class="helper">如果你不走当前兼容性引导，可从这里进入实验配置、论文目录或 Scratch 搭建器。</p>' + (state.showAdvancedActions ? '<div class="qs-actions"><button type="button" id="qs-open-experiment" class="primary">创建 / 编辑实验配置</button><button type="button" id="qs-open-papers" class="secondary">查看兼容论文</button><button type="button" id="qs-open-scratch" class="secondary">打开 Scratch 搭建器</button></div>' : '<button type="button" id="qs-show-advanced-actions" class="secondary">展开高级模式</button>') + '</details></section>';
+  }
   function render() {
     if (!panel) return;
-    panel.innerHTML = '<div class="qs-root' + (state.loading ? ' qs-is-loading' : '') + '"><h2>Quick Start</h2>' + loadingMarkup() + (state.error ? '<div class="qs-feedback qs-error">' + esc(state.error) + '</div>' : "") + renderDataset() + renderNoise() + renderMethods() + renderPlan() + '</div>';
+    if (state.dataset && context && context.datasetReady) context.datasetReady(state.dataset);
+    const compact = Boolean(context && context.compact);
+    const guidedFlow = compact ? renderNextActions() : renderNoise() + renderMethods() + renderPlan();
+    panel.innerHTML = '<div class="qs-root' + (state.loading ? ' qs-is-loading' : '') + '"><h2>' + (compact ? '从数据集开始' : 'Quick Start') + '</h2>' + loadingMarkup() + (state.error ? '<div class="qs-feedback qs-error">' + esc(state.error) + '</div>' : "") + renderDataset() + guidedFlow + '</div>';
     const path = document.getElementById("qs-path");
     path && path.addEventListener("input", function () { state.path = this.value; });
     document.getElementById("qs-pick")?.addEventListener("click", pickPath);
     document.getElementById("qs-registered")?.addEventListener("change", function () { if (this.value) registerPath(this.value, null); });
     document.getElementById("qs-probe")?.addEventListener("click", probeAndRegister);
-    document.getElementById("qs-reset")?.addEventListener("click", function () { state.dataset = null; state.noise = null; state.methods = []; state.plan = null; state.methodInputs = {}; state.labelsConfirmed = false; render(); });
+    document.getElementById("qs-reset")?.addEventListener("click", function () { state.dataset = null; state.noise = null; state.methods = []; state.plan = null; state.methodInputs = {}; state.selectedPaperId = ""; state.labelsConfirmed = false; state.showAdvancedActions = false; state.methodListExpanded = false; render(); });
     panel.querySelectorAll(".qs-candidate").forEach(function (button) { button.addEventListener("click", function () { registerPath(state.path, this.dataset.adapter); }); });
     document.getElementById("qs-noise")?.addEventListener("change", updateNoise);
     document.getElementById("qs-rate")?.addEventListener("change", updateNoise);
     document.getElementById("qs-seed")?.addEventListener("change", updateNoise);
     document.getElementById("qs-confirm-labels")?.addEventListener("click", function () { state.labelsConfirmed = true; render(); loadMethods(); });
-    panel.querySelectorAll(".qs-method-card").forEach(function (button) { button.addEventListener("click", function () { const item = state.methods.find(function (entry) { return entry.paper_id === button.dataset.paper; }); if (!item || !["ready", "needs_input"].includes(item.status)) return; state.selectedPaperId = this.dataset.paper; state.methodInputs = {}; buildPlan(); }); });
+    document.getElementById("qs-methods-panel")?.addEventListener("toggle", function () { state.methodListExpanded = this.open; });
+    panel.querySelectorAll(".qs-method-card").forEach(function (button) { button.addEventListener("click", function () { const item = state.methods.find(function (entry) { return entry.paper_id === button.dataset.paper; }); if (!item || !["ready", "needs_input"].includes(item.status)) return; state.selectedPaperId = this.dataset.paper; state.methodInputs = {}; state.methodListExpanded = false; render(); buildPlan(); }); });
     panel.querySelectorAll(".qs-required-input").forEach(function (input) { input.addEventListener("input", function () { state.methodInputs[this.dataset.inputKey] = this.value; }); });
     document.getElementById("qs-apply-inputs")?.addEventListener("click", buildPlan);
     document.getElementById("qs-dry")?.addEventListener("click", function () { if (state.plan) { context.setRequest({command:state.plan.dry_run_command}, state.plan.dry_run_command); context.execute(); } });
     document.getElementById("qs-run")?.addEventListener("click", function () { if (state.plan) { const summary = [state.plan.summary].concat(state.plan.details || []).join("\n"); if (window.confirm("即将启动训练：\n\n" + summary + "\n\n确认继续？")) { context.setRequest({command:state.plan.command}, state.plan.command); context.execute(); } } });
+    document.getElementById("qs-open-experiment")?.addEventListener("click", function () { context.openExperiment && context.openExperiment(state.dataset); });
+    document.getElementById("qs-open-papers")?.addEventListener("click", function () { context.openPapers && context.openPapers(state.dataset); });
+    document.getElementById("qs-open-scratch")?.addEventListener("click", function () { context.openScratch && context.openScratch(state.dataset); });
+    document.getElementById("qs-show-advanced-actions")?.addEventListener("click", function () { state.showAdvancedActions = true; render(); });
   }
   function updateNoise() {
     const key = document.getElementById("qs-noise")?.value || "clean";
     state.noiseSelection = {kind:key === "clean" ? "clean" : "synthetic", key:key, rate:key === "clean" ? null : Number(document.getElementById("qs-rate")?.value || 0.2), seed:Number(document.getElementById("qs-seed")?.value || 1)};
     state.methods = [];
+    state.selectedPaperId = "";
+    state.methodListExpanded = false;
     state.methodInputs = {};
     state.plan = null;
     render();
@@ -173,7 +195,7 @@
     post("/api/quick-start/probe", {path:state.path}, "正在识别数据集格式…").then(function (payload) { state.probe = payload; render(); if (payload.status === "detected" || payload.status === "already_registered") registerPath(state.path, null); }).catch(function (error) { state.error = String(error.message || error); render(); });
   }
   function registerPath(path, adapter) {
-    post("/api/quick-start/register", {path:path, adapter:adapter || ""}, "正在登记数据集并检查样本…").then(function (payload) { if (payload.kind !== "dataset") { state.probe = payload; render(); return; } state.dataset = payload.dataset; state.error = ""; return loadRegistered().then(loadNoise); }).catch(function (error) { state.error = String(error.message || error); render(); });
+    post("/api/quick-start/register", {path:path, adapter:adapter || ""}, "正在登记数据集并检查样本…").then(function (payload) { if (payload.kind !== "dataset") { state.probe = payload; render(); return; } state.dataset = payload.dataset; state.error = ""; state.selectedPaperId = ""; state.methodListExpanded = false; state.showAdvancedActions = false; return loadRegistered().then(function () { render(); return loadNoise(); }); }).catch(function (error) { state.error = String(error.message || error); render(); });
   }
   function loadNoise() {
     return request("/api/quick-start/noises?dataset=" + encodeURIComponent(state.dataset.alias), undefined, "正在读取标签噪声能力…").then(function (payload) { state.noise = payload; state.labelsConfirmed = !payload.requires_confirmation; if (payload.dataset_state === "native") state.noiseSelection = {kind:"native", key:"native", rate:null, seed:null}; else state.noiseSelection = {kind:"clean", key:"clean", rate:null, seed:1}; render(); return payload.requires_confirmation ? null : loadMethods(); });
@@ -194,5 +216,5 @@
     if (!state.registered.length) loadRegistered().then(render);
     render();
   }
-  window.quickStartController = {mount:mount, render:render, onModuleEnter:mount};
+  window.quickStartController = {mount:mount, render:render, onModuleEnter:mount, showCompatibilityGuide:function () { render(); return state.noise ? Promise.resolve() : loadNoise(); }};
 }());

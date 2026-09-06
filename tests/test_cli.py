@@ -581,6 +581,46 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
         self.assertEqual(code, 0, error)
         self.assertNotIn('--open', call.call_args.args[0])
 
+    def test_web_restart_cleans_selected_port_before_starting(self) -> None:
+        events = []
+
+        def cleanup(ports, *, dry_run=False):
+            events.append(('cleanup', ports, dry_run))
+            return 0
+
+        def start(command, **kwargs):
+            events.append(('start', command, kwargs))
+            return 0
+
+        with patch('lnl_toolbox.cli.main.cleanup_ports', side_effect=cleanup), patch(
+            'lnl_toolbox.cli.main.subprocess.call', side_effect=start
+        ):
+            code, _output, error = self.invoke(
+                'web', 'restart', '--host', '127.0.0.1', '--port', '9000', '--no-open'
+            )
+        self.assertEqual(code, 0, error)
+        self.assertEqual(events[0], ('cleanup', [9000], False))
+        self.assertEqual(events[1][0], 'start')
+        self.assertNotIn('--open', events[1][1])
+        self.assertIn('9000', events[1][1])
+
+    def test_web_restart_does_not_start_when_cleanup_fails(self) -> None:
+        with patch('lnl_toolbox.cli.main.cleanup_ports', return_value=1), patch(
+            'lnl_toolbox.cli.main.subprocess.call'
+        ) as start:
+            code, _output, error = self.invoke('web', 'restart')
+        self.assertEqual(code, 1, error)
+        start.assert_not_called()
+
+    def test_ports_cleanup_dispatches_explicit_ports_and_dry_run(self) -> None:
+        with patch('lnl_toolbox.cli.main.cleanup_ports', return_value=0) as cleanup:
+            code, output, error = self.invoke(
+                'ports', 'cleanup', '--port', '8765', '--port', '8795', '--dry-run'
+            )
+        self.assertEqual(code, 0, error)
+        self.assertEqual(output, '')
+        cleanup.assert_called_once_with([8765, 8795], dry_run=True)
+
     def test_local_dataset_registration_and_recipe_switch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

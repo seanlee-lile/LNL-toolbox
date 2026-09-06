@@ -6,6 +6,7 @@ from threading import Thread
 import unittest
 from unittest.mock import patch
 
+from web import command_console
 from web.command_console import ConsoleHandler, ThreadingHTTPServer
 
 
@@ -52,6 +53,24 @@ class QuickStartRouteTests(unittest.TestCase):
             ):
                 status, _ = self._request("POST", path, {})
                 self.assertNotEqual(status, 404)
+
+    def test_compact_quick_start_defaults_to_compatibility_guide(self) -> None:
+        script = (command_console.WEB_ROOT / "assets" / "quick_start.js").read_text(encoding="utf-8")
+        compatibility = script.index('<h3>完整方法兼容性引导</h3>')
+        advanced = script.index('class="qs-advanced-actions"')
+        actions = script.index('id="qs-open-experiment"')
+        self.assertLess(compatibility, advanced)
+        self.assertLess(advanced, actions)
+        self.assertIn("renderNoise() + renderMethods() + renderPlan()", script)
+        self.assertIn('id="qs-methods-panel"', script)
+        self.assertIn("state.methodListExpanded", script)
+        self.assertIn('id="qs-methods-panel" class="qs-step qs-methods-panel"', script)
+        self.assertIn('addEventListener("toggle"', script)
+        self.assertIn("点击标题可更换论文", script)
+        self.assertIn('id="qs-show-advanced-actions"', script)
+        self.assertNotIn('id="qs-show-full-flow"', script)
+        self.assertIn("state.showAdvancedActions = false", script)
+        self.assertIn("return loadRegistered().then(function () { render(); return loadNoise(); });", script)
 
 
 if __name__ == "__main__":

@@ -25,15 +25,12 @@
       </div>
       <button id="open" class="toolbar-button" type="button">打开</button>
       <button id="save" class="toolbar-button" type="button">保存</button>
-      <button id="run" class="run-button" type="button">▶ 运行</button>
+      <button id="run" class="run-button" type="button">▶ 试运行</button>
+      <button id="run-full" class="run-full-button" type="button">完整运行</button>
       <button id="help" class="help-button" type="button" aria-label="帮助">?</button>
       <details id="advanced-actions" class="advanced-actions">
         <summary>更多</summary>
         <div class="advanced-menu">
-          <button id="templates" type="button">论文模板</button>
-          <button id="formula-builder" type="button">快速插入运算</button>
-          <button id="new-formula" type="button">新建公式</button>
-          <button id="my-formulas" type="button">我的公式</button>
           <button id="check" type="button">仅检查结构</button>
         </div>
       </details>
@@ -50,13 +47,37 @@
         <div class="panel-heading"><h2>积木</h2><span id="palette-count" class="panel-count"></span></div>
         <label class="palette-search-label" for="palette-search">搜索积木</label>
         <input id="palette-search" class="palette-search" type="search" placeholder="名称、分类、参数或输出">
-        <p class="palette-help">单击查看说明；拖动到绿色插入位置</p>
+        <p class="palette-help">单击查看说明；用“添加到当前位置/推荐位置”或拖动把手放入绿色插入位</p>
+        <div class="palette-target-bar" aria-live="polite">
+          <span id="palette-target-summary">请先点击中间的插入位置</span>
+          <button id="palette-target-locate" type="button" class="secondary" hidden>定位可用插入位</button>
+        </div>
+        <p class="palette-status-help" aria-label="插入状态说明"><span class="status-ok">✓ 可添加</span><span class="status-invalid">✕ 不可添加：会显示层级或前置 slot 原因</span></p>
+        <div class="palette-legend" aria-label="积木颜色说明">
+          <span><i class="legend-swatch" data-legend-category="数据"></i>数据</span>
+          <span><i class="legend-swatch" data-legend-category="模型与训练"></i>模型与训练</span>
+          <span><i class="legend-swatch" data-legend-category="算法操作"></i>算法操作</span>
+          <span><i class="legend-swatch" data-legend-category="评估"></i>评估</span>
+          <span><i class="legend-swatch" data-legend-category="我的"></i>我的</span>
+        </div>
         <div id="palette"></div>
       </div>
     </aside>
 
     <section class="workspace-panel" aria-label="算法工作区">
-      <div class="workspace-heading"><div><strong>算法工作区</strong><span>左侧找积木 · 中间搭算法 · 论文方法放在 Training Loop</span></div><span class="workspace-hint">拖动积木到绿色插入位</span></div>
+      <div class="workspace-heading">
+        <div class="workspace-heading-copy"><strong>算法工作区</strong><span>左侧找积木 · 中间搭算法 · 论文方法放在 Training Loop</span></div>
+        <div id="workspace-position-indicator" class="workspace-position-indicator" data-state="empty" role="status" aria-live="polite">
+          <span class="position-indicator-icon" aria-hidden="true">⌖</span>
+          <div class="position-indicator-copy">
+            <strong id="workspace-position-label">当前位置</strong>
+            <span id="workspace-position-detail">尚未选择插入位置</span>
+            <small id="workspace-position-constraint">请先点击中间的插入位；选择积木后会显示具体限制。</small>
+            <span id="workspace-position-status" class="position-indicator-status">○ 等待选择插入位</span>
+          </div>
+        </div>
+        <div class="workspace-heading-actions"><span class="workspace-hint">拖动把手到绿色插入位</span><button id="undo-delete" type="button" class="secondary" hidden>撤销删除</button></div>
+      </div>
       <div id="empty-onboarding" class="empty-onboarding">
         <div class="empty-onboarding-icon">✦</div>
         <h2>创建你的第一个算法</h2>
@@ -84,7 +105,7 @@
         <section id="result-panel" class="result-panel" aria-live="polite">
           <div class="result-header"><h3>运行结果</h3><span id="result-status" class="result-status">尚未运行</span></div>
           <div class="run-controls" aria-label="运行控制">
-            <label class="run-mode-control" for="run-mode">运行模式
+            <label class="run-mode-control" for="run-mode" hidden>运行模式
               <select id="run-mode" aria-describedby="run-mode-help">
                 <option value="check">结构验证（1 epoch / 1 batch）</option>
                 <option value="full">完整运行（正式 epochs / 全部 batch）</option>

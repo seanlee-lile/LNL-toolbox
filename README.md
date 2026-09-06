@@ -31,6 +31,22 @@ lnl web
 `http://127.0.0.1:8765/scratch`。这些页面由同一个 `lnl web` 服务提供；使用
 `lnl web --no-open` 可只启动服务。
 
+如果需要先清理占用默认 Web 端口的旧 LNL 进程再启动，可直接运行：
+
+```powershell
+lnl web restart
+```
+
+如果服务异常退出后端口仍被旧的 LNL 进程占用，可清理当前所有命令行确认为
+LNL Web 服务的监听进程：
+
+```powershell
+lnl ports cleanup
+```
+
+执行前只查看候选进程而不终止：`lnl ports cleanup --dry-run`；也可以用重复的
+`--port 8765` 参数将范围限定到指定端口。其他程序的监听进程不会被清理。
+
 原有的 `lnl-train`、`lnl-clean-train`、`lnl-inspect-data` 和 `lnl-make-noise` 命令仍然保留。
 
 ### 准备 CIFAR 数据
@@ -264,7 +280,7 @@ lnl resume artifacts/runs/20260802-120000 --checkpoint best
 已完成的 run 执行 `lnl resume` 是严格 no-op；中断的 run 才会从所选 checkpoint
 继续。
 
-## 6. Sweep、比较与报告
+## 6. 参数组合实验、比较与报告
 
 顺序运行多个独立 seed：
 

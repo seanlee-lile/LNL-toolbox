@@ -2,7 +2,10 @@ const state = {
   blocks: [],
   recipe: { schema_version: 1, name: 'scratch_recipe', description: '', steps: [] },
   selected: null,
+  adjacentSelection: null,
+  adjacentExpanded: new Set(),
   paletteSelection: null,
+  paletteDraft: null,
   collapsed: new WeakSet(),
   activeInsertionTarget: null,
   drag: null,
@@ -21,6 +24,7 @@ const state = {
   paletteCollapsed: new Set(),
   compositeExpanded: new Set(),
   compositeUngrouped: new Set(),
+  deletedStep: null,
   inspectorTab: 'blocks',
   running: false,
   jobId: null,
@@ -73,6 +77,13 @@ function newStep(id) {
   return step;
 }
 
+function paletteDraftFor(info) {
+  if (!state.paletteDraft || state.paletteDraft.block !== info.id || state.paletteDraft.recipe !== state.recipe) {
+    state.paletteDraft = {block: info.id, params: {}, recipe: state.recipe};
+  }
+  return state.paletteDraft;
+}
+
 function ensureUiIds(steps) {
   (steps || []).forEach((step) => {
     if (!step._uiId) step._uiId = makeUiId();
@@ -113,7 +124,8 @@ function getPlacementContext(parentId) {
   if (!parent) return 'top';
   if (parent.block === 'epoch_loop') return 'epoch';
   if (parent.block === 'batch_loop') return 'batch';
-  return 'any';
+  const location = findParentArrayAndIndex(parentId);
+  return location ? getPlacementContext(location.parentId) : 'top';
 }
 
 function stripUiFields(value) {
@@ -152,11 +164,12 @@ function slotValue(info, step, name) {
   return typeof value === 'string' && value.trim() ? value : name;
 }
 
-function inferAvailableSlot(info, name, available) {
-  const schema = info?.params?.[name] || {};
-  const configured = schema.default;
-  if (configured && available.has(configured)) return configured;
-  return null;
+function inferAvailableSlot(info, name, available, step = null) {
+  const supplied = step?.params || {};
+  if (Object.prototype.hasOwnProperty.call(supplied, name)
+      && (typeof supplied[name] !== 'string' || !supplied[name].trim())) return null;
+  const configured = slotValue(info, step, name);
+  return available.has(configured) ? configured : null;
 }
 
 function inferOutputSlot(info, name, target) {
@@ -168,15 +181,21 @@ function addProvidedKeys(keys, step) {
   (info?.provides || []).forEach((name) => keys.add(slotValue(info, step, name)));
 }
 
-function addStepsBefore(keys, steps, endIndex) {
-  (steps || []).slice(0, endIndex).forEach((step) => addProvidedKeys(keys, step));
+function addStepsBefore(keys, steps, endIndex, excludedId = null) {
+  (steps || []).slice(0, endIndex).forEach((step) => {
+    if (step._uiId === excludedId) return;
+    addProvidedKeys(keys, step);
+    // Match recipe validation: epoch outputs survive the loop, while batch
+    // temporaries and conditional child outputs do not escape their scope.
+    if (step.block === 'epoch_loop') addStepsBefore(keys, step.steps, step.steps?.length || 0, excludedId);
+  });
 }
 
-function availableKeysBefore(target) {
+function availableKeysBefore(target, excludedId = null) {
   const keys = new Set(Object.keys(state.recipe.settings || {}));
   if (!target) return keys;
   if (target.parentId === '__root__') {
-    addStepsBefore(keys, state.recipe.steps, target.index);
+    addStepsBefore(keys, state.recipe.steps, target.index, excludedId);
     return keys;
   }
   const path = findStepPath(target.parentId);
@@ -184,40 +203,84 @@ function availableKeysBefore(target) {
   let siblings = state.recipe.steps;
   for (const parent of path) {
     const parentIndex = siblings.indexOf(parent);
-    addStepsBefore(keys, siblings, parentIndex);
+    addStepsBefore(keys, siblings, parentIndex, excludedId);
     addProvidedKeys(keys, parent);
     siblings = Array.isArray(parent.steps) ? parent.steps : [];
   }
-  addStepsBefore(keys, siblings, target.index);
+  addStepsBefore(keys, siblings, target.index, excludedId);
   return keys;
 }
 
-function loopAlreadyExists(blockId, parentId, movingId = null) {
-  const array = getChildrenArray(parentId) || [];
-  return array.some((step) => step.block === blockId && step._uiId !== movingId);
-}
-
-function availabilityReason(info, target, movingId = null) {
-  if (!info || !target) return '请先选择插入位置';
-  if (!placementAllows(info, target.parentId)) return `placement 不允许放入 ${target.context} 层`;
-  if (info.id === 'epoch_loop' && target.parentId !== '__root__') return 'Epoch Loop 只能放在根层';
-  if (info.id === 'batch_loop' && getPlacementContext(target.parentId) !== 'epoch') return 'Batch Loop 只能放入 Epoch Loop';
-  if ((info.id === 'epoch_loop' || info.id === 'batch_loop') && loopAlreadyExists(info.id, target.parentId, movingId)) return `${info.name} 当前只允许一个`;
+function availabilityReason(info, target, movingId = null, params = null, allowIncomplete = false) {
+  if (!target) return '请先选择插入位置';
+  if (!info) return '积木定义尚未加载，请刷新积木库';
+  const parent = target.parentId === '__root__' ? null : findStepById(target.parentId);
+  const children = target.parentId === '__root__' ? state.recipe.steps : parent?.steps;
+  if (!Array.isArray(children) || !Number.isInteger(target.index) || target.index < 0 || target.index > children.length
+      || (parent && blockInfo(parent.block)?.kind === 'action')) return '插入位置已失效，请重新点击插入位';
+  const names = { top: '根层（循环外）', epoch: '每轮训练（Epoch）', batch: '每批训练（Batch）', any: '任意层级' };
+  if (!placementAllows(info, target.parentId)) return `当前是${names[getPlacementContext(target.parentId)]}；此积木允许：${(info.placement || ['any']).map((value) => names[value] || value).join('、')}`;
   if (movingId && target.parentId !== '__root__' && containsStep(findStepById(movingId), target.parentId)) return '不能把循环拖入自己的子层';
-  const available = availableKeysBefore(target);
+  const movingStep = movingId ? findStepById(movingId) : null;
+  if (movingId && !movingStep) return '待移动积木已不存在，请重新选择';
+  const candidate = params ? {params} : movingStep || (state.paletteDraft?.block === info.id && state.paletteDraft.recipe === state.recipe ? state.paletteDraft : null);
+  const available = availableKeysBefore(target, movingId);
   const missing = (info.requires || [])
-    .filter((name) => !inferAvailableSlot(info, name, available))
-    .map((name) => slotValue(info, null, name));
-  if (missing.length) return `前置 slot 不完整：${missing.join(', ')}`;
+    .filter((name) => !inferAvailableSlot(info, name, available, candidate))
+    .map((name) => slotValue(info, candidate, name));
+  if (missing.length && !allowIncomplete) return `缺少前置输入：${missing.join(', ')}。可先添加积木，再在右侧连接输入`;
+  if (movingStep) return moveDependencyReason(movingStep, target);
   return null;
 }
 
-function canInsert(info, parentId, movingId = null, index = 0) {
-  return availabilityReason(info, { parentId, index, context: getPlacementContext(parentId) }, movingId) === null;
+function moveDependencyReason(movingStep, target) {
+  // Inspect a copy so a rejected drag never mutates the recipe. Only newly
+  // broken connections block a move; unrelated unfinished steps remain editable.
+  function missingConnections(steps, available, missing = new Map(), context = 'top') {
+    const current = new Set(available);
+    for (const step of steps) {
+      const info = blockInfo(step.block);
+      if (info && info.beginner_visible !== false && !(info.placement || ['any']).some((place) => place === 'any' || place === context)) {
+        missing.set(`${step._uiId}:placement`, `${info.name || step.block} 不支持移动后的 ${context} 层级`);
+      }
+      for (const name of info?.requires || []) {
+        const slot = slotValue(info, step, name);
+        if (!current.has(slot)) missing.set(`${step._uiId}:${slot}`, `${info.name || step.block} 需要 ${slot}`);
+      }
+      const childKeys = new Set(current);
+      addProvidedKeys(childKeys, step);
+      if (Array.isArray(step.steps)) {
+        const childContext = step.block === 'epoch_loop' ? 'epoch' : step.block === 'batch_loop' ? 'batch' : context;
+        const result = missingConnections(step.steps, childKeys, missing, childContext);
+        if (step.block === 'epoch_loop') result.current.forEach((key) => current.add(key));
+      }
+      addProvidedKeys(current, step);
+    }
+    return {current, missing};
+  }
+  const initial = new Set(Object.keys(state.recipe.settings || {}));
+  const before = missingConnections(state.recipe.steps, initial).missing;
+  const copy = (steps, parentId = '__root__') => {
+    const result = [];
+    for (let index = 0; index <= steps.length; index += 1) {
+      if (parentId === target.parentId && index === target.index) result.push(movingStep);
+      const step = steps[index];
+      if (!step || step._uiId === movingStep._uiId) continue;
+      result.push(Array.isArray(step.steps) ? {...step, steps: copy(step.steps, step._uiId)} : step);
+    }
+    return result;
+  };
+  const after = missingConnections(copy(state.recipe.steps), initial).missing;
+  const broken = [...after].filter(([key]) => !before.has(key)).map(([, reason]) => reason);
+  return broken.length ? `移动会断开输入连接或违反层级限制：${broken.join('；')}。请同时调整依赖积木的位置` : null;
+}
+
+function canInsert(info, parentId, movingId = null, index = 0, allowIncomplete = false) {
+  return availabilityReason(info, { parentId, index, context: getPlacementContext(parentId) }, movingId, null, allowIncomplete) === null;
 }
 
 function findDropTarget(zone) {
-  return { parentId: zone.dataset.parentId || '__root__', index: Number(zone.dataset.index || 0), context: zone.dataset.context || 'top' };
+  return { parentId: zone.dataset.parentId || '__root__', index: Number(zone.dataset.index || 0), context: zone.dataset.context || 'top', compositeId: zone.dataset.compositeId || null };
 }
 
 function setActiveInsertionTarget(target) {
@@ -228,28 +291,124 @@ function setActiveInsertionTarget(target) {
 function targetLabel(target) {
   if (!target) return '请先点击一个插入位置';
   const contextNames = { top: '根层', epoch: 'Epoch Loop', batch: 'Batch Loop', any: '当前容器' };
-  const next = target.context === 'batch' ? ' 下一步：添加 Forward。' : '';
-  return `当前插入位置：${contextNames[target.context] || target.context}，第 ${target.index + 1} 步。${next}`;
+  const focus = target.focus === 'algorithm-core' ? '算法核心' : `第 ${target.index + 1} 步`;
+  return `当前插入位置：${contextNames[getPlacementContext(target.parentId)] || target.context}，${focus}。`;
+}
+
+function renderPositionIndicator() {
+  const indicator = $('workspace-position-indicator');
+  if (!indicator) return;
+  const detail = $('workspace-position-detail');
+  const constraint = $('workspace-position-constraint');
+  const status = $('workspace-position-status');
+  const target = state.activeInsertionTarget;
+  const contextNames = { top: '根层', epoch: 'Epoch Loop', batch: 'Batch Loop', any: '当前容器' };
+  const context = target ? (contextNames[getPlacementContext(target.parentId)] || target.context) : null;
+  // A selected workspace block is also a candidate: selecting a block and
+  // then clicking another insertion slot should explain whether that block
+  // can be moved there, just like a palette block being dragged in.
+  const selectedInfo = state.selected ? blockInfo(state.selected.block) : null;
+  const candidate = state.drag?.info || state.paletteSelection || selectedInfo;
+  const movingId = state.drag?.type === 'step'
+    ? state.drag.id
+    : (!state.drag && state.selected ? state.selected._uiId : null);
+
+  indicator.dataset.state = target ? 'ready' : 'empty';
+  if (detail) detail.textContent = target ? `${context} · 第 ${target.index + 1} 个插入位` : '尚未选择插入位置';
+  if (constraint) {
+    if (!target) {
+      constraint.textContent = '先选插入位，再选积木：这里会说明能否放置，以及缺少哪些输入。';
+    } else {
+      const slotCount = availableKeysBefore(target).size;
+      constraint.textContent = `位置需支持${context}；输入可以添加后再连接。此处已有 ${slotCount} 项输入。可放置不代表已通过运行检查。`;
+    }
+  }
+  if (!status) return;
+  if (!candidate) {
+    status.textContent = target ? '○ 请选择左侧积木查看是否可放置' : '○ 等待选择插入位';
+    return;
+  }
+  const reason = availabilityReason(candidate, target, movingId);
+  if (reason) {
+    const configurable = !movingId && !availabilityReason(candidate, target, null, null, true);
+    indicator.dataset.state = configurable ? 'ready' : 'invalid';
+    status.textContent = configurable ? `○ 可添加，待连接：${reason}` : `✕ ${candidate.name || candidate.id}：${reason}`;
+  } else {
+    indicator.dataset.state = 'valid';
+    status.textContent = `✓ ${candidate.name || candidate.id} 可以放置在这里`;
+  }
 }
 
 function defaultInsertionTarget() {
   const epoch = state.recipe.steps.find((step) => step.block === 'epoch_loop');
   const batch = epoch?.steps?.find((step) => step.block === 'batch_loop');
   if (!batch) return null;
-  const afterGetBatch = (batch.steps || []).findIndex((step) => step.block === 'get_batch');
-  return { parentId: batch._uiId, index: afterGetBatch >= 0 ? afterGetBatch + 1 : (batch.steps || []).length, context: 'batch' };
+  const coreIndex = (batch.steps || []).findIndex((step) =>
+    ['forward', 'forward_feature', 'forward_with_state'].includes(step.block));
+  const index = coreIndex >= 0 ? coreIndex + 1 : (batch.steps || []).length;
+  return { parentId: batch._uiId, index, context: 'batch', focus: 'algorithm-core' };
+}
+
+function collectInsertionTargets(steps = state.recipe.steps, parentId = '__root__', context = 'top', targets = []) {
+  const children = steps || [];
+  for (let index = 0; index <= children.length; index += 1) targets.push({parentId, index, context});
+  children.forEach((step) => {
+    if (!Array.isArray(step.steps)) return;
+    const childContext = getPlacementContext(step._uiId);
+    collectInsertionTargets(step.steps, step._uiId, childContext, targets);
+  });
+  return targets;
+}
+
+function revealInsertionTarget(target) {
+  const path = target?.parentId && target.parentId !== '__root__' ? findStepPath(target.parentId) : [];
+  let siblings = state.recipe.steps;
+  let containerId = '__root__';
+  (path || []).forEach((ancestor) => {
+    const ancestorIndex = siblings.indexOf(ancestor);
+    detectCompositeRanges(siblings).forEach((range) => {
+      if (ancestorIndex < range.start || ancestorIndex >= range.end) return;
+      const key = compositeKey(containerId, {...range, steps: siblings});
+      if (!state.compositeUngrouped.has(key)) state.compositeExpanded.add(key);
+    });
+    if (blockInfo(ancestor.block)?.kind !== 'action') state.collapsed.delete(ancestor);
+    siblings = Array.isArray(ancestor.steps) ? ancestor.steps : [];
+    containerId = ancestor._uiId;
+  });
+}
+
+function recommendedInsertionTarget(info, movingId = null) {
+  const current = state.activeInsertionTarget;
+  if (current && canInsert(info, current.parentId, movingId, current.index)) return current;
+  return collectInsertionTargets().find((target) => canInsert(info, target.parentId, movingId, target.index)) || null;
+}
+
+function locateBlockInsertion(info) {
+  const target = recommendedInsertionTarget(info);
+  if (!target) {
+    showMessage(`没有找到可插入位置：${availabilityReason(info, state.activeInsertionTarget) || '请先补齐前置 slot'}`, 'error');
+    return false;
+  }
+  revealInsertionTarget(target);
+  state.activeInsertionTarget = target;
+  state.paletteSelection = info;
+  state.selected = null;
+  draw();
+  requestAnimationFrame(() => {
+    const zone = [...document.querySelectorAll('.drop-target')].find((item) => {
+      const candidate = findDropTarget(item);
+      return candidate.parentId === target.parentId && candidate.index === target.index;
+    });
+    zone?.scrollIntoView({block: 'center'});
+  });
+  return true;
 }
 
 const UI_CATEGORIES = [
   { name: '全部', icon: '▤', color: '#84cc16' },
   { name: '数据', icon: '▦', color: '#38bdf8' },
-  { name: '模型', icon: '◈', color: '#a78bfa' },
-  { name: '训练', icon: '↻', color: '#f59e0b' },
-  { name: '公式', icon: 'ƒ', color: '#fb7185' },
-  { name: '选择', icon: '⌁', color: '#34d399' },
-  { name: '状态', icon: '▣', color: '#818cf8' },
-  { name: '统计', icon: '∑', color: '#2dd4bf' },
-  { name: '更新', icon: '↟', color: '#facc15' },
+  { name: '模型与训练', icon: '◈', color: '#a78bfa' },
+  { name: '算法操作', icon: 'ƒ', color: '#fb7185' },
   { name: '评估', icon: '◒', color: '#c4b5fd' },
   { name: '我的', icon: '♡', color: '#f472b6' },
 ];
@@ -257,17 +416,10 @@ const UI_CATEGORIES = [
 function uiCategory(info) {
   if (isUserOwnedInfo(info)) return '我的';
   const raw = `${info?.ui_group || ''} ${info?.category || ''} ${info?.stage || ''}`.toLowerCase();
-  if (info?.id?.startsWith('formula__') || /formula|tensor|loss|gather|softmax|log|power|mean|cross/.test(raw)) return '公式';
   if (/data|dataset|loader|noise|view|role|split|manifest|数据/.test(raw)) return '数据';
-  if (/model|network|backbone|模型/.test(raw)) return '模型';
-  if (/selection|select|mask|weight|sample|选择|筛/.test(raw)) return '选择';
-  if (/state|history|ema|accumulator|memory|状态|历史/.test(raw)) return '状态';
-  if (/statistic|posterior|transition|graph|snapshot|统计|后验|转移/.test(raw)) return '统计';
-  if (/meta|parameter|gradient|optimizer|update|更新|参数/.test(raw)) return '更新';
   if (/evaluation|evaluate|metric|评估/.test(raw)) return '评估';
-  if (/scheduler|epoch|batch|training|control|runtime|train|loop|训练/.test(raw)) return '训练';
-  if (String(info?.id || '').startsWith('user/')) return '我的';
-  return '训练';
+  if (/model|network|backbone|optimizer|scheduler|epoch|batch|training|control|runtime|train|loop|模型|训练|更新|参数/.test(raw)) return '模型与训练';
+  return '算法操作';
 }
 
 function isUserOwnedInfo(info) {
@@ -277,7 +429,7 @@ function isUserOwnedInfo(info) {
   return origin === 'user' || origin.includes('scratch-web') || id.startsWith('user/') || id.includes('__user__');
 }
 
-function categoryInfo(name) { return UI_CATEGORIES.find((item) => item.name === name) || UI_CATEGORIES.find((item) => item.name === '训练') || UI_CATEGORIES[0]; }
+function categoryInfo(name) { return UI_CATEGORIES.find((item) => item.name === name) || UI_CATEGORIES.find((item) => item.name === '模型与训练') || UI_CATEGORIES[0]; }
 
 function setResultState(label, className = '') {
   const status = $('result-status');
@@ -820,8 +972,10 @@ function updateRunState() {
   const run = $('run');
   if (run) {
     run.disabled = Boolean(state.running);
-    run.textContent = state.running ? '运行中…' : '▶ 运行';
+    run.textContent = state.running ? '运行中…' : '▶ 试运行';
   }
+  const fullRun = $('run-full');
+  if (fullRun) fullRun.disabled = Boolean(state.running);
   const stop = $('stop-run');
   if (stop) {
     stop.disabled = !state.running || !state.jobId || state.runStopping;
@@ -848,6 +1002,7 @@ function renderRuntimeLimits() {
 }
 
 function selectedTarget(step) {
+  if (step === state.paletteDraft) return state.activeInsertionTarget;
   const location = step ? findParentArrayAndIndex(step._uiId) : null;
   return { parentId: location?.parentId || '__root__', index: location?.index || 0 };
 }
@@ -933,7 +1088,7 @@ function renderParamControl(name, schema, step) {
     else if (kind === 'int') step.params[name] = Number.parseInt(input.value, 10);
     else if (kind === 'float') step.params[name] = Number.parseFloat(input.value);
     else step.params[name] = input.value;
-    markDirty();
+    if (step !== state.paletteDraft) markDirty();
     renderPalette();
     if (isDatasetSourceInfo(blockInfo(step.block)) && (name === 'dataset' || name === 'root' || name === 'path')) {
       renderInspector();
@@ -1058,9 +1213,35 @@ function removeStepById(uiId) {
   return { step, ...location };
 }
 
-function insertStep(parentId, index, step) {
+function renderUndoDelete() {
+  const button = $('undo-delete');
+  if (!button) return;
+  button.hidden = !state.deletedStep;
+  button.onclick = () => {
+    const deleted = state.deletedStep;
+    if (!deleted || !deleted.array) return;
+    deleted.array.splice(Math.min(deleted.index, deleted.array.length), 0, deleted.step);
+    state.deletedStep = null;
+    state.selected = deleted.step;
+    state.activeInsertionTarget = {parentId: deleted.parentId, index: deleted.index, context: deleted.context};
+    revealInsertionTarget(state.activeInsertionTarget);
+    markDirty();
+    draw();
+  };
+}
+
+function insertionComposite(steps, target) {
+  if (target.compositeId) return steps.find((step) => step._uiComposite?.id === target.compositeId)?._uiComposite;
+  const left = steps[target.index - 1]?._uiComposite;
+  const right = steps[target.index]?._uiComposite;
+  return left && left.id === right?.id ? left : null;
+}
+
+function insertStep(parentId, index, step, insertionTarget = {index}) {
   const target = getChildrenArray(parentId);
   if (!target) return false;
+  const group = insertionComposite(target, insertionTarget);
+  if (group) step._uiComposite = group;
   target.splice(Math.max(0, Math.min(index, target.length)), 0, step);
   markDirty();
   return true;
@@ -1073,33 +1254,43 @@ function moveStepToTarget(uiId, target) {
   if (!location || !step || !canInsert(info, target.parentId, uiId, target.index)) return false;
   const targetArray = getChildrenArray(target.parentId);
   if (!targetArray) return false;
+  const group = insertionComposite(targetArray, target);
   location.array.splice(location.index, 1);
   let index = target.index;
   if (location.array === targetArray && location.index < target.index) index -= 1;
   targetArray.splice(Math.max(0, Math.min(index, targetArray.length)), 0, step);
+  if (group) step._uiComposite = group;
+  else delete step._uiComposite;
   markDirty();
   state.activeInsertionTarget = { ...target, index };
+  revealInsertionTarget(target);
+  state.selected = step;
   return true;
 }
 
 function addStepAtTarget(blockId, target) {
   const info = blockInfo(blockId);
-  if (!canInsert(info, target?.parentId, null, target?.index || 0)) return false;
+  if (!target || !canInsert(info, target.parentId, null, target.index, true)) return false;
   const step = newStep(blockId);
+  if (state.paletteDraft?.block === blockId && state.paletteDraft.recipe === state.recipe) step.params = {...state.paletteDraft.params};
   const available = availableKeysBefore(target);
   (info.requires || []).forEach((name) => {
     const current = slotValue(info, step, name);
-    const inferred = inferAvailableSlot(info, name, available);
+    const inferred = inferAvailableSlot(info, name, available, step);
     if (inferred && !available.has(current)) step.params[name] = inferred;
   });
   (info.provides || []).forEach((name) => {
     const inferred = inferOutputSlot(info, name, target);
     if (inferred) step.params[name] = inferred;
   });
-  if (!insertStep(target.parentId, target.index, step)) return false;
+  if (!insertStep(target.parentId, target.index, step, target)) return false;
   markDirty();
   state.selected = step;
   state.activeInsertionTarget = { ...target, index: target.index + 1 };
+  // Make an inserted nested step immediately visible.  Without expanding its
+  // containing composite/loop, the recipe changes but the new block appears
+  // to have vanished from the workspace.
+  revealInsertionTarget(target);
   return true;
 }
 
@@ -1110,12 +1301,25 @@ function markDropZones() {
     const info = state.drag?.info || (state.drag?.type === 'new' ? blockInfo(state.drag.id) : null);
     const active = Boolean(state.activeInsertionTarget
       && state.activeInsertionTarget.parentId === target.parentId
-      && state.activeInsertionTarget.index === target.index);
+      && state.activeInsertionTarget.index === target.index
+      && (state.activeInsertionTarget.compositeId || null) === target.compositeId);
     zone.classList.toggle('drop-active', active);
     zone.classList.toggle('active', active);
-    zone.classList.toggle('drop-valid', Boolean(info && canInsert(info, target.parentId, movingId, target.index)));
-    zone.classList.toggle('drop-invalid', Boolean(info && !canInsert(info, target.parentId, movingId, target.index)));
+    const valid = Boolean(info && canInsert(info, target.parentId, movingId, target.index, !movingId));
+    zone.classList.toggle('drop-valid', valid);
+    zone.classList.toggle('drop-invalid', Boolean(info && !valid));
+    const baseLabel = zone.dataset.baseLabel || dropZoneLabel(target.parentId, target.index, target.context);
+    // During a drag, keep the drop zone itself as the explanation surface:
+    // valid targets are green, while invalid targets state the exact contract
+    // or placement reason instead of relying on colour alone.
+    if (info) {
+      const pending = valid && availabilityReason(info, target, movingId);
+      zone.textContent = valid ? `${baseLabel} ${pending ? '○ 可放置，之后连接输入' : '✓ 可放置'}` : `✕ ${baseLabel}（${availabilityReason(info, target, movingId)}）`;
+    } else {
+      zone.textContent = baseLabel;
+    }
   });
+  renderPositionIndicator();
 }
 
 function handleDrop(event, zone) {
@@ -1124,29 +1328,31 @@ function handleDrop(event, zone) {
   const newBlockId = event.dataTransfer.getData('application/x-lnl-new-block');
   const stepId = event.dataTransfer.getData('application/x-lnl-step');
   const reason = newBlockId
-    ? availabilityReason(blockInfo(newBlockId), target)
+    ? availabilityReason(blockInfo(newBlockId), target, null, null, true)
     : stepId ? availabilityReason(blockInfo(findStepById(stepId)?.block), target, stepId) : '未识别拖动内容';
   const success = !reason && (newBlockId ? addStepAtTarget(newBlockId, target) : moveStepToTarget(stepId, target));
   state.drag = null;
   if (!success) {
-    showMessage(`不能插入到${target.context}层：${reason || '插入失败'}`, 'error');
+    showMessage(`✕ 不能插入到${target.context}层：${reason || '插入失败'}`, 'error');
     markDropZones();
     return;
   }
   draw();
 }
 
-function createDropZone(parentId, index, context) {
+function createDropZone(parentId, index, context, compositeId = null) {
   const zone = document.createElement('div');
   zone.className = 'drop-target';
   zone.dataset.parentId = parentId;
   zone.dataset.index = String(index);
   zone.dataset.context = context;
-  zone.textContent = dropZoneLabel(parentId, index, context);
-  zone.onclick = (event) => { event.stopPropagation(); setActiveInsertionTarget({ parentId, index, context }); };
+  if (compositeId) zone.dataset.compositeId = compositeId;
+  zone.dataset.baseLabel = dropZoneLabel(parentId, index, context);
+  zone.textContent = zone.dataset.baseLabel;
+  zone.onclick = (event) => { event.stopPropagation(); setActiveInsertionTarget(findDropTarget(zone)); };
   zone.ondragover = (event) => {
     const info = state.drag?.info;
-    if (info && canInsert(info, parentId, state.drag.type === 'step' ? state.drag.id : null, index)) {
+    if (info && canInsert(info, parentId, state.drag.type === 'step' ? state.drag.id : null, index, state.drag.type === 'new')) {
       event.preventDefault();
       zone.classList.add('drop-hover');
     }
@@ -1177,12 +1383,42 @@ function renderPalette() {
   palette.innerHTML = '';
   rail.innerHTML = '';
   const query = state.paletteQuery.trim().toLowerCase();
+  const target = state.activeInsertionTarget;
   const categoryMatches = (item) => state.paletteCategory === '全部'
     || (state.paletteCategory === '我的' ? isUserOwnedInfo(item) : uiCategory(item) === state.paletteCategory);
-  const visible = state.blocks.filter((item) => item.beginner_visible && (!query || [
+  const searchable = state.blocks.filter((item) => item.beginner_visible && (!query || [
     item.name, item.id, item.category, item.ui_group, item.description,
     ...(item.requires || []), ...(item.provides || []),
   ].join(' ').toLowerCase().includes(query)) && categoryMatches(item));
+  const placementMatches = (item) => !target || placementAllows(item, target.parentId);
+  // Position-incompatible blocks stay discoverable while searching, but the
+  // normal palette shows only blocks that can live in the selected container.
+  const visible = searchable.filter((item) => placementMatches(item) || Boolean(query));
+  const hiddenByPlacement = searchable.length - visible.length;
+  const availableKeys = target ? availableKeysBefore(target) : new Set();
+  const recommendationScore = (item) => {
+    if (!target || !placementMatches(item)) return -1;
+    const required = item.requires || [];
+    const ready = required.filter((name) => availableKeys.has(slotValue(item, null, name))).length;
+    const score = required.length ? ready / required.length : 0.25;
+    return (required.length && ready === required.length ? 100 : 0)
+      + score * 30
+      + (item.formula_safe ? 15 : 0)
+      + (item.stage === 'train' && target.context === 'batch' ? 5 : 0);
+  };
+  const recommended = query || !target ? [] : [...visible]
+    .map((item, index) => ({item, score: recommendationScore(item), index}))
+    .filter(({score}) => score >= 100)
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .slice(0, 8)
+    .map(({item}) => item);
+  const targetSummary = $('palette-target-summary');
+  if (targetSummary) targetSummary.textContent = target ? targetLabel(target) : '请先点击中间的插入位置';
+  const targetLocate = $('palette-target-locate');
+  if (targetLocate) {
+    targetLocate.hidden = !state.paletteSelection;
+    targetLocate.onclick = () => state.paletteSelection && locateBlockInsertion(state.paletteSelection);
+  }
   UI_CATEGORIES.forEach((category) => {
     const categoryVisible = visible.filter((item) => uiCategory(item) === category.name);
     const railButton = document.createElement('button');
@@ -1198,7 +1434,7 @@ function renderPalette() {
     rail.appendChild(railButton);
   });
   const count = $('palette-count');
-  if (count) count.textContent = `${visible.length} 个`;
+  if (count) count.textContent = `${visible.length} 个${hiddenByPlacement ? `（隐藏 ${hiddenByPlacement} 个位置不符）` : ''}`;
 
   if (state.paletteCategory === '我的') {
     const actions = document.createElement('div'); actions.className = 'my-palette-actions';
@@ -1210,9 +1446,42 @@ function renderPalette() {
     });
     palette.appendChild(actions);
   }
+  if (state.paletteCategory === '算法操作') {
+    const actions = document.createElement('div'); actions.className = 'my-palette-actions';
+    const custom = document.createElement('button'); custom.type = 'button'; custom.className = 'my-palette-card';
+    custom.innerHTML = '<strong>＋ 创建自定义公式</strong><small>把已有公式积木组合成一个可复用的用户公式。</small>';
+    custom.onclick = () => { resetFormulaEditor(); $('formula-editor-dialog').showModal(); };
+    actions.appendChild(custom); palette.appendChild(actions);
+  }
   if (!visible.length) {
     palette.appendChild(Object.assign(document.createElement('div'), {className: 'palette-empty', textContent: query ? '没有匹配的积木' : state.paletteCategory === '我的' ? '暂无用户公式；从上方创建一个。' : '该分类暂无可见积木'}));
+    renderPositionIndicator();
     return;
+  }
+  if (recommended.length) {
+    const heading = document.createElement('div');
+    heading.className = 'palette-section-heading';
+    heading.innerHTML = '<strong>推荐下一步</strong><small>根据当前位置和已有输入自动筛选</small>';
+    palette.appendChild(heading);
+    const recommendationBar = document.createElement('div');
+    recommendationBar.className = 'palette-recommendations';
+    recommended.forEach((item) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'palette-recommendation';
+      button.dataset.blockId = item.id;
+      button.textContent = item.name;
+      button.title = item.description || item.name;
+      button.onclick = () => {
+        state.paletteSelection = item;
+        state.selected = null;
+        paletteDraftFor(item);
+        renderInspector();
+        renderPalette();
+      };
+      recommendationBar.appendChild(button);
+    });
+    palette.appendChild(recommendationBar);
   }
   const groups = new Map();
   visible.forEach((item) => { const group = item.formula_group || item.category || '通用'; if (!groups.has(group)) groups.set(group, []); groups.get(group).push(item); });
@@ -1247,16 +1516,39 @@ function renderPalette() {
       node.dataset.uiCategory = uiCategory(item);
       node.dataset.blockId = item.id;
       node.classList.toggle('palette-selected', Boolean(state.paletteSelection?.id === item.id && !state.selected));
-      // Placement and required slots are validated against the concrete drop
-      // zone, not the last selected insertion target.
-      node.draggable = true;
-      node.setAttribute('aria-disabled', 'false');
-      node.textContent = item.name;
-      const clickReason = availabilityReason(item, state.activeInsertionTarget);
-      node.title = clickReason
-        ? `${item.description}\n点击插入不可用：${clickReason}\n可拖动到合法的绿色插入位置`
-        : `${item.description}\n点击插入到当前插入位置，或拖动到任意合法插入位置`;
-      node.ondragstart = (event) => {
+      const header = document.createElement('div'); header.className = 'palette-block-header';
+      const title = document.createElement('strong'); title.textContent = item.name;
+      const handle = document.createElement('span'); handle.className = 'drag-handle'; handle.textContent = '⠿'; handle.title = '拖动把手：添加到绿色插入位'; handle.setAttribute('role', 'img'); handle.setAttribute('aria-label', '拖动把手');
+      header.append(title, handle); node.appendChild(header);
+      const reason = target ? availabilityReason(item, target) : '请先选择插入位置';
+      const placeable = target && !availabilityReason(item, target, null, null, true);
+      const status = document.createElement('div'); status.className = 'palette-availability';
+      if (!target) { status.dataset.state = 'empty'; status.textContent = '○ 先选插入位'; }
+      else if (reason) { status.dataset.state = placeable ? 'empty' : 'invalid'; status.textContent = placeable ? `○ 待连接：${reason}` : `✕ ${reason}`; }
+      else { status.dataset.state = 'valid'; status.textContent = '✓ 可添加'; }
+      node.appendChild(status);
+      const actions = document.createElement('div'); actions.className = 'palette-block-actions';
+      const add = document.createElement('button'); add.type = 'button'; add.className = 'palette-add';
+      const recommended = target && reason ? recommendedInsertionTarget(item) : null;
+      add.textContent = !target ? '选择插入位' : placeable ? (reason ? '添加并配置' : '添加到当前位置') : recommended ? '添加到推荐位置' : '查看放置限制';
+      add.disabled = !target;
+      add.title = reason || '添加到当前插入位置';
+      add.onclick = (event) => {
+        event.stopPropagation();
+        state.paletteSelection = item;
+        state.selected = null;
+        paletteDraftFor(item);
+        if (!placeable && recommended) {
+          revealInsertionTarget(recommended);
+          if (addStepAtTarget(item.id, recommended)) { state.paletteSelection = null; draw(); return; }
+        }
+        if (!placeable) { renderInspector(); renderPalette(); setInspectorTab('blocks'); return; }
+        if (addStepAtTarget(item.id, target)) { state.paletteSelection = null; draw(); }
+        else showMessage('添加失败：请重新选择一个绿色插入位置', 'error');
+      };
+      actions.appendChild(add); node.appendChild(actions);
+      handle.draggable = true;
+      handle.ondragstart = (event) => {
         state.paletteSelection = item;
         state.selected = null;
         renderInspector();
@@ -1265,22 +1557,21 @@ function renderPalette() {
         event.dataTransfer.effectAllowed = 'copy';
         markDropZones();
       };
-      node.ondragend = () => { state.drag = null; markDropZones(); };
-      node.onclick = () => {
-        // A palette click should always expose the block contract, even when
-        // the current insertion target cannot accept that block.
+      handle.ondragend = () => { state.drag = null; markDropZones(); };
+      node.onclick = (event) => {
+        if (event.target.closest('.drag-handle, .palette-add')) return;
+        // Clicking a palette item only selects it; insertion is an explicit
+        // action or a drag from the handle.
         state.paletteSelection = item;
         state.selected = null;
         renderInspector();
-        const target = state.activeInsertionTarget;
-        const clickReason = availabilityReason(item, target);
-        if (clickReason || !addStepAtTarget(item.id, target)) { showMessage(`不能插入：${clickReason || '插入失败'}`, 'error'); return; }
-        state.paletteSelection = null;
-        draw();
+        renderPalette();
       };
+      node.title = `${item.description || ''}\n${reason || '可添加到当前插入位置'}\n点击查看详情；使用“添加到当前位置/推荐位置”或拖动把手`;
       palette.appendChild(node);
     });
   });
+  renderPositionIndicator();
 }
 
 function renderStepSummary(step, info) {
@@ -1311,7 +1602,11 @@ const MATH_COMMANDS = {
   alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', theta: 'θ',
   lambda: 'λ', mu: 'μ', pi: 'π', rho: 'ρ', sigma: 'σ', tau: 'τ', phi: 'φ',
   psi: 'ψ', omega: 'ω', Gamma: 'Γ', Delta: 'Δ', Sigma: 'Σ', Phi: 'Φ',
-  in: '∈', le: '≤', ge: '≥', neq: '≠', times: '×', cdot: '·',
+  ell: 'ℓ', varepsilon: 'ϵ', varphi: 'ϕ', vartheta: 'ϑ', kappa: 'κ',
+  nu: 'ν', xi: 'ξ', chi: 'χ', zeta: 'ζ',
+  in: '∈', notin: '∉', le: '≤', ge: '≥', neq: '≠', ne: '≠', approx: '≈',
+  geq: '≥', leq: '≤', partial: '∂', nabla: '∇', lceil: '⌈', rceil: '⌉',
+  propto: '∝', times: '×', cdot: '·',
   pm: '±', rightarrow: '→', leftarrow: '←', infty: '∞', sum: 'Σ', prod: 'Π',
 };
 const MATH_OPERATOR_CHARS = new Set(['=', '+', '-', '*', '/', '·', '×', '±', '⊙',
@@ -1319,6 +1614,106 @@ const MATH_OPERATOR_CHARS = new Set(['=', '+', '-', '*', '/', '·', '×', '±', 
   '≠', '<', '>', '∈', 'Σ', 'Π', '∑', '∏']);
 const MATH_GREEK = new Set('αβγδεζηθικλμνξοπρστυφχψωΓΔΘΛΞΠΣΦΨΩ'.split(''));
 const MATH_WORD_SYMBOLS = {sum: 'Σ', prod: 'Π'};
+const MATH_OPERATOR_COMMANDS = new Set([
+  'argmax', 'argmin', 'clip', 'cos', 'Cov', 'CE', 'count', 'det', 'EMA', 'exp',
+  'GMM', 'log', 'max', 'mean', 'min', 'normalize', 'pinv', 'Quantile',
+  'ReverseDLD', 'row-normalize', 'shape', 'softmax', 'swap', 'Top', 'Uniform', 'var',
+]);
+
+// Registry formulas are intentionally kept as runtime metadata.  A few of the
+// historical strings were shorthand (or used ambiguous variable names), which
+// made the formula bar show a mathematically different expression than the
+// operation actually performs.  This display-only catalogue gives each
+// canonical operation an explicit, indexed equation without changing execution
+// metadata or user-authored formulas.
+const DISPLAY_FORMULAS = Object.freeze({
+  binary_risk: String.raw`\ell_{i,0}=-\log p_{i,0},\ \ell_{i,1}=-\log p_{i,1}; \tilde{\ell}_{i,0}=\frac{(1-\rho_+)\ell_{i,0}-\rho_-\ell_{i,1}}{1-\rho_+-\rho_-}; \tilde{\ell}_{i,1}=\frac{-\rho_+\ell_{i,0}+(1-\rho_-)\ell_{i,1}}{1-\rho_+-\rho_-}`,
+  compose_revision_transition: String.raw`T'_i=\operatorname{row-normalize}([T_i+\Delta T]_+),\ [u]_+=\max(u,0)`,
+  dld_accelerated_inference: String.raw`\hat{y}_0=\operatorname{ReverseDLD}(y_T; K=\text{steps})`,
+  formula__builtin__apl: String.raw`\mathcal{L}_{\mathrm{APL}}=\lambda_A\frac{-\log p_{i,y_i}}{\sum_c -\log p_{i,c}}+\lambda_P\left(-\sum_{c\ne y_i}p_{i,c}\log \bar{y}_{i,c}\right);\ \log\bar{y}_{i,y_i}=0`,
+  formula__builtin__confidence_score: String.raw`p_i=\operatorname{softmax}(z_i),\ s_i=p_{i,y_i}`,
+  formula__builtin__gce: String.raw`\mathcal{L}_q=\frac{1}{N}\sum_i\frac{1-p_{i,y_i}^{q}}{q},\ p_i=\operatorname{softmax}(z_i),\ q>0`,
+  formula__builtin__standard_ce: String.raw`\mathcal{L}=\frac{1}{N}\sum_i-\log p_{i,y_i},\ p_i=\operatorname{softmax}(z_i)`,
+  formula__builtin__transition_corrected_risk: String.raw`\mathcal{L}=\frac{1}{N}\sum_i-\log[(p_iT_i)_{y_i}],\ p_i=\operatorname{softmax}(z_i)`,
+  formula__builtin__weighted_ce: String.raw`\mathcal{L}=\frac{1}{N}\sum_i w_i[-\log p_{i,y_i}],\ p_i=\operatorname{softmax}(z_i)`,
+  softmax: String.raw`p_{i,c}=\frac{\exp(z_{i,c}/\tau)}{\sum_j\exp(z_{i,j}/\tau)},\ \tau>0`,
+  cal_cores2_adjusted_risk: String.raw`\mathcal{L}=\frac{1}{N}\sum_i\left[-\log p_{i,y_i}-\alpha\sum_c\bar{\pi}_c\log p_{i,c}\right],\ \bar{\pi}_c=\frac{\sqrt{\pi_c}}{\sum_j\sqrt{\pi_j}}`,
+  cal_covariance_correction: String.raw`\Delta=\sum_c\hat{\pi}_c\sum_j\operatorname{Cov}\left(1[\tilde{y}=j],\ell_j\mid\hat{y}=c\right)`,
+  dss_masked_training_loss: String.raw`\mathcal{L}=\frac{1}{B}\sum_i s_i\left[\log\sum_{c\notin E_i}\exp(z_{i,c})-z_{i,y_i}\right]`,
+  mc_ldce_objective: String.raw`J=1+\frac{1}{N}\sum_i\left\|h_iW^{\mathsf{T}}\right\|_2^2-2\langle W,\mu_{\mathrm{clean}}\rangle_F`,
+  mc_ldce_volmin_objective: String.raw`\mathcal{L}=\frac{1}{N}\sum_i-\log[(p_iT)_{y_i}]+\lambda\log\det(T),\ p_i=\operatorname{softmax}(z_i)`,
+  mean_loss: String.raw`L=\frac{1}{N}\sum_i\ell_i`,
+  mean_squared_error: String.raw`e_i=\operatorname{mean}_d[(x_{i,d}-y_{i,d})^2],\ \operatorname{MSE}_{\mathrm{per\text{-}sample}}=e_i,\ \operatorname{MSE}_{\mathrm{scalar}}=\operatorname{mean}_i e_i`,
+  nce_loss: String.raw`L_{\mathrm{NCE},i}=\frac{-\log p_{i,y_i}}{\sum_c[-\log p_{i,c}]},\ p_i=\operatorname{softmax}(z_i)`,
+  per_sample_ce: String.raw`\ell_i=-\log p_{i,y_i},\ p_i=\operatorname{softmax}(z_i)`,
+  rce_loss: String.raw`L_{\mathrm{RCE},i}=-\sum_c p_{i,c}\log\bar{y}_{i,c},\ \log\bar{y}_{i,y_i}=0,\ \log\bar{y}_{i,c\ne y_i}=\log\alpha`,
+  sed_rejected_regularizer: String.raw`R_i=\beta\frac{\log p_{i,\tilde y_i}}{C}+\gamma\frac{-\log(1-p_{i,\tilde y_i^{\mathrm{comp}}})}{C},\ \tilde y_i^{\mathrm{comp}}\sim\operatorname{Uniform}(\mathcal{Y}\setminus\{\tilde y_i\})`,
+  soft_target_cross_entropy: String.raw`\mathcal{L}=\frac{1}{N}\sum_i-\sum_c q_{i,c}\log p_{i,c},\ p_i=\operatorname{softmax}(z_i)`,
+  symmetric_kl: String.raw`D_{\mathrm{SKL},i}=\sum_c p^a_{i,c}\log\frac{p^a_{i,c}}{p^b_{i,c}}+\sum_c p^b_{i,c}\log\frac{p^b_{i,c}}{p^a_{i,c}}`,
+  weighted_sum: String.raw`y=\sum_{k=1}^{K}w_kx_k`,
+  virtual_parameter_update: String.raw`\theta'=\theta-\alpha\nabla_{\theta}L`,
+  step_milestone_update: String.raw`\operatorname{lr}_t=\operatorname{lr}_0\gamma^{\sum_m1[t\ge m]},\ t=\operatorname{epoch}\cdot S+\operatorname{batch}+1`,
+  cwd_global_objective: String.raw`\mathcal{L}=1+\frac{1}{N}\sum_i(h_i^{\mathsf{T}}w+b)^2-2w^{\mathsf{T}}(\mu_1-\mu_0)-2b(\pi_1-\pi_0)`,
+  cwd_virtual_systems: String.raw`C^{(k)}=\sum_{s,t}\tilde{\pi}^{(k)}_s\tilde{T}^{(k)}_{s,t}P_{s,t}^{\mathsf{T}}`,
+  cwd_coefficient_pseudoinverse: String.raw`C^{(k)+}=\operatorname{pinv}(C^{(k)})`,
+  cwd_observed_statistics: String.raw`\tilde{\pi}_c=\frac{n_c}{N},\ \tilde{\mu}_c=\frac{1}{N}\sum_i h_i1[\tilde{y}_i=c]`,
+  cwd_recover_centroids: String.raw`\hat{M}=\left[\sum_k\tilde{M}C^{(k)+}-(C-1)\tilde{M}\right]^{\mathsf{T}}`,
+  dld_sample_forward_state: String.raw`y_t=y_0+\bar{\alpha}_t d+\bar{\beta}_t\epsilon,\ d=y_n-y_0`,
+  dld_pre_correct_labels: String.raw`d_i=y_{n,i}-y_{0,i},\ (y_0,y_n)=\operatorname{PreCorrect}(p_w,p_s,\tilde{y})`,
+  dss_ccs_trend_exclusion: String.raw`E_{i,c}=1\left[z_{i,c}>\Phi^{-1}(1-\alpha)\right],\ E_{i,y_i}=0`,
+  dss_mda_marginal_adjustment: String.raw`p'_{i,c}=\frac{p_{i,c}/(Cm_c)}{\sum_jp_{i,j}/(Cm_j)}`,
+  dss_warmup_lifecycle: String.raw`S\leftarrow\operatorname{on\_cycle\_start}(S,t)`,
+  create_fine_state: String.raw`\operatorname{EMA}_t=m\operatorname{EMA}_{t-1}+(1-m)f_t;\ \operatorname{SCS/SCR}\text{ update epoch snapshots}`,
+  fine_scr_reweight: String.raw`w_i=\exp\left[-\frac{(\max_c p_{i,c}-\hat{\mu}_{\hat{c}_i})^2}{2\hat{\sigma}_{\hat{c}_i}^2/n_\sigma^2}\right]`,
+  fine_scs_select: String.raw`clean_i=1\left[p_{i,\tilde{y}_i}\ge\tau_{\mathrm{global}}\,\tau_{\mathrm{class}(\tilde{y}_i)}\right]`,
+  fine_snapshot_predictions: String.raw`p_{t,i}=f_t(x_i),\ p^{\mathrm{EMA}}_{t,i}=f^{\mathrm{EMA}}_t(x_i),\ \text{aligned by stable index}`,
+  fine_warmup_loss: String.raw`L_{\mathrm{warmup}}=\frac{1}{N}\sum_i-\log p_{i,\tilde{y}_i}`,
+  fit_gmm: String.raw`w_i=P(z_i=\mathrm{clean}\mid\ell_i),\ z_i\sim\mathrm{GMM}_2`,
+  mc_ldce_recover_statistic: String.raw`\hat{\mu}=\left(\tilde{\mu}\,A^+\right)^{\mathsf{T}},\ A=\sum_{i,j}\pi_iT_{i,j}\,\operatorname{swap}(i,j)^{\mathsf{T}}`,
+  create_mentor_provider: String.raw`q_t=mq_{t-1}+(1-m)\operatorname{Quantile}_{p}(\ell_t)\quad(\text{provider state})`,
+  pcse_recover_layer_statistics: String.raw`\mu=R^{\mathsf{T}}\tilde{\mu},\ S=R^{\mathsf{T}}\tilde{S},\ \Sigma=S-\mu\mu^{\mathsf{T}}`,
+  upm_update_eta: String.raw`\eta_i\leftarrow\Pi_{[0,1]}\left(\eta_i+\alpha\frac{\partial\log p(\tilde{y}_i\mid x_i)}{\partial\eta_i}\right)`,
+  masked_gradient_update: String.raw`g_i\leftarrow\alpha m_i g_i+\lambda\operatorname{sign}(\theta_i),\ m_i=1[i\in S]`,
+  parameter_criticality_mask: String.raw`s_j=|g_j\theta_j|,\ S=\operatorname{Top}_k(s),\ k=\lceil(1-\tau)m\rceil,\ \tau=\text{noise rate}`,
+  cal_materialize_proxy_artifact: String.raw`\text{proxy}=\operatorname{CORES}^2(\operatorname{argmax} f_{\mathrm{warmup}}(x),\ \ell_{\mathrm{adjusted}};\ \ell\in[\ell_{\min},\ell_{\max}])`,
+  cnlcu_soft_score: String.raw`\ell_i^*=\tilde{\mu}_i-\frac{\sigma^2\left(t_i+\sigma^2\log(2t_i)/t_i^2\right)}{n_i-\sigma^2}`,
+  indices_to_mask: String.raw`m_j=1[j\in I]`,
+  mean_by_indices: String.raw`\operatorname{mean}_{j\in I}v_j=\frac{1}{|I|}\sum_{j\in I}v_j`,
+  select_by_indices: String.raw`v_{\mathrm{selected}}=(v_j)_{j\in I}`,
+  select_lowest_scores: String.raw`I=\operatorname{argsort}_{\mathrm{stable\ score\ then\ index}}(s)_{1:k},\ k=\min\!\left(N,\max\!\left(m_{\min},R_r(Nf)\right)\right)`,
+  linear_rate_schedule: String.raw`r(t)=r_0+\operatorname{clip}(t/T,0,1)(r_1-r_0)`,
+  create_dss_state: String.raw`S=(H,M,Z,A,E)\quad\text{(indexed history, marginal, trend, selected, excluded)}`,
+  indexed_accumulate: String.raw`S_i\leftarrow S_i+v_i`,
+  affine_transform: String.raw`z=\alpha x+\beta`,
+  clamp_min: String.raw`z=\max(x,c)\quad\text{(elementwise)}`,
+  elementwise_multiply: String.raw`z_i=x_i y_i`,
+  elementwise_power: String.raw`z_i=x_i^{q}`,
+  gather_by_label: String.raw`v_i=V_{i,y_i}`,
+  negate: String.raw`z_i=-x_i`,
+  one_hot_like: String.raw`O_{i,c}=1[y_i=c],\ c=1,\ldots,C=\operatorname{shape}_{-1}(R)`,
+  sharpen_distribution: String.raw`q'_{i,c}=\frac{q_{i,c}^{1/T}}{\sum_jq_{i,j}^{1/T}}`,
+  sum_last_dimension: String.raw`z_i=\sum_cx_{i,c}`,
+  sum_values: String.raw`s=\sum_i x_i`,
+  weighted_blend: String.raw`z_i=w_i x_i+(1-w_i)y_i,\ w_i\in[0,1]`,
+  compose_transition: String.raw`T_{i,k}=\sum_jT^{(1)}_{i,j}T^{(2)}_{j,k},\ \bar{T}_{i,k}=\frac{T_{i,k}}{\sum_lT_{i,l}}`,
+  dual_t_transition_estimation: String.raw`T=T_{\mathrm{club}}T_{\mathrm{spade}},\ (T_{\mathrm{spade}})_{a,b}=\frac{\#\{\operatorname{argmax} q=a,\tilde{y}=b\}}{\#\{\operatorname{argmax} q=a\}}`,
+  pdl_fit_basis_matrices: String.raw`M_c=\operatorname{argmin}_{M\ge0}\sum_r\left\|W_{a_c(r)}M-q_{a_c(r)}\right\|_2^2`,
+  pdl_estimate_instance_transition: String.raw`T(x)=\sum_{r=1}^{R}\beta_r(x)M_r`,
+  pdl_fit_part_representation: String.raw`\operatorname{min}_{H,W\ge0}\|X-WH\|_F^2,\ \text{then normalize rows of }W`,
+  initialize_t_revision_transition: String.raw`\hat{T}_{c,:}=q(x_c),\ x_c=\operatorname{argmax}_x q_c(x)`,
+  importance_weight_formula: String.raw`w_i=\operatorname{detach}\!\left[\frac{q_{i,\tilde{y}_i}-\rho_{\mathrm{opp}(\tilde{y}_i)}}{(1-\rho_0-\rho_1)q_{i,\tilde{y}_i}}\right]_+`,
+  mentor_build_features: String.raw`v_i=(\ell_i,\ell_i-q_t,y_i,e_t)`,
+  mentor_predict_sample_weights: String.raw`w_i=M(v_i)\quad\text{with burn-in and dropout policy}`,
+  nonnegative_projection: String.raw`w_i=[s x_i]_+=\max(sx_i,0),\ s\in\{+1,-1\}`,
+  normalize_nonnegative_weights: String.raw`w_i=\bar{w}_i/\sum_j\bar{w}_j\ (\sum_j\bar{w}_j>0);\ w_i=0\ (\sum_j\bar{w}_j=0)`,
+  t_revision_importance_ratio: String.raw`w_i=\frac{g_{\tilde{y}_i}(x_i)}{(g(x_i)T_i)_{\tilde{y}_i}}`,
+});
+
+function formulaDisplayText(info) {
+  if (typeof info === 'string') return DISPLAY_FORMULAS[info] || info;
+  if (!info) return '';
+  return DISPLAY_FORMULAS[info.id] || info.formula || '';
+}
 
 function mathElement(tag, text = null) {
   const element = document.createElementNS(MATH_NS, tag);
@@ -1346,8 +1741,8 @@ function mathGroupEnd(source, start, opening = '{', closing = '}') {
 
 function normalizeMathSource(value) {
   return String(value || '')
-    .replace(/\\left|\\right/g, '')
-    .replace(/\\[,;!]/g, ' ')
+    .replace(/\\(?:left|right|quad|qquad|[,;!])/g, ' ')
+    .replace(/\\\s+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -1381,10 +1776,19 @@ function parseMathAtom(source, start) {
         fraction.append(numerator.node || mathElement('mi', '□'), denominator.node || mathElement('mi', '□'));
         return {node: fraction, next: denominator.next};
       }
-      if (command === 'text' || command === 'mathrm') {
+      if (command === 'sqrt') {
         const content = parseMathAtom(source, next);
-        const text = content.node?.textContent || '';
-        return {node: mathElement('mtext', text), next: content.next};
+        const root = mathElement('msqrt'); root.append(content.node || mathElement('mi', '□'));
+        return {node: root, next: content.next};
+      }
+      if (['text', 'mathrm', 'operatorname', 'mathbf', 'mathbb', 'mathcal', 'mathsf'].includes(command)) {
+        const content = parseMathAtom(source, next);
+        if (['operatorname', 'text'].includes(command)) {
+          return {node: mathElement('mtext', content.node?.textContent || ''), next: content.next};
+        }
+        const node = content.node || mathElement('mi', '□');
+        node.setAttribute('mathvariant', command === 'mathbb' ? 'double-struck' : command === 'mathcal' ? 'script' : command === 'mathbf' ? 'bold' : 'normal');
+        return {node, next: content.next};
       }
       if (['tilde', 'hat', 'bar', 'vec'].includes(command)) {
         const content = parseMathAtom(source, next);
@@ -1392,6 +1796,9 @@ function parseMathAtom(source, start) {
         const mover = mathElement('mover'); mover.append(content.node || mathElement('mi', '□'), mathElement('mo', accent));
         mover.setAttribute('accent', 'true');
         return {node: mover, next: content.next};
+      }
+      if (MATH_OPERATOR_COMMANDS.has(command)) {
+        return {node: mathElement('mo', command), next};
       }
       const symbol = MATH_COMMANDS[command] || command;
       const node = MATH_GREEK.has(symbol) ? mathElement('mi', symbol) : mathElement('mo', symbol);
@@ -1485,7 +1892,7 @@ function splitMathLines(value) {
 function renderMathFormula(container, formula, {compact = false} = {}) {
   if (!container) return;
   container.replaceChildren();
-  const source = String(formula || '').trim();
+  const source = normalizeMathSource(formula);
   container.classList.add('math-rendered');
   container.classList.toggle('math-rendered-compact', compact);
   if (!source || /^(暂无公式|暂无独立公式|无独立公式)$/.test(source)) {
@@ -1499,7 +1906,7 @@ function renderMathFormula(container, formula, {compact = false} = {}) {
     const row = document.createElement('div'); row.className = 'math-line'; row.appendChild(math); container.appendChild(row);
   });
   const sourceNode = document.createElement('span');
-  sourceNode.className = 'math-source'; sourceNode.textContent = source; sourceNode.title = '原始公式记号';
+  sourceNode.className = 'math-source'; sourceNode.textContent = source; sourceNode.title = '公式展示记号';
   container.appendChild(sourceNode);
 }
 
@@ -1561,6 +1968,20 @@ function detectCompositeRanges(steps) {
   const ranges = [];
   let index = 0;
   while (index < (steps || []).length) {
+    const membership = steps[index]._uiComposite;
+    if (membership) {
+      let end = index + 1;
+      while (end < steps.length && steps[end]._uiComposite?.id === membership.id) end += 1;
+      const definition = COMPOSITE_DEFINITIONS.find((item) => item.id === membership.definitionId);
+      if (definition) {
+        const members = steps.slice(index, end);
+        ranges.push({definition, start: index, end, groupId: membership.id,
+          modelCount: members.filter((step) => step.block === 'create_model').length,
+          optimizerCount: members.filter((step) => ['create_optimizer', 'create_parameter_group_optimizer'].includes(step.block)).length});
+        index = end;
+        continue;
+      }
+    }
     let match = null;
     for (const definition of COMPOSITE_DEFINITIONS) {
       const ids = definition.blocks;
@@ -1578,73 +1999,186 @@ function detectCompositeRanges(steps) {
         break;
       }
     }
-    if (match) { ranges.push(match); index = match.end; } else index += 1;
+    if (match && steps.slice(match.start, match.end).every((step) => !step._uiComposite)) {
+      const membership = {id: makeUiId(), definitionId: match.definition.id};
+      steps.slice(match.start, match.end).forEach((step) => { step._uiComposite = membership; });
+      match.groupId = membership.id;
+      ranges.push(match); index = match.end;
+    } else index += 1;
   }
   return ranges;
 }
 
 function compositeKey(parentId, range) {
-  return `${parentId}:${range.definition.id}:${range.start}:${range.end}:${range.steps?.[range.start]?._uiId || ''}`;
+  return `${parentId}:${range.groupId || range.steps?.[range.start]?._uiComposite?.id}`;
 }
 
-function renderStepNode(step, index, steps, parent, parentId, context) {
+function appendLoopIterationControl(container, step) {
+  if (!step || step.block !== 'epoch_loop') return;
+  const info = blockInfo(step.block);
+  const schema = info?.params?.epochs || {type: 'int', min: 0, default: 1};
+  step.params = step.params || {};
+  const wrap = document.createElement('label');
+  wrap.className = 'loop-iterations';
+  wrap.title = '直接修改训练循环执行的 epoch 轮次';
+  const label = document.createElement('span');
+  label.textContent = '轮次';
+  const input = document.createElement('input');
+  input.className = 'loop-iterations-input';
+  input.type = 'number';
+  input.min = schema.min ?? 0;
+  if (schema.max !== undefined) input.max = schema.max;
+  input.step = '1';
+  input.value = String(step.params.epochs ?? schema.default ?? 1);
+  input.setAttribute('aria-label', '训练轮次');
+  const commit = () => {
+    const value = Number.parseInt(input.value, 10);
+    const minimum = Number(schema.min ?? 0);
+    const maximum = schema.max === undefined ? Number.POSITIVE_INFINITY : Number(schema.max);
+    if (!Number.isFinite(value) || value < minimum || value > maximum) {
+      input.value = String(step.params.epochs ?? schema.default ?? 1);
+      input.setAttribute('aria-invalid', 'true');
+      return;
+    }
+    input.removeAttribute('aria-invalid');
+    if (step.params.epochs !== value) {
+      step.params.epochs = value;
+      markDirty();
+      renderRuntimeLimits();
+    }
+  };
+  input.oninput = (event) => event.stopPropagation();
+  input.onchange = (event) => { event.stopPropagation(); commit(); };
+  input.onkeydown = (event) => event.stopPropagation();
+  wrap.append(label, input);
+  container.appendChild(wrap);
+}
+
+function createSchedulerForEpoch(epochStep) {
+  const info = blockInfo('create_scheduler');
+  if (!info || !epochStep) return false;
+  if (flatRecipeSteps().some((step) => step.block === 'create_scheduler')) {
+    showMessage('Create Scheduler 已经添加；当前 Recipe 只能通过此入口添加一次。', 'error');
+    return false;
+  }
+  const epochIndex = state.recipe.steps.indexOf(epochStep);
+  if (epochIndex < 0) {
+    showMessage('当前 Epoch Loop 已失效，请重新选择训练循环。', 'error');
+    return false;
+  }
+  const targets = collectInsertionTargets()
+    .filter((target) => target.parentId === '__root__' && target.index <= epochIndex)
+    .sort((left, right) => right.index - left.index);
+  let selectedTarget = null;
+  let optimizer = null;
+  for (const target of targets) {
+    const available = availableKeysBefore(target);
+    const candidate = available.has('optimizer')
+      ? 'optimizer'
+      : [...available].find((key) => /optimizer/i.test(String(key)));
+    if (!candidate) continue;
+    if (!availabilityReason(info, target, null, {optimizer: candidate})) {
+      selectedTarget = target;
+      optimizer = candidate;
+      break;
+    }
+  }
+  if (!selectedTarget) {
+    showMessage('无法添加 Create Scheduler：请先在 Epoch Loop 前创建并连接一个 optimizer。', 'error');
+    return false;
+  }
+  const draft = paletteDraftFor(info);
+  draft.params = {...draft.params, optimizer};
+  revealInsertionTarget(selectedTarget);
+  state.activeInsertionTarget = selectedTarget;
+  if (!addStepAtTarget('create_scheduler', selectedTarget)) {
+    showMessage('Create Scheduler 添加失败，请检查 optimizer 连接。', 'error');
+    return false;
+  }
+  state.paletteSelection = null;
+  state.paletteDraft = null;
+  draw();
+  showMessage(`已在 Epoch Loop 前添加 Create Scheduler（${optimizer}）。可在右侧继续编辑参数。`, 'ok');
+  return true;
+}
+
+function appendEpochAdvancedOptions(container, step) {
+  if (!step || step.block !== 'epoch_loop') return;
+  const details = document.createElement('details');
+  details.className = 'epoch-advanced';
+  const summary = document.createElement('summary');
+  summary.textContent = '高级选项';
+  const menu = document.createElement('div');
+  menu.className = 'epoch-advanced-menu';
+  const addScheduler = document.createElement('button');
+  addScheduler.type = 'button';
+  const schedulerExists = flatRecipeSteps().some((candidate) => candidate.block === 'create_scheduler');
+  addScheduler.textContent = schedulerExists ? 'Create Scheduler 已添加' : '添加 Create Scheduler';
+  addScheduler.disabled = schedulerExists;
+  addScheduler.title = schedulerExists ? '当前 Recipe 已有 Create Scheduler' : '只添加一次学习率调度器';
+  addScheduler.onclick = (event) => {
+    event.stopPropagation();
+    if (createSchedulerForEpoch(step)) details.open = false;
+  };
+  const hint = document.createElement('small');
+  hint.textContent = '调度器是训练配置，会自动放在 Epoch Loop 前的合法位置。';
+  menu.append(addScheduler, hint);
+  details.append(summary, menu);
+  details.onclick = (event) => event.stopPropagation();
+  container.appendChild(details);
+}
+
+function renderStepNode(step, index, steps, parent, parentId, context, options = {}) {
   const info = blockInfo(step.block);
   const node = document.createElement('div');
   const loopClass = info && info.kind !== 'action' ? `loop-container loop-block ${step.block === 'epoch_loop' ? 'epoch-loop' : step.block === 'batch_loop' ? 'batch-loop' : ''}` : '';
   const formulaClass = info?.formula ? 'formula-block' : '';
-  node.className = `step ${loopClass} ${formulaClass}${state.selected === step ? ' selected' : ''}${state.errorStepId === step._uiId ? ' error-step' : ''}`;
+  const isSelected = state.selected === step || (state.selected?._uiId && state.selected._uiId === step._uiId);
+  node.className = `step ${loopClass} ${formulaClass}${isSelected ? ' selected' : ''}${state.errorStepId === step._uiId ? ' error-step' : ''}`;
   node.dataset.category = blockCategory(info);
   node.dataset.uiCategory = uiCategory(info);
   node.dataset.uiId = step._uiId;
   const header = document.createElement('div');
   header.className = 'step-header';
-  const title = document.createElement('span'); title.textContent = info ? info.name : step.block; header.appendChild(title);
+  const title = document.createElement('span'); title.className = 'step-title'; title.textContent = info ? info.name : step.block; header.appendChild(title);
+  appendLoopIterationControl(header, step);
+  if (!options.suppressEpochAdvanced) appendEpochAdvancedOptions(header, step);
   const kind = document.createElement('span'); kind.className = 'kind'; kind.textContent = info ? info.kind : ''; header.appendChild(kind);
   const summary = renderStepSummary(step, info);
   node.appendChild(header);
   if (summary) { const summaryNode = document.createElement('div'); summaryNode.className = 'step-summary'; summaryNode.textContent = summary; node.appendChild(summaryNode); }
   node.onclick = (event) => {
-    if (event.target.closest('button, input, select, textarea')) return;
+    if (event.target.closest('button, input, select, textarea, .drag-handle')) return;
     event.stopPropagation();
     state.selected = step;
     state.paletteSelection = null;
+    state.activeInsertionTarget = {parentId, index: index + 1, context: getPlacementContext(parentId), compositeId: step._uiComposite?.id || null};
     renderInspector();
     draw();
   };
-  node.draggable = true;
-  node.onmousedown = (event) => {
-    if (event.button !== 0 || event.target.closest('button, input, select, textarea')) return;
-    const startX = event.clientX; const startY = event.clientY; let moved = false;
-    const onMove = (moveEvent) => {
-      if (!moved && Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < 5) return;
-      moved = true;
-      state.drag = { type: 'step', id: step._uiId, info };
-      const zone = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest('.drop-target');
-      document.querySelectorAll('.drop-target.drop-hover').forEach((item) => item.classList.remove('drop-hover'));
-      if (zone) { const target = findDropTarget(zone); if (canInsert(info, target.parentId, step._uiId, target.index)) zone.classList.add('drop-hover'); }
-      markDropZones(); moveEvent.preventDefault();
-    };
-    const onUp = (upEvent) => {
-      document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp);
-      if (!moved) { state.drag = null; return; }
-      const zone = document.elementFromPoint(upEvent.clientX, upEvent.clientY)?.closest('.drop-target');
-      const target = zone ? findDropTarget(zone) : null;
-      const reason = target ? availabilityReason(info, target, step._uiId) : '未放在有效 drop zone';
-      const success = Boolean(target && !reason && moveStepToTarget(step._uiId, target)); state.drag = null;
-      if (!success) showMessage(`不能拖动：${reason || '插入失败'}`, 'error');
-      draw(); upEvent.preventDefault();
-    };
-    document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+  const dragHandle = document.createElement('span');
+  dragHandle.className = 'drag-handle';
+  dragHandle.textContent = '⠿';
+  dragHandle.title = '拖动把手：移动到绿色插入位';
+  dragHandle.setAttribute('role', 'img');
+  dragHandle.setAttribute('aria-label', '拖动把手');
+  dragHandle.draggable = true;
+  dragHandle.ondragstart = (event) => {
+    state.drag = { type: 'step', id: step._uiId, info };
+    state.selected = step;
+    event.dataTransfer.setData('application/x-lnl-step', step._uiId);
+    event.dataTransfer.effectAllowed = 'move';
+    markDropZones();
   };
-  node.ondragstart = (event) => { state.drag = { type: 'step', id: step._uiId, info }; event.dataTransfer.setData('application/x-lnl-step', step._uiId); event.dataTransfer.effectAllowed = 'move'; markDropZones(); };
-  node.ondragend = () => { state.drag = null; markDropZones(); };
+  dragHandle.ondragend = () => { state.drag = null; markDropZones(); };
+  header.insertBefore(dragHandle, header.firstChild);
   if (info && info.kind !== 'action') {
     const toggle = document.createElement('button'); toggle.textContent = state.collapsed.has(step) ? '展开' : '折叠';
     toggle.onclick = (event) => { event.stopPropagation(); if (state.collapsed.has(step)) state.collapsed.delete(step); else state.collapsed.add(step); draw(); };
     header.appendChild(toggle);
     if (!state.collapsed.has(step)) {
       const nested = document.createElement('div'); nested.className = 'nested loop-body';
-      const childContext = step.block === 'epoch_loop' ? 'epoch' : step.block === 'batch_loop' ? 'batch' : 'any';
+      const childContext = getPlacementContext(step._uiId);
       drawSteps(step.steps || (step.steps = []), nested, step._uiId, childContext); node.appendChild(nested);
     }
   }
@@ -1652,10 +2186,93 @@ function renderStepNode(step, index, steps, parent, parentId, context) {
   const copy = document.createElement('button'); copy.textContent = '复制';
   copy.onclick = (event) => { event.stopPropagation(); const clone = typeof structuredClone === 'function' ? structuredClone(step) : JSON.parse(JSON.stringify(step)); ensureUiIds([clone]); clone._uiId = makeUiId(); (steps || []).splice(index + 1, 0, clone); markDirty(); state.selected = clone; draw(); };
   const remove = document.createElement('button'); remove.textContent = '删除';
-  remove.onclick = (event) => { event.stopPropagation(); (steps || []).splice(index, 1); markDirty(); if (state.selected === step) state.selected = null; state.paletteSelection = null; state.activeInsertionTarget = { parentId, index, context }; draw(); };
+  remove.onclick = (event) => {
+    event.stopPropagation();
+    state.deletedStep = {step, array: steps, index, parentId, context};
+    (steps || []).splice(index, 1);
+    markDirty();
+    if (state.selected === step) state.selected = null;
+    state.paletteSelection = null;
+    state.activeInsertionTarget = {parentId, index, context};
+    draw();
+    showMessage(`已删除“${info?.name || step.block}”，可点击“撤销删除”恢复`, 'ok');
+  };
   controls.append(copy, remove); node.appendChild(controls);
   parent.appendChild(node);
   return node;
+}
+
+function adjacentPairAt(steps, index) {
+  const first = steps[index], second = steps[index + 1];
+  if (!first || !second || first._uiComposite?.id !== second._uiComposite?.id) return null;
+  if (first.block === 'set_seed' && second.block === 'select_device') {
+    return {name: '设置实验环境', description: '设置随机种子，并选择计算设备。', members: [first, second]};
+  }
+  if (first.block === 'load_dataset' && second.block === 'inspect_dataset_semantics') {
+    return {name: '加载并检查数据', description: '加载数据源和标签，然后检查数据的类别、标签和划分信息。', members: [first, second]};
+  }
+  return null;
+}
+
+function renderAdjacentPair(pair, index, steps, parent, parentId, context) {
+  const first = pair.members[0];
+  const key = first._uiId;
+  const node = document.createElement('div');
+  node.className = 'step adjacent-pair';
+  node.dataset.uiCategory = uiCategory(blockInfo(first.block));
+  node.dataset.pairId = key;
+  node.classList.toggle('selected', state.selected === first && state.adjacentSelection?.members[0] === first);
+  const header = document.createElement('div'); header.className = 'step-header';
+  const title = document.createElement('strong'); title.className = 'step-title'; title.textContent = pair.name;
+  const inspect = () => {
+    state.selected = first;
+    state.adjacentSelection = pair;
+    state.paletteSelection = null;
+    state.activeInsertionTarget = {parentId, index: index + 2, context, compositeId: first._uiComposite?.id || null};
+    draw();
+    setInspectorTab('blocks');
+  };
+  const edit = document.createElement('button'); edit.type = 'button'; edit.textContent = '编辑参数';
+  edit.onclick = (event) => { event.stopPropagation(); inspect(); };
+  const expand = document.createElement('button'); expand.type = 'button';
+  expand.textContent = state.adjacentExpanded.has(key) ? '收起步骤' : '查看原步骤';
+  expand.onclick = (event) => {
+    event.stopPropagation();
+    if (state.adjacentExpanded.has(key)) state.adjacentExpanded.delete(key); else state.adjacentExpanded.add(key);
+    draw();
+  };
+  header.append(title, edit, expand); node.appendChild(header);
+  const summary = document.createElement('div'); summary.className = 'step-summary';
+  summary.textContent = first.block === 'set_seed'
+    ? `随机种子：${first.params?.seed ?? blockInfo(first.block)?.params?.seed?.default} · 设备：${pair.members[1].params?.device ?? 'auto'}`
+    : `数据集：${first.params?.dataset || '未选择'} · 包含数据语义检查`;
+  node.appendChild(summary);
+  node.onclick = (event) => { if (!event.target.closest('button, input, select, textarea, .drag-handle')) { event.stopPropagation(); inspect(); } };
+  if (state.adjacentExpanded.has(key)) {
+    const body = document.createElement('div'); body.className = 'nested';
+    pair.members.forEach((step, offset) => renderStepNode(step, index + offset, steps, body, parentId, context));
+    node.appendChild(body);
+  }
+  parent.appendChild(node);
+}
+
+function renderPairInspector(pair, target, explanationTarget) {
+  const title = document.createElement('strong'); title.textContent = pair.name;
+  const description = document.createElement('p'); description.textContent = pair.description;
+  explanationTarget.append(title, description);
+  for (const step of pair.members) {
+    const info = blockInfo(step.block);
+    const section = document.createElement('section'); section.className = 'inspector-section';
+    const heading = document.createElement('h3'); heading.textContent = info.name; section.appendChild(heading);
+    for (const [name, schema] of Object.entries(info.params || {})) {
+      if (isDatasetSourceInfo(info) && name === 'path' && step.params?.source_mode !== 'custom_path') continue;
+      const wrap = document.createElement('div'); wrap.className = 'param';
+      const label = document.createElement('label'); label.textContent = name;
+      wrap.append(label, renderParamControl(name, schema, step)); section.appendChild(wrap);
+    }
+    target.appendChild(section);
+    if (isDatasetSourceInfo(info)) target.appendChild(renderDatasetFacts(step));
+  }
 }
 
 function createCompositeShell(range, steps, parentId, context, key) {
@@ -1668,6 +2285,9 @@ function createCompositeShell(range, steps, parentId, context, key) {
     ? `${range.modelCount} 个模型 · ${range.optimizerCount} 个优化器 · ${range.end - range.start} 个步骤`
     : `${range.end - range.start} 个步骤`;
   const title = document.createElement('div'); title.className = 'composite-title'; title.innerHTML = `<span class="composite-icon">${definition.icon}</span><strong>${definition.label}</strong><small>${countLabel}</small>`;
+  if (definition.id === 'training-loop') {
+    appendEpochAdvancedOptions(title, steps[range.start]);
+  }
   const actions = document.createElement('div'); actions.className = 'composite-actions';
   const toggle = document.createElement('button'); toggle.type = 'button'; toggle.textContent = state.compositeExpanded.has(key) ? '收起' : '展开';
   toggle.onclick = (event) => { event.stopPropagation(); if (state.compositeExpanded.has(key)) state.compositeExpanded.delete(key); else state.compositeExpanded.add(key); draw(); };
@@ -1677,8 +2297,13 @@ function createCompositeShell(range, steps, parentId, context, key) {
   const hint = document.createElement('p'); hint.className = 'composite-hint'; hint.textContent = definition.description; shell.appendChild(hint);
   if (state.compositeExpanded.has(key)) {
     const body = document.createElement('div'); body.className = 'composite-body';
-    for (let index = range.start; index < range.end; index += 1) { body.appendChild(createDropZone(parentId, index, context)); renderStepNode(steps[index], index, steps, body, parentId, context); }
-    body.appendChild(createDropZone(parentId, range.end, context)); shell.appendChild(body);
+    for (let index = range.start; index < range.end; index += 1) {
+      body.appendChild(createDropZone(parentId, index, context, range.groupId));
+      const pair = index + 1 < range.end ? adjacentPairAt(steps, index) : null;
+      if (pair) { renderAdjacentPair(pair, index, steps, body, parentId, context); index += 1; }
+      else renderStepNode(steps[index], index, steps, body, parentId, context, {suppressEpochAdvanced: true});
+    }
+    body.appendChild(createDropZone(parentId, range.end, context, range.groupId)); shell.appendChild(body);
   }
   return shell;
 }
@@ -1696,8 +2321,9 @@ function drawSteps(steps = state.recipe.steps, parent = $('steps'), parentId = '
       index = range.end;
       continue;
     }
-    renderStepNode(steps[index], index, steps, parent, parentId, context);
-    index += 1;
+    const pair = adjacentPairAt(steps, index);
+    if (pair) { renderAdjacentPair(pair, index, steps, parent, parentId, context); index += 2; }
+    else { renderStepNode(steps[index], index, steps, parent, parentId, context); index += 1; }
   }
   parent.appendChild(createDropZone(parentId, (steps || []).length, context));
   markDropZones();
@@ -1708,11 +2334,14 @@ function renderInspector() {
   const explanationTarget = $('module-explanation');
   target.innerHTML = '';
   explanationTarget.innerHTML = '';
+  const pairLocation = state.selected ? findParentArrayAndIndex(state.selected._uiId) : null;
+  const pair = pairLocation ? adjacentPairAt(pairLocation.array, pairLocation.index) : null;
+  if (pair && state.adjacentSelection?.members[0] === state.selected) {
+    renderPairInspector(pair, target, explanationTarget);
+    return;
+  }
   const paletteInfo = !state.selected ? state.paletteSelection : null;
-  const previewStep = paletteInfo ? {
-    block: paletteInfo.id,
-    params: Object.fromEntries(Object.entries(paletteInfo.params || {}).map(([name, schema]) => [name, schema.default ?? ''])),
-  } : null;
+  const previewStep = paletteInfo ? paletteDraftFor(paletteInfo) : null;
   const step = state.selected || previewStep;
   if (!step) {
     explanationTarget.textContent = '点击一个积木查看说明';
@@ -1757,7 +2386,7 @@ function renderInspector() {
   const formula = document.createElement('div');
   formula.className = 'formula';
   const formulaText = document.createElement('div');
-  renderMathFormula(formulaText, info.formula || '');
+  renderMathFormula(formulaText, formulaDisplayText(info));
   formula.appendChild(formulaText);
   if (info.formula_ref) { const ref = document.createElement('small'); ref.textContent = `定义来源：${info.formula_ref}`; formula.appendChild(ref); }
   if (info.paper) { const paper = document.createElement('div'); paper.textContent = `论文：${info.paper}`; formula.appendChild(paper); }
@@ -1770,13 +2399,14 @@ function renderInspector() {
 
   const params = document.createElement('div');
   if (paletteInfo) {
+    const help = document.createElement('p');
+    help.textContent = '待添加积木：先选择输入连接和输出名称，再添加或拖动。这里只配置新积木，不会修改已有步骤。';
+    params.appendChild(help);
     info.params && Object.entries(info.params).forEach(([name, schema]) => {
       if (isDatasetSourceInfo(info) && name === 'path' && step.params?.source_mode !== 'custom_path') return;
       const wrap = document.createElement('div'); wrap.className = 'param';
       const label = document.createElement('label'); label.textContent = isDatasetSourceInfo(info) && name === 'dataset' ? 'dataset（必选）' : name; wrap.appendChild(label);
-      const value = document.createElement('span'); value.className = 'param-preview';
-      value.textContent = formatParamValue(step.params[name] ?? schema.default);
-      wrap.appendChild(value);
+      wrap.appendChild(renderParamControl(name, schema, step));
       params.appendChild(wrap);
     });
   } else {
@@ -1800,7 +2430,14 @@ function draw() {
   if (empty) empty.hidden = flatRecipeSteps().length > 0;
   renderPalette();
   drawSteps();
+  // Selection is keyed by the stable UI id as well as object identity.  This
+  // keeps the highlight reliable when a nested recipe array is re-rendered
+  // after an explicit palette insertion.
+  if (state.selected?._uiId) {
+    document.querySelector(`[data-ui-id="${state.selected._uiId}"]`)?.classList.add('selected');
+  }
   renderInspector();
+  renderUndoDelete();
   renderGuidance();
   updateRunState();
   if (!state.lastRun) showMessage(targetLabel(state.activeInsertionTarget));
@@ -1926,7 +2563,7 @@ function renderFormulaBuilderFields() {
   const description = document.createElement('p'); description.className = 'formula-preview-description'; description.textContent = info.description || '';
   preview.appendChild(description);
   const formulaLabel = document.createElement('div'); formulaLabel.className = 'formula-preview-label'; formulaLabel.textContent = '数学公式'; preview.appendChild(formulaLabel);
-  const formulaVisual = document.createElement('div'); renderMathFormula(formulaVisual, info.formula || '该运算没有单独公式标注，但可作为公式链的一步。'); preview.appendChild(formulaVisual);
+  const formulaVisual = document.createElement('div'); renderMathFormula(formulaVisual, formulaDisplayText(info) || '该运算没有单独公式标注，但可作为公式链的一步。'); preview.appendChild(formulaVisual);
   const inputSummary = document.createElement('div'); inputSummary.className = 'formula-preview-inputs'; inputSummary.textContent = `输入：${(info.requires || []).join(', ') || '无'}`; preview.appendChild(inputSummary);
   if (target) {
     targetText.textContent = `目标：Batch Loop，第 ${target.index + 1} 步（将生成 ${info.name}）`;
@@ -1951,13 +2588,9 @@ function formulaParamsFromDialog(info) {
 
 function formulaInsertionReason(info, target, params) {
   if (!target) return '请先选择 Batch 内的绿色插入位置';
-  if (!placementAllows(info, target.parentId)) return `placement 不允许放入 ${target.context} 层`;
+  const reason = availabilityReason(info, target, null, params);
+  if (reason) return reason;
   const available = availableKeysBefore(target);
-  const missing = (info.requires || []).map((name) => {
-    const configured = params[name] ?? info.params?.[name]?.default ?? name;
-    return [name, configured];
-  }).filter(([, slot]) => typeof slot !== 'string' || !available.has(slot));
-  if (missing.length) return `前置 slot 不完整：${missing.map(([name, slot]) => `${name}=${slot}`).join(', ')}`;
   if (info.id === 'weighted_sum' && Array.isArray(params.terms)) {
     const unknown = params.terms.filter((slot) => typeof slot !== 'string' || !available.has(slot));
     if (unknown.length) return `Weighted Sum 找不到 term slot：${unknown.join(', ')}`;
@@ -2109,7 +2742,7 @@ function renderFormulaEditor() {
   if (currentPreview) {
     currentPreview.replaceChildren();
     const label = document.createElement('strong'); label.textContent = selectedInfo ? `当前运算：${selectedInfo.name}` : '当前运算'; currentPreview.appendChild(label);
-    const math = document.createElement('div'); renderMathFormula(math, selectedInfo?.formula || '暂无独立公式', {compact: true}); currentPreview.appendChild(math);
+    const math = document.createElement('div'); renderMathFormula(math, formulaDisplayText(selectedInfo) || '暂无独立公式', {compact: true}); currentPreview.appendChild(math);
   }
   const editorPalette = $('formula-editor-palette');
   if (editorPalette) {
@@ -2117,7 +2750,7 @@ function renderFormulaEditor() {
     candidates.forEach((info) => {
       const button = document.createElement('button'); button.type = 'button'; button.className = 'formula-palette-block';
       const name = document.createElement('strong'); name.textContent = info.name; button.appendChild(name);
-      const formula = document.createElement('div'); formula.className = 'formula-palette-formula'; renderMathFormula(formula, info.formula || '无独立公式', {compact: true}); button.appendChild(formula);
+      const formula = document.createElement('div'); formula.className = 'formula-palette-formula'; renderMathFormula(formula, formulaDisplayText(info) || '无独立公式', {compact: true}); button.appendChild(formula);
       button.title = info.description || info.id;
       button.onclick = () => { select.value = info.id; renderFormulaEditor(); };
       editorPalette.appendChild(button);
@@ -2130,7 +2763,7 @@ function renderFormulaEditor() {
     const body = document.createElement('div'); body.className = 'formula-step-body';
     const label = document.createElement('span'); label.innerHTML = `${index + 1}. <code>${step.id}</code> ← ${info.name || step.block}`;
     body.appendChild(label);
-    const visual = document.createElement('div'); visual.className = 'formula-step-math'; renderMathFormula(visual, info.formula || `${step.block}(${(info.requires || []).join(', ')})`, {compact: true}); body.appendChild(visual);
+    const visual = document.createElement('div'); visual.className = 'formula-step-math'; renderMathFormula(visual, formulaDisplayText(info) || `${step.block}(${(info.requires || []).join(', ')})`, {compact: true}); body.appendChild(visual);
     const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '删除'; remove.onclick = () => { state.formulaEditor.steps.splice(index, 1); renderFormulaEditor(); };
     row.append(body, remove); list.appendChild(row);
   });
@@ -2149,7 +2782,7 @@ function renderFormulaEditor() {
       const info = blockInfo(step.block) || {};
       const visual = document.createElement('div'); visual.className = 'formula-chain-step';
       const stepLabel = document.createElement('small'); stepLabel.textContent = `${index + 1}. ${info.name || step.block}`; visual.appendChild(stepLabel);
-      const math = document.createElement('div'); renderMathFormula(math, info.formula || `${step.block}(${(info.requires || []).join(', ')})`, {compact: true}); visual.appendChild(math); preview.appendChild(visual);
+      const math = document.createElement('div'); renderMathFormula(math, formulaDisplayText(info) || `${step.block}(${(info.requires || []).join(', ')})`, {compact: true}); visual.appendChild(math); preview.appendChild(visual);
       if (index < state.formulaEditor.steps.length - 1) preview.appendChild(Object.assign(document.createElement('div'), {className: 'formula-chain-arrow', textContent: '↓'}));
     });
     const expression = document.createElement('details'); expression.className = 'formula-expression-details';
@@ -2278,6 +2911,7 @@ function singleSkeletonRecipe() {
   const batchSteps = [
     makeRecipeStep('get_batch', {batch: 'batch', input_as: 'images', label_as: 'labels', index_as: 'indices'}),
     makeRecipeStep('move_batch_to_device', {input: 'images', labels: 'labels', device: 'device'}),
+    makeRecipeStep('zero_grad', {optimizer: 'optimizer'}),
     makeRecipeStep('forward', {model: 'model', input: 'images', save_as: 'logits'}),
     makeRecipeStep('per_sample_ce', {logits: 'logits', labels: 'labels', save_as: 'loss_per_sample'}),
     makeRecipeStep('mean_loss', {input: 'loss_per_sample', save_as: 'loss'}),
@@ -2285,7 +2919,7 @@ function singleSkeletonRecipe() {
     makeRecipeStep('optimizer_step', {optimizer: 'optimizer'}),
   ];
   const epochSteps = [
-    makeRecipeStep('batch_loop', {loader: 'train_loader', max_steps: 1, global_step_as: 'global_step'}, batchSteps),
+    makeRecipeStep('batch_loop', {loader: 'train_loader', global_step_as: 'global_step'}, batchSteps),
     makeRecipeStep('evaluate_accuracy', {model: 'model', loader: 'validation_loader', save_as: 'validation_accuracy', final: false, target_source: 'observed'}),
     makeRecipeStep('track_best_model', {model: 'model', metric: 'validation_accuracy', metric_name: 'validation_accuracy', save_as: 'best_model_state'}),
   ];
@@ -2310,7 +2944,7 @@ function dualSkeletonRecipe() {
     makeRecipeStep('backward', {loss: 'loss_b', model: 'model_b'}),
     makeRecipeStep('optimizer_step', {optimizer: 'optimizer_b'}),
   ];
-  const epochSteps = [makeRecipeStep('batch_loop', {loader: 'train_loader', max_steps: 1, global_step_as: 'global_step'}, dualBatch), makeRecipeStep('evaluate_accuracy', {model: 'model_a', loader: 'validation_loader', save_as: 'validation_accuracy', target_source: 'observed'})];
+  const epochSteps = [makeRecipeStep('batch_loop', {loader: 'train_loader', global_step_as: 'global_step'}, dualBatch), makeRecipeStep('evaluate_accuracy', {model: 'model_a', loader: 'validation_loader', save_as: 'validation_accuracy', target_source: 'observed'})];
   return {
     schema_version: 1, name: '新建双模型算法', description: 'Scratch 双模型训练骨架', settings: {},
     steps: [...canonicalDataSteps(), makeRecipeStep('create_model', {model: 'mlp', num_classes: 2, input_dim: 4, hidden: 32, device: 'device', save_as: 'model_a'}), makeRecipeStep('create_model', {model: 'mlp', num_classes: 2, input_dim: 4, hidden: 32, device: 'device', save_as: 'model_b'}), makeRecipeStep('create_optimizer', {optimizer: 'sgd', model: 'model_a', lr: 0.01, save_as: 'optimizer_a'}), makeRecipeStep('create_optimizer', {optimizer: 'sgd', model: 'model_b', lr: 0.01, save_as: 'optimizer_b'}), makeRecipeStep('epoch_loop', {epochs: 3, start_epoch: 0}, epochSteps), makeRecipeStep('evaluate_accuracy', {model: 'model_a', loader: 'test_loader', save_as: 'test_accuracy', final: true, target_source: 'observed'}), makeRecipeStep('record_metrics', {values: ['test_accuracy']})],
@@ -2322,7 +2956,7 @@ function blankRecipe() { return {schema_version: 1, name: '空白 Scratch 算法
 function applySkeleton(kind) {
   resetRunTracking();
   state.recipe = kind === 'single' ? singleSkeletonRecipe() : kind === 'dual' ? dualSkeletonRecipe() : blankRecipe();
-  ensureUiIds(state.recipe.steps); state.selected = null; state.paletteSelection = null; state.lastRun = null; state.validated = false; state.errorStepId = null; state.errorMessage = ''; state.errorPayload = null; state.errorGuide = null; state.activeInsertionTarget = defaultInsertionTarget(); state.compositeExpanded.clear(); state.compositeUngrouped.clear();
+  ensureUiIds(state.recipe.steps); state.selected = null; state.paletteSelection = null; state.deletedStep = null; state.lastRun = null; state.validated = false; state.errorStepId = null; state.errorMessage = ''; state.errorPayload = null; state.errorGuide = null; state.activeInsertionTarget = defaultInsertionTarget(); state.compositeExpanded.clear(); state.compositeUngrouped.clear();
   const menu = $('new-menu'); if (menu) menu.hidden = true; const newButton = $('new'); if (newButton) newButton.setAttribute('aria-expanded', 'false');
   draw();
 }
@@ -2330,7 +2964,7 @@ function applySkeleton(kind) {
 function renderRecipeList(names) {
   const list = $('recipe-list'); if (!list) return; list.innerHTML = '';
   if (!names.length) { list.textContent = '暂无已保存 Recipe'; return; }
-  names.forEach((name) => { const row = document.createElement('button'); row.type = 'button'; row.className = 'recipe-list-row'; row.textContent = name; row.onclick = async () => { try { resetRunTracking(); state.recipe = await api('/api/recipe/' + encodeURIComponent(name)); ensureUiIds(state.recipe.steps); state.selected = null; state.paletteSelection = null; state.validated = false; state.lastRun = null; state.errorMessage = ''; state.errorPayload = null; state.errorGuide = null; state.errorStepId = null; $('recipe-dialog').close(); draw(); } catch (error) { showError(error); } }; list.appendChild(row); });
+  names.forEach((name) => { const row = document.createElement('button'); row.type = 'button'; row.className = 'recipe-list-row'; row.textContent = name; row.onclick = async () => { try { resetRunTracking(); state.recipe = await api('/api/recipe/' + encodeURIComponent(name)); ensureUiIds(state.recipe.steps); state.selected = null; state.paletteSelection = null; state.deletedStep = null; state.validated = false; state.lastRun = null; state.errorMessage = ''; state.errorPayload = null; state.errorGuide = null; state.errorStepId = null; $('recipe-dialog').close(); draw(); } catch (error) { showError(error); } }; list.appendChild(row); });
 }
 
 async function loadDefaultRecipe() {
@@ -2339,6 +2973,7 @@ async function loadDefaultRecipe() {
   ensureUiIds(state.recipe.steps);
   state.selected = null;
   state.paletteSelection = null;
+  state.deletedStep = null;
   state.lastRun = null;
   state.validated = false;
   state.errorMessage = '';
@@ -2456,6 +3091,7 @@ async function openTemplate(item) {
     ensureUiIds(state.recipe.steps);
     state.selected = null;
     state.paletteSelection = null;
+    state.deletedStep = null;
     state.lastRun = null;
     state.validated = false;
     state.errorMessage = '';
@@ -2489,7 +3125,7 @@ if ($('new-template')) $('new-template').onclick = openTemplateDialog;
 if ($('empty-single')) $('empty-single').onclick = () => applySkeleton('single');
 if ($('empty-dual')) $('empty-dual').onclick = () => applySkeleton('dual');
 if ($('empty-blank')) $('empty-blank').onclick = () => applySkeleton('blank');
-if ($('empty-template')) $('empty-template').onclick = () => $('templates').click();
+if ($('empty-template')) $('empty-template').onclick = openTemplateDialog;
 document.querySelectorAll('[data-inspector-tab]').forEach((button) => { button.onclick = () => setInspectorTab(button.dataset.inspectorTab); });
 
 async function validateCurrentRecipe() {
@@ -2528,8 +3164,10 @@ if ($('run-mode')) $('run-mode').onchange = (event) => {
 };
 if ($('stop-run')) $('stop-run').onclick = stopRun;
 if ($('refresh-run')) $('refresh-run').onclick = () => state.jobId && pollRunJob(state.jobId);
-if ($('run')) $('run').onclick = async () => {
+async function startRun(mode = 'check') {
   if (state.running) return;
+  state.runMode = mode === 'full' ? 'full' : 'check';
+  renderRuntimeLimits();
   resetRunTracking();
   state.running = true; updateRunState(); setInspectorTab('run'); setResultState('运行中…');
   $('result-status')?.classList.add('running');
@@ -2549,7 +3187,9 @@ if ($('run')) $('run').onclick = async () => {
   } catch (error) {
     state.lastRun = null; state.running = false; clearRunPolling(); updateRunState(); showError(error);
   }
-};
+}
+if ($('run')) $('run').onclick = () => startRun('check');
+if ($('run-full')) $('run-full').onclick = () => startRun('full');
 if ($('open')) $('open').onclick = async () => { try { const names = await api('/api/recipes'); renderRecipeList(names); $('recipe-dialog').showModal(); } catch (error) { showError(error); } };
 async function openTemplateDialog() {
   try {

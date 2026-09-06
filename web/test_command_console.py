@@ -16,6 +16,23 @@ import command_console  # noqa: E402
 
 
 class CommandConsoleTest(unittest.TestCase):
+    def test_command_preview_is_directly_editable_and_execute_uses_edit(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn('textarea id="preview"', page)
+        self.assertIn('id="preview-reset"', page)
+        self.assertIn("state.previewEdited", page)
+        self.assertIn("state.previewAutoCommand", page)
+        self.assertIn("state.previewAutoRequest", page)
+        self.assertIn("previewNode.value", page)
+        self.assertIn("previewNode.addEventListener(\"input\"", page)
+        self.assertIn("已修改，执行时将使用编辑后的指令", page)
+        self.assertIn("const editedCommand = previewNode.value.trim();", page)
+        self.assertIn("state.request = {command: editedCommand};", page)
+        self.assertIn("navigator.clipboard.writeText(previewNode.value)", page)
+        self.assertIn("function resetPreviewCommand()", page)
+        self.assertIn('setRequest(request, command, options = {})', page)
+        self.assertIn('setRequest: function (request, command) { setRequest(request, command, {resetPreview:true}); }', page)
+
     def test_dataset_first_page_consumes_backend_compatibility_contract(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
         for marker in (
@@ -62,6 +79,8 @@ class CommandConsoleTest(unittest.TestCase):
             "继续编辑 YAML（未保存）",
             "目标已登记数据集（可选）",
             "compatible-recipes",
+            "yamlRecipeCompatibilityAlias",
+            "state.yamlDataset === alias && state.yamlRecipeCompatibilityAlias !== alias",
             "打开 YAML/配置说明",
         ):
             self.assertIn(marker, page)
@@ -267,7 +286,7 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertIn("快速命令（跳过逐步教程）", page)
         self.assertIn('"lnl doctor"', page)
         self.assertIn("lnl list experiments --profile smoke --format json", page)
-        self.assertIn('href="http://127.0.0.1:8765/scratch"', page)
+        self.assertIn('class="context-scratch" href="/scratch"', page)
         self.assertIn('control.replaceAll("__ID__", id)', page)
 
     def test_quick_start_is_first_entry_and_reuses_existing_execution_flow(self):
@@ -287,22 +306,49 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertIn("已偏离论文配置", page)
         self.assertIn("acknowledge_paper_impact", page)
 
-    def test_config_workflow_links_papers_yaml_sweep_and_results(self):
+    def test_config_workflow_links_papers_experiments_and_results(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
         for marker in (
             "activeConfig",
-            "编辑为项目 YAML",
-            "使用此配置做 Sweep",
-            "保存并转到 Sweep",
+            "在实验中打开配置",
+            "查看兼容数据集",
+            "在 Scratch 打开论文模板",
+            "保存并转到参数组合实验",
             "openActiveConfigInEditor",
             "openSweepForSource",
-            "查看此 Sweep 的运行结果",
+            "查看此参数组合实验的运行结果",
             "sweep-load-source",
             "requestedKey",
         ):
             self.assertIn(marker, page)
         self.assertIn("defaultCustomYamlPath", page)
         self.assertIn("-custom.yaml", page)
+
+    def test_main_console_uses_four_workspaces_and_keeps_legacy_actions_advanced(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        for workspace in ('id:"start"', 'id:"data"', 'id:"experiments"', 'id:"papers"'):
+            self.assertIn(workspace, page)
+        self.assertIn("const workspaces = [", page)
+        self.assertIn("workspaces.forEach(function (item)", page)
+        self.assertIn('id="workspace-tabs"', page)
+        self.assertIn('id="advanced-tools-list"', page)
+        self.assertIn('id="advanced-command-panel"', page)
+        self.assertIn('workspaceTabs = {', page)
+        self.assertIn('experiments: [{id:"yaml", label:"配置"}', page)
+        self.assertIn('run: renderRunWorkspace', page)
+        self.assertIn("function renderRunWorkspace()", page)
+        self.assertIn('class="context-scratch" href="/scratch"', page)
+        self.assertIn("function renderConsoleContext()", page)
+
+    def test_dataset_first_start_page_exposes_workspace_handoffs(self):
+        quick_start = (command_console.WEB_ROOT / "assets" / "quick_start.js").read_text(encoding="utf-8")
+        self.assertIn("compact: true", (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8"))
+        self.assertIn("function renderNextActions()", quick_start)
+        self.assertIn("创建 / 编辑实验配置", quick_start)
+        self.assertIn("查看兼容论文", quick_start)
+        self.assertIn("打开 Scratch 搭建器", quick_start)
+        self.assertIn("高级：完整方法兼容性引导", quick_start)
+        self.assertIn("context.openExperiment", quick_start)
 
     def test_sweep_ui_reuses_parameter_metadata_groups_and_excludes_locks(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
@@ -311,7 +357,7 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertIn("用途：", page)
         self.assertIn("论文依据：", page)
         self.assertIn("复现影响：", page)
-        self.assertIn("不可 Sweep：", page)
+        self.assertIn("不可加入参数组合实验：", page)
         self.assertIn("fieldInfo.editable && supported", page)
         self.assertIn("lnl sweep --", page)
 
@@ -755,7 +801,7 @@ class CommandConsoleTest(unittest.TestCase):
             'datasetProfileCompatibilityHtml() : "";',
             render_data,
         )
-        self.assertIn("+ trainingFlow;", render_data)
+        self.assertIn("+ trainingFlow +", render_data)
         self.assertNotIn("+ datasetProfileCompatibilityHtml();", render_data)
         for action in ("list", "status", "path", "register", "inspect", "verify", "remove"):
             self.assertIn(f'{{value:"{action}"', render_data)
@@ -803,7 +849,7 @@ class CommandConsoleTest(unittest.TestCase):
                     recipe = response.read().decode("utf-8-sig")
                 self.assertIn("LNL Toolbox Command Console", home)
                 self.assertIn("const recipeMode", recipe)
-                self.assertNotIn("workspace-tabs", home)
+                self.assertIn('id="workspace-tabs"', home)
                 self.assertIn("1. 登记路径", home)
                 self.assertIn("再次点击，确认删除登记", home)
                 self.assertIn('dataAdapter: "cifar10"', home)
@@ -826,9 +872,12 @@ class CommandConsoleTest(unittest.TestCase):
                 self.assertIn("/api/resume-inspect?path=", home)
                 self.assertIn("state.resumeInspectionKey !== currentResumeKey()", home)
                 self.assertIn("function updateResultVisibility()", home)
-                self.assertIn('id="paper-open-yaml"', home)
+                self.assertIn('id="paper-open-experiment"', home)
+                self.assertIn('id="paper-open-data"', home)
+                self.assertIn('id="paper-open-scratch"', home)
                 self.assertIn("论文方法、配置字段与代码的关系", home)
-                self.assertIn("await loadYamlSelection(recipe)", home)
+                self.assertIn('switchModule("yaml")', home)
+                self.assertIn('id="paper-open-experiment"', home)
                 self.assertNotIn('id="paper-profile"', home)
                 self.assertNotIn('id="paper-variant"', home)
                 self.assertNotIn("配置 profile 与 recipe 变体", home)

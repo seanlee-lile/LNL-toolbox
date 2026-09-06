@@ -1040,6 +1040,29 @@ from lnl_toolbox.data.local_catalog import LocalDatasetCatalog
 # --- merged from test_local_data_catalog.py ---
 class _local_data_catalog_LocalDatasetCatalogTest(unittest.TestCase):
 
+    def test_concurrent_writes_do_not_collide_on_shared_temp_file(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'dataset'
+            source.mkdir()
+            catalog_path = root / 'catalog.json'
+
+            def register(index: int) -> None:
+                LocalDatasetCatalog(catalog_path).register(
+                    f'data-{index}', 'cifar10', {'root': source}
+                )
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                list(executor.map(register, range(16)))
+
+            records = LocalDatasetCatalog(catalog_path).records()
+            self.assertEqual(
+                {record.alias for record in records},
+                {f'data-{index}' for index in range(16)},
+            )
+
     def test_registration_merge_states_and_removal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

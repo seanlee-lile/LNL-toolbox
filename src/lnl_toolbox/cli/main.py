@@ -44,6 +44,7 @@ from lnl_toolbox.training.sweep import (
     run_sweep,
     sweep_status,
 )
+from lnl_toolbox.cli.ports import cleanup_ports
 
 
 def _validate_with_registry(config: dict[str, Any], *, check_data: bool):
@@ -233,14 +234,45 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument("--port", type=int, default=8765)
     web.add_argument("--no-open", action="store_true")
     web.add_argument("--project-root", type=Path)
+    web_sub = web.add_subparsers(dest="web_command")
+    web_restart = web_sub.add_parser(
+        "restart", help="清理当前 Web 端口上的旧 LNL 进程后重新启动 Web UI"
+    )
+    # Keep `lnl web --host ... --port ... restart` and
+    # `lnl web restart --host ... --port ...` equivalent.  Suppressing these
+    # defaults prevents the nested parser from overwriting values parsed by
+    # the parent command.
+    web_restart.add_argument("--host", default=argparse.SUPPRESS)
+    web_restart.add_argument("--port", type=int, default=argparse.SUPPRESS)
+    web_restart.add_argument("--no-open", action="store_true", default=argparse.SUPPRESS)
+    web_restart.add_argument("--project-root", type=Path, default=argparse.SUPPRESS)
 
-    sweep = sub.add_parser("sweep", help="run multiple seeds sequentially and resumably")
+    ports = sub.add_parser("ports", help="查看并清理 LNL Web 监听进程")
+    ports_sub = ports.add_subparsers(dest="ports_command", required=True)
+    ports_cleanup = ports_sub.add_parser(
+        "cleanup", help="清理命令行确认属于 LNL 的旧监听进程"
+    )
+    ports_cleanup.add_argument(
+        "--port",
+        dest="ports",
+        action="append",
+        type=int,
+        metavar="PORT",
+        help="只清理指定端口；可重复传入。默认扫描所有 LNL 监听端口",
+    )
+    ports_cleanup.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="只列出候选进程，不终止",
+    )
+
+    sweep = sub.add_parser("sweep", help="参数组合实验：按笛卡尔积运行多组实验")
     _source_options(sweep)
     sweep.add_argument(
         "status_path",
         nargs="?",
         type=Path,
-        help="sweep directory when using 'lnl sweep status <path>'",
+        help="参数组合实验目录，用于 'lnl sweep status <path>'",
     )
     sweep.add_argument("--seeds", type=int, nargs="+")
     sweep.add_argument(
@@ -256,7 +288,7 @@ def build_parser() -> argparse.ArgumentParser:
     sweep.add_argument(
         "--no-check-data",
         action="store_true",
-        help="skip dataset path/layout checks during sweep dry-run",
+        help="参数组合实验预演时跳过数据路径/布局检查",
     )
     sweep.add_argument(
         "--set", dest="overrides", action="append", default=[], metavar="PATH=VALUE"
@@ -633,7 +665,7 @@ def _sweep(args: argparse.Namespace) -> int:
         if getattr(args, "format", "human") == "json":
             print(json.dumps(value, ensure_ascii=False))
             return 0
-        print("Sweep")
+        print("参数组合实验")
         print(f"  ID: {value['sweep_id']}")
         print(f"  Path: {value['root']}")
         print("\nStatus")
@@ -760,7 +792,7 @@ def _parse_sweep_matrix(assignments: list[str]) -> dict[str, list[Any]]:
 
 
 def _print_sweep_plan(plan) -> None:
-    print("Sweep plan")
+    print("参数组合实验计划")
     print(f"\nBase:\n  {plan.recipe}")
     print("\nMatrix:")
     if plan.matrix:
@@ -1412,6 +1444,13 @@ def _mentor_command(args: argparse.Namespace) -> int:
 
 
 def _web(args: argparse.Namespace) -> int:
+    if getattr(args, "web_command", None) == "restart":
+        # Reuse the same guarded listener discovery as `lnl ports cleanup`.
+        # Restrict the cleanup to the port that will be started so a restart
+        # cannot terminate an unrelated LNL service on another port.
+        cleanup_code = cleanup_ports([args.port])
+        if cleanup_code != 0:
+            return cleanup_code
     root = find_project_root(None, args.project_root)
     server = root / "web" / "command_console.py"
     # `lnl web` is a user-facing entry point.  When launched outside the
@@ -1438,6 +1477,12 @@ def _web(args: argparse.Namespace) -> int:
     return int(subprocess.call(command, cwd=root))
 
 
+def _ports_command(args: argparse.Namespace) -> int:
+    if args.ports_command != "cleanup":
+        raise ValueError(f"unknown ports command: {args.ports_command}")
+    return cleanup_ports(args.ports, dry_run=args.dry_run)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1460,6 +1505,8 @@ def main(argv: list[str] | None = None) -> int:
             return _mentor_command(args)
         if args.command == "web":
             return _web(args)
+        if args.command == "ports":
+            return _ports_command(args)
         if args.command == "sweep":
             return _sweep(args)
         if args.command == "compare":

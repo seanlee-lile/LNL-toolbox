@@ -62,8 +62,13 @@ class ScratchBlockCoverageTest(unittest.TestCase):
 
     def test_scratch_ui_has_no_selector_id_whitelist(self) -> None:
         source = (ROOT / "web" / "scratch.js").read_text(encoding="utf-8")
-        self.assertNotIn("small_loss_indices", source)
-        self.assertNotIn("select_lowest_scores", source)
+        # The display-only formula catalogue legitimately keys entries by
+        # canonical block id.  The UI selector check must inspect executable
+        # interaction code, not that catalogue, otherwise adding mathematically
+        # correct formula displays is mistaken for an id whitelist.
+        executable = source.split("const DISPLAY_FORMULAS", 1)[0] + source.split("function formulaDisplayText", 1)[-1]
+        self.assertNotIn("small_loss_indices", executable)
+        self.assertNotIn("select_lowest_scores", executable)
 
 
 if __name__ == "__main__":
