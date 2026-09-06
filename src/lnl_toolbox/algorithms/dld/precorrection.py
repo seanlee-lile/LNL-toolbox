@@ -125,6 +125,10 @@ def weighted_neighbor_distribution(
         if metric in {"cosine_distance", "cosine_similarity"}:
             current = F.normalize(current_query, dim=1)
             similarities = current @ reference.T
+            identical = (
+                query_indices[start:stop, None] == reference_indices[None, :]
+            )
+            similarities = similarities.masked_fill(identical, 1.0)
             values = (
                 similarities
                 if metric == "cosine_similarity"
@@ -151,7 +155,16 @@ def weighted_neighbor_distribution(
         selected_values = values.gather(1, positions)
         if not bool(torch.isfinite(selected_values).all()):
             raise ValueError("DLD selected neighbor values are non-finite")
-        denominators = selected_values + float(delta)
+        # The paper weights neighbours by inverse *distance*.  Cosine
+        # similarity is retained as the selection metric, but it must be
+        # converted before inverse weighting; otherwise a closer neighbour
+        # (larger similarity) incorrectly receives a smaller weight.
+        weighting_values = (
+            (1.0 - selected_values).clamp_min(0.0)
+            if metric == "cosine_similarity"
+            else selected_values
+        )
+        denominators = weighting_values + float(delta)
         if not bool(torch.isfinite(denominators).all()) or bool(
             (denominators <= 0).any()
         ):

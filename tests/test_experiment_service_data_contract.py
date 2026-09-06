@@ -5,6 +5,7 @@ import tempfile
 import unittest
 
 import numpy as np
+import torch
 
 from lnl_toolbox.data.contracts import (
     DataSpec,
@@ -62,6 +63,36 @@ class ExperimentServiceDataContractTests(unittest.TestCase):
         self.assertIsNotNone(result.status)
         listed = self.service.list_config_compatibility("local-cifar10", {"fixture": config})
         self.assertEqual(listed[0][0], "fixture")
+
+    def test_cal_external_artifact_requires_schema_and_clean_identity(self) -> None:
+        root = Path(self.temp.name)
+        artifact = root / "cal-labels.pt"
+        clean = np.arange(20, dtype=np.int64) % 10
+        noisy = clean.copy()
+        noisy[0] = 1
+        torch.save({"clean": torch.from_numpy(clean), "noisy": torch.from_numpy(noisy)}, artifact)
+        config = {
+            "seed": 0,
+            "data": {"name": "cifar10"},
+            "noise": {
+                "path": str(artifact),
+                "clean_key": "clean",
+                "noisy_key": "noisy",
+            },
+        }
+        value = self.service.data_service.validate_cal_external_labels(config)
+        self.assertEqual(value["samples"], 20)
+        self.assertEqual(
+            value["clean_usage"], "identity_alignment_and_evaluation_only"
+        )
+
+        torch.save({"clean": torch.from_numpy(clean[::-1].copy()), "noisy": torch.from_numpy(noisy)}, artifact)
+        with self.assertRaisesRegex(ValueError, "identity alignment"):
+            self.service.data_service.validate_cal_external_labels(config)
+
+        torch.save({"clean": torch.from_numpy(clean)}, artifact)
+        with self.assertRaisesRegex(ValueError, "configured clean/noisy keys"):
+            self.service.data_service.validate_cal_external_labels(config)
 
 
 if __name__ == "__main__":

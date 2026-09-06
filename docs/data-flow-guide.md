@@ -318,7 +318,7 @@ Forward/Backward、Importance Weighting 等未来消费者只能接收 Artifact�
 
 用户入口、适用场景、完整配置、artifact 解释和 resume 规则见
 [`docs/t-revision.md`](t-revision.md)。公共命令使用
-`python -m lnl_toolbox.cli.train --config ...`；未知 `method` 会显式失败，
+`lnl run --config ...`；未知 `method` 会显式失败，
 不会回落到普通监督训练。
 
 `method: t_revision` 是论文专属生命周期，不是通用 transition plugin：

@@ -14,6 +14,7 @@ from lnl_toolbox.data.profile import (
     NoiseOrigin,
     NoiseRateStatus,
 )
+from lnl_toolbox.training.prerequisites import SourceDescriptor, ValidationMetadata
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +73,7 @@ class MethodRequirements:
     method_noise_prior_paths: tuple[tuple[str, ...], ...] = ()
     pretrained_role_paths: tuple[tuple[str, tuple[str, ...]], ...] = ()
     required_config_inputs: tuple[ConfigInputRequirement, ...] = ()
+    prerequisites: tuple[SourceDescriptor, ...] = ()
 
     def __post_init__(self) -> None:
         method = str(self.method).strip()
@@ -143,6 +145,14 @@ class MethodRequirements:
                 for item in self.required_config_inputs
             ),
         )
+        object.__setattr__(
+            self,
+            "prerequisites",
+            tuple(
+                item if isinstance(item, SourceDescriptor) else SourceDescriptor(**item)
+                for item in self.prerequisites
+            ),
+        )
 
 
 class CompatibilityStatus(str, Enum):
@@ -196,6 +206,7 @@ class CompatibilityResult:
     required_user_inputs: tuple[str, ...] = ()
     required_input_paths: tuple[tuple[str, tuple[tuple[str, ...], ...]], ...] = ()
     input_guidance: tuple[CompatibilityInputGuidance, ...] = ()
+    prerequisites: tuple[ValidationMetadata, ...] = ()
 
     def __post_init__(self) -> None:
         normalized = []
@@ -223,6 +234,7 @@ class CompatibilityResult:
                 for code, paths in self.required_input_paths
             },
             "input_guidance": [item.to_dict() for item in self.input_guidance],
+            "prerequisites": [item.to_dict() for item in self.prerequisites],
         }
 
 
@@ -319,10 +331,36 @@ def build_input_guidance(
     reason_messages = {item.code: item.message for item in result.reasons}
     guidance: list[CompatibilityInputGuidance] = []
     covered_reason_codes: set[str] = set()
+    prerequisite_by_key = {
+        item.descriptor.key: item for item in result.prerequisites
+    }
     for input_id in result.required_user_inputs:
         if input_id.startswith("pretrained:"):
             role = input_id.split(":", 1)[1]
+            prerequisite = prerequisite_by_key.get(role)
             environment = environments.get(input_id)
+            if prerequisite is not None:
+                descriptor = prerequisite.descriptor
+                guidance.append(CompatibilityInputGuidance(
+                    input_id=input_id,
+                    category="method_input",
+                    label=descriptor.name,
+                    missing=prerequisite.message,
+                    expected_value=descriptor.requirement + (
+                        "; supported: " + ", ".join(descriptor.supported_sources)
+                        if descriptor.supported_sources else ""
+                    ),
+                    provision=descriptor.provide,
+                    input_kind=(
+                        "environment_directory"
+                        if descriptor.environment_variable
+                        else "artifact_source"
+                    ),
+                    config_paths=descriptor.config_paths,
+                    environment_variable=descriptor.environment_variable,
+                ))
+                covered_reason_codes.add("missing_pretrained_source")
+                continue
             provision = (
                 f"设置环境变量 {environment}=<run directory>"
                 if environment else "按 recipe 的 pretrained source 配置提供运行目录"

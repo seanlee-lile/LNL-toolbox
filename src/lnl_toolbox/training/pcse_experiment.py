@@ -310,7 +310,15 @@ def run_pcse_experiment(
     # Validation may be an independently namespaced source split.  Its
     # realized rate must be measured from the materialized role view rather
     # than by indexing the training-scoped noise manifest.
-    effective_validation_rate = prepared.realized_noise_rate(DataRole.NOISY_VALIDATION)
+    # The training-scoped manifest can only describe a validation subset when
+    # validation is carved from the same train split.  Independent validation
+    # sources have their own namespace and must not be measured against the
+    # train manifest (there is no meaningful manifest-aligned rate to report).
+    effective_validation_rate = (
+        effective_subset_actual_rate(manifest, prepared.validation_indices)
+        if prepared.validation_uses_train_manifest
+        else None
+    )
     train_loader = prepared.loader(DataRole.TRAIN, generator_seed=seed + 101)
     statistics_loader = prepared.loader(DataRole.TRAIN_EVAL, shuffle=False, generator_seed=seed + 102)
     validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False, generator_seed=seed + 103)

@@ -16,4 +16,7 @@ The current contract is:
 - empty selections skip parameter updates but commit observed history;
 - epoch-seeded loaders and strict checkpoint/resume.
 
-See `papers/lend/reproduction.md` for commands and fidelity boundaries.
+This is a 论文方法对齐（paper-oriented）工程流程（engineering workflow）; it is
+not a claim that numerical reproduction has been verified. For the current
+recommended `lnl` commands and fidelity boundaries, see the
+[LEND reproduction guide](../papers/lend/reproduction.md).

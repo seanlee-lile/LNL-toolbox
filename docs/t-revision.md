@@ -22,7 +22,7 @@ process.
 
 ```powershell
 $env:PYTHONPATH = "src"
-python -m lnl_toolbox.cli.train `
+lnl run `
   --config configs/experiment/cifar10_t_revision_smoke.yaml `
   --output-dir artifacts/runs/t-revision-smoke
 ```
@@ -30,7 +30,7 @@ python -m lnl_toolbox.cli.train `
 Resume only from the run-local `last.pt`:
 
 ```powershell
-python -m lnl_toolbox.cli.train `
+lnl run `
   --config configs/experiment/cifar10_t_revision_smoke.yaml `
   --resume artifacts/runs/t-revision-smoke/last.pt
 ```

@@ -448,6 +448,17 @@ def _print_compatibility_result(result: CompatibilityResult | None) -> None:
         print(f"  - {reason.code}: {reason.message}")
     for required in result.required_user_inputs:
         print(f"  required: {required}")
+    for prerequisite in result.prerequisites:
+        level = (
+            "NOT_CONFIGURED"
+            if prerequisite.level is None
+            else prerequisite.level.name
+        )
+        print(
+            f"  prerequisite: {prerequisite.descriptor.name}: "
+            f"{prerequisite.status.upper()} ({level})"
+        )
+        print(f"    {prerequisite.message}")
 
 
 def _print_plan(

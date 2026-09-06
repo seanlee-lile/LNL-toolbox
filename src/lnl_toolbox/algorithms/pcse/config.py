@@ -149,12 +149,16 @@ class PCSEConfig:
                     "model",
                 },
             )
-            if (
-                str(source_values.get("adapter", "")).strip().lower()
-                != "upm_main_best"
-            ):
+            adapter = str(source_values.get("adapter", "")).strip().lower()
+            supported_adapters = {
+                "upm_main_best",
+                "supervised_best",
+                "coteaching_peer_a_best",
+            }
+            if adapter not in supported_adapters:
                 raise ValueError(
-                    "PCSE external source.adapter must be upm_main_best"
+                    "PCSE external source.adapter must be one of: "
+                    + ", ".join(sorted(supported_adapters))
                 )
             if not str(source_values.get("run_directory_env", "")).strip():
                 raise ValueError(
@@ -186,7 +190,7 @@ class PCSEConfig:
                     )
             source = {
                 **source_values,
-                "adapter": "upm_main_best",
+                "adapter": adapter,
                 "run_directory_env": str(
                     source_values["run_directory_env"]
                 ).strip(),

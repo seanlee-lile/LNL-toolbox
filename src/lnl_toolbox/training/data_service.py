@@ -380,6 +380,16 @@ class PreparedData:
         return self.train_split.dataset
 
     @property
+    def validation_uses_train_manifest(self) -> bool:
+        """Whether noisy validation is intentionally scoped to the train manifest."""
+
+        return (
+            self.manifest is not None
+            and self.requirements.validation_targets == "noisy"
+            and self.validation_split is self.train_split
+        )
+
+    @property
     def input_spec(self) -> InputSpec:
         modality, shape, channels = _input_contract(self.train_split)
         feature_dim = shape[0] if modality is Modality.TABULAR and shape is not None else None
@@ -1431,6 +1441,51 @@ class DataService:
 
     def apply(self, config: Mapping[str, Any], name: object) -> dict[str, Any]:
         return self.catalog.apply(config, name)
+
+    def validate_cal_external_labels(self, config: Mapping[str, Any]) -> dict[str, Any]:
+        """Validate CAL's external clean/noisy label artifact without leaking labels."""
+
+        resolved = self.resolve_config(config)
+        noise = resolved.get("noise")
+        if not isinstance(noise, Mapping):
+            raise ValueError("CAL external label configuration is missing")
+        source = Path(str(noise.get("path", ""))).expanduser().resolve()
+        if not source.is_file():
+            raise FileNotFoundError(f"CAL external label artifact does not exist: {source}")
+        payload = torch.load(source, map_location="cpu", weights_only=True)
+        if not isinstance(payload, Mapping):
+            raise TypeError("CAL external label artifact must contain a mapping")
+        clean_key = str(noise.get("clean_key", ""))
+        noisy_key = str(noise.get("noisy_key", ""))
+        if not clean_key or not noisy_key or clean_key not in payload or noisy_key not in payload:
+            raise ValueError("CAL external label artifact is missing configured clean/noisy keys")
+        clean = np.asarray(payload[clean_key], dtype=np.int64)
+        noisy = np.asarray(payload[noisy_key], dtype=np.int64)
+        if clean.ndim != 1 or clean.shape != noisy.shape:
+            raise ValueError("CAL external clean/noisy labels must be aligned vectors")
+        spec = DataSpec.from_mapping(resolved["data"])
+        train = self.registry.load(spec, "train", seed=int(resolved.get("seed", 0)))
+        if train.clean_targets is None:
+            raise ValueError("CAL artifact identity requires dataset clean targets")
+        indices = np.asarray(train.global_indices, dtype=np.int64)
+        expected = np.asarray(train.clean_targets, dtype=np.int64)
+        if indices.size and clean.size > int(indices.max()):
+            aligned_clean = clean[indices]
+        elif clean.size == expected.size:
+            aligned_clean = clean
+        else:
+            raise ValueError("CAL external labels do not cover the training index space")
+        if not np.array_equal(aligned_clean, expected):
+            raise ValueError("CAL external clean labels fail dataset identity alignment")
+        return {
+            "path": str(source),
+            "clean_key": clean_key,
+            "noisy_key": noisy_key,
+            "samples": int(clean.size),
+            "dataset": train.dataset,
+            "num_classes": int(train.num_classes),
+            "clean_usage": "identity_alignment_and_evaluation_only",
+        }
 
     def resolve_config(self, config: Mapping[str, Any]) -> dict[str, Any]:
         """Resolve one portable data contract through a unique local registration."""

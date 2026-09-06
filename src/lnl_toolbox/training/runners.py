@@ -12,6 +12,7 @@ from typing import Any, Callable
 from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.data.profile import Modality
 from lnl_toolbox.training.compatibility import ConfigInputRequirement, MethodRequirements
+from lnl_toolbox.training.prerequisites import SourceDescriptor
 from lnl_toolbox.training.planning import (
     RunPlan,
     coteaching_plan,
@@ -446,6 +447,27 @@ def _cal_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         implemented_variant="proxy_label_sieve",
         supports_native_noisy_labels=True,
         required_config_inputs=inputs,
+        prerequisites=(
+            SourceDescriptor(
+                key="cal_external_labels",
+                kind="external_label_artifact",
+                name="Aligned CAL clean/noisy label artifact",
+                requirement="aligned external clean/noisy label vectors",
+                obtain="obtain the benchmark IDN label artifact",
+                provide="set noise.path, noise.clean_key, and noise.noisy_key",
+                validator="cal_external_labels",
+                supported_sources=("external_torch",),
+                config_paths=(
+                    ("noise", "path"),
+                    ("noise", "clean_key"),
+                    ("noise", "noisy_key"),
+                ),
+                clean_data_usage=(
+                    "Clean labels are used only for identity, alignment, and evaluation; "
+                    "they are not an input to CAL optimizer updates."
+                ),
+            ),
+        ) if external_labels_configured else (),
     )
 
 
@@ -584,6 +606,19 @@ def _pcse_requirements(config: Mapping[str, Any]) -> MethodRequirements:
             (("upm_main_best", ("pretraining_stage", "source", "run_directory_env")),)
             if external else ()
         ),
+        prerequisites=(
+            SourceDescriptor(
+                key="upm_main_best",
+                kind="pretrained_classifier",
+                name="PCSE pretrained classifier",
+                requirement="a compatible trained classifier with hidden-layer features",
+                obtain="finish a supported CE, Co-teaching peer A, or UPM run",
+                provide="select the immutable producer run and configure its hashes",
+                validator="pcse_classifier",
+                supported_sources=("supervised_best", "coteaching_peer_a_best", "upm_main_best"),
+                config_paths=(("pretraining_stage", "source", "run_directory_env"),),
+            ),
+        ) if external else (),
     )
 
 
@@ -633,6 +668,19 @@ def _dld_requirements(config: Mapping[str, Any]) -> MethodRequirements:
             (("upm_main_best", ("dld", "feature_extractor", "external", "run_directory_env")),)
             if source == "external_checkpoint" else ()
         ),
+        prerequisites=(
+            SourceDescriptor(
+                key="upm_main_best",
+                kind="pretrained_feature_extractor",
+                name="DLD pretrained feature extractor",
+                requirement="a compatible frozen feature extractor",
+                obtain="use a supported ImageNet ResNet-34 or UPM producer run",
+                provide="select the immutable producer run and configure its hashes",
+                validator="dld_feature_extractor",
+                supported_sources=("torchvision_resnet34_imagenet1k_v1", "upm_main_best"),
+                config_paths=(("dld", "feature_extractor", "external", "run_directory_env"),),
+            ),
+        ) if source == "external_checkpoint" else (),
     )
 
 

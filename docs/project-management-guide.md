@@ -41,7 +41,7 @@ python -m unittest discover -s tests -v
 
 ```powershell
 python -m unittest discover -s tests -v
-python -m lnl_toolbox.cli.train --config configs/experiment/cifar10_smoke.yaml
+lnl run --config configs/experiment/cifar10_smoke.yaml
 ```
 
 ### 4.3 提交前

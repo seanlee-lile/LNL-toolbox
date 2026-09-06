@@ -720,14 +720,14 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
         ):
             from lnl_toolbox.training.experiment import build_model
             from lnl_toolbox.training.pcse_pretrained import (
-                load_upm_main_best_source,
+                load_pretrained_classifier_source,
             )
 
             num_classes = int(_require_mapping(config, "data")["num_classes"])
             model = build_model(
                 dict(parsed_method_config.pretraining.model), num_classes
             )
-            source = load_upm_main_best_source(
+            source = load_pretrained_classifier_source(
                 parsed_method_config.pretraining.source,
                 model,
                 num_classes=num_classes,
