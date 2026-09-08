@@ -23,17 +23,26 @@ class FormulaInputSpec:
     name: str
     description: str = ""
     type: str = "tensor"
+    required: bool | None = None
 
     @classmethod
     def from_value(cls, name: str, value: Any) -> "FormulaInputSpec":
         if isinstance(value, Mapping):
-            return cls(name=name, description=str(value.get("description", "")), type=str(value.get("type", "tensor")))
+            required = value.get("required")
+            return cls(
+                name=name,
+                description=str(value.get("description", "")),
+                type=str(value.get("type", "tensor")),
+                required=bool(required) if required is not None else None,
+            )
         return cls(name=name, description=str(value or ""))
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {"description": self.description}
         if self.type != "tensor":
             result["type"] = self.type
+        if self.required is not None:
+            result["required"] = self.required
         return result
 
 
@@ -46,6 +55,7 @@ class FormulaParameterSpec:
     minimum: float | int | None = None
     maximum: float | int | None = None
     options: list[Any] | None = None
+    required: bool | None = None
 
     @classmethod
     def from_value(cls, name: str, value: Any) -> "FormulaParameterSpec":
@@ -60,6 +70,7 @@ class FormulaParameterSpec:
             minimum=value.get("minimum", value.get("min")),
             maximum=value.get("maximum", value.get("max")),
             options=list(options) if isinstance(options, (list, tuple)) else None,
+            required=bool(value["required"]) if "required" in value and value.get("required") is not None else None,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -72,6 +83,8 @@ class FormulaParameterSpec:
             result["maximum"] = self.maximum
         if self.options is not None:
             result["options"] = list(self.options)
+        if self.required is not None:
+            result["required"] = self.required
         return result
 
 
@@ -164,4 +177,3 @@ class FormulaSpec:
             "outputs": {name: item.to_dict() for name, item in self.outputs.items()},
             "metadata": dict(self.metadata),
         }
-

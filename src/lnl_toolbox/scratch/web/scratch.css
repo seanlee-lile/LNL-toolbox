@@ -373,15 +373,29 @@ dialog::backdrop { background: rgba(0,0,0,.68); }
 .formula-canvas { min-height: 78px; padding: 14px; overflow-x: auto; border: 1px solid #22d3ee; border-radius: 8px; background: #061923; color: #e0f2fe; font: 14px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; box-shadow: inset 0 0 0 1px rgba(34, 211, 238, .12); }
 .formula-canvas .math-source { display: none; }
 .formula-canvas-heading { margin-bottom: 8px; color: #67e8f9; font-size: 13px; font-weight: 750; }
+.formula-canvas > .formula-expression-math-node { display: inline-block; padding: 8px 5px; color: #f8fafc; font-size: 18px; line-height: 1.8; }
+.formula-expression-math-node { border: 1px solid transparent; border-radius: 5px; cursor: pointer; }
+.formula-expression-math-node:hover, .formula-expression-math-node:focus-visible { border-color: #67e8f9; outline: none; background: rgba(8, 47, 73, .72); }
+.formula-expression-math-node.selected { border-color: #fbbf24; background: rgba(120, 53, 15, .48); box-shadow: 0 0 0 2px rgba(251, 191, 36, .18); }
+.formula-expression-math-input { color: #bfdbfe; }
+.formula-expression-math-parameter { color: #ddd6fe; font-style: italic; }
+.formula-expression-math-constant { color: #cbd5e1; }
+.formula-expression-math-operation { color: #f8fafc; }
 .formula-expression-node { display: inline-flex; flex-direction: column; max-width: 100%; margin: 2px; padding: 5px 7px; border: 1px solid transparent; border-radius: 6px; background: rgba(15, 118, 110, .2); color: #e0f2fe; cursor: pointer; text-align: left; vertical-align: middle; }
 .formula-expression-node:hover, .formula-expression-node:focus-visible { border-color: #67e8f9; outline: none; }
 .formula-expression-node.selected { border-color: #fbbf24; background: rgba(120, 53, 15, .46); box-shadow: 0 0 0 2px rgba(251, 191, 36, .16); }
+.formula-expression-node-controls { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; padding-top: 3px; border-top: 1px solid rgba(148, 163, 184, .22); }
+.formula-expression-node-control { padding: 2px 5px; border: 1px solid #475569; border-radius: 4px; background: #172235; color: #cbd5e1; font-size: 9px; line-height: 1.2; }
+.formula-expression-node-control:hover { border-color: #67e8f9; color: #f8fafc; }
 .formula-expression-input, .formula-expression-parameter { background: rgba(30, 64, 175, .28); color: #dbeafe; }
 .formula-expression-constant { background: rgba(71, 85, 105, .4); color: #e2e8f0; }
 .formula-expression-operation { background: rgba(15, 118, 110, .28); }
 .formula-expression-label { white-space: nowrap; }
 .formula-expression-children { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 5px; padding-top: 4px; border-top: 1px dashed rgba(148, 163, 184, .42); }
 .formula-expression-child { display: inline-flex; flex-direction: column; min-width: 0; }
+.formula-expression-child[draggable="true"] { cursor: grab; }
+.formula-expression-child[draggable="true"].dragging { opacity: .58; }
+.formula-expression-child[draggable="true"].drag-over { outline: 1px dashed #22c55e; outline-offset: 2px; }
 .formula-expression-child > small { margin: 0 3px 2px; color: #93c5fd; font-size: 9px; }
 .formula-expression-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 9px; padding: 8px; border: 1px solid #155e75; border-radius: 7px; background: rgba(8, 47, 73, .38); color: #bae6fd; font-size: 11px; }
 .formula-expression-actions strong { margin-right: 4px; color: #fde68a; }
@@ -428,6 +442,9 @@ dialog::backdrop { background: rgba(0,0,0,.68); }
 .formula-chain-arrow { padding: 0 0 0 14px; color: #67e8f9; font-size: 17px; line-height: 1; }
 .formula-expression-details { margin-top: 7px; color: #94a3b8; }
 .formula-expression-details code { display: block; margin-top: 5px; padding: 6px; overflow-x: auto; color: #cbd5e1; white-space: pre-wrap; }
+.formula-expression-structure { margin-top: 8px; border: 1px solid #334155; border-radius: 6px; background: #07111e; }
+.formula-expression-structure > summary { padding: 6px 8px; cursor: pointer; color: #a5b4fc; font-size: 10px; }
+.formula-expression-structure > div { padding: 4px 7px 7px; overflow-x: auto; }
 .formula-editor-validation { min-height: 21px; margin-top: 9px; color: #fca5a5; }
 .formula-list-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px solid #334155; }
 .formula-list-item small { display: block; color: var(--muted); }

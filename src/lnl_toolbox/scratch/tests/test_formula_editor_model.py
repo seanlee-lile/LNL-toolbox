@@ -74,6 +74,42 @@ if (steps.filter((step) => step.block === 'elementwise_multiply').length !== 2) 
 """
         )
 
+    def test_array_editing_preserves_array_and_supports_reorder(self) -> None:
+        self.run_node(
+            """
+const array = {kind: 'array', items: [expressionInput('a'), expressionInput('b')]};
+const root = {kind: 'operation', block: 'weighted_sum', bindings: {}, parameters: {terms: array}};
+const second = array.items[1];
+if (!insertExpressionSibling(root, second, 'after', expressionInput('c'))) throw new Error('array insertion failed');
+if (array.items.length !== 3 || array.items[2].name !== 'c') throw new Error('array insertion changed the wrong container');
+if (!moveExpressionArrayItem(root, array.items[2], -1) || array.items[1].name !== 'c') throw new Error('array reorder failed');
+if (!duplicateExpressionNode(root, array.items[1])) throw new Error('array duplication failed');
+if (array.items.length !== 4) throw new Error('array duplicate did not add an item');
+const removed = pruneExpressionNode(root, array.items[0]);
+if (!removed || removed.parameters.terms.kind !== 'array' || removed.parameters.terms.items.length !== 3) throw new Error('deleting an array item must keep an array node');
+"""
+        )
+
+    def test_shared_expression_nodes_are_serialized_once(self) -> None:
+        self.run_node(
+            """
+state.blocks = [{id: 'softmax', name: 'Softmax', kind: 'action', formula_safe: true, requires: ['logits'], params: {logits: {type: 'slot'}, save_as: {type: 'slot'}}}, {id: 'add', name: 'Add', kind: 'action', formula_safe: true, requires: ['left', 'right'], params: {left: {type: 'slot'}, right: {type: 'slot'}, save_as: {type: 'slot'}}}];
+const shared = {kind: 'operation', block: 'softmax', bindings: {logits: expressionInput('x')}, parameters: {}};
+const expression = {kind: 'operation', block: 'add', bindings: {left: shared, right: shared}, parameters: {}};
+const steps = expressionToFormulaSteps(expression, 'y');
+if (steps.filter((step) => step.block === 'softmax').length !== 1) throw new Error('shared operation was serialized twice');
+if (steps.at(-1).bindings.left !== steps.at(-1).bindings.right) throw new Error('shared references did not point to one step');
+"""
+        )
+
+    def test_parameter_schema_line_keeps_structural_metadata_helpers(self) -> None:
+        self.run_node(
+            """
+const schema = {type: 'float', default: 0.7, minimum: 0, maximum: 1, options: [0.7], description: 'GCE exponent', required: true};
+if (parameterSchemaLine('q', schema) !== 'q:float=0.7') throw new Error('parameter line should only encode editable fields');
+"""
+        )
+
     def test_advanced_execution_details_are_closed_by_default(self) -> None:
         html = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
         self.assertIn('id="formula-editor-advanced" class="formula-editor-advanced">', html)

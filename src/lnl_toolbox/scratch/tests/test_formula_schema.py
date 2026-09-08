@@ -46,3 +46,15 @@ class FormulaSchemaTest(unittest.TestCase):
     def test_parameter_range_is_checked(self):
         with self.assertRaises(FormulaValidationError):
             validate_formula(_spec(parameters={"q": {"type": "float", "default": 2.0, "maximum": 1.0}}))
+
+    def test_input_and_parameter_required_metadata_roundtrips(self):
+        spec = validate_formula(_spec(
+            inputs={"logits": {"type": "tensor", "description": "model scores", "required": True}, "targets": {"type": "labels"}},
+            parameters={"q": {"type": "float", "default": 0.7, "minimum": 0.0, "maximum": 1.0, "options": [0.7], "required": True}},
+            steps=[{"id": "powered", "block": "elementwise_power", "bindings": {"input": "logits"}, "parameters": {"q": "q"}}],
+            outputs={"powered": {"source": "powered"}},
+        ))
+        payload = spec.to_dict()
+        self.assertTrue(payload["inputs"]["logits"]["required"])
+        self.assertEqual(payload["parameters"]["q"]["options"], [0.7])
+        self.assertTrue(payload["parameters"]["q"]["required"])

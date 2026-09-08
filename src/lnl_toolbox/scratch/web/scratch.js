@@ -34,7 +34,10 @@ const state = {
   runPollTimer: null,
   runProgress: null,
   runStopping: false,
-  formulaEditor: { steps: [], editingId: null, paletteExpanded: true, expression: null, expressionSelection: null },
+  formulaEditor: {
+    steps: [], editingId: null, paletteExpanded: true, expression: null, expressionSelection: null, expressionDrag: null,
+    inputSchemas: {}, parameterSchemas: {}, outputSchemas: {},
+  },
 };
 const $ = (id) => document.getElementById(id);
 const apiBase = location.pathname.startsWith('/scratch') ? '/api/scratch' : '/api';
@@ -2951,6 +2954,42 @@ function parseEditorInputs() {
   return String($('formula-inputs').value || '').split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
 }
 
+function cloneExpressionValue(value) {
+  if (value === undefined) return undefined;
+  if (typeof structuredClone === 'function') return structuredClone(value);
+  return JSON.parse(JSON.stringify(value));
+}
+
+function cloneSchema(value) {
+  return value && typeof value === 'object' ? cloneExpressionValue(value) : {};
+}
+
+function parameterValueFromRaw(raw, type) {
+  let value = String(raw ?? '').trim();
+  if (type === 'float') value = Number.parseFloat(value);
+  else if (type === 'int') value = Number.parseInt(value, 10);
+  else if (type === 'bool') value = value === 'true';
+  else if (type === 'value') {
+    try { value = JSON.parse(value); } catch (error) { throw new Error('value 参数必须是合法 JSON'); }
+  }
+  if ((type === 'float' || type === 'int') && !Number.isFinite(value)) throw new Error('参数默认值无效');
+  return value;
+}
+
+function parameterDefaultText(schema = {}) {
+  if (!Object.prototype.hasOwnProperty.call(schema, 'default')) return '';
+  const value = schema.default;
+  if (schema.type === 'value') return JSON.stringify(value);
+  if (schema.type === 'bool') return value ? 'true' : 'false';
+  if (value === null) return 'null';
+  return String(value);
+}
+
+function parameterSchemaLine(name, schema = {}) {
+  const type = schema.type || 'float';
+  return Object.prototype.hasOwnProperty.call(schema, 'default') ? `${name}:${type}=${parameterDefaultText(schema)}` : `${name}:${type}`;
+}
+
 function formulaInputRows() {
   return [...new Set(parseEditorInputs())];
 }
@@ -2963,11 +3002,21 @@ function updateFormulaInputText() {
   rows.forEach((row) => {
     const name = row.querySelector('[data-formula-input-name]')?.value.trim() || '';
     const previous = row.dataset.formulaInputOriginal || '';
-    if (previous && name && previous !== name) renameExpressionSymbol(state.formulaEditor.expression, 'input', previous, name);
+    if (previous && name && previous !== name) {
+      renameExpressionSymbol(state.formulaEditor.expression, 'input', previous, name);
+      if (state.formulaEditor.inputSchemas[previous]) {
+        state.formulaEditor.inputSchemas[name] = state.formulaEditor.inputSchemas[previous];
+        delete state.formulaEditor.inputSchemas[previous];
+      }
+    }
     row.dataset.formulaInputOriginal = name;
-    if (name && !names.includes(name)) names.push(name);
+    if (name && !names.includes(name)) {
+      names.push(name);
+      if (!state.formulaEditor.inputSchemas[name]) state.formulaEditor.inputSchemas[name] = {description: '', type: 'tensor'};
+    }
   });
   field.value = names.join('\n');
+  Object.keys(state.formulaEditor.inputSchemas).forEach((name) => { if (!names.includes(name)) delete state.formulaEditor.inputSchemas[name]; });
   renderFormulaEditorBindingFields();
   renderFormulaCanvas();
 }
@@ -3000,6 +3049,7 @@ function addFormulaEditorInput() {
   let name = `input_${index}`;
   while (existing.includes(name)) { index += 1; name = `input_${index}`; }
   field.value = [...existing, name].join('\n');
+  state.formulaEditor.inputSchemas[name] = {description: '', type: 'tensor'};
   renderFormulaInputFields();
   const inputs = $('formula-input-fields')?.querySelectorAll('[data-formula-input-name]') || [];
   const input = inputs[inputs.length - 1];
@@ -3009,16 +3059,16 @@ function addFormulaEditorInput() {
 function parseEditorParameters() {
   const result = {};
   String($('formula-parameters').value || '').split(/\n/).map((item) => item.trim()).filter(Boolean).forEach((line) => {
-    const match = line.match(/^([A-Za-z][A-Za-z0-9_]*)\s*(?::\s*([A-Za-z]+))?\s*=\s*(.+)$/);
+    const match = line.match(/^([A-Za-z][A-Za-z0-9_]*)\s*(?::\s*([A-Za-z]+))?(?:\s*=\s*(.*))?$/);
     if (!match) throw new Error(`参数格式错误：${line}，应为 name:type=default`);
     const [, name, type = 'float', raw] = match;
-    let value = raw.trim();
-    if (type === 'float') value = Number.parseFloat(value);
-    else if (type === 'int') value = Number.parseInt(value, 10);
-    else if (type === 'bool') value = value === 'true';
-    else if (type === 'value') { try { value = JSON.parse(value); } catch (error) { throw new Error(`参数 ${name} 的 value 必须是 JSON`); } }
-    if ((type === 'float' || type === 'int') && !Number.isFinite(value)) throw new Error(`参数 ${name} 的默认值无效`);
-    result[name] = { type, default: value };
+    const schema = {...cloneSchema(state.formulaEditor.parameterSchemas[name]), type};
+    if (raw !== undefined && raw.trim() !== '') {
+      let value;
+      try { value = parameterValueFromRaw(raw, type); } catch (error) { throw new Error(`参数 ${name}：${error.message}`); }
+      schema.default = value;
+    } else delete schema.default;
+    result[name] = schema;
   });
   return result;
 }
@@ -3026,8 +3076,8 @@ function parseEditorParameters() {
 function formulaParameterRows() {
   const rows = [];
   String($('formula-parameters')?.value || '').split(/\n/).map((item) => item.trim()).filter(Boolean).forEach((line) => {
-    const match = line.match(/^([A-Za-z][A-Za-z0-9_]*)\s*(?::\s*([A-Za-z]+))?\s*=\s*(.+)$/);
-    if (match) rows.push({name: match[1], type: match[2] || 'float', raw: match[3].trim()});
+    const match = line.match(/^([A-Za-z][A-Za-z0-9_]*)\s*(?::\s*([A-Za-z]+))?(?:\s*=\s*(.*))?$/);
+    if (match) rows.push({name: match[1], type: match[2] || 'float', raw: (match[3] ?? '').trim()});
   });
   return rows;
 }
@@ -3040,13 +3090,27 @@ function updateFormulaParameterText() {
   rows.forEach((row) => {
     const name = row.querySelector('[data-formula-parameter-name]')?.value.trim() || '';
     const previous = row.dataset.formulaParameterOriginal || '';
-    if (previous && name && previous !== name) renameExpressionSymbol(state.formulaEditor.expression, 'parameter', previous, name);
+    if (previous && name && previous !== name) {
+      renameExpressionSymbol(state.formulaEditor.expression, 'parameter', previous, name);
+      if (state.formulaEditor.parameterSchemas[previous]) {
+        state.formulaEditor.parameterSchemas[name] = state.formulaEditor.parameterSchemas[previous];
+        delete state.formulaEditor.parameterSchemas[previous];
+      }
+    }
     row.dataset.formulaParameterOriginal = name;
     const type = row.querySelector('[data-formula-parameter-type]')?.value || 'float';
     const value = row.querySelector('[data-formula-parameter-default]')?.value ?? '';
-    if (name) lines.push(`${name}:${type}=${value}`);
+    if (name) {
+      const schema = {...cloneSchema(state.formulaEditor.parameterSchemas[name]), type};
+      if (String(value).trim() === '') delete schema.default;
+      else { try { schema.default = parameterValueFromRaw(value, type); } catch (error) { schema.default = value; } }
+      state.formulaEditor.parameterSchemas[name] = schema;
+      lines.push(`${name}:${type}=${value}`);
+    }
   });
   field.value = lines.join('\n');
+  const names = rows ? [...rows].map((row) => row.querySelector('[data-formula-parameter-name]')?.value.trim() || '').filter(Boolean) : [];
+  Object.keys(state.formulaEditor.parameterSchemas).forEach((name) => { if (!names.includes(name)) delete state.formulaEditor.parameterSchemas[name]; });
   renderFormulaEditorBindingFields();
   renderFormulaEditorStepParameterFields();
   renderFormulaCanvas();
@@ -3069,8 +3133,12 @@ function renderFormulaParameterFields() {
     const value = document.createElement('input'); value.value = item.raw; value.dataset.formulaParameterDefault = '1'; value.placeholder = '0.7'; value.autocomplete = 'off'; valueLabel.appendChild(value);
     const typeLabel = document.createElement('label'); typeLabel.textContent = '类型';
     const type = document.createElement('select'); type.dataset.formulaParameterType = '1';
-    [['float', '小数'], ['int', '整数'], ['bool', '开关'], ['value', 'JSON 值']].forEach(([key, label]) => { const option = document.createElement('option'); option.value = key; option.textContent = label; type.appendChild(option); });
-    type.value = ['float', 'int', 'bool', 'value'].includes(item.type) ? item.type : 'float'; typeLabel.appendChild(type);
+    [['float', '小数'], ['int', '整数'], ['bool', '开关'], ['enum', '枚举'], ['str', '文本'], ['value', 'JSON 值']].forEach(([key, label]) => { const option = document.createElement('option'); option.value = key; option.textContent = label; type.appendChild(option); });
+    type.value = ['float', 'int', 'bool', 'enum', 'str', 'value'].includes(item.type) ? item.type : 'float'; typeLabel.appendChild(type);
+    const schema = state.formulaEditor.parameterSchemas[item.name] || {};
+    if (schema.description || schema.minimum !== undefined || schema.maximum !== undefined || Array.isArray(schema.options)) {
+      row.title = [schema.description, schema.minimum !== undefined ? `最小值 ${schema.minimum}` : '', schema.maximum !== undefined ? `最大值 ${schema.maximum}` : '', Array.isArray(schema.options) ? `选项：${schema.options.join(', ')}` : ''].filter(Boolean).join('；');
+    }
     const insert = document.createElement('button'); insert.type = 'button'; insert.className = 'secondary-button formula-symbol-insert'; insert.textContent = '插入'; insert.title = `将 ${item.name} 插入选中的表达式位置`; insert.onclick = () => insertExpressionSymbol('parameter', item.name);
     const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'secondary-button'; remove.textContent = '删除'; remove.title = `删除参数 ${item.name}`;
     remove.onclick = () => { state.formulaEditor.expression = removeExpressionSymbol(state.formulaEditor.expression, 'parameter', item.name); state.formulaEditor.expressionSelection = null; row.remove(); updateFormulaParameterText(); if (!container.querySelector('[data-formula-parameter-row]')) renderFormulaParameterFields(); renderFormulaCanvas(); };
@@ -3087,6 +3155,7 @@ function addFormulaEditorParameter() {
   let name = `parameter_${index}`;
   while (existing.includes(name)) { index += 1; name = `parameter_${index}`; }
   field.value = [...String(field.value || '').split(/\n/).map((item) => item.trim()).filter(Boolean), `${name}:float=0`].join('\n');
+  state.formulaEditor.parameterSchemas[name] = {type: 'float', default: 0};
   renderFormulaParameterFields();
   const inputs = $('formula-parameter-fields')?.querySelectorAll('[data-formula-parameter-name]') || [];
   const input = inputs[inputs.length - 1];
@@ -3128,7 +3197,7 @@ function removeExpressionSymbol(root, kind, name) {
   if (root.kind === kind && root.name === name) return null;
   if (root.kind === 'array') {
     root.items = root.items.map((child) => removeExpressionSymbol(child, kind, name)).filter(Boolean);
-    return root.items.length ? root : null;
+    return root;
   }
   if (root.kind === 'operation') {
     Object.entries(root.bindings || {}).forEach(([slot, child]) => {
@@ -3221,20 +3290,168 @@ function expressionNodeValue(node) {
   return null;
 }
 
-function renderExpressionNode(node) {
+function cloneExpressionNode(node, seen = new WeakMap()) {
+  if (!node || typeof node !== 'object') return node;
+  if (seen.has(node)) return seen.get(node);
+  const copy = {kind: node.kind}; seen.set(node, copy);
+  if (node.kind === 'input' || node.kind === 'parameter') copy.name = node.name;
+  else if (node.kind === 'constant') copy.value = cloneExpressionValue(node.value);
+  else if (node.kind === 'array') copy.items = (node.items || []).map((item) => cloneExpressionNode(item, seen));
+  else if (node.kind === 'operation') {
+    copy.block = node.block;
+    copy.bindings = Object.fromEntries(Object.entries(node.bindings || {}).map(([name, child]) => [name, cloneExpressionNode(child, seen)]));
+    copy.parameters = Object.fromEntries(Object.entries(node.parameters || {}).map(([name, child]) => [name, cloneExpressionNode(child, seen)]));
+  }
+  return copy;
+}
+
+function expressionNodeChildSet(parent, key, child) {
+  if (!parent) return;
+  if (parent.kind === 'array') parent.items[Number(String(key).slice(1)) - 1] = child;
+  else if (parent.kind === 'operation') {
+    if (Object.prototype.hasOwnProperty.call(parent.bindings || {}, key)) parent.bindings[key] = child;
+    else parent.parameters[key] = child;
+  }
+}
+
+function duplicateExpressionNode(root, target) {
+  if (!root || !target) return root;
+  if (root === target) return cloneExpressionNode(root);
+  const walk = (node) => {
+    if (!node) return false;
+    if (node.kind === 'array') {
+      const index = node.items.indexOf(target);
+      if (index >= 0) { node.items.splice(index + 1, 0, cloneExpressionNode(target)); return true; }
+      return node.items.some(walk);
+    }
+    if (node.kind === 'operation') {
+      for (const collection of [node.bindings || {}, node.parameters || {}]) {
+        for (const [name, child] of Object.entries(collection)) {
+          if (child === target) { collection[name] = cloneExpressionNode(child); return true; }
+          if (walk(child)) return true;
+        }
+      }
+    }
+    return false;
+  };
+  walk(root);
+  return root;
+}
+
+function insertExpressionSibling(root, target, position = 'after', node = expressionConstant(0)) {
+  if (!root || !target) return false;
+  if (root.kind === 'array') {
+    const index = root.items.indexOf(target);
+    if (index >= 0) { root.items.splice(index + (position === 'before' ? 0 : 1), 0, node); return true; }
+    return root.items.some((child) => insertExpressionSibling(child, target, position, node));
+  }
+  if (root.kind === 'operation') return [...Object.values(root.bindings || {}), ...Object.values(root.parameters || {})].some((child) => insertExpressionSibling(child, target, position, node));
+  return false;
+}
+
+function moveExpressionArrayItem(root, target, direction) {
+  if (!root || !target) return false;
+  if (root.kind === 'array') {
+    const index = root.items.indexOf(target);
+    if (index >= 0) {
+      const next = index + Number(direction);
+      if (next >= 0 && next < root.items.length) [root.items[index], root.items[next]] = [root.items[next], root.items[index]];
+      return true;
+    }
+    return root.items.some((child) => moveExpressionArrayItem(child, target, direction));
+  }
+  if (root.kind === 'operation') return [...Object.values(root.bindings || {}), ...Object.values(root.parameters || {})].some((child) => moveExpressionArrayItem(child, target, direction));
+  return false;
+}
+
+function expressionArrayItem(node) {
+  const inputs = formulaInputRows();
+  return inputs.length ? expressionInput(inputs[0]) : expressionConstant(0);
+}
+
+function appendExpressionNodeControl(parent, label, title, handler) {
+  const button = document.createElement('button'); button.type = 'button'; button.className = 'formula-expression-node-control'; button.textContent = label; button.title = title;
+  button.onclick = (event) => { event.stopPropagation(); handler(); }; return button;
+}
+
+function renderExpressionNode(node, parent = null, key = null) {
   const wrapper = document.createElement('div');
   wrapper.className = `formula-expression-node formula-expression-${node?.kind || 'empty'}${state.formulaEditor.expressionSelection === node ? ' selected' : ''}`;
+  wrapper.dataset.expressionKind = node?.kind || 'empty';
+  if (node?.block) wrapper.dataset.expressionBlock = node.block;
   wrapper.setAttribute('role', 'button'); wrapper.tabIndex = 0;
   const label = document.createElement('span'); label.className = 'formula-expression-label'; label.textContent = expressionNodeText(node); wrapper.appendChild(label);
-  wrapper.onclick = (event) => { event.stopPropagation(); state.formulaEditor.expressionSelection = node; renderFormulaCanvas(); };
-  wrapper.onkeydown = (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); state.formulaEditor.expressionSelection = node; renderFormulaCanvas(); } };
+  wrapper.onclick = (event) => { event.stopPropagation(); selectExpressionNode(node); };
+  wrapper.onkeydown = (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectExpressionNode(node); } };
+  const controls = document.createElement('span'); controls.className = 'formula-expression-node-controls';
+  controls.appendChild(appendExpressionNodeControl(null, '复制', '复制此节点', () => { state.formulaEditor.expression = duplicateExpressionNode(state.formulaEditor.expression, node); state.formulaEditor.expressionSelection = node; syncFormulaStepsFromExpression(); renderFormulaEditor(); }));
+  controls.appendChild(appendExpressionNodeControl(null, '替换', '在下方操作栏替换此节点', () => { state.formulaEditor.expressionSelection = node; renderFormulaCanvas(); }));
+  if (parent?.kind === 'array') {
+    controls.appendChild(appendExpressionNodeControl(null, '前插', '在数组中插入前项', () => { insertExpressionSibling(state.formulaEditor.expression, node, 'before', expressionArrayItem(node)); syncFormulaStepsFromExpression(); renderFormulaEditor(); }));
+    controls.appendChild(appendExpressionNodeControl(null, '后插', '在数组中插入后项', () => { insertExpressionSibling(state.formulaEditor.expression, node, 'after', expressionArrayItem(node)); syncFormulaStepsFromExpression(); renderFormulaEditor(); }));
+    controls.appendChild(appendExpressionNodeControl(null, '↑', '数组项上移', () => { moveExpressionArrayItem(state.formulaEditor.expression, node, -1); syncFormulaStepsFromExpression(); renderFormulaEditor(); }));
+    controls.appendChild(appendExpressionNodeControl(null, '↓', '数组项下移', () => { moveExpressionArrayItem(state.formulaEditor.expression, node, 1); syncFormulaStepsFromExpression(); renderFormulaEditor(); }));
+  }
+  if (node?.kind === 'array') controls.appendChild(appendExpressionNodeControl(null, '＋元素', '向数组末尾添加元素', () => { node.items.push(expressionArrayItem(node)); syncFormulaStepsFromExpression(); renderFormulaEditor(); }));
+  controls.appendChild(appendExpressionNodeControl(null, '删除', '删除此节点', () => { state.formulaEditor.expression = pruneExpressionNode(state.formulaEditor.expression, node); state.formulaEditor.expressionSelection = null; syncFormulaStepsFromExpression(); renderFormulaEditor(); }));
+  wrapper.appendChild(controls);
   const entries = expressionNodeEntries(node);
   if (entries.length) {
     const children = document.createElement('div'); children.className = 'formula-expression-children';
-    entries.forEach(([name, child]) => { const item = document.createElement('div'); item.className = 'formula-expression-child'; const key = document.createElement('small'); key.textContent = name; item.append(key, renderExpressionNode(child)); children.appendChild(item); });
+    entries.forEach(([name, child]) => {
+      const item = document.createElement('div'); item.className = 'formula-expression-child';
+      if (node.kind === 'array') {
+        item.draggable = true; item.dataset.expressionArrayItem = '1';
+        item.ondragstart = (event) => { state.formulaEditor.expressionDrag = {parent: node, child}; item.classList.add('dragging'); if (event.dataTransfer) { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', name); } };
+        item.ondragover = (event) => { if (state.formulaEditor.expressionDrag?.parent === node) { event.preventDefault(); item.classList.add('drag-over'); if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'; } };
+        item.ondragleave = () => item.classList.remove('drag-over');
+        item.ondrop = (event) => {
+          event.preventDefault(); item.classList.remove('drag-over'); const drag = state.formulaEditor.expressionDrag;
+          if (!drag || drag.parent !== node || drag.child === child) return;
+          const from = node.items.indexOf(drag.child); const to = node.items.indexOf(child);
+          if (from >= 0 && to >= 0) { const [moved] = node.items.splice(from, 1); node.items.splice(from < to ? to - 1 : to, 0, moved); }
+          state.formulaEditor.expressionDrag = null; syncFormulaStepsFromExpression(); renderFormulaEditor();
+        };
+        item.ondragend = () => { state.formulaEditor.expressionDrag = null; item.classList.remove('dragging', 'drag-over'); };
+      }
+      const entry = document.createElement('small'); entry.textContent = name; item.append(entry, renderExpressionNode(child, node, name)); children.appendChild(item);
+    });
     wrapper.appendChild(children);
   }
   return wrapper;
+}
+
+function appendMathExpressionChild(parent, node) {
+  const child = renderMathExpressionNode(node); parent.appendChild(child); return child;
+}
+
+function renderMathExpressionNode(node) {
+  const wrapper = document.createElement('span');
+  wrapper.className = `formula-expression-math-node formula-expression-math-${node?.kind || 'empty'}${state.formulaEditor.expressionSelection === node ? ' selected' : ''}`;
+  wrapper.tabIndex = 0; wrapper.setAttribute('role', 'button');
+  wrapper.onclick = (event) => { event.stopPropagation(); selectExpressionNode(node); };
+  wrapper.onkeydown = (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectExpressionNode(node); } };
+  if (!node) { wrapper.textContent = '（空）'; return wrapper; }
+  if (node.kind === 'input' || node.kind === 'parameter') { wrapper.textContent = node.name; return wrapper; }
+  if (node.kind === 'constant') { wrapper.textContent = expressionNodeText(node); return wrapper; }
+  if (node.kind === 'array') {
+    wrapper.append('['); node.items.forEach((item, index) => { if (index) wrapper.append(', '); appendMathExpressionChild(wrapper, item); }); wrapper.append(']'); return wrapper;
+  }
+  const entries = expressionNodeEntries(node); const values = entries.map(([, child]) => child);
+  const symbols = {add: ' ＋ ', subtract: ' − ', elementwise_multiply: ' × ', safe_divide: ' ÷ '};
+  if (symbols[node.block] && values.length >= 2) { appendMathExpressionChild(wrapper, values[0]); wrapper.append(symbols[node.block]); appendMathExpressionChild(wrapper, values[1]); return wrapper; }
+  if (node.block === 'negative_log' && values.length) { wrapper.append('−log('); appendMathExpressionChild(wrapper, values[0]); wrapper.append(')'); return wrapper; }
+  if (node.block === 'mean_loss' && values.length) { wrapper.append('mean('); appendMathExpressionChild(wrapper, values[0]); wrapper.append(')'); return wrapper; }
+  if (node.block === 'softmax' && values.length) { wrapper.append('softmax('); appendMathExpressionChild(wrapper, values[0]); wrapper.append(')'); return wrapper; }
+  if (node.block === 'gather_by_label' && values.length >= 2) { appendMathExpressionChild(wrapper, values[0]); wrapper.append('['); appendMathExpressionChild(wrapper, values[1]); wrapper.append(']'); return wrapper; }
+  if (node.block === 'elementwise_power' && values.length >= 2) { appendMathExpressionChild(wrapper, values[0]); wrapper.append('^'); appendMathExpressionChild(wrapper, values[1]); return wrapper; }
+  if (node.block === 'weighted_sum') {
+    const terms = node.parameters?.terms?.items || []; const weights = node.parameters?.weights?.items || [];
+    wrapper.append('Σ(');
+    terms.forEach((term, index) => { if (index) wrapper.append(' ＋ '); if (weights[index]) { appendMathExpressionChild(wrapper, weights[index]); wrapper.append(' × '); } appendMathExpressionChild(wrapper, term); });
+    wrapper.append(')'); return wrapper;
+  }
+  const info = blockInfo(node.block); wrapper.append(`${info?.name || node.block}(`); values.forEach((child, index) => { if (index) wrapper.append(', '); appendMathExpressionChild(wrapper, child); }); wrapper.append(')'); return wrapper;
 }
 
 function replaceExpressionReference(root, target, replacement) {
@@ -3249,11 +3466,43 @@ function replaceExpressionReference(root, target, replacement) {
   return root;
 }
 
+// Expression operations deliberately work on every node kind.  The renderer
+// and future Formula-safe Blocks use this small API instead of implementing
+// input/parameter/constant/array-specific mutations of their own.
+function selectExpressionNode(node) {
+  state.formulaEditor.expressionSelection = node || null;
+  renderFormulaCanvas();
+  return node;
+}
+
+function replaceExpressionNode(root, target, replacement) {
+  return replaceExpressionReference(root, target, replacement);
+}
+
+function removeExpressionNode(root, target) {
+  return pruneExpressionNode(root, target);
+}
+
+function wrapExpressionNode(root, target, blockId) {
+  const info = blockInfo(blockId);
+  if (!info || !target) return root;
+  const binding = (info.requires || [])[0];
+  const wrapper = {kind: 'operation', block: blockId, bindings: binding ? {[binding]: target} : {}, parameters: {}};
+  Object.entries(info.params || {}).forEach(([name, schema]) => {
+    if (schema.type !== 'slot' || isOutputSlot(name)) wrapper.parameters[name] = expressionConstant(schema.default);
+  });
+  return replaceExpressionReference(root, target, wrapper);
+}
+
 function pruneExpressionNode(root, target) {
   if (root === target) return null;
   const entries = expressionNodeEntries(root);
   for (const [name, child] of entries) {
     if (child === target) {
+      if (root.kind === 'array') {
+        root.items.splice(Number(name.slice(1)) - 1, 1);
+        return root;
+      }
       const siblings = entries.filter(([key]) => key !== name).map(([, value]) => value).filter(Boolean);
       if (siblings.length) return siblings[0];
       return null;
@@ -3266,7 +3515,7 @@ function pruneExpressionNode(root, target) {
       } else if (root.kind === 'array') {
         const index = Number(name.slice(1)) - 1;
         if (next === null) root.items.splice(index, 1); else root.items[index] = next;
-        if (!root.items.length) return null;
+        return root;
       }
       return root;
     }
@@ -3392,10 +3641,38 @@ function renderFormulaExpressionActions() {
   if (!selected) { container.textContent = '点击公式中的任意部分以选中；输入和参数也可以作为独立对象编辑。'; return; }
   const selectedLabel = document.createElement('strong'); selectedLabel.textContent = `已选中：${expressionNodeText(selected)}`; container.appendChild(selectedLabel);
   const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '删除此表达式'; remove.onclick = () => { state.formulaEditor.expression = pruneExpressionNode(state.formulaEditor.expression, selected); state.formulaEditor.expressionSelection = null; syncFormulaStepsFromExpression(); renderFormulaEditor(); }; container.appendChild(remove);
-  if (selected.kind !== 'operation') return;
-  const replace = document.createElement('select'); replace.title = '替换当前运算';
-  expressionOperationCandidates().forEach((info) => { const option = document.createElement('option'); option.value = info.id; option.textContent = `替换为：${info.name}`; option.selected = info.id === selected.block; replace.appendChild(option); });
-  const replaceButton = document.createElement('button'); replaceButton.type = 'button'; replaceButton.textContent = '替换运算'; replaceButton.onclick = () => { expressionReplaceOperation(selected, replace.value); syncFormulaStepsFromExpression(); renderFormulaEditor(); }; container.append(replace, replaceButton);
+  const replace = document.createElement('select'); replace.title = '替换当前节点';
+  const replacementGroups = [
+    {label: '输入', values: expressionInputCandidates().map((node) => ({value: `input:${node.name}`, label: node.name}))},
+    {label: '参数', values: expressionParameterCandidates().map((node) => ({value: `parameter:${node.name}`, label: node.name}))},
+  ];
+  if (selected.kind === 'operation') replacementGroups.push({label: '运算', values: expressionOperationCandidates().map((info) => ({value: `operation:${info.id}`, label: info.name, selected: info.id === selected.block}))});
+  replacementGroups.forEach((group) => {
+    if (!group.values.length) return;
+    const optgroup = document.createElement('optgroup'); optgroup.label = group.label;
+    group.values.forEach((item) => { const option = document.createElement('option'); option.value = item.value; option.textContent = item.label; option.selected = Boolean(item.selected); optgroup.appendChild(option); });
+    replace.appendChild(optgroup);
+  });
+  if (replace.options.length) {
+    const replaceButton = document.createElement('button'); replaceButton.type = 'button'; replaceButton.textContent = '替换'; replaceButton.onclick = () => {
+      const [kind, name] = String(replace.value || '').split(':');
+      const replacement = kind === 'input' ? expressionInput(name) : kind === 'parameter' ? expressionParameter(name) : null;
+      if (replacement) state.formulaEditor.expression = replaceExpressionReference(state.formulaEditor.expression, selected, replacement);
+      else if (kind === 'operation') expressionReplaceOperation(selected, name);
+      state.formulaEditor.expressionSelection = replacement || selected;
+      syncFormulaStepsFromExpression(); renderFormulaEditor();
+    };
+    container.append(replace, replaceButton);
+  }
+  if (selected.kind === 'constant') {
+    const constant = document.createElement('input'); constant.type = 'text'; constant.value = parameterDefaultText({default: selected.value}); constant.title = '编辑常量（数字、文本或 JSON）';
+    const constantButton = document.createElement('button'); constantButton.type = 'button'; constantButton.textContent = '更新常量'; constantButton.onclick = () => {
+      const raw = constant.value.trim(); let value = raw;
+      try { value = JSON.parse(raw); } catch (error) { /* plain text constants remain strings */ }
+      selected.value = value; syncFormulaStepsFromExpression(); renderFormulaEditor();
+    };
+    container.append(constant, constantButton);
+  }
   const unary = expressionOperationCandidates().filter((info) => (info.requires || []).length === 1);
   if (unary.length) {
     const wrap = document.createElement('select'); wrap.title = '用一元运算包裹'; unary.forEach((info) => { const option = document.createElement('option'); option.value = info.id; option.textContent = `包裹为：${info.name}`; wrap.appendChild(option); });
@@ -3405,7 +3682,7 @@ function renderFormulaExpressionActions() {
 
 function expressionToFormulaSteps(root, outputName) {
   if (!root) return [];
-  const steps = []; const used = new Set();
+  const steps = []; const used = new Set(); const generated = new WeakMap();
   const safeName = (value) => String(value || 'step').replace(/[^A-Za-z0-9_]/g, '_').replace(/^[^A-Za-z]+/, '') || 'step';
   const value = (node) => {
     if (!node) return null;
@@ -3416,10 +3693,12 @@ function expressionToFormulaSteps(root, outputName) {
   };
   const visit = (node, isRoot) => {
     if (!node || node.kind !== 'operation') return value(node);
+    if (!isRoot && generated.has(node)) return generated.get(node);
     let id = isRoot ? outputName : safeName(node.block);
     let suffix = 2;
     if (!isRoot) while (used.has(id)) id = `${safeName(node.block)}_${suffix++}`;
     used.add(id);
+    generated.set(node, id);
     const bindings = {}; Object.entries(node.bindings || {}).forEach(([name, child]) => { bindings[name] = value(child); });
     const parameters = {}; Object.entries(node.parameters || {}).forEach(([name, child]) => { parameters[name] = value(child); });
     steps.push({id, block: node.block, bindings, parameters});
@@ -3436,6 +3715,14 @@ function syncFormulaStepsFromExpression() {
   if (output && [...output.options].some((option) => option.value === outputName)) output.value = outputName;
 }
 
+function renderFormulaStructureTree() {
+  const tree = $('formula-expression-tree');
+  if (!tree) return;
+  tree.replaceChildren();
+  if (state.formulaEditor.expression) tree.appendChild(renderExpressionNode(state.formulaEditor.expression));
+  else tree.textContent = '尚未创建表达式结构';
+}
+
 function renderFormulaCanvas() {
   const canvas = $('formula-canvas');
   if (!canvas) return;
@@ -3446,9 +3733,10 @@ function renderFormulaCanvas() {
     state.formulaEditor.expression = formulaStepsToExpression(state.formulaEditor.steps, source, inputs, parameters);
   }
   canvas.replaceChildren();
-  if (!state.formulaEditor.expression) { canvas.textContent = '公式画布：尚未添加步骤'; renderFormulaExpressionActions(); return; }
+  if (!state.formulaEditor.expression) { canvas.textContent = '公式画布：尚未添加步骤'; renderFormulaStructureTree(); renderFormulaExpressionActions(); return; }
   const heading = document.createElement('div'); heading.className = 'formula-canvas-heading'; heading.textContent = `${$('formula-output-name')?.value.trim() || '输出'} =`; canvas.appendChild(heading);
-  canvas.appendChild(renderExpressionNode(state.formulaEditor.expression));
+  canvas.appendChild(renderMathExpressionNode(state.formulaEditor.expression));
+  renderFormulaStructureTree();
   renderFormulaExpressionActions();
 }
 
@@ -3675,6 +3963,9 @@ function renderFormulaEditor() {
 
 function resetFormulaEditor() {
   state.formulaEditor.steps = []; state.formulaEditor.expression = null; state.formulaEditor.expressionSelection = null; state.formulaEditor.editingId = null; state.formulaEditor.paletteExpanded = true;
+  state.formulaEditor.inputSchemas = {logits: {description: '', type: 'tensor'}, targets: {description: '', type: 'labels'}};
+  state.formulaEditor.parameterSchemas = {epsilon: {type: 'float', default: 1e-8}};
+  state.formulaEditor.outputSchemas = {};
   $('formula-id').value = 'user/my_formula'; $('formula-name').value = 'My Formula'; $('formula-description').value = '';
   $('formula-inputs').value = 'logits\ntargets'; $('formula-parameters').value = 'epsilon:float=1e-8'; $('formula-output-name').value = 'loss';
   $('formula-editor-step-id').value = '';
@@ -3687,9 +3978,12 @@ function loadFormulaIntoEditor(item) {
   $('formula-list-dialog')?.close();
   state.formulaEditor.editingId = item.id;
   state.formulaEditor.steps = (item.steps || []).map((step) => ({ id: step.id, block: step.block, bindings: {...(step.bindings || {})}, parameters: {...(step.parameters || {})} }));
+  state.formulaEditor.inputSchemas = cloneSchema(item.inputs || {});
+  state.formulaEditor.parameterSchemas = cloneSchema(item.parameters || {});
+  state.formulaEditor.outputSchemas = cloneSchema(item.outputs || {});
   $('formula-id').value = item.id; $('formula-name').value = item.name || ''; $('formula-description').value = item.description || '';
   $('formula-inputs').value = Object.keys(item.inputs || {}).join('\n');
-  $('formula-parameters').value = Object.entries(item.parameters || {}).map(([name, schema]) => `${name}:${schema.type || 'float'}=${JSON.stringify(schema.default)}`).join('\n');
+  $('formula-parameters').value = Object.entries(item.parameters || {}).map(([name, schema]) => parameterSchemaLine(name, schema)).join('\n');
   const outputName = Object.keys(item.outputs || {})[0] || 'loss';
   $('formula-output-name').value = outputName;
   const inputNames = new Set(Object.keys(item.inputs || {}));
@@ -3759,11 +4053,13 @@ async function saveFormulaEditor() {
   try {
     syncFormulaStepsFromExpression();
     const id = $('formula-id').value.trim(); const name = $('formula-name').value.trim();
-    const inputs = Object.fromEntries(parseEditorInputs().map((input) => [input, { description: '' }]));
+    const inputNames = parseEditorInputs();
+    const inputs = Object.fromEntries(inputNames.map((input) => [input, {...cloneSchema(state.formulaEditor.inputSchemas[input]), description: state.formulaEditor.inputSchemas[input]?.description || ''}]));
     const parameters = parseEditorParameters();
     const outputName = $('formula-output-name').value.trim(); const outputSource = outputName;
     if (!outputName || !outputSource || !state.formulaEditor.steps.length) throw new Error('请先在公式画布中创建一个可输出的表达式');
-    const formula = { id, name, description: $('formula-description').value.trim(), inputs, parameters, steps: state.formulaEditor.steps, outputs: { [outputName]: { source: outputSource } }, metadata: { origin: 'scratch-web' } };
+    const outputs = {[outputName]: {...cloneSchema(state.formulaEditor.outputSchemas[outputName]), source: outputSource}};
+    const formula = { id, name, description: $('formula-description').value.trim(), inputs, parameters, steps: state.formulaEditor.steps, outputs, metadata: { origin: 'scratch-web' } };
     const result = await api('/api/formulas', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ formula, replace: Boolean(state.formulaEditor.editingId) }) });
     await refreshBlocksAfterFormulaChange();
     $('formula-editor-dialog').close();
