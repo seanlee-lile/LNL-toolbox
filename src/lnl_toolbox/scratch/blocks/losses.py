@@ -65,7 +65,7 @@ def _class_labels(value: Any, classes: int, *, device: Any, slot: str) -> Any:
     requires=("logits", "labels"),
     provides=("save_as",),
     placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="CE(z, y) = -log softmax(z)_y", formula_ref="standard cross-entropy definition", formula_kind="composite", formula_group="概率 / Loss",
+    formula="CE(z, y) = -log softmax(z)_y", formula_ref="builtin/per_sample_ce", formula_kind="composite", formula_group="概率 / Loss",
 )
 def per_sample_ce(
     ctx: ScratchContext,
@@ -93,7 +93,7 @@ def per_sample_ce(
     provides=("save_as",),
     placement=("batch",), stage="train", ui_group="⑤ 损失公式",
     formula="D_SKL(p_a,p_b)=KL(p_a||p_b)+KL(p_b||p_a)",
-    formula_ref="symmetric KL divergence definition", formula_kind="composite", formula_group="概率 / Loss",
+    formula_ref="builtin/symmetric_kl", formula_kind="composite", formula_group="概率 / Loss",
 )
 def symmetric_kl(
     ctx: ScratchContext,
@@ -184,7 +184,7 @@ def complementary_negative_loss(ctx: ScratchContext, logits: str = "logits", com
     requires=("values", "labels"),
     provides=("save_as",),
     placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式",
-    formula="v_i=values[i,labels_i]", formula_ref="row-wise indexed gather", formula_kind="composite", formula_group="索引",
+    formula="v_i=values[i,labels_i]", formula_ref="builtin/gather_by_label", formula_kind="composite", formula_group="索引",
 )
 def gather_by_label(ctx: ScratchContext, values: str = "probabilities", labels: str = "labels", save_as: str = "gathered_values") -> None:
     torch = __import__("torch")
@@ -218,13 +218,16 @@ def clamp_min(ctx: ScratchContext, input: str = "gathered_values", minimum: floa
     description="Raise each tensor element to an explicit scalar exponent.",
     params={
         "input": {"type": "slot", "default": "clamped_values"},
-        "q": {"type": "float", "default": 0.7, "min": 0.0, "max": 1.0},
+        # ``value`` permits a formula to bind the exponent to another scalar
+        # expression (for example reciprocal temperature) while retaining the
+        # ordinary numeric q parameter for recipes.
+        "q": {"type": "value", "default": 0.7},
         "save_as": {"type": "slot", "default": "powered_values"},
     },
     requires=("input",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
     formula="z=x^q", formula_ref="elementwise power operation", formula_kind="primitive", formula_group="基础",
 )
-def elementwise_power(ctx: ScratchContext, input: str = "clamped_values", q: float = 0.7, save_as: str = "powered_values") -> None:
+def elementwise_power(ctx: ScratchContext, input: str = "clamped_values", q: Any = 0.7, save_as: str = "powered_values") -> None:
     ctx[save_as] = ctx[input].pow(float(q))
 
 
@@ -254,6 +257,7 @@ def affine_transform(ctx: ScratchContext, input: str = "powered_values", scale: 
     requires=("logits", "labels"),
     provides=("save_as",),
     placement=("batch",), stage="train", ui_group="⑤ 损失公式", beginner_visible=False,
+    formula="L_i=mean_c|softmax(z_i)_c-1[y_i=c]|", formula_ref="builtin/mae_loss", formula_kind="composite", formula_group="概率 / Loss",
 )
 def mae_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", save_as: str = "loss_per_sample") -> None:
     torch, _ = _torch()
@@ -277,7 +281,7 @@ def mae_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels"
     provides=("save_as",),
     placement=("batch",), stage="train", ui_group="⑤ 损失公式",
     formula="L_NCE = -log p_y / Σ_j(-log p_j)", formula_kind="composite", formula_group="概率 / Loss",
-    formula_ref="Normalized Cross Entropy definition in Ma et al. (2020), Eq. (2)",
+    formula_ref="builtin/nce_loss",
     paper="Normalized Loss Functions for Deep Learning with Noisy Labels",
 )
 def nce_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", save_as: str = "loss_per_sample") -> None:
@@ -304,7 +308,7 @@ def nce_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels"
     provides=("save_as",),
     placement=("batch",), stage="train", ui_group="⑤ 损失公式",
     formula="L_RCE = -Σ_j p_j log(ŷ_j), where log(ŷ_y)=0 and log(ŷ_j)=log_zero otherwise", formula_kind="composite", formula_group="概率 / Loss",
-    formula_ref="Reverse Cross Entropy definition in Wang et al. (2019), as used by Ma et al. (2020)",
+    formula_ref="builtin/rce_loss",
     paper="Normalized Loss Functions for Deep Learning with Noisy Labels",
 )
 def rce_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", log_zero: float = -4.0, save_as: str = "loss_per_sample") -> None:
@@ -324,7 +328,7 @@ def rce_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels"
     requires=("input",),
     provides=("save_as",),
     placement=("top", "batch"), stage="train", ui_group="⑤ 损失公式",
-    formula="L = mean_i l_i", formula_ref="method definition", formula_kind="composite", formula_group="归约",
+    formula="L = mean_i l_i", formula_ref="builtin/mean_loss", formula_kind="composite", formula_group="归约",
 )
 def mean_loss(ctx: ScratchContext, input: str = "loss_per_sample", save_as: str = "loss") -> None:
     ctx[save_as] = ctx[input].mean()

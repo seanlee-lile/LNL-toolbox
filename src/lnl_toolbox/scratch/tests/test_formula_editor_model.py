@@ -71,6 +71,27 @@ const expression = {kind: 'operation', block: 'add', bindings: {
 const steps = expressionToFormulaSteps(expression, 'loss');
 if (steps.at(-1).id !== 'loss' || steps.at(-1).block !== 'add') throw new Error('combination root was not serialized as loss');
 if (steps.filter((step) => step.block === 'elementwise_multiply').length !== 2) throw new Error('nested terms were not serialized');
+        """
+        )
+
+    def test_constant_slot_operand_is_materialized_as_a_constant_step(self) -> None:
+        self.run_node(
+            """
+state.blocks = [
+  {id: 'constant', name: 'Constant', kind: 'action', formula_kind: 'primitive', requires: [], params: {value: {type: 'float'}, save_as: {type: 'slot'}}},
+  {id: 'add', name: 'Add', kind: 'action', formula_kind: 'primitive', requires: ['left', 'right'], params: {left: {type: 'slot'}, right: {type: 'slot'}, save_as: {type: 'slot'}}},
+];
+const expression = {kind: 'operation', block: 'add', bindings: {
+  left: expressionInput('x'),
+  right: expressionConstant(1),
+}, parameters: {}};
+const steps = expressionToFormulaSteps(expression, 'y');
+const constantIndex = steps.findIndex((step) => step.block === 'constant');
+const addIndex = steps.findIndex((step) => step.block === 'add');
+if (constantIndex < 0 || addIndex < 0 || constantIndex >= addIndex) throw new Error('constant operand was not emitted before its consumer');
+const constant = steps[constantIndex];
+const add = steps[addIndex];
+if (constant.parameters.value !== 1 || add.bindings.right !== constant.id) throw new Error('constant slot binding was not serialized as a constant step reference');
 """
         )
 

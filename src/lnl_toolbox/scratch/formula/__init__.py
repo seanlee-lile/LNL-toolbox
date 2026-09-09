@@ -18,6 +18,13 @@ from .registry import (
     unregister_formula,
     validate_and_register_formula,
 )
+from .composites import (
+    get_composite_formula,
+    has_composite_formula,
+    list_composite_formulas,
+    register_composite_formulas,
+)
+from .audit import formula_classification, formula_closure, write_formula_audit
 from .runtime import execute_formula, formula_hash
 from .schema import (
     FormulaInputSpec,
@@ -48,4 +55,11 @@ __all__ = [
     "unregister_formula",
     "validate_and_register_formula",
     "validate_formula",
+    "get_composite_formula",
+    "has_composite_formula",
+    "list_composite_formulas",
+    "register_composite_formulas",
+    "formula_classification",
+    "formula_closure",
+    "write_formula_audit",
 ]

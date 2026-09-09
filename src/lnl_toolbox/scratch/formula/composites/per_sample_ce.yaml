@@ -1,0 +1,21 @@
+id: builtin/per_sample_ce
+name: Per-sample Cross Entropy
+description: Log-softmax, row-wise target gather and explicit negative log.
+inputs:
+  logits: {type: tensor}
+  labels: {type: labels}
+parameters:
+  epsilon: {type: float, default: 1.0e-12, minimum: 0.0}
+steps:
+  - id: probabilities
+    block: softmax
+    bindings: {logits: logits}
+  - id: target_probability
+    block: gather_by_label
+    bindings: {values: probabilities, labels: labels}
+  - id: loss
+    block: negative_log
+    bindings: {input: target_probability}
+    parameters: {minimum: epsilon}
+outputs:
+  loss: {source: loss}

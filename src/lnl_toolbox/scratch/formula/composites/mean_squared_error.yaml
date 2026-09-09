@@ -1,0 +1,19 @@
+id: builtin/mean_squared_error
+name: Mean Squared Error
+description: Elementwise subtraction, power and global mean.
+inputs:
+  predicted: {type: tensor}
+  target: {type: tensor}
+steps:
+  - id: difference
+    block: subtract
+    bindings: {minuend: predicted, subtrahend: target}
+  - id: squared
+    block: elementwise_power
+    bindings: {input: difference}
+    parameters: {q: 2.0}
+  - id: loss
+    block: reduce_mean
+    bindings: {input: squared}
+outputs:
+  loss: {source: loss}

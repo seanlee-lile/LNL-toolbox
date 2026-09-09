@@ -1,0 +1,11 @@
+id: builtin/mean_loss
+name: Mean Loss
+description: Reduce per-sample values to their scalar mean.
+inputs:
+  values: {type: tensor}
+steps:
+  - id: loss
+    block: reduce_mean
+    bindings: {input: values}
+outputs:
+  loss: {source: loss}

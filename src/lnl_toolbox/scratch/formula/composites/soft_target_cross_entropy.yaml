@@ -1,0 +1,25 @@
+id: builtin/soft_target_cross_entropy
+name: Soft-target Cross Entropy
+description: Negative probability-target weighted log-softmax reduced over classes.
+inputs:
+  logits: {type: tensor}
+  targets: {type: probability}
+steps:
+  - id: log_probabilities
+    block: log_softmax
+    bindings: {logits: logits}
+  - id: weighted_log_probabilities
+    block: elementwise_multiply
+    bindings: {left: targets, right: log_probabilities}
+  - id: class_sum
+    block: reduce_sum
+    bindings: {input: weighted_log_probabilities}
+    parameters: {dim: -1}
+  - id: mean_loss
+    block: reduce_mean
+    bindings: {input: class_sum}
+  - id: loss
+    block: negate
+    bindings: {input: mean_loss}
+outputs:
+  loss: {source: loss}

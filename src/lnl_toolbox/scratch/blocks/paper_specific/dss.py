@@ -204,7 +204,7 @@ def dss_ccs_trend_exclusion(ctx: ScratchContext, state: str = "dss_state", epoch
     description="Compute DSS candidate-masked cross entropy using the indexed selected/excluded state.",
     params={"state": {"type": "slot", "default": "dss_state"}, "logits": {"type": "slot", "default": "logits"}, "labels": {"type": "slot", "default": "labels"}, "indices": {"type": "slot", "default": "indices"}, "save_as": {"type": "slot", "default": "loss"}},
     requires=("state", "logits", "labels", "indices"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="L=mean_i selected_i * CE(z_i,y_i) with excluded classes masked", formula_ref="DSS masked risk", formula_kind="composite", paper="Debiased Sample Selection",
+    formula="L=mean_i selected_i * CE(z_i,y_i) with excluded classes masked", formula_ref="DSS masked risk", formula_kind="special", paper="Debiased Sample Selection",
 )
 def dss_masked_training_loss(ctx: ScratchContext, state: str = "dss_state", logits: str = "logits", labels: str = "labels", indices: str = "indices", save_as: str = "loss") -> None:
     import torch

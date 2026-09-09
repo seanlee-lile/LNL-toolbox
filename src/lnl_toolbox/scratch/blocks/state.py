@@ -226,6 +226,7 @@ from .selection import agreement_mask
     description="Reduce selected values with an explicit selected-count or batch-size denominator.",
     params={"values": {"type": "slot", "default": "loss_per_sample"}, "mask": {"type": "slot", "default": "selected_mask"}, "denominator": {"type": "enum", "options": ["selected", "batch"], "default": "selected"}, "empty": {"type": "enum", "options": ["zero", "error"], "default": "zero"}, "save_as": {"type": "slot", "default": "loss"}},
     requires=("values", "mask"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="L=mean_{i:m_i=1}v_i", formula_ref="builtin/masked_mean", formula_kind="composite", formula_group="概率 / Loss",
 )
 def masked_mean(ctx: ScratchContext, values: str = "loss_per_sample", mask: str = "selected_mask", denominator: str = "selected", empty: str = "zero", save_as: str = "loss") -> None:
     tensor = ctx[values]

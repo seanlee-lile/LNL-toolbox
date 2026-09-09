@@ -1,0 +1,28 @@
+id: builtin/nce_loss
+name: Normalized Cross Entropy
+description: Target negative log probability divided by total negative log mass.
+inputs:
+  logits: {type: tensor}
+  labels: {type: labels}
+parameters:
+  epsilon: {type: float, default: 1.0e-12, minimum: 0.0}
+steps:
+  - id: log_probabilities
+    block: log_softmax
+    bindings: {logits: logits}
+  - id: negative_log_probabilities
+    block: negate
+    bindings: {input: log_probabilities}
+  - id: target_negative_log
+    block: gather_by_label
+    bindings: {values: negative_log_probabilities, labels: labels}
+  - id: total_negative_log
+    block: reduce_sum
+    bindings: {input: negative_log_probabilities}
+    parameters: {dim: -1}
+  - id: loss
+    block: safe_divide
+    bindings: {numerator: target_negative_log, denominator: total_negative_log}
+    parameters: {minimum: epsilon}
+outputs:
+  loss: {source: loss}

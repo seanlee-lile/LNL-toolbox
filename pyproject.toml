@@ -40,7 +40,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 lnl_toolbox = ["paper_catalog.json"]
 "lnl_toolbox.cli" = ["data/recipe_catalog.json"]
-"lnl_toolbox.scratch" = ["recipes/**/*.yaml", "web/*.html", "web/*.js", "web/*.css"]
+"lnl_toolbox.scratch" = ["recipes/**/*.yaml", "formula/composites/*.yaml", "web/*.html", "web/*.js", "web/*.css"]
 
 [tool.ruff]
 target-version = "py310"

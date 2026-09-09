@@ -1,0 +1,15 @@
+id: builtin/masked_mean
+name: Masked Mean
+description: Convert a boolean selection to indices and average the selected values.
+inputs:
+  values: {type: tensor}
+  mask: {type: mask}
+steps:
+  - id: selected_indices
+    block: mask_to_indices
+    bindings: {mask: mask}
+  - id: loss
+    block: mean_by_indices
+    bindings: {values: values, indices: selected_indices}
+outputs:
+  loss: {source: loss}

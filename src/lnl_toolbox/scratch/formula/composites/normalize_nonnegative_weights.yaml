@@ -1,0 +1,20 @@
+id: builtin/normalize_nonnegative_weights
+name: Normalize Nonnegative Weights
+description: Divide nonnegative weights by their explicitly floored sum.
+inputs:
+  weights: {type: tensor}
+parameters:
+  epsilon: {type: float, default: 1.0e-12, minimum: 0.0}
+steps:
+  - id: total
+    block: reduce_sum
+    bindings: {input: weights}
+  - id: safe_total
+    block: clamp_min
+    bindings: {input: total}
+    parameters: {minimum: epsilon}
+  - id: normalized
+    block: divide
+    bindings: {numerator: weights, denominator: safe_total}
+outputs:
+  normalized: {source: normalized}

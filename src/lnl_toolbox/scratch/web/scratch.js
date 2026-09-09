@@ -1,5 +1,6 @@
 const state = {
   blocks: [],
+  formulas: [],
   recipe: { schema_version: 1, name: 'scratch_recipe', description: '', steps: [] },
   selected: null,
   adjacentSelection: null,
@@ -1704,6 +1705,29 @@ const DISPLAY_FORMULAS = Object.freeze({
   partial_label_loss: String.raw`\mathcal{L}_i=\lambda\left[-\sum_c w_{i,c}h_{i,c}\log p_{i,c}\right]+(1-\lambda)\left[-\sum_c w_{i,c}q_{i,c}\log p_{i,c}\right],\quad q_{i,c}=\frac{c_{i,c}}{\sum_jc_{i,j}},\ h_i=\operatorname{onehot}(\arg\max_c c_{i,c}),\ \lambda=hard_weight`,
   prior_kl: String.raw`D=\sum_c\pi_c\log\frac{\pi_c}{\bar{p}_c},\ \bar{p}=\frac{1}{N}\sum_i p_i`,
   weighted_sum: String.raw`y=\sum_{k=1}^{K}w_kx_k`,
+  constant: String.raw`z=c`,
+  reciprocal: String.raw`z=1/x`,
+  mask_to_indices: String.raw`I=\operatorname{where}(m)`,
+  formula__builtin__gather_by_label: String.raw`v_i=V_{i,y_i}`,
+  formula__builtin__negative_log: String.raw`z=-\log(\max(x,\varepsilon))`,
+  formula__builtin__safe_divide: String.raw`z=\frac{x}{\max(y,\varepsilon)}`,
+  formula__builtin__row_normalize: String.raw`z_{i,c}=\frac{x_{i,c}}{\max(\sum_jx_{i,j},\varepsilon)}`,
+  formula__builtin__weighted_blend: String.raw`z=w\,left+(1-w)\,right`,
+  formula__builtin__sharpen_distribution: String.raw`q'_c=\frac{q_c^{1/T}}{\sum_jq_j^{1/T}}`,
+  formula__builtin__soft_target_cross_entropy: String.raw`L=-\operatorname{mean}_i\sum_cq_{i,c}\log p_{i,c}`,
+  formula__builtin__masked_mean: String.raw`L=\operatorname{mean}_{i:m_i=1}v_i`,
+  formula__builtin__mean_squared_error: String.raw`L=\operatorname{mean}((x-y)^2)`,
+  formula__builtin__weighted_sum: String.raw`y=\sum_kw_kx_k`,
+  formula__builtin__per_sample_ce: String.raw`\ell_i=-\log p_{i,y_i}`,
+  formula__builtin__nce_loss: String.raw`L_i=\frac{-\log p_{i,y_i}}{\sum_c-\log p_{i,c}}`,
+  formula__builtin__rce_loss: String.raw`L_i=-\sum_cp_{i,c}\log\bar y_{i,c}`,
+  formula__builtin__symmetric_kl: String.raw`D_{\mathrm{SKL}}=\operatorname{KL}(p_a\Vert p_b)+\operatorname{KL}(p_b\Vert p_a)`,
+  formula__builtin__mean_loss: String.raw`L=\operatorname{mean}_i\ell_i`,
+  formula__builtin__mean_by_indices: String.raw`L=\operatorname{mean}_{i\in I}v_i`,
+  formula__builtin__compose_transition: String.raw`T=\operatorname{row\_normalize}(T_1T_2)`,
+  formula__builtin__mae_loss: String.raw`L_i=\operatorname{mean}_c|p_{i,c}-1[y_i=c]|`,
+  formula__builtin__prior_kl: String.raw`D=\sum_c\pi_c\log(\pi_c/\bar p_c)`,
+  formula__builtin__normalize_nonnegative_weights: String.raw`w=\bar w/\sum_j\bar w_j`,
   virtual_parameter_update: String.raw`\theta'=\theta-\alpha\nabla_{\theta}L`,
   step_milestone_update: String.raw`\operatorname{lr}_t=\operatorname{lr}_0\gamma^{\sum_m1[t\ge m]},\ t=\operatorname{epoch}\cdot S+\operatorname{batch}+1`,
   cwd_global_objective: String.raw`\mathcal{L}=1+\frac{1}{N}\sum_i(h_i^{\mathsf{T}}w+b)^2-2w^{\mathsf{T}}(\mu_1-\mu_0)-2b(\pi_1-\pi_0)`,
@@ -3025,11 +3049,25 @@ function formulaEditorCandidates() {
 }
 
 const FORMULA_EDITOR_GROUPS = ['基础', '函数', '归约', '概率 / Loss', '更多'];
+const FORMULA_EDITOR_KIND_GROUPS = ['基础运算', '特殊运算', '公式模板'];
 function formulaEditorGroup(info) {
   const declaredGroup = String(info?.formula_group || '').trim();
   if (FORMULA_EDITOR_GROUPS.includes(declaredGroup)) return declaredGroup;
   const kindGroups = {primitive: '基础', composite: '概率 / Loss', special: '更多'};
   return kindGroups[String(info?.formula_kind || '')] || '更多';
+}
+
+function formulaEditorKindGroup(info) {
+  const kind = String(info?.formula_kind || '');
+  if (kind === 'primitive') return '基础运算';
+  if (kind === 'special') return '特殊运算';
+  if (kind === 'composite') return '公式模板';
+  return '特殊运算';
+}
+
+function formulaDefinitionForBlock(info) {
+  const reference = String(info?.formula_ref || '');
+  return state.formulas.find((item) => item && item.id === reference) || null;
 }
 
 function expressionHole() { return {kind: 'hole'}; }
@@ -4076,6 +4114,41 @@ function expressionReplaceOperation(target, blockId) {
   target.block = blockId; target.bindings = bindings; target.parameters = parameters;
 }
 
+// Replace a composite node with the expression described by its FormulaSpec.
+// This is an editor-only transformation: execution still serializes the
+// resulting expression through the existing FormulaSpec step format.
+function expandCompositeExpression(target) {
+  if (!target || target.kind !== 'operation') return false;
+  const info = blockInfo(target.block);
+  const spec = formulaDefinitionForBlock(info);
+  if (!info || info.formula_kind !== 'composite' || !spec) return false;
+  const values = new Map();
+  const resolve = (value) => {
+    if (Array.isArray(value)) return {kind: 'array', items: value.map(resolve)};
+    if (value && typeof value === 'object') return expressionConstant(cloneExpressionValue(value));
+    if (typeof value === 'string') {
+      if (Object.prototype.hasOwnProperty.call(spec.inputs, value)) return target.bindings?.[value] || expressionHole();
+      if (Object.prototype.hasOwnProperty.call(spec.parameters, value)) return target.parameters?.[value] || expressionConstant(spec.parameters[value].default);
+      if (value.startsWith('$') && Object.prototype.hasOwnProperty.call(spec.parameters, value.slice(1))) return target.parameters?.[value.slice(1)] || expressionConstant(spec.parameters[value.slice(1)].default);
+      if (values.has(value)) return values.get(value);
+    }
+    return expressionConstant(value);
+  };
+  (spec.steps || []).forEach((step) => {
+    const bindings = Object.fromEntries(Object.entries(step.bindings || {}).map(([name, value]) => [name, resolve(value)]));
+    const parameters = Object.fromEntries(Object.entries(step.parameters || {}).map(([name, value]) => [name, resolve(value)]));
+    values.set(step.id, {kind: 'operation', block: step.block, bindings, parameters});
+  });
+  const output = Object.values(spec.outputs || {})[0];
+  const expanded = output ? values.get(String(output.source).split('.')[0]) : null;
+  if (!expanded) return false;
+  state.formulaEditor.expression = replaceExpressionReference(state.formulaEditor.expression, target, expanded);
+  state.formulaEditor.expressionSelection = expanded;
+  syncFormulaStepsFromExpression();
+  renderFormulaEditor();
+  return true;
+}
+
 function renderFormulaExpressionActions() {
   const container = $('formula-expression-actions');
   if (!container) return;
@@ -4084,6 +4157,10 @@ function renderFormulaExpressionActions() {
   if (!selected) { container.textContent = '点击公式中的任意部分以选中；输入和参数也可以作为独立对象编辑。'; return; }
   const selectedLabel = document.createElement('strong'); selectedLabel.textContent = `已选中：${expressionNodeText(selected)}`; container.appendChild(selectedLabel);
   const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '删除此表达式'; remove.onclick = deleteSelectedFormulaExpression; container.appendChild(remove);
+  const selectedInfo = selected.kind === 'operation' ? blockInfo(selected.block) : null;
+  if (selectedInfo?.formula_kind === 'composite' && formulaDefinitionForBlock(selectedInfo)) {
+    const expand = document.createElement('button'); expand.type = 'button'; expand.textContent = '展开后编辑'; expand.title = '把公式模板替换为它的基础运算链'; expand.onclick = () => expandCompositeExpression(selected); container.appendChild(expand);
+  }
   const replace = document.createElement('select'); replace.title = '替换当前节点';
   const replacementGroups = [
     {label: '输入', values: expressionInputCandidates().map((node) => ({value: `input:${node.name}`, label: node.name}))},
@@ -4144,6 +4221,21 @@ function expressionToFormulaStepsForOutputs(outputExpressions, outputOrder = nul
     generated.set(node, id);
     const bindings = {}; Object.entries(node.bindings || {}).forEach(([name, child]) => { bindings[name] = value(child); });
     const parameters = {}; Object.entries(node.parameters || {}).forEach(([name, child]) => { parameters[name] = value(child); });
+    // A literal occupying a slot is a real Formula operand, not a valid slot
+    // name.  Materialize it as an implicit constant step so ``x + 1`` can be
+    // saved and reopened without exposing this implementation detail.
+    const definition = blockInfo(node.block);
+    Object.entries(node.bindings || {}).forEach(([name, child]) => {
+      if (child?.kind !== 'constant' || definition?.params?.[name]?.type !== 'slot') return;
+      let constantId = generated.get(child);
+      if (!constantId) {
+        constantId = safeName(`${node.block}_${name}_constant`); let constantSuffix = 2;
+        while (used.has(constantId)) constantId = `${safeName(node.block)}_${name}_constant_${constantSuffix++}`;
+        used.add(constantId); generated.set(child, constantId);
+        steps.push({id: constantId, block: 'constant', bindings: {}, parameters: {value: child.value}});
+      }
+      bindings[name] = constantId;
+    });
     steps.push({id, block: node.block, bindings, parameters});
     return id;
   };
@@ -4359,10 +4451,22 @@ function renderFormulaEditor() {
     currentPreview.replaceChildren();
     const label = document.createElement('strong'); label.textContent = selectedInfo ? `当前运算：${selectedInfo.name}` : '当前运算'; currentPreview.appendChild(label);
     const math = document.createElement('div'); renderFormulaOrIntro(math, selectedInfo, {compact: true}); currentPreview.appendChild(math);
-    if (selectedInfo?.formula_kind === 'composite' && selectedInfo.formula) {
+    if (selectedInfo?.formula_kind === 'composite' && selectedInfo.formula_ref) {
       const composition = document.createElement('details'); composition.className = 'formula-composition-details';
       composition.appendChild(Object.assign(document.createElement('summary'), {textContent: '查看组成'}));
-      composition.appendChild(Object.assign(document.createElement('code'), {textContent: selectedInfo.formula}));
+      const definition = formulaDefinitionForBlock(selectedInfo);
+      if (definition) {
+        const chain = document.createElement('ol'); chain.className = 'formula-composition-chain';
+        (definition.steps || []).forEach((step) => {
+          const item = document.createElement('li'); const operation = blockInfo(step.block);
+          item.textContent = operation ? `${operation.name}（${step.block}）` : step.block;
+          chain.appendChild(item);
+        });
+        composition.appendChild(chain);
+      } else {
+        composition.appendChild(Object.assign(document.createElement('code'), {textContent: selectedInfo.formula || `定义：${selectedInfo.formula_ref}`}));
+      }
+      const expandHint = document.createElement('small'); expandHint.textContent = '选中公式节点后可“展开后编辑”；展开只改变编辑表达式，不改变执行器。'; composition.appendChild(expandHint);
       currentPreview.appendChild(composition);
     }
   }
@@ -4378,9 +4482,9 @@ function renderFormulaEditor() {
     summary.title = '展开或收起全部数学运算';
     const body = document.createElement('div');
     body.className = 'formula-palette-body';
-    const groups = new Map(FORMULA_EDITOR_GROUPS.map((group) => [group, []]));
+    const groups = new Map(FORMULA_EDITOR_KIND_GROUPS.map((group) => [group, []]));
     candidates.forEach((info) => {
-      const group = formulaEditorGroup(info);
+      const group = formulaEditorKindGroup(info);
       if (!groups.has(group)) groups.set(group, []);
       groups.get(group).push(info);
     });
@@ -4393,7 +4497,7 @@ function renderFormulaEditor() {
       groupSummary.textContent = `${groupName}（${items.length}）`;
       const groupBody = document.createElement('div');
       groupBody.className = 'formula-operation-group-body';
-      items.forEach((info) => {
+      const appendOperation = (info) => {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'formula-palette-block';
@@ -4407,7 +4511,19 @@ function renderFormulaEditor() {
         button.title = info.description || '点击插入这个数学运算';
         button.onclick = () => addExpressionOperation(info.id);
         groupBody.appendChild(button);
-      });
+      };
+      if (groupName === '基础运算') {
+        const subgroups = new Map(FORMULA_EDITOR_GROUPS.map((name) => [name, []]));
+        items.forEach((info) => { const name = formulaEditorGroup(info); if (!subgroups.has(name)) subgroups.set(name, []); subgroups.get(name).push(info); });
+        subgroups.forEach((subitems, subgroupName) => {
+          if (!subitems.length) return;
+          const subgroup = document.createElement('details'); subgroup.className = 'formula-operation-subgroup'; subgroup.open = true;
+          subgroup.appendChild(Object.assign(document.createElement('summary'), {textContent: `${subgroupName}（${subitems.length}）`}));
+          const subgroupBody = document.createElement('div'); subgroupBody.className = 'formula-operation-subgroup-body';
+          subitems.forEach((info) => { const previous = groupBody.children.length; appendOperation(info); subgroupBody.appendChild(groupBody.children[previous]); });
+          subgroup.appendChild(subgroupBody); groupBody.appendChild(subgroup);
+        });
+      } else items.forEach(appendOperation);
       group.append(groupSummary, groupBody);
       body.appendChild(group);
     });
@@ -4592,14 +4708,14 @@ async function saveFormulaEditor() {
 }
 
 async function refreshBlocksAfterFormulaChange() {
-  state.blocks = await api('/api/blocks');
+  [state.blocks, state.formulas] = await Promise.all([api('/api/blocks'), api('/api/formulas')]);
   draw();
 }
 
 async function showMyFormulas() {
   try {
     const formulas = await api('/api/formulas');
-    state.blocks = await api('/api/blocks');
+    [state.blocks, state.formulas] = await Promise.all([api('/api/blocks'), api('/api/formulas')]);
     renderPalette();
     const list = $('formula-list'); list.innerHTML = '';
     formulas.forEach((item) => {
@@ -4991,8 +5107,9 @@ document.addEventListener('keydown', (event) => {
   if (state.formulaEditor.expressionSelection && deleteSelectedFormulaExpression()) event.preventDefault();
 });
 
-api('/api/blocks').then((blocks) => {
+Promise.all([api('/api/blocks'), api('/api/formulas')]).then(([blocks, formulas]) => {
   state.blocks = blocks;
+  state.formulas = formulas;
   return Promise.all([api('/api/entry-recipe'), api('/api/datasets')]);
 }).then(([recipe, datasetPayload]) => {
   state.recipe = recipe;

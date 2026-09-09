@@ -18,6 +18,20 @@ def _torch():
 
 
 @block(
+    id="constant",
+    name="Constant",
+    category="Tensor Operation",
+    description="Publish an explicit scalar or structured constant as a formula operand.",
+    params={"value": {"type": "value", "default": 0.0}, "save_as": {"type": "slot", "default": "constant"}},
+    provides=("save_as",), placement=("batch", "top", "epoch"), stage="train", ui_group="⑤ 损失公式",
+    formula="z=c", formula_ref="explicit constant operand", formula_kind="primitive", formula_group="基础",
+)
+def constant(ctx: ScratchContext, value: Any = 0.0, save_as: str = "constant") -> None:
+    """Publish a literal without inferring device, dtype, or a hidden input."""
+    ctx[save_as] = value
+
+
+@block(
     id="one_hot",
     name="One-hot Labels",
     category="Tensor Operation",
@@ -37,7 +51,7 @@ def one_hot(ctx: ScratchContext, labels: str = "labels", num_classes: int = 10, 
     description="Convert labels to one-hot vectors using the class dimension of a reference tensor.",
     params={"labels": {"type": "slot", "default": "labels"}, "reference": {"type": "slot", "default": "logits"}, "save_as": {"type": "slot", "default": "one_hot_labels"}},
     requires=("labels", "reference"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="one_hot(y, reference.shape[-1])", formula_ref="reference-shaped one-hot encoding", formula_kind="composite", formula_group="概率 / Loss",
+    formula="one_hot(y, reference.shape[-1])", formula_ref="reference-shaped one-hot encoding", formula_kind="special", formula_group="概率 / Loss",
 )
 def one_hot_like(ctx: ScratchContext, labels: str = "labels", reference: str = "logits", save_as: str = "one_hot_labels") -> None:
     torch, F = _torch()
@@ -165,6 +179,19 @@ def exp(ctx: ScratchContext, input: str = "input", save_as: str = "exponential")
 
 
 @block(
+    id="reciprocal",
+    name="Reciprocal",
+    category="Tensor Operation",
+    description="Compute the elementwise reciprocal 1/x without an implicit floor.",
+    params={"input": {"type": "slot", "default": "input"}, "save_as": {"type": "slot", "default": "reciprocal"}},
+    requires=("input",), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式",
+    formula="z=1/x", formula_ref="elementwise reciprocal", formula_kind="primitive", formula_group="基础",
+)
+def reciprocal(ctx: ScratchContext, input: str = "input", save_as: str = "reciprocal") -> None:
+    ctx[save_as] = 1.0 / ctx[input]
+
+
+@block(
     id="log",
     name="Natural Log",
     category="Tensor Operation",
@@ -223,8 +250,8 @@ def sign(ctx: ScratchContext, input: str = "input", save_as: str = "sign") -> No
     category="Tensor Operation",
     description="Reduce all elements of a tensor to one scalar sum.",
     params={"input": {"type": "slot", "default": "values"}, "save_as": {"type": "slot", "default": "sum"}},
-    requires=("input",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式", formula_kind="composite", formula_group="归约",
-    formula="s=Σ_i x_i", formula_ref="sum reduction",
+    requires=("input",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="s=Σ_i x_i", formula_ref="builtin/sum_values", formula_kind="primitive", formula_group="归约",
 )
 def sum_values(ctx: ScratchContext, input: str = "values", save_as: str = "sum") -> None:
     ctx[save_as] = ctx[input].sum()
@@ -237,7 +264,7 @@ def sum_values(ctx: ScratchContext, input: str = "values", save_as: str = "sum")
     description="Reduce only the last tensor dimension, preserving leading sample dimensions.",
     params={"input": {"type": "slot", "default": "values"}, "save_as": {"type": "slot", "default": "summed_values"}},
     requires=("input",), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式",
-    formula="z_i=Σ_c x_{i,c}", formula_ref="explicit last-dimension reduction", formula_kind="composite",
+    formula="z_i=Σ_c x_{i,c}", formula_ref="explicit last-dimension reduction", formula_kind="primitive",
 )
 def sum_last_dimension(ctx: ScratchContext, input: str = "values", save_as: str = "summed_values") -> None:
     ctx[save_as] = ctx[input].sum(dim=-1)
@@ -564,7 +591,7 @@ def sample_timestep_noise(ctx: ScratchContext, reference: str = "reference", tim
     description="Compute squared error with an explicit per-sample or scalar reduction.",
     params={"predicted": {"type": "slot", "default": "predicted"}, "target": {"type": "slot", "default": "target"}, "mask": {"type": "value", "default": None}, "reduction": {"type": "enum", "options": ["per_sample", "scalar"], "default": "scalar"}, "save_as": {"type": "slot", "default": "loss"}},
     requires=("predicted", "target"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="MSE(x,y)=mean((x-y)^2)", formula_ref="mean squared error", formula_kind="composite", formula_group="概率 / Loss",
+    formula="MSE(x,y)=mean((x-y)^2)", formula_ref="builtin/mean_squared_error", formula_kind="composite", formula_group="概率 / Loss",
 )
 def mean_squared_error(ctx: ScratchContext, predicted: str = "predicted", target: str = "target", mask: Any = None, reduction: str = "scalar", save_as: str = "loss") -> None:
     predicted_values, target_values = ctx[predicted], ctx[target]
@@ -585,7 +612,7 @@ def mean_squared_error(ctx: ScratchContext, predicted: str = "predicted", target
     description="Sum explicitly named scalar or tensor terms with explicit weights.",
     params={"terms": {"type": "value", "default": []}, "weights": {"type": "value", "default": []}, "save_as": {"type": "slot", "default": "loss"}},
     provides=("save_as",), placement=("batch", "epoch", "top"), stage="train", ui_group="⑤ 损失公式",
-    formula="L=sum_i w_i L_i", formula_ref="weighted objective composition", formula_kind="composite", formula_group="概率 / Loss",
+    formula="L=sum_i w_i L_i", formula_ref="builtin/weighted_sum", formula_kind="composite", formula_group="概率 / Loss",
 )
 def weighted_sum(ctx: ScratchContext, terms: Any = (), weights: Any = (), save_as: str = "loss") -> None:
     if not isinstance(terms, (list, tuple)) or not terms:
@@ -625,7 +652,7 @@ def nonnegative_projection(ctx: ScratchContext, input: str = "gradient", negate:
     description="Normalize nonnegative weights to sum to one while preserving the all-zero case.",
     params={"weights": {"type": "slot", "default": "nonnegative_values"}, "save_as": {"type": "slot", "default": "weights"}},
     requires=("weights",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑥ 后验与权重",
-    formula="w=wbar/sum(wbar)", formula_ref="normalized nonnegative weighting", formula_kind="composite",
+    formula="w=wbar/sum(wbar)", formula_ref="builtin/normalize_nonnegative_weights", formula_kind="composite",
 )
 def normalize_nonnegative_weights(ctx: ScratchContext, weights: str = "nonnegative_values", save_as: str = "weights") -> None:
     values = ctx[weights]
@@ -639,7 +666,7 @@ def normalize_nonnegative_weights(ctx: ScratchContext, weights: str = "nonnegati
     category="Tensor Operation",
     description="Apply an explicit finite floor and negative logarithm.",
     params={"input": {"type": "slot", "default": "probabilities"}, "minimum": {"type": "float", "default": 1e-12, "min": 0.0}, "save_as": {"type": "slot", "default": "negative_log_values"}},
-    requires=("input",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式", formula_kind="composite", formula_group="函数",
+    requires=("input",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式", formula="z=-log(max(x,epsilon))", formula_ref="builtin/negative_log", formula_kind="composite", formula_group="函数",
 )
 def negative_log(ctx: ScratchContext, input: str = "probabilities", minimum: float = 1e-12, save_as: str = "negative_log_values") -> None:
     ctx[save_as] = -ctx[input].clamp_min(float(minimum)).log()
@@ -651,7 +678,7 @@ def negative_log(ctx: ScratchContext, input: str = "probabilities", minimum: flo
     category="Tensor Operation",
     description="Divide two tensors after applying an explicit denominator floor.",
     params={"numerator": {"type": "slot", "default": "numerator"}, "denominator": {"type": "slot", "default": "denominator"}, "minimum": {"type": "float", "default": 1e-12, "min": 0.0}, "save_as": {"type": "slot", "default": "quotient"}},
-    requires=("numerator", "denominator"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式", formula_kind="composite", formula_group="基础",
+    requires=("numerator", "denominator"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式", formula="z=x/max(y,epsilon)", formula_ref="builtin/safe_divide", formula_kind="composite", formula_group="基础",
 )
 def safe_divide(ctx: ScratchContext, numerator: str = "numerator", denominator: str = "denominator", minimum: float = 1e-12, save_as: str = "quotient") -> None:
     denominator_value = ctx[denominator]
@@ -667,7 +694,7 @@ def safe_divide(ctx: ScratchContext, numerator: str = "numerator", denominator: 
     description="Blend two tensors using a sample-wise weight.",
     params={"left": {"type": "slot", "default": "left"}, "right": {"type": "slot", "default": "right"}, "weight": {"type": "slot", "default": "weight"}, "clamp_weight": {"type": "bool", "default": True}, "save_as": {"type": "slot", "default": "blended"}},
     requires=("left", "right", "weight"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="z=w left+(1-w) right", formula_ref="weighted blend", formula_kind="composite",
+    formula="z=w·left+(1-w)·right", formula_ref="builtin/weighted_blend", formula_kind="composite",
 )
 def weighted_blend(ctx: ScratchContext, left: str = "left", right: str = "right", weight: str = "weight", clamp_weight: bool = True, save_as: str = "blended") -> None:
     values = ctx[weight]
@@ -685,7 +712,7 @@ def weighted_blend(ctx: ScratchContext, left: str = "left", right: str = "right"
     description="Apply temperature sharpening and renormalize a class distribution.",
     params={"input": {"type": "slot", "default": "targets"}, "temperature": {"type": "float", "default": 0.5, "min": 0.0001}, "save_as": {"type": "slot", "default": "sharpened"}},
     requires=("input",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="q_c'=q_c^(1/T)/sum_j q_j^(1/T)", formula_ref="distribution sharpening", formula_kind="composite",
+    formula="q'_c=q_c^(1/T)/Σ_j q_j^(1/T)", formula_ref="builtin/sharpen_distribution", formula_kind="composite",
 )
 def sharpen_distribution(ctx: ScratchContext, input: str = "targets", temperature: float = 0.5, save_as: str = "sharpened") -> None:
     values = ctx[input].clamp_min(0).pow(1.0 / float(temperature))
@@ -699,7 +726,7 @@ def sharpen_distribution(ctx: ScratchContext, input: str = "targets", temperatur
     description="Compute cross entropy against probability targets, optionally restricted by a mask.",
     params={"logits": {"type": "slot", "default": "logits"}, "targets": {"type": "slot", "default": "targets"}, "mask": {"type": "value", "default": None}, "reduction": {"type": "enum", "options": ["per_sample", "mean"], "default": "mean"}, "save_as": {"type": "slot", "default": "loss"}},
     requires=("logits", "targets"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="CE(q,z)=-sum_c q_c log softmax(z)_c", formula_ref="soft-target cross entropy", formula_kind="composite",
+    formula="CE(q,z)=-Σ_c q_c log softmax(z)_c", formula_ref="builtin/soft_target_cross_entropy", formula_kind="composite",
 )
 def soft_target_cross_entropy(ctx: ScratchContext, logits: str = "logits", targets: str = "targets", mask: Any = None, reduction: str = "mean", save_as: str = "loss") -> None:
     _, F = _torch()
@@ -715,7 +742,7 @@ def soft_target_cross_entropy(ctx: ScratchContext, logits: str = "logits", targe
     category="Correction",
     description="Map clean-class probabilities through a shared or per-sample transition matrix.",
     params={"probabilities": {"type": "slot", "default": "probabilities"}, "transition": {"type": "slot", "default": "transition"}, "save_as": {"type": "slot", "default": "noisy_probabilities"}},
-    requires=("probabilities", "transition"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式", formula_kind="composite", formula_group="概率 / Loss",
+    requires=("probabilities", "transition"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式", formula="q'=qT", formula_ref="transition probability application", formula_kind="special", formula_group="概率 / Loss",
 )
 def apply_transition(ctx: ScratchContext, probabilities: str = "probabilities", transition: str = "transition", save_as: str = "noisy_probabilities") -> None:
     values = ctx[probabilities]
@@ -742,7 +769,7 @@ def apply_transition(ctx: ScratchContext, probabilities: str = "probabilities", 
     params={"input": {"type": "slot", "default": "values"},
             "minimum": {"type": "float", "default": 1e-12, "min": 0.0},
             "save_as": {"type": "slot", "default": "normalized"}},
-    requires=("input",), provides=("save_as",), placement=("batch", "top"), stage="setup", ui_group="⑤ 损失公式", formula_kind="composite", formula_group="概率 / Loss",
+    requires=("input",), provides=("save_as",), placement=("batch", "top"), stage="setup", ui_group="⑤ 损失公式", formula="z=x/max(sum(x),epsilon)", formula_ref="builtin/row_normalize", formula_kind="composite", formula_group="概率 / Loss",
 )
 def row_normalize(ctx: ScratchContext, input: str = "values", minimum: float = 1e-12,
                   save_as: str = "normalized") -> None:
@@ -781,7 +808,7 @@ def positive_logdet(ctx: ScratchContext, matrix: str = "matrix", save_as: str = 
     description="Compose two row-stochastic transition matrices and normalize each output row.",
     params={"first": {"type": "slot", "default": "transition_a"}, "second": {"type": "slot", "default": "transition_b"}, "save_as": {"type": "slot", "default": "composed_transition"}},
     requires=("first", "second"), provides=("save_as",), placement=("top", "batch"), stage="setup", ui_group="⑥ 后验与权重",
-    formula="T=T_1T_2; row-normalize(T)", formula_ref="transition composition", formula_kind="composite",
+    formula="T=T_1T_2; row-normalize(T)", formula_ref="builtin/compose_transition", formula_kind="composite",
 )
 def compose_transition(ctx: ScratchContext, first: str = "transition_a", second: str = "transition_b", save_as: str = "composed_transition") -> None:
     matrix = ctx[first] @ ctx[second]
@@ -864,6 +891,7 @@ def compose_revision_transition(ctx: ScratchContext, transition: str = "transiti
     description="Match the batch mean prediction to an explicit class prior.",
     params={"probabilities": {"type": "slot", "default": "probabilities"}, "prior": {"type": "slot", "default": "prior"}, "save_as": {"type": "slot", "default": "loss"}},
     requires=("probabilities", "prior"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="D=Σ_cπ_c log(π_c/mean_i p_{i,c})", formula_ref="builtin/prior_kl", formula_kind="composite", formula_group="概率 / Loss",
 )
 def prior_kl(ctx: ScratchContext, probabilities: str = "probabilities", prior: str = "prior", save_as: str = "loss") -> None:
     values = ctx[probabilities].mean(dim=0).clamp_min(1e-12)

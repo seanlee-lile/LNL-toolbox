@@ -1,0 +1,20 @@
+id: builtin/negative_log
+name: Negative Log
+description: Explicit floor followed by natural logarithm and negation.
+inputs:
+  x: {type: tensor, description: input values}
+parameters:
+  epsilon: {type: float, default: 1.0e-12, minimum: 0.0}
+steps:
+  - id: floored
+    block: clamp_min
+    bindings: {input: x}
+    parameters: {minimum: epsilon}
+  - id: logged
+    block: log
+    bindings: {input: floored}
+  - id: result
+    block: negate
+    bindings: {input: logged}
+outputs:
+  z: {source: result}

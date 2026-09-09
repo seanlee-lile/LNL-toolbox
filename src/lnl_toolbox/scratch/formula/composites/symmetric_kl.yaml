@@ -1,0 +1,44 @@
+id: builtin/symmetric_kl
+name: Symmetric KL
+description: Two directional KL reductions built from log-probability primitives.
+inputs:
+  logits_a: {type: tensor}
+  logits_b: {type: tensor}
+steps:
+  - id: log_a
+    block: log_softmax
+    bindings: {logits: logits_a}
+  - id: log_b
+    block: log_softmax
+    bindings: {logits: logits_b}
+  - id: prob_a
+    block: exp
+    bindings: {input: log_a}
+  - id: prob_b
+    block: exp
+    bindings: {input: log_b}
+  - id: delta_ab
+    block: subtract
+    bindings: {minuend: log_a, subtrahend: log_b}
+  - id: delta_ba
+    block: subtract
+    bindings: {minuend: log_b, subtrahend: log_a}
+  - id: weighted_ab
+    block: elementwise_multiply
+    bindings: {left: prob_a, right: delta_ab}
+  - id: weighted_ba
+    block: elementwise_multiply
+    bindings: {left: prob_b, right: delta_ba}
+  - id: kl_ab
+    block: reduce_sum
+    bindings: {input: weighted_ab}
+    parameters: {dim: -1}
+  - id: kl_ba
+    block: reduce_sum
+    bindings: {input: weighted_ba}
+    parameters: {dim: -1}
+  - id: loss
+    block: add
+    bindings: {left: kl_ab, right: kl_ba}
+outputs:
+  loss: {source: loss}

@@ -135,6 +135,16 @@ def register_builtin_formulas() -> tuple[FormulaSpec, ...]:
     _BUILTINS_LOADED = True
     from .storage import load_formula_file
 
+    # Composite definitions are first-class FormulaSpecs used for closure and
+    # inspection.  They are loaded before the historical example formulas so
+    # nested references such as ``negative_log`` are available to all callers.
+    from .composites import register_composite_formulas
+
+    for spec in register_composite_formulas():
+        if spec.id not in FORMULAS:
+            FORMULAS[spec.id] = spec
+            _register_formula_block(spec)
+
     root = Path(__file__).parent / "examples"
     for path in sorted(root.glob("*.yaml")):
         register_formula(load_formula_file(path))

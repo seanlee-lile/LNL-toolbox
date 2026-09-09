@@ -398,7 +398,7 @@ def dual_t_transition_estimation(
     requires=("posterior", "posterior_indices", "labels", "indices", "rho_positive", "rho_negative"),
     provides=("save_as",),
     placement=("batch",), stage="train", ui_group="⑥ 后验与权重",
-    formula="w(x, y_tilde) = (q_y(x) - rho_{1-y}) / ((1-rho_0-rho_1) q_y(x))", formula_kind="composite",
+    formula="w(x, y_tilde) = (q_y(x) - rho_{1-y}) / ((1-rho_0-rho_1) q_y(x))", formula_kind="special",
     formula_ref="Li et al., binary asymmetric RCN importance-weight formula",
     paper="Learning from Noisy Labels with Importance Reweighting",
 )
@@ -546,7 +546,7 @@ def cwd_recover_centroids(ctx: ScratchContext, observed_centroids: str = "observ
     description="Evaluate CWD's squared global risk for the paper's binary scalar classifier with dynamic centroids.",
     params={"model": {"type": "slot", "default": "model"}, "features": {"type": "slot", "default": "features"}, "labels": {"type": "slot", "default": "labels"}, "centroids": {"type": "slot", "default": "cwd_centroids"}, "clean_prior": {"type": "slot", "default": "clean_prior"}, "pseudoinverses": {"type": "slot", "default": "cwd_pseudoinverses"}, "save_as": {"type": "slot", "default": "loss"}},
     requires=("model", "features", "labels", "centroids", "clean_prior", "pseudoinverses"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑦ 论文目标",
-    formula="L = 1 + mean(m^2) - 2 w^T(mu_1-mu_0) - 2b(p_1-p_0)", formula_ref="CWD global squared objective", formula_kind="composite", paper="Class-Wise Denoising",
+    formula="L = 1 + mean(m^2) - 2 w^T(mu_1-mu_0) - 2b(p_1-p_0)", formula_ref="CWD global squared objective", formula_kind="special", paper="Class-Wise Denoising",
 )
 def cwd_global_objective(ctx: ScratchContext, model: str = "model", features: str = "features", labels: str = "labels", centroids: str = "cwd_centroids", clean_prior: str = "clean_prior", pseudoinverses: str = "cwd_pseudoinverses", save_as: str = "loss") -> None:
     torch, _ = _torch()
@@ -797,7 +797,7 @@ def fine_scr_reweight(ctx: ScratchContext, state: str = "fine_state", snapshot: 
     description="Compute the paper's warm-up cross entropy before SED robust training.",
     params={"logits": {"type": "slot", "default": "logits"}, "labels": {"type": "slot", "default": "labels"}, "save_as": {"type": "slot", "default": "loss"}},
     requires=("logits", "labels"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="L_warmup=CE(f(x),y~)", formula_kind="composite",
+    formula="L_warmup=CE(f(x),y~)", formula_kind="special",
     formula_ref="FINE official warm-up objective",
     paper="FINE: Filtering Noise in the Feature Space for Robust Learning with Noisy Labels",
 )
@@ -815,7 +815,7 @@ def fine_warmup_loss(ctx: ScratchContext, logits: str = "logits", labels: str = 
     description="Apply FINE's rejected-sample machine-unlearning and complementary-label negative-learning terms.",
     params={"logits": {"type": "slot", "default": "logits"}, "labels": {"type": "slot", "default": "labels"}, "clean": {"type": "slot", "default": "clean"}, "state": {"type": "slot", "default": "sed_state"}, "save_as": {"type": "slot", "default": "sed_regularizer"}},
     requires=("logits", "labels", "clean", "state"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="R=β·(1/C)log p_y~+γ·(−1/C)log(1−p_y~comp), y~comp∼Uniform(Y\\{y~})", formula_kind="composite", formula_ref="FINE Eq. (2)-(5)",
+    formula="R=β·(1/C)log p_y~+γ·(−1/C)log(1−p_y~comp), y~comp∼Uniform(Y\\{y~})", formula_kind="special", formula_ref="FINE Eq. (2)-(5)",
 )
 def sed_rejected_regularizer(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", clean: str = "clean", state: str = "sed_state", save_as: str = "sed_regularizer") -> None:
     ctx[save_as] = ctx[state]["regularizer"](ctx[logits], ctx[labels], rejected_mask=~ctx[clean].bool())
@@ -846,7 +846,7 @@ def initialize_t_revision_transition(ctx: ScratchContext, posterior: str = "t_re
     description="Compute the clean-to-noisy posterior ratio for each observed noisy label without clipping or normalization.",
     params={"probabilities": {"type": "slot", "default": "probabilities"}, "noisy_probabilities": {"type": "slot", "default": "noisy_probabilities"}, "labels": {"type": "slot", "default": "labels"}, "denominator_floor": {"type": "float", "default": 1.0e-12, "min": 0.0}, "save_as": {"type": "slot", "default": "sample_weights"}, "denominators_as": {"type": "slot", "default": "sample_denominators"}},
     requires=("probabilities", "noisy_probabilities", "labels"), provides=("save_as", "denominators_as"), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="w_i=g_ytilde_i(x_i)/(g(x_i)T)_ytilde_i", formula_kind="composite", formula_ref="T-Revision paper Eq. (3)", paper="Are Anchor Points Really Indispensable in Label-Noise Learning?",
+    formula="w_i=g_ytilde_i(x_i)/(g(x_i)T)_ytilde_i", formula_kind="special", formula_ref="T-Revision paper Eq. (3)", paper="Are Anchor Points Really Indispensable in Label-Noise Learning?",
 )
 def t_revision_importance_ratio(ctx: ScratchContext, probabilities: str = "probabilities", noisy_probabilities: str = "noisy_probabilities", labels: str = "labels", denominator_floor: float = 1.0e-12, save_as: str = "sample_weights", denominators_as: str = "sample_denominators") -> None:
     torch, _ = _torch()
@@ -955,7 +955,7 @@ def cal_materialize_proxy_artifact(ctx: ScratchContext, model: str = "warmup_mod
     ctx[retained_state_as] = _table(retained)
 
 
-@block(id="cal_cores2_adjusted_risk", name="CAL: CORES2 Adjusted Risk", category="Loss", description="Compute CAL Eq. (7) with the square-root noisy prior used by the paper's confidence regularizer.", params={"logits":{"type":"slot","default":"logits"},"labels":{"type":"slot","default":"labels"},"noisy_prior":{"type":"slot","default":"cal_noisy_prior"},"confidence_weight":{"type":"slot","default":"confidence_weight"},"save_as":{"type":"slot","default":"cal_adjusted_risk"}}, requires=("logits","labels","noisy_prior","confidence_weight"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式", formula="mean[-log p_y-alpha sum_c sqrt(pi_c)/sum_j sqrt(pi_j) log p_c]", formula_kind="composite", formula_ref="CAL Eq. (7)", paper="Learning from Noisy Labels with Core-loss and Second-order Risk")
+@block(id="cal_cores2_adjusted_risk", name="CAL: CORES2 Adjusted Risk", category="Loss", description="Compute CAL Eq. (7) with the square-root noisy prior used by the paper's confidence regularizer.", params={"logits":{"type":"slot","default":"logits"},"labels":{"type":"slot","default":"labels"},"noisy_prior":{"type":"slot","default":"cal_noisy_prior"},"confidence_weight":{"type":"slot","default":"confidence_weight"},"save_as":{"type":"slot","default":"cal_adjusted_risk"}}, requires=("logits","labels","noisy_prior","confidence_weight"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式", formula="mean[-log p_y-alpha sum_c sqrt(pi_c)/sum_j sqrt(pi_j) log p_c]", formula_kind="special", formula_ref="CAL Eq. (7)", paper="Learning from Noisy Labels with Core-loss and Second-order Risk")
 def cal_cores2_adjusted_risk(ctx: ScratchContext, logits: str="logits", labels: str="labels", noisy_prior: str="cal_noisy_prior", confidence_weight: str="confidence_weight", save_as: str="cal_adjusted_risk") -> None:
     torch,F=_torch(); probability=F.softmax(ctx[logits],dim=1); observed=-torch.log(probability+1.0e-8).gather(1,ctx[labels].long()[:,None]).squeeze(1); all_losses=-torch.log(probability+1.0e-5); prior=ctx[noisy_prior].to(all_losses).clamp_min(0).sqrt(); prior=prior/prior.sum().clamp_min(torch.finfo(all_losses.dtype).tiny); ctx[save_as]=(observed-float(ctx[confidence_weight])*(all_losses*prior).sum(1)).mean()
 
@@ -978,7 +978,7 @@ def cal_covariance_correction(ctx: ScratchContext, logits: str="logits", labels:
     description="Apply the bias-free classifier's global squared centroid risk against the estimated statistic.",
     params={"model": {"type": "slot", "default": "model"}, "logits": {"type": "slot", "default": "logits"}, "features": {"type": "slot", "default": "features"}, "statistic": {"type": "slot", "default": "mc_ldce_statistic"}, "save_as": {"type": "slot", "default": "loss"}},
     requires=("model", "logits", "features", "statistic"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="J=1+mean||hW^T||²-2 sum(W*mu_clean)", formula_kind="composite", formula_ref="MC-LDCE Eq. (30)", paper="MC-LDCE",
+    formula="J=1+mean||hW^T||²-2 sum(W*mu_clean)", formula_kind="special", formula_ref="MC-LDCE Eq. (30)", paper="MC-LDCE",
 )
 def mc_ldce_objective(ctx: ScratchContext, model: str = "model", logits: str = "logits", features: str = "features", statistic: str = "mc_ldce_statistic", save_as: str = "loss") -> None:
     torch = __import__("torch")
@@ -997,7 +997,7 @@ def mc_ldce_objective(ctx: ScratchContext, model: str = "model", logits: str = "
     description="Apply the PaperVolMin noisy-label likelihood plus volume penalty to the independent transition estimator.",
     params={"logits": {"type": "slot", "default": "transition_logits"}, "labels": {"type": "slot", "default": "labels"}, "transition": {"type": "slot", "default": "mc_ldce_transition"}, "lambda_volume": {"type": "float", "default": 0.0001, "min": 0.0}, "determinant_tolerance": {"type": "float", "default": 1.0e-8, "min": 0.0}, "condition_limit": {"type": "float", "default": 1.0e8, "min": 1.0}, "save_as": {"type": "slot", "default": "loss"}},
     requires=("logits", "labels", "transition"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="L=-log((T^T p)_y)+lambda logdet(T)", formula_kind="composite", formula_ref="MC-LDCE PaperVolMin transition stage", paper="MC-LDCE",
+    formula="L=-log((T^T p)_y)+lambda logdet(T)", formula_kind="special", formula_ref="MC-LDCE PaperVolMin transition stage", paper="MC-LDCE",
 )
 def mc_ldce_volmin_objective(ctx: ScratchContext, logits: str = "transition_logits", labels: str = "labels", transition: str = "mc_ldce_transition", lambda_volume: float = 0.0001, determinant_tolerance: float = 1.0e-8, condition_limit: float = 1.0e8, save_as: str = "loss") -> None:
     from ...native_stats import paper_volmin_objective
