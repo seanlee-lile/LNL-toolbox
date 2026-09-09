@@ -116,3 +116,31 @@ def softmax(
     torch = _torch()
     values = ctx[logits].detach() if bool(detach) else ctx[logits]
     ctx[save_as] = torch.softmax(values / float(temperature), dim=-1)
+
+
+@block(
+    id="log_softmax",
+    name="Log Softmax",
+    category="Forward",
+    description="Convert logits to log-probabilities with an explicit temperature.",
+    params={
+        "logits": {"type": "slot", "default": "logits"},
+        "temperature": {"type": "float", "default": 1.0, "min": 0.000001},
+        "detach": {"type": "bool", "default": False},
+        "save_as": {"type": "slot", "default": "log_probabilities"},
+    },
+    requires=("logits",),
+    provides=("save_as",),
+    placement=("batch",), stage="train", ui_group="④ 前向与概率", formula_group="函数",
+    formula="log p=log_softmax(z)", formula_ref="log-probability transform",
+)
+def log_softmax(
+    ctx: ScratchContext,
+    logits: str = "logits",
+    temperature: float = 1.0,
+    detach: bool = False,
+    save_as: str = "log_probabilities",
+) -> None:
+    torch = _torch()
+    values = ctx[logits].detach() if bool(detach) else ctx[logits]
+    ctx[save_as] = torch.log_softmax(values / float(temperature), dim=-1)

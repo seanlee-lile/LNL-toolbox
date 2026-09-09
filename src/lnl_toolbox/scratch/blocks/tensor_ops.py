@@ -99,6 +99,127 @@ def add(ctx: ScratchContext, left: str = "left", right: str = "right", save_as: 
 
 
 @block(
+    id="divide",
+    name="Divide",
+    category="Tensor Operation",
+    description="Divide two tensor or scalar slots elementwise. No numerical floor is added; use Safe Divide when a denominator floor is part of the formula.",
+    params={"numerator": {"type": "slot", "default": "numerator"}, "denominator": {"type": "slot", "default": "denominator"}, "save_as": {"type": "slot", "default": "quotient"}},
+    requires=("numerator", "denominator"), provides=("save_as",), placement=("batch", "top", "epoch"), stage="train", ui_group="⑤ 损失公式", formula_group="基础",
+    formula="z=x/y", formula_ref="pure elementwise division",
+)
+def divide(ctx: ScratchContext, numerator: str = "numerator", denominator: str = "denominator", save_as: str = "quotient") -> None:
+    """Perform pure elementwise division without silently clamping the denominator."""
+    ctx[save_as] = ctx[numerator] / ctx[denominator]
+
+
+@block(
+    id="maximum",
+    name="Maximum",
+    category="Tensor Operation",
+    description="Take the elementwise maximum of two aligned tensor or scalar slots.",
+    params={"left": {"type": "slot", "default": "left"}, "right": {"type": "slot", "default": "right"}, "save_as": {"type": "slot", "default": "maximum"}},
+    requires=("left", "right"), provides=("save_as",), placement=("batch", "top", "epoch"), stage="train", ui_group="⑤ 损失公式", formula_group="基础",
+    formula="z=max(x,y)", formula_ref="elementwise maximum",
+)
+def maximum(ctx: ScratchContext, left: str = "left", right: str = "right", save_as: str = "maximum") -> None:
+    torch, _ = _torch()
+    ctx[save_as] = torch.maximum(torch.as_tensor(ctx[left]), torch.as_tensor(ctx[right]))
+
+
+@block(
+    id="minimum",
+    name="Minimum",
+    category="Tensor Operation",
+    description="Take the elementwise minimum of two aligned tensor or scalar slots.",
+    params={"left": {"type": "slot", "default": "left"}, "right": {"type": "slot", "default": "right"}, "save_as": {"type": "slot", "default": "minimum"}},
+    requires=("left", "right"), provides=("save_as",), placement=("batch", "top", "epoch"), stage="train", ui_group="⑤ 损失公式", formula_group="基础",
+    formula="z=min(x,y)", formula_ref="elementwise minimum",
+)
+def minimum(ctx: ScratchContext, left: str = "left", right: str = "right", save_as: str = "minimum") -> None:
+    torch, _ = _torch()
+    ctx[save_as] = torch.minimum(torch.as_tensor(ctx[left]), torch.as_tensor(ctx[right]))
+
+
+@block(
+    id="matrix_multiply",
+    name="Matrix Multiply",
+    category="Tensor Operation",
+    description="Multiply matrices or batched matrices with the ordinary matrix product.",
+    params={"left": {"type": "slot", "default": "left"}, "right": {"type": "slot", "default": "right"}, "save_as": {"type": "slot", "default": "product"}},
+    requires=("left", "right"), provides=("save_as",), placement=("batch", "top", "epoch"), stage="train", ui_group="⑤ 损失公式", formula_group="基础",
+    formula="Z=XY", formula_ref="matrix multiplication",
+)
+def matrix_multiply(ctx: ScratchContext, left: str = "left", right: str = "right", save_as: str = "product") -> None:
+    ctx[save_as] = ctx[left] @ ctx[right]
+
+
+@block(
+    id="exp",
+    name="Exponential",
+    category="Tensor Operation",
+    description="Apply the natural exponential elementwise.",
+    params={"input": {"type": "slot", "default": "input"}, "save_as": {"type": "slot", "default": "exponential"}},
+    requires=("input",), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式", formula_group="函数",
+    formula="z=exp(x)", formula_ref="elementwise exponential",
+)
+def exp(ctx: ScratchContext, input: str = "input", save_as: str = "exponential") -> None:
+    ctx[save_as] = ctx[input].exp()
+
+
+@block(
+    id="log",
+    name="Natural Log",
+    category="Tensor Operation",
+    description="Apply the natural logarithm elementwise without an implicit clamp.",
+    params={"input": {"type": "slot", "default": "input"}, "save_as": {"type": "slot", "default": "log_values"}},
+    requires=("input",), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式", formula_group="函数",
+    formula="z=log(x)", formula_ref="pure elementwise natural logarithm",
+)
+def log(ctx: ScratchContext, input: str = "input", save_as: str = "log_values") -> None:
+    """Perform the pure logarithm; callers add clamp_min explicitly when needed."""
+    ctx[save_as] = ctx[input].log()
+
+
+@block(
+    id="sqrt",
+    name="Square Root",
+    category="Tensor Operation",
+    description="Apply the square root elementwise.",
+    params={"input": {"type": "slot", "default": "input"}, "save_as": {"type": "slot", "default": "square_root"}},
+    requires=("input",), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式", formula_group="函数",
+    formula="z=sqrt(x)", formula_ref="elementwise square root",
+)
+def sqrt(ctx: ScratchContext, input: str = "input", save_as: str = "square_root") -> None:
+    ctx[save_as] = ctx[input].sqrt()
+
+
+@block(
+    id="abs",
+    name="Absolute Value",
+    category="Tensor Operation",
+    description="Take the elementwise absolute value.",
+    params={"input": {"type": "slot", "default": "input"}, "save_as": {"type": "slot", "default": "absolute"}},
+    requires=("input",), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式", formula_group="函数",
+    formula="z=|x|", formula_ref="elementwise absolute value",
+)
+def abs(ctx: ScratchContext, input: str = "input", save_as: str = "absolute") -> None:
+    ctx[save_as] = ctx[input].abs()
+
+
+@block(
+    id="sign",
+    name="Sign",
+    category="Tensor Operation",
+    description="Return the elementwise sign of a tensor.",
+    params={"input": {"type": "slot", "default": "input"}, "save_as": {"type": "slot", "default": "sign"}},
+    requires=("input",), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式", formula_group="函数",
+    formula="z=sign(x)", formula_ref="elementwise sign",
+)
+def sign(ctx: ScratchContext, input: str = "input", save_as: str = "sign") -> None:
+    ctx[save_as] = ctx[input].sign()
+
+
+@block(
     id="sum_values",
     name="Sum Values",
     category="Tensor Operation",
@@ -156,7 +277,8 @@ def uniform_prior(ctx: ScratchContext, reference: str = "probabilities", num_cla
     category="Tensor Operation",
     description="Subtract one tensor or scalar slot from another.",
     params={"minuend": {"type": "slot", "default": "first"}, "subtrahend": {"type": "slot", "default": "second"}, "save_as": {"type": "slot", "default": "difference"}},
-    requires=("minuend", "subtrahend"), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式",
+    requires=("minuend", "subtrahend"), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式", formula_group="基础",
+    formula="z=x-y", formula_ref="elementwise subtraction",
 )
 def subtract(ctx: ScratchContext, minuend: str = "first", subtrahend: str = "second", save_as: str = "difference") -> None:
     ctx[save_as] = ctx[minuend] - ctx[subtrahend]
