@@ -1436,7 +1436,7 @@ function renderPalette() {
     const score = required.length ? ready / required.length : 0.25;
     return (required.length && ready === required.length ? 100 : 0)
       + score * 30
-      + (item.formula_safe ? 15 : 0)
+      + (item.formula_kind ? 15 : 0)
       + (item.stage === 'train' && target.context === 'batch' ? 5 : 0);
   };
   const recommended = query || !target ? [] : [...visible]
@@ -1700,8 +1700,8 @@ const DISPLAY_FORMULAS = Object.freeze({
   backward_correction: String.raw`\tilde{\ell}_{i,y_i}=[\ell_iT^{-\mathsf{T}}]_{y_i}`,
   complementary_negative_loss: String.raw`L_i=-\sum_c m_{i,c}\log\left(1-\sigma(z_{i,c})\right)`,
   mae_loss: String.raw`L_i=\frac{1}{C}\sum_c\left|\operatorname{softmax}(z_i)_c-1[y_i=c]\right|`,
-  masked_mean: String.raw`L=\frac{\sum_i m_i v_i}{\sum_i m_i\ \text{or}\ N}`,
-  partial_label_loss: String.raw`\mathcal{L}_i=\lambda\left[-\sum_c w_{i,c}h_{i,c}\log p_{i,c}\right]+(1-\lambda)\left[-\sum_c w_{i,c}q_{i,c}\log p_{i,c}\right]`,
+  masked_mean: String.raw`L(d=selected)=\frac{\sum_i m_i v_i}{\max(\sum_i m_i,\varepsilon)},\quad L(d=batch)=\frac{1}{N}\sum_i v_i`,
+  partial_label_loss: String.raw`\mathcal{L}_i=\lambda\left[-\sum_c w_{i,c}h_{i,c}\log p_{i,c}\right]+(1-\lambda)\left[-\sum_c w_{i,c}q_{i,c}\log p_{i,c}\right],\quad q_{i,c}=\frac{c_{i,c}}{\sum_jc_{i,j}},\ h_i=\operatorname{onehot}(\arg\max_c c_{i,c}),\ \lambda=hard_weight`,
   prior_kl: String.raw`D=\sum_c\pi_c\log\frac{\pi_c}{\bar{p}_c},\ \bar{p}=\frac{1}{N}\sum_i p_i`,
   weighted_sum: String.raw`y=\sum_{k=1}^{K}w_kx_k`,
   virtual_parameter_update: String.raw`\theta'=\theta-\alpha\nabla_{\theta}L`,
@@ -1745,11 +1745,28 @@ const DISPLAY_FORMULAS = Object.freeze({
   negative_log: String.raw`z=-\log\left(\max(x,\varepsilon)\right)`,
   detach: String.raw`z=\operatorname{stopgrad}(x)`,
   one_hot: String.raw`O_{i,c}=1[y_i=c],\ c=1,\ldots,C`,
-  ones_like: String.raw`z_i=1,\ \operatorname{shape}(z)=\operatorname{shape}(x)`,
-  zeros_like: String.raw`z_i=0,\ \operatorname{shape}(z)=\operatorname{shape}(x)`,
+  ones_like: String.raw`z_i=1,\ \operatorname{shape}(z)=\operatorname{shape}(x),\ \operatorname{dtype}(z)=float32`,
+  zeros_like: String.raw`z_i=0,\ \operatorname{shape}(z)=\operatorname{shape}(x),\ \operatorname{dtype}(z)=\operatorname{dtype}(x)`,
   row_normalize: String.raw`z_{i,c}=\frac{x_{i,c}}{\max(\sum_jx_{i,j},\varepsilon)}`,
   positive_logdet: String.raw`z=\log\det(X),\ \det(X)>0`,
   uniform_prior: String.raw`\pi_c=\frac{1}{C},\ c=1,\ldots,C`,
+  reduce_sum: String.raw`z=\sum_{\mathrm{dim}}x`,
+  reduce_mean: String.raw`z=\operatorname{mean}_{\mathrm{dim}}(x)`,
+  reduce_max: String.raw`z=\max_{\mathrm{dim}}(x)`,
+  reduce_min: String.raw`z=\min_{\mathrm{dim}}(x)`,
+  reshape_tensor: String.raw`z=\operatorname{reshape}(x,\mathrm{shape})`,
+  unsqueeze: String.raw`z=\operatorname{unsqueeze}(x,\mathrm{dim})`,
+  squeeze: String.raw`z=\operatorname{squeeze}(x,\mathrm{dim})`,
+  transpose_dims: String.raw`z=\operatorname{transpose}(x,d_0,d_1)`,
+  compare: String.raw`m=(x\ \operatorname{op}\ y)`,
+  where: String.raw`z=\operatorname{where}(m,x,y)`,
+  logical_not: String.raw`z=\neg m`,
+  logical_and: String.raw`z=m_1\land m_2`,
+  logical_or: String.raw`z=m_1\lor m_2`,
+  argmax: String.raw`z=\operatorname{argmax}_{\mathrm{dim}}(x)`,
+  gather: String.raw`z=\operatorname{gather}(x,i,\mathrm{dim})`,
+  index_select: String.raw`z=\operatorname{index\_select}(x,i,\mathrm{dim})`,
+  batched_matmul: String.raw`Z_i=X_iY_i`,
   maximum: String.raw`z=\max(x,y)`,
   minimum: String.raw`z=\min(x,y)`,
   matrix_multiply: String.raw`Z=XY`,
@@ -1792,7 +1809,7 @@ function formulaDisplayText(info) {
 // Not every Formula Editor operation has a standalone equation.  Keep those
 // operations useful in the palette by showing their registry description
 // instead of the old empty-formula placeholder.  The fallback is deliberately
-// generic so newly registered formula-safe operations get an explanation
+// generic so newly registered formula operations get an explanation
 // without a UI-specific block-id branch.
 function formulaEditorOperationIntro(info) {
   if (!info) return '这是一个可组合的数学运算。';
@@ -2834,7 +2851,7 @@ function formulaCandidates() {
   return state.blocks.filter((info) => info.beginner_visible
     && !info.paper
     && info.kind === 'action'
-    && info.formula_safe
+    && info.formula_kind
     && (info.placement || []).some((place) => place === 'batch' || place === 'any')
     && (info.formula || Object.keys(info.params || {}).some((name) => name === 'save_as' || name.endsWith('_as'))));
 }
@@ -3003,20 +3020,16 @@ function addFormulaFromDialog() {
 }
 
 function formulaEditorCandidates() {
-  return state.blocks.filter((info) => info.formula_safe && !info.paper && info.kind === 'action')
+  return state.blocks.filter((info) => info.formula_kind && !info.paper && info.kind === 'action')
     .sort((a, b) => `${a.formula_group || a.category}:${a.name}`.localeCompare(`${b.formula_group || b.category}:${b.name}`));
 }
 
 const FORMULA_EDITOR_GROUPS = ['基础', '函数', '归约', '概率 / Loss', '更多'];
 function formulaEditorGroup(info) {
-  const id = String(info?.id || '').toLowerCase();
   const declaredGroup = String(info?.formula_group || '').trim();
   if (FORMULA_EDITOR_GROUPS.includes(declaredGroup)) return declaredGroup;
-  if (new Set(['add', 'subtract', 'elementwise_multiply', 'safe_divide', 'elementwise_power', 'affine_transform', 'negate', 'clamp_min']).has(id)) return '基础';
-  if (new Set(['negative_log', 'positive_logdet', 'detach', 'row_normalize', 'sharpen_distribution', 'one_hot', 'one_hot_like', 'ones_like', 'zeros_like']).has(id) || /\b(log|exp|sqrt|abs)\b/.test(String(info?.name || '').toLowerCase())) return '函数';
-  if (new Set(['sum_values', 'sum_last_dimension', 'mean_loss', 'mean_by_indices', 'masked_mean', 'weighted_sum']).has(id) || /sum|mean|平均|归约/i.test(String(info?.name || ''))) return '归约';
-  if (id.startsWith('formula__') || new Set(['softmax', 'per_sample_ce', 'soft_target_cross_entropy', 'complementary_negative_loss', 'mae_loss', 'partial_label_loss', 'prior_kl', 'symmetric_kl', 'weighted_sum', 'apply_transition', 'backward_correction']).has(id) || /loss|probability|entropy|概率|交叉/i.test(String(info?.name || ''))) return '概率 / Loss';
-  return '更多';
+  const kindGroups = {primitive: '基础', composite: '概率 / Loss', special: '更多'};
+  return kindGroups[String(info?.formula_kind || '')] || '更多';
 }
 
 function expressionHole() { return {kind: 'hole'}; }
@@ -3909,7 +3922,7 @@ function replaceExpressionReference(root, target, replacement) {
 }
 
 // Expression operations deliberately work on every node kind.  The renderer
-// and future Formula-safe Blocks use this small API instead of implementing
+// and future formula operations use this small API instead of implementing
 // input/parameter/constant/array-specific mutations of their own.
 function selectExpressionNode(node) {
   if (node?.kind === 'operation') exposeExpressionParameters(node);
@@ -3968,7 +3981,7 @@ function pruneExpressionNode(root, target) {
 }
 
 function expressionOperationCandidates() {
-  return formulaEditorCandidates().filter((info) => info.id !== 'weighted_sum' || info.formula_safe);
+  return formulaEditorCandidates().filter((info) => info.formula_kind);
 }
 
 function expressionInputCandidates() {
@@ -4346,6 +4359,12 @@ function renderFormulaEditor() {
     currentPreview.replaceChildren();
     const label = document.createElement('strong'); label.textContent = selectedInfo ? `当前运算：${selectedInfo.name}` : '当前运算'; currentPreview.appendChild(label);
     const math = document.createElement('div'); renderFormulaOrIntro(math, selectedInfo, {compact: true}); currentPreview.appendChild(math);
+    if (selectedInfo?.formula_kind === 'composite' && selectedInfo.formula) {
+      const composition = document.createElement('details'); composition.className = 'formula-composition-details';
+      composition.appendChild(Object.assign(document.createElement('summary'), {textContent: '查看组成'}));
+      composition.appendChild(Object.assign(document.createElement('code'), {textContent: selectedInfo.formula}));
+      currentPreview.appendChild(composition);
+    }
   }
   const editorPalette = $('formula-editor-palette');
   if (editorPalette) {

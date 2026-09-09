@@ -152,7 +152,7 @@ def indexed_write(ctx: ScratchContext, state: str = "state", indices: str = "ind
     description="Add aligned values to a generic indexed state without replacing prior observations.",
     params={"state": {"type": "slot", "default": "state"}, "indices": {"type": "slot", "default": "indices"}, "values": {"type": "slot", "default": "values"}, "save_as": {"type": "slot", "default": "state"}},
     requires=("state", "indices", "values"), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="④ 状态更新",
-    formula="S[i] <- S[i] + v_i", formula_ref="indexed cumulative state update",
+    formula="S[i] <- S[i] + v_i", formula_ref="indexed cumulative state update", formula_kind="special",
 )
 def indexed_accumulate(ctx: ScratchContext, state: str = "state", indices: str = "indices", values: str = "values", save_as: str = "state") -> None:
     torch = _torch()

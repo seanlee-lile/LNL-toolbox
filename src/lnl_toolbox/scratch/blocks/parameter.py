@@ -18,7 +18,7 @@ def _torch():
     description="Select trainable scalar parameters with the largest detached |gradient times parameter| scores.",
     params={"model": {"type": "slot", "default": "model"}, "noise_rate": {"type": "float", "default": 0.4, "min": 0.0, "max": 0.999999}, "save_as": {"type": "slot", "default": "critical_masks"}},
     requires=("model",), provides=("save_as",), placement=("batch", "epoch"), stage="train", ui_group="⑤ 损失公式",
-    formula="s_i=|g_i theta_i|; S=top-ceil((1-tau)m)(s)", formula_ref="critical parameter selection",
+    formula="s_i=|g_i theta_i|; S=top-ceil((1-tau)m)(s)", formula_ref="critical parameter selection", formula_kind="special",
 )
 def parameter_criticality_mask(ctx: ScratchContext, model: str = "model", noise_rate: float = 0.4, save_as: str = "critical_masks") -> None:
     import math
@@ -50,7 +50,7 @@ def parameter_criticality_mask(ctx: ScratchContext, model: str = "model", noise_
     description="Apply a parameter mask, global gradient scale, and optional L1 term before the optimizer step.",
     params={"model": {"type":"slot", "default":"model"}, "masks": {"type":"slot", "default":"critical_masks"}, "scale": {"type":"float", "default":0.6, "min":0.0}, "l1_decay": {"type":"float", "default":0.001, "min":0.0}},
     requires=("model", "masks"), provides=(), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="g_i <- scale*1[i in S]g_i + lambda sign(theta_i)", formula_ref="masked parameter gradient update",
+    formula="g_i <- scale*1[i in S]g_i + lambda sign(theta_i)", formula_ref="masked parameter gradient update", formula_kind="special",
 )
 def masked_gradient_update(ctx: ScratchContext, model: str = "model", masks: str = "critical_masks", scale: float = 0.6, l1_decay: float = 0.001) -> None:
     if float(scale) < 0.0 or float(l1_decay) < 0.0:

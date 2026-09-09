@@ -20,7 +20,7 @@ def _torch():
     description="Differentiate a scalar loss and expose a functional virtual parameter state.",
     params={"model": {"type": "slot", "default": "model"}, "loss": {"type": "slot", "default": "virtual_loss"}, "learning_rate": {"type": "float", "default": 1.0, "min": 0.0}, "create_graph": {"type": "bool", "default": True}, "save_as": {"type": "slot", "default": "virtual_state"}},
     requires=("model", "loss"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑥ 后验与权重",
-    formula="theta'=theta-alpha grad_theta L", formula_ref="functional virtual parameter update",
+    formula="theta'=theta-alpha grad_theta L", formula_ref="functional virtual parameter update", formula_kind="special",
 )
 def virtual_parameter_update(ctx: ScratchContext, model: str = "model", loss: str = "virtual_loss", learning_rate: float = 1.0, create_graph: bool = True, save_as: str = "virtual_state") -> None:
     torch = _torch(); network = ctx[model]

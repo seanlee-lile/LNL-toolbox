@@ -128,7 +128,7 @@ class _ScratchDSSState:
     params={"prepared_data": {"type": "slot", "default": "prepared_data"}, "total_epochs": {"type": "int", "required": True, "min": 1}, "warmup_epochs": {"type": "int", "required": True, "min": 0}, "alpha": {"type": "float", "required": True, "min": 0.000001, "max": 0.999999}, "prior_decay": {"type": "float", "required": True, "min": 0.0, "max": 0.999999}, "mda": {"type": "bool", "default": True}, "ccs": {"type": "bool", "default": True}, "save_as": {"type": "slot", "default": "dss_state"}},
     requires=("prepared_data",),
     provides=("save_as",), placement=("top",), stage="setup", ui_group="② 初始化",
-    formula="S={history, marginal, trend, selected, excluded}", formula_ref="DSS indexed selector lifecycle", paper="Debiased Sample Selection",
+    formula="S={history, marginal, trend, selected, excluded}", formula_ref="DSS indexed selector lifecycle", formula_kind="special", paper="Debiased Sample Selection",
 )
 def create_dss_state(ctx: ScratchContext, prepared_data: str = "prepared_data", total_epochs: int | None = None, warmup_epochs: int | None = None, alpha: float | None = None, prior_decay: float | None = None, mda: bool = True, ccs: bool = True, save_as: str = "dss_state") -> None:
     prepared = ctx[prepared_data]
@@ -155,7 +155,7 @@ def create_dss_state(ctx: ScratchContext, prepared_data: str = "prepared_data", 
     description="Advance DSS to the current epoch before observing indexed predictions.",
     params={"state": {"type": "slot", "default": "dss_state"}, "epoch": {"type": "slot", "default": "epoch"}},
     requires=("state", "epoch"), provides=(), placement=("epoch",), stage="train", ui_group="⑩ 论文专用",
-    formula="S.on_cycle_start(t)", formula_ref="DSS warmup lifecycle", paper="Debiased Sample Selection",
+    formula="S.on_cycle_start(t)", formula_ref="DSS warmup lifecycle", formula_kind="special", paper="Debiased Sample Selection",
 )
 def dss_warmup_lifecycle(ctx: ScratchContext, state: str = "dss_state", epoch: str = "epoch") -> None:
     ctx[state].on_cycle_start(int(ctx[epoch]))
@@ -168,7 +168,7 @@ def dss_warmup_lifecycle(ctx: ScratchContext, state: str = "dss_state", epoch: s
     description="Apply DSS moving marginal-distribution adjustment to detached class probabilities.",
     params={"state": {"type": "slot", "default": "dss_state"}, "probabilities": {"type": "slot", "default": "probabilities"}, "labels": {"type": "slot", "default": "labels"}, "indices": {"type": "slot", "default": "indices"}, "epoch": {"type": "slot", "default": "epoch"}, "save_as": {"type": "slot", "default": "dss_adjusted_probabilities"}},
     requires=("state", "probabilities"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑥ 后验与权重",
-    formula="p'_c=p_c/(C m_c); normalize rows", formula_ref="DSS MDA", paper="Debiased Sample Selection",
+    formula="p'_c=p_c/(C m_c); normalize rows", formula_ref="DSS MDA", formula_kind="special", paper="Debiased Sample Selection",
 )
 def dss_mda_marginal_adjustment(ctx: ScratchContext, state: str = "dss_state", probabilities: str = "probabilities", labels: str = "labels", indices: str = "indices", epoch: str = "epoch", save_as: str = "dss_adjusted_probabilities") -> None:
     torch = _torch()
@@ -191,7 +191,7 @@ def dss_mda_marginal_adjustment(ctx: ScratchContext, state: str = "dss_state", p
     description="Finalize DSS trend-based class exclusions and sample selection at epoch end.",
     params={"state": {"type": "slot", "default": "dss_state"}, "epoch": {"type": "slot", "default": "epoch"}},
     requires=("state", "epoch"), provides=(), placement=("epoch",), stage="train", ui_group="⑩ 论文专用",
-    formula="CCS: z_c>Phi^{-1}(1-alpha) => excluded_c", formula_ref="DSS CCS trend exclusion", paper="Debiased Sample Selection",
+    formula="CCS: z_c>Phi^{-1}(1-alpha) => excluded_c", formula_ref="DSS CCS trend exclusion", formula_kind="special", paper="Debiased Sample Selection",
 )
 def dss_ccs_trend_exclusion(ctx: ScratchContext, state: str = "dss_state", epoch: str = "epoch") -> None:
     ctx[state].on_cycle_end(int(ctx[epoch]))
@@ -204,7 +204,7 @@ def dss_ccs_trend_exclusion(ctx: ScratchContext, state: str = "dss_state", epoch
     description="Compute DSS candidate-masked cross entropy using the indexed selected/excluded state.",
     params={"state": {"type": "slot", "default": "dss_state"}, "logits": {"type": "slot", "default": "logits"}, "labels": {"type": "slot", "default": "labels"}, "indices": {"type": "slot", "default": "indices"}, "save_as": {"type": "slot", "default": "loss"}},
     requires=("state", "logits", "labels", "indices"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="L=mean_i selected_i * CE(z_i,y_i) with excluded classes masked", formula_ref="DSS masked risk", paper="Debiased Sample Selection",
+    formula="L=mean_i selected_i * CE(z_i,y_i) with excluded classes masked", formula_ref="DSS masked risk", formula_kind="composite", paper="Debiased Sample Selection",
 )
 def dss_masked_training_loss(ctx: ScratchContext, state: str = "dss_state", logits: str = "logits", labels: str = "labels", indices: str = "indices", save_as: str = "loss") -> None:
     import torch

@@ -11,6 +11,7 @@ BLOCKS: dict[str, "BlockDefinition"] = {}
 _KINDS = {"action", "loop", "condition"}
 _PLACEMENTS = {"top", "epoch", "batch", "any"}
 _STAGES = {"data", "setup", "train", "evaluate"}
+_FORMULA_KINDS = {"primitive", "special", "composite"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +32,7 @@ class BlockDefinition:
     formula_ref: str | None = None
     paper: str | None = None
     beginner_visible: bool = True
-    formula_safe: bool = False
+    formula_kind: str | None = None
     formula_group: str | None = None
 
     def describe(self) -> dict[str, Any]:
@@ -51,7 +52,7 @@ class BlockDefinition:
             "formula_ref": self.formula_ref,
             "paper": self.paper,
             "beginner_visible": self.beginner_visible,
-            "formula_safe": self.formula_safe,
+            "formula_kind": self.formula_kind,
             "formula_group": self.formula_group,
         }
 
@@ -69,6 +70,8 @@ def register_block(definition: BlockDefinition) -> BlockDefinition:
         raise ValueError(f"invalid Scratch block placement: {definition.id}")
     if definition.stage not in _STAGES:
         raise ValueError(f"invalid Scratch block stage: {definition.id}")
+    if definition.formula_kind is not None and definition.formula_kind not in _FORMULA_KINDS:
+        raise ValueError(f"invalid Scratch formula kind: {definition.id}")
     # Legacy/paper blocks that have not opted into the V2 palette metadata must
     # stay out of the beginner palette until they receive an explicit UI group.
     if definition.beginner_visible and not definition.ui_group:
@@ -96,23 +99,10 @@ def block(
     formula_ref: str | None = None,
     paper: str | None = None,
     beginner_visible: bool = True,
-    formula_safe: bool | None = None,
+    formula_kind: str | None = None,
     formula_group: str | None = None,
 ) -> Callable[[BlockCallable], BlockCallable]:
     def decorate(function: BlockCallable) -> BlockCallable:
-        # Existing canonical tensor/loss/selection operations predate the
-        # explicit flag.  Infer a conservative default for those operations,
-        # while allowing stateful/model/data blocks to remain opt-in only.
-        safe_default = (
-            kind == "action"
-            and paper is None
-            and category in {"Forward", "Tensor Operation", "Loss", "Correction", "Transition", "Sample Selection", "Weighting"}
-            and any(place in {"batch", "any"} for place in placement)
-            and id not in {
-                "forward", "module_forward", "forward_feature", "compose_revision_transition",
-                "classwise_percentile_anchor_candidates",
-            }
-        )
         register_block(BlockDefinition(
             id=id,
             name=name,
@@ -130,8 +120,8 @@ def block(
             formula_ref=formula_ref,
             paper=paper,
             beginner_visible=beginner_visible,
-            formula_safe=safe_default if formula_safe is None else bool(formula_safe),
-            formula_group=formula_group or (category.lower().replace(" ", "_") if safe_default else None),
+            formula_kind=formula_kind,
+            formula_group=formula_group,
         ))
         return function
 

@@ -81,7 +81,7 @@ def validate_formula(value: FormulaSpec | Mapping[str, Any], *, stack: tuple[str
             definition = get_block(step.block)
         except KeyError as exc:
             raise FormulaValidationError(f"step `{step.id}` uses unknown Block `{step.block}`") from exc
-        if not definition.formula_safe:
+        if definition.formula_kind is None:
             raise FormulaValidationError(f"Block `{step.block}` is not allowed inside a Formula")
         nested_id = _nested_formula_id(step.block)
         if nested_id:

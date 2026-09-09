@@ -72,7 +72,7 @@ remain read-only package resources.
 Click **新建公式** in the Scratch page to save a user formula as YAML under
 the Scratch user workspace (`$LNL_SCRATCH_WORKSPACE/formulas/`, or
 `~/.lnl_toolbox/scratch/formulas/`). A formula contains declared inputs and
-parameters, an ordered list of existing `formula_safe` Registry operations,
+parameters, an ordered list of existing Registry operations with explicit `formula_kind`,
 and named outputs. It is validated, registered immediately as a normal
 `formula/user/...` Scratch Block, and can be referenced by any Recipe or by a
 nested formula. No Python, `eval`, implicit detach, reduction, state mutation,

@@ -55,7 +55,7 @@ from .schedule import linear_rate_schedule
     requires=("scores", "keep_fraction"),
     provides=("save_as",),
     placement=("batch",), stage="train", ui_group="⑥ 样本选择",
-    formula="S=arg lowest_k(score), k=rounding(N·fraction)",
+    formula="S=arg lowest_k(score), k=rounding(N·fraction)", formula_kind="primitive",
     formula_ref="stable lowest-score selection",
 )
 def select_lowest_scores(ctx: ScratchContext, scores: str = "loss_per_sample",
@@ -104,7 +104,7 @@ def select_lowest_scores(ctx: ScratchContext, scores: str = "loss_per_sample",
     params={"values": {"type": "slot", "default": "loss_per_sample"}, "indices": {"type": "slot", "default": "selected_indices"}, "save_as": {"type": "slot", "default": "selected_values"}},
     requires=("values", "indices"), provides=("save_as",),
     placement=("batch",), stage="train", ui_group="⑥ 样本选择",
-    formula="v_selected=v[indices]", formula_ref="indexed selection",
+    formula="v_selected=v[indices]", formula_ref="indexed selection", formula_kind="primitive",
 )
 def select_by_indices(ctx: ScratchContext, values: str = "loss_per_sample", indices: str = "selected_indices", save_as: str = "selected_values") -> None:
     ctx[save_as] = ctx[values].reshape(-1)[ctx[indices]]
@@ -118,7 +118,7 @@ def select_by_indices(ctx: ScratchContext, values: str = "loss_per_sample", indi
     params={"indices": {"type": "slot", "default": "selected_indices"}, "reference": {"type": "slot", "default": "loss_per_sample"}, "save_as": {"type": "slot", "default": "selected_mask"}},
     requires=("indices", "reference"), provides=("save_as",),
     placement=("batch",), stage="train", ui_group="⑥ 样本选择",
-    formula="m_j=1[j in indices]", formula_ref="explicit index-to-mask conversion",
+    formula="m_j=1[j in indices]", formula_ref="explicit index-to-mask conversion", formula_kind="primitive",
 )
 def indices_to_mask(ctx: ScratchContext, indices: str = "selected_indices", reference: str = "loss_per_sample", save_as: str = "selected_mask") -> None:
     torch = _torch()
@@ -324,7 +324,7 @@ def top_k_mask(ctx: ScratchContext, scores: str = "logits", k: int = 1, save_as:
     params={"values": {"type": "slot", "default": "loss_per_sample"}, "indices": {"type": "slot", "default": "selected_indices"}, "save_as": {"type": "slot", "default": "loss"}},
     requires=("values", "indices"), provides=("save_as",),
     placement=("batch",), stage="train", ui_group="⑥ 样本选择",
-    formula="mean(v[indices])", formula_ref="indexed mean reduction",
+    formula="mean(v[indices])", formula_ref="indexed mean reduction", formula_kind="composite",
 )
 def mean_by_indices(ctx: ScratchContext, values: str = "loss_per_sample", indices: str = "selected_indices", save_as: str = "loss") -> None:
     ctx[save_as] = ctx[values].reshape(-1)[ctx[indices]].mean()

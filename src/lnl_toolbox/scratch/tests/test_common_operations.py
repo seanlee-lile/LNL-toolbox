@@ -91,6 +91,52 @@ class CommonOperationTest(unittest.TestCase):
         run("materialize_transition", context, artifact="revision", save_as="materialized")
         self.assertEqual(tuple(context["materialized"].shape), (2, 2))
 
+    def test_formula_primitives_support_broadcast_reduction_shape_and_selection(self):
+        context = ScratchContext(
+            values=torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
+            bias=torch.tensor([10.0, 20.0]),
+            mask=torch.tensor([True, False]),
+            true_values=torch.tensor([1.0, 2.0]),
+            false_values=torch.tensor([3.0, 4.0]),
+            indices=torch.tensor([1, 0]),
+        )
+        run("elementwise_multiply", context, left="values", right="bias", save_as="broadcast_product")
+        self.assertTrue(torch.equal(context["broadcast_product"], torch.tensor([[10.0, 40.0], [30.0, 80.0]])))
+        run("reduce_sum", context, input="values", dim=1, save_as="sum_rows")
+        run("reduce_mean", context, input="values", dim=0, save_as="mean_columns")
+        run("reduce_max", context, input="values", dim=None, save_as="max_all")
+        run("reduce_min", context, input="values", dim=None, save_as="min_all")
+        self.assertTrue(torch.equal(context["sum_rows"], torch.tensor([3.0, 7.0])))
+        self.assertTrue(torch.equal(context["mean_columns"], torch.tensor([2.0, 3.0])))
+        self.assertEqual(float(context["max_all"]), 4.0)
+        self.assertEqual(float(context["min_all"]), 1.0)
+        run("reshape_tensor", context, input="values", shape=[4], save_as="flat")
+        run("unsqueeze", context, input="flat", dim=0, save_as="expanded")
+        run("squeeze", context, input="expanded", dim=0, save_as="squeezed")
+        run("transpose_dims", context, input="values", dim0=0, dim1=1, save_as="transposed")
+        self.assertEqual(tuple(context["squeezed"].shape), (4,))
+        self.assertTrue(torch.equal(context["transposed"], context["values"].t()))
+        run("where", context, condition="mask", when_true="true_values", when_false="false_values", save_as="chosen")
+        run("logical_not", context, input="mask", save_as="not_mask")
+        run("logical_and", context, left="mask", right="not_mask", save_as="and_mask")
+        self.assertTrue(torch.equal(context["chosen"], torch.tensor([1.0, 4.0])))
+        self.assertTrue(torch.equal(context["and_mask"], torch.tensor([False, False])))
+        run("argmax", context, input="values", dim=1, keepdim=True, save_as="argmax_indices")
+        run("gather", context, input="values", indices="argmax_indices", dim=1, save_as="gathered")
+        run("index_select", context, input="values", indices="indices", dim=0, save_as="selected_rows")
+        self.assertTrue(torch.equal(context["gathered"], torch.tensor([[2.0], [4.0]])))
+        self.assertTrue(torch.equal(context["selected_rows"], torch.tensor([[3.0, 4.0], [1.0, 2.0]])))
+
+    def test_batched_matmul_and_formula_kind_metadata(self):
+        context = ScratchContext(
+            left=torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
+            right=torch.tensor([[[1.0], [2.0]], [[2.0], [1.0]]]),
+        )
+        run("batched_matmul", context, left="left", right="right", save_as="product")
+        self.assertTrue(torch.equal(context["product"], torch.tensor([[5.0], [10.0]])))
+        self.assertEqual(BLOCKS["reduce_sum"].formula_kind, "primitive")
+        self.assertEqual(BLOCKS["gather_by_label"].formula_kind, "composite")
+
 
 if __name__ == "__main__":
     unittest.main()

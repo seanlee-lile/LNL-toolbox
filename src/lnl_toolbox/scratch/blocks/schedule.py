@@ -23,7 +23,7 @@ from ..registry import block
     requires=("epoch",),
     provides=("save_as",),
     placement=("epoch",), stage="train", ui_group="⑥ 样本选择",
-    formula="r(t)=start+clip(t/T,0,1)(end-start)",
+    formula="r(t)=start+clip(t/T,0,1)(end-start)", formula_kind="primitive",
     formula_ref="shared linear keep-rate schedule",
 )
 def linear_rate_schedule(ctx: ScratchContext, epoch: str = "epoch", start: float = 1.0,

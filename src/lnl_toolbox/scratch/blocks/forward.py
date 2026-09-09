@@ -104,7 +104,7 @@ def forward_feature(
     requires=("logits",),
     provides=("save_as",),
     placement=("batch",), stage="train", ui_group="④ 前向与概率",
-    formula="p = softmax(z)", formula_ref="method definition",
+    formula="p = softmax(z)", formula_ref="method definition", formula_kind="primitive", formula_group="概率",
 )
 def softmax(
     ctx: ScratchContext,
@@ -132,7 +132,7 @@ def softmax(
     requires=("logits",),
     provides=("save_as",),
     placement=("batch",), stage="train", ui_group="④ 前向与概率", formula_group="函数",
-    formula="log p=log_softmax(z)", formula_ref="log-probability transform",
+    formula="log p=log_softmax(z)", formula_ref="log-probability transform", formula_kind="primitive",
 )
 def log_softmax(
     ctx: ScratchContext,

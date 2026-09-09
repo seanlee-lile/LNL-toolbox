@@ -1,6 +1,7 @@
 import unittest
 
 from lnl_toolbox.scratch import BLOCKS, describe_block, get_block
+from lnl_toolbox.scratch.registry import list_blocks
 from lnl_toolbox.scratch.formula import FormulaValidationError, get_formula, register_formula, unregister_formula
 
 
@@ -26,7 +27,7 @@ class FormulaRegistryTest(unittest.TestCase):
         register_formula(_formula())
         self.assertIs(get_block("formula/user/registry_formula"), BLOCKS["formula__user__registry_formula"])
         metadata = describe_block("formula/user/registry_formula")
-        self.assertTrue(metadata["formula_safe"])
+        self.assertEqual(metadata["formula_kind"], "composite")
         self.assertIn("save_as", metadata["provides"])
 
     def test_nested_formula_is_allowed(self):
@@ -42,6 +43,13 @@ class FormulaRegistryTest(unittest.TestCase):
 
     def test_builtin_formula_count(self):
         self.assertGreaterEqual(len([item for item in BLOCKS if item.startswith("formula__builtin__")]), 5)
+
+    def test_formula_blocks_have_explicit_kinds_and_no_legacy_flag(self):
+        allowed = {"primitive", "special", "composite"}
+        for block in list_blocks():
+            if block.formula:
+                self.assertIn(block.formula_kind, allowed, block.id)
+            self.assertNotIn("formula" + "_safe", block.describe())
 
     def test_nested_cycle_is_rejected(self):
         register_formula(_formula("user/cycle_a"))

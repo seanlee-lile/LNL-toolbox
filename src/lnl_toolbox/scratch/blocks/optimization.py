@@ -352,7 +352,7 @@ def scheduler_step(ctx: ScratchContext, scheduler: str = "scheduler") -> None:
         "global_step": {"type": "slot", "default": "global_step"},
     },
     requires=("optimizer",), placement=("batch",), stage="train", ui_group="⑧ 反向传播与更新", beginner_visible=False,
-    formula="lr_t=lr_0 gamma^{|{m: m<=t}|}, t=epoch*S+batch+1",
+    formula="lr_t=lr_0 gamma^{|{m: m<=t}|}, t=epoch*S+batch+1", formula_kind="special",
     formula_ref="step-milestone learning-rate schedule",
 )
 def step_milestone_update(

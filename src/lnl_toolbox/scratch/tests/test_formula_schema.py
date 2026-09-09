@@ -27,7 +27,7 @@ class FormulaSchemaTest(unittest.TestCase):
         self.assertIsInstance(spec, FormulaSpec)
         self.assertEqual(spec.to_dict()["steps"][0]["block"], "softmax")
 
-    def test_add_operation_is_a_formula_safe_binary_primitive(self):
+    def test_add_operation_is_a_formula_kind_binary_primitive(self):
         spec = validate_formula(_spec(
             inputs={"loss_a": {}, "loss_b": {}},
             steps=[{"id": "loss", "block": "add", "bindings": {"left": "loss_a", "right": "loss_b"}}],

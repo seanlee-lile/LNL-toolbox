@@ -61,8 +61,8 @@ if (!roundTrip.some((step) => step.block === 'elementwise_power' && step.paramet
         self.run_node(
             """
 state.blocks = [
-  {id: 'elementwise_multiply', name: 'Multiply', kind: 'action', formula_safe: true, requires: ['left', 'right'], params: {left: {type: 'slot'}, right: {type: 'slot'}, save_as: {type: 'slot'}}},
-  {id: 'add', name: 'Add', kind: 'action', formula_safe: true, requires: ['left', 'right'], params: {left: {type: 'slot'}, right: {type: 'slot'}, save_as: {type: 'slot'}}},
+  {id: 'elementwise_multiply', name: 'Multiply', kind: 'action', formula_kind: 'primitive', requires: ['left', 'right'], params: {left: {type: 'slot'}, right: {type: 'slot'}, save_as: {type: 'slot'}}},
+  {id: 'add', name: 'Add', kind: 'action', formula_kind: 'primitive', requires: ['left', 'right'], params: {left: {type: 'slot'}, right: {type: 'slot'}, save_as: {type: 'slot'}}},
 ];
 const expression = {kind: 'operation', block: 'add', bindings: {
   left: {kind: 'operation', block: 'elementwise_multiply', bindings: {left: expressionParameter('alpha'), right: expressionInput('loss_a')}, parameters: {}},
@@ -93,7 +93,7 @@ if (!removed || removed.parameters.terms.kind !== 'array' || removed.parameters.
     def test_shared_expression_nodes_are_serialized_once(self) -> None:
         self.run_node(
             """
-state.blocks = [{id: 'softmax', name: 'Softmax', kind: 'action', formula_safe: true, requires: ['logits'], params: {logits: {type: 'slot'}, save_as: {type: 'slot'}}}, {id: 'add', name: 'Add', kind: 'action', formula_safe: true, requires: ['left', 'right'], params: {left: {type: 'slot'}, right: {type: 'slot'}, save_as: {type: 'slot'}}}];
+state.blocks = [{id: 'softmax', name: 'Softmax', kind: 'action', formula_kind: 'primitive', requires: ['logits'], params: {logits: {type: 'slot'}, save_as: {type: 'slot'}}}, {id: 'add', name: 'Add', kind: 'action', formula_kind: 'primitive', requires: ['left', 'right'], params: {left: {type: 'slot'}, right: {type: 'slot'}, save_as: {type: 'slot'}}}];
 const shared = {kind: 'operation', block: 'softmax', bindings: {logits: expressionInput('x')}, parameters: {}};
 const expression = {kind: 'operation', block: 'add', bindings: {left: shared, right: shared}, parameters: {}};
 const steps = expressionToFormulaSteps(expression, 'y');
@@ -118,7 +118,7 @@ if (unary.bindings.input.kind !== 'hole') throw new Error('unary operation did n
     def test_new_operation_focuses_the_next_hole_for_symbol_insertion(self) -> None:
         self.run_node(
             """
-state.blocks = [{id: 'add', name: 'Add', kind: 'action', formula_safe: true, requires: ['left', 'right'], params: {left: {type: 'slot'}, right: {type: 'slot'}}}];
+state.blocks = [{id: 'add', name: 'Add', kind: 'action', formula_kind: 'primitive', requires: ['left', 'right'], params: {left: {type: 'slot'}, right: {type: 'slot'}}}];
 state.formulaEditor.expression = null;
 state.formulaEditor.expressionSelection = null;
 addExpressionOperation('add');

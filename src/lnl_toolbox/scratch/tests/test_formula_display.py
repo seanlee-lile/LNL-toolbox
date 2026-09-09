@@ -54,7 +54,7 @@ class ScratchFormulaDisplayTest(unittest.TestCase):
             r"positive_logdet: String.raw`z=\log\det(X),\ \det(X)>0`",
             r"ones_like: String.raw`z_i=1",
             r"zeros_like: String.raw`z_i=0",
-            r"masked_mean: String.raw`L=\frac{\sum_i m_i v_i}",
+            r"masked_mean: String.raw`L(d=selected)=\frac{\sum_i m_i v_i}",
             r"apply_transition: String.raw`\tilde{p}_i=p_iT_i`",
             r"complementary_negative_loss: String.raw`L_i=-\sum_c m_{i,c}",
             r"mae_loss: String.raw`L_i=\frac{1}{C}\sum_c",
@@ -79,7 +79,7 @@ class ScratchFormulaDisplayTest(unittest.TestCase):
         source = WEB_SCRIPT.read_text(encoding="utf-8")
         operations = [
             block for block in list_blocks()
-            if block.kind == "action" and block.formula_safe and not block.formula
+            if block.kind == "action" and block.formula_kind and not block.formula
         ]
         self.assertTrue(operations)
         self.assertEqual([block.id for block in operations if not block.description], [])

@@ -45,7 +45,7 @@ def _timestep_embedding(timestep, dimension):
     requires=("weak_probabilities", "strong_probabilities", "noisy_labels"),
     provides=("y0_as", "yn_as", "direction_as", "partition_as", "divergence_as"),
     placement=("batch",), stage="train", ui_group="⑩ 论文专用",
-    formula="y_d=y_n-y_0; (y_0,y_n)=PreCorrect(p_w,p_s,\\tilde y)",
+    formula="y_d=y_n-y_0; (y_0,y_n)=PreCorrect(p_w,p_s,\\tilde y)", formula_kind="special",
     formula_ref="DLD two-view label pre-correction before diffusion",
     paper="Directional Label Diffusion",
 )
@@ -135,7 +135,7 @@ def dld_pre_correct_labels(
     ctx[divergence_as] = divergence
 
 
-@block(id="dld_sample_forward_state", name="DLD: Sample Forward State", category="Paper Specific", description="Sample the scheduled directional forward diffusion state.", params={"y0":{"type":"slot","default":"y0"},"direction":{"type":"slot","default":"direction"},"timestep":{"type":"slot","default":"timestep"},"epsilon":{"type":"slot","default":"epsilon"},"timesteps":{"type":"int","required":True,"min":1},"save_as":{"type":"slot","default":"yd"}}, requires=("y0","direction","timestep","epsilon"), provides=("save_as",), placement=("batch",), formula="y_t=y_0+alpha_bar(t)d+beta_bar(t)epsilon", formula_ref="DLD forward diffusion schedule", paper="Directional Label Diffusion")
+@block(id="dld_sample_forward_state", name="DLD: Sample Forward State", category="Paper Specific", description="Sample the scheduled directional forward diffusion state.", params={"y0":{"type":"slot","default":"y0"},"direction":{"type":"slot","default":"direction"},"timestep":{"type":"slot","default":"timestep"},"epsilon":{"type":"slot","default":"epsilon"},"timesteps":{"type":"int","required":True,"min":1},"save_as":{"type":"slot","default":"yd"}}, requires=("y0","direction","timestep","epsilon"), provides=("save_as",), placement=("batch",), formula="y_t=y_0+alpha_bar(t)d+beta_bar(t)epsilon", formula_kind="special", formula_ref="DLD forward diffusion schedule", paper="Directional Label Diffusion")
 def dld_sample_forward_state(ctx: ScratchContext, y0="y0", direction="direction", timestep="timestep", epsilon="epsilon", timesteps=None, save_as="yd"):
     if timesteps is None:
         raise ValueError("DLD forward state requires an explicit timesteps value")
@@ -143,7 +143,7 @@ def dld_sample_forward_state(ctx: ScratchContext, y0="y0", direction="direction"
     t = ctx[timestep].long()
     ctx[save_as] = ctx[y0] + alpha_bar[t, None] * ctx[direction] + beta_bar[t, None] * ctx[epsilon]
 
-@block(id="dld_accelerated_inference", name="DLD: Accelerated Label Inference", category="Evaluation", description="Run the paper's deterministic accelerated reverse-label trajectory with an explicit fixed number of inference steps.", params={"feature_model":{"type":"slot","default":"model"},"direction":{"type":"slot","default":"direction_predictor"},"noise":{"type":"slot","default":"noise_predictor"},"loader":{"type":"slot","default":"test_loader"},"timesteps":{"type":"int","required":True,"min":1},"steps":{"type":"int","required":True,"min":1},"save_as":{"type":"slot","default":"test_accuracy"}}, requires=("feature_model","direction","noise","loader"), provides=("save_as",), placement=("top",), stage="evaluate", ui_group="⑨ 评估", formula="y_0_hat=Reverse_DLD(y_T; K=steps)", formula_ref="DLD accelerated inference", paper="Directional Label Diffusion")
+@block(id="dld_accelerated_inference", name="DLD: Accelerated Label Inference", category="Evaluation", description="Run the paper's deterministic accelerated reverse-label trajectory with an explicit fixed number of inference steps.", params={"feature_model":{"type":"slot","default":"model"},"direction":{"type":"slot","default":"direction_predictor"},"noise":{"type":"slot","default":"noise_predictor"},"loader":{"type":"slot","default":"test_loader"},"timesteps":{"type":"int","required":True,"min":1},"steps":{"type":"int","required":True,"min":1},"save_as":{"type":"slot","default":"test_accuracy"}}, requires=("feature_model","direction","noise","loader"), provides=("save_as",), placement=("top",), stage="evaluate", ui_group="⑨ 评估", formula="y_0_hat=Reverse_DLD(y_T; K=steps)", formula_kind="special", formula_ref="DLD accelerated inference", paper="Directional Label Diffusion")
 def dld_accelerated_inference(ctx: ScratchContext, feature_model="model", direction="direction_predictor", noise="noise_predictor", loader="test_loader", timesteps=None, steps=None, save_as="test_accuracy"):
     if timesteps is None or steps is None:
         raise ValueError("DLD accelerated inference requires explicit timesteps and steps")

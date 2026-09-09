@@ -96,7 +96,7 @@ def _register_formula_block(spec: FormulaSpec) -> None:
         placement=("batch", "top", "epoch"),
         stage="train",
         ui_group="⑧ 用户公式",
-        formula_safe=True,
+        formula_kind="composite",
         formula_group="formula",
         formula="; ".join(f"{step.id}={step.block}" for step in spec.steps),
         formula_ref=spec.id,

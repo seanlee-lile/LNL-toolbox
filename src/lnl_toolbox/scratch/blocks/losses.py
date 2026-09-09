@@ -65,7 +65,7 @@ def _class_labels(value: Any, classes: int, *, device: Any, slot: str) -> Any:
     requires=("logits", "labels"),
     provides=("save_as",),
     placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="CE(z, y) = -log softmax(z)_y", formula_ref="standard cross-entropy definition",
+    formula="CE(z, y) = -log softmax(z)_y", formula_ref="standard cross-entropy definition", formula_kind="composite", formula_group="概率 / Loss",
 )
 def per_sample_ce(
     ctx: ScratchContext,
@@ -93,7 +93,7 @@ def per_sample_ce(
     provides=("save_as",),
     placement=("batch",), stage="train", ui_group="⑤ 损失公式",
     formula="D_SKL(p_a,p_b)=KL(p_a||p_b)+KL(p_b||p_a)",
-    formula_ref="symmetric KL divergence definition",
+    formula_ref="symmetric KL divergence definition", formula_kind="composite", formula_group="概率 / Loss",
 )
 def symmetric_kl(
     ctx: ScratchContext,
@@ -184,7 +184,7 @@ def complementary_negative_loss(ctx: ScratchContext, logits: str = "logits", com
     requires=("values", "labels"),
     provides=("save_as",),
     placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式",
-    formula="v_i=values[i,labels_i]", formula_ref="row-wise indexed gather",
+    formula="v_i=values[i,labels_i]", formula_ref="row-wise indexed gather", formula_kind="composite", formula_group="索引",
 )
 def gather_by_label(ctx: ScratchContext, values: str = "probabilities", labels: str = "labels", save_as: str = "gathered_values") -> None:
     torch = __import__("torch")
@@ -205,7 +205,7 @@ def gather_by_label(ctx: ScratchContext, values: str = "probabilities", labels: 
     description="Apply an explicit lower bound to a tensor.",
     params={"input": {"type": "slot", "default": "gathered_values"}, "minimum": {"type": "float", "default": 1e-12}, "save_as": {"type": "slot", "default": "clamped_values"}},
     requires=("input",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="x'=max(x,c)", formula_ref="explicit numerical lower bound",
+    formula="x'=max(x,c)", formula_ref="explicit numerical lower bound", formula_kind="primitive", formula_group="基础",
 )
 def clamp_min(ctx: ScratchContext, input: str = "gathered_values", minimum: float = 1e-12, save_as: str = "clamped_values") -> None:
     ctx[save_as] = ctx[input].clamp_min(float(minimum))
@@ -222,7 +222,7 @@ def clamp_min(ctx: ScratchContext, input: str = "gathered_values", minimum: floa
         "save_as": {"type": "slot", "default": "powered_values"},
     },
     requires=("input",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="z=x^q", formula_ref="elementwise power operation",
+    formula="z=x^q", formula_ref="elementwise power operation", formula_kind="primitive", formula_group="基础",
 )
 def elementwise_power(ctx: ScratchContext, input: str = "clamped_values", q: float = 0.7, save_as: str = "powered_values") -> None:
     ctx[save_as] = ctx[input].pow(float(q))
@@ -235,7 +235,7 @@ def elementwise_power(ctx: ScratchContext, input: str = "clamped_values", q: flo
     description="Apply scale times input plus bias without changing reduction or gradient semantics.",
     params={"input": {"type": "slot", "default": "powered_values"}, "scale": {"type": "float", "default": 1.0}, "bias": {"type": "float", "default": 0.0}, "save_as": {"type": "slot", "default": "loss_per_sample"}},
     requires=("input",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="z=scale*x+bias", formula_ref="explicit affine combination",
+    formula="z=scale*x+bias", formula_ref="explicit affine combination", formula_kind="primitive", formula_group="基础",
 )
 def affine_transform(ctx: ScratchContext, input: str = "powered_values", scale: float = 1.0, bias: float = 0.0, save_as: str = "loss_per_sample") -> None:
     ctx[save_as] = float(scale) * ctx[input] + float(bias)
@@ -276,7 +276,7 @@ def mae_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels"
     requires=("logits", "labels"),
     provides=("save_as",),
     placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="L_NCE = -log p_y / Σ_j(-log p_j)",
+    formula="L_NCE = -log p_y / Σ_j(-log p_j)", formula_kind="composite", formula_group="概率 / Loss",
     formula_ref="Normalized Cross Entropy definition in Ma et al. (2020), Eq. (2)",
     paper="Normalized Loss Functions for Deep Learning with Noisy Labels",
 )
@@ -303,7 +303,7 @@ def nce_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels"
     requires=("logits", "labels"),
     provides=("save_as",),
     placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="L_RCE = -Σ_j p_j log(ŷ_j), where log(ŷ_y)=0 and log(ŷ_j)=log_zero otherwise",
+    formula="L_RCE = -Σ_j p_j log(ŷ_j), where log(ŷ_y)=0 and log(ŷ_j)=log_zero otherwise", formula_kind="composite", formula_group="概率 / Loss",
     formula_ref="Reverse Cross Entropy definition in Wang et al. (2019), as used by Ma et al. (2020)",
     paper="Normalized Loss Functions for Deep Learning with Noisy Labels",
 )
@@ -324,7 +324,7 @@ def rce_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels"
     requires=("input",),
     provides=("save_as",),
     placement=("top", "batch"), stage="train", ui_group="⑤ 损失公式",
-    formula="L = mean_i l_i", formula_ref="method definition",
+    formula="L = mean_i l_i", formula_ref="method definition", formula_kind="composite", formula_group="归约",
 )
 def mean_loss(ctx: ScratchContext, input: str = "loss_per_sample", save_as: str = "loss") -> None:
     ctx[save_as] = ctx[input].mean()
@@ -346,7 +346,7 @@ def mean_loss(ctx: ScratchContext, input: str = "loss_per_sample", save_as: str 
     provides=("save_as",),
     placement=("batch",), stage="train", ui_group="⑤ 损失公式",
     formula="l̃_0=((1-ρ₊)l_0-ρ₋l_1)/(1-ρ₊-ρ₋); l̃_1=(-ρ₊l_0+(1-ρ₋)l_1)/(1-ρ₊-ρ₋)",
-    formula_ref="Natarajan et al. (2013), unbiased risk estimator for class-dependent label noise",
+    formula_ref="Natarajan et al. (2013), unbiased risk estimator for class-dependent label noise", formula_kind="special", formula_group="概率 / Loss",
     paper="Learning with Noisy Labels",
 )
 def binary_risk(
