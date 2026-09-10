@@ -126,6 +126,25 @@ def divide(ctx: ScratchContext, numerator: str = "numerator", denominator: str =
 
 
 @block(
+    id="strict_divide",
+    name="Strict Divide",
+    category="Tensor Operation",
+    description="Divide after requiring every denominator value to be finite and strictly above an explicit floor.",
+    params={"numerator": {"type": "slot", "default": "numerator"}, "denominator": {"type": "slot", "default": "denominator"}, "minimum": {"type": "float", "default": 1e-12, "min": 0.0}, "save_as": {"type": "slot", "default": "quotient"}},
+    requires=("numerator", "denominator"), provides=("save_as",), placement=("batch", "top", "epoch"), stage="train", ui_group="⑤ 损失公式",
+    formula="z=x/y,\ y>\\varepsilon", formula_ref="strict elementwise division", formula_kind="primitive", formula_group="基础",
+)
+def strict_divide(ctx: ScratchContext, numerator: str = "numerator", denominator: str = "denominator", minimum: float = 1e-12, save_as: str = "quotient") -> None:
+    torch = __import__("torch")
+    denominator_value = ctx[denominator]
+    if not hasattr(denominator_value, "clamp_min"):
+        denominator_value = torch.as_tensor(denominator_value, dtype=ctx[numerator].dtype, device=ctx[numerator].device)
+    if not bool(torch.isfinite(denominator_value).all().item()) or bool((denominator_value <= float(minimum)).any().item()):
+        raise ValueError("strict_divide denominator must be finite and strictly above minimum")
+    ctx[save_as] = ctx[numerator] / denominator_value
+
+
+@block(
     id="maximum",
     name="Maximum",
     category="Tensor Operation",
@@ -368,6 +387,41 @@ def reshape_tensor(ctx: ScratchContext, input: str = "input", shape: Any = (), s
     if not isinstance(shape, (list, tuple)) or not shape:
         raise ValueError("reshape_tensor requires a non-empty shape list")
     ctx[save_as] = ctx[input].reshape(tuple(int(value) for value in shape))
+
+
+@block(
+    id="flatten_per_sample",
+    name="Flatten Per Sample",
+    category="Tensor Operation",
+    description="Flatten every non-batch dimension while preserving the leading sample dimension.",
+    params={"input": {"type": "slot", "default": "input"}, "save_as": {"type": "slot", "default": "flattened"}},
+    requires=("input",), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式",
+    formula="z_i=reshape(x_i,-1)", formula_ref="per-sample flattening", formula_kind="primitive", formula_group="形状",
+)
+def flatten_per_sample(ctx: ScratchContext, input: str = "input", save_as: str = "flattened") -> None:
+    value = ctx[input]
+    if getattr(value, "ndim", 0) < 1:
+        raise ValueError("flatten_per_sample expects a batched tensor with a leading sample dimension")
+    ctx[save_as] = value.reshape(value.shape[0], -1)
+
+
+@block(
+    id="broadcast_sample_weight",
+    name="Broadcast Sample Weight",
+    category="Tensor Operation",
+    description="Append singleton trailing dimensions to a sample-wise weight until it matches a reference rank.",
+    params={"weight": {"type": "slot", "default": "weight"}, "reference": {"type": "slot", "default": "reference"}, "save_as": {"type": "slot", "default": "aligned_weight"}},
+    requires=("weight", "reference"), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式",
+    formula="w'=reshape(w,w.shape+[1]^{rank(x)-rank(w)})", formula_ref="sample-weight rank alignment", formula_kind="primitive", formula_group="形状",
+)
+def broadcast_sample_weight(ctx: ScratchContext, weight: str = "weight", reference: str = "reference", save_as: str = "aligned_weight") -> None:
+    values = ctx[weight]
+    reference_value = ctx[reference]
+    if getattr(values, "ndim", 0) > getattr(reference_value, "ndim", 0):
+        raise ValueError("broadcast_sample_weight cannot reduce a weight rank")
+    while values.ndim < reference_value.ndim:
+        values = values.unsqueeze(-1)
+    ctx[save_as] = values
 
 
 @block(
@@ -732,14 +786,18 @@ def negative_log(ctx: ScratchContext, input: str = "probabilities", minimum: flo
     id="safe_divide",
     name="Safe Divide",
     category="Tensor Operation",
-    description="Divide two tensors after applying an explicit denominator floor.",
-    params={"numerator": {"type": "slot", "default": "numerator"}, "denominator": {"type": "slot", "default": "denominator"}, "minimum": {"type": "float", "default": 1e-12, "min": 0.0}, "save_as": {"type": "slot", "default": "quotient"}},
+    description="Divide two tensors after applying an explicit denominator floor, or reject invalid denominators when requested.",
+    params={"numerator": {"type": "slot", "default": "numerator"}, "denominator": {"type": "slot", "default": "denominator"}, "minimum": {"type": "float", "default": 1e-12, "min": 0.0}, "on_invalid": {"type": "enum", "options": ["clamp", "error"], "default": "clamp"}, "save_as": {"type": "slot", "default": "quotient"}},
     requires=("numerator", "denominator"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式", formula="z=x/max(y,epsilon)", formula_ref="builtin/safe_divide", formula_kind="composite", formula_group="基础",
 )
-def safe_divide(ctx: ScratchContext, numerator: str = "numerator", denominator: str = "denominator", minimum: float = 1e-12, save_as: str = "quotient") -> None:
+def safe_divide(ctx: ScratchContext, numerator: str = "numerator", denominator: str = "denominator", minimum: float = 1e-12, on_invalid: str = "clamp", save_as: str = "quotient") -> None:
     denominator_value = ctx[denominator]
     if not hasattr(denominator_value, "clamp_min"):
         denominator_value = __import__("torch").as_tensor(denominator_value, dtype=ctx[numerator].dtype, device=ctx[numerator].device)
+    if str(on_invalid) == "error":
+        torch = __import__("torch")
+        if not bool(torch.isfinite(denominator_value).all().item()) or bool((denominator_value <= float(minimum)).any().item()):
+            raise ValueError("safe_divide denominator must be finite and strictly above minimum")
     ctx[save_as] = ctx[numerator] / denominator_value.clamp_min(float(minimum))
 
 

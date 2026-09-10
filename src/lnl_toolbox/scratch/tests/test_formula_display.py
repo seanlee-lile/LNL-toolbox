@@ -75,6 +75,12 @@ class ScratchFormulaDisplayTest(unittest.TestCase):
         self.assertNotIn("暂无独立公式', {compact", source)
         self.assertNotIn("无独立公式', {compact", source)
 
+    def test_composite_expansion_uses_the_selected_formula_variant(self) -> None:
+        source = WEB_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("function formulaVariantForExpression(spec, target)", source)
+        self.assertIn("const selectedVariant = formulaVariantForExpression(spec, target)", source)
+        self.assertIn("const steps = selectedVariant?.steps || spec.steps || []", source)
+
     def test_operations_without_equations_have_registry_introductions(self) -> None:
         source = WEB_SCRIPT.read_text(encoding="utf-8")
         operations = [

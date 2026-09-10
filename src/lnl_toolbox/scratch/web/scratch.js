@@ -1774,6 +1774,7 @@ const DISPLAY_FORMULAS = Object.freeze({
   add: String.raw`z=x+y`,
   subtract: String.raw`z=x-y`,
   divide: String.raw`z=x\div y`,
+  strict_divide: String.raw`z=\frac{x}{y},\ y>\varepsilon`,
   safe_divide: String.raw`z=\frac{x}{\max(y,\varepsilon)}`,
   negative_log: String.raw`z=-\log\left(\max(x,\varepsilon)\right)`,
   detach: String.raw`z=\operatorname{stopgrad}(x)`,
@@ -1788,6 +1789,8 @@ const DISPLAY_FORMULAS = Object.freeze({
   reduce_max: String.raw`z=\max_{\mathrm{dim}}(x)`,
   reduce_min: String.raw`z=\min_{\mathrm{dim}}(x)`,
   reshape_tensor: String.raw`z=\operatorname{reshape}(x,\mathrm{shape})`,
+  flatten_per_sample: String.raw`z_i=\operatorname{reshape}(x_i,-1)`,
+  broadcast_sample_weight: String.raw`w'=\operatorname{reshape}(w,\operatorname{rank}(x))`,
   unsqueeze: String.raw`z=\operatorname{unsqueeze}(x,\mathrm{dim})`,
   squeeze: String.raw`z=\operatorname{squeeze}(x,\mathrm{dim})`,
   transpose_dims: String.raw`z=\operatorname{transpose}(x,d_0,d_1)`,
@@ -4126,14 +4129,57 @@ function expressionReplaceOperation(target, blockId) {
   target.block = blockId; target.bindings = bindings; target.parameters = parameters;
 }
 
+function formulaVariantSelectorValue(spec, target, key) {
+  const isInput = Boolean(spec?.inputs && Object.prototype.hasOwnProperty.call(spec.inputs, key));
+  const node = isInput ? target?.bindings?.[key] : target?.parameters?.[key];
+  if (isInput) return {present: Boolean(node && node.kind !== 'hole'), known: true, value: expressionNodeValue(node)};
+  if (node?.kind === 'constant') return {present: true, known: true, value: node.value};
+  if (node?.kind === 'parameter') {
+    const editorSchema = state.formulaEditor.parameterSchemas?.[node.name];
+    if (editorSchema && Object.prototype.hasOwnProperty.call(editorSchema, 'default')) return {present: true, known: true, value: editorSchema.default};
+    const specSchema = spec?.parameters?.[node.name];
+    if (specSchema && Object.prototype.hasOwnProperty.call(specSchema, 'default')) return {present: true, known: true, value: specSchema.default};
+    return {present: true, known: false, value: undefined};
+  }
+  if (!node) {
+    const schema = spec?.parameters?.[key];
+    if (schema && Object.prototype.hasOwnProperty.call(schema, 'default')) return {present: true, known: true, value: schema.default};
+    return {present: false, known: false, value: undefined};
+  }
+  return {present: true, known: true, value: expressionNodeValue(node)};
+}
+
+function formulaVariantMatchesExpression(spec, target, variant) {
+  return Object.entries(variant?.when || {}).every(([key, expected]) => {
+    const actual = formulaVariantSelectorValue(spec, target, key);
+    if (expected && typeof expected === 'object' && !Array.isArray(expected)) {
+      if (Object.prototype.hasOwnProperty.call(expected, 'present') && Boolean(expected.present) !== actual.present) return false;
+      if (Object.prototype.hasOwnProperty.call(expected, 'equals') && (!actual.known || actual.value !== expected.equals)) return false;
+      return true;
+    }
+    if (expected === '__present__' || expected === '$present') return actual.present;
+    if (expected === '__absent__' || expected === '$absent') return !actual.present;
+    return actual.known && actual.value === expected;
+  });
+}
+
+function formulaVariantForExpression(spec, target) {
+  return (Array.isArray(spec?.variants) ? spec.variants : []).find((variant) => formulaVariantMatchesExpression(spec, target, variant)) || null;
+}
+
 // Replace a composite node with the expression described by its FormulaSpec.
 // This is an editor-only transformation: execution still serializes the
-// resulting expression through the existing FormulaSpec step format.
+// resulting expression through the existing FormulaSpec step format.  When a
+// FormulaSpec has executable variants, expand the branch selected by the
+// node's current inputs/parameters rather than always showing the default.
 function expandCompositeExpression(target) {
   if (!target || target.kind !== 'operation') return false;
   const info = blockInfo(target.block);
   const spec = formulaDefinitionForBlock(info);
   if (!info || info.formula_kind !== 'composite' || !spec) return false;
+  const selectedVariant = formulaVariantForExpression(spec, target);
+  const steps = selectedVariant?.steps || spec.steps || [];
+  const outputs = selectedVariant?.outputs && Object.keys(selectedVariant.outputs).length ? selectedVariant.outputs : spec.outputs;
   const values = new Map();
   const resolve = (value) => {
     if (Array.isArray(value)) return {kind: 'array', items: value.map(resolve)};
@@ -4146,12 +4192,12 @@ function expandCompositeExpression(target) {
     }
     return expressionConstant(value);
   };
-  (spec.steps || []).forEach((step) => {
+  steps.forEach((step) => {
     const bindings = Object.fromEntries(Object.entries(step.bindings || {}).map(([name, value]) => [name, resolve(value)]));
     const parameters = Object.fromEntries(Object.entries(step.parameters || {}).map(([name, value]) => [name, resolve(value)]));
     values.set(step.id, {kind: 'operation', block: step.block, bindings, parameters});
   });
-  const output = Object.values(spec.outputs || {})[0];
+  const output = Object.values(outputs || {})[0];
   const expanded = output ? values.get(String(output.source).split('.')[0]) : null;
   if (!expanded) return false;
   state.formulaEditor.expression = replaceExpressionReference(state.formulaEditor.expression, target, expanded);

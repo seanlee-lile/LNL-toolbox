@@ -136,6 +136,14 @@ class FormulaCompositeEquivalenceTest(unittest.TestCase):
         numerator = torch.tensor([1.0, 2.0], dtype=torch.float64)
         denominator = torch.tensor([0.0, 4.0], dtype=torch.float64)
         self._assert_formula_matches_block("safe_divide", "builtin/safe_divide", {"n": numerator, "d": denominator}, {"numerator": "n", "denominator": "d", "minimum": 0.25}, {"epsilon": 0.25}, {"numerator": "n", "denominator": "d"})
+        with self.assertRaises(ValueError):
+            _execute_block("safe_divide", {"n": numerator, "d": denominator}, numerator="n", denominator="d", minimum=0.25, on_invalid="error", save_as="result")
+        with self.assertRaises(ValueError):
+            execute_formula(
+                get_formula("builtin/safe_divide"), ScratchContext({"n": numerator, "d": denominator}),
+                parameter_values={"epsilon": 0.25, "on_invalid": "error"},
+                input_bindings={"numerator": "n", "denominator": "d"}, output_bindings={"quotient": "result"},
+            )
         matrix = torch.tensor([[1.0, 3.0], [2.0, 2.0]], dtype=torch.float64)
         self._assert_formula_matches_block("row_normalize", "builtin/row_normalize", {"matrix": matrix}, {"input": "matrix", "minimum": 0.5}, {"epsilon": 0.5}, {"x": "matrix"})
         probabilities = torch.tensor([[0.2, 0.8], [0.6, 0.4]], dtype=torch.float64)
@@ -158,6 +166,58 @@ class FormulaCompositeEquivalenceTest(unittest.TestCase):
         self._assert_formula_matches_block("weighted_blend", "builtin/weighted_blend", {"l": left, "r": right, "w": blend_weight}, {"left": "l", "right": "r", "weight": "w", "clamp_weight": True}, {}, {"left": "l", "right": "r", "weight": "w"}, output_name="blended")
         a, b = torch.tensor([1.0, 2.0]), torch.tensor([3.0, 4.0])
         self._assert_formula_matches_block("weighted_sum", "builtin/weighted_sum", {"a": a, "b": b}, {"terms": ["a", "b"], "weights": [0.25, 0.75]}, {"weight_a": 0.25, "weight_b": 0.75}, {"a": "a", "b": "b"}, output_name="result")
+
+    def test_high_dimensional_mse_and_weighted_blend_match_direct_blocks(self) -> None:
+        predicted = torch.arange(2 * 3 * 2 * 2, dtype=torch.float64).reshape(2, 3, 2, 2)
+        target = predicted + torch.tensor(0.5, dtype=torch.float64)
+        direct = _execute_block(
+            "mean_squared_error", {"predicted": predicted, "target": target},
+            predicted="predicted", target="target", reduction="per_sample", save_as="result",
+        )["result"]
+        composed = ScratchContext({"predicted": predicted, "target": target})
+        execute_formula(
+            get_formula("builtin/mean_squared_error"), composed,
+            parameter_values={"reduction": "per_sample"},
+            input_bindings={"predicted": "predicted", "target": "target"},
+            output_bindings={"loss": "result"},
+        )
+        torch.testing.assert_close(composed["result"], direct)
+        torch.testing.assert_close(direct, (predicted - target).reshape(2, -1).square().mean(dim=1))
+
+        left = torch.randn(2, 3, 4, 5, dtype=torch.float64)
+        right = torch.randn(2, 3, 4, 5, dtype=torch.float64)
+        weight = torch.tensor([0.25, 0.75], dtype=torch.float64)
+        direct = _execute_block(
+            "weighted_blend", {"left": left, "right": right, "weight": weight},
+            left="left", right="right", weight="weight", clamp_weight=True, save_as="result",
+        )["result"]
+        composed = ScratchContext({"left": left, "right": right, "weight": weight})
+        execute_formula(
+            get_formula("builtin/weighted_blend"), composed,
+            input_bindings={"left": "left", "right": "right", "weight": "weight"},
+            output_bindings={"blended": "result"},
+        )
+        torch.testing.assert_close(composed["result"], direct)
+
+    def test_t_revision_ratio_composite_preserves_denominator_failure(self) -> None:
+        probabilities = torch.tensor([[0.7, 0.3], [0.2, 0.8]], dtype=torch.float64)
+        noisy = torch.tensor([[0.0, 1.0], [0.4, 0.6]], dtype=torch.float64)
+        labels = torch.tensor([0, 1])
+        with self.assertRaises(ValueError):
+            _execute_block(
+                "t_revision_importance_ratio",
+                {"p": probabilities, "q": noisy, "y": labels},
+                probabilities="p", noisy_probabilities="q", labels="y", denominator_floor=1e-6,
+                save_as="weights", denominators_as="denominators",
+            )
+        composed = ScratchContext({"p": probabilities, "q": noisy, "y": labels})
+        with self.assertRaises(ValueError):
+            execute_formula(
+                get_formula("builtin/t_revision_importance_ratio"), composed,
+                parameter_values={"denominator_floor": 1e-6},
+                input_bindings={"probabilities": "p", "noisy_probabilities": "q", "labels": "y"},
+                output_bindings={"weights": "weights", "denominators": "denominators"},
+            )
 
     def test_dispatch_branches_have_explicit_compositions(self) -> None:
         """Exercise mask/reduction/variadic branches with visible step chains."""

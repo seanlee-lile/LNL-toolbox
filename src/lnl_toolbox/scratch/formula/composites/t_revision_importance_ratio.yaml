@@ -17,7 +17,7 @@ steps:
   - id: weights
     block: safe_divide
     bindings: {numerator: numerator, denominator: denominator}
-    parameters: {minimum: "$denominator_floor"}
+    parameters: {minimum: "$denominator_floor", on_invalid: error}
 outputs:
   weights: {source: weights}
   denominators: {source: denominator}

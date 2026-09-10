@@ -24,13 +24,11 @@ steps:
     block: subtract
     bindings: {minuend: one, subtrahend: bounded}
   - id: bounded_row
-    block: unsqueeze
-    bindings: {input: bounded}
-    parameters: {dim: -1}
+    block: broadcast_sample_weight
+    bindings: {weight: bounded, reference: left}
   - id: complement_row
-    block: unsqueeze
-    bindings: {input: complement}
-    parameters: {dim: -1}
+    block: broadcast_sample_weight
+    bindings: {weight: complement, reference: right}
   - id: left_part
     block: elementwise_multiply
     bindings: {left: bounded_row, right: left}
@@ -62,13 +60,11 @@ variants:
         block: subtract
         bindings: {minuend: one, subtrahend: bounded}
       - id: bounded_row
-        block: unsqueeze
-        bindings: {input: bounded}
-        parameters: {dim: -1}
+        block: broadcast_sample_weight
+        bindings: {weight: bounded, reference: left}
       - id: complement_row
-        block: unsqueeze
-        bindings: {input: complement}
-        parameters: {dim: -1}
+        block: broadcast_sample_weight
+        bindings: {weight: complement, reference: right}
       - id: left_part
         block: elementwise_multiply
         bindings: {left: bounded_row, right: left}
@@ -88,13 +84,11 @@ variants:
         block: subtract
         bindings: {minuend: one, subtrahend: weight}
       - id: bounded_row
-        block: unsqueeze
-        bindings: {input: weight}
-        parameters: {dim: -1}
+        block: broadcast_sample_weight
+        bindings: {weight: weight, reference: left}
       - id: complement_row
-        block: unsqueeze
-        bindings: {input: complement}
-        parameters: {dim: -1}
+        block: broadcast_sample_weight
+        bindings: {weight: complement, reference: right}
       - id: left_part
         block: elementwise_multiply
         bindings: {left: bounded_row, right: left}
