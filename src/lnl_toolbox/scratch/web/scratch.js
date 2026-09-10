@@ -3595,10 +3595,20 @@ function expressionFromValue(value, expressions, inputNames, parameterNames) {
 function formulaStepsToExpressionMap(steps, inputNames = new Set(), parameterNames = new Set()) {
   const expressions = new Map();
   (steps || []).forEach((step) => {
+    const info = blockInfo(step.block);
+    const inputSlots = new Set(Object.entries(info?.params || {})
+      .filter(([name, schema]) => schema?.type === 'slot' && !isOutputSlot(name))
+      .map(([name]) => name));
     const bindings = {};
     Object.entries(step.bindings || {}).forEach(([name, value]) => { bindings[name] = expressionFromValue(value, expressions, inputNames, parameterNames); });
     const parameters = {};
-    Object.entries(step.parameters || {}).forEach(([name, value]) => { parameters[name] = expressionFromValue(value, expressions, inputNames, parameterNames); });
+    // Older editor saves could put an optional Formula input (for example
+    // ``mask``) in ``parameters``.  Promote slot-typed values while loading
+    // so optional inputs participate in variant matching as real bindings.
+    Object.entries(step.parameters || {}).forEach(([name, value]) => {
+      const target = inputSlots.has(name) ? bindings : parameters;
+      target[name] = expressionFromValue(value, expressions, inputNames, parameterNames);
+    });
     expressions.set(step.id, {kind: 'operation', block: step.block, bindings, parameters, sourceStep: step.id});
   });
   return expressions;
@@ -4116,11 +4126,24 @@ function expressionReplaceOperation(target, blockId) {
   const info = blockInfo(blockId);
   if (!info) return;
   ensureFormulaEditorParameters(info, {}, {force: true});
-  const oldValues = expressionNodeEntries(target).map(([, child]) => child);
+  const oldInfo = blockInfo(target?.block);
+  const oldRequired = new Set(oldInfo?.requires || []);
+  const oldBindings = target?.bindings || {};
+  const oldValues = Object.entries(oldBindings)
+    .filter(([name]) => oldRequired.has(name))
+    .map(([, child]) => child);
   const bindings = {};
   let valueIndex = 0;
   Object.entries(info.params || {}).forEach(([name, schema]) => {
-    if (schema.type === 'slot' && !isOutputSlot(name)) bindings[name] = oldValues[valueIndex++] || expressionInput(formulaInputRows()[0] || name);
+    if (schema.type !== 'slot' || isOutputSlot(name)) return;
+    if ((info.requires || []).includes(name)) {
+      bindings[name] = oldBindings[name] || oldValues[valueIndex++] || expressionInput(formulaInputRows()[0] || name);
+    } else if (oldBindings[name]) {
+      // Optional inputs are absent unless the user already connected one;
+      // never manufacture a mask (or any other optional branch) as a
+      // positional fallback while replacing an operation.
+      bindings[name] = oldBindings[name];
+    }
   });
   const parameters = {};
   Object.entries(info.params || {}).forEach(([name, schema]) => {
@@ -4450,7 +4473,13 @@ function renderFormulaEditorBindingFields() {
     label.textContent = `${name}${(info.requires || []).includes(name) ? '（必需）' : ''}`;
     const select = document.createElement('select');
     select.dataset.formulaBinding = name;
-    const configured = schema.default && sources.includes(schema.default) ? schema.default : '';
+    const required = (info.requires || []).includes(name);
+    // Optional Formula inputs (notably ``mask``) are genuine bindings, but
+    // they must stay absent until the user explicitly connects a source.  A
+    // schema default is a suggested source for required slots only; treating
+    // it as a parameter or silently selecting it would force the wrong
+    // Variant during expansion.
+    const configured = required && schema.default && sources.includes(schema.default) ? schema.default : '';
     const options = [...new Set(['', ...sources, configured].filter(Boolean))];
     options.forEach((source) => {
       const option = document.createElement('option');

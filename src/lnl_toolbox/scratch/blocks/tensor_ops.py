@@ -136,12 +136,18 @@ def divide(ctx: ScratchContext, numerator: str = "numerator", denominator: str =
 )
 def strict_divide(ctx: ScratchContext, numerator: str = "numerator", denominator: str = "denominator", minimum: float = 1e-12, save_as: str = "quotient") -> None:
     torch = __import__("torch")
+    numerator_value = ctx[numerator]
     denominator_value = ctx[denominator]
     if not hasattr(denominator_value, "clamp_min"):
-        denominator_value = torch.as_tensor(denominator_value, dtype=ctx[numerator].dtype, device=ctx[numerator].device)
+        denominator_value = torch.as_tensor(denominator_value, dtype=numerator_value.dtype, device=numerator_value.device)
     if not bool(torch.isfinite(denominator_value).all().item()) or bool((denominator_value <= float(minimum)).any().item()):
         raise ValueError("strict_divide denominator must be finite and strictly above minimum")
-    ctx[save_as] = ctx[numerator] / denominator_value
+    if not bool(torch.isfinite(torch.as_tensor(numerator_value)).all().item()):
+        raise ValueError("strict_divide numerator must be finite")
+    result = numerator_value / denominator_value
+    if not bool(torch.isfinite(torch.as_tensor(result)).all().item()):
+        raise ValueError("strict_divide result must be finite")
+    ctx[save_as] = result
 
 
 @block(
@@ -698,7 +704,7 @@ def sample_timestep_noise(ctx: ScratchContext, reference: str = "reference", tim
     name="Mean Squared Error",
     category="Loss",
     description="Compute squared error with an explicit per-sample or scalar reduction.",
-    params={"predicted": {"type": "slot", "default": "predicted"}, "target": {"type": "slot", "default": "target"}, "mask": {"type": "value", "default": None}, "reduction": {"type": "enum", "options": ["per_sample", "scalar"], "default": "scalar"}, "save_as": {"type": "slot", "default": "loss"}},
+    params={"predicted": {"type": "slot", "default": "predicted"}, "target": {"type": "slot", "default": "target"}, "mask": {"type": "slot", "default": "mask", "required": False}, "reduction": {"type": "enum", "options": ["per_sample", "scalar"], "default": "scalar"}, "save_as": {"type": "slot", "default": "loss"}},
     requires=("predicted", "target"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
     formula="MSE(x,y)=mean((x-y)^2)", formula_ref="builtin/mean_squared_error", formula_kind="composite", formula_group="概率 / Loss",
 )
@@ -798,7 +804,13 @@ def safe_divide(ctx: ScratchContext, numerator: str = "numerator", denominator: 
         torch = __import__("torch")
         if not bool(torch.isfinite(denominator_value).all().item()) or bool((denominator_value <= float(minimum)).any().item()):
             raise ValueError("safe_divide denominator must be finite and strictly above minimum")
-    ctx[save_as] = ctx[numerator] / denominator_value.clamp_min(float(minimum))
+        numerator_value = ctx[numerator]
+        if not bool(torch.isfinite(torch.as_tensor(numerator_value)).all().item()):
+            raise ValueError("safe_divide numerator must be finite")
+    result = ctx[numerator] / denominator_value.clamp_min(float(minimum))
+    if str(on_invalid) == "error" and not bool(torch.isfinite(torch.as_tensor(result)).all().item()):
+        raise ValueError("safe_divide result must be finite")
+    ctx[save_as] = result
 
 
 @block(
@@ -838,7 +850,7 @@ def sharpen_distribution(ctx: ScratchContext, input: str = "targets", temperatur
     name="Soft-target Cross Entropy",
     category="Loss",
     description="Compute cross entropy against probability targets, optionally restricted by a mask.",
-    params={"logits": {"type": "slot", "default": "logits"}, "targets": {"type": "slot", "default": "targets"}, "mask": {"type": "value", "default": None}, "reduction": {"type": "enum", "options": ["per_sample", "mean"], "default": "mean"}, "save_as": {"type": "slot", "default": "loss"}},
+    params={"logits": {"type": "slot", "default": "logits"}, "targets": {"type": "slot", "default": "targets"}, "mask": {"type": "slot", "default": "mask", "required": False}, "reduction": {"type": "enum", "options": ["per_sample", "mean"], "default": "mean"}, "save_as": {"type": "slot", "default": "loss"}},
     requires=("logits", "targets"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
     formula="CE(q,z)=-Σ_c q_c log softmax(z)_c", formula_ref="builtin/soft_target_cross_entropy", formula_kind="composite",
 )

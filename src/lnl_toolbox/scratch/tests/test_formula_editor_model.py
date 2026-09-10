@@ -136,6 +136,29 @@ if (unary.bindings.input.kind !== 'hole') throw new Error('unary operation did n
 """
         )
 
+    def test_optional_formula_inputs_are_bindings_and_stay_absent_by_default(self) -> None:
+        self.run_node(
+            """
+const mse = {id: 'mean_squared_error', name: 'Mean Squared Error', formula_kind: 'composite', requires: ['predicted', 'target'], params: {
+  predicted: {type: 'slot'}, target: {type: 'slot'}, mask: {type: 'slot', required: false, default: 'mask'},
+  reduction: {type: 'enum', default: 'scalar'}, save_as: {type: 'slot'},
+}};
+state.blocks = [mse];
+const fresh = expressionOperationNode(mse);
+if (Object.prototype.hasOwnProperty.call(fresh.parameters, 'mask')) throw new Error('optional mask was exposed as a parameter');
+if (Object.prototype.hasOwnProperty.call(fresh.bindings, 'mask')) throw new Error('optional mask was silently connected by its schema default');
+const loaded = formulaStepsToExpression([
+  {id: 'loss', block: 'mean_squared_error', bindings: {predicted: 'predicted', target: 'target'}, parameters: {mask: 'mask', reduction: 'scalar'}},
+], 'loss', new Set(['predicted', 'target', 'mask']), new Set());
+if (loaded.bindings.mask?.kind !== 'input' || loaded.bindings.mask.name !== 'mask') throw new Error('optional mask was not promoted to an input binding');
+if (Object.prototype.hasOwnProperty.call(loaded.parameters, 'mask')) throw new Error('promoted mask remained in parameters');
+const replacement = {kind: 'operation', block: 'add', bindings: {left: expressionInput('a'), right: expressionInput('b')}, parameters: {}};
+state.blocks.push({id: 'add', name: 'Add', requires: ['left', 'right'], params: {left: {type: 'slot'}, right: {type: 'slot'}, save_as: {type: 'slot'}}});
+expressionReplaceOperation(replacement, 'mean_squared_error');
+if (Object.prototype.hasOwnProperty.call(replacement.bindings, 'mask')) throw new Error('operation replacement manufactured an optional mask binding');
+"""
+        )
+
     def test_new_operation_focuses_the_next_hole_for_symbol_insertion(self) -> None:
         self.run_node(
             """

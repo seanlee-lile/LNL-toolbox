@@ -199,6 +199,12 @@ class FormulaCompositeEquivalenceTest(unittest.TestCase):
         )
         torch.testing.assert_close(composed["result"], direct)
 
+    def test_optional_mask_metadata_is_an_input_slot(self) -> None:
+        self.assertEqual(get_block("mean_squared_error").params["mask"]["type"], "slot")
+        self.assertFalse(get_block("mean_squared_error").params["mask"]["required"])
+        self.assertEqual(get_block("soft_target_cross_entropy").params["mask"]["type"], "slot")
+        self.assertFalse(get_block("soft_target_cross_entropy").params["mask"]["required"])
+
     def test_t_revision_ratio_composite_preserves_denominator_failure(self) -> None:
         probabilities = torch.tensor([[0.7, 0.3], [0.2, 0.8]], dtype=torch.float64)
         noisy = torch.tensor([[0.0, 1.0], [0.4, 0.6]], dtype=torch.float64)
@@ -214,6 +220,25 @@ class FormulaCompositeEquivalenceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             execute_formula(
                 get_formula("builtin/t_revision_importance_ratio"), composed,
+                parameter_values={"denominator_floor": 1e-6},
+                input_bindings={"probabilities": "p", "noisy_probabilities": "q", "labels": "y"},
+                output_bindings={"weights": "weights", "denominators": "denominators"},
+            )
+
+    def test_t_revision_ratio_rejects_nonfinite_numerator_like_composite(self) -> None:
+        probabilities = torch.tensor([[float("nan"), 0.3], [0.2, 0.8]], dtype=torch.float64)
+        noisy = torch.tensor([[0.7, 0.3], [0.4, 0.6]], dtype=torch.float64)
+        labels = torch.tensor([0, 1])
+        with self.assertRaises(ValueError):
+            _execute_block(
+                "t_revision_importance_ratio",
+                {"p": probabilities, "q": noisy, "y": labels},
+                probabilities="p", noisy_probabilities="q", labels="y", denominator_floor=1e-6,
+                save_as="weights", denominators_as="denominators",
+            )
+        with self.assertRaises(ValueError):
+            execute_formula(
+                get_formula("builtin/t_revision_importance_ratio"), ScratchContext({"p": probabilities, "q": noisy, "y": labels}),
                 parameter_values={"denominator_floor": 1e-6},
                 input_bindings={"probabilities": "p", "noisy_probabilities": "q", "labels": "y"},
                 output_bindings={"weights": "weights", "denominators": "denominators"},
