@@ -1,0 +1,23 @@
+id: builtin/t_revision_importance_ratio
+name: T-Revision Importance Ratio
+description: Gather clean and noisy posterior probabilities at the observed label and divide them with an explicit floor.
+inputs:
+  probabilities: {type: probability}
+  noisy_probabilities: {type: probability}
+  labels: {type: labels}
+parameters:
+  denominator_floor: {type: float, default: 1.0e-12, minimum: 0.0}
+steps:
+  - id: numerator
+    block: gather_by_label
+    bindings: {values: probabilities, labels: labels}
+  - id: denominator
+    block: gather_by_label
+    bindings: {values: noisy_probabilities, labels: labels}
+  - id: weights
+    block: safe_divide
+    bindings: {numerator: numerator, denominator: denominator}
+    parameters: {minimum: "$denominator_floor"}
+outputs:
+  weights: {source: weights}
+  denominators: {source: denominator}

@@ -356,7 +356,7 @@ def mean_loss(ctx: ScratchContext, input: str = "loss_per_sample", save_as: str 
     provides=("save_as",),
     placement=("batch",), stage="train", ui_group="⑤ 损失公式",
     formula="l̃_0=((1-ρ₊)l_0-ρ₋l_1)/(1-ρ₊-ρ₋); l̃_1=(-ρ₊l_0+(1-ρ₋)l_1)/(1-ρ₊-ρ₋)",
-    formula_ref="Natarajan et al. (2013), unbiased risk estimator for class-dependent label noise", formula_kind="special", formula_group="概率 / Loss",
+    formula_ref="builtin/binary_risk", formula_kind="composite", formula_group="概率 / Loss",
     paper="Learning with Noisy Labels",
 )
 def binary_risk(

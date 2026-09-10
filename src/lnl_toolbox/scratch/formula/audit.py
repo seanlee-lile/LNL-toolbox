@@ -28,29 +28,6 @@ from .schema import FormulaSpec
 _OUTPUT_PARAM_RE = re.compile(r"(?:^save_as$|_as$)")
 _PARAMETER_ALIASES = {"input": ("x", "values", "probabilities"), "minimum": ("epsilon",)}
 
-_SPECIAL_REASON_OVERRIDES = {
-    "apply_transition": "artifact-aware 2-D/3-D transition dispatch and namespace alignment",
-    "binary_risk": "paper-specific unbiased class-dependent risk estimator with identifiability guard",
-    "cal_cores2_adjusted_risk": "paper-defined CORES² adjusted risk with square-root prior normalization and distinct numerical floors",
-    "cal_covariance_correction": "conditional covariance estimator over retained proxy classes and detached reference statistics",
-    "compose_revision_transition": "trainable transition-artifact composition with model parameter access",
-    "cwd_observed_statistics": "CWD observed-prior and class-feature statistics from a noisy snapshot",
-    "cwd_recover_centroids": "CWD clean-centroid recovery through virtual-system pseudoinverse algebra",
-    "cwd_virtual_systems": "CWD virtual-prior/coefficient-system construction indexed by clean class",
-    "dual_t_transition_estimation": "Dual-T anchor and argmax-count transition estimator with artifact diagnostics",
-    "fit_gmm": "two-component GMM EM lifecycle with clean-component identification",
-    "importance_weight_formula": "binary RCN importance weighting with stable-index alignment and identifiability guard",
-    "initialize_t_revision_transition": "T-Revision pseudo-anchor transition estimator with artifact materialization",
-    "mentor_build_features": "MentorNet frozen-provider feature contract and curriculum epoch semantics",
-    "mc_ldce_volmin_objective": "MC-LDCE PaperVolMin likelihood plus constrained transition diagnostics",
-    "one_hot_like": "reference-shaped class-cardinality adapter; output width is inferred from a tensor",
-    "pdl_estimate_instance_transition": "PDL part-dependent transition estimator over fitted basis artifacts",
-    "pdl_fit_basis_matrices": "PDL class-conditioned basis fitting lifecycle over aligned anchors",
-    "pdl_fit_part_representation": "PDL nonnegative part-factorization solver and convergence controls",
-    "t_revision_importance_ratio": "paper-specific posterior ratio with denominator validation and diagnostic output",
-}
-
-
 def _runtime_body(definition: Any) -> str:
     try:
         source = textwrap.dedent(inspect.getsource(definition.execute))
@@ -66,21 +43,49 @@ def _runtime_body(definition: Any) -> str:
 
 
 def _special_reason(definition: Any, body: str) -> tuple[str, str]:
-    """Classify a special body from executable evidence, conservatively."""
+    """Classify a special body from executable evidence, conservatively.
+
+    This intentionally does not consult a Block-ID allow-list.  Retention is
+    justified by syntax present in the callable body (state mutation, model
+    lifecycle, stochastic sampling, autograd, or numerical estimation).  A
+    plain tensor expression therefore becomes an actionable migration finding.
+    """
     lowered = body.lower()
     flags: list[str] = []
-    if any(token in lowered for token in ("autograd", "backward(", "create_graph", "gradient")):
+    if any(token in lowered for token in ("autograd", "backward(", "create_graph", "gradient", "requires_grad")):
         flags.append("autograd")
     if any(token in lowered for token in ("torch.rand", "torch.randn", "torch.randint", "random", "generator")):
         flags.append("random")
-    if any(token in lowered for token in ("torch.linalg", "pinv", "solve(", "slogdet", "scipy", "fit_", "estimate_")):
+    if any(token in lowered for token in ("torch.linalg", "pinv", "solve(", "slogdet", "lstsq", "scipy", "fit_", "estimate_", "collect_")):
         flags.append("solver/statistics")
-    if any(token in lowered for token in ("named_parameters", ".eval(", ".train(", "optimizer", "model")):
+    if any(token in lowered for token in ("named_parameters", ".eval(", ".train(", "optimizer", "model", "network")):
         flags.append("model/optimizer internal")
-    if "state" in lowered or definition.category in {"State", "Meta", "Optimization"}:
+    if definition.category in {"State", "Meta", "Optimization"} or any(token in lowered for token in (".zero_(", "ctx[state]", "ctx[\"state\"]", "state_value", "on_cycle_", "epoch")):
         flags.append("state/lifecycle")
-    if definition.id in _SPECIAL_REASON_OVERRIDES:
-        flags.append(_SPECIAL_REASON_OVERRIDES[definition.id])
+    # Retain a special operation only when its callable body exposes a
+    # research-level boundary that ordinary tensor primitives cannot express.
+    # These checks inspect executable evidence rather than block IDs or a
+    # hand-maintained allow-list.
+    evidence = (
+        (("transition_for", "einsum", "artifact"), "artifact-aware transition algebra"),
+        (("paper_volmin_objective", "diagnostics"), "constrained statistical objective with diagnostics"),
+        (("torch.eye", "_cwd_swap_matrix", "virtual_prior"), "virtual-prior matrix-system construction"),
+        (("bincount", "observed_prior", "centroid", "snapshot"), "snapshot-derived class statistics"),
+        (("pseudoinverse", "torch.stack"), "pseudoinverse/statistical recovery"),
+        (("_schedule", "alpha_bar", "beta_bar"), "paper diffusion schedule materialization"),
+        (("estimator", "estimate("), "estimator lifecycle"),
+        (("searchsorted", "identifiability", "opposite_rate"), "stable-index aligned identifiability weighting"),
+        (("for c in range", "reference_losses", "reference_transition"), "conditional covariance accumulation"),
+        # Iterative mixture fitting is a statistical estimator even when the
+        # implementation is self-contained and does not call a helper named
+        # ``fit_*``.  Require the characteristic EM state and update loop as
+        # executable evidence rather than retaining it by block ID.
+        (("for _ in range", "posterior", "variances", "means"), "iterative mixture estimator"),
+    )
+    for tokens, label in evidence:
+        if all(token in lowered for token in tokens):
+            flags.append(label)
+            break
     if not flags:
         return "CHANGE_TO_COMPOSITE", "plain tensor arithmetic has no state/random/autograd/solver/model evidence"
     return "KEEP_SPECIAL", "; ".join(dict.fromkeys(flags))
@@ -127,29 +132,24 @@ def _formula_parameter_coverage(definition: Any, spec: FormulaSpec) -> dict[str,
             aliases[name] = target
     for name in sorted(block_values):
         candidates = (name, *_PARAMETER_ALIASES.get(name, ()))
-        target = next((candidate for candidate in candidates if candidate in formula_values), None)
+        target = next((candidate for candidate in candidates if candidate in formula_values or candidate in formula_inputs), None)
         if target is not None:
             aliases[name] = target
         else:
             missing.append(name)
-    # Formula controls without an oracle parameter are also surfaced.  This is
-    # what catches a YAML epsilon/reduction that had previously been hard-coded
-    # by the Python callable.
+    # Formula controls without a corresponding Block parameter are also
+    # surfaced.  A branch is valid only when it is executable in the FormulaSpec
+    # itself; audit annotations are deliberately not accepted as evidence.
     reverse = set(aliases.values()) | block_values
     missing.extend(sorted(formula_values - reverse))
     missing = sorted(set(missing))
-    # A sequential FormulaSpec intentionally describes the canonical/default
-    # path.  Branches that cannot be encoded as sequential steps must be
-    # declared by that YAML itself; the audit must not silently whitelist a
-    # Python-only parameter by block id.
-    branch_metadata = spec.metadata.get("oracle_branches", {})
-    if not isinstance(branch_metadata, dict):
-        branch_metadata = {}
-    dispatch = sorted(set(branch_metadata) & set(missing))
-    unrepresented = sorted(set(missing) - set(dispatch))
+    branch_parameters = sorted({key for variant in spec.variants for key in variant.when})
+    # Parameters controlling a real executable variant are represented by the
+    # variant's `when` selector and are therefore not hidden branch metadata.
+    unrepresented = sorted(set(missing) - set(branch_parameters))
     if not unrepresented:
         status = "PASS"
-        reason = "all input/value parameters are represented; dispatch branches are recorded separately"
+        reason = "all input/value parameters are represented by executable formula inputs, parameters, or variants"
     else:
         status = "FAIL"
         reason = "formula and executable Block expose different result-changing parameters"
@@ -161,9 +161,9 @@ def _formula_parameter_coverage(definition: Any, spec: FormulaSpec) -> dict[str,
         "formula_parameters": "|".join(sorted(formula_values)),
         "aliases": ";".join(f"{key}->{value}" for key, value in sorted(aliases.items())),
         "missing_parameters": "|".join(unrepresented),
-        "branch_parameters": "|".join(dispatch),
-        "branch_documentation": ";".join(f"{name}: {branch_metadata[name]}" for name in dispatch),
-        "branch_status": "DOCUMENTED_YAML_ORACLE_BRANCH" if dispatch else "NONE",
+        "branch_parameters": "|".join(branch_parameters),
+        "branch_documentation": ";".join(f"{variant.name}: {variant.when}" for variant in spec.variants),
+        "branch_status": "EXECUTABLE_FORMULA_VARIANT" if spec.variants else "NONE",
         "status": status,
         "reason": reason,
     }
@@ -219,7 +219,13 @@ def _walk_spec(spec: FormulaSpec, *, seen: tuple[str, ...]) -> tuple[set[str], s
     leaves_special: set[str] = set()
     depth = 1
     status = "COMPOSABLE"
-    for step in spec.steps:
+    # Variants are executable branches, not documentation. Include every
+    # branch in the closure so a composite cannot hide a dependency behind a
+    # selector.
+    executable_steps = list(spec.steps)
+    for variant in spec.variants:
+        executable_steps.extend(variant.steps)
+    for step in executable_steps:
         definition = get_block(step.block)
         if definition.formula_kind == "primitive":
             leaves_primitive.add(definition.id)

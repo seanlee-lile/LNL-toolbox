@@ -32,6 +32,7 @@ from .schema import (
     FormulaParameterSpec,
     FormulaSpec,
     FormulaStepSpec,
+    FormulaVariantSpec,
 )
 from .validation import FormulaValidationError, validate_formula
 
@@ -42,6 +43,7 @@ __all__ = [
     "FormulaParameterSpec",
     "FormulaSpec",
     "FormulaStepSpec",
+    "FormulaVariantSpec",
     "FormulaValidationError",
     "collect_formula_provenance",
     "merge_formula_provenance",

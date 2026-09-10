@@ -846,7 +846,7 @@ def initialize_t_revision_transition(ctx: ScratchContext, posterior: str = "t_re
     description="Compute the clean-to-noisy posterior ratio for each observed noisy label without clipping or normalization.",
     params={"probabilities": {"type": "slot", "default": "probabilities"}, "noisy_probabilities": {"type": "slot", "default": "noisy_probabilities"}, "labels": {"type": "slot", "default": "labels"}, "denominator_floor": {"type": "float", "default": 1.0e-12, "min": 0.0}, "save_as": {"type": "slot", "default": "sample_weights"}, "denominators_as": {"type": "slot", "default": "sample_denominators"}},
     requires=("probabilities", "noisy_probabilities", "labels"), provides=("save_as", "denominators_as"), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="w_i=g_ytilde_i(x_i)/(g(x_i)T)_ytilde_i", formula_kind="special", formula_ref="T-Revision paper Eq. (3)", paper="Are Anchor Points Really Indispensable in Label-Noise Learning?",
+    formula="w_i=g_ytilde_i(x_i)/(g(x_i)T)_ytilde_i", formula_kind="composite", formula_ref="builtin/t_revision_importance_ratio", paper="Are Anchor Points Really Indispensable in Label-Noise Learning?",
 )
 def t_revision_importance_ratio(ctx: ScratchContext, probabilities: str = "probabilities", noisy_probabilities: str = "noisy_probabilities", labels: str = "labels", denominator_floor: float = 1.0e-12, save_as: str = "sample_weights", denominators_as: str = "sample_denominators") -> None:
     torch, _ = _torch()
@@ -955,7 +955,7 @@ def cal_materialize_proxy_artifact(ctx: ScratchContext, model: str = "warmup_mod
     ctx[retained_state_as] = _table(retained)
 
 
-@block(id="cal_cores2_adjusted_risk", name="CAL: CORES2 Adjusted Risk", category="Loss", description="Compute CAL Eq. (7) with the square-root noisy prior used by the paper's confidence regularizer.", params={"logits":{"type":"slot","default":"logits"},"labels":{"type":"slot","default":"labels"},"noisy_prior":{"type":"slot","default":"cal_noisy_prior"},"confidence_weight":{"type":"slot","default":"confidence_weight"},"save_as":{"type":"slot","default":"cal_adjusted_risk"}}, requires=("logits","labels","noisy_prior","confidence_weight"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式", formula="mean[-log p_y-alpha sum_c sqrt(pi_c)/sum_j sqrt(pi_j) log p_c]", formula_kind="special", formula_ref="CAL Eq. (7)", paper="Learning from Noisy Labels with Core-loss and Second-order Risk")
+@block(id="cal_cores2_adjusted_risk", name="CAL: CORES2 Adjusted Risk", category="Loss", description="Compute CAL Eq. (7) with the square-root noisy prior used by the paper's confidence regularizer.", params={"logits":{"type":"slot","default":"logits"},"labels":{"type":"slot","default":"labels"},"noisy_prior":{"type":"slot","default":"cal_noisy_prior"},"confidence_weight":{"type":"slot","default":"confidence_weight"},"save_as":{"type":"slot","default":"cal_adjusted_risk"}}, requires=("logits","labels","noisy_prior","confidence_weight"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式", formula="mean[-log p_y-alpha sum_c sqrt(pi_c)/sum_j sqrt(pi_j) log p_c]", formula_kind="composite", formula_ref="builtin/cal_cores2_adjusted_risk", paper="Learning from Noisy Labels with Core-loss and Second-order Risk")
 def cal_cores2_adjusted_risk(ctx: ScratchContext, logits: str="logits", labels: str="labels", noisy_prior: str="cal_noisy_prior", confidence_weight: str="confidence_weight", save_as: str="cal_adjusted_risk") -> None:
     torch,F=_torch(); probability=F.softmax(ctx[logits],dim=1); observed=-torch.log(probability+1.0e-8).gather(1,ctx[labels].long()[:,None]).squeeze(1); all_losses=-torch.log(probability+1.0e-5); prior=ctx[noisy_prior].to(all_losses).clamp_min(0).sqrt(); prior=prior/prior.sum().clamp_min(torch.finfo(all_losses.dtype).tiny); ctx[save_as]=(observed-float(ctx[confidence_weight])*(all_losses*prior).sum(1)).mean()
 
@@ -1032,11 +1032,11 @@ def mc_ldce_recover_statistic(ctx: ScratchContext, model: str="model", loader: s
     name="CNLCU Soft Selection Score",
     category="Sample Selection",
     description="Compute CNLCU Eq. (7)'s uncertainty-aware lower-bound score.",
-    params={"robust_mean": {"type": "slot", "default": "cnlcu_robust_mean"}, "history_length": {"type": "slot", "default": "cnlcu_history_length"}, "selected_count": {"type": "slot", "default": "history_selected_count"}, "sigma_squared": {"type": "float", "default": 0.01, "min": 0.000001, "max": 0.999999}, "save_as": {"type": "slot", "default": "cnlcu_score"}},
-    requires=("robust_mean", "history_length", "selected_count"), provides=("save_as", "cnlcu_bonus"), placement=("batch",), stage="train", ui_group="⑥ 样本选择",
-    formula="score=r-σ²(t+σ² log(2t)/t²)/(n-σ²)", formula_kind="special", formula_ref="CNLCU Eq. (7)", paper="CNLCU",
+    params={"robust_mean": {"type": "slot", "default": "cnlcu_robust_mean"}, "history_length": {"type": "slot", "default": "cnlcu_history_length"}, "selected_count": {"type": "slot", "default": "history_selected_count"}, "sigma_squared": {"type": "float", "default": 0.01, "min": 0.000001, "max": 0.999999}, "save_as": {"type": "slot", "default": "cnlcu_score"}, "bonus_as": {"type": "slot", "default": "cnlcu_bonus"}},
+    requires=("robust_mean", "history_length", "selected_count"), provides=("save_as", "bonus_as"), placement=("batch",), stage="train", ui_group="⑥ 样本选择",
+    formula="score=r-σ²(t+σ² log(2t)/t²)/(n-σ²)", formula_kind="composite", formula_ref="builtin/cnlcu_soft_score", paper="CNLCU",
 )
-def cnlcu_soft_score(ctx: ScratchContext, robust_mean: str = "cnlcu_robust_mean", history_length: str = "cnlcu_history_length", selected_count: str = "history_selected_count", sigma_squared: float = 0.01, save_as: str = "cnlcu_score") -> None:
+def cnlcu_soft_score(ctx: ScratchContext, robust_mean: str = "cnlcu_robust_mean", history_length: str = "cnlcu_history_length", selected_count: str = "history_selected_count", sigma_squared: float = 0.01, save_as: str = "cnlcu_score", bonus_as: str = "cnlcu_bonus") -> None:
     from ...native_stats import cnlcu_soft_score as score_fn
     robust = ctx[robust_mean]
     length = ctx[history_length]
@@ -1048,4 +1048,4 @@ def cnlcu_soft_score(ctx: ScratchContext, robust_mean: str = "cnlcu_robust_mean"
     if getattr(selected, "ndim", 0) > 1 and int(selected.shape[-1]) == 1:
         selected = selected.squeeze(-1)
     score, bonus = score_fn(robust, length, selected + 1, float(sigma_squared))
-    ctx[save_as], ctx["cnlcu_bonus"] = score, bonus
+    ctx[save_as], ctx[bonus_as] = score, bonus

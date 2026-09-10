@@ -63,7 +63,12 @@ def _register_formula_block(spec: FormulaSpec) -> None:
     if block_id in BLOCKS:
         return
     params: dict[str, dict[str, Any]] = {
-        name: {"type": "slot", "default": name, "description": input_spec.description}
+        name: {
+            "type": "slot",
+            "default": name,
+            "description": input_spec.description,
+            **({"required": input_spec.required} if input_spec.required is not None else {}),
+        }
         for name, input_spec in spec.inputs.items()
     }
     type_map = {"float": "float", "int": "int", "bool": "bool", "enum": "enum", "str": "str", "value": "value"}
@@ -90,7 +95,10 @@ def _register_formula_block(spec: FormulaSpec) -> None:
         description=spec.description or "User-composed Scratch formula",
         kind="action",
         params=params,
-        requires=tuple(spec.inputs),
+        # Optional Formula inputs (for example a mask branch) remain visible
+        # in the generated block schema but must not become hard prerequisites
+        # in the outer Scratch context.
+        requires=tuple(name for name, input_spec in spec.inputs.items() if input_spec.required is not False),
         provides=provides,
         execute=_formula_execute(spec),
         placement=("batch", "top", "epoch"),

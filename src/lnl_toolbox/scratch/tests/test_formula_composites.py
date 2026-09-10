@@ -271,6 +271,64 @@ class FormulaCompositeEquivalenceTest(unittest.TestCase):
         execute_formula(variadic, composed)
         torch.testing.assert_close(direct, composed["result"])
 
+    def test_builtin_variants_execute_each_result_changing_branch(self) -> None:
+        """Branch controls are executable FormulaSpec variants, not notes."""
+        predicted = torch.tensor([[1.0, 2.0], [5.0, 7.0], [2.0, 1.0]])
+        target = torch.tensor([[0.0, 1.0], [4.0, 8.0], [2.0, 3.0]])
+        mask = torch.tensor([True, False, True])
+        for reduction in ("scalar", "per_sample"):
+            for masked in (False, True):
+                direct_context = _execute_block(
+                    "mean_squared_error",
+                    {"predicted": predicted, "target": target, **({"mask": mask} if masked else {})},
+                    predicted="predicted", target="target", mask="mask" if masked else None,
+                    reduction=reduction, save_as="result",
+                )
+                formula_context = ScratchContext({"predicted": predicted, "target": target, **({"mask": mask} if masked else {})})
+                execute_formula(
+                    get_formula("builtin/mean_squared_error"), formula_context,
+                    parameter_values={"reduction": reduction},
+                    input_bindings={"predicted": "predicted", "target": "target", **({"mask": "mask"} if masked else {})},
+                    output_bindings={"loss": "result"},
+                )
+                torch.testing.assert_close(direct_context["result"], formula_context["result"])
+
+        logits = torch.tensor([[1.0, -1.0], [2.0, 0.0], [-1.0, 3.0]])
+        targets = torch.tensor([[1.0, 0.0], [0.0, 1.0], [0.25, 0.75]])
+        for reduction in ("mean", "per_sample"):
+            for masked in (False, True):
+                direct_context = _execute_block(
+                    "soft_target_cross_entropy",
+                    {"logits": logits, "targets": targets, **({"mask": mask} if masked else {})},
+                    logits="logits", targets="targets", mask="mask" if masked else None,
+                    reduction=reduction, save_as="result",
+                )
+                formula_context = ScratchContext({"logits": logits, "targets": targets, **({"mask": mask} if masked else {})})
+                execute_formula(
+                    get_formula("builtin/soft_target_cross_entropy"), formula_context,
+                    parameter_values={"reduction": reduction},
+                    input_bindings={"logits": "logits", "targets": "targets", **({"mask": "mask"} if masked else {})},
+                    output_bindings={"loss": "result"},
+                )
+                torch.testing.assert_close(direct_context["result"], formula_context["result"])
+
+        values = torch.tensor([1.0, 2.0, 4.0])
+        for denominator in ("selected", "batch"):
+            for empty in ("zero", "error"):
+                current_mask = torch.zeros(3, dtype=torch.bool) if empty == "zero" else mask
+                direct_context = _execute_block(
+                    "masked_mean", {"values": values, "mask": current_mask},
+                    values="values", mask="mask", denominator=denominator, empty=empty, save_as="result",
+                )
+                formula_context = ScratchContext({"values": values, "mask": current_mask})
+                execute_formula(
+                    get_formula("builtin/masked_mean"), formula_context,
+                    parameter_values={"denominator": denominator, "empty": empty},
+                    input_bindings={"values": "values", "mask": "mask"},
+                    output_bindings={"loss": "result"},
+                )
+                torch.testing.assert_close(direct_context["result"], formula_context["result"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,83 @@
+id: builtin/binary_risk
+name: Binary Unbiased Risk
+description: Natarajan's binary class-dependent correction expressed as explicit tensor operations.
+inputs:
+  logits: {type: tensor}
+  labels: {type: labels}
+parameters:
+  rho_positive: {type: float, default: 0.1, minimum: 0.0, maximum: 0.999}
+  rho_negative: {type: float, default: 0.1, minimum: 0.0, maximum: 0.999}
+steps:
+  - id: log_probabilities
+    block: log_softmax
+    bindings: {logits: logits}
+  - id: losses
+    block: negate
+    bindings: {input: log_probabilities}
+  - id: loss_zero
+    block: select_class_column
+    bindings: {input: losses}
+    parameters: {class_index: 0}
+  - id: loss_one
+    block: select_class_column
+    bindings: {input: losses}
+    parameters: {class_index: 1}
+  - id: one
+    block: constant
+    parameters: {value: 1.0}
+  - id: rho_positive_value
+    block: constant
+    parameters: {value: "$rho_positive"}
+  - id: rho_negative_value
+    block: constant
+    parameters: {value: "$rho_negative"}
+  - id: one_minus_positive
+    block: subtract
+    bindings: {minuend: one, subtrahend: rho_positive_value}
+  - id: zero_positive
+    block: elementwise_multiply
+    bindings: {left: one_minus_positive, right: loss_zero}
+  - id: negative_zero
+    block: elementwise_multiply
+    bindings: {left: rho_negative_value, right: loss_one}
+  - id: numerator_zero
+    block: subtract
+    bindings: {minuend: zero_positive, subtrahend: negative_zero}
+  - id: positive_negative
+    block: elementwise_multiply
+    bindings: {left: rho_positive_value, right: loss_zero}
+  - id: one_minus_negative
+    block: subtract
+    bindings: {minuend: one, subtrahend: rho_negative_value}
+  - id: one_negative
+    block: elementwise_multiply
+    bindings: {left: one_minus_negative, right: loss_one}
+  - id: numerator_one
+    block: subtract
+    bindings: {minuend: one_negative, subtrahend: positive_negative}
+  - id: gap_partial
+    block: subtract
+    bindings: {minuend: one, subtrahend: rho_positive_value}
+  - id: gap
+    block: subtract
+    bindings: {minuend: gap_partial, subtrahend: rho_negative_value}
+  - id: corrected_zero
+    block: safe_divide
+    bindings: {numerator: numerator_zero, denominator: gap}
+    parameters: {minimum: 0.0}
+  - id: corrected_one
+    block: safe_divide
+    bindings: {numerator: numerator_one, denominator: gap}
+    parameters: {minimum: 0.0}
+  - id: zero_label
+    block: constant
+    parameters: {value: 0}
+  - id: is_zero
+    block: compare
+    bindings: {left: labels, right: zero_label}
+    parameters: {operator: eq}
+  - id: loss
+    block: where
+    bindings: {condition: is_zero, when_true: corrected_zero, when_false: corrected_one}
+outputs:
+  loss: {source: loss}

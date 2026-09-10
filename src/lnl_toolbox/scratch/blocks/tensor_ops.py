@@ -38,6 +38,7 @@ def constant(ctx: ScratchContext, value: Any = 0.0, save_as: str = "constant") -
     description="Convert integer labels to one-hot vectors.",
     params={"labels": {"type": "slot", "default": "labels"}, "num_classes": {"type": "int", "default": 10, "min": 2}, "save_as": {"type": "slot", "default": "one_hot_labels"}},
     requires=("labels",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
+    formula="one_hot(y, C)", formula_ref="one-hot label encoding", formula_kind="primitive", formula_group="概率 / Loss",
 )
 def one_hot(ctx: ScratchContext, labels: str = "labels", num_classes: int = 10, save_as: str = "one_hot_labels") -> None:
     torch, F = _torch()
@@ -51,7 +52,7 @@ def one_hot(ctx: ScratchContext, labels: str = "labels", num_classes: int = 10, 
     description="Convert labels to one-hot vectors using the class dimension of a reference tensor.",
     params={"labels": {"type": "slot", "default": "labels"}, "reference": {"type": "slot", "default": "logits"}, "save_as": {"type": "slot", "default": "one_hot_labels"}},
     requires=("labels", "reference"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="one_hot(y, reference.shape[-1])", formula_ref="reference-shaped one-hot encoding", formula_kind="special", formula_group="概率 / Loss",
+    formula="one_hot(y, shape(reference)[-1])", formula_ref="builtin/one_hot_like", formula_kind="composite", formula_group="概率 / Loss",
 )
 def one_hot_like(ctx: ScratchContext, labels: str = "labels", reference: str = "logits", save_as: str = "one_hot_labels") -> None:
     torch, F = _torch()
@@ -281,12 +282,14 @@ def _optional_dim(dim: Any) -> int | None:
     name="Reduce Sum",
     category="Tensor Operation",
     description="Sum a tensor globally or along one explicit dimension.",
-    params={"input": {"type": "slot", "default": "values"}, "dim": {"type": "value", "default": None}, "keepdim": {"type": "bool", "default": False}, "save_as": {"type": "slot", "default": "sum"}},
+    params={"input": {"type": "slot", "default": "values"}, "dim": {"type": "value", "default": None}, "keepdim": {"type": "bool", "default": False}, "empty": {"type": "enum", "options": ["nan", "zero", "error"], "default": "nan"}, "save_as": {"type": "slot", "default": "sum"}},
     requires=("input",), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式",
     formula="z=Σ_dim x", formula_ref="explicit sum reduction", formula_kind="primitive", formula_group="归约",
 )
-def reduce_sum(ctx: ScratchContext, input: str = "values", dim: Any = None, keepdim: bool = False, save_as: str = "sum") -> None:
+def reduce_sum(ctx: ScratchContext, input: str = "values", dim: Any = None, keepdim: bool = False, empty: str = "nan", save_as: str = "sum") -> None:
     axis = _optional_dim(dim)
+    if ctx[input].numel() == 0 and str(empty) == "error":
+        raise ValueError("reduce_sum received an empty tensor")
     ctx[save_as] = ctx[input].sum() if axis is None else ctx[input].sum(dim=axis, keepdim=bool(keepdim))
 
 
@@ -295,13 +298,33 @@ def reduce_sum(ctx: ScratchContext, input: str = "values", dim: Any = None, keep
     name="Reduce Mean",
     category="Tensor Operation",
     description="Average a tensor globally or along one explicit dimension.",
-    params={"input": {"type": "slot", "default": "values"}, "dim": {"type": "value", "default": None}, "keepdim": {"type": "bool", "default": False}, "save_as": {"type": "slot", "default": "mean"}},
+    params={"input": {"type": "slot", "default": "values"}, "dim": {"type": "value", "default": None}, "keepdim": {"type": "bool", "default": False}, "empty": {"type": "enum", "options": ["nan", "zero", "error"], "default": "nan"}, "save_as": {"type": "slot", "default": "mean"}},
     requires=("input",), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式",
     formula="z=mean_dim(x)", formula_ref="explicit mean reduction", formula_kind="primitive", formula_group="归约",
 )
-def reduce_mean(ctx: ScratchContext, input: str = "values", dim: Any = None, keepdim: bool = False, save_as: str = "mean") -> None:
+def reduce_mean(ctx: ScratchContext, input: str = "values", dim: Any = None, keepdim: bool = False, empty: str = "nan", save_as: str = "mean") -> None:
     axis = _optional_dim(dim)
+    if ctx[input].numel() == 0:
+        if str(empty) == "error":
+            raise ValueError("reduce_mean received an empty tensor")
+        if str(empty) == "zero":
+            ctx[save_as] = ctx[input].sum() * 0.0
+            return
     ctx[save_as] = ctx[input].mean() if axis is None else ctx[input].mean(dim=axis, keepdim=bool(keepdim))
+
+
+@block(
+    id="numel",
+    name="Element Count",
+    category="Tensor Operation",
+    description="Publish the number of elements in a tensor as a scalar on its device and dtype.",
+    params={"input": {"type": "slot", "default": "values"}, "save_as": {"type": "slot", "default": "count"}},
+    requires=("input",), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式",
+    formula="n=|x|", formula_ref="tensor element count", formula_kind="primitive", formula_group="归约",
+)
+def numel(ctx: ScratchContext, input: str = "values", save_as: str = "count") -> None:
+    value = ctx[input]
+    ctx[save_as] = __import__("torch").as_tensor(float(value.numel()), dtype=value.dtype, device=value.device)
 
 
 @block(
@@ -486,6 +509,38 @@ def gather(ctx: ScratchContext, input: str = "values", indices: str = "indices",
 
 
 @block(
+    id="select_class_column",
+    name="Select Class Column",
+    category="Tensor Operation",
+    description="Select one fixed class column from an [N,C] tensor without changing its batch axis.",
+    params={"input": {"type": "slot", "default": "values"}, "class_index": {"type": "int", "default": 0, "min": 0}, "save_as": {"type": "slot", "default": "selected_class"}},
+    requires=("input",), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式",
+    formula="z_i=x_{i,c}", formula_ref="fixed class-column selection", formula_kind="primitive", formula_group="索引",
+)
+def select_class_column(ctx: ScratchContext, input: str = "values", class_index: int = 0, save_as: str = "selected_class") -> None:
+    values = ctx[input]
+    if values.ndim < 2 or not 0 <= int(class_index) < int(values.shape[-1]):
+        raise ValueError("select_class_column expects a valid class index for an [N,C] tensor")
+    ctx[save_as] = values[..., int(class_index)]
+
+
+@block(
+    id="class_count",
+    name="Class Count",
+    category="Tensor Operation",
+    description="Publish the class dimension of a reference tensor as an integer scalar.",
+    params={"reference": {"type": "slot", "default": "logits"}, "save_as": {"type": "slot", "default": "num_classes"}},
+    requires=("reference",), provides=("save_as",), placement=("batch", "top"), stage="train", ui_group="⑤ 损失公式",
+    formula="C=shape(x)[-1]", formula_ref="reference class dimension", formula_kind="primitive", formula_group="形状",
+)
+def class_count(ctx: ScratchContext, reference: str = "logits", save_as: str = "num_classes") -> None:
+    value = ctx[reference]
+    if getattr(value, "ndim", 0) < 1:
+        raise ValueError("class_count expects a tensor with a class dimension")
+    ctx[save_as] = int(value.shape[-1])
+
+
+@block(
     id="index_select",
     name="Index Select",
     category="Tensor Operation",
@@ -612,7 +667,7 @@ def mean_squared_error(ctx: ScratchContext, predicted: str = "predicted", target
     description="Sum explicitly named scalar or tensor terms with explicit weights.",
     params={"terms": {"type": "value", "default": []}, "weights": {"type": "value", "default": []}, "save_as": {"type": "slot", "default": "loss"}},
     provides=("save_as",), placement=("batch", "epoch", "top"), stage="train", ui_group="⑤ 损失公式",
-    formula="L=sum_i w_i L_i", formula_ref="builtin/weighted_sum", formula_kind="composite", formula_group="概率 / Loss",
+    formula="L=sum_i w_i L_i", formula_ref="builtin/weighted_sum", formula_kind="primitive", formula_group="概率 / Loss",
 )
 def weighted_sum(ctx: ScratchContext, terms: Any = (), weights: Any = (), save_as: str = "loss") -> None:
     if not isinstance(terms, (list, tuple)) or not terms:

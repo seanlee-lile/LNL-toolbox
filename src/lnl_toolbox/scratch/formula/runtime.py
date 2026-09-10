@@ -37,6 +37,32 @@ def _resolve_value(value: Any, local: Mapping[str, Any], parameters: Mapping[str
     return value
 
 
+def _variant_matches(when: Mapping[str, Any], local: Mapping[str, Any], parameters: Mapping[str, Any]) -> bool:
+    """Return whether an executable FormulaSpec variant applies."""
+    for key, expected in when.items():
+        if key in parameters:
+            actual = parameters[key]
+            present = True
+        else:
+            actual = local.get(key)
+            present = key in local and actual is not None
+        if isinstance(expected, Mapping):
+            if "present" in expected and bool(expected["present"]) != present:
+                return False
+            if "equals" in expected and (not present or actual != expected["equals"]):
+                return False
+            continue
+        elif isinstance(expected, str) and expected in {"__present__", "$present"}:
+            if not present:
+                return False
+        elif isinstance(expected, str) and expected in {"__absent__", "$absent"}:
+            if present:
+                return False
+        elif not present or actual != expected:
+            return False
+    return True
+
+
 def execute_formula(
     value: FormulaSpec | Mapping[str, Any],
     context: ScratchContext | Mapping[str, Any],
@@ -57,9 +83,12 @@ def execute_formula(
     inputs = dict(input_bindings or {})
     supplied_parameters = dict(parameter_values or {})
     local = ScratchContext()
-    for name in spec.inputs:
+    for name, input_spec in spec.inputs.items():
         source = inputs.get(name, name)
         if not isinstance(source, str) or source not in parent:
+            if input_spec.required is False:
+                local[name] = None
+                continue
             raise KeyError(f"formula input `{name}` is not bound to an available slot")
         local[name] = parent[source]
     resolved_parameters: dict[str, Any] = {}
@@ -83,7 +112,12 @@ def execute_formula(
         resolved_parameters[name] = current
         local[name] = current
 
-    for step in spec.steps:
+    selected_variant = next((variant for variant in spec.variants if _variant_matches(variant.when, local, resolved_parameters)), None)
+    if spec.variants and selected_variant is None:
+        raise ValueError(f"formula `{spec.id}` has no matching executable variant")
+    steps = selected_variant.steps if selected_variant is not None else spec.steps
+    selected_outputs = (selected_variant.outputs or spec.outputs) if selected_variant is not None else spec.outputs
+    for step in steps:
         definition = get_block(step.block)
         params: dict[str, Any] = {}
         for name, schema in definition.params.items():
@@ -122,7 +156,7 @@ def execute_formula(
                 raise RuntimeError(f"formula step `{step.id}` did not publish an output")
 
     bindings = dict(output_bindings or {})
-    for name, output in spec.outputs.items():
+    for name, output in selected_outputs.items():
         source = output.source.split(".", 1)[0]
         if source not in local:
             raise KeyError(f"formula output `{name}` source is unavailable: {output.source}")
@@ -159,4 +193,4 @@ def execute_formula(
                 if isinstance(item, dict)
             ):
                 records.append(provenance)
-    return {name: parent[bindings.get(name, name)] for name in spec.outputs}
+    return {name: parent[bindings.get(name, name)] for name in selected_outputs}

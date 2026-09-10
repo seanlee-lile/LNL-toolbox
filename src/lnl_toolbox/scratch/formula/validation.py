@@ -6,7 +6,7 @@ import re
 from typing import Any, Mapping
 
 from ..registry import get_block
-from .schema import FormulaSpec
+from .schema import FormulaSpec, FormulaStepSpec
 
 
 class FormulaValidationError(ValueError):
@@ -33,6 +33,50 @@ def _nested_formula_id(block_id: str) -> str | None:
     if block_id.startswith("formula__"):
         return block_id.removeprefix("formula__").replace("__", "/", 1)
     return None
+
+
+def _validate_steps(spec: FormulaSpec, steps: list[FormulaStepSpec], names: set[str], *, stack: tuple[str, ...]) -> set[str]:
+    """Validate one executable sequential branch and return its local names."""
+    seen: set[str] = set()
+    for step in steps:
+        if not step.id or not step.id.replace("_", "").isalnum():
+            raise FormulaValidationError(f"invalid or missing step id: {step.id!r}")
+        if step.id in seen or step.id in names:
+            raise FormulaValidationError(f"duplicate formula step id: {step.id}")
+        seen.add(step.id)
+        try:
+            definition = get_block(step.block)
+        except KeyError as exc:
+            raise FormulaValidationError(f"step `{step.id}` uses unknown Block `{step.block}`") from exc
+        if definition.formula_kind is None:
+            raise FormulaValidationError(f"Block `{step.block}` is not allowed inside a Formula")
+        nested_id = _nested_formula_id(step.block)
+        if nested_id:
+            from .registry import get_formula
+
+            nested = get_formula(nested_id)
+            validate_formula(nested, stack=(*stack, spec.id))
+        for param_name, binding in step.bindings.items():
+            if param_name not in definition.params:
+                raise FormulaValidationError(f"step `{step.id}` has unknown binding `{param_name}`")
+            if definition.params[param_name].get("type") == "slot":
+                source = _source_name(binding)
+                if source not in names and source not in seen:
+                    raise FormulaValidationError(f"step `{step.id}` binding `{param_name}` references unavailable `{source}`")
+        for param_name, value_param in step.parameters.items():
+            if param_name not in definition.params:
+                raise FormulaValidationError(f"step `{step.id}` has unknown parameter `{param_name}`")
+            if isinstance(value_param, str) and value_param in spec.parameters:
+                continue
+        for required in definition.requires:
+            if required in step.bindings:
+                source = _source_name(step.bindings[required])
+                if source not in names and source not in seen:
+                    raise FormulaValidationError(f"step `{step.id}` missing earlier source `{source}` for `{required}`")
+            elif required not in names and required not in seen:
+                raise FormulaValidationError(f"step `{step.id}` missing required binding `{required}`")
+        names.add(step.id)
+    return names
 
 
 def validate_formula(value: FormulaSpec | Mapping[str, Any], *, stack: tuple[str, ...] = ()) -> FormulaSpec:
@@ -70,50 +114,25 @@ def validate_formula(value: FormulaSpec | Mapping[str, Any], *, stack: tuple[str
                 raise FormulaValidationError(f"parameter `{name}` default exceeds its maximum")
     if not spec.steps:
         raise FormulaValidationError("formula must contain at least one operation step")
-    seen: set[str] = set()
-    for step in spec.steps:
-        if not step.id or not step.id.replace("_", "").isalnum():
-            raise FormulaValidationError(f"invalid or missing step id: {step.id!r}")
-        if step.id in seen or step.id in names:
-            raise FormulaValidationError(f"duplicate formula step id: {step.id}")
-        seen.add(step.id)
-        try:
-            definition = get_block(step.block)
-        except KeyError as exc:
-            raise FormulaValidationError(f"step `{step.id}` uses unknown Block `{step.block}`") from exc
-        if definition.formula_kind is None:
-            raise FormulaValidationError(f"Block `{step.block}` is not allowed inside a Formula")
-        nested_id = _nested_formula_id(step.block)
-        if nested_id:
-            # Resolving the block above proves registration; importing here
-            # avoids a hard import cycle with the Formula Registry.
-            from .registry import get_formula
-
-            nested = get_formula(nested_id)
-            validate_formula(nested, stack=(*stack, spec.id))
-        for param_name, binding in step.bindings.items():
-            if param_name not in definition.params:
-                raise FormulaValidationError(f"step `{step.id}` has unknown binding `{param_name}`")
-            if definition.params[param_name].get("type") == "slot":
-                source = _source_name(binding)
-                if source not in names and source not in seen:
-                    raise FormulaValidationError(f"step `{step.id}` binding `{param_name}` references unavailable `{source}`")
-        for param_name, value_param in step.parameters.items():
-            if param_name not in definition.params:
-                raise FormulaValidationError(f"step `{step.id}` has unknown parameter `{param_name}`")
-            if isinstance(value_param, str) and value_param in spec.parameters:
-                continue
-        for required in definition.requires:
-            if required in step.bindings:
-                source = _source_name(step.bindings[required])
-                if source not in names and source not in seen:
-                    raise FormulaValidationError(f"step `{step.id}` missing earlier source `{source}` for `{required}`")
-            elif required not in names and required not in seen:
-                raise FormulaValidationError(f"step `{step.id}` missing required binding `{required}`")
-        # A step's named result is the only implicit output.  The runtime
-        # forces dynamic save_as-style outputs to this name, so there is no
-        # hidden reduction or detach between steps.
-        names.add(step.id)
+    names = _validate_steps(spec, spec.steps, names, stack=stack)
+    variant_names: set[str] = set()
+    for variant in spec.variants:
+        if not variant.name or not variant.name.replace("_", "").isalnum():
+            raise FormulaValidationError(f"invalid or missing formula variant name: {variant.name!r}")
+        if variant.name in variant_names:
+            raise FormulaValidationError(f"duplicate formula variant name: {variant.name}")
+        variant_names.add(variant.name)
+        for key in variant.when:
+            if key not in spec.inputs and key not in spec.parameters:
+                raise FormulaValidationError(f"variant `{variant.name}` references unknown selector `{key}`")
+        if not variant.steps:
+            raise FormulaValidationError(f"formula variant `{variant.name}` must contain at least one operation step")
+        branch_names = _validate_steps(spec, variant.steps, set(spec.inputs) | set(spec.parameters), stack=stack)
+        outputs = variant.outputs or spec.outputs
+        for output_name, output in outputs.items():
+            source = _step_output_name(output.source, output.source)
+            if source not in branch_names or source in spec.inputs or source in spec.parameters:
+                raise FormulaValidationError(f"formula variant `{variant.name}` output `{output_name}` references unknown result `{output.source}`")
     if not spec.outputs:
         raise FormulaValidationError("formula must declare at least one output")
     for name, output in spec.outputs.items():

@@ -135,6 +135,48 @@ class FormulaOutputSpec:
 
 
 @dataclass
+class FormulaVariantSpec:
+    """An executable branch of a composite formula.
+
+    Variants are part of the FormulaSpec contract rather than audit-only
+    annotations.  ``when`` is matched against formula parameters and optional
+    inputs at execution time; the selected step list is then run through the
+    same sequential runtime as the default formula.
+    """
+
+    name: str
+    when: dict[str, Any] = field(default_factory=dict)
+    steps: list[FormulaStepSpec] = field(default_factory=list)
+    outputs: dict[str, FormulaOutputSpec] = field(default_factory=dict)
+
+    @classmethod
+    def from_value(cls, value: Any) -> "FormulaVariantSpec":
+        if not isinstance(value, Mapping):
+            raise TypeError("formula variant must be a mapping")
+        raw_steps = value.get("steps", [])
+        if not isinstance(raw_steps, list):
+            raise TypeError("variant.steps must be a list")
+        raw_when = _mapping(value.get("when", {}), "variant.when")
+        raw_outputs = _mapping(value.get("outputs", {}), "variant.outputs")
+        return cls(
+            name=str(value.get("name", "")),
+            when=raw_when,
+            steps=[FormulaStepSpec.from_value(item) for item in raw_steps],
+            outputs={name: FormulaOutputSpec.from_value(name, item) for name, item in raw_outputs.items()},
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "name": self.name,
+            "when": dict(self.when),
+            "steps": [step.to_dict() for step in self.steps],
+        }
+        if self.outputs:
+            result["outputs"] = {name: item.to_dict() for name, item in self.outputs.items()}
+        return result
+
+
+@dataclass
 class FormulaSpec:
     id: str
     name: str
@@ -144,6 +186,7 @@ class FormulaSpec:
     steps: list[FormulaStepSpec] = field(default_factory=list)
     outputs: dict[str, FormulaOutputSpec] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+    variants: list[FormulaVariantSpec] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "FormulaSpec":
@@ -155,6 +198,9 @@ class FormulaSpec:
         raw_steps = value.get("steps", [])
         if not isinstance(raw_steps, list):
             raise TypeError("steps must be a list")
+        raw_variants = value.get("variants", [])
+        if not isinstance(raw_variants, list):
+            raise TypeError("variants must be a list")
         return cls(
             id=str(value.get("id", "")),
             name=str(value.get("name", "")),
@@ -164,10 +210,11 @@ class FormulaSpec:
             steps=[FormulaStepSpec.from_value(item) for item in raw_steps],
             outputs={name: FormulaOutputSpec.from_value(name, item) for name, item in raw_outputs.items()},
             metadata=_mapping(value.get("metadata", {}), "metadata"),
+            variants=[FormulaVariantSpec.from_value(item) for item in raw_variants],
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "id": self.id,
             "name": self.name,
             "description": self.description,
@@ -177,3 +224,6 @@ class FormulaSpec:
             "outputs": {name: item.to_dict() for name, item in self.outputs.items()},
             "metadata": dict(self.metadata),
         }
+        if self.variants:
+            result["variants"] = [variant.to_dict() for variant in self.variants]
+        return result
