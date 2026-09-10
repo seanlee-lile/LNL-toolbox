@@ -36,7 +36,7 @@ const state = {
   runProgress: null,
   runStopping: false,
   formulaEditor: {
-    steps: [], editingId: null, paletteExpanded: true, expression: null, expressionSelection: null, expressionDrag: null,
+    steps: [], editingId: null, paletteExpanded: true, paletteGroup: '基础运算', expression: null, expressionSelection: null, expressionDrag: null,
     activeOutput: 'loss', outputExpressions: {loss: null}, inputSchemas: {}, parameterSchemas: {}, outputSchemas: {},
     parameterStates: {},
   },
@@ -3064,7 +3064,7 @@ function formulaEditorCandidates() {
 // operations in their own visible groups instead of collapsing them into the
 // generic "基础" bucket.
 const FORMULA_EDITOR_GROUPS = ['基础', '函数', '归约', '形状', '条件', '索引', '线性代数', '概率', '概率 / Loss', '更多'];
-const FORMULA_EDITOR_KIND_GROUPS = ['基础运算', '特殊运算', '公式模板'];
+const FORMULA_EDITOR_KIND_GROUPS = ['基础运算', '进阶运算', '公式模板'];
 function formulaEditorGroup(info) {
   const declaredGroup = String(info?.formula_group || '').trim();
   if (FORMULA_EDITOR_GROUPS.includes(declaredGroup)) return declaredGroup;
@@ -3075,9 +3075,9 @@ function formulaEditorGroup(info) {
 function formulaEditorKindGroup(info) {
   const kind = String(info?.formula_kind || '');
   if (kind === 'primitive') return '基础运算';
-  if (kind === 'special') return '特殊运算';
+  if (kind === 'special') return '进阶运算';
   if (kind === 'composite') return '公式模板';
-  return '特殊运算';
+  return '进阶运算';
 }
 
 function formulaDefinitionForBlock(info) {
@@ -4023,6 +4023,14 @@ function pruneExpressionNode(root, target) {
         root.items.splice(Number(name.slice(1)) - 1, 1);
         return root;
       }
+      const parentInfo = root.kind === 'operation' ? blockInfo(root.block) : null;
+      if (parentInfo?.params?.[name]?.type === 'slot' && parentInfo.params[name].required === false && !isOutputSlot(name)) {
+        // Removing an optional input disconnects that branch while keeping
+        // the surrounding operation intact.  Required operands still use
+        // the existing expression-pruning behaviour below.
+        delete root.bindings[name];
+        return root;
+      }
       const siblings = entries.filter(([key]) => key !== name).map(([, value]) => value).filter(Boolean);
       if (siblings.length) return siblings[0];
       return null;
@@ -4105,6 +4113,20 @@ function expressionOperationNode(info, selected = null, current = null) {
     }
   });
   return {kind: 'operation', block: info.id, bindings, parameters};
+}
+
+function addOptionalExpressionInput(node, slotName) {
+  if (!node || node.kind !== 'operation') return false;
+  const info = blockInfo(node.block);
+  const schema = info?.params?.[slotName];
+  if (!schema || schema.type !== 'slot' || schema.required !== false || isOutputSlot(slotName)) return false;
+  if (node.bindings?.[slotName]) return false;
+  node.bindings = node.bindings || {};
+  node.bindings[slotName] = expressionHole();
+  state.formulaEditor.expressionSelection = node.bindings[slotName];
+  syncFormulaStepsFromExpression();
+  renderFormulaEditor();
+  return true;
 }
 
 function addExpressionOperation(blockId) {
@@ -4241,6 +4263,24 @@ function renderFormulaExpressionActions() {
   const selectedInfo = selected.kind === 'operation' ? blockInfo(selected.block) : null;
   if (selectedInfo?.formula_kind === 'composite' && formulaDefinitionForBlock(selectedInfo)) {
     const expand = document.createElement('button'); expand.type = 'button'; expand.textContent = '展开后编辑'; expand.title = '把公式模板替换为它的基础运算链'; expand.onclick = () => expandCompositeExpression(selected); container.appendChild(expand);
+  }
+  if (selectedInfo?.params) {
+    const optionalSlots = Object.entries(selectedInfo.params)
+      .filter(([name, schema]) => schema?.type === 'slot' && schema.required === false && !isOutputSlot(name) && !selected.bindings?.[name]);
+    if (optionalSlots.length) {
+      const optionalLabel = document.createElement('span');
+      optionalLabel.className = 'formula-optional-input-label';
+      optionalLabel.textContent = '添加可选输入：';
+      container.appendChild(optionalLabel);
+    }
+    optionalSlots.forEach(([name]) => {
+      const add = document.createElement('button');
+      add.type = 'button';
+      add.textContent = `＋ ${name}`;
+      add.title = `连接可选输入 ${name}`;
+      add.onclick = () => addOptionalExpressionInput(selected, name);
+      container.appendChild(add);
+    });
   }
   const replace = document.createElement('select'); replace.title = '替换当前节点';
   const replacementGroups = [
@@ -4575,45 +4615,67 @@ function renderFormulaEditor() {
       if (!groups.has(group)) groups.set(group, []);
       groups.get(group).push(info);
     });
-    groups.forEach((items, groupName) => {
-      if (!items.length) return;
-      const group = document.createElement('details');
-      group.className = 'formula-operation-group';
-      group.open = true;
-      const groupSummary = document.createElement('summary');
-      groupSummary.textContent = `${groupName}（${items.length}）`;
-      const groupBody = document.createElement('div');
-      groupBody.className = 'formula-operation-group-body';
-      const appendOperation = (info) => {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'formula-palette-block';
-        const name = document.createElement('strong');
-        name.textContent = info.name;
-        button.appendChild(name);
-        const formula = document.createElement('div');
-        formula.className = 'formula-palette-formula';
-        renderFormulaOrIntro(formula, info, {compact: true});
-        button.appendChild(formula);
-        button.title = info.description || '点击插入这个数学运算';
-        button.onclick = () => addExpressionOperation(info.id);
-        groupBody.appendChild(button);
-      };
-      if (groupName === '基础运算') {
-        const subgroups = new Map(FORMULA_EDITOR_GROUPS.map((name) => [name, []]));
-        items.forEach((info) => { const name = formulaEditorGroup(info); if (!subgroups.has(name)) subgroups.set(name, []); subgroups.get(name).push(info); });
-        subgroups.forEach((subitems, subgroupName) => {
-          if (!subitems.length) return;
-          const subgroup = document.createElement('details'); subgroup.className = 'formula-operation-subgroup'; subgroup.open = true;
-          subgroup.appendChild(Object.assign(document.createElement('summary'), {textContent: `${subgroupName}（${subitems.length}）`}));
-          const subgroupBody = document.createElement('div'); subgroupBody.className = 'formula-operation-subgroup-body';
-          subitems.forEach((info) => { const previous = groupBody.children.length; appendOperation(info); subgroupBody.appendChild(groupBody.children[previous]); });
-          subgroup.appendChild(subgroupBody); groupBody.appendChild(subgroup);
-        });
-      } else items.forEach(appendOperation);
-      group.append(groupSummary, groupBody);
-      body.appendChild(group);
+    const visibleGroups = [...groups.entries()].filter(([, items]) => items.length);
+    const activeGroupName = groups.has(state.formulaEditor.paletteGroup) && groups.get(state.formulaEditor.paletteGroup).length
+      ? state.formulaEditor.paletteGroup
+      : (visibleGroups[0]?.[0] || '基础运算');
+    state.formulaEditor.paletteGroup = activeGroupName;
+    const tabs = document.createElement('div');
+    tabs.className = 'formula-palette-tabs';
+    visibleGroups.forEach(([groupName, items]) => {
+      const tab = document.createElement('button');
+      tab.type = 'button';
+      tab.className = `formula-palette-tab${groupName === activeGroupName ? ' active' : ''}`;
+      tab.textContent = `${groupName}（${items.length}）`;
+      tab.title = `查看${groupName}中的运算`;
+      tab.onclick = () => { state.formulaEditor.paletteGroup = groupName; renderFormulaEditor(); };
+      tabs.appendChild(tab);
     });
+    body.appendChild(tabs);
+    const activeItems = groups.get(activeGroupName) || [];
+    const module = document.createElement('div');
+    module.className = 'formula-palette-module';
+    const moduleHeading = document.createElement('div');
+    moduleHeading.className = 'formula-palette-module-heading';
+    moduleHeading.textContent = `${activeGroupName}运算`;
+    module.appendChild(moduleHeading);
+    const group = document.createElement('details');
+    group.className = 'formula-operation-group';
+    group.open = true;
+    const groupSummary = document.createElement('summary');
+    groupSummary.textContent = `${activeGroupName}（${activeItems.length}）`;
+    const groupBody = document.createElement('div');
+    groupBody.className = 'formula-operation-group-body';
+    const appendOperation = (info, parent = groupBody) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'formula-palette-block';
+      const name = document.createElement('strong');
+      name.textContent = info.name;
+      button.appendChild(name);
+      const formula = document.createElement('div');
+      formula.className = 'formula-palette-formula';
+      renderFormulaOrIntro(formula, info, {compact: true});
+      button.appendChild(formula);
+      button.title = info.description || '点击插入这个数学运算';
+      button.onclick = () => addExpressionOperation(info.id);
+      parent.appendChild(button);
+    };
+    if (activeGroupName === '基础运算') {
+      const subgroups = new Map(FORMULA_EDITOR_GROUPS.map((name) => [name, []]));
+      activeItems.forEach((info) => { const name = formulaEditorGroup(info); if (!subgroups.has(name)) subgroups.set(name, []); subgroups.get(name).push(info); });
+      subgroups.forEach((subitems, subgroupName) => {
+        if (!subitems.length) return;
+        const subgroup = document.createElement('details'); subgroup.className = 'formula-operation-subgroup'; subgroup.open = true;
+        subgroup.appendChild(Object.assign(document.createElement('summary'), {textContent: `${subgroupName}（${subitems.length}）`}));
+        const subgroupBody = document.createElement('div'); subgroupBody.className = 'formula-operation-subgroup-body';
+        subitems.forEach((info) => appendOperation(info, subgroupBody));
+        subgroup.appendChild(subgroupBody); groupBody.appendChild(subgroup);
+      });
+    } else activeItems.forEach((info) => appendOperation(info));
+    group.append(groupSummary, groupBody);
+    module.appendChild(group);
+    body.appendChild(module);
     disclosure.append(summary, body);
     editorPalette.appendChild(disclosure);
   }
@@ -4668,7 +4730,7 @@ function renderFormulaEditor() {
 }
 
 function resetFormulaEditor() {
-  state.formulaEditor.steps = []; state.formulaEditor.expression = null; state.formulaEditor.expressionSelection = null; state.formulaEditor.editingId = null; state.formulaEditor.paletteExpanded = true; state.formulaEditor.parameterStates = {};
+  state.formulaEditor.steps = []; state.formulaEditor.expression = null; state.formulaEditor.expressionSelection = null; state.formulaEditor.editingId = null; state.formulaEditor.paletteExpanded = true; state.formulaEditor.paletteGroup = '基础运算'; state.formulaEditor.parameterStates = {};
   state.formulaEditor.activeOutput = 'loss'; state.formulaEditor.outputExpressions = {loss: null}; state.formulaEditor.outputSchemas = {};
   state.formulaEditor.inputSchemas = {logits: {description: '', type: 'tensor'}, targets: {description: '', type: 'labels'}};
   state.formulaEditor.parameterSchemas = {epsilon: {type: 'float', default: 1e-8}};

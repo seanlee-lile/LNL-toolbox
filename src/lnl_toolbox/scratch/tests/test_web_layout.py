@@ -104,6 +104,9 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
         self.assertIn("FORMULA_EDITOR_GROUPS", javascript)
         self.assertIn("formulaEditorGroup(info)", javascript)
         self.assertIn("formula-operation-group", javascript)
+        self.assertIn("formula-palette-tabs", javascript)
+        self.assertIn("state.formulaEditor.paletteGroup", javascript)
+        self.assertIn("FORMULA_EDITOR_KIND_GROUPS = ['基础运算', '进阶运算', '公式模板']", javascript)
         self.assertIn("disclosure.append(summary, body)", javascript)
         self.assertIn("已添加步骤：${id}", javascript)
         self.assertIn("while (state.formulaEditor.steps.some", javascript)
@@ -117,6 +120,9 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
         self.assertIn('id="formula-editor-advanced"', html)
         self.assertNotIn('id="formula-editor-advanced" class="formula-editor-advanced" open', html)
         self.assertIn('class="formula-editor-side-details"', html)
+        self.assertIn('class="formula-editor-side formula-editor-section"', html)
+        self.assertIn('class="formula-editor-section formula-editor-meta"', html)
+        self.assertIn('class="formula-editor-section formula-parameters-section"', html)
         self.assertIn('class="formula-editor-advanced-inline"', html)
         self.assertIn('id="formula-input-fields"', html)
         self.assertIn('id="formula-add-input"', html)
@@ -155,6 +161,8 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
         self.assertIn(".formula-canvas", css)
         self.assertIn(".formula-parameter-row", css)
         self.assertIn(".formula-editor-palette { align-self: stretch;", css)
+        self.assertIn(".formula-editor-dialog { width: min(1580px", css)
+        self.assertIn(".formula-palette-tabs", css)
         self.assertIn("overflow-y: auto", css)
 
     def test_inspector_and_main_columns_are_viewport_bounded(self) -> None:

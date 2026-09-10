@@ -159,6 +159,32 @@ if (Object.prototype.hasOwnProperty.call(replacement.bindings, 'mask')) throw ne
 """
         )
 
+    def test_optional_input_button_selects_masked_composite_variant(self) -> None:
+        self.run_node(
+            """
+const mse = {id: 'mean_squared_error', name: 'Mean Squared Error', formula_kind: 'composite', formula_ref: 'builtin/mean_squared_error', requires: ['predicted', 'target'], params: {
+  predicted: {type: 'slot'}, target: {type: 'slot'}, mask: {type: 'slot', required: false, default: 'mask'},
+  reduction: {type: 'enum', default: 'scalar'}, save_as: {type: 'slot'},
+}};
+state.blocks = [mse];
+const node = expressionOperationNode(mse);
+node.bindings.predicted = expressionInput('predicted');
+node.bindings.target = expressionInput('target');
+state.formulaEditor.expression = node;
+state.formulaEditor.expressionSelection = node;
+if (!addOptionalExpressionInput(node, 'mask')) throw new Error('optional input button did not create a binding hole');
+if (node.bindings.mask?.kind !== 'hole') throw new Error('optional input was not created as a hole');
+node.bindings.mask = expressionInput('mask');
+const spec = {inputs: {predicted: {}, target: {}, mask: {type: 'mask', required: false}}, parameters: {reduction: {default: 'scalar'}}, variants: [
+  {name: 'masked_scalar', when: {mask: '__present__', reduction: 'scalar'}, steps: [{id: 'selected_indices', block: 'mask_to_indices'}]},
+]};
+const selected = formulaVariantForExpression(spec, node);
+if (!selected || selected.name !== 'masked_scalar' || !selected.steps.some((step) => step.block === 'mask_to_indices')) throw new Error('connected mask did not select the masked Variant');
+const kept = pruneExpressionNode(node, node.bindings.mask);
+if (kept !== node || Object.prototype.hasOwnProperty.call(node.bindings, 'mask')) throw new Error('removing optional input did not disconnect only that binding');
+"""
+        )
+
     def test_new_operation_focuses_the_next_hole_for_symbol_insertion(self) -> None:
         self.run_node(
             """
