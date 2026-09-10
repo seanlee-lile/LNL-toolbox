@@ -1,6 +1,10 @@
 id: builtin/masked_mean
 name: Masked Mean
 description: Convert a boolean selection to indices and average the selected values.
+metadata:
+  oracle_branches:
+    denominator: "selected or batch"
+    empty: "zero or error"
 inputs:
   values: {type: tensor}
   mask: {type: mask}

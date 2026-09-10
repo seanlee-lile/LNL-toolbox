@@ -60,6 +60,7 @@ def _class_labels(value: Any, classes: int, *, device: Any, slot: str) -> Any:
     params={
         "logits": {"type": "slot", "default": "logits"},
         "labels": {"type": "slot", "default": "labels"},
+        "epsilon": {"type": "float", "default": 1e-12, "min": 0.0},
         "save_as": {"type": "slot", "default": "loss_per_sample"},
     },
     requires=("logits", "labels"),
@@ -71,12 +72,16 @@ def per_sample_ce(
     ctx: ScratchContext,
     logits: str = "logits",
     labels: str = "labels",
+    epsilon: float = 1e-12,
     save_as: str = "loss_per_sample",
 ) -> None:
     torch, F = _torch()
     scores = ctx[logits]
     targets = _class_labels(ctx[labels], scores.shape[-1], device=scores.device, slot=labels)
-    _save_loss(ctx, F.cross_entropy(scores, targets, reduction="none"), save_as)
+    # Keep the explicit floor visible to the formula layer while preserving
+    # the ordinary CE result for finite logits.
+    probabilities = F.softmax(scores, dim=-1).clamp_min(float(epsilon))
+    _save_loss(ctx, -probabilities.log().gather(1, targets.view(-1, 1)).squeeze(1), save_as)
 
 
 @block(
@@ -275,6 +280,7 @@ def mae_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels"
     params={
         "logits": {"type": "slot", "default": "logits"},
         "labels": {"type": "slot", "default": "labels"},
+        "epsilon": {"type": "float", "default": 1e-12, "min": 0.0},
         "save_as": {"type": "slot", "default": "loss_per_sample"},
     },
     requires=("logits", "labels"),
@@ -284,13 +290,13 @@ def mae_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels"
     formula_ref="builtin/nce_loss",
     paper="Normalized Loss Functions for Deep Learning with Noisy Labels",
 )
-def nce_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", save_as: str = "loss_per_sample") -> None:
+def nce_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", epsilon: float = 1e-12, save_as: str = "loss_per_sample") -> None:
     torch, F = _torch()
     scores = ctx[logits]
     log_probabilities = F.log_softmax(scores, dim=-1)
     target_labels = _class_labels(ctx[labels], scores.shape[-1], device=scores.device, slot=labels)
     ce = -log_probabilities.gather(1, target_labels.view(-1, 1)).squeeze(1)
-    _save_loss(ctx, ce / (-log_probabilities).sum(dim=1).clamp_min(1e-12), save_as)
+    _save_loss(ctx, ce / (-log_probabilities).sum(dim=1).clamp_min(float(epsilon)), save_as)
 
 
 @block(

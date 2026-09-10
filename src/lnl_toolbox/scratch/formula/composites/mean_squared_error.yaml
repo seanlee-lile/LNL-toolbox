@@ -1,6 +1,10 @@
 id: builtin/mean_squared_error
 name: Mean Squared Error
 description: Elementwise subtraction, power and global mean.
+metadata:
+  oracle_branches:
+    mask: "optional slot name; select rows before the reduction"
+    reduction: "per_sample or scalar"
 inputs:
   predicted: {type: tensor}
   target: {type: tensor}

@@ -650,14 +650,15 @@ def nonnegative_projection(ctx: ScratchContext, input: str = "gradient", negate:
     name="Normalize Nonnegative Weights",
     category="Weighting",
     description="Normalize nonnegative weights to sum to one while preserving the all-zero case.",
-    params={"weights": {"type": "slot", "default": "nonnegative_values"}, "save_as": {"type": "slot", "default": "weights"}},
+    params={"weights": {"type": "slot", "default": "nonnegative_values"}, "epsilon": {"type": "float", "default": 1e-12, "min": 0.0}, "save_as": {"type": "slot", "default": "weights"}},
     requires=("weights",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑥ 后验与权重",
     formula="w=wbar/sum(wbar)", formula_ref="builtin/normalize_nonnegative_weights", formula_kind="composite",
 )
-def normalize_nonnegative_weights(ctx: ScratchContext, weights: str = "nonnegative_values", save_as: str = "weights") -> None:
+def normalize_nonnegative_weights(ctx: ScratchContext, weights: str = "nonnegative_values", epsilon: float = 1e-12, save_as: str = "weights") -> None:
     values = ctx[weights]
     total = values.sum()
-    ctx[save_as] = values / total if bool(total > 0) else __import__("torch").zeros_like(values)
+    denominator = total.clamp_min(float(epsilon))
+    ctx[save_as] = values / denominator if bool(total > 0) else __import__("torch").zeros_like(values)
 
 
 @block(
@@ -710,13 +711,13 @@ def weighted_blend(ctx: ScratchContext, left: str = "left", right: str = "right"
     name="Sharpen Distribution",
     category="Tensor Operation",
     description="Apply temperature sharpening and renormalize a class distribution.",
-    params={"input": {"type": "slot", "default": "targets"}, "temperature": {"type": "float", "default": 0.5, "min": 0.0001}, "save_as": {"type": "slot", "default": "sharpened"}},
+    params={"input": {"type": "slot", "default": "targets"}, "temperature": {"type": "float", "default": 0.5, "min": 0.0001}, "epsilon": {"type": "float", "default": 1e-12, "min": 0.0}, "save_as": {"type": "slot", "default": "sharpened"}},
     requires=("input",), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
     formula="q'_c=q_c^(1/T)/Σ_j q_j^(1/T)", formula_ref="builtin/sharpen_distribution", formula_kind="composite",
 )
-def sharpen_distribution(ctx: ScratchContext, input: str = "targets", temperature: float = 0.5, save_as: str = "sharpened") -> None:
+def sharpen_distribution(ctx: ScratchContext, input: str = "targets", temperature: float = 0.5, epsilon: float = 1e-12, save_as: str = "sharpened") -> None:
     values = ctx[input].clamp_min(0).pow(1.0 / float(temperature))
-    ctx[save_as] = values / values.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+    ctx[save_as] = values / values.sum(dim=-1, keepdim=True).clamp_min(float(epsilon))
 
 
 @block(
@@ -806,14 +807,14 @@ def positive_logdet(ctx: ScratchContext, matrix: str = "matrix", save_as: str = 
     name="Compose Transition Matrices",
     category="Transition",
     description="Compose two row-stochastic transition matrices and normalize each output row.",
-    params={"first": {"type": "slot", "default": "transition_a"}, "second": {"type": "slot", "default": "transition_b"}, "save_as": {"type": "slot", "default": "composed_transition"}},
+    params={"first": {"type": "slot", "default": "transition_a"}, "second": {"type": "slot", "default": "transition_b"}, "epsilon": {"type": "float", "default": 1e-12, "min": 0.0}, "save_as": {"type": "slot", "default": "composed_transition"}},
     requires=("first", "second"), provides=("save_as",), placement=("top", "batch"), stage="setup", ui_group="⑥ 后验与权重",
     formula="T=T_1T_2; row-normalize(T)", formula_ref="builtin/compose_transition", formula_kind="composite",
 )
-def compose_transition(ctx: ScratchContext, first: str = "transition_a", second: str = "transition_b", save_as: str = "composed_transition") -> None:
+def compose_transition(ctx: ScratchContext, first: str = "transition_a", second: str = "transition_b", epsilon: float = 1e-12, save_as: str = "composed_transition") -> None:
     matrix = ctx[first] @ ctx[second]
     torch = __import__("torch")
-    ctx[save_as] = matrix / matrix.sum(dim=-1, keepdim=True).clamp_min(torch.finfo(matrix.dtype).tiny)
+    ctx[save_as] = matrix / matrix.sum(dim=-1, keepdim=True).clamp_min(float(epsilon))
 
 
 @block(
@@ -889,11 +890,11 @@ def compose_revision_transition(ctx: ScratchContext, transition: str = "transiti
     name="Prior KL Regularizer",
     category="Loss",
     description="Match the batch mean prediction to an explicit class prior.",
-    params={"probabilities": {"type": "slot", "default": "probabilities"}, "prior": {"type": "slot", "default": "prior"}, "save_as": {"type": "slot", "default": "loss"}},
+    params={"probabilities": {"type": "slot", "default": "probabilities"}, "prior": {"type": "slot", "default": "prior"}, "epsilon": {"type": "float", "default": 1e-12, "min": 0.0}, "save_as": {"type": "slot", "default": "loss"}},
     requires=("probabilities", "prior"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
     formula="D=Σ_cπ_c log(π_c/mean_i p_{i,c})", formula_ref="builtin/prior_kl", formula_kind="composite", formula_group="概率 / Loss",
 )
-def prior_kl(ctx: ScratchContext, probabilities: str = "probabilities", prior: str = "prior", save_as: str = "loss") -> None:
-    values = ctx[probabilities].mean(dim=0).clamp_min(1e-12)
-    target = ctx[prior].to(values).clamp_min(1e-12)
+def prior_kl(ctx: ScratchContext, probabilities: str = "probabilities", prior: str = "prior", epsilon: float = 1e-12, save_as: str = "loss") -> None:
+    values = ctx[probabilities].mean(dim=0).clamp_min(float(epsilon))
+    target = ctx[prior].to(values).clamp_min(float(epsilon))
     ctx[save_as] = (target * (target / values).log()).sum()

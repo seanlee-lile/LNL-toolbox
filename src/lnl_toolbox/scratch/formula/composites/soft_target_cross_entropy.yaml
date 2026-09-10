@@ -1,6 +1,10 @@
 id: builtin/soft_target_cross_entropy
 name: Soft-target Cross Entropy
 description: Negative probability-target weighted log-softmax reduced over classes.
+metadata:
+  oracle_branches:
+    mask: "optional slot name; select rows before the reduction"
+    reduction: "per_sample or mean"
 inputs:
   logits: {type: tensor}
   targets: {type: probability}

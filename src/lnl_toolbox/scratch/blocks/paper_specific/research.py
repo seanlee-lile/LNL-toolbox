@@ -797,8 +797,8 @@ def fine_scr_reweight(ctx: ScratchContext, state: str = "fine_state", snapshot: 
     description="Compute the paper's warm-up cross entropy before SED robust training.",
     params={"logits": {"type": "slot", "default": "logits"}, "labels": {"type": "slot", "default": "labels"}, "save_as": {"type": "slot", "default": "loss"}},
     requires=("logits", "labels"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑤ 损失公式",
-    formula="L_warmup=CE(f(x),y~)", formula_kind="special",
-    formula_ref="FINE official warm-up objective",
+    formula="L_warmup=mean_i[-log softmax(f(x_i))_{y~_i}]", formula_kind="composite",
+    formula_ref="builtin/fine_warmup_loss",
     paper="FINE: Filtering Noise in the Feature Space for Robust Learning with Noisy Labels",
 )
 def fine_warmup_loss(ctx: ScratchContext, logits: str = "logits", labels: str = "labels", save_as: str = "loss") -> None:

@@ -1683,6 +1683,7 @@ const DISPLAY_FORMULAS = Object.freeze({
   formula__builtin__standard_ce: String.raw`\mathcal{L}=\frac{1}{N}\sum_i-\log p_{i,y_i},\ p_i=\operatorname{softmax}(z_i)`,
   formula__builtin__transition_corrected_risk: String.raw`\mathcal{L}=\frac{1}{N}\sum_i-\log[(p_iT_i)_{y_i}],\ p_i=\operatorname{softmax}(z_i)`,
   formula__builtin__weighted_ce: String.raw`\mathcal{L}=\frac{1}{N}\sum_i w_i[-\log p_{i,y_i}],\ p_i=\operatorname{softmax}(z_i)`,
+  formula__builtin__fine_warmup_loss: String.raw`L_{\mathrm{warmup}}=\frac{1}{N}\sum_i-\log p_{i,\tilde{y}_i}`,
   softmax: String.raw`p_{i,c}=\frac{\exp(z_{i,c}/\tau)}{\sum_j\exp(z_{i,j}/\tau)},\ \tau>0`,
   cal_cores2_adjusted_risk: String.raw`\mathcal{L}=\frac{1}{N}\sum_i\left[-\log p_{i,y_i}-\alpha\sum_c\bar{\pi}_c\log p_{i,c}\right],\ \bar{\pi}_c=\frac{\sqrt{\pi_c}}{\sum_j\sqrt{\pi_j}}`,
   cal_covariance_correction: String.raw`\Delta=\sum_c\hat{\pi}_c\sum_j\operatorname{Cov}\left(1[\tilde{y}=j],\ell_j\mid\hat{y}=c\right)`,
@@ -3048,7 +3049,10 @@ function formulaEditorCandidates() {
     .sort((a, b) => `${a.formula_group || a.category}:${a.name}`.localeCompare(`${b.formula_group || b.category}:${b.name}`));
 }
 
-const FORMULA_EDITOR_GROUPS = ['基础', '函数', '归约', '概率 / Loss', '更多'];
+// Formula palette groups come from Block metadata.  Keep structural math
+// operations in their own visible groups instead of collapsing them into the
+// generic "基础" bucket.
+const FORMULA_EDITOR_GROUPS = ['基础', '函数', '归约', '形状', '条件', '索引', '线性代数', '概率', '概率 / Loss', '更多'];
 const FORMULA_EDITOR_KIND_GROUPS = ['基础运算', '特殊运算', '公式模板'];
 function formulaEditorGroup(info) {
   const declaredGroup = String(info?.formula_group || '').trim();

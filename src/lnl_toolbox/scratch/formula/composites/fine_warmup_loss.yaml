@@ -1,0 +1,21 @@
+id: builtin/fine_warmup_loss
+name: FINE Warm-up Cross Entropy
+description: Ordinary observed-label cross entropy used during FINE warm-up.
+inputs:
+  logits: {type: tensor}
+  labels: {type: labels}
+steps:
+  - id: log_probabilities
+    block: log_softmax
+    bindings: {logits: logits}
+  - id: target_log_probability
+    block: gather_by_label
+    bindings: {values: log_probabilities, labels: labels}
+  - id: per_sample_loss
+    block: negate
+    bindings: {input: target_log_probability}
+  - id: mean_loss
+    block: reduce_mean
+    bindings: {input: per_sample_loss}
+outputs:
+  loss: {source: mean_loss}

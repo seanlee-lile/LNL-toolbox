@@ -24,7 +24,7 @@ from .composites import (
     list_composite_formulas,
     register_composite_formulas,
 )
-from .audit import formula_classification, formula_closure, write_formula_audit
+from .audit import composite_parameter_coverage, formula_classification, formula_closure, special_audit, write_formula_audit
 from .runtime import execute_formula, formula_hash
 from .schema import (
     FormulaInputSpec,
@@ -61,5 +61,7 @@ __all__ = [
     "register_composite_formulas",
     "formula_classification",
     "formula_closure",
+    "special_audit",
+    "composite_parameter_coverage",
     "write_formula_audit",
 ]

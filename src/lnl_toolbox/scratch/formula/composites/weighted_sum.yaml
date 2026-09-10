@@ -1,6 +1,12 @@
 id: builtin/weighted_sum
 name: Weighted Sum
 description: Two explicit terms combined by scalar weights.
+metadata:
+  oracle_branches:
+    terms: "variadic term-slot list supported by the Python oracle"
+    weights: "one scalar weight per term"
+    weight_a: "first two-term weight exposed by the FormulaSpec"
+    weight_b: "second two-term weight exposed by the FormulaSpec"
 inputs:
   a: {type: tensor}
   b: {type: tensor}

@@ -16,6 +16,18 @@ def _execute_block(block_id: str, context: dict, **params):
 
 
 class FormulaCompositeEquivalenceTest(unittest.TestCase):
+    def _assert_formula_matches_block(self, block_id, formula_id, context, block_params, formula_params, input_bindings=None, output_name="result"):
+        direct_context = _execute_block(block_id, context, save_as=output_name, **block_params)
+        formula_context = ScratchContext(dict(context))
+        execute_formula(
+            get_formula(formula_id),
+            formula_context,
+            parameter_values=formula_params,
+            input_bindings=input_bindings,
+            output_bindings={next(iter(get_formula(formula_id).outputs)): output_name},
+        )
+        torch.testing.assert_close(direct_context[output_name], formula_context[output_name], atol=1e-6, rtol=1e-6)
+
     def test_negative_log_value_and_gradient(self) -> None:
         values = torch.tensor([0.2, 0.7], dtype=torch.float64)
         direct_input = values.clone().requires_grad_()
@@ -116,6 +128,148 @@ class FormulaCompositeEquivalenceTest(unittest.TestCase):
         }
         execute_formula(formula, context)
         torch.testing.assert_close(context["y"], torch.tensor([3.0, 4.0]))
+
+    def test_numeric_parameter_branches_match_the_composite_definitions(self) -> None:
+        """Exercise non-default numeric controls instead of checking metadata only."""
+        values = torch.tensor([0.0, 0.25, 0.75], dtype=torch.float64)
+        self._assert_formula_matches_block("negative_log", "builtin/negative_log", {"x": values}, {"input": "x", "minimum": 1e-4}, {"epsilon": 1e-4}, {"x": "x"})
+        numerator = torch.tensor([1.0, 2.0], dtype=torch.float64)
+        denominator = torch.tensor([0.0, 4.0], dtype=torch.float64)
+        self._assert_formula_matches_block("safe_divide", "builtin/safe_divide", {"n": numerator, "d": denominator}, {"numerator": "n", "denominator": "d", "minimum": 0.25}, {"epsilon": 0.25}, {"numerator": "n", "denominator": "d"})
+        matrix = torch.tensor([[1.0, 3.0], [2.0, 2.0]], dtype=torch.float64)
+        self._assert_formula_matches_block("row_normalize", "builtin/row_normalize", {"matrix": matrix}, {"input": "matrix", "minimum": 0.5}, {"epsilon": 0.5}, {"x": "matrix"})
+        probabilities = torch.tensor([[0.2, 0.8], [0.6, 0.4]], dtype=torch.float64)
+        self._assert_formula_matches_block("sharpen_distribution", "builtin/sharpen_distribution", {"p": probabilities}, {"input": "p", "temperature": 0.8, "epsilon": 1e-6}, {"temperature": 0.8, "epsilon": 1e-6}, {"probabilities": "p"})
+        weights = torch.tensor([0.0, 2.0, 3.0], dtype=torch.float64)
+        self._assert_formula_matches_block("normalize_nonnegative_weights", "builtin/normalize_nonnegative_weights", {"w": weights}, {"weights": "w", "epsilon": 0.25}, {"epsilon": 0.25}, {"weights": "w"})
+        first = torch.tensor([[0.8, 0.2], [0.1, 0.9]], dtype=torch.float64)
+        second = torch.tensor([[0.7, 0.3], [0.4, 0.6]], dtype=torch.float64)
+        self._assert_formula_matches_block("compose_transition", "builtin/compose_transition", {"a": first, "b": second}, {"first": "a", "second": "b", "epsilon": 1e-6}, {"epsilon": 1e-6}, {"first": "a", "second": "b"})
+        logits = torch.tensor([[1.0, -1.0], [-0.2, 0.8]], dtype=torch.float64)
+        labels = torch.tensor([0, 1])
+        self._assert_formula_matches_block("per_sample_ce", "builtin/per_sample_ce", {"z": logits, "y": labels}, {"logits": "z", "labels": "y", "epsilon": 1e-6}, {"epsilon": 1e-6}, {"logits": "z", "labels": "y"})
+        self._assert_formula_matches_block("nce_loss", "builtin/nce_loss", {"z": logits, "y": labels}, {"logits": "z", "labels": "y", "epsilon": 1e-6}, {"epsilon": 1e-6}, {"logits": "z", "labels": "y"})
+        probabilities = torch.tensor([[0.3, 0.7], [0.8, 0.2]], dtype=torch.float64)
+        prior = torch.tensor([0.55, 0.45], dtype=torch.float64)
+        self._assert_formula_matches_block("prior_kl", "builtin/prior_kl", {"p": probabilities, "q": prior}, {"probabilities": "p", "prior": "q", "epsilon": 1e-6}, {"epsilon": 1e-6}, {"probabilities": "p", "prior": "q"})
+        left = torch.ones((2, 2), dtype=torch.float64)
+        right = torch.full((2, 2), 3.0, dtype=torch.float64)
+        blend_weight = torch.tensor([0.2, 0.8], dtype=torch.float64)
+        self._assert_formula_matches_block("weighted_blend", "builtin/weighted_blend", {"l": left, "r": right, "w": blend_weight}, {"left": "l", "right": "r", "weight": "w", "clamp_weight": True}, {}, {"left": "l", "right": "r", "weight": "w"}, output_name="blended")
+        a, b = torch.tensor([1.0, 2.0]), torch.tensor([3.0, 4.0])
+        self._assert_formula_matches_block("weighted_sum", "builtin/weighted_sum", {"a": a, "b": b}, {"terms": ["a", "b"], "weights": [0.25, 0.75]}, {"weight_a": 0.25, "weight_b": 0.75}, {"a": "a", "b": "b"}, output_name="result")
+
+    def test_dispatch_branches_have_explicit_compositions(self) -> None:
+        """Exercise mask/reduction/variadic branches with visible step chains."""
+        predicted = torch.tensor([[1.0, 2.0], [5.0, 7.0], [2.0, 1.0]])
+        target = torch.tensor([[0.0, 1.0], [4.0, 8.0], [2.0, 3.0]])
+        mask = torch.tensor([True, False, True])
+        direct = _execute_block(
+            "mean_squared_error",
+            {"predicted": predicted, "target": target, "mask": mask},
+            predicted="predicted", target="target", mask="mask", reduction="per_sample", save_as="result",
+        )["result"]
+        masked_mse = {
+            "id": "user/test_masked_mse_branch", "name": "Masked MSE branch",
+            "inputs": {"predicted": {}, "target": {}, "mask": {}},
+            "steps": [
+                {"id": "selected_indices", "block": "mask_to_indices", "bindings": {"mask": "mask"}},
+                {"id": "selected_predicted", "block": "index_select", "bindings": {"input": "predicted", "indices": "selected_indices"}, "parameters": {"dim": 0}},
+                {"id": "selected_target", "block": "index_select", "bindings": {"input": "target", "indices": "selected_indices"}, "parameters": {"dim": 0}},
+                {"id": "difference", "block": "subtract", "bindings": {"minuend": "selected_predicted", "subtrahend": "selected_target"}},
+                {"id": "squared", "block": "elementwise_power", "bindings": {"input": "difference"}, "parameters": {"q": 2.0}},
+                {"id": "result", "block": "reduce_mean", "bindings": {"input": "squared"}, "parameters": {"dim": -1}},
+            ],
+            "outputs": {"loss": {"source": "result"}},
+        }
+        composed = ScratchContext({"predicted": predicted, "target": target, "mask": mask})
+        execute_formula(masked_mse, composed, output_bindings={"loss": "result"})
+        torch.testing.assert_close(direct, composed["result"])
+
+        logits = torch.tensor([[1.0, -1.0], [2.0, 0.0], [-1.0, 3.0]])
+        targets = torch.tensor([[1.0, 0.0], [0.0, 1.0], [0.25, 0.75]])
+        direct = _execute_block(
+            "soft_target_cross_entropy",
+            {"logits": logits, "targets": targets, "mask": mask},
+            logits="logits", targets="targets", mask="mask", reduction="per_sample", save_as="result",
+        )["result"]
+        masked_ce = {
+            "id": "user/test_masked_soft_ce_branch", "name": "Masked soft CE branch",
+            "inputs": {"logits": {}, "targets": {}, "mask": {}},
+            "steps": [
+                {"id": "selected_indices", "block": "mask_to_indices", "bindings": {"mask": "mask"}},
+                {"id": "selected_logits", "block": "index_select", "bindings": {"input": "logits", "indices": "selected_indices"}, "parameters": {"dim": 0}},
+                {"id": "selected_targets", "block": "index_select", "bindings": {"input": "targets", "indices": "selected_indices"}, "parameters": {"dim": 0}},
+                {"id": "log_probabilities", "block": "log_softmax", "bindings": {"logits": "selected_logits"}},
+                {"id": "weighted", "block": "elementwise_multiply", "bindings": {"left": "selected_targets", "right": "log_probabilities"}},
+                {"id": "class_sum", "block": "reduce_sum", "bindings": {"input": "weighted"}, "parameters": {"dim": -1}},
+                {"id": "result", "block": "negate", "bindings": {"input": "class_sum"}},
+            ],
+            "outputs": {"loss": {"source": "result"}},
+        }
+        composed = ScratchContext({"logits": logits, "targets": targets, "mask": mask})
+        execute_formula(masked_ce, composed, output_bindings={"loss": "result"})
+        torch.testing.assert_close(direct, composed["result"])
+
+        values = torch.tensor([1.0, 2.0, 4.0])
+        empty = torch.zeros(3, dtype=torch.bool)
+        direct_empty = _execute_block(
+            "masked_mean", {"values": values, "mask": empty}, values="values", mask="mask", denominator="selected", empty="zero", save_as="result",
+        )["result"]
+        self.assertEqual(float(direct_empty), 0.0)
+        direct_batch = _execute_block(
+            "masked_mean", {"values": values, "mask": mask}, values="values", mask="mask", denominator="batch", empty="zero", save_as="result",
+        )["result"]
+        self.assertAlmostEqual(float(direct_batch), float(values[mask].sum() / values.numel()))
+
+        left = torch.tensor([[1.0], [2.0]])
+        right = torch.tensor([[5.0], [7.0]])
+        weights = torch.tensor([1.5, -0.5])
+        direct = _execute_block(
+            "weighted_blend", {"left": left, "right": right, "weight": weights},
+            left="left", right="right", weight="weight", clamp_weight=False, save_as="result",
+        )["result"]
+        raw_blend = {
+            "id": "user/test_raw_blend_branch", "name": "Unclamped blend branch",
+            "inputs": {"left": {}, "right": {}, "weight": {}},
+            "steps": [
+                {"id": "one", "block": "ones_like", "bindings": {"input": "weight"}},
+                {"id": "one_minus_weight", "block": "subtract", "bindings": {"minuend": "one", "subtrahend": "weight"}},
+                {"id": "weight_row", "block": "unsqueeze", "bindings": {"input": "weight"}, "parameters": {"dim": -1}},
+                {"id": "one_minus_weight_row", "block": "unsqueeze", "bindings": {"input": "one_minus_weight"}, "parameters": {"dim": -1}},
+                {"id": "left_part", "block": "elementwise_multiply", "bindings": {"left": "weight_row", "right": "left"}},
+                {"id": "right_part", "block": "elementwise_multiply", "bindings": {"left": "one_minus_weight_row", "right": "right"}},
+                {"id": "result", "block": "add", "bindings": {"left": "left_part", "right": "right_part"}},
+            ],
+            "outputs": {"blended": {"source": "result"}},
+        }
+        composed = ScratchContext({"left": left, "right": right, "weight": weights})
+        execute_formula(raw_blend, composed, output_bindings={"blended": "result"})
+        torch.testing.assert_close(direct, composed["result"])
+
+        terms = [torch.tensor([1.0, 2.0]), torch.tensor([3.0, 4.0]), torch.tensor([5.0, 6.0])]
+        direct = _execute_block(
+            "weighted_sum", {"a": terms[0], "b": terms[1], "c": terms[2]},
+            terms=["a", "b", "c"], weights=[0.5, 1.0, -2.0], save_as="result",
+        )["result"]
+        variadic = {
+            "id": "user/test_variadic_weighted_sum", "name": "Variadic weighted sum",
+            "inputs": {"a": {}, "b": {}, "c": {}},
+            "steps": [
+                {"id": "wa", "block": "constant", "parameters": {"value": 0.5}},
+                {"id": "wb", "block": "constant", "parameters": {"value": 1.0}},
+                {"id": "wc", "block": "constant", "parameters": {"value": -2.0}},
+                {"id": "ta", "block": "elementwise_multiply", "bindings": {"left": "wa", "right": "a"}},
+                {"id": "tb", "block": "elementwise_multiply", "bindings": {"left": "wb", "right": "b"}},
+                {"id": "tc", "block": "elementwise_multiply", "bindings": {"left": "wc", "right": "c"}},
+                {"id": "ab", "block": "add", "bindings": {"left": "ta", "right": "tb"}},
+                {"id": "result", "block": "add", "bindings": {"left": "ab", "right": "tc"}},
+            ],
+            "outputs": {"result": {"source": "result"}},
+        }
+        composed = ScratchContext({"a": terms[0], "b": terms[1], "c": terms[2]})
+        execute_formula(variadic, composed)
+        torch.testing.assert_close(direct, composed["result"])
 
 
 if __name__ == "__main__":

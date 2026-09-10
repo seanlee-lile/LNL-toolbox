@@ -1,6 +1,9 @@
 id: builtin/weighted_blend
 name: Weighted Blend
 description: Blend two operands with an explicitly bounded sample weight.
+metadata:
+  oracle_branches:
+    clamp_weight: "true clamps weights to [0,1]; false preserves the supplied weights"
 inputs:
   left: {type: tensor}
   right: {type: tensor}
