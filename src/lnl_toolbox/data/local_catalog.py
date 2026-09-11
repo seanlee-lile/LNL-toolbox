@@ -9,10 +9,14 @@ toolbox never describes an untrained local source as training verified.
 
 from copy import deepcopy
 from dataclasses import dataclass
+from collections.abc import Callable
+from contextlib import contextmanager
 import hashlib
 import json
 import os
 from pathlib import Path
+from threading import RLock, get_ident
+import time
 from typing import Any, Mapping
 
 
@@ -118,8 +122,79 @@ class LocalDatasetRecord:
 
 
 class LocalDatasetCatalog:
+    _process_lock_guard = RLock()
+    _process_locks: dict[Path, RLock] = {}
+
     def __init__(self, path: str | Path | None = None) -> None:
         self.path = Path(path).expanduser().resolve() if path is not None else default_catalog_path()
+
+    @classmethod
+    def _process_lock(cls, path: Path) -> RLock:
+        with cls._process_lock_guard:
+            return cls._process_locks.setdefault(path, RLock())
+
+    @contextmanager
+    def _mutation_lock(self):
+        """Serialize catalog read/modify/write transactions across processes.
+
+        The web server handles requests in parallel, and users may also have
+        more than one console process open.  A fixed ``datasets.json.tmp``
+        filename made those writers collide with WinError 5/32.  The lock
+        file protects the transaction; ``_write_raw`` additionally uses a
+        unique temporary filename so an older process cannot collide with it.
+        """
+
+        process_lock = self._process_lock(self.path)
+        with process_lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+            deadline = time.monotonic() + 15.0
+            descriptor: int | None = None
+            while descriptor is None:
+                try:
+                    descriptor = os.open(
+                        lock_path,
+                        os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                    )
+                    os.write(descriptor, f"{os.getpid()}\n".encode("ascii"))
+                except FileExistsError:
+                    try:
+                        stale = time.time() - lock_path.stat().st_mtime > 120.0
+                    except FileNotFoundError:
+                        continue
+                    if stale:
+                        try:
+                            lock_path.unlink()
+                        except FileNotFoundError:
+                            pass
+                        continue
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"timed out waiting for dataset catalog lock: {self.path}")
+                    time.sleep(0.05)
+                except OSError:
+                    if descriptor is not None:
+                        os.close(descriptor)
+                        descriptor = None
+                    try:
+                        lock_path.unlink()
+                    except FileNotFoundError:
+                        pass
+                    raise
+            try:
+                yield
+            finally:
+                os.close(descriptor)
+                try:
+                    lock_path.unlink()
+                except FileNotFoundError:
+                    pass
+
+    def _update_raw(self, update: Callable[[dict[str, Any]], Any]) -> Any:
+        with self._mutation_lock():
+            raw = self._load_raw()
+            result = update(raw)
+            self._write_raw(raw)
+            return result
 
     def _load_raw(self) -> dict[str, Any]:
         if not self.path.is_file():
@@ -133,9 +208,17 @@ class LocalDatasetCatalog:
 
     def _write_raw(self, value: Mapping[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(self.path.suffix + ".tmp")
-        temporary.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
-        temporary.replace(self.path)
+        temporary = self.path.with_name(
+            f"{self.path.name}.{os.getpid()}.{get_ident()}.tmp"
+        )
+        try:
+            temporary.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
+            temporary.replace(self.path)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
 
     @staticmethod
     def _record(alias: str, value: Mapping[str, Any]) -> LocalDatasetRecord:
@@ -170,27 +253,29 @@ class LocalDatasetCatalog:
         for path_key in _SOURCE_KEYS:
             if payload.get(path_key) not in {None, ""}:
                 payload[path_key] = str(Path(str(payload[path_key])).expanduser().resolve())
-        raw = self._load_raw()
-        raw["datasets"][key] = {
-            "adapter": adapter_name,
-            "data": payload,
-            "state": "registered",
-            "evidence": None,
-            "error": None,
-            "profile": None,
-            "declarations": None,
-            "profile_fingerprint": None,
-        }
-        self._write_raw(raw)
+        def update(raw: dict[str, Any]) -> None:
+            raw["datasets"][key] = {
+                "adapter": adapter_name,
+                "data": payload,
+                "state": "registered",
+                "evidence": None,
+                "error": None,
+                "profile": None,
+                "declarations": None,
+                "profile_fingerprint": None,
+            }
+
+        self._update_raw(update)
         return self.get(key)
 
     def remove(self, alias: object) -> None:
         key = normalize_alias(alias)
-        raw = self._load_raw()
-        if key not in raw["datasets"]:
-            raise KeyError(f"local dataset is not registered: {key}")
-        del raw["datasets"][key]
-        self._write_raw(raw)
+        def update(raw: dict[str, Any]) -> None:
+            if key not in raw["datasets"]:
+                raise KeyError(f"local dataset is not registered: {key}")
+            del raw["datasets"][key]
+
+        self._update_raw(update)
 
     def _set_state(
         self,
@@ -201,13 +286,14 @@ class LocalDatasetCatalog:
         error: str | None = None,
     ) -> LocalDatasetRecord:
         key = normalize_alias(alias)
-        raw = self._load_raw()
-        if key not in raw["datasets"]:
-            raise KeyError(f"local dataset is not registered: {key}")
-        raw["datasets"][key]["state"] = state
-        raw["datasets"][key]["evidence"] = None if evidence is None else dict(evidence)
-        raw["datasets"][key]["error"] = error
-        self._write_raw(raw)
+        def update(raw: dict[str, Any]) -> None:
+            if key not in raw["datasets"]:
+                raise KeyError(f"local dataset is not registered: {key}")
+            raw["datasets"][key]["state"] = state
+            raw["datasets"][key]["evidence"] = None if evidence is None else dict(evidence)
+            raw["datasets"][key]["error"] = error
+
+        self._update_raw(update)
         return self.get(key)
 
     def mark_layout_validated(
@@ -217,23 +303,24 @@ class LocalDatasetCatalog:
         *,
         profile: Mapping[str, Any] | None = None,
     ) -> LocalDatasetRecord:
-        value = dict(evidence or {})
-        value["source_signature"] = self.get(alias).signature
         key = normalize_alias(alias)
-        raw = self._load_raw()
-        if key not in raw["datasets"]:
-            raise KeyError(f"local dataset is not registered: {key}")
-        raw["datasets"][key]["state"] = "layout_validated"
-        raw["datasets"][key]["evidence"] = value
-        raw["datasets"][key]["error"] = None
-        if profile is not None:
-            payload = deepcopy(dict(profile))
-            fingerprint = str(payload.get("fingerprint", "")).strip()
-            if len(fingerprint) != 64:
-                raise ValueError("dataset profile must include a SHA-256 fingerprint")
-            raw["datasets"][key]["profile"] = payload
-            raw["datasets"][key]["profile_fingerprint"] = fingerprint
-        self._write_raw(raw)
+        def update(raw: dict[str, Any]) -> None:
+            if key not in raw["datasets"]:
+                raise KeyError(f"local dataset is not registered: {key}")
+            value = dict(evidence or {})
+            value["source_signature"] = self._record(key, raw["datasets"][key]).signature
+            raw["datasets"][key]["state"] = "layout_validated"
+            raw["datasets"][key]["evidence"] = value
+            raw["datasets"][key]["error"] = None
+            if profile is not None:
+                payload = deepcopy(dict(profile))
+                fingerprint = str(payload.get("fingerprint", "")).strip()
+                if len(fingerprint) != 64:
+                    raise ValueError("dataset profile must include a SHA-256 fingerprint")
+                raw["datasets"][key]["profile"] = payload
+                raw["datasets"][key]["profile_fingerprint"] = fingerprint
+
+        self._update_raw(update)
         return self.get(key)
 
     def set_profile(
@@ -242,16 +329,17 @@ class LocalDatasetCatalog:
         profile: Mapping[str, Any],
     ) -> LocalDatasetRecord:
         key = normalize_alias(alias)
-        raw = self._load_raw()
-        if key not in raw["datasets"]:
-            raise KeyError(f"local dataset is not registered: {key}")
         payload = deepcopy(dict(profile))
         fingerprint = str(payload.get("fingerprint", "")).strip()
         if len(fingerprint) != 64:
             raise ValueError("dataset profile must include a SHA-256 fingerprint")
-        raw["datasets"][key]["profile"] = payload
-        raw["datasets"][key]["profile_fingerprint"] = fingerprint
-        self._write_raw(raw)
+        def update(raw: dict[str, Any]) -> None:
+            if key not in raw["datasets"]:
+                raise KeyError(f"local dataset is not registered: {key}")
+            raw["datasets"][key]["profile"] = payload
+            raw["datasets"][key]["profile_fingerprint"] = fingerprint
+
+        self._update_raw(update)
         return self.get(key)
 
     def set_declarations(
@@ -260,13 +348,14 @@ class LocalDatasetCatalog:
         declarations: Mapping[str, Any] | None,
     ) -> LocalDatasetRecord:
         key = normalize_alias(alias)
-        raw = self._load_raw()
-        if key not in raw["datasets"]:
-            raise KeyError(f"local dataset is not registered: {key}")
-        raw["datasets"][key]["declarations"] = (
-            None if declarations is None else deepcopy(dict(declarations))
-        )
-        self._write_raw(raw)
+        def update(raw: dict[str, Any]) -> None:
+            if key not in raw["datasets"]:
+                raise KeyError(f"local dataset is not registered: {key}")
+            raw["datasets"][key]["declarations"] = (
+                None if declarations is None else deepcopy(dict(declarations))
+            )
+
+        self._update_raw(update)
         return self.get(key)
 
     def mark_training_verified(self, alias: object, evidence: Mapping[str, Any]) -> LocalDatasetRecord:

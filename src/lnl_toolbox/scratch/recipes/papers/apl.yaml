@@ -1,0 +1,69 @@
+schema_version: 1
+name: apl
+description: "Complete APL CIFAR-10 reproduction recipe: standard preprocessing, per-class symmetric noise 0.2, CifarCnn8, SGD, CosineAnnealingLR, test selection, and 120 epochs."
+steps:
+  - block: set_seed
+    params: {seed: 1}
+  - block: select_device
+    params: {device: auto}
+  - {block: load_dataset, params: {dataset: cifar10}}
+  - {block: inspect_dataset_semantics}
+  - {block: create_dataset_split, params: {validation_size: 0, split_seed: 1}}
+  - {block: select_label_source}
+  - {block: apply_noise, params: {name: symmetric, rate: 0.2, seed: 1, sampling: per_class}}
+  - {block: build_noise_manifest}
+  - {block: configure_preprocessing, params: {preprocessing: standard, augment: true}}
+  - {block: configure_views, params: {views: [weak]}}
+  - {block: assign_data_roles, params: {roles: [train, test]}}
+  - {block: configure_loader, params: {batch_size: 128, num_workers: 8, pin_memory: true}}
+  - {block: build_prepared_data}
+  - {block: build_loaders}
+  - block: create_model
+    params: {model: cifar_cnn8, num_classes: 10, device: device}
+  - block: create_optimizer
+    params:
+      optimizer: sgd
+      model: model
+      lr: 0.01
+      momentum: 0.9
+      nesterov: false
+      weight_decay: 0.0001
+  - block: create_scheduler
+    params:
+      scheduler: cosine
+      optimizer: optimizer
+      t_max: 120
+      eta_min: 0.0
+  - block: epoch_loop
+    params: {epochs: 120}
+    steps:
+      - block: refresh_epoch_loader
+        params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad}
+          - {block: forward}
+          - block: nce_loss
+            params: {save_as: active_loss_per_sample}
+          - block: rce_loss
+            params: {log_zero: -4.0, save_as: passive_loss_per_sample}
+          - block: weighted_sum
+            params: {terms: [active_loss_per_sample, passive_loss_per_sample], weights: [1.0, 1.0], save_as: loss_per_sample}
+          - {block: mean_loss}
+          - {block: backward}
+          - {block: optimizer_step}
+      - block: evaluate_accuracy
+        params: {model: model, loader: test_loader, save_as: selection_accuracy}
+      - block: track_best_model
+        params: {model: model, metric: selection_accuracy, metric_name: selection_accuracy}
+      - block: scheduler_step
+        params: {scheduler: scheduler}
+  - block: restore_best_model
+    params: {model: model, state: best_model_state}
+  - block: evaluate_accuracy
+    params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}
+  - block: record_metrics
+    params: {values: [test_accuracy, best_selection_accuracy, best_epoch]}

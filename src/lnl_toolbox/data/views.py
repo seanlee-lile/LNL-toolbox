@@ -56,6 +56,12 @@ class IndexedDatasetView(Dataset[dict[str, Any]]):
             for index, target in zip(split.global_indices, split.observed_targets)
         }
         if targets_by_index is not None:
+            foreign = set(map(int, targets_by_index)) - set(lookup)
+            if foreign:
+                raise KeyError(
+                    f"target overlay contains {len(foreign)} indices outside "
+                    f"the {split.split!r} split namespace"
+                )
             missing = set(map(int, requested)) - set(map(int, targets_by_index))
             if missing:
                 raise KeyError(f"target overlay is missing {len(missing)} requested indices")
@@ -68,6 +74,12 @@ class IndexedDatasetView(Dataset[dict[str, Any]]):
             for name, values in (overlays or {}).items()
         }
         for name, values in self.overlays.items():
+            foreign = set(values) - set(lookup)
+            if foreign:
+                raise KeyError(
+                    f"overlay {name!r} contains {len(foreign)} indices outside "
+                    f"the {split.split!r} split namespace"
+                )
             missing = set(map(int, requested)) - set(values)
             if missing:
                 raise KeyError(f"overlay {name!r} is missing {len(missing)} requested indices")
@@ -98,4 +110,32 @@ class IndexedDatasetView(Dataset[dict[str, Any]]):
         return result
 
 
-__all__ = ["IndexedDatasetView", "Transform"]
+class InputViewDataset(Dataset[dict[str, Any]]):
+    """Project one named input view while preserving target and sample identity."""
+
+    def __init__(self, source: Dataset[dict[str, Any]], view: str) -> None:
+        if not str(view).strip():
+            raise ValueError("input view name must be non-empty")
+        self.source = source
+        self.view = str(view)
+
+    def __len__(self) -> int:
+        return len(self.source)
+
+    def __getitem__(self, item: int) -> dict[str, Any]:
+        sample = self.source[item]
+        if self.view == "input":
+            value = sample["input"]
+        else:
+            views = sample.get("views", {})
+            if self.view not in views:
+                raise KeyError(f"sample does not provide input view {self.view!r}")
+            value = views[self.view]
+        return {
+            "input": value,
+            "target": sample["target"],
+            "index": sample["index"],
+        }
+
+
+__all__ = ["IndexedDatasetView", "InputViewDataset", "Transform"]

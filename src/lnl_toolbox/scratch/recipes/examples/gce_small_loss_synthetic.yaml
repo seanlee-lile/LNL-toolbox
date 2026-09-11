@@ -1,0 +1,93 @@
+schema_version: 1
+name: gce_small_loss_synthetic
+description: One-epoch GCE plus small-loss training smoke recipe.
+steps:
+  - block: set_seed
+    params:
+      seed: 1
+  - block: select_device
+    params:
+      device: cpu
+  - block: load_synthetic
+    params:
+      samples: 64
+      features: 4
+      classes: 2
+  - block: inspect_dataset_semantics
+  - block: create_dataset_split
+    params: {validation_size: 0}
+  - block: select_label_source
+    params: {validation: observed, test: observed}
+  - block: apply_noise
+    params: {name: none, rate: 0.0}
+  - block: build_noise_manifest
+    params: {required: false}
+  - block: configure_preprocessing
+    params: {preprocessing: tensor_only}
+  - block: configure_views
+    params: {views: [weak]}
+  - block: assign_data_roles
+    params: {roles: [train, test]}
+  - block: configure_loader
+    params: {batch_size: 16}
+  - block: build_prepared_data
+  - block: build_loaders
+  - block: create_model
+    params:
+      model: mlp
+      num_classes: 2
+      input_dim: 4
+      device: device
+  - block: create_optimizer
+    params:
+      optimizer: sgd
+      model: model
+      lr: 0.1
+  - block: set_value
+    params:
+      value: 0.8
+      save_as: keep_rate
+  - block: epoch_loop
+    params:
+      epochs: 1
+    steps:
+      - block: batch_loop
+        params:
+          loader: train_loader
+        steps:
+          - block: get_batch
+          - block: zero_grad
+          - block: forward
+          - block: softmax
+            params: {logits: logits, save_as: probabilities}
+          - block: gather_by_label
+            params: {values: probabilities, labels: labels, save_as: target_probability}
+          - block: clamp_min
+            params: {input: target_probability, minimum: 1.0e-12, save_as: clamped_target_probability}
+          - block: elementwise_power
+            params: {input: clamped_target_probability, q: 0.7, save_as: powered_target_probability}
+          - block: affine_transform
+            params: {input: powered_target_probability, scale: -1.4285714285714286, bias: 1.4285714285714286, save_as: loss_per_sample}
+          - block: select_lowest_scores
+            params:
+              scores: loss_per_sample
+              keep_fraction: keep_rate
+              stable_sample_indices: indices
+              rounding: ceil
+              minimum_count: 1
+              save_as: selected_indices
+          - block: select_by_indices
+            params:
+              values: loss_per_sample
+              indices: selected_indices
+              save_as: selected_loss
+          - block: mean_by_indices
+            params:
+              values: loss_per_sample
+              indices: selected_indices
+              save_as: loss
+          - block: backward
+          - block: optimizer_step
+  - block: record_metrics
+    params:
+      values: [loss]

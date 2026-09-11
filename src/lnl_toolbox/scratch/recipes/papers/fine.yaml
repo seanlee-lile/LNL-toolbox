@@ -1,0 +1,73 @@
+schema_version: 1
+name: fine
+description: "Formal FINE CIFAR-100N recipe with SevenCNN, 200-epoch warm-up, EMA/SCS/SCR, robust SED/FINE objective, and cosine SGD."
+steps:
+  - {block: set_seed, params: {seed: 23}}
+  - {block: select_device, params: {device: auto}}
+  - {block: load_dataset, params: {dataset: cifar100}}
+  - {block: inspect_dataset_semantics}
+  - {block: create_dataset_split, params: {validation_size: 0, split_seed: 0}}
+  - {block: select_label_source}
+  - {block: apply_noise, params: {name: symmetric, rate: 0.2, seed: 0}}
+  - {block: build_noise_manifest}
+  - {block: configure_preprocessing, params: {preprocessing: official_cifar10, augment: true}}
+  - {block: configure_views, params: {views: [weak]}}
+  - {block: assign_data_roles, params: {roles: [train, train_eval, test]}}
+  - {block: configure_loader, params: {batch_size: 128, num_workers: 8, pin_memory: true}}
+  - {block: build_prepared_data}
+  - {block: build_loaders}
+  - {block: create_model, params: {model: fine_seven_cnn, num_classes: 100, base_width: 64, device: device, save_as: model}}
+  - {block: create_model_ema, params: {model: model, momentum: 0.95, update_buffers: false, save_as: fine_ema}}
+  - {block: create_optimizer, params: {optimizer: sgd, model: model, lr: 0.1, momentum: 0.9, nesterov: true, weight_decay: 0.0005, save_as: optimizer}}
+  - {block: create_scheduler, params: {scheduler: cosine, optimizer: optimizer, t_max: 100, eta_min: 0.0005, save_as: scheduler}}
+  - {block: create_fine_state, params: {model: model, ema_model: fine_ema, prepared_data: prepared_data, num_classes: 100, ema_momentum: 0.95, momentum_scs: 0.999, momentum_scr: 0.99, quantile: 0.8, maximum_threshold: 0.95, beta: 0.001, gamma: 0.1, probability_floor: 0.0000001, seed: 23, save_as: fine_state}}
+  - block: epoch_loop
+    params: {epochs: 300}
+    steps:
+      - block: if_epoch_eq
+        params: {epoch: 200}
+        steps:
+          - {block: set_optimizer_learning_rate, params: {optimizer: optimizer, learning_rate: 0.05}}
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}}
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train_eval, batch_size: 128, save_as: train_eval_loader}}
+      - block: if_epoch_ge
+        params: {epoch: 200}
+        steps:
+          - {block: fine_snapshot_predictions, params: {model: model, state: fine_state, loader: train_eval_loader, save_as: fine_snapshot}}
+          - {block: fine_scs_select, params: {state: fine_state, snapshot: fine_snapshot}}
+          - {block: fine_scr_reweight, params: {state: fine_state, snapshot: fine_snapshot}}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: select_batch_view, params: {batch: batch, input: images, view: strong_input, save_as: strong_images}}
+          - {block: zero_grad}
+          - {block: forward_feature}
+          - block: if_epoch_lt
+            params: {epoch: 200}
+            steps:
+              - {block: fine_warmup_loss, params: {logits: logits, labels: labels, save_as: loss}}
+          - block: if_epoch_ge
+            params: {epoch: 200}
+            steps:
+              - {block: indexed_read, params: {state: fine_clean_state, indices: indices, save_as: fine_clean}}
+              - {block: indexed_read, params: {state: fine_pseudo_state, indices: indices, save_as: fine_pseudo}}
+              - {block: indexed_read, params: {state: fine_weight_state, indices: indices, save_as: fine_weights}}
+              - {block: forward, params: {model: model, input: strong_images, save_as: strong_logits}}
+              - {block: per_sample_ce, params: {logits: logits, labels: labels, save_as: fine_clean_ce_per_sample}}
+              - {block: masked_mean, params: {values: fine_clean_ce_per_sample, mask: fine_clean, denominator: selected, empty: zero, save_as: fine_clean_ce}}
+              - {block: per_sample_ce, params: {logits: strong_logits, labels: fine_pseudo, save_as: fine_strong_pseudo_ce_per_sample}}
+              - {block: detach, params: {input: fine_weights, save_as: fine_detached_weights}}
+              - {block: elementwise_multiply, params: {left: fine_strong_pseudo_ce_per_sample, right: fine_detached_weights, save_as: fine_weighted_pseudo_ce_per_sample}}
+              - {block: mean_loss, params: {input: fine_weighted_pseudo_ce_per_sample, save_as: fine_strong_pseudo_ce}}
+              - {block: sed_rejected_regularizer, params: {logits: logits, labels: labels, clean: fine_clean, state: fine_state, save_as: fine_regularizer}}
+              - {block: weighted_sum, params: {terms: [fine_clean_ce, fine_regularizer, fine_strong_pseudo_ce], weights: [1.0, 1.0, 1.0], save_as: loss}}
+          - {block: backward}
+          - {block: optimizer_step}
+          - {block: update_model_ema, params: {model: model, ema: fine_ema}}
+      - block: if_epoch_ge
+        params: {epoch: 200}
+        steps:
+          - {block: scheduler_step}
+  - {block: evaluate_accuracy, params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}}

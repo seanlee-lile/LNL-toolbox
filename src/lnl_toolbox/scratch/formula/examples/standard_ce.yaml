@@ -1,0 +1,29 @@
+id: builtin/standard_ce
+name: Standard Cross Entropy
+description: Explicit softmax, target gather, finite floor, negative log and mean.
+inputs:
+  logits: {description: model logits}
+  targets: {description: observed labels, type: labels}
+parameters:
+  epsilon: {type: float, default: 1.0e-12, minimum: 0.0}
+steps:
+  - id: probabilities
+    block: softmax
+    bindings: {logits: logits}
+  - id: target_probability
+    block: gather_by_label
+    bindings: {values: probabilities, labels: targets}
+  - id: safe_probability
+    block: clamp_min
+    bindings: {input: target_probability}
+    parameters: {minimum: epsilon}
+  - id: sample_loss
+    block: negative_log
+    bindings: {input: safe_probability}
+    parameters: {minimum: 0.0}
+  - id: loss
+    block: mean_loss
+    bindings: {input: sample_loss}
+outputs:
+  loss: {source: loss}
+metadata: {kind: loss, formula_group: probability}

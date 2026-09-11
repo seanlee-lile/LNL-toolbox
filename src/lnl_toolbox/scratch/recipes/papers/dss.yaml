@@ -1,0 +1,43 @@
+schema_version: 1
+name: dss
+description: "Formal DSS CIFAR-10 symmetric-50 recipe with indexed state, MDA, CCS, masked risk, and validation selection."
+steps:
+  - {block: set_seed, params: {seed: 4}}
+  - {block: select_device, params: {device: auto}}
+  - {block: load_dataset, params: {dataset: cifar10}}
+  - {block: inspect_dataset_semantics}
+  - {block: create_dataset_split, params: {validation_size: 5000, split_seed: 4}}
+  - {block: select_label_source, params: {validation: observed}}
+  - {block: apply_noise, params: {name: symmetric, rate: 0.5, seed: 4}}
+  - {block: build_noise_manifest}
+  - {block: configure_preprocessing, params: {preprocessing: standard, augment: true}}
+  - {block: configure_views, params: {views: [weak]}}
+  - {block: assign_data_roles, params: {roles: [train, noisy_validation, test]}}
+  - {block: configure_loader, params: {batch_size: 128, num_workers: 8, pin_memory: true}}
+  - {block: build_prepared_data}
+  - {block: build_loaders}
+  - {block: create_model, params: {model: preact_resnet18, num_classes: 10, base_width: 64, device: device, save_as: model}}
+  - {block: create_optimizer, params: {optimizer: sgd, model: model, lr: 0.02, momentum: 0.9, weight_decay: 0.001, save_as: optimizer}}
+  - {block: create_scheduler, params: {scheduler: multistep, optimizer: optimizer, milestones: [80], gamma: 0.1, save_as: scheduler}}
+  - {block: create_dss_state, params: {total_epochs: 150, warmup_epochs: 30, alpha: 0.1, prior_decay: 0.99, save_as: dss_state}}
+  - block: epoch_loop
+    params: {epochs: 150}
+    steps:
+      - {block: dss_warmup_lifecycle, params: {state: dss_state, epoch: epoch}}
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad}
+          - {block: forward}
+          - {block: softmax, params: {logits: logits, save_as: probabilities}}
+          - {block: dss_mda_marginal_adjustment, params: {state: dss_state, probabilities: probabilities, save_as: dss_adjusted_probabilities}}
+          - {block: dss_masked_training_loss, params: {state: dss_state, logits: logits, labels: labels, indices: indices, save_as: loss}}
+          - {block: backward}
+          - {block: optimizer_step}
+      - {block: evaluate_accuracy, params: {model: model, loader: validation_loader, save_as: validation_accuracy}}
+      - {block: dss_ccs_trend_exclusion, params: {state: dss_state, epoch: epoch}}
+      - {block: scheduler_step, params: {scheduler: scheduler}}
+  - {block: evaluate_accuracy, params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}}

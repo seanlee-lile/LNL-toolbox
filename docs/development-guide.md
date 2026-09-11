@@ -118,7 +118,7 @@ lnl-train --config configs/experiment/cifar10_smoke.yaml
 等价的模块运行方式：
 
 ```powershell
-python -m lnl_toolbox.cli.train `
+lnl run `
   --config configs/experiment/cifar10_smoke.yaml
 ```
 
@@ -266,3 +266,23 @@ focused tests 必须与 `tests/` 一起进入 CI。
 1 epoch、`data_manifest.json`、epoch 指标，以及训练 batch 不泄漏 clean target 的既有门禁。
 本机真实数据若可用，还应再通过 `lnl data verify`。外部数据格式依据应来自数据集发布方
 或论文课题组官方仓库；未经上述实验，不在文档中标记为训练可用。
+
+## 声明论文方法的数据要求（2026-08-22）
+
+新增论文或新增 runner 配置时，必须在中央 runner registry 提供 `MethodRequirements`。
+声明应反映当前可执行链路，而不是论文理论上可能支持的数据：包括 modality、类别数、
+manifest、clean/trusted supervision、validation target、噪声率先验和外部来源。多字段
+先验或“矩阵/产物任选其一”使用 `ConfigInputRequirement`，不得在兼容性层计算论文公式、
+改写配置或补默认值。共享 runner 必须按组件配置识别方法，不得按论文标题分支。
+
+每个正式 recipe 都应有非空 requirements；测试还必须覆盖 observed-only native noise 的
+失败边界，并冻结已有 provider 的结果。算法、adapter 和 experiment runner 的能力扩展应
+作为独立任务审批，不能借修改兼容性元数据静默放宽。
+
+### 兼容性 UI 的输入边界
+
+新增 adapter 时，优先提供可选的 `semantic_hints`，只补充原始 train/test 无法观测的
+语义事实。不要把模态、观测标签、稳定索引或原生噪声来源交给用户自由填写。新增
+`required_user_inputs` 时，必须同时提供 Web/CLI 的渲染或自动解析路径；若是 runner 元数据
+缺失，应返回开发者元数据错误，不应显示为用户输入框。方法噪声率先验必须由具体 recipe
+声明真实配置路径，预训练要求必须验证实际文件/目录或已存在运行产物。

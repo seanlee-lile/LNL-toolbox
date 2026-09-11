@@ -19,6 +19,8 @@ noise:
   manifest_filename: noise_manifest.npz
   name: symmetric
 pretraining_stage:
+  mode: train
+  method: cross_entropy
   epochs: 10
   checkpoint_selection: noisy_validation_accuracy
   model:

@@ -72,6 +72,7 @@ data 安装，避免用户本地 YAML 污染 catalog。
 | `data/cifar.py` | 读取 CIFAR-10/100 官方 pickle，转换为 `[N,32,32,3]` uint8 图像并验证标签。 |
 | `data/torch_cifar.py` | 提供分层、随机及 `classwise_legacy` 可复现划分、可配置 mean/std 的标准变换、GCE 2018 preprocessing 和稳定 `input/target/index`。 |
 | `data/noisy_dataset.py` | 按显式 global-index mapping 包装训练 Dataset 并替换 target；不会向 batch 暴露 clean label。 |
+| `data/probe.py` | Quick Start 的只读数据路径探测；按真实文件布局识别现有 adapter，不注册、不加载完整数据、不运行训练。 |
 | `data/__init__.py` | 公开 CIFAR 读取函数、干净 Dataset 和 noisy wrapper。 |
 | `data/cifar-10-batches-py/` | 用户放入的 CIFAR-10 官方 Python 数据。 |
 | `data/cifar-100-python/` | 用户放入的 CIFAR-100 官方 Python 数据。 |
@@ -99,6 +100,7 @@ data 安装，避免用户本地 YAML 污染 catalog。
 | `noise/transition.py` | 验证 `T[i,j]=P(noisy=j|clean=i)` 行随机矩阵；提供 `KnownTransition`、版本化 `TransitionArtifact`、NPZ roundtrip 和哈希篡改检测。 |
 | `noise/estimators.py` | 定义无 clean-label 的 `PosteriorSnapshot`、`TransitionEstimator` Protocol，并实现 Anchor、Known 与 Dual-T 离线 estimator。 |
 | `noise/__init__.py` | 公开 Noise Manifest、生成器、后验快照、estimator 和转移矩阵产物协议。 |
+| `noise/quickstart_catalog.py` | 将真实噪声生成能力映射为 Quick Start 可读选项；隐藏 external/source-only 标签并复用现有 noise 配置合同。 |
 | `losses/numpy_losses.py` | NumPy 版逐样本 CE 与 GCE，用于数学验证，不执行神经网络反向传播。 |
 | `losses/torch_losses.py` | PyTorch 版逐样本 CE、标准 GCE、NCE、MAE、RCE、严格 P0 APL，以及 `[B]` 输出合同校验。 |
 | `losses/__init__.py` | 公开 NumPy 参考函数；安装 PyTorch 时同时公开可训练 loss。 |
@@ -118,6 +120,17 @@ data 安装，避免用户本地 YAML 污染 catalog。
 | `treatments/selector_adapter.py` | 将现有 hard Selector 适配为 mask 加全一权重，保持旧配置和数值行为。 |
 | `treatments/weights.py` | 定义泛型 WeightProvider、通用 WeightResult 和不依赖具体输入字段的 adapter；BinaryRCNWeightInput 与对应 provider 实现二分类 asymmetric-RCN 的论文精确 importance-weight 公式，不负责 posterior 或噪声率估计。 |
 | `algorithms/mentornet.py` | MentorNet 的移动分位数、burn-in/dropout 和状态化连续权重 Provider；只消费 noisy Student loss 与冻结 MentorArtifact。 |
+
+### Quick Start 编排与 Web 入口
+
+| 文件/目录 | 作用 |
+|---|---|
+| `quickstart/models.py` | Quick Start 的数据集、噪声、方法和计划 DTO；不访问磁盘或训练。 |
+| `quickstart/templates.py` | 从现有论文目录和配置生成方法模板，区分正式 reproduction 与 toolbox-adapted 配置。 |
+| `quickstart/service.py` | 编排路径探测、登记/inspect、噪声选择、方法能力检查和配置计划；复用现有 DataService/ExperimentService。 |
+| `web/quick_start_api.py` | Quick Start HTTP payload 薄适配层，不复制兼容性或训练逻辑。 |
+| `web/assets/quick_start.js` | Quick Start 的局部状态、步骤界面和现有 `/api/run` 对接。 |
+| `web/assets/quick_start.css` | 仅 Quick Start 使用的 `.qs-` 样式。 |
 | `models/mentornet.py` | 可复用 bi-LSTM curriculum model；不拥有 StudentNet 或训练循环。 |
 | `training/mentor_artifacts.py` | 冻结 Mentor 模型的结构、特征 schema、来源和哈希校验。 |
 | `training/mentor_learning.py` | 从隔离的 trusted curriculum feature 数据离线训练 MentorArtifact。 |
@@ -497,14 +510,16 @@ clean-label boundaries or existing Result Contract field meanings.
 
 | 文件 | 责任 |
 |---|---|
-| `data/contracts.py` | `DataSpec`、`DatasetIdentity`、`RawDatasetSplit`、`DataRequirements`、角色与适配器协议 |
+| `data/contracts.py` | `DataSpec`、`DatasetIdentity`、`RawDatasetSplit`、`InputSpec`、`NoiseDescriptor`、`DataRequirements`、`DataProtocol`、角色与适配器协议 |
 | `data/registry.py` | 数据适配器注册、别名解析和未知数据集诊断 |
 | `data/sources.py` | CIFAR、CIFAR 二分类视图、synthetic、UCI 适配器 |
 | `data/cifar_n.py` | CIFAR-10N/100N 人工噪声标签版本与 clean-label 对齐验证 |
 | `data/mnist.py` | 本地 MNIST/Fashion-MNIST 适配器；禁止自动下载 |
 | `data/real_noise.py` | Clothing1M manifest 与 Animal-10N 文件夹懒加载 |
-| `data/views.py` | 稳定 global-index 的单/多视图 Dataset 和动态 overlay |
-| `training/data_service.py` | 唯一 prepare 入口、split/noise/role/view/loader/manifest/resume |
+| `data/views.py` | 稳定 global-index 的单/多视图 Dataset、动态 overlay，以及不泄漏其他字段的单 view 输入投影 |
+| `training/data_service.py` | 唯一 prepare 入口、split/noise/role/view/loader/manifest/resume；`PreparedData` 提供 role loader、`view_loader` 和 `subset_loader` |
+| `training/runners.py` | runner 能力声明；GCE/APL 的通用能力为 IMAGE/TABULAR，manifest 需求由具体 noise 配置决定 |
+| `training/experiment.py` | CE/GCE/APL 共享监督训练入口；只消费所需 role，并通过 `input_spec` 构造 TinyCNN 或通用 feature MLP |
 | `training/reproduction_data.py` | 旧 `prepare_noisy_classification()` 兼容代理 |
 | `training/checkpoint.py` | checkpoint 自动注入并校验 `data_manifest` 指纹 |
 | `cli/inspect_data.py` | 使用同一 Registry 的数据检查入口 |
@@ -512,6 +527,30 @@ clean-label boundaries or existing Result Contract field meanings.
 | `tests/test_data_adapters.py` | CIFAR-N、MNIST、真实噪声、UCI、synthetic fixture |
 
 所有计划内论文 runner 已直接调用 `prepare_experiment_data()`；论文 objective、模型、优化器和训练阶段定义未移入数据层。
+
+`DataRequirements` 只描述方法需要什么；`DataProtocol` 描述 generic 或论文复现怎样切分和
+变换数据。旧 runner 仍通过兼容入口工作，后续按方法迁移，不允许把 CIFAR 名称、官方
+augmentation 或固定类别数重新写入公共 `PreparedData` 接口。
+
+第二阶段共享入口迁移范围为 CE/GCE/APL；第三阶段只迁移下列三个专用 runner 的数据
+组装。其余 runner 仍需逐个核对真正需要的 role、view、clean/noise knowledge。
+
+特殊接头首批覆盖 DLD、DivideMix 和 L2RW：DLD 消费统一的 view loader，DivideMix 消费
+动态 subset loader，L2RW 通过 requirements 选择 validation 并保留独立 trusted role。
+这些修改仅替换 runner 开头的数据组装，不改变三个方法的算法或训练状态机。
+
+专用 runner 迁移首批（Phase 5A）继续复用同一文件层级，不新增目录：
+
+| 文件 | 本批职责变化 |
+|---|---|
+| `training/runners.py` | CDR、DSS、CA2C、VolMinNet 发布数学兼容的 IMAGE/TABULAR 能力；VolMinNet 只保留 `C>=3` |
+| `training/pcse_experiment.py` | train-mode PCSE 从 `PreparedData` 获取 dataset、类别数和 feature dimension；external UPM reproduction 边界保持不变 |
+| `algorithms/volminnet/config.py` | 通用数据读取显式类别数；旧 CIFAR recipe 缺省类别数仅作向后兼容 |
+| `tests/test_training.py` | CDR/DSS 在已注册四分类表格数据上完成真实 CPU epoch |
+| `tests/test_pcse.py` | 非内置名称的表格 adapter 进入 PCSE 第一个真实预训练 epoch |
+| `tests/test_estimators.py` | VolMinNet 在四分类表格数据上完成完整一轮并生成 `[4,4]` transition |
+
+算法公式、loss、selector、checkpoint 状态机、正式 YAML、CLI 和 Web 均未因本批数据迁移修改。
 
 ## 本地数据登记与训练证据（2026-08-20）
 
@@ -595,3 +634,56 @@ Recipe/YAML 编辑功能。`lnl web` 由 `cli/main.py` 启动 `web/command_conso
 | `web/test_command_console.py` | 26 个 formal schema、论文变更确认/记录、锁定字段 API 防绕过与前端分组门禁 |
 
 配置当前值始终来自所选 YAML，registry 不覆盖训练值。论文参数数量保持 99 个；T-Revision 与 DivideMix 仅修正迁移后的 dotted path，没有改变其论文参数集合。
+
+## 26 篇论文兼容性门禁（2026-08-22）
+
+| 路径 | 职责 |
+|---|---|
+| `training/compatibility.py` | 数据能力与方法要求的纯合同，以及 all/any 声明型配置输入；不执行训练或论文数学 |
+| `training/runners.py` | 26 篇正式 recipe 的 requirements provider；共享 runner 按组件配置识别具体方法 |
+| `training/service.py` | 数据能力检查后验证必需配置输入，并在 runner 调用前返回稳定 reason code |
+| `tests/test_compatibility.py` | 26 篇覆盖、14 篇新增边界、observed-only native noise 拒绝和已有 12 篇回归 |
+
+本门禁没有修改算法、experiment runner、DatasetAdapter、`data_service.py`、正式 YAML、CLI
+或 Web。兼容结论描述当前工具箱实际通路，不代表论文方法理论能力的上限。
+
+## Web 数据集约束与 YAML 编辑器联动（2026-08-22）
+
+| 路径 | 职责 |
+|---|---|
+| `training/service.py` | 对同一数据能力批量解析具体配置兼容性，避免用空 runner 配置代表论文 recipe |
+| `web/command_console.py` | 暴露 26 份正式 recipe 的数据兼容结果，并在 YAML 保存时服务端复核所选数据别名 |
+| `web/index.html` | 单一 YAML 路径、上下文编辑器收起/草稿恢复、数据页到 YAML 的入口，以及兼容 recipe 的禁用与原因提示 |
+| `tests/test_experiment_service.py`、`web/test_command_console.py` | 单次能力加载、recipe 身份、服务端防绕过和前端交互门禁 |
+
+数据集覆盖仅通过 CLI `--data` 传给运行或 Sweep，不改写 Registry 锁定的论文数据/噪声协议。
+
+## Dataset-first 输入与兼容性（2026-08-23）
+
+| 路径 | 职责 |
+|---|---|
+| `data/profile.py` | `DatasetSemanticHints`、数据能力和声明合同；旧 method prior/pretrained role 仅兼容读取 |
+| `data/real_noise.py` | Clothing1M/Animal-10N 的原生噪声、干净验证集和不可用干净训练标签语义 |
+| `training/data_service.py` | 读取 adapter hints，仅填充 UNKNOWN；拒绝把方法先验或角色名写成数据声明 |
+| `training/compatibility.py` | 纯兼容性结果、开发者元数据错误、用户输入和真实配置路径 |
+| `training/service.py` | 解析具体 recipe、验证实际 checkpoint 路径，并把方法先验注入配置 |
+| `web/command_console.py` | 返回 profile/capabilities/未决事实和每个 formal recipe 的兼容结果 |
+| `web/index.html` | 只读数据集事实、UNKNOWN 声明、当前 recipe 实验输入三段式展示 |
+| `tests/test_data_adapters.py` | 原生噪声 semantic hints、标签可用性和统一数据服务回归 |
+| `web/test_command_console.py` | 具体 recipe、先验不入 catalog、Web 输入分组和命令生成回归 |
+
+## 统一 Method/Data Requirements（2026-08-25）
+
+| 路径 | 当前职责 |
+|---|---|
+| `training/compatibility.py` | `MethodRequirements`：variant、唯一 `DataRequirements`、实现限制及兼容原因来源 |
+| `training/runners.py` | 26 篇论文 requirement provider 的唯一真源；`invoke()` 把合同传给实际 runner |
+| `training/data_service.py` | 只消费显式 `DataRequirements`；物化 role/view/noise/identity，不识别论文名 |
+| `training/experiment.py` | supervised 组装及 `bind_model_input()`；从 `PreparedData.input_spec` 绑定模型维度 |
+| `training/*_experiment.py` | 消费 runner 传入的合同；直接调用时仅向 runner registry 请求，不自建第二套合同 |
+| `tests/test_registry.py` | 26/26 provider、variant/implementation limit、兼容与 invoke 同源检查 |
+| `tests/test_data_adapters.py` | role 标签边界、真实 clean trusted source、独立 validation 噪声率与统一入口检查 |
+
+高冲突文件是 `training/runners.py`、`training/compatibility.py`、本文件和
+`data-flow-guide.md`。算法、Loss、Selector、Estimator、正式 YAML、CLI、Web 与 Scratch
+不属于本轮修改范围。

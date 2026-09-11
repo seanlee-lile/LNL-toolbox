@@ -1,0 +1,107 @@
+id: builtin/mean_squared_error
+name: Mean Squared Error
+description: Elementwise subtraction, power and an explicit scalar or per-sample reduction.
+inputs:
+  predicted: {type: tensor}
+  target: {type: tensor}
+  mask: {type: mask, required: false}
+parameters:
+  reduction: {type: enum, options: [per_sample, scalar], default: scalar}
+steps:
+  - id: difference
+    block: subtract
+    bindings: {minuend: predicted, subtrahend: target}
+  - id: squared
+    block: elementwise_power
+    bindings: {input: difference}
+    parameters: {q: 2.0}
+  - id: loss
+    block: reduce_mean
+    bindings: {input: squared}
+outputs:
+  loss: {source: loss}
+variants:
+  - name: unmasked_scalar
+    when: {mask: __absent__, reduction: scalar}
+    steps:
+      - id: difference
+        block: subtract
+        bindings: {minuend: predicted, subtrahend: target}
+      - id: squared
+        block: elementwise_power
+        bindings: {input: difference}
+        parameters: {q: 2.0}
+      - id: flattened
+        block: flatten_per_sample
+        bindings: {input: squared}
+      - id: loss
+        block: reduce_mean
+        bindings: {input: flattened}
+  - name: unmasked_per_sample
+    when: {mask: __absent__, reduction: per_sample}
+    steps:
+      - id: difference
+        block: subtract
+        bindings: {minuend: predicted, subtrahend: target}
+      - id: squared
+        block: elementwise_power
+        bindings: {input: difference}
+        parameters: {q: 2.0}
+      - id: flattened
+        block: flatten_per_sample
+        bindings: {input: squared}
+      - id: loss
+        block: reduce_mean
+        bindings: {input: flattened}
+        parameters: {dim: -1}
+  - name: masked_scalar
+    when: {mask: __present__, reduction: scalar}
+    steps:
+      - id: selected_indices
+        block: mask_to_indices
+        bindings: {mask: mask}
+      - id: selected_predicted
+        block: index_select
+        bindings: {input: predicted, indices: selected_indices}
+      - id: selected_target
+        block: index_select
+        bindings: {input: target, indices: selected_indices}
+      - id: difference
+        block: subtract
+        bindings: {minuend: selected_predicted, subtrahend: selected_target}
+      - id: squared
+        block: elementwise_power
+        bindings: {input: difference}
+        parameters: {q: 2.0}
+      - id: flattened
+        block: flatten_per_sample
+        bindings: {input: squared}
+      - id: loss
+        block: reduce_mean
+        bindings: {input: flattened}
+  - name: masked_per_sample
+    when: {mask: __present__, reduction: per_sample}
+    steps:
+      - id: selected_indices
+        block: mask_to_indices
+        bindings: {mask: mask}
+      - id: selected_predicted
+        block: index_select
+        bindings: {input: predicted, indices: selected_indices}
+      - id: selected_target
+        block: index_select
+        bindings: {input: target, indices: selected_indices}
+      - id: difference
+        block: subtract
+        bindings: {minuend: selected_predicted, subtrahend: selected_target}
+      - id: squared
+        block: elementwise_power
+        bindings: {input: difference}
+        parameters: {q: 2.0}
+      - id: flattened
+        block: flatten_per_sample
+        bindings: {input: squared}
+      - id: loss
+        block: reduce_mean
+        bindings: {input: flattened}
+        parameters: {dim: -1}

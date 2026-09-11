@@ -1,0 +1,54 @@
+id: builtin/apl
+name: Active Passive Loss
+description: APL expressed from public NCE/RCE tensor operations and weighted composition.
+inputs:
+  logits: {description: model logits}
+  targets: {description: observed labels, type: labels}
+parameters:
+  log_zero: {type: float, default: -4.0}
+  active_weight: {type: float, default: 1.0}
+  passive_weight: {type: float, default: 1.0}
+steps:
+  - id: probabilities
+    block: softmax
+    bindings: {logits: logits}
+  - id: all_negative_log
+    block: negative_log
+    bindings: {input: probabilities}
+  - id: active_target
+    block: gather_by_label
+    bindings: {values: all_negative_log, labels: targets}
+  - id: active_total
+    block: sum_last_dimension
+    bindings: {input: all_negative_log}
+  - id: active
+    block: safe_divide
+    bindings: {numerator: active_target, denominator: active_total}
+  - id: one_hot_labels
+    block: one_hot_like
+    bindings: {labels: targets, reference: logits}
+  - id: ones
+    block: ones_like
+    bindings: {input: one_hot_labels}
+  - id: complement
+    block: subtract
+    bindings: {minuend: ones, subtrahend: one_hot_labels}
+  - id: clipped_log_targets
+    block: affine_transform
+    bindings: {input: complement}
+    parameters: {scale: log_zero, bias: 0.0}
+  - id: passive_product
+    block: elementwise_multiply
+    bindings: {left: probabilities, right: clipped_log_targets}
+  - id: passive_sum
+    block: sum_last_dimension
+    bindings: {input: passive_product}
+  - id: passive
+    block: negate
+    bindings: {input: passive_sum}
+  - id: loss
+    block: weighted_sum
+    parameters: {terms: [active, passive], weights: [active_weight, passive_weight]}
+outputs:
+  loss: {source: loss}
+metadata: {kind: loss, formula_group: composite_loss}

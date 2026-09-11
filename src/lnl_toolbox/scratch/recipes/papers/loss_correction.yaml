@@ -1,0 +1,67 @@
+schema_version: 1
+name: loss-correction
+description: "Complete Loss Correction CIFAR-10 reproduction recipe: GCE-2018 preprocessing, asymmetric class-conditional noise 0.4, known transition artifact, ResNet-32, Forward correction, MultiStepLR, and 120 epochs."
+steps:
+  - block: set_seed
+    params: {seed: 1}
+  - block: select_device
+    params: {device: auto}
+  - {block: load_dataset, params: {dataset: cifar10}}
+  - {block: inspect_dataset_semantics}
+  - {block: create_dataset_split, params: {validation_size: 5000, split_seed: 1}}
+  - {block: select_label_source, params: {validation: observed}}
+  - {block: apply_noise, params: {name: class_conditional, rate: 0.4, seed: 1, options: {transition_matrix: formal_loss_correction}}}
+  - {block: build_noise_manifest}
+  - {block: configure_preprocessing, params: {preprocessing: gce2018, augment: true}}
+  - {block: configure_views, params: {views: [weak]}}
+  - {block: assign_data_roles, params: {roles: [train, noisy_validation, test]}}
+  - {block: configure_loader, params: {batch_size: 128, num_workers: 0, pin_memory: true}}
+  - {block: build_prepared_data}
+  - {block: build_loaders}
+  - block: create_model
+    params: {model: resnet32, num_classes: 10, base_width: 16, device: device}
+  - block: create_optimizer
+    params:
+      optimizer: sgd
+      model: model
+      lr: 0.01
+      momentum: 0.9
+      nesterov: false
+      weight_decay: 0.0001
+  - block: create_scheduler
+    params:
+      scheduler: multistep
+      optimizer: optimizer
+      milestones: [40, 80]
+      gamma: 0.1
+  - block: epoch_loop
+    params: {epochs: 120}
+    steps:
+      - block: refresh_epoch_loader
+        params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad}
+          - {block: forward}
+          - {block: softmax, params: {logits: logits, save_as: clean_probabilities}}
+          - {block: apply_transition, params: {probabilities: clean_probabilities, transition: transition, save_as: noisy_probabilities}}
+          - {block: gather_by_label, params: {values: noisy_probabilities, labels: labels, save_as: target_probability}}
+          - {block: negative_log, params: {input: target_probability, save_as: loss_per_sample}}
+          - {block: mean_loss}
+          - {block: backward}
+          - {block: optimizer_step}
+      - block: evaluate_accuracy
+        params: {model: model, loader: validation_loader, save_as: validation_accuracy}
+      - block: track_best_model
+        params: {model: model, metric: validation_accuracy}
+      - block: scheduler_step
+        params: {scheduler: scheduler}
+  - block: restore_best_model
+    params: {model: model, state: best_model_state}
+  - block: evaluate_accuracy
+    params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}
+  - block: record_metrics
+    params: {values: [test_accuracy, best_validation_accuracy, best_epoch]}

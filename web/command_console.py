@@ -9,9 +9,9 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import math
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 import threading
@@ -28,6 +28,16 @@ from urllib.parse import parse_qs, unquote, urlparse
 ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = Path(__file__).resolve().parent
 SRC_ROOT = ROOT / "src"
+SCRATCH_ROOT = SRC_ROOT / "lnl_toolbox" / "scratch"
+SCRATCH_WEB_ROOT = SCRATCH_ROOT / "web"
+SCRATCH_RECIPE_ROOT = SCRATCH_ROOT / "recipes"
+STATIC_ASSETS = {
+    "/assets/quick_start.js": (WEB_ROOT / "assets" / "quick_start.js", "application/javascript; charset=utf-8"),
+    "/assets/quick_start.css": (WEB_ROOT / "assets" / "quick_start.css", "text/css; charset=utf-8"),
+    "/assets/run_output.js": (WEB_ROOT / "assets" / "run_output.js", "application/javascript; charset=utf-8"),
+}
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 if SRC_ROOT.is_dir() and str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
@@ -92,7 +102,7 @@ COMMANDS: dict[str, CommandSpec] = {
     ),
     "sweep-smoke": CommandSpec(
         "sweep-smoke",
-        "多 seed Sweep",
+        "多 seed 参数组合实验",
         "按多个随机种子顺序运行同一个 recipe，并支持中断后恢复",
         (
             "sweep",
@@ -238,6 +248,8 @@ class Job:
     returncode: int | None = None
     error: str | None = None
     structured: object | None = None
+    cancel_requested: bool = False
+    training_context: object | None = None
 
     @property
     def done(self) -> bool:
@@ -249,11 +261,8 @@ JOBS_LOCK = threading.Lock()
 
 
 def resolve_lnl_command() -> list[str]:
-    """Prefer the installed lnl shortcut, then fall back to the module CLI."""
+    """Run the CLI with the interpreter serving the current Web process."""
 
-    executable = shutil.which("lnl")
-    if executable:
-        return [executable]
     return [sys.executable, "-m", "lnl_toolbox.cli.main"]
 
 
@@ -322,6 +331,24 @@ def _start_process(key: str, command: list[str], display_command: str) -> Job:
         command=command,
         display_command=display_command,
     )
+    from web.training_status import infer_training_context
+
+    context = infer_training_context(command, ROOT)
+    if (
+        context is not None
+        and context.command_kind == "run"
+        and context.run_dir is None
+        and "--dry-run" not in command
+    ):
+        # A recipe's output_root can produce a runner-defined subdirectory.
+        # Give Web-owned formal runs a unique explicit location instead, so
+        # polling never guesses from the newest artifact directory.
+        web_output = ROOT / "artifacts" / "web-runs" / job.job_id
+        command = [*command, "--output-dir", str(web_output.relative_to(ROOT))]
+        job.command = command
+        job.display_command = f"{display_command} --output-dir {web_output.relative_to(ROOT)}"
+        context = infer_training_context(command, ROOT)
+    job.training_context = context
     try:
         job.process = subprocess.Popen(
             command,
@@ -354,15 +381,184 @@ def start_free_job(raw: str) -> Job:
     return _start_process("custom", command, raw.strip())
 
 
+def cancel_job(job_id: str) -> Job:
+    """Request termination of one WebUI-owned child process."""
+
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if job is None:
+            raise KeyError("job not found")
+        if job.done:
+            return job
+        process = job.process
+        job.cancel_requested = True
+    if process is not None and process.poll() is None:
+        # ``lnl`` may be a Windows console wrapper which starts the actual
+        # Python worker as a child.  Terminating only the wrapper leaks that
+        # worker into the next batch case, so cancel the complete process tree.
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        else:
+            process.terminate()
+    return job
+
+
 def _json_response(
     handler: BaseHTTPRequestHandler, payload: object, status: int = 200
 ) -> None:
-    body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
+    def json_safe(value: object) -> object:
+        if isinstance(value, float):
+            return value if math.isfinite(value) else None
+        if isinstance(value, dict):
+            return {key: json_safe(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [json_safe(item) for item in value]
+        return value
+
+    body = json.dumps(json_safe(payload), ensure_ascii=True, allow_nan=False).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
+
+
+def _scratch_recipe_path(name: str) -> Path:
+    """Resolve a Scratch recipe below the repository's Scratch recipe root."""
+
+    from lnl_toolbox.scratch import recipe_workspace_root
+
+    requested = Path(name)
+    # Paper templates are packaged read-only assets.  Do not make opening one
+    # depend on the optional user recipe directory being writable (which can
+    # fail with PermissionError on locked-down Windows profiles).
+    try:
+        user_root = recipe_workspace_root()
+    except OSError:
+        user_root = None
+    candidates = ([
+        (user_root, user_root / requested),
+    ] if user_root is not None else []) + [
+        (SCRATCH_RECIPE_ROOT, SCRATCH_RECIPE_ROOT / requested),
+        (SCRATCH_RECIPE_ROOT, SCRATCH_RECIPE_ROOT / "examples" / requested.name),
+        (SCRATCH_RECIPE_ROOT, SCRATCH_RECIPE_ROOT / "papers" / requested.name),
+    ]
+    for root, candidate in candidates:
+        resolved = candidate.resolve()
+        root = root.resolve()
+        if root not in resolved.parents:
+            continue
+        if candidate.suffix in {".yaml", ".yml"} and candidate.is_file():
+            return candidate
+    raise FileNotFoundError(f"Scratch recipe not found: {name}")
+
+
+def _scratch_error(exc: Exception) -> dict[str, object]:
+    payload: dict[str, object] = {"ok": False, "error": str(exc)}
+    try:
+        from lnl_toolbox.scratch.web.server import _job_error_code
+
+        payload["code"] = _job_error_code(str(exc))
+    except Exception:
+        pass
+    path = getattr(exc, "path", None)
+    block_id = getattr(exc, "block_id", None)
+    if path is not None:
+        payload["path"] = list(path)
+    if block_id is not None:
+        payload["block_id"] = block_id
+    return payload
+
+
+def _scratch_recipe_api_payload() -> list[str]:
+    from lnl_toolbox.scratch import recipe_workspace_root
+
+    try:
+        root = recipe_workspace_root()
+    except OSError:
+        return []
+    return sorted(str(path.relative_to(root)).replace("\\", "/") for path in root.rglob("*.y*ml"))
+
+
+def _scratch_template_payload() -> list[dict[str, str]]:
+    formula_ready = {"gce", "coteaching"}
+    display_names = {"gce": "GCE", "coteaching": "Co-teaching"}
+    paper_root = SCRATCH_RECIPE_ROOT / "papers"
+    if not paper_root.exists():
+        return []
+    return [
+        {
+            "id": path.stem,
+            "name": display_names.get(path.stem, path.stem.replace("_", " ").title()),
+            "path": f"papers/{path.name}",
+            "status": "formula-ready" if path.stem in formula_ready else "template-ready",
+        }
+        for path in sorted(paper_root.glob("*.y*ml"))
+    ]
+
+
+def _scratch_examples_payload() -> list[dict[str, str]]:
+    return _scratch_template_payload()
+
+
+def _scratch_formula_payload(spec: object) -> dict[str, object]:
+    from lnl_toolbox.scratch.formula.runtime import formula_hash
+
+    payload = spec.to_dict()
+    payload.update({"formula_hash": formula_hash(spec), "block_id": "formula/" + spec.id})
+    return payload
+
+
+def _scratch_reload_formulas() -> None:
+    from lnl_toolbox.scratch.formula.registry import reload_formulas
+
+    reload_formulas()
+
+
+def _scratch_request_body(handler: BaseHTTPRequestHandler) -> dict[str, object]:
+    length = int(handler.headers.get("Content-Length", "0"))
+    payload = json.loads(handler.rfile.read(length) or b"{}")
+    if not isinstance(payload, dict):
+        raise TypeError("Scratch request body must be an object")
+    return payload
+
+
+def _scratch_recipe_from_body(payload: dict[str, object]) -> dict[str, object]:
+    from lnl_toolbox.scratch import validate_recipe
+
+    recipe = payload.get("recipe", payload)
+    if not isinstance(recipe, dict):
+        raise TypeError("Scratch recipe must be an object")
+    return validate_recipe(recipe)
+
+
+def _scratch_run(recipe: dict[str, object]) -> dict[str, object]:
+    from lnl_toolbox.scratch import execute_recipe, resolve_recipe, save_recipe
+    from lnl_toolbox.scratch.formula.registry import collect_formula_provenance, merge_formula_provenance
+
+    output = ROOT / "artifacts" / "scratch" / Path(str(recipe["name"])).name
+    output.mkdir(parents=True, exist_ok=True)
+    save_recipe(recipe, output / "recipe.yaml")
+    save_recipe(resolve_recipe(recipe), output / "resolved_recipe.yaml")
+    static_provenance = collect_formula_provenance(recipe)
+    context = execute_recipe(recipe, {"artifact_dir": str(output)})
+    provenance = merge_formula_provenance(static_provenance, context.get("_formula_provenance", []))
+    (output / "formula_provenance.json").write_text(json.dumps(provenance, ensure_ascii=False, indent=2), encoding="utf-8")
+    metrics = context.get("metrics", [])
+    (output / "metrics.jsonl").write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in metrics),
+        encoding="utf-8",
+    )
+    (output / "stdout.log").write_text(
+        json.dumps({"name": recipe["name"], "metrics": metrics}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return {"ok": True, "metrics": metrics, "artifact_dir": str(output), "formula_provenance": provenance}
 
 
 def _recipe_payload(*, include_all: bool = False) -> list[dict[str, object]]:
@@ -398,7 +594,10 @@ def _paper_payload() -> list[dict[str, object]]:
 
     from lnl_toolbox.catalog import (
         discover_recipes,
+        load_recipe_config,
         load_papers,
+        mentornet_preparation_status,
+        resolve_config_paths,
     )
 
     recipes = {
@@ -456,6 +655,15 @@ def _paper_payload() -> list[dict[str, object]]:
                 "reproduction_status": config.reproduction_status,
                 "availability": config.availability,
             })
+            if paper.id == "mentornet":
+                resolved = resolve_config_paths(load_recipe_config(recipe), ROOT)
+                payload[-1]["configs"][-1]["preparation"] = (
+                    mentornet_preparation_status(
+                        resolved,
+                        ROOT,
+                        student_recipe=config.recipe_id,
+                    )
+                )
     return payload
 
 
@@ -487,13 +695,27 @@ def _dataset_profile_payload(name: object) -> dict[str, object]:
     report = service.inspect_dataset(alias)
     if report.status != "ready" or report.profile is None:
         raise ValueError(report.error or f"dataset profile is unavailable: {alias}")
+    profile = report.profile.to_dict()
+    declared = service.data_service.declarations(alias).to_dict()
+    capabilities = service.data_service.capabilities(alias, persist=False)
+    unresolved = []
+    for field, value in (
+        ("clean_train_labels", capabilities.clean_train_labels.value),
+        ("noise_status", capabilities.noise_status.value),
+        ("noise_origin", capabilities.noise_origin.value),
+        ("dataset_noise_rate", capabilities.noise_rate.status.value),
+    ):
+        if value == "unknown":
+            unresolved.append(field)
     return {
         "dataset": alias,
         "adapter": report.adapter,
         "source": report.location,
-        "profile": report.profile.to_dict(),
-        "detected": report.profile.to_dict(),
-        "declared": service.data_service.declarations(alias).to_dict(),
+        "profile": profile,
+        "detected": profile,
+        "capabilities": capabilities.to_dict(),
+        "unresolved_dataset_facts": unresolved,
+        "declared": declared,
     }
 
 
@@ -519,9 +741,82 @@ def _dataset_compatibility_payload(
         "dataset": alias,
         "profile": profile["profile"],
         "detected": profile["detected"],
+        "capabilities": profile.get("capabilities", {}),
+        "unresolved_dataset_facts": profile.get("unresolved_dataset_facts", []),
         "declared": profile["declared"],
         "method_noise_rate_prior": method_noise_rate_prior,
         "methods": [result.to_dict() for result in methods],
+    }
+
+
+def _dataset_recipe_compatibility_payload(
+    name: object,
+    *,
+    method_noise_rate_prior: float | None = None,
+) -> dict[str, object]:
+    """Resolve each paper's concrete formal recipe for one local dataset."""
+
+    from lnl_toolbox.catalog import load_yaml, recipe_by_id
+    from lnl_toolbox.training.service import ExperimentService
+
+    alias = str(name).strip()
+    if not alias:
+        raise ValueError("recipe compatibility query requires a dataset alias")
+    papers = _paper_payload()
+    recipe_meta: dict[str, dict[str, object]] = {}
+    for paper in papers:
+        paper_configs = paper.get("configs") or [{
+            "recipe_id": paper["default_recipe_id"],
+            "profile": "reproduction",
+            "configuration_fidelity": paper["default_fidelity"],
+        }]
+        formal_configs = [item for item in paper_configs if item.get("profile") == "reproduction"]
+        if not formal_configs:
+            formal_configs = [next(item for item in paper_configs if item.get("recipe_id") == paper["default_recipe_id"])]
+        for config_meta in formal_configs:
+            recipe_id = str(config_meta["recipe_id"])
+            recipe_meta[recipe_id] = {
+                "paper_id": paper["id"],
+                "acronym": paper["acronym"],
+                "title": paper["title"],
+                "fidelity": config_meta.get("configuration_fidelity", paper["default_fidelity"]),
+            }
+    configs = {
+        recipe_id: load_yaml(recipe_by_id(recipe_id, ROOT).config_path)
+        for recipe_id in recipe_meta
+    }
+    service = ExperimentService()
+    results = dict(service.list_config_compatibility(
+        alias,
+        configs,
+        method_noise_rate_prior=method_noise_rate_prior,
+    ))
+    recipes = []
+    for recipe_id, meta in recipe_meta.items():
+        result = results[recipe_id].to_dict()
+        recipes.append({
+            "paper_id": meta["paper_id"],
+            "acronym": meta["acronym"],
+            "title": meta["title"],
+            "recipe_id": recipe_id,
+            "profile": "reproduction",
+            "fidelity": meta["fidelity"],
+            **result,
+        })
+    grouped: dict[str, dict[str, object]] = {}
+    for item in recipes:
+        group = grouped.setdefault(str(item["paper_id"]), {
+            "paper_id": item["paper_id"],
+            "acronym": item["acronym"],
+            "title": item["title"],
+            "recipes": [],
+        })
+        group["recipes"].append(item)
+    return {
+        "dataset": alias,
+        "profile": _dataset_profile_payload(alias),
+        "methods": list(grouped.values()),
+        "recipes": recipes,
     }
 
 
@@ -533,17 +828,15 @@ def _dataset_declarations_payload(name: object, payload: object) -> dict[str, ob
     declarations = payload.get("declarations", {})
     if not isinstance(declarations, dict):
         raise ValueError("declarations must be a JSON object")
-    if "method_noise_rate_prior" in declarations:
-        raise ValueError("method noise-rate prior is experiment-specific")
+    if "method_noise_rate_prior" in declarations or "pretrained_roles" in declarations:
+        raise ValueError("method noise-rate prior and pretrained roles are experiment-specific")
+    if "method_noise_rate_prior" in payload:
+        raise ValueError("method noise-rate prior is an experiment input, not a dataset declaration")
     from lnl_toolbox.training.data_service import DataService
 
     service = DataService()
     service.update_declarations(name, declarations)
-    prior = payload.get("method_noise_rate_prior")
-    return _dataset_compatibility_payload(
-        name,
-        method_noise_rate_prior=None if prior in {None, ""} else float(prior),
-    )
+    return _dataset_compatibility_payload(name)
 
 
 def _dataset_action(payload: object) -> dict[str, object]:
@@ -1202,6 +1495,22 @@ def _save_config(payload: object) -> dict[str, object]:
         acknowledged=bool(payload.get("acknowledge_paper_impact", False)),
     )
     validate_config(parsed)
+    dataset_alias = str(payload.get("dataset_alias") or "").strip()
+    if dataset_alias:
+        from lnl_toolbox.training.service import ExperimentService
+
+        service = ExperimentService()
+        _, compatibility = service.list_config_compatibility(
+            dataset_alias, {"candidate": parsed}
+        )[0]
+        if compatibility.status.value != "compatible":
+            reasons = "; ".join(
+                f"{item.code}: {item.message}" for item in compatibility.reasons
+            )
+            raise ValueError(
+                f"所选数据集 {dataset_alias!r} 与当前配置不兼容："
+                f"{compatibility.status.value}; {reasons}"
+            )
     try:
         import yaml
 
@@ -1215,12 +1524,17 @@ def _save_config(payload: object) -> dict[str, object]:
         raise FileExistsError("目标文件已存在；如需修改请使用覆盖保存")
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(content, encoding="utf-8")
-    return {"path": destination.relative_to(ROOT).as_posix(), "bytes": destination.stat().st_size, "content": content}
+    return {
+        "path": destination.relative_to(ROOT).as_posix(),
+        "bytes": destination.stat().st_size,
+        "content": content,
+        "dataset_alias": dataset_alias or None,
+    }
 
 
 def _job_payload(job: Job) -> dict[str, object]:
     with JOBS_LOCK:
-        return {
+        payload: dict[str, object] = {
             "id": job.job_id,
             "key": job.key,
             "command": job.display_command,
@@ -1228,8 +1542,28 @@ def _job_payload(job: Job) -> dict[str, object]:
             "returncode": job.returncode,
             "error": job.error,
             "running": not job.done,
+            "cancel_requested": job.cancel_requested,
             "structured": job.structured,
         }
+        context = job.training_context
+        lines = list(job.lines)
+        running = not job.done
+        returncode = job.returncode
+        cancel_requested = job.cancel_requested
+    if context is not None:
+        from web.training_status import training_snapshot
+
+        snapshot = training_snapshot(
+            context,
+            lines=lines,
+            running=running,
+            returncode=returncode,
+            cancel_requested=cancel_requested,
+        )
+        payload["training"] = None if snapshot is None else snapshot.to_dict()
+    else:
+        payload["training"] = None
+    return payload
 
 
 def _picker_payload(payload: object) -> dict[str, object]:
@@ -1263,15 +1597,22 @@ def _picker_payload(payload: object) -> dict[str, object]:
     script = (
         "Add-Type -AssemblyName System.Windows.Forms; "
         "$mode=$env:LNL_PICKER_MODE; $initial=$env:LNL_PICKER_INITIAL; "
+        "$owner=New-Object System.Windows.Forms.Form; $d=$null; "
+        "$owner.ShowInTaskbar=$false; $owner.TopMost=$true; "
+        "$owner.FormBorderStyle=[System.Windows.Forms.FormBorderStyle]::None; "
+        "$owner.StartPosition=[System.Windows.Forms.FormStartPosition]::CenterScreen; "
+        "$owner.Width=1; $owner.Height=1; $owner.Opacity=0; "
+        "try { [void]$owner.Show(); [void]$owner.Activate(); "
         "if($mode -eq 'folder'){ $d=New-Object System.Windows.Forms.FolderBrowserDialog; "
         "if($initial -and (Test-Path -LiteralPath $initial)){ $d.SelectedPath=$initial }; "
-        "if($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Write($d.SelectedPath)} } "
+        "if($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Write($d.SelectedPath)} } "
         "else { if($mode -eq 'save_file'){ $d=New-Object System.Windows.Forms.SaveFileDialog } "
         "else { $d=New-Object System.Windows.Forms.OpenFileDialog }; "
         "$d.Filter=$env:LNL_PICKER_FILTER; "
         "if($initial){ if(Test-Path -LiteralPath $initial -PathType Container){$d.InitialDirectory=$initial} "
         "elseif(Test-Path -LiteralPath $initial){$d.InitialDirectory=(Split-Path -Parent $initial);$d.FileName=(Split-Path -Leaf $initial)} }; "
-        "if($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Write($d.FileName)} }"
+        "if($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK){[Console]::Write($d.FileName)} } } "
+        "finally { if($null -ne $d){$d.Dispose()}; $owner.Close(); $owner.Dispose() }"
     )
     executable = Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
     result = subprocess.run(
@@ -1311,6 +1652,9 @@ def _sweep_plan_payload(payload: object) -> dict[str, object]:
         path_value=path_value or None,
     )
     config = resolve_config_paths(source_payload["config"], ROOT)
+    dataset_alias = str(payload.get("dataset_alias") or "").strip()
+    if dataset_alias:
+        config = ExperimentService().data_service.apply(config, dataset_alias)
     matrix = payload.get("matrix", {}) or {}
     if not isinstance(matrix, dict):
         raise TypeError("sweep matrix must be an object")
@@ -1409,8 +1753,118 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = urlparse(self.path).path
+        if path in STATIC_ASSETS:
+            asset, content_type = STATIC_ASSETS[path]
+            self._serve_file(asset, content_type)
+            return
         if path in {"/", "/recipe", "/recipe/"}:
             self._serve_file(WEB_ROOT / "index.html", "text/html; charset=utf-8")
+            return
+        if path in {"/scratch", "/scratch/"}:
+            self._serve_file(SCRATCH_WEB_ROOT / "index.html", "text/html; charset=utf-8")
+            return
+        if path in {"/scratch.js", "/scratch.css"}:
+            content_type = "application/javascript; charset=utf-8" if path.endswith(".js") else "text/css; charset=utf-8"
+            self._serve_file(SCRATCH_WEB_ROOT / path.lstrip("/"), content_type)
+            return
+        if path == "/api/scratch/blocks":
+            try:
+                _scratch_reload_formulas()
+                from lnl_toolbox.scratch import list_blocks
+
+                _json_response(self, [definition.describe() for definition in list_blocks()])
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 500)
+            return
+        if path == "/api/scratch/formulas":
+            try:
+                _scratch_reload_formulas()
+                from lnl_toolbox.scratch.formula.registry import list_formulas
+
+                _json_response(self, [_scratch_formula_payload(spec) for spec in list_formulas()])
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path.startswith("/api/scratch/formula/") and not path.endswith("/export"):
+            try:
+                from lnl_toolbox.scratch.formula.registry import get_formula
+
+                formula_id = unquote(path.removeprefix("/api/scratch/formula/"))
+                _json_response(self, _scratch_formula_payload(get_formula(formula_id)))
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 404)
+            return
+        if path.startswith("/api/scratch/formula/") and path.endswith("/export"):
+            try:
+                from lnl_toolbox.scratch.formula.storage import export_formula
+
+                formula_id = unquote(path.removeprefix("/api/scratch/formula/").removesuffix("/export"))
+                _json_response(self, export_formula(formula_id))
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 404)
+            return
+        if path == "/api/scratch/default-recipe":
+            try:
+                from lnl_toolbox.scratch import load_recipe
+
+                _json_response(self, load_recipe(SCRATCH_RECIPE_ROOT / "examples" / "default_supervised.yaml"))
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path == "/api/scratch/entry-recipe":
+            _json_response(self, {
+                "schema_version": 1,
+                "name": "空白 Scratch 算法",
+                "description": "选择单模型、双模型、论文模板或从空白开始。",
+                "settings": {},
+                "steps": [],
+            })
+            return
+        if path == "/api/scratch/templates":
+            try:
+                _json_response(self, _scratch_template_payload())
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path == "/api/scratch/examples":
+            try:
+                _json_response(self, _scratch_examples_payload())
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path == "/api/scratch/datasets":
+            try:
+                from lnl_toolbox.scratch.web.data_bridge import dataset_catalog_payload
+
+                _json_response(self, dataset_catalog_payload())
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path.startswith("/api/scratch/dataset/"):
+            try:
+                from lnl_toolbox.scratch.web.data_bridge import dataset_fact_payload
+
+                alias = unquote(path.removeprefix("/api/scratch/dataset/"))
+                _json_response(self, dataset_fact_payload(alias))
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path == "/api/scratch/recipes":
+            try:
+                _json_response(self, _scratch_recipe_api_payload())
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 500)
+            return
+        if path.startswith("/api/scratch/recipe/"):
+            try:
+                from lnl_toolbox.scratch import load_recipe
+
+                name = unquote(path.removeprefix("/api/scratch/recipe/"))
+                _json_response(self, load_recipe(_scratch_recipe_path(name)))
+            except FileNotFoundError as exc:
+                _json_response(self, _scratch_error(exc), 404)
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
             return
         if path == "/api/commands":
             _json_response(
@@ -1428,6 +1882,18 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/tutorial":
             _json_response(self, _tutorial_payload())
+            return
+        if path == "/api/quick-start/noises":
+            try:
+                query = parse_qs(urlparse(self.path).query)
+                alias = query.get("dataset", [""])[0].strip()
+                if not alias:
+                    raise ValueError("provide a dataset alias")
+                from web.quick_start_api import noise_options_payload
+
+                _json_response(self, noise_options_payload(alias))
+            except (KeyError, OSError, TypeError, ValueError) as exc:
+                _json_response(self, {"error": str(exc)}, 400)
             return
         if path == "/api/recipes":
             try:
@@ -1464,6 +1930,15 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     query = parse_qs(urlparse(self.path).query)
                     raw_prior = query.get("method_noise_rate_prior", [""])[0].strip()
                     value = _dataset_compatibility_payload(
+                        alias,
+                        method_noise_rate_prior=(
+                            None if not raw_prior else float(raw_prior)
+                        ),
+                    )
+                elif action == "compatible-recipes":
+                    query = parse_qs(urlparse(self.path).query)
+                    raw_prior = query.get("method_noise_rate_prior", [""])[0].strip()
+                    value = _dataset_recipe_compatibility_payload(
                         alias,
                         method_noise_rate_prior=(
                             None if not raw_prior else float(raw_prior)
@@ -1522,6 +1997,20 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             except (OSError, TypeError, ValueError) as exc:
                 _json_response(self, {"error": str(exc)}, 400)
             return
+        if path.startswith("/api/scratch/jobs/"):
+            try:
+                from lnl_toolbox.scratch.web.server import SCRATCH_JOBS, SCRATCH_JOBS_LOCK, _scratch_job_payload
+
+                job_id = path.removeprefix("/api/scratch/jobs/").strip("/")
+                with SCRATCH_JOBS_LOCK:
+                    job = SCRATCH_JOBS.get(job_id)
+                if job is None:
+                    _json_response(self, {"error": "Scratch job not found"}, 404)
+                else:
+                    _json_response(self, _scratch_job_payload(job))
+            except Exception as exc:
+                _json_response(self, {"error": str(exc)}, 400)
+            return
         if path.startswith("/api/jobs/"):
             job_id = path.rsplit("/", 1)[-1]
             with JOBS_LOCK:
@@ -1535,6 +2024,130 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path.startswith("/api/quick-start/"):
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                from web import quick_start_api
+
+                handlers = {
+                    "/api/quick-start/probe": quick_start_api.probe_payload,
+                    "/api/quick-start/register": quick_start_api.register_payload,
+                    "/api/quick-start/methods": quick_start_api.method_options_payload,
+                    "/api/quick-start/plan": quick_start_api.plan_payload,
+                }
+                handler = handlers.get(path)
+                if handler is None:
+                    raise ValueError("unknown Quick Start API endpoint")
+                _json_response(self, handler(payload))
+            except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError) as exc:
+                _json_response(self, {"error": str(exc)}, 400)
+            except Exception as exc:
+                _json_response(self, {"error": f"Quick Start backend error: {exc}"}, 500)
+            return
+        if path in {"/api/scratch/validate", "/api/scratch/save", "/api/scratch/run"}:
+            try:
+                payload = _scratch_request_body(self)
+                recipe = _scratch_recipe_from_body(payload)
+                if path == "/api/scratch/validate":
+                    _json_response(self, {"ok": True, "recipe": recipe})
+                elif path == "/api/scratch/save":
+                    from lnl_toolbox.scratch import recipe_workspace_root, save_recipe
+
+                    name = Path(str(recipe["name"])).name
+                    destination = recipe_workspace_root() / f"{name}.yaml"
+                    save_recipe(recipe, destination)
+                    _json_response(
+                        self,
+                        {"ok": True, "path": str(destination)},
+                        201,
+                    )
+                else:
+                    from lnl_toolbox.scratch.web.server import _scratch_job_payload, start_scratch_job
+
+                    job = start_scratch_job(recipe, payload.get("runtime_limits", {}))
+                    _json_response(self, _scratch_job_payload(job), 202)
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path.startswith("/api/scratch/jobs/") and path.endswith("/cancel"):
+            try:
+                from lnl_toolbox.scratch.web.server import _scratch_job_payload, cancel_scratch_job
+
+                job_id = path.removeprefix("/api/scratch/jobs/").removesuffix("/cancel").strip("/")
+                _json_response(self, _scratch_job_payload(cancel_scratch_job(job_id)), 202)
+            except KeyError:
+                _json_response(self, {"error": "Scratch job not found"}, 404)
+            except Exception as exc:
+                _json_response(self, {"error": str(exc)}, 400)
+            return
+        if path == "/api/scratch/formulas":
+            try:
+                payload = _scratch_request_body(self)
+                from lnl_toolbox.scratch.formula.registry import validate_and_register_formula
+                from lnl_toolbox.scratch.formula.storage import save_formula
+
+                spec = validate_and_register_formula(payload.get("formula", payload), replace=bool(payload.get("replace", False)))
+                destination = save_formula(spec, overwrite=True)
+                _json_response(self, {"ok": True, "formula": _scratch_formula_payload(spec), "path": str(destination)}, 201)
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path == "/api/scratch/formula/delete":
+            try:
+                payload = _scratch_request_body(self)
+                from lnl_toolbox.scratch.formula.registry import unregister_formula
+                from lnl_toolbox.scratch.formula.storage import delete_formula, find_formula_references
+
+                formula_id = str(payload.get("id", ""))
+                from lnl_toolbox.scratch import recipe_workspace_root
+
+                references = find_formula_references(SCRATCH_RECIPE_ROOT, formula_id)
+                references.extend(find_formula_references(recipe_workspace_root(), formula_id))
+                spec = delete_formula(formula_id, referenced_by=tuple(references))
+                unregister_formula(spec.id)
+                _json_response(self, {"ok": True, "id": spec.id})
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path == "/api/scratch/formula/import":
+            try:
+                payload = _scratch_request_body(self)
+                from lnl_toolbox.scratch.formula.registry import validate_and_register_formula
+                from lnl_toolbox.scratch.formula.storage import import_formula
+
+                spec = import_formula(payload.get("formula", payload.get("yaml", "")), overwrite=bool(payload.get("replace", False)))
+                validate_and_register_formula(spec, replace=True)
+                _json_response(self, {"ok": True, "formula": _scratch_formula_payload(spec)}, 201)
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path == "/api/scratch/formula/rename":
+            try:
+                payload = _scratch_request_body(self)
+                from lnl_toolbox.scratch.formula.registry import register_formula, unregister_formula
+                from lnl_toolbox.scratch.formula.storage import rename_formula
+
+                old_id, new_id = str(payload.get("old_id", "")), str(payload.get("new_id", ""))
+                spec = rename_formula(old_id, new_id)
+                try:
+                    unregister_formula(old_id)
+                except KeyError:
+                    pass
+                register_formula(spec, replace=True)
+                _json_response(self, {"ok": True, "formula": _scratch_formula_payload(spec)}, 201)
+            except Exception as exc:
+                _json_response(self, _scratch_error(exc), 400)
+            return
+        if path.startswith("/api/jobs/") and path.endswith("/cancel"):
+            job_id = path.split("/")[3]
+            try:
+                _json_response(self, _job_payload(cancel_job(job_id)), 202)
+            except KeyError as exc:
+                _json_response(self, {"error": str(exc)}, 404)
+            except OSError as exc:
+                _json_response(self, {"error": str(exc)}, 409)
+            return
         if path.startswith("/api/datasets/"):
             try:
                 parts = path.split("/")

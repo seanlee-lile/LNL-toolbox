@@ -1,0 +1,36 @@
+id: builtin/sharpen_distribution
+name: Sharpen Distribution
+description: Raise a distribution to reciprocal temperature and row-normalize it.
+inputs:
+  probabilities: {type: probability}
+parameters:
+  temperature: {type: float, default: 0.5, minimum: 0.0001}
+  epsilon: {type: float, default: 1.0e-12, minimum: 0.0}
+steps:
+  - id: bounded
+    block: clamp_min
+    bindings: {input: probabilities}
+    parameters: {minimum: 0.0}
+  - id: temperature_value
+    block: constant
+    parameters: {value: $temperature}
+  - id: inverse_temperature
+    block: reciprocal
+    bindings: {input: temperature_value}
+  - id: powered
+    block: elementwise_power
+    bindings: {input: bounded}
+    parameters: {q: $inverse_temperature}
+  - id: row_sum
+    block: reduce_sum
+    bindings: {input: powered}
+    parameters: {dim: -1, keepdim: true}
+  - id: safe_sum
+    block: clamp_min
+    bindings: {input: row_sum}
+    parameters: {minimum: epsilon}
+  - id: sharpened
+    block: divide
+    bindings: {numerator: powered, denominator: safe_sum}
+outputs:
+  sharpened: {source: sharpened}

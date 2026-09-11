@@ -81,17 +81,40 @@ class DLDConfig:
             external = _mapping(
                 extractor.get("external"), "dld.feature_extractor.external"
             )
-            if str(external.get("adapter", "")).strip().lower() != "upm_main_best":
-                raise ValueError("DLD external feature adapter must be upm_main_best")
-            for field in (
-                "run_directory_env",
-                "checkpoint_sha256",
-                "manifest_sha256",
-                "mapping_hash",
-                "dataset_fingerprint",
-            ):
+            adapter = str(external.get("adapter", "")).strip().lower()
+            supported = {
+                "upm_main_best",
+                "torchvision_resnet34_imagenet1k_v1",
+            }
+            if adapter not in supported:
+                raise ValueError(
+                    "DLD external feature adapter must be one of: "
+                    + ", ".join(sorted(supported))
+                )
+            required = (
+                (
+                    "run_directory_env",
+                    "checkpoint_sha256",
+                    "manifest_sha256",
+                    "mapping_hash",
+                    "dataset_fingerprint",
+                )
+                if adapter == "upm_main_best"
+                else ("weights", "input_contract")
+            )
+            for field in required:
                 if not str(external.get(field, "")).strip():
                     raise ValueError(f"dld.feature_extractor.external.{field} is required")
+            if adapter == "torchvision_resnet34_imagenet1k_v1":
+                if str(external["weights"]).strip() != "IMAGENET1K_V1":
+                    raise ValueError(
+                        "DLD torchvision ResNet34 weights must be IMAGENET1K_V1"
+                    )
+                if str(external["input_contract"]).strip() != "cifar10_standard_normalized":
+                    raise ValueError(
+                        "DLD torchvision ResNet34 input_contract must be "
+                        "cifar10_standard_normalized"
+                    )
 
         precorrection = _mapping(section.get("precorrection"), "dld.precorrection")
         _positive_int(precorrection.get("k_neighbors"), "dld.precorrection.k_neighbors")

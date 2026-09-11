@@ -1,0 +1,29 @@
+"""Independent, recipe-driven LNL scratch builder."""
+
+from .context import ScratchContext
+from .executor import ScratchExecutionError, execute_recipe, execute_steps
+from .recipe import load_recipe, recipe_workspace_root, resolve_recipe, save_recipe
+from .registry import BLOCKS, describe_block, get_block, list_blocks
+from .validation import ScratchValidationError, validate_recipe
+
+# Built-in and dynamically saved formulas are registered after the canonical
+# Scratch blocks have loaded, so formula steps can resolve the same registry.
+from .formula.registry import register_builtin_formulas
+
+register_builtin_formulas()
+
+__all__ = [
+    "BLOCKS",
+    "ScratchContext",
+    "ScratchExecutionError",
+    "ScratchValidationError",
+    "describe_block",
+    "execute_recipe",
+    "execute_steps",
+    "get_block",
+    "list_blocks",
+    "load_recipe",
+    "recipe_workspace_root",
+    "save_recipe",
+    "validate_recipe",
+]

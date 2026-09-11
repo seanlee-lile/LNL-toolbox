@@ -1,0 +1,62 @@
+schema_version: 1
+name: ca2c
+description: "Formal CA2C CIFAR-100 symmetric-20 recipe with SevenCNN, warmup/candidate memory, asymmetric co-learning objective, and cosine SGD."
+steps:
+  - {block: set_seed, params: {seed: 123}}
+  - {block: select_device, params: {device: auto}}
+  - {block: load_dataset, params: {dataset: cifar100}}
+  - {block: inspect_dataset_semantics}
+  - {block: create_dataset_split, params: {validation_size: 0, split_seed: 123}}
+  - {block: select_label_source}
+  - {block: apply_noise, params: {name: symmetric, rate: 0.2, seed: 123}}
+  - {block: build_noise_manifest}
+  - {block: configure_preprocessing, params: {preprocessing: standard, augment: true}}
+  - {block: configure_views, params: {views: [weak]}}
+  - {block: assign_data_roles, params: {roles: [train, test]}}
+  - {block: configure_loader, params: {batch_size: 128, num_workers: 4, pin_memory: true}}
+  - {block: build_prepared_data}
+  - {block: build_loaders}
+  - {block: create_model, params: {model: ca2c_seven_cnn, num_classes: 100, device: device, save_as: model_p}}
+  - {block: create_model, params: {model: ca2c_seven_cnn, num_classes: 100, device: device, save_as: model_n}}
+  - {block: create_optimizer, params: {optimizer: sgd, model: model_p, lr: 0.02, momentum: 0.9, nesterov: true, weight_decay: 0.0005, save_as: optimizer}}
+  - {block: create_optimizer, params: {optimizer: sgd, model: model_n, lr: 0.02, momentum: 0.9, nesterov: true, weight_decay: 0.0005, save_as: optimizer_n}}
+  - {block: create_scheduler, params: {scheduler: cosine, optimizer: optimizer, t_max: 700, eta_min: 0.0, save_as: scheduler}}
+  - {block: create_scheduler, params: {scheduler: cosine, optimizer: optimizer_n, t_max: 700, eta_min: 0.0, save_as: scheduler_n}}
+  - {block: create_indexed_state, params: {prepared_data: prepared_data, width: 100, dtype: float32, initial_value: 0.0, save_as: ca2c_candidate_memory}}
+  - block: epoch_loop
+    params: {epochs: 700}
+    steps:
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad}
+          - {block: zero_grad, params: {optimizer: optimizer_n}}
+          - {block: forward, params: {model: model_p, save_as: logits_p}}
+          - {block: forward, params: {model: model_n, save_as: logits_n}}
+          - block: if_epoch_lt
+            params: {epoch: 400}
+            steps:
+              - {block: per_sample_ce, params: {logits: logits_p, labels: labels, save_as: ca2c_warmup_positive}}
+              - {block: per_sample_ce, params: {logits: logits_n, labels: labels, save_as: ca2c_warmup_negative}}
+              - {block: mean_loss, params: {input: ca2c_warmup_positive, save_as: ca2c_warmup_positive_mean}}
+              - {block: mean_loss, params: {input: ca2c_warmup_negative, save_as: ca2c_warmup_negative_mean}}
+              - {block: weighted_sum, params: {terms: [ca2c_warmup_positive_mean, ca2c_warmup_negative_mean], weights: [0.5, 0.5], save_as: loss}}
+          - block: if_epoch_ge
+            params: {epoch: 400}
+            steps:
+              - {block: top_k_mask, params: {scores: logits_n, k: 2, save_as: ca2c_candidates}}
+              - {block: top_k_mask, params: {scores: logits_p, k: 2, save_as: ca2c_positive_mask}}
+              - {block: invert_mask, params: {mask: ca2c_positive_mask, save_as: ca2c_complements}}
+              - {block: indexed_accumulate, params: {state: ca2c_candidate_memory, indices: indices, values: ca2c_candidates, save_as: ca2c_candidate_memory}}
+              - {block: indexed_read, params: {state: ca2c_candidate_memory, indices: indices, save_as: ca2c_candidates}}
+              - {block: partial_label_loss, params: {logits: logits_p, candidates: ca2c_candidates, hard_weight: 0.99, save_as: ca2c_positive_loss}}
+              - {block: complementary_negative_loss, params: {logits: logits_n, complements: ca2c_complements, save_as: ca2c_negative_loss}}
+              - {block: weighted_sum, params: {terms: [ca2c_positive_loss, ca2c_negative_loss], weights: [1.0, 1.0], save_as: loss}}
+          - {block: backward, params: {model: model_p + model_n}}
+          - {block: optimizer_step}
+          - {block: optimizer_step, params: {optimizer: optimizer_n}}
+      - {block: scheduler_step}
+      - {block: scheduler_step, params: {scheduler: scheduler_n}}

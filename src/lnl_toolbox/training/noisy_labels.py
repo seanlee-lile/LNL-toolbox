@@ -84,6 +84,7 @@ def _validate_manifest(
     *,
     dataset: str,
     dataset_targets: np.ndarray,
+    dataset_indices: np.ndarray,
     required_indices: np.ndarray,
     num_classes: int,
     mode: str,
@@ -94,6 +95,7 @@ def _validate_manifest(
         dataset,
         num_classes,
         required_indices=required_indices,
+        reference_indices=dataset_indices,
     )
     if manifest.split != "train":
         raise ValueError("Noise manifest split must be 'train'")
@@ -129,6 +131,7 @@ def prepare_noise_manifest(
     run_dir: Path,
     checkpoint_payload: Mapping[str, Any] | None = None,
     dataset_targets: np.ndarray | None = None,
+    dataset_indices: np.ndarray | None = None,
 ) -> tuple[NoiseManifest | None, Path | None]:
     """Prepare one immutable run-local manifest for generated or external noise."""
 
@@ -151,6 +154,11 @@ def prepare_noise_manifest(
             raise ValueError("dataset_targets is required for non-contiguous global indices")
         dataset_targets = clean_targets
     dataset_targets = np.asarray(dataset_targets, dtype=np.int64)
+    if dataset_indices is None:
+        dataset_indices = np.arange(dataset_targets.size, dtype=np.int64)
+    dataset_indices = np.asarray(dataset_indices, dtype=np.int64)
+    if dataset_indices.shape != dataset_targets.shape:
+        raise ValueError("dataset_indices must align with dataset_targets")
     generated_spec = _generated_spec(config) if mode == "generated" else None
 
     if checkpoint_payload is not None:
@@ -176,6 +184,7 @@ def prepare_noise_manifest(
             manifest,
             dataset=dataset,
             dataset_targets=dataset_targets,
+            dataset_indices=dataset_indices,
             required_indices=global_indices,
             num_classes=num_classes,
             mode=mode,
@@ -240,6 +249,7 @@ def prepare_noise_manifest(
             manifest,
             dataset=dataset,
             dataset_targets=dataset_targets,
+            dataset_indices=dataset_indices,
             required_indices=global_indices,
             num_classes=num_classes,
             mode=mode,

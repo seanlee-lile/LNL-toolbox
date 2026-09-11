@@ -1,0 +1,25 @@
+id: builtin/mae_loss
+name: Mean Absolute Error Loss
+description: Softmax probabilities compared with one-hot labels by per-sample mean absolute error.
+inputs:
+  logits: {type: tensor}
+  labels: {type: labels}
+steps:
+  - id: probabilities
+    block: softmax
+    bindings: {logits: logits}
+  - id: target
+    block: one_hot_like
+    bindings: {labels: labels, reference: logits}
+  - id: difference
+    block: subtract
+    bindings: {minuend: probabilities, subtrahend: target}
+  - id: absolute
+    block: abs
+    bindings: {input: difference}
+  - id: loss
+    block: reduce_mean
+    bindings: {input: absolute}
+    parameters: {dim: -1}
+outputs:
+  loss: {source: loss}

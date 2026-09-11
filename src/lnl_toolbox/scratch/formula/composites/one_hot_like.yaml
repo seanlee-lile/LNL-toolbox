@@ -1,0 +1,16 @@
+id: builtin/one_hot_like
+name: One-hot Like
+description: Infer the class width from a reference tensor, then encode labels.
+inputs:
+  labels: {type: labels}
+  reference: {type: tensor}
+steps:
+  - id: classes
+    block: class_count
+    bindings: {reference: reference}
+  - id: one_hot_labels
+    block: one_hot
+    bindings: {labels: labels}
+    parameters: {num_classes: "$classes"}
+outputs:
+  one_hot_labels: {source: one_hot_labels}

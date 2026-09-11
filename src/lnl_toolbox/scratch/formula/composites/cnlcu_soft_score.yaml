@@ -1,0 +1,58 @@
+id: builtin/cnlcu_soft_score
+name: CNLCU Soft Selection Score
+description: CNLCU Eq. (7) as a transparent elementwise score and bonus composition.
+inputs:
+  robust_mean: {type: tensor}
+  history_length: {type: tensor}
+  selected_count: {type: tensor}
+parameters:
+  sigma_squared: {type: float, default: 0.01, minimum: 0.000001, maximum: 0.999999}
+steps:
+  - id: one
+    block: constant
+    parameters: {value: 1.0}
+  - id: sigma
+    block: constant
+    parameters: {value: "$sigma_squared"}
+  - id: count
+    block: add
+    bindings: {left: selected_count, right: one}
+  - id: two
+    block: constant
+    parameters: {value: 2.0}
+  - id: twice_t
+    block: elementwise_multiply
+    bindings: {left: two, right: history_length}
+  - id: log_twice_t
+    block: log
+    bindings: {input: twice_t}
+  - id: t_squared
+    block: elementwise_power
+    bindings: {input: history_length}
+    parameters: {q: 2.0}
+  - id: sigma_log
+    block: elementwise_multiply
+    bindings: {left: sigma, right: log_twice_t}
+  - id: correction
+    block: safe_divide
+    bindings: {numerator: sigma_log, denominator: t_squared}
+    parameters: {minimum: 0.0}
+  - id: numerator_sum
+    block: add
+    bindings: {left: history_length, right: correction}
+  - id: sigma_numerator
+    block: elementwise_multiply
+    bindings: {left: sigma, right: numerator_sum}
+  - id: denominator
+    block: subtract
+    bindings: {minuend: count, subtrahend: sigma}
+  - id: bonus
+    block: safe_divide
+    bindings: {numerator: sigma_numerator, denominator: denominator}
+    parameters: {minimum: 0.0}
+  - id: score
+    block: subtract
+    bindings: {minuend: robust_mean, subtrahend: bonus}
+outputs:
+  score: {source: score}
+  bonus: {source: bonus}

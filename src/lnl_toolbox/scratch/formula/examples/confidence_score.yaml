@@ -1,0 +1,16 @@
+id: builtin/confidence_score
+name: Confidence Score
+description: Per-sample target probability with no implicit reduction.
+inputs:
+  logits: {description: model logits}
+  targets: {description: observed labels, type: labels}
+steps:
+  - id: probabilities
+    block: softmax
+    bindings: {logits: logits}
+  - id: score
+    block: gather_by_label
+    bindings: {values: probabilities, labels: targets}
+outputs:
+  score: {source: score}
+metadata: {kind: score, formula_group: probability, reduction: explicit}

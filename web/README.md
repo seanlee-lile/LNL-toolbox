@@ -6,13 +6,13 @@
 
 在仓库根目录运行：
 
-    lnl web
+    lnl web --host 127.0.0.1 --port 8765
 
 然后打开 http://127.0.0.1:8765。
 根路径是原有主控制台；Recipe/YAML 编辑器保留为独立子页面：
 http://127.0.0.1:8765/recipe。`lnl web` 默认打开主页；`lnl web --no-open` 只启动服务。
 
-直接开发后端时仍可运行：
+`lnl web` 是普通用户和本地使用的推荐入口。直接开发后端时仍可运行：
 
     python web/command_console.py
 
@@ -26,7 +26,37 @@ http://127.0.0.1:8765/recipe。`lnl web` 默认打开主页；`lnl web --no-open
 
     python -m unittest discover -s web -p "test_*.py" -v
 
-主页默认进入“新手教程”，并按以下顺序推进：
+## Quick Start
+
+Quick Start 的最短流程是：
+
+    数据路径 → 自动识别 → 自动登记与 inspect → 选择标签噪声 → 选择论文方法 → 预演/训练
+
+它不要求用户先手工登记 alias，也不会从已有 recipe 反推噪声选项。若条件完全匹配仓库的
+正式 recipe，页面显示“论文复现配置”；否则显示“Toolbox 适配配置”，说明它只是基于现有
+方法实现和训练模板为当前数据集、噪声条件生成的可运行配置，不等同于论文原始复现。
+
+Quick Start 只负责编排，最终训练仍使用现有 `/api/run`、job polling、日志和停止任务流程。
+复杂数据集或额外 checkpoint、manifest 等资源，继续从“本地数据集”或 YAML 编辑器进入。
+
+主页面左侧导航当前依次为：**快速开始**、**新手教程**、**新建 YAML**、**本地数据集**、**参数 Sweep**、**运行管理**、**论文方法**、**自由输入**。用户填写当前模块字段后，真实命令会在右侧内容区下方的 **Preview** 显示；执行、复制、清空日志和常用快捷命令也都位于该 Preview 组块中。
+
+## 论文方法与前置条件
+
+论文页面使用具体 recipe 的“当前选择”卡片显示 **可用**、**需补充条件** 或 **不兼容**，不再显示旧的兼容性分类列表。缺少 prerequisite 时 Run 保持禁用；满足真实条件后会恢复可用。
+
+- **PCSE** 仅支持角色明确、身份兼容的 UPM 主模型、监督 CE 模型和 Co-teaching peer A 模型。可用 `LNL_PCSE_SOURCE_RUN` 提供来源运行目录，但不能把任意 checkpoint 当作来源。
+- **DLD** 的 formal/paper-oriented 配置需要真实的 pretrained feature extractor；Toolbox 不自动联网下载 torchvision 权重，random frozen 模型只属于 engineering/smoke。
+- **CAL** 需要对齐的 external clean/noisy label artifact，不是 pretrained model；clean vector 仅用于 identity、alignment 和 evaluation，不参与训练更新。
+- **MentorNet** 保持单独的准备流程：准备 Mentor 特征 → 训练 MentorArtifact → 运行 Student。缺少 artifact 时 Student 被阻止，不会自动训练 Mentor。
+
+## 长训练输出
+
+训练任务默认显示简洁状态：当前/最后完成的阶段、最近完成的 epoch，以及仅在已知时显示的总 epoch。它只读取已 flush 的 `metrics.jsonl`，因此不展示 batch 进度、百分比或 ETA。
+
+点击“详细输出”可同时查看原始合并 stdout/stderr 与最近 100 条指标事件。读取半写入的 JSON 行失败时会忽略该行并保留上一次有效状态；状态展示失败不会中断训练，也不会改变 runner、checkpoint 或训练数学。
+
+主页默认进入“快速开始”，先按数据集 → 标签噪声 → 正式配置开始实验；“新手教程”仍保留，并按以下顺序推进：
 
     doctor → list → validate → dry-run → run → resume
 
@@ -62,3 +92,17 @@ YAML，或直接将内置配置带入参数 Sweep；项目 YAML 保存成功后�
 新手模式和“使用已登记数据训练”会生成
 `lnl run --recipe <template> --data <alias>`。这里的 recipe 是训练模板，`--data` 才决定
 实际数据集；覆盖论文 recipe 的数据后只表示方法迁移测试，不再表示论文原始配置复现。
+
+新建 YAML 只保留编辑器中的一个项目路径作为加载与保存位置。编辑器在切换左侧模块时
+自动收起；未保存草稿仍保留，并通过“继续编辑 YAML（未保存）”重新打开。选择已登记且
+完成 inspect 的数据集后，论文列表按每份正式 recipe 的实际兼容性门禁标记；不兼容或仍
+缺输入的配置不可选择。数据页也可直接把“数据别名 + 兼容的正式 recipe”带到新建 YAML。
+数据别名作为 `--data` 运行时覆盖传递，不改写论文 YAML 中锁定的数据/噪声协议，因此该
+组合明确属于数据迁移训练。
+
+数据页面在选择 **使用已登记数据训练** 时显示数据集优先流程：`数据集信息` 是 adapter 和
+实际 train/test 加载得到的只读事实；`需要确认的数据集信息` 只列 UNKNOWN 的数据集声明；
+具体 recipe 的“当前选择”卡片再说明方法输入。其他数据操作不会常驻显示训练流程。噪声来源
+使用受限选项，估计噪声率必须同时说明来源。方法噪声率先验、checkpoint 和外部 artifact
+不会写入本地数据 catalog，而是通过 YAML/recipe 的真实配置路径进入 Validate、Dry-run 或
+Run。预训练角色必须解析为实际文件/目录，角色字符串本身不构成证据。

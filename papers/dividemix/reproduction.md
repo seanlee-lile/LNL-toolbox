@@ -27,11 +27,13 @@ python -m lnl_toolbox.cli.main run `
   --output-dir <temporary-run-directory>
 ```
 
-This executes 10 warmup epochs followed by one main DivideMix epoch. Resume
-the same run to two completed main epochs with:
+This executes 10 warmup epochs followed by one main DivideMix epoch. `lnl resume`
+does not accept `--epochs`; to extend the main-stage target, copy the resolved
+configuration, change the explicit `dividemix.training.epochs` value, then use
+`lnl run --config ... --resume <run-directory>/last.pt` after a Dry-run.
 
 ```powershell
-python -m lnl_toolbox.cli.main resume <temporary-run-directory> --epochs 2
+lnl resume <temporary-run-directory>
 ```
 
 Generated checkpoints, manifests, metrics, and per-epoch co-divide artifacts

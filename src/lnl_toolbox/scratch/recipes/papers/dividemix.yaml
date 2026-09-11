@@ -1,0 +1,83 @@
+schema_version: 1
+name: dividemix
+description: "Formal DivideMix CIFAR-10 symmetric-20 recipe: two preactivation ResNet18 peers, warmup/co-divide GMM, co-refinement, MixMatch, and 300 epochs."
+steps:
+  - {block: set_seed, params: {seed: 1}}
+  - {block: select_device, params: {device: auto}}
+  - {block: load_dataset, params: {dataset: cifar10}}
+  - {block: inspect_dataset_semantics}
+  - {block: create_dataset_split, params: {validation_size: 5000, split_seed: 1}}
+  - {block: select_label_source, params: {validation: observed}}
+  - {block: apply_noise, params: {name: symmetric, rate: 0.2, seed: 1}}
+  - {block: build_noise_manifest}
+  - {block: configure_preprocessing, params: {preprocessing: standard, augment: true}}
+  - {block: configure_views, params: {views: [weak, strong]}}
+  - {block: assign_data_roles, params: {roles: [train, train_eval, noisy_validation, test]}}
+  - {block: configure_loader, params: {batch_size: 128, num_workers: 4, pin_memory: true}}
+  - {block: build_prepared_data}
+  - {block: build_loaders}
+  - {block: create_model, params: {model: preact_resnet18, num_classes: 10, base_width: 64, device: device, save_as: model_a}}
+  - {block: create_model, params: {model: preact_resnet18, num_classes: 10, base_width: 64, device: device, save_as: model_b}}
+  - {block: create_optimizer, params: {optimizer: sgd, model: model_a, lr: 0.02, momentum: 0.9, weight_decay: 0.0005, save_as: optimizer_a}}
+  - {block: create_optimizer, params: {optimizer: sgd, model: model_b, lr: 0.02, momentum: 0.9, weight_decay: 0.0005, save_as: optimizer_b}}
+  - {block: create_scheduler, params: {scheduler: multistep, optimizer: optimizer_a, milestones: [150], gamma: 0.1, save_as: scheduler_a}}
+  - {block: create_scheduler, params: {scheduler: multistep, optimizer: optimizer_b, milestones: [150], gamma: 0.1, save_as: scheduler_b}}
+  - {block: create_indexed_state, params: {prepared_data: prepared_data, width: 1, save_as: clean_probability_state_a}}
+  - {block: create_indexed_state, params: {prepared_data: prepared_data, width: 1, save_as: clean_probability_state_b}}
+  - block: epoch_loop
+    params: {epochs: 300}
+    steps:
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train_eval, batch_size: 128, save_as: train_eval_loader}}
+      - {block: collect_loss_snapshot, params: {model: model_a, loader: train_eval_loader, device: device, save_as: loss_snapshot_a, losses_as: snapshot_losses_a, targets_as: snapshot_targets_a, indices_as: snapshot_indices_a}}
+      - {block: collect_loss_snapshot, params: {model: model_b, loader: train_eval_loader, device: device, save_as: loss_snapshot_b, losses_as: snapshot_losses_b, targets_as: snapshot_targets_b, indices_as: snapshot_indices_b}}
+      - {block: fit_gmm, params: {losses: snapshot_losses_a, save_as: clean_probability_a}}
+      - {block: fit_gmm, params: {losses: snapshot_losses_b, save_as: clean_probability_b}}
+      - {block: indexed_write, params: {state: clean_probability_state_a, indices: snapshot_indices_a, values: clean_probability_a, save_as: clean_probability_state_a}}
+      - {block: indexed_write, params: {state: clean_probability_state_b, indices: snapshot_indices_b, values: clean_probability_b, save_as: clean_probability_state_b}}
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad, params: {optimizer: optimizer_a}}
+          - {block: zero_grad, params: {optimizer: optimizer_b}}
+          - {block: forward, params: {model: model_a, save_as: logits_a}}
+          - {block: forward, params: {model: model_b, save_as: logits_b}}
+          - {block: indexed_read, params: {state: clean_probability_state_b, indices: indices, save_as: clean_probability}}
+          - {block: detach, params: {input: clean_probability, save_as: clean_probability}}
+          - {block: threshold_mask, params: {values: clean_probability, threshold: 0.5, comparison: ge, save_as: clean_mask}}
+          - {block: mask_to_indices, params: {mask: clean_mask, save_as: clean_indices}}
+          - {block: softmax, params: {logits: logits_a, save_as: probabilities}}
+          - {block: one_hot, params: {labels: labels, num_classes: 10, save_as: one_hot_labels}}
+          - {block: weighted_blend, params: {left: one_hot_labels, right: probabilities, weight: clean_probability, save_as: refined_labels}}
+          - {block: sharpen_distribution, params: {input: refined_labels, temperature: 0.5, save_as: refined_labels}}
+          - {block: soft_target_cross_entropy, params: {logits: logits_a, targets: refined_labels, mask: clean_mask, save_as: loss_x_a}}
+          - {block: invert_mask, params: {mask: clean_mask, save_as: noisy_mask}}
+          - {block: softmax, params: {logits: logits_a, save_as: noisy_probabilities_a}}
+          - {block: mean_squared_error, params: {predicted: noisy_probabilities_a, target: refined_labels, mask: noisy_mask, reduction: scalar, save_as: loss_u_a}}
+          - {block: softmax, params: {logits: logits_a, save_as: prior_probabilities_a}}
+          - {block: uniform_prior, params: {reference: prior_probabilities_a, save_as: uniform_prior_a}}
+          - {block: prior_kl, params: {probabilities: prior_probabilities_a, prior: uniform_prior_a, save_as: loss_r_a}}
+          - {block: weighted_sum, params: {terms: [loss_x_a, loss_u_a, loss_r_a], weights: [1.0, 25.0, 1.0], save_as: loss}}
+          - {block: backward, params: {loss: loss, model: model_a}}
+          - {block: optimizer_step, params: {optimizer: optimizer_a}}
+          - {block: indexed_read, params: {state: clean_probability_state_a, indices: indices, save_as: clean_probability}}
+          - {block: threshold_mask, params: {values: clean_probability, threshold: 0.5, comparison: ge, save_as: clean_mask}}
+          - {block: mask_to_indices, params: {mask: clean_mask, save_as: clean_indices}}
+          - {block: softmax, params: {logits: logits_b, save_as: probabilities_b}}
+          - {block: one_hot, params: {labels: labels, num_classes: 10, save_as: one_hot_labels_b}}
+          - {block: weighted_blend, params: {left: one_hot_labels_b, right: probabilities_b, weight: clean_probability, save_as: refined_labels_b}}
+          - {block: sharpen_distribution, params: {input: refined_labels_b, temperature: 0.5, save_as: refined_labels_b}}
+          - {block: soft_target_cross_entropy, params: {logits: logits_b, targets: refined_labels_b, mask: clean_mask, save_as: loss_x_b}}
+          - {block: invert_mask, params: {mask: clean_mask, save_as: noisy_mask_b}}
+          - {block: softmax, params: {logits: logits_b, save_as: noisy_probabilities_b}}
+          - {block: mean_squared_error, params: {predicted: noisy_probabilities_b, target: refined_labels_b, mask: noisy_mask_b, reduction: scalar, save_as: loss_u_b}}
+          - {block: softmax, params: {logits: logits_b, save_as: prior_probabilities_b}}
+          - {block: uniform_prior, params: {reference: prior_probabilities_b, save_as: uniform_prior_b}}
+          - {block: prior_kl, params: {probabilities: prior_probabilities_b, prior: uniform_prior_b, save_as: loss_r_b}}
+          - {block: weighted_sum, params: {terms: [loss_x_b, loss_u_b, loss_r_b], weights: [1.0, 25.0, 1.0], save_as: loss_b}}
+          - {block: backward, params: {loss: loss_b, model: model_b}}
+          - {block: optimizer_step, params: {optimizer: optimizer_b}}
+      - {block: scheduler_step, params: {scheduler: scheduler_a}}
+      - {block: scheduler_step, params: {scheduler: scheduler_b}}

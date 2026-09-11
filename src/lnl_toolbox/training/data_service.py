@@ -17,16 +17,21 @@ from torch.utils.data import DataLoader, Dataset
 
 from lnl_toolbox.data.cifar_n import add_cifar_n_sources
 from lnl_toolbox.data.contracts import (
+    DataProtocol,
     DataRequirements,
     DataRole,
     DataSpec,
+    InputSpec,
+    NoiseDescriptor,
     RawDatasetSplit,
+    UnsupportedDatasetSplitError,
 )
 from lnl_toolbox.data.mnist import add_mnist_sources
 from lnl_toolbox.data.local_catalog import LocalDatasetCatalog, LocalDatasetRecord
 from lnl_toolbox.data.profile import (
     DatasetCapabilities,
     DatasetDeclarations,
+    DatasetSemanticHints,
     DatasetProfile,
     KnowledgeState,
     Modality,
@@ -61,6 +66,20 @@ def create_dataset_registry() -> DatasetRegistry:
 
 
 DATASETS = create_dataset_registry()
+
+_LOCAL_SOURCE_KEYS = {
+    "root",
+    "path",
+    "noise_path",
+    "labels_path",
+    "annotation_root",
+}
+
+
+def _scale_cifar_tensor(value: torch.Tensor) -> torch.Tensor:
+    """Scale a CIFAR tensor without capturing a local function in workers."""
+
+    return (value - 0.5) * 2.0
 
 
 def _seed_worker(_worker_id: int) -> None:
@@ -146,6 +165,7 @@ def _profile_from_splits(
     adapter: str,
     source: str | None,
     splits: Mapping[str, RawDatasetSplit],
+    semantic_hints: DatasetSemanticHints | None = None,
 ) -> DatasetProfile:
     train = splits["train"]
     modality, input_shape, channels = _input_contract(train)
@@ -169,7 +189,7 @@ def _profile_from_splits(
     )
     validation = splits.get("validation")
     clean_validation = (
-        KnowledgeState.UNAVAILABLE
+        KnowledgeState.UNKNOWN
         if validation is None
         else KnowledgeState.AVAILABLE
         if validation.clean_targets is not None
@@ -196,7 +216,7 @@ def _profile_from_splits(
                 NoiseRateInfo(NoiseRateStatus.NOT_APPLICABLE),
             )
     class_names = train.class_names or tuple(str(index) for index in range(classes))
-    return DatasetProfile(
+    profile = DatasetProfile(
         dataset=name,
         adapter=adapter,
         source=source,
@@ -218,6 +238,40 @@ def _profile_from_splits(
         dataset_fingerprint=dataset_fingerprint,
         split_fingerprints=tuple(split_fingerprints.items()),
         noise=noise,
+    )
+    hints = semantic_hints or DatasetSemanticHints()
+
+    def fill_state(current: KnowledgeState, hinted: KnowledgeState, field_name: str) -> KnowledgeState:
+        if getattr(hinted, "value", hinted) == "unknown":
+            return current
+        if getattr(current, "value", current) != "unknown" and current != hinted:
+            raise ValueError(f"adapter semantic hint conflicts with inspected {field_name}")
+        return hinted
+
+    modality = profile.modality
+    if hints.modality is not Modality.UNKNOWN:
+        if modality is not Modality.UNKNOWN and modality is not hints.modality:
+            raise ValueError("adapter semantic hint conflicts with inspected modality")
+        modality = hints.modality
+    hinted_noise = hints.noise
+    noise_value = profile.noise
+    noise_status = fill_state(noise_value.status, hinted_noise.status, "noise_status")
+    noise_origin = fill_state(noise_value.origin, hinted_noise.origin, "noise_origin")
+    noise_rate = noise_value.rate
+    if hinted_noise.rate.status is not NoiseRateStatus.UNKNOWN:
+        if noise_rate.status is not NoiseRateStatus.UNKNOWN and noise_rate != hinted_noise.rate:
+            raise ValueError("adapter semantic hint conflicts with inspected noise_rate")
+        if noise_rate.status is NoiseRateStatus.UNKNOWN:
+            noise_rate = hinted_noise.rate
+    noise_value = NoiseKnowledge(noise_status, noise_origin, noise_rate)
+    return replace(
+        profile,
+        modality=modality,
+        observed_train_labels=fill_state(profile.observed_train_labels, hints.observed_train_labels, "observed_train_labels"),
+        clean_train_labels=fill_state(profile.clean_train_labels, hints.clean_train_labels, "clean_train_labels"),
+        clean_validation_labels=fill_state(profile.clean_validation_labels, hints.clean_validation_labels, "clean_validation_labels"),
+        stable_indices=fill_state(profile.stable_indices, hints.stable_indices, "stable_indices"),
+        noise=noise_value,
     )
 
 
@@ -242,7 +296,7 @@ def _transforms(
             operations: list[Any] = []
             if training and bool(data.get("augment", True)):
                 operations.extend((transforms.Pad(4), transforms.RandomCrop(32), transforms.RandomHorizontalFlip()))
-            operations.extend((transforms.ToTensor(), transforms.Lambda(lambda value: (value - 0.5) * 2.0)))
+            operations.extend((transforms.ToTensor(), transforms.Lambda(_scale_cifar_tensor)))
             weak = transforms.Compose(operations)
         else:
             weak = build_cifar_transform(
@@ -301,7 +355,9 @@ def _transforms(
 class PreparedData:
     spec: DataSpec
     requirements: DataRequirements
+    protocol: DataProtocol
     train_split: RawDatasetSplit
+    validation_split: RawDatasetSplit | None
     test_split: RawDatasetSplit
     train_indices: np.ndarray
     validation_indices: np.ndarray
@@ -310,6 +366,7 @@ class PreparedData:
     manifest_path: Path | None
     datasets: dict[DataRole, Dataset]
     loader_config: Mapping[str, Any]
+    noise_config: Mapping[str, Any]
     seed: int
     data_manifest_path: Path
     data_fingerprint: str
@@ -323,12 +380,94 @@ class PreparedData:
         return self.train_split.dataset
 
     @property
+    def validation_uses_train_manifest(self) -> bool:
+        """Whether noisy validation is intentionally scoped to the train manifest."""
+
+        return (
+            self.manifest is not None
+            and self.requirements.validation_targets == "noisy"
+            and self.validation_split is self.train_split
+        )
+
+    @property
+    def input_spec(self) -> InputSpec:
+        modality, shape, channels = _input_contract(self.train_split)
+        feature_dim = shape[0] if modality is Modality.TABULAR and shape is not None else None
+        return InputSpec(
+            modality=modality.value,
+            shape=shape,
+            channels=channels,
+            feature_dim=feature_dim,
+        )
+
+    @property
+    def available_roles(self) -> frozenset[DataRole]:
+        return frozenset(self.datasets)
+
+    @property
+    def noise_descriptor(self) -> NoiseDescriptor:
+        if self.manifest is None:
+            return NoiseDescriptor(
+                noise_type=str(
+                    self.noise_config.get(
+                        "name",
+                        "unknown" if self.train_split.clean_targets is None else "clean",
+                    )
+                ),
+                nominal_rate=self.noise_config.get("rate"),
+                realized_rate=(
+                    0.0
+                    if self.train_split.clean_targets is not None and not self.noise_config
+                    else None
+                ),
+                rho_positive=self.noise_config.get("rho_positive"),
+                rho_negative=self.noise_config.get("rho_negative"),
+                provenance=self.train_split.source,
+            )
+        return NoiseDescriptor(
+            noise_type=self.manifest.noise_type,
+            nominal_rate=self.manifest.requested_rate,
+            realized_rate=self.manifest.actual_rate,
+            rho_positive=self.noise_config.get("rho_positive"),
+            rho_negative=self.noise_config.get("rho_negative"),
+            transition_matrix=self.manifest.transition_matrix,
+            instance_transition=self.manifest.per_sample_transition,
+            provenance=str(self.manifest.metadata.get("source", "noise_manifest")),
+            mapping_hash=self.manifest.mapping_hash,
+        )
+
+    @property
     def noisy_targets(self) -> np.ndarray:
         if self.manifest is None:
             lookup = _target_map(self.train_split.global_indices, self.train_split.observed_targets)
         else:
             lookup = _target_map(self.manifest.global_indices, self.manifest.noisy_targets)
         return np.asarray([lookup[int(index)] for index in self.train_indices], dtype=np.int64)
+
+    def realized_noise_rate(self, role: DataRole | str) -> float | None:
+        """Return the observed-vs-clean disagreement for one materialized role.
+
+        A noise manifest is scoped to its source split.  Consequently an
+        independently loaded validation split cannot be measured by looking
+        up its indices in the training manifest; the role view is the
+        authoritative aligned target mapping for this diagnostic.
+        """
+
+        dataset = self.dataset_for(role)
+        if not isinstance(dataset, IndexedDatasetView):
+            raise TypeError("role noise diagnostics require an indexed dataset view")
+        clean = dataset.split.clean_targets
+        if clean is None:
+            return None
+        clean_by_index = _target_map(dataset.split.global_indices, clean)
+        changed = np.asarray(
+            [
+                dataset.targets[int(index)] != clean_by_index[int(index)]
+                for index in dataset.indices
+            ],
+            dtype=np.bool_,
+        )
+        return None if changed.size == 0 else float(changed.mean())
 
     def dataset_for(self, role: DataRole | str) -> Dataset:
         key = role if isinstance(role, DataRole) else DataRole(str(role))
@@ -371,6 +510,36 @@ class PreparedData:
             worker_init_fn=_seed_worker,
         )
 
+    def validation_loader(self, **loader_options: Any) -> DataLoader:
+        """Return the validation role declared by the method contract."""
+
+        preferred = (
+            DataRole.NOISY_VALIDATION
+            if self.requirements.validation_targets == "noisy"
+            else DataRole.CLEAN_VALIDATION
+        )
+        if preferred not in self.datasets:
+            raise KeyError(
+                f"validation role {preferred.value!r} was not requested; "
+                f"available roles are {sorted(role.value for role in self.datasets)}"
+            )
+        return self.loader(preferred, **loader_options)
+
+    def view_loader(
+        self,
+        role: DataRole | str,
+        view: str,
+        **loader_options: Any,
+    ) -> DataLoader:
+        """Load one named input view without changing target or global index."""
+
+        from lnl_toolbox.data.views import InputViewDataset
+
+        return self.loader_for_dataset(
+            InputViewDataset(self.dataset_for(role), view),
+            **loader_options,
+        )
+
     def dynamic_dataset(
         self,
         indices: Sequence[int] | np.ndarray,
@@ -395,6 +564,27 @@ class PreparedData:
             transforms=_transforms(self.train_split, data_config, requested, training=training),
             overlays=overlays,
         )
+
+    def subset_loader(
+        self,
+        indices: Sequence[int] | np.ndarray,
+        *,
+        views: tuple[str, ...] | None = None,
+        targets_by_index: Mapping[int, int] | None = None,
+        overlays: Mapping[str, Mapping[int, Any]] | None = None,
+        training: bool = True,
+        **loader_options: Any,
+    ) -> DataLoader:
+        """Build a stable-index dynamic training subset and its loader."""
+
+        dataset = self.dynamic_dataset(
+            indices,
+            views=views,
+            targets_by_index=targets_by_index,
+            overlays=overlays,
+            training=training,
+        )
+        return self.loader_for_dataset(dataset, **loader_options)
 
     def loader_for_dataset(
         self,
@@ -436,13 +626,14 @@ class PreparedData:
 def _write_data_manifest(
     path: Path,
     spec: DataSpec,
-    splits: Mapping[str, RawDatasetSplit],
+    splits: Mapping[str, RawDatasetSplit | None],
     train_indices: np.ndarray,
     validation_indices: np.ndarray,
     trusted_indices: np.ndarray,
     noise_manifest: NoiseManifest | None,
     loader_config: Mapping[str, Any],
     requirements: DataRequirements,
+    data_protocol: DataProtocol | None = None,
 ) -> str:
     def jsonable(value: Any) -> Any:
         if isinstance(value, Mapping):
@@ -458,7 +649,11 @@ def _write_data_manifest(
         "dataset": spec.name,
         "source": {"root": None if spec.root is None else str(spec.root), "path": None if spec.path is None else str(spec.path)},
         "options": jsonable(spec.options),
-        "splits": {name: split.identity.to_dict() for name, split in splits.items()},
+        "splits": {
+            name: split.identity.to_dict()
+            for name, split in splits.items()
+            if split is not None
+        },
         "train_indices": train_indices.tolist(),
         "validation_indices": validation_indices.tolist(),
         "trusted_indices": trusted_indices.tolist(),
@@ -482,6 +677,8 @@ def _write_data_manifest(
             "train_drop_last": requirements.train_drop_last,
         },
     }
+    if data_protocol is not None:
+        payload["data_protocol"] = jsonable(data_protocol.to_dict())
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     fingerprint = hashlib.sha256(canonical.encode()).hexdigest()
     payload["fingerprint"] = fingerprint
@@ -503,6 +700,7 @@ def _prepare_experiment_data(
     seed: int,
     checkpoint_payload: Mapping[str, Any] | None = None,
     registry: DatasetRegistry | None = None,
+    data_protocol: DataProtocol | None = None,
 ) -> PreparedData:
     """Normalize, validate, split, corrupt, view, and identify experiment data."""
 
@@ -515,6 +713,30 @@ def _prepare_experiment_data(
         noise_config["name"] = "binary_asymmetric_rcn"
     if noise_config:
         effective_config["noise"] = noise_config
+    explicit_data_protocol = data_protocol is not None
+    if data_protocol is None:
+        protocol_options = {
+            key: data_config[key]
+            for key in (
+                "augment",
+                "image_size",
+                "normalization",
+                "normalization_mean",
+                "normalization_std",
+                "strong_policy",
+                "strong_magnitude",
+            )
+            if key in data_config
+        }
+        data_protocol = DataProtocol(
+            name=str(data_config.get("protocol", "generic")),
+            transform_identity=str(data_config.get("preprocessing", "standard")),
+            validation_size=requirements.validation_size,
+            split_strategy=requirements.split_strategy,
+            options=protocol_options,
+        )
+    else:
+        data_config.update(dict(data_protocol.options))
     spec = DataSpec.from_mapping(data_config)
     registry = registry or DATASETS
     run_dir = Path(run_dir).resolve()
@@ -535,9 +757,30 @@ def _prepare_experiment_data(
             tuple(train.class_names[value] for value in requirements.class_subset) if train.class_names else (),
             train.source,
         )
-    try:
-        native_validation = registry.load(spec, "validation", seed=seed)
-    except (ValueError, FileNotFoundError):
+    protocol_validation_size = data_protocol.validation_size
+    validation_size = int(
+        protocol_validation_size
+        if protocol_validation_size is not None
+        else requirements.validation_size
+        if requirements.validation_size is not None
+        else data_config.get("validation_size", data_config.get("num_val", 0))
+        or 0
+    )
+    validation_roles = {
+        DataRole.CLEAN_VALIDATION,
+        DataRole.NOISY_VALIDATION,
+    }
+    probe_native_validation = bool(
+        requirements.roles.intersection(validation_roles)
+        or validation_size > 0
+        or DataRole.TRUSTED_VALIDATION in requirements.roles
+    )
+    if probe_native_validation:
+        try:
+            native_validation = registry.load(spec, "validation", seed=seed)
+        except (UnsupportedDatasetSplitError, FileNotFoundError, KeyError):
+            native_validation = None
+    else:
         native_validation = None
     test = registry.load(spec, "test", seed=seed)
     source_train_indices = train.global_indices.copy()
@@ -554,11 +797,6 @@ def _prepare_experiment_data(
         validation_indices = native_validation.global_indices.copy()
         validation_split = native_validation
     else:
-        validation_size = int(
-            requirements.validation_size
-            if requirements.validation_size is not None
-            else data_config.get("validation_size", data_config.get("num_val", 0))
-        )
         if validation_size:
             if "num_val" in data_config and "num_clean" in data_config:
                 full_train_indices, validation_indices = _random_partition(
@@ -566,7 +804,7 @@ def _prepare_experiment_data(
                     [len(source_train_indices) - validation_size, validation_size],
                     int(data_config.get("seed", seed)),
                 )
-            elif requirements.split_strategy == "numpy_choice_complement":
+            elif (data_protocol.split_strategy or requirements.split_strategy) == "numpy_choice_complement":
                 np.random.seed(int(seed))
                 chosen = np.random.choice(
                     source_train_indices.size,
@@ -591,8 +829,25 @@ def _prepare_experiment_data(
             validation_split = train
         else:
             full_train_indices = source_train_indices.copy()
-            validation_indices = test.global_indices.copy()
-            validation_split = test
+            # A zero-sized validation protocol has no validation source.  Do
+            # not use TEST as a placeholder: doing so leaks TEST identity into
+            # role metadata and makes downstream runners treat it as a split.
+            validation_indices = np.empty(0, dtype=np.int64)
+            validation_split = None
+    if validation_split is None and requirements.roles.intersection(validation_roles):
+        raise ValueError(
+            "the requested validation role has no genuine validation source; "
+            "set data.validation_size/num_val or provide a validation split"
+        )
+    if (
+        DataRole.CLEAN_VALIDATION in requirements.roles
+        and validation_split is not None
+        and validation_split.clean_targets is None
+    ):
+        raise ValueError(
+            "clean_validation requires genuine clean targets; "
+            "an observed-only validation split cannot be promoted"
+        )
     train_indices = _subset(
         full_train_indices,
         train.clean_targets if train.clean_targets is not None else train.observed_targets,
@@ -616,9 +871,17 @@ def _prepare_experiment_data(
             elif not set(map(int, trusted_indices)) <= set(map(int, train.global_indices)):
                 raise ValueError("trusted manifest indices are outside configured data")
         elif trusted_source == "synthetic_fixture":
+            if validation_split is None:
+                raise ValueError(
+                    "synthetic trusted_validation requires a validation source"
+                )
             trusted_indices = validation_indices.copy()
             trusted_split = validation_split
-            trusted_values = validation_split.clean_targets if validation_split.clean_targets is not None else validation_split.observed_targets
+            if validation_split.clean_targets is None:
+                raise ValueError(
+                    "trusted_validation cannot substitute observed targets for missing clean targets"
+                )
+            trusted_values = validation_split.clean_targets
             trusted_target_map = _target_map(validation_split.global_indices, trusted_values)
         else:
             trusted_size = int(data_config.get("num_clean", data_config.get("trusted_size", 0)))
@@ -630,7 +893,11 @@ def _prepare_experiment_data(
                 int(data_config.get("seed", seed)),
             )
             if not ("num_val" in data_config and "num_clean" in data_config):
-                labels = train.clean_targets if train.clean_targets is not None else train.observed_targets
+                if train.clean_targets is None:
+                    raise ValueError(
+                        "trusted_validation requires source clean targets or an audited manifest"
+                    )
+                labels = train.clean_targets
                 positions = {int(index): position for position, index in enumerate(train.global_indices)}
                 combined = np.concatenate((train_indices, trusted_indices))
                 aligned = np.asarray([labels[positions[int(index)]] for index in combined], dtype=np.int64)
@@ -639,12 +906,15 @@ def _prepare_experiment_data(
                 )
                 train_indices = combined[remaining_positions]
                 trusted_indices = combined[trusted_positions]
-    validation_indices = _subset(
-        validation_indices,
-        validation_split.clean_targets if validation_split.clean_targets is not None else validation_split.observed_targets,
-        data_config.get("max_validation_samples"),
-        seed + 12,
-    )
+    if validation_split is not None:
+        validation_indices = _subset(
+            validation_indices,
+            validation_split.clean_targets
+            if validation_split.clean_targets is not None
+            else validation_split.observed_targets,
+            data_config.get("max_validation_samples"),
+            seed + 12,
+        )
     test_indices = _subset(
         test.global_indices,
         test.clean_targets if test.clean_targets is not None else test.observed_targets,
@@ -655,6 +925,10 @@ def _prepare_experiment_data(
     manifest: NoiseManifest | None = None
     manifest_path: Path | None = None
     source_clean = train.clean_targets
+    configured_noise_name = str(noise_config.get("name", "clean")).strip().lower()
+    requests_noise_materialization = bool(noise_config.get("manifest")) or (
+        configured_noise_name not in {"", "clean", "none", "native", "real_world"}
+    )
     if (
         source_clean is None
         and requirements.needs_noise_manifest
@@ -684,26 +958,33 @@ def _prepare_experiment_data(
             manifest_path = run_dir / "noise_manifest.npz"
             if not manifest_path.exists():
                 manifest.save(manifest_path)
-        elif requirements.needs_noise_manifest:
+        elif requirements.needs_noise_manifest or requests_noise_materialization:
             manifest_indices = (
                 train_indices
                 if requirements.manifest_scope == "effective_train"
                 else full_train_indices
             )
-            clean_lookup = _target_map(train.global_indices, source_clean)
-            if requirements.validation_targets == "noisy":
-                validation_clean = (
-                    validation_split.clean_targets
-                    if validation_split.clean_targets is not None
-                    else validation_split.observed_targets
+            if (
+                requirements.validation_targets == "noisy"
+                and validation_split is train
+            ):
+                manifest_index_set = set(map(int, manifest_indices))
+                validation_extension = np.asarray(
+                    [
+                        int(index)
+                        for index in validation_indices
+                        if int(index) not in manifest_index_set
+                    ],
+                    dtype=np.int64,
                 )
-                clean_lookup.update(_target_map(validation_split.global_indices, validation_clean))
-                manifest_indices = np.unique(np.concatenate((manifest_indices, validation_indices)))
+                manifest_indices = np.concatenate(
+                    (manifest_indices, validation_extension)
+                )
+            clean_lookup = _target_map(train.global_indices, source_clean)
             manifest_clean = np.asarray([clean_lookup[int(index)] for index in manifest_indices], dtype=np.int64)
-            dataset_targets = np.zeros(int(manifest_indices.max()) + 1, dtype=np.int64)
-            for index, target in clean_lookup.items():
-                if index < dataset_targets.size:
-                    dataset_targets[index] = target
+            # A manifest is scoped to train.  Independent validation splits may
+            # reuse integer positions, so their targets must never enter this map.
+            dataset_targets = source_clean
             noise_name = str(noise_config.get("name", "clean")).lower()
             if noise_name == "pdl":
                 from lnl_toolbox.noise import generate_pdl_idn
@@ -819,6 +1100,7 @@ def _prepare_experiment_data(
                 run_dir=run_dir,
                 checkpoint_payload=checkpoint_payload,
                 dataset_targets=dataset_targets,
+                dataset_indices=train.global_indices,
                 )
     noisy_map = (
         _target_map(train.global_indices, train.observed_targets)
@@ -826,10 +1108,12 @@ def _prepare_experiment_data(
         else _target_map(manifest.global_indices, manifest.noisy_targets)
     )
     clean_train_map = None if train.clean_targets is None else _target_map(train.global_indices, train.clean_targets)
-    if requirements.validation_targets == "noisy":
+    if validation_split is None:
+        validation_target_map = None
+    elif requirements.validation_targets == "noisy":
         validation_target_map = (
             noisy_map
-            if manifest is not None or validation_split is train
+            if manifest is not None and validation_split is train
             else _target_map(
                 validation_split.global_indices,
                 validation_split.observed_targets,
@@ -848,24 +1132,43 @@ def _prepare_experiment_data(
         needs_noise_manifest=requirements.needs_noise_manifest,
     )
     train_eval_transforms = _transforms(train, data_config, eval_requirements, training=False)
-    validation_transforms = _transforms(validation_split, data_config, eval_requirements, training=False)
+    validation_transforms = (
+        None
+        if validation_split is None
+        else _transforms(validation_split, data_config, eval_requirements, training=False)
+    )
     test_transforms = _transforms(test, data_config, eval_requirements, training=False)
     datasets: dict[DataRole, Dataset] = {}
     if DataRole.TRAIN in requirements.roles:
         datasets[DataRole.TRAIN] = IndexedDatasetView(train, train_indices, targets_by_index=noisy_map, transforms=train_transforms)
     if DataRole.TRAIN_EVAL in requirements.roles:
         datasets[DataRole.TRAIN_EVAL] = IndexedDatasetView(train, train_indices, targets_by_index=noisy_map, transforms=train_eval_transforms)
-    validation_view = IndexedDatasetView(validation_split, validation_indices, targets_by_index=validation_target_map, transforms=validation_transforms)
+    validation_view = None
+    if validation_split is not None:
+        validation_view = IndexedDatasetView(
+            validation_split,
+            validation_indices,
+            targets_by_index=validation_target_map,
+            transforms=validation_transforms,
+        )
     if DataRole.NOISY_VALIDATION in requirements.roles:
+        if validation_view is None:
+            raise ValueError("noisy_validation requires a genuine validation source")
         datasets[DataRole.NOISY_VALIDATION] = validation_view
     if DataRole.CLEAN_VALIDATION in requirements.roles:
+        if validation_view is None or validation_split is None:
+            raise ValueError("clean_validation requires a genuine validation source")
         if validation_split is train and clean_train_map is not None:
             datasets[DataRole.CLEAN_VALIDATION] = IndexedDatasetView(train, validation_indices, targets_by_index=clean_train_map, transforms=validation_transforms)
         else:
             datasets[DataRole.CLEAN_VALIDATION] = validation_view
     if DataRole.TRUSTED_VALIDATION in requirements.roles:
         if trusted_target_map is None:
-            trusted_values = trusted_split.clean_targets if trusted_split.clean_targets is not None else trusted_split.observed_targets
+            if trusted_split.clean_targets is None:
+                raise ValueError(
+                    "trusted_validation requires source clean targets or an audited manifest"
+                )
+            trusted_values = trusted_split.clean_targets
             trusted_target_map = _target_map(trusted_split.global_indices, trusted_values)
         if trusted_target_map is None:
             raise ValueError("trusted_validation requires clean or trusted targets")
@@ -890,6 +1193,7 @@ def _prepare_experiment_data(
         manifest,
         dict(config.get("loader", {})),
         requirements,
+        data_protocol if explicit_data_protocol else None,
     )
     adapter = registry.get(spec.name)
     artifact_provider = getattr(adapter, "identity_artifacts", None)
@@ -905,7 +1209,9 @@ def _prepare_experiment_data(
     prepared = PreparedData(
         spec=spec,
         requirements=requirements,
+        protocol=data_protocol,
         train_split=train,
+        validation_split=validation_split,
         test_split=test,
         train_indices=train_indices,
         validation_indices=validation_indices,
@@ -914,6 +1220,7 @@ def _prepare_experiment_data(
         manifest_path=manifest_path,
         datasets=datasets,
         loader_config=dict(config.get("loader", {})),
+        noise_config=noise_config,
         seed=int(seed),
         data_manifest_path=data_manifest_path,
         data_fingerprint=fingerprint,
@@ -1135,6 +1442,51 @@ class DataService:
     def apply(self, config: Mapping[str, Any], name: object) -> dict[str, Any]:
         return self.catalog.apply(config, name)
 
+    def validate_cal_external_labels(self, config: Mapping[str, Any]) -> dict[str, Any]:
+        """Validate CAL's external clean/noisy label artifact without leaking labels."""
+
+        resolved = self.resolve_config(config)
+        noise = resolved.get("noise")
+        if not isinstance(noise, Mapping):
+            raise ValueError("CAL external label configuration is missing")
+        source = Path(str(noise.get("path", ""))).expanduser().resolve()
+        if not source.is_file():
+            raise FileNotFoundError(f"CAL external label artifact does not exist: {source}")
+        payload = torch.load(source, map_location="cpu", weights_only=True)
+        if not isinstance(payload, Mapping):
+            raise TypeError("CAL external label artifact must contain a mapping")
+        clean_key = str(noise.get("clean_key", ""))
+        noisy_key = str(noise.get("noisy_key", ""))
+        if not clean_key or not noisy_key or clean_key not in payload or noisy_key not in payload:
+            raise ValueError("CAL external label artifact is missing configured clean/noisy keys")
+        clean = np.asarray(payload[clean_key], dtype=np.int64)
+        noisy = np.asarray(payload[noisy_key], dtype=np.int64)
+        if clean.ndim != 1 or clean.shape != noisy.shape:
+            raise ValueError("CAL external clean/noisy labels must be aligned vectors")
+        spec = DataSpec.from_mapping(resolved["data"])
+        train = self.registry.load(spec, "train", seed=int(resolved.get("seed", 0)))
+        if train.clean_targets is None:
+            raise ValueError("CAL artifact identity requires dataset clean targets")
+        indices = np.asarray(train.global_indices, dtype=np.int64)
+        expected = np.asarray(train.clean_targets, dtype=np.int64)
+        if indices.size and clean.size > int(indices.max()):
+            aligned_clean = clean[indices]
+        elif clean.size == expected.size:
+            aligned_clean = clean
+        else:
+            raise ValueError("CAL external labels do not cover the training index space")
+        if not np.array_equal(aligned_clean, expected):
+            raise ValueError("CAL external clean labels fail dataset identity alignment")
+        return {
+            "path": str(source),
+            "clean_key": clean_key,
+            "noisy_key": noisy_key,
+            "samples": int(clean.size),
+            "dataset": train.dataset,
+            "num_classes": int(train.num_classes),
+            "clean_usage": "identity_alignment_and_evaluation_only",
+        }
+
     def resolve_config(self, config: Mapping[str, Any]) -> dict[str, Any]:
         """Resolve one portable data contract through a unique local registration."""
 
@@ -1150,10 +1502,44 @@ class DataService:
             return resolved
         record = self._record_for(name)
         if record is None:
-            raise ValueError(
-                f"dataset {name!r} has no local registration; run "
-                f"'lnl data register <alias> --adapter {name} ...' or pass --data"
+            adapter = self.registry.get(name)
+            source_adapter_name = str(
+                getattr(adapter, "source_adapter", "")
+            ).strip()
+            if not source_adapter_name:
+                raise ValueError(
+                    f"dataset {name!r} has no local registration; run "
+                    f"'lnl data register <alias> --adapter {name} ...' or pass --data"
+                )
+            source_adapter = self.registry.get(source_adapter_name).name
+            matches = tuple(
+                candidate
+                for candidate in self.catalog.records()
+                if candidate.adapter == source_adapter
             )
+            if not matches:
+                raise ValueError(
+                    f"dataset {name!r} has no local registration and its source "
+                    f"adapter {source_adapter!r} is not registered"
+                )
+            if len(matches) > 1:
+                raise ValueError(
+                    f"dataset {name!r} can reuse source adapter {source_adapter!r}, "
+                    "but multiple local registrations match; set data.root explicitly "
+                    f"or register {name!r} as a separate local dataset"
+                )
+            source_record = matches[0]
+            for key in _LOCAL_SOURCE_KEYS:
+                value = source_record.data.get(key)
+                if value not in {None, ""}:
+                    data_config[key] = deepcopy(value)
+            resolved["data"] = data_config
+            resolved["local_dataset"] = {
+                "alias": source_record.alias,
+                "adapter": adapter.name,
+                "source_signature": source_record.signature,
+            }
+            return resolved
         return self.catalog.apply(resolved, record.alias)
 
     @staticmethod
@@ -1162,6 +1548,7 @@ class DataService:
         adapter: str,
         location: str | None,
         splits: Mapping[str, RawDatasetSplit],
+        semantic_hints: DatasetSemanticHints | None = None,
     ) -> DatasetStatusReport:
         train = splits["train"]
         test = splits["test"]
@@ -1171,7 +1558,8 @@ class DataService:
             f"{train_fingerprint}:{test_fingerprint}".encode("utf-8")
         ).hexdigest()
         profile = _profile_from_splits(
-            name=name, adapter=adapter, source=location, splits=splits
+            name=name, adapter=adapter, source=location, splits=splits,
+            semantic_hints=semantic_hints,
         )
         return DatasetStatusReport(
             name=name,
@@ -1220,13 +1608,19 @@ class DataService:
                 validation = self.registry.load(spec, "validation", seed=seed)
             except (FileNotFoundError, KeyError):
                 validation = None
-            except ValueError as exc:
-                if "split must be train or test" not in str(exc):
-                    raise
+            except UnsupportedDatasetSplitError:
                 validation = None
             if validation is not None and validation.split == "validation" and len(validation):
                 splits["validation"] = validation
-            report = self._inspection_report(name, adapter, location, splits)
+            adapter_impl = self.registry.get(spec.name)
+            semantic_hints = getattr(adapter_impl, "semantic_hints", None)
+            if callable(semantic_hints):
+                semantic_hints = semantic_hints()
+            if semantic_hints is not None and not isinstance(semantic_hints, DatasetSemanticHints):
+                raise TypeError("adapter semantic_hints must be DatasetSemanticHints")
+            report = self._inspection_report(
+                name, adapter, location, splits, semantic_hints=semantic_hints
+            )
             if record is not None and persist:
                 evidence = report.to_dict()
                 evidence.pop("profile", None)
@@ -1277,6 +1671,10 @@ class DataService:
     ) -> DatasetCapabilities:
         """Persist an explicit, partial user declaration after inspection."""
 
+        forbidden = {"method_noise_rate_prior", "pretrained_roles"}.intersection(updates)
+        if forbidden:
+            names = ", ".join(sorted(forbidden))
+            raise ValueError(f"{names} are experiment inputs, not dataset declarations")
         payload = self.declarations(name).to_dict()
         for key, value in updates.items():
             if key not in payload:

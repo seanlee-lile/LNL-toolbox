@@ -200,6 +200,21 @@ global index 的当前用途：
 
 ## 5. Dataset 与 Batch 合同
 
+### 5.0 validation 与 TEST 边界
+
+`RunnerSpec.data_requirements(config)` 只有在 `data.validation_size` 或
+`data.num_val` 大于 0 时才为 FINE/CAL 声明 validation role；其 target source 由
+`noise.validation_targets` 决定，缺省为 clean。runner 只能通过
+`PreparedData.validation_loader()` 获取该独立 role，禁止把 TEST loader 复用为
+validation。
+
+- 没有 validation role：epoch 行只写训练指标；训练结束后评测一次 TEST。
+- 有 validation role：每个 epoch 评测真实 validation；训练结束后另评测一次 TEST。
+- TEST 结果只写入末尾 `event: final`，并记录
+  `selection_split: none`、`test_selection_leakage: false`。
+- 曲线允许 train-only 或 train+validation 两种完整形态；同一次运行不得混用或只提供
+  一半 validation 字段。
+
 单样本必须返回且只能依赖以下公共字段：
 
 ```python
@@ -303,7 +318,7 @@ Forward/Backward、Importance Weighting 等未来消费者只能接收 Artifact�
 
 用户入口、适用场景、完整配置、artifact 解释和 resume 规则见
 [`docs/t-revision.md`](t-revision.md)。公共命令使用
-`python -m lnl_toolbox.cli.train --config ...`；未知 `method` 会显式失败，
+`lnl run --config ...`；未知 `method` 会显式失败，
 不会回落到普通监督训练。
 
 `method: t_revision` 是论文专属生命周期，不是通用 transition plugin：
@@ -757,6 +772,87 @@ prepared = prepare_experiment_data(
 
 `DatasetRegistry` 负责名称/别名到 `DatasetAdapter` 的映射；适配器只验证并读取数据源。`DataRequirements` 由 runner 声明角色、视图、划分和 loader 行为，不包含论文名称。`PreparedData` 统一提供 train、train_eval、noisy/clean/trusted validation、test，以及按 global index 构造的动态子集。
 
+## 数据要求与复现协议边界（2026-08-25）
+
+数据入口现在使用三层语义，禁止混写：
+
+```text
+DataRequirements  = 算法真正需要的 role / view / label 条件
+DataProtocol      = generic 或论文复现使用的 split / transform / augmentation 身份
+PreparedData      = DataService 对算法交付的实际数据对象
+```
+
+`PreparedData` 的公共消费面是：
+
+```python
+prepared.input_spec          # modality / shape / channels / feature_dim
+prepared.num_classes         # 不从 dataset 名称推断
+prepared.available_roles     # 本次实际构造的 DataRole
+prepared.loader(role)        # TRAIN / TRAIN_EVAL / validation / TEST
+prepared.validation_loader() # 严格按 DataRequirements 选择 clean 或 noisy validation
+prepared.noise_descriptor    # rate / rho / T / instance information / provenance / hash
+```
+
+训练 batch 仍只有 `input/target/index` 和方法明确请求的 view/overlay；
+`NoiseDescriptor` 不包含 clean target。`UNLABELED`、`CURRICULUM` 已进入角色词汇，只有在
+对应数据源和方法迁移完成后才允许 runner 请求，不能静默用 TRAIN 或 validation 冒充。
+
+未显式传入 `DataProtocol` 的旧 runner 保持原 manifest/checkpoint 指纹；显式协议会写入
+`data_manifest.json` 并参与数据指纹，防止 resume 时更换 split/transform 协议。
+
+### 共享监督训练入口
+
+CE、GCE、APL 走同一个数据接头，不再把 loss 公式与 CIFAR 或图像输入绑定：
+
+```text
+DatasetAdapter -> DataService -> PreparedData
+                              -> TRAIN + 所选 validation role + TEST
+                              -> input_spec -> model builder
+                              -> observed target -> per-sample loss[B]
+```
+
+- GCE/APL 接受数学兼容的 IMAGE 或 TABULAR 数据；tabular 输入由 `feature_mlp` 消费。
+- runner 只请求配置选定的 clean/noisy validation，不同时强制构造两套验证集。
+- 生成噪声和外部 manifest 仍保留 manifest 身份；原生 observed target 可直接训练，不要求 clean target 或工具箱私有 manifest。
+- `TinyCNN.input_channels` 和 `feature_mlp.input_dim` 从 `PreparedData.input_spec` 获得，不再读取一个样本或按数据集名称猜测。
+- loss、selector、optimizer、epoch loop、checkpoint 和正式 reproduction YAML 的数学与状态逻辑保持不变。
+
+### 特殊角色与动态视图
+
+特殊方法仍只通过 `PreparedData` 取得数据，不在 runner 内重新解释数据集：
+
+```python
+prepared.loader(DataRole.TRAIN_EVAL)       # 同一 sample_id，evaluation transform
+prepared.loader(DataRole.TRUSTED_VALIDATION)
+prepared.view_loader(DataRole.TRAIN, "weak")
+prepared.view_loader(DataRole.TRAIN, "strong")
+prepared.subset_loader(indices, views=(...), overlays={...})
+```
+
+`view_loader` 只投影一个已存在的输入 view，保留 observed target 与 global index；输出不会
+携带其他 view、overlay 或 clean target。`subset_loader` 只接受训练 split 的 global index，
+由统一服务完成 view、target overlay、随机种子和 loader 构造。
+
+DLD 使用固定对齐的 weak/strong view；L2RW 使用独立 trusted validation；DivideMix 的
+labeled/unlabeled 成员由每轮 GMM 结果动态决定，因此通过 `subset_loader` 构造，不能登记为
+静态 `DataRole.UNLABELED`。论文算法的特征提取、meta gradient、GMM、MixMatch 和双网络
+状态机均不属于数据服务。
+
+### 通用表格输入与剩余专用 runner 首批迁移
+
+- CDR、DSS 和 CA2C 的能力声明不再把 IMAGE 当作工具箱硬限制；IMAGE/TABULAR 都通过
+  `InputSpec` 和现有模型 builder 进入原训练逻辑。CDR 的参数更新、DSS 的 stable-index
+  history、CA2C 的双网络 memory 均未迁入数据层。
+- PCSE 的 `pretraining_stage.mode: train` 不再按 dataset 名称分支；它从
+  `PreparedData.num_classes` 和 `input_spec.feature_dim` 构造已有 MLP。外部 UPM checkpoint
+  路径仍是独立的 CIFAR-10 reproduction adapter，不冒充通用算法要求。
+- VolMinNet 接受任意显式 `data.num_classes >= 3` 的 IMAGE/TABULAR 数据；`C>=3` 来自当前
+  transition 参数化中的数学分母。旧 CIFAR recipe 在缺少显式类别数时仅保留兼容推断，
+  不构成对新数据集名称的限制。
+- 需要 noisy validation 的方法若使用生成噪声，validation 必须来自同一 train index
+  namespace，或由数据源直接提供 observed noisy labels；不得用独立 validation index
+  查询仅覆盖 TRAIN 的 Noise Manifest。
+
 标准训练 batch 为 `input/target/index`，可选包含 `views`、`strong_input` 和动态 overlay。训练角色禁止暴露 `clean_target`。每次运行写入 `data_manifest.json`，checkpoint 自动记录其指纹；数据版本、标签、split、预处理、视图或 loader 身份变化时恢复立即失败。
 
 内置 Registry 当前支持 CIFAR-10/100、CIFAR airplane/automobile、CIFAR-10N/100N、MNIST、Fashion-MNIST、Clothing1M、Animal-10N、UCI binary、synthetic binary/multiclass。训练期间均不自动下载。
@@ -792,3 +888,87 @@ record、UCI Heart 空白分隔行，以及内存生成的 synthetic binary/mult
 `ExperimentService.preflight()` 通过注入的 `DataService.validate_config()` 完成数据预检，
 因此 doctor、validate、dry-run、run 和 sweep 不再维护自己的数据检查逻辑。现有 runner
 继续调用 `prepare_experiment_data()`；该函数是默认 `DataService` 的兼容代理。
+
+## 论文方法的数据兼容性门禁（2026-08-22）
+
+`MethodRequirements` 只声明当前 runner 已实现的数据边界，不改变论文 objective 或
+`DataRequirements`。共享 `supervised` runner 根据已配置的 loss、risk corrector、weight
+provider、objective consumer 和 parameter-update policy 解析具体方法；无法识别的空配置
+继续报告 requirements unavailable，不猜测论文身份。
+
+噪声率对、known-T 矩阵、trusted manifest 和外部 artifact 使用声明型配置输入检查。
+检查只判断必需字段是否存在；矩阵方向、数值范围、artifact 身份和论文公式仍由原有组件
+验证。observed-only 天然噪声数据若不能提供当前路径要求的 manifest 或 clean/noisy 对齐
+证据，必须在训练调用前失败，不能因为理论上可扩展而宣称当前实现兼容。
+
+## Dataset-first 兼容性解析（2026-08-23）
+
+兼容性查询先读取 adapter 的硬事实和可选 `DatasetSemanticHints`，只用用户声明填充
+UNKNOWN；声明与已检查事实冲突时失败，UNKNOWN 不等于 UNAVAILABLE。适配器可以声明
+原生噪声、干净验证集和缺失干净训练标签，而不会从 `clean_targets is None` 推断噪声。
+
+Web 必须选择具体 formal recipe 后再检查方法。数据集真实噪声率、方法噪声率先验和预训练
+资源分属不同层：前者是数据声明，后两者是实验配置输入。`CompatibilityResult` 返回
+`required_user_inputs` 及实际 `required_input_paths`；先验由 `ExperimentService` 注入
+配置后再进入 validate/dry-run/run。旧 catalog 中的先验和 `pretrained_roles` 仅可读取，
+不再作为新兼容性证据。
+
+## 26 篇论文统一数据接头（2026-08-25）
+
+唯一的数据要求来源是 `training/runners.py::RunnerSpec`：
+
+```text
+RunnerSpec
+  → MethodRequirements
+      ├─ compatibility
+      └─ data_requirements ─→ runner ─→ prepare_experiment_data
+```
+
+`MethodRequirements` 分开记录 `implemented_variant`、该 variant 的
+`data_requirements` 和非论文理论边界 `implementation_limits`。兼容性检查与实际训练
+均调用同一个 provider；`RunnerSpec.invoke()` 将解析出的同一 `DataRequirements` 对象传给
+runner。直接调用 runner 时，只能在 runner 层通过 `resolve_data_requirements()` 取得合同。
+`DataService` 不导入 runner、不了解 method，也不提供隐式默认要求。
+
+公开论文 runner 不得再次构造 `DataRequirements`。用户明确保留的 legacy
+`volmin_experiment.py` 与 evidence-only `dual_t_evidence_experiment.py` 不属于该生产门禁。
+`clean` 只是 supervised engine 的兼容包装，不维护第二份合同。
+
+模型输入维度由 `PreparedData.input_spec` 经 `bind_model_input()` 绑定；TinyCNN、CIFAR
+ResNet/PreActResNet 与 MLP 分别消费 channels 或 feature_dim，算法不再根据 dataset 名称猜测
+类别数或 shape。正式 reproduction YAML、split、augmentation 与训练数学
+保持不变。FINE/DLD 的强视图/特征路径仍保留 IMAGE variant 边界；CWD 与 Importance
+Reweighting 保留 binary variant；VolMinNet 保留当前 parameterization 的 `C >= 3`；
+MC-LDCE 的 `C >= 3` 继续标记为论文证据未决。
+
+普通 noisy `TRAIN` batch 仍只提供 `input/target/index`，其中 target 是 observed target。
+trusted role 只能来自 source 的真实 clean target 或已校验 manifest，禁止用 observed target
+补洞。独立 validation 的实际噪声率由 `PreparedData.realized_noise_rate(role)` 从该 role
+自身身份空间计算，不能拿 train manifest 的 index 推断。
+
+## Quick Start 方法—数据可移植性（2026-08-28）
+
+Quick Start 的两条路径必须分开：
+
+```text
+Formal parity    = 原始 Method + 原始 reproduction DataProtocol
+Generic portable = 同一 Method + 当前 DatasetCapabilities + 用户选择的 noise
+```
+
+Formal 命中时使用完整 recipe，不能改写原始 dataset、split、transform 或论文参数。Generic
+路径只复用方法配置，不把 formal YAML 中的 CIFAR 名称、固定类别数或转移矩阵当成数据要求。
+它将当前数据集的 `num_classes` 写入通用 data 合同，并仅在 `MethodRequirements` 允许该
+类别空间时递归绑定组件中的同名标量；不属于当前数据/噪声身份的固定 transition matrix
+会被丢弃，后续由唯一 compatibility/preflight 路径判定是否需要用户提供新 artifact。
+
+Quick Start 不维护私有 compatibility 规则。菜单和计划都调用
+`ExperimentService → RunnerSpec.requirements(config)`，状态含义固定为：
+
+- `COMPATIBLE/ready`：计划必须通过真实 preflight，并能进入该 runner 的首个训练阶段；
+- `INCOMPATIBLE/unsupported`：必须返回算法要求或当前 implemented-variant limit；
+- `NEEDS_INPUT/needs_input`：仅用于缺 noise、trusted source、checkpoint、matrix 等外部输入。
+
+因此公共不变量是 `ready option → ready plan → same runner preflight`。Noisy-only 方法在 clean
+选择下不能显示 ready；需要 class-dependent noise 的方法不能把 PDL 等不兼容噪声配置误判
+为可运行。模型构造继续通过 `bind_model_input()` 消费 `PreparedData.input_spec`；CIFAR
+ResNet 系列的三通道默认保持不变，同时可由 generic 数据协议绑定单通道输入。

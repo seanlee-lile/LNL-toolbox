@@ -1,0 +1,18 @@
+id: builtin/compose_transition
+name: Compose Transition
+description: Matrix product followed by explicit row normalization.
+inputs:
+  first: {type: transition}
+  second: {type: transition}
+parameters:
+  epsilon: {type: float, default: 1.0e-12, minimum: 0.0}
+steps:
+  - id: product
+    block: matrix_multiply
+    bindings: {left: first, right: second}
+  - id: composed_transition
+    block: row_normalize
+    bindings: {input: product}
+    parameters: {minimum: epsilon}
+outputs:
+  composed_transition: {source: composed_transition}

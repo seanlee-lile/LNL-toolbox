@@ -1,0 +1,80 @@
+schema_version: 1
+name: jocor
+description: "Complete JoCoR CIFAR-10 reproduction recipe: tensor-only preprocessing, symmetric transition noise 0.5, two CifarSixConvNet peers, Adam, linear LR/beta schedule, joint symmetric-KL loss, floor small-loss selection, test selection, and 200 epochs."
+steps:
+  - block: set_seed
+    params: {seed: 1}
+  - block: select_device
+    params: {device: auto}
+  - {block: load_dataset, params: {dataset: cifar10}}
+  - {block: inspect_dataset_semantics}
+  - {block: create_dataset_split, params: {validation_size: 0, split_seed: 0}}
+  - {block: select_label_source}
+  - {block: apply_noise, params: {name: symmetric, rate: 0.5, seed: 0, sampling: transition, options: {rng: numpy_legacy}}}
+  - {block: build_noise_manifest}
+  - {block: configure_preprocessing, params: {preprocessing: tensor_only, augment: false}}
+  - {block: configure_views, params: {views: [weak]}}
+  - {block: assign_data_roles, params: {roles: [train, test], train_drop_last: true}}
+  - {block: configure_loader, params: {batch_size: 128, num_workers: 4, pin_memory: true, drop_last: true}}
+  - {block: build_prepared_data}
+  - {block: build_loaders}
+  - block: create_model
+    params: {model: cifar_six_conv, num_classes: 10, device: device, save_as: model_a}
+  - block: create_model
+    params: {model: cifar_six_conv, num_classes: 10, device: device, save_as: model_b}
+  - block: create_parameter_group_optimizer
+    params:
+      optimizer_spec: {name: adam, betas: [0.9, 0.999], weight_decay: 0.0}
+      groups: [{source: model_a, lr: 0.001}, {source: model_b, lr: 0.001}]
+      save_as: optimizer
+  - block: create_scheduler
+    params:
+      scheduler: linear_decay
+      optimizer: optimizer
+      start_epoch: 80
+      end_epoch: 200
+      initial_lr: 0.001
+      final_lr: 0.0
+      beta1_before: 0.9
+      beta1_after: 0.1
+  - block: epoch_loop
+    params: {epochs: 200}
+    steps:
+      - block: linear_rate_schedule
+        params: {start: 1.0, end: 0.5, warmup_epochs: 9}
+      - block: refresh_epoch_loader
+        params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad}
+          - {block: forward, params: {model: model_a, save_as: logits_a}}
+          - {block: forward, params: {model: model_b, save_as: logits_b}}
+          - block: per_sample_ce
+            params: {logits: logits_a, labels: labels, save_as: loss_a_per_sample}
+          - block: per_sample_ce
+            params: {logits: logits_b, labels: labels, save_as: loss_b_per_sample}
+          - block: symmetric_kl
+            params: {logits_a: logits_a, logits_b: logits_b, save_as: agreement_per_sample}
+          - block: weighted_sum
+            params: {terms: [loss_a_per_sample, loss_b_per_sample, agreement_per_sample], weights: [0.1, 0.1, 0.9], save_as: joint_loss_per_sample}
+          - block: select_lowest_scores
+            params: {scores: joint_loss_per_sample, keep_fraction: keep_rate, stable_sample_indices: indices, rounding: ceil, minimum_count: 1, save_as: selected_indices}
+          - block: mean_by_indices
+            params: {values: joint_loss_per_sample, indices: selected_indices, save_as: loss}
+          - {block: backward, params: {model: model_a + model_b}}
+          - {block: optimizer_step}
+      - block: evaluate_peer_ensemble
+        params: {model_a: model_a, model_b: model_b, loader: test_loader, save_as: ensemble_accuracy}
+      - block: track_best_state
+        params: {model: model_a, auxiliary: model_b, metric: ensemble_accuracy, metric_name: ensemble_accuracy, mode: max, save_as: best_peer_model_state}
+      - block: scheduler_step
+        params: {scheduler: scheduler}
+  - block: restore_best_state
+    params: {model: model_a, auxiliary: model_b, state: best_peer_model_state}
+  - block: evaluate_peer_ensemble
+    params: {model_a: model_a, model_b: model_b, loader: test_loader, save_as: test_accuracy, final: true}
+  - block: record_metrics
+    params: {values: [test_accuracy, best_ensemble_accuracy, best_epoch]}

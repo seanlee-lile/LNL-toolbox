@@ -1,0 +1,71 @@
+schema_version: 1
+name: importance-reweighting
+description: "Complete low-dimensional Importance Reweighting reproduction: synthetic_binary_2d 4096/1024/1024, asymmetric RCN 0.2/0.1, KDE noisy posterior, raw-min rates, exact importance weights, linear classifier, SGD, and 50 epochs."
+steps:
+  - block: set_seed
+    params: {seed: 17}
+  - block: select_device
+    params: {device: auto}
+  - {block: load_dataset, params: {dataset: synthetic_binary_2d, options: {train_size: 4096, validation_size: 1024, test_size: 1024, data_seed: 17}}}
+  - {block: inspect_dataset_semantics}
+  - {block: create_dataset_split, params: {validation_size: 1024, split_seed: 17}}
+  - {block: select_label_source, params: {validation: observed}}
+  - {block: apply_noise, params: {name: binary_asymmetric_rcn, rate: 0.2, seed: 29, options: {rho_positive: 0.2, rho_negative: 0.1}}}
+  - {block: build_noise_manifest}
+  - {block: configure_preprocessing, params: {preprocessing: binary_raw, augment: false}}
+  - {block: configure_views, params: {views: [weak]}}
+  - {block: assign_data_roles, params: {roles: [train, noisy_validation, test]}}
+  - {block: configure_loader, params: {batch_size: 128, num_workers: 0}}
+  - {block: build_prepared_data}
+  - {block: build_loaders}
+  - block: create_model
+    params: {model: linear, input_dim: 2, num_classes: 2, device: device}
+  - block: collect_feature_snapshot
+    params: {model: model, loader: train_loader, device: device, dataset: synthetic_binary_2d, split: train, save_as: posterior_feature_snapshot, features_as: posterior_features, targets_as: posterior_targets, indices_as: posterior_indices}
+  - block: estimate_noisy_posterior
+    params:
+      backend: kde
+      bandwidth: 0.15
+  - block: estimate_raw_min_noise_rates
+  - block: create_optimizer
+    params:
+      optimizer: sgd
+      model: model
+      lr: 0.1
+      momentum: 0.0
+      nesterov: false
+      weight_decay: 0.0
+  - block: epoch_loop
+    params: {epochs: 50}
+    steps:
+      - block: refresh_epoch_loader
+        params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad}
+          - {block: forward}
+          - block: per_sample_ce
+            params: {logits: logits, labels: labels, save_as: loss_per_sample}
+          - block: importance_weight_formula
+            params: {save_as: sample_weights}
+          - block: detach
+            params: {input: sample_weights, save_as: detached_sample_weights}
+          - block: elementwise_multiply
+            params: {left: loss_per_sample, right: detached_sample_weights, save_as: weighted_loss_per_sample}
+          - block: mean_loss
+            params: {input: weighted_loss_per_sample, save_as: loss}
+          - {block: backward}
+          - {block: optimizer_step}
+      - block: evaluate_accuracy
+        params: {model: model, loader: validation_loader, save_as: validation_accuracy}
+      - block: track_best_model
+        params: {model: model, metric: validation_accuracy, metric_name: validation_accuracy}
+  - block: restore_best_model
+    params: {model: model, state: best_model_state}
+  - block: evaluate_accuracy
+    params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}
+  - block: record_metrics
+    params: {values: [test_accuracy, best_validation_accuracy, best_epoch]}

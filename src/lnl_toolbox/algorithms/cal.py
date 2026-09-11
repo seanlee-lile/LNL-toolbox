@@ -102,12 +102,20 @@ def cal_covariance_correction(
     retained_mask: Tensor,
     proxy_class_prior: Tensor,
     reference_loss_means: Tensor,
+    reference_transition_means: Tensor,
 ) -> tuple[Tensor, Tensor]:
     if all_class_losses.ndim != 2:
         raise ValueError("CAL all-class losses must have shape [B,C]")
     classes = all_class_losses.shape[1]
     if reference_loss_means.shape != (classes, classes):
         raise ValueError("CAL reference loss means must have shape [C,C]")
+    if reference_transition_means.shape != (classes, classes):
+        raise ValueError("CAL reference transition means must have shape [C,C]")
+    transition_means = reference_transition_means.detach().to(all_class_losses)
+    if not bool(torch.isfinite(transition_means).all()) or bool(
+        ((transition_means < 0) | (transition_means > 1)).any()
+    ):
+        raise ValueError("CAL reference transition means must be probabilities")
     prior = proxy_class_prior.to(all_class_losses)
     if prior.shape != (classes,):
         raise ValueError("CAL proxy class prior must have shape [C]")
@@ -123,7 +131,9 @@ def cal_covariance_correction(
         noisy = noisy_targets[class_mask]
         for noisy_class in range(classes):
             indicator = noisy.eq(noisy_class).to(losses.dtype)
-            centered_indicator = indicator - indicator.mean()
+            centered_indicator = (
+                indicator - transition_means[proxy_class, noisy_class]
+            )
             centered_loss = losses[:, noisy_class] - reference_loss_means[proxy_class, noisy_class]
             correction = correction + prior[proxy_class] * (centered_indicator * centered_loss).mean()
     return correction, detached_means
@@ -137,6 +147,7 @@ def cal_objective(
     noisy_prior: Tensor,
     proxy_class_prior: Tensor,
     reference_loss_means: Tensor,
+    reference_transition_means: Tensor,
     *,
     confidence_weight: float,
 ) -> tuple[Tensor, Tensor]:
@@ -146,7 +157,7 @@ def cal_objective(
     ).mean()
     correction, means = cal_covariance_correction(
         all_losses, proxy_targets, noisy_targets, retained_mask,
-        proxy_class_prior, reference_loss_means,
+        proxy_class_prior, reference_loss_means, reference_transition_means,
     )
     objective = base - correction
     if not bool(torch.isfinite(objective).item()):

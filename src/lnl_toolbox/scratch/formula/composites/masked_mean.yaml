@@ -1,0 +1,110 @@
+id: builtin/masked_mean
+name: Masked Mean
+description: Convert a boolean selection to indices and average selected values with explicit denominator and empty-selection semantics.
+inputs:
+  values: {type: tensor}
+  mask: {type: mask}
+parameters:
+  denominator: {type: enum, options: [selected, batch], default: selected}
+  empty: {type: enum, options: [zero, error], default: zero}
+steps:
+  - id: selected_indices
+    block: mask_to_indices
+    bindings: {mask: mask}
+  - id: selected_values
+    block: select_by_indices
+    bindings: {values: values, indices: selected_indices}
+  - id: selected_sum
+    block: reduce_sum
+    bindings: {input: selected_values}
+    parameters: {empty: "$empty"}
+  - id: selected_count
+    block: numel
+    bindings: {input: selected_values}
+  - id: loss
+    block: safe_divide
+    bindings: {numerator: selected_sum, denominator: selected_count}
+    parameters: {minimum: 1.0}
+outputs:
+  loss: {source: loss}
+variants:
+  - name: selected_zero
+    when: {denominator: selected, empty: zero}
+    steps:
+      - id: selected_indices
+        block: mask_to_indices
+        bindings: {mask: mask}
+      - id: selected_values
+        block: select_by_indices
+        bindings: {values: values, indices: selected_indices}
+      - id: selected_sum
+        block: reduce_sum
+        bindings: {input: selected_values}
+        parameters: {empty: zero}
+      - id: selected_count
+        block: numel
+        bindings: {input: selected_values}
+      - id: loss
+        block: safe_divide
+        bindings: {numerator: selected_sum, denominator: selected_count}
+        parameters: {minimum: 1.0}
+  - name: selected_error
+    when: {denominator: selected, empty: error}
+    steps:
+      - id: selected_indices
+        block: mask_to_indices
+        bindings: {mask: mask}
+      - id: selected_values
+        block: select_by_indices
+        bindings: {values: values, indices: selected_indices}
+      - id: selected_sum
+        block: reduce_sum
+        bindings: {input: selected_values}
+        parameters: {empty: error}
+      - id: selected_count
+        block: numel
+        bindings: {input: selected_values}
+      - id: loss
+        block: safe_divide
+        bindings: {numerator: selected_sum, denominator: selected_count}
+        parameters: {minimum: 1.0}
+  - name: batch_zero
+    when: {denominator: batch, empty: zero}
+    steps:
+      - id: selected_indices
+        block: mask_to_indices
+        bindings: {mask: mask}
+      - id: selected_values
+        block: select_by_indices
+        bindings: {values: values, indices: selected_indices}
+      - id: selected_sum
+        block: reduce_sum
+        bindings: {input: selected_values}
+        parameters: {empty: zero}
+      - id: batch_count
+        block: numel
+        bindings: {input: values}
+      - id: loss
+        block: safe_divide
+        bindings: {numerator: selected_sum, denominator: batch_count}
+        parameters: {minimum: 1.0}
+  - name: batch_error
+    when: {denominator: batch, empty: error}
+    steps:
+      - id: selected_indices
+        block: mask_to_indices
+        bindings: {mask: mask}
+      - id: selected_values
+        block: select_by_indices
+        bindings: {values: values, indices: selected_indices}
+      - id: selected_sum
+        block: reduce_sum
+        bindings: {input: selected_values}
+        parameters: {empty: error}
+      - id: batch_count
+        block: numel
+        bindings: {input: values}
+      - id: loss
+        block: safe_divide
+        bindings: {numerator: selected_sum, denominator: batch_count}
+        parameters: {minimum: 1.0}

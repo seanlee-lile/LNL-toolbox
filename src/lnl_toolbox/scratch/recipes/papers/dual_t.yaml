@@ -1,0 +1,124 @@
+schema_version: 1
+name: dual-t
+description: "Complete Dual-T reproduction: CIFAR-10 standard preprocessing, symmetric noise 0.2, posterior ResNet-18 stage, stable posterior snapshot, Dual-T T-club/T-spade estimation, fresh ResNet-18 Forward-correction stage, and 100 epochs per stage."
+steps:
+  - block: set_seed
+    params: {seed: 1}
+  - block: select_device
+    params: {device: auto}
+  - {block: load_dataset, params: {dataset: cifar10}}
+  - {block: inspect_dataset_semantics}
+  - {block: create_dataset_split, params: {validation_size: 10000, split_seed: 1}}
+  - {block: select_label_source, params: {validation: observed}}
+  - {block: apply_noise, params: {name: symmetric, rate: 0.2, seed: 1}}
+  - {block: build_noise_manifest}
+  - {block: configure_preprocessing, params: {preprocessing: standard, augment: true}}
+  - {block: configure_views, params: {views: [weak]}}
+  - {block: assign_data_roles, params: {roles: [train, noisy_validation, test]}}
+  - {block: configure_loader, params: {batch_size: 128, num_workers: 0, pin_memory: true}}
+  - {block: build_prepared_data}
+  - {block: build_loaders}
+  - block: create_model
+    params: {model: cifar_resnet18, num_classes: 10, base_width: 64, device: device, save_as: posterior_model}
+  - block: create_optimizer
+    params:
+      optimizer: sgd
+      model: posterior_model
+      lr: 0.01
+      momentum: 0.9
+      nesterov: false
+      weight_decay: 0.0005
+      save_as: posterior_optimizer
+  - block: create_scheduler
+    params:
+      scheduler: multistep
+      optimizer: posterior_optimizer
+      milestones: [50]
+      gamma: 0.1
+      save_as: posterior_scheduler
+  - block: epoch_loop
+    params: {epochs: 100}
+    steps:
+      - block: refresh_epoch_loader
+        params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - block: zero_grad
+            params: {optimizer: posterior_optimizer}
+          - block: forward
+            params: {model: posterior_model, input: images, save_as: logits}
+          - block: per_sample_ce
+            params: {logits: logits, labels: labels, save_as: loss_per_sample}
+          - block: mean_loss
+            params: {input: loss_per_sample, save_as: loss}
+          - {block: backward, params: {model: posterior_model}}
+          - block: optimizer_step
+            params: {optimizer: posterior_optimizer}
+      - block: evaluate_accuracy
+        params: {model: posterior_model, loader: validation_loader, save_as: posterior_validation_accuracy}
+      - block: track_best_model
+        params: {model: posterior_model, metric: posterior_validation_accuracy, metric_name: posterior_validation_accuracy, save_as: best_posterior_state}
+      - block: scheduler_step
+        params: {scheduler: posterior_scheduler}
+  - block: restore_best_model
+    params: {model: posterior_model, state: best_posterior_state}
+  - block: collect_posterior_snapshot
+    params: {model: posterior_model, loader: train_loader, device: device, dataset: cifar10, split: train, save_as: posterior_snapshot}
+  - block: dual_t_transition_estimation
+    params: {posterior: posterior_snapshot, save_as: transition}
+  - block: create_model
+    params: {model: cifar_resnet18, num_classes: 10, base_width: 64, device: device, save_as: final_model}
+  - block: create_optimizer
+    params:
+      optimizer: sgd
+      model: final_model
+      lr: 0.01
+      momentum: 0.9
+      nesterov: false
+      weight_decay: 0.0005
+      save_as: final_optimizer
+  - block: create_scheduler
+    params:
+      scheduler: multistep
+      optimizer: final_optimizer
+      milestones: [50]
+      gamma: 0.1
+      save_as: final_scheduler
+  - block: epoch_loop
+    params: {epochs: 100}
+    steps:
+      - block: refresh_epoch_loader
+        params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - block: zero_grad
+            params: {optimizer: final_optimizer}
+          - block: forward
+            params: {model: final_model, input: images, save_as: logits}
+          - {block: softmax, params: {logits: logits, save_as: clean_probabilities}}
+          - {block: apply_transition, params: {probabilities: clean_probabilities, transition: transition, save_as: noisy_probabilities}}
+          - {block: gather_by_label, params: {values: noisy_probabilities, labels: labels, save_as: target_probability}}
+          - {block: negative_log, params: {input: target_probability, save_as: loss_per_sample}}
+          - block: mean_loss
+            params: {input: loss_per_sample, save_as: loss}
+          - {block: backward, params: {model: final_model}}
+          - block: optimizer_step
+            params: {optimizer: final_optimizer}
+      - block: evaluate_accuracy
+        params: {model: final_model, loader: validation_loader, save_as: final_validation_accuracy}
+      - block: track_best_model
+        params: {model: final_model, metric: final_validation_accuracy, metric_name: final_validation_accuracy, save_as: best_final_state}
+      - block: scheduler_step
+        params: {scheduler: final_scheduler}
+  - block: restore_best_model
+    params: {model: final_model, state: best_final_state}
+  - block: evaluate_accuracy
+    params: {model: final_model, loader: test_loader, save_as: test_accuracy, final: true}
+  - block: record_metrics
+    params: {values: [test_accuracy, best_final_validation_accuracy, best_epoch]}

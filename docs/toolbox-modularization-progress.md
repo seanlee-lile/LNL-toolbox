@@ -1,5 +1,67 @@
 # Toolbox modularization progress
 
+## Quick Start method–dataset portability closeout (2026-08-28)
+
+- Current task: make Quick Start select datasets from the same `MethodRequirements × DatasetCapabilities` contract used by real preflight, while preserving formal reproduction recipes and paper training stages.
+- Branch/base: `new-cli` at `62892f5`; no branch creation, commit, or push was authorized. The pre-existing `training/runners.py`/`tests/test_jocor.py` working-tree changes and five unrelated untracked files were preserved.
+- Checklist: remove the private class-space gate; bind generic class-dependent config; publish noisy/artifact requirements; prove READY→plan/preflight; run real-data/focused/full acceptance. Completed: 5 / 5 (100%).
+- Public behavior: formal parity still uses the exact recipe. Generic Quick Start binds the selected dataset's class count, discards stale transition matrices, and delegates all READY/INCOMPATIBLE/NEEDS_INPUT decisions to `ExperimentService` and the runner requirement provider. Importance Reweighting no longer rejects a binary dataset by name; missing binary rates remain explicit user inputs. Noisy-only methods require noisy labels, T-Revision rejects incompatible non-class-dependent noise, and external PCSE retains its exact implemented-variant boundary.
+- Input binding: existing CIFAR ResNet/PreActResNet families now consume `input_channels` from `PreparedData.input_spec`, defaulting to three channels. This removes the hidden Fashion-MNIST failure without changing CIFAR formal behavior or any paper objective.
+- Real compatibility matrix: CIFAR-10, CIFAR-100 and Fashion-MNIST were checked with clean and symmetric-0.2 selections across all 26 papers. Every menu item marked READY produced a READY plan; other entries remained typed INCOMPATIBLE or NEEDS_INPUT. Real `supervised → GCE → ResNet-34` runs completed one optimization epoch on all three datasets (global steps 1, 2 and 1 respectively) using temporary artifacts.
+- Files inspected: Quick Start templates/service/models, runner registry, ExperimentService, ResNet builders, Importance Reweighting config, local dataset catalog, affected tests, and the shared data-flow/progress documents.
+- Files modified: `src/lnl_toolbox/quickstart/templates.py`, `src/lnl_toolbox/quickstart/service.py`, `src/lnl_toolbox/training/runners.py`, `src/lnl_toolbox/training/service.py`, `src/lnl_toolbox/training/experiment.py`, `src/lnl_toolbox/models/cifar_resnet.py`, `src/lnl_toolbox/algorithms/importance_reweighting/config.py`, `tests/test_quickstart_service.py`, `tests/test_registry.py`, `tests/test_training.py`, `tests/test_cli.py`, `tests/test_importance_reweighting.py`, `web/test_quick_start_integration.py`, `docs/data-flow-guide.md`, and this progress record. Files added: none.
+- Tests executed: Quick Start `13/13`; registry `53/53`; Web integration `2/2`; training `75/75`; CLI `89/89`; Importance Reweighting `50/50`; nine affected method suites `257/257`; full unittest `969/969`; Python compile and `git diff --check` passed.
+- Blockers: none. Assumption: shortened real runs validate data portability and first-stage execution, not paper numerical reproduction.
+- Local checkpoint commits: none. History cleanup: not needed. Push readiness: implementation is reviewable, but commit and publication remain unapproved.
+- Collaborator integration: `training/runners.py`, `training/service.py`, `training/experiment.py`, Quick Start files and both shared documents are high-conflict. `tests/test_jocor.py` is pre-existing collaborator work and was not modified by this task.
+- Exact next step: human review of the scoped diff; request separate authorization before staging or committing.
+
+## Five startup-boundary fixes (2026-08-25)
+
+- Current task: repair only the five confirmed startup/data-role defects reported by the Web formal-run path.
+- Branch/base: `new-cli` at `3a7582d`; no commit or push performed.
+- Completed: 5 / 5 code fixes and focused regression checks.
+- JoCoR now derives `validation_size` from its data configuration before choosing the validation loader. PDL now derives `official_pdl` from the configured correction/phase variant before loading revision artifacts. The paper algorithms are unchanged.
+- CWD's folded CIFAR adapter is correctly treated as a train/test-only source during inspection; the absence of a native validation split no longer aborts preflight.
+- MC-LDCE and CA2C requirements and runners no longer request or materialize a validation loader when `validation_size` is zero. They retain validation metrics when an explicit validation role exists.
+- MentorNet remains fail-closed: a missing or hash-mismatched MentorArtifact is an external resource readiness failure, not a reason to bypass validation.
+- Validation: Ruff passed; data adapters `54/54`; registry `52/52`; training `74/74` with one CUDA skip; CWD data inspection against the existing F-drive CIFAR source returned `ready`; zero-validation role inspection showed no validation role for MC-LDCE/CA2C. Full unittest ran `957` tests: `954` passed, `1` skipped, and the same two baseline failures remain (95-vs-94 YAML count and the pre-existing NoiseManifest error-text mismatch).
+- Exact next step: run the formal Web paths for JoCoR, PDL, CWD, MC-LDCE and CA2C with available data/resources, then separately prepare the pinned MentorArtifact/PCSE resources for the remaining external-resource cases.
+
+## Unified data connector final semantic closeout (2026-08-25)
+
+- Current task: close the last validation/TEST and compatibility-origin semantics without changing DataService or paper algorithms.
+- Branch/base: `new-cli` at `3a7582d`; no branch creation, commit, or push is authorized.
+- Checklist: FINE role declaration; CAL role declaration; train-only progress; final-only TEST; compatibility origin table; focused/full acceptance. Completed: 5 / 6 (83%); code regression is complete, but the all-paper formal-runtime acceptance is not.
+- Result: FINE/CAL request validation only when `data.validation_size` or `data.num_val` is positive. Their runners never alias TEST as validation. Epoch rows are train-only or use a real independent validation role; TEST is evaluated once after training and appears only in one final event with leakage flags.
+- Compatibility: class-count limits for CWD, Importance Reweighting, PCSE, VolMinNet and unresolved MC-LDCE are reported as `implemented_variant_limit`; FINE/DLD modality and MentorArtifact interface limits use the same origin. Binary Risk and L2RW trusted supervision remain algorithm requirements.
+- Files added: none. DataService, algorithms, YAML, CLI/Web/Scratch, taxonomy/guideline, data sources and the four pre-existing untracked files remain unchanged.
+- Focused tests: FINE `14/14`; CAL `13/13`; registry `52/52`; training `74/74` with one CUDA skip. Both validation modes, resume final-row replacement and train-only/train+validation SVGs are covered. Ruff and `git diff --check` pass.
+- Full regression: `957` tests executed; `954` passed, `1` skipped, and only the two already-recorded baseline assertions failed (95 vs 94 YAML count; manifest namespace error text vs `length`).
+- Formal preflight: `24/26` formal recipes are compatible after injecting the existing MentorArtifact. CWD is blocked before training because the folded CIFAR adapter's validation probe raises `folded CIFAR binary view exposes train and test`; PCSE is blocked because no discovered UPM run matches its pinned checkpoint SHA-256. These are pre-existing acceptance-resource/data-adapter blockers outside this task's allowlist. Formal FINE/CAL also cannot be reduced to one stage solely through their current public `trainer.epochs` budget because their fixed warm-up budgets would then exceed the total budget; their unchanged formal protocols were therefore not rewritten for this check.
+- Exact next step: separately approve the CWD validation-probe fix and provide the pinned PCSE source run (or approve a formal acceptance protocol that records stage-specific budget overrides). Then run all 26 first real stages and compatible alternate-data cases before marking 6/6.
+- Ready for history cleanup/push: no; neither commit nor publication is authorized.
+
+## 26-paper unified data boundary (2026-08-25)
+
+- Current task: separate method data requirements from reproduction protocols, then migrate 26 paper methods without changing their training engines.
+- Branch/base: `new-cli` at `3b1675b`; four pre-existing untracked audit/WebUI files are intentionally preserved.
+- Checklist: repository/audit baseline; neutral PreparedData contracts; shared-runner migration; specialized role/view migration; remaining dedicated-runner migration; 26-paper formal/alternate-data acceptance.
+- Completed: 4 / 6 (67%); baseline audit、backward-compatible contract foundation、shared-runner migration 和 specialized role/view migration 已完成；remaining dedicated-runner migration 已完成 Phase 5A，但该 checklist 项尚未整体完成。
+- Contract result: `InputSpec`, `NoiseDescriptor`, `DataProtocol`, `UNLABELED` and `CURRICULUM` are public vocabulary. `PreparedData` exposes input/noise/available-role contracts and fail-closed validation selection. Explicit protocols participate in the data fingerprint; legacy callers retain their prior manifest fingerprint shape.
+- Files inspected: data contracts/profile/service, reproduction compatibility layer, all dedicated experiment entry points, runner compatibility requirements, data tests, shared data-flow/file-map documents, taxonomy coverage, and the 26-method data-requirements audit.
+- Files modified: phase 1 changed `src/lnl_toolbox/data/contracts.py`, `src/lnl_toolbox/data/__init__.py`, `src/lnl_toolbox/training/data_service.py`, `tests/test_data_adapters.py`; phase 2 changed `src/lnl_toolbox/training/runners.py`, `src/lnl_toolbox/training/experiment.py`, `tests/test_registry.py`, `tests/test_training.py`; phase 3 changed `src/lnl_toolbox/data/views.py`, the data export/service, and the data-entry sections of `dld_experiment.py`, `dividemix_experiment.py`, `l2rw_experiment.py`, with contract coverage in `tests/test_data_adapters.py`; phase 5A changed capability declarations, PCSE train-mode data construction, VolMinNet class-count parsing, and their focused tests. All phases update `docs/data-flow-guide.md`, `docs/file-map.md`, and this progress record. Files added: none.
+- Shared-runner result: CE/GCE/APL consume only TRAIN, the selected validation role and TEST. GCE/APL accept compatible IMAGE/TABULAR data, native observed-only noise does not require clean labels or a private manifest, while formal generated-noise recipes retain manifest identity. `feature_mlp` consumes tabular `input_spec.feature_dim`; loss/selector/optimizer/epoch loop remain unchanged.
+- Specialized role/view result: `PreparedData.view_loader()` projects one named view while preserving target/index, and `subset_loader()` constructs validated dynamic training partitions. DLD now obtains aligned weak/strong loaders from the service; DivideMix obtains per-epoch labeled/unlabeled loaders from the service; L2RW selects its validation loader through the declared requirements. Their feature extraction, diffusion, GMM, MixMatch, meta gradient and checkpoint state are unchanged. Dynamic DivideMix membership deliberately remains a subset operation rather than a static UNLABELED role.
+- Tests: focused data contracts pass 57/57; registry passes 46/46; training passes 71/71 with 1 CUDA skip. The added generic tabular GCE and APL cases each completed a real CPU epoch with finite test loss. The phase 2 full unittest ran 942 tests with 2 failures, 2 errors and 1 skip; all four failures are the same pre-existing failures observed before phase 2: stale YAML count, stale noise error text, and two PCSE validation-index/manifest mismatches. Official-format image and tabular fixtures each completed a real one-epoch path in phase 1. Ruff and `git diff --check` pass.
+- Blockers: none for the contract foundation. The four pre-existing full-suite failures must remain visible and are outside this phase's allowlist.
+- Phase 3 tests: data adapters/service pass 53/53; DLD passes 27/27; DivideMix passes 30/30; L2RW passes 16/16. Ruff and `git diff --check` pass. Full unittest reran 942 tests with the unchanged 2 failures, 2 errors and 1 skip: stale YAML count, stale noise error text, and two PCSE validation-index/manifest mismatches. No phase 3 regression was found.
+- Phase 5A result: CDR、DSS、CA2C 和 VolMinNet 的能力声明不再包含无论文依据的 IMAGE/CIFAR/10-or-100-class 限制；PCSE train mode 从 `PreparedData` 获取 dataset、类别数和 feature dimension，external UPM reproduction 路径保持不变。CDR/DSS 在非内置名称的四分类 tabular adapter 上完成真实 CPU epoch；CA2C generic tabular smoke 继续通过；VolMinNet 在四分类 tabular 数据上完成完整 epoch；PCSE generic adapter 完成第一个真实预训练 epoch。算法公式、正式 YAML、CLI、Web、CAL、FINE、MentorNet 和 MC-LDCE `C>=3` 未修改。
+- Phase 5A tests: registry 46/46；training 72/72 with 1 CIFAR-data skip；VolMinNet/estimators 49/49；PCSE generic first-stage 1/1；Ruff 通过。完整 unittest 运行 945 项，结果仍为实施前相同的 2 failures、2 errors、1 skip：stale YAML count、stale noise error text 和两项 PCSE independent-validation index/manifest mismatch；没有新增失败。
+- Exact next step: propose the next separately approved dedicated-runner batch. Do not mark item 5 complete until all remaining runners are migrated.
+- Ready for history cleanup: no; the 26-paper migration is in progress. Ready to push: no.
+- Collaborator note: contracts, DataService, runner registry and shared documents are high-conflict surfaces. Phase 3 changes shared `data_service.py` and only the data-entry sections of `dld_experiment.py`, `dividemix_experiment.py`, and `l2rw_experiment.py`. Phase 5A changes only CA2C's capability declaration, not its algorithm/runner; FINE/UPM and all loss, selector, recipe, CLI and Web files remain unchanged.
+
 ## Web configuration workflow and semantic Sweep (2026-08-22)
 
 - Current task: carry one recipe/project-YAML context through paper guidance, YAML editing, execution, parameter Sweep, and result management.
@@ -287,3 +349,65 @@
 - Final validation: Web 23/23, full unittest 840/840, Ruff, embedded JavaScript syntax and `git diff --check` passed.
 - Cleanup: the browser-created project YAML was removed after validation; no generated training or configuration artifact remains.
 - Exact next step: human diff review and optional commit under separate authorization; no commit or push is authorized.
+
+## 26-paper noise compatibility preflight (2026-08-22)
+
+- Current task: add the missing compatibility requirements for 14 papers without changing algorithms, experiment runners, adapters, YAML, CLI or Web.
+- Branch/base: `codex/cli` at `7eaa452`.
+- Checklist: declarative config-input contract; component-driven shared-runner providers; dedicated-runner providers; 26-paper/native-noise regression; full validation.
+- Completed: 5 / 5 (100%).
+- Public behavior: all 26 formal paper recipes now publish config-specific requirements during preflight. Missing rate pairs, known-T matrix, trusted supervision or external artifacts produce stable requirement codes before runner invocation.
+- Safety boundary: compatibility describes the current executable path. Observed-only native noise is rejected when that path requires a manifest or aligned clean/noisy evidence; no formula, lifecycle, data adapter or clean-label boundary changed.
+- Tests executed: compatibility 23/23, experiment service 3/3, unified CLI 47/47, full unittest 878/878; focused Ruff and `git diff --check` passed.
+- Files added: none. Blockers: none. Local checkpoint commits: none.
+- Exact next step: human review of the eight-file diff; commit or push requires separate authorization.
+- Collaborator note: `training/runners.py`, `training/service.py` and shared documents are high-conflict; changes are limited to requirements providers, preflight validation and documentation.
+
+## Web dataset-aware YAML workflow (2026-08-22)
+
+- Current task: remove the duplicate YAML destination, make the editor contextual, and surface dataset/method compatibility while constructing YAML.
+- Branch/base: `codex/cli` at `7eaa452`, layered on the approved uncommitted 26-paper compatibility work.
+- Checklist: concrete-recipe batch query; server-side save gate; one-path editor; draft-preserving module switch; dataset-to-YAML link; focused/browser/full regression; documentation.
+- Completed: 6 / 7 (86%); focused service 4/4 and Web 47/47 tests pass, and browser checks confirm CIFAR disables Binary Risk/FINE while enabling Loss Correction, a single YAML path, automatic editor collapse, and draft restoration.
+- Safety boundary: dataset selection is a runtime `--data` override and is labeled as migration training; locked paper data/noise protocol fields, algorithms, runners, adapters and formal YAML remain unchanged.
+- Files added: none. Local checkpoint commits: none. Push is not authorized.
+- Exact next step: run full unittest/Ruff/final browser check, then update this record to 7/7 and hand off the reviewed diff.
+
+## Dataset-first workflow 输入重构（2026-08-23）
+
+- Current task: 按 Dataset-first 计划区分适配器事实、UNKNOWN 数据集声明和具体 recipe 实验输入。
+- Branch: `codex/cli`; base: 当前工作区既有兼容性与 Web 修改；未提交、未推送。
+- Checklist: adapter semantic hints；UNKNOWN-only 声明；具体 formal recipe；方法先验配置注入；实际预训练资源；Web 三段式 UI；测试与文档。
+- Completed: 7 / 7（100%）。
+- Public behavior: Web 不再允许把 method prior 或 pretrained role 写入 dataset catalog；正式 recipe 必须显式选择；兼容结果返回真实 input paths；原生 Clothing1M/Animal-10N 语义由 adapter hints 提供。
+- Validation: Web `test_command_console.py` 47/47；数据适配器 46/46；Python 编译检查通过。完整 registry 测试当前受仓库既有缺失模块 `test_t_revision_workflow` 阻塞，未归因于本任务。
+- Files modified in this task: `README.md`, `web/README.md`, `web/index.html`, `web/command_console.py`, `docs/data-flow-guide.md`, `docs/development-guide.md`, `docs/file-map.md`, `docs/toolbox-modularization-progress.md`, `src/lnl_toolbox/data/profile.py`, `src/lnl_toolbox/data/real_noise.py`, `src/lnl_toolbox/training/data_service.py`, `src/lnl_toolbox/training/compatibility.py`, `src/lnl_toolbox/training/service.py`, `tests/test_data_adapters.py`, `tests/test_registry.py`, `web/test_command_console.py`。其中多份文件已有协作者工作，本次只做局部增量。
+- Exact next step: review final diff and resolve the pre-existing merged-test import issue before considering commit/push.
+
+## 26 篇论文统一数据接头收口（2026-08-25）
+
+- Current task: 以 `RunnerSpec` 为唯一 method requirement 真源，让 compatibility 与真实 runner 共享同一个 `DataRequirements`，并仅解除不改变现有数学流程的数据限制。
+- Branch/base: `new-cli` at `3382934`; no branch creation, commit, or push is authorized.
+- Checklist: canonical requirement source；RunnerSpec→runner identity；第一批六方法；其余二十方法；label/role boundary；tests/docs。Completed: 6 / 6（100%）。
+- Public contract: `RunnerSpec.data_requirements(config)` 同时供 compatibility 与 `RunnerSpec.invoke()` 使用；`prepare_experiment_data(..., requirements=...)` 保持显式必填，DataService 不认识 method/runner。
+- Safe removals: 可由 role/view/model input adapter 支持的 dataset-name、CIFAR、IMAGE、固定类别数和手工 feature snapshot 限制已解除。CWD binary、VolMinNet `C>=3`、Binary Risk/Importance binary、DLD multi-view、FINE robust strong-view、L2RW trusted supervision 等仍按 `implemented_variant_limit` 或算法 requirement 保留；没有新增论文 variant 或数学流程。
+- Label boundary: noisy TRAIN 始终使用 observed target 且 batch 不暴露 clean label；clean/trusted labels 只在显式 evaluation、trusted/meta/curriculum role 使用。协议 TEST source 可提供 clean evaluation ground truth，TRAIN 派生 clean validation 仍须真实 clean target。
+- Focused validation: registry `49/49`；data adapters `54/54`；CLI `89/89`；Quick Start `10/10`；training `72/72`（1 skipped）；estimators `49/49`；各 dedicated method suites已通过。
+- Full validation: `949` tests executed; `946` passed, `1` skipped, and the two known baseline assertions below failed. All focused suites affected by this task pass.
+- Known baseline failures outside this task: `test_config.py` still hard-codes 94 YAMLs although 95 are tracked; `test_noise.py` expects a generic length error while manifest validation raises the more specific out-of-namespace index error. Neither file nor noise/config implementation was modified.
+- Files added: none. Four pre-existing untracked WebUI audit files remain untouched.
+- Local checkpoint commits: none.
+- Exact next step: human review of the final diff and the two explicitly recorded baseline failures; commit or publication requires separate authorization.
+- Collaborator note: `training/runners.py`, `training/compatibility.py`, `training/data_service.py`, `training/experiment.py`, and shared docs are high-conflict; algorithms, losses, selectors, estimators, reproduction YAML, CLI/Web/Scratch, and legacy evidence runners remain unchanged.
+
+## Quick Start 与 validation 语义收口（2026-08-28）
+
+- Current task: 修复 Quick Start exact formal recipe、typed unsupported split、TEST-as-validation、JoCoR validation-size 和 PDL variant predicate 问题；禁用不可选方法卡片。
+- Branch/base: `new-cli` at `3a7582d`; 不创建分支、不提交、不推送；工作区原有未提交内容保持不动。
+- Completed: 7 / 7（100%）：exact matcher；typed split contract；无 validation 时不伪造 TEST；JoCoR；PDL predicate；Web 状态保护；回归验证（仅剩一项既有断言文本不一致）。
+- Public behavior: Quick Start 的 `clean/native` 语义不再混同，formal 命中返回真实 recipe id；validation 仅来自 native validation 或 TRAIN 派生 split，零 validation 时 `PreparedData.validation_split=None` 且 manifest 省略 validation。
+- Focused validation: data adapters 57/57；Quick Start service 11/11；PDL 20/20；JoCoR 7/7；Web assets/integration 6/6；CLI 89/89；data-contract 及 training focused suites通过。
+- Full validation: 963/963 tests 通过；`test_noise` 的错误文本断言已更新为匹配当前更具体的 index-namespace 错误。未放宽生产代码的 typed-exception 边界。
+- Files modified in this task: `src/lnl_toolbox/quickstart/templates.py`, `src/lnl_toolbox/quickstart/service.py`, `src/lnl_toolbox/data/contracts.py`, `src/lnl_toolbox/data/sources.py`, `src/lnl_toolbox/data/cifar_n.py`, `src/lnl_toolbox/data/real_noise.py`, `src/lnl_toolbox/training/data_service.py`, `src/lnl_toolbox/training/multi_model_experiment.py`, `src/lnl_toolbox/training/runners.py`, `src/lnl_toolbox/training/instance_transition_experiment.py`, `web/assets/quick_start.js`, `tests/test_data_adapters.py`, `tests/test_data_capability_contract.py`, `tests/test_experiment_service_data_contract.py`, `tests/test_pdl.py`, `tests/test_quickstart_service.py`, `tests/test_training.py`, `web/test_quick_start_assets.py`, `web/test_quick_start_integration.py`, and this progress record. No new files.
+- Known collaborator scope: shared `training/data_service.py`, `training/runners.py`, Quick Start assets and progress documentation are high-conflict; no algorithm/loss/selector implementation was changed.
+- Exact next step: human review；本轮功能和回归均已收口。无 commit 或 push 授权。

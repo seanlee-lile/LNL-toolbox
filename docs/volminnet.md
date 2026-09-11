@@ -30,3 +30,12 @@ and initial/best/last transition artifacts. Clean test labels are evaluation
 only; noisy validation loss selects the paired classifier/transition best
 checkpoint. The smoke profile establishes workflow behavior, not paper-level
 numerical reproduction.
+
+## Formal profile
+
+`volminnet-cifar10-reproduction` is the current full-budget CIFAR-10
+paper-protocol configuration. It retains the transition parameterization and
+positive-logdet contract described above. The profile's existence does not
+claim completed numerical reproduction: its catalog `reproduction_status` is
+`not_run`, and paper tables or repeated-seed statistics require separate
+evidence.

@@ -20,14 +20,23 @@ python -m pip install -e ".[train]"
 lnl --help
 ```
 
-启动本地数据管理网页（默认自动打开浏览器）：
+启动本地 Web 控制台（默认自动打开浏览器）：
 
 ```powershell
 lnl web
 ```
 
+首次使用可以任选一种入口：
+
+- **Web-first**：打开首页后，从“快速开始”输入本地数据路径，完成识别、登记、实际加载、方法选择、预演和运行；完整步骤见 [Web 使用手册](docs/toolbox-usage-manual.md)。
+- **CLI-first**：依次执行 `lnl doctor`、`lnl list experiments --profile smoke`、`lnl validate --recipe <recipe> --check-data`、Dry-run 和 `lnl run`；命令速查见 [CLI 简明操作教程](docs/LNL-Toolbox-简明操作教程.md)。
+
+两条入口使用同一套数据、兼容性和训练合同。配置存在、Dry-run 通过或 smoke 成功只说明相应工程链路可用，不自动代表论文数值已经复现。
+
 主控制台为 `http://127.0.0.1:8765/`；Recipe/YAML 编辑子页面为
-`http://127.0.0.1:8765/recipe`。使用 `lnl web --no-open` 可只启动服务。
+`http://127.0.0.1:8765/recipe`；Scratch 积木搭建器为
+`http://127.0.0.1:8765/scratch`。这些页面由同一个 `lnl web` 服务提供；使用
+`lnl web --no-open` 可只启动服务。
 
 原有的 `lnl-train`、`lnl-clean-train`、`lnl-inspect-data` 和 `lnl-make-noise` 命令仍然保留。
 
@@ -233,10 +242,12 @@ execution:
 
 MentorNet 等依赖外部训练 artifact 的 recipe 默认不会出现在直接可运行列表中；使用 `lnl list experiments --include-conditional` 查看，并先运行 `lnl validate` 获取缺失 artifact 的明确提示。
 
-PCSE 的真实 CIFAR profile 同样属于 conditional workflow：它要求一个严格匹配的 UPM
-`main_best` checkpoint 和 noise manifest。先阅读
-`papers/pcse/reproduction.md`，准备 source artifact 并设置
-`LNL_PCSE_SOURCE_RUN`；缺失或 identity 不匹配时，`validate` 和 dry-run 会在训练前失败。
+PCSE 的真实 CIFAR profile 同样属于 conditional workflow。当前只接受角色明确且身份兼容的
+来源：UPM 主模型、监督 CE 模型或 Co-teaching 的 peer A；不会把任意 checkpoint 猜作合法来源。
+可用 `LNL_PCSE_SOURCE_RUN` 指向来源运行目录，并按
+`papers/pcse/reproduction.md` 中的 source identity 配置 YAML；缺失或不匹配时，`validate` 和 Dry-run 会在训练前失败。
+
+DLD 的 formal/paper-oriented 流程需要真实、可验证的预训练特征提取器；Toolbox 不会自动联网下载 torchvision 权重。随机冻结模型只可用于 engineering/smoke 链路，不能当作 formal pretrained source。CAL 则需要对齐的外部 clean/noisy label artifact，而不是预训练模型；其中 clean vector 仅用于 identity、alignment 和 evaluation，不参与训练更新。
 
 兼容的显式写法和训练预算快捷参数仍然可用：
 
@@ -398,3 +409,11 @@ python -m unittest discover -s tests -v
 - [论文实现进度](papers/implement/paper-reproduction-progress.md)
 
 本地数据放在 `data/`，训练产物放在 `artifacts/`；二者均不应提交到 Git。
+
+### Dataset-first 数据集兼容性
+
+Web 和 CLI 的数据集检查都经过统一 `DataService`。适配器/实际加载得到的事实（例如
+模态、观测标签、稳定索引、原生噪声来源）只读展示；只有无法由数据源确定的 UNKNOWN
+事实才需要用户确认。数据集真实噪声率与某个方法的噪声率先验是两个不同输入：前者属于
+数据集声明，后者属于所选正式 recipe，并会写入该 recipe 声明的配置路径。预训练资源也
+必须是实际 checkpoint、运行目录或 YAML 路径，不能用角色名称冒充资源。

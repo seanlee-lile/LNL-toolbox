@@ -1,0 +1,15 @@
+id: builtin/mean_by_indices
+name: Mean By Indices
+description: Select indexed values and reduce them to a scalar mean.
+inputs:
+  values: {type: tensor}
+  indices: {type: tensor}
+steps:
+  - id: selected_values
+    block: select_by_indices
+    bindings: {values: values, indices: indices}
+  - id: loss
+    block: reduce_mean
+    bindings: {input: selected_values}
+outputs:
+  loss: {source: loss}

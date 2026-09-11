@@ -36,6 +36,7 @@ from lnl_toolbox.training.checkpoint import (
 from lnl_toolbox.training.experiment import (
     _environment,
     _resolved_noise_config,
+    bind_model_input,
     build_model,
     build_optimizer,
     build_scheduler,
@@ -490,6 +491,8 @@ def run_upm_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    requirements: DataRequirements | None = None,
 ) -> Path:
     config = deepcopy(config)
     method = UPMConfig.from_mapping(config)
@@ -512,13 +515,12 @@ def run_upm_experiment(
         saved_method = UPMConfig.from_mapping(checkpoint["config"])
         extension_requested = method.main.epochs > saved_method.main.epochs
 
-    data_config = config["data"]
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        requirements = resolve_data_requirements(config, expected_runner="upm")
     prepared = prepare_experiment_data(
         config,
-        requirements=DataRequirements(
-            roles=frozenset({DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.NOISY_VALIDATION, DataRole.TEST}),
-            validation_targets="noisy",
-        ),
+        requirements=requirements,
         run_dir=run_dir, seed=seed, checkpoint_payload=checkpoint,
     )
     dataset, classes = prepared.dataset, prepared.num_classes
@@ -533,14 +535,18 @@ def run_upm_experiment(
         manifest, manifest_path, run_dir,
         effective_subset_actual_rate(manifest, prepared.train_indices),
         mode=noise_mode(config), validation_targets="noisy",
-        effective_validation_rate=effective_subset_actual_rate(manifest, prepared.validation_indices),
+        effective_validation_rate=prepared.realized_noise_rate(DataRole.NOISY_VALIDATION),
     )
     config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
 
-    stage1_model = build_model(method.stage1.model, classes)
+    stage1_model = build_model(
+        bind_model_input(method.stage1.model, prepared.input_spec), classes
+    )
     stage1_optimizer = build_optimizer(stage1_model, method.stage1.optimizer)
     stage1_scheduler = build_scheduler(stage1_optimizer, method.stage1.scheduler, method.stage1.epochs)
-    main_model = build_model(method.main.model, classes)
+    main_model = build_model(
+        bind_model_input(method.main.model, prepared.input_spec), classes
+    )
     main_optimizer = build_optimizer(main_model, method.main.optimizer)
     main_scheduler = build_scheduler(main_optimizer, method.main.scheduler, method.main.epochs)
     loss = build_builtin_loss({"name": "ce"})

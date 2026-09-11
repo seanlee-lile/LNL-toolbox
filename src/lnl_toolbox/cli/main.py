@@ -22,6 +22,7 @@ from lnl_toolbox.catalog import (
     recipe_by_id,
     resolve_config_paths,
     load_recipe_config,
+    mentornet_preparation_status,
     select_paper_config,
     validate_config,
 )
@@ -43,6 +44,7 @@ from lnl_toolbox.training.sweep import (
     run_sweep,
     sweep_status,
 )
+from lnl_toolbox.cli.ports import cleanup_ports
 
 
 def _validate_with_registry(config: dict[str, Any], *, check_data: bool):
@@ -196,6 +198,28 @@ def build_parser() -> argparse.ArgumentParser:
     data_verify.add_argument("--output-dir", type=Path)
     data_verify.add_argument("--project-root", type=Path)
 
+    mentor = sub.add_parser(
+        "mentor", help="prepare and inspect the offline MentorNet artifact"
+    )
+    mentor_sub = mentor.add_subparsers(dest="mentor_command", required=True)
+    mentor_status = mentor_sub.add_parser(
+        "status", help="show MentorArtifact readiness for a Student recipe"
+    )
+    mentor_status.add_argument("--recipe", required=True)
+    mentor_status.add_argument("--project-root", type=Path)
+    mentor_prepare = mentor_sub.add_parser(
+        "prepare", help="prepare trusted Mentor feature records"
+    )
+    mentor_prepare.add_argument("--config", type=Path, required=True)
+    mentor_prepare.add_argument("--output-dir", type=Path, required=True)
+    mentor_prepare.add_argument("--project-root", type=Path)
+    mentor_train = mentor_sub.add_parser(
+        "train", help="train and freeze a reusable MentorArtifact"
+    )
+    mentor_train.add_argument("--config", type=Path, required=True)
+    mentor_train.add_argument("--output", type=Path, required=True)
+    mentor_train.add_argument("--project-root", type=Path)
+
     methods = sub.add_parser("methods", help="discover dataset/method compatibility")
     methods_sub = methods.add_subparsers(dest="methods_command", required=True)
     methods_compatible = methods_sub.add_parser(
@@ -210,14 +234,45 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument("--port", type=int, default=8765)
     web.add_argument("--no-open", action="store_true")
     web.add_argument("--project-root", type=Path)
+    web_sub = web.add_subparsers(dest="web_command")
+    web_restart = web_sub.add_parser(
+        "restart", help="清理当前 Web 端口上的旧 LNL 进程后重新启动 Web UI"
+    )
+    # Keep `lnl web --host ... --port ... restart` and
+    # `lnl web restart --host ... --port ...` equivalent.  Suppressing these
+    # defaults prevents the nested parser from overwriting values parsed by
+    # the parent command.
+    web_restart.add_argument("--host", default=argparse.SUPPRESS)
+    web_restart.add_argument("--port", type=int, default=argparse.SUPPRESS)
+    web_restart.add_argument("--no-open", action="store_true", default=argparse.SUPPRESS)
+    web_restart.add_argument("--project-root", type=Path, default=argparse.SUPPRESS)
 
-    sweep = sub.add_parser("sweep", help="run multiple seeds sequentially and resumably")
+    ports = sub.add_parser("ports", help="查看并清理 LNL Web 监听进程")
+    ports_sub = ports.add_subparsers(dest="ports_command", required=True)
+    ports_cleanup = ports_sub.add_parser(
+        "cleanup", help="清理命令行确认属于 LNL 的旧监听进程"
+    )
+    ports_cleanup.add_argument(
+        "--port",
+        dest="ports",
+        action="append",
+        type=int,
+        metavar="PORT",
+        help="只清理指定端口；可重复传入。默认扫描所有 LNL 监听端口",
+    )
+    ports_cleanup.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="只列出候选进程，不终止",
+    )
+
+    sweep = sub.add_parser("sweep", help="参数组合实验：按笛卡尔积运行多组实验")
     _source_options(sweep)
     sweep.add_argument(
         "status_path",
         nargs="?",
         type=Path,
-        help="sweep directory when using 'lnl sweep status <path>'",
+        help="参数组合实验目录，用于 'lnl sweep status <path>'",
     )
     sweep.add_argument("--seeds", type=int, nargs="+")
     sweep.add_argument(
@@ -233,7 +288,7 @@ def build_parser() -> argparse.ArgumentParser:
     sweep.add_argument(
         "--no-check-data",
         action="store_true",
-        help="skip dataset path/layout checks during sweep dry-run",
+        help="参数组合实验预演时跳过数据路径/布局检查",
     )
     sweep.add_argument(
         "--set", dest="overrides", action="append", default=[], metavar="PATH=VALUE"
@@ -393,6 +448,17 @@ def _print_compatibility_result(result: CompatibilityResult | None) -> None:
         print(f"  - {reason.code}: {reason.message}")
     for required in result.required_user_inputs:
         print(f"  required: {required}")
+    for prerequisite in result.prerequisites:
+        level = (
+            "NOT_CONFIGURED"
+            if prerequisite.level is None
+            else prerequisite.level.name
+        )
+        print(
+            f"  prerequisite: {prerequisite.descriptor.name}: "
+            f"{prerequisite.status.upper()} ({level})"
+        )
+        print(f"    {prerequisite.message}")
 
 
 def _print_plan(
@@ -610,7 +676,7 @@ def _sweep(args: argparse.Namespace) -> int:
         if getattr(args, "format", "human") == "json":
             print(json.dumps(value, ensure_ascii=False))
             return 0
-        print("Sweep")
+        print("参数组合实验")
         print(f"  ID: {value['sweep_id']}")
         print(f"  Path: {value['root']}")
         print("\nStatus")
@@ -737,7 +803,7 @@ def _parse_sweep_matrix(assignments: list[str]) -> dict[str, list[Any]]:
 
 
 def _print_sweep_plan(plan) -> None:
-    print("Sweep plan")
+    print("参数组合实验计划")
     print(f"\nBase:\n  {plan.recipe}")
     print("\nMatrix:")
     if plan.matrix:
@@ -1328,9 +1394,85 @@ def _methods_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _mentor_command(args: argparse.Namespace) -> int:
+    root = find_project_root(None, args.project_root)
+    if args.mentor_command == "status":
+        recipe = recipe_by_id(args.recipe, root)
+        config = resolve_config_paths(load_recipe_config(recipe), root)
+        status = mentornet_preparation_status(
+            config, root, student_recipe=recipe.id
+        )
+        if status is None:
+            raise ValueError(f"recipe {recipe.id!r} is not a MentorNet workflow")
+        print(f"MentorArtifact: {str(status['status']).upper()}")
+        print(f"  artifact: {status['artifact_path']}")
+        print(
+            "  artifact validation: "
+            + ("PASS" if status["artifact_ready"] else "NOT READY")
+        )
+        print(
+            "  Mentor features: "
+            + ("READY" if status["feature_ready"] else "NOT READY")
+        )
+        if status["artifact_error"]:
+            print(f"  error: {status['artifact_error']}")
+        for step, command in status["commands"].items():
+            print(f"  {step}: {command}")
+        return 0 if status["artifact_ready"] else 1
+
+    config_path = args.config.expanduser().resolve()
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Mentor configuration does not exist: {config_path}")
+    config = load_yaml(config_path)
+    if args.mentor_command == "prepare":
+        from lnl_toolbox.training.mentor_learning import (
+            prepare_trusted_mentor_features,
+        )
+
+        output_dir = args.output_dir.expanduser()
+        if not output_dir.is_absolute():
+            output_dir = (root / output_dir).resolve()
+        feature_path = prepare_trusted_mentor_features(config, output_dir)
+        print(f"Mentor features: READY")
+        print(feature_path)
+        return 0
+    if args.mentor_command == "train":
+        from lnl_toolbox.training.mentor_learning import train_mentor_artifact
+
+        feature_data = Path(str(config.get("feature_data", ""))).expanduser()
+        if not feature_data.is_absolute():
+            feature_data = (root / feature_data).resolve()
+        config = dict(config)
+        config["feature_data"] = str(feature_data)
+        output = args.output.expanduser()
+        if not output.is_absolute():
+            output = (root / output).resolve()
+        train_mentor_artifact(config, output)
+        print("MentorArtifact: READY")
+        print(output)
+        return 0
+    raise ValueError(f"unknown mentor command: {args.mentor_command}")
+
+
 def _web(args: argparse.Namespace) -> int:
+    if getattr(args, "web_command", None) == "restart":
+        # Reuse the same guarded listener discovery as `lnl ports cleanup`.
+        # Restrict the cleanup to the port that will be started so a restart
+        # cannot terminate an unrelated LNL service on another port.
+        cleanup_code = cleanup_ports([args.port])
+        if cleanup_code != 0:
+            return cleanup_code
     root = find_project_root(None, args.project_root)
     server = root / "web" / "command_console.py"
+    # `lnl web` is a user-facing entry point.  When launched outside the
+    # checkout, project-root discovery starts at the current directory and
+    # cannot find the repository's combined WebUI server; editable installs
+    # still expose the source checkout through this module path.
+    if not server.is_file():
+        source_root = Path(__file__).resolve().parents[3]
+        source_server = source_root / "web" / "command_console.py"
+        if source_server.is_file():
+            root, server = source_root, source_server
     if not server.is_file():
         raise FileNotFoundError(f"Web UI server does not exist: {server}")
     command = [
@@ -1344,6 +1486,12 @@ def _web(args: argparse.Namespace) -> int:
     if not args.no_open:
         command.append("--open")
     return int(subprocess.call(command, cwd=root))
+
+
+def _ports_command(args: argparse.Namespace) -> int:
+    if args.ports_command != "cleanup":
+        raise ValueError(f"unknown ports command: {args.ports_command}")
+    return cleanup_ports(args.ports, dry_run=args.dry_run)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1364,8 +1512,12 @@ def main(argv: list[str] | None = None) -> int:
             return _data_command(args)
         if args.command == "methods":
             return _methods_command(args)
+        if args.command == "mentor":
+            return _mentor_command(args)
         if args.command == "web":
             return _web(args)
+        if args.command == "ports":
+            return _ports_command(args)
         if args.command == "sweep":
             return _sweep(args)
         if args.command == "compare":

@@ -59,15 +59,6 @@ class ImportanceReweightingConfig:
 
         data = _mapping(value.get("data"), owner="data")
         data_name = str(data.get("name", "")).strip().lower()
-        if data_name not in {
-            "synthetic_binary_2d",
-            "synthetic_binary_high_dim",
-            "uci_statlog_heart",
-        }:
-            raise ValueError(
-                "importance reweighting supports synthetic_binary_2d, "
-                "synthetic_binary_high_dim, or uci_statlog_heart"
-            )
         dimension = int(data.get("dimension", 2))
         if data_name == "synthetic_binary_2d" and dimension != 2:
             raise ValueError("synthetic_binary_2d requires data.dimension: 2")

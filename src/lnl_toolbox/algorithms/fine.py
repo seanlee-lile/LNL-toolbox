@@ -27,7 +27,7 @@ class ActiveForgettingRegularizer:
     ) -> Tensor:
         values = torch.log_softmax(logits, dim=1).gather(
             1, noisy_targets.long()[:, None]
-        ).squeeze(1)
+        ).squeeze(1) / logits.shape[1]
         mask = rejected_mask if rejected_mask is not None else (
             torch.ones_like(values, dtype=torch.bool) if selected_mask is None else ~selected_mask
         )
@@ -47,7 +47,8 @@ class FINERegularizer:
         self.probability_floor = float(probability_floor)
         if self.probability_floor <= 0.0:
             raise ValueError("probability_floor must be positive")
-        self.seed = int(seed)  # retained in state for configuration compatibility
+        self.seed = int(seed)
+        self.generator = torch.Generator(device="cpu").manual_seed(self.seed)
 
     def __call__(
         self,
@@ -72,19 +73,29 @@ class FINERegularizer:
         )
         if not bool(mask.any()):
             return logits.sum() * 0.0
+        num_classes = logits.shape[1]
+        if num_classes <= 1:
+            raise ValueError("FINE requires at least two classes")
+        offsets = torch.randint(
+            1,
+            num_classes,
+            noisy_targets.shape,
+            generator=self.generator,
+            device="cpu",
+        ).to(device=noisy_targets.device)
+        complementary = (noisy_targets.long() + offsets) % num_classes
         probabilities = torch.softmax(logits, dim=1)
-        p_target = probabilities.gather(1, noisy_targets.long()[:, None]).squeeze(1)
-        # The official implementation uses ``log(1.0000001 - p_y)`` rather
-        # than a post-hoc clamp of ``1 - p_y``.  Keep the epsilon explicit so
-        # this consumer is numerically and algebraically source-faithful.
+        p_complementary = probabilities.gather(
+            1, complementary[:, None]
+        ).squeeze(1)
         suppression = -torch.log(
-            (1.0 + self.probability_floor - p_target).clamp_min(
+            (1.0 + self.probability_floor - p_complementary).clamp_min(
                 self.probability_floor
             )
-        )
+        ) / num_classes
         forgetting = torch.log_softmax(logits, dim=1).gather(
             1, noisy_targets.long()[:, None]
-        ).squeeze(1)
+        ).squeeze(1) / num_classes
         return self.beta * suppression[mask].mean() + self.gamma * forgetting[mask].mean()
 
     compute = __call__
@@ -95,6 +106,7 @@ class FINERegularizer:
             "gamma": self.gamma,
             "probability_floor": self.probability_floor,
             "seed": self.seed,
+            "generator_state": self.generator.get_state(),
         }
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
@@ -103,6 +115,8 @@ class FINERegularizer:
                 raise ValueError("FINE configuration mismatch")
         if "seed" in state and int(state["seed"]) != self.seed:
             raise ValueError("FINE configuration mismatch")
+        if "generator_state" in state:
+            self.generator.set_state(torch.as_tensor(state["generator_state"]).cpu())
 
 
 AFMU = ActiveForgettingRegularizer

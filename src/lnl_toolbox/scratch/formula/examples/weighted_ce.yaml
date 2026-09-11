@@ -1,0 +1,20 @@
+id: builtin/weighted_ce
+name: Weighted Cross Entropy
+description: Per-sample cross entropy followed by explicit sample weighting and mean.
+inputs:
+  logits: {description: model logits}
+  targets: {description: observed labels, type: labels}
+  weights: {description: sample weights, type: tensor}
+steps:
+  - id: sample_loss
+    block: per_sample_ce
+    bindings: {logits: logits, labels: targets}
+  - id: weighted_loss
+    block: elementwise_multiply
+    bindings: {left: sample_loss, right: weights}
+  - id: loss
+    block: mean_loss
+    bindings: {input: weighted_loss}
+outputs:
+  loss: {source: loss}
+metadata: {kind: loss, formula_group: weighting}

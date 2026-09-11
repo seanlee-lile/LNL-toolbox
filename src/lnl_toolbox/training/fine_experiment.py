@@ -156,6 +156,8 @@ def run_fine_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    requirements: DataRequirements | None = None,
 ) -> Path:
     """Run the official warm-up -> SED/SCR -> FINE lifecycle."""
 
@@ -172,21 +174,19 @@ def run_fine_experiment(
     checkpoint = None if resume is None else read_checkpoint(resume, "cpu")
     if checkpoint is not None and checkpoint.get("config") != config:
         raise ValueError("FINE resume configuration mismatch")
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
 
-    data_config = config["data"]
+        requirements = resolve_data_requirements(config, expected_runner="fine")
+
     prepared = prepare_experiment_data(
         config,
-        requirements=DataRequirements(
-            roles=frozenset({DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.CLEAN_VALIDATION, DataRole.TEST}),
-            views=("weak", "strong"),
-            manifest_scope="effective_train",
-        ),
+        requirements=requirements,
         run_dir=run_dir,
         seed=seed,
         checkpoint_payload=checkpoint,
     )
-    if prepared.num_classes != 100:
-        raise ValueError("FINE requires a 100-class dataset")
+    num_classes = prepared.num_classes
     manifest, manifest_path = prepared.manifest, prepared.manifest_path
     noise_metadata = None
     if manifest is not None:
@@ -200,14 +200,38 @@ def run_fine_experiment(
         )
     loader_config = config["loader"]
     train_loader = prepared.loader(DataRole.TRAIN)
-    snapshot_loader = prepared.loader(DataRole.TRAIN_EVAL, shuffle=False)
+    target_map = {
+        int(index): int(target)
+        for index, target in zip(prepared.train_indices, prepared.noisy_targets)
+    }
+    snapshot_loader = prepared.loader_for_dataset(
+        prepared.dynamic_dataset(
+            prepared.train_indices,
+            views=("weak",),
+            targets_by_index=target_map,
+            training=False,
+        ),
+        shuffle=False,
+    )
     evaluation_batch_size = int(
         config.get("evaluation", {}).get("batch_size", loader_config["batch_size"])
     )
-    validation_loader = prepared.loader(DataRole.CLEAN_VALIDATION, shuffle=False, batch_size=evaluation_batch_size)
     test_loader = prepared.loader(DataRole.TEST, shuffle=False, batch_size=evaluation_batch_size)
+    validation_loader = (
+        prepared.validation_loader(shuffle=False, batch_size=evaluation_batch_size)
+        if {
+            DataRole.CLEAN_VALIDATION,
+            DataRole.NOISY_VALIDATION,
+        }.intersection(prepared.available_roles)
+        else None
+    )
 
-    model = _build_fine_model(config["model"], 100).to(device)
+    model_config = dict(config["model"])
+    if str(model_config.get("name", "")).lower() == "feature_mlp" and "input_dim" not in model_config:
+        if prepared.input_spec.feature_dim is None:
+            raise ValueError("FINE feature_mlp requires a known feature dimension")
+        model_config["input_dim"] = prepared.input_spec.feature_dim
+    model = _build_fine_model(model_config, num_classes).to(device)
     optimizer_config = dict(config["optimizer"])
     fine_config = config["fine"]
     warmup_epochs = int(fine_config["warmup_epochs"])
@@ -226,13 +250,13 @@ def run_fine_experiment(
     # FINE's official ``model_ema`` remains in train mode during snapshots.
     ema.model.train()
     scs = SelfAdaptiveClassSelector(
-        100,
+        num_classes,
         float(fine_config.get("momentum_scs", 0.999)),
         quantile=float(fine_config.get("quantile", 0.8)) if fine_config.get("use_quantile", True) else None,
         maximum_threshold=float(fine_config.get("maximum_threshold", 0.95)) if fine_config.get("clip_threshold", True) else None,
     )
     scr = SelfAdaptiveConfidenceReweighting(
-        100, float(fine_config.get("momentum_scr", 0.99))
+        num_classes, float(fine_config.get("momentum_scr", 0.99))
     )
     regularizer = FINERegularizer(
         beta=float(fine_config.get("beta", 0.1)),
@@ -279,7 +303,7 @@ def run_fine_experiment(
             clean_ratio = 1.0
         else:
             probabilities, ema_probabilities, snapshot_targets = _epoch_predictions(
-                model, ema.model, snapshot_loader, device, positions, 100
+                model, ema.model, snapshot_loader, device, positions, num_classes
             )
             clean_mask = scs.select_epoch(probabilities, snapshot_targets)
             weights = scr.weights(ema_probabilities)
@@ -300,20 +324,23 @@ def run_fine_experiment(
                 alpha=float(fine_config.get("alpha", 1.0)),
             )
             clean_ratio = float(clean_mask.float().mean())
-        validation = evaluate_classification(model, validation_loader, criterion, device)
-        test = evaluate_classification(model, test_loader, criterion, device)
-        row = standardize_epoch_row({
+        row_values = {
             "epoch": epoch + 1,
             "phase": "warmup" if epoch < warmup_epochs else "robust",
             "train_loss": train_loss,
             "train_accuracy": train_accuracy,
-            "validation_loss": validation["loss"],
-            "validation_accuracy": validation["accuracy"],
-            "test_loss": test["loss"],
-            "test_accuracy": test["accuracy"],
             "selected_ratio": clean_ratio,
             "learning_rate": float(optimizer.param_groups[0]["lr"]),
-        })
+        }
+        if validation_loader is not None:
+            validation = evaluate_classification(model, validation_loader, criterion, device)
+            row_values.update({
+                "validation_loss": validation["loss"],
+                "validation_accuracy": validation["accuracy"],
+            })
+        row = standardize_epoch_row(
+            row_values, require_validation=validation_loader is not None
+        )
         rows.append(row)
         metrics_path.write_text(
             "".join(json.dumps(value, sort_keys=True) + "\n" for value in rows),
@@ -342,6 +369,23 @@ def run_fine_experiment(
     )
     if rows:
         write_training_curves_svg(rows, run_dir / "training_curves.svg")
+    test = evaluate_classification(model, test_loader, criterion, device)
+    final_row = {
+        "event": "final",
+        "completed_epochs": epochs,
+        "test_loss": test["loss"],
+        "test_accuracy": test["accuracy"],
+        "selection_split": "none",
+        "test_selection_leakage": False,
+        "method": "fine_sed",
+    }
+    metrics_path.write_text(
+        "".join(
+            json.dumps(value, sort_keys=True) + "\n"
+            for value in [*rows, final_row]
+        ),
+        encoding="utf-8",
+    )
     return run_dir
 
 

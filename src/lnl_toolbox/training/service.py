@@ -3,7 +3,9 @@ from __future__ import annotations
 """Public experiment service shared by CLI, Python API, and sweeps."""
 
 import json
+from copy import deepcopy
 from dataclasses import replace
+import os
 from pathlib import Path
 import platform
 import sys
@@ -14,14 +16,23 @@ from lnl_toolbox.core.config_schema import (
     runtime_experiment_config,
 )
 from lnl_toolbox.training.results import finalize_result, is_completed_result
-from lnl_toolbox.data.profile import NoiseRateInfo, NoiseRateStatus
+from lnl_toolbox.data.profile import NoiseOrigin, NoiseRateInfo, NoiseRateStatus
 from lnl_toolbox.training.compatibility import (
+    CompatibilityReason,
     CompatibilityResult,
     CompatibilityStatus,
+    build_input_guidance,
     requirements_unavailable_result,
     resolve_compatibility,
 )
 from lnl_toolbox.training.runners import resolve_runner, runner_specs
+from lnl_toolbox.training.prerequisites import (
+    PrerequisiteRegistry,
+    ReadinessLevel,
+    ReadinessStatus,
+    SourceDescriptor,
+    ValidationMetadata,
+)
 
 if TYPE_CHECKING:
     from lnl_toolbox.training.data_service import DataService
@@ -36,6 +47,10 @@ class ExperimentService:
         self.data_service = data_service
         self.last_compatibility: CompatibilityResult | None = None
         self._last_compatibility_config: dict[str, Any] | None = None
+        self.prerequisites = PrerequisiteRegistry()
+        self.prerequisites.register("pcse_classifier", self._validate_pcse_source)
+        self.prerequisites.register("dld_feature_extractor", self._validate_dld_source)
+        self.prerequisites.register("cal_external_labels", self._validate_cal_source)
 
     @staticmethod
     def _config_value(config: Mapping[str, Any], path: tuple[str, ...]) -> Any:
@@ -46,10 +61,126 @@ class ExperimentService:
             current = current[key]
         return current
 
+    @staticmethod
+    def _config_value_present(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, (Mapping, list, tuple, set, frozenset)):
+            return bool(value)
+        return True
+
+    @staticmethod
+    def _source_mapping(
+        config: Mapping[str, Any], path: tuple[str, ...]
+    ) -> Mapping[str, Any] | None:
+        value = ExperimentService._config_value(config, path)
+        return value if isinstance(value, Mapping) else None
+
+    @staticmethod
+    def _invalid_prerequisite(
+        descriptor: SourceDescriptor, error: Exception, *, path_exists: bool
+    ) -> ValidationMetadata:
+        level = ReadinessLevel.PATH_EXISTS if path_exists else ReadinessLevel.CONFIGURED
+        return ValidationMetadata.invalid(descriptor, level, str(error))
+
+    def _validate_pcse_source(
+        self, descriptor: SourceDescriptor, config: Mapping[str, Any]
+    ) -> ValidationMetadata:
+        source = self._source_mapping(config, ("pretraining_stage", "source"))
+        if source is None:
+            return ValidationMetadata.needs_input(descriptor, "PCSE source is not configured")
+        environment = str(source.get("run_directory_env", "")).strip()
+        run_value = os.environ.get(environment, "").strip() if environment else ""
+        path_exists = bool(run_value and Path(run_value).expanduser().is_dir())
+        if not run_value:
+            return ValidationMetadata.needs_input(
+                descriptor, f"set {environment or 'the configured source environment variable'}"
+            )
+        try:
+            from lnl_toolbox.training.experiment import build_model
+            from lnl_toolbox.training.pcse_pretrained import load_pretrained_classifier_source
+
+            num_classes = int((config.get("data", {}) or {}).get("num_classes", 10))
+            model = build_model(dict(source.get("model", {})), num_classes)
+            value = load_pretrained_classifier_source(source, model, num_classes=num_classes)
+        except (FileNotFoundError, TypeError, ValueError) as error:
+            return self._invalid_prerequisite(descriptor, error, path_exists=path_exists)
+        return ValidationMetadata.ready(
+            descriptor, "PCSE classifier source is consumer-validated", provenance=value.provenance
+        )
+
+    def _validate_dld_source(
+        self, descriptor: SourceDescriptor, config: Mapping[str, Any]
+    ) -> ValidationMetadata:
+        extractor = self._source_mapping(config, ("dld", "feature_extractor"))
+        if extractor is None or not isinstance(extractor.get("external"), Mapping):
+            return ValidationMetadata.needs_input(
+                descriptor, "DLD feature extractor source is not configured"
+            )
+        external = extractor["external"]
+        adapter = str(external.get("adapter", "")).strip().lower()
+        path_exists = False
+        if adapter in {"upm_main_best", "run_directory"}:
+            environment = str(external.get("run_directory_env", "")).strip()
+            value = os.environ.get(environment, "").strip() if environment else ""
+            path_exists = bool(value and Path(value).expanduser().is_dir())
+            if not value:
+                return ValidationMetadata.needs_input(
+                    descriptor, f"set {environment or 'the DLD source environment variable'}"
+                )
+        try:
+            from lnl_toolbox.training.dld_pretrained import load_dld_feature_source
+
+            value = load_dld_feature_source(
+                extractor, num_classes=int((config.get("data", {}) or {}).get("num_classes", 10))
+            )
+        except (FileNotFoundError, TypeError, ValueError) as error:
+            return self._invalid_prerequisite(descriptor, error, path_exists=path_exists)
+        return ValidationMetadata.ready(
+            descriptor, "DLD feature extractor is consumer-validated", provenance=value.provenance
+        )
+
+    def _validate_cal_source(
+        self, descriptor: SourceDescriptor, config: Mapping[str, Any]
+    ) -> ValidationMetadata:
+        noise = self._source_mapping(config, ("noise",))
+        if noise is None or not all(
+            str(noise.get(key, "")).strip() for key in ("path", "clean_key", "noisy_key")
+        ):
+            return ValidationMetadata.needs_input(
+                descriptor, "configure noise.path, noise.clean_key, and noise.noisy_key"
+            )
+        source = Path(str(noise["path"])).expanduser()
+        try:
+            provenance = self.data_service.validate_cal_external_labels(config)
+        except (FileNotFoundError, KeyError, TypeError, ValueError) as error:
+            return self._invalid_prerequisite(descriptor, error, path_exists=source.is_file())
+        return ValidationMetadata.ready(
+            descriptor,
+            "CAL label artifact is schema-valid and identity-compatible",
+            provenance=provenance,
+        )
+
     def inspect_dataset(self, source: object, *, seed: int = 0):
         """Inspect without persisting catalog state or creating artifacts."""
 
         return self.data_service.inspect(source, seed=seed, persist=False)
+
+    def prerequisite_readiness(
+        self, config: Mapping[str, Any]
+    ) -> tuple[ValidationMetadata, ...]:
+        """Evaluate configured external prerequisites without running training."""
+
+        runner = resolve_runner(config)
+        requirements = runner.requirements(config)
+        if requirements is None:
+            return ()
+        return tuple(
+            self.prerequisites.evaluate(descriptor, config)
+            for descriptor in requirements.prerequisites
+        )
 
     def _resolve_for_capabilities(
         self,
@@ -61,7 +192,8 @@ class ExperimentService:
     ) -> CompatibilityResult:
         requirements = runner.requirements(config)
         if requirements is None:
-            return requirements_unavailable_result(runner.name, capabilities.dataset)
+            result = requirements_unavailable_result(runner.name, capabilities.dataset)
+            return replace(result, input_guidance=build_input_guidance(result))
 
         prior = method_noise_rate_prior
         prior_source = "compatibility API input"
@@ -72,21 +204,196 @@ class ExperimentService:
                     prior = float(value)
                     prior_source = "experiment config:" + ".".join(path)
                     break
-        pretrained_roles = set(capabilities.pretrained_roles)
-        for role, path in requirements.pretrained_role_paths:
-            if str(self._config_value(config, path) or "").strip() == role:
-                pretrained_roles.add(role)
-        if prior is not None or pretrained_roles != set(capabilities.pretrained_roles):
-            capabilities = replace(
-                capabilities,
-                method_noise_rate_prior=(
-                    capabilities.method_noise_rate_prior
-                    if prior is None
-                    else NoiseRateInfo(NoiseRateStatus.KNOWN, prior, prior_source)
-                ),
-                pretrained_roles=tuple(sorted(pretrained_roles)),
+        prior_info = None if prior is None else NoiseRateInfo(
+            NoiseRateStatus.KNOWN, prior, prior_source
+        )
+        prerequisite_results = tuple(
+            self.prerequisites.evaluate(descriptor, config)
+            for descriptor in requirements.prerequisites
+        )
+        pretrained_roles = frozenset(
+            item.descriptor.key
+            for item in prerequisite_results
+            if item.status == ReadinessStatus.READY
+        )
+        if not requirements.prerequisites:
+            pretrained_roles = self._available_pretrained_roles(config, requirements)
+        result = resolve_compatibility(
+            capabilities,
+            requirements,
+            method_noise_rate_prior=prior_info,
+            available_pretrained_roles=pretrained_roles,
+        )
+        environments = {
+            f"pretrained:{role}": str(self._config_value(config, path)).strip()
+            for role, path in requirements.pretrained_role_paths
+            if path[-1] == "run_directory_env"
+            and self._config_value(config, path) is not None
+        }
+        missing_inputs = []
+        incompatible_config = []
+        for required in requirements.required_config_inputs:
+            if (
+                required.code == "requires_noisy_training_labels"
+                and capabilities.noise_origin is NoiseOrigin.NATIVE
+            ):
+                continue
+            if required.code == "requires_class_dependent_noise":
+                noise = config.get("noise", {}) or {}
+                name = str(noise.get("name", "")).strip().lower() if isinstance(noise, Mapping) else ""
+                has_manifest = bool(noise.get("manifest")) if isinstance(noise, Mapping) else False
+                if name and name not in {"symmetric", "pairflip", "external"} and not has_manifest:
+                    incompatible_config.append(CompatibilityReason(
+                        required.code,
+                        required.description,
+                        "algorithm_requirement",
+                    ))
+                    continue
+            present = [
+                self._config_value_present(self._config_value(config, path))
+                for path in required.paths
+            ]
+            satisfied = all(present) if required.mode == "all" else any(present)
+            if not satisfied:
+                missing_inputs.append(required)
+        if incompatible_config:
+            result = CompatibilityResult(
+                status=CompatibilityStatus.INCOMPATIBLE,
+                method=result.method,
+                dataset=result.dataset,
+                reasons=result.reasons + tuple(incompatible_config),
+                warnings=result.warnings,
+                required_user_inputs=result.required_user_inputs,
+                required_input_paths=result.required_input_paths,
+                prerequisites=prerequisite_results,
             )
-        return resolve_compatibility(capabilities, requirements)
+        elif missing_inputs:
+            status = (
+                result.status
+                if result.status is CompatibilityStatus.INCOMPATIBLE
+                else CompatibilityStatus.COMPATIBLE_WITH_REQUIREMENTS
+            )
+            result = CompatibilityResult(
+                status=status,
+                method=result.method,
+                dataset=result.dataset,
+                reasons=result.reasons + tuple(
+                    CompatibilityReason(
+                        item.code,
+                        (
+                            f"implemented variant {requirements.implemented_variant!r}: "
+                            f"{item.description}"
+                            if item.implementation_limit in requirements.implementation_limits
+                            else item.description
+                        ),
+                        (
+                            "implemented_variant_limit"
+                            if item.implementation_limit in requirements.implementation_limits
+                            else "algorithm_requirement"
+                        ),
+                    )
+                    for item in missing_inputs
+                ),
+                warnings=result.warnings,
+                required_user_inputs=tuple(sorted(
+                    set(result.required_user_inputs).union(
+                        f"config:{item.code}" for item in missing_inputs
+                    )
+                )),
+                required_input_paths=tuple(
+                    list(result.required_input_paths)
+                    + [
+                        (f"config:{item.code}", item.paths)
+                        for item in missing_inputs
+                    ]
+                ),
+                prerequisites=prerequisite_results,
+            )
+        invalid_prerequisites = tuple(
+            item for item in prerequisite_results
+            if item.status == ReadinessStatus.INVALID
+        )
+        if invalid_prerequisites:
+            result = CompatibilityResult(
+                status=CompatibilityStatus.INCOMPATIBLE,
+                method=result.method,
+                dataset=result.dataset,
+                reasons=result.reasons + tuple(
+                    CompatibilityReason(
+                        "invalid_prerequisite",
+                        f"{item.descriptor.name}: {item.message}",
+                    )
+                    for item in invalid_prerequisites
+                ),
+                warnings=result.warnings,
+                required_user_inputs=result.required_user_inputs,
+                required_input_paths=result.required_input_paths,
+                prerequisites=prerequisite_results,
+            )
+        elif prerequisite_results and not result.prerequisites:
+            result = replace(result, prerequisites=prerequisite_results)
+        return replace(
+            result,
+            input_guidance=build_input_guidance(
+                result, environment_variables=environments,
+            ),
+        )
+
+    @staticmethod
+    def _set_config_value(config: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
+        current = config
+        for part in path[:-1]:
+            child = current.get(part)
+            if not isinstance(child, dict):
+                child = {}
+                current[part] = child
+            current = child
+        current[path[-1]] = value
+
+    @classmethod
+    def _inject_method_noise_prior(
+        cls,
+        config: Mapping[str, Any],
+        runner,
+        prior: float | None,
+    ) -> dict[str, Any]:
+        candidate = deepcopy(dict(config))
+        if prior is None:
+            return candidate
+        requirements = runner.requirements(candidate)
+        if requirements is None or not requirements.requires_method_noise_prior:
+            return candidate
+        if not requirements.method_noise_prior_paths:
+            raise ValueError(
+                f"method {requirements.method!r} declares a noise-rate prior "
+                "but does not declare method_noise_prior_paths"
+            )
+        for path in requirements.method_noise_prior_paths:
+            cls._set_config_value(candidate, path, float(prior))
+        return candidate
+
+    @staticmethod
+    def _available_pretrained_roles(
+        config: Mapping[str, Any], requirements,
+    ) -> frozenset[str]:
+        available: set[str] = set()
+        for role, path in requirements.pretrained_role_paths:
+            value = ExperimentService._config_value(config, path)
+            if isinstance(value, Mapping):
+                value = value.get("path") or value.get("checkpoint")
+            if value is None:
+                continue
+            text = str(value).strip()
+            if not text or text == role:
+                continue
+            if path[-1] == "run_directory_env":
+                text = os.environ.get(text, "").strip()
+                if not text:
+                    continue
+            candidate = Path(text).expanduser()
+            if candidate.is_file() or candidate.is_dir():
+                available.add(role)
+        return frozenset(available)
 
     def resolve_method_compatibility(
         self,
@@ -107,6 +414,7 @@ class ExperimentService:
             source, seed=int(config.get("seed", 0)), persist=False
         )
         runner = resolve_runner(config)
+        config = self._inject_method_noise_prior(config, runner, method_noise_rate_prior)
         return self._resolve_for_capabilities(
             capabilities,
             runner,
@@ -132,6 +440,34 @@ class ExperimentService:
             )
             for runner in runner_specs()
         )
+
+    def list_config_compatibility(
+        self,
+        dataset: object,
+        configs: Mapping[str, Mapping[str, Any]],
+        *,
+        method_noise_rate_prior: float | None = None,
+    ) -> tuple[tuple[str, CompatibilityResult], ...]:
+        """Resolve concrete configurations while loading dataset capabilities once."""
+
+        capabilities = self.data_service.capabilities(dataset, persist=False)
+        results: list[tuple[str, CompatibilityResult]] = []
+        for key, config in configs.items():
+            candidate = self.data_service.apply(config, dataset)
+            runner = resolve_runner(candidate)
+            candidate = self._inject_method_noise_prior(
+                candidate, runner, method_noise_rate_prior
+            )
+            results.append((
+                str(key),
+                self._resolve_for_capabilities(
+                    capabilities,
+                    runner,
+                    candidate,
+                    method_noise_rate_prior=method_noise_rate_prior,
+                ),
+            ))
+        return tuple(results)
 
     @staticmethod
     def _enforce_compatibility(result: CompatibilityResult) -> None:

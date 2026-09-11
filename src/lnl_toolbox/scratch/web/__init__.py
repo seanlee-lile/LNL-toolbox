@@ -1,0 +1,1 @@
+"""Standalone Scratch web UI."""

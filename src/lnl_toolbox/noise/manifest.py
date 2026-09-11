@@ -56,6 +56,8 @@ class NoiseManifest:
     global_indices: np.ndarray | None = None
 
     def __post_init__(self) -> None:
+        if not self.split.strip():
+            raise ValueError("Noise manifest split must not be empty")
         self.clean_targets = np.asarray(self.clean_targets, dtype=np.int64)
         self.noisy_targets = np.asarray(self.noisy_targets, dtype=np.int64)
         if self.clean_targets.ndim != 1 or self.noisy_targets.ndim != 1:
@@ -117,8 +119,9 @@ class NoiseManifest:
         dataset: str,
         num_classes: int,
         required_indices: np.ndarray | None = None,
+        reference_indices: np.ndarray | None = None,
     ) -> "NoiseManifest":
-        """Verify this mapping against a full dataset and required training indices."""
+        """Verify this split-scoped mapping against aligned source targets."""
 
         reference = np.asarray(clean_targets, dtype=np.int64)
         if reference.ndim != 1:
@@ -127,11 +130,25 @@ class NoiseManifest:
             raise ValueError(
                 f"Noise manifest dataset {self.dataset!r} does not match {dataset!r}"
             )
-        if self.global_indices.size and self.global_indices.max() >= reference.size:
-            raise ValueError(
-                "Noise manifest length/global index coverage does not match the current dataset"
+        indices = (
+            np.arange(reference.size, dtype=np.int64)
+            if reference_indices is None
+            else np.asarray(reference_indices, dtype=np.int64)
+        )
+        if indices.ndim != 1 or indices.shape != reference.shape:
+            raise ValueError("reference_indices must align with reference clean targets")
+        if np.unique(indices).size != indices.size or (indices.size and indices.min() < 0):
+            raise ValueError("reference_indices must be unique and non-negative")
+        reference_by_index = {int(index): int(target) for index, target in zip(indices, reference)}
+        try:
+            aligned = np.asarray(
+                [reference_by_index[int(index)] for index in self.global_indices],
+                dtype=np.int64,
             )
-        aligned = reference[self.global_indices]
+        except KeyError as error:
+            raise ValueError(
+                "Noise manifest index is outside the current split namespace"
+            ) from error
         if fingerprint_labels(aligned) != self.dataset_fingerprint:
             raise ValueError("Noise manifest fingerprint does not match the current dataset")
         if not np.array_equal(aligned, self.clean_targets):

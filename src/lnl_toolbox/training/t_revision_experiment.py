@@ -21,6 +21,7 @@ from lnl_toolbox.training.checkpoint import read_checkpoint
 from lnl_toolbox.training.experiment import (
     _environment,
     _resolved_noise_config,
+    bind_model_input,
     build_model,
     build_optimizer,
     build_scheduler,
@@ -66,6 +67,8 @@ def run_t_revision_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    requirements: DataRequirements | None = None,
 ) -> Path:
     """Run the paper-faithful Reweight-R workflow with explicit code choices."""
 
@@ -97,13 +100,12 @@ def run_t_revision_experiment(
         if checkpoint_payload.get("method") != "t_revision":
             raise ValueError("Resume checkpoint is not a T-Revision run")
 
-    data_config = config["data"]
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        requirements = resolve_data_requirements(config, expected_runner="t_revision")
     prepared = prepare_experiment_data(
         config,
-        requirements=DataRequirements(
-            roles=frozenset({DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.NOISY_VALIDATION, DataRole.TEST}),
-            validation_targets="noisy",
-        ),
+        requirements=requirements,
         run_dir=run_dir,
         seed=seed,
         checkpoint_payload=checkpoint_payload,
@@ -141,7 +143,7 @@ def run_t_revision_experiment(
     test_loader = prepared.loader(DataRole.TEST, shuffle=False)
 
     effective_train_rate = effective_subset_actual_rate(manifest, prepared.train_indices)
-    effective_validation_rate = effective_subset_actual_rate(manifest, prepared.validation_indices)
+    effective_validation_rate = prepared.realized_noise_rate(DataRole.NOISY_VALIDATION)
     noise_metadata = checkpoint_noise_metadata(
         manifest,
         manifest_path,
@@ -153,7 +155,9 @@ def run_t_revision_experiment(
     )
     config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
 
-    model = build_model(method_config.model, num_classes).to(device)
+    model = build_model(
+        bind_model_input(method_config.model, prepared.input_spec), num_classes
+    ).to(device)
     _preflight_model_output(model, posterior_loader, device, num_classes)
     stage1_optimizer = build_optimizer(model, method_config.stage1.optimizer)
     stage1_scheduler = build_scheduler(

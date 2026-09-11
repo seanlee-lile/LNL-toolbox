@@ -38,8 +38,9 @@ from lnl_toolbox.models.feature_output import forward_with_features
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
 from lnl_toolbox.training.dld_pretrained import (
+    DLDTorchvisionResNet34Source,
     DLDUPMMainBestSource,
-    load_upm_main_best_feature_source,
+    load_dld_feature_source,
 )
 from lnl_toolbox.training.experiment import (
     _environment,
@@ -73,23 +74,6 @@ def _move_optimizer_state(optimizer: torch.optim.Optimizer, device: torch.device
         for name, value in state.items():
             if torch.is_tensor(value):
                 state[name] = value.to(device)
-
-
-class _ViewDataset(Dataset[dict[str, Any]]):
-    def __init__(self, source: Dataset[dict[str, Any]], field: str) -> None:
-        self.source = source
-        self.field = field
-
-    def __len__(self) -> int:
-        return len(self.source)
-
-    def __getitem__(self, index: int) -> dict[str, Any]:
-        sample = self.source[index]
-        return {
-            "input": sample[self.field],
-            "target": sample["target"],
-            "index": sample["index"],
-        }
 
 
 class _IndexDataset(Dataset[dict[str, int]]):
@@ -139,7 +123,7 @@ class DLDWorkflow:
         noise_metadata: Mapping[str, Any],
         feature_model: torch.nn.Module,
         feature_identity: str,
-        feature_source: DLDUPMMainBestSource | None,
+        feature_source: DLDUPMMainBestSource | DLDTorchvisionResNet34Source | None,
         feature_source_provenance: Mapping[str, Any],
         train_indices: np.ndarray,
         dual_view_loader: Any,
@@ -566,6 +550,8 @@ def run_dld_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
     resume: str | Path | None = None,
+    *,
+    requirements: DataRequirements | None = None,
 ) -> Path:
     config = deepcopy(config)
     method = DLDConfig.from_mapping(config)
@@ -587,14 +573,12 @@ def run_dld_experiment(
         if method.epochs < saved.epochs:
             raise ValueError("DLD diffusion epoch target cannot be reduced on resume")
 
-    data_config = config["data"]
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        requirements = resolve_data_requirements(config, expected_runner="dld")
     prepared = prepare_experiment_data(
         config,
-        requirements=DataRequirements(
-            roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}),
-            views=("weak", "strong"),
-            validation_targets="noisy",
-        ),
+        requirements=requirements,
         run_dir=run_dir, seed=seed, checkpoint_payload=checkpoint,
     )
     dataset, classes = prepared.dataset, prepared.num_classes
@@ -604,11 +588,13 @@ def run_dld_experiment(
     if int(method.precorrection["k_neighbors"]) >= len(prepared.train_indices):
         raise ValueError("DLD k_neighbors must be smaller than the effective train set")
     loader_config = config["loader"]
-    multi_view = prepared.dataset_for(DataRole.TRAIN)
     def dual_view_loader(field: str):
-        return prepared.loader_for_dataset(
-            _ViewDataset(multi_view, field), shuffle=False,
-            stream=10 if field == "input" else 11,
+        view = "weak" if field == "input" else "strong"
+        return prepared.view_loader(
+            DataRole.TRAIN,
+            view,
+            shuffle=False,
+            stream=10 if view == "weak" else 11,
         )
     validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False, stream=20)
     test_loader = prepared.loader(DataRole.TEST, shuffle=False, stream=21)
@@ -616,22 +602,23 @@ def run_dld_experiment(
         manifest, manifest_path, run_dir,
         effective_subset_actual_rate(manifest, prepared.train_indices),
         mode=noise_mode(config), validation_targets="noisy",
-        effective_validation_rate=effective_subset_actual_rate(manifest, prepared.validation_indices),
+        effective_validation_rate=prepared.realized_noise_rate(DataRole.NOISY_VALIDATION),
     )
     config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
 
     seed_everything(seed + 3000)
-    feature_model = build_model(method.feature_extractor["model"], classes).to(device).eval()
-    feature_source: DLDUPMMainBestSource | None = None
+    feature_source: DLDUPMMainBestSource | DLDTorchvisionResNet34Source | None = None
     source_name = str(method.feature_extractor["source"]).strip().lower()
     if source_name == "external_checkpoint":
-        feature_source = load_upm_main_best_feature_source(
-            method.feature_extractor["external"],
-            feature_model,
-            num_classes=classes,
+        feature_source = load_dld_feature_source(
+            method.feature_extractor, num_classes=classes,
         )
+        feature_model = feature_source.model.to(device).eval()
         feature_source_provenance = feature_source.provenance
     else:
+        feature_model = build_model(
+            method.feature_extractor["model"], classes
+        ).to(device).eval()
         feature_source_provenance = {
             "source": "repository_frozen_model",
             "model": dict(method.feature_extractor["model"]),

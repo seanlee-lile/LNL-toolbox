@@ -1,0 +1,36 @@
+id: builtin/prior_kl
+name: Prior KL Regularizer
+description: KL divergence between the batch mean prediction and a class prior.
+inputs:
+  probabilities: {type: probability}
+  prior: {type: probability}
+parameters:
+  epsilon: {type: float, default: 1.0e-12, minimum: 0.0}
+steps:
+  - id: batch_mean
+    block: reduce_mean
+    bindings: {input: probabilities}
+    parameters: {dim: 0}
+  - id: safe_mean
+    block: clamp_min
+    bindings: {input: batch_mean}
+    parameters: {minimum: epsilon}
+  - id: safe_prior
+    block: clamp_min
+    bindings: {input: prior}
+    parameters: {minimum: epsilon}
+  - id: ratio
+    block: safe_divide
+    bindings: {numerator: safe_prior, denominator: safe_mean}
+    parameters: {minimum: epsilon}
+  - id: log_ratio
+    block: log
+    bindings: {input: ratio}
+  - id: weighted
+    block: elementwise_multiply
+    bindings: {left: safe_prior, right: log_ratio}
+  - id: loss
+    block: reduce_sum
+    bindings: {input: weighted}
+outputs:
+  loss: {source: loss}

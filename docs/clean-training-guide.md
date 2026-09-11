@@ -1,10 +1,22 @@
 # 干净标签训练全流程
 
-正式 clean baseline 使用独立入口 `lnl_toolbox.cli.clean_train`。它支持 CIFAR-10/100、TinyCNN、CIFAR ResNet-18、PreActResNet-18、SGD/AdamW、cosine/multistep 学习率、最佳模型保存、断点恢复和多随机种子汇总。
+## 当前推荐入口
+
+新用户和统一实验工作流优先使用 `lnl run`，它与其他方法共用 validate、dry-run、运行目录和结果生命周期：
+
+```powershell
+lnl validate --config configs/experiment/cifar10_clean_baseline.yaml --check-data
+lnl run --config configs/experiment/cifar10_clean_baseline.yaml --dry-run --check-data
+lnl run --config configs/experiment/cifar10_clean_baseline.yaml
+```
+
+## 兼容/专用 clean-only 入口
+
+`lnl-clean-train` 与 `python -m lnl_toolbox.cli.clean_train` 仍是可用的 clean-only 专用（兼容/legacy）入口。它支持 CIFAR-10/100、TinyCNN、CIFAR ResNet-18、PreActResNet-18、SGD/AdamW、cosine/multistep 学习率、最佳模型保存、断点恢复和多随机种子汇总；它拒绝带噪声的配置，且其 `--epochs`、`--seeds` 等专用参数不应被视为统一 experiment runner 的通用合同。
 
 安装 editable package 后，无参数运行 `lnl-clean-train` 会进入中文向导，可选择配置模板、数据、模型、loss、优化器、scheduler、设备以及单次/恢复/多 seed 模式。最终确认前不会创建运行目录；向导只修改内存配置，实际配置仍由运行目录中的 `resolved_config.yaml` 记录。
 
-## 单次正式训练
+## 专用入口：单次 clean baseline 训练
 
 交互方式：
 
@@ -19,14 +31,14 @@ $env:PYTHONPATH = "src"
 python -m lnl_toolbox.cli.clean_train --config configs/experiment/cifar10_clean_baseline.yaml
 ```
 
-不激活 Conda 时可直接使用：
+如果 console script 不可用，可在已安装依赖的同一 Python 环境中使用模块入口：
 
 ```powershell
 $env:PYTHONPATH = "src"
-& "F:\Miniconda\envs\pytorch\python.exe" -m lnl_toolbox.cli.clean_train --config configs/experiment/cifar10_clean_baseline.yaml
+python -m lnl_toolbox.cli.clean_train --config configs/experiment/cifar10_clean_baseline.yaml
 ```
 
-## Smoke 与恢复
+## 专用入口的 Smoke 与恢复
 
 ```powershell
 python -m lnl_toolbox.cli.clean_train --config configs/experiment/cifar10_clean_smoke.yaml --output-dir artifacts/runs/clean-smoke

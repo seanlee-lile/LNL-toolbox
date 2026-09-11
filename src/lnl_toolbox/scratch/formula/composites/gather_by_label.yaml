@@ -1,0 +1,21 @@
+id: builtin/gather_by_label
+name: Gather By Label
+description: Unsqueeze row labels, gather along the class dimension, and squeeze the singleton dimension.
+inputs:
+  values: {type: tensor}
+  labels: {type: labels}
+steps:
+  - id: row_labels
+    block: unsqueeze
+    bindings: {input: labels}
+    parameters: {dim: 1}
+  - id: selected
+    block: gather
+    bindings: {input: values, indices: row_labels}
+    parameters: {dim: 1}
+  - id: result
+    block: squeeze
+    bindings: {input: selected}
+    parameters: {dim: 1}
+outputs:
+  result: {source: result}

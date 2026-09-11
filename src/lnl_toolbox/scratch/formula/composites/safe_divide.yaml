@@ -1,0 +1,37 @@
+id: builtin/safe_divide
+name: Safe Divide
+description: Floor the denominator explicitly and divide.
+inputs:
+  numerator: {type: tensor}
+  denominator: {type: tensor}
+parameters:
+  epsilon: {type: float, default: 1.0e-12, minimum: 0.0}
+  on_invalid: {type: enum, options: [clamp, error], default: clamp}
+steps:
+  - id: floored_denominator
+    block: clamp_min
+    bindings: {input: denominator}
+    parameters: {minimum: epsilon}
+  - id: quotient
+    block: divide
+    bindings: {numerator: numerator, denominator: floored_denominator}
+outputs:
+  quotient: {source: quotient}
+variants:
+  - name: clamp
+    when: {on_invalid: clamp}
+    steps:
+      - id: floored_denominator
+        block: clamp_min
+        bindings: {input: denominator}
+        parameters: {minimum: epsilon}
+      - id: quotient
+        block: divide
+        bindings: {numerator: numerator, denominator: floored_denominator}
+  - name: error
+    when: {on_invalid: error}
+    steps:
+      - id: quotient
+        block: strict_divide
+        bindings: {numerator: numerator, denominator: denominator}
+        parameters: {minimum: epsilon}

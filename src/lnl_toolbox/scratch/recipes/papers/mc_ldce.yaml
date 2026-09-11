@@ -1,0 +1,60 @@
+schema_version: 1
+name: mc-ldce
+description: "Formal MC-LDCE CIFAR-10 symmetric-20 lifecycle with fixed features, bias-free classifier contract, centroid risk, and separate transition stage."
+steps:
+  - {block: set_seed, params: {seed: 1}}
+  - {block: select_device, params: {device: auto}}
+  - {block: load_dataset, params: {dataset: cifar10}}
+  - {block: inspect_dataset_semantics}
+  - {block: create_dataset_split, params: {validation_size: 0, split_seed: 1}}
+  - {block: select_label_source}
+  - {block: apply_noise, params: {name: symmetric, rate: 0.2, seed: 1}}
+  - {block: build_noise_manifest}
+  - {block: configure_preprocessing, params: {preprocessing: standard, augment: true}}
+  - {block: configure_views, params: {views: [weak]}}
+  - {block: assign_data_roles, params: {roles: [train, train_eval, test]}}
+  - {block: configure_loader, params: {batch_size: 128, num_workers: 4, pin_memory: true}}
+  - {block: build_prepared_data}
+  - {block: build_loaders}
+  - {block: create_model, params: {model: mc_ldce_cnn, num_classes: 10, classifier_bias: false, device: device, save_as: transition_model}}
+  - {block: create_sigmoid_offdiagonal_transition, params: {num_classes: 10, initial_weight: -2.0794415416798357, seed: 1, device: device, save_as: mc_ldce_transition}}
+  - block: create_parameter_group_optimizer
+    params:
+      optimizer_spec: {name: sgd, momentum: 0.9, weight_decay: 0.001}
+      groups: [{source: transition_model, lr: 0.01}, {source: mc_ldce_transition, lr: 0.01}]
+      save_as: transition_optimizer
+  - {block: create_scheduler, params: {scheduler: multistep, optimizer: transition_optimizer, milestones: [30, 60], gamma: 0.1, save_as: transition_scheduler}}
+  - block: epoch_loop
+    params: {epochs: 150}
+    steps:
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad, params: {optimizer: transition_optimizer}}
+          - {block: forward, params: {model: transition_model, input: images, save_as: transition_logits}}
+          - {block: mc_ldce_volmin_objective, params: {logits: transition_logits, labels: labels, transition: mc_ldce_transition, lambda_volume: 0.0001, save_as: loss}}
+          - {block: backward, params: {model: transition_model}}
+          - {block: optimizer_step, params: {optimizer: transition_optimizer}}
+      - {block: scheduler_step, params: {scheduler: transition_scheduler}}
+  - {block: create_model, params: {model: mc_ldce_cnn, num_classes: 10, classifier_bias: false, device: device, save_as: model}}
+  - {block: set_module_trainability, params: {module: model, submodule: convolutions, trainable: false}}
+  - {block: mc_ldce_recover_statistic, params: {model: model, loader: train_eval_loader, transition: mc_ldce_transition, num_classes: 10, save_as: mc_ldce_statistic}}
+  - {block: create_optimizer, params: {optimizer: adam, model: model, lr: 0.001, weight_decay: 0.0, save_as: optimizer}}
+  - block: epoch_loop
+    params: {epochs: 200}
+    steps:
+      - {block: refresh_epoch_loader, params: {data: prepared_data, role: train, batch_size: 128, save_as: train_loader}}
+      - block: batch_loop
+        params: {loader: train_loader}
+        steps:
+          - {block: get_batch}
+          - {block: move_batch_to_device}
+          - {block: zero_grad}
+          - {block: forward_feature}
+          - {block: mc_ldce_objective, params: {model: model, logits: logits, features: features, statistic: mc_ldce_statistic, save_as: loss}}
+          - {block: backward, params: {model: model}}
+          - {block: optimizer_step}
+  - {block: evaluate_accuracy, params: {model: model, loader: test_loader, save_as: test_accuracy, final: true}}

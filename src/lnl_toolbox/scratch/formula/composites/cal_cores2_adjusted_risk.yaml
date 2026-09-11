@@ -1,0 +1,71 @@
+id: builtin/cal_cores2_adjusted_risk
+name: CAL CORES2 Adjusted Risk
+description: CAL Eq. (7) with explicit probability, prior, and per-class loss operations.
+inputs:
+  logits: {type: tensor}
+  labels: {type: labels}
+  noisy_prior: {type: probability}
+  confidence_weight: {type: scalar}
+steps:
+  - id: probabilities
+    block: softmax
+    bindings: {logits: logits}
+  - id: observed_epsilon
+    block: constant
+    parameters: {value: 1.0e-8}
+  - id: all_epsilon
+    block: constant
+    parameters: {value: 1.0e-5}
+  - id: shifted_observed
+    block: add
+    bindings: {left: probabilities, right: observed_epsilon}
+  - id: shifted_all
+    block: add
+    bindings: {left: probabilities, right: all_epsilon}
+  - id: observed_probability
+    block: gather_by_label
+    bindings: {values: shifted_observed, labels: labels}
+  - id: observed_log
+    block: log
+    bindings: {input: observed_probability}
+  - id: observed_loss
+    block: negate
+    bindings: {input: observed_log}
+  - id: all_log
+    block: log
+    bindings: {input: shifted_all}
+  - id: all_losses
+    block: negate
+    bindings: {input: all_log}
+  - id: prior_floor
+    block: clamp_min
+    bindings: {input: noisy_prior}
+    parameters: {minimum: 0.0}
+  - id: prior_root
+    block: sqrt
+    bindings: {input: prior_floor}
+  - id: prior_total
+    block: reduce_sum
+    bindings: {input: prior_root}
+  - id: prior_normalized
+    block: safe_divide
+    bindings: {numerator: prior_root, denominator: prior_total}
+    parameters: {minimum: 1.0e-12}
+  - id: weighted_regularizer
+    block: elementwise_multiply
+    bindings: {left: all_losses, right: prior_normalized}
+  - id: regularizer_per_sample
+    block: reduce_sum
+    bindings: {input: weighted_regularizer}
+    parameters: {dim: -1}
+  - id: confidence_regularizer
+    block: elementwise_multiply
+    bindings: {left: confidence_weight, right: regularizer_per_sample}
+  - id: adjusted
+    block: subtract
+    bindings: {minuend: observed_loss, subtrahend: confidence_regularizer}
+  - id: loss
+    block: reduce_mean
+    bindings: {input: adjusted}
+outputs:
+  loss: {source: loss}

@@ -1,0 +1,21 @@
+id: builtin/row_normalize
+name: Row Normalize
+description: Divide each last-dimension row by its explicitly floored sum.
+inputs:
+  x: {type: tensor}
+parameters:
+  epsilon: {type: float, default: 1.0e-12, minimum: 0.0}
+steps:
+  - id: row_sum
+    block: reduce_sum
+    bindings: {input: x}
+    parameters: {dim: -1, keepdim: true}
+  - id: safe_sum
+    block: clamp_min
+    bindings: {input: row_sum}
+    parameters: {minimum: epsilon}
+  - id: normalized
+    block: divide
+    bindings: {numerator: x, denominator: safe_sum}
+outputs:
+  normalized: {source: normalized}

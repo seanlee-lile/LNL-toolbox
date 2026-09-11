@@ -6,185 +6,310 @@
   <title>LNL Toolbox Command Console</title>
   <style>
     :root {
-      color-scheme: dark;
-      --bg: #111827;
-      --panel: #1f2937;
-      --panel-2: #263449;
-      --line: #374151;
-      --text: #e5e7eb;
-      --muted: #9ca3af;
-      --accent: #60a5fa;
-      --good: #34d399;
-      --bad: #f87171;
+      color-scheme: light;
+      --bg-page: #f4f0e6;
+      --bg-sidebar: #eee9dc;
+      --bg-card: #fffaf0;
+      --bg-soft: #f7f3e9;
+      --bg-code: #5a4030;
+      --border: #d8d1c1;
+      --border-strong: #b8ad97;
+      --text-primary: #342f2a;
+      --text-secondary: #5c534a;
+      --text-muted: #786f66;
+      --accent-orange: #b8945e;
+      --accent-orange-hover: #a98450;
+      --accent-peach: #f2d8c8;
+      --accent-orange-soft: #f2e8d5;
+      --accent-text: #806647;
+      --accent-muted: #98784c;
+      --hover-bg: #f6eedf;
+      --hover-border: #c8aa7b;
+      --hover-text: #6b5436;
+      --selected-bg: #f3e6c9;
+      --selected-border: #b89560;
+      --selected-text: #6f5736;
+      --active-bg: #ead8b5;
+      --active-border: #ad8750;
+      --code-bg: #4a3428;
+      --code-bg-soft: #5a4030;
+      --code-text: #f8ebdd;
+      --code-muted: #d8c2ae;
+      --code-border: #765744;
+      --success: #4f775b;
+      --success-soft: #e4eee5;
+      --warning: #9a6a32;
+      --warning-soft: #faecd9;
+      --danger: #a55252;
+      --danger-soft: #f7e4e1;
+      --radius-sm: 9px;
+      --radius-md: 13px;
+      --radius-card: 18px;
+      --shadow-card: 0 8px 24px rgba(67, 59, 42, .06);
+      --bg: var(--bg-page);
+      --panel: var(--bg-card);
+      --panel-2: var(--bg-soft);
+      --line: var(--border);
+      --text: var(--text-primary);
+      --muted: var(--text-muted);
+      --accent: var(--accent-orange);
+      --good: var(--success);
+      --bad: var(--danger);
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
-      background: radial-gradient(circle at 10% 0%, #243b63, var(--bg) 38%);
+      background: #fbf8f1;
       color: var(--text);
-      font: 14px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+      font: 16px/1.65 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     }
-    main { max-width: 1440px; margin: 0 auto; padding: 28px; }
-    h1 { margin: 0 0 6px; font-size: 24px; }
-    .subtitle { color: var(--muted); margin-bottom: 22px; }
-    .layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; align-items: start; }
+    main { max-width: 1520px; margin: 0 auto; padding: 36px 32px 48px; }
+    h1 { margin: 0 0 8px; font-size: 34px; line-height: 1.25; letter-spacing: -.02em; }
+    .subtitle { color: var(--text-secondary); margin-bottom: 26px; font-size: 17px; }
+    .layout { display: grid; grid-template-columns: 370px minmax(0, 1fr); gap: 24px; align-items: start; }
     .panel {
-      background: rgba(31, 41, 55, .92);
+      background: var(--bg-card);
       border: 1px solid var(--line);
-      border-radius: 14px;
-      padding: 16px;
-      box-shadow: 0 16px 45px rgba(0, 0, 0, .2);
+      border-radius: var(--radius-card);
+      padding: 22px;
+      box-shadow: var(--shadow-card);
     }
-    .section-title { color: var(--muted); font-size: 12px; letter-spacing: .06em; margin: 0 0 10px; }
-    .module-list, .commands { display: grid; gap: 8px; }
+    aside.panel { background: var(--bg-sidebar); }
+    .section-title { color: var(--text-secondary); font-size: 14px; font-weight: 750; letter-spacing: .08em; margin: 0 0 13px; }
+    .module-list { display: grid; gap: 10px; }
+    .workspace-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; }
+    .workspace-tab { min-height: 38px; padding: 8px 12px; font-size: 14px; }
+    .workspace-tab.active { border-color: var(--active-border); color: var(--selected-text); background: var(--active-bg); }
+    .advanced-tools { margin-top: 20px; border-top: 1px solid var(--border); padding-top: 14px; }
+    .advanced-tools > summary, .advanced-command-panel > summary { cursor: pointer; color: var(--text-secondary); font-size: 14px; font-weight: 750; }
+    .advanced-tools-body { display: grid; gap: 8px; margin-top: 12px; }
+    .advanced-tools-body button { min-height: 40px; }
+    .console-context {
+      position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center;
+      margin: 0 0 22px; padding: 11px 14px; border: 1px solid var(--border); border-radius: var(--radius-md);
+      background: color-mix(in srgb, var(--bg-card) 92%, transparent); box-shadow: 0 6px 18px rgba(67, 59, 42, .06);
+      backdrop-filter: blur(10px); font-size: 14px;
+    }
+    .context-item { color: var(--text-secondary); }
+    .context-item strong { color: var(--text-primary); }
+    .context-status.ready { color: var(--success); }
+    .context-status.attention { color: var(--warning); }
+    .context-status.error { color: var(--danger); }
+    .context-scratch { margin-left: auto; color: #fffaf0; background: var(--accent-orange); border-radius: var(--radius-sm); padding: 6px 10px; text-decoration: none; font-weight: 700; }
+    .context-scratch:hover { color: #fffaf0; background: var(--accent-orange-hover); }
+    .workspace-intro { padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--bg-soft); margin-bottom: 16px; }
+    .workspace-intro p { margin: 5px 0 0; color: var(--text-muted); }
+    .run-summary { display: grid; gap: 12px; }
+    .commands { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; width: 100%; }
+    .commands button { width: 100%; min-width: 0; height: 100%; }
+    .shortcut-section { width: 100%; margin: 4px 0 18px; }
+    .preview-panel { grid-column: 1 / -1; width: 100%; min-width: 0; }
+    .preview-panel .preview, .preview-panel pre { width: 100%; min-width: 0; }
     .module-button { width: 100%; }
-    .module-button.active { border-color: var(--accent); background: #294568; }
-    .label { display: block; color: #bfdbfe; font-weight: 700; }
-    .desc { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .module-button.active { border-color: var(--active-border); color: var(--selected-text); background: var(--active-bg); box-shadow: inset 4px 0 0 var(--accent-orange); }
+    .module-button.active .label { color: var(--selected-text); }
+    .label { display: block; color: var(--text-primary); font-size: 16px; font-weight: 720; }
+    .desc { display: block; color: var(--text-muted); font-size: 13px; line-height: 1.55; margin-top: 5px; }
     button {
       border: 1px solid var(--line);
-      border-radius: 9px;
+      border-radius: var(--radius-md);
       background: var(--panel-2);
       color: var(--text);
       cursor: pointer;
       text-align: left;
-      padding: 10px 12px;
+      min-height: 46px;
+      padding: 11px 14px;
       font: inherit;
     }
-    button:hover, button.active { border-color: var(--accent); background: #294568; }
-    button.primary { text-align: center; background: #1d4d7b; border-color: #3b82f6; }
+    button:hover { border-color: var(--hover-border); color: var(--hover-text); background: var(--hover-bg); }
+    button.active { border-color: var(--active-border); color: var(--selected-text); background: var(--active-bg); }
+    button:focus-visible { outline: 3px solid rgba(184, 149, 96, .24); outline-offset: 2px; }
+    button.primary { text-align: center; color: #fffaf0; background: var(--accent-orange); border-color: var(--accent-orange); }
+    button.primary:hover { color: #fffaf0; background: var(--accent-orange-hover); border-color: var(--accent-orange-hover); }
     button.secondary { text-align: center; }
-    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
-    .form-grid label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
+    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; margin-bottom: 18px; }
+    .form-grid label { display: grid; gap: 7px; color: var(--text-secondary); font-size: 14px; font-weight: 650; }
     .form-grid .wide { grid-column: 1 / -1; }
     select, input {
       width: 100%;
       border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #0b1220;
+      min-height: 46px;
+      border-radius: var(--radius-sm);
+      background: #fffdf7;
       color: var(--text);
-      padding: 9px 10px;
+      padding: 10px 12px;
       font: inherit;
     }
-    input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); }
+    input:focus, select:focus, textarea:focus { outline: 3px solid rgba(184, 149, 96, .22); border-color: var(--selected-border); }
     textarea {
       width: 100%; min-height: 88px; resize: vertical; border: 1px solid var(--line);
-      border-radius: 8px; background: #0b1220; color: var(--text); padding: 10px; font: inherit;
+      border-radius: var(--radius-sm); background: #fffdf7; color: var(--text); padding: 12px; font: inherit;
     }
-    .helper, .module-description { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
-    .module-description { margin: 0 0 14px; }
+    input::placeholder, textarea::placeholder { color: #858b83; opacity: 1; }
+    .helper, .module-description { color: var(--text-muted); font-size: 14px; line-height: 1.65; margin: 9px 0 0; }
+    .module-description { margin: 4px 0 18px; }
     .hidden { display: none !important; }
-    .right-stack { display: grid; gap: 16px; }
-    .parameter-panel { min-height: 230px; }
+    .right-stack { display: grid; gap: 22px; }
+    .parameter-panel { min-height: 250px; }
     .parameter-heading { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
-    .parameter-heading h2 { margin: 0; font-size: 18px; }
-    .parameter-heading span { color: var(--muted); font-size: 12px; }
+    .parameter-heading h2 { margin: 0; font-size: 23px; line-height: 1.3; }
+    .parameter-heading span { color: var(--text-muted); font-size: 14px; }
     .heading-actions { display: flex; align-items: center; gap: 8px; }
-    .yaml-editor-panel textarea { min-height: 420px; font-size: 13px; }
-    .yaml-parameter-groups { display: grid; gap: 10px; grid-column: 1 / -1; }
-    .yaml-parameter-group { border: 1px solid var(--line); border-radius: 10px; background: #172033; }
-    .yaml-parameter-group > summary { cursor: pointer; padding: 10px 12px; color: #bfdbfe; font-weight: 700; }
-    .yaml-parameter-group-body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 0 12px 12px; }
-    .yaml-field { display: grid; gap: 5px; padding: 9px; border: 1px solid #2d3b50; border-radius: 8px; }
-    .yaml-field-meta { color: var(--muted); font-size: 11px; margin: 0; }
-    .yaml-field-paper { border-color: #7c5c22; background: rgba(120, 80, 0, .12); }
-    .yaml-field-locked { background: #111827; }
-    .yaml-readonly-value { padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; color: #cbd5e1; background: #0b1220; overflow-wrap: anywhere; }
-    .yaml-paper-status { grid-column: 1 / -1; padding: 9px 11px; border-radius: 8px; color: var(--good); background: #10251f; }
-    .yaml-paper-status.modified { color: #fde68a; background: rgba(120, 80, 0, .2); }
-    .config-context { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 14px; padding: 10px 12px; border: 1px solid #34506f; border-radius: 10px; background: #132238; }
-    .config-context strong { color: #bfdbfe; }
-    .config-context code { color: #dbeafe; overflow-wrap: anywhere; }
-    .workflow-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
-    .sweep-groups { display: grid; gap: 10px; margin-top: 12px; }
-    .sweep-group { border: 1px solid var(--line); border-radius: 10px; background: #172033; }
-    .sweep-group > summary { cursor: pointer; padding: 10px 12px; color: #bfdbfe; font-weight: 700; }
-    .sweep-group-body { display: grid; gap: 8px; padding: 0 12px 12px; }
-    .sweep-field-card { padding: 10px; border: 1px solid #344258; border-radius: 8px; background: #101a2c; }
-    .sweep-field-card.selected { border-color: #38bdf8; }
+    .yaml-editor-panel textarea { min-height: 420px; font-size: 14px; }
+    .yaml-parameter-groups { display: grid; gap: 14px; grid-column: 1 / -1; }
+    .yaml-parameter-group { border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--bg-soft); }
+    .yaml-parameter-group > summary { cursor: pointer; padding: 13px 15px; color: var(--text-primary); font-weight: 700; }
+    .yaml-parameter-group-body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 0 15px 15px; }
+    .yaml-field { display: grid; gap: 7px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #fffdf7; }
+    .yaml-field-meta { color: var(--text-muted); font-size: 13px; margin: 0; }
+    .yaml-field-paper { border-color: #d8b68e; background: var(--accent-orange-soft); }
+    .yaml-field-locked { background: #eeece5; }
+    .yaml-readonly-value { padding: 11px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); color: var(--text-secondary); background: #efede6; overflow-wrap: anywhere; }
+    .yaml-paper-status { grid-column: 1 / -1; padding: 11px 13px; border-radius: var(--radius-sm); color: var(--success); background: var(--success-soft); }
+    .yaml-paper-status.modified { color: var(--warning); background: var(--warning-soft); }
+    .config-context { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 18px; padding: 12px 14px; border: 1px solid var(--selected-border); border-radius: var(--radius-md); background: var(--selected-bg); }
+    .config-context strong { color: var(--selected-text); }
+    .config-context code { color: var(--text-primary); overflow-wrap: anywhere; }
+    .workflow-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0; }
+    .sweep-groups { display: grid; gap: 14px; margin-top: 16px; }
+    .sweep-group { border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--bg-soft); }
+    .sweep-group > summary { cursor: pointer; padding: 13px 15px; color: var(--text-primary); font-weight: 700; }
+    .sweep-group-body { display: grid; gap: 10px; padding: 0 15px 15px; }
+    .sweep-field-card { padding: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #fffdf7; }
+    .sweep-field-card.selected { border-color: var(--selected-border); background: var(--selected-bg); }
     .sweep-field-head { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
-    .sweep-field-path { color: #93c5fd; font-size: 12px; overflow-wrap: anywhere; }
-    .parameter-badge { display: inline-block; padding: 2px 7px; border-radius: 999px; background: #29415f; color: #bfdbfe; font-size: 11px; }
-    .sweep-dimension { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr) auto; gap: 8px; align-items: start; padding: 10px; border: 1px solid #34506f; border-radius: 9px; background: #101a2c; }
-    .sweep-warning { margin: 10px 0; padding: 10px 12px; border: 1px solid #b7791f; border-radius: 8px; background: #3a2b13; color: #fde68a; }
+    .sweep-field-path { color: var(--accent-text); font-size: 13px; overflow-wrap: anywhere; }
+    .parameter-badge { display: inline-block; padding: 3px 9px; border-radius: 999px; background: var(--accent-orange-soft); color: var(--accent-text); font-size: 12px; }
+    .compatibility-method[data-status="compatible"] .parameter-badge { color: var(--success); background: var(--success-soft); }
+    .compatibility-method[data-status="compatible_with_requirements"] .parameter-badge { color: var(--warning); background: var(--warning-soft); }
+    .compatibility-method[data-status="incompatible"] .parameter-badge { color: var(--danger); background: var(--danger-soft); }
+    .sweep-dimension { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr) auto; gap: 10px; align-items: start; padding: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #fffdf7; }
+    .sweep-warning { margin: 12px 0; padding: 12px 14px; border: 1px solid #dfbf92; border-radius: var(--radius-sm); background: var(--warning-soft); color: var(--warning); }
     .preview {
-      margin: 0 0 14px; padding: 14px; min-height: 54px; white-space: pre-wrap;
-      overflow-wrap: anywhere; color: #bfdbfe; background: #0b1220; border-radius: 9px; border: 1px solid #263b5d;
+      margin: 0 0 18px; padding: 16px 18px; min-height: 62px; white-space: pre-wrap;
+      overflow-wrap: anywhere; overflow-x: auto; color: var(--code-text); background: var(--code-bg-soft); border-radius: var(--radius-md); border: 1px solid var(--code-border);
+      font: 15px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace;
     }
-    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
-    .status { color: var(--muted); margin: 0 0 8px; }
-    .status.running { color: #fbbf24; }
+    .preview-editor {
+      display: block; box-sizing: border-box; width: 100%; min-height: 92px; resize: vertical;
+      white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: auto;
+    }
+    .preview-editor:focus { outline: 2px solid var(--active-border); outline-offset: 2px; }
+    .preview-editor.edited { border-color: var(--active-border); box-shadow: 0 0 0 2px rgba(198, 126, 57, .14); }
+    .preview-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+    .preview-heading .helper { margin: 0 0 8px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
+    .status { color: var(--text-muted); margin: 0 0 10px; font-size: 15px; font-weight: 650; }
+    .status.running { color: var(--warning); }
+    .status.warning { color: var(--warning); }
     .status.success { color: var(--good); }
     .status.failed { color: var(--bad); }
     pre {
-      margin: 0; min-height: 300px; max-height: 48vh; overflow: auto; padding: 14px;
-      background: #080d17; color: #d1d5db; border-radius: 9px; border: 1px solid #1f2937;
-      white-space: pre-wrap; overflow-wrap: anywhere;
+      margin: 0; min-height: 300px; max-height: 48vh; overflow: auto; padding: 18px;
+      background: var(--code-bg); color: var(--code-text); border-radius: var(--radius-md); border: 1px solid var(--code-border);
+      white-space: pre-wrap; overflow-wrap: anywhere; font: 15px/1.75 ui-monospace, SFMono-Regular, Consolas, monospace;
     }
-    .note { margin-top: 14px; padding: 10px 12px; border-left: 3px solid #f59e0b; color: #fde68a; background: rgba(120, 80, 0, .18); font-size: 12px; }
-    .tutorial-steps { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 7px; margin: 0 0 14px; }
-    .tutorial-step { min-width: 0; padding: 9px 8px; background: #172033; color: var(--muted); }
+    .note { margin-top: 18px; padding: 13px 15px; border-left: 4px solid var(--warning); color: #765124; background: var(--warning-soft); font-size: 14px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+    .tutorial-steps { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 9px; margin: 0 0 18px; }
+    .tutorial-step { min-width: 0; padding: 12px 9px; background: #efede6; color: var(--text-muted); }
     .tutorial-step strong { display: block; color: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .tutorial-step.active { border-color: var(--accent); color: #bfdbfe; background: #294568; }
-    .tutorial-step.passed, .tutorial-step.not-needed { border-color: var(--good); color: var(--good); }
-    .tutorial-step.failed { border-color: var(--bad); color: #fecaca; }
+    .tutorial-step.passed, .tutorial-step.not-needed { border-color: #a9c2ad; color: var(--success); background: var(--success-soft); }
+    .tutorial-step.active { border-color: var(--active-border); color: var(--selected-text); background: var(--active-bg); box-shadow: inset 0 -4px 0 var(--accent-orange); }
+    .tutorial-step.failed { border-color: #d7abab; color: var(--danger); background: var(--danger-soft); }
     .tutorial-step:disabled { cursor: not-allowed; opacity: .55; }
-    .tutorial-card { padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: #111a2a; margin-bottom: 12px; }
-    .tutorial-card h3 { margin: 0 0 7px; color: #bfdbfe; font-size: 16px; }
-    .tutorial-card p { margin: 5px 0; }
+    .tutorial-card { padding: 18px; border: 1px solid var(--line); border-radius: var(--radius-md); background: #fffdf7; margin-bottom: 16px; }
+    .tutorial-card h3 { margin: 0 0 9px; color: var(--text-primary); font-size: 19px; }
+    .tutorial-card p { margin: 7px 0; }
     .tutorial-why { color: var(--muted); }
-    .tutorial-success { color: #a7f3d0; }
-    .tutorial-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
-    .tutorial-nav .progress-label { margin-left: auto; color: var(--muted); font-size: 12px; }
-    .tutorial-inspection { margin-top: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: #0b1220; }
-    .tutorial-inspection.success { border-color: #226c57; }
-    .tutorial-inspection.failed { border-color: #7f3030; color: #fecaca; }
+    .tutorial-success { color: var(--success); }
+    .tutorial-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 15px; }
+    .tutorial-nav .progress-label { margin-left: auto; color: var(--text-muted); font-size: 14px; font-weight: 650; }
+    .tutorial-inspection { margin-top: 12px; padding: 13px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg-soft); }
+    .tutorial-inspection.success { border-color: #a9c2ad; background: var(--success-soft); }
+    .tutorial-inspection.failed { border-color: #d7abab; color: var(--danger); background: var(--danger-soft); }
     .tutorial-inspection p { margin: 3px 0; }
-    .tutorial-quick { margin-top: 14px; border: 1px solid var(--line); border-radius: 9px; background: #172033; }
-    .tutorial-quick > summary { cursor: pointer; padding: 10px 12px; color: #bfdbfe; }
-    .tutorial-quick-body { padding: 0 12px 12px; }
-    .data-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0 0 14px; }
-    .data-step { border: 1px solid var(--line); border-radius: 9px; padding: 9px 10px; color: var(--muted); background: #172033; }
-    .data-step.active { border-color: var(--accent); color: #bfdbfe; }
-    .data-step.done { border-color: var(--good); color: var(--good); }
-    .data-feedback { margin: 12px 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; background: #111a2a; }
-    .data-feedback.success { border-color: #226c57; }
-    .data-feedback.failed { border-color: #7f3030; color: #fecaca; }
+    .tutorial-quick { margin-top: 18px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--bg-soft); }
+    .tutorial-quick > summary { cursor: pointer; padding: 13px 15px; color: var(--text-primary); font-weight: 700; }
+    .tutorial-quick-body { padding: 0 15px 15px; }
+    .data-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 0 0 18px; }
+    .data-step { border: 1px solid var(--line); border-radius: var(--radius-md); padding: 12px 13px; color: var(--text-muted); background: #efede6; }
+    .data-step.active { border-color: var(--active-border); color: var(--selected-text); background: var(--active-bg); }
+    .data-step.done { border-color: #a9c2ad; color: var(--success); background: var(--success-soft); }
+    .data-feedback { margin: 15px 0; padding: 14px 15px; border: 1px solid var(--line); border-radius: var(--radius-md); background: #fffdf7; }
+    .data-feedback.success { border-color: #a9c2ad; background: var(--success-soft); }
+    .data-feedback.failed { border-color: #d7abab; color: var(--danger); background: var(--danger-soft); }
     .data-feedback p { margin: 4px 0; }
     .data-table-wrap { overflow-x: auto; margin-top: 12px; }
-    .data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    .data-table th, .data-table td { padding: 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
-    .data-table th { color: var(--muted); }
+    .data-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .data-table th, .data-table td { padding: 11px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .data-table th { color: var(--text-secondary); background: var(--bg-soft); }
     .data-status-ready, .data-status-verified { color: var(--good); }
-    .data-status-incomplete { color: #fbbf24; }
+    .data-status-pending { color: var(--warning); }
+    .data-status-unavailable { color: var(--bad); }
+    .data-status-unchecked { color: var(--text-muted); }
+    .quick-start-summary { margin-top: 18px; padding: 15px; border: 1px solid var(--selected-border); border-radius: var(--radius-md); background: var(--selected-bg); }
+    .quick-start-summary strong { color: var(--selected-text); }
     .path-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
     .path-control button { white-space: nowrap; }
     .structured-output { margin-top: 10px; }
-    .chart-wrap { margin-top: 14px; padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: #0b1220; overflow-x: auto; }
+    .chart-wrap { margin-top: 18px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: #fffdf7; overflow-x: auto; }
     .chart-wrap svg { width: 100%; min-width: 640px; height: 330px; }
-    .chart-legend { display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 12px; }
+    .chart-legend { display: flex; flex-wrap: wrap; gap: 14px; color: var(--text-muted); font-size: 14px; }
     .run-select { width: auto; }
-    .required-field::after { content: " · 必填"; color: #fbbf24; }
-    button.danger { border-color: #b91c1c; background: #5f1d24; }
+    .required-field::after { content: " · 必填"; color: var(--warning); }
+    button.danger { color: #fffaf5; border-color: var(--danger); background: var(--danger); }
+    button.danger:hover { color: #fffaf5; border-color: #914343; background: #914343; }
+    button:disabled { cursor: not-allowed; opacity: .55; filter: saturate(.55); }
+    .guide-card { margin-top: 15px; padding: 17px; border: 1px solid var(--line); border-radius: var(--radius-md); background: #fffdf7; }
+    .guide-card h3 { margin: 0 0 8px; font-size: 20px; }
+    .guide-card strong { color: var(--text-primary); }
+    .guide-card table { width: 100%; border-collapse: collapse; }
+    .guide-card th, .guide-card td { padding: 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+    .mentor-preparation { border-color: #d8c5a8; background: var(--accent-orange-soft); }
+    .mentor-preparation.is-ready { border-color: #a9c2ad; background: var(--success-soft); }
+    .mentor-status { display: inline-block; margin-left: 4px; padding: 2px 8px; border-radius: 999px; font-size: 13px; font-weight: 750; }
+    .mentor-status.ready, .mentor-status.available { color: var(--success); background: #d6e6d8; }
+    .mentor-status.not-ready, .mentor-status.blocked { color: var(--warning); background: #f4dcc1; }
+    #training-output { margin: 16px 0; padding: 16px; border: 1px solid var(--selected-border); border-radius: var(--radius-md); background: var(--selected-bg); }
+    #training-output .actions { margin: 12px 0; }
+    #training-metrics { min-height: 180px; max-height: 38vh; }
+    a { color: var(--accent-text); text-underline-offset: 3px; }
+    .task-stop-control { position: fixed; top: 18px; right: 22px; z-index: 20; }
+    .task-stop-control button { box-shadow: 0 6px 18px rgba(91, 57, 50, .12); }
+    .task-stop-control button:disabled { opacity: .55; cursor: not-allowed; }
     @media (max-width: 900px) {
       main { padding: 16px; }
       .layout { grid-template-columns: 1fr; }
+      .preview-panel { grid-column: 1; }
+      .commands { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .form-grid, .data-steps, .tutorial-steps { grid-template-columns: 1fr; }
+      .console-context { position: static; }
+      .context-scratch { margin-left: 0; }
     }
+    @media (max-width: 620px) { .commands { grid-template-columns: 1fr; } }
   </style>
+  <link rel="stylesheet" href="/assets/quick_start.css">
 </head>
 <body>
+    <div class="task-stop-control"><button id="stop-task" class="danger" type="button" disabled>停止当前任务</button></div>
   <main>
     <h1 id="page-title">LNL Toolbox Command Console</h1>
-    <div id="page-subtitle" class="subtitle">左侧选择功能，右侧配置参数并预览指令；参数变化会即时反映在预览中。</div>
+    <div id="page-subtitle" class="subtitle">左侧选择功能，右侧配置参数；对应指令会显示在下方 Preview 模块中，点击“执行此指令”即可完成操作。</div>
+    <div id="console-context" class="console-context" aria-label="当前工作上下文">
+      <span class="context-item">当前数据集：<strong id="context-dataset">未选择</strong></span>
+      <span class="context-item">当前实验：<strong id="context-config">未选择</strong></span>
+      <span id="context-run" class="context-item context-status">运行状态：未运行</span>
+      <a class="context-scratch" href="/scratch" target="_blank" rel="noopener">打开 Scratch 搭建器</a>
+    </div>
     <div class="layout">
       <aside class="panel">
-        <div class="section-title">功能模块</div>
+        <div class="section-title">工作区</div>
         <div id="module-list" class="module-list"></div>
-        <div class="section-title" style="margin-top: 20px;">常用快捷命令</div>
-        <div id="commands" class="commands"></div>
-        <div class="note">训练按钮默认面向短测试。正式论文实验请使用对应 reproduction YAML 和论文规定轮次。</div>
+        <details class="advanced-tools">
+          <summary>高级工具</summary>
+          <div id="advanced-tools-list" class="advanced-tools-body"></div>
+        </details>
       </aside>
       <div class="right-stack">
         <section class="panel parameter-panel">
@@ -196,6 +321,7 @@
             </div>
           </div>
           <p id="module-description" class="module-description"></p>
+          <div id="workspace-tabs" class="workspace-tabs" aria-label="当前工作区的功能"></div>
           <div id="parameter-panel"></div>
         </section>
         <section id="yaml-editor-panel" class="panel yaml-editor-panel hidden">
@@ -204,7 +330,7 @@
             <label>从 recipe 加载
               <select id="yaml-source"></select>
             </label>
-            <label>项目 YAML 路径（加载/另存，项目目录内）
+            <label>项目 YAML 路径（唯一加载/保存位置，项目目录内）
               <input id="yaml-path" placeholder="例如 configs/experiment/my_clothing1m.yaml" spellcheck="false">
             </label>
           </div>
@@ -218,39 +344,89 @@
             <button id="yaml-overwrite" class="secondary">覆盖保存</button>
             <button id="yaml-validate" class="secondary">验证此 YAML</button>
             <button id="yaml-run" class="primary">运行此 YAML</button>
-            <button id="yaml-sweep" class="secondary">保存并转到 Sweep</button>
+            <button id="yaml-sweep" class="secondary">保存并转到参数组合实验</button>
           </div>
           <p class="helper">可以使用上方参数菜单，也可以直接编辑完整 YAML；直接编辑时以文本内容为准。保存前会解析并验证，内置 recipe 不允许被覆盖。</p>
         </section>
-        <section class="panel">
-          <div class="section-title">PREVIEW · 当前模块生成的指令</div>
-          <div id="preview" class="preview">正在加载菜单...</div>
+      </div>
+        <section class="panel preview-panel">
+          <div class="preview-heading">
+            <div class="section-title">PREVIEW · 当前模块生成的指令</div>
+            <p class="helper">可直接编辑；点击“执行此指令”时以编辑后的内容为准。</p>
+          </div>
+          <textarea id="preview" class="preview preview-editor" rows="3" spellcheck="false" aria-label="即将执行的指令">正在加载菜单...</textarea>
           <div class="actions">
             <button id="run" class="primary" disabled>执行此指令</button>
             <button id="copy" class="secondary" disabled>复制指令</button>
+            <button id="preview-reset" class="secondary" disabled>恢复自动指令</button>
             <button id="clear" class="secondary">清空日志</button>
           </div>
+          <details id="advanced-command-panel" class="advanced-command-panel shortcut-section">
+            <summary>高级工具 · 快捷命令</summary>
+            <div id="commands" class="commands"></div>
+          </details>
+          <div class="note">训练按钮默认面向短测试。正式论文实验请使用对应 reproduction YAML 和论文规定轮次。</div>
           <div id="status" class="status">尚未执行命令</div>
+          <section id="training-output" class="hidden" aria-live="polite">
+            <div class="section-title">TRAINING · 已确认的阶段输出</div>
+            <div id="training-summary" class="helper"></div>
+            <div class="actions" style="margin-top: 8px;">
+              <button id="training-simple" class="secondary">简洁状态</button>
+              <button id="training-detail" class="secondary">详细输出</button>
+            </div>
+            <pre id="training-metrics" class="hidden"></pre>
+          </section>
           <pre id="output">选择左侧模块或快捷命令后，点击“执行此指令”。</pre>
         </section>
-      </div>
     </div>
   </main>
+  <script src="/assets/quick_start.js"></script>
+  <script src="/assets/run_output.js"></script>
   <script>
     const recipeMode = window.location.pathname === "/recipe" || window.location.pathname === "/recipe/";
     const allModules = [
-      { id: "beginner", label: "新手教程", description: "按顺序完成环境检查、实验选择、验证、预演、训练和恢复判断。", hint: "doctor → list → validate → dry-run → run → resume" },
-      { id: "yaml", label: "新建 YAML", description: "从已有 recipe 组合损失、选择器和训练策略参数。", hint: "参数可选，实时预览" },
-      { id: "data", label: "本地数据集", description: "登记本机路径，并分别检查布局或完成 1 epoch 训练验证。", hint: "registered ≠ training_verified" },
-      { id: "sweep", label: "多 seed Sweep", description: "为同一 recipe 顺序运行多个随机种子。", hint: "支持中断后恢复" },
-      { id: "results", label: "运行管理", description: "恢复训练、查看报告或比较训练曲线。", hint: "checkpoint / report / compare" },
-      { id: "papers", label: "论文方法", description: "理解论文解决的问题、核心方法，以及配置字段和实现代码的对应关系。", hint: "方法 → 配置 → 代码" },
-      { id: "advanced", label: "自由输入", description: "直接输入一条 lnl 指令，后端仍会安全解析。", hint: "高级用户" },
+      { id: "quickstart", label: "快速开始", description: "从数据集出发快速配置并启动实验。", hint: "数据识别 · 噪声设置 · 方法兼容性" },
+      { id: "beginner", label: "新手教程", description: "了解工具箱核心功能与标准实验流程。", hint: "环境 · 配置 · 训练 · 恢复" },
+      { id: "yaml", label: "新建 YAML", description: "创建和编辑自定义实验配置。", hint: "recipe 与项目配置" },
+      { id: "data", label: "本地数据集", description: "注册、检查并管理自己的数据集。", hint: "登记 · 检查 · 兼容性" },
+      { id: "sweep", label: "参数组合实验", description: "按参数笛卡尔积批量运行并比较多组实验。", hint: "参数组合 · seeds · 对比" },
+      { id: "results", label: "运行管理", description: "查看、恢复和比较已有实验运行。", hint: "状态 · resume · report · compare" },
+      { id: "papers", label: "论文方法", description: "查看论文方法、配置与实现说明。", hint: "论文目录 · recipe · 实现映射" },
+      { id: "advanced", label: "自由输入", description: "直接执行高级 lnl 命令。", hint: "CLI 精确控制" },
     ];
+    const workspaces = [
+      {id:"start", label:"开始", description:"先登记或选择可用数据集，再进入实验或论文。", hint:"数据集优先", defaultModule:"quickstart"},
+      {id:"data", label:"数据集", description:"登记、检查并确认本地数据集是否可用于实验。", hint:"登记 · 检查 · 兼容性", defaultModule:"data"},
+      {id:"experiments", label:"实验", description:"创建配置、启动运行、参数组合实验与查看结果。", hint:"配置 · 运行 · 参数组合 · 结果", defaultModule:"yaml"},
+      {id:"papers", label:"论文", description:"浏览 26 篇论文、正式配置与数据集兼容性。", hint:"目录 · 配置 · 限制", defaultModule:"papers"},
+    ];
+    const workspaceForModule = {
+      quickstart:"start", beginner:"start", data:"data", yaml:"experiments", run:"experiments",
+      sweep:"experiments", results:"experiments", papers:"papers", advanced:"advanced",
+    };
+    const workspaceTabs = {
+      start: [{id:"quickstart", label:"数据集优先"}, {id:"beginner", label:"完整新手引导"}],
+      experiments: [{id:"yaml", label:"配置"}, {id:"run", label:"运行"}, {id:"sweep", label:"参数组合实验"}, {id:"results", label:"结果"}],
+    };
     const modules = allModules;
     const sweepModule = modules.find(function (item) { return item.id === "sweep"; });
-    if (sweepModule) { sweepModule.label = "参数 Sweep"; sweepModule.description = "对多个参数取值执行笛卡尔积，可选叠加多个随机种子。"; sweepModule.hint = "参数矩阵 × 可选 seeds"; }
-    const state = { selected: null, request: null, jobId: null, timer: null, resultTimer: null, module: recipeMode ? "yaml" : "beginner", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, tutorial: {steps:[], sequence:[]}, tutorialStep: 0, tutorialCompleted: {}, tutorialRunningStep: "", tutorialRecipe: "cifar10-symmetric-ce-smoke", tutorialData: "", tutorialOutput: "artifacts/runs/tutorial-ce-smoke", tutorialResume: null, tutorialQuickMode: false, tutorialQuickAction: "validate", tutorialQuickEpochs: "1", tutorialQuickSeeds: "1 2 3", yamlSchema: null, yamlSourcePath: "", yamlTextDirty: false, yamlSuggestedPath: "", pendingYamlPath: "", activeConfig: {kind:"recipe", value:"cifar10-symmetric-ce-smoke", label:"cifar10-symmetric-ce-smoke"}, trainingData: "", dataAction: "list", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, dataCompatibility: null, dataCompatibilityAlias: "", dataCompatibilityError: "", dataCompatibilityLoading: false, dataSelectedMethod: "", dataMethodNoisePrior: "", dataShowUnavailable: false, removeConfirmed: false, sweepSourceKind: "recipe", sweepRecipe: "cifar10-clean-smoke", sweepPath: "", sweepSchema: null, sweepSchemaKey: "", sweepRows: [], sweepPlan: null, sweepOutput: "artifacts/web-sweep", resultData: null, resultSelected: [], resultFilter: "", resultListCollapsed: false, resultListInitialized: false, resumeData: null, resumeInspectionKey: "", paperId: "", paperRecipe: "" };
+    if (sweepModule) { sweepModule.label = "参数组合实验"; sweepModule.description = "按参数笛卡尔积批量运行并比较多组实验。"; sweepModule.hint = "参数组合 · seeds · 对比"; }
+    const commandPurposeDescriptions = {
+      "help": "查看 CLI 命令与参数。",
+      "doctor": "检查环境、依赖与设备。",
+      "list-smoke": "浏览快速验证实验配置。",
+      "validate-clean": "检查配置、数据与运行条件。",
+      "dry-run-clean": "查看训练计划，不启动训练。",
+      "train-one": "快速验证完整训练链路。",
+      "sweep-smoke": "批量运行多个随机种子。",
+      "resume": "从 checkpoint 继续训练。",
+      "report": "汇总实验配置与指标。",
+      "compare": "比较训练曲线与实验结果。",
+      "compose": "从配置生成项目 YAML。",
+      "papers": "浏览工具箱内置的论文方法目录。",
+      "paper-config": "查看论文正式配置与映射。"
+    };
+    const state = { selected: null, request: null, previewEdited: false, previewAutoCommand: "", previewAutoRequest: null, jobId: null, timer: null, resultTimer: null, module: recipeMode ? "yaml" : "quickstart", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, tutorial: {steps:[], sequence:[]}, tutorialStep: 0, tutorialCompleted: {}, tutorialRunningStep: "", tutorialRecipe: "cifar10-symmetric-ce-smoke", tutorialData: "", tutorialOutput: "artifacts/runs/tutorial-ce-smoke", tutorialResume: null, tutorialQuickMode: false, tutorialQuickAction: "validate", tutorialQuickEpochs: "1", tutorialQuickSeeds: "1 2 3", yamlSchema: null, yamlSourcePath: "", yamlTextDirty: false, yamlFormDirty: false, yamlSuggestedPath: "", yamlDestinationPath: "", yamlDataset: "", yamlMode: "paper", yamlPaper: "", yamlBase: "cifar10-symmetric-ce-smoke", yamlLoss: "ce", yamlSelector: "all", yamlKeepRate: "0.8", yamlUpdate: "standard", yamlMilestones: "60 80", yamlGamma: "0.1", yamlCdrNoiseRate: "0.2", yamlL1Decay: "0.0", yamlRecipeCompatibility: null, yamlRecipeCompatibilityAlias: "", yamlCompatibilityLoading: false, yamlCompatibilityError: "", pendingYamlPath: "", activeConfig: {kind:"recipe", value:"cifar10-clean-smoke", label:"cifar10-clean-smoke"}, runDataset: "", trainingData: "", dataAction: "status", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, dataCompatibility: null, dataRecipeCompatibility: null, dataCompatibilityAlias: "", dataCompatibilityError: "", dataCompatibilityLoading: false, dataSelectedMethod: "", dataSelectedRecipe: "", dataMethodNoisePrior: "", dataShowUnavailable: false, removeConfirmed: false, sweepSourceKind: "recipe", sweepRecipe: "cifar10-clean-smoke", sweepPath: "", sweepDataset: "", sweepSchema: null, sweepSchemaKey: "", sweepRows: [], sweepPlan: null, sweepOutput: "artifacts/web-sweep", resultData: null, resultSelected: [], resultFilter: "", resultListCollapsed: false, resultListInitialized: false, resumeData: null, resumeInspectionKey: "", paperId: "", paperRecipe: "" };
     if (recipeMode) {
       document.getElementById("page-title").textContent = "LNL Toolbox Recipe Editor";
       document.getElementById("page-subtitle").textContent = "从已有 recipe 组合配置，并查看或保存 YAML。";
@@ -265,6 +441,7 @@
     outputNode.parentNode.insertBefore(structuredNode, outputNode);
     const statusNode = document.getElementById("status");
     const runButton = document.getElementById("run");
+    const stopTaskButton = document.getElementById("stop-task");
     const copyButton = document.getElementById("copy");
     const yamlEditorPanel = document.getElementById("yaml-editor-panel");
 
@@ -272,24 +449,55 @@
       const text = String(value ?? "").trim();
       return /^(?:[A-Za-z0-9_./:=+-]+)$/.test(text) ? text : '"' + text.replaceAll('"', '\\"') + '"';
     }
-    function setRequest(request, command) {
-      state.request = request;
-      previewNode.textContent = command || "请输入或生成一条指令";
-      runButton.disabled = !command;
+    function updatePreviewControls() {
+      const command = previewNode.value.trim();
+      const hasRequest = Boolean(state.request);
+      runButton.disabled = !hasRequest || (!state.request.dataset && !command);
       copyButton.disabled = !command;
+      const resetButton = document.getElementById("preview-reset");
+      if (resetButton) resetButton.disabled = !state.previewEdited || !state.previewAutoCommand;
+      previewNode.classList.toggle("edited", state.previewEdited);
+      previewNode.setAttribute("aria-label", state.previewEdited ? "已编辑的即将执行指令" : "即将执行的指令");
+    }
+    function setRequest(request, command, options = {}) {
+      const nextCommand = String(command || "");
+      const resetPreview = Boolean(options.resetPreview);
+      const preserveEdit = state.previewEdited && !resetPreview && Boolean(request) && !request.dataset;
+      state.request = request;
+      state.previewAutoCommand = nextCommand;
+      state.previewAutoRequest = request ? {...request, ...(request.dataset ? {dataset:{...request.dataset}} : {})} : null;
+      if (!preserveEdit) {
+        previewNode.value = nextCommand || "";
+        state.previewEdited = false;
+      }
+      updatePreviewControls();
+    }
+    function resetPreviewCommand() {
+      if (!state.previewAutoCommand) return;
+      previewNode.value = state.previewAutoCommand;
+      state.previewEdited = false;
+      state.request = state.previewAutoRequest
+        ? {...state.previewAutoRequest, ...(state.previewAutoRequest.dataset ? {dataset:{...state.previewAutoRequest.dataset}} : {})}
+        : null;
+      updatePreviewControls();
+      statusNode.textContent = "已恢复自动生成的指令";
+      statusNode.className = "status";
     }
     function selectValue(id, fallback = "") {
       const node = document.getElementById(id);
       return node ? node.value : fallback;
     }
     function field(label, id, control, wide = false) {
-      return '<label class="' + (wide ? 'wide' : '') + '">' + label + control.replace("__ID__", id) + '</label>';
+      return '<label class="' + (wide ? 'wide' : '') + '">' + label + control.replaceAll("__ID__", id) + '</label>';
     }
     function selectControl(id, options, attrs = "") {
       return '<select id="' + id + '" ' + attrs + '>' + options.map(function (item) {
         const value = typeof item === "string" ? item : item.value;
         const label = typeof item === "string" ? item : item.label;
-        return '<option value="' + escapeHtml(value) + '">' + escapeHtml(label) + '</option>';
+        const disabled = typeof item === "object" && item.disabled ? ' disabled' : '';
+        const title = typeof item === "object" && item.title ? ' title="' + escapeHtml(item.title) + '"' : '';
+        const hidden = typeof item === "object" && item.hidden ? ' hidden' : '';
+        return '<option value="' + escapeHtml(value) + '"' + disabled + hidden + title + '>' + escapeHtml(label) + '</option>';
       }).join("") + '</select>';
     }
     function inputControl(id, value, type = "text", attrs = "") {
@@ -335,6 +543,26 @@
       const source = normalizedConfigSource(kind, value, label);
       if (!source.value) return;
       state.activeConfig = source;
+      renderConsoleContext();
+    }
+    function currentWorkspace() { return workspaceForModule[state.module] || "advanced"; }
+    function workspaceMeta() {
+      return workspaces.find(function (item) { return item.id === currentWorkspace(); }) ||
+        allModules.find(function (item) { return item.id === state.module; }) || workspaces[0];
+    }
+    function selectedDatasetName() {
+      return state.runDataset || state.yamlDataset || state.dataAlias || state.tutorialData || "";
+    }
+    function renderConsoleContext() {
+      const dataset = document.getElementById("context-dataset");
+      const config = document.getElementById("context-config");
+      const run = document.getElementById("context-run");
+      if (!dataset || !config || !run) return;
+      dataset.textContent = selectedDatasetName() || "未选择";
+      config.textContent = state.activeConfig?.label || state.activeConfig?.value || "未选择";
+      const running = Boolean(statusNode?.classList.contains("running"));
+      run.textContent = "运行状态：" + (running ? "运行中" : statusNode?.classList.contains("failed") ? "需要处理" : "未运行");
+      run.className = "context-item context-status " + (running ? "attention" : statusNode?.classList.contains("failed") ? "error" : state.jobId ? "ready" : "");
     }
     function configContextHtml(source = state.activeConfig) {
       if (!source?.value) return "";
@@ -354,6 +582,19 @@
       state.sweepSchemaKey = "";
       state.sweepRows = [];
       state.sweepPlan = null;
+    }
+    function yamlDraftDirty() { return state.yamlTextDirty || state.yamlFormDirty; }
+    function updateYamlEditorButton() {
+      const button = document.getElementById("show-yaml");
+      if (!button) return;
+      button.classList.toggle("hidden", state.module !== "yaml");
+      if (state.module !== "yaml") return;
+      if (!yamlEditorPanel.classList.contains("hidden")) button.textContent = "收起 YAML 编辑器";
+      else button.textContent = yamlDraftDirty() ? "继续编辑 YAML（未保存）" : "显示/编辑 YAML";
+    }
+    function hideYamlEditor() {
+      yamlEditorPanel.classList.add("hidden");
+      updateYamlEditorButton();
     }
 
     function tutorialStatus(stepId) {
@@ -413,7 +654,39 @@
         statusNode.className = "status failed";
       }
       renderBeginner();
-      setRequest(buildBeginnerCommand() ? {command:buildBeginnerCommand()} : null, buildBeginnerCommand());
+      setRequest(buildBeginnerCommand() ? {command:buildBeginnerCommand()} : null, buildBeginnerCommand(), {resetPreview:true});
+    }
+    function renderQuickStart() {
+      if (window.quickStartController) {
+        window.quickStartController.mount(parameterPanel, {
+          setRequest: function (request, command) { setRequest(request, command, {resetPreview:true}); },
+          execute: function () { runButton.click(); },
+          status: function (message, kind) { statusNode.textContent = message; statusNode.className = "status " + (kind || ""); },
+          switchModule: switchModule,
+          compact: true,
+          datasetReady: function (dataset) {
+            const alias = dataset?.alias || "";
+            if (!alias) return;
+            state.yamlDataset = alias;
+            state.runDataset = alias;
+            state.dataAlias = alias;
+            renderConsoleContext();
+          },
+          openExperiment: function (dataset) {
+            const alias = dataset?.alias || "";
+            if (alias) { state.yamlDataset = alias; state.runDataset = alias; }
+            switchModule("yaml");
+          },
+          openPapers: function (dataset) {
+            const alias = dataset?.alias || "";
+            if (alias) state.dataAlias = alias;
+            switchModule("papers");
+          },
+          openScratch: function () { window.open("/scratch", "_blank", "noopener"); }
+        });
+        return;
+      }
+      parameterPanel.innerHTML = '<p class="helper">Quick Start 加载失败，请刷新页面。</p>';
     }
     function renderBeginner() {
       const steps = state.tutorial.steps || [];
@@ -440,10 +713,10 @@
         '<details class="tutorial-quick"><summary>快速命令（跳过逐步教程）</summary><div class="tutorial-quick-body">' + commonFormStart() +
         field("操作", "tutorial-quick-action", selectControl("__ID__", [
           {value:"validate", label:"只检查，不训练"}, {value:"dry-run", label:"预演训练流程"},
-          {value:"train", label:"训练几轮"}, {value:"sweep", label:"多 seed Sweep"}
+          {value:"train", label:"训练几轮"}, {value:"sweep", label:"多 seed 参数组合实验"}
         ])) +
         field("训练轮次", "tutorial-quick-epochs", selectControl("__ID__", ["1", "2", "5", "10"])) +
-        field("随机种子（Sweep）", "tutorial-quick-seeds", inputControl("__ID__", state.tutorialQuickSeeds), true) +
+        field("随机种子（参数组合实验）", "tutorial-quick-seeds", inputControl("__ID__", state.tutorialQuickSeeds), true) +
         commonFormEnd() + '<button type="button" id="tutorial-use-quick" class="secondary">使用这条快速命令</button></div></details>';
       const recipeNode = document.getElementById("tutorial-recipe");
       if ([...recipeNode.options].some(function (option) { return option.value === state.tutorialRecipe; })) recipeNode.value = state.tutorialRecipe;
@@ -466,21 +739,92 @@
         node.addEventListener("input", function () { captureTutorialInputs(); state.tutorialResume = null; updateModulePreview(); });
       });
     }
-    function renderYaml() {
-      const paperOptions = state.papers.map(function (paper) {
+    function recipeCompatibility(recipeId, payload = state.yamlRecipeCompatibility) {
+      return (payload?.recipes || []).find(function (item) { return item.recipe_id === recipeId; });
+    }
+    function compatibilityStatusLabel(status) {
+      return ({compatible:"可用", compatible_with_requirements:"需补充条件", incompatible:"不兼容"})[status] || "未检查";
+    }
+    function compatibilitySummary(item) {
+      if (!item) return "尚未针对目标数据集检查";
+      const reasons = (item.reasons || []).map(function (reason) { return reason.message || reason.code; });
+      return reasons.join("；") || "当前正式配置满足该数据集的训练前门禁";
+    }
+    function yamlPaperOptions() {
+      return state.papers.map(function (paper) {
+        const compatibility = recipeCompatibility(paper.default_recipe_id);
         return {
           value: paper.default_recipe_id,
-          label: paper.acronym + " · " + paper.title + " · " + paper.default_fidelity
+          label: paper.acronym + " · " + paper.title + " · " + paper.default_fidelity + (state.yamlDataset ? " · " + compatibilityStatusLabel(compatibility?.status) : ""),
+          disabled: Boolean(state.yamlDataset) && compatibility?.status !== "compatible",
+          title: compatibilitySummary(compatibility)
         };
       });
+    }
+    function captureYamlBuilderValues() {
+      state.yamlMode = selectValue("yaml-mode", state.yamlMode);
+      state.yamlPaper = selectValue("yaml-paper", state.yamlPaper);
+      state.yamlBase = selectValue("yaml-base", state.yamlBase);
+      state.yamlDataset = selectValue("yaml-dataset", state.yamlDataset);
+      state.yamlLoss = selectValue("yaml-loss", state.yamlLoss);
+      state.yamlSelector = selectValue("yaml-selector", state.yamlSelector);
+      state.yamlKeepRate = selectValue("yaml-keep-rate", state.yamlKeepRate);
+      state.yamlUpdate = selectValue("yaml-update", state.yamlUpdate);
+      state.yamlMilestones = selectValue("yaml-milestones", state.yamlMilestones);
+      state.yamlGamma = selectValue("yaml-gamma", state.yamlGamma);
+      state.yamlCdrNoiseRate = selectValue("yaml-cdr-noise-rate", state.yamlCdrNoiseRate);
+      state.yamlL1Decay = selectValue("yaml-l1-decay", state.yamlL1Decay);
+    }
+    function currentYamlBuilderRecipe() {
+      return selectValue("yaml-mode", state.yamlMode) === "paper"
+        ? selectValue("yaml-paper", state.yamlPaper)
+        : selectValue("yaml-base", state.yamlBase);
+    }
+    async function loadYamlRecipeCompatibility(alias = state.yamlDataset) {
+      if (!alias) {
+        state.yamlRecipeCompatibility = null; state.yamlRecipeCompatibilityAlias = ""; state.yamlCompatibilityError = ""; state.yamlCompatibilityLoading = false;
+        if (state.module === "yaml") { renderYaml(); updateModulePreview(); }
+        return;
+      }
+      state.yamlCompatibilityLoading = true; state.yamlCompatibilityError = "";
+      if (state.module === "yaml") renderYaml();
+      try {
+        const response = await fetch("/api/datasets/" + encodeURIComponent(alias) + "/compatible-recipes");
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "论文配置兼容性检查失败");
+        if (state.yamlDataset !== alias) return;
+        state.yamlRecipeCompatibility = payload; state.yamlRecipeCompatibilityAlias = alias;
+        const current = recipeCompatibility(state.yamlPaper, payload);
+        if (!current || current.status !== "compatible") {
+          state.yamlPaper = (payload.recipes || []).find(function (item) { return item.status === "compatible"; })?.recipe_id || "";
+        }
+      } catch (error) {
+        if (state.yamlDataset !== alias) return;
+        state.yamlRecipeCompatibility = null;
+        state.yamlRecipeCompatibilityAlias = alias;
+        state.yamlCompatibilityError = String(error.message || error);
+      } finally {
+        if (state.yamlDataset === alias) state.yamlCompatibilityLoading = false;
+        if (state.module === "yaml") { renderYaml(); updateModulePreview(); }
+      }
+    }
+    function yamlCompatibilityHtml() {
+      if (!state.yamlDataset) return '<div class="guide-card"><strong>目标数据集</strong><p>未覆盖数据集，将保留训练模板的论文原始数据协议。</p></div>';
+      if (state.yamlCompatibilityLoading) return '<div class="guide-card"><strong>正在检查</strong><p>正在按所选数据集和每篇论文正式配置逐项检查。</p></div>';
+      if (state.yamlCompatibilityError) return '<div class="data-feedback failed"><strong>兼容性检查失败</strong><p>' + escapeHtml(state.yamlCompatibilityError) + '</p></div>';
+      const current = recipeCompatibility(state.yamlPaper);
+      return '<div class="guide-card"><strong>数据集约束</strong><p>' + escapeHtml(state.yamlDataset + " · " + compatibilityStatusLabel(current?.status)) + '</p><p>' + escapeHtml(compatibilitySummary(current)) + '</p><p class="helper">数据别名作为运行时覆盖传给 CLI，不改写论文配置中锁定的数据/噪声协议；因此这是数据迁移训练，不再等同于原论文数据组合。</p></div>';
+    }
+    function renderYaml() {
+      const paperOptions = yamlPaperOptions();
       parameterPanel.innerHTML = configContextHtml() + commonFormStart() +
         field("创建方式", "yaml-mode", selectControl("__ID__", [
           {value:"paper", label:"论文正式配置"},
           {value:"supervised", label:"通用监督组合"}
         ]), true) +
+        field("目标已登记数据集（可选）", "yaml-dataset", selectControl("__ID__", registeredDatasetOptions(true)), true) +
         field("论文方法", "yaml-paper", selectControl("__ID__", paperOptions), true) +
         field("基础配方", "yaml-base", recipesSelect("__ID__", "cifar10-symmetric-ce-smoke", "supervised"), true) +
-        field("输出 YAML", "yaml-output", inputControl("__ID__", "configs/experiment/my_train.yaml"), true) +
         field("损失函数", "yaml-loss", selectControl("__ID__", ["ce", "gce", "nce", "mae", "rce", "apl"])) +
         field("样本选择器", "yaml-selector", selectControl("__ID__", ["all", "small_loss"])) +
         field("保留率", "yaml-keep-rate", inputControl("__ID__", "0.8", "number", "step=0.01 min=0 max=1")) +
@@ -491,9 +835,47 @@
         field("gamma", "yaml-gamma", inputControl("__ID__", "0.1", "number", "step=0.01")) +
         field("CDR noise rate", "yaml-cdr-noise-rate", inputControl("__ID__", "0.2", "number", "step=0.01 min=0 max=1")) +
         field("L1 decay", "yaml-l1-decay", inputControl("__ID__", "0.0", "number", "step=0.0001 min=0")) +
-        commonFormEnd() + '<p id="yaml-help" class="helper">每篇论文只显示一份默认正式训练配置；复制时保持论文 runner、生命周期和超参数不变。</p>';
-      if ([...document.getElementById("yaml-base").options].some(function (option) { return option.value === "cifar10-symmetric-ce-smoke"; })) document.getElementById("yaml-base").value = "cifar10-symmetric-ce-smoke";
+        commonFormEnd() + yamlCompatibilityHtml() + '<p id="yaml-help" class="helper">每篇论文只显示一份默认正式训练配置；唯一保存路径在“显示/编辑 YAML”中设置，不再重复显示第二个路径框。</p>';
+      document.getElementById("yaml-mode").value = state.yamlMode;
+      document.getElementById("yaml-dataset").value = state.yamlDataset;
+      const paperNode = document.getElementById("yaml-paper");
+      if (!state.yamlPaper) state.yamlPaper = paperNode.options[0]?.value || "";
+      if ([...paperNode.options].some(function (option) { return option.value === state.yamlPaper && !option.disabled; })) paperNode.value = state.yamlPaper;
+      else state.yamlPaper = paperNode.value;
+      const baseNode = document.getElementById("yaml-base");
+      if ([...baseNode.options].some(function (option) { return option.value === state.yamlBase; })) baseNode.value = state.yamlBase;
+      document.getElementById("yaml-loss").value = state.yamlLoss;
+      document.getElementById("yaml-selector").value = state.yamlSelector;
+      document.getElementById("yaml-keep-rate").value = state.yamlKeepRate;
+      document.getElementById("yaml-update").value = state.yamlUpdate;
+      document.getElementById("yaml-milestones").value = state.yamlMilestones;
+      document.getElementById("yaml-gamma").value = state.yamlGamma;
+      document.getElementById("yaml-cdr-noise-rate").value = state.yamlCdrNoiseRate;
+      document.getElementById("yaml-l1-decay").value = state.yamlL1Decay;
+      document.getElementById("yaml-dataset").addEventListener("change", function () {
+        captureYamlBuilderValues(); state.yamlRecipeCompatibility = null; state.yamlRecipeCompatibilityAlias = ""; loadYamlRecipeCompatibility(state.yamlDataset);
+      });
+      paperNode.addEventListener("change", function () {
+        captureYamlBuilderValues(); setActiveConfig("recipe", state.yamlPaper); state.yamlSuggestedPath = defaultCustomYamlPath(state.yamlPaper); state.yamlDestinationPath = state.yamlSuggestedPath; updateModulePreview();
+      });
+      baseNode.addEventListener("change", function () {
+        captureYamlBuilderValues(); setActiveConfig("recipe", state.yamlBase); state.yamlSuggestedPath = defaultCustomYamlPath(state.yamlBase); state.yamlDestinationPath = state.yamlSuggestedPath; updateModulePreview();
+      });
+      setActiveConfig("recipe", currentYamlBuilderRecipe());
+      if (!state.yamlDestinationPath) state.yamlDestinationPath = defaultCustomYamlPath(currentYamlBuilderRecipe());
       updateYamlFields();
+      // A dataset can be restored programmatically (Quick Start, opening a saved
+      // experiment, or a page refresh), so no native `change` event is emitted.
+      // Trigger the same compatibility check whenever the selected alias has not
+      // yet been checked for the current YAML builder state.
+      if (state.yamlDataset && state.yamlRecipeCompatibilityAlias !== state.yamlDataset && !state.yamlCompatibilityLoading) {
+        const alias = state.yamlDataset;
+        setTimeout(function () {
+          if (state.module === "yaml" && state.yamlDataset === alias && state.yamlRecipeCompatibilityAlias !== alias && !state.yamlCompatibilityLoading) {
+            loadYamlRecipeCompatibility(alias);
+          }
+        }, 0);
+      }
     }
     const DATASET_GUIDES = {
       cifar10: {
@@ -584,11 +966,17 @@
     }
 
     function dataStatusLabel(item) {
-      if (item.training_evidence) return "训练已验证";
-      if (item.status === "ready") return "检查通过";
-      if (item.status === "incomplete" && item.location && !item.error) return "已登记，待检查";
-      if (item.status === "incomplete") return "检查失败";
-      return "未登记";
+      if (item.training_evidence || item.status === "ready") return "可用";
+      if (item.status === "incomplete" && item.location && !item.error) return "待补充";
+      if (item.error) return "不可用";
+      return "未检查";
+    }
+    function dataStatusClass(item) {
+      if (item.training_evidence) return "data-status-verified";
+      if (item.status === "ready") return "data-status-ready";
+      if (item.status === "incomplete" && item.location && !item.error) return "data-status-pending";
+      if (item.error) return "data-status-unavailable";
+      return "data-status-unchecked";
     }
     function dataStepsHtml(report) {
       const registered = Boolean(report?.location);
@@ -609,11 +997,9 @@
         if (report?.fingerprint) detail += '<p>指纹：' + escapeHtml(report.fingerprint) + '</p>';
         return '<div class="data-feedback success"><strong>操作完成</strong><p>' + escapeHtml(state.dataResult.message) + '</p>' + detail + '</div>';
       }
-      if (!report) return '<div class="data-feedback"><strong>开始使用</strong><p>先选择“登记本机路径”，保存后依次执行实际检查和一轮验证。</p></div>';
-      if (report.training_evidence) return '<div class="data-feedback success"><strong>训练验证完成</strong><p>' + escapeHtml(report.name) + ' 已通过数据加载和一轮训练验证。</p><p>样本：' + report.train_samples + ' train / ' + report.test_samples + ' test；类别：' + report.classes + '</p><p>指纹：' + escapeHtml(report.fingerprint || "-") + '</p></div>';
-      if (report.status === "ready") return '<div class="data-feedback success"><strong>数据检查通过</strong><p>' + escapeHtml(report.name) + '：' + report.train_samples + ' train / ' + report.test_samples + ' test，' + report.classes + ' 类。</p><p>下一步：选择“verify”，完成一轮训练验证。</p></div>';
-      if (report.location && !report.error) return '<div class="data-feedback"><strong>路径已登记，尚未检查</strong><p>下一步：选择“inspect”，实际加载 train/test。登记成功不等于数据可训练。</p></div>';
-      return '<div class="data-feedback failed"><strong>数据尚未可用</strong><p>' + escapeHtml(report.error || "请登记正确路径后执行 inspect。") + '</p></div>';
+      if (state.dataAction !== "run" || !report) return '';
+      return '<div class="data-feedback"><strong>已登记数据</strong><p>' + escapeHtml(report.name) + ' · ' + escapeHtml(report.adapter) + ' · ' + escapeHtml(dataStatusLabel(report)) + '</p>' +
+        (report.train_samples == null ? '' : '<p>样本：' + report.train_samples + ' train / ' + report.test_samples + ' test；类别：' + report.classes + '</p>') + '</div>';
     }
     function explicitValue(value) {
       return value === null || value === undefined || value === "" || String(value).toLowerCase() === "unknown" ? "Unknown" : String(value);
@@ -622,83 +1008,120 @@
       const reasons = (item.reasons || []).map(function (reason) { return reason.code + ": " + reason.message; });
       return reasons.length ? reasons.join("; ") : "No additional requirements";
     }
-    function compatibilityMethodCard(item, selectable) {
-      const selected = state.dataSelectedMethod === item.method;
-      const required = (item.required_user_inputs || []).map(function (value) {
-        if (value === "noise_rate_prior") return "Method noise-rate prior";
-        if (value.startsWith("pretrained:")) return "External prerequisite: " + value.slice(11);
-        return value;
-      });
-      return '<div class="guide-card compatibility-method" data-status="' + escapeHtml(item.status) + '"><div><strong>' + escapeHtml(item.method) + '</strong> <span class="parameter-badge">' + escapeHtml(item.status) + '</span></div>' +
-        '<p>' + escapeHtml(compatibilityReasonText(item)) + '</p>' +
-        (required.length ? '<p><b>Required:</b> ' + escapeHtml(required.join(", ")) + '</p>' : '') +
-        '<button type="button" data-compat-method="' + escapeHtml(item.method) + '" ' + (selectable ? '' : 'disabled') + '>' + (selected ? 'Selected' : selectable ? 'Select method' : 'Unavailable') + '</button></div>';
+    function compatibilityInputLabel(value) {
+      if (value === "clean_train_labels") return "干净训练标签声明";
+      if (value === "dataset_noise_rate") return "数据集真实噪声率";
+      if (value === "noise_rate_prior") return "当前方法的噪声率先验";
+      if (value === "noise_manifest") return "噪声 manifest 文件";
+      if (value === "method_requirements") return "方法兼容性元数据（开发者问题）";
+      if (value.startsWith("pretrained:")) return "实际 checkpoint：" + value.slice(11);
+      if (value.startsWith("config:")) return "配置字段：" + value.slice(7);
+      return value;
+    }
+    function compatibilityMethodCard(item) {
+      const required = (item.required_user_inputs || []).map(compatibilityInputLabel);
+      const developerIssue = (item.reason_codes || []).includes("method_metadata_error") || (item.reason_codes || []).includes("requirements_unavailable");
+      return '<div class="guide-card compatibility-method" data-status="' + escapeHtml(item.status) + '"><div><strong>' + escapeHtml(item.method) + '</strong> <span class="parameter-badge">' + escapeHtml(compatibilityStatusLabel(item.status)) + '</span></div>' +
+        '<p>' + escapeHtml(compatibilitySummary(item)) + '</p>' +
+        (required.length ? '<p><b>还需要：</b> ' + escapeHtml(required.join("、")) + '</p>' : '') +
+        (developerIssue ? '<p class="helper">这是方法元数据问题，不是用户应填写的数据事实。</p>' : '') + '</div>';
+    }
+    function compatibilityGuidanceCard(item) {
+      const category = item.category === "dataset_fact" ? "数据集事实" : item.category === "developer_error" ? "开发者配置错误" : item.category === "dataset_preparation" ? "数据准备" : "方法输入";
+      const paths = (item.config_paths || []).map(function (path) { return path.join("."); });
+      return '<div class="guide-card compatibility-requirement"><div><strong>' + escapeHtml(item.label || item.id) + '</strong> <span class="parameter-badge">' + escapeHtml(category) + '</span></div>' +
+        '<p><b>缺少：</b>' + escapeHtml(item.missing || item.id) + '</p>' +
+        '<p><b>你需要提供：</b>' + escapeHtml(item.expected_value || "请按方法配置要求提供输入") + '</p>' +
+        '<p><b>提供方式：</b>' + escapeHtml(item.provision || "请检查方法配置") + '</p>' +
+        (item.environment_variable ? '<p><b>环境变量：</b><code>' + escapeHtml(item.environment_variable) + '=&lt;run directory&gt;</code></p>' : '') +
+        (paths.length ? '<p class="helper">配置定位：' + escapeHtml(paths.join(" 或 ")) + '</p>' : '') + '</div>';
+    }
+    function selectedRecipeCompatibilityHtml(recipe) {
+      if (!recipe) return '<p>尚未选择正式 recipe</p>';
+      if (recipe.status === "compatible") return '<p class="status success">✓ 当前 recipe 与该数据集兼容</p>';
+      if (recipe.status === "incompatible") {
+        const reasons = recipe.reasons || [];
+        return '<p class="status failed">当前 recipe 与该数据集不兼容</p><p><b>不兼容原因：</b></p><ul>' +
+          reasons.map(function (reason) { return '<li>' + escapeHtml(reason.message || reason.code) + '</li>'; }).join("") + '</ul>';
+      }
+      const guidance = recipe.input_guidance || [];
+      const details = guidance.length
+        ? guidance.map(compatibilityGuidanceCard).join("")
+        : '<div class="data-feedback failed"><strong>缺少可执行指引</strong><p>' + escapeHtml(compatibilitySummary(recipe)) + '</p><p>Backend 尚未发布安全的输入位置；请勿猜测或伪造数据事实。</p></div>';
+      return '<p class="status warning">当前 recipe 需要补充条件</p><div><b>需要补充：</b></div>' + details;
     }
     function datasetProfileCompatibilityHtml() {
-      if (state.dataCompatibilityLoading) return '<div class="guide-card"><strong>Dataset-first workflow</strong><p>Inspecting dataset and resolving compatibility...</p></div>';
-      if (state.dataCompatibilityError) return '<div class="data-feedback failed"><strong>Dataset compatibility unavailable</strong><p>' + escapeHtml(state.dataCompatibilityError) + '</p></div>';
+      if (state.dataCompatibilityLoading) return '<div class="guide-card"><strong>数据集优先流程</strong><p>正在读取适配器事实并检查正式 recipe……</p></div>';
+      if (state.dataCompatibilityError) return '<div class="data-feedback failed"><strong>数据集兼容性不可用</strong><p>' + escapeHtml(state.dataCompatibilityError) + '</p></div>';
       const value = state.dataCompatibility;
-      if (!value) return '<div class="guide-card"><strong>Dataset-first workflow</strong><p>Select an inspected dataset to view its profile and compatible methods.</p></div>';
+      if (!value) return '<div class="guide-card"><strong>数据集优先流程</strong><p>请选择已检查通过的数据集。</p></div>';
       const profile = value.profile || {}, noise = profile.noise || {}, rate = noise.rate || {}, declared = value.declared || {};
       const counts = profile.sample_counts_by_split || {};
       const detectedRows = [{
-        Dataset:profile.dataset, Adapter:profile.adapter, Source:profile.source,
-        Task:profile.task, Modality:profile.modality, Classes:profile.num_classes,
-        "Input shape":profile.input_shape || "Unknown", Channels:profile.channels,
-        Train:counts.train, Validation:counts.validation, Test:counts.test,
-        Splits:(profile.available_splits || []).join(", "),
-        "Observed train labels":explicitValue(profile.observed_train_labels),
-        "Clean train labels":explicitValue(profile.clean_train_labels),
-        "Noise status":explicitValue(noise.status), "Noise origin":explicitValue(noise.origin),
-        "Dataset noise rate":rate.status === "known" || rate.status === "estimated" ? rate.status + ": " + rate.value : explicitValue(rate.status),
-        "Stable indices":explicitValue(profile.stable_indices), Fingerprint:profile.fingerprint
+        数据集:profile.dataset, 适配器:profile.adapter, 模态:profile.modality, 类别:profile.num_classes,
+        训练集:counts.train, 验证集:counts.validation, 测试集:counts.test,
+        观测标签:explicitValue(profile.observed_train_labels), 稳定索引:explicitValue(profile.stable_indices),
+        噪声状态:explicitValue(noise.status), 噪声来源:explicitValue(noise.origin),
+        指纹:profile.fingerprint
       }];
-      const methods = value.methods || [];
-      const compatible = methods.filter(function (item) { return item.status === "compatible"; });
-      const requirementsUnknown = methods.filter(function (item) { return (item.reason_codes || []).includes("requirements_unavailable"); });
-      const conditional = methods.filter(function (item) { return item.status === "compatible_with_requirements" && !(item.reason_codes || []).includes("requirements_unavailable"); });
-      const unavailable = methods.filter(function (item) { return item.status === "incompatible"; });
-      const selected = methods.find(function (item) { return item.method === state.dataSelectedMethod; });
-      const recipe = selected ? state.recipes.find(function (item) { return item.method === selected.method; }) : null;
-      const ready = selected?.status === "compatible" && Boolean(recipe);
-      const declarations = '<div class="guide-card"><strong>Declared by user</strong><div class="form-grid">' +
-        field("Do you know whether labels are noisy?", "compat-noise-status", selectControl("__ID__", ["unknown","clean","noisy"])) +
-        field("Dataset noise-rate status", "compat-rate-status", selectControl("__ID__", ["unknown","known","estimated"])) +
-        field("Dataset noise-rate value", "compat-rate-value", inputControl("__ID__", "", "number", "min=0 max=1 step=0.001")) +
-        field("Dataset rate provenance", "compat-rate-provenance", inputControl("__ID__", "")) +
-        field("Clean train labels", "compat-clean-labels", selectControl("__ID__", ["unknown","available","unavailable"])) +
-        field("Method noise-rate prior", "compat-method-prior", inputControl("__ID__", state.dataMethodNoisePrior, "number", "min=0 max=1 step=0.001")) +
-        field("Available pretrained roles", "compat-pretrained-roles", inputControl("__ID__", (declared.pretrained_roles || []).join(","))) +
-        '</div><p class="helper">Dataset true noise rate and method noise-rate prior are independent. Unknown is valid and is never converted to zero.</p><button type="button" id="compat-apply-declarations" class="secondary">Apply declarations and re-check</button></div>';
-      const section = function (title, items, selectable) { return '<div class="wide"><h3>' + title + '</h3>' + (items.length ? items.map(function (item) { return compatibilityMethodCard(item, selectable); }).join("") : '<p class="helper">None</p>') + '</div>'; };
-      return '<section id="dataset-compatibility-panel"><h2>Dataset-first workflow</h2><p>Choose dataset → inspect profile → compatible methods → required inputs → validate → dry-run → run.</p>' +
-        '<div class="guide-card"><strong>Detected by system</strong>' + tableHtml(detectedRows) + '</div>' + declarations +
-        section("Compatible methods", compatible, true) + section("Available after additional input", conditional, true) + section("Compatibility unknown", requirementsUnknown, false) +
-        '<label><input type="checkbox" id="compat-show-unavailable" ' + (state.dataShowUnavailable ? 'checked' : '') + '> Show unavailable methods</label>' +
-        '<div id="compat-unavailable" class="' + (state.dataShowUnavailable ? '' : 'hidden') + '">' + section("Unavailable", unavailable, false) + '</div>' +
-        '<div class="guide-card"><strong>Selected method</strong><p>' + escapeHtml(selected ? selected.method + " · " + selected.status : "None") + '</p>' +
-        '<p>Recipe: ' + escapeHtml(recipe?.id || "No public recipe for selected method") + '</p>' +
-        '<div class="actions"><button type="button" data-compat-action="validate" ' + (ready ? '' : 'disabled') + '>Validate</button><button type="button" data-compat-action="dry-run" ' + (ready ? '' : 'disabled') + '>Dry-run</button><button type="button" data-compat-action="run" ' + (ready ? '' : 'disabled') + '>Run</button></div>' +
-        '<p class="helper">Actions remain disabled until backend status is COMPATIBLE. Validate and run preflight remain final safety gates.</p></div></section>';
+      const unknowns = value.unresolved_dataset_facts || [];
+      const declaredFields = [];
+      if (unknowns.includes("noise_status")) declaredFields.push(field("标签是否含噪声", "compat-noise-status", selectControl("__ID__", [{value:"unknown",label:"未知"},{value:"clean",label:"干净"},{value:"noisy",label:"有噪声"}])));
+      if (unknowns.includes("noise_origin")) declaredFields.push(field("噪声来源", "compat-noise-origin", selectControl("__ID__", [{value:"unknown",label:"未知"},{value:"synthetic",label:"人工合成"},{value:"native",label:"数据集原生"}])));
+      if (unknowns.includes("clean_train_labels")) declaredFields.push(field("干净训练标签", "compat-clean-labels", selectControl("__ID__", [{value:"unknown",label:"未知"},{value:"available",label:"有"},{value:"unavailable",label:"没有"}])));
+      if (unknowns.includes("dataset_noise_rate")) {
+        declaredFields.push(field("真实噪声率", "compat-rate-status", selectControl("__ID__", [{value:"unknown",label:"未知"},{value:"known",label:"已知"},{value:"estimated",label:"估计"}])));
+        declaredFields.push(field("噪声率数值", "compat-rate-value", inputControl("__ID__", "", "number", "min=0 max=1 step=0.001")));
+        declaredFields.push(field("噪声率来源", "compat-rate-provenance", selectControl("__ID__", [{value:"",label:"请选择"},{value:"official_documentation",label:"官方文档"},{value:"official_metadata",label:"官方元数据"},{value:"user_measurement",label:"本地测量"},{value:"external_manifest",label:"外部 manifest"},{value:"other",label:"其他"}])));
+        declaredFields.push(field("其他来源说明", "compat-rate-provenance-other", inputControl("__ID__", "仅选择“其他”时填写")));
+      }
+      const declarations = declaredFields.length
+        ? '<div class="guide-card"><strong>需要确认的数据集信息</strong><p class="helper">这里只显示适配器和实际检查无法确定的 UNKNOWN 字段；不要把方法先验或 checkpoint 角色写进数据集。</p><div class="form-grid">' + declaredFields.join("") + '</div><button type="button" id="compat-apply-declarations" class="secondary">保存确认并重新检查</button></div>'
+        : '<div class="guide-card"><strong>需要确认的数据集信息</strong><p>适配器已经提供全部数据集语义事实，无需额外声明。</p></div>';
+      const recipeItems = state.dataRecipeCompatibility?.recipes || [];
+      if (state.dataSelectedRecipe && !recipeItems.some(function (item) { return item.recipe_id === state.dataSelectedRecipe; })) state.dataSelectedRecipe = "";
+      const recipeOptions = [{value:"", label:"请选择一个正式 recipe"}].concat(recipeItems.map(function (item) { return {value:item.recipe_id, label:item.acronym + " · " + item.recipe_id + " · " + compatibilityStatusLabel(item.status), title:compatibilitySummary(item)}; }));
+      const selectedRecipe = recipeItems.find(function (item) { return item.recipe_id === state.dataSelectedRecipe; });
+      state.dataSelectedMethod = selectedRecipe?.method || "";
+      const selectedInputs = selectedRecipe?.required_user_inputs || [];
+      const needsPrior = selectedInputs.includes("noise_rate_prior");
+      const priorEditor = needsPrior ? '<div class="form-grid">' + field("当前方法噪声率先验", "compat-method-prior", inputControl("__ID__", state.dataMethodNoisePrior, "number", "min=0 max=1 step=0.001")) + '</div><p class="helper">这是所选 recipe 的实验输入，不会保存为数据集事实；提交时会写入该 recipe 声明的真实配置路径。</p>' : '';
+      const recipeWorkflow = '<div class="guide-card"><strong>选择正式论文配置</strong><p>必须明确选择具体 recipe；兼容性由后端加载该 recipe 的真实 YAML 后计算。</p>' +
+        (recipeOptions.length ? field("正式 recipe", "compat-recipe-select", selectControl("__ID__", recipeOptions), true) : '<p class="helper">没有可检查的正式 recipe。</p>') +
+        '</div>';
+      const actionsReady = selectedRecipe?.status === "compatible";
+      return '<section id="dataset-compatibility-panel"><h2>数据集优先流程</h2><p>先读取数据集事实，再选择正式 recipe；只有具体配置兼容时才允许 validate、dry-run 和 run。</p>' +
+        '<div class="guide-card"><strong>数据集信息</strong>' + tableHtml(detectedRows) + '<p class="helper">这些字段来自 adapter 和实际 train/test 加载，不可由普通 Web 表单伪造。</p></div>' + declarations + recipeWorkflow +
+        '<div class="guide-card compatibility-method" data-status="' + escapeHtml(selectedRecipe?.status || "unchecked") + '"><strong>当前选择</strong><p>' + escapeHtml(selectedRecipe ? selectedRecipe.acronym + " · " + selectedRecipe.recipe_id + " · " + compatibilityStatusLabel(selectedRecipe.status) : "尚未选择正式 recipe") + '</p>' +
+        selectedRecipeCompatibilityHtml(selectedRecipe) + priorEditor +
+        (selectedRecipe?.status === "compatible_with_requirements" ? '<button type="button" id="compat-create-yaml">打开 YAML/配置说明</button>' : '') +
+        '<div class="actions"><button type="button" data-compat-action="validate" ' + (actionsReady ? '' : 'disabled') + '>检查</button><button type="button" data-compat-action="dry-run" ' + (actionsReady ? '' : 'disabled') + '>预演</button><button type="button" data-compat-action="run" ' + (actionsReady ? '' : 'disabled') + '>运行</button></div>' +
+        '</div></section>';
     }
     async function loadDatasetCompatibility(alias = state.dataAlias) {
-      if (!alias) { state.dataCompatibility = null; state.dataCompatibilityAlias = ""; state.dataCompatibilityError = ""; return; }
+      if (!alias) { state.dataCompatibility = null; state.dataRecipeCompatibility = null; state.dataCompatibilityAlias = ""; state.dataCompatibilityError = ""; return; }
       state.dataCompatibilityLoading = true; state.dataCompatibilityError = "";
       if (state.module === "data") renderData();
+      if (state.module === "quickstart") renderQuickStart();
       try {
         const query = state.dataMethodNoisePrior === "" ? "" : "?method_noise_rate_prior=" + encodeURIComponent(state.dataMethodNoisePrior);
-        const response = await fetch("/api/datasets/" + encodeURIComponent(alias) + "/compatible-methods" + query);
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || "Compatibility query failed");
+        const responses = await Promise.all([
+          fetch("/api/datasets/" + encodeURIComponent(alias) + "/compatible-methods" + query),
+          fetch("/api/datasets/" + encodeURIComponent(alias) + "/compatible-recipes" + query)
+        ]);
+        const payload = await responses[0].json();
+        const recipes = await responses[1].json();
+        if (!responses[0].ok || !responses[1].ok) throw new Error(payload.error || recipes.error || "Compatibility query failed");
         if (state.dataAlias !== alias) return;
-        state.dataCompatibility = payload; state.dataCompatibilityAlias = alias; state.dataCompatibilityError = "";
+        state.dataCompatibility = payload; state.dataRecipeCompatibility = recipes; state.dataCompatibilityAlias = alias; state.dataCompatibilityError = "";
         if (!(payload.methods || []).some(function (item) { return item.method === state.dataSelectedMethod; })) state.dataSelectedMethod = "";
       } catch (error) {
         if (state.dataAlias !== alias) return;
-        state.dataCompatibility = null; state.dataCompatibilityAlias = alias; state.dataCompatibilityError = String(error.message || error);
+        state.dataCompatibility = null; state.dataRecipeCompatibility = null; state.dataCompatibilityAlias = alias; state.dataCompatibilityError = String(error.message || error);
       } finally {
         if (state.dataAlias === alias) state.dataCompatibilityLoading = false;
         if (state.module === "data") { renderData(); updateModulePreview(); }
+        if (state.module === "quickstart") { renderQuickStart(); updateModulePreview(); }
       }
     }
     async function applyDatasetDeclarations() {
@@ -708,29 +1131,32 @@
       if (["known", "estimated"].includes(rateStatus)) {
         if (rawRate === "") throw new Error("Dataset noise-rate value is required");
         rate.value = Number(rawRate);
-        rate.provenance = selectValue("compat-rate-provenance", "").trim() || (rateStatus === "known" ? "user declaration" : null);
+        const provenance = selectValue("compat-rate-provenance", "");
+        const other = selectValue("compat-rate-provenance-other", "").trim();
+        if (!provenance || (rateStatus === "estimated" && provenance === "other" && !other)) throw new Error("估计噪声率必须填写来源");
+        rate.provenance = provenance === "other" ? other : provenance;
       }
-      state.dataMethodNoisePrior = selectValue("compat-method-prior", "").trim();
       const body = {
-        method_noise_rate_prior: state.dataMethodNoisePrior,
         declarations: {
           noise_status: selectValue("compat-noise-status", "unknown"),
+          noise_origin: selectValue("compat-noise-origin", "unknown"),
           noise_rate: rate,
           clean_train_labels: selectValue("compat-clean-labels", "unknown"),
-          pretrained_roles: selectValue("compat-pretrained-roles", "").split(",").map(function (value) { return value.trim(); }).filter(Boolean)
         }
       };
       const response = await fetch("/api/datasets/" + encodeURIComponent(state.dataAlias) + "/declarations", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Declaration update failed");
-      state.dataCompatibility = payload; state.dataCompatibilityError = ""; renderData(); updateModulePreview();
+      state.dataCompatibility = payload; state.dataCompatibilityError = ""; await loadDatasetCompatibility(state.dataAlias);
     }
     function compatibilityWorkflowCommand(action) {
-      const selected = (state.dataCompatibility?.methods || []).find(function (item) { return item.method === state.dataSelectedMethod; });
-      const recipe = selected ? state.recipes.find(function (item) { return item.method === selected.method; }) : null;
-      if (!selected || selected.status !== "compatible" || !recipe || !state.dataAlias) return "";
+      const recipe = (state.dataRecipeCompatibility?.recipes || []).find(function (item) { return item.recipe_id === state.dataSelectedRecipe; });
+      if (!recipe || recipe.status !== "compatible" || !state.dataAlias) return "";
       const base = action === "validate" ? "lnl validate" : "lnl run";
-      return base + " --recipe " + quoteArg(recipe.id) + " --data " + quoteArg(state.dataAlias) + (action === "dry-run" ? " --dry-run" : "") + " --check-data";
+      let command = base + " --recipe " + quoteArg(recipe.recipe_id) + " --data " + quoteArg(state.dataAlias) + (action === "dry-run" ? " --dry-run" : "") + " --check-data";
+      const paths = (recipe.required_input_paths || {}).noise_rate_prior || [];
+      if (state.dataMethodNoisePrior !== "") paths.forEach(function (path) { command += " --set " + quoteArg(path.join(".") + "=" + state.dataMethodNoisePrior); });
+      return command;
     }
     async function startCompatibilityWorkflow(action) {
       const command = compatibilityWorkflowCommand(action);
@@ -754,7 +1180,7 @@
     }
     function installPathPickers(root = document) {
       const specs = [
-        ['output-dir','folder','all'], ['yaml-path','open_file','yaml'], ['yaml-output','save_file','yaml'], ['data-root','folder','all'],
+        ['output-dir','folder','all'], ['yaml-path','save_file','yaml'], ['data-root','folder','all'],
         ['data-path','open_file','all'], ['data-labels','open_file','labels'], ['data-output','folder','all'],
         ['sweep-output','folder','all'], ['result-path','folder','all']
       ];
@@ -782,7 +1208,7 @@
     function dataTableHtml(reports) {
       return '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>数据集</th><th>状态</th><th>位置</th><th>Train / Test</th><th>训练验证</th></tr></thead><tbody>' + reports.map(function (item) {
         const label = dataStatusLabel(item);
-        const statusClass = item.training_evidence ? "data-status-verified" : item.status === "ready" ? "data-status-ready" : item.status === "incomplete" ? "data-status-incomplete" : "";
+        const statusClass = dataStatusClass(item);
         return '<tr><td>' + escapeHtml(item.name) + '<br><span class="helper">' + escapeHtml(item.adapter) + '</span></td><td class="' + statusClass + '">' + escapeHtml(label) + '</td><td>' + escapeHtml(item.location || "-") + '</td><td>' + (item.train_samples ?? "-") + ' / ' + (item.test_samples ?? "-") + '</td><td>' + (item.training_evidence ? "通过" : "-") + '</td></tr>';
       }).join("") + '</tbody></table></div>';
     }
@@ -810,6 +1236,12 @@
       runButton.textContent = state.removeConfirmed ? "再次点击，确认删除登记" : "执行此指令";
       updateDatasetGuideVisibility();
     }
+    function updateDatasetStatusVisibility() {
+      document.getElementById("data-status-panel")?.classList.toggle(
+        "hidden",
+        selectValue("data-action", state.dataAction) !== "list"
+      );
+    }
     function renderData() {
       const adapters = state.datasets.adapters || [];
       const reports = state.datasets.datasets || [];
@@ -817,11 +1249,12 @@
       if (!registeredReports.some(function (item) { return item.name === state.dataAlias; })) state.dataAlias = registeredReports[0]?.name || "";
       const selectedReport = state.dataAction === "register" ? null : reports.find(function (item) { return item.name === state.dataAlias; });
       const registered = registeredReports.map(function (item) { return {value:item.name, label:item.name + " · " + item.adapter + " · " + dataStatusLabel(item)}; });
+      const trainingFlow = state.dataAction === "run" ? datasetProfileCompatibilityHtml() : "";
       parameterPanel.innerHTML = dataStepsHtml(selectedReport) + commonFormStart() +
         field("操作", "data-action", selectControl("__ID__", [
-          {value:"list", label:"查看全部状态"}, {value:"status", label:"查看单项详情"}, {value:"path", label:"查看数据位置"},
+          {value:"list", label:"查看全部状态", hidden:true}, {value:"status", label:"查看单项详情"}, {value:"path", label:"查看数据位置", hidden:true},
           {value:"register", label:"1 · 登记本机路径"}, {value:"inspect", label:"2 · 实际加载 train/test"},
-          {value:"verify", label:"3 · 训练 1 epoch 验证"}, {value:"run", label:"使用已登记数据训练"}, {value:"remove", label:"删除登记（不删除原文件）"}
+          {value:"verify", label:"3 · 训练 1 epoch 验证"}, {value:"run", label:"使用已登记数据训练"}, {value:"remove", label:"删除登记（不删除原文件）", hidden:true}
         ])) +
         field("已登记数据", "data-alias", selectControl("__ID__", registered.length ? registered : [{value:"", label:"尚未登记"}])) +
         field("新别名", "data-new-alias", inputControl("__ID__", "local-cifar10")) + field("适配器", "data-adapter", selectControl("__ID__", adapters.length ? adapters : ["cifar10"])) +
@@ -829,9 +1262,24 @@
         field("人工标签文件（CIFAR-N）", "data-labels", inputControl("__ID__", ""), true) + field("训练模板", "data-recipe", recipesSelect("__ID__"), true) +
         field("验证输出目录（可选）", "data-output", inputControl("__ID__", ""), true) + commonFormEnd() +
         dataFeedbackHtml(selectedReport) + '<p class="helper">登记只保存路径；inspect 才会真实加载 train/test；verify 会自动按数据类型运行 1 epoch，不需要 CIFAR 或 MNIST 配方。自定义训练时再选择训练模板。</p>' +
-        '<div class="guide-card"><strong>数据状态</strong>' + dataTableHtml(reports) + '</div>' + datasetProfileCompatibilityHtml();
+        '<div class="guide-card"><strong>数据状态</strong>' + dataTableHtml(reports) + '</div>' + trainingFlow +
+        '<details class="guide-card"><summary>更多操作</summary><p class="helper">低频操作不会影响已登记的原始数据文件；删除只移除本机登记记录。</p><div class="workflow-actions"><button type="button" data-data-action="list" class="secondary">查看全部状态</button><button type="button" data-data-action="path" class="secondary">查看数据位置</button><button type="button" data-data-action="remove" class="danger">删除登记</button></div></details>';
       const actionNode = document.getElementById("data-action");
-      actionNode.value = [...actionNode.options].some(function (option) { return option.value === state.dataAction; }) ? state.dataAction : "list";
+      actionNode.value = [...actionNode.options].some(function (option) { return option.value === state.dataAction; }) ? state.dataAction : "status";
+      const statusPanel = [...parameterPanel.querySelectorAll(".guide-card")].find(function (node) { return Boolean(node.querySelector("table")); });
+      statusPanel.id = "data-status-panel";
+      statusPanel.classList.toggle("hidden", state.dataAction !== "list");
+      const statusHeading = statusPanel.querySelector("strong");
+      const statusHeadingRow = document.createElement("div");
+      statusHeadingRow.className = "actions";
+      statusHeading.before(statusHeadingRow);
+      statusHeadingRow.appendChild(statusHeading);
+      const statusCollapse = document.createElement("button");
+      statusCollapse.id = "data-status-collapse";
+      statusCollapse.type = "button";
+      statusCollapse.className = "secondary";
+      statusCollapse.textContent = "收起";
+      statusHeadingRow.appendChild(statusCollapse);
       const aliasNode = document.getElementById("data-alias");
       if (state.dataAlias) aliasNode.value = state.dataAlias;
       const adapterNode = document.getElementById("data-adapter");
@@ -842,9 +1290,11 @@
       if (state.dataCompatibility) {
         const declared = state.dataCompatibility.declared || {}, declaredRate = declared.noise_rate || {};
         if (document.getElementById("compat-noise-status")) document.getElementById("compat-noise-status").value = declared.noise_status || "unknown";
+        if (document.getElementById("compat-noise-origin")) document.getElementById("compat-noise-origin").value = declared.noise_origin || "unknown";
         if (document.getElementById("compat-rate-status")) document.getElementById("compat-rate-status").value = declaredRate.status || "unknown";
         if (document.getElementById("compat-rate-value")) document.getElementById("compat-rate-value").value = declaredRate.value ?? "";
         if (document.getElementById("compat-rate-provenance")) document.getElementById("compat-rate-provenance").value = declaredRate.provenance || "";
+        if (document.getElementById("compat-rate-provenance-other")) document.getElementById("compat-rate-provenance-other").value = "";
         if (document.getElementById("compat-clean-labels")) document.getElementById("compat-clean-labels").value = declared.clean_train_labels || "unknown";
       }
       const guideActions = document.createElement("div"); guideActions.className = "actions";
@@ -856,12 +1306,29 @@
         state.dataOutput = selectValue("data-output", state.dataOutput);
         state.dataAction = actionNode.value; state.dataResult = null; state.removeConfirmed = false;
         outputNode.textContent = "尚未执行当前操作。"; statusNode.textContent = "请填写当前操作所需字段，然后执行。"; statusNode.className = "status";
+        renderData();
+        updateModulePreview();
+      });
+      parameterPanel.querySelectorAll("[data-data-action]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          state.dataAction = button.dataset.dataAction;
+          state.dataResult = null;
+          state.removeConfirmed = false;
+          renderData();
+          updateModulePreview();
+        });
+      });
+      statusCollapse.addEventListener("click", function () {
+        state.dataAction = "status";
+        actionNode.value = "status";
         updateDataFormVisibility();
+        updateDatasetStatusVisibility();
+        updateModulePreview();
       });
       aliasNode.addEventListener("change", function () {
         state.dataRecipe = selectValue("data-recipe", state.dataRecipe);
         state.dataOutput = selectValue("data-output", state.dataOutput);
-        state.dataAlias = aliasNode.value; state.dataResult = null; state.dataCompatibility = null; state.dataCompatibilityAlias = ""; state.dataCompatibilityError = ""; state.dataSelectedMethod = ""; state.removeConfirmed = false; renderData(); updateModulePreview(); loadDatasetCompatibility();
+        state.dataAlias = aliasNode.value; state.dataResult = null; state.dataCompatibility = null; state.dataRecipeCompatibility = null; state.dataCompatibilityAlias = ""; state.dataCompatibilityError = ""; state.dataSelectedMethod = ""; state.dataSelectedRecipe = ""; state.removeConfirmed = false; renderConsoleContext(); renderData(); updateModulePreview(); loadDatasetCompatibility();
       });
       adapterNode.addEventListener("change", function () {
         state.dataAdapter = adapterNode.value;
@@ -871,13 +1338,23 @@
       guideButton.addEventListener("click", function () { guideNode.innerHTML = datasetGuideHtml(adapterNode.value); guideNode.classList.remove("hidden"); });
       recipeNode.addEventListener("change", function () { state.dataRecipe = recipeNode.value; const recipe = state.recipes.find(function (item) { return item.id === state.dataRecipe; }); state.dataSelectedMethod = recipe?.method || ""; if (state.dataAlias) loadDatasetCompatibility(state.dataAlias); });
       document.getElementById("data-output").addEventListener("input", function (event) { state.dataOutput = event.target.value; });
-      document.getElementById("compat-show-unavailable")?.addEventListener("change", function (event) { state.dataShowUnavailable = event.target.checked; document.getElementById("compat-unavailable")?.classList.toggle("hidden", !state.dataShowUnavailable); });
       document.getElementById("compat-apply-declarations")?.addEventListener("click", async function () {
         try { await applyDatasetDeclarations(); statusNode.textContent = "Declarations saved; compatibility recomputed."; statusNode.className = "status success"; }
         catch (error) { statusNode.textContent = String(error.message || error); statusNode.className = "status failed"; }
       });
       parameterPanel.querySelectorAll("[data-compat-method]").forEach(function (button) { button.addEventListener("click", function () { state.dataSelectedMethod = button.dataset.compatMethod; renderData(); updateModulePreview(); }); });
       parameterPanel.querySelectorAll("[data-compat-action]").forEach(function (button) { button.addEventListener("click", async function () { try { await startCompatibilityWorkflow(button.dataset.compatAction); } catch (error) { statusNode.textContent = String(error.message || error); statusNode.className = "status failed"; } }); });
+      document.getElementById("compat-recipe-select")?.addEventListener("change", function () { state.dataSelectedRecipe = this.value; renderData(); updateModulePreview(); });
+      document.getElementById("compat-method-prior")?.addEventListener("change", function () { state.dataMethodNoisePrior = this.value.trim(); loadDatasetCompatibility(state.dataAlias); });
+      document.getElementById("compat-method-prior")?.addEventListener("input", function () { state.dataMethodNoisePrior = this.value.trim(); });
+      document.getElementById("compat-create-yaml")?.addEventListener("click", function () {
+        state.yamlDataset = state.dataAlias;
+        state.yamlPaper = state.dataSelectedRecipe;
+        state.yamlRecipeCompatibility = state.dataRecipeCompatibility;
+        state.yamlDestinationPath = defaultCustomYamlPath(state.yamlPaper);
+        setActiveConfig("recipe", state.yamlPaper);
+        switchModule("yaml");
+      });
       parameterPanel.querySelectorAll("input, select, textarea").forEach(function (node) {
         node.addEventListener("input", updateModulePreview);
         node.addEventListener("change", updateModulePreview);
@@ -887,7 +1364,7 @@
     }
     function renderSweep() {
       parameterPanel.innerHTML = commonFormStart() +
-        field("Sweep 配方", "sweep-recipe", recipesSelect("__ID__"), true) +
+        field("参数组合实验配方", "sweep-recipe", recipesSelect("__ID__"), true) +
         field("Seeds", "sweep-seeds", inputControl("__ID__", "1 2 3")) +
         field("输出目录", "sweep-output", inputControl("__ID__", "artifacts/web-sweep")) +
         commonFormEnd() + '<p class="helper">例如输入 1 2 3；每个 seed 使用同一个 recipe，并写入独立结果目录。</p>';
@@ -919,7 +1396,7 @@
       if (!fieldInfo) return "";
       let html = '<p class="yaml-field-meta">用途：' + escapeHtml(fieldInfo.note || "未提供说明") + '</p><p class="yaml-field-meta">当前值：' + escapeHtml(typeof fieldInfo.value === "object" ? JSON.stringify(fieldInfo.value) : fieldInfo.value) + '</p>';
       if (fieldInfo.level === "paper") html += '<p class="yaml-field-meta">论文依据：' + escapeHtml(fieldInfo.evidence || "见论文来源") + '</p><p class="yaml-field-meta">复现影响：' + escapeHtml(fieldInfo.reproduction_impact || "修改后偏离论文默认配置") + '</p>';
-      if (fieldInfo.level === "locked") html += '<p class="yaml-field-meta">不可 Sweep：' + escapeHtml(fieldInfo.lock_reason || fieldInfo.note) + '</p>';
+      if (fieldInfo.level === "locked") html += '<p class="yaml-field-meta">不可加入参数组合实验：' + escapeHtml(fieldInfo.lock_reason || fieldInfo.note) + '</p>';
       return html;
     }
     function sweepDimensionHtml(row, index) {
@@ -935,7 +1412,7 @@
         const cards = fields.map(function (fieldInfo) {
           const supported = ["number", "text", "boolean", "list"].includes(fieldInfo.kind);
           const canAdd = fieldInfo.editable && supported && !selected.has(fieldInfo.path);
-          const action = canAdd ? '<button type="button" class="secondary" data-sweep-add="' + escapeHtml(fieldInfo.path) + '">加入 Sweep</button>' : fieldInfo.editable && selected.has(fieldInfo.path) ? '<button type="button" disabled>已加入</button>' : '';
+          const action = canAdd ? '<button type="button" class="secondary" data-sweep-add="' + escapeHtml(fieldInfo.path) + '">加入参数组合实验</button>' : fieldInfo.editable && selected.has(fieldInfo.path) ? '<button type="button" disabled>已加入</button>' : '';
           return '<div class="sweep-field-card ' + (selected.has(fieldInfo.path) ? 'selected' : '') + '"><div class="sweep-field-head"><div><span class="parameter-badge">' + escapeHtml(fieldInfo.level_label || levelInfo.label) + '</span><div class="sweep-field-path">' + escapeHtml(fieldInfo.path) + '</div></div>' + action + '</div>' + sweepFieldDescription(fieldInfo) + '</div>';
         }).join("");
         return '<details class="sweep-group" ' + (levelInfo.default_expanded ? 'open' : '') + '><summary>' + escapeHtml(levelInfo.label) + '（' + fields.length + '）</summary><div class="sweep-group-body">' + cards + '</div></details>';
@@ -953,9 +1430,10 @@
         field("配置来源", "sweep-source-kind", selectControl("__ID__", [{value:"recipe",label:"内置 recipe"},{value:"path",label:"项目 YAML"}])) +
         field("内置 recipe", "sweep-recipe", recipesSelect("__ID__"), true) +
         field("项目 YAML", "sweep-path", pathControl("__ID__", state.sweepPath, "open_file", "yaml"), true) +
+        field("运行时数据覆盖（可选）", "sweep-dataset", selectControl("__ID__", registeredDatasetOptions(true)), true) +
         field("Seeds（可选）", "sweep-seeds", inputControl("__ID__", state.sweepSeeds || "", "text", 'placeholder="留空则使用配置 seed"')) +
         field("输出目录", "sweep-output", pathControl("__ID__", state.sweepOutput || "artifacts/web-sweep"), true) +
-        '<div class="wide workflow-actions"><button id="sweep-load-source" type="button" class="primary">加载配置参数</button><button id="sweep-edit-source" type="button" class="secondary">编辑当前配置</button><button id="sweep-open-results" type="button" class="secondary">查看此 Sweep 的运行结果</button>' + quick + '</div>' +
+        '<div class="wide workflow-actions"><button id="sweep-load-source" type="button" class="primary">加载配置参数</button><button id="sweep-edit-source" type="button" class="secondary">编辑当前配置</button><button id="sweep-open-results" type="button" class="secondary">查看此参数组合实验的运行结果</button>' + quick + '</div>' +
         '<div class="wide"><strong>已选参数维度</strong><div id="sweep-dimensions">' + rows + '</div></div>' + commonFormEnd() +
         '<div id="sweep-parameter-library"><strong>参数用途与分类</strong>' + sweepGroupsHtml(schema) + '</div><div id="sweep-plan-view" class="structured-output"></div>';
       document.getElementById("sweep-source-kind").value = source.kind;
@@ -963,6 +1441,7 @@
       if ([...recipeNode.options].some(function (option) { return option.value === state.sweepRecipe; })) recipeNode.value = state.sweepRecipe;
       recipeNode.closest("label").classList.toggle("hidden", source.kind !== "recipe");
       document.getElementById("sweep-path").closest("label").classList.toggle("hidden", source.kind !== "path");
+      document.getElementById("sweep-dataset").value = state.sweepDataset;
       document.getElementById("sweep-source-kind").addEventListener("change", function () { captureSweepValues(); state.sweepSourceKind = this.value; state.sweepSchema = null; state.sweepRows = []; state.sweepPlan = null; renderSweepV2(); loadSweepSchema(); });
       recipeNode.addEventListener("change", function () { captureSweepValues(); state.sweepRecipe = this.value; state.sweepSchema = null; state.sweepRows = []; state.sweepPlan = null; setActiveConfig("recipe", this.value); loadSweepSchema(); });
       document.getElementById("sweep-path").addEventListener("change", function () { captureSweepValues(); state.sweepPath = this.value.trim(); state.sweepSchema = null; state.sweepRows = []; state.sweepPlan = null; if (state.sweepPath) setActiveConfig("path", state.sweepPath); loadSweepSchema(); });
@@ -983,6 +1462,7 @@
       state.sweepSourceKind = selectValue("sweep-source-kind", state.sweepSourceKind);
       state.sweepRecipe = selectValue("sweep-recipe", state.sweepRecipe);
       state.sweepPath = selectValue("sweep-path", state.sweepPath).trim();
+      state.sweepDataset = selectValue("sweep-dataset", state.sweepDataset);
       state.sweepSeeds = selectValue("sweep-seeds", state.sweepSeeds || "");
       state.sweepOutput = selectValue("sweep-output", state.sweepOutput || "artifacts/web-sweep");
       if (document.getElementById("sweep-values-0")) state.sweepRows = currentSweepRows();
@@ -995,7 +1475,7 @@
       const response = await fetch("/api/config-schema?" + query);
       const payload = await response.json();
       if (sweepSourceKey(currentSweepSource()) !== requestedKey) return;
-      if (!response.ok) { statusNode.textContent = payload.error || "Sweep 配置读取失败"; statusNode.className = "status failed"; return; }
+      if (!response.ok) { statusNode.textContent = payload.error || "参数组合实验配置读取失败"; statusNode.className = "status failed"; return; }
       state.sweepSchema = payload; state.sweepSchemaKey = requestedKey; setActiveConfig(source.kind, source.value); renderSweepV2(); updateModulePreview();
     }
     function parseSweepValues(text, path) {
@@ -1025,6 +1505,7 @@
       Object.entries(matrix).forEach(function (entry) { command += " --matrix " + quoteArg(entry[0] + "=" + JSON.stringify(entry[1])); });
       const seeds = selectValue("sweep-seeds", "").trim();
       if (seeds) command += " --seeds " + seeds;
+      if (state.sweepDataset) command += " --data " + quoteArg(state.sweepDataset);
       command += " --output-dir " + quoteArg(selectValue("sweep-output", "artifacts/web-sweep"));
       return command;
     }
@@ -1035,22 +1516,23 @@
       const seeds = seedsText ? seedsText.split(/\s+/).map(Number) : null;
       const source = currentSweepSource();
       const requestBody = {matrix:matrix, seeds:seeds, output_dir:selectValue("sweep-output")};
+      if (state.sweepDataset) requestBody.dataset_alias = state.sweepDataset;
       requestBody[source.kind] = source.value;
       const response = await fetch("/api/sweep/plan", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(requestBody)});
       const payload = await response.json();
-      if (!response.ok) { statusNode.textContent = payload.error || "Sweep 预检失败"; statusNode.className = "status failed"; return false; }
+      if (!response.ok) { statusNode.textContent = payload.error || "参数组合实验预检失败"; statusNode.className = "status failed"; return false; }
       state.sweepPlan = payload;
       const rows = payload.runs.map(function (run) { return {run:run.run_id, seed:run.seed, parameters:Object.entries(run.overrides).map(function (entry) { return entry[0] + "=" + JSON.stringify(entry[1]); }).join("; ") || "-"}; });
       const warning = payload.modified_from_paper ? '<div class="sweep-warning">这些组合修改了论文参数：' + escapeHtml(payload.paper_deviation_paths.join(", ")) + '。结果不得标记为未修改的论文默认配置。</div>' : '';
       document.getElementById("sweep-plan-view").innerHTML = warning + '<strong>共 ' + payload.total + ' 个运行</strong>' + tableHtml(rows);
-      statusNode.textContent = "Sweep 预检通过：" + payload.total + " 个运行"; statusNode.className = "status success";
+      statusNode.textContent = "参数组合实验预检通过：" + payload.total + " 个运行"; statusNode.className = "status success";
       return true;
     }
     function renderResultsV2() {
       parameterPanel.innerHTML = commonFormStart() +
         field("操作", "result-action", selectControl("__ID__", [{value:"resume",label:"resume · 恢复训练"},{value:"report",label:"report · 生成报告"},{value:"compare",label:"compare · 汇总比较"}])) +
         field("checkpoint", "result-checkpoint", selectControl("__ID__", ["last", "best"])) +
-        field("运行或 Sweep 目录", "result-path", inputControl("__ID__", state.resultPath || "artifacts"), true) +
+        field("运行或参数组合实验目录", "result-path", inputControl("__ID__", state.resultPath || "artifacts"), true) +
         '<div id="result-resume-tools" class="wide actions"><button id="result-resume-inspect" type="button" class="primary">检查恢复内容</button></div>' +
         '<div id="result-compare-tools" class="wide actions hidden"><button id="result-load" type="button" class="primary">加载指标与曲线</button><button id="result-list-toggle" type="button" class="secondary">收起列表</button><input id="result-filter" value="' + escapeHtml(state.resultFilter) + '" placeholder="筛选名称 / 方法 / 状态 / seed" spellcheck="false"></div>' + commonFormEnd() +
         '<div id="result-resume-dashboard"></div><div id="result-dashboard"></div>';
@@ -1204,35 +1686,33 @@
       if (paper) state.paperId = paper.id;
       const configItems = (paper?.configs || []).map(function (item) { return {value:item.recipe_id, label:item.label}; });
       if (!configItems.some(function (item) { return item.value === state.paperRecipe; })) state.paperRecipe = paper?.default_recipe_id || configItems[0]?.value || "";
+      const activePaperConfig = (paper?.configs || []).find(function (item) { return item.recipe_id === state.paperRecipe; });
       parameterPanel.innerHTML = commonFormStart() +
         field("论文方法", "paper-id", selectControl("__ID__", paperItems.length ? paperItems : ["binary-risk"])) +
         field("工具箱配置", "paper-recipe", selectControl("__ID__", configItems.length ? configItems : [""])) +
-        '<div class="wide workflow-actions"><button id="paper-run-config" type="button" class="primary">运行正式配置</button><button id="paper-open-yaml" type="button" class="secondary">编辑为项目 YAML</button><button id="paper-open-sweep" type="button" class="secondary">使用此配置做 Sweep</button></div>' +
+        '<div class="wide workflow-actions"><button id="paper-open-experiment" type="button" class="primary">在实验中打开配置</button><button id="paper-open-data" type="button" class="secondary">查看兼容数据集</button><button id="paper-open-scratch" type="button" class="secondary">在 Scratch 打开论文模板</button></div>' +
         commonFormEnd() + '<div id="paper-details"></div>';
       document.getElementById("paper-id").value = state.paperId;
       document.getElementById("paper-recipe").value = state.paperRecipe;
       document.getElementById("paper-id").addEventListener("change", function (event) { state.paperId = event.target.value; state.paperRecipe = ""; renderPapers(); updateModulePreview(); });
-      document.getElementById("paper-recipe").addEventListener("change", function (event) { state.paperRecipe = event.target.value; renderPaperDetails(); updateModulePreview(); });
-      document.getElementById("paper-run-config").addEventListener("click", function () {
+      document.getElementById("paper-recipe").addEventListener("change", function (event) { state.paperRecipe = event.target.value; renderPapers(); updateModulePreview(); });
+      document.getElementById("paper-open-experiment").addEventListener("click", function () {
         setActiveConfig("recipe", state.paperRecipe);
-        const command = "lnl run --recipe " + state.paperRecipe + " --check-data";
-        setRequest({command:command}, command);
-        statusNode.textContent = "已准备论文正式配置；确认预览后执行";
+        state.yamlMode = "paper";
+        state.yamlPaper = state.paperRecipe;
+        state.yamlSuggestedPath = defaultCustomYamlPath(state.paperRecipe);
+        switchModule("yaml");
+        statusNode.textContent = "已在实验工作区打开论文正式配置；可先查看参数，再转到运行。";
         statusNode.className = "status";
       });
-      document.getElementById("paper-open-yaml").addEventListener("click", async function () {
-        const recipe = state.paperRecipe;
-        setActiveConfig("recipe", recipe);
-        state.yamlSuggestedPath = defaultCustomYamlPath(recipe);
-        switchModule("yaml");
-        yamlEditorPanel.classList.remove("hidden");
-        renderYamlSources();
-        await loadYamlSelection(recipe);
-        yamlEditorPanel.scrollIntoView({behavior:"smooth", block:"start"});
+      document.getElementById("paper-open-data").addEventListener("click", function () {
+        state.dataRecipe = state.paperRecipe;
+        state.dataSelectedRecipe = state.paperRecipe;
+        state.dataAction = "run";
+        switchModule("data");
       });
-      document.getElementById("paper-open-sweep").addEventListener("click", function () {
-        setSweepSource({kind:"recipe", value:state.paperRecipe, label:state.paperRecipe});
-        switchModule("sweep");
+      document.getElementById("paper-open-scratch").addEventListener("click", function () {
+        window.open("/scratch", "_blank", "noopener");
       });
       renderPaperDetails();
     }
@@ -1245,40 +1725,105 @@
       const mappingRows = (paper.concept_to_config || []).map(function (item) { return {"论文概念":item.concept, "YAML 配置字段":item.config, "实现模块":item.implementation}; });
       const configRows = [{"配置文件":config.config_path, "数据集":config.data, "噪声":config.noise + (config.noise_rate == null ? "" : " · " + config.noise_rate), "训练轮次":config.epochs ?? "-", "执行器":config.runner, "方法":config.method || "-"}];
       const limitations = (paper.limitations || []).map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("");
+      const preparation = config.preparation;
+      const preparationCard = preparation ? '<div class="guide-card mentor-preparation ' + (preparation.artifact_ready ? 'is-ready' : 'is-pending') + '"><strong>MentorArtifact: <span class="mentor-status ' + (preparation.artifact_ready ? 'ready' : 'not-ready') + '">' + (preparation.artifact_ready ? 'READY' : 'NOT READY') + '</span></strong>' +
+        '<p class="helper">' + escapeHtml(preparation.artifact_path) + '</p>' +
+        '<p>Step 1 · Mentor features: <span class="mentor-status ' + (preparation.feature_ready ? 'ready' : 'not-ready') + '">' + (preparation.feature_ready ? 'READY' : 'NOT READY') + '</span></p>' +
+        '<p>Step 2 · Frozen MentorArtifact: <span class="mentor-status ' + (preparation.artifact_ready ? 'ready' : 'not-ready') + '">' + (preparation.artifact_ready ? 'READY' : 'NOT READY') + '</span></p>' +
+        '<p>Step 3 · Student training: <span class="mentor-status ' + (preparation.artifact_ready ? 'available' : 'blocked') + '">' + (preparation.artifact_ready ? 'AVAILABLE' : 'BLOCKED') + '</span></p>' +
+        (preparation.artifact_error ? '<p class="status failed">' + escapeHtml(preparation.artifact_error) + '</p>' : '') +
+        (preparation.preparation_available ? '<div class="actions"><button type="button" data-mentor-step="prepare" class="secondary" ' + (preparation.feature_ready ? 'disabled' : '') + '>准备 Mentor 数据</button><button type="button" data-mentor-step="train" class="secondary" ' + (!preparation.feature_ready || preparation.artifact_ready ? 'disabled' : '') + '>训练 MentorArtifact</button></div>' : '<p class="helper">This configuration requires an externally prepared, identity-compatible MentorArtifact.</p>') +
+        '</div>' : '';
       node.innerHTML = '<div class="guide-card"><h3>' + escapeHtml(paper.acronym + "：" + paper.title) + '</h3><p>' + escapeHtml(paper.venue + " " + paper.year) + ' · <a href="' + escapeHtml(paper.source_url) + '" target="_blank" rel="noreferrer">查看论文来源</a></p><p><strong>解决的问题：</strong>' + escapeHtml(paper.summary) + '</p><p><strong>核心方法：</strong>' + escapeHtml(paper.mechanism) + '</p></div>' +
         '<div class="guide-card"><strong>论文训练流程</strong><ol>' + lifecycle + '</ol></div>' +
-        '<div class="guide-card"><strong>当前配置如何运行这篇论文</strong>' + tableHtml(configRows) + '<p class="helper">可直接准备正式训练指令，也可另存为项目 YAML 后修改或进入参数 Sweep；内置配置不会被覆盖。</p></div>' +
+        preparationCard +
+        '<div class="guide-card"><strong>当前配置如何运行这篇论文</strong>' + tableHtml(configRows) + '<p class="helper">可直接准备正式训练指令，也可另存为项目 YAML 后修改或进入参数组合实验；内置配置不会被覆盖。</p></div>' +
         '<div class="guide-card"><strong>论文方法、配置字段与代码的关系</strong>' + tableHtml(mappingRows) + '</div>' +
         (limitations ? '<details class="guide-card"><summary>已知限制</summary><ul>' + limitations + '</ul></details>' : '');
+      node.querySelectorAll("[data-mentor-step]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          const command = preparation?.commands?.[button.dataset.mentorStep];
+          if (!command) return;
+          setRequest({command:command}, command, {resetPreview:true});
+          runButton.click();
+        });
+      });
     }
     function renderAdvanced() {
       parameterPanel.innerHTML = '<label for="free-command">输入一条 lnl 指令</label>' +
         '<textarea id="free-command" spellcheck="false">lnl doctor</textarea>' +
         '<p class="helper">例如：lnl run --recipe cifar10-clean-smoke --epochs 1 --output-dir artifacts/web-smoke</p>' +
-        '<p class="helper">只允许 lnl 指令；不支持管道、重定向和其他 shell 命令。</p>';
+        '<p class="helper">高级工具保留旧能力，但不属于推荐主流程。只允许 lnl 指令；不支持管道、重定向和其他 shell 命令。</p>';
+    }
+    function renderRunWorkspace() {
+      const source = state.activeConfig || {kind:"recipe", value:"", label:""};
+      const sourceLabel = source.value ? (source.kind === "path" ? "项目 YAML · " : "内置 recipe · ") + (source.label || source.value) : "请先在“配置”中选择或创建实验配置";
+      parameterPanel.innerHTML = '<div class="workspace-intro"><strong>运行当前实验</strong><p>运行不会修改内置论文配置。需要修改参数时，请回到“配置”；已有运行的恢复与比较在“结果”。</p></div>' +
+        '<div class="run-summary">' + configContextHtml(source) +
+        '<label>运行时数据集（可选）' + selectControl("run-dataset", registeredDatasetOptions(true)) + '</label>' +
+        '<div class="workflow-actions"><button id="run-open-config" type="button" class="secondary">编辑当前配置</button><button id="run-open-results" type="button" class="secondary">查看运行结果</button></div>' +
+        '<p class="helper">当前来源：' + escapeHtml(sourceLabel) + '。执行前请确认下方指令预览。</p></div>';
+      document.getElementById("run-dataset").value = state.runDataset;
+      document.getElementById("run-dataset").addEventListener("change", function (event) { state.runDataset = event.target.value; renderConsoleContext(); updateModulePreview(); });
+      document.getElementById("run-open-config").addEventListener("click", function () { openActiveConfigInEditor(source); });
+      document.getElementById("run-open-results").addEventListener("click", function () { switchModule("results"); });
+    }
+    function renderWorkspaceTabs() {
+      const node = document.getElementById("workspace-tabs");
+      if (!node) return;
+      const tabs = workspaceTabs[currentWorkspace()] || [];
+      node.replaceChildren();
+      node.classList.toggle("hidden", !tabs.length);
+      tabs.forEach(function (tab) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "workspace-tab" + (tab.id === state.module ? " active" : "");
+        button.textContent = tab.label;
+        button.addEventListener("click", function () { switchModule(tab.id); });
+        node.appendChild(button);
+      });
+    }
+    function renderAdvancedTools() {
+      const node = document.getElementById("advanced-tools-list");
+      if (!node) return;
+      node.replaceChildren();
+      [
+        {module:"advanced", label:"自由输入", description:"直接输入受限的 lnl 命令。"},
+        {module:"beginner", label:"完整新手引导", description:"环境、配置、训练与恢复的逐步教程。"},
+      ].forEach(function (item) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.innerHTML = '<span class="label">' + item.label + '</span><span class="desc">' + item.description + '</span>';
+        button.addEventListener("click", function () { switchModule(item.module); });
+        node.appendChild(button);
+      });
+      const commands = document.getElementById("advanced-command-panel");
+      if (commands && state.module === "advanced") commands.open = true;
     }
     function renderModuleButtons() {
       moduleList.replaceChildren();
-      modules.forEach(function (item) {
+      workspaces.forEach(function (item) {
         const button = document.createElement("button");
-        button.className = "module-button" + (item.id === state.module ? " active" : "");
+        button.className = "module-button" + (item.id === currentWorkspace() ? " active" : "");
         button.dataset.module = item.id;
         button.innerHTML = '<span class="label">' + item.label + '</span><span class="desc">' + item.description + '</span>';
-        button.addEventListener("click", function () { switchModule(item.id); });
+        button.addEventListener("click", function () { switchModule(item.defaultModule); });
         moduleList.appendChild(button);
       });
+      renderAdvancedTools();
     }
     function renderCommands(items) {
       const node = document.getElementById("commands");
       node.replaceChildren();
-      items.forEach(function (item) {
+      items.filter(function (item) { return item.key !== "papers"; }).forEach(function (item) {
         const button = document.createElement("button");
-        button.innerHTML = '<span class="label">' + escapeHtml(item.label) + '</span><span class="desc">' + escapeHtml(item.description) + '</span>';
+        const description = commandPurposeDescriptions[item.key] || item.description;
+        button.innerHTML = '<span class="label">' + escapeHtml(item.label) + '</span><span class="desc">' + escapeHtml(description) + '</span>';
         button.addEventListener("click", function () {
           state.selected = item;
           document.querySelectorAll("#commands button").forEach(function (entry) { entry.classList.remove("active"); });
           button.classList.add("active");
-          setRequest({key: item.key}, item.command);
+          setRequest({key: item.key}, item.command, {resetPreview:true});
           statusNode.textContent = "已选择：" + item.label;
           statusNode.className = "status";
         });
@@ -1286,7 +1831,15 @@
       });
     }
     function switchModule(module) {
+      const previousModule = state.module;
       if (state.resultTimer && module !== "results") { clearInterval(state.resultTimer); state.resultTimer = null; }
+      if (module !== previousModule && !yamlEditorPanel.classList.contains("hidden")) hideYamlEditor();
+      if (module === "data" && previousModule !== "data" && state.dataAction === "list") state.dataAction = "status";
+      if (module !== previousModule) {
+        state.previewEdited = false;
+        state.previewAutoCommand = "";
+        state.previewAutoRequest = null;
+      }
       state.module = module;
       if (module !== "data") {
         state.removeConfirmed = false;
@@ -1294,12 +1847,13 @@
         runButton.textContent = "执行此指令";
       }
       renderModuleButtons();
-      const meta = modules.find(function (item) { return item.id === module; });
+      renderWorkspaceTabs();
+      const meta = workspaceMeta();
       document.getElementById("module-title").textContent = meta.label;
       document.getElementById("module-hint").textContent = meta.hint;
       document.getElementById("module-description").textContent = meta.description;
-      ({beginner: renderBeginner, yaml: renderYaml, data: renderData, sweep: renderSweepV2,
-        results: renderResultsV2, papers: renderPapers, advanced: renderAdvanced}[module])();
+      ({quickstart: renderQuickStart, beginner: renderBeginner, yaml: renderYaml, data: renderData, sweep: renderSweepV2,
+        run: renderRunWorkspace, results: renderResultsV2, papers: renderPapers, advanced: renderAdvanced}[module])();
       if (module !== "data") {
         parameterPanel.querySelectorAll("input, select, textarea").forEach(function (node) {
           node.addEventListener("input", updateModulePreview);
@@ -1314,6 +1868,8 @@
       if (yamlUpdateNode) yamlUpdateNode.addEventListener("change", function () { updateYamlFields(); updateModulePreview(); });
       installPathPickers(parameterPanel);
       updateModulePreview();
+      updateYamlEditorButton();
+      renderConsoleContext();
     }
     function toggleYamlField(id, visible) {
       const node = document.getElementById(id);
@@ -1397,10 +1953,13 @@
       const node = document.getElementById("yaml-paper-status");
       if (!node) return;
       const paths = paperChangePaths();
-      node.classList.toggle("modified", paths.length > 0);
+      const dirty = yamlDraftDirty();
+      node.classList.toggle("modified", dirty || paths.length > 0);
       node.textContent = paths.length
         ? "已偏离论文配置：" + paths.join(", ") + "。保存前需要确认复现影响。"
-        : "当前论文参数与正式配置一致。";
+        : dirty
+          ? "配置已修改但尚未暂存；当前配置不能视为与论文正式配置一致。"
+          : "当前论文参数与正式配置一致。";
     }
     function renderYamlFields(schema) {
       const node = document.getElementById("yaml-fields");
@@ -1448,7 +2007,7 @@
       for (const fieldInfo of schema.fields || []) {
         if (!fieldInfo.editable) continue;
         const input = document.getElementById(yamlFieldId(fieldInfo.path));
-        if (input) input.addEventListener("input", updatePaperDeviation);
+        if (input) input.addEventListener("input", function () { state.yamlFormDirty = true; updatePaperDeviation(); updateYamlEditorButton(); });
       }
       updatePaperDeviation();
     }
@@ -1481,15 +2040,18 @@
         return;
       }
       document.getElementById("yaml-text").value = payload.content;
-      document.getElementById("yaml-path").value = byPath ? payload.path : state.yamlSuggestedPath;
+      state.yamlDestinationPath = byPath ? payload.path : (state.yamlSuggestedPath || state.yamlDestinationPath || defaultCustomYamlPath(value));
+      document.getElementById("yaml-path").value = state.yamlDestinationPath;
       renderYamlFields(schema);
       state.yamlSourcePath = payload.path;
       state.yamlTextDirty = false;
+      state.yamlFormDirty = false;
       setActiveConfig(byPath ? "path" : "recipe", byPath ? payload.path : value, byPath ? payload.path : value);
       state.yamlSuggestedPath = "";
       document.getElementById("yaml-source-path").textContent = "来源：" + payload.path + "；可通过参数菜单或下方完整 YAML 编辑。";
       statusNode.textContent = "已加载：" + (payload.recipe || payload.path);
       statusNode.className = "status";
+      updateYamlEditorButton();
     }
     async function loadYamlFromRecipe() { await loadYamlSelection(); }
     async function loadYamlFromEditor() {
@@ -1503,23 +2065,31 @@
       await loadYamlSelection("path:" + path);
     }
     async function openActiveConfigInEditor(source = state.activeConfig) {
+      const normalized = normalizedConfigSource(source.kind, source.value, source.label);
+      const currentKey = state.yamlSchema?.recipe ? "recipe:" + state.yamlSchema.recipe : "path:" + state.yamlSourcePath;
+      const requestedKey = normalized.kind + ":" + normalized.value;
+      if (yamlDraftDirty() && currentKey !== requestedKey && !window.confirm("当前 YAML 有未保存修改。是否放弃草稿并打开另一份配置？")) return false;
       switchModule("yaml");
       yamlEditorPanel.classList.remove("hidden");
       renderYamlSources();
-      if (source.kind === "path") await loadYamlFromPath(source.value);
+      if (normalized.kind === "path") await loadYamlFromPath(normalized.value);
       else {
-        state.yamlSuggestedPath = defaultCustomYamlPath(source.value);
-        await loadYamlSelection(source.value);
+        state.yamlSuggestedPath = defaultCustomYamlPath(normalized.value);
+        await loadYamlSelection(normalized.value);
       }
+      updateYamlEditorButton();
       yamlEditorPanel.scrollIntoView({behavior:"smooth", block:"start"});
+      return true;
     }
     function openSweepForSource(source) {
       setSweepSource(source);
+      state.sweepDataset = state.yamlDataset;
       switchModule("sweep");
     }
     function configCommand(action, path) {
-      const command = "lnl " + action + " --config " + quoteArg(path) + " --check-data";
-      setRequest({command: command}, command);
+      const dataOption = state.yamlDataset ? " --data " + quoteArg(state.yamlDataset) : "";
+      const command = "lnl " + action + " --config " + quoteArg(path) + dataOption + " --check-data";
+      setRequest({command: command}, command, {resetPreview:true});
       statusNode.textContent = "YAML 已保存，请确认右侧预览后执行";
       statusNode.className = "status";
     }
@@ -1536,7 +2106,7 @@
         statusNode.className = "status failed";
         return null;
       }
-      const body = {path: path, recipe: state.yamlSchema?.recipe, source_path: state.yamlSourcePath, overwrite: overwrite};
+      const body = {path: path, recipe: state.yamlSchema?.recipe, source_path: state.yamlSourcePath, overwrite: overwrite, dataset_alias:state.yamlDataset || null};
       const paperChanges = paperChangePaths();
       if (state.yamlTextDirty) {
         body.content = document.getElementById("yaml-text").value;
@@ -1563,6 +2133,7 @@
         return null;
       }
       await loadYamlFromPath(payload.path);
+      state.yamlDataset = payload.dataset_alias || state.yamlDataset;
       statusNode.textContent = "已保存：" + payload.path;
       statusNode.className = "status success";
       if (nextAction === "sweep") openSweepForSource({kind:"path", value:payload.path, label:payload.path});
@@ -1598,14 +2169,17 @@
         ? selectValue("yaml-paper", "")
         : selectValue("yaml-base", "cifar10-symmetric-ce-smoke");
       if (!base) return "";
+      const compatibility = state.yamlDataset ? recipeCompatibility(base) : null;
+      if (state.yamlDataset && compatibility?.status !== "compatible") return "";
+      const destination = state.yamlDestinationPath || defaultCustomYamlPath(base);
       if (paperMode) {
         return "lnl compose create --base " + base +
-          " --output " + quoteArg(selectValue("yaml-output", "configs/experiment/my_train.yaml"));
+          " --output " + quoteArg(destination);
       }
       const selector = selectValue("yaml-selector", "all");
       const update = selectValue("yaml-update", "standard");
       let command = "lnl compose create --base " + base +
-        " --output " + quoteArg(selectValue("yaml-output", "configs/experiment/my_train.yaml")) +
+        " --output " + quoteArg(destination) +
         " --loss " + selectValue("yaml-loss", "ce") + " --selector " + selector;
       if (selector === "small_loss") command += " --keep-rate " + selectValue("yaml-keep-rate", "0.8");
       command += " --parameter-update " + update;
@@ -1618,25 +2192,43 @@
       }
       return command;
     }
+    function datasetRegistrationSources(adapter) {
+      const sources = {root:"", path:"", labels:""};
+      if (adapter === "uci_binary") {
+        sources.path = selectValue("data-path", "").trim();
+      } else {
+        sources.root = selectValue("data-root", "").trim();
+        if (["cifar10n", "cifar100n"].includes(adapter)) sources.labels = selectValue("data-labels", "").trim();
+      }
+      return sources;
+    }
+    function buildRunWorkspaceCommand() {
+      const source = state.activeConfig;
+      if (!source?.value) return "";
+      const flag = source.kind === "path" ? "--config" : "--recipe";
+      const dataset = selectValue("run-dataset", state.runDataset).trim();
+      return "lnl run " + flag + " " + quoteArg(source.value) +
+        (dataset ? " --data " + quoteArg(dataset) : "") + " --check-data";
+    }
     function buildModuleCommand() {
+      if (state.module === "quickstart") return "";
       if (state.module === "beginner") return buildBeginnerCommand();
       if (state.module === "yaml") return buildYamlCommand();
+      if (state.module === "run") return buildRunWorkspaceCommand();
       if (state.module === "data") {
         const action = selectValue("data-action", "list");
         const alias = selectValue("data-alias", "");
         const recipe = selectValue("data-recipe", "cifar10-clean-smoke");
-        if (action === "list") return "lnl data list";
+        if (action === "list") return "";
         if (action === "status") return "lnl data status" + (alias ? " " + quoteArg(alias) : "");
         if (action === "path") return alias ? "lnl data path " + quoteArg(alias) : "";
         if (action === "register") {
           const adapter = selectValue("data-adapter", "cifar10");
           let command = "lnl data register " + quoteArg(selectValue("data-new-alias", "")) + " --adapter " + adapter;
-          const root = selectValue("data-root", "").trim();
-          const path = selectValue("data-path", "").trim();
-          const labels = selectValue("data-labels", "").trim();
-          if (root) command += " --root " + quoteArg(root);
-          if (path) command += " --path " + quoteArg(path);
-          if (labels) command += " --labels " + quoteArg(labels);
+          const sources = datasetRegistrationSources(adapter);
+          if (sources.root) command += " --root " + quoteArg(sources.root);
+          if (sources.path) command += " --path " + quoteArg(sources.path);
+          if (sources.labels) command += " --labels " + quoteArg(sources.labels);
           return command;
         }
         if (!alias) return "";
@@ -1679,9 +2271,10 @@
       if (action === "register") {
         payload.name = selectValue("data-new-alias", "");
         payload.adapter = selectValue("data-adapter", "cifar10");
-        payload.root = selectValue("data-root", "").trim();
-        payload.path = selectValue("data-path", "").trim();
-        payload.labels = selectValue("data-labels", "").trim();
+        const sources = datasetRegistrationSources(payload.adapter);
+        if (sources.root) payload.root = sources.root;
+        if (sources.path) payload.path = sources.path;
+        if (sources.labels) payload.labels = sources.labels;
       } else if (alias) {
         payload.name = alias;
       }
@@ -1691,6 +2284,13 @@
       return payload;
     }
     function updateModulePreview() {
+      if (state.module === "quickstart" && window.quickStartController) return;
+      if (state.module === "data" && selectValue("data-action", state.dataAction) === "list") {
+        setRequest(null, "");
+        statusNode.textContent = "正在查看已有数据状态，无需执行指令。";
+        statusNode.className = "status";
+        return;
+      }
       if (state.module === "data" && state.removeConfirmed) {
         state.removeConfirmed = false;
         runButton.textContent = "执行此指令";
@@ -1698,18 +2298,25 @@
       const command = buildModuleCommand();
       const dataRequest = state.module === "data" ? buildDataApiRequest() : null;
       setRequest(command ? (dataRequest ? {dataset: dataRequest} : {command: command}) : null, command);
-      statusNode.textContent = command ? "参数已更新，请确认右侧预览后执行" : "当前参数组合无法生成有效指令";
+      statusNode.textContent = command
+        ? (state.previewEdited ? "预览已修改，执行时将使用编辑后的指令" : "参数已更新，请确认右侧预览后执行")
+        : "当前参数组合无法生成有效指令";
       statusNode.className = "status";
     }
     function showJob(job) {
       state.jobId = job.id;
-      outputNode.textContent = job.lines.join("\n") || "(暂无输出)";
+      const output = job.lines.join("\n") || "(暂无输出)";
+      outputNode.textContent = job.error ? output + "\n\n启动错误：" + job.error : output;
       outputNode.scrollTop = outputNode.scrollHeight;
-      if (job.structured != null) renderStructured(job.structured);
+      stopTaskButton.disabled = !job.running || !job.id;
+      stopTaskButton.textContent = job.cancel_requested ? "正在停止…" : "停止当前任务";
+      if (job.structured != null && !job.error) renderStructured(job.structured);
       else { structuredNode.classList.add("hidden"); outputNode.classList.remove("hidden"); }
+      if (window.trainingOutput) window.trainingOutput.render(job);
       if (job.running) { statusNode.textContent = "运行中：" + job.command; statusNode.className = "status running"; }
       else if (job.error || job.returncode !== 0) { statusNode.textContent = "失败（退出码 " + job.returncode + "）"; statusNode.className = "status failed"; }
       else { statusNode.textContent = "完成（退出码 0）"; statusNode.className = "status success"; }
+      renderConsoleContext();
     }
     function formatDatasetResult(result) {
       if (result.removed) return "已删除登记：" + result.removed + "\n原始数据文件未被删除。";
@@ -1731,8 +2338,22 @@
       const response = await fetch("/api/datasets");
       if (!response.ok) return;
       state.datasets = await response.json();
+      renderConsoleContext();
       if (state.module === "data") {
         renderData();
+        updateModulePreview();
+      }
+      if (state.module === "quickstart") {
+        renderQuickStart();
+        updateModulePreview();
+      }
+    }
+    async function refreshPapers() {
+      const response = await fetch("/api/papers");
+      if (!response.ok) return;
+      state.papers = await response.json();
+      if (state.module === "papers") {
+        renderPapers();
         updateModulePreview();
       }
     }
@@ -1743,6 +2364,7 @@
       const job = await response.json(); showJob(job);
       if (!job.running && state.timer) {
         clearInterval(state.timer); state.timer = null;
+        renderConsoleContext();
         if (state.tutorialRunningStep) {
           const stepId = state.tutorialRunningStep;
           state.tutorialRunningStep = "";
@@ -1755,7 +2377,7 @@
             renderBeginner();
             installPathPickers(parameterPanel);
             const nextCommand = buildBeginnerCommand();
-            setRequest(nextCommand ? {command:nextCommand} : null, nextCommand);
+            setRequest(nextCommand ? {command:nextCommand} : null, nextCommand, {resetPreview:true});
           }
         }
         if (!job.error && job.returncode === 0 && job.key === "data-verify") {
@@ -1766,14 +2388,35 @@
           state.pendingYamlPath = "";
           await loadYamlFromPath(createdPath);
           setActiveConfig("path", createdPath);
-          statusNode.textContent = "YAML 已创建并打开；现在可验证、运行或转到参数 Sweep：" + createdPath;
+          statusNode.textContent = "YAML 已创建并打开；现在可验证、运行或转到参数组合实验：" + createdPath;
           statusNode.className = "status success";
         } else if (job.error || job.returncode !== 0) {
           state.pendingYamlPath = "";
         }
         await refreshDatasets();
+        if (!job.error && job.returncode === 0 && job.command.startsWith("lnl mentor ")) {
+          await refreshPapers();
+        }
       }
     }
+    stopTaskButton.addEventListener("click", async function () {
+      if (!state.jobId || stopTaskButton.disabled) return;
+      if (!window.confirm("确定停止当前 WebUI 任务吗？训练将不会自动恢复。")) return;
+      stopTaskButton.disabled = true;
+      stopTaskButton.textContent = "正在停止…";
+      try {
+        const response = await fetch("/api/jobs/" + state.jobId + "/cancel", {method:"POST"});
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "停止任务失败");
+        showJob(result);
+        statusNode.textContent = result.running ? "已发出停止请求，等待进程退出…" : "任务已停止";
+        statusNode.className = "status failed";
+      } catch (error) {
+        statusNode.textContent = "停止失败：" + String(error.message || error);
+        statusNode.className = "status failed";
+        stopTaskButton.disabled = false;
+      }
+    });
     runButton.addEventListener("click", async function () {
       if (!state.request) return;
       if (state.module === "sweep" && !(await previewSweepPlan())) return;
@@ -1782,6 +2425,16 @@
         state.tutorialRunningStep = step ? step.id : "";
       }
       const datasetRequest = state.request.dataset;
+      const editedCommand = previewNode.value.trim();
+      if (!datasetRequest && state.previewEdited) {
+        if (!editedCommand) {
+          statusNode.textContent = "请在预览框中填写要执行的 lnl 指令";
+          statusNode.className = "status failed";
+          updatePreviewControls();
+          return;
+        }
+        state.request = {command: editedCommand};
+      }
       if (datasetRequest?.action === "remove" && !state.removeConfirmed) {
         state.removeConfirmed = true;
         runButton.textContent = "再次点击，确认删除登记";
@@ -1798,7 +2451,7 @@
         typeof body.command === "string" &&
         body.command.startsWith("lnl compose create ")
       ) {
-        state.pendingYamlPath = selectValue("yaml-output", "").trim();
+        state.pendingYamlPath = state.yamlDestinationPath || defaultCustomYamlPath(currentYamlBuilderRecipe());
       }
       try {
         const response = await fetch(endpoint, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
@@ -1809,10 +2462,10 @@
           showJob(result); if (state.timer) clearInterval(state.timer); state.timer = setInterval(pollJob, 350);
         } else {
           state.dataResult = result;
-          if (result.dataset?.name) state.dataAlias = result.dataset.name;
+          if (result.dataset?.name) { state.dataAlias = result.dataset.name; }
           if (result.removed === state.dataAlias) {
             state.dataAlias = "";
-            state.dataAction = result.next_action || "list";
+            state.dataAction = result.next_action === "list" ? "status" : (result.next_action || "status");
           }
           outputNode.textContent = formatDatasetResult(result);
           await refreshDatasets();
@@ -1834,15 +2487,30 @@
         runButton.disabled = false;
       }
     });
-    copyButton.addEventListener("click", async function () { if (!state.request) return; await navigator.clipboard.writeText(previewNode.textContent); statusNode.textContent = "指令已复制"; });
+    previewNode.addEventListener("input", function () {
+      const command = previewNode.value;
+      state.previewEdited = command !== state.previewAutoCommand;
+      if (command.trim()) state.request = {command: command};
+      else state.request = null;
+      updatePreviewControls();
+      statusNode.textContent = command.trim() ? (state.previewEdited ? "预览已修改，执行时将使用编辑后的指令" : "已恢复自动指令") : "预览为空，请填写要执行的 lnl 指令";
+      statusNode.className = command.trim() ? "status running" : "status failed";
+    });
+    document.getElementById("preview-reset").addEventListener("click", resetPreviewCommand);
+    copyButton.addEventListener("click", async function () { if (!previewNode.value.trim()) return; await navigator.clipboard.writeText(previewNode.value); statusNode.textContent = "指令已复制"; });
     document.getElementById("clear").addEventListener("click", function () { outputNode.textContent = ""; statusNode.textContent = "日志已清空"; });
+    document.getElementById("training-simple").addEventListener("click", function () { if (window.trainingOutput) window.trainingOutput.toggle(false); });
+    document.getElementById("training-detail").addEventListener("click", function () { if (window.trainingOutput) window.trainingOutput.toggle(true); });
     document.getElementById("show-yaml").addEventListener("click", async function () {
-      yamlEditorPanel.classList.toggle("hidden");
-      if (!yamlEditorPanel.classList.contains("hidden")) {
+      if (!yamlEditorPanel.classList.contains("hidden")) { hideYamlEditor(); return; }
+      yamlEditorPanel.classList.remove("hidden");
+      if (!yamlDraftDirty()) {
         renderYamlSources();
-        if (state.activeConfig?.kind === "path") await loadYamlFromPath(state.activeConfig.value);
-        else await loadYamlSelection(state.activeConfig?.value || currentRecipeId());
+        const source = state.module === "yaml" ? {kind:"recipe", value:currentYamlBuilderRecipe()} : state.activeConfig;
+        if (source?.kind === "path") await loadYamlFromPath(source.value);
+        else { state.yamlSuggestedPath = state.yamlDestinationPath || defaultCustomYamlPath(source?.value || currentRecipeId()); await loadYamlSelection(source?.value || currentRecipeId()); }
       }
+      updateYamlEditorButton();
     });
     document.getElementById("yaml-source").addEventListener("change", loadYamlFromRecipe);
     document.getElementById("yaml-load").addEventListener("click", loadYamlFromEditor);
@@ -1856,7 +2524,10 @@
       document.getElementById("yaml-schema-meta").textContent = "已直接编辑完整 YAML；保存时以文本内容为准，并执行配置验证。";
       statusNode.textContent = "YAML 已修改，尚未保存";
       statusNode.className = "status running";
+      updatePaperDeviation();
+      updateYamlEditorButton();
     });
+    document.getElementById("yaml-path").addEventListener("input", function () { state.yamlDestinationPath = this.value.trim(); });
 
     const recipeEndpoint = "/api/recipes";
     installPathPickers(document);
@@ -1864,11 +2535,11 @@
       .then(function (responses) { return Promise.all(responses.map(function (response) { if (!response.ok) throw new Error("后端菜单数据加载失败"); return response.json(); })); })
       .then(function (payloads) {
         state.recipes = payloads[1]; state.papers = payloads[2]; state.datasets = payloads[3]; state.tutorial = payloads[4];
-        renderCommands(payloads[0]); renderYamlSources(); switchModule(recipeMode ? "yaml" : "beginner");
+        renderCommands(payloads[0]); renderYamlSources(); switchModule(recipeMode ? "yaml" : "quickstart");
         if (recipeMode) yamlEditorPanel.classList.remove("hidden");
         if (!yamlEditorPanel.classList.contains("hidden")) loadYamlFromRecipe();
       })
-      .catch(function (error) { previewNode.textContent = "无法连接后端：" + error; });
+      .catch(function (error) { state.request = null; state.previewEdited = false; state.previewAutoCommand = ""; state.previewAutoRequest = null; previewNode.value = "无法连接后端：" + error; updatePreviewControls(); });
   </script>
 </body>
 </html>

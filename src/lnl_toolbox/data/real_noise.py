@@ -7,7 +7,15 @@ import re
 
 import numpy as np
 
-from .contracts import DataSpec, RawDatasetSplit
+from .contracts import DataSpec, RawDatasetSplit, UnsupportedDatasetSplitError
+from .profile import (
+    DatasetSemanticHints,
+    KnowledgeState,
+    NoiseKnowledge,
+    NoiseOrigin,
+    NoiseRateInfo,
+    NoiseStatus,
+)
 from .registry import DatasetRegistry
 
 
@@ -78,6 +86,16 @@ def _resolve_images(root: Path, keys: tuple[str, ...]) -> tuple[Path, ...]:
 class Clothing1MAdapter:
     name = "clothing1m"
     aliases = ("clothing_1m",)
+    semantic_hints = DatasetSemanticHints(
+        clean_train_labels=KnowledgeState.UNAVAILABLE,
+        clean_validation_labels=KnowledgeState.AVAILABLE,
+        noise=NoiseKnowledge(
+            NoiseStatus.NOISY,
+            NoiseOrigin.NATIVE,
+            NoiseRateInfo(),
+        ),
+        stable_indices=KnowledgeState.AVAILABLE,
+    )
     _defaults = {
         "train": "noisy_train_key_list.txt",
         "validation": "clean_val_key_list.txt",
@@ -142,6 +160,16 @@ class Clothing1MAdapter:
 class Animal10NAdapter:
     name = "animal10n"
     aliases = ("animal_10n",)
+    semantic_hints = DatasetSemanticHints(
+        clean_train_labels=KnowledgeState.UNAVAILABLE,
+        clean_validation_labels=KnowledgeState.AVAILABLE,
+        noise=NoiseKnowledge(
+            NoiseStatus.NOISY,
+            NoiseOrigin.NATIVE,
+            NoiseRateInfo(),
+        ),
+        stable_indices=KnowledgeState.AVAILABLE,
+    )
 
     class_names = (
         "cat", "lynx", "wolf", "coyote", "cheetah", "jaguar",
@@ -247,9 +275,13 @@ class Animal10NAdapter:
     def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
         del seed
         if split == "validation":
-            split = "test"
+            raise UnsupportedDatasetSplitError(
+                "Animal-10N source exposes train and test only"
+            )
         if split not in {"train", "test"}:
-            raise ValueError("Animal-10N split must be train or test")
+            raise UnsupportedDatasetSplitError(
+                "Animal-10N source exposes train and test only"
+            )
         if spec.root is None:
             raise ValueError("Animal-10N requires data.root")
         layout = self._layout(spec.root)

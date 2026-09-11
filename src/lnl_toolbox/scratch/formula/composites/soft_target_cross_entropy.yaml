@@ -1,0 +1,117 @@
+id: builtin/soft_target_cross_entropy
+name: Soft-target Cross Entropy
+description: Negative probability-target weighted log-softmax with explicit mask and reduction variants.
+inputs:
+  logits: {type: tensor}
+  targets: {type: probability}
+  mask: {type: mask, required: false}
+parameters:
+  reduction: {type: enum, options: [per_sample, mean], default: mean}
+steps:
+  - id: log_probabilities
+    block: log_softmax
+    bindings: {logits: logits}
+  - id: weighted_log_probabilities
+    block: elementwise_multiply
+    bindings: {left: targets, right: log_probabilities}
+  - id: class_sum
+    block: reduce_sum
+    bindings: {input: weighted_log_probabilities}
+    parameters: {dim: -1}
+  - id: mean_loss
+    block: reduce_mean
+    bindings: {input: class_sum}
+  - id: loss
+    block: negate
+    bindings: {input: mean_loss}
+outputs:
+  loss: {source: loss}
+variants:
+  - name: unmasked_mean
+    when: {mask: __absent__, reduction: mean}
+    steps:
+      - id: log_probabilities
+        block: log_softmax
+        bindings: {logits: logits}
+      - id: weighted
+        block: elementwise_multiply
+        bindings: {left: targets, right: log_probabilities}
+      - id: class_sum
+        block: reduce_sum
+        bindings: {input: weighted}
+        parameters: {dim: -1}
+      - id: result
+        block: negate
+        bindings: {input: class_sum}
+      - id: loss
+        block: reduce_mean
+        bindings: {input: result}
+  - name: unmasked_per_sample
+    when: {mask: __absent__, reduction: per_sample}
+    steps:
+      - id: log_probabilities
+        block: log_softmax
+        bindings: {logits: logits}
+      - id: weighted
+        block: elementwise_multiply
+        bindings: {left: targets, right: log_probabilities}
+      - id: class_sum
+        block: reduce_sum
+        bindings: {input: weighted}
+        parameters: {dim: -1}
+      - id: loss
+        block: negate
+        bindings: {input: class_sum}
+  - name: masked_mean
+    when: {mask: __present__, reduction: mean}
+    steps:
+      - id: selected_indices
+        block: mask_to_indices
+        bindings: {mask: mask}
+      - id: selected_logits
+        block: index_select
+        bindings: {input: logits, indices: selected_indices}
+      - id: selected_targets
+        block: index_select
+        bindings: {input: targets, indices: selected_indices}
+      - id: log_probabilities
+        block: log_softmax
+        bindings: {logits: selected_logits}
+      - id: weighted
+        block: elementwise_multiply
+        bindings: {left: selected_targets, right: log_probabilities}
+      - id: class_sum
+        block: reduce_sum
+        bindings: {input: weighted}
+        parameters: {dim: -1}
+      - id: result
+        block: negate
+        bindings: {input: class_sum}
+      - id: loss
+        block: reduce_mean
+        bindings: {input: result, empty: zero}
+  - name: masked_per_sample
+    when: {mask: __present__, reduction: per_sample}
+    steps:
+      - id: selected_indices
+        block: mask_to_indices
+        bindings: {mask: mask}
+      - id: selected_logits
+        block: index_select
+        bindings: {input: logits, indices: selected_indices}
+      - id: selected_targets
+        block: index_select
+        bindings: {input: targets, indices: selected_indices}
+      - id: log_probabilities
+        block: log_softmax
+        bindings: {logits: selected_logits}
+      - id: weighted
+        block: elementwise_multiply
+        bindings: {left: selected_targets, right: log_probabilities}
+      - id: class_sum
+        block: reduce_sum
+        bindings: {input: weighted}
+        parameters: {dim: -1}
+      - id: loss
+        block: negate
+        bindings: {input: class_sum}

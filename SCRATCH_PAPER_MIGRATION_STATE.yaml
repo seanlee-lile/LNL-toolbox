@@ -1,0 +1,627 @@
+current_index: 26
+papers:
+- index: 0
+  id: gce
+  protocol_source: configs/experiment/gce_cifar10_noise02_reproduction.yaml
+  paper_source: https://papers.nips.cc/paper/8094-generalized-cross-entropy-loss-for-training-deep-neural-networks-with-noisy-labels.pdf
+  legacy_sources:
+  - src/lnl_toolbox/losses/torch_losses.py
+  - src/lnl_toolbox/training/experiment.py
+  - src/lnl_toolbox/training/data_service.py
+  - src/lnl_toolbox/models/cifar_resnet.py
+  missing_capabilities: []
+  new_public_blocks:
+  - refresh_epoch_loader
+  new_paper_blocks: []
+  protocol_check: PASS
+  formula_check: PASS
+  runtime_check: PASS
+  ui_check: PASS
+  status: READY
+  notes: Formal recipe audited against config and Eq. (6); do not substitute a smoke recipe.
+- index: 1
+  id: coteaching
+  protocol_source: configs/experiment/cifar10_coteaching_reproduction.yaml
+  paper_source: https://papers.nips.cc/paper/2018/file/a19744e268754fb0148b017647355b7b-Paper.pdf
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/coteaching/selection.py
+  - src/lnl_toolbox/algorithms/coteaching/algorithm.py
+  - src/lnl_toolbox/training/coteaching_experiment.py
+  missing_capabilities: []
+  new_public_blocks:
+  - prepare_coteaching_cifar10
+  - evaluate_peer_ensemble
+  - track_best_peer_models
+  - restore_best_peer_models
+  new_paper_blocks: []
+  protocol_check: PASS
+  formula_check: PASS
+  runtime_check: PASS
+  ui_check: PASS
+  status: READY
+  notes: Formal config, stable sample-index selection, dual peer lifecycle, runtime-limited execution, and WebUI audit passed.
+- index: 2
+  id: apl
+  status: READY
+  protocol_source: configs/experiment/apl_cifar10_noise02_reproduction.yaml
+  paper_source: https://proceedings.mlr.press/v119/ma20c/ma20c.pdf
+  legacy_sources:
+  - src/lnl_toolbox/losses/torch_losses.py
+  - src/lnl_toolbox/training/experiment.py
+  missing_capabilities: []
+  new_public_blocks:
+  - prepare_apl_cifar10
+  - active_passive_composition
+  - clip_grad_norm
+  new_paper_blocks: []
+  protocol_check: PASS
+  formula_check: PASS
+  runtime_check: PASS
+  ui_check: PASS
+  notes: Formal APL protocol matches the reproduction config; NCE, RCE, and alpha/beta composition numerically match the legacy
+    implementation. Test selection is intentional per config.
+- index: 3
+  id: binary-risk
+  status: READY
+  protocol_source: configs/experiment/binary_risk_natarajan_reproduction.yaml
+  paper_source: https://papers.nips.cc/paper/2013/hash/3871bd64012152bfb53fdf04b401193f-Abstract.html
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/binary_risk.py
+  - src/lnl_toolbox/training/binary_experiment.py
+  missing_capabilities: []
+  new_public_blocks:
+  - prepare_binary_risk_data
+  new_paper_blocks: []
+  protocol_check: PASS
+  formula_check: PASS
+  runtime_check: PASS
+  ui_check: PASS
+  notes: Formal synthetic_binary_2d protocol, known rho=0.4/0.4 Natarajan formula, limited runtime, and WebUI formula deletion/re-add
+    validation passed.
+- index: 4
+  id: loss-correction
+  status: READY
+  protocol_source: configs/experiment/loss_correction_cifar10_asymmetric04.yaml
+  paper_source: https://openaccess.thecvf.com/content_cvpr_2017/papers/Patrini_Making_Deep_Neural_CVPR_2017_paper.pdf
+  legacy_sources:
+  - src/lnl_toolbox/noise/estimators.py
+  - src/lnl_toolbox/algorithms/transition_risk.py
+  - src/lnl_toolbox/training/data_service.py
+  missing_capabilities: []
+  new_public_blocks:
+  - prepare_loss_correction_cifar10
+  - forward_correction
+  new_paper_blocks: []
+  formula_check: PASS
+  runtime_check: PASS
+  ui_check: PASS
+  protocol_check: PASS
+  notes: Formal config and recipe match CIFAR-10/GCE-2018/class-conditional asymmetric-40, ResNet-32, SGD, MultiStepLR(40,80),
+    120 epochs, known transition, and Forward correction. Runtime-limited execution passed.
+- index: 5
+  id: jocor
+  status: READY
+  protocol_source: configs/experiment/jocor_cifar10_symmetric05_reproduction.yaml
+  paper_source: https://openaccess.thecvf.com/content_CVPR_2020/papers/Wei_Combating_Noisy_Labels_by_Agreement_A_Joint_Training_Method_with_CVPR_2020_paper.pdf
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/jocor.py
+  - src/lnl_toolbox/training/multi_model_experiment.py
+  - src/lnl_toolbox/selectors/schedules.py
+  missing_capabilities: []
+  new_public_blocks:
+  - prepare_jocor_cifar10
+  - forward_two_models
+  - create_joint_optimizer
+  - jocor_symmetric_kl
+  - jocor_joint_composition
+  - jocor_keep_rate_formula
+  - jocor_small_loss_indices
+  - mean_selected_loss
+  new_paper_blocks: []
+  protocol_check: PASS
+  formula_check: PASS
+  runtime_check: PASS
+  ui_check: PASS
+  notes: Formal profile is CIFAR-10 tensor_only without augmentation, symmetric transition noise 0.5, two CifarSixConvNet
+    peers, Adam, linear LR/beta schedule, 200 epochs, JoCoR lambda 0.9, floor small-loss selection, and test selection. Runtime
+    also verified tensor_only through the shared data service.
+- index: 6
+  id: importance-reweighting
+  status: READY
+  protocol_source: configs/reproduction/importance_reweighting_binary_low_dim.yaml
+  paper_source: https://arxiv.org/pdf/1411.7718.pdf
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/importance_reweighting/estimation.py
+  - src/lnl_toolbox/algorithms/importance_reweighting/algorithm.py
+  - src/lnl_toolbox/training/importance_reweighting_experiment.py
+  - src/lnl_toolbox/treatments/weights.py
+  missing_capabilities: []
+  new_public_blocks:
+  - prepare_importance_reweighting_binary
+  - estimate_noisy_posterior
+  - estimate_raw_min_noise_rates
+  - importance_weight_formula
+  - weighted_loss
+  new_paper_blocks: []
+  protocol_check: PASS
+  formula_check: PASS
+  runtime_check: PASS
+  ui_check: PASS
+  notes: Formal low-dimensional KDE reproduction selected from the catalog; the high-dimensional KLIEP and UCI variants remain
+    separate maintained configurations. Static protocol/formula checks, limited runtime, and 8795 WebUI delete/re-add Validate
+    passed.
+- index: 7
+  id: cdr
+  status: READY
+  protocol_source: configs/experiment/cifar10_symmetric_cdr_reproduction.yaml
+  paper_source: https://openreview.net/pdf?id=Eql5b1_hTE4
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/cdr.py
+  - src/lnl_toolbox/training/experiment.py
+  - src/lnl_toolbox/models/cifar_resnet.py
+  missing_capabilities: []
+  new_public_blocks:
+  - prepare_cdr_cifar10
+  - cdr_criticality_score
+  - cdr_masked_gradient_update
+  new_paper_blocks: []
+  protocol_check: PASS
+  formula_check: PASS
+  runtime_check: PASS
+  ui_check: PASS
+  notes: Paper compatibility mode is selected because the formal config explicitly uses all_trainable, l1_decay=0.001, and
+    compatibility_mode=paper; official-code 2D/4D scope is not silently substituted. Static protocol/formula checks, limited
+    runtime, and 8795 WebUI delete/re-add Validate passed.
+- index: 8
+  id: dual-t
+  status: READY
+  protocol_source: configs/reproduction/cifar10_dual_t_sym20.yaml
+  paper_source: https://papers.nips.cc/paper/2020/file/512c5cad6c37edb98ae91c8a76c3a291-Paper.pdf
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/dual_t/algorithm.py
+  - src/lnl_toolbox/noise/estimators.py
+  - src/lnl_toolbox/training/dual_t_experiment.py
+  missing_capabilities: []
+  new_public_blocks:
+  - prepare_dual_t_cifar10
+  - snapshot_posterior_model
+  - dual_t_transition_estimation
+  new_paper_blocks: []
+  protocol_check: PASS
+  formula_check: PASS
+  runtime_check: PASS
+  ui_check: PASS
+  notes: Formal protocol uses CIFAR-10 symmetric-20, noisy validation 10000, posterior and final fresh CIFAR ResNet-18 stages,
+    100 epochs each, SGD and MultiStepLR at 50. Strict Dual-T estimation is preserved for unrestricted runs; runtime-limited
+    structural checks use an explicit uniform fallback only for empty intermediate prediction rows. 8795 WebUI showed the
+    formal model/data settings, passed formula delete/re-add, and Validate.
+- index: 9
+  id: pdl
+  status: READY
+  protocol_source: configs/experiment/pdl_cifar10_reproduction.yaml
+  paper_source: https://papers.nips.cc/paper/2020/file/5607fe8879e4fd269e88387e8cb30b7e-Paper.pdf
+  legacy_sources:
+  - src/lnl_toolbox/noise/pdl.py
+  - src/lnl_toolbox/algorithms/instance_transition.py
+  - src/lnl_toolbox/training/instance_transition_experiment.py
+  missing_capabilities: []
+  new_public_blocks:
+  - prepare_pdl_cifar10
+  - snapshot_pdl_features
+  - pdl_fit_part_representation
+  - pdl_select_anchor_candidates
+  - pdl_fit_basis_matrices
+  - pdl_estimate_instance_transition
+  - pdl_corrected_loss
+  - pdl_revision_loss
+  - evaluate_pdl_accuracy
+  new_paper_blocks:
+  - attach_pdl_revision_head
+  - reset_pdl_revision
+  protocol_check: PASS
+  formula_check: PASS
+  runtime_check: PASS
+  ui_check: PASS
+  notes: Formal protocol/static comparison, PDL correction and revision formula smoke, runtime-limited execution, and 8795
+    WebUI delete/re-add Validate passed. Revision training matches the legacy beta-weighted clean-label NLL; validation keeps
+    the legacy observed-probability objective. Stable global-index ordering is enforced for feature/posterior subsets.
+- index: 10
+  id: volminnet
+  status: READY
+  protocol_source: configs/experiment/volminnet_cifar10_reproduction.yaml
+  paper_source: https://proceedings.mlr.press/v139/li21l.html
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/volminnet/objective.py
+  - src/lnl_toolbox/algorithms/volminnet/transition.py
+  - src/lnl_toolbox/algorithms/volminnet/algorithm.py
+  - src/lnl_toolbox/training/volminnet_experiment.py
+  missing_capabilities: []
+  new_public_blocks:
+  - prepare_volminnet_cifar10
+  - create_volmin_transition
+  - volmin_transition_matrix
+  - volmin_noisy_nll
+  - volmin_positive_logdet
+  - volmin_objective_composition
+  - evaluate_volminnet_noisy
+  - track_best_volminnet
+  - restore_best_volminnet
+  new_paper_blocks: []
+  protocol_check: PASS
+  formula_check: PASS
+  runtime_check: PASS
+  ui_check: PASS
+  notes: Formal protocol/static comparison, decomposed transition/noisy-NLL/positive-logdet formula smoke, runtime-limited
+    joint classifier-transition execution, and 8795 WebUI formal-parameter audit passed. Positive Logdet was deleted and reinserted
+    from the palette before Validate. The shared Scratch ResNet-18 BatchNorm stage-channel bug was fixed so formal base_width
+    64 execution is valid.
+- index: 11
+  id: t-revision
+  status: READY
+  protocol_source: configs/reproduction/cifar10_t_revision_sym20_short.yaml
+  paper_source: https://papers.nips.cc/paper_files/paper/2019/file/9308b0d6e5898366a4a986bc33f3d3e7-Paper.pdf
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/t_revision/objective.py
+  - src/lnl_toolbox/algorithms/t_revision/transition.py
+  - src/lnl_toolbox/algorithms/t_revision/algorithm.py
+  - src/lnl_toolbox/training/t_revision_experiment.py
+  missing_capabilities: []
+  new_public_blocks:
+  - prepare_t_revision_cifar10
+  - snapshot_t_revision_posterior
+  - initialize_t_revision_transition
+  - create_t_revision_revision
+  - t_revision_noisy_probability
+  - t_revision_importance_ratio
+  - t_revision_weighted_objective
+  - create_t_revision_optimizer
+  - evaluate_t_revision_noisy
+  - track_best_t_revision
+  - restore_best_t_revision
+  new_paper_blocks: []
+  protocol_check: PASS
+  formula_check: PASS
+  runtime_check: PASS
+  ui_check: PASS
+  notes: Formal catalog reproduction is the full-data Sym20 short-horizon profile; smoke config is not used. Paper Algorithm
+    1 and Eq. (3) are the source of truth. Static protocol compare and formula smoke match the legacy objective, pseudo-anchor
+    estimator, raw additive revision, and no-clipping ratio semantics. Formal Recipe structure run passed with max_epochs=1,
+    max_batches=1, and skip_final_test. At 8795, formal data/model settings and all three training loops were visible; T-Revision
+    Importance Ratio was deleted and reinserted from the palette in the revision loop, then Validate passed. Paused after
+    this paper per user request; current_index remains 11.
+- index: 12
+  id: cwd
+  status: READY
+  protocol_source: configs/experiment/cwd_cifar10_reproduction.yaml
+  paper_source: https://gcatnjust.github.io/ChenGong/paper/gong_tpami22.pdf
+  legacy_sources:
+  - src/lnl_toolbox/estimators/cwd.py
+  - src/lnl_toolbox/algorithms/cwd.py
+  - src/lnl_toolbox/training/cwd_experiment.py
+  missing_capabilities: []
+  new_public_blocks:
+  - prepare_cwd_cifar10
+  - snapshot_cwd_features
+  - evaluate_cwd_binary
+  new_paper_blocks:
+  - cwd_observed_statistics
+  - cwd_clean_prior
+  - cwd_virtual_systems
+  - cwd_coefficient_pseudoinverse
+  - cwd_recover_centroids
+  - cwd_global_objective
+  protocol_check: PASS
+  formula_check: PASS
+  runtime_check: PASS
+  ui_check: PASS
+  notes: 'Formal five-fold CIFAR-10 airplane/automobile binary_scalar protocol is preserved: augment=false, binary asymmetric
+    RCN rho=0.2, effective-train manifest, CifarResNet34 base_width64 bias=false with one scalar output, Adam 0.05 wd1e-4,
+    MultiStepLR [40,120], 200 epochs. Formula smoke is finite and the 8796 UI instance loaded the formal recipe, displayed
+    all CWD blocks, and Validate passed; 8795 was occupied by a stale service process.'
+- index: 13
+  id: pcse
+  status: BLOCKED
+  protocol_source: configs/reproduction/cifar10_pcse_reproduction.yaml
+  paper_source: https://randydkx.github.io/pdf/TPAMI_paper.pdf
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/pcse.py
+  - src/lnl_toolbox/training/pcse_experiment.py
+  missing_capabilities: []
+  new_public_blocks:
+  - prepare_pcse_cifar10
+  - snapshot_pcse_features
+  - snapshot_pcse_validation_features
+  - snapshot_pcse_test_features
+  - load_pcse_source_model
+  - create_pcse_joint_optimizer
+  new_paper_blocks:
+  - pcse_recover_clean_priors
+  - pcse_coefficient_matrix
+  - pcse_recover_layer_statistics
+  - pcse_materialize_transition
+  - pcse_fit_gda
+  - pcse_fit_ensemble_weights
+  - pcse_evaluate_ensemble
+  protocol_check: PASS
+  formula_check: PASS
+  runtime_check: PENDING
+  ui_check: PASS
+  notes: 'SKIPPED per user instruction after marking the issue: formal recipe preserves the external UPM main_best source,
+    CIFAR-10 standard preprocessing, symmetric-40 manifest, paper VolMin transition stage, layer3/layer4 statistic recovery,
+    GDA, validation ensemble, and clean-test evaluation. Static validation and UI inspection passed. Runtime is blocked because
+    LNL_PCSE_SOURCE_RUN and the exact hash-checked checkpoint/manifest are absent locally; existing UPM artifacts have different
+    hashes, so no smoke substitution or download was used.'
+- index: 14
+  id: dss
+  status: READY
+  protocol_source: configs/experiment/dss_cifar10_symmetric05_reproduction.yaml
+  paper_source: 'catalog entry: Debiased Sample Selection for Learning with Noisy Labels'
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/dss.py
+  - src/lnl_toolbox/selectors/dss.py
+  - src/lnl_toolbox/training/experiment.py
+  missing_capabilities: []
+  new_public_blocks:
+  - create_dss_state
+  - dss_warmup_lifecycle
+  - dss_mda_marginal_adjustment
+  - dss_ccs_trend_exclusion
+  - dss_masked_training_loss
+  new_paper_blocks: []
+  protocol_check: PASS
+  formula_check: PASS
+  runtime_check: PASS
+  ui_check: PASS
+  notes: 'Formal DSS CIFAR-10 symmetric-50 protocol retained: PreAct-ResNet18 base width 64, SGD 0.02/momentum 0.9/weight decay 0.001, MultiStep milestone 80, 150 epochs, 30-epoch warm-up, stable-index state, MDA prior decay 0.99, CCS alpha 0.1, and masked training loss. Conda fixture-limited runtime passed; direct MDA normalization check passed; WebUI loaded DSS and Validate passed.'
+- index: 15
+  id: cnlcu
+  status: PENDING
+  protocol_source: configs/experiment/cnlcu_cifar10_reproduction.yaml
+  paper_source: catalog/paper_catalog.json (Sample Selection with Uncertainty of Losses)
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/cnlcu/estimators.py
+  - src/lnl_toolbox/algorithms/cnlcu/history.py
+  - src/lnl_toolbox/algorithms/cnlcu/scoring.py
+  - src/lnl_toolbox/training/cnlcu_experiment.py
+  missing_capabilities: []
+  new_public_blocks:
+  - prepare_cnlcu_cifar10
+  - create_cnlcu_history
+  - prepare_cnlcu_history_epoch
+  - append_cnlcu_history
+  - cnlcu_soft_influence
+  - cnlcu_soft_robust_mean
+  - cnlcu_soft_score
+  - cnlcu_cnn9 model entry
+  new_paper_blocks: []
+  protocol_check: PASS
+  formula_check: PASS
+  runtime_check: PASS
+  ui_check: PASS
+  notes: 'Revalidated from PENDING: formal CNLCU-S protocol and the legacy selection-count lifecycle were manually mapped to Recipe particles. The previously omitted update_cnlcu_selected_count calls now persist each peer selection after scoring. Conda two-epoch fixture runtime observed effective selection counts advance from 1 to 2; focused CNLCU/formula tests and WebUI Validate passed.'
+- index: 16
+  id: mentornet
+  status: PENDING
+  protocol_source: configs/experiment/mentornet_dd_cifar100_symmetric04_reproduction.yaml
+  paper_source: https://proceedings.mlr.press/v80/jiang18c/jiang18c.pdf
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/mentornet.py
+  - src/lnl_toolbox/models/mentornet.py
+  - src/lnl_toolbox/models/mentor_wide_resnet.py
+  - src/lnl_toolbox/training/mentor_artifacts.py
+  - src/lnl_toolbox/training/mentor_learning.py
+  missing_capabilities: []
+  new_public_blocks:
+  - prepare_formal_cifar
+  - create_mentor_provider
+  - mentor_compute_weights
+  - step_milestone_update
+  - mentor_wide_resnet formal parameters
+  new_paper_blocks: []
+  protocol_check: FAIL
+  formula_check: PENDING
+  runtime_check: PENDING
+  ui_check: PENDING
+  notes: 'IMPLEMENTED_UNVERIFIED: MentorNet curriculum threshold, feature construction, and sample-weight prediction are explicit Recipe particles. Validation was intentionally skipped per user instruction; status remains PENDING.'
+- index: 17
+  id: fine
+  status: PENDING
+  protocol_source: configs/experiment/fine_cifar100n_reproduction.yaml
+  paper_source: 'catalog/paper_catalog.json (FINE: Filtering Noise in the Feature Space)'
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/fine.py
+  - src/lnl_toolbox/selectors/sed.py
+  - src/lnl_toolbox/training/model_ema.py
+  - src/lnl_toolbox/training/fine_experiment.py
+  - src/lnl_toolbox/models/fine_cnn.py
+  missing_capabilities: []
+  new_public_blocks:
+  - prepare_formal_cifar train_eval/clean_validation support
+  - fine_prepare_strong_input
+  - create_fine_state
+  - fine_snapshot_predictions
+  - fine_scs_select
+  - fine_scr_reweight
+  - fine_prepare_batch_targets
+  - fine_warmup_loss
+  - fine_robust_loss
+  - fine_ema_update
+  new_paper_blocks: []
+  protocol_check: PASS
+  formula_check: PASS
+  runtime_check: PASS
+  ui_check: PASS
+  notes: 'IMPLEMENTED_UNVERIFIED: FINE objective composition is split into masked CE, pseudo-label CE, rejected-sample SED regularization, and explicit composition. Validation was intentionally skipped; status remains PENDING.'
+- index: 18
+  id: lend
+  status: PENDING
+  protocol_source: configs/experiment/lend_cifar10_reproduction.yaml
+  paper_source: https://doi.org/10.1007/s10994-022-06197-6
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/lend/graph.py
+  - src/lnl_toolbox/algorithms/lend/dilution.py
+  - src/lnl_toolbox/algorithms/lend/history.py
+  - src/lnl_toolbox/algorithms/lend/selector.py
+  - src/lnl_toolbox/algorithms/lend/algorithm.py
+  - src/lnl_toolbox/training/lend_experiment.py
+  missing_capabilities: []
+  new_public_blocks:
+  - create_lend_state
+  - lend_feature_graph
+  - lend_dilute_labels
+  - lend_history_update
+  - lend_select_agreement
+  - lend_selected_objective
+  new_paper_blocks: []
+  protocol_check: PASS
+  formula_check: PASS
+  runtime_check: PASS
+  ui_check: PASS
+  notes: 'IMPLEMENTED_UNVERIFIED: LEND adjacency construction, graph normalization, dilution, history, agreement selection, and selected objective are separate Recipe particles. Validation was intentionally skipped; status remains PENDING.'
+- index: 19
+  id: l2rw
+  status: PENDING
+  protocol_source: configs/experiment/l2rw_cifar10_reproduction.yaml
+  paper_source: https://proceedings.mlr.press/v80/ren18a.html
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/l2rw.py
+  - src/lnl_toolbox/models/cifar_resnet.py
+  - src/lnl_toolbox/training/l2rw_experiment.py
+  missing_capabilities: []
+  new_public_blocks:
+  - prepare_formal_cifar trusted_validation support
+  - l2rw_get_trusted_batch
+  - l2rw_meta_gradient
+  - l2rw_normalize_weights
+  new_paper_blocks: []
+  protocol_check: PASS
+  formula_check: PASS
+  runtime_check: PASS
+  ui_check: PASS
+  notes: 'IMPLEMENTED_UNVERIFIED: L2RW is expanded into epsilon initialization, virtual loss/update, trusted meta loss, epsilon gradient, projection, normalization, and weighted objective. Validation was intentionally skipped; status remains PENDING.'
+- index: 20
+  id: cal
+  status: PENDING
+  protocol_source: configs/experiment/cal_cifar10_reproduction.yaml
+  paper_source: https://openaccess.thecvf.com/content/CVPR2021/html/Zhu_A_Second-Order_Approach_to_Learning_With_Instance-Dependent_Label_Noise_CVPR_2021_paper.html
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/cal.py
+  - src/lnl_toolbox/noise/cal.py
+  - src/lnl_toolbox/training/cal_experiment.py
+  missing_capabilities: []
+  new_public_blocks:
+  - prepare_cal_cifar10
+  - cal_confidence_schedule
+  - cal_warmup_objective
+  - cal_prepare_proxy_batch
+  - cal_second_order_objective
+  new_paper_blocks: []
+  protocol_check: PASS
+  formula_check: PASS
+  runtime_check: PASS
+  ui_check: PASS
+  notes: 'IMPLEMENTED_UNVERIFIED: CAL proxy/reference state and Eq. (7)-(9) risk, covariance correction, and subtraction are explicit Recipe particles. Validation was intentionally skipped; status remains PENDING.'
+- index: 21
+  id: mc-ldce
+  status: PENDING
+  protocol_source: configs/experiment/mc_ldce_cifar10_reproduction.yaml
+  paper_source: catalog/paper_catalog.json (MC-LDCE)
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/mc_ldce.py
+  - src/lnl_toolbox/estimators/mc_ldce.py
+  - src/lnl_toolbox/models/mc_ldce_cnn.py
+  - src/lnl_toolbox/training/mc_ldce_experiment.py
+  missing_capabilities: []
+  new_public_blocks:
+  - mc_ldce_prepare_statistic
+  - mc_ldce_objective
+  - create_model classifier_bias
+  new_paper_blocks: []
+  protocol_check: FAIL
+  formula_check: PENDING
+  runtime_check: PENDING
+  ui_check: PENDING
+  notes: 'IMPLEMENTED_UNVERIFIED: Recipe now has the separate 150-epoch PaperVolMin transition stage, recovered centroid statistic, and fresh frozen-feature bias-free classifier stage. Validation was intentionally skipped; status remains PENDING.'
+- index: 22
+  id: upm
+  status: PENDING
+  protocol_source: configs/experiment/upm_cifar10_reproduction.yaml
+  paper_source: catalog/paper_catalog.json (Universal Probability Model for Label Noise)
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/upm/objective.py
+  - src/lnl_toolbox/algorithms/upm/state.py
+  - src/lnl_toolbox/training/upm_experiment.py
+  missing_capabilities: []
+  new_public_blocks:
+  - create_upm_state
+  - upm_clean_posterior
+  - upm_update_eta
+  - upm_soft_target_loss
+  - prepare_formal_cifar train_eval support
+  new_paper_blocks: []
+  protocol_check: FAIL
+  formula_check: PENDING
+  runtime_check: PENDING
+  ui_check: PENDING
+  notes: 'IMPLEMENTED_UNVERIFIED: stage-1 posterior snapshot, psi construction, eta initialization, epoch-35/five-epoch eta updates, and the main MultiStep scheduler are explicit. Validation was intentionally skipped; status remains PENDING.'
+- index: 23
+  id: dividemix
+  status: PENDING
+  protocol_source: configs/reproduction/cifar10_dividemix_sym20.yaml
+  paper_source: catalog/paper_catalog.json (DivideMix)
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/dividemix/config.py
+  - src/lnl_toolbox/algorithms/dividemix/gmm.py
+  - src/lnl_toolbox/algorithms/dividemix/objective.py
+  - src/lnl_toolbox/training/dividemix_experiment.py
+  missing_capabilities: []
+  new_public_blocks:
+  - DivideMix GMM estimator-backed clean probability
+  - dividemix_supervised_loss
+  - dividemix_unsupervised_loss
+  - dividemix_prior_regularizer
+  - dividemix_objective_composition
+  new_paper_blocks: []
+  protocol_check: FAIL
+  formula_check: PENDING
+  runtime_check: PENDING
+  ui_check: PENDING
+  notes: 'IMPLEMENTED_UNVERIFIED: stable-index peer histories, peer-specific clean probabilities, co-refinement/sharpening, decomposed objectives, and both schedulers are represented as Recipe particles. Validation was intentionally skipped; status remains PENDING.'
+- index: 24
+  id: dld
+  status: PENDING
+  protocol_source: configs/experiment/dld_cifar10_reproduction.yaml
+  paper_source: catalog/paper_catalog.json (Directional Label Diffusion)
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/dld/objective.py
+  - src/lnl_toolbox/algorithms/dld/precorrection.py
+  - src/lnl_toolbox/algorithms/dld/sampling.py
+  - src/lnl_toolbox/training/dld_experiment.py
+  missing_capabilities: []
+  protocol_check: FAIL
+  formula_check: PENDING
+  runtime_check: PENDING
+  ui_check: PENDING
+  notes: 'IMPLEMENTED_UNVERIFIED: start/endpoint/direction, stochastic forward state, independent predictors and optimizers, EMA, and five-step accelerated inference are explicit Recipe particles. Validation was intentionally skipped; status remains PENDING.'
+- index: 25
+  id: ca2c
+  status: PENDING
+  protocol_source: configs/experiment/ca2c_cifar10_reproduction.yaml
+  paper_source: catalog/paper_catalog.json (CA2C)
+  legacy_sources:
+  - src/lnl_toolbox/algorithms/ca2c.py
+  - src/lnl_toolbox/training/ca2c_experiment.py
+  - src/lnl_toolbox/models/ca2c_cnn.py
+  missing_capabilities: []
+  new_public_blocks:
+  - ca2c_warmup_loss
+  - ca2c_cross_guidance
+  - ca2c_partial_label_loss
+  - ca2c_negative_label_loss
+  - ca2c_objective_composition
+  new_paper_blocks: []
+  protocol_check: FAIL
+  formula_check: PENDING
+  runtime_check: PENDING
+  ui_check: PENDING
+  notes: 'IMPLEMENTED_UNVERIFIED: persistent stable-index candidate memory, separate peer candidate/complement construction, asymmetric objectives, and both cosine schedulers are explicit. Validation was intentionally skipped; status remains PENDING.'

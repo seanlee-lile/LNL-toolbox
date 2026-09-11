@@ -1,0 +1,100 @@
+id: builtin/weighted_blend
+name: Weighted Blend
+description: Blend two operands with an explicit sample weight; clamping is an executable formula variant.
+inputs:
+  left: {type: tensor}
+  right: {type: tensor}
+  weight: {type: tensor}
+parameters:
+  clamp_weight: {type: bool, default: true}
+steps:
+  - id: one
+    block: ones_like
+    bindings: {input: weight}
+  - id: zero
+    block: zeros_like
+    bindings: {input: weight}
+  - id: upper
+    block: minimum
+    bindings: {left: weight, right: one}
+  - id: bounded
+    block: maximum
+    bindings: {left: upper, right: zero}
+  - id: complement
+    block: subtract
+    bindings: {minuend: one, subtrahend: bounded}
+  - id: bounded_row
+    block: broadcast_sample_weight
+    bindings: {weight: bounded, reference: left}
+  - id: complement_row
+    block: broadcast_sample_weight
+    bindings: {weight: complement, reference: right}
+  - id: left_part
+    block: elementwise_multiply
+    bindings: {left: bounded_row, right: left}
+  - id: right_part
+    block: elementwise_multiply
+    bindings: {left: complement_row, right: right}
+  - id: blended
+    block: add
+    bindings: {left: left_part, right: right_part}
+outputs:
+  blended: {source: blended}
+variants:
+  - name: clamped
+    when: {clamp_weight: true}
+    steps:
+      - id: one
+        block: ones_like
+        bindings: {input: weight}
+      - id: zero
+        block: zeros_like
+        bindings: {input: weight}
+      - id: upper
+        block: minimum
+        bindings: {left: weight, right: one}
+      - id: bounded
+        block: maximum
+        bindings: {left: upper, right: zero}
+      - id: complement
+        block: subtract
+        bindings: {minuend: one, subtrahend: bounded}
+      - id: bounded_row
+        block: broadcast_sample_weight
+        bindings: {weight: bounded, reference: left}
+      - id: complement_row
+        block: broadcast_sample_weight
+        bindings: {weight: complement, reference: right}
+      - id: left_part
+        block: elementwise_multiply
+        bindings: {left: bounded_row, right: left}
+      - id: right_part
+        block: elementwise_multiply
+        bindings: {left: complement_row, right: right}
+      - id: blended
+        block: add
+        bindings: {left: left_part, right: right_part}
+  - name: unclamped
+    when: {clamp_weight: false}
+    steps:
+      - id: one
+        block: ones_like
+        bindings: {input: weight}
+      - id: complement
+        block: subtract
+        bindings: {minuend: one, subtrahend: weight}
+      - id: bounded_row
+        block: broadcast_sample_weight
+        bindings: {weight: weight, reference: left}
+      - id: complement_row
+        block: broadcast_sample_weight
+        bindings: {weight: complement, reference: right}
+      - id: left_part
+        block: elementwise_multiply
+        bindings: {left: bounded_row, right: left}
+      - id: right_part
+        block: elementwise_multiply
+        bindings: {left: complement_row, right: right}
+      - id: blended
+        block: add
+        bindings: {left: left_part, right: right_part}

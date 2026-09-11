@@ -1,0 +1,37 @@
+id: builtin/rce_loss
+name: Reverse Cross Entropy
+description: Probability-weighted clipped one-hot log targets.
+inputs:
+  logits: {type: tensor}
+  labels: {type: labels}
+parameters:
+  log_zero: {type: float, default: -4.0}
+steps:
+  - id: probabilities
+    block: softmax
+    bindings: {logits: logits}
+  - id: one_hot_labels
+    block: one_hot_like
+    bindings: {labels: labels, reference: logits}
+  - id: ones
+    block: ones_like
+    bindings: {input: one_hot_labels}
+  - id: complement
+    block: subtract
+    bindings: {minuend: ones, subtrahend: one_hot_labels}
+  - id: clipped_log_targets
+    block: affine_transform
+    bindings: {input: complement}
+    parameters: {scale: log_zero, bias: 0.0}
+  - id: weighted
+    block: elementwise_multiply
+    bindings: {left: probabilities, right: clipped_log_targets}
+  - id: class_sum
+    block: reduce_sum
+    bindings: {input: weighted}
+    parameters: {dim: -1}
+  - id: loss
+    block: negate
+    bindings: {input: class_sum}
+outputs:
+  loss: {source: loss}

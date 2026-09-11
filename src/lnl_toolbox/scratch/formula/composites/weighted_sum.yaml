@@ -1,0 +1,27 @@
+id: builtin/weighted_sum
+name: Weighted Sum
+description: Two explicit terms combined by scalar weights.
+inputs:
+  a: {type: tensor}
+  b: {type: tensor}
+parameters:
+  weight_a: {type: float, default: 1.0}
+  weight_b: {type: float, default: 1.0}
+steps:
+  - id: scalar_a
+    block: constant
+    parameters: {value: $weight_a}
+  - id: scalar_b
+    block: constant
+    parameters: {value: $weight_b}
+  - id: weighted_a
+    block: elementwise_multiply
+    bindings: {left: scalar_a, right: a}
+  - id: weighted_b
+    block: elementwise_multiply
+    bindings: {left: scalar_b, right: b}
+  - id: result
+    block: add
+    bindings: {left: weighted_a, right: weighted_b}
+outputs:
+  result: {source: result}

@@ -29,7 +29,7 @@ from lnl_toolbox.noise.transition import TransitionArtifact
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
 from lnl_toolbox.training.data_service import prepare_experiment_data
-from lnl_toolbox.training.experiment import build_optimizer, build_scheduler
+from lnl_toolbox.training.experiment import bind_model_input, build_optimizer, build_scheduler
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
 from lnl_toolbox.training.reproduction_data import build_reproduction_model
 from lnl_toolbox.training.snapshots import FeatureSnapshot, collect_feature_snapshot
@@ -39,6 +39,15 @@ def _directory(config, output_dir, resume) -> Path:
     path = Path(resume).resolve().parent if resume else Path(output_dir or Path(config.get("output_root", "artifacts/runs")) / datetime.now().strftime("%Y%m%d-%H%M%S")).resolve()
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _write_epoch_metrics(rows: list[dict[str, Any]], path: Path) -> None:
+    """Rewrite the complete epoch history for live WebUI reads and resume."""
+
+    path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
 
 
 def _transition(config, snapshot_hash: str) -> TransitionArtifact:
@@ -148,26 +157,37 @@ def _estimate_volmin(config, model, loader, device):
     }
 
 
-def run_mc_ldce_experiment(config: dict[str, Any], output_dir=None, resume=None) -> Path:
+def run_mc_ldce_experiment(
+    config: dict[str, Any], output_dir=None, resume=None, *,
+    requirements: DataRequirements | None = None,
+) -> Path:
     config = deepcopy(config)
     seed = int(config.get("seed", 1))
     seed_everything(seed)
     device = resolve_device(str(config.get("trainer", {}).get("device", "auto")))
     run_dir = _directory(config, output_dir, resume)
+    if requirements is None:
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        requirements = resolve_data_requirements(config, expected_runner="mc_ldce")
     prepared = prepare_experiment_data(
         config,
-        requirements=DataRequirements(roles=frozenset({
-            DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.CLEAN_VALIDATION, DataRole.TEST,
-        })),
+        requirements=requirements,
         run_dir=run_dir,
         seed=seed,
     )
     train_loader = prepared.loader(DataRole.TRAIN, stream=21)
     snapshot_loader = prepared.loader(DataRole.TRAIN_EVAL, stream=22, shuffle=False)
-    validation_loader = prepared.loader(DataRole.CLEAN_VALIDATION, stream=23, shuffle=False)
+    validation_loader = (
+        prepared.loader(DataRole.CLEAN_VALIDATION, stream=23, shuffle=False)
+        if DataRole.CLEAN_VALIDATION in prepared.available_roles
+        else None
+    )
     test_loader = prepared.loader(DataRole.TEST, stream=24, shuffle=False)
     lifecycle = _lifecycle(config)
-    model = build_reproduction_model(config["model"], config["data"], prepared.num_classes).to(device)
+    model = build_reproduction_model(
+        bind_model_input(config["model"], prepared.input_spec),
+        config["data"], prepared.num_classes,
+    ).to(device)
     epochs = int(config["trainer"]["epochs"])
     criterion = CrossEntropyLoss().to(device)
     start_epoch = 0
@@ -182,7 +202,10 @@ def run_mc_ldce_experiment(config: dict[str, Any], output_dir=None, resume=None)
         _prepare_fixed_feature_classifier(model)
     elif str(config["transition"].get("estimator", "")).lower() == "paper_volmin":
         estimator_model = build_reproduction_model(
-            dict(config["transition"].get("model", {"name": "resnet18"})),
+            bind_model_input(
+                dict(config["transition"].get("model", {"name": "resnet18"})),
+                prepared.input_spec,
+            ),
             config["data"],
             prepared.num_classes,
         ).to(device)
@@ -234,6 +257,8 @@ def run_mc_ldce_experiment(config: dict[str, Any], output_dir=None, resume=None)
     objective = MCLDCEObjective(statistic)
     base_learning_rate = float(config["optimizer"]["lr"])
     decay_start = int(config.get("scheduler", {}).get("decay_start", epochs))
+    metrics_path = run_dir / "metrics.jsonl"
+    _write_epoch_metrics(rows, metrics_path)
     for epoch in range(start_epoch, epochs):
         if str(config.get("scheduler", {}).get("name", "none")).lower() == "linear_after":
             factor = 1.0 if epoch < decay_start else max(
@@ -248,14 +273,18 @@ def run_mc_ldce_experiment(config: dict[str, Any], output_dir=None, resume=None)
             loss = objective.compute(model=model, logits=output.logits, features=output.features, noisy_targets=targets, sample_indices=indices, base_loss=criterion, metadata={})
             optimizer.zero_grad(set_to_none=True); loss.backward(); optimizer.step()
             count = targets.numel(); total += count; loss_sum += float(loss.detach()) * count; correct += int(output.logits.argmax(1).eq(targets).sum())
-        validation = evaluate_classification(model, validation_loader, criterion, device)
         test = evaluate_classification(model, test_loader, criterion, device)
-        row = standardize_epoch_row({"epoch": epoch + 1, "train_loss": loss_sum / total, "train_accuracy": correct / total, "validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"], "test_loss": test["loss"], "test_accuracy": test["accuracy"], "learning_rate": optimizer.param_groups[0]["lr"], "method": "mc_ldce"})
+        row_values = {"epoch": epoch + 1, "train_loss": loss_sum / total, "train_accuracy": correct / total, "test_loss": test["loss"], "test_accuracy": test["accuracy"], "learning_rate": optimizer.param_groups[0]["lr"], "method": "mc_ldce"}
+        if validation_loader is not None:
+            validation = evaluate_classification(model, validation_loader, criterion, device)
+            row_values.update({"validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"]})
+        row = standardize_epoch_row(row_values, require_validation=validation_loader is not None)
         rows.append(row)
+        _write_epoch_metrics(rows, metrics_path)
         if scheduler is not None: scheduler.step()
         atomic_save({"method": "mc_ldce", "lifecycle_version": lifecycle["lifecycle_version"], "config": config, "model": model.state_dict(), "optimizer": optimizer.state_dict(), "scheduler": None if scheduler is None else scheduler.state_dict(), "completed_epoch": epoch, "metrics": rows, "statistic_hash": statistic.artifact_hash, "rng_state": capture_rng_state()}, run_dir / "last.pt")
     (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
-    (run_dir / "metrics.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    _write_epoch_metrics(rows, metrics_path)
     if rows: write_training_curves_svg(rows, run_dir / "training_curves.svg")
     return run_dir
 

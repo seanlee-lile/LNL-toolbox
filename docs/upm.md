@@ -28,8 +28,25 @@ The module entry `python -m lnl_toolbox.cli.main` is equivalent. For UPM,
 `last.pt` is the sole resume checkpoint. The run also writes
 `stage1_best.pt`, `psi_snapshot.npz`, `eta_initial.npz`, `eta_best.npz`,
 `eta_last.npz`, `best.pt`, `metrics.jsonl`, and `final_metrics.json`.
-Completed resume is a no-op unless `upm.main.epochs` is explicitly increased.
+`lnl resume <run-dir>` only resumes the already resolved configuration; it has
+no `--epochs` override. A completed run is therefore a no-op under that
+configuration. To increase only `upm.main.epochs`, copy or update the YAML,
+run `lnl run --config <updated.yaml> --dry-run`, then resume explicitly with
+`lnl run --config <updated.yaml> --resume <run-dir>/last.pt`. Stage 1 and the
+identity settings must remain compatible.
 
 The built-in smoke uses small CIFAR subsets and symmetric synthetic noise. It
 validates lifecycle and integration only; it is not the paper's CIFAR IDN data
 generation or a numerical reproduction.
+
+## Formal engineering profile and producer boundary
+
+`upm-cifar10-reproduction` is the current full-budget CIFAR-10 engineering
+profile. It is a runnable formal workflow, but its catalog
+`reproduction_status` remains `not_run`; recipe availability, Dry-run, or a
+successful smoke must not be described as numerical reproduction.
+
+UPM artifacts can be consumed by PCSE or a compatible DLD source adapter only
+when the consumer validates an explicit role, checkpoint schema, model/dataset
+identity, NoiseManifest, stable mapping, and recorded digests. An arbitrary
+UPM checkpoint is not a valid source merely because it has a `.pt` suffix.

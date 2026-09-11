@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LNL Scratch</title>
+  <link rel="stylesheet" href="/scratch.css">
+</head>
+<body>
+  <header class="top-toolbar">
+    <div class="brand-group">
+      <h1>LNL Scratch</h1>
+      <span id="runtime-limits" class="runtime-limits"></span>
+    </div>
+    <label class="recipe-name">算法名称 <input id="recipe-name" value="scratch_recipe"></label>
+    <div class="toolbar-actions">
+      <div class="new-menu-wrap">
+        <button id="new" class="toolbar-button" type="button" aria-haspopup="true" aria-expanded="false">新建 ▾</button>
+        <div id="new-menu" class="new-menu" hidden>
+          <button id="new-single" type="button"><strong>标准单模型算法</strong><small>推荐的起点</small></button>
+          <button id="new-dual" type="button"><strong>双模型算法</strong><small>Co-teaching / JoCoR 结构</small></button>
+          <button id="new-blank" type="button"><strong>空白算法</strong><small>从零开始搭建</small></button>
+          <button id="new-template" type="button"><strong>从论文模板开始</strong><small>打开 26 篇 Paper Recipe</small></button>
+        </div>
+      </div>
+      <button id="open" class="toolbar-button" type="button">打开</button>
+      <button id="save" class="toolbar-button" type="button">保存</button>
+      <button id="run" class="run-button" type="button">▶ 试运行</button>
+      <button id="run-full" class="run-full-button" type="button">完整运行</button>
+      <button id="help" class="help-button" type="button" aria-label="帮助">?</button>
+      <details id="advanced-actions" class="advanced-actions">
+        <summary>更多</summary>
+        <div class="advanced-menu">
+          <button id="check" type="button">仅检查结构</button>
+        </div>
+      </details>
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <aside class="palette-panel">
+      <div class="palette-rail-panel">
+        <h2 class="visually-hidden">积木分类</h2>
+        <nav id="category-rail" class="category-rail" aria-label="积木分类"></nav>
+      </div>
+      <div class="palette-list-panel">
+        <div class="panel-heading"><h2>积木</h2><span id="palette-count" class="panel-count"></span></div>
+        <label class="palette-search-label" for="palette-search">搜索积木</label>
+        <input id="palette-search" class="palette-search" type="search" placeholder="名称、分类、参数或输出">
+        <p class="palette-help">单击查看说明；用“添加到当前位置/推荐位置”或拖动把手放入绿色插入位</p>
+        <div class="palette-target-bar" aria-live="polite">
+          <span id="palette-target-summary">请先点击中间的插入位置</span>
+          <button id="palette-target-locate" type="button" class="secondary" hidden>定位可用插入位</button>
+        </div>
+        <p class="palette-status-help" aria-label="插入状态说明"><span class="status-ok">✓ 可添加</span><span class="status-invalid">✕ 不可添加：会显示层级或前置 slot 原因</span></p>
+        <div class="palette-legend" aria-label="积木颜色说明">
+          <span><i class="legend-swatch" data-legend-category="数据"></i>数据</span>
+          <span><i class="legend-swatch" data-legend-category="模型与训练"></i>模型与训练</span>
+          <span><i class="legend-swatch" data-legend-category="算法操作"></i>算法操作</span>
+          <span><i class="legend-swatch" data-legend-category="评估"></i>评估</span>
+          <span><i class="legend-swatch" data-legend-category="我的"></i>我的</span>
+        </div>
+        <div id="palette"></div>
+      </div>
+    </aside>
+
+    <section class="workspace-panel" aria-label="算法工作区">
+      <div class="workspace-heading">
+        <div class="workspace-heading-copy"><strong>算法工作区</strong><span>左侧找积木 · 中间搭算法 · 论文方法放在 Training Loop</span></div>
+        <div id="workspace-position-indicator" class="workspace-position-indicator" data-state="empty" role="status" aria-live="polite">
+          <span class="position-indicator-icon" aria-hidden="true">⌖</span>
+          <div class="position-indicator-copy">
+            <strong id="workspace-position-label">当前位置</strong>
+            <span id="workspace-position-detail">尚未选择插入位置</span>
+            <small id="workspace-position-constraint">请先点击中间的插入位；选择积木后会显示具体限制。</small>
+            <span id="workspace-position-status" class="position-indicator-status">○ 等待选择插入位</span>
+          </div>
+        </div>
+        <div class="workspace-heading-actions"><span class="workspace-hint">拖动把手到绿色插入位</span><button id="undo-delete" type="button" class="secondary" hidden>撤销删除</button></div>
+      </div>
+      <div id="empty-onboarding" class="empty-onboarding">
+        <div class="empty-onboarding-icon">✦</div>
+        <h2>创建你的第一个算法</h2>
+        <p>从一个可编辑的骨架开始，再把公式、选择和状态积木放入 Training Loop。</p>
+        <div class="empty-onboarding-actions">
+          <button id="empty-single" type="button" class="primary-action">标准单模型</button>
+          <button id="empty-dual" type="button">双模型</button>
+          <button id="empty-blank" type="button">空白</button>
+          <button id="empty-template" type="button">论文模板</button>
+        </div>
+      </div>
+      <div id="steps" class="steps"></div>
+    </section>
+
+    <aside class="inspector" aria-label="检查器">
+      <div class="inspector-tabs" role="tablist" aria-label="右侧面板">
+        <button type="button" role="tab" aria-selected="true" data-inspector-tab="blocks">积木</button>
+        <button type="button" role="tab" aria-selected="false" data-inspector-tab="run">运行</button>
+      </div>
+      <div id="inspector-block-tab" class="inspector-tab-panel" role="tabpanel">
+        <div id="module-explanation" class="module-explanation">点击一个积木查看说明</div>
+        <div id="inspector"></div>
+      </div>
+      <div id="inspector-run-tab" class="inspector-tab-panel" role="tabpanel" hidden>
+        <section id="result-panel" class="result-panel" aria-live="polite">
+          <div class="result-header"><h3>运行结果</h3><span id="result-status" class="result-status">尚未运行</span></div>
+          <div class="run-controls" aria-label="运行控制">
+            <label class="run-mode-control" for="run-mode" hidden>运行模式
+              <select id="run-mode" aria-describedby="run-mode-help">
+                <option value="check">结构验证（1 epoch / 1 batch）</option>
+                <option value="full">完整运行（正式 epochs / 全部 batch）</option>
+              </select>
+            </label>
+            <button id="stop-run" type="button" class="danger" disabled>■ 停止运行</button>
+            <button id="refresh-run" type="button" class="secondary" disabled>↻ 刷新进度</button>
+          </div>
+          <p id="run-mode-help" class="run-mode-help">默认只跑一轮做结构验证；切换到“完整运行”后会按当前 Recipe 的正式轮次和 batch 执行。</p>
+          <div id="run-progress" class="run-progress" hidden aria-live="polite">
+            <div class="progress-heading"><strong>实时进度</strong><span id="progress-percent">—</span></div>
+            <progress id="progress-bar" max="1" value="0"></progress>
+            <div class="progress-facts"><span id="progress-stage">等待启动</span><span id="progress-position">尚无 epoch / batch</span></div>
+            <div id="progress-block" class="progress-block"></div>
+            <section id="epoch-output" class="epoch-output" aria-live="polite">
+              <div class="epoch-output-heading"><strong>每轮输出</strong><span id="epoch-output-count">0 轮</span></div>
+              <div id="epoch-output-list" class="epoch-output-list">完成一个 epoch 后，这里会实时显示该轮的标量输出。</div>
+            </section>
+          </div>
+          <div id="result-summary" class="result-summary">点击绿色“运行”会先自动检查，再执行当前 Recipe。</div>
+          <div id="run-guidance" class="run-guidance" hidden></div>
+          <details class="preflight-guide">
+            <summary>运行前检查清单</summary>
+            <ol>
+              <li>数据：存在“加载数据集”，并在右侧 dataset 参数中选好数据源。</li>
+              <li>连接：每个积木的输入 slot 都由前面的积木产生，输出被后续步骤使用。</li>
+              <li>训练：模型、优化器、Loader 和 Training Loop 已连接；双模型要分别指定 model / optimizer。</li>
+              <li>参数：数字在允许范围内，路径、manifest 和外部资源真实存在。</li>
+              <li>公式：最终 loss 已连接到 backward；修改后重新运行结构检查。</li>
+              <li>运行模式：默认只做 1 epoch / 1 batch 结构验证；需要正式实验时切换为“完整运行”。</li>
+              <li>协议：validation_size=0 时不要添加 validation role，也不要在每个 epoch 做 validation。</li>
+              <li>标签：clean / trusted role 只能使用真实存在的 clean target，不能用 observed target 补齐。</li>
+            </ol>
+          </details>
+          <div id="result-metrics" class="result-metrics"></div>
+          <div id="result-artifacts" class="result-artifacts"></div>
+          <details id="result-details"><summary>原始输出</summary><pre id="output"></pre></details>
+        </section>
+      </div>
+    </aside>
+  </main>
+
+  <dialog id="onboarding-dialog" class="onboarding-dialog">
+    <form method="dialog" class="dialog-header"><h2>如何使用 Scratch</h2><button>关闭</button></form>
+    <ol class="onboarding-steps">
+      <li>左边选积木，拖到中间的绿色插入位。</li>
+      <li>先从“数据”分类放入“加载数据集”；点击它后，在右侧“积木”标签的 <code>dataset</code> 下拉框选择数据源。</li>
+      <li>中间搭算法，论文方法主要放在 Training Loop 内。</li>
+      <li>点击绿色“运行”，系统会先检查结构。</li>
+      <li>右侧“运行”面板可切换“结构验证”或“完整运行”；完整运行按 Recipe 的正式 epochs 和 batch 执行。</li>
+      <li>红色积木表示错误，右边查看缺失输入和参数。</li>
+      <li>右边“运行”标签查看真实指标、产物和日志。</li>
+    </ol>
+    <div class="formula-actions"><button id="tutorial-done" type="button">开始搭建</button></div>
+  </dialog>
+
+  <dialog id="template-dialog">
+    <form method="dialog" class="dialog-header"><h2>论文模板</h2><button>关闭</button></form>
+    <input id="template-search" placeholder="搜索论文模板">
+    <h3>置顶论文范例</h3>
+    <div id="featured-examples"></div>
+    <h3>全部模板</h3>
+    <div id="template-list"></div>
+  </dialog>
+
+  <dialog id="recipe-dialog">
+    <form method="dialog" class="dialog-header"><h2>我的 Recipe</h2><button>关闭</button></form>
+    <p class="dialog-help">用户 Recipe 保存在 Scratch 工作区；论文模板和系统示例保持只读。</p>
+    <div id="recipe-list"></div>
+  </dialog>
+
+  <dialog id="formula-dialog">
+    <form method="dialog" class="dialog-header"><h2>快速插入运算</h2><button>关闭</button></form>
+    <p class="formula-help">选择一个公共公式运算，配置输入和输出 slot；添加后会生成普通 Scratch 积木。</p>
+    <label for="formula-operation">运算</label>
+    <select id="formula-operation"></select>
+    <div id="formula-operation-preview" class="formula-operation-preview"></div>
+    <div id="formula-target" class="formula-target"></div>
+    <div id="formula-fields"></div>
+    <div class="formula-actions"><button id="formula-add" type="button">添加到当前 Batch</button><button id="formula-cancel" type="button">取消</button></div>
+  </dialog>
+
+  <dialog id="formula-editor-dialog" class="formula-editor-dialog">
+    <form method="dialog" class="dialog-header"><h2>新建公式</h2><button>关闭</button></form>
+    <div class="formula-editor-layout">
+      <aside class="formula-editor-palette formula-editor-section"><h3>运算模块</h3><p>按模块选择运算，把它放到当前的空位（□）或包裹已选表达式。</p><div id="formula-editor-palette"></div></aside>
+      <section class="formula-editor-workspace">
+        <div class="formula-editor-section formula-canvas-section"><h3>公式画布</h3><p class="formula-canvas-help">点击任意子表达式即可选中。点击左侧输入或参数会填入当前空位；点击运算会生成相应数量的空位，并自动把它涉及的可调数值参数加入右侧。普通视图只显示数学等式，执行步骤和结构树保留在高级视图。</p><div class="formula-output-heading">输出</div><div id="formula-output-fields" class="formula-output-fields"></div><button id="formula-add-output" type="button" class="secondary-button">＋ 添加输出</button><input id="formula-output-name" type="hidden" value="loss"><div id="formula-canvas" class="formula-canvas">公式画布：尚未添加步骤</div><div id="formula-expression-actions" class="formula-expression-actions"></div></div>
+        <details id="formula-editor-advanced" class="formula-editor-advanced"><summary>高级：查看生成的执行步骤</summary><div class="formula-editor-advanced-body"><div class="formula-editor-section formula-steps-section"><h3>执行步骤</h3><div class="formula-editor-step-controls"><select id="formula-editor-block"></select><input id="formula-editor-step-id" placeholder="内部 step_id（可留空自动生成）"><div id="formula-editor-binding-fields" class="formula-editor-binding-fields"></div><button id="formula-editor-add-step" type="button">添加步骤</button></div><div id="formula-editor-step-list"></div></div><div class="formula-editor-section formula-output-section"><h3>输出与调试预览</h3><div class="form-grid"><label>来源<select id="formula-output-source"></select></label></div><div id="formula-preview" class="formula-preview">公式预览：尚未添加步骤</div><details id="formula-expression-structure" class="formula-expression-structure"><summary>查看表达式结构</summary><div id="formula-expression-tree"></div></details></div></div></details>
+      </section>
+      <aside class="formula-editor-side formula-editor-section">
+        <div class="formula-editor-section formula-editor-meta"><h3>公式信息</h3><div class="form-grid"><label>ID（user/xxx）<input id="formula-id" placeholder="user/my_robust_loss"></label><label>名称<input id="formula-name" placeholder="My Robust Loss"></label></div><label>描述<textarea id="formula-description"></textarea></label></div>
+        <div class="formula-editor-section formula-parameters-section"><h3>输入与参数</h3><div class="form-grid"><div><label>输入变量</label><div id="formula-input-fields" class="formula-input-fields"></div><button id="formula-add-input" type="button" class="secondary-button">＋ 添加输入</button></div><div><label>公式参数</label><div id="formula-parameter-fields" class="formula-parameter-fields"></div><button id="formula-add-parameter" type="button" class="secondary-button">＋ 添加参数</button></div></div><details class="formula-editor-advanced-inline"><summary>高级：查看输入类型和保存格式</summary><label>输入原始定义（每行一个名称）<textarea id="formula-inputs" placeholder="logits\ntargets"></textarea></label><label>参数原始定义（每行 name:type=default）<textarea id="formula-parameters" placeholder="epsilon:float=1e-8\nq:float=0.7"></textarea></label><small>普通模式下使用上面的输入/参数行；这里保留底层 schema，供兼容旧公式和高级用户校验。</small></details></div>
+        <details class="formula-editor-side-details"><summary>高级：当前运算参数</summary><p>普通模式只需关注公式画布和右侧输入参数。这里显示所选运算的数学形式，以及它连接到哪些输入插口。</p><div id="formula-editor-current-preview" class="formula-editor-current-preview"></div><div id="formula-editor-step-parameter-fields" class="formula-editor-step-parameter-fields"></div></details>
+      </aside>
+    </div>
+    <div id="formula-editor-validation" class="formula-editor-validation"></div>
+    <div class="formula-actions"><button id="formula-editor-save" type="button">保存公式</button><button id="formula-editor-cancel" type="button">取消</button></div>
+  </dialog>
+
+  <dialog id="formula-list-dialog">
+    <form method="dialog" class="dialog-header"><h2>公式模板与我的公式</h2><button>关闭</button></form>
+    <div id="formula-list"></div>
+  </dialog>
+  <script src="/scratch.js"></script>
+</body>
+</html>
