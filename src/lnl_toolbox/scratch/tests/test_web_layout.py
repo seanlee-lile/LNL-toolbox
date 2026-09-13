@@ -191,7 +191,7 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
         for marker in (
             "function setInspectorTab(tab = 'blocks')", "function renderRunResult(result)",
             "setResultState('运行中…')", "renderRunResult(result)",
-            "function pollRunJob(jobId)", "async function stopRun()", "renderRunProgress(job)",
+            "function pollRunJob(jobId, expectedGeneration = state.activeRunGeneration)", "async function stopRun()", "renderRunProgress(job)",
             "function renderEpochOutputs(progress = {})", "epoch_outputs",
             "const RUN_PROGRESS_POLL_MS = 4000", "const RUN_STOP_POLL_MS = 500",
             "function makeTemplateCardActivatable(card, item)",
@@ -199,7 +199,7 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
             "$('new-template').onclick = openTemplateDialog",
             "card.setAttribute('role', 'button')", "card.onkeydown",
             "$('result-metrics')", "function detectCompositeRanges(steps)",
-            "function applySkeleton(kind)", "await validateCurrentRecipe()",
+            "function applySkeleton(kind)", "await validateCurrentRecipe({expectedRevision: runRevision, requestPayload})",
             "function datasetReadiness()", "function guideForError(error)",
             "function renderGuidance()", "function focusDatasetSource()",
             "function clearErrorPresentation()", "state.runMode === 'full' ? {}",

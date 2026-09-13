@@ -13,6 +13,26 @@ const state = {
   datasets: [],
   datasetFacts: {},
   validated: false,
+  // The recipe and registered dataset catalog are the only authoritative
+  // experiment inputs.  Everything below is derived and carries the
+  // revision that produced it; a changed source invalidates those values.
+  revision: 0,
+  validatedRevision: -1,
+  sourceSnapshot: {datasetKey: null},
+  derived: {
+    datasetCapabilities: null,
+    datasetCapabilitiesRevision: -1,
+    compatibility: null,
+    compatibilityRevision: -1,
+    generatedConfig: null,
+    generatedConfigRevision: -1,
+    preflight: null,
+    preflightRevision: -1,
+    runPlan: null,
+    runPlanRevision: -1,
+    command: null,
+    commandRevision: -1,
+  },
   errorStepId: null,
   errorMessage: '',
   errorPayload: null,
@@ -32,6 +52,13 @@ const state = {
   inspectorTab: 'blocks',
   running: false,
   jobId: null,
+  activeRunRevision: null,
+  runGeneration: 0,
+  activeRunGeneration: null,
+  recipeLoadGeneration: 0,
+  pendingRunRequest: null,
+  pendingRunCancellation: null,
+  unresolvedCancellations: new Map(),
   runPollTimer: null,
   runProgress: null,
   runStopping: false,
@@ -49,6 +76,133 @@ let uiIdCounter = 0;
 const RUN_PROGRESS_POLL_MS = 4000;
 const RUN_STOP_POLL_MS = 500;
 const USABLE_DATASET_STATUSES = new Set(['ready', 'available', 'built-in', 'builtin']);
+const CUSTOM_DATASET_MODES = new Set(['custom', 'custom_path', 'local', 'path', 'folder']);
+
+function isCustomDatasetMode(value) {
+  return CUSTOM_DATASET_MODES.has(String(value || '').trim().toLowerCase());
+}
+
+// Keep this dependency map close to the state so future UI additions do not
+// accidentally cache a result against only a display name.  The map is also
+// useful as a compact audit of the invalidation boundary:
+// source recipe/catalog changes invalidate capabilities first, then every
+// compatibility/config/plan/command result derived from them.  Recipe edits
+// still invalidate execution artifacts, while capabilities remain cached when
+// the selected source itself is unchanged.
+const DERIVED_STATE_DEPENDENCIES = Object.freeze({
+  datasetCapabilities: ['dataset_catalog', 'recipe.data'],
+  compatibility: ['method_requirements', 'datasetCapabilities', 'recipe'],
+  generatedConfig: ['recipe', 'datasetCapabilities'],
+  runPlan: ['generatedConfig', 'compatibility', 'preflight'],
+  command: ['runPlan'],
+});
+
+function invalidateDerivedState(reason = 'source changed', {datasetChanged = null} = {}) {
+  // Capabilities describe the selected data source, not every recipe
+  // parameter.  Keep them when an unrelated recipe/parameter edit occurs;
+  // infer a data change from the canonical source key when callers do not
+  // provide one explicitly.
+  const currentDatasetKey = typeof datasetSourceKey === 'function' ? datasetSourceKey() : null;
+  const previousDatasetKey = state.sourceSnapshot?.datasetKey ?? null;
+  const changedDataset = datasetChanged === null ? previousDatasetKey !== currentDatasetKey : Boolean(datasetChanged);
+  state.revision += 1;
+  state.validated = false;
+  state.validatedRevision = -1;
+  const capabilities = changedDataset ? null : state.derived.datasetCapabilities;
+  state.derived = {
+    ...state.derived,
+    datasetCapabilities: capabilities,
+    datasetCapabilitiesRevision: capabilities ? state.revision : -1,
+    compatibility: null,
+    compatibilityRevision: -1,
+    generatedConfig: null,
+    generatedConfigRevision: -1,
+    preflight: null,
+    preflightRevision: -1,
+    runPlan: null,
+    runPlanRevision: -1,
+    command: null,
+    commandRevision: -1,
+    invalidatedBy: reason,
+  };
+  state.sourceSnapshot = {datasetKey: currentDatasetKey};
+  return state.revision;
+}
+
+function staleStateError(expectedRevision, phase = '异步检查') {
+  const error = new Error(`实验状态在${phase}期间发生变化，已丢弃过期结果。请基于当前状态重新检查后运行。`);
+  error.guidanceCode = 'stale-state';
+  error.payload = {ok: false, error: error.message, code: 'stale-state', expected_revision: expectedRevision, current_revision: state.revision};
+  return error;
+}
+
+function assertCurrentRevision(expectedRevision, phase = '操作') {
+  if (expectedRevision !== state.revision) throw staleStateError(expectedRevision, phase);
+}
+
+function isCurrentRequest(requestRevision, requestSourceKey = null) {
+  if (requestRevision !== state.revision) return false;
+  return requestSourceKey === null || requestSourceKey === datasetSourceKey();
+}
+
+function assertCurrentRequest(requestRevision, requestSourceKey = null, phase = '异步操作') {
+  if (!isCurrentRequest(requestRevision, requestSourceKey)) throw staleStateError(requestRevision, phase);
+}
+
+function assertCurrentRunState(expectedRevision = state.revision) {
+  assertCurrentRevision(expectedRevision, '启动运行');
+  const required = ['generatedConfig', 'compatibility', 'preflight', 'runPlan'];
+  if (!state.validated || state.validatedRevision !== expectedRevision || required.some((name) => (
+    !state.derived[name] || state.derived[`${name}Revision`] !== expectedRevision
+  ))) {
+    throw staleStateError(expectedRevision, '启动运行');
+  }
+}
+
+function isCurrentRun(jobId, generation = state.activeRunGeneration) {
+  return generation !== null && generation === state.activeRunGeneration && jobId === state.jobId;
+}
+
+function beginRecipeLoad() {
+  state.recipeLoadGeneration += 1;
+  return {token: state.recipeLoadGeneration, revision: state.revision};
+}
+
+function cancelJobSilently(jobId) {
+  if (!jobId) return state.pendingRunCancellation || Promise.resolve();
+  // Recipe navigation must release the server-side process, but a failed
+  // best-effort cancellation must not overwrite the newly selected recipe.
+  state.unresolvedCancellations.set(jobId, null);
+  const request = api(`/jobs/${encodeURIComponent(jobId)}/cancel`, {method: 'POST'})
+    .then((job) => {
+      if (!['cancelled', 'completed', 'failed'].includes(job?.status)) {
+        throw new Error('服务尚未确认旧进程退出');
+      }
+      state.unresolvedCancellations.delete(jobId);
+      return job;
+    }).catch((error) => { state.unresolvedCancellations.set(jobId, error); });
+  const pending = state.pendingRunCancellation;
+  const combined = Promise.all([pending, request]);
+  state.pendingRunCancellation = combined;
+  combined.then(() => {
+    if (state.pendingRunCancellation === combined) state.pendingRunCancellation = null;
+  });
+  return combined;
+}
+
+async function ensurePreviousRunsStopped() {
+  if (state.pendingRunCancellation) await state.pendingRunCancellation;
+  // Keep failed cancellation IDs so retrying Run can recover, without ever
+  // treating a network failure as confirmation that the process exited.
+  await Promise.all([...state.unresolvedCancellations.keys()].map(cancelJobSilently));
+  if (state.unresolvedCancellations.size) {
+    throw new Error(`无法确认旧任务已停止（${[...state.unresolvedCancellations.keys()].join(', ')}）。已阻止新训练；恢复服务连接后重试。`);
+  }
+}
+
+function updateRecipeName(value) {
+  state.recipe.name = String(value).trim() || 'scratch_recipe';
+}
 
 async function api(path, options = {}) {
   const relativePath = path.startsWith('/api/') ? path.slice(4) : path;
@@ -451,9 +605,14 @@ function clearRunPolling() {
   state.runPollTimer = null;
 }
 
-function resetRunTracking() {
+function resetRunTracking({cancel = false} = {}) {
+  const previousJobId = state.jobId;
+  state.runGeneration += 1;
+  if (cancel) cancelJobSilently(previousJobId);
   clearRunPolling();
   state.jobId = null;
+  state.activeRunRevision = null;
+  state.activeRunGeneration = null;
   state.runProgress = null;
   state.runStopping = false;
   state.running = false;
@@ -538,8 +697,10 @@ function renderEpochOutputs(progress = {}) {
   list.scrollTop = list.scrollHeight;
 }
 
-function renderRunJob(job) {
-  if (!job) return;
+function renderRunJob(job, expectedGeneration = state.activeRunGeneration) {
+  // Do not let a late response from an older recipe mutate the current run
+  // panel. The guard belongs before any state or DOM write.
+  if (!job || !isCurrentRun(job.id, expectedGeneration)) return false;
   state.jobId = job.id || state.jobId;
   state.runStopping = Boolean(job.running && job.cancel_requested);
   state.runProgress = job.progress || state.runProgress;
@@ -553,51 +714,74 @@ function renderRunJob(job) {
     setResultState(job.cancel_requested ? '正在停止…' : '运行中…', 'running');
     if ($('result-summary')) $('result-summary').textContent = job.cancel_requested
       ? '已发出停止请求，正在等待运行进程退出…'
-      : '训练正在后台执行；实时进度会在此处更新。';
+      : (state.activeRunRevision !== null && state.activeRunRevision !== state.revision
+        ? '训练仍在执行旧版本；当前配方已变化，本次结果不会覆盖当前状态。'
+        : '训练正在后台执行；实时进度会在此处更新。');
     updateRunState();
-    return;
+    return true;
   }
   state.running = false;
   clearRunPolling();
   updateRunState();
+  if (state.activeRunRevision !== null && state.activeRunRevision !== state.revision) {
+    // The process may finish after the user changed the recipe.  Keep its
+    // logs available, but never promote an old run into the current result or
+    // readiness state.
+    state.lastRun = null;
+    setResultState('旧版本运行已结束', 'error');
+    if ($('result-summary')) $('result-summary').textContent = '本次运行基于修改前的配方完成；结果未写入当前配方，请按当前状态重新运行。';
+    return true;
+  }
   if (job.status === 'cancelled' || job.cancel_requested) {
     setResultState('已停止', 'error');
     if ($('result-summary')) $('result-summary').textContent = '运行已停止；已经生成的中间产物仍保留在运行目录中。';
-    return;
+    return true;
   }
   if (job.returncode === 0) {
     const result = job.structured && typeof job.structured === 'object' ? job.structured : {
       ok: true, metrics: [], artifact_dir: job.artifact_dir,
     };
     renderRunResult({...result, artifact_dir: result.artifact_dir || job.artifact_dir});
-    return;
+    return true;
   }
   const error = new Error(job.error || 'Scratch 运行失败，请展开原始输出查看原因。');
   error.payload = {ok: false, error: error.message, code: job.error_code, block_id: job.block_id, params: job.params};
   showError(error);
+  return true;
 }
 
-async function pollRunJob(jobId) {
-  if (!jobId) return;
+async function pollRunJob(jobId, expectedGeneration = state.activeRunGeneration) {
+  if (!isCurrentRun(jobId, expectedGeneration)) return;
   try {
     const job = await api(`/jobs/${encodeURIComponent(jobId)}`);
-    renderRunJob(job);
-    if (job.running) state.runPollTimer = window.setTimeout(() => pollRunJob(jobId), RUN_PROGRESS_POLL_MS);
+    if (!isCurrentRun(jobId, expectedGeneration)) return;
+    renderRunJob(job, expectedGeneration);
+    if (job.running && isCurrentRun(jobId, expectedGeneration)) {
+      state.runPollTimer = window.setTimeout(() => pollRunJob(jobId, expectedGeneration), RUN_PROGRESS_POLL_MS);
+    }
   } catch (error) {
+    if (!isCurrentRun(jobId, expectedGeneration)) return;
     clearRunPolling(); state.running = false; updateRunState(); showError(error);
   }
 }
 
 async function stopRun() {
   if (!state.jobId || !state.running) return;
+  const stopJobId = state.jobId;
+  const stopGeneration = state.activeRunGeneration;
+  if (!isCurrentRun(stopJobId, stopGeneration)) return;
   state.runStopping = true;
   const button = $('stop-run');
   if (button) { button.disabled = true; button.textContent = '正在停止…'; }
   try {
-    const job = await api(`/jobs/${encodeURIComponent(state.jobId)}/cancel`, {method: 'POST'});
-    renderRunJob(job);
-    if (job.running) state.runPollTimer = window.setTimeout(() => pollRunJob(state.jobId), RUN_STOP_POLL_MS);
+    const job = await api(`/jobs/${encodeURIComponent(stopJobId)}/cancel`, {method: 'POST'});
+    if (!isCurrentRun(stopJobId, stopGeneration)) return;
+    renderRunJob(job, stopGeneration);
+    if (job.running && isCurrentRun(stopJobId, stopGeneration)) {
+      state.runPollTimer = window.setTimeout(() => pollRunJob(stopJobId, stopGeneration), RUN_STOP_POLL_MS);
+    }
   } catch (error) {
+    if (!isCurrentRun(stopJobId, stopGeneration)) return;
     state.runStopping = false;
     if (button) { button.disabled = false; button.textContent = '■ 停止运行'; }
     showError(error);
@@ -705,6 +889,14 @@ function guideForError(error) {
   const payload = error?.payload || {};
   const code = String(error?.guidanceCode || error?.code || payload.code || '').toLowerCase();
   const message = String(error?.message || payload.error || '');
+  if (code === 'stale-state') {
+    return {
+      title: '页面状态已更新',
+      summary: '刚才的检查来自旧的数据、方法或参数状态，系统已主动丢弃它，没有让旧结果进入运行。',
+      steps: ['确认当前数据集、方法和参数仍是你要运行的版本。', '重新点击“检查”或直接重新运行；系统会基于当前状态重新执行兼容性和前置检查。'],
+      actions: [{id: 'open-run-details', label: '查看当前运行面板', primary: true}],
+    };
+  }
   if (code === 'missing-dataset-block') {
     return {
       title: '运行前需要一个数据集入口',
@@ -727,6 +919,22 @@ function guideForError(error) {
       summary: message || '当前数据源没有可用的本地资源。',
       steps: ['回到“积木”标签，打开 load_dataset 的 dataset/source_mode/path 参数。', '注册数据集或填写正确路径，并确认 train/test source 都能访问。', '如果只是先验证算法连接，可以切换到内置 synthetic。'],
       actions: [{id: 'focus-dataset', label: '检查数据源参数', primary: true}, {id: 'use-synthetic', label: '切换 synthetic 试跑'}],
+    };
+  }
+  if (code === 'dataset-clean-target-missing' || code === 'dataset-capability-missing' || code === 'noise-method-unsupported' || code === 'validation-role-without-split' || code === 'official-validation-unavailable') {
+    return {
+      title: '数据能力与当前 Recipe 不匹配',
+      summary: message || '当前 Recipe 要求的数据标签、验证集或噪声能力，所选数据源没有完整提供。',
+      steps: ['查看 load_dataset 的数据事实，确认 train/test、sample index 和 clean target 能力。', '检查 create_dataset_split 的 validation_size 是否与 validation/trusted role 一致，以及噪声类型是否被数据源声明支持。', '修正数据源或 Recipe 后重新检查；系统不会用 test 代替 validation，也不会伪造 clean label。'],
+      actions: [{id: 'focus-dataset', label: '检查数据源能力', primary: true}, {id: 'focus-error', label: '查看当前依赖'}],
+    };
+  }
+  if (code === 'missing-external-source' || code === 'external-source-conflict' || code === 'external-source-not-found' || code === 'external-source-empty' || code === 'external-source-inaccessible') {
+    return {
+      title: '外部运行资源还没有准备好',
+      summary: message || '当前 Recipe 需要外部噪声 artifact，但路径或 source_env 不可用。',
+      steps: ['检查 apply_noise 的 path、artifact_path、external_path 或 source_env。', '确认实际文件存在且不为空；多个来源必须指向同一个 artifact。', '确认资源后重新检查；fixture 运行会使用已声明的 bounded 替代，不会伪造正式资源。'],
+      actions: [{id: 'focus-error', label: '检查外部资源参数', primary: true}, {id: 'open-run-details', label: '查看运行日志'}],
     };
   }
   if (code === 'dataset-model-class-mismatch' || /类别数不一致|num_classes.*(match|匹配)/i.test(message)) {
@@ -859,7 +1067,13 @@ function renderRunResult(result) {
 
 function markDirty() {
   const hadError = Boolean(state.errorMessage || state.errorStepId || state.errorPayload || state.errorGuide);
-  state.validated = false;
+  if (state.running || state.jobId) {
+    // Editing the recipe changes the meaning of every live run update. Stop
+    // and detach that run immediately so even intermediate progress/log
+    // responses cannot appear under the newly edited recipe.
+    resetRunTracking({cancel: true});
+  }
+  invalidateDerivedState('recipe or parameter changed');
   state.lastRun = null;
   state.errorStepId = null;
   state.errorMessage = '';
@@ -886,6 +1100,22 @@ function recipeDataReady() {
 
 function datasetSourceEntry() {
   return stepsWithInfo().find(({ info }) => isDatasetSourceInfo(info)) || null;
+}
+
+function stableSourceValue(value) {
+  if (Array.isArray(value)) return value.map(stableSourceValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableSourceValue(value[key])]));
+}
+
+function datasetSourceKey(entry = datasetSourceEntry()) {
+  const params = entry?.step?.params || {};
+  // Every effective load_dataset parameter participates in source identity.
+  // A change to adapter/classes/labels/options must invalidate capabilities just
+  // like a dataset/path change; save_as is only an output-slot name.
+  const sourceParams = Object.fromEntries(Object.entries(params)
+    .filter(([key]) => key !== 'save_as' && !key.startsWith('_ui')));
+  return JSON.stringify(stableSourceValue(sourceParams));
 }
 
 function datasetIsUsable(item) {
@@ -935,8 +1165,15 @@ function datasetReadiness() {
   const params = entry.step.params || {};
   const mode = String(params.source_mode || 'registered');
   const alias = String(params.dataset ?? params.name ?? '').trim();
-  const path = String(params.path || '').trim();
-  if (mode === 'custom_path') {
+  const options = params.options && typeof params.options === 'object' ? params.options : {};
+  // The source loader accepts both path and root (including the options
+  // object). Mirror that contract so the browser does not report a custom
+  // source as ready merely because the other path field is empty.
+  const path = String(params.path || params.root || options.path || options.root || '').trim();
+  // Keep all custom-source aliases on the same readiness path as the server
+  // preflight.  Otherwise `local`/`path`/`folder` could fall through to the
+  // registered-dataset branch and appear ready until the subprocess starts.
+  if (isCustomDatasetMode(mode)) {
     if (!path) {
       return {
         ok: false,
@@ -1058,9 +1295,10 @@ function optionValues(name, schema, step) {
 
 function renderParamControl(name, schema, step) {
   const kind = controlKind(name, schema);
+  const customDataset = kind === 'dataset' && isCustomDatasetMode(step.params?.source_mode);
   const current = step.params[name] ?? schema.default ?? '';
   let input;
-  if (['enum', 'model', 'optimizer', 'dataset', 'slot'].includes(kind)) {
+  if (['enum', 'model', 'optimizer', 'dataset', 'slot'].includes(kind) && !customDataset) {
     input = document.createElement('select');
     optionValues(name, schema, step).forEach((value) => {
       const option = document.createElement('option');
@@ -1090,6 +1328,10 @@ function renderParamControl(name, schema, step) {
     input.classList.add('dataset-selector');
     input.setAttribute('aria-label', 'dataset（必选）：选择数据集');
     input.title = '运行前必须选择一个数据集；选项来自当前 Scratch 数据目录。';
+    if (customDataset) {
+      input.placeholder = '例如 cifar10、mnist 或 uci_binary';
+      input.title = '自定义路径仍需填写 adapter/dataset 名称，以便 Scratch 选择对应的读取器。';
+    }
   }
   const updateValue = () => {
     if (kind === 'bool') step.params[name] = input.checked;
@@ -1098,7 +1340,7 @@ function renderParamControl(name, schema, step) {
     else step.params[name] = input.value;
     if (step !== state.paletteDraft) markDirty();
     renderPalette();
-    if (isDatasetSourceInfo(blockInfo(step.block)) && (name === 'dataset' || name === 'root' || name === 'path')) {
+    if (isDatasetSourceInfo(blockInfo(step.block)) && (name === 'dataset' || name === 'source_mode' || name === 'root' || name === 'path')) {
       renderInspector();
       if (name === 'dataset') loadDatasetFacts(step.params[name]);
     }
@@ -1121,26 +1363,43 @@ function syntheticFacts() {
 async function loadDatasetFacts(alias) {
   const name = String(alias || '').trim();
   if (!name) return;
+  const requestRevision = state.revision;
+  const requestSourceKey = datasetSourceKey();
   if (name === 'synthetic') {
+    if (!isCurrentRequest(requestRevision, requestSourceKey)) return;
     state.datasetFacts.synthetic = syntheticFacts();
+    state.derived.datasetCapabilities = state.datasetFacts.synthetic;
+    state.derived.datasetCapabilitiesRevision = state.revision;
     renderInspector();
     renderPalette();
     return;
   }
+  let facts;
   try {
-    state.datasetFacts[name] = await api('/api/dataset/' + encodeURIComponent(name));
+    facts = await api('/api/dataset/' + encodeURIComponent(name));
   } catch (error) {
-    state.datasetFacts[name] = { alias: name, status: 'unknown', noise_methods: [], error: error.message };
+    facts = { alias: name, status: 'unknown', noise_methods: [], error: error.message };
   }
+  // A response for a previous dataset selection must never replace the
+  // capabilities for the current one (A → B where A returns last).
+  if (!isCurrentRequest(requestRevision, requestSourceKey)) return;
+  state.datasetFacts[name] = facts;
+  state.derived.datasetCapabilities = facts;
+  state.derived.datasetCapabilitiesRevision = state.revision;
   renderInspector();
   renderPalette();
 }
 
 async function refreshDatasets({announce = false} = {}) {
+  const requestRevision = state.revision;
   try {
-    const payload = await api('/api/datasets');
-    state.datasets = Array.isArray(payload) ? payload : (payload.datasets || []);
+    const response = await api('/api/datasets');
+    if (!isCurrentRequest(requestRevision)) return;
+    state.datasets = Array.isArray(response) ? response : (response.datasets || []);
     state.datasets.forEach((item) => { if (item.alias) state.datasetFacts[item.alias] = item; });
+    invalidateDerivedState('dataset catalog refreshed', {datasetChanged: true});
+    state.derived.datasetCapabilities = state.datasetFacts[datasetSourceEntry()?.step?.params?.dataset] || null;
+    state.derived.datasetCapabilitiesRevision = state.revision;
     renderInspector();
     renderPalette();
     if (announce) showMessage(`已同步 ${state.datasets.length} 个数据集登记`, 'ok');
@@ -2248,7 +2507,7 @@ function renderDataOverviewInspector(selection, target, explanationTarget) {
     detail.textContent = info.description || '';
     section.appendChild(detail);
     Object.entries(info.params || {}).forEach(([name, schema]) => {
-      if (isDatasetSourceInfo(info) && name === 'path' && step.params?.source_mode !== 'custom_path') return;
+      if (isDatasetSourceInfo(info) && name === 'path' && !isCustomDatasetMode(step.params?.source_mode)) return;
       const wrap = document.createElement('div');
       wrap.className = 'param';
       const label = document.createElement('label');
@@ -2635,7 +2894,7 @@ function renderPairInspector(pair, target, explanationTarget) {
     const section = document.createElement('section'); section.className = 'inspector-section';
     const heading = document.createElement('h3'); heading.textContent = info.name; section.appendChild(heading);
     for (const [name, schema] of Object.entries(info.params || {})) {
-      if (isDatasetSourceInfo(info) && name === 'path' && step.params?.source_mode !== 'custom_path') continue;
+      if (isDatasetSourceInfo(info) && name === 'path' && !isCustomDatasetMode(step.params?.source_mode)) continue;
       const wrap = document.createElement('div'); wrap.className = 'param';
       const label = document.createElement('label'); label.textContent = name;
       wrap.append(label, renderParamControl(name, schema, step)); section.appendChild(wrap);
@@ -2842,7 +3101,7 @@ function renderInspector() {
     help.textContent = '待添加积木：先选择输入连接和输出名称，再添加或拖动。这里只配置新积木，不会修改已有步骤。';
     params.appendChild(help);
     info.params && Object.entries(info.params).forEach(([name, schema]) => {
-      if (isDatasetSourceInfo(info) && name === 'path' && step.params?.source_mode !== 'custom_path') return;
+      if (isDatasetSourceInfo(info) && name === 'path' && !isCustomDatasetMode(step.params?.source_mode)) return;
       const wrap = document.createElement('div'); wrap.className = 'param';
       const label = document.createElement('label'); label.textContent = isDatasetSourceInfo(info) && name === 'dataset' ? 'dataset（必选）' : name; wrap.appendChild(label);
       wrap.appendChild(renderParamControl(name, schema, step));
@@ -2850,7 +3109,7 @@ function renderInspector() {
     });
   } else {
     info.params && Object.entries(info.params).forEach(([name, schema]) => {
-      if (isDatasetSourceInfo(info) && name === 'path' && step.params?.source_mode !== 'custom_path') return;
+      if (isDatasetSourceInfo(info) && name === 'path' && !isCustomDatasetMode(step.params?.source_mode)) return;
       const wrap = document.createElement('div'); wrap.className = 'param';
       const label = document.createElement('label'); label.textContent = isDatasetSourceInfo(info) && name === 'dataset' ? 'dataset（必选）' : name; wrap.appendChild(label);
       wrap.appendChild(renderParamControl(name, schema, step));
@@ -4963,9 +5222,11 @@ function dualSkeletonRecipe() {
 function blankRecipe() { return {schema_version: 1, name: '空白 Scratch 算法', description: '', settings: {}, steps: []}; }
 
 function applySkeleton(kind) {
-  resetRunTracking();
+  beginRecipeLoad();
+  resetRunTracking({cancel: true});
   state.recipe = kind === 'single' ? singleSkeletonRecipe() : kind === 'dual' ? dualSkeletonRecipe() : blankRecipe();
-  ensureUiIds(state.recipe.steps); state.selected = null; state.paletteSelection = null; state.dataOverviewSelection = null; state.dataBlockMode = 'concepts'; state.deletedStep = null; state.lastRun = null; state.validated = false; state.errorStepId = null; state.errorMessage = ''; state.errorPayload = null; state.errorGuide = null; state.activeInsertionTarget = defaultInsertionTarget(); state.compositeExpanded.clear(); state.dataExecutionView.clear(); state.compositeUngrouped.clear();
+  invalidateDerivedState('recipe replaced by a new skeleton');
+  ensureUiIds(state.recipe.steps); state.selected = null; state.paletteSelection = null; state.dataOverviewSelection = null; state.dataBlockMode = 'concepts'; state.deletedStep = null; state.lastRun = null; state.errorStepId = null; state.errorMessage = ''; state.errorPayload = null; state.errorGuide = null; state.activeInsertionTarget = defaultInsertionTarget(); state.compositeExpanded.clear(); state.dataExecutionView.clear(); state.compositeUngrouped.clear();
   const menu = $('new-menu'); if (menu) menu.hidden = true; const newButton = $('new'); if (newButton) newButton.setAttribute('aria-expanded', 'false');
   draw();
 }
@@ -4973,27 +5234,37 @@ function applySkeleton(kind) {
 function renderRecipeList(names) {
   const list = $('recipe-list'); if (!list) return; list.innerHTML = '';
   if (!names.length) { list.textContent = '暂无已保存 Recipe'; return; }
-  names.forEach((name) => { const row = document.createElement('button'); row.type = 'button'; row.className = 'recipe-list-row'; row.textContent = name; row.onclick = async () => { try { resetRunTracking(); state.recipe = await api('/api/recipe/' + encodeURIComponent(name)); ensureUiIds(state.recipe.steps); state.selected = null; state.paletteSelection = null; state.dataOverviewSelection = null; state.dataBlockMode = 'concepts'; state.deletedStep = null; state.validated = false; state.lastRun = null; state.errorMessage = ''; state.errorPayload = null; state.errorGuide = null; state.errorStepId = null; state.dataExecutionView.clear(); $('recipe-dialog').close(); draw(); } catch (error) { showError(error); } }; list.appendChild(row); });
+  names.forEach((name) => { const row = document.createElement('button'); row.type = 'button'; row.className = 'recipe-list-row'; row.textContent = name; row.onclick = async () => { const request = beginRecipeLoad(); const requestToken = request.token; const requestRevision = request.revision; resetRunTracking({cancel: true}); try { const loadedRecipe = await api('/api/recipe/' + encodeURIComponent(name)); if (requestToken !== state.recipeLoadGeneration || requestRevision !== state.revision) return; state.recipe = loadedRecipe; invalidateDerivedState('saved recipe loaded'); ensureUiIds(state.recipe.steps); state.selected = null; state.paletteSelection = null; state.dataOverviewSelection = null; state.dataBlockMode = 'concepts'; state.deletedStep = null; state.lastRun = null; state.errorMessage = ''; state.errorPayload = null; state.errorGuide = null; state.errorStepId = null; state.dataExecutionView.clear(); $('recipe-dialog').close(); draw(); } catch (error) { if (requestToken === state.recipeLoadGeneration) showError(error); } }; list.appendChild(row); });
 }
 
 async function loadDefaultRecipe() {
-  resetRunTracking();
-  state.recipe = await api('/api/default-recipe');
-  ensureUiIds(state.recipe.steps);
-  state.selected = null;
-  state.dataOverviewSelection = null;
-  state.dataBlockMode = 'concepts';
-  state.paletteSelection = null;
-  state.deletedStep = null;
-  state.lastRun = null;
-  state.validated = false;
-  state.errorMessage = '';
-  state.errorPayload = null;
-  state.errorGuide = null;
-  state.dataExecutionView.clear();
-  state.errorStepId = null;
-  state.activeInsertionTarget = defaultInsertionTarget();
-  draw();
+  const request = beginRecipeLoad();
+  const requestToken = request.token;
+  resetRunTracking({cancel: true});
+  const requestRevision = request.revision;
+  try {
+    const loadedRecipe = await api('/api/default-recipe');
+    if (requestToken !== state.recipeLoadGeneration || requestRevision !== state.revision) return;
+    state.recipe = loadedRecipe;
+    invalidateDerivedState('default recipe loaded');
+    ensureUiIds(state.recipe.steps);
+    state.selected = null;
+    state.dataOverviewSelection = null;
+    state.dataBlockMode = 'concepts';
+    state.paletteSelection = null;
+    state.deletedStep = null;
+    state.lastRun = null;
+    state.validated = false;
+    state.errorMessage = '';
+    state.errorPayload = null;
+    state.errorGuide = null;
+    state.dataExecutionView.clear();
+    state.errorStepId = null;
+    state.activeInsertionTarget = defaultInsertionTarget();
+    draw();
+  } catch (error) {
+    if (requestToken === state.recipeLoadGeneration) showError(error);
+  }
 }
 
 function payload() {
@@ -5097,9 +5368,16 @@ function makeTemplateCardActivatable(card, item) {
 }
 
 async function openTemplate(item) {
+  let requestToken = null;
   try {
-    resetRunTracking();
-    state.recipe = await api('/api/recipe/' + encodeURIComponent(item.path));
+    const request = beginRecipeLoad();
+    requestToken = request.token;
+    const requestRevision = request.revision;
+    resetRunTracking({cancel: true});
+    const loadedRecipe = await api('/api/recipe/' + encodeURIComponent(item.path));
+    if (requestToken !== state.recipeLoadGeneration || requestRevision !== state.revision) return;
+    state.recipe = loadedRecipe;
+    invalidateDerivedState('paper template loaded');
     ensureUiIds(state.recipe.steps);
     state.selected = null;
     state.paletteSelection = null;
@@ -5116,7 +5394,11 @@ async function openTemplate(item) {
     state.activeInsertionTarget = defaultInsertionTarget();
     $('template-dialog').close();
     draw();
-  } catch (error) { showError(error); }
+  } catch (error) {
+    // An older template request must not surface an error after a newer
+    // template has been selected.
+    if (requestToken === state.recipeLoadGeneration) showError(error);
+  }
 }
 
 function openOnboarding() {
@@ -5143,22 +5425,56 @@ if ($('empty-blank')) $('empty-blank').onclick = () => applySkeleton('blank');
 if ($('empty-template')) $('empty-template').onclick = openTemplateDialog;
 document.querySelectorAll('[data-inspector-tab]').forEach((button) => { button.onclick = () => setInspectorTab(button.dataset.inspectorTab); });
 
-async function validateCurrentRecipe() {
-  await api('/api/validate', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload()) });
-  state.validated = true; updateRunState();
-  const readiness = datasetReadiness();
-  if (!readiness.ok) {
-    state.validated = false;
-    updateRunState();
-    const error = new Error(readiness.message);
-    error.guidanceCode = readiness.code;
-    error.payload = {ok: false, error: readiness.message, code: readiness.code, block_id: readiness.step?.block || 'load_dataset'};
+async function validateCurrentRecipe({expectedRevision = state.revision, requestPayload = runPayload()} = {}) {
+  assertCurrentRevision(expectedRevision, '检查');
+  const requestRevision = state.revision;
+  state.validated = false;
+  state.validatedRevision = -1;
+  // Keep a snapshot of what was actually checked.  A boolean alone is not a
+  // valid readiness proof after the user edits the recipe.
+  state.derived.generatedConfig = null;
+  state.derived.generatedConfigRevision = -1;
+  state.derived.preflight = null;
+  state.derived.preflightRevision = -1;
+  state.derived.compatibility = null;
+  state.derived.compatibilityRevision = -1;
+  state.derived.runPlan = null;
+  state.derived.runPlanRevision = -1;
+  state.derived.command = null;
+  state.derived.commandRevision = -1;
+  const validationResult = await api('/api/validate', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(requestPayload) });
+  assertCurrentRevision(requestRevision, '检查');
+  // The server just inspected the current source. The catalog cached when
+  // this page opened must not overrule that result.
+  if (validationResult?.dataset_preflight?.ok !== true) {
+    const error = new Error('服务未返回本次数据前置检查结果，请更新服务后重新检查。');
     throw error;
   }
+  state.validated = true; state.validatedRevision = requestRevision; updateRunState();
   state.errorStepId = null;
   state.errorMessage = '';
   state.errorPayload = null;
   state.errorGuide = null;
+  const validatedCapabilities = validationResult?.dataset_preflight?.capabilities;
+  if (validatedCapabilities && typeof validatedCapabilities === 'object') {
+    state.derived.datasetCapabilities = validatedCapabilities;
+    state.derived.datasetCapabilitiesRevision = requestRevision;
+  }
+  // Promote only the normalized recipe returned by this validation request.
+  // This is the exact recipe snapshot that the run gate will later consume.
+  const validatedRecipe = validationResult?.recipe || requestPayload.recipe;
+  state.derived.generatedConfig = validatedRecipe;
+  state.derived.generatedConfigRevision = requestRevision;
+  state.derived.compatibility = {status: 'compatible', revision: requestRevision, dataset: validatedCapabilities || state.derived.datasetCapabilities};
+  state.derived.compatibilityRevision = requestRevision;
+  state.derived.preflight = {
+    status: 'passed',
+    revision: requestRevision,
+    dataset: validationResult.dataset_preflight,
+  };
+  state.derived.preflightRevision = requestRevision;
+  state.derived.runPlan = validatedRecipe;
+  state.derived.runPlanRevision = requestRevision;
   clearErrorPresentation();
   return true;
 }
@@ -5178,28 +5494,79 @@ if ($('run-mode')) $('run-mode').onchange = (event) => {
   renderRuntimeLimits();
 };
 if ($('stop-run')) $('stop-run').onclick = stopRun;
-if ($('refresh-run')) $('refresh-run').onclick = () => state.jobId && pollRunJob(state.jobId);
+if ($('refresh-run')) $('refresh-run').onclick = () => state.jobId && pollRunJob(state.jobId, state.activeRunGeneration);
 async function startRun(mode = 'check') {
   if (state.running) return;
   state.runMode = mode === 'full' ? 'full' : 'check';
   renderRuntimeLimits();
+  const runRevision = state.revision;
+  const requestPayload = runPayload();
   resetRunTracking();
+  state.activeRunRevision = runRevision;
+  state.activeRunGeneration = state.runGeneration;
+  const runGeneration = state.activeRunGeneration;
   state.running = true; updateRunState(); setInspectorTab('run'); setResultState('运行中…');
   $('result-status')?.classList.add('running');
   if ($('result-summary')) $('result-summary').textContent = '正在检查数据集、连接和参数，检查通过后会启动后台运行任务。';
   renderRunProgress({status: 'starting', progress: {state: 'starting'}});
   try {
-    await validateCurrentRecipe();
-    const result = await api('/api/run', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(runPayload()) });
+    // A previous run may still be waiting for /api/run to return its job id.
+    // Wait for that request to settle first; its stale response handler will
+    // enqueue cancellation before this run is allowed to proceed.
+    const priorRunRequest = state.pendingRunRequest;
+    if (priorRunRequest) {
+      if ($('result-summary')) $('result-summary').textContent = '正在等待上一运行请求完成，然后检查当前配方…';
+      try { await priorRunRequest; } catch (_) { /* the replacement run may still proceed */ }
+      if (runGeneration !== state.activeRunGeneration || runRevision !== state.revision) return;
+    }
+    // A recipe edit/new recipe may have requested cancellation just before
+    // this click.  Wait for the server acknowledgement (the server waits for
+    // the child process to exit) before allowing a new process to start.
+    const priorCancellation = state.pendingRunCancellation;
+    if (priorCancellation) {
+      if ($('result-summary')) $('result-summary').textContent = '正在等待上一运行进程退出，然后检查当前配方…';
+      await priorCancellation;
+      if (runGeneration !== state.activeRunGeneration || runRevision !== state.revision) return;
+    }
+    await ensurePreviousRunsStopped();
+    if (runGeneration !== state.activeRunGeneration || runRevision !== state.revision) return;
+    await validateCurrentRecipe({expectedRevision: runRevision, requestPayload});
+    assertCurrentRunState(runRevision);
+    // Use the recipe produced by the current validation rather than
+    // re-serializing a potentially stale cached plan.
+    requestPayload.recipe = state.derived.runPlan;
+    assertCurrentRunState(runRevision);
+    state.derived.command = requestPayload;
+    state.derived.commandRevision = runRevision;
+    // Keep the request itself in the gate.  A user can change the recipe
+    // after validation but before the server has returned a job id; the
+    // stale response must be observed and cancelled before a replacement run
+    // is allowed to start.
+    const runRequest = api('/api/run', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(requestPayload) });
+    state.pendingRunRequest = runRequest;
+    let result;
+    try {
+      result = await runRequest;
+    } finally {
+      if (state.pendingRunRequest === runRequest) state.pendingRunRequest = null;
+    }
     if (result?.id) {
+      if (runGeneration !== state.activeRunGeneration || runRevision !== state.revision) {
+        // The server may have accepted the request just as the user changed
+        // recipes. Release that now-unowned process instead of orphaning it.
+        cancelJobSilently(result.id);
+        return;
+      }
       state.jobId = result.id;
-      renderRunJob(result);
-      await pollRunJob(result.id);
+      renderRunJob(result, runGeneration);
+      await pollRunJob(result.id, runGeneration);
     } else {
+      if (runGeneration !== state.activeRunGeneration || runRevision !== state.revision) return;
       state.running = false;
       renderRunResult(result);
     }
   } catch (error) {
+    if (runGeneration !== state.activeRunGeneration || runRevision !== state.revision) return;
     state.lastRun = null; state.running = false; clearRunPolling(); updateRunState(); showError(error);
   }
 }
@@ -5208,10 +5575,12 @@ if ($('run-full')) $('run-full').onclick = () => startRun('full');
 if ($('open')) $('open').onclick = async () => { try { const names = await api('/api/recipes'); renderRecipeList(names); $('recipe-dialog').showModal(); } catch (error) { showError(error); } };
 async function openTemplateDialog() {
   try {
+    const requestRevision = state.revision;
     const menu = $('new-menu');
     if (menu) menu.hidden = true;
     if ($('new')) $('new').setAttribute('aria-expanded', 'false');
     const [templates, examples] = await Promise.all([api('/api/templates'), api('/api/examples')]);
+    if (requestRevision !== state.revision) return;
     renderFeaturedExamples(examples);
     renderTemplateList(templates);
     $('template-search').value = '';
@@ -5241,7 +5610,7 @@ if ($('formula-editor-add-step')) $('formula-editor-add-step').onclick = addForm
 if ($('formula-editor-save')) $('formula-editor-save').onclick = saveFormulaEditor;
 if ($('formula-editor-cancel')) $('formula-editor-cancel').onclick = () => $('formula-editor-dialog').close();
 if ($('my-formulas')) $('my-formulas').onclick = showMyFormulas;
-if ($('recipe-name')) $('recipe-name').oninput = markDirty;
+if ($('recipe-name')) $('recipe-name').oninput = (event) => updateRecipeName(event.target.value);
 if ($('palette-search')) $('palette-search').oninput = (event) => {
   state.paletteQuery = event.target.value;
   renderPalette();
@@ -5262,6 +5631,7 @@ Promise.all([api('/api/blocks'), api('/api/formulas')]).then(([blocks, formulas]
   return Promise.all([api('/api/entry-recipe'), api('/api/datasets')]);
 }).then(([recipe, datasetPayload]) => {
   state.recipe = recipe;
+  invalidateDerivedState('entry recipe loaded');
   state.datasets = Array.isArray(datasetPayload) ? datasetPayload : (datasetPayload.datasets || []);
   state.datasets.forEach((item) => { if (item.alias) state.datasetFacts[item.alias] = item; });
   ensureUiIds(state.recipe.steps);

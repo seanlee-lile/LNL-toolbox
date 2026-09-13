@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from collections.abc import Mapping
 from urllib.parse import unquote, urlparse
 
 from .. import ScratchExecutionError, execute_recipe, list_blocks, load_recipe, recipe_workspace_root, resolve_recipe, save_recipe, validate_recipe
@@ -254,6 +255,14 @@ def cancel_scratch_job(job_id: str) -> ScratchJob:
                     pass
         else:
             process.terminate()
+        # Do not report cancellation before the child has actually exited.
+        # Recipe navigation can immediately start another run, so returning
+        # while the old process is still alive would permit two Scratch jobs
+        # to overlap briefly.
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
     return job
 
 
@@ -282,6 +291,244 @@ def _recipe_path(name: str) -> Path:
         if candidate.suffix in {".yaml", ".yml"} and candidate.exists():
             return candidate
     raise FileNotFoundError(name)
+
+
+def _load_dataset_params(recipe: object) -> Mapping[str, object] | None:
+    """Find the canonical load_dataset parameters, including nested steps."""
+
+    def visit(steps: object) -> Mapping[str, object] | None:
+        if not isinstance(steps, list):
+            return None
+        for step in steps:
+            if not isinstance(step, Mapping):
+                continue
+            if step.get("block") == "load_dataset" and isinstance(step.get("params"), Mapping):
+                return step["params"]
+            nested = visit(step.get("steps"))
+            if nested is not None:
+                return nested
+        return None
+
+    if isinstance(recipe, Mapping):
+        return visit(recipe.get("steps"))
+    return None
+
+
+def _recipe_steps(recipe: object) -> list[Mapping[str, object]]:
+    """Flatten recipe steps for server-side data capability checks."""
+
+    result: list[Mapping[str, object]] = []
+
+    def visit(steps: object) -> None:
+        if not isinstance(steps, list):
+            return
+        for step in steps:
+            if not isinstance(step, Mapping):
+                continue
+            result.append(step)
+            visit(step.get("steps"))
+
+    if isinstance(recipe, Mapping):
+        visit(recipe.get("steps"))
+    return result
+
+
+def _recipe_data_requirements(recipe: object) -> dict[str, object]:
+    """Extract explicit data facts required by the current recipe.
+
+    This intentionally reads only declared Scratch data blocks.  It does not
+    infer method compatibility from a paper name or from a dataset alias.
+    """
+
+    roles: set[str] = set()
+    noise_names: list[str] = []
+    labels: dict[str, str] = {}
+    split: dict[str, object] = {}
+    models: list[Mapping[str, object]] = []
+    for step in _recipe_steps(recipe):
+        block_id = str(step.get("block", ""))
+        params = step.get("params") if isinstance(step.get("params"), Mapping) else {}
+        if block_id == "assign_data_roles":
+            declared = params.get("roles", [])
+            if isinstance(declared, (list, tuple)):
+                aliases = {"validation": "clean_validation", "trusted": "trusted_validation", "train-eval": "train_eval"}
+                roles.update(aliases.get(str(value).strip().lower(), str(value).strip().lower()) for value in declared)
+        elif block_id == "apply_noise":
+            noise_names.append(str(params.get("name", "none")).strip().lower())
+        elif block_id == "select_label_source":
+            for key in ("train", "validation", "test", "trusted"):
+                if key in params:
+                    labels[key] = str(params[key]).strip().lower()
+        elif block_id == "create_dataset_split":
+            split = dict(params)
+        elif block_id == "create_model":
+            models.append(params)
+    return {"roles": roles, "noise_names": noise_names, "labels": labels,
+            "split": split, "models": models}
+
+
+def _dataset_capability_preflight(recipe: object, params: Mapping[str, object]) -> dict[str, object]:
+    """Reject declared recipe/data mismatches before launching a job."""
+
+    from .data_bridge import dataset_fact_payload, inspect_source_capabilities
+
+    requirements = _recipe_data_requirements(recipe)
+    roles = requirements["roles"]
+    labels = requirements["labels"]
+    alias = str(params.get("dataset") or params.get("name") or "").strip().lower()
+    mode = str(params.get("source_mode") or "registered").strip().lower()
+    custom_mode = mode in {"custom", "custom_path", "local", "path", "folder"} or bool(
+        params.get("path") or params.get("root")
+    )
+    facts = dataset_fact_payload(alias)
+
+    # A custom source with a supported adapter has no persisted profile yet;
+    # use the adapter's declared static facts where available.  The path/layout
+    # gate still remains authoritative for the filesystem itself.
+    if custom_mode:
+        options = params.get("options") if isinstance(params.get("options"), Mapping) else {}
+        adapter = str(params.get("adapter") or options.get("adapter") or alias).strip().lower().replace("-", "_")
+        static = dataset_fact_payload(adapter)
+        if static.get("status") != "unregistered":
+            facts = static
+
+    capabilities = {
+        key: facts.get(key)
+        for key in ("dataset", "adapter", "num_classes", "input_shape",
+                    "has_clean_target", "has_test_clean_target", "has_validation_clean_target", "has_noisy_target", "has_sample_index",
+                    "has_validation_source",
+                    "layout_validated", "training_verified", "noise_methods")
+    }
+    capabilities["dataset"] = facts.get("alias") or alias
+    if facts.get("status") in {"unregistered", "unavailable"} and not custom_mode:
+        return {"ok": False, "code": "dataset-unavailable",
+                "error": f"数据集“{alias}”当前没有可用的 Scratch 数据源。",
+                "capabilities": capabilities}
+    if capabilities["has_sample_index"] is False:
+        return {"ok": False, "code": "dataset-capability-missing",
+                "error": "当前数据源没有稳定 sample index，不能进入 Scratch 运行。",
+                "capabilities": capabilities}
+
+    clean_keys = set()
+    if "trusted_validation" in roles:
+        clean_keys.add("has_clean_target")
+    if "clean_validation" in roles:
+        clean_keys.add("has_validation_clean_target" if requirements["split"].get("split_strategy") == "official" else "has_clean_target")
+    if "test" in roles and labels.get("test") == "clean":
+        clean_keys.add("has_test_clean_target")
+    # Custom paths and incomplete registration facts require actual source
+    # inspection, rather than adapter-name guesses or a nonempty directory.
+    source_options = params.get("options") if isinstance(params.get("options"), Mapping) else {}
+    if custom_mode or any(key in source_options for key in ("classes", "num_classes", "binary_classes")) or not facts.get("layout_validated") or capabilities["has_sample_index"] is None or any(capabilities.get(key) is None for key in clean_keys):
+        try:
+            inspected = inspect_source_capabilities(params, base_dir=REPO_ROOT)
+        except Exception as exc:
+            return {"ok": False, "code": "dataset-inspection-failed",
+                    "error": f"数据源检查失败：{exc}。请检查 adapter、路径及 train/test 文件布局。"}
+        facts = {**facts, **inspected}
+        capabilities.update(inspected)
+    for model in requirements["models"]:
+        if model.get("num_classes") is not None and capabilities.get("num_classes") is not None:
+            if int(model["num_classes"]) != int(capabilities["num_classes"]):
+                return {"ok": False, "code": "dataset-model-class-mismatch",
+                        "error": f"数据源为 {capabilities['num_classes']} 类，但模型配置为 {model['num_classes']} 类。"}
+    if any(capabilities.get(key) is not True for key in clean_keys):
+        return {"ok": False, "code": "dataset-clean-target-missing",
+                "error": "当前 Recipe 要求 clean target，但所选数据源没有可用的真实 clean label。",
+                "capabilities": capabilities}
+
+    supported_noise = {str(value).lower() for value in (capabilities.get("noise_methods") or [])}
+    for noise_name in requirements["noise_names"]:
+        if noise_name and noise_name not in supported_noise:
+            return {"ok": False, "code": "noise-method-unsupported",
+                    "error": f"数据源不声明支持噪声方法：{noise_name}。",
+                    "capabilities": capabilities}
+
+    split = requirements["split"]
+    validation_size = int(split.get("validation_size", 0) or 0) if isinstance(split, Mapping) else 0
+    strategy = str(split.get("split_strategy", "random")).lower() if isinstance(split, Mapping) else "random"
+    validation_roles = {"clean_validation", "noisy_validation"} & set(roles)
+    if validation_roles and validation_size <= 0:
+        return {"ok": False, "code": "validation-role-without-split",
+                "error": f"Recipe 请求 {', '.join(sorted(validation_roles))}，但 validation_size=0。不能把 test split 冒充 validation。",
+                "capabilities": capabilities}
+    if "trusted_validation" in roles:
+        options = params.get("options") if isinstance(params.get("options"), Mapping) else {}
+        trusted_size = int(options.get("num_clean", options.get("trusted_size", 0)) or 0)
+        if trusted_size <= 0:
+            return {"ok": False, "code": "trusted-size-missing",
+                    "error": "trusted_validation 需要正数 num_clean/trusted_size，以及真实 clean labels。"}
+        train_count = facts.get("train_samples")
+        if train_count is not None and trusted_size >= int(train_count) - validation_size:
+            return {"ok": False, "code": "trusted-size-too-large",
+                    "error": "trusted subset 太大，划分后必须保留训练样本。"}
+    if strategy == "official" and validation_size > 0 and not facts.get("has_validation_source", False):
+        return {"ok": False, "code": "official-validation-unavailable",
+                "error": "当前数据源没有声明 official validation source，不能执行 official split。",
+                "capabilities": capabilities}
+
+    return {"ok": True, "capabilities": capabilities,
+            "requirements": {"roles": sorted(roles), "noise": list(requirements["noise_names"]),
+                              "validation_size": validation_size}}
+
+
+def _external_resource_preflight(recipe: object, *, runtime_limits: object = None) -> dict[str, object]:
+    """Check external noise artifacts before a Scratch child is spawned."""
+
+    if isinstance(runtime_limits, Mapping) and runtime_limits.get("fixture"):
+        return {"ok": True, "skipped": True, "reason": "fixture runtime"}
+    for step in _recipe_steps(recipe):
+        if str(step.get("block", "")) != "apply_noise":
+            continue
+        params = step.get("params") if isinstance(step.get("params"), Mapping) else {}
+        if str(params.get("name", "none")).strip().lower() not in {"external", "external_torch"}:
+            continue
+        options = params.get("options") if isinstance(params.get("options"), Mapping) else {}
+        effective = dict(params)
+        effective.update(options)
+        explicit = [effective.get(key) for key in ("path", "artifact_path", "external_path") if effective.get(key)]
+        env_name = str(effective.get("source_env") or "").strip()
+        env_value = os.environ.get(env_name) if env_name else None
+        if len({str(value) for value in explicit}) > 1 or (env_value and explicit and str(env_value) not in {str(value) for value in explicit}):
+            return {"ok": False, "code": "external-source-conflict", "error": "外部噪声 source 同时指定了冲突的 path/artifact_path/source_env。"}
+        value = explicit[0] if explicit else env_value
+        if not value:
+            return {"ok": False, "code": "missing-external-source", "error": "当前 Recipe 需要外部噪声 artifact，但没有可用的路径或 source_env。"}
+        path = Path(str(value)).expanduser()
+        if not path.is_absolute():
+            path = REPO_ROOT / path
+        path = path.resolve()
+        if path.is_dir():
+            candidates = [path / "noise_manifest.npz", path / "noise.pt", path / "artifact.pt"]
+            path = next((candidate for candidate in candidates if candidate.exists()), path)
+        if not path.is_file():
+            return {"ok": False, "code": "external-source-not-found", "error": f"外部噪声 artifact 不存在：{path}", "path": str(path)}
+        try:
+            if path.stat().st_size <= 0:
+                return {"ok": False, "code": "external-source-empty", "error": f"外部噪声 artifact 为空：{path}", "path": str(path)}
+        except OSError as exc:
+            return {"ok": False, "code": "external-source-inaccessible", "error": f"无法访问外部噪声 artifact：{path}（{exc}）", "path": str(path)}
+    return {"ok": True, "skipped": True}
+
+
+def _dataset_preflight(recipe: object, *, runtime_limits: object = None) -> dict[str, object]:
+    """Run the server-side filesystem gate for a recipe's data source."""
+
+    params = _load_dataset_params(recipe)
+    if params is None:
+        return {"ok": True, "skipped": True}
+    from .data_bridge import dataset_preflight_payload
+
+    filesystem = dataset_preflight_payload(params, base_dir=REPO_ROOT)
+    if not filesystem.get("ok", False):
+        return filesystem
+    capability = _dataset_capability_preflight(recipe, params)
+    if not capability.get("ok", False):
+        return capability
+    external = _external_resource_preflight(recipe, runtime_limits=runtime_limits)
+    if not external.get("ok", False):
+        return external
+    return {**filesystem, **capability, "external": external}
 
 
 def _error_payload(exc: Exception) -> dict[str, object]:
@@ -444,7 +691,12 @@ class ScratchHandler(BaseHTTPRequestHandler):
         try:
             body = self._body()
             if self.path == "/api/validate":
-                self._send({"ok": True, "recipe": validate_recipe(body.get("recipe", body))})
+                recipe = validate_recipe(body.get("recipe", body))
+                preflight = _dataset_preflight(recipe, runtime_limits=body.get("runtime_limits"))
+                if not preflight.get("ok", False):
+                    self._send(preflight, 400)
+                    return
+                self._send({"ok": True, "recipe": recipe, "dataset_preflight": preflight})
             elif self.path == "/api/formulas":
                 from ..formula.registry import validate_and_register_formula
                 from ..formula.storage import save_formula
@@ -491,6 +743,10 @@ class ScratchHandler(BaseHTTPRequestHandler):
                 self._send({"ok": True, "path": str(destination)})
             elif self.path == "/api/run":
                 recipe = validate_recipe(body["recipe"])
+                preflight = _dataset_preflight(recipe, runtime_limits=body.get("runtime_limits"))
+                if not preflight.get("ok", False):
+                    self._send(preflight, 400)
+                    return
                 limits = body.get("runtime_limits", {})
                 job = start_scratch_job(recipe, limits)
                 self._send(_scratch_job_payload(job), 202)

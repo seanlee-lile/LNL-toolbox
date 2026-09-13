@@ -537,6 +537,14 @@ def _scratch_recipe_from_body(payload: dict[str, object]) -> dict[str, object]:
     return validate_recipe(recipe)
 
 
+def _scratch_dataset_preflight(recipe: dict[str, object], runtime_limits: object = None) -> dict[str, object]:
+    """Apply the same filesystem gate used by the standalone Scratch server."""
+
+    from lnl_toolbox.scratch.web.server import _dataset_preflight
+
+    return _dataset_preflight(recipe, runtime_limits=runtime_limits)
+
+
 def _scratch_run(recipe: dict[str, object]) -> dict[str, object]:
     from lnl_toolbox.scratch import execute_recipe, resolve_recipe, save_recipe
     from lnl_toolbox.scratch.formula.registry import collect_formula_provenance, merge_formula_provenance
@@ -2050,7 +2058,11 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 payload = _scratch_request_body(self)
                 recipe = _scratch_recipe_from_body(payload)
                 if path == "/api/scratch/validate":
-                    _json_response(self, {"ok": True, "recipe": recipe})
+                    preflight = _scratch_dataset_preflight(recipe, payload.get("runtime_limits"))
+                    if not preflight.get("ok", False):
+                        _json_response(self, preflight, 400)
+                        return
+                    _json_response(self, {"ok": True, "recipe": recipe, "dataset_preflight": preflight})
                 elif path == "/api/scratch/save":
                     from lnl_toolbox.scratch import recipe_workspace_root, save_recipe
 
@@ -2065,6 +2077,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 else:
                     from lnl_toolbox.scratch.web.server import _scratch_job_payload, start_scratch_job
 
+                    preflight = _scratch_dataset_preflight(recipe, payload.get("runtime_limits"))
+                    if not preflight.get("ok", False):
+                        _json_response(self, preflight, 400)
+                        return
                     job = start_scratch_job(recipe, payload.get("runtime_limits", {}))
                     _json_response(self, _scratch_job_payload(job), 202)
             except Exception as exc:

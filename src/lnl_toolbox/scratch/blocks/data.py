@@ -124,17 +124,18 @@ def _dataset_num_classes(name: str) -> int:
     id="load_dataset", name="Load Dataset", category="Data",
     description="Create a Scratch-native dataset plan without selecting a paper-specific bundle.",
     params={"dataset": {"type": "dataset", "required": True},
+            "source_mode": {"type": "enum", "options": ["registered", "builtin", "custom_path"], "default": "registered"},
             "root": {"type": "path", "default": ""},
             "path": {"type": "path", "default": ""},
             "options": {"type": "value", "default": {}},
             "save_as": {"type": "slot", "default": "data_plan"}},
     requires=(), provides=("save_as", "data_spec", "train_source", "validation_source", "test_source", "num_classes"), placement=("top",), stage="data", ui_group="① 数据准备",
 )
-def load_dataset(ctx: ScratchContext, dataset: str, root: str = "", path: str = "",
+def load_dataset(ctx: ScratchContext, dataset: str, source_mode: str = "registered", root: str = "", path: str = "",
                  options: Mapping[str, Any] | None = None, save_as: str = "data_plan") -> None:
     plan = _plan(ctx, save_as)
     opts = dict(options or {})
-    data = {"name": str(dataset).strip(), "root": str(root), "path": str(path), **opts}
+    data = {"name": str(dataset).strip(), "source_mode": str(source_mode), "root": str(root), "path": str(path), **opts}
     if not data["name"]:
         raise ValueError("load_dataset needs a dataset name")
     registered = registered_dataset_config(data["name"])

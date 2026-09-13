@@ -29,17 +29,36 @@ docs/paper-summaries.md
 artifacts/
 /output/
 outputs/
+ppt-output/
 runs/
 checkpoints/
+*.pdf
 *.ckpt
 *.pth
 *.pt
 *.log
 
+# Repository-local planning and migration state
+/codex_quick_start_v2_layered_plan.md
+/EXECUTION_PLAN_LNL_SCRATCH_V2_FORMULA_BLOCKS.md
+/SCRATCH_PAPER_MIGRATION_LOOP_PLAN.md
+/SCRATCH_PAPER_MIGRATION_STATE.yaml
+/SCRATCH_REPAIR_FROM_INDEX14_PLAN.md
+/docs/toolbox-modularization-progress.md
+/papers/implement/apl/plan.md
+/papers/implement/gce/result.md
+/papers/implement/loss-content-audit.md
+/papers/implement/paper-reproduction-progress.md
+/papers/implement/transition-estimator-audit.md
+/papers/implement/working-baseline.md
+
 # Temporary extraction, previews, and scratch work
 tmp/
 temp/
 /scratch/
+.ppt-work/
+.ppt*/
+.ppt*
 
 # Downloaded papers are local research inputs; keep README and manifest
 papers/**/*.pdf
