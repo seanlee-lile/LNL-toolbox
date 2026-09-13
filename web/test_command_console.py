@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -299,6 +300,64 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertNotIn("quickStartCompatibilityRecipes", page)
         self.assertIn('fetch("/api/run"', page)
 
+    def test_web_formal_run_fails_closed_before_training(self):
+        import importlib
+
+        cli_main = importlib.import_module("lnl_toolbox.cli.main")
+        commands = []
+
+        class InlineProcess:
+            stdout = None
+
+            def __init__(self, command, **_kwargs):
+                commands.append(list(command))
+                run_index = command.index("run")
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.returncode = cli_main.main(command[run_index:])
+
+            def wait(self):
+                return self.returncode
+
+        server = command_console.ThreadingHTTPServer(
+            ("127.0.0.1", 0), command_console.ConsoleHandler
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        body = json.dumps(
+            {"command": "lnl run --recipe dld-cifar10-reproduction"}
+        ).encode("utf-8")
+        payload = {}
+        try:
+            with mock.patch.object(
+                command_console.subprocess, "Popen", InlineProcess
+            ), mock.patch.object(
+                cli_main.ExperimentService,
+                "preflight",
+                side_effect=ValueError("formal prerequisite is not ready"),
+            ) as preflight, mock.patch.object(
+                cli_main.ExperimentService, "run"
+            ) as training:
+                web_request = request.Request(
+                    f"{base}/api/run",
+                    data=body,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with request.urlopen(web_request, timeout=2) as response:
+                    payload = json.loads(response.read())
+                self.assertEqual(response.status, 202)
+                preflight.assert_called_once()
+                training.assert_not_called()
+            self.assertIn("run", commands[0])
+            self.assertEqual(payload["returncode"], 2)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            with command_console.JOBS_LOCK:
+                command_console.JOBS.pop(payload.get("id", ""), None)
+
     def test_parameter_editor_exposes_registry_groups_and_deviation_warning(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
         self.assertIn("yaml-parameter-groups", page)
@@ -347,8 +406,15 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertIn("创建 / 编辑实验配置", quick_start)
         self.assertIn("查看兼容论文", quick_start)
         self.assertIn("打开 Scratch 搭建器", quick_start)
-        self.assertIn("高级：完整方法兼容性引导", quick_start)
+        self.assertIn("完整方法兼容性引导", quick_start)
+        self.assertIn("高级模式：其他工作区", quick_start)
         self.assertIn("context.openExperiment", quick_start)
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn("state.yamlDataset = alias", page)
+        self.assertIn("state.runDataset = alias", page)
+        self.assertIn("state.dataAlias = alias", page)
+        self.assertIn('switchModule("yaml")', page)
+        self.assertIn('switchModule("papers")', page)
 
     def test_sweep_ui_reuses_parameter_metadata_groups_and_excludes_locks(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
@@ -595,8 +661,11 @@ class CommandConsoleTest(unittest.TestCase):
         papers = command_console._paper_payload()
         self.assertEqual(len(papers), 26)
         self.assertTrue(all(item["configs"] for item in papers))
-        self.assertTrue(all(item["summary"] for item in papers))
-        self.assertTrue(all(item["mechanism"] for item in papers))
+        self.assertEqual(sum(len(item["configs"]) for item in papers), 56)
+        self.assertTrue(all(item["presentation"]["summary"] for item in papers))
+        self.assertTrue(all(item["presentation"]["mechanism"] for item in papers))
+        self.assertTrue(all(item["presentation"]["lifecycle"] for item in papers))
+        self.assertTrue(all(item["presentation"]["concept_to_config"] for item in papers))
         self.assertTrue(all(item["concept_to_config"] for item in papers))
         self.assertTrue(all(item["configs"][0]["config_path"] for item in papers))
         self.assertTrue(all(item["configs"][0]["label"] for item in papers))
@@ -640,15 +709,80 @@ class CommandConsoleTest(unittest.TestCase):
         )
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
         for marker in (
-            "MentorArtifact: ",
+            "MentorArtifact：",
             "data-mentor-step",
             "准备 Mentor 数据",
             "训练 MentorArtifact",
-            "studentReady",
+            "学生模型训练",
+            "已阻止（BLOCKED）",
             "refreshPapers",
             'job.command.startsWith("lnl mentor ")',
         ):
             self.assertIn(marker, page)
+
+    def test_paper_payload_exposes_shared_prerequisite_readiness(self):
+        papers = command_console._paper_payload()
+
+        def config(paper_id, recipe_id):
+            paper = next(item for item in papers if item["id"] == paper_id)
+            return next(item for item in paper["configs"] if item["recipe_id"] == recipe_id)
+
+        pcse = config("pcse", "cifar10-pcse-reproduction")
+        self.assertEqual(pcse["prerequisite_status"], "needs_input")
+        pcse_requirement = pcse["prerequisites"][0]
+        self.assertEqual(
+            {item["id"] for item in pcse_requirement["supported_source_labels"]},
+            {"supervised_best", "coteaching_peer_a_best", "upm_main_best"},
+        )
+        self.assertEqual(pcse_requirement["kind"], "pretrained_classifier")
+
+        dld = config("dld", "dld-cifar10-reproduction")
+        self.assertNotEqual(dld["prerequisite_status"], "ready")
+        self.assertEqual(
+            dld["prerequisites"][0]["kind"], "pretrained_feature_extractor"
+        )
+        self.assertIn(
+            "torchvision_resnet34_imagenet1k_v1",
+            dld["prerequisites"][0]["supported_sources"],
+        )
+
+        cal = config("cal", "cal-cifar10-reproduction")
+        self.assertNotEqual(cal["prerequisite_status"], "ready")
+        self.assertEqual(
+            cal["prerequisites"][0]["kind"], "external_label_artifact"
+        )
+        self.assertIn("不参与训练更新", cal["prerequisites"][0]["presentation"]["note"])
+
+    def test_paper_page_uses_generic_readiness_and_presentation_panels(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        for marker in (
+            "function renderPrerequisitePanel(config)",
+            "supported_source_labels",
+            "运行前置要求",
+            "尚需配置（NEEDS_INPUT）",
+            "当前输入无效（INVALID）",
+            "paper.presentation",
+            "presentation.concept_to_config",
+        ):
+            self.assertIn(marker, page)
+        self.assertNotIn("const localizedPaperPresentationCopy", page)
+
+    def test_paper_presentation_covers_every_catalog_paper(self):
+        from lnl_toolbox.catalog import load_papers
+
+        presentation = command_console._paper_presentation()
+        paper_ids = {paper.id for paper in load_papers(command_console.ROOT)}
+        self.assertEqual(set(presentation["papers"]), paper_ids)
+        self.assertEqual(len(paper_ids), 26)
+        for paper_id, copy in presentation["papers"].items():
+            self.assertTrue(copy["summary"], paper_id)
+            self.assertTrue(copy["mechanism"], paper_id)
+            self.assertTrue(copy["lifecycle"], paper_id)
+            self.assertTrue(copy["limitations"], paper_id)
+            self.assertTrue(
+                all(not re.match(r"^\s*\d+\s*[.、]", item) for item in copy["lifecycle"]),
+                paper_id,
+            )
 
     def test_dataset_payload_distinguishes_registration_from_training_evidence(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
@@ -1083,6 +1217,23 @@ class CommandConsoleTest(unittest.TestCase):
                 all(field["note"] for field in schema["fields"] if field["level"] == "paper"),
                 paper.id,
             )
+
+    def test_all_paper_configs_build_web_schema_and_readiness(self):
+        papers = command_console._paper_payload()
+        self.assertEqual(len(papers), 26)
+        self.assertEqual(sum(len(paper["configs"]) for paper in papers), 56)
+        checked = 0
+        for paper in papers:
+            for config in paper["configs"]:
+                schema = command_console._config_schema(config["recipe_id"])
+                self.assertTrue(schema["fields"], config["recipe_id"])
+                self.assertIn(
+                    config.get("prerequisite_status", "ready"),
+                    {"ready", "needs_input", "invalid"},
+                    config["recipe_id"],
+                )
+                checked += 1
+        self.assertEqual(checked, 56)
 
     def test_paper_parameter_change_requires_acknowledgement_and_is_recorded(self):
         with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:

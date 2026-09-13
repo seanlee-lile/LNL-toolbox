@@ -36,6 +36,7 @@ STATIC_ASSETS = {
     "/assets/quick_start.css": (WEB_ROOT / "assets" / "quick_start.css", "text/css; charset=utf-8"),
     "/assets/run_output.js": (WEB_ROOT / "assets" / "run_output.js", "application/javascript; charset=utf-8"),
 }
+_PAPER_PRESENTATION_PATH = WEB_ROOT / "paper_presentation.json"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 if SRC_ROOT.is_dir() and str(SRC_ROOT) not in sys.path:
@@ -589,6 +590,22 @@ def _recipe_payload(*, include_all: bool = False) -> list[dict[str, object]]:
     ]
 
 
+@lru_cache(maxsize=1)
+def _paper_presentation() -> dict[str, object]:
+    """Load display-only paper copy without changing catalog metadata."""
+
+    try:
+        value = json.loads(_PAPER_PRESENTATION_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"论文展示文案无法加载：{exc}") from exc
+    if not isinstance(value, dict) or not isinstance(value.get("papers"), dict):
+        raise ValueError("论文展示文案缺少 papers mapping")
+    for key in ("concepts", "sources", "prerequisites"):
+        if not isinstance(value.get(key), dict):
+            raise ValueError(f"论文展示文案缺少 {key} mapping")
+    return value
+
+
 def _paper_payload() -> list[dict[str, object]]:
     """Return paper metadata and available recipe variants for the UI."""
 
@@ -599,17 +616,33 @@ def _paper_payload() -> list[dict[str, object]]:
         mentornet_preparation_status,
         resolve_config_paths,
     )
+    from lnl_toolbox.training.prerequisites import ReadinessStatus
+    from lnl_toolbox.training.service import ExperimentService
 
     recipes = {
         recipe.id: recipe
         for recipe in discover_recipes(ROOT, include_conditional=True)
     }
+    presentation = _paper_presentation()
+    paper_copy = presentation["papers"]
+    concept_copy = presentation["concepts"]
+    source_copy = presentation["sources"]
+    prerequisite_copy = presentation["prerequisites"]
+    prerequisite_service = ExperimentService()
     payload = []
     for paper in load_papers(ROOT):
         default_config = next(
             config for config in paper.configs if config.profile == "reproduction"
         )
         default_recipe = recipes[default_config.recipe_id]
+        display = dict(paper_copy.get(paper.id, {}))
+        display["concept_to_config"] = [
+            {
+                **dict(item),
+                "concept": concept_copy.get(item["concept"], item["concept"]),
+            }
+            for item in paper.concept_to_config
+        ]
         payload.append({
             "id": paper.id,
             "acronym": paper.acronym,
@@ -625,6 +658,7 @@ def _paper_payload() -> list[dict[str, object]]:
             "implementation_paths": list(paper.implementation_paths),
             "implementation_status": paper.implementation_status,
             "reproduction_status": paper.reproduction_status,
+            "presentation": display,
             "default_recipe_id": default_recipe.id,
             "default_variant": default_config.variant,
             "default_fidelity": default_config.configuration_fidelity,
@@ -638,6 +672,7 @@ def _paper_payload() -> list[dict[str, object]]:
                 "experiment": "实验配置",
             }.get(config.profile, config.profile)
             noise_label = recipe.noise
+            resolved = resolve_config_paths(load_recipe_config(recipe), ROOT)
             payload[-1]["configs"].append({
                 "recipe_id": config.recipe_id,
                 "label": f"{profile_label} · {recipe.dataset} · {noise_label} · {recipe.epochs or '-'} ep",
@@ -655,8 +690,55 @@ def _paper_payload() -> list[dict[str, object]]:
                 "reproduction_status": config.reproduction_status,
                 "availability": config.availability,
             })
+            readiness = prerequisite_service.prerequisite_readiness(resolved)
+            if readiness:
+                serialized = []
+                for item in readiness:
+                    value = item.to_dict()
+                    configured = []
+                    for path in item.descriptor.config_paths:
+                        current: object = resolved
+                        for part in path:
+                            if not isinstance(current, dict) or part not in current:
+                                current = None
+                                break
+                            current = current[part]
+                        if current is not None:
+                            configured.append({
+                                "path": ".".join(path),
+                                "value": current,
+                            })
+                    value.update({
+                        "id": item.descriptor.key,
+                        "display_name": item.descriptor.name,
+                        "readiness_level": value["level"],
+                        "required_source": item.descriptor.requirement,
+                        "provision_method": item.descriptor.provide,
+                        "configured_source": configured,
+                        "supported_source_labels": [
+                            {
+                                "id": source,
+                                "label": source_copy.get(source, source),
+                            }
+                            for source in item.descriptor.supported_sources
+                        ],
+                        "validation_message": item.message,
+                        "presentation": prerequisite_copy.get(
+                            item.descriptor.kind, {}
+                        ),
+                    })
+                    serialized.append(value)
+                statuses = {item.status for item in readiness}
+                aggregate = (
+                    ReadinessStatus.INVALID
+                    if ReadinessStatus.INVALID in statuses
+                    else ReadinessStatus.NEEDS_INPUT
+                    if ReadinessStatus.NEEDS_INPUT in statuses
+                    else ReadinessStatus.READY
+                )
+                payload[-1]["configs"][-1]["prerequisites"] = serialized
+                payload[-1]["configs"][-1]["prerequisite_status"] = aggregate
             if paper.id == "mentornet":
-                resolved = resolve_config_paths(load_recipe_config(recipe), ROOT)
                 payload[-1]["configs"][-1]["preparation"] = (
                     mentornet_preparation_status(
                         resolved,

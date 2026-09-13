@@ -30,4 +30,3 @@ class FormulaStorageTest(unittest.TestCase):
             self.assertEqual(imported.id, "user/storage_formula")
             delete_formula("user/storage_formula", root)
             self.assertFalse(any(path.name == "storage_formula.yaml" for path in list_formula_files(root)))
-

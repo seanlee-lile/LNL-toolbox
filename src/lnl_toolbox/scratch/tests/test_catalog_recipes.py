@@ -34,6 +34,18 @@ class ScratchCatalogRecipeTest(unittest.TestCase):
             context = execute_recipe(recipe, runtime_limits={"fixture": True})
             self.assertIn("labels", context, path.name)
 
+    def test_mentornet_fixture_exposes_curriculum_contract(self) -> None:
+        recipe = load_recipe(ROOT / "recipes" / "papers" / "mentornet.yaml")
+        context = execute_recipe(recipe, runtime_limits={"fixture": True})
+
+        provider = context["mentor_provider"]
+        self.assertEqual(provider.burn_in_epoch, 18)
+        self.assertTrue(provider.fixed_epoch_after_burn_in)
+        self.assertEqual(provider.fixed_label, 0)
+        self.assertEqual(provider._dropout_rate(0), 0.5)
+        self.assertIn("mentor_features", context)
+        self.assertIn("sample_weights", context)
+
 
 if __name__ == "__main__":
     unittest.main()

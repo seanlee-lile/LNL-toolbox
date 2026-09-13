@@ -2920,15 +2920,6 @@ methods:
           origin: structural_or_integrity_contract
           note: 结构性运行契约；普通参数面板中的独立修改会破坏 schema、runner、组件 wiring、label-space/cardinality 或 lifecycle 契约。
           lock_reason: label-space protocol
-        pretraining_stage.method:
-          current: cross_entropy
-          value_type: string
-          ui_control: readonly
-          reproduction_impact: high
-          origin: structural_or_integrity_contract
-          note: PCSE 正式前置训练方法固定为内部 CrossEntropy。
-          evidence_ref: pretrain
-          lock_reason: pretraining method contract
         transition_stage.name:
           current: paper_volmin
           value_type: string
@@ -2947,12 +2938,12 @@ methods:
           note: 结构性运行契约；普通参数面板中的独立修改会破坏 schema、runner、组件 wiring、label-space/cardinality 或 lifecycle 契约。
           lock_reason: dedicated runner
     coverage:
-      parameter_count: 60
+      parameter_count: 59
       by_level:
         basic: 3
         paper: 4
         advanced: 45
-        locked: 8
+        locked: 7
     paper_comparison:
       audit_status: checked_against_original_paper
       alignment_status: engineering_fidelity_not_claimed_exact

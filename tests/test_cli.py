@@ -551,6 +551,20 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
             self.assertIn('unsupported_modality', stderr)
         runner.assert_not_called()
 
+    def test_missing_formal_prerequisite_cannot_reach_training(self) -> None:
+        error = ValueError(
+            "DLD pretrained feature extractor prerequisite is not ready"
+        )
+        with patch(
+            "lnl_toolbox.cli.main.ExperimentService.preflight", side_effect=error
+        ), patch("lnl_toolbox.cli.main.ExperimentService.run") as runner:
+            code, _, stderr = self.invoke(
+                "run", "--recipe", "dld-cifar10-reproduction"
+            )
+        self.assertEqual(code, 2)
+        self.assertIn("prerequisite is not ready", stderr)
+        runner.assert_not_called()
+
     def test_plain_ce_validate_check_data_reports_compatible(self) -> None:
         data_service = Mock()
         data_service.capabilities.return_value = resolve_dataset_capabilities(

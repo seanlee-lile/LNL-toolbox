@@ -292,7 +292,27 @@ def create_mentor_provider(
         class _FixtureMentorProvider:
             def __init__(self):
                 self.moving = None
+                # The fixture follows the same public curriculum contract as
+                # MentorNetWeightProvider.  Scratch consumers intentionally
+                # read these values while constructing the frozen Mentor
+                # feature vector; keeping them here avoids a fixture-only
+                # shadow contract without weakening the formal provider.
+                self.burn_in_epoch = int(burn_in_epoch)
+                self.fixed_epoch_after_burn_in = bool(fixed_epoch_after_burn_in)
+                self.fixed_label = int(fixed_label)
+                self.dropout_schedule = tuple(
+                    (float(rate), int(duration))
+                    for rate, duration in dropout_schedule
+                )
                 self.generator = __import__("torch").Generator().manual_seed(int(seed))
+
+            def _dropout_rate(self, epoch):
+                boundary = 0
+                for rate, duration in self.dropout_schedule:
+                    boundary += duration
+                    if int(epoch) < boundary:
+                        return rate
+                return 0.0
 
             def compute(self, weight_input):
                 torch = __import__("torch")
@@ -303,12 +323,7 @@ def create_mentor_provider(
                 mentor_epoch = min(epoch, int(burn_in_epoch))
                 burn = mentor_epoch < max(0, int(burn_in_epoch) - 1)
                 weights = torch.ones_like(losses) if burn else torch.sigmoid(-(losses - self.moving)).detach()
-                rate = 0.0
-                boundary = 0
-                for candidate, duration in dropout_schedule:
-                    boundary += int(duration)
-                    if mentor_epoch < boundary:
-                        rate = float(candidate); break
+                rate = self._dropout_rate(mentor_epoch)
                 if rate:
                     keep = torch.rand(weights.shape, generator=self.generator, device="cpu").to(weights.device) >= rate
                     weights = weights * keep

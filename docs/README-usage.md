@@ -425,4 +425,3 @@ Web 和 CLI 的数据集检查都经过统一 `DataService`。适配器/实际�
 数据集声明，后者属于所选正式 recipe，并会写入该 recipe 声明的配置路径。预训练资源也
 必须是实际 checkpoint、运行目录或 YAML 路径，不能用角色名称冒充资源。
 
-
