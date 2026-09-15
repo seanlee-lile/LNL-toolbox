@@ -63,7 +63,7 @@ const state = {
   runProgress: null,
   runStopping: false,
   formulaEditor: {
-    steps: [], editingId: null, paletteExpanded: true, paletteGroup: '基础运算', expression: null, expressionSelection: null, expressionDrag: null,
+    steps: [], editingId: null, paletteExpanded: true, paletteGroup: '基础运算', paletteQuery: '', expression: null, expressionSelection: null, expressionDrag: null,
     activeOutput: 'loss', outputExpressions: {loss: null}, inputSchemas: {}, parameterSchemas: {}, outputSchemas: {},
     parameterStates: {},
   },
@@ -761,7 +761,12 @@ async function pollRunJob(jobId, expectedGeneration = state.activeRunGeneration)
     }
   } catch (error) {
     if (!isCurrentRun(jobId, expectedGeneration)) return;
-    clearRunPolling(); state.running = false; updateRunState(); showError(error);
+    // A transport failure says nothing about whether the training process
+    // has exited. Keep ownership and the Stop action while retrying status.
+    clearRunPolling(); state.running = true; updateRunState(); showError(error);
+    setResultState('连接中断，任务状态待确认', 'error');
+    if ($('result-summary')) $('result-summary').textContent = '旧训练可能仍在运行；正在重试查询。确认结束前不会启动新任务，也可以点击停止运行。';
+    state.runPollTimer = window.setTimeout(() => pollRunJob(jobId, expectedGeneration), RUN_PROGRESS_POLL_MS);
   }
 }
 
@@ -4859,17 +4864,24 @@ function renderFormulaEditor() {
   const editorPalette = $('formula-editor-palette');
   if (editorPalette) {
     editorPalette.innerHTML = '';
+    const paletteQuery = String(state.formulaEditor.paletteQuery || '').trim().toLocaleLowerCase();
+    const paletteCandidates = paletteQuery
+      ? candidates.filter((info) => [info.id, info.name, info.formula, info.description, info.formula_group, info.category]
+        .filter(Boolean).join(' ').toLocaleLowerCase().includes(paletteQuery))
+      : candidates;
     const disclosure = document.createElement('details');
     disclosure.className = 'formula-palette-disclosure';
     disclosure.open = state.formulaEditor.paletteExpanded !== false;
     disclosure.addEventListener('toggle', () => { state.formulaEditor.paletteExpanded = disclosure.open; });
     const summary = document.createElement('summary');
-    summary.textContent = `全部运算（${candidates.length}）`;
+    summary.textContent = paletteQuery
+      ? `全部运算（${paletteCandidates.length}/${candidates.length}）`
+      : `全部运算（${candidates.length}）`;
     summary.title = '展开或收起全部数学运算';
     const body = document.createElement('div');
     body.className = 'formula-palette-body';
     const groups = new Map(FORMULA_EDITOR_KIND_GROUPS.map((group) => [group, []]));
-    candidates.forEach((info) => {
+    paletteCandidates.forEach((info) => {
       const group = formulaEditorKindGroup(info);
       if (!groups.has(group)) groups.set(group, []);
       groups.get(group).push(info);
@@ -4892,6 +4904,15 @@ function renderFormulaEditor() {
     });
     body.appendChild(tabs);
     const activeItems = groups.get(activeGroupName) || [];
+    if (paletteQuery && !paletteCandidates.length) {
+      body.appendChild(Object.assign(document.createElement('div'), {
+        className: 'formula-palette-search-empty',
+        textContent: `没有找到“${state.formulaEditor.paletteQuery.trim()}”对应的运算`,
+      }));
+      disclosure.append(summary, body);
+      editorPalette.appendChild(disclosure);
+      return;
+    }
     const module = document.createElement('div');
     module.className = 'formula-palette-module';
     const moduleHeading = document.createElement('div');
@@ -4989,7 +5010,7 @@ function renderFormulaEditor() {
 }
 
 function resetFormulaEditor() {
-  state.formulaEditor.steps = []; state.formulaEditor.expression = null; state.formulaEditor.expressionSelection = null; state.formulaEditor.editingId = null; state.formulaEditor.paletteExpanded = true; state.formulaEditor.paletteGroup = '基础运算'; state.formulaEditor.parameterStates = {};
+  state.formulaEditor.steps = []; state.formulaEditor.expression = null; state.formulaEditor.expressionSelection = null; state.formulaEditor.editingId = null; state.formulaEditor.paletteExpanded = true; state.formulaEditor.paletteGroup = '基础运算'; state.formulaEditor.paletteQuery = ''; state.formulaEditor.parameterStates = {};
   state.formulaEditor.activeOutput = 'loss'; state.formulaEditor.outputExpressions = {loss: null}; state.formulaEditor.outputSchemas = {};
   state.formulaEditor.inputSchemas = {logits: {description: '', type: 'tensor'}, targets: {description: '', type: 'labels'}};
   state.formulaEditor.parameterSchemas = {epsilon: {type: 'float', default: 1e-8}};
@@ -5005,6 +5026,7 @@ function resetFormulaEditor() {
 function loadFormulaIntoEditor(item) {
   $('formula-list-dialog')?.close();
   state.formulaEditor.editingId = item.id;
+  state.formulaEditor.paletteQuery = '';
   state.formulaEditor.steps = (item.steps || []).map((step) => ({ id: step.id, block: step.block, bindings: {...(step.bindings || {})}, parameters: {...(step.parameters || {})} }));
   state.formulaEditor.inputSchemas = cloneSchema(item.inputs || {});
   state.formulaEditor.parameterSchemas = cloneSchema(item.parameters || {});
@@ -5501,7 +5523,9 @@ async function startRun(mode = 'check') {
   renderRuntimeLimits();
   const runRevision = state.revision;
   const requestPayload = runPayload();
-  resetRunTracking();
+  // Even an idle UI may still own a job whose terminal status is unknown.
+  // Transfer that ownership to the cancellation gate before clearing it.
+  resetRunTracking({cancel: true});
   state.activeRunRevision = runRevision;
   state.activeRunGeneration = state.runGeneration;
   const runGeneration = state.activeRunGeneration;
@@ -5598,6 +5622,10 @@ if ($('formula-add')) $('formula-add').onclick = addFormulaFromDialog;
 if ($('formula-cancel')) $('formula-cancel').onclick = () => $('formula-dialog').close();
 if ($('new-formula')) $('new-formula').onclick = () => { resetFormulaEditor(); $('formula-editor-dialog').showModal(); };
 if ($('formula-editor-block')) $('formula-editor-block').onchange = renderFormulaEditor;
+if ($('formula-palette-search')) $('formula-palette-search').oninput = (event) => {
+  state.formulaEditor.paletteQuery = event.target.value;
+  renderFormulaEditor();
+};
 if ($('formula-inputs')) $('formula-inputs').oninput = () => { renderFormulaInputFields(); renderFormulaEditorBindingFields(); renderFormulaCanvas(); };
 if ($('formula-parameters')) $('formula-parameters').oninput = () => { renderFormulaParameterFields(); renderFormulaEditorBindingFields(); renderFormulaCanvas(); };
 if ($('formula-output-source')) $('formula-output-source').onchange = renderFormulaEditor;

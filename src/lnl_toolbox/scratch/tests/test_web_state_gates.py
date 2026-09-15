@@ -286,6 +286,73 @@ vm.runInContext(`(async () => {
 """, str(script)], capture_output=True, text=True, encoding="utf-8", timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    @unittest.skipUnless(shutil.which("node"), "Node.js required for browser logic tests")
+    def test_poll_failure_keeps_job_owned_until_terminal_confirmation(self) -> None:
+        script = Path(__file__).resolve().parents[1] / "web" / "scratch.js"
+        result = subprocess.run([shutil.which("node"), "-e", r"""
+const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
+const source = fs.readFileSync(process.argv[1], 'utf8');
+const timers = [];
+const context = vm.createContext({location: {pathname: '/'}, assert,
+  document: {getElementById: () => null},
+  window: {setTimeout: fn => {timers.push(fn); return timers.length;}, clearTimeout: () => {}}});
+vm.runInContext(source.slice(0, source.indexOf('const UI_CATEGORIES')), context);
+for (const [start, end] of [
+  ['function clearRunPolling(', 'function renderRunProgress('],
+  ['function renderRunJob(', 'async function stopRun('],
+  ['async function validateCurrentRecipe(', "if ($('check'))"],
+  ['async function startRun(', "if ($('run'))"],
+]) vm.runInContext(source.slice(source.indexOf(start), source.indexOf(end)), context);
+vm.runInContext(`
+function updateRunState() {}
+function renderRuntimeLimits() {}
+function setInspectorTab() {}
+function setResultState() {}
+function renderRunProgress() {}
+function renderRunResult() {}
+function clearErrorPresentation() {}
+function showError(error) { state.testError = error; }
+function runPayload() { return {recipe: state.recipe, runtime_limits: {fixture: true}}; }
+`, context);
+vm.runInContext(`(async () => {
+  state.jobId = 'A'; state.running = true;
+  state.activeRunGeneration = state.runGeneration;
+  state.activeRunRevision = state.revision;
+  const generation = state.activeRunGeneration, calls = [];
+  api = async path => { calls.push(path); throw new Error('offline'); };
+  await pollRunJob('A', generation);
+  assert.equal(state.jobId, 'A'); assert.equal(state.running, true);
+  assert.notEqual(state.runPollTimer, null);
+  await startRun();
+  assert.deepEqual(calls, ['/jobs/A']); // no second process, nor cancellation by Run
+
+  // Defence in depth: an idle UI must not silently discard a still-owned job.
+  state.running = false;
+  await startRun();
+  assert.equal(state.unresolvedCancellations.has('A'), true);
+  assert.equal(calls.includes('/api/run'), false);
+  api = async path => { calls.push(path); return {status: 'running'}; };
+  await startRun();
+  assert.equal(calls.includes('/api/run'), false);
+
+  // Only the server's terminal acknowledgement releases A before B starts.
+  api = async (path, options) => {
+    calls.push(path);
+    if (path.endsWith('/cancel')) return {status: 'cancelled'};
+    if (path === '/api/validate') return {recipe: JSON.parse(options.body).recipe, dataset_preflight: {ok: true}};
+    return {ok: true};
+  };
+  await startRun();
+  assert.equal(state.unresolvedCancellations.size, 0);
+  assert.equal(calls.filter(path => path === '/api/run').length, 1);
+  assert.ok(calls.lastIndexOf('/jobs/A/cancel') < calls.indexOf('/api/run'));
+  const count = calls.length;
+  await pollRunJob('A', generation); // stale retry cannot touch the replacement
+  assert.equal(calls.length, count);
+})()`, context).catch(error => { console.error(error); process.exitCode = 1; });
+""", str(script)], capture_output=True, text=True, encoding="utf-8", timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_server_preflight_rejects_unknown_registered_dataset(self) -> None:
         result = _dataset_preflight({"steps": [{"block": "load_dataset", "params": {"dataset": "not-a-scratch-adapter"}}]})
         self.assertFalse(result["ok"])

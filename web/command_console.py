@@ -31,6 +31,7 @@ SRC_ROOT = ROOT / "src"
 SCRATCH_ROOT = SRC_ROOT / "lnl_toolbox" / "scratch"
 SCRATCH_WEB_ROOT = SCRATCH_ROOT / "web"
 SCRATCH_RECIPE_ROOT = SCRATCH_ROOT / "recipes"
+_SCRATCH_FORMULA_RELOAD_LOCK = threading.RLock()
 STATIC_ASSETS = {
     "/assets/quick_start.js": (WEB_ROOT / "assets" / "quick_start.js", "application/javascript; charset=utf-8"),
     "/assets/quick_start.css": (WEB_ROOT / "assets" / "quick_start.css", "text/css; charset=utf-8"),
@@ -517,7 +518,12 @@ def _scratch_formula_payload(spec: object) -> dict[str, object]:
 def _scratch_reload_formulas() -> None:
     from lnl_toolbox.scratch.formula.registry import reload_formulas
 
-    reload_formulas()
+    # The Scratch editor requests blocks and formulas in parallel.  Both
+    # endpoints refresh the process-wide registry; serialize the unregister /
+    # register cycle so a user formula cannot be registered twice by racing
+    # requests.
+    with _SCRATCH_FORMULA_RELOAD_LOCK:
+        reload_formulas()
 
 
 def _scratch_request_body(handler: BaseHTTPRequestHandler) -> dict[str, object]:

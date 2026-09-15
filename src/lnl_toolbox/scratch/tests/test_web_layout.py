@@ -29,6 +29,8 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
     def test_palette_has_search_and_category_fold_controls(self) -> None:
         html = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
         self.assertIn('id="palette-search"', html)
+        self.assertIn('id="formula-palette-search"', html)
+        self.assertIn('placeholder="名称、公式或说明"', html)
         self.assertIn("单击查看说明；用“添加到当前位置/推荐位置”或拖动把手放入绿色插入位", html)
         javascript = (WEB_ROOT / "scratch.js").read_text(encoding="utf-8")
         css = (WEB_ROOT / "scratch.css").read_text(encoding="utf-8")
@@ -106,6 +108,8 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
         self.assertIn("formula-operation-group", javascript)
         self.assertIn("formula-palette-tabs", javascript)
         self.assertIn("state.formulaEditor.paletteGroup", javascript)
+        self.assertIn("state.formulaEditor.paletteQuery", javascript)
+        self.assertIn("const paletteCandidates", javascript)
         self.assertIn("FORMULA_EDITOR_KIND_GROUPS = ['基础运算', '进阶运算', '公式模板']", javascript)
         self.assertIn("disclosure.append(summary, body)", javascript)
         self.assertIn("已添加步骤：${id}", javascript)
@@ -163,6 +167,7 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
         self.assertIn(".formula-editor-palette { align-self: stretch;", css)
         self.assertIn(".formula-editor-dialog { width: min(1580px", css)
         self.assertIn(".formula-palette-tabs", css)
+        self.assertIn(".formula-palette-search", css)
         self.assertIn("overflow-y: auto", css)
 
     def test_inspector_and_main_columns_are_viewport_bounded(self) -> None:

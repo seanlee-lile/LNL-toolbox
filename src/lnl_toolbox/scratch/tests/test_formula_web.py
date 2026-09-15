@@ -4,6 +4,7 @@ import os
 import tempfile
 import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -44,9 +45,26 @@ class FormulaWebApiTest(unittest.TestCase):
                 saved = json.loads(response.read())
                 self.assertEqual(response.status, 201)
                 self.assertEqual(saved["formula"]["id"], "user/web_formula")
-                connection.request("GET", "/api/blocks")
-                response = connection.getresponse()
-                blocks = json.loads(response.read())
+                barrier = threading.Barrier(2)
+
+                def get(path):
+                    barrier.wait(timeout=5)
+                    concurrent = http.client.HTTPConnection(*server.server_address, timeout=5)
+                    try:
+                        concurrent.request("GET", path)
+                        result = concurrent.getresponse()
+                        return result.status, json.loads(result.read())
+                    finally:
+                        concurrent.close()
+
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    blocks_future = pool.submit(get, "/api/blocks")
+                    formulas_future = pool.submit(get, "/api/formulas")
+                    blocks_status, blocks = blocks_future.result(timeout=10)
+                    formulas_status, formulas = formulas_future.result(timeout=10)
+                self.assertEqual(blocks_status, 200)
+                self.assertEqual(formulas_status, 200)
+                self.assertIn("user/web_formula", {item["id"] for item in formulas})
                 self.assertIn("formula__user__web_formula", {item["id"] for item in blocks})
             finally:
                 server.shutdown()

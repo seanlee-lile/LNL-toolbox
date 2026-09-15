@@ -23,6 +23,7 @@ from .. import ScratchExecutionError, execute_recipe, list_blocks, load_recipe, 
 ROOT = Path(__file__).resolve().parent
 RECIPE_ROOT = ROOT.parent / "recipes"
 REPO_ROOT = ROOT.parents[3]
+_FORMULA_RELOAD_LOCK = threading.RLock()
 
 
 @dataclass
@@ -588,7 +589,11 @@ def _formula_payload(spec) -> dict[str, object]:
 def _reload_user_formulas() -> None:
     from ..formula.registry import reload_formulas
 
-    reload_formulas()
+    # The editor loads blocks and formulas in parallel.  Both endpoints refresh
+    # the same process-wide Formula registry, so unregister/register must be one
+    # atomic operation or the two requests can observe a duplicate user ID.
+    with _FORMULA_RELOAD_LOCK:
+        reload_formulas()
 
 
 class ScratchHandler(BaseHTTPRequestHandler):
