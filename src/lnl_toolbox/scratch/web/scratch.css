@@ -257,6 +257,28 @@ h1, h2, h3, p { margin-top: 0; }
 .run-mode-control select { max-width: 194px; padding: 5px 7px; font-size: 10px; }
 .run-mode-help { margin: 4px 0 8px; color: var(--muted); font-size: 10px; line-height: 1.35; }
 .run-controls .danger { border-color: #fb7185; background: #581c2c; color: #ffe4e6; }
+.scratch-job-list { margin: 7px 0 9px; padding: 8px; border: 1px solid #334155; border-radius: 8px; background: #0b1725; }
+.scratch-job-list-heading { display: flex; align-items: center; gap: 7px; color: #cbd5e1; font-size: 10px; }
+.scratch-job-list-toggle { min-width: 0; flex: 1 1 auto; display: flex; align-items: center; gap: 5px; min-height: 27px; padding: 3px 5px; border: 0; background: transparent; color: #cbd5e1; text-align: left; }
+.scratch-job-list-toggle:hover { background: rgba(56, 189, 248, .1); color: #e0f2fe; }
+.scratch-job-list-toggle strong { color: #bae6fd; }
+.scratch-job-list-toggle span { margin-left: auto; color: #7dd3fc; font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.scratch-job-list-chevron { margin-left: 0 !important; color: #67e8f9 !important; font: 13px system-ui, sans-serif !important; }
+.scratch-job-list-heading button { padding: 3px 6px; font-size: 10px; }
+.scratch-job-list-items { display: grid; gap: 5px; max-height: 180px; margin-top: 6px; overflow: auto; }
+.scratch-job-list-items[hidden] { display: none; }
+.scratch-job-list-empty { padding: 5px 6px; color: #94a3b8; font-size: 10px; }
+.scratch-job-row { padding: 6px 7px; border: 1px solid #334155; border-radius: 6px; background: #111c29; }
+.scratch-job-row.is-running { border-color: #f59e0b; background: #2b2112; }
+.scratch-job-row-heading { display: flex; align-items: center; gap: 7px; }
+.scratch-job-row-heading strong { min-width: 0; overflow: hidden; color: #e0f2fe; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.scratch-job-status { margin-left: auto; color: #94a3b8; font-size: 10px; white-space: nowrap; }
+.scratch-job-status.running { color: #fde68a; }
+.scratch-job-status.completed { color: #86efac; }
+.scratch-job-status.cancelled { color: #cbd5e1; }
+.scratch-job-status.failed { color: #fca5a5; }
+.scratch-job-row-meta { margin-top: 3px; color: #64748b; font: 9px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.scratch-job-cancel { margin-top: 5px; padding: 3px 6px; border-color: #fb7185; background: #581c2c; color: #ffe4e6; font-size: 10px; }
 .run-progress { margin: 9px 0 11px; padding: 10px; border: 1px solid #25617a; border-radius: 8px; background: #0c3040; }
 .run-progress[hidden] { display: none; }
 .progress-heading, .progress-facts { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -359,8 +381,19 @@ dialog::backdrop { background: rgba(0,0,0,.68); }
 .formula-operation-group > summary::-webkit-details-marker { display: none; }
 .formula-operation-group > summary::before { content: "▾"; display: inline-block; width: 15px; color: #fb7185; }
 .formula-operation-group:not([open]) > summary::before { content: "▸"; }
-.formula-operation-group-body { padding: 0 6px 6px; }
+.formula-operation-group-body, .formula-operation-subgroup-body { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; padding: 0 6px 6px; }
+.formula-operation-group-body > .formula-palette-block, .formula-operation-subgroup-body > .formula-palette-block { flex: 1 0 100%; min-width: 0; width: auto; margin: 0; }
+.formula-palette-row { display: flex; flex-wrap: nowrap; align-items: stretch; gap: 6px; margin: 0 0 6px; }
+.formula-palette-row:last-child { margin-bottom: 0; }
+.formula-palette-row > .formula-palette-block { flex: 0 1 auto; min-width: 0; width: auto; margin: 0; max-width: 100%; overflow-wrap: anywhere; word-break: break-word; white-space: normal; }
+.formula-palette-row > .formula-palette-block:only-child { flex: 1 1 100%; }
+.formula-palette-row > .formula-palette-block.formula-palette-paired .formula-palette-formula,
+.formula-palette-row > .formula-palette-block.formula-palette-paired .math-rendered,
+.formula-palette-row > .formula-palette-block.formula-palette-paired .math-line,
+.formula-palette-row > .formula-palette-block.formula-palette-paired math { min-width: 0; width: 100%; max-width: 100%; overflow: hidden; }
+.formula-palette-row > .formula-palette-block.formula-palette-paired math { font-size: .82em; }
 .formula-palette-body .formula-palette-block { margin: 5px 0; }
+.formula-palette-body .formula-palette-row > .formula-palette-block { margin: 0; }
 .formula-palette-block { display: block; width: 100%; margin: 5px 0; padding: 7px; border-left: 3px solid #fb7185; border-radius: 5px; background: #3b202b; color: #fecdd3; font-size: 11px; text-align: left; }
 .formula-palette-block strong { display: block; color: #fbcfe8; }
 .formula-palette-formula { margin-top: 3px; color: #ffe4e6; }
@@ -403,7 +436,7 @@ dialog::backdrop { background: rgba(0,0,0,.68); }
 .formula-output-equals { color: #67e8f9; font-size: 16px; font-weight: 750; }
 .formula-output-summary { min-width: 0; overflow: hidden; border: 0; background: transparent; color: #e0f2fe; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .formula-output-summary:hover { color: #fef08a; }
-.formula-canvas > .formula-expression-math-node { display: inline-block; padding: 8px 5px; color: #f8fafc; font-size: 18px; line-height: 1.8; }
+.formula-canvas > .formula-expression-math-node { display: block; width: 100%; max-width: 100%; padding: 8px 5px; color: #f8fafc; font-size: 18px; line-height: 1.8; }
 .formula-expression-math-node { border: 1px solid transparent; border-radius: 5px; cursor: pointer; }
 .formula-expression-math-node:hover, .formula-expression-math-node:focus-visible { border-color: #67e8f9; outline: none; background: rgba(8, 47, 73, .72); }
 .formula-expression-math-node.selected { border-color: #fbbf24; background: rgba(120, 53, 15, .48); box-shadow: 0 0 0 2px rgba(251, 191, 36, .18); }
@@ -411,7 +444,9 @@ dialog::backdrop { background: rgba(0,0,0,.68); }
 .formula-expression-math-parameter { color: #ddd6fe; font-style: italic; }
 .formula-expression-math-constant { color: #cbd5e1; }
 .formula-expression-math-hole { display: inline-block; min-width: 1.15em; color: #fbbf24; border: 1px dashed #fbbf24; border-radius: 4px; background: rgba(120, 53, 15, .35); text-align: center; }
-.formula-expression-math-operation { color: #f8fafc; }
+.formula-expression-math-operation { display: inline-block; max-width: 100%; color: #f8fafc; vertical-align: middle; white-space: normal; }
+.formula-expression-math-child { display: inline-block; max-width: 100%; vertical-align: middle; }
+.formula-expression-math-break { display: block; width: 100%; height: 0; }
 .formula-expression-node { display: inline-flex; flex-direction: column; max-width: 100%; margin: 2px; padding: 5px 7px; border: 1px solid transparent; border-radius: 6px; background: rgba(15, 118, 110, .2); color: #e0f2fe; cursor: pointer; text-align: left; vertical-align: middle; }
 .formula-expression-node:hover, .formula-expression-node:focus-visible { border-color: #67e8f9; outline: none; }
 .formula-expression-node.selected { border-color: #fbbf24; background: rgba(120, 53, 15, .46); box-shadow: 0 0 0 2px rgba(251, 191, 36, .16); }

@@ -60,6 +60,8 @@ const state = {
   pendingRunCancellation: null,
   unresolvedCancellations: new Map(),
   runPollTimer: null,
+  jobListPollTimer: null,
+  jobs: [],
   runProgress: null,
   runStopping: false,
   formulaEditor: {
@@ -75,6 +77,7 @@ let uiIdCounter = 0;
 // every few seconds. Stopping remains faster so the button feels responsive.
 const RUN_PROGRESS_POLL_MS = 4000;
 const RUN_STOP_POLL_MS = 500;
+const JOB_LIST_POLL_MS = 4000;
 const USABLE_DATASET_STATUSES = new Set(['ready', 'available', 'built-in', 'builtin']);
 const CUSTOM_DATASET_MODES = new Set(['custom', 'custom_path', 'local', 'path', 'folder']);
 
@@ -748,6 +751,107 @@ function renderRunJob(job, expectedGeneration = state.activeRunGeneration) {
   error.payload = {ok: false, error: error.message, code: job.error_code, block_id: job.block_id, params: job.params};
   showError(error);
   return true;
+}
+
+function jobStatusLabel(job) {
+  if (job?.running) return job.cancel_requested ? '正在停止' : '运行中';
+  if (job?.status === 'cancelled' || job?.cancel_requested) return '已停止';
+  if (job?.status === 'completed' || job?.returncode === 0) return '已完成';
+  if (job?.status === 'failed') return '失败';
+  return job?.status || '未知';
+}
+
+function renderJobList(jobs = state.jobs) {
+  const list = $('scratch-job-list-items');
+  const count = $('scratch-job-list-count');
+  if (!list) return;
+  if (count) count.textContent = `${jobs.length} 个`;
+  list.replaceChildren();
+  if (!jobs.length) {
+    const empty = document.createElement('div');
+    empty.className = 'scratch-job-list-empty';
+    empty.textContent = '当前没有 Scratch 进程。';
+    list.appendChild(empty);
+    return;
+  }
+  jobs.forEach((job) => {
+    const row = document.createElement('article');
+    row.className = `scratch-job-row ${job.running ? 'is-running' : 'is-terminal'}`;
+    const heading = document.createElement('div');
+    heading.className = 'scratch-job-row-heading';
+    const title = document.createElement('strong');
+    title.textContent = job.recipe || 'Scratch Recipe';
+    const status = document.createElement('span');
+    status.className = `scratch-job-status ${job.running ? 'running' : job.status || ''}`;
+    status.textContent = job.id === state.jobId ? `当前 · ${jobStatusLabel(job)}` : jobStatusLabel(job);
+    heading.append(title, status);
+    row.appendChild(heading);
+    const meta = document.createElement('div');
+    meta.className = 'scratch-job-row-meta';
+    meta.textContent = `${String(job.id || '').slice(0, 12)} · ${Number(job.elapsed_seconds || 0).toFixed(1)}s`;
+    row.appendChild(meta);
+    if (job.running) {
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'secondary scratch-job-cancel';
+      cancel.disabled = Boolean(job.cancel_requested);
+      cancel.textContent = job.cancel_requested ? '正在停止…' : '停止此进程';
+      cancel.onclick = () => cancelListedJob(job.id);
+      row.appendChild(cancel);
+    }
+    list.appendChild(row);
+  });
+}
+
+function setScratchJobListExpanded(expanded) {
+  const list = $('scratch-job-list-items');
+  const section = $('scratch-job-list');
+  const toggle = $('toggle-scratch-jobs');
+  const open = Boolean(expanded);
+  if (list) list.hidden = !open;
+  if (section) section.classList.toggle('is-expanded', open);
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', String(open));
+    const chevron = toggle.querySelector('.scratch-job-list-chevron');
+    if (chevron) chevron.textContent = open ? '▾' : '▸';
+  }
+}
+
+async function refreshJobList({schedule = true} = {}) {
+  if (state.jobListPollTimer) window.clearTimeout(state.jobListPollTimer);
+  state.jobListPollTimer = null;
+  try {
+    const payload = await api('/jobs');
+    state.jobs = Array.isArray(payload) ? payload : (payload.jobs || []);
+    renderJobList();
+    const current = state.jobs.find((job) => job.id === state.jobId);
+    // The list is an independent liveness source. If the focused poll missed
+    // the terminal response, reconcile it here so Stop is released.
+    if (current && !current.running && isCurrentRun(current.id, state.activeRunGeneration)) {
+      renderRunJob(current, state.activeRunGeneration);
+    }
+  } catch (error) {
+    const list = $('scratch-job-list-items');
+    if (list && !state.jobs.length) list.textContent = `进程列表暂时不可用：${error.message}`;
+  } finally {
+    if (schedule) state.jobListPollTimer = window.setTimeout(() => refreshJobList(), JOB_LIST_POLL_MS);
+  }
+}
+
+async function cancelListedJob(jobId) {
+  if (!jobId) return;
+  if (jobId === state.jobId && state.running) {
+    await stopRun();
+    return;
+  }
+  try {
+    const job = await api(`/jobs/${encodeURIComponent(jobId)}/cancel`, {method: 'POST'});
+    state.jobs = state.jobs.map((item) => item.id === jobId ? job : item);
+    renderJobList();
+    refreshJobList({schedule: false});
+  } catch (error) {
+    showError(error);
+  }
 }
 
 async function pollRunJob(jobId, expectedGeneration = state.activeRunGeneration) {
@@ -1744,7 +1848,7 @@ function renderPalette() {
 
   if (state.paletteCategory === '我的') {
     const actions = document.createElement('div'); actions.className = 'my-palette-actions';
-    [['新建公式', '用数学运算创建一个用户公式', () => { resetFormulaEditor(); $('formula-editor-dialog').showModal(); }],
+    [['新建公式', '用数学运算创建一个用户公式', () => { resetFormulaEditor(); showFormulaEditorDialog(); }],
       ['公式模板与我的公式', '打开内置公式模板，或编辑已保存的用户公式', showMyFormulas],
       ['我的组合块', '组合块只在界面中折叠，不会新增运行时 Block', () => showMessage('组合块是 UI 视图；展开或解除组合不会改变 Recipe。')]].forEach(([name, description, action]) => {
       const card = document.createElement('button'); card.type = 'button'; card.className = 'my-palette-card';
@@ -1756,7 +1860,7 @@ function renderPalette() {
     const actions = document.createElement('div'); actions.className = 'my-palette-actions';
     const custom = document.createElement('button'); custom.type = 'button'; custom.className = 'my-palette-card';
     custom.innerHTML = '<strong>＋ 创建自定义公式</strong><small>把已有公式积木组合成一个可复用的用户公式。</small>';
-    custom.onclick = () => { resetFormulaEditor(); $('formula-editor-dialog').showModal(); };
+    custom.onclick = () => { resetFormulaEditor(); showFormulaEditorDialog(); };
     actions.appendChild(custom); palette.appendChild(actions);
   }
   if (!visible.length) {
@@ -4128,8 +4232,197 @@ function renderExpressionNode(node, parent = null, key = null) {
   return wrapper;
 }
 
+let formulaCanvasResizeObserver = null;
+let formulaCanvasObservedWidth = null;
+let formulaCanvasLayoutFrame = null;
+let formulaPaletteResizeObserver = null;
+let formulaPaletteObservedWidth = null;
+let formulaPaletteLayoutFrame = null;
+
 function appendMathExpressionChild(parent, node) {
-  const child = renderMathExpressionNode(node); parent.appendChild(child); return child;
+  // Keep every rendered operand as an explicit layout item. The equation
+  // renderer can measure these items in the browser and insert a real line
+  // break only when the currently available pixel width is exhausted.
+  const item = document.createElement('span');
+  item.className = 'formula-expression-math-child';
+  const child = renderMathExpressionNode(node);
+  item.appendChild(child);
+  parent.appendChild(item);
+  return child;
+}
+
+function formulaMathRangeWidth(parent, start, end) {
+  if (typeof document === 'undefined' || typeof document.createRange !== 'function') return 0;
+  try {
+    const range = document.createRange();
+    range.setStartBefore(start);
+    range.setEndAfter(end);
+    return range.getBoundingClientRect().width;
+  } catch (_) {
+    return 0;
+  }
+}
+
+function insertFormulaMathBreak(parent, child) {
+  const breakNode = document.createElement('span');
+  breakNode.className = 'formula-expression-math-break';
+  // Keep the operator/comma with the operand that follows it.  For example,
+  // a wrapped affine expression becomes "scale × input" / "+ bias" instead
+  // of leaving a dangling "+" at the end of the first visual row.
+  const separator = child.previousSibling;
+  if (separator?.nodeType === 3 && separator.textContent.trim()) separator.before(breakNode);
+  else child.before(breakNode);
+}
+
+function layoutFormulaMathRows(canvas = $('formula-canvas')) {
+  if (!canvas) return;
+  canvas.querySelectorAll('.formula-expression-math-operation').forEach((parent) => {
+    const children = Array.from(parent.children).filter((child) => child.classList.contains('formula-expression-math-child'));
+    if (children.length < 2) return;
+    // Remove breaks from the previous pass before measuring natural width.
+    Array.from(parent.children)
+      .filter((child) => child.classList.contains('formula-expression-math-break'))
+      .forEach((breakNode) => breakNode.remove());
+    const previousWhiteSpace = parent.style.whiteSpace;
+    parent.style.whiteSpace = 'nowrap';
+    const computed = typeof window !== 'undefined' && typeof window.getComputedStyle === 'function'
+      ? window.getComputedStyle(parent) : null;
+    const horizontalPadding = computed
+      ? (parseFloat(computed.paddingLeft || '0') + parseFloat(computed.paddingRight || '0')) : 0;
+    const available = Math.max(0, (parent.clientWidth || parent.getBoundingClientRect().width) - horizontalPadding);
+    if (!available) { parent.style.whiteSpace = previousWhiteSpace; return; }
+    let rowStart = 0;
+    for (let index = 1; index < children.length; index += 1) {
+      const width = formulaMathRangeWidth(parent, children[rowStart], children[index]);
+      // Range includes the actual operator/comma text between operands, so
+      // the decision uses rendered pixels rather than character counts.
+      if (width > available + 0.5) {
+        insertFormulaMathBreak(parent, children[index]);
+        rowStart = index;
+      }
+    }
+    parent.style.whiteSpace = previousWhiteSpace;
+  });
+}
+
+function ensureFormulaCanvasLayoutObserver(canvas) {
+  if (!canvas || typeof ResizeObserver !== 'function') return;
+  if (formulaCanvasResizeObserver) return;
+  formulaCanvasResizeObserver = new ResizeObserver((entries) => {
+    const width = entries?.[0]?.contentRect?.width;
+    if (width === formulaCanvasObservedWidth) return;
+    formulaCanvasObservedWidth = width;
+    queueFormulaCanvasLayout();
+  });
+  formulaCanvasResizeObserver.observe(canvas);
+}
+
+function queueFormulaCanvasLayout() {
+  const run = () => {
+    formulaCanvasLayoutFrame = null;
+    layoutFormulaMathRows();
+  };
+  if (formulaCanvasLayoutFrame && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+    window.cancelAnimationFrame(formulaCanvasLayoutFrame);
+  }
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+    formulaCanvasLayoutFrame = window.requestAnimationFrame(run);
+  } else {
+    run();
+  }
+}
+
+function layoutFormulaPaletteRows(root = $('formula-editor-palette')) {
+  if (!root) return;
+  root.querySelectorAll('.formula-operation-group-body, .formula-operation-subgroup-body').forEach((parent) => {
+    // Flatten rows from the previous pass while preserving the current visual
+    // order. This makes every resize a fresh packing decision.
+    const flattened = [];
+    Array.from(parent.children).forEach((child) => {
+      if (child.classList.contains('formula-palette-row')) flattened.push(...Array.from(child.children));
+      else if (child.classList.contains('formula-palette-block')) flattened.push(child);
+    });
+    const blocks = flattened.filter((child) => child.classList.contains('formula-palette-block'));
+    if (!blocks.length) return;
+    parent.replaceChildren(...blocks);
+    parent.style.display = 'block';
+    // Measure each card at its natural rendered width. Each section is sorted
+    // independently so short cards form tidy pairs and long cards naturally
+    // remain on their own row.
+    blocks.forEach((block) => { block.style.flex = '0 0 auto'; block.style.width = 'max-content'; });
+    const computed = typeof window !== 'undefined' && typeof window.getComputedStyle === 'function'
+      ? window.getComputedStyle(parent) : null;
+    const padding = computed
+      ? parseFloat(computed.paddingLeft || '0') + parseFloat(computed.paddingRight || '0') : 0;
+    const available = Math.max(0, (parent.clientWidth || parent.getBoundingClientRect().width) - padding);
+    const gap = computed ? parseFloat(computed.columnGap || computed.gap || '0') : 0;
+    if (!available) {
+      blocks.forEach((block) => { block.style.flex = '1 0 100%'; block.style.width = 'auto'; });
+      return;
+    }
+    const measured = blocks
+      .map((block, index) => ({block, width: block.getBoundingClientRect().width, index}))
+      .sort((left, right) => left.width - right.width || left.index - right.index);
+    // A card can be shorter than the available row even when the two natural
+    // widths add up slightly above it: the row gives each short card a real
+    // half-width column and the text is allowed to wrap.  Keep genuinely long
+    // cards on their own row, based on the measured pixel width rather than a
+    // block-name whitelist.
+    // Use the measured width as the long-card cutoff.  A card that occupies
+    // most of a section is long; cards below that cutoff are allowed to share
+    // two equal columns and let their formula text shrink/wrap.
+    const shortCardLimit = available * 0.86;
+    const rows = [];
+    for (let index = 0; index < measured.length; index += 1) {
+      const first = measured[index];
+      const second = measured[index + 1];
+      const naturalPairFits = second && first.width + gap + second.width <= available + 0.5;
+      const shortPairFits = second && first.width <= shortCardLimit && second.width <= shortCardLimit;
+      if (second && (naturalPairFits || shortPairFits)) {
+        rows.push({blocks: [first.block, second.block], width: first.width + gap + second.width});
+        index += 1;
+      } else rows.push({blocks: [first.block], width: first.width});
+    }
+    rows.forEach((row) => {
+      const rowNode = document.createElement('div');
+      rowNode.className = 'formula-palette-row';
+      rowNode.style.gap = `${gap}px`;
+      row.blocks.forEach((block) => {
+        block.style.flex = row.blocks.length === 1 ? '1 1 100%' : '1 1 0';
+        block.style.width = 'auto';
+        block.classList.toggle('formula-palette-paired', row.blocks.length === 2);
+        rowNode.appendChild(block);
+      });
+      parent.appendChild(rowNode);
+    });
+  });
+}
+
+function ensureFormulaPaletteLayoutObserver(root) {
+  if (!root || typeof ResizeObserver !== 'function') return;
+  if (formulaPaletteResizeObserver) return;
+  formulaPaletteResizeObserver = new ResizeObserver((entries) => {
+    const width = entries?.[0]?.contentRect?.width;
+    if (width === formulaPaletteObservedWidth) return;
+    formulaPaletteObservedWidth = width;
+    queueFormulaPaletteLayout();
+  });
+  formulaPaletteResizeObserver.observe(root);
+}
+
+function queueFormulaPaletteLayout() {
+  const run = () => {
+    formulaPaletteLayoutFrame = null;
+    layoutFormulaPaletteRows();
+  };
+  if (formulaPaletteLayoutFrame && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+    window.cancelAnimationFrame(formulaPaletteLayoutFrame);
+  }
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+    formulaPaletteLayoutFrame = window.requestAnimationFrame(run);
+  } else {
+    run();
+  }
 }
 
 function renderMathExpressionNode(node) {
@@ -4673,6 +4966,8 @@ function renderFormulaCanvas() {
   if (!state.formulaEditor.expression) { canvas.textContent = '公式画布：尚未添加步骤'; renderFormulaStructureTree(); renderFormulaExpressionActions(); return; }
   const heading = document.createElement('div'); heading.className = 'formula-canvas-heading'; heading.textContent = `${state.formulaEditor.activeOutput || '输出'} =`; canvas.appendChild(heading);
   canvas.appendChild(renderMathExpressionNode(state.formulaEditor.expression));
+  ensureFormulaCanvasLayoutObserver(canvas);
+  queueFormulaCanvasLayout();
   renderFormulaStructureTree();
   renderFormulaExpressionActions();
 }
@@ -5007,6 +5302,8 @@ function renderFormulaEditor() {
   renderFormulaInputFields();
   renderFormulaParameterFields();
   renderFormulaCanvas();
+  ensureFormulaPaletteLayoutObserver($('formula-editor-palette'));
+  queueFormulaPaletteLayout();
 }
 
 function resetFormulaEditor() {
@@ -5021,6 +5318,23 @@ function resetFormulaEditor() {
   if ($('formula-editor-advanced')) $('formula-editor-advanced').open = false;
   renderFormulaEditor();
   $('formula-editor-validation').textContent = '';
+}
+
+// The palette is rendered while the dialog may still be closed.  A closed
+// dialog has no usable layout width, so a first measurement would incorrectly
+// force every operation card into a full-width row.  Always remeasure after
+// the dialog becomes visible.
+function showFormulaEditorDialog() {
+  const dialog = $('formula-editor-dialog');
+  if (!dialog) return;
+  dialog.showModal();
+  ensureFormulaPaletteLayoutObserver($('formula-editor-palette'));
+  queueFormulaPaletteLayout();
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+    window.requestAnimationFrame(() => queueFormulaPaletteLayout());
+  } else if (typeof window !== 'undefined' && typeof window.setTimeout === 'function') {
+    window.setTimeout(() => queueFormulaPaletteLayout(), 0);
+  }
 }
 
 function loadFormulaIntoEditor(item) {
@@ -5050,7 +5364,7 @@ function loadFormulaIntoEditor(item) {
   const loadedSource = item.outputs?.[outputName]?.source?.split('.')[0];
   if (loadedSource && $('formula-output-source') && [...$('formula-output-source').options].some((option) => option.value === loadedSource)) $('formula-output-source').value = loadedSource;
   $('formula-editor-validation').textContent = '';
-  $('formula-editor-dialog').showModal();
+  showFormulaEditorDialog();
 }
 
 function openBuiltinFormulaCopy(item, formulas = []) {
@@ -5620,7 +5934,7 @@ if ($('formula-builder')) $('formula-builder').onclick = () => {
 if ($('formula-operation')) $('formula-operation').onchange = renderFormulaBuilderFields;
 if ($('formula-add')) $('formula-add').onclick = addFormulaFromDialog;
 if ($('formula-cancel')) $('formula-cancel').onclick = () => $('formula-dialog').close();
-if ($('new-formula')) $('new-formula').onclick = () => { resetFormulaEditor(); $('formula-editor-dialog').showModal(); };
+if ($('new-formula')) $('new-formula').onclick = () => { resetFormulaEditor(); showFormulaEditorDialog(); };
 if ($('formula-editor-block')) $('formula-editor-block').onchange = renderFormulaEditor;
 if ($('formula-palette-search')) $('formula-palette-search').oninput = (event) => {
   state.formulaEditor.paletteQuery = event.target.value;
@@ -5643,6 +5957,11 @@ if ($('palette-search')) $('palette-search').oninput = (event) => {
   state.paletteQuery = event.target.value;
   renderPalette();
 };
+if ($('refresh-jobs')) $('refresh-jobs').onclick = () => refreshJobList({schedule: false});
+if ($('toggle-scratch-jobs')) $('toggle-scratch-jobs').onclick = () => {
+  setScratchJobListExpanded($('scratch-job-list-items')?.hidden !== false);
+};
+setScratchJobListExpanded(false);
 
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Backspace') return;
@@ -5652,6 +5971,15 @@ document.addEventListener('keydown', (event) => {
   if (target?.closest?.('input, textarea, select, button, a, [contenteditable="true"]')) return;
   if (state.formulaEditor.expressionSelection && deleteSelectedFormulaExpression()) event.preventDefault();
 });
+
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('resize', () => { queueFormulaCanvasLayout(); queueFormulaPaletteLayout(); }, {passive: true});
+}
+
+// Keep the process panel useful even when the user is not watching the run
+// inspector. This is independent from the focused-job poll, so it also
+// reconciles jobs started before this page was opened.
+refreshJobList();
 
 Promise.all([api('/api/blocks'), api('/api/formulas')]).then(([blocks, formulas]) => {
   state.blocks = blocks;

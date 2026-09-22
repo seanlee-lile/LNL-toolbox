@@ -320,6 +320,20 @@ def _read_output(job: Job) -> None:
                 job.structured = None
 
 
+def _reconcile_job_process(job: Job) -> None:
+    """Publish a child exit before the stdout reader has drained its pipe."""
+
+    process = job.process
+    if process is None or job.returncode is not None:
+        return
+    returncode = process.poll()
+    if returncode is None:
+        return
+    with JOBS_LOCK:
+        if job.returncode is None:
+            job.returncode = returncode
+
+
 def _start_process(key: str, command: list[str], display_command: str) -> Job:
     child_env = os.environ.copy()
     # Windows Python processes may otherwise select the GBK console codec
@@ -1168,6 +1182,28 @@ def _value_kind(value: object) -> str:
     return "text"
 
 
+def _metadata_field_kind(metadata: dict[str, object], current: object) -> tuple[str, bool]:
+    """Return the editor kind and whether an empty value means ``null``.
+
+    Registry metadata is authoritative here.  Inferring a field's type from
+    its current value breaks nullable numeric settings because their current
+    value is legitimately ``None`` (and previously exposed them as text).
+    """
+
+    value_type = str(metadata.get("value_type", "")).strip().lower()
+    if value_type in {"integer", "number", "nullable"}:
+        return "number", value_type == "nullable"
+    if value_type == "boolean":
+        return "boolean", False
+    if value_type == "list":
+        return "list", False
+    if value_type in {"mapping", "object"}:
+        return "object", False
+    if value_type == "string":
+        return "text", False
+    return _value_kind(current), False
+
+
 @lru_cache(maxsize=1)
 def _registry_recipe_paths() -> dict[str, Path]:
     from lnl_toolbox.catalog import discover_recipes
@@ -1222,12 +1258,17 @@ def _registry_config_fields(
                 raise ValueError(f"registry 参数路径不存在：{method}.{path}")
             baseline_found, baseline_value = _config_path_value(baseline, str(path))
             evidence_ref = metadata.get("evidence_ref")
+            kind, nullable = _metadata_field_kind(metadata, current)
             fields.append(
                 {
                     "path": str(path),
                     "label": str(path),
                     "value": current,
-                    "kind": _value_kind(current),
+                    "kind": kind,
+                    "nullable": nullable,
+                    "number_type": str(metadata.get("value_type", ""))
+                    if kind == "number"
+                    else "",
                     "level": level,
                     "level_label": level_metadata.get("label_zh", level),
                     "editable": bool(level_metadata.get("editable", False)),
@@ -1338,6 +1379,54 @@ def _set_config_path(config: dict[str, object], path: str, value: object) -> Non
     current[parts[-1]] = value
 
 
+def _normalize_registry_numeric_fields(config: dict[str, Any], method: str) -> None:
+    """Convert numeric Web-editor values before a config is persisted.
+
+    Full-YAML editing can bypass the typed form controls, so normalize only
+    paths whose registry metadata declares a numeric value.  In particular,
+    an empty nullable numeric field is ``None`` rather than the invalid
+    ``""`` that later reaches the data service.  String-declared fields are
+    deliberately left untouched.
+    """
+
+    registry_fields = _registry_config_fields(config, method)
+    if registry_fields is None:
+        return
+    fields, _ = registry_fields
+    for field in fields:
+        if field.get("kind") != "number":
+            continue
+        path = str(field["path"])
+        found, value = _config_path_value(config, path)
+        if not found:
+            continue
+        nullable = bool(field.get("nullable", False))
+        number_type = str(field.get("number_type", ""))
+        if value is None:
+            if not nullable:
+                raise ValueError(f"参数 {path} 必须是数字")
+            continue
+        if isinstance(value, bool):
+            raise ValueError(f"参数 {path} 必须是数字")
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                if nullable:
+                    _set_config_path(config, path, None)
+                    continue
+                raise ValueError(f"参数 {path} 必须是数字")
+            try:
+                value = int(text) if number_type == "integer" else float(text)
+            except ValueError as exc:
+                raise ValueError(f"参数 {path} 必须是数字") from exc
+        if number_type == "integer":
+            if isinstance(value, float) and not value.is_integer():
+                raise ValueError(f"参数 {path} 必须是整数")
+            _set_config_path(config, path, int(value))
+        elif isinstance(value, (int, float)):
+            _set_config_path(config, path, value)
+
+
 def _coerce_patch_value(field: dict[str, object], value: object) -> object:
     kind = field["kind"]
     if kind == "boolean":
@@ -1345,8 +1434,16 @@ def _coerce_patch_value(field: dict[str, object], value: object) -> object:
             raise ValueError(f"参数 {field['path']} 必须是布尔值")
         return value
     if kind == "number":
+        if field.get("nullable") and isinstance(value, str) and not value.strip():
+            return None
+        if field.get("nullable") and value is None:
+            return None
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError(f"参数 {field['path']} 必须是数字")
+        if field.get("number_type") == "integer":
+            if isinstance(value, float) and not value.is_integer():
+                raise ValueError(f"参数 {field['path']} 必须是整数")
+            return int(value)
         return value
     if kind == "list":
         if not isinstance(value, list):
@@ -1502,6 +1599,7 @@ def _save_config(payload: object) -> dict[str, object]:
     if source_config is None:
         formal = _formal_registry_config(method)
         source_config = formal[1] if formal is not None else parsed
+    _normalize_registry_numeric_fields(parsed, method)
     _assert_locked_parameters_unchanged(source_config, parsed, method)
     _record_paper_parameter_status(
         parsed,
@@ -1547,6 +1645,7 @@ def _save_config(payload: object) -> dict[str, object]:
 
 
 def _job_payload(job: Job) -> dict[str, object]:
+    _reconcile_job_process(job)
     with JOBS_LOCK:
         payload: dict[str, object] = {
             "id": job.job_id,
@@ -1578,6 +1677,14 @@ def _job_payload(job: Job) -> dict[str, object]:
     else:
         payload["training"] = None
     return payload
+
+
+def job_list_payload() -> dict[str, object]:
+    """Return current and recent main-console jobs for the process panel."""
+
+    with JOBS_LOCK:
+        jobs = list(reversed(list(JOBS.values())))[:30]
+    return {"jobs": [_job_payload(job) for job in jobs]}
 
 
 def _picker_payload(payload: object) -> dict[str, object]:
@@ -2010,6 +2117,17 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 _json_response(self, _resume_payload(selected, checkpoint))
             except (OSError, TypeError, ValueError) as exc:
                 _json_response(self, {"error": str(exc)}, 400)
+            return
+        if path == "/api/scratch/jobs":
+            try:
+                from lnl_toolbox.scratch.web.server import scratch_job_list_payload
+
+                _json_response(self, scratch_job_list_payload())
+            except Exception as exc:
+                _json_response(self, {"error": str(exc)}, 400)
+            return
+        if path == "/api/jobs":
+            _json_response(self, job_list_payload())
             return
         if path.startswith("/api/scratch/jobs/"):
             try:

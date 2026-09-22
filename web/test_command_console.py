@@ -972,6 +972,53 @@ class CommandConsoleTest(unittest.TestCase):
             )
             self.assertIn("seed: 19", overwritten["content"])
 
+    def test_yaml_editor_uses_registry_numeric_types_and_preserves_nullable_values(self):
+        schema = command_console._config_schema("gce-cifar10-noise02-reproduction")
+        fields = {field["path"]: field for field in schema["fields"]}
+        self.assertEqual(fields["data.max_train_samples"]["kind"], "number")
+        self.assertTrue(fields["data.max_train_samples"]["nullable"])
+        self.assertEqual(fields["data.name"]["kind"], "text")
+
+        source = command_console._config_payload("gce-cifar10-noise02-reproduction")
+        broken = source["content"].replace("max_train_samples: null", "max_train_samples: ''")
+        broken = broken.replace("max_validation_samples: null", "max_validation_samples: ''")
+        broken = broken.replace("max_test_samples: null", "max_test_samples: ''")
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            destination = Path(directory) / "gce-numeric-round-trip.yaml"
+            saved = command_console._save_config(
+                {
+                    "path": str(destination),
+                    "recipe": "gce-cifar10-noise02-reproduction",
+                    "source_path": source["path"],
+                    "content": broken,
+                    "overwrite": False,
+                }
+            )
+            from lnl_toolbox.catalog import load_yaml
+
+            config = load_yaml(command_console.ROOT / saved["path"])
+            self.assertIsNone(config["data"]["max_train_samples"])
+            self.assertIsNone(config["data"]["max_validation_samples"])
+            self.assertIsNone(config["data"]["max_test_samples"])
+
+            numeric = command_console._save_config(
+                {
+                    "path": str(destination),
+                    "recipe": "gce-cifar10-noise02-reproduction",
+                    "source_path": source["path"],
+                    "patches": [
+                        {"path": "data.max_train_samples", "value": 3000},
+                        {"path": "data.max_validation_samples", "value": ""},
+                        {"path": "data.name", "value": "123"},
+                    ],
+                    "overwrite": True,
+                }
+            )
+            config = load_yaml(command_console.ROOT / numeric["path"])
+            self.assertEqual(config["data"]["max_train_samples"], 3000)
+            self.assertIsNone(config["data"]["max_validation_samples"])
+            self.assertEqual(config["data"]["name"], "123")
+
     def test_complete_yaml_edit_rejects_invalid_configuration(self):
         config = command_console._config_payload("cifar10-clean-smoke")
         invalid = config["content"].replace("runner: clean", "runner: missing", 1)
@@ -1236,6 +1283,32 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertEqual(payload["returncode"], 0)
         self.assertIsNone(payload["training"])
         json.dumps(payload)
+
+    def test_terminal_process_poll_releases_main_stop_state(self):
+        process = mock.Mock()
+        process.poll.return_value = 0
+        job = command_console.Job(
+            job_id="exited",
+            key="doctor",
+            command=["lnl", "doctor"],
+            display_command="lnl doctor",
+            process=process,
+            cancel_requested=True,
+        )
+        payload = command_console._job_payload(job)
+        self.assertFalse(payload["running"])
+        self.assertEqual(payload["returncode"], 0)
+
+    def test_main_console_exposes_process_list(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        for marker in (
+            'id="console-job-list"', 'id="refresh-console-jobs"',
+            'id="toggle-console-jobs"', 'aria-expanded="false"',
+            'id="console-job-list-items"', 'function setConsoleJobListExpanded', 'function refreshConsoleJobList',
+            'function renderConsoleJobList', 'fetch("/api/jobs")',
+        ):
+            self.assertIn(marker, page)
+        self.assertTrue(callable(command_console.job_list_payload))
 
     def test_training_job_payload_contains_best_effort_snapshot(self):
         from web.training_status import TrainingContext

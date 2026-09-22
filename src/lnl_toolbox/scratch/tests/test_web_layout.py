@@ -140,6 +140,21 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
         self.assertIn('id="formula-expression-actions"', html)
         self.assertIn("function renderExpressionNode", javascript)
         self.assertIn("function renderMathExpressionNode", javascript)
+        self.assertIn("function layoutFormulaMathRows", javascript)
+        self.assertIn("getBoundingClientRect", javascript)
+        self.assertIn("formula-expression-math-child", javascript)
+        self.assertIn("formula-expression-math-break", javascript)
+        self.assertIn("function ensureFormulaCanvasLayoutObserver", javascript)
+        self.assertIn("function queueFormulaCanvasLayout", javascript)
+        self.assertIn("function layoutFormulaPaletteRows", javascript)
+        self.assertIn("function showFormulaEditorDialog", javascript)
+        self.assertIn("showFormulaEditorDialog();", javascript)
+        self.assertIn("const shortCardLimit = available * 0.86", javascript)
+        self.assertIn("block.style.flex = row.blocks.length === 1 ? '1 1 100%' : '1 1 0'", javascript)
+        self.assertIn("formula-palette-paired", javascript)
+        self.assertIn("function ensureFormulaPaletteLayoutObserver", javascript)
+        self.assertIn("function queueFormulaPaletteLayout", javascript)
+        self.assertIn("formula-palette-row", javascript)
         self.assertIn("function insertExpressionSibling", javascript)
         self.assertIn("function moveExpressionArrayItem", javascript)
         self.assertIn("function cloneExpressionNode", javascript)
@@ -163,6 +178,11 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
         self.assertIn("disclosure.addEventListener('toggle'", javascript)
         self.assertIn("formula-editor-advanced > summary", css)
         self.assertIn(".formula-canvas", css)
+        self.assertIn(".formula-expression-math-child", css)
+        self.assertIn(".formula-expression-math-break", css)
+        self.assertIn(".formula-operation-subgroup-body", css)
+        self.assertIn(".formula-palette-row", css)
+        self.assertIn(".formula-palette-paired", css)
         self.assertIn(".formula-parameter-row", css)
         self.assertIn(".formula-editor-palette { align-self: stretch;", css)
         self.assertIn(".formula-editor-dialog { width: min(1580px", css)
@@ -189,6 +209,7 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
             'id="run-mode"', 'id="run-mode-help"',
             'id="progress-bar"', 'id="progress-stage"',
             'id="epoch-output"', 'id="epoch-output-list"', 'id="epoch-output-count"',
+            'id="scratch-job-list"', 'id="toggle-scratch-jobs"', 'id="refresh-jobs"', 'id="scratch-job-list-items"',
         ):
             self.assertIn(marker, html)
 
@@ -197,6 +218,7 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
             "function setInspectorTab(tab = 'blocks')", "function renderRunResult(result)",
             "setResultState('运行中…')", "renderRunResult(result)",
             "function pollRunJob(jobId, expectedGeneration = state.activeRunGeneration)", "async function stopRun()", "renderRunProgress(job)",
+            "function renderJobList(jobs = state.jobs)", "function setScratchJobListExpanded", "async function refreshJobList", "async function cancelListedJob", "refreshJobList();",
             "function renderEpochOutputs(progress = {})", "epoch_outputs",
             "const RUN_PROGRESS_POLL_MS = 4000", "const RUN_STOP_POLL_MS = 500",
             "function makeTemplateCardActivatable(card, item)",
@@ -234,6 +256,8 @@ class ScratchInspectorLayoutTest(unittest.TestCase):
         self.assertIn(".run-progress", css)
         self.assertIn(".epoch-output-card", css)
         self.assertIn(".run-controls", css)
+        self.assertIn(".scratch-job-list-toggle", css)
+        self.assertIn(".scratch-job-list-items[hidden]", css)
         self.assertIn(".run-button", css)
         self.assertIn(".math-rendered math", css)
         self.assertIn(".formula-chain-step", css)

@@ -88,7 +88,30 @@ def _job_error_code(message: str | None) -> str | None:
     return None
 
 
+def _reconcile_job_process(job: ScratchJob) -> None:
+    """Publish a terminal process state even if stdout draining lags behind.
+
+    The output reader intentionally drains stdout in a background thread.  On
+    Windows, ``Popen.wait()`` can return before that thread has finished
+    copying the final lines, which previously left ``returncode`` as ``None``
+    and made the UI keep the Stop button disabled forever.  The process handle
+    is authoritative for liveness; output parsing can finish independently.
+    """
+
+    process = job.process
+    if process is None or job.returncode is not None:
+        return
+    returncode = process.poll()
+    if returncode is None:
+        return
+    with SCRATCH_JOBS_LOCK:
+        if job.returncode is None:
+            job.returncode = returncode
+            job.finished_at = job.finished_at or time.time()
+
+
 def _scratch_job_payload(job: ScratchJob) -> dict[str, object]:
+    _reconcile_job_process(job)
     with SCRATCH_JOBS_LOCK:
         lines = list(job.lines)
         returncode = job.returncode
@@ -127,6 +150,14 @@ def _scratch_job_payload(job: ScratchJob) -> dict[str, object]:
         "progress": progress,
         "elapsed_seconds": max(0.0, (job.finished_at or time.time()) - job.started_at),
     }
+
+
+def scratch_job_list_payload() -> dict[str, object]:
+    """Return current and recent Scratch jobs for the Web process panel."""
+
+    with SCRATCH_JOBS_LOCK:
+        jobs = sorted(SCRATCH_JOBS.values(), key=lambda item: item.started_at, reverse=True)
+    return {"jobs": [_scratch_job_payload(job) for job in jobs[:30]]}
 
 
 def _read_scratch_job_output(job: ScratchJob) -> None:
@@ -264,6 +295,7 @@ def cancel_scratch_job(job_id: str) -> ScratchJob:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             pass
+    _reconcile_job_process(job)
     return job
 
 
@@ -660,6 +692,8 @@ class ScratchHandler(BaseHTTPRequestHandler):
                 from .data_bridge import dataset_catalog_payload
 
                 self._send(dataset_catalog_payload())
+            elif parsed.path == "/api/jobs":
+                self._send(scratch_job_list_payload())
             elif parsed.path.startswith("/api/jobs/"):
                 job_id = parsed.path.removeprefix("/api/jobs/").strip("/")
                 if not job_id:

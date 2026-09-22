@@ -8,11 +8,62 @@ import unittest
 from unittest.mock import patch
 
 from lnl_toolbox.scratch.web.data_bridge import dataset_preflight_payload, _registered_fact
-from lnl_toolbox.scratch.web.server import _dataset_preflight
+from lnl_toolbox.scratch.web.server import (
+    ScratchJob,
+    _dataset_preflight,
+    _scratch_job_payload,
+    scratch_job_list_payload,
+)
 from lnl_toolbox.scratch import validate_recipe
 
 
 class ScratchWebStateGateTest(unittest.TestCase):
+    def test_terminal_process_poll_releases_running_state_before_output_drain(self) -> None:
+        """A child that has exited must not leave the Stop action stuck."""
+
+        class ExitedProcess:
+            pid = 4242
+
+            def poll(self):
+                return -9
+
+        with tempfile.TemporaryDirectory() as root:
+            job = ScratchJob(
+                job_id="job-exited",
+                recipe_name="test.yaml",
+                output_dir=Path(root),
+                command=["python", "-c", ""],
+                process=ExitedProcess(),
+                cancel_requested=True,
+            )
+            payload = _scratch_job_payload(job)
+
+        self.assertFalse(payload["running"])
+        self.assertEqual(payload["returncode"], -9)
+        self.assertEqual(payload["status"], "cancelled")
+
+    def test_job_list_payload_reconciles_each_process(self) -> None:
+        class ExitedProcess:
+            pid = 4343
+
+            def poll(self):
+                return 0
+
+        with tempfile.TemporaryDirectory() as root:
+            job = ScratchJob(
+                job_id="job-listed",
+                recipe_name="listed.yaml",
+                output_dir=Path(root),
+                command=["python", "-c", ""],
+                process=ExitedProcess(),
+            )
+            with patch("lnl_toolbox.scratch.web.server.SCRATCH_JOBS", {job.job_id: job}):
+                payload = scratch_job_list_payload()
+
+        self.assertEqual(len(payload["jobs"]), 1)
+        self.assertFalse(payload["jobs"][0]["running"])
+        self.assertEqual(payload["jobs"][0]["status"], "completed")
+
     @unittest.skipUnless(shutil.which("node"), "Node.js required for browser logic tests")
     def test_revision_invalidates_all_derived_results(self) -> None:
         script = Path(__file__).resolve().parents[1] / "web" / "scratch.js"
@@ -293,9 +344,11 @@ vm.runInContext(`(async () => {
 const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
 const source = fs.readFileSync(process.argv[1], 'utf8');
 const timers = [];
-const context = vm.createContext({location: {pathname: '/'}, assert,
+const schedule = fn => { timers.push(fn); return timers.length; };
+const context = vm.createContext({location: {pathname: '/'}, assert, process,
   document: {getElementById: () => null},
-  window: {setTimeout: fn => {timers.push(fn); return timers.length;}, clearTimeout: () => {}}});
+  setTimeout: schedule, clearTimeout: () => {},
+  window: {setTimeout: schedule, clearTimeout: () => {}}});
 vm.runInContext(source.slice(0, source.indexOf('const UI_CATEGORIES')), context);
 for (const [start, end] of [
   ['function clearRunPolling(', 'function renderRunProgress('],
@@ -349,7 +402,7 @@ vm.runInContext(`(async () => {
   const count = calls.length;
   await pollRunJob('A', generation); // stale retry cannot touch the replacement
   assert.equal(calls.length, count);
-})()`, context).catch(error => { console.error(error); process.exitCode = 1; });
+})().then(() => process.exit(0)).catch(error => { console.error(error); process.exitCode = 1; });`, context);
 """, str(script)], capture_output=True, text=True, encoding="utf-8", timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 

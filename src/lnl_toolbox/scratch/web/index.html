@@ -114,6 +114,15 @@
             <button id="stop-run" type="button" class="danger" disabled>■ 停止运行</button>
             <button id="refresh-run" type="button" class="secondary" disabled>↻ 刷新进度</button>
           </div>
+          <section id="scratch-job-list" class="scratch-job-list" aria-live="polite">
+            <div class="scratch-job-list-heading">
+              <button id="toggle-scratch-jobs" class="scratch-job-list-toggle" type="button" aria-expanded="false" aria-controls="scratch-job-list-items">
+                <span class="scratch-job-list-chevron" aria-hidden="true">▸</span><strong>Scratch 进程列表</strong><span id="scratch-job-list-count">0 个</span>
+              </button>
+              <button id="refresh-jobs" type="button" class="secondary" aria-label="刷新 Scratch 进程列表">↻ 刷新</button>
+            </div>
+            <div id="scratch-job-list-items" class="scratch-job-list-items" hidden>正在读取进程状态…</div>
+          </section>
           <p id="run-mode-help" class="run-mode-help">默认只跑一轮做结构验证；切换到“完整运行”后会按当前 Recipe 的正式轮次和 batch 执行。</p>
           <div id="run-progress" class="run-progress" hidden aria-live="polite">
             <div class="progress-heading"><strong>实时进度</strong><span id="progress-percent">—</span></div>
