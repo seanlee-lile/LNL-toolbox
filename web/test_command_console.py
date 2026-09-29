@@ -16,6 +16,41 @@ import command_console  # noqa: E402
 
 
 class CommandConsoleTest(unittest.TestCase):
+    def test_data_page_noise_status_edits_dataset_facts_without_progress_boxes(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertNotIn('function dataStepsHtml(', page)
+        self.assertNotIn('class="data-steps"', page)
+        self.assertIn('datasetNoiseStatusHtml(selectedReport)', page)
+        self.assertIn('id="data-noise-status"', page)
+        self.assertIn('id="data-noise-save"', page)
+        self.assertIn('await saveDatasetDeclarations(declarations)', page)
+        self.assertIn('await loadDatasetCompatibility(alias)', page)
+
+    def test_web_server_refuses_second_listener_on_same_port(self):
+        with command_console.SingleInstanceHTTPServer(
+            ("127.0.0.1", 0), command_console.ConsoleHandler
+        ) as first:
+            with self.assertRaises(OSError):
+                command_console.ThreadingHTTPServer(
+                    first.server_address, command_console.ConsoleHandler
+                )
+
+    def test_main_reports_occupied_web_port(self):
+        with mock.patch.object(
+            command_console, "serve", side_effect=OSError(10048, "address in use")
+        ), contextlib.redirect_stderr(io.StringIO()) as output:
+            result = command_console.main(["--port", "8765"])
+        self.assertEqual(result, 1)
+        self.assertIn("Web port 8765 is already in use", output.getvalue())
+
+    def test_number_parameters_do_not_spin_on_mouse_wheel(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn('document.addEventListener("wheel", function (event) {', page)
+        self.assertIn('target instanceof HTMLInputElement && target.type === "number"', page)
+        self.assertIn('document.activeElement === target', page)
+        self.assertIn('target.blur();', page)
+        self.assertIn('}, {capture:true, passive:true});', page)
+
     def test_command_preview_is_directly_editable_and_execute_uses_edit(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
         self.assertIn('textarea id="preview"', page)
@@ -69,6 +104,21 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertIn("loadDatasetCompatibility(state.tutorialData)", page)
         self.assertNotIn('dataset === "clothing1m"', page.lower())
 
+    def test_quick_start_is_a_centered_previous_next_carousel(self):
+        script = (command_console.WEB_ROOT / "assets" / "quick_start.js").read_text(encoding="utf-8")
+        css = (command_console.WEB_ROOT / "assets" / "quick_start.css").read_text(encoding="utf-8")
+        for marker in ("currentStep", "quickStartSteps", "renderQuickStartCarousel", "id=\"qs-prev\"", "id=\"qs-next\"", "上一步", "下一步"):
+            self.assertIn(marker, script)
+        for marker in (".qs-carousel", ".qs-carousel-slide", ".qs-carousel-nav", "margin-inline: auto"):
+            self.assertIn(marker, css)
+        self.assertIn(".qs-next-actions { width: 100%;", css)
+        self.assertIn("max-width: 1280px", css)
+        self.assertIn("grid-template-columns: auto minmax(0, 1fr) auto", css)
+        self.assertIn("&lt; 上一步", script)
+        self.assertIn("下一步 &gt;", script)
+        self.assertIn(".qs-carousel-card", css)
+        self.assertIn("border: 0; border-radius: 0; background: transparent", css)
+
     def test_yaml_builder_has_one_path_and_contextual_editor_lifecycle(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
         self.assertEqual(page.count('id="yaml-path"'), 1)
@@ -111,8 +161,11 @@ class CommandConsoleTest(unittest.TestCase):
         ), mock.patch(
             "lnl_toolbox.catalog.load_yaml", return_value={"execution": {"runner": "fine"}}
         ), mock.patch(
-            "command_console._dataset_profile_payload",
-            return_value={"dataset": "lab", "profile": {}, "detected": {}, "capabilities": {}, "unresolved_dataset_facts": [], "declared": {}},
+            "command_console._dataset_profile_context",
+            return_value=(
+                {"dataset": "lab", "profile": {}, "detected": {}, "capabilities": {}, "unresolved_dataset_facts": [], "declared": {}},
+                mock.Mock(),
+            ),
         ), mock.patch(
             "lnl_toolbox.training.service.ExperimentService", return_value=service
         ):
@@ -340,15 +393,57 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertIn('class="context-scratch" href="/scratch"', page)
         self.assertIn("function renderConsoleContext()", page)
 
+    def test_main_console_layout_centers_primary_algorithm_area(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn("width: 100%; max-width: none", page)
+        self.assertIn("grid-template-columns: minmax(170px, 190px) minmax(0, 1fr)", page)
+        self.assertIn("width: 100%; margin: 0", page)
+        self.assertIn(".right-stack { display: grid; gap: 18px; width: 100%; margin: 0; }", page)
+        self.assertIn("top: 12px; right: 18px", page)
+
     def test_dataset_first_start_page_exposes_workspace_handoffs(self):
         quick_start = (command_console.WEB_ROOT / "assets" / "quick_start.js").read_text(encoding="utf-8")
-        self.assertIn("compact: true", (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8"))
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn("compact: true", page)
         self.assertIn("function renderNextActions()", quick_start)
-        self.assertIn("创建 / 编辑实验配置", quick_start)
-        self.assertIn("查看兼容论文", quick_start)
-        self.assertIn("打开 Scratch 搭建器", quick_start)
-        self.assertIn("高级：完整方法兼容性引导", quick_start)
-        self.assertIn("context.openExperiment", quick_start)
+        self.assertIn("renderPlanParameters()", quick_start)
+        self.assertIn('class="qs-parameter-advanced"', quick_start)
+        self.assertIn("完整方法兼容性引导", quick_start)
+        self.assertNotIn("高级模式：其他工作区", quick_start)
+
+    def test_quick_start_parameter_edits_save_a_checked_run_config(self):
+        quick_start = (command_console.WEB_ROOT / "assets" / "quick_start.js").read_text(encoding="utf-8")
+        self.assertIn('request("/api/config-schema?" + source', quick_start)
+        self.assertIn('post("/api/configs", {', quick_start)
+        self.assertIn('dataset_alias:state.dataset.alias', quick_start)
+        self.assertIn('acknowledge_paper_impact:true', quick_start)
+        self.assertIn('commandForSavedConfig(command, plan, saved.path)', quick_start)
+        self.assertNotIn('qs-open-experiment', quick_start)
+
+    def test_web_exposes_one_seed_and_saves_derived_noise_seed(self):
+        import tempfile
+        import yaml
+
+        for method, recipe_id in command_console._parameter_registry()["formal_recipe_bindings"].items():
+            paper_schema = command_console._config_schema(recipe_id)
+            visible_seeds = [field["path"] for field in paper_schema["fields"]
+                             if field["visible"] and (field["path"] == "seed" or field["path"].rsplit(".", 1)[-1].endswith("seed"))]
+            self.assertEqual(visible_seeds, ["seed"], method)
+        schema = command_console._config_schema("gce-cifar10-noise02-reproduction")
+        fields = {field["path"]: field for field in schema["fields"]}
+        self.assertTrue(fields["seed"]["visible"])
+        self.assertFalse(fields["noise.seed"]["visible"])
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            destination = Path(directory) / "one-seed.yaml"
+            command_console._save_config({
+                "recipe": "gce-cifar10-noise02-reproduction",
+                "path": str(destination),
+                "patches": [{"path": "seed", "value": 73}],
+                "acknowledge_paper_impact": True,
+            })
+            stored = yaml.safe_load(destination.read_text(encoding="utf-8"))
+            self.assertEqual(stored["seed"], 73)
+            self.assertEqual(stored["noise"]["seed"], 73)
 
     def test_sweep_ui_reuses_parameter_metadata_groups_and_excludes_locks(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
@@ -763,25 +858,11 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertNotIn('selectValue("data-root"', api_builder)
         self.assertNotIn('selectValue("data-path"', api_builder)
 
-    def test_dataset_status_table_is_a_direct_collapsed_web_view(self):
+    def test_dataset_status_table_is_a_direct_web_view(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn('dataAction: "status"', page)
-        self.assertIn('statusPanel.id = "data-status-panel";', page)
-        self.assertIn(
-            'statusPanel.classList.toggle("hidden", state.dataAction !== "list");',
-            page,
-        )
-        self.assertIn('statusCollapse.id = "data-status-collapse";', page)
-        self.assertIn('statusCollapse.textContent = "收起";', page)
-        self.assertIn('state.dataAction = "status";', page)
-        self.assertIn('actionNode.value = "status";', page)
-        self.assertIn("updateDatasetStatusVisibility();", page)
-        self.assertIn('if (action === "list") return "";', page)
-        self.assertIn("正在查看已有数据状态，无需执行指令。", page)
-        self.assertIn(
-            'module === "data" && previousModule !== "data" && state.dataAction === "list"',
-            page,
-        )
+        self.assertIn('state.dataAction = "list";', page)
+        self.assertIn('id="data-status-panel"', page)
+        self.assertIn('dataTableHtml(reports) + datasetNoiseStatusHtml(selectedReport)', page)
         for heading in ("数据集", "状态", "位置", "Train / Test", "训练验证"):
             self.assertIn(f"<th>{heading}</th>", page)
 
@@ -972,6 +1053,34 @@ class CommandConsoleTest(unittest.TestCase):
             )
             self.assertIn("seed: 19", overwritten["content"])
 
+    def test_gce_explicit_learning_rates_save_without_changing_formal_recipe(self):
+        schema = command_console._config_schema("gce-cifar10-noise02-reproduction")
+        fields = {field["path"]: field for field in schema["fields"]}
+        self.assertTrue(fields["scheduler.lr_values"]["editable"])
+        self.assertIsNone(fields["scheduler.lr_values"]["value"])
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            destination = Path(directory) / "gce-custom-rates.yaml"
+            saved = command_console._save_config({
+                "path": str(destination),
+                "recipe": "gce-cifar10-noise02-reproduction",
+                "patches": [{"path": "scheduler.lr_values", "value": [0.003, 0.0007]}],
+                "overwrite": False,
+            })
+            from lnl_toolbox.catalog import load_yaml
+
+            custom = load_yaml(command_console.ROOT / saved["path"])
+            self.assertEqual(custom["scheduler"]["lr_values"], [0.003, 0.0007])
+            self.assertEqual(custom["scheduler"]["gamma"], 0.1)
+            formal = load_yaml(command_console.ROOT / "configs/experiment/gce_cifar10_noise02_reproduction.yaml")
+            self.assertNotIn("lr_values", formal["scheduler"])
+            with self.assertRaisesRegex(ValueError, "one value per milestone"):
+                command_console._save_config({
+                    "path": str(Path(directory) / "invalid-rates.yaml"),
+                    "recipe": "gce-cifar10-noise02-reproduction",
+                    "patches": [{"path": "scheduler.lr_values", "value": [0.003]}],
+                    "overwrite": False,
+                })
+
     def test_yaml_editor_uses_registry_numeric_types_and_preserves_nullable_values(self):
         schema = command_console._config_schema("gce-cifar10-noise02-reproduction")
         fields = {field["path"]: field for field in schema["fields"]}
@@ -1009,7 +1118,6 @@ class CommandConsoleTest(unittest.TestCase):
                     "patches": [
                         {"path": "data.max_train_samples", "value": 3000},
                         {"path": "data.max_validation_samples", "value": ""},
-                        {"path": "data.name", "value": "123"},
                     ],
                     "overwrite": True,
                 }
@@ -1017,7 +1125,16 @@ class CommandConsoleTest(unittest.TestCase):
             config = load_yaml(command_console.ROOT / numeric["path"])
             self.assertEqual(config["data"]["max_train_samples"], 3000)
             self.assertIsNone(config["data"]["max_validation_samples"])
-            self.assertEqual(config["data"]["name"], "123")
+            self.assertEqual(config["data"]["name"], "cifar10")
+            self.assertEqual(command_console._coerce_patch_value(fields["data.name"], "123"), "123")
+            with self.assertRaisesRegex(ValueError, "unknown dataset"):
+                command_console._save_config({
+                    "path": str(destination),
+                    "recipe": "gce-cifar10-noise02-reproduction",
+                    "source_path": source["path"],
+                    "patches": [{"path": "data.name", "value": "123"}],
+                    "overwrite": True,
+                })
 
     def test_complete_yaml_edit_rejects_invalid_configuration(self):
         config = command_console._config_payload("cifar10-clean-smoke")
@@ -1104,14 +1221,68 @@ class CommandConsoleTest(unittest.TestCase):
             "lnl_parameter_metadata_registry_revised.yaml",
         )
         registry = command_console._parameter_registry()
-        self.assertEqual(str(registry["registry_version"]), "1.1.0")
+        self.assertEqual(str(registry["registry_version"]), "1.2.2")
         self.assertIn("permission_policy_revision", registry)
+
+    def test_parameter_display_policy_separates_runtime_fields_and_resources(self):
+        schema = command_console._config_schema("gce-cifar10-noise02-reproduction")
+        fields = {field["path"]: field for field in schema["fields"]}
+        self.assertFalse(fields["loader.num_workers"]["visible"])
+        self.assertFalse(fields["loader.pin_memory"]["visible"])
+        self.assertFalse(fields["trainer.device"]["visible"])
+        self.assertFalse(fields["data.max_train_samples"]["visible"])
+        self.assertTrue(fields["data.name"]["visible"])
+        dld_schema = command_console._config_schema("dld-cifar10-reproduction")
+        resource_fields = [field for field in dld_schema["fields"] if field["presentation"] == "resource"]
+        self.assertTrue(resource_fields)
+        self.assertTrue(all(field["research_category"] == "resource" for field in resource_fields))
+        # A noise realization changes the data condition, not the runtime
+        # implementation. It must be discoverable in the data/noise section.
+        self.assertEqual(fields["noise.seed"]["research_category"], "data")
+        self.assertEqual(fields["noise.seed"]["research_group"], "data")
+
+        policy = command_console._parameter_registry()["parameter_display_policy"]
+        for field in fields.values():
+            path = field["path"]
+            expected_presentation, _ = command_console._parameter_presentation(path, "gce")
+            self.assertEqual(field["visible"], expected_presentation != "hidden", path)
+            self.assertEqual(field["presentation"], expected_presentation, path)
+        self.assertEqual(command_console._parameter_presentation("data.root", "gce")[0], "hidden")
+
+    def test_recipe_compatibility_requests_share_one_computation(self):
+        command_console._invalidate_dataset_recipe_compatibility()
+        value = {"dataset": "lab", "recipes": [], "methods": []}
+        with mock.patch.object(
+            command_console,
+            "_compute_dataset_recipe_compatibility_payload",
+            return_value=value,
+        ) as compute:
+            first = command_console._dataset_recipe_compatibility_payload("lab")
+            second = command_console._dataset_recipe_compatibility_payload("lab")
+        self.assertEqual(first, value)
+        self.assertEqual(second, value)
+        compute.assert_called_once_with("lab", method_noise_rate_prior=None)
+        command_console._invalidate_dataset_recipe_compatibility("lab")
 
     def test_all_formal_paper_recipes_have_complete_registry_schemas(self):
         from lnl_toolbox.catalog import default_paper_config, load_papers
 
         papers = load_papers(command_console.ROOT)
         self.assertEqual(len(papers), 26)
+        registry = command_console._parameter_registry()
+        research_view = registry["research_parameter_view"]
+        default_paths = registry["default_parameter_paths"]
+        display_policy = registry["parameter_display_policy"]
+        for policy_key in (
+            "common_paths_by_method", "selection_paths_by_method",
+            "resource_paths_by_method", "hidden_paths_by_method",
+        ):
+            self.assertEqual(set(display_policy[policy_key]), set(registry["formal_recipe_bindings"]))
+        self.assertEqual(sum(map(len, display_policy["common_paths_by_method"].values())), 297)
+        self.assertEqual(sum(map(len, display_policy["selection_paths_by_method"].values())), 28)
+        self.assertEqual(sum(map(len, display_policy["resource_paths_by_method"].values())), 4)
+        self.assertEqual(set(research_view["method_paths"]), set(command_console._parameter_registry()["methods"]))
+        self.assertEqual(set(default_paths["methods"]), set(command_console._parameter_registry()["formal_recipe_bindings"]))
         for paper in papers:
             config, _ = default_paper_config(paper, root=command_console.ROOT)
             schema = command_console._config_schema(config.recipe_id)
@@ -1130,6 +1301,380 @@ class CommandConsoleTest(unittest.TestCase):
                 all(field["note"] for field in schema["fields"] if field["level"] == "paper"),
                 paper.id,
             )
+            fields = {field["path"]: field for field in schema["fields"]}
+            self.assertEqual(len(fields), len(schema["fields"]), paper.id)
+            for presentation_key, expected_presentation in (
+                ("common_paths_by_method", "common"),
+                ("selection_paths_by_method", "selection"),
+                ("resource_paths_by_method", "resource"),
+                ("hidden_paths_by_method", "hidden"),
+            ):
+                for path in display_policy[presentation_key][schema["method"]]:
+                    self.assertIn(path, fields, (paper.id, path))
+                    presentation = "hidden" if path.startswith("trusted_validation.") or path != "seed" and path.rsplit(".", 1)[-1].endswith("seed") and not path.endswith("peer_seed_offset") else expected_presentation
+                    self.assertEqual(fields[path]["presentation"], presentation, (paper.id, path))
+            selected = (set(default_paths["common"]) | set(default_paths["methods"][schema["method"]])) - set(default_paths.get("exclude", {}).get(schema["method"], ()))
+            self.assertTrue(set(default_paths["methods"][schema["method"]]) <= set(fields), paper.id)
+            defaults = {path for path, field in fields.items() if field["visible"] and field["display_group"] == "default"}
+            self.assertTrue({
+                path for path in selected
+                if path in fields and fields[path]["editable"]
+                and fields[path]["presentation"] != "hidden"
+                and fields[path]["kind"] not in {"list", "object"}
+                and not isinstance(fields[path]["value"], (list, dict))
+            } <= defaults, paper.id)
+            for field in fields.values():
+                self.assertEqual(field["display_group"], command_console._parameter_display_group(field, schema["method"]), (paper.id, field["path"]))
+            self.assertTrue({field["display_group"] for field in fields.values()} <=
+                            {"default", "advanced", "restricted"}, paper.id)
+            self.assertEqual(
+                [group["id"] for group in schema["research_groups"]],
+                ["method", "data", "training"],
+                paper.id,
+            )
+            self.assertEqual(
+                [category["id"] for category in schema["research_categories"]],
+                ["method", "data", "comparison", "method_protocol", "data_protocol", "training_protocol", "runtime", "resource"],
+                paper.id,
+            )
+            for field in fields.values():
+                if not field["editable"]:
+                    self.assertEqual(field["display_group"], "restricted", (paper.id, field["path"]))
+                elif field["presentation"] == "hidden":
+                    self.assertEqual(field["display_group"], "advanced", (paper.id, field["path"]))
+                if field.get("presentation") == "resource":
+                    self.assertEqual(field["research_category"], "resource", (paper.id, field["path"]))
+                    continue
+                if field["research_group"]:
+                    self.assertTrue(field["research_category"], (paper.id, field["path"]))
+                else:
+                    self.assertFalse(field["research_category"], (paper.id, field["path"]))
+            for path in research_view["method_paths"][schema["method"]]:
+                self.assertIn(path, fields, (paper.id, path))
+                if fields[path]["presentation"] in {"common", "selection", "resource", "hidden"}:
+                    self.assertFalse(fields[path]["research_group"], (paper.id, path))
+                    continue
+                if fields[path]["presentation"] == "resource":
+                    self.assertEqual(fields[path]["research_group"], "", (paper.id, path))
+                    self.assertEqual(fields[path]["research_category"], "resource", (paper.id, path))
+                elif fields[path]["visible"]:
+                    self.assertEqual(fields[path]["research_group"], "method", (paper.id, path))
+                else:
+                    self.assertEqual(fields[path]["research_group"], "", (paper.id, path))
+            self.assertTrue(all(not field["research_group"] for field in fields.values() if field["level"] == "locked"), paper.id)
+
+        gce = {field["path"]: field for field in command_console._config_schema("gce-cifar10-noise02-reproduction")["fields"]}
+        self.assertEqual(gce["loss.q"]["research_group"], "method")
+        self.assertEqual(gce["loss.q"]["research_category"], "method")
+        self.assertEqual(gce["loss.q"]["display_group"], "default")
+        self.assertEqual(gce["noise.rate"]["presentation"], "common")
+        self.assertEqual(gce["model.name"]["presentation"], "selection")
+        self.assertEqual(gce["noise.seed"]["presentation"], "hidden")
+        self.assertEqual(gce["data.preprocessing"]["presentation"], "common")
+        self.assertEqual(gce["seed"]["presentation"], "common")
+        self.assertEqual(gce["seed"]["display_group"], "default")
+        self.assertTrue(gce["loss.name"]["visible"])
+        self.assertFalse(gce["loss.name"]["editable"])
+        self.assertEqual(gce["loss.name"]["display_group"], "restricted")
+        correction = {
+            field["path"]: field
+            for field in command_console._config_schema("loss-correction-cifar10-asymmetric04")["fields"]
+        }
+        self.assertEqual(correction["noise.transition_matrix"]["display_group"], "advanced")
+        self.assertEqual(correction["pipeline.warmup_epochs"]["display_group"], "advanced")
+        binary = {
+            field["path"]: field
+            for field in command_console._config_schema("binary-risk-natarajan-reproduction")["fields"]
+        }
+        self.assertEqual(binary["risk.rho_positive"]["display_group"], "default")
+        self.assertEqual(binary["risk.rho_positive"]["linked_fields"], ["noise.rho_positive"])
+        self.assertEqual(binary["noise.rho_positive"]["presentation"], "common")
+        cal = {
+            field["path"]: field
+            for field in command_console._config_schema("cal-cifar10-reproduction")["fields"]
+        }
+        self.assertEqual(cal["noise.name"]["presentation"], "common")
+        self.assertEqual(cal["noise.rate"]["presentation"], "common")
+        self.assertEqual(command_console._parameter_display_group({
+            "path": "loss.q", "kind": "number", "value": 0.7, "editable": True,
+        }, "gce"), "default")
+        self.assertEqual(command_console._parameter_display_group({
+            "path": "method.internal", "kind": "number", "value": 1, "editable": False,
+        }, "gce"), "restricted")
+
+    def test_three_display_groups_drive_both_parameter_editors(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn("function parameterSections(schema)", page)
+        self.assertIn("function parameterDisplayGroup(fieldInfo)", page)
+        self.assertIn('id:"default", label:"默认显示", default_expanded:true', page)
+        self.assertIn('id:"advanced", label:"高级参数", default_expanded:false', page)
+        self.assertIn('id:"restricted", label:"禁止在 Web 修改的专属参数", default_expanded:false', page)
+        self.assertEqual(page.count('const sections = parameterSections(schema);'), 2)
+        self.assertEqual(page.count('parameterDisplayGroup(fieldInfo) === levelInfo.id'), 2)
+        self.assertIn('for (const path of fieldInfo.linked_fields || [])', page)
+        self.assertIn('function yamlScheduleGroups(fields)', page)
+        self.assertIn('function yamlScheduleHtml(group, fields)', page)
+        self.assertIn('data-yaml-schedule-toggle', page)
+        self.assertIn('data-yaml-schedule-point', page)
+        self.assertIn('data-yaml-schedule-rate', page)
+
+    def test_research_controls_are_explained_without_exposing_trusted_wiring(self):
+        bindings = command_console._parameter_registry()["formal_recipe_bindings"]
+        for method, recipe in bindings.items():
+            fields = {field["path"]: field for field in command_console._config_schema(recipe)["fields"]}
+            for path, field in fields.items():
+                if path.startswith("trusted_validation."):
+                    self.assertFalse(field["visible"], (method, path))
+            for path in ("data.augment", "data.validation_size", "model.name", "scheduler.name"):
+                if path in fields and fields[path]["editable"]:
+                    self.assertEqual(fields[path]["display_group"], "default", (method, path))
+        l2rw = {field["path"]: field for field in command_console._config_schema(bindings["l2rw"])["fields"]}
+        self.assertEqual(l2rw["trainer.max_steps"]["display_group"], "default")
+        self.assertIn("更新次数", l2rw["trainer.max_steps"]["note"])
+        self.assertEqual(l2rw["trainer.max_steps"]["value"], 80000)
+
+    def test_all_formal_parameter_labels_and_help_are_concise(self):
+        bindings = command_console._parameter_registry()["formal_recipe_bindings"]
+        for method, recipe in bindings.items():
+            fields = command_console._config_schema(recipe)["fields"]
+            for field in fields:
+                if field["visible"] is False:
+                    continue
+                self.assertNotIn(" · ", field["label"], (method, field["path"]))
+                self.assertNotIn("可修改的高级实验/实现选项", field["note"], (method, field["path"]))
+                self.assertNotIn("但不定义算法身份", field["note"], (method, field["path"]))
+        l2rw = {field["path"]: field for field in command_console._config_schema(bindings["l2rw"])["fields"]}
+        self.assertEqual(l2rw["trainer.max_steps"]["note"], "训练最多执行的参数更新次数。")
+        self.assertNotIn("trainer.epochs", l2rw["trainer.max_steps"]["note"])
+        gce = {field["path"]: field for field in command_console._config_schema(bindings["gce"])["fields"]}
+        self.assertEqual(gce["model.name"]["label"], "模型架构")
+        self.assertEqual(gce["data.augment"]["label"], "训练数据增强")
+
+    def test_official_l2rw_virtual_rate_is_not_web_editable(self):
+        from copy import deepcopy
+        from lnl_toolbox.catalog import load_yaml, recipe_by_id
+
+        recipe = "l2rw-cifar10-reproduction"
+        schema = command_console._config_schema(recipe)
+        field = next(field for field in schema["fields"] if field["path"] == "meta.virtual_learning_rate")
+        self.assertFalse(field["editable"])
+        self.assertEqual(field["display_group"], "restricted")
+        self.assertIn("固定为 1", field["lock_reason"])
+
+        config = load_yaml(recipe_by_id(recipe, command_console.ROOT).config_path)
+        with self.assertRaisesRegex(ValueError, "固定为 1"):
+            command_console._assert_locked_parameters_unchanged(
+                config, {**config, "meta": {**config["meta"], "virtual_learning_rate": 0.5}}, "l2rw"
+            )
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            destination = str(Path(directory) / "l2rw-edited.yaml")
+            with self.assertRaisesRegex(ValueError, "锁定参数"):
+                command_console._save_config({
+                    "recipe": recipe, "path": destination,
+                    "patches": [{"path": "meta.virtual_learning_rate", "value": 0.5}],
+                })
+            edited = deepcopy(config)
+            edited["meta"]["virtual_learning_rate"] = 0.5
+            import yaml
+
+            with self.assertRaisesRegex(ValueError, "固定为 1"):
+                command_console._save_config({
+                    "recipe": recipe, "path": destination,
+                    "content": yaml.safe_dump(edited, allow_unicode=True),
+                })
+        paper_variant = deepcopy(config)
+        paper_variant["meta"]["implementation"] = "paper"
+        paper_variant["meta"]["virtual_learning_rate"] = 0.5
+        fields, _ = command_console._registry_config_fields(paper_variant, "l2rw")
+        self.assertTrue(next(field for field in fields if field["path"] == "meta.virtual_learning_rate")["editable"])
+
+    def test_runtime_fixed_parameters_are_readonly_across_formal_recipes(self):
+        from copy import deepcopy
+        from lnl_toolbox.catalog import load_yaml, recipe_by_id
+
+        registry = command_console._parameter_registry()
+        fixed_by_method = registry["runtime_fixed_parameter_paths"]
+        self.assertGreaterEqual(sum(map(len, fixed_by_method.values())), 60)
+        for method, paths in fixed_by_method.items():
+            recipe = registry["formal_recipe_bindings"][method]
+            config = load_yaml(recipe_by_id(recipe, command_console.ROOT).config_path)
+            fields = {field["path"]: field for field in command_console._config_schema(recipe)["fields"]}
+            for path in paths:
+                self.assertIn(path, fields, (method, path))
+                self.assertFalse(fields[path]["editable"], (method, path))
+                self.assertEqual(fields[path]["display_group"], "restricted", (method, path))
+            changed = deepcopy(config)
+            path = paths[0]
+            original = fields[path]["value"]
+            replacement = not original if isinstance(original, bool) else (
+                original + 1 if isinstance(original, (int, float)) else "__invalid_change__"
+            )
+            command_console._set_config_path(changed, path, replacement)
+            with self.assertRaisesRegex(ValueError, "锁定参数"):
+                command_console._assert_locked_parameters_unchanged(config, changed, method)
+
+        cdr = {field["path"]: field for field in command_console._config_schema(
+            registry["formal_recipe_bindings"]["cdr"]
+        )["fields"]}
+        for path in ("optimizer.momentum", "optimizer.weight_decay"):
+            self.assertFalse(cdr[path]["editable"])
+        cdr_config = load_yaml(recipe_by_id(
+            registry["formal_recipe_bindings"]["cdr"], command_console.ROOT
+        ).config_path)
+        changed_cdr = deepcopy(cdr_config)
+        changed_cdr["optimizer"]["momentum"] = 0.9
+        with self.assertRaisesRegex(ValueError, "optimizer.momentum"):
+            command_console._assert_locked_parameters_unchanged(
+                cdr_config, changed_cdr, "cdr"
+            )
+        pcse = {field["path"]: field for field in command_console._config_schema(
+            registry["formal_recipe_bindings"]["pcse"]
+        )["fields"]}
+        for path in (
+            "pretraining_stage.epochs", "pretraining_stage.model.name",
+            "pretraining_stage.optimizer.lr", "pretraining_stage.scheduler.name",
+        ):
+            self.assertFalse(pcse[path]["editable"], path)
+        pcse_config = load_yaml(recipe_by_id(
+            registry["formal_recipe_bindings"]["pcse"], command_console.ROOT
+        ).config_path)
+        changed_pcse = deepcopy(pcse_config)
+        changed_pcse["pretraining_stage"]["model"]["name"] = "other"
+        with self.assertRaisesRegex(ValueError, "锁定参数"):
+            command_console._assert_locked_parameters_unchanged(
+                pcse_config, changed_pcse, "pcse"
+            )
+
+    def test_noise_rate_updates_derived_method_fields(self):
+        from copy import deepcopy
+        from lnl_toolbox.catalog import load_yaml
+
+        registry = command_console._parameter_registry()
+        for method in ("coteaching", "cnlcu"):
+            recipe = registry["formal_recipe_bindings"][method]
+            fields = {field["path"]: field for field in command_console._config_schema(recipe)["fields"]}
+            for path in registry["runtime_derived_parameter_paths"][method]:
+                self.assertFalse(fields[path]["editable"])
+            with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+                saved = command_console._save_config({
+                    "recipe": recipe,
+                    "path": str(Path(directory) / f"{method}-rate.yaml"),
+                    "patches": [{"path": "noise.rate", "value": 0.3}],
+                    "acknowledge_paper_impact": True,
+                })
+                config = load_yaml(command_console.ROOT / saved["path"])
+                self.assertAlmostEqual(config[method]["noise_rate"], 0.3)
+                self.assertAlmostEqual(config[method]["remember_schedule"]["end"], 0.7)
+                changed = deepcopy(config)
+                changed[method]["remember_schedule"]["end"] = 0.5
+                with self.assertRaisesRegex(ValueError, "remember_schedule.end"):
+                    command_console._assert_locked_parameters_unchanged(
+                        config, changed, method
+                    )
+
+    def test_web_save_rejects_model_name_that_would_fail_at_training(self):
+        recipe = command_console._parameter_registry()["formal_recipe_bindings"]["coteaching"]
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            destination = str(Path(directory) / "unknown-model.yaml")
+            with self.assertRaisesRegex(ValueError, "Unsupported model"):
+                command_console._save_config({
+                    "recipe": recipe, "path": destination,
+                    "patches": [{"path": "model.name", "value": "__unknown_model__"}],
+                })
+
+    def test_importance_reweighting_fixed_and_derived_dimensions(self):
+        recipe = command_console._parameter_registry()["formal_recipe_bindings"]["importance_reweighting"]
+        fields = {field["path"]: field for field in command_console._config_schema(recipe)["fields"]}
+        self.assertFalse(fields["data.dimension"]["editable"])
+        self.assertFalse(fields["model.in_features"]["editable"])
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            with self.assertRaisesRegex(ValueError, "锁定参数"):
+                command_console._save_config({
+                    "recipe": recipe, "path": str(Path(directory) / "wrong-dimension.yaml"),
+                    "patches": [{"path": "data.dimension", "value": 3}],
+                })
+
+    def test_web_save_rejects_unknown_dataset_and_noise_names(self):
+        recipe = "gce-cifar10-noise02-reproduction"
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            for path, error in (
+                ("data.name", "unknown dataset"),
+                ("noise.name", "Unsupported generated noise type"),
+            ):
+                with self.subTest(path=path), self.assertRaisesRegex(ValueError, error):
+                    command_console._save_config({
+                        "recipe": recipe, "path": str(Path(directory) / "invalid.yaml"),
+                        "patches": [{"path": path, "value": "__unknown__"}],
+                        "acknowledge_paper_impact": True,
+                    })
+
+    def test_web_save_checks_changed_optimizer_and_scheduler_builders(self):
+        bindings = command_console._parameter_registry()["formal_recipe_bindings"]
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            for recipe, path, expected in (
+                (bindings["coteaching"], "optimizer.name", "Unsupported optimizer"),
+                (bindings["l2rw"], "scheduler.name", "Unsupported scheduler"),
+            ):
+                with self.subTest(path=path), self.assertRaisesRegex(ValueError, expected):
+                    command_console._save_config({
+                        "recipe": recipe, "path": str(Path(directory) / "invalid.yaml"),
+                        "patches": [{"path": path, "value": "__unknown__"}],
+                    })
+
+    def test_loss_correction_matrices_do_not_show_false_paper_deviation(self):
+        schema = command_console._config_schema("loss-correction-cifar10-asymmetric04")
+        self.assertFalse(schema["modified_from_paper"])
+        fields = {field["path"]: field for field in schema["fields"]}
+        for path in ("noise.transition_matrix", "pipeline.transition_estimator.matrix"):
+            field = fields[path]
+            self.assertEqual(field["kind"], "list")
+            self.assertEqual(field["value"], field["changed_from"])
+            self.assertFalse(field["changed_from_paper"])
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            saved = command_console._save_config({
+                "recipe": "loss-correction-cifar10-asymmetric04",
+                "path": str(Path(directory) / "unchanged-loss-correction.yaml"),
+                "patches": [],
+            })
+            from lnl_toolbox.catalog import load_yaml
+
+            config = load_yaml(command_console.ROOT / saved["path"])
+            self.assertFalse(config["meta"]["web_parameter_record"]["modified_from_paper"])
+
+    def test_adapted_parameter_schema_tolerates_missing_formal_fields(self):
+        from copy import deepcopy
+        from lnl_toolbox.catalog import load_yaml, recipe_by_id
+
+        config = deepcopy(load_yaml(recipe_by_id("gce-cifar10-noise02-reproduction", command_console.ROOT).config_path))
+        del config["loss"]["q"]
+        fields, _ = command_console._registry_config_fields(config, "gce", allow_missing=True)
+        self.assertNotIn("loss.q", {field["path"] for field in fields})
+        recipe, changes = command_console._paper_parameter_changes(config, "gce")
+        self.assertEqual(recipe, "gce-cifar10-noise02-reproduction")
+        self.assertIn("loss.q", {change["path"] for change in changes})
+
+    def test_quick_start_project_config_keeps_paper_parameter_controls(self):
+        from lnl_toolbox.catalog import load_yaml, recipe_by_id
+
+        source = recipe_by_id("gce-cifar10-noise02-reproduction", command_console.ROOT).config_path
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            generated = Path(directory) / "generated.yaml"
+            generated.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+            schema = command_console._config_schema(
+                path_value=str(generated), recipe_hint="gce-cifar10-noise02-reproduction"
+            )
+            fields = {field["path"]: field for field in schema["fields"]}
+            self.assertEqual(fields["loss.q"]["display_group"], "default")
+            saved = command_console._save_config({
+                "source_path": str(generated),
+                "recipe_hint": "gce-cifar10-noise02-reproduction",
+                "path": str(Path(directory) / "edited.yaml"),
+                "patches": [{"path": "loss.q", "value": 0.5}],
+                "acknowledge_paper_impact": True,
+            })
+            config = load_yaml(command_console.ROOT / saved["path"])
+            self.assertEqual(config["loss"]["q"], 0.5)
+            self.assertTrue(config["meta"]["web_parameter_record"]["modified_from_paper"])
 
     def test_paper_parameter_change_requires_acknowledgement_and_is_recorded(self):
         with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:

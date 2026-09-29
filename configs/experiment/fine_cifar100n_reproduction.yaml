@@ -19,7 +19,7 @@ data:
 noise:
   name: symmetric
   rate: 0.2
-  seed: 0
+  seed: 23
   sampling: transition
   rng: numpy_legacy
 loader:

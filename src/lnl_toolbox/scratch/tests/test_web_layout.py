@@ -8,6 +8,14 @@ WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
 
 
 class ScratchInspectorLayoutTest(unittest.TestCase):
+    def test_numeric_parameters_cannot_spin_with_mouse_wheel(self) -> None:
+        javascript = (WEB_ROOT / "scratch.js").read_text(encoding="utf-8")
+        self.assertIn("document.addEventListener('wheel', (event) => {", javascript)
+        self.assertIn("target instanceof HTMLInputElement && target.type === 'number'", javascript)
+        self.assertIn("document.activeElement === target", javascript)
+        self.assertIn("target.blur();", javascript)
+        self.assertIn("{capture: true, passive: true}", javascript)
+
     def test_module_explanation_is_outside_scrollable_inspector(self) -> None:
         html = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
         self.assertIn('id="module-explanation"', html)

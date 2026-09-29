@@ -5972,6 +5972,14 @@ document.addEventListener('keydown', (event) => {
   if (state.formulaEditor.expressionSelection && deleteSelectedFormulaExpression()) event.preventDefault();
 });
 
+// Keep wheel scrolling from changing a focused numeric parameter.
+document.addEventListener('wheel', (event) => {
+  const target = event.target;
+  if (target instanceof HTMLInputElement && target.type === 'number' && document.activeElement === target) {
+    target.blur();
+  }
+}, {capture: true, passive: true});
+
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener('resize', () => { queueFormulaCanvasLayout(); queueFormulaPaletteLayout(); }, {passive: true});
 }

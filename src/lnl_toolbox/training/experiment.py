@@ -190,6 +190,27 @@ def build_scheduler(optimizer, config: Mapping[str, Any] | None, epochs: int):
             eta_min=float(config.get("eta_min", 0.0)),
         )
     if name == "multistep":
+        explicit_values = config.get("lr_values")
+        if explicit_values is not None:
+            milestones = [int(value) for value in config["milestones"]]
+            values = [float(value) for value in explicit_values]
+            if len(values) != len(milestones) or milestones != sorted(set(milestones)) or any(
+                milestone <= 0 for milestone in milestones
+            ):
+                raise ValueError("multistep lr_values must match sorted, unique milestones")
+            if len(optimizer.param_groups) != 1:
+                raise ValueError("explicit multistep lr_values require one optimizer parameter group")
+            base_lr = float(optimizer.param_groups[0]["lr"])
+            if not math.isfinite(base_lr) or base_lr <= 0 or any(
+                not math.isfinite(value) or value <= 0 for value in values
+            ):
+                raise ValueError("explicit multistep learning rates must be positive and finite")
+
+            def multiplier(epoch: int) -> float:
+                stage = sum(epoch >= milestone for milestone in milestones)
+                return (base_lr if stage == 0 else values[stage - 1]) / base_lr
+
+            return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=multiplier)
         return torch.optim.lr_scheduler.MultiStepLR(
             optimizer,
             milestones=[int(value) for value in config["milestones"]],

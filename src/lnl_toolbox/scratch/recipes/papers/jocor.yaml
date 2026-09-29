@@ -8,9 +8,9 @@ steps:
     params: {device: auto}
   - {block: load_dataset, params: {dataset: cifar10}}
   - {block: inspect_dataset_semantics}
-  - {block: create_dataset_split, params: {validation_size: 0, split_seed: 0}}
+  - {block: create_dataset_split, params: {validation_size: 0, split_seed: 1}}
   - {block: select_label_source}
-  - {block: apply_noise, params: {name: symmetric, rate: 0.5, seed: 0, sampling: transition, options: {rng: numpy_legacy}}}
+  - {block: apply_noise, params: {name: symmetric, rate: 0.5, seed: 1, sampling: transition, options: {rng: numpy_legacy}}}
   - {block: build_noise_manifest}
   - {block: configure_preprocessing, params: {preprocessing: tensor_only, augment: false}}
   - {block: configure_views, params: {views: [weak]}}

@@ -8,13 +8,53 @@ from pathlib import Path
 import unittest
 
 # --- merged from test_config_schema.py ---
-from lnl_toolbox.catalog import discover_recipes, load_yaml
+from lnl_toolbox.catalog import discover_recipes, load_yaml, load_papers, default_paper_config
 
 # --- merged from test_config_schema.py ---
 from lnl_toolbox.core.config_schema import normalize_experiment_config, runtime_experiment_config
 
 # --- merged from test_config_schema.py ---
 class _config_schema_ConfigSchemaTest(unittest.TestCase):
+
+    def test_one_runtime_seed_controls_nested_stochastic_components(self) -> None:
+        config = normalize_experiment_config({
+            'seed': 42,
+            'execution': {'runner': 'supervised'},
+            'data': {'name': 'synthetic_multiclass', 'seed': 0, 'input_seed': 2},
+            'noise': {'name': 'symmetric', 'rate': 0.2, 'seed': 3},
+            'dividemix': {'gmm': {'random_seed': 4}, 'initialization': {'peer_seed_offset': 1}},
+            'parameter_record': {'sampling_seed': 99},
+        })
+        self.assertEqual(config['data']['seed'], 42)
+        self.assertEqual(config['data']['input_seed'], 42)
+        self.assertEqual(config['noise']['seed'], 42)
+        self.assertEqual(config['dividemix']['gmm']['random_seed'], 42)
+        self.assertEqual(config['dividemix']['initialization']['peer_seed_offset'], 1)
+        self.assertEqual(config['parameter_record']['sampling_seed'], 99)
+
+    def test_all_formal_papers_have_one_active_seed_in_source_yaml(self) -> None:
+        import yaml
+
+        papers = load_papers()
+        self.assertEqual(len(papers), 26)
+        for paper in papers:
+            path = default_paper_config(paper)[1].config_path
+            config = yaml.safe_load(path.read_text(encoding='utf-8'))
+            seed = config['seed']
+
+            def check(value, prefix=''):
+                if not isinstance(value, dict):
+                    return
+                for key, item in value.items():
+                    path_key = f'{prefix}.{key}' if prefix else key
+                    if key in {'parameter_record', 'parameter_sampling', 'hyperparameters'}:
+                        continue
+                    if (key == 'seed' or key.endswith('_seed')) and key != 'peer_seed_offset':
+                        self.assertEqual(item, seed, (paper.id, path_key))
+                    else:
+                        check(item, path_key)
+
+            check(config)
 
     def test_binary_legacy_aliases_normalize_to_shared_sections(self) -> None:
         value = normalize_experiment_config({'execution': {'runner': 'binary'}, 'data': {'name': 'synthetic_binary_2d'}, 'batch_size': 8, 'learning_rate': 0.02, 'epochs': 3})

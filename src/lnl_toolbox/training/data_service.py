@@ -1654,12 +1654,14 @@ class DataService:
         name: object,
         declarations: DatasetDeclarations,
     ) -> DatasetCapabilities:
-        record = self.catalog.set_declarations(name, declarations.to_dict())
+        record = self.record(name)
         if record.profile is None:
             raise ValueError("dataset must be inspected before declarations are resolved")
-        return resolve_dataset_capabilities(
+        capabilities = resolve_dataset_capabilities(
             DatasetProfile.from_dict(record.profile), declarations
         )
+        self.catalog.set_declarations(name, declarations.to_dict())
+        return capabilities
 
     def declarations(self, name: object) -> DatasetDeclarations:
         return DatasetDeclarations.from_dict(self.record(name).declarations)

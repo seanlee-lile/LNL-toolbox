@@ -1,4 +1,4 @@
-registry_version: 1.1.0
+registry_version: 1.2.2
 generated_for:
   repository: https://github.com/seanlee-lile/LNL-toolbox
   branch: codex/cli
@@ -94,6 +94,236 @@ global_ui_rules:
   - cdr noise.rate must stay consistent with parameter_update.noise_rate
   - coteaching noise.rate must stay consistent with coteaching.noise_rate
   - cnlcu noise.rate must stay consistent with cnlcu.noise_rate
+# Presentation policy is deliberately separate from the four permission levels above.
+# Hidden fields remain in the YAML and in the full-editor path; they are simply not
+# offered as ordinary paper parameters. Resource fields are shown in a dedicated
+# prerequisite section instead of being mixed with method hyperparameters.
+parameter_display_policy:
+  hidden_paths:
+  - schema_version
+  - kind
+  - data.root
+  - execution.runner
+  - method
+  - algorithm.name
+  - risk.name
+  - pipeline.name
+  - pipeline.transition_estimator.name
+  - pipeline.risk_corrector.name
+  - posterior_stage.name
+  - pretraining_stage.method
+  - transition_stage
+  - transition_stage.name
+  - instance_transition.name
+  - mc_ldce.lifecycle_version
+  - loss.name
+  - loss.active.name
+  - loss.passive.name
+  - selector.name
+  - parameter_update.name
+  - pipeline.objective_consumer.name
+  - pipeline.weight_provider.name
+  - num_classes
+  - data.num_classes
+  - model.num_classes
+  - transition.num_classes
+  - pipeline.objective_consumer.num_classes
+  - pipeline.objective_consumer.num_samples
+  - label_convention
+  - coteaching.model_count
+  - cnlcu.model_count
+  - dividemix.model_count
+  - noise.clean_key
+  - noise.noisy_key
+  - output_root
+  - loader.num_workers
+  - loader.pin_memory
+  - trainer.device
+  - trainer.progress
+  - trainer.progress.enabled
+  - trainer.progress.update_interval
+  - trainer.progress.curves
+  - evaluation.batch_size
+  - evaluation.report_last_epochs
+  - noise.manifest_filename
+  - meta.implementation
+  - noise.rng
+  - data.split_rng
+  - data.validation_split.rng
+  - warmup.split_rng
+  - transition_stage.parameterization.seed
+  - transition.parameterization.seed
+  - instance_transition.representation_seed
+  - dld.precorrection.gmm_seed
+  - dividemix.gmm.random_seed
+  - trusted_validation.seed
+  - trusted_validation.input_seed
+  - pipeline.weight_provider.seed
+  - coteaching.initialization.peer_seed_offset
+  - cnlcu.initialization.peer_seed_offset
+  - dividemix.initialization.peer_seed_offset
+  - loss.passive.log_zero
+  - cwd.pinv_rcond
+  - fine.probability_floor
+  - t_revision.revision.ratio.denominator_floor
+  - upm.confusing_probability.epsilon
+  - transition_stage.determinant_tolerance
+  - transition_stage.condition_limit
+  - statistics_stage.condition_limit
+  - transition.determinant_tolerance
+  - transition.condition_limit
+  - statistics.rcond
+  - statistics.condition_limit
+  - gda_stage.covariance_ridge
+  - selector.rounding
+  - cnlcu.history.storage_dtype
+  - instance_transition.representation_error_tolerance
+  - dld.precorrection.query_chunk_size
+  - dld.precorrection.minimum_mean_separation
+  - dividemix.gmm.max_iterations
+  - dividemix.gmm.tolerance
+  - dividemix.gmm.covariance_regularization
+  - dividemix.gmm.minimum_mean_separation
+  - evaluation.allow_test_selection
+  hidden_prefixes:
+  - parameter_record.
+  - parameter_sampling.
+  - data.max_
+  - hyperparameters.source
+  - hyperparameters.sampling_seed
+  - hyperparameters.sampled_setting
+  resource_paths:
+  - pipeline.weight_provider.artifact_path
+  - noise.path
+  - dld.feature_extractor.source
+  - trusted_validation.source
+  resource_labels:
+    pipeline.weight_provider.artifact_path: 外部权重文件
+    noise.path: 外部噪声/标签文件
+    dld.feature_extractor.source: DLD 特征来源
+    trusted_validation.source: Trusted validation 来源
+  selection_labels:
+    model.name: 模型选择
+    posterior_stage.model.name: 后验阶段模型
+    final_stage.model.name: 最终阶段模型
+    pretraining_stage.model.name: 预训练模型
+    t_revision.stage1.model.name: 第一阶段模型
+    transition.model.name: 转移矩阵估计模型
+    volminnet.model.name: VolMinNet 模型
+    upm.stage1.model.name: UPM 第一阶段模型
+    upm.main.model.name: UPM 主模型
+    dld.feature_extractor.model.name: 特征提取模型
+  # First-pass PU-style hard screen. These are display destinations, not
+  # permission changes: common controls live outside the paper-parameter
+  # groups; component choices and resources get their own UI area.
+  common_paths_by_method:
+    apl: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.max_train_samples, data.max_validation_samples, data.max_test_samples, data.augment, data.preprocessing, noise.name, noise.sampling, evaluation.selection_split, evaluation.allow_test_selection, evaluation.loss.name]
+    gce: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.max_train_samples, data.max_validation_samples, data.max_test_samples, data.augment, data.preprocessing, noise.name]
+    binary_risk: [seed, data.seed, noise.seed, data.train_size, data.test_size, noise.rho_positive, noise.rho_negative, data.name, noise.name]
+    dual_t: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.augment, data.preprocessing, noise.name, evaluation.selection_split]
+    loss_correction: [seed, noise.seed, noise.rate, noise.transition_matrix, data.name, data.validation_size, data.max_train_samples, data.max_validation_samples, data.max_test_samples, data.augment, data.preprocessing, noise.name]
+    importance_reweighting: [seed, noise.seed, data.dimension, data.train_size, data.test_size, noise.rho_positive, noise.rho_negative, data.name, data.validation_size, noise.name, evaluation.selection_split]
+    cwd: [seed, data.fold_index, noise.seed, noise.rho_positive, noise.rho_negative, data.name, data.folds, data.augment, noise.name]
+    pcse: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.split_strategy, data.split_rng, data.augment, data.preprocessing, noise.mode, noise.name, noise.sampling, evaluation.selection_split]
+    fine: [seed, noise.seed, noise.rate, evaluation.batch_size, data.name, data.validation_size, data.augment, data.strong_policy, data.normalization.mean, data.normalization.std, noise.name, noise.sampling]
+    cdr: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.max_train_samples, data.max_validation_samples, data.max_test_samples, data.augment, data.validation_split.strategy, data.validation_split.rng, data.normalization.mean, data.normalization.std, noise.name, noise.sampling, evaluation.selection_split]
+    dss: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.max_train_samples, data.max_validation_samples, data.max_test_samples, data.augment, data.validation_split.strategy, data.validation_split.rng, data.normalization.mean, data.normalization.std, noise.name, noise.sampling, evaluation.selection_split]
+    coteaching: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.validation_split.strategy, data.validation_split.rng, data.augment, data.preprocessing, noise.name, noise.sampling, evaluation.selection_split, evaluation.primary, evaluation.ensemble]
+    jocor: [seed, noise.seed, noise.rate, evaluation.report_last_epochs, data.name, data.validation_size, data.preprocessing, data.augment, noise.name, noise.sampling, evaluation.selection_split, evaluation.allow_test_selection]
+    cnlcu: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.validation_split.strategy, data.validation_split.rng, data.augment, data.preprocessing, noise.name, noise.sampling, evaluation.selection_split, evaluation.primary, evaluation.ensemble]
+    mentornet: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.augment, noise.name, evaluation.selection_split]
+    t_revision: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.preprocessing, data.augment, noise.name, noise.sampling, evaluation.selection_split]
+    mc_ldce: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.augment, noise.name, noise.sampling]
+    volminnet: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.validation_split.strategy, data.validation_split.rng, data.augment, data.preprocessing, noise.name, noise.sampling]
+    pdl: [seed, noise.seed, noise.rate, data.name, data.max_train_samples, data.max_test_samples, data.preprocessing, data.augment, data.normalization.mean, data.normalization.std, noise.name]
+    upm: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.split_strategy, data.split_rng, data.augment, noise.name, noise.sampling, evaluation.selection_split, evaluation.primary]
+    cal: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.augment, data.normalization.mean, data.normalization.std, noise.name]
+    dld: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.strong_augment, data.strong_magnitude, noise.name, noise.sampling, evaluation.selection_split, evaluation.primary]
+    ca2c: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.augment, data.strong_augment, data.strong_magnitude, noise.name, noise.sampling]
+    dividemix: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.augment, data.preprocessing, noise.name, noise.sampling, evaluation.selection_split, evaluation.primary]
+    l2rw: [seed, data.input_seed, data.seed, noise.seed, data.num_val, data.num_clean, noise.rate, data.name, data.augment, noise.name]
+    lend: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.validation_split.strategy, data.validation_split.rng, data.augment, data.preprocessing, noise.name, noise.sampling, evaluation.selection_split, evaluation.primary]
+  selection_paths_by_method:
+    apl: [model.name]
+    gce: [model.name]
+    binary_risk: [model.name]
+    dual_t: [posterior_stage.model.name, final_stage.model.name]
+    loss_correction: [model.name]
+    importance_reweighting: [model.name]
+    cwd: [model.name]
+    pcse: [pretraining_stage.model.name]
+    fine: [model.name]
+    cdr: [model.name]
+    dss: [model.name]
+    coteaching: [model.name]
+    jocor: []
+    cnlcu: [model.name]
+    mentornet: [model.name]
+    t_revision: [t_revision.stage1.model.name]
+    mc_ldce: [model.name, transition.model.name]
+    volminnet: [volminnet.model.name]
+    pdl: [model.name]
+    upm: [upm.stage1.model.name, upm.main.model.name]
+    cal: [model.name]
+    dld: [dld.feature_extractor.model.name]
+    ca2c: [model.name]
+    dividemix: [model.name]
+    l2rw: [model.name]
+    lend: [model.name]
+  resource_paths_by_method:
+    apl: []
+    gce: []
+    binary_risk: []
+    dual_t: []
+    loss_correction: []
+    importance_reweighting: []
+    cwd: []
+    pcse: []
+    fine: []
+    cdr: []
+    dss: []
+    coteaching: []
+    jocor: []
+    cnlcu: []
+    mentornet: [pipeline.weight_provider.artifact_path]
+    t_revision: []
+    mc_ldce: []
+    volminnet: []
+    pdl: []
+    upm: []
+    dld: [dld.feature_extractor.source]
+    cal: [noise.path]
+    l2rw: [trusted_validation.source]
+    ca2c: []
+    dividemix: []
+    lend: []
+  hidden_paths_by_method:
+    apl: [output_root, loader.num_workers, loader.pin_memory, loss.passive.log_zero, trainer.progress.enabled, trainer.progress.update_interval, trainer.progress.curves, trainer.device, noise.validation_targets, noise.manifest_filename, schema_version, kind, loss.name, loss.active.name, loss.passive.name, selector.name, parameter_update.name, execution.runner]
+    gce: [output_root, loader.num_workers, loader.pin_memory, trainer.progress.enabled, trainer.progress.update_interval, trainer.progress.curves, trainer.device, noise.validation_targets, noise.manifest_filename, schema_version, kind, loss.name, selector.name, parameter_update.name, execution.runner]
+    binary_risk: [output_root, schema_version, kind, risk.name, execution.runner]
+    dual_t: [output_root, loader.num_workers, loader.pin_memory, trainer.device, noise.validation_targets, noise.manifest_filename, posterior_stage.checkpoint_selection, schema_version, kind, method, transition_stage, execution.runner]
+    loss_correction: [output_root, loader.num_workers, loader.pin_memory, trainer.progress.enabled, trainer.progress.update_interval, trainer.progress.curves, trainer.device, noise.rng, noise.validation_targets, noise.manifest_filename, schema_version, kind, loss.name, pipeline.name, pipeline.transition_estimator.name, pipeline.risk_corrector.name, execution.runner]
+    importance_reweighting: [output_root, loader.num_workers, loader.pin_memory, trainer.device, noise.validation_targets, schema_version, kind, method, num_classes, label_convention, posterior_stage.name, model.num_classes, loss.name, execution.runner]
+    cwd: [output_root, loader.num_workers, loader.pin_memory, cwd.pinv_rcond, trainer.device, schema_version, kind, parameter_record.sampling_seed, parameter_record.selected_group, parameter_record.source, parameter_record.repeated_runs, execution.runner]
+    pcse: [output_root, loader.num_workers, loader.pin_memory, transition_stage.parameterization.seed, transition_stage.determinant_tolerance, transition_stage.condition_limit, statistics_stage.condition_limit, gda_stage.covariance_ridge, trainer.device, configuration_fidelity, noise.rng, noise.validation_targets, noise.manifest_filename, pretraining_stage.checkpoint_selection, schema_version, kind, method, data.num_classes, transition_stage.name, execution.runner]
+    fine: [output_root, loader.num_workers, loader.pin_memory, loader.drop_last, fine.probability_floor, trainer.device, noise.rng, schema_version, kind, parameter_record.sampling_seed, parameter_record.selected_group, parameter_record.source, parameter_record.repeated_runs, execution.runner]
+    cdr: [output_root, loader.num_workers, loader.pin_memory, trainer.progress, trainer.device, noise.rng, noise.validation_targets, noise.manifest_filename, schema_version, kind, loss.name, selector.name, parameter_update.name, execution.runner]
+    dss: [output_root, loader.num_workers, loader.pin_memory, trainer.progress.enabled, trainer.progress.update_interval, trainer.progress.curves, trainer.device, noise.rng, noise.validation_targets, noise.manifest_filename, schema_version, kind, loss.name, selector.name, parameter_update.name, pipeline.name, pipeline.objective_consumer.name, pipeline.objective_consumer.num_samples, pipeline.objective_consumer.num_classes, execution.runner]
+    coteaching: [output_root, coteaching.initialization.peer_seed_offset, loader.num_workers, loader.pin_memory, trainer.device, configuration_fidelity, noise.rng, noise.validation_targets, noise.manifest_filename, schema_version, kind, method, coteaching.model_count, execution.runner]
+    jocor: [selector.rounding, output_root, loader.num_workers, loader.pin_memory, loader.drop_last, trainer.progress.enabled, trainer.progress.update_interval, trainer.progress.curves, trainer.device, noise.rng, schema_version, kind, parameter_sampling.paper, parameter_sampling.seed, parameter_sampling.candidates.setting, parameter_sampling.candidates.train_seed, parameter_sampling.sources.setting, parameter_sampling.sources.train_seed, loss.name, algorithm.name, selector.name, execution.runner]
+    cnlcu: [output_root, cnlcu.initialization.peer_seed_offset, cnlcu.history.storage_dtype, loader.num_workers, loader.pin_memory, trainer.device, configuration_fidelity, noise.rng, noise.validation_targets, noise.manifest_filename, schema_version, kind, method, loss.name, cnlcu.model_count, execution.runner]
+    mentornet: [loader.num_workers, loader.drop_last, pipeline.weight_provider.seed, schema_version, kind, loss.name, selector.name, parameter_update.name, pipeline.weight_provider.name, hyperparameters.sampling_seed, hyperparameters.source, hyperparameters.sampled_setting, execution.runner]
+    t_revision: [output_root, loader.num_workers, loader.pin_memory, t_revision.revision.ratio.denominator_floor, trainer.device, configuration_fidelity, noise.validation_targets, t_revision.fidelity, t_revision.stage1.best_metric, t_revision.classifier_initialization.best_metric, t_revision.revision.best_metric, schema_version, kind, method, execution.runner]
+    mc_ldce: [output_root, loader.num_workers, loader.pin_memory, transition.determinant_tolerance, transition.condition_limit, transition.parameterization.seed, statistics.rcond, statistics.condition_limit, trainer.device, noise.rng, schema_version, kind, method, execution.runner, mc_ldce.lifecycle_version, transition.num_classes]
+    volminnet: [output_root, loader.num_workers, loader.pin_memory, trainer.device, configuration_fidelity, noise.rng, noise.validation_targets, noise.manifest_filename, volminnet.fidelity, volminnet.checkpoint_selection.split, volminnet.checkpoint_selection.metric, volminnet.checkpoint_selection.mode, schema_version, kind, method, execution.runner]
+    pdl: [output_root, loader.num_workers, loader.pin_memory, loader.drop_last, trainer.device, trainer.progress.curves, noise.manifest_filename, schema_version, kind, instance_transition.name, algorithm.name, loss.name, execution.runner]
+    upm: [output_root, loader.num_workers, loader.pin_memory, loader.drop_last, upm.confusing_probability.epsilon, trainer.device, configuration_fidelity, noise.rng, noise.validation_targets, upm.stage1.best_metric, schema_version, kind, method, execution.runner]
+    cal: [output_root, loader.num_workers, loader.pin_memory, trainer.device, schema_version, kind, method, execution.runner, noise.clean_key, noise.noisy_key]
+    dld: [output_root, loader.num_workers, loader.pin_memory, dld.precorrection.gmm_seed, dld.precorrection.minimum_mean_separation, dld.precorrection.query_chunk_size, trainer.device, configuration_fidelity, noise.rng, noise.validation_targets, dld.fidelity.name, dld.fidelity.hard_y0, dld.fidelity.direction_endpoint, dld.fidelity.direction, dld.fidelity.neighbor_metric, dld.fidelity.neighbor_weighting, dld.fidelity.self_neighbor, dld.fidelity.divergence, dld.fidelity.divergence_softmax, dld.fidelity.hard_yn_zero_denominator, dld.fidelity.schedule, dld.fidelity.inference_initialization, dld.fidelity.inference_steps, schema_version, kind, method, execution.runner]
+    ca2c: [output_root, loader.num_workers, loader.pin_memory, loader.drop_last, trainer.device, noise.rng, schema_version, kind, method, execution.runner]
+    dividemix: [output_root, loader.num_workers, loader.pin_memory, dividemix.initialization.peer_seed_offset, dividemix.gmm.random_seed, dividemix.gmm.max_iterations, dividemix.gmm.tolerance, dividemix.gmm.covariance_regularization, dividemix.gmm.minimum_mean_separation, trainer.device, configuration_fidelity, noise.rng, noise.validation_targets, noise.manifest_filename, dividemix.fidelity, schema_version, kind, method, execution.runner, dividemix.model_count]
+    l2rw: [output_root, loader.num_workers, loader.pin_memory, trusted_validation.seed, trusted_validation.input_seed, trainer.device, meta.implementation, schema_version, kind, method, execution.runner]
+    lend: [output_root, loader.num_workers, loader.pin_memory, loader.drop_last, trainer.device, configuration_fidelity, noise.rng, noise.validation_targets, noise.manifest_filename, schema_version, kind, method, execution.runner, loss.name]
 webui_migration:
   backend:
   - Use registry lookup by method + dotted path as the authorization source.
@@ -134,6 +364,171 @@ formal_recipe_bindings:
   dividemix: cifar10-dividemix-sym20
   l2rw: l2rw-cifar10-reproduction
   lend: lend-cifar10-reproduction
+# Presentation only: these paths decide which editable controls are shown by
+# default. All other editable controls share one Advanced section; locked
+# fields remain read-only. The underlying permission levels are unchanged.
+# Basic experiment controls and the selected method's principal parameters
+# stay visible. A field's dotted path need not be trainer.epochs/optimizer.lr
+# when the formal recipe uses multiple training stages.
+# Values required exactly by the current method validators. These are
+# implementation contracts, not independently tunable hyperparameters.
+# Paired/ranged fields are intentionally absent: they remain editable and
+# must pass whole-config validation when saved.
+runtime_fixed_parameter_paths:
+  dual_t: [final_stage.fresh_model, posterior_stage.loss.name, final_stage.classifier, final_stage.loss.name, evaluation.selection_split]
+  pcse: [pretraining_stage.loss.name, transition_stage.optimizer.name, transition_stage.scheduler.name, transition_stage.parameterization.name, evaluation.selection_split]
+  importance_reweighting: [noise.name, posterior_stage.rate_estimator, model.name, evaluation.selection_split]
+  coteaching: [coteaching.remember_schedule.name, coteaching.remember_schedule.start, coteaching.selection.count_rule, coteaching.selection.tie_break, evaluation.selection_split, evaluation.primary, evaluation.ensemble]
+  cnlcu: [cnlcu.remember_schedule.name, cnlcu.remember_schedule.start, cnlcu.selection.count_rule, cnlcu.selection.tie_break, evaluation.selection_split, evaluation.primary, evaluation.ensemble]
+  t_revision: [t_revision.objective, t_revision.transition_initialization.method, t_revision.transition_initialization.posterior_split, t_revision.transition_initialization.extraction_augmentation, t_revision.transition_initialization.tie_break, t_revision.classifier_initialization.optimizer.name, t_revision.classifier_initialization.start_from, t_revision.revision.transition_mode, t_revision.revision.delta_initialization, t_revision.revision.start_from, t_revision.revision.optimizer.name, t_revision.revision.ratio.detach, t_revision.revision.ratio.clamp, evaluation.selection_split]
+  volminnet: [volminnet.transition.parameterization, volminnet.transition.convention, volminnet.transition.normalization_axis, volminnet.transition.initialization.mode, volminnet.objective.classification, volminnet.objective.volume.mode]
+  upm: [upm.psi.source, upm.psi.split, upm.psi.augmentation, upm.main.initialization, evaluation.selection_split]
+  dld: [dld.precorrection.gmm_components, dld.diffusion.model.independent_predictors, dld.inference.steps, dld.inference.deterministic, dld.inference.initialization]
+  dividemix: [evaluation.selection_split, dividemix.mixmatch.mixup_lambda_scope, dividemix.inference.ensemble]
+  lend: [lend.dilution.policy, lend.history.first_observation, lend.selection.rule, lend.selection.reduction, lend.selection.empty_batch]
+runtime_derived_parameter_paths:
+  importance_reweighting: [model.in_features]
+  coteaching: [coteaching.noise_rate, coteaching.remember_schedule.end]
+  cnlcu: [cnlcu.noise_rate, cnlcu.remember_schedule.end]
+default_parameter_paths:
+  common: [data.name, noise.name, noise.rate, seed, loader.batch_size, trainer.epochs, optimizer.lr]
+  # CAL consumes an external noise artifact; changing its displayed name/rate
+  # alone would not regenerate that artifact or redefine its realized noise.
+  exclude:
+    cal: [noise.name, noise.rate]
+  methods:
+    apl: [loss.alpha, loss.beta]
+    gce: [loss.q]
+    binary_risk: [risk.rho_positive, risk.rho_negative]
+    dual_t: [posterior_stage.epochs, final_stage.epochs, posterior_stage.optimizer.lr, final_stage.optimizer.lr]
+    loss_correction: []
+    importance_reweighting: [noise.rho_positive, noise.rho_negative, posterior_stage.bandwidth]
+    cwd: [noise.rho_positive, noise.rho_negative]
+    pcse: [transition_stage.lambda_volume, pretraining_stage.epochs, pretraining_stage.optimizer.lr, transition_stage.epochs, transition_stage.optimizer.model_lr, transition_stage.optimizer.transition_lr, ensemble_stage.epochs, ensemble_stage.learning_rate]
+    fine: [fine.alpha, fine.beta, fine.gamma]
+    cdr: [parameter_update.l1_decay]
+    dss: [pipeline.objective_consumer.alpha]
+    coteaching: [coteaching.remember_schedule.gradual_epochs]
+    jocor: [algorithm.lambda]
+    cnlcu: [cnlcu.uncertainty.sigma_squared]
+    mentornet: [pipeline.weight_provider.percentile]
+    t_revision: [t_revision.stage1.epochs, t_revision.stage1.optimizer.lr, t_revision.classifier_initialization.epochs, t_revision.classifier_initialization.optimizer.lr, t_revision.revision.epochs, t_revision.revision.optimizer.lr]
+    mc_ldce: [transition.lambda_volume, transition.epochs, transition.optimizer.lr]
+    volminnet: [volminnet.objective.volume.coefficient, volminnet.optimizer.classifier.lr, volminnet.optimizer.transition.lr]
+    pdl: [instance_transition.num_parts, warmup.epochs, warmup.optimizer.lr, phases.correction_epochs, phases.revision_epochs, revision.optimizer.lr]
+    upm: [upm.confusing_probability.initial_value, upm.confusing_probability.learning_rate, upm.stage1.epochs, upm.stage1.optimizer.lr, upm.main.epochs, upm.main.optimizer.lr]
+    cal: [cal.confidence_weight]
+    dld: [dld.precorrection.k_neighbors, dld.inference.steps, dld.diffusion.epochs, dld.diffusion.optimizer.direction.lr, dld.diffusion.optimizer.noise.lr]
+    ca2c: [ca2c.candidate_k, ca2c.lambda, ca2c.robust_weight]
+    dividemix: [dividemix.gmm.threshold, dividemix.mixmatch.temperature, dividemix.objective.lambda_u, dividemix.training.epochs]
+    l2rw: [data.num_clean, meta.virtual_learning_rate]
+    lend: [lend.graph.k, lend.dilution.alpha, lend.training.epochs]
+# Research-facing grouping is independent of the edit-permission levels above.
+# A path appears once in the editor. Values still come from the selected recipe.
+research_parameter_view:
+  groups:
+    method: {label_zh: 方法核心, description_zh: 损失、样本选择、状态更新和论文特有的算法选择。}
+    data: {label_zh: 数据与噪声, description_zh: 数据集、划分、标签噪声和输入处理所定义的实验条件。}
+    training: {label_zh: 模型与训练, description_zh: 模型、训练预算、优化和调度所定义的对照条件。}
+  # Reader-facing categories mirror the desktop research-parameter workbook.
+  # They affect only presentation, never config values or edit permissions.
+  categories:
+    method: {label_zh: 方法核心变量, description_zh: 论文方法中的损失、选择、状态、阶段与估计参数。, default_expanded: true}
+    data: {label_zh: 数据与噪声变量, description_zh: 数据、监督量与噪声条件。, default_expanded: true}
+    comparison: {label_zh: 实验对照条件, description_zh: 模型架构、训练预算与优化强度；改变后应记录对照条件。, default_expanded: false}
+    method_protocol: {label_zh: 论文协议选择, description_zh: 正式方法的实现路径与选择规则，修改前需核对论文协议。, default_expanded: false}
+    data_protocol: {label_zh: 数据协议设置, description_zh: 划分、预处理、标签来源与评估协议。, default_expanded: false}
+    training_protocol: {label_zh: 训练协议设置, description_zh: 优化器与调度器的复现细节。, default_expanded: false}
+    runtime: {label_zh: 运行与复现细节, description_zh: 随机实现及实验实例标识，不属于方法消融参数。, default_expanded: false}
+    resource: {label_zh: 资源与前置条件, description_zh: 外部文件、权重或标签来源；这是运行前置条件，不是论文超参数。, default_expanded: true}
+  focus_data_paths: [data.name, noise.name, noise.mode, noise.rate, noise.seed, noise.rho_positive, noise.rho_negative, data.num_clean, data.num_val, trusted_validation.source]
+  comparison_paths: [loader.batch_size, trainer.epochs, trainer.max_steps, optimizer.lr, model.name]
+  # The noise realization seed is a user-visible data/noise condition. Only
+  # implementation-specific RNG selectors belong to the runtime category.
+  implementation_paths: [seed, noise.rng, data.split_rng, data.validation_split.rng, trusted_validation.seed]
+  method_protocol_paths: [configuration_fidelity, noise.rng, evaluation.selection_split, trusted_validation.source, pretraining_stage.mode]
+  method_protocol_suffixes: [.fidelity, .fidelity.name, .implementation, .count_rule, .tie_break, .rounding]
+  data_paths:
+  - data.name
+  - data.validation_size
+  - data.num_val
+  - data.num_clean
+  - data.dimension
+  - data.train_size
+  - data.test_size
+  - data.folds
+  - data.split_strategy
+  - data.split_rng
+  - data.validation_split.strategy
+  - data.validation_split.rng
+  - data.augment
+  - data.strong_augment
+  - data.strong_policy
+  - data.strong_magnitude
+  - data.preprocessing
+  - noise.name
+  - noise.mode
+  - noise.rate
+  - noise.seed
+  - noise.rho_positive
+  - noise.rho_negative
+  - noise.sampling
+  - noise.rng
+  - noise.validation_targets
+  - evaluation.selection_split
+  - evaluation.allow_test_selection
+  - evaluation.primary
+  - evaluation.ensemble
+  - trusted_validation.source
+  - trusted_validation.seed
+  training_paths:
+  - seed
+  - loader.batch_size
+  - trainer.epochs
+  - trainer.max_steps
+  - optimizer.lr
+  - optimizer.momentum
+  - optimizer.nesterov
+  - optimizer.weight_decay
+  - optimizer.name
+  - scheduler.name
+  - scheduler.milestones
+  - scheduler.gamma
+  - scheduler.t_max
+  - scheduler.eta_min
+  - model.name
+  - model.base_width
+  - model.dropout
+  - model.num_residual_units
+  - model.width_multiplier
+  # Advanced method choices that the old four-level UI buried by default.
+  method_paths:
+    apl: [evaluation.selection_split]
+    gce: []
+    binary_risk: []
+    dual_t: [posterior_stage.checkpoint_selection, final_stage.classifier, final_stage.fresh_model]
+    loss_correction: [pipeline.warmup_epochs, noise.rng]
+    importance_reweighting: [posterior_stage.bandwidth, posterior_stage.rate_estimator]
+    cwd: [cwd.variant, cwd.dynamic_centroid]
+    pcse: [configuration_fidelity, pretraining_stage.mode, pretraining_stage.epochs, transition_stage.epochs, transition_stage.parameterization.name, transition_stage.parameterization.initial_flip_mass, transition_stage.parameterization.max_flip_mass, transition_stage.parameterization.temperature, feature_stage.layers]
+    fine: [fine.probability_floor]
+    cdr: [parameter_update.critical_scope, parameter_update.compatibility_mode]
+    dss: [pipeline.objective_consumer.mda, pipeline.objective_consumer.ccs]
+    coteaching: [coteaching.remember_schedule.name, coteaching.selection.count_rule, coteaching.selection.tie_break]
+    jocor: [selector.rounding, selector.keep_rate.name]
+    cnlcu: [cnlcu.variant, cnlcu.remember_schedule.name, cnlcu.selection.count_rule, cnlcu.selection.tie_break]
+    mentornet: [pipeline.weight_provider.decay, pipeline.weight_provider.total_epochs, pipeline.weight_provider.fixed_epoch_after_burn_in, pipeline.weight_provider.fixed_label]
+    t_revision: [configuration_fidelity, t_revision.objective, t_revision.fidelity, t_revision.transition_initialization.method, t_revision.transition_initialization.posterior_split, t_revision.classifier_initialization.start_from, t_revision.revision.transition_mode, t_revision.revision.start_from]
+    mc_ldce: [transition.epochs, transition.estimator, transition.parameterization.name, transition.parameterization.initial_weight, mc_ldce.transition_model, mc_ldce.feature_mode]
+    volminnet: [configuration_fidelity, volminnet.fidelity, volminnet.transition.parameterization, volminnet.transition.convention, volminnet.transition.normalization_axis, volminnet.transition.initialization.mode, volminnet.objective.classification, volminnet.objective.volume.mode]
+    pdl: [warmup.epochs, warmup.noisy_validation_size, algorithm.correction]
+    upm: [configuration_fidelity, upm.psi.source, upm.psi.split, upm.psi.augmentation, upm.main.initialization]
+    cal: []
+    dld: [configuration_fidelity, dld.precorrection.delta, dld.precorrection.gmm_components, dld.fidelity.name, dld.fidelity.neighbor_metric, dld.fidelity.neighbor_weighting, dld.fidelity.schedule, dld.fidelity.inference_initialization, dld.feature_extractor.source]
+    ca2c: []
+    dividemix: [configuration_fidelity, dividemix.fidelity, dividemix.gmm.loss_history.name, dividemix.gmm.loss_history.window_epochs, dividemix.mixmatch.mixup_lambda_scope, dividemix.inference.ensemble]
+    l2rw: [trusted_validation.source, meta.implementation]
+    lend: [configuration_fidelity, lend.graph.metric, lend.graph.normalize_features, lend.dilution.policy, lend.selection.rule, lend.selection.reduction]
 methods:
   apl:
     paper:
@@ -1549,8 +1944,8 @@ methods:
           reproduction_context: benchmark condition
         noise.transition_matrix:
           current: <10x10 class-conditional transition matrix; atomic value from formal recipe>
-          value_type: string
-          ui_control: text
+          value_type: list
+          ui_control: json
           reproduction_impact: high
           origin: paper_method_or_experiment_condition
           note: 可修改的重要论文参数或实验条件；修改后实验仍可运行，但应标记为偏离当前论文/正式 recipe 设置。
@@ -1558,8 +1953,8 @@ methods:
           reproduction_context: fixed benchmark transition matrix
         pipeline.transition_estimator.matrix:
           current: <10x10 class-conditional transition matrix; atomic value from formal recipe>
-          value_type: string
-          ui_control: text
+          value_type: list
+          ui_control: json
           reproduction_impact: high
           origin: paper_method_or_experiment_condition
           note: 可修改的重要论文参数或实验条件；修改后实验仍可运行，但应标记为偏离当前论文/正式 recipe 设置。
@@ -2920,15 +3315,6 @@ methods:
           origin: structural_or_integrity_contract
           note: 结构性运行契约；普通参数面板中的独立修改会破坏 schema、runner、组件 wiring、label-space/cardinality 或 lifecycle 契约。
           lock_reason: label-space protocol
-        pretraining_stage.method:
-          current: cross_entropy
-          value_type: string
-          ui_control: readonly
-          reproduction_impact: high
-          origin: structural_or_integrity_contract
-          note: PCSE 正式前置训练方法固定为内部 CrossEntropy。
-          evidence_ref: pretrain
-          lock_reason: pretraining method contract
         transition_stage.name:
           current: paper_volmin
           value_type: string
@@ -2947,17 +3333,17 @@ methods:
           note: 结构性运行契约；普通参数面板中的独立修改会破坏 schema、runner、组件 wiring、label-space/cardinality 或 lifecycle 契约。
           lock_reason: dedicated runner
     coverage:
-      parameter_count: 60
+      parameter_count: 58
       by_level:
         basic: 3
         paper: 4
         advanced: 45
-        locked: 8
+        locked: 6
     paper_comparison:
       audit_status: checked_against_original_paper
       alignment_status: engineering_fidelity_not_claimed_exact
-      summary: Repository marks this configuration engineering; internal CrossEntropy pretraining and transition/statistics
-        stages are not presented as an exact numerical reproduction.
+      summary: Repository marks this configuration engineering; the formal recipe consumes a verified external UPM checkpoint
+        before its transition/statistics stages and is not an exact numerical reproduction.
       permission_policy: execution_validity_lock_rule_v1_1
   fine:
     paper:
@@ -10697,12 +11083,12 @@ methods:
       permission_policy: execution_validity_lock_rule_v1_1
 coverage_summary:
   methods: 26
-  parameters_total: 1231
+  parameters_total: 1223
   parameters_by_level:
     basic: 120
     paper: 137
-    advanced: 809
-    locked: 165
+    advanced: 806
+    locked: 160
   reclassified_from_locked:
     to_basic: 30
     to_paper: 38

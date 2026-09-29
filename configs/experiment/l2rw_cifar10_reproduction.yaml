@@ -10,11 +10,11 @@ data:
   num_val: 5000
   num_clean: 100
   augment: true
-  input_seed: 0
-  seed: 0
+  input_seed: 1234
+  seed: 1234
 noise:
   rate: 0.4
-  seed: 0
+  seed: 1234
   name: official_uniform_flip
 loader:
   batch_size: 100
@@ -24,7 +24,7 @@ trusted_validation:
   source: official_generated
   batch_size: 100
   seed: 1234
-  input_seed: 0
+  input_seed: 1234
 model:
   name: l2rw_resnet32
   base_width: 16

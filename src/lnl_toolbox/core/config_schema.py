@@ -63,6 +63,36 @@ def _infer_kind(config: Mapping[str, Any]) -> str:
     return "experiment"
 
 
+def synchronize_experiment_seed(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Use the experiment seed for every active stochastic component.
+
+    Historical parameter-search records and peer offsets describe provenance
+    or a deterministic offset, not independently configurable random seeds.
+    """
+
+    value = deepcopy(dict(config))
+    if "seed" not in value:
+        return value
+    seed = int(value["seed"])
+    value["seed"] = seed
+
+    def synchronize(section: dict[str, Any]) -> None:
+        for key, item in section.items():
+            if key in {"parameter_record", "parameter_sampling", "hyperparameters"}:
+                continue
+            if isinstance(key, str) and (key == "seed" or (key.endswith("_seed") and key != "peer_seed_offset")):
+                section[key] = seed
+            elif isinstance(item, dict):
+                synchronize(item)
+            elif isinstance(item, list):
+                for child in item:
+                    if isinstance(child, dict):
+                        synchronize(child)
+
+    synchronize(value)
+    return value
+
+
 def normalize_experiment_config(config: Mapping[str, Any]) -> dict[str, Any]:
     """Return the canonical public representation without runtime-only aliases."""
 
@@ -117,7 +147,7 @@ def normalize_experiment_config(config: Mapping[str, Any]) -> dict[str, Any]:
         value["trainer"] = trainer
 
     validate_experiment_config(value)
-    return value
+    return synchronize_experiment_seed(value)
 
 
 def runtime_experiment_config(config: Mapping[str, Any]) -> dict[str, Any]:

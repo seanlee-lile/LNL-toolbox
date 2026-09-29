@@ -52,7 +52,7 @@ dld:
     k_neighbors: 50
     delta: 1.0e-6
     gmm_components: 2
-    gmm_seed: 0
+    gmm_seed: 123
     minimum_mean_separation: 1.0e-6
     query_chunk_size: 64
   diffusion:

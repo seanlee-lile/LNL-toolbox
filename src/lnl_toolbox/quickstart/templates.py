@@ -182,7 +182,11 @@ def adapt_method_template(
         path = tuple(str(part) for part in str(path_text).split("."))
         if path:
             _set(candidate, path, value)
-    return candidate
+    if noise_selection.seed is not None:
+        candidate["seed"] = int(noise_selection.seed)
+    from lnl_toolbox.core.config_schema import synchronize_experiment_seed
+
+    return synchronize_experiment_seed(candidate)
 
 
 def find_exact_reproduction(
@@ -190,6 +194,7 @@ def find_exact_reproduction(
     *,
     dataset_adapter: str,
     noise_selection: QuickStartNoiseSelection,
+    recipes: Mapping[str, RecipeSpec] | None = None,
 ) -> str | None:
     """Find a formal recipe whose dataset adapter and noise choice match."""
 
@@ -197,7 +202,11 @@ def find_exact_reproduction(
     for item in paper.configs:
         if item.profile != "reproduction":
             continue
-        config = _cached_recipe_config(item.recipe_id)
+        config = (
+            load_recipe_config(recipes[item.recipe_id])
+            if recipes is not None
+            else _cached_recipe_config(item.recipe_id)
+        )
         data_name = str(_get(config, ("data", "name"), "")).lower().replace("-", "_")
         noise_name = str(_get(config, ("noise", "name"), "clean")).strip().lower()
         if data_name != str(dataset_adapter).lower().replace("-", "_"):
@@ -208,6 +217,8 @@ def find_exact_reproduction(
         if noise_selection.rate is not None and configured_rate is not None:
             if float(configured_rate) != float(noise_selection.rate):
                 continue
+        if noise_selection.seed is not None and int(config.get("seed", 1)) != int(noise_selection.seed):
+            continue
         return item.recipe_id
     return None
 

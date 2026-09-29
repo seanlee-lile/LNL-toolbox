@@ -59,6 +59,33 @@ class _FakeFashionMnistAdapter(_FakeImageAdapter):
     name = "fashion_mnist"
 
 
+class _FakeUnverifiedLabelsAdapter(_FakeImageAdapter):
+    name = "custom_labels"
+
+    def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
+        del spec, seed
+        count = 12 if split == "train" else 6
+        labels = np.arange(count, dtype=np.int64) % 2
+        return RawDatasetSplit(
+            np.zeros((count, 32, 32, 3), dtype=np.uint8), labels,
+            np.arange(count, dtype=np.int64), self.name, split, 2,
+        )
+
+
+class _FakeNoisyImageAdapter(_FakeImageAdapter):
+    name = "noisy_image"
+
+    def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
+        clean = super().load(spec, split, seed=seed)
+        observed = np.array(clean.observed_targets, copy=True)
+        if split == "train":
+            observed[0] = 1 - observed[0]
+        return RawDatasetSplit(
+            clean.inputs, observed, clean.global_indices, self.name, split, 2,
+            clean_targets=clean.clean_targets,
+        )
+
+
 class QuickStartServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -84,9 +111,72 @@ class QuickStartServiceTests(unittest.TestCase):
 
     def test_noise_options_are_capability_based(self) -> None:
         result = self.service.noise_options("local-cifar10")
+        self.assertEqual(result["dataset_state"], "clean")
+        self.assertEqual(result["status_source"], "inspected")
+        self.assertEqual(result["clean_train_labels"], "available")
         keys = {item["key"] for item in result["options"]}
         self.assertIn("symmetric", keys)
         self.assertNotIn("external_torch", keys)
+
+    def test_unknown_labels_are_not_treated_as_clean_and_noisy_rate_can_be_declared(self) -> None:
+        root = Path(self.temp.name)
+        data_service = DataService(
+            registry=DatasetRegistry((_FakeUnverifiedLabelsAdapter(),)),
+            catalog=LocalDatasetCatalog(root / "unknown-catalog.json"),
+        )
+        data_service.register("unverified", "custom_labels", {"root": str(self.data_root)})
+        data_service.inspect("unverified")
+        service = QuickStartService(data_service, artifact_root=root / "unknown-artifacts")
+        self.assertEqual(service.noise_options("unverified")["dataset_state"], "unknown")
+        data_service.update_declarations("unverified", {"noise_status":"noisy", "noise_origin":"native"})
+        unknown_rate = service.noise_options("unverified")
+        self.assertEqual(unknown_rate["dataset_state"], "native")
+        self.assertEqual(unknown_rate["noise_rate"]["status"], "unknown")
+        self.assertEqual([item["key"] for item in unknown_rate["options"]], ["native"])
+        data_service.update_declarations("unverified", {"noise_rate":{
+            "status":"estimated", "value":0.25, "provenance":"local_measurement",
+        }})
+        self.assertEqual(service.noise_options("unverified")["noise_rate"]["value"], 0.25)
+
+    def test_declared_noise_status_is_reflected_in_quick_start(self) -> None:
+        root = Path(self.temp.name)
+        data_service = DataService(
+            registry=DatasetRegistry((_FakeUnverifiedLabelsAdapter(),)),
+            catalog=LocalDatasetCatalog(root / "declared-catalog.json"),
+        )
+        data_service.register("unverified", "custom_labels", {"root": str(self.data_root)})
+        data_service.inspect("unverified")
+        service = QuickStartService(data_service, artifact_root=root / "declared-artifacts")
+        self.assertEqual(service.noise_options("unverified")["dataset_state"], "unknown")
+        data_service.update_declarations("unverified", {"noise_status": "clean"})
+        clean = service.noise_options("unverified")
+        self.assertEqual(clean["dataset_state"], "clean")
+        self.assertEqual(clean["status_source"], "declared")
+        self.assertIn("symmetric", {item["key"] for item in clean["options"]})
+        data_service.update_declarations("unverified", {"noise_status": "noisy", "noise_origin": "native"})
+        noisy = service.noise_options("unverified")
+        self.assertEqual(noisy["dataset_state"], "native")
+        self.assertEqual([item["key"] for item in noisy["options"]], ["native"])
+
+    def test_conflicting_noise_declaration_does_not_overwrite_inspected_fact(self) -> None:
+        before = self.data_service.declarations("local-cifar10").to_dict()
+        with self.assertRaises(ValueError):
+            self.data_service.update_declarations("local-cifar10", {"noise_status": "noisy"})
+        self.assertEqual(self.data_service.declarations("local-cifar10").to_dict(), before)
+
+    def test_inspected_noisy_labels_publish_measured_original_rate(self) -> None:
+        root = Path(self.temp.name)
+        data_service = DataService(
+            registry=DatasetRegistry((_FakeNoisyImageAdapter(),)),
+            catalog=LocalDatasetCatalog(root / "noisy-catalog.json"),
+        )
+        data_service.register("noisy", "noisy_image", {"root": str(self.data_root)})
+        data_service.inspect("noisy")
+        result = QuickStartService(data_service, artifact_root=root / "noisy-artifacts").noise_options("noisy")
+        self.assertEqual(result["dataset_state"], "native")
+        self.assertEqual(result["status_source"], "inspected")
+        self.assertAlmostEqual(result["noise_rate"]["value"], 1 / 12)
+        self.assertEqual([item["key"] for item in result["options"]], ["native"])
 
     def test_method_options_are_paper_catalog_driven(self) -> None:
         result = self.service.method_options(
@@ -106,6 +196,7 @@ class QuickStartServiceTests(unittest.TestCase):
         service.register(
             "local-cifar100", "cifar100", {"root": str(self.data_root)}
         )
+        service.inspect("local-cifar100")
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("LNL_PCSE_SOURCE_RUN", None)
             option = next(
@@ -128,28 +219,43 @@ class QuickStartServiceTests(unittest.TestCase):
             self.service.experiment_service,
             "list_config_compatibility",
             wraps=original,
-        ) as checker:
+        ) as checker, patch(
+            "lnl_toolbox.quickstart.templates._cached_recipe_config",
+            side_effect=AssertionError("method scan must reuse discovered recipes"),
+        ):
             first = self.service.method_options("local-cifar10", selection)
             second = self.service.method_options("local-cifar10", selection)
         self.assertEqual(first, second)
         self.assertEqual(checker.call_count, 1)
         self.assertGreater(len(first), 5)
 
-    def test_method_options_cache_skips_second_dataset_inspection(self) -> None:
+    def test_method_options_use_accepted_profile_without_dataset_inspection(self) -> None:
         selection = QuickStartNoiseSelection("clean", "clean")
-        original = self.service.data_service.inspect
-        with patch.object(self.service.data_service, "inspect", wraps=original) as inspector:
-            self.service.method_options("local-cifar10", selection)
-            first_calls = inspector.call_count
-            self.service.method_options("local-cifar10", selection)
-        self.assertGreaterEqual(first_calls, 1)
-        self.assertEqual(inspector.call_count, first_calls)
+        with patch.object(self.service.data_service, "inspect", side_effect=AssertionError("unexpected reinspection")):
+            first = self.service.method_options("local-cifar10", selection)
+            second = self.service.method_options("local-cifar10", selection)
+        self.assertEqual(first, second)
+
+    def test_accepted_quick_start_flow_does_not_reload_dataset(self) -> None:
+        selection = QuickStartNoiseSelection("synthetic", "symmetric", rate=0.2, seed=1)
+        with patch.object(self.data_service.registry, "load", side_effect=AssertionError("unexpected sample load")):
+            self.assertEqual(self.service.register_and_inspect(str(self.data_root)).alias, "local-cifar10")
+            self.assertIn("symmetric", {item["key"] for item in self.service.noise_options("local-cifar10")["options"]})
+            methods = self.service.method_options("local-cifar10", selection)
+            self.assertTrue(any(item.paper_id == "gce" for item in methods))
+            plan = self.service.build_plan(
+                dataset_alias="local-cifar10", noise_selection=selection, paper_id="gce",
+            )
+        self.assertEqual(plan.status, "ready", plan.details)
 
     def test_unknown_path_is_not_marked_ready(self) -> None:
         result = self.service.register_and_inspect(str(Path(self.temp.name) / "missing"))
         self.assertEqual(result.status, "unsupported")
 
     def test_inspect_failure_stops_registration_flow(self) -> None:
+        self.data_service.status = lambda *args, **kwargs: SimpleNamespace(
+            status="incomplete", error="fixture status failed", profile=None
+        )
         self.data_service.inspect = lambda *args, **kwargs: SimpleNamespace(
             status="incomplete", error="fixture inspect failed", profile=None
         )
@@ -160,7 +266,7 @@ class QuickStartServiceTests(unittest.TestCase):
                 self.service.register_and_inspect(str(self.data_root))
 
     def test_method_options_rejects_an_incomplete_profile(self) -> None:
-        self.data_service.inspect = lambda *args, **kwargs: SimpleNamespace(
+        self.data_service.status = lambda *args, **kwargs: SimpleNamespace(
             status="incomplete", error="fixture inspect failed", profile=None
         )
         with self.assertRaisesRegex(ValueError, "fixture inspect failed"):
@@ -212,6 +318,30 @@ class QuickStartServiceTests(unittest.TestCase):
                 noise_selection=QuickStartNoiseSelection("clean", "clean"),
             ), "formal-clean")
 
+    def test_exact_reproduction_reuses_discovered_recipe(self) -> None:
+        recipe = SimpleNamespace(id="formal-clean")
+        paper = SimpleNamespace(configs=(SimpleNamespace(profile="reproduction", recipe_id=recipe.id),))
+        with patch("lnl_toolbox.quickstart.templates._cached_recipe_config", side_effect=AssertionError("rescan")), \
+             patch("lnl_toolbox.quickstart.templates.load_recipe_config", return_value={"data": {"name": "cifar10"}}) as load:
+            result = find_exact_reproduction(
+                paper, dataset_adapter="cifar10",
+                noise_selection=QuickStartNoiseSelection("clean", "clean"),
+                recipes={recipe.id: recipe},
+            )
+        self.assertEqual(result, recipe.id)
+        load.assert_called_once_with(recipe)
+
+    def test_changed_experiment_seed_is_not_mistaken_for_exact_recipe(self) -> None:
+        paper = SimpleNamespace(configs=(SimpleNamespace(profile="reproduction", recipe_id="formal-gce"),))
+        with patch("lnl_toolbox.quickstart.templates._cached_recipe_config", return_value={
+            "seed": 1, "data": {"name": "cifar10"},
+            "noise": {"name": "symmetric", "rate": 0.2, "seed": 1},
+        }):
+            self.assertIsNone(find_exact_reproduction(
+                paper, dataset_adapter="cifar10",
+                noise_selection=QuickStartNoiseSelection("synthetic", "symmetric", rate=0.2, seed=7),
+            ))
+
 
     def test_all_ready_options_build_ready_plans_across_registered_class_spaces(self) -> None:
         root = Path(self.temp.name)
@@ -222,6 +352,7 @@ class QuickStartServiceTests(unittest.TestCase):
         cifar100_service.register(
             "local-cifar100", "cifar100", {"root": str(self.data_root)}
         )
+        cifar100_service.inspect("local-cifar100")
         fashion_service = DataService(
             registry=DatasetRegistry((_FakeFashionMnistAdapter(),)),
             catalog=LocalDatasetCatalog(root / "fashion-catalog.json"),
@@ -229,6 +360,7 @@ class QuickStartServiceTests(unittest.TestCase):
         fashion_service.register(
             "fashion-mnist", "fashion_mnist", {"root": str(self.data_root)}
         )
+        fashion_service.inspect("fashion-mnist")
         scenarios = (
             ("local-cifar10", self.service),
             ("local-cifar100", QuickStartService(

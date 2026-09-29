@@ -10,7 +10,7 @@ steps:
   - {block: inspect_dataset_semantics}
   - {block: create_dataset_split, params: {validation_size: 1024, split_seed: 17}}
   - {block: select_label_source, params: {validation: observed}}
-  - {block: apply_noise, params: {name: binary_asymmetric_rcn, rate: 0.2, seed: 29, options: {rho_positive: 0.2, rho_negative: 0.1}}}
+  - {block: apply_noise, params: {name: binary_asymmetric_rcn, rate: 0.2, seed: 17, options: {rho_positive: 0.2, rho_negative: 0.1}}}
   - {block: build_noise_manifest}
   - {block: configure_preprocessing, params: {preprocessing: binary_raw, augment: false}}
   - {block: configure_views, params: {views: [weak]}}

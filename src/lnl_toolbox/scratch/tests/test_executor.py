@@ -39,6 +39,15 @@ def _increment(ctx):
     ctx["count"] = int(ctx.get("count", 0)) + 1
 
 
+@block(id="test_seed_inputs", name="Seed Inputs", category="Test", params={
+    "seed": {"type": "int", "default": 0},
+    "options": {"type": "value", "default": {}},
+    "peer_seed_offset": {"type": "int", "default": 1},
+})
+def _seed_inputs(ctx, seed=0, options=None, peer_seed_offset=1):
+    ctx["received_seeds"] = (seed, options["data_seed"], peer_seed_offset)
+
+
 class _PreparedData:
     num_classes = 10
 
@@ -54,6 +63,15 @@ class _PreparedData:
 
 
 class ScratchExecutorTest(unittest.TestCase):
+    def test_set_seed_controls_later_stochastic_parameters(self) -> None:
+        context = execute_recipe({"schema_version": 1, "name": "one seed", "steps": [
+            {"block": "set_seed", "params": {"seed": 7}},
+            {"block": "test_seed_inputs", "params": {
+                "seed": 1, "options": {"data_seed": 2}, "peer_seed_offset": 3,
+            }},
+        ]}, ScratchContext())
+        self.assertEqual(context["received_seeds"], (7, 7, 3))
+
     def test_sequence_loop_and_condition_share_context(self) -> None:
         recipe = {
             "schema_version": 1,

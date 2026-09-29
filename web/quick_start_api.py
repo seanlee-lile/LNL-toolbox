@@ -3,13 +3,16 @@ from __future__ import annotations
 """Thin JSON boundary for the Quick Start service."""
 
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from lnl_toolbox.quickstart.models import QuickStartNoiseSelection
 from lnl_toolbox.quickstart.service import QuickStartService
 
 
-SERVICE = QuickStartService()
+SERVICE = QuickStartService(
+    artifact_root=Path(__file__).resolve().parents[1] / "artifacts" / "web-quick-start"
+)
 
 
 def _body_mapping(body: Mapping[str, object]) -> Mapping[str, object]:

@@ -209,6 +209,22 @@ def execute_steps(
         path = (*_path, index)
         definition = get_block(str(step["block"]))
         params = _resolved_params(definition, step)
+        if definition.id != "set_seed" and "seed" in context:
+            # A recipe has one random-seed source: the preceding set_seed
+            # block. Keep deterministic peer offsets, which are not seeds.
+            def use_experiment_seed(value):
+                if isinstance(value, Mapping):
+                    return {
+                        key: int(context["seed"])
+                        if isinstance(key, str) and (key == "seed" or key.endswith("_seed")) and key != "peer_seed_offset"
+                        else use_experiment_seed(item)
+                        for key, item in value.items()
+                    }
+                if isinstance(value, list):
+                    return [use_experiment_seed(item) for item in value]
+                return value
+
+            params = use_experiment_seed(params)
         children = step.get("steps", [])
         _publish_progress(context, block_id=definition.id, path=path)
         try:

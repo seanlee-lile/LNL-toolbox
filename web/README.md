@@ -36,7 +36,9 @@ Quick Start 的最短流程是：
 正式 recipe，页面显示“论文复现配置”；否则显示“Toolbox 适配配置”，说明它只是基于现有
 方法实现和训练模板为当前数据集、噪声条件生成的可运行配置，不等同于论文原始复现。
 
-Quick Start 只负责编排，最终训练仍使用现有 `/api/run`、job polling、日志和停止任务流程。
+Quick Start 第 4 步直接显示本次配置的默认参数和可折叠的高级参数；修改后先另存并检查
+本次自定义 YAML，再用它预演或训练，内置论文 Recipe 不会被覆盖。“高级模式：其他工作区”
+跳转区已移除，其他主导航功能仍可独立访问。最终训练仍使用现有 `/api/run`、job polling、日志和停止任务流程。
 复杂数据集或额外 checkpoint、manifest 等资源，继续从“本地数据集”或 YAML 编辑器进入。
 
 主页面左侧导航当前依次为：**快速开始**、**新手教程**、**新建 YAML**、**本地数据集**、**参数 Sweep**、**运行管理**、**论文方法**、**自由输入**。用户填写当前模块字段后，真实命令会在右侧内容区下方的 **Preview** 显示；执行、复制、清空日志和常用快捷命令也都位于该 Preview 组块中。
@@ -71,9 +73,16 @@ YAML，或直接将内置配置带入参数 Sweep；项目 YAML 保存成功后�
 `configs/experiment/<recipe>-custom.yaml`。有未保存修改时，运行或 Sweep 会先要求保存。
 
 参数 Sweep 同时接受内置 recipe 和项目 YAML。参数列表复用
-`lnl_parameter_metadata_registry_revised.yaml`，按基础、论文、高级和锁定四级展示；锁定
-参数不能加入矩阵，论文参数会显示依据与复现影响，并在预检结果中明确标记偏离。Sweep
+`lnl_parameter_metadata_registry_revised.yaml`。元数据仍记录基础、论文、高级和锁定权限，
+但页面只按下述两层展示；锁定参数不能加入矩阵，论文参数会显示依据与复现影响，并在预检结果中明确标记偏离。Sweep
 完成后可把输出目录直接带入“运行管理”。
+
+26 篇正式论文的 YAML 参数编辑器和 Sweep 参数列表只显示两组：“默认显示”
+放数据集、适用的噪声条件、常用训练控制和逐篇挑选的方法核心参数；“高级参数”
+按需展开随机种子、模型/协议/实现细节、资源路径和复杂结构。
+逐篇选择见 `lnl_parameter_metadata_registry_revised.yaml` 的 `default_parameter_paths`；
+不再按旧研究类别自动展开所有字段。分类只改变展示位置，不改变参数值、编辑权限、
+论文依据或偏离记录。互相依赖的字段在表单中同步输入。
 
 “本地数据集”模块可生成 `lnl data register/inspect/verify/remove` 和
 `lnl run ... --data <alias>`。页面显示机器本地 catalog 的当前状态，但不会读取或上传

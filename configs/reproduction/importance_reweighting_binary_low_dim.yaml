@@ -15,7 +15,7 @@ noise:
   name: binary_asymmetric_rcn
   rho_positive: 0.2
   rho_negative: 0.1
-  seed: 29
+  seed: 17
   validation_targets: noisy
 posterior_stage:
   name: kde

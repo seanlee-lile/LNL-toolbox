@@ -16,7 +16,7 @@ from lnl_toolbox.core.config_schema import (
     runtime_experiment_config,
 )
 from lnl_toolbox.training.results import finalize_result, is_completed_result
-from lnl_toolbox.data.profile import NoiseOrigin, NoiseRateInfo, NoiseRateStatus
+from lnl_toolbox.data.profile import DatasetCapabilities, NoiseOrigin, NoiseRateInfo, NoiseRateStatus
 from lnl_toolbox.training.compatibility import (
     CompatibilityReason,
     CompatibilityResult,
@@ -447,10 +447,15 @@ class ExperimentService:
         configs: Mapping[str, Mapping[str, Any]],
         *,
         method_noise_rate_prior: float | None = None,
+        dataset_capabilities: DatasetCapabilities | None = None,
     ) -> tuple[tuple[str, CompatibilityResult], ...]:
-        """Resolve concrete configurations while loading dataset capabilities once."""
+        """Resolve configurations with supplied or freshly inspected capabilities."""
 
-        capabilities = self.data_service.capabilities(dataset, persist=False)
+        capabilities = (
+            dataset_capabilities
+            if dataset_capabilities is not None
+            else self.data_service.capabilities(dataset, persist=False)
+        )
         results: list[tuple[str, CompatibilityResult]] = []
         for key, config in configs.items():
             candidate = self.data_service.apply(config, dataset)

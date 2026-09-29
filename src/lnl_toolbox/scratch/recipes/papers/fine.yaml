@@ -6,9 +6,9 @@ steps:
   - {block: select_device, params: {device: auto}}
   - {block: load_dataset, params: {dataset: cifar100}}
   - {block: inspect_dataset_semantics}
-  - {block: create_dataset_split, params: {validation_size: 0, split_seed: 0}}
+  - {block: create_dataset_split, params: {validation_size: 0, split_seed: 23}}
   - {block: select_label_source}
-  - {block: apply_noise, params: {name: symmetric, rate: 0.2, seed: 0}}
+  - {block: apply_noise, params: {name: symmetric, rate: 0.2, seed: 23}}
   - {block: build_noise_manifest}
   - {block: configure_preprocessing, params: {preprocessing: official_cifar10, augment: true}}
   - {block: configure_views, params: {views: [weak]}}

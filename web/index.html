@@ -64,10 +64,10 @@
       color: var(--text);
       font: 16px/1.65 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     }
-    main { max-width: 1520px; margin: 0 auto; padding: 36px 32px 48px; }
+    main { width: 100%; max-width: none; margin: 0; padding: 12px 12px 30px; }
     h1 { margin: 0 0 8px; font-size: 34px; line-height: 1.25; letter-spacing: -.02em; }
-    .subtitle { color: var(--text-secondary); margin-bottom: 26px; font-size: 17px; }
-    .layout { display: grid; grid-template-columns: 370px minmax(0, 1fr); gap: 24px; align-items: start; }
+    .subtitle { color: var(--text-secondary); margin-bottom: 16px; font-size: 17px; }
+    .layout { display: grid; grid-template-columns: minmax(170px, 190px) minmax(0, 1fr); gap: 12px; align-items: start; width: 100%; margin: 0; }
     .panel {
       background: var(--bg-card);
       border: 1px solid var(--line);
@@ -87,7 +87,7 @@
     .advanced-tools-body button { min-height: 40px; }
     .console-context {
       position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center;
-      margin: 0 0 22px; padding: 11px 14px; border: 1px solid var(--border); border-radius: var(--radius-md);
+      margin: 0 0 14px; padding: 11px 14px; border: 1px solid var(--border); border-radius: var(--radius-md);
       background: color-mix(in srgb, var(--bg-card) 92%, transparent); box-shadow: 0 6px 18px rgba(67, 59, 42, .06);
       backdrop-filter: blur(10px); font-size: 14px;
     }
@@ -150,7 +150,7 @@
     .helper, .module-description { color: var(--text-muted); font-size: 14px; line-height: 1.65; margin: 9px 0 0; }
     .module-description { margin: 4px 0 18px; }
     .hidden { display: none !important; }
-    .right-stack { display: grid; gap: 22px; }
+    .right-stack { display: grid; gap: 18px; width: 100%; margin: 0; }
     .parameter-panel { min-height: 250px; }
     .parameter-heading { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
     .parameter-heading h2 { margin: 0; font-size: 23px; line-height: 1.3; }
@@ -163,7 +163,17 @@
     .yaml-parameter-group-body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 0 15px 15px; }
     .yaml-field { display: grid; gap: 7px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #fffdf7; }
     .yaml-field-meta { color: var(--text-muted); font-size: 13px; margin: 0; }
+    .yaml-schedule { grid-column: 1 / -1; padding: 15px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #fffdf7; }
+    .yaml-schedule-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .yaml-schedule-head label { display: inline-flex; align-items: center; gap: 7px; }
+    .yaml-schedule-track { display: flex; align-items: center; gap: 10px; margin: 16px 0; color: var(--text-muted); font-size: 13px; }
+    .yaml-schedule-bar { position: relative; flex: 1; height: 8px; border-radius: 999px; background: var(--selected-bg); }
+    .yaml-schedule-tick { position: absolute; top: -6px; width: 4px; height: 20px; background: var(--accent-orange); }
+    .yaml-schedule-row { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr) auto; gap: 8px; align-items: end; margin-top: 8px; }
+    .yaml-schedule-row label { display: grid; gap: 4px; }
+    .yaml-schedule-row input { width: 100%; box-sizing: border-box; }
     .yaml-field-paper { border-color: #d8b68e; background: var(--accent-orange-soft); }
+    .yaml-field-resource { border-color: #9bb4c8; background: #edf4f8; }
     .yaml-field-locked { background: #eeece5; }
     .yaml-readonly-value { padding: 11px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); color: var(--text-secondary); background: #efede6; overflow-wrap: anywhere; }
     .yaml-paper-status { grid-column: 1 / -1; padding: 11px 13px; border-radius: var(--radius-sm); color: var(--success); background: var(--success-soft); }
@@ -232,10 +242,9 @@
     .tutorial-quick { margin-top: 18px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--bg-soft); }
     .tutorial-quick > summary { cursor: pointer; padding: 13px 15px; color: var(--text-primary); font-weight: 700; }
     .tutorial-quick-body { padding: 0 15px 15px; }
-    .data-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 0 0 18px; }
-    .data-step { border: 1px solid var(--line); border-radius: var(--radius-md); padding: 12px 13px; color: var(--text-muted); background: #efede6; }
-    .data-step.active { border-color: var(--active-border); color: var(--selected-text); background: var(--active-bg); }
-    .data-step.done { border-color: #a9c2ad; color: var(--success); background: var(--success-soft); }
+    .data-noise-row { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; margin-top: 14px; }
+    .data-noise-row label { min-width: 210px; margin: 0; }
+    .data-noise-row .helper { flex-basis: 100%; margin: 0; }
     .data-feedback { margin: 15px 0; padding: 14px 15px; border: 1px solid var(--line); border-radius: var(--radius-md); background: #fffdf7; }
     .data-feedback.success { border-color: #a9c2ad; background: var(--success-soft); }
     .data-feedback.failed { border-color: #d7abab; color: var(--danger); background: var(--danger-soft); }
@@ -275,7 +284,7 @@
     #training-output .actions { margin: 12px 0; }
     #training-metrics { min-height: 180px; max-height: 38vh; }
     a { color: var(--accent-text); text-underline-offset: 3px; }
-    .task-stop-control { position: relative; z-index: 2; width: min(300px, calc(100vw - 44px)); margin: 18px 22px 0 auto; }
+    .task-stop-control { position: absolute; top: 12px; right: 18px; z-index: 20; width: min(300px, calc(100vw - 44px)); margin: 0; }
     .task-stop-control > button { width: 100%; box-shadow: 0 6px 18px rgba(91, 57, 50, .12); }
     .task-stop-control button:disabled { opacity: .55; cursor: not-allowed; }
     .console-job-list { margin-top: 8px; padding: 7px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: rgba(255, 253, 247, .97); box-shadow: 0 6px 18px rgba(91, 57, 50, .10); }
@@ -300,11 +309,13 @@
     .console-job-row-meta { margin-top: 3px; color: var(--text-muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
     .console-job-cancel { margin-top: 5px; padding: 3px 7px; font-size: 11px; }
     @media (max-width: 900px) {
-      main { padding: 16px; }
-      .layout { grid-template-columns: 1fr; }
+      main { width: 100%; padding: 10px 12px 24px; }
+      .task-stop-control { position: relative; top: auto; right: auto; margin: 8px 16px 0 auto; }
+      .layout { grid-template-columns: 1fr; width: 100%; }
+      .right-stack { width: 100%; margin: 0; }
       .preview-panel { grid-column: 1; }
       .commands { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-      .form-grid, .data-steps, .tutorial-steps { grid-template-columns: 1fr; }
+      .form-grid, .tutorial-steps { grid-template-columns: 1fr; }
       .console-context { position: static; }
       .context-scratch { margin-left: 0; }
     }
@@ -330,7 +341,7 @@
     <div id="page-subtitle" class="subtitle">左侧选择功能，右侧配置参数；对应指令会显示在下方 Preview 模块中，点击“执行此指令”即可完成操作。</div>
     <div id="console-context" class="console-context" aria-label="当前工作上下文">
       <span class="context-item">当前数据集：<strong id="context-dataset">未选择</strong></span>
-      <span class="context-item">当前实验：<strong id="context-config">未选择</strong></span>
+      <span class="context-item"><span id="context-config-label">当前实验</span>：<strong id="context-config">未选择</strong></span>
       <span id="context-run" class="context-item context-status">运行状态：未运行</span>
       <a class="context-scratch" href="/scratch" target="_blank" rel="noopener">打开 Scratch 搭建器</a>
     </div>
@@ -459,6 +470,7 @@
       "paper-config": "查看论文正式配置与映射。"
     };
     const state = { selected: null, request: null, previewEdited: false, previewAutoCommand: "", previewAutoRequest: null, jobId: null, timer: null, resultTimer: null, jobListTimer: null, jobs: [], module: recipeMode ? "yaml" : "quickstart", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, tutorial: {steps:[], sequence:[]}, tutorialStep: 0, tutorialCompleted: {}, tutorialRunningStep: "", tutorialRecipe: "cifar10-symmetric-ce-smoke", tutorialData: "", tutorialOutput: "artifacts/runs/tutorial-ce-smoke", tutorialResume: null, tutorialQuickMode: false, tutorialQuickAction: "validate", tutorialQuickEpochs: "1", tutorialQuickSeeds: "1 2 3", yamlSchema: null, yamlSourcePath: "", yamlTextDirty: false, yamlFormDirty: false, yamlSuggestedPath: "", yamlDestinationPath: "", yamlDataset: "", yamlMode: "paper", yamlPaper: "", yamlBase: "cifar10-symmetric-ce-smoke", yamlLoss: "ce", yamlSelector: "all", yamlKeepRate: "0.8", yamlUpdate: "standard", yamlMilestones: "60 80", yamlGamma: "0.1", yamlCdrNoiseRate: "0.2", yamlL1Decay: "0.0", yamlRecipeCompatibility: null, yamlRecipeCompatibilityAlias: "", yamlCompatibilityLoading: false, yamlCompatibilityError: "", pendingYamlPath: "", activeConfig: {kind:"recipe", value:"cifar10-clean-smoke", label:"cifar10-clean-smoke"}, runDataset: "", trainingData: "", dataAction: "status", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, dataCompatibility: null, dataRecipeCompatibility: null, dataCompatibilityAlias: "", dataCompatibilityError: "", dataCompatibilityLoading: false, dataSelectedMethod: "", dataSelectedRecipe: "", dataMethodNoisePrior: "", dataShowUnavailable: false, removeConfirmed: false, sweepSourceKind: "recipe", sweepRecipe: "cifar10-clean-smoke", sweepPath: "", sweepDataset: "", sweepSchema: null, sweepSchemaKey: "", sweepRows: [], sweepPlan: null, sweepOutput: "artifacts/web-sweep", resultData: null, resultSelected: [], resultFilter: "", resultListCollapsed: false, resultListInitialized: false, resumeData: null, resumeInspectionKey: "", paperId: "", paperRecipe: "" };
+    state.dataAction = "list";
     if (recipeMode) {
       document.getElementById("page-title").textContent = "LNL Toolbox Recipe Editor";
       document.getElementById("page-subtitle").textContent = "从已有 recipe 组合配置，并查看或保存 YAML。";
@@ -603,10 +615,15 @@
     function renderConsoleContext() {
       const dataset = document.getElementById("context-dataset");
       const config = document.getElementById("context-config");
+      const configLabel = document.getElementById("context-config-label");
       const run = document.getElementById("context-run");
-      if (!dataset || !config || !run) return;
+      if (!dataset || !config || !configLabel || !run) return;
       dataset.textContent = selectedDatasetName() || "未选择";
-      config.textContent = state.activeConfig?.label || state.activeConfig?.value || "未选择";
+      const quickStart = state.module === "quickstart";
+      configLabel.textContent = quickStart ? "当前论文" : "当前实验";
+      config.textContent = quickStart
+        ? (state.quickStartPaper ? [state.quickStartPaper.acronym, state.quickStartPaper.title].filter(Boolean).join(" · ") : "未选择")
+        : state.activeConfig?.label || state.activeConfig?.value || "未选择";
       const running = Boolean(statusNode?.classList.contains("running"));
       run.textContent = "运行状态：" + (running ? "运行中" : statusNode?.classList.contains("failed") ? "需要处理" : "未运行");
       run.className = "context-item context-status " + (running ? "attention" : statusNode?.classList.contains("failed") ? "error" : state.jobId ? "ready" : "");
@@ -719,17 +736,10 @@
             state.dataAlias = alias;
             renderConsoleContext();
           },
-          openExperiment: function (dataset) {
-            const alias = dataset?.alias || "";
-            if (alias) { state.yamlDataset = alias; state.runDataset = alias; }
-            switchModule("yaml");
-          },
-          openPapers: function (dataset) {
-            const alias = dataset?.alias || "";
-            if (alias) state.dataAlias = alias;
-            switchModule("papers");
-          },
-          openScratch: function () { window.open("/scratch", "_blank", "noopener"); }
+          paperSelected: function (paper) {
+            state.quickStartPaper = paper ? {acronym: paper.acronym, title: paper.title} : null;
+            renderConsoleContext();
+          }
         });
         return;
       }
@@ -1025,16 +1035,20 @@
       if (item.error) return "data-status-unavailable";
       return "data-status-unchecked";
     }
-    function dataStepsHtml(report) {
-      const registered = Boolean(report?.location);
-      const inspected = report?.status === "ready";
-      const verified = Boolean(report?.training_evidence);
-      const active = state.dataAction === "register" ? 0 : state.dataAction === "inspect" ? 1 : state.dataAction === "verify" ? 2 : -1;
-      return '<div class="data-steps" aria-label="数据准备步骤">' + [
-        ["1. 登记路径", registered], ["2. 实际检查", inspected], ["3. 一轮验证", verified]
-      ].map(function (item, index) {
-        return '<div class="data-step ' + (item[1] ? "done" : index === active ? "active" : "") + '">' + item[0] + (item[1] ? " ✓" : "") + '</div>';
-      }).join("") + '</div>';
+    function datasetNoiseStatusHtml(report) {
+      if (!report) return "";
+      const facts = state.dataCompatibilityAlias === report.name ? state.dataCompatibility : null;
+      const inspectedStatus = facts?.profile?.noise?.status || report.profile?.noise?.status || "unknown";
+      const status = facts?.capabilities?.noise_status || inspectedStatus;
+      const editable = report.status === "ready" && inspectedStatus === "unknown" && !state.dataCompatibilityLoading;
+      const labels = {unknown:"未知", clean:"干净", noisy:"含噪"};
+      const options = Object.entries(labels).map(function ([value, label]) {
+        return '<option value="' + value + '"' + (status === value ? ' selected' : '') + '>' + label + '</option>';
+      }).join("");
+      const hint = inspectedStatus !== "unknown" ? "已由数据检查确定；不能用声明覆盖。"
+        : report.status !== "ready" ? "请先检查数据集。" : "保存后，Quick Start 会使用这项数据集事实。";
+      return '<div class="data-noise-row"><label>带噪情况<select id="data-noise-status"' + (editable ? '' : ' disabled') + '>' + options + '</select></label>' +
+        '<button type="button" id="data-noise-save" class="secondary"' + (editable ? '' : ' disabled') + '>保存</button><p class="helper">' + hint + '</p></div>';
     }
     function dataFeedbackHtml(report) {
       if (state.dataResult?.error) return '<div class="data-feedback failed"><strong>操作失败</strong><p>' + escapeHtml(state.dataResult.error) + '</p></div>';
@@ -1102,13 +1116,23 @@
       if (state.dataCompatibilityError) return '<div class="data-feedback failed"><strong>数据集兼容性不可用</strong><p>' + escapeHtml(state.dataCompatibilityError) + '</p></div>';
       const value = state.dataCompatibility;
       if (!value) return '<div class="guide-card"><strong>数据集优先流程</strong><p>请选择已检查通过的数据集。</p></div>';
-      const profile = value.profile || {}, noise = profile.noise || {}, rate = noise.rate || {}, declared = value.declared || {};
+      const profile = value.profile || {}, noise = profile.noise || {}, declared = value.declared || {};
+      const capabilities = value.capabilities || {}, acceptedRate = capabilities.noise_rate || {};
+      const acceptedStatus = capabilities.noise_status || noise.status || "unknown";
+      const statusTitle = acceptedStatus === "clean" ? "训练标签已确认干净" : acceptedStatus === "noisy" ? "训练标签已确认含噪声" : "训练标签干净性尚不能确认";
+      const statusEvidence = noise.status === acceptedStatus && acceptedStatus !== "unknown"
+        ? "依据：验收时检查的标签资料与适配器语义。"
+        : acceptedStatus !== "unknown" ? "依据：保存的数据集声明；不是按名称猜测。" : "登记名称和成功加载样本不足以证明标签干净。";
+      const rateSummary = acceptedStatus === "noisy"
+        ? acceptedRate.value == null ? "原始噪声率尚未知晓；若有官方资料或测量结果，可在下方登记。" : "原始噪声率：" + acceptedRate.value + (acceptedRate.status === "estimated" ? "（估计）" : "（已知）") + (acceptedRate.provenance ? "；来源：" + acceptedRate.provenance : "")
+        : acceptedStatus === "clean" ? "当前不需要原始噪声率；如要研究人工噪声，可在 Quick Start 中选择是否加噪。" : "请先核实标签是否含噪；未确认前不会自动提供人工加噪选项。";
+      const noiseStatusCard = '<div class="guide-card"><strong>' + escapeHtml(statusTitle) + '</strong><p>' + escapeHtml(statusEvidence) + '</p><p>' + escapeHtml(rateSummary) + '</p></div>';
       const counts = profile.sample_counts_by_split || {};
       const detectedRows = [{
         数据集:profile.dataset, 适配器:profile.adapter, 模态:profile.modality, 类别:profile.num_classes,
         训练集:counts.train, 验证集:counts.validation, 测试集:counts.test,
         观测标签:explicitValue(profile.observed_train_labels), 稳定索引:explicitValue(profile.stable_indices),
-        噪声状态:explicitValue(noise.status), 噪声来源:explicitValue(noise.origin),
+        干净训练标签:explicitValue(capabilities.clean_train_labels), 噪声状态:explicitValue(acceptedStatus), 噪声来源:explicitValue(capabilities.noise_origin),
         指纹:profile.fingerprint
       }];
       const unknowns = value.unresolved_dataset_facts || [];
@@ -1116,7 +1140,7 @@
       if (unknowns.includes("noise_status")) declaredFields.push(field("标签是否含噪声", "compat-noise-status", selectControl("__ID__", [{value:"unknown",label:"未知"},{value:"clean",label:"干净"},{value:"noisy",label:"有噪声"}])));
       if (unknowns.includes("noise_origin")) declaredFields.push(field("噪声来源", "compat-noise-origin", selectControl("__ID__", [{value:"unknown",label:"未知"},{value:"synthetic",label:"人工合成"},{value:"native",label:"数据集原生"}])));
       if (unknowns.includes("clean_train_labels")) declaredFields.push(field("干净训练标签", "compat-clean-labels", selectControl("__ID__", [{value:"unknown",label:"未知"},{value:"available",label:"有"},{value:"unavailable",label:"没有"}])));
-      if (unknowns.includes("dataset_noise_rate")) {
+      if (acceptedStatus === "noisy" && unknowns.includes("dataset_noise_rate")) {
         declaredFields.push(field("真实噪声率", "compat-rate-status", selectControl("__ID__", [{value:"unknown",label:"未知"},{value:"known",label:"已知"},{value:"estimated",label:"估计"}])));
         declaredFields.push(field("噪声率数值", "compat-rate-value", inputControl("__ID__", "", "number", "min=0 max=1 step=0.001")));
         declaredFields.push(field("噪声率来源", "compat-rate-provenance", selectControl("__ID__", [{value:"",label:"请选择"},{value:"official_documentation",label:"官方文档"},{value:"official_metadata",label:"官方元数据"},{value:"user_measurement",label:"本地测量"},{value:"external_manifest",label:"外部 manifest"},{value:"other",label:"其他"}])));
@@ -1138,7 +1162,7 @@
         '</div>';
       const actionsReady = selectedRecipe?.status === "compatible";
       return '<section id="dataset-compatibility-panel"><h2>数据集优先流程</h2><p>先读取数据集事实，再选择正式 recipe；只有具体配置兼容时才允许 validate、dry-run 和 run。</p>' +
-        '<div class="guide-card"><strong>数据集信息</strong>' + tableHtml(detectedRows) + '<p class="helper">这些字段来自 adapter 和实际 train/test 加载，不可由普通 Web 表单伪造。</p></div>' + declarations + recipeWorkflow +
+        noiseStatusCard + '<div class="guide-card"><strong>数据集信息</strong>' + tableHtml(detectedRows) + '<p class="helper">已检测事实来自 adapter 与实际样本检查；用户补充的声明会单独标明，不将数据集名称当作干净性的证明。</p></div>' + declarations + recipeWorkflow +
         '<div class="guide-card compatibility-method" data-status="' + escapeHtml(selectedRecipe?.status || "unchecked") + '"><strong>当前选择</strong><p>' + escapeHtml(selectedRecipe ? selectedRecipe.acronym + " · " + selectedRecipe.recipe_id + " · " + compatibilityStatusLabel(selectedRecipe.status) : "尚未选择正式 recipe") + '</p>' +
         selectedRecipeCompatibilityHtml(selectedRecipe) + priorEditor +
         (selectedRecipe?.status === "compatible_with_requirements" ? '<button type="button" id="compat-create-yaml">打开 YAML/配置说明</button>' : '') +
@@ -1171,30 +1195,36 @@
         if (state.module === "quickstart") { renderQuickStart(); updateModulePreview(); }
       }
     }
-    async function applyDatasetDeclarations() {
-      const rateStatus = selectValue("compat-rate-status", "unknown");
-      const rawRate = selectValue("compat-rate-value", "").trim();
-      const rate = {status:rateStatus, value:null, provenance:null};
-      if (["known", "estimated"].includes(rateStatus)) {
-        if (rawRate === "") throw new Error("Dataset noise-rate value is required");
-        rate.value = Number(rawRate);
-        const provenance = selectValue("compat-rate-provenance", "");
-        const other = selectValue("compat-rate-provenance-other", "").trim();
-        if (!provenance || (rateStatus === "estimated" && provenance === "other" && !other)) throw new Error("估计噪声率必须填写来源");
-        rate.provenance = provenance === "other" ? other : provenance;
-      }
-      const body = {
-        declarations: {
-          noise_status: selectValue("compat-noise-status", "unknown"),
-          noise_origin: selectValue("compat-noise-origin", "unknown"),
-          noise_rate: rate,
-          clean_train_labels: selectValue("compat-clean-labels", "unknown"),
-        }
-      };
-      const response = await fetch("/api/datasets/" + encodeURIComponent(state.dataAlias) + "/declarations", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+    async function saveDatasetDeclarations(declarations) {
+      const alias = state.dataAlias;
+      const response = await fetch("/api/datasets/" + encodeURIComponent(alias) + "/declarations", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({declarations:declarations})});
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Declaration update failed");
-      state.dataCompatibility = payload; state.dataCompatibilityError = ""; await loadDatasetCompatibility(state.dataAlias);
+      if (!response.ok) throw new Error(payload.error || "数据集信息保存失败");
+      if (state.dataAlias !== alias) return;
+      state.dataCompatibility = payload;
+      state.dataCompatibilityError = "";
+      await loadDatasetCompatibility(alias);
+    }
+    async function applyDatasetDeclarations() {
+      const declarations = {};
+      for (const [id, key] of [["compat-noise-status", "noise_status"], ["compat-noise-origin", "noise_origin"], ["compat-clean-labels", "clean_train_labels"]]) {
+        if (document.getElementById(id)) declarations[key] = selectValue(id, "unknown");
+      }
+      if (document.getElementById("compat-rate-status")) {
+        const rateStatus = selectValue("compat-rate-status", "unknown");
+        const rawRate = selectValue("compat-rate-value", "").trim();
+        const rate = {status:rateStatus, value:null, provenance:null};
+        if (["known", "estimated"].includes(rateStatus)) {
+          if (rawRate === "") throw new Error("请填写数据集原始噪声率");
+          rate.value = Number(rawRate);
+          const provenance = selectValue("compat-rate-provenance", "");
+          const other = selectValue("compat-rate-provenance-other", "").trim();
+          if (!provenance || (rateStatus === "estimated" && provenance === "other" && !other)) throw new Error("请填写噪声率来源");
+          rate.provenance = provenance === "other" ? other : provenance;
+        }
+        declarations.noise_rate = rate;
+      }
+      await saveDatasetDeclarations(declarations);
     }
     function compatibilityWorkflowCommand(action) {
       const recipe = (state.dataRecipeCompatibility?.recipes || []).find(function (item) { return item.recipe_id === state.dataSelectedRecipe; });
@@ -1284,10 +1314,7 @@
       updateDatasetGuideVisibility();
     }
     function updateDatasetStatusVisibility() {
-      document.getElementById("data-status-panel")?.classList.toggle(
-        "hidden",
-        selectValue("data-action", state.dataAction) !== "list"
-      );
+      document.getElementById("data-status-panel")?.classList.remove("hidden");
     }
     function renderData() {
       const adapters = state.datasets.adapters || [];
@@ -1297,7 +1324,8 @@
       const selectedReport = state.dataAction === "register" ? null : reports.find(function (item) { return item.name === state.dataAlias; });
       const registered = registeredReports.map(function (item) { return {value:item.name, label:item.name + " · " + item.adapter + " · " + dataStatusLabel(item)}; });
       const trainingFlow = state.dataAction === "run" ? datasetProfileCompatibilityHtml() : "";
-      parameterPanel.innerHTML = dataStepsHtml(selectedReport) + commonFormStart() +
+      parameterPanel.innerHTML =
+        '<div class="guide-card" id="data-status-panel"><strong>已登记数据集</strong>' + dataTableHtml(reports) + datasetNoiseStatusHtml(selectedReport) + '</div>' + commonFormStart() +
         field("操作", "data-action", selectControl("__ID__", [
           {value:"list", label:"查看全部状态", hidden:true}, {value:"status", label:"查看单项详情"}, {value:"path", label:"查看数据位置", hidden:true},
           {value:"register", label:"1 · 登记本机路径"}, {value:"inspect", label:"2 · 实际加载 train/test"},
@@ -1308,25 +1336,10 @@
         field("数据根目录", "data-root", inputControl("__ID__", "F:/datasets/cifar10"), true) + field("单文件路径（UCI）", "data-path", inputControl("__ID__", ""), true) +
         field("人工标签文件（CIFAR-N）", "data-labels", inputControl("__ID__", ""), true) + field("训练模板", "data-recipe", recipesSelect("__ID__"), true) +
         field("验证输出目录（可选）", "data-output", inputControl("__ID__", ""), true) + commonFormEnd() +
-        dataFeedbackHtml(selectedReport) + '<p class="helper">登记只保存路径；inspect 才会真实加载 train/test；verify 会自动按数据类型运行 1 epoch，不需要 CIFAR 或 MNIST 配方。自定义训练时再选择训练模板。</p>' +
-        '<div class="guide-card"><strong>数据状态</strong>' + dataTableHtml(reports) + '</div>' + trainingFlow +
-        '<details class="guide-card"><summary>更多操作</summary><p class="helper">低频操作不会影响已登记的原始数据文件；删除只移除本机登记记录。</p><div class="workflow-actions"><button type="button" data-data-action="list" class="secondary">查看全部状态</button><button type="button" data-data-action="path" class="secondary">查看数据位置</button><button type="button" data-data-action="remove" class="danger">删除登记</button></div></details>';
+        dataFeedbackHtml(selectedReport) + '<p class="helper">登记保存本机路径；检查会实际加载训练集和测试集；一轮验证会按数据类型执行 1 个 epoch。</p>' + trainingFlow +
+        '<div class="guide-card"><strong>数据集操作</strong><div class="workflow-actions"><button type="button" data-data-action="list" class="secondary">查看全部状态</button><button type="button" data-data-action="path" class="secondary">查看数据位置</button><button type="button" data-data-action="remove" class="danger">删除登记</button></div><p class="helper">删除登记只移除工具箱保存的路径记录，不会删除数据文件。</p></div>';
       const actionNode = document.getElementById("data-action");
       actionNode.value = [...actionNode.options].some(function (option) { return option.value === state.dataAction; }) ? state.dataAction : "status";
-      const statusPanel = [...parameterPanel.querySelectorAll(".guide-card")].find(function (node) { return Boolean(node.querySelector("table")); });
-      statusPanel.id = "data-status-panel";
-      statusPanel.classList.toggle("hidden", state.dataAction !== "list");
-      const statusHeading = statusPanel.querySelector("strong");
-      const statusHeadingRow = document.createElement("div");
-      statusHeadingRow.className = "actions";
-      statusHeading.before(statusHeadingRow);
-      statusHeadingRow.appendChild(statusHeading);
-      const statusCollapse = document.createElement("button");
-      statusCollapse.id = "data-status-collapse";
-      statusCollapse.type = "button";
-      statusCollapse.className = "secondary";
-      statusCollapse.textContent = "收起";
-      statusHeadingRow.appendChild(statusCollapse);
       const aliasNode = document.getElementById("data-alias");
       if (state.dataAlias) aliasNode.value = state.dataAlias;
       const adapterNode = document.getElementById("data-adapter");
@@ -1365,13 +1378,6 @@
           updateModulePreview();
         });
       });
-      statusCollapse.addEventListener("click", function () {
-        state.dataAction = "status";
-        actionNode.value = "status";
-        updateDataFormVisibility();
-        updateDatasetStatusVisibility();
-        updateModulePreview();
-      });
       aliasNode.addEventListener("change", function () {
         state.dataRecipe = selectValue("data-recipe", state.dataRecipe);
         state.dataOutput = selectValue("data-output", state.dataOutput);
@@ -1388,6 +1394,19 @@
       document.getElementById("compat-apply-declarations")?.addEventListener("click", async function () {
         try { await applyDatasetDeclarations(); statusNode.textContent = "Declarations saved; compatibility recomputed."; statusNode.className = "status success"; }
         catch (error) { statusNode.textContent = String(error.message || error); statusNode.className = "status failed"; }
+      });
+      document.getElementById("data-noise-save")?.addEventListener("click", async function () {
+        try {
+          const status = selectValue("data-noise-status", "unknown");
+          const declarations = {noise_status:status, noise_origin:status === "noisy" ? "native" : "unknown"};
+          if (status !== "noisy") declarations.noise_rate = {status:"unknown", value:null, provenance:null};
+          await saveDatasetDeclarations(declarations);
+          statusNode.textContent = "带噪情况已保存；Quick Start 将读取更新后的状态。";
+          statusNode.className = "status success";
+        } catch (error) {
+          statusNode.textContent = String(error.message || error);
+          statusNode.className = "status failed";
+        }
       });
       parameterPanel.querySelectorAll("[data-compat-method]").forEach(function (button) { button.addEventListener("click", function () { state.dataSelectedMethod = button.dataset.compatMethod; renderData(); updateModulePreview(); }); });
       parameterPanel.querySelectorAll("[data-compat-action]").forEach(function (button) { button.addEventListener("click", async function () { try { await startCompatibilityWorkflow(button.dataset.compatAction); } catch (error) { statusNode.textContent = String(error.message || error); statusNode.className = "status failed"; } }); });
@@ -1448,19 +1467,34 @@
     }
     function sweepDimensionHtml(row, index) {
       const fieldInfo = sweepFieldByPath(row.path) || {path:row.path, level:"basic", level_label:"基础参数", note:""};
-      return '<div class="sweep-dimension"><div><span class="parameter-badge">' + escapeHtml(fieldInfo.level_label || fieldInfo.level) + '</span><div class="sweep-field-path">' + escapeHtml(row.path) + '</div>' + sweepFieldDescription(fieldInfo) + '</div><input id="sweep-values-' + index + '" value="' + escapeHtml(row.values) + '" placeholder="JSON 数组，例如 [256,512]" spellcheck="false"><button type="button" data-sweep-remove="' + index + '">删除</button></div>';
+      return '<div class="sweep-dimension"><div><div class="sweep-field-path">' + escapeHtml(row.path) + '</div>' + sweepFieldDescription(fieldInfo) + '</div><input id="sweep-values-' + index + '" value="' + escapeHtml(row.values) + '" placeholder="JSON 数组，例如 [256,512]" spellcheck="false"><button type="button" data-sweep-remove="' + index + '">删除</button></div>';
+    }
+    function parameterSections(schema) {
+      return [
+        {id:"default", label:"默认显示", default_expanded:true},
+        {id:"advanced", label:"高级参数", default_expanded:false},
+        {id:"restricted", label:"禁止在 Web 修改的专属参数", default_expanded:false}
+      ];
+    }
+    function parameterDisplayGroup(fieldInfo) {
+      if (fieldInfo && !fieldInfo.editable) return "restricted";
+      if (fieldInfo?.display_group) return fieldInfo.display_group;
+      return "advanced"; // Unknown metadata must not expand the default panel.
     }
     function sweepGroupsHtml(schema) {
       if (!schema) return '<p class="helper">正在读取配置参数和用途说明...</p>';
       const selected = new Set(state.sweepRows.map(function (row) { return row.path; }));
-      return '<div class="sweep-groups">' + (schema.levels || []).map(function (levelInfo) {
-        const fields = (schema.fields || []).filter(function (fieldInfo) { return fieldInfo.level === levelInfo.id; });
+      const sections = parameterSections(schema);
+      return '<div class="sweep-groups">' + sections.map(function (levelInfo) {
+      const fields = (schema.fields || []).filter(function (fieldInfo) {
+          return fieldInfo.visible !== false && parameterDisplayGroup(fieldInfo) === levelInfo.id;
+        });
         if (!fields.length) return "";
         const cards = fields.map(function (fieldInfo) {
           const supported = ["number", "text", "boolean", "list"].includes(fieldInfo.kind);
           const canAdd = fieldInfo.editable && supported && !selected.has(fieldInfo.path);
           const action = canAdd ? '<button type="button" class="secondary" data-sweep-add="' + escapeHtml(fieldInfo.path) + '">加入参数组合实验</button>' : fieldInfo.editable && selected.has(fieldInfo.path) ? '<button type="button" disabled>已加入</button>' : '';
-          return '<div class="sweep-field-card ' + (selected.has(fieldInfo.path) ? 'selected' : '') + '"><div class="sweep-field-head"><div><span class="parameter-badge">' + escapeHtml(fieldInfo.level_label || levelInfo.label) + '</span><div class="sweep-field-path">' + escapeHtml(fieldInfo.path) + '</div></div>' + action + '</div>' + sweepFieldDescription(fieldInfo) + '</div>';
+          return '<div class="sweep-field-card ' + (selected.has(fieldInfo.path) ? 'selected' : '') + '"><div class="sweep-field-head"><div class="sweep-field-path">' + escapeHtml(fieldInfo.path) + '</div>' + action + '</div>' + sweepFieldDescription(fieldInfo) + '</div>';
         }).join("");
         return '<details class="sweep-group" ' + (levelInfo.default_expanded ? 'open' : '') + '><summary>' + escapeHtml(levelInfo.label) + '（' + fields.length + '）</summary><div class="sweep-group-body">' + cards + '</div></details>';
       }).join("") + '</div>';
@@ -1468,7 +1502,7 @@
     function renderSweepV2() {
       const source = normalizedConfigSource(state.sweepSourceKind, state.sweepSourceKind === "path" ? state.sweepPath : state.sweepRecipe);
       const schema = state.sweepSchemaKey === sweepSourceKey(source) ? state.sweepSchema : null;
-      const editableFields = (schema?.fields || []).filter(function (fieldInfo) { return fieldInfo.editable; });
+      const editableFields = (schema?.fields || []).filter(function (fieldInfo) { return fieldInfo.visible !== false && fieldInfo.editable; });
       const batch = editableFields.find(function (fieldInfo) { return fieldInfo.path.endsWith("batch_size"); });
       const learningRate = editableFields.find(function (fieldInfo) { return fieldInfo.path === "optimizer.lr" || fieldInfo.path.endsWith(".lr") || fieldInfo.path.endsWith("learning_rate"); });
       const quick = [batch, learningRate].filter(Boolean).filter(function (fieldInfo, index, values) { return values.findIndex(function (item) { return item.path === fieldInfo.path; }) === index; }).map(function (fieldInfo) { return '<button type="button" class="secondary" data-sweep-add="' + escapeHtml(fieldInfo.path) + '">快捷加入 ' + escapeHtml(fieldInfo.path) + '</button>'; }).join("");
@@ -1881,7 +1915,6 @@
       const previousModule = state.module;
       if (state.resultTimer && module !== "results") { clearInterval(state.resultTimer); state.resultTimer = null; }
       if (module !== previousModule && !yamlEditorPanel.classList.contains("hidden")) hideYamlEditor();
-      if (module === "data" && previousModule !== "data" && state.dataAction === "list") state.dataAction = "status";
       if (module !== previousModule) {
         state.previewEdited = false;
         state.previewAutoCommand = "";
@@ -1993,7 +2026,7 @@
     }
     function paperChangePaths() {
       return (state.yamlSchema?.fields || []).filter(function (fieldInfo) {
-        return fieldInfo.level === "paper" && JSON.stringify(yamlFieldValue(fieldInfo)) !== JSON.stringify(fieldInfo.changed_from);
+        return fieldInfo.visible !== false && fieldInfo.level === "paper" && JSON.stringify(yamlFieldValue(fieldInfo)) !== JSON.stringify(fieldInfo.changed_from);
       }).map(function (fieldInfo) { return fieldInfo.path; });
     }
     function updatePaperDeviation() {
@@ -2008,6 +2041,49 @@
           ? "配置已修改但尚未暂存；当前配置不能视为与论文正式配置一致。"
           : "当前论文参数与正式配置一致。";
     }
+    function yamlScheduleGroups(fields) {
+      return fields.filter(function (fieldInfo) {
+        return fieldInfo.editable && (fieldInfo.path === "scheduler.name" || fieldInfo.path.endsWith(".scheduler.name"));
+      }).map(function (nameField) {
+        const prefix = nameField.path.slice(0, -5);
+        const members = fields.filter(function (fieldInfo) { return fieldInfo.editable && fieldInfo.path.startsWith(prefix + "."); });
+        return {prefix:prefix, name:nameField, members:members,
+          milestones:members.find(function (fieldInfo) { return fieldInfo.path === prefix + ".step_milestones"; }) ||
+            members.find(function (fieldInfo) { return fieldInfo.path === prefix + ".milestones"; }),
+          gamma:members.find(function (fieldInfo) { return fieldInfo.path === prefix + ".gamma"; })};
+      });
+    }
+    function yamlScheduleHtml(group, fields) {
+      const read = function (fieldInfo) { return fieldInfo ? yamlFieldValue(fieldInfo) : null; };
+      const name = String(read(group.name) || "none");
+      const points = Array.isArray(read(group.milestones)) ? read(group.milestones).map(Number) : [];
+      const stepBased = Boolean(group.milestones?.path.endsWith("step_milestones"));
+      const enabled = name !== "none" || (stepBased && points.length > 0);
+      const showNodes = stepBased || name === "multistep";
+      const gamma = Number(read(group.gamma) ?? 0.1);
+      const baseField = fields.find(function (fieldInfo) { return fieldInfo.path === (group.prefix === "scheduler" ? "optimizer.lr" : group.prefix.replace(/scheduler$/, "optimizer") + ".lr"); });
+      const baseRate = Number(read(baseField));
+      const budgetField = fields.find(function (fieldInfo) { return fieldInfo.path === (stepBased ? "trainer.max_steps" : "trainer.epochs"); });
+      const budget = Number(read(budgetField)) || Math.max(1, ...points);
+      const title = group.prefix === "scheduler" ? "主模型学习率阶段" : group.prefix.replace(/\.scheduler$/, "") + " 学习率阶段";
+      const options = ["none"];
+      if (group.milestones && !stepBased) options.push("multistep");
+      if (group.members.some(function (fieldInfo) { return fieldInfo.path === group.prefix + ".t_max"; }) || name === "cosine") options.push("cosine");
+      if (group.members.some(function (fieldInfo) { return fieldInfo.path === group.prefix + ".start_epoch"; })) options.push("linear_after");
+      if (name === "linear_decay") options.push("linear_decay");
+      if (!options.includes(name)) options.push(name);
+      const selector = stepBased ? '<p class="yaml-field-meta">按累计参数更新步数设置学习率节点。</p>' : '<label>变化方式<select data-yaml-schedule-mode="' + escapeHtml(group.prefix) + '">' + options.map(function (value) { return '<option value="' + escapeHtml(value) + '"' + (name === value ? ' selected' : '') + '>' + escapeHtml(({none:"不变化",multistep:"到节点后降低",cosine:"平滑下降",linear_after:"指定轮次后线性下降",linear_decay:"线性下降"})[value] || value) + '</option>'; }).join("") + '</select></label>';
+      const ticks = (showNodes ? points : []).map(function (point) { return '<span class="yaml-schedule-tick" style="left:' + Math.max(0, Math.min(100, point * 100 / budget)) + '%" title="' + escapeHtml(point) + '"></span>'; }).join("");
+      const rows = points.map(function (point, index) {
+        const rate = Number.isFinite(baseRate) && Number.isFinite(gamma) ? Number((baseRate * Math.pow(gamma, index + 1)).toPrecision(7)) : "";
+        return '<div class="yaml-schedule-row"><label>节点 ' + (index + 1) + '（' + (stepBased ? '步' : '轮') + '）<input type="number" min="1" step="1" data-yaml-schedule-point="' + escapeHtml(group.prefix) + '" data-index="' + index + '" value="' + escapeHtml(point) + '"></label><label>节点后学习率<input type="number" min="0" step="any" data-yaml-schedule-rate="' + escapeHtml(group.prefix) + '" data-index="' + index + '" value="' + escapeHtml(rate) + '"' + (!group.gamma || !baseField ? ' disabled' : '') + '></label><button type="button" data-yaml-schedule-remove="' + escapeHtml(group.prefix) + '" data-index="' + index + '">移除</button></div>';
+      }).join("");
+      const hidden = [group.name, group.milestones, group.gamma].filter(Boolean).map(function (fieldInfo) {
+        return '<input type="hidden" id="' + yamlFieldId(fieldInfo.path) + '" data-yaml-path="' + escapeHtml(fieldInfo.path) + '" value="' + escapeHtml(fieldInfo.kind === "list" ? JSON.stringify(read(fieldInfo)) : read(fieldInfo)) + '">';
+      }).join("");
+      return '<div class="yaml-schedule" data-yaml-schedule="' + escapeHtml(group.prefix) + '">' + hidden + '<div class="yaml-schedule-head"><strong>' + escapeHtml(title) + '</strong><label><input type="checkbox" data-yaml-schedule-toggle="' + escapeHtml(group.prefix) + '"' + (enabled ? ' checked' : '') + '>启用</label></div>' +
+        (enabled ? selector + '<p class="yaml-field-meta">横轴为' + (stepBased ? '累计参数更新步数' : '训练轮次') + '。' + (showNodes && group.gamma ? '各节点共用同一个衰减倍率；编辑一个节点后的学习率会同步调整其余节点。' : '') + '</p><div class="yaml-schedule-track"><span>0</span><div class="yaml-schedule-bar">' + ticks + '</div><span>' + escapeHtml(budget) + '</span></div>' + (showNodes && group.milestones ? rows + '<button type="button" data-yaml-schedule-add="' + escapeHtml(group.prefix) + '">添加节点</button>' : '<p class="yaml-field-meta">当前方式没有离散学习率节点。</p>') : '<p class="yaml-field-meta">此阶段不改变学习率；开启后可编辑变化方式和节点。</p>') + '</div>';
+    }
     function renderYamlFields(schema) {
       const node = document.getElementById("yaml-fields");
       const meta = document.getElementById("yaml-schema-meta");
@@ -2018,15 +2094,21 @@
         (schema.paper_title ? " · " + escapeHtml(schema.paper_title) + ' · <a href="' + escapeHtml(schema.paper_source) + '" target="_blank" rel="noopener">论文来源</a>' : "") +
         "。参数权限由 metadata registry 决定。";
       const groupsNode = document.getElementById("yaml-parameter-groups");
-      for (const levelInfo of schema.levels || []) {
-        const fields = (schema.fields || []).filter(function (fieldInfo) { return fieldInfo.level === levelInfo.id; });
-        if (!fields.length) continue;
+      const sections = parameterSections(schema);
+      const scheduleGroups = yamlScheduleGroups((schema.fields || []).filter(function (fieldInfo) { return fieldInfo.visible !== false; }));
+      const scheduleParts = new Set(scheduleGroups.flatMap(function (group) { return [group.name, group.milestones, group.gamma].filter(Boolean).map(function (fieldInfo) { return fieldInfo.path; }); }));
+      for (const levelInfo of sections) {
+        const fields = (schema.fields || []).filter(function (fieldInfo) {
+          return fieldInfo.visible !== false && parameterDisplayGroup(fieldInfo) === levelInfo.id;
+        });
+        if (!fields.length && !(levelInfo.id === "default" && scheduleGroups.length)) continue;
         const details = document.createElement("details");
         details.className = "yaml-parameter-group";
         details.open = Boolean(levelInfo.default_expanded);
         details.innerHTML = '<summary>' + escapeHtml(levelInfo.label) + '（' + fields.length + '）</summary><div class="yaml-parameter-group-body"></div>';
         const body = details.querySelector(".yaml-parameter-group-body");
         for (const fieldInfo of fields) {
+          if (scheduleParts.has(fieldInfo.path)) continue;
           const id = yamlFieldId(fieldInfo.path);
           let control;
           if (!fieldInfo.editable) {
@@ -2040,27 +2122,105 @@
             const nullable = fieldInfo.nullable ? ' data-yaml-nullable="true"' : '';
             control = '<input id="' + id + '" type="' + type + '" value="' + escapeHtml(value) + '" spellcheck="false" data-yaml-path="' + escapeHtml(fieldInfo.path) + '"' + nullable + '>';
           }
-          const explanation = fieldInfo.level === "paper"
-            ? '<p class="yaml-field-meta">含义：' + escapeHtml(fieldInfo.note) + '</p><p class="yaml-field-meta">论文依据：' + escapeHtml(fieldInfo.evidence || "见论文来源") + '</p><p class="yaml-field-meta">复现影响：' + escapeHtml(fieldInfo.reproduction_impact) + '</p>'
+          const displayLabel = fieldInfo.presentation === "resource" ? (fieldInfo.presentation_label || "资源/前置条件") : fieldInfo.label;
+          const explanation = !fieldInfo.editable
+            ? '<p class="yaml-field-meta">不可修改：' + escapeHtml(fieldInfo.lock_reason || fieldInfo.note) + '</p>'
+            : fieldInfo.level === "paper"
+            ? (fieldInfo.note ? '<p class="yaml-field-meta">' + escapeHtml(fieldInfo.note) + '</p>' : '') + '<p class="yaml-field-meta">论文依据：' + escapeHtml(fieldInfo.evidence || "见论文来源") + '</p><p class="yaml-field-meta">复现影响：' + escapeHtml(fieldInfo.reproduction_impact) + '</p>'
             : fieldInfo.level === "locked"
               ? '<p class="yaml-field-meta">不可修改：' + escapeHtml(fieldInfo.lock_reason || fieldInfo.note) + '</p>'
-              : '<p class="yaml-field-meta">' + escapeHtml(fieldInfo.note) + '</p>';
-          body.insertAdjacentHTML("beforeend", '<div class="yaml-field yaml-field-' + escapeHtml(fieldInfo.level) + '"><label for="' + id + '">' + escapeHtml(fieldInfo.label) + '</label>' + control + explanation + '</div>');
+              : (fieldInfo.note ? '<p class="yaml-field-meta">' + escapeHtml(fieldInfo.note) + '</p>' : '') + (fieldInfo.presentation === "resource" ? '<p class="yaml-field-meta">配置字段：' + escapeHtml(fieldInfo.path) + '</p>' : '');
+          body.insertAdjacentHTML("beforeend", '<div class="yaml-field yaml-field-' + escapeHtml(fieldInfo.level) + ' yaml-field-' + escapeHtml(fieldInfo.presentation || "parameter") + '"><label for="' + id + '">' + escapeHtml(displayLabel) + '</label>' + control + explanation + '</div>');
         }
+        if (levelInfo.id === "default") for (const group of scheduleGroups) body.insertAdjacentHTML("beforeend", yamlScheduleHtml(group, schema.fields || []));
         groupsNode.appendChild(details);
       }
-      if (!schema.fields || !schema.fields.length) {
+      if (!(schema.fields || []).some(function (fieldInfo) { return fieldInfo.visible !== false; })) {
         node.innerHTML = '<p class="helper">此 recipe 没有可由网页安全修改的参数，请使用论文原始配置运行。</p>';
       }
       for (const fieldInfo of schema.fields || []) {
-        if (!fieldInfo.editable) continue;
+        if (fieldInfo.visible === false || !fieldInfo.editable) continue;
         const input = document.getElementById(yamlFieldId(fieldInfo.path));
-        if (input) input.addEventListener("input", function () { state.yamlFormDirty = true; updatePaperDeviation(); updateYamlEditorButton(); });
+        if (input) input.addEventListener("input", function () {
+          for (const path of fieldInfo.linked_fields || []) {
+            const linked = document.getElementById(yamlFieldId(path));
+            if (linked && !linked.disabled) {
+              if (linked.type === "checkbox") linked.checked = input.checked;
+              else linked.value = input.value;
+            }
+          }
+          state.yamlFormDirty = true;
+          updatePaperDeviation();
+          updateYamlEditorButton();
+          if (fieldInfo.path === "optimizer.lr" || fieldInfo.path.endsWith(".optimizer.lr")) {
+            for (const group of scheduleGroups) refreshSchedule(group);
+          }
+        });
       }
+      const scheduleByPrefix = new Map(scheduleGroups.map(function (group) { return [group.prefix, group]; }));
+      function updateScheduleField(fieldInfo, value) {
+        if (!fieldInfo) return;
+        const input = document.getElementById(yamlFieldId(fieldInfo.path));
+        if (!input) return;
+        input.value = fieldInfo.kind === "list" ? JSON.stringify(value) : String(value);
+        input.dispatchEvent(new Event("input", {bubbles:true}));
+      }
+      function refreshSchedule(group) {
+        const card = [...groupsNode.querySelectorAll("[data-yaml-schedule]")].find(function (node) { return node.dataset.yamlSchedule === group.prefix; });
+        if (!card) return;
+        // Read the edited values before replacing their hidden form controls.
+        const markup = yamlScheduleHtml(group, schema.fields || []);
+        card.outerHTML = markup;
+        updatePaperDeviation();
+      }
+      groupsNode.addEventListener("change", function (event) {
+        const target = event.target;
+        const prefix = target.dataset.yamlScheduleToggle || target.dataset.yamlScheduleMode || target.dataset.yamlSchedulePoint || target.dataset.yamlScheduleRate;
+        const group = scheduleByPrefix.get(prefix);
+        if (!group) return;
+        const points = group.milestones ? yamlFieldValue(group.milestones).map(Number) : [];
+        const stepBased = Boolean(group.milestones?.path.endsWith("step_milestones"));
+        if (target.dataset.yamlScheduleToggle) {
+          if (!target.checked) {
+            if (stepBased) updateScheduleField(group.milestones, []);
+            else updateScheduleField(group.name, "none");
+          } else if (stepBased) {
+            updateScheduleField(group.milestones, group.milestones.value || []);
+          } else {
+            updateScheduleField(group.name, group.milestones ? "multistep" : "cosine");
+          }
+        } else if (target.dataset.yamlScheduleMode) {
+          updateScheduleField(group.name, target.value);
+        } else if (target.dataset.yamlSchedulePoint) {
+          const point = Number(target.value);
+          if (!Number.isInteger(point) || point < 1) return;
+          points[Number(target.dataset.index)] = point;
+          updateScheduleField(group.milestones, points);
+        } else if (target.dataset.yamlScheduleRate) {
+          const rate = Number(target.value);
+          const baseField = (schema.fields || []).find(function (fieldInfo) { return fieldInfo.path === (prefix === "scheduler" ? "optimizer.lr" : prefix.replace(/scheduler$/, "optimizer") + ".lr"); });
+          const base = baseField ? Number(yamlFieldValue(baseField)) : NaN;
+          if (!group.gamma || !Number.isFinite(rate) || rate < 0 || !Number.isFinite(base) || base <= 0) return;
+          updateScheduleField(group.gamma, Math.pow(rate / base, 1 / (Number(target.dataset.index) + 1)));
+        }
+        refreshSchedule(group);
+      });
+      groupsNode.addEventListener("click", function (event) {
+        const target = event.target.closest("[data-yaml-schedule-add], [data-yaml-schedule-remove]");
+        if (!target) return;
+        const prefix = target.dataset.yamlScheduleAdd || target.dataset.yamlScheduleRemove;
+        const group = scheduleByPrefix.get(prefix);
+        if (!group?.milestones) return;
+        const points = yamlFieldValue(group.milestones).map(Number);
+        if (target.dataset.yamlScheduleAdd) points.push(points.length ? Math.max(...points) + 1 : 1);
+        else points.splice(Number(target.dataset.index), 1);
+        updateScheduleField(group.milestones, points);
+        refreshSchedule(group);
+      });
       updatePaperDeviation();
     }
     function collectYamlPatches() {
-      return (state.yamlSchema?.fields || []).filter(function (fieldInfo) { return fieldInfo.editable; }).map(function (fieldInfo) {
+      return (state.yamlSchema?.fields || []).filter(function (fieldInfo) { return fieldInfo.visible !== false && fieldInfo.editable; }).map(function (fieldInfo) {
         const node = document.getElementById(yamlFieldId(fieldInfo.path));
         let value = fieldInfo.kind === "boolean" ? Boolean(node.checked) : node.value;
         if (fieldInfo.kind === "number") {
@@ -2676,6 +2836,15 @@
       updateYamlEditorButton();
     });
     document.getElementById("yaml-path").addEventListener("input", function () { state.yamlDestinationPath = this.value.trim(); });
+
+    // Number inputs spin on wheel only while focused. Blur before the browser's
+    // default wheel action so scrolling the page cannot silently change a parameter.
+    document.addEventListener("wheel", function (event) {
+      const target = event.target;
+      if (target instanceof HTMLInputElement && target.type === "number" && document.activeElement === target) {
+        target.blur();
+      }
+    }, {capture:true, passive:true});
 
     refreshConsoleJobList();
 

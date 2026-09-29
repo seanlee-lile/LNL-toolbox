@@ -213,6 +213,30 @@ class _torch_training_TorchTrainingTest(unittest.TestCase):
         self.assertAlmostEqual(values[4], 0.001 / 3)
         self.assertEqual(values[5], 0.0)
 
+    def test_multistep_accepts_independent_explicit_learning_rates(self):
+        model = torch.nn.Linear(2, 2)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+        scheduler = build_scheduler(optimizer, {
+            'name': 'multistep', 'milestones': [2, 4], 'gamma': 0.1,
+            'lr_values': [0.003, 0.0007],
+        }, epochs=5)
+        values = [optimizer.param_groups[0]['lr']]
+        for _ in range(5):
+            optimizer.step()
+            scheduler.step()
+            values.append(optimizer.param_groups[0]['lr'])
+        for actual, expected in zip(values, [0.01, 0.01, 0.003, 0.003, 0.0007, 0.0007]):
+            self.assertAlmostEqual(actual, expected)
+
+        legacy = torch.optim.SGD(model.parameters(), lr=0.01)
+        legacy_scheduler = build_scheduler(legacy, {
+            'name': 'multistep', 'milestones': [2, 4], 'gamma': 0.1,
+        }, epochs=5)
+        for _ in range(4):
+            legacy.step()
+            legacy_scheduler.step()
+        self.assertAlmostEqual(legacy.param_groups[0]['lr'], 0.0001)
+
     def test_existing_models_expose_compatible_feature_output(self):
         models = (TinyCNN(10, 8), build_model({'name': 'resnet18', 'base_width': 8}, num_classes=10), build_model({'name': 'cifar_cnn8'}, num_classes=10))
         inputs = torch.randn(2, 3, 32, 32)

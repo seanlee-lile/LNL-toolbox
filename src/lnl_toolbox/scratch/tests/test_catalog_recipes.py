@@ -11,6 +11,35 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ScratchCatalogRecipeTest(unittest.TestCase):
+    def test_every_paper_recipe_uses_one_seed(self) -> None:
+        for path in sorted((ROOT / "recipes" / "papers").glob("*.yaml")):
+            recipe = load_recipe(path)
+            steps = []
+
+            def collect(items):
+                for step in items:
+                    steps.append(step)
+                    collect(step.get("steps", []))
+
+            collect(recipe["steps"])
+            seeds = [step.get("params", {}).get("seed") for step in steps if step["block"] == "set_seed"]
+            self.assertEqual(len(seeds), 1, path.name)
+            seed = seeds[0]
+
+            def check(value):
+                if isinstance(value, dict):
+                    for key, item in value.items():
+                        if (key == "seed" or key.endswith("_seed")) and key != "peer_seed_offset":
+                            self.assertEqual(item, seed, (path.name, key))
+                        else:
+                            check(item)
+                elif isinstance(value, list):
+                    for item in value:
+                        check(item)
+
+            for step in steps:
+                check(step.get("params", {}))
+
     def test_every_catalog_method_has_one_valid_recipe(self) -> None:
         catalog = json.loads((ROOT.parent / "paper_catalog.json").read_text(encoding="utf-8"))
         expected = {item["id"] for item in catalog}

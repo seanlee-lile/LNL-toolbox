@@ -7,6 +7,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from importlib import metadata, resources
 import json
+import math
 from pathlib import Path
 import pickle
 from typing import Any
@@ -663,6 +664,17 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
         scheduler = config.get("scheduler", {}) or {}
         if scheduler and str(scheduler.get("name", "none")).lower() not in {"none", "cosine", "multistep"}:
             raise ValueError(f"unsupported scheduler: {scheduler.get('name')}")
+        if isinstance(scheduler, Mapping) and scheduler.get("lr_values") is not None:
+            milestones = scheduler.get("milestones", [])
+            values = scheduler["lr_values"]
+            if str(scheduler.get("name", "none")).lower() != "multistep":
+                raise ValueError("scheduler.lr_values requires a multistep scheduler")
+            if not isinstance(milestones, list) or not isinstance(values, list) or len(values) != len(milestones):
+                raise ValueError("scheduler.lr_values must contain one value per milestone")
+            if any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in milestones) or milestones != sorted(set(milestones)):
+                raise ValueError("scheduler.milestones must be sorted, distinct positive integers")
+            if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0 for value in values):
+                raise ValueError("scheduler.lr_values must contain positive finite numbers")
         try:
             from lnl_toolbox.plugins.builtin import create_builtin_catalog
 

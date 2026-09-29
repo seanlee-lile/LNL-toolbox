@@ -61,7 +61,7 @@ transition_stage:
     initial_flip_mass: 0.05
     max_flip_mass: 0.49
     temperature: 1.0
-    seed: 37
+    seed: 1
   determinant_tolerance: 1.0e-06
   condition_limit: 1000000.0
 feature_stage:

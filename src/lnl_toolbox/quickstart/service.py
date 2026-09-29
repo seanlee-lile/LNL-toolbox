@@ -12,7 +12,7 @@ import uuid
 
 from lnl_toolbox.catalog import discover_recipes, load_papers, recipe_by_id, load_recipe_config
 from lnl_toolbox.data.probe import DatasetProbeResult, probe_dataset_path, suggest_dataset_alias
-from lnl_toolbox.data.profile import KnowledgeState, NoiseOrigin
+from lnl_toolbox.data.profile import KnowledgeState, NoiseOrigin, resolve_dataset_capabilities
 from lnl_toolbox.noise.quickstart_catalog import quick_start_noise_specs, visible_synthetic_noise_specs
 from lnl_toolbox.training.compatibility import CompatibilityStatus
 from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE, DataService
@@ -134,6 +134,15 @@ class QuickStartService:
             raise ValueError(f"dataset profile is unavailable after inspect: {alias}")
         return report
 
+    def _accepted_report(self, alias: str):
+        """Use the profile established at registration without reopening sample files."""
+        return self._require_ready_report(self.data_service.status(alias), alias)
+
+    def _accepted_capabilities(self, alias: str, report):
+        return resolve_dataset_capabilities(
+            report.profile, self.data_service.declarations(alias)
+        )
+
     @staticmethod
     def _summary(alias: str, report) -> QuickStartDatasetSummary:
         profile = report.profile
@@ -163,9 +172,10 @@ class QuickStartService:
         result = self.probe(path)
         if result.status == "already_registered":
             assert result.existing_alias is not None
-            report = self._require_ready_report(
-                self.data_service.inspect(result.existing_alias), result.existing_alias
-            )
+            report = self.data_service.status(result.existing_alias)
+            if report.status != "ready" or report.profile is None:
+                report = self.data_service.inspect(result.existing_alias)
+            report = self._require_ready_report(report, result.existing_alias)
             return self._summary(result.existing_alias, report)
         candidates = list(result.candidates)
         if selected_adapter is not None:
@@ -185,20 +195,34 @@ class QuickStartService:
         return self._summary(alias, report)
 
     def noise_options(self, dataset_alias: str) -> dict[str, object]:
-        capabilities = self.data_service.capabilities(dataset_alias, persist=False)
-        if capabilities.noise_origin is NoiseOrigin.NATIVE:
+        report = self._accepted_report(dataset_alias)
+        capabilities = self._accepted_capabilities(dataset_alias, report)
+        facts = {
+            "noise_status": capabilities.noise_status.value,
+            "noise_origin": capabilities.noise_origin.value,
+            "clean_train_labels": capabilities.clean_train_labels.value,
+            "noise_rate": capabilities.noise_rate.to_dict(),
+            "status_source": (
+                "inspected" if report.profile.noise.status == capabilities.noise_status
+                and capabilities.noise_status.value != "unknown" else "declared"
+            ),
+        }
+        if capabilities.noise_status.value == "noisy":
             return {
-                "dataset_state": "native",
+                **facts,
+                "dataset_state": "native" if capabilities.noise_origin is NoiseOrigin.NATIVE else "noisy",
                 "requires_confirmation": False,
                 "options": [{"key": "native", "label": "使用数据集原始 noisy labels"}],
             }
         if capabilities.noise_status.value == "unknown":
             return {
+                **facts,
                 "dataset_state": "unknown",
                 "requires_confirmation": True,
                 "options": [{"key": "clean", "label": "保持当前标签"}],
             }
         return {
+            **facts,
             "dataset_state": "clean",
             "requires_confirmation": False,
             "options": [
@@ -221,8 +245,12 @@ class QuickStartService:
         dataset_alias: str,
         noise_selection: QuickStartNoiseSelection,
     ) -> tuple[QuickStartMethodOption, ...]:
+        report = self._accepted_report(dataset_alias)
+        capabilities = self._accepted_capabilities(dataset_alias, report)
         cache_key = json.dumps({
             "dataset": dataset_alias,
+            "profile_fingerprint": report.profile.fingerprint,
+            "capabilities": capabilities.to_dict(),
             "noise": noise_selection.to_dict(),
         }, sort_keys=True)
         with self._method_cache_lock:
@@ -230,9 +258,6 @@ class QuickStartService:
         if cached is not None:
             return cached
 
-        report = self._require_ready_report(
-            self.data_service.inspect(dataset_alias, persist=False), dataset_alias
-        )
         profile_data = report.profile.to_dict()
         dataset_service = _CachedDatasetService(self.data_service, dataset_alias)
         papers = load_papers()
@@ -266,7 +291,8 @@ class QuickStartService:
         if compatibility_configs:
             try:
                 batch = self.experiment_service.list_config_compatibility(
-                    dataset_alias, compatibility_configs
+                    dataset_alias, compatibility_configs,
+                    dataset_capabilities=capabilities,
                 )
                 results = dict(batch)
             except Exception:
@@ -274,7 +300,8 @@ class QuickStartService:
                 for paper_id, candidate in compatibility_configs.items():
                     try:
                         results[paper_id] = self.experiment_service.list_config_compatibility(
-                            dataset_alias, {paper_id: candidate}
+                            dataset_alias, {paper_id: candidate},
+                            dataset_capabilities=capabilities,
                         )[0][1]
                     except Exception as exc:
                         results[paper_id] = exc
@@ -315,6 +342,7 @@ class QuickStartService:
                     paper,
                     dataset_adapter=str(profile_data.get("adapter", "")),
                     noise_selection=noise_selection,
+                    recipes=recipes,
                 ) else "toolbox_adapted",
                 candidate,
                 tuple(result.required_input_paths),
@@ -339,9 +367,8 @@ class QuickStartService:
         from lnl_toolbox.catalog import paper_by_id
 
         paper = paper_by_id(paper_id)
-        report = self._require_ready_report(
-            self.data_service.inspect(dataset_alias, persist=False), dataset_alias
-        )
+        report = self._accepted_report(dataset_alias)
+        capabilities = self._accepted_capabilities(dataset_alias, report)
         profile = report.profile
         profile_data = profile.to_dict()
         exact = find_exact_reproduction(
@@ -356,7 +383,8 @@ class QuickStartService:
             )
             output_dir = self.artifact_root / "runs" / plan_id
             result = self.experiment_service.list_config_compatibility(
-                dataset_alias, {paper.id: config}
+                dataset_alias, {paper.id: config},
+                dataset_capabilities=capabilities,
             )[0][1]
             status = self._status(result)
             details = tuple(item.message for item in result.reasons)
@@ -369,7 +397,7 @@ class QuickStartService:
                     details=details,
                 )
             try:
-                self.experiment_service.preflight(config, check_data=True)
+                self.experiment_service.preflight(config, check_data=False)
             except Exception as exc:
                 return QuickStartPlan(
                     plan_id, dataset_alias, paper.id, paper.acronym,
@@ -399,7 +427,8 @@ class QuickStartService:
             method_inputs=user_inputs,
         )
         result = self.experiment_service.list_config_compatibility(
-            dataset_alias, {paper.id: candidate}
+            dataset_alias, {paper.id: candidate},
+            dataset_capabilities=capabilities,
         )[0][1]
         status = self._status(result)
         details = tuple(item.message for item in result.reasons)
@@ -412,7 +441,7 @@ class QuickStartService:
             )
 
         try:
-            self.experiment_service.preflight(candidate, check_data=True)
+            self.experiment_service.preflight(candidate, check_data=False)
         except Exception as exc:
             return QuickStartPlan(
                 plan_id, dataset_alias, paper.id, paper.acronym, noise_selection,

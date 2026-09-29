@@ -7,10 +7,12 @@ not execute browser-provided shell strings and never starts a shell.
 from __future__ import annotations
 
 import argparse
+import errno
 import ipaddress
 import json
 import math
 import os
+import socket
 import shlex
 import subprocess
 import sys
@@ -32,6 +34,8 @@ SCRATCH_ROOT = SRC_ROOT / "lnl_toolbox" / "scratch"
 SCRATCH_WEB_ROOT = SCRATCH_ROOT / "web"
 SCRATCH_RECIPE_ROOT = SCRATCH_ROOT / "recipes"
 _SCRATCH_FORMULA_RELOAD_LOCK = threading.RLock()
+_DATASET_RECIPE_COMPATIBILITY_LOCK = threading.RLock()
+_DATASET_RECIPE_COMPATIBILITY_CACHE: dict[tuple[str, float | None], dict[str, object]] = {}
 STATIC_ASSETS = {
     "/assets/quick_start.js": (WEB_ROOT / "assets" / "quick_start.js", "application/javascript; charset=utf-8"),
     "/assets/quick_start.css": (WEB_ROOT / "assets" / "quick_start.css", "text/css; charset=utf-8"),
@@ -617,23 +621,72 @@ def _recipe_payload(*, include_all: bool = False) -> list[dict[str, object]]:
     ]
 
 
+_WEB_RECIPE_CATALOG: dict[str, object] | None = None
+
+
+def _web_recipe_catalog() -> dict[str, object]:
+    """Load the recipe manifest once per console process.
+
+    The compatibility page used to call ``recipe_by_id`` once per paper.  That
+    helper performs a fresh full ``discover_recipes`` scan, so one page load
+    caused every recipe YAML to be parsed dozens of times.  The Web console is
+    a long-lived process; a process-local catalog is the correct cache scope.
+    """
+
+    global _WEB_RECIPE_CATALOG
+    if _WEB_RECIPE_CATALOG is not None:
+        return _WEB_RECIPE_CATALOG
+    from lnl_toolbox.catalog import discover_recipes
+
+    discovered = {
+        recipe.id: recipe
+        for recipe in discover_recipes(ROOT, include_conditional=True)
+    }
+    # Do not poison the process cache when a unit test (or a partially
+    # installed package) supplies a stub YAML loader and discovery yields no
+    # runnable recipes. A real checkout has substantially more than this.
+    if len(discovered) >= 20:
+        _WEB_RECIPE_CATALOG = discovered
+    return discovered
+
+
+@lru_cache(maxsize=1)
+def _web_paper_specs() -> tuple[object, ...]:
+    from lnl_toolbox.catalog import load_papers
+
+    return load_papers(ROOT)
+
+
+@lru_cache(maxsize=None)
+def _web_recipe_config(recipe_id: str) -> dict[str, Any]:
+    """Load one recipe YAML through the cached manifest.
+
+    The fallback keeps isolated unit tests that provide a synthetic
+    ``recipe_by_id`` response working without reintroducing the production
+    full-catalog scan.
+    """
+
+    from copy import deepcopy
+    from lnl_toolbox.catalog import load_yaml, recipe_by_id
+
+    recipe = _web_recipe_catalog().get(str(recipe_id))
+    if recipe is None:
+        recipe = recipe_by_id(str(recipe_id), ROOT)
+    return deepcopy(load_yaml(recipe.config_path))
+
+
 def _paper_payload() -> list[dict[str, object]]:
     """Return paper metadata and available recipe variants for the UI."""
 
     from lnl_toolbox.catalog import (
-        discover_recipes,
         load_recipe_config,
-        load_papers,
         mentornet_preparation_status,
         resolve_config_paths,
     )
 
-    recipes = {
-        recipe.id: recipe
-        for recipe in discover_recipes(ROOT, include_conditional=True)
-    }
+    recipes = _web_recipe_catalog()
     payload = []
-    for paper in load_papers(ROOT):
+    for paper in _web_paper_specs():
         default_config = next(
             config for config in paper.configs if config.profile == "reproduction"
         )
@@ -711,8 +764,8 @@ def _dataset_payload() -> dict[str, object]:
     }
 
 
-def _dataset_profile_payload(name: object) -> dict[str, object]:
-    """Return the Phase-2 profile contract for one registered dataset."""
+def _dataset_profile_context(name: object) -> tuple[dict[str, object], object]:
+    """Return the public profile payload and its inspected capabilities."""
 
     from lnl_toolbox.training.service import ExperimentService
 
@@ -735,7 +788,7 @@ def _dataset_profile_payload(name: object) -> dict[str, object]:
     ):
         if value == "unknown":
             unresolved.append(field)
-    return {
+    payload = {
         "dataset": alias,
         "adapter": report.adapter,
         "source": report.location,
@@ -745,6 +798,7 @@ def _dataset_profile_payload(name: object) -> dict[str, object]:
         "unresolved_dataset_facts": unresolved,
         "declared": declared,
     }
+    return payload, capabilities
 
 
 def _dataset_compatibility_payload(
@@ -784,12 +838,38 @@ def _dataset_recipe_compatibility_payload(
 ) -> dict[str, object]:
     """Resolve each paper's concrete formal recipe for one local dataset."""
 
-    from lnl_toolbox.catalog import load_yaml, recipe_by_id
-    from lnl_toolbox.training.service import ExperimentService
-
     alias = str(name).strip()
     if not alias:
         raise ValueError("recipe compatibility query requires a dataset alias")
+    key = (alias, method_noise_rate_prior)
+    # Compatibility is a read-heavy page operation. Serialize the first
+    # computation for a key so concurrent browser requests do not all reload
+    # the same CIFAR source and run the same 26-recipe check.
+    with _DATASET_RECIPE_COMPATIBILITY_LOCK:
+        cached = _DATASET_RECIPE_COMPATIBILITY_CACHE.get(key)
+        if cached is not None:
+            from copy import deepcopy
+
+            return deepcopy(cached)
+        value = _compute_dataset_recipe_compatibility_payload(
+            alias,
+            method_noise_rate_prior=method_noise_rate_prior,
+        )
+        _DATASET_RECIPE_COMPATIBILITY_CACHE[key] = value
+        from copy import deepcopy
+
+        return deepcopy(value)
+
+
+def _compute_dataset_recipe_compatibility_payload(
+    alias: str,
+    *,
+    method_noise_rate_prior: float | None = None,
+) -> dict[str, object]:
+    """Compute one compatibility result; callers provide cache coordination."""
+
+    from lnl_toolbox.training.service import ExperimentService
+
     papers = _paper_payload()
     recipe_meta: dict[str, dict[str, object]] = {}
     for paper in papers:
@@ -809,15 +889,21 @@ def _dataset_recipe_compatibility_payload(
                 "title": paper["title"],
                 "fidelity": config_meta.get("configuration_fidelity", paper["default_fidelity"]),
             }
+    # Use the process-local recipe catalog/config cache.  Calling
+    # ``recipe_by_id`` here once per paper used to rediscover and parse the
+    # complete recipe directory for every entry (over 2,000 YAML reads on a
+    # single compatibility page).
     configs = {
-        recipe_id: load_yaml(recipe_by_id(recipe_id, ROOT).config_path)
+        recipe_id: _web_recipe_config(recipe_id)
         for recipe_id in recipe_meta
     }
     service = ExperimentService()
+    profile, capabilities = _dataset_profile_context(alias)
     results = dict(service.list_config_compatibility(
         alias,
         configs,
         method_noise_rate_prior=method_noise_rate_prior,
+        dataset_capabilities=capabilities,
     ))
     recipes = []
     for recipe_id, meta in recipe_meta.items():
@@ -840,12 +926,31 @@ def _dataset_recipe_compatibility_payload(
             "recipes": [],
         })
         group["recipes"].append(item)
-    return {
+    payload = {
         "dataset": alias,
-        "profile": _dataset_profile_payload(alias),
+        "profile": profile,
         "methods": list(grouped.values()),
         "recipes": recipes,
     }
+    return payload
+
+
+def _dataset_profile_payload(name: object) -> dict[str, object]:
+    """Return the Phase-2 profile contract for one registered dataset."""
+
+    payload, _ = _dataset_profile_context(name)
+    return payload
+
+
+def _invalidate_dataset_recipe_compatibility(name: object | None = None) -> None:
+    with _DATASET_RECIPE_COMPATIBILITY_LOCK:
+        if name is None:
+            _DATASET_RECIPE_COMPATIBILITY_CACHE.clear()
+            return
+        alias = str(name).strip()
+        for key in tuple(_DATASET_RECIPE_COMPATIBILITY_CACHE):
+            if key[0] == alias:
+                _DATASET_RECIPE_COMPATIBILITY_CACHE.pop(key, None)
 
 
 def _dataset_declarations_payload(name: object, payload: object) -> dict[str, object]:
@@ -864,6 +969,7 @@ def _dataset_declarations_payload(name: object, payload: object) -> dict[str, ob
 
     service = DataService()
     service.update_declarations(name, declarations)
+    _invalidate_dataset_recipe_compatibility(name)
     return _dataset_compatibility_payload(name)
 
 
@@ -903,31 +1009,37 @@ def _dataset_action(payload: object) -> dict[str, object]:
             value = payload.get(source)
             if value not in {None, ""}:
                 data[target] = value
-        return {
+        result = {
             "dataset": service.register(name, adapter, data).to_dict(),
             "message": "登记已保存。下一步请执行 inspect，实际加载 train/test。",
             "next_action": "inspect",
         }
+        _invalidate_dataset_recipe_compatibility(name)
+        return result
     if action == "inspect":
         if not name:
             raise ValueError("dataset inspection requires a name")
         report = service.inspect(name)
         if report.status != "ready":
             raise ValueError(report.error or f"dataset is not ready: {name}")
-        return {
+        result = {
             "dataset": report.to_dict(),
             "message": "数据检查通过。可继续执行 verify，完成一轮训练验证。",
             "next_action": "verify",
         }
+        _invalidate_dataset_recipe_compatibility(name)
+        return result
     if action == "remove":
         if not name:
             raise ValueError("dataset removal requires a name")
         service.remove(name)
-        return {
+        result = {
             "removed": name,
             "message": f"已删除数据登记：{name}。原始数据文件未被删除。",
             "next_action": "list",
         }
+        _invalidate_dataset_recipe_compatibility(name)
+        return result
     raise ValueError(f"unsupported dataset action: {action}")
 
 
@@ -946,6 +1058,9 @@ def _dataset_verify_job(payload: object) -> Job:
         command.extend(("--recipe", recipe))
     if output_dir:
         command.extend(("--output-dir", output_dir))
+    # Verification can update the catalog/profile facts. Never reuse a
+    # compatibility result produced before this background job.
+    _invalidate_dataset_recipe_compatibility(name)
     display = "lnl " + " ".join(shlex.quote(item) for item in command[len(resolve_lnl_command()):])
     return _start_process("data-verify", command, display)
 
@@ -1134,6 +1249,66 @@ def _parameter_registry() -> dict[str, Any]:
     return value
 
 
+def _parameter_display_policy() -> dict[str, object]:
+    policy = _parameter_registry().get("parameter_display_policy", {})
+    return policy if isinstance(policy, dict) else {}
+
+
+def _parameter_presentation(path: str, method: str = "") -> tuple[str, str]:
+    """Return the method-aware UI destination and optional display label.
+
+    This is a presentation policy only.  Hidden fields remain available in the
+    persisted recipe; common experiment controls, component selectors and
+    resources are kept outside the method's default/advanced parameter groups.
+    """
+
+    policy = _parameter_display_policy()
+    # Trusted-supervision wiring is resolved by the selected method/data
+    # protocol. Raw trusted_validation.* keys are not meaningful controls in
+    # the ordinary Web parameter editor.
+    if path.startswith("trusted_validation."):
+        return "hidden", ""
+    method_key = _method_registry_key(method)
+    override = {
+        "common_paths": policy.get("common_paths_by_method", {}).get(method_key, ()),
+        "selection_paths": policy.get("selection_paths_by_method", {}).get(method_key, ()),
+        "resource_paths": policy.get("resource_paths_by_method", {}).get(method_key, ()),
+        "hidden_paths": policy.get("hidden_paths_by_method", {}).get(method_key, ()),
+    }
+    # Method-specific hard-screen destinations take precedence over generic
+    # implementation fields (for example, a max-sample limit can be a
+    # supported experiment control for one recipe and absent in another).
+    if path in override.get("hidden_paths", ()):
+        return "hidden", ""
+    # The top-level experiment seed is the only user-facing seed control.
+    # Component seeds are derived from it when the config is normalized.
+    if path != "seed" and path.rsplit(".", 1)[-1].endswith("seed") and not path.endswith("peer_seed_offset"):
+        return "hidden", ""
+    if path in override.get("selection_paths", ()):
+        labels = policy.get("selection_labels", {})
+        label = labels.get(path, "独立组件选择") if isinstance(labels, dict) else "独立组件选择"
+        return "selection", str(label)
+    if path in override.get("resource_paths", ()):
+        labels = policy.get("resource_labels", {})
+        label = labels.get(path, "外部资源/运行前置条件") if isinstance(labels, dict) else "外部资源/运行前置条件"
+        return "resource", str(label)
+    # Explicit common controls may override a generic hidden prefix such as
+    # data.max_* when the method's first-pass audit says users may edit it.
+    if path in override.get("common_paths", ()):
+        return "common", "公共实验设置"
+    hidden_paths = policy.get("hidden_paths", ())
+    hidden_prefixes = policy.get("hidden_prefixes", ())
+    if path in hidden_paths or any(path.startswith(str(prefix)) for prefix in hidden_prefixes):
+        return "hidden", ""
+    resource_paths = policy.get("resource_paths", ())
+    resource_prefixes = policy.get("resource_prefixes", ())
+    if path in resource_paths or any(path.startswith(str(prefix)) for prefix in resource_prefixes):
+        labels = policy.get("resource_labels", {})
+        label = labels.get(path, "资源/前置条件") if isinstance(labels, dict) else "资源/前置条件"
+        return "resource", str(label)
+    return "parameter", ""
+
+
 def _method_registry_key(method: object) -> str:
     return str(method or "").strip().lower().replace("-", "_")
 
@@ -1229,8 +1404,217 @@ def _formal_registry_config(method: str) -> tuple[str, dict[str, Any]] | None:
     return str(recipe_id), load_yaml(recipe_path)
 
 
+def _research_parameter_category(
+    group: str, path: str, view: dict[str, Any]
+) -> str:
+    """Classify a visible config field without changing its edit permission."""
+
+    if not group:
+        return ""
+    if path in view.get("implementation_paths", ()):
+        return "runtime"
+    if group == "method":
+        if path in view.get("method_protocol_paths", ()) or path.endswith(
+            tuple(view.get("method_protocol_suffixes", ()))
+        ):
+            return "method_protocol"
+        return "method"
+    if group == "data":
+        return "data" if path in view.get("focus_data_paths", ()) else "data_protocol"
+    if group == "training":
+        return (
+            "comparison"
+            if path in view.get("comparison_paths", ())
+            else "training_protocol"
+        )
+    raise ValueError(f"unknown research parameter group: {group}")
+
+
+def _parameter_display_group(field: dict[str, object], method: str) -> str:
+    """Classify visible fields without changing registry edit permissions."""
+
+    if not field.get("editable"):
+        return "restricted"
+    if (
+        field.get("kind") in {"list", "object"}
+        or isinstance(field.get("value"), (list, dict))
+    ):
+        return "advanced"
+    policy = _parameter_registry().get("default_parameter_paths", {})
+    if not isinstance(policy, dict):
+        return "advanced"
+    methods = policy.get("methods", {})
+    method_paths = methods.get(_method_registry_key(method), ()) if isinstance(methods, dict) else ()
+    exclusions = policy.get("exclude", {})
+    excluded = exclusions.get(_method_registry_key(method), ()) if isinstance(exclusions, dict) else ()
+    selected = (set(policy.get("common", ())) | set(method_paths)) - set(excluded)
+    if field.get("presentation") == "hidden":
+        return "advanced"
+    path = str(field.get("path", ""))
+    if path in selected:
+        return "default"
+    if path in {
+        "data.validation_size", "data.augment", "data.strong_augment",
+        "data.preprocessing", "data.folds", "data.fold_index",
+        "trainer.max_steps", "noise.path", "dld.feature_extractor.source",
+        "pipeline.weight_provider.artifact_path", "posterior_stage.rate_estimator",
+        "selector.keep_rate.start", "selector.keep_rate.end",
+    }:
+        return "default"
+    if path == "model.name" or path.endswith(".model.name"):
+        return "default"
+    if ".scheduler." in path or path.startswith("scheduler."):
+        return "default"
+    if path.endswith((".epochs", ".lr", ".learning_rate")) and not any(
+        part in path for part in (".gmm.", ".loss_history.")
+    ):
+        return "default"
+    return "advanced"
+
+
+def _parameter_user_note(path: str, original: str) -> str:
+    """Keep field help specific to that field, without registry policy boilerplate."""
+
+    if path == "loader.batch_size":
+        return "每次参数更新使用的训练样本数。"
+    if path == "trainer.epochs":
+        return "训练数据最多完整遍历的次数。"
+    if path == "optimizer.lr":
+        return "主模型优化器的起始学习率。"
+    if path == "meta.virtual_learning_rate":
+        return "L2RW 的 official 实现固定为 1；paper 实现才使用此值计算虚拟更新。"
+    if path == "data.num_clean":
+        return "用于计算样本权重的干净验证样本数。"
+    if path == "data.num_val":
+        return "从训练数据划出的验证样本数。"
+    if path == "data.dimension":
+        return "每个样本的特征维度；模型输入维度会随之更新。"
+    if path == "noise.rate":
+        return "生成噪声时目标标签翻转比例。"
+    if path in {"noise.rho_positive", "noise.rho_negative"}:
+        return "该类别标签被翻转的概率；两类概率之和必须小于 1。"
+    if path in {"noise.transition_matrix", "pipeline.transition_estimator.matrix"}:
+        return "类别间标签转移概率矩阵；每行对应一个原始类别。"
+    if path == "trainer.max_steps":
+        return "训练最多执行的参数更新次数。"
+    if path == "data.augment":
+        return "是否对训练输入应用随机增强。"
+    if path == "data.strong_augment":
+        return "是否生成强增强训练视图。"
+    if path == "data.preprocessing":
+        return "输入图像的转换和归一化方案。"
+    if path == "data.validation_size":
+        return "从训练数据中划出的验证样本数。"
+    if path in {"data.train_size", "data.test_size"}:
+        return "生成的" + ("训练" if path == "data.train_size" else "测试") + "样本数；该数据协议要求正偶数。"
+    if path in {"data.split_strategy", "data.validation_split.strategy"}:
+        return "训练与验证样本的划分规则。"
+    if path == "data.folds":
+        return "交叉验证划分的份数。"
+    if path == "data.fold_index":
+        return "本次使用的交叉验证份编号，从 0 开始。"
+    if path == "noise.path":
+        return "外部观测标签或噪声文件的路径。"
+    if path.endswith(".model.name") or path == "model.name":
+        return "本阶段使用的模型网络架构。"
+    if path.endswith(".scheduler.name") or path == "scheduler.name":
+        return "本阶段的学习率变化方式。"
+    if path.endswith(".t_max") and "scheduler" in path:
+        return "余弦学习率下降曲线的周期长度。"
+    if path.endswith(".eta_min") and "scheduler" in path:
+        return "余弦学习率曲线的最低学习率。"
+    if path.endswith(".start_epoch") and "scheduler" in path:
+        return "学习率开始下降的轮次。"
+    if path.endswith(".end_epoch") and "scheduler" in path:
+        return "学习率下降到终点值的轮次。"
+    if path.endswith(".step_milestones"):
+        return "学习率变化的累计更新步数节点。"
+    if path.endswith(".milestones") and "scheduler" in path:
+        return "学习率变化的训练轮次节点。"
+    if path.endswith(".gamma") and "scheduler" in path:
+        return "每个学习率节点使用的衰减倍率。"
+    if path.endswith(".epochs"):
+        return "该训练阶段遍历数据的次数。"
+    if path.endswith(".warmup_epochs"):
+        return "预热阶段遍历数据的次数。"
+    if path.endswith((".lr", ".learning_rate")):
+        return "该训练阶段优化器的起始学习率。"
+    if path.endswith(".batch_size"):
+        return "每批从该数据角色取出的样本数。"
+    if path == "posterior_stage.rate_estimator":
+        return "后验阶段的噪声率估计方法。"
+    if path == "dld.feature_extractor.source":
+        return "DLD 特征提取器的来源。"
+    if path == "pipeline.weight_provider.artifact_path":
+        return "MentorNet 预训练权重文件路径。"
+    if path == "pipeline.weight_provider.decay":
+        return "MentorNet 权重提供器使用的衰减系数。"
+    if path == "seed":
+        return "控制本次实验随机过程的种子。"
+    if path in {"data.name", "noise.name", "optimizer.name"} or path.endswith(".optimizer.name"):
+        return {"data.name": "训练使用的数据集。", "noise.name": "标签噪声类型。"}.get(path, "优化器类型。")
+    if path.endswith(".momentum"):
+        return "优化器的动量系数。"
+    if path.endswith(".weight_decay"):
+        return "优化器的权重衰减系数。"
+    if path.endswith(".nesterov"):
+        return "是否启用 Nesterov 动量。"
+    if path.endswith(".model.base_width") or path == "model.base_width":
+        return "模型的基础通道数。"
+    if path in {"data.max_train_samples", "data.max_validation_samples", "data.max_test_samples"}:
+        return "本次运行最多使用的" + {"data.max_train_samples": "训练", "data.max_validation_samples": "验证", "data.max_test_samples": "测试"}[path] + "样本数。"
+    if original in {
+        "可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。",
+        "优化器或学习率调度细节；影响数值复现，但不定义算法身份。",
+        "可修改的重要论文参数或实验条件；修改后实验仍可运行，但应标记为偏离当前论文/正式 recipe 设置。",
+        "工程实现或估计器内部细节；默认折叠。",
+        "结构性运行契约；普通参数面板中的独立修改会破坏 schema、runner、组件 wiring、label-space/cardinality 或 lifecycle 契约。",
+    }:
+        return ""
+    return original
+
+
+def _parameter_user_label(path: str, method: str) -> str:
+    def stage_name(prefix: str) -> str:
+        parts = prefix.split(".") if prefix else []
+        if parts and parts[0] == method:
+            parts = parts[1:]
+        names = {
+            "posterior_stage": "后验阶段", "final_stage": "最终阶段",
+            "ensemble_stage": "集成阶段", "pretraining_stage": "预训练阶段",
+            "transition_stage": "转移矩阵阶段", "stage1": "第一阶段",
+            "classifier_initialization": "分类器初始化阶段", "revision": "修正阶段",
+            "transition": "转移矩阵", "warmup": "预热阶段",
+            "main": "主训练阶段", "training": "训练阶段",
+            "diffusion": "扩散阶段", "feature_extractor": "特征提取器",
+            "classifier": "分类器", "direction": "方向预测器",
+            "noise": "噪声预测器", "confusing_probability": "混淆概率",
+        }
+        return "".join(names.get(part, part.replace("_", " ")) for part in parts if part not in {"optimizer", "model"})
+
+    labels = {
+        "seed": "实验随机种子", "data.augment": "训练数据增强",
+        "data.strong_augment": "强数据增强", "data.preprocessing": "输入预处理",
+        "data.validation_size": "验证集样本数", "data.folds": "交叉验证份数",
+        "data.fold_index": "当前验证份", "trainer.max_steps": "总更新步数",
+        "trainer.epochs": "训练轮数", "loader.batch_size": "训练批次大小",
+        "meta.virtual_learning_rate": "虚拟更新步长", "data.num_clean": "干净验证样本数",
+        "noise.path": "外部噪声/标签文件", "dld.feature_extractor.source": "DLD 特征来源",
+        "pipeline.weight_provider.artifact_path": "MentorNet 权重文件",
+    }
+    if path in labels:
+        return labels[path]
+    if path == "model.name" or path.endswith(".model.name"):
+        return (stage_name(path.removesuffix(".model.name")) if path != "model.name" else "") + "模型架构"
+    if path.endswith(".epochs"):
+        return stage_name(path.removesuffix(".epochs")) + "轮数"
+    if path.endswith((".lr", ".learning_rate")):
+        return stage_name(path.rsplit(".", 1)[0]) + "起始学习率"
+    return path
+
+
 def _registry_config_fields(
-    config: dict[str, Any], method: str
+    config: dict[str, Any], method: str, *, allow_missing: bool = False
 ) -> tuple[list[dict[str, object]], dict[str, object]] | None:
     registry = _parameter_registry()
     method_metadata = registry["methods"].get(method)
@@ -1244,6 +1628,12 @@ def _registry_config_fields(
     recipe_id, baseline = formal if formal is not None else ("", config)
     paper_metadata = method_metadata.get("paper", {})
     evidence = paper_metadata.get("evidence", {}) if isinstance(paper_metadata, dict) else {}
+    research_view = registry.get("research_parameter_view", {})
+    research_groups = research_view.get("groups", {})
+    research_method_paths = set(research_view.get("method_paths", {}).get(method, ()))
+    research_data_paths = set(research_view.get("data_paths", ()))
+    research_training_paths = set(research_view.get("training_paths", ()))
+    research_categories = research_view.get("categories", {})
     fields: list[dict[str, object]] = []
     for level in _PARAMETER_LEVEL_ORDER:
         level_metadata = levels.get(level, {})
@@ -1253,16 +1643,42 @@ def _registry_config_fields(
         for path, metadata in entries.items():
             if not isinstance(metadata, dict):
                 raise ValueError(f"registry 参数 {method}.{path} 元数据无效")
+            presentation, resource_label = _parameter_presentation(str(path), method)
             found, current = _config_path_value(config, str(path))
             if not found:
+                if allow_missing:
+                    continue
                 raise ValueError(f"registry 参数路径不存在：{method}.{path}")
             baseline_found, baseline_value = _config_path_value(baseline, str(path))
             evidence_ref = metadata.get("evidence_ref")
             kind, nullable = _metadata_field_kind(metadata, current)
+            permission, runtime_lock_reason, _ = _parameter_edit_rule(
+                config, method, str(path), level
+            )
+            research_group = ""
+            # Research-facing groups describe what the ordinary parameter
+            # panel exposes. Structural/hidden fields and external resources
+            # must not masquerade as method/data/training variables.
+            if presentation == "parameter" and level != "locked":
+                if path in research_method_paths:
+                    research_group = "method"
+                elif path in research_data_paths:
+                    research_group = "data"
+                elif level == "paper":
+                    research_group = "method"
+                elif path in research_training_paths or str(path).endswith(
+                    (".optimizer.lr", ".model.name", ".scheduler.milestones", ".scheduler.gamma")
+                ):
+                    research_group = "training"
+            research_category = (
+                _research_parameter_category(research_group, str(path), research_view)
+                if presentation == "parameter"
+                else "resource" if presentation == "resource" else ""
+            )
             fields.append(
                 {
                     "path": str(path),
-                    "label": str(path),
+                    "label": _parameter_user_label(str(path), method),
                     "value": current,
                     "kind": kind,
                     "nullable": nullable,
@@ -1270,19 +1686,30 @@ def _registry_config_fields(
                     if kind == "number"
                     else "",
                     "level": level,
+                    # Show only named algorithm/component contracts as
+                    # read-only. Provenance and implementation-only locked
+                    # fields (including extra seeds) stay hidden.
+                    "visible": presentation != "hidden" or (
+                        level == "locked" and str(path).endswith(".name")
+                    ),
+                    "presentation": presentation,
+                    "presentation_label": resource_label,
+                    "research_group": research_group,
+                    "research_category": research_category,
                     "level_label": level_metadata.get("label_zh", level),
-                    "editable": bool(level_metadata.get("editable", False)),
+                    "editable": permission == "editable",
                     "default_expanded": bool(
                         level_metadata.get("default_expanded", False)
                     ),
-                    "note": str(metadata.get("note", "")),
+                    "note": _parameter_user_note(str(path), str(metadata.get("note", ""))),
                     "reproduction_impact": str(
                         metadata.get("reproduction_impact", "")
                     ),
                     "origin": str(metadata.get("origin", "")),
-                    "lock_reason": str(metadata.get("lock_reason", "")),
+                    "lock_reason": runtime_lock_reason or str(metadata.get("lock_reason", "")),
                     "evidence_ref": str(evidence_ref or ""),
                     "evidence": str(evidence.get(evidence_ref, "")),
+                    "linked_fields": list(metadata.get("linked_fields", ())),
                     "changed_from": baseline_value if baseline_found else None,
                     "changed_from_paper": bool(
                         level == "paper"
@@ -1291,16 +1718,48 @@ def _registry_config_fields(
                     ),
                 }
             )
+    if allow_missing:
+        known = {str(field["path"]) for field in fields}
+        for field in _legacy_editable_config_fields(config):
+            path = str(field["path"])
+            if path not in known:
+                presentation, presentation_label = _parameter_presentation(path, method)
+                fields.append({
+                    **field, "level": "advanced", "visible": presentation != "hidden",
+                    "presentation": presentation, "presentation_label": presentation_label,
+                    "research_group": "", "research_category": "", "linked_fields": [],
+                })
     paper_changes = [
         field for field in fields if field["level"] == "paper" and field["changed_from_paper"]
     ]
+    paper_change_paths = (
+        [str(change["path"]) for change in _paper_parameter_changes(config, method)[1]]
+        if allow_missing else [str(field["path"]) for field in paper_changes]
+    )
     return fields, {
         "registry_version": str(registry.get("registry_version", "")),
         "formal_recipe": recipe_id,
         "paper_title": str(paper_metadata.get("title", "")),
         "paper_source": str(paper_metadata.get("original_source", "")),
-        "modified_from_paper": bool(paper_changes),
-        "paper_changes": [field["path"] for field in paper_changes],
+        "modified_from_paper": bool(paper_change_paths),
+        "paper_changes": paper_change_paths,
+        "research_groups": [
+            {
+                "id": group,
+                "label": str(research_groups.get(group, {}).get("label_zh", group)),
+                "description": str(research_groups.get(group, {}).get("description_zh", "")),
+            }
+            for group in ("method", "data", "training")
+        ],
+        "research_categories": [
+            {
+                "id": category,
+                "label": str(details.get("label_zh", category)),
+                "description": str(details.get("description_zh", "")),
+                "default_expanded": bool(details.get("default_expanded", False)),
+            }
+            for category, details in research_categories.items()
+        ],
         "levels": [
             {
                 "id": level,
@@ -1318,15 +1777,16 @@ def _config_schema(
     recipe_id: object = None,
     *,
     path_value: object = None,
+    recipe_hint: object = None,
 ) -> dict[str, object]:
     payload = _config_payload(recipe_id, path_value=path_value)
     method = _config_method(
-        payload["config"], payload["recipe"] or payload["method"]
+        payload["config"], payload["recipe"] or recipe_hint or payload["method"]
     )
     formal_recipe = _parameter_registry()["formal_recipe_bindings"].get(method, "")
-    use_registry = not payload["recipe"] or payload["recipe"] == formal_recipe
-    registry_fields = (
-        _registry_config_fields(payload["config"], method) if use_registry else None
+    strict_registry = bool(payload["recipe"] and payload["recipe"] == formal_recipe)
+    registry_fields = _registry_config_fields(
+        payload["config"], method, allow_missing=not strict_registry
     )
     fields, metadata = (
         registry_fields
@@ -1346,6 +1806,11 @@ def _config_schema(
             },
         )
     )
+    explicit_rates = _explicit_multistep_rates_field(payload["config"])
+    if explicit_rates is not None:
+        fields.append(explicit_rates)
+    for field in fields:
+        field["display_group"] = _parameter_display_group(field, method)
     return {
         "recipe": payload["recipe"],
         "source_path": payload["path"],
@@ -1357,13 +1822,34 @@ def _config_schema(
 
 
 def _field_map(config: dict[str, Any], method: str) -> dict[str, dict[str, object]]:
-    registry_fields = _registry_config_fields(config, method)
+    registry_fields = _registry_config_fields(config, method, allow_missing=True)
     fields = (
         registry_fields[0]
         if registry_fields is not None
         else _legacy_editable_config_fields(config)
     )
-    return {str(field["path"]): field for field in fields}
+    result = {str(field["path"]): field for field in fields}
+    explicit_rates = _explicit_multistep_rates_field(config)
+    if explicit_rates is not None:
+        result[str(explicit_rates["path"])] = explicit_rates
+    return result
+
+
+def _explicit_multistep_rates_field(config: dict[str, Any]) -> dict[str, object] | None:
+    """Optional Web edit field only for the shared supervised scheduler runtime."""
+    execution = config.get("execution", {})
+    scheduler = config.get("scheduler", {})
+    if not isinstance(execution, dict) or execution.get("runner") not in {"supervised", "clean"}:
+        return None
+    if not isinstance(scheduler, dict) or scheduler.get("name") != "multistep":
+        return None
+    return {
+        "path": "scheduler.lr_values", "label": "各节点后的学习率",
+        "value": scheduler.get("lr_values"), "kind": "list", "nullable": True,
+        "level": "advanced", "research_group": "", "research_category": "",
+        "editable": True, "visible": True, "presentation": "parameter",
+        "note": "可选；每个节点填写一个绝对学习率。未设置时继续使用 gamma。",
+    }
 
 
 def _set_config_path(config: dict[str, object], path: str, value: object) -> None:
@@ -1374,6 +1860,12 @@ def _set_config_path(config: dict[str, object], path: str, value: object) -> Non
         if not isinstance(child, dict):
             raise ValueError(f"不允许新增或重组配置字段：{path}")
         current = child
+    if path == "scheduler.lr_values":
+        if value is None:
+            current.pop(parts[-1], None)
+        else:
+            current[parts[-1]] = value
+        return
     if parts[-1] not in current:
         raise ValueError(f"配置字段不存在：{path}")
     current[parts[-1]] = value
@@ -1389,7 +1881,7 @@ def _normalize_registry_numeric_fields(config: dict[str, Any], method: str) -> N
     deliberately left untouched.
     """
 
-    registry_fields = _registry_config_fields(config, method)
+    registry_fields = _registry_config_fields(config, method, allow_missing=True)
     if registry_fields is None:
         return
     fields, _ = registry_fields
@@ -1446,29 +1938,239 @@ def _coerce_patch_value(field: dict[str, object], value: object) -> object:
             return int(value)
         return value
     if kind == "list":
+        if field.get("nullable") and value is None:
+            return None
         if not isinstance(value, list):
             raise ValueError(f"参数 {field['path']} 必须是列表")
+        return value
+    if kind == "object":
+        if not isinstance(value, dict):
+            raise ValueError(f"参数 {field['path']} 必须是对象")
         return value
     if not isinstance(value, str):
         raise ValueError(f"参数 {field['path']} 必须是文本")
     return value
 
 
-def _locked_registry_paths(method: str) -> tuple[str, ...]:
-    method_metadata = _parameter_registry()["methods"].get(method, {})
-    parameters = method_metadata.get("parameters", {}) if isinstance(method_metadata, dict) else {}
-    locked = parameters.get("locked", {}) if isinstance(parameters, dict) else {}
-    return tuple(str(path) for path in locked) if isinstance(locked, dict) else ()
+def _parameter_edit_rule(
+    config: dict[str, Any], method: str, path: str, level: str
+) -> tuple[str, str, object | None]:
+    """One permission decision for both the parameter panel and YAML saves.
+
+    `fixed` cannot change independently; `required` must equal a mode-specific
+    value; `derived` is computed from another editable parameter.
+    """
+
+    if level == "locked":
+        return "fixed", "", None
+    registry = _parameter_registry()
+    fixed = registry.get("runtime_fixed_parameter_paths", {})
+    if path in fixed.get(method, ()):
+        return "fixed", "当前方法实现要求此值固定；不能单独修改。", None
+    derived = registry.get("runtime_derived_parameter_paths", {})
+    if path in derived.get(method, ()):
+        if method == "importance_reweighting":
+            _, dimension = _config_path_value(config, "data.dimension")
+            return "derived", "此值跟随数据维度，请修改数据维度。", int(dimension)
+        _, noise_rate = _config_path_value(config, "noise.rate")
+        expected = 1.0 - float(noise_rate) if path.endswith("remember_schedule.end") else float(noise_rate)
+        return "derived", "此值由噪声率自动计算，请修改噪声率。", expected
+    if method == "importance_reweighting" and path == "data.dimension":
+        data = config.get("data", {})
+        required = {"synthetic_binary_2d": 2, "uci_statlog_heart": 13}.get(
+            data.get("name") if isinstance(data, dict) else None
+        )
+        if required is not None:
+            return "required", "当前数据集要求固定输入维度。", required
+    if method == "l2rw" and path == "meta.virtual_learning_rate":
+        meta = config.get("meta", {})
+        if isinstance(meta, dict) and str(meta.get("implementation", "paper")).lower() == "official":
+            return "required", "official L2RW 实现固定为 1，不执行显式虚拟参数更新", 1.0
+    if method == "pcse":
+        pretraining = config.get("pretraining_stage", {})
+        if isinstance(pretraining, dict) and pretraining.get("mode") == "external_checkpoint":
+            if path == "pretraining_stage.epochs":
+                return "required", "外部预训练模式使用已有检查点；预训练轮数为 0。", 0
+            if path.startswith((
+                "pretraining_stage.model.", "pretraining_stage.optimizer.",
+                "pretraining_stage.scheduler.",
+            )):
+                return "fixed", "外部预训练模式使用已有检查点；此项不由当前训练配置执行。", None
+    if method == "cdr":
+        update = config.get("parameter_update", {})
+        mode = str(update.get("compatibility_mode", "paper")).lower() if isinstance(update, dict) else ""
+        if mode == "paper" and path in {"optimizer.momentum", "optimizer.weight_decay"}:
+            return "required", "CDR paper 模式要求此优化器参数为 0。", 0
+        if mode == "official_code" and path == "parameter_update.l1_decay":
+            return "required", "CDR official_code 模式要求 L1 衰减为 0。", 0
+    return "editable", "", None
+
+
+def _synchronize_web_derived_parameters(config: dict[str, Any], method: str) -> None:
+    derived = _parameter_registry().get("runtime_derived_parameter_paths", {})
+    for path in derived.get(method, ()):
+        _, _, expected = _parameter_edit_rule(config, method, path, "advanced")
+        _set_config_path(config, path, expected)
+
+
+def _validate_changed_model_configs(
+    before: dict[str, Any], after: dict[str, Any], method: str
+) -> None:
+    """Catch unsupported Web model edits before a training job is created."""
+
+    import torch
+
+    def check_factory(factory, *args) -> None:
+        with torch.random.fork_rng(devices=[]):
+            factory(*args)
+
+    if method == "jocor":
+        if before.get("models") != after.get("models"):
+            from lnl_toolbox.training.multi_model_experiment import _build_member
+
+            for model in after.get("models", ()):
+                check_factory(_build_member, model, int(after.get("data", {}).get("num_classes", 10)))
+        return
+    parameters = _parameter_registry()["methods"].get(method, {}).get("parameters", {})
+    model_paths = {
+        str(path).removesuffix(".name")
+        for entries in parameters.values() if isinstance(entries, dict)
+        for path in entries if path == "model.name" or str(path).endswith(".model.name")
+    }
+    classes = int(after.get("data", {}).get("num_classes", 10))
+    for path in model_paths:
+        if path.startswith("dld.feature_extractor."):
+            continue  # Its separate source/adapter contract validates this model.
+        before_found, previous = _config_path_value(before, path)
+        after_found, model = _config_path_value(after, path)
+        if not after_found or (before_found and previous == model):
+            continue
+        if not isinstance(model, dict):
+            raise ValueError(f"模型配置必须是 mapping：{path}")
+        if method in {"binary_risk", "importance_reweighting"}:
+            from lnl_toolbox.training.binary_experiment import build_binary_model
+
+            dimension = int(after.get("data", {}).get("dimension", model.get("in_features", 2)))
+            check_factory(build_binary_model, dimension, model)
+        elif method == "cwd":
+            from lnl_toolbox.training.cwd_experiment import _build_model
+
+            check_factory(_build_model, model)
+        elif method == "fine":
+            from lnl_toolbox.training.fine_experiment import _build_fine_model
+
+            check_factory(_build_fine_model, model, classes)
+        elif method in {"cal", "ca2c", "l2rw", "mc_ldce"}:
+            from lnl_toolbox.training.reproduction_data import build_reproduction_model
+
+            candidate = dict(model)
+            if candidate.get("name") == "feature_mlp" and "input_dim" not in candidate:
+                candidate["input_dim"] = int(after.get("data", {}).get("dimension", 1))
+            check_factory(build_reproduction_model, candidate, after.get("data", {}), classes)
+        else:
+            from lnl_toolbox.training.experiment import build_model
+
+            candidate = dict(model)
+            if candidate.get("name") == "feature_mlp" and "input_dim" not in candidate:
+                candidate["input_dim"] = int(after.get("data", {}).get("dimension", 1))
+            check_factory(build_model, candidate, classes)
+
+
+def _validate_changed_data_noise_selectors(before: dict[str, Any], after: dict[str, Any]) -> None:
+    previous_data, current_data = before.get("data") or {}, after.get("data") or {}
+    if previous_data.get("name") != current_data.get("name"):
+        from lnl_toolbox.training.data_service import DATASETS
+
+        DATASETS.get(after["data"]["name"])
+    previous_noise, current_noise = before.get("noise") or {}, after.get("noise") or {}
+    if previous_noise.get("name") != current_noise.get("name"):
+        name = str(current_noise.get("name", "clean")).lower()
+        direct = {
+            "", "clean", "none", "native", "real_world", "external",
+            "pdl", "official_uniform_flip", "binary_asymmetric_rcn",
+            "asymmetric_rcn", "external_torch",
+        }
+        if name not in direct:
+            from lnl_toolbox.training.noisy_labels import _generated_spec
+
+            _generated_spec(after)
+
+
+def _validate_changed_training_selectors(
+    before: dict[str, Any], after: dict[str, Any], method: str
+) -> None:
+    """Use the actual optimizer/scheduler builders for changed Web fields."""
+
+    parameters = _parameter_registry()["methods"].get(method, {}).get("parameters", {})
+    paths = {
+        str(path).rsplit(".", 1)[0]
+        for entries in parameters.values() if isinstance(entries, dict)
+        for path in entries
+        if str(path).endswith(("optimizer.name", "scheduler.name"))
+    }
+    for path in paths:
+        before_found, previous = _config_path_value(before, path)
+        after_found, value = _config_path_value(after, path)
+        if not after_found or (before_found and previous == value):
+            continue
+        if not isinstance(value, dict):
+            raise ValueError(f"训练参数必须是 mapping：{path}")
+        import torch
+
+        with torch.random.fork_rng(devices=[]):
+            dummy = torch.nn.Linear(1, 1)
+        if path.endswith("optimizer"):
+            if method == "pcse" and path == "transition_stage.optimizer":
+                continue  # PCSE validates its two-learning-rate optimizer directly.
+            if method == "jocor":
+                from lnl_toolbox.training.multi_model_experiment import _build_optimizer
+
+                _build_optimizer(dummy.parameters(), value)
+            else:
+                from lnl_toolbox.training.experiment import build_optimizer
+
+                build_optimizer(dummy, value)
+        else:
+            name = str(value.get("name", "none")).lower()
+            if method == "mc_ldce" and path == "transition.scheduler" and name not in {"none", "multistep"}:
+                raise ValueError("MC-LDCE transition scheduler 只支持 none 或 multistep")
+            optimizer = torch.optim.SGD(dummy.parameters(), lr=0.01)
+            epochs = int(after.get("trainer", {}).get("epochs", 1))
+            if method == "cal" and path == "scheduler":
+                from lnl_toolbox.training.experiment import AlphaScaledScheduler
+
+                AlphaScaledScheduler(optimizer, value)
+            elif method == "jocor":
+                from lnl_toolbox.training.multi_model_experiment import _apply_epoch_optimizer_schedule
+
+                _apply_epoch_optimizer_schedule(optimizer, value, epoch=0, total_epochs=epochs)
+            else:
+                from lnl_toolbox.training.experiment import build_scheduler
+
+                build_scheduler(optimizer, value, epochs)
 
 
 def _assert_locked_parameters_unchanged(
     before: dict[str, Any], after: dict[str, Any], method: str
 ) -> None:
-    for path in _locked_registry_paths(method):
-        before_found, before_value = _config_path_value(before, path)
-        after_found, after_value = _config_path_value(after, path)
-        if before_found != after_found or before_value != after_value:
-            raise ValueError(f"锁定参数不能通过普通 WebUI 修改：{path}")
+    parameters = _parameter_registry()["methods"].get(method, {}).get("parameters", {})
+    for level, entries in parameters.items():
+        if not isinstance(entries, dict):
+            continue
+        for path in entries:
+            permission, reason, required = _parameter_edit_rule(after, method, str(path), level)
+            if permission not in {"fixed", "required", "derived"}:
+                continue
+            before_found, before_value = _config_path_value(before, str(path))
+            after_found, after_value = _config_path_value(after, str(path))
+            if permission == "fixed" and (
+                before_found != after_found or before_value != after_value
+            ):
+                raise ValueError(f"锁定参数不能通过普通 WebUI 修改：{path}")
+            if permission in {"required", "derived"} and (
+                not after_found or after_value != required
+            ):
+                raise ValueError(f"{path}：{reason}")
 
 
 def _paper_parameter_changes(
@@ -1486,14 +2188,14 @@ def _paper_parameter_changes(
         for path in paper:
             baseline_found, baseline_value = _config_path_value(baseline, str(path))
             current_found, current_value = _config_path_value(config, str(path))
-            if not baseline_found or not current_found:
+            if not baseline_found:
                 raise ValueError(f"论文参数路径不存在：{method}.{path}")
-            if current_value != baseline_value:
+            if not current_found or current_value != baseline_value:
                 changes.append(
                     {
                         "path": str(path),
                         "changed_from": baseline_value,
-                        "value": current_value,
+                        "value": current_value if current_found else None,
                     }
                 )
     return recipe_id, changes
@@ -1562,7 +2264,7 @@ def _save_config(payload: object) -> dict[str, object]:
         if not source.is_file():
             raise FileNotFoundError("来源 YAML 不存在")
         source_config = load_yaml(source)
-        source_method = _config_method(source_config)
+        source_method = _config_method(source_config, payload.get("recipe_hint", ""))
 
     if content is not None:
         if not isinstance(content, str) or not content.strip():
@@ -1595,11 +2297,15 @@ def _save_config(payload: object) -> dict[str, object]:
             if not field.get("editable", False):
                 raise ValueError(f"锁定参数不能通过普通 WebUI 修改：{path}")
             _set_config_path(parsed, path, _coerce_patch_value(field, patch.get("value")))
+        _synchronize_web_derived_parameters(parsed, method)
     method = source_method or _config_method(source_config or parsed, _config_method(parsed))
     if source_config is None:
         formal = _formal_registry_config(method)
         source_config = formal[1] if formal is not None else parsed
     _normalize_registry_numeric_fields(parsed, method)
+    from lnl_toolbox.core.config_schema import synchronize_experiment_seed
+
+    parsed = synchronize_experiment_seed(parsed)
     _assert_locked_parameters_unchanged(source_config, parsed, method)
     _record_paper_parameter_status(
         parsed,
@@ -1607,6 +2313,9 @@ def _save_config(payload: object) -> dict[str, object]:
         acknowledged=bool(payload.get("acknowledge_paper_impact", False)),
     )
     validate_config(parsed)
+    _validate_changed_data_noise_selectors(source_config, parsed)
+    _validate_changed_model_configs(source_config, parsed, method)
+    _validate_changed_training_selectors(source_config, parsed, method)
     dataset_alias = str(payload.get("dataset_alias") or "").strip()
     if dataset_alias:
         from lnl_toolbox.training.service import ExperimentService
@@ -2090,9 +2799,10 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 query = parse_qs(urlparse(self.path).query)
                 recipe_id = query.get("recipe", [""])[0]
                 path_value = query.get("path", [""])[0]
+                recipe_hint = query.get("recipe_hint", [""])[0]
                 _json_response(
                     self,
-                    _config_schema(recipe_id, path_value=path_value),
+                    _config_schema(recipe_id, path_value=path_value, recipe_hint=recipe_hint),
                 )
             except Exception as exc:
                 _json_response(self, {"error": str(exc)}, 400)
@@ -2394,19 +3104,44 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+class SingleInstanceHTTPServer(ThreadingHTTPServer):
+    """Refuse another listener on the same host/port, including on Windows."""
+
+    allow_reuse_address = False
+
+    def server_bind(self) -> None:
+        if os.name == "nt":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def serve(
     host: str = "127.0.0.1",
     port: int = 8765,
     *,
     open_browser: bool = False,
 ) -> None:
-    server = ThreadingHTTPServer((host, port), ConsoleHandler)
-    browser_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
-    url = f"http://{browser_host}:{port}/"
-    print(f"LNL web: {url}", flush=True)
-    if open_browser:
-        threading.Timer(0.25, webbrowser.open, args=(url,)).start()
+    # Reserve the port before the expensive warm-up.  A second launch must
+    # fail immediately instead of starting another request-serving process.
+    server = SingleInstanceHTTPServer((host, port), ConsoleHandler)
+    # Warm imports/catalogs before accepting browser requests.  Without this,
+    # the first compatibility request pays the cost of importing torch/
+    # torchvision and discovering every recipe while the UI displays a
+    # generic loading card.  Fail-soft so the server can still start when an
+    # optional training dependency is unavailable.
     try:
+        try:
+            from lnl_toolbox.training.service import ExperimentService  # noqa: F401
+
+            _web_recipe_catalog()
+            _web_paper_specs()
+        except Exception:
+            pass
+        browser_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+        url = f"http://{browser_host}:{port}/"
+        print(f"LNL web: {url}", flush=True)
+        if open_browser:
+            threading.Timer(0.25, webbrowser.open, args=(url,)).start()
         server.serve_forever()
     except KeyboardInterrupt:
         pass
@@ -2420,7 +3155,16 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--open", action="store_true", dest="open_browser")
     args = parser.parse_args(argv)
-    serve(args.host, args.port, open_browser=args.open_browser)
+    try:
+        serve(args.host, args.port, open_browser=args.open_browser)
+    except OSError as exc:
+        if exc.errno not in {errno.EADDRINUSE, 10048} and getattr(exc, "winerror", None) != 10048:
+            raise
+        print(
+            f"Web port {args.port} is already in use. Use the running service or stop the old instance first.",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
