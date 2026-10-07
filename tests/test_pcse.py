@@ -836,6 +836,15 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
         self.assertEqual(parsed_paper.transition_backend, 'paper_volmin')
         self.assertEqual(parsed_paper.transition_backend_config['lambda_volume'], 0.001)
 
+    def test_cifar10_reproduction_trains_its_own_pretrainer(self) -> None:
+        path = _pcse_workflow_ROOT / 'configs/reproduction/cifar10_pcse_reproduction.yaml'
+        config = yaml.safe_load(path.read_text(encoding='utf-8'))
+        self.assertEqual(config['pretraining_stage']['mode'], 'train')
+        self.assertEqual(config['pretraining_stage']['method'], 'cross_entropy')
+        self.assertEqual(config['noise']['mode'], 'generated')
+        self.assertNotIn('source', config['pretraining_stage'])
+        self.assertEqual(PCSEConfig.from_mapping(config).pretraining.mode, 'train')
+
     def test_external_checkpoint_config_is_strict_and_train_mode_unchanged(self) -> None:
         config = _pcse_workflow__load_smoke_config()
         self.assertEqual(PCSEConfig.from_mapping(config).pretraining.mode, 'train')

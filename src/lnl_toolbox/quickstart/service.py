@@ -25,7 +25,7 @@ from .models import (
     QuickStartNoiseSelection,
     QuickStartPlan,
 )
-from .templates import MethodTemplate, adapt_method_template, find_exact_reproduction, method_template_for_paper
+from .templates import MethodTemplate, adapt_method_template, find_exact_reproduction, method_template_for_paper, reference_train_size
 
 
 class _CachedDatasetService:
@@ -203,7 +203,8 @@ class QuickStartService:
             "clean_train_labels": capabilities.clean_train_labels.value,
             "noise_rate": capabilities.noise_rate.to_dict(),
             "status_source": (
-                "inspected" if report.profile.noise.status == capabilities.noise_status
+                "inspected" if not self.data_service.declarations(dataset_alias).noise_override
+                and report.profile.noise.status == capabilities.noise_status
                 and capabilities.noise_status.value != "unknown" else "declared"
             ),
         }
@@ -229,7 +230,8 @@ class QuickStartService:
                 {"key": item.key, "label": item.label, "description": item.description, "requires_rate": item.requires_rate}
                 for item in quick_start_noise_specs()
                 if item.key == "clean" or item in visible_synthetic_noise_specs()
-            ],
+            ] + ([{"key": "binary_asymmetric_rcn", "label": "二分类非对称噪声", "description": "分别设置正类与负类标签翻转概率。", "requires_rate": False}]
+                 if report.classes == 2 else []),
         }
 
     @staticmethod
@@ -376,6 +378,10 @@ class QuickStartService:
             dataset_adapter=str(profile_data.get("adapter", "")),
             noise_selection=noise_selection,
         )
+        if exact is not None:
+            original_count = reference_train_size(load_recipe_config(recipe_by_id(exact)))
+            if original_count is not None and report.train_samples != original_count:
+                exact = None
         if exact is not None:
             plan_id = self._plan_id(dataset_alias, paper.id)
             config = self.data_service.apply(

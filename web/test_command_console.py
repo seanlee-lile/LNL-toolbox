@@ -16,14 +16,14 @@ import command_console  # noqa: E402
 
 
 class CommandConsoleTest(unittest.TestCase):
-    def test_data_page_noise_status_edits_dataset_facts_without_progress_boxes(self):
+    def test_data_page_noise_rate_is_edited_per_dataset_row(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
         self.assertNotIn('function dataStepsHtml(', page)
         self.assertNotIn('class="data-steps"', page)
-        self.assertIn('datasetNoiseStatusHtml(selectedReport)', page)
-        self.assertIn('id="data-noise-status"', page)
-        self.assertIn('id="data-noise-save"', page)
-        self.assertIn('await saveDatasetDeclarations(declarations)', page)
+        self.assertIn('<th>带噪比例</th><th>编辑</th>', page)
+        self.assertIn('data-noise-edit=', page)
+        self.assertIn('data-noise-rate-value', page)
+        self.assertIn('await saveDatasetDeclarations(declarations, alias)', page)
         self.assertIn('await loadDatasetCompatibility(alias)', page)
 
     def test_web_server_refuses_second_listener_on_same_port(self):
@@ -71,7 +71,7 @@ class CommandConsoleTest(unittest.TestCase):
     def test_dataset_first_page_consumes_backend_compatibility_contract(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
         for marker in (
-            "数据集优先流程",
+            "数据集兼容性",
             "数据集信息",
             "需要确认的数据集信息",
             "选择正式论文配置",
@@ -329,22 +329,16 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertTrue(all(step["success"] for step in payload["steps"]))
         self.assertEqual(payload["guide"], "docs/LNL-Toolbox-简明操作教程.md")
 
-    def test_beginner_page_tracks_steps_and_inspects_before_resume(self):
+    def test_beginner_page_is_not_exposed(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn('fetch("/api/tutorial")', page)
-        self.assertIn("tutorialStepAvailable", page)
-        self.assertIn("tutorialRunningStep", page)
-        self.assertIn("inspectTutorialRun", page)
-        self.assertIn("已达到目标轮次，无需恢复", page)
-        self.assertIn("快速命令（跳过逐步教程）", page)
-        self.assertIn('"lnl doctor"', page)
-        self.assertIn("lnl list experiments --profile smoke --format json", page)
-        self.assertIn('class="context-scratch" href="/scratch"', page)
-        self.assertIn('control.replaceAll("__ID__", id)', page)
+        self.assertNotIn('fetch("/api/tutorial")', page)
+        self.assertNotIn('id: "beginner"', page)
+        self.assertNotIn('module:"beginner"', page)
+        self.assertNotIn('完整新手引导', page)
 
     def test_quick_start_is_first_entry_and_reuses_existing_execution_flow(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertLess(page.index('id: "quickstart"'), page.index('id: "beginner"'))
+        self.assertNotIn('id: "beginner"', page)
         self.assertIn('/assets/quick_start.js', page)
         self.assertIn('/assets/quick_start.css', page)
         self.assertIn('window.quickStartController.mount', page)
@@ -429,12 +423,21 @@ class CommandConsoleTest(unittest.TestCase):
             visible_seeds = [field["path"] for field in paper_schema["fields"]
                              if field["visible"] and (field["path"] == "seed" or field["path"].rsplit(".", 1)[-1].endswith("seed"))]
             self.assertEqual(visible_seeds, ["seed"], method)
+            self.assertTrue(all(not field["editable"] for field in paper_schema["fields"]
+                                if field["path"] != "seed" and field["path"].rsplit(".", 1)[-1].endswith("seed")), method)
         schema = command_console._config_schema("gce-cifar10-noise02-reproduction")
         fields = {field["path"]: field for field in schema["fields"]}
         self.assertTrue(fields["seed"]["visible"])
         self.assertFalse(fields["noise.seed"]["visible"])
+        self.assertFalse(fields["noise.seed"]["editable"])
         with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
             destination = Path(directory) / "one-seed.yaml"
+            with self.assertRaisesRegex(ValueError, "内部随机种子由 seed 自动生成"):
+                command_console._save_config({
+                    "recipe": "gce-cifar10-noise02-reproduction",
+                    "path": str(destination),
+                    "patches": [{"path": "noise.seed", "value": 17}],
+                })
             command_console._save_config({
                 "recipe": "gce-cifar10-noise02-reproduction",
                 "path": str(destination),
@@ -862,8 +865,8 @@ class CommandConsoleTest(unittest.TestCase):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
         self.assertIn('state.dataAction = "list";', page)
         self.assertIn('id="data-status-panel"', page)
-        self.assertIn('dataTableHtml(reports) + datasetNoiseStatusHtml(selectedReport)', page)
-        for heading in ("数据集", "状态", "位置", "Train / Test", "训练验证"):
+        self.assertIn('dataTableHtml(reports) +', page)
+        for heading in ("数据集", "状态", "位置", "Train / Test", "训练验证", "带噪比例", "编辑"):
             self.assertIn(f"<th>{heading}</th>", page)
 
     def test_dataset_training_flow_and_feedback_are_scoped_to_current_action(self):
@@ -1081,6 +1084,130 @@ class CommandConsoleTest(unittest.TestCase):
                     "overwrite": False,
                 })
 
+    def test_lend_can_save_an_independent_rate_without_changing_paper_defaults(self):
+        from lnl_toolbox.catalog import load_yaml
+        from lnl_toolbox.training.experiment import build_scheduler
+        import torch
+
+        recipe = "lend-cifar10-reproduction"
+        fields = {field["path"]: field for field in command_console._config_schema(recipe)["fields"]}
+        self.assertTrue(fields["scheduler.lr_values"]["editable"])
+        self.assertIsNone(fields["scheduler.lr_values"]["value"])
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            destination = Path(directory) / "lend-custom-rates.yaml"
+            command_console._save_config({
+                "path": str(destination), "recipe": recipe,
+                "patches": [{"path": "scheduler.lr_values", "value": [0.007]}],
+                "acknowledge_paper_impact": True,
+            })
+            custom = load_yaml(destination)
+            formal = load_yaml(command_console.ROOT / "configs/experiment/lend_cifar10_reproduction.yaml")
+            self.assertEqual(custom["scheduler"]["lr_values"], [0.007])
+            self.assertNotIn("lr_values", formal["scheduler"])
+            self.assertEqual(formal["optimizer"]["lr"], 0.05)
+            parameter = torch.nn.Parameter(torch.tensor(1.0))
+            optimizer = torch.optim.SGD([parameter], lr=custom["optimizer"]["lr"])
+            scheduler = build_scheduler(optimizer, custom["scheduler"], 200)
+            for _ in range(100):
+                optimizer.step()
+                scheduler.step()
+            self.assertAlmostEqual(optimizer.param_groups[0]["lr"], 0.007)
+            with self.assertRaisesRegex(ValueError, "one value per milestone"):
+                command_console._save_config({
+                    "path": str(Path(directory) / "lend-invalid-rates.yaml"),
+                    "recipe": recipe,
+                    "patches": [{"path": "scheduler.lr_values", "value": [0.007, 0.003]}],
+                    "acknowledge_paper_impact": True,
+                })
+
+    def test_all_formal_stage_schedules_accept_independent_rate_patches(self):
+        from lnl_toolbox.catalog import load_yaml
+
+        bindings = command_console._parameter_registry()["formal_recipe_bindings"]
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            for method, recipe in bindings.items():
+                schema = command_console._config_schema(recipe)
+                fields = {field["path"]: field for field in schema["fields"]}
+                rate_paths = [path for path in fields if path.endswith(".scheduler.lr_values")
+                              or path == "scheduler.lr_values" or ".scheduler." in path and path.endswith(".lr_values")]
+                if not rate_paths:
+                    continue
+                patches = []
+                for path in rate_paths:
+                    prefix = path.removesuffix(".lr_values")
+                    nodes = fields.get(prefix + ".step_milestones") or fields.get(prefix + ".milestones")
+                    self.assertIsNotNone(nodes, (method, path))
+                    self.assertTrue(fields[path]["editable"], (method, path))
+                    patches.append({"path": path, "value": [0.007] * len(nodes["value"])})
+                destination = Path(directory) / (method + ".yaml")
+                command_console._save_config({
+                    "path": str(destination), "recipe": recipe, "patches": patches,
+                    "acknowledge_paper_impact": True,
+                })
+                saved = load_yaml(destination)
+                for patch in patches:
+                    value = saved
+                    for part in patch["path"].split("."):
+                        value = value[part]
+                    self.assertEqual(value, patch["value"], (method, patch["path"]))
+
+    def test_all_formal_stage_schedules_can_be_disabled_for_fixed_learning_rate(self):
+        bindings = command_console._parameter_registry()["formal_recipe_bindings"]
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            for method, recipe in bindings.items():
+                schema = command_console._config_schema(recipe)
+                fields = {field["path"]: field for field in schema["fields"]}
+                patches = []
+                for path, field in fields.items():
+                    if not field["editable"] or not field["visible"]:
+                        continue
+                    if path.endswith("scheduler.name") and field["value"] != "none":
+                        patches.append({"path": path, "value": "none"})
+                    if path == "scheduler.step_milestones" and field["value"]:
+                        patches.append({"path": path, "value": []})
+                if not patches:
+                    continue
+                command_console._save_config({
+                    "path": str(Path(directory) / (method + "-fixed.yaml")),
+                    "recipe": recipe, "patches": patches,
+                    "acknowledge_paper_impact": True,
+                })
+
+    def test_disabling_step_and_epoch_schedules_saves_fixed_learning_rates(self):
+        from lnl_toolbox.catalog import load_yaml
+
+        cases = (
+            ("l2rw-cifar10-reproduction", [
+                {"path": "scheduler.step_milestones", "value": []},
+                {"path": "optimizer.lr", "value": 0.05},
+            ]),
+            ("gce-cifar10-noise02-reproduction", [
+                {"path": "scheduler.name", "value": "none"},
+                {"path": "optimizer.lr", "value": 0.005},
+            ]),
+            ("cwd-cifar10-reproduction", [
+                {"path": "scheduler.name", "value": "none"},
+                {"path": "optimizer.lr", "value": 0.004},
+            ]),
+            ("cal-cifar10-reproduction", [
+                {"path": "scheduler.name", "value": "none"},
+                {"path": "optimizer.lr", "value": 0.03},
+            ]),
+        )
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            for recipe, patches in cases:
+                destination = Path(directory) / (recipe + ".yaml")
+                command_console._save_config({
+                    "path": str(destination), "recipe": recipe, "patches": patches,
+                    "acknowledge_paper_impact": True,
+                })
+                config = load_yaml(destination)
+                self.assertEqual(config["optimizer"]["lr"], patches[-1]["value"])
+                if recipe.startswith("l2rw"):
+                    self.assertEqual(config["scheduler"]["step_milestones"], [])
+                else:
+                    self.assertEqual(config["scheduler"]["name"], "none")
+
     def test_yaml_editor_uses_registry_numeric_types_and_preserves_nullable_values(self):
         schema = command_console._config_schema("gce-cifar10-noise02-reproduction")
         fields = {field["path"]: field for field in schema["fields"]}
@@ -1223,6 +1350,14 @@ class CommandConsoleTest(unittest.TestCase):
         registry = command_console._parameter_registry()
         self.assertEqual(str(registry["registry_version"]), "1.2.2")
         self.assertIn("permission_policy_revision", registry)
+        self.assertEqual(
+            registry["formal_recipe_bindings"]["t_revision"],
+            "cifar10-t-revision-sym20-reproduction",
+        )
+        self.assertEqual(
+            registry["formal_recipe_bindings"]["ca2c"],
+            "ca2c-cifar100-reproduction",
+        )
 
     def test_parameter_display_policy_separates_runtime_fields_and_resources(self):
         schema = command_console._config_schema("gce-cifar10-noise02-reproduction")
@@ -1238,14 +1373,17 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertTrue(all(field["research_category"] == "resource" for field in resource_fields))
         # A noise realization changes the data condition, not the runtime
         # implementation. It must be discoverable in the data/noise section.
-        self.assertEqual(fields["noise.seed"]["research_category"], "data")
-        self.assertEqual(fields["noise.seed"]["research_group"], "data")
+        self.assertEqual(fields["noise.seed"]["research_category"], "")
+        self.assertEqual(fields["noise.seed"]["research_group"], "")
 
         policy = command_console._parameter_registry()["parameter_display_policy"]
         for field in fields.values():
             path = field["path"]
             expected_presentation, _ = command_console._parameter_presentation(path, "gce")
-            self.assertEqual(field["visible"], expected_presentation != "hidden", path)
+            expected_visible = expected_presentation != "hidden" or (
+                field["level"] == "locked" and path.endswith(".name")
+            )
+            self.assertEqual(field["visible"], expected_visible, path)
             self.assertEqual(field["presentation"], expected_presentation, path)
         self.assertEqual(command_console._parameter_presentation("data.root", "gce")[0], "hidden")
 
@@ -1278,7 +1416,7 @@ class CommandConsoleTest(unittest.TestCase):
             "resource_paths_by_method", "hidden_paths_by_method",
         ):
             self.assertEqual(set(display_policy[policy_key]), set(registry["formal_recipe_bindings"]))
-        self.assertEqual(sum(map(len, display_policy["common_paths_by_method"].values())), 297)
+        self.assertEqual(sum(map(len, display_policy["common_paths_by_method"].values())), 280)
         self.assertEqual(sum(map(len, display_policy["selection_paths_by_method"].values())), 28)
         self.assertEqual(sum(map(len, display_policy["resource_paths_by_method"].values())), 4)
         self.assertEqual(set(research_view["method_paths"]), set(command_console._parameter_registry()["methods"]))
@@ -1303,6 +1441,13 @@ class CommandConsoleTest(unittest.TestCase):
             )
             fields = {field["path"]: field for field in schema["fields"]}
             self.assertEqual(len(fields), len(schema["fields"]), paper.id)
+            for path in (
+                "data.max_train_samples", "data.max_validation_samples", "data.max_test_samples"
+            ):
+                if path in fields:
+                    self.assertFalse(fields[path]["visible"], (paper.id, path))
+                    self.assertEqual(fields[path]["presentation"], "hidden", (paper.id, path))
+                self.assertNotIn(path, display_policy["common_paths_by_method"][schema["method"]])
             for presentation_key, expected_presentation in (
                 ("common_paths_by_method", "common"),
                 ("selection_paths_by_method", "selection"),
@@ -1432,6 +1577,34 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertEqual(l2rw["trainer.max_steps"]["display_group"], "default")
         self.assertIn("更新次数", l2rw["trainer.max_steps"]["note"])
         self.assertEqual(l2rw["trainer.max_steps"]["value"], 80000)
+
+    def test_paper_split_counts_are_default_editors_with_original_fraction(self):
+        bindings = command_console._parameter_registry()["formal_recipe_bindings"]
+        split_paths = {"data.validation_size", "data.num_val", "data.num_clean", "warmup.noisy_validation_size"}
+        for method, recipe in bindings.items():
+            for field in command_console._config_schema(recipe)["fields"]:
+                if field["path"] in split_paths and field["visible"]:
+                    self.assertEqual(field["display_group"], "default", (method, field["path"]))
+                    if method != "importance_reweighting":
+                        self.assertIn("split_reference", field, (method, field["path"]))
+        l2rw = {field["path"]: field for field in command_console._config_schema(bindings["l2rw"])["fields"]}
+        self.assertEqual(l2rw["data.num_val"]["split_reference"], {"count": 5000, "total": 50000})
+
+    def test_adapted_schema_keeps_original_split_fraction(self):
+        from copy import deepcopy
+        import yaml
+        from lnl_toolbox.catalog import load_yaml, recipe_by_id
+
+        recipe = "l2rw-cifar10-reproduction"
+        config = deepcopy(load_yaml(recipe_by_id(recipe, command_console.ROOT).config_path))
+        config["data"]["num_val"] = 300
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            generated = Path(directory) / "mini-l2rw.yaml"
+            generated.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+            schema = command_console._config_schema(path_value=str(generated), recipe_hint=recipe)
+        field = next(field for field in schema["fields"] if field["path"] == "data.num_val")
+        self.assertEqual(field["value"], 300)
+        self.assertEqual(field["split_reference"], {"count": 5000, "total": 50000})
 
     def test_all_formal_parameter_labels_and_help_are_concise(self):
         bindings = command_console._parameter_registry()["formal_recipe_bindings"]

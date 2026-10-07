@@ -257,7 +257,7 @@ class DatasetProfile:
 
 @dataclass(frozen=True, slots=True)
 class DatasetDeclarations:
-    """Persisted declarations for facts that inspection cannot determine.
+    """Persisted settings, including explicit user overrides of noise metadata.
 
     ``method_noise_rate_prior`` and ``pretrained_roles`` are retained only for
     reading old catalogs.  New compatibility resolution deliberately ignores
@@ -273,8 +273,11 @@ class DatasetDeclarations:
     clean_labels_location: str | None = None
     clean_labels_provenance: str | None = None
     semantic_notes: str | None = None
+    noise_override: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.noise_override, bool):
+            raise ValueError("noise_override must be a boolean")
         object.__setattr__(self, "clean_train_labels", KnowledgeState(self.clean_train_labels))
         object.__setattr__(self, "noise_status", NoiseStatus(self.noise_status))
         object.__setattr__(self, "noise_origin", NoiseOrigin(self.noise_origin))
@@ -301,6 +304,7 @@ class DatasetDeclarations:
             "clean_labels_location": self.clean_labels_location,
             "clean_labels_provenance": self.clean_labels_provenance,
             "semantic_notes": self.semantic_notes,
+            "noise_override": self.noise_override,
         }
 
     @classmethod
@@ -318,6 +322,7 @@ class DatasetDeclarations:
             clean_labels_location=value.get("clean_labels_location"),
             clean_labels_provenance=value.get("clean_labels_provenance"),
             semantic_notes=value.get("semantic_notes"),
+            noise_override=value.get("noise_override", False),
         )
 
 
@@ -411,17 +416,29 @@ def resolve_dataset_capabilities(
         profile.clean_train_labels, declared.clean_train_labels, "clean_train_labels"
     )
     status = profile.noise.status
-    if declared.noise_status is not NoiseStatus.UNKNOWN:
+    if declared.noise_override:
+        status = declared.noise_status
+    elif declared.noise_status is not NoiseStatus.UNKNOWN:
         if status is not NoiseStatus.UNKNOWN and status is not declared.noise_status:
             raise DatasetDeclarationConflict("noise_status declaration conflicts with inspected data")
         status = declared.noise_status
     origin = profile.noise.origin
-    if declared.noise_origin is not NoiseOrigin.UNKNOWN:
+    if declared.noise_override:
+        origin = declared.noise_origin
+    elif declared.noise_origin is not NoiseOrigin.UNKNOWN:
         if origin is not NoiseOrigin.UNKNOWN and origin is not declared.noise_origin:
             raise DatasetDeclarationConflict("noise_origin declaration conflicts with inspected data")
         origin = declared.noise_origin
     rate = profile.noise.rate
-    if declared.noise_rate.status is not NoiseRateStatus.UNKNOWN:
+    if declared.noise_override:
+        rate = declared.noise_rate
+        if status is NoiseStatus.CLEAN:
+            if rate.value is not None and rate.value > 0:
+                raise ValueError("clean dataset cannot declare a nonzero noise rate")
+            rate = NoiseRateInfo(NoiseRateStatus.NOT_APPLICABLE)
+        elif status is NoiseStatus.UNKNOWN:
+            rate = NoiseRateInfo()
+    elif declared.noise_rate.status is not NoiseRateStatus.UNKNOWN:
         if rate.status not in {NoiseRateStatus.UNKNOWN, NoiseRateStatus.NOT_APPLICABLE} and rate != declared.noise_rate:
             raise DatasetDeclarationConflict("noise_rate declaration conflicts with inspected data")
         if rate.status is NoiseRateStatus.NOT_APPLICABLE and status is NoiseStatus.CLEAN:

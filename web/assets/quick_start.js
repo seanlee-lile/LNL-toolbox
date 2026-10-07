@@ -11,11 +11,13 @@
     nativeRateMode: "unknown",
     methods: [],
     selectedPaperId: "",
+    pendingPaper: null,
     methodInputs: {},
     labelsConfirmed: false,
     seedTouched: false,
     plan: null,
     planSchema: null,
+    scheduleStash: {},
     parameterDraft: {},
     segmentedPaths: {},
     parameterError: "",
@@ -38,6 +40,74 @@
   function statusLabel(status) {
     return ({ready:"基础条件满足", needs_input:"需要补充输入", unsupported:"当前实现不适用", metadata_error:"兼容性元数据不完整"})[status] || status;
   }
+  function mountExternalResources(node, source, openPaper, onDownloaded, compact = false) {
+    if (!node) return;
+    const query = new URLSearchParams(source);
+    let timer = null;
+    let wasDownloading = false;
+    async function refresh() {
+      if (!node.isConnected) { if (timer) clearTimeout(timer); return; }
+      try {
+        const response = await fetch("/api/external-resources?" + query);
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "无法检查外部数据");
+        if (!node.isConnected) return;
+        const items = payload.resources || [];
+        const downloading = items.some(function (item) { return item.status === "downloading"; });
+        const completed = wasDownloading && !downloading && items.every(function (item) { return item.ready; });
+        wasDownloading = downloading;
+        node.innerHTML = items.length ? '<div class="' + (compact ? 'qs-feedback' : 'guide-card') + '">' + (compact ? '' : '<h3>外部数据</h3>') + items.map(function (item) {
+          const label = item.ready ? "已就绪" : item.status === "downloading" ? "正在下载…" : item.status === "failed" ? "下载失败" : "尚未准备";
+          return '<div><strong>' + (compact ? '外部数据 ' : '') + esc(item.title) + '：' + label + '</strong>' + (compact ? '' : '<p class="helper">' + esc(item.note) + '</p><p>文件放置路径：<code style="overflow-wrap:anywhere">' + esc(item.path) + '</code></p>') +
+            (item.error ? '<p class="status failed">' + esc(item.error) + '</p>' : '') +
+            '<div class="actions">' + (!item.ready && item.downloadable ? '<button type="button" data-external-download="' + esc(item.id) + '"' + (item.status === "downloading" ? ' disabled' : '') + '>一键下载</button>' : '') +
+            (item.url && !compact ? '<a href="' + esc(item.url) + '" target="_blank" rel="noreferrer">自行下载</a>' : '') +
+            (openPaper && !item.ready ? '<button type="button" class="secondary" data-external-paper>前往论文栏查看准备说明</button>' : '') + '</div></div>';
+        }).join('') + '<button type="button" class="secondary" data-external-refresh>刷新状态</button></div>' : '';
+        node.querySelector("[data-external-refresh]")?.addEventListener("click", refresh);
+        node.querySelectorAll("[data-external-paper]").forEach(function (button) { button.onclick = openPaper; });
+        node.querySelectorAll("[data-external-download]").forEach(function (button) {
+          button.onclick = async function () {
+            button.disabled = true;
+            button.textContent = "正在开始下载…";
+            try {
+              const result = await fetch("/api/external-resources/download", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(Object.assign({}, source, {resource:button.dataset.externalDownload}))});
+              const body = await result.json();
+              if (!result.ok) throw new Error(body.error || "下载失败");
+              wasDownloading = true;
+              await refresh();
+            } catch (error) {
+              if (!node.isConnected) return;
+              button.disabled = false;
+              button.textContent = "重试下载";
+              const message = document.createElement("p");
+              message.className = "status failed";
+              message.textContent = "下载失败：" + error.message + "。请前往论文栏查看下载链接和放置路径。";
+              node.appendChild(message);
+            }
+          };
+        });
+        if (timer) clearTimeout(timer);
+        if (downloading) timer = setTimeout(refresh, 1000);
+        if (completed && onDownloaded) onDownloaded();
+      } catch (error) {
+        if (!node.isConnected) return;
+        node.replaceChildren();
+        const message = document.createElement("p");
+        message.textContent = "外部数据检查失败：" + error.message;
+        node.appendChild(message);
+        if (openPaper) {
+          const button = document.createElement("button");
+          button.textContent = "前往论文栏";
+          button.onclick = openPaper;
+          node.appendChild(button);
+        }
+      }
+    }
+    node.textContent = "正在检查外部数据…";
+    refresh();
+  }
+  window.paperExternalResources = {mount:mountExternalResources};
   function beginLoading(message) {
     state.loading = true;
     state.loadingMessage = message || "正在处理…";
@@ -124,15 +194,17 @@
       '<label class="qs-noise-choice"><input id="qs-add-noise" type="checkbox"' + (addNoise ? ' checked' : '') + '>是否添加人工标签噪声？</label>' +
       (addNoise ? '<label>加噪类型<select id="qs-noise">' + syntheticOptions.map(function (item) { return '<option value="' + esc(item.key) + '"' + (item.key === selected?.key ? ' selected' : '') + '>' + esc(item.label) + '</option>'; }).join("") + '</select></label>' +
         (selected?.description ? '<p class="helper">' + esc(selected.description) + '</p>' : '') +
-        (selected?.requires_rate ? '<label>人工噪声率<input id="qs-rate" type="number" min="0" max="1" step="0.01" value="' + esc(state.noiseSelection.rate == null ? "0.2" : state.noiseSelection.rate) + '"></label><p class="helper">这是新生成的错误标签比例，不是数据集原本的噪声率。</p>' : '') : '<p class="helper">不加噪：按登记的干净标签直接训练；不需要噪声率。</p>');
+        (selected?.key === "binary_asymmetric_rcn" ? '<div class="qs-noise-inputs"><label>正类翻转率<input id="qs-rho-positive" type="number" min="0" max="1" step="0.01" value="' + esc(state.noiseSelection.rho_positive ?? 0.2) + '"></label><label>负类翻转率<input id="qs-rho-negative" type="number" min="0" max="1" step="0.01" value="' + esc(state.noiseSelection.rho_negative ?? 0.1) + '"></label></div><p class="helper">分别表示真实正类被标成负类、真实负类被标成正类的概率；两者之和必须小于 1。</p>' :
+        selected?.requires_rate ? '<label>人工噪声率<input id="qs-rate" type="number" min="0" max="1" step="0.01" value="' + esc(state.noiseSelection.rate == null ? "0.2" : state.noiseSelection.rate) + '"></label><p class="helper">这是新生成的错误标签比例，不是数据集原本的噪声率。</p>' : '') : '<p class="helper">不加噪：按登记的干净标签直接训练；不需要噪声率。</p>');
     const unknownMessage = '<div class="qs-feedback qs-warning"><strong>训练标签的干净性尚不能确认</strong><p>现有数据资料不足以判断其是否含噪，不能默认它是干净数据并提供人工加噪。可先在“数据集”中补充有依据的标签事实；也可以只按当前观测标签继续检查方法。</p><button type="button" id="qs-open-dataset-facts" class="secondary">查看数据集事实</button> <button type="button" id="qs-confirm-labels" class="secondary">按当前标签继续</button></div>';
-    return '<section class="qs-step"><h3>2. 标签噪声</h3>' + (native ? noisy : unknown || state.noise.dataset_state === "unknown" ? unknownMessage : clean) +
+    return '<section id="qs-noise-step" class="qs-step"><h3>2. 标签噪声</h3>' + (native ? noisy : unknown || state.noise.dataset_state === "unknown" ? unknownMessage : clean) +
       '<label>实验随机种子<input id="qs-seed" type="number" min="0" step="1" value="' + esc(state.noiseSelection.seed == null ? "1" : state.noiseSelection.seed) + '"></label><p class="helper">同一个种子用于本次实验的数据划分、人工加噪（若启用）和其他随机步骤。</p></section>';
   }
   function methodCard(item) {
     const selected = item.paper_id === state.selectedPaperId ? " selected" : "";
     const selectable = item.status === "ready" || item.status === "needs_input";
-    return '<button type="button" class="qs-method-card qs-status-' + esc(item.status) + selected + '" data-paper="' + esc(item.paper_id) + '"' + (selectable ? "" : ' disabled aria-disabled="true"') + '><strong>' + esc(item.acronym) + '</strong><span>' + esc(item.title) + '</span><small>' + esc(item.venue) + ' ' + esc(item.year) + ' · ' + esc(statusLabel(item.status)) + '</small><p>' + esc(item.summary) + '</p>' + (item.reasons && item.reasons.length ? '<small>' + esc(item.reasons.join("；")) + '</small>' : "") + '</button>';
+    const reasons = item.status === "needs_input" ? "选择后查看需要补充的条件" : (item.reasons || []).join("；");
+    return '<button type="button" class="qs-method-card qs-status-' + esc(item.status) + selected + '" data-paper="' + esc(item.paper_id) + '"' + (selectable ? "" : ' disabled aria-disabled="true"') + '><strong>' + esc(item.acronym) + '</strong><span>' + esc(item.title) + '</span><small>' + esc(item.venue) + ' ' + esc(item.year) + ' · ' + esc(statusLabel(item.status)) + '</small><p>' + esc(item.summary) + '</p>' + (reasons ? '<small>' + esc(reasons) + '</small>' : "") + '</button>';
   }
   function renderMethods() {
     if (!state.dataset || !state.methods.length) return "";
@@ -154,23 +226,59 @@
     const unresolved = plan.required_user_inputs || [];
     const fields = [];
     const manual = [];
+    let needsNoiseSelection = false;
+    let needsExternalLabels = false;
+    let needsPrior = false;
     unresolved.forEach(function (name) {
       if (name === "noise_rate_prior") {
-        fields.push('<label>方法噪声率先验<input class="qs-required-input" data-input-key="noise_rate_prior" type="number" min="0" max="1" step="0.01" value="' + esc(state.methodInputs.noise_rate_prior || "") + '"></label>');
+        needsPrior = true;
+        return;
+      }
+      if (name === "config:requires_external_noise_labels") {
+        needsExternalLabels = true;
         return;
       }
       const paths = pathMap[name] || [];
       if (!paths.length) { manual.push(name); return; }
       paths.forEach(function (path) {
         const key = path.join(".");
-        fields.push('<label>' + esc(key) + '<input class="qs-required-input" data-input-key="' + esc(key) + '" value="' + esc(state.methodInputs[key] == null ? "" : state.methodInputs[key]) + '" placeholder="输入数字、字符串或 JSON"></label>');
+        if (["noise.name", "noise.rho_positive", "noise.rho_negative"].includes(key)) {
+          needsNoiseSelection = true;
+          return;
+        }
+        const labels = {
+          "risk.rho_positive":"正类标签翻转率", "risk.rho_negative":"负类标签翻转率",
+          "pipeline.transition_estimator.matrix":"当前噪声的类别转移矩阵（K×K）",
+          "transition.matrix":"当前噪声的类别转移矩阵（K×K）",
+          "transition.artifact":"转移矩阵文件路径",
+          "trusted_validation.source":"可信验证样本来源",
+          "trusted_validation.manifest":"可信验证样本清单路径",
+          "pipeline.weight_provider.artifact_path":"Mentor 网络权重文件路径"
+        };
+        const label = labels[key];
+        if (!label) { manual.push("请在论文配置中补充该方法的专用输入"); return; }
+        const value = state.methodInputs[key] == null ? "" : state.methodInputs[key];
+        if (key.endsWith(".matrix")) {
+          fields.push('<label>' + label + '<textarea class="qs-required-input" data-input-key="' + esc(key) + '" placeholder="按类别顺序填写矩阵，例如 [[0.8,0.2],[0.2,0.8]]">' + esc(value) + '</textarea><small>只能填写与当前噪声类型、比例和类别顺序相符的矩阵；不能沿用另一种噪声的论文矩阵。</small></label>');
+        } else {
+          fields.push('<label>' + label + '<input class="qs-required-input" data-input-key="' + esc(key) + '" value="' + esc(value) + '" placeholder="请填写有依据的值"></label>');
+        }
       });
     });
+    if (needsPrior && !needsNoiseSelection) {
+      fields.unshift('<label>方法使用的噪声率估计值<input class="qs-required-input" data-input-key="noise_rate_prior" type="number" min="0" max="1" step="0.01" value="' + esc(state.methodInputs.noise_rate_prior || "") + '"></label>');
+    }
     const inputs = fields.length ? '<div class="qs-feedback qs-warning"><strong>补充方法输入</strong><div class="qs-required-inputs">' + fields.join("") + '</div><button type="button" id="qs-apply-inputs" class="secondary">应用并重新检查</button></div>' : "";
-    const manualNote = manual.length ? '<div class="qs-feedback qs-warning">以下条件属于数据集事实或外部产物，不能在 Quick Start 中伪造：' + esc(manual.join("、")) + '。请先在“本地数据集”或 YAML 编辑器中补齐。</div>' : "";
+    const noisePrompt = needsNoiseSelection ? '<div class="qs-feedback qs-warning">请先在第 2 步选择标签噪声，并填写该噪声类型需要的比例。<button type="button" id="qs-back-to-noise" class="secondary">返回第 2 步设置标签噪声</button></div>' : "";
+    const externalChoice = state.noiseSelection.kind === "synthetic" ? "第 2 步选择的人工噪声不能替代该文件；原论文配置中的文件路径和标签字段也不能用于另一种噪声。" : "当前的标签选择没有提供这组外部标签；不能把干净标签或未知来源的带噪标签当作该文件。";
+    const externalPrompt = needsExternalLabels ? '<div class="qs-feedback qs-warning">CAL 当前实现需要与训练样本逐一对应的外部干净／带噪标签文件。' + externalChoice + '请在“论文”的外部数据栏目准备文件，并使用匹配该文件的实验配置。<button type="button" id="qs-open-paper-resources" class="secondary">查看论文外部数据</button></div>' : "";
+    const manualLabels = {clean_train_labels:"可核实的干净训练标签", dataset_noise_rate:"数据集原始噪声率", noise_manifest:"与当前样本对应的噪声记录", method_requirements:"方法兼容性资料"};
+    const manualNote = manual.length ? '<div class="qs-feedback qs-warning">还缺少不能凭空生成的资料：' + esc(Array.from(new Set(manual.map(function (name) { return manualLabels[name] || (name.startsWith("pretrained:") ? "预训练模型文件" : name.startsWith("请在") ? name : "方法专用输入"); }))).join("、")) + '。请在数据集或论文配置中核对。</div>' : "";
     const canRun = plan.status === "ready" && state.planSchema && !state.parameterError;
-    const problem = plan.status === "ready" ? "" : '<div class="qs-feedback qs-warning"><strong>运行前还需处理</strong><p>' + esc(plan.summary) + '</p></div>';
-    return '<section class="qs-step"><h3>4. 运行计划</h3>' + problem + inputs + manualNote + renderPlanParameters() + '<div class="qs-actions"><button type="button" id="qs-dry" class="secondary" ' + (canRun ? "" : "disabled") + '>预演</button><button type="button" id="qs-run" class="primary" ' + (canRun ? "" : "disabled") + '>确认并开始训练</button></div></section>';
+    const details = unresolved.length ? [] : (plan.details || []);
+    const problem = plan.status === "ready" ? "" : '<div class="qs-feedback qs-warning"><strong>运行前还需处理</strong><p>' + esc(unresolved.length ? "请按下方提示补齐当前方法的条件。" : plan.summary) + '</p>' + details.map(function (detail) { return '<p>' + esc(detail) + '</p>'; }).join("") + '</div>';
+    const transitionNote = plan.status === "ready" && state.selectedPaperId === "loss-correction" && ["symmetric", "pairflip", "binary_asymmetric_rcn"].includes(state.noiseSelection.key) ? '<p class="qs-feedback">原论文配置的转移矩阵不适用于当前噪声；已按第 2 步的类型、比例和当前类别数生成对应矩阵，原 Recipe 未改动。</p>' : "";
+    return '<section class="qs-step"><h3>4. 运行计划</h3>' + problem + noisePrompt + externalPrompt + inputs + manualNote + transitionNote + renderPlanParameters() + '<div class="qs-actions"><button type="button" id="qs-dry" class="secondary" ' + (canRun ? "" : "disabled") + '>预演</button><button type="button" id="qs-run" class="primary" ' + (canRun ? "" : "disabled") + '>确认并开始训练</button></div></section>';
   }
 
   function parameterValue(field) {
@@ -178,7 +286,10 @@
       ? state.parameterDraft[field.path] : field.value;
   }
   function renderParameterField(field, segmentable) {
+    segmentable = Boolean(segmentable && field.editable && field.display_group !== "restricted");
     const value = parameterValue(field);
+    const currentTrainCount = Number(state.dataset?.train_size);
+    const split = field.split_reference && Number.isInteger(currentTrainCount) && currentTrainCount > 0;
     const selectedDataset = field.path === "data.name";
     const readonly = !field.editable || selectedDataset;
     const label = selectedDataset ? "当前数据集" : field.label || field.presentation_label || field.path;
@@ -189,10 +300,12 @@
       control = '<textarea data-qs-param="' + esc(field.path) + '"' + (readonly ? ' disabled' : '') + '>' + esc(JSON.stringify(value)) + '</textarea>';
     } else {
       const shown = selectedDataset ? state.dataset.alias : value == null ? "" : value;
-      control = '<input type="' + (field.kind === "number" ? "number" : "text") + '" value="' + esc(shown) + '" data-qs-param="' + esc(field.path) + '"' + (readonly ? ' disabled' : '') + '>';
+      control = '<input type="' + (field.kind === "number" ? "number" : "text") + '" value="' + esc(shown) + '" data-qs-param="' + esc(field.path) + '"' + (split ? ' min="0" max="' + esc(currentTrainCount - 1) + '" step="1"' : '') + (readonly ? ' disabled' : '') + '>';
     }
     const noteText = segmentable ? '勾选后在上方分段表中编辑。' : readonly && field.lock_reason ? field.lock_reason : field.note;
-    const note = noteText ? '<small>' + esc(noteText) + '</small>' : '';
+    if (split) control = '<div class="qs-split-value">' + control + '<span>/ ' + esc(currentTrainCount) + '</span></div>';
+    const paperSplit = field.split_reference ? '<small>原论文配置：' + esc(field.split_reference.count) + ' / ' + esc(field.split_reference.total) + (split && currentTrainCount !== field.split_reference.total ? '；当前值按相同比例换算并取整。' : '') + '</small>' : '';
+    const note = paperSplit + (noteText ? '<small>' + esc(noteText) + '</small>' : '');
     if (segmentable) {
       return '<div class="qs-parameter-field"><div class="qs-parameter-title"><strong>' + esc(label) + '</strong><label class="qs-segment-choice"><input type="checkbox" data-qs-segment-param="' + esc(field.path) + '">加入分段表</label></div>' + control + note + '</div>';
     }
@@ -226,6 +339,39 @@
     return allFields.find(function (field) { return field.path === before + "optimizer." + after + "lr"; }) ||
       allFields.find(function (field) { return field.path.startsWith(before + "optimizer.") && field.path.endsWith("_lr"); });
   }
+  function scheduleEnabled(group) {
+    const name = String(scheduleValue(group.fields.find(function (field) { return field.path === group.prefix + ".name"; })) || "none");
+    const steps = group.fields.find(function (field) { return field.path === group.prefix + ".step_milestones"; });
+    return steps ? scheduleMilestones(steps).length > 0 : name !== "none";
+  }
+  function setScheduleEnabled(prefix, enabled) {
+    const fields = state.planSchema?.fields || [];
+    const find = function (suffix) { return fields.find(function (field) { return field.path === prefix + "." + suffix; }); };
+    const nameField = find("name");
+    const milestones = find("step_milestones") || find("milestones");
+    const explicitField = find("lr_values");
+    if (!nameField) return;
+    if (!enabled) {
+      state.scheduleStash[prefix] = {
+        name: String(scheduleValue(nameField) || "none"),
+        milestones: milestones ? scheduleMilestones(milestones) : null,
+        rates: explicitField ? scheduleExplicitRates(explicitField) : null,
+      };
+      state.parameterDraft[nameField.path] = "none";
+      if (explicitField) state.parameterDraft[explicitField.path] = null;
+      if (milestones?.path.endsWith("step_milestones")) state.parameterDraft[milestones.path] = "[]";
+      return;
+    }
+    const saved = state.scheduleStash[prefix];
+    if (milestones?.path.endsWith("step_milestones")) {
+      state.parameterDraft[milestones.path] = JSON.stringify(saved?.milestones ?? milestones.value ?? []);
+      state.parameterDraft[nameField.path] = saved?.name ?? "none";
+    } else {
+      state.parameterDraft[nameField.path] = saved?.name && saved.name !== "none" ? saved.name :
+        nameField.value !== "none" ? nameField.value : milestones ? "multistep" : "cosine";
+    }
+    if (explicitField && saved?.rates != null) state.parameterDraft[explicitField.path] = JSON.stringify(saved.rates);
+  }
   function renderScheduleControl(group, allFields) {
     const lookup = new Map(group.fields.map(function (field) { return [field.path, field]; }));
     const prefix = group.prefix;
@@ -234,7 +380,7 @@
     const milestoneField = lookup.get(prefix + ".step_milestones") || lookup.get(prefix + ".milestones");
     const milestones = scheduleMilestones(milestoneField);
     const stepBased = Boolean(milestoneField && milestoneField.path.endsWith("step_milestones"));
-    const enabled = name !== "none" || (stepBased && milestones.length > 0);
+    const enabled = scheduleEnabled(group);
     const before = prefix === "scheduler" ? "" : prefix.split(".scheduler")[0] + ".";
     const baseField = scheduleBaseField(prefix, allFields);
     const baseRate = Number(scheduleValue(baseField));
@@ -268,14 +414,14 @@
       return '<th scope="col"><label>节点 ' + (column.index + 1) + '（' + (stepBased ? '步' : '轮') + '）<input type="number" min="1" step="1" data-qs-schedule-milestone="' + esc(prefix) + '" data-index="' + column.index + '" value="' + esc(column.point) + '"></label><button type="button" class="secondary" data-qs-schedule-remove="' + esc(prefix) + '" data-index="' + column.index + '">移除节点</button></th>';
     }).join("") + '</tr></thead><tbody><tr><th scope="row">' + (canSegment ? '<label class="qs-segment-choice"><input type="checkbox" data-qs-segment-param="' + esc(baseField.path) + '"' + (segmented ? ' checked' : '') + '>学习率</label>' : '学习率') + '</th>' + (segmented ? '<td><input aria-label="初始段学习率" type="number" min="0" step="any" data-qs-param="' + esc(baseField.path) + '" value="' + esc(scheduleValue(baseField)) + '"></td>' + columns.map(function (column) {
       return '<td><input aria-label="节点 ' + (column.index + 1) + ' 后学习率" type="number" min="0" step="any" data-qs-schedule-rate="' + esc(prefix) + '" data-index="' + column.index + '" value="' + esc(column.rate) + '"></td>';
-    }).join("") : '<td colspan="' + (columns.length + 1) + '" class="qs-segment-placeholder">学习率仍在下方编辑；勾选后移入此表，按阶段查看和调整。</td>') + '</tr></tbody></table></div><p class="helper">' + (segmented ? explicitRates ? '每个节点后的学习率使用表中单独填写的数值，不再按统一倍率推算。' : explicitField ? '初始段就是 optimizer.lr；现有节点值按统一倍率计算。直接修改某一格即可改为独立指定各段学习率。' : '初始段就是 optimizer.lr；本方法的节点共用一个衰减倍率，修改一格会联动其他节点。' : '节点仍按原配置生效；此处只是切换学习率的编辑位置，不会新增一个参数。') + '</p>' : '';
+    }).join("") : '<td colspan="' + (columns.length + 1) + '" class="qs-segment-placeholder">学习率仍在下方编辑；勾选后移入此表，按阶段查看和调整。</td>') + '</tr></tbody></table></div><p class="helper">' + (segmented ? explicitField ? '表中是各段实际学习率；默认值来自当前论文配置，每一格都可以独立修改。' : '本方法的节点共用一个衰减倍率，修改一格会联动其他节点。' : '这里只切换学习率的编辑位置；若要关闭分段，请取消上方“启用分段学习率”。') + '</p>' : '';
     const otherFields = group.fields.filter(function (field) { return ![nameField.path, milestoneField?.path, gammaField?.path, explicitField?.path].includes(field.path); });
-    return '<section class="qs-schedule" data-schedule="' + esc(prefix) + '"><div class="qs-schedule-head"><strong>' + esc(title) + '</strong><label class="qs-schedule-switch"><input type="checkbox" data-qs-schedule-toggle="' + esc(prefix) + '"' + (enabled ? ' checked' : '') + '>启用</label></div>' +
+    return '<section class="qs-schedule" data-schedule="' + esc(prefix) + '"><div class="qs-schedule-head"><strong>' + esc(title) + '</strong><label class="qs-schedule-switch"><input type="checkbox" data-qs-schedule-toggle="' + esc(prefix) + '"' + (enabled ? ' checked' : '') + '>' + (stepBased || name === 'multistep' ? '启用分段学习率' : '启用学习率变化') + '</label></div>' +
       (enabled ? mode + '<p class="helper">' + (stepBased ? '横轴是累计参数更新步数。' : '横轴是训练轮次。') + '目前训练端只支持学习率分段；momentum、weight decay 等仍按整场训练的固定值执行。</p>' +
         '<div class="qs-schedule-track"><span>0</span><div class="qs-schedule-bar">' + ticks + '</div><span>' + esc(budget) + '</span></div>' +
         (showNodes && milestoneField ? segmentTable + '<button type="button" class="secondary" data-qs-schedule-add="' + esc(prefix) + '">添加节点</button>' : '<p class="helper">' + (name === "cosine" ? '学习率从起点平滑下降到终点，不使用突变节点。' : '当前方式不使用额外节点。') + '</p>') +
-        (gammaField && !explicitRates ? '<p class="helper">当前默认倍率：' + esc(gamma) + (explicitField ? '；手动修改表格后改用各段明确数值。' : '；各节点共用此倍率。') + '</p>' : '') +
-        (otherFields.length ? '<div class="qs-parameter-grid">' + otherFields.map(renderParameterField).join("") + '</div>' : '') :
+        (gammaField && !explicitField ? '<p class="helper">当前默认倍率：' + esc(gamma) + '；各节点共用此倍率。</p>' : '') +
+        (otherFields.length ? '<div class="qs-parameter-grid">' + otherFields.map(function (field) { return renderParameterField(field, false); }).join("") + '</div>' : '') :
         '<p class="helper">不应用此调度阶段；学习率保持本阶段的起始值。开启后可编辑变化方式和节点。</p>') + '</section>';
   }
   function renderPlanParameters() {
@@ -291,6 +437,7 @@
     const schedules = scheduleGroups(fields);
     const schedulePaths = new Set(schedules.flatMap(function (group) { return group.fields.map(function (field) { return field.path; }); }));
     const segmentablePaths = new Set(schedules.flatMap(function (group) {
+      if (!scheduleEnabled(group)) return [];
       const name = String(scheduleValue(group.fields.find(function (field) { return field.path === group.prefix + ".name"; })) || "none");
       const hasNodes = group.fields.some(function (field) { return field.path === group.prefix + ".step_milestones" || field.path === group.prefix + ".milestones"; });
       const gamma = group.fields.find(function (field) { return field.path === group.prefix + ".gamma"; });
@@ -306,7 +453,7 @@
     const schedulePlan = schedules.length ? '<div class="qs-training-plan"><h4>模型训练计划</h4><p class="helper">先看学习率会怎样随训练进度变化。关闭阶段时保持起始学习率；开启后可选择变化方式，并在有节点的方式下调整节点及对应学习率。</p>' + schedules.map(function (group) { return renderScheduleControl(group, fields); }).join("") + '</div>' : '';
     return '<div class="qs-parameter-panel">' + schedulePlan + '<h4>可修改的训练参数</h4><div class="qs-parameter-grid">' + defaults.map(function (field) { return renderParameterField(field, segmentablePaths.has(field.path)); }).join("") + '</div>' +
       (advanced.length ? '<details class="qs-parameter-advanced"><summary>高级参数（' + advanced.length + '）</summary><div class="qs-parameter-grid">' + advanced.map(function (field) { return renderParameterField(field, segmentablePaths.has(field.path)); }).join("") + '</div></details>' : '') +
-      (restricted.length ? '<details class="qs-parameter-advanced"><summary>禁止在 Web 修改的专属参数（' + restricted.length + '）</summary><p class="helper">这些值由配置契约固定；此处仅供查看。</p><div class="qs-parameter-grid">' + restricted.map(renderParameterField).join("") + '</div></details>' : '') +
+      (restricted.length ? '<details class="qs-parameter-advanced"><summary>禁止在 Web 修改的专属参数（' + restricted.length + '）</summary><p class="helper">这些值由配置契约固定；此处仅供查看。</p><div class="qs-parameter-grid">' + restricted.map(function (field) { return renderParameterField(field, false); }).join("") + '</div></details>' : '') +
       (changed ? '<p class="qs-feedback qs-warning">参数已修改。预演或运行前会保存为本次自定义配置并重新检查；不会改动论文原始 Recipe。</p>' : '') + '</div>';
   }
 
@@ -357,28 +504,51 @@
     if (context && context.paperSelected) context.paperSelected(state.methods.find(function (item) { return item.paper_id === state.selectedPaperId; }) || null);
     const compact = Boolean(context && context.compact);
     const guidedFlow = compact ? renderNextActions() : renderNoise() + renderMethods() + renderPlan();
-    panel.innerHTML = '<div class="qs-root' + (state.loading ? ' qs-is-loading' : '') + '"><h2>' + (compact ? '从数据集开始' : 'Quick Start') + '</h2>' + loadingMarkup() + (state.error ? '<div class="qs-feedback qs-error">' + esc(state.error) + '</div>' : "") + (compact ? "" : renderDataset()) + guidedFlow + '</div>';
+    panel.innerHTML = '<div class="qs-root' + (state.loading ? ' qs-is-loading' : '') + '">' + (compact ? '' : '<h2>Quick Start</h2>') + loadingMarkup() + (state.error ? '<div class="qs-feedback qs-error">' + esc(state.error) + '</div>' : "") + (state.selectedPaperId ? '<div id="qs-external-resources"></div>' : '') + (compact ? "" : renderDataset()) + guidedFlow + '</div>';
+    const selectedResourceMethod = state.methods.find(function (item) { return item.paper_id === state.selectedPaperId; });
+    if (selectedResourceMethod?.recipe_id) {
+      const currentPlan = state.plan?.paper_id === state.selectedPaperId ? state.plan : null;
+      const source = {recipe:currentPlan?.recipe_id || selectedResourceMethod.recipe_id, dataset:state.dataset.alias, paper_id:state.selectedPaperId, noise:JSON.stringify(state.noiseSelection)};
+      if (state.plan?.paper_id === state.selectedPaperId && state.plan.generated_config_path) source.config_path = state.plan.generated_config_path;
+      const paperId = state.selectedPaperId;
+      mountExternalResources(document.getElementById("qs-external-resources"), source, function () {
+        if (context?.openPaperDetails) context.openPaperDetails(paperId);
+        else context?.switchModule?.("papers");
+      }, function () { if (state.selectedPaperId === paperId) buildPlan(); }, true);
+    }
     const path = document.getElementById("qs-path");
     path && path.addEventListener("input", function () { state.path = this.value; });
     document.getElementById("qs-pick")?.addEventListener("click", pickPath);
     document.getElementById("qs-registered")?.addEventListener("change", function () { if (this.value) registerPath(this.value, null, true); });
     document.getElementById("qs-probe")?.addEventListener("click", probeAndRegister);
-    document.getElementById("qs-reset")?.addEventListener("click", function () { state.dataset = null; state.noise = null; state.methods = []; state.plan = null; state.planSchema = null; state.parameterDraft = {}; state.segmentedPaths = {}; state.methodInputs = {}; state.selectedPaperId = ""; state.labelsConfirmed = false; state.seedTouched = false; state.methodListExpanded = false; state.currentStep = 0; render(); });
+    document.getElementById("qs-reset")?.addEventListener("click", function () { state.dataset = null; state.noise = null; state.methods = []; state.plan = null; state.planSchema = null; state.parameterDraft = {}; state.segmentedPaths = {}; state.scheduleStash = {}; state.methodInputs = {}; state.selectedPaperId = ""; state.labelsConfirmed = false; state.seedTouched = false; state.methodListExpanded = false; state.currentStep = 0; render(); });
     panel.querySelectorAll(".qs-candidate").forEach(function (button) { button.addEventListener("click", function () { registerPath(state.path, this.dataset.adapter); }); });
     document.getElementById("qs-noise")?.addEventListener("change", updateNoise);
     document.getElementById("qs-add-noise")?.addEventListener("change", updateNoise);
     document.getElementById("qs-rate")?.addEventListener("change", updateNoise);
+    document.getElementById("qs-rho-positive")?.addEventListener("change", updateNoise);
+    document.getElementById("qs-rho-negative")?.addEventListener("change", updateNoise);
     document.getElementById("qs-seed")?.addEventListener("change", updateNoise);
     document.getElementById("qs-native-rate-status")?.addEventListener("change", function () { state.nativeRateMode = this.value; render(); });
     document.getElementById("qs-save-native-rate")?.addEventListener("click", saveNativeRate);
     document.getElementById("qs-open-dataset-facts")?.addEventListener("click", function () { context?.switchModule?.("data"); });
-    document.getElementById("qs-confirm-labels")?.addEventListener("click", function () { state.labelsConfirmed = true; render(); loadMethods(); });
+    document.getElementById("qs-confirm-labels")?.addEventListener("click", async function () { state.labelsConfirmed = true; render(); await loadMethods(); await continuePendingPaper(); });
     document.getElementById("qs-methods-panel")?.addEventListener("toggle", function () { state.methodListExpanded = this.open; });
     document.getElementById("qs-prev")?.addEventListener("click", function () { state.currentStep = Math.max(0, state.currentStep - 1); render(); });
     document.getElementById("qs-next")?.addEventListener("click", function () { const steps = quickStartSteps(); if (!quickStartCanAdvance(steps[state.currentStep])) return; state.currentStep = Math.min(steps.length - 1, state.currentStep + 1); render(); });
     panel.querySelectorAll(".qs-carousel-dot").forEach(function (button) { button.addEventListener("click", function () { const target = Number(this.dataset.qsStep); if (!this.disabled) { state.currentStep = target; render(); } }); });
-    panel.querySelectorAll(".qs-method-card").forEach(function (button) { button.addEventListener("click", function () { const item = state.methods.find(function (entry) { return entry.paper_id === button.dataset.paper; }); if (!item || !["ready", "needs_input"].includes(item.status)) return; state.selectedPaperId = this.dataset.paper; state.methodInputs = {}; state.planSchema = null; state.parameterDraft = {}; state.segmentedPaths = {}; state.methodListExpanded = false; render(); if (state.seedTouched || !item.recipe_id) { buildPlan(); return; } request("/api/config-schema?recipe=" + encodeURIComponent(item.recipe_id), undefined, "正在读取论文默认随机种子…").then(function (schema) { if (state.selectedPaperId !== item.paper_id) return; const seed = (schema.fields || []).find(function (field) { return field.path === "seed"; }); if (seed) state.noiseSelection.seed = Number(seed.value); render(); buildPlan(); }).catch(function (error) { state.error = String(error.message || error); render(); }); }); });
+    panel.querySelectorAll(".qs-method-card").forEach(function (button) { button.addEventListener("click", function () { const item = state.methods.find(function (entry) { return entry.paper_id === button.dataset.paper; }); if (!item || !["ready", "needs_input"].includes(item.status)) return; state.selectedPaperId = this.dataset.paper; state.methodInputs = {}; state.planSchema = null; state.parameterDraft = {}; state.segmentedPaths = {}; state.scheduleStash = {}; state.methodListExpanded = false; render(); if (state.seedTouched || !item.recipe_id) { buildPlan(); return; } request("/api/config-schema?recipe=" + encodeURIComponent(item.recipe_id), undefined, "正在读取论文默认随机种子…").then(function (schema) { if (state.selectedPaperId !== item.paper_id) return; const seed = (schema.fields || []).find(function (field) { return field.path === "seed"; }); if (seed) state.noiseSelection.seed = Number(seed.value); render(); buildPlan(); }).catch(function (error) { state.error = String(error.message || error); render(); }); }); });
     panel.querySelectorAll(".qs-required-input").forEach(function (input) { input.addEventListener("input", function () { state.methodInputs[this.dataset.inputKey] = this.value; }); });
+    document.getElementById("qs-back-to-noise")?.addEventListener("click", function () {
+      const index = quickStartStepIndex("noise");
+      if (index >= 0) state.currentStep = index;
+      render();
+      document.getElementById("qs-noise-step")?.scrollIntoView({behavior:"smooth", block:"start"});
+    });
+    document.getElementById("qs-open-paper-resources")?.addEventListener("click", function () {
+      if (context?.openPaperDetails) context.openPaperDetails(state.selectedPaperId);
+      else context?.switchModule?.("papers");
+    });
     function markParameterEdited() {
       const note = panel.querySelector(".qs-parameter-panel > .qs-feedback");
       if (!note) panel.querySelector(".qs-parameter-panel")?.insertAdjacentHTML("beforeend", '<p class="qs-feedback qs-warning">参数已修改。预演或运行前会保存为本次自定义配置并重新检查；不会改动论文原始 Recipe。</p>');
@@ -422,20 +592,7 @@
       });
     }
     panel.querySelectorAll("[data-qs-schedule-toggle]").forEach(function (toggle) { toggle.addEventListener("change", function () {
-      const prefix = this.dataset.qsScheduleToggle;
-      const nameField = scheduleField(prefix, "name");
-      const milestones = scheduleMilestoneField(prefix);
-      if (!nameField) return;
-      if (!this.checked) {
-        state.parameterDraft[nameField.path] = "none";
-        if (scheduleExplicitField(prefix)) state.parameterDraft[scheduleExplicitField(prefix).path] = null;
-        if (milestones?.path.endsWith("step_milestones")) state.parameterDraft[milestones.path] = "[]";
-      } else if (milestones?.path.endsWith("step_milestones")) {
-        state.parameterDraft[milestones.path] = JSON.stringify(milestones.value || []);
-        state.parameterDraft[nameField.path] = "none";
-      } else {
-        state.parameterDraft[nameField.path] = nameField.value !== "none" ? nameField.value : milestones ? "multistep" : "cosine";
-      }
+      setScheduleEnabled(this.dataset.qsScheduleToggle, this.checked);
       render();
     }); });
     panel.querySelectorAll("[data-qs-schedule-milestone]").forEach(function (input) { input.addEventListener("change", function () {
@@ -556,13 +713,24 @@
     if (!command || !command.includes(original)) throw new Error("运行计划的配置来源已变化，请重新生成计划");
     return command.replace(original, "--config " + path);
   }
+  function currentRunSummary(plan, patches) {
+    const fields = state.planSchema?.fields || [];
+    const field = function (path) { return fields.find(function (item) { return item.path === path; }); };
+    const maxSteps = field("trainer.max_steps");
+    const epochs = field("trainer.epochs");
+    const budget = maxSteps && Number(parameterValue(maxSteps)) > 0
+      ? "总更新步数：" + parameterValue(maxSteps)
+      : epochs ? "训练轮数：" + parameterValue(epochs) : "";
+    return ["论文方法：" + plan.method, "数据集：" + state.dataset.alias, budget,
+      patches.length ? "已修改 " + patches.length + " 个参数，将另存为本次自定义配置。" : ""
+    ].filter(Boolean).join("\n");
+  }
   async function executePlan(dryRun) {
     const plan = state.plan;
     if (!plan || plan.status !== "ready" || !state.planSchema || state.parameterError) return;
     try {
       const patches = parameterPatches();
-      const summary = [plan.summary].concat(plan.details || []).join("\n");
-      if (!dryRun && !window.confirm("即将启动训练：\n\n" + summary + (patches.length ? "\n\n已修改 " + patches.length + " 个参数，将另存为本次自定义配置。" : "") + "\n\n确认继续？")) return;
+      if (!dryRun && !window.confirm("即将启动训练：\n\n" + currentRunSummary(plan, patches) + "\n\n确认继续？")) return;
       let command = dryRun ? plan.dry_run_command : plan.command;
       if (patches.length) {
         const selected = state.methods.find(function (item) { return item.paper_id === plan.paper_id; });
@@ -590,11 +758,19 @@
     const selected = (state.noise?.options || []).find(function (item) { return item.key === key; });
     const rawRate = document.getElementById("qs-rate")?.value;
     const rate = addNoise && selected?.requires_rate ? Number(rawRate ?? state.noiseSelection.rate ?? 0.2) : null;
+    const binary = addNoise && key === "binary_asymmetric_rcn";
+    const positiveInput = document.getElementById("qs-rho-positive");
+    const negativeInput = document.getElementById("qs-rho-negative");
+    const positive = binary ? Number(positiveInput?.value ?? state.noiseSelection.rho_positive ?? 0.2) : null;
+    const negative = binary ? Number(negativeInput?.value ?? state.noiseSelection.rho_negative ?? 0.1) : null;
+    if (binary && (positiveInput?.value === "" || negativeInput?.value === "" || !Number.isFinite(positive) || !Number.isFinite(negative) || positive < 0 || negative < 0 || positive + negative >= 1)) {
+      state.error = "正类和负类翻转率都必须非负，且两者之和小于 1"; render(); return;
+    }
     if (addNoise && selected?.requires_rate && (rawRate === "" || !Number.isFinite(rate) || rate < 0 || rate > 1)) {
       state.error = "人工噪声率必须是 0 到 1 之间的数字"; render(); return;
     }
     state.error = "";
-    state.noiseSelection = {kind:native ? "native" : addNoise ? "synthetic" : "clean", key:key, rate:rate, seed:Number(document.getElementById("qs-seed")?.value ?? 1)};
+    state.noiseSelection = {kind:native ? "native" : addNoise ? "synthetic" : "clean", key:key, rate:rate, seed:Number(document.getElementById("qs-seed")?.value ?? 1), rho_positive:positive, rho_negative:negative};
     state.methods = [];
     state.selectedPaperId = "";
     state.methodListExpanded = false;
@@ -603,6 +779,7 @@
     state.planSchema = null;
     state.parameterDraft = {};
     state.segmentedPaths = {};
+    state.scheduleStash = {};
     state.currentStep = 1;
     render();
     loadMethods();
@@ -626,7 +803,7 @@
   }
   function registerPath(path, adapter, alreadyRegistered) {
     const message = alreadyRegistered ? "正在读取数据集验收记录（未验收时才检查样本）…" : "正在登记数据集并检查训练/测试样本…";
-    post("/api/quick-start/register", {path:path, adapter:adapter || ""}, message).then(function (payload) { if (payload.kind !== "dataset") { state.probe = payload; render(); return; } state.dataset = payload.dataset; state.error = ""; state.selectedPaperId = ""; state.plan = null; state.planSchema = null; state.parameterDraft = {}; state.segmentedPaths = {}; state.methodListExpanded = false; state.currentStep = 1; return loadRegistered().then(function () { render(); return loadNoise(); }); }).catch(function (error) { state.error = String(error.message || error); render(); });
+    return post("/api/quick-start/register", {path:path, adapter:adapter || ""}, message).then(function (payload) { if (payload.kind !== "dataset") { state.probe = payload; render(); return; } state.dataset = payload.dataset; state.error = ""; state.selectedPaperId = ""; state.plan = null; state.planSchema = null; state.parameterDraft = {}; state.segmentedPaths = {}; state.scheduleStash = {}; state.methodListExpanded = false; state.currentStep = 1; return loadRegistered().then(function () { render(); return loadNoise(); }); }).catch(function (error) { state.error = String(error.message || error); render(); return null; });
   }
   function loadNoise() {
     return request("/api/quick-start/noises?dataset=" + encodeURIComponent(state.dataset.alias), undefined, "正在读取已验收数据集的标签与噪声资料…").then(function (payload) { state.noise = payload; state.nativeRateMode = "unknown"; state.labelsConfirmed = !payload.requires_confirmation; if (["native", "noisy"].includes(payload.dataset_state)) state.noiseSelection = {kind:"native", key:"native", rate:null, seed:state.noiseSelection.seed ?? 1}; else state.noiseSelection = {kind:"clean", key:"clean", rate:null, seed:state.noiseSelection.seed ?? 1}; render(); return payload.requires_confirmation ? null : loadMethods(); });
@@ -644,6 +821,7 @@
       state.planSchema = null;
       state.parameterDraft = {};
       state.segmentedPaths = {};
+      state.scheduleStash = {};
       if (["native", "noisy"].includes(payload.dataset_state)) state.noiseSelection = {kind:"native", key:"native", rate:null, seed:state.noiseSelection.seed ?? 1};
       else if (payload.dataset_state === "unknown" || state.noiseSelection.kind === "native") state.noiseSelection = {kind:"clean", key:"clean", rate:null, seed:state.noiseSelection.seed ?? 1};
       render();
@@ -658,7 +836,88 @@
     if (!state.dataset || !state.selectedPaperId) return;
     const userInputs = {};
     Object.keys(state.methodInputs).forEach(function (key) { const raw = state.methodInputs[key]; if (raw === "") return; try { userInputs[key] = JSON.parse(raw); } catch (_error) { userInputs[key] = raw; } });
-    post("/api/quick-start/plan", {dataset:state.dataset.alias, paper_id:state.selectedPaperId, noise:state.noiseSelection, user_inputs:userInputs}, "正在核对配置与已验收数据资料…").then(function (payload) { state.plan = payload; state.planSchema = null; state.parameterDraft = {}; state.segmentedPaths = {}; state.parameterError = ""; const index = quickStartStepIndex("plan"); if (index >= 0) state.currentStep = index; render(); return loadPlanSchema(payload); }).catch(function (error) { state.error = String(error.message || error); render(); });
+    post("/api/quick-start/plan", {dataset:state.dataset.alias, paper_id:state.selectedPaperId, noise:state.noiseSelection, user_inputs:userInputs}, "正在核对配置与已验收数据资料…").then(function (payload) { state.plan = payload; state.planSchema = null; state.parameterDraft = {}; state.segmentedPaths = {}; state.scheduleStash = {}; state.parameterError = ""; const index = quickStartStepIndex("plan"); if (index >= 0) state.currentStep = index; render(); return loadPlanSchema(payload); }).catch(function (error) { state.error = String(error.message || error); render(); });
+  }
+
+  function schemaValue(schema, path) {
+    const field = (schema?.fields || []).find(function (item) { return item.path === path; });
+    return field ? field.value : undefined;
+  }
+
+  async function continuePendingPaper() {
+    const pending = state.pendingPaper;
+    if (!pending || !state.dataset || !state.noise) return;
+    if (state.noise.requires_confirmation && !state.labelsConfirmed) return;
+    const datasetState = state.noise.dataset_state;
+    const configuredNoise = schemaValue(pending.schema, "noise.name");
+    const configuredRate = schemaValue(pending.schema, "noise.rate");
+    const configuredSeed = schemaValue(pending.schema, "seed");
+    if (configuredSeed != null) state.noiseSelection.seed = Number(configuredSeed);
+    if (["native", "noisy"].includes(datasetState)) {
+      state.noiseSelection = {kind:"native", key:"native", rate:null, seed:state.noiseSelection.seed ?? 1};
+    } else if (datasetState === "clean") {
+      if (!configuredNoise || configuredNoise === "clean") {
+        state.noiseSelection = {kind:"clean", key:"clean", rate:null, seed:state.noiseSelection.seed ?? 1};
+      } else {
+        const option = (state.noise.options || []).find(function (item) { return item.key === configuredNoise; });
+        if (!option) {
+          state.error = "Quick Start 不提供该论文配置的噪声类型：" + configuredNoise;
+          state.currentStep = quickStartStepIndex("noise");
+          render();
+          return;
+        }
+        state.noiseSelection = {kind:"synthetic", key:option.key, rate:option.requires_rate ? Number(configuredRate) : null, seed:state.noiseSelection.seed ?? 1,
+          rho_positive:configuredNoise === "binary_asymmetric_rcn" ? Number(schemaValue(pending.schema, "noise.rho_positive")) : null,
+          rho_negative:configuredNoise === "binary_asymmetric_rcn" ? Number(schemaValue(pending.schema, "noise.rho_negative")) : null};
+      }
+    }
+    state.pendingPaper = null;
+    state.selectedPaperId = pending.paperId;
+    state.methodInputs = {};
+    state.plan = null;
+    state.planSchema = null;
+    state.parameterDraft = {};
+    state.segmentedPaths = {};
+    state.scheduleStash = {};
+    state.methodListExpanded = false;
+    await loadMethods();
+    buildPlan();
+  }
+
+  async function openPaper(paperId, recipeId, adapter) {
+    state.error = "";
+    state.pendingPaper = null;
+    context?.switchModule?.("quickstart");
+    try {
+      const schema = await request("/api/config-schema?recipe=" + encodeURIComponent(recipeId), undefined, "正在读取论文配置…");
+      if (!state.registered.length) await loadRegistered();
+      const requiredAdapter = schemaValue(schema, "data.name") || adapter;
+      const registered = state.registered.find(function (item) { return item.adapter === requiredAdapter; });
+      if (!state.dataset || state.dataset.alias !== registered?.name) {
+        if (!registered) {
+          state.currentStep = 0;
+          state.error = "请先登记论文配置需要的数据集（" + requiredAdapter + "），再开始训练。";
+          render();
+          return;
+        }
+        await registerPath(registered.location, null, true);
+      }
+      if (!state.dataset || !state.noise) {
+        state.currentStep = 0;
+        render();
+        return;
+      }
+      state.pendingPaper = {paperId:paperId, recipeId:recipeId, schema:schema};
+      if (state.noise.requires_confirmation && !state.labelsConfirmed) {
+        state.currentStep = quickStartStepIndex("noise");
+        render();
+        return;
+      }
+      await continuePendingPaper();
+    } catch (error) {
+      state.error = String(error.message || error);
+      render();
+    }
   }
   function mount(target, options) {
     panel = target;
@@ -667,5 +926,5 @@
     render();
     if (state.dataset) refreshNoiseFacts();
   }
-  window.quickStartController = {mount:mount, render:render, onModuleEnter:mount, showCompatibilityGuide:function () { render(); return state.noise ? Promise.resolve() : loadNoise(); }};
+  window.quickStartController = {mount:mount, render:render, onModuleEnter:mount, openPaper:openPaper, showCompatibilityGuide:function () { render(); return state.noise ? Promise.resolve() : loadNoise(); }};
 }());

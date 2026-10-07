@@ -217,17 +217,17 @@ parameter_display_policy:
   # permission changes: common controls live outside the paper-parameter
   # groups; component choices and resources get their own UI area.
   common_paths_by_method:
-    apl: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.max_train_samples, data.max_validation_samples, data.max_test_samples, data.augment, data.preprocessing, noise.name, noise.sampling, evaluation.selection_split, evaluation.allow_test_selection, evaluation.loss.name]
-    gce: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.max_train_samples, data.max_validation_samples, data.max_test_samples, data.augment, data.preprocessing, noise.name]
+    apl: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.augment, data.preprocessing, noise.name, noise.sampling, evaluation.selection_split, evaluation.allow_test_selection, evaluation.loss.name]
+    gce: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.augment, data.preprocessing, noise.name]
     binary_risk: [seed, data.seed, noise.seed, data.train_size, data.test_size, noise.rho_positive, noise.rho_negative, data.name, noise.name]
     dual_t: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.augment, data.preprocessing, noise.name, evaluation.selection_split]
-    loss_correction: [seed, noise.seed, noise.rate, noise.transition_matrix, data.name, data.validation_size, data.max_train_samples, data.max_validation_samples, data.max_test_samples, data.augment, data.preprocessing, noise.name]
+    loss_correction: [seed, noise.seed, noise.rate, noise.transition_matrix, data.name, data.validation_size, data.augment, data.preprocessing, noise.name]
     importance_reweighting: [seed, noise.seed, data.dimension, data.train_size, data.test_size, noise.rho_positive, noise.rho_negative, data.name, data.validation_size, noise.name, evaluation.selection_split]
     cwd: [seed, data.fold_index, noise.seed, noise.rho_positive, noise.rho_negative, data.name, data.folds, data.augment, noise.name]
     pcse: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.split_strategy, data.split_rng, data.augment, data.preprocessing, noise.mode, noise.name, noise.sampling, evaluation.selection_split]
     fine: [seed, noise.seed, noise.rate, evaluation.batch_size, data.name, data.validation_size, data.augment, data.strong_policy, data.normalization.mean, data.normalization.std, noise.name, noise.sampling]
-    cdr: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.max_train_samples, data.max_validation_samples, data.max_test_samples, data.augment, data.validation_split.strategy, data.validation_split.rng, data.normalization.mean, data.normalization.std, noise.name, noise.sampling, evaluation.selection_split]
-    dss: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.max_train_samples, data.max_validation_samples, data.max_test_samples, data.augment, data.validation_split.strategy, data.validation_split.rng, data.normalization.mean, data.normalization.std, noise.name, noise.sampling, evaluation.selection_split]
+    cdr: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.augment, data.validation_split.strategy, data.validation_split.rng, data.normalization.mean, data.normalization.std, noise.name, noise.sampling, evaluation.selection_split]
+    dss: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.augment, data.validation_split.strategy, data.validation_split.rng, data.normalization.mean, data.normalization.std, noise.name, noise.sampling, evaluation.selection_split]
     coteaching: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.validation_split.strategy, data.validation_split.rng, data.augment, data.preprocessing, noise.name, noise.sampling, evaluation.selection_split, evaluation.primary, evaluation.ensemble]
     jocor: [seed, noise.seed, noise.rate, evaluation.report_last_epochs, data.name, data.validation_size, data.preprocessing, data.augment, noise.name, noise.sampling, evaluation.selection_split, evaluation.allow_test_selection]
     cnlcu: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.validation_split.strategy, data.validation_split.rng, data.augment, data.preprocessing, noise.name, noise.sampling, evaluation.selection_split, evaluation.primary, evaluation.ensemble]
@@ -235,7 +235,7 @@ parameter_display_policy:
     t_revision: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.preprocessing, data.augment, noise.name, noise.sampling, evaluation.selection_split]
     mc_ldce: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.augment, noise.name, noise.sampling]
     volminnet: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.validation_split.strategy, data.validation_split.rng, data.augment, data.preprocessing, noise.name, noise.sampling]
-    pdl: [seed, noise.seed, noise.rate, data.name, data.max_train_samples, data.max_test_samples, data.preprocessing, data.augment, data.normalization.mean, data.normalization.std, noise.name]
+    pdl: [seed, noise.seed, noise.rate, data.name, data.preprocessing, data.augment, data.normalization.mean, data.normalization.std, noise.name]
     upm: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.split_strategy, data.split_rng, data.augment, noise.name, noise.sampling, evaluation.selection_split, evaluation.primary]
     cal: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.augment, data.normalization.mean, data.normalization.std, noise.name]
     dld: [seed, noise.seed, noise.rate, data.name, data.validation_size, data.strong_augment, data.strong_magnitude, noise.name, noise.sampling, evaluation.selection_split, evaluation.primary]
@@ -353,14 +353,14 @@ formal_recipe_bindings:
   jocor: jocor-cifar10-symmetric05-reproduction
   cnlcu: cnlcu-cifar10-reproduction
   mentornet: mentornet-dd-cifar100-symmetric04-reproduction
-  t_revision: cifar10-t-revision-sym20-short
+  t_revision: cifar10-t-revision-sym20-reproduction
   mc_ldce: mc-ldce-cifar10-reproduction
   volminnet: volminnet-cifar10-reproduction
   pdl: pdl-cifar10-reproduction
   upm: upm-cifar10-reproduction
   cal: cal-cifar10-reproduction
   dld: dld-cifar10-reproduction
-  ca2c: ca2c-cifar10-reproduction
+  ca2c: ca2c-cifar100-reproduction
   dividemix: cifar10-dividemix-sym20
   l2rw: l2rw-cifar10-reproduction
   lend: lend-cifar10-reproduction
@@ -9987,7 +9987,7 @@ methods:
           note: Ramp-up length for semi-supervised objective weighting.
           evidence_ref: mixmatch
         dividemix.training.epochs:
-          current: 300
+          current: 290
           value_type: integer
           ui_control: number
           reproduction_impact: high

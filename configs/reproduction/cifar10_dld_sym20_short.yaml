@@ -35,17 +35,15 @@ dld:
     inference_steps: 5
   feature_extractor:
     source: external_checkpoint
-    model: &id001
-      name: resnet18
-      base_width: 16
+    model:
+      name: torchvision_resnet34
+      base_width: 64
+      weights: IMAGENET1K_V1
+      feature_dimension: 512
     external:
-      adapter: upm_main_best
-      run_directory_env: LNL_DLD_SOURCE_RUN
-      checkpoint_sha256: edb9387f2bc95b56c61ced551ef387746f1a49c5079f8dfbc966e583b34da062
-      manifest_sha256: fd919619d3ff55619d3e8dc9f937f674fbed0d084c83b5baf8301e51f59e867b
-      mapping_hash: 674b78dd41e2ae3c097ecedb9768eb9274fed8d95e66002bdf119dd263596dd9
-      dataset_fingerprint: 9c53dc2c001574ab3f1b78d48632b8a82d0003c754bf7367f230280068e118a4
-      model: *id001
+      adapter: torchvision_resnet34_imagenet1k_v1
+      weights: IMAGENET1K_V1
+      input_contract: cifar10_standard_normalized
   precorrection:
     k_neighbors: 50
     delta: 1.0e-06

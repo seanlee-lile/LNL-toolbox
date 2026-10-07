@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime
 import json
+import math
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -84,6 +85,15 @@ def _write_epoch_metrics(rows: list[Mapping[str, Any]], path: Path) -> None:
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
         encoding="utf-8",
     )
+
+
+def _step_learning_rate(
+    base_rate: float, milestones: list[int], gamma: float,
+    explicit_rates: list[float] | None, next_step: int,
+) -> float:
+    stage = sum(next_step >= milestone for milestone in milestones)
+    return (explicit_rates[stage - 1] if explicit_rates is not None and stage
+            else base_rate * gamma ** stage)
 
 
 def _trusted_manifest(
@@ -247,6 +257,14 @@ def run_l2rw_experiment(
     meta_weight_decay = float(config["optimizer"].get("weight_decay", 0.0))
     global_step = int(payload.get("global_step", 0)) if payload is not None else 0
     step_milestones = [int(value) for value in config.get("scheduler", {}).get("step_milestones", [])]
+    step_rates = config.get("scheduler", {}).get("lr_values")
+    if step_rates is not None:
+        step_rates = [float(value) for value in step_rates]
+        if (len(step_rates) != len(step_milestones)
+                or step_milestones != sorted(set(step_milestones))
+                or any(point <= 0 for point in step_milestones)
+                or any(not math.isfinite(rate) or rate <= 0 for rate in step_rates)):
+            raise ValueError("scheduler.lr_values requires one positive learning rate per distinct step milestone")
     while (global_step < max_steps) if max_steps else (start < epochs):
         epoch = start
         model.train(); meta_model.train(); trusted_iterator = iter(trusted_loader)
@@ -258,8 +276,11 @@ def run_l2rw_experiment(
                 # Uber's FixedLearnRateScheduler.step(niter) changes the
                 # rate when niter + 1 reaches a decay step, before that
                 # optimization update is applied.
-                decays = sum(global_step + 1 >= milestone for milestone in step_milestones)
-                learning_rate = float(config["optimizer"]["lr"]) * float(config.get("scheduler", {}).get("gamma", 0.1)) ** decays
+                learning_rate = _step_learning_rate(
+                    float(config["optimizer"]["lr"]), step_milestones,
+                    float(config.get("scheduler", {}).get("gamma", 0.1)),
+                    step_rates, global_step + 1,
+                )
                 for group in optimizer.param_groups:
                     group["lr"] = learning_rate
             try:

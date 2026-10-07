@@ -102,6 +102,22 @@ def _subset_pdl_snapshots(
     return selected_features, selected_posteriors
 
 
+def _representation_positions(
+    representation_indices: np.ndarray, requested_indices: np.ndarray,
+) -> np.ndarray:
+    """Locate stable indices without changing the NMF input/output order."""
+
+    order = np.argsort(representation_indices, kind="stable")
+    sorted_indices = representation_indices[order]
+    positions = np.searchsorted(sorted_indices, requested_indices)
+    if (
+        np.any(positions >= sorted_indices.size)
+        or not np.array_equal(sorted_indices[positions], requested_indices)
+    ):
+        raise KeyError("PDL shared representation does not cover split indices")
+    return order[positions]
+
+
 def _run_directory(config: Mapping[str, Any], output_dir: str | Path | None) -> Path:
     path = Path(output_dir) if output_dir is not None else Path(
         config.get("output_root", "artifacts/runs")
@@ -543,25 +559,12 @@ def run_instance_transition_experiment(
             validation_anchor_positions = select_pdl_anchor_candidates(
                 validation_posteriors.noisy_probabilities, percentages
             )
-            train_representation_positions = np.searchsorted(
+            train_representation_positions = _representation_positions(
                 representation_indices, train_posteriors.global_indices
             )
-            validation_representation_positions = np.searchsorted(
+            validation_representation_positions = _representation_positions(
                 representation_indices, validation_posteriors.global_indices
             )
-            if (
-                np.any(train_representation_positions >= representation_indices.size)
-                or np.any(validation_representation_positions >= representation_indices.size)
-                or not np.array_equal(
-                representation_indices[train_representation_positions],
-                train_posteriors.global_indices,
-                )
-                or not np.array_equal(
-                representation_indices[validation_representation_positions],
-                validation_posteriors.global_indices,
-                )
-            ):
-                raise KeyError("PDL shared representation does not cover split indices")
             train_split_coefficients = representation_coefficients[
                 train_representation_positions
             ]

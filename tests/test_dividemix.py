@@ -426,7 +426,8 @@ class _dividemix_workflow_DivideMixWorkflowTest(unittest.TestCase):
         self.assertEqual(config['loader']['batch_size'], 128)
         method = config['dividemix']
         self.assertEqual(method['warmup']['epochs'], 10)
-        self.assertEqual(method['training']['epochs'], 300)
+        self.assertEqual(method['training']['epochs'], 290)
+        self.assertEqual(method['warmup']['epochs'] + method['training']['epochs'], 300)
         self.assertEqual(method['gmm']['threshold'], 0.5)
         self.assertEqual(method['mixmatch']['augmentations'], 2)
         self.assertEqual(method['mixmatch']['temperature'], 0.5)

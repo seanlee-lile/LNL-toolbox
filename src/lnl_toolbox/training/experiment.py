@@ -241,6 +241,7 @@ class AlphaScaledScheduler:
         self.name = str(config.get("name", "none")).lower()
         self.gamma = float(config.get("gamma", 0.1))
         self.milestones = tuple(int(value) for value in config.get("milestones", []))
+        self.lr_values = config.get("lr_values")
         self.step_size = int(config.get("step_size", 1))
         self.last_epoch = -1
         self.alpha = 0.0
@@ -251,13 +252,23 @@ class AlphaScaledScheduler:
             raise ValueError("alpha-scaled step_size must be positive")
         if self.name == "multistep" and list(self.milestones) != sorted(self.milestones):
             raise ValueError("alpha-scaled milestones must be sorted")
+        if self.lr_values is not None:
+            values = [float(value) for value in self.lr_values]
+            if (self.name != "multistep" or len(values) != len(self.milestones)
+                    or list(self.milestones) != sorted(set(self.milestones))
+                    or len(optimizer.param_groups) != 1
+                    or any(not math.isfinite(value) or value <= 0 for value in values)):
+                raise ValueError("alpha-scaled lr_values require one positive rate per distinct milestone and one optimizer group")
+            self.lr_values = tuple(values)
 
     def step(self, alpha: float = 0.0) -> None:
         self.last_epoch += 1
         if self.name == "step" and self.last_epoch > 0 and self.last_epoch % self.step_size == 0:
             self.record_lrs = [value * self.gamma for value in self.record_lrs]
         if self.name == "multistep" and self.last_epoch in self.milestones:
-            self.record_lrs = [value * self.gamma for value in self.record_lrs]
+            self.record_lrs = ([self.lr_values[self.milestones.index(self.last_epoch)]]
+                               if self.lr_values is not None else
+                               [value * self.gamma for value in self.record_lrs])
         self.alpha = float(alpha)
         if not math.isfinite(self.alpha) or self.alpha < 0.0:
             raise ValueError("alpha-scaled scheduler alpha must be finite and non-negative")

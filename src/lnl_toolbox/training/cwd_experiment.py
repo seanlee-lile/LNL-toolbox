@@ -29,6 +29,7 @@ from lnl_toolbox.training.checkpoint import (
 )
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
 from lnl_toolbox.training.data_service import prepare_experiment_data
+from lnl_toolbox.training.experiment import build_scheduler
 from lnl_toolbox.training.snapshots import collect_feature_snapshot
 
 
@@ -186,18 +187,16 @@ def run_cwd_experiment(
         lr=float(optimizer_config["lr"]),
         weight_decay=float(optimizer_config.get("weight_decay", 0.0)),
     )
-    milestones = [int(value) for value in config.get("scheduler", {}).get("milestones", [])]
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(
-        optimizer,
-        milestones=milestones,
-        gamma=float(config.get("scheduler", {}).get("gamma", 0.1)),
-    )
+    scheduler_config = dict(config.get("scheduler", {}))
+    scheduler_config.setdefault("name", "multistep")
+    scheduler = build_scheduler(optimizer, scheduler_config, int(config["trainer"]["epochs"]))
     start_epoch = 0
     rows: list[dict[str, Any]] = []
     if checkpoint is not None:
         model.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
-        scheduler.load_state_dict(checkpoint["scheduler"])
+        if scheduler is not None:
+            scheduler.load_state_dict(checkpoint["scheduler"])
         restore_rng_state(checkpoint["rng_state"])
         start_epoch = int(checkpoint["completed_epoch"]) + 1
         rows = list(checkpoint.get("metrics", []))
@@ -267,7 +266,8 @@ def run_cwd_experiment(
             "".join(json.dumps(value, sort_keys=True) + "\n" for value in rows),
             encoding="utf-8",
         )
-        scheduler.step()
+        if scheduler is not None:
+            scheduler.step()
         atomic_save(
             {
                 "format_version": 1,
@@ -275,7 +275,7 @@ def run_cwd_experiment(
                 "config": config,
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
-                "scheduler": scheduler.state_dict(),
+                "scheduler": scheduler.state_dict() if scheduler is not None else None,
                 "completed_epoch": epoch,
                 "metrics": rows,
                 "rng_state": capture_rng_state(),

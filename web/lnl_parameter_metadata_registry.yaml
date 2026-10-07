@@ -113,14 +113,14 @@ formal_recipe_bindings:
   jocor: jocor-cifar10-symmetric05-reproduction
   cnlcu: cnlcu-cifar10-reproduction
   mentornet: mentornet-dd-cifar100-symmetric04-reproduction
-  t_revision: cifar10-t-revision-sym20-short
+  t_revision: cifar10-t-revision-sym20-reproduction
   mc_ldce: mc-ldce-cifar10-reproduction
   volminnet: volminnet-cifar10-reproduction
   pdl: pdl-cifar10-reproduction
   upm: upm-cifar10-reproduction
   cal: cal-cifar10-reproduction
   dld: dld-cifar10-reproduction
-  ca2c: ca2c-cifar10-reproduction
+  ca2c: ca2c-cifar100-reproduction
   dividemix: cifar10-dividemix-sym20
   l2rw: l2rw-cifar10-reproduction
   lend: lend-cifar10-reproduction
@@ -9604,7 +9604,7 @@ methods:
           note: Ramp-up length for semi-supervised objective weighting.
           evidence_ref: mixmatch
         dividemix.training.epochs:
-          current: 300
+          current: 290
           value_type: integer
           ui_control: number
           reproduction_impact: high

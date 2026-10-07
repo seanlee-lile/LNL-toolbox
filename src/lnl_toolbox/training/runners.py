@@ -663,22 +663,17 @@ def _dld_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         implemented_variant="two_view_diffusion",
         implementation_limits=frozenset({"modality"}),
         min_classes=2,
-        required_pretrained_roles=("upm_main_best",) if source == "external_checkpoint" else (),
-        pretrained_role_paths=(
-            (("upm_main_best", ("dld", "feature_extractor", "external", "run_directory_env")),)
-            if source == "external_checkpoint" else ()
-        ),
         prerequisites=(
             SourceDescriptor(
-                key="upm_main_best",
+                key="dld_feature_extractor",
                 kind="pretrained_feature_extractor",
                 name="DLD pretrained feature extractor",
                 requirement="a compatible frozen feature extractor",
                 obtain="use a supported ImageNet ResNet-34 or UPM producer run",
-                provide="select the immutable producer run and configure its hashes",
+                provide="provide a supported pretrained feature source",
                 validator="dld_feature_extractor",
                 supported_sources=("torchvision_resnet34_imagenet1k_v1", "upm_main_best"),
-                config_paths=(("dld", "feature_extractor", "external", "run_directory_env"),),
+                config_paths=(("dld", "feature_extractor", "external"),),
             ),
         ) if source == "external_checkpoint" else (),
     )

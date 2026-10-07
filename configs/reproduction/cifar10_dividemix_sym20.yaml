@@ -68,7 +68,7 @@ dividemix:
     lambda_r: 1.0
     rampup_epochs: 16
   training:
-    epochs: 300
+    epochs: 290
   inference:
     ensemble: official_logits_sum
 trainer:

@@ -1677,7 +1677,23 @@ class DataService:
         if forbidden:
             names = ", ".join(sorted(forbidden))
             raise ValueError(f"{names} are experiment inputs, not dataset declarations")
-        payload = self.declarations(name).to_dict()
+        current = self.declarations(name)
+        payload = current.to_dict()
+        if {"noise_status", "noise_origin", "noise_rate"}.intersection(updates):
+            if not current.noise_override:
+                profile = self.record(name).profile
+                if profile is None:
+                    raise ValueError("dataset must be inspected before declarations are resolved")
+                effective = resolve_dataset_capabilities(DatasetProfile.from_dict(profile), current)
+                payload.update(noise_status=effective.noise_status.value,
+                               noise_origin=effective.noise_origin.value,
+                               noise_rate=effective.noise_rate.to_dict())
+            if "noise_status" in updates and updates["noise_status"] != payload["noise_status"]:
+                if "noise_rate" not in updates:
+                    payload["noise_rate"] = NoiseRateInfo().to_dict()
+                if "noise_origin" not in updates:
+                    payload["noise_origin"] = "native" if updates["noise_status"] == "noisy" else "unknown"
+            payload["noise_override"] = True
         for key, value in updates.items():
             if key not in payload:
                 raise ValueError(f"unknown dataset declaration field: {key}")

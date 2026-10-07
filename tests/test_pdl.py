@@ -44,11 +44,20 @@ from lnl_toolbox.noise import PartTransitionArtifact, PartTransitionEstimator, P
 from lnl_toolbox.training.snapshots import FeatureSnapshot
 
 # --- merged from test_pdl.py ---
-from lnl_toolbox.training.instance_transition_experiment import _official_pdl_split, _pdl_official_raw_features
+from lnl_toolbox.training.instance_transition_experiment import _official_pdl_split, _pdl_official_raw_features, _representation_positions
 from lnl_toolbox.training.runners import is_official_pdl_config
 
 # --- merged from test_pdl.py ---
 class _pdl_PDLTest(unittest.TestCase):
+
+    def test_shared_representation_keeps_unsorted_official_split_order(self) -> None:
+        indices = np.array([7, 2, 9, 1, 5], dtype=np.int64)
+        train = _representation_positions(indices, np.array([1, 7, 9]))
+        validation = _representation_positions(indices, np.array([2, 5]))
+        np.testing.assert_array_equal(train, [3, 0, 2])
+        np.testing.assert_array_equal(validation, [1, 4])
+        with self.assertRaisesRegex(KeyError, "does not cover"):
+            _representation_positions(indices, np.array([3]))
 
     def test_official_variant_predicate_is_shared_by_requirement_and_runner(self) -> None:
         self.assertTrue(is_official_pdl_config({

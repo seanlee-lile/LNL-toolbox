@@ -119,11 +119,7 @@ def _estimate_volmin(config, model, loader, device):
     scheduler_config = dict(value.get("scheduler", {}) or {})
     scheduler = None
     if str(scheduler_config.get("name", "none")).lower() == "multistep":
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(
-            optimizer,
-            milestones=[int(item) for item in scheduler_config.get("milestones", [])],
-            gamma=float(scheduler_config.get("gamma", 0.1)),
-        )
+        scheduler = build_scheduler(optimizer, scheduler_config, int(value["epochs"]))
     elif str(scheduler_config.get("name", "none")).lower() != "none":
         raise ValueError("paper VolMin transition scheduler must be none or multistep")
     latest = {}

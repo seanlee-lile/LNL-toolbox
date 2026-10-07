@@ -572,7 +572,7 @@ class _dld_readiness_DLDReadinessTest(unittest.TestCase):
             output = source.model.forward_with_features(torch.zeros(1, 3, 32, 32))
             self.assertEqual(tuple(output.features.shape), (1, 512))
 
-    def test_torchvision_source_does_not_download_missing_weights(self) -> None:
+    def test_torchvision_source_reports_missing_official_weights(self) -> None:
         config = {
             'adapter': 'torchvision_resnet34_imagenet1k_v1',
             'weights': 'IMAGENET1K_V1',
@@ -581,8 +581,21 @@ class _dld_readiness_DLDReadinessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, mock.patch(
             'torch.hub.get_dir', return_value=directory
         ):
-            with self.assertRaisesRegex(FileNotFoundError, 'not cached'):
+            with self.assertRaisesRegex(FileNotFoundError, 'Download resnet34-b627a593.pth'):
                 load_torchvision_resnet34_imagenet1k_v1_source(config)
+
+    def test_torchvision_source_rejects_wrong_cached_weights(self) -> None:
+        from torchvision.models import ResNet34_Weights
+        from lnl_toolbox.training.dld_pretrained import _cached_torchvision_weight
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch(
+            'torch.hub.get_dir', return_value=directory
+        ):
+            cached = Path(directory) / 'checkpoints' / 'resnet34-b627a593.pth'
+            cached.parent.mkdir()
+            cached.write_bytes(b'not official weights')
+            with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+                _cached_torchvision_weight(ResNet34_Weights.IMAGENET1K_V1.url)
 
     def test_real_short_config_is_full_data_external_sym20(self) -> None:
         path = _dld_readiness_ROOT / 'configs' / 'reproduction' / 'cifar10_dld_sym20_short.yaml'
@@ -597,6 +610,12 @@ class _dld_readiness_DLDReadinessTest(unittest.TestCase):
         self.assertEqual(parsed.fidelity['neighbor_metric'], 'cosine_similarity')
         self.assertEqual(parsed.fidelity['neighbor_weighting'], 'inverse_neighbor_value')
         self.assertEqual(parsed.feature_extractor['source'], 'external_checkpoint')
+        self.assertEqual(parsed.feature_extractor['external']['adapter'], 'torchvision_resnet34_imagenet1k_v1')
+        self.assertNotIn('checkpoint_sha256', parsed.feature_extractor['external'])
+        from lnl_toolbox.training.runners import resolve_runner
+        requirements = resolve_runner(config).requirements(config)
+        self.assertEqual(requirements.required_pretrained_roles, ())
+        self.assertEqual(requirements.prerequisites[0].key, 'dld_feature_extractor')
         self.assertEqual(parsed.precorrection['query_chunk_size'], 64)
         self.assertEqual(parsed.epochs, 15)
         legacy = yaml.safe_load(path.read_text(encoding='utf-8'))

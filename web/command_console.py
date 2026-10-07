@@ -46,6 +46,8 @@ if str(ROOT) not in sys.path:
 if SRC_ROOT.is_dir() and str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from lnl_toolbox.quickstart.templates import SPLIT_COUNT_PATHS, reference_train_size
+
 
 @dataclass(frozen=True)
 class CommandSpec:
@@ -675,6 +677,35 @@ def _web_recipe_config(recipe_id: str) -> dict[str, Any]:
     return deepcopy(load_yaml(recipe.config_path))
 
 
+def _external_resource_payload(recipe_id: str, config_path: str = "", dataset: str = "", paper_id: str = "", noise: str = "") -> dict[str, object]:
+    from web.external_resources import resources
+    from lnl_toolbox.catalog import load_yaml
+
+    config = _web_recipe_config(recipe_id)
+    if dataset and not config_path:
+        from web.quick_start_api import SERVICE, _selection
+        option = next((item for item in SERVICE.method_options(dataset, _selection({"noise": json.loads(noise)}))
+                       if item.paper_id == paper_id), None)
+        if option is None or option.candidate_config is None:
+            raise ValueError("当前论文的运行配置尚未生成")
+        config = option.candidate_config
+    if config_path:
+        source = Path(config_path)
+        if not source.is_absolute():
+            source = ROOT / source
+        source = source.resolve()
+        if not source.is_relative_to(ROOT.resolve()) or source.suffix.lower() not in {".yaml", ".yml"}:
+            raise ValueError("运行配置必须位于项目目录中")
+        config = load_yaml(source)
+    items = resources(config, ROOT)
+    # Only fixed server-selected targets can be written by the downloader.
+    for item in items:
+        if item["id"] != "dld-resnet34" and not Path(item["path"]).is_relative_to(ROOT.resolve()):
+            item["downloadable"] = False
+            item["note"] += " 此路径位于项目外，请自行放置文件。"
+    return {"resources": items}
+
+
 def _paper_payload() -> list[dict[str, object]]:
     """Return paper metadata and available recipe variants for the UI."""
 
@@ -735,6 +766,7 @@ def _paper_payload() -> list[dict[str, object]]:
                 "implementation_status": config.implementation_status,
                 "reproduction_status": config.reproduction_status,
                 "availability": config.availability,
+                "external_resources": _external_resource_payload(config.recipe_id)["resources"],
             })
             if paper.id == "mentornet":
                 resolved = resolve_config_paths(load_recipe_config(recipe), ROOT)
@@ -754,13 +786,29 @@ def _dataset_payload() -> dict[str, object]:
     from lnl_toolbox.training.data_service import DataService
 
     service = DataService()
+    from lnl_toolbox.data.profile import resolve_dataset_capabilities
+
     adapters = [
         name for name in service.registry.names() if not name.startswith("synthetic_")
     ]
+    datasets = []
+    for report in service.list_datasets():
+        item = report.to_dict()
+        if report.status == "ready" and report.profile is not None and report.location:
+            declared = service.declarations(report.name)
+            capabilities = resolve_dataset_capabilities(report.profile, declared)
+            item["noise_facts"] = {
+                "status": capabilities.noise_status.value,
+                "rate": capabilities.noise_rate.to_dict(),
+                "inspected_status": report.profile.noise.status.value,
+                "inspected_rate": report.profile.noise.rate.to_dict(),
+                "declared": declared.to_dict(),
+            }
+        datasets.append(item)
     return {
         "catalog": str(service.catalog.path),
         "adapters": adapters,
-        "datasets": [report.to_dict() for report in service.list_datasets()],
+        "datasets": datasets,
     }
 
 
@@ -1254,6 +1302,10 @@ def _parameter_display_policy() -> dict[str, object]:
     return policy if isinstance(policy, dict) else {}
 
 
+def _internal_seed_path(path: str) -> bool:
+    return path != "seed" and path.rsplit(".", 1)[-1].endswith("seed")
+
+
 def _parameter_presentation(path: str, method: str = "") -> tuple[str, str]:
     """Return the method-aware UI destination and optional display label.
 
@@ -1267,6 +1319,14 @@ def _parameter_presentation(path: str, method: str = "") -> tuple[str, str]:
     # protocol. Raw trusted_validation.* keys are not meaningful controls in
     # the ordinary Web parameter editor.
     if path.startswith("trusted_validation."):
+        return "hidden", ""
+    # These caps only shrink a run for smoke/debugging.  A method's common
+    # controls must not promote them into paper-facing parameters.
+    if path in {
+        "data.max_train_samples",
+        "data.max_validation_samples",
+        "data.max_test_samples",
+    }:
         return "hidden", ""
     method_key = _method_registry_key(method)
     override = {
@@ -1282,7 +1342,7 @@ def _parameter_presentation(path: str, method: str = "") -> tuple[str, str]:
         return "hidden", ""
     # The top-level experiment seed is the only user-facing seed control.
     # Component seeds are derived from it when the config is normalized.
-    if path != "seed" and path.rsplit(".", 1)[-1].endswith("seed") and not path.endswith("peer_seed_offset"):
+    if _internal_seed_path(path):
         return "hidden", ""
     if path in override.get("selection_paths", ()):
         labels = policy.get("selection_labels", {})
@@ -1292,8 +1352,8 @@ def _parameter_presentation(path: str, method: str = "") -> tuple[str, str]:
         labels = policy.get("resource_labels", {})
         label = labels.get(path, "外部资源/运行前置条件") if isinstance(labels, dict) else "外部资源/运行前置条件"
         return "resource", str(label)
-    # Explicit common controls may override a generic hidden prefix such as
-    # data.max_* when the method's first-pass audit says users may edit it.
+    # Explicit common controls may override generic hidden prefixes, except
+    # for the smoke-only sample caps handled above.
     if path in override.get("common_paths", ()):
         return "common", "公共实验设置"
     hidden_paths = policy.get("hidden_paths", ())
@@ -1435,6 +1495,8 @@ def _parameter_display_group(field: dict[str, object], method: str) -> str:
 
     if not field.get("editable"):
         return "restricted"
+    if tuple(str(field.get("path", "")).split(".")) in SPLIT_COUNT_PATHS:
+        return "default"
     if (
         field.get("kind") in {"list", "object"}
         or isinstance(field.get("value"), (list, dict))
@@ -1697,7 +1759,7 @@ def _registry_config_fields(
                     "research_group": research_group,
                     "research_category": research_category,
                     "level_label": level_metadata.get("label_zh", level),
-                    "editable": permission == "editable",
+                    "editable": permission == "editable" and not _internal_seed_path(str(path)),
                     "default_expanded": bool(
                         level_metadata.get("default_expanded", False)
                     ),
@@ -1726,6 +1788,7 @@ def _registry_config_fields(
                 presentation, presentation_label = _parameter_presentation(path, method)
                 fields.append({
                     **field, "level": "advanced", "visible": presentation != "hidden",
+                    "editable": bool(field["editable"]) and not _internal_seed_path(path),
                     "presentation": presentation, "presentation_label": presentation_label,
                     "research_group": "", "research_category": "", "linked_fields": [],
                 })
@@ -1806,11 +1869,22 @@ def _config_schema(
             },
         )
     )
-    explicit_rates = _explicit_multistep_rates_field(payload["config"])
-    if explicit_rates is not None:
-        fields.append(explicit_rates)
+    fields.extend(_schedule_editor_fields(payload["config"]))
+    original = (
+        _config_payload(recipe_hint)["config"]
+        if recipe_hint and payload["recipe"] != recipe_hint
+        else payload["config"]
+    )
+    original_count = reference_train_size(original)
     for field in fields:
         field["display_group"] = _parameter_display_group(field, method)
+        path = tuple(str(field.get("path", "")).split("."))
+        if original_count and path in SPLIT_COUNT_PATHS:
+            source = original
+            for part in path:
+                source = source.get(part) if isinstance(source, dict) else None
+            if isinstance(source, int) and not isinstance(source, bool):
+                field["split_reference"] = {"count": source, "total": original_count}
     return {
         "recipe": payload["recipe"],
         "source_path": payload["path"],
@@ -1829,27 +1903,73 @@ def _field_map(config: dict[str, Any], method: str) -> dict[str, dict[str, objec
         else _legacy_editable_config_fields(config)
     )
     result = {str(field["path"]): field for field in fields}
-    explicit_rates = _explicit_multistep_rates_field(config)
-    if explicit_rates is not None:
-        result[str(explicit_rates["path"])] = explicit_rates
+    for schedule_field in _schedule_editor_fields(config):
+        result[str(schedule_field["path"])] = schedule_field
     return result
 
 
-def _explicit_multistep_rates_field(config: dict[str, Any]) -> dict[str, object] | None:
-    """Optional Web edit field only for the shared supervised scheduler runtime."""
-    execution = config.get("execution", {})
-    scheduler = config.get("scheduler", {})
-    if not isinstance(execution, dict) or execution.get("runner") not in {"supervised", "clean"}:
-        return None
-    if not isinstance(scheduler, dict) or scheduler.get("name") != "multistep":
-        return None
-    return {
-        "path": "scheduler.lr_values", "label": "各节点后的学习率",
-        "value": scheduler.get("lr_values"), "kind": "list", "nullable": True,
-        "level": "advanced", "research_group": "", "research_category": "",
-        "editable": True, "visible": True, "presentation": "parameter",
-        "note": "可选；每个节点填写一个绝对学习率。未设置时继续使用 gamma。",
-    }
+def _schedule_editor_fields(config: dict[str, Any]) -> list[dict[str, object]]:
+    """Expose absolute stage rates wherever the training scheduler supports them."""
+    result: list[dict[str, object]] = []
+    execution = config.get("execution") or {}
+    cwd = config.get("method") == "cwd" or isinstance(execution, dict) and execution.get("runner") == "cwd"
+
+    if cwd and isinstance(config.get("scheduler"), dict):
+        result.append({
+            "path": "scheduler.name", "label": "学习率变化方式",
+            "value": config["scheduler"].get("name", "multistep"), "kind": "text",
+            "level": "advanced", "research_group": "", "research_category": "",
+            "editable": True, "visible": True, "presentation": "parameter",
+            "note": "CWD 原配置使用分段学习率；关闭后保持固定学习率。",
+        })
+
+    def visit(value: object, path: str = "") -> None:
+        if not isinstance(value, dict):
+            return
+        if "scheduler" in path.split(".") and (
+            (value.get("name") in {"multistep", "none"} and isinstance(value.get("milestones"), list))
+            or (path == "scheduler" and isinstance(value.get("step_milestones"), list))
+            or (path == "scheduler" and cwd and isinstance(value.get("milestones"), list))
+        ):
+            result.append({
+                "path": path + ".lr_values", "label": "各节点后的学习率",
+                "value": value.get("lr_values"), "kind": "list", "nullable": True,
+                "level": "advanced", "research_group": "", "research_category": "",
+                "editable": True, "visible": True, "presentation": "parameter",
+                "note": "每个节点可单独填写学习率；留空时使用论文配置的衰减倍率。",
+            })
+        for key, child in value.items():
+            if isinstance(child, dict):
+                visit(child, f"{path}.{key}" if path else key)
+
+    visit(config)
+    return result
+
+
+def _validate_schedule_editor_rates(config: dict[str, Any]) -> None:
+    execution = config.get("execution") or {}
+    cwd = config.get("method") == "cwd" or isinstance(execution, dict) and execution.get("runner") == "cwd"
+    def visit(value: object, path: str = "") -> None:
+        if not isinstance(value, dict):
+            return
+        if "scheduler" in path.split(".") and value.get("lr_values") is not None:
+            nodes = value.get("step_milestones", value.get("milestones"))
+            rates = value["lr_values"]
+            if ("step_milestones" not in value
+                    and str(value.get("name", "multistep" if cwd else "none")) != "multistep"):
+                raise ValueError(f"{path}.lr_values 仅适用于分段学习率")
+            if not isinstance(nodes, list) or not isinstance(rates, list) or len(nodes) != len(rates):
+                raise ValueError(f"{path}.lr_values requires one value per milestone")
+            if (any(isinstance(node, bool) or not isinstance(node, int) or node <= 0 for node in nodes)
+                    or nodes != sorted(set(nodes))
+                    or any(isinstance(rate, bool) or not isinstance(rate, (int, float))
+                           or not math.isfinite(rate) or rate <= 0 for rate in rates)):
+                raise ValueError(f"{path}.lr_values 需要与递增且不重复的节点一一对应，且学习率必须为正数")
+        for key, child in value.items():
+            if isinstance(child, dict):
+                visit(child, f"{path}.{key}" if path else key)
+
+    visit(config)
 
 
 def _set_config_path(config: dict[str, object], path: str, value: object) -> None:
@@ -1860,7 +1980,9 @@ def _set_config_path(config: dict[str, object], path: str, value: object) -> Non
         if not isinstance(child, dict):
             raise ValueError(f"不允许新增或重组配置字段：{path}")
         current = child
-    if path == "scheduler.lr_values":
+    execution = config.get("execution") or {}
+    cwd = config.get("method") == "cwd" or isinstance(execution, dict) and execution.get("runner") == "cwd"
+    if path.endswith(".lr_values") or (path == "scheduler.name" and cwd):
         if value is None:
             current.pop(parts[-1], None)
         else:
@@ -2137,9 +2259,9 @@ def _validate_changed_training_selectors(
             optimizer = torch.optim.SGD(dummy.parameters(), lr=0.01)
             epochs = int(after.get("trainer", {}).get("epochs", 1))
             if method == "cal" and path == "scheduler":
-                from lnl_toolbox.training.experiment import AlphaScaledScheduler
+                from lnl_toolbox.training.experiment import build_alpha_scaled_scheduler
 
-                AlphaScaledScheduler(optimizer, value)
+                build_alpha_scaled_scheduler(optimizer, value)
             elif method == "jocor":
                 from lnl_toolbox.training.multi_model_experiment import _apply_epoch_optimizer_schedule
 
@@ -2291,6 +2413,8 @@ def _save_config(payload: object) -> dict[str, object]:
             if not isinstance(patch, dict) or not isinstance(patch.get("path"), str):
                 raise ValueError("YAML 参数修改格式错误")
             path = patch["path"]
+            if _internal_seed_path(path):
+                raise ValueError(f"内部随机种子由 seed 自动生成，不能单独修改：{path}")
             field = fields.get(path)
             if field is None:
                 raise ValueError(f"不允许修改配置结构或组件：{path}")
@@ -2303,6 +2427,7 @@ def _save_config(payload: object) -> dict[str, object]:
         formal = _formal_registry_config(method)
         source_config = formal[1] if formal is not None else parsed
     _normalize_registry_numeric_fields(parsed, method)
+    _validate_schedule_editor_rates(parsed)
     from lnl_toolbox.core.config_schema import synchronize_experiment_seed
 
     parsed = synchronize_experiment_seed(parsed)
@@ -2735,6 +2860,14 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 _json_response(self, {"error": str(exc)}, 500)
             return
+        if path == "/api/external-resources":
+            try:
+                query = parse_qs(urlparse(self.path).query)
+                _json_response(self, _external_resource_payload(
+                    *(query.get(key, [""])[0] for key in ("recipe", "config_path", "dataset", "paper_id", "noise"))))
+            except Exception as exc:
+                _json_response(self, {"error": str(exc)}, 400)
+            return
         if path == "/api/papers":
             try:
                 _json_response(self, _paper_payload())
@@ -2866,6 +2999,20 @@ class ConsoleHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/external-resources/download":
+            try:
+                from web.external_resources import start_download
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                payload = _external_resource_payload(*(str(body.get(key, "")) for key in ("recipe", "config_path", "dataset", "paper_id", "noise")))
+                item = next((item for item in payload["resources"] if item["id"] == body.get("resource")), None)
+                if item is None:
+                    raise ValueError("当前配置不需要该资源")
+                start_download(item)
+                _json_response(self, {"started": True}, 202)
+            except Exception as exc:
+                _json_response(self, {"error": str(exc)}, 400)
+            return
         if path.startswith("/api/quick-start/"):
             try:
                 length = int(self.headers.get("Content-Length", "0"))

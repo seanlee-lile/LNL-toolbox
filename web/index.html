@@ -67,7 +67,7 @@
     main { width: 100%; max-width: none; margin: 0; padding: 12px 12px 30px; }
     h1 { margin: 0 0 8px; font-size: 34px; line-height: 1.25; letter-spacing: -.02em; }
     .subtitle { color: var(--text-secondary); margin-bottom: 16px; font-size: 17px; }
-    .layout { display: grid; grid-template-columns: minmax(170px, 190px) minmax(0, 1fr); gap: 12px; align-items: start; width: 100%; margin: 0; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; width: 100%; margin: 0; }
     .panel {
       background: var(--bg-card);
       border: 1px solid var(--line);
@@ -77,14 +77,18 @@
     }
     aside.panel { background: var(--bg-sidebar); }
     .section-title { color: var(--text-secondary); font-size: 14px; font-weight: 750; letter-spacing: .08em; margin: 0 0 13px; }
-    .module-list { display: grid; gap: 10px; }
+    .workspace-navigation { min-width: 0; }
+    .module-list { display: flex; align-items: flex-end; overflow-x: auto; border-bottom: 2px solid var(--border-strong); }
+    .workspace-navigation .module-button { flex: 0 0 auto; width: auto; min-width: 112px; min-height: 50px; padding: 10px 24px; border-radius: 12px 12px 0 0; border-bottom: 0; text-align: center; }
+    .workspace-navigation .module-button .label { font-size: 18px; }
+    .workspace-navigation .module-button .desc { display: none; }
+    .workspace-navigation .module-button[data-module="start"] { min-width: 160px; min-height: 82px; padding: 16px 30px; border-radius: 36px 36px 0 0; }
+    .workspace-navigation .module-button[data-module="start"] .label { font-size: 30px; }
+    .workspace-navigation .module-button.active { box-shadow: inset 0 -4px 0 var(--accent-orange); }
     .workspace-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; }
     .workspace-tab { min-height: 38px; padding: 8px 12px; font-size: 14px; }
     .workspace-tab.active { border-color: var(--active-border); color: var(--selected-text); background: var(--active-bg); }
-    .advanced-tools { margin-top: 20px; border-top: 1px solid var(--border); padding-top: 14px; }
-    .advanced-tools > summary, .advanced-command-panel > summary { cursor: pointer; color: var(--text-secondary); font-size: 14px; font-weight: 750; }
-    .advanced-tools-body { display: grid; gap: 8px; margin-top: 12px; }
-    .advanced-tools-body button { min-height: 40px; }
+    .advanced-command-panel > summary { cursor: pointer; color: var(--text-secondary); font-size: 14px; font-weight: 750; }
     .console-context {
       position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center;
       margin: 0 0 14px; padding: 11px 14px; border: 1px solid var(--border); border-radius: var(--radius-md);
@@ -182,6 +186,7 @@
     .config-context strong { color: var(--selected-text); }
     .config-context code { color: var(--text-primary); overflow-wrap: anywhere; }
     .workflow-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0; }
+    .paper-start-actions { display: flex; align-items: end; }
     .sweep-groups { display: grid; gap: 14px; margin-top: 16px; }
     .sweep-group { border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--bg-soft); }
     .sweep-group > summary { cursor: pointer; padding: 13px 15px; color: var(--text-primary); font-weight: 700; }
@@ -242,9 +247,10 @@
     .tutorial-quick { margin-top: 18px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--bg-soft); }
     .tutorial-quick > summary { cursor: pointer; padding: 13px 15px; color: var(--text-primary); font-weight: 700; }
     .tutorial-quick-body { padding: 0 15px 15px; }
-    .data-noise-row { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; margin-top: 14px; }
-    .data-noise-row label { min-width: 210px; margin: 0; }
-    .data-noise-row .helper { flex-basis: 100%; margin: 0; }
+    .data-noise-editor { display: grid; grid-template-columns: repeat(3, minmax(150px, 1fr)); gap: 10px; padding: 12px; }
+    .data-noise-editor label { margin: 0; }
+    .data-noise-editor .helper, .data-noise-editor .actions { grid-column: 1 / -1; margin: 0; }
+    .data-table .data-row-edit { min-height: 34px; padding: 5px 10px; }
     .data-feedback { margin: 15px 0; padding: 14px 15px; border: 1px solid var(--line); border-radius: var(--radius-md); background: #fffdf7; }
     .data-feedback.success { border-color: #a9c2ad; background: var(--success-soft); }
     .data-feedback.failed { border-color: #d7abab; color: var(--danger); background: var(--danger-soft); }
@@ -319,7 +325,11 @@
       .console-context { position: static; }
       .context-scratch { margin-left: 0; }
     }
-    @media (max-width: 620px) { .commands { grid-template-columns: 1fr; } }
+    @media (max-width: 620px) {
+      .commands { grid-template-columns: 1fr; }
+      .workspace-navigation .module-button { min-width: 84px; padding: 10px 14px; }
+      .workspace-navigation .module-button[data-module="start"] { min-width: 112px; padding: 16px 20px; }
+    }
   </style>
   <link rel="stylesheet" href="/assets/quick_start.css">
 </head>
@@ -338,7 +348,7 @@
     </div>
   <main>
     <h1 id="page-title">LNL Toolbox Command Console</h1>
-    <div id="page-subtitle" class="subtitle">左侧选择功能，右侧配置参数；对应指令会显示在下方 Preview 模块中，点击“执行此指令”即可完成操作。</div>
+    <div id="page-subtitle" class="subtitle">选择上方工作区，在下方配置参数；对应指令会显示在 Preview 模块中，点击“执行此指令”即可完成操作。</div>
     <div id="console-context" class="console-context" aria-label="当前工作上下文">
       <span class="context-item">当前数据集：<strong id="context-dataset">未选择</strong></span>
       <span class="context-item"><span id="context-config-label">当前实验</span>：<strong id="context-config">未选择</strong></span>
@@ -346,14 +356,9 @@
       <a class="context-scratch" href="/scratch" target="_blank" rel="noopener">打开 Scratch 搭建器</a>
     </div>
     <div class="layout">
-      <aside class="panel">
-        <div class="section-title">工作区</div>
+      <nav class="workspace-navigation" aria-label="工作区">
         <div id="module-list" class="module-list"></div>
-        <details class="advanced-tools">
-          <summary>高级工具</summary>
-          <div id="advanced-tools-list" class="advanced-tools-body"></div>
-        </details>
-      </aside>
+      </nav>
       <div class="right-stack">
         <section class="panel parameter-panel">
           <div class="parameter-heading">
@@ -405,7 +410,7 @@
             <button id="clear" class="secondary">清空日志</button>
           </div>
           <details id="advanced-command-panel" class="advanced-command-panel shortcut-section">
-            <summary>高级工具 · 快捷命令</summary>
+            <summary>快捷命令</summary>
             <div id="commands" class="commands"></div>
           </details>
           <div class="note">训练按钮默认面向短测试。正式论文实验请使用对应 reproduction YAML 和论文规定轮次。</div>
@@ -419,7 +424,7 @@
             </div>
             <pre id="training-metrics" class="hidden"></pre>
           </section>
-          <pre id="output">选择左侧模块或快捷命令后，点击“执行此指令”。</pre>
+          <pre id="output">选择上方工作区或快捷命令后，点击“执行此指令”。</pre>
         </section>
     </div>
   </main>
@@ -428,32 +433,29 @@
   <script>
     const recipeMode = window.location.pathname === "/recipe" || window.location.pathname === "/recipe/";
     const allModules = [
-      { id: "quickstart", label: "快速开始", description: "从数据集出发快速配置并启动实验。", hint: "数据识别 · 噪声设置 · 方法兼容性" },
-      { id: "beginner", label: "新手教程", description: "了解工具箱核心功能与标准实验流程。", hint: "环境 · 配置 · 训练 · 恢复" },
+      { id: "quickstart", label: "快速开始", description: "配置数据集、标签噪声和论文方法。", hint: "数据集 · 标签噪声 · 论文方法" },
       { id: "yaml", label: "新建 YAML", description: "创建和编辑自定义实验配置。", hint: "recipe 与项目配置" },
       { id: "data", label: "本地数据集", description: "注册、检查并管理自己的数据集。", hint: "登记 · 检查 · 兼容性" },
-      { id: "sweep", label: "参数组合实验", description: "按参数笛卡尔积批量运行并比较多组实验。", hint: "参数组合 · seeds · 对比" },
+      { id: "sweep", label: "参数组合实验", description: "按参数笛卡尔积批量运行并比较多组实验。", hint: "参数组合 · 对比" },
       { id: "results", label: "运行管理", description: "查看、恢复和比较已有实验运行。", hint: "状态 · resume · report · compare" },
       { id: "papers", label: "论文方法", description: "查看论文方法、配置与实现说明。", hint: "论文目录 · recipe · 实现映射" },
-      { id: "advanced", label: "自由输入", description: "直接执行高级 lnl 命令。", hint: "CLI 精确控制" },
     ];
     const workspaces = [
-      {id:"start", label:"开始", description:"先登记或选择可用数据集，再进入实验或论文。", hint:"数据集优先", defaultModule:"quickstart"},
+      {id:"start", label:"开始", description:"配置并运行论文实验。", hint:"", defaultModule:"quickstart"},
       {id:"data", label:"数据集", description:"登记、检查并确认本地数据集是否可用于实验。", hint:"登记 · 检查 · 兼容性", defaultModule:"data"},
-      {id:"experiments", label:"实验", description:"创建配置、启动运行、参数组合实验与查看结果。", hint:"配置 · 运行 · 参数组合 · 结果", defaultModule:"yaml"},
+      {id:"experiments", label:"实验", description:"运行参数组合实验并对比实验结果。", hint:"参数组合 · 结果对比", defaultModule:"sweep"},
       {id:"papers", label:"论文", description:"浏览 26 篇论文、正式配置与数据集兼容性。", hint:"目录 · 配置 · 限制", defaultModule:"papers"},
     ];
     const workspaceForModule = {
-      quickstart:"start", beginner:"start", data:"data", yaml:"experiments", run:"experiments",
-      sweep:"experiments", results:"experiments", papers:"papers", advanced:"advanced",
+      quickstart:"start", data:"data", yaml:"experiments", run:"experiments",
+      sweep:"experiments", results:"experiments", papers:"papers",
     };
     const workspaceTabs = {
-      start: [{id:"quickstart", label:"数据集优先"}, {id:"beginner", label:"完整新手引导"}],
-      experiments: [{id:"yaml", label:"配置"}, {id:"run", label:"运行"}, {id:"sweep", label:"参数组合实验"}, {id:"results", label:"结果"}],
+      experiments: [{id:"sweep", label:"参数组合实验"}, {id:"results", label:"比对实验结果"}],
     };
     const modules = allModules;
     const sweepModule = modules.find(function (item) { return item.id === "sweep"; });
-    if (sweepModule) { sweepModule.label = "参数组合实验"; sweepModule.description = "按参数笛卡尔积批量运行并比较多组实验。"; sweepModule.hint = "参数组合 · seeds · 对比"; }
+    if (sweepModule) { sweepModule.label = "参数组合实验"; sweepModule.description = "按参数笛卡尔积批量运行并比较多组实验。"; sweepModule.hint = "参数组合 · 对比"; }
     const commandPurposeDescriptions = {
       "help": "查看 CLI 命令与参数。",
       "doctor": "检查环境、依赖与设备。",
@@ -469,8 +471,9 @@
       "papers": "浏览工具箱内置的论文方法目录。",
       "paper-config": "查看论文正式配置与映射。"
     };
-    const state = { selected: null, request: null, previewEdited: false, previewAutoCommand: "", previewAutoRequest: null, jobId: null, timer: null, resultTimer: null, jobListTimer: null, jobs: [], module: recipeMode ? "yaml" : "quickstart", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, tutorial: {steps:[], sequence:[]}, tutorialStep: 0, tutorialCompleted: {}, tutorialRunningStep: "", tutorialRecipe: "cifar10-symmetric-ce-smoke", tutorialData: "", tutorialOutput: "artifacts/runs/tutorial-ce-smoke", tutorialResume: null, tutorialQuickMode: false, tutorialQuickAction: "validate", tutorialQuickEpochs: "1", tutorialQuickSeeds: "1 2 3", yamlSchema: null, yamlSourcePath: "", yamlTextDirty: false, yamlFormDirty: false, yamlSuggestedPath: "", yamlDestinationPath: "", yamlDataset: "", yamlMode: "paper", yamlPaper: "", yamlBase: "cifar10-symmetric-ce-smoke", yamlLoss: "ce", yamlSelector: "all", yamlKeepRate: "0.8", yamlUpdate: "standard", yamlMilestones: "60 80", yamlGamma: "0.1", yamlCdrNoiseRate: "0.2", yamlL1Decay: "0.0", yamlRecipeCompatibility: null, yamlRecipeCompatibilityAlias: "", yamlCompatibilityLoading: false, yamlCompatibilityError: "", pendingYamlPath: "", activeConfig: {kind:"recipe", value:"cifar10-clean-smoke", label:"cifar10-clean-smoke"}, runDataset: "", trainingData: "", dataAction: "status", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, dataCompatibility: null, dataRecipeCompatibility: null, dataCompatibilityAlias: "", dataCompatibilityError: "", dataCompatibilityLoading: false, dataSelectedMethod: "", dataSelectedRecipe: "", dataMethodNoisePrior: "", dataShowUnavailable: false, removeConfirmed: false, sweepSourceKind: "recipe", sweepRecipe: "cifar10-clean-smoke", sweepPath: "", sweepDataset: "", sweepSchema: null, sweepSchemaKey: "", sweepRows: [], sweepPlan: null, sweepOutput: "artifacts/web-sweep", resultData: null, resultSelected: [], resultFilter: "", resultListCollapsed: false, resultListInitialized: false, resumeData: null, resumeInspectionKey: "", paperId: "", paperRecipe: "" };
+    const state = { selected: null, request: null, previewEdited: false, previewAutoCommand: "", previewAutoRequest: null, jobId: null, timer: null, resultTimer: null, jobListTimer: null, jobs: [], module: recipeMode ? "yaml" : "quickstart", recipes: [], papers: [], datasets: {catalog:"", adapters:[], datasets:[]}, tutorial: {steps:[], sequence:[]}, tutorialStep: 0, tutorialCompleted: {}, tutorialRunningStep: "", tutorialRecipe: "cifar10-symmetric-ce-smoke", tutorialData: "", tutorialOutput: "artifacts/runs/tutorial-ce-smoke", tutorialResume: null, tutorialQuickMode: false, tutorialQuickAction: "validate", tutorialQuickEpochs: "1", tutorialQuickSeeds: "1 2 3", yamlSchema: null, yamlSourcePath: "", yamlTextDirty: false, yamlFormDirty: false, yamlSuggestedPath: "", yamlDestinationPath: "", yamlDataset: "", yamlMode: "paper", yamlPaper: "", yamlBase: "cifar10-clean-smoke", yamlLoss: "ce", yamlSelector: "all", yamlKeepRate: "0.8", yamlUpdate: "standard", yamlMilestones: "60 80", yamlGamma: "0.1", yamlCdrNoiseRate: "0.2", yamlL1Decay: "0.0", yamlRecipeCompatibility: null, yamlRecipeCompatibilityAlias: "", yamlCompatibilityLoading: false, yamlCompatibilityError: "", pendingYamlPath: "", activeConfig: {kind:"recipe", value:"cifar10-clean-smoke", label:"cifar10-clean-smoke"}, runDataset: "", trainingData: "", dataAction: "status", dataAlias: "", dataAdapter: "cifar10", dataRecipe: "cifar10-clean-smoke", dataOutput: "", dataResult: null, dataCompatibility: null, dataRecipeCompatibility: null, dataCompatibilityAlias: "", dataCompatibilityError: "", dataCompatibilityLoading: false, dataSelectedMethod: "", dataSelectedRecipe: "", dataMethodNoisePrior: "", dataShowUnavailable: false, removeConfirmed: false, sweepDataset: "", sweepSchema: null, sweepSchemaKey: "", sweepRows: [], sweepPlan: null, sweepOutput: "artifacts/web-sweep", resultData: null, resultSelected: [], resultFilter: "", resultListCollapsed: false, resultListInitialized: false, resumeData: null, resumeInspectionKey: "", paperId: "", paperRecipe: "" };
     state.dataAction = "list";
+    state.dataEditingAlias = "";
     if (recipeMode) {
       document.getElementById("page-title").textContent = "LNL Toolbox Recipe Editor";
       document.getElementById("page-subtitle").textContent = "从已有 recipe 组合配置，并查看或保存 YAML。";
@@ -639,9 +642,6 @@
     function setSweepSource(source) {
       const normalized = normalizedConfigSource(source.kind, source.value, source.label);
       setActiveConfig(normalized.kind, normalized.value, normalized.label);
-      state.sweepSourceKind = normalized.kind;
-      if (normalized.kind === "path") state.sweepPath = normalized.value;
-      else state.sweepRecipe = normalized.value;
       state.sweepSchema = null;
       state.sweepSchemaKey = "";
       state.sweepRows = [];
@@ -727,6 +727,7 @@
           execute: function () { runButton.click(); },
           status: function (message, kind) { statusNode.textContent = message; statusNode.className = "status " + (kind || ""); },
           switchModule: switchModule,
+          openPaperDetails: function (paperId) { state.paperId = paperId; state.paperRecipe = ""; switchModule("papers"); },
           compact: true,
           datasetReady: function (dataset) {
             const alias = dataset?.alias || "";
@@ -1035,20 +1036,20 @@
       if (item.error) return "data-status-unavailable";
       return "data-status-unchecked";
     }
-    function datasetNoiseStatusHtml(report) {
-      if (!report) return "";
-      const facts = state.dataCompatibilityAlias === report.name ? state.dataCompatibility : null;
-      const inspectedStatus = facts?.profile?.noise?.status || report.profile?.noise?.status || "unknown";
-      const status = facts?.capabilities?.noise_status || inspectedStatus;
-      const editable = report.status === "ready" && inspectedStatus === "unknown" && !state.dataCompatibilityLoading;
-      const labels = {unknown:"未知", clean:"干净", noisy:"含噪"};
-      const options = Object.entries(labels).map(function ([value, label]) {
+    function datasetNoiseEditorHtml(item) {
+      const facts = item.noise_facts || {}, rate = facts.rate || {}, declared = facts.declared || {};
+      const status = facts.status || "unknown";
+      const rateStatus = ["known", "estimated"].includes(rate.status) ? rate.status : "unknown";
+      const options = [["unknown", "未知"], ["clean", "干净"], ["noisy", "含噪"]].map(function ([value, label]) {
         return '<option value="' + value + '"' + (status === value ? ' selected' : '') + '>' + label + '</option>';
       }).join("");
-      const hint = inspectedStatus !== "unknown" ? "已由数据检查确定；不能用声明覆盖。"
-        : report.status !== "ready" ? "请先检查数据集。" : "保存后，Quick Start 会使用这项数据集事实。";
-      return '<div class="data-noise-row"><label>带噪情况<select id="data-noise-status"' + (editable ? '' : ' disabled') + '>' + options + '</select></label>' +
-        '<button type="button" id="data-noise-save" class="secondary"' + (editable ? '' : ' disabled') + '>保存</button><p class="helper">' + hint + '</p></div>';
+      return '<div class="data-noise-editor" data-noise-editor="' + escapeHtml(item.name) + '">' +
+        '<label>带噪情况<select data-noise-status>' + options + '</select></label>' +
+        '<label>带噪比例<select data-noise-rate-status><option value="unknown"' + (rateStatus === "unknown" ? ' selected' : '') + '>未知</option><option value="known"' + (rateStatus === "known" ? ' selected' : '') + '>已知</option><option value="estimated"' + (rateStatus === "estimated" ? ' selected' : '') + '>估计</option></select></label>' +
+        '<label>比例（0–1）<input data-noise-rate-value type="number" min="0" max="1" step="any" value="' + escapeHtml(rate.value ?? "") + '"></label>' +
+        '<label>比例依据<input data-noise-rate-source value="' + escapeHtml(declared.noise_rate?.provenance || rate.provenance || "") + '" placeholder="例如官方资料或本地测量"></label>' +
+        '<p class="helper">保存后以你的设置为准，Quick Start 会读取更新后的资料。选择“含噪”后可填写噪声比例；此处不修改原始标签文件。</p>' +
+        '<div class="actions"><button type="button" class="secondary" data-noise-save>保存</button><button type="button" class="secondary" data-noise-cancel>取消</button></div></div>';
     }
     function dataFeedbackHtml(report) {
       if (state.dataResult?.error) return '<div class="data-feedback failed"><strong>操作失败</strong><p>' + escapeHtml(state.dataResult.error) + '</p></div>';
@@ -1112,10 +1113,10 @@
       return '<p class="status warning">当前 recipe 需要补充条件</p><div><b>需要补充：</b></div>' + details;
     }
     function datasetProfileCompatibilityHtml() {
-      if (state.dataCompatibilityLoading) return '<div class="guide-card"><strong>数据集优先流程</strong><p>正在读取适配器事实并检查正式 recipe……</p></div>';
+      if (state.dataCompatibilityLoading) return '<div class="guide-card"><strong>数据集兼容性</strong><p>正在读取数据集信息并检查正式 recipe……</p></div>';
       if (state.dataCompatibilityError) return '<div class="data-feedback failed"><strong>数据集兼容性不可用</strong><p>' + escapeHtml(state.dataCompatibilityError) + '</p></div>';
       const value = state.dataCompatibility;
-      if (!value) return '<div class="guide-card"><strong>数据集优先流程</strong><p>请选择已检查通过的数据集。</p></div>';
+      if (!value) return '<div class="guide-card"><strong>数据集兼容性</strong><p>请选择已检查通过的数据集。</p></div>';
       const profile = value.profile || {}, noise = profile.noise || {}, declared = value.declared || {};
       const capabilities = value.capabilities || {}, acceptedRate = capabilities.noise_rate || {};
       const acceptedStatus = capabilities.noise_status || noise.status || "unknown";
@@ -1161,7 +1162,7 @@
         (recipeOptions.length ? field("正式 recipe", "compat-recipe-select", selectControl("__ID__", recipeOptions), true) : '<p class="helper">没有可检查的正式 recipe。</p>') +
         '</div>';
       const actionsReady = selectedRecipe?.status === "compatible";
-      return '<section id="dataset-compatibility-panel"><h2>数据集优先流程</h2><p>先读取数据集事实，再选择正式 recipe；只有具体配置兼容时才允许 validate、dry-run 和 run。</p>' +
+      return '<section id="dataset-compatibility-panel"><h2>数据集兼容性</h2><p>选择正式 recipe 后，可查看它与当前数据集的兼容情况。</p>' +
         noiseStatusCard + '<div class="guide-card"><strong>数据集信息</strong>' + tableHtml(detectedRows) + '<p class="helper">已检测事实来自 adapter 与实际样本检查；用户补充的声明会单独标明，不将数据集名称当作干净性的证明。</p></div>' + declarations + recipeWorkflow +
         '<div class="guide-card compatibility-method" data-status="' + escapeHtml(selectedRecipe?.status || "unchecked") + '"><strong>当前选择</strong><p>' + escapeHtml(selectedRecipe ? selectedRecipe.acronym + " · " + selectedRecipe.recipe_id + " · " + compatibilityStatusLabel(selectedRecipe.status) : "尚未选择正式 recipe") + '</p>' +
         selectedRecipeCompatibilityHtml(selectedRecipe) + priorEditor +
@@ -1195,11 +1196,11 @@
         if (state.module === "quickstart") { renderQuickStart(); updateModulePreview(); }
       }
     }
-    async function saveDatasetDeclarations(declarations) {
-      const alias = state.dataAlias;
+    async function saveDatasetDeclarations(declarations, alias = state.dataAlias) {
       const response = await fetch("/api/datasets/" + encodeURIComponent(alias) + "/declarations", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({declarations:declarations})});
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "数据集信息保存失败");
+      await refreshDatasets();
       if (state.dataAlias !== alias) return;
       state.dataCompatibility = payload;
       state.dataCompatibilityError = "";
@@ -1283,10 +1284,14 @@
       structuredNode.classList.remove('hidden'); outputNode.classList.add('hidden');
     }
     function dataTableHtml(reports) {
-      return '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>数据集</th><th>状态</th><th>位置</th><th>Train / Test</th><th>训练验证</th></tr></thead><tbody>' + reports.map(function (item) {
+      return '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>数据集</th><th>状态</th><th>位置</th><th>Train / Test</th><th>训练验证</th><th>带噪比例</th><th>编辑</th></tr></thead><tbody>' + reports.map(function (item) {
         const label = dataStatusLabel(item);
         const statusClass = dataStatusClass(item);
-        return '<tr><td>' + escapeHtml(item.name) + '<br><span class="helper">' + escapeHtml(item.adapter) + '</span></td><td class="' + statusClass + '">' + escapeHtml(label) + '</td><td>' + escapeHtml(item.location || "-") + '</td><td>' + (item.train_samples ?? "-") + ' / ' + (item.test_samples ?? "-") + '</td><td>' + (item.training_evidence ? "通过" : "-") + '</td></tr>';
+        const facts = item.noise_facts || {}, rate = facts.rate || {};
+        const noiseRate = facts.status === "clean" ? "/" : facts.status === "noisy" ? (rate.value == null ? "未知" : (Number(rate.value) * 100).toLocaleString() + "%" + (rate.status === "estimated" ? "（估计）" : "")) : "未知";
+        const editable = item.status === "ready" && Boolean(item.location) && Boolean(item.profile);
+        return '<tr><td>' + escapeHtml(item.name) + '<br><span class="helper">' + escapeHtml(item.adapter) + '</span></td><td class="' + statusClass + '">' + escapeHtml(label) + '</td><td>' + escapeHtml(item.location || "-") + '</td><td>' + (item.train_samples ?? "-") + ' / ' + (item.test_samples ?? "-") + '</td><td>' + (item.training_evidence ? "通过" : "-") + '</td><td>' + escapeHtml(noiseRate) + '</td><td><button type="button" class="secondary data-row-edit" data-noise-edit="' + escapeHtml(item.name) + '"' + (editable ? '' : ' disabled title="请先实际检查数据集"') + '>编辑</button></td></tr>' +
+          (state.dataEditingAlias === item.name && editable ? '<tr><td colspan="7">' + datasetNoiseEditorHtml(item) + '</td></tr>' : '');
       }).join("") + '</tbody></table></div>';
     }
     function updateDataFormVisibility() {
@@ -1325,7 +1330,7 @@
       const registered = registeredReports.map(function (item) { return {value:item.name, label:item.name + " · " + item.adapter + " · " + dataStatusLabel(item)}; });
       const trainingFlow = state.dataAction === "run" ? datasetProfileCompatibilityHtml() : "";
       parameterPanel.innerHTML =
-        '<div class="guide-card" id="data-status-panel"><strong>已登记数据集</strong>' + dataTableHtml(reports) + datasetNoiseStatusHtml(selectedReport) + '</div>' + commonFormStart() +
+        '<div class="guide-card" id="data-status-panel"><strong>已登记数据集</strong>' + dataTableHtml(reports) + '</div>' + commonFormStart() +
         field("操作", "data-action", selectControl("__ID__", [
           {value:"list", label:"查看全部状态", hidden:true}, {value:"status", label:"查看单项详情"}, {value:"path", label:"查看数据位置", hidden:true},
           {value:"register", label:"1 · 登记本机路径"}, {value:"inspect", label:"2 · 实际加载 train/test"},
@@ -1395,18 +1400,50 @@
         try { await applyDatasetDeclarations(); statusNode.textContent = "Declarations saved; compatibility recomputed."; statusNode.className = "status success"; }
         catch (error) { statusNode.textContent = String(error.message || error); statusNode.className = "status failed"; }
       });
-      document.getElementById("data-noise-save")?.addEventListener("click", async function () {
-        try {
-          const status = selectValue("data-noise-status", "unknown");
-          const declarations = {noise_status:status, noise_origin:status === "noisy" ? "native" : "unknown"};
-          if (status !== "noisy") declarations.noise_rate = {status:"unknown", value:null, provenance:null};
-          await saveDatasetDeclarations(declarations);
-          statusNode.textContent = "带噪情况已保存；Quick Start 将读取更新后的状态。";
-          statusNode.className = "status success";
-        } catch (error) {
-          statusNode.textContent = String(error.message || error);
-          statusNode.className = "status failed";
+      parameterPanel.querySelectorAll("[data-noise-edit]").forEach(function (button) { button.addEventListener("click", function () {
+        const alias = button.dataset.noiseEdit;
+        state.dataEditingAlias = state.dataEditingAlias === alias ? "" : alias;
+        state.dataAlias = alias;
+        renderData();
+        updateModulePreview();
+      }); });
+      parameterPanel.querySelectorAll("[data-noise-editor]").forEach(function (editor) {
+        const alias = editor.dataset.noiseEditor;
+        const statusInput = editor.querySelector("[data-noise-status]");
+        const rateStatusInput = editor.querySelector("[data-noise-rate-status]");
+        const rateValueInput = editor.querySelector("[data-noise-rate-value]");
+        const rateSourceInput = editor.querySelector("[data-noise-rate-source]");
+        function updateRateInputs() {
+          const editable = statusInput.value === "noisy";
+          rateStatusInput.disabled = !editable;
+          const hasRate = editable && rateStatusInput.value !== "unknown";
+          rateValueInput.disabled = !hasRate;
+          rateSourceInput.disabled = !hasRate;
         }
+        statusInput.addEventListener("change", updateRateInputs);
+        rateStatusInput.addEventListener("change", updateRateInputs);
+        updateRateInputs();
+        editor.querySelector("[data-noise-cancel]").addEventListener("click", function () { state.dataEditingAlias = ""; renderData(); });
+        editor.querySelector("[data-noise-save]").addEventListener("click", async function () {
+          try {
+            const status = statusInput.value;
+            const declarations = {noise_status:status};
+            const rateStatus = status === "noisy" ? rateStatusInput.value : "unknown";
+            const raw = rateValueInput.value.trim();
+            const provenance = rateSourceInput.value.trim();
+            if (rateStatus !== "unknown" && (raw === "" || !Number.isFinite(Number(raw)) || Number(raw) < 0 || Number(raw) > 1)) throw new Error("带噪比例须填写 0 到 1 之间的数字");
+            if (rateStatus === "estimated" && !provenance) throw new Error("估计比例须填写依据");
+            declarations.noise_rate = {status:rateStatus, value:rateStatus === "unknown" ? null : Number(raw), provenance:rateStatus === "unknown" ? null : provenance || null};
+            await saveDatasetDeclarations(declarations, alias);
+            state.dataEditingAlias = "";
+            renderData();
+            statusNode.textContent = "数据集属性已保存；Quick Start 将读取更新后的资料。";
+            statusNode.className = "status success";
+          } catch (error) {
+            statusNode.textContent = String(error.message || error);
+            statusNode.className = "status failed";
+          }
+        });
       });
       parameterPanel.querySelectorAll("[data-compat-method]").forEach(function (button) { button.addEventListener("click", function () { state.dataSelectedMethod = button.dataset.compatMethod; renderData(); updateModulePreview(); }); });
       parameterPanel.querySelectorAll("[data-compat-action]").forEach(function (button) { button.addEventListener("click", async function () { try { await startCompatibilityWorkflow(button.dataset.compatAction); } catch (error) { statusNode.textContent = String(error.message || error); statusNode.className = "status failed"; } }); });
@@ -1431,9 +1468,8 @@
     function renderSweep() {
       parameterPanel.innerHTML = commonFormStart() +
         field("参数组合实验配方", "sweep-recipe", recipesSelect("__ID__"), true) +
-        field("Seeds", "sweep-seeds", inputControl("__ID__", "1 2 3")) +
         field("输出目录", "sweep-output", inputControl("__ID__", "artifacts/web-sweep")) +
-        commonFormEnd() + '<p class="helper">例如输入 1 2 3；每个 seed 使用同一个 recipe，并写入独立结果目录。</p>';
+        commonFormEnd();
       if ([...document.getElementById("sweep-recipe").options].some(function (option) { return option.value === "cifar10-clean-smoke"; })) document.getElementById("sweep-recipe").value = "cifar10-clean-smoke";
     }
     function renderResults() {
@@ -1445,9 +1481,8 @@
         commonFormEnd() + '<p class="helper">resume 使用已有 checkpoint；report/compare 读取现有运行产物。</p>';
     }
     function currentSweepSource() {
-      const kind = selectValue("sweep-source-kind", state.sweepSourceKind) === "path" ? "path" : "recipe";
-      const value = kind === "path" ? selectValue("sweep-path", state.sweepPath).trim() : selectValue("sweep-recipe", state.sweepRecipe).trim();
-      return normalizedConfigSource(kind, value, value);
+      const source = state.activeConfig || {};
+      return normalizedConfigSource(source.kind, source.value, source.label);
     }
     function sweepSourceKey(source = currentSweepSource()) { return source.kind + ":" + source.value; }
     function currentSweepRows() {
@@ -1500,33 +1535,22 @@
       }).join("") + '</div>';
     }
     function renderSweepV2() {
-      const source = normalizedConfigSource(state.sweepSourceKind, state.sweepSourceKind === "path" ? state.sweepPath : state.sweepRecipe);
+      const source = currentSweepSource();
       const schema = state.sweepSchemaKey === sweepSourceKey(source) ? state.sweepSchema : null;
       const editableFields = (schema?.fields || []).filter(function (fieldInfo) { return fieldInfo.visible !== false && fieldInfo.editable; });
       const batch = editableFields.find(function (fieldInfo) { return fieldInfo.path.endsWith("batch_size"); });
       const learningRate = editableFields.find(function (fieldInfo) { return fieldInfo.path === "optimizer.lr" || fieldInfo.path.endsWith(".lr") || fieldInfo.path.endsWith("learning_rate"); });
       const quick = [batch, learningRate].filter(Boolean).filter(function (fieldInfo, index, values) { return values.findIndex(function (item) { return item.path === fieldInfo.path; }) === index; }).map(function (fieldInfo) { return '<button type="button" class="secondary" data-sweep-add="' + escapeHtml(fieldInfo.path) + '">快捷加入 ' + escapeHtml(fieldInfo.path) + '</button>'; }).join("");
-      const rows = state.sweepRows.map(sweepDimensionHtml).join("") || '<p class="helper">尚未加入参数维度；留空时仅按配置 seed 运行一次。</p>';
-      parameterPanel.innerHTML = configContextHtml(source) + commonFormStart() +
-        field("配置来源", "sweep-source-kind", selectControl("__ID__", [{value:"recipe",label:"内置 recipe"},{value:"path",label:"项目 YAML"}])) +
-        field("内置 recipe", "sweep-recipe", recipesSelect("__ID__"), true) +
-        field("项目 YAML", "sweep-path", pathControl("__ID__", state.sweepPath, "open_file", "yaml"), true) +
+      const rows = state.sweepRows.map(sweepDimensionHtml).join("") || '<p class="helper">尚未加入参数维度；可以将 seed 加入参数组合。</p>';
+      const sourceLabel = escapeHtml(source.label || source.value || "未选择配置");
+      parameterPanel.innerHTML = '<p class="helper">当前参数配置：<strong>' + sourceLabel + '</strong></p>' + commonFormStart() +
         field("运行时数据覆盖（可选）", "sweep-dataset", selectControl("__ID__", registeredDatasetOptions(true)), true) +
-        field("Seeds（可选）", "sweep-seeds", inputControl("__ID__", state.sweepSeeds || "", "text", 'placeholder="留空则使用配置 seed"')) +
         field("输出目录", "sweep-output", pathControl("__ID__", state.sweepOutput || "artifacts/web-sweep"), true) +
-        '<div class="wide workflow-actions"><button id="sweep-load-source" type="button" class="primary">加载配置参数</button><button id="sweep-edit-source" type="button" class="secondary">编辑当前配置</button><button id="sweep-open-results" type="button" class="secondary">查看此参数组合实验的运行结果</button>' + quick + '</div>' +
+        '<div class="wide workflow-actions"><button id="sweep-load-source" type="button" class="primary">加载当前配置参数</button><button id="sweep-edit-source" type="button" class="secondary">编辑当前配置</button><button id="sweep-open-results" type="button" class="secondary">查看此参数组合实验的运行结果</button>' + quick + '</div>' +
         '<div class="wide"><strong>已选参数维度</strong><div id="sweep-dimensions">' + rows + '</div></div>' + commonFormEnd() +
         '<div id="sweep-parameter-library"><strong>参数用途与分类</strong>' + sweepGroupsHtml(schema) + '</div><div id="sweep-plan-view" class="structured-output"></div>';
-      document.getElementById("sweep-source-kind").value = source.kind;
-      const recipeNode = document.getElementById("sweep-recipe");
-      if ([...recipeNode.options].some(function (option) { return option.value === state.sweepRecipe; })) recipeNode.value = state.sweepRecipe;
-      recipeNode.closest("label").classList.toggle("hidden", source.kind !== "recipe");
-      document.getElementById("sweep-path").closest("label").classList.toggle("hidden", source.kind !== "path");
       document.getElementById("sweep-dataset").value = state.sweepDataset;
-      document.getElementById("sweep-source-kind").addEventListener("change", function () { captureSweepValues(); state.sweepSourceKind = this.value; state.sweepSchema = null; state.sweepRows = []; state.sweepPlan = null; renderSweepV2(); loadSweepSchema(); });
-      recipeNode.addEventListener("change", function () { captureSweepValues(); state.sweepRecipe = this.value; state.sweepSchema = null; state.sweepRows = []; state.sweepPlan = null; setActiveConfig("recipe", this.value); loadSweepSchema(); });
-      document.getElementById("sweep-path").addEventListener("change", function () { captureSweepValues(); state.sweepPath = this.value.trim(); state.sweepSchema = null; state.sweepRows = []; state.sweepPlan = null; if (state.sweepPath) setActiveConfig("path", state.sweepPath); loadSweepSchema(); });
-      document.getElementById("sweep-load-source").addEventListener("click", function () { captureSweepValues(); const selected = currentSweepSource(); setActiveConfig(selected.kind, selected.value); state.sweepSchema = null; state.sweepRows = []; state.sweepPlan = null; loadSweepSchema(); });
+      document.getElementById("sweep-load-source").addEventListener("click", function () { captureSweepValues(); state.sweepSchema = null; state.sweepRows = []; state.sweepPlan = null; loadSweepSchema(); });
       parameterPanel.querySelectorAll("[data-sweep-add]").forEach(function (button) {
         button.addEventListener("click", function () { captureSweepValues(); const path = button.dataset.sweepAdd; if (!state.sweepRows.some(function (row) { return row.path === path; })) state.sweepRows.push({path:path, values:""}); renderSweepV2(); updateModulePreview(); });
       });
@@ -1540,17 +1564,13 @@
       if (!schema && source.value) loadSweepSchema();
     }
     function captureSweepValues() {
-      state.sweepSourceKind = selectValue("sweep-source-kind", state.sweepSourceKind);
-      state.sweepRecipe = selectValue("sweep-recipe", state.sweepRecipe);
-      state.sweepPath = selectValue("sweep-path", state.sweepPath).trim();
       state.sweepDataset = selectValue("sweep-dataset", state.sweepDataset);
-      state.sweepSeeds = selectValue("sweep-seeds", state.sweepSeeds || "");
       state.sweepOutput = selectValue("sweep-output", state.sweepOutput || "artifacts/web-sweep");
       if (document.getElementById("sweep-values-0")) state.sweepRows = currentSweepRows();
     }
     async function loadSweepSchema() {
       const source = currentSweepSource();
-      if (!source.value) { statusNode.textContent = "请选择 recipe 或项目 YAML"; statusNode.className = "status failed"; return; }
+      if (!source.value) { statusNode.textContent = "请先选择或编辑实验配置"; statusNode.className = "status failed"; return; }
       const requestedKey = sweepSourceKey(source);
       const query = (source.kind === "path" ? "path=" : "recipe=") + encodeURIComponent(source.value);
       const response = await fetch("/api/config-schema?" + query);
@@ -1577,26 +1597,30 @@
       currentSweepRows().forEach(function (row) { add(row.path, row.values); });
       return matrix;
     }
+    function collectSweepExecutionSpec() {
+      const matrix = collectSweepMatrix();
+      const seeds = matrix.seed || null;
+      delete matrix.seed;
+      return {matrix:matrix, seeds:seeds};
+    }
     function buildSweepCommand() {
       const source = currentSweepSource();
       if (!source.value) return "";
-      let matrix;
-      try { matrix = collectSweepMatrix(); } catch (error) { statusNode.textContent = error.message; statusNode.className = "status failed"; return ""; }
+      let sweep;
+      try { sweep = collectSweepExecutionSpec(); } catch (error) { statusNode.textContent = error.message; statusNode.className = "status failed"; return ""; }
       let command = "lnl sweep --" + (source.kind === "path" ? "config " : "recipe ") + quoteArg(source.value);
-      Object.entries(matrix).forEach(function (entry) { command += " --matrix " + quoteArg(entry[0] + "=" + JSON.stringify(entry[1])); });
-      const seeds = selectValue("sweep-seeds", "").trim();
-      if (seeds) command += " --seeds " + seeds;
+      Object.entries(sweep.matrix).forEach(function (entry) { command += " --matrix " + quoteArg(entry[0] + "=" + JSON.stringify(entry[1])); });
+      if (sweep.seeds) command += " --seeds " + sweep.seeds.join(" ");
       if (state.sweepDataset) command += " --data " + quoteArg(state.sweepDataset);
       command += " --output-dir " + quoteArg(selectValue("sweep-output", "artifacts/web-sweep"));
       return command;
     }
     async function previewSweepPlan() {
-      let matrix;
-      try { matrix = collectSweepMatrix(); } catch (error) { statusNode.textContent = error.message; statusNode.className = "status failed"; return false; }
-      const seedsText = selectValue("sweep-seeds", "").trim();
-      const seeds = seedsText ? seedsText.split(/\s+/).map(Number) : null;
+      let sweep;
+      try { sweep = collectSweepExecutionSpec(); } catch (error) { statusNode.textContent = error.message; statusNode.className = "status failed"; return false; }
       const source = currentSweepSource();
-      const requestBody = {matrix:matrix, seeds:seeds, output_dir:selectValue("sweep-output")};
+      const requestBody = {matrix:sweep.matrix, output_dir:selectValue("sweep-output")};
+      if (sweep.seeds) requestBody.seeds = sweep.seeds;
       if (state.sweepDataset) requestBody.dataset_alias = state.sweepDataset;
       requestBody[source.kind] = source.value;
       const response = await fetch("/api/sweep/plan", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(requestBody)});
@@ -1770,30 +1794,18 @@
       const activePaperConfig = (paper?.configs || []).find(function (item) { return item.recipe_id === state.paperRecipe; });
       parameterPanel.innerHTML = commonFormStart() +
         field("论文方法", "paper-id", selectControl("__ID__", paperItems.length ? paperItems : ["binary-risk"])) +
-        field("工具箱配置", "paper-recipe", selectControl("__ID__", configItems.length ? configItems : [""])) +
-        '<div class="wide workflow-actions"><button id="paper-open-experiment" type="button" class="primary">在实验中打开配置</button><button id="paper-open-data" type="button" class="secondary">查看兼容数据集</button><button id="paper-open-scratch" type="button" class="secondary">在 Scratch 打开论文模板</button></div>' +
+        '<div class="paper-start-actions"><button id="paper-start-quickstart" type="button" class="primary">开始训练</button></div>' +
         commonFormEnd() + '<div id="paper-details"></div>';
       document.getElementById("paper-id").value = state.paperId;
-      document.getElementById("paper-recipe").value = state.paperRecipe;
       document.getElementById("paper-id").addEventListener("change", function (event) { state.paperId = event.target.value; state.paperRecipe = ""; renderPapers(); updateModulePreview(); });
-      document.getElementById("paper-recipe").addEventListener("change", function (event) { state.paperRecipe = event.target.value; renderPapers(); updateModulePreview(); });
-      document.getElementById("paper-open-experiment").addEventListener("click", function () {
-        setActiveConfig("recipe", state.paperRecipe);
-        state.yamlMode = "paper";
-        state.yamlPaper = state.paperRecipe;
-        state.yamlSuggestedPath = defaultCustomYamlPath(state.paperRecipe);
-        switchModule("yaml");
-        statusNode.textContent = "已在实验工作区打开论文正式配置；可先查看参数，再转到运行。";
-        statusNode.className = "status";
-      });
-      document.getElementById("paper-open-data").addEventListener("click", function () {
-        state.dataRecipe = state.paperRecipe;
-        state.dataSelectedRecipe = state.paperRecipe;
-        state.dataAction = "run";
-        switchModule("data");
-      });
-      document.getElementById("paper-open-scratch").addEventListener("click", function () {
-        window.open("/scratch", "_blank", "noopener");
+      document.getElementById("paper-start-quickstart").addEventListener("click", function () {
+        if (window.quickStartController?.openPaper) {
+          window.quickStartController.openPaper(state.paperId, state.paperRecipe, activePaperConfig?.data);
+        } else {
+          switchModule("quickstart");
+          statusNode.textContent = "Quick Start 尚未加载，请稍后再试。";
+          statusNode.className = "status failed";
+        }
       });
       renderPaperDetails();
     }
@@ -1802,11 +1814,13 @@
       const paper = state.papers.find(function (item) { return item.id === state.paperId; });
       const config = paper?.configs.find(function (item) { return item.recipe_id === state.paperRecipe; });
       if (!node || !paper || !config) return;
-      const lifecycle = (paper.lifecycle || []).map(function (stage, index) { return '<li>' + (index + 1) + '. ' + escapeHtml(stage) + '</li>'; }).join("");
+      const lifecycle = (paper.lifecycle || []).map(function (stage) { return '<li>' + escapeHtml(String(stage).replace(/^\s*\d+\s*[.)、]\s*/, "")) + '</li>'; }).join("");
       const mappingRows = (paper.concept_to_config || []).map(function (item) { return {"论文概念":item.concept, "YAML 配置字段":item.config, "实现模块":item.implementation}; });
       const configRows = [{"配置文件":config.config_path, "数据集":config.data, "噪声":config.noise + (config.noise_rate == null ? "" : " · " + config.noise_rate), "训练轮次":config.epochs ?? "-", "执行器":config.runner, "方法":config.method || "-"}];
       const limitations = (paper.limitations || []).map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("");
       const preparation = config.preparation;
+      const resourceConfigs = paper.configs.filter(function (item) { return item.profile === "reproduction" && item.external_resources?.length; });
+      const externalCards = resourceConfigs.map(function (item, index) { return '<div><p class="helper">' + escapeHtml(item.label) + '</p><div id="paper-external-' + index + '"></div></div>'; }).join('');
       const preparationCard = preparation ? '<div class="guide-card mentor-preparation ' + (preparation.artifact_ready ? 'is-ready' : 'is-pending') + '"><strong>MentorArtifact: <span class="mentor-status ' + (preparation.artifact_ready ? 'ready' : 'not-ready') + '">' + (preparation.artifact_ready ? 'READY' : 'NOT READY') + '</span></strong>' +
         '<p class="helper">' + escapeHtml(preparation.artifact_path) + '</p>' +
         '<p>Step 1 · Mentor features: <span class="mentor-status ' + (preparation.feature_ready ? 'ready' : 'not-ready') + '">' + (preparation.feature_ready ? 'READY' : 'NOT READY') + '</span></p>' +
@@ -1817,10 +1831,11 @@
         '</div>' : '';
       node.innerHTML = '<div class="guide-card"><h3>' + escapeHtml(paper.acronym + "：" + paper.title) + '</h3><p>' + escapeHtml(paper.venue + " " + paper.year) + ' · <a href="' + escapeHtml(paper.source_url) + '" target="_blank" rel="noreferrer">查看论文来源</a></p><p><strong>解决的问题：</strong>' + escapeHtml(paper.summary) + '</p><p><strong>核心方法：</strong>' + escapeHtml(paper.mechanism) + '</p></div>' +
         '<div class="guide-card"><strong>论文训练流程</strong><ol>' + lifecycle + '</ol></div>' +
-        preparationCard +
+        externalCards + preparationCard +
         '<div class="guide-card"><strong>当前配置如何运行这篇论文</strong>' + tableHtml(configRows) + '<p class="helper">可直接准备正式训练指令，也可另存为项目 YAML 后修改或进入参数组合实验；内置配置不会被覆盖。</p></div>' +
         '<div class="guide-card"><strong>论文方法、配置字段与代码的关系</strong>' + tableHtml(mappingRows) + '</div>' +
         (limitations ? '<details class="guide-card"><summary>已知限制</summary><ul>' + limitations + '</ul></details>' : '');
+      resourceConfigs.forEach(function (item, index) { window.paperExternalResources?.mount(document.getElementById("paper-external-" + index), {recipe:item.recipe_id}); });
       node.querySelectorAll("[data-mentor-step]").forEach(function (button) {
         button.addEventListener("click", function () {
           const command = preparation?.commands?.[button.dataset.mentorStep];
@@ -1829,12 +1844,6 @@
           runButton.click();
         });
       });
-    }
-    function renderAdvanced() {
-      parameterPanel.innerHTML = '<label for="free-command">输入一条 lnl 指令</label>' +
-        '<textarea id="free-command" spellcheck="false">lnl doctor</textarea>' +
-        '<p class="helper">例如：lnl run --recipe cifar10-clean-smoke --epochs 1 --output-dir artifacts/web-smoke</p>' +
-        '<p class="helper">高级工具保留旧能力，但不属于推荐主流程。只允许 lnl 指令；不支持管道、重定向和其他 shell 命令。</p>';
     }
     function renderRunWorkspace() {
       const source = state.activeConfig || {kind:"recipe", value:"", label:""};
@@ -1864,34 +1873,18 @@
         node.appendChild(button);
       });
     }
-    function renderAdvancedTools() {
-      const node = document.getElementById("advanced-tools-list");
-      if (!node) return;
-      node.replaceChildren();
-      [
-        {module:"advanced", label:"自由输入", description:"直接输入受限的 lnl 命令。"},
-        {module:"beginner", label:"完整新手引导", description:"环境、配置、训练与恢复的逐步教程。"},
-      ].forEach(function (item) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.innerHTML = '<span class="label">' + item.label + '</span><span class="desc">' + item.description + '</span>';
-        button.addEventListener("click", function () { switchModule(item.module); });
-        node.appendChild(button);
-      });
-      const commands = document.getElementById("advanced-command-panel");
-      if (commands && state.module === "advanced") commands.open = true;
-    }
     function renderModuleButtons() {
       moduleList.replaceChildren();
       workspaces.forEach(function (item) {
         const button = document.createElement("button");
         button.className = "module-button" + (item.id === currentWorkspace() ? " active" : "");
         button.dataset.module = item.id;
+        button.setAttribute("aria-pressed", String(item.id === currentWorkspace()));
+        button.title = item.description;
         button.innerHTML = '<span class="label">' + item.label + '</span><span class="desc">' + item.description + '</span>';
         button.addEventListener("click", function () { switchModule(item.defaultModule); });
         moduleList.appendChild(button);
       });
-      renderAdvancedTools();
     }
     function renderCommands(items) {
       const node = document.getElementById("commands");
@@ -1932,8 +1925,8 @@
       document.getElementById("module-title").textContent = meta.label;
       document.getElementById("module-hint").textContent = meta.hint;
       document.getElementById("module-description").textContent = meta.description;
-      ({quickstart: renderQuickStart, beginner: renderBeginner, yaml: renderYaml, data: renderData, sweep: renderSweepV2,
-        run: renderRunWorkspace, results: renderResultsV2, papers: renderPapers, advanced: renderAdvanced}[module])();
+      ({quickstart: renderQuickStart, yaml: renderYaml, data: renderData, sweep: renderSweepV2,
+        run: renderRunWorkspace, results: renderResultsV2, papers: renderPapers}[module])();
       if (module !== "data") {
         parameterPanel.querySelectorAll("input, select, textarea").forEach(function (node) {
           node.addEventListener("input", updateModulePreview);
@@ -2480,7 +2473,7 @@
         const recipe = selectValue("paper-recipe", state.paperRecipe);
         return recipe ? "lnl validate --recipe " + recipe + " --check-data" : "";
       }
-      return selectValue("free-command", "").trim();
+      return "";
     }
     function buildDataApiRequest() {
       const action = selectValue("data-action", "list");
@@ -2850,10 +2843,10 @@
 
     const recipeEndpoint = "/api/recipes";
     installPathPickers(document);
-    Promise.all([fetch("/api/commands"), fetch(recipeEndpoint), fetch("/api/papers"), fetch("/api/datasets"), fetch("/api/tutorial")])
+    Promise.all([fetch("/api/commands"), fetch(recipeEndpoint), fetch("/api/papers"), fetch("/api/datasets")])
       .then(function (responses) { return Promise.all(responses.map(function (response) { if (!response.ok) throw new Error("后端菜单数据加载失败"); return response.json(); })); })
       .then(function (payloads) {
-        state.recipes = payloads[1]; state.papers = payloads[2]; state.datasets = payloads[3]; state.tutorial = payloads[4];
+        state.recipes = payloads[1]; state.papers = payloads[2]; state.datasets = payloads[3];
         renderCommands(payloads[0]); renderYamlSources(); switchModule(recipeMode ? "yaml" : "quickstart");
         if (recipeMode) yamlEditorPanel.classList.remove("hidden");
         if (!yamlEditorPanel.classList.contains("hidden")) loadYamlFromRecipe();

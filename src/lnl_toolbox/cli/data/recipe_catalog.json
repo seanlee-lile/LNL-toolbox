@@ -5,7 +5,7 @@
     "configs/experiment/apl_cifar10_noise04_reproduction.yaml",
     "configs/experiment/binary_risk_natarajan_1epoch.yaml",
     "configs/experiment/binary_risk_natarajan_reproduction.yaml",
-    "configs/experiment/ca2c_cifar10_reproduction.yaml",
+    "configs/experiment/ca2c_cifar100_reproduction.yaml",
     "configs/experiment/ca2c_cifar10_smoke.yaml",
     "configs/experiment/cal_cifar10_reproduction.yaml",
     "configs/experiment/cal_cifar10_smoke.yaml",
@@ -64,6 +64,7 @@
     "configs/reproduction/cifar10_dividemix_sym20.yaml",
     "configs/reproduction/cifar10_pcse_reproduction.yaml",
     "configs/reproduction/cifar10_t_revision_sym20_short.yaml",
+    "configs/reproduction/cifar10_t_revision_sym20_reproduction.yaml",
     "configs/reproduction/importance_reweighting_binary_high_dim.yaml",
     "configs/reproduction/importance_reweighting_binary_low_dim.yaml",
     "configs/reproduction/uci_heart_importance_reweighting.yaml"

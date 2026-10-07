@@ -119,14 +119,21 @@ validation, and unsupported objective/transition/ratio policies. During
 training, non-finite logits, transition values, denominators, weights, delta,
 or objective fail at the consuming stage.
 
+## Full-budget Quick Start profile
+
+Quick Start uses `cifar10-t-revision-sym20-reproduction`, with 20/200/200
+epochs across transition estimation, classifier initialization, and revision.
+The 40/80 classifier learning-rate milestones are reached. This is one run
+of the Reweight-R variant, not the paper's five-run numerical summary.
+
 ## Full-data short-horizon stability profile
 
 `cifar10-t-revision-sym20-short` is a real CIFAR-10 engineering gate. It uses
 the complete 45k noisy-train / 5k noisy-validation / 10k clean-test split,
 symmetric 20% transition sampling, ResNet-18, batch size 128, and standard
 CIFAR augmentation. Its 15/15/20 epoch budget is intentionally shorter than
-the released code's 20/200/200 lifecycle and must not be reported as a paper
-numerical reproduction.
+the released code's 20/200/200 lifecycle. It remains available as a separate
+engineering check and is not selected by Quick Start.
 
 ```powershell
 python -m lnl_toolbox.cli.main validate `

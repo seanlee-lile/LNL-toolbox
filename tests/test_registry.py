@@ -434,7 +434,7 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
         formal_cases = (
             ('cal-cifar10-reproduction', 'cal'),
             ('mc-ldce-cifar10-reproduction', 'mc_ldce'),
-            ('ca2c-cifar10-reproduction', 'ca2c'),
+            ('ca2c-cifar100-reproduction', 'ca2c'),
         )
         for recipe_id, runner_name in formal_cases:
             with self.subTest(recipe=recipe_id):
@@ -442,6 +442,14 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
                 requirements = registry.get(runner_name).requirements(config)
                 expected = frozenset({Modality.IMAGE, Modality.TABULAR})
                 self.assertEqual(requirements.supported_modalities, expected)
+
+        ca2c_recipe = recipe_by_id('ca2c-cifar100-reproduction')
+        self.assertEqual(load_recipe_config(ca2c_recipe)['data']['name'], 'cifar100')
+        ca2c_paper = paper_by_id('ca2c')
+        self.assertIn(
+            ca2c_recipe.id,
+            {item.recipe_id for item in ca2c_paper.configs if item.profile == 'reproduction'},
+        )
 
         cal = registry.get('cal').requirements(
             load_recipe_config(recipe_by_id('cal-cifar10-reproduction'))
@@ -1095,7 +1103,18 @@ class _t_revision_readiness_TRevisionReadinessTest(unittest.TestCase):
         self.assertEqual(config['t_revision']['classifier_initialization']['epochs'], 15)
         self.assertEqual(config['t_revision']['revision']['epochs'], 20)
         paper = paper_by_id('t-revision')
-        self.assertIn(recipe.id, {item.recipe_id for item in paper.configs})
+        self.assertNotIn(recipe.id, {item.recipe_id for item in paper.configs})
+
+    def test_quick_start_uses_full_t_revision_budget(self) -> None:
+        recipe = recipe_by_id('cifar10-t-revision-sym20-reproduction')
+        config = load_recipe_config(recipe)
+        self.assertEqual(validate_config(config).name, 't_revision')
+        self.assertEqual(recipe.configuration_fidelity, 'paper_oriented')
+        self.assertEqual(config['t_revision']['stage1']['epochs'], 20)
+        self.assertEqual(config['t_revision']['classifier_initialization']['epochs'], 200)
+        self.assertEqual(config['t_revision']['revision']['epochs'], 200)
+        paper = paper_by_id('t-revision')
+        self.assertIn(recipe.id, {item.recipe_id for item in paper.configs if item.profile == 'reproduction'})
 
     def test_objective_exposes_detached_diagnostics_without_changing_loss(self) -> None:
         logits = torch.tensor([[1.2, -0.2], [0.1, 0.7]], requires_grad=True)

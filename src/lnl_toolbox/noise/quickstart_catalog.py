@@ -31,7 +31,7 @@ _SPECS: tuple[QuickStartNoiseSpec, ...] = (
     QuickStartNoiseSpec("pdl", "PDL 实例依赖噪声", "使用 PDL 论文规定的实例依赖噪声生成流程。", "pdl", True, True, True, "synthetic"),
     QuickStartNoiseSpec("external_torch", "外部标签文件", "由已有实验资源提供的外部标签映射。", "external_torch", False, False, False, "source_only"),
     QuickStartNoiseSpec("official_uniform_flip", "官方固定标签源", "特定论文或官方数据发布的固定标签来源。", "official_uniform_flip", False, True, True, "source_only"),
-    QuickStartNoiseSpec("binary_asymmetric_rcn", "二分类非对称噪声", "二分类风险实验的非对称随机分类噪声。", "binary_asymmetric_rcn", False, True, True, "source_only"),
+    QuickStartNoiseSpec("binary_asymmetric_rcn", "二分类非对称噪声", "分别设置正类与负类标签翻转概率。", "binary_asymmetric_rcn", False, False, True, "source_only"),
 )
 _BY_KEY = {item.key: item for item in _SPECS}
 
@@ -57,12 +57,21 @@ def build_noise_config(
     *,
     rate: float | None,
     seed: int | None,
+    rho_positive: float | None = None,
+    rho_negative: float | None = None,
 ) -> dict[str, object] | None:
     """Build an existing experiment noise mapping, or ``None`` when inputs are insufficient."""
 
     spec = quick_start_noise_spec(key)
     if spec.key == "clean":
         return None
+    if spec.key == "binary_asymmetric_rcn":
+        if rho_positive is None or rho_negative is None or seed is None:
+            raise ValueError("binary asymmetric noise requires both flip rates and a seed")
+        positive, negative = float(rho_positive), float(rho_negative)
+        if not 0.0 <= positive < 1.0 or not 0.0 <= negative < 1.0 or positive + negative >= 1.0:
+            raise ValueError("binary flip rates must be in [0, 1) and sum to less than 1")
+        return {"name": spec.backend_name, "rho_positive": positive, "rho_negative": negative, "seed": int(seed)}
     if not spec.visible or spec.backend_name is None:
         raise ValueError(f"noise capability {spec.key!r} is not available in Quick Start")
     if spec.requires_rate and rate is None:

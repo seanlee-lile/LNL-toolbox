@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Strict, read-only pretrained feature source for real-data DLD runs."""
+"""Verified pretrained feature source for real-data DLD runs."""
 
 from dataclasses import dataclass
 import os
@@ -236,10 +236,13 @@ def _cached_torchvision_weight(url: str) -> Path:
     path = Path(torch.hub.get_dir()) / "checkpoints" / filename
     if not path.is_file():
         raise FileNotFoundError(
-            "DLD pretrained ResNet34 weights are not cached; expected official "
-            f"torchvision weights at: {path}. Cache IMAGENET1K_V1 explicitly "
-            "before validating this conditional recipe."
+            "DLD needs the official torchvision ResNet34 IMAGENET1K_V1 weights at "
+            f"{path}. Download resnet34-b627a593.pth from the official PyTorch "
+            "weight URL before running this recipe."
         )
+    expected_prefix = filename.rsplit("-", 1)[-1].split(".", 1)[0]
+    if not file_sha256(path).startswith(expected_prefix):
+        raise ValueError(f"DLD pretrained ResNet34 weight checksum mismatch: {path}")
     return path
 
 
@@ -262,7 +265,7 @@ def load_torchvision_resnet34_imagenet1k_v1_source(
     weights = ResNet34_Weights.IMAGENET1K_V1
     cached = _cached_torchvision_weight(weights.url)
     identity = DLDSourceFileIdentity.capture(cached)
-    # Cache presence is checked first so this call never initiates a download.
+    # The official cached checkpoint is fingerprinted before loading.
     model = _TorchvisionResNet34FeatureModel(resnet34(weights=weights)).eval()
     for parameter in model.parameters():
         parameter.requires_grad_(False)

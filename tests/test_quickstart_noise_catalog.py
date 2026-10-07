@@ -35,6 +35,20 @@ class QuickStartNoiseCatalogTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_noise_config("pairflip", rate=None, seed=1)
 
+    def test_binary_asymmetric_uses_two_flip_rates(self) -> None:
+        self.assertEqual(
+            build_noise_config("binary_asymmetric_rcn", rate=None, seed=7,
+                               rho_positive=0.2, rho_negative=0.1),
+            {"name": "binary_asymmetric_rcn", "rho_positive": 0.2,
+             "rho_negative": 0.1, "seed": 7},
+        )
+        with self.assertRaisesRegex(ValueError, "both flip rates"):
+            build_noise_config("binary_asymmetric_rcn", rate=None, seed=7,
+                               rho_positive=0.2)
+        with self.assertRaisesRegex(ValueError, "sum to less than 1"):
+            build_noise_config("binary_asymmetric_rcn", rate=None, seed=7,
+                               rho_positive=0.6, rho_negative=0.4)
+
     def test_every_visible_synthetic_capability_builds_a_config(self) -> None:
         for spec in visible_synthetic_noise_specs():
             with self.subTest(spec=spec.key):

@@ -163,6 +163,17 @@ class _cal_CALTest(unittest.TestCase):
         scheduler.step(2.0)
         self.assertAlmostEqual(optimizer.param_groups[0]['lr'], 0.1 / 3.0)
 
+    def test_alpha_scaled_scheduler_accepts_independent_stage_rate(self) -> None:
+        parameter = torch.nn.Parameter(torch.tensor(1.0))
+        optimizer = torch.optim.SGD([parameter], lr=0.1)
+        scheduler = build_alpha_scaled_scheduler(optimizer, {
+            'name': 'multistep', 'milestones': [1], 'gamma': 0.1,
+            'lr_values': [0.03],
+        })
+        scheduler.step(0.0)
+        scheduler.step(0.0)
+        self.assertAlmostEqual(optimizer.param_groups[0]['lr'], 0.03)
+
     def test_warmup_gradient_guard_rejects_non_finite_gradient(self) -> None:
         model = torch.nn.Linear(1, 1)
         model.weight.grad = torch.full_like(model.weight, float('nan'))

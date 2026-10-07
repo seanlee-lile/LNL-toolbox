@@ -38,6 +38,8 @@ def _selection(body: Mapping[str, object]) -> QuickStartNoiseSelection:
         key=str(raw.get("key", "clean")),
         rate=None if rate in {None, ""} else float(rate),
         seed=None if raw.get("seed") in {None, ""} else int(raw["seed"]),
+        rho_positive=None if raw.get("rho_positive") in {None, ""} else float(raw["rho_positive"]),
+        rho_negative=None if raw.get("rho_negative") in {None, ""} else float(raw["rho_negative"]),
     )
 
 

@@ -28,6 +28,8 @@ class QuickStartNoiseSelection:
     key: str
     rate: float | None = None
     seed: int | None = None
+    rho_positive: float | None = None
+    rho_negative: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

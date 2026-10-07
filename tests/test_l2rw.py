@@ -213,10 +213,16 @@ class _l2rw_training_L2RWTrainingTest(unittest.TestCase):
         self.assertEqual(payload['global_step'], 2)
 
     def test_official_schedule_switches_before_boundary_step(self) -> None:
+        from lnl_toolbox.training.l2rw_experiment import _step_learning_rate
+
         milestones = [40000, 60000]
         self.assertEqual(sum((39999 + 1 >= value for value in milestones)), 1)
         self.assertEqual(sum((40000 + 1 >= value for value in milestones)), 1)
         self.assertEqual(sum((59999 + 1 >= value for value in milestones)), 2)
+        self.assertAlmostEqual(_step_learning_rate(0.1, milestones, 0.1, None, 40000), 0.01)
+        self.assertAlmostEqual(_step_learning_rate(0.1, milestones, 0.1, [0.03, 0.007], 39999), 0.1)
+        self.assertAlmostEqual(_step_learning_rate(0.1, milestones, 0.1, [0.03, 0.007], 40000), 0.03)
+        self.assertAlmostEqual(_step_learning_rate(0.1, milestones, 0.1, [0.03, 0.007], 60000), 0.007)
 
     def test_smoke_and_completed_resume(self) -> None:
         config = yaml.safe_load((_l2rw_training_ROOT / 'configs/experiment/l2rw_cifar10_smoke.yaml').read_text(encoding='utf-8'))
