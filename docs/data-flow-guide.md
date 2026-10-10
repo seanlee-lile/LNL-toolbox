@@ -972,3 +972,72 @@ Quick Start 不维护私有 compatibility 规则。菜单和计划都调用
 选择下不能显示 ready；需要 class-dependent noise 的方法不能把 PDL 等不兼容噪声配置误判
 为可运行。模型构造继续通过 `bind_model_input()` 消费 `PreparedData.input_spec`；CIFAR
 ResNet 系列的三通道默认保持不变，同时可由 generic 数据协议绑定单通道输入。
+
+## 用户数据通用格式与自动识别
+
+“开始 → 自动识别并继续”共享 `probe_dataset_path → DatasetRegistry → DataService`。
+通用格式是其中的 `standard` adapter，不另建训练入口。目录或 ZIP、tar.gz、tgz、tar
+可包含以下结构；压缩包中的外层目录可保留。当前压缩包识别覆盖 CIFAR-10/100 Python
+格式（含同目录 CIFAR-N 标签文件）和通用清单格式，不支持 CIFAR binary/MATLAB 包。
+
+```text
+my_dataset/
+  dataset.yaml
+  samples.csv
+  images/              # 图像数据；表格数据不需要此目录
+```
+
+`dataset.yaml` 示例（二分类；多分类继续添加类别）：
+
+```yaml
+name: my_dataset
+task: classification
+modality: image        # image 或 tabular；尚不支持文本训练
+classes:
+  - id: 0
+    name: cat
+  - id: 1
+    name: dog
+label_status: unknown  # unknown / clean / noisy；clean 是用户声明，不是名称推断
+noise_rate: null       # 含噪且知道比例时填 0～1；未知填 null
+```
+
+图像 `samples.csv`（UTF-8，路径相对于数据集根目录）：
+
+```csv
+sample_id,path,label
+s001,images/001.jpg,0
+s002,images/002.jpg,1
+```
+
+数值表格设置 `modality: tabular`，使用 `feature_` 前缀列：
+
+```csv
+sample_id,label,feature_age,feature_pressure
+s001,0,54,130
+s002,1,62,145
+```
+
+类别 id 必须从 0 开始连续编号；样本 id 必须唯一；图像尺寸与通道数需一致。
+表格特征必须是有限数字，缺失值和类别型特征应先明确处理，不自动猜测编码。
+可选 `clean_label` 列必须全列填写或全部省略；无该列时不生成干净标签，除非用户明确
+声明 `label_status: clean`。可选 `split` 列为 train / validation / test，填写时每行都要
+填写；可选 `group_id` 不允许同组跨划分，也不支持自动按组划分。
+
+未填写 split 时，登记保留整个样本池，不默认切出测试集。训练前可以填 CSV 的 split
+列，或在运行配置添加以下规则（按类别分层、由实验 seed 决定；不改原始文件）：
+
+```yaml
+data:
+  name: standard
+  root: /path/to/my_dataset
+  split:
+    test_fraction: 0.2
+    validation_fraction: 0.0
+```
+
+已有 CSV split 和运行时重新划分不能同时设置。未提供测试集时，训练预检会明确报错。
+目前此规则可通过运行 YAML 设置；Web 尚无专门的比例编辑控件。标准格式读取成功只
+表示数据格式有效，论文是否支持该数据类型、类别数、干净标签条件仍由兼容性检查判断。
+压缩包在登记时解压到 Quick Start artifact 目录的缓存，原文件不改写；只允许普通文件
+和目录，拒绝路径穿越、链接、重复路径和超过 10 GiB／100000 条目的包。

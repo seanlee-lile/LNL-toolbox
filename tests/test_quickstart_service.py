@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from lnl_toolbox.data.contracts import DataSpec, RawDatasetSplit
+from lnl_toolbox.data.contracts import DataSpec, RawDatasetSplit, UnsupportedDatasetSplitError
 from lnl_toolbox.data.probe import DatasetProbeResult
 from lnl_toolbox.data.local_catalog import LocalDatasetCatalog
 from lnl_toolbox.data.registry import DatasetRegistry
@@ -32,6 +32,8 @@ class _FakeImageAdapter:
 
     def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
         del seed
+        if split == "validation":
+            raise UnsupportedDatasetSplitError("fixture has no native validation split")
         count = 12 if split == "train" else 6
         images = np.zeros((count, 32, 32, 3), dtype=np.uint8)
         labels = np.arange(count, dtype=np.int64) % 2
@@ -64,6 +66,8 @@ class _FakeUnverifiedLabelsAdapter(_FakeImageAdapter):
 
     def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
         del spec, seed
+        if split == "validation":
+            raise UnsupportedDatasetSplitError("fixture has no native validation split")
         count = 12 if split == "train" else 6
         labels = np.arange(count, dtype=np.int64) % 2
         return RawDatasetSplit(
@@ -87,6 +91,36 @@ class _FakeNoisyImageAdapter(_FakeImageAdapter):
 
 
 class QuickStartServiceTests(unittest.TestCase):
+    def test_all_papers_keep_original_counts_and_one_web_validation_source(self) -> None:
+        from copy import deepcopy
+        from lnl_toolbox.quickstart.templates import configure_validation_split, SPLIT_COUNT_PATHS
+
+        covered = []
+        for paper in load_papers():
+            original = method_template_for_paper(paper).config
+            before = deepcopy(original)
+            candidate = configure_validation_split(deepcopy(original))
+            covered.append(paper.id)
+            if paper.id == "cwd":
+                self.assertEqual(candidate, before)
+                continue
+            self.assertEqual(candidate["data"]["validation_split"]["source"], "training_pool", paper.id)
+            paths = []
+            for path in SPLIT_COUNT_PATHS:
+                if path[-1] == "num_clean":
+                    continue
+                old, new = before, candidate
+                for key in path:
+                    old = old.get(key) if isinstance(old, dict) else None
+                    new = new.get(key) if isinstance(new, dict) else None
+                if old is not None:
+                    self.assertEqual(new, old, (paper.id, path))
+                if new is not None:
+                    paths.append(path)
+            self.assertEqual(len(paths), 1, paper.id)
+            self.assertEqual(original, before, paper.id)
+        self.assertEqual(len(covered), 26)
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
@@ -391,6 +425,22 @@ class QuickStartServiceTests(unittest.TestCase):
             )
         self.assertEqual(plan.status, "ready", plan.details)
 
+    def test_dividemix_does_not_request_a_separate_noise_rate_prior(self) -> None:
+        clean = QuickStartNoiseSelection("clean", "clean")
+        option = next(
+            item for item in self.service.method_options("local-cifar10", clean)
+            if item.paper_id == "dividemix"
+        )
+        self.assertIn("config:requires_noisy_training_labels", option.required_user_inputs)
+        self.assertNotIn("noise_rate_prior", option.required_user_inputs)
+
+        synthetic = QuickStartNoiseSelection("synthetic", "symmetric", rate=0.2, seed=1)
+        option = next(
+            item for item in self.service.method_options("local-cifar10", synthetic)
+            if item.paper_id == "dividemix"
+        )
+        self.assertNotIn("noise_rate_prior", option.required_user_inputs)
+
     def test_unknown_path_is_not_marked_ready(self) -> None:
         result = self.service.register_and_inspect(str(Path(self.temp.name) / "missing"))
         self.assertEqual(result.status, "unsupported")
@@ -464,6 +514,14 @@ class QuickStartServiceTests(unittest.TestCase):
             self.assertEqual(candidate[section][key], count, paper.id)
             if paper.id == "l2rw":
                 self.assertEqual(candidate["data"]["num_clean"], 6)
+            profile["sample_counts_by_split"].update(train=2700, validation=300)
+            restored = adapt_method_template(
+                method_template_for_paper(paper).config,
+                dataset_alias="local-cifar10", dataset_profile=profile,
+                noise_selection=noise, data_service=self.data_service,
+            )
+            self.assertEqual(restored[section][key], count, paper.id)
+            profile["sample_counts_by_split"].update(train=3000, validation=0)
 
     def test_small_dataset_uses_adapted_plan_instead_of_full_size_recipe(self) -> None:
         from lnl_toolbox.catalog import load_yaml

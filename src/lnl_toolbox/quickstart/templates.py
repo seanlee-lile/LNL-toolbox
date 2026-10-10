@@ -13,6 +13,7 @@ from lnl_toolbox.catalog import (
     recipe_by_id,
 )
 from lnl_toolbox.noise.quickstart_catalog import build_noise_config
+from lnl_toolbox.data.registry import training_pool_size
 
 from .models import QuickStartNoiseSelection
 
@@ -120,6 +121,17 @@ def _paper_method_config(config: Mapping[str, Any]) -> dict[str, Any]:
     return deepcopy(dict(config))
 
 
+def configure_validation_split(config: dict[str, Any]) -> dict[str, Any]:
+    """Make the Web's split count authoritative without changing stored recipes."""
+    data = config.setdefault("data", {})
+    if "folds" in data:
+        return config  # CWD's held-out fold is a distinct experiment protocol.
+    data.setdefault("validation_split", {})["source"] = "training_pool"
+    if "num_val" not in data and _get(config, ("warmup", "noisy_validation_size")) is None:
+        data.setdefault("validation_size", 0)
+    return config
+
+
 SPLIT_COUNT_PATHS = (
     ("data", "validation_size"),
     ("data", "num_val"),
@@ -135,6 +147,9 @@ def reference_train_size(config: Mapping[str, Any]) -> int | None:
     if not isinstance(data, Mapping):
         return None
     name = str(data.get("name", "")).lower().replace("-", "_")
+    if name.startswith("synthetic_"):
+        size = data.get("train_size")
+        return size if isinstance(size, int) and not isinstance(size, bool) and size > 0 else None
     return {
         "cifar10": 50_000, "cifar100": 50_000,
         "cifar10n": 50_000, "cifar100n": 50_000,
@@ -222,7 +237,7 @@ def adapt_method_template(
     data = dict(candidate.get("data", {}) or {})
     data["name"] = str(dataset_profile.get("adapter") or data.get("name", ""))
     candidate["data"] = data
-    train_count = int((dataset_profile.get("sample_counts_by_split") or {}).get("train", 0))
+    train_count = training_pool_size(str(dataset_profile.get("adapter", "")), dict(dataset_profile.get("sample_counts_by_split") or {}))
     adapt_split_counts(candidate, base_config, train_count)
     original_noise = dict(candidate.get("noise", {}) or {})
     original_noise_name = str(original_noise.get("name", "clean")).strip().lower()
@@ -302,7 +317,7 @@ def adapt_method_template(
         candidate["seed"] = int(noise_selection.seed)
     from lnl_toolbox.core.config_schema import synchronize_experiment_seed
 
-    return synchronize_experiment_seed(candidate)
+    return synchronize_experiment_seed(configure_validation_split(candidate))
 
 
 def find_exact_reproduction(
@@ -350,6 +365,7 @@ __all__ = [
     "SPLIT_COUNT_PATHS",
     "adapt_split_counts",
     "adapt_method_template",
+    "configure_validation_split",
     "find_exact_reproduction",
     "method_template_for_paper",
     "reference_train_size",

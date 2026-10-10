@@ -388,6 +388,14 @@ class LocalDatasetCatalog:
         for key in _SOURCE_KEYS:
             current.pop(key, None)
         result["data"] = _deep_merge(current, record.data)
+        if (current.get("validation_split", {}) or {}).get("source") == "training_pool":
+            # Registration stores source facts, not this experiment's hold-out budget.
+            for key in ("validation_size", "num_val", "num_clean"):
+                if key in current:
+                    result["data"][key] = deepcopy(current[key])
+            result["data"]["validation_split"] = _deep_merge(
+                dict(result["data"].get("validation_split", {}) or {}), current["validation_split"]
+            )
         result.setdefault("local_dataset", {})
         result["local_dataset"] = {
             "alias": record.alias,

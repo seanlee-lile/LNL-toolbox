@@ -45,6 +45,7 @@ from lnl_toolbox.data.profile import (
 from lnl_toolbox.data.real_noise import add_real_noise_sources
 from lnl_toolbox.data.registry import DatasetRegistry
 from lnl_toolbox.data.sources import add_existing_sources
+from lnl_toolbox.data.standard import StandardDatasetAdapter, standard_metadata
 from lnl_toolbox.data.torch_cifar import (
     build_cifar_transform,
     cifar_pixel_mean,
@@ -62,6 +63,7 @@ def create_dataset_registry() -> DatasetRegistry:
     add_cifar_n_sources(registry)
     add_mnist_sources(registry)
     add_real_noise_sources(registry)
+    registry.add(StandardDatasetAdapter())
     return registry
 
 
@@ -742,6 +744,9 @@ def _prepare_experiment_data(
     run_dir = Path(run_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
     train = registry.load(spec, "train", seed=seed)
+    automatic_split = (data_config.get("validation_split", {}) or {}).get("source") == "training_pool"
+    if automatic_split:
+        train = registry.training_pool(spec, seed=seed, train=train)
     if requirements.class_subset is not None:
         selected = np.flatnonzero(np.isin(train.observed_targets, requirements.class_subset))
         remap = {value: offset for offset, value in enumerate(requirements.class_subset)}
@@ -775,7 +780,7 @@ def _prepare_experiment_data(
         or validation_size > 0
         or DataRole.TRUSTED_VALIDATION in requirements.roles
     )
-    if probe_native_validation:
+    if probe_native_validation and not automatic_split:
         try:
             native_validation = registry.load(spec, "validation", seed=seed)
         except (UnsupportedDatasetSplitError, FileNotFoundError, KeyError):
@@ -783,6 +788,8 @@ def _prepare_experiment_data(
     else:
         native_validation = None
     test = registry.load(spec, "test", seed=seed)
+    if spec.name == "standard" and not len(test):
+        raise ValueError("dataset has no test split; specify CSV split assignments or data.split.test_fraction before training")
     source_train_indices = train.global_indices.copy()
     if requirements.subset_before_split:
         source_train_indices = _subset(
@@ -790,6 +797,12 @@ def _prepare_experiment_data(
             train.clean_targets if train.clean_targets is not None else train.observed_targets,
             data_config.get("max_train_samples"),
             seed + 1,
+        )
+
+    if automatic_split and not 0 <= validation_size < source_train_indices.size:
+        raise ValueError(
+            f"验证集样本数必须在 0 到 {source_train_indices.size - 1} 之间；"
+            f"原始训练池共 {source_train_indices.size} 个样本"
         )
 
     if native_validation is not None and native_validation.dataset == train.dataset:
@@ -1431,6 +1444,15 @@ class DataService:
         }:
             raise ValueError(f"{canonical} registration requires --labels")
         record = self.catalog.register(alias, canonical, payload)
+        if canonical == "standard":
+            metadata = standard_metadata(Path(payload["root"]))
+            self.catalog.set_declarations(alias, DatasetDeclarations(
+                noise_status=NoiseStatus(metadata.get("label_status", "unknown")),
+                noise_origin=NoiseOrigin.NATIVE if metadata.get("label_status") == "noisy" else NoiseOrigin.UNKNOWN,
+                noise_rate=NoiseRateInfo(NoiseRateStatus.KNOWN, float(metadata["noise_rate"]), "user_dataset_manifest")
+                    if metadata.get("noise_rate") is not None else NoiseRateInfo(),
+                noise_override=metadata.get("label_status", "unknown") != "unknown",
+            ).to_dict())
         return self._shallow_report(record.alias, record.adapter, record)
 
     def remove(self, name: object) -> None:

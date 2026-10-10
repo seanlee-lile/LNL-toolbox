@@ -12,6 +12,8 @@ from pathlib import Path
 import re
 from typing import TYPE_CHECKING, Any, Iterable
 
+from .archive import archive_layout, is_dataset_archive
+
 if TYPE_CHECKING:
     from lnl_toolbox.training.data_service import DataService
 
@@ -116,7 +118,7 @@ def _looks_like_uci(path: Path) -> bool:
 def _registered_alias(path: Path, data_service: "DataService") -> str | None:
     resolved = path.expanduser().resolve()
     for record in data_service.catalog.records():
-        for key in ("root", "path", "noise_path", "labels_path", "annotation_root"):
+        for key in ("root", "path", "noise_path", "labels_path", "annotation_root", "source_archive"):
             value = record.data.get(key)
             if value and Path(str(value)).expanduser().resolve() == resolved:
                 return record.alias
@@ -145,7 +147,34 @@ def probe_dataset_path(
     if existing is not None:
         return DatasetProbeResult(str(resolved), "already_registered", existing_alias=existing)
 
+    if is_dataset_archive(resolved):
+        names = set(archive_layout(resolved))
+        parents = {str(Path(name).parent).replace("\\", "/") for name in names}
+        candidates = []
+        signatures = {
+            "cifar10": {*(f"data_batch_{i}" for i in range(1, 6)), "test_batch", "batches.meta"},
+            "cifar100": {"train", "test", "meta"},
+            "standard": {"dataset.yaml", "samples.csv"},
+        }
+        for parent in sorted(parents):
+            files = {Path(name).name for name in names if str(Path(name).parent).replace("\\", "/") == parent}
+            for adapter, signature in signatures.items():
+                if signature.issubset(files):
+                    candidates.append(_candidate(adapter, "high", "recognized dataset layout inside archive",
+                                                 root=str(resolved), source_archive=str(resolved), archive_subdir=parent))
+                    annotation = {"cifar10": "CIFAR-10_human.pt", "cifar100": "CIFAR-100_human.pt"}.get(adapter)
+                    if annotation in files:
+                        candidates.append(_candidate(adapter + "n", "high", "CIFAR-N annotation inside archive",
+                                                     root=str(resolved), source_archive=str(resolved), archive_subdir=parent))
+        return DatasetProbeResult(str(resolved), "detected" if len(candidates) == 1 else "ambiguous" if candidates else "unsupported", tuple(candidates))
+
     candidates: list[ProbeCandidate] = []
+    standard_roots = [resolved] if resolved.is_dir() else []
+    if resolved.is_dir():
+        standard_roots.extend(p for p in resolved.iterdir() if p.is_dir())
+    for root in standard_roots:
+        if (root / "dataset.yaml").is_file() and (root / "samples.csv").is_file():
+            candidates.append(_candidate("standard", "high", "dataset.yaml and samples.csv manifest", root=str(root)))
     cifar10 = _cifar10_root(resolved) if resolved.is_dir() else None
     cifar100 = _cifar100_root(resolved) if resolved.is_dir() else None
     if cifar10 is not None:

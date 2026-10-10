@@ -365,6 +365,7 @@
             <h2 id="module-title">新手模式</h2>
             <div class="heading-actions">
               <span id="module-hint">从检查到训练的向导</span>
+              <button id="add-dataset" class="hidden" type="button">添加数据集</button>
               <button id="show-yaml" class="secondary">显示/编辑 YAML</button>
             </div>
           </div>
@@ -431,6 +432,13 @@
   <script src="/assets/quick_start.js"></script>
   <script src="/assets/run_output.js"></script>
   <script>
+    window.scrollConsoleToTop = function () {
+      const reset = function () { window.scrollTo({top:0, left:0, behavior:"instant"}); };
+      reset();
+      window.requestAnimationFrame(reset);
+    };
+    if ("scrollRestoration" in window.history) window.history.scrollRestoration = "manual";
+    window.addEventListener("pageshow", window.scrollConsoleToTop);
     const recipeMode = window.location.pathname === "/recipe" || window.location.pathname === "/recipe/";
     const allModules = [
       { id: "quickstart", label: "快速开始", description: "配置数据集、标签噪声和论文方法。", hint: "数据集 · 标签噪声 · 论文方法" },
@@ -443,7 +451,7 @@
     const workspaces = [
       {id:"start", label:"开始", description:"配置并运行论文实验。", hint:"", defaultModule:"quickstart"},
       {id:"data", label:"数据集", description:"登记、检查并确认本地数据集是否可用于实验。", hint:"登记 · 检查 · 兼容性", defaultModule:"data"},
-      {id:"experiments", label:"实验", description:"运行参数组合实验并对比实验结果。", hint:"参数组合 · 结果对比", defaultModule:"sweep"},
+      {id:"experiments", label:"实验", description:"查看并比较实验结果，也可运行参数组合实验。", hint:"结果对比 · 参数组合", defaultModule:"results"},
       {id:"papers", label:"论文", description:"浏览 26 篇论文、正式配置与数据集兼容性。", hint:"目录 · 配置 · 限制", defaultModule:"papers"},
     ];
     const workspaceForModule = {
@@ -1284,13 +1292,14 @@
       structuredNode.classList.remove('hidden'); outputNode.classList.add('hidden');
     }
     function dataTableHtml(reports) {
-      return '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>数据集</th><th>状态</th><th>位置</th><th>Train / Test</th><th>训练验证</th><th>带噪比例</th><th>编辑</th></tr></thead><tbody>' + reports.map(function (item) {
+      return '<div class="data-table-wrap"><table class="data-table"><thead><tr><th>数据集</th><th>状态</th><th>位置</th><th>Train / Test</th><th>训练验证</th><th>带噪比例</th><th>操作</th></tr></thead><tbody>' + reports.map(function (item) {
         const label = dataStatusLabel(item);
         const statusClass = dataStatusClass(item);
         const facts = item.noise_facts || {}, rate = facts.rate || {};
         const noiseRate = facts.status === "clean" ? "/" : facts.status === "noisy" ? (rate.value == null ? "未知" : (Number(rate.value) * 100).toLocaleString() + "%" + (rate.status === "estimated" ? "（估计）" : "")) : "未知";
+        const registered = Boolean(item.location);
         const editable = item.status === "ready" && Boolean(item.location) && Boolean(item.profile);
-        return '<tr><td>' + escapeHtml(item.name) + '<br><span class="helper">' + escapeHtml(item.adapter) + '</span></td><td class="' + statusClass + '">' + escapeHtml(label) + '</td><td>' + escapeHtml(item.location || "-") + '</td><td>' + (item.train_samples ?? "-") + ' / ' + (item.test_samples ?? "-") + '</td><td>' + (item.training_evidence ? "通过" : "-") + '</td><td>' + escapeHtml(noiseRate) + '</td><td><button type="button" class="secondary data-row-edit" data-noise-edit="' + escapeHtml(item.name) + '"' + (editable ? '' : ' disabled title="请先实际检查数据集"') + '>编辑</button></td></tr>' +
+        return '<tr><td>' + escapeHtml(item.name) + '<br><span class="helper">' + escapeHtml(item.adapter) + '</span></td><td class="' + statusClass + '">' + escapeHtml(label) + '</td><td>' + escapeHtml(item.location || "-") + '</td><td>' + (item.train_samples ?? "-") + ' / ' + (item.test_samples ?? "-") + '</td><td>' + (item.training_evidence ? "通过" : "-") + '</td><td>' + escapeHtml(noiseRate) + '</td><td><div class="workflow-actions"><button type="button" class="secondary data-row-edit" data-noise-edit="' + escapeHtml(item.name) + '"' + (editable ? '' : ' disabled title="请先实际检查数据集"') + '>编辑</button>' + (registered ? '<button type="button" class="danger data-row-delete" data-dataset-delete="' + escapeHtml(item.name) + '">删除</button>' : '') + '</div></td></tr>' +
           (state.dataEditingAlias === item.name && editable ? '<tr><td colspan="7">' + datasetNoiseEditorHtml(item) + '</td></tr>' : '');
       }).join("") + '</tbody></table></div>';
     }
@@ -1321,91 +1330,121 @@
     function updateDatasetStatusVisibility() {
       document.getElementById("data-status-panel")?.classList.remove("hidden");
     }
-    function renderData() {
-      const adapters = state.datasets.adapters || [];
-      const reports = state.datasets.datasets || [];
-      const registeredReports = reports.filter(function (item) { return Boolean(item.location); });
-      if (!registeredReports.some(function (item) { return item.name === state.dataAlias; })) state.dataAlias = registeredReports[0]?.name || "";
-      const selectedReport = state.dataAction === "register" ? null : reports.find(function (item) { return item.name === state.dataAlias; });
-      const registered = registeredReports.map(function (item) { return {value:item.name, label:item.name + " · " + item.adapter + " · " + dataStatusLabel(item)}; });
-      const trainingFlow = state.dataAction === "run" ? datasetProfileCompatibilityHtml() : "";
-      parameterPanel.innerHTML =
-        '<div class="guide-card" id="data-status-panel"><strong>已登记数据集</strong>' + dataTableHtml(reports) + '</div>' + commonFormStart() +
-        field("操作", "data-action", selectControl("__ID__", [
-          {value:"list", label:"查看全部状态", hidden:true}, {value:"status", label:"查看单项详情"}, {value:"path", label:"查看数据位置", hidden:true},
-          {value:"register", label:"1 · 登记本机路径"}, {value:"inspect", label:"2 · 实际加载 train/test"},
-          {value:"verify", label:"3 · 训练 1 epoch 验证"}, {value:"run", label:"使用已登记数据训练"}, {value:"remove", label:"删除登记（不删除原文件）", hidden:true}
-        ])) +
-        field("已登记数据", "data-alias", selectControl("__ID__", registered.length ? registered : [{value:"", label:"尚未登记"}])) +
-        field("新别名", "data-new-alias", inputControl("__ID__", "local-cifar10")) + field("适配器", "data-adapter", selectControl("__ID__", adapters.length ? adapters : ["cifar10"])) +
-        field("数据根目录", "data-root", inputControl("__ID__", "F:/datasets/cifar10"), true) + field("单文件路径（UCI）", "data-path", inputControl("__ID__", ""), true) +
-        field("人工标签文件（CIFAR-N）", "data-labels", inputControl("__ID__", ""), true) + field("训练模板", "data-recipe", recipesSelect("__ID__"), true) +
-        field("验证输出目录（可选）", "data-output", inputControl("__ID__", ""), true) + commonFormEnd() +
-        dataFeedbackHtml(selectedReport) + '<p class="helper">登记保存本机路径；检查会实际加载训练集和测试集；一轮验证会按数据类型执行 1 个 epoch。</p>' + trainingFlow +
-        '<div class="guide-card"><strong>数据集操作</strong><div class="workflow-actions"><button type="button" data-data-action="list" class="secondary">查看全部状态</button><button type="button" data-data-action="path" class="secondary">查看数据位置</button><button type="button" data-data-action="remove" class="danger">删除登记</button></div><p class="helper">删除登记只移除工具箱保存的路径记录，不会删除数据文件。</p></div>';
-      const actionNode = document.getElementById("data-action");
-      actionNode.value = [...actionNode.options].some(function (option) { return option.value === state.dataAction; }) ? state.dataAction : "status";
-      const aliasNode = document.getElementById("data-alias");
-      if (state.dataAlias) aliasNode.value = state.dataAlias;
-      const adapterNode = document.getElementById("data-adapter");
-      if ([...adapterNode.options].some(function (option) { return option.value === state.dataAdapter; })) adapterNode.value = state.dataAdapter;
-      const recipeNode = document.getElementById("data-recipe");
-      if ([...recipeNode.options].some(function (option) { return option.value === state.dataRecipe; })) recipeNode.value = state.dataRecipe;
-      document.getElementById("data-output").value = state.dataOutput;
-      if (state.dataCompatibility) {
-        const declared = state.dataCompatibility.declared || {}, declaredRate = declared.noise_rate || {};
-        if (document.getElementById("compat-noise-status")) document.getElementById("compat-noise-status").value = declared.noise_status || "unknown";
-        if (document.getElementById("compat-noise-origin")) document.getElementById("compat-noise-origin").value = declared.noise_origin || "unknown";
-        if (document.getElementById("compat-rate-status")) document.getElementById("compat-rate-status").value = declaredRate.status || "unknown";
-        if (document.getElementById("compat-rate-value")) document.getElementById("compat-rate-value").value = declaredRate.value ?? "";
-        if (document.getElementById("compat-rate-provenance")) document.getElementById("compat-rate-provenance").value = declaredRate.provenance || "";
-        if (document.getElementById("compat-rate-provenance-other")) document.getElementById("compat-rate-provenance-other").value = "";
-        if (document.getElementById("compat-clean-labels")) document.getElementById("compat-clean-labels").value = declared.clean_train_labels || "unknown";
-      }
-      const guideActions = document.createElement("div"); guideActions.className = "actions";
-      const guideButton = document.createElement("button"); guideButton.id = "data-guide-button"; guideButton.type = "button"; guideButton.className = "secondary hidden"; guideButton.textContent = "查看此适配器的数据说明";
-      const guideNode = document.createElement("div"); guideNode.id = "data-guide"; guideNode.className = "helper hidden";
-      guideActions.appendChild(guideButton); parameterPanel.appendChild(guideActions); parameterPanel.appendChild(guideNode);
-      actionNode.addEventListener("change", function () {
-        state.dataRecipe = selectValue("data-recipe", state.dataRecipe);
-        state.dataOutput = selectValue("data-output", state.dataOutput);
-        state.dataAction = actionNode.value; state.dataResult = null; state.removeConfirmed = false;
-        outputNode.textContent = "尚未执行当前操作。"; statusNode.textContent = "请填写当前操作所需字段，然后执行。"; statusNode.className = "status";
-        renderData();
-        updateModulePreview();
-      });
-      parameterPanel.querySelectorAll("[data-data-action]").forEach(function (button) {
-        button.addEventListener("click", function () {
-          state.dataAction = button.dataset.dataAction;
-          state.dataResult = null;
-          state.removeConfirmed = false;
-          renderData();
-          updateModulePreview();
+    function openAddDataset() {
+      let dialog = document.getElementById("add-dataset-dialog");
+      if (!dialog) {
+        dialog = document.createElement("dialog");
+        dialog.id = "add-dataset-dialog";
+        dialog.style.cssText = "width:min(720px,90vw);max-height:85vh;overflow:auto;border:1px solid #d9cfbd;border-radius:16px;padding:24px;background:#fffaf1;color:#302b24";
+        dialog.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center"><h2>添加数据集</h2><button type="button" class="secondary" data-close>关闭</button></div>' +
+          '<p>选择本机数据。工具箱会自动识别格式、登记路径并检查样本；不会启动训练，也不会额外划分数据集。</p>' +
+          '<div data-drop tabindex="0" style="border:2px dashed #b79460;border-radius:12px;padding:40px 16px;text-align:center;margin:20px 0">将数据集文件夹或压缩包拖入这里<br><span class="helper">也可以使用下方按钮选择，或粘贴完整路径。</span></div>' +
+          '<label>本机路径<input id="add-dataset-path" placeholder="例如 F:/datasets/my-dataset" style="width:100%"></label>' +
+          '<div class="actions"><button type="button" class="secondary" data-folder>选择文件夹</button><button type="button" class="secondary" data-file>选择文件</button><button type="button" data-register>添加并检查</button></div>' +
+          '<p data-progress role="status" aria-live="polite"></p><div data-candidates></div>' +
+          '<details open><summary>standard 格式是什么？</summary><p>自定义分类数据集需要在同一个文件夹内提供 dataset.yaml 和 UTF-8 编码的 samples.csv。CIFAR、MNIST 等已支持的原始格式无需改成 standard。</p>' +
+          '<p>图片数据示例：</p><pre>my-dataset/\n  dataset.yaml\n  samples.csv\n  images/\n    a.png\n    b.png</pre>' +
+          '<p>dataset.yaml 描述任务、数据类型和类别：</p><pre>task: classification\nmodality: image\nclasses:\n  - {id: 0, name: 猫}\n  - {id: 1, name: 狗}\nlabel_status: unknown</pre>' +
+          '<p>samples.csv 一行一个样本，图片路径相对于数据集文件夹：</p><pre>sample_id,path,label\n1,images/a.png,0\n2,images/b.png,1</pre>' +
+          '<p>类别编号从 0 连续递增，至少两类；样本编号唯一；图片尺寸与通道数一致。label_status 可填 clean（干净）、noisy（带噪）或 unknown（未知）。可选 clean_label 列提供每个样本的干净标签。</p>' +
+          '<p>表格数据使用 modality: tabular，CSV 中以 feature_ 开头的列存放有限数值，例如 sample_id,feature_1,feature_2,label。</p>' +
+          '<p>split 列可省略，省略时所有样本进入训练数据池，不自动切分。已有划分可填 train、validation 或 test。只按类别存放图片而没有上述两个文件的文件夹，暂不支持自动转换。</p></details>';
+        document.body.appendChild(dialog);
+        const pathInput = dialog.querySelector("#add-dataset-path");
+        const progress = dialog.querySelector("[data-progress]");
+        const candidates = dialog.querySelector("[data-candidates]");
+        let busy = false;
+        async function add(adapter) {
+          if (busy) return;
+          const path = pathInput.value.trim();
+          if (!path) { progress.textContent = "请选择数据集文件夹或文件。"; return; }
+          busy = true;
+          dialog.querySelectorAll("button,input").forEach(function (node) { node.disabled = true; });
+          candidates.replaceChildren();
+          progress.textContent = "正在识别格式、登记并检查数据集，请稍候…";
+          try {
+            const response = await fetch("/api/quick-start/register", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({path:path, ...(adapter ? {adapter:adapter} : {})})});
+            const payload = await response.json();
+            if (!response.ok) throw new Error(payload.error || "添加数据集失败");
+            if (payload.kind === "dataset") {
+              await refreshDatasets();
+              progress.textContent = "已添加并通过检查：" + payload.dataset.alias;
+              pathInput.value = "";
+            } else if (payload.status === "ambiguous") {
+              progress.textContent = "检测到多种可能的格式，请确认数据类型：";
+              (payload.candidates || []).forEach(function (item) {
+                const button = document.createElement("button");
+                button.type = "button"; button.className = "secondary";
+                button.textContent = item.adapter + " — " + item.reason;
+                button.onclick = function () { add(item.adapter); };
+                candidates.appendChild(button);
+              });
+            } else {
+              throw new Error("未识别到支持的数据格式。请检查所选目录，或按下方 standard 说明准备文件。");
+            }
+          } catch (error) { progress.textContent = String(error.message || error); }
+          finally {
+            busy = false;
+            dialog.querySelectorAll("button,input").forEach(function (node) { node.disabled = false; });
+          }
+        }
+        dialog.querySelector("[data-close]").onclick = function () { if (!busy) dialog.close(); };
+        dialog.addEventListener("cancel", function (event) { if (busy) event.preventDefault(); });
+        dialog.querySelector("[data-register]").onclick = function () { add(); };
+        async function choose(mode) {
+          try {
+            const response = await fetch("/api/picker", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({mode:mode, kind:"all", initial:pathInput.value})});
+            const payload = await response.json();
+            if (!response.ok) throw new Error(payload.error || "路径选择失败");
+            if (!payload.cancelled) { pathInput.value = payload.path; await add(); }
+          } catch (error) { progress.textContent = String(error.message || error); }
+        }
+        dialog.querySelector("[data-folder]").onclick = function () { choose("folder"); };
+        dialog.querySelector("[data-file]").onclick = function () { choose("open_file"); };
+        const drop = dialog.querySelector("[data-drop]");
+        drop.addEventListener("dragover", function (event) { event.preventDefault(); event.dataTransfer.dropEffect = "link"; });
+        drop.addEventListener("drop", function (event) {
+          event.preventDefault();
+          if (busy) return;
+          const transfer = event.dataTransfer;
+          let path = transfer.getData("text/uri-list").split("\n").find(function (line) { return line.trim() && !line.startsWith("#"); }) || transfer.getData("text/plain") || "";
+          path = path.trim();
+          if (/^file:\/\//i.test(path)) {
+            try { const url = new URL(path); path = decodeURIComponent(url.pathname).replace(/^\/(?=[A-Za-z]:)/, ""); if (url.hostname) path = "//" + url.hostname + path; }
+            catch (_) { path = ""; }
+          }
+          if (!/^(?:[A-Za-z]:[\\/]|\/)/.test(path)) {
+            progress.textContent = "浏览器未提供文件的完整本机路径。请点击“选择文件夹”或“选择文件”，选择后会自动添加；不会上传或复制原始数据。";
+            return;
+          }
+          pathInput.value = path;
+          add();
         });
-      });
-      aliasNode.addEventListener("change", function () {
-        state.dataRecipe = selectValue("data-recipe", state.dataRecipe);
-        state.dataOutput = selectValue("data-output", state.dataOutput);
-        state.dataAlias = aliasNode.value; state.dataResult = null; state.dataCompatibility = null; state.dataRecipeCompatibility = null; state.dataCompatibilityAlias = ""; state.dataCompatibilityError = ""; state.dataSelectedMethod = ""; state.dataSelectedRecipe = ""; state.removeConfirmed = false; renderConsoleContext(); renderData(); updateModulePreview(); loadDatasetCompatibility();
-      });
-      adapterNode.addEventListener("change", function () {
-        state.dataAdapter = adapterNode.value;
-        updateDataFormVisibility();
-        if (!guideNode.classList.contains("hidden")) guideNode.innerHTML = datasetGuideHtml(adapterNode.value);
-      });
-      guideButton.addEventListener("click", function () { guideNode.innerHTML = datasetGuideHtml(adapterNode.value); guideNode.classList.remove("hidden"); });
-      recipeNode.addEventListener("change", function () { state.dataRecipe = recipeNode.value; const recipe = state.recipes.find(function (item) { return item.id === state.dataRecipe; }); state.dataSelectedMethod = recipe?.method || ""; if (state.dataAlias) loadDatasetCompatibility(state.dataAlias); });
-      document.getElementById("data-output").addEventListener("input", function (event) { state.dataOutput = event.target.value; });
-      document.getElementById("compat-apply-declarations")?.addEventListener("click", async function () {
-        try { await applyDatasetDeclarations(); statusNode.textContent = "Declarations saved; compatibility recomputed."; statusNode.className = "status success"; }
-        catch (error) { statusNode.textContent = String(error.message || error); statusNode.className = "status failed"; }
-      });
+      }
+      dialog.showModal();
+    }
+    function renderData() {
+      const reports = state.datasets.datasets || [];
+      parameterPanel.innerHTML = '<div class="guide-card" id="data-status-panel"><strong>数据集</strong>' + dataTableHtml(reports) + '</div>';
+      document.getElementById("add-dataset").onclick = openAddDataset;
       parameterPanel.querySelectorAll("[data-noise-edit]").forEach(function (button) { button.addEventListener("click", function () {
         const alias = button.dataset.noiseEdit;
         state.dataEditingAlias = state.dataEditingAlias === alias ? "" : alias;
         state.dataAlias = alias;
         renderData();
         updateModulePreview();
+      }); });
+      parameterPanel.querySelectorAll("[data-dataset-delete]").forEach(function (button) { button.addEventListener("click", function () {
+        const alias = button.dataset.datasetDelete;
+        if (!window.confirm("删除数据集登记“" + alias + "”？只会移除工具箱保存的路径记录，不会删除原始数据文件。")) return;
+        state.dataAction = "remove";
+        state.dataAlias = alias;
+        state.dataResult = null;
+        state.removeConfirmed = false;
+        renderData();
+        updateModulePreview();
+        state.removeConfirmed = true;
+        runButton.click();
       }); });
       parameterPanel.querySelectorAll("[data-noise-editor]").forEach(function (editor) {
         const alias = editor.dataset.noiseEditor;
@@ -1463,7 +1502,6 @@
         node.addEventListener("change", updateModulePreview);
       });
       updateDataFormVisibility();
-      if (selectedReport?.status === "ready" && state.dataCompatibilityAlias !== state.dataAlias && !state.dataCompatibilityLoading) setTimeout(function () { loadDatasetCompatibility(state.dataAlias); }, 0);
     }
     function renderSweep() {
       parameterPanel.innerHTML = commonFormStart() +
@@ -1923,6 +1961,7 @@
       renderWorkspaceTabs();
       const meta = workspaceMeta();
       document.getElementById("module-title").textContent = meta.label;
+      document.getElementById("add-dataset").classList.toggle("hidden", module !== "data");
       document.getElementById("module-hint").textContent = meta.hint;
       document.getElementById("module-description").textContent = meta.description;
       ({quickstart: renderQuickStart, yaml: renderYaml, data: renderData, sweep: renderSweepV2,
@@ -1943,6 +1982,7 @@
       updateModulePreview();
       updateYamlEditorButton();
       renderConsoleContext();
+      window.scrollConsoleToTop();
     }
     function toggleYamlField(id, visible) {
       const node = document.getElementById(id);
@@ -2103,12 +2143,22 @@
         for (const fieldInfo of fields) {
           if (scheduleParts.has(fieldInfo.path)) continue;
           const id = yamlFieldId(fieldInfo.path);
+          const stringOptions = fieldInfo.choices;
           let control;
-          if (!fieldInfo.editable) {
-            const value = typeof fieldInfo.value === "object" ? JSON.stringify(fieldInfo.value) : fieldInfo.value ?? "";
+          if (fieldInfo.rows) {
+            control = '<input hidden id="' + id + '" data-yaml-path="' + escapeHtml(fieldInfo.path) + '" value="' + escapeHtml(JSON.stringify(fieldInfo.value)) + '">' + window.parameterListEditor.render(fieldInfo, fieldInfo.value, !fieldInfo.editable);
+          } else if (!fieldInfo.editable) {
+            const selected = stringOptions?.find(function (option) { return option.value === String(fieldInfo.value); });
+            const value = selected ? selected.label : typeof fieldInfo.value === "object" ? JSON.stringify(fieldInfo.value) : fieldInfo.value ?? "";
             control = '<div class="yaml-readonly-value">' + escapeHtml(value) + '</div>';
           } else if (fieldInfo.kind === "boolean") {
             control = '<input id="' + id + '" type="checkbox" ' + (fieldInfo.value ? "checked" : "") + ' data-yaml-path="' + escapeHtml(fieldInfo.path) + '">';
+          } else if (stringOptions) {
+            const currentValue = String(fieldInfo.value ?? "");
+            const options = stringOptions.some(function (option) { return option.value === currentValue; })
+              ? stringOptions
+              : [{ value: currentValue, label: "当前配置含未支持选项", unsupported: true }, ...stringOptions];
+            control = '<select id="' + id + '" data-yaml-path="' + escapeHtml(fieldInfo.path) + '">' + window.parameterChoiceHelp.options(options, currentValue) + '</select>';
           } else {
             const type = fieldInfo.kind === "number" ? "number" : "text";
             const value = fieldInfo.kind === "list" ? JSON.stringify(fieldInfo.value) : fieldInfo.value ?? "";
@@ -2116,14 +2166,12 @@
             control = '<input id="' + id + '" type="' + type + '" value="' + escapeHtml(value) + '" spellcheck="false" data-yaml-path="' + escapeHtml(fieldInfo.path) + '"' + nullable + '>';
           }
           const displayLabel = fieldInfo.presentation === "resource" ? (fieldInfo.presentation_label || "资源/前置条件") : fieldInfo.label;
-          const explanation = !fieldInfo.editable
-            ? '<p class="yaml-field-meta">不可修改：' + escapeHtml(fieldInfo.lock_reason || fieldInfo.note) + '</p>'
-            : fieldInfo.level === "paper"
-            ? (fieldInfo.note ? '<p class="yaml-field-meta">' + escapeHtml(fieldInfo.note) + '</p>' : '') + '<p class="yaml-field-meta">论文依据：' + escapeHtml(fieldInfo.evidence || "见论文来源") + '</p><p class="yaml-field-meta">复现影响：' + escapeHtml(fieldInfo.reproduction_impact) + '</p>'
-            : fieldInfo.level === "locked"
-              ? '<p class="yaml-field-meta">不可修改：' + escapeHtml(fieldInfo.lock_reason || fieldInfo.note) + '</p>'
-              : (fieldInfo.note ? '<p class="yaml-field-meta">' + escapeHtml(fieldInfo.note) + '</p>' : '') + (fieldInfo.presentation === "resource" ? '<p class="yaml-field-meta">配置字段：' + escapeHtml(fieldInfo.path) + '</p>' : '');
-          body.insertAdjacentHTML("beforeend", '<div class="yaml-field yaml-field-' + escapeHtml(fieldInfo.level) + ' yaml-field-' + escapeHtml(fieldInfo.presentation || "parameter") + '"><label for="' + id + '">' + escapeHtml(displayLabel) + '</label>' + control + explanation + '</div>');
+          const explanation = (stringOptions ? window.parameterChoiceHelp.render(stringOptions, fieldInfo.value) : '') + (fieldInfo.note ? '<p class="yaml-field-meta">' + escapeHtml(fieldInfo.note) + '</p>' : '') +
+            (!fieldInfo.editable ? '<p class="yaml-field-meta">此项由训练流程固定，不能在网页修改。</p>' : '');
+          const inputExplanation = fieldInfo.path === "data.preprocessing"
+            ? '<div class="yaml-field-meta"><p>这个选项决定图像像素如何变成模型输入；它不会改变标签，也不会添加噪声。普通图片的像素通常在 0–255 之间。</p><p><strong>按颜色通道标准化：</strong>先把像素缩放到 0–1，再分别对红、绿、蓝三个通道减去该通道的平均值，并除以该通道的标准差。模型收到的是以 0 附近为中心、尺度经过调整的数值。</p><p><strong>只把像素缩放到 0–1：</strong>只将像素除以 255，不再减均值或除标准差。模型收到的仍是非负数值；此模式不执行随机裁剪、翻转等随机增强。</p><p><strong>减去每个像素位置的训练集均值：</strong>针对每个颜色通道和图像位置，计算训练图片在该位置的平均像素值，再从输入图片的同一位置减掉它；不再除以标准差。比如，减去训练图片左上角红色通道的平均值，只作用于输入图左上角的红色数值。启用训练数据增强时，仍可按配置进行随机裁剪和翻转。</p><p>“标准化/减均值”是在调整像素数值；“训练数据增强”是在训练时随机改变图片，两者不是一回事。不同方法可能依赖特定输入处理，通常保持论文配置。</p></div>'
+            : '';
+          body.insertAdjacentHTML("beforeend", '<div class="yaml-field yaml-field-' + escapeHtml(fieldInfo.level) + ' yaml-field-' + escapeHtml(fieldInfo.presentation || "parameter") + '"><label for="' + id + '">' + escapeHtml(displayLabel) + '</label>' + control + explanation + inputExplanation + '</div>');
         }
         if (levelInfo.id === "default") for (const group of scheduleGroups) body.insertAdjacentHTML("beforeend", yamlScheduleHtml(group, schema.fields || []));
         groupsNode.appendChild(details);
@@ -2131,10 +2179,12 @@
       if (!(schema.fields || []).some(function (fieldInfo) { return fieldInfo.visible !== false; })) {
         node.innerHTML = '<p class="helper">此 recipe 没有可由网页安全修改的参数，请使用论文原始配置运行。</p>';
       }
+      window.parameterListEditor.bind(node, function (path) { return document.getElementById(yamlFieldId(path)); });
       for (const fieldInfo of schema.fields || []) {
         if (fieldInfo.visible === false || !fieldInfo.editable) continue;
         const input = document.getElementById(yamlFieldId(fieldInfo.path));
-        if (input) input.addEventListener("input", function () {
+        if (input) input.addEventListener(input.tagName === "SELECT" ? "change" : "input", function () {
+          window.parameterChoiceHelp.update(input);
           for (const path of fieldInfo.linked_fields || []) {
             const linked = document.getElementById(yamlFieldId(path));
             if (linked && !linked.disabled) {
@@ -2428,8 +2478,8 @@
       if (state.module === "yaml") return buildYamlCommand();
       if (state.module === "run") return buildRunWorkspaceCommand();
       if (state.module === "data") {
-        const action = selectValue("data-action", "list");
-        const alias = selectValue("data-alias", "");
+        const action = selectValue("data-action", state.dataAction === "remove" ? "remove" : "list");
+        const alias = selectValue("data-alias", state.dataAlias);
         const recipe = selectValue("data-recipe", "cifar10-clean-smoke");
         if (action === "list") return "";
         if (action === "status") return "lnl data status" + (alias ? " " + quoteArg(alias) : "");
@@ -2476,8 +2526,8 @@
       return "";
     }
     function buildDataApiRequest() {
-      const action = selectValue("data-action", "list");
-      const alias = selectValue("data-alias", "");
+      const action = selectValue("data-action", state.dataAction === "remove" ? "remove" : "list");
+      const alias = selectValue("data-alias", state.dataAlias);
       if (action === "run") return null;
       const payload = {action: action};
       if (action === "register") {

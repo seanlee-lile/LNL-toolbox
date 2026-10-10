@@ -41,10 +41,25 @@ def _unpickle(path: Path) -> dict[Any, Any]:
     if not path.is_file():
         raise FileNotFoundError(f"Missing CIFAR file: {path}")
     with path.open("rb") as handle:
-        value = pickle.load(handle, encoding="bytes")
+        value = _CifarUnpickler(handle, encoding="bytes").load()
     if not isinstance(value, dict):
         raise ValueError(f"Expected a dictionary in {path}")
     return value
+
+
+class _CifarUnpickler(pickle.Unpickler):
+    """CIFAR stores NumPy arrays; reject executable globals in user imports."""
+
+    def find_class(self, module: str, name: str):
+        allowed = {
+            ("numpy", "ndarray"), ("numpy", "dtype"),
+            ("numpy.core.multiarray", "_reconstruct"), ("numpy._core.multiarray", "_reconstruct"),
+            ("numpy.core.multiarray", "scalar"), ("numpy._core.multiarray", "scalar"),
+            ("_codecs", "encode"),
+        }
+        if (module, name) not in allowed:
+            raise pickle.UnpicklingError(f"unsupported CIFAR pickle global: {module}.{name}")
+        return super().find_class(module, name)
 
 
 def _get(record: dict[Any, Any], key: str) -> Any:

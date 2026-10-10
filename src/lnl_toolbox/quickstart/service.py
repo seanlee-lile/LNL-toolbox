@@ -12,6 +12,8 @@ import uuid
 
 from lnl_toolbox.catalog import discover_recipes, load_papers, recipe_by_id, load_recipe_config
 from lnl_toolbox.data.probe import DatasetProbeResult, probe_dataset_path, suggest_dataset_alias
+from lnl_toolbox.data.archive import extract_dataset_archive
+from lnl_toolbox.data.registry import training_pool_size
 from lnl_toolbox.data.profile import KnowledgeState, NoiseOrigin, resolve_dataset_capabilities
 from lnl_toolbox.noise.quickstart_catalog import quick_start_noise_specs, visible_synthetic_noise_specs
 from lnl_toolbox.training.compatibility import CompatibilityStatus
@@ -25,7 +27,7 @@ from .models import (
     QuickStartNoiseSelection,
     QuickStartPlan,
 )
-from .templates import MethodTemplate, adapt_method_template, find_exact_reproduction, method_template_for_paper, reference_train_size
+from .templates import MethodTemplate, adapt_method_template, configure_validation_split, find_exact_reproduction, method_template_for_paper, reference_train_size
 
 
 class _CachedDatasetService:
@@ -154,6 +156,7 @@ class QuickStartService:
             display_name=(profile.dataset if profile is not None else report.adapter),
             num_classes=report.classes,
             train_size=report.train_samples,
+            training_pool_size=training_pool_size(report.adapter, dict(profile.sample_counts_by_split)) if profile is not None else report.train_samples,
             validation_size=_split_size(profile, "validation"),
             test_size=report.test_samples,
             noise_status="unknown" if noise is None else noise.status.value,
@@ -185,9 +188,20 @@ class QuickStartService:
         if len(candidates) != 1:
             return DatasetProbeResult(result.path, "unsupported", tuple(candidates))
         candidate = candidates[0]
+        candidate_data = dict(candidate.data)
+        if candidate_data.get("source_archive"):
+            unpacked = extract_dataset_archive(Path(candidate_data["source_archive"]), self.artifact_root / "datasets" / "unpacked")
+            inner_root = unpacked / candidate_data.pop("archive_subdir")
+            recognized = probe_dataset_path(inner_root, data_service=self.data_service)
+            if recognized.status == "already_registered":
+                return self._summary(recognized.existing_alias, self._accepted_report(recognized.existing_alias))
+            matches = [c for c in recognized.candidates if c.adapter == candidate.adapter]
+            if len(matches) != 1:
+                raise ValueError("unpacked dataset does not match the selected format")
+            candidate_data = {**matches[0].data, "source_archive": str(Path(path).resolve())}
         aliases = [record.alias for record in self.data_service.catalog.records()]
         alias = suggest_dataset_alias(candidate.adapter, result.path, aliases)
-        self.data_service.register(alias, candidate.adapter, candidate.data)
+        self.data_service.register(alias, candidate.adapter, candidate_data)
         with self._method_cache_lock:
             self._method_cache.clear()
             self._template_cache.clear()
@@ -380,13 +394,14 @@ class QuickStartService:
         )
         if exact is not None:
             original_count = reference_train_size(load_recipe_config(recipe_by_id(exact)))
-            if original_count is not None and report.train_samples != original_count:
+            if original_count is not None and training_pool_size(report.adapter, dict(profile.sample_counts_by_split)) != original_count:
                 exact = None
         if exact is not None:
             plan_id = self._plan_id(dataset_alias, paper.id)
             config = self.data_service.apply(
                 load_recipe_config(recipe_by_id(exact)), dataset_alias
             )
+            configure_validation_split(config)
             output_dir = self.artifact_root / "runs" / plan_id
             result = self.experiment_service.list_config_compatibility(
                 dataset_alias, {paper.id: config},

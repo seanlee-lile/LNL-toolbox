@@ -127,6 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--resume", type=Path)
     run.add_argument("--epochs", type=int)
     run.add_argument("--dry-run", action="store_true")
+    run.add_argument("--review", action="store_true", help="report parameter-check and rehearsal phases in one dry-run process")
     data_check = run.add_mutually_exclusive_group()
     data_check.add_argument(
         "--check-data",
@@ -375,13 +376,13 @@ def _load_source(args: argparse.Namespace) -> tuple[dict[str, Any], Path, Recipe
     if recipe_name:
         recipe = recipe_by_id(recipe_name, root)
         config_path = recipe.config_path
-        config = load_recipe_config(recipe)
+        config = load_recipe_config(recipe, check_parameters=True)
     elif config_arg is not None:
         recipe = None
         config_path = config_arg.expanduser().resolve()
         if not config_path.is_file():
             raise FileNotFoundError(f"configuration does not exist: {config_path}")
-        config = load_yaml(config_path)
+        config = load_yaml(config_path, check_parameters=True)
     else:
         raise ValueError("provide a recipe name or YAML path")
     project = find_project_root(None if recipe is not None else config_path, root)
@@ -639,6 +640,11 @@ def _validate(args: argparse.Namespace) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
+    review = bool(getattr(args, "review", False))
+    if review and not args.dry_run:
+        raise ValueError("--review requires --dry-run")
+    if review:
+        print("Quick Start phase: validating", flush=True)
     config, path, recipe, project = _load_source(args)
     config = apply_override_assignments(config, args.overrides)
     if args.epochs is not None:
@@ -646,8 +652,18 @@ def _run(args: argparse.Namespace) -> int:
     if args.no_check_data and not args.dry_run:
         raise ValueError("--no-check-data is only valid together with --dry-run")
     service = ExperimentService()
+    if review:
+        service.preflight(config, check_data=False)
+        print("Quick Start phase: rehearsing", flush=True)
     service.preflight(config, check_data=_should_check_data(args))
     if args.dry_run:
+        if args.output_dir is not None:
+            output = args.output_dir.expanduser().resolve()
+            print("Planned training artifacts (created when training starts)")
+            print(f"  artifact directory: {output}")
+            if review:
+                print(f"  training configuration: {output / 'config.yaml'}")
+            print(f"  resolved configuration: {output / 'resolved_config.yaml'}")
         _print_plan(config, path, project, service.last_compatibility)
         return 0
     result = service.run(

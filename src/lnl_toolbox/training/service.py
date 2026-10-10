@@ -520,10 +520,11 @@ class ExperimentService:
 
         from lnl_toolbox.catalog import validate_config
 
-        candidate = runtime_experiment_config({"kind": "experiment", **dict(config)})
+        raw = {"kind": "experiment", **dict(config)}
+        runner = validate_config(raw, check_data=False)
+        candidate = runtime_experiment_config(raw)
         if candidate.get("kind") != "experiment":
             raise ValueError("ExperimentService requires kind: experiment")
-        runner = validate_config(candidate, check_data=False)
         if check_data:
             self.data_service.validate_config(candidate)
             self._compatibility_preflight(candidate, runner)

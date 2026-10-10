@@ -73,7 +73,7 @@ class PaperSpec:
     availability: str
 
 
-def load_yaml(path: Path) -> dict[str, Any]:
+def load_yaml(path: Path, *, check_parameters: bool = False) -> dict[str, Any]:
     try:
         import yaml
     except ImportError as exc:
@@ -84,6 +84,10 @@ def load_yaml(path: Path) -> dict[str, Any]:
     value = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(value, Mapping):
         raise ValueError(f"configuration must contain a YAML mapping: {path}")
+    if check_parameters:
+        errors = _config_parameter_errors(value)
+        if errors:
+            raise ValueError("\n".join(errors))
     return normalize_experiment_config(dict(value))
 
 
@@ -421,10 +425,10 @@ def default_paper_config(
     return selected, recipe_by_id(selected.recipe_id, root)
 
 
-def load_recipe_config(recipe: RecipeSpec) -> dict[str, Any]:
+def load_recipe_config(recipe: RecipeSpec, *, check_parameters: bool = False) -> dict[str, Any]:
     """Load one explicit built-in recipe without scanning user configuration."""
 
-    return load_yaml(recipe.config_path)
+    return load_yaml(recipe.config_path, check_parameters=check_parameters)
 
 
 def find_project_root(config_path: Path | None = None, explicit: Path | None = None) -> Path:
@@ -626,7 +630,299 @@ def _validate_dedicated_runner(config: Mapping[str, Any], runner: str) -> None:
             )
 
 
+def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
+    """Collect input errors before normalization can coerce or hide bad values.
+
+    Rules describe supported input domains, not paper defaults/search grids.
+    Common leaf rules also cover optimizers and schedulers in nested stages.
+    This intentionally has no dependency on Web code or machine-local data.
+    """
+    def number(value: Any) -> bool:
+        if type(value) not in (int, float):
+            return False
+        try:
+            return math.isfinite(value)
+        except OverflowError:
+            return False
+
+    rules = {
+        "integer": ("an integer >= 0", lambda v: type(v) is int and v >= 0),
+        "positive_integer": ("an integer > 0", lambda v: type(v) is int and v > 0),
+        "number": ("a finite number", number),
+        "nonnegative": ("a finite number >= 0", lambda v: number(v) and v >= 0),
+        "positive": ("a finite number > 0", lambda v: number(v) and v > 0),
+        "probability": ("a finite number in [0, 1]", lambda v: number(v) and 0 <= v <= 1),
+        "open_probability": ("a finite number in (0, 1)", lambda v: number(v) and 0 < v < 1),
+        "decay": ("a finite number in [0, 1)", lambda v: number(v) and 0 <= v < 1),
+        "seed": ("an integer in [0, 4294967295]", lambda v: type(v) is int and 0 <= v < 2**32),
+        "half_probability": ("a finite number in (0, 0.5)", lambda v: number(v) and 0 < v < 0.5),
+        "boolean": ("a boolean", lambda v: type(v) is bool),
+        "text": ("a non-empty string without control characters", lambda v: isinstance(v, str) and bool(v.strip()) and all(ord(c) >= 32 for c in v)),
+        "milestones": ("a list of strictly increasing positive integers", lambda v: isinstance(v, list) and all(type(x) is int and x > 0 for x in v) and v == sorted(set(v))),
+        "rates": ("null or a list of positive finite learning rates", lambda v: v is None or isinstance(v, list) and all(number(x) and x > 0 for x in v)),
+        "numbers": ("a list of finite numbers", lambda v: isinstance(v, list) and all(number(x) for x in v)),
+        "vector": ("a non-empty list of finite numbers", lambda v: isinstance(v, list) and bool(v) and all(number(x) for x in v)),
+    }
+    leaf_groups = {
+        "integer": "seed num_workers max_steps num_clean num_val validation_size test_size train_size fold_index strong_magnitude patience warmup_epochs gradual_epochs burn_in_epoch fixed_label noisy_validation_size decay_start start_epoch update_start_epoch correction_epochs revision_epochs stem_padding epochs",
+        "positive_integer": "batch_size candidate_k window_size window_epochs augmentations rampup_epochs hidden_dim time_dim timesteps base_width k_neighbors report_last_epochs anchor_candidates basis_epochs num_parts representation_iterations steps k num_residual_units end_epoch t_max update_interval_epochs folds total_epochs num_classes width input_channels hidden_width input_dim step_size",
+        "nonnegative": "lambda lambda_volume robust_weight confidence_weight lambda_r lambda_u confidence_penalty_weight min_delta learning_rate lr initial_lr final_lr eta_min model_lr transition_lr weight_decay gamma l1_decay max_grad_norm prior_decay decay bandwidth beta coefficient basis_loss_threshold alpha delta leakiness",
+        "positive": "mixup_alpha temperature basis_learning_rate warmup_lr eps epsilon scale width_multiplier",
+        "probability": "rate rho_negative rho_positive high_noise_rate maximum_threshold momentum_scr momentum_scs ema_momentum dropout percentile beta1_after beta1_before initial_value start end noise_rate initial_flip_mass max_flip_mass batch_norm_momentum",
+        "decay": "beta1 beta2 rho_positive rho_negative",
+        "boolean": "dynamic_centroid augment strong_augment enabled allow_test_selection nesterov normalize_features classifier_bias bias ccs mda fixed_epoch_after_burn_in drop_last pin_memory download",
+        "number": "momentum initial_weight lower_threshold upper_threshold",
+        "milestones": "milestones step_milestones",
+        "rates": "lr_values",
+        "numbers": "values mean std anchor_percentages",
+        "text": "path root artifact_path monitor",
+    }
+    leaf_rules = {name: kind for kind, names in leaf_groups.items() for name in names.split()}
+    # Exact overrides distinguish parameters sharing a spelling but not a domain.
+    exact = {
+        "trainer.epochs": "positive_integer",
+        "seed": "seed",
+        "evaluation.report_last_epochs": "integer",
+        "data.normalization.mean": "vector", "data.normalization.std": "vector",
+        "instance_transition.anchor_percentages": "vector",
+        "fine.warmup_epochs": "positive_integer",
+        "loss.alpha": "positive", "loss.beta": "positive",
+        "algorithm.lambda": "probability", "ca2c.lambda": "probability",
+        "dld.precorrection.delta": "positive",
+        "cnlcu.uncertainty.sigma_squared": "open_probability",
+        "dividemix.gmm.threshold": "open_probability",
+        "dividemix.mixmatch.temperature": "positive",
+        "dld.diffusion.ema.decay": "decay",
+        "lend.dilution.alpha": "open_probability",
+        "lend.graph.gamma": "positive",
+        "lend.history.beta": "probability",
+        "pipeline.objective_consumer.alpha": "open_probability",
+        "pipeline.objective_consumer.prior_decay": "decay",
+        "pipeline.weight_provider.decay": "probability",
+        "meta.virtual_learning_rate": "positive",
+        "posterior_stage.bandwidth": "positive",
+        "transition_stage.parameterization.initial_flip_mass": "positive",
+        "transition_stage.parameterization.max_flip_mass": "half_probability",
+    }
+    enums = {
+        "algorithm.correction": "forward pdl pdl_revision",
+        "cnlcu.variant": "soft hard", "cwd.variant": "binary_scalar multiclass",
+        "data.preprocessing": "standard tensor_only gce2018 l2rw",
+        "data.split_strategy": "random stratified classwise_legacy numpy_choice_complement",
+        "data.validation_split.strategy": "random stratified classwise_legacy numpy_choice_complement",
+        "warmup.split_strategy": "random stratified classwise_legacy numpy_choice_complement",
+        "data.split_rng": "default_rng numpy_legacy",
+        "data.validation_split.rng": "default_rng numpy_legacy",
+        "data.strong_policy": "official_cifar10 torchvision",
+        "dividemix.gmm.loss_history.name": "official_auto current_epoch",
+        "dld.feature_extractor.source": "repository_frozen_model external_checkpoint",
+        "early_stopping.mode": "min max",
+        "early_stopping.monitor": "selection_accuracy selection_loss validation_accuracy validation_loss train_accuracy train_loss test_accuracy test_loss",
+        "evaluation.selection_split": "validation test",
+        "evaluation.primary": "accuracy ensemble_accuracy mean_peer_accuracy",
+        "lend.graph.metric": "inner_product cosine euclidean",
+        "mc_ldce.feature_mode": "fixed", "mc_ldce.transition_model": "separate",
+        "model.initialization": "kaiming torch_default",
+        "noise.mode": "generated external clean",
+        "noise.name": "symmetric pairflip class_conditional binary_asymmetric_rcn asymmetric_rcn external_torch official_uniform_flip pdl clean none native real_world",
+        "noise.sampling": "global per_class transition",
+        "parameter_update.compatibility_mode": "paper official_code",
+        "parameter_update.critical_scope": "all_trainable matrix_and_convolution_weights",
+        "pretraining_stage.mode": "train external_checkpoint",
+        "selector.keep_rate.name": "linear constant",
+        "transition.estimator": "paper_volmin dual_t known_smoke",
+        "transition.parameterization.name": "sigmoid_off_diagonal",
+    }
+    for stage in (
+        "dividemix.training", "dividemix.warmup", "dld.diffusion", "lend.training",
+        "ensemble_stage", "final_stage", "posterior_stage", "transition_stage",
+        "t_revision.stage1", "t_revision.classifier_initialization", "t_revision.revision",
+        "upm.stage1", "upm.main",
+    ):
+        exact[stage + ".epochs"] = "positive_integer"
+    method = config.get("method", "")
+    if isinstance(method, Mapping):
+        method = method.get("name", "")
+    method = str(method).strip().lower().replace("-", "_")
+    if not method:
+        execution = config.get("execution", {})
+        if isinstance(execution, Mapping):
+            method = str(execution.get("runner", "")).strip().lower()
+        algorithm = config.get("algorithm", {})
+        if method == "multi_model" or (
+            isinstance(algorithm, Mapping)
+            and str(algorithm.get("name", "")).strip().lower() == "jocor"
+        ):
+            method = "jocor"
+        elif method == "binary":
+            method = "binary_risk"
+    if method in {"coteaching", "cnlcu"}:
+        exact["noise.rate"] = "decay"
+        exact[method + ".noise_rate"] = "decay"
+        exact["data.validation_size"] = "positive_integer"
+    if method == "t_revision":
+        exact["data.validation_size"] = "positive_integer"
+    if method == "binary_risk":
+        enums["optimizer.name"] = "sgd"
+        enums["model.name"] = "linear mlp"
+    if method == "cwd":
+        enums["optimizer.name"] = "adam"
+        enums["model.name"] = "resnet34 cifar_resnet34 tiny_cnn feature_mlp"
+    model_names = "tiny_cnn cifar_cnn8 cnlcu_cnn9 resnet14 resnet32 resnet18 resnet34 resnet50 resnet101 preact_resnet18 mentor_wide_resnet feature_mlp pcse_mlp mlp linear cifar_six_conv cifar_resnet34 fine_seven_cnn ca2c_seven_cnn mc_ldce_cnn l2rw_resnet32 torchvision_resnet34"
+    errors: dict[str, str] = {}
+    flat: dict[str, Any] = {}
+
+    def fail(path: str, expected: str) -> None:
+        errors.setdefault(path, f"invalid config for {path}, expected {expected}")
+
+    def walk(value: Mapping[str, Any], prefix: str = "") -> None:
+        for key, current in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            flat[path] = current
+            kind = exact.get(path, leaf_rules.get(str(key)))
+            choices = enums.get(path)
+            parts = path.split(".")
+            if choices is not None:
+                pass
+            elif key == "name" and "optimizer" in parts:
+                choices = "sgd adam adamw"
+            elif key == "name" and "scheduler" in parts:
+                choices = "none cosine multistep linear_after"
+                if method == "jocor":
+                    choices = "none linear_decay"
+                elif method == "cal":
+                    choices = "none step multistep"
+            elif key == "name" and ("model" in parts or prefix.startswith("models.")):
+                choices = model_names
+            elif key == "name" and "loss" in parts:
+                choices = "ce cross_entropy nce mae gce rce apl nce_rce nce_mae"
+            if choices is not None:
+                if not isinstance(current, str) or current.strip().lower() not in choices.split():
+                    fail(path, "one of: " + ", ".join(choices.split()))
+            elif kind is not None:
+                expected, predicate = rules[kind]
+                if not predicate(current):
+                    fail(path, expected)
+            if isinstance(current, Mapping):
+                # data.preprocessing also accepts a structured tabular protocol.
+                if path == "data.preprocessing":
+                    errors.pop(path, None)
+                walk(current, path)
+            elif key == "models":
+                if not isinstance(current, list) or len(current) != 2 or any(not isinstance(x, Mapping) for x in current):
+                    fail(path, "a list of two model mappings")
+                else:
+                    for i, model in enumerate(current):
+                        walk(model, f"models.{i}")
+
+    walk(config)
+    # List-valued structures need element and shape checks as well as a list type.
+    for path in ("noise.transition_matrix", "pipeline.transition_estimator.matrix"):
+        if path in flat:
+            matrix = flat[path]
+            classes = flat.get("data.num_classes")
+            if not (isinstance(matrix, list) and matrix and all(
+                isinstance(row, list) and len(row) == len(matrix)
+                and all(number(x) and 0 <= x <= 1 for x in row)
+                and math.isclose(sum(row), 1, abs_tol=1e-6) for row in matrix
+            ) and (classes is None or len(matrix) == classes)):
+                fail(path, "a square probability matrix matching data.num_classes, with each row summing to 1")
+    special_lists = {
+        "optimizer.betas": ("two finite numbers in [0, 1)", lambda v: isinstance(v, list) and len(v) == 2 and all(number(x) and 0 <= x < 1 for x in v)),
+        "feature_stage.layers": ("at least two distinct layer mappings with name and pooling (global_average or flatten)", lambda v: isinstance(v, list) and len(v) >= 2 and all(isinstance(x, Mapping) and isinstance(x.get("name"), str) and x["name"].strip() and isinstance(x.get("pooling", "global_average"), str) and x.get("pooling", "global_average") in {"global_average", "flatten"} for x in v) and len({x["name"] for x in v}) == len(v)),
+        "pipeline.weight_provider.dropout_schedule": ("a list of [dropout in [0, 1], positive integer duration] pairs", lambda v: isinstance(v, list) and bool(v) and all(isinstance(x, list) and len(x) == 2 and number(x[0]) and 0 <= x[0] <= 1 and type(x[1]) is int and x[1] > 0 for x in v)),
+    }
+    for path, (expected, predicate) in special_lists.items():
+        if path in flat and not predicate(flat[path]):
+            fail(path, expected)
+    for path, current in flat.items():
+        if path.endswith(".momentum") and "optimizer" in path.split("."):
+            if not number(current) or current < 0:
+                fail(path, "a finite number >= 0")
+        if path.endswith(".std") and path not in errors and any(x <= 0 for x in current):
+            fail(path, "a list of positive finite numbers")
+        if path.endswith(".anchor_percentages") and path not in errors and any(not 0 <= x <= 100 for x in current):
+            fail(path, "a list of finite numbers in [0, 100]")
+        if path.endswith(".lr_values") and current is not None and path not in errors:
+            owner = path.rsplit(".", 1)[0]
+            milestones = flat.get(owner + ".step_milestones", flat.get(owner + ".milestones", []))
+            if not isinstance(milestones, list) or len(current) != len(milestones):
+                fail(path, "one positive finite learning rate per milestone")
+            scheduler_name = str(flat.get(owner + ".name", "")).strip().lower()
+            # L2RW applies its step schedule directly in the update loop;
+            # its epoch scheduler correctly remains disabled.
+            l2rw_step_schedule = (
+                method == "l2rw" and owner == "scheduler"
+                and owner + ".step_milestones" in flat
+                and scheduler_name == "none"
+            )
+            if scheduler_name not in {"multistep", "step"} and not l2rw_step_schedule:
+                fail(path, "a multistep or step scheduler when explicit learning rates are provided")
+        if path.endswith(".nesterov") and current is True:
+            owner = path.rsplit(".", 1)[0]
+            momentum = flat.get(owner + ".momentum", 0.9)
+            if number(momentum) and momentum <= 0:
+                fail(owner + ".momentum", "a finite number > 0 when nesterov is enabled")
+    q = flat.get("loss.q")
+    if "loss.q" in flat and (not number(q) or not 0 < q <= 1):
+        fail("loss.q", "a finite number in (0, 1]")
+    classes, k = flat.get("data.num_classes"), flat.get("ca2c.candidate_k")
+    if type(classes) is int and type(k) is int and not 0 < k < classes:
+        fail("ca2c.candidate_k", "an integer > 0 and < data.num_classes")
+    batch, k = flat.get("loader.batch_size"), flat.get("lend.graph.k")
+    if type(batch) is int and type(k) is int and batch <= k:
+        fail("loader.batch_size", "an integer > lend.graph.k")
+    initial = flat.get("transition_stage.parameterization.initial_flip_mass")
+    maximum = flat.get("transition_stage.parameterization.max_flip_mass")
+    if number(initial) and number(maximum) and initial >= maximum:
+        fail("transition_stage.parameterization.initial_flip_mass", "a positive finite number < transition_stage.parameterization.max_flip_mass")
+    for owner in ("data.normalization",):
+        mean, std = flat.get(owner + ".mean"), flat.get(owner + ".std")
+        if isinstance(mean, list) and isinstance(std, list) and len(mean) != len(std):
+            fail(owner + ".std", "one positive finite standard deviation per mean value")
+    lower, upper = flat.get("sieve.lower_threshold"), flat.get("sieve.upper_threshold")
+    if number(lower) and number(upper) and lower > upper:
+        fail("sieve.upper_threshold", "a finite number >= sieve.lower_threshold")
+    folds, index = flat.get("data.folds"), flat.get("data.fold_index")
+    if type(folds) is int and folds < 2:
+        fail("data.folds", "an integer >= 2")
+    if type(folds) is int and type(index) is int and not 0 <= index < folds:
+        fail("data.fold_index", "an integer >= 0 and < data.folds")
+    timesteps, steps = flat.get("dld.diffusion.timesteps"), flat.get("dld.inference.steps")
+    if type(timesteps) is int and type(steps) is int and timesteps < steps:
+        fail("dld.diffusion.timesteps", "an integer >= dld.inference.steps")
+    for path, current in flat.items():
+        if path.endswith(".name") and "scheduler" in path.split(".") and current in ("linear_after", "linear_decay"):
+            owner = path.rsplit(".", 1)[0]
+            stage = owner.rsplit(".scheduler", 1)[0]
+            budget = flat.get(stage + ".epochs", flat.get("trainer.epochs"))
+            start = flat.get(owner + ".start_epoch")
+            end = flat.get(owner + ".end_epoch", budget)
+            if type(start) is int and type(end) is int and type(budget) is int and not 0 <= start < end <= budget:
+                fail(owner + ".start_epoch", "0 <= start_epoch < end_epoch <= training epochs")
+        if path.endswith(".confidence_schedule.values") and path not in errors:
+            milestones = flat.get(path.rsplit(".", 1)[0] + ".milestones")
+            if isinstance(milestones, list) and len(current) != len(milestones):
+                fail(path, "one finite value per confidence milestone")
+    if method == "importance_reweighting" and flat.get("data.name") != "uci_statlog_heart":
+        for name in ("train_size", "validation_size", "test_size"):
+            if name == "validation_size" and flat.get("data.validation_split.source") == "training_pool":
+                continue  # Hold-out counts do not inherit the synthetic generator's parity constraint.
+            value = flat.get("data." + name)
+            if type(value) is int and (value < 2 or value % 2):
+                fail("data." + name, "an even integer >= 2")
+    for prefix in ("noise", "risk"):
+        positive, negative = flat.get(prefix + ".rho_positive"), flat.get(prefix + ".rho_negative")
+        if number(positive) and number(negative) and positive + negative >= 1:
+            for name in ("rho_positive", "rho_negative"):
+                fail(prefix + "." + name, "rates with rho_positive + rho_negative < 1")
+    return list(errors.values())
+
+
 def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> RunnerSpec:
+    errors = _config_parameter_errors(config)
+    if errors:
+        raise ValueError("\n".join(errors))
     runner = resolve_runner(config)
     config = normalize_experiment_config(config)
     data = config.get("data")

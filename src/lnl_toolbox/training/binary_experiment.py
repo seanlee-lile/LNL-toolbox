@@ -180,6 +180,11 @@ def run_binary_experiment(
     for epoch in range(epochs):
         row = train_binary_epoch(model, loader, optimizer, risk=risk)
         row["epoch"] = float(epoch + 1)
+        if prepared.validation_indices.size:
+            validation_loader = prepared.validation_loader(shuffle=False)
+            validation = evaluate_binary(model, validation_loader)
+            row["validation_loss"] = validation["loss"]
+            row["validation_accuracy"] = validation["accuracy"]
         if len(prepared.dataset_for(DataRole.TEST)) > 0:
             test_loader = prepared.loader(DataRole.TEST, shuffle=False)
             evaluation = evaluate_binary(model, test_loader)

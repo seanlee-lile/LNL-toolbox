@@ -17,6 +17,7 @@ class QuickStartDatasetSummary:
     noise_status: str
     noise_origin: str
     clean_train_labels: str
+    training_pool_size: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

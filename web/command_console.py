@@ -17,6 +17,7 @@ import shlex
 import subprocess
 import sys
 import threading
+import tempfile
 import uuid
 import webbrowser
 from dataclasses import dataclass, field
@@ -257,6 +258,7 @@ class Job:
     structured: object | None = None
     cancel_requested: bool = False
     training_context: object | None = None
+    output_complete: bool = False
 
     @property
     def done(self) -> bool:
@@ -265,6 +267,14 @@ class Job:
 
 JOBS: dict[str, Job] = {}
 JOBS_LOCK = threading.Lock()
+REVIEW_FILES: dict[str, tempfile.TemporaryDirectory] = {}
+
+
+def _cleanup_review_file(path: str) -> None:
+    with JOBS_LOCK:
+        directory = REVIEW_FILES.pop(path, None)
+    if directory is not None:
+        directory.cleanup()
 
 
 def resolve_lnl_command() -> list[str]:
@@ -317,8 +327,11 @@ def _read_output(job: Job) -> None:
             with JOBS_LOCK:
                 job.lines.append(line.rstrip("\r\n"))
     returncode = job.process.wait()
+    if "--review" in job.command and "--dry-run" in job.command and "--config" in job.command:
+        _cleanup_review_file(job.command[job.command.index("--config") + 1])
     with JOBS_LOCK:
         job.returncode = returncode
+        job.output_complete = True
         if returncode == 0 and "--format" in job.command and "json" in job.command:
             try:
                 job.structured = json.loads("\n".join(job.lines))
@@ -385,6 +398,9 @@ def _start_process(key: str, command: list[str], display_command: str) -> Job:
     except OSError as exc:
         job.error = str(exc)
         job.returncode = -1
+        job.output_complete = True
+        if "--review" in command and "--dry-run" in command and "--config" in command:
+            _cleanup_review_file(command[command.index("--config") + 1])
     with JOBS_LOCK:
         JOBS[job.job_id] = job
     if job.process is not None:
@@ -1320,6 +1336,8 @@ def _parameter_presentation(path: str, method: str = "") -> tuple[str, str]:
     # the ordinary Web parameter editor.
     if path.startswith("trusted_validation."):
         return "hidden", ""
+    if path == "data.validation_split.source":
+        return "hidden", ""
     # These caps only shrink a run for smoke/debugging.  A method's common
     # controls must not promote them into paper-facing parameters.
     if path in {
@@ -1534,7 +1552,67 @@ def _parameter_display_group(field: dict[str, object], method: str) -> str:
     return "advanced"
 
 
-def _parameter_user_note(path: str, original: str) -> str:
+def _parameter_context(path: str, method: str = "", *, brief: bool = False) -> str:
+    """Name the operation/model, not an opaque stage number."""
+    contexts = {
+        "t_revision.stage1": ("初始分类器", "用带噪标签训练初始分类器，供初始转移矩阵估计使用"),
+        "t_revision.classifier_initialization": ("校正分类器", "固定估计的转移矩阵，使用校正损失训练分类器"),
+        "t_revision.revision": ("联合修正", "联合更新分类器和转移矩阵的修正量"),
+        "upm.stage1": ("初始分类器", "用带噪标签训练初始分类器，生成观测标签后验概率"),
+        "upm.main": ("软标签分类器", "使用估计的软标签训练分类器"),
+        "upm.confusing_probability": ("混淆概率", "样本混淆概率更新"),
+        "dld.diffusion.optimizer.direction": ("方向预测器", "扩散训练中的方向预测器"),
+        "dld.diffusion.scheduler.direction": ("方向预测器", "扩散训练中的方向预测器"),
+        "dld.diffusion.optimizer.noise": ("噪声预测器", "扩散训练中的噪声预测器"),
+        "dld.diffusion.scheduler.noise": ("噪声预测器", "扩散训练中的噪声预测器"),
+        "dld.diffusion": ("扩散训练", "标签扩散模型训练"),
+        "dld.feature_extractor": ("特征提取器", "冻结的预训练特征提取器"),
+        "dld.precorrection": ("标签预校正", "基于特征近邻的标签预校正"),
+        "volminnet.optimizer.classifier": ("分类器", "分类器训练"),
+        "volminnet.scheduler.classifier": ("分类器", "分类器训练"),
+        "volminnet.optimizer.transition": ("转移矩阵", "转移矩阵学习"),
+        "volminnet.scheduler.transition": ("转移矩阵", "转移矩阵学习"),
+        "posterior_stage": ("初始模型", "带噪标签后验概率模型训练"),
+        "final_stage": ("最终模型", "噪声校正后的分类器训练"),
+        "pretraining_stage": ("特征预训练", "特征模型预训练"),
+        "transition_stage": ("噪声矩阵估计", "噪声转移矩阵学习"),
+        "ensemble_stage": ("集成训练", "集成分类器训练"),
+        "dividemix.warmup": ("双模型预热", "两个分类器的带噪标签预热训练"),
+        "dividemix.training": ("协同训练", "两个分类器的 DivideMix 协同训练"),
+        "warmup": ("预热", "带噪标签预热训练"),
+        "transition": ("噪声矩阵估计", "噪声转移矩阵学习"),
+        "revision": ("联合修正", "分类器与实例相关转移矩阵联合修正"),
+        "phases.correction_epochs": ("校正分类器", "固定实例相关转移矩阵的分类器训练"),
+        "phases.revision_epochs": ("联合修正", "分类器与实例相关转移矩阵联合修正"),
+        "lend.training": ("主模型", "LEND 分类器训练"),
+        "fine.warmup": ("预热", "FINE 分类器预热训练"),
+        "ca2c.warmup": ("预热", "CA2C 分类器预热训练"),
+    }
+    for prefix in sorted(contexts, key=len, reverse=True):
+        if path == prefix or path.startswith(prefix + ".") or (
+            prefix.endswith(".warmup") and path.startswith(prefix + "_")
+        ):
+            return contexts[prefix][0 if brief else 1]
+    if path.startswith(("optimizer.", "scheduler.", "model.")):
+        peers = method in {"coteaching", "cnlcu", "jocor", "dividemix"}
+        return ("双模型共同设置" if peers else "主模型") if brief else ("两个同伴分类器的共同设置" if peers else "主分类器训练")
+    return ""
+
+
+def _parameter_user_note(path: str, original: str, method: str = "") -> str:
+    spec = _parameter_ui_spec(path)
+    if spec:
+        context = _parameter_context(path, method)
+        return (context + "：" if context else "") + str(spec[1])
+    context = _parameter_context(path, method)
+    note = _parameter_base_note(path, original)
+    if context:
+        note = note.replace("本阶段", "").replace("该训练阶段", "").replace("主模型", "")
+        return context + "：" + note if note else context + "。"
+    return note
+
+
+def _parameter_base_note(path: str, original: str) -> str:
     """Keep field help specific to that field, without registry policy boilerplate."""
 
     if path == "loader.batch_size":
@@ -1554,7 +1632,7 @@ def _parameter_user_note(path: str, original: str) -> str:
     if path == "noise.rate":
         return "生成噪声时目标标签翻转比例。"
     if path in {"noise.rho_positive", "noise.rho_negative"}:
-        return "该类别标签被翻转的概率；两类概率之和必须小于 1。"
+        return ("正类标签翻转为负类" if path.endswith("positive") else "负类标签翻转为正类") + "的概率；两类概率之和必须小于 1。"
     if path in {"noise.transition_matrix", "pipeline.transition_estimator.matrix"}:
         return "类别间标签转移概率矩阵；每行对应一个原始类别。"
     if path == "trainer.max_steps":
@@ -1597,6 +1675,8 @@ def _parameter_user_note(path: str, original: str) -> str:
         return "每个学习率节点使用的衰减倍率。"
     if path.endswith(".epochs"):
         return "该训练阶段遍历数据的次数。"
+    if path in {"phases.correction_epochs", "phases.revision_epochs"}:
+        return "完整遍历训练数据的次数。"
     if path.endswith(".warmup_epochs"):
         return "预热阶段遍历数据的次数。"
     if path.endswith((".lr", ".learning_rate")):
@@ -1623,6 +1703,67 @@ def _parameter_user_note(path: str, original: str) -> str:
         return "是否启用 Nesterov 动量。"
     if path.endswith(".model.base_width") or path == "model.base_width":
         return "模型的基础通道数。"
+    details = {
+        "optimizer.beta1": "Adam 一阶梯度移动平均的衰减系数。",
+        "optimizer.beta2": "Adam 二阶梯度平方移动平均的衰减系数。",
+        "optimizer.betas": "Adam 的一阶、二阶移动平均衰减系数，按此顺序填写。",
+        "scheduler.lr_values": "按节点顺序填写各节点开始使用的学习率。",
+        "scheduler.initial_lr": "学习率变化曲线的起始值。",
+        "scheduler.final_lr": "学习率变化曲线的终点值。",
+        "model.dropout": "训练时随机置零神经元输出的比例。",
+        "model.width_multiplier": "网络通道宽度相对基础宽度的倍数。",
+        "model.num_residual_units": "每组残差模块中的残差单元数。",
+        "model.leakiness": "LeakyReLU 在负输入区间的斜率。",
+        "model.bias": "是否在模型中使用偏置参数。",
+        "loader.num_workers": "并行读取训练数据的工作进程数。",
+        "loader.drop_last": "是否舍弃最后一个不足批次大小的训练批次。",
+        "loader.pin_memory": "是否使用锁页内存加速数据到 GPU 的传输。",
+        "early_stopping.monitor": "用于判断是否提前停止训练的指标名称。",
+        "early_stopping.mode": "被监测指标的改善方向：min 表示降低，max 表示升高。",
+        "early_stopping.patience": "指标连续未改善多少轮后停止训练。",
+        "early_stopping.min_delta": "将指标变化认定为改善所需的最小幅度。",
+        "parameter_update.max_grad_norm": "梯度裁剪的最大范数；超过此值时缩放梯度。",
+        "noise.sampling": "依据转移概率生成观测标签时使用的抽样方式。",
+        "noise.mode": "选择标签噪声的生成或读取方式。",
+        "data.split_rng": "数据划分使用的随机数生成器类型。",
+        "data.validation_split.rng": "验证集划分使用的随机数生成器类型。",
+        "data.normalization.mean": "输入归一化时各颜色通道减去的均值，按通道顺序填写。",
+        "data.normalization.std": "输入归一化时各颜色通道除以的标准差，按通道顺序填写。",
+        "data.strong_policy": "生成强增强图像视图的变换策略。",
+        "data.strong_magnitude": "强数据增强操作的强度。",
+        "evaluation.selection_split": "用于选择最佳模型检查点的数据划分。",
+        "evaluation.allow_test_selection": "是否允许用测试集指标选择模型检查点。",
+        "evaluation.loss.name": "评估时计算损失使用的函数。",
+        "evaluation.primary": "结果汇总使用的主要评估指标。",
+        "evaluation.report_last_epochs": "结果汇总统计最后多少个训练轮次。",
+        "cwd.variant": "CWD 使用的算法变体。",
+        "cwd.dynamic_centroid": "是否依据当前批次的特征和观测标签重新计算类别质心。",
+        "feature_stage.layers": "PCSE 提取特征时使用的网络层名称列表。",
+        "parameter_update.critical_scope": "CDR 筛选关键参数时考察的模型参数范围。",
+        "parameter_update.compatibility_mode": "CDR 参数更新采用 paper 公式版本还是 official_code 实现版本。",
+        "pipeline.objective_consumer.mda": "是否启用 DSS 的边际分布对齐（MDA）。",
+        "pipeline.objective_consumer.ccs": "是否启用 DSS 的 CCS 筛选：根据跨轮次预测变化趋势排除类别。",
+        "selector.keep_rate.name": "JoCoR 保留样本比例随训练进度变化的规则。",
+        "models": "JoCoR 两个同伴分类器的模型配置列表。",
+        "cnlcu.variant": "CNLCU 样本不确定性估计采用的算法变体。",
+        "parameter_update.milestones": "参数更新策略切换的训练轮次节点。",
+        "parameter_update.gamma": "参数更新策略在节点使用的衰减倍率。",
+        "pipeline.weight_provider.total_epochs": "MentorNet 计算训练进度百分比时使用的总轮数。",
+        "pipeline.weight_provider.fixed_epoch_after_burn_in": "预热结束后，是否固定输入 MentorNet 的进度特征。",
+        "pipeline.weight_provider.fixed_label": "输入 MentorNet 的固定标签特征；为空时使用各样本的观测标签。",
+        "mc_ldce.transition_model": "MC-LDCE 估计噪声转移矩阵使用的模型方式。",
+        "mc_ldce.feature_mode": "MC-LDCE 分类阶段采用固定特征或可训练特征的方式。",
+        "mc_ldce.classifier_bias": "是否为 MC-LDCE 线性分类器启用偏置项。",
+        "algorithm.correction": "PDL 使用的标签噪声损失校正方式。",
+        "dividemix.gmm.loss_history.name": "DivideMix 拟合干净/带噪损失分布时采用的历史损失汇总规则。",
+        "dividemix.gmm.loss_history.high_noise_rate": "达到此噪声率时启用高噪声条件下的历史损失汇总。",
+        "dividemix.gmm.loss_history.window_epochs": "DivideMix 汇总损失时使用的最近训练轮数。",
+        "lend.graph.metric": "LEND 构建特征近邻图时使用的距离度量。",
+        "lend.graph.normalize_features": "是否在构建 LEND 近邻图前对特征向量归一化。",
+    }
+    for suffix, note in details.items():
+        if path == suffix or path.endswith("." + suffix):
+            return note
     if path in {"data.max_train_samples", "data.max_validation_samples", "data.max_test_samples"}:
         return "本次运行最多使用的" + {"data.max_train_samples": "训练", "data.max_validation_samples": "验证", "data.max_test_samples": "测试"}[path] + "样本数。"
     if original in {
@@ -1636,24 +1777,154 @@ def _parameter_user_note(path: str, original: str) -> str:
     return original
 
 
-def _parameter_user_label(path: str, method: str) -> str:
-    def stage_name(prefix: str) -> str:
-        parts = prefix.split(".") if prefix else []
-        if parts and parts[0] == method:
-            parts = parts[1:]
-        names = {
-            "posterior_stage": "后验阶段", "final_stage": "最终阶段",
-            "ensemble_stage": "集成阶段", "pretraining_stage": "预训练阶段",
-            "transition_stage": "转移矩阵阶段", "stage1": "第一阶段",
-            "classifier_initialization": "分类器初始化阶段", "revision": "修正阶段",
-            "transition": "转移矩阵", "warmup": "预热阶段",
-            "main": "主训练阶段", "training": "训练阶段",
-            "diffusion": "扩散阶段", "feature_extractor": "特征提取器",
-            "classifier": "分类器", "direction": "方向预测器",
-            "noise": "噪声预测器", "confusing_probability": "混淆概率",
-        }
-        return "".join(names.get(part, part.replace("_", " ")) for part in parts if part not in {"optimizer", "model"})
+def _parameter_ui_spec(path: str) -> list[str] | None:
+    ui = _parameter_registry().get("parameter_ui", {})
+    exact = ui.get("fields", {}).get(path)
+    if exact:
+        return exact
+    # Optimizers/schedulers may be named by their role (classifier, direction…).
+    parts = path.split(".")
+    normalized = path
+    for component in ("optimizer", "scheduler", "model"):
+        if component in parts:
+            normalized = component + "." + parts[-1]
+            break
+    suffixes = ui.get("suffixes", {})
+    for suffix in sorted(suffixes, key=len, reverse=True):
+        if path == suffix or path.endswith("." + suffix) or normalized == suffix:
+            return suffixes[suffix]
+    return None
 
+
+def _parameter_choices(field: dict[str, object], method: str) -> list[dict[str, str]] | None:
+    if field.get("kind") not in {"string", "text"}:
+        return None
+    if field.get("visible") is False:
+        return None
+    path = str(field["path"])
+    if path.endswith((".path", ".artifact_path")):
+        return None  # A user-supplied filesystem path is not an enumeration.
+    ui = _parameter_registry().get("parameter_ui", {})
+    choices = ui.get("choices", {}).get(path)
+    parts = path.split(".")
+    category = next((part for part in ("optimizer", "scheduler", "model", "loss") if part in parts), "")
+    if choices is None and parts[-1] == "name" and category:
+        choices = ui["choices"].get(category + ".name")
+    if category == "model" and parts[-1] == "name":
+        # Use the vocabulary of the actual model factory for this method,
+        # rather than offering every model mentioned anywhere in the toolbox.
+        choices = ["tiny_cnn", "cifar_cnn8", "cnlcu_cnn9", "resnet14", "resnet32",
+                   "resnet18", "resnet34", "resnet50", "resnet101",
+                   "preact_resnet18", "mentor_wide_resnet", "feature_mlp"]
+        if method in {"apl", "gce", "cdr", "dss", "mentornet", "loss_correction", "pdl"}:
+            choices = [value for value in choices if value not in {"cnlcu_cnn9", "feature_mlp"}]
+        extra = {"jocor": "cifar_six_conv", "fine": "fine_seven_cnn",
+                 "ca2c": "ca2c_seven_cnn", "l2rw": "l2rw_resnet32", "mc_ldce": "mc_ldce_cnn"}.get(method)
+        if extra:
+            choices.append(extra)
+        if method == "importance_reweighting":
+            choices = ["linear"]
+        elif method == "pcse":
+            choices = ["pcse_mlp"] if field.get("value") == "pcse_mlp" else ["resnet18", "resnet34", "resnet50", "resnet101"]
+        elif method == "dld" and field.get("value") == "torchvision_resnet34":
+            choices = ["torchvision_resnet34"]
+    if path == "data.name":
+        from lnl_toolbox.training.data_service import DATASETS
+        choices = list(DATASETS.names())
+        current = str(field.get("value", ""))
+        if current not in choices:
+            DATASETS.get(current)  # Keep supported aliases, not arbitrary strings.
+            choices.append(current)
+    if category == "optimizer" and method in {"binary_risk", "cwd"} and path == "optimizer.name":
+        choices = ["sgd"] if method == "binary_risk" else ["adam"]
+    if category == "model" and path == "model.name":
+        if method == "binary_risk":
+            choices = ["linear", "mlp"]
+        elif method == "cwd":
+            choices = ["resnet34", "cifar_resnet34", "tiny_cnn", "feature_mlp"]
+    if category == "scheduler":
+        if method == "jocor":
+            choices = ["none", "linear_decay"]
+        elif method == "cal":
+            choices = ["none", "step", "multistep"]
+        elif method == "dld":
+            choices = ["none", "cosine", "multistep"]
+        elif method == "mc_ldce" and path == "transition.scheduler.name":
+            choices = ["none", "multistep"]
+        elif method in {"apl", "gce", "cdr", "dss", "mentornet", "loss_correction", "pdl"}:
+            choices = ["none", "cosine", "multistep"]
+    if path == "evaluation.primary":
+        # Dedicated evaluators expose their own metric, not an interchangeable
+        # menu of metrics that may never be produced by the selected runner.
+        choices = [str(field["value"])]
+    if path == "transition.estimator" and field.get("value") != "known_smoke":
+        choices = [value for value in choices if value != "known_smoke"]
+    if not field.get("editable"):
+        choices = [str(field.get("value", ""))]
+    if choices is None:
+        return None
+    result = []
+    for value in choices:
+        value = str(value)
+        description = ui.get("choice_descriptions_by_path", {}).get(path, {}).get(
+            value, ui.get("choice_descriptions", {}).get(value, "")
+        )
+        if category == "model":
+            description = ui.get("model_descriptions", {}).get(value, description)
+        if path == "data.name":
+            description = ui.get("dataset_descriptions", {}).get(value, description)
+        result.append({"value": value, "label": value, "description": description})
+    return result
+
+
+@lru_cache(maxsize=32)
+def _feature_layer_choices(model_json: str, num_classes: int) -> list[dict[str, str]]:
+    import torch
+    from lnl_toolbox.training.experiment import build_model
+
+    # Read architecture names without loading weights, allocating tensors or
+    # changing the experiment's random state.
+    model_config = json.loads(model_json)
+    if model_config.get("name") == "pcse_mlp":
+        return [{"value": "hidden1", "label": "hidden1", "description": "隐藏层一"}, {"value": "hidden2", "label": "hidden2", "description": "隐藏层二"}]
+    with torch.random.fork_rng(devices=[]), torch.device("meta"):
+        model = build_model(model_config, num_classes)
+    names = [name for name, _ in model.named_children()
+             if name not in {"fc", "classifier", "head", "output", "logits"}]
+    descriptions = {"layer1": "残差组一", "layer2": "残差组二", "layer3": "残差组三",
+                    "layer4": "残差组四", "features": "卷积特征层", "avgpool": "平均池化层",
+                    "conv1": "首层卷积", "bn1": "首层批归一化", "relu": "首层激活", "maxpool": "最大池化层"}
+    return [{"value": name, "label": name, "description": descriptions.get(name, "网络中间层")} for name in names]
+
+
+def _parameter_list_rows(field: dict[str, object], config: dict[str, Any], method: str) -> list[list[dict[str, object]]] | None:
+    path = field["path"]
+    if path not in {"models", "feature_stage.layers"}:
+        return None
+    rows = []
+    for index, item in enumerate(field.get("value") or []):
+        row = []
+        for key, value in item.items():
+            child_path = "model." + key if path == "models" else "feature_layer." + key
+            spec = _parameter_ui_spec(child_path)
+            if spec is None:
+                raise ValueError(f"列表参数缺少说明：{path}.{key}")
+            child = {"path": child_path, "key": key, "index": index, "label": key,
+                     "note": spec[1], "value": value, "kind": "boolean" if isinstance(value, bool) else "number" if isinstance(value, (int, float)) else "text",
+                     "editable": field["editable"], "visible": True}
+            if path == "models":
+                child["choices"] = _parameter_choices(child, method)
+            elif key == "pooling":
+                child["choices"] = [{"value": "global_average", "label": "global_average", "description": "各空间位置取平均"}, {"value": "flatten", "label": "flatten", "description": "全部位置展开成向量"}]
+            elif key == "name":
+                model = config.get("pretraining_stage", {}).get("model", {})
+                child["choices"] = _feature_layer_choices(json.dumps(model, sort_keys=True), int(config["data"]["num_classes"]))
+            row.append(child)
+        rows.append(row)
+    return rows
+
+
+def _parameter_user_label(path: str, method: str) -> str:
     labels = {
         "seed": "实验随机种子", "data.augment": "训练数据增强",
         "data.strong_augment": "强数据增强", "data.preprocessing": "输入预处理",
@@ -1664,14 +1935,13 @@ def _parameter_user_label(path: str, method: str) -> str:
         "noise.path": "外部噪声/标签文件", "dld.feature_extractor.source": "DLD 特征来源",
         "pipeline.weight_provider.artifact_path": "MentorNet 权重文件",
     }
+    context = _parameter_context(path, method, brief=True)
+    if context:
+        return path + "（" + context + "）"
     if path in labels:
-        return labels[path]
+        return path + "（" + labels[path] + "）"
     if path == "model.name" or path.endswith(".model.name"):
-        return (stage_name(path.removesuffix(".model.name")) if path != "model.name" else "") + "模型架构"
-    if path.endswith(".epochs"):
-        return stage_name(path.removesuffix(".epochs")) + "轮数"
-    if path.endswith((".lr", ".learning_rate")):
-        return stage_name(path.rsplit(".", 1)[0]) + "起始学习率"
+        return path + "（模型架构）"
     return path
 
 
@@ -1763,7 +2033,7 @@ def _registry_config_fields(
                     "default_expanded": bool(
                         level_metadata.get("default_expanded", False)
                     ),
-                    "note": _parameter_user_note(str(path), str(metadata.get("note", ""))),
+                    "note": _parameter_user_note(str(path), str(metadata.get("note", "")), method),
                     "reproduction_impact": str(
                         metadata.get("reproduction_impact", "")
                     ),
@@ -1780,6 +2050,16 @@ def _registry_config_fields(
                     ),
                 }
             )
+    if method == "binary_risk":
+        # The binary runner's ordinary hold-out is optional, not a method hyperparameter.
+        fields.append({
+            "path": "data.validation_size", "label": _parameter_user_label("data.validation_size", method),
+            "value": config.get("data", {}).get("validation_size", 0),
+            "kind": "number", "number_type": "integer", "nullable": False,
+            "level": "advanced", "visible": True, "editable": True,
+            "presentation": "common", "research_group": "", "research_category": "",
+            "linked_fields": [], "note": _parameter_user_note("data.validation_size", "", method),
+        })
     if allow_missing:
         known = {str(field["path"]) for field in fields}
         for field in _legacy_editable_config_fields(config):
@@ -1878,6 +2158,13 @@ def _config_schema(
     original_count = reference_train_size(original)
     for field in fields:
         field["display_group"] = _parameter_display_group(field, method)
+        if method in _parameter_registry()["methods"] and field.get("visible") is not False and not _parameter_ui_spec(str(field["path"])):
+            raise ValueError(f"参数尚未提供具体说明：{field['path']}")
+        if _parameter_ui_spec(str(field["path"])):
+            field["label"] = _parameter_user_label(str(field["path"]), method)
+            field["note"] = _parameter_user_note(str(field["path"]), "", method)
+        field["choices"] = _parameter_choices(field, method)
+        field["rows"] = _parameter_list_rows(field, payload["config"], method)
         path = tuple(str(field.get("path", "")).split("."))
         if original_count and path in SPLIT_COUNT_PATHS:
             source = original
@@ -1905,6 +2192,9 @@ def _field_map(config: dict[str, Any], method: str) -> dict[str, dict[str, objec
     result = {str(field["path"]): field for field in fields}
     for schedule_field in _schedule_editor_fields(config):
         result[str(schedule_field["path"])] = schedule_field
+    for field in result.values():
+        field["choices"] = _parameter_choices(field, method)
+        field["rows"] = _parameter_list_rows(field, config, method)
     return result
 
 
@@ -1912,15 +2202,16 @@ def _schedule_editor_fields(config: dict[str, Any]) -> list[dict[str, object]]:
     """Expose absolute stage rates wherever the training scheduler supports them."""
     result: list[dict[str, object]] = []
     execution = config.get("execution") or {}
+    method = str(config.get("method") or (execution.get("runner", "") if isinstance(execution, dict) else ""))
     cwd = config.get("method") == "cwd" or isinstance(execution, dict) and execution.get("runner") == "cwd"
 
     if cwd and isinstance(config.get("scheduler"), dict):
         result.append({
-            "path": "scheduler.name", "label": "学习率变化方式",
+            "path": "scheduler.name", "label": _parameter_user_label("scheduler.name", method),
             "value": config["scheduler"].get("name", "multistep"), "kind": "text",
             "level": "advanced", "research_group": "", "research_category": "",
             "editable": True, "visible": True, "presentation": "parameter",
-            "note": "CWD 原配置使用分段学习率；关闭后保持固定学习率。",
+            "note": _parameter_user_note("scheduler.name", "", method),
         })
 
     def visit(value: object, path: str = "") -> None:
@@ -1932,11 +2223,11 @@ def _schedule_editor_fields(config: dict[str, Any]) -> list[dict[str, object]]:
             or (path == "scheduler" and cwd and isinstance(value.get("milestones"), list))
         ):
             result.append({
-                "path": path + ".lr_values", "label": "各节点后的学习率",
+                "path": path + ".lr_values", "label": _parameter_user_label(path + ".lr_values", method),
                 "value": value.get("lr_values"), "kind": "list", "nullable": True,
                 "level": "advanced", "research_group": "", "research_category": "",
                 "editable": True, "visible": True, "presentation": "parameter",
-                "note": "每个节点可单独填写学习率；留空时使用论文配置的衰减倍率。",
+                "note": _parameter_user_note(path + ".lr_values", "", method),
             })
         for key, child in value.items():
             if isinstance(child, dict):
@@ -1987,6 +2278,9 @@ def _set_config_path(config: dict[str, object], path: str, value: object) -> Non
             current.pop(parts[-1], None)
         else:
             current[parts[-1]] = value
+            if cwd and path == "scheduler.lr_values" and "name" not in current:
+                # CWD's existing unnamed scheduler is implicitly multistep.
+                current["name"] = "multistep"
         return
     if parts[-1] not in current:
         raise ValueError(f"配置字段不存在：{path}")
@@ -2064,6 +2358,15 @@ def _coerce_patch_value(field: dict[str, object], value: object) -> object:
             return None
         if not isinstance(value, list):
             raise ValueError(f"参数 {field['path']} 必须是列表")
+        rows = field.get("rows")
+        if rows:
+            if len(value) != len(rows):
+                raise ValueError(f"{field['label']}：请保留 {len(rows)} 项配置")
+            for index, (item, row) in enumerate(zip(value, rows)):
+                if not isinstance(item, dict) or set(item) != {child["key"] for child in row}:
+                    raise ValueError(f"{field['label']}：第 {index + 1} 项格式错误")
+                for child in row:
+                    _coerce_patch_value(child, item[child["key"]])
         return value
     if kind == "object":
         if not isinstance(value, dict):
@@ -2071,6 +2374,9 @@ def _coerce_patch_value(field: dict[str, object], value: object) -> object:
         return value
     if not isinstance(value, str):
         raise ValueError(f"参数 {field['path']} 必须是文本")
+    choices = field.get("choices")
+    if choices and value not in {option["value"] for option in choices}:
+        raise ValueError(f"{field['label']}：请从下拉选项中选择")
     return value
 
 
@@ -2093,6 +2399,8 @@ def _parameter_edit_rule(
     if path in derived.get(method, ()):
         if method == "importance_reweighting":
             _, dimension = _config_path_value(config, "data.dimension")
+            if dimension is None:
+                return "fixed", "输入特征数由当前数据决定。", None
             return "derived", "此值跟随数据维度，请修改数据维度。", int(dimension)
         _, noise_rate = _config_path_value(config, "noise.rate")
         expected = 1.0 - float(noise_rate) if path.endswith("remember_schedule.end") else float(noise_rate)
@@ -2365,10 +2673,10 @@ def _record_paper_parameter_status(
     config["meta"] = meta
 
 
-def _save_config(payload: object) -> dict[str, object]:
+def _save_config(payload: object, *, for_review: bool = False, destination: Path | None = None) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise ValueError("请求内容必须是 JSON 对象")
-    destination = _project_path(payload.get("path"))
+    destination = destination if destination is not None else _project_path(payload.get("path"))
     recipe_id = payload.get("recipe")
     source_path = payload.get("source_path")
     content = payload.get("content")
@@ -2420,29 +2728,40 @@ def _save_config(payload: object) -> dict[str, object]:
                 raise ValueError(f"不允许修改配置结构或组件：{path}")
             if not field.get("editable", False):
                 raise ValueError(f"锁定参数不能通过普通 WebUI 修改：{path}")
-            _set_config_path(parsed, path, _coerce_patch_value(field, patch.get("value")))
-        _synchronize_web_derived_parameters(parsed, method)
+            _set_config_path(parsed, path, patch.get("value") if for_review else _coerce_patch_value(field, patch.get("value")))
+        from lnl_toolbox.catalog import _config_parameter_errors
+        if not for_review or not _config_parameter_errors(parsed):
+            _synchronize_web_derived_parameters(parsed, method)
     method = source_method or _config_method(source_config or parsed, _config_method(parsed))
     if source_config is None:
         formal = _formal_registry_config(method)
         source_config = formal[1] if formal is not None else parsed
-    _normalize_registry_numeric_fields(parsed, method)
-    _validate_schedule_editor_rates(parsed)
+    from lnl_toolbox.catalog import _config_parameter_errors
+    raw_errors = _config_parameter_errors(parsed) if for_review else []
+    if not for_review:
+        _normalize_registry_numeric_fields(parsed, method)
+        _validate_schedule_editor_rates(parsed)
     from lnl_toolbox.core.config_schema import synchronize_experiment_seed
 
-    parsed = synchronize_experiment_seed(parsed)
-    _assert_locked_parameters_unchanged(source_config, parsed, method)
+    if not raw_errors:
+        parsed = synchronize_experiment_seed(parsed)
+        _assert_locked_parameters_unchanged(source_config, parsed, method)
+        if payload.get("automatic_validation_split"):
+            from lnl_toolbox.quickstart.templates import configure_validation_split
+
+            configure_validation_split(parsed)
     _record_paper_parameter_status(
         parsed,
         method,
         acknowledged=bool(payload.get("acknowledge_paper_impact", False)),
     )
-    validate_config(parsed)
-    _validate_changed_data_noise_selectors(source_config, parsed)
-    _validate_changed_model_configs(source_config, parsed, method)
-    _validate_changed_training_selectors(source_config, parsed, method)
+    if not for_review:
+        validate_config(parsed)
+        _validate_changed_data_noise_selectors(source_config, parsed)
+        _validate_changed_model_configs(source_config, parsed, method)
+        _validate_changed_training_selectors(source_config, parsed, method)
     dataset_alias = str(payload.get("dataset_alias") or "").strip()
-    if dataset_alias:
+    if dataset_alias and not for_review:
         from lnl_toolbox.training.service import ExperimentService
 
         service = ExperimentService()
@@ -2471,11 +2790,44 @@ def _save_config(payload: object) -> dict[str, object]:
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(content, encoding="utf-8")
     return {
-        "path": destination.relative_to(ROOT).as_posix(),
+        "path": str(destination) if for_review else destination.relative_to(ROOT).as_posix(),
         "bytes": destination.stat().st_size,
         "content": content,
         "dataset_alias": dataset_alias or None,
     }
+
+
+def _quick_start_config(payload: dict[str, object], *, review: bool) -> dict[str, object]:
+    body = {key: payload.get(key) for key in ("recipe", "source_path", "recipe_hint", "patches", "dataset_alias")}
+    body["acknowledge_paper_impact"] = True
+    body["automatic_validation_split"] = True
+    run_id = uuid.uuid4().hex if review else str(payload.get("run_id") or uuid.uuid4().hex)
+    if uuid.UUID(run_id).hex != run_id:
+        raise ValueError("invalid run identifier")
+    run_dir = ROOT / "artifacts" / "web-runs" / run_id
+    locations = {"run_id": run_id, "output_dir": str(run_dir), "config_path": str(run_dir / "config.yaml")}
+    if not review:
+        body.update(content=payload.get("content"), path=str(run_dir / "config.yaml"))
+        return {**_save_config(body), **locations}
+    directory = tempfile.TemporaryDirectory(prefix="lnl-review-")
+    path = str(Path(directory.name) / "config.yaml")
+    try:
+        saved = _save_config(body, for_review=True, destination=Path(path))
+    except Exception:
+        directory.cleanup()
+        raise
+    with JOBS_LOCK:
+        REVIEW_FILES[path] = directory
+    # Clean abandoned requests too; an active CLI owns its file until exit.
+    def expire() -> None:
+        with JOBS_LOCK:
+            active = any(path in job.command and not job.output_complete for job in JOBS.values())
+        if not active:
+            _cleanup_review_file(path)
+    timer = threading.Timer(600, expire)
+    timer.daemon = True
+    timer.start()
+    return {**saved, **locations}
 
 
 def _job_payload(job: Job) -> dict[str, object]:
@@ -2489,6 +2841,7 @@ def _job_payload(job: Job) -> dict[str, object]:
             "returncode": job.returncode,
             "error": job.error,
             "running": not job.done,
+            "output_complete": job.output_complete,
             "cancel_requested": job.cancel_requested,
             "structured": job.structured,
         }
@@ -3020,6 +3373,8 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 from web import quick_start_api
 
                 handlers = {
+                    "/api/quick-start/review-config": lambda body: _quick_start_config(body, review=True),
+                    "/api/quick-start/training-config": lambda body: _quick_start_config(body, review=False),
                     "/api/quick-start/probe": quick_start_api.probe_payload,
                     "/api/quick-start/register": quick_start_api.register_payload,
                     "/api/quick-start/methods": quick_start_api.method_options_payload,

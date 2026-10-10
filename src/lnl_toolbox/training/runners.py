@@ -179,11 +179,10 @@ def _image_requirements(
             required_inputs = required_inputs + (_config_input(
                 "requires_class_dependent_noise",
                 ("noise", "name"),
-                description=(
-                    "T-Revision requires symmetric, pairflip, or an external "
-                    "class-dependent transition source"
-                ),
+                description="当前实现仅支持对称、相邻翻转或外部类别转移噪声",
+                implementation_limit="configured_class_dependent_noise",
             ),)
+            implementation_limits = implementation_limits | {"configured_class_dependent_noise"}
         return MethodRequirements(
             method=method,
             supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
@@ -230,7 +229,10 @@ def _validation_target(config: Mapping[str, Any]) -> str:
     size = data.get("validation_size", data.get("num_val", 0))
     if int(size or 0) <= 0:
         return "none"
-    return str((config.get("noise", {}) or {}).get("validation_targets", "clean")).strip().lower()
+    target = str((config.get("noise", {}) or {}).get("validation_targets", "clean")).strip().lower()
+    if target == "none" and (data.get("validation_split", {}) or {}).get("source") == "training_pool":
+        return "noisy"
+    return target
 
 
 def _component_name(config: Mapping[str, Any], *path: str) -> str:
@@ -334,6 +336,8 @@ def _supervised_requirements(config: Mapping[str, Any]) -> MethodRequirements | 
         validation_target = str(
             noise_config.get("validation_targets", "clean")
         ).strip().lower()
+        if ((config.get("data", {}) or {}).get("validation_split", {}) or {}).get("source") == "training_pool":
+            validation_target = _validation_target(config)
         noise_name = str(noise_config.get("name", "clean")).strip().lower()
         requires_manifest = bool(noise_config.get("manifest")) or noise_name not in {
             "",
@@ -378,7 +382,7 @@ def _binary_requirements(config: Mapping[str, Any]) -> MethodRequirements:
     return MethodRequirements(
         method="binary",
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
-        data_requirements=_classification_data(validation="none", needs_manifest=True),
+        data_requirements=_classification_data(validation=_validation_target(config), needs_manifest=True),
         implemented_variant="binary_risk",
         min_classes=2,
         max_classes=2,
@@ -435,7 +439,8 @@ def _cal_requirements(config: Mapping[str, Any]) -> MethodRequirements:
     inputs = () if synthetic_feature_smoke or external_labels_configured else (_config_input(
         "requires_external_noise_labels",
         ("noise", "path"), ("noise", "clean_key"), ("noise", "noisy_key"),
-        description="CAL requires aligned external clean/noisy label vectors",
+        description="当前 CAL 配置需要外部标签文件",
+        implementation_limit="external_noise_labels",
     ),)
     return MethodRequirements(
         method="cal",
@@ -445,6 +450,7 @@ def _cal_requirements(config: Mapping[str, Any]) -> MethodRequirements:
             needs_manifest=False,
         ),
         implemented_variant="proxy_label_sieve",
+        implementation_limits=frozenset({"external_noise_labels"}) if inputs else frozenset(),
         supports_native_noisy_labels=True,
         required_config_inputs=inputs,
         prerequisites=(
@@ -826,8 +832,6 @@ def create_runner_registry() -> RunnerRegistry:
         planner=dividemix_plan,
         requirements_provider=_image_requirements(
             "dividemix",
-            method_noise_prior=True,
-            method_noise_prior_paths=(("noise", "rate"),),
             extra_roles=(DataRole.TRAIN_EVAL,),
             requires_configured_noise=True,
         ),

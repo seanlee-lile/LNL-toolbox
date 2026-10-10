@@ -112,6 +112,7 @@ class CifarBinaryViewAdapter:
 
 class SyntheticAdapter:
     aliases: tuple[str, ...] = ()
+    independent_validation = True
 
     def __init__(self, name: str) -> None:
         self.name = name
@@ -126,6 +127,9 @@ class SyntheticAdapter:
             raise ValueError(f"{self.name} requires data.dimension")
 
     def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
+        automatic_split = (spec.options.get("validation_split", {}) or {}).get("source") == "training_pool"
+        if automatic_split and split == "validation":
+            raise UnsupportedDatasetSplitError("automatic validation is drawn from the training pool")
         size_key = f"{split}_size"
         default = {"train": 200, "validation": 100, "test": 100}.get(split)
         if default is None:
@@ -135,7 +139,7 @@ class SyntheticAdapter:
             "train": 0,
             "validation": int(spec.options.get("train_size", 200)),
             "test": int(spec.options.get("train_size", 200))
-            + int(spec.options.get("validation_size", 100)),
+            + (0 if automatic_split else int(spec.options.get("validation_size", 100))),
         }
         split_seed = seed + {"train": 1, "validation": 2, "test": 3}[split]
         if self.name == "synthetic_multiclass":

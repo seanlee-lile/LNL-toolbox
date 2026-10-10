@@ -136,6 +136,10 @@ class ImportanceReweightingConfig:
         if data_name != "uci_statlog_heart":
             for name in ("train_size", "validation_size", "test_size"):
                 size = int(data.get(name, 0))
+                if name == "validation_size" and (data.get("validation_split", {}) or {}).get("source") == "training_pool":
+                    if size <= 0:
+                        raise ValueError("data.validation_size must be positive")
+                    continue
                 if size < 2 or size % 2:
                     raise ValueError(f"data.{name} must be a positive even integer")
 

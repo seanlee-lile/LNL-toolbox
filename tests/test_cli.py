@@ -232,6 +232,258 @@ from lnl_toolbox.training.service import ExperimentService
 # --- merged from test_unified_cli.py ---
 _unified_cli_ROOT = Path(__file__).resolve().parents[1]
 
+
+class ConfigParameterGateTest(unittest.TestCase):
+    """The CLI and Web share the same aggregated input gate."""
+
+    def test_review_requires_dry_run_before_loading_or_training(self):
+        from argparse import Namespace
+        from lnl_toolbox.cli.main import _run
+        with patch("lnl_toolbox.cli.main._load_source") as load:
+            with self.assertRaisesRegex(ValueError, "--review requires --dry-run"):
+                _run(Namespace(review=True, dry_run=False))
+            load.assert_not_called()
+
+    @staticmethod
+    def set_value(config, path, value):
+        node = config
+        for key in path.split('.')[:-1]:
+            node = node.setdefault(key, {})
+        node[path.split('.')[-1]] = value
+
+    def test_all_web_parameter_types_and_enums_reject_invalid_strings(self):
+        from copy import deepcopy
+        from web.command_console import _parameter_registry, _config_schema
+
+        probes = 0
+        for method, recipe_id in _parameter_registry()['formal_recipe_bindings'].items():
+            config = load_recipe_config(recipe_by_id(recipe_id))
+            fields = _config_schema(recipe_id)['fields']
+            for field in fields:
+                path = field['path']
+                # Names/paths are free text, not enums or numeric controls.
+                if not field['editable'] or not field.get('visible', True) or path in {
+                    'data.name', 'noise.path', 'pipeline.weight_provider.artifact_path',
+                }:
+                    continue
+                for invalid in ('invalid_text_xyz', '非法输入测试'):
+                    with self.subTest(method=method, path=path, value=invalid):
+                        candidate = deepcopy(config)
+                        self.set_value(candidate, path, invalid)
+                        with self.assertRaises(ValueError) as error:
+                            validate_config(candidate)
+                        lines = str(error.exception).splitlines()
+                        self.assertTrue(any(line.startswith(f'invalid config for {path}, expected ') for line in lines), lines)
+                        self.assertTrue(all(line.startswith('invalid config for ') for line in lines))
+                        probes += 1
+        self.assertGreater(probes, 1300)
+
+    def test_formal_parameter_defaults_are_unchanged_and_accepted(self):
+        from copy import deepcopy
+        from web.command_console import _parameter_registry
+        from lnl_toolbox.catalog import _config_parameter_errors
+
+        for method, recipe_id in _parameter_registry()['formal_recipe_bindings'].items():
+            with self.subTest(method=method):
+                config = load_recipe_config(recipe_by_id(recipe_id))
+                original = deepcopy(config)
+                self.assertEqual(_config_parameter_errors(config), [])
+                self.assertEqual(config, original)
+
+    def test_multiple_errors_are_one_line_per_parameter(self):
+        config = load_recipe_config(recipe_by_id('gce-cifar10-noise02-reproduction'))
+        config['loader']['batch_size'] = '非法'
+        config['optimizer']['lr'] = float('nan')
+        config['loss']['q'] = 2
+        config['noise']['rate'] = -1
+        with self.assertRaises(ValueError) as error:
+            validate_config(config)
+        lines = str(error.exception).splitlines()
+        self.assertEqual(len(lines), 4)
+        self.assertEqual(len({line.split(', expected ')[0] for line in lines}), 4)
+
+    def test_numeric_boundaries_and_types(self):
+        from copy import deepcopy
+        config = load_recipe_config(recipe_by_id('gce-cifar10-noise02-reproduction'))
+        invalid_cases = {
+            'loader.batch_size': (0, -1, 1.5, True, None),
+            'optimizer.lr': (-1, float('nan'), float('inf'), True, None),
+            'optimizer.momentum': (-1, float('inf'), True),
+            'optimizer.weight_decay': (-1, float('nan')),
+            'loss.q': (0, -1, 1.1, float('nan'), True),
+            'noise.rate': (-0.1, 1.1, float('inf'), True),
+            'seed': (-1, 2**32, 1.5, True),
+            'data.augment': ('false', 0, 1, None),
+        }
+        for path, values in invalid_cases.items():
+            for value in values:
+                with self.subTest(path=path, value=value):
+                    candidate = deepcopy(config)
+                    self.set_value(candidate, path, value)
+                    with self.assertRaisesRegex(ValueError, f'invalid config for {path}'):
+                        validate_config(candidate)
+        config['optimizer']['lr'] = 5e-7
+        config['noise']['rate'] = 0
+        config['loss']['q'] = 1
+        self.assertEqual(validate_config(config).name, 'supervised')
+
+    def test_schedule_lists_and_independent_rates(self):
+        from copy import deepcopy
+        config = load_recipe_config(recipe_by_id('gce-cifar10-noise02-reproduction'))
+        config['scheduler'] = {'name': 'multistep', 'milestones': [40, 80], 'lr_values': [0.003, 0.007]}
+        self.assertEqual(validate_config(config).name, 'supervised')
+        for path, value in (
+            ('scheduler.milestones', [80, 40]),
+            ('scheduler.milestones', [40, 40]),
+            ('scheduler.milestones', [40, '非法']),
+            ('scheduler.lr_values', [0.001]),
+            ('scheduler.lr_values', [0.001, float('nan')]),
+            ('scheduler.lr_values', [0.001, 'invalid']),
+        ):
+            with self.subTest(path=path, value=value):
+                candidate = deepcopy(config)
+                self.set_value(candidate, path, value)
+                with self.assertRaises(ValueError) as error:
+                    validate_config(candidate)
+                self.assertIn(f'invalid config for {path}, expected ', str(error.exception))
+
+    def test_structured_parameters_do_not_escape_as_type_errors(self):
+        from lnl_toolbox.catalog import _config_parameter_errors
+        cases = {
+            'noise.transition_matrix': [[1, '非法'], [0, 1]],
+            'feature_stage.layers': [{'name': 'a', 'pooling': []}, {'name': 'b'}],
+            'optimizer.betas': [0.9, 1],
+            'models': [{'name': 'resnet18'}, '非法'],
+            'pipeline.weight_provider.dropout_schedule': [[0.5, 'invalid']],
+        }
+        for path, value in cases.items():
+            with self.subTest(path=path):
+                config = {}
+                self.set_value(config, path, value)
+                self.assertTrue(any(line.startswith(f'invalid config for {path}, expected ') for line in _config_parameter_errors(config)))
+
+    def test_supplementary_ranges_and_method_specific_choices(self):
+        from lnl_toolbox.catalog import _config_parameter_errors
+
+        cases = (
+            ('gce', 'optimizer.lr', 10**400),
+            ('lend', 'lend.graph.gamma', 0),
+            ('lend', 'lend.dilution.alpha', 1),
+            ('dss', 'pipeline.objective_consumer.alpha', 0),
+            ('dss', 'pipeline.objective_consumer.prior_decay', 1),
+            ('l2rw', 'meta.virtual_learning_rate', 0),
+            ('coteaching', 'noise.rate', 1),
+            ('cnlcu', 'cnlcu.noise_rate', 1),
+            ('t_revision', 'data.validation_size', 0),
+            ('binary_risk', 'optimizer.name', 'adam'),
+            ('binary_risk', 'model.name', 'resnet18'),
+            ('cwd', 'optimizer.name', 'sgd'),
+            ('cwd', 'model.name', 'resnet18'),
+            ('jocor', 'scheduler.name', 'cosine'),
+            ('cal', 'warmup.scheduler.name', 'cosine'),
+            ('dld', 'dld.diffusion.epochs', 0),
+            ('pcse', 'transition_stage.parameterization.max_flip_mass', 0.5),
+        )
+        for method, path, value in cases:
+            with self.subTest(method=method, path=path, value=value):
+                config = {'method': method}
+                self.set_value(config, path, value)
+                errors = _config_parameter_errors(config)
+                self.assertTrue(any(line.startswith(f'invalid config for {path}, expected ') for line in errors), errors)
+
+    def test_supplementary_linked_constraints(self):
+        from lnl_toolbox.catalog import _config_parameter_errors
+
+        cases = (
+            ('ca2c.candidate_k', {'data.num_classes': 10, 'ca2c.candidate_k': 10}),
+            ('loader.batch_size', {'loader.batch_size': 4, 'lend.graph.k': 4}),
+            ('transition_stage.parameterization.initial_flip_mass', {
+                'transition_stage.parameterization.initial_flip_mass': 0.2,
+                'transition_stage.parameterization.max_flip_mass': 0.2,
+            }),
+            ('data.normalization.std', {'data.normalization.mean': [0, 0, 0], 'data.normalization.std': [1]}),
+            ('sieve.upper_threshold', {'sieve.lower_threshold': -1, 'sieve.upper_threshold': -2}),
+            ('data.folds', {'data.folds': 1, 'data.fold_index': 0}),
+            ('data.fold_index', {'data.folds': 5, 'data.fold_index': 5}),
+            ('dld.diffusion.timesteps', {'dld.diffusion.timesteps': 4, 'dld.inference.steps': 5}),
+            ('scheduler.start_epoch', {'scheduler.name': 'linear_after', 'scheduler.start_epoch': 20, 'scheduler.end_epoch': 10, 'trainer.epochs': 30}),
+            ('warmup.confidence_schedule.values', {'warmup.confidence_schedule.milestones': [10, 20], 'warmup.confidence_schedule.values': [1]}),
+            ('data.train_size', {'method': 'importance_reweighting', 'data.name': 'synthetic_binary_2d', 'data.train_size': 3}),
+            ('noise.rho_positive', {'noise.rho_positive': 0.5, 'noise.rho_negative': 0.5}),
+            ('optimizer.momentum', {'optimizer.nesterov': True, 'optimizer.momentum': 0}),
+        )
+        for expected_path, values in cases:
+            with self.subTest(path=expected_path):
+                config = {}
+                for path, value in values.items():
+                    self.set_value(config, path, value)
+                errors = _config_parameter_errors(config)
+                self.assertTrue(any(line.startswith(f'invalid config for {expected_path}, expected ') for line in errors), errors)
+                self.assertEqual(len(errors), len({line.split(', expected ')[0] for line in errors}))
+
+    def test_supplementary_valid_boundaries_are_not_overrestricted(self):
+        from lnl_toolbox.catalog import _config_parameter_errors
+
+        cases = (
+            {'sieve': {'lower_threshold': -8.3, 'upper_threshold': -8.3}},
+            {'model': {'width_multiplier': 1.5}},
+            {'evaluation': {'report_last_epochs': 0}},
+            {'data': {'normalization': {'mean': [-1, 0, 1], 'std': [1, 2, 3]}}},
+            {'method': 'jocor', 'scheduler': {'name': 'linear_decay', 'start_epoch': 0, 'end_epoch': 10}, 'trainer': {'epochs': 10}},
+            {'execution': {'runner': 'multi_model'}, 'algorithm': {'name': 'jocor'}, 'scheduler': {'name': 'linear_decay', 'start_epoch': 0, 'end_epoch': 10}, 'trainer': {'epochs': 10}},
+            {'method': 'cal', 'warmup': {'scheduler': {'name': 'step', 'step_size': 10}}},
+        )
+        for config in cases:
+            with self.subTest(config=config):
+                self.assertEqual(_config_parameter_errors(config), [])
+
+    def test_preflight_checks_before_normalization_and_never_loads_data(self):
+        config = {'data': {'name': 'cifar10'}, 'loader': {'batch_size': '非法'}, 'noise': {'rate': 'invalid'}}
+        service = ExperimentService()
+        with patch.object(service.data_service, 'validate_config') as load_data:
+            with self.assertRaises(ValueError) as error:
+                service.preflight(config)
+            load_data.assert_not_called()
+        self.assertEqual(len(str(error.exception).splitlines()), 2)
+
+    def test_cli_run_prints_all_errors_and_does_not_train(self):
+        import contextlib
+        import io
+        config = {'data': {'name': 'cifar10'}, 'loader': {'batch_size': '非法'}, 'noise': {'rate': 'invalid'}}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'invalid.yaml'
+            path.write_text(yaml.safe_dump(config), encoding='utf-8')
+            output = io.StringIO()
+            with contextlib.redirect_stderr(output), patch.object(ExperimentService, 'run') as run:
+                result = main(['run', '--config', str(path)])
+            self.assertEqual(result, 2)
+            run.assert_not_called()
+            lines = output.getvalue().splitlines()
+            self.assertEqual(len(lines), 2)
+            self.assertTrue(lines[0].startswith('错误: invalid config for '))
+            self.assertTrue(lines[1].startswith('invalid config for '))
+
+    def test_cli_subprocess_errors_use_web_output_collector(self):
+        import os
+        import subprocess
+        import sys
+        from web.command_console import Job, _read_output
+
+        config = {'data': {'name': 'cifar10'}, 'loader': {'batch_size': '非法'}, 'optimizer': {'lr': 'invalid'}}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'invalid.yaml'
+            path.write_text(yaml.safe_dump(config), encoding='utf-8')
+            command = [sys.executable, '-B', '-m', 'lnl_toolbox.cli.main', 'run', '--config', str(path)]
+            environment = {**os.environ, 'PYTHONIOENCODING': 'utf-8'}
+            job = Job(job_id='input-gate-test', key='test', command=command, display_command='test')
+            with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', env=environment) as process:
+                job.process = process
+                _read_output(job)
+            self.assertEqual(job.returncode, 2)
+            self.assertEqual(len(job.lines), 2, job.lines)
+            self.assertTrue(job.lines[0].startswith('错误: invalid config for '))
+            self.assertTrue(job.lines[1].startswith('invalid config for '))
+
 # --- merged from test_unified_cli.py ---
 class _unified_cli_RunnerResolutionTest(unittest.TestCase):
 

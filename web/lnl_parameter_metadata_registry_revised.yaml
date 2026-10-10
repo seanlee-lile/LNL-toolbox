@@ -1,4 +1,510 @@
 registry_version: 1.2.2
+parameter_ui:
+  # Help and choices are shared by Quick Start and the YAML field editor.
+  # Field meanings below document the keys; displayed parameter names stay unchanged.
+  choices:
+    algorithm.correction: [forward, pdl, pdl_revision]
+    cnlcu.variant: [soft, hard]
+    cwd.variant: [binary_scalar, multiclass]
+    data.preprocessing: [standard, tensor_only, gce2018, l2rw]
+    data.split_strategy: [random, stratified, classwise_legacy, numpy_choice_complement]
+    data.validation_split.strategy: [random, stratified, classwise_legacy, numpy_choice_complement]
+    warmup.split_strategy: [random, stratified, classwise_legacy, numpy_choice_complement]
+    data.split_rng: [default_rng, numpy_legacy]
+    data.validation_split.rng: [default_rng, numpy_legacy]
+    data.strong_policy: [official_cifar10, torchvision]
+    data.preprocessing.format: [auto, delimited, csv, whitespace, libsvm]
+    data.preprocessing.missing_policy: [error, median_mode]
+    data.preprocessing.categorical_policy: [error, one_hot]
+    dividemix.gmm.loss_history.name: [official_auto, current_epoch]
+    dld.feature_extractor.source: [external_checkpoint, repository_frozen_model]
+    early_stopping.mode: [min, max]
+    early_stopping.monitor: [selection_accuracy, selection_loss, validation_accuracy, validation_loss, train_accuracy, train_loss, test_accuracy, test_loss]
+    evaluation.selection_split: [validation, test]
+    evaluation.loss.name: [ce]
+    evaluation.primary: [accuracy, ensemble_accuracy, mean_peer_accuracy]
+    lend.graph.metric: [inner_product, cosine, euclidean]
+    mc_ldce.feature_mode: [fixed]
+    mc_ldce.transition_model: [separate]
+    model.initialization: [kaiming, torch_default]
+    noise.mode: [generated, external, clean]
+    noise.name: [symmetric, pairflip, class_conditional, binary_asymmetric_rcn, asymmetric_rcn, external_torch, official_uniform_flip, pdl, clean, none, native, real_world]
+    noise.sampling: [global, per_class, transition]
+    parameter_update.compatibility_mode: [paper, official_code]
+    parameter_update.critical_scope: [all_trainable, matrix_and_convolution_weights]
+    pretraining_stage.mode: [train, external_checkpoint]
+    selector.keep_rate.name: [linear, constant]
+    transition.estimator: [paper_volmin, dual_t, known_smoke]
+    transition.parameterization.name: [sigmoid_off_diagonal]
+    cnlcu.hard_fidelity: [paper_formula_corrected_lof]
+    cnlcu.uncertainty.loss_upper_bound.mode: [fixed]
+    optimizer.name: [sgd, adam, adamw]
+    scheduler.name: [none, cosine, multistep, linear_after]
+    model.name: [tiny_cnn, cifar_cnn8, cnlcu_cnn9, resnet14, resnet32, resnet18, resnet34, resnet50, resnet101, preact_resnet18, mentor_wide_resnet, feature_mlp, pcse_mlp, mlp, linear, cifar_six_conv, cifar_resnet34, fine_seven_cnn, ca2c_seven_cnn, mc_ldce_cnn, l2rw_resnet32, torchvision_resnet34]
+    loss.name: [ce, cross_entropy, nce, mae, gce, rce, apl, nce_rce, nce_mae]
+  choice_descriptions:
+    validation: 验证集
+    test: 测试集
+    train: 训练集
+    ce: 交叉熵
+    cross_entropy: 交叉熵
+    nce: 归一化交叉熵
+    mae: 平均绝对误差
+    gce: 广义交叉熵
+    rce: 反向交叉熵
+    apl: 主动与被动组合损失
+    nce_rce: 归一化交叉熵加反向交叉熵
+    nce_mae: 归一化交叉熵加平均绝对误差
+    standard: 按通道标准化
+    tensor_only: 像素缩放到 0–1
+    gce2018: 减去各像素位置的训练集均值
+    l2rw: L2RW 图像预处理
+    random: 随机划分
+    stratified: 按类别比例划分
+    classwise_legacy: 逐类随机划分（原实现）
+    numpy_choice_complement: 随机抽取验证样本后取补集
+    default_rng: 新版 NumPy 随机生成器
+    numpy_legacy: 原版 NumPy 随机生成器
+    official_cifar10: 作者 CIFAR-10 强增强方案
+    torchvision: TorchVision 强增强方案
+    official_auto: 作者的损失历史汇总策略
+    current_epoch: 只使用当前轮损失
+    external_checkpoint: 读取已有预训练模型权重
+    repository_frozen_model: 使用仓库模型并冻结参数
+    min: 越小越好
+    max: 越大越好
+    selection_accuracy: 模型评选数据集准确率
+    selection_loss: 模型评选数据集损失
+    validation_accuracy: 验证集准确率
+    validation_loss: 验证集损失
+    train_accuracy: 训练集准确率
+    train_loss: 训练集损失
+    test_accuracy: 测试集准确率
+    test_loss: 测试集损失
+    accuracy: 分类准确率
+    ensemble_accuracy: 合并预测准确率
+    mean_peer_accuracy: 两个模型准确率的平均值
+    mean_probabilities: 预测概率取平均
+    official_logits_sum: 作者的预测分数相加方式
+    inner_product: 向量内积
+    euclidean: 欧氏距离
+    fixed: 固定特征
+    separate: 独立转移矩阵模型
+    kaiming: Kaiming 初始化
+    torch_default: PyTorch 默认初始化
+    generated: 工具箱生成人工噪声
+    external: 读取外部噪声标签
+    clean: 保留干净标签
+    symmetric: 对称标签噪声
+    pairflip: 成对类别翻转
+    class_conditional: 按类别转移矩阵加噪
+    binary_asymmetric_rcn: 二分类非对称随机噪声
+    asymmetric_rcn: 非对称随机分类噪声
+    external_torch: 读取 PyTorch 标签文件
+    official_uniform_flip: 作者的均匀类别替换
+    pdl: 实例相关标签噪声
+    pdl_revision: 联合转移修正
+    forward: 前向损失校正
+    none: 不启用
+    native: 数据集自带噪声标签
+    real_world: 真实标注噪声
+    global: 按总体数量抽样
+    per_class: 按每个类别数量抽样
+    transition: 按转移概率逐样本抽样
+    paper: 论文公式版本
+    official_code: 作者代码版本
+    all_trainable: 所有可训练参数
+    matrix_and_convolution_weights: 矩阵权重与卷积权重
+    linear: 线性变化
+    constant: 保持不变
+    paper_volmin: 论文的体积最小化估计
+    dual_t: 双转移矩阵估计
+    known_smoke: 使用已知转移矩阵（流程测试）
+    sigmoid_off_diagonal: 非对角元素经 Sigmoid 约束
+    sgd: 随机梯度下降
+    adam: 自适应矩估计
+    adamw: 解耦权重衰减
+    cosine: 余弦变化
+    multistep: 按节点分段调整
+    linear_after: 指定轮次后线性下降
+    linear_decay: 线性下降
+    step: 每隔固定轮数衰减
+    soft: 软截断不确定性估计
+    hard: 硬截断不确定性估计
+    binary_scalar: 二分类标量版本
+    multiclass: 多分类版本
+    floor: 向下取整
+    stable_sample_index: 按样本编号稳定排序
+    minibatch: 整个批次共用混合比例
+    zero: 全零初始化
+    zeros: 全零初始化
+    fixed_steps: 固定次数标签稀释
+    current: 使用首次观测值
+    skip_update: 跳过本次参数更新
+    batch_mean: 在整个批次上取平均
+    noisy_equals_diluted_argmax: 观测标签与稀释后的最高概率类别一致
+    natarajan_unbiased: 无偏风险校正
+    standard_noisy_erm: 带噪标签经验风险最小化
+    jocor: 双模型一致性训练
+    dss: 双阶段样本筛选
+    mentornet: 样本权重预测
+    known: 使用已知标签转移矩阵
+    kde: 核密度后验估计
+    paper_raw_min: 论文的最小后验值估计
+    stage1_best: 初始阶段的最佳模型
+    classifier_initialization_best: 分类器校正阶段的最佳模型
+    reweight: 转移概率比值重加权
+    paper_experiment_raw_additive: 论文实验的加性转移修正
+    pseudo_anchor_max_posterior: 每类取后验概率最大的伪锚点
+    fresh: 重新初始化模型
+    noisy_nll: 观测标签负对数似然
+    positive_logdet: 正行列式的对数
+    clean_to_noisy_row: 每行表示干净标签到噪声标签的转移
+    row: 按行归一化
+    fixed_diagonal_sigmoid_offdiag: 固定对角项并约束非对角项
+    diagonal_dominant: 对角占优的标签转移矩阵
+    all: 使用全部训练样本
+    small_loss: 优先选择低损失样本
+    corrected_classification: 转移矩阵校正分类
+    cdr: 关键参数重加权更新
+    step_milestone: 按累计更新步数调整学习率
+    kliep: 密度比后验估计
+    paper_formula_corrected_lof: 论文公式与修正后的局部离群检测
+    auto: 自动识别文件格式
+    delimited: 分隔符表格
+    csv: 逗号分隔表格
+    whitespace: 空格分隔表格
+    libsvm: 稀疏特征格式
+    error: 遇到该情况时报错
+    median_mode: 数值用中位数填补，类别用众数填补
+    one_hot: 类别转换为独热向量
+  choice_descriptions_by_path:
+    parameter_update.name: {standard: 常规梯度更新}
+    cnlcu.uncertainty.loss_upper_bound.mode: {fixed: 固定数值上界}
+    volminnet.transition.initialization.mode: {paper: 论文规定的转移矩阵初始值}
+    t_revision.revision.ratio.clamp: {none: 不截断权重比值}
+    noise.name: {none: 不加人工噪声}
+    lend.graph.metric: {cosine: 余弦相似度}
+    pretraining_stage.mode: {train: 在本机训练预训练模型}
+  model_descriptions:
+    tiny_cnn: 小型卷积网络
+    cifar_cnn8: CIFAR 八层卷积网络
+    cnlcu_cnn9: 九层卷积网络
+    resnet14: 14 层残差网络
+    resnet32: 32 层残差网络
+    resnet18: 18 层残差网络
+    resnet34: 34 层残差网络
+    resnet50: 50 层残差网络
+    resnet101: 101 层残差网络
+    preact_resnet18: 18 层预激活残差网络
+    mentor_wide_resnet: 宽残差网络
+    feature_mlp: 特征输入多层感知机
+    pcse_mlp: 多层感知机
+    mlp: 多层感知机
+    linear: 线性分类器
+    cifar_six_conv: CIFAR 六层卷积网络
+    cifar_resnet34: CIFAR 34 层残差网络
+    fine_seven_cnn: 七层卷积网络
+    ca2c_seven_cnn: 七层卷积网络
+    mc_ldce_cnn: 卷积网络
+    l2rw_resnet32: 32 层残差网络
+    torchvision_resnet34: TorchVision 34 层残差网络
+  dataset_descriptions:
+    cifar10: CIFAR-10 图像数据
+    cifar100: CIFAR-100 图像数据
+    cifar10n: CIFAR-10N 人工标注数据
+    cifar100n: CIFAR-100N 人工标注数据
+    cifar10_airplane_automobile: CIFAR-10 飞机与汽车二分类
+    mnist: 手写数字
+    fashion_mnist: 服饰图像
+    animal10n: 动物图像
+    clothing1m: 服饰图像
+    synthetic_binary_2d: 二维合成二分类数据
+    synthetic_binary_high_dim: 高维合成二分类数据
+    synthetic_multiclass: 合成多分类数据
+    uci_binary: UCI 二分类表格数据
+    uci_statlog_heart: UCI Statlog 心脏病数据
+    standard: 已登记的标准格式数据
+  fields:
+    seed: [实验随机种子, 控制数据划分、标签加噪和模型初始化等随机过程；相同种子便于重复实验。]
+    loader.batch_size: [训练批次大小, 每次参数更新读取的训练样本数；较大的批次通常需要更多显存。]
+    trainer.epochs: [训练轮数, 训练数据最多完整遍历的次数。]
+    trainer.max_steps: [总更新步数, 训练最多执行的参数更新次数。]
+    data.name: [数据集, 本次训练使用的数据集；Quick Start 使用前面选定的数据集。]
+    data.path: [数据文件路径, 表格数据文件的路径；相对路径以项目目录为起点。]
+    data.preprocessing.format: [表格文件格式, 按所选格式解析文件中的样本行和特征列。]
+    data.preprocessing.target_column: [标签列位置, 指定哪一列是分类标签；0 表示第一列，-1 表示最后一列。]
+    data.preprocessing.has_header: [首行是列名, 开启后把第一行当作表头，不计入样本。]
+    data.preprocessing.missing_policy: [缺失数据处理方式, 遇到缺失单元格时选择报错或用训练数据统计量填补。]
+    data.preprocessing.categorical_policy: [类别特征处理方式, 遇到文字类别特征时选择报错或转换成独热向量。]
+    data.preprocessing.standardize: [表格特征标准化, 用训练数据的均值和标准差调整数值特征；验证与测试数据使用相同统计量。]
+    data.preprocessing.label_values: [原始二分类标签, 依次填写原始文件代表两类的标签，例如字符串列表；顺序决定它们映射为 0 和 1。]
+    data.split.validation_fraction: [验证集比例, 从数据中留给验证集的比例；0.2 表示 20%。]
+    data.split.test_fraction: [测试集比例, 从数据中留给测试集的比例；0.2 表示 20%。]
+    data.num_val: [验证集样本数, 从原始训练池一次性留出的验证样本数；修改数量后重新划分。]
+    data.validation_size: [验证集样本数, 从原始训练池一次性留出的验证样本数；修改数量后重新划分，其余样本用于训练。]
+    data.num_clean: [干净验证样本数, L2RW 用这些已知标签正确的样本计算训练样本权重。]
+    data.dimension: [样本特征维度, 每个输入样本包含的特征数；模型输入维度随之调整。]
+    data.train_size: [生成训练样本数, 合成数据生成器创建的训练样本总数；填写正偶数。]
+    data.test_size: [生成测试样本数, 合成数据生成器创建的测试样本总数；填写正偶数。]
+    data.preprocessing: [输入预处理, 将原始图像像素转换成模型输入的方式。]
+    data.augment: [训练数据增强, 训练时随机裁剪、翻转等；具体变换由当前数据协议决定。]
+    data.strong_augment: [强数据增强, 为训练样本生成变化更明显的图像视图。]
+    data.strong_policy: [强增强方案, 决定强增强视图使用哪些图像变换。]
+    data.strong_magnitude: [强增强强度, 强增强操作的幅度；数值越大通常改变图像越明显。]
+    data.folds: [交叉验证份数, 将数据分成多少份；轮流留出一份用于验证。]
+    data.fold_index: [当前验证份编号, 本次留出的验证份；编号从 0 开始，必须小于交叉验证份数。]
+    data.normalization.mean: [通道均值, 归一化时各颜色通道减去的均值；按通道顺序填写数值列表。]
+    data.normalization.std: [通道标准差, 归一化时各颜色通道除以的标准差；按通道顺序填写正数列表。]
+    noise.rate: [标签噪声率, 人工加噪时的目标标签翻转比例；0.2 表示 20%。]
+    noise.rho_positive: [正类标签翻转率, 正类标签被改成负类的概率；与负类翻转率之和必须小于 1。]
+    noise.rho_negative: [负类标签翻转率, 负类标签被改成正类的概率；与正类翻转率之和必须小于 1。]
+    risk.rho_positive: [正类噪声率先验, 无偏风险校正使用的正类标签翻转概率。]
+    risk.rho_negative: [负类噪声率先验, 无偏风险校正使用的负类标签翻转概率。]
+    noise.name: [标签噪声类型, 决定如何生成或读取训练标签中的错误标签。]
+    noise.mode: [标签噪声来源, 选择生成噪声、读取外部标签文件或保留干净标签。]
+    noise.sampling: [标签翻转抽样方式, 控制标签翻转是按总体数量、逐类数量还是逐样本概率抽样。]
+    noise.path: [外部标签文件, 标签文件的路径；相对路径以项目目录为起点。]
+    noise.transition_matrix: [标签转移概率矩阵, 行表示原始类别，列表示观测类别；每行概率之和必须为 1。]
+    evaluation.selection_split: [最佳模型评选数据集, 选择用哪个数据划分评选并保存最佳模型。validation 使用留出的验证集；test 使用测试集。选择 test 会让测试集结果参与模型选择。]
+    evaluation.allow_test_selection: [允许用测试集评选模型, 开启后可用测试集结果选取最佳模型；这种设置会让测试数据参与模型选择。]
+    evaluation.loss.name: [评估损失函数, 评估时计算并记录的损失函数。ce 表示交叉熵，用于衡量预测对评估标签的偏差；数值越低表示该指标下预测越接近标签。]
+    evaluation.primary: [主要评估指标, 结果汇总和模型评选使用的主要指标。]
+    evaluation.ensemble: [双模型预测合并方式, 决定如何将两个分类器的预测合并成一次预测。]
+    evaluation.report_last_epochs: [末段结果统计轮数, 汇总训练结束前多少轮的评估结果。]
+    evaluation.batch_size: [评估批次大小, 评估时一次处理的样本数。]
+    early_stopping.monitor: [提前停止监测指标, 根据哪个指标判断训练是否仍在改善。]
+    early_stopping.mode: [指标改善方向, 选择该指标越小越好还是越大越好。]
+    early_stopping.patience: [提前停止等待轮数, 指标连续多少轮未改善后停止训练。]
+    early_stopping.min_delta: [最小改善幅度, 指标变化达到这个幅度才算一次改善。]
+    algorithm.name: [训练算法, 当前训练流程采用的算法。]
+    algorithm.correction: [标签噪声校正方式, PDL 使用的损失校正流程；联合修正模式还会学习转移矩阵修正量。]
+    algorithm.lambda: [双模型一致性权重, JoCoR 中控制两模型预测一致性项占比的系数。]
+    loss.name: [训练损失函数, 用于计算训练样本损失的函数。]
+    loss.active.name: [主动损失函数, APL 中强调拟合观测标签的损失部分。]
+    loss.passive.name: [被动损失函数, APL 中与主动损失组合的稳健损失部分。]
+    loss.alpha: [主动损失权重, APL 中主动损失项乘以的系数。]
+    loss.beta: [被动损失权重, APL 中被动损失项乘以的系数。]
+    loss.q: [广义交叉熵形状参数, GCE 的 q 值，范围为大于 0 且不超过 1；接近 0 时趋近交叉熵，接近 1 时趋近平均绝对误差。]
+    selector.name: [训练样本选择规则, 决定哪些样本的损失用于当前参数更新。]
+    selector.keep_rate.name: [样本保留比例变化方式, 控制训练进度变化时参与更新的样本比例。]
+    models: [两个同伴模型, JoCoR 的两个分类器配置；分别选择网络架构和网络参数。]
+    model.batch_norm_momentum: [批归一化统计更新系数, 每次更新运行均值与方差时，新批次统计量所占的比例。]
+    feature_layer.name: [特征提取位置, 选择从预训练网络的哪个中间层读取特征；两个位置必须不同。]
+    feature_layer.pooling: [特征汇总方式, 将中间层的空间输出汇总为每个样本的特征向量。]
+    cnlcu.hard_fidelity: [硬截断实现版本, 使用论文的置信界公式和修正后的局部离群检测规则。]
+    cnlcu.uncertainty.loss_upper_bound.mode: [损失上界设置方式, 硬截断置信界使用预先指定的固定损失上界。]
+    cnlcu.uncertainty.loss_upper_bound.value: [损失上界, CNLCU 硬截断置信界允许的最大观测损失；超过该值时报告错误。]
+    cnlcu.uncertainty.tau_min: [最小置信参数, CNLCU 硬截断置信界使用的正数常量，控制置信修正的尺度。]
+    cnlcu.truncation.n_neighbors: [离群检测近邻数, 用多少个相邻历史观测估计局部密度；必须小于最少观测次数。]
+    cnlcu.truncation.contamination: [离群观测比例, 局部离群检测预期排除的历史损失观测比例；取值大于 0 且小于 0.5。]
+    cnlcu.truncation.minimum_observations: [离群检测最少观测次数, 累积到这个数量的历史损失后才执行离群检测。]
+    ca2c.hard_weight: [联合目标平衡系数, CA2C 硬伪标签损失的权重；软伪标签损失权重为 1 减去此值，取值为 0 到 1。]
+    evidence.include_noisy_ce: [记录带噪标签交叉熵, 是否在运行记录中额外保存带噪标签的交叉熵统计。]
+    meta.virtual_learning_rate: [虚拟更新步长, L2RW 计算样本权重时使用的临时模型更新步长；当前官方实现固定为 1。]
+    parameter_update.name: [模型参数更新方式, 决定如何用梯度更新模型参数。]
+    parameter_update.compatibility_mode: [关键参数更新版本, CDR 选择论文公式版本或作者代码版本的参数筛选与更新规则。]
+    parameter_update.critical_scope: [关键参数筛选范围, CDR 在所选范围中筛选需要重点更新的参数。]
+    parameter_update.noise_rate: [参数更新噪声率先验, CDR 用这个噪声率设定关键参数保留策略。]
+    parameter_update.l1_decay: [非关键参数衰减系数, CDR 对未被选为关键参数的部分施加的衰减强度。]
+    parameter_update.max_grad_norm: [梯度裁剪上限, 梯度整体范数超过该值时按比例缩小梯度。]
+    parameter_update.milestones: [参数策略切换轮次, 参数更新策略发生变化的训练轮次列表。]
+    parameter_update.gamma: [参数策略衰减倍率, 在参数策略切换节点使用的倍率。]
+    cwd.variant: [质心加权算法版本, CWD 选择二分类标量版本或多分类版本。]
+    cwd.dynamic_centroid: [动态更新类别质心, 开启后用当前批次的特征和观测标签重新计算类别代表向量。]
+    cnlcu.variant: [不确定性估计版本, CNLCU 选择软截断或硬截断的不确定性估计方式。]
+    cnlcu.history.window_size: [历史损失窗口轮数, CNLCU 用最近多少轮损失估计样本不确定性。]
+    cnlcu.uncertainty.sigma_squared: [不确定性尺度, CNLCU 置信界中的方差尺度，控制不确定性修正强度。]
+    ca2c.candidate_k: [候选类别数, 每个样本保留预测概率最高的多少个候选类别；必须小于类别总数。]
+    ca2c.lambda: [联合目标平衡系数, CA2C 将硬伪标签损失和软伪标签损失加权组合。此值是硬标签项的权重，软标签项的权重为 1 减去此值；取值为 0 到 1。]
+    ca2c.robust_weight: [稳健目标权重, CA2C 稳健置信度目标乘以的系数。]
+    cal.confidence_weight: [主训练置信度权重, CAL 主训练阶段置信度项乘以的系数。]
+    cal.confidence_schedule.milestones: [置信度权重切换轮次, CAL 主训练阶段置信度权重改变的轮次列表。]
+    cal.confidence_schedule.values: [各阶段置信度权重, 依次填写 CAL 主训练各阶段的置信度权重；比切换节点多一个值。]
+    warmup.confidence_weight: [预热置信度权重, CAL 预热阶段置信度项乘以的系数。]
+    warmup.confidence_schedule.milestones: [预热置信度切换轮次, CAL 预热阶段置信度权重改变的轮次列表。]
+    warmup.confidence_schedule.values: [预热各阶段置信度权重, 依次填写 CAL 预热各阶段的置信度权重；比切换节点多一个值。]
+    sieve.lower_threshold: [筛选下阈值, CAL 样本筛选使用的下界；必须不大于上阈值。]
+    sieve.upper_threshold: [筛选上阈值, CAL 样本筛选使用的上界；必须不小于下阈值。]
+    mc_ldce.transition_model: [噪声矩阵估计模型方式, MC-LDCE 使用独立模型学习标签转移关系。]
+    mc_ldce.feature_mode: [分类特征使用方式, MC-LDCE 分类阶段使用固定的已提取特征。]
+    mc_ldce.classifier_bias: [分类器偏置, 是否在线性分类器中增加可训练偏置项。]
+    fine.alpha: [伪标签训练权重, FINE 在强增强图像上用伪标签计算分类损失；此系数控制该项在总训练损失中的权重。]
+    fine.beta: [类别抑制损失权重, FINE 类别抑制正则项乘以的系数。]
+    fine.gamma: [遗忘损失权重, FINE 遗忘正则项乘以的系数。]
+    fine.ema_momentum: [平均模型平滑系数, FINE 更新平均模型时保留旧模型参数的比例。]
+    fine.momentum_scs: [类别筛选统计平滑系数, 更新类别筛选统计量时保留旧统计量的比例。]
+    fine.momentum_scr: [置信度统计平滑系数, 更新样本置信度统计量时保留旧统计量的比例。]
+    fine.maximum_threshold: [类别筛选阈值上限, 限制类别筛选所用置信度阈值的最大值。]
+    fine.warmup_lr: [预热学习率, FINE 预热训练阶段使用的学习率。]
+    feature_stage.layers: [特征提取层, PCSE 从哪些网络层提取特征，以及每层如何汇总特征；至少选择两个不同层。]
+    posterior_stage.name: [后验概率估计方式, Importance Reweighting 估计样本属于各带噪标签类别的概率；当前配置选择核密度或密度比估计。]
+    posterior_stage.rate_estimator: [噪声率估计方式, 从估计的带噪标签后验概率中提取类别噪声率。]
+    posterior_stage.bandwidth: [核密度估计带宽, 后验概率估计的平滑尺度；较大值通常使估计更平滑。]
+    final_stage.classifier: [最终分类器校正方式, 最终分类器使用的标签噪声校正方法。]
+    final_stage.fresh_model: [重新初始化最终模型, 开启后重新创建最终分类器，不沿用前一阶段模型参数。]
+    pretraining_stage.mode: [预训练模型来源, 选择本地训练预训练模型或读取已有模型权重。]
+    transition.estimator: [标签转移矩阵估计方式, 决定从数据或已知条件中怎样获得标签转移概率矩阵。]
+    transition.parameterization.name: [转移矩阵参数形式, 控制可训练参数如何转换成标签转移概率。]
+    transition.parameterization.initial_weight: [转移参数初始值, 学习标签转移矩阵前使用的参数初值。]
+    transition.lambda_volume: [矩阵体积正则权重, 标签转移矩阵体积正则项乘以的系数。]
+    transition_stage.name: [噪声矩阵学习方式, PCSE 使用的标签转移矩阵学习流程。]
+    transition_stage.lambda_volume: [噪声矩阵体积正则权重, PCSE 标签转移矩阵体积正则项的系数。]
+    transition_stage.optimizer.model_lr: [矩阵估计模型学习率, 噪声矩阵估计阶段分类模型参数的学习率。]
+    transition_stage.optimizer.transition_lr: [噪声矩阵学习率, 噪声矩阵估计阶段转移参数的学习率。]
+    transition_stage.parameterization.name: [噪声矩阵参数形式, 将可训练参数映射为合法的标签转移概率矩阵。]
+    transition_stage.parameterization.initial_flip_mass: [初始标签翻转概率总量, 噪声矩阵初始化时每行非对角元素的概率总量。]
+    transition_stage.parameterization.max_flip_mass: [标签翻转概率总量上限, 限制噪声矩阵每行非对角元素的概率总量；必须大于初始值。]
+    transition_stage.parameterization.temperature: [噪声矩阵概率温度, 控制转移概率在各候选类别之间分配的集中程度。]
+    instance_transition.name: [逐样本转移矩阵方法, PDL 为不同样本构造不同标签转移概率矩阵。]
+    instance_transition.anchor_candidates: [锚点候选数, 每次估计转移关系时考察的高置信度候选样本数量。]
+    instance_transition.anchor_percentages: [锚点搜索百分位, 搜索高置信度锚点时使用的百分位列表，取值范围为 0 到 100。]
+    instance_transition.basis_epochs: [基础转移矩阵学习次数, 优化基础转移矩阵时执行的迭代次数。]
+    instance_transition.basis_learning_rate: [基础转移矩阵学习率, 优化基础转移矩阵参数时使用的步长。]
+    instance_transition.basis_loss_threshold: [基础矩阵优化停止阈值, 优化损失达到该阈值时可提前停止基础转移矩阵估计。]
+    instance_transition.num_parts: [基础转移矩阵数, 将逐样本转移关系表示为多少个基础转移矩阵的组合。]
+    instance_transition.representation_iterations: [特征分解迭代次数, 估计样本组合系数时执行的特征分解迭代次数。]
+    t_revision.objective: [联合修正目标, T-Revision 使用样本重加权目标联合学习分类器与噪声矩阵。]
+    t_revision.transition_initialization.method: [初始噪声矩阵估计方式, 用各类别预测概率最高的样本作为伪锚点估计标签转移关系。]
+    t_revision.transition_initialization.posterior_split: [初始矩阵估计数据集, 在哪个数据集上收集分类器预测概率以估计初始矩阵。]
+    t_revision.transition_initialization.tie_break: [相同置信度处理规则, 多个样本置信度相同时按照固定样本编号选择。]
+    t_revision.transition_initialization.extraction_augmentation: [矩阵估计时使用随机增强, 收集初始噪声矩阵估计所需预测概率时是否增强输入图像。]
+    t_revision.classifier_initialization.start_from: [校正分类器初始权重, 用初始分类器阶段保存的最佳模型开始校正训练。]
+    t_revision.revision.start_from: [联合修正初始权重, 用校正分类器阶段保存的最佳模型开始联合修正。]
+    t_revision.revision.transition_mode: [噪声矩阵修正方式, 在初始转移矩阵上直接加上可训练修正量。]
+    t_revision.revision.delta_initialization: [噪声矩阵修正量初值, 联合修正开始时把矩阵修正量初始化为零。]
+    t_revision.revision.ratio.detach: [停止权重比值的梯度传播, 开启后重加权比值不参与梯度计算，会改变联合优化的梯度。]
+    t_revision.revision.ratio.clamp: [权重比值截断方式, 是否对重加权比值作数值截断；当前配置不截断。]
+    volminnet.objective.classification: [带噪标签分类目标, 用经过噪声转移矩阵修正的概率计算观测标签的负对数似然损失。]
+    volminnet.objective.volume.mode: [矩阵体积度量, 用标签转移矩阵的对数行列式作为体积正则。]
+    volminnet.objective.volume.coefficient: [矩阵体积正则权重, 体积正则项相对于带噪标签分类损失的权重。]
+    volminnet.transition.convention: [标签转移矩阵方向, 行表示干净类别，列表示观测到的带噪类别。]
+    volminnet.transition.initialization.mode: [噪声矩阵初始化方式, 使用论文对应的转移矩阵初始化规则。]
+    volminnet.transition.normalization_axis: [矩阵概率归一化方向, 按行归一化，使每个原始类别对应的转移概率之和为 1。]
+    volminnet.transition.parameterization: [噪声矩阵参数形式, 固定对角参数，并通过逻辑函数构造非对角转移概率。]
+    upm.main.initialization: [软标签模型初始权重, 使用重新初始化的模型开始软标签分类训练。]
+    upm.psi.source: [混淆统计模型来源, 使用初始分类器阶段的最佳模型计算混淆统计。]
+    upm.psi.split: [混淆统计数据集, 收集哪些样本的预测概率来计算混淆统计。]
+    upm.psi.augmentation: [混淆统计时使用增强, 收集混淆统计所需预测概率时是否随机增强输入。]
+    upm.confusing_probability.initial_value: [混淆概率初值, 样本混淆概率在开始更新前的初始值。]
+    upm.confusing_probability.learning_rate: [混淆概率更新步长, 每次更新样本混淆概率时使用的步长。]
+    upm.confusing_probability.update_start_epoch: [混淆概率起始更新轮次, 从哪一轮开始更新样本混淆概率。]
+    upm.confusing_probability.update_interval_epochs: [混淆概率更新间隔, 每隔多少轮重新更新一次样本混淆概率。]
+    dividemix.gmm.loss_history.name: [损失历史汇总方式, 拟合干净与带噪样本的损失分布时，使用当前轮或按作者规则汇总历史损失。]
+    dividemix.gmm.loss_history.high_noise_rate: [高噪声历史汇总起点, 噪声率达到该值时启用高噪声条件的历史损失汇总。]
+    dividemix.gmm.loss_history.window_epochs: [历史损失窗口轮数, 汇总最近多少轮的逐样本损失。]
+    dividemix.gmm.threshold: [干净样本概率阈值, 样本被估计为干净的概率达到该值时进入有标签训练部分。]
+    dividemix.mixmatch.augmentations: [每样本增强视图数, 为每个样本生成多少个增强视图用于预测和训练。]
+    dividemix.mixmatch.temperature: [软标签锐化温度, 控制软标签概率的集中程度；较小的值使概率更集中。]
+    dividemix.mixmatch.mixup_alpha: [图像混合分布参数, MixUp 混合比例所用 Beta 分布的形状参数。]
+    dividemix.mixmatch.mixup_lambda_scope: [图像混合比例共享范围, 一个训练批次中的样本使用同一个 MixUp 混合比例。]
+    dividemix.objective.lambda_u: [无标签损失权重, 无标签样本训练损失乘以的系数。]
+    dividemix.objective.lambda_r: [类别先验正则权重, 约束类别预测分布的正则项乘以的系数。]
+    dividemix.objective.rampup_epochs: [无标签权重渐增轮数, 用多少轮将无标签训练损失权重逐渐提高到设定值。]
+    dividemix.warmup.confidence_penalty_weight: [预热过度自信惩罚权重, 预热时抑制过度自信预测的惩罚项系数。]
+    dividemix.inference.ensemble: [双模型预测合并方式, 将两个模型的原始类别评分相加后进行最终分类。]
+    dld.feature_extractor.source: [预训练特征来源, 选择已有预训练权重或仓库内冻结模型；正式配置使用已有预训练权重。]
+    dld.diffusion.timesteps: [扩散时间步数, 标签扩散过程划分的总时间步数。]
+    dld.diffusion.model.hidden_dim: [扩散预测器隐藏维度, 方向与噪声预测网络中间特征向量的维度。]
+    dld.diffusion.model.time_dim: [扩散时间编码维度, 将扩散时间步表示为向量时使用的维度。]
+    dld.diffusion.model.independent_predictors: [独立方向与噪声预测器, 使用两个分别学习的网络预测扩散方向与噪声。]
+    dld.diffusion.ema.enabled: [使用平滑平均预测器, 开启后用参数的指数移动平均模型进行预测。]
+    dld.diffusion.ema.decay: [预测器参数平滑系数, 更新平均预测器时保留旧参数的比例。]
+    dld.precorrection.k_neighbors: [预校正近邻样本数, 利用特征空间中多少个近邻样本估计标签校正结果。]
+    dld.precorrection.delta: [近邻数值稳定项, 给近邻权重计算加入的小正数，避免除以零。]
+    dld.precorrection.gmm_components: [标签混合分布成分数, 标签预校正的高斯混合模型使用多少个分布成分。]
+    dld.inference.steps: [预测扩散步数, 为每个样本完成标签预测时执行的扩散更新次数。]
+    dld.inference.deterministic: [确定性扩散预测, 开启后预测过程中不再抽取随机噪声。]
+    dld.inference.initialization: [预测标签初始值, 开始扩散预测前标签向量的初始化方式。]
+    lend.graph.k: [图近邻样本数, 构建特征近邻图时每个样本连接的近邻数；必须小于训练批次大小。]
+    lend.graph.metric: [近邻相似度度量, 在特征空间中判断哪些样本更接近的计算方式。]
+    lend.graph.gamma: [图传播强度, 控制近邻图中标签信息传播的强度。]
+    lend.graph.normalize_features: [归一化图特征, 构图前把特征向量缩放到单位长度。]
+    lend.dilution.alpha: [标签稀释混合系数, 控制标签稀释中原有标签信息与传播信息的混合比例。]
+    lend.dilution.steps: [标签稀释迭代次数, 每次标签稀释过程执行多少次迭代。]
+    lend.dilution.policy: [标签稀释停止规则, 当前流程按固定迭代次数完成标签稀释。]
+    lend.history.beta: [历史标签平滑系数, 更新历史标签估计时保留旧估计的比例。]
+    lend.history.first_observation: [历史标签初次记录方式, 第一次观察到样本时用当前估计初始化历史记录。]
+    lend.selection.rule: [训练样本保留规则, 保留观测标签与稀释后最高概率类别一致的样本。]
+    lend.selection.reduction: [筛选损失平均方式, 用整个批次大小作为筛选后训练损失的平均分母。]
+    lend.selection.empty_batch: [批次无样本保留时的处理, 当前批次没有样本通过筛选时跳过参数更新。]
+    pipeline.name: [训练流程, 当前方法采用的数据、损失和更新步骤组合。]
+    pipeline.warmup_epochs: [流程预热轮数, 正式方法步骤开始前执行的预热轮数。]
+    pipeline.objective_consumer.name: [训练目标模块, 当前流程计算训练目标所用的模块。]
+    pipeline.objective_consumer.alpha: [类别排除显著性水平, DSS 用正态分布分位点设定类别排除阈值；统计分数超过阈值的类别被排除，数值越小阈值越高。]
+    pipeline.objective_consumer.prior_decay: [类别先验平滑系数, DSS 更新类别分布先验时保留旧估计的比例。]
+    pipeline.objective_consumer.mda: [类别分布对齐, DSS 将当前预测类别分布与维护的类别先验对齐。]
+    pipeline.objective_consumer.ccs: [跨轮次类别筛选, DSS 根据样本预测随训练轮次的变化筛选候选类别。]
+    pipeline.risk_corrector.name: [损失校正模块, 当前流程处理标签噪声风险的校正方式。]
+    pipeline.transition_estimator.name: [标签转移矩阵来源, 当前流程如何取得标签转移概率矩阵。]
+    pipeline.transition_estimator.matrix: [已知标签转移矩阵, 行为原始类别，列为观测类别；每行概率之和必须为 1。]
+    pipeline.weight_provider.name: [样本权重来源, 决定哪个模块为训练样本计算损失权重。]
+    pipeline.weight_provider.artifact_path: [MentorNet 权重文件, 已训练的 MentorNet 权重路径；相对路径以项目目录为起点。]
+    pipeline.weight_provider.total_epochs: [MentorNet 进度基准轮数, 将当前训练轮次转换为进度比例时使用的总轮数。]
+    pipeline.weight_provider.percentile: [MentorNet 损失分位点, 选取哪个损失分位点作为样本损失相对大小的参考。]
+    pipeline.weight_provider.decay: [MentorNet 统计平滑系数, 更新损失统计时保留旧统计的比例。]
+    pipeline.weight_provider.burn_in_epoch: [MentorNet 预热结束轮次, 从哪一轮开始进入预热后的样本权重规则。]
+    pipeline.weight_provider.fixed_epoch_after_burn_in: [固定预热后的进度特征, 开启后向 MentorNet 输入固定的训练进度特征。]
+    pipeline.weight_provider.fixed_label: [MentorNet 标签输入特征, 固定输入 MentorNet 的标签特征值；留空时使用样本观测标签。]
+    pipeline.weight_provider.dropout_schedule: [MentorNet 样本丢弃阶段, '每项依次填写丢弃比例和持续轮数，例如 [[0.5,17],[0.05,78]]。']
+    risk.name: [二分类风险校正方法, 使用类别翻转概率对带噪标签训练风险作无偏校正。]
+    scheduler.beta1_before: [衰减前的一阶平均系数, JoCoR 学习率衰减开始前使用的 Adam 一阶移动平均系数。]
+    scheduler.beta1_after: [衰减后的一阶平均系数, JoCoR 学习率衰减开始后使用的 Adam 一阶移动平均系数。]
+    scheduler.decay_start: [学习率衰减起始轮次, 从哪一轮开始降低学习率。]
+    warmup.noisy_validation_size: [预热验证集样本数, 预热阶段从训练数据中留出的带噪标签验证样本数。]
+  suffixes:
+    model.width: [卷积网络通道宽度, 控制卷积层的基础通道数，影响网络规模和显存用量。]
+    model.hidden_width: [隐藏层宽度, 多层感知机隐藏层的神经元数量。]
+    remember_schedule.name: [样本保留比例变化方式, 按训练进度逐渐改变参与训练的样本比例。]
+    remember_schedule.start: [起始样本保留比例, 训练开始时参与参数更新的样本比例。]
+    remember_schedule.end: [最终样本保留比例, 渐变阶段结束后参与参数更新的样本比例。]
+    remember_schedule.gradual_epochs: [样本保留比例渐变轮数, 用多少轮将保留比例从起始值变到最终值。]
+    noise_rate: [噪声率先验, 方法用于设定样本保留策略的标签噪声率。]
+    selection.count_rule: [保留样本数取整规则, 将样本保留比例转换为样本数时向下取整。]
+    selection.tie_break: [相同损失样本排序规则, 样本损失相同时按固定样本编号排序。]
+    keep_rate.start: [起始样本保留比例, 训练开始时参与更新的样本比例。]
+    keep_rate.end: [最终样本保留比例, 保留比例渐变结束后的样本比例。]
+    keep_rate.warmup_epochs: [保留比例渐变轮数, 用多少轮从起始保留比例变化到最终比例。]
+    loss.name: [损失函数, 本阶段计算样本损失所用的函数。]
+    optimizer.name: [优化器, 本阶段根据梯度更新模型参数的算法。]
+    scheduler.name: [学习率变化方式, 本阶段学习率随训练进度变化的方式。]
+    model.name: [模型架构, 本阶段使用的神经网络结构。]
+    model.base_width: [基础通道数, 网络首层或基础模块的通道宽度。]
+    model.initialization: [模型初始化方式, 开始训练前模型参数的初始化规则。]
+    model.dropout: [神经元随机丢弃比例, 训练时随机将多少比例的神经元输出置零。]
+    model.width_multiplier: [网络宽度倍数, 网络通道数相对基础宽度的倍数。]
+    model.num_residual_units: [每组残差单元数, 每组残差模块包含的残差单元数量。]
+    model.leakiness: [负输入激活斜率, LeakyReLU 对负输入保留的斜率。]
+    model.bias: [模型偏置, 是否为模型启用可训练的偏置项。]
+    model.in_features: [模型输入特征数, 每个样本输入模型的特征向量长度。]
+    model.stem_padding: [首层卷积填充宽度, 在图像边缘填充多少像素以进行首层卷积。]
+    model.weight_decay: [模型权重衰减系数, 该模型训练时使用的权重衰减强度。]
+    lr: [学习率, 参数每次沿梯度更新时使用的步长。]
+    learning_rate: [学习率, 参数每次沿梯度更新时使用的步长。]
+    momentum: [动量系数, 梯度更新中保留过去更新方向的程度。]
+    nesterov: [前瞻动量, 是否采用 Nesterov 前瞻动量更新。]
+    weight_decay: [权重衰减系数, 更新时抑制模型权重过大所用的衰减强度。]
+    beta1: [梯度平均平滑系数, Adam 一阶梯度移动平均保留旧值的比例。]
+    beta2: [梯度平方平均平滑系数, Adam 二阶梯度平方移动平均保留旧值的比例。]
+    betas: [Adam 平滑系数, '依次填写梯度平均与梯度平方平均的平滑系数，例如 [0.9,0.999]。']
+    scheduler.gamma: [学习率衰减倍率, 未指定逐段学习率时，各节点使用的统一衰减倍率。]
+    scheduler.milestones: [学习率切换轮次, 学习率变化的训练轮次节点；按递增顺序填写。]
+    scheduler.step_milestones: [学习率切换步数, 学习率变化的累计参数更新步数节点；按递增顺序填写。]
+    scheduler.lr_values: [各段学习率, 按节点顺序填写节点后的学习率；每个节点对应一个值。]
+    scheduler.t_max: [余弦变化周期轮数, 余弦学习率曲线从起点变化到最低值所用的轮数。]
+    scheduler.eta_min: [最低学习率, 余弦学习率曲线的最低学习率。]
+    scheduler.initial_lr: [曲线起始学习率, 学习率变化曲线在起点使用的值。]
+    scheduler.final_lr: [曲线结束学习率, 学习率变化曲线在终点使用的值。]
+    scheduler.start_epoch: [学习率下降起始轮次, 从哪一轮开始降低学习率。]
+    scheduler.end_epoch: [学习率下降结束轮次, 到哪一轮学习率下降至终点值。]
+    epochs: [训练轮数, 该阶段完整遍历训练数据的次数。]
+    warmup_epochs: [预热轮数, 正式方法步骤开始前完整遍历训练数据的次数。]
+    correction_epochs: [校正分类器轮数, 固定估计的标签转移关系训练分类器的轮数。]
+    revision_epochs: [联合修正轮数, 联合训练分类器与标签转移修正量的轮数。]
+    split_strategy: [训练验证划分方式, 决定如何从训练数据中留出验证样本。]
+    validation_split.strategy: [训练验证划分方式, 决定如何从训练数据中留出验证样本。]
+    split_rng: [数据划分随机生成器, 数据划分使用的随机数生成器；固定种子时影响具体样本划分。]
+    validation_split.rng: [数据划分随机生成器, 数据划分使用的随机数生成器；固定种子时影响具体样本划分。]
 generated_for:
   repository: https://github.com/seanlee-lile/LNL-toolbox
   branch: codex/cli
@@ -100,6 +606,8 @@ global_ui_rules:
 # prerequisite section instead of being mixed with method hyperparameters.
 parameter_display_policy:
   hidden_paths:
+  - data.sha256
+  - data.expected_samples
   - schema_version
   - kind
   - data.root
@@ -186,6 +694,9 @@ parameter_display_policy:
   - dividemix.gmm.minimum_mean_separation
   - evaluation.allow_test_selection
   hidden_prefixes:
+  - meta.web_parameter_record.
+  - data.source.
+  - data.schema.
   - parameter_record.
   - parameter_sampling.
   - data.max_
