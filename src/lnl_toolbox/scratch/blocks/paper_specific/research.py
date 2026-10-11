@@ -282,43 +282,15 @@ def create_mentor_provider(
     if not path.is_absolute():
         path = Path.cwd() / path
     fixture = bool((ctx.get("_runtime_limits") or {}).get("fixture"))
-    if path.exists():
-        provider = MentorNetWeightProvider(
-            str(path), int(total_epochs), percentile=float(percentile), decay=float(decay),
-            burn_in_epoch=int(burn_in_epoch), fixed_epoch_after_burn_in=bool(fixed_epoch_after_burn_in),
-            fixed_label=int(fixed_label), dropout_schedule=dropout_schedule, seed=int(seed),
-        )
-    elif fixture:
-        class _FixtureMentorProvider:
-            def __init__(self):
-                self.moving = None
-                self.generator = __import__("torch").Generator().manual_seed(int(seed))
-
-            def compute(self, weight_input):
-                torch = __import__("torch")
-                losses = weight_input.per_sample_loss.detach()
-                current = float(torch.quantile(losses, float(percentile)).item())
-                self.moving = current if self.moving is None else float(decay) * self.moving + (1.0 - float(decay)) * current
-                epoch = int(weight_input.metadata.get("epoch", 0))
-                mentor_epoch = min(epoch, int(burn_in_epoch))
-                burn = mentor_epoch < max(0, int(burn_in_epoch) - 1)
-                weights = torch.ones_like(losses) if burn else torch.sigmoid(-(losses - self.moving)).detach()
-                rate = 0.0
-                boundary = 0
-                for candidate, duration in dropout_schedule:
-                    boundary += int(duration)
-                    if mentor_epoch < boundary:
-                        rate = float(candidate); break
-                if rate:
-                    keep = torch.rand(weights.shape, generator=self.generator, device="cpu").to(weights.device) >= rate
-                    weights = weights * keep
-                if not bool((weights > 0).any()):
-                    weights = torch.ones_like(weights)
-                from ...native_stats import WeightResult
-                return WeightResult(weights.clamp(0, 1).detach(), {"weight_mean": float(weights.mean().item()), "moving_percentile": float(self.moving)})
-        provider = _FixtureMentorProvider()
-    else:
+    if not fixture and not path.is_file():
         raise FileNotFoundError(f"MentorArtifact not found: {path}")
+    # Explicit fixture execution never consumes a user's local artifact.
+    # Both paths share the curriculum interface and lifecycle implementation.
+    provider = MentorNetWeightProvider(
+        str(path), int(total_epochs), percentile=float(percentile), decay=float(decay),
+        burn_in_epoch=int(burn_in_epoch), fixed_epoch_after_burn_in=bool(fixed_epoch_after_burn_in),
+        fixed_label=int(fixed_label), dropout_schedule=dropout_schedule, seed=int(seed), fixture=fixture,
+    )
     ctx[save_as] = provider
     ctx[threshold_as] = None
     ctx["mentor_artifact_path"] = os.fspath(path)
@@ -326,26 +298,15 @@ def create_mentor_provider(
 
 @block(id="mentor_build_features", name="MentorNet: Build Mentor Features", category="Weighting", description="Expose loss, loss deviation, label and curriculum epoch features consumed by the frozen mentor.", params={"provider":{"type":"slot","default":"mentor_provider"},"losses":{"type":"slot","default":"loss_per_sample"},"labels":{"type":"slot","default":"labels"},"threshold":{"type":"slot","default":"mentor_threshold"},"save_as":{"type":"slot","default":"mentor_features"}}, requires=("provider","losses","labels","threshold"), provides=("save_as",), placement=("batch",), formula="v_i=(loss_i,loss_i-q_t,y_i,e_t)", formula_kind="special", formula_ref="MentorNet feature construction", paper="MentorNet")
 def mentor_build_features(ctx: ScratchContext, provider: str="mentor_provider", losses: str="loss_per_sample", labels: str="labels", threshold: str="mentor_threshold", save_as: str="mentor_features") -> None:
-    torch,_=_torch(); holder=ctx[provider]; epoch=int(ctx.get("epoch",0)); mentor_epoch=min(epoch,int(holder.burn_in_epoch)) if holder.burn_in_epoch is not None and holder.fixed_epoch_after_burn_in else epoch
+    torch,_=_torch(); holder=ctx[provider]; epoch=int(ctx.get("epoch",0)); mentor_epoch=holder.mentor_epoch(epoch)
     mentor_labels=torch.full_like(ctx[labels].long(),int(holder.fixed_label)) if holder.fixed_label is not None else ctx[labels].long()
-    ctx[save_as]={"losses":ctx[losses].detach(),"deviation":ctx[losses].detach()-float(ctx[threshold]),"labels":mentor_labels,"epochs":torch.full_like(ctx[losses].detach(),float(mentor_epoch)),"mentor_epoch":mentor_epoch}
+    ctx[save_as]={"losses":ctx[losses].detach(),"deviation":ctx[losses].detach()-float(ctx[threshold]),"labels":mentor_labels,"epochs":torch.full_like(ctx[losses].detach(),float(holder.feature_epoch(epoch))),"mentor_epoch":mentor_epoch}
 
 
 @block(id="mentor_predict_sample_weights", name="MentorNet: Predict Sample Weights", category="Weighting", description="Apply burn-in, frozen mentor prediction, and configured dropout to exposed mentor features.", params={"provider":{"type":"slot","default":"mentor_provider"},"features":{"type":"slot","default":"mentor_features"},"save_as":{"type":"slot","default":"sample_weights"}}, requires=("provider","features"), provides=("save_as",), placement=("batch",), formula="w_i=M(v_i) with burn-in and dropout", formula_kind="special", formula_ref="MentorNet curriculum prediction", paper="MentorNet")
 def mentor_predict_sample_weights(ctx: ScratchContext, provider: str="mentor_provider", features: str="mentor_features", save_as: str="sample_weights") -> None:
-    torch,_=_torch(); holder=ctx[provider]; values=ctx[features]; mentor_epoch=int(values["mentor_epoch"]); burn=holder.burn_in_epoch is not None and mentor_epoch < max(0,int(holder.burn_in_epoch)-1)
-    if burn: weights=torch.ones_like(values["losses"])
-    else:
-        model = getattr(holder, "model", None)
-        if model is None:
-            weights = torch.sigmoid(-values["deviation"])
-        else:
-            model.to(values["losses"].device)
-            with torch.no_grad(): weights=model(values["losses"],values["deviation"],values["labels"],values["epochs"])
-    rate=float(holder._dropout_rate(mentor_epoch)) if hasattr(holder, "_dropout_rate") else 0.0
-    if rate: weights=weights*(torch.rand(weights.shape,generator=holder.generator,device="cpu").to(weights.device)>=rate)
-    if not bool((weights>0).any()): weights=torch.ones_like(weights)
-    ctx[save_as]=weights.clamp(0,1).detach()
+    model_provider = ctx[provider]
+    ctx[save_as] = model_provider.predict_features(ctx[features])
 
 
 @block(

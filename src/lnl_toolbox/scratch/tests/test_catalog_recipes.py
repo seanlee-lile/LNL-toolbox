@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
 from lnl_toolbox.scratch import execute_recipe, load_recipe, validate_recipe
 
@@ -60,7 +62,8 @@ class ScratchCatalogRecipeTest(unittest.TestCase):
                 # execution tests.
                 continue
             recipe = load_recipe(path)
-            context = execute_recipe(recipe, runtime_limits={"fixture": True})
+            with tempfile.TemporaryDirectory() as directory, patch("pathlib.Path.cwd", return_value=Path(directory)):
+                context = execute_recipe(recipe, runtime_limits={"fixture": True})
             self.assertIn("labels", context, path.name)
 
 

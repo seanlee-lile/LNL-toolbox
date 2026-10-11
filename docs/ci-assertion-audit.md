@@ -102,3 +102,40 @@ python -m build --no-isolation --outdir <临时目录>/dist
 - 文档：本文、`docs/development-guide.md` 的 CI 断言维护规范、`papers/dividemix/reproduction.md` 的预算说明。
 
 这些文件中部分本来就有主会话修改；整份 git diff 不等于本次新增改动。长期测试规则已写入开发指南。
+
+## 2026-10-11：Scratch MentorNet 干净环境修复
+
+针对用户提供的 `b2eaafd` / Actions `38115413999` 报告，本地强制缺文件路径复现了
+`_FixtureMentorProvider` 缺少 `burn_in_epoch` 的异常。本地确实存在配方引用的
+`data/mentornet/cifar10-symmetric04-official-port-seed20260729/mentor_artifact.pt`；
+此前目录测试优先选择这个文件对应的分支，因此“244 项本地通过”不能证明干净环境通过。
+先前没有隔离这项本地资源，是测试验证的遗漏，不是 GitHub 的断言误报。
+
+本次修复：
+
+- 删除重复的 fixture Provider，改用同一套课程接口；显式 fixture 无论本地文件是否存在均不读取权重。
+- 正式 Scratch Provider 加载并校验现有 MentorArtifact，构建冻结模型；不再把正式路径当作 logistic fixture。
+- burn-in、固定标签、epoch 特征、dropout 使用共享实现；正式路径的全零权重仍报错。
+- 临时目录覆盖有文件、无文件两条路径。新增 5 项回归，验证模型真正被使用、权重冻结、缺文件拒绝、固定特征、dropout 边界和种子行为，并逐步比较现有 CLI Provider 的输出。
+- 未修改 CLI 算法、论文 recipe 或默认参数。fixture 仍仅用于测试，不能作为正式训练证据。
+
+为复用现有文件格式而不复制模型定义，隔离检查仅允许 `native_stats.py` 导入
+`MentorArtifact` 与 `build_mentor_model` 两个指定符号；其他跨模块导入仍拒绝，
+没有允许调用算法、trainer 或 CLI 工作流。公式审计的断言未删除或放宽。
+
+验证记录：主测试 1,060 项通过，完整 Scratch 249 项通过，Ruff、差异检查、wheel/sdist
+构建及两种包的独立安装 CLI 检查通过。Web 全量 154 项通过；三套测试共 1,463 项通过。
+主测试 coverage 重跑 1,060 项再次通过，补强后的 Scratch 全量 249 项再次通过。
+三套 coverage 数据合并成功，报告总覆盖率 75%，退出码 0。主验证环境为 Windows / Python 3.11。
+Python 3.10 的 408 个文件语法检查通过，但该环境缺少 torch，运行检查未通过；
+Python 3.12 / Ubuntu 尚未验证。本次没有 push，不能声称远程 CI 已通过。
+
+本次修改文件：
+
+- `src/lnl_toolbox/scratch/native_stats.py`
+- `src/lnl_toolbox/scratch/blocks/paper_specific/research.py`
+- `src/lnl_toolbox/scratch/tests/test_catalog_recipes.py`
+- `src/lnl_toolbox/scratch/tests/test_semantics_repairs.py`
+- `src/lnl_toolbox/scratch/tests/test_runtime_isolation.py`
+- `docs/ci-assertion-audit.md`
+- `docs/development-guide.md`

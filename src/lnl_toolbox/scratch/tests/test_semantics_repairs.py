@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -235,6 +238,99 @@ class SemanticsRepairTest(unittest.TestCase):
         self.assertEqual(first_peer_read["params"]["state"], "clean_probability_state_b")
         detach = next(step for step in batch["steps"] if step.get("block") == "detach")
         self.assertEqual(detach["params"]["input"], "clean_probability")
+
+
+class MentorNetCurriculumTest(unittest.TestCase):
+    def _artifact(self, directory, *, constant=True):
+        from lnl_toolbox.models.mentornet import MentorNet
+        from lnl_toolbox.training.mentor_artifacts import MentorArtifact
+
+        model = MentorNet(num_labels=2)
+        if constant:
+            with torch.no_grad():
+                for parameter in model.parameters():
+                    parameter.zero_()
+                model.output.bias.fill_(float(np.log(4)))
+        path = Path(directory) / "mentor.pt"
+        MentorArtifact.create(
+            architecture=model.architecture(), feature_schema={"label": "fixed_zero"},
+            source={"dataset": "test"}, model_state=model.state_dict(),
+        ).save(path)
+        return path
+
+    def _context(self, path, *, fixture, dropout=()):
+        context = ScratchContext(_runtime_limits={"fixture": fixture})
+        _run("create_mentor_provider", context, artifact_path=str(path),
+             total_epochs=100, percentile=0.6, decay=0.5, burn_in_epoch=18,
+             fixed_epoch_after_burn_in=True, fixed_label=0,
+             dropout_schedule=dropout, seed=7)
+        context.update(epoch=50, loss_per_sample=torch.linspace(0, 2, 48),
+                       labels=torch.ones(48, dtype=torch.long), mentor_threshold=1.0)
+        _run("mentor_build_features", context)
+        return context
+
+    def test_fixture_ignores_artifacts_in_both_file_states(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing.pt"
+            present = self._artifact(directory)
+            with patch("lnl_toolbox.training.mentor_artifacts.MentorArtifact.load",
+                       side_effect=AssertionError("fixture must not read local weights")):
+                contexts = [self._context(path, fixture=True, dropout=((0.5, 100),))
+                            for path in (missing, present)]
+                for context in contexts:
+                    _run("mentor_predict_sample_weights", context)
+                    self.assertIsNone(context["mentor_provider"].model)
+                    self.assertEqual(context["mentor_features"]["mentor_epoch"], 18)
+                    torch.testing.assert_close(context["mentor_features"]["epochs"], torch.full((48,), 18.0))
+                    self.assertTrue(torch.equal(context["mentor_features"]["labels"], torch.zeros(48, dtype=torch.long)))
+                torch.testing.assert_close(contexts[0]["sample_weights"], contexts[1]["sample_weights"])
+                self.assertTrue(bool((contexts[0]["sample_weights"] == 0).any()))
+
+    def test_real_artifact_is_loaded_frozen_and_used_by_blocks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            context = self._context(self._artifact(directory), fixture=False)
+            provider = context["mentor_provider"]
+            self.assertFalse(provider.model.training)
+            self.assertTrue(all(not p.requires_grad for p in provider.model.parameters()))
+            _run("mentor_predict_sample_weights", context)
+            torch.testing.assert_close(context["sample_weights"], torch.full((48,), 0.8))
+
+    def test_missing_real_artifact_is_not_replaced_with_fixture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(FileNotFoundError):
+                self._context(Path(directory) / "missing.pt", fixture=False)
+
+    def test_curriculum_and_dropout_match_training_provider(self):
+        from lnl_toolbox.algorithms.mentornet import MentorNetWeightProvider as TrainingProvider
+        from lnl_toolbox.scratch.native_stats import MentorNetWeightProvider
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._artifact(directory, constant=False)
+            for fixed in (False, True):
+                with self.subTest(fixed_epoch=fixed):
+                    params = dict(percentile=0.6, decay=0.5, burn_in_epoch=18,
+                                  fixed_epoch_after_burn_in=fixed, fixed_label=0,
+                                  dropout_schedule=((0.5, 17), (0.05, 78), (0.9, 5)), seed=7)
+                    actual = MentorNetWeightProvider(str(path), 200, **params)
+                    expected = TrainingProvider(str(path), 200, **params)
+                    for epoch in (0, 16, 17, 18, 30, 99):
+                        value = SimpleNamespace(per_sample_loss=torch.linspace(0, 2, 48),
+                                                noisy_targets=torch.ones(48, dtype=torch.long),
+                                                metadata={"epoch": epoch})
+                        result, reference = actual.compute(value), expected.compute(value)
+                        torch.testing.assert_close(result.sample_weights, reference.sample_weights)
+                        self.assertAlmostEqual(result.metrics["moving_percentile"], reference.metrics["moving_percentile"])
+                    self.assertEqual(actual.feature_epoch(50), 18 if fixed else 25)
+                    self.assertEqual(actual._dropout_rate(16), 0.5)
+                    self.assertEqual(actual._dropout_rate(17), 0.05)
+                    self.assertEqual(actual._dropout_rate(95), 0.9)
+                    self.assertEqual(actual._dropout_rate(100), 0.0)
+
+    def test_real_all_zero_dropout_is_an_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            context = self._context(self._artifact(directory), fixture=False, dropout=((1.0, 100),))
+            with self.assertRaisesRegex(ValueError, "all-zero batch"):
+                _run("mentor_predict_sample_weights", context)
 
 
 if __name__ == "__main__":

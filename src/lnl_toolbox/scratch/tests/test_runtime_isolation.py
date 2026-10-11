@@ -6,8 +6,16 @@ import unittest
 
 
 class ScratchRuntimeIsolationTest(unittest.TestCase):
-    def test_runtime_imports_only_scratch_from_lnl_toolbox(self) -> None:
+    def test_runtime_reuses_only_explicit_artifact_and_model_interfaces(self) -> None:
         root = Path(__file__).resolve().parents[1]
+        # Artifact decoding and model construction are shared formats, not
+        # algorithm/trainer delegation. Restrict each exception by file,
+        # module, symbol, and import form; all other legacy imports still fail.
+        shared_interfaces = {
+            ("native_stats.py", "lnl_toolbox.training.mentor_artifacts", ("MentorArtifact",)),
+            ("native_stats.py", "lnl_toolbox.models.mentornet", ("build_mentor_model",)),
+        }
+        seen = set()
         violations = []
         for path in root.rglob("*.py"):
             if "tests" in path.parts:
@@ -21,8 +29,15 @@ class ScratchRuntimeIsolationTest(unittest.TestCase):
                     names = [node.module]
                 for name in names:
                     if name.startswith("lnl_toolbox.") and not name.startswith("lnl_toolbox.scratch"):
+                        if isinstance(node, ast.ImportFrom):
+                            interface = (path.relative_to(root).as_posix(), name,
+                                         tuple(alias.name for alias in node.names))
+                            if interface in shared_interfaces:
+                                seen.add(interface)
+                                continue
                         violations.append(f"{path.name}:{node.lineno}:{name}")
         self.assertEqual(violations, [])
+        self.assertEqual(seen, shared_interfaces)
 
 
 if __name__ == "__main__":

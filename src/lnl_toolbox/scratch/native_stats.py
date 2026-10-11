@@ -1,7 +1,8 @@
 """Scratch-owned statistical helpers used by research blocks.
 
-The helpers in this module deliberately depend only on third-party numerical
-libraries and the canonical Scratch batch contract.  They are small semantic
+The helpers use third-party numerical libraries and the canonical Scratch batch
+contract; MentorNet additionally reuses the shared artifact codec/model factory.
+They are small semantic
 operations (snapshots, estimators and state containers), not a second workflow
 engine and not wrappers around the legacy implementation.
 """
@@ -465,15 +466,71 @@ class SupervisedWeightInput:
 
 
 class MentorNetWeightProvider:
-    def __init__(self, artifact_path: str, total_epochs: int, percentile: float, decay: float, burn_in_epoch: int, fixed_epoch_after_burn_in: bool, fixed_label: int, dropout_schedule: Any, seed: int, **_: Any):
+    def __init__(self, artifact_path: str, total_epochs: int, percentile: float, decay: float, burn_in_epoch: int, fixed_epoch_after_burn_in: bool, fixed_label: int, dropout_schedule: Any, seed: int, *, fixture: bool = False, **_: Any):
         self.total_epochs = int(total_epochs); self.percentile = float(percentile); self.decay = float(decay)
-        self.burn_in_epoch = int(burn_in_epoch); self.fixed_epoch_after_burn_in = bool(fixed_epoch_after_burn_in); self.fixed_label = int(fixed_label)
-        self.dropout_schedule = tuple(dropout_schedule); self.generator = _torch().Generator().manual_seed(int(seed)); self.moving = None; self.model = None
+        self.burn_in_epoch = int(burn_in_epoch); self.fixed_epoch_after_burn_in = bool(fixed_epoch_after_burn_in); self.fixed_label = None if fixed_label is None else int(fixed_label)
+        if self.total_epochs <= 0 or not 0 <= self.burn_in_epoch <= 100:
+            raise ValueError("MentorNet requires positive total_epochs and burn_in_epoch within [0, 100]")
+        if not 0 <= self.percentile <= 1 or not 0 <= self.decay <= 1:
+            raise ValueError("MentorNet percentile and decay must be within [0, 1]")
+        self.dropout_schedule = tuple((float(rate), int(duration)) for rate, duration in dropout_schedule)
+        if any(not 0 <= rate <= 1 or duration <= 0 for rate, duration in self.dropout_schedule):
+            raise ValueError("dropout schedule entries must be [rate, positive_epochs]")
+        self.generator = _torch().Generator().manual_seed(int(seed)); self.moving = None; self.model = None
+        self.fixture = bool(fixture)
+        if not self.fixture:
+            # Reuse the artifact format and model, not the training workflow.
+            from lnl_toolbox.training.mentor_artifacts import MentorArtifact
+            from lnl_toolbox.models.mentornet import build_mentor_model
+            artifact = MentorArtifact.load(artifact_path)
+            self.model = build_mentor_model(dict(artifact.architecture))
+            self.model.load_state_dict(dict(artifact.model_state))
+            self.model.eval()
+            for parameter in self.model.parameters():
+                parameter.requires_grad_(False)
+
+    def mentor_epoch(self, epoch: int) -> int:
+        return min(int(epoch), self.burn_in_epoch)
+
+    def feature_epoch(self, epoch: int) -> int:
+        return min(99, self.mentor_epoch(epoch) if self.fixed_epoch_after_burn_in else int(100 * epoch / self.total_epochs))
+
+    def _dropout_rate(self, epoch: int) -> float:
+        boundary = 0
+        for rate, duration in self.dropout_schedule:
+            boundary += duration
+            if epoch < boundary:
+                return rate
+        return 0.0
+
+    def predict_features(self, values: Mapping[str, Any]):
+        torch = _torch(); losses = values["losses"]; epoch = int(values["mentor_epoch"])
+        if epoch < max(0, self.burn_in_epoch - 1):
+            weights = torch.ones_like(losses)
+        elif self.fixture:
+            weights = torch.sigmoid(-values["deviation"])
+        else:
+            self.model.to(losses.device)
+            with torch.no_grad():
+                weights = self.model(losses, values["deviation"], values["labels"], values["epochs"])
+        rate = self._dropout_rate(epoch)
+        if rate:
+            keep = torch.rand(weights.shape, generator=self.generator, device="cpu").to(weights.device) >= rate
+            weights = weights * keep
+        if not bool((weights > 0).any()):
+            if not self.fixture:
+                raise ValueError("MentorNet produced an all-zero batch")
+            weights = torch.ones_like(weights)
+        return weights.clamp(0, 1).detach()
+
     def compute(self, value: SupervisedWeightInput):
         torch = _torch(); losses = value.per_sample_loss.detach(); q = float(torch.quantile(losses, self.percentile))
         self.moving = q if self.moving is None else self.decay * self.moving + (1 - self.decay) * q
-        weights = torch.ones_like(losses) if int(value.metadata.get("epoch", 0)) < self.burn_in_epoch else torch.sigmoid(-(losses - self.moving))
-        return WeightResult(weights.clamp(0, 1).detach(), {"weight_mean": float(weights.mean()), "moving_percentile": float(self.moving)})
+        epoch = int(value.metadata.get("epoch", 0))
+        labels = value.noisy_targets.detach() if self.fixed_label is None else torch.full_like(value.noisy_targets, self.fixed_label)
+        weights = self.predict_features({"losses": losses, "deviation": losses - self.moving, "labels": labels,
+            "epochs": torch.full_like(labels, self.feature_epoch(epoch)), "mentor_epoch": self.mentor_epoch(epoch)})
+        return WeightResult(weights, {"weight_mean": float(weights.mean()), "moving_percentile": float(self.moving)})
 
 
 class DualTransitionEstimator:

@@ -18,6 +18,7 @@ class TrainingContext:
     config_path: Path | None
     command_kind: str
     total_epochs: int | None
+    total_steps: int | None = None
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,8 @@ class TrainingSnapshot:
     source: str
     metrics: tuple[dict[str, Any], ...] = ()
     warning: str | None = None
+    completed_step: int | None = None
+    total_steps: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         value = asdict(self)
@@ -53,22 +56,24 @@ def _resolve_path(value: str | None, root: Path) -> Path | None:
     return path if path.is_absolute() else root / path
 
 
-def _read_total_epochs(config_path: Path | None) -> int | None:
+def _read_training_budget(config_path: Path | None) -> tuple[int | None, int | None]:
     if config_path is None or not config_path.is_file():
-        return None
+        return None, None
     try:
         raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError):
-        return None
+        return None, None
     if not isinstance(raw, dict):
-        return None
+        return None, None
     trainer = raw.get("trainer")
+    if isinstance(trainer, dict) and isinstance(trainer.get("max_steps"), int) and trainer["max_steps"] > 0:
+        return None, trainer["max_steps"]
     if isinstance(trainer, dict) and isinstance(trainer.get("epochs"), int):
-        return int(trainer["epochs"])
+        return int(trainer["epochs"]), None
     # Multi-stage runners reuse ``epoch`` for each stage.  A single combined
     # total would make e.g. DivideMix main epoch 1 appear as 1/310, so it is
     # deliberately omitted until a runner publishes a stage-aware contract.
-    return None
+    return None, None
 
 
 def infer_training_context(command: Sequence[str], root: str | Path) -> TrainingContext | None:
@@ -89,7 +94,7 @@ def infer_training_context(command: Sequence[str], root: str | Path) -> Training
         if not candidate.startswith("-"):
             config_path = _resolve_path(candidate, root_path)
     output_dir = _resolve_path(_option_value(values, "--output-dir"), root_path)
-    total_epochs = _read_total_epochs(config_path)
+    total_epochs, total_steps = _read_training_budget(config_path)
     override = _option_value(values, "--epochs")
     if override is not None:
         try:
@@ -101,6 +106,7 @@ def infer_training_context(command: Sequence[str], root: str | Path) -> Training
         config_path=config_path,
         command_kind="run",
         total_epochs=total_epochs,
+        total_steps=total_steps,
     )
 
 
@@ -168,6 +174,7 @@ def training_snapshot(
     stage = _stage(latest)
     epoch = latest.get("epoch")
     completed_epoch = int(epoch) if isinstance(epoch, int) else None
+    completed_step = next((row["global_step"] for row in reversed(rows) if isinstance(row.get("global_step"), int)), None)
     if running:
         state = "running"
     elif cancel_requested:
@@ -186,4 +193,6 @@ def training_snapshot(
         source=source if rows else "process",
         metrics=tuple(rows),
         warning=warning,
+        completed_step=completed_step,
+        total_steps=context.total_steps,
     )

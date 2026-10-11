@@ -15,6 +15,8 @@
 .qs-step { padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-md); background: #fffdf7; }
 .qs-step h3 { margin: 0 0 10px; color: var(--text-primary); font-size: 19px; }
 .qs-step h4 { margin: 13px 0 8px; color: var(--text-secondary); font-size: 15px; }
+#qs-training-output { margin-bottom: 18px; padding: 16px; border: 1px solid var(--selected-border); border-radius: var(--radius-md); background: var(--selected-bg); }
+#qs-training-progress { width: 100%; height: 20px; margin: 12px 0 6px; accent-color: var(--selected-border); }
 .qs-noise-choice { display: inline-flex; align-items: center; gap: 9px; margin: 12px 0; font-weight: 700; }
 .qs-noise-choice input { width: 20px; height: 20px; min-height: 0; margin: 0; }
 .qs-methods-panel { padding: 0; overflow: hidden; }

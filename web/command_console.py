@@ -2190,6 +2190,10 @@ def _config_schema(
                 source = source.get(part) if isinstance(source, dict) else None
             if isinstance(source, int) and not isinstance(source, bool):
                 field["split_reference"] = {"count": source, "total": original_count}
+    display_order = _parameter_registry().get("default_parameter_paths", {}).get("methods", {}).get(_method_registry_key(method), ())
+    positions = {path: index for index, path in enumerate(display_order)}
+    fields.sort(key=lambda field: positions.get(str(field["path"]), len(positions))
+                if field.get("display_group") == "default" else len(positions))
     return {
         "recipe": payload["recipe"],
         "source_path": payload["path"],

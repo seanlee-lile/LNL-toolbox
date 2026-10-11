@@ -408,7 +408,8 @@
     const busy = ["saving", "validating", "rehearsing"].includes(review?.phase);
     const lines = reviewLines(review);
     const information = reviewInformation(review, ready);
-    return '<section class="qs-step"><h3>5. 检查与确认</h3><div class="qs-review-center" aria-live="polite"><span class="qs-spinner" aria-hidden="true"' + (busy ? '' : ' hidden') + '></span><h4 data-review-title>' + esc(reviewTitle(review)) + '</h4><pre data-review-locations' + (information ? '' : ' hidden') + '>' + esc(information) + '</pre><pre data-review-error class="qs-review-errors" role="alert"' + (review?.phase === "error" ? '' : ' hidden') + '>' + esc(review?.error) + '</pre><details data-review-output' + (lines.length ? '' : ' hidden') + '><summary>完整 CLI 输出</summary><pre>' + esc(lines.join("\n")) + '</pre></details><button type="button" id="qs-run" class="primary"' + (ready ? '' : ' disabled') + '>确认并开始训练</button></div></section>';
+    const training = review?.phase === "started" ? '<section id="qs-training-output" hidden aria-live="polite"><h4>训练进度</h4><div id="qs-training-summary" class="helper"></div><progress id="qs-training-progress" max="100" aria-label="训练进度"></progress><div id="qs-training-progress-label" class="helper"></div></section>' : '';
+    return '<section class="qs-step"><h3>5. 检查与确认</h3>' + training + '<div class="qs-review-center" aria-live="polite"><span class="qs-spinner" aria-hidden="true"' + (busy ? '' : ' hidden') + '></span><h4 data-review-title>' + esc(reviewTitle(review)) + '</h4><pre data-review-locations' + (information ? '' : ' hidden') + '>' + esc(information) + '</pre><pre data-review-error class="qs-review-errors" role="alert"' + (review?.phase === "error" ? '' : ' hidden') + '>' + esc(review?.error) + '</pre><details data-review-output' + (lines.length ? '' : ' hidden') + '><summary>完整 CLI 输出</summary><pre>' + esc(lines.join("\n")) + '</pre></details><button type="button" id="qs-run" class="primary"' + (ready ? '' : ' disabled') + '>确认并开始训练</button></div></section>';
   }
 
   function parameterValue(field) {
@@ -763,6 +764,7 @@
     const compact = Boolean(context && context.compact);
     const guidedFlow = compact ? renderNextActions() : renderNoise() + renderMethods() + renderPlan();
     panel.innerHTML = '<div class="qs-root' + (state.loading ? ' qs-is-loading' : '') + '">' + (compact ? '' : '<h2>Quick Start</h2>') + loadingMarkup() + (state.error ? '<div class="qs-feedback qs-error">' + esc(state.error) + '</div>' : "") + (state.selectedPaperId ? '<div id="qs-external-resources"></div>' : '') + (compact ? "" : renderDataset()) + guidedFlow + '</div>';
+    if (window.trainingOutput) window.trainingOutput.refresh();
     const selectedResourceMethod = state.methods.find(function (item) { return item.paper_id === state.selectedPaperId; });
     if (selectedResourceMethod?.recipe_id) {
       const currentPlan = state.plan?.paper_id === state.selectedPaperId ? state.plan : null;
@@ -1087,8 +1089,9 @@
       review.locations = "本次训练保存位置\n运行目录：" + saved.output_dir + "\n配置文件：" + saved.config_path + "\n训练日志、指标与模型权重保存在同一运行目录。";
       review.phase = "started";
       context.setRequest({command:review.command}, review.command);
-      context.execute();
       render();
+      if (window.trainingOutput) window.trainingOutput.render({training:{state:"starting", metrics:[]}});
+      context.execute();
     } catch (error) {
       review.phase = "error"; review.error = String(error.message || error); updateReview();
     }

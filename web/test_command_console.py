@@ -17,6 +17,43 @@ import command_console  # noqa: E402
 
 
 class CommandConsoleTest(unittest.TestCase):
+    def test_all_26_papers_follow_the_existing_parameter_lists(self):
+        bindings = command_console._parameter_registry()["formal_recipe_bindings"]
+        self.assertEqual(len(bindings), 26)
+        for method, recipe in bindings.items():
+            with self.subTest(method=method):
+                fields = command_console._config_schema(recipe)["fields"]
+                order = command_console._parameter_registry()["default_parameter_paths"]["methods"][method]
+                defaults = [f["path"] for f in fields if f.get("visible") is not False
+                            and f.get("display_group") == "default"]
+                self.assertEqual(defaults, [path for path in order if path in defaults])
+                registry = command_console._registry_config_fields(
+                    command_console._config_payload(recipe)["config"], method
+                )[0]
+                paths = {f["path"] for f in registry}
+                advanced = [f["path"] for f in fields if f.get("display_group") == "advanced"
+                            and f["path"] in paths]
+                self.assertEqual(advanced, [f["path"] for f in registry if f["path"] in advanced])
+
+    def test_pcse_original_lists_keep_stages_together(self):
+        recipe = command_console._parameter_registry()["formal_recipe_bindings"]["pcse"]
+        ordered = command_console._config_schema(recipe)["fields"]
+        stage_prefixes = ("pretraining_stage", "transition_stage", "feature_stage", "statistics_stage", "gda_stage", "ensemble_stage")
+        for group in ("default", "advanced"):
+            stage_positions = []
+            for field in ordered:
+                if field.get("visible") is False or field.get("display_group") != group:
+                    continue
+                for position, prefix in enumerate(stage_prefixes):
+                    if str(field["path"]).startswith(prefix + "."):
+                        stage_positions.append(position)
+                        break
+            self.assertEqual(stage_positions, sorted(stage_positions), group)
+        paths = [f["path"] for f in ordered]
+        self.assertLess(paths.index("pretraining_stage.epochs"), paths.index("pretraining_stage.optimizer.lr"))
+        self.assertLess(paths.index("pretraining_stage.optimizer.lr"), paths.index("transition_stage.epochs"))
+        self.assertLess(paths.index("transition_stage.epochs"), paths.index("ensemble_stage.epochs"))
+
     def test_selection_split_is_hidden_for_all_papers_without_hiding_split_counts(self):
         from lnl_toolbox.catalog import load_recipe_config, recipe_by_id
 
