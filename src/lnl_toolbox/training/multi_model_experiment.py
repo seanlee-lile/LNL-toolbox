@@ -156,7 +156,9 @@ def run_multi_model_experiment(
     """Run one configured multi-model algorithm without paper-name branches."""
 
     config, parameter_record = resolve_parameter_sampling(raw_config)
-    config = dict(config)
+    from lnl_toolbox.core.config_schema import normalize_experiment_config
+
+    config = normalize_experiment_config(config)
     seed = int(config.get("seed", 1))
     epochs = int(config["trainer"]["epochs"])
     if epochs <= 0:

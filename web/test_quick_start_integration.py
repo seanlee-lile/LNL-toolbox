@@ -129,15 +129,20 @@ class QuickStartIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         alias = registered["dataset"]["alias"]
-        noise = {"kind": "clean", "key": "clean"}
+        self.service.data_service.update_declarations(alias, {
+            "noise_status": "noisy", "noise_origin": "native",
+            "noise_rate": {"status": "unknown"},
+        })
+        noise = {"kind": "native", "key": "native"}
         status, methods = self._request(
             "POST", "/api/quick-start/methods", {"dataset": alias, "noise": noise}
         )
         self.assertEqual(status, 200)
-        upm = next(item for item in methods["methods"] if item["paper_id"] == "upm")
-        self.assertEqual(upm["status"], "needs_input")
+        jocor = next(item for item in methods["methods"] if item["paper_id"] == "jocor")
+        self.assertEqual(jocor["status"], "needs_input")
+        self.assertIn("noise_rate_prior", jocor["required_user_inputs"])
         status, plan = self._request("POST", "/api/quick-start/plan", {
-            "dataset": alias, "noise": noise, "paper_id": "upm",
+            "dataset": alias, "noise": noise, "paper_id": "jocor",
         })
         self.assertEqual(status, 200)
         self.assertEqual(plan["status"], "needs_input")

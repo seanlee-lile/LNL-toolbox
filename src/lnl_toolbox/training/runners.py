@@ -569,7 +569,7 @@ def _jocor_requirements(config: Mapping[str, Any]) -> MethodRequirements | None:
         ),
         implemented_variant="joint_coregularization",
         requires_method_noise_prior=True,
-        method_noise_prior_paths=(("noise", "rate"),),
+        method_noise_prior_paths=(("algorithm", "estimated_noise_rate"),),
     )
 
 

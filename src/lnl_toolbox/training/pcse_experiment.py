@@ -306,6 +306,11 @@ def run_pcse_experiment(
     manifest, manifest_path = prepared.manifest, prepared.manifest_path
     if manifest is None or manifest_path is None:
         raise ValueError("PCSE requires noisy train and validation labels")
+    if pretraining_mode == "train":
+        if manifest.noise_type == "clean":
+            manifest_mode = "clean"
+        elif manifest.noise_type == "real_world":
+            manifest_mode = "native"
     effective_train_rate = effective_subset_actual_rate(manifest, prepared.train_indices)
     # Validation may be an independently namespaced source split.  Its
     # realized rate must be measured from the materialized role view rather

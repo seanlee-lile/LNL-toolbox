@@ -144,8 +144,8 @@ class _l2rw_training_L2RWTrainingTest(unittest.TestCase):
         config = yaml.safe_load((_l2rw_training_ROOT / 'configs/experiment/l2rw_cifar10_reproduction.yaml').read_text(encoding='utf-8'))
         self.assertEqual(config['model']['name'], 'l2rw_resnet32')
         self.assertEqual(config['seed'], 1234)
-        self.assertEqual(config['data']['seed'], 0)
-        self.assertEqual(config['noise']['seed'], 0)
+        for section in ('data', 'noise', 'trusted_validation'):
+            self.assertEqual(config[section]['seed'], config['seed'], section)
         from lnl_toolbox.models.cifar_resnet import L2RWResNet32
         from lnl_toolbox.training.reproduction_data import build_reproduction_model
         model = build_reproduction_model(config['model'], config['data'], 10)

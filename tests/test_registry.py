@@ -199,16 +199,28 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
 
     def test_rate_prior_and_external_source_metadata(self) -> None:
         registry = create_runner_registry()
-        for runner in ('coteaching', 'cnlcu', 'dividemix'):
+        for runner in ('coteaching', 'cnlcu'):
             requirement = registry.get(runner).requirements({})
             self.assertTrue(requirement.requires_method_noise_prior)
             self.assertFalse(requirement.requires_dataset_true_noise_rate)
+        # DivideMix obtains clean probabilities from its loss GMM, not a
+        # supplied scalar noise-rate prior. Corruption generation is separate.
+        dividemix = registry.get('dividemix').requirements({})
+        self.assertFalse(dividemix.requires_method_noise_prior)
+        self.assertFalse(dividemix.requires_dataset_true_noise_rate)
+        self.assertEqual(dividemix.method_noise_prior_paths, ())
         pcse = registry.get('pcse').requirements({'pretraining_stage': {'mode': 'external_checkpoint'}})
         self.assertEqual(pcse.required_pretrained_roles, ('upm_main_best',))
         self.assertEqual(pcse.pretrained_role_paths, (('upm_main_best', ('pretraining_stage', 'source', 'run_directory_env')),))
         dld = registry.get('dld').requirements({'dld': {'feature_extractor': {'source': 'external_checkpoint'}}})
-        self.assertEqual(dld.required_pretrained_roles, ('upm_main_best',))
-        self.assertEqual(dld.pretrained_role_paths, (('upm_main_best', ('dld', 'feature_extractor', 'external', 'run_directory_env')),))
+        self.assertEqual(len(dld.prerequisites), 1)
+        source = dld.prerequisites[0]
+        self.assertEqual(source.kind, 'pretrained_feature_extractor')
+        self.assertEqual(source.validator, 'dld_feature_extractor')
+        self.assertIn('torchvision_resnet34_imagenet1k_v1', source.supported_sources)
+        self.assertIn('upm_main_best', source.supported_sources)
+        self.assertEqual(source.config_paths, (('dld', 'feature_extractor', 'external'),))
+        self.assertFalse(registry.get('dld').requirements({}).prerequisites)
 
     def test_all_formal_papers_publish_config_specific_requirements(self) -> None:
         expected = {'binary-risk': 'binary', 'importance-reweighting': 'importance_reweighting', 'loss-correction': 'loss_correction', 'coteaching': 'coteaching', 'gce': 'gce', 'l2rw': 'l2rw', 'mentornet': 'mentornet', 't-revision': 't_revision', 'apl': 'apl', 'dividemix': 'dividemix', 'dual-t': 'dual_t', 'jocor': 'jocor', 'pdl': 'pdl', 'cal': 'cal', 'cdr': 'cdr', 'upm': 'upm', 'volminnet': 'volminnet', 'cnlcu': 'cnlcu', 'cwd': 'cwd', 'lend': 'lend', 'mc-ldce': 'mc_ldce', 'pcse': 'pcse', 'ca2c': 'ca2c', 'dld': 'dld', 'dss': 'dss', 'fine': 'fine'}

@@ -13,6 +13,66 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class QuickStartAssetsTests(unittest.TestCase):
+    def test_compatibility_guide_reuses_loaded_noise_facts(self) -> None:
+        self.assertIsNotNone(shutil.which("node"), "CI requires Node-backed UI verification")
+        script = r"""
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+let source=fs.readFileSync('web/assets/quick_start.js','utf8');
+source=source.replace('window.quickStartController =',
+ 'window.__probe={state}; window.quickStartController =');
+source=source.replace('function render() {','function render() { return;');
+const calls=[];
+const ctx={window:{setTimeout(){return 1;},clearTimeout(){}},
+ fetch:async url=>{calls.push(url);return {ok:true,json:async()=>({requires_confirmation:true,dataset_state:'unknown',options:[]})};}};
+vm.runInNewContext(source,ctx);
+const s=ctx.window.__probe.state,c=ctx.window.quickStartController;
+(async()=>{
+ s.dataset={alias:'fixture'};s.noise=null;
+ await c.showCompatibilityGuide();
+ assert.deepStrictEqual(calls,['/api/quick-start/noises?dataset=fixture']);
+ assert(s.noise);await c.showCompatibilityGuide();assert.strictEqual(calls.length,1);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+        result = subprocess.run([shutil.which("node"), "-e", script], cwd=ROOT,
+                                capture_output=True, text=True, encoding="utf-8", check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_stale_plan_and_method_responses_cannot_replace_current_selection(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("Node.js is unavailable")
+        script = r"""
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+let source=fs.readFileSync('web/assets/quick_start.js','utf8');
+source=source.replace('window.quickStartController =',
+ 'window.__probe={state,buildPlan,loadMethods}; window.quickStartController =');
+source=source.replace('function render() {','function render() { return;');
+const pending=[];
+const ctx={window:{setTimeout(){return 1;},clearTimeout(){}},
+ fetch:(url,options)=>new Promise(resolve=>pending.push({url,resolve}))};
+vm.runInNewContext(source,ctx);
+const p=ctx.window.__probe,s=p.state;
+function reply(index,payload){pending[index].resolve({ok:true,json:async()=>payload});}
+(async()=>{
+ s.dataset={alias:'data'};s.selectedPaperId='gce';
+ const old=p.buildPlan({navigate:false});
+ s.selectedPaperId='pcse';const current=p.buildPlan({navigate:false});
+ reply(1,{plan_id:'new',paper_id:'pcse'});await current;
+ reply(0,{plan_id:'old',paper_id:'gce'});await old;
+ assert.strictEqual(s.plan.paper_id,'pcse');assert.strictEqual(s.plan.plan_id,'new');
+ const oldMethods=p.loadMethods();
+ s.noiseSelection={kind:'native',key:'native'};const currentMethods=p.loadMethods();
+ reply(3,{methods:[{paper_id:'new-method'}]});await currentMethods;
+ reply(2,{methods:[{paper_id:'old-method'}]});await oldMethods;
+ assert.strictEqual(s.methods[0].paper_id,'new-method');
+ const abandoned=p.buildPlan({navigate:false});s.selectedPaperId='lend';
+ reply(4,{plan_id:'abandoned',paper_id:'pcse'});await abandoned;
+ assert.strictEqual(s.plan,null);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+        result = subprocess.run([shutil.which("node"), "-e", script], cwd=ROOT,
+                                capture_output=True, text=True, encoding="utf-8", check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_dataset_path_next_identifies_and_invalidates_previous_selection(self) -> None:
         if not shutil.which("node"):
             self.skipTest("Node.js is unavailable")
@@ -446,7 +506,8 @@ if (!html.includes('查看论文外部数据') || html.includes('noise.path') ||
         for paper in load_papers(command_console.ROOT):
             recipe = default_paper_config(paper, root=command_console.ROOT)[0]
             schemas.append(command_console._config_schema(recipe.recipe_id))
-        self.assertEqual(len(schemas), 26)
+        self.assertEqual(len(schemas), len(load_papers(command_console.ROOT)))
+        self.assertTrue(schemas)
         script = r"""
 const fs = require('fs');
 const vm = require('vm');

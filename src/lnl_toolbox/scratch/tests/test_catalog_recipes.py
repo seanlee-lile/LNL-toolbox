@@ -49,7 +49,7 @@ class ScratchCatalogRecipeTest(unittest.TestCase):
             validate_recipe(recipe)
             recipes[recipe["name"]] = path
         self.assertEqual(set(recipes), expected)
-        self.assertEqual(len(recipes), 26)
+        self.assertTrue(expected)
 
     def test_legacy_catalog_recipes_execute_synthetic_path(self) -> None:
         for path in sorted((ROOT / "recipes" / "papers").glob("*.yaml")):

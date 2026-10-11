@@ -783,7 +783,17 @@ class _importance_reweighting_uci_ImportanceReweightingUCIAdapterTest(unittest.T
                 run_experiment(bad, output_dir=root / 'bad')
             run_dir = root / 'run'
             run_experiment(_importance_reweighting_uci__config(source, sha256, 1), output_dir=run_dir)
-            changed = _importance_reweighting_uci__config(source, sha256, 2)
-            changed['data']['split']['seed'] += 1
-            with self.assertRaisesRegex(ValueError, 'identity mismatch|configuration mismatch|noise manifest|data_manifest'):
-                run_experiment(changed, resume=run_dir / 'last.pt')
+            before = {name: (run_dir / name).read_bytes() for name in ('split_manifest.json', 'noise_manifest.npz', 'last.pt')}
+            for change in ('seed', 'split', 'noise'):
+                with self.subTest(change=change):
+                    changed = _importance_reweighting_uci__config(source, sha256, 2)
+                    if change == 'seed':
+                        # One public seed controls the split and corruption.
+                        changed['seed'] += 1
+                    elif change == 'split':
+                        changed['data']['split']['test_fraction'] = 0.3
+                    else:
+                        changed['noise']['rho_positive'] += 0.05
+                    with self.assertRaisesRegex(ValueError, 'identity mismatch|configuration mismatch|noise manifest|data_manifest'):
+                        run_experiment(changed, resume=run_dir / 'last.pt')
+                    self.assertEqual(before, {name: (run_dir / name).read_bytes() for name in before})

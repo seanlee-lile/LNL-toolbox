@@ -5586,6 +5586,14 @@ methods:
           note: Weight of the JoCoR co-regularization/agreement term.
           evidence_ref: lambda
           constraints: paper search grid roughly 0.05..0.95
+        algorithm.estimated_noise_rate:
+          current: 0.5
+          value_type: number
+          ui_control: number
+          reproduction_impact: high
+          origin: paper_method
+          note: 用于样本筛选的预计标签噪声率，不改变数据标签。
+          evidence_ref: protocol
         selector.keep_rate.start:
           current: 1.0
           value_type: number

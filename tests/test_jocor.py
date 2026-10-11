@@ -131,6 +131,40 @@ class _jocor_JoCoRAlgorithmTest(unittest.TestCase):
 
 # --- merged from test_jocor.py ---
 class _jocor_JoCoRConfigurationTest(unittest.TestCase):
+    def test_estimated_rate_changes_selection_not_artificial_noise(self) -> None:
+        from lnl_toolbox.core.config_schema import normalize_experiment_config
+        path = Path('configs/experiment/jocor_cifar10_symmetric05_reproduction.yaml')
+        config = yaml.safe_load(path.read_text(encoding='utf-8'))
+        legacy = normalize_experiment_config(config)
+        self.assertEqual(legacy['selector']['keep_rate']['end'], 0.5)
+        self.assertEqual(legacy['algorithm']['estimated_noise_rate'], 0.5)
+        config['algorithm']['estimated_noise_rate'] = 0.2
+        normalized = normalize_experiment_config(config)
+        self.assertEqual(normalized['noise']['rate'], 0.5)
+        self.assertEqual(normalized['selector']['keep_rate']['end'], 0.8)
+        config['algorithm']['estimated_noise_rate'] = 1.1
+        with self.assertRaisesRegex(ValueError, 'estimated_noise_rate'):
+            normalize_experiment_config(config)
+
+    def test_web_estimate_is_editable_and_saves_independently(self) -> None:
+        from web import command_console
+        from lnl_toolbox.catalog import load_yaml
+        recipe = 'jocor-cifar10-symmetric05-reproduction'
+        fields = {field['path']: field for field in command_console._config_schema(recipe)['fields']}
+        estimate = fields['algorithm.estimated_noise_rate']
+        self.assertTrue(estimate['editable'])
+        self.assertEqual(estimate['display_group'], 'default')
+        self.assertFalse(fields['selector.keep_rate.end']['visible'])
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            saved = command_console._save_config({
+                'recipe': recipe, 'path': str(Path(directory) / 'jocor.yaml'),
+                'patches': [{'path': 'algorithm.estimated_noise_rate', 'value': 0.2}],
+                'acknowledge_paper_impact': True,
+            })
+            config = load_yaml(command_console.ROOT / saved['path'])
+            self.assertEqual(config['noise']['rate'], 0.5)
+            self.assertEqual(config['selector']['keep_rate']['end'], 0.8)
+
 
     def test_official_model_shape(self) -> None:
         model = CifarSixConvNet(10)

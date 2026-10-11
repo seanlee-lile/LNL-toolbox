@@ -88,6 +88,8 @@
   let loadingTimer = null;
   let renderedStep = null;
   let reviewToken = 0;
+  let methodsToken = 0;
+  let planToken = 0;
 
   function esc(value) {
     return String(value == null ? "" : value).replace(/[&<>"']/g, function (char) {
@@ -351,7 +353,9 @@
       });
     });
     if (needsPrior && !needsNoiseSelection) {
-      fields.unshift('<label>方法噪声率<input class="qs-required-input" data-input-key="noise_rate_prior" type="number" min="0" max="1" step="0.01" value="' + esc(state.methodInputs.noise_rate_prior || "") + '"></label>');
+      const priorLabel = state.selectedPaperId === "jocor" ? "estimated_noise_rate" : "方法噪声率";
+      const priorNote = state.selectedPaperId === "jocor" ? '<small>原生带噪数据的噪声率未知，请填写估计值。此值只用于样本筛选，不会给数据加噪。</small>' : '';
+      fields.unshift('<label>' + priorLabel + '<input class="qs-required-input" data-input-key="noise_rate_prior" type="number" min="0" max="1" step="0.01" value="' + esc(state.methodInputs.noise_rate_prior ?? "") + '">' + priorNote + '</label>');
     }
     const inputs = fields.length ? '<div class="qs-feedback qs-warning"><strong>补充方法输入</strong><div class="qs-required-inputs">' + fields.join("") + '</div><button type="button" id="qs-apply-inputs" class="secondary">应用并重新检查</button></div>' : "";
     const noisePrompt = needsNoiseSelection ? '<div class="qs-feedback qs-warning">' + (needsClassDependentNoise ? '当前实现需要类别相关噪声。' : '当前配置需要带噪训练标签。') + '<button type="button" id="qs-back-to-noise" class="secondary">返回第 2 步设置标签噪声</button></div>' : "";
@@ -950,17 +954,19 @@
     }
   }
   function loadPlanSchema(plan) {
+    const signature = planRequestSignature();
+    const current = function () { return state.plan?.plan_id === plan.plan_id && state.selectedPaperId === plan.paper_id && signature === planRequestSignature(); };
     const selected = state.methods.find(function (item) { return item.paper_id === plan.paper_id; });
     const source = plan.recipe_id ? "recipe=" + encodeURIComponent(plan.recipe_id)
       : plan.generated_config_path ? "path=" + encodeURIComponent(plan.generated_config_path) + "&recipe_hint=" + encodeURIComponent(selected?.recipe_id || "") : "";
     if (!source) return Promise.resolve();
     return request("/api/config-schema?" + source, undefined, "正在读取参数…").then(function (schema) {
-      if (state.plan?.plan_id !== plan.plan_id) return;
+      if (!current()) return;
       state.planSchema = schema;
       state.parameterError = "";
       render();
     }).catch(function (error) {
-      if (state.plan?.plan_id !== plan.plan_id) return;
+      if (!current()) return;
       state.parameterError = String(error.message || error);
       render();
     });
@@ -1178,14 +1184,26 @@
   }
   function loadMethods() {
     if (!state.dataset || !state.noiseSelection) return Promise.resolve();
-    return post("/api/quick-start/methods", {dataset:state.dataset.alias, noise:state.noiseSelection}, "正在匹配论文方法…").then(function (payload) { state.methods = payload.methods || []; render(); }).catch(function (error) { state.error = String(error.message || error); render(); });
+    const token = ++methodsToken;
+    const signature = JSON.stringify([state.dataset.alias, state.noiseSelection]);
+    const current = function () { return token === methodsToken && signature === JSON.stringify([state.dataset?.alias, state.noiseSelection]); };
+    return post("/api/quick-start/methods", {dataset:state.dataset.alias, noise:state.noiseSelection}, "正在匹配论文方法…").then(function (payload) { if (!current()) return; state.methods = payload.methods || []; render(); }).catch(function (error) { if (!current()) return; state.error = String(error.message || error); render(); });
+  }
+  function planRequestSignature() {
+    return JSON.stringify([state.dataset?.alias, state.selectedPaperId, state.noiseSelection, state.methodInputs]);
   }
   function buildPlan(options) {
     if (!state.dataset || !state.selectedPaperId) return;
+    const token = ++planToken;
+    const signature = planRequestSignature();
+    const current = function () { return token === planToken && signature === planRequestSignature(); };
     const navigate = options?.navigate !== false;
     const userInputs = {};
     Object.keys(state.methodInputs).forEach(function (key) { const raw = state.methodInputs[key]; if (raw === "") return; try { userInputs[key] = JSON.parse(raw); } catch (_error) { userInputs[key] = raw; } });
-    post("/api/quick-start/plan", {dataset:state.dataset.alias, paper_id:state.selectedPaperId, noise:state.noiseSelection, user_inputs:userInputs}, "正在核对…").then(function (payload) { state.plan = payload; state.planSchema = null; state.parameterDraft = {}; state.segmentedPaths = {}; state.scheduleStash = {}; state.parameterError = ""; const index = quickStartStepIndex("plan"); if (navigate && index >= 0) state.currentStep = index; render(); return loadPlanSchema(payload); }).catch(function (error) { state.error = String(error.message || error); render(); });
+    state.plan = null;
+    state.planSchema = null;
+    state.review = null;
+    return post("/api/quick-start/plan", {dataset:state.dataset.alias, paper_id:state.selectedPaperId, noise:state.noiseSelection, user_inputs:userInputs}, "正在核对…").then(function (payload) { if (!current()) return; state.plan = payload; state.planSchema = null; state.parameterDraft = {}; state.segmentedPaths = {}; state.scheduleStash = {}; state.parameterError = ""; const index = quickStartStepIndex("plan"); if (navigate && index >= 0) state.currentStep = index; render(); return loadPlanSchema(payload); }).catch(function (error) { if (!current()) return; state.error = String(error.message || error); render(); });
   }
   function recheckSelectedPaper(options) {
     if (!state.selectedPaperId || state.error) return;

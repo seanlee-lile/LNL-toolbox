@@ -49,17 +49,16 @@ belong in the run directory and must not be committed.
 - two independently initialized PreActResNet-18 peers with base width 64;
 - SGD at learning rate 0.02, momentum 0.9, and weight decay 5e-4;
 - minibatch size 128;
-- 10 warmup epochs and 300 main-stage epochs;
+- 10 warmup epochs and 290 main-stage epochs (300 total);
 - a MultiStep scheduler with milestone 150 and gamma 0.1;
 - two augmentations, sharpening temperature 0.5, MixUp alpha 4;
 - clean-probability threshold 0.5, lambda-u 25, and lambda-r 1.
 
 The public `--epochs N` option changes only
 `dividemix.training.epochs`. It never changes the 10-epoch warmup budget.
-Consequently, the stored formal profile represents 10 warmup plus 300 main
-epochs: 310 Toolbox lifecycle epochs. The paper describes a 300-epoch budget;
-this separate-stage representation is an explicit engineering lifecycle
-difference and must not be hidden.
+Consequently, the stored formal profile represents 10 warmup plus 290 main
+epochs: 300 Toolbox lifecycle epochs, matching the paper's total training
+budget. A main-stage override does not change the warmup budget.
 
 The current runner steps both schedulers after every warmup epoch and every
 main epoch. Therefore milestone 150 is a global scheduler-step milestone: with
@@ -136,7 +135,7 @@ epoch boundaries; mid-minibatch exact resume is not claimed.
 
 The repository may claim a tested, user-ready DivideMix method workflow after
 the full-data GPU transition sanity passes. It must not claim paper-exact
-architecture, main-table noise generation, 300-total-epoch semantics, reported
+architecture, main-table noise generation, reported
 accuracy reproduction, or multi-seed statistics without separate evidence.
 
 ## Sources

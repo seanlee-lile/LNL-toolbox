@@ -297,6 +297,11 @@ class QuickStartService:
                     dataset_profile=profile_data,
                     noise_selection=noise_selection,
                     data_service=dataset_service,
+                    method_inputs=(
+                        {"noise_rate_prior": capabilities.noise_rate.value}
+                        if noise_selection.kind == "native" and capabilities.noise_rate.value is not None
+                        else None
+                    ),
                 )
                 prepared.append((paper, template, candidate, None, None))
                 compatibility_configs[paper.id] = candidate
@@ -348,10 +353,18 @@ class QuickStartService:
                     "toolbox_adapted", candidate, (),
                 ))
                 continue
+            status = self._status(result)
+            reasons = tuple(item.message for item in result.reasons)
+            if status == "ready":
+                try:
+                    self.experiment_service.preflight(candidate, check_data=False)
+                except Exception as exc:
+                    status = "unsupported"
+                    reasons = (*reasons, str(exc))
             options.append(QuickStartMethodOption(
                 paper.id, paper.acronym, paper.title, paper.summary, paper.venue, paper.year,
-                self._status(result),
-                tuple(item.message for item in result.reasons),
+                status,
+                reasons,
                 tuple(result.required_user_inputs),
                 template.recipe_id,
                 "paper_reproduction" if find_exact_reproduction(
@@ -445,7 +458,12 @@ class QuickStartService:
             dataset_profile=profile_data,
             noise_selection=noise_selection,
             data_service=self.data_service,
-            method_inputs=user_inputs,
+            method_inputs={
+                **({"noise_rate_prior": capabilities.noise_rate.value}
+                   if noise_selection.kind == "native" and capabilities.noise_rate.value is not None
+                   else {}),
+                **dict(user_inputs or {}),
+            },
         )
         result = self.experiment_service.list_config_compatibility(
             dataset_alias, {paper.id: candidate},

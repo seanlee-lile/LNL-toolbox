@@ -999,7 +999,26 @@ def _prepare_experiment_data(
             # reuse integer positions, so their targets must never enter this map.
             dataset_targets = source_clean
             noise_name = str(noise_config.get("name", "clean")).lower()
-            if noise_name == "pdl":
+            if (noise_name in {"", "clean", "none", "native", "real_world"}
+                    and not noise_config.get("manifest")):
+                # Some methods need an indexed label record even without
+                # corruption. Preserve the source labels rather than generating
+                # artificial noise to satisfy that contract.
+                manifest = NoiseManifest(
+                    train.dataset, "clean", int(config.get("seed", seed)), 0.0,
+                    manifest_clean, manifest_clean.copy(),
+                    metadata={"source": "clean"},
+                    global_indices=manifest_indices, num_classes=train.num_classes,
+                )
+                manifest_path = run_dir / "noise_manifest.npz"
+                if manifest_path.is_file():
+                    stored = NoiseManifest.load(manifest_path)
+                    if stored.mapping_hash != manifest.mapping_hash or stored.seed != manifest.seed:
+                        raise ValueError("existing clean label manifest does not match configured data")
+                    manifest = stored
+                else:
+                    manifest.save(manifest_path)
+            elif noise_name == "pdl":
                 from lnl_toolbox.noise import generate_pdl_idn
                 source_lookup = {int(index): position for position, index in enumerate(train.global_indices)}
                 positions = np.asarray([source_lookup[int(index)] for index in manifest_indices], dtype=np.int64)

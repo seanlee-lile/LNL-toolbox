@@ -1336,7 +1336,9 @@ def _parameter_presentation(path: str, method: str = "") -> tuple[str, str]:
     # the ordinary Web parameter editor.
     if path.startswith("trusted_validation."):
         return "hidden", ""
-    if path == "data.validation_split.source":
+    if method == "jocor" and path == "selector.keep_rate.end":
+        return "hidden", ""
+    if path in {"data.validation_split.source", "evaluation.selection_split"}:
         return "hidden", ""
     # These caps only shrink a run for smoke/debugging.  A method's common
     # controls must not promote them into paper-facing parameters.
@@ -1479,7 +1481,12 @@ def _formal_registry_config(method: str) -> tuple[str, dict[str, Any]] | None:
         recipe_path = _registry_recipe_paths()[str(recipe_id)]
     except KeyError as exc:
         raise ValueError(f"registry formal recipe 不存在：{recipe_id}") from exc
-    return str(recipe_id), load_yaml(recipe_path)
+    config = load_yaml(recipe_path)
+    if method == "jocor":
+        from lnl_toolbox.core.config_schema import normalize_experiment_config
+
+        config = normalize_experiment_config(config)
+    return str(recipe_id), config
 
 
 def _research_parameter_category(
@@ -1539,6 +1546,7 @@ def _parameter_display_group(field: dict[str, object], method: str) -> str:
         "trainer.max_steps", "noise.path", "dld.feature_extractor.source",
         "pipeline.weight_provider.artifact_path", "posterior_stage.rate_estimator",
         "selector.keep_rate.start", "selector.keep_rate.end",
+        "algorithm.estimated_noise_rate",
     }:
         return "default"
     if path == "model.name" or path.endswith(".model.name"):
@@ -1778,6 +1786,8 @@ def _parameter_base_note(path: str, original: str) -> str:
 
 
 def _parameter_ui_spec(path: str) -> list[str] | None:
+    if path == "algorithm.estimated_noise_rate":
+        return ["algorithm.estimated_noise_rate", "预计训练标签中错误标签的比例，用于确定样本筛选的最终保留比例（1−此值）。人工加噪时自动使用所设噪声率；干净数据为 0；原生带噪且噪声率未知时需要填写。修改此值不会改变标签或加噪率。"]
     ui = _parameter_registry().get("parameter_ui", {})
     exact = ui.get("fields", {}).get(path)
     if exact:
@@ -1948,6 +1958,10 @@ def _parameter_user_label(path: str, method: str) -> str:
 def _registry_config_fields(
     config: dict[str, Any], method: str, *, allow_missing: bool = False
 ) -> tuple[list[dict[str, object]], dict[str, object]] | None:
+    if method == "jocor":
+        from lnl_toolbox.core.config_schema import normalize_experiment_config
+
+        config = normalize_experiment_config(config)
     registry = _parameter_registry()
     method_metadata = registry["methods"].get(method)
     if not isinstance(method_metadata, dict):
@@ -2127,6 +2141,10 @@ def _config_schema(
         payload["config"], payload["recipe"] or recipe_hint or payload["method"]
     )
     formal_recipe = _parameter_registry()["formal_recipe_bindings"].get(method, "")
+    if method == "jocor":
+        from lnl_toolbox.core.config_schema import normalize_experiment_config
+
+        payload["config"] = normalize_experiment_config(payload["config"])
     strict_registry = bool(payload["recipe"] and payload["recipe"] == formal_recipe)
     registry_fields = _registry_config_fields(
         payload["config"], method, allow_missing=not strict_registry
@@ -2437,6 +2455,10 @@ def _parameter_edit_rule(
 
 
 def _synchronize_web_derived_parameters(config: dict[str, Any], method: str) -> None:
+    if method == "jocor":
+        from lnl_toolbox.core.config_schema import normalize_experiment_config
+
+        config.update(normalize_experiment_config(config))
     derived = _parameter_registry().get("runtime_derived_parameter_paths", {})
     for path in derived.get(method, ()):
         _, _, expected = _parameter_edit_rule(config, method, path, "advanced")
@@ -2606,6 +2628,10 @@ def _assert_locked_parameters_unchanged(
 def _paper_parameter_changes(
     config: dict[str, Any], method: str
 ) -> tuple[str, list[dict[str, object]]]:
+    if method == "jocor":
+        from lnl_toolbox.core.config_schema import normalize_experiment_config
+
+        config = normalize_experiment_config(config)
     formal = _formal_registry_config(method)
     if formal is None:
         return "", []

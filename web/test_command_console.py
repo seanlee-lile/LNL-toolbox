@@ -17,6 +17,33 @@ import command_console  # noqa: E402
 
 
 class CommandConsoleTest(unittest.TestCase):
+    def test_selection_split_is_hidden_for_all_papers_without_hiding_split_counts(self):
+        from lnl_toolbox.catalog import load_recipe_config, recipe_by_id
+
+        bindings = command_console._parameter_registry()["formal_recipe_bindings"]
+        self.assertEqual(len(bindings), 26)
+        split_paths = {
+            "data.validation_size", "data.num_val", "data.num_clean",
+            "warmup.noisy_validation_size",
+        }
+        for method, recipe_id in bindings.items():
+            with self.subTest(method=method):
+                original = load_recipe_config(recipe_by_id(recipe_id))
+                schema = command_console._config_schema(recipe_id)
+                self.assertEqual(
+                    command_console._parameter_presentation("evaluation.selection_split", method)[0],
+                    "hidden",
+                )
+                for field in schema["fields"]:
+                    if field["path"] == "evaluation.selection_split":
+                        self.assertFalse(field["visible"])
+                        self.assertEqual(field["value"], original["evaluation"]["selection_split"])
+                    elif field["path"] in split_paths:
+                        self.assertTrue(field["visible"], field["path"])
+                        self.assertTrue(field["editable"], field["path"])
+                        self.assertEqual(field["kind"], "number")
+                self.assertEqual(load_recipe_config(recipe_by_id(recipe_id)), original)
+
     def test_every_paper_and_registered_variant_has_readable_parameter_controls(self):
         from lnl_toolbox.catalog import discover_recipes
 
@@ -1424,7 +1451,7 @@ class CommandConsoleTest(unittest.TestCase):
             ):
                 for path in display_policy[presentation_key][schema["method"]]:
                     self.assertIn(path, fields, (paper.id, path))
-                    presentation = "hidden" if path.startswith("trusted_validation.") or path != "seed" and path.rsplit(".", 1)[-1].endswith("seed") and not path.endswith("peer_seed_offset") else expected_presentation
+                    presentation = "hidden" if path in {"data.validation_split.source", "evaluation.selection_split"} or path.startswith("trusted_validation.") or path != "seed" and path.rsplit(".", 1)[-1].endswith("seed") and not path.endswith("peer_seed_offset") else expected_presentation
                     self.assertEqual(fields[path]["presentation"], presentation, (paper.id, path))
             selected = (set(default_paths["common"]) | set(default_paths["methods"][schema["method"]])) - set(default_paths.get("exclude", {}).get(schema["method"], ()))
             self.assertTrue(set(default_paths["methods"][schema["method"]]) <= set(fields), paper.id)
@@ -1550,11 +1577,18 @@ class CommandConsoleTest(unittest.TestCase):
         bindings = command_console._parameter_registry()["formal_recipe_bindings"]
         split_paths = {"data.validation_size", "data.num_val", "data.num_clean", "warmup.noisy_validation_size"}
         for method, recipe in bindings.items():
+            original = command_console._config_payload(recipe)["config"]
+            total = command_console.reference_train_size(original)
             for field in command_console._config_schema(recipe)["fields"]:
                 if field["path"] in split_paths and field["visible"]:
                     self.assertEqual(field["display_group"], "default", (method, field["path"]))
-                    if method != "importance_reweighting":
-                        self.assertIn("split_reference", field, (method, field["path"]))
+                    source = original
+                    for key in field["path"].split("."):
+                        source = source.get(key) if isinstance(source, dict) else None
+                    if total and isinstance(source, int) and not isinstance(source, bool):
+                        self.assertEqual(field["split_reference"], {"count": source, "total": total})
+                    else:
+                        self.assertNotIn("split_reference", field, (method, field["path"]))
         l2rw = {field["path"]: field for field in command_console._config_schema(bindings["l2rw"])["fields"]}
         self.assertEqual(l2rw["data.num_val"]["split_reference"], {"count": 5000, "total": 50000})
 

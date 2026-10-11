@@ -778,6 +778,36 @@ class _pcse_workflow__GenericTabularAdapter:
 # --- merged from test_pcse_workflow.py ---
 class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
 
+    def test_clean_training_keeps_labels_and_records_zero_corruption(self) -> None:
+        from lnl_toolbox.noise.manifest import NoiseManifest
+
+        try:
+            DATASETS.get(_pcse_workflow__GenericTabularAdapter.name)
+        except ValueError:
+            DATASETS.add(_pcse_workflow__GenericTabularAdapter())
+        config = _pcse_workflow__load_smoke_config()
+        config['data'] = {
+            'name': _pcse_workflow__GenericTabularAdapter.name,
+            'root': 'unused', 'num_classes': 3, 'validation_size': 30,
+        }
+        config['noise'] = {'name': 'clean', 'validation_targets': 'noisy'}
+        config['pretraining_stage']['epochs'] = 1
+        config['ensemble_stage']['epochs'] = 1
+        with tempfile.TemporaryDirectory() as directory:
+            def run_first_real_stage(algorithm: PCSEAlgorithm) -> None:
+                algorithm.train_pretraining(max_epochs=1)
+
+            with mock.patch.object(PCSEAlgorithm, 'run', autospec=True,
+                                   side_effect=run_first_real_stage):
+                run_dir = run_pcse_experiment(config, output_dir=Path(directory) / 'run')
+            manifest = NoiseManifest.load(run_dir / 'noise_manifest.npz')
+            np.testing.assert_array_equal(manifest.clean_targets, manifest.noisy_targets)
+            self.assertEqual(manifest.noise_type, 'clean')
+            self.assertEqual(manifest.requested_rate, 0.0)
+            checkpoint = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
+            self.assertEqual(checkpoint['noise']['mode'], 'clean')
+            self.assertEqual(checkpoint['pcse_state']['pretraining_completed_epochs'], 1)
+
     def test_train_mode_runs_with_a_generic_registered_tabular_adapter(self) -> None:
         try:
             DATASETS.get(_pcse_workflow__GenericTabularAdapter.name)

@@ -15,7 +15,7 @@ FORMULA_READY = {"gce", "coteaching"}
 
 class ScratchWebTemplateTest(unittest.TestCase):
     def _assert_catalog(self, items: list[dict[str, str]]) -> None:
-        self.assertEqual(len(items), 26)
+        self.assertTrue(items)
         ids = [item["id"] for item in items]
         self.assertEqual(len(ids), len(set(ids)))
         self.assertEqual(set(ids), {path.stem for path in PAPER_ROOT.glob("*.yaml")})

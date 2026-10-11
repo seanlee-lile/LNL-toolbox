@@ -146,6 +146,37 @@ def normalize_experiment_config(config: Mapping[str, Any]) -> dict[str, Any]:
             trainer.setdefault("epochs", value.pop("epochs"))
         value["trainer"] = trainer
 
+    algorithm = value.get("algorithm", {})
+    if isinstance(algorithm, Mapping) and algorithm.get("name") == "jocor":
+        algorithm = dict(algorithm)
+        selector = deepcopy(dict(value.get("selector", {})))
+        keep_rate = dict(selector.get("keep_rate", {}))
+        # Legacy recipes already encode the paper's prior as the final
+        # retained fraction. Preserve that fraction when adding the new input.
+        if "estimated_noise_rate" in algorithm:
+            estimate = algorithm["estimated_noise_rate"]
+        else:
+            try:
+                estimate = 1.0 - float(keep_rate.get("end", 1.0))
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    "invalid config for selector.keep_rate.end, expected number in [0, 1]"
+                ) from error
+        try:
+            if isinstance(estimate, bool):
+                raise ValueError("boolean is not a noise rate")
+            estimate = float(estimate)
+            if not 0.0 <= estimate <= 1.0:
+                raise ValueError("noise rate is outside [0, 1]")
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "invalid config for algorithm.estimated_noise_rate, expected number in [0, 1]"
+            ) from error
+        algorithm["estimated_noise_rate"] = estimate
+        keep_rate["end"] = 1.0 - estimate
+        selector["keep_rate"] = keep_rate
+        value["algorithm"] = algorithm
+        value["selector"] = selector
     validate_experiment_config(value)
     return synchronize_experiment_seed(value)
 

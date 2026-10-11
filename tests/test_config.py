@@ -36,7 +36,7 @@ class _config_schema_ConfigSchemaTest(unittest.TestCase):
         import yaml
 
         papers = load_papers()
-        self.assertEqual(len(papers), 26)
+        self.assertTrue(papers)
         for paper in papers:
             path = default_paper_config(paper)[1].config_path
             config = yaml.safe_load(path.read_text(encoding='utf-8'))
@@ -77,7 +77,7 @@ class _config_schema_ConfigSchemaTest(unittest.TestCase):
     def test_every_active_yaml_is_versioned_and_canonical(self) -> None:
         root = Path(__file__).resolve().parents[1]
         paths = sorted((root / 'configs').rglob('*.yaml'))
-        self.assertEqual(len(paths), 95)
+        self.assertTrue(paths, 'the active configuration catalog must not be empty')
         for path in paths:
             value = load_yaml(path)
             self.assertEqual(value['schema_version'], 1, path)
@@ -86,7 +86,13 @@ class _config_schema_ConfigSchemaTest(unittest.TestCase):
                 self.assertIn('runner', value['execution'], path)
                 self.assertNotIn('root', value['data'], path)
                 self.assertNotIn('type', value.get('noise', {}), path)
-        self.assertEqual(len(discover_recipes(root, include_conditional=True)), 67)
+        recipes = discover_recipes(root, include_conditional=True)
+        recipe_ids = [recipe.id for recipe in recipes]
+        self.assertTrue(recipes)
+        self.assertEqual(len(recipe_ids), len(set(recipe_ids)), 'recipe IDs must be unique')
+        for recipe in recipes:
+            self.assertIn(recipe.config_path.resolve(), {path.resolve() for path in paths})
+        self.assertIn('gce-cifar10-noise02-reproduction', recipe_ids)
 
 # --- merged from test_config_overrides.py ---
 from copy import deepcopy

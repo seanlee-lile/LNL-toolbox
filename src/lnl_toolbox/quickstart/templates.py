@@ -251,7 +251,14 @@ def adapt_method_template(
             and original_noise.get("rho_negative") != noise_selection.rho_negative)
     )
     if noise_selection.kind in {"clean", "native"} or selected_noise_name in {"clean", "native"}:
-        candidate.pop("noise", None)
+        # Label selection is independent of artificial corruption. Keep the
+        # paper's validation target contract, but discard generation inputs and
+        # external manifests belonging to the template's original dataset.
+        candidate["noise"] = {}
+        if noise_selection.kind == "clean" or selected_noise_name == "clean":
+            candidate["noise"]["name"] = "clean"
+        if "validation_targets" in original_noise:
+            candidate["noise"]["validation_targets"] = original_noise["validation_targets"]
     else:
         noise = build_noise_config(
             noise_selection.key,
@@ -286,12 +293,17 @@ def adapt_method_template(
         )
     if requirements is not None:
         if requirements.requires_method_noise_prior:
-            prior = inputs.get("noise_rate_prior", noise_selection.rate)
+            known_rate = 0.0 if noise_selection.kind == "clean" else noise_selection.rate
+            prior = inputs.get("noise_rate_prior", known_rate)
             for path in requirements.method_noise_prior_paths:
                 if prior is None:
                     _unset(candidate, path)
                 else:
                     _set(candidate, path, float(prior))
+            if prior is not None and requirements.method in {"coteaching", "cnlcu"}:
+                # Their keep-rate endpoint is defined by the supplied prior;
+                # retaining the old paper endpoint makes an adapted run invalid.
+                _set(candidate, (requirements.method, "remember_schedule", "end"), 1.0 - float(prior))
         binary_rates = _binary_flip_rates(noise_selection, num_classes)
         transition = _synthetic_transition_matrix(noise_selection, num_classes)
         for requirement in requirements.required_config_inputs:

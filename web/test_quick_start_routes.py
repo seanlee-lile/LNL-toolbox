@@ -69,7 +69,7 @@ class QuickStartRouteTests(unittest.TestCase):
         self.assertNotIn('id="qs-show-full-flow"', script)
         self.assertIn('renderPlanParameters()', script)
         self.assertIn('state.planSchema = null', script)
-        self.assertIn("return loadRegistered().then(function () { render(); return loadNoise(); });", script)
+        self.assertIn("showCompatibilityGuide:", script)
 
 
 if __name__ == "__main__":
