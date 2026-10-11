@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import threading
+from types import SimpleNamespace
 import time
 import unittest
 from pathlib import Path
@@ -688,7 +689,11 @@ class CommandConsoleTest(unittest.TestCase):
 
     def test_windows_picker_returns_selection_or_cancellation(self):
         completed = mock.Mock(returncode=0, stdout="F:\\runs", stderr="")
-        with mock.patch.object(command_console.os, "name", "nt"), mock.patch.object(
+        with mock.patch.object(
+            command_console,
+            "os",
+            SimpleNamespace(name="nt", environ=os.environ),
+        ), mock.patch.object(
             command_console.subprocess, "run", return_value=completed
         ) as run:
             result = command_console._picker_payload(
@@ -700,7 +705,11 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["env"]["LNL_PICKER_INITIAL"], str(command_console.ROOT))
 
         completed.stdout = ""
-        with mock.patch.object(command_console.os, "name", "nt"), mock.patch.object(
+        with mock.patch.object(
+            command_console,
+            "os",
+            SimpleNamespace(name="nt", environ=os.environ),
+        ), mock.patch.object(
             command_console.subprocess, "run", return_value=completed
         ):
             self.assertEqual(
@@ -710,7 +719,11 @@ class CommandConsoleTest(unittest.TestCase):
 
     def test_windows_picker_uses_disposable_foreground_owner_for_every_mode(self):
         completed = mock.Mock(returncode=0, stdout="", stderr="")
-        with mock.patch.object(command_console.os, "name", "nt"), mock.patch.object(
+        with mock.patch.object(
+            command_console,
+            "os",
+            SimpleNamespace(name="nt", environ=os.environ),
+        ), mock.patch.object(
             command_console.subprocess, "run", return_value=completed
         ) as run:
             for mode in ("folder", "open_file", "save_file"):
@@ -734,7 +747,11 @@ class CommandConsoleTest(unittest.TestCase):
 
     def test_windows_picker_falls_back_to_root_for_relative_output_path(self):
         completed = mock.Mock(returncode=0, stdout="", stderr="")
-        with mock.patch.object(command_console.os, "name", "nt"), mock.patch.object(
+        with mock.patch.object(
+            command_console,
+            "os",
+            SimpleNamespace(name="nt", environ=os.environ),
+        ), mock.patch.object(
             command_console.subprocess, "run", return_value=completed
         ) as run:
             command_console._picker_payload(
