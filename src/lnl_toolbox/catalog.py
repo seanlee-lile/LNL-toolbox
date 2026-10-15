@@ -694,6 +694,8 @@ def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
         "dividemix.mixmatch.temperature": "positive",
         "dld.diffusion.ema.decay": "decay",
         "lend.dilution.alpha": "open_probability",
+        "lend.dilution.tolerance": "positive",
+        "lend.dilution.max_steps": "positive_integer",
         "lend.graph.gamma": "positive",
         "lend.history.beta": "probability",
         "pipeline.objective_consumer.alpha": "open_probability",
@@ -721,9 +723,9 @@ def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
         "evaluation.selection_split": "validation test",
         "evaluation.primary": "accuracy ensemble_accuracy mean_peer_accuracy",
         "lend.graph.metric": "inner_product cosine euclidean",
+        "lend.dilution.policy": "fixed_steps until_converged",
         "mc_ldce.feature_mode": "joint", "mc_ldce.transition_model": "separate",
-        "model.initialization": "kaiming torch_default",
-        "model.variant": "standard dss_author",
+        "pipeline.risk_corrector.name": "forward backward",
         "noise.mode": "generated external clean",
         "noise.name": "symmetric pairflip class_conditional binary_asymmetric_rcn asymmetric_rcn external_torch official_uniform_flip pdl clean none native real_world",
         "noise.sampling": "global per_class transition",
@@ -771,7 +773,7 @@ def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
     if method == "cwd":
         enums["optimizer.name"] = "adam"
         enums["model.name"] = "resnet34 cifar_resnet34 tiny_cnn feature_mlp"
-    model_names = "tiny_cnn cifar_cnn8 cnlcu_cnn9 resnet14 resnet32 resnet18 resnet34 resnet50 resnet101 preact_resnet18 mentor_wide_resnet feature_mlp pcse_mlp mlp linear cifar_six_conv cifar_resnet34 fine_seven_cnn ca2c_seven_cnn mc_ldce_cnn l2rw_resnet32 torchvision_resnet34"
+    model_names = "tiny_cnn cnn8 cnn9 resnet14 resnet32 resnet18 resnet34 resnet50 resnet101 preact_resnet18 mentor_wide_resnet feature_mlp pcse_mlp mlp linear cifar_six_conv cifar_resnet34 fine_seven_cnn ca2c_seven_cnn mc_ldce_cnn l2rw_resnet32 torchvision_resnet34"
     errors: dict[str, str] = {}
     flat: dict[str, Any] = {}
 
@@ -797,6 +799,18 @@ def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
                     choices = "none step multistep"
             elif key == "name" and ("model" in parts or prefix.startswith("models.")):
                 choices = model_names
+            elif key == "initialization" and ("model" in parts or prefix.startswith("models.")):
+                choices = "kaiming torch_default"
+            elif key == "variant" and ("model" in parts or prefix.startswith("models.")):
+                # A variant belongs to its model family, not to one paper or
+                # one nesting depth. Match the actual model factory contracts.
+                model_name = str(value.get("name", "preact_resnet18")).lower()
+                choices = {
+                    "resnet32": "standard loss_correction",
+                    "preact_resnet18": "standard dss_author",
+                    "resnet18": "standard imagenet_standard",
+                    "resnet34": "standard imagenet_standard",
+                }.get(model_name, "standard")
             elif key == "name" and "loss" in parts:
                 choices = "ce cross_entropy nce mae gce rce apl nce_rce nce_mae"
             if choices is not None:
@@ -949,7 +963,7 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
             raise ValueError("model configuration must be a mapping")
         model_name = str(model.get("name", "preact_resnet18")).lower()
         supported_models = {
-            "tiny_cnn", "cifar_cnn8", "resnet14", "resnet32", "resnet18", "resnet34",
+            "tiny_cnn", "cnn8", "resnet14", "resnet32", "resnet18", "resnet34",
             "resnet50", "resnet101", "mentor_wide_resnet", "preact_resnet18"
         }
         if model_name not in supported_models:

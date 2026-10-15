@@ -44,10 +44,10 @@ transition_stage:
   scheduler:
     name: none
   parameterization:
-    name: diagonal_dominant
-    initial_flip_mass: 0.05
-    max_flip_mass: 0.49
-    temperature: 1.0
+    name: sigmoid_off_diagonal
+    # Preserve the initial matrix: diagonal 0.95, off-diagonals 0.025.
+    # sigmoid(initial_weight) = 0.05 / ((1 - 0.05) * (3 - 1)).
+    initial_weight: -3.6109179126442243
     seed: 37
   determinant_tolerance: 1.0e-06
   condition_limit: 1000000.0

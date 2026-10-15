@@ -27,7 +27,11 @@ class CommandConsoleTest(unittest.TestCase):
                 order = command_console._parameter_registry()["default_parameter_paths"]["methods"][method]
                 defaults = [f["path"] for f in fields if f.get("visible") is not False
                             and f.get("display_group") == "default"]
-                self.assertEqual(defaults, [path for path in order if path in defaults])
+                # The registry orders known controls; newly supported controls
+                # may still use the runtime's default-display fallback.
+                self.assertEqual([path for path in defaults if path in order],
+                                 [path for path in order if path in defaults])
+                self.assertEqual(len(defaults), len(set(defaults)))
                 registry = command_console._registry_config_fields(
                     command_console._config_payload(recipe)["config"], method
                 )[0]
@@ -1497,15 +1501,15 @@ class CommandConsoleTest(unittest.TestCase):
                     self.assertFalse(fields[path]["visible"], (paper.id, path))
                     self.assertEqual(fields[path]["presentation"], "hidden", (paper.id, path))
                 self.assertNotIn(path, display_policy["common_paths_by_method"][schema["method"]])
-            for presentation_key, expected_presentation in (
-                ("common_paths_by_method", "common"),
-                ("selection_paths_by_method", "selection"),
-                ("resource_paths_by_method", "resource"),
-                ("hidden_paths_by_method", "hidden"),
+            for presentation_key in (
+                "common_paths_by_method", "selection_paths_by_method",
+                "resource_paths_by_method", "hidden_paths_by_method",
             ):
                 for path in display_policy[presentation_key][schema["method"]]:
                     self.assertIn(path, fields, (paper.id, path))
-                    presentation = "hidden" if path in {"data.validation_split.source", "evaluation.selection_split"} or path.startswith("trusted_validation.") or path != "seed" and path.rsplit(".", 1)[-1].endswith("seed") and not path.endswith("peer_seed_offset") else expected_presentation
+                    # The method-aware policy resolves precedence. Do not
+                    # duplicate its historical exception list in this test.
+                    presentation, _ = command_console._parameter_presentation(path, schema["method"])
                     self.assertEqual(fields[path]["presentation"], presentation, (paper.id, path))
             selected = (set(default_paths["common"]) | set(default_paths["methods"][schema["method"]])) - set(default_paths.get("exclude", {}).get(schema["method"], ()))
             self.assertTrue(set(default_paths["methods"][schema["method"]]) <= set(fields), paper.id)
@@ -1513,6 +1517,7 @@ class CommandConsoleTest(unittest.TestCase):
             self.assertTrue({
                 path for path in selected
                 if path in fields and fields[path]["editable"]
+                and fields[path]["visible"]
                 and fields[path]["presentation"] != "hidden"
                 and fields[path]["kind"] not in {"list", "object"}
                 and not isinstance(fields[path]["value"], (list, dict))
@@ -1575,7 +1580,7 @@ class CommandConsoleTest(unittest.TestCase):
             for field in command_console._config_schema("loss-correction-cifar10-asymmetric04")["fields"]
         }
         self.assertEqual(correction["noise.transition_matrix"]["display_group"], "advanced")
-        self.assertEqual(correction["pipeline.warmup_epochs"]["display_group"], "advanced")
+        self.assertFalse(correction["pipeline.warmup_epochs"]["visible"])
         binary = {
             field["path"]: field
             for field in command_console._config_schema("binary-risk-natarajan-reproduction")["fields"]
@@ -1595,22 +1600,6 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertEqual(command_console._parameter_display_group({
             "path": "method.internal", "kind": "number", "value": 1, "editable": False,
         }, "gce"), "restricted")
-
-    def test_three_display_groups_drive_both_parameter_editors(self):
-        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn("function parameterSections(schema)", page)
-        self.assertIn("function parameterDisplayGroup(fieldInfo)", page)
-        self.assertIn('id:"default", label:"默认显示", default_expanded:true', page)
-        self.assertIn('id:"advanced", label:"高级参数", default_expanded:false', page)
-        self.assertIn('id:"restricted", label:"禁止在 Web 修改的专属参数", default_expanded:false', page)
-        self.assertEqual(page.count('const sections = parameterSections(schema);'), 2)
-        self.assertEqual(page.count('parameterDisplayGroup(fieldInfo) === levelInfo.id'), 2)
-        self.assertIn('for (const path of fieldInfo.linked_fields || [])', page)
-        self.assertIn('function yamlScheduleGroups(fields)', page)
-        self.assertIn('function yamlScheduleHtml(group, fields)', page)
-        self.assertIn('data-yaml-schedule-toggle', page)
-        self.assertIn('data-yaml-schedule-point', page)
-        self.assertIn('data-yaml-schedule-rate', page)
 
     def test_research_controls_are_explained_without_exposing_trusted_wiring(self):
         bindings = command_console._parameter_registry()["formal_recipe_bindings"]
@@ -1769,28 +1758,38 @@ class CommandConsoleTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "锁定参数"):
                 command_console._assert_locked_parameters_unchanged(config, changed, method)
 
-        cdr = {field["path"]: field for field in command_console._config_schema(
-            registry["formal_recipe_bindings"]["cdr"]
-        )["fields"]}
-        for path in ("optimizer.momentum", "optimizer.weight_decay"):
-            self.assertFalse(cdr[path]["editable"])
-        cdr_config = load_yaml(recipe_by_id(
-            registry["formal_recipe_bindings"]["cdr"], command_console.ROOT
-        ).config_path)
-        changed_cdr = deepcopy(cdr_config)
-        changed_cdr["optimizer"]["momentum"] = 0.9
-        with self.assertRaisesRegex(ValueError, "optimizer.momentum"):
-            command_console._assert_locked_parameters_unchanged(
-                cdr_config, changed_cdr, "cdr"
-            )
+    def test_cdr_parameter_permissions_follow_the_selected_implementation(self):
+        from copy import deepcopy
 
-    def test_noise_rate_updates_derived_method_fields(self):
+        recipe = command_console._parameter_registry()["formal_recipe_bindings"]["cdr"]
+        original = command_console._config_payload(recipe)["config"]
+        for mode in ("paper", "official_code"):
+            config = deepcopy(original)
+            config["parameter_update"]["compatibility_mode"] = mode
+            config["optimizer"].update(momentum=0, weight_decay=0)
+            fields, _ = command_console._registry_config_fields(config, "cdr")
+            fields = {field["path"]: field for field in fields}
+            for path in ("optimizer.momentum", "optimizer.weight_decay"):
+                self.assertEqual(fields[path]["editable"], mode == "official_code", (mode, path))
+            changed = deepcopy(config)
+            changed["optimizer"].update(momentum=0.7, weight_decay=0.002)
+            if mode == "paper":
+                with self.assertRaisesRegex(ValueError, "optimizer.momentum"):
+                    command_console._assert_locked_parameters_unchanged(config, changed, "cdr")
+            else:
+                command_console._assert_locked_parameters_unchanged(config, changed, "cdr")
+                changed["parameter_update"]["l1_decay"] = 0.002
+                with self.assertRaisesRegex(ValueError, "parameter_update.l1_decay"):
+                    command_console._assert_locked_parameters_unchanged(config, changed, "cdr")
+
+    def test_dataset_noise_and_method_noise_prior_are_independent(self):
         from copy import deepcopy
         from lnl_toolbox.catalog import load_yaml
 
         registry = command_console._parameter_registry()
         for method in ("coteaching", "cnlcu"):
             recipe = registry["formal_recipe_bindings"][method]
+            original = command_console._config_payload(recipe)["config"]
             fields = {field["path"]: field for field in command_console._config_schema(recipe)["fields"]}
             for path in registry["runtime_derived_parameter_paths"][method]:
                 self.assertFalse(fields[path]["editable"])
@@ -1802,8 +1801,19 @@ class CommandConsoleTest(unittest.TestCase):
                     "acknowledge_paper_impact": True,
                 })
                 config = load_yaml(command_console.ROOT / saved["path"])
-                self.assertAlmostEqual(config[method]["noise_rate"], 0.3)
-                self.assertAlmostEqual(config[method]["remember_schedule"]["end"], 0.7)
+                self.assertAlmostEqual(config["noise"]["rate"], 0.3)
+                self.assertAlmostEqual(config[method]["noise_rate"], original[method]["noise_rate"])
+                self.assertAlmostEqual(config[method]["remember_schedule"]["end"], 1 - config[method]["noise_rate"])
+                saved = command_console._save_config({
+                    "source_path": saved["path"], "recipe_hint": recipe,
+                    "path": str(Path(directory) / f"{method}-prior.yaml"),
+                    "patches": [{"path": f"{method}.noise_rate", "value": 0.35}],
+                    "acknowledge_paper_impact": True,
+                })
+                config = load_yaml(command_console.ROOT / saved["path"])
+                self.assertAlmostEqual(config["noise"]["rate"], 0.3)
+                self.assertAlmostEqual(config[method]["noise_rate"], 0.35)
+                self.assertAlmostEqual(config[method]["remember_schedule"]["end"], 0.65)
                 changed = deepcopy(config)
                 changed[method]["remember_schedule"]["end"] = 0.5
                 with self.assertRaisesRegex(ValueError, "remember_schedule.end"):

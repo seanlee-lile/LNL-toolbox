@@ -31,7 +31,7 @@ from lnl_toolbox.models.cifar_resnet import (
     cifar_resnet101,
     preact_resnet18,
 )
-from lnl_toolbox.models.cifar_cnn import CifarCnn8, CnlcuCnn9
+from lnl_toolbox.models.cifar_cnn import CNN8, CNN9
 from lnl_toolbox.models.tiny_cnn import TinyCNN
 from lnl_toolbox.models.mentor_wide_resnet import MentorWideResNet101
 from lnl_toolbox.plugins.builtin import (
@@ -99,10 +99,10 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
             width_multiplier=float(config.get("width_multiplier", 1.0)),
             weight_decay=float(config.get("weight_decay", 0.0002)),
         )
-    if name == "cifar_cnn8":
-        return CifarCnn8(num_classes)
-    if name == "cnlcu_cnn9":
-        return CnlcuCnn9(
+    if name == "cnn8":
+        return CNN8(num_classes)
+    if name == "cnn9":
+        return CNN9(
             num_classes, batch_norm_momentum=float(config.get("batch_norm_momentum", 0.999))
         )
     if name == "resnet14":

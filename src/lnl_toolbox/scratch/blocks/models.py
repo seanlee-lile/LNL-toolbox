@@ -29,11 +29,11 @@ class _FeatureOutput(NamedTuple):
     features: Any
 
 
-def _cifar_cnn8(num_classes: int):
+def _cnn8(num_classes: int):
     torch, nn = _torch()
     import torch.nn.functional as F
 
-    class CifarCNN8(nn.Module):
+    class CNN8(nn.Module):
         def __init__(self):
             super().__init__()
             channels = (64, 64, 128, 128, 196, 196)
@@ -45,14 +45,13 @@ def _cifar_cnn8(num_classes: int):
                     layers.append(nn.MaxPool2d(2))
                 incoming = outgoing
             self.features = nn.Sequential(*layers)
-            self.classifier = nn.Sequential(nn.Linear(4 * 4 * 196, 256), nn.ReLU(inplace=True), nn.Linear(256, int(num_classes)))
+            self.classifier = nn.Sequential(nn.Linear(4 * 4 * 196, 256), nn.BatchNorm1d(256), nn.ReLU(inplace=True), nn.Linear(256, int(num_classes)))
             for module in self.modules():
                 if isinstance(module, nn.Conv2d):
                     nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
-                    if module.bias is not None: nn.init.zeros_(module.bias)
                 elif isinstance(module, nn.Linear):
-                    nn.init.xavier_uniform_(module.weight); nn.init.zeros_(module.bias)
-                elif isinstance(module, nn.BatchNorm2d):
+                    nn.init.xavier_uniform_(module.weight)
+                elif isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)):
                     nn.init.ones_(module.weight); nn.init.zeros_(module.bias)
 
         def forward_with_features(self, inputs):
@@ -62,31 +61,27 @@ def _cifar_cnn8(num_classes: int):
         def forward(self, inputs):
             return self.forward_with_features(inputs).logits
 
-    return CifarCNN8()
+    return CNN8()
 
 
-def _cnlcu_cnn9(num_classes: int):
+def _cnn9(num_classes: int):
     torch, nn = _torch()
 
-    class CnlcuCNN9(nn.Module):
+    class CNN9(nn.Module):
         def __init__(self):
             super().__init__()
             channels = (128, 128, 128, 256, 256, 256, 512, 256, 128)
             layers = []
             incoming = 3
             for index, outgoing in enumerate(channels):
-                layers.extend((nn.Conv2d(incoming, outgoing, 3, padding=1), nn.LeakyReLU(0.01, inplace=True)))
-                if index in (2, 5): layers.extend((nn.MaxPool2d(2), nn.Dropout(p=0.25)))
+                layers.extend((nn.Conv2d(incoming, outgoing, 3, padding=1 if index < 6 else 0),
+                               nn.BatchNorm2d(outgoing, momentum=0.999),
+                               nn.LeakyReLU(0.01, inplace=True)))
+                if index in (2, 5): layers.extend((nn.MaxPool2d(2), nn.Dropout2d(p=0.25)))
                 incoming = outgoing
             layers.append(nn.AdaptiveAvgPool2d(1))
             self.features = nn.Sequential(*layers)
             self.classifier = nn.Linear(128, int(num_classes))
-            for module in self.modules():
-                if isinstance(module, nn.Conv2d):
-                    nn.init.kaiming_normal_(module.weight, a=0.01, mode="fan_out", nonlinearity="leaky_relu")
-                    if module.bias is not None: nn.init.zeros_(module.bias)
-                elif isinstance(module, nn.Linear):
-                    nn.init.xavier_uniform_(module.weight); nn.init.zeros_(module.bias)
 
         def forward_with_features(self, inputs):
             features = self.features(inputs).flatten(1)
@@ -95,7 +90,7 @@ def _cnlcu_cnn9(num_classes: int):
         def forward(self, inputs):
             return self.forward_with_features(inputs).logits
 
-    return CnlcuCNN9()
+    return CNN9()
 
 
 def _cifar_six_conv(num_classes: int, batch_norm_momentum: float = 0.1):
@@ -587,10 +582,10 @@ def create_model(
         network = _cifar_resnet_depth(14, num_classes, int(base_width))
     elif name in {"resnet32", "cifar_resnet32"}:
         network = _cifar_resnet_depth(32, num_classes, int(base_width))
-    elif name == "cifar_cnn8":
-        network = _cifar_cnn8(num_classes)
-    elif name == "cnlcu_cnn9":
-        network = _cnlcu_cnn9(num_classes)
+    elif name == "cnn8":
+        network = _cnn8(num_classes)
+    elif name == "cnn9":
+        network = _cnn9(num_classes)
     elif name == "mentor_wide_resnet":
         network = _mentor_wide_resnet(num_classes, num_residual_units=int(num_residual_units), leakiness=float(leakiness), width_multiplier=float(width_multiplier), weight_decay=float(weight_decay))
     elif name == "fine_seven_cnn":

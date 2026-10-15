@@ -298,9 +298,9 @@ class _cwd_training_CWDTrainingTest(unittest.TestCase):
         test = _cwd_training__cifar('test', 2)
         config = {'seed': 7, 'data': {'name': 'cifar10_airplane_automobile', 'root': 'unused', 'folds': 2,
             'fold_index': 0, 'augment': False}, 'noise': {'rho_positive': 0., 'rho_negative': 0., 'seed': 7},
-            'loader': {'batch_size': 8, 'num_workers': 0, 'pin_memory': False}, 'model': {'name': 'tiny_cnn', 'width': 1},
+            'loader': {'batch_size': 3, 'num_workers': 0, 'pin_memory': False}, 'model': {'name': 'tiny_cnn', 'width': 1},
             'optimizer': {'name': 'adam', 'lr': .001, 'weight_decay': 0.}, 'scheduler': {'milestones': [], 'gamma': .1},
-            'trainer': {'epochs': 2, 'device': 'cpu'}, 'cwd': {'variant': 'multiclass', 'dynamic_centroid': True}}
+            'trainer': {'epochs': 3, 'device': 'cpu'}, 'cwd': {'variant': 'multiclass', 'dynamic_centroid': True}}
         with tempfile.TemporaryDirectory() as directory, \
              patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: train if split == 'train' else test):
             root = Path(directory)
@@ -319,14 +319,22 @@ class _cwd_training_CWDTrainingTest(unittest.TestCase):
             run_cwd_experiment(config, resume=checkpoint)
             resumed = torch.load(checkpoint, weights_only=False)
             complete = torch.load(uninterrupted/'last.pt', weights_only=False)
-            self.assertEqual(resumed['completed_epoch'], 1)
-            self.assertEqual([row['epoch'] for row in resumed['metrics']], [1, 2])
+            self.assertEqual(resumed['completed_epoch'], config['trainer']['epochs'] - 1)
+            self.assertEqual([row['epoch'] for row in resumed['metrics']], list(range(1, config['trainer']['epochs'] + 1)))
             for name, value in complete['model'].items():
-                torch.testing.assert_close(resumed['model'][name], value)
+                torch.testing.assert_close(resumed['model'][name], value, rtol=0, atol=0)
+            self.assertEqual(resumed['metrics'], complete['metrics'])
+            for name, state in complete['loader_rng_state'].items():
+                torch.testing.assert_close(resumed['loader_rng_state'][name], state, rtol=0, atol=0)
             rows = [json.loads(line) for line in (checkpoint.parent/'metrics.jsonl').read_text().splitlines()]
             for row in rows:
                 self.assertTrue(np.isfinite(row['test_loss']))
                 self.assertFalse(any(key.startswith('validation_') for key in row))
+            # A legacy checkpoint cannot silently restart the sample order.
+            before.pop('loader_rng_state')
+            save(before, checkpoint)
+            with self.assertRaisesRegex(ValueError, 'data-loader RNG states'):
+                run_cwd_experiment(config, resume=checkpoint)
 
     def test_web_explains_single_fold_and_static_centroid_limit(self) -> None:
         import yaml

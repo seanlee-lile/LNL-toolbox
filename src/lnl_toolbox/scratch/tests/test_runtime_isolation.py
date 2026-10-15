@@ -8,12 +8,14 @@ import unittest
 class ScratchRuntimeIsolationTest(unittest.TestCase):
     def test_runtime_reuses_only_explicit_artifact_and_model_interfaces(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        # Artifact decoding and model construction are shared formats, not
-        # algorithm/trainer delegation. Restrict each exception by file,
+        # Artifact/model interfaces and detached mathematical operations are
+        # reusable, not algorithm/trainer delegation. Restrict each exception by file,
         # module, symbol, and import form; all other legacy imports still fail.
         shared_interfaces = {
             ("native_stats.py", "lnl_toolbox.training.mentor_artifacts", ("MentorArtifact",)),
             ("native_stats.py", "lnl_toolbox.models.mentornet", ("build_mentor_model",)),
+            ("blocks/graph.py", "lnl_toolbox.algorithms.lend.dilution", ("dilute_labels",)),
+            ("blocks/parameter.py", "lnl_toolbox.algorithms.cdr", ("critical_parameter_masks", "official_code_parameter_masks")),
         }
         seen = set()
         violations = []

@@ -168,6 +168,7 @@ def run_cwd_experiment(
     train_loader = prepared.loader(DataRole.TRAIN)
     snapshot_loader = prepared.loader(DataRole.TRAIN_EVAL, shuffle=False)
     test_loader = prepared.loader(DataRole.TEST, shuffle=False)
+    loaders = {"train": train_loader, "snapshot": snapshot_loader, "test": test_loader}
 
     cwd_config = config.get("cwd", {})
     cwd_variant = str(cwd_config.get("variant", "multiclass")).strip().lower()
@@ -200,6 +201,13 @@ def run_cwd_experiment(
         restore_rng_state(checkpoint["rng_state"])
         start_epoch = int(checkpoint["completed_epoch"]) + 1
         rows = list(checkpoint.get("metrics", []))
+        # PreparedData loaders own generators independent of the global RNG.
+        # Restoring only rng_state restarts their sample order on resume.
+        loader_states = checkpoint.get("loader_rng_state", {})
+        if start_epoch < int(config["trainer"]["epochs"]) and set(loader_states) != set(loaders):
+            raise ValueError("CWD checkpoint is missing data-loader RNG states; exact resume is unavailable")
+        for name, state in loader_states.items():
+            loaders[name].generator.set_state(state.cpu())
 
     transition = np.asarray(
         [
@@ -278,6 +286,9 @@ def run_cwd_experiment(
                 "completed_epoch": epoch,
                 "metrics": rows,
                 "rng_state": capture_rng_state(),
+                "loader_rng_state": {
+                    name: loader.generator.get_state() for name, loader in loaders.items()
+                },
                 "noise_mapping_hash": manifest.mapping_hash,
                 "statistic_hash": artifact.artifact_hash,
                 "feature_snapshot_hash": snapshot.snapshot_hash,

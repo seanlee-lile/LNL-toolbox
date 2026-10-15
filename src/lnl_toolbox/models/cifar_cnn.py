@@ -8,7 +8,7 @@ from torch import nn
 from .feature_output import FeatureOutput
 
 
-class CifarCnn8(nn.Module):
+class CNN8(nn.Module):
     """Six-convolution CIFAR classifier matching the APL reference model."""
 
     def __init__(self, num_classes: int = 10) -> None:
@@ -61,7 +61,7 @@ class CifarCnn8(nn.Module):
         return FeatureOutput(self.classifier(features), features)
 
 
-class CnlcuCnn9(nn.Module):
+class CNN9(nn.Module):
     """Nine-convolution CIFAR network shared by CNLCU and Co-teaching."""
 
     def __init__(self, num_classes: int = 10, *, batch_norm_momentum: float = 0.999) -> None:

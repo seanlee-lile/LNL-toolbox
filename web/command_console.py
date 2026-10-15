@@ -1342,7 +1342,10 @@ def _parameter_presentation(path: str, method: str = "") -> tuple[str, str]:
         return "hidden", ""
     if method == "jocor" and path == "selector.keep_rate.end":
         return "hidden", ""
-    if path in {"data.validation_split.source", "evaluation.selection_split"}:
+    if path in {
+        "data.validation_split.source", "data.validation_split.rng",
+        "data.validation_split.strategy", "evaluation.selection_split",
+    }:
         return "hidden", ""
     # These caps only shrink a run for smoke/debugging.  A method's common
     # controls must not promote them into paper-facing parameters.
@@ -1835,11 +1838,11 @@ def _parameter_choices(field: dict[str, object], method: str) -> list[dict[str, 
     if category == "model" and parts[-1] == "name":
         # Use the vocabulary of the actual model factory for this method,
         # rather than offering every model mentioned anywhere in the toolbox.
-        choices = ["tiny_cnn", "cifar_cnn8", "cnlcu_cnn9", "resnet14", "resnet32",
+        choices = ["tiny_cnn", "cnn8", "cnn9", "resnet14", "resnet32",
                    "resnet18", "resnet34", "resnet50", "resnet101",
                    "preact_resnet18", "mentor_wide_resnet", "feature_mlp"]
         if method in {"apl", "gce", "cdr", "dss", "mentornet", "loss_correction", "pdl"}:
-            choices = [value for value in choices if value not in {"cnlcu_cnn9", "feature_mlp"}]
+            choices = [value for value in choices if value not in {"cnn9", "feature_mlp"}]
         extra = {"jocor": "cifar_six_conv", "fine": "fine_seven_cnn",
                  "ca2c": "ca2c_seven_cnn", "l2rw": "l2rw_resnet32", "mc_ldce": "mc_ldce_cnn"}.get(method)
         if extra:

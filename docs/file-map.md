@@ -589,8 +589,8 @@ Recipe/YAML 编辑功能。`lnl web` 由 `cli/main.py` 启动 `web/command_conso
 | `cli/data/recipe_catalog.json` | 登记正式 YAML；新手公开模板仍维持四项，不把全部内部配置塞入新手菜单 |
 | `cli/main.py` | `compose create` 对专用 runner 只允许原样复制，拒绝不安全的通用组件覆盖 |
 | `web/index.html`、`web/command_console.py` | “新建 YAML”分为 26 篇论文正式配置和通用监督组合两种模式 |
-| `models/cifar_cnn.py` | `CnlcuCnn9` 实现论文附录的九层 CIFAR CNN |
-| `training/experiment.py` | 注册通用 `cnlcu_cnn9` 模型名和 `linear_after` scheduler，不包含 CNLCU 论文分支 |
+| `models/cifar_cnn.py` | `CNN9` 实现论文附录的九层 CIFAR CNN |
+| `training/experiment.py` | 注册通用 `cnn9` 模型名和 `linear_after` scheduler，不包含 CNLCU 论文分支 |
 | `configs/experiment/cnlcu_cifar10_reproduction.yaml` | CNLCU-S CIFAR-10 Sym20 单组论文协议配置 |
 | `configs/experiment/volminnet_cifar10_reproduction.yaml` | VolMinNet CIFAR-10 Sym20 单组论文协议配置 |
 | `configs/experiment/dld_cifar10_reproduction.yaml` | DLD 完整预算的当前工具箱配置；因未接入官方 ViT-L/14 特征路径，明确标记 `paper_oriented` |

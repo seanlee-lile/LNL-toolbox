@@ -380,6 +380,8 @@ def _synthetic_source(data: Mapping[str, Any], seed: int) -> dict[str, ScratchSp
         inputs = (torch.rand(size, *image_shape, generator=generator)
                   if image_shape else torch.randn(size, features, generator=generator))
         labels = (inputs.reshape(size, -1) @ weights).argmax(1).long()
+        if data.get("balanced_labels", False):
+            labels = torch.arange(size) % classes
         return ScratchSplit(name, split, tuple(ScratchSample(inputs[i], i, int(labels[i]), int(labels[i])) for i in range(size)), classes)
     return {"train": make(train_size, "train", 0), "test": make(test_size, "test", train_size)}
 
@@ -886,6 +888,16 @@ def _split_train(train: ScratchSplit, plan: Mapping[str, Any]) -> tuple[ScratchS
         if rng_name != "numpy_legacy":
             raise ValueError("classwise_legacy requires numpy_legacy")
         classes = np.unique(labels)
+        if plan.get("data", {}).get("_fixture", False):
+            # The split block is configured after source loading and may cap
+            # a fixture's hold-out to two samples. Round only that explicit
+            # fixture to complete class groups; real data stays fail-closed.
+            size = len(labels) - max(1, (len(labels) - size) // len(classes)) * len(classes)
+            config["validation_size"] = size
+            plan["split"].update(config)
+            for owner in ("data", "requirements"):
+                if isinstance(plan.get(owner), dict):
+                    plan[owner]["validation_size"] = size
         count = int((len(labels) - size) / len(classes))
         train_parts, validation_parts = [], []
         for label in classes:
@@ -940,11 +952,15 @@ def _fixture_source_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
     ) else int(plan.get("semantics", {}).get("num_classes", 10))
     fixture_data.update({
         "name": "synthetic",
-        "train_size": 8,
+        "train_size": ((max(8, 2 * fixture_classes) + fixture_classes - 1) // fixture_classes) * fixture_classes,
         "test_size": 4,
         "features": 2 if original_name == "synthetic_binary_2d" else 4,
         "classes": fixture_classes,
+        "balanced_labels": True,
+        "_fixture": True,
     })
+    fixture_split = dict(plan.get("split", {}))
+    classwise = str(fixture_split.get("strategy", "random")).lower() == "classwise_legacy"
     # A registered alias carries its real adapter in the plan.  Fixture runs
     # intentionally replace that source with the bounded Scratch generator;
     # leaving the adapter behind would route the synthetic fixture back into a
@@ -962,10 +978,9 @@ def _fixture_source_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
     elif original_name in {"mnist", "fashion_mnist"}:
         fixture_data["image_shape"] = (1, 28, 28)
     fixture_plan["data"] = fixture_data
-    fixture_split = dict(plan.get("split", {}))
     requested_validation = int(fixture_split.get("validation_size", 0))
     if requested_validation > 0:
-        fixture_split["validation_size"] = min(requested_validation, 2)
+        fixture_split["validation_size"] = fixture_classes if classwise else min(requested_validation, 2)
     fixture_plan["split"] = fixture_split
     fixture_loader = dict(plan.get("loader", {}))
     fixture_loader["num_workers"] = 0

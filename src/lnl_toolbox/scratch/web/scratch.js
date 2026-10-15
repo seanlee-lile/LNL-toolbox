@@ -1378,7 +1378,7 @@ function optionValues(name, schema, step) {
     return schema.options || [];
   }
   if (kind === 'model') return [
-    'cifar_cnn8', 'cifar_six_conv', 'cifar_resnet18', 'cifar_resnet34',
+    'cnn8', 'cnn9', 'cifar_six_conv', 'cifar_resnet18', 'cifar_resnet34',
     'cifar_resnet32', 'cifar_resnet50', 'resnet18', 'resnet34', 'resnet32',
     'resnet50', 'preact_resnet18', 'mlp', 'linear',
   ];

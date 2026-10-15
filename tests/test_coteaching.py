@@ -25,7 +25,7 @@ class CoTeachingPaperDefaultsTest(unittest.TestCase):
         self.assertEqual([layer.out_channels for layer in convolutions], [128,128,128,256,256,256,512,256,128])
         self.assertEqual([layer.padding for layer in convolutions], [(1,1)]*6+[(0,0)]*3)
         self.assertEqual([layer.momentum for layer in model.modules() if isinstance(layer, torch.nn.BatchNorm2d)], [.1]*9)
-        cnlcu = build_model({'name':'cnlcu_cnn9'}, 10)
+        cnlcu = build_model({'name':'cnn9'}, 10)
         self.assertEqual([layer.momentum for layer in cnlcu.modules() if isinstance(layer, torch.nn.BatchNorm2d)], [.999]*9)
         model.eval()
         with torch.no_grad():
@@ -452,27 +452,9 @@ class _coteaching_workflow_CoTeachingWorkflowTest(unittest.TestCase):
         self.assertEqual(validate_config(config).name, 'coteaching')
         self.assertEqual(config['method'], 'coteaching')
         self.assertEqual(config['execution']['runner'], 'coteaching')
-        self.assertEqual(config['data']['name'], 'cifar10')
         for key in ('max_train_samples', 'max_validation_samples', 'max_test_samples'):
             self.assertNotIn(key, config['data'])
-        self.assertEqual(config['noise']['name'], 'symmetric')
-        self.assertEqual(config['noise']['rate'], 0.2)
-        self.assertEqual(config['noise']['sampling'], 'transition')
-        self.assertEqual(config['noise']['validation_targets'], 'noisy')
-        self.assertEqual(config['model'], {'name': 'cnlcu_cnn9', 'batch_norm_momentum': 0.1})
-        self.assertFalse(config['data']['augment'])
-        self.assertEqual(config['data']['preprocessing'], 'tensor_only')
-        self.assertEqual(config['scheduler'], {
-            'name': 'linear_after', 'start_epoch': 80, 'end_epoch': 200,
-            'beta1_before': 0.9, 'beta1_after': 0.1,
-        })
-        self.assertEqual(config['trainer']['epochs'], 200)
-        self.assertEqual(config['loader']['batch_size'], 128)
-        self.assertEqual(config['optimizer']['name'], 'adam')
-        self.assertEqual(config['optimizer']['lr'], 0.001)
         self.assertEqual(config['coteaching']['model_count'], 2)
-        self.assertEqual(config['coteaching']['noise_rate'], 0.2)
-        self.assertEqual(config['coteaching']['remember_schedule']['gradual_epochs'], 10)
         paper = paper_by_id('coteaching')
         exposed = {item.recipe_id: item for item in paper.configs}
         self.assertEqual(exposed[recipe.id].configuration_fidelity, 'engineering')

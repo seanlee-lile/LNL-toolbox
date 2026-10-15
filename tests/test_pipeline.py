@@ -254,7 +254,7 @@ class _runner_planning_RunnerPlanningTest(unittest.TestCase):
             self.assertNotIn(f'== "{method}"', source)
 
     def test_coteaching_plan_uses_nested_remember_schedule(self) -> None:
-        config = {'method': 'coteaching', 'execution': {'runner': 'coteaching'}, 'data': {'name': 'cifar10'}, 'model': {'name': 'cifar_cnn8'}, 'loader': {'batch_size': 128}, 'optimizer': {'name': 'adam', 'lr': 0.001}, 'noise': {'rate': 0.2}, 'coteaching': {'model_count': 2, 'noise_rate': 0.2, 'gradual_epochs': 999, 'remember_schedule': {'gradual_epochs': 10}}, 'trainer': {'epochs': 200}}
+        config = {'method': 'coteaching', 'execution': {'runner': 'coteaching'}, 'data': {'name': 'cifar10'}, 'model': {'name': 'cnn8'}, 'loader': {'batch_size': 128}, 'optimizer': {'name': 'adam', 'lr': 0.001}, 'noise': {'rate': 0.2}, 'coteaching': {'model_count': 2, 'noise_rate': 0.2, 'gradual_epochs': 999, 'remember_schedule': {'gradual_epochs': 10}}, 'trainer': {'epochs': 200}}
         fields = {field.label: field.value for field in resolve_runner(config).describe(config).fields}
         self.assertEqual(fields['Co-teaching networks'], '2')
         self.assertEqual(fields['Co-teaching batch size'], '128')

@@ -16,8 +16,8 @@ steps:
   - {block: configure_loader, params: {batch_size: 128, num_workers: 4, pin_memory: true}}
   - {block: build_prepared_data}
   - {block: build_loaders}
-  - {block: create_model, params: {model: cnlcu_cnn9, num_classes: 10, device: device, save_as: model_a}}
-  - {block: create_model, params: {model: cnlcu_cnn9, num_classes: 10, device: device, save_as: model_b}}
+  - {block: create_model, params: {model: cnn9, num_classes: 10, device: device, save_as: model_a}}
+  - {block: create_model, params: {model: cnn9, num_classes: 10, device: device, save_as: model_b}}
   - {block: create_optimizer, params: {optimizer: adam, model: model_a, lr: 0.001, weight_decay: 0.0, save_as: optimizer_a}}
   - {block: create_optimizer, params: {optimizer: adam, model: model_b, lr: 0.001, weight_decay: 0.0, save_as: optimizer_b}}
   - {block: create_scheduler, params: {scheduler: linear_decay, optimizer: optimizer_a, start_epoch: 80, end_epoch: 200, initial_lr: 0.001, final_lr: 0.0, save_as: scheduler_a}}

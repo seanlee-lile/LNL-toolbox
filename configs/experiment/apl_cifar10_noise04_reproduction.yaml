@@ -37,7 +37,7 @@ loader:
   num_workers: 8
   pin_memory: true
 model:
-  name: cifar_cnn8
+  name: cnn8
 optimizer:
   name: sgd
   lr: 0.01

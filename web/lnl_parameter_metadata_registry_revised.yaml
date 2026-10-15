@@ -48,7 +48,7 @@ parameter_ui:
     cnlcu.uncertainty.loss_upper_bound.mode: [fixed]
     optimizer.name: [sgd, adam, adamw]
     scheduler.name: [none, cosine, multistep, linear_after]
-    model.name: [tiny_cnn, cifar_cnn8, cnlcu_cnn9, resnet14, resnet32, resnet18, resnet34, resnet50, resnet101, preact_resnet18, mentor_wide_resnet, feature_mlp, pcse_mlp, mlp, linear, cifar_six_conv, cifar_resnet34, fine_seven_cnn, ca2c_seven_cnn, mc_ldce_cnn, l2rw_resnet32, torchvision_resnet34]
+    model.name: [tiny_cnn, cnn8, cnn9, resnet14, resnet32, resnet18, resnet34, resnet50, resnet101, preact_resnet18, mentor_wide_resnet, feature_mlp, pcse_mlp, mlp, linear, cifar_six_conv, cifar_resnet34, fine_seven_cnn, ca2c_seven_cnn, mc_ldce_cnn, l2rw_resnet32, torchvision_resnet34]
     loss.name: [ce, cross_entropy, nce, mae, gce, rce, apl, nce_rce, nce_mae]
   choice_descriptions:
     validation: 验证集
@@ -203,8 +203,8 @@ parameter_ui:
     pretraining_stage.mode: {train: 在本机训练预训练模型}
   model_descriptions:
     tiny_cnn: 小型卷积网络
-    cifar_cnn8: CIFAR 八层卷积网络
-    cnlcu_cnn9: 九层卷积网络
+    cnn8: 八层网络（六层卷积＋两层全连接）
+    cnn9: 九层卷积网络
     resnet14: 14 层残差网络
     resnet32: 32 层残差网络
     resnet18: 18 层残差网络
@@ -829,7 +829,7 @@ parameter_display_policy:
     gce: [output_root, loader.num_workers, loader.pin_memory, trainer.progress.enabled, trainer.progress.update_interval, trainer.progress.curves, trainer.device, noise.validation_targets, noise.manifest_filename, schema_version, kind, loss.name, selector.name, parameter_update.name, execution.runner]
     binary_risk: [output_root, schema_version, kind, risk.name, execution.runner]
     dual_t: [output_root, loader.num_workers, loader.pin_memory, trainer.device, noise.validation_targets, noise.manifest_filename, posterior_stage.checkpoint_selection, schema_version, kind, method, transition_stage, execution.runner]
-    loss_correction: [output_root, loader.num_workers, loader.pin_memory, trainer.progress.enabled, trainer.progress.update_interval, trainer.progress.curves, trainer.device, noise.rng, noise.validation_targets, noise.manifest_filename, schema_version, kind, loss.name, pipeline.name, pipeline.transition_estimator.name, pipeline.risk_corrector.name, execution.runner]
+    loss_correction: [output_root, loader.num_workers, loader.pin_memory, trainer.progress.enabled, trainer.progress.update_interval, trainer.progress.curves, trainer.device, noise.rng, noise.validation_targets, noise.manifest_filename, schema_version, kind, loss.name, pipeline.name, pipeline.transition_estimator.name, execution.runner]
     importance_reweighting: [output_root, loader.num_workers, loader.pin_memory, trainer.device, noise.validation_targets, schema_version, kind, method, num_classes, label_convention, posterior_stage.name, model.num_classes, loss.name, execution.runner]
     cwd: [output_root, loader.num_workers, loader.pin_memory, cwd.pinv_rcond, trainer.device, schema_version, kind, parameter_record.sampling_seed, parameter_record.selected_group, parameter_record.source, parameter_record.repeated_runs, execution.runner]
     pcse: [output_root, loader.num_workers, loader.pin_memory, transition_stage.parameterization.seed, transition_stage.determinant_tolerance, transition_stage.condition_limit, statistics_stage.condition_limit, gda_stage.covariance_ridge, trainer.device, configuration_fidelity, noise.rng, noise.validation_targets, noise.manifest_filename, pretraining_stage.checkpoint_selection, schema_version, kind, method, data.num_classes, transition_stage.name, execution.runner]
@@ -1194,7 +1194,7 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: preprocessing protocol
         model.name:
-          current: cifar_cnn8
+          current: cnn8
           value_type: string
           ui_control: text
           reproduction_impact: high
@@ -5375,7 +5375,7 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: split protocol
         model.name:
-          current: cnlcu_cnn9
+          current: cnn9
           value_type: string
           ui_control: text
           reproduction_impact: high
@@ -6271,7 +6271,7 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: split protocol
         model.name:
-          current: cnlcu_cnn9
+          current: cnn9
           value_type: string
           ui_control: text
           reproduction_impact: high

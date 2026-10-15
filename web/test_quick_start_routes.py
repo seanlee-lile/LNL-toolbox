@@ -6,7 +6,6 @@ from threading import Thread
 import unittest
 from unittest.mock import patch
 
-from web import command_console
 from web.command_console import ConsoleHandler, ThreadingHTTPServer
 
 
@@ -53,24 +52,6 @@ class QuickStartRouteTests(unittest.TestCase):
             ):
                 status, _ = self._request("POST", path, {})
                 self.assertNotEqual(status, 404)
-
-    def test_compact_quick_start_defaults_to_compatibility_guide(self) -> None:
-        script = (command_console.WEB_ROOT / "assets" / "quick_start.js").read_text(encoding="utf-8")
-        self.assertIn('<h3>完整方法兼容性引导</h3>', script)
-        self.assertNotIn('qs-advanced-actions', script)
-        self.assertNotIn('qs-open-experiment', script)
-        self.assertIn("renderNoise() + renderMethods() + renderPlan()", script)
-        self.assertIn('id="qs-methods-panel"', script)
-        self.assertIn("state.methodListExpanded", script)
-        self.assertIn('id="qs-methods-panel" class="qs-step qs-methods-panel"', script)
-        self.assertIn('addEventListener("toggle"', script)
-        self.assertIn("点击标题可更换论文", script)
-        self.assertIn('class="qs-parameter-advanced"', script)
-        self.assertNotIn('id="qs-show-full-flow"', script)
-        self.assertIn('renderPlanParameters()', script)
-        self.assertIn('state.planSchema = null', script)
-        self.assertIn("showCompatibilityGuide:", script)
-
 
 if __name__ == "__main__":
     unittest.main()

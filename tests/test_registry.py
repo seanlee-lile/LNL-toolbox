@@ -912,16 +912,25 @@ _cnlcu_readiness_FORMAL_CONFIG = _cnlcu_readiness_ROOT / 'configs/experiment/cnl
 # --- merged from test_cnlcu_readiness.py ---
 class _cnlcu_readiness_CNLCUReadinessTest(unittest.TestCase):
 
-    def test_formal_config_matches_cifar10_paper_protocol(self) -> None:
+    def test_cnlcu_current_and_custom_configs_are_accepted_without_rewriting(self) -> None:
+        from copy import deepcopy
+        from lnl_toolbox.catalog import validate_config
+
         config = yaml.safe_load(_cnlcu_readiness_FORMAL_CONFIG.read_text(encoding='utf-8'))
-        method = CNLCUConfig.from_mapping(config)
-        self.assertEqual(config['configuration_fidelity'], 'paper_protocol')
-        self.assertEqual(config['model'], {'name': 'cnlcu_cnn9'})
-        self.assertEqual(config['optimizer']['lr'], 0.001)
-        self.assertEqual(config['scheduler'], {'name': 'linear_after', 'start_epoch': 80, 'end_epoch': 200})
-        self.assertEqual(config['loader']['batch_size'], 128)
-        self.assertEqual(config['trainer']['epochs'], 200)
-        self.assertEqual(method.variant, 'soft')
+        original = deepcopy(config)
+        self.assertEqual(validate_config(config).name, 'cnlcu')
+        self.assertEqual(config, original)
+        config['model'] = {'name': 'resnet18', 'base_width': 4}
+        config['optimizer']['lr'] = 0.003
+        config['loader']['batch_size'] = 64
+        config['trainer']['epochs'] = 240
+        config['scheduler'] = {'name': 'linear_after', 'start_epoch': 90, 'end_epoch': 240,
+                               'beta1_before': 0.8, 'beta1_after': 0.2}
+        modified = deepcopy(config)
+        self.assertEqual(validate_config(config).name, 'cnlcu')
+        self.assertEqual(CNLCUConfig.from_mapping(config).variant, config['cnlcu']['variant'])
+        self.assertEqual(config, modified)
+        self.assertEqual(yaml.safe_load(_cnlcu_readiness_FORMAL_CONFIG.read_text(encoding='utf-8')), original)
 
     def test_short_config_is_full_data_cnlcu_soft_sym20(self) -> None:
         config = yaml.safe_load(_cnlcu_readiness_CONFIG.read_text(encoding='utf-8'))
@@ -935,7 +944,7 @@ class _cnlcu_readiness_CNLCUReadinessTest(unittest.TestCase):
         self.assertEqual(config['noise']['name'], 'symmetric')
         self.assertEqual(config['noise']['rate'], 0.2)
         self.assertEqual(config['noise']['validation_targets'], 'noisy')
-        self.assertEqual(config['model']['name'], 'cifar_cnn8')
+        self.assertEqual(config['model']['name'], 'cnn8')
         self.assertEqual(config['trainer']['epochs'], 15)
         self.assertEqual(method.variant, 'soft')
         self.assertEqual(method.window_size, 5)

@@ -187,14 +187,14 @@ class _torch_training_TorchTrainingTest(unittest.TestCase):
         torch.testing.assert_close(featured.logits, ordinary)
         self.assertEqual(featured.features.shape, (2, 256))
 
-    def test_cifar_cnn8_shape_and_reference_channels(self):
-        model = build_model({'name': 'cifar_cnn8'}, num_classes=10)
+    def test_cnn8_shape_and_reference_channels(self):
+        model = build_model({'name': 'cnn8'}, num_classes=10)
         convolutions = [module for module in model.modules() if isinstance(module, torch.nn.Conv2d)]
         self.assertEqual([module.out_channels for module in convolutions], [64, 64, 128, 128, 196, 196])
         self.assertEqual(model(torch.randn(2, 3, 32, 32)).shape, (2, 10))
 
-    def test_cnlcu_cnn9_matches_appendix_channels_and_shape(self):
-        model = build_model({'name': 'cnlcu_cnn9'}, num_classes=10)
+    def test_cnn9_matches_appendix_channels_and_shape(self):
+        model = build_model({'name': 'cnn9'}, num_classes=10)
         convolutions = [module for module in model.modules() if isinstance(module, torch.nn.Conv2d)]
         self.assertEqual([module.out_channels for module in convolutions], [128, 128, 128, 256, 256, 256, 512, 256, 128])
         self.assertEqual(model(torch.randn(2, 3, 32, 32)).shape, (2, 10))
@@ -238,7 +238,7 @@ class _torch_training_TorchTrainingTest(unittest.TestCase):
         self.assertAlmostEqual(legacy.param_groups[0]['lr'], 0.0001)
 
     def test_existing_models_expose_compatible_feature_output(self):
-        models = (TinyCNN(10, 8), build_model({'name': 'resnet18', 'base_width': 8}, num_classes=10), build_model({'name': 'cifar_cnn8'}, num_classes=10))
+        models = (TinyCNN(10, 8), build_model({'name': 'resnet18', 'base_width': 8}, num_classes=10), build_model({'name': 'cnn8'}, num_classes=10))
         inputs = torch.randn(2, 3, 32, 32)
         for model in models:
             with self.subTest(model=type(model).__name__):
@@ -262,7 +262,7 @@ class _torch_training_TorchTrainingTest(unittest.TestCase):
             FeatureOutput(torch.zeros(2, 3), torch.zeros(3, 4))
 
     def test_ordinary_forward_does_not_construct_feature_output(self):
-        cases = ((TinyCNN(10, 8), 'lnl_toolbox.models.tiny_cnn.FeatureOutput'), (build_model({'name': 'resnet18', 'base_width': 8}, num_classes=10), 'lnl_toolbox.models.cifar_resnet.FeatureOutput'), (build_model({'name': 'cifar_cnn8'}, num_classes=10), 'lnl_toolbox.models.cifar_cnn.FeatureOutput'), (build_model({'name': 'resnet50', 'base_width': 8}, num_classes=10), 'lnl_toolbox.models.cifar_resnet.FeatureOutput'))
+        cases = ((TinyCNN(10, 8), 'lnl_toolbox.models.tiny_cnn.FeatureOutput'), (build_model({'name': 'resnet18', 'base_width': 8}, num_classes=10), 'lnl_toolbox.models.cifar_resnet.FeatureOutput'), (build_model({'name': 'cnn8'}, num_classes=10), 'lnl_toolbox.models.cifar_cnn.FeatureOutput'), (build_model({'name': 'resnet50', 'base_width': 8}, num_classes=10), 'lnl_toolbox.models.cifar_resnet.FeatureOutput'))
         inputs = torch.randn(2, 3, 32, 32)
         for model, symbol in cases:
             with self.subTest(model=type(model).__name__):
@@ -812,7 +812,7 @@ class APLReportingProtocolTest(unittest.TestCase):
         config = _noisy_ce_baseline__config(epochs)
         config['data']['validation_size'] = 0
         config['data'].pop('max_validation_samples')
-        config['model'] = {'name': 'cifar_cnn8'}
+        config['model'] = {'name': 'cnn8'}
         config['optimizer'] = {'name': 'sgd', 'lr': 0.01, 'momentum': 0.9, 'weight_decay': 1e-4}
         config['loss'] = {'name': 'apl', 'alpha': 1.0, 'beta': 1.0,
                           'active': {'name': 'nce'},
@@ -822,7 +822,7 @@ class APLReportingProtocolTest(unittest.TestCase):
         return config
 
     def test_author_network_structure_and_initialization(self):
-        model = build_model({'name': 'cifar_cnn8'}, 10)
+        model = build_model({'name': 'cnn8'}, 10)
         self.assertIsInstance(model.classifier[1], torch.nn.BatchNorm1d)
         self.assertEqual(model.classifier[1].num_features, 256)
         self.assertEqual(model.classifier[1].eps, 1e-5)
@@ -1259,17 +1259,42 @@ class _new_paper_training_NewPaperTrainingTest(unittest.TestCase):
     def _config(self, name: str) -> dict:
         return yaml.safe_load((_new_paper_training_ROOT / 'configs' / 'experiment' / name).read_text(encoding='utf-8'))
 
+    def test_registered_pcse_volmin_fixture_trains_without_parameter_replacement(self) -> None:
+        from lnl_toolbox.catalog import validate_config
+
+        config = self._config('pcse_multiclass_volmin_smoke.yaml')
+        original = deepcopy(config)
+        self.assertEqual(validate_config(config).name, 'pcse')
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = run_experiment(config, Path(directory) / 'pcse')
+            checkpoint = run_dir / 'last.pt'
+            self.assertTrue(checkpoint.is_file())
+            self.assertTrue((run_dir / 'final_metrics.json').is_file())
+            self.assertEqual(run_experiment(config, resume=checkpoint), run_dir)
+        self.assertEqual(config, original)
+
     def test_all_new_workflows_smoke_and_resume(self) -> None:
         names = ('mc_ldce_cifar10_smoke.yaml', 'cal_cifar10_smoke.yaml', 'ca2c_cifar10_smoke.yaml')
         with tempfile.TemporaryDirectory() as directory:
             for name in names:
                 with self.subTest(name=name):
                     config = deepcopy(self._config(name))
+                    if config['method'] == 'mc_ldce':
+                        from lnl_toolbox.catalog import validate_config
+                        from lnl_toolbox.training.mc_ldce_experiment import _lifecycle
+
+                        self.assertEqual(validate_config(config).name, 'mc_ldce')
+                        _lifecycle(config)
+                        config['trainer']['epochs'] = 2
                     run_dir = run_experiment(config, Path(directory) / name)
                     checkpoint = run_dir / 'last.pt'
                     self.assertTrue(checkpoint.is_file())
                     self.assertTrue((run_dir / 'metrics.jsonl').is_file())
                     self.assertEqual(run_experiment(config, resume=checkpoint), run_dir)
+                    if config['method'] == 'mc_ldce':
+                        saved = torch.load(checkpoint, map_location='cpu', weights_only=False)
+                        self.assertEqual(saved['lifecycle_version'], config['mc_ldce']['lifecycle_version'])
+                        self.assertEqual(saved['completed_epoch'], config['trainer']['epochs'] - 1)
 
 # --- merged from test_update_policy.py ---
 import unittest

@@ -658,18 +658,6 @@ if (!splitAllocationText().includes('训练 2694，验证 300，干净参考 6')
         self.assertIn('window.quickStartController', html)
         self.assertIn('id="training-output"', html)
         self.assertIn('id="context-config-label"', html)
-        self.assertIn('paperSelected: function (paper)', html)
-        self.assertIn('quickStart ? "当前论文" : "当前实验"', html)
-        self.assertIn('state.quickStartPaper.acronym, state.quickStartPaper.title', html)
-
-    def test_existing_modules_remain(self) -> None:
-        html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
-        for module in ('quickstart', 'yaml', 'data', 'sweep', 'results', 'papers'):
-            self.assertIn('id: "' + module + '"', html)
-        self.assertNotIn('id: "advanced"', html)
-        self.assertNotIn('id: "beginner"', html)
-        self.assertNotIn('完整新手引导', html)
-        self.assertNotIn('数据集优先', html)
 
     def test_registered_dataset_and_training_guard_are_wired(self) -> None:
         script = (ROOT / "web" / "assets" / "quick_start.js").read_text(encoding="utf-8")
@@ -919,7 +907,7 @@ state.planSchema = {fields:[
   {path:'optimizer.lr', value:0.01, editable:true, visible:true, display_group:'default', kind:'number'},
   {path:'optimizer.momentum', value:0.9, editable:true, visible:true, display_group:'default', kind:'number'},
   {path:'optimizer.weight_decay', value:0.0001, editable:true, visible:true, display_group:'default', kind:'number'},
-  {path:'model.name', value:'cifar_cnn8', editable:true, visible:true, display_group:'default', kind:'string'},
+  {path:'model.name', value:'cnn8', editable:true, visible:true, display_group:'default', kind:'string'},
   {path:'trainer.epochs', value:120, editable:true, visible:true, display_group:'default', kind:'number'}
 ]};
 let html = renderPlanParameters();

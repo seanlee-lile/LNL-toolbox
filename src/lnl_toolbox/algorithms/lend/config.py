@@ -125,7 +125,7 @@ class LENDConfig:
                 )
         model = _mapping(config.get("model"), "model configuration")
         feature_models = {
-            "tiny_cnn", "cifar_cnn8", "resnet14", "resnet32", "resnet18",
+            "tiny_cnn", "cnn8", "resnet14", "resnet32", "resnet18",
             "resnet34", "resnet50", "resnet101", "preact_resnet18",
         }
         if str(model.get("name", "")).strip().lower() not in feature_models:

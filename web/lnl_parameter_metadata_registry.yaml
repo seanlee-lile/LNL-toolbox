@@ -449,7 +449,7 @@ methods:
           note: 为保持论文算法身份、完整 lifecycle 或正式复现协议而锁定。
           lock_reason: update wiring
         model.name:
-          current: cifar_cnn8
+          current: cnn8
           value_type: string
           ui_control: readonly
           reproduction_impact: high
@@ -4552,7 +4552,7 @@ methods:
           note: 为保持论文算法身份、完整 lifecycle 或正式复现协议而锁定。
           lock_reason: noise provenance
         model.name:
-          current: cifar_cnn8
+          current: cnn8
           value_type: string
           ui_control: readonly
           reproduction_impact: high
@@ -5420,7 +5420,7 @@ methods:
           note: 为保持论文算法身份、完整 lifecycle 或正式复现协议而锁定。
           lock_reason: base objective
         model.name:
-          current: cnlcu_cnn9
+          current: cnn9
           value_type: string
           ui_control: readonly
           reproduction_impact: high

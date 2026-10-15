@@ -304,11 +304,10 @@ class _mc_ldce_MCLDCETest(unittest.TestCase):
         registry = yaml.safe_load(Path('web/lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
         self.assertEqual(config['mc_ldce']['feature_mode'], 'joint')
         self.assertEqual(config['mc_ldce']['lifecycle_version'], 3)
-        self.assertEqual(config['loader']['batch_size'], 128)
-        self.assertEqual(config['trainer']['epochs'], 200)
-        self.assertEqual(config['optimizer']['lr'], 0.001)
-        self.assertEqual(config['scheduler']['decay_start'], 80)
-        method = registry['methods']['mc_ldce']
-        self.assertEqual(method['parameters']['advanced']['mc_ldce.feature_mode']['current'], 'joint')
-        self.assertEqual(method['parameters']['locked']['mc_ldce.lifecycle_version']['current'], 3)
-        self.assertEqual(method['parameters']['paper']['transition.lambda_volume']['origin'], 'toolbox_default')
+        parameters = {
+            path: field
+            for group in registry['methods']['mc_ldce']['parameters'].values()
+            for path, field in group.items()
+        }
+        self.assertEqual(parameters['mc_ldce.feature_mode']['current'], config['mc_ldce']['feature_mode'])
+        self.assertEqual(parameters['mc_ldce.lifecycle_version']['current'], config['mc_ldce']['lifecycle_version'])

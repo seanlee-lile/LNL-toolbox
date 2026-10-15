@@ -101,14 +101,14 @@ class ScratchSemanticsGateTest(unittest.TestCase):
     def test_formal_cnn_module_layouts_match_legacy(self) -> None:
         """Non-ResNet formal models must retain their layer topology too."""
         from lnl_toolbox.models.ca2c_cnn import CA2CSevenCNN
-        from lnl_toolbox.models.cifar_cnn import CifarCnn8, CnlcuCnn9
+        from lnl_toolbox.models.cifar_cnn import CNN8, CNN9
         from lnl_toolbox.models.cifar_resnet import L2RWResNet32
         from lnl_toolbox.models.mc_ldce_cnn import MCLDCECifarCNN
         from lnl_toolbox.models.mentor_wide_resnet import MentorWideResNet101
 
         cases = (
-            ("cifar_cnn8", CifarCnn8, {}, {}),
-            ("cnlcu_cnn9", CnlcuCnn9, {}, {}),
+            ("cnn8", CNN8, {}, {}),
+            ("cnn9", CNN9, {}, {}),
             ("mentor_wide_resnet", MentorWideResNet101,
              {"num_residual_units": 2, "width_multiplier": 0.25},
              {"num_residual_units": 2, "width_multiplier": 0.25}),

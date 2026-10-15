@@ -23,7 +23,7 @@ noise:
   validation_targets: noisy
   manifest_filename: noise_manifest.npz
 model:
-  name: cnlcu_cnn9
+  name: cnn9
   batch_norm_momentum: 0.1
 optimizer:
   name: adam

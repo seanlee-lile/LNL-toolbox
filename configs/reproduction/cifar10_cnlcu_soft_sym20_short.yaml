@@ -25,7 +25,7 @@ noise:
 loss:
   name: ce
 model:
-  name: cifar_cnn8
+  name: cnn8
 optimizer:
   name: adam
   lr: 0.001

@@ -65,24 +65,90 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
             ],
         )
 
-    def test_coteaching_recipe_matches_formal_protocol(self) -> None:
+    def test_coteaching_recipe_preserves_peer_wiring_with_custom_parameters(self) -> None:
+        from copy import deepcopy
+
         recipe = load_recipe(ROOT / "recipes" / "papers" / "coteaching.yaml")
-        config_path = ROOT.parents[2] / "configs" / "experiment" / "cifar10_coteaching_reproduction.yaml"
-        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        original = deepcopy(recipe)
+        validate_recipe(recipe)
         steps = recipe["steps"]
-        data = {step["block"]: step.get("params", {}) for step in steps[:14]}
-        self.assertEqual(data["create_dataset_split"]["validation_size"], config["data"]["validation_size"])
-        self.assertEqual(data["apply_noise"]["rate"], config["noise"]["rate"])
-        self.assertEqual(data["apply_noise"]["seed"], config["noise"]["seed"])
-        self.assertEqual(data["configure_loader"]["batch_size"], config["loader"]["batch_size"])
-        self.assertEqual(data["configure_loader"]["num_workers"], config["loader"]["num_workers"])
         models = [step for step in steps if step["block"] == "create_model"]
-        self.assertEqual([step["params"]["model"] for step in models], [config["model"]["name"]] * 2)
         optimizers = [step for step in steps if step["block"] == "create_optimizer"]
-        self.assertEqual([step["params"]["optimizer"] for step in optimizers], [config["optimizer"]["name"]] * 2)
+        slots = {step["params"]["save_as"] for step in models}
+        self.assertEqual(len(models), 2)
+        self.assertEqual(len(slots), 2)
+        self.assertEqual({step["params"]["model"] for step in optimizers}, slots)
+        for model in ("cnn8", "cnn9"):
+            changed = deepcopy(recipe)
+            for step in changed["steps"]:
+                if step["block"] == "create_model":
+                    step["params"]["model"] = model
+                elif step["block"] == "create_optimizer":
+                    step["params"]["lr"] = 0.003
+                elif step["block"] == "epoch_loop":
+                    step["params"]["epochs"] = 3
+            validate_recipe(changed)
+        self.assertEqual(recipe, original)
         epoch = next(step for step in steps if step["block"] == "epoch_loop")
-        self.assertEqual(epoch["params"]["epochs"], config["trainer"]["epochs"])
         self.assertEqual([step["block"] for step in epoch["steps"][-2:]], ["evaluate_peer_ensemble", "track_best_state"])
+
+    def test_cnns_match_shared_model_initialization_and_outputs(self) -> None:
+        import torch
+        from lnl_toolbox.models.cifar_cnn import CNN8, CNN9
+        from lnl_toolbox.scratch.blocks.models import create_model
+        from lnl_toolbox.scratch.context import ScratchContext
+
+        for name, factory in (("cnn8", CNN8), ("cnn9", CNN9)):
+            with self.subTest(model=name):
+                torch.manual_seed(17)
+                context = ScratchContext(device="cpu")
+                create_model(context, model=name, num_classes=3, device="device")
+                actual = context["model"].eval()
+                torch.manual_seed(17)
+                expected = factory(num_classes=3).eval()
+                self.assertEqual(set(actual.state_dict()), set(expected.state_dict()))
+                for key, value in expected.state_dict().items():
+                    torch.testing.assert_close(actual.state_dict()[key], value, rtol=0, atol=0)
+                inputs = torch.randn(2, 3, 32, 32)
+                with torch.no_grad():
+                    torch.testing.assert_close(actual(inputs), expected(inputs), rtol=0, atol=0)
+
+    def test_classwise_fixture_keeps_complete_class_groups(self) -> None:
+        from copy import deepcopy
+        from lnl_toolbox.scratch.data_runtime import load_sources, split_source
+
+        for classes in (2, 3, 10):
+            plan = {"seed": 5, "data": {"name": "synthetic", "train_size": 50000},
+                    "semantics": {"num_classes": classes},
+                    "split": {"strategy": "classwise_legacy", "rng": "numpy_legacy", "validation_size": 5000}}
+            original = deepcopy(plan)
+            effective, train, validation, _ = load_sources(plan, {"_runtime_limits": {"fixture": True}})
+            train, validation = split_source(train, validation, effective)
+            self.assertEqual({sample.observed_target for sample in train.samples}, set(range(classes)))
+            self.assertEqual({sample.observed_target for sample in validation.samples}, set(range(classes)))
+            self.assertEqual(len(validation.samples), effective["split"]["validation_size"])
+            self.assertEqual(plan, original)
+
+    def test_late_classwise_split_works_only_with_explicit_fixture_adaptation(self) -> None:
+        import torch
+        from lnl_toolbox.scratch.data_runtime import ScratchSample, ScratchSplit, split_source
+
+        recipe = {"schema_version": 1, "name": "classwise_fixture", "steps": [
+            {"block": "set_seed", "params": {"seed": 1}},
+            {"block": "load_dataset", "params": {"dataset": "cifar10"}},
+            {"block": "inspect_dataset_semantics"},
+            {"block": "create_dataset_split", "params": {
+                "validation_size": 5000, "split_strategy": "classwise_legacy", "split_rng": "numpy_legacy"}},
+        ]}
+        context = execute_recipe(recipe, runtime_limits={"fixture": True})
+        self.assertEqual(len(context["validation_split"].samples), context["num_classes"])
+        self.assertEqual(context["data_plan"]["split"]["validation_size"], len(context["validation_split"].samples))
+        source = ScratchSplit("real", "train", tuple(
+            ScratchSample(torch.zeros(2), i, i % 3, i % 3) for i in range(6)
+        ), 3)
+        with self.assertRaisesRegex(ValueError, "class counts compatible"):
+            split_source(source, None, {"split": {
+                "strategy": "classwise_legacy", "rng": "numpy_legacy", "validation_size": 1}})
 
     def test_cnlcu_persists_peer_selection_counts(self) -> None:
         recipe = load_recipe(ROOT / "recipes" / "papers" / "cnlcu.yaml")

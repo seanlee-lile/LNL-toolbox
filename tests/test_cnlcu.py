@@ -5,8 +5,8 @@ import unittest
 
 class CNLCUReferenceDefaultsTest(unittest.TestCase):
     def test_reference_network_and_feature_output(self):
-        from lnl_toolbox.models.cifar_cnn import CnlcuCnn9
-        model = CnlcuCnn9().eval()
+        from lnl_toolbox.models.cifar_cnn import CNN9
+        model = CNN9().eval()
         convolutions = [m for m in model.modules() if isinstance(m, torch.nn.Conv2d)]
         norms = [m for m in model.modules() if isinstance(m, torch.nn.BatchNorm2d)]
         self.assertEqual([m.out_channels for m in convolutions], [128,128,128,256,256,256,512,256,128])
