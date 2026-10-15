@@ -67,7 +67,6 @@
     pendingPaper: null,
     methodInputs: {},
     labelsConfirmed: false,
-    seedTouched: false,
     plan: null,
     planSchema: null,
     scheduleStash: {},
@@ -238,7 +237,6 @@
     state.selectedPaperId = "";
     state.pendingPaper = null;
     state.labelsConfirmed = false;
-    state.seedTouched = false;
     state.methodListExpanded = false;
     state.parameterError = "";
     state.review = null;
@@ -611,6 +609,34 @@
     }
     if (explicitField && saved?.rates != null) state.parameterDraft[explicitField.path] = JSON.stringify(saved.rates);
   }
+  function renderContinuousSchedule(group, allFields, name, baseField, budget) {
+    if (!baseField || !["linear_after", "linear_decay", "cosine"].includes(name)) return null;
+    const lookup = new Map(group.fields.map(field => [field.path, field]));
+    const field = suffix => lookup.get(group.prefix + "." + suffix);
+    const linear = name !== "cosine";
+    const startField = linear ? field("start_epoch") || field("decay_start") : null;
+    const endField = linear ? field("end_epoch") : field("t_max");
+    const start = startField ? Number(scheduleValue(startField)) : 0;
+    const end = endField ? Number(scheduleValue(endField)) : budget;
+    const finalField = linear ? field("final_lr") : field("eta_min");
+    const before = linear ? field("beta1_before") : null;
+    const after = linear ? field("beta1_after") : null;
+    const handled = new Set([startField, endField, finalField, before, after, field("initial_lr")].filter(Boolean).map(f => f.path));
+    function editor(f, label, fallback = 0) {
+      if (!f) return '<span>' + esc(fallback) + '</span>';
+      return '<input aria-label="' + esc(label) + '" type="number" min="0" step="' + (f.number_type === "integer" ? '1' : 'any') + '" data-qs-param="' + esc(f.path) + '" value="' + esc(scheduleValue(f)) + '"' + (f.editable ? '' : ' disabled') + '>';
+    }
+    const points = linear ? [start, end] : [end];
+    const ticks = points.map(point => '<span class="qs-schedule-tick" style="left:' + Math.max(0, Math.min(100, 100 * point / budget)) + '%" title="第 ' + esc(point) + ' 轮"></span>').join("");
+    const headers = linear ? '<th scope="col">恒定阶段：0—' + esc(start) + ' 轮<label>开始下降（轮）' + editor(startField, '开始下降轮次', start) + '</label></th><th scope="col">线性下降：' + esc(start) + '—' + esc(end) + ' 轮<label>下降结束（轮）' + editor(endField, '下降结束轮次', end) + '</label></th>' :
+      '<th scope="col">余弦下降：0—' + esc(end) + ' 轮<label>下降周期（轮）' + editor(endField, '余弦下降周期', end) + '</label></th>';
+    const rate = linear ? '<td>' + editor(baseField, '起始学习率') + '</td><td>从起始值连续下降至 ' + editor(finalField, '终点学习率', 0) + '</td>' :
+      '<td><label>起点' + editor(baseField, '起始学习率') + '</label><label>终点' + editor(finalField, '终点学习率', 0) + '</label></td>';
+    const beta = before || after ? '<tr><th scope="row">Adam β₁</th><td>' + editor(before, '下降前 Adam beta1') + '</td><td>' + editor(after, '下降后 Adam beta1') + '</td></tr>' : '';
+    return {handled:handled, html:'<div class="qs-schedule-track"><span>0</span><div class="qs-schedule-bar">' + ticks + '</div><span>' + esc(budget) + '</span></div><div class="qs-segment-table-wrap"><table class="qs-segment-table" data-qs-continuous="' + esc(name) + '"><thead><tr><th scope="col">参数 / 阶段</th>' + headers + '</tr></thead><tbody><tr><th scope="row">学习率</th>' + rate + '</tr>' + beta + '</tbody></table></div><p class="helper">' +
+      (linear ? '边界控制开始和结束轮次；下降区间内学习率连续线性变化。' : '学习率在整个下降周期内按余弦曲线连续变化。') +
+      (before || after ? ' Adam β₁ 在开始下降时切换。' : '') + '</p>'};
+  }
   function renderScheduleControl(group, allFields, compact = false) {
     const lookup = new Map(group.fields.map(function (field) { return [field.path, field]; }));
     const prefix = group.prefix;
@@ -634,7 +660,7 @@
     const shortTitle = stageName ? stageName + (component ? " " + component : "") : prefix === "scheduler" ? "主模型" : prefix.replace(/\.scheduler(\.|$)/, " ").replaceAll("_", " ");
     const title = shortTitle + "学习率阶段";
     const budgetSummary = budgetField ? '<p class="helper" data-qs-budget="' + esc(budgetField.path) + '">' + esc(trainingBudgetLabel(budgetField)) + '：' + esc(scheduleValue(budgetField)) + '</p>' : '';
-    const modeLabel = !enabled ? "固定学习率" : name === "multistep" ? "按节点变化" : name === "cosine" ? "平滑下降" : "学习率变化";
+    const modeLabel = !enabled ? "固定学习率" : name === "multistep" ? "按节点变化" : name === "cosine" ? "余弦下降" : ["linear_after", "linear_decay"].includes(name) ? "线性下降" : "学习率变化";
     const budgetStatus = budgetField ? " / " + scheduleValue(budgetField) + (budgetField.path.endsWith("max_steps") ? " 步" : " 轮") : "";
     const available = [];
     if (lookup.has(prefix + ".milestones")) available.push("multistep");
@@ -659,13 +685,14 @@
     }).join("") + '</tr></thead><tbody><tr><th scope="row">' + (canSegment ? '<label class="qs-segment-choice"><input type="checkbox" data-qs-segment-param="' + esc(baseField.path) + '"' + (segmented ? ' checked' : '') + '>学习率</label>' : '学习率') + '</th>' + (segmented ? '<td><input aria-label="初始段学习率" type="number" min="0" step="any" data-qs-param="' + esc(baseField.path) + '" value="' + esc(scheduleValue(baseField)) + '"></td>' + columns.map(function (column) {
       return '<td><input aria-label="节点 ' + (column.index + 1) + ' 后学习率" type="number" min="0" step="any" data-qs-schedule-rate="' + esc(prefix) + '" data-index="' + column.index + '" value="' + esc(column.rate) + '"></td>';
     }).join("") : '<td colspan="' + (columns.length + 1) + '" class="qs-segment-placeholder">学习率仍在下方编辑；勾选后移入此表，按阶段查看和调整。</td>') + '</tr></tbody></table></div><p class="helper">' + (segmented ? explicitField ? '表中是各段实际学习率；默认值来自当前论文配置，每一格都可以独立修改。' : '本方法的节点共用一个衰减倍率，修改一格会联动其他节点。' : '这里只切换学习率的编辑位置；若要关闭分段，请取消上方“启用分段学习率”。') + '</p>' : '';
-    const otherFields = group.fields.filter(function (field) { return ![nameField.path, milestoneField?.path, gammaField?.path, explicitField?.path].includes(field.path); });
+    const continuous = renderContinuousSchedule(group, allFields, name, baseField, budget);
+    const otherFields = group.fields.filter(function (field) { return ![nameField.path, milestoneField?.path, gammaField?.path, explicitField?.path].includes(field.path) && !continuous?.handled.has(field.path); });
     const toggle = '<label class="qs-schedule-switch"><input type="checkbox" data-qs-schedule-toggle="' + esc(prefix) + '"' + (enabled ? ' checked' : '') + '>动态学习率</label>';
     return (compact ? '<div class="qs-schedule qs-schedule-compact" data-schedule="' + esc(prefix) + '"><div class="qs-schedule-compact-head"><button type="button" class="qs-schedule-expand" data-qs-schedule-expand="' + esc(prefix) + '" aria-expanded="' + Boolean(state.expandedSchedules[prefix]) + '"><span class="qs-schedule-arrow" aria-hidden="true">' + (state.expandedSchedules[prefix] ? '▾' : '▸') + '</span><strong>' + esc(shortTitle) + ' 学习率</strong><span class="qs-schedule-status">' + esc(modeLabel + budgetStatus) + '</span></button>' + toggle + '</div><div class="qs-schedule-body"' + (state.expandedSchedules[prefix] ? '' : ' hidden') + '>' : '<section class="qs-schedule" data-schedule="' + esc(prefix) + '"><div class="qs-schedule-head"><strong>' + esc(title) + '</strong>' + toggle + '</div>') +
       budgetSummary + (enabled ? mode +
-        (!showNodes && baseField?.editable ? '<div class="qs-parameter-grid">' + renderParameterField(baseField, false) + '</div>' : '') +
+        (continuous ? continuous.html : (!showNodes && baseField?.editable ? '<div class="qs-parameter-grid">' + renderParameterField(baseField, false) + '</div>' : '')) +
         (showNodes ? '<div class="qs-schedule-track"><span>0</span><div class="qs-schedule-bar">' + ticks + '</div><span>' + esc(budget) + '</span></div>' : '') +
-        (showNodes && milestoneField ? segmentTable + '<button type="button" class="secondary" data-qs-schedule-add="' + esc(prefix) + '">添加节点</button>' : '<p class="helper">' + (name === "cosine" ? '学习率从起点平滑下降到终点，不使用突变节点。' : '当前方式不使用额外节点。') + '</p>') +
+        (showNodes && milestoneField ? segmentTable + '<button type="button" class="secondary" data-qs-schedule-add="' + esc(prefix) + '">添加节点</button>' : continuous ? '' : '<p class="helper">当前方式不使用额外节点。</p>') +
         (gammaField && !explicitField ? '<p class="helper">当前默认倍率：' + esc(gamma) + '；各节点共用此倍率。</p>' : '') +
         (otherFields.length ? '<div class="qs-parameter-grid">' + otherFields.map(function (field) { return renderParameterField(field, false); }).join("") + '</div>' : '') :
         '<p class="helper">学习率保持本阶段的起始值；训练阶段仍会执行。</p>') + (compact ? '</div></div>' : '</section>');
@@ -803,7 +830,7 @@
     document.getElementById("qs-prev")?.addEventListener("click", function () { state.currentStep = Math.max(0, state.currentStep - 1); render(); });
     document.getElementById("qs-next")?.addEventListener("click", advanceQuickStart);
     panel.querySelectorAll(".qs-carousel-dot").forEach(function (button) { button.addEventListener("click", function () { const target = Number(this.dataset.qsStep); if (!this.disabled) { state.currentStep = target; if (quickStartSteps()[target].id === "review") reviewPlan(); else render(); } }); });
-    panel.querySelectorAll(".qs-method-card").forEach(function (button) { button.addEventListener("click", function () { const item = state.methods.find(function (entry) { return entry.paper_id === button.dataset.paper; }); if (!item || !["ready", "needs_input"].includes(item.status)) return; state.selectedPaperId = this.dataset.paper; state.methodInputs = {}; state.planSchema = null; state.parameterDraft = {}; state.segmentedPaths = {}; state.scheduleStash = {}; state.methodListExpanded = false; render(); if (state.seedTouched || !item.recipe_id) { buildPlan(); return; } request("/api/config-schema?recipe=" + encodeURIComponent(item.recipe_id), undefined, "正在读取配置…").then(function (schema) { if (state.selectedPaperId !== item.paper_id) return; const seed = (schema.fields || []).find(function (field) { return field.path === "seed"; }); if (seed) state.noiseSelection.seed = Number(seed.value); render(); buildPlan(); }).catch(function (error) { state.error = String(error.message || error); render(); }); }); });
+    panel.querySelectorAll(".qs-method-card").forEach(function (button) { button.addEventListener("click", function () { const item = state.methods.find(function (entry) { return entry.paper_id === button.dataset.paper; }); if (!item || !["ready", "needs_input"].includes(item.status)) return; state.selectedPaperId = this.dataset.paper; state.methodInputs = {}; state.planSchema = null; state.parameterDraft = {}; state.segmentedPaths = {}; state.scheduleStash = {}; state.methodListExpanded = false; render(); buildPlan(); }); });
     panel.querySelectorAll(".qs-required-input").forEach(function (input) { input.addEventListener("input", function () { state.methodInputs[this.dataset.inputKey] = this.value; }); });
     document.getElementById("qs-back-to-noise")?.addEventListener("click", function () {
       const index = quickStartStepIndex("noise");
@@ -843,7 +870,7 @@
     window.parameterListEditor.bind(panel, function (path) { return Array.from(panel.querySelectorAll('[data-qs-param]')).find(function (input) { return input.dataset.qsParam === path; }); });
     const budgetPaths = new Set(scheduleGroups(state.planSchema?.fields || []).map(function (group) { return scheduleBudgetField(group, state.planSchema.fields)?.path; }).filter(Boolean));
     for (const field of state.planSchema?.fields || []) {
-      if (field.path.endsWith(".epochs")) budgetPaths.add(field.path);
+      if (field.path.endsWith(".epochs") || /\.scheduler.*\.(start_epoch|end_epoch|decay_start|t_max)$/.test('.' + field.path)) budgetPaths.add(field.path);
     }
     budgetPaths.add("trainer.max_steps");
     panel.querySelectorAll("[data-qs-param]").forEach(function (input) {
@@ -1097,7 +1124,6 @@
     }
   }
   function updateNoise(event) {
-    if (event?.target?.id === "qs-seed") state.seedTouched = true;
     const native = ["native", "noisy"].includes(state.noise?.dataset_state);
     const addNoise = !native && state.noise?.dataset_state === "clean" && Boolean(document.getElementById("qs-add-noise")?.checked);
     const key = native ? "native" : addNoise ? (document.getElementById("qs-noise")?.value || (state.noise.options || []).find(function (item) { return item.key !== "clean"; })?.key) : "clean";

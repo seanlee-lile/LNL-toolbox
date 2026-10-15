@@ -50,10 +50,8 @@ transition_stage:
   scheduler:
     name: none
   parameterization:
-    name: diagonal_dominant
-    initial_flip_mass: 0.05
-    max_flip_mass: 0.49
-    temperature: 1.0
+    name: sigmoid_off_diagonal
+    initial_weight: -5.135798437050262
     seed: 1
   determinant_tolerance: 1.0e-06
   condition_limit: 1000000.0

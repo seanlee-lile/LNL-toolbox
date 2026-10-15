@@ -92,6 +92,29 @@ class _dividemix_algorithm_DivideMixAlgorithmTest(unittest.TestCase):
         self.assertTrue(torch.equal(result.labeled_for_a, torch.tensor([False, True, False, True])))
         self.assertTrue(torch.equal(result.labeled_for_b, torch.tensor([True, False, True, False])))
 
+    def test_real_gmm_receives_history_average_without_rescaling(self):
+        from sklearn.mixture import GaussianMixture
+        indices = torch.tensor([0, 1, 2, 3, 4, 5, 6, 7])
+        history = []
+        append_loss_history(history, indices, torch.tensor([0., .1, .2, .3, .7, .8, .9, 1.]), 5)
+        append_loss_history(history, indices, torch.tensor([.3, .2, .1, 0., 1., .9, .8, .7]), 5)
+        config = DivideMixConfig.from_mapping(_dividemix_algorithm_config())
+        original_fit = GaussianMixture.fit
+        for rate in (.9, .2, None):
+            captured = []
+            def capture_fit(estimator, values, *args, **kwargs):
+                captured.append(values.copy())
+                return original_fit(estimator, values, *args, **kwargs)
+            expected = history_input(history, indices, use_average=rate == .9)
+            with self.subTest(rate=rate), patch.object(GaussianMixture, 'fit', capture_fit):
+                result = build_co_divide(indices, history, history, config, rate)
+            self.assertEqual(len(captured), 2)
+            for values in captured:
+                np.testing.assert_allclose(values[:, 0], expected.numpy(), atol=0, rtol=0)
+            torch.testing.assert_close(result.normalized_loss_a, expected)
+            self.assertEqual(result.metrics['loss_history_depth'], 2. if rate == .9 else 1.)
+            self.assertEqual(result.labeled_for_a.tolist(), [True] * 4 + [False] * 4)
+
 # --- merged from test_dividemix_gmm.py ---
 import math
 
@@ -207,6 +230,30 @@ class _dividemix_gmm_DivideMixGMMTest(unittest.TestCase):
             DivideMixGMMCleanProbabilityEstimator().estimate(DivideMixGMMLossInput(per_sample_losses=torch.ones(4), sample_indices=torch.arange(4)))
         with self.assertRaisesRegex(ValueError, 'at least two'):
             DivideMixGMMCleanProbabilityEstimator().estimate(DivideMixGMMLossInput(per_sample_losses=torch.tensor([0.2]), sample_indices=torch.tensor([5])))
+
+    def test_pre_normalized_input_and_raw_input_have_distinct_fit_scales(self):
+        from sklearn.mixture import GaussianMixture
+        losses = torch.tensor([.1, .12, .15, .8, .85, .9], dtype=torch.float64)
+        indices = torch.arange(6)
+        original_fit = GaussianMixture.fit
+        for already_normalized in (True, False):
+            captured = []
+            def capture_fit(estimator, values, *args, **kwargs):
+                captured.append(values.copy())
+                return original_fit(estimator, values, *args, **kwargs)
+            with self.subTest(already_normalized=already_normalized), patch.object(GaussianMixture, 'fit', capture_fit):
+                DivideMixGMMCleanProbabilityEstimator().estimate(
+                    DivideMixGMMLossInput(losses, indices, already_normalized=already_normalized))
+            expected = losses if already_normalized else (losses - losses.min()) / (losses.max() - losses.min())
+            np.testing.assert_allclose(captured[0][:, 0], expected.numpy(), atol=0, rtol=0)
+
+    def test_pre_normalized_input_rejects_out_of_range_and_non_boolean_flag(self):
+        estimator = DivideMixGMMCleanProbabilityEstimator()
+        for losses in (torch.tensor([-.1, .8]), torch.tensor([.1, 1.1])):
+            with self.assertRaisesRegex(ValueError, 'within'):
+                estimator.estimate(DivideMixGMMLossInput(losses, torch.arange(2), already_normalized=True))
+        with self.assertRaisesRegex(TypeError, 'boolean'):
+            estimator.estimate(DivideMixGMMLossInput(torch.tensor([.1, .8]), torch.arange(2), already_normalized='yes'))
 
     def test_invalid_loss_values_and_empty_input_are_rejected(self):
         cases = ((torch.tensor([]), torch.tensor([], dtype=torch.long), 'at least two'), (torch.tensor([0.1, float('nan')]), torch.tensor([0, 1]), 'finite'), (torch.tensor([0.1, float('inf')]), torch.tensor([0, 1]), 'finite'), (torch.tensor([1, 2]), torch.tensor([0, 1]), 'floating-point'))
@@ -420,7 +467,8 @@ class _dividemix_workflow_DivideMixWorkflowTest(unittest.TestCase):
         self.assertEqual(config['noise']['name'], 'symmetric')
         self.assertEqual(config['noise']['rate'], 0.2)
         self.assertEqual(config['noise']['sampling'], 'global')
-        self.assertEqual(config['model'], {'name': 'preact_resnet18', 'base_width': 64})
+        self.assertEqual(config['model'], {'name': 'preact_resnet18', 'base_width': 64, 'variant': 'dss_author'})
+        self.assertEqual(config['data']['normalization'], {'mean': [.4914, .4822, .4465], 'std': [.2023, .1994, .2010]})
         self.assertEqual(config['optimizer'], {'name': 'sgd', 'lr': 0.02, 'momentum': 0.9, 'weight_decay': 0.0005})
         self.assertEqual(config['scheduler'], {'name': 'multistep', 'milestones': [150], 'gamma': 0.1})
         self.assertEqual(config['loader']['batch_size'], 128)
@@ -434,6 +482,57 @@ class _dividemix_workflow_DivideMixWorkflowTest(unittest.TestCase):
         self.assertEqual(method['mixmatch']['mixup_alpha'], 4.0)
         self.assertEqual(method['objective']['lambda_u'], 25.0)
         self.assertEqual(method['objective']['lambda_r'], 1.0)
+
+    def test_author_style_network_matches_explicit_forward_and_has_gradients(self):
+        from lnl_toolbox.models.cifar_resnet import preact_resnet18
+        import torch.nn.functional as F
+        config = load_recipe_config(recipe_by_id('cifar10-dividemix-sym20'))
+        model = preact_resnet18(base_width=4, variant=config['model']['variant']).eval()
+        self.assertIsInstance(model.stem, nn.Sequential)
+        self.assertIsInstance(model.final_bn, nn.Identity)
+        inputs = torch.randn(2, 3, 32, 32)
+        actual = model(inputs)
+        output = F.relu(model.stem[1](model.stem[0](inputs)))
+        for layer in (model.layer1, model.layer2, model.layer3, model.layer4):
+            self.assertEqual(len(layer), 2)
+            for block in layer:
+                activated = F.relu(block.bn1(output))
+                shortcut = activated if block.shortcut is None else block.shortcut(activated)
+                output = block.conv2(F.relu(block.bn2(block.conv1(activated)))) + shortcut
+        expected = model.classifier(F.avg_pool2d(output, 4).flatten(1))
+        # Fixed and adaptive global pooling can sum float32 values in a
+        # different order; compare numerical agreement, not bitwise identity.
+        torch.testing.assert_close(actual, expected, atol=1e-7, rtol=1e-5)
+        actual.square().sum().backward()
+        self.assertGreater(float(model.stem[0].weight.grad.abs().sum()), 0.)
+
+    def test_prepared_test_images_use_author_normalization(self):
+        from lnl_toolbox.data import DataRole
+        from lnl_toolbox.training.data_service import prepare_experiment_data
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        config = _dividemix_workflow__config()
+        normalization = load_recipe_config(recipe_by_id('cifar10-dividemix-sym20'))['data']['normalization']
+        config['data']['normalization'] = normalization
+        self.test.images.fill(0)
+        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self.load):
+            prepared = prepare_experiment_data(config, requirements=resolve_data_requirements(config, expected_runner='dividemix'),
+                                               run_dir=Path(directory), seed=config['seed'])
+            actual = next(iter(prepared.loader(DataRole.TEST, shuffle=False)))['input']
+        expected = (-torch.tensor(normalization['mean']) / torch.tensor(normalization['std'])).view(1, 3, 1, 1)
+        torch.testing.assert_close(actual, expected.expand_as(actual))
+
+    def test_web_and_scratch_descriptions_state_current_limits(self):
+        import yaml
+        from web import command_console
+        root = Path(__file__).resolve().parents[1]
+        fields = {f['path']: f for f in command_console._config_schema('cifar10-dividemix-sym20')['fields']}
+        self.assertEqual(fields['loader.batch_size']['value'], 128)
+        self.assertEqual(fields['optimizer.lr']['value'], .02)
+        self.assertFalse(fields['dividemix.fidelity']['visible'])
+        self.assertIn('非对称噪声', fields['dividemix.warmup.confidence_penalty_weight']['note'])
+        self.assertIn('对称噪声下不使用', fields['dividemix.warmup.confidence_penalty_weight']['note'])
+        recipe = yaml.safe_load((root / 'src/lnl_toolbox/scratch/recipes/papers/dividemix.yaml').read_text(encoding='utf-8'))
+        self.assertIn('Not a complete DivideMix reproduction', recipe['description'])
 
     def test_fresh_extension_and_completed_noop(self):
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self.load), patch('lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator', _dividemix_workflow__FakeEstimator):

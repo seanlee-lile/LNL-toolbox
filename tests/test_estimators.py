@@ -372,6 +372,59 @@ from torch import nn
 from lnl_toolbox.algorithms.volminnet import VolMinNetAlgorithm, VolMinTransition
 
 # --- merged from test_volminnet_algorithm.py ---
+class VolMinNetPaperDefaultsTest(unittest.TestCase):
+    def test_formal_network_stem_and_default_initialization(self):
+        from lnl_toolbox.catalog import load_yaml
+        from lnl_toolbox.training.experiment import build_model
+        from lnl_toolbox.models.cifar_resnet import CifarResNet, BasicBlock
+        root = Path(__file__).resolve().parents[1]
+        config = load_yaml(root / 'configs/experiment/volminnet_cifar10_reproduction.yaml')
+        torch.manual_seed(9)
+        model = build_model(config['volminnet']['model'], 10).eval()
+        torch.manual_seed(9)
+        reference = CifarResNet(BasicBlock, 10, 64, initialization='torch_default', stem_padding=0)
+        self.assertEqual(model.stem[0].padding, (0, 0))
+        self.assertEqual(model.stem(torch.zeros(2, 3, 32, 32)).shape[-2:], (30, 30))
+        for name, value in reference.state_dict().items():
+            torch.testing.assert_close(model.state_dict()[name], value, rtol=0, atol=0)
+        self.assertEqual(build_model({'name': 'resnet18'}, 10).stem[0].padding, (1, 1))
+
+    def test_author_normalization_and_paper_optimizer_defaults(self):
+        from lnl_toolbox.catalog import load_yaml
+        from lnl_toolbox.data.torch_cifar import build_cifar_transform
+        from PIL import Image
+        import numpy as np
+        config = load_yaml(Path(__file__).resolve().parents[1] / 'configs/experiment/volminnet_cifar10_reproduction.yaml')
+        normalization = config['data']['normalization']
+        transform = build_cifar_transform(False, False,
+            normalization_mean=normalization['mean'], normalization_std=normalization['std'])
+        actual = transform(Image.fromarray(np.zeros((32, 32, 3), dtype=np.uint8)))
+        expected = -torch.tensor([0.4914, 0.4822, 0.4465]) / torch.tensor([0.2023, 0.1994, 0.2010])
+        torch.testing.assert_close(actual[:, 0, 0], expected)
+        for role in ('classifier', 'transition'):
+            optimizer = config['volminnet']['optimizer'][role]
+            self.assertEqual(optimizer['weight_decay'], 0.001)
+            self.assertEqual(optimizer['lr'], 0.01)
+            self.assertEqual(optimizer['momentum'], 0.9)
+        self.assertEqual(config['trainer']['epochs'], 150)
+
+    def test_formal_network_can_train_one_short_epoch(self):
+        from lnl_toolbox.catalog import load_yaml
+        from lnl_toolbox.training.experiment import run_experiment
+        config = load_yaml(Path(__file__).resolve().parents[1] / 'configs/experiment/volminnet_cifar10_reproduction.yaml')
+        config['trainer'].update(epochs=1, device='cpu')
+        config['data'].update(root='unused', validation_size=10, max_train_samples=20,
+                              max_validation_samples=10, max_test_samples=10, augment=False)
+        config['loader'].update(batch_size=10, num_workers=0)
+        with tempfile.TemporaryDirectory() as directory, patch(
+            'lnl_toolbox.data.sources.load_cifar10',
+            side_effect=lambda _root, split: _volminnet_workflow__cifar(40 if split == 'train' else 20, split),
+        ):
+            run_dir = run_experiment(config, output_dir=Path(directory) / 'run')
+            self.assertTrue((run_dir / 'last.pt').is_file())
+            self.assertTrue((run_dir / 'final_metrics.json').is_file())
+
+
 class _volminnet_algorithm_VolMinNetAlgorithmTest(unittest.TestCase):
 
     def _algorithm(self) -> VolMinNetAlgorithm:

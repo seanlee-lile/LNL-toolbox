@@ -16,6 +16,65 @@ from lnl_toolbox.algorithms.coteaching import coteaching_exchange as package_cot
 from lnl_toolbox.algorithms.coteaching import remember_rate as package_remember_rate
 
 # --- merged from test_coteaching.py ---
+class CoTeachingPaperDefaultsTest(unittest.TestCase):
+    def test_nine_convolution_model_and_independent_bn_defaults(self):
+        from lnl_toolbox.training.experiment import build_model
+        config = load_recipe_config(recipe_by_id('cifar10-coteaching-reproduction'))
+        model = build_model(config['model'], 10)
+        convolutions = [layer for layer in model.modules() if isinstance(layer, torch.nn.Conv2d)]
+        self.assertEqual([layer.out_channels for layer in convolutions], [128,128,128,256,256,256,512,256,128])
+        self.assertEqual([layer.padding for layer in convolutions], [(1,1)]*6+[(0,0)]*3)
+        self.assertEqual([layer.momentum for layer in model.modules() if isinstance(layer, torch.nn.BatchNorm2d)], [.1]*9)
+        cnlcu = build_model({'name':'cnlcu_cnn9'}, 10)
+        self.assertEqual([layer.momentum for layer in cnlcu.modules() if isinstance(layer, torch.nn.BatchNorm2d)], [.999]*9)
+        model.eval()
+        with torch.no_grad():
+            self.assertEqual(tuple(model(torch.zeros(2,3,32,32)).shape), (2,10))
+
+    def test_all_200_learning_rates_and_adam_beta1_phases(self):
+        from lnl_toolbox.training.experiment import build_optimizer, build_scheduler, apply_epoch_beta1
+        config = load_recipe_config(recipe_by_id('cifar10-coteaching-reproduction'))
+        optimizer = build_optimizer(torch.nn.Linear(1,1), config['optimizer'])
+        scheduler = build_scheduler(optimizer, config['scheduler'], 200)
+        for epoch in range(200):
+            apply_epoch_beta1(optimizer, config['scheduler'], epoch)
+            expected = .001 if epoch <= 80 else .001*(200-epoch)/120
+            self.assertAlmostEqual(optimizer.param_groups[0]['lr'], expected)
+            self.assertEqual(optimizer.param_groups[0]['betas'], (.9 if epoch < 80 else .1, .999))
+            optimizer.step()
+            scheduler.step()
+        self.assertEqual(optimizer.param_groups[0]['lr'], 0)
+        previous = optimizer.param_groups[0]['betas']
+        apply_epoch_beta1(optimizer, {'name':'none'}, 0)
+        self.assertEqual(optimizer.param_groups[0]['betas'], previous)
+
+    def test_web_saves_noise_generation_and_algorithm_estimate_independently(self):
+        from web import command_console
+        import yaml
+        fields = {field['path']: field for field in command_console._config_schema('cifar10-coteaching-reproduction')['fields']}
+        self.assertEqual(fields['noise.rate']['linked_fields'], [])
+        self.assertNotIn('noise.rate', fields['coteaching.noise_rate']['linked_fields'])
+        self.assertIn('scheduler.beta1_after', fields)
+        for edited, other, value in (
+            ('noise.rate','coteaching.noise_rate',.4),
+            ('coteaching.noise_rate','noise.rate',.3),
+        ):
+            with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+                saved = command_console._save_config({
+                    'recipe':'cifar10-coteaching-reproduction',
+                    'path':str(Path(directory)/'coteaching.yaml'),
+                    'patches':[{'path':edited,'value':value}],
+                    'acknowledge_paper_impact':True,
+                })
+                resolved = yaml.safe_load(Path(saved['path']).read_text(encoding='utf-8'))
+                owner,key = edited.split('.')
+                self.assertEqual(resolved[owner][key], value)
+                owner,key = other.split('.')
+                self.assertEqual(resolved[owner][key], .2)
+                self.assertAlmostEqual(resolved['coteaching']['remember_schedule']['end'],1-resolved['coteaching']['noise_rate'])
+                CoTeachingConfig.from_mapping(resolved)
+
+
 class _coteaching_CoTeachingTest(unittest.TestCase):
 
     def test_peer_exchange(self) -> None:
@@ -311,6 +370,29 @@ class _coteaching_workflow_CoTeachingWorkflowTest(unittest.TestCase):
     def _load_data(self, _root, split):
         return self.train_data if split == 'train' else self.test_data
 
+    def test_adam_phases_are_applied_to_both_peers_and_survive_resume(self):
+        config = _coteaching_workflow__config(2)
+        config['scheduler'] = {
+            'name':'linear_after', 'start_epoch':1, 'end_epoch':2,
+            'beta1_before':.9, 'beta1_after':.1,
+        }
+        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load_data):
+            run_dir = run_experiment(config, Path(directory)/'run')
+            first = torch.load(run_dir/'last.pt', map_location='cpu', weights_only=False)
+            for peer in ('a','b'):
+                self.assertEqual(first['optimizer'][peer]['param_groups'][0]['betas'], (.1,.999))
+            resumed_config = copy.deepcopy(config)
+            resumed_config['trainer']['epochs'] = 3
+            run_experiment(resumed_config, resume=run_dir/'last.pt')
+            resumed = torch.load(run_dir/'last.pt', map_location='cpu', weights_only=False)
+            full_dir = run_experiment(resumed_config, Path(directory)/'full')
+            full = torch.load(full_dir/'last.pt', map_location='cpu', weights_only=False)
+            for peer in ('a','b'):
+                self.assertEqual(resumed['optimizer'][peer]['param_groups'][0]['betas'], (.1,.999))
+                self.assertEqual(resumed['optimizer'][peer]['param_groups'][0]['lr'], 0)
+                for name, value in resumed['model'][peer].items():
+                    torch.testing.assert_close(value, full['model'][peer][name], rtol=0, atol=0)
+
     def test_fresh_resume_and_completed_resume_preserve_dual_state(self):
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load_data):
             run_dir = run_experiment(_coteaching_workflow__config(2), Path(directory) / 'run')
@@ -377,7 +459,13 @@ class _coteaching_workflow_CoTeachingWorkflowTest(unittest.TestCase):
         self.assertEqual(config['noise']['rate'], 0.2)
         self.assertEqual(config['noise']['sampling'], 'transition')
         self.assertEqual(config['noise']['validation_targets'], 'noisy')
-        self.assertEqual(config['model'], {'name': 'cifar_cnn8'})
+        self.assertEqual(config['model'], {'name': 'cnlcu_cnn9', 'batch_norm_momentum': 0.1})
+        self.assertFalse(config['data']['augment'])
+        self.assertEqual(config['data']['preprocessing'], 'tensor_only')
+        self.assertEqual(config['scheduler'], {
+            'name': 'linear_after', 'start_epoch': 80, 'end_epoch': 200,
+            'beta1_before': 0.9, 'beta1_after': 0.1,
+        })
         self.assertEqual(config['trainer']['epochs'], 200)
         self.assertEqual(config['loader']['batch_size'], 128)
         self.assertEqual(config['optimizer']['name'], 'adam')

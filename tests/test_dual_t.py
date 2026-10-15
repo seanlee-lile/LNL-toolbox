@@ -246,6 +246,142 @@ def _dual_t_forward__algorithm(directory: str | Path, *, posterior_epochs: int=2
     return DualTAlgorithm(posterior_model=posterior_model, posterior_optimizer=posterior_optimizer, posterior_scheduler=None, final_model=final_model, final_optimizer=final_optimizer, final_scheduler=None, posterior_loss=loss, final_loss=nn.CrossEntropyLoss(reduction='none'), train_loader=DataLoader(_dual_t_forward__records(clean_offset=clean_offset), batch_size=3, shuffle=True), noisy_validation_loader=DataLoader(_dual_t_forward__validation_records(), batch_size=3), clean_test_loader=DataLoader(_dual_t_forward__test_records(), batch_size=3), device=torch.device('cpu'), run_dir=directory, config=_dual_t_forward__config(posterior_epochs=posterior_epochs, final_epochs=final_epochs), dataset='fixture', noise_metadata={'manifest_sha256': 'b' * 64, 'mapping_hash': 'a' * 64})
 
 # --- merged from test_dual_t_forward.py ---
+class DualTPaperProtocolTest(unittest.TestCase):
+
+    def test_formal_defaults_and_metadata(self):
+        from lnl_toolbox.catalog import load_yaml
+        from lnl_toolbox.training.experiment import build_optimizer
+        root = Path(__file__).resolve().parents[1]
+        config = load_yaml(root / 'configs/reproduction/cifar10_dual_t_sym20.yaml')
+        metadata = load_yaml(root / 'web/lnl_parameter_metadata_registry_revised.yaml')['methods']['dual_t']
+        self.assertEqual(config['posterior_stage']['epochs'], 100)
+        self.assertEqual(config['final_stage']['epochs'], 200)
+        self.assertEqual(config['posterior_stage']['scheduler']['milestones'], [50])
+        self.assertEqual(config['final_stage']['scheduler']['milestones'], [50, 100, 150])
+        for stage in ('posterior_stage', 'final_stage'):
+            optimizer = build_optimizer(nn.Linear(3, 3), config[stage]['optimizer'])
+            self.assertEqual(optimizer.defaults['momentum'], 0)
+            self.assertEqual(optimizer.defaults['weight_decay'], 1e-4)
+            self.assertEqual(config[stage]['model']['variant'], 'imagenet_standard')
+            self.assertEqual(metadata['parameters']['paper'][stage + '.epochs']['current'], config[stage]['epochs'])
+        for level, fields in metadata['parameters'].items():
+            self.assertEqual(metadata['coverage']['by_level'][level], len(fields))
+        self.assertEqual(metadata['coverage']['parameter_count'], sum(len(v) for v in metadata['parameters'].values()))
+
+    def test_standard_resnet_stem_and_unchanged_cifar_default(self):
+        for name, blocks in (('resnet18', [2, 2, 2, 2]), ('resnet34', [3, 4, 6, 3])):
+            model = build_model({'name': name, 'variant': 'imagenet_standard'}, 10).eval()
+            self.assertEqual(model.conv1.kernel_size, (7, 7))
+            self.assertEqual(model.conv1.stride, (2, 2))
+            self.assertEqual(model.maxpool.kernel_size, 3)
+            self.assertEqual([len(getattr(model, f'layer{i}')) for i in range(1, 5)], blocks)
+            self.assertEqual(model(torch.zeros(2, 3, 32, 32)).shape, (2, 10))
+            cifar = build_model({'name': name}, 10)
+            self.assertEqual(cifar.stem[0].kernel_size, (3, 3))
+            self.assertEqual(cifar.stem[0].stride, (1, 1))
+        with self.assertRaisesRegex(ValueError, 'base_width'):
+            build_model({'name': 'resnet18', 'variant': 'imagenet_standard', 'base_width': 16}, 10)
+
+    def test_forward_epsilon_loss_and_gradient_preserve_default_behavior(self):
+        from lnl_toolbox.algorithms.dual_t.algorithm import _build_final_risk_corrector
+        from lnl_toolbox.algorithms.transition_risk import ForwardRiskCorrector
+        matrix = TransitionArtifact(np.eye(2), estimator='fixture')
+        logits = torch.tensor([[0., -90.]], dtype=torch.float64, requires_grad=True)
+        targets = torch.tensor([1])
+        probability = logits.softmax(1)[:, 1]
+        loss = nn.CrossEntropyLoss(reduction='none')
+        actual = _build_final_risk_corrector('forward').per_sample_risk(
+            logits=logits, noisy_targets=targets, base_loss=loss, transition=matrix)
+        expected = -(probability + 1e-12).log()
+        torch.testing.assert_close(actual, expected)
+        torch.testing.assert_close(torch.autograd.grad(actual.sum(), logits, retain_graph=True)[0],
+            torch.autograd.grad(expected.sum(), logits, retain_graph=True)[0])
+        default = ForwardRiskCorrector().per_sample_risk(
+            logits=logits, noisy_targets=targets, base_loss=loss, transition=matrix)
+        torch.testing.assert_close(default, -probability.log())
+        self.assertGreater(default.item(), actual.item())
+        for value in (-1, float('nan'), float('inf')):
+            with self.assertRaises(ValueError):
+                ForwardRiskCorrector(log_epsilon=value)
+
+    def test_snapshot_uses_deterministic_loader_with_aligned_labels(self):
+        from lnl_toolbox.training.snapshots import collect_posterior_snapshot
+        with tempfile.TemporaryDirectory() as directory:
+            algorithm = _dual_t_forward__algorithm(directory, posterior_epochs=1, final_epochs=1)
+            algorithm.train_posterior()
+            records = _dual_t_forward__records()
+            deterministic = DataLoader(records, batch_size=3, shuffle=False)
+            algorithm.posterior_loader = deterministic
+            algorithm.train_loader = object()  # Iteration would fail if the old path is used.
+            with patch('lnl_toolbox.algorithms.dual_t.algorithm.collect_posterior_snapshot',
+                    wraps=collect_posterior_snapshot) as collect:
+                algorithm.estimate_transition()
+            self.assertIs(collect.call_args.args[1], deterministic)
+            self.assertEqual(algorithm.snapshot.global_indices.tolist(), [int(r['index']) for r in records])
+            self.assertEqual(algorithm.snapshot.noisy_targets.tolist(), [int(r['target']) for r in records])
+
+    def test_production_runner_uses_train_eval_and_completes_short_training(self):
+        from types import SimpleNamespace
+        from lnl_toolbox.data import DataRole
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        from lnl_toolbox.training.dual_t_experiment import run_dual_t_experiment
+        config = _dual_t_forward__config(posterior_epochs=1, final_epochs=1)
+        requirements = resolve_data_requirements(config, expected_runner='dual_t')
+        self.assertIn(DataRole.TRAIN_EVAL, requirements.roles)
+        loaders = {
+            DataRole.TRAIN: DataLoader(_dual_t_forward__records(), batch_size=3),
+            DataRole.TRAIN_EVAL: DataLoader(_dual_t_forward__records(), batch_size=3),
+            DataRole.NOISY_VALIDATION: DataLoader(_dual_t_forward__validation_records(), batch_size=3),
+            DataRole.TEST: DataLoader(_dual_t_forward__test_records(), batch_size=3),
+        }
+        calls = []
+        def loader(role, **kwargs):
+            calls.append((role, kwargs))
+            return loaders[role]
+        prepared = SimpleNamespace(dataset='fixture', num_classes=3,
+            manifest=object(), manifest_path=Path('unused.npz'), train_indices=[],
+            validation_indices=[], input_spec=SimpleNamespace(channels=None), loader=loader)
+        from lnl_toolbox.training.snapshots import collect_posterior_snapshot
+        prefix = 'lnl_toolbox.training.dual_t_experiment.'
+        with tempfile.TemporaryDirectory() as directory, \
+                patch(prefix + 'prepare_experiment_data', return_value=prepared), \
+                patch(prefix + 'effective_subset_actual_rate', return_value=0.2), \
+                patch(prefix + 'checkpoint_noise_metadata', return_value={
+                    'mode': 'generated', 'manifest_path': 'noise_manifest.npz',
+                    'manifest_sha256': 'b' * 64, 'mapping_hash': 'a' * 64,
+                    'manifest_actual_rate': 0.2, 'effective_train_subset_actual_rate': 0.2,
+                    'validation_targets': 'noisy', 'effective_validation_subset_actual_rate': 0.2}), \
+                patch(prefix + 'build_model', side_effect=lambda *_: _dual_t_forward__IndexedClassifier()), \
+                patch('lnl_toolbox.algorithms.dual_t.algorithm.collect_posterior_snapshot',
+                    wraps=collect_posterior_snapshot) as collect:
+            run_dual_t_experiment(config, output_dir=directory)
+            self.assertIn((DataRole.TRAIN_EVAL, {'shuffle': False}), calls)
+            self.assertIs(collect.call_args.args[1], loaders[DataRole.TRAIN_EVAL])
+            self.assertTrue(Path(directory, 'final_metrics.json').is_file())
+            self.assertTrue(Path(directory, 'best.pt').is_file())
+
+    def test_checkpoint_selection_uses_corrected_predictions(self):
+        from lnl_toolbox.algorithms.dual_t.algorithm import _evaluate_forward_classification
+        from lnl_toolbox.evaluation.classification import evaluate_classification
+        with tempfile.TemporaryDirectory() as directory:
+            algorithm = _dual_t_forward__algorithm(directory, posterior_epochs=1, final_epochs=1)
+            algorithm.train_posterior()
+            algorithm.estimate_transition()
+            algorithm.start_final_training()
+            # Rotate classes: raw predictions are all correct; corrected ones are all wrong.
+            algorithm.transition = TransitionArtifact(np.roll(np.eye(3), 1, axis=1), estimator='fixture')
+            model = algorithm.final_algorithm.model
+            raw = evaluate_classification(model, algorithm.noisy_validation_loader,
+                algorithm.final_algorithm.loss, algorithm.device)
+            corrected = _evaluate_forward_classification(model, algorithm.noisy_validation_loader,
+                algorithm.final_algorithm.loss, algorithm.device, algorithm.transition)
+            self.assertEqual(raw['accuracy'], 1)
+            self.assertEqual(corrected['accuracy'], 0)
+            algorithm.train_final()
+            self.assertEqual(algorithm.state.best_final_validation_accuracy, corrected['accuracy'])
+            self.assertEqual(read_checkpoint(algorithm.best_path, 'cpu')['dual_t_state']['best_final_validation_accuracy'], 0)
+
+
 class _dual_t_forward_DualTMathTest(unittest.TestCase):
 
     @staticmethod
@@ -370,7 +506,8 @@ class _dual_t_forward_DualTAlgorithmLifecycleTest(unittest.TestCase):
             self.assertEqual(algorithm.transition.metadata['method'], 'dual_t')
             metric_rows = [json.loads(line) for line in Path(directory, 'metrics.jsonl').read_text(encoding='utf-8').splitlines()]
             final_epoch = next((row for row in metric_rows if row.get('stage') == 'final' and row.get('event') == 'epoch'))
-            self.assertIn('validation_observed_ce_loss', final_epoch)
+            self.assertIn('validation_forward_loss', final_epoch)
+            self.assertNotIn('validation_observed_ce_loss', final_epoch)
             self.assertNotIn('validation_loss', final_epoch)
             actual_best_sha = hashlib.sha256(Path(directory, 'posterior_best.pt').read_bytes()).hexdigest()
             best_payload = read_checkpoint(Path(directory, 'posterior_best.pt'), 'cpu')

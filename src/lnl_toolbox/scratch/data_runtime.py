@@ -876,8 +876,30 @@ def _split_train(train: ScratchSplit, plan: Mapping[str, Any]) -> tuple[ScratchS
         raise ValueError("validation_size must be smaller than the training source")
     import numpy as np
     labels = np.asarray([sample.clean_target if sample.clean_target is not None else sample.observed_target for sample in train.samples])
-    rng = np.random.default_rng(int(config.get("seed", plan.get("seed", 1))))
+    seed = int(config.get("seed", plan.get("seed", 1)))
+    rng_name = str(config.get("rng", "numpy"))
+    if rng_name not in {"numpy", "numpy_legacy"}:
+        raise ValueError("Scratch split rng must be numpy or numpy_legacy")
+    rng = np.random.RandomState(seed) if rng_name == "numpy_legacy" else np.random.default_rng(seed)
     strategy = str(config.get("strategy", "random")).lower()
+    if strategy == "classwise_legacy":
+        if rng_name != "numpy_legacy":
+            raise ValueError("classwise_legacy requires numpy_legacy")
+        classes = np.unique(labels)
+        count = int((len(labels) - size) / len(classes))
+        train_parts, validation_parts = [], []
+        for label in classes:
+            candidates = np.flatnonzero(labels == label)
+            rng.shuffle(candidates)
+            train_parts.append(candidates[:count])
+            validation_parts.append(candidates[count:])
+        train_positions = np.concatenate(train_parts)
+        val_positions = np.concatenate(validation_parts)
+        if len(val_positions) != size:
+            raise ValueError("classwise_legacy requires class counts compatible with validation_size")
+        rng.shuffle(train_positions)
+        rng.shuffle(val_positions)
+        return train.subset(train_positions.tolist()), train.subset(val_positions.tolist(), "validation")
     if strategy in {"stratified", "official"}:
         val_positions = []
         for label in np.unique(labels):
@@ -1274,7 +1296,21 @@ def _transform_pair(preprocessing: Mapping[str, Any], train: ScratchSplit,
     if augment and name not in {"tensor_only", "binary_raw"}:
         ops = [transforms.RandomCrop(crop_size, padding=padding), transforms.RandomHorizontalFlip(), transforms.Lambda(_to_tensor_input)]
     if name == "standard" and image_like:
-        ops.append(transforms.Normalize((0.49139968, 0.48215827, 0.44653124), (0.24703233, 0.24348505, 0.26158768)))
+        normalization = preprocessing.get("normalization")
+        if normalization is None:
+            mean, std = (0.49139968, 0.48215827, 0.44653124), (0.24703233, 0.24348505, 0.26158768)
+        else:
+            import math
+            if not isinstance(normalization, Mapping):
+                raise ValueError("Scratch normalization must contain mean and std lists")
+            try:
+                mean = tuple(float(value) for value in normalization["mean"])
+                std = tuple(float(value) for value in normalization["std"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("Scratch normalization must contain numeric mean and std lists") from exc
+            if not mean or len(mean) != len(std) or not all(math.isfinite(value) for value in (*mean, *std)) or any(value <= 0 for value in std):
+                raise ValueError("Scratch normalization requires equal-length finite mean/std and positive std")
+        ops.append(transforms.Normalize(mean, std))
     elif name == "gce2018" and image_like:
         # GCE specifies per-pixel mean subtraction (not variance
         # standardisation) before its 32x32 crop/flip augmentation.
@@ -1329,6 +1365,9 @@ def build_role_datasets(
     """Select concrete role datasets from already materialised splits."""
     weak = preprocessing_transform
     views = dict(view_transforms)
+    evaluation_weak, evaluation_views = weak, views
+    if "evaluation_preprocessing" in data_config:
+        evaluation_weak, evaluation_views = build_transforms(data_config["evaluation_preprocessing"], train_split, ("weak",))
     trusted: ScratchSplit | None = None
     learning_train = noisy_train
     if "trusted_validation" in roles:
@@ -1360,11 +1399,11 @@ def build_role_datasets(
         elif role == "train":
             datasets[role] = ScratchRoleDataset(learning_train, transform=weak, views=views)
         elif role == "train_eval":
-            datasets[role] = ScratchRoleDataset(learning_train, transform=weak, views=views)
+            datasets[role] = ScratchRoleDataset(learning_train, transform=evaluation_weak, views=evaluation_views)
         elif role in {"clean_validation", "noisy_validation"}:
-            datasets[role] = ScratchRoleDataset(validation_split, transform=weak, views=views)
+            datasets[role] = ScratchRoleDataset(validation_split, transform=evaluation_weak, views=evaluation_views)
         elif role == "test":
-            datasets[role] = ScratchRoleDataset(test_split, transform=weak, views=views)
+            datasets[role] = ScratchRoleDataset(test_split, transform=evaluation_weak, views=evaluation_views)
         else:
             raise ValueError(f"unknown Scratch data role `{role}`")
     return datasets

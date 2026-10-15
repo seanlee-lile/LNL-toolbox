@@ -403,6 +403,34 @@ def _data_service__write_fashion_idx(root: Path, split: str, count: int) -> None
 # --- merged from test_data_service.py ---
 class _data_service_DataServiceTest(unittest.TestCase):
 
+    def test_gce_evaluation_reuses_training_pixel_mean(self) -> None:
+        train = _data_adapters__cifar(40, 'train')
+        test = _data_adapters__cifar(20, 'test')
+        train.images.fill(64)
+        test.images.fill(192)
+        config = {
+            'data': {'name': 'cifar10', 'root': 'unused', 'validation_size': 10,
+                     'preprocessing': 'gce2018', 'augment': False},
+            'noise': {'name': 'clean'},
+            'loader': {'batch_size': 10, 'num_workers': 0},
+        }
+        requirements = DataRequirements(
+            roles=frozenset({DataRole.TRAIN, DataRole.TRAIN_EVAL,
+                             DataRole.CLEAN_VALIDATION, DataRole.TEST}),
+            validation_targets='clean', needs_noise_manifest=False,
+        )
+        with tempfile.TemporaryDirectory() as directory, patch(
+            'lnl_toolbox.data.sources.load_cifar10',
+            side_effect=lambda _root, split: train if split == 'train' else test,
+        ):
+            prepared = prepare_experiment_data(config, requirements=requirements,
+                                                run_dir=directory, seed=1)
+            for role in (DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.CLEAN_VALIDATION):
+                sample = prepared.dataset_for(role)[0]['input']
+                torch.testing.assert_close(sample, torch.zeros_like(sample), atol=1e-6, rtol=0)
+            sample = prepared.dataset_for(DataRole.TEST)[0]['input']
+            torch.testing.assert_close(sample, torch.full_like(sample, 128 / 255), atol=1e-6, rtol=0)
+
     def test_native_validation_noisy_targets_use_validation_split_mapping(self) -> None:
         requirements = DataRequirements(roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}), validation_targets='noisy', needs_noise_manifest=False)
         with tempfile.TemporaryDirectory() as directory:
@@ -413,12 +441,72 @@ class _data_service_DataServiceTest(unittest.TestCase):
             self.assertEqual(prepared.train_split.observed_targets.tolist(), [5, 6])
             self.assertEqual(prepared.realized_noise_rate(DataRole.NOISY_VALIDATION), 0.0)
 
-    def test_native_noisy_data_fails_before_manifest_required_training(self) -> None:
+    def test_native_noisy_data_builds_observations_without_clean_truth(self) -> None:
         requirements = DataRequirements(roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}), validation_targets='noisy', needs_noise_manifest=True)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            with self.assertRaisesRegex(ValueError, 'native observed noisy labels without train clean targets'):
-                prepare_experiment_data({'data': {'name': 'native_noisy_fixture', 'root': str(root)}, 'loader': {'batch_size': 2, 'num_workers': 0}}, requirements=requirements, run_dir=root / 'run', seed=3, registry=DatasetRegistry((_data_service__NativeNoisyFixtureAdapter(),)))
+            prepared = prepare_experiment_data({'data': {'name': 'native_noisy_fixture', 'root': str(root)}, 'loader': {'batch_size': 2, 'num_workers': 0}}, requirements=requirements, run_dir=root / 'run', seed=3, registry=DatasetRegistry((_data_service__NativeNoisyFixtureAdapter(),)))
+            self.assertIsNone(prepared.manifest.clean_targets)
+            self.assertIsNone(prepared.manifest.actual_rate)
+            self.assertEqual(prepared.manifest.noisy_targets.tolist(), [5, 6])
+            self.assertEqual(prepared.manifest.global_indices.tolist(), prepared.train_split.global_indices.tolist())
+
+    def test_native_observations_reach_real_training_without_oracle_metrics(self) -> None:
+        from test_coteaching import _coteaching_workflow__config
+        from test_cnlcu import _cnlcu_workflow__config
+        from test_lend import _lend_workflow__config
+        from test_upm import _upm_workflow__config
+        from test_dividemix import _dividemix_workflow__config
+        from test_t_revision import _t_revision_workflow__config
+        from lnl_toolbox.training.experiment import run_experiment
+        from lnl_toolbox.noise import NoiseManifest
+
+        class NativeImageAdapter:
+            name, aliases = 'cifar10', ()
+
+            def validate(self, spec):
+                pass
+
+            def load(self, spec, split, *, seed):
+                count = 40 if split == 'train' else 20
+                labels = np.arange(count, dtype=np.int64) % 10
+                images = np.random.default_rng(seed + {'train': 0, 'validation': 1, 'test': 2}[split]).integers(0, 256, (count, 32, 32, 3), dtype=np.uint8)
+                return RawDatasetSplit(images, labels, np.arange(count), self.name, split, 10,
+                                       clean_targets=labels.copy() if split == 'test' else None,
+                                       source='native_observations_fixture')
+
+        configs = [_coteaching_workflow__config(1), _cnlcu_workflow__config(1),
+                   _lend_workflow__config(1), _upm_workflow__config(main_epochs=1),
+                   _dividemix_workflow__config(1), _t_revision_workflow__config()]
+        configs[-1]['t_revision']['stage1']['model'] = {'name': 'tiny_cnn', 'width': 2}
+        correction = _coteaching_workflow__config(1)
+        correction.pop('method')
+        correction.pop('coteaching')
+        correction['execution'] = {'runner': 'supervised'}
+        correction['pipeline'] = {'warmup_epochs': 1, 'transition_estimator': {'name': 'anchor'},
+                                  'risk_corrector': {'name': 'forward'}}
+        configs.append(correction)
+        registry = DatasetRegistry((NativeImageAdapter(),))
+        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.training.data_service.DEFAULT_DATA_SERVICE.registry', registry):
+            for config in configs:
+                method_name = config.get('method', 'loss_correction')
+                with self.subTest(method=method_name):
+                    config['data'].update(name='cifar10', root=directory, num_classes=10,
+                                          validation_size=10, max_train_samples=20,
+                                          max_validation_samples=10, max_test_samples=10, augment=False)
+                    config['noise'] = {'name': 'native', 'validation_targets': 'noisy'}
+                    config.setdefault('trainer', {})['device'] = 'cpu'
+                    config.setdefault('loader', {}).update(batch_size=10, num_workers=0)
+                    run_dir = run_experiment(config, Path(directory) / method_name)
+                    self.assertTrue((run_dir / 'last.pt').is_file())
+                    manifest = NoiseManifest.load(run_dir / 'noise_manifest.npz')
+                    self.assertIsNone(manifest.clean_targets)
+                    self.assertIsNone(manifest.actual_rate)
+                    rows = [json.loads(line) for line in (run_dir / 'metrics.jsonl').read_text(encoding='utf-8').splitlines()]
+                    for row in rows:
+                        for key, value in row.items():
+                            if key.startswith('oracle_') or key.startswith('selected_clean_precision'):
+                                self.assertIsNone(value)
 
     def test_synthetic_noise_manifest_and_validation_mapping_are_preserved(self) -> None:
         requirements = DataRequirements(roles=frozenset({DataRole.TRAIN, DataRole.NOISY_VALIDATION, DataRole.TEST}), validation_targets='noisy')

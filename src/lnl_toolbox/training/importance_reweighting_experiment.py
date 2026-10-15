@@ -25,6 +25,19 @@ from lnl_toolbox.training.experiment import _environment, build_optimizer, build
 from lnl_toolbox.training.snapshots import collect_feature_snapshot
 
 
+def _realized_noise_rates(manifest) -> tuple[float | None, float | None]:
+    """Diagnostic class-conditional flip rates; never used for training weights."""
+    if manifest.clean_targets is None:
+        return None, None
+    clean = np.asarray(manifest.clean_targets)
+    noisy = np.asarray(manifest.noisy_targets)
+    rates = []
+    for label in (1, 0):
+        mask = clean == label
+        rates.append(float(np.mean(noisy[mask] != label)) if mask.any() else None)
+    return rates[0], rates[1]
+
+
 def run_importance_reweighting_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
@@ -65,8 +78,7 @@ def run_importance_reweighting_experiment(
     manifest = prepared.manifest
     if manifest is None:
         raise ValueError("importance reweighting requires binary asymmetric noise")
-    realized_rho_positive = float(method_config.noise["rho_positive"])
-    realized_rho_negative = float(method_config.noise["rho_negative"])
+    realized_rho_positive, realized_rho_negative = _realized_noise_rates(manifest)
 
     def train_loader_factory(epoch: int):
         return prepared.loader(DataRole.TRAIN, epoch=int(epoch), stream=1000)
@@ -104,9 +116,12 @@ def run_importance_reweighting_experiment(
         "num_classes": manifest.num_classes,
         "label_convention": manifest.metadata.get("label_convention"),
         "data_fingerprint": prepared.data_fingerprint,
-        "realized_rho_positive": realized_rho_positive,
-        "realized_rho_negative": realized_rho_negative,
     }
+    # Missing observations must not add non-reflexive NaN checkpoint identity.
+    for name, value in (("realized_rho_positive", realized_rho_positive),
+                        ("realized_rho_negative", realized_rho_negative)):
+        if value is not None:
+            manifest_identity[name] = value
     for artifact_name, hash_name in (
         ("preprocessing_state.json", "preprocessing_state_hash"),
         ("split_manifest.json", "split_hash"),
@@ -157,4 +172,11 @@ def run_importance_reweighting_experiment(
         encoding="utf-8",
     )
     result = algorithm.run()
+    # Publish JSON null (unknown) instead of legacy diagnostic NaN values.
+    metrics_path = run_dir / "final_metrics.json"
+    if metrics_path.is_file() and (realized_rho_positive is None or realized_rho_negative is None):
+        metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+        metrics["noise_rates"]["realized_rho_positive"] = realized_rho_positive
+        metrics["noise_rates"]["realized_rho_negative"] = realized_rho_negative
+        metrics_path.write_text(json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8")
     return result

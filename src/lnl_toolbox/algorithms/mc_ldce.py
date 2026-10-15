@@ -34,15 +34,28 @@ class MCLDCEObjective:
         base_loss: nn.Module,
         metadata: Mapping[str, Any],
     ) -> Tensor:
-        del logits, noisy_targets, sample_indices, base_loss, metadata
+        del logits, sample_indices, base_loss, metadata
         if self.statistic is None:
             raise ValueError("MC-LDCE objective requires a statistic artifact")
         weight, bias = classifier_parameters(model)
         if bias is not None:
-            raise ValueError("MC-LDCE Eq. (30) requires a bias-free classifier")
-        centroid = torch.as_tensor(
-            self.statistic.values.copy(), dtype=features.dtype, device=features.device
+            raise ValueError("MC-LDCE Eq. (4.13) requires a bias-free classifier")
+        # Eq. (4.12) is linear in the noisy centroid. A uniform minibatch
+        # estimates the full-data risk at the CURRENT network parameters.
+        # Keep this expression in autograd, using the same features (including
+        # augmentation and dropout) as the quadratic term. M and its priors
+        # are estimated globally, not from a possibly single-class minibatch.
+        coefficient = torch.as_tensor(
+            self.statistic.metadata["coefficient_matrix"],
+            dtype=features.dtype, device=features.device,
         )
+        inverse = torch.linalg.pinv(
+            coefficient, rtol=float(self.statistic.metadata["rcond"])
+        )
+        labels = torch.nn.functional.one_hot(
+            noisy_targets, num_classes=coefficient.shape[0]
+        ).to(features)
+        centroid = (features.transpose(0, 1) @ labels / features.shape[0] @ inverse).T
         if weight.shape != centroid.shape:
             raise ValueError("classifier and centroid dimensions differ")
         scores = features @ weight.transpose(0, 1)

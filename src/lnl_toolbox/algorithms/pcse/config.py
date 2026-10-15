@@ -307,43 +307,21 @@ class PCSEConfig:
                 owner="transition_stage.parameterization",
                 allowed={
                     "name",
-                    "initial_flip_mass",
-                    "max_flip_mass",
-                    "temperature",
+                    "initial_weight",
                     "seed",
                 },
             )
             if (
                 str(parameterization.get("name", "")).strip().lower()
-                != "diagonal_dominant"
+                != "sigmoid_off_diagonal"
             ):
                 raise ValueError(
                     "paper_volmin parameterization.name must be "
-                    "diagonal_dominant"
+                    "sigmoid_off_diagonal"
                 )
-            initial_flip_mass = _positive_float(
-                parameterization.get("initial_flip_mass"),
-                owner=(
-                    "transition_stage.parameterization.initial_flip_mass"
-                ),
-            )
-            max_flip_mass = _positive_float(
-                parameterization.get("max_flip_mass"),
-                owner="transition_stage.parameterization.max_flip_mass",
-            )
-            if max_flip_mass >= 0.5:
-                raise ValueError(
-                    "paper_volmin max_flip_mass must be less than 0.5"
-                )
-            if initial_flip_mass >= max_flip_mass:
-                raise ValueError(
-                    "paper_volmin initial_flip_mass must be below "
-                    "max_flip_mass"
-                )
-            temperature = _positive_float(
-                parameterization.get("temperature"),
-                owner="transition_stage.parameterization.temperature",
-            )
+            initial_weight = float(parameterization.get("initial_weight"))
+            if not math.isfinite(initial_weight):
+                raise ValueError("transition_stage.parameterization.initial_weight must be finite")
             seed = int(parameterization.get("seed"))
             determinant_tolerance = _positive_float(
                 transition.get("determinant_tolerance"),
@@ -364,10 +342,8 @@ class PCSEConfig:
                 },
                 "scheduler": {"name": "none"},
                 "parameterization": {
-                    "name": "diagonal_dominant",
-                    "initial_flip_mass": initial_flip_mass,
-                    "max_flip_mass": max_flip_mass,
-                    "temperature": temperature,
+                    "name": "sigmoid_off_diagonal",
+                    "initial_weight": initial_weight,
                     "seed": seed,
                 },
                 "determinant_tolerance": determinant_tolerance,
@@ -381,8 +357,8 @@ class PCSEConfig:
         layers = tuple(
             PCSEFeatureLayerConfig.from_mapping(item) for item in raw_layers
         )
-        if len(layers) < 2:
-            raise ValueError("PCSE requires at least two hidden feature layers")
+        if not layers:
+            raise ValueError("PCSE requires at least one hidden feature layer")
         if len({layer.name for layer in layers}) != len(layers):
             raise ValueError("PCSE feature layer names must be unique")
 

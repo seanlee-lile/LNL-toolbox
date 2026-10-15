@@ -36,9 +36,9 @@ selector:
 parameter_update:
   name: cdr
   noise_rate: 0.4
-  l1_decay: 0.001
-  critical_scope: all_trainable
-  compatibility_mode: paper
+  l1_decay: 0.0
+  critical_scope: matrix_and_convolution_weights
+  compatibility_mode: official_code
 loader:
   batch_size: 64
   num_workers: 0
@@ -51,8 +51,8 @@ model:
 optimizer:
   name: sgd
   lr: 0.01
-  momentum: 0.0
-  weight_decay: 0.0
+  momentum: 0.9
+  weight_decay: 0.001
 scheduler:
   name: multistep
   milestones:

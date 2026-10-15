@@ -34,7 +34,7 @@ from lnl_toolbox.training.noisy_labels import (
     effective_subset_actual_rate,
     file_sha256,
 )
-from lnl_toolbox.training.pcse_pretrained import load_upm_main_best_source
+from lnl_toolbox.training.pcse_pretrained import load_pretrained_classifier_source
 
 
 class _PCSEMultilayerPerceptron(nn.Module):
@@ -263,11 +263,11 @@ def run_pcse_experiment(
         data_name = str(data.get("name", "")).strip().lower()
         num_classes = int(data.get("num_classes", 0))
         if data_name != "cifar10":
-            raise ValueError("PCSE external UPM source currently requires CIFAR-10")
+            raise ValueError("PCSE external classifier source currently requires CIFAR-10")
         if num_classes != 10:
             raise ValueError("PCSE CIFAR-10 requires data.num_classes: 10")
         model = build_model(model_config, num_classes)
-        external_source = load_upm_main_best_source(
+        external_source = load_pretrained_classifier_source(
             method_config.pretraining.source, model, num_classes=num_classes
         )
         source_model = build_model(model_config, num_classes)
@@ -300,7 +300,7 @@ def run_pcse_experiment(
             model_config, prepared.input_spec, num_classes
         )
     elif num_classes != 10:
-        raise ValueError("PCSE external UPM source class count mismatch")
+        raise ValueError("PCSE external classifier source class count mismatch")
     if model is None:
         raise RuntimeError("PCSE model construction did not complete")
     manifest, manifest_path = prepared.manifest, prepared.manifest_path

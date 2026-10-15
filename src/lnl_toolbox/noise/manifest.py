@@ -43,8 +43,8 @@ class NoiseManifest:
     dataset: str
     noise_type: str
     seed: int
-    requested_rate: float
-    clean_targets: np.ndarray
+    requested_rate: float | None
+    clean_targets: np.ndarray | None
     noisy_targets: np.ndarray
     transition_matrix: np.ndarray | None = None
     per_sample_transition: np.ndarray | None = None
@@ -58,8 +58,11 @@ class NoiseManifest:
     def __post_init__(self) -> None:
         if not self.split.strip():
             raise ValueError("Noise manifest split must not be empty")
-        self.clean_targets = np.asarray(self.clean_targets, dtype=np.int64)
         self.noisy_targets = np.asarray(self.noisy_targets, dtype=np.int64)
+        if self.clean_targets is None:
+            self._validate_observed_only()
+            return
+        self.clean_targets = np.asarray(self.clean_targets, dtype=np.int64)
         if self.clean_targets.ndim != 1 or self.noisy_targets.ndim != 1:
             raise ValueError("clean_targets and noisy_targets must be one-dimensional")
         if self.clean_targets.shape != self.noisy_targets.shape:
@@ -113,6 +116,29 @@ class NoiseManifest:
                     f"[{self.clean_targets.size}, {self.num_classes}]"
                 )
 
+    def _validate_observed_only(self) -> None:
+        """An indexed observation record contains no noise-generation truth."""
+        values = self.noisy_targets
+        if values.ndim != 1 or (values.size and values.min() < 0):
+            raise ValueError("observed labels must be a non-negative vector")
+        indices = (np.arange(values.size, dtype=np.int64) if self.global_indices is None
+                   else np.asarray(self.global_indices, dtype=np.int64))
+        if indices.shape != values.shape or np.unique(indices).size != indices.size or (indices.size and indices.min() < 0):
+            raise ValueError("global_indices must be unique, non-negative and align with observations")
+        self.global_indices = indices
+        if self.requested_rate is not None and not 0 <= self.requested_rate <= 1:
+            raise ValueError("requested_rate must be in [0, 1] or unknown")
+        fingerprint = fingerprint_labels(values)
+        if self.dataset_fingerprint and self.dataset_fingerprint != fingerprint:
+            raise ValueError("observed-label fingerprint mismatch")
+        self.dataset_fingerprint = fingerprint
+        if self.num_classes is None and values.size:
+            self.num_classes = int(values.max()) + 1
+        if self.num_classes is not None and (self.num_classes < 2 or (values.size and values.max() >= self.num_classes)):
+            raise ValueError("observed labels are outside configured classes")
+        if self.transition_matrix is not None or self.per_sample_transition is not None:
+            raise ValueError("observed-only records cannot declare ground-truth transitions")
+
     def validate_for(
         self,
         clean_targets: np.ndarray,
@@ -121,7 +147,7 @@ class NoiseManifest:
         required_indices: np.ndarray | None = None,
         reference_indices: np.ndarray | None = None,
     ) -> "NoiseManifest":
-        """Verify this split-scoped mapping against aligned source targets."""
+        """Verify aligned clean targets, or observations for a native record."""
 
         reference = np.asarray(clean_targets, dtype=np.int64)
         if reference.ndim != 1:
@@ -151,13 +177,14 @@ class NoiseManifest:
             ) from error
         if fingerprint_labels(aligned) != self.dataset_fingerprint:
             raise ValueError("Noise manifest fingerprint does not match the current dataset")
-        if not np.array_equal(aligned, self.clean_targets):
-            raise ValueError("Noise manifest clean targets do not match the current dataset")
+        source_targets = self.noisy_targets if self.clean_targets is None else self.clean_targets
+        if not np.array_equal(aligned, source_targets):
+            raise ValueError("Noise manifest source targets do not match the current dataset")
         for name, values in (
             ("clean_targets", self.clean_targets),
             ("noisy_targets", self.noisy_targets),
         ):
-            if values.size and (values.min() < 0 or values.max() >= num_classes):
+            if values is not None and values.size and (values.min() < 0 or values.max() >= num_classes):
                 raise ValueError(f"{name} must be within [0, {num_classes})")
         if self.num_classes is not None and self.num_classes != num_classes:
             raise ValueError("Noise manifest num_classes does not match the current dataset")
@@ -186,14 +213,18 @@ class NoiseManifest:
 
     @property
     def flip_mask(self) -> np.ndarray:
+        if self.clean_targets is None:
+            raise ValueError("label corruption is unknown without clean targets")
         return self.clean_targets != self.noisy_targets
 
     @property
-    def realized_rate(self) -> float:
+    def realized_rate(self) -> float | None:
+        if self.clean_targets is None:
+            return None
         return float(self.flip_mask.mean()) if self.clean_targets.size else 0.0
 
     @property
-    def actual_rate(self) -> float:
+    def actual_rate(self) -> float | None:
         return self.realized_rate
 
     @property
@@ -235,13 +266,15 @@ class NoiseManifest:
             "mapping_hash": self.mapping_hash,
             "metadata": self.metadata,
         }
+        if self.clean_targets is None:
+            payload["observed_only"] = True
         np.savez_compressed(
             destination,
-            clean_targets=self.clean_targets,
+            clean_targets=np.array([], dtype=np.int64) if self.clean_targets is None else self.clean_targets,
             noisy_targets=self.noisy_targets,
             global_indices=self.global_indices,
-            flip_mask=self.flip_mask,
-            corruption_mask=self.corruption_mask,
+            flip_mask=np.array([], dtype=bool) if self.clean_targets is None else self.flip_mask,
+            corruption_mask=np.array([], dtype=bool) if self.clean_targets is None else self.corruption_mask,
             transition_matrix=np.array([]) if self.transition_matrix is None else self.transition_matrix,
             per_sample_transition=np.array([]) if self.per_sample_transition is None else self.per_sample_transition,
             metadata_json=np.array(json.dumps(payload, ensure_ascii=False)),
@@ -260,10 +293,10 @@ class NoiseManifest:
                 split=meta.get("split", "train"),
                 noise_type=meta["noise_type"],
                 seed=int(meta["seed"]),
-                requested_rate=float(meta["requested_rate"]),
+                requested_rate=None if meta["requested_rate"] is None else float(meta["requested_rate"]),
                 num_classes=meta.get("num_classes"),
                 global_indices=data["global_indices"] if "global_indices" in data.files else None,
-                clean_targets=data["clean_targets"],
+                clean_targets=None if meta.get("observed_only") else data["clean_targets"],
                 noisy_targets=data["noisy_targets"],
                 transition_matrix=None if transition.size == 0 else transition,
                 per_sample_transition=None if per_sample.size == 0 else per_sample,

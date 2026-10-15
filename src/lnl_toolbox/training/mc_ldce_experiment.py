@@ -59,19 +59,19 @@ def _transition(config, snapshot_hash: str) -> TransitionArtifact:
     return TransitionArtifact(value["matrix"], str(value.get("estimator", "known")), snapshot_hash, {"configured": True})
 
 
-_LIFECYCLE_VERSION = 2
+_LIFECYCLE_VERSION = 3
 
 
 def _lifecycle(config: dict[str, Any]) -> dict[str, Any]:
     value = dict(config.get("mc_ldce", {}))
     version = int(value.get("lifecycle_version", _LIFECYCLE_VERSION))
-    feature_mode = str(value.get("feature_mode", "fixed")).lower()
+    feature_mode = str(value.get("feature_mode", "joint")).lower()
     transition_model = str(value.get("transition_model", "separate")).lower()
     classifier_bias = bool(value.get("classifier_bias", False))
     if version != _LIFECYCLE_VERSION:
         raise ValueError(f"unsupported MC-LDCE lifecycle version: {version}")
-    if feature_mode != "fixed":
-        raise ValueError("MC-LDCE requires a fixed feature space")
+    if feature_mode != "joint":
+        raise ValueError("MC-LDCE requires joint CNN and centroid-risk training")
     if transition_model != "separate":
         raise ValueError("MC-LDCE requires a separate transition estimator model")
     if classifier_bias:
@@ -84,7 +84,7 @@ def _lifecycle(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _prepare_fixed_feature_classifier(model: nn.Module) -> None:
+def _prepare_classifier(model: nn.Module) -> None:
     classifier = getattr(model, "classifier", None)
     if not isinstance(classifier, nn.Linear):
         raise TypeError("MC-LDCE requires a direct linear classifier")
@@ -99,12 +99,7 @@ def _prepare_fixed_feature_classifier(model: nn.Module) -> None:
         model.classifier = replacement
         classifier = replacement
     for parameter in model.parameters():
-        parameter.requires_grad_(False)
-    for parameter in classifier.parameters():
         parameter.requires_grad_(True)
-    freeze = getattr(model, "freeze_feature_extractor", None)
-    if callable(freeze):
-        freeze()
 
 
 def _estimate_volmin(config, model, loader, device):
@@ -194,8 +189,8 @@ def run_mc_ldce_experiment(
         if payload.get("method") != "mc_ldce" or payload.get("config") != config:
             raise ValueError("MC-LDCE resume identity mismatch")
         if payload.get("lifecycle_version") != _LIFECYCLE_VERSION:
-            raise ValueError("MC-LDCE checkpoint predates fixed-feature lifecycle")
-        _prepare_fixed_feature_classifier(model)
+            raise ValueError("MC-LDCE checkpoint predates joint CNN lifecycle")
+        _prepare_classifier(model)
     elif str(config["transition"].get("estimator", "")).lower() == "paper_volmin":
         estimator_model = build_reproduction_model(
             bind_model_input(
@@ -209,7 +204,7 @@ def run_mc_ldce_experiment(
             config, estimator_model, train_loader, device
         )
         del estimator_model
-        _prepare_fixed_feature_classifier(model)
+        _prepare_classifier(model)
     else:
         warmup_epochs = int(config.get("warmup", {}).get("epochs", 0))
         warmup_optimizer = build_optimizer(model, config["optimizer"])
@@ -221,8 +216,8 @@ def run_mc_ldce_experiment(
                 warmup_optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 warmup_optimizer.step()
-        _prepare_fixed_feature_classifier(model)
-    optimizer = build_optimizer(model.classifier, config["optimizer"])
+        _prepare_classifier(model)
+    optimizer = build_optimizer(model, config["optimizer"])
     scheduler_config = dict(config.get("scheduler", {}) or {})
     scheduler = (
         None if str(scheduler_config.get("name", "none")).lower() == "linear_after"
@@ -282,6 +277,14 @@ def run_mc_ldce_experiment(
     (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     _write_epoch_metrics(rows, metrics_path)
     if rows: write_training_curves_svg(rows, run_dir / "training_curves.svg")
+    if rows:
+        tail = rows[-10:]
+        (run_dir / "summary.json").write_text(json.dumps({
+            "method": "mc_ldce",
+            "evaluation": "mean test accuracy over final up to 10 epochs of this run",
+            "epochs_averaged": len(tail),
+            "test_accuracy_mean": sum(row["test_accuracy"] for row in tail) / len(tail),
+        }, indent=2), encoding="utf-8")
     return run_dir
 
 

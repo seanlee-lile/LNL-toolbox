@@ -721,8 +721,9 @@ def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
         "evaluation.selection_split": "validation test",
         "evaluation.primary": "accuracy ensemble_accuracy mean_peer_accuracy",
         "lend.graph.metric": "inner_product cosine euclidean",
-        "mc_ldce.feature_mode": "fixed", "mc_ldce.transition_model": "separate",
+        "mc_ldce.feature_mode": "joint", "mc_ldce.transition_model": "separate",
         "model.initialization": "kaiming torch_default",
+        "model.variant": "standard dss_author",
         "noise.mode": "generated external clean",
         "noise.name": "symmetric pairflip class_conditional binary_asymmetric_rcn asymmetric_rcn external_torch official_uniform_flip pdl clean none native real_world",
         "noise.sampling": "global per_class transition",
@@ -756,6 +757,8 @@ def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
             method = "jocor"
         elif method == "binary":
             method = "binary_risk"
+    if method == "jocor":
+        enums["evaluation.selection_split"] = "validation test none"
     if method in {"coteaching", "cnlcu"}:
         exact["noise.rate"] = "decay"
         exact[method + ".noise_rate"] = "decay"

@@ -806,6 +806,103 @@ def _noisy_ce_baseline__config(epochs: int=1) -> dict:
     return {'seed': 7, 'data': {'name': 'cifar10', 'root': 'unused', 'validation_size': 10, 'max_train_samples': 20, 'max_validation_samples': 10, 'max_test_samples': 10, 'augment': False}, 'noise': {'name': 'symmetric', 'rate': 0.4, 'seed': 17}, 'loss': {'name': 'ce'}, 'loader': {'batch_size': 10, 'num_workers': 0, 'pin_memory': False}, 'model': {'name': 'tiny_cnn', 'width': 4}, 'optimizer': {'name': 'adamw', 'lr': 0.001}, 'scheduler': {'name': 'cosine', 't_max': 2}, 'trainer': {'epochs': epochs, 'device': 'cpu'}}
 
 
+class APLReportingProtocolTest(unittest.TestCase):
+    @staticmethod
+    def config(epochs=2):
+        config = _noisy_ce_baseline__config(epochs)
+        config['data']['validation_size'] = 0
+        config['data'].pop('max_validation_samples')
+        config['model'] = {'name': 'cifar_cnn8'}
+        config['optimizer'] = {'name': 'sgd', 'lr': 0.01, 'momentum': 0.9, 'weight_decay': 1e-4}
+        config['loss'] = {'name': 'apl', 'alpha': 1.0, 'beta': 1.0,
+                          'active': {'name': 'nce'},
+                          'passive': {'name': 'rce', 'log_zero': -9.210340371976184}}
+        config['evaluation'] = {'report_checkpoint': 'last', 'selection_split': 'test',
+                                'allow_test_selection': False, 'loss': {'name': 'ce'}}
+        return config
+
+    def test_author_network_structure_and_initialization(self):
+        model = build_model({'name': 'cifar_cnn8'}, 10)
+        self.assertIsInstance(model.classifier[1], torch.nn.BatchNorm1d)
+        self.assertEqual(model.classifier[1].num_features, 256)
+        self.assertEqual(model.classifier[1].eps, 1e-5)
+        self.assertEqual(model.classifier[1].momentum, 0.1)
+        for module in model.modules():
+            if isinstance(module, (torch.nn.Conv2d, torch.nn.Linear)):
+                self.assertGreater(torch.count_nonzero(module.bias).item(), 0)
+            if isinstance(module, (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d)):
+                torch.testing.assert_close(module.weight, torch.ones_like(module.weight))
+                torch.testing.assert_close(module.bias, torch.zeros_like(module.bias))
+        self.assertEqual(model(torch.randn(2, 3, 32, 32)).shape, (2, 10))
+
+    def test_formal_defaults_and_metadata(self):
+        import yaml
+        root = Path(__file__).resolve().parents[1]
+        for rate in ('02', '04'):
+            config = yaml.safe_load((root / 'configs' / 'experiment' /
+                f'apl_cifar10_noise{rate}_reproduction.yaml').read_text(encoding='utf-8'))
+            self.assertEqual(config['evaluation']['report_checkpoint'], 'last')
+            self.assertFalse(config['evaluation']['allow_test_selection'])
+            self.assertEqual(config['data']['validation_size'], 0)
+            self.assertEqual(config['loader']['batch_size'], 128)
+            self.assertEqual(config['trainer']['epochs'], 120)
+            self.assertEqual(config['optimizer']['lr'], 0.01)
+        registry = yaml.safe_load((root / 'web' / 'lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
+        self.assertIn('evaluation.report_checkpoint', registry['parameter_display_policy']['hidden_paths_by_method']['apl'])
+        self.assertEqual(registry['methods']['apl']['parameters']['locked']['evaluation.report_checkpoint']['current'], 'last')
+
+    def test_last_checkpoint_report_does_not_select_highest_test_accuracy(self):
+        import json
+        scores = iter((0.9, 0.1, 0.1))
+        evaluated = []
+        def evaluate(model, *_args):
+            evaluated.append({key: value.detach().clone() for key, value in model.state_dict().items()})
+            return {'loss': 1.0, 'accuracy': next(scores), 'samples': 10.0}
+        with tempfile.TemporaryDirectory() as directory, patch(
+            'lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: _noisy_ce_baseline__cifar(40 if split == 'train' else 20, split)
+        ), patch('lnl_toolbox.training.experiment.evaluate_classification', side_effect=evaluate):
+            run_dir = run_experiment(self.config(), output_dir=Path(directory) / 'run')
+            final = json.loads((run_dir / 'final_metrics.json').read_text())
+            self.assertEqual(final['test_checkpoint'], 'last.pt')
+            self.assertEqual(final['report_epoch'], 2)
+            self.assertEqual(final['test_accuracy'], 0.1)
+            self.assertFalse(final['test_selection_leakage'])
+            self.assertIsNone(final['best_epoch'])
+            self.assertFalse((run_dir / 'best.pt').exists())
+            for key, value in evaluated[-1].items():
+                torch.testing.assert_close(value, evaluated[-2][key], rtol=0, atol=0)
+
+    def test_last_checkpoint_resume_matches_uninterrupted_training(self):
+        with tempfile.TemporaryDirectory() as directory, patch(
+            'lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: _noisy_ce_baseline__cifar(40 if split == 'train' else 20, split)
+        ):
+            full = run_experiment(self.config(), output_dir=Path(directory) / 'full')
+            partial = run_experiment(self.config(1), output_dir=Path(directory) / 'resumed')
+            run_experiment(self.config(), output_dir=partial, resume=partial / 'last.pt')
+            expected = torch.load(full / 'last.pt', map_location='cpu', weights_only=False)
+            actual = torch.load(partial / 'last.pt', map_location='cpu', weights_only=False)
+            for key, value in expected['model'].items():
+                torch.testing.assert_close(actual['model'][key], value, rtol=0, atol=0)
+
+    def test_test_monitoring_cannot_trigger_early_stopping(self):
+        config = self.config()
+        config['early_stopping'] = {}
+        with self.assertRaisesRegex(ValueError, 'Test monitoring must not control early stopping'):
+            run_experiment(config)
+
+    def test_validation_requirement_is_removed_only_for_apl_last_test_report(self):
+        from lnl_toolbox.data import DataRole
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        config = self.config()
+        validation_roles = {DataRole.CLEAN_VALIDATION, DataRole.NOISY_VALIDATION}
+        self.assertFalse(resolve_data_requirements(config).roles & validation_roles)
+        config['evaluation']['report_checkpoint'] = 'best'
+        self.assertTrue(resolve_data_requirements(config).roles & validation_roles)
+        config['evaluation']['report_checkpoint'] = 'last'
+        config['loss'] = {'name': 'gce', 'q': 0.7}
+        self.assertTrue(resolve_data_requirements(config).roles & validation_roles)
+
+
 class _noisy_ce_baseline__GenericTabularAdapter:
     name = 'supervised_generic_tabular_fixture'
     aliases: tuple[str, ...] = ()

@@ -283,6 +283,7 @@ def _transforms(
     requirements: DataRequirements,
     *,
     training: bool,
+    pixel_mean: torch.Tensor | None = None,
 ) -> dict[str, Any]:
     if not _is_image_split(split):
         return {name: None for name in requirements.views}
@@ -290,8 +291,7 @@ def _transforms(
     normalization = dict(data.get("normalization", {}) or {})
     if name.startswith("cifar"):
         preprocessing = str(data.get("preprocessing", "standard"))
-        pixel_mean = None
-        if preprocessing == "gce2018":
+        if preprocessing == "gce2018" and pixel_mean is None:
             pixel_mean = cifar_pixel_mean(np.asarray(split.inputs))
         if preprocessing == "l2rw" or {"num_val", "num_clean", "input_seed"} <= set(data):
             from torchvision import transforms
@@ -942,18 +942,24 @@ def _prepare_experiment_data(
     requests_noise_materialization = bool(noise_config.get("manifest")) or (
         configured_noise_name not in {"", "clean", "none", "native", "real_world"}
     )
-    if (
-        source_clean is None
-        and requirements.needs_noise_manifest
-        and requirements.validation_targets == "noisy"
-    ):
-        raise ValueError(
-            "This method requires a noise manifest derived from aligned "
-            "clean/noisy targets, but dataset "
-            f"{train.dataset!r} provides native observed noisy labels without "
-            "train clean targets. This native-noise workflow is not yet "
-            "supported by this method."
-        )
+    if source_clean is None:
+        if requests_noise_materialization:
+            raise ValueError("Artificial noise requires clean source labels; use native observations instead")
+        if requirements.needs_noise_manifest:
+            manifest = NoiseManifest(
+                train.dataset, "native", int(config.get("seed", seed)), None,
+                None, train.observed_targets.copy(),
+                metadata={"source": "native", "source_path": train.source},
+                global_indices=train.global_indices.copy(), num_classes=train.num_classes,
+            )
+            manifest_path = run_dir / "noise_manifest.npz"
+            if manifest_path.is_file():
+                stored = NoiseManifest.load(manifest_path)
+                if stored.mapping_hash != manifest.mapping_hash or stored.clean_targets is not None:
+                    raise ValueError("existing native observations do not match configured data")
+                manifest = stored
+            else:
+                manifest.save(manifest_path)
     if source_clean is not None:
         observed_differs = not np.array_equal(train.observed_targets, source_clean)
         if observed_differs:
@@ -1156,20 +1162,27 @@ def _prepare_experiment_data(
             validation_split.global_indices,
             validation_split.clean_targets if validation_split.clean_targets is not None else validation_split.observed_targets,
         )
-    train_transforms = _transforms(train, data_config, requirements, training=True)
+    # Fit GCE pixel statistics on the training source, never on evaluation data.
+    pixel_mean = (
+        cifar_pixel_mean(np.asarray(train.inputs))
+        if str(data_config.get("preprocessing", "standard")) == "gce2018"
+        and train.dataset.replace("_", "").lower().startswith("cifar")
+        else None
+    )
+    train_transforms = _transforms(train, data_config, requirements, training=True, pixel_mean=pixel_mean)
     eval_requirements = DataRequirements(
         roles=requirements.roles,
         views=("weak",),
         validation_targets=requirements.validation_targets,
         needs_noise_manifest=requirements.needs_noise_manifest,
     )
-    train_eval_transforms = _transforms(train, data_config, eval_requirements, training=False)
+    train_eval_transforms = _transforms(train, data_config, eval_requirements, training=False, pixel_mean=pixel_mean)
     validation_transforms = (
         None
         if validation_split is None
-        else _transforms(validation_split, data_config, eval_requirements, training=False)
+        else _transforms(validation_split, data_config, eval_requirements, training=False, pixel_mean=pixel_mean)
     )
-    test_transforms = _transforms(test, data_config, eval_requirements, training=False)
+    test_transforms = _transforms(test, data_config, eval_requirements, training=False, pixel_mean=pixel_mean)
     datasets: dict[DataRole, Dataset] = {}
     if DataRole.TRAIN in requirements.roles:
         datasets[DataRole.TRAIN] = IndexedDatasetView(train, train_indices, targets_by_index=noisy_map, transforms=train_transforms)
@@ -1209,6 +1222,7 @@ def _prepare_experiment_data(
             transforms=_transforms(
                 trusted_split, data_config, eval_requirements,
                 training=trusted_source == "official_generated",
+                pixel_mean=pixel_mean,
             ),
         )
     if DataRole.TEST in requirements.roles:

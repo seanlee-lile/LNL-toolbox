@@ -4,9 +4,9 @@ method: mc_ldce
 execution:
   runner: mc_ldce
 mc_ldce:
-  lifecycle_version: 2
+  lifecycle_version: 3
   transition_model: separate
-  feature_mode: fixed
+  feature_mode: joint
   classifier_bias: false
 seed: 1
 output_root: artifacts/reproductions/mc-ldce-cifar10-sym20

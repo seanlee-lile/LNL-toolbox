@@ -1331,6 +1331,10 @@ def _parameter_presentation(path: str, method: str = "") -> tuple[str, str]:
     """
 
     policy = _parameter_display_policy()
+    if method == "loss_correction" and path in {"pipeline.risk_corrector.name", "pipeline.warmup_epochs"}:
+        return "parameter", ""
+    if method == "loss_correction" and path in {"pipeline.transition_estimator.name", "pipeline.pretraining_protocol", "model.variant", "evaluation.selection_metric", "evaluation.corrected_loss"}:
+        return "hidden", ""
     # Trusted-supervision wiring is resolved by the selected method/data
     # protocol. Raw trusted_validation.* keys are not meaningful controls in
     # the ordinary Web parameter editor.
@@ -1608,6 +1612,10 @@ def _parameter_context(path: str, method: str = "", *, brief: bool = False) -> s
 
 
 def _parameter_user_note(path: str, original: str, method: str = "") -> str:
+    if method == "loss_correction" and path == "pipeline.warmup_epochs":
+        return "估计 T 前的 CE 训练轮数。按带噪验证损失选择最佳 CE 模型，再用训练集和验证集预测估计 T。CIFAR-10 默认 120 轮。"
+    if method == "loss_correction" and path == "pipeline.transition_estimator.name":
+        return "known 使用提供的转移矩阵；anchor 从观测标签数据估计，不需要真实 T 或干净标签。"
     spec = _parameter_ui_spec(path)
     if spec:
         context = _parameter_context(path, method)
@@ -1816,6 +1824,10 @@ def _parameter_choices(field: dict[str, object], method: str) -> list[dict[str, 
         return None  # A user-supplied filesystem path is not an enumeration.
     ui = _parameter_registry().get("parameter_ui", {})
     choices = ui.get("choices", {}).get(path)
+    if method == "loss_correction" and path == "pipeline.transition_estimator.name":
+        choices = ["known", "anchor"]
+    if method == "loss_correction" and path == "pipeline.risk_corrector.name":
+        choices = ["forward", "backward"]
     parts = path.split(".")
     category = next((part for part in ("optimizer", "scheduler", "model", "loss") if part in parts), "")
     if choices is None and parts[-1] == "name" and category:
@@ -1992,6 +2004,8 @@ def _registry_config_fields(
             presentation, resource_label = _parameter_presentation(str(path), method)
             found, current = _config_path_value(config, str(path))
             if not found:
+                if method == "loss_correction" and str(path) in {"pipeline.transition_estimator.matrix", "pipeline.transition_estimator.percentile", "model.variant"}:
+                    continue
                 if allow_missing:
                     continue
                 raise ValueError(f"registry 参数路径不存在：{method}.{path}")
@@ -2089,6 +2103,13 @@ def _registry_config_fields(
     paper_changes = [
         field for field in fields if field["level"] == "paper" and field["changed_from_paper"]
     ]
+    if method == "loss_correction":
+        estimated = (config.get("pipeline", {}).get("transition_estimator", {}) or {}).get("name") == "anchor"
+        for field in fields:
+            if field["path"] == "pipeline.warmup_epochs":
+                field["visible"] = estimated
+            if field["path"] == "pipeline.transition_estimator.percentile":
+                field["visible"] = estimated
     paper_change_paths = (
         [str(change["path"]) for change in _paper_parameter_changes(config, method)[1]]
         if allow_missing else [str(field["path"]) for field in paper_changes]
@@ -2413,6 +2434,10 @@ def _parameter_edit_rule(
 
     if level == "locked":
         return "fixed", "", None
+    if method == "loss_correction" and path == "pipeline.transition_estimator.name":
+        return "fixed", "根据当前噪声是否提供转移矩阵自动选择。", None
+    if method == "loss_correction" and path == "pipeline.pretraining_protocol":
+        return "fixed", "Loss Correction 使用两阶段预训练协议。", None
     registry = _parameter_registry()
     fixed = registry.get("runtime_fixed_parameter_paths", {})
     if path in fixed.get(method, ()):
@@ -2424,6 +2449,9 @@ def _parameter_edit_rule(
             if dimension is None:
                 return "fixed", "输入特征数由当前数据决定。", None
             return "derived", "此值跟随数据维度，请修改数据维度。", int(dimension)
+        if method in {"cnlcu", "coteaching"}:
+            _, noise_rate = _config_path_value(config, f"{method}.noise_rate")
+            return "derived", f"此值由算法估计噪声率计算，请修改 {method}.noise_rate。", 1.0 - float(noise_rate)
         _, noise_rate = _config_path_value(config, "noise.rate")
         expected = 1.0 - float(noise_rate) if path.endswith("remember_schedule.end") else float(noise_rate)
         return "derived", "此值由噪声率自动计算，请修改噪声率。", expected
@@ -2459,6 +2487,10 @@ def _parameter_edit_rule(
 
 
 def _synchronize_web_derived_parameters(config: dict[str, Any], method: str) -> None:
+    if method == "loss_correction":
+        from lnl_toolbox.quickstart.templates import configure_loss_correction_transition
+
+        configure_loss_correction_transition(config)
     if method == "jocor":
         from lnl_toolbox.core.config_schema import normalize_experiment_config
 
@@ -2600,6 +2632,11 @@ def _validate_changed_training_selectors(
                 from lnl_toolbox.training.multi_model_experiment import _apply_epoch_optimizer_schedule
 
                 _apply_epoch_optimizer_schedule(optimizer, value, epoch=0, total_epochs=epochs)
+            elif method == "mc_ldce" and path == "scheduler" and name == "linear_after":
+                # MC-LDCE's runner uses decay_start, not the generic start_epoch.
+                start = value.get("decay_start")
+                if isinstance(start, bool) or not isinstance(start, int) or not 0 <= start < epochs:
+                    raise ValueError("MC-LDCE scheduler.decay_start 必须为非负整数且小于训练轮数")
             else:
                 from lnl_toolbox.training.experiment import build_scheduler
 
@@ -2648,6 +2685,8 @@ def _paper_parameter_changes(
         for path in paper:
             baseline_found, baseline_value = _config_path_value(baseline, str(path))
             current_found, current_value = _config_path_value(config, str(path))
+            if not baseline_found and method == "loss_correction" and str(path) == "pipeline.transition_estimator.percentile":
+                continue
             if not baseline_found:
                 raise ValueError(f"论文参数路径不存在：{method}.{path}")
             if not current_found or current_value != baseline_value:
@@ -2763,6 +2802,13 @@ def _save_config(payload: object, *, for_review: bool = False, destination: Path
         if not for_review or not _config_parameter_errors(parsed):
             _synchronize_web_derived_parameters(parsed, method)
     method = source_method or _config_method(source_config or parsed, _config_method(parsed))
+    if method == "loss_correction":
+        pipeline_values = parsed.get("pipeline", {}) or {}
+        if (pipeline_values.get("transition_estimator", {}) or {}).get("name") == "anchor":
+            explicitly_zero = any(isinstance(item, dict) and item.get("path") == "pipeline.warmup_epochs" and int(item.get("value", 0)) <= 0 for item in (patches or []))
+            if explicitly_zero or (content is not None and int(pipeline_values.get("warmup_epochs", 0)) <= 0):
+                raise ValueError("未知 T 必须先训练 CE 分类器；预训练轮数必须大于 0。")
+        _synchronize_web_derived_parameters(parsed, method)
     if source_config is None:
         formal = _formal_registry_config(method)
         source_config = formal[1] if formal is not None else parsed
@@ -2774,6 +2820,24 @@ def _save_config(payload: object, *, for_review: bool = False, destination: Path
     from lnl_toolbox.core.config_schema import synchronize_experiment_seed
 
     if not raw_errors:
+        if method == "jocor":
+            # Both Web entry points must describe the same initial rate. The
+            # training scheduler would otherwise overwrite optimizer.lr.
+            rate_paths = {"optimizer.lr", "scheduler.initial_lr"}
+            if content is None:
+                changed_rates = {item["path"] for item in (patches or [])
+                                 if isinstance(item, dict) and item.get("path") in rate_paths}
+            else:
+                changed_rates = {path for path in rate_paths
+                                 if _config_path_value(source_config, path) != _config_path_value(parsed, path)}
+            if changed_rates:
+                optimizer_rate = _config_path_value(parsed, "optimizer.lr")[1]
+                schedule_rate = _config_path_value(parsed, "scheduler.initial_lr")[1]
+                if changed_rates == rate_paths and optimizer_rate != schedule_rate:
+                    raise ValueError("JoCoR 起始学习率设置冲突：optimizer.lr 与 scheduler.initial_lr 必须一致")
+                rate = optimizer_rate if "optimizer.lr" in changed_rates else schedule_rate
+                _set_config_path(parsed, "optimizer.lr", rate)
+                _set_config_path(parsed, "scheduler.initial_lr", rate)
         parsed = synchronize_experiment_seed(parsed)
         _assert_locked_parameters_unchanged(source_config, parsed, method)
         if payload.get("automatic_validation_split"):

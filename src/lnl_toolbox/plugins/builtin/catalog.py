@@ -350,6 +350,8 @@ def build_builtin_transition_estimator(
         raise TypeError("Transition estimator configuration must be a mapping")
     values = dict(config or {"name": "anchor"})
     name = str(values.pop("name", "anchor")).strip().lower()
+    if name == "anchor" and "percentile" in values and values["percentile"] is not None:
+        values["percentile"] = float(values["percentile"])
     catalog = catalog or create_builtin_catalog()
     try:
         return catalog.build("transition_estimator", name, **values)

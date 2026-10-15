@@ -410,9 +410,17 @@ def _resnet18(
     initialization: str = "kaiming",
     classifier_bias: bool = True,
     stem_padding: int = 1,
+    variant: str = "standard",
 ):
     torch, nn = _torch()
     import torch.nn.functional as F
+    if variant not in {"standard", "dss_author"}:
+        raise ValueError("ResNet variant must be standard or dss_author")
+    if variant == "dss_author" and not preactivation:
+        raise ValueError("dss_author requires a preactivation network")
+    author = variant == "dss_author"
+    if author:
+        initialization = "torch_default"
 
     class BasicBlock(nn.Module):
         def __init__(self, incoming: int, outgoing: int, stride: int = 1) -> None:
@@ -438,7 +446,7 @@ def _resnet18(
                 activated = F.relu(self.bn1(x), inplace=True)
                 value = self.conv1(activated)
                 value = self.conv2(F.relu(self.bn2(value), inplace=True))
-                shortcut = x if isinstance(self.shortcut, nn.Identity) else self.shortcut(activated)
+                shortcut = (activated if author else x) if isinstance(self.shortcut, nn.Identity) else self.shortcut(activated)
                 return value + shortcut
             value = F.relu(self.bn1(self.conv1(x)), inplace=True)
             value = self.bn2(self.conv2(value))
@@ -448,7 +456,7 @@ def _resnet18(
         def __init__(self) -> None:
             super().__init__()
             widths = (int(base_width), int(base_width) * 2, int(base_width) * 4, int(base_width) * 8)
-            if preactivation:
+            if preactivation and not author:
                 self.stem = nn.Conv2d(3, widths[0], 3, 1, int(stem_padding), bias=False)
                 self.stem_bn = nn.Identity()
             else:
@@ -470,7 +478,7 @@ def _resnet18(
             self.layer2 = stage(widths[0], widths[1], layer_counts[1], 2)
             self.layer3 = stage(widths[1], widths[2], layer_counts[2], 2)
             self.layer4 = stage(widths[2], widths[3], layer_counts[3], 2)
-            self.final_bn = nn.BatchNorm2d(widths[3]) if preactivation else nn.Identity()
+            self.final_bn = nn.BatchNorm2d(widths[3]) if preactivation and not author else nn.Identity()
             self.classifier = nn.Linear(widths[3], num_classes, bias=bool(classifier_bias))
 
         def forward_with_features(self, x):
@@ -481,7 +489,7 @@ def _resnet18(
             value = self.layer2(value)
             value = self.layer3(value)
             value = self.layer4(value)
-            if preactivation:
+            if preactivation and not author:
                 value = F.relu(self.final_bn(value), inplace=True)
             features = F.adaptive_avg_pool2d(value, 1).flatten(1)
             return _FeatureOutput(self.classifier(features), features)
@@ -520,6 +528,7 @@ def _resnet18(
         "weight_decay": {"type": "float", "default": 0.0002, "min": 0.0},
         "stem_padding": {"type": "int", "default": 1, "min": 0, "max": 3},
         "initialization": {"type": "str", "default": "kaiming"},
+        "variant": {"type": "enum", "default": "standard", "options": ["standard", "dss_author"]},
         "bias": {"type": "bool", "default": True},
         "classifier_bias": {"type": "bool", "default": True},
         "device": {"type": "slot", "default": "device"},
@@ -546,6 +555,7 @@ def create_model(
     classifier_bias: bool = True,
     device: str = "device",
     save_as: str = "model",
+    variant: str = "standard",
 ) -> None:
     _, nn = _torch()
     # A loaded Scratch dataset publishes its class cardinality as a runtime
@@ -562,9 +572,11 @@ def create_model(
             "the matching class count or update the model num_classes parameter"
         )
     name = str(model).strip().lower().replace("-", "_")
+    if variant not in {"standard", "dss_author"} or (variant == "dss_author" and name != "preact_resnet18"):
+        raise ValueError("dss_author variant requires preact_resnet18")
     effective_classifier_bias = bool(classifier_bias and bias)
     if name in {"resnet18", "cifar_resnet18", "preact_resnet18"}:
-        network = _resnet18(num_classes, preactivation=name.startswith("preact"), base_width=int(base_width), initialization=initialization, classifier_bias=effective_classifier_bias, stem_padding=int(stem_padding))
+        network = _resnet18(num_classes, preactivation=name.startswith("preact"), base_width=int(base_width), initialization=initialization, classifier_bias=effective_classifier_bias, stem_padding=int(stem_padding), variant=variant)
     elif name in {"resnet34", "cifar_resnet34"}:
         network = _resnet18(num_classes, layer_counts=(3, 4, 6, 3), base_width=int(base_width), initialization=initialization, classifier_bias=effective_classifier_bias, stem_padding=int(stem_padding))
     elif name in {"resnet50", "cifar_resnet50"}:

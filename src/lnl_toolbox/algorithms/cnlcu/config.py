@@ -56,9 +56,6 @@ class CNLCUConfig:
         rate = float(values.get("noise_rate", float("nan")))
         if not math.isfinite(rate) or not 0.0 <= rate < 1.0:
             raise ValueError("cnlcu.noise_rate must be finite and in [0,1)")
-        noise = _mapping(config.get("noise"), "noise configuration")
-        if "rate" in noise and not math.isclose(float(noise["rate"]), rate, rel_tol=0.0, abs_tol=1e-12):
-            raise ValueError("noise.rate and cnlcu.noise_rate must match")
         initialization = _mapping(values.get("initialization", {}), "cnlcu.initialization")
         peer_seed_offset = int(initialization.get("peer_seed_offset", 1))
         if peer_seed_offset == 0:

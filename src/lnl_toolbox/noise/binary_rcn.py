@@ -94,6 +94,16 @@ def validate_binary_rcn_manifest(
         raise TypeError("importance reweighting requires a NoiseManifest")
     if manifest.num_classes != 2:
         raise ValueError("importance reweighting manifest num_classes must be 2")
+    if manifest.clean_targets is None:
+        validate_zero_one_labels(manifest.noisy_targets, owner="native binary observations", require_both_classes=True)
+        if rho_positive is None or rho_negative is None:
+            raise ValueError("native binary observations require both noise-rate priors")
+        positive, negative = _rate("rho_positive", rho_positive), _rate("rho_negative", rho_negative)
+        if positive + negative >= 1:
+            raise ValueError("binary noise rates must sum to less than 1")
+        if expected_indices is not None and not np.array_equal(manifest.global_indices, expected_indices):
+            raise ValueError("native binary observation indices mismatch")
+        return manifest
     if manifest.noise_type != NOISE_TYPE:
         raise ValueError(
             f"importance reweighting requires noise_type {NOISE_TYPE!r}"

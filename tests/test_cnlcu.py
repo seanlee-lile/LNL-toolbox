@@ -1,4 +1,85 @@
-"""Merged unit tests; source modules were consolidated without changing assertions."""
+"""CNLCU algorithm, workflow and reference-default regression tests."""
+
+import unittest
+
+
+class CNLCUReferenceDefaultsTest(unittest.TestCase):
+    def test_reference_network_and_feature_output(self):
+        from lnl_toolbox.models.cifar_cnn import CnlcuCnn9
+        model = CnlcuCnn9().eval()
+        convolutions = [m for m in model.modules() if isinstance(m, torch.nn.Conv2d)]
+        norms = [m for m in model.modules() if isinstance(m, torch.nn.BatchNorm2d)]
+        self.assertEqual([m.out_channels for m in convolutions], [128,128,128,256,256,256,512,256,128])
+        self.assertEqual([m.padding for m in convolutions], [(1,1)] * 6 + [(0,0)] * 3)
+        self.assertEqual(len(norms), 9)
+        self.assertTrue(all(m.momentum == .999 for m in norms))
+        self.assertEqual(len([m for m in model.modules() if isinstance(m, torch.nn.Dropout2d)]), 2)
+        self.assertFalse(any(isinstance(m, torch.nn.Dropout) for m in model.modules()))
+        self.assertTrue(torch.any(convolutions[0].bias != 0))
+        inputs = torch.randn(2,3,32,32)
+        with torch.no_grad():
+            output = model.forward_with_features(inputs)
+            self.assertEqual(tuple(output.features.shape), (2,128))
+            self.assertEqual(tuple(output.logits.shape), (2,10))
+            torch.testing.assert_close(output.logits, model(inputs))
+
+    def test_all_200_optimizer_schedule_epochs_and_resume(self):
+        from lnl_toolbox.training.cnlcu_experiment import _apply_epoch_beta1
+        from lnl_toolbox.training.experiment import build_scheduler
+        schedule = {'name':'linear_after', 'start_epoch':80, 'end_epoch':200,
+                    'beta1_before':.9, 'beta1_after':.1}
+        model = torch.nn.Linear(2,2)
+        optimizer = torch.optim.Adam(model.parameters(), lr=.001)
+        scheduler = build_scheduler(optimizer, schedule, 200)
+        for epoch in range(200):
+            _apply_epoch_beta1(optimizer, schedule, epoch)
+            self.assertEqual(optimizer.param_groups[0]['betas'], (.9 if epoch < 80 else .1, .999))
+            self.assertAlmostEqual(optimizer.param_groups[0]['lr'], .001 if epoch <= 80 else .001 * (200-epoch)/120)
+            optimizer.step()
+            scheduler.step()
+            if epoch == 85:
+                restored = torch.optim.Adam(model.parameters(), lr=.001)
+                restored.load_state_dict(optimizer.state_dict())
+                _apply_epoch_beta1(restored, schedule, epoch+1)
+                self.assertEqual(restored.param_groups[0]['betas'], (.1,.999))
+        before = optimizer.param_groups[0]['betas']
+        _apply_epoch_beta1(optimizer, {'name':'none'}, 0)
+        self.assertEqual(optimizer.param_groups[0]['betas'], before)
+
+    def test_independent_estimate_and_web_defaults(self):
+        from web import command_console
+        import yaml
+        path = Path(__file__).resolve().parents[1] / 'configs/experiment/cnlcu_cifar10_reproduction.yaml'
+        config = yaml.safe_load(path.read_text(encoding='utf-8'))
+        self.assertEqual(config['data']['preprocessing'], 'tensor_only')
+        self.assertFalse(config['data']['augment'])
+        self.assertEqual(config['cnlcu']['history']['window_size'], 3)
+        self.assertEqual(config['cnlcu']['uncertainty']['sigma_squared'], .0001)
+        changed = copy.deepcopy(config)
+        changed['noise']['rate'] = .4
+        self.assertEqual(CNLCUConfig.from_mapping(changed).noise_rate, .2)
+        fields = {f['path']: f for f in command_console._config_schema('cnlcu-cifar10-reproduction')['fields']}
+        self.assertEqual(fields['noise.rate']['linked_fields'], [])
+        self.assertNotIn('noise.rate', fields['cnlcu.noise_rate']['linked_fields'])
+        self.assertIn('scheduler.beta1_after', fields)
+        import tempfile
+        for edited, other, value in (
+            ('noise.rate', 'cnlcu.noise_rate', .4),
+            ('cnlcu.noise_rate', 'noise.rate', .3),
+        ):
+            with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+                saved = command_console._save_config({
+                    'recipe': 'cnlcu-cifar10-reproduction',
+                    'path': str(Path(directory) / 'cnlcu.yaml'),
+                    'patches': [{'path': edited, 'value': value}],
+                    'acknowledge_paper_impact': True,
+                })
+                resolved = yaml.safe_load(Path(saved['path']).read_text(encoding='utf-8'))
+                owner, key = edited.split('.')
+                self.assertEqual(resolved[owner][key], value)
+                owner, key = other.split('.')
+                self.assertEqual(resolved[owner][key], .2)
+                CNLCUConfig.from_mapping(resolved)
 
 # --- merged from test_cnlcu_algorithm.py ---
 import copy

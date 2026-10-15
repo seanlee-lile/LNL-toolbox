@@ -122,6 +122,7 @@ loss:
   name: ce
 pipeline:
   name: standard_noisy_erm
+  pretraining_protocol: loss_correction
   warmup_epochs: 0
   transition_estimator:
     name: known
@@ -234,6 +235,7 @@ loader:
   pin_memory: true
 model:
   name: resnet32
+  variant: loss_correction
   base_width: 16
 optimizer:
   name: sgd
@@ -247,6 +249,10 @@ scheduler:
   - 40
   - 80
   gamma: 0.1
+evaluation:
+  selection_split: validation
+  selection_metric: loss
+  corrected_loss: true
 trainer:
   epochs: 120
   device: auto

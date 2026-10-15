@@ -141,14 +141,15 @@ def normalize_graph(ctx: ScratchContext, adjacency: str = "adjacency", save_as: 
     id="propagate_labels",
     name="Propagate Labels",
     category="Graph",
-    description="Apply finite-step graph diffusion to one-hot observed labels.",
-    params={"graph": {"type": "slot", "default": "graph"}, "labels": {"type": "slot", "default": "labels"}, "num_classes": {"type": "int", "default": 10, "min": 2}, "alpha": {"type": "float", "default": 0.99, "min": 0.0001, "max": 0.9999}, "steps": {"type": "int", "default": 10, "min": 1}, "save_as": {"type": "slot", "default": "diluted_labels"}},
+    description="Apply LEND Eq. (3), using fixed iterations or convergence stopping.",
+    params={"graph": {"type": "slot", "default": "graph"}, "labels": {"type": "slot", "default": "labels"}, "num_classes": {"type": "int", "default": 10, "min": 2}, "alpha": {"type": "float", "default": 0.99, "min": 0.0001, "max": 0.9999}, "steps": {"type": "int", "default": 10, "min": 1}, "policy": {"type": "enum", "options": ["fixed_steps", "until_converged"], "default": "fixed_steps"}, "tolerance": {"type": "float", "default": 1e-5, "min": 1e-12}, "max_steps": {"type": "int", "default": 1000, "min": 1}, "save_as": {"type": "slot", "default": "diluted_labels"}},
     requires=("graph", "labels"), provides=("save_as",), placement=("batch",), stage="train", ui_group="⑥ 后验与权重",
 )
-def propagate_labels(ctx: ScratchContext, graph: str = "graph", labels: str = "labels", num_classes: int = 10, alpha: float = 0.99, steps: int = 10, save_as: str = "diluted_labels") -> None:
+def propagate_labels(ctx: ScratchContext, graph: str = "graph", labels: str = "labels", num_classes: int = 10, alpha: float = 0.99, steps: int = 10, save_as: str = "diluted_labels", policy: str = "fixed_steps", tolerance: float = 1e-5, max_steps: int = 1000) -> None:
     torch, F = _torch()
+    from lnl_toolbox.algorithms.lend.dilution import dilute_labels
     values = F.one_hot(ctx[labels].long(), int(num_classes)).to(ctx[graph].dtype)
-    operator = ctx[graph].to(values)
-    for _ in range(int(steps)):
-        values = float(alpha) * (operator @ values) + (1.0 - float(alpha)) * values
-    ctx[save_as] = values
+    diagnostics: dict[str, float] = {}
+    ctx[save_as] = dilute_labels(values, ctx[graph].to(values), alpha=float(alpha), steps=int(steps),
+                                policy=policy, tolerance=float(tolerance), max_steps=int(max_steps), diagnostics=diagnostics)
+    ctx[save_as + "_diagnostics"] = diagnostics

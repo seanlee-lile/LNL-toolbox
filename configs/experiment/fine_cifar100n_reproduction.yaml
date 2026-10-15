@@ -53,13 +53,13 @@ fine:
   momentum_scr: 0.99
   maximum_threshold: 0.95
   alpha: 1.0
-  beta: 0.1
-  gamma: 0.002
+  beta: 0.001
+  gamma: 0.1
   probability_floor: 1.0e-07
 parameter_record:
   sampling_seed: 23
   selected_group: cifar100_symmetric_02
-  source: official_sed_fine_command
+  source: paper_equations_with_author_sed_training
   repeated_runs: 1
 execution:
   runner: fine

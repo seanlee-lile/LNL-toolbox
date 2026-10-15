@@ -59,7 +59,7 @@ def fit_part_representation(
     if not np.isfinite(error_tolerance) or error_tolerance < 0.0:
         raise ValueError("error_tolerance must be finite and non-negative")
 
-    # ``tools.train_m`` uses NumPy's module-level RNG.  ``seed=None`` is an
+    # ``main.train_m`` uses NumPy's module-level RNG.  ``seed=None`` is an
     # explicit official-source mode; the default keeps the reusable helper's
     # isolated deterministic behavior for non-official callers.
     random = np.random if seed is None else np.random.RandomState(seed)
@@ -81,8 +81,9 @@ def fit_part_representation(
             numerator, denominator, out=np.zeros_like(numerator),
             where=denominator != 0.0,
         )
-    # Official ``train_m`` applies ``tools.norm(W)`` once, after the complete
-    # multiplicative-update loop, not after every iteration.
+        # Official ``main.train_m`` normalizes W inside each iteration.
+        coefficients /= np.maximum(coefficients.sum(axis=1, keepdims=True), 1e-12)
+    # Keep the output normalized if convergence occurs before the first update.
     coefficients /= np.maximum(coefficients.sum(axis=1, keepdims=True), 1e-12)
     return latent.T, coefficients
 

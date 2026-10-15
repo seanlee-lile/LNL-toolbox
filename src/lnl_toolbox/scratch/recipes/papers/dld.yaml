@@ -1,6 +1,6 @@
 schema_version: 1
 name: dld
-description: "Formal DLD CIFAR-10 symmetric-20 recipe with strong-augmentation-compatible data, frozen feature direction, label diffusion, and 200 epochs."
+description: "Simplified educational DLD flow: classifier probabilities replace pretrained-feature KNN distributions, with label-vector predictors and 200 epochs. This is not a complete paper reproduction; pretrained KNN, trainable image conditions and the paper's mixed inputs are absent."
 steps:
   - {block: set_seed, params: {seed: 123}}
   - {block: select_device, params: {device: auto}}

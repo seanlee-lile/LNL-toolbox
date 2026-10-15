@@ -187,7 +187,14 @@ class SupervisedClassificationAlgorithm:
         self.weight_adapter = (
             None if weight_provider is None else WeightContributionAdapter(weight_provider)
         )
-        self.reduction = ReductionSpec()
+        from lnl_toolbox.algorithms.mentornet import MentorNetWeightProvider
+
+        # MentorNet Eq. (1) preserves the absolute scale of mentor weights.
+        # Other providers retain the shared weight-sum normalization.
+        self.reduction = ReductionSpec(
+            "batch_mean" if isinstance(weight_provider, MentorNetWeightProvider)
+            else "weight_sum_mean"
+        )
 
     def setup(self, context: ExperimentContext) -> None:
         self.model.to(self.device)

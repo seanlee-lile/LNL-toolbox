@@ -19,7 +19,7 @@ import numpy as np
 import torch
 
 # --- merged from test_cal.py ---
-from lnl_toolbox.algorithms.cal import cal_covariance_correction, cal_objective, cal_transition_indicators, cores2_adjusted_losses, resolve_confidence_weight
+from lnl_toolbox.algorithms.cal import cal_covariance_correction, cal_objective, cal_sieve_scores, cal_transition_indicators, cores2_adjusted_losses, cores2_warmup_prior, resolve_confidence_weight
 
 # --- merged from test_cal.py ---
 from lnl_toolbox.noise.cal import DROP, KEEP, RELABEL, CALProxyArtifact, build_cal_proxy_artifact
@@ -35,6 +35,44 @@ from lnl_toolbox.training.experiment import build_alpha_scaled_scheduler
 
 # --- merged from test_cal.py ---
 class _cal_CALTest(unittest.TestCase):
+
+    def test_cores2_warmup_uses_sqrt_prior_without_cifar10_class_multiplier(self) -> None:
+        prior = torch.tensor([0.8, 0.2, 0.0], dtype=torch.float64)
+        original = prior.clone()
+        weights = cores2_warmup_prior(prior)
+        torch.testing.assert_close(weights, torch.tensor([2 / 3, 1 / 3, 0.0], dtype=torch.float64))
+        torch.testing.assert_close(prior, original)
+        balanced = torch.full((10,), 0.1)
+        torch.testing.assert_close(cores2_warmup_prior(balanced), balanced)
+        logits = torch.tensor([[2.0, 0.0, -1.0]], dtype=torch.float64)
+        probabilities = logits.softmax(dim=1)
+        expected = -torch.log(probabilities[:, 0] + 1e-8) - 2.0 * (
+            -torch.log(probabilities + 1e-5) * weights
+        ).sum(dim=1)
+        actual = cores2_adjusted_losses(logits, torch.tensor([0]), weights, 2.0)
+        torch.testing.assert_close(actual, expected)
+
+    def test_cores2_warmup_rejects_invalid_prior(self) -> None:
+        for prior in (torch.zeros(2), torch.tensor([-1.0, 2.0]), torch.tensor([float('nan'), 1.0])):
+            with self.assertRaises(ValueError):
+                cores2_warmup_prior(prior)
+
+    def test_sieve_scores_match_author_formula_not_confidence_adjusted_loss(self) -> None:
+        logits = torch.tensor([[20.0] + [0.0] * 9, [20.0] + [0.0] * 9], dtype=torch.float64)
+        targets = torch.tensor([0, 1])
+        probabilities = logits.softmax(dim=1)
+        official = -torch.log(probabilities.gather(1, targets[:, None]).squeeze(1) + 1e-8)
+        official -= (-torch.log(probabilities + 1e-8)).mean(dim=1)
+        scores = cal_sieve_scores(logits, targets)
+        torch.testing.assert_close(scores, official)
+        adjusted = cores2_adjusted_losses(logits, targets, torch.full((10,), 0.1), 2.0)
+        self.assertFalse(torch.allclose(scores, adjusted))
+        snapshot = PosteriorSnapshot(probabilities.numpy(), targets.numpy(), np.array([0, 1]), 'fixture', 'train')
+        artifact = build_cal_proxy_artifact(snapshot, scores.numpy(), lower_threshold=-8.0, upper_threshold=-8.0)
+        self.assertEqual(artifact.sample_status.tolist(), [KEEP, RELABEL])
+        self.assertEqual(artifact.proxy_targets.tolist(), [0, 0])
+        boundary = build_cal_proxy_artifact(snapshot, np.full(2, -8.0), lower_threshold=-8.0, upper_threshold=-8.0)
+        self.assertEqual(boundary.sample_status.tolist(), [DROP, DROP])
 
     def test_clean_identity_vector_is_not_a_training_objective_input(self) -> None:
         logits = torch.tensor([[1.5, -0.5], [-0.25, 1.0]])

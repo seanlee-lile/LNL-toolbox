@@ -176,8 +176,8 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
     (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     (run_dir / "environment.json").write_text(json.dumps(_environment(seed, device), indent=2), encoding="utf-8")
     (run_dir / "noise_summary.json").write_text(json.dumps(noise_metadata, indent=2), encoding="utf-8")
-    corruption = {int(index): bool(value) for index, value in zip(manifest.global_indices, manifest.corruption_mask)}
-    clean_target = {int(index): int(value) for index, value in zip(manifest.global_indices, manifest.clean_targets)}
+    corruption = {int(index): bool(value) for index, value in zip(manifest.global_indices, [] if manifest.clean_targets is None else manifest.corruption_mask)}
+    clean_target = {int(index): int(value) for index, value in zip(manifest.global_indices, [] if manifest.clean_targets is None else manifest.clean_targets)}
     metrics_path = run_dir / "metrics.jsonl"
     with metrics_path.open("a", encoding="utf-8") as metrics_file:
         for epoch in range(completed_epoch + 1, epochs):
@@ -194,13 +194,15 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
                 selected_total += selected
                 oracle_clean_selected += sum(
                     not corruption[int(index)] for index in result.metadata["selected_indices"].tolist()
+                    if corruption
                 )
                 batch_indices = result.metadata["batch_indices"].tolist()
-                oracle_clean_observed += sum(not corruption[int(index)] for index in batch_indices)
+                oracle_clean_observed += sum(not corruption[int(index)] for index in batch_indices if corruption)
                 history_predictions = result.metadata["history_values"].argmax(dim=1).tolist()
                 oracle_diluted_correct += sum(
                     prediction == clean_target[int(index)]
                     for prediction, index in zip(history_predictions, batch_indices)
+                    if clean_target
                 )
                 for key, value in result.metrics.items():
                     if key in {"samples", "selected_samples", "optimizer_steps", "empty_selection_batches"}:
@@ -226,13 +228,13 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
                 "selected_ratio": selected_total / samples,
                 "empty_selection_batches": algorithm.private_state.empty_selection_batches,
                 "oracle_selection_precision": (
-                    oracle_clean_selected / selected_total if selected_total else 0.0
+                    (oracle_clean_selected / selected_total if selected_total else 0.0) if corruption else None
                 ),
                 "oracle_selection_recall": (
-                    oracle_clean_selected / oracle_clean_observed
-                    if oracle_clean_observed else 0.0
+                    (oracle_clean_selected / oracle_clean_observed
+                    if oracle_clean_observed else 0.0) if corruption else None
                 ),
-                "oracle_diluted_label_accuracy": oracle_diluted_correct / samples,
+                "oracle_diluted_label_accuracy": oracle_diluted_correct / samples if clean_target else None,
                 "validation_accuracy": validation["accuracy"],
                 "best_validation_accuracy": best_accuracy,
             }

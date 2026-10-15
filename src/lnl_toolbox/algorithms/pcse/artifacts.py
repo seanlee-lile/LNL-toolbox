@@ -223,8 +223,8 @@ class PCSEEnsembleArtifact:
 
     def __post_init__(self) -> None:
         weights = np.asarray(self.weights, dtype=np.float64)
-        if len(self.layer_names) < 2 or weights.shape != (len(self.layer_names),):
-            raise ValueError("PCSE ensemble weights must align at least two layers")
+        if not self.layer_names or weights.shape != (len(self.layer_names),):
+            raise ValueError("PCSE ensemble weights must align at least one layer")
         if (
             not np.isfinite(weights).all()
             or (weights <= 0.0).any()

@@ -126,6 +126,7 @@ class StandardNoisyERMPipeline:
     weight_provider: WeightProvider[SupervisedWeightInput] | None = None
     regularizer: Any | None = None
     warmup_epochs: int = 0
+    pretraining_protocol: str = "standard"
     artifacts: PipelineArtifacts = field(default_factory=PipelineArtifacts)
     state: PipelineState = field(default_factory=PipelineState)
 
@@ -192,6 +193,14 @@ class StandardNoisyERMPipeline:
             else build_builtin_regularizer(regularizer_config)
         )
         warmup_epochs = int(values.get("warmup_epochs", 0))
+        pretraining_protocol = str(values.get("pretraining_protocol", "standard"))
+        if pretraining_protocol not in {"standard", "loss_correction"}:
+            raise ValueError("Unknown pipeline.pretraining_protocol")
+        if pretraining_protocol == "loss_correction":
+            from lnl_toolbox.noise.estimators import AnchorTransitionEstimator
+
+            if isinstance(estimator, AnchorTransitionEstimator) and warmup_epochs <= 0:
+                raise ValueError("Unknown T requires positive CE pretraining epochs")
         if warmup_epochs < 0:
             raise ValueError("pipeline.warmup_epochs must be non-negative")
         if risk is not None and estimator is None:
@@ -235,6 +244,7 @@ class StandardNoisyERMPipeline:
             objective_consumer=objective_consumer,
             regularizer=regularizer,
             warmup_epochs=warmup_epochs,
+            pretraining_protocol=pretraining_protocol,
         )
 
     def warmup(
@@ -268,16 +278,30 @@ class StandardNoisyERMPipeline:
         dataset: str,
         split: str,
         run_dir: str | Path,
+        validation_loader=None,
+        snapshot_loader=None,
+        warmup_loader=None,
+        warmup_scheduler=None,
+        checkpoint_identity: Mapping[str, Any] | None = None,
     ) -> PipelineArtifacts:
         """Run warm-up, collect a stable snapshot, and estimate one artifact."""
 
         if self.transition_estimator is None:
             return self.artifacts
         model.to(device)
-        self.warmup(model, optimizer, loader, device)
+        if self.pretraining_protocol == "loss_correction" and snapshot_loader is not None:
+            self.state.phase = PipelinePhase.WARMUP
+            self.state.metadata["pretraining"] = pretrain_noisy_classifier(
+                model, optimizer, loader if warmup_loader is None else warmup_loader, device, epochs=self.warmup_epochs,
+                validation_loader=validation_loader, scheduler=warmup_scheduler,
+                checkpoint_dir=run_dir, checkpoint_identity=checkpoint_identity,
+            )
+            self.state.phase = PipelinePhase.SNAPSHOT
+        else:
+            self.warmup(model, optimizer, loader, device)
         snapshot = collect_posterior_snapshot(
             model,
-            loader,
+            loader if snapshot_loader is None else snapshot_loader,
             device,
             dataset=dataset,
             split=split,
@@ -474,6 +498,8 @@ class StandardNoisyERMPipeline:
             raise ValueError("checkpoint pipeline identity mismatch")
         if int(state.get("warmup_epochs", -1)) != self.warmup_epochs:
             raise ValueError("checkpoint pipeline warmup configuration mismatch")
+        if state.get("pretraining_protocol", "standard") != self.pretraining_protocol:
+            raise ValueError("checkpoint pipeline pretraining protocol mismatch")
         lifecycle = state.get("state")
         if not isinstance(lifecycle, Mapping):
             raise ValueError("checkpoint pipeline state is missing lifecycle state")
@@ -664,6 +690,7 @@ class StandardNoisyERMPipeline:
         return {
             "name": "standard_noisy_erm",
             "warmup_epochs": self.warmup_epochs,
+            "pretraining_protocol": self.pretraining_protocol,
             "artifacts": self.artifacts.state_dict(),
             "state": self.state.state_dict(),
         }

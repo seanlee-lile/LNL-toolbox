@@ -144,7 +144,7 @@ class ImportanceReweightingConfig:
                     raise ValueError(f"data.{name} must be a positive even integer")
 
         noise = _mapping(value.get("noise"), owner="noise")
-        if str(noise.get("name", "")).strip().lower() != "binary_asymmetric_rcn":
+        if str(noise.get("name", "")).strip().lower() not in {"binary_asymmetric_rcn", "native", "real_world"}:
             raise ValueError(
                 "importance reweighting requires "
                 "noise.name: binary_asymmetric_rcn"

@@ -44,6 +44,17 @@ class PreActBlock(nn.Module):
         return output + shortcut
 
 
+class DSSAuthorPreActBlock(PreActBlock):
+    """DSS author's shortcut uses preactivated input even without a projection."""
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        activated = F.relu(self.bn1(inputs))
+        shortcut = activated if self.shortcut is None else self.shortcut(activated)
+        output = self.conv1(activated)
+        output = self.conv2(F.relu(self.bn2(output)))
+        return output + shortcut
+
+
 class BottleneckBlock(nn.Module):
     """Three-convolution bottleneck used by the explicit CIFAR ResNet-50."""
 
@@ -187,8 +198,13 @@ class CifarResNet(nn.Module):
                  initialization: str = "kaiming",
                  classifier_bias: bool = True,
                  stem_padding: int = 1,
-                 input_channels: int = 3) -> None:
+                 input_channels: int = 3,
+                 variant: str = "standard") -> None:
         super().__init__()
+        if variant not in {"standard", "dss_author"}:
+            raise ValueError("ResNet variant must be standard or dss_author")
+        if variant == "dss_author" and not preactivation:
+            raise ValueError("dss_author requires a preactivation network")
         if len(layer_counts) != 4 or any(count <= 0 for count in layer_counts):
             raise ValueError("layer_counts must contain four positive integers")
         initialization = str(initialization).strip().lower()
@@ -203,15 +219,15 @@ class CifarResNet(nn.Module):
             int(input_channels), base_width, 3,
             padding=int(stem_padding), bias=False
         )
-        if not preactivation:
+        if not preactivation or variant == "dss_author":
             stem = nn.Sequential(stem, nn.BatchNorm2d(base_width), nn.ReLU(inplace=True))
         self.stem = stem
         self.layer1 = self._make_layer(block, base_width, layer_counts[0], 1)
         self.layer2 = self._make_layer(block, base_width * 2, layer_counts[1], 2)
         self.layer3 = self._make_layer(block, base_width * 4, layer_counts[2], 2)
         self.layer4 = self._make_layer(block, base_width * 8, layer_counts[3], 2)
-        self.final_bn = nn.BatchNorm2d(base_width * 8) if preactivation else nn.Identity()
-        self.preactivation = preactivation
+        self.preactivation = preactivation and variant != "dss_author"
+        self.final_bn = nn.BatchNorm2d(base_width * 8) if self.preactivation else nn.Identity()
         self.classifier = nn.Linear(
             base_width * 8,
             num_classes,
@@ -260,6 +276,7 @@ def cifar_resnet18(
     base_width: int = 64,
     *,
     initialization: str = "kaiming",
+    stem_padding: int = 1,
     input_channels: int = 3,
 ) -> CifarResNet:
     return CifarResNet(
@@ -268,6 +285,7 @@ def cifar_resnet18(
         base_width,
         preactivation=False,
         initialization=initialization,
+        stem_padding=stem_padding,
         input_channels=input_channels,
     )
 
@@ -340,14 +358,37 @@ def preact_resnet18(
     base_width: int = 64,
     *,
     input_channels: int = 3,
+    variant: str = "standard",
 ) -> CifarResNet:
     return CifarResNet(
-        PreActBlock,
+        DSSAuthorPreActBlock if variant == "dss_author" else PreActBlock,
         num_classes,
         base_width,
         preactivation=True,
         input_channels=input_channels,
+        variant=variant,
+        initialization="torch_default" if variant == "dss_author" else "kaiming",
     )
+
+
+class LossCorrectionPreActBlock(nn.Module):
+    """Patrini's CIFAR residual branch; projection uses the raw shortcut input."""
+
+    def __init__(self, incoming: int, outgoing: int, stride: int = 1, *, first: bool = False):
+        super().__init__()
+        self.bn1 = nn.Identity() if first else nn.BatchNorm2d(incoming, eps=1e-3, momentum=0.01)
+        self.first = first
+        self.pad = nn.ZeroPad2d((0, 1, 0, 1)) if stride == 2 else nn.Identity()
+        self.conv1 = nn.Conv2d(incoming, outgoing, 3, stride=stride, padding=0 if stride == 2 else 1)
+        self.bn2 = nn.BatchNorm2d(outgoing, eps=1e-3, momentum=0.01)
+        self.conv2 = nn.Conv2d(outgoing, outgoing, 3, padding=1)
+        self.shortcut = nn.Identity() if incoming == outgoing and stride == 1 else nn.Conv2d(incoming, outgoing, 1, stride=stride)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        output = inputs if self.first else F.relu(self.bn1(inputs))
+        output = self.conv1(self.pad(output))
+        output = self.conv2(F.relu(self.bn2(output)))
+        return output + self.shortcut(inputs)
 
 
 class CifarResNetDepth(nn.Module):
@@ -360,8 +401,12 @@ class CifarResNetDepth(nn.Module):
         base_width: int = 16,
         *,
         input_channels: int = 3,
+        variant: str = "standard",
     ) -> None:
         super().__init__()
+        if variant not in {"standard", "loss_correction"}:
+            raise ValueError("CIFAR depth variant must be standard or loss_correction")
+        self.variant = variant
         if depth < 8 or (depth - 2) % 6:
             raise ValueError("CIFAR depth must satisfy depth = 6*n + 2 and be at least 8")
         if int(input_channels) <= 0:
@@ -369,27 +414,36 @@ class CifarResNetDepth(nn.Module):
         blocks = (depth - 2) // 6
         widths = (base_width, base_width * 2, base_width * 4)
         self.stem = nn.Conv2d(
-            int(input_channels), widths[0], 3, padding=1, bias=False
+            int(input_channels), widths[0], 3, padding=1, bias=variant == "loss_correction"
         )
-        self.bn = nn.BatchNorm2d(widths[0])
+        self.bn = nn.BatchNorm2d(widths[0], eps=1e-3, momentum=0.01) if variant == "loss_correction" else nn.BatchNorm2d(widths[0])
         incoming = widths[0]
         stages = []
         for stage, width in enumerate(widths):
             layers = []
             for block in range(blocks):
                 stride = 1 if stage == 0 or block else 2
-                layers.append(BasicBlock(incoming, width, stride))
+                layers.append(
+                    LossCorrectionPreActBlock(incoming, width, stride, first=stage == 0 and block == 0)
+                    if variant == "loss_correction" else BasicBlock(incoming, width, stride)
+                )
                 incoming = width
             stages.append(nn.Sequential(*layers))
         self.stages = nn.ModuleList(stages)
+        self.final_bn = nn.BatchNorm2d(widths[-1], eps=1e-3, momentum=0.01) if variant == "loss_correction" else nn.Identity()
         self.classifier = nn.Linear(widths[-1], num_classes)
         self.depth = int(depth)
         for module in self.modules():
             if isinstance(module, nn.Conv2d):
-                nn.init.kaiming_normal_(module.weight, mode="fan_out", nonlinearity="relu")
+                nn.init.kaiming_normal_(module.weight, mode="fan_in" if variant == "loss_correction" else "fan_out", nonlinearity="relu")
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
             elif isinstance(module, nn.BatchNorm2d):
                 nn.init.ones_(module.weight)
                 nn.init.zeros_(module.bias)
+        if variant == "loss_correction":
+            nn.init.uniform_(self.classifier.weight, -0.05, 0.05)
+            nn.init.zeros_(self.classifier.bias)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.forward_with_features(inputs).logits
@@ -398,6 +452,8 @@ class CifarResNetDepth(nn.Module):
         output = F.relu(self.bn(self.stem(inputs)), inplace=True)
         for stage in self.stages:
             output = stage(output)
+        if self.variant == "loss_correction":
+            output = F.relu(self.final_bn(output))
         features = F.adaptive_avg_pool2d(output, 1).flatten(1)
         return FeatureOutput(self.classifier(features), features)
 
@@ -408,9 +464,10 @@ def cifar_resnet_depth(
     base_width: int = 16,
     *,
     input_channels: int = 3,
+    variant: str = "standard",
 ) -> CifarResNetDepth:
     return CifarResNetDepth(
-        depth, num_classes, base_width, input_channels=input_channels
+        depth, num_classes, base_width, input_channels=input_channels, variant=variant
     )
 
 
@@ -430,9 +487,10 @@ def cifar_resnet32(
     base_width: int = 16,
     *,
     input_channels: int = 3,
+    variant: str = "standard",
 ) -> CifarResNetDepth:
     return cifar_resnet_depth(
-        32, num_classes, base_width, input_channels=input_channels
+        32, num_classes, base_width, input_channels=input_channels, variant=variant
     )
 
 

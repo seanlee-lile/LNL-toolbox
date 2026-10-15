@@ -158,6 +158,8 @@ def run_multi_model_experiment(
     config, parameter_record = resolve_parameter_sampling(raw_config)
     from lnl_toolbox.core.config_schema import normalize_experiment_config
 
+    # Sampling provenance is saved separately, not part of the input schema.
+    config.pop("resolved_parameters", None)
     config = normalize_experiment_config(config)
     seed = int(config.get("seed", 1))
     epochs = int(config["trainer"]["epochs"])
@@ -248,7 +250,8 @@ def run_multi_model_experiment(
             resume, algorithm, device, scheduler=None
         )
         best_epoch = int(checkpoint_payload["best_epoch"])
-        best_accuracy = float(checkpoint_payload["best_selection_accuracy"])
+        saved_accuracy = checkpoint_payload["best_selection_accuracy"]
+        best_accuracy = float("-inf") if saved_accuracy is None else float(saved_accuracy)
 
     (run_dir / "resolved_config.yaml").write_text(
         yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
@@ -277,8 +280,10 @@ def run_multi_model_experiment(
         if validation_loader is None:
             raise ValueError("validation selection requires validation data")
         selection_loader = validation_loader
+    elif selection_split == "none":
+        selection_loader = None
     else:
-        raise ValueError("selection_split must be validation or test")
+        raise ValueError("selection_split must be validation, test, or none")
 
     progress_config = config["trainer"].get("progress", {})
     if isinstance(progress_config, bool):
@@ -330,8 +335,10 @@ def run_multi_model_experiment(
                     accuracy=float(result.metrics["accuracy"]),
                 )
             algorithm.on_cycle_end(state)
+            evaluation_split = "test" if selection_loader is None else selection_split
             selected_metrics = evaluate_model_group(
-                models, selection_loader, criterion, device
+                models, test_loader if selection_loader is None else selection_loader,
+                criterion, device
             )
             row = standardize_epoch_row({
                 "event": "epoch",
@@ -347,21 +354,28 @@ def run_multi_model_experiment(
                 "selected_samples": selected_samples,
                 "selected_ratio": selected_samples / samples,
                 "selection_split": selection_split,
-                "selection_loss": selected_metrics["loss"],
-                "selection_accuracy": selected_metrics["accuracy"],
-                "validation_loss": selected_metrics["loss"],
-                "validation_accuracy": selected_metrics["accuracy"],
-                "selection_model_1_accuracy": selected_metrics[
+                f"{evaluation_split}_loss": selected_metrics["loss"],
+                f"{evaluation_split}_accuracy": selected_metrics["accuracy"],
+                f"{evaluation_split}_model_1_accuracy": selected_metrics[
                     "model_1_accuracy"
                 ],
-                "selection_model_2_accuracy": selected_metrics[
+                f"{evaluation_split}_model_2_accuracy": selected_metrics[
                     "model_2_accuracy"
                 ],
-            })
+            }, require_validation=evaluation_split == "validation")
+            # Add selection fields after standardization, which otherwise aliases
+            # selection metrics to validation metrics even for test selection.
+            if selection_loader is not None:
+                row.update({
+                    "selection_loss": selected_metrics["loss"],
+                    "selection_accuracy": selected_metrics["accuracy"],
+                    "selection_model_1_accuracy": selected_metrics["model_1_accuracy"],
+                    "selection_model_2_accuracy": selected_metrics["model_2_accuracy"],
+                })
             curve_rows.append(row)
             metrics_file.write(json.dumps(row) + "\n")
             metrics_file.flush()
-            if selected_metrics["accuracy"] > best_accuracy:
+            if selection_loader is not None and selected_metrics["accuracy"] > best_accuracy:
                 best_accuracy = float(selected_metrics["accuracy"])
                 best_epoch = epoch + 1
                 save_checkpoint(
@@ -371,7 +385,7 @@ def run_multi_model_experiment(
                     epoch,
                     config,
                     best_epoch=best_epoch,
-                    best_validation_accuracy=best_accuracy,
+                    best_validation_accuracy=(best_accuracy if selection_split == "validation" else None),
                     selection_split=selection_split,
                     best_selection_accuracy=best_accuracy,
                     noise=noise_metadata,
@@ -388,9 +402,9 @@ def run_multi_model_experiment(
                 epoch,
                 config,
                 best_epoch=best_epoch,
-                best_validation_accuracy=best_accuracy,
+                best_validation_accuracy=(best_accuracy if selection_split == "validation" else None),
                 selection_split=selection_split,
-                best_selection_accuracy=best_accuracy,
+                best_selection_accuracy=(best_accuracy if selection_loader is not None else None),
                 noise=noise_metadata,
                 parameter_record=(
                     None if parameter_record is None else parameter_record.to_dict()
@@ -410,7 +424,7 @@ def run_multi_model_experiment(
             "completed_epochs": epochs,
             "global_step": state.step,
             "best_epoch": best_epoch,
-            "best_selection_accuracy": best_accuracy,
+            "best_selection_accuracy": best_accuracy if selection_loader is not None else None,
             "selection_split": selection_split,
             "test_selection_leakage": selection_split == "test",
             "test_loss": test_metrics["loss"],
@@ -423,11 +437,11 @@ def run_multi_model_experiment(
                 float(row[key])
                 for row in window_rows
                 for key in (
-                    "selection_model_1_accuracy",
-                    "selection_model_2_accuracy",
+                    f"{'test' if selection_loader is None else selection_split}_model_1_accuracy",
+                    f"{'test' if selection_loader is None else selection_split}_model_2_accuracy",
                 )
             ]
-            final["last_window_epochs"] = report_last
+            final["last_window_epochs"] = len(window_rows)
             final["last_window_member_mean_accuracy"] = float(
                 np.mean(member_values)
             )

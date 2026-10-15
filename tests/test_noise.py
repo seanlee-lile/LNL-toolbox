@@ -34,6 +34,37 @@ from lnl_toolbox.training.noisy_labels import checkpoint_noise_metadata, prepare
 # --- merged from test_noise.py ---
 class _noise_NoiseTest(unittest.TestCase):
 
+    def test_observed_only_manifest_preserves_unknown_truth(self) -> None:
+        manifest = NoiseManifest('native', 'native', 1, None, None,
+                                 np.array([1, 0, 1]), global_indices=np.array([9, 3, 7]), num_classes=2)
+        self.assertIsNone(manifest.actual_rate)
+        with self.assertRaisesRegex(ValueError, 'unknown'):
+            _ = manifest.flip_mask
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'observations.npz'
+            manifest.save(path)
+            restored = NoiseManifest.load(path)
+        self.assertIsNone(restored.clean_targets)
+        self.assertIsNone(restored.transition_matrix)
+        self.assertIsNone(restored.requested_rate)
+        self.assertEqual(restored.mapping_hash, manifest.mapping_hash)
+        np.testing.assert_array_equal(restored.noisy_targets, [1, 0, 1])
+        restored.validate_for(np.array([1, 0, 1]), 'native', 2,
+                              reference_indices=np.array([9, 3, 7]))
+        with self.assertRaisesRegex(ValueError, 'fingerprint'):
+            restored.validate_for(np.array([0, 0, 1]), 'native', 2,
+                                  reference_indices=np.array([9, 3, 7]))
+
+    def test_native_binary_manifest_requires_explicit_priors(self) -> None:
+        from lnl_toolbox.noise.binary_rcn import validate_binary_rcn_manifest
+
+        manifest = NoiseManifest('native', 'native', 1, None, None,
+                                 np.array([1, 0, 1]), num_classes=2)
+        with self.assertRaisesRegex(ValueError, 'both noise-rate priors'):
+            validate_binary_rcn_manifest(manifest)
+        self.assertIs(validate_binary_rcn_manifest(
+            manifest, rho_positive=0.2, rho_negative=0.1), manifest)
+
     def setUp(self) -> None:
         self.labels = np.tile(np.arange(10), 20)
 

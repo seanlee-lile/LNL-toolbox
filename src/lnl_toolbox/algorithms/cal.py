@@ -60,6 +60,25 @@ def cal_all_class_losses(logits: Tensor, eps: float = 1.0e-5) -> Tensor:
     return -torch.log(F.softmax(logits, dim=1) + float(eps))
 
 
+def cores2_warmup_prior(noisy_prior: Tensor) -> Tensor:
+    """CIFAR-10 CORES² weights: sqrt(p) / sum(sqrt(p)), not CAL's raw p."""
+    if noisy_prior.ndim != 1 or not bool(torch.isfinite(noisy_prior).all()) or bool((noisy_prior < 0).any()):
+        raise ValueError("CORES2 noisy prior must be finite and non-negative [C]")
+    weights = noisy_prior.sqrt()
+    if not bool(weights.sum() > 0):
+        raise ValueError("CORES2 noisy prior must have positive mass")
+    return weights / weights.sum()
+
+
+def cal_sieve_scores(logits: Tensor, noisy_targets: Tensor) -> Tensor:
+    """Official sieve score: observed CE minus mean CE over all classes."""
+    if logits.ndim != 2 or noisy_targets.shape != (logits.shape[0],):
+        raise ValueError("CAL logits/targets shapes are invalid")
+    losses = cal_all_class_losses(logits, eps=1.0e-8)
+    observed = losses.gather(1, noisy_targets.long()[:, None]).squeeze(1)
+    return observed - losses.mean(dim=1)
+
+
 def cores2_adjusted_losses(
     logits: Tensor,
     noisy_targets: Tensor,
@@ -166,7 +185,7 @@ def cal_objective(
 
 
 __all__ = [
-    "cal_all_class_losses", "cal_covariance_correction", "cal_objective",
-    "cal_transition_indicators", "cores2_adjusted_losses",
+    "cal_all_class_losses", "cal_covariance_correction", "cal_objective", "cal_sieve_scores",
+    "cal_transition_indicators", "cores2_adjusted_losses", "cores2_warmup_prior",
     "resolve_confidence_weight",
 ]

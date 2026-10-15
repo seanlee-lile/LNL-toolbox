@@ -133,10 +133,11 @@ def build_co_divide(
     history_a: list[dict[str, Any]],
     history_b: list[dict[str, Any]],
     config: DivideMixConfig,
-    noise_rate: float,
+    noise_rate: float | None,
 ) -> CoDivideResult:
     use_average = (
         config.gmm.history_name == "official_auto"
+        and noise_rate is not None
         and abs(float(noise_rate) - config.gmm.high_noise_rate) <= 1e-12
     )
     estimator = DivideMixGMMCleanProbabilityEstimator(
@@ -146,10 +147,10 @@ def build_co_divide(
         covariance_regularization=config.gmm.covariance_regularization,
         minimum_mean_separation=config.gmm.minimum_mean_separation,
     )
-    input_a = normalized_loss(history_input(history_a, indices, use_average=use_average))
-    input_b = normalized_loss(history_input(history_b, indices, use_average=use_average))
-    result_a = estimator.estimate(DivideMixGMMLossInput(input_a, indices))
-    result_b = estimator.estimate(DivideMixGMMLossInput(input_b, indices))
+    input_a = history_input(history_a, indices, use_average=use_average)
+    input_b = history_input(history_b, indices, use_average=use_average)
+    result_a = estimator.estimate(DivideMixGMMLossInput(input_a, indices, already_normalized=True))
+    result_b = estimator.estimate(DivideMixGMMLossInput(input_b, indices, already_normalized=True))
     # Cross ownership: B selects data consumed by A; A selects data consumed by B.
     labeled_for_a = result_b.scores >= config.gmm.threshold
     labeled_for_b = result_a.scores >= config.gmm.threshold

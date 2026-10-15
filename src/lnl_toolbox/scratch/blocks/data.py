@@ -203,20 +203,21 @@ def inspect_dataset_semantics(ctx: ScratchContext, data_plan: str = "data_plan",
     description="Configure a deterministic train/validation split in the Scratch data plan.",
     params={"data_plan": {"type": "slot", "default": "data_plan"},
             "validation_size": {"type": "int", "default": 0, "min": 0},
-            "split_strategy": {"type": "enum", "options": ["random", "stratified", "official"], "default": "random"},
+            "split_strategy": {"type": "enum", "options": ["random", "stratified", "official", "classwise_legacy"], "default": "random"},
+            "split_rng": {"type": "enum", "options": ["numpy", "numpy_legacy"], "default": "numpy"},
             "split_seed": {"type": "int", "default": 1, "min": 0},
             "subset_before_split": {"type": "bool", "default": False}},
     requires=("train_source",), provides=("train_split", "validation_split"), placement=("top",), stage="data", ui_group="① 数据准备",
 )
 def create_dataset_split(ctx: ScratchContext, data_plan: str = "data_plan", validation_size: int = 0,
                          split_strategy: str = "random", split_seed: int = 1,
-                         subset_before_split: bool = False) -> None:
+                         subset_before_split: bool = False, split_rng: str = "numpy") -> None:
     plan = _plan(ctx, data_plan)
     runtime_limits = ctx.get("_runtime_limits", {})
     if isinstance(runtime_limits, Mapping) and runtime_limits.get("fixture") and int(validation_size) > 2:
         validation_size = 2
     plan["split"] = {"validation_size": int(validation_size), "strategy": str(split_strategy),
-                     "seed": int(split_seed), "subset_before_split": bool(subset_before_split)}
+                     "seed": int(split_seed), "subset_before_split": bool(subset_before_split), "rng": str(split_rng)}
     plan["requirements"].update({"validation_size": int(validation_size),
                                   "split_strategy": str(split_strategy),
                                   "subset_before_split": bool(subset_before_split)})
@@ -385,6 +386,13 @@ def configure_preprocessing(ctx: ScratchContext, data_plan: str = "data_plan", p
     plan = _plan(ctx, data_plan)
     plan["preprocessing"] = _serializable({"name": str(preprocessing), "augment": bool(augment),
                                             "strong_augment": bool(strong_augment), **dict(options or {})})
+    if "evaluation_augment" in plan["preprocessing"]:
+        evaluation = dict(plan["preprocessing"])
+        evaluation["augment"] = bool(evaluation.pop("evaluation_augment"))
+        evaluation["strong_augment"] = False
+        plan["data"]["evaluation_preprocessing"] = evaluation
+    else:
+        plan["data"].pop("evaluation_preprocessing", None)
     source = ctx.get("train_split")
     if source is None:
         raise ValueError("configure_preprocessing requires a loaded/split source")

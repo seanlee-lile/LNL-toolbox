@@ -168,6 +168,54 @@ class _cwd_CWDTest(unittest.TestCase):
         dynamic = CWDGlobalObjective(artifact, variant='binary_scalar', dynamic_centroid=True).compute(**kwargs)
         torch.testing.assert_close(static.detach(), dynamic.detach())
 
+    def test_dynamic_centroid_loss_and_full_model_gradients_match_reference(self) -> None:
+        class LearnedFeatures(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.encoder = nn.Linear(2, 3)
+                self.classifier = nn.Linear(3, 1, bias=False)
+
+            def forward_with_features(self, inputs):
+                features = self.encoder(inputs).tanh()
+                return FeatureOutput(self.classifier(features), features)
+
+        inputs = torch.tensor([[1., 0.], [0., 1.], [1., 1.], [-1., 0.],
+                               [0., -1.], [-1., -1.]], dtype=torch.float64)
+        targets = torch.tensor([0, 1, 0, 1, 0, 1])
+        for rho_positive, rho_negative in ((0., 0.), (0.3, 0.1)):
+            with self.subTest(rates=(rho_positive, rho_negative)):
+                torch.manual_seed(15)
+                model = LearnedFeatures().double()
+                output = model.forward_with_features(inputs)
+                transition = np.array([[1-rho_negative, rho_negative], [rho_positive, 1-rho_positive]])
+                artifact = CWDEstimator(transition).estimate(FeatureSnapshot(
+                    output.features.detach().numpy(), targets.numpy(), np.arange(6), 'fixture', 'train'))
+                kwargs = dict(model=model, logits=output.logits, features=output.features,
+                    noisy_targets=targets, sample_indices=torch.arange(6), base_loss=CrossEntropyLoss(), metadata={})
+                actual = CWDGlobalObjective(artifact, variant='binary_scalar', dynamic_centroid=True).compute(**kwargs)
+                clean_positive = (targets.double().mean().item()-rho_negative)/(1-rho_positive-rho_negative)
+                omega = 1/(1-2*clean_positive*rho_positive) + 1/(1-2*(1-clean_positive)*rho_negative) - 1
+                margin = output.logits[:, 0]
+                signs = targets.double()*2-1
+                expected = 1 + margin.square().mean() - 2*omega*(margin*signs).mean()
+                if rho_positive == rho_negative == 0:
+                    torch.testing.assert_close(expected, (margin-signs).square().mean())
+                torch.testing.assert_close(actual, expected)
+                parameters = tuple(model.parameters())
+                actual_grad = torch.autograd.grad(actual, parameters, retain_graph=True)
+                expected_grad = torch.autograd.grad(expected, parameters, retain_graph=True)
+                for got, reference in zip(actual_grad, expected_grad):
+                    self.assertTrue(torch.isfinite(got).all())
+                    torch.testing.assert_close(got, reference)
+                self.assertGreater(actual_grad[0].abs().sum().item(), 0)
+                self.assertGreater(actual_grad[-1].abs().sum().item(), 0)
+                # A cached centroid has the same value at snapshot time but
+                # omits the feature gradient of its label-dependent term.
+                static = CWDGlobalObjective(artifact, variant='binary_scalar', dynamic_centroid=False).compute(**kwargs)
+                torch.testing.assert_close(static, actual)
+                static_grad = torch.autograd.grad(static, parameters)
+                self.assertFalse(torch.allclose(static_grad[0], actual_grad[0]))
+
     def test_pipeline_prepares_feature_statistic_and_binds_consumer(self) -> None:
         model = _cwd__FeatureModel()
         optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
@@ -237,3 +285,57 @@ class _cwd_training_CWDTrainingTest(unittest.TestCase):
             self.assertEqual(payload['completed_epoch'], 0)
             self.assertTrue(payload['statistic_hash'])
             self.assertTrue(payload['feature_snapshot_hash'])
+            for row in payload['metrics']:
+                self.assertIn('test_loss', row)
+                self.assertIn('test_accuracy', row)
+                self.assertNotIn('validation_loss', row)
+                self.assertNotIn('validation_accuracy', row)
+
+    def test_interrupted_fold_resumes_same_plan_without_validation_metrics(self) -> None:
+        import json
+        from lnl_toolbox.training.checkpoint import atomic_save as save
+        train = _cwd_training__cifar('train', 6)
+        test = _cwd_training__cifar('test', 2)
+        config = {'seed': 7, 'data': {'name': 'cifar10_airplane_automobile', 'root': 'unused', 'folds': 2,
+            'fold_index': 0, 'augment': False}, 'noise': {'rho_positive': 0., 'rho_negative': 0., 'seed': 7},
+            'loader': {'batch_size': 8, 'num_workers': 0, 'pin_memory': False}, 'model': {'name': 'tiny_cnn', 'width': 1},
+            'optimizer': {'name': 'adam', 'lr': .001, 'weight_decay': 0.}, 'scheduler': {'milestones': [], 'gamma': .1},
+            'trainer': {'epochs': 2, 'device': 'cpu'}, 'cwd': {'variant': 'multiclass', 'dynamic_centroid': True}}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: train if split == 'train' else test):
+            root = Path(directory)
+            uninterrupted = run_cwd_experiment(config, root/'complete')
+
+            def interrupt(payload, path):
+                save(payload, path)
+                raise RuntimeError('test interruption')
+
+            with patch('lnl_toolbox.training.cwd_experiment.atomic_save', side_effect=interrupt):
+                with self.assertRaisesRegex(RuntimeError, 'test interruption'):
+                    run_cwd_experiment(config, root/'interrupted')
+            checkpoint = root/'interrupted'/'last.pt'
+            before = torch.load(checkpoint, weights_only=False)
+            self.assertEqual(before['completed_epoch'], 0)
+            run_cwd_experiment(config, resume=checkpoint)
+            resumed = torch.load(checkpoint, weights_only=False)
+            complete = torch.load(uninterrupted/'last.pt', weights_only=False)
+            self.assertEqual(resumed['completed_epoch'], 1)
+            self.assertEqual([row['epoch'] for row in resumed['metrics']], [1, 2])
+            for name, value in complete['model'].items():
+                torch.testing.assert_close(resumed['model'][name], value)
+            rows = [json.loads(line) for line in (checkpoint.parent/'metrics.jsonl').read_text().splitlines()]
+            for row in rows:
+                self.assertTrue(np.isfinite(row['test_loss']))
+                self.assertFalse(any(key.startswith('validation_') for key in row))
+
+    def test_web_explains_single_fold_and_static_centroid_limit(self) -> None:
+        import yaml
+        from web.command_console import _config_schema
+        registry = yaml.safe_load(Path('web/lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
+        method = registry['methods']['cwd']
+        self.assertIn('one selected fold', method['paper_comparison']['summary'])
+        self.assertIn('选定的一折', method['parameters']['locked']['parameter_record.source']['note'])
+        schema = _config_schema('cwd-cifar10-reproduction')
+        field = next(field for field in schema['fields'] if field['path']=='cwd.dynamic_centroid')
+        self.assertIn('固定特征', field['note'])
+        self.assertIn('梯度', field['note'])

@@ -26,6 +26,51 @@ from lnl_toolbox.algorithms.t_revision import AdditiveTransitionRevision, Revise
 from lnl_toolbox.noise.transition import TransitionArtifact
 
 # --- merged from test_t_revision_algorithm.py ---
+class TRevisionPaperDefaultsTest(unittest.TestCase):
+
+    def test_author_network_and_global_defaults(self):
+        from lnl_toolbox.catalog import load_yaml
+        from lnl_toolbox.models.cifar_resnet import CifarResNet, BasicBlock
+        from lnl_toolbox.training.experiment import build_model
+        config = load_yaml(Path(__file__).resolve().parents[1] /
+            'configs/reproduction/cifar10_t_revision_sym20_reproduction.yaml')
+        torch.manual_seed(9)
+        model = build_model(config['t_revision']['stage1']['model'], 10).eval()
+        torch.manual_seed(9)
+        reference = CifarResNet(BasicBlock, 10, 64,
+            initialization='torch_default', stem_padding=0)
+        self.assertEqual(model.stem[0].padding, (0, 0))
+        self.assertEqual(model.stem(torch.zeros(2, 3, 32, 32)).shape[-2:], (30, 30))
+        for name, value in reference.state_dict().items():
+            torch.testing.assert_close(model.state_dict()[name], value, rtol=0, atol=0)
+        for name in ('resnet18', 'resnet34'):
+            self.assertEqual(build_model({'name': name}, 10).stem[0].padding, (1, 1))
+
+    def test_author_normalization_and_metadata(self):
+        from lnl_toolbox.catalog import load_yaml
+        from lnl_toolbox.data.torch_cifar import build_cifar_transform
+        from PIL import Image
+        root = Path(__file__).resolve().parents[1]
+        config = load_yaml(root / 'configs/reproduction/cifar10_t_revision_sym20_reproduction.yaml')
+        normalization = config['data']['normalization']
+        transform = build_cifar_transform(training=False, augment=False,
+            normalization_mean=normalization['mean'], normalization_std=normalization['std'])
+        actual = transform(Image.fromarray(np.zeros((32, 32, 3), dtype=np.uint8)))
+        expected = -torch.tensor([0.4914, 0.4822, 0.4465]) / torch.tensor([0.2023, 0.1994, 0.2010])
+        torch.testing.assert_close(actual[:, 0, 0], expected)
+        registry = load_yaml(root / 'web/lnl_parameter_metadata_registry_revised.yaml')
+        method = registry['methods']['t_revision']
+        for stage, epochs in (('stage1', 20), ('classifier_initialization', 200), ('revision', 200)):
+            self.assertEqual(config['t_revision'][stage]['epochs'], epochs)
+            self.assertEqual(method['parameters']['paper'][f't_revision.{stage}.epochs']['current'], epochs)
+        self.assertEqual(method['coverage']['parameter_count'],
+            sum(len(values) for values in method['parameters'].values()))
+        for level, values in method['parameters'].items():
+            self.assertEqual(method['coverage']['by_level'][level], len(values))
+        self.assertEqual(registry['parameter_ui']['choices']['t_revision.stage1.model.initialization'],
+            ['kaiming', 'torch_default'])
+
+
 class _t_revision_algorithm_TRevisionTransitionTest(unittest.TestCase):
 
     def test_delta_starts_zero_and_raw_addition_is_unprojected(self) -> None:

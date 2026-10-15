@@ -15,32 +15,20 @@ def _torch():
     id="parameter_criticality_mask",
     name="Parameter Criticality Mask",
     category="Parameter Update",
-    description="Select trainable scalar parameters with the largest detached |gradient times parameter| scores.",
-    params={"model": {"type": "slot", "default": "model"}, "noise_rate": {"type": "float", "default": 0.4, "min": 0.0, "max": 0.999999}, "save_as": {"type": "slot", "default": "critical_masks"}},
+    description="Select critical parameters using the paper's exact top-k or the released code's 2D/4D threshold masks.",
+    params={"model": {"type": "slot", "default": "model"}, "noise_rate": {"type": "float", "default": 0.4, "min": 0.0, "max": 0.999999}, "compatibility_mode": {"type": "enum", "default": "paper", "options": ["paper", "official_code"]}, "save_as": {"type": "slot", "default": "critical_masks"}},
     requires=("model",), provides=("save_as",), placement=("batch", "epoch"), stage="train", ui_group="⑤ 损失公式",
     formula="s_i=|g_i theta_i|; S=top-ceil((1-tau)m)(s)", formula_ref="critical parameter selection", formula_kind="special",
 )
-def parameter_criticality_mask(ctx: ScratchContext, model: str = "model", noise_rate: float = 0.4, save_as: str = "critical_masks") -> None:
-    import math
-    torch = _torch()
-    tau = float(noise_rate)
-    if not 0.0 <= tau < 1.0:
-        raise ValueError("noise_rate must satisfy 0 <= noise_rate < 1")
-    values = sorted(((str(name), parameter) for name, parameter in ctx[model].named_parameters() if parameter.requires_grad and parameter.grad is not None), key=lambda item: item[0])
-    if not values:
-        raise ValueError("parameter criticality requires trainable parameters with gradients")
-    scores = torch.cat([(parameter.grad.detach() * parameter.detach()).abs().reshape(-1).to(torch.float64) for _, parameter in values])
-    count = int(math.ceil((1.0 - tau) * int(scores.numel())))
-    order = torch.argsort(scores, descending=True, stable=True)
-    selected = torch.zeros(scores.numel(), dtype=torch.bool, device=scores.device)
-    selected[order[:count]] = True
-    masks = {}
-    offset = 0
-    for name, parameter in values:
-        size = int(parameter.numel())
-        masks[name] = selected[offset:offset + size].reshape(parameter.shape)
-        offset += size
-    ctx[save_as] = masks
+def parameter_criticality_mask(ctx: ScratchContext, model: str = "model", noise_rate: float = 0.4, save_as: str = "critical_masks", compatibility_mode: str = "paper") -> None:
+    from lnl_toolbox.algorithms.cdr import critical_parameter_masks, official_code_parameter_masks
+    if compatibility_mode == "paper":
+        selected = critical_parameter_masks(ctx[model].named_parameters(), noise_rate)
+    elif compatibility_mode == "official_code":
+        selected = official_code_parameter_masks(ctx[model].named_parameters(), noise_rate)
+    else:
+        raise ValueError("compatibility_mode must be 'paper' or 'official_code'")
+    ctx[save_as] = dict(selected.masks)
 
 
 @block(

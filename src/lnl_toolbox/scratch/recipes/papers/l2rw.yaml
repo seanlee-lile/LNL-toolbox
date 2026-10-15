@@ -1,6 +1,6 @@
 schema_version: 1
 name: l2rw
-description: "Formal L2RW CIFAR-10 uniform-40 recipe with L2RW ResNet32, trusted-meta weighting, SGD, and official long horizon."
+description: "Educational L2RW flow using the paper's differentiable virtual update. ResNet32, 100 trusted samples and an 80k-step cap are not the paper's UniformFlip Table 1 preset (WRN-28-10, 1000 trusted samples, 60k steps). Scratch uses symmetric noise and standard CIFAR preprocessing, not the formal runner's author-code noise and [-1,1] image scaling."
 steps:
   - {block: set_seed, params: {seed: 1234}}
   - {block: select_device, params: {device: auto}}

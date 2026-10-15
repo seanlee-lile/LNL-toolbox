@@ -13,6 +13,37 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class QuickStartAssetsTests(unittest.TestCase):
+    def test_selecting_paper_preserves_noise_step_seed(self) -> None:
+        self.assertIsNotNone(shutil.which("node"), "CI requires Node-backed UI verification")
+        script = r"""
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const source=fs.readFileSync('web/assets/quick_start.js','utf8');
+const binding=source.split('\n').find(line=>line.includes('panel.querySelectorAll(".qs-method-card")'));
+(async()=>{
+  for(const seed of [1,73]) {
+    const state={noiseSelection:{seed},methods:['l2rw','gce','pcse'].map(paper_id=>
+      ({paper_id,recipe_id:paper_id+'-recipe',status:'ready'}))};
+    const calls=[];
+    let click;
+    const button={dataset:{paper:'l2rw'},addEventListener(event,handler){click=handler;}};
+    const ctx={state,panel:{querySelectorAll(){return [button];}},render(){},
+      buildPlan(){calls.push(state.noiseSelection.seed);},
+      request:async()=>({fields:[{path:'seed',value:1234}]})};
+    vm.runInNewContext(binding,ctx);
+    for(const method of state.methods) {
+      button.dataset.paper=method.paper_id;
+      click.call(button);
+      await Promise.resolve();await Promise.resolve();
+      assert.strictEqual(state.noiseSelection.seed,seed,method.paper_id);
+    }
+    assert.deepStrictEqual(calls,[seed,seed,seed]);
+  }
+})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+        result = subprocess.run([shutil.which("node"), "-e", script], cwd=ROOT,
+                                capture_output=True, text=True, encoding="utf-8", check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_compatibility_guide_reuses_loaded_noise_facts(self) -> None:
         self.assertIsNotNone(shutil.which("node"), "CI requires Node-backed UI verification")
         script = r"""
@@ -1077,6 +1108,118 @@ if (!html.includes('id="qs-rho-positive"') || !html.includes('id="qs-rho-negativ
             [shutil.which("node"), "-e", script], cwd=ROOT,
             capture_output=True, text=True, check=False,
         )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class ContinuousScheduleRegressionTests(unittest.TestCase):
+    def test_jocor_saved_initial_rate_is_the_rate_used_by_training(self) -> None:
+        import tempfile, yaml, torch
+        from web import command_console as console
+        from lnl_toolbox.training.multi_model_experiment import _apply_epoch_optimizer_schedule
+        for path in ('optimizer.lr', 'scheduler.initial_lr'):
+            with self.subTest(path=path), tempfile.TemporaryDirectory(dir=ROOT) as directory:
+                saved = console._save_config({'recipe': 'jocor-cifar10-symmetric05-reproduction',
+                         'path': str(Path(directory) / 'edited.yaml'),
+                         'patches': [{'path': path, 'value': .003}], 'acknowledge_paper_impact': True})
+                config = yaml.safe_load((ROOT / saved['path']).read_text(encoding='utf-8'))
+                self.assertEqual(config['optimizer']['lr'], .003)
+                self.assertEqual(config['scheduler']['initial_lr'], .003)
+                optimizer = torch.optim.Adam([torch.nn.Parameter(torch.ones(1))], lr=config['optimizer']['lr'])
+                _apply_epoch_optimizer_schedule(optimizer, config['scheduler'], epoch=0, total_epochs=200)
+                self.assertEqual(optimizer.param_groups[0]['lr'], .003)
+                _apply_epoch_optimizer_schedule(optimizer, config['scheduler'], epoch=120, total_epochs=200)
+                self.assertAlmostEqual(optimizer.param_groups[0]['lr'], .002)
+                self.assertEqual(optimizer.param_groups[0]['betas'][0], .1)
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            target = Path(directory) / 'conflict.yaml'
+            with self.assertRaisesRegex(ValueError, '起始学习率设置冲突'):
+                console._save_config({'recipe': 'jocor-cifar10-symmetric05-reproduction', 'path': str(target),
+                    'patches': [{'path': 'optimizer.lr', 'value': .003}, {'path': 'scheduler.initial_lr', 'value': .004}],
+                    'acknowledge_paper_impact': True})
+            self.assertFalse(target.exists())
+
+    def test_mc_ldce_can_save_its_own_linear_schedule_boundary(self) -> None:
+        import tempfile, yaml
+        from web import command_console as console
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            saved = console._save_config({'recipe': 'mc-ldce-cifar10-reproduction',
+                     'path': str(Path(directory) / 'edited.yaml'),
+                     'patches': [{'path': 'scheduler.decay_start', 'value': 81}], 'acknowledge_paper_impact': True})
+            config = yaml.safe_load((ROOT / saved['path']).read_text(encoding='utf-8'))
+            self.assertEqual(config['scheduler']['decay_start'], 81)
+            self.assertNotIn('start_epoch', config['scheduler'])
+            for start in (-1, config['trainer']['epochs']):
+                with self.subTest(start=start), self.assertRaisesRegex(ValueError, 'decay_start'):
+                    console._save_config({'recipe': 'mc-ldce-cifar10-reproduction',
+                        'path': str(Path(directory) / 'invalid.yaml'),
+                        'patches': [{'path': 'scheduler.decay_start', 'value': start}], 'acknowledge_paper_impact': True})
+
+    def test_all_26_papers_render_continuous_phases_without_duplicate_editors(self) -> None:
+        from lnl_toolbox.catalog import default_paper_config, load_papers
+        from web import command_console as console
+        schemas = [console._config_schema(default_paper_config(p, root=ROOT)[0].recipe_id) for p in load_papers(ROOT)]
+        self.assertEqual(len(schemas), 26)
+        script = r"""
+const fs=require('fs'),vm=require('vm');
+const schemas=JSON.parse(fs.readFileSync(0,'utf8'));
+let source=fs.readFileSync('web/assets/quick_start.js','utf8');
+source=source.replace('window.quickStartController =','window.__probe={state,renderPlanParameters,scheduleGroups,scheduleEnabled,setScheduleEnabled,renderScheduleControl,parameterPatches};window.quickStartController =');
+const context={window:{}};vm.runInNewContext(source,context);const p=context.window.__probe;
+const expected=new Set(['coteaching','cnlcu','jocor','mc_ldce','apl','ca2c','fine']);
+const seen=new Set();
+for(const schema of schemas){
+ const state=p.state;state.planSchema=schema;state.parameterDraft={};state.segmentedPaths={};state.scheduleStash={};state.expandedSchedules={};
+ const original=p.renderPlanParameters();
+ const count=(html,path)=>html.split('data-qs-param="'+path+'"').length-1;
+ for(const f of schema.fields)if(count(original,f.path)>1)throw Error(schema.method+' duplicates '+f.path);
+ const active=p.scheduleGroups(schema.fields).filter(p.scheduleEnabled);
+ for(const group of active){
+  const name=group.fields.find(f=>f.path===group.prefix+'.name').value;
+  if(!['linear_after','linear_decay','cosine'].includes(name))continue;
+  seen.add(schema.method);
+  const html=p.renderScheduleControl(group,schema.fields);
+  if(!html.includes('qs-schedule-track')||!html.includes('qs-segment-table'))throw Error(schema.method+' lacks continuous phase UI');
+  if(html.includes('当前方式不使用额外节点'))throw Error(schema.method+' has old fallback');
+  for(const suffix of ['start_epoch','end_epoch','decay_start','t_max','eta_min','beta1_before','beta1_after','final_lr']){
+   const field=group.fields.find(f=>f.path===group.prefix+'.'+suffix);
+   if(field&&count(html,field.path)!==1)throw Error(schema.method+' phase editor missing/duplicated '+field.path);
+  }
+  if(schema.method==='jocor'&&count(html,'scheduler.initial_lr')!==0)throw Error('JoCoR shows a second initial rate');
+ }
+ const rates=schema.fields.filter(f=>f.editable&&f.visible!==false&&f.path.includes('optimizer.')&&f.path.endsWith('.lr')&&f.display_group!=='restricted');
+ for(const group of active)p.setScheduleEnabled(group.prefix,false);
+ const off=p.renderPlanParameters();for(const f of rates)if(count(off,f.path)!==1)throw Error(schema.method+' disabled loses/duplicates '+f.path);
+ for(const group of active)p.setScheduleEnabled(group.prefix,true);
+ const restored=p.renderPlanParameters();for(const f of rates)if(count(restored,f.path)!==1)throw Error(schema.method+' restore loses/duplicates '+f.path);
+ if(p.parameterPatches().length)throw Error(schema.method+' toggle changed defaults');
+}
+if([...expected].some(id=>!seen.has(id)))throw Error('not all seven continuous papers checked');
+"""
+        result = subprocess.run([shutil.which('node'), '-e', script], cwd=ROOT, input=json.dumps(schemas),
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_continuous_table_edits_produce_numeric_configuration_patches(self) -> None:
+        from web import command_console as console
+        schemas = [console._config_schema(recipe) for recipe in ('jocor-cifar10-symmetric05-reproduction',
+                   'mc-ldce-cifar10-reproduction', 'apl-cifar10-noise02-reproduction')]
+        script = r"""
+const fs=require('fs'),vm=require('vm');let source=fs.readFileSync('web/assets/quick_start.js','utf8');
+source=source.replace('window.quickStartController =','window.__probe={state,parameterPatches,renderPlanParameters};window.quickStartController =');
+const context={window:{}};vm.runInNewContext(source,context);const p=context.window.__probe;
+for(const schema of JSON.parse(fs.readFileSync(0,'utf8'))){
+ p.state.planSchema=schema;p.state.parameterDraft={};p.state.segmentedPaths={};p.state.expandedSchedules={};
+ const edits=schema.method==='jocor'?{'optimizer.lr':'0.003','scheduler.start_epoch':'81','scheduler.beta1_after':'0.2'}:
+             schema.method==='mc_ldce'?{'scheduler.decay_start':'81'}:{'scheduler.t_max':'119','scheduler.eta_min':'0.00001'};
+ p.state.parameterDraft=edits;const html=p.renderPlanParameters();const patches=p.parameterPatches();
+ for(const [path,value] of Object.entries(edits)){
+  const patch=patches.find(x=>x.path===path);if(!patch||patch.value!==Number(value))throw Error('wrong typed patch '+path);
+  if(html.split('data-qs-param="'+path+'"').length!==2)throw Error('edited field missing/duplicated '+path);
+ }
+}
+"""
+        result = subprocess.run([shutil.which('node'), '-e', script], cwd=ROOT, input=json.dumps(schemas),
+                                capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
 
 

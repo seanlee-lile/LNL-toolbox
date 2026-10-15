@@ -141,11 +141,12 @@ def generate_synthetic_binary_high_dim(
     start_index: int = 0,
     split: str,
 ) -> SyntheticBinaryData:
-    """Generate a balanced Gaussian binary problem for KLIEP smoke tests.
+    """Generate balanced uniform features with a linear decision boundary.
 
-    This controlled high-dimensional distribution is an implementation choice
-    for pipeline verification; it is not a reproduction of the paper's
-    numerical synthetic experiment.
+    Section 8.1 specifies uniform [0, 1] features and equally probable classes.
+    The boundary sum(x) = dimension / 2 is a repository choice because the
+    paper does not give its coefficients. Balance uses conditional sampling,
+    as in the existing two-dimensional generator.
     """
 
     if isinstance(size, bool) or int(size) != size or size < 2 or size % 2:
@@ -159,19 +160,20 @@ def generate_synthetic_binary_high_dim(
     target_per_class = size // 2
     feature_rng = np.random.default_rng(int(seed))
     order_rng = np.random.default_rng(int(seed) + 7919)
-    mean = np.zeros(dimension, dtype=np.float64)
-    mean[: min(5, dimension)] = 1.25
-    class_zero = feature_rng.normal(
-        loc=-mean,
-        scale=0.75,
-        size=(target_per_class, dimension),
-    )
-    class_one = feature_rng.normal(
-        loc=mean,
-        scale=0.75,
-        size=(target_per_class, dimension),
-    )
-    features = np.concatenate((class_zero, class_one), axis=0)
+    parts: list[np.ndarray] = []
+    for class_index in (0, 1):
+        accepted: list[np.ndarray] = []
+        count = 0
+        while count < target_per_class:
+            candidates = feature_rng.random((max(32, 2 * (target_per_class - count)), dimension))
+            candidate_labels = (candidates.sum(axis=1) >= dimension / 2).astype(np.int64)
+            selected = candidates[candidate_labels == class_index]
+            if selected.size:
+                take = selected[: target_per_class - count]
+                accepted.append(take)
+                count += take.shape[0]
+        parts.append(np.concatenate(accepted, axis=0))
+    features = np.concatenate(parts, axis=0)
     labels = np.concatenate((
         np.zeros(target_per_class, dtype=np.int64),
         np.ones(target_per_class, dtype=np.int64),

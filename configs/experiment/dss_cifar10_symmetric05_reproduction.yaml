@@ -52,6 +52,7 @@ loader:
   pin_memory: true
 model:
   name: preact_resnet18
+  variant: dss_author
   base_width: 64
 optimizer:
   name: sgd

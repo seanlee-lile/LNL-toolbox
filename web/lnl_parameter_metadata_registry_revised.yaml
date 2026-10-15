@@ -7,6 +7,7 @@ parameter_ui:
     cnlcu.variant: [soft, hard]
     cwd.variant: [binary_scalar, multiclass]
     data.preprocessing: [standard, tensor_only, gce2018, l2rw]
+    lend.dilution.policy: [until_converged, fixed_steps]
     data.split_strategy: [random, stratified, classwise_legacy, numpy_choice_complement]
     data.validation_split.strategy: [random, stratified, classwise_legacy, numpy_choice_complement]
     warmup.split_strategy: [random, stratified, classwise_legacy, numpy_choice_complement]
@@ -21,12 +22,18 @@ parameter_ui:
     early_stopping.mode: [min, max]
     early_stopping.monitor: [selection_accuracy, selection_loss, validation_accuracy, validation_loss, train_accuracy, train_loss, test_accuracy, test_loss]
     evaluation.selection_split: [validation, test]
+    evaluation.selection_metric: [accuracy, loss]
     evaluation.loss.name: [ce]
     evaluation.primary: [accuracy, ensemble_accuracy, mean_peer_accuracy]
     lend.graph.metric: [inner_product, cosine, euclidean]
-    mc_ldce.feature_mode: [fixed]
+    mc_ldce.feature_mode: [joint]
     mc_ldce.transition_model: [separate]
     model.initialization: [kaiming, torch_default]
+    volminnet.model.initialization: [kaiming, torch_default]
+    t_revision.stage1.model.initialization: [kaiming, torch_default]
+    posterior_stage.model.variant: [standard, imagenet_standard]
+    final_stage.model.variant: [standard, imagenet_standard]
+    model.variant: [standard, dss_author]
     noise.mode: [generated, external, clean]
     noise.name: [symmetric, pairflip, class_conditional, binary_asymmetric_rcn, asymmetric_rcn, external_torch, official_uniform_flip, pdl, clean, none, native, real_world]
     noise.sampling: [global, per_class, transition]
@@ -36,6 +43,7 @@ parameter_ui:
     selector.keep_rate.name: [linear, constant]
     transition.estimator: [paper_volmin, dual_t, known_smoke]
     transition.parameterization.name: [sigmoid_off_diagonal]
+    transition_stage.parameterization.name: [sigmoid_off_diagonal]
     cnlcu.hard_fidelity: [paper_formula_corrected_lof]
     cnlcu.uncertainty.loss_upper_bound.mode: [fixed]
     optimizer.name: [sgd, adam, adamw]
@@ -89,6 +97,7 @@ parameter_ui:
     inner_product: 向量内积
     euclidean: 欧氏距离
     fixed: 固定特征
+    joint: CNN 与分类层共同训练
     separate: 独立转移矩阵模型
     kaiming: Kaiming 初始化
     torch_default: PyTorch 默认初始化
@@ -179,6 +188,12 @@ parameter_ui:
     median_mode: 数值用中位数填补，类别用众数填补
     one_hot: 类别转换为独热向量
   choice_descriptions_by_path:
+    posterior_stage.model.variant:
+      standard: 工具箱 CIFAR ResNet，3×3、步长 1 首层，无最大池化。
+      imagenet_standard: 作者标准 ResNet，7×7、步长 2 首层及最大池化；不加载预训练权重。
+    final_stage.model.variant:
+      standard: 工具箱 CIFAR ResNet，3×3、步长 1 首层，无最大池化。
+      imagenet_standard: 作者标准 ResNet，7×7、步长 2 首层及最大池化；不加载预训练权重。
     parameter_update.name: {standard: 常规梯度更新}
     cnlcu.uncertainty.loss_upper_bound.mode: {fixed: 固定数值上界}
     volminnet.transition.initialization.mode: {paper: 论文规定的转移矩阵初始值}
@@ -303,35 +318,35 @@ parameter_ui:
     evidence.include_noisy_ce: [记录带噪标签交叉熵, 是否在运行记录中额外保存带噪标签的交叉熵统计。]
     meta.virtual_learning_rate: [虚拟更新步长, L2RW 计算样本权重时使用的临时模型更新步长；当前官方实现固定为 1。]
     parameter_update.name: [模型参数更新方式, 决定如何用梯度更新模型参数。]
-    parameter_update.compatibility_mode: [关键参数更新版本, CDR 选择论文公式版本或作者代码版本的参数筛选与更新规则。]
+    parameter_update.compatibility_mode: [关键参数更新版本, paper 按论文 Eq. (3)–(6) 筛选全部可训练参数并执行显式 L1 更新，要求 SGD 动量和 weight_decay 为 0。official_code 按作者代码筛选二维和四维权重，使用优化器动量与 L2 衰减，要求 l1_decay 为 0。]
     parameter_update.critical_scope: [关键参数筛选范围, CDR 在所选范围中筛选需要重点更新的参数。]
-    parameter_update.noise_rate: [参数更新噪声率先验, CDR 用这个噪声率设定关键参数保留策略。]
-    parameter_update.l1_decay: [非关键参数衰减系数, CDR 对未被选为关键参数的部分施加的衰减强度。]
+    parameter_update.noise_rate: [参数更新噪声率先验, CDR 使用的估计噪声率，用于确定关键参数比例和损失梯度缩放；可独立于人工加噪率 noise.rate 设置。]
+    parameter_update.l1_decay: [L1 衰减系数, paper 模式下对关键和非关键参数均施加 L1 收缩。关键参数还接受缩放后的损失梯度，非关键参数只接受 L1 更新。official_code 模式要求此值为 0，并使用优化器的 L2 衰减。]
     parameter_update.max_grad_norm: [梯度裁剪上限, 梯度整体范数超过该值时按比例缩小梯度。]
     parameter_update.milestones: [参数策略切换轮次, 参数更新策略发生变化的训练轮次列表。]
     parameter_update.gamma: [参数策略衰减倍率, 在参数策略切换节点使用的倍率。]
     cwd.variant: [质心加权算法版本, CWD 选择二分类标量版本或多分类版本。]
-    cwd.dynamic_centroid: [动态更新类别质心, 开启后用当前批次的特征和观测标签重新计算类别代表向量。]
+    cwd.dynamic_centroid: [动态更新类别质心, 开启后用当前批次的特征和观测标签计算修正质心，并让质心项参与梯度计算；关闭后使用轮次开始时的缓存质心，适用于固定特征，不能视为可训练深度特征的完整风险梯度。]
     cnlcu.variant: [不确定性估计版本, CNLCU 选择软截断或硬截断的不确定性估计方式。]
     cnlcu.history.window_size: [历史损失窗口轮数, CNLCU 用最近多少轮损失估计样本不确定性。]
     cnlcu.uncertainty.sigma_squared: [不确定性尺度, CNLCU 置信界中的方差尺度，控制不确定性修正强度。]
     ca2c.candidate_k: [候选类别数, 每个样本保留预测概率最高的多少个候选类别；必须小于类别总数。]
     ca2c.lambda: [联合目标平衡系数, CA2C 将硬伪标签损失和软伪标签损失加权组合。此值是硬标签项的权重，软标签项的权重为 1 减去此值；取值为 0 到 1。]
-    ca2c.robust_weight: [稳健目标权重, CA2C 稳健置信度目标乘以的系数。]
+    ca2c.robust_weight: [稳健目标权重, Robust 阶段 PLL/NL 损失的系数；强增强一致性 CE 的系数为 1 减去此值。默认为 0.8 和 0.2。lambda 单独控制硬标签与软标签损失的混合，不是此参数。]
     cal.confidence_weight: [主训练置信度权重, CAL 主训练阶段置信度项乘以的系数。]
     cal.confidence_schedule.milestones: [置信度权重切换轮次, CAL 主训练阶段置信度权重改变的轮次列表。]
     cal.confidence_schedule.values: [各阶段置信度权重, 依次填写 CAL 主训练各阶段的置信度权重；比切换节点多一个值。]
-    warmup.confidence_weight: [预热置信度权重, CAL 预热阶段置信度项乘以的系数。]
+    warmup.confidence_weight: [预热置信度权重, CAL 预训练置信度项的系数；CIFAR-10 使用观测类别比例的平方根归一化权重。此系数不参与代理标签筛选分数计算。]
     warmup.confidence_schedule.milestones: [预热置信度切换轮次, CAL 预热阶段置信度权重改变的轮次列表。]
     warmup.confidence_schedule.values: [预热各阶段置信度权重, 依次填写 CAL 预热各阶段的置信度权重；比切换节点多一个值。]
-    sieve.lower_threshold: [筛选下阈值, CAL 样本筛选使用的下界；必须不大于上阈值。]
-    sieve.upper_threshold: [筛选上阈值, CAL 样本筛选使用的上界；必须不小于下阈值。]
+    sieve.lower_threshold: [筛选下阈值, 筛选分数为观测标签交叉熵减去各类别交叉熵均值。低于下阈值保留观测标签；下阈值必须不大于上阈值。]
+    sieve.upper_threshold: [筛选上阈值, 筛选分数为观测标签交叉熵减去各类别交叉熵均值。高于上阈值改为预测类别；两阈值之间及边界样本丢弃。上阈值必须不小于下阈值。]
     mc_ldce.transition_model: [噪声矩阵估计模型方式, MC-LDCE 使用独立模型学习标签转移关系。]
-    mc_ldce.feature_mode: [分类特征使用方式, MC-LDCE 分类阶段使用固定的已提取特征。]
+    mc_ldce.feature_mode: [分类特征使用方式, CNN 与分类层共同训练，质心使用当前批次的特征计算并保留梯度。]
     mc_ldce.classifier_bias: [分类器偏置, 是否在线性分类器中增加可训练偏置项。]
     fine.alpha: [伪标签训练权重, FINE 在强增强图像上用伪标签计算分类损失；此系数控制该项在总训练损失中的权重。]
-    fine.beta: [类别抑制损失权重, FINE 类别抑制正则项乘以的系数。]
-    fine.gamma: [遗忘损失权重, FINE 遗忘正则项乘以的系数。]
+    fine.beta: [遗忘损失权重, 论文 Eq. (5) 中主动遗忘 AFMU 的系数，默认 0.001。]
+    fine.gamma: [噪声抑制损失权重, 论文 Eq. (5) 中互补标签噪声抑制 NSNL 的系数，默认 0.1。]
     fine.ema_momentum: [平均模型平滑系数, FINE 更新平均模型时保留旧模型参数的比例。]
     fine.momentum_scs: [类别筛选统计平滑系数, 更新类别筛选统计量时保留旧统计量的比例。]
     fine.momentum_scr: [置信度统计平滑系数, 更新样本置信度统计量时保留旧统计量的比例。]
@@ -353,6 +368,7 @@ parameter_ui:
     transition_stage.optimizer.model_lr: [矩阵估计模型学习率, 噪声矩阵估计阶段分类模型参数的学习率。]
     transition_stage.optimizer.transition_lr: [噪声矩阵学习率, 噪声矩阵估计阶段转移参数的学习率。]
     transition_stage.parameterization.name: [噪声矩阵参数形式, 将可训练参数映射为合法的标签转移概率矩阵。]
+    transition_stage.parameterization.initial_weight: [转移矩阵初始化权重, Sigmoid 变换前的非对角元素初始值；随后对每行归一化。当前 CIFAR-10 默认使初始总翻转概率约为 0.05，是工具箱初始化选择。]
     transition_stage.parameterization.initial_flip_mass: [初始标签翻转概率总量, 噪声矩阵初始化时每行非对角元素的概率总量。]
     transition_stage.parameterization.max_flip_mass: [标签翻转概率总量上限, 限制噪声矩阵每行非对角元素的概率总量；必须大于初始值。]
     transition_stage.parameterization.temperature: [噪声矩阵概率温度, 控制转移概率在各候选类别之间分配的集中程度。]
@@ -388,6 +404,7 @@ parameter_ui:
     upm.psi.augmentation: [混淆统计时使用增强, 收集混淆统计所需预测概率时是否随机增强输入。]
     upm.confusing_probability.initial_value: [混淆概率初值, 样本混淆概率在开始更新前的初始值。]
     upm.confusing_probability.learning_rate: [混淆概率更新步长, 每次更新样本混淆概率时使用的步长。]
+    upm.confusing_probability.epsilon: [混淆概率更新稳定项, 混淆概率更新时在分母 η 上加 ε，避免除以零；论文 Eq. (11) 使用 0.0001。]
     upm.confusing_probability.update_start_epoch: [混淆概率起始更新轮次, 从哪一轮开始更新样本混淆概率。]
     upm.confusing_probability.update_interval_epochs: [混淆概率更新间隔, 每隔多少轮重新更新一次样本混淆概率。]
     dividemix.gmm.loss_history.name: [损失历史汇总方式, 拟合干净与带噪样本的损失分布时，使用当前轮或按作者规则汇总历史损失。]
@@ -401,7 +418,7 @@ parameter_ui:
     dividemix.objective.lambda_u: [无标签损失权重, 无标签样本训练损失乘以的系数。]
     dividemix.objective.lambda_r: [类别先验正则权重, 约束类别预测分布的正则项乘以的系数。]
     dividemix.objective.rampup_epochs: [无标签权重渐增轮数, 用多少轮将无标签训练损失权重逐渐提高到设定值。]
-    dividemix.warmup.confidence_penalty_weight: [预热过度自信惩罚权重, 预热时抑制过度自信预测的惩罚项系数。]
+    dividemix.warmup.confidence_penalty_weight: [预热过度自信惩罚权重, 仅在非对称噪声预热阶段生效，增加预测熵以缓解过度自信；对称噪声下不使用此项。]
     dividemix.inference.ensemble: [双模型预测合并方式, 将两个模型的原始类别评分相加后进行最终分类。]
     dld.feature_extractor.source: [预训练特征来源, 选择已有预训练权重或仓库内冻结模型；正式配置使用已有预训练权重。]
     dld.diffusion.timesteps: [扩散时间步数, 标签扩散过程划分的总时间步数。]
@@ -418,11 +435,13 @@ parameter_ui:
     dld.inference.initialization: [预测标签初始值, 开始扩散预测前标签向量的初始化方式。]
     lend.graph.k: [图近邻样本数, 构建特征近邻图时每个样本连接的近邻数；必须小于训练批次大小。]
     lend.graph.metric: [近邻相似度度量, 在特征空间中判断哪些样本更接近的计算方式。]
-    lend.graph.gamma: [图传播强度, 控制近邻图中标签信息传播的强度。]
+    lend.graph.gamma: [近邻相似度指数, 将非负特征内积取 gamma 次幂作为边权；论文定义此指数但未给定数值，1 是工具箱默认值。]
     lend.graph.normalize_features: [归一化图特征, 构图前把特征向量缩放到单位长度。]
     lend.dilution.alpha: [标签稀释混合系数, 控制标签稀释中原有标签信息与传播信息的混合比例。]
-    lend.dilution.steps: [标签稀释迭代次数, 每次标签稀释过程执行多少次迭代。]
-    lend.dilution.policy: [标签稀释停止规则, 当前流程按固定迭代次数完成标签稀释。]
+    lend.dilution.steps: [标签稀释迭代次数, 仅在 fixed_steps 下生效；执行指定次数后停止，是工程变体，不保证收敛。]
+    lend.dilution.policy: [标签稀释停止规则, until_converged 按相邻两次标签矩阵的最大绝对变化判断收敛；fixed_steps 执行固定次数。]
+    lend.dilution.tolerance: [扩散收敛容差, 相邻两次标签矩阵的最大绝对变化不超过此值时停止；1e-5 为工具箱数值设置，并非论文指定值。]
+    lend.dilution.max_steps: [扩散迭代上限, 单批标签扩散最多执行的迭代次数；达到上限仍未收敛会报错。1000 为工具箱保护上限，并非论文指定值。]
     lend.history.beta: [历史标签平滑系数, 更新历史标签估计时保留旧估计的比例。]
     lend.history.first_observation: [历史标签初次记录方式, 第一次观察到样本时用当前估计初始化历史记录。]
     lend.selection.rule: [训练样本保留规则, 保留观测标签与稀释后最高概率类别一致的样本。]
@@ -442,14 +461,14 @@ parameter_ui:
     pipeline.weight_provider.artifact_path: [MentorNet 权重文件, 已训练的 MentorNet 权重路径；相对路径以项目目录为起点。]
     pipeline.weight_provider.total_epochs: [MentorNet 进度基准轮数, 将当前训练轮次转换为进度比例时使用的总轮数。]
     pipeline.weight_provider.percentile: [MentorNet 损失分位点, 选取哪个损失分位点作为样本损失相对大小的参考。]
-    pipeline.weight_provider.decay: [MentorNet 统计平滑系数, 更新损失统计时保留旧统计的比例。]
+    pipeline.weight_provider.decay: [MentorNet 统计平滑系数, '损失百分位移动平均保留历史值的比例。默认 0.95 来自论文第 5.1 节和补充材料 E.3；作者发布脚本默认值为 0.5。']
     pipeline.weight_provider.burn_in_epoch: [MentorNet 预热结束轮次, 从哪一轮开始进入预热后的样本权重规则。]
     pipeline.weight_provider.fixed_epoch_after_burn_in: [固定预热后的进度特征, 开启后向 MentorNet 输入固定的训练进度特征。]
     pipeline.weight_provider.fixed_label: [MentorNet 标签输入特征, 固定输入 MentorNet 的标签特征值；留空时使用样本观测标签。]
     pipeline.weight_provider.dropout_schedule: [MentorNet 样本丢弃阶段, '每项依次填写丢弃比例和持续轮数，例如 [[0.5,17],[0.05,78]]。']
     risk.name: [二分类风险校正方法, 使用类别翻转概率对带噪标签训练风险作无偏校正。]
-    scheduler.beta1_before: [衰减前的一阶平均系数, JoCoR 学习率衰减开始前使用的 Adam 一阶移动平均系数。]
-    scheduler.beta1_after: [衰减后的一阶平均系数, JoCoR 学习率衰减开始后使用的 Adam 一阶移动平均系数。]
+    scheduler.beta1_before: [衰减前的一阶平均系数, 学习率衰减开始前使用的 Adam 一阶移动平均系数。]
+    scheduler.beta1_after: [衰减后的一阶平均系数, 学习率衰减开始后使用的 Adam 一阶移动平均系数。]
     scheduler.decay_start: [学习率衰减起始轮次, 从哪一轮开始降低学习率。]
     warmup.noisy_validation_size: [预热验证集样本数, 预热阶段从训练数据中留出的带噪标签验证样本数。]
   suffixes:
@@ -471,6 +490,7 @@ parameter_ui:
     model.name: [模型架构, 本阶段使用的神经网络结构。]
     model.base_width: [基础通道数, 网络首层或基础模块的通道宽度。]
     model.initialization: [模型初始化方式, 开始训练前模型参数的初始化规则。]
+    model.variant: [模型实现版本, dss_author 使用 DSS 作者网络：入口含 BN 和 ReLU、无投影残差支路使用激活后输入、分类前不额外添加 BN/ReLU，并使用 PyTorch 默认初始化。standard 使用工具箱原有 PreActResNet 实现。]
     model.dropout: [神经元随机丢弃比例, 训练时随机将多少比例的神经元输出置零。]
     model.width_multiplier: [网络宽度倍数, 网络通道数相对基础宽度的倍数。]
     model.num_residual_units: [每组残差单元数, 每组残差模块包含的残差单元数量。]
@@ -597,9 +617,6 @@ global_ui_rules:
   - external artifact hashes/fingerprints
   linked_validation_examples:
   - binary-risk noise.rho_positive/rho_negative must stay consistent with risk.rho_positive/rho_negative
-  - cdr noise.rate must stay consistent with parameter_update.noise_rate
-  - coteaching noise.rate must stay consistent with coteaching.noise_rate
-  - cnlcu noise.rate must stay consistent with cnlcu.noise_rate
 # Presentation policy is deliberately separate from the four permission levels above.
 # Hidden fields remain in the YAML and in the full-editor path; they are simply not
 # offered as ordinary paper parameters. Resource fields are shown in a dedicated
@@ -674,7 +691,6 @@ parameter_display_policy:
   - cwd.pinv_rcond
   - fine.probability_floor
   - t_revision.revision.ratio.denominator_floor
-  - upm.confusing_probability.epsilon
   - transition_stage.determinant_tolerance
   - transition_stage.condition_limit
   - statistics_stage.condition_limit
@@ -809,7 +825,7 @@ parameter_display_policy:
     dividemix: []
     lend: []
   hidden_paths_by_method:
-    apl: [output_root, loader.num_workers, loader.pin_memory, loss.passive.log_zero, trainer.progress.enabled, trainer.progress.update_interval, trainer.progress.curves, trainer.device, noise.validation_targets, noise.manifest_filename, schema_version, kind, loss.name, loss.active.name, loss.passive.name, selector.name, parameter_update.name, execution.runner]
+    apl: [output_root, loader.num_workers, loader.pin_memory, loss.passive.log_zero, evaluation.report_checkpoint, evaluation.allow_test_selection, trainer.progress.enabled, trainer.progress.update_interval, trainer.progress.curves, trainer.device, noise.validation_targets, noise.manifest_filename, schema_version, kind, loss.name, loss.active.name, loss.passive.name, selector.name, parameter_update.name, execution.runner]
     gce: [output_root, loader.num_workers, loader.pin_memory, trainer.progress.enabled, trainer.progress.update_interval, trainer.progress.curves, trainer.device, noise.validation_targets, noise.manifest_filename, schema_version, kind, loss.name, selector.name, parameter_update.name, execution.runner]
     binary_risk: [output_root, schema_version, kind, risk.name, execution.runner]
     dual_t: [output_root, loader.num_workers, loader.pin_memory, trainer.device, noise.validation_targets, noise.manifest_filename, posterior_stage.checkpoint_selection, schema_version, kind, method, transition_stage, execution.runner]
@@ -817,7 +833,7 @@ parameter_display_policy:
     importance_reweighting: [output_root, loader.num_workers, loader.pin_memory, trainer.device, noise.validation_targets, schema_version, kind, method, num_classes, label_convention, posterior_stage.name, model.num_classes, loss.name, execution.runner]
     cwd: [output_root, loader.num_workers, loader.pin_memory, cwd.pinv_rcond, trainer.device, schema_version, kind, parameter_record.sampling_seed, parameter_record.selected_group, parameter_record.source, parameter_record.repeated_runs, execution.runner]
     pcse: [output_root, loader.num_workers, loader.pin_memory, transition_stage.parameterization.seed, transition_stage.determinant_tolerance, transition_stage.condition_limit, statistics_stage.condition_limit, gda_stage.covariance_ridge, trainer.device, configuration_fidelity, noise.rng, noise.validation_targets, noise.manifest_filename, pretraining_stage.checkpoint_selection, schema_version, kind, method, data.num_classes, transition_stage.name, execution.runner]
-    fine: [output_root, loader.num_workers, loader.pin_memory, loader.drop_last, fine.probability_floor, trainer.device, noise.rng, schema_version, kind, parameter_record.sampling_seed, parameter_record.selected_group, parameter_record.source, parameter_record.repeated_runs, execution.runner]
+    fine: [output_root, loader.num_workers, loader.pin_memory, loader.drop_last, model.dropout, fine.probability_floor, trainer.device, noise.rng, schema_version, kind, parameter_record.sampling_seed, parameter_record.selected_group, parameter_record.source, parameter_record.repeated_runs, execution.runner]
     cdr: [output_root, loader.num_workers, loader.pin_memory, trainer.progress, trainer.device, noise.rng, noise.validation_targets, noise.manifest_filename, schema_version, kind, loss.name, selector.name, parameter_update.name, execution.runner]
     dss: [output_root, loader.num_workers, loader.pin_memory, trainer.progress.enabled, trainer.progress.update_interval, trainer.progress.curves, trainer.device, noise.rng, noise.validation_targets, noise.manifest_filename, schema_version, kind, loss.name, selector.name, parameter_update.name, pipeline.name, pipeline.objective_consumer.name, pipeline.objective_consumer.num_samples, pipeline.objective_consumer.num_classes, execution.runner]
     coteaching: [output_root, coteaching.initialization.peer_seed_offset, loader.num_workers, loader.pin_memory, trainer.device, configuration_fidelity, noise.rng, noise.validation_targets, noise.manifest_filename, schema_version, kind, method, coteaching.model_count, execution.runner]
@@ -828,9 +844,9 @@ parameter_display_policy:
     mc_ldce: [output_root, loader.num_workers, loader.pin_memory, transition.determinant_tolerance, transition.condition_limit, transition.parameterization.seed, statistics.rcond, statistics.condition_limit, trainer.device, noise.rng, schema_version, kind, method, execution.runner, mc_ldce.lifecycle_version, transition.num_classes]
     volminnet: [output_root, loader.num_workers, loader.pin_memory, trainer.device, configuration_fidelity, noise.rng, noise.validation_targets, noise.manifest_filename, volminnet.fidelity, volminnet.checkpoint_selection.split, volminnet.checkpoint_selection.metric, volminnet.checkpoint_selection.mode, schema_version, kind, method, execution.runner]
     pdl: [output_root, loader.num_workers, loader.pin_memory, loader.drop_last, trainer.device, trainer.progress.curves, noise.manifest_filename, schema_version, kind, instance_transition.name, algorithm.name, loss.name, execution.runner]
-    upm: [output_root, loader.num_workers, loader.pin_memory, loader.drop_last, upm.confusing_probability.epsilon, trainer.device, configuration_fidelity, noise.rng, noise.validation_targets, upm.stage1.best_metric, schema_version, kind, method, execution.runner]
+    upm: [output_root, loader.num_workers, loader.pin_memory, loader.drop_last, trainer.device, configuration_fidelity, noise.rng, noise.validation_targets, upm.stage1.best_metric, schema_version, kind, method, execution.runner]
     cal: [output_root, loader.num_workers, loader.pin_memory, trainer.device, schema_version, kind, method, execution.runner, noise.clean_key, noise.noisy_key]
-    dld: [output_root, loader.num_workers, loader.pin_memory, dld.precorrection.gmm_seed, dld.precorrection.minimum_mean_separation, dld.precorrection.query_chunk_size, trainer.device, configuration_fidelity, noise.rng, noise.validation_targets, dld.fidelity.name, dld.fidelity.hard_y0, dld.fidelity.direction_endpoint, dld.fidelity.direction, dld.fidelity.neighbor_metric, dld.fidelity.neighbor_weighting, dld.fidelity.self_neighbor, dld.fidelity.divergence, dld.fidelity.divergence_softmax, dld.fidelity.hard_yn_zero_denominator, dld.fidelity.schedule, dld.fidelity.inference_initialization, dld.fidelity.inference_steps, schema_version, kind, method, execution.runner]
+    dld: [output_root, loader.num_workers, loader.pin_memory, dld.precorrection.gmm_seed, dld.precorrection.minimum_mean_separation, dld.precorrection.query_chunk_size, trainer.epochs, trainer.device, configuration_fidelity, noise.rng, noise.validation_targets, dld.fidelity.name, dld.fidelity.hard_y0, dld.fidelity.direction_endpoint, dld.fidelity.direction, dld.fidelity.neighbor_metric, dld.fidelity.neighbor_weighting, dld.fidelity.self_neighbor, dld.fidelity.divergence, dld.fidelity.divergence_softmax, dld.fidelity.hard_yn_zero_denominator, dld.fidelity.schedule, dld.fidelity.inference_initialization, dld.fidelity.inference_steps, schema_version, kind, method, execution.runner]
     ca2c: [output_root, loader.num_workers, loader.pin_memory, loader.drop_last, trainer.device, noise.rng, schema_version, kind, method, execution.runner]
     dividemix: [output_root, loader.num_workers, loader.pin_memory, dividemix.initialization.peer_seed_offset, dividemix.gmm.random_seed, dividemix.gmm.max_iterations, dividemix.gmm.tolerance, dividemix.gmm.covariance_regularization, dividemix.gmm.minimum_mean_separation, trainer.device, configuration_fidelity, noise.rng, noise.validation_targets, noise.manifest_filename, dividemix.fidelity, schema_version, kind, method, execution.runner, dividemix.model_count]
     l2rw: [output_root, loader.num_workers, loader.pin_memory, trusted_validation.seed, trusted_validation.input_seed, trainer.device, meta.implementation, schema_version, kind, method, execution.runner]
@@ -886,6 +902,7 @@ formal_recipe_bindings:
 # Paired/ranged fields are intentionally absent: they remain editable and
 # must pass whole-config validation when saved.
 runtime_fixed_parameter_paths:
+  apl: [evaluation.allow_test_selection, evaluation.report_checkpoint]
   dual_t: [final_stage.fresh_model, posterior_stage.loss.name, final_stage.classifier, final_stage.loss.name, evaluation.selection_split]
   pcse: [pretraining_stage.loss.name, transition_stage.optimizer.name, transition_stage.scheduler.name, transition_stage.parameterization.name, evaluation.selection_split]
   importance_reweighting: [noise.name, posterior_stage.rate_estimator, model.name, evaluation.selection_split]
@@ -896,11 +913,11 @@ runtime_fixed_parameter_paths:
   upm: [upm.psi.source, upm.psi.split, upm.psi.augmentation, upm.main.initialization, evaluation.selection_split]
   dld: [dld.precorrection.gmm_components, dld.diffusion.model.independent_predictors, dld.inference.steps, dld.inference.deterministic, dld.inference.initialization]
   dividemix: [evaluation.selection_split, dividemix.mixmatch.mixup_lambda_scope, dividemix.inference.ensemble]
-  lend: [lend.dilution.policy, lend.history.first_observation, lend.selection.rule, lend.selection.reduction, lend.selection.empty_batch]
+  lend: [lend.history.first_observation, lend.selection.rule, lend.selection.reduction, lend.selection.empty_batch]
 runtime_derived_parameter_paths:
   importance_reweighting: [model.in_features]
-  coteaching: [coteaching.noise_rate, coteaching.remember_schedule.end]
-  cnlcu: [cnlcu.noise_rate, cnlcu.remember_schedule.end]
+  coteaching: [coteaching.remember_schedule.end]
+  cnlcu: [cnlcu.remember_schedule.end]
 default_parameter_paths:
   common: [data.name, noise.name, noise.rate, seed, loader.batch_size, trainer.epochs, optimizer.lr]
   # CAL consumes an external noise artifact; changing its displayed name/rate
@@ -912,7 +929,7 @@ default_parameter_paths:
     gce: [data.validation_size, data.name, data.augment, data.preprocessing, loader.batch_size, model.name, trainer.epochs, optimizer.lr, scheduler.name, scheduler.gamma, loss.q, seed, noise.name, noise.rate]
     binary_risk: [data.validation_size, data.name, loader.batch_size, model.name, trainer.epochs, optimizer.lr, risk.rho_negative, risk.rho_positive, seed, noise.name]
     dual_t: [data.validation_size, data.name, data.augment, data.preprocessing, loader.batch_size, posterior_stage.model.name, posterior_stage.epochs, posterior_stage.optimizer.lr, posterior_stage.scheduler.name, posterior_stage.scheduler.gamma, final_stage.model.name, final_stage.epochs, final_stage.optimizer.lr, final_stage.scheduler.name, final_stage.scheduler.gamma, seed, noise.name, noise.rate]
-    loss_correction: [data.validation_size, data.name, data.augment, data.preprocessing, loader.batch_size, model.name, trainer.epochs, optimizer.lr, scheduler.name, scheduler.gamma, seed, noise.name, noise.rate]
+    loss_correction: [data.validation_size, data.name, data.augment, data.preprocessing, loader.batch_size, model.name, pipeline.transition_estimator.name, pipeline.risk_corrector.name, pipeline.warmup_epochs, trainer.epochs, optimizer.lr, scheduler.name, scheduler.gamma, seed, noise.name, noise.rate]
     importance_reweighting: [data.validation_size, data.name, loader.batch_size, posterior_stage.bandwidth, trainer.epochs, optimizer.lr, scheduler.name, seed, noise.rho_negative, noise.rho_positive]
     cwd: [data.folds, data.fold_index, data.name, data.augment, loader.batch_size, model.name, trainer.epochs, optimizer.lr, scheduler.name, scheduler.gamma, seed, noise.name, noise.rho_negative, noise.rho_positive]
     pcse: [data.validation_size, data.name, data.augment, data.preprocessing, loader.batch_size, pretraining_stage.model.name, pretraining_stage.epochs, pretraining_stage.optimizer.lr, pretraining_stage.scheduler.name, transition_stage.epochs, transition_stage.optimizer.model_lr, transition_stage.optimizer.transition_lr, transition_stage.lambda_volume, ensemble_stage.epochs, ensemble_stage.learning_rate, seed, noise.name, noise.rate]
@@ -929,7 +946,7 @@ default_parameter_paths:
     pdl: [warmup.noisy_validation_size, data.name, data.augment, data.preprocessing, loader.batch_size, model.name, warmup.epochs, warmup.optimizer.lr, warmup.scheduler.name, instance_transition.num_parts, phases.correction_epochs, trainer.epochs, optimizer.lr, scheduler.name, phases.revision_epochs, revision.optimizer.lr, seed, noise.name, noise.rate]
     upm: [data.validation_size, data.name, data.augment, loader.batch_size, upm.stage1.model.name, upm.stage1.epochs, upm.stage1.optimizer.lr, upm.stage1.scheduler.name, upm.stage1.scheduler.gamma, upm.main.model.name, upm.main.epochs, upm.main.optimizer.lr, upm.main.scheduler.name, upm.main.scheduler.gamma, upm.confusing_probability.initial_value, upm.confusing_probability.learning_rate, seed, noise.name, noise.rate]
     cal: [data.validation_size, data.name, data.augment, loader.batch_size, model.name, warmup.epochs, trainer.epochs, optimizer.lr, scheduler.name, scheduler.gamma, cal.confidence_weight, seed, noise.path]
-    dld: [data.validation_size, data.name, data.strong_augment, loader.batch_size, dld.feature_extractor.model.name, dld.feature_extractor.source, dld.precorrection.k_neighbors, dld.diffusion.epochs, dld.diffusion.optimizer.direction.lr, dld.diffusion.optimizer.noise.lr, dld.diffusion.scheduler.direction.name, dld.diffusion.scheduler.noise.name, trainer.epochs, seed, noise.name, noise.rate, dld.inference.steps]
+    dld: [data.validation_size, data.name, data.strong_augment, loader.batch_size, dld.feature_extractor.model.name, dld.feature_extractor.source, dld.precorrection.k_neighbors, dld.diffusion.epochs, dld.diffusion.optimizer.direction.lr, dld.diffusion.optimizer.noise.lr, dld.diffusion.scheduler.direction.name, dld.diffusion.scheduler.noise.name, seed, noise.name, noise.rate, dld.inference.steps]
     ca2c: [data.validation_size, data.name, data.augment, data.strong_augment, loader.batch_size, model.name, trainer.epochs, optimizer.lr, scheduler.name, scheduler.t_max, scheduler.eta_min, ca2c.candidate_k, ca2c.lambda, ca2c.robust_weight, seed, noise.name, noise.rate]
     dividemix: [data.validation_size, data.name, data.augment, data.preprocessing, loader.batch_size, model.name, dividemix.warmup.epochs, dividemix.gmm.threshold, dividemix.training.epochs, optimizer.lr, scheduler.name, scheduler.gamma, dividemix.mixmatch.temperature, dividemix.objective.lambda_u, seed, noise.name, noise.rate]
     l2rw: [data.num_val, data.num_clean, data.name, data.augment, loader.batch_size, model.name, trainer.epochs, trainer.max_steps, optimizer.lr, scheduler.name, scheduler.gamma, seed, noise.name, noise.rate, meta.virtual_learning_rate]
@@ -1018,10 +1035,10 @@ research_parameter_view:
     gce: []
     binary_risk: []
     dual_t: [posterior_stage.checkpoint_selection, final_stage.classifier, final_stage.fresh_model]
-    loss_correction: [pipeline.warmup_epochs, noise.rng]
+    loss_correction: [noise.rng, model.variant, pipeline.pretraining_protocol, evaluation.selection_metric, evaluation.corrected_loss]
     importance_reweighting: [posterior_stage.bandwidth, posterior_stage.rate_estimator]
     cwd: [cwd.variant, cwd.dynamic_centroid]
-    pcse: [configuration_fidelity, pretraining_stage.mode, pretraining_stage.epochs, transition_stage.epochs, transition_stage.parameterization.name, transition_stage.parameterization.initial_flip_mass, transition_stage.parameterization.max_flip_mass, transition_stage.parameterization.temperature, feature_stage.layers]
+    pcse: [configuration_fidelity, pretraining_stage.mode, pretraining_stage.epochs, transition_stage.epochs, transition_stage.parameterization.name, transition_stage.parameterization.initial_weight, feature_stage.layers]
     fine: [fine.probability_floor]
     cdr: [parameter_update.critical_scope, parameter_update.compatibility_mode]
     dss: [pipeline.objective_consumer.mda, pipeline.objective_consumer.ccs]
@@ -1039,7 +1056,7 @@ research_parameter_view:
     ca2c: []
     dividemix: [configuration_fidelity, dividemix.fidelity, dividemix.gmm.loss_history.name, dividemix.gmm.loss_history.window_epochs, dividemix.mixmatch.mixup_lambda_scope, dividemix.inference.ensemble]
     l2rw: [trusted_validation.source, meta.implementation]
-    lend: [configuration_fidelity, lend.graph.metric, lend.graph.normalize_features, lend.dilution.policy, lend.selection.rule, lend.selection.reduction]
+    lend: [configuration_fidelity, lend.graph.metric, lend.graph.normalize_features, lend.selection.rule, lend.selection.reduction]
 methods:
   apl:
     paper:
@@ -1051,8 +1068,7 @@ methods:
       evidence:
         apl_combo: APL combines an active normalized loss and a passive loss; the recipe instantiates NCE + RCE with balancing
           coefficients alpha and beta.
-        rce_zero: RCE requires a finite surrogate for log(0); the concrete clamp is an implementation detail, not the paper-level
-          method choice.
+        rce_zero: The author implementation clamps zero label probabilities to 1e-4; ln(1e-4) scales the RCE term.
     repository_recipe:
       branch: codex/cli
       role: formal/reproduction recipe selected by the paper catalog
@@ -1268,9 +1284,9 @@ methods:
           current: -9.210340371976184
           value_type: number
           ui_control: number
-          reproduction_impact: low_to_medium
-          origin: implementation_or_training_detail
-          note: 工程实现或估计器内部细节；默认折叠。
+          reproduction_impact: high
+          origin: author_implementation
+          note: 对应作者将零标签概率截断为 1e-4 后的自然对数；绝对值决定 RCE 项强度，当前约为 -9.21。
         parameter_update.max_grad_norm:
           current: 5.0
           value_type: number
@@ -1287,12 +1303,12 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: evaluation metric wiring
         evaluation.allow_test_selection:
-          current: true
+          current: false
           value_type: boolean
           ui_control: checkbox
           reproduction_impact: high
           origin: advanced_experiment_or_implementation_control
-          note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
+          note: 不根据测试准确率挑选模型；APL 默认报告训练结束时的最后一轮模型。
           reproduction_context: model-selection/evaluation rule
         evaluation.selection_split:
           current: test
@@ -1300,7 +1316,7 @@ methods:
           ui_control: text
           reproduction_impact: high
           origin: advanced_experiment_or_implementation_control
-          note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
+          note: 逐轮记录测试集指标，用于观察训练过程；最终报告最后一轮结果。
           reproduction_context: model-selection/evaluation rule
         loader.num_workers:
           current: 8
@@ -1356,6 +1372,14 @@ methods:
           origin: implementation_or_training_detail
           note: 工程/资源/输出设置；不属于论文方法超参数。
       locked:
+        evaluation.report_checkpoint:
+          current: last
+          value_type: string
+          ui_control: readonly
+          reproduction_impact: high
+          origin: author_implementation
+          note: 作者汇总最后一轮结果；测试集指标不用于挑选模型。
+          lock_reason: final-epoch reporting protocol
         schema_version:
           current: 1
           value_type: integer
@@ -1421,16 +1445,16 @@ methods:
           note: 结构性运行契约；普通参数面板中的独立修改会破坏 schema、runner、组件 wiring、label-space/cardinality 或 lifecycle 契约。
           lock_reason: runner contract
     coverage:
-      parameter_count: 47
+      parameter_count: 48
       by_level:
         basic: 5
         paper: 3
         advanced: 31
-        locked: 8
+        locked: 9
     paper_comparison:
       audit_status: checked_against_original_paper
       alignment_status: method_and_selected_hparams_aligned
-      summary: APL=NCE+RCE and alpha/beta are exposed as paper parameters; RCE log-zero clamp is engineering.
+      summary: CIFAR-10 uses the author CNN with fully connected BatchNorm and final-epoch reporting; extreme-probability RCE clipping remains to be verified.
       permission_policy: execution_validity_lock_rule_v1_1
   gce:
     paper:
@@ -1831,23 +1855,23 @@ methods:
           origin: experiment_control
           note: 可直接修改的实验随机性/realization 控制；修改会改变具体实验实例，但不会使 recipe 的结构或 runner 契约失效。
           reproduction_context: noise realization
-      paper:
         data.test_size:
           current: 2048
           value_type: integer
           ui_control: number
           reproduction_impact: high
-          origin: paper_method_or_experiment_condition
-          note: 可修改的重要论文参数或实验条件；修改后实验仍可运行，但应标记为偏离当前论文/正式 recipe 设置。
-          reproduction_context: paper/benchmark data protocol
+          origin: toolbox_default
+          note: 工具箱合成数据的默认样本数量，可修改；论文未规定此数值。
+          reproduction_context: toolbox synthetic data generation
         data.train_size:
           current: 512
           value_type: integer
           ui_control: number
           reproduction_impact: high
-          origin: paper_method_or_experiment_condition
-          note: 可修改的重要论文参数或实验条件；修改后实验仍可运行，但应标记为偏离当前论文/正式 recipe 设置。
-          reproduction_context: paper/benchmark data protocol
+          origin: toolbox_default
+          note: 工具箱合成数据的默认样本数量，可修改；论文未规定此数值。
+          reproduction_context: toolbox synthetic data generation
+      paper:
         risk.rho_negative:
           current: 0.4
           value_type: number
@@ -1858,7 +1882,7 @@ methods:
           evidence_ref: rates
           linked_fields:
           - noise.rho_negative
-          constraints: 0 <= rho_negative < 0.5 for the intended identifiable regime
+          constraints: 0 <= rho_positive < 1; 0 <= rho_negative < 1; rho_positive + rho_negative < 1
         risk.rho_positive:
           current: 0.4
           value_type: number
@@ -1869,7 +1893,7 @@ methods:
           evidence_ref: rates
           linked_fields:
           - noise.rho_positive
-          constraints: 0 <= rho_positive < 0.5 for the intended identifiable regime
+          constraints: 0 <= rho_positive < 1; 0 <= rho_negative < 1; rho_positive + rho_negative < 1
         noise.rho_negative:
           current: 0.4
           value_type: number
@@ -1881,7 +1905,7 @@ methods:
           - risk.rho_negative
           reproduction_context: benchmark noise condition; linked to estimator
           evidence_ref: rates
-          constraints: 0 <= rho_negative < 0.5 for the intended identifiable regime
+          constraints: 0 <= rho_positive < 1; 0 <= rho_negative < 1; rho_positive + rho_negative < 1
         noise.rho_positive:
           current: 0.4
           value_type: number
@@ -1893,7 +1917,7 @@ methods:
           - risk.rho_positive
           reproduction_context: benchmark noise condition; linked to estimator
           evidence_ref: rates
-          constraints: 0 <= rho_positive < 0.5 for the intended identifiable regime
+          constraints: 0 <= rho_positive < 1; 0 <= rho_negative < 1; rho_positive + rho_negative < 1
       advanced:
         data.name:
           current: synthetic_binary_2d
@@ -1977,8 +2001,8 @@ methods:
     coverage:
       parameter_count: 22
       by_level:
-        basic: 6
-        paper: 6
+        basic: 8
+        paper: 4
         advanced: 6
         locked: 4
     paper_comparison:
@@ -1997,7 +2021,7 @@ methods:
       evidence:
         dual_t: Dual-T is a staged transition-matrix estimation procedure; the posterior stage, transition estimation, and
           final forward correction are algorithm structure.
-        epochs: The paper uses ResNet-18 on CIFAR-10 and reports 100-epoch classifier training in the cited setup.
+        epochs: 论文后验估计训练 100 轮；最终 DT-Forward 分类器采用作者 cl_epochs 的默认 200 轮。
     repository_recipe:
       branch: codex/cli
       role: formal/reproduction recipe selected by the paper catalog
@@ -2036,12 +2060,12 @@ methods:
           note: Posterior-estimation stage budget; changing it alters the transition estimate quality.
           evidence_ref: epochs
         final_stage.epochs:
-          current: 100
+          current: 200
           value_type: integer
           ui_control: number
           reproduction_impact: high
-          origin: paper_method
-          note: Final corrected-classifier training budget.
+          origin: author_implementation
+          note: 使用估计的转移矩阵训练最终分类器的轮数；作者公开程序默认 200 轮。
           evidence_ref: epochs
         noise.rate:
           current: 0.2
@@ -2100,6 +2124,13 @@ methods:
           origin: advanced_experiment_or_implementation_control
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: model architecture
+        posterior_stage.model.variant:
+          current: imagenet_standard
+          value_type: string
+          ui_control: select
+          reproduction_impact: high
+          origin: author_implementation
+          note: 作者标准 ResNet 使用 7×7、步长 2 首层及最大池化；standard 使用工具箱 CIFAR 网络的 3×3、步长 1 首层。
         posterior_stage.optimizer.name:
           current: sgd
           value_type: string
@@ -2116,12 +2147,12 @@ methods:
           origin: implementation_or_training_detail
           note: 优化器或学习率调度细节；影响数值复现，但不定义算法身份。
         posterior_stage.optimizer.momentum:
-          current: 0.9
+          current: 0.0
           value_type: number
           ui_control: number
           reproduction_impact: low_to_medium
-          origin: implementation_or_training_detail
-          note: 优化器或学习率调度细节；影响数值复现，但不定义算法身份。
+          origin: author_implementation
+          note: SGD 动量系数；作者创建优化器时未传入 momentum，实际使用 0。
         posterior_stage.optimizer.nesterov:
           current: false
           value_type: boolean
@@ -2130,12 +2161,12 @@ methods:
           origin: implementation_or_training_detail
           note: 优化器或学习率调度细节；影响数值复现，但不定义算法身份。
         posterior_stage.optimizer.weight_decay:
-          current: 0.0005
+          current: 0.0001
           value_type: number
           ui_control: number
           reproduction_impact: low_to_medium
-          origin: implementation_or_training_detail
-          note: 优化器或学习率调度细节；影响数值复现，但不定义算法身份。
+          origin: author_implementation
+          note: SGD 权重衰减系数；作者程序默认使用 0.0001。
         posterior_stage.scheduler.name:
           current: multistep
           value_type: string
@@ -2191,6 +2222,13 @@ methods:
           origin: advanced_experiment_or_implementation_control
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: model architecture
+        final_stage.model.variant:
+          current: imagenet_standard
+          value_type: string
+          ui_control: select
+          reproduction_impact: high
+          origin: author_implementation
+          note: 作者标准 ResNet 使用 7×7、步长 2 首层及最大池化；standard 使用工具箱 CIFAR 网络的 3×3、步长 1 首层。
         final_stage.optimizer.name:
           current: sgd
           value_type: string
@@ -2207,12 +2245,12 @@ methods:
           origin: implementation_or_training_detail
           note: 优化器或学习率调度细节；影响数值复现，但不定义算法身份。
         final_stage.optimizer.momentum:
-          current: 0.9
+          current: 0.0
           value_type: number
           ui_control: number
           reproduction_impact: low_to_medium
-          origin: implementation_or_training_detail
-          note: 优化器或学习率调度细节；影响数值复现，但不定义算法身份。
+          origin: author_implementation
+          note: SGD 动量系数；作者创建优化器时未传入 momentum，实际使用 0。
         final_stage.optimizer.nesterov:
           current: false
           value_type: boolean
@@ -2221,12 +2259,12 @@ methods:
           origin: implementation_or_training_detail
           note: 优化器或学习率调度细节；影响数值复现，但不定义算法身份。
         final_stage.optimizer.weight_decay:
-          current: 0.0005
+          current: 0.0001
           value_type: number
           ui_control: number
           reproduction_impact: low_to_medium
-          origin: implementation_or_training_detail
-          note: 优化器或学习率调度细节；影响数值复现，但不定义算法身份。
+          origin: author_implementation
+          note: SGD 权重衰减系数；作者程序默认使用 0.0001。
         final_stage.scheduler.name:
           current: multistep
           value_type: string
@@ -2236,8 +2274,7 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: scheduler family
         final_stage.scheduler.milestones:
-          current:
-          - 50
+          current: [50, 100, 150]
           value_type: list
           ui_control: list_editor
           reproduction_impact: low_to_medium
@@ -2378,17 +2415,16 @@ methods:
           note: 结构性运行契约；普通参数面板中的独立修改会破坏 schema、runner、组件 wiring、label-space/cardinality 或 lifecycle 契约。
           lock_reason: dedicated runner
     coverage:
-      parameter_count: 48
+      parameter_count: 50
       by_level:
         basic: 3
         paper: 3
-        advanced: 37
+        advanced: 39
         locked: 5
     paper_comparison:
       audit_status: checked_against_original_paper
       alignment_status: method_aligned_with_staged_protocol
-      summary: Stage budgets remain paper-sensitive; stage model/optimizer/selection protocol is advanced editable, while
-        the dispatcher/lifecycle structure remains structural.
+      summary: 后验预算与 CIFAR 网络型号遵循论文；标准 ResNet 结构、有效 SGD 参数、最终 200 轮及修正后的带噪验证指标依据作者源码。保留论文最大后验 Anchor，未验证完整数值复现。
       permission_policy: execution_validity_lock_rule_v1_1
   loss_correction:
     paper:
@@ -2445,15 +2481,6 @@ methods:
           note: 可直接修改的实验随机性/realization 控制；修改会改变具体实验实例，但不会使 recipe 的结构或 runner 契约失效。
           reproduction_context: noise realization
       paper:
-        pipeline.transition_estimator.matrix:
-          current: <10x10 class-conditional transition matrix; atomic value from formal recipe>
-          value_type: list
-          ui_control: json
-          reproduction_impact: high
-          origin: paper_method_or_experiment_condition
-          note: 可修改的重要论文参数或实验条件；修改后实验仍可运行，但应标记为偏离当前论文/正式 recipe 设置。
-          evidence_ref: T
-          reproduction_context: fixed transition estimator input
         noise.rate:
           current: 0.4
           value_type: number
@@ -2472,6 +2499,65 @@ methods:
           evidence_ref: T
           reproduction_context: fixed benchmark transition matrix
       advanced:
+        model.variant:
+          current: loss_correction
+          value_type: string
+          ui_control: readonly
+          reproduction_impact: high
+          origin: paper_experiment
+          note: Loss Correction 使用预激活 CIFAR 残差网络。
+        pipeline.pretraining_protocol:
+          current: loss_correction
+          value_type: string
+          ui_control: readonly
+          reproduction_impact: high
+          origin: paper_experiment
+          note: 估计 T 后重新初始化分类器和优化器，开始损失修正训练。
+        pipeline.transition_estimator.percentile:
+          current: 97
+          value_type: nullable
+          ui_control: number
+          reproduction_impact: high
+          origin: paper_experiment
+          note: CIFAR-10 默认排除每类预测概率最高的 3%，再从剩余样本中选取最大概率的代表样本；CIFAR-100 按论文使用直接最大值，设为空。
+        evaluation.selection_metric:
+          current: loss
+          value_type: string
+          ui_control: readonly
+          reproduction_impact: high
+          origin: paper_experiment
+          note: 按带噪验证集损失最小值选择最佳模型。
+        evaluation.corrected_loss:
+          current: true
+          value_type: boolean
+          ui_control: checkbox
+          reproduction_impact: high
+          origin: paper_experiment
+          note: 验证损失使用当前 Forward 或 Backward 校正；测试准确率仍由原始分类预测计算。
+        pipeline.transition_estimator.name:
+          current: known
+          value_type: string
+          ui_control: select
+          reproduction_impact: high
+          origin: structural_or_integrity_contract
+          note: 根据当前噪声是否提供 T 自动判断。有 T 时直接使用；没有 T 时先训练 CE 分类器，再估计 T。
+        pipeline.risk_corrector.name:
+          current: forward
+          value_type: string
+          ui_control: select
+          reproduction_impact: high
+          origin: structural_or_integrity_contract
+          note: 选择 Forward 概率修正或 Backward 损失修正。
+          evidence_ref: correction
+        pipeline.transition_estimator.matrix:
+          current: <10x10 class-conditional transition matrix; atomic value from formal recipe>
+          value_type: list
+          ui_control: json
+          reproduction_impact: high
+          origin: paper_method_or_experiment_condition
+          note: 已知标签转移矩阵。每行表示真实类别到观测类别的转移概率，行和为 1。
+          evidence_ref: T
+          reproduction_context: fixed transition estimator input
         data.validation_size:
           current: 5000
           value_type: integer
@@ -2550,7 +2636,7 @@ methods:
           ui_control: number
           reproduction_impact: low_to_medium
           origin: implementation_or_training_detail
-          note: 工程实现或估计器内部细节；默认折叠。
+          note: 估计 T 前，CE 分类器训练的轮数；使用最佳带噪验证损失模型进行估计。CIFAR-10 默认 120 轮。
         trainer.device:
           current: auto
           value_type: string
@@ -2718,23 +2804,6 @@ methods:
           origin: structural_or_integrity_contract
           note: 结构性运行契约；普通参数面板中的独立修改会破坏 schema、runner、组件 wiring、label-space/cardinality 或 lifecycle 契约。
           lock_reason: pipeline identity
-        pipeline.transition_estimator.name:
-          current: known
-          value_type: string
-          ui_control: readonly
-          reproduction_impact: high
-          origin: structural_or_integrity_contract
-          note: 结构性运行契约；普通参数面板中的独立修改会破坏 schema、runner、组件 wiring、label-space/cardinality 或 lifecycle 契约。
-          lock_reason: transition-estimator identity
-        pipeline.risk_corrector.name:
-          current: forward
-          value_type: string
-          ui_control: readonly
-          reproduction_impact: high
-          origin: structural_or_integrity_contract
-          note: 结构性运行契约；普通参数面板中的独立修改会破坏 schema、runner、组件 wiring、label-space/cardinality 或 lifecycle 契约。
-          evidence_ref: correction
-          lock_reason: loss-correction algorithm variant
         execution.runner:
           current: supervised
           value_type: string
@@ -2744,17 +2813,18 @@ methods:
           note: 结构性运行契约；普通参数面板中的独立修改会破坏 schema、runner、组件 wiring、label-space/cardinality 或 lifecycle 契约。
           lock_reason: runner contract
     coverage:
-      parameter_count: 43
+      parameter_count: 48
       by_level:
         basic: 5
-        paper: 3
-        advanced: 28
-        locked: 7
+        paper: 2
+        advanced: 36
+        locked: 5
     paper_comparison:
       audit_status: checked_against_original_paper
-      alignment_status: method_aligned_no_free_scalar_paper_knob
-      summary: Forward correction and transition matrix are algorithm/protocol objects, so this registry intentionally does
-        not invent a scalar “paper hyperparameter”.
+      alignment_status: core_protocol_updated_pending_preprocessing_audit
+      summary: CIFAR-10 uses preactivation ResNet-32 and corrected validation loss for checkpoint selection. Unknown T uses
+        CE pretraining, train-plus-validation percentile anchor estimation, and a freshly initialized corrected classifier.
+        Pixel scaling and exact regularization equivalence remain to be verified.
       permission_policy: execution_validity_lock_rule_v1_1
   importance_reweighting:
     paper:
@@ -2824,16 +2894,16 @@ methods:
           value_type: integer
           ui_control: number
           reproduction_impact: high
-          origin: paper_method_or_experiment_condition
-          note: 可修改的重要论文参数或实验条件；修改后实验仍可运行，但应标记为偏离当前论文/正式 recipe 设置。
+          origin: toolbox_default
+          note: 生成的测试样本数；1024 是工具箱默认值。论文合成实验共 1000 个样本，采用 75% 训练、25% 测试。
           reproduction_context: benchmark data scale
         data.train_size:
           current: 4096
           value_type: integer
           ui_control: number
           reproduction_impact: high
-          origin: paper_method_or_experiment_condition
-          note: 可修改的重要论文参数或实验条件；修改后实验仍可运行，但应标记为偏离当前论文/正式 recipe 设置。
+          origin: toolbox_default
+          note: 生成的训练样本数；4096 是工具箱默认值，不是论文给定的训练样本数。
           reproduction_context: benchmark data scale
         noise.rho_negative:
           current: 0.1
@@ -2890,10 +2960,10 @@ methods:
         model.name:
           current: linear
           value_type: string
-          ui_control: text
+          ui_control: readonly
           reproduction_impact: high
-          origin: advanced_experiment_or_implementation_control
-          note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
+          origin: implementation_constraint
+          note: 当前训练器只支持 linear，对输入特征进行线性分类。二分类 CE 对应 logistic 损失，论文 Table 6 也包含线性 logistic 实验。
           reproduction_context: paper model protocol
         model.in_features:
           current: 20
@@ -3068,9 +3138,10 @@ methods:
         locked: 9
     paper_comparison:
       audit_status: checked_against_original_paper
-      alignment_status: method_aligned_estimator_details_advanced
-      summary: Importance reweighting/KLIEP pipeline is preserved; bandwidth/iterations/tolerances are estimator details rather
-        than promoted to core paper knobs.
+      alignment_status: reweighting_method_with_incomplete_paper_experiment_protocol
+      summary: Binary importance-weighted logistic training is supported. High-dimensional synthetic inputs are uniform in [0,1]
+        with a repository-chosen linear boundary; sample counts and training budgets are toolbox defaults. KDE standard-deviation
+        bandwidth, 75/25 repeated-split experiments, hinge and kernel routes remain to be aligned with the paper.
       permission_policy: execution_validity_lock_rule_v1_1
   cwd:
     paper:
@@ -3330,7 +3401,7 @@ methods:
           ui_control: readonly
           reproduction_impact: high
           origin: structural_or_integrity_contract
-          note: 只读 provenance 元数据，不是实验调参入口；修改会破坏参数来源/审计记录的可信性。
+          note: 参数依据为论文 CIFAR-binary 实验条件；当前训练入口只运行 fold_index 选定的一折，不表示已经执行完整五折实验。
           lock_reason: provenance integrity; not an experiment control
         parameter_record.repeated_runs:
           current: 1
@@ -3357,9 +3428,10 @@ methods:
         locked: 7
     paper_comparison:
       audit_status: checked_against_original_paper
-      alignment_status: method_aligned_variant_editable_advanced
-      summary: Class-wise denoising variant and dynamic-centroid semantics are advanced editable; pseudoinverse rcond remains
-        engineering-level; provenance/runner contracts remain read-only.
+      alignment_status: paper_parameters_single_fold_statistics_incomplete
+      summary: CIFAR-binary defaults follow the paper; this entry runs one selected fold and reports test metrics only,
+        without inventing validation metrics. Automatic five-fold execution and mean/std aggregation remain unimplemented.
+        Dynamic centroids retain feature gradients; cached centroids are for fixed-feature use.
       permission_policy: execution_validity_lock_rule_v1_1
   pcse:
     paper:
@@ -3409,24 +3481,24 @@ methods:
           value_type: number
           ui_control: number
           reproduction_impact: high
-          origin: paper_method
-          note: Weight on the transition-matrix volume regularization used by the paper-oriented transition estimation stage.
+          origin: toolbox_default
+          note: 转移矩阵体积正则项的系数；论文包含此项，但未确认指定 0.001，当前数值是工具箱默认值。
           evidence_ref: pcse
         ensemble_stage.epochs:
           current: 5
           value_type: integer
           ui_control: number
           reproduction_impact: medium
-          origin: paper_method
-          note: Paper-oriented ensemble/post-processing training budget.
+          origin: toolbox_default
+          note: 多层 GDA 混合权重的训练轮数；5 是工具箱默认值，使用带噪验证标签。单层时权重恒为 1。
           evidence_ref: pcse
         ensemble_stage.learning_rate:
           current: 0.05
           value_type: number
           ui_control: number
           reproduction_impact: medium
-          origin: paper_method
-          note: Learning rate for the PCSE ensemble/post-processing stage.
+          origin: toolbox_default
+          note: GDA 层混合权重的优化学习率；0.05 是工具箱默认值，未确认来自作者实现。
           evidence_ref: pcse
         noise.rate:
           current: 0.4
@@ -3638,37 +3710,23 @@ methods:
           origin: implementation_or_training_detail
           note: 数值稳定/病态矩阵保护参数；默认折叠，除非定位数值问题不建议修改。
         transition_stage.parameterization.name:
-          current: diagonal_dominant
+          current: sigmoid_off_diagonal
           value_type: string
-          ui_control: text
+          ui_control: readonly
           reproduction_impact: high
-          origin: advanced_experiment_or_implementation_control
-          note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
+          origin: implementation_constraint
+          note: 使用已有 VolMinNet 的非对角 Sigmoid 与行归一化，不限制总翻转概率小于 0.49。
           reproduction_context: transition parameterization
-        transition_stage.parameterization.initial_flip_mass:
-          current: 0.05
+        transition_stage.parameterization.initial_weight:
+          current: -5.135798437050262
           value_type: number
           ui_control: number
           reproduction_impact: low_to_medium
-          origin: implementation_or_training_detail
-          note: 工程实现或估计器内部细节；默认折叠。
-        transition_stage.parameterization.max_flip_mass:
-          current: 0.49
-          value_type: number
-          ui_control: number
-          reproduction_impact: low_to_medium
-          origin: implementation_or_training_detail
-          note: 工程实现或估计器内部细节；默认折叠。
+          origin: toolbox_default
+          note: 初始化非对角权重；当前值使 CIFAR-10 初始总翻转概率约为 0.05，不是论文指定值，也不限制后续训练范围。
         transition_stage.parameterization.seed:
-          current: 37
+          current: 1
           value_type: integer
-          ui_control: number
-          reproduction_impact: low_to_medium
-          origin: implementation_or_training_detail
-          note: 工程实现或估计器内部细节；默认折叠。
-        transition_stage.parameterization.temperature:
-          current: 1.0
-          value_type: number
           ui_control: number
           reproduction_impact: low_to_medium
           origin: implementation_or_training_detail
@@ -3844,17 +3902,19 @@ methods:
           note: 结构性运行契约；普通参数面板中的独立修改会破坏 schema、runner、组件 wiring、label-space/cardinality 或 lifecycle 契约。
           lock_reason: dedicated runner
     coverage:
-      parameter_count: 58
+      parameter_count: 56
       by_level:
         basic: 3
         paper: 4
-        advanced: 45
+        advanced: 43
         locked: 6
     paper_comparison:
       audit_status: checked_against_original_paper
       alignment_status: engineering_fidelity_not_claimed_exact
-      summary: Repository marks this configuration engineering; the formal recipe consumes a verified external UPM checkpoint
-        before its transition/statistics stages and is not an exact numerical reproduction.
+      summary: The default trains CE internally. External CE, Co-teaching peer-A and UPM classifiers use the generic loader.
+        VolMinNet sigmoid off-diagonal parameterization supports the CIFAR-10 60-percent symmetric matrix; single-layer GDA
+        is supported. Stage budgets, AdamW settings, ridge and ensemble defaults are repository choices; transition convergence
+        and full multi-trial paper results remain unverified.
       permission_policy: execution_validity_lock_rule_v1_1
   fine:
     paper:
@@ -3866,8 +3926,9 @@ methods:
       evidence:
         fine: FINE introduces active-forgetting/noise-suppression dynamics controlled by a warm-up, moving statistics/momenta,
           a maximum threshold and objective coefficients.
-        protocol: The repository recipe records the official command/protocol source and uses the paper-oriented long training
-          budget.
+        protocol: Paper Eqs. (2)-(5) use 1/C, complementary labels, beta for MU and gamma for NL. Page 7 specifies
+          beta=0.001 and gamma=0.1. Author SED_FINE.py instead suppresses observed labels without 1/C and assigns
+          beta to NL; its command values differ. This recipe prioritizes paper equations/defaults and reuses the author SED baseline.
     repository_recipe:
       branch: codex/cli
       role: formal/reproduction recipe selected by the paper catalog
@@ -3903,7 +3964,7 @@ methods:
           origin: experiment_control
           note: 实验级随机种子；允许新手修改，但复现实验报告应记录该值。
         noise.seed:
-          current: 0
+          current: 23
           value_type: integer
           ui_control: number
           reproduction_impact: high
@@ -3936,12 +3997,12 @@ methods:
           note: FINE objective coefficient alpha.
           evidence_ref: fine
         fine.beta:
-          current: 0.1
+          current: 0.001
           value_type: number
           ui_control: number
           reproduction_impact: high
           origin: paper_method
-          note: FINE objective coefficient beta.
+          note: 论文 Eq. (5) 的 AFMU 主动遗忘权重；第 7 页默认 0.001。保留 Eq. (2) 的类别数归一化。
           evidence_ref: fine
         fine.ema_momentum:
           current: 0.95
@@ -3952,12 +4013,12 @@ methods:
           note: EMA coefficient used by FINE state tracking.
           evidence_ref: fine
         fine.gamma:
-          current: 0.002
+          current: 0.1
           value_type: number
           ui_control: number
           reproduction_impact: high
           origin: paper_method
-          note: FINE objective coefficient gamma.
+          note: 论文 Eq. (5) 的 NSNL 噪声抑制权重；第 7 页默认 0.1，使用 Eq. (4) 随机互补标签和 Eq. (3) 的类别数归一化。
           evidence_ref: fine
         fine.maximum_threshold:
           current: 0.95
@@ -4165,7 +4226,7 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: noise protocol
         noise.rng:
-          current: legacy
+          current: numpy_legacy
           value_type: string
           ui_control: text
           reproduction_impact: high
@@ -4223,7 +4284,7 @@ methods:
           evidence_ref: protocol
           lock_reason: provenance integrity; not an experiment control
         parameter_record.source:
-          current: official_sed_fine_command
+          current: paper_equations_with_author_sed_training
           value_type: string
           ui_control: readonly
           reproduction_impact: high
@@ -4257,8 +4318,10 @@ methods:
         locked: 7
     paper_comparison:
       audit_status: checked_against_original_paper
-      alignment_status: paper_oriented_with_official_command_provenance
-      summary: FINE method controls are paper-level; probability floor and runtime/optimizer internals remain advanced.
+      alignment_status: paper_equations_defaults_with_author_sed_baseline
+      summary: Preserve paper 1/C scaling and random complementary labels. Beta weights AFMU (0.001), gamma weights NSNL (0.1).
+        The author implementation/command differs in label target, scaling and coefficient convention; it is not treated as
+        overriding the paper. Reports the last up-to-ten epoch mean per run without test-based model selection; five-run aggregation is not implemented.
       permission_policy: execution_validity_lock_rule_v1_1
   cdr:
     paper:
@@ -4272,6 +4335,11 @@ methods:
           to hinder memorization; the noise-rate-dependent critical ratio and L1 decay are method parameters.
         critical: The critical-parameter count is tied to the assumed noise rate; the compatibility scope defines the exact
           repository implementation semantics.
+        implementation_modes: Paper Eq. (5)-(6) use explicit L1 updates for both parameter groups. Section 4.1 states
+          SGD momentum 0.9, weight decay 0.001 and 100 epochs. Author code uses SGD momentum and L2 decay,
+          and sets CIFAR epochs to 200. The default uses Section 4.1 optimizer settings and 100 epochs,
+          with the released-code 2D/4D threshold masks and no explicit L1. The separate paper mode preserves
+          the explicit equations with zero optimizer momentum/L2 decay. These update semantics are not equivalent.
     repository_recipe:
       branch: codex/cli
       role: formal/reproduction recipe selected by the paper catalog
@@ -4316,12 +4384,12 @@ methods:
           reproduction_context: noise realization
       paper:
         parameter_update.l1_decay:
-          current: 0.001
+          current: 0.0
           value_type: number
           ui_control: number
           reproduction_impact: high
           origin: paper_method
-          note: Strength of CDR critical-parameter L1 regularization.
+          note: 论文公式模式中关键和非关键参数共用的显式 L1 系数；默认作者代码模式使用优化器 L2 衰减，此项为 0。
           evidence_ref: cdr
         parameter_update.noise_rate:
           current: 0.4
@@ -4329,11 +4397,8 @@ methods:
           ui_control: number
           reproduction_impact: high
           origin: paper_method
-          note: Noise-rate estimate used to determine the critical parameter subset; must stay consistent with the intended
-            benchmark noise rate.
+          note: 算法使用的估计噪声率；控制关键参数比例与梯度缩放，可独立于实际加噪率设置。
           evidence_ref: critical
-          linked_fields:
-          - noise.rate
           constraints: 0 <= value < 1
         noise.rate:
           current: 0.4
@@ -4341,10 +4406,8 @@ methods:
           ui_control: number
           reproduction_impact: high
           origin: paper_method_or_experiment_condition
-          note: 实验噪声率；可修改，但必须与 parameter_update.noise_rate 的算法输入保持一致。修改后实验仍可运行，同时应标记为偏离当前论文/正式 recipe 设置。
+          note: 人工生成标签噪声时使用的比例；不强制等于 CDR 的估计噪声率。
           reproduction_context: benchmark condition
-          linked_fields:
-          - parameter_update.noise_rate
           evidence_ref: critical
       advanced:
         data.validation_size:
@@ -4488,19 +4551,19 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: optimizer family
         optimizer.momentum:
-          current: 0.0
+          current: 0.9
           value_type: number
           ui_control: number
           reproduction_impact: low_to_medium
-          origin: implementation_or_training_detail
-          note: 优化器或学习率调度细节；影响数值复现，但不定义算法身份。
+          origin: paper_experiment
+          note: SGD 动量系数；论文第 4.1 节设为 0.9，默认作者代码模式使用此值。
         optimizer.weight_decay:
-          current: 0.0
+          current: 0.001
           value_type: number
           ui_control: number
           reproduction_impact: low_to_medium
-          origin: implementation_or_training_detail
-          note: 优化器或学习率调度细节；影响数值复现，但不定义算法身份。
+          origin: paper_experiment
+          note: 优化器 L2 衰减系数；论文第 4.1 节设为 0.001，默认关闭显式 L1，避免叠加。
         scheduler.name:
           current: multistep
           value_type: string
@@ -4526,7 +4589,7 @@ methods:
           origin: implementation_or_training_detail
           note: 优化器或学习率调度细节；影响数值复现，但不定义算法身份。
         parameter_update.compatibility_mode:
-          current: paper
+          current: official_code
           value_type: string
           ui_control: text
           reproduction_impact: high
@@ -4535,7 +4598,7 @@ methods:
           evidence_ref: cdr
           reproduction_context: algorithm fidelity mode
         parameter_update.critical_scope:
-          current: all_trainable
+          current: matrix_and_convolution_weights
           value_type: string
           ui_control: text
           reproduction_impact: high
@@ -4582,7 +4645,7 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: noise protocol
         noise.rng:
-          current: legacy
+          current: numpy_legacy
           value_type: string
           ui_control: text
           reproduction_impact: high
@@ -4671,9 +4734,10 @@ methods:
         locked: 6
     paper_comparison:
       audit_status: checked_against_original_paper
-      alignment_status: paper_compatibility_mode
-      summary: CDR noise-rate input and L1 decay are paper parameters; critical scope/compatibility mode are advanced editable
-        implementation semantics.
+      alignment_status: paper_experiment_defaults_with_author_update_semantics
+      summary: 默认使用论文第 4.1 节的 SGD 动量 0.9、L2 衰减 0.001 和 100 轮；
+        参数筛选与更新采用作者代码模式，显式 L1 为 0。保留严格公式模式，但两者不等价。
+        作者 CIFAR 入口使用 200 轮，与论文不同；本配置优先论文。单次运行不代表五次实验汇总。
       permission_policy: execution_validity_lock_rule_v1_1
   dss:
     paper:
@@ -4687,6 +4751,8 @@ methods:
           table includes warm-up Tw, prior/marginal momentum and alpha-like significance terms.
         components: MDA and CCS are method components/ablation switches; disabling them changes the algorithm variant rather
           than tuning a scalar.
+        model: Author Aliinton/DSS model/PreResNet.py uses a Conv-BN-ReLU stem, preactivated identity shortcuts,
+          no final BN-ReLU, and PyTorch default initialization.
     repository_recipe:
       branch: codex/cli
       role: formal/reproduction recipe selected by the paper catalog
@@ -4824,17 +4890,25 @@ methods:
           reproduction_context: input protocol
         data.normalization.std:
           current:
-          - 0.247
-          - 0.2435
-          - 0.2616
+          - 0.2023
+          - 0.1994
+          - 0.201
           value_type: list
           ui_control: list_editor
           reproduction_impact: high
           origin: advanced_experiment_or_implementation_control
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: input protocol
+        model.variant:
+          current: dss_author
+          value_type: string
+          ui_control: select
+          reproduction_impact: high
+          origin: author_implementation
+          evidence_ref: model
+          note: dss_author 使用作者网络结构与默认初始化；standard 保留工具箱原有 PreActResNet 结构。
         data.validation_split.rng:
-          current: legacy
+          current: numpy_legacy
           value_type: string
           ui_control: text
           reproduction_impact: high
@@ -5032,7 +5106,7 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: noise protocol
         noise.rng:
-          current: legacy
+          current: numpy_legacy
           value_type: string
           ui_control: text
           reproduction_impact: high
@@ -5240,20 +5314,16 @@ methods:
           ui_control: number
           reproduction_impact: high
           origin: paper_method
-          note: Assumed label-noise rate used by the Co-teaching remember schedule.
+          note: 算法估计的标签噪声率，用于计算最终保留比例；可独立于人工加噪率设置。
           evidence_ref: forget
-          linked_fields:
-          - noise.rate
         noise.rate:
           current: 0.2
           value_type: number
           ui_control: number
           reproduction_impact: high
           origin: paper_method_or_experiment_condition
-          note: 实验噪声率；可修改，但必须与 coteaching.noise_rate 的算法输入保持一致。修改后实验仍可运行，同时应标记为偏离当前论文/正式 recipe 设置。
+          note: 生成人工噪声标签时使用的噪声率。
           reproduction_context: benchmark condition
-          linked_fields:
-          - coteaching.noise_rate
           evidence_ref: forget
       advanced:
         data.validation_size:
@@ -5273,7 +5343,7 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: dataset protocol
         data.augment:
-          current: true
+          current: false
           value_type: boolean
           ui_control: checkbox
           reproduction_impact: high
@@ -5281,7 +5351,7 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: augmentation protocol
         data.preprocessing:
-          current: standard
+          current: tensor_only
           value_type: string
           ui_control: text
           reproduction_impact: high
@@ -5305,13 +5375,53 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: split protocol
         model.name:
-          current: cifar_cnn8
+          current: cnlcu_cnn9
           value_type: string
           ui_control: text
           reproduction_impact: high
           origin: advanced_experiment_or_implementation_control
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: paper model implementation
+        model.batch_norm_momentum:
+          current: 0.1
+          value_type: number
+          ui_control: number
+          reproduction_impact: medium
+          origin: author_implementation
+          note: BatchNorm 运行统计量的更新系数。Co-teaching 作者 CIFAR-10 网络使用 0.1。
+          source: https://github.com/bhanML/Co-teaching
+        scheduler.start_epoch:
+          current: 80
+          value_type: integer
+          ui_control: number
+          reproduction_impact: medium
+          origin: author_implementation
+          note: 从零开始计数的学习率衰减起点。CIFAR-10 作者实现设为 80。
+          source: https://github.com/bhanML/Co-teaching
+        scheduler.end_epoch:
+          current: 200
+          value_type: integer
+          ui_control: number
+          reproduction_impact: medium
+          origin: author_implementation
+          note: 线性衰减的终点，学习率在此处降至零。
+          source: https://github.com/bhanML/Co-teaching
+        scheduler.beta1_before:
+          current: 0.9
+          value_type: number
+          ui_control: number
+          reproduction_impact: medium
+          origin: author_implementation
+          note: 衰减起点之前使用的 Adam 一阶动量系数。
+          source: https://github.com/bhanML/Co-teaching
+        scheduler.beta1_after:
+          current: 0.1
+          value_type: number
+          ui_control: number
+          reproduction_impact: medium
+          origin: author_implementation
+          note: 从衰减起点开始使用的 Adam 一阶动量系数。
+          source: https://github.com/bhanML/Co-teaching
         trainer.device:
           current: auto
           value_type: string
@@ -5335,7 +5445,7 @@ methods:
           origin: implementation_or_training_detail
           note: 优化器或学习率调度细节；影响数值复现，但不定义算法身份。
         scheduler.name:
-          current: none
+          current: linear_after
           value_type: string
           ui_control: text
           reproduction_impact: high
@@ -5510,11 +5620,11 @@ methods:
           note: 结构性运行契约；普通参数面板中的独立修改会破坏 schema、runner、组件 wiring、label-space/cardinality 或 lifecycle 契约。
           lock_reason: dedicated runner
     coverage:
-      parameter_count: 42
+      parameter_count: 47
       by_level:
         basic: 5
         paper: 5
-        advanced: 27
+        advanced: 32
         locked: 5
     paper_comparison:
       audit_status: checked_against_original_paper
@@ -5795,7 +5905,7 @@ methods:
           origin: implementation_or_training_detail
           note: Sample-count rounding for small-loss selection.
         evaluation.allow_test_selection:
-          current: true
+          current: false
           value_type: boolean
           ui_control: checkbox
           reproduction_impact: high
@@ -5808,14 +5918,14 @@ methods:
           ui_control: number
           reproduction_impact: low_to_medium
           origin: implementation_or_training_detail
-          note: 工程实现或估计器内部细节；默认折叠。
+          note: 统计训练末尾最多 10 轮两个模型的测试准确率平均值；不用于挑选模型。
         evaluation.selection_split:
-          current: test
+          current: none
           value_type: string
           ui_control: text
           reproduction_impact: high
           origin: advanced_experiment_or_implementation_control
-          note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
+          note: none 表示不按评估结果挑选最佳模型，保存最终模型并记录逐轮测试结果。
           reproduction_context: evaluation/model-selection rule
         loader.drop_last:
           current: true
@@ -6008,13 +6118,13 @@ methods:
       evidence:
         uncertainty: CNLCU uses confidence intervals/uncertainty of recent losses rather than point losses; the time/history
           window and uncertainty scale are method hyperparameters.
-        window: The paper sensitivity study evaluates several time-interval values; the repository uses window_size=5.
+        window: 作者 CNLCU-S 默认 time_step=3；每三轮重置历史窗口。
         peers: The implemented soft CNLCU variant uses two peer networks; variant/model-count and selection semantics define
           the algorithm.
     repository_recipe:
       branch: codex/cli
       role: formal/reproduction recipe selected by the paper catalog
-      note: ''
+      note: 网络与预处理参考 xiaoboxia/CNLCU；评估时关闭 Dropout。置信系数调度与历史计数差异仍待核实。
     parameters:
       basic:
         loader.batch_size:
@@ -6079,20 +6189,20 @@ methods:
           note: Ramp length for sample retention.
           evidence_ref: uncertainty
         cnlcu.history.window_size:
-          current: 5
+          current: 3
           value_type: integer
           ui_control: number
           reproduction_impact: high
           origin: paper_method
-          note: Recent-loss history/time interval used to estimate uncertainty.
+          note: 每三轮重置损失历史；默认长度参考作者实现。
           evidence_ref: window
         cnlcu.uncertainty.sigma_squared:
-          current: 0.01
+          current: 0.0001
           value_type: number
           ui_control: number
           reproduction_impact: high
           origin: paper_method
-          note: Uncertainty/confidence-bound scale used by CNLCU.
+          note: 默认 0.0001 参考作者实现；论文通过带噪验证集从 0.1、0.01、0.001、0.0001 中选择。
           evidence_ref: uncertainty
         cnlcu.noise_rate:
           current: 0.2
@@ -6100,20 +6210,16 @@ methods:
           ui_control: number
           reproduction_impact: high
           origin: paper_method
-          note: Assumed noise rate used by the remember schedule.
+          note: 算法使用的估计噪声率，用于计算最终保留比例；可以不同于人工加噪率。
           evidence_ref: uncertainty
-          linked_fields:
-          - noise.rate
         noise.rate:
           current: 0.2
           value_type: number
           ui_control: number
           reproduction_impact: high
           origin: paper_method_or_experiment_condition
-          note: 实验噪声率；可修改，但必须与 cnlcu.noise_rate 的算法输入保持一致。修改后实验仍可运行，同时应标记为偏离当前论文/正式 recipe 设置。
+          note: 人工加噪时的标签噪声比例；独立于算法使用的估计噪声率。
           reproduction_context: benchmark condition
-          linked_fields:
-          - cnlcu.noise_rate
           evidence_ref: uncertainty
       advanced:
         data.validation_size:
@@ -6133,7 +6239,7 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: dataset protocol
         data.augment:
-          current: true
+          current: false
           value_type: boolean
           ui_control: checkbox
           reproduction_impact: high
@@ -6141,7 +6247,7 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: augmentation protocol
         data.preprocessing:
-          current: standard
+          current: tensor_only
           value_type: string
           ui_control: text
           reproduction_impact: high
@@ -6217,6 +6323,20 @@ methods:
           origin: advanced_experiment_or_implementation_control
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: paper training protocol
+        scheduler.beta1_before:
+          current: 0.9
+          value_type: number
+          ui_control: number
+          reproduction_impact: medium
+          origin: author_implementation
+          note: 第 80 轮调度节点之前使用的 Adam 一阶平均系数，参考作者训练代码。
+        scheduler.beta1_after:
+          current: 0.1
+          value_type: number
+          ui_control: number
+          reproduction_impact: medium
+          origin: author_implementation
+          note: 从第 80 轮调度节点开始使用的 Adam 一阶平均系数，参考作者训练代码。
         scheduler.end_epoch:
           current: 200
           value_type: integer
@@ -6644,14 +6764,12 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: scheduler protocol
         pipeline.weight_provider.decay:
-          current: 0.5
+          current: 0.95
           value_type: number
           ui_control: number
           reproduction_impact: medium
           origin: implementation_or_training_detail
-          note: MentorNet repository adapter decay=0.5. The paper also contains moving-statistic decay quantities with different
-            semantics; until the adapter field is explicitly mapped to the exact paper symbol, treat this as advanced rather
-            than claiming a direct paper hyperparameter.
+          note: 损失百分位移动平均的衰减系数；保留历史值的比例。默认 0.95 来自论文第 5.1 节和补充材料 E.3；作者发布脚本默认值为 0.5。
         pipeline.weight_provider.fixed_epoch_after_burn_in:
           current: true
           value_type: boolean
@@ -6850,28 +6968,28 @@ methods:
           reproduction_context: noise realization
       paper:
         t_revision.stage1.epochs:
-          current: 15
-          value_type: integer
-          ui_control: number
-          reproduction_impact: high
-          origin: paper_method
-          note: Stage-1 noisy classifier budget used before transition initialization.
-          evidence_ref: revision
-        t_revision.classifier_initialization.epochs:
-          current: 15
-          value_type: integer
-          ui_control: number
-          reproduction_impact: high
-          origin: paper_method
-          note: Classifier-initialization/refinement budget before revision.
-          evidence_ref: revision
-        t_revision.revision.epochs:
           current: 20
           value_type: integer
           ui_control: number
           reproduction_impact: high
+          origin: author_implementation
+          note: 带噪交叉熵预训练轮数；作者 CIFAR-10 使用 20 轮，CIFAR-100 使用 15 轮。
+          evidence_ref: revision
+        t_revision.classifier_initialization.epochs:
+          current: 200
+          value_type: integer
+          ui_control: number
+          reproduction_impact: high
           origin: paper_method
-          note: Joint transition-revision stage budget.
+          note: 固定初始转移矩阵，训练分类器的轮数；论文 CIFAR 实验使用 200 轮。
+          evidence_ref: revision
+        t_revision.revision.epochs:
+          current: 200
+          value_type: integer
+          ui_control: number
+          reproduction_impact: high
+          origin: author_implementation
+          note: 联合更新分类器与转移矩阵修订项的轮数；作者 CIFAR 实现使用 200 轮。
           evidence_ref: revision
         t_revision.revision.optimizer.lr:
           current: 5.0e-07
@@ -6962,6 +7080,34 @@ methods:
           origin: advanced_experiment_or_implementation_control
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: optimizer family
+        t_revision.stage1.model.stem_padding:
+          current: 0
+          value_type: integer
+          ui_control: number
+          reproduction_impact: high
+          origin: author_implementation
+          note: 首层卷积每边的填充像素数；作者设为 0，32×32 输入经首层变为 30×30。
+        t_revision.stage1.model.initialization:
+          current: torch_default
+          value_type: string
+          ui_control: select
+          reproduction_impact: high
+          origin: author_implementation
+          note: 网络权重初始化方式；作者采用 PyTorch 默认初始化，kaiming 使用工具箱的显式 Kaiming 初始化。
+        data.normalization.mean:
+          current: [0.4914, 0.4822, 0.4465]
+          value_type: list
+          ui_control: list_editor
+          reproduction_impact: high
+          origin: author_implementation
+          note: 图像缩放到 [0,1] 后，RGB 三个通道分别减去的均值；数值来自作者预处理代码。
+        data.normalization.std:
+          current: [0.2023, 0.1994, 0.2010]
+          value_type: list
+          ui_control: list_editor
+          reproduction_impact: high
+          origin: author_implementation
+          note: 减去均值后，RGB 三个通道分别除以的标准差；数值来自作者预处理代码。
         t_revision.stage1.optimizer.lr:
           current: 0.01
           value_type: number
@@ -7291,17 +7437,16 @@ methods:
           note: 结构性运行契约；普通参数面板中的独立修改会破坏 schema、runner、组件 wiring、label-space/cardinality 或 lifecycle 契约。
           lock_reason: dedicated runner
     coverage:
-      parameter_count: 58
+      parameter_count: 62
       by_level:
         basic: 3
         paper: 5
-        advanced: 46
+        advanced: 50
         locked: 4
     paper_comparison:
       audit_status: checked_against_original_paper
       alignment_status: engineering_fidelity_with_paper_revision_semantics
-      summary: Repository marks engineering fidelity while preserving pseudo-anchor initialization and raw-additive revision;
-        revision lr=5e-7 is paper-reported.
+      summary: CIFAR 网络与分类器初始化参数依据论文，首层填充、初始化和标准化依据作者源码；保留论文的最大后验伪 Anchor 与一次性加法修订。未验证完整数值复现。
       permission_policy: execution_validity_lock_rule_v1_1
   mc_ldce:
     paper:
@@ -7313,8 +7458,8 @@ methods:
       evidence:
         mc: MC-LDCE decomposes multi-class loss into label-dependent/independent parts and estimates a clean data centroid
           to obtain an unbiased risk estimator.
-        implementation: The repository adds a transition-estimation/fixed-feature lifecycle around the MC-LDCE core; lifecycle
-          version, feature mode and estimator family are implementation contracts.
+        implementation: Joint CNN training uses a differentiable minibatch centroid derived from Eq. (4.12)-(4.13),
+          sharing the same features with the quadratic risk term. This execution detail is repository-derived, not specified author code.
         volume: The transition-estimation auxiliary volume coefficient belongs to the paper-oriented estimator stage but is
           not the defining MC-LDCE loss-decomposition hyperparameter.
     repository_recipe:
@@ -7365,8 +7510,8 @@ methods:
           value_type: number
           ui_control: number
           reproduction_impact: medium_to_high
-          origin: paper_method
-          note: Volume-regularization coefficient used in the paper-oriented transition-estimation stage.
+          origin: toolbox_default
+          note: VolMinNet 转移矩阵估计阶段的体积正则系数；MC-LDCE 原文未指定此数值，当前使用工具箱默认值 0.0001。
           evidence_ref: volume
         noise.rate:
           current: 0.2
@@ -7431,7 +7576,7 @@ methods:
           ui_control: number
           reproduction_impact: low_to_medium
           origin: implementation_or_training_detail
-          note: 工程实现或估计器内部细节；默认折叠。
+          note: VolMinNet 转移矩阵估计阶段训练 150 轮；MC-LDCE 原文未指定该阶段轮数，当前值是工具箱默认值。
         transition.optimizer.name:
           current: sgd
           value_type: string
@@ -7605,14 +7750,14 @@ methods:
           evidence_ref: implementation
           reproduction_context: model/estimator contract
         mc_ldce.feature_mode:
-          current: fixed
+          current: joint
           value_type: string
           ui_control: text
           reproduction_impact: high
           origin: advanced_experiment_or_implementation_control
-          note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
+          note: CNN 与分类层共同训练；每批次使用同一组当前特征计算平方风险和恢复质心，两项均参与梯度计算。这是依据论文公式推导的小批量实现。
           evidence_ref: implementation
-          reproduction_context: feature-estimation semantics
+          reproduction_context: Eq. (4.12)-(4.13) differentiable minibatch implementation; not an author-code claim
         mc_ldce.transition_model:
           current: separate
           value_type: string
@@ -7702,7 +7847,7 @@ methods:
           note: 结构性运行契约；普通参数面板中的独立修改会破坏 schema、runner、组件 wiring、label-space/cardinality 或 lifecycle 契约。
           lock_reason: dedicated runner
         mc_ldce.lifecycle_version:
-          current: 2
+          current: 3
           value_type: integer
           ui_control: readonly
           reproduction_impact: high
@@ -7727,9 +7872,9 @@ methods:
         locked: 6
     paper_comparison:
       audit_status: checked_against_original_paper
-      alignment_status: method_aligned_repository_lifecycle_is_engineering
-      summary: MC-LDCE loss/centroid semantics are preserved; transition/fidelity machinery is advanced editable, while lifecycle
-        version/label-space/runner contracts remain structural.
+      alignment_status: paper_equations_with_repository_derived_minibatch_training
+      summary: CNN and classifier are jointly optimized using the same current features for both risk terms, with differentiable
+        centroid recovery. Minibatch execution and auxiliary VolMinNet defaults are repository choices; author code and full numerical reproduction remain unverified.
       permission_policy: execution_validity_lock_rule_v1_1
   volminnet:
     paper:
@@ -7860,6 +8005,34 @@ methods:
           origin: advanced_experiment_or_implementation_control
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: model architecture
+        volminnet.model.stem_padding:
+          current: 0
+          value_type: integer
+          ui_control: number
+          reproduction_impact: high
+          origin: author_implementation
+          note: 作者 CIFAR-10 网络首层不填充；32×32 输入在首层卷积后变为 30×30。
+        volminnet.model.initialization:
+          current: torch_default
+          value_type: string
+          ui_control: select
+          reproduction_impact: high
+          origin: author_implementation
+          note: 作者 CIFAR-10 网络采用 PyTorch 层的默认初始化。
+        data.normalization.mean:
+          current: [0.4914, 0.4822, 0.4465]
+          value_type: list
+          ui_control: list_editor
+          reproduction_impact: high
+          origin: author_implementation
+          note: 作者 CIFAR 预处理的 RGB 通道均值；图像缩放到 [0,1] 后逐通道减去该值。
+        data.normalization.std:
+          current: [0.2023, 0.1994, 0.2010]
+          value_type: list
+          ui_control: list_editor
+          reproduction_impact: high
+          origin: author_implementation
+          note: 作者 CIFAR 预处理的 RGB 通道标准差；减去均值后逐通道除以该值。
         trainer.device:
           current: auto
           value_type: string
@@ -8163,17 +8336,16 @@ methods:
           note: 结构性运行契约；普通参数面板中的独立修改会破坏 schema、runner、组件 wiring、label-space/cardinality 或 lifecycle 契约。
           lock_reason: dedicated runner
     coverage:
-      parameter_count: 52
+      parameter_count: 56
       by_level:
         basic: 4
         paper: 2
-        advanced: 42
+        advanced: 46
         locked: 4
     paper_comparison:
       audit_status: checked_against_original_paper
       alignment_status: paper_protocol
-      summary: Volume coefficient is the key paper scalar; transition parameterization/convention and fidelity choices are
-        advanced editable rather than fidelity-locked.
+      summary: CIFAR-10 follows paper SGD settings and author network/preprocessing; CIFAR-100 uses paper ResNet-32 and default Adam for the transition matrix.
       permission_policy: execution_validity_lock_rule_v1_1
   pdl:
     paper:
@@ -8188,6 +8360,9 @@ methods:
         basis: Representation/anchor/basis-fitting settings control how part-dependent transition matrices are estimated and
           are paper-method hyperparameters.
         lifecycle: Warm-up, correction and revision phases plus the PDL correction component form the algorithm lifecycle.
+        initial_training: Paper section 4.1 specifies 100 initial SGD epochs, momentum 0.9, learning rate 0.01,
+          and 0.1 decay at epochs 40 and 80. These paper defaults take precedence over the released CIFAR-10
+          code's four initial epochs with no momentum or scheduler.
     repository_recipe:
       branch: codex/cli
       role: formal/reproduction recipe selected by the paper catalog
@@ -8434,12 +8609,13 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: model architecture
         warmup.epochs:
-          current: 4
+          current: 100
           value_type: integer
           ui_control: number
-          reproduction_impact: low_to_medium
-          origin: implementation_or_training_detail
-          note: 工程实现或估计器内部细节；默认折叠。
+          reproduction_impact: high
+          origin: paper_method
+          note: 论文第 4.1 节初始训练使用 100 轮；作者发布代码实际运行 4 轮，此处优先采用论文设置。
+          evidence_ref: initial_training
         warmup.optimizer.name:
           current: sgd
           value_type: string
@@ -8456,12 +8632,13 @@ methods:
           origin: implementation_or_training_detail
           note: 优化器或学习率调度细节；影响数值复现，但不定义算法身份。
         warmup.optimizer.momentum:
-          current: 0.0
+          current: 0.9
           value_type: number
           ui_control: number
           reproduction_impact: low_to_medium
-          origin: implementation_or_training_detail
-          note: 优化器或学习率调度细节；影响数值复现，但不定义算法身份。
+          origin: paper_method
+          note: 论文第 4.1 节初始 SGD 的动量系数为 0.9；作者发布代码未传入 momentum。
+          evidence_ref: initial_training
         warmup.optimizer.nesterov:
           current: false
           value_type: boolean
@@ -8477,13 +8654,30 @@ methods:
           origin: implementation_or_training_detail
           note: 优化器或学习率调度细节；影响数值复现，但不定义算法身份。
         warmup.scheduler.name:
-          current: none
+          current: multistep
           value_type: string
           ui_control: text
           reproduction_impact: high
-          origin: advanced_experiment_or_implementation_control
-          note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
+          origin: paper_method
+          note: 论文第 4.1 节初始学习率在第 40、80 轮分别乘以 0.1；作者发布代码未设置对应调度器。
+          evidence_ref: initial_training
           reproduction_context: scheduler family
+        warmup.scheduler.milestones:
+          current: [40, 80]
+          value_type: list
+          ui_control: json
+          reproduction_impact: high
+          origin: paper_method
+          note: 初始训练学习率切换节点，按已完成训练轮数计。
+          evidence_ref: initial_training
+        warmup.scheduler.gamma:
+          current: 0.1
+          value_type: number
+          ui_control: number
+          reproduction_impact: high
+          origin: paper_method
+          note: 每到一个初始训练节点，学习率乘以 0.1。
+          evidence_ref: initial_training
         warmup.loss.name:
           current: ce
           value_type: string
@@ -8721,9 +8915,9 @@ methods:
       audit_scope: method equations/algorithm + hyperparameter/experimental-setting sections checked against the repository
         formal recipe
       evidence:
-        alpha2: The UPM paper treats the learning rate for confusing probabilities (alpha_2) as an important sensitivity parameter;
-          updates begin around epoch 35 in the illustrated setting. The paper sensitivity discussion reports a best point
-          around 0.5, while this repository recipe uses 0.7.
+        alpha1: Paper Eq. (11) uses alpha_1 for the confusing-probability update learning rate;
+          the CIFAR-10 implementation setting specifies 0.7 and an initial confusing probability of 0.01.
+        epsilon: Paper Eq. (11) adds epsilon to eta in the update denominator, with epsilon set to 0.0001.
         psi: UPM estimates psi from the stage-1 classifier and then trains the main model while updating confusing probabilities;
           stage handoff/source are lifecycle contracts.
         update: Update-start epoch and update interval control the paper mechanism rather than generic optimizer behavior.
@@ -8734,7 +8928,7 @@ methods:
     parameters:
       basic:
         loader.batch_size:
-          current: 128
+          current: 256
           value_type: integer
           ui_control: number
           reproduction_impact: medium
@@ -8779,19 +8973,17 @@ methods:
           reproduction_impact: high
           origin: paper_method
           note: Initial confusing probability.
-          evidence_ref: alpha2
+          evidence_ref: alpha1
         upm.confusing_probability.learning_rate:
           current: 0.7
           value_type: number
           ui_control: number
           reproduction_impact: high
           origin: paper_method
-          note: 'Learning rate alpha_2 for confusing probabilities. Note: paper sensitivity text favors ~0.5 in its shown
-            setting; repository formal recipe uses 0.7.'
-          evidence_ref: alpha2
-          paper_reference_value_note: Paper sensitivity discussion/figure shows the best point around 0.5 in the illustrated
-            setting; this repository formal recipe uses 0.7.
-          repository_differs_from_paper_reference: true
+          note: Learning rate alpha_1 for confusing-probability updates in Eq. (11).
+          evidence_ref: alpha1
+          paper_reference_value_note: The paper specifies 0.7 for CIFAR-10.
+          repository_differs_from_paper_reference: false
         upm.confusing_probability.update_interval_epochs:
           current: 5
           value_type: integer
@@ -8858,7 +9050,7 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: split protocol
         upm.stage1.model.name:
-          current: resnet18
+          current: resnet32
           value_type: string
           ui_control: text
           reproduction_impact: high
@@ -8963,7 +9155,7 @@ methods:
           evidence_ref: psi
           reproduction_context: psi estimation data split
         upm.main.model.name:
-          current: resnet18
+          current: resnet32
           value_type: string
           ui_control: text
           reproduction_impact: high
@@ -9042,12 +9234,13 @@ methods:
           evidence_ref: psi
           reproduction_context: main-stage lifecycle
         upm.confusing_probability.epsilon:
-          current: 1.0e-08
+          current: 1.0e-04
           value_type: number
           ui_control: number
-          reproduction_impact: low_to_medium
-          origin: implementation_or_training_detail
-          note: 数值稳定/病态矩阵保护参数；默认折叠，除非定位数值问题不建议修改。
+          reproduction_impact: high
+          origin: paper_method
+          note: 混淆概率更新时在分母 η 上加 ε，避免除以零；论文 Eq. (11) 使用 0.0001。
+          evidence_ref: epsilon
         evaluation.primary:
           current: accuracy
           value_type: string
@@ -9196,9 +9389,10 @@ methods:
       evidence:
         cal: CAL uses second-order confidence/label information and confidence-aware learning/sieving schedules; confidence
           weights and sieve thresholds directly affect the method.
-        threshold: The paper discusses lower/upper thresholding behavior and ideal decision boundaries. The repository encodes
-          thresholds in its criterion/log-domain convention, so values must be interpreted in that implementation domain rather
-          than compared as raw probabilities.
+        threshold: Author models/peerreg_CAL.py compares observed-label CE minus mean all-class CE with -8,
+          using -log(softmax + 1e-8). The sieve score does not include the training confidence weight.
+        warmup_prior: Author experiments/exptPeerReg.py uses sqrt(p) / sum(sqrt(p)) for CIFAR-10 CORES2 pretraining,
+          and raw observed-label proportions p for CAL training; no class-count multiplier is applied to CIFAR-10.
         schedule: Warm-up and confidence-weight schedules are part of the paper-oriented training lifecycle.
     repository_recipe:
       branch: codex/cli
@@ -9279,15 +9473,15 @@ methods:
           ui_control: number
           reproduction_impact: high
           origin: paper_method
-          note: Warm-up confidence-loss weight.
-          evidence_ref: cal
+          note: CIFAR-10 CORES2 confidence weight applied to the sqrt-normalized observed-label prior; not a sieve-score coefficient.
+          evidence_ref: warmup_prior
         sieve.lower_threshold:
           current: -8.0
           value_type: number
           ui_control: number
           reproduction_impact: high
           origin: paper_method
-          note: Lower sieve threshold in the repository criterion domain.
+          note: Retain the observed label when observed CE minus mean all-class CE is below this threshold.
           evidence_ref: threshold
         sieve.upper_threshold:
           current: -8.0
@@ -9295,7 +9489,7 @@ methods:
           ui_control: number
           reproduction_impact: high
           origin: paper_method
-          note: Upper sieve threshold in the repository criterion domain.
+          note: Relabel to the predicted class when observed CE minus mean all-class CE is above this threshold; discard boundary and intermediate scores.
           evidence_ref: threshold
         cal.confidence_schedule.milestones:
           current:
@@ -9568,14 +9762,17 @@ methods:
         dld: DLD estimates a directional clean-label endpoint and trains a diffusion process in label space; neighborhood
           size and diffusion horizon/optimization are method-sensitive.
         fidelity: Direction endpoint, divergence, neighbor metric/weighting, self-neighbor policy and inference initialization
-          encode the mathematical variant. Changing them changes the implemented fidelity/variant, but they remain advanced
-          editable choices when the runner supports them.
+          encode the mathematical variant. The current runner fixes these values; they are hidden in the parameter UI,
+          and unsupported alternatives are rejected by DLDConfig.
         precorrection: k-nearest-neighbor/GMM precorrection settings include both paper hyperparameters and numerical/engineering
           guards.
+        implementation: The current runner trains independent label-vector MLPs using cached frozen features and sinusoidal
+          time embeddings. It has no trainable image condition branch or weak/strong image mixing, and uses fixed learning
+          rates rather than the author's per-batch warmup/cosine policy. This is not the complete paper training architecture.
     repository_recipe:
       branch: codex/cli
-      role: formal/reproduction recipe selected by the paper catalog
-      note: ''
+      role: catalog entry for the current label-vector training variant
+      note: 正式入口当前仍为冻结特征条件的 MLP 变体；训练图像分支、图像混合及作者学习率策略尚未接入。
     parameters:
       basic:
         loader.batch_size:
@@ -9646,7 +9843,7 @@ methods:
           ui_control: number
           reproduction_impact: high
           origin: paper_method
-          note: Diffusion-model training budget.
+          note: 标签扩散模型训练的轮数；修改此值直接控制 DLD 训练循环。
           evidence_ref: dld
         dld.diffusion.ema.decay:
           current: 0.999
@@ -9706,7 +9903,7 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: augmentation protocol
         dld.feature_extractor.model.name:
-          current: resnet34
+          current: torchvision_resnet34
           value_type: string
           ui_control: text
           reproduction_impact: high
@@ -9722,12 +9919,12 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: model architecture
         dld.feature_extractor.source:
-          current: repository_frozen_model
+          current: external_checkpoint
           value_type: string
           ui_control: text
           reproduction_impact: high
           origin: advanced_experiment_or_implementation_control
-          note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
+          note: 默认读取 ImageNet 预训练 ResNet34 权重并冻结；该网络用于提取特征，不是当前扩散模型的可训练图像分支。
           reproduction_context: feature extractor source
         dld.precorrection.delta:
           current: 1.0e-06
@@ -10085,13 +10282,14 @@ methods:
         locked: 4
     paper_comparison:
       audit_status: checked_against_original_paper
-      alignment_status: paper_oriented
-      summary: Neighborhood/diffusion scale parameters are paper-level; directional endpoint, metric/divergence and inference
-        fidelity semantics are advanced editable.
+      alignment_status: label_vector_variant_not_complete_paper_training
+      summary: 当前入口实现标签预校正和双 MLP 标签扩散，特征来源为 ImageNet 预训练 ResNet34。
+        尚缺可训练图像条件分支、弱强图像混合及作者逐批 warmup/cosine 策略，不是完整论文训练架构。
+        参数页只展示实际生效的 dld.diffusion.epochs 作为训练轮数入口；固定 fidelity 字段隐藏。
       permission_policy: execution_validity_lock_rule_v1_1
   ca2c:
     paper:
-      title: 'CA2C: A Prior-Knowledge-Free Approach for Robust Label Noise Learning via Confidence-Aware Curriculum'
+      title: 'CA2C: A Prior-Knowledge-Free Approach for Robust Label Noise Learning via Asymmetric Co-learning and Co-training'
       venue_year: ICCV 2025
       original_source: https://openaccess.thecvf.com/content/ICCV2025/papers/Sheng_CA2C_A_Prior-Knowledge-Free_Approach_for_Robust_Label_Noise_Learning_via_ICCV_2025_paper.pdf
       audit_scope: method equations/algorithm + hyperparameter/experimental-setting sections checked against the repository
@@ -10099,8 +10297,12 @@ methods:
       evidence:
         ca2c: The CA2C algorithm uses warm-up, Top-K candidate construction and a confidence-aware joint hard/soft objective;
           K and lambda-like loss balancing are direct method hyperparameters.
-        robust: The repository robust_weight is a method loss-weighting coefficient and should be shown with paper provenance
-          rather than under generic optimizer settings.
+        robust: The released implementation mixes each peer's PLL/NL loss with its strong-view consistency CE;
+          robust_weight defaults to 0.8, with consistency weight 0.2. This is separate from the paper's lambda
+          balancing hard and soft partial-label losses.
+        warmup_memory: The released warmup accumulates both peers' top-K predictions in the candidate memory;
+          robust training continues accumulating only N-model candidates. Warmup CE is kept unchanged.
+        confidence: Retains the paper Eq. (10) class-wise M/max(M) weighting rather than the released scalar max(M/sum(M)).
     repository_recipe:
       branch: codex/cli
       role: formal/reproduction recipe selected by the paper catalog
@@ -10137,12 +10339,12 @@ methods:
           note: 可直接修改的实验随机性/realization 控制；修改会改变具体实验实例，但不会使 recipe 的结构或 runner 契约失效。
           reproduction_context: noise realization
         optimizer.lr:
-          current: 0.02
+          current: 0.01
           value_type: number
           ui_control: number
           reproduction_impact: medium
-          origin: experiment_control
-          note: 主优化器学习率；常规训练超参数。
+          origin: paper_experiment
+          note: 初始学习率；论文第 4.1 节使用 0.01。作者 CLI 默认 0.02，本入口优先论文明确设置。
       paper:
         ca2c.candidate_k:
           current: 2
@@ -10165,8 +10367,8 @@ methods:
           value_type: number
           ui_control: number
           reproduction_impact: high
-          origin: paper_method
-          note: Weight of the robust/confidence-aware objective component.
+          origin: author_implementation
+          note: Robust 阶段 PLL/NL 损失的权重；强增强一致性损失使用 1 减去此值。默认分别为 0.8 与 0.2；lambda 单独控制 P-model 的硬标签／软标签损失。
           evidence_ref: robust
         ca2c.warmup_epochs:
           current: 400
@@ -10386,8 +10588,8 @@ methods:
     paper_comparison:
       audit_status: checked_against_original_paper
       alignment_status: paper_oriented
-      summary: Warm-up, Top-K candidate size and objective weights are paper-level; model/noise/protocol choices are advanced
-        editable; runner/method contracts remain structural.
+      summary: 采用论文学习率 0.01 与逐类别置信权重；warmup 双网络记忆积累及 robust 强增强一致性项依据作者实现补充。
+        作者的延迟余弦曲线、归一化、末十轮统计与完整 Scratch 同步尚未对齐，不能声称完整数值复现。
       permission_policy: execution_validity_lock_rule_v1_1
   dividemix:
     paper:
@@ -10404,6 +10606,11 @@ methods:
         gmm: The clean-probability threshold is method-sensitive; GMM numerical iterations/tolerances are estimator engineering
           details.
         peers: Two-network co-divide/co-training and official logits-sum inference are algorithm/protocol semantics.
+        cifar_defaults: Paper Section 4.1 specifies batch size 128 and 300 total epochs with LR decay after 150 epochs. Author
+          PreResNet.py uses a Conv-BN-ReLU stem, preactivated shortcuts and no final BN/ReLU; the existing dss_author variant
+          implements these details. Author dataloader_cifar.py uses CIFAR-10 mean [0.4914, 0.4822, 0.4465] and std [0.2023, 0.1994, 0.2010].
+        loss_history: Author Train_cifar.py normalizes each epoch's losses once, then at noise rate 0.9 averages the last five
+          normalized vectors and fits GMM directly without rescaling that average.
     repository_recipe:
       branch: codex/cli
       role: formal/reproduction recipe selected by the paper catalog
@@ -10447,7 +10654,7 @@ methods:
           ui_control: number
           reproduction_impact: high
           origin: paper_method
-          note: Confidence-penalty weight used during warm-up.
+          note: Only used during asymmetric-noise warm-up; symmetric-noise warm-up uses cross entropy without this penalty.
           evidence_ref: divide
         dividemix.gmm.threshold:
           current: 0.5
@@ -10857,8 +11064,10 @@ methods:
     paper_comparison:
       audit_status: checked_against_original_paper
       alignment_status: paper_oriented
-      summary: GMM clean threshold and MixMatch hyperparameters are paper-level; fidelity/inference choices are advanced editable;
-        two-network structural cardinality remains locked.
+      summary: CIFAR-10 uses the shared author-style PreActResNet-18 variant and author normalization; batch size 128 and 300
+        total epochs follow the paper. High-noise loss history is averaged without a second normalization. Fidelity/inference
+        selectors are hidden. The 5000-example validation split and validation-best reporting still differ from the author's
+        full-training-set and paper Best/Last-10 protocol. Scratch remains a simplified educational flow, not complete DivideMix.
       permission_policy: execution_validity_lock_rule_v1_1
   l2rw:
     paper:
@@ -10872,6 +11081,11 @@ methods:
           update scale is method-sensitive.
         trusted: The clean trusted-validation source and official meta implementation are required protocol/algorithm contracts
           rather than ordinary knobs.
+        experiment_presets: Paper Section 4.2 and Table 1 use WRN-28-10 with dropout 0.3, 1000 clean images and 60000 steps with
+          LR decays at 40000/50000 for UniformFlip. BackgroundFlip uses ResNet-32, 10 clean images per class and 80000 steps
+          with LR decays at 40000/60000. The current uniform-noise ResNet-32 recipe is not either complete paper preset.
+        data_isolation: Noise generation is scoped to effective training indices after removing the trusted subset. Trusted
+          samples retain clean targets and must not be reintroduced into noisy TRAIN by the author's flip/shuffle operation.
     repository_recipe:
       branch: codex/cli
       role: formal/reproduction recipe selected by the paper catalog
@@ -11166,9 +11380,12 @@ methods:
         locked: 4
     paper_comparison:
       audit_status: checked_against_original_paper
-      alignment_status: official_meta_protocol
-      summary: Virtual meta learning rate and trusted-set sizes are paper-level; source/meta implementation choices are advanced
-        editable; structural method/runner contracts remain locked.
+      alignment_status: official_meta_algorithm_mixed_experiment_defaults
+      summary: Official HVP and paper virtual-update gradient conventions are distinct and preserved. Current UniformFlip defaults
+        use ResNet-32, 100 trusted images and 80000 steps, unlike paper Table 1's WRN-28-10, 1000 trusted images and 60000 steps.
+        Noise is generated only on effective TRAIN, excluding trusted samples. Official virtual learning rate is fixed; Quick
+        Start hides epochs when max_steps controls the budget. Scratch is an educational paper-gradient flow with different
+        noise/preprocessing, not a complete UniformFlip reproduction. WRN-28-10 and separate paper presets remain unimplemented.
       permission_policy: execution_validity_lock_rule_v1_1
   lend:
     paper:
@@ -11180,8 +11397,8 @@ methods:
       evidence:
         k: The paper reports sensitivity to neighborhood size k with tested values including 2,4,6,8,10; the repository uses
           k=8.
-        lend: LEND constructs graph/feature-embedding based label dilution and history; graph gamma, dilution alpha/steps
-          and history beta are method hyperparameters.
+        lend: LEND constructs graph/feature-embedding based label dilution and history. Eq. (3) is iterated until convergence;
+          the paper supplies alpha/beta and recommends k, but does not give numeric gamma, tolerance or an iteration cap.
         semantics: Graph metric/feature normalization, dilution policy and selection rule define the implemented variant.
           Changing them changes the variant semantics, but does not by itself justify locking the field.
     repository_recipe:
@@ -11234,8 +11451,8 @@ methods:
           value_type: number
           ui_control: number
           reproduction_impact: high
-          origin: paper_method
-          note: Graph/distance weighting coefficient.
+          origin: engineering_default
+          note: The paper defines the nonnegative inner-product exponent gamma but does not specify its numeric value; 1.0 is a toolbox default.
           evidence_ref: lend
         lend.graph.k:
           current: 8
@@ -11258,8 +11475,8 @@ methods:
           value_type: integer
           ui_control: number
           reproduction_impact: high
-          origin: paper_method
-          note: Number of fixed dilution iterations.
+          origin: engineering_default
+          note: Only used by the fixed_steps engineering variant; ten rounds are not a paper-specified convergence criterion.
           evidence_ref: lend
         noise.rate:
           current: 0.4
@@ -11412,14 +11629,28 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: feature-similarity semantics
         lend.dilution.policy:
-          current: fixed_steps
+          current: until_converged
           value_type: string
-          ui_control: text
+          ui_control: select
           reproduction_impact: high
           origin: advanced_experiment_or_implementation_control
-          note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
+          note: The paper describes iteration until convergence. fixed_steps remains an explicit finite-iteration engineering variant.
           evidence_ref: semantics
           reproduction_context: dilution variant
+        lend.dilution.tolerance:
+          current: 1.0e-5
+          value_type: number
+          ui_control: number
+          reproduction_impact: high
+          origin: engineering_default
+          note: Maximum absolute change between successive label matrices; a numerical setting not supplied by the paper.
+        lend.dilution.max_steps:
+          current: 1000
+          value_type: integer
+          ui_control: number
+          reproduction_impact: high
+          origin: engineering_default
+          note: Convergence iteration safety cap; reaching it without convergence raises an error instead of silently accepting the result.
         lend.selection.empty_batch:
           current: skip_update
           value_type: string
@@ -11597,8 +11828,11 @@ methods:
     paper_comparison:
       audit_status: checked_against_original_paper
       alignment_status: paper_oriented
-      summary: Graph k/gamma, dilution alpha/steps and history beta are paper-level; graph metric and selection semantics
-        are advanced editable.
+      summary: Graph construction, dilution recurrence and indexed history follow the paper. Default dilution now iterates
+        until convergence; tolerance 1e-5, cap 1000 and gamma 1.0 are toolbox numerical choices, not paper-specified values.
+        Scratch shares the dilution function and inner-product ranking, skips empty-selection SGD and preserves label history.
+        The former softmax-KNN selector has non-LEND API names. Validation-best reporting, data split and five-run Best/Last-10
+        aggregation remain fidelity limits; no verified author implementation or paper numerical reproduction is claimed.
       permission_policy: execution_validity_lock_rule_v1_1
 coverage_summary:
   methods: 26

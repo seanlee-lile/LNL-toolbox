@@ -1,6 +1,6 @@
 schema_version: 1
 name: dividemix
-description: "Formal DivideMix CIFAR-10 symmetric-20 recipe: two preactivation ResNet18 peers, warmup/co-divide GMM, co-refinement, MixMatch, and 300 epochs."
+description: "Simplified educational two-network loss-GMM and label-refinement flow. Not a complete DivideMix reproduction: it omits supervised warmup, separate labeled/unlabeled loaders, two-view co-guessing, MixUp, unsupervised ramp-up, and epoch-wise sequential peer training."
 steps:
   - {block: set_seed, params: {seed: 1}}
   - {block: select_device, params: {device: auto}}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Risk correctors that consume shared transition-matrix artifacts."""
 
+import math
 from typing import Protocol, runtime_checkable
 
 import torch
@@ -112,6 +113,16 @@ class ForwardRiskCorrector:
     name = "forward"
     requires_transition = True
 
+    def __init__(self, *, log_epsilon: float = 0.0) -> None:
+        self.log_epsilon = float(log_epsilon)
+        if not math.isfinite(self.log_epsilon) or self.log_epsilon < 0:
+            raise ValueError("log_epsilon must be finite and non-negative")
+
+    def _log(self, probabilities: Tensor) -> Tensor:
+        if self.log_epsilon:
+            return torch.log(probabilities + self.log_epsilon)
+        return torch.log(probabilities.clamp_min(torch.finfo(probabilities.dtype).tiny))
+
     def per_sample_risk(self, *, logits, noisy_targets, base_loss, transition):
         if logits.ndim != 2 or noisy_targets.ndim != 1:
             raise ValueError("logits and noisy_targets have invalid shapes")
@@ -123,8 +134,8 @@ class ForwardRiskCorrector:
         probabilities = torch.softmax(logits, dim=1) @ matrix
         observed = probabilities.gather(1, noisy_targets[:, None]).squeeze(1)
         if isinstance(base_loss, nn.CrossEntropyLoss):
-            return -torch.log(observed.clamp_min(torch.finfo(logits.dtype).tiny))
-        corrected_logits = torch.log(probabilities.clamp_min(torch.finfo(logits.dtype).tiny))
+            return -self._log(observed)
+        corrected_logits = self._log(probabilities)
         return base_loss(corrected_logits, noisy_targets)
 
 

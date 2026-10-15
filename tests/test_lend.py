@@ -8,20 +8,20 @@ import unittest
 import torch
 
 # --- merged from test_lend.py ---
-from lnl_toolbox.selectors.lend import LENDSelector, dilute_labels as selector_dilute_labels
+from lnl_toolbox.selectors.lend import KNNLabelPropagationSelector, propagate_knn_labels
 
 # --- merged from test_lend.py ---
-class _lend_LENDMathTest(unittest.TestCase):
+class _knn_KNNPropagationTest(unittest.TestCase):
 
     def test_batch_local_dilution_is_a_distribution(self) -> None:
         features = torch.eye(4)
         targets = torch.tensor([0, 1, 2, 1])
-        diluted = selector_dilute_labels(features, targets, neighbors=2, num_classes=3, diffusion_steps=2)
+        diluted = propagate_knn_labels(features, targets, neighbors=2, num_classes=3, diffusion_steps=2)
         self.assertEqual(tuple(diluted.shape), (4, 3))
         torch.testing.assert_close(diluted.sum(1), torch.ones(4))
 
     def test_selector_returns_complementary_mask(self) -> None:
-        result = LENDSelector(neighbors=2, num_classes=3).select(features=torch.eye(4), noisy_targets=torch.tensor([0, 1, 2, 1]))
+        result = KNNLabelPropagationSelector(neighbors=2, num_classes=3).select(features=torch.eye(4), noisy_targets=torch.tensor([0, 1, 2, 1]))
         torch.testing.assert_close(result.rejected_mask, ~result.selected_mask)
 
 # --- merged from test_lend_algorithm.py ---
@@ -185,6 +185,10 @@ class _lend_algorithm_LENDAlgorithmTest(unittest.TestCase):
         config['data']['max_train_samples'] = 256
         config['loader']['batch_size'] = 256
         config['lend']['graph']['k'] = 8
+        from pathlib import Path
+        import yaml
+        formal = yaml.safe_load((Path(__file__).resolve().parents[1] / 'configs/experiment/lend_cifar10_reproduction.yaml').read_text(encoding='utf-8'))
+        config['lend']['dilution'] = formal['lend']['dilution']
         algorithm = LENDAlgorithm(model=model, optimizer=optimizer, loss=nn.CrossEntropyLoss(reduction='none'), device=torch.device('cpu'), method_config=LENDConfig.from_mapping(config), canonical_global_indices=torch.arange(256), num_classes=10)
         algorithm.setup(ExperimentContext(__import__('pathlib').Path('.')))
         inputs = torch.randn(256, 3, 32, 32)
@@ -193,6 +197,8 @@ class _lend_algorithm_LENDAlgorithmTest(unittest.TestCase):
         classifier_weight_before = model.classifier.weight.detach().clone()
         classifier_before = classifier_weight_before.norm()
         result = algorithm.step(Batch({'input': inputs, 'target': targets, 'index': torch.arange(256)}), RunState(cycle=0))
+        self.assertEqual(result.metrics['dilution_converged'], 1.)
+        self.assertLessEqual(result.metrics['dilution_residual'], formal['lend']['dilution']['tolerance'])
         after = torch.cat([value.detach().flatten() for value in model.parameters()])
         self.assertTrue(bool(torch.isfinite(after).all()))
         self.assertLess(float((after - before).norm() / before.norm()), 0.1)
@@ -246,6 +252,145 @@ import torch
 from lnl_toolbox.algorithms.lend import dilute_labels, select_lend_samples
 
 # --- merged from test_lend_dilution.py ---
+class LENDConvergenceAndScratchTest(unittest.TestCase):
+    def test_until_converged_matches_known_fixed_point_and_reports_residual(self):
+        from lnl_toolbox.algorithms.lend.dilution import dilute_labels
+        labels = torch.eye(2, dtype=torch.float64)
+        graph = torch.full((2, 2), .5, dtype=torch.float64)
+        diagnostics = {}
+        result = dilute_labels(labels, graph, alpha=.99, policy='until_converged', tolerance=1e-8,
+                               max_steps=1000, diagnostics=diagnostics)
+        torch.testing.assert_close(result, torch.full_like(labels, .5), atol=1e-8, rtol=0)
+        self.assertEqual(diagnostics['converged'], 1.)
+        self.assertLessEqual(diagnostics['residual'], 1e-8)
+        self.assertLess(diagnostics['iterations'], 10)
+        self.assertFalse(result.requires_grad)
+        torch.testing.assert_close(labels, torch.eye(2, dtype=torch.float64))
+
+    def test_cap_is_a_failure_not_silent_fixed_steps(self):
+        from lnl_toolbox.algorithms.lend.dilution import dilute_labels
+        labels = torch.eye(2, dtype=torch.float64)
+        graph = torch.tensor([[.99, .01], [.01, .99]], dtype=torch.float64)
+        diagnostics = {}
+        with self.assertRaisesRegex(RuntimeError, 'did not converge after 2 iterations.*residual=.*tolerance='):
+            dilute_labels(labels, graph, alpha=.99, policy='until_converged', tolerance=1e-8,
+                          max_steps=2, diagnostics=diagnostics)
+        self.assertEqual(diagnostics['converged'], 0.)
+        self.assertEqual(diagnostics['iterations'], 2.)
+        self.assertGreater(diagnostics['residual'], 1e-8)
+        self.assertTrue(torch.isfinite(dilute_labels(labels, graph, alpha=.99, steps=2)).all())
+
+    def test_invalid_convergence_settings_are_rejected(self):
+        from lnl_toolbox.algorithms.lend.dilution import dilute_labels
+        for options in ({'tolerance': 0.}, {'tolerance': float('nan')}, {'max_steps': 0},
+                        {'max_steps': True}, {'max_steps': 1.5}):
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                dilute_labels(torch.eye(2), torch.eye(2), alpha=.99, policy='until_converged', **options)
+
+    def test_scratch_and_formal_share_exact_dilution_without_row_normalization(self):
+        from lnl_toolbox.algorithms.lend.dilution import dilute_labels
+        from lnl_toolbox.algorithms.lend.graph import normalize_lend_graph
+        from lnl_toolbox.scratch import ScratchContext
+        from lnl_toolbox.scratch.blocks.graph import propagate_labels
+        adjacency = torch.tensor([[0., 2., 1.], [1., 0., .5], [3., 1., 0.]], dtype=torch.float64)
+        graph = normalize_lend_graph(adjacency)
+        targets = torch.tensor([0, 1, 0])
+        for policy in ('fixed_steps', 'until_converged'):
+            context = ScratchContext(graph=graph, labels=targets)
+            propagate_labels(context, num_classes=2, alpha=.99, policy=policy, steps=7,
+                             tolerance=1e-6, max_steps=1000)
+            diagnostics = {}
+            expected = dilute_labels(torch.nn.functional.one_hot(targets, 2).to(graph), graph,
+                                     alpha=.99, policy=policy, steps=7, tolerance=1e-6,
+                                     max_steps=1000, diagnostics=diagnostics)
+            torch.testing.assert_close(context['diluted_labels'], expected, atol=0, rtol=0)
+            self.assertEqual(context['diluted_labels_diagnostics'], diagnostics)
+            self.assertFalse(torch.allclose(expected.sum(1), torch.ones(3, dtype=torch.float64)))
+
+    def test_scratch_empty_selection_preserves_parameters_and_existing_sgd_momentum(self):
+        from lnl_toolbox.scratch import ScratchContext
+        from lnl_toolbox.scratch.executor import execute_steps
+        import yaml
+        from pathlib import Path
+        recipe = yaml.safe_load((Path(__file__).resolve().parents[1] / 'src/lnl_toolbox/scratch/recipes/papers/lend.yaml').read_text(encoding='utf-8'))
+        batch_steps = next(step for step in next(s for s in recipe['steps'] if s['block'] == 'epoch_loop')['steps']
+                           if step['block'] == 'batch_loop')['steps']
+        condition = next(step for step in batch_steps if step['block'] == 'if_mask_any')
+        self.assertLess(next(i for i, s in enumerate(batch_steps) if s['block'] == 'indexed_ema'), batch_steps.index(condition))
+        self.assertEqual(next(s for s in batch_steps if s['block'] == 'pairwise_similarity')['params']['metric'], 'inner_product')
+        model = nn.Linear(2, 2)
+        optimizer = torch.optim.SGD(model.parameters(), lr=.1, momentum=.9, weight_decay=.0005)
+        inputs = torch.ones(3, 2)
+        model(inputs).square().sum().backward()
+        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+        before_model, before_optimizer = copy.deepcopy(model.state_dict()), copy.deepcopy(optimizer.state_dict())
+        context = ScratchContext(model=model, optimizer=optimizer, lend_selected=torch.zeros(3, dtype=torch.bool),
+                                 loss=model(inputs).square().sum() * 0.)
+        execute_steps([condition], context)
+        _lend_workflow__nested_equal(self, model.state_dict(), before_model)
+        _lend_workflow__nested_equal(self, optimizer.state_dict(), before_optimizer)
+        self.assertTrue(all(p.grad is None for p in model.parameters()))
+        context.update(lend_selected=torch.ones(3, dtype=torch.bool), loss=model(inputs).square().sum())
+        execute_steps([condition], context)
+        self.assertTrue(any(not torch.equal(value, before_model[name]) for name, value in model.state_dict().items()))
+
+    def test_web_can_save_and_parse_both_policies_with_correct_default_sources(self):
+        from web import command_console
+        import tempfile, yaml
+        from pathlib import Path
+        fields = {f['path']: f for f in command_console._config_schema('lend-cifar10-reproduction')['fields']}
+        self.assertEqual(fields['lend.dilution.policy']['value'], 'until_converged')
+        self.assertTrue(fields['lend.dilution.policy']['editable'])
+        self.assertEqual([choice['value'] for choice in fields['lend.dilution.policy']['choices']], ['until_converged', 'fixed_steps'])
+        self.assertIn('并非论文指定', fields['lend.dilution.tolerance']['note'])
+        self.assertIn('工具箱默认值', fields['lend.graph.gamma']['note'])
+        for policy in ('fixed_steps', 'until_converged'):
+            with self.subTest(policy=policy), tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+                saved = command_console._save_config({'recipe': 'lend-cifar10-reproduction',
+                         'path': str(Path(directory) / 'edited.yaml'),
+                         'patches': [{'path': 'lend.dilution.policy', 'value': policy}], 'acknowledge_paper_impact': True})
+                config = yaml.safe_load((command_console.ROOT / saved['path']).read_text(encoding='utf-8'))
+                parsed = LENDConfig.from_mapping(config)
+                self.assertEqual(parsed.dilution_policy, policy)
+                self.assertEqual(parsed.dilution_max_steps, 1000)
+                self.assertEqual(parsed.dilution_tolerance, 1e-5)
+
+    def test_generic_knn_component_has_no_paper_lend_aliases(self):
+        from lnl_toolbox.selectors import lend as component
+        self.assertFalse(hasattr(component, 'LENDSelector'))
+        self.assertFalse(hasattr(component, 'dilute_labels'))
+        self.assertTrue(hasattr(component, 'KNNLabelPropagationSelector'))
+
+    def test_algorithm_records_convergence_before_selection_and_update(self):
+        algorithm = _lend_algorithm_LENDAlgorithmTest()._algorithm(beta=.9, lr=.01)
+        config = _lend_algorithm__config(beta=.9)
+        config['lend']['dilution'] = {'alpha': .99, 'policy': 'until_converged', 'tolerance': 1e-5, 'max_steps': 1000}
+        algorithm.method_config = LENDConfig.from_mapping(config)
+        result = algorithm.step(Batch({'input': torch.tensor([[1., 1.], [2., 1.], [1., 2.]]),
+                                      'target': torch.tensor([0, 1, 0]), 'index': torch.tensor([10, 20, 30])}), RunState())
+        self.assertEqual(result.metrics['dilution_converged'], 1.)
+        self.assertLessEqual(result.metrics['dilution_residual'], 1e-5)
+        self.assertGreaterEqual(result.metrics['dilution_iterations'], 1.)
+
+    def test_controlled_converged_training_resume_matches_uninterrupted(self):
+        import tempfile
+        from pathlib import Path
+        train, test = _lend_workflow__cifar(60, 'train'), _lend_workflow__cifar(20, 'test')
+        config = _lend_workflow__config(1)
+        config['lend']['dilution'] = {'alpha': .99, 'policy': 'until_converged', 'tolerance': 1e-5, 'max_steps': 1000}
+        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10',
+                                                             side_effect=lambda root, split: train if split == 'train' else test):
+            run_dir = run_experiment(config, Path(directory) / 'resumed')
+            config['lend']['training']['epochs'] = 2
+            run_experiment(config, resume=run_dir / 'last.pt')
+            fresh = run_experiment(config, Path(directory) / 'fresh')
+            resumed = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
+            continuous = torch.load(fresh / 'last.pt', map_location='cpu', weights_only=False)
+            for key in ('model', 'optimizer', 'algorithm_private_state'):
+                _lend_workflow__nested_equal(self, resumed[key], continuous[key])
+
+
 class _lend_dilution_LENDDilutionTest(unittest.TestCase):
 
     def test_single_and_multiple_step_equation(self):

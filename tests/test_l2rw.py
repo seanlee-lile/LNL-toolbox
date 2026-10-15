@@ -239,3 +239,105 @@ class _l2rw_training_L2RWTrainingTest(unittest.TestCase):
             self.assertEqual(run_experiment(config, resume=checkpoint), run_dir)
             resumed = [json.loads(line) for line in (run_dir / 'metrics.jsonl').read_text().splitlines()]
             self.assertEqual([row['event'] for row in resumed], ['epoch', 'epoch', 'final'])
+
+
+class L2RWPreparedDataIsolationTest(unittest.TestCase):
+    def setUp(self):
+        from lnl_toolbox.data.cifar import CifarData
+        rng = np.random.default_rng(17)
+        names = tuple(map(str, range(10)))
+        self.train = CifarData(rng.integers(0, 256, (40, 32, 32, 3), dtype=np.uint8),
+                               np.arange(40) % 10, names, 'train', 'cifar10')
+        self.test = CifarData(rng.integers(0, 256, (20, 32, 32, 3), dtype=np.uint8),
+                              np.arange(20) % 10, names, 'test', 'cifar10')
+        self.config = yaml.safe_load((_l2rw_training_ROOT / 'configs/experiment/l2rw_cifar10_reproduction.yaml').read_text(encoding='utf-8'))
+        self.config['data'].update(root='unused-controlled-source', num_val=10, num_clean=10)
+        self.config['loader'].update(batch_size=5, num_workers=0, pin_memory=False)
+        self.config['trusted_validation']['batch_size'] = 5
+
+    def load(self, _root, split):
+        return self.train if split == 'train' else self.test
+
+    def prepare(self, directory, config):
+        from lnl_toolbox.training.data_service import prepare_experiment_data
+        from lnl_toolbox.training.runners import resolve_data_requirements
+        return prepare_experiment_data(config, requirements=resolve_data_requirements(config, expected_runner='l2rw'),
+                                       run_dir=Path(directory), seed=config['seed'])
+
+    def assert_isolated(self, prepared, train_count, clean_count):
+        from lnl_toolbox.data import DataRole
+        train, clean, validation = map(set, (prepared.train_indices, prepared.trusted_indices, prepared.validation_indices))
+        self.assertEqual(len(train), train_count)
+        self.assertEqual(len(clean), clean_count)
+        self.assertEqual(len(validation), 10)
+        self.assertFalse(train & clean)
+        self.assertFalse(train & validation)
+        self.assertFalse(clean & validation)
+        self.assertEqual(set(prepared.manifest.global_indices), train)
+        self.assertEqual(prepared.requirements.manifest_scope, 'effective_train')
+        trusted = prepared.datasets[DataRole.TRUSTED_VALIDATION]
+        for position, index in enumerate(prepared.trusted_indices):
+            self.assertEqual(int(trusted[position]['target']), int(self.train.labels[index]))
+
+    def test_real_data_service_keeps_trusted_out_of_train_and_matches_author_noise(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self.load):
+            prepared = self.prepare(directory, self.config)
+            self.assert_isolated(prepared, 20, 10)
+            pool, validation = _official_partition(40, [30, 10], seed=self.config['seed'])
+            noisy_indices, clean_indices = _official_train_subsets(pool, num_clean=10, seed=self.config['seed'])
+            noisy_labels, _, order = _official_flip_labels(self.train.labels[noisy_indices], num_classes=10,
+                                                          rate=.4, seed=self.config['seed'])
+            np.testing.assert_array_equal(prepared.train_indices, noisy_indices[order])
+            np.testing.assert_array_equal(prepared.manifest.global_indices, noisy_indices[order])
+            np.testing.assert_array_equal(prepared.manifest.clean_targets, self.train.labels[noisy_indices[order]])
+            np.testing.assert_array_equal(prepared.manifest.noisy_targets, noisy_labels)
+            np.testing.assert_array_equal(prepared.trusted_indices, clean_indices)
+            np.testing.assert_array_equal(prepared.validation_indices, validation)
+
+    def test_isolation_with_clean_noise_zero_rate_and_sample_limit(self):
+        from unittest.mock import patch
+        for name, rate, limit, clean_count in [('clean', 0., None, 10), ('official_uniform_flip', 0., None, 10),
+                                              ('official_uniform_flip', .4, 12, 4)]:
+            config = deepcopy(self.config)
+            config['noise'].update(name=name, rate=rate)
+            config['data']['num_clean'] = clean_count
+            if limit is not None:
+                config['data']['max_train_samples'] = limit
+            with self.subTest(name=name, rate=rate, limit=limit), tempfile.TemporaryDirectory() as directory, \
+                    patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self.load):
+                prepared = self.prepare(directory, config)
+                self.assert_isolated(prepared, (limit or 30) - clean_count, clean_count)
+                if rate == 0.:
+                    np.testing.assert_array_equal(prepared.manifest.noisy_targets, prepared.manifest.clean_targets)
+
+    def test_controlled_two_step_training_and_completed_resume_preserve_isolation(self):
+        from unittest.mock import patch
+        from lnl_toolbox.noise import NoiseManifest
+        from lnl_toolbox.data.trusted import TrustedSupervisionManifest
+        config = deepcopy(self.config)
+        config['model'] = {'name': 'tiny_cnn', 'width': 4}
+        config['trainer'] = {'epochs': 2, 'max_steps': 2, 'device': 'cpu'}
+        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self.load):
+            run_dir = run_experiment(config, Path(directory) / 'run')
+            checkpoint = run_dir / 'last.pt'
+            payload = torch.load(checkpoint, map_location='cpu', weights_only=False)
+            self.assertEqual(payload['global_step'], 2)
+            noisy = NoiseManifest.load(run_dir / 'noise_manifest.npz')
+            trusted = TrustedSupervisionManifest.load(run_dir / 'trusted_validation_manifest.npz')
+            self.assertEqual(len(noisy.global_indices), 20)
+            self.assertEqual(len(trusted.global_indices), 10)
+            self.assertFalse(set(noisy.global_indices) & set(trusted.global_indices))
+            before = checkpoint.read_bytes()
+            self.assertEqual(run_experiment(config, resume=checkpoint), run_dir)
+            self.assertEqual(checkpoint.read_bytes(), before)
+
+    def test_metadata_and_scratch_do_not_claim_complete_uniform_preset(self):
+        registry = yaml.safe_load((_l2rw_training_ROOT / 'web/lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
+        comparison = registry['methods']['l2rw']['paper_comparison']
+        self.assertEqual(comparison['alignment_status'], 'official_meta_algorithm_mixed_experiment_defaults')
+        self.assertIn('WRN-28-10', comparison['summary'])
+        self.assertIn('remain unimplemented', comparison['summary'])
+        recipe = yaml.safe_load((_l2rw_training_ROOT / 'src/lnl_toolbox/scratch/recipes/papers/l2rw.yaml').read_text(encoding='utf-8'))
+        self.assertIn('Educational L2RW', recipe['description'])
+        self.assertIn('not the paper', recipe['description'])

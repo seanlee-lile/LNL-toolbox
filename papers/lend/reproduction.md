@@ -13,7 +13,7 @@ current noisy mini-batch
 -> one model forward producing logits and penultimate embeddings
 -> directed batch-local kNN and Eq. (1) adjacency
 -> A^T A and symmetric degree normalization
--> fixed-step Eq. (3) label dilution from noisy one-hot labels
+-> Eq. (3) label dilution from noisy one-hot labels until convergence
 -> stable-index Eq. (5) cross-epoch history
 -> Eq. (6) agreement selection
 -> summed selected noisy-label CE
@@ -22,6 +22,24 @@ current noisy mini-batch
 Diluted vectors are detached selection evidence, not probability targets. Empty
 selected batches commit the successfully observed label history but skip
 backward and the optimizer step.
+
+The catalog default and Scratch paper recipe stop when the maximum absolute
+change between successive label matrices is at most `1e-5`, with a safety cap
+of 1000 iterations. The paper requests convergence but supplies neither number;
+both are explicit toolbox numerical settings. Exhausting the cap raises an
+error, not a successful selection result. Iteration count, residual and
+convergence status are reported by the formal batch algorithm.
+
+`fixed_steps` is retained as an explicitly selected engineering variant (and
+in the bounded smoke configuration). Scratch reuses the same dilution function,
+uses inner-product neighbor ranking, and skips backward/SGD for empty selection
+while still updating label history. The historical `selectors/lend.py` module
+now exposes `KNNLabelPropagationSelector` and `propagate_knn_labels`, not LEND
+aliases: its softmax-cosine propagation is a separate, stateless algorithm.
+
+The default validation split, validation-best checkpoint reporting and missing
+five-run Best/Last-10 aggregate remain fidelity limits; this change does not
+claim paper numerical reproduction or verified author-code parity.
 
 ## Fidelity policy
 

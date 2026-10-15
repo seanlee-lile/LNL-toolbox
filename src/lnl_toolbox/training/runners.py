@@ -185,6 +185,7 @@ def _image_requirements(
             implementation_limits = implementation_limits | {"configured_class_dependent_noise"}
         return MethodRequirements(
             method=method,
+            supports_native_noisy_labels=True,
             supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
             data_requirements=DataRequirements(
                 roles=frozenset({
@@ -296,6 +297,7 @@ def _supervised_requirements(config: Mapping[str, Any]) -> MethodRequirements | 
             ),)
         return MethodRequirements(
             method="loss_correction",
+            supports_native_noisy_labels=True,
             supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
             data_requirements=_classification_data(validation="noisy"),
             implemented_variant="forward_backward",
@@ -304,6 +306,7 @@ def _supervised_requirements(config: Mapping[str, Any]) -> MethodRequirements | 
     if weight == "mentornet":
         return MethodRequirements(
             method="mentornet",
+            supports_native_noisy_labels=True,
             supported_modalities=frozenset({Modality.IMAGE}),
             data_requirements=_classification_data(validation="clean"),
             implemented_variant="artifact_weight_provider",
@@ -318,6 +321,7 @@ def _supervised_requirements(config: Mapping[str, Any]) -> MethodRequirements | 
     if objective == "dss":
         return MethodRequirements(
             method="dss",
+            supports_native_noisy_labels=True,
             supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
             data_requirements=_classification_data(validation="noisy"),
             implemented_variant="objective_consumer",
@@ -325,6 +329,7 @@ def _supervised_requirements(config: Mapping[str, Any]) -> MethodRequirements | 
     if update == "cdr":
         return MethodRequirements(
             method="cdr",
+            supports_native_noisy_labels=True,
             supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
             data_requirements=_classification_data(validation="noisy"),
             implemented_variant="parameter_update_policy",
@@ -338,6 +343,10 @@ def _supervised_requirements(config: Mapping[str, Any]) -> MethodRequirements | 
         ).strip().lower()
         if ((config.get("data", {}) or {}).get("validation_split", {}) or {}).get("source") == "training_pool":
             validation_target = _validation_target(config)
+        evaluation = config.get("evaluation", {}) or {}
+        if (loss == "apl" and evaluation.get("report_checkpoint") == "last"
+                and evaluation.get("selection_split") == "test"):
+            validation_target = "none"
         noise_name = str(noise_config.get("name", "clean")).strip().lower()
         requires_manifest = bool(noise_config.get("manifest")) or noise_name not in {
             "",
@@ -381,6 +390,7 @@ def _binary_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         ),)
     return MethodRequirements(
         method="binary",
+        supports_native_noisy_labels=True,
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
         data_requirements=_classification_data(validation=_validation_target(config), needs_manifest=True),
         implemented_variant="binary_risk",
@@ -410,10 +420,14 @@ def _l2rw_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         ))
     return MethodRequirements(
         method="l2rw",
+        supports_native_noisy_labels=True,
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
         data_requirements=_classification_data(
             validation="clean",
             extra_roles=(DataRole.TRUSTED_VALIDATION,),
+            # Generate noise only after the trusted subset has been removed.
+            # The official flip generator reorders its manifest into TRAIN.
+            manifest_scope="effective_train",
             train_drop_last=True if source == "official_generated" else None,
         ),
         implemented_variant="trusted_meta_reweighting",
@@ -436,7 +450,8 @@ def _cal_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         _component_name(config, "noise", key) != ""
         for key in ("path", "clean_key", "noisy_key")
     )
-    inputs = () if synthetic_feature_smoke or external_labels_configured else (_config_input(
+    native_observations = _component_name(config, "noise") in {"native", "real_world"}
+    inputs = () if synthetic_feature_smoke or external_labels_configured or native_observations else (_config_input(
         "requires_external_noise_labels",
         ("noise", "path"), ("noise", "clean_key"), ("noise", "noisy_key"),
         description="当前 CAL 配置需要外部标签文件",
@@ -480,6 +495,7 @@ def _cal_requirements(config: Mapping[str, Any]) -> MethodRequirements:
 def _cwd_requirements(_config: Mapping[str, Any]) -> MethodRequirements:
     return MethodRequirements(
         method="cwd",
+        supports_native_noisy_labels=True,
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
         data_requirements=_classification_data(
             validation="none",
@@ -512,6 +528,7 @@ def _mc_ldce_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         ),)
     return MethodRequirements(
         method="mc_ldce",
+        supports_native_noisy_labels=True,
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
         data_requirements=_classification_data(
             validation=_validation_target(config),
@@ -527,6 +544,7 @@ def _mc_ldce_requirements(config: Mapping[str, Any]) -> MethodRequirements:
 def _ca2c_requirements(config: Mapping[str, Any]) -> MethodRequirements:
     return MethodRequirements(
         method="ca2c",
+        supports_native_noisy_labels=True,
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
         data_requirements=_classification_data(
             validation=_validation_target(config),
@@ -542,6 +560,7 @@ def _fine_requirements(config: Mapping[str, Any]) -> MethodRequirements:
     official_strong = bool((config.get("data", {}) or {}).get("strong_policy"))
     return MethodRequirements(
         method="fine",
+        supports_native_noisy_labels=True,
         supported_modalities=frozenset({Modality.IMAGE}),
         data_requirements=_classification_data(
             validation=_validation_target(config),
@@ -562,6 +581,7 @@ def _jocor_requirements(config: Mapping[str, Any]) -> MethodRequirements | None:
         return None
     return MethodRequirements(
         method="jocor",
+        supports_native_noisy_labels=True,
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
         data_requirements=_classification_data(
             validation=_validation_target(config),
@@ -576,6 +596,7 @@ def _jocor_requirements(config: Mapping[str, Any]) -> MethodRequirements | None:
 def _importance_reweighting_requirements(_config: Mapping[str, Any]) -> MethodRequirements:
     return MethodRequirements(
         method="importance_reweighting",
+        supports_native_noisy_labels=True,
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
         data_requirements=_classification_data(validation="noisy"),
         implemented_variant="binary_asymmetric_rcn",
@@ -598,6 +619,7 @@ def _pcse_requirements(config: Mapping[str, Any]) -> MethodRequirements:
     external = isinstance(pretraining, Mapping) and str(pretraining.get("mode", "train")) == "external_checkpoint"
     return MethodRequirements(
         method="pcse",
+        supports_native_noisy_labels=True,
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
         data_requirements=_classification_data(
             validation="noisy",
@@ -631,6 +653,7 @@ def _pcse_requirements(config: Mapping[str, Any]) -> MethodRequirements:
 def _volminnet_requirements(_config: Mapping[str, Any]) -> MethodRequirements:
     return MethodRequirements(
         method="volminnet",
+        supports_native_noisy_labels=True,
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
         data_requirements=_classification_data(validation="noisy"),
         implemented_variant="fixed_diagonal_sigmoid_offdiag",
@@ -648,6 +671,7 @@ def _volminnet_requirements(_config: Mapping[str, Any]) -> MethodRequirements:
 def _volmin_requirements(_config: Mapping[str, Any]) -> MethodRequirements:
     return MethodRequirements(
         method="volmin",
+        supports_native_noisy_labels=True,
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
         data_requirements=_classification_data(validation="clean"),
         implemented_variant="volmin_transition",
@@ -661,6 +685,7 @@ def _dld_requirements(config: Mapping[str, Any]) -> MethodRequirements:
     source = str(feature.get("source", "repository_frozen")) if isinstance(feature, Mapping) else "repository_frozen"
     return MethodRequirements(
         method="dld",
+        supports_native_noisy_labels=True,
         supported_modalities=frozenset({Modality.IMAGE}),
         data_requirements=_classification_data(
             validation="noisy",
@@ -692,6 +717,7 @@ def _pdl_requirements(config: Mapping[str, Any]) -> MethodRequirements:
     ) or None
     return MethodRequirements(
         method="pdl",
+        supports_native_noisy_labels=True,
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
         data_requirements=_classification_data(
             validation="noisy",
@@ -769,7 +795,9 @@ def create_runner_registry() -> RunnerRegistry:
         "lnl_toolbox.training.dual_t_experiment",
         "run_dual_t_experiment",
         budget_path=None,
-        requirements_provider=_image_requirements("dual_t", requires_configured_noise=True),
+        requirements_provider=_image_requirements(
+            "dual_t", extra_roles=(DataRole.TRAIN_EVAL,), requires_configured_noise=True,
+        ),
     )
     registry.add(
         "importance_reweighting",

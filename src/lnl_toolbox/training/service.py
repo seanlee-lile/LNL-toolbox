@@ -242,7 +242,7 @@ class ExperimentService:
                 noise = config.get("noise", {}) or {}
                 name = str(noise.get("name", "")).strip().lower() if isinstance(noise, Mapping) else ""
                 has_manifest = bool(noise.get("manifest")) if isinstance(noise, Mapping) else False
-                if name and name not in {"symmetric", "pairflip", "external"} and not has_manifest:
+                if name and name not in {"symmetric", "pairflip", "external", "native", "real_world"} and not has_manifest:
                     incompatible_config.append(CompatibilityReason(
                         required.code,
                         required.description,

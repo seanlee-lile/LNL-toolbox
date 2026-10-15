@@ -139,23 +139,47 @@ class _pdl_PDLTest(unittest.TestCase):
         self.assertTrue((parts >= 0.0).all())
         self.assertTrue(np.isfinite(coefficients @ parts.T - features).all())
 
-    def test_official_nmf_matches_train_m_global_rng_and_final_normalization(self) -> None:
+    def test_official_nmf_matches_train_m_normalization_after_each_iteration(self) -> None:
         features = np.array([[0.9, 0.1, 0.3], [0.2, 0.8, 0.4], [0.6, 0.4, 0.7]], dtype=np.float64)
         iterations = 4
         np.random.seed(23)
         weights = np.random.random((features.shape[0], 2))
         latent = np.random.random((2, features.shape[1]))
-        for _ in range(iterations):
+        for iteration in range(iterations):
             error = features - weights @ latent
             if float(np.square(error).sum()) < 1e-05:
                 break
             latent *= np.divide(weights.T @ features, weights.T @ weights @ latent, out=np.zeros_like(latent), where=weights.T @ weights @ latent != 0.0)
             weights *= np.divide(features @ latent.T, weights @ latent @ latent.T, out=np.zeros_like(weights), where=weights @ latent @ latent.T != 0.0)
-        weights /= weights.sum(axis=1, keepdims=True)
-        np.random.seed(23)
-        actual_parts, actual_coefficients = fit_part_representation(features, 2, seed=None, iterations=iterations, error_tolerance=1e-05)
-        np.testing.assert_allclose(actual_parts, latent.T)
-        np.testing.assert_allclose(actual_coefficients, weights)
+            weights /= weights.sum(axis=1, keepdims=True)
+            np.random.seed(23)
+            actual_parts, actual_coefficients = fit_part_representation(features, 2, seed=None, iterations=iteration + 1, error_tolerance=1e-05)
+            with self.subTest(iterations=iteration + 1):
+                np.testing.assert_allclose(actual_parts, latent.T)
+                np.testing.assert_allclose(actual_coefficients, weights)
+                np.testing.assert_allclose(actual_coefficients.sum(axis=1), 1.0)
+                self.assertTrue((actual_coefficients >= 0.0).all())
+
+    def test_cifar10_initial_training_defaults_follow_paper_not_short_author_run(self) -> None:
+        import yaml
+        from lnl_toolbox.training.experiment import build_optimizer, build_scheduler
+
+        path = Path(__file__).resolve().parents[1] / 'configs' / 'experiment' / 'pdl_cifar10_reproduction.yaml'
+        config = yaml.safe_load(path.read_text(encoding='utf-8'))
+        warmup = config['warmup']
+        self.assertEqual(warmup['epochs'], 100)
+        self.assertEqual(warmup['optimizer']['momentum'], 0.9)
+        self.assertEqual(warmup['optimizer']['lr'], 0.01)
+        self.assertEqual(warmup['scheduler'], {'name': 'multistep', 'milestones': [40, 80], 'gamma': 0.1})
+        model = torch.nn.Linear(1, 1)
+        optimizer = build_optimizer(model, warmup['optimizer'])
+        scheduler = build_scheduler(optimizer, warmup['scheduler'], warmup['epochs'])
+        for completed_epoch in range(1, 101):
+            optimizer.step()
+            scheduler.step()
+            if completed_epoch in (39, 40, 79, 80, 100):
+                expected = 0.01 if completed_epoch < 40 else (0.001 if completed_epoch < 80 else 0.0001)
+                self.assertAlmostEqual(optimizer.param_groups[0]['lr'], expected)
 
     def test_official_basis_reset_matches_init_params_scale(self) -> None:
         from torch.nn import functional as F

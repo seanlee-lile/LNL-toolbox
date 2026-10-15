@@ -186,4 +186,50 @@ class _jocor_JoCoRConfigurationTest(unittest.TestCase):
         self.assertEqual(resolved['selector']['keep_rate']['warmup_epochs'], 9)
         self.assertEqual(resolved['scheduler']['start_epoch'], 80)
         self.assertEqual(resolved['evaluation']['report_last_epochs'], 10)
-        self.assertTrue(resolved['evaluation']['allow_test_selection'])
+        self.assertEqual(resolved['evaluation']['selection_split'], 'none')
+        self.assertFalse(resolved['evaluation']['allow_test_selection'])
+
+    def test_runner_reports_test_without_selecting_best_or_aliasing_validation(self) -> None:
+        import json
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        from lnl_toolbox.training import multi_model_experiment as runner
+
+        config = yaml.safe_load(Path('configs/experiment/jocor_cifar10_symmetric05_reproduction.yaml').read_text(encoding='utf-8'))
+        config['trainer'].update(epochs=2, device='cpu', progress=False)
+        config['scheduler'] = {'name': 'none'}
+        prepared = Mock(dataset='cifar10', num_classes=10, manifest=None,
+                        manifest_path=None, input_spec=None)
+        prepared.loader.return_value = [{}]
+        algorithm = Mock()
+        algorithm.step.return_value = SimpleNamespace(metrics={
+            'samples': 2., 'selected_samples': 1., 'loss': 1.,
+            'all_sample_loss': 1., 'accuracy': .5,
+            'model_1_accuracy': .5, 'model_2_accuracy': .5, 'agreement_loss': .1,
+        })
+        metrics = [dict(loss=1., accuracy=.9, model_1_accuracy=.8, model_2_accuracy=1.),
+                   dict(loss=1., accuracy=.1, model_1_accuracy=0., model_2_accuracy=.2),
+                   dict(loss=1., accuracy=.1, model_1_accuracy=0., model_2_accuracy=.2)]
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(runner, 'prepare_experiment_data', return_value=prepared), \
+             patch.object(runner, 'bind_model_input', side_effect=lambda config, spec: config), \
+             patch.object(runner, '_build_member', side_effect=lambda config, classes: nn.Linear(2, 2)), \
+             patch.object(runner, 'build_builtin_multi_model_algorithm', return_value=algorithm), \
+             patch.object(runner, 'evaluate_model_group', side_effect=metrics), \
+             patch.object(runner, 'save_checkpoint') as save:
+            runner.run_multi_model_experiment(config, directory, requirements=SimpleNamespace(validation_size=0))
+            self.assertEqual([call.args[0].name for call in save.call_args_list], ['last.pt', 'last.pt'])
+            for call in save.call_args_list:
+                self.assertIsNone(call.kwargs['best_selection_accuracy'])
+                self.assertIsNone(call.kwargs['best_validation_accuracy'])
+            rows = [json.loads(line) for line in Path(directory, 'metrics.jsonl').read_text().splitlines()]
+            for row in rows[:2]:
+                self.assertIn('test_accuracy', row)
+                self.assertNotIn('validation_accuracy', row)
+                self.assertNotIn('validation_loss', row)
+                self.assertNotIn('selection_accuracy', row)
+            final = rows[-1]
+            self.assertFalse(final['test_selection_leakage'])
+            self.assertIsNone(final['best_selection_accuracy'])
+            self.assertEqual(final['last_window_epochs'], 2)
+            self.assertAlmostEqual(final['last_window_member_mean_accuracy'], .5)

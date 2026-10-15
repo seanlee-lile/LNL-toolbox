@@ -14,6 +14,10 @@ data:
     rng: default_rng
   augment: true
   preprocessing: standard
+  # Author transformer.py; the paper does not specify normalization constants.
+  normalization:
+    mean: [0.4914, 0.4822, 0.4465]
+    std: [0.2023, 0.1994, 0.2010]
 noise:
   name: symmetric
   rate: 0.2
@@ -27,6 +31,9 @@ volminnet:
   model:
     name: resnet18
     base_width: 64
+    # Author models.py: unpadded stem and PyTorch default initialization.
+    stem_padding: 0
+    initialization: torch_default
   transition:
     parameterization: fixed_diagonal_sigmoid_offdiag
     convention: clean_to_noisy_row

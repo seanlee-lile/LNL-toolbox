@@ -19,6 +19,69 @@ from lnl_toolbox.algorithms.dld import DLDAlgorithm, DLDLabelPredictor, DLDPreCo
 # --- merged from test_dld.py ---
 from lnl_toolbox.models.directional_diffusion import DirectionalDiffusion
 
+
+class DLDWebBudgetTest(unittest.TestCase):
+    def test_parameter_ui_has_only_the_effective_epoch_field(self) -> None:
+        from web import command_console
+        fields = {field['path']: field for field in command_console._config_schema('dld-cifar10-reproduction')['fields']}
+        self.assertFalse(fields['trainer.epochs']['visible'])
+        self.assertTrue(fields['dld.diffusion.epochs']['visible'])
+        self.assertTrue(fields['dld.diffusion.epochs']['editable'])
+        self.assertIn('完整遍历训练数据', fields['dld.diffusion.epochs']['note'])
+        self.assertFalse(any(field['visible'] for name, field in fields.items() if name.startswith('dld.fidelity.')))
+        self.assertEqual(fields['dld.feature_extractor.source']['value'], 'external_checkpoint')
+
+    def test_saved_web_budget_controls_the_training_loop(self) -> None:
+        from web import command_console
+        from lnl_toolbox.catalog import load_yaml
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            saved = command_console._save_config({
+                'recipe': 'dld-cifar10-reproduction',
+                'path': str(Path(directory) / 'edited.yaml'),
+                'patches': [{'path': 'dld.diffusion.epochs', 'value': 1}],
+                'acknowledge_paper_impact': True,
+            })
+            resolved = load_yaml(command_console.ROOT / saved['path'])
+            self.assertEqual(resolved['dld']['diffusion']['epochs'], 1)
+            self.assertEqual(resolved['trainer']['epochs'], 200)
+            self.assertEqual(DLDConfig.from_mapping(resolved).epochs, 1)
+            # Controlled data/model fixtures isolate the saved budget from external weights.
+            # Keep trainer.epochs at 200 to prove it does not control this workflow.
+            config = _dld_workflow__config(200)
+            config['dld']['diffusion']['epochs'] = resolved['dld']['diffusion']['epochs']
+            config['trainer']['epochs'] = resolved['trainer']['epochs']
+            train, test = _dld_workflow__data('train', 4), _dld_workflow__data('test', 2)
+            with patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda root, split: train if split == 'train' else test), patch('lnl_toolbox.training.dld_experiment.partition_samples', side_effect=_dld_workflow__partition):
+                run = run_dld_experiment(config, Path(directory) / 'run')
+            payload = read_checkpoint(run / 'last.pt', 'cpu')
+            final = json.loads((run / 'final_metrics.json').read_text(encoding='utf-8'))
+            rows = [json.loads(line) for line in (run / 'metrics.jsonl').read_text(encoding='utf-8').splitlines()]
+            self.assertEqual(payload['dld_state']['completed_epochs'], 1)
+            self.assertEqual(final['completed_epochs'], 1)
+            self.assertEqual(sum(row.get('event') == 'diffusion_epoch' for row in rows), 1)
+
+    def test_descriptions_record_actual_feature_source_and_missing_paper_components(self) -> None:
+        from web import command_console
+        registry = yaml.safe_load((command_console.ROOT / 'web/lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
+        def find_paper(value):
+            if isinstance(value, dict):
+                if isinstance(value.get('dld'), dict) and 'parameters' in value['dld']:
+                    return value['dld']
+                for child in value.values():
+                    result = find_paper(child)
+                    if result is not None:
+                        return result
+            return None
+        paper = find_paper(registry)
+        fields = paper['parameters']['advanced']
+        self.assertEqual(fields['dld.feature_extractor.source']['current'], 'external_checkpoint')
+        self.assertEqual(fields['dld.feature_extractor.model.name']['current'], 'torchvision_resnet34')
+        self.assertEqual(paper['paper_comparison']['alignment_status'], 'label_vector_variant_not_complete_paper_training')
+        self.assertIn('尚缺', paper['paper_comparison']['summary'])
+        scratch = yaml.safe_load((command_console.ROOT / 'src/lnl_toolbox/scratch/recipes/papers/dld.yaml').read_text(encoding='utf-8'))
+        self.assertIn('Simplified educational', scratch['description'])
+        self.assertIn('not a complete paper reproduction', scratch['description'])
+
 # --- merged from test_dld.py ---
 def _dld__algorithm_fixture() -> DLDAlgorithm:
     torch.manual_seed(29)

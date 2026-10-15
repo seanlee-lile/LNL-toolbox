@@ -183,7 +183,7 @@ def run_dividemix_experiment(
                 losses_a, indices_a = _collect_losses(algorithm.model_a, eval_train_loader, device); losses_b, indices_b = _collect_losses(algorithm.model_b, eval_train_loader, device)
                 if not torch.equal(indices_a, indices_b): raise ValueError("DivideMix peer loss snapshots are not stable-index aligned")
                 append_loss_history(algorithm.state.loss_history_a, indices_a, losses_a, method.gmm.history_window_epochs); append_loss_history(algorithm.state.loss_history_b, indices_b, losses_b, method.gmm.history_window_epochs)
-                co_divide = build_co_divide(indices_a, algorithm.state.loss_history_a, algorithm.state.loss_history_b, method, float(config["noise"]["rate"]))
+                co_divide = build_co_divide(indices_a, algorithm.state.loss_history_a, algorithm.state.loss_history_b, method, config["noise"].get("rate"))
                 artifact_hash = save_co_divide_artifact(artifact_path, co_divide, epoch=epoch, metadata={"config_hash": method.identity_hash, "manifest_mapping_hash": noise_metadata["mapping_hash"], "model_hash_a": _state_hash(algorithm.model_a), "model_hash_b": _state_hash(algorithm.model_b), "threshold": method.gmm.threshold, **co_divide.metrics})
                 algorithm.state.current_artifact, algorithm.state.current_artifact_hash = artifact_path.name, artifact_hash; algorithm.state.transition(DivideMixPhase.CO_DIVIDE_READY); _save_last(run_dir, algorithm, config, noise_metadata, best_epoch, best_metric, best_metrics)
             artifact, metadata, artifact_hash = load_co_divide_artifact(run_dir / str(algorithm.state.current_artifact))

@@ -222,6 +222,34 @@ def _rebind_class_dependent_values(
             )
 
 
+def configure_loss_correction_transition(config: dict[str, Any]) -> dict[str, Any]:
+    """Resolve the paper's known-T or two-stage estimated-T configuration."""
+    pipeline = config.get("pipeline", {}) or {}
+    if pipeline.get("pretraining_protocol") != "loss_correction":
+        return config
+    model = config.get("model", {}) or {}
+    if model.get("name") != "resnet32" and model.get("variant") == "loss_correction":
+        model.pop("variant")
+    estimator = pipeline.get("transition_estimator", {}) or {}
+    name = str(estimator.get("name", "known"))
+    if name == "known":
+        if estimator.get("matrix") is None:
+            estimator["matrix"] = deepcopy((config.get("noise", {}) or {}).get("transition_matrix"))
+        estimator.pop("percentile", None)
+        pipeline["warmup_epochs"] = 0
+    elif name == "anchor":
+        estimator.pop("matrix", None)
+        if "percentile" not in estimator:
+            estimator["percentile"] = None if (config.get("data", {}) or {}).get("name") == "cifar100" else 97.0
+        if int(pipeline.get("warmup_epochs", 0)) <= 0:
+            pipeline["warmup_epochs"] = int((config.get("trainer", {}) or {}).get("epochs", 120))
+    else:
+        raise ValueError("Loss Correction T source must be known or anchor")
+    pipeline["transition_estimator"] = estimator
+    config["pipeline"] = pipeline
+    return config
+
+
 def adapt_method_template(
     base_config: Mapping[str, Any],
     *,
@@ -237,6 +265,37 @@ def adapt_method_template(
     data = dict(candidate.get("data", {}) or {})
     data["name"] = str(dataset_profile.get("adapter") or data.get("name", ""))
     candidate["data"] = data
+    source_dataset = str(_get(base_config, ("data", "name"), "")).replace("_", "").lower()
+    selected_dataset = data["name"].replace("_", "").lower()
+    if (_get(candidate, ("loss", "name")) == "gce"
+            and source_dataset != selected_dataset
+            and selected_dataset in {"cifar10", "cifar100"}):
+        # GCE paper, Section 4.2: dataset-specific budgets and LR milestones.
+        epochs, milestones = (150, [80, 120]) if selected_dataset == "cifar100" else (120, [40, 80])
+        _set(candidate, ("trainer", "epochs"), epochs)
+        _set(candidate, ("scheduler", "milestones"), milestones)
+    if (_get(candidate, ("execution", "runner")) == "volminnet"
+            and source_dataset != selected_dataset and selected_dataset == "cifar100"):
+        # Paper Section 6 takes precedence over the author's ResNet-34 code.
+        _set(candidate, ("volminnet", "model"), {"name": "resnet32", "base_width": 16})
+        # Adam defaults; do not inherit the CIFAR-10 SGD fields.
+        _set(candidate, ("volminnet", "optimizer", "transition"),
+             {"name": "adam", "lr": 0.001, "weight_decay": 0.0})
+    if (_get(candidate, ("execution", "runner")) == "t_revision"
+            and source_dataset != selected_dataset
+            and selected_dataset in {"cifar10", "cifar100"}):
+        # Paper Section 4 specifies the network; author main.py supplies Stage 1 budgets.
+        _set(candidate, ("t_revision", "stage1", "model", "name"),
+             "resnet34" if selected_dataset == "cifar100" else "resnet18")
+        _set(candidate, ("t_revision", "stage1", "epochs"),
+             15 if selected_dataset == "cifar100" else 20)
+    if (_get(candidate, ("execution", "runner")) == "dual_t"
+            and source_dataset != selected_dataset
+            and selected_dataset in {"cifar10", "cifar100"}):
+        # Dual-T paper Section 4.1: ResNet-18 for CIFAR-10, ResNet-34 for CIFAR-100.
+        for stage in ("posterior_stage", "final_stage"):
+            _set(candidate, (stage, "model", "name"),
+                 "resnet34" if selected_dataset == "cifar100" else "resnet18")
     train_count = training_pool_size(str(dataset_profile.get("adapter", "")), dict(dataset_profile.get("sample_counts_by_split") or {}))
     adapt_split_counts(candidate, base_config, train_count)
     original_noise = dict(candidate.get("noise", {}) or {})
@@ -257,6 +316,8 @@ def adapt_method_template(
         candidate["noise"] = {}
         if noise_selection.kind == "clean" or selected_noise_name == "clean":
             candidate["noise"]["name"] = "clean"
+        else:
+            candidate["noise"]["name"] = "native"
         if "validation_targets" in original_noise:
             candidate["noise"]["validation_targets"] = original_noise["validation_targets"]
     else:
@@ -327,6 +388,34 @@ def adapt_method_template(
             _set(candidate, path, value)
     if noise_selection.seed is not None:
         candidate["seed"] = int(noise_selection.seed)
+    # Loss Correction automatically uses T only when the selected noise
+    # generator (or a supplied matrix) actually provides it.
+    pipeline = candidate.get("pipeline", {}) or {}
+    if pipeline.get("pretraining_protocol") == "loss_correction":
+        known_matrix = inputs.get("pipeline.transition_estimator.matrix")
+        if noise_selection.kind == "clean":
+            known_matrix = [[float(row == col) for col in range(num_classes)] for row in range(num_classes)]
+        if known_matrix is None:
+            known_matrix = _synthetic_transition_matrix(noise_selection, num_classes)
+        pipeline["transition_estimator"] = (
+            {"name": "known", "matrix": known_matrix} if known_matrix is not None
+            else {"name": "anchor"}
+        )
+        candidate["pipeline"] = pipeline
+    estimator = pipeline.get("transition_estimator", {}) or {}
+    if (
+        (noise_selection.kind == "native" or pipeline.get("pretraining_protocol") == "loss_correction")
+        and estimator.get("name") == "known"
+        and "matrix" not in estimator
+        and not any(str(path).startswith("pipeline.transition_estimator") for path in inputs)
+    ):
+        pipeline["transition_estimator"] = {"name": "anchor"}
+        if int(pipeline.get("warmup_epochs", 0)) <= 0:
+            pipeline["warmup_epochs"] = int((candidate.get("trainer", {}) or {}).get("epochs", 1))
+        candidate["pipeline"] = pipeline
+    if "pipeline.warmup_epochs" in inputs and int(inputs["pipeline.warmup_epochs"]) <= 0 and pipeline.get("transition_estimator", {}).get("name") == "anchor":
+        raise ValueError("Unknown T requires positive CE pretraining epochs")
+    configure_loss_correction_transition(candidate)
     from lnl_toolbox.core.config_schema import synchronize_experiment_seed
 
     return synchronize_experiment_seed(configure_validation_split(candidate))

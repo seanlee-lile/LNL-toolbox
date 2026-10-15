@@ -9,7 +9,7 @@ from torch import Tensor
 
 
 class ActiveForgettingRegularizer:
-    """Official negative-cross-entropy forgetting term on noisy samples."""
+    """Paper Eq. (2) negative-cross-entropy forgetting term on noisy samples."""
 
     def __init__(self, probability_floor: float = 1e-8) -> None:
         if probability_floor <= 0.0:
@@ -35,11 +35,11 @@ class ActiveForgettingRegularizer:
 
 
 class FINERegularizer:
-    """Official FINE MU/NL terms applied after SED's second-stage mask."""
+    """Paper Eqs. (2)-(5): beta weights MU; gamma weights complementary NL."""
 
     name = "fine"
 
-    def __init__(self, beta: float = 0.1, gamma: float = 0.002, probability_floor: float = 1e-7, seed: int = 0) -> None:
+    def __init__(self, beta: float = 0.001, gamma: float = 0.1, probability_floor: float = 1e-7, seed: int = 0) -> None:
         if beta < 0.0 or gamma < 0.0:
             raise ValueError("FINE beta and gamma must be non-negative")
         self.beta = float(beta)
@@ -96,7 +96,7 @@ class FINERegularizer:
         forgetting = torch.log_softmax(logits, dim=1).gather(
             1, noisy_targets.long()[:, None]
         ).squeeze(1) / num_classes
-        return self.beta * suppression[mask].mean() + self.gamma * forgetting[mask].mean()
+        return self.beta * forgetting[mask].mean() + self.gamma * suppression[mask].mean()
 
     compute = __call__
 

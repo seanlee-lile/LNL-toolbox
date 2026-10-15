@@ -31,6 +31,8 @@ def noise_mode(config: Mapping[str, Any]) -> str:
         raise TypeError("noise configuration must be a mapping")
     has_manifest = bool(noise.get("manifest"))
     name = str(noise.get("name", "clean")).lower()
+    if name in {"native", "real_world"} and not has_manifest:
+        return "native"
     generated = name not in {"", "clean", "external"}
     if has_manifest and (generated or "rate" in noise or "seed" in noise):
         raise ValueError("noise.manifest cannot be combined with generated-noise parameters")
@@ -267,7 +269,12 @@ def prepare_noise_manifest(
     return manifest, manifest_path
 
 
-def effective_subset_actual_rate(manifest: NoiseManifest, subset_indices: np.ndarray) -> float:
+def effective_subset_actual_rate(manifest: NoiseManifest, subset_indices: np.ndarray) -> float | None:
+    missing = np.setdiff1d(subset_indices, manifest.global_indices)
+    if missing.size:
+        raise ValueError("Training subset indices are absent from noise manifest")
+    if manifest.clean_targets is None:
+        return None
     mapping = {
         int(index): bool(corrupted)
         for index, corrupted in zip(manifest.global_indices, manifest.corruption_mask)
@@ -285,7 +292,7 @@ def checkpoint_noise_metadata(
     manifest: NoiseManifest,
     manifest_path: Path,
     run_dir: Path,
-    effective_rate: float,
+    effective_rate: float | None,
     mode: str | None = None,
     *,
     validation_targets: str = "clean",

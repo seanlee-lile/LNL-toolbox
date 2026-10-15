@@ -24,9 +24,7 @@ student_trainer:
   trusted_size: 5000
   device: cuda
 model:
-  num_labels: 1
-  hidden_size: 10
-  sequence_length: 10
+  implementation: official
   label_embedding_dim: 2
   epoch_embedding_dim: 5
   dense_size: 20

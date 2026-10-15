@@ -50,6 +50,79 @@ from lnl_toolbox.treatments.weights import SupervisedWeightInput
 # --- merged from test_mentornet.py ---
 class _mentornet_MentorNetTest(unittest.TestCase):
 
+    def test_mentor_weights_preserve_loss_and_gradient_scale(self) -> None:
+        from lnl_toolbox.algorithms.supervised import SupervisedClassificationAlgorithm
+        from lnl_toolbox.core import Batch
+        from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
+        from lnl_toolbox.treatments.weights import WeightResult
+
+        class ConstantMentor(MentorNetWeightProvider):
+            def __init__(self):
+                pass
+
+            def compute(self, request):
+                return WeightResult(torch.full_like(request.per_sample_loss, .2))
+
+        class OtherWeights:
+            def compute(self, request):
+                return WeightResult(torch.full_like(request.per_sample_loss, .2))
+
+        inputs = torch.tensor([[1., 0.], [0., 1.], [1., 1.]])
+        targets = torch.tensor([0, 1, 0])
+        for provider, scale, normalization in (
+            (ConstantMentor(), .2, 'batch_mean'),
+            (OtherWeights(), 1., 'weight_sum_mean'),
+            (None, 1., 'weight_sum_mean'),
+        ):
+            torch.manual_seed(12)
+            model = torch.nn.Linear(2, 2)
+            objective = torch.nn.functional.cross_entropy(model(inputs), targets)
+            expected_grads = torch.autograd.grad(objective, tuple(model.parameters()))
+            algorithm = SupervisedClassificationAlgorithm(
+                model, torch.optim.SGD(model.parameters(), lr=0.),
+                CrossEntropyLoss(), torch.device('cpu'), weight_provider=provider,
+            )
+            result = algorithm.step(Batch({'input': inputs, 'target': targets,
+                                          'index': torch.arange(3)}), RunState())
+            self.assertEqual(algorithm.reduction.normalization, normalization)
+            self.assertAlmostEqual(result.metrics['loss'], float(objective.detach()) * scale, places=6)
+            for parameter, expected in zip(model.parameters(), expected_grads):
+                torch.testing.assert_close(parameter.grad, expected * scale)
+
+    def test_paper_decay_is_used_by_recipe_and_web(self) -> None:
+        import yaml
+        from web import command_console
+        root = Path(__file__).resolve().parents[1]
+        config = yaml.safe_load((root / 'configs/experiment/mentornet_dd_cifar100_symmetric04_reproduction.yaml').read_text(encoding='utf-8'))
+        self.assertEqual(config['pipeline']['weight_provider']['decay'], .95)
+        fields = {f['path']: f for f in command_console._config_schema('mentornet-dd-cifar100-symmetric04-reproduction')['fields']}
+        field = fields['pipeline.weight_provider.decay']
+        self.assertEqual(field['value'], .95)
+        self.assertIn('0.95', field['note'])
+
+    def test_teacher_yaml_generates_loadable_official_artifact(self) -> None:
+        import yaml
+        root = Path(__file__).resolve().parents[1]
+        config = yaml.safe_load((root / 'configs/experiment/mentornet_dd_teacher_cifar10_symmetric04.yaml').read_text(encoding='utf-8'))
+        self.assertEqual(config['model']['implementation'], 'official')
+        with tempfile.TemporaryDirectory() as directory:
+            feature_path = Path(directory) / 'features.npz'
+            np.savez_compressed(feature_path,
+                losses=np.array([.1, .9], dtype=np.float32),
+                loss_differences=np.array([-.2, .3], dtype=np.float32),
+                labels=np.array([0, 0], dtype=np.int64),
+                epoch_percentages=np.array([21, 75], dtype=np.int64),
+                curriculum_targets=np.array([1., 0.], dtype=np.float32))
+            config['feature_data'] = str(feature_path)
+            config['trainer'].update(epochs=1, device='cpu')
+            config['loader'].update(batch_size=2, num_workers=0)
+            output = Path(directory) / 'mentor.pt'
+            artifact = train_mentor_artifact(config, output)
+            self.assertEqual(artifact.architecture['implementation'], 'official')
+            provider = MentorNetWeightProvider(str(output), total_epochs=100)
+            self.assertIsInstance(provider.model, OfficialMentorNet)
+            self.assertTrue(all(not p.requires_grad for p in provider.model.parameters()))
+
     def _artifact(self, path: Path) -> MentorArtifact:
         model = MentorNet(num_labels=1)
         artifact = MentorArtifact.create(architecture=model.architecture(), feature_schema={'label': 'fixed_zero'}, source={'dataset': 'trusted'}, model_state=model.state_dict())

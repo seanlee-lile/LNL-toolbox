@@ -90,6 +90,7 @@ def run_dual_t_experiment(
     if manifest is None or manifest_path is None:
         raise ValueError("Dual-T requires an enabled noisy-label manifest")
     train_loader = prepared.loader(DataRole.TRAIN)
+    posterior_loader = prepared.loader(DataRole.TRAIN_EVAL, shuffle=False)
     noisy_validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False)
     clean_test_loader = prepared.loader(DataRole.TEST, shuffle=False)
 
@@ -161,6 +162,7 @@ def run_dual_t_experiment(
         posterior_loss=posterior_loss,
         final_loss=final_loss,
         train_loader=train_loader,
+        posterior_loader=posterior_loader,
         noisy_validation_loader=noisy_validation_loader,
         clean_test_loader=clean_test_loader,
         device=device,

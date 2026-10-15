@@ -73,6 +73,21 @@ def if_context(
 
 
 @block(
+    id="if_mask_any",
+    name="If Selection Is Nonempty",
+    category="Control",
+    description="Execute child blocks only when a mask selects at least one sample.",
+    kind="condition",
+    params={"mask": {"type": "slot", "default": "selected_mask"}},
+    requires=("mask",), placement=("batch",), stage="train", ui_group="③ 训练结构",
+)
+def if_mask_any(ctx: ScratchContext, *, params: Mapping[str, Any],
+                children: Sequence[Mapping[str, Any]], execute: Callable[..., ScratchContext]) -> None:
+    if bool(ctx[str(params["mask"])].bool().any()):
+        execute(children, ctx)
+
+
+@block(
     id="if_epoch_ge",
     name="If Epoch >=",
     category="Control",

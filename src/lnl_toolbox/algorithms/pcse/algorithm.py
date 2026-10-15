@@ -48,10 +48,10 @@ from .gda import GDAEnsemble, fit_ensemble_weights, fit_gda_layers
 from .state import PCSEPhase, PCSEState
 from .statistics import estimate_pcse_statistics
 from .volmin import (
-    DiagonallyDominantTransition,
+    PaperVolMinTransition,
     build_volmin_optimizer,
-    validate_trainable_transition,
-    volmin_objective,
+    validate_paper_volmin_transition,
+    paper_volmin_objective,
 )
 
 
@@ -211,7 +211,7 @@ class PCSEAlgorithm:
         )
         self.pretraining_run_state = RunState(phase="pcse_pretraining")
         self.state = PCSEState()
-        self.transition_model: DiagonallyDominantTransition | None = None
+        self.transition_model: PaperVolMinTransition | None = None
         self.transition_optimizer: torch.optim.Optimizer | None = None
         self.snapshot: PosteriorSnapshot | None = None
         self.transition: TransitionArtifact | None = None
@@ -489,11 +489,9 @@ class PCSEAlgorithm:
             raise ValueError("transition runtime is only used by paper_volmin")
         values = self.transition_backend.config
         parameterization = values["parameterization"]
-        self.transition_model = DiagonallyDominantTransition(
+        self.transition_model = PaperVolMinTransition(
             self.num_classes,
-            initial_flip_mass=parameterization["initial_flip_mass"],
-            max_flip_mass=parameterization["max_flip_mass"],
-            temperature=parameterization["temperature"],
+            initial_weight=parameterization["initial_weight"],
             seed=parameterization["seed"],
         ).to(self.device)
         self.transition_optimizer = build_volmin_optimizer(
@@ -597,10 +595,10 @@ class PCSEAlgorithm:
                 "method": "pcse",
                 "transition_backend": "paper_volmin",
                 "transition_backend_note": (
-                    "paper Eq. (1) objective with a strictly diagonally "
-                    "dominant numerical-safety parameterization; this is "
-                    "narrower than the paper's general nonsingular "
-                    "row-stochastic assumption"
+                    "paper Eq. (1) objective with VolMinNet sigmoid "
+                    "off-diagonal row normalization; no total flip-mass "
+                    "cap of 0.49. Optimizer and stage budgets are "
+                    "repository defaults, not verified author settings."
                 ),
                 "transition_backend_config": dict(
                     self.transition_backend.config
@@ -706,7 +704,7 @@ class PCSEAlgorithm:
                 )
                 logits = model(inputs).to(dtype=torch.float64)
                 transition = self.transition_model.matrix()
-                objective, batch_metrics = volmin_objective(
+                objective, batch_metrics = paper_volmin_objective(
                     logits,
                     noisy_targets,
                     transition,
@@ -740,7 +738,7 @@ class PCSEAlgorithm:
             self._save_last()
         if self.state.transition_completed_epochs == int(values["epochs"]):
             transition = self.transition_model.matrix()
-            _, diagnostics = validate_trainable_transition(
+            _, diagnostics = validate_paper_volmin_transition(
                 transition,
                 determinant_tolerance=values["determinant_tolerance"],
                 condition_limit=values["condition_limit"],

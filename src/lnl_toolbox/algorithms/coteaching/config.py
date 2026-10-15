@@ -52,12 +52,6 @@ class CoTeachingConfig:
         rate = float(values.get("noise_rate", float("nan")))
         if not math.isfinite(rate) or not 0.0 <= rate < 1.0:
             raise ValueError("coteaching.noise_rate must be finite and in [0, 1)")
-        noise = _mapping(config.get("noise"), "noise configuration")
-        if "rate" in noise and not math.isclose(
-            float(noise["rate"]), rate, rel_tol=0.0, abs_tol=1e-12
-        ):
-            raise ValueError("noise.rate and coteaching.noise_rate must match")
-
         schedule = _mapping(
             values.get("remember_schedule"),
             "coteaching.remember_schedule",

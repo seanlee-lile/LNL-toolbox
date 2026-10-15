@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime
 import json
+import math
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -29,6 +30,25 @@ from lnl_toolbox.training.data_service import prepare_experiment_data
 from lnl_toolbox.training.noisy_labels import (
     checkpoint_noise_metadata, effective_subset_actual_rate, noise_mode,
 )
+
+
+def _apply_epoch_beta1(optimizer: torch.optim.Optimizer,
+                      schedule: Mapping[str, Any] | None, epoch: int) -> None:
+    """Apply the reference Adam beta1 switch without changing the LR schedule."""
+    if not schedule or str(schedule.get("name", "none")).lower() == "none":
+        return
+    if "beta1_before" not in schedule and "beta1_after" not in schedule:
+        return
+    if not {"beta1_before", "beta1_after", "start_epoch"} <= schedule.keys():
+        raise ValueError("CNLCU beta1 schedule requires before, after and start_epoch")
+    before, after = float(schedule["beta1_before"]), float(schedule["beta1_after"])
+    if any(not math.isfinite(value) or not 0 <= value < 1 for value in (before, after)):
+        raise ValueError("CNLCU scheduled Adam beta1 must be in [0,1)")
+    beta1 = before if epoch < int(schedule["start_epoch"]) else after
+    for group in optimizer.param_groups:
+        if "betas" not in group:
+            raise ValueError("CNLCU beta1 schedule requires an Adam optimizer")
+        group["betas"] = (beta1, group["betas"][1])
 
 
 def _validate_resume_config(current: Mapping[str, Any], saved: Mapping[str, Any]) -> None:
@@ -131,10 +151,12 @@ def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None =
     (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     (run_dir / "environment.json").write_text(json.dumps(_environment(seed, device), indent=2), encoding="utf-8")
     (run_dir / "noise_summary.json").write_text(json.dumps(noise_metadata, indent=2), encoding="utf-8")
-    corruption = {int(i): bool(c) for i, c in zip(manifest.global_indices, manifest.corruption_mask)}
+    corruption = {int(i): bool(c) for i, c in zip(manifest.global_indices, [] if manifest.clean_targets is None else manifest.corruption_mask)}
     metrics_path = run_dir / "metrics.jsonl"
     with metrics_path.open("a", encoding="utf-8") as metrics_file:
         for epoch in range(completed_epoch + 1, epochs):
+            for optimizer in (optimizer_a, optimizer_b):
+                _apply_epoch_beta1(optimizer, config.get("scheduler"), epoch)
             state.cycle = epoch; algorithm.on_cycle_start(state)
             sums: dict[str, float] = {}; samples = selected_a_total = selected_b_total = 0.0
             extrema: dict[str, float] = {}
@@ -175,8 +197,8 @@ def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None =
                     extrema[key] = max(extrema.get(key, float("-inf")), result.metrics[key])
                 sums["loss_a_on_selected_by_b"] = sums.get("loss_a_on_selected_by_b", 0.0) + result.metrics["loss_a_on_selected_by_b"] * result.metrics["selected_by_b_count"]
                 sums["loss_b_on_selected_by_a"] = sums.get("loss_b_on_selected_by_a", 0.0) + result.metrics["loss_b_on_selected_by_a"] * result.metrics["selected_by_a_count"]
-                clean_a += sum(not corruption[int(i)] for i in result.metadata["selected_by_a_indices"].tolist())
-                clean_b += sum(not corruption[int(i)] for i in result.metadata["selected_by_b_indices"].tolist())
+                clean_a += sum(not corruption[int(i)] for i in result.metadata["selected_by_a_indices"].tolist() if corruption)
+                clean_b += sum(not corruption[int(i)] for i in result.metadata["selected_by_b_indices"].tolist() if corruption)
             algorithm.on_cycle_end(state)
             validation = _evaluate_peers(algorithm, validation_loader, criterion, device)
             lr_a, lr_b = float(optimizer_a.param_groups[0]["lr"]), float(optimizer_b.param_groups[0]["lr"])
@@ -188,8 +210,8 @@ def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None =
                    "selected_by_a_count": selected_a_total, "selected_by_b_count": selected_b_total,
                    "selected_by_a_ratio": selected_a_total / samples,
                    "selected_by_b_ratio": selected_b_total / samples,
-                   "selected_clean_precision_a": clean_a / selected_a_total,
-                   "selected_clean_precision_b": clean_b / selected_b_total,
+                   "selected_clean_precision_a": clean_a / selected_a_total if corruption else None,
+                   "selected_clean_precision_b": clean_b / selected_b_total if corruption else None,
                    "validation_accuracy_a": validation["accuracy_a"], "validation_accuracy_b": validation["accuracy_b"],
                    "mean_peer_accuracy": validation["mean_peer_accuracy"],
                    "validation_accuracy_ensemble": validation["ensemble_accuracy"],

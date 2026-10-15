@@ -28,14 +28,16 @@ posterior_stage:
   model:
     name: resnet18
     base_width: 64
+    variant: imagenet_standard
   loss:
     name: ce
   optimizer:
     name: sgd
     lr: 0.01
-    momentum: 0.9
+    # Author SGD construction omits momentum; its effective value is zero.
+    momentum: 0.0
     nesterov: false
-    weight_decay: 0.0005
+    weight_decay: 0.0001
   scheduler:
     name: multistep
     milestones:
@@ -44,23 +46,27 @@ posterior_stage:
 transition_stage: {}
 final_stage:
   classifier: forward
-  epochs: 100
+  # Author cl_epochs default; the paper specifies 100 only for posterior estimation.
+  epochs: 200
   fresh_model: true
   model:
     name: resnet18
     base_width: 64
+    variant: imagenet_standard
   loss:
     name: ce
   optimizer:
     name: sgd
     lr: 0.01
-    momentum: 0.9
+    momentum: 0.0
     nesterov: false
-    weight_decay: 0.0005
+    weight_decay: 0.0001
   scheduler:
     name: multistep
     milestones:
     - 50
+    - 100
+    - 150
     gamma: 0.1
 execution:
   runner: dual_t

@@ -231,6 +231,21 @@ class QuickStartServiceTests(unittest.TestCase):
         self.assertNotIn("rho_positive", clean["risk"])
         self.assertNotIn("rho_negative", clean["risk"])
 
+    def test_loss_correction_automatically_estimates_unknown_T(self) -> None:
+        paper = next(item for item in load_papers() if item.id == "loss-correction")
+        profile = self.data_service.status("local-cifar10").profile.to_dict()
+        options = dict(dataset_alias="local-cifar10", dataset_profile=profile,
+                       noise_selection=QuickStartNoiseSelection("native", "native", rate=None, seed=1),
+                       data_service=self.data_service)
+        config = adapt_method_template(method_template_for_paper(paper).config,
+            method_inputs={"pipeline.warmup_epochs": 2}, **options)
+        self.assertEqual(config["pipeline"]["transition_estimator"], {"name": "anchor", "percentile": 97.0})
+        self.assertEqual(config["pipeline"]["warmup_epochs"], 2)
+        self.assertEqual(config["pipeline"]["pretraining_protocol"], "loss_correction")
+        with self.assertRaises(ValueError):
+            adapt_method_template(method_template_for_paper(paper).config,
+                method_inputs={"pipeline.warmup_epochs": 0}, **options)
+
     def test_known_transition_follows_selected_synthetic_noise(self) -> None:
         paper = next(item for item in load_papers() if item.id == "loss-correction")
         profile = self.data_service.status("local-cifar10").profile.to_dict()
@@ -251,6 +266,27 @@ class QuickStartServiceTests(unittest.TestCase):
                 self.assertEqual(
                     config["pipeline"]["transition_estimator"]["matrix"], expected,
                 )
+
+    def test_loss_correction_automatic_T_source_for_clean_and_instance_noise(self) -> None:
+        paper = next(item for item in load_papers() if item.id == "loss-correction")
+        profile = self.data_service.status("local-cifar10").profile.to_dict()
+        for selection, expected in ((QuickStartNoiseSelection("clean", "clean"), "known"),
+                                    (QuickStartNoiseSelection("synthetic", "pdl", rate=.2, seed=1), "anchor")):
+            config = adapt_method_template(method_template_for_paper(paper).config,
+                dataset_alias="local-cifar10", dataset_profile=profile, noise_selection=selection,
+                data_service=self.data_service)
+            self.assertEqual(config['pipeline']['transition_estimator']['name'], expected)
+            if expected == 'known':
+                np.testing.assert_array_equal(config['pipeline']['transition_estimator']['matrix'], np.eye(2))
+                self.assertEqual(config['pipeline']['warmup_epochs'], 0)
+            else:
+                self.assertNotIn('matrix', config['pipeline']['transition_estimator'])
+                self.assertEqual(config['pipeline']['warmup_epochs'], 120)
+        profile['adapter'] = 'cifar100'
+        config = adapt_method_template(method_template_for_paper(paper).config,
+            dataset_alias="local-cifar10", dataset_profile=profile,
+            noise_selection=QuickStartNoiseSelection('native', 'native'), data_service=self.data_service)
+        self.assertIsNone(config['pipeline']['transition_estimator']['percentile'])
 
     def test_method_noise_prior_does_not_keep_old_recipe_rate(self) -> None:
         paper = next(item for item in load_papers() if item.id == "coteaching")
@@ -462,6 +498,9 @@ class QuickStartServiceTests(unittest.TestCase):
                         data_service=self.data_service,
                     )
                     original = template.config.get("noise", {}) or {}
+                    if kind == "native" and paper.id == "loss-correction":
+                        self.assertEqual(candidate["pipeline"]["transition_estimator"], {"name": "anchor", "percentile": 97.0})
+                        self.assertGreater(candidate["pipeline"]["warmup_epochs"], 0)
                     self.assertIsInstance(candidate["noise"], dict)
                     self.assertEqual(candidate["noise"].get("validation_targets"),
                                      original.get("validation_targets"))
@@ -682,6 +721,139 @@ class QuickStartServiceTests(unittest.TestCase):
             )
             self.assertEqual(restored[section][key], count, paper.id)
             profile["sample_counts_by_split"].update(train=3000, validation=0)
+
+    def test_gce_dataset_defaults_and_user_overrides(self) -> None:
+        paper = next(item for item in load_papers() if item.id == 'gce')
+        template = method_template_for_paper(paper).config
+        profile = self.data_service.status('local-cifar10').profile.to_dict()
+        noise = QuickStartNoiseSelection('synthetic', 'symmetric', rate=0.2, seed=1)
+        for adapter, epochs, milestones in (('cifar10', 120, [40, 80]), ('cifar100', 150, [80, 120])):
+            with self.subTest(adapter=adapter):
+                profile.update(adapter=adapter, num_classes=10 if adapter == 'cifar10' else 100)
+                profile['sample_counts_by_split'] = {'train': 50000, 'test': 10000}
+                candidate = adapt_method_template(template, dataset_alias='local-cifar10',
+                    dataset_profile=profile, noise_selection=noise, data_service=self.data_service)
+                self.assertEqual(candidate['trainer']['epochs'], epochs)
+                self.assertEqual(candidate['scheduler']['milestones'], milestones)
+                self.assertEqual(candidate['scheduler']['gamma'], 0.1)
+                self.assertEqual(candidate['scheduler']['name'], 'multistep')
+                self.assertEqual(candidate['optimizer']['lr'], 0.01)
+                self.assertEqual(candidate['optimizer']['momentum'], 0.9)
+                self.assertEqual(candidate['optimizer']['weight_decay'], 1e-4)
+                self.assertEqual(candidate['loader']['batch_size'], 128)
+                self.assertEqual(candidate['loss']['q'], 0.7)
+                self.assertEqual(candidate['model']['name'], 'resnet34')
+                overridden = adapt_method_template(template, dataset_alias='local-cifar10',
+                    dataset_profile=profile, noise_selection=noise, data_service=self.data_service,
+                    method_inputs={'trainer.epochs': 3, 'scheduler.milestones': [1, 2]})
+                self.assertEqual(overridden['trainer']['epochs'], 3)
+                self.assertEqual(overridden['scheduler']['milestones'], [1, 2])
+        self.assertEqual(template['trainer']['epochs'], 120)
+        self.assertEqual(template['scheduler']['milestones'], [40, 80])
+
+    def test_volminnet_cifar100_defaults_and_user_overrides(self) -> None:
+        from lnl_toolbox.training.experiment import build_optimizer, build_model
+        from lnl_toolbox.algorithms.volminnet import VolMinNetConfig, VolMinTransition
+        paper = next(item for item in load_papers() if item.id == 'volminnet')
+        template = method_template_for_paper(paper).config
+        profile = self.data_service.status('local-cifar10').profile.to_dict()
+        profile.update(adapter='cifar100', num_classes=100)
+        profile['sample_counts_by_split'] = {'train': 50000, 'test': 10000}
+        noise = QuickStartNoiseSelection('synthetic', 'symmetric', rate=0.2, seed=1)
+        config = adapt_method_template(template, dataset_alias='local-cifar10',
+            dataset_profile=profile, noise_selection=noise, data_service=self.data_service)
+        method = config['volminnet']
+        self.assertEqual(method['model'], {'name': 'resnet32', 'base_width': 16})
+        self.assertEqual(method['optimizer']['transition'], {'name': 'adam', 'lr': 0.001, 'weight_decay': 0.0})
+        self.assertEqual(method['optimizer']['classifier'], template['volminnet']['optimizer']['classifier'])
+        self.assertEqual(config['trainer']['epochs'], 150)
+        for role in ('classifier', 'transition'):
+            self.assertEqual(method['scheduler'][role]['milestones'], [30, 60])
+        parsed = VolMinNetConfig.from_mapping(config)
+        optimizer = build_optimizer(VolMinTransition(100), parsed.transition_optimizer)
+        self.assertEqual(optimizer.defaults['betas'], (0.9, 0.999))
+        model = build_model(method['model'], 100)
+        self.assertEqual(model.classifier.out_features, 100)
+        overridden = adapt_method_template(template, dataset_alias='local-cifar10',
+            dataset_profile=profile, noise_selection=noise, data_service=self.data_service,
+            method_inputs={'volminnet.optimizer.transition.lr': 0.02, 'trainer.epochs': 3})
+        self.assertEqual(overridden['volminnet']['optimizer']['transition']['lr'], 0.02)
+        self.assertEqual(overridden['trainer']['epochs'], 3)
+        self.assertEqual(template['volminnet']['model']['name'], 'resnet18')
+
+    def test_t_revision_dataset_defaults_and_user_overrides(self) -> None:
+        from lnl_toolbox.algorithms.t_revision import TRevisionConfig
+        from lnl_toolbox.training.experiment import build_model
+        paper = next(item for item in load_papers() if item.id == 't-revision')
+        template = method_template_for_paper(paper).config
+        profile = self.data_service.status('local-cifar10').profile.to_dict()
+        noise = QuickStartNoiseSelection('synthetic', 'symmetric', rate=0.2, seed=1)
+        for adapter, name, epochs, blocks in (
+                ('cifar10', 'resnet18', 20, [2, 2, 2, 2]),
+                ('cifar100', 'resnet34', 15, [3, 4, 6, 3])):
+            with self.subTest(adapter=adapter):
+                classes = 10 if adapter == 'cifar10' else 100
+                profile.update(adapter=adapter, num_classes=classes)
+                profile['sample_counts_by_split'] = {'train': 50000, 'test': 10000}
+                config = adapt_method_template(template, dataset_alias='local-cifar10',
+                    dataset_profile=profile, noise_selection=noise, data_service=self.data_service)
+                method = config['t_revision']
+                self.assertEqual(method['stage1']['epochs'], epochs)
+                self.assertEqual(method['stage1']['model']['name'], name)
+                for stage in ('classifier_initialization', 'revision'):
+                    self.assertEqual(method[stage]['epochs'], 200)
+                self.assertEqual(config['data']['normalization'], template['data']['normalization'])
+                parsed = TRevisionConfig.from_mapping(config)
+                model = build_model(parsed.model, classes).eval()
+                self.assertEqual(model.stem[0].padding, (0, 0))
+                self.assertEqual(model.classifier.out_features, classes)
+                self.assertEqual([len(getattr(model, f'layer{i}')) for i in range(1, 5)], blocks)
+                overridden = adapt_method_template(template, dataset_alias='local-cifar10',
+                    dataset_profile=profile, noise_selection=noise, data_service=self.data_service,
+                    method_inputs={'t_revision.stage1.epochs': 3,
+                        't_revision.stage1.model.name': 'resnet18',
+                        't_revision.stage1.optimizer.lr': 0.02})
+                self.assertEqual(overridden['t_revision']['stage1']['epochs'], 3)
+                self.assertEqual(overridden['t_revision']['stage1']['model']['name'], 'resnet18')
+                self.assertEqual(overridden['t_revision']['stage1']['optimizer']['lr'], 0.02)
+        self.assertEqual(template['t_revision']['stage1']['epochs'], 20)
+        self.assertEqual(template['t_revision']['stage1']['model']['name'], 'resnet18')
+
+    def test_dual_t_dataset_defaults_and_user_overrides(self) -> None:
+        from lnl_toolbox.algorithms.dual_t import DualTConfig
+        from lnl_toolbox.training.experiment import build_model
+        paper = next(item for item in load_papers() if item.id == 'dual-t')
+        template = method_template_for_paper(paper).config
+        profile = self.data_service.status('local-cifar10').profile.to_dict()
+        noise = QuickStartNoiseSelection('synthetic', 'symmetric', rate=0.2, seed=1)
+        for adapter, name, classes in (('cifar10', 'resnet18', 10), ('cifar100', 'resnet34', 100)):
+            with self.subTest(adapter=adapter):
+                profile.update(adapter=adapter, num_classes=classes)
+                profile['sample_counts_by_split'] = {'train': 50000, 'test': 10000}
+                config = adapt_method_template(template, dataset_alias='local-cifar10',
+                    dataset_profile=profile, noise_selection=noise, data_service=self.data_service)
+                parsed = DualTConfig.from_mapping(config)
+                self.assertEqual(config['data']['validation_size'], 10000)
+                for stage in ('posterior_stage', 'final_stage'):
+                    self.assertEqual(config[stage]['model']['name'], name)
+                    self.assertEqual(config[stage]['model']['variant'], 'imagenet_standard')
+                    self.assertEqual(config[stage]['optimizer']['momentum'], 0)
+                    self.assertEqual(config[stage]['optimizer']['weight_decay'], 1e-4)
+                model = build_model(parsed.final_stage.model, classes)
+                self.assertEqual(model.conv1.kernel_size, (7, 7))
+                self.assertEqual(model.fc.out_features, classes)
+                self.assertEqual(config['posterior_stage']['epochs'], 100)
+                self.assertEqual(config['final_stage']['epochs'], 200)
+                self.assertEqual(config['final_stage']['scheduler']['milestones'], [50, 100, 150])
+                overridden = adapt_method_template(template, dataset_alias='local-cifar10',
+                    dataset_profile=profile, noise_selection=noise, data_service=self.data_service,
+                    method_inputs={'final_stage.epochs': 3, 'final_stage.model.name': 'resnet18',
+                        'final_stage.optimizer.lr': 0.02})
+                self.assertEqual(overridden['final_stage']['epochs'], 3)
+                self.assertEqual(overridden['final_stage']['model']['name'], 'resnet18')
+                self.assertEqual(overridden['final_stage']['optimizer']['lr'], 0.02)
+        self.assertEqual(template['final_stage']['model']['name'], 'resnet18')
+        self.assertEqual(template['final_stage']['epochs'], 200)
 
     def test_small_dataset_uses_adapted_plan_instead_of_full_size_recipe(self) -> None:
         from lnl_toolbox.catalog import load_yaml

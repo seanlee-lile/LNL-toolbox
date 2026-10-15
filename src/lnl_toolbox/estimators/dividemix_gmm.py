@@ -42,6 +42,7 @@ class DivideMixGMMLossInput:
 
     per_sample_losses: Tensor
     sample_indices: Tensor
+    already_normalized: bool = False
 
 
 def _positive_integer(name: str, value: int) -> int:
@@ -152,6 +153,10 @@ class DivideMixGMMCleanProbabilityEstimator:
         """Fit one loss GMM and return lower-mean-component probabilities."""
 
         losses, indices = _validate_input(estimator_input)
+        if not isinstance(estimator_input.already_normalized, bool):
+            raise TypeError("already_normalized must be a boolean")
+        if estimator_input.already_normalized and bool(((losses < 0) | (losses > 1)).any().item()):
+            raise ValueError("already-normalized losses must be within [0, 1]")
         cpu_losses = losses.detach().to(
             device="cpu", dtype=torch.float64
         ).numpy()
@@ -170,8 +175,11 @@ class DivideMixGMMCleanProbabilityEstimator:
                 "min-max normalization"
             )
 
+        # Epoch histories are normalized before averaging. Rescaling that
+        # average would change the author's high-noise GMM input and reg_covar.
         normalized_losses = (
-            (canonical_losses - loss_min) / loss_range
+            canonical_losses if estimator_input.already_normalized
+            else (canonical_losses - loss_min) / loss_range
         ).reshape(-1, 1)
         GaussianMixture, ConvergenceWarning = _load_sklearn_gmm()
         gmm = GaussianMixture(

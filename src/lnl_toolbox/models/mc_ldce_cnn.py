@@ -18,7 +18,6 @@ class MCLDCECifarCNN(nn.Module):
         classifier_bias: bool = True,
     ) -> None:
         super().__init__()
-        self._feature_extractor_frozen = False
         channels = (128, 128, 128, 512, 256, 128)
         layers: list[nn.Module] = []
         incoming = int(input_channels)
@@ -35,20 +34,6 @@ class MCLDCECifarCNN(nn.Module):
             int(num_classes),
             bias=bool(classifier_bias),
         )
-
-    def freeze_feature_extractor(self) -> None:
-        """Keep the representation fixed for the centroid-risk stage."""
-
-        self._feature_extractor_frozen = True
-        for parameter in self.convolutions.parameters():
-            parameter.requires_grad_(False)
-        self.dropout.eval()
-
-    def train(self, mode: bool = True):
-        super().train(mode)
-        if self._feature_extractor_frozen:
-            self.dropout.eval()
-        return self
 
     def forward_with_features(self, inputs: torch.Tensor):
         value = inputs

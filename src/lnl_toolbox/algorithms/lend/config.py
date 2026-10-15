@@ -29,6 +29,8 @@ class LENDConfig:
     reduction: str
     empty_batch: str
     epochs: int
+    dilution_tolerance: float = 1e-5
+    dilution_max_steps: int = 1000
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any]) -> "LENDConfig":
@@ -58,15 +60,24 @@ class LENDConfig:
         if type(normalize_features) is not bool:
             raise TypeError("lend.graph.normalize_features must be boolean")
         dilution = _mapping(values.get("dilution"), "lend.dilution")
-        if set(dilution) != {"alpha", "policy", "steps"}:
-            raise ValueError("lend.dilution requires alpha/policy/steps")
         alpha = float(dilution["alpha"])
         policy = str(dilution["policy"]).strip().lower()
-        steps = int(dilution["steps"])
+        if policy not in {"fixed_steps", "until_converged"}:
+            raise ValueError("lend.dilution.policy must be fixed_steps or until_converged")
+        required = {"alpha", "policy", "steps"} if policy == "fixed_steps" else {"alpha", "policy", "tolerance", "max_steps"}
+        if not required <= set(dilution) or set(dilution) - {"alpha", "policy", "steps", "tolerance", "max_steps"}:
+            raise ValueError(f"lend.dilution {policy} requires {sorted(required)}")
+        steps = int(dilution.get("steps", 10))
+        tolerance = float(dilution.get("tolerance", 1e-5))
+        max_steps = dilution.get("max_steps", 1000)
         if not math.isfinite(alpha) or not 0 < alpha < 1:
             raise ValueError("lend.dilution.alpha must be finite and in (0,1)")
-        if policy != "fixed_steps" or steps < 1:
-            raise ValueError("LEND first version requires fixed_steps with steps >= 1")
+        if policy == "fixed_steps" and steps < 1:
+            raise ValueError("LEND fixed_steps requires steps >= 1")
+        if not math.isfinite(tolerance) or tolerance <= 0:
+            raise ValueError("lend.dilution.tolerance must be finite and positive")
+        if type(max_steps) is not int or max_steps < 1:
+            raise ValueError("lend.dilution.max_steps must be a positive integer")
 
         history = _mapping(values.get("history"), "lend.history")
         if set(history) != {"beta", "first_observation"}:
@@ -121,7 +132,7 @@ class LENDConfig:
             raise ValueError("LEND model must be a supported feature-aware model")
         return cls(k, gamma, metric, normalize_features, zero_degree_policy,
                    alpha, policy, steps, beta, first, rule, reduction, empty,
-                   int(training["epochs"]))
+                   int(training["epochs"]), tolerance, max_steps)
 
     def identity(self) -> dict[str, Any]:
         value = asdict(self)

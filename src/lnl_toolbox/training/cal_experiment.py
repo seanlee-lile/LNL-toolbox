@@ -15,7 +15,9 @@ import yaml
 from lnl_toolbox.algorithms.cal import (
     cal_all_class_losses,
     cal_objective,
+    cal_sieve_scores,
     cores2_adjusted_losses,
+    cores2_warmup_prior,
     resolve_confidence_weight,
 )
 from lnl_toolbox.evaluation.classification import evaluate_classification
@@ -155,6 +157,7 @@ def run_cal_experiment(
         warmup_optimizer = build_optimizer(warmup, config["optimizer"])
         warmup_cfg = dict(config["warmup"])
         warmup_epochs = int(warmup_cfg["epochs"])
+        warmup_prior = cores2_warmup_prior(noisy_prior)
         warmup_scheduler = _build_warmup_scheduler(
             warmup_optimizer, config, warmup_epochs
         )
@@ -168,7 +171,7 @@ def run_cal_experiment(
             for batch in train_loader:
                 inputs, targets = batch["input"].to(device), batch["target"].to(device)
                 loss = cores2_adjusted_losses(
-                    warmup(inputs), targets, noisy_prior, confidence_weight
+                    warmup(inputs), targets, warmup_prior, confidence_weight
                 ).mean()
                 _assert_finite_warmup_state(warmup, loss)
                 warmup_optimizer.zero_grad(set_to_none=True)
@@ -201,22 +204,13 @@ def run_cal_experiment(
         with torch.inference_mode():
             for batch in snapshot_loader:
                 logits = warmup(batch["input"].to(device)); targets = batch["target"].to(device)
-                losses.append(cores2_adjusted_losses(
-                    logits,
-                    targets,
-                    noisy_prior,
-                    resolve_confidence_weight(
-                        warmup_epochs - 1,
-                        float(warmup_cfg["confidence_weight"]),
-                        warmup_cfg.get("confidence_schedule"),
-                    ),
-                ).cpu().numpy())
+                losses.append(cal_sieve_scores(logits, targets).cpu().numpy())
                 loss_indices.append(batch["index"].cpu().numpy())
         all_losses = np.concatenate(losses)
         all_indices = np.concatenate(loss_indices)
         order = np.argsort(all_indices, kind="stable")
         if not np.array_equal(all_indices[order], snapshot.global_indices):
-            raise ValueError("CAL adjusted-loss indices do not match posterior snapshot")
+            raise ValueError("CAL sieve-score indices do not match posterior snapshot")
         proxy = build_cal_proxy_artifact(snapshot, all_losses[order], lower_threshold=float(config["sieve"]["lower_threshold"]), upper_threshold=float(config["sieve"]["upper_threshold"])); proxy.save(proxy_path)
     else:
         if payload.get("method") != "cal" or payload.get("config") != config: raise ValueError("CAL resume identity mismatch")

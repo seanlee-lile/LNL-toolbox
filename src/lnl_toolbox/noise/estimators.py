@@ -176,6 +176,12 @@ def select_anchor_candidates(
 class AnchorTransitionEstimator:
     """Patrini et al. (CVPR 2017), Equations (12)-(13)."""
 
+    percentile: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.percentile is not None and not 0.0 < float(self.percentile) < 100.0:
+            raise ValueError("anchor percentile must be between 0 and 100")
+
     def estimate(self, snapshot: PosteriorSnapshot) -> TransitionArtifact:
         probabilities = snapshot.noisy_probabilities
         anchors: list[int] = []
@@ -183,6 +189,13 @@ class AnchorTransitionEstimator:
         positions: list[int] = []
         for class_index in range(snapshot.num_classes):
             scores = probabilities[:, class_index]
+            if self.percentile is not None:
+                threshold = np.percentile(scores, self.percentile, method="higher")
+                candidates = np.flatnonzero(scores < threshold)
+                if not candidates.size:
+                    raise ValueError(f"No anchor candidate below percentile for class {class_index}; predictions are tied")
+                # Filter only the selection scores, never mutate posterior rows.
+                scores = np.where(scores < threshold, scores, -np.inf)
             maximum = scores.max()
             tied_positions = np.flatnonzero(scores == maximum)
             tied_indices = snapshot.global_indices[tied_positions]
@@ -192,6 +205,8 @@ class AnchorTransitionEstimator:
             anchor_scores.append(float(maximum))
 
         matrix = probabilities[np.asarray(positions, dtype=np.int64)]
+        if self.percentile is not None:
+            matrix = matrix / matrix.sum(axis=1, keepdims=True)
         return TransitionArtifact(
             matrix=matrix,
             estimator="anchor",
@@ -202,7 +217,8 @@ class AnchorTransitionEstimator:
                 "num_samples": snapshot.num_samples,
                 "anchor_global_indices": anchors,
                 "anchor_scores": anchor_scores,
-                "selection": "argmax_noisy_posterior_tie_min_global_index",
+                "selection": "argmax_noisy_posterior_tie_min_global_index" if self.percentile is None else "below_percentile_argmax_tie_min_global_index",
+                **({"percentile": self.percentile} if self.percentile is not None else {}),
                 "paper": "Patrini et al., CVPR 2017, Equations (12)-(13)",
             },
         )

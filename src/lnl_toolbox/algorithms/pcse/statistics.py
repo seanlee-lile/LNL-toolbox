@@ -173,8 +173,8 @@ class PCSEStatistics:
             or self.coefficient_condition <= 0.0
         ):
             raise ValueError("PCSE condition metrics must be finite and positive")
-        if len(self.layers) < 2:
-            raise ValueError("PCSE statistics require at least two layers")
+        if not self.layers:
+            raise ValueError("PCSE statistics require at least one layer")
         if any(layer.clean_means.shape[0] != noisy.size for layer in self.layers):
             raise ValueError("PCSE layer class counts must match priors")
         if len({layer.name for layer in self.layers}) != len(self.layers):
@@ -194,8 +194,8 @@ def estimate_pcse_statistics(
 ) -> PCSEStatistics:
     """Recover clean per-class statistics using paper Eqs. (20)–(23)."""
 
-    if len(snapshots) < 2 or len(snapshots) != len(layer_names):
-        raise ValueError("PCSE requires matching snapshots for at least two layers")
+    if not snapshots or len(snapshots) != len(layer_names):
+        raise ValueError("PCSE requires matching snapshots for at least one layer")
     matrix = validate_transition_matrix(transition)
     classes = matrix.shape[0]
     reference = snapshots[0]

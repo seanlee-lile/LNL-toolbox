@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -48,27 +49,43 @@ def _ca2c_batch_objectives(
     candidate_k: int,
     hard_weight: float,
     robust: bool,
+    robust_weight: float = 1.0,
+    p_strong_logits: torch.Tensor | None = None,
+    n_strong_logits: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    if not math.isfinite(robust_weight) or not 0.0 <= robust_weight <= 1.0:
+        raise ValueError("CA2C robust_weight must be finite and in [0, 1]")
+    if robust and robust_weight < 1.0:
+        if p_strong_logits is None or n_strong_logits is None:
+            raise ValueError("CA2C robust_weight < 1 requires strong-view logits for both networks")
+        if p_strong_logits.shape != p_logits.shape or n_strong_logits.shape != n_logits.shape:
+            raise ValueError("CA2C strong-view logits must match the weak-view logits")
+    candidates, complements = cross_guidance(p_logits, n_logits, candidate_k)
     if not robust:
+        # The released warmup accumulates each peer's top-K, including two
+        # counts when the peers propose the same class. CE remains unchanged.
+        memory.update_(indices, candidates)
+        memory.update_(indices, ~complements)
         return (
             criterion(p_logits, targets).mean(),
             criterion(n_logits, targets).mean(),
         )
-    candidates, complements = cross_guidance(
-        p_logits, n_logits, candidate_k
-    )
     memory.update_(indices, candidates)
     soft_targets = memory.targets(indices)
     confidence_weights = memory.confidence_weights(indices)
-    return (
-        partial_label_objective(
-            p_logits,
-            soft_targets,
-            hard_weight,
-            confidence_weights=confidence_weights,
-        ),
-        negative_label_objective(n_logits, complements),
+    p_loss = partial_label_objective(
+        p_logits,
+        soft_targets,
+        hard_weight,
+        confidence_weights=confidence_weights,
     )
+    n_loss = negative_label_objective(n_logits, complements)
+    if robust_weight < 1.0:
+        p_consistency = criterion(p_strong_logits, p_logits.detach().argmax(1)).mean()
+        n_consistency = criterion(n_strong_logits, n_logits.detach().argmax(1)).mean()
+        p_loss = robust_weight * p_loss + (1.0 - robust_weight) * p_consistency
+        n_loss = robust_weight * n_loss + (1.0 - robust_weight) * n_consistency
+    return p_loss, n_loss
 
 
 def run_ca2c_experiment(
@@ -87,7 +104,6 @@ def run_ca2c_experiment(
         run_dir=run_dir,
         seed=seed,
     ); classes = data.num_classes
-    train_loader = data.loader(DataRole.TRAIN, stream=21)
     validation_loader = (
         data.loader(DataRole.CLEAN_VALIDATION, stream=23, shuffle=False)
         if DataRole.CLEAN_VALIDATION in data.available_roles
@@ -112,6 +128,9 @@ def run_ca2c_experiment(
         restore_rng_state(payload["rng_state"])
     ca2c_config = dict(config.get("ca2c", {}) or {})
     warmup_epochs = int(ca2c_config.get("warmup_epochs", 0))
+    robust_weight = float(ca2c_config.get("robust_weight", 1.0))
+    if not math.isfinite(robust_weight) or not 0.0 <= robust_weight <= 1.0:
+        raise ValueError("CA2C robust_weight must be finite and in [0, 1]")
     k = int(ca2c_config["candidate_k"])
     mixing = float(
         ca2c_config.get(
@@ -120,9 +139,17 @@ def run_ca2c_experiment(
         )
     )
     for epoch in range(start, epochs):
+        train_loader = data.loader(DataRole.TRAIN, epoch=epoch, stream=21)
         p_model.train(); n_model.train(); total = correct = 0; loss_sum = 0.0
         for batch in train_loader:
             inputs, targets, indices = batch["input"].to(device), batch["target"].to(device), batch["index"].to(device); p_logits, n_logits = p_model(inputs), n_model(inputs)
+            robust = epoch >= warmup_epochs
+            p_strong_logits = n_strong_logits = None
+            if robust and robust_weight < 1.0:
+                if batch.get("strong_input") is None:
+                    raise ValueError("CA2C consistency training requires a strong view; enable data.strong_augment or set ca2c.robust_weight=1")
+                strong_inputs = batch["strong_input"].to(device)
+                p_strong_logits, n_strong_logits = p_model(strong_inputs), n_model(strong_inputs)
             p_loss, n_loss = _ca2c_batch_objectives(
                 p_logits,
                 n_logits,
@@ -132,7 +159,10 @@ def run_ca2c_experiment(
                 memory,
                 candidate_k=k,
                 hard_weight=mixing,
-                robust=epoch >= warmup_epochs,
+                robust=robust,
+                robust_weight=robust_weight,
+                p_strong_logits=p_strong_logits,
+                n_strong_logits=n_strong_logits,
             )
             p_optimizer.zero_grad(set_to_none=True); p_loss.backward(); p_optimizer.step(); n_optimizer.zero_grad(set_to_none=True); n_loss.backward(); n_optimizer.step()
             ensemble = (p_logits.detach() + n_logits.detach()) / 2; total += targets.numel(); correct += int(ensemble.argmax(1).eq(targets).sum()); loss_sum += float((p_loss.detach() + n_loss.detach()) / 2) * targets.numel()

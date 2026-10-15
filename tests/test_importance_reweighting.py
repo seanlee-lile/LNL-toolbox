@@ -286,6 +286,88 @@ class _importance_reweighting_kliep_KLIEPWorkflowTest(unittest.TestCase):
             for name in ('test_accuracy', 'test_loss', 'rho_positive_hat', 'rho_negative_hat'):
                 self.assertTrue(np.isfinite(metrics[name]))
             self.assertEqual(metrics['reduction'], 'batch_mean')
+            manifest = NoiseManifest.load(result / 'noise_manifest.npz')
+            summary = json.loads((result / 'noise_summary.json').read_text())
+            for label, name in ((1, 'realized_rho_positive'), (0, 'realized_rho_negative')):
+                mask = manifest.clean_targets == label
+                expected = float(np.mean(manifest.noisy_targets[mask] != label))
+                self.assertEqual(summary[name], expected)
+                self.assertEqual(metrics['noise_rates'][name], expected)
+
+
+    def test_high_dimensional_features_are_uniform_and_linearly_separated(self) -> None:
+        from lnl_toolbox.data.binary_synthetic import generate_synthetic_binary_high_dim
+        first = generate_synthetic_binary_high_dim(10000, 20, 17, start_index=50, split='train')
+        repeat = generate_synthetic_binary_high_dim(10000, 20, 17, start_index=50, split='train')
+        self.assertTrue(((first.features >= 0) & (first.features < 1)).all())
+        np.testing.assert_array_equal(first.labels, first.features.sum(axis=1) >= 10)
+        np.testing.assert_array_equal(np.bincount(first.labels), [5000, 5000])
+        np.testing.assert_array_equal(first.features, repeat.features)
+        np.testing.assert_array_equal(first.global_indices, repeat.global_indices)
+        np.testing.assert_array_equal(np.sort(first.global_indices), np.arange(50, 10050))
+        np.testing.assert_allclose(first.features.mean(axis=0), 0.5, atol=0.01)
+        np.testing.assert_allclose(first.features.std(axis=0), np.sqrt(1/12), atol=0.01)
+        changed = generate_synthetic_binary_high_dim(10000, 20, 18, split='train')
+        self.assertFalse(np.array_equal(first.features, changed.features))
+
+    def test_realized_rates_use_class_specific_observations(self) -> None:
+        from types import SimpleNamespace
+        from lnl_toolbox.training.importance_reweighting_experiment import _realized_noise_rates
+        manifest = SimpleNamespace(clean_targets=np.array([1, 1, 1, 0, 0]),
+            noisy_targets=np.array([0, 1, 1, 1, 0]))
+        self.assertEqual(_realized_noise_rates(manifest), (1/3, 1/2))
+        manifest.clean_targets = None
+        self.assertEqual(_realized_noise_rates(manifest), (None, None))
+        manifest.clean_targets = np.array([1, 1])
+        manifest.noisy_targets = np.array([1, 1])
+        self.assertEqual(_realized_noise_rates(manifest), (0., None))
+
+    def test_unknown_rates_are_published_as_null_not_configured_probabilities(self) -> None:
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from lnl_toolbox.training.importance_reweighting_experiment import run_importance_reweighting_experiment
+        config = _importance_reweighting_kliep_load_config()
+        config['noise']['name'] = 'native'
+        manifest = SimpleNamespace(clean_targets=None, noisy_targets=np.array([0, 1, 0, 1]),
+            dataset='fixture', dataset_fingerprint='observed', mapping_hash='mapping', noise_type='native',
+            num_classes=2, metadata={'label_convention':'zero_one'}, actual_rate=None)
+        batch = {'input':torch.ones(4, 20), 'target':torch.tensor([0, 1, 0, 1]), 'index':torch.arange(4)}
+        prepared = SimpleNamespace(dataset='fixture', manifest=manifest, data_fingerprint='fixture',
+            loader=lambda *args, **kwargs: [batch])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def finish():
+                (root/'final_metrics.json').write_text(json.dumps({'noise_rates':{
+                    'realized_rho_positive':float('nan'), 'realized_rho_negative':float('nan')}}))
+                return root
+
+            with patch('lnl_toolbox.training.importance_reweighting_experiment.prepare_experiment_data', return_value=prepared), \
+                 patch('lnl_toolbox.training.importance_reweighting_experiment.ImportanceReweightingAlgorithm') as algorithm:
+                algorithm.return_value.run.side_effect = finish
+                run_importance_reweighting_experiment(config, output_dir=root, requirements=object())
+                identity = algorithm.call_args.kwargs['manifest_identity']
+                self.assertNotIn('realized_rho_positive', identity)
+                self.assertNotIn('realized_rho_negative', identity)
+            for filename in ('noise_summary.json', 'final_metrics.json'):
+                text = (root/filename).read_text()
+                self.assertNotIn('NaN', text)
+                result = json.loads(text)
+                rates = result.get('noise_rates', result)
+                self.assertIsNone(rates['realized_rho_positive'])
+                self.assertIsNone(rates['realized_rho_negative'])
+
+    def test_web_model_constraint_and_scale_sources(self) -> None:
+        from web.command_console import _config_schema
+        registry = yaml.safe_load(Path('web/lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
+        parameters = registry['methods']['importance_reweighting']['parameters']
+        for path in ('data.train_size', 'data.test_size'):
+            self.assertEqual(parameters['paper'][path]['origin'], 'toolbox_default')
+        self.assertEqual(parameters['advanced']['model.name']['ui_control'], 'readonly')
+        schema = _config_schema('importance-reweighting-binary-high-dim')
+        field = next(field for field in schema['fields'] if field['path']=='model.name')
+        self.assertFalse(field['editable'])
+        self.assertEqual([choice['value'] for choice in field['choices']], ['linear'])
 
     def test_resume_rejects_backend_and_parameter_mismatch(self) -> None:
         config = _importance_reweighting_kliep_load_config()

@@ -25,6 +25,7 @@ from lnl_toolbox.training.checkpoint import (
 from lnl_toolbox.training.experiment import (
     _environment,
     _resolved_noise_config,
+    apply_epoch_beta1,
     bind_model_input,
     build_model,
     build_optimizer,
@@ -282,11 +283,13 @@ def run_coteaching_experiment(
 
     corruption_by_index = {
         int(index): bool(corrupted)
-        for index, corrupted in zip(manifest.global_indices, manifest.corruption_mask)
+        for index, corrupted in zip(manifest.global_indices, [] if manifest.clean_targets is None else manifest.corruption_mask)
     }
     metrics_path = run_dir / "metrics.jsonl"
     with metrics_path.open("a", encoding="utf-8") as metrics_file:
         for epoch in range(completed_epoch + 1, epochs):
+            for optimizer in (optimizer_a, optimizer_b):
+                apply_epoch_beta1(optimizer, config.get("scheduler"), epoch)
             state.cycle = epoch
             algorithm.on_cycle_start(state)
             sums: dict[str, float] = {}
@@ -323,10 +326,12 @@ def run_coteaching_experiment(
                 clean_selected_a += sum(
                     not corruption_by_index[int(index)]
                     for index in result.metadata["selected_by_a_indices"].tolist()
+                    if corruption_by_index
                 )
                 clean_selected_b += sum(
                     not corruption_by_index[int(index)]
                     for index in result.metadata["selected_by_b_indices"].tolist()
+                    if corruption_by_index
                 )
             algorithm.on_cycle_end(state)
             validation = _evaluate_peers(algorithm, validation_loader, criterion, device)
@@ -346,8 +351,8 @@ def run_coteaching_experiment(
                 "train_all_sample_loss_b": sums["all_sample_loss_b"] / samples,
                 "selected_by_a_count": selected_total_a,
                 "selected_by_b_count": selected_total_b,
-                "selected_clean_precision_a": clean_selected_a / selected_total_a,
-                "selected_clean_precision_b": clean_selected_b / selected_total_b,
+                "selected_clean_precision_a": clean_selected_a / selected_total_a if corruption_by_index else None,
+                "selected_clean_precision_b": clean_selected_b / selected_total_b if corruption_by_index else None,
                 "selection_overlap_rate": sums["selection_overlap_rate"] / samples,
                 "prediction_agreement_rate": sums["prediction_agreement_rate"] / samples,
                 "train_accuracy_a": sums["accuracy_a"] / samples,

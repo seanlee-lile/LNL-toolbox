@@ -85,11 +85,18 @@ def _pcse_pretrained_adapter__source(directory: Path) -> tuple[dict, torch.nn.Mo
 
 
 def _pcse_pretrained_adapter__standard_source(
-    directory: Path, adapter: str
+    directory: Path, adapter: str, *, samples: int = 20, zero_features: bool = False
 ) -> tuple[dict, torch.nn.Module]:
     model_config = {'name': 'resnet18', 'base_width': 16}
     model = build_model(model_config, 10)
-    labels = np.arange(20, dtype=np.int64) % 10
+    if zero_features:
+        # This fixture tests checkpoint wiring, not pretrained feature quality.
+        # Constant zero features give exact PSD moments, avoiding meaningless
+        # noisy moment recovery from random weights on identical images.
+        with torch.no_grad():
+            for parameter in model.parameters():
+                parameter.zero_()
+    labels = np.arange(samples, dtype=np.int64) % 10
     manifest = generate_symmetric(
         labels, 10, 0.4, 1, 'cifar10', sampling='per_class'
     )
@@ -468,7 +475,10 @@ _pcse_volmin_VOLMIN_CONFIG = _pcse_volmin_ROOT / 'configs/experiment/pcse_multic
 
 # --- merged from test_pcse_volmin.py ---
 def _pcse_volmin__config() -> dict:
-    return yaml.safe_load(_pcse_volmin_VOLMIN_CONFIG.read_text(encoding='utf-8'))
+    config = yaml.safe_load(_pcse_volmin_VOLMIN_CONFIG.read_text(encoding='utf-8'))
+    config['transition_stage']['parameterization'] = {
+        'name': 'sigmoid_off_diagonal', 'initial_weight': -3., 'seed': 3}
+    return config
 
 # --- merged from test_pcse_volmin.py ---
 def _pcse_volmin__algorithm(run_dir: Path) -> PCSEAlgorithm:
@@ -846,7 +856,7 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
             self.assertEqual(checkpoint['pretraining_source'], 'internal_training')
             self.assertTrue((run_dir / 'last.pt').is_file())
 
-    def test_config_requires_multilayer_and_valid_backend(self) -> None:
+    def test_config_accepts_single_layer_and_requires_valid_backend(self) -> None:
         config = _pcse_workflow__load_smoke_config()
         parsed = PCSEConfig.from_mapping(config)
         self.assertEqual(parsed.pretraining.method, 'cross_entropy')
@@ -854,14 +864,17 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
         self.assertEqual(tuple((layer.name for layer in parsed.feature_layers)), ('hidden1', 'hidden2'))
         single = deepcopy(config)
         single['feature_stage']['layers'] = [{'name': 'hidden1'}]
-        with self.assertRaisesRegex(ValueError, 'at least two'):
-            PCSEConfig.from_mapping(single)
+        self.assertEqual(len(PCSEConfig.from_mapping(single).feature_layers), 1)
+        empty = deepcopy(single)
+        empty['feature_stage']['layers'] = []
+        with self.assertRaisesRegex(ValueError, 'at least one'):
+            PCSEConfig.from_mapping(empty)
         binary = deepcopy(config)
         binary['data']['num_classes'] = 2
         with self.assertRaisesRegex(ValueError, 'num_classes >= 3'):
             PCSEConfig.from_mapping(binary)
         paper_backend = deepcopy(config)
-        paper_backend['transition_stage'] = {'name': 'paper_volmin', 'epochs': 2, 'lambda_volume': 0.001, 'optimizer': {'name': 'adamw', 'model_lr': 0.001, 'transition_lr': 0.01, 'weight_decay': 0.0}, 'scheduler': {'name': 'none'}, 'parameterization': {'name': 'diagonal_dominant', 'initial_flip_mass': 0.05, 'max_flip_mass': 0.49, 'temperature': 1.0, 'seed': 3}, 'determinant_tolerance': 1e-06, 'condition_limit': 1000000.0}
+        paper_backend['transition_stage'] = {'name': 'paper_volmin', 'epochs': 2, 'lambda_volume': 0.001, 'optimizer': {'name': 'adamw', 'model_lr': 0.001, 'transition_lr': 0.01, 'weight_decay': 0.0}, 'scheduler': {'name': 'none'}, 'parameterization': {'name': 'sigmoid_off_diagonal', 'initial_weight': -3., 'seed': 3}, 'determinant_tolerance': 1e-06, 'condition_limit': 1000000.0}
         parsed_paper = PCSEConfig.from_mapping(paper_backend)
         self.assertEqual(parsed_paper.transition_backend, 'paper_volmin')
         self.assertEqual(parsed_paper.transition_backend_config['lambda_volume'], 0.001)
@@ -873,6 +886,97 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
         self.assertEqual(config['pretraining_stage']['method'], 'cross_entropy')
         self.assertEqual(config['noise']['mode'], 'generated')
         self.assertNotIn('source', config['pretraining_stage'])
+
+    def test_paper_volmin_can_express_sixty_percent_symmetric_noise(self) -> None:
+        from lnl_toolbox.algorithms.pcse.volmin import PaperVolMinTransition, paper_volmin_objective
+        classes = 10
+        # Unnormalized diagonal = 1; off-diagonal = T_ij / T_ii.
+        q = (0.6/(classes-1))/0.4
+        model = PaperVolMinTransition(classes, initial_weight=float(np.log(q/(1-q))))
+        transition = model.matrix()
+        expected = torch.full((classes, classes), 0.6/(classes-1), dtype=torch.float64)
+        expected.fill_diagonal_(0.4)
+        torch.testing.assert_close(transition, expected)
+        logits = torch.randn(20, classes, dtype=torch.float64, requires_grad=True)
+        objective, _ = paper_volmin_objective(logits, torch.arange(20)%classes, transition,
+            lambda_volume=.001, determinant_tolerance=1e-6, condition_limit=1e6)
+        noisy = torch.softmax(logits, 1) @ expected
+        reference = -torch.log(noisy[torch.arange(20), torch.arange(20)%classes]).mean() + .001*torch.linalg.slogdet(expected)[1]
+        torch.testing.assert_close(objective, reference)
+        objective.backward()
+        self.assertTrue(torch.isfinite(model.off_diagonal_logits.grad).all())
+        self.assertTrue(torch.isfinite(logits.grad).all())
+
+    def test_single_layer_real_workflow_save_and_completed_resume(self) -> None:
+        config = _pcse_volmin__config()
+        config['pretraining_stage']['epochs'] = 1
+        config['transition_stage']['epochs'] = 1
+        config['ensemble_stage']['epochs'] = 1
+        config['feature_stage']['layers'] = [{'name':'hidden2'}]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_pcse_experiment(config, output_dir=root)
+            artifact = PCSEEnsembleArtifact.load(root/'pcse_ensemble.npz')
+            self.assertEqual(artifact.layer_names, ('hidden2',))
+            np.testing.assert_array_equal(artifact.weights, [1.])
+            names = ('pcse_statistics.npz', 'pcse_gda.npz', 'pcse_ensemble.npz', 'final_metrics.json')
+            before = {name:(root/name).read_bytes() for name in names}
+            run_pcse_experiment(config, resume=root/'last.pt')
+            self.assertEqual(before, {name:(root/name).read_bytes() for name in names})
+            metrics = json.loads((root/'final_metrics.json').read_text())
+            self.assertTrue(np.isfinite(metrics['test_accuracy']))
+
+    def test_main_runner_adopts_ce_and_coteaching_and_finishes_single_layer(self) -> None:
+        from lnl_toolbox.data.cifar import CifarData
+        for adapter in ('supervised_best', 'coteaching_peer_a_best'):
+            with self.subTest(adapter=adapter), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source_dir = root/'source'
+                source_dir.mkdir()
+                source, _ = _pcse_pretrained_adapter__standard_source(source_dir, adapter, samples=100, zero_features=True)
+                config = yaml.safe_load((_pcse_workflow_ROOT/'configs/reproduction/cifar10_pcse_reproduction.yaml').read_text(encoding='utf-8'))
+                config['data'].update({'root':str(root), 'validation_size':10})
+                config['pretraining_stage'].update({'mode':'external_checkpoint', 'epochs':0,
+                    'model':source['model'], 'source':source})
+                config['feature_stage']['layers'] = [{'name':'layer4', 'pooling':'global_average'}]
+                config['ensemble_stage']['epochs'] = 1
+                config['loader'].update({'batch_size':32, 'num_workers':0, 'pin_memory':False})
+                config['trainer']['device'] = 'cpu'
+
+                def data(_root, split):
+                    size = 100 if split == 'train' else 20
+                    return CifarData(np.zeros((size,32,32,3),dtype=np.uint8), np.arange(size)%10,
+                        tuple(map(str,range(10))), split, 'cifar10')
+
+                with mock.patch.dict(os.environ, {'PCSE_TEST_SOURCE':str(source_dir)}), \
+                     mock.patch('lnl_toolbox.data.sources.load_cifar10', side_effect=data):
+                    run_dir = run_pcse_experiment(config, output_dir=root/'run')
+                    metrics = json.loads((run_dir/'final_metrics.json').read_text())
+                    self.assertTrue(np.isfinite(metrics['test_accuracy']))
+                    self.assertEqual(PCSEEnsembleArtifact.load(run_dir/'pcse_ensemble.npz').weights.tolist(), [1.])
+                    payload = read_checkpoint(run_dir/'last.pt', 'cpu')
+                    self.assertEqual(payload['external_source_provenance']['adapter'], adapter)
+                    self.assertEqual(payload['pretraining_source'], adapter)
+                    before = (run_dir/'pcse_ensemble.npz').read_bytes()
+                    run_pcse_experiment(config, resume=run_dir/'last.pt')
+                    self.assertEqual((run_dir/'pcse_ensemble.npz').read_bytes(), before)
+
+    def test_pcse_formal_web_schema_matches_new_parameterization(self) -> None:
+        from web.command_console import _config_schema
+        config = yaml.safe_load((_pcse_workflow_ROOT/'configs/reproduction/cifar10_pcse_reproduction.yaml').read_text(encoding='utf-8'))
+        parsed = PCSEConfig.from_mapping(config)
+        self.assertEqual(parsed.transition_backend_config['parameterization']['name'], 'sigmoid_off_diagonal')
+        registry = yaml.safe_load((_pcse_workflow_ROOT/'web/lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
+        method = registry['methods']['pcse']
+        self.assertEqual(method['parameters']['advanced']['transition_stage.parameterization.seed']['current'], 1)
+        self.assertEqual(sum(len(group) for group in method['parameters'].values()), method['coverage']['parameter_count'])
+        for group, entries in method['parameters'].items():
+            self.assertEqual(len(entries), method['coverage']['by_level'][group])
+        schema = _config_schema('cifar10-pcse-reproduction')
+        fields = {field['path']:field for field in schema['fields']}
+        self.assertEqual(fields['transition_stage.parameterization.name']['value'], 'sigmoid_off_diagonal')
+        self.assertEqual(fields['transition_stage.parameterization.initial_weight']['value'], config['transition_stage']['parameterization']['initial_weight'])
+        self.assertNotIn('transition_stage.parameterization.max_flip_mass', fields)
         self.assertEqual(PCSEConfig.from_mapping(config).pretraining.mode, 'train')
 
     def test_external_checkpoint_config_is_strict_and_train_mode_unchanged(self) -> None:

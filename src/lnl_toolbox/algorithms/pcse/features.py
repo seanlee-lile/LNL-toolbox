@@ -24,8 +24,8 @@ class PCSEFeatureCollection:
     snapshots: tuple[FeatureSnapshot, ...]
 
     def __post_init__(self) -> None:
-        if len(self.layer_names) < 2 or len(self.layer_names) != len(self.snapshots):
-            raise ValueError("PCSE requires aligned snapshots for at least two layers")
+        if not self.layer_names or len(self.layer_names) != len(self.snapshots):
+            raise ValueError("PCSE requires aligned snapshots for at least one layer")
         reference = self.snapshots[0]
         for snapshot in self.snapshots[1:]:
             if not np.array_equal(snapshot.global_indices, reference.global_indices):

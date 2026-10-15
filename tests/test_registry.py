@@ -558,10 +558,11 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
         self.assertIsNone(multi_model.requirements({}))
         self.assertEqual(multi_model.requirements({'algorithm': {'name': 'jocor'}}).method, 'jocor')
 
-    def test_remaining_papers_reject_observed_only_native_noise(self) -> None:
+    def test_all_papers_check_dependencies_not_native_noise_origin(self) -> None:
         native_noise = NoiseKnowledge(status=NoiseStatus.NOISY, origin=NoiseOrigin.NATIVE, rate=NoiseRateInfo())
         papers = {paper.id: paper for paper in load_papers()}
-        for paper_id in {'binary-risk', 'loss-correction', 'l2rw', 'mentornet', 'dual-t', 'jocor', 'cdr', 'cwd', 'mc-ldce', 'dss', 'fine'}:
+        self.assertEqual(len(papers), 26)
+        for paper_id in papers:
             with self.subTest(paper=paper_id):
                 _, recipe = default_paper_config(papers[paper_id])
                 config = load_recipe_config(recipe)
@@ -570,7 +571,12 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
                 classes = next(iter(requirements.exact_classes)) if requirements.exact_classes else max(2, requirements.min_classes or 2)
                 capabilities = resolve_dataset_capabilities(_compatibility__profile(modality=modality, classes=classes, clean=KnowledgeState.UNAVAILABLE, clean_validation=KnowledgeState.UNAVAILABLE, noise=native_noise))
                 result = resolve_compatibility(capabilities, requirements)
-                self.assertEqual(result.status, CompatibilityStatus.INCOMPATIBLE)
+                self.assertNotIn('unsupported_native_noise', {reason.code for reason in result.reasons})
+                self.assertNotIn('missing_noise_manifest', {reason.code for reason in result.reasons})
+                if requirements.requires_method_noise_prior:
+                    self.assertIn('noise_rate_prior', result.required_user_inputs)
+                if requirements.requires_clean_train_labels:
+                    self.assertEqual(result.status, CompatibilityStatus.INCOMPATIBLE)
 
     def test_cal_accepts_observed_only_native_noise(self) -> None:
         native_noise = NoiseKnowledge(status=NoiseStatus.NOISY, origin=NoiseOrigin.NATIVE, rate=NoiseRateInfo())
@@ -705,7 +711,7 @@ class _compatibility_ExperimentCompatibilityServiceTest(unittest.TestCase):
         service = ExperimentService(data_service=data_service)
         config = {'method': 'upm', 'execution': {'runner': 'upm'}, 'data': {'name': 'fixture'}}
         with patch('lnl_toolbox.catalog.validate_config', return_value=runner):
-            with self.assertRaisesRegex(ValueError, 'missing_noise_manifest'):
+            with self.assertRaisesRegex(ValueError, 'requires_noisy_training_labels'):
                 service.preflight(config, check_data=True)
         runner.invoke.assert_not_called()
 

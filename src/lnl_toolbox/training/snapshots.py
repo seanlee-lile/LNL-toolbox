@@ -3,6 +3,7 @@ from __future__ import annotations
 """Deterministic model snapshots consumed by offline noise estimators."""
 
 from collections.abc import Iterable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
 import json
@@ -205,21 +206,49 @@ def pretrain_noisy_classifier(
     *,
     epochs: int,
     criterion: nn.Module | None = None,
+    validation_loader=None,
+    scheduler=None,
+    checkpoint_dir: str | Path | None = None,
+    checkpoint_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Shared noisy-label warm-up using only observed targets."""
 
     if epochs < 0:
         raise ValueError("warm-up epochs must be non-negative")
-    criterion = criterion or nn.CrossEntropyLoss()
+    criterion = criterion or nn.CrossEntropyLoss(reduction="none" if validation_loader is not None else "mean")
     resolved_device = torch.device(device)
     model.to(resolved_device)
     criterion.to(resolved_device)
     was_training = model.training
     model.train()
     steps = 0
+    completed_epoch = -1
+    best_loss = float("inf")
+    best_epoch = -1
+    best_model = None
+    destination = None if checkpoint_dir is None else Path(checkpoint_dir)
+    identity = dict(checkpoint_identity or {})
+    if destination is not None:
+        from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, restore_rng_state
+
+        previous = destination / "pretraining_last.pt"
+        if previous.is_file():
+            payload = torch.load(previous, map_location=resolved_device, weights_only=False)
+            if payload.get("identity") != identity or payload.get("epochs") != epochs:
+                raise ValueError("Loss Correction pretraining checkpoint configuration changed")
+            model.load_state_dict(payload["model"])
+            optimizer.load_state_dict(payload["optimizer"])
+            if scheduler is not None:
+                scheduler.load_state_dict(payload["scheduler"])
+            completed_epoch, steps = int(payload["completed_epoch"]), int(payload["steps"])
+            best_loss, best_epoch = float(payload["best_loss"]), int(payload["best_epoch"])
+            best_model = torch.load(destination / "pretraining_best.pt", map_location=resolved_device, weights_only=False)["model"]
+            restore_rng_state(payload["rng_state"])
     try:
-        for _ in range(epochs):
-            for batch in loader:
+        for epoch in range(completed_epoch + 1, epochs):
+            model.train()
+            epoch_loader = loader(epoch) if callable(loader) else loader
+            for batch in epoch_loader:
                 inputs = _batch_tensor(batch, "input").to(resolved_device)
                 targets = _batch_tensor(batch, "target").to(resolved_device)
                 loss = criterion(model(inputs), targets)
@@ -229,6 +258,36 @@ def pretrain_noisy_classifier(
                 loss.backward()
                 optimizer.step()
                 steps += 1
+            validation_loss = None
+            if validation_loader is not None:
+                from lnl_toolbox.evaluation.classification import evaluate_classification
+
+                validation_loss = evaluate_classification(model, validation_loader, criterion, resolved_device)["loss"]
+                if not np.isfinite(validation_loss):
+                    raise ValueError("CE pretraining validation loss must be finite")
+            if (validation_loader is not None or destination is not None) and (validation_loss is None or validation_loss < best_loss):
+                best_loss = float("inf") if validation_loss is None else float(validation_loss)
+                best_epoch = epoch
+                best_model = deepcopy(model.state_dict())
+                if destination is not None:
+                    atomic_save({"model": best_model, "epoch": epoch, "validation_loss": validation_loss}, destination / "pretraining_best.pt")
+            if scheduler is not None:
+                scheduler.step()
+            if destination is not None:
+                atomic_save({
+                    "identity": identity, "epochs": epochs, "completed_epoch": epoch,
+                    "model": model.state_dict(), "optimizer": optimizer.state_dict(),
+                    "scheduler": None if scheduler is None else scheduler.state_dict(),
+                    "rng_state": capture_rng_state(), "steps": steps,
+                    "best_loss": best_loss, "best_epoch": best_epoch,
+                }, destination / "pretraining_last.pt")
+                print(json.dumps({"event": "pretraining_epoch", "stage": "pretraining", "epoch": epoch + 1,
+                                  "total_epochs": epochs, "validation_loss": validation_loss}), flush=True)
+        if validation_loader is not None and best_model is not None:
+            model.load_state_dict(best_model)
     finally:
         model.train(was_training)
-    return {"epochs": int(epochs), "steps": int(steps)}
+    summary = {"epochs": int(epochs), "steps": int(steps)}
+    if validation_loader is not None:
+        summary.update({"best_epoch": best_epoch + 1, "best_validation_loss": best_loss})
+    return summary

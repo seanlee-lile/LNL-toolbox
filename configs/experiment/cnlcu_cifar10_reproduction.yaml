@@ -12,8 +12,8 @@ data:
   validation_split:
     strategy: stratified
     rng: default_rng
-  augment: true
-  preprocessing: standard
+  augment: false
+  preprocessing: tensor_only
 noise:
   name: symmetric
   rate: 0.2
@@ -35,6 +35,8 @@ scheduler:
   name: linear_after
   start_epoch: 80
   end_epoch: 200
+  beta1_before: 0.9
+  beta1_after: 0.1
 cnlcu:
   variant: soft
   model_count: 2
@@ -47,10 +49,10 @@ cnlcu:
     end: 0.8
     gradual_epochs: 10
   history:
-    window_size: 5
+    window_size: 3
     storage_dtype: float32
   uncertainty:
-    sigma_squared: 0.01
+    sigma_squared: 0.0001
   selection:
     count_rule: floor
     tie_break: stable_sample_index

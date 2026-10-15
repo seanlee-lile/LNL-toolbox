@@ -199,19 +199,15 @@ def run_fine_experiment(
             mode=noise_mode(config),
         )
     loader_config = config["loader"]
-    train_loader = prepared.loader(DataRole.TRAIN)
     target_map = {
         int(index): int(target)
         for index, target in zip(prepared.train_indices, prepared.noisy_targets)
     }
-    snapshot_loader = prepared.loader_for_dataset(
-        prepared.dynamic_dataset(
-            prepared.train_indices,
-            views=("weak",),
-            targets_by_index=target_map,
-            training=False,
-        ),
-        shuffle=False,
+    snapshot_dataset = prepared.dynamic_dataset(
+        prepared.train_indices,
+        views=("weak",),
+        targets_by_index=target_map,
+        training=True,
     )
     evaluation_batch_size = int(
         config.get("evaluation", {}).get("batch_size", loader_config["batch_size"])
@@ -259,8 +255,8 @@ def run_fine_experiment(
         num_classes, float(fine_config.get("momentum_scr", 0.99))
     )
     regularizer = FINERegularizer(
-        beta=float(fine_config.get("beta", 0.1)),
-        gamma=float(fine_config.get("gamma", 0.002)),
+        beta=float(fine_config.get("beta", 0.001)),
+        gamma=float(fine_config.get("gamma", 0.1)),
         probability_floor=float(fine_config.get("probability_floor", 1e-7)),
         seed=seed,
     )
@@ -290,6 +286,12 @@ def run_fine_experiment(
         if checkpoint is not None and checkpoint.get("scheduler") is not None:
             scheduler.load_state_dict(checkpoint["scheduler"])
     for epoch in range(start_epoch, epochs):
+        # Epoch-derived loader seeds make interrupted training reproducible,
+        # including augmentation workers and batch order.
+        train_loader = prepared.loader(DataRole.TRAIN, epoch=epoch)
+        snapshot_loader = prepared.loader_for_dataset(
+            snapshot_dataset, shuffle=False, epoch=epoch, stream=1000,
+        )
         if epoch == warmup_epochs:
             for group in optimizer.param_groups:
                 group["lr"] = float(config["optimizer"]["lr"])
@@ -338,6 +340,9 @@ def run_fine_experiment(
                 "validation_loss": validation["loss"],
                 "validation_accuracy": validation["accuracy"],
             })
+        # Report each epoch for the paper's last-ten mean, never for selection.
+        test = evaluate_classification(model, test_loader, criterion, device)
+        row_values.update({"test_loss": test["loss"], "test_accuracy": test["accuracy"]})
         row = standardize_epoch_row(
             row_values, require_validation=validation_loader is not None
         )
@@ -369,12 +374,16 @@ def run_fine_experiment(
     )
     if rows:
         write_training_curves_svg(rows, run_dir / "training_curves.svg")
-    test = evaluate_classification(model, test_loader, criterion, device)
+    if not rows:
+        raise ValueError("FINE requires at least one completed epoch for reporting")
+    tail = rows[-10:]
     final_row = {
         "event": "final",
         "completed_epochs": epochs,
-        "test_loss": test["loss"],
-        "test_accuracy": test["accuracy"],
+        "test_loss": rows[-1]["test_loss"],
+        "test_accuracy": rows[-1]["test_accuracy"],
+        "last_10_test_accuracy": sum(row["test_accuracy"] for row in tail) / len(tail),
+        "epochs_averaged": len(tail),
         "selection_split": "none",
         "test_selection_leakage": False,
         "method": "fine_sed",

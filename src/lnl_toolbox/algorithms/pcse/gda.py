@@ -157,8 +157,8 @@ def fit_ensemble_weights(
     if probabilities.ndim != 3:
         raise ValueError("layer probabilities must have shape [L,N,C]")
     layers, samples, classes = probabilities.shape
-    if layers < 2 or samples == 0 or classes < 3:
-        raise ValueError("PCSE ensemble requires L>=2, N>0 and C>=3")
+    if layers < 1 or samples == 0 or classes < 3:
+        raise ValueError("PCSE ensemble requires L>=1, N>0 and C>=3")
     if targets.shape != (samples,) or targets.min() < 0 or targets.max() >= classes:
         raise ValueError("PCSE ensemble noisy targets must have shape [N]")
     if not torch.isfinite(probabilities).all() or bool(

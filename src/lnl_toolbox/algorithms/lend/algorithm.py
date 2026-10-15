@@ -79,9 +79,14 @@ class LENDAlgorithm:
             adjacency, zero_degree_policy=self.method_config.zero_degree_policy
         )
         onehot = functional.one_hot(targets, self.num_classes).to(features.dtype).detach()
+        dilution_diagnostics: dict[str, float] = {}
         current = dilute_labels(
             onehot, graph.to(dtype=onehot.dtype), alpha=self.method_config.alpha,
             steps=self.method_config.dilution_steps,
+            policy=self.method_config.dilution_policy,
+            tolerance=self.method_config.dilution_tolerance,
+            max_steps=self.method_config.dilution_max_steps,
+            diagnostics=dilution_diagnostics,
         )
         proposal = self.private_state.history.propose(
             indices, current, epoch=state.cycle, beta=self.method_config.beta
@@ -114,6 +119,7 @@ class LENDAlgorithm:
         agreement = selected.float().mean()
         predictions = logits.detach().argmax(dim=1)
         metrics = {
+            **{f"dilution_{key}": value for key, value in dilution_diagnostics.items()},
             "samples": float(count),
             "selected_samples": float(selected_count),
             "selected_ratio": float(agreement.item()),

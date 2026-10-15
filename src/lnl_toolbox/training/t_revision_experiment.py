@@ -116,7 +116,7 @@ def run_t_revision_experiment(
         raise ValueError("T-Revision requires an enabled noisy-label manifest")
     if manifest.num_classes != num_classes:
         raise ValueError("T-Revision noise manifest class count mismatch")
-    if manifest.transition_matrix is None or manifest.per_sample_transition is not None:
+    if manifest.per_sample_transition is not None:
         raise ValueError(
             "T-Revision requires one fixed class-dependent transition matrix; "
             "sample-dependent transitions are unsupported"

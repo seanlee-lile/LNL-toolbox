@@ -50,8 +50,12 @@ lend:
     normalize_features: false
   dilution:
     alpha: 0.99
-    policy: fixed_steps
+    policy: until_converged
+    # Only used if the user explicitly chooses the fixed_steps variant.
     steps: 10
+    # Numerical stopping settings are toolbox choices, not paper-specified values.
+    tolerance: 1.0e-5
+    max_steps: 1000
   history:
     beta: 0.9
     first_observation: current

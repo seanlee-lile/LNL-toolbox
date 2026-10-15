@@ -256,6 +256,32 @@ class _cdr_CDRUpdatePolicyTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'does not match'):
                 load_checkpoint(path, standard_algorithm, torch.device('cpu'))
 
+    def test_web_noise_prior_is_independent_and_l1_explanation_covers_both_groups(self) -> None:
+        from web import command_console
+        from lnl_toolbox.catalog import load_yaml
+        recipe = 'cifar10-symmetric-cdr-reproduction'
+        fields = {field['path']: field for field in command_console._config_schema(recipe)['fields']}
+        self.assertEqual(fields['parameter_update.noise_rate']['linked_fields'], [])
+        self.assertEqual(fields['noise.rate']['linked_fields'], [])
+        self.assertIn('关键和非关键', fields['parameter_update.l1_decay']['note'])
+        self.assertIn('L2', fields['parameter_update.compatibility_mode']['note'])
+        for edited, other, value in (
+            ('parameter_update.noise_rate', 'noise.rate', .2),
+            ('noise.rate', 'parameter_update.noise_rate', .3),
+        ):
+            with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+                saved = command_console._save_config({
+                    'recipe': recipe, 'path': str(Path(directory) / 'cdr.yaml'),
+                    'patches': [{'path': edited, 'value': value}],
+                    'acknowledge_paper_impact': True,
+                })
+                config = load_yaml(command_console.ROOT / saved['path'])
+                section, key = edited.split('.')
+                self.assertEqual(config[section][key], value)
+                section, key = other.split('.')
+                self.assertEqual(config[section][key], .4)
+                _validate_supervised_config(config)
+
     def test_runner_validates_cdr_optimizer_and_noise_contracts(self) -> None:
         base = {'optimizer': {'name': 'sgd', 'lr': 0.01, 'momentum': 0.0, 'weight_decay': 0.0}, 'noise': {'name': 'symmetric', 'rate': 0.4}, 'parameter_update': {'name': 'cdr', 'noise_rate': 0.4, 'l1_decay': 0.001}}
         _validate_supervised_config(base)
@@ -269,8 +295,10 @@ class _cdr_CDRUpdatePolicyTest(unittest.TestCase):
         self.assertEqual(invalid_momentum['optimizer']['momentum'], 0.9)
         with self.assertRaisesRegex(ValueError, 'weight_decay=0'):
             _validate_supervised_config({**base, 'optimizer': {'name': 'sgd', 'lr': 0.01, 'momentum': 0.0, 'weight_decay': 0.1}})
-        with self.assertRaisesRegex(ValueError, 'noise\\.rate=0\\.2.*parameter_update\\.noise_rate=0\\.4'):
-            _validate_supervised_config({**base, 'noise': {'name': 'symmetric', 'rate': 0.2}})
+        independent_rates = {**base, 'noise': {'name': 'symmetric', 'rate': 0.2}}
+        _validate_supervised_config(independent_rates)
+        self.assertEqual(independent_rates['noise']['rate'], 0.2)
+        self.assertEqual(independent_rates['parameter_update']['noise_rate'], 0.4)
         with self.assertRaisesRegex(ValueError, 'parameter_update'):
             _validate_resume_config(base, {**base, 'parameter_update': {'name': 'cdr', 'noise_rate': 0.2, 'l1_decay': 0.001}})
         official = {**base, 'optimizer': {'name': 'sgd', 'lr': 0.01, 'momentum': 0.9, 'weight_decay': 0.1}, 'parameter_update': {'name': 'cdr', 'noise_rate': 0.4, 'l1_decay': 0.0, 'compatibility_mode': 'official_code'}}
@@ -334,10 +362,11 @@ class _cdr_reproduction_CDRReproductionTest(unittest.TestCase):
         self.assertEqual(config['noise']['validation_targets'], 'noisy')
         self.assertEqual(config['noise']['sampling'], 'transition')
         self.assertEqual(config['noise']['seed'], config['seed'])
-        self.assertEqual(config['parameter_update']['compatibility_mode'], 'paper')
-        self.assertEqual(config['parameter_update']['critical_scope'], 'all_trainable')
-        self.assertEqual(config['optimizer']['weight_decay'], 0.0)
-        self.assertEqual(config['optimizer']['momentum'], 0.0)
+        self.assertEqual(config['parameter_update']['compatibility_mode'], 'official_code')
+        self.assertEqual(config['parameter_update']['critical_scope'], 'matrix_and_convolution_weights')
+        self.assertEqual(config['parameter_update']['l1_decay'], 0.0)
+        self.assertEqual(config['optimizer']['weight_decay'], 0.001)
+        self.assertEqual(config['optimizer']['momentum'], 0.9)
         self.assertEqual(config['model']['name'], 'resnet50')
         self.assertEqual(config['model']['stem_padding'], 0)
         self.assertEqual(config['model']['initialization'], 'torch_default')
@@ -345,9 +374,89 @@ class _cdr_reproduction_CDRReproductionTest(unittest.TestCase):
         model = build_model(config['model'], 10)
         optimizer = build_optimizer(model, config['optimizer'])
         policy = build_builtin_parameter_update_policy(config['parameter_update'])
-        self.assertEqual(policy.compatibility_mode, 'paper')
-        self.assertEqual(optimizer.param_groups[0]['momentum'], 0.0)
-        self.assertEqual(optimizer.param_groups[0]['weight_decay'], 0.0)
+        self.assertEqual(policy.compatibility_mode, 'official_code')
+        self.assertEqual(optimizer.param_groups[0]['momentum'], 0.9)
+        self.assertEqual(optimizer.param_groups[0]['weight_decay'], 0.001)
+
+    def test_scratch_author_updates_match_runner_and_resume_with_momentum(self) -> None:
+        from copy import deepcopy
+        from lnl_toolbox.scratch.context import ScratchContext
+        from lnl_toolbox.scratch.blocks.parameter import parameter_criticality_mask, masked_gradient_update
+        runner = torch.nn.Linear(2, 2)
+        with torch.no_grad():
+            runner.weight.copy_(torch.tensor([[2., -1.], [0., 4.]]))
+            runner.bias.copy_(torch.tensor([1., -1.]))
+        scratch = deepcopy(runner)
+        models = [runner, scratch]
+        optimizers = [torch.optim.SGD(m.parameters(), lr=.01, momentum=.9, weight_decay=.001) for m in models]
+        policy = CDRUpdatePolicy(.4, 0., compatibility_mode='official_code')
+        saved = None
+        for step in range(3):
+            weights = torch.tensor([[1., 3.], [9., -.25]]) if step != 1 else torch.tensor([[.01, .01], [9., 8.]])
+            def objective(model):
+                return (model.weight * weights).sum() + (model.bias * torch.tensor([2., -3.])).sum()
+            policy.update(ParameterUpdateInput(objective(runner), runner, optimizers[0], RunState()))
+            optimizers[1].zero_grad(set_to_none=True)
+            objective(scratch).backward()
+            ctx = ScratchContext(model=scratch)
+            parameter_criticality_mask(ctx, noise_rate=.4, compatibility_mode='official_code')
+            masked_gradient_update(ctx, scale=.6, l1_decay=0.)
+            optimizers[1].step()
+            for left, right in zip(runner.parameters(), scratch.parameters()):
+                torch.testing.assert_close(left, right, rtol=0, atol=0)
+            if step == 0:
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / 'resume.pt'
+                    torch.save({'model': runner.state_dict(), 'optimizer': optimizers[0].state_dict(), 'policy': policy.state_dict()}, path)
+                    saved = torch.load(path, weights_only=False)
+                resumed = torch.nn.Linear(2, 2)
+                resumed.load_state_dict(saved['model'])
+                resumed_optimizer = torch.optim.SGD(resumed.parameters(), lr=.01, momentum=.9, weight_decay=.001)
+                resumed_optimizer.load_state_dict(saved['optimizer'])
+                resumed_policy = CDRUpdatePolicy(.4, 0., compatibility_mode='official_code')
+                resumed_policy.load_state_dict(saved['policy'])
+            else:
+                resumed_policy.update(ParameterUpdateInput(objective(resumed), resumed, resumed_optimizer, RunState()))
+                for left, right in zip(runner.parameters(), resumed.parameters()):
+                    torch.testing.assert_close(left, right, rtol=0, atol=0)
+
+    def test_formal_scratch_and_web_share_experiment_defaults(self) -> None:
+        from web import command_console
+        root = Path(__file__).resolve().parents[1]
+        config = yaml.safe_load((root / 'configs/experiment/cifar10_symmetric_cdr_reproduction.yaml').read_text(encoding='utf-8'))
+        recipe = yaml.safe_load((root / 'src/lnl_toolbox/scratch/recipes/papers/cdr.yaml').read_text(encoding='utf-8'))
+        def flatten(steps):
+            for step in steps:
+                yield step
+                yield from flatten(step.get('steps', []))
+        blocks = {step['block']: step.get('params', {}) for step in flatten(recipe['steps'])}
+        for key in ['lr', 'momentum', 'weight_decay']:
+            self.assertEqual(blocks['create_optimizer'][key], config['optimizer'][key])
+        for key in ['stem_padding', 'initialization']:
+            self.assertEqual(blocks['create_model'][key], config['model'][key])
+        self.assertEqual(blocks['epoch_loop']['epochs'], 100)
+        self.assertEqual(blocks['parameter_criticality_mask']['compatibility_mode'], 'official_code')
+        self.assertEqual(blocks['masked_gradient_update']['l1_decay'], 0.)
+        fields = {field['path']: field for field in command_console._config_schema('cifar10-symmetric-cdr-reproduction')['fields']}
+        for key in ['momentum', 'weight_decay']:
+            self.assertEqual(fields['optimizer.' + key]['value'], config['optimizer'][key])
+        self.assertEqual(fields['parameter_update.compatibility_mode']['value'], 'official_code')
+        self.assertEqual(fields['parameter_update.l1_decay']['value'], 0.)
+        metadata = yaml.safe_load((root / 'web/lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
+        # Find the paper node rather than depending on a particular registry root layout.
+        def find_cdr(value):
+            if isinstance(value, dict):
+                if 'cdr' in value and isinstance(value['cdr'], dict) and 'parameters' in value['cdr']:
+                    return value['cdr']
+                for child in value.values():
+                    found = find_cdr(child)
+                    if found is not None:
+                        return found
+            return None
+        paper = find_cdr(metadata)
+        self.assertEqual(paper['parameters']['advanced']['noise.rng']['current'], 'numpy_legacy')
+        self.assertEqual(paper['parameters']['advanced']['optimizer.momentum']['current'], .9)
+        self.assertEqual(paper['parameters']['advanced']['optimizer.weight_decay']['current'], .001)
 
     def test_smoke_config_uses_strict_paper_optimizer_contract(self) -> None:
         path = Path(__file__).resolve().parents[1] / 'configs' / 'experiment' / 'cifar10_symmetric_cdr_smoke.yaml'
@@ -357,3 +466,37 @@ class _cdr_reproduction_CDRReproductionTest(unittest.TestCase):
         self.assertEqual(config['optimizer']['weight_decay'], 0.0)
         self.assertEqual(config['noise']['rate'], config['parameter_update']['noise_rate'])
         _validate_supervised_config(config)
+
+    def test_scratch_cdr_recipe_applies_explicit_normalization(self) -> None:
+        from lnl_toolbox.scratch.context import ScratchContext
+        from lnl_toolbox.scratch.data_runtime import ScratchSample, ScratchSplit
+        from lnl_toolbox.scratch.blocks.data import configure_preprocessing, configure_views
+        root = Path(__file__).resolve().parents[1]
+        recipe = yaml.safe_load((root / 'src/lnl_toolbox/scratch/recipes/papers/cdr.yaml').read_text(encoding='utf-8'))
+        config = yaml.safe_load((root / 'configs/experiment/cifar10_symmetric_cdr_reproduction.yaml').read_text(encoding='utf-8'))
+        params = next(step['params'] for step in recipe['steps'] if step['block'] == 'configure_preprocessing')
+        self.assertEqual(params['options']['normalization'], config['data']['normalization'])
+        source = ScratchSplit('cifar10', 'train', (ScratchSample(torch.zeros(3, 32, 32), 0, 0, 0),), 10)
+        ctx = ScratchContext(train_split=source)
+        configure_preprocessing(ctx, **params)
+        operations = ctx['preprocessing_transform'].transforms
+        self.assertEqual([type(op).__name__ for op in operations], ['RandomCrop', 'RandomHorizontalFlip', 'Lambda', 'Normalize'])
+        configure_views(ctx, views=['weak'])
+        expected = (-torch.tensor(config['data']['normalization']['mean']) / torch.tensor(config['data']['normalization']['std']))[:, None, None].expand(3, 32, 32)
+        torch.testing.assert_close(ctx['preprocessing_transform'](source.samples[0].input), expected)
+        torch.testing.assert_close(ctx['view_transforms']['weak'](source.samples[0].input), expected)
+
+    def test_scratch_standard_default_normalization_is_unchanged(self) -> None:
+        from lnl_toolbox.scratch.data_runtime import ScratchSample, ScratchSplit, build_transforms
+        value = torch.full((3, 32, 32), .5)
+        source = ScratchSplit('cifar10', 'train', (ScratchSample(value, 0, 0, 0),), 10)
+        transform, _ = build_transforms({'name': 'standard', 'augment': False}, source)
+        expected = ((.5 - torch.tensor([.49139968, .48215827, .44653124])) / torch.tensor([.24703233, .24348505, .26158768]))[:, None, None].expand_as(value)
+        torch.testing.assert_close(transform(value), expected)
+
+    def test_scratch_rejects_invalid_explicit_normalization(self) -> None:
+        from lnl_toolbox.scratch.data_runtime import ScratchSample, ScratchSplit, build_transforms
+        source = ScratchSplit('cifar10', 'train', (ScratchSample(torch.zeros(3, 32, 32), 0, 0, 0),), 10)
+        for settings in [[], {}, {'mean': [], 'std': []}, {'mean': [0, 0], 'std': [1]}, {'mean': [float('nan')], 'std': [1]}, {'mean': [0], 'std': [0]}, {'mean': [0], 'std': [-1]}, {'mean': [0], 'std': [float('inf')]}]:
+            with self.subTest(settings=settings), self.assertRaisesRegex(ValueError, 'normalization'):
+                build_transforms({'name': 'standard', 'normalization': settings}, source)

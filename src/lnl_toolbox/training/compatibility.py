@@ -509,17 +509,14 @@ def resolve_compatibility(
 
     if method.requires_clean_validation:
         clean_validation = dataset.clean_validation_labels
-        has_protocol_test = "test" in dataset.available_splits
         if (
             clean_validation is KnowledgeState.UNAVAILABLE
-            and dataset.clean_train_labels is not KnowledgeState.AVAILABLE
-            and not has_protocol_test
+            and dataset.clean_train_labels is KnowledgeState.UNAVAILABLE
         ):
             incompatible.append(CompatibilityReason("missing_clean_validation", "clean validation labels cannot be provided"))
         elif (
-            clean_validation is KnowledgeState.UNKNOWN
-            and dataset.clean_train_labels is KnowledgeState.UNKNOWN
-            and not has_protocol_test
+            clean_validation is not KnowledgeState.AVAILABLE
+            and dataset.clean_train_labels is not KnowledgeState.AVAILABLE
         ):
             requirements.append(CompatibilityReason("unknown_clean_validation", "adapter/inspection metadata does not establish a clean validation source"))
 
@@ -534,6 +531,9 @@ def resolve_compatibility(
         can_generate = (
             dataset.aligned_clean_noisy_targets is KnowledgeState.AVAILABLE
             or (dataset.supports_synthetic_corruption and method.supports_synthetic_noise)
+            or (method.supports_native_noisy_labels
+                and dataset.observed_train_labels is KnowledgeState.AVAILABLE
+                and dataset.stable_indices is KnowledgeState.AVAILABLE)
         )
         if dataset.noise_manifest is KnowledgeState.UNAVAILABLE and not can_generate:
             incompatible.append(CompatibilityReason("missing_noise_manifest", "required noise manifest is unavailable and cannot be generated"))

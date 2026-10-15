@@ -1,6 +1,6 @@
 schema_version: 1
 name: ca2c
-description: "Formal CA2C CIFAR-100 symmetric-20 recipe with SevenCNN, warmup/candidate memory, asymmetric co-learning objective, and cosine SGD."
+description: "Simplified CA2C teaching flow with SevenCNN and partial/negative label objectives. Not a complete reproduction: warmup candidate accumulation, strong-view consistency and robust_weight mixing are not synchronized with the formal runner."
 steps:
   - {block: set_seed, params: {seed: 123}}
   - {block: select_device, params: {device: auto}}

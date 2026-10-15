@@ -56,8 +56,25 @@ from lnl_toolbox.training.progress import (
 )
 
 
+def _selected_loss_mean(loss_sum: float, selected_samples: float) -> float:
+    """An empty selection contributes zero loss, not an undefined average."""
+    return loss_sum / selected_samples if selected_samples > 0 else 0.0
+
+
 def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
     name = str(config.get("name", "preact_resnet18")).lower()
+    if name in {"resnet18", "resnet34"} and config.get("variant") == "imagenet_standard":
+        # Author Dual-T uses the standard 7x7/stride-2 stem with max pooling.
+        # Explicit opt-in leaves the existing CIFAR networks unchanged.
+        from torchvision import models
+        if int(config.get("base_width", 64)) != 64:
+            raise ValueError("imagenet_standard ResNet requires base_width=64")
+        model = getattr(models, name)(weights=None, num_classes=num_classes)
+        channels = int(config.get("input_channels", 3))
+        if channels != 3:
+            model.conv1 = nn.Conv2d(channels, 64, 7, stride=2, padding=3, bias=False)
+            nn.init.kaiming_normal_(model.conv1.weight, mode="fan_out", nonlinearity="relu")
+        return model
     if name == "feature_mlp":
         input_dim = int(config.get("input_dim", 0))
         hidden_width = int(config.get("hidden_width", 16))
@@ -85,7 +102,9 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
     if name == "cifar_cnn8":
         return CifarCnn8(num_classes)
     if name == "cnlcu_cnn9":
-        return CnlcuCnn9(num_classes)
+        return CnlcuCnn9(
+            num_classes, batch_norm_momentum=float(config.get("batch_norm_momentum", 0.999))
+        )
     if name == "resnet14":
         return cifar_resnet14(
             num_classes,
@@ -97,12 +116,14 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
             num_classes,
             int(config.get("base_width", 16)),
             input_channels=int(config.get("input_channels", 3)),
+            variant=str(config.get("variant", "standard")),
         )
     if name == "resnet18":
         return cifar_resnet18(
             num_classes,
             int(config.get("base_width", 64)),
             initialization=str(config.get("initialization", "kaiming")),
+            stem_padding=int(config.get("stem_padding", 1)),
             input_channels=int(config.get("input_channels", 3)),
         )
     if name == "resnet34":
@@ -110,6 +131,7 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
             num_classes,
             int(config.get("base_width", 64)),
             initialization=str(config.get("initialization", "kaiming")),
+            stem_padding=int(config.get("stem_padding", 1)),
             input_channels=int(config.get("input_channels", 3)),
         )
     if name == "resnet50":
@@ -133,6 +155,7 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
             num_classes,
             int(config.get("base_width", 64)),
             input_channels=int(config.get("input_channels", 3)),
+            variant=str(config.get("variant", "standard")),
         )
     raise ValueError(f"Unsupported model: {name}")
 
@@ -177,6 +200,24 @@ def build_optimizer(model: nn.Module, config: Mapping[str, Any]):
             **common,
         )
     raise ValueError(f"Unsupported optimizer: {name}")
+
+
+def apply_epoch_beta1(optimizer, config: Mapping[str, Any] | None, epoch: int) -> None:
+    """Apply an optional Adam beta1 phase without overriding learning rates."""
+    if not config or str(config.get("name", "none")).lower() == "none":
+        return
+    if not {"beta1_before", "beta1_after"}.intersection(config):
+        return
+    if not {"start_epoch", "beta1_before", "beta1_after"}.issubset(config):
+        raise ValueError("Adam beta1 phases require start_epoch, beta1_before and beta1_after")
+    before, after = float(config["beta1_before"]), float(config["beta1_after"])
+    if any(not math.isfinite(value) or not 0.0 <= value < 1.0 for value in (before, after)):
+        raise ValueError("Adam beta1 values must be finite and in [0, 1)")
+    beta1 = before if epoch < int(config["start_epoch"]) else after
+    for group in optimizer.param_groups:
+        if "betas" not in group:
+            raise ValueError("Adam beta1 phases require an Adam optimizer")
+        group["betas"] = (beta1, group["betas"][1])
 
 
 def build_scheduler(optimizer, config: Mapping[str, Any] | None, epochs: int):
@@ -388,6 +429,10 @@ def _validate_resume_config(current: Mapping[str, Any], saved: Mapping[str, Any]
     )
     if str(current_selection).lower() != str(saved_selection).lower():
         raise ValueError("Resume configuration changed evaluation.selection_split")
+    current_report = (current.get("evaluation", {}) or {}).get("report_checkpoint", "best")
+    saved_report = (saved.get("evaluation", {}) or {}).get("report_checkpoint", "best")
+    if current_report != saved_report:
+        raise ValueError("Resume configuration changed evaluation.report_checkpoint")
 
 
 def _resolve_dss_epoch_contract(
@@ -504,21 +549,6 @@ def _validate_supervised_config(config: Mapping[str, Any]) -> None:
                     "CDR paper mode requires optimizer weight_decay=0; "
                     "use parameter_update.l1_decay for Eq. (5)-(6)"
                 )
-        if "rate" in noise_config and noise_config["rate"] is not None:
-            configured_noise_rate = float(noise_config["rate"])
-            update_noise_rate = float(update_config["noise_rate"])
-            if not math.isclose(
-                configured_noise_rate,
-                update_noise_rate,
-                rel_tol=1e-9,
-                abs_tol=1e-12,
-            ):
-                raise ValueError(
-                    "CDR noise-rate mismatch: "
-                    f"noise.rate={configured_noise_rate} but "
-                    "parameter_update.noise_rate="
-                    f"{update_noise_rate}"
-                )
     validation_targets = str(
         noise_config.get("validation_targets", "clean")
     ).strip().lower()
@@ -532,7 +562,16 @@ def _validate_supervised_config(config: Mapping[str, Any]) -> None:
     selection_split = str(evaluation.get("selection_split", "validation")).lower()
     if selection_split not in {"validation", "test"}:
         raise ValueError("evaluation.selection_split must be 'validation' or 'test'")
-    if selection_split == "test" and not bool(evaluation.get("allow_test_selection", False)):
+    if evaluation.get("selection_metric", "accuracy") not in {"accuracy", "loss"}:
+        raise ValueError("evaluation.selection_metric must be accuracy or loss")
+    if evaluation.get("corrected_loss", False) and not pipeline_config.get("risk_corrector"):
+        raise ValueError("Corrected validation loss requires a pipeline risk corrector")
+    report_checkpoint = str(evaluation.get("report_checkpoint", "best"))
+    if report_checkpoint not in {"best", "last"}:
+        raise ValueError("evaluation.report_checkpoint must be best or last")
+    if report_checkpoint == "last" and selection_split == "test" and config.get("early_stopping") not in (None, False):
+        raise ValueError("Test monitoring must not control early stopping")
+    if report_checkpoint == "best" and selection_split == "test" and not bool(evaluation.get("allow_test_selection", False)):
         raise ValueError("test selection requires evaluation.allow_test_selection=true")
 
 
@@ -555,6 +594,11 @@ def run_supervised_experiment(
         from lnl_toolbox.training.runners import resolve_data_requirements
 
         requirements = resolve_data_requirements(config, expected_runner="supervised")
+    pipeline_config = config.get("pipeline", {}) or {}
+    if pipeline_config.get("pretraining_protocol") == "loss_correction" and (pipeline_config.get("transition_estimator", {}) or {}).get("name") == "anchor":
+        from dataclasses import replace
+
+        requirements = replace(requirements, roles=requirements.roles | {DataRole.TRAIN_EVAL})
     seed = int(config.get("seed", 1))
     epochs = int(config["trainer"]["epochs"])
     _resolve_dss_epoch_contract(config, epochs)
@@ -620,7 +664,11 @@ def run_supervised_experiment(
         )
         config["noise"] = _resolved_noise_config(noise_config, noise_metadata)
     train_loader = prepared.loader(DataRole.TRAIN)
-    validation_loader = prepared.validation_loader(shuffle=False)
+    validation_loader = (
+        prepared.validation_loader(shuffle=False)
+        if requirements.roles & {DataRole.CLEAN_VALIDATION, DataRole.NOISY_VALIDATION}
+        else None
+    )
     test_loader = prepared.loader(DataRole.TEST, shuffle=False)
     evaluation_config = config.get("evaluation", {}) or {}
     selection_split = str(evaluation_config.get("selection_split", "validation")).lower()
@@ -638,6 +686,13 @@ def run_supervised_experiment(
     )
     optimizer = build_optimizer(model, config["optimizer"])
     pipeline = build_builtin_pipeline(config.get("pipeline"))
+    from lnl_toolbox.noise.estimators import AnchorTransitionEstimator
+
+    estimated_correction = (
+        pipeline.pretraining_protocol == "loss_correction"
+        and isinstance(pipeline.transition_estimator, AnchorTransitionEstimator)
+        and pipeline.risk_corrector is not None
+    )
     pipeline_compatibility_warnings: list[str] = []
     if resume is not None:
         assert checkpoint_payload is not None
@@ -649,6 +704,22 @@ def run_supervised_experiment(
             split="train",
         )
     else:
+        preparation_options = {}
+        if estimated_correction:
+            from itertools import chain
+
+            # Deterministic transforms and observed labels for the entire training pool.
+            class EstimationLoader:
+                def __iter__(self):
+                    return chain(iter(prepared.loader(DataRole.TRAIN_EVAL, shuffle=False)), iter(validation_loader))
+
+            preparation_options = {
+                "validation_loader": validation_loader,
+                "snapshot_loader": EstimationLoader(),
+                "warmup_loader": lambda epoch: prepared.loader(DataRole.TRAIN, epoch=epoch),
+                "warmup_scheduler": build_scheduler(optimizer, config.get("scheduler"), pipeline.warmup_epochs),
+                "checkpoint_identity": {key: config.get(key) for key in ("seed", "data", "noise", "model", "optimizer", "scheduler")},
+            }
         pipeline.prepare(
             model=model,
             optimizer=optimizer,
@@ -657,7 +728,22 @@ def run_supervised_experiment(
             dataset=dataset_name,
             split="train",
             run_dir=run_dir,
+            **preparation_options,
         )
+        if estimated_correction:
+            # The author rebuilds the classifier after estimating T.
+            model = build_model(model_config, num_classes).to(device)
+            optimizer = build_optimizer(model, config["optimizer"])
+            print(json.dumps({"event": "transition_estimated", "stage": "correction_training",
+                              "estimation_samples": pipeline.artifacts.snapshot.num_samples}), flush=True)
+    if evaluation_config.get("corrected_loss", False):
+        base_selection_criterion = selection_criterion
+
+        def selection_criterion(logits, targets):
+            return pipeline.risk_corrector.per_sample_risk(
+                logits=logits, noisy_targets=targets, base_loss=base_selection_criterion,
+                transition=pipeline.artifacts.transition,
+            )
     scheduler = build_scheduler(optimizer, config.get("scheduler"), epochs)
     algorithm = SupervisedClassificationAlgorithm(
         model,
@@ -679,6 +765,9 @@ def run_supervised_experiment(
     best_epoch = -1
     best_accuracy = float("-inf")
     best_selection_accuracy = float("-inf")
+    selection_metric = str(evaluation_config.get("selection_metric", "accuracy"))
+    report_checkpoint = str(evaluation_config.get("report_checkpoint", "best"))
+    best_selection_loss = float("inf")
     compatibility_warnings: list[str] = list(
         pipeline_compatibility_warnings
     )
@@ -692,6 +781,7 @@ def run_supervised_experiment(
         best_selection_accuracy = float(
             checkpoint_payload.get("best_selection_accuracy", best_accuracy)
         )
+        best_selection_loss = float(pipeline.state.metadata.get("best_selection_loss", float("inf")))
         compatibility_warnings.extend(
             checkpoint_payload.get("_compatibility_warnings", [])
         )
@@ -737,6 +827,8 @@ def run_supervised_experiment(
             }) + "\n")
             metrics_file.flush()
         for epoch in range(completed_epoch + 1, epochs):
+            if pipeline.pretraining_protocol == "loss_correction" or report_checkpoint == "last":
+                train_loader = prepared.loader(DataRole.TRAIN, epoch=epoch)
             state.cycle = epoch
             algorithm.on_cycle_start(state)
             loss_sum = 0.0
@@ -776,7 +868,7 @@ def run_supervised_experiment(
                         )
                 progress.update(
                     batch_number,
-                    loss=loss_sum / selected_samples,
+                    loss=_selected_loss_mean(loss_sum, selected_samples),
                     accuracy=correct_weighted / samples,
                 )
             algorithm.on_cycle_end(state)
@@ -797,7 +889,7 @@ def run_supervised_experiment(
                 "epoch": epoch + 1,
                 "global_step": state.step,
                 "learning_rate": learning_rate,
-                "train_loss": loss_sum / selected_samples,
+                "train_loss": _selected_loss_mean(loss_sum, selected_samples),
                 "train_all_sample_loss": all_sample_loss_sum / samples,
                 "train_accuracy": correct_weighted / samples,
                 "selected_samples": selected_samples,
@@ -821,8 +913,13 @@ def run_supervised_experiment(
                 for key, value in row.items()
                 if isinstance(value, float)
             }
-            improved = selection["accuracy"] > best_selection_accuracy
+            improved = report_checkpoint == "best" and (
+                selection["loss"] < best_selection_loss if selection_metric == "loss"
+                else selection["accuracy"] > best_selection_accuracy
+            )
             if improved:
+                best_selection_loss = selection["loss"]
+                pipeline.state.metadata["best_selection_loss"] = best_selection_loss
                 best_selection_accuracy = selection["accuracy"]
                 best_accuracy = best_selection_accuracy
                 best_epoch = epoch
@@ -882,10 +979,10 @@ def run_supervised_experiment(
                 state.stopped = True
                 break
 
-        best_path = run_dir / "best.pt"
+        best_path = run_dir / ("last.pt" if report_checkpoint == "last" else "best.pt")
         if not best_path.is_file():
             raise RuntimeError(
-                "No best checkpoint exists; increase the total epoch target when resuming"
+                f"No {report_checkpoint} checkpoint exists; increase the total epoch target when resuming"
             )
         best_payload = read_checkpoint(best_path, device)
         model.load_state_dict(best_payload["model"])
@@ -902,11 +999,20 @@ def run_supervised_experiment(
             "best_validation_accuracy": best_accuracy,
             "selection_split": selection_split,
             "best_selection_accuracy": best_selection_accuracy,
-            "test_selection_leakage": selection_split == "test",
-            "test_checkpoint": "best.pt",
+            "test_selection_leakage": report_checkpoint == "best" and selection_split == "test",
+            "selection_metric": selection_metric,
+            "best_selection_loss": best_selection_loss,
+            "test_checkpoint": best_path.name,
             "test_loss": test["loss"],
             "test_accuracy": test["accuracy"],
         }
+        if report_checkpoint == "last":
+            final.update({
+                "report_epoch": last_completed_epoch + 1,
+                "best_epoch": None, "best_validation_accuracy": None,
+                "best_selection_accuracy": None, "best_selection_loss": None,
+                "selection_metric": None, "selection_split": None,
+            })
         if noise_metadata is not None:
             final["noise"] = noise_metadata
         if device.type == "cuda":

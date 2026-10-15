@@ -130,6 +130,15 @@ def run_binary_experiment(
     resolved_config = dict(resolved_config)
     resolved_config.setdefault("execution", {"runner": "binary"})
     resolved_config = normalize_experiment_config(resolved_config)
+    risk_config = resolved_config.get("risk")
+    risk = None
+    if risk_config is not None:
+        if not isinstance(risk_config, Mapping):
+            raise TypeError("risk configuration must be a mapping")
+        risk_name = str(risk_config.get("name", "")).strip().lower()
+        if risk_name not in {"natarajan", "natarajan_unbiased"}:
+            raise ValueError("binary experiment supports risk.name: natarajan or natarajan_unbiased")
+        risk = NatarajanUnbiasedRisk(float(risk_config["rho_positive"]), float(risk_config["rho_negative"]))
     destination = Path(output_dir or resolved_config.get("output_root", "artifacts/binary")).resolve()
     destination.mkdir(parents=True, exist_ok=True)
     seed = int(resolved_config.get("seed", 1))
@@ -166,10 +175,6 @@ def run_binary_experiment(
         momentum=float(optimizer_config.get("momentum", 0.9)),
         weight_decay=float(optimizer_config.get("weight_decay", 0.0)),
     )
-    risk = None
-    risk_config = resolved_config.get("risk")
-    if isinstance(risk_config, Mapping):
-        risk = NatarajanUnbiasedRisk(float(risk_config["rho_positive"]), float(risk_config["rho_negative"]))
     epochs = int(resolved_config["trainer"]["epochs"])
     if epochs <= 0:
         raise ValueError("epochs must be positive")

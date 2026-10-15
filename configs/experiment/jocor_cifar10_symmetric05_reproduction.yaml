@@ -81,8 +81,8 @@ trainer:
     update_interval: 50
     curves: true
 evaluation:
-  selection_split: test
-  allow_test_selection: true
+  selection_split: none
+  allow_test_selection: false
   report_last_epochs: 10
 execution:
   runner: multi_model

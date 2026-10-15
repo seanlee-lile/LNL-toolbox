@@ -251,15 +251,14 @@ def run_cwd_experiment(
                 "phase": "cwd",
                 "train_loss": train_loss,
                 "train_accuracy": train_accuracy,
-                "validation_loss": test["loss"],
-                "validation_accuracy": test["accuracy"],
                 "test_loss": test["loss"],
                 "test_accuracy": test["accuracy"],
                 "learning_rate": float(optimizer.param_groups[0]["lr"]),
                 "statistic_hash": artifact.artifact_hash,
                 "feature_snapshot_hash": snapshot.snapshot_hash,
                 "fold_index": fold_index,
-            }
+            },
+            require_validation=False,
         )
         rows.append(row)
         metrics_path.write_text(

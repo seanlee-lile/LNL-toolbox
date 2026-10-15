@@ -29,6 +29,38 @@ class _binary_risk_BinaryRiskTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             NatarajanUnbiasedRisk(0.7, 0.3)
 
+    def test_noise_expectation_recovers_clean_loss_and_gradient(self) -> None:
+        for positive, negative in ((0.2, 0.1), (0.7, 0.1), (0.0, 0.0), (0.49, 0.49)):
+            for clean_label in (0, 1):
+                with self.subTest(rates=(positive, negative), label=clean_label):
+                    logits = torch.tensor([[0.8, -0.3]], dtype=torch.float64, requires_grad=True)
+                    criterion = CrossEntropyLoss()
+                    risk = NatarajanUnbiasedRisk(positive, negative)
+                    zero = risk.per_sample_risk(logits=logits, noisy_targets=torch.tensor([0]), base_loss=criterion)
+                    one = risk.per_sample_risk(logits=logits, noisy_targets=torch.tensor([1]), base_loss=criterion)
+                    expected = ((1 - negative) * zero + negative * one if clean_label == 0
+                                else positive * zero + (1 - positive) * one)
+                    clean = criterion(logits, torch.tensor([clean_label]))
+                    torch.testing.assert_close(expected, clean, rtol=1e-12, atol=1e-12)
+                    actual_gradient = torch.autograd.grad(expected.sum(), logits, retain_graph=True)[0]
+                    clean_gradient = torch.autograd.grad(clean.sum(), logits)[0]
+                    torch.testing.assert_close(actual_gradient, clean_gradient, rtol=1e-12, atol=1e-12)
+
+    def test_metadata_distinguishes_toolbox_defaults_and_joint_rate_constraint(self) -> None:
+        from pathlib import Path
+        import yaml
+        registry = yaml.safe_load((Path(__file__).resolve().parents[1] / 'web' /
+            'lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
+        method = registry['methods']['binary_risk']
+        for path in ('data.train_size', 'data.test_size'):
+            self.assertEqual(method['parameters']['basic'][path]['origin'], 'toolbox_default')
+            self.assertNotIn(path, method['parameters']['paper'])
+        for prefix in ('risk', 'noise'):
+            for suffix in ('rho_positive', 'rho_negative'):
+                constraint = method['parameters']['paper'][f'{prefix}.{suffix}']['constraints']
+                self.assertIn('rho_positive + rho_negative < 1', constraint)
+                self.assertNotIn('0.5', constraint)
+
 # --- merged from test_binary_preprocessing.py ---
 import tempfile
 
@@ -221,6 +253,26 @@ from lnl_toolbox.training.binary_experiment import BinaryTensorDataset, build_bi
 
 # --- merged from test_binary_training.py ---
 class _binary_training_BinaryTrainingTest(unittest.TestCase):
+
+    def test_risk_name_is_validated_before_loading_data(self) -> None:
+        from unittest.mock import patch
+        config = {'data': {'name': 'synthetic_binary_2d'}, 'epochs': 1,
+                  'risk': {'name': 'label_dependent_cost', 'rho_positive': 0.2, 'rho_negative': 0.1}}
+        with patch('lnl_toolbox.training.binary_experiment.prepare_experiment_data') as prepare:
+            with self.assertRaisesRegex(ValueError, 'supports risk.name'):
+                run_binary_experiment(config)
+            prepare.assert_not_called()
+
+    def test_both_natarajan_names_support_asymmetric_short_training(self) -> None:
+        for name in ('natarajan', 'natarajan_unbiased'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                config = {'seed': 4, 'data': {'name': 'synthetic_binary_2d', 'train_size': 20, 'test_size': 8},
+                          'noise': {'name': 'binary_asymmetric_rcn', 'rho_positive': 0.7, 'rho_negative': 0.1},
+                          'risk': {'name': name, 'rho_positive': 0.7, 'rho_negative': 0.1},
+                          'loader': {'batch_size': 5}, 'model': {'name': 'linear'},
+                          'trainer': {'epochs': 1}, 'optimizer': {'name': 'sgd', 'lr': 0.01}}
+                result = run_binary_experiment(config, directory)
+                self.assertTrue((Path(result) / 'metrics.json').is_file())
 
     def test_dataset_and_epoch_keep_stable_indices(self) -> None:
         benchmark = BinaryBenchmark(np.asarray([[0.0], [1.0], [0.2], [0.8]]), np.asarray([0, 1, 0, 1]), 'fixture')

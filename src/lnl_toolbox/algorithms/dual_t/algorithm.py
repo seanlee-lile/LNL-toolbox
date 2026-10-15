@@ -43,7 +43,7 @@ def _build_final_risk_corrector(classifier_backend: str) -> ForwardRiskCorrector
     """Build the current final consumer without coupling it to Dual-T estimation."""
 
     if classifier_backend == "forward":
-        return ForwardRiskCorrector()
+        return ForwardRiskCorrector(log_epsilon=1e-12)
     raise NotImplementedError(
         "Dual-T first version only supports classifier backend 'forward'"
     )
@@ -85,6 +85,28 @@ def _train_supervised_epoch(
     }
 
 
+@torch.inference_mode()
+def _evaluate_forward_classification(model, loader, loss, device, transition):
+    """Select DT-Forward checkpoints by corrected noisy-label predictions."""
+    model.eval()
+    corrector = ForwardRiskCorrector(log_epsilon=1e-12)
+    loss_sum, correct, samples = 0.0, 0, 0
+    for batch in loader:
+        inputs = batch["input"].to(device, non_blocking=True)
+        targets = batch["target"].to(device, non_blocking=True)
+        logits = model(inputs)
+        matrix = transition.as_tensor(device=device, dtype=logits.dtype)
+        probabilities = torch.softmax(logits, dim=1) @ matrix
+        values = corrector.per_sample_risk(logits=logits, noisy_targets=targets,
+            base_loss=loss, transition=transition)
+        loss_sum += float(values.sum().item())
+        correct += int((probabilities.argmax(1) == targets).sum().item())
+        samples += int(targets.numel())
+    if samples == 0:
+        raise ValueError("Dual-T validation loader must contain at least one sample")
+    return {"loss": loss_sum / samples, "accuracy": correct / samples, "samples": float(samples)}
+
+
 class DualTAlgorithm:
     """Own the paper-specific two-stage Dual-T + Forward lifecycle.
 
@@ -112,6 +134,7 @@ class DualTAlgorithm:
         config: Mapping[str, Any],
         dataset: str,
         noise_metadata: Mapping[str, Any] | None = None,
+        posterior_loader: Any = None,
     ) -> None:
         self.config = dict(config)
         self.method_config = DualTConfig.from_mapping(config)
@@ -135,6 +158,9 @@ class DualTAlgorithm:
         self.dataset = str(dataset)
         self.noise_metadata = dict(noise_metadata or {})
         self.train_loader = train_loader
+        # Direct callers without augmentation may reuse their training fixture.
+        # The production runner always supplies the deterministic TRAIN_EVAL role.
+        self.posterior_loader = train_loader if posterior_loader is None else posterior_loader
         self.noisy_validation_loader = noisy_validation_loader
         self.clean_test_loader = clean_test_loader
         self.posterior_scheduler = posterior_scheduler
@@ -446,7 +472,7 @@ class DualTAlgorithm:
 
         snapshot = collect_posterior_snapshot(
             self.posterior_algorithm.model,
-            self.train_loader,
+            self.posterior_loader,
             self.device,
             dataset=self.dataset,
             split="train",
@@ -535,11 +561,12 @@ class DualTAlgorithm:
             train = self._train_epoch(
                 self.final_algorithm, self.final_run_state, epoch
             )
-            validation = evaluate_classification(
+            validation = _evaluate_forward_classification(
                 self.final_algorithm.model,
                 self.noisy_validation_loader,
                 self.final_algorithm.loss,
                 self.device,
+                self.transition,
             )
             if self.final_scheduler is not None:
                 self.final_scheduler.step()
@@ -561,7 +588,7 @@ class DualTAlgorithm:
                 "global_step": self.state.final_global_step,
                 "learning_rate": learning_rate,
                 **train,
-                "validation_observed_ce_loss": validation["loss"],
+                "validation_forward_loss": validation["loss"],
                 "validation_accuracy": validation["accuracy"],
                 "best_epoch": self.state.best_final_epoch + 1,
                 "best_validation_accuracy": (

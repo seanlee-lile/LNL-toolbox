@@ -155,7 +155,7 @@ class TRevisionConfig:
         noise = _mapping(value.get("noise"), owner="noise")
         noise_name = str(noise.get("name", "")).strip().lower()
         has_manifest = bool(str(noise.get("manifest", "")).strip())
-        if not has_manifest and noise_name not in {"symmetric", "pairflip"}:
+        if not has_manifest and noise_name not in {"symmetric", "pairflip", "native", "real_world"}:
             raise ValueError(
                 "T-Revision requires class-dependent, instance-independent "
                 "noise (symmetric, pairflip, or an external manifest)"

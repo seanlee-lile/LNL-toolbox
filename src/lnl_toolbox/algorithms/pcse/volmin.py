@@ -2,9 +2,8 @@ from __future__ import annotations
 
 """Paper Eq. (1) minimum-volume transition-training primitives for PCSE.
 
-The strictly diagonally dominant parameterization is a numerical-safety
-implementation choice.  It is intentionally narrower than the paper's general
-nonsingular row-stochastic transition assumption.
+PCSE uses the VolMinNet sigmoid off-diagonal parameterization. The older
+strictly diagonally dominant primitives below are not the PCSE runtime.
 """
 
 from dataclasses import dataclass
@@ -94,8 +93,8 @@ class PaperVolMinTransition(nn.Module):
     The paper fixes every diagonal entry of ``A`` to one, applies a sigmoid
     only to the free off-diagonal weights, and normalizes each row.  This is
     intentionally separate from ``DiagonallyDominantTransition``: the latter
-    is a narrower numerical-safety parameterization retained for the PCSE
-    workflow and is not the VolMinNet parameterization used by MC-LDCE.
+    is a narrower numerical-safety primitive and is not the parameterization
+    used by the current PCSE or MC-LDCE workflows.
     """
 
     def __init__(self, num_classes: int, *, initial_weight: float, seed: int = 0) -> None:
@@ -370,10 +369,10 @@ def volmin_objective(
 
 def build_volmin_optimizer(
     model: nn.Module,
-    transition_model: DiagonallyDominantTransition,
+    transition_model: PaperVolMinTransition,
     config: Mapping[str, Any],
 ) -> torch.optim.Optimizer:
-    """Build the method-local joint optimizer with explicit parameter groups."""
+    """Build PCSE's repository-default joint optimizer, not an author-code claim."""
 
     name = str(config.get("name", "")).strip().lower()
     if name != "adamw":

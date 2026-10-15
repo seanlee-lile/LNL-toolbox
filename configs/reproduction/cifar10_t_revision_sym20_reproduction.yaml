@@ -11,6 +11,10 @@ data:
   validation_size: 5000
   preprocessing: standard
   augment: true
+  # Author transformer.py; the paper does not specify channel normalization.
+  normalization:
+    mean: [0.4914, 0.4822, 0.4465]
+    std: [0.2023, 0.1994, 0.2010]
 noise:
   name: symmetric
   rate: 0.2
@@ -31,6 +35,9 @@ t_revision:
     model:
       name: resnet18
       base_width: 64
+      # Author Resnet.py: unpadded stem and PyTorch default initialization.
+      stem_padding: 0
+      initialization: torch_default
     optimizer:
       name: sgd
       lr: 0.01

@@ -12,8 +12,8 @@ data:
   validation_split:
     strategy: stratified
     rng: default_rng
-  augment: true
-  preprocessing: standard
+  augment: false
+  preprocessing: tensor_only
 noise:
   name: symmetric
   rate: 0.2
@@ -23,13 +23,18 @@ noise:
   validation_targets: noisy
   manifest_filename: noise_manifest.npz
 model:
-  name: cifar_cnn8
+  name: cnlcu_cnn9
+  batch_norm_momentum: 0.1
 optimizer:
   name: adam
   lr: 0.001
   weight_decay: 0.0
 scheduler:
-  name: none
+  name: linear_after
+  start_epoch: 80
+  end_epoch: 200
+  beta1_before: 0.9
+  beta1_after: 0.1
 coteaching:
   model_count: 2
   noise_rate: 0.2

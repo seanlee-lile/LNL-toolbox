@@ -11,6 +11,9 @@ data:
   validation_size: 5000
   augment: true
   preprocessing: standard
+  normalization:
+    mean: [0.4914, 0.4822, 0.4465]
+    std: [0.2023, 0.1994, 0.2010]
 noise:
   name: symmetric
   rate: 0.2
@@ -22,6 +25,7 @@ noise:
 model:
   name: preact_resnet18
   base_width: 64
+  variant: dss_author
 optimizer:
   name: sgd
   lr: 0.02
