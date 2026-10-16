@@ -649,7 +649,7 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
             raise ValueError("model configuration must be a mapping")
         model_name = str(model.get("name", "preact_resnet18")).lower()
         supported_models = {
-            "tiny_cnn", "cifar_cnn8", "resnet14", "resnet32", "resnet18", "resnet34",
+            "feature_mlp", "tiny_cnn", "cifar_cnn8", "resnet14", "resnet32", "resnet18", "resnet34",
             "resnet50", "resnet101", "mentor_wide_resnet", "preact_resnet18"
         }
         if model_name not in supported_models:

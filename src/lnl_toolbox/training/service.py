@@ -561,6 +561,12 @@ class ExperimentService:
         recipe: str | None = None,
         completed_noop: bool = True,
     ) -> Path:
+        """Admit a formal execution against current data and external sources.
+
+        Discovery/preflight results are not execution authorizations: files and
+        environment-provided sources may have changed without a config change.
+        Resume uses this same gate, except for resume()'s completed-run no-op.
+        """
         # Preserve the public dispatch contract even for otherwise incomplete
         # configurations: an unknown explicit method must fail as an unknown
         # method before schema validation reports missing dataset fields.
@@ -570,6 +576,9 @@ class ExperimentService:
         candidate = runtime_experiment_config({"kind": "experiment", **dict(config)})
         if candidate.get("kind") != "experiment":
             raise ValueError("ExperimentService requires kind: experiment")
+        self.last_compatibility = None
+        self._last_compatibility_config = None
+        self.preflight(candidate, check_data=True)
         runner = resolve_runner(candidate)
         expected_root = None
         if resume is not None:

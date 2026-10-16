@@ -646,8 +646,8 @@ def _run(args: argparse.Namespace) -> int:
     if args.no_check_data and not args.dry_run:
         raise ValueError("--no-check-data is only valid together with --dry-run")
     service = ExperimentService()
-    service.preflight(config, check_data=_should_check_data(args))
     if args.dry_run:
+        service.preflight(config, check_data=_should_check_data(args))
         _print_plan(config, path, project, service.last_compatibility)
         return 0
     result = service.run(
@@ -712,12 +712,12 @@ def _sweep(args: argparse.Namespace) -> int:
         recipe=recipe.id if recipe is not None else None,
     )
     service = ExperimentService()
-    for planned in plan.runs:
-        service.preflight(
-            resolve_planned_config(config, planned),
-            check_data=not args.no_check_data,
-        )
     if args.dry_run:
+        for planned in plan.runs:
+            service.preflight(
+                resolve_planned_config(config, planned),
+                check_data=not args.no_check_data,
+            )
         _print_sweep_plan(plan)
         return 0
     result = run_sweep(

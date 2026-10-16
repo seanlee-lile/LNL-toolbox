@@ -1776,7 +1776,6 @@ class DataService:
 
         service = ExperimentService(data_service=self)
         try:
-            service.preflight(resolved_config, check_data=True)
             run_dir = Path(
                 service.run(resolved_config, output_dir, recipe=recipe)
             ).resolve()

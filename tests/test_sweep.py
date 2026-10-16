@@ -12,6 +12,10 @@ import tempfile
 
 # --- merged from test_sweep.py ---
 import unittest
+from contextlib import redirect_stdout, redirect_stderr
+from io import StringIO
+
+import yaml
 
 # --- merged from test_sweep.py ---
 from unittest.mock import patch
@@ -89,6 +93,65 @@ class _sweep_SweepTest(unittest.TestCase):
     def test_duplicate_seeds_fail(self) -> None:
         with self.assertRaisesRegex(ValueError, 'unique'):
             run_sweep({}, [1, 1])
+
+    def test_actual_sweep_isolates_admission_failure_and_runs_valid_member(self):
+        from lnl_toolbox.training.service import ExperimentService
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = {'execution': {'runner': 'supervised'}, 'data': {
+                'name': 'synthetic_multiclass', 'num_classes': 3, 'dimension': 4,
+                'train_size': 12, 'test_size': 6, 'validation_size': 6, 'root': str(root),
+            }}
+            calls = []
+
+            def finish(candidate, output, resume):
+                calls.append((candidate, resume))
+                output = Path(output)
+                output.mkdir(parents=True)
+                (output / 'final_metrics.json').write_text(
+                    json.dumps({'test_accuracy': 0.5}), encoding='utf-8'
+                )
+                return output
+
+            service = ExperimentService()
+            with patch('lnl_toolbox.training.runners.RunnerSpec.invoke', side_effect=finish):
+                result = run_sweep(config, [1], matrix={
+                    'data.root': [str(root / 'missing'), str(root)],
+                }, output_dir=root / 'sweep', service=service)
+            self.assertEqual((result.failed, result.completed), (1, 1))
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][0]['data']['root'], str(root))
+            self.assertIsNone(calls[0][1])
+            self.assertEqual([row['status'] for row in result.manifest['runs']], ['failed', 'completed'])
+            self.assertIn('data path does not exist', result.manifest['runs'][0]['error'])
+
+    def test_actual_cli_sweep_keeps_failure_exit_code_and_continues(self):
+        from lnl_toolbox.cli.main import main
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = {'execution': {'runner': 'supervised'}, 'data': {
+                'name': 'synthetic_multiclass', 'num_classes': 3, 'dimension': 4,
+                'train_size': 12, 'test_size': 6, 'validation_size': 6, 'root': str(root),
+            }}
+            source = root / 'config.yaml'
+            source.write_text(yaml.safe_dump(config), encoding='utf-8')
+
+            def finish(_config, output, _resume):
+                output = Path(output)
+                output.mkdir(parents=True)
+                (output / 'final_metrics.json').write_text(json.dumps({'test_accuracy': 0.5}), encoding='utf-8')
+                return output
+
+            stdout, stderr = StringIO(), StringIO()
+            with patch('lnl_toolbox.training.runners.RunnerSpec.invoke', side_effect=finish) as runner, redirect_stdout(stdout), redirect_stderr(stderr):
+                code = main(['sweep', '--config', str(source), '--seeds', '1', '--matrix',
+                             'data.root=' + json.dumps([str(root / 'missing'), str(root)]),
+                             '--output-dir', str(root / 'sweep')])
+            self.assertEqual(code, 1, stderr.getvalue())
+            runner.assert_called_once()
+            self.assertIn('completed=1 skipped=0 failed=1', stdout.getvalue())
 
     def test_matrix_manifest_identity_resume_and_status(self) -> None:
         service = _sweep__Service()

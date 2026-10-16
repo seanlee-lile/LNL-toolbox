@@ -17,6 +17,123 @@ import command_console  # noqa: E402
 
 
 class CommandConsoleTest(unittest.TestCase):
+    def submit_inline_cli_job(self, command):
+        """Exercise the HTTP/CLI handoff while keeping the runner mock separate."""
+        import importlib
+
+        cli_main = importlib.import_module("lnl_toolbox.cli.main")
+
+        class InlineProcess:
+            stdout = None
+
+            def __init__(self, argv, **_kwargs):
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    self.returncode = cli_main.main(argv[3:])
+
+            def wait(self):
+                return self.returncode
+
+        server = command_console.ThreadingHTTPServer(("127.0.0.1", 0), command_console.ConsoleHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        payload = {}
+        try:
+            with mock.patch.object(command_console.subprocess, "Popen", InlineProcess):
+                req = request.Request(
+                    f"http://127.0.0.1:{server.server_address[1]}/api/run",
+                    data=json.dumps({"command": command}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"}, method="POST",
+                )
+                with request.urlopen(req, timeout=5) as response:
+                    self.assertEqual(response.status, 202)
+                    payload = json.loads(response.read())
+                job = command_console.JOBS[payload["id"]]
+                # The real output-reader thread publishes completion.
+                for _ in range(200):
+                    if job.returncode is not None:
+                        break
+                    threading.Event().wait(0.01)
+                self.assertIsNotNone(job.returncode)
+                return job.returncode
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            with command_console.JOBS_LOCK:
+                command_console.JOBS.pop(payload.get("id", ""), None)
+
+    def test_web_valid_run_and_resume_use_application_admission(self):
+        import yaml
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = {
+                "execution": {"runner": "supervised"},
+                "data": {"name": "synthetic_multiclass", "num_classes": 3,
+                         "dimension": 4, "train_size": 12, "test_size": 6,
+                         "validation_size": 6},
+            }
+            source = root / "resolved_config.yaml"
+            source.write_text(yaml.safe_dump(config), encoding="utf-8")
+            (root / "last.pt").write_bytes(b"runner-owned checkpoint")
+            (root / "environment.json").write_text("{}", encoding="utf-8")
+            output = root / "not-created"
+            with mock.patch("lnl_toolbox.training.runners.RunnerSpec.invoke", return_value=output) as runner:
+                self.assertEqual(self.submit_inline_cli_job(
+                    f'lnl run --config "{source}" --output-dir "{output}"'
+                ), 0)
+            runner.assert_called_once()
+            self.assertIsNone(runner.call_args.args[2])
+            with mock.patch("lnl_toolbox.training.runners.RunnerSpec.invoke", return_value=root) as runner:
+                self.assertEqual(self.submit_inline_cli_job(f'lnl resume "{root}"'), 0)
+            runner.assert_called_once()
+            self.assertEqual(runner.call_args.args[1:], (root.resolve(), root / "last.pt"))
+
+    def test_web_run_and_resume_reject_current_missing_dataset_before_runner(self):
+        import yaml
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "resolved_config.yaml"
+            source.write_text(yaml.safe_dump({
+                "execution": {"runner": "supervised"},
+                "data": {"name": "cifar10", "root": str(root / "missing")},
+            }), encoding="utf-8")
+            (root / "last.pt").write_bytes(b"runner-owned checkpoint")
+            for command in (f'lnl run --config "{source}" --output-dir "{root / "output"}"',
+                            f'lnl resume "{root}"'):
+                with self.subTest(command=command):
+                    with mock.patch("lnl_toolbox.training.runners.RunnerSpec.invoke") as runner:
+                        self.assertEqual(self.submit_inline_cli_job(command), 2)
+                    runner.assert_not_called()
+
+    def test_web_run_and_resume_reject_missing_or_invalid_external_artifact(self):
+        import yaml
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = {
+                "method": "cal", "execution": {"runner": "cal"},
+                "data": {"name": "synthetic_multiclass", "num_classes": 3,
+                         "dimension": 4, "train_size": 12, "test_size": 6,
+                         "validation_size": 6},
+            }
+            source = root / "resolved_config.yaml"
+            (root / "last.pt").write_bytes(b"runner-owned checkpoint")
+            for noise in (
+                {"name": "external_torch"},
+                {"name": "external_torch", "path": str(root / "missing-labels.pt"),
+                 "clean_key": "clean", "noisy_key": "noisy"},
+            ):
+                config["noise"] = noise
+                source.write_text(yaml.safe_dump(config), encoding="utf-8")
+                for command in (f'lnl run --config "{source}" --output-dir "{root / "output"}"',
+                                f'lnl resume "{root}"'):
+                    with self.subTest(noise=noise, command=command):
+                        with mock.patch("lnl_toolbox.training.runners.RunnerSpec.invoke") as runner:
+                            self.assertEqual(self.submit_inline_cli_job(command), 2)
+                        runner.assert_not_called()
+
     def test_command_preview_is_directly_editable_and_execute_uses_edit(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
         self.assertIn('textarea id="preview"', page)
@@ -335,8 +452,8 @@ class CommandConsoleTest(unittest.TestCase):
                 cli_main.ExperimentService,
                 "preflight",
                 side_effect=ValueError("formal prerequisite is not ready"),
-            ) as preflight, mock.patch.object(
-                cli_main.ExperimentService, "run"
+            ), mock.patch(
+                "lnl_toolbox.training.runners.RunnerSpec.invoke"
             ) as training:
                 web_request = request.Request(
                     f"{base}/api/run",
@@ -347,7 +464,6 @@ class CommandConsoleTest(unittest.TestCase):
                 with request.urlopen(web_request, timeout=2) as response:
                     payload = json.loads(response.read())
                 self.assertEqual(response.status, 202)
-                preflight.assert_called_once()
                 training.assert_not_called()
             self.assertIn("run", commands[0])
             self.assertEqual(payload["returncode"], 2)

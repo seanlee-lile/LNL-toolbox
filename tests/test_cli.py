@@ -253,6 +253,28 @@ class _unified_cli_RunnerResolutionTest(unittest.TestCase):
 # --- merged from test_unified_cli.py ---
 class _unified_cli_CatalogTest(unittest.TestCase):
 
+    def test_supervised_model_validation_adds_only_existing_feature_mlp(self):
+        from lnl_toolbox.training.experiment import build_model
+
+        previous_models = {
+            'tiny_cnn', 'cifar_cnn8', 'resnet14', 'resnet32', 'resnet18', 'resnet34',
+            'resnet50', 'resnet101', 'mentor_wide_resnet', 'preact_resnet18',
+        }
+        for name in previous_models | {'feature_mlp'}:
+            with self.subTest(model=name):
+                config = {'data': {'name': 'synthetic_multiclass'},
+                          'execution': {'runner': 'supervised'},
+                          'model': {'name': name}}
+                self.assertEqual(validate_config(config).name, 'supervised')
+        model = build_model({'name': 'feature_mlp', 'input_dim': 6, 'hidden_width': 8}, 4)
+        self.assertEqual(model[0].in_features, 6)
+        self.assertEqual(model[-1].out_features, 4)
+        for name in ('unknown_model', 'linear', 'cnlcu_cnn9', 'mc_ldce_cnn'):
+            with self.subTest(rejected_model=name):
+                with self.assertRaisesRegex(ValueError, 'unsupported model'):
+                    validate_config({'data': {'name': 'synthetic_multiclass'},
+                                     'model': {'name': name}})
+
     def test_installed_recipe_uses_distribution_file_record(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             prefix = Path(temporary) / 'venv'
@@ -539,7 +561,7 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
 
     def test_compatibility_failure_prevents_validate_dry_run_and_run(self) -> None:
         error = ValueError("method 'upm' is not ready for dataset 'heart': incompatible; unsupported_modality: image required")
-        with patch('lnl_toolbox.cli.main.ExperimentService.preflight', side_effect=error), patch('lnl_toolbox.cli.main.ExperimentService.run') as runner:
+        with patch('lnl_toolbox.cli.main.ExperimentService.preflight', side_effect=error), patch('lnl_toolbox.training.runners.RunnerSpec.invoke') as runner:
             code, _, stderr = self.invoke('validate', '--recipe', 'cifar10-upm-smoke', '--check-data')
             self.assertEqual(code, 2)
             self.assertIn('unsupported_modality', stderr)
@@ -557,13 +579,105 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
         )
         with patch(
             "lnl_toolbox.cli.main.ExperimentService.preflight", side_effect=error
-        ), patch("lnl_toolbox.cli.main.ExperimentService.run") as runner:
+        ), patch("lnl_toolbox.training.runners.RunnerSpec.invoke") as runner:
             code, _, stderr = self.invoke(
                 "run", "--recipe", "dld-cifar10-reproduction"
             )
         self.assertEqual(code, 2)
         self.assertIn("prerequisite is not ready", stderr)
         runner.assert_not_called()
+
+    def test_valid_run_uses_application_admission_without_duplicate_data_check(self):
+        data_service = Mock()
+        data_service.capabilities.return_value = resolve_dataset_capabilities(self.compatibility_profile())
+        service = ExperimentService(data_service=data_service)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'not-created'
+            with patch('lnl_toolbox.cli.main.ExperimentService', return_value=service), patch(
+                'lnl_toolbox.training.runners.RunnerSpec.invoke', return_value=output
+            ) as runner:
+                code, _, error = self.invoke(
+                    'run', '--recipe', 'cifar10-symmetric-ce-smoke', '--output-dir', str(output)
+                )
+            self.assertEqual(code, 0, error)
+            runner.assert_called_once()
+            data_service.validate_config.assert_called_once()
+
+    def test_run_checkpoint_and_directory_resume_reject_current_prerequisites(self):
+        from lnl_toolbox.training.prerequisites import ValidationMetadata, ReadinessLevel
+
+        data_service = Mock()
+        data_service.capabilities.return_value = resolve_dataset_capabilities(self.compatibility_profile())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = {
+                'method': 'cal', 'execution': {'runner': 'cal'},
+                'data': {'name': 'cifar10', 'num_classes': 3, 'validation_size': 0},
+                'noise': {'name': 'external_torch', 'path': str(root / 'labels.pt'),
+                          'clean_key': 'clean', 'noisy_key': 'noisy'},
+            }
+            config_path = root / 'resolved_config.yaml'
+            config_path.write_text(yaml.safe_dump(config), encoding='utf-8')
+            checkpoint = root / 'last.pt'
+            checkpoint.write_bytes(b'runner-owned checkpoint')
+            descriptor = resolve_runner(config).requirements(config).prerequisites[0]
+            states = (
+                ValidationMetadata.needs_input(descriptor, 'current source needs input'),
+                ValidationMetadata.invalid(descriptor, ReadinessLevel.PATH_EXISTS, 'current source invalid'),
+            )
+            for state in states:
+                candidate = dict(config)
+                if state.status == 'needs_input':
+                    candidate['noise'] = {'name': 'external_torch'}
+                config_path.write_text(yaml.safe_dump(candidate), encoding='utf-8')
+                for arguments in (
+                    ('run', '--config', str(config_path), '--resume', str(checkpoint)),
+                    ('resume', str(root)),
+                ):
+                    with self.subTest(state=state.status, command=arguments[0]):
+                        service = ExperimentService(data_service=data_service)
+                        with patch('lnl_toolbox.cli.main.ExperimentService', return_value=service), patch.object(
+                            service.prerequisites, 'evaluate', return_value=state
+                        ), patch('lnl_toolbox.training.runners.RunnerSpec.invoke') as runner:
+                            code, _, error = self.invoke(*arguments)
+                        self.assertEqual(code, 2)
+                        self.assertIn(
+                            'requires_external_noise_labels' if state.status == 'needs_input' else state.message,
+                            error,
+                        )
+                        runner.assert_not_called()
+
+    def test_legacy_formal_entries_inherit_application_admission(self):
+        from lnl_toolbox.training.experiment import run_experiment
+
+        with tempfile.TemporaryDirectory() as directory:
+            config = {'data': {'name': 'cifar10', 'root': str(Path(directory) / 'missing')},
+                      'execution': {'runner': 'supervised'}}
+            config_path = Path(directory) / 'experiment.yaml'
+            config_path.write_text(yaml.safe_dump(config), encoding='utf-8')
+            with patch('lnl_toolbox.training.runners.RunnerSpec.invoke') as runner:
+                with self.assertRaises(FileNotFoundError):
+                    run_experiment(config)
+                with self.assertRaises(FileNotFoundError):
+                    train_cli.main(['--config', str(config_path)])
+            runner.assert_not_called()
+
+    def test_sweep_dry_run_rejects_invalid_context_without_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / 'config.yaml'
+            path.write_text(yaml.safe_dump({
+                'data': {'name': 'cifar10', 'root': str(root / 'missing')},
+                'execution': {'runner': 'supervised'},
+            }), encoding='utf-8')
+            output = root / 'not-created'
+            with patch('lnl_toolbox.training.runners.RunnerSpec.invoke') as runner:
+                code, _, error = self.invoke('sweep', '--config', str(path), '--seeds', '1', '2',
+                                             '--dry-run', '--output-dir', str(output))
+            self.assertEqual(code, 2)
+            self.assertIn('data path does not exist', error)
+            runner.assert_not_called()
+            self.assertFalse(output.exists())
 
     def test_plain_ce_validate_check_data_reports_compatible(self) -> None:
         data_service = Mock()

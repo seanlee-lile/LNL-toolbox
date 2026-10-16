@@ -814,8 +814,19 @@ class _noisy_ce_baseline__GenericTabularAdapter:
 # --- merged from test_noisy_ce_baseline.py ---
 class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
 
-    def test_relative_output_root_is_resolved_before_manifest_metadata(self) -> None:
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.data_root = Path(temporary.name) / 'data'
+        self.data_root.mkdir()
+
+    def _config(self) -> dict:
         config = _noisy_ce_baseline__config()
+        config['data']['root'] = str(self.data_root)
+        return config
+
+    def test_relative_output_root_is_resolved_before_manifest_metadata(self) -> None:
+        config = self._config()
         config['output_root'] = 'runs'
         train_data = _noisy_ce_baseline__cifar(40, 'train')
         test_data = _noisy_ce_baseline__cifar(20, 'test')
@@ -835,10 +846,13 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
             self.assertTrue((run_dir / 'noise_summary.json').is_file())
 
     def test_unconnected_transition_estimator_configuration_is_rejected(self) -> None:
-        config = _noisy_ce_baseline__config()
+        config = self._config()
         config['transition_estimator'] = {'name': 'anchor'}
-        with self.assertRaisesRegex(ValueError, "field 'transition_estimator'.*pipeline.transition_estimator"):
-            run_experiment(config)
+        train_data = _noisy_ce_baseline__cifar(40, 'train')
+        test_data = _noisy_ce_baseline__cifar(20, 'test')
+        with patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: train_data if split == 'train' else test_data):
+            with self.assertRaisesRegex(ValueError, "field 'transition_estimator'.*pipeline.transition_estimator"):
+                run_experiment(config)
 
     def test_noisy_training_writes_manifest_metadata_and_clean_evaluation_sets(self) -> None:
         train_data = _noisy_ce_baseline__cifar(40, 'train')
@@ -853,7 +867,7 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
             observed_evaluation_targets.append((sample['index'], sample['target']))
             return {'loss': 1.0, 'accuracy': 0.25, 'samples': float(len(loader.dataset))}
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=load_data), patch('lnl_toolbox.training.experiment.evaluate_classification', side_effect=evaluate):
-            run_dir = run_experiment(_noisy_ce_baseline__config(), directory)
+            run_dir = run_experiment(self._config(), directory)
             manifest = NoiseManifest.load(run_dir / 'noise_manifest.npz')
             checkpoint = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
             final = json.loads((run_dir / 'final_metrics.json').read_text(encoding='utf-8'))
@@ -869,7 +883,7 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
             self.assertEqual(target, index % 10)
 
     def test_paper_mode_can_apply_one_manifest_to_train_and_validation(self) -> None:
-        config = _noisy_ce_baseline__config()
+        config = self._config()
         config['noise']['validation_targets'] = 'noisy'
         train_data = _noisy_ce_baseline__cifar(40, 'train')
         test_data = _noisy_ce_baseline__cifar(20, 'test')
@@ -917,7 +931,7 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
                 prepare_noise_manifest(config, dataset='cifar10', clean_targets=np.arange(10), global_indices=np.arange(10), num_classes=10, run_dir=Path(directory), checkpoint_payload={'noise': metadata})
 
     def test_noisy_runner_accepts_configured_gce_loss(self) -> None:
-        config = _noisy_ce_baseline__config()
+        config = self._config()
         config['loss'] = {'name': 'gce', 'q': 0.7}
         train_data = _noisy_ce_baseline__cifar(40, 'train')
         test_data = _noisy_ce_baseline__cifar(20, 'test')
@@ -982,7 +996,7 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
             'seed': 7,
             'data': {
                 'name': _noisy_ce_baseline__GenericTabularAdapter.name,
-                'root': 'unused',
+                'root': str(self.data_root),
                 'num_classes': 4,
                 'validation_size': 8,
             },
@@ -1049,7 +1063,7 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
                     self.assertTrue(np.isfinite(final['test_loss']))
 
     def test_small_loss_selector_is_applied_and_resume_config_is_checked(self) -> None:
-        config = _noisy_ce_baseline__config()
+        config = self._config()
         config['selector'] = {'name': 'small_loss', 'keep_rate': 0.5}
         train_data = _noisy_ce_baseline__cifar(40, 'train')
         test_data = _noisy_ce_baseline__cifar(20, 'test')
@@ -1106,10 +1120,13 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
             _validate_resume_config(changed, saved)
 
     def test_test_set_cannot_select_checkpoint_without_explicit_opt_in(self):
-        config = _noisy_ce_baseline__config()
+        config = self._config()
         config['evaluation'] = {'selection_split': 'test'}
-        with self.assertRaisesRegex(ValueError, 'test selection requires'):
-            run_experiment(config)
+        train_data = _noisy_ce_baseline__cifar(40, 'train')
+        test_data = _noisy_ce_baseline__cifar(20, 'test')
+        with patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: train_data if split == 'train' else test_data):
+            with self.assertRaisesRegex(ValueError, 'test selection requires'):
+                run_experiment(config)
 
 # --- merged from test_new_paper_training.py ---
 from copy import deepcopy
