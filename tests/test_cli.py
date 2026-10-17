@@ -1,4 +1,4 @@
-"""Merged unit tests; source modules were consolidated without changing assertions."""
+"""Merged CLI regressions, including formal execution failure diagnostics."""
 from __future__ import annotations
 
 # --- merged from test_cli.py ---
@@ -1447,6 +1447,210 @@ def _upm_cli__config():
     return {'method': 'upm', 'execution': {'runner': 'upm'}, 'data': {'name': 'cifar10'}, 'loader': {'batch_size': 2}, 'noise': {'name': 'symmetric', 'rate': 0.2, 'validation_targets': 'noisy'}, 'evaluation': {'selection_split': 'validation'}, 'trainer': {'device': 'cpu'}, 'upm': {'stage1': {**stage, 'best_metric': 'noisy_validation_accuracy'}, 'psi': {'source': 'stage1_best', 'split': 'train', 'augmentation': False}, 'main': {**stage, 'initialization': 'fresh'}, 'confusing_probability': {'initial_value': 0.01, 'learning_rate': 0.1, 'epsilon': 0.0001, 'update_start_epoch': 0, 'update_interval_epochs': 1}}}
 
 # --- merged from test_upm_cli.py ---
+class PrerequisiteFailureGuidanceTest(unittest.TestCase):
+    def setUp(self):
+        from tests.test_experiment_service_data_contract import ExperimentServiceDataContractTests
+        self.fixture = ExperimentServiceDataContractTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.tearDown)
+
+    def invoke(self, *arguments):
+        stdout, stderr = StringIO(), StringIO()
+        with patch("lnl_toolbox.cli.main.ExperimentService", return_value=self.fixture.service), \
+             redirect_stdout(stdout), redirect_stderr(stderr):
+            code = main(list(arguments))
+        return code, stdout.getvalue(), stderr.getvalue()
+
+    def run_config(self, config, *arguments):
+        path = Path(self.fixture.temp.name) / "guidance.yaml"
+        path.write_text(yaml.safe_dump(config), encoding="utf-8")
+        return self.invoke("run", "--config", str(path), "--project-root", str(_unified_cli_ROOT), *arguments)
+
+    def test_ready_run_is_quiet_and_keeps_normal_stdout(self):
+        config, _ = self.fixture.cal_execution_config()
+        output = Path(self.fixture.temp.name) / "runner-output"
+        with patch("lnl_toolbox.training.runners.RunnerSpec.invoke", return_value=output) as runner:
+            code, stdout, stderr = self.run_config(config)
+        self.assertEqual(code, 0)
+        self.assertIn("运行完成:", stdout)
+        self.assertEqual(stderr, "")
+        self.assertNotIn("Prerequisite:", stdout)
+        runner.assert_called_once()
+
+    def test_cal_missing_path_schema_identity_and_consumer_rejection(self):
+        from contextlib import nullcontext
+        import torch
+        cases = ("needs_input", "path", "schema", "identity", "consumer")
+        for case in cases:
+            with self.subTest(case=case):
+                config, artifact = self.fixture.cal_execution_config()
+                expected = "invalid"
+                if case == "needs_input":
+                    config["noise"] = {"name": "external_torch"}
+                    expected = "needs_input"
+                elif case == "path":
+                    artifact.unlink()
+                elif case == "schema":
+                    torch.save({"clean": torch.arange(20) % 10}, artifact)
+                elif case == "identity":
+                    torch.save({"clean": (torch.arange(20) + 1) % 10, "noisy": torch.arange(20) % 10}, artifact)
+                consumer = (patch.object(self.fixture.service.data_service, "validate_cal_external_labels",
+                                        side_effect=ValueError("consumer rejected source"))
+                            if case == "consumer" else nullcontext())
+                with consumer, patch("lnl_toolbox.training.runners.RunnerSpec.invoke") as runner:
+                    code, stdout, stderr = self.run_config(config)
+                self.assertEqual(code, 2)
+                self.assertEqual(stdout, "")
+                if case == "needs_input":
+                    # Missing CAL fields are a config-input requirement in the
+                    # canonical backend, not a shared prerequisite status.
+                    self.assertIn("Compatibility: COMPATIBLE_WITH_REQUIREMENTS", stderr)
+                    self.assertIn("Input (method_input):", stderr)
+                    self.assertNotIn("status: NEEDS_INPUT", stderr)
+                else:
+                    self.assertIn("status: " + expected.upper(), stderr)
+                    self.assertIn("type: external_label_artifact", stderr)
+                self.assertIn("noise.path", stderr)
+                if case != "needs_input":
+                    self.assertIn(str(artifact), stderr)
+                self.assertIn({"schema":"configured clean/noisy keys", "identity":"identity alignment",
+                               "consumer":"consumer rejected source", "path":"does not exist",
+                               "needs_input":"requires_external_noise_labels"}[case], stderr)
+                runner.assert_not_called()
+
+    def test_multiple_blockers_and_non_prerequisite_incompatibility(self):
+        from lnl_toolbox.training.compatibility import CompatibilityResult, CompatibilityStatus, CompatibilityReason
+        from lnl_toolbox.training.prerequisites import SourceDescriptor, ValidationMetadata, ReadinessLevel
+        a = SourceDescriptor("a", "pretrained_classifier", "Classifier", "trained model", "train source", "set source", "fixture")
+        b = SourceDescriptor("b", "external_label_artifact", "Labels", "aligned labels", "obtain labels", "set labels", "fixture")
+        result = CompatibilityResult(CompatibilityStatus.INCOMPATIBLE, "fixture", "fixture", prerequisites=(
+            ValidationMetadata.needs_input(a, "classifier missing"),
+            ValidationMetadata.invalid(b, ReadinessLevel.PATH_EXISTS, "label schema rejected")))
+        for candidate in (result, CompatibilityResult(CompatibilityStatus.INCOMPATIBLE, "fixture", "fixture",
+                              reasons=(CompatibilityReason("modality", "modality mismatch"),))):
+            with self.subTest(prerequisites=bool(candidate.prerequisites)), \
+                 patch.object(self.fixture.service, "_resolve_for_capabilities", return_value=candidate), \
+                 patch("lnl_toolbox.training.runners.RunnerSpec.invoke") as runner:
+                code, stdout, stderr = self.run_config(self.fixture.execution_config())
+            self.assertEqual(code, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("Compatibility: INCOMPATIBLE", stderr)
+            if candidate.prerequisites:
+                self.assertLess(stderr.index("[1] Prerequisite: Classifier"), stderr.index("[2] Prerequisite: Labels"))
+                for marker in ("NEEDS_INPUT", "INVALID", "classifier missing", "label schema rejected"):
+                    self.assertIn(marker, stderr)
+            else:
+                self.assertIn("modality mismatch", stderr)
+                self.assertNotIn("[1] Prerequisite", stderr)
+            runner.assert_not_called()
+
+    def test_unfinished_resume_uses_same_guidance_and_completed_resume_is_noop(self):
+        import json
+        import torch
+        config, artifact = self.fixture.cal_execution_config()
+        root = self.fixture.unfinished_run(config)
+        torch.save({"clean": torch.arange(20) % 10}, artifact)
+        before = {p.name:p.read_bytes() for p in root.iterdir()}
+        with patch("lnl_toolbox.training.runners.RunnerSpec.invoke") as runner:
+            code, stdout, stderr = self.invoke("resume", str(root))
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("status: INVALID", stderr)
+        self.assertIn("configured clean/noisy keys", stderr)
+        runner.assert_not_called()
+        self.assertEqual(before, {p.name:p.read_bytes() for p in root.iterdir()})
+        (root / "final_metrics.json").write_text(json.dumps({"test_accuracy":0.5}), encoding="utf-8")
+        with patch("lnl_toolbox.cli.main._print_failure_guidance") as diagnostic, \
+             patch.object(self.fixture.service, "preflight") as preflight, \
+             patch("lnl_toolbox.training.runners.RunnerSpec.invoke") as runner:
+            code, stdout, stderr = self.invoke("resume", str(root))
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("resume complete:", stdout)
+        diagnostic.assert_not_called()
+        preflight.assert_not_called()
+        runner.assert_not_called()
+
+    def test_checked_validate_dry_run_and_run_resume_share_failure_guidance(self):
+        import torch
+        config, artifact = self.fixture.cal_execution_config()
+        root = self.fixture.unfinished_run(config)
+        torch.save({"clean": torch.arange(20) % 10}, artifact)
+        path = Path(self.fixture.temp.name) / "checked-guidance.yaml"
+        path.write_text(yaml.safe_dump(config), encoding="utf-8")
+        for command in (("validate", "--check-data"), ("run", "--dry-run"),
+                        ("run", "--resume", str(root / "last.pt"))):
+            with self.subTest(command=command), patch("lnl_toolbox.training.runners.RunnerSpec.invoke") as runner:
+                code, stdout, stderr = self.invoke(*command, "--config", str(path), "--project-root", str(_unified_cli_ROOT))
+            self.assertEqual((code, stdout), (2, ""))
+            self.assertIn("status: INVALID", stderr)
+            self.assertIn("configured clean/noisy keys", stderr)
+            runner.assert_not_called()
+
+    def test_pcse_early_catalog_failure_has_context_but_no_invented_status(self):
+        config = load_recipe_config(recipe_by_id("cifar10-pcse-reproduction"))
+        config["data"] = self.fixture.execution_config()["data"]
+        with patch.dict(os.environ, {}, clear=False), \
+             patch.object(self.fixture.service.prerequisites, "evaluate") as evaluate, \
+             patch("lnl_toolbox.training.runners.RunnerSpec.invoke") as runner:
+            os.environ.pop("LNL_PCSE_SOURCE_RUN", None)
+            code, stdout, stderr = self.run_config(config)
+        self.assertEqual((code, stdout), (2, ""))
+        for marker in ("PCSE source environment variable is not set", "LNL_PCSE_SOURCE_RUN",
+                       "pretraining_stage.source.run_directory_env", "pretrained_classifier", "not evaluated"):
+            self.assertIn(marker, stderr)
+        self.assertNotIn("status:", stderr)
+        evaluate.assert_not_called()
+        runner.assert_not_called()
+
+    def test_dld_missing_environment_and_cached_weight_guidance_remain_distinct(self):
+        from lnl_toolbox.training.prerequisites import ValidationMetadata, ReadinessLevel
+        config = load_recipe_config(recipe_by_id("dld-cifar10-reproduction"))
+        config["data"] = {**self.fixture.execution_config()["data"], "validation_size":4}
+        external = config["dld"]["feature_extractor"]["external"]
+        descriptor = resolve_runner(config).requirements(config).prerequisites[0]
+        invalid = ValidationMetadata.invalid(descriptor, ReadinessLevel.CONFIGURED, "cached weight file missing: cache/resnet34.pth")
+        with patch.object(self.fixture.service.prerequisites, "evaluate", return_value=invalid), \
+             patch("lnl_toolbox.training.runners.RunnerSpec.invoke") as runner:
+            code, _, stderr = self.run_config(config)
+        self.assertEqual(code, 2)
+        self.assertIn("status: INVALID", stderr)
+        self.assertIn("torchvision_resnet34_imagenet1k_v1", stderr)
+        self.assertIn("cached weight file missing", stderr)
+        self.assertNotIn("  action: select the immutable producer run", stderr)
+        self.assertNotIn("  config field: dld.feature_extractor.external.run_directory_env", stderr)
+        runner.assert_not_called()
+        external.update(adapter="upm_main_best", run_directory_env="LNL_PHASE2_DLD_SOURCE", checkpoint_sha256="0"*64,
+                        manifest_sha256="0"*64, mapping_hash="fixture", dataset_fingerprint="fixture", model={"name":"resnet18"})
+        with patch.dict(os.environ, {}, clear=False), patch("lnl_toolbox.training.runners.RunnerSpec.invoke") as runner:
+            os.environ.pop("LNL_PHASE2_DLD_SOURCE", None)
+            code, _, stderr = self.run_config(config)
+        self.assertEqual(code, 2)
+        self.assertIn("status: NEEDS_INPUT", stderr)
+        self.assertIn("LNL_PHASE2_DLD_SOURCE", stderr)
+        runner.assert_not_called()
+
+    def test_mentor_early_failure_keeps_independent_preparation_contract(self):
+        config = load_recipe_config(recipe_by_id("mentornet-dd-cifar100-symmetric04-smoke"))
+        status = mentornet_preparation_status(config, _unified_cli_ROOT)
+        status = {**status, "artifact_ready":False, "status":"not_ready"}
+        with patch("lnl_toolbox.catalog.mentornet_preparation_status", return_value=status), \
+             patch("lnl_toolbox.training.runners.RunnerSpec.invoke") as runner:
+            code, stdout, stderr = self.run_config(config)
+        self.assertEqual((code, stdout), (2, ""))
+        for marker in ("MentorArtifact: NOT READY", "lnl mentor prepare", "lnl mentor train", "Step 3 run Student"):
+            self.assertIn(marker, stderr)
+        self.assertNotIn("status: NEEDS_INPUT", stderr)
+        runner.assert_not_called()
+
+    def test_diagnostic_formatter_failure_never_overrides_original_error(self):
+        with patch("lnl_toolbox.cli.main._run", side_effect=FileNotFoundError("original missing source")), \
+             patch("lnl_toolbox.cli.main._print_failure_guidance", side_effect=RuntimeError("formatter failed")):
+            code, stdout, stderr = self.invoke("run", "--recipe", "cifar10-clean-smoke")
+        self.assertEqual((code, stdout), (2, ""))
+        self.assertIn("original missing source", stderr)
+        self.assertNotIn("formatter failed", stderr)
+
+
 class _upm_cli_UPMCliTest(unittest.TestCase):
 
     def test_registry_recipe_paper_and_validation(self) -> None:

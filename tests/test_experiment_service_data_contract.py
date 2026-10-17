@@ -20,7 +20,7 @@ from lnl_toolbox.data.contracts import (
 from lnl_toolbox.data.local_catalog import LocalDatasetCatalog
 from lnl_toolbox.data.registry import DatasetRegistry
 from lnl_toolbox.training.data_service import DataService
-from lnl_toolbox.training.service import ExperimentService
+from lnl_toolbox.training.service import ExperimentReadinessError, ExperimentService
 
 
 class _Adapter:
@@ -92,6 +92,65 @@ class ExperimentServiceDataContractTests(unittest.TestCase):
         for name in ("last.pt", "best.pt"):
             (root / name).write_bytes(b"runner-owned checkpoint")
         return root
+
+    def test_failure_projection_retains_order_and_backend_status_without_second_validation(self):
+        from lnl_toolbox.training.compatibility import CompatibilityResult, CompatibilityStatus
+        from lnl_toolbox.training.prerequisites import SourceDescriptor, ValidationMetadata, ReadinessLevel
+
+        first = SourceDescriptor("a", "pretrained_classifier", "Classifier", "trained model", "train source", "set source", "fixture")
+        second = SourceDescriptor("b", "external_label_artifact", "Labels", "aligned labels", "obtain labels", "set labels", "fixture")
+        result = CompatibilityResult(
+            CompatibilityStatus.INCOMPATIBLE, "fixture", "fixture",
+            prerequisites=(ValidationMetadata.needs_input(first, "source missing"),
+                           ValidationMetadata.invalid(second, ReadinessLevel.PATH_EXISTS, "schema rejected")),
+        )
+        with patch.object(self.service, "_resolve_for_capabilities", return_value=result) as evaluate, \
+             patch.object(self.service, "prerequisite_readiness") as recheck, \
+             patch("lnl_toolbox.training.runners.RunnerSpec.invoke") as runner:
+            with self.assertRaises(ExperimentReadinessError) as raised:
+                self.service.run(self.execution_config())
+        self.assertIs(raised.exception.compatibility, result)
+        self.assertIsInstance(raised.exception, ValueError)
+        self.assertEqual([item.status for item in result.prerequisites], ["needs_input", "invalid"])
+        self.assertEqual(str(raised.exception), "method 'fixture' is not ready for dataset 'fixture': incompatible; ")
+        evaluate.assert_called_once()
+        recheck.assert_not_called()
+        runner.assert_not_called()
+
+    def test_early_failure_preserves_exception_when_diagnostic_snapshot_fails(self):
+        config, _ = self.cal_execution_config()
+        for original in (FileNotFoundError("original missing path"), ValueError("original schema error")):
+            with self.subTest(error=type(original).__name__), \
+                 patch("lnl_toolbox.catalog.validate_config", side_effect=original), \
+                 patch.object(self.service, "_config_value", side_effect=RuntimeError("diagnostic lookup failed")), \
+                 patch.object(self.service.prerequisites, "evaluate") as evaluate, \
+                 patch("lnl_toolbox.training.runners.RunnerSpec.invoke") as runner:
+                with self.assertRaises(type(original)) as raised:
+                    self.service.run(config)
+                self.assertIs(raised.exception, original)
+                self.assertNotIn("diagnostic lookup", str(raised.exception))
+                evaluate.assert_not_called()
+                runner.assert_not_called()
+
+    def test_plain_validate_does_not_add_dld_or_cal_readiness_checks(self):
+        for recipe in ("dld-cifar10-reproduction", "cal-cifar10-reproduction"):
+            with self.subTest(recipe=recipe), patch.object(self.service.prerequisites, "evaluate") as evaluate:
+                self.service.preflight(load_recipe_config(recipe_by_id(recipe)), check_data=False)
+                evaluate.assert_not_called()
+
+    def test_cal_failure_retains_source_and_runs_consumer_validation_once(self):
+        config, artifact = self.cal_execution_config()
+        torch.save({"clean": torch.arange(20) % 10}, artifact)
+        validate = self.service.data_service.validate_cal_external_labels
+        with patch.object(self.service.data_service, "validate_cal_external_labels", wraps=validate) as consumer, \
+             patch("lnl_toolbox.training.runners.RunnerSpec.invoke") as runner:
+            with self.assertRaises(ExperimentReadinessError) as raised:
+                self.service.run(config)
+        consumer.assert_called_once()
+        runner.assert_not_called()
+        self.assertIn("configured clean/noisy keys", str(raised.exception))
+        self.assertEqual(raised.exception.compatibility.prerequisites[0].status, "invalid")
+        self.assertEqual(raised.exception.prerequisite_context[0]["configured"][0]["value"], str(artifact))
 
     def test_direct_run_admits_valid_context_without_writing_before_runner(self):
         config = self.execution_config()

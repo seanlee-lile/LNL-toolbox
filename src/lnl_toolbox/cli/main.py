@@ -37,7 +37,7 @@ from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE, DatasetStatu
 from lnl_toolbox.data.profile import NoiseRateInfo, NoiseRateStatus
 from lnl_toolbox.training.compatibility import CompatibilityResult, CompatibilityStatus
 from lnl_toolbox.training.runners import apply_epoch_override, resolve_runner, runner_names
-from lnl_toolbox.training.service import ExperimentService
+from lnl_toolbox.training.service import ExperimentReadinessError, ExperimentService
 from lnl_toolbox.training.sweep import (
     plan_sweep,
     resolve_planned_config,
@@ -436,6 +436,69 @@ def _paper_config_value(config: dict[str, Any], key: str) -> str:
         if value is not None:
             staged.append(f"{stage_name}={value}")
     return "；".join(staged) if staged else "由执行器决定"
+
+
+def _print_failure_guidance(error: Exception) -> None:
+    """Present backend facts only; never validate or infer a readiness state."""
+    result = error.compatibility if isinstance(error, ExperimentReadinessError) else None
+    context = getattr(error, "prerequisite_context", ())
+    if result is not None:
+        print(f"Compatibility: {result.status.value.upper()}", file=sys.stderr)
+        for reason in result.reasons:
+            print(f"  {reason.code}: {reason.message}", file=sys.stderr)
+        items = [(item.descriptor, item) for item in result.prerequisites if item.status != "ready"]
+    else:
+        # An early catalog failure has declarations, not validated statuses.
+        items = [(entry["descriptor"], None) for entry in context]
+    for index, (descriptor, readiness) in enumerate(items, 1):
+        label = "Prerequisite" if readiness is not None else "Prerequisite context (not evaluated)"
+        print(f"[{index}] {label}: {descriptor.name}", file=sys.stderr)
+        print(f"  type: {descriptor.kind}", file=sys.stderr)
+        print(f"  role: {descriptor.key}", file=sys.stderr)
+        if readiness is not None:
+            print(f"  status: {readiness.status.upper()}", file=sys.stderr)
+            if readiness.level is not None:
+                print(f"  level: {readiness.level.name}", file=sys.stderr)
+            print(f"  reason: {readiness.message}", file=sys.stderr)
+        source = next((entry["configured"] for entry in context if entry["descriptor"] == descriptor), ())
+        applicable = []
+        seen_sources = set()
+        for entry in source:
+            parent = entry.get("source")
+            if parent:
+                text = json.dumps(parent, ensure_ascii=False, default=str)
+                if text not in seen_sources:
+                    print(f"  configured source: {text}", file=sys.stderr)
+                    seen_sources.add(text)
+            value = entry.get("value")
+            if value is not None:
+                applicable.append(entry["path"])
+                print(f"  config field: {entry['path']} = {value}", file=sys.stderr)
+            if entry.get("environment_variable"):
+                text = entry.get("environment_value")
+                print(f"  source env: {entry['environment_variable']}" + (f" = {text}" if text else " (not set)"), file=sys.stderr)
+        if descriptor.requirement:
+            print(f"  expected: {descriptor.requirement}", file=sys.stderr)
+        if descriptor.obtain:
+            print(f"  preparation: {descriptor.obtain}", file=sys.stderr)
+        # A declared env/run-directory field may not apply to the configured
+        # cached-weight adapter.  Do not present it as that adapter's action.
+        if applicable and descriptor.provide:
+            print(f"  action: {descriptor.provide}", file=sys.stderr)
+    if result is not None:
+        represented = {"pretrained:" + item.descriptor.key for item in result.prerequisites}
+        for guidance in result.input_guidance:
+            if guidance.input_id in represented:
+                continue
+            print(f"Input ({guidance.category}): {guidance.label}", file=sys.stderr)
+            for name, value in (("reason", guidance.missing), ("expected", guidance.expected_value),
+                                ("action", guidance.provision)):
+                if value:
+                    print(f"  {name}: {value}", file=sys.stderr)
+            for path in guidance.config_paths:
+                print(f"  config field: {'.'.join(path)}", file=sys.stderr)
+            if guidance.environment_variable:
+                print(f"  source env: {guidance.environment_variable}", file=sys.stderr)
 
 
 def _print_compatibility_result(result: CompatibilityResult | None) -> None:
@@ -1538,6 +1601,11 @@ def main(argv: list[str] | None = None) -> int:
             return _paper_config(args)
     except (OSError, RuntimeError, TypeError, ValueError, KeyError) as exc:
         print(f"错误: {exc}", file=sys.stderr)
+        try:
+            _print_failure_guidance(exc)
+        except Exception:
+            # Presentation is best-effort; preserve the primary diagnostic/code.
+            pass
         return 2
     parser.error("unknown command")
     return 2
