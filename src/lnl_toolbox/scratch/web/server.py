@@ -22,6 +22,7 @@ from .. import ScratchExecutionError, execute_recipe, list_blocks, load_recipe, 
 ROOT = Path(__file__).resolve().parent
 RECIPE_ROOT = ROOT.parent / "recipes"
 REPO_ROOT = ROOT.parents[3]
+_FORMULA_RELOAD_LOCK = threading.RLock()
 
 
 @dataclass
@@ -86,7 +87,30 @@ def _job_error_code(message: str | None) -> str | None:
     return None
 
 
+def _reconcile_job_process(job: ScratchJob) -> None:
+    """Publish a terminal process state even if stdout draining lags behind.
+
+    The output reader intentionally drains stdout in a background thread.  On
+    Windows, ``Popen.wait()`` can return before that thread has finished
+    copying the final lines, which previously left ``returncode`` as ``None``
+    and made the UI keep the Stop button disabled forever.  The process handle
+    is authoritative for liveness; output parsing can finish independently.
+    """
+
+    process = job.process
+    if process is None or job.returncode is not None:
+        return
+    returncode = process.poll()
+    if returncode is None:
+        return
+    with SCRATCH_JOBS_LOCK:
+        if job.returncode is None:
+            job.returncode = returncode
+            job.finished_at = job.finished_at or time.time()
+
+
 def _scratch_job_payload(job: ScratchJob) -> dict[str, object]:
+    _reconcile_job_process(job)
     with SCRATCH_JOBS_LOCK:
         lines = list(job.lines)
         returncode = job.returncode
@@ -125,6 +149,14 @@ def _scratch_job_payload(job: ScratchJob) -> dict[str, object]:
         "progress": progress,
         "elapsed_seconds": max(0.0, (job.finished_at or time.time()) - job.started_at),
     }
+
+
+def scratch_job_list_payload() -> dict[str, object]:
+    """Return current and recent Scratch jobs for the Web process panel."""
+
+    with SCRATCH_JOBS_LOCK:
+        jobs = sorted(SCRATCH_JOBS.values(), key=lambda item: item.started_at, reverse=True)
+    return {"jobs": [_scratch_job_payload(job) for job in jobs[:30]]}
 
 
 def _read_scratch_job_output(job: ScratchJob) -> None:
@@ -254,6 +286,15 @@ def cancel_scratch_job(job_id: str) -> ScratchJob:
                     pass
         else:
             process.terminate()
+        # Do not report cancellation before the child has actually exited.
+        # Recipe navigation can immediately start another run, so returning
+        # while the old process is still alive would permit two Scratch jobs
+        # to overlap briefly.
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+    _reconcile_job_process(job)
     return job
 
 
@@ -341,7 +382,11 @@ def _formula_payload(spec) -> dict[str, object]:
 def _reload_user_formulas() -> None:
     from ..formula.registry import reload_formulas
 
-    reload_formulas()
+    # The editor loads blocks and formulas in parallel.  Both endpoints refresh
+    # the same process-wide Formula registry, so unregister/register must be one
+    # atomic operation or the two requests can observe a duplicate user ID.
+    with _FORMULA_RELOAD_LOCK:
+        reload_formulas()
 
 
 class ScratchHandler(BaseHTTPRequestHandler):
@@ -408,6 +453,8 @@ class ScratchHandler(BaseHTTPRequestHandler):
                 from .data_bridge import dataset_catalog_payload
 
                 self._send(dataset_catalog_payload())
+            elif parsed.path == "/api/jobs":
+                self._send(scratch_job_list_payload())
             elif parsed.path.startswith("/api/jobs/"):
                 job_id = parsed.path.removeprefix("/api/jobs/").strip("/")
                 if not job_id:

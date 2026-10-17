@@ -183,7 +183,6 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertIn('item.environment_variable', page)
         self.assertIn('path.join(".")', page)
         self.assertIn('let command = base + " --recipe "', page)
-        self.assertIn("state.dataCompatibilityAlias !== state.dataAlias", page)
         self.assertIn("loadDatasetCompatibility(state.tutorialData)", page)
         self.assertNotIn('dataset === "clothing1m"', page.lower())
 
@@ -409,13 +408,12 @@ class CommandConsoleTest(unittest.TestCase):
 
     def test_quick_start_is_first_entry_and_reuses_existing_execution_flow(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertLess(page.index('id: "quickstart"'), page.index('id: "beginner"'))
-        self.assertIn('/assets/quick_start.js', page)
-        self.assertIn('/assets/quick_start.css', page)
-        self.assertIn('window.quickStartController.mount', page)
+        self.assertLess(page.index('id: "quickstart"'), page.index('id: "data"'))
+        for marker in ("/assets/quick_start.js", "/assets/quick_start.css",
+                       "window.quickStartController.mount", 'fetch("/api/run"'):
+            self.assertIn(marker, page)
         self.assertNotIn("quickStartNoiseOptions", page)
         self.assertNotIn("quickStartCompatibilityRecipes", page)
-        self.assertIn('fetch("/api/run"', page)
 
     def test_web_formal_run_fails_closed_before_training(self):
         import importlib
@@ -486,8 +484,8 @@ class CommandConsoleTest(unittest.TestCase):
         for marker in (
             "activeConfig",
             "在实验中打开配置",
-            "查看兼容数据集",
-            "在 Scratch 打开论文模板",
+            "paper-start-quickstart",
+            'href="/scratch"',
             "保存并转到参数组合实验",
             "openActiveConfigInEditor",
             "openSweepForSource",
@@ -506,31 +504,24 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertIn("const workspaces = [", page)
         self.assertIn("workspaces.forEach(function (item)", page)
         self.assertIn('id="workspace-tabs"', page)
-        self.assertIn('id="advanced-tools-list"', page)
+        self.assertIn('class="workspace-navigation"', page)
         self.assertIn('id="advanced-command-panel"', page)
         self.assertIn('workspaceTabs = {', page)
-        self.assertIn('experiments: [{id:"yaml", label:"配置"}', page)
+        self.assertIn('experiments: [{id:"sweep", label:"参数组合实验"}', page)
         self.assertIn('run: renderRunWorkspace', page)
         self.assertIn("function renderRunWorkspace()", page)
         self.assertIn('class="context-scratch" href="/scratch"', page)
         self.assertIn("function renderConsoleContext()", page)
 
-    def test_dataset_first_start_page_exposes_workspace_handoffs(self):
-        quick_start = (command_console.WEB_ROOT / "assets" / "quick_start.js").read_text(encoding="utf-8")
-        self.assertIn("compact: true", (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8"))
-        self.assertIn("function renderNextActions()", quick_start)
-        self.assertIn("创建 / 编辑实验配置", quick_start)
-        self.assertIn("查看兼容论文", quick_start)
-        self.assertIn("打开 Scratch 搭建器", quick_start)
-        self.assertIn("完整方法兼容性引导", quick_start)
-        self.assertIn("高级模式：其他工作区", quick_start)
-        self.assertIn("context.openExperiment", quick_start)
+    def test_dataset_first_start_page_exposes_reviewed_execution_flow(self):
+        script = (command_console.WEB_ROOT / "assets" / "quick_start.js").read_text(encoding="utf-8")
+        for marker in ("function renderNextActions()", "function renderQuickStartCarousel()",
+                       "function renderPlanParameters(", "async function reviewPlan()",
+                       "async function executePlan()", "async function openPaper("):
+            self.assertIn(marker, script)
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn("state.yamlDataset = alias", page)
-        self.assertIn("state.runDataset = alias", page)
-        self.assertIn("state.dataAlias = alias", page)
-        self.assertIn('switchModule("yaml")', page)
-        self.assertIn('switchModule("papers")', page)
+        for marker in ("state.yamlDataset = alias", "state.runDataset = alias", "state.dataAlias = alias"):
+            self.assertIn(marker, page)
 
     def test_sweep_ui_reuses_parameter_metadata_groups_and_excludes_locks(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
@@ -1013,63 +1004,27 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertNotIn('selectValue("data-root"', api_builder)
         self.assertNotIn('selectValue("data-path"', api_builder)
 
-    def test_dataset_status_table_is_a_direct_collapsed_web_view(self):
+    def test_dataset_list_uses_existing_reports_and_registration_modal(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn('dataAction: "status"', page)
-        self.assertIn('statusPanel.id = "data-status-panel";', page)
-        self.assertIn(
-            'statusPanel.classList.toggle("hidden", state.dataAction !== "list");',
-            page,
-        )
-        self.assertIn('statusCollapse.id = "data-status-collapse";', page)
-        self.assertIn('statusCollapse.textContent = "收起";', page)
-        self.assertIn('state.dataAction = "status";', page)
-        self.assertIn('actionNode.value = "status";', page)
-        self.assertIn("updateDatasetStatusVisibility();", page)
-        self.assertIn('if (action === "list") return "";', page)
-        self.assertIn("正在查看已有数据状态，无需执行指令。", page)
-        self.assertIn(
-            'module === "data" && previousModule !== "data" && state.dataAction === "list"',
-            page,
-        )
-        for heading in ("数据集", "状态", "位置", "Train / Test", "训练验证"):
-            self.assertIn(f"<th>{heading}</th>", page)
+        block = page[page.index("function renderData()"):page.index("function renderSweep()")]
+        self.assertIn("state.datasets.datasets || []", block)
+        self.assertIn("dataTableHtml(reports)", block)
+        self.assertIn('document.getElementById("add-dataset").onclick = openAddDataset', block)
+        self.assertIn('action:"remove", name:alias', block)
+        self.assertIn("await refreshDatasets()", block)
+        self.assertIn("function openAddDataset()", page)
+        self.assertNotIn("datasetProfileCompatibilityHtml()", block)
+        self.assertNotIn("dataFeedbackHtml(", block)
 
-    def test_dataset_training_flow_and_feedback_are_scoped_to_current_action(self):
+    def test_dataset_list_does_not_leak_legacy_training_feedback(self):
         page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        render_data = page[
-            page.index("function renderData()"):
-            page.index("function renderSweep()")
-        ]
-        feedback = page[
-            page.index("function dataFeedbackHtml(report)"):
-            page.index("function explicitValue(value)")
-        ]
-
-        self.assertIn(
-            'const trainingFlow = state.dataAction === "run" ? '
-            'datasetProfileCompatibilityHtml() : "";',
-            render_data,
-        )
-        self.assertIn("+ trainingFlow +", render_data)
-        self.assertNotIn("+ datasetProfileCompatibilityHtml();", render_data)
-        for action in ("list", "status", "path", "register", "inspect", "verify", "remove"):
-            self.assertIn(f'{{value:"{action}"', render_data)
-        self.assertIn('{value:"run", label:"使用已登记数据训练"}', render_data)
-
-        self.assertIn('if (state.dataAction !== "run" || !report) return \'\';', feedback)
-        self.assertNotIn("训练验证完成", feedback)
-        self.assertNotIn("数据检查通过", feedback)
-        self.assertIn(
-            "state.dataAction = actionNode.value; state.dataResult = null;",
-            render_data,
-        )
-        action_change = render_data[
-            render_data.index('actionNode.addEventListener("change"'):
-            render_data.index('statusCollapse.addEventListener("click"')
-        ]
-        self.assertIn("renderData();", action_change)
-        self.assertIn("updateModulePreview();", action_change)
+        block = page[page.index("function renderData()"):page.index("function renderSweep()")]
+        self.assertNotIn("state.dataResult", block)
+        self.assertNotIn("dataFeedbackHtml(", block)
+        self.assertNotIn("datasetProfileCompatibilityHtml()", block)
+        script = (command_console.WEB_ROOT / "assets" / "quick_start.js").read_text(encoding="utf-8")
+        for marker in ("function reviewPlan()", "function executePlan()", "reviewSignature()"):
+            self.assertIn(marker, script)
 
     def test_dataset_http_api_uses_shared_status_contract(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
@@ -1103,7 +1058,7 @@ class CommandConsoleTest(unittest.TestCase):
                 self.assertIn("1. 登记路径", home)
                 self.assertIn("再次点击，确认删除登记", home)
                 self.assertIn('dataAdapter: "cifar10"', home)
-                self.assertIn("state.dataOutput = event.target.value", home)
+                self.assertIn('document.getElementById("add-dataset").onclick = openAddDataset', home)
                 self.assertIn('field("本地数据集", "tutorial-data"', home)
                 self.assertIn('{value:"paper", label:"论文正式配置"}', home)
                 self.assertIn('field("论文方法", "yaml-paper"', home)
@@ -1123,8 +1078,8 @@ class CommandConsoleTest(unittest.TestCase):
                 self.assertIn("state.resumeInspectionKey !== currentResumeKey()", home)
                 self.assertIn("function updateResultVisibility()", home)
                 self.assertIn('id="paper-open-experiment"', home)
-                self.assertIn('id="paper-open-data"', home)
-                self.assertIn('id="paper-open-scratch"', home)
+                self.assertIn('id="paper-start-quickstart"', home)
+                self.assertIn('class="context-scratch" href="/scratch"', home)
                 self.assertIn("论文方法、配置字段与代码的关系", home)
                 self.assertIn('switchModule("yaml")', home)
                 self.assertIn('id="paper-open-experiment"', home)
@@ -1615,3 +1570,77 @@ class CommandConsoleTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IntegratedJobUiTest(unittest.TestCase):
+    def test_output_completion_waits_for_stdout_drain(self):
+        process = mock.Mock(stdout=io.StringIO('{"ok":true}\n'))
+        process.poll.return_value = 0
+        process.wait.return_value = 0
+        job = command_console.Job("drain", "doctor", ["lnl", "doctor", "--format", "json"], "doctor", process=process)
+        before = command_console._job_payload(job)
+        self.assertFalse(before["running"])
+        self.assertFalse(before["output_complete"])
+        command_console._read_output(job)
+        after = command_console._job_payload(job)
+        self.assertTrue(after["output_complete"])
+        self.assertEqual(after["structured"], {"ok": True})
+
+    def test_job_list_http_returns_reconciled_snapshot(self):
+        process = mock.Mock()
+        process.poll.return_value = 0
+        job = command_console.Job("listed", "doctor", ["lnl", "doctor"], "doctor", process=process)
+        server = command_console.ThreadingHTTPServer(("127.0.0.1", 0), command_console.ConsoleHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with mock.patch.object(command_console, "JOBS", {job.job_id: job}):
+                with request.urlopen(f"http://127.0.0.1:{server.server_address[1]}/api/jobs") as response:
+                    payload = json.load(response)
+                self.assertEqual(payload["jobs"][0]["id"], "listed")
+                self.assertFalse(payload["jobs"][0]["running"])
+                self.assertFalse(payload["jobs"][0]["output_complete"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_web_server_refuses_second_listener_on_same_port(self):
+        with command_console.SingleInstanceHTTPServer(
+            ("127.0.0.1", 0), command_console.ConsoleHandler
+        ) as first:
+            with self.assertRaises(OSError):
+                command_console.ThreadingHTTPServer(
+                    first.server_address, command_console.ConsoleHandler
+                )
+
+    def test_main_reports_occupied_web_port(self):
+        with mock.patch.object(
+            command_console, "serve", side_effect=OSError(10048, "address in use")
+        ), contextlib.redirect_stderr(io.StringIO()) as output:
+            result = command_console.main(["--port", "8765"])
+        self.assertEqual(result, 1)
+        self.assertIn("Web port 8765 is already in use", output.getvalue())
+
+    def test_number_parameters_do_not_spin_on_mouse_wheel(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn('document.addEventListener("wheel", function (event) {', page)
+        self.assertIn('target instanceof HTMLInputElement && target.type === "number"', page)
+        self.assertIn('document.activeElement === target', page)
+        self.assertIn('target.blur();', page)
+        self.assertIn('}, {capture:true, passive:true});', page)
+
+    def test_terminal_process_poll_releases_main_stop_state(self):
+        process = mock.Mock()
+        process.poll.return_value = 0
+        job = command_console.Job(
+            job_id="exited",
+            key="doctor",
+            command=["lnl", "doctor"],
+            display_command="lnl doctor",
+            process=process,
+            cancel_requested=True,
+        )
+        payload = command_console._job_payload(job)
+        self.assertFalse(payload["running"])
+        self.assertEqual(payload["returncode"], 0)

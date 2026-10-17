@@ -13,6 +13,26 @@ const state = {
   datasets: [],
   datasetFacts: {},
   validated: false,
+  // The recipe and registered dataset catalog are the only authoritative
+  // experiment inputs.  Everything below is derived and carries the
+  // revision that produced it; a changed source invalidates those values.
+  revision: 0,
+  validatedRevision: -1,
+  sourceSnapshot: {datasetKey: null},
+  derived: {
+    datasetCapabilities: null,
+    datasetCapabilitiesRevision: -1,
+    compatibility: null,
+    compatibilityRevision: -1,
+    generatedConfig: null,
+    generatedConfigRevision: -1,
+    preflight: null,
+    preflightRevision: -1,
+    runPlan: null,
+    runPlanRevision: -1,
+    command: null,
+    commandRevision: -1,
+  },
   errorStepId: null,
   errorMessage: '',
   errorPayload: null,
@@ -32,11 +52,20 @@ const state = {
   inspectorTab: 'blocks',
   running: false,
   jobId: null,
+  activeRunRevision: null,
+  runGeneration: 0,
+  activeRunGeneration: null,
+  recipeLoadGeneration: 0,
+  pendingRunRequest: null,
+  pendingRunCancellation: null,
+  unresolvedCancellations: new Map(),
   runPollTimer: null,
+  jobListPollTimer: null,
+  jobs: [],
   runProgress: null,
   runStopping: false,
   formulaEditor: {
-    steps: [], editingId: null, paletteExpanded: true, expression: null, expressionSelection: null, expressionDrag: null,
+    steps: [], editingId: null, paletteExpanded: true, paletteGroup: '基础运算', paletteQuery: '', expression: null, expressionSelection: null, expressionDrag: null,
     activeOutput: 'loss', outputExpressions: {loss: null}, inputSchemas: {}, parameterSchemas: {}, outputSchemas: {},
     parameterStates: {},
   },
@@ -48,7 +77,135 @@ let uiIdCounter = 0;
 // every few seconds. Stopping remains faster so the button feels responsive.
 const RUN_PROGRESS_POLL_MS = 4000;
 const RUN_STOP_POLL_MS = 500;
+const JOB_LIST_POLL_MS = 4000;
 const USABLE_DATASET_STATUSES = new Set(['ready', 'available', 'built-in', 'builtin']);
+const CUSTOM_DATASET_MODES = new Set(['custom', 'custom_path', 'local', 'path', 'folder']);
+
+function isCustomDatasetMode(value) {
+  return CUSTOM_DATASET_MODES.has(String(value || '').trim().toLowerCase());
+}
+
+// Keep this dependency map close to the state so future UI additions do not
+// accidentally cache a result against only a display name.  The map is also
+// useful as a compact audit of the invalidation boundary:
+// source recipe/catalog changes invalidate capabilities first, then every
+// compatibility/config/plan/command result derived from them.  Recipe edits
+// still invalidate execution artifacts, while capabilities remain cached when
+// the selected source itself is unchanged.
+const DERIVED_STATE_DEPENDENCIES = Object.freeze({
+  datasetCapabilities: ['dataset_catalog', 'recipe.data'],
+  compatibility: ['method_requirements', 'datasetCapabilities', 'recipe'],
+  generatedConfig: ['recipe', 'datasetCapabilities'],
+  runPlan: ['generatedConfig', 'compatibility', 'preflight'],
+  command: ['runPlan'],
+});
+
+function invalidateDerivedState(reason = 'source changed', {datasetChanged = null} = {}) {
+  // Capabilities describe the selected data source, not every recipe
+  // parameter.  Keep them when an unrelated recipe/parameter edit occurs;
+  // infer a data change from the canonical source key when callers do not
+  // provide one explicitly.
+  const currentDatasetKey = typeof datasetSourceKey === 'function' ? datasetSourceKey() : null;
+  const previousDatasetKey = state.sourceSnapshot?.datasetKey ?? null;
+  const changedDataset = datasetChanged === null ? previousDatasetKey !== currentDatasetKey : Boolean(datasetChanged);
+  state.revision += 1;
+  state.validated = false;
+  state.validatedRevision = -1;
+  const capabilities = changedDataset ? null : state.derived.datasetCapabilities;
+  state.derived = {
+    ...state.derived,
+    datasetCapabilities: capabilities,
+    datasetCapabilitiesRevision: capabilities ? state.revision : -1,
+    compatibility: null,
+    compatibilityRevision: -1,
+    generatedConfig: null,
+    generatedConfigRevision: -1,
+    preflight: null,
+    preflightRevision: -1,
+    runPlan: null,
+    runPlanRevision: -1,
+    command: null,
+    commandRevision: -1,
+    invalidatedBy: reason,
+  };
+  state.sourceSnapshot = {datasetKey: currentDatasetKey};
+  return state.revision;
+}
+
+function staleStateError(expectedRevision, phase = '异步检查') {
+  const error = new Error(`实验状态在${phase}期间发生变化，已丢弃过期结果。请基于当前状态重新检查后运行。`);
+  error.guidanceCode = 'stale-state';
+  error.payload = {ok: false, error: error.message, code: 'stale-state', expected_revision: expectedRevision, current_revision: state.revision};
+  return error;
+}
+
+function assertCurrentRevision(expectedRevision, phase = '操作') {
+  if (expectedRevision !== state.revision) throw staleStateError(expectedRevision, phase);
+}
+
+function isCurrentRequest(requestRevision, requestSourceKey = null) {
+  if (requestRevision !== state.revision) return false;
+  return requestSourceKey === null || requestSourceKey === datasetSourceKey();
+}
+
+function assertCurrentRequest(requestRevision, requestSourceKey = null, phase = '异步操作') {
+  if (!isCurrentRequest(requestRevision, requestSourceKey)) throw staleStateError(requestRevision, phase);
+}
+
+function assertCurrentRunState(expectedRevision = state.revision) {
+  assertCurrentRevision(expectedRevision, '启动运行');
+  const required = ['generatedConfig', 'compatibility', 'preflight', 'runPlan'];
+  if (!state.validated || state.validatedRevision !== expectedRevision || required.some((name) => (
+    !state.derived[name] || state.derived[`${name}Revision`] !== expectedRevision
+  ))) {
+    throw staleStateError(expectedRevision, '启动运行');
+  }
+}
+
+function isCurrentRun(jobId, generation = state.activeRunGeneration) {
+  return generation !== null && generation === state.activeRunGeneration && jobId === state.jobId;
+}
+
+function beginRecipeLoad() {
+  state.recipeLoadGeneration += 1;
+  return {token: state.recipeLoadGeneration, revision: state.revision};
+}
+
+function cancelJobSilently(jobId) {
+  if (!jobId) return state.pendingRunCancellation || Promise.resolve();
+  // Recipe navigation must release the server-side process, but a failed
+  // best-effort cancellation must not overwrite the newly selected recipe.
+  state.unresolvedCancellations.set(jobId, null);
+  const request = api(`/jobs/${encodeURIComponent(jobId)}/cancel`, {method: 'POST'})
+    .then((job) => {
+      if (!['cancelled', 'completed', 'failed'].includes(job?.status)) {
+        throw new Error('服务尚未确认旧进程退出');
+      }
+      state.unresolvedCancellations.delete(jobId);
+      return job;
+    }).catch((error) => { state.unresolvedCancellations.set(jobId, error); });
+  const pending = state.pendingRunCancellation;
+  const combined = Promise.all([pending, request]);
+  state.pendingRunCancellation = combined;
+  combined.then(() => {
+    if (state.pendingRunCancellation === combined) state.pendingRunCancellation = null;
+  });
+  return combined;
+}
+
+async function ensurePreviousRunsStopped() {
+  if (state.pendingRunCancellation) await state.pendingRunCancellation;
+  // Keep failed cancellation IDs so retrying Run can recover, without ever
+  // treating a network failure as confirmation that the process exited.
+  await Promise.all([...state.unresolvedCancellations.keys()].map(cancelJobSilently));
+  if (state.unresolvedCancellations.size) {
+    throw new Error(`无法确认旧任务已停止（${[...state.unresolvedCancellations.keys()].join(', ')}）。已阻止新训练；恢复服务连接后重试。`);
+  }
+}
+
+function updateRecipeName(value) {
+  state.recipe.name = String(value).trim() || 'scratch_recipe';
+}
 
 async function api(path, options = {}) {
   const relativePath = path.startsWith('/api/') ? path.slice(4) : path;
@@ -451,9 +608,14 @@ function clearRunPolling() {
   state.runPollTimer = null;
 }
 
-function resetRunTracking() {
+function resetRunTracking({cancel = false} = {}) {
+  const previousJobId = state.jobId;
+  state.runGeneration += 1;
+  if (cancel) cancelJobSilently(previousJobId);
   clearRunPolling();
   state.jobId = null;
+  state.activeRunRevision = null;
+  state.activeRunGeneration = null;
   state.runProgress = null;
   state.runStopping = false;
   state.running = false;
@@ -538,8 +700,10 @@ function renderEpochOutputs(progress = {}) {
   list.scrollTop = list.scrollHeight;
 }
 
-function renderRunJob(job) {
-  if (!job) return;
+function renderRunJob(job, expectedGeneration = state.activeRunGeneration) {
+  // Do not let a late response from an older recipe mutate the current run
+  // panel. The guard belongs before any state or DOM write.
+  if (!job || !isCurrentRun(job.id, expectedGeneration)) return false;
   state.jobId = job.id || state.jobId;
   state.runStopping = Boolean(job.running && job.cancel_requested);
   state.runProgress = job.progress || state.runProgress;
@@ -553,51 +717,181 @@ function renderRunJob(job) {
     setResultState(job.cancel_requested ? '正在停止…' : '运行中…', 'running');
     if ($('result-summary')) $('result-summary').textContent = job.cancel_requested
       ? '已发出停止请求，正在等待运行进程退出…'
-      : '训练正在后台执行；实时进度会在此处更新。';
+      : (state.activeRunRevision !== null && state.activeRunRevision !== state.revision
+        ? '训练仍在执行旧版本；当前配方已变化，本次结果不会覆盖当前状态。'
+        : '训练正在后台执行；实时进度会在此处更新。');
     updateRunState();
-    return;
+    return true;
   }
   state.running = false;
   clearRunPolling();
   updateRunState();
+  if (state.activeRunRevision !== null && state.activeRunRevision !== state.revision) {
+    // The process may finish after the user changed the recipe.  Keep its
+    // logs available, but never promote an old run into the current result or
+    // readiness state.
+    state.lastRun = null;
+    setResultState('旧版本运行已结束', 'error');
+    if ($('result-summary')) $('result-summary').textContent = '本次运行基于修改前的配方完成；结果未写入当前配方，请按当前状态重新运行。';
+    return true;
+  }
   if (job.status === 'cancelled' || job.cancel_requested) {
     setResultState('已停止', 'error');
     if ($('result-summary')) $('result-summary').textContent = '运行已停止；已经生成的中间产物仍保留在运行目录中。';
-    return;
+    return true;
   }
   if (job.returncode === 0) {
     const result = job.structured && typeof job.structured === 'object' ? job.structured : {
       ok: true, metrics: [], artifact_dir: job.artifact_dir,
     };
     renderRunResult({...result, artifact_dir: result.artifact_dir || job.artifact_dir});
-    return;
+    return true;
   }
   const error = new Error(job.error || 'Scratch 运行失败，请展开原始输出查看原因。');
   error.payload = {ok: false, error: error.message, code: job.error_code, block_id: job.block_id, params: job.params};
   showError(error);
+  return true;
+}
+
+function jobStatusLabel(job) {
+  if (job?.running) return job.cancel_requested ? '正在停止' : '运行中';
+  if (job?.status === 'cancelled' || job?.cancel_requested) return '已停止';
+  if (job?.status === 'completed' || job?.returncode === 0) return '已完成';
+  if (job?.status === 'failed') return '失败';
+  return job?.status || '未知';
+}
+
+function renderJobList(jobs = state.jobs) {
+  const list = $('scratch-job-list-items');
+  const count = $('scratch-job-list-count');
+  if (!list) return;
+  if (count) count.textContent = `${jobs.length} 个`;
+  list.replaceChildren();
+  if (!jobs.length) {
+    const empty = document.createElement('div');
+    empty.className = 'scratch-job-list-empty';
+    empty.textContent = '当前没有 Scratch 进程。';
+    list.appendChild(empty);
+    return;
+  }
+  jobs.forEach((job) => {
+    const row = document.createElement('article');
+    row.className = `scratch-job-row ${job.running ? 'is-running' : 'is-terminal'}`;
+    const heading = document.createElement('div');
+    heading.className = 'scratch-job-row-heading';
+    const title = document.createElement('strong');
+    title.textContent = job.recipe || 'Scratch Recipe';
+    const status = document.createElement('span');
+    status.className = `scratch-job-status ${job.running ? 'running' : job.status || ''}`;
+    status.textContent = job.id === state.jobId ? `当前 · ${jobStatusLabel(job)}` : jobStatusLabel(job);
+    heading.append(title, status);
+    row.appendChild(heading);
+    const meta = document.createElement('div');
+    meta.className = 'scratch-job-row-meta';
+    meta.textContent = `${String(job.id || '').slice(0, 12)} · ${Number(job.elapsed_seconds || 0).toFixed(1)}s`;
+    row.appendChild(meta);
+    if (job.running) {
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'secondary scratch-job-cancel';
+      cancel.disabled = Boolean(job.cancel_requested);
+      cancel.textContent = job.cancel_requested ? '正在停止…' : '停止此进程';
+      cancel.onclick = () => cancelListedJob(job.id);
+      row.appendChild(cancel);
+    }
+    list.appendChild(row);
+  });
+}
+
+function setScratchJobListExpanded(expanded) {
+  const list = $('scratch-job-list-items');
+  const section = $('scratch-job-list');
+  const toggle = $('toggle-scratch-jobs');
+  const open = Boolean(expanded);
+  if (list) list.hidden = !open;
+  if (section) section.classList.toggle('is-expanded', open);
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', String(open));
+    const chevron = toggle.querySelector('.scratch-job-list-chevron');
+    if (chevron) chevron.textContent = open ? '▾' : '▸';
+  }
+}
+
+async function refreshJobList({schedule = true} = {}) {
+  if (state.jobListPollTimer) window.clearTimeout(state.jobListPollTimer);
+  state.jobListPollTimer = null;
+  try {
+    const payload = await api('/jobs');
+    state.jobs = Array.isArray(payload) ? payload : (payload.jobs || []);
+    renderJobList();
+    const current = state.jobs.find((job) => job.id === state.jobId);
+    // The list is an independent liveness source. If the focused poll missed
+    // the terminal response, reconcile it here so Stop is released.
+    if (current && !current.running && isCurrentRun(current.id, state.activeRunGeneration)) {
+      renderRunJob(current, state.activeRunGeneration);
+    }
+  } catch (error) {
+    const list = $('scratch-job-list-items');
+    if (list && !state.jobs.length) list.textContent = `进程列表暂时不可用：${error.message}`;
+  } finally {
+    if (schedule) state.jobListPollTimer = window.setTimeout(() => refreshJobList(), JOB_LIST_POLL_MS);
+  }
+}
+
+async function cancelListedJob(jobId) {
+  if (!jobId) return;
+  if (jobId === state.jobId && state.running) {
+    await stopRun();
+    return;
+  }
+  try {
+    const job = await api(`/jobs/${encodeURIComponent(jobId)}/cancel`, {method: 'POST'});
+    state.jobs = state.jobs.map((item) => item.id === jobId ? job : item);
+    renderJobList();
+    refreshJobList({schedule: false});
+  } catch (error) {
+    showError(error);
+  }
 }
 
 async function pollRunJob(jobId) {
-  if (!jobId) return;
+  const expectedGeneration = arguments.length > 1 ? arguments[1] : state.activeRunGeneration;
+  if (!isCurrentRun(jobId, expectedGeneration)) return;
   try {
     const job = await api(`/jobs/${encodeURIComponent(jobId)}`);
-    renderRunJob(job);
-    if (job.running) state.runPollTimer = window.setTimeout(() => pollRunJob(jobId), RUN_PROGRESS_POLL_MS);
+    if (!isCurrentRun(jobId, expectedGeneration)) return;
+    renderRunJob(job, expectedGeneration);
+    if (job.running && isCurrentRun(jobId, expectedGeneration)) {
+      state.runPollTimer = window.setTimeout(() => pollRunJob(jobId, expectedGeneration), RUN_PROGRESS_POLL_MS);
+    }
   } catch (error) {
-    clearRunPolling(); state.running = false; updateRunState(); showError(error);
+    if (!isCurrentRun(jobId, expectedGeneration)) return;
+    // A transport failure says nothing about whether the training process
+    // has exited. Keep ownership and the Stop action while retrying status.
+    clearRunPolling(); state.running = true; updateRunState(); showError(error);
+    setResultState('连接中断，任务状态待确认', 'error');
+    if ($('result-summary')) $('result-summary').textContent = '旧训练可能仍在运行；正在重试查询。确认结束前不会启动新任务，也可以点击停止运行。';
+    state.runPollTimer = window.setTimeout(() => pollRunJob(jobId, expectedGeneration), RUN_PROGRESS_POLL_MS);
   }
 }
 
 async function stopRun() {
   if (!state.jobId || !state.running) return;
+  const stopJobId = state.jobId;
+  const stopGeneration = state.activeRunGeneration;
+  if (!isCurrentRun(stopJobId, stopGeneration)) return;
   state.runStopping = true;
   const button = $('stop-run');
   if (button) { button.disabled = true; button.textContent = '正在停止…'; }
   try {
-    const job = await api(`/jobs/${encodeURIComponent(state.jobId)}/cancel`, {method: 'POST'});
-    renderRunJob(job);
-    if (job.running) state.runPollTimer = window.setTimeout(() => pollRunJob(state.jobId), RUN_STOP_POLL_MS);
+    const job = await api(`/jobs/${encodeURIComponent(stopJobId)}/cancel`, {method: 'POST'});
+    if (!isCurrentRun(stopJobId, stopGeneration)) return;
+    renderRunJob(job, stopGeneration);
+    if (job.running && isCurrentRun(stopJobId, stopGeneration)) {
+      state.runPollTimer = window.setTimeout(() => pollRunJob(stopJobId, stopGeneration), RUN_STOP_POLL_MS);
+    }
   } catch (error) {
+    if (!isCurrentRun(stopJobId, stopGeneration)) return;
     state.runStopping = false;
     if (button) { button.disabled = false; button.textContent = '■ 停止运行'; }
     showError(error);
@@ -859,7 +1153,13 @@ function renderRunResult(result) {
 
 function markDirty() {
   const hadError = Boolean(state.errorMessage || state.errorStepId || state.errorPayload || state.errorGuide);
-  state.validated = false;
+  if (state.running || state.jobId) {
+    // Editing the recipe changes the meaning of every live run update. Stop
+    // and detach that run immediately so even intermediate progress/log
+    // responses cannot appear under the newly edited recipe.
+    resetRunTracking({cancel: true});
+  }
+  invalidateDerivedState('recipe or parameter changed');
   state.lastRun = null;
   state.errorStepId = null;
   state.errorMessage = '';
@@ -886,6 +1186,22 @@ function recipeDataReady() {
 
 function datasetSourceEntry() {
   return stepsWithInfo().find(({ info }) => isDatasetSourceInfo(info)) || null;
+}
+
+function stableSourceValue(value) {
+  if (Array.isArray(value)) return value.map(stableSourceValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableSourceValue(value[key])]));
+}
+
+function datasetSourceKey(entry = datasetSourceEntry()) {
+  const params = entry?.step?.params || {};
+  // Every effective load_dataset parameter participates in source identity.
+  // A change to adapter/classes/labels/options must invalidate capabilities just
+  // like a dataset/path change; save_as is only an output-slot name.
+  const sourceParams = Object.fromEntries(Object.entries(params)
+    .filter(([key]) => key !== 'save_as' && !key.startsWith('_ui')));
+  return JSON.stringify(stableSourceValue(sourceParams));
 }
 
 function datasetIsUsable(item) {
@@ -1121,26 +1437,43 @@ function syntheticFacts() {
 async function loadDatasetFacts(alias) {
   const name = String(alias || '').trim();
   if (!name) return;
+  const requestRevision = state.revision;
+  const requestSourceKey = datasetSourceKey();
   if (name === 'synthetic') {
+    if (!isCurrentRequest(requestRevision, requestSourceKey)) return;
     state.datasetFacts.synthetic = syntheticFacts();
+    state.derived.datasetCapabilities = state.datasetFacts.synthetic;
+    state.derived.datasetCapabilitiesRevision = state.revision;
     renderInspector();
     renderPalette();
     return;
   }
+  let facts;
   try {
-    state.datasetFacts[name] = await api('/api/dataset/' + encodeURIComponent(name));
+    facts = await api('/api/dataset/' + encodeURIComponent(name));
   } catch (error) {
-    state.datasetFacts[name] = { alias: name, status: 'unknown', noise_methods: [], error: error.message };
+    facts = { alias: name, status: 'unknown', noise_methods: [], error: error.message };
   }
+  // A response for a previous dataset selection must never replace the
+  // capabilities for the current one (A → B where A returns last).
+  if (!isCurrentRequest(requestRevision, requestSourceKey)) return;
+  state.datasetFacts[name] = facts;
+  state.derived.datasetCapabilities = facts;
+  state.derived.datasetCapabilitiesRevision = state.revision;
   renderInspector();
   renderPalette();
 }
 
 async function refreshDatasets({announce = false} = {}) {
+  const requestRevision = state.revision;
   try {
-    const payload = await api('/api/datasets');
-    state.datasets = Array.isArray(payload) ? payload : (payload.datasets || []);
+    const response = await api('/api/datasets');
+    if (!isCurrentRequest(requestRevision)) return;
+    state.datasets = Array.isArray(response) ? response : (response.datasets || []);
     state.datasets.forEach((item) => { if (item.alias) state.datasetFacts[item.alias] = item; });
+    invalidateDerivedState('dataset catalog refreshed', {datasetChanged: true});
+    state.derived.datasetCapabilities = state.datasetFacts[datasetSourceEntry()?.step?.params?.dataset] || null;
+    state.derived.datasetCapabilitiesRevision = state.revision;
     renderInspector();
     renderPalette();
     if (announce) showMessage(`已同步 ${state.datasets.length} 个数据集登记`, 'ok');
@@ -1480,7 +1813,7 @@ function renderPalette() {
 
   if (state.paletteCategory === '我的') {
     const actions = document.createElement('div'); actions.className = 'my-palette-actions';
-    [['新建公式', '用数学运算创建一个用户公式', () => { resetFormulaEditor(); $('formula-editor-dialog').showModal(); }],
+    [['新建公式', '用数学运算创建一个用户公式', () => { resetFormulaEditor(); showFormulaEditorDialog(); }],
       ['公式模板与我的公式', '打开内置公式模板，或编辑已保存的用户公式', showMyFormulas],
       ['我的组合块', '组合块只在界面中折叠，不会新增运行时 Block', () => showMessage('组合块是 UI 视图；展开或解除组合不会改变 Recipe。')]].forEach(([name, description, action]) => {
       const card = document.createElement('button'); card.type = 'button'; card.className = 'my-palette-card';
@@ -1492,7 +1825,7 @@ function renderPalette() {
     const actions = document.createElement('div'); actions.className = 'my-palette-actions';
     const custom = document.createElement('button'); custom.type = 'button'; custom.className = 'my-palette-card';
     custom.innerHTML = '<strong>＋ 创建自定义公式</strong><small>把已有公式积木组合成一个可复用的用户公式。</small>';
-    custom.onclick = () => { resetFormulaEditor(); $('formula-editor-dialog').showModal(); };
+    custom.onclick = () => { resetFormulaEditor(); showFormulaEditorDialog(); };
     actions.appendChild(custom); palette.appendChild(actions);
   }
   if (!visible.length) {
@@ -2248,7 +2581,7 @@ function renderDataOverviewInspector(selection, target, explanationTarget) {
     detail.textContent = info.description || '';
     section.appendChild(detail);
     Object.entries(info.params || {}).forEach(([name, schema]) => {
-      if (isDatasetSourceInfo(info) && name === 'path' && step.params?.source_mode !== 'custom_path') return;
+      if (isDatasetSourceInfo(info) && name === 'path' && !isCustomDatasetMode(step.params?.source_mode)) return;
       const wrap = document.createElement('div');
       wrap.className = 'param';
       const label = document.createElement('label');
@@ -2635,7 +2968,7 @@ function renderPairInspector(pair, target, explanationTarget) {
     const section = document.createElement('section'); section.className = 'inspector-section';
     const heading = document.createElement('h3'); heading.textContent = info.name; section.appendChild(heading);
     for (const [name, schema] of Object.entries(info.params || {})) {
-      if (isDatasetSourceInfo(info) && name === 'path' && step.params?.source_mode !== 'custom_path') continue;
+      if (isDatasetSourceInfo(info) && name === 'path' && !isCustomDatasetMode(step.params?.source_mode)) continue;
       const wrap = document.createElement('div'); wrap.className = 'param';
       const label = document.createElement('label'); label.textContent = name;
       wrap.append(label, renderParamControl(name, schema, step)); section.appendChild(wrap);
@@ -2842,7 +3175,7 @@ function renderInspector() {
     help.textContent = '待添加积木：先选择输入连接和输出名称，再添加或拖动。这里只配置新积木，不会修改已有步骤。';
     params.appendChild(help);
     info.params && Object.entries(info.params).forEach(([name, schema]) => {
-      if (isDatasetSourceInfo(info) && name === 'path' && step.params?.source_mode !== 'custom_path') return;
+      if (isDatasetSourceInfo(info) && name === 'path' && !isCustomDatasetMode(step.params?.source_mode)) return;
       const wrap = document.createElement('div'); wrap.className = 'param';
       const label = document.createElement('label'); label.textContent = isDatasetSourceInfo(info) && name === 'dataset' ? 'dataset（必选）' : name; wrap.appendChild(label);
       wrap.appendChild(renderParamControl(name, schema, step));
@@ -2850,7 +3183,7 @@ function renderInspector() {
     });
   } else {
     info.params && Object.entries(info.params).forEach(([name, schema]) => {
-      if (isDatasetSourceInfo(info) && name === 'path' && step.params?.source_mode !== 'custom_path') return;
+      if (isDatasetSourceInfo(info) && name === 'path' && !isCustomDatasetMode(step.params?.source_mode)) return;
       const wrap = document.createElement('div'); wrap.className = 'param';
       const label = document.createElement('label'); label.textContent = isDatasetSourceInfo(info) && name === 'dataset' ? 'dataset（必选）' : name; wrap.appendChild(label);
       wrap.appendChild(renderParamControl(name, schema, step));
@@ -3064,7 +3397,7 @@ function formulaEditorCandidates() {
 // operations in their own visible groups instead of collapsing them into the
 // generic "基础" bucket.
 const FORMULA_EDITOR_GROUPS = ['基础', '函数', '归约', '形状', '条件', '索引', '线性代数', '概率', '概率 / Loss', '更多'];
-const FORMULA_EDITOR_KIND_GROUPS = ['基础运算', '特殊运算', '公式模板'];
+const FORMULA_EDITOR_KIND_GROUPS = ['基础运算', '进阶运算', '公式模板'];
 function formulaEditorGroup(info) {
   const declaredGroup = String(info?.formula_group || '').trim();
   if (FORMULA_EDITOR_GROUPS.includes(declaredGroup)) return declaredGroup;
@@ -3075,9 +3408,9 @@ function formulaEditorGroup(info) {
 function formulaEditorKindGroup(info) {
   const kind = String(info?.formula_kind || '');
   if (kind === 'primitive') return '基础运算';
-  if (kind === 'special') return '特殊运算';
+  if (kind === 'special') return '进阶运算';
   if (kind === 'composite') return '公式模板';
-  return '特殊运算';
+  return '进阶运算';
 }
 
 function formulaDefinitionForBlock(info) {
@@ -3864,8 +4197,197 @@ function renderExpressionNode(node, parent = null, key = null) {
   return wrapper;
 }
 
+let formulaCanvasResizeObserver = null;
+let formulaCanvasObservedWidth = null;
+let formulaCanvasLayoutFrame = null;
+let formulaPaletteResizeObserver = null;
+let formulaPaletteObservedWidth = null;
+let formulaPaletteLayoutFrame = null;
+
 function appendMathExpressionChild(parent, node) {
-  const child = renderMathExpressionNode(node); parent.appendChild(child); return child;
+  // Keep every rendered operand as an explicit layout item. The equation
+  // renderer can measure these items in the browser and insert a real line
+  // break only when the currently available pixel width is exhausted.
+  const item = document.createElement('span');
+  item.className = 'formula-expression-math-child';
+  const child = renderMathExpressionNode(node);
+  item.appendChild(child);
+  parent.appendChild(item);
+  return child;
+}
+
+function formulaMathRangeWidth(parent, start, end) {
+  if (typeof document === 'undefined' || typeof document.createRange !== 'function') return 0;
+  try {
+    const range = document.createRange();
+    range.setStartBefore(start);
+    range.setEndAfter(end);
+    return range.getBoundingClientRect().width;
+  } catch (_) {
+    return 0;
+  }
+}
+
+function insertFormulaMathBreak(parent, child) {
+  const breakNode = document.createElement('span');
+  breakNode.className = 'formula-expression-math-break';
+  // Keep the operator/comma with the operand that follows it.  For example,
+  // a wrapped affine expression becomes "scale × input" / "+ bias" instead
+  // of leaving a dangling "+" at the end of the first visual row.
+  const separator = child.previousSibling;
+  if (separator?.nodeType === 3 && separator.textContent.trim()) separator.before(breakNode);
+  else child.before(breakNode);
+}
+
+function layoutFormulaMathRows(canvas = $('formula-canvas')) {
+  if (!canvas) return;
+  canvas.querySelectorAll('.formula-expression-math-operation').forEach((parent) => {
+    const children = Array.from(parent.children).filter((child) => child.classList.contains('formula-expression-math-child'));
+    if (children.length < 2) return;
+    // Remove breaks from the previous pass before measuring natural width.
+    Array.from(parent.children)
+      .filter((child) => child.classList.contains('formula-expression-math-break'))
+      .forEach((breakNode) => breakNode.remove());
+    const previousWhiteSpace = parent.style.whiteSpace;
+    parent.style.whiteSpace = 'nowrap';
+    const computed = typeof window !== 'undefined' && typeof window.getComputedStyle === 'function'
+      ? window.getComputedStyle(parent) : null;
+    const horizontalPadding = computed
+      ? (parseFloat(computed.paddingLeft || '0') + parseFloat(computed.paddingRight || '0')) : 0;
+    const available = Math.max(0, (parent.clientWidth || parent.getBoundingClientRect().width) - horizontalPadding);
+    if (!available) { parent.style.whiteSpace = previousWhiteSpace; return; }
+    let rowStart = 0;
+    for (let index = 1; index < children.length; index += 1) {
+      const width = formulaMathRangeWidth(parent, children[rowStart], children[index]);
+      // Range includes the actual operator/comma text between operands, so
+      // the decision uses rendered pixels rather than character counts.
+      if (width > available + 0.5) {
+        insertFormulaMathBreak(parent, children[index]);
+        rowStart = index;
+      }
+    }
+    parent.style.whiteSpace = previousWhiteSpace;
+  });
+}
+
+function ensureFormulaCanvasLayoutObserver(canvas) {
+  if (!canvas || typeof ResizeObserver !== 'function') return;
+  if (formulaCanvasResizeObserver) return;
+  formulaCanvasResizeObserver = new ResizeObserver((entries) => {
+    const width = entries?.[0]?.contentRect?.width;
+    if (width === formulaCanvasObservedWidth) return;
+    formulaCanvasObservedWidth = width;
+    queueFormulaCanvasLayout();
+  });
+  formulaCanvasResizeObserver.observe(canvas);
+}
+
+function queueFormulaCanvasLayout() {
+  const run = () => {
+    formulaCanvasLayoutFrame = null;
+    layoutFormulaMathRows();
+  };
+  if (formulaCanvasLayoutFrame && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+    window.cancelAnimationFrame(formulaCanvasLayoutFrame);
+  }
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+    formulaCanvasLayoutFrame = window.requestAnimationFrame(run);
+  } else {
+    run();
+  }
+}
+
+function layoutFormulaPaletteRows(root = $('formula-editor-palette')) {
+  if (!root) return;
+  root.querySelectorAll('.formula-operation-group-body, .formula-operation-subgroup-body').forEach((parent) => {
+    // Flatten rows from the previous pass while preserving the current visual
+    // order. This makes every resize a fresh packing decision.
+    const flattened = [];
+    Array.from(parent.children).forEach((child) => {
+      if (child.classList.contains('formula-palette-row')) flattened.push(...Array.from(child.children));
+      else if (child.classList.contains('formula-palette-block')) flattened.push(child);
+    });
+    const blocks = flattened.filter((child) => child.classList.contains('formula-palette-block'));
+    if (!blocks.length) return;
+    parent.replaceChildren(...blocks);
+    parent.style.display = 'block';
+    // Measure each card at its natural rendered width. Each section is sorted
+    // independently so short cards form tidy pairs and long cards naturally
+    // remain on their own row.
+    blocks.forEach((block) => { block.style.flex = '0 0 auto'; block.style.width = 'max-content'; });
+    const computed = typeof window !== 'undefined' && typeof window.getComputedStyle === 'function'
+      ? window.getComputedStyle(parent) : null;
+    const padding = computed
+      ? parseFloat(computed.paddingLeft || '0') + parseFloat(computed.paddingRight || '0') : 0;
+    const available = Math.max(0, (parent.clientWidth || parent.getBoundingClientRect().width) - padding);
+    const gap = computed ? parseFloat(computed.columnGap || computed.gap || '0') : 0;
+    if (!available) {
+      blocks.forEach((block) => { block.style.flex = '1 0 100%'; block.style.width = 'auto'; });
+      return;
+    }
+    const measured = blocks
+      .map((block, index) => ({block, width: block.getBoundingClientRect().width, index}))
+      .sort((left, right) => left.width - right.width || left.index - right.index);
+    // A card can be shorter than the available row even when the two natural
+    // widths add up slightly above it: the row gives each short card a real
+    // half-width column and the text is allowed to wrap.  Keep genuinely long
+    // cards on their own row, based on the measured pixel width rather than a
+    // block-name whitelist.
+    // Use the measured width as the long-card cutoff.  A card that occupies
+    // most of a section is long; cards below that cutoff are allowed to share
+    // two equal columns and let their formula text shrink/wrap.
+    const shortCardLimit = available * 0.86;
+    const rows = [];
+    for (let index = 0; index < measured.length; index += 1) {
+      const first = measured[index];
+      const second = measured[index + 1];
+      const naturalPairFits = second && first.width + gap + second.width <= available + 0.5;
+      const shortPairFits = second && first.width <= shortCardLimit && second.width <= shortCardLimit;
+      if (second && (naturalPairFits || shortPairFits)) {
+        rows.push({blocks: [first.block, second.block], width: first.width + gap + second.width});
+        index += 1;
+      } else rows.push({blocks: [first.block], width: first.width});
+    }
+    rows.forEach((row) => {
+      const rowNode = document.createElement('div');
+      rowNode.className = 'formula-palette-row';
+      rowNode.style.gap = `${gap}px`;
+      row.blocks.forEach((block) => {
+        block.style.flex = row.blocks.length === 1 ? '1 1 100%' : '1 1 0';
+        block.style.width = 'auto';
+        block.classList.toggle('formula-palette-paired', row.blocks.length === 2);
+        rowNode.appendChild(block);
+      });
+      parent.appendChild(rowNode);
+    });
+  });
+}
+
+function ensureFormulaPaletteLayoutObserver(root) {
+  if (!root || typeof ResizeObserver !== 'function') return;
+  if (formulaPaletteResizeObserver) return;
+  formulaPaletteResizeObserver = new ResizeObserver((entries) => {
+    const width = entries?.[0]?.contentRect?.width;
+    if (width === formulaPaletteObservedWidth) return;
+    formulaPaletteObservedWidth = width;
+    queueFormulaPaletteLayout();
+  });
+  formulaPaletteResizeObserver.observe(root);
+}
+
+function queueFormulaPaletteLayout() {
+  const run = () => {
+    formulaPaletteLayoutFrame = null;
+    layoutFormulaPaletteRows();
+  };
+  if (formulaPaletteLayoutFrame && typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+    window.cancelAnimationFrame(formulaPaletteLayoutFrame);
+  }
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+    formulaPaletteLayoutFrame = window.requestAnimationFrame(run);
+  } else {
+    run();
+  }
 }
 
 function renderMathExpressionNode(node) {
@@ -4023,6 +4545,14 @@ function pruneExpressionNode(root, target) {
         root.items.splice(Number(name.slice(1)) - 1, 1);
         return root;
       }
+      const parentInfo = root.kind === 'operation' ? blockInfo(root.block) : null;
+      if (parentInfo?.params?.[name]?.type === 'slot' && parentInfo.params[name].required === false && !isOutputSlot(name)) {
+        // Removing an optional input disconnects that branch while keeping
+        // the surrounding operation intact.  Required operands still use
+        // the existing expression-pruning behaviour below.
+        delete root.bindings[name];
+        return root;
+      }
       const siblings = entries.filter(([key]) => key !== name).map(([, value]) => value).filter(Boolean);
       if (siblings.length) return siblings[0];
       return null;
@@ -4105,6 +4635,20 @@ function expressionOperationNode(info, selected = null, current = null) {
     }
   });
   return {kind: 'operation', block: info.id, bindings, parameters};
+}
+
+function addOptionalExpressionInput(node, slotName) {
+  if (!node || node.kind !== 'operation') return false;
+  const info = blockInfo(node.block);
+  const schema = info?.params?.[slotName];
+  if (!schema || schema.type !== 'slot' || schema.required !== false || isOutputSlot(slotName)) return false;
+  if (node.bindings?.[slotName]) return false;
+  node.bindings = node.bindings || {};
+  node.bindings[slotName] = expressionHole();
+  state.formulaEditor.expressionSelection = node.bindings[slotName];
+  syncFormulaStepsFromExpression();
+  renderFormulaEditor();
+  return true;
 }
 
 function addExpressionOperation(blockId) {
@@ -4242,6 +4786,24 @@ function renderFormulaExpressionActions() {
   if (selectedInfo?.formula_kind === 'composite' && formulaDefinitionForBlock(selectedInfo)) {
     const expand = document.createElement('button'); expand.type = 'button'; expand.textContent = '展开后编辑'; expand.title = '把公式模板替换为它的基础运算链'; expand.onclick = () => expandCompositeExpression(selected); container.appendChild(expand);
   }
+  if (selectedInfo?.params) {
+    const optionalSlots = Object.entries(selectedInfo.params)
+      .filter(([name, schema]) => schema?.type === 'slot' && schema.required === false && !isOutputSlot(name) && !selected.bindings?.[name]);
+    if (optionalSlots.length) {
+      const optionalLabel = document.createElement('span');
+      optionalLabel.className = 'formula-optional-input-label';
+      optionalLabel.textContent = '添加可选输入：';
+      container.appendChild(optionalLabel);
+    }
+    optionalSlots.forEach(([name]) => {
+      const add = document.createElement('button');
+      add.type = 'button';
+      add.textContent = `＋ ${name}`;
+      add.title = `连接可选输入 ${name}`;
+      add.onclick = () => addOptionalExpressionInput(selected, name);
+      container.appendChild(add);
+    });
+  }
   const replace = document.createElement('select'); replace.title = '替换当前节点';
   const replacementGroups = [
     {label: '输入', values: expressionInputCandidates().map((node) => ({value: `input:${node.name}`, label: node.name}))},
@@ -4369,6 +4931,8 @@ function renderFormulaCanvas() {
   if (!state.formulaEditor.expression) { canvas.textContent = '公式画布：尚未添加步骤'; renderFormulaStructureTree(); renderFormulaExpressionActions(); return; }
   const heading = document.createElement('div'); heading.className = 'formula-canvas-heading'; heading.textContent = `${state.formulaEditor.activeOutput || '输出'} =`; canvas.appendChild(heading);
   canvas.appendChild(renderMathExpressionNode(state.formulaEditor.expression));
+  ensureFormulaCanvasLayoutObserver(canvas);
+  queueFormulaCanvasLayout();
   renderFormulaStructureTree();
   renderFormulaExpressionActions();
 }
@@ -4560,60 +5124,98 @@ function renderFormulaEditor() {
   const editorPalette = $('formula-editor-palette');
   if (editorPalette) {
     editorPalette.innerHTML = '';
+    const paletteQuery = String(state.formulaEditor.paletteQuery || '').trim().toLocaleLowerCase();
+    const paletteCandidates = paletteQuery
+      ? candidates.filter((info) => [info.id, info.name, info.formula, info.description, info.formula_group, info.category]
+        .filter(Boolean).join(' ').toLocaleLowerCase().includes(paletteQuery))
+      : candidates;
     const disclosure = document.createElement('details');
     disclosure.className = 'formula-palette-disclosure';
     disclosure.open = state.formulaEditor.paletteExpanded !== false;
     disclosure.addEventListener('toggle', () => { state.formulaEditor.paletteExpanded = disclosure.open; });
     const summary = document.createElement('summary');
-    summary.textContent = `全部运算（${candidates.length}）`;
+    summary.textContent = paletteQuery
+      ? `全部运算（${paletteCandidates.length}/${candidates.length}）`
+      : `全部运算（${candidates.length}）`;
     summary.title = '展开或收起全部数学运算';
     const body = document.createElement('div');
     body.className = 'formula-palette-body';
     const groups = new Map(FORMULA_EDITOR_KIND_GROUPS.map((group) => [group, []]));
-    candidates.forEach((info) => {
+    paletteCandidates.forEach((info) => {
       const group = formulaEditorKindGroup(info);
       if (!groups.has(group)) groups.set(group, []);
       groups.get(group).push(info);
     });
-    groups.forEach((items, groupName) => {
-      if (!items.length) return;
-      const group = document.createElement('details');
-      group.className = 'formula-operation-group';
-      group.open = true;
-      const groupSummary = document.createElement('summary');
-      groupSummary.textContent = `${groupName}（${items.length}）`;
-      const groupBody = document.createElement('div');
-      groupBody.className = 'formula-operation-group-body';
-      const appendOperation = (info) => {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'formula-palette-block';
-        const name = document.createElement('strong');
-        name.textContent = info.name;
-        button.appendChild(name);
-        const formula = document.createElement('div');
-        formula.className = 'formula-palette-formula';
-        renderFormulaOrIntro(formula, info, {compact: true});
-        button.appendChild(formula);
-        button.title = info.description || '点击插入这个数学运算';
-        button.onclick = () => addExpressionOperation(info.id);
-        groupBody.appendChild(button);
-      };
-      if (groupName === '基础运算') {
-        const subgroups = new Map(FORMULA_EDITOR_GROUPS.map((name) => [name, []]));
-        items.forEach((info) => { const name = formulaEditorGroup(info); if (!subgroups.has(name)) subgroups.set(name, []); subgroups.get(name).push(info); });
-        subgroups.forEach((subitems, subgroupName) => {
-          if (!subitems.length) return;
-          const subgroup = document.createElement('details'); subgroup.className = 'formula-operation-subgroup'; subgroup.open = true;
-          subgroup.appendChild(Object.assign(document.createElement('summary'), {textContent: `${subgroupName}（${subitems.length}）`}));
-          const subgroupBody = document.createElement('div'); subgroupBody.className = 'formula-operation-subgroup-body';
-          subitems.forEach((info) => { const previous = groupBody.children.length; appendOperation(info); subgroupBody.appendChild(groupBody.children[previous]); });
-          subgroup.appendChild(subgroupBody); groupBody.appendChild(subgroup);
-        });
-      } else items.forEach(appendOperation);
-      group.append(groupSummary, groupBody);
-      body.appendChild(group);
+    const visibleGroups = [...groups.entries()].filter(([, items]) => items.length);
+    const activeGroupName = groups.has(state.formulaEditor.paletteGroup) && groups.get(state.formulaEditor.paletteGroup).length
+      ? state.formulaEditor.paletteGroup
+      : (visibleGroups[0]?.[0] || '基础运算');
+    state.formulaEditor.paletteGroup = activeGroupName;
+    const tabs = document.createElement('div');
+    tabs.className = 'formula-palette-tabs';
+    visibleGroups.forEach(([groupName, items]) => {
+      const tab = document.createElement('button');
+      tab.type = 'button';
+      tab.className = `formula-palette-tab${groupName === activeGroupName ? ' active' : ''}`;
+      tab.textContent = `${groupName}（${items.length}）`;
+      tab.title = `查看${groupName}中的运算`;
+      tab.onclick = () => { state.formulaEditor.paletteGroup = groupName; renderFormulaEditor(); };
+      tabs.appendChild(tab);
     });
+    body.appendChild(tabs);
+    const activeItems = groups.get(activeGroupName) || [];
+    if (paletteQuery && !paletteCandidates.length) {
+      body.appendChild(Object.assign(document.createElement('div'), {
+        className: 'formula-palette-search-empty',
+        textContent: `没有找到“${state.formulaEditor.paletteQuery.trim()}”对应的运算`,
+      }));
+      disclosure.append(summary, body);
+      editorPalette.appendChild(disclosure);
+      return;
+    }
+    const module = document.createElement('div');
+    module.className = 'formula-palette-module';
+    const moduleHeading = document.createElement('div');
+    moduleHeading.className = 'formula-palette-module-heading';
+    moduleHeading.textContent = `${activeGroupName}运算`;
+    module.appendChild(moduleHeading);
+    const group = document.createElement('details');
+    group.className = 'formula-operation-group';
+    group.open = true;
+    const groupSummary = document.createElement('summary');
+    groupSummary.textContent = `${activeGroupName}（${activeItems.length}）`;
+    const groupBody = document.createElement('div');
+    groupBody.className = 'formula-operation-group-body';
+    const appendOperation = (info, parent = groupBody) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'formula-palette-block';
+      const name = document.createElement('strong');
+      name.textContent = info.name;
+      button.appendChild(name);
+      const formula = document.createElement('div');
+      formula.className = 'formula-palette-formula';
+      renderFormulaOrIntro(formula, info, {compact: true});
+      button.appendChild(formula);
+      button.title = info.description || '点击插入这个数学运算';
+      button.onclick = () => addExpressionOperation(info.id);
+      parent.appendChild(button);
+    };
+    if (activeGroupName === '基础运算') {
+      const subgroups = new Map(FORMULA_EDITOR_GROUPS.map((name) => [name, []]));
+      activeItems.forEach((info) => { const name = formulaEditorGroup(info); if (!subgroups.has(name)) subgroups.set(name, []); subgroups.get(name).push(info); });
+      subgroups.forEach((subitems, subgroupName) => {
+        if (!subitems.length) return;
+        const subgroup = document.createElement('details'); subgroup.className = 'formula-operation-subgroup'; subgroup.open = true;
+        subgroup.appendChild(Object.assign(document.createElement('summary'), {textContent: `${subgroupName}（${subitems.length}）`}));
+        const subgroupBody = document.createElement('div'); subgroupBody.className = 'formula-operation-subgroup-body';
+        subitems.forEach((info) => appendOperation(info, subgroupBody));
+        subgroup.appendChild(subgroupBody); groupBody.appendChild(subgroup);
+      });
+    } else activeItems.forEach((info) => appendOperation(info));
+    group.append(groupSummary, groupBody);
+    module.appendChild(group);
+    body.appendChild(module);
     disclosure.append(summary, body);
     editorPalette.appendChild(disclosure);
   }
@@ -4665,10 +5267,12 @@ function renderFormulaEditor() {
   renderFormulaInputFields();
   renderFormulaParameterFields();
   renderFormulaCanvas();
+  ensureFormulaPaletteLayoutObserver($('formula-editor-palette'));
+  queueFormulaPaletteLayout();
 }
 
 function resetFormulaEditor() {
-  state.formulaEditor.steps = []; state.formulaEditor.expression = null; state.formulaEditor.expressionSelection = null; state.formulaEditor.editingId = null; state.formulaEditor.paletteExpanded = true; state.formulaEditor.parameterStates = {};
+  state.formulaEditor.steps = []; state.formulaEditor.expression = null; state.formulaEditor.expressionSelection = null; state.formulaEditor.editingId = null; state.formulaEditor.paletteExpanded = true; state.formulaEditor.paletteGroup = '基础运算'; state.formulaEditor.paletteQuery = ''; state.formulaEditor.parameterStates = {};
   state.formulaEditor.activeOutput = 'loss'; state.formulaEditor.outputExpressions = {loss: null}; state.formulaEditor.outputSchemas = {};
   state.formulaEditor.inputSchemas = {logits: {description: '', type: 'tensor'}, targets: {description: '', type: 'labels'}};
   state.formulaEditor.parameterSchemas = {epsilon: {type: 'float', default: 1e-8}};
@@ -4681,9 +5285,27 @@ function resetFormulaEditor() {
   $('formula-editor-validation').textContent = '';
 }
 
+// The palette is rendered while the dialog may still be closed.  A closed
+// dialog has no usable layout width, so a first measurement would incorrectly
+// force every operation card into a full-width row.  Always remeasure after
+// the dialog becomes visible.
+function showFormulaEditorDialog() {
+  const dialog = $('formula-editor-dialog');
+  if (!dialog) return;
+  dialog.showModal();
+  ensureFormulaPaletteLayoutObserver($('formula-editor-palette'));
+  queueFormulaPaletteLayout();
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+    window.requestAnimationFrame(() => queueFormulaPaletteLayout());
+  } else if (typeof window !== 'undefined' && typeof window.setTimeout === 'function') {
+    window.setTimeout(() => queueFormulaPaletteLayout(), 0);
+  }
+}
+
 function loadFormulaIntoEditor(item) {
   $('formula-list-dialog')?.close();
   state.formulaEditor.editingId = item.id;
+  state.formulaEditor.paletteQuery = '';
   state.formulaEditor.steps = (item.steps || []).map((step) => ({ id: step.id, block: step.block, bindings: {...(step.bindings || {})}, parameters: {...(step.parameters || {})} }));
   state.formulaEditor.inputSchemas = cloneSchema(item.inputs || {});
   state.formulaEditor.parameterSchemas = cloneSchema(item.parameters || {});
@@ -4707,7 +5329,7 @@ function loadFormulaIntoEditor(item) {
   const loadedSource = item.outputs?.[outputName]?.source?.split('.')[0];
   if (loadedSource && $('formula-output-source') && [...$('formula-output-source').options].some((option) => option.value === loadedSource)) $('formula-output-source').value = loadedSource;
   $('formula-editor-validation').textContent = '';
-  $('formula-editor-dialog').showModal();
+  showFormulaEditorDialog();
 }
 
 function openBuiltinFormulaCopy(item, formulas = []) {
@@ -4901,9 +5523,11 @@ function dualSkeletonRecipe() {
 function blankRecipe() { return {schema_version: 1, name: '空白 Scratch 算法', description: '', settings: {}, steps: []}; }
 
 function applySkeleton(kind) {
-  resetRunTracking();
+  beginRecipeLoad();
+  resetRunTracking({cancel: true});
   state.recipe = kind === 'single' ? singleSkeletonRecipe() : kind === 'dual' ? dualSkeletonRecipe() : blankRecipe();
-  ensureUiIds(state.recipe.steps); state.selected = null; state.paletteSelection = null; state.dataOverviewSelection = null; state.dataBlockMode = 'concepts'; state.deletedStep = null; state.lastRun = null; state.validated = false; state.errorStepId = null; state.errorMessage = ''; state.errorPayload = null; state.errorGuide = null; state.activeInsertionTarget = defaultInsertionTarget(); state.compositeExpanded.clear(); state.dataExecutionView.clear(); state.compositeUngrouped.clear();
+  invalidateDerivedState('recipe replaced by a new skeleton');
+  ensureUiIds(state.recipe.steps); state.selected = null; state.paletteSelection = null; state.dataOverviewSelection = null; state.dataBlockMode = 'concepts'; state.deletedStep = null; state.lastRun = null; state.errorStepId = null; state.errorMessage = ''; state.errorPayload = null; state.errorGuide = null; state.activeInsertionTarget = defaultInsertionTarget(); state.compositeExpanded.clear(); state.dataExecutionView.clear(); state.compositeUngrouped.clear();
   const menu = $('new-menu'); if (menu) menu.hidden = true; const newButton = $('new'); if (newButton) newButton.setAttribute('aria-expanded', 'false');
   draw();
 }
@@ -4911,27 +5535,37 @@ function applySkeleton(kind) {
 function renderRecipeList(names) {
   const list = $('recipe-list'); if (!list) return; list.innerHTML = '';
   if (!names.length) { list.textContent = '暂无已保存 Recipe'; return; }
-  names.forEach((name) => { const row = document.createElement('button'); row.type = 'button'; row.className = 'recipe-list-row'; row.textContent = name; row.onclick = async () => { try { resetRunTracking(); state.recipe = await api('/api/recipe/' + encodeURIComponent(name)); ensureUiIds(state.recipe.steps); state.selected = null; state.paletteSelection = null; state.dataOverviewSelection = null; state.dataBlockMode = 'concepts'; state.deletedStep = null; state.validated = false; state.lastRun = null; state.errorMessage = ''; state.errorPayload = null; state.errorGuide = null; state.errorStepId = null; state.dataExecutionView.clear(); $('recipe-dialog').close(); draw(); } catch (error) { showError(error); } }; list.appendChild(row); });
+  names.forEach((name) => { const row = document.createElement('button'); row.type = 'button'; row.className = 'recipe-list-row'; row.textContent = name; row.onclick = async () => { const request = beginRecipeLoad(); const requestToken = request.token; const requestRevision = request.revision; resetRunTracking({cancel: true}); try { const loadedRecipe = await api('/api/recipe/' + encodeURIComponent(name)); if (requestToken !== state.recipeLoadGeneration || requestRevision !== state.revision) return; state.recipe = loadedRecipe; invalidateDerivedState('saved recipe loaded'); ensureUiIds(state.recipe.steps); state.selected = null; state.paletteSelection = null; state.dataOverviewSelection = null; state.dataBlockMode = 'concepts'; state.deletedStep = null; state.lastRun = null; state.errorMessage = ''; state.errorPayload = null; state.errorGuide = null; state.errorStepId = null; state.dataExecutionView.clear(); $('recipe-dialog').close(); draw(); } catch (error) { if (requestToken === state.recipeLoadGeneration) showError(error); } }; list.appendChild(row); });
 }
 
 async function loadDefaultRecipe() {
-  resetRunTracking();
-  state.recipe = await api('/api/default-recipe');
-  ensureUiIds(state.recipe.steps);
-  state.selected = null;
-  state.dataOverviewSelection = null;
-  state.dataBlockMode = 'concepts';
-  state.paletteSelection = null;
-  state.deletedStep = null;
-  state.lastRun = null;
-  state.validated = false;
-  state.errorMessage = '';
-  state.errorPayload = null;
-  state.errorGuide = null;
-  state.dataExecutionView.clear();
-  state.errorStepId = null;
-  state.activeInsertionTarget = defaultInsertionTarget();
-  draw();
+  const request = beginRecipeLoad();
+  const requestToken = request.token;
+  resetRunTracking({cancel: true});
+  const requestRevision = request.revision;
+  try {
+    const loadedRecipe = await api('/api/default-recipe');
+    if (requestToken !== state.recipeLoadGeneration || requestRevision !== state.revision) return;
+    state.recipe = loadedRecipe;
+    invalidateDerivedState('default recipe loaded');
+    ensureUiIds(state.recipe.steps);
+    state.selected = null;
+    state.dataOverviewSelection = null;
+    state.dataBlockMode = 'concepts';
+    state.paletteSelection = null;
+    state.deletedStep = null;
+    state.lastRun = null;
+    state.validated = false;
+    state.errorMessage = '';
+    state.errorPayload = null;
+    state.errorGuide = null;
+    state.dataExecutionView.clear();
+    state.errorStepId = null;
+    state.activeInsertionTarget = defaultInsertionTarget();
+    draw();
+  } catch (error) {
+    if (requestToken === state.recipeLoadGeneration) showError(error);
+  }
 }
 
 function payload() {
@@ -5035,9 +5669,16 @@ function makeTemplateCardActivatable(card, item) {
 }
 
 async function openTemplate(item) {
+  let requestToken = null;
   try {
-    resetRunTracking();
-    state.recipe = await api('/api/recipe/' + encodeURIComponent(item.path));
+    const request = beginRecipeLoad();
+    requestToken = request.token;
+    const requestRevision = request.revision;
+    resetRunTracking({cancel: true});
+    const loadedRecipe = await api('/api/recipe/' + encodeURIComponent(item.path));
+    if (requestToken !== state.recipeLoadGeneration || requestRevision !== state.revision) return;
+    state.recipe = loadedRecipe;
+    invalidateDerivedState('paper template loaded');
     ensureUiIds(state.recipe.steps);
     state.selected = null;
     state.paletteSelection = null;
@@ -5054,7 +5695,11 @@ async function openTemplate(item) {
     state.activeInsertionTarget = defaultInsertionTarget();
     $('template-dialog').close();
     draw();
-  } catch (error) { showError(error); }
+  } catch (error) {
+    // An older template request must not surface an error after a newer
+    // template has been selected.
+    if (requestToken === state.recipeLoadGeneration) showError(error);
+  }
 }
 
 function openOnboarding() {
@@ -5081,22 +5726,56 @@ if ($('empty-blank')) $('empty-blank').onclick = () => applySkeleton('blank');
 if ($('empty-template')) $('empty-template').onclick = openTemplateDialog;
 document.querySelectorAll('[data-inspector-tab]').forEach((button) => { button.onclick = () => setInspectorTab(button.dataset.inspectorTab); });
 
-async function validateCurrentRecipe() {
-  await api('/api/validate', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload()) });
-  state.validated = true; updateRunState();
-  const readiness = datasetReadiness();
-  if (!readiness.ok) {
-    state.validated = false;
-    updateRunState();
-    const error = new Error(readiness.message);
-    error.guidanceCode = readiness.code;
-    error.payload = {ok: false, error: readiness.message, code: readiness.code, block_id: readiness.step?.block || 'load_dataset'};
+async function validateCurrentRecipe({expectedRevision = state.revision, requestPayload = runPayload()} = {}) {
+  assertCurrentRevision(expectedRevision, '检查');
+  const requestRevision = state.revision;
+  state.validated = false;
+  state.validatedRevision = -1;
+  // Keep a snapshot of what was actually checked.  A boolean alone is not a
+  // valid readiness proof after the user edits the recipe.
+  state.derived.generatedConfig = null;
+  state.derived.generatedConfigRevision = -1;
+  state.derived.preflight = null;
+  state.derived.preflightRevision = -1;
+  state.derived.compatibility = null;
+  state.derived.compatibilityRevision = -1;
+  state.derived.runPlan = null;
+  state.derived.runPlanRevision = -1;
+  state.derived.command = null;
+  state.derived.commandRevision = -1;
+  const validationResult = await api('/api/validate', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(requestPayload) });
+  assertCurrentRevision(requestRevision, '检查');
+  // The server just inspected the current source. The catalog cached when
+  // this page opened must not overrule that result.
+  if (validationResult?.dataset_preflight?.ok !== true) {
+    const error = new Error('服务未返回本次数据前置检查结果，请更新服务后重新检查。');
     throw error;
   }
+  state.validated = true; state.validatedRevision = requestRevision; updateRunState();
   state.errorStepId = null;
   state.errorMessage = '';
   state.errorPayload = null;
   state.errorGuide = null;
+  const validatedCapabilities = validationResult?.dataset_preflight?.capabilities;
+  if (validatedCapabilities && typeof validatedCapabilities === 'object') {
+    state.derived.datasetCapabilities = validatedCapabilities;
+    state.derived.datasetCapabilitiesRevision = requestRevision;
+  }
+  // Promote only the normalized recipe returned by this validation request.
+  // This is the exact recipe snapshot that the run gate will later consume.
+  const validatedRecipe = validationResult?.recipe || requestPayload.recipe;
+  state.derived.generatedConfig = validatedRecipe;
+  state.derived.generatedConfigRevision = requestRevision;
+  state.derived.compatibility = {status: 'compatible', revision: requestRevision, dataset: validatedCapabilities || state.derived.datasetCapabilities};
+  state.derived.compatibilityRevision = requestRevision;
+  state.derived.preflight = {
+    status: 'passed',
+    revision: requestRevision,
+    dataset: validationResult.dataset_preflight,
+  };
+  state.derived.preflightRevision = requestRevision;
+  state.derived.runPlan = validatedRecipe;
+  state.derived.runPlanRevision = requestRevision;
   clearErrorPresentation();
   return true;
 }
@@ -5116,28 +5795,81 @@ if ($('run-mode')) $('run-mode').onchange = (event) => {
   renderRuntimeLimits();
 };
 if ($('stop-run')) $('stop-run').onclick = stopRun;
-if ($('refresh-run')) $('refresh-run').onclick = () => state.jobId && pollRunJob(state.jobId);
+if ($('refresh-run')) $('refresh-run').onclick = () => state.jobId && pollRunJob(state.jobId, state.activeRunGeneration);
 async function startRun(mode = 'check') {
   if (state.running) return;
   state.runMode = mode === 'full' ? 'full' : 'check';
   renderRuntimeLimits();
-  resetRunTracking();
+  const runRevision = state.revision;
+  const requestPayload = runPayload();
+  // Even an idle UI may still own a job whose terminal status is unknown.
+  // Transfer that ownership to the cancellation gate before clearing it.
+  resetRunTracking({cancel: true});
+  state.activeRunRevision = runRevision;
+  state.activeRunGeneration = state.runGeneration;
+  const runGeneration = state.activeRunGeneration;
   state.running = true; updateRunState(); setInspectorTab('run'); setResultState('运行中…');
   $('result-status')?.classList.add('running');
   if ($('result-summary')) $('result-summary').textContent = '正在检查数据集、连接和参数，检查通过后会启动后台运行任务。';
   renderRunProgress({status: 'starting', progress: {state: 'starting'}});
   try {
-    await validateCurrentRecipe();
-    const result = await api('/api/run', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(runPayload()) });
+    // A previous run may still be waiting for /api/run to return its job id.
+    // Wait for that request to settle first; its stale response handler will
+    // enqueue cancellation before this run is allowed to proceed.
+    const priorRunRequest = state.pendingRunRequest;
+    if (priorRunRequest) {
+      if ($('result-summary')) $('result-summary').textContent = '正在等待上一运行请求完成，然后检查当前配方…';
+      try { await priorRunRequest; } catch (_) { /* the replacement run may still proceed */ }
+      if (runGeneration !== state.activeRunGeneration || runRevision !== state.revision) return;
+    }
+    // A recipe edit/new recipe may have requested cancellation just before
+    // this click.  Wait for the server acknowledgement (the server waits for
+    // the child process to exit) before allowing a new process to start.
+    const priorCancellation = state.pendingRunCancellation;
+    if (priorCancellation) {
+      if ($('result-summary')) $('result-summary').textContent = '正在等待上一运行进程退出，然后检查当前配方…';
+      await priorCancellation;
+      if (runGeneration !== state.activeRunGeneration || runRevision !== state.revision) return;
+    }
+    await ensurePreviousRunsStopped();
+    if (runGeneration !== state.activeRunGeneration || runRevision !== state.revision) return;
+    await validateCurrentRecipe({expectedRevision: runRevision, requestPayload});
+    assertCurrentRunState(runRevision);
+    // Use the recipe produced by the current validation rather than
+    // re-serializing a potentially stale cached plan.
+    requestPayload.recipe = state.derived.runPlan;
+    assertCurrentRunState(runRevision);
+    state.derived.command = requestPayload;
+    state.derived.commandRevision = runRevision;
+    // Keep the request itself in the gate.  A user can change the recipe
+    // after validation but before the server has returned a job id; the
+    // stale response must be observed and cancelled before a replacement run
+    // is allowed to start.
+    const runRequest = api('/api/run', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(requestPayload) });
+    state.pendingRunRequest = runRequest;
+    let result;
+    try {
+      result = await runRequest;
+    } finally {
+      if (state.pendingRunRequest === runRequest) state.pendingRunRequest = null;
+    }
     if (result?.id) {
+      if (runGeneration !== state.activeRunGeneration || runRevision !== state.revision) {
+        // The server may have accepted the request just as the user changed
+        // recipes. Release that now-unowned process instead of orphaning it.
+        cancelJobSilently(result.id);
+        return;
+      }
       state.jobId = result.id;
-      renderRunJob(result);
-      await pollRunJob(result.id);
+      renderRunJob(result, runGeneration);
+      await pollRunJob(result.id, runGeneration);
     } else {
+      if (runGeneration !== state.activeRunGeneration || runRevision !== state.revision) return;
       state.running = false;
       renderRunResult(result);
     }
   } catch (error) {
+    if (runGeneration !== state.activeRunGeneration || runRevision !== state.revision) return;
     state.lastRun = null; state.running = false; clearRunPolling(); updateRunState(); showError(error);
   }
 }
@@ -5146,10 +5878,12 @@ if ($('run-full')) $('run-full').onclick = () => startRun('full');
 if ($('open')) $('open').onclick = async () => { try { const names = await api('/api/recipes'); renderRecipeList(names); $('recipe-dialog').showModal(); } catch (error) { showError(error); } };
 async function openTemplateDialog() {
   try {
+    const requestRevision = state.revision;
     const menu = $('new-menu');
     if (menu) menu.hidden = true;
     if ($('new')) $('new').setAttribute('aria-expanded', 'false');
     const [templates, examples] = await Promise.all([api('/api/templates'), api('/api/examples')]);
+    if (requestRevision !== state.revision) return;
     renderFeaturedExamples(examples);
     renderTemplateList(templates);
     $('template-search').value = '';
@@ -5165,8 +5899,12 @@ if ($('formula-builder')) $('formula-builder').onclick = () => {
 if ($('formula-operation')) $('formula-operation').onchange = renderFormulaBuilderFields;
 if ($('formula-add')) $('formula-add').onclick = addFormulaFromDialog;
 if ($('formula-cancel')) $('formula-cancel').onclick = () => $('formula-dialog').close();
-if ($('new-formula')) $('new-formula').onclick = () => { resetFormulaEditor(); $('formula-editor-dialog').showModal(); };
+if ($('new-formula')) $('new-formula').onclick = () => { resetFormulaEditor(); showFormulaEditorDialog(); };
 if ($('formula-editor-block')) $('formula-editor-block').onchange = renderFormulaEditor;
+if ($('formula-palette-search')) $('formula-palette-search').oninput = (event) => {
+  state.formulaEditor.paletteQuery = event.target.value;
+  renderFormulaEditor();
+};
 if ($('formula-inputs')) $('formula-inputs').oninput = () => { renderFormulaInputFields(); renderFormulaEditorBindingFields(); renderFormulaCanvas(); };
 if ($('formula-parameters')) $('formula-parameters').oninput = () => { renderFormulaParameterFields(); renderFormulaEditorBindingFields(); renderFormulaCanvas(); };
 if ($('formula-output-source')) $('formula-output-source').onchange = renderFormulaEditor;
@@ -5179,11 +5917,16 @@ if ($('formula-editor-add-step')) $('formula-editor-add-step').onclick = addForm
 if ($('formula-editor-save')) $('formula-editor-save').onclick = saveFormulaEditor;
 if ($('formula-editor-cancel')) $('formula-editor-cancel').onclick = () => $('formula-editor-dialog').close();
 if ($('my-formulas')) $('my-formulas').onclick = showMyFormulas;
-if ($('recipe-name')) $('recipe-name').oninput = markDirty;
+if ($('recipe-name')) $('recipe-name').oninput = (event) => updateRecipeName(event.target.value);
 if ($('palette-search')) $('palette-search').oninput = (event) => {
   state.paletteQuery = event.target.value;
   renderPalette();
 };
+if ($('refresh-jobs')) $('refresh-jobs').onclick = () => refreshJobList({schedule: false});
+if ($('toggle-scratch-jobs')) $('toggle-scratch-jobs').onclick = () => {
+  setScratchJobListExpanded($('scratch-job-list-items')?.hidden !== false);
+};
+setScratchJobListExpanded(false);
 
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Backspace') return;
@@ -5194,12 +5937,30 @@ document.addEventListener('keydown', (event) => {
   if (state.formulaEditor.expressionSelection && deleteSelectedFormulaExpression()) event.preventDefault();
 });
 
+// Keep wheel scrolling from changing a focused numeric parameter.
+document.addEventListener('wheel', (event) => {
+  const target = event.target;
+  if (target instanceof HTMLInputElement && target.type === 'number' && document.activeElement === target) {
+    target.blur();
+  }
+}, {capture: true, passive: true});
+
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('resize', () => { queueFormulaCanvasLayout(); queueFormulaPaletteLayout(); }, {passive: true});
+}
+
+// Keep the process panel useful even when the user is not watching the run
+// inspector. This is independent from the focused-job poll, so it also
+// reconciles jobs started before this page was opened.
+if (typeof window !== 'undefined') refreshJobList();
+
 Promise.all([api('/api/blocks'), api('/api/formulas')]).then(([blocks, formulas]) => {
   state.blocks = blocks;
   state.formulas = formulas;
   return Promise.all([api('/api/entry-recipe'), api('/api/datasets')]);
 }).then(([recipe, datasetPayload]) => {
   state.recipe = recipe;
+  invalidateDerivedState('entry recipe loaded');
   state.datasets = Array.isArray(datasetPayload) ? datasetPayload : (datasetPayload.datasets || []);
   state.datasets.forEach((item) => { if (item.alias) state.datasetFacts[item.alias] = item; });
   ensureUiIds(state.recipe.steps);

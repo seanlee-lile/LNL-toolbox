@@ -7,10 +7,12 @@ not execute browser-provided shell strings and never starts a shell.
 from __future__ import annotations
 
 import argparse
+import errno
 import ipaddress
 import json
 import math
 import os
+import socket
 import shlex
 import subprocess
 import sys
@@ -31,6 +33,7 @@ SRC_ROOT = ROOT / "src"
 SCRATCH_ROOT = SRC_ROOT / "lnl_toolbox" / "scratch"
 SCRATCH_WEB_ROOT = SCRATCH_ROOT / "web"
 SCRATCH_RECIPE_ROOT = SCRATCH_ROOT / "recipes"
+_SCRATCH_FORMULA_RELOAD_LOCK = threading.RLock()
 STATIC_ASSETS = {
     "/assets/quick_start.js": (WEB_ROOT / "assets" / "quick_start.js", "application/javascript; charset=utf-8"),
     "/assets/quick_start.css": (WEB_ROOT / "assets" / "quick_start.css", "text/css; charset=utf-8"),
@@ -251,6 +254,7 @@ class Job:
     structured: object | None = None
     cancel_requested: bool = False
     training_context: object | None = None
+    output_complete: bool = False
 
     @property
     def done(self) -> bool:
@@ -313,11 +317,26 @@ def _read_output(job: Job) -> None:
     returncode = job.process.wait()
     with JOBS_LOCK:
         job.returncode = returncode
+        job.output_complete = True
         if returncode == 0 and "--format" in job.command and "json" in job.command:
             try:
                 job.structured = json.loads("\n".join(job.lines))
             except json.JSONDecodeError:
                 job.structured = None
+
+
+def _reconcile_job_process(job: Job) -> None:
+    """Publish a child exit before the stdout reader has drained its pipe."""
+
+    process = job.process
+    if process is None or job.returncode is not None:
+        return
+    returncode = process.poll()
+    if returncode is None:
+        return
+    with JOBS_LOCK:
+        if job.returncode is None:
+            job.returncode = returncode
 
 
 def _start_process(key: str, command: list[str], display_command: str) -> Job:
@@ -365,6 +384,7 @@ def _start_process(key: str, command: list[str], display_command: str) -> Job:
     except OSError as exc:
         job.error = str(exc)
         job.returncode = -1
+        job.output_complete = True
     with JOBS_LOCK:
         JOBS[job.job_id] = job
     if job.process is not None:
@@ -518,7 +538,12 @@ def _scratch_formula_payload(spec: object) -> dict[str, object]:
 def _scratch_reload_formulas() -> None:
     from lnl_toolbox.scratch.formula.registry import reload_formulas
 
-    reload_formulas()
+    # The Scratch editor requests blocks and formulas in parallel.  Both
+    # endpoints refresh the process-wide registry; serialize the unregister /
+    # register cycle so a user formula cannot be registered twice by racing
+    # requests.
+    with _SCRATCH_FORMULA_RELOAD_LOCK:
+        reload_formulas()
 
 
 def _scratch_request_body(handler: BaseHTTPRequestHandler) -> dict[str, object]:
@@ -1615,6 +1640,7 @@ def _save_config(payload: object) -> dict[str, object]:
 
 
 def _job_payload(job: Job) -> dict[str, object]:
+    _reconcile_job_process(job)
     with JOBS_LOCK:
         payload: dict[str, object] = {
             "id": job.job_id,
@@ -1624,6 +1650,7 @@ def _job_payload(job: Job) -> dict[str, object]:
             "returncode": job.returncode,
             "error": job.error,
             "running": not job.done,
+            "output_complete": job.output_complete,
             "cancel_requested": job.cancel_requested,
             "structured": job.structured,
         }
@@ -1646,6 +1673,14 @@ def _job_payload(job: Job) -> dict[str, object]:
     else:
         payload["training"] = None
     return payload
+
+
+def job_list_payload() -> dict[str, object]:
+    """Return current and recent main-console jobs for the process panel."""
+
+    with JOBS_LOCK:
+        jobs = list(reversed(list(JOBS.values())))[:30]
+    return {"jobs": [_job_payload(job) for job in jobs]}
 
 
 def _picker_payload(payload: object) -> dict[str, object]:
@@ -2079,6 +2114,17 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             except (OSError, TypeError, ValueError) as exc:
                 _json_response(self, {"error": str(exc)}, 400)
             return
+        if path == "/api/scratch/jobs":
+            try:
+                from lnl_toolbox.scratch.web.server import scratch_job_list_payload
+
+                _json_response(self, scratch_job_list_payload())
+            except Exception as exc:
+                _json_response(self, {"error": str(exc)}, 400)
+            return
+        if path == "/api/jobs":
+            _json_response(self, job_list_payload())
+            return
         if path.startswith("/api/scratch/jobs/"):
             try:
                 from lnl_toolbox.scratch.web.server import SCRATCH_JOBS, SCRATCH_JOBS_LOCK, _scratch_job_payload
@@ -2336,13 +2382,24 @@ class ConsoleHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+class SingleInstanceHTTPServer(ThreadingHTTPServer):
+    """Refuse another listener on the same host/port, including on Windows."""
+
+    allow_reuse_address = False
+
+    def server_bind(self) -> None:
+        if os.name == "nt":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def serve(
     host: str = "127.0.0.1",
     port: int = 8765,
     *,
     open_browser: bool = False,
 ) -> None:
-    server = ThreadingHTTPServer((host, port), ConsoleHandler)
+    server = SingleInstanceHTTPServer((host, port), ConsoleHandler)
     browser_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
     url = f"http://{browser_host}:{port}/"
     print(f"LNL web: {url}", flush=True)
@@ -2362,7 +2419,16 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--open", action="store_true", dest="open_browser")
     args = parser.parse_args(argv)
-    serve(args.host, args.port, open_browser=args.open_browser)
+    try:
+        serve(args.host, args.port, open_browser=args.open_browser)
+    except OSError as exc:
+        if exc.errno not in {errno.EADDRINUSE, 10048} and getattr(exc, "winerror", None) != 10048:
+            raise
+        print(
+            f"Web port {args.port} is already in use. Use the running service or stop the old instance first.",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
