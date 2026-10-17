@@ -58,25 +58,26 @@ def _should_check_data(args: argparse.Namespace) -> bool:
 
 
 def _source_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("source", nargs="?", help="recipe name or YAML path")
+    parser.add_argument("source", nargs="?", help="experiment recipe name or YAML path; provide this OR --recipe OR --config, never combine them")
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--recipe", help="内置实验配置名称")
-    group.add_argument("--config", type=Path, help="自定义 YAML 配置")
-    parser.add_argument("--project-root", type=Path, help="显式指定项目根目录")
+    group.add_argument("--recipe", help="select a built-in recipe instead of positional source or --config")
+    group.add_argument("--config", type=Path, help="read an experiment YAML instead of positional source or --recipe")
+    parser.add_argument("--project-root", type=Path, help="resolve project-relative configuration paths against this root")
     parser.add_argument(
         "--data",
         dest="local_dataset",
-        help="machine-local dataset alias registered with 'lnl data register'",
+        help="apply a machine-local dataset alias from 'lnl data register'; reads registration and overrides the configured data source",
     )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lnl",
-        description="LNL Toolbox 统一命令行入口",
+        description="LNL Toolbox: discover recipes/components/papers, inspect data, validate configurations, execute/resume experiments, and report results.",
         epilog=(
-            "推荐顺序: lnl doctor -> lnl list experiments -> "
-            "lnl run <source> --dry-run -> lnl run <source>"
+            "Core workflow: validate -> optional validate --check-data -> run --dry-run -> run / resume. "
+            "Core commands: success exits 0; expected validation/execution rejection writes diagnostics to stderr and exits 2. "
+            "Examples: lnl validate experiment.yaml; lnl run experiment.yaml --dry-run; lnl resume RUN_DIR."
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -117,26 +118,49 @@ def build_parser() -> argparse.ArgumentParser:
         help="输出格式；human 适合阅读，tsv 适合脚本处理（默认: human）",
     )
 
-    validate = sub.add_parser("validate", help="训练前静态检查配置")
+    validate = sub.add_parser(
+        "validate", help="check configuration/method constraints without training; optionally check data",
+        description=(
+            "Check configuration and method constraints without training. By default, no full dataset, "
+            "compatibility or prerequisite preflight is performed. Configuration-level source/artifact "
+            "checks (including PCSE/MentorNet) may still read external files."
+        ),
+        epilog="Examples: lnl validate experiment.yaml; lnl validate experiment.yaml --check-data.",
+    )
     _source_options(validate)
-    validate.add_argument("--check-data", action="store_true")
+    validate.add_argument(
+        "--check-data", action="store_true",
+        help="add train/test data loading, data contract checks, compatibility and applicable prerequisite readiness; no training or one-epoch verification",
+    )
 
-    run = sub.add_parser("run", help="运行内置 recipe 或自定义配置")
+    run = sub.add_parser(
+        "run", help="admit and execute an experiment, or preflight/preview it with --dry-run",
+        description=(
+            "Execute a recipe or YAML configuration. Formal execution rechecks current data, compatibility "
+            "and applicable prerequisite sources; execution admission must pass before the training runner "
+            "is invoked. Rejection fails before training. Use --dry-run for preflight and a runner plan instead."
+        ),
+        epilog=(
+            "Examples: lnl run experiment.yaml --dry-run; lnl run experiment.yaml. "
+            "run --resume CHECKPOINT uses the supplied configuration and a checkpoint file; "
+            "resume RUN_DIR instead reads an existing run's resolved configuration."
+        ),
+    )
     _source_options(run)
-    run.add_argument("--output-dir", type=Path)
-    run.add_argument("--resume", type=Path)
-    run.add_argument("--epochs", type=int)
-    run.add_argument("--dry-run", action="store_true")
+    run.add_argument("--output-dir", type=Path, help="training output directory; omit to use the runner default; dry-run creates no formal training run artifacts")
+    run.add_argument("--resume", type=Path, help="continue from a checkpoint FILE using this command's supplied configuration; for an existing run directory use 'lnl resume RUN_DIR'")
+    run.add_argument("--epochs", type=int, help="override the supported training epoch budget for this invocation; stage selection is method-dependent and ambiguous overrides are rejected; inspect with --dry-run")
+    run.add_argument("--dry-run", action="store_true", help="perform preflight and print runner plan/training budget; check data, compatibility and applicable prerequisites by default; no training runner or formal training run artifacts")
     data_check = run.add_mutually_exclusive_group()
     data_check.add_argument(
         "--check-data",
         action="store_true",
-        help="compatibility flag; run preflight checks data by default",
+        help="legacy compatibility flag: data, compatibility and applicable prerequisite checks are already enabled by default",
     )
     data_check.add_argument(
         "--no-check-data",
         action="store_true",
-        help="skip dataset path/layout checks during dry-run",
+        help="reduced-check dry-run only: skip full data checks, compatibility and full readiness; configuration-level artifact/source checks may still occur; invalid without --dry-run",
     )
     run.add_argument(
         "--set",
@@ -147,9 +171,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="override an existing dotted configuration value; repeatable",
     )
 
-    resume = sub.add_parser("resume", help="从运行目录自动恢复")
-    resume.add_argument("run_dir", type=Path)
-    resume.add_argument("--checkpoint", choices=("last", "best"), default="last")
+    resume = sub.add_parser(
+        "resume", help="continue an existing run using its resolved config; completed runs are no-op",
+        description=(
+            "Resume an existing Toolbox run directory using its resolved_config.yaml and selected checkpoint, "
+            "not a new experiment configuration. Unfinished runs repeat current-state admission for data, "
+            "compatibility and applicable prerequisites before training continuation. Completed runs are a "
+            "strict no-op: no admission or training."
+        ),
+        epilog="Examples: lnl resume RUN_DIR; lnl resume RUN_DIR --checkpoint best. Unlike run --resume CHECKPOINT, this command takes a run directory.",
+    )
+    resume.add_argument("run_dir", type=Path, help="existing Toolbox run directory containing resolved_config.yaml; not a checkpoint file")
+    resume.add_argument("--checkpoint", choices=("last", "best"), default="last", help="select last.pt (default) or best.pt for an unfinished run; completed runs remain no-op")
 
     data = sub.add_parser("data", help="register and verify machine-local datasets")
     data_sub = data.add_subparsers(dest="data_command", required=True)

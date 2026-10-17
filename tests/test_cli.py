@@ -1447,6 +1447,110 @@ def _upm_cli__config():
     return {'method': 'upm', 'execution': {'runner': 'upm'}, 'data': {'name': 'cifar10'}, 'loader': {'batch_size': 2}, 'noise': {'name': 'symmetric', 'rate': 0.2, 'validation_targets': 'noisy'}, 'evaluation': {'selection_split': 'validation'}, 'trainer': {'device': 'cpu'}, 'upm': {'stage1': {**stage, 'best_metric': 'noisy_validation_accuracy'}, 'psi': {'source': 'stage1_best', 'split': 'train', 'augmentation': False}, 'main': {**stage, 'initialization': 'fresh'}, 'confusing_probability': {'initial_value': 0.01, 'learning_rate': 0.1, 'epsilon': 0.0001, 'update_start_epoch': 0, 'update_interval_epochs': 1}}}
 
 # --- merged from test_upm_cli.py ---
+class CoreCommandHelpContractTest(unittest.TestCase):
+    def help_text(self, *command):
+        output, error = StringIO(), StringIO()
+        with redirect_stdout(output), redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            main([*command, "--help"])
+        self.assertEqual(raised.exception.code, 0)
+        self.assertEqual(error.getvalue(), "")
+        return " ".join(output.getvalue().split())
+
+    def test_help_exits_zero_without_service_runner_data_or_producer_calls(self):
+        from contextlib import ExitStack
+        targets = (
+            "lnl_toolbox.cli.main.ExperimentService",
+            "lnl_toolbox.training.service.ExperimentService.preflight",
+            "lnl_toolbox.training.service.ExperimentService.run",
+            "lnl_toolbox.training.runners.RunnerSpec.invoke",
+            "lnl_toolbox.training.runners.RunnerSpec.describe",
+            "lnl_toolbox.cli.main._load_source",
+            "lnl_toolbox.cli.main.DEFAULT_DATA_SERVICE.apply",
+            "lnl_toolbox.data.registry.DatasetRegistry.load",
+            "lnl_toolbox.catalog.mentornet_preparation_status",
+            "lnl_toolbox.training.mentor_learning.prepare_trusted_mentor_features",
+            "lnl_toolbox.training.mentor_learning.train_mentor_artifact",
+        )
+        with ExitStack() as stack:
+            mocks = [stack.enter_context(patch(target, side_effect=AssertionError("help invoked " + target)))
+                     for target in targets]
+            for command in ((), ("validate",), ("run",), ("resume",)):
+                with self.subTest(command=command):
+                    self.assertTrue(self.help_text(*command).startswith("usage: lnl"))
+            for mocked in mocks:
+                mocked.assert_not_called()
+
+    def test_top_level_help_explains_core_workflow_and_scoped_exit_behavior(self):
+        text = self.help_text()
+        for phrase in ("discover", "inspect data", "validate", "execute/resume", "report results",
+                       "validate --check-data", "run --dry-run", "run / resume", "Core commands:",
+                       "success exits 0", "stderr", "exits 2"):
+            self.assertIn(phrase, text)
+
+    def test_validate_help_distinguishes_default_and_checked_validation(self):
+        text = self.help_text("validate")
+        for phrase in ("without training", "no full dataset", "compatibility or prerequisite preflight",
+                       "PCSE/MentorNet", "read external files", "--check-data", "train/test data loading",
+                       "data contract checks", "applicable prerequisite readiness", "no training or one-epoch verification"):
+            self.assertIn(phrase, text)
+        self.assertNotIn("静态", text)
+
+    def test_run_help_explains_admission_preview_and_reduced_check(self):
+        text = self.help_text("run")
+        for phrase in ("rechecks current data", "execution admission must pass", "before the training runner",
+                       "--dry-run", "runner plan/training budget", "no training runner or formal training run artifacts",
+                       "reduced-check dry-run only", "skip full data checks, compatibility and full readiness",
+                       "configuration-level artifact/source checks may still occur", "invalid without --dry-run",
+                       "legacy compatibility flag", "already enabled by default", "runner default",
+                       "stage selection is method-dependent", "ambiguous overrides are rejected"):
+            self.assertIn(phrase, text)
+
+    def test_resume_help_distinguishes_run_directory_and_checkpoint_file(self):
+        text = self.help_text("resume")
+        for phrase in ("run directory", "resolved_config.yaml", "not a new experiment configuration",
+                       "Unfinished runs repeat current-state admission", "strict no-op", "no admission or training",
+                       "last.pt (default)", "best.pt", "run --resume CHECKPOINT", "not a checkpoint file"):
+            self.assertIn(phrase, text)
+        run = self.help_text("run")
+        for phrase in ("checkpoint FILE", "supplied configuration", "lnl resume RUN_DIR"):
+            self.assertIn(phrase, run)
+
+    def test_source_help_explains_required_alternatives_and_registered_data(self):
+        for command in ("validate", "run"):
+            with self.subTest(command=command):
+                text = self.help_text(command)
+                for phrase in ("recipe name or YAML path", "provide this OR --recipe OR --config",
+                               "never combine them", "reads registration", "overrides the configured data source"):
+                    self.assertIn(phrase, text)
+
+    def test_parser_defaults_and_existing_option_contracts_are_unchanged(self):
+        from lnl_toolbox.cli.main import build_parser
+        parser = build_parser()
+        validate = parser.parse_args(["validate", "experiment.yaml"])
+        self.assertEqual(validate.source, "experiment.yaml")
+        self.assertFalse(validate.check_data)
+        run = parser.parse_args(["run", "experiment.yaml"])
+        self.assertFalse(run.dry_run)
+        self.assertFalse(run.check_data)
+        self.assertFalse(run.no_check_data)
+        self.assertEqual(run.overrides, [])
+        self.assertIsNone(run.epochs)
+        self.assertIsNone(run.output_dir)
+        self.assertIsNone(run.resume)
+        resumed = parser.parse_args(["resume", "existing-run"])
+        self.assertEqual(resumed.checkpoint, "last")
+        self.assertEqual(resumed.run_dir, Path("existing-run"))
+        # Positional/flag overlap remains a runtime source check, not a new
+        # argparse mutual-exclusion group introduced by the copy change.
+        overlap = parser.parse_args(["validate", "experiment.yaml", "--recipe", "fixture"])
+        self.assertEqual((overlap.source, overlap.recipe), ("experiment.yaml", "fixture"))
+        for args in (["validate", "--recipe", "fixture", "--config", "experiment.yaml"],
+                     ["run", "--check-data", "--no-check-data"]):
+            with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as raised:
+                parser.parse_args(args)
+            self.assertEqual(raised.exception.code, 2)
+
+
 class PrerequisiteFailureGuidanceTest(unittest.TestCase):
     def setUp(self):
         from tests.test_experiment_service_data_contract import ExperimentServiceDataContractTests
