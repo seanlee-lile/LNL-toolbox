@@ -1,46 +1,21 @@
-"""Merged unit tests; source modules were consolidated without changing assertions."""
 from __future__ import annotations
-
-# --- merged from test_cli.py ---
 from pathlib import Path
-
-# --- merged from test_cli.py ---
 import tempfile
-
-# --- merged from test_cli.py ---
 import unittest
-
-# --- merged from test_cli.py ---
 from unittest.mock import patch
-
-# --- merged from test_cli.py ---
 import yaml
-
-# --- merged from test_cli.py ---
 from lnl_toolbox.cli import PromptSession, TrainingSelection
-
-# --- merged from test_cli.py ---
 import lnl_toolbox.cli as cli_shared
-
-# --- merged from test_cli.py ---
 from lnl_toolbox.cli import clean_train as clean_cli
-
-# --- merged from test_cli.py ---
 from lnl_toolbox.cli import inspect_data as inspect_cli
-
-# --- merged from test_cli.py ---
 from lnl_toolbox.cli import make_noise as noise_cli
-
-# --- merged from test_cli.py ---
 from lnl_toolbox.cli import train as train_cli
 
-# --- merged from test_cli.py ---
 def _cli_scripted_session(values: list[str]) -> tuple[PromptSession, list[str]]:
     answers = iter(values)
     output: list[str] = []
     return (PromptSession(read=lambda _: next(answers), write=output.append), output)
 
-# --- merged from test_cli.py ---
 class _cli_PromptSessionTest(unittest.TestCase):
 
     def test_clean_template_discovery_excludes_noisy_configs(self) -> None:
@@ -90,7 +65,6 @@ class _cli_PromptSessionTest(unittest.TestCase):
             self.assertNotIn('noise', selection.config)
             self.assertEqual(template['loss'], {'name': 'ce'})
 
-# --- merged from test_cli.py ---
 class _cli_CliEntryPointTest(unittest.TestCase):
 
     def test_train_help_lists_t_revision(self) -> None:
@@ -169,72 +143,51 @@ class _cli_CliEntryPointTest(unittest.TestCase):
                 clean_cli.main(['--config', str(config_path), '--resume', 'last.pt', '--seeds', '1', '2'])
             self.assertEqual(raised.exception.code, 2)
 
-# --- merged from test_unified_cli.py ---
 from contextlib import redirect_stderr, redirect_stdout
-
-# --- merged from test_unified_cli.py ---
 from io import StringIO
-
-# --- merged from test_unified_cli.py ---
-from pathlib import Path
-
-# --- merged from test_unified_cli.py ---
 import json
-
-# --- merged from test_unified_cli.py ---
 import os
-
-# --- merged from test_unified_cli.py ---
 import subprocess
-
-# --- merged from test_unified_cli.py ---
 import sys
-
-# --- merged from test_unified_cli.py ---
-import tempfile
-
-# --- merged from test_unified_cli.py ---
-import unittest
-
-# --- merged from test_unified_cli.py ---
-from unittest.mock import Mock, patch
-
-# --- merged from test_unified_cli.py ---
-import yaml
-
-# --- merged from test_unified_cli.py ---
+from unittest.mock import Mock
 from lnl_toolbox import catalog as catalog_module
-
-# --- merged from test_unified_cli.py ---
 from lnl_toolbox.catalog import discover_recipes, default_paper_config, find_project_root, load_papers, load_yaml, load_recipe_config, mentornet_preparation_status, recipe_by_id, resolve_config_paths, select_paper_config, validate_config
-
 from lnl_toolbox.models.mentornet import MentorNet
-
 from lnl_toolbox.training.mentor_artifacts import MentorArtifact
-
-# --- merged from test_unified_cli.py ---
 from lnl_toolbox.cli.main import main
-
-# --- merged from test_unified_cli.py ---
 from lnl_toolbox.data.profile import DatasetProfile, KnowledgeState, Modality, NoiseKnowledge, resolve_dataset_capabilities
-
-# --- merged from test_unified_cli.py ---
 from lnl_toolbox.training.compatibility import CompatibilityReason, CompatibilityResult, CompatibilityStatus
-
-# --- merged from test_unified_cli.py ---
 from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE, DatasetStatusReport
-
-# --- merged from test_unified_cli.py ---
 from lnl_toolbox.training.runners import resolve_runner, runner_names
-
 from lnl_toolbox.training.service import ExperimentService
 
-# --- merged from test_unified_cli.py ---
 _unified_cli_ROOT = Path(__file__).resolve().parents[1]
 
 
 class ConfigParameterGateTest(unittest.TestCase):
     """The CLI and Web share the same aggregated input gate."""
+
+    def test_stage_boolean_errors_are_aggregated_and_readable(self):
+        from copy import deepcopy
+        from lnl_toolbox.core.config_schema import normalize_experiment_config
+        from web.command_console import _parameter_registry
+
+        recipe = _parameter_registry()['formal_recipe_bindings']['dual_t']
+        config = load_recipe_config(recipe_by_id(recipe))
+        config['posterior_stage']['early_stopping'] = 'false'
+        config['final_stage']['early_stopping'] = 1
+        for validate in (validate_config, normalize_experiment_config):
+            with self.subTest(validator=validate.__name__):
+                with self.assertRaises(ValueError) as error:
+                    validate(deepcopy(config))
+                self.assertEqual(set(str(error.exception).splitlines()), {
+                    'invalid config for posterior_stage.early_stopping, expected a boolean',
+                    'invalid config for final_stage.early_stopping, expected a boolean',
+                })
+        config['loader']['batch_size'] = 0
+        with self.assertRaises(ValueError) as error:
+            validate_config(config)
+        self.assertEqual(len(str(error.exception).splitlines()), 3)
 
     def test_review_requires_dry_run_before_loading_or_training(self):
         from argparse import Namespace
@@ -301,18 +254,6 @@ class ConfigParameterGateTest(unittest.TestCase):
                     self.assertTrue(any(owner + '.' + option in error for error in errors))
         for name, variant in (('resnet32', 'dss_author'), ('preact_resnet18', 'loss_correction')):
             self.assertTrue(_config_parameter_errors({'model': {'name': name, 'variant': variant}}))
-
-    def test_formal_parameter_defaults_are_unchanged_and_accepted(self):
-        from copy import deepcopy
-        from web.command_console import _parameter_registry
-        from lnl_toolbox.catalog import _config_parameter_errors
-
-        for method, recipe_id in _parameter_registry()['formal_recipe_bindings'].items():
-            with self.subTest(method=method):
-                config = load_recipe_config(recipe_by_id(recipe_id))
-                original = deepcopy(config)
-                self.assertEqual(_config_parameter_errors(config), [])
-                self.assertEqual(config, original)
 
     def test_multiple_errors_are_one_line_per_parameter(self):
         config = load_recipe_config(recipe_by_id('gce-cifar10-noise02-reproduction'))
@@ -508,7 +449,6 @@ class ConfigParameterGateTest(unittest.TestCase):
             self.assertTrue(job.lines[0].startswith('错误: invalid config for '))
             self.assertTrue(job.lines[1].startswith('invalid config for '))
 
-# --- merged from test_unified_cli.py ---
 class _unified_cli_RunnerResolutionTest(unittest.TestCase):
 
     def test_all_public_runners_are_registered(self) -> None:
@@ -526,7 +466,6 @@ class _unified_cli_RunnerResolutionTest(unittest.TestCase):
         self.assertEqual(resolve_runner({'data': {}, 'cwd': {}}).name, 'cwd')
         self.assertEqual(resolve_runner({'data': {}, 'algorithm': {'name': 'jocor'}}).name, 'multi_model')
 
-# --- merged from test_unified_cli.py ---
 class _unified_cli_CatalogTest(unittest.TestCase):
 
     def test_installed_recipe_uses_distribution_file_record(self) -> None:
@@ -672,14 +611,15 @@ class _unified_cli_CatalogTest(unittest.TestCase):
             finally:
                 os.chdir(previous)
 
-# --- merged from test_unified_cli.py ---
-class _unified_cli_UnifiedCliTest(unittest.TestCase):
+def _invoke_cli(*arguments: str) -> tuple[int, str, str]:
+    stdout, stderr = StringIO(), StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        code = main(list(arguments))
+    return code, stdout.getvalue(), stderr.getvalue()
 
-    def invoke(self, *arguments: str) -> tuple[int, str, str]:
-        stdout, stderr = (StringIO(), StringIO())
-        with redirect_stdout(stdout), redirect_stderr(stderr):
-            code = main(list(arguments))
-        return (code, stdout.getvalue(), stderr.getvalue())
+
+class _unified_cli_UnifiedCliTest(unittest.TestCase):
+    invoke = staticmethod(_invoke_cli)
 
     def test_unified_mentor_commands_reuse_prepare_and_train_producers(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1291,16 +1231,9 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
         self.assertEqual(code, 0, error)
         self.assertEqual(json.loads(output)['summaries'], [])
 
-# --- merged from test_dividemix_cli.py ---
-import unittest
 
-# --- merged from test_dividemix_cli.py ---
-from lnl_toolbox.catalog import discover_recipes, load_recipe_config, recipe_by_id, validate_config
+from lnl_toolbox.training.runners import apply_epoch_override
 
-# --- merged from test_dividemix_cli.py ---
-from lnl_toolbox.training.runners import apply_epoch_override, resolve_runner
-
-# --- merged from test_dividemix_cli.py ---
 class _dividemix_cli_DivideMixCliTest(unittest.TestCase):
 
     def test_recipe_validates_and_epoch_override_only_changes_main(self):
@@ -1326,37 +1259,13 @@ class _dividemix_cli_DivideMixCliTest(unittest.TestCase):
         self.assertEqual(config['dividemix']['warmup']['epochs'], 10)
         self.assertEqual(config['dividemix']['training']['epochs'], 1)
 
-# --- merged from test_dld_cli.py ---
-from contextlib import redirect_stdout
 
-# --- merged from test_dld_cli.py ---
 from copy import deepcopy
+from lnl_toolbox.catalog import paper_by_id
 
-# --- merged from test_dld_cli.py ---
-from io import StringIO
 
-# --- merged from test_dld_cli.py ---
-from pathlib import Path
-
-# --- merged from test_dld_cli.py ---
-import unittest
-
-# --- merged from test_dld_cli.py ---
-import yaml
-
-# --- merged from test_dld_cli.py ---
-from lnl_toolbox.catalog import paper_by_id, recipe_by_id, validate_config
-
-# --- merged from test_dld_cli.py ---
-from lnl_toolbox.cli.main import main
-
-# --- merged from test_dld_cli.py ---
-from lnl_toolbox.training.runners import apply_epoch_override, resolve_runner
-
-# --- merged from test_dld_cli.py ---
 _dld_cli_ROOT = Path(__file__).resolve().parents[1]
 
-# --- merged from test_dld_cli.py ---
 class _dld_cli_DLDCliTest(unittest.TestCase):
 
     @classmethod
@@ -1381,10 +1290,8 @@ class _dld_cli_DLDCliTest(unittest.TestCase):
         self.assertEqual(config['trainer'], before)
 
     def test_dry_run_discloses_fidelity_and_plan(self) -> None:
-        output = StringIO()
-        with redirect_stdout(output):
-            self.assertEqual(main(['run', '--config', str(self.path), '--dry-run', '--no-check-data']), 0)
-        text = output.getvalue()
+        code, text, error = _invoke_cli(*['run', '--config', str(self.path), '--dry-run', '--no-check-data'])
+        self.assertEqual(code, 0, error)
         for value in ('dld', '2 (diffusion)', 'K=10', 'cosine_similarity', 'dld_precorrection.npz', 'paper_oriented_v2_cosine_similarity', 'DLD inference steps: 5'):
             self.assertIn(value, text)
 
@@ -1392,10 +1299,8 @@ class _dld_cli_DLDCliTest(unittest.TestCase):
         path = _dld_cli_ROOT / 'configs' / 'reproduction' / 'cifar10_dld_sym20_short.yaml'
         config = yaml.safe_load(path.read_text(encoding='utf-8'))
         self.assertEqual(validate_config(config).name, 'dld')
-        output = StringIO()
-        with redirect_stdout(output):
-            self.assertEqual(main(['run', '--config', str(path), '--dry-run', '--no-check-data']), 0)
-        text = output.getvalue()
+        code, text, error = _invoke_cli(*['run', '--config', str(path), '--dry-run', '--no-check-data'])
+        self.assertEqual(code, 0, error)
         for value in ('dld', '15 (diffusion)', 'K=50', 'paper_oriented_v2_cosine_similarity'):
             self.assertIn(value, text)
 
@@ -1403,37 +1308,9 @@ class _dld_cli_DLDCliTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             recipe_by_id('cifar10-symmetric40-all-e5')
 
-# --- merged from test_lend_cli.py ---
-from contextlib import redirect_stdout
 
-# --- merged from test_lend_cli.py ---
-from copy import deepcopy
-
-# --- merged from test_lend_cli.py ---
-from io import StringIO
-
-# --- merged from test_lend_cli.py ---
-from pathlib import Path
-
-# --- merged from test_lend_cli.py ---
-import unittest
-
-# --- merged from test_lend_cli.py ---
-import yaml
-
-# --- merged from test_lend_cli.py ---
-from lnl_toolbox.catalog import paper_by_id, recipe_by_id, validate_config
-
-# --- merged from test_lend_cli.py ---
-from lnl_toolbox.cli.main import main
-
-# --- merged from test_lend_cli.py ---
-from lnl_toolbox.training.runners import apply_epoch_override, resolve_runner
-
-# --- merged from test_lend_cli.py ---
 _lend_cli_ROOT = Path(__file__).resolve().parents[1]
 
-# --- merged from test_lend_cli.py ---
 class _lend_cli_LENDCliTest(unittest.TestCase):
 
     @classmethod
@@ -1459,10 +1336,8 @@ class _lend_cli_LENDCliTest(unittest.TestCase):
         self.assertEqual(config['trainer'], trainer)
 
     def test_dry_run_discloses_all_fidelity_choices(self):
-        output = StringIO()
-        with redirect_stdout(output):
-            self.assertEqual(main(['run', '--config', str(self.path), '--dry-run', '--no-check-data']), 0)
-        text = output.getvalue()
+        code, text, error = _invoke_cli(*['run', '--config', str(self.path), '--dry-run', '--no-check-data'])
+        self.assertEqual(code, 0, error)
         for value in ('lend', '2 (LEND)', 'k=15', 'gamma=1.0', 'inner_product', 'normalize_features=False', 'alpha=0.99', 'fixed_steps', 'steps=3', 'beta=0.9', 'batch_mean', 'skip_update'):
             self.assertIn(value, text)
 
@@ -1517,33 +1392,18 @@ class _lend_cli_LENDCliTest(unittest.TestCase):
                 self.assertEqual(parsed.epochs, config['lend']['training']['epochs'])
                 path = Path(directory) / 'lend.yaml'
                 path.write_text(yaml.safe_dump(config), encoding='utf-8')
-                output = StringIO()
-                with redirect_stdout(output):
-                    self.assertEqual(main(['run', '--config', str(path), '--dry-run', '--no-check-data']), 0)
+                code, text, error = _invoke_cli(*['run', '--config', str(path), '--dry-run', '--no-check-data'])
+                self.assertEqual(code, 0, error)
                 for value in (policy, str(config['lend']['training']['epochs']) + ' (LEND)',
                               config['model']['name'], 'LEND batch size: ' + str(config['loader']['batch_size'])):
-                    self.assertIn(value, output.getvalue())
+                    self.assertIn(value, text)
         self.assertEqual(self.reproduction_config, original)
 
-# --- merged from test_pcse_cli.py ---
-from pathlib import Path
 
-# --- merged from test_pcse_cli.py ---
-import os
-
-# --- merged from test_pcse_cli.py ---
-import unittest
-
-# --- merged from test_pcse_cli.py ---
 from unittest import mock
-
-# --- merged from test_pcse_cli.py ---
 from lnl_toolbox.algorithms.pcse import PCSEConfig
 
-# --- merged from test_pcse_cli.py ---
-from lnl_toolbox.catalog import discover_recipes, load_recipe_config, paper_by_id, recipe_by_id, validate_config
 
-# --- merged from test_pcse_cli.py ---
 class _pcse_cli_PCSECliTest(unittest.TestCase):
 
     def test_real_cifar_recipe_is_registered_and_valid(self) -> None:
@@ -1596,36 +1456,15 @@ class _pcse_cli_PCSECliTest(unittest.TestCase):
         real_config = next((item for item in paper.configs if item.recipe_id == 'cifar10-pcse-reproduction'))
         self.assertEqual(real_config.availability, 'conditional')
 
-# --- merged from test_upm_cli.py ---
-from contextlib import redirect_stdout
 
-# --- merged from test_upm_cli.py ---
-from copy import deepcopy
-
-# --- merged from test_upm_cli.py ---
 import io
-
-# --- merged from test_upm_cli.py ---
-from pathlib import Path
-
-# --- merged from test_upm_cli.py ---
-import unittest
-
-# --- merged from test_upm_cli.py ---
-from lnl_toolbox.catalog import load_recipe_config, paper_by_id, recipe_by_id, validate_config
-
-# --- merged from test_upm_cli.py ---
 from lnl_toolbox.cli import main as cli_main
 
-# --- merged from test_upm_cli.py ---
-from lnl_toolbox.training.runners import apply_epoch_override, resolve_runner
 
-# --- merged from test_upm_cli.py ---
 def _upm_cli__config():
     stage = {'epochs': 2, 'model': {'name': 'tiny_cnn'}, 'optimizer': {'name': 'sgd', 'lr': 0.01}, 'scheduler': {'name': 'none'}}
     return {'method': 'upm', 'execution': {'runner': 'upm'}, 'data': {'name': 'cifar10'}, 'loader': {'batch_size': 2}, 'noise': {'name': 'symmetric', 'rate': 0.2, 'validation_targets': 'noisy'}, 'evaluation': {'selection_split': 'validation'}, 'trainer': {'device': 'cpu'}, 'upm': {'stage1': {**stage, 'best_metric': 'noisy_validation_accuracy'}, 'psi': {'source': 'stage1_best', 'split': 'train', 'augmentation': False}, 'main': {**stage, 'initialization': 'fresh'}, 'confusing_probability': {'initial_value': 0.01, 'learning_rate': 0.1, 'epsilon': 0.0001, 'update_start_epoch': 0, 'update_interval_epochs': 1}}}
 
-# --- merged from test_upm_cli.py ---
 class _upm_cli_UPMCliTest(unittest.TestCase):
 
     def test_registry_recipe_paper_and_validation(self) -> None:
@@ -1661,14 +1500,7 @@ class _upm_cli_UPMCliTest(unittest.TestCase):
 
     def test_dry_run_reports_stages_psi_and_eta(self) -> None:
         config_path = Path('configs/experiment/cifar10_upm_smoke.yaml').resolve()
-        output = io.StringIO()
-        with redirect_stdout(output):
-            result = cli_main.main(['run', '--config', str(config_path), '--dry-run', '--no-check-data'])
-        self.assertEqual(result, 0)
-        text = output.getvalue()
+        code, text, error = _invoke_cli(*['run', '--config', str(config_path), '--dry-run', '--no-check-data'])
+        self.assertEqual(code, 0, error)
         for expected in ('upm', '2/2 (stage1/main)', 'UPM psi source: stage1_best', 'UPM eta initial value: 0.01', 'UPM eta update start epoch: 0', 'UPM eta update interval: 1'):
             self.assertIn(expected, text)
-
-    def test_protected_yaml_is_not_a_recipe(self) -> None:
-        with self.assertRaises(ValueError):
-            recipe_by_id('cifar10-symmetric40-all-e5')

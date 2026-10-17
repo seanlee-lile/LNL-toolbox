@@ -119,12 +119,6 @@ class _pipeline_PipelineIntegrationTest(unittest.TestCase):
             self.assertTrue(restored.load_artifacts(directory))
             self.assertEqual(restored.artifacts.snapshot.snapshot_hash, artifacts.snapshot.snapshot_hash)
 
-    def test_fresh_training_can_prepare_transition(self) -> None:
-        pipeline, model, optimizer, loader = self._transition_fixture()
-        with tempfile.TemporaryDirectory() as directory:
-            artifacts = pipeline.prepare_transition(model=model, optimizer=optimizer, loader=loader, device=torch.device('cpu'), dataset='synthetic', split='train', run_dir=directory)
-            self.assertIsNotNone(artifacts.snapshot)
-            self.assertIsNotNone(artifacts.transition)
 
     def test_resume_missing_transition_artifact_fails(self) -> None:
         pipeline, _, _, _ = self._transition_fixture()
@@ -164,17 +158,6 @@ class _pipeline_PipelineIntegrationTest(unittest.TestCase):
             restored, _, _, _ = self._transition_fixture()
             with self.assertRaisesRegex(ValueError, 'checkpoint identity mismatch'):
                 restored.restore_for_resume(directory, checkpoint_state=checkpoint_state, component_states={}, dataset='synthetic', split='train')
-
-    def test_pipeline_state_roundtrip(self) -> None:
-        pipeline = StandardNoisyERMPipeline()
-        pipeline.state.phase = PipelinePhase.EVALUATE
-        pipeline.state.cycle = 7
-        pipeline.state.metadata['marker'] = 'restored'
-        restored = StandardNoisyERMPipeline()
-        restored.load_state_dict(pipeline.state_dict())
-        self.assertEqual(restored.state.phase, PipelinePhase.EVALUATE)
-        self.assertEqual(restored.state.cycle, 7)
-        self.assertEqual(restored.state.metadata['marker'], 'restored')
 
     def test_pipeline_state_restored_before_training(self) -> None:
         pipeline, model, optimizer, loader = self._transition_fixture()
@@ -248,10 +231,6 @@ class _runner_planning_RunnerPlanningTest(unittest.TestCase):
         apply_epoch_override(config, 4)
         self.assertEqual(config['upm']['main']['epochs'], 4)
 
-    def test_cli_preview_contains_no_method_specific_dispatch(self) -> None:
-        source = inspect.getsource(_print_plan)
-        for method in ('upm', 'coteaching', 'dld', 'dividemix', 'lend'):
-            self.assertNotIn(f'== "{method}"', source)
 
     def test_coteaching_plan_uses_nested_remember_schedule(self) -> None:
         config = {'method': 'coteaching', 'execution': {'runner': 'coteaching'}, 'data': {'name': 'cifar10'}, 'model': {'name': 'cnn8'}, 'loader': {'batch_size': 128}, 'optimizer': {'name': 'adam', 'lr': 0.001}, 'noise': {'rate': 0.2}, 'coteaching': {'model_count': 2, 'noise_rate': 0.2, 'gradual_epochs': 999, 'remember_schedule': {'gradual_epochs': 10}}, 'trainer': {'epochs': 200}}

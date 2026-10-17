@@ -1,16 +1,8 @@
-"""Merged unit tests; source modules were consolidated without changing assertions."""
 from __future__ import annotations
-
-# --- merged from test_lend.py ---
 import unittest
-
-# --- merged from test_lend.py ---
 import torch
-
-# --- merged from test_lend.py ---
 from lnl_toolbox.selectors.lend import KNNLabelPropagationSelector, propagate_knn_labels
 
-# --- merged from test_lend.py ---
 class _knn_KNNPropagationTest(unittest.TestCase):
 
     def test_batch_local_dilution_is_a_distribution(self) -> None:
@@ -24,37 +16,15 @@ class _knn_KNNPropagationTest(unittest.TestCase):
         result = KNNLabelPropagationSelector(neighbors=2, num_classes=3).select(features=torch.eye(4), noisy_targets=torch.tensor([0, 1, 2, 1]))
         torch.testing.assert_close(result.rejected_mask, ~result.selected_mask)
 
-# --- merged from test_lend_algorithm.py ---
 import copy
-
-# --- merged from test_lend_algorithm.py ---
-import unittest
-
-# --- merged from test_lend_algorithm.py ---
 from unittest.mock import patch
-
-# --- merged from test_lend_algorithm.py ---
-import torch
-
-# --- merged from test_lend_algorithm.py ---
 from torch import nn
-
-# --- merged from test_lend_algorithm.py ---
 from lnl_toolbox.algorithms.lend import LENDAlgorithm, LENDConfig
-
-# --- merged from test_lend_algorithm.py ---
 from lnl_toolbox.algorithms.lend.graph import build_lend_similarity
-
-# --- merged from test_lend_algorithm.py ---
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
-
-# --- merged from test_lend_algorithm.py ---
 from lnl_toolbox.models.cifar_resnet import cifar_resnet18
-
-# --- merged from test_lend_algorithm.py ---
 from lnl_toolbox.models.feature_output import FeatureOutput
 
-# --- merged from test_lend_algorithm.py ---
 class _lend_algorithm_FeatureModel(nn.Module):
 
     def __init__(self):
@@ -72,11 +42,9 @@ class _lend_algorithm_FeatureModel(nn.Module):
         features = torch.relu(self.encoder(inputs)) + 0.1
         return self.classifier(features)
 
-# --- merged from test_lend_algorithm.py ---
 def _lend_algorithm__config(beta=1.0):
     return {'method': 'lend', 'data': {'name': 'cifar10', 'max_train_samples': 3}, 'model': {'name': 'tiny_cnn'}, 'loader': {'batch_size': 3, 'drop_last': False}, 'loss': {'name': 'ce'}, 'lend': {'graph': {'k': 2, 'gamma': 1.0, 'metric': 'inner_product', 'normalize_features': False}, 'dilution': {'alpha': 0.99, 'policy': 'fixed_steps', 'steps': 1}, 'history': {'beta': beta, 'first_observation': 'current'}, 'selection': {'rule': 'noisy_equals_diluted_argmax', 'reduction': 'batch_mean', 'empty_batch': 'skip_update'}, 'training': {'epochs': 2}}}
 
-# --- merged from test_lend_algorithm.py ---
 class _lend_algorithm_LENDAlgorithmTest(unittest.TestCase):
 
     def _algorithm(self, beta=1.0, lr=0.0):
@@ -234,24 +202,36 @@ class _lend_algorithm_LENDAlgorithmTest(unittest.TestCase):
         self.assertTrue(torch.equal(history.last_updated_epoch, before['last_updated_epoch']))
 
     def test_clean_target_payload_is_ignored(self):
-        left, right = (self._algorithm(beta=0.9, lr=0.0), self._algorithm(beta=0.9, lr=0.0))
+        left, right = (self._algorithm(beta=0.9, lr=0.1), self._algorithm(beta=0.9, lr=0.1))
+        for algorithm in (left, right):
+            algorithm.private_state.history.values[:] = torch.tensor([[1.0, 0.0]] * 3)
+            algorithm.private_state.history.initialized[:] = True
+        before = copy.deepcopy(left.model.state_dict())
         inputs = torch.tensor([[1.0, 1.0], [2.0, 1.0], [1.0, 2.0]])
         common = {'input': inputs, 'target': torch.tensor([0, 1, 0]), 'index': torch.tensor([10, 20, 30])}
-        left.step(Batch({**common, 'clean_target': torch.tensor([0, 0, 0])}), RunState(cycle=0))
-        right.step(Batch({**common, 'clean_target': torch.tensor([1, 1, 1])}), RunState(cycle=0))
+        first = left.step(Batch({**common, 'clean_target': torch.tensor([0, 0, 0])}), RunState(cycle=0))
+        second = right.step(Batch({**common, 'clean_target': torch.tensor([1, 1, 1])}), RunState(cycle=0))
+        self.assertGreater(first.metrics['selected_samples'], 0)
+        self.assertEqual(left.private_state.optimizer_steps, 1)
+        self.assertTrue(any(not torch.equal(value, before[name])
+                            for name, value in left.model.state_dict().items()))
         for name, value in left.model.state_dict().items():
             torch.testing.assert_close(value, right.model.state_dict()[name])
+        for parameter, other in zip(left.model.parameters(), right.model.parameters()):
+            self.assertIsNotNone(parameter.grad)
+            torch.testing.assert_close(parameter.grad, other.grad)
+            torch.testing.assert_close(left.optimizer.state[parameter]['momentum_buffer'],
+                                       right.optimizer.state[other]['momentum_buffer'])
+        self.assertEqual(first.metrics, second.metrics)
+        for key in first.metadata:
+            torch.testing.assert_close(first.metadata[key], second.metadata[key])
+        for key in ('values', 'initialized', 'last_updated_epoch'):
+            torch.testing.assert_close(getattr(left.private_state.history, key),
+                                       getattr(right.private_state.history, key))
 
-# --- merged from test_lend_dilution.py ---
-import unittest
 
-# --- merged from test_lend_dilution.py ---
-import torch
-
-# --- merged from test_lend_dilution.py ---
 from lnl_toolbox.algorithms.lend import dilute_labels, select_lend_samples
 
-# --- merged from test_lend_dilution.py ---
 class LENDConvergenceAndScratchTest(unittest.TestCase):
     def test_until_converged_matches_known_fixed_point_and_reports_residual(self):
         from lnl_toolbox.algorithms.lend.dilution import dilute_labels
@@ -414,16 +394,9 @@ class _lend_dilution_LENDDilutionTest(unittest.TestCase):
         history = torch.tensor([[0.5, 0.5], [0.1, 0.9], [0.9, 0.1]])
         self.assertEqual(select_lend_samples(noisy, history).tolist(), [True, True, False])
 
-# --- merged from test_lend_graph.py ---
-import unittest
 
-# --- merged from test_lend_graph.py ---
-import torch
+from lnl_toolbox.algorithms.lend import build_lend_similarity, normalize_lend_graph
 
-# --- merged from test_lend_graph.py ---
-from lnl_toolbox.algorithms.lend import build_lend_similarity, dilute_labels, normalize_lend_graph
-
-# --- merged from test_lend_graph.py ---
 class _lend_graph_LENDGraphTest(unittest.TestCase):
 
     def test_equation_one_and_normalization_hand_calculation(self):
@@ -507,16 +480,9 @@ class _lend_graph_LENDGraphTest(unittest.TestCase):
         cuda = build_lend_similarity(features.cuda(), indices.cuda(), k=2, gamma=1.0, metric='inner_product', normalize_features=False)
         torch.testing.assert_close(cuda.cpu(), cpu)
 
-# --- merged from test_lend_history.py ---
-import unittest
 
-# --- merged from test_lend_history.py ---
-import torch
-
-# --- merged from test_lend_history.py ---
 from lnl_toolbox.algorithms.lend.history import LENDLabelHistory
 
-# --- merged from test_lend_history.py ---
 class _lend_history_LENDHistoryTest(unittest.TestCase):
 
     def test_arbitrary_indices_first_observation_and_equation_five(self):
@@ -560,56 +526,28 @@ class _lend_history_LENDHistoryTest(unittest.TestCase):
         state['values'].zero_()
         self.assertFalse(torch.equal(restored.values, state['values']))
 
-# --- merged from test_lend_workflow.py ---
-import copy
 
-# --- merged from test_lend_workflow.py ---
 import hashlib
-
-# --- merged from test_lend_workflow.py ---
 import json
-
-# --- merged from test_lend_workflow.py ---
 import tempfile
-
-# --- merged from test_lend_workflow.py ---
-import unittest
-
-# --- merged from test_lend_workflow.py ---
 from pathlib import Path
-
-# --- merged from test_lend_workflow.py ---
-from unittest.mock import patch
-
-# --- merged from test_lend_workflow.py ---
 import numpy as np
-
-# --- merged from test_lend_workflow.py ---
-import torch
-
-# --- merged from test_lend_workflow.py ---
 from lnl_toolbox.data.cifar import CifarData
-
-# --- merged from test_lend_workflow.py ---
 from lnl_toolbox.training.experiment import run_experiment
 
-# --- merged from test_lend_workflow.py ---
 def _lend_workflow__cifar(size, split, classes=10):
     rng = np.random.default_rng(401 + size + classes)
     images = rng.integers(1, 255, size=(size, 32, 32, 3), dtype=np.uint8)
     labels = np.arange(size, dtype=np.int64) % classes
     return CifarData(images, labels, tuple(map(str, range(classes))), split, f'cifar{classes}')
 
-# --- merged from test_lend_workflow.py ---
 def _lend_workflow__config(epochs=2, dataset='cifar10'):
     classes = 10 if dataset == 'cifar10' else 100
     return {'method': 'lend', 'execution': {'runner': 'lend'}, 'seed': 7, 'data': {'name': dataset, 'root': 'unused', 'validation_size': classes, 'max_train_samples': classes * 2, 'max_validation_samples': classes, 'max_test_samples': classes, 'augment': False}, 'noise': {'name': 'symmetric', 'rate': 0.2, 'seed': 17, 'validation_targets': 'noisy'}, 'loss': {'name': 'ce'}, 'model': {'name': 'tiny_cnn', 'width': 2}, 'optimizer': {'name': 'adam', 'lr': 0.001, 'weight_decay': 0.0}, 'scheduler': {'name': 'none'}, 'loader': {'batch_size': classes, 'num_workers': 0, 'pin_memory': False, 'drop_last': False}, 'lend': {'graph': {'k': classes - 1, 'gamma': 1.0, 'metric': 'inner_product', 'normalize_features': False}, 'dilution': {'alpha': 0.99, 'policy': 'fixed_steps', 'steps': 2}, 'history': {'beta': 0.9, 'first_observation': 'current'}, 'selection': {'rule': 'noisy_equals_diluted_argmax', 'reduction': 'batch_mean', 'empty_batch': 'skip_update'}, 'training': {'epochs': epochs}}, 'evaluation': {'selection_split': 'validation', 'primary': 'accuracy'}, 'trainer': {'device': 'cpu'}}
 
-# --- merged from test_lend_workflow.py ---
 def _lend_workflow__sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
-# --- merged from test_lend_workflow.py ---
 def _lend_workflow__nested_equal(test, left, right):
     if torch.is_tensor(left):
         torch.testing.assert_close(left, right, rtol=0.0, atol=0.0)
@@ -624,7 +562,6 @@ def _lend_workflow__nested_equal(test, left, right):
     else:
         test.assertEqual(left, right)
 
-# --- merged from test_lend_workflow.py ---
 class _lend_workflow_LENDWorkflowTest(unittest.TestCase):
 
     def _run_case(self, dataset='cifar10'):

@@ -18,13 +18,6 @@ from lnl_toolbox.training.checkpoint import read_checkpoint
 from lnl_toolbox.training.noisy_labels import file_sha256
 
 
-def _digest(value: Any, owner: str) -> str:
-    parsed = str(value).strip().lower()
-    if len(parsed) != 64 or any(char not in "0123456789abcdef" for char in parsed):
-        raise ValueError(f"{owner} must be a 64-character SHA-256 digest")
-    return parsed
-
-
 @dataclass(frozen=True)
 class DLDSourceFileIdentity:
     path: str
@@ -66,7 +59,6 @@ class DLDUPMMainBestSource:
 
     @property
     def provenance(self) -> dict[str, Any]:
-        noise = self.checkpoint_payload["noise"]
         config = self.checkpoint_payload["config"]
         state = self.checkpoint_payload["upm_state"]
         return {
@@ -76,8 +68,8 @@ class DLDUPMMainBestSource:
             "run_dir": str(self.run_dir),
             "checkpoint": self.checkpoint.state_dict(),
             "manifest": self.manifest.state_dict(),
-            "mapping_hash": str(noise["mapping_hash"]),
-            "dataset_fingerprint": str(noise["dataset_fingerprint"]),
+            "mapping_hash": self.noise_manifest.mapping_hash,
+            "dataset_fingerprint": self.noise_manifest.dataset_fingerprint,
             "model": dict(config["upm"]["main"]["model"]),
             "completed_epochs": int(state["main_completed_epochs"]),
             "global_step": int(state["main_global_step"]),
@@ -109,10 +101,6 @@ def load_upm_main_best_feature_source(
         raise FileNotFoundError(f"DLD pretrained source run does not exist: {run_dir}")
     checkpoint = DLDSourceFileIdentity.capture(run_dir / "best.pt")
     manifest_identity = DLDSourceFileIdentity.capture(run_dir / "noise_manifest.npz")
-    if checkpoint.sha256 != _digest(source_config.get("checkpoint_sha256"), "checkpoint_sha256"):
-        raise ValueError("DLD source checkpoint SHA-256 mismatch")
-    if manifest_identity.sha256 != _digest(source_config.get("manifest_sha256"), "manifest_sha256"):
-        raise ValueError("DLD source manifest SHA-256 mismatch")
 
     payload = read_checkpoint(checkpoint.path, "cpu")
     if payload.get("method") != "upm" or payload.get("checkpoint_role") != "main_best":
@@ -129,19 +117,7 @@ def load_upm_main_best_feature_source(
         raise ValueError("DLD source model architecture mismatch")
     if str(noise.get("dataset")) != "cifar10" or int(noise.get("num_classes", -1)) != num_classes:
         raise ValueError("DLD source dataset or class count mismatch")
-    expected_mapping = _digest(source_config.get("mapping_hash"), "mapping_hash")
-    expected_fingerprint = _digest(
-        source_config.get("dataset_fingerprint"), "dataset_fingerprint"
-    )
-    if str(noise.get("mapping_hash", "")).lower() != expected_mapping:
-        raise ValueError("DLD source mapping hash mismatch")
-    if str(noise.get("dataset_fingerprint", "")).lower() != expected_fingerprint:
-        raise ValueError("DLD source dataset fingerprint mismatch")
-    if str(noise.get("manifest_sha256", "")).lower() != manifest_identity.sha256:
-        raise ValueError("DLD source checkpoint manifest identity mismatch")
     manifest = NoiseManifest.load(manifest_identity.path)
-    if manifest.mapping_hash != expected_mapping or manifest.dataset_fingerprint != expected_fingerprint:
-        raise ValueError("DLD source manifest provenance mismatch")
     if manifest.dataset != "cifar10" or manifest.num_classes != num_classes:
         raise ValueError("DLD source manifest dataset contract mismatch")
     try:
@@ -240,9 +216,6 @@ def _cached_torchvision_weight(url: str) -> Path:
             f"{path}. Download resnet34-b627a593.pth from the official PyTorch "
             "weight URL before running this recipe."
         )
-    expected_prefix = filename.rsplit("-", 1)[-1].split(".", 1)[0]
-    if not file_sha256(path).startswith(expected_prefix):
-        raise ValueError(f"DLD pretrained ResNet34 weight checksum mismatch: {path}")
     return path
 
 

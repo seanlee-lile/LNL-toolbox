@@ -160,7 +160,7 @@ class DSSSelectorState:
         observed = self.labels >= 0
         if not bool(self.history.observed[observed, epoch].all()):
             raise ValueError("DSS did not observe every known sample this epoch")
-        if epoch + 1 < self.warmup_epochs:
+        if epoch + 1 < self.warmup_epochs and not getattr(self, "warmup_finished", False):
             return
         self.selected[observed] = (
             self.current_prediction[observed].argmax(dim=1)
@@ -202,6 +202,7 @@ class DSSSelectorState:
             "selected": self.selected.clone(),
             "excluded": self.excluded.clone(),
             "current_epoch": self.current_epoch,
+            "warmup_finished": getattr(self, "warmup_finished", False),
         }
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
@@ -236,6 +237,7 @@ class DSSSelectorState:
                 raise ValueError(f"DSS state contains non-finite values for {name}")
             destination.copy_(value)
         self.current_epoch = int(state.get("current_epoch", -1))
+        self.warmup_finished = bool(state.get("warmup_finished", False))
         if not -1 <= self.current_epoch < self.total_epochs:
             raise ValueError("DSS current epoch is outside the configured range")
 

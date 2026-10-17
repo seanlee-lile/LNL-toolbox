@@ -210,6 +210,7 @@ def pretrain_noisy_classifier(
     scheduler=None,
     checkpoint_dir: str | Path | None = None,
     checkpoint_identity: Mapping[str, Any] | None = None,
+    early_stopping: bool = False,
 ) -> dict[str, Any]:
     """Shared noisy-label warm-up using only observed targets."""
 
@@ -228,6 +229,11 @@ def pretrain_noisy_classifier(
     best_model = None
     destination = None if checkpoint_dir is None else Path(checkpoint_dir)
     identity = dict(checkpoint_identity or {})
+    from lnl_toolbox.training.early_stopping import StageEarlyStopping
+    stopping = StageEarlyStopping({"pretraining": {"early_stopping": early_stopping}},
+                                  "pretraining.early_stopping", "validation_loss", mode="min", run_dir=destination)
+    if stopping.enabled and validation_loader is None:
+        raise ValueError("pretraining early stopping requires a validation loader")
     if destination is not None:
         from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, restore_rng_state
 
@@ -244,8 +250,12 @@ def pretrain_noisy_classifier(
             best_loss, best_epoch = float(payload["best_loss"]), int(payload["best_epoch"])
             best_model = torch.load(destination / "pretraining_best.pt", map_location=resolved_device, weights_only=False)["model"]
             restore_rng_state(payload["rng_state"])
+            if stopping.enabled and payload.get("early_stopping") is not None:
+                stopping.counter.load_state_dict(payload["early_stopping"])
     try:
         for epoch in range(completed_epoch + 1, epochs):
+            if stopping.stopped:
+                break
             model.train()
             epoch_loader = loader(epoch) if callable(loader) else loader
             for batch in epoch_loader:
@@ -273,6 +283,8 @@ def pretrain_noisy_classifier(
                     atomic_save({"model": best_model, "epoch": epoch, "validation_loss": validation_loss}, destination / "pretraining_best.pt")
             if scheduler is not None:
                 scheduler.step()
+            stopping.update({"epoch": epoch + 1, "validation_loss": validation_loss})
+            completed_epoch = epoch
             if destination is not None:
                 atomic_save({
                     "identity": identity, "epochs": epochs, "completed_epoch": epoch,
@@ -280,6 +292,7 @@ def pretrain_noisy_classifier(
                     "scheduler": None if scheduler is None else scheduler.state_dict(),
                     "rng_state": capture_rng_state(), "steps": steps,
                     "best_loss": best_loss, "best_epoch": best_epoch,
+                    "early_stopping": stopping.counter.state_dict() if stopping.enabled else None,
                 }, destination / "pretraining_last.pt")
                 print(json.dumps({"event": "pretraining_epoch", "stage": "pretraining", "epoch": epoch + 1,
                                   "total_epochs": epochs, "validation_loss": validation_loss}), flush=True)
@@ -287,7 +300,7 @@ def pretrain_noisy_classifier(
             model.load_state_dict(best_model)
     finally:
         model.train(was_training)
-    summary = {"epochs": int(epochs), "steps": int(steps)}
+    summary = {"epochs": completed_epoch + 1, "steps": int(steps)}
     if validation_loader is not None:
         summary.update({"best_epoch": best_epoch + 1, "best_validation_loss": best_loss})
     return summary

@@ -498,7 +498,7 @@ def _cwd_requirements(_config: Mapping[str, Any]) -> MethodRequirements:
         supports_native_noisy_labels=True,
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
         data_requirements=_classification_data(
-            validation="none",
+            validation=(_validation_target(_config) if (_config.get("trainer") or {}).get("early_stopping", False) else "none"),
             extra_roles=(DataRole.TRAIN_EVAL,),
             manifest_scope="effective_train",
         ),

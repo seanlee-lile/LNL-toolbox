@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 from typing import Any, Mapping
+import json
+from pathlib import Path
 
 
 @dataclass
@@ -84,3 +86,160 @@ class EarlyStopping:
         self.best = None if state["best"] is None else float(state["best"])
         self.bad_epochs = int(state["bad_epochs"])
         self.stopped = bool(state["stopped"])
+
+
+class StageEarlyStopping:
+    """One stage, one boolean, exactly 15 consecutive validation failures.
+
+    The caller owns phase transitions and the stage's best-model restoration.
+    This object never stops a process or substitutes a training/test metric.
+    """
+
+    PATIENCE = 15
+
+    def __init__(self, config: Mapping[str, Any], path: str, monitor: str,
+                 *, mode: str = "max", run_dir: str | Path | None = None) -> None:
+        value: Any = config
+        for component in path.split("."):
+            value = value.get(component, False) if isinstance(value, Mapping) else False
+        if not isinstance(value, bool):
+            raise TypeError(path + " must be a boolean")
+        self.enabled = value
+        self.path = path
+        self.counter = EarlyStopping(monitor=monitor, mode=mode, patience=self.PATIENCE)
+        self.history: list[dict[str, Any]] = []
+        self.run_dir = None if run_dir is None else Path(run_dir)
+
+    @property
+    def stopped(self) -> bool:
+        return self.enabled and self.counter.stopped
+
+    def update(self, row: Mapping[str, Any], *, epoch: int | None = None,
+               persist: bool = True) -> bool:
+        if not self.enabled:
+            return False
+        if row.get("selection_split") == "test":
+            raise ValueError(self.path + " cannot monitor test-set model selection")
+        number = row.get("epoch") if epoch is None else epoch
+        if not isinstance(number, int) or isinstance(number, bool):
+            raise ValueError(self.path + " requires a completed epoch number")
+        if self.history and number <= self.history[-1]["epoch"]:
+            return self.stopped
+        self.counter.update(row)
+        self.counter.stopped = self.counter.bad_epochs >= self.PATIENCE
+        self.history.append({"epoch": number, "value": float(row[self.counter.monitor]),
+                             "best": self.counter.best, "bad_epochs": self.counter.bad_epochs})
+        if persist and self.run_dir is not None:
+            destination = self.run_dir / "stage-early-stopping.json"
+            document = json.loads(destination.read_text(encoding="utf-8")) if destination.exists() else {}
+            document[self.path] = {"enabled": True, **self.counter.state_dict(), "history": self.history}
+            temporary = destination.with_suffix(".json.tmp")
+            temporary.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
+            temporary.replace(destination)
+            if self.stopped:
+                print(json.dumps({"event": "stage_early_stop", "stage": self.path.rsplit(".", 1)[0],
+                                  "epoch": number, "monitor": self.counter.monitor,
+                                  "best": self.counter.best, "bad_epochs": self.counter.bad_epochs}), flush=True)
+        return self.stopped
+
+    def replay(self, rows, *, event: str | None = None, phase: str | None = None,
+               completed: int | None = None, zero_based: bool = False) -> None:
+        if not self.enabled:
+            return
+        for row in rows:
+            if event is not None and row.get("event", "epoch") != event:
+                continue
+            if phase is not None and row.get("stage", row.get("phase")) != phase:
+                continue
+            epoch = row.get("epoch")
+            if not isinstance(epoch, int) or self.counter.monitor not in row:
+                continue
+            if completed is not None and epoch >= completed + (0 if zero_based else 1):
+                continue
+            self.update(row, persist=False)
+
+    def replay_file(self, path: str | Path, **filters) -> None:
+        source = Path(path)
+        if not self.enabled or not source.is_file():
+            return
+        rows = []
+        for line in source.read_text(encoding="utf-8").splitlines():
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        self.replay(rows, **filters)
+
+    def observe(self, row: Mapping[str, Any], components: Mapping[str, Any]) -> bool:
+        """Checkpoint a paired stage optimum and restore it before advancing."""
+        if not self.enabled:
+            return False
+        if self.run_dir is None:
+            raise ValueError("stage early stopping requires a run directory")
+        previous = self.counter.best
+        stopped = self.update(row)
+        if previous != self.counter.best:
+            import torch
+            destination = self.run_dir / (self.path.replace(".", "_") + "_best.pt")
+            temporary = destination.with_suffix(".pt.tmp")
+            torch.save({name: (component.detach().cpu().clone() if isinstance(component, torch.Tensor)
+                               else component.state_dict()) for name, component in components.items()
+                        if component is not None}, temporary)
+            temporary.replace(destination)
+        if stopped:
+            self.restore_best(components)
+        return stopped
+
+    def restore_best(self, components: Mapping[str, Any]) -> None:
+        if not self.enabled or self.run_dir is None or self.counter.best is None:
+            return
+        import torch
+        source = self.run_dir / (self.path.replace(".", "_") + "_best.pt")
+        if not source.is_file():
+            raise RuntimeError("missing best stage checkpoint: " + str(source))
+        payload = torch.load(source, map_location="cpu", weights_only=False)
+        for name, component in components.items():
+            if component is not None:
+                if isinstance(component, torch.Tensor):
+                    with torch.no_grad():
+                        component.copy_(payload[name].to(component))
+                else:
+                    component.load_state_dict(payload[name])
+
+
+def stage_epochs(start: int, total: int, warmup: int,
+                 warmup_stopping: StageEarlyStopping, main_stopping: StageEarlyStopping):
+    """Skip only the stopped phase; retain the subsequent phase's budget."""
+    for epoch in range(start, min(warmup, total)):
+        if warmup_stopping.stopped:
+            break
+        yield epoch
+    for epoch in range(max(start, warmup), total):
+        if main_stopping.stopped:
+            break
+        yield epoch
+
+
+def forward_validation(model, transition, loader, device) -> dict[str, float]:
+    """Validation on observed noisy labels for a jointly fitted transition."""
+    import torch
+    if loader is None:
+        raise ValueError("stage early stopping requires a validation split")
+    was_training = model.training
+    model.eval()
+    loss_sum, correct, samples = 0.0, 0, 0
+    try:
+        with torch.inference_mode():
+            for batch in loader:
+                targets = batch["target"].to(device)
+                logits = model(batch["input"].to(device)).to(torch.float64)
+                probabilities = logits.softmax(-1) @ transition.matrix().to(logits)
+                probabilities = probabilities.clamp_min(torch.finfo(probabilities.dtype).tiny)
+                loss_sum += float(torch.nn.functional.nll_loss(probabilities.log(), targets, reduction="sum"))
+                correct += int(probabilities.argmax(-1).eq(targets).sum())
+                samples += targets.numel()
+    finally:
+        model.train(was_training)
+    if not samples:
+        raise ValueError("stage early stopping requires nonempty validation data")
+    return {"validation_loss": loss_sum / samples, "validation_accuracy": correct / samples}

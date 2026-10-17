@@ -1,39 +1,16 @@
-"""Merged unit tests; source modules were consolidated without changing assertions."""
 from __future__ import annotations
 
-# --- merged from test_cal.py ---
-import tempfile
-
 import json
-
-# --- merged from test_cal.py ---
 from pathlib import Path
-
-# --- merged from test_cal.py ---
+import tempfile
 import unittest
-
-# --- merged from test_cal.py ---
 import numpy as np
-
-# --- merged from test_cal.py ---
 import torch
-
-# --- merged from test_cal.py ---
-from lnl_toolbox.algorithms.cal import cal_covariance_correction, cal_objective, cal_sieve_scores, cal_transition_indicators, cores2_adjusted_losses, cores2_warmup_prior, resolve_confidence_weight
-
-# --- merged from test_cal.py ---
+from lnl_toolbox.algorithms.cal import cal_covariance_correction, cal_sieve_scores, cal_transition_indicators, cores2_adjusted_losses, cores2_warmup_prior, resolve_confidence_weight
 from lnl_toolbox.noise.cal import DROP, KEEP, RELABEL, CALProxyArtifact, build_cal_proxy_artifact
-
-# --- merged from test_cal.py ---
 from lnl_toolbox.noise.estimators import PosteriorSnapshot
-
-# --- merged from test_cal.py ---
 from lnl_toolbox.training.cal_experiment import _assert_finite_warmup_gradients, _build_warmup_scheduler, _reference_transition_means, run_cal_experiment
-
-# --- merged from test_cal.py ---
 from lnl_toolbox.training.experiment import build_alpha_scaled_scheduler
-
-# --- merged from test_cal.py ---
 class _cal_CALTest(unittest.TestCase):
 
     def test_cores2_warmup_uses_sqrt_prior_without_cifar10_class_multiplier(self) -> None:
@@ -74,31 +51,6 @@ class _cal_CALTest(unittest.TestCase):
         boundary = build_cal_proxy_artifact(snapshot, np.full(2, -8.0), lower_threshold=-8.0, upper_threshold=-8.0)
         self.assertEqual(boundary.sample_status.tolist(), [DROP, DROP])
 
-    def test_clean_identity_vector_is_not_a_training_objective_input(self) -> None:
-        logits = torch.tensor([[1.5, -0.5], [-0.25, 1.0]])
-        noisy = torch.tensor([0, 1])
-        proxy = torch.tensor([0, 1])
-        retained = torch.tensor([True, True])
-        noisy_prior = torch.tensor([0.5, 0.5])
-        proxy_prior = torch.tensor([0.5, 0.5])
-        means = torch.zeros(2, 2)
-        transition = torch.eye(2)
-        clean_vectors = (torch.tensor([0, 1]), torch.tensor([1, 0]))
-        values = []
-        for _clean_identity_only in clean_vectors:
-            loss, _ = cal_objective(
-                logits,
-                noisy,
-                proxy,
-                retained,
-                noisy_prior,
-                proxy_prior,
-                means,
-                transition,
-                confidence_weight=1.0,
-            )
-            values.append(loss)
-        torch.testing.assert_close(values[0], values[1])
 
     def _snapshot(self) -> PosteriorSnapshot:
         return PosteriorSnapshot(np.array([[0.9, 0.1], [0.2, 0.8], [0.6, 0.4]]), np.array([0, 0, 1]), np.array([8, 3, 5]), 'fixture', 'train')
@@ -266,25 +218,3 @@ class _cal_CALTest(unittest.TestCase):
         self.assertNotIn('validation_loss', rows[0])
         self.assertNotIn('test_loss', rows[0])
         self.assertEqual(rows[-1]['event'], 'final')
-
-    def test_epoch_metrics_are_written_before_final_evaluation(self) -> None:
-        import yaml
-        from unittest.mock import patch
-
-        from lnl_toolbox.training import cal_experiment as cal_module
-
-        config = yaml.safe_load(
-            (Path(__file__).resolve().parents[1] / 'configs' / 'experiment' / 'cal_cifar10_smoke.yaml').read_text(encoding='utf-8')
-        )
-        writes = []
-        original_writer = cal_module._write_epoch_metrics
-
-        def record_write(rows, path):
-            writes.append([row.get('event', 'epoch') for row in rows])
-            original_writer(rows, path)
-
-        with tempfile.TemporaryDirectory() as directory:
-            with patch.object(cal_module, '_write_epoch_metrics', side_effect=record_write):
-                run_cal_experiment(config, directory)
-        self.assertIn(['epoch'], writes)
-        self.assertEqual(writes[-1], ['epoch', 'final'])

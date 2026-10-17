@@ -169,6 +169,9 @@ def run_cwd_experiment(
     snapshot_loader = prepared.loader(DataRole.TRAIN_EVAL, shuffle=False)
     test_loader = prepared.loader(DataRole.TEST, shuffle=False)
     loaders = {"train": train_loader, "snapshot": snapshot_loader, "test": test_loader}
+    validation_loader = (prepared.validation_loader(shuffle=False)
+                         if {DataRole.CLEAN_VALIDATION, DataRole.NOISY_VALIDATION}.intersection(prepared.available_roles)
+                         else None)
 
     cwd_config = config.get("cwd", {})
     cwd_variant = str(cwd_config.get("variant", "multiclass")).strip().lower()
@@ -225,7 +228,14 @@ def run_cwd_experiment(
     criterion = CrossEntropyLoss().to(device)
     epochs = int(config["trainer"]["epochs"])
     metrics_path = run_dir / "metrics.jsonl"
+    from lnl_toolbox.training.early_stopping import StageEarlyStopping
+    stopping = StageEarlyStopping(config, "trainer.early_stopping", "validation_accuracy", run_dir=run_dir)
+    if stopping.enabled and validation_loader is None:
+        raise ValueError("trainer.early_stopping requires data.num_val or data.validation_size")
+    stopping.replay(rows, completed=start_epoch)
     for epoch in range(start_epoch, epochs):
+        if stopping.stopped:
+            break
         snapshot = collect_feature_snapshot(
             model,
             snapshot_loader,
@@ -269,6 +279,9 @@ def run_cwd_experiment(
             require_validation=False,
         )
         rows.append(row)
+        if validation_loader is not None:
+            validation = _evaluate_cwd(model, validation_loader, device, scalar_binary=cwd_variant == "binary_scalar")
+            row.update({"validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"]})
         metrics_path.write_text(
             "".join(json.dumps(value, sort_keys=True) + "\n" for value in rows),
             encoding="utf-8",
@@ -295,6 +308,9 @@ def run_cwd_experiment(
             },
             run_dir / "last.pt",
         )
+        if stopping.observe(row, {"model": model, "optimizer": optimizer, "scheduler": scheduler}):
+            break
+    stopping.restore_best({"model": model})
     (run_dir / "resolved_config.yaml").write_text(
         yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
     )

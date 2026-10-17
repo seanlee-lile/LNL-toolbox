@@ -1004,9 +1004,11 @@
     const fields = state.planSchema?.fields || [];
     const patches = [];
     for (const field of fields) {
-      if (!Object.prototype.hasOwnProperty.call(state.parameterDraft, field.path)) continue;
+      const stageSwitch = field.kind === "boolean" && /\.(early_stopping|warmup_early_stopping)$/.test(field.path);
+      const hasDraft = Object.prototype.hasOwnProperty.call(state.parameterDraft, field.path);
+      if (!hasDraft && !stageSwitch) continue;
       if (!field.editable || field.visible === false || field.path === "data.name") continue;
-      const raw = state.parameterDraft[field.path];
+      const raw = hasDraft ? state.parameterDraft[field.path] : field.value;
       let value = raw;
       if (field.kind === "number") {
         if (field.nullable && String(raw).trim() === "") value = null;
@@ -1025,7 +1027,7 @@
           if (!forReview && field.kind === "object" && (value === null || Array.isArray(value) || typeof value !== "object")) throw new Error(field.path + " 必须是 JSON 对象");
         }
       }
-      if (JSON.stringify(value) !== JSON.stringify(field.value)) patches.push({path:field.path, value:value});
+      if (stageSwitch || JSON.stringify(value) !== JSON.stringify(field.value)) patches.push({path:field.path, value:value});
     }
     return patches;
   }

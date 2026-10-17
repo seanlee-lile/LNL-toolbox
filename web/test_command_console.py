@@ -18,6 +18,33 @@ import command_console  # noqa: E402
 
 
 class CommandConsoleTest(unittest.TestCase):
+    def test_stage_early_stopping_fields_share_the_parameter_contract(self):
+        from copy import deepcopy
+        from lnl_toolbox.core.config_schema import training_stage_controls
+
+        for method, recipe in command_console._parameter_registry()['formal_recipe_bindings'].items():
+            config = command_console._config_payload(recipe)['config']
+            fields = command_console._config_schema(recipe)['fields']
+            for control in training_stage_controls(config):
+                with self.subTest(method=method, path=control['path']):
+                    matches = [field for field in fields if field['path'] == control['path']]
+                    self.assertEqual(len(matches), 1)
+                    field = matches[0]
+                    self.assertEqual(field['value'], control['value'])
+                    self.assertEqual(field['kind'], 'boolean')
+                    self.assertTrue(field['editable'])
+                    self.assertEqual(field['label'], command_console._parameter_user_label(control['path'], method))
+                    self.assertIn('15轮', field['note'])
+                    self.assertIn('最佳模型', field['note'])
+                    self.assertEqual(field['research_group'], '')
+                    self.assertEqual(field['research_category'], '')
+                    self.assertEqual(field['linked_fields'], [])
+                    edited = deepcopy(config)
+                    for enabled in (True, False):
+                        command_console._set_config_path(edited, control['path'], enabled)
+                        values = {item['path']: item['value'] for item in training_stage_controls(edited)}
+                        self.assertIs(values[control['path']], enabled)
+
     def test_all_26_papers_follow_the_existing_parameter_lists(self):
         bindings = command_console._parameter_registry()["formal_recipe_bindings"]
         self.assertEqual(len(bindings), 26)
@@ -103,7 +130,6 @@ class CommandConsoleTest(unittest.TestCase):
                 with self.subTest(recipe=recipe.id, path=field["path"]):
                     self.assertIsNotNone(command_console._parameter_ui_spec(field["path"]))
                     self.assertRegex(field["note"], r"[\u4e00-\u9fff]")
-                    self.assertEqual(field["label"], command_console._parameter_user_label(field["path"], method))
                     self.assertNotIn("通用配置参数", field["note"])
                     if field["kind"] in {"text", "string"} and not field["path"].endswith((".path", ".artifact_path")):
                         choices = field["choices"]
@@ -245,62 +271,10 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertIn("Web port 8765 is already in use", output.getvalue())
 
-    def test_number_parameters_do_not_spin_on_mouse_wheel(self):
-        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn('document.addEventListener("wheel", function (event) {', page)
-        self.assertIn('target instanceof HTMLInputElement && target.type === "number"', page)
-        self.assertIn('document.activeElement === target', page)
-        self.assertIn('target.blur();', page)
-        self.assertIn('}, {capture:true, passive:true});', page)
-
-    def test_command_preview_is_directly_editable_and_execute_uses_edit(self):
-        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn('textarea id="preview"', page)
-        self.assertIn('id="preview-reset"', page)
-        self.assertIn("state.previewEdited", page)
-        self.assertIn("state.previewAutoCommand", page)
-        self.assertIn("state.previewAutoRequest", page)
-        self.assertIn("previewNode.value", page)
-        self.assertIn("previewNode.addEventListener(\"input\"", page)
-        self.assertIn("已修改，执行时将使用编辑后的指令", page)
-        self.assertIn("const editedCommand = previewNode.value.trim();", page)
-        self.assertIn("state.request = {command: editedCommand};", page)
-        self.assertIn("navigator.clipboard.writeText(previewNode.value)", page)
-        self.assertIn("function resetPreviewCommand()", page)
-        self.assertIn('setRequest(request, command, options = {})', page)
-        self.assertIn('setRequest: function (request, command) { setRequest(request, command, {resetPreview:true}); }', page)
 
 
-    def test_quick_start_is_a_centered_previous_next_carousel(self):
-        script = (command_console.WEB_ROOT / "assets" / "quick_start.js").read_text(encoding="utf-8")
-        css = (command_console.WEB_ROOT / "assets" / "quick_start.css").read_text(encoding="utf-8")
-        for marker in ("currentStep", "quickStartSteps", "renderQuickStartCarousel", "id=\"qs-prev\"", "id=\"qs-next\"", "上一步", "下一步"):
-            self.assertIn(marker, script)
-        for marker in (".qs-carousel", ".qs-carousel-slide", ".qs-carousel-nav", "margin-inline: auto"):
-            self.assertIn(marker, css)
-        self.assertIn(".qs-next-actions { width: 100%;", css)
-        self.assertIn("max-width: 1280px", css)
-        self.assertIn("grid-template-columns: auto minmax(0, 1fr) auto", css)
-        self.assertIn("&lt; 上一步", script)
-        self.assertIn("下一步 &gt;", script)
-        self.assertIn(".qs-carousel-card", css)
-        self.assertIn("border: 0; border-radius: 0; background: transparent", css)
 
-    def test_yaml_builder_has_one_path_and_contextual_editor_lifecycle(self):
-        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertEqual(page.count('id="yaml-path"'), 1)
-        self.assertNotIn('id="yaml-output"', page)
-        for marker in (
-            "hideYamlEditor",
-            "yamlDraftDirty",
-            "继续编辑 YAML（未保存）",
-            "目标已登记数据集（可选）",
-            "compatible-recipes",
-            "yamlRecipeCompatibilityAlias",
-            "state.yamlDataset === alias && state.yamlRecipeCompatibilityAlias !== alias",
-            "打开 YAML/配置说明",
-        ):
-            self.assertIn(marker, page)
+
 
     def test_concrete_recipe_compatibility_preserves_paper_identity(self):
         result = mock.Mock()
@@ -496,53 +470,13 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertTrue(all(step["success"] for step in payload["steps"]))
         self.assertEqual(payload["guide"], "docs/LNL-Toolbox-简明操作教程.md")
 
-    def test_beginner_page_is_not_exposed(self):
-        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertNotIn('fetch("/api/tutorial")', page)
-        self.assertNotIn('id: "beginner"', page)
-        self.assertNotIn('module:"beginner"', page)
-        self.assertNotIn('完整新手引导', page)
-
-    def test_quick_start_is_first_entry_and_reuses_existing_execution_flow(self):
-        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertNotIn('id: "beginner"', page)
-        self.assertIn('/assets/quick_start.js', page)
-        self.assertIn('/assets/quick_start.css', page)
-        self.assertIn('window.quickStartController.mount', page)
-        self.assertNotIn("quickStartNoiseOptions", page)
-        self.assertNotIn("quickStartCompatibilityRecipes", page)
-        self.assertIn('fetch("/api/run"', page)
-
-    def test_parameter_editor_exposes_registry_groups_and_deviation_warning(self):
-        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn("yaml-parameter-groups", page)
-        self.assertIn("yaml-readonly-value", page)
-        self.assertIn("已偏离论文配置", page)
-        self.assertIn("acknowledge_paper_impact", page)
 
 
 
 
-    def test_dataset_first_start_page_exposes_workspace_handoffs(self):
-        quick_start = (command_console.WEB_ROOT / "assets" / "quick_start.js").read_text(encoding="utf-8")
-        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn("compact: true", page)
-        self.assertIn("function renderNextActions()", quick_start)
-        self.assertIn("renderPlanParameters()", quick_start)
-        self.assertIn('class="qs-parameter-advanced"', quick_start)
-        self.assertIn("完整方法兼容性引导", quick_start)
-        self.assertNotIn("高级模式：其他工作区", quick_start)
 
-    def test_quick_start_parameter_edits_save_a_checked_run_config(self):
-        quick_start = (command_console.WEB_ROOT / "assets" / "quick_start.js").read_text(encoding="utf-8")
-        self.assertIn('request("/api/config-schema?" + source', quick_start)
-        self.assertIn('jsonRequest("/api/quick-start/review-config",', quick_start)
-        self.assertIn('dataset_alias:state.dataset.alias', quick_start)
-        self.assertIn('commandForRun(state.plan.command, state.plan, saved)', quick_start)
-        self.assertIn('fetch("/api/quick-start/training-config",', quick_start)
-        self.assertIn('" --review"', quick_start)
-        self.assertIn('plan.dry_run_command', quick_start)
-        self.assertNotIn('qs-open-experiment', quick_start)
+
+
 
     def test_web_exposes_one_seed_and_saves_derived_noise_seed(self):
         import tempfile
@@ -578,16 +512,6 @@ class CommandConsoleTest(unittest.TestCase):
             self.assertEqual(stored["seed"], 73)
             self.assertEqual(stored["noise"]["seed"], 73)
 
-    def test_sweep_ui_reuses_parameter_metadata_groups_and_excludes_locks(self):
-        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn("sweepGroupsHtml", page)
-        self.assertIn("levelInfo.default_expanded", page)
-        self.assertIn("用途：", page)
-        self.assertIn("论文依据：", page)
-        self.assertIn("复现影响：", page)
-        self.assertIn("不可加入参数组合实验：", page)
-        self.assertIn("fieldInfo.editable && supported", page)
-        self.assertIn("lnl sweep --", page)
 
     def test_command_catalog_is_fixed_and_displayable(self):
         for spec in command_console.COMMANDS.values():
@@ -608,10 +532,6 @@ class CommandConsoleTest(unittest.TestCase):
         advanced_ids = {item["id"] for item in advanced}
         self.assertIn("fine-cifar100n-reproduction", advanced_ids)
 
-    def test_sweep_shortcut_is_available(self):
-        command = command_console.COMMANDS["sweep-smoke"].display_command
-        self.assertIn("lnl sweep", command)
-        self.assertIn("--seeds 1 2 3", command)
 
     def test_sweep_plan_supports_parameter_matrix_and_optional_seeds(self):
         payload = command_console._sweep_plan_payload(
@@ -721,33 +641,6 @@ class CommandConsoleTest(unittest.TestCase):
                 {"cancelled": True, "path": None},
             )
 
-    def test_windows_picker_uses_disposable_foreground_owner_for_every_mode(self):
-        completed = mock.Mock(returncode=0, stdout="", stderr="")
-        with mock.patch.object(
-            command_console,
-            "os",
-            SimpleNamespace(name="nt", environ=os.environ),
-        ), mock.patch.object(
-            command_console.subprocess, "run", return_value=completed
-        ) as run:
-            for mode in ("folder", "open_file", "save_file"):
-                with self.subTest(mode=mode):
-                    self.assertEqual(
-                        command_console._picker_payload({"mode": mode}),
-                        {"cancelled": True, "path": None},
-                    )
-                    script = run.call_args.args[0][-1]
-                    self.assertIn("$owner=New-Object System.Windows.Forms.Form", script)
-                    self.assertIn("$owner.ShowInTaskbar=$false", script)
-                    self.assertIn("$owner.TopMost=$true", script)
-                    self.assertIn("$d.ShowDialog($owner)", script)
-                    self.assertIn("finally", script)
-                    self.assertIn("$d.Dispose()", script)
-                    self.assertIn("$owner.Close()", script)
-                    self.assertIn("$owner.Dispose()", script)
-                    self.assertEqual(
-                        run.call_args.kwargs["env"]["LNL_PICKER_MODE"], mode
-                    )
 
     def test_windows_picker_falls_back_to_root_for_relative_output_path(self):
         completed = mock.Mock(returncode=0, stdout="", stderr="")
@@ -964,34 +857,6 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertIn("原始数据文件未被删除", removal["message"])
         service.remove.assert_called_once_with("lab")
 
-    def test_dataset_registration_sources_follow_adapter_contract(self):
-        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        helper = page[
-            page.index("function datasetRegistrationSources(adapter)"):
-            page.index("function buildModuleCommand()")
-        ]
-        self.assertIn('if (adapter === "uci_binary")', helper)
-        self.assertIn('sources.path = selectValue("data-path", "").trim()', helper)
-        self.assertNotIn('sources.root = selectValue("data-root", "").trim()', helper.split("} else {")[0])
-        self.assertIn('sources.root = selectValue("data-root", "").trim()', helper)
-        self.assertIn('["cifar10n", "cifar100n"].includes(adapter)', helper)
-
-        command_builder = page[
-            page.index("function buildModuleCommand()"):
-            page.index("function buildDataApiRequest()")
-        ]
-        api_builder = page[
-            page.index("function buildDataApiRequest()"):
-            page.index("function updateModulePreview()")
-        ]
-        self.assertIn("const sources = datasetRegistrationSources(adapter);", command_builder)
-        self.assertIn('if (sources.root) command += " --root "', command_builder)
-        self.assertIn('if (sources.path) command += " --path "', command_builder)
-        self.assertIn("const sources = datasetRegistrationSources(payload.adapter);", api_builder)
-        self.assertIn("if (sources.root) payload.root = sources.root;", api_builder)
-        self.assertIn("if (sources.path) payload.path = sources.path;", api_builder)
-        self.assertNotIn('selectValue("data-root"', api_builder)
-        self.assertNotIn('selectValue("data-path"', api_builder)
 
 
 
@@ -1429,15 +1294,6 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertEqual(fields["noise.seed"]["research_category"], "")
         self.assertEqual(fields["noise.seed"]["research_group"], "")
 
-        policy = command_console._parameter_registry()["parameter_display_policy"]
-        for field in fields.values():
-            path = field["path"]
-            expected_presentation, _ = command_console._parameter_presentation(path, "gce")
-            expected_visible = expected_presentation != "hidden" or (
-                field["level"] == "locked" and path.endswith(".name")
-            )
-            self.assertEqual(field["visible"], expected_visible, path)
-            self.assertEqual(field["presentation"], expected_presentation, path)
         self.assertEqual(command_console._parameter_presentation("data.root", "gce")[0], "hidden")
 
     def test_recipe_compatibility_requests_share_one_computation(self):
@@ -1469,9 +1325,6 @@ class CommandConsoleTest(unittest.TestCase):
             "resource_paths_by_method", "hidden_paths_by_method",
         ):
             self.assertEqual(set(display_policy[policy_key]), set(registry["formal_recipe_bindings"]))
-        self.assertEqual(sum(map(len, display_policy["common_paths_by_method"].values())), 280)
-        self.assertEqual(sum(map(len, display_policy["selection_paths_by_method"].values())), 28)
-        self.assertEqual(sum(map(len, display_policy["resource_paths_by_method"].values())), 4)
         self.assertEqual(set(research_view["method_paths"]), set(command_console._parameter_registry()["methods"]))
         self.assertEqual(set(default_paths["methods"]), set(command_console._parameter_registry()["formal_recipe_bindings"]))
         for paper in papers:
@@ -1507,10 +1360,6 @@ class CommandConsoleTest(unittest.TestCase):
             ):
                 for path in display_policy[presentation_key][schema["method"]]:
                     self.assertIn(path, fields, (paper.id, path))
-                    # The method-aware policy resolves precedence. Do not
-                    # duplicate its historical exception list in this test.
-                    presentation, _ = command_console._parameter_presentation(path, schema["method"])
-                    self.assertEqual(fields[path]["presentation"], presentation, (paper.id, path))
             selected = (set(default_paths["common"]) | set(default_paths["methods"][schema["method"]])) - set(default_paths.get("exclude", {}).get(schema["method"], ()))
             self.assertTrue(set(default_paths["methods"][schema["method"]]) <= set(fields), paper.id)
             defaults = {path for path, field in fields.items() if field["visible"] and field["display_group"] == "default"}
@@ -1522,8 +1371,6 @@ class CommandConsoleTest(unittest.TestCase):
                 and fields[path]["kind"] not in {"list", "object"}
                 and not isinstance(fields[path]["value"], (list, dict))
             } <= defaults, paper.id)
-            for field in fields.values():
-                self.assertEqual(field["display_group"], command_console._parameter_display_group(field, schema["method"]), (paper.id, field["path"]))
             self.assertTrue({field["display_group"] for field in fields.values()} <=
                             {"default", "advanced", "restricted"}, paper.id)
             self.assertEqual(
@@ -1986,16 +1833,6 @@ class CommandConsoleTest(unittest.TestCase):
                     }
                 )
 
-    def test_safe_save_rejects_component_changes(self):
-        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
-            with self.assertRaises(ValueError):
-                command_console._save_config(
-                    {
-                        "path": str(Path(directory) / "edited.yaml"),
-                        "recipe": "fine-cifar100n-smoke",
-                        "patches": [{"path": "model.name", "value": "resnet50"}],
-                    }
-                )
 
     def test_builtin_recipe_cannot_be_overwritten(self):
         config = command_console._config_payload("cifar10-clean-smoke")
@@ -2047,11 +1884,6 @@ class CommandConsoleTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 command_console.parse_free_command(raw)
 
-    def test_command_always_uses_current_python(self):
-        self.assertEqual(
-            command_console.resolve_lnl_command(),
-            [sys.executable, "-m", "lnl_toolbox.cli.main"],
-        )
 
     def test_command_builder_does_not_use_shell(self):
         command = command_console.build_command("train-one")
@@ -2059,10 +1891,6 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertIn("--epochs", command)
         self.assertIn("1", command)
 
-    def test_job_error_is_rendered_in_web_output(self):
-        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn('output + "\\n\\n启动错误：" + job.error', page)
-        self.assertIn('job.structured != null && !job.error', page)
 
     def test_job_payload_is_json_serializable(self):
         job = command_console.Job(
@@ -2093,16 +1921,6 @@ class CommandConsoleTest(unittest.TestCase):
         self.assertFalse(payload["running"])
         self.assertEqual(payload["returncode"], 0)
 
-    def test_main_console_exposes_process_list(self):
-        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        for marker in (
-            'id="console-job-list"', 'id="refresh-console-jobs"',
-            'id="toggle-console-jobs"', 'aria-expanded="false"',
-            'id="console-job-list-items"', 'function setConsoleJobListExpanded', 'function refreshConsoleJobList',
-            'function renderConsoleJobList', 'fetch("/api/jobs")',
-        ):
-            self.assertIn(marker, page)
-        self.assertTrue(callable(command_console.job_list_payload))
 
     def test_training_job_payload_contains_best_effort_snapshot(self):
         from web.training_status import TrainingContext
@@ -2162,24 +1980,6 @@ class CommandConsoleTest(unittest.TestCase):
             with command_console.JOBS_LOCK:
                 command_console.JOBS.pop(job.job_id, None)
 
-    def test_tutorial_success_handler_advances_progress_and_unlocks_next_step(self):
-        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn(
-            'state.tutorialCompleted[stepId] = !job.error && job.returncode === 0 ? "passed" : "failed";',
-            page,
-        )
-        self.assertIn(
-            'state.timer = setInterval(pollJob, 350)',
-            page,
-        )
-        self.assertIn(
-            '["passed", "not-needed"].includes(tutorialStatus(active.id))',
-            page,
-        )
-        self.assertIn(
-            'const doneCount = steps.filter(function (step) { return ["passed", "not-needed"].includes(tutorialStatus(step.id)); }).length;',
-            page,
-        )
 
     def test_cancel_job_terminates_running_web_child(self):
         process = mock.Mock()

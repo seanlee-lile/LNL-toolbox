@@ -348,11 +348,6 @@ if (parameterSchemaLine('q', schema) !== 'q:float=0.7') throw new Error('paramet
 """
         )
 
-    def test_advanced_execution_details_are_closed_by_default(self) -> None:
-        html = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
-        self.assertIn('id="formula-editor-advanced" class="formula-editor-advanced">', html)
-        self.assertNotIn('id="formula-editor-advanced" class="formula-editor-advanced" open', html)
-        self.assertIn('class="formula-editor-side-details"', html)
 
 
 if __name__ == "__main__":

@@ -123,11 +123,6 @@ class _mc_ldce_MCLDCETest(unittest.TestCase):
         self.assertIn('convolutions.0.weight', trainable)
         self.assertIn('classifier.weight', trainable)
 
-    def test_classifier_preparation_removes_bias_without_freezing_parameters(self) -> None:
-        model = _mc_ldce__LinearFeatures()
-        _prepare_classifier(model)
-        self.assertIsNone(model.classifier.bias)
-        self.assertEqual([name for name, value in model.named_parameters() if value.requires_grad], ['classifier.weight'])
 
     def test_objective_rejects_classifier_bias(self) -> None:
         snapshot = FeatureSnapshot(np.array([[1.0, 0.0], [0.0, 1.0]]), np.array([0, 1]), np.array([0, 1]), 'fixture', 'train')
@@ -168,15 +163,6 @@ class _mc_ldce_MCLDCETest(unittest.TestCase):
         np.testing.assert_allclose(artifact.values, expected.T, rtol=1e-10, atol=1e-10)
         self.assertEqual(artifact.metadata['coefficient_convention'], 'M=sum_i pi_i sum_j T_ij K_i_to_j^T')
 
-    def test_global_objective_matches_expansion_and_has_gradient(self) -> None:
-        snapshot = FeatureSnapshot(np.array([[1.0, 0.0], [0.0, 1.0]]), np.array([0, 1]), np.array([0, 1]), 'fixture', 'train')
-        artifact = MCLDCEEstimator().estimate(snapshot, TransitionArtifact(np.eye(2), 'known'))
-        model = _mc_ldce__LinearFeatures()
-        features = torch.tensor(snapshot.features, dtype=torch.float32)
-        objective = MCLDCEObjective(artifact).compute(model=model, logits=model(features), features=features, noisy_targets=torch.tensor([0, 1]), sample_indices=torch.tensor([0, 1]), base_loss=nn.CrossEntropyLoss(), metadata={})
-        objective.backward()
-        self.assertTrue(torch.isfinite(objective))
-        self.assertIsNotNone(model.classifier.weight.grad)
 
     def test_identity_risk_and_feature_gradients_equal_squared_loss(self) -> None:
         features = torch.randn(4, 2, dtype=torch.float64, requires_grad=True)

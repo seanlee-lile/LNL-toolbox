@@ -330,7 +330,12 @@ def run_volminnet_experiment(
         json.dumps(_environment(seed, device), indent=2), encoding="utf-8"
     )
     metrics_path = run_dir / "metrics.jsonl"
+    from lnl_toolbox.training.early_stopping import StageEarlyStopping
+    stopping = StageEarlyStopping(config, "trainer.early_stopping", "noisy_validation_loss", mode="min", run_dir=run_dir)
+    stopping.replay_file(metrics_path, event="epoch", completed=algorithm.state.completed_epochs)
     for epoch in range(algorithm.state.completed_epochs, epochs):
+        if stopping.stopped:
+            break
         sums = {"objective": 0.0, "classification_loss": 0.0, "volume_logdet": 0.0}
         samples = 0.0
         train_loader = prepared.loader(DataRole.TRAIN, epoch=epoch, stream=1000)
@@ -411,6 +416,8 @@ def run_volminnet_experiment(
             best_payload["checkpoint_role"] = "best_evaluation"
             atomic_save(best_payload, run_dir / "best.pt")
         print(json.dumps(row), flush=True)
+        if stopping.update(row):
+            break
 
     if not best_pair:
         raise ValueError("VolMinNet best classifier/transition pair is missing")

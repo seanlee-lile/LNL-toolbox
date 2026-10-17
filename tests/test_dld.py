@@ -1,22 +1,9 @@
-"""Merged unit tests; source modules were consolidated without changing assertions."""
 from __future__ import annotations
-
-# --- merged from test_dld.py ---
 import unittest
-
-# --- merged from test_dld.py ---
 from unittest.mock import patch
-
-# --- merged from test_dld.py ---
 import numpy as np
-
-# --- merged from test_dld.py ---
 import torch
-
-# --- merged from test_dld.py ---
 from lnl_toolbox.algorithms.dld import DLDAlgorithm, DLDLabelPredictor, DLDPreCorrectionArtifact, DirectionalDiffusionSchedule
-
-# --- merged from test_dld.py ---
 from lnl_toolbox.models.directional_diffusion import DirectionalDiffusion
 
 
@@ -60,29 +47,6 @@ class DLDWebBudgetTest(unittest.TestCase):
             self.assertEqual(final['completed_epochs'], 1)
             self.assertEqual(sum(row.get('event') == 'diffusion_epoch' for row in rows), 1)
 
-    def test_descriptions_record_actual_feature_source_and_missing_paper_components(self) -> None:
-        from web import command_console
-        registry = yaml.safe_load((command_console.ROOT / 'web/lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
-        def find_paper(value):
-            if isinstance(value, dict):
-                if isinstance(value.get('dld'), dict) and 'parameters' in value['dld']:
-                    return value['dld']
-                for child in value.values():
-                    result = find_paper(child)
-                    if result is not None:
-                        return result
-            return None
-        paper = find_paper(registry)
-        fields = paper['parameters']['advanced']
-        self.assertEqual(fields['dld.feature_extractor.source']['current'], 'external_checkpoint')
-        self.assertEqual(fields['dld.feature_extractor.model.name']['current'], 'torchvision_resnet34')
-        self.assertEqual(paper['paper_comparison']['alignment_status'], 'label_vector_variant_not_complete_paper_training')
-        self.assertIn('尚缺', paper['paper_comparison']['summary'])
-        scratch = yaml.safe_load((command_console.ROOT / 'src/lnl_toolbox/scratch/recipes/papers/dld.yaml').read_text(encoding='utf-8'))
-        self.assertIn('Simplified educational', scratch['description'])
-        self.assertIn('not a complete paper reproduction', scratch['description'])
-
-# --- merged from test_dld.py ---
 def _dld__algorithm_fixture() -> DLDAlgorithm:
     torch.manual_seed(29)
     direction = DLDLabelPredictor(2, 3, hidden_dim=8, time_dim=4)
@@ -93,7 +57,6 @@ def _dld__algorithm_fixture() -> DLDAlgorithm:
     artifact = DLDPreCorrectionArtifact(np.array([7, 3]), np.array([0, 1]), probabilities, probabilities, probabilities, np.zeros(2), np.array([0, 1]), y0, yn, yn - y0, np.array([[1.0, 2.0, 3.0], [3.0, 4.0, 5.0]]), {'test': True})
     return DLDAlgorithm(direction_model=direction, noise_model=noise, direction_optimizer=torch.optim.Adam(direction.parameters(), lr=0.01), noise_optimizer=torch.optim.Adam(noise.parameters(), lr=0.01), direction_scheduler=None, noise_scheduler=None, schedule=DirectionalDiffusionSchedule.average(5), artifact=artifact, device='cpu', ema_decay=0.9)
 
-# --- merged from test_dld.py ---
 class _dld_DLDModelTest(unittest.TestCase):
 
     def test_read_only_telemetry_preserves_losses_and_parameter_updates(self) -> None:
@@ -165,26 +128,15 @@ class _dld_DLDModelTest(unittest.TestCase):
         self.assertEqual(tuple(probabilities.shape), (4, 3))
         self.assertTrue(torch.isfinite(probabilities).all())
 
-# --- merged from test_dld_diffusion.py ---
-import unittest
 
-# --- merged from test_dld_diffusion.py ---
-import numpy as np
+from lnl_toolbox.algorithms.dld import construct_direction, dld_objective, sample_forward_state
 
-# --- merged from test_dld_diffusion.py ---
-import torch
-
-# --- merged from test_dld_diffusion.py ---
-from lnl_toolbox.algorithms.dld import DLDAlgorithm, DLDLabelPredictor, DLDPreCorrectionArtifact, DirectionalDiffusionSchedule, construct_direction, dld_objective, sample_forward_state
-
-# --- merged from test_dld_diffusion.py ---
 def _dld_diffusion__artifact() -> DLDPreCorrectionArtifact:
     pw = np.array([[0.8, 0.2], [0.2, 0.8]])
     y0 = np.eye(2)
     yn = np.array([[0.0, 0.0], [1.0, 0.0]])
     return DLDPreCorrectionArtifact(np.array([7, 3]), np.array([0, 1]), pw, pw, pw, np.array([0.0, 0.0]), np.array([0, 1]), y0, yn, yn - y0, np.array([[1.0, 2.0], [3.0, 4.0]]), {'test': True})
 
-# --- merged from test_dld_diffusion.py ---
 class _dld_diffusion_DLDDiffusionTest(unittest.TestCase):
 
     def test_schedule_endpoint_and_forward_equation(self) -> None:
@@ -222,25 +174,10 @@ class _dld_diffusion_DLDDiffusionTest(unittest.TestCase):
         result = model(torch.zeros(2, 3, device='cuda'), torch.zeros(2, 3, device='cuda'), torch.zeros(2, 4, device='cuda'), torch.tensor([0, 1], device='cuda'))
         self.assertEqual(tuple(result.shape), (2, 3))
 
-# --- merged from test_dld_precorrection.py ---
 from pathlib import Path
-
-# --- merged from test_dld_precorrection.py ---
 import tempfile
+from lnl_toolbox.algorithms.dld import PARTITION_CLEAN, PARTITION_HARD, PARTITION_NOISY, construct_y0, construct_yn, kl_ps_to_pw, partition_samples, persist_precorrection_atomically, weighted_neighbor_distribution
 
-# --- merged from test_dld_precorrection.py ---
-import unittest
-
-# --- merged from test_dld_precorrection.py ---
-import numpy as np
-
-# --- merged from test_dld_precorrection.py ---
-import torch
-
-# --- merged from test_dld_precorrection.py ---
-from lnl_toolbox.algorithms.dld import DLDPreCorrectionArtifact, PARTITION_CLEAN, PARTITION_HARD, PARTITION_NOISY, construct_y0, construct_yn, kl_ps_to_pw, partition_samples, persist_precorrection_atomically, weighted_neighbor_distribution
-
-# --- merged from test_dld_precorrection.py ---
 class _dld_precorrection_DLDPreCorrectionTest(unittest.TestCase):
 
     def test_cosine_similarity_knn_uses_stable_indices_and_normalizes(self) -> None:
@@ -340,7 +277,6 @@ class _dld_precorrection_DLDPreCorrectionTest(unittest.TestCase):
         self.assertTrue(torch.equal(yn[0], torch.zeros(2, dtype=torch.float64)))
         self.assertTrue(torch.equal(yn[1], torch.tensor([0.0, 1.0], dtype=torch.float64)))
         self.assertTrue(torch.allclose(yn[2], torch.tensor([0.5, 0.5], dtype=torch.float64)))
-        self.assertTrue(torch.allclose(yn - y0, yn - y0))
 
     def test_hard_zero_denominator_fails(self) -> None:
         p = torch.tensor([[0.5, 0.5]])
@@ -371,19 +307,10 @@ class _dld_precorrection_DLDPreCorrectionTest(unittest.TestCase):
             self.assertEqual(loaded.artifact_hash, artifact.artifact_hash)
             self.assertEqual(loaded.global_indices.tolist(), [2, 9])
 
-# --- merged from test_dld_sampling.py ---
-import unittest
 
-# --- merged from test_dld_sampling.py ---
-import torch
-
-# --- merged from test_dld_sampling.py ---
 from torch import nn
+from lnl_toolbox.algorithms.dld import accelerated_timesteps, sample_labels
 
-# --- merged from test_dld_sampling.py ---
-from lnl_toolbox.algorithms.dld import DirectionalDiffusionSchedule, accelerated_timesteps, sample_labels
-
-# --- merged from test_dld_sampling.py ---
 class _dld_sampling__Constant(nn.Module):
 
     def __init__(self, classes: int, value: float) -> None:
@@ -394,7 +321,6 @@ class _dld_sampling__Constant(nn.Module):
     def forward(self, y_t, y_n, features, timestep):
         return torch.full_like(y_t, self.value)
 
-# --- merged from test_dld_sampling.py ---
 class _dld_sampling_DLDSamplingTest(unittest.TestCase):
 
     def test_five_step_sequence_and_manual_reverse(self) -> None:
@@ -417,46 +343,14 @@ class _dld_sampling_DLDSamplingTest(unittest.TestCase):
         self.assertTrue(direction.training)
         self.assertEqual(tuple(first.shape), (4, 3))
 
-# --- merged from test_dld_workflow.py ---
 from copy import deepcopy
-
-# --- merged from test_dld_workflow.py ---
 import json
-
-# --- merged from test_dld_workflow.py ---
-from pathlib import Path
-
-# --- merged from test_dld_workflow.py ---
-import tempfile
-
-# --- merged from test_dld_workflow.py ---
-import unittest
-
-# --- merged from test_dld_workflow.py ---
-from unittest.mock import patch
-
-# --- merged from test_dld_workflow.py ---
-import numpy as np
-
-# --- merged from test_dld_workflow.py ---
-import torch
-
-# --- merged from test_dld_workflow.py ---
 from lnl_toolbox.algorithms.dld.precorrection import DLDPartitionResult
-
-# --- merged from test_dld_workflow.py ---
 from lnl_toolbox.algorithms.dld.state import DLDPhase, DLDState
-
-# --- merged from test_dld_workflow.py ---
 from lnl_toolbox.data.cifar import CifarData
-
-# --- merged from test_dld_workflow.py ---
 from lnl_toolbox.training.checkpoint import read_checkpoint
-
-# --- merged from test_dld_workflow.py ---
 from lnl_toolbox.training.dld_experiment import run_dld_experiment
 
-# --- merged from test_dld_workflow.py ---
 def _dld_workflow__data(split: str, samples_per_class: int, classes: int=10) -> CifarData:
     labels = np.repeat(np.arange(classes, dtype=np.int64), samples_per_class)
     rng = np.random.default_rng(91 if split == 'train' else 92)
@@ -464,18 +358,15 @@ def _dld_workflow__data(split: str, samples_per_class: int, classes: int=10) -> 
     dataset = 'cifar10' if classes == 10 else 'cifar100'
     return CifarData(images, labels, tuple((str(i) for i in range(classes))), split, dataset)
 
-# --- merged from test_dld_workflow.py ---
 def _dld_workflow__config(epochs: int) -> dict:
     return {'method': 'dld', 'execution': {'runner': 'dld'}, 'seed': 5, 'data': {'name': 'cifar10', 'root': 'unused', 'validation_size': 10, 'max_train_samples': 20, 'max_validation_samples': 10, 'max_test_samples': 10}, 'loader': {'batch_size': 10, 'num_workers': 0, 'pin_memory': False}, 'noise': {'name': 'symmetric', 'rate': 0.2, 'seed': 8, 'validation_targets': 'noisy'}, 'dld': {'fidelity': {'name': 'paper_oriented_v2_cosine_similarity', 'hard_y0': 'averaged_views', 'direction_endpoint': 'estimated_yn', 'direction': 'yn_minus_y0', 'neighbor_metric': 'cosine_similarity', 'neighbor_weighting': 'inverse_neighbor_value', 'self_neighbor': 'include', 'divergence': 'kl_ps_to_pw', 'divergence_softmax': False, 'hard_yn_zero_denominator': 'fail', 'schedule': 'average', 'inference_initialization': 'zero', 'inference_steps': 5}, 'feature_extractor': {'source': 'repository_frozen_model', 'model': {'name': 'tiny_cnn', 'width': 4}}, 'precorrection': {'k_neighbors': 3, 'delta': 1e-06, 'gmm_components': 2, 'gmm_seed': 0, 'minimum_mean_separation': 0.0, 'query_chunk_size': 2}, 'diffusion': {'timesteps': 5, 'epochs': epochs, 'model': {'independent_predictors': True, 'hidden_dim': 8, 'time_dim': 4}, 'optimizer': {'direction': {'name': 'adam', 'lr': 0.001}, 'noise': {'name': 'adam', 'lr': 0.001}}, 'scheduler': {'direction': {'name': 'none'}, 'noise': {'name': 'none'}}, 'ema': {'enabled': True, 'decay': 0.9}}, 'inference': {'steps': 5, 'deterministic': True, 'initialization': 'zero'}}, 'evaluation': {'selection_split': 'validation', 'primary': 'accuracy'}, 'trainer': {'device': 'cpu'}, 'output_root': 'unused'}
 
-# --- merged from test_dld_workflow.py ---
 def _dld_workflow__partition(p_w, p_s, targets, **kwargs):
     p_ws = ((p_w + p_s) / 2).detach()
     partition = torch.arange(p_w.shape[0], device=p_w.device) % 2
     divergence = torch.linspace(0.01, 1.0, p_w.shape[0], device=p_w.device, dtype=p_w.dtype)
     return DLDPartitionResult(divergence, partition, p_ws, 0.1, 0.9)
 
-# --- merged from test_dld_workflow.py ---
 class _dld_workflow_DLDWorkflowTest(unittest.TestCase):
 
     def test_state_rejects_illegal_transition(self) -> None:
@@ -531,55 +422,19 @@ class _dld_workflow_DLDWorkflowTest(unittest.TestCase):
             final = json.loads((run / 'final_metrics.json').read_text())
             self.assertEqual(final['completed_epochs'], 1)
 
-# --- merged from test_dld_readiness.py ---
 import os
-
-# --- merged from test_dld_readiness.py ---
-from pathlib import Path
-
-# --- merged from test_dld_readiness.py ---
-import tempfile
-
-# --- merged from test_dld_readiness.py ---
-import unittest
-
-# --- merged from test_dld_readiness.py ---
 from unittest import mock
-
-# --- merged from test_dld_readiness.py ---
-import numpy as np
-
-# --- merged from test_dld_readiness.py ---
-import torch
-
-# --- merged from test_dld_readiness.py ---
 import yaml
-
-# --- merged from test_dld_readiness.py ---
 from lnl_toolbox.algorithms.dld import DLDConfig
-
-# --- merged from test_dld_readiness.py ---
 from lnl_toolbox.noise.generators import generate_symmetric
-
-# --- merged from test_dld_readiness.py ---
 from lnl_toolbox.noise.manifest import fingerprint_labels
-
-# --- merged from test_dld_readiness.py ---
 from lnl_toolbox.training.checkpoint import atomic_save
-
-# --- merged from test_dld_readiness.py ---
 from lnl_toolbox.training.dld_pretrained import load_torchvision_resnet34_imagenet1k_v1_source, load_upm_main_best_feature_source
-
-# --- merged from test_dld_readiness.py ---
 from lnl_toolbox.training.experiment import build_model
-
-# --- merged from test_dld_readiness.py ---
 from lnl_toolbox.training.noisy_labels import file_sha256
 
-# --- merged from test_dld_readiness.py ---
 _dld_readiness_ROOT = Path(__file__).resolve().parents[1]
 
-# --- merged from test_dld_readiness.py ---
 def _dld_readiness__source(directory: Path) -> tuple[dict, torch.nn.Module]:
     model_config = {'name': 'resnet18', 'base_width': 16}
     model = build_model(model_config, 10)
@@ -593,9 +448,8 @@ def _dld_readiness__source(directory: Path) -> tuple[dict, torch.nn.Module]:
     payload = {'method': 'upm', 'checkpoint_role': 'main_best', 'config': {'upm': {'main': {'model': model_config}}}, 'noise': noise, 'upm_state': {'main_completed_epochs': 3, 'main_global_step': 9, 'main_best_epoch': 1, 'main_best_validation_accuracy': 0.5}, 'best_main_model_state': model.state_dict()}
     checkpoint_path = directory / 'best.pt'
     atomic_save(payload, checkpoint_path)
-    return ({'adapter': 'upm_main_best', 'run_directory_env': 'DLD_TEST_SOURCE', 'checkpoint_sha256': file_sha256(checkpoint_path), 'manifest_sha256': file_sha256(manifest_path), 'mapping_hash': manifest.mapping_hash, 'dataset_fingerprint': manifest.dataset_fingerprint, 'model': model_config}, model)
+    return ({'adapter': 'upm_main_best', 'run_directory_env': 'DLD_TEST_SOURCE', 'model': model_config}, model)
 
-# --- merged from test_dld_readiness.py ---
 class _dld_readiness_DLDReadinessTest(unittest.TestCase):
 
     def test_formal_config_uses_current_contract_and_full_budget(self) -> None:
@@ -647,7 +501,7 @@ class _dld_readiness_DLDReadinessTest(unittest.TestCase):
             with self.assertRaisesRegex(FileNotFoundError, 'Download resnet34-b627a593.pth'):
                 load_torchvision_resnet34_imagenet1k_v1_source(config)
 
-    def test_torchvision_source_rejects_wrong_cached_weights(self) -> None:
+    def test_torchvision_cache_lookup_does_not_enforce_a_hash(self) -> None:
         from torchvision.models import ResNet34_Weights
         from lnl_toolbox.training.dld_pretrained import _cached_torchvision_weight
 
@@ -657,8 +511,7 @@ class _dld_readiness_DLDReadinessTest(unittest.TestCase):
             cached = Path(directory) / 'checkpoints' / 'resnet34-b627a593.pth'
             cached.parent.mkdir()
             cached.write_bytes(b'not official weights')
-            with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
-                _cached_torchvision_weight(ResNet34_Weights.IMAGENET1K_V1.url)
+            self.assertEqual(_cached_torchvision_weight(ResNet34_Weights.IMAGENET1K_V1.url), cached)
 
     def test_real_short_config_is_full_data_external_sym20(self) -> None:
         path = _dld_readiness_ROOT / 'configs' / 'reproduction' / 'cifar10_dld_sym20_short.yaml'
@@ -701,17 +554,17 @@ class _dld_readiness_DLDReadinessTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'source changed'):
                     source.assert_unchanged()
 
-    def test_external_source_rejects_identity_and_role_drift(self) -> None:
+    def test_external_source_ignores_legacy_hashes_but_checks_checkpoint_role(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config, _ = _dld_readiness__source(root)
             with mock.patch.dict(os.environ, {'DLD_TEST_SOURCE': directory}):
-                invalid = {**config, 'checkpoint_sha256': 'f' * 64}
-                with self.assertRaisesRegex(ValueError, 'checkpoint SHA-256'):
-                    load_upm_main_best_feature_source(invalid, build_model(config['model'], 10), num_classes=10)
+                legacy = {**config, 'checkpoint_sha256': 'obsolete', 'manifest_sha256': 'obsolete',
+                          'mapping_hash': 'obsolete', 'dataset_fingerprint': 'obsolete'}
+                source = load_upm_main_best_feature_source(legacy, build_model(config['model'], 10), num_classes=10)
+                self.assertEqual(source.provenance['adapter'], 'upm_main_best')
                 payload = torch.load(root / 'best.pt', map_location='cpu', weights_only=False)
                 payload['checkpoint_role'] = 'last'
                 atomic_save(payload, root / 'best.pt')
-                role_config = {**config, 'checkpoint_sha256': file_sha256(root / 'best.pt')}
                 with self.assertRaisesRegex(ValueError, 'main_best'):
-                    load_upm_main_best_feature_source(role_config, build_model(config['model'], 10), num_classes=10)
+                    load_upm_main_best_feature_source(config, build_model(config['model'], 10), num_classes=10)

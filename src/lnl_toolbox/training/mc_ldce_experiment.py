@@ -102,7 +102,7 @@ def _prepare_classifier(model: nn.Module) -> None:
         parameter.requires_grad_(True)
 
 
-def _estimate_volmin(config, model, loader, device):
+def _estimate_volmin(config, model, loader, device, validation_loader=None, run_dir=None):
     value = dict(config["transition"])
     parameterization = dict(value["parameterization"])
     transition_model = PaperVolMinTransition(
@@ -118,7 +118,10 @@ def _estimate_volmin(config, model, loader, device):
     elif str(scheduler_config.get("name", "none")).lower() != "none":
         raise ValueError("paper VolMin transition scheduler must be none or multistep")
     latest = {}
-    for _ in range(int(value["epochs"])):
+    from lnl_toolbox.training.early_stopping import StageEarlyStopping, forward_validation
+    stopping = StageEarlyStopping(config, "transition.early_stopping", "validation_loss", mode="min", run_dir=run_dir)
+    completed = 0
+    for epoch in range(int(value["epochs"])):
         model.train()
         for batch in loader:
             logits = model(batch["input"].to(device)).to(torch.float64)
@@ -131,6 +134,13 @@ def _estimate_volmin(config, model, loader, device):
             optimizer.zero_grad(set_to_none=True); objective.backward(); optimizer.step()
         if scheduler is not None:
             scheduler.step()
+        completed = epoch + 1
+        if stopping.enabled:
+            validation = forward_validation(model, transition_model, validation_loader, device)
+            if stopping.observe({"epoch": completed, **validation},
+                                {"model": model, "transition": transition_model, "optimizer": optimizer}):
+                break
+    stopping.restore_best({"model": model, "transition": transition_model})
     matrix = transition_model.matrix()
     _, diagnostics = validate_paper_volmin_transition(
         matrix,
@@ -138,7 +148,7 @@ def _estimate_volmin(config, model, loader, device):
         condition_limit=float(value.get("condition_limit", 1e8)),
     )
     return matrix.detach().cpu().numpy(), {
-        "epochs": int(value["epochs"]),
+        "epochs": completed,
         "optimizer": dict(value["optimizer"]),
         "scheduler": scheduler_config,
         "parameterization": parameterization,
@@ -201,14 +211,16 @@ def run_mc_ldce_experiment(
             prepared.num_classes,
         ).to(device)
         matrix, transition_metadata = _estimate_volmin(
-            config, estimator_model, train_loader, device
+            config, estimator_model, train_loader, device, validation_loader, run_dir
         )
         del estimator_model
         _prepare_classifier(model)
     else:
         warmup_epochs = int(config.get("warmup", {}).get("epochs", 0))
         warmup_optimizer = build_optimizer(model, config["optimizer"])
-        for _ in range(warmup_epochs):
+        from lnl_toolbox.training.early_stopping import StageEarlyStopping
+        warmup_stopping = StageEarlyStopping(config, "warmup.early_stopping", "validation_accuracy", run_dir=run_dir)
+        for warmup_epoch in range(warmup_epochs):
             model.train()
             for batch in train_loader:
                 inputs, targets = batch["input"].to(device), batch["target"].to(device)
@@ -216,6 +228,14 @@ def run_mc_ldce_experiment(
                 warmup_optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 warmup_optimizer.step()
+            if warmup_stopping.enabled:
+                if validation_loader is None:
+                    raise ValueError("warmup.early_stopping requires a validation split")
+                score = evaluate_classification(model, validation_loader, criterion, device)
+                if warmup_stopping.observe({"epoch": warmup_epoch + 1, "validation_accuracy": score["accuracy"]},
+                                           {"model": model, "optimizer": warmup_optimizer}):
+                    break
+        warmup_stopping.restore_best({"model": model})
         _prepare_classifier(model)
     optimizer = build_optimizer(model, config["optimizer"])
     scheduler_config = dict(config.get("scheduler", {}) or {})
@@ -250,7 +270,12 @@ def run_mc_ldce_experiment(
     decay_start = int(config.get("scheduler", {}).get("decay_start", epochs))
     metrics_path = run_dir / "metrics.jsonl"
     _write_epoch_metrics(rows, metrics_path)
+    from lnl_toolbox.training.early_stopping import StageEarlyStopping
+    stopping = StageEarlyStopping(config, "trainer.early_stopping", "validation_accuracy", run_dir=run_dir)
+    stopping.replay(rows, completed=start_epoch)
     for epoch in range(start_epoch, epochs):
+        if stopping.stopped:
+            break
         if str(config.get("scheduler", {}).get("name", "none")).lower() == "linear_after":
             factor = 1.0 if epoch < decay_start else max(
                 0.0, (epochs - epoch) / max(1, epochs - decay_start)
@@ -274,6 +299,9 @@ def run_mc_ldce_experiment(
         _write_epoch_metrics(rows, metrics_path)
         if scheduler is not None: scheduler.step()
         atomic_save({"method": "mc_ldce", "lifecycle_version": lifecycle["lifecycle_version"], "config": config, "model": model.state_dict(), "optimizer": optimizer.state_dict(), "scheduler": None if scheduler is None else scheduler.state_dict(), "completed_epoch": epoch, "metrics": rows, "statistic_hash": statistic.artifact_hash, "rng_state": capture_rng_state()}, run_dir / "last.pt")
+        if stopping.observe(row, {"model": model, "optimizer": optimizer, "scheduler": scheduler}):
+            break
+    stopping.restore_best({"model": model})
     (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     _write_epoch_metrics(rows, metrics_path)
     if rows: write_training_curves_svg(rows, run_dir / "training_curves.svg")

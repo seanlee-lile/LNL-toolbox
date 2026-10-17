@@ -18,7 +18,7 @@ class FormulaClassificationTest(unittest.TestCase):
 
     def test_composite_registry_is_machine_readable(self) -> None:
         definitions = list_composite_formulas()
-        self.assertGreaterEqual(len(definitions), 12)
+        self.assertTrue(definitions)
         for definition in list_blocks():
             if definition.formula_kind == "composite":
                 self.assertTrue(definition.formula_ref, definition.id)

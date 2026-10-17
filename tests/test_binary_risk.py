@@ -1,18 +1,21 @@
-"""Merged unit tests; source modules were consolidated without changing assertions."""
-
-# --- merged from test_binary_risk.py ---
+from pathlib import Path
+import tempfile
 import unittest
-
-# --- merged from test_binary_risk.py ---
+import numpy as np
 import torch
+from torch.utils.data import DataLoader
 
-# --- merged from test_binary_risk.py ---
 from lnl_toolbox.algorithms.binary_risk import NatarajanUnbiasedRisk
-
-# --- merged from test_binary_risk.py ---
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
+from lnl_toolbox.data.binary_benchmarks import BinaryBenchmark, stratified_binary_splits
+from lnl_toolbox.data.preprocessing import BinaryPreprocessingConfig, BinaryPreprocessor
+from lnl_toolbox.training.binary_experiment import (
+    BinaryTensorDataset,
+    build_binary_mlp,
+    run_binary_experiment,
+    train_binary_epoch,
+)
 
-# --- merged from test_binary_risk.py ---
 class _binary_risk_BinaryRiskTest(unittest.TestCase):
 
     def test_unbiased_risk_is_finite_and_differentiable(self) -> None:
@@ -61,31 +64,6 @@ class _binary_risk_BinaryRiskTest(unittest.TestCase):
                 self.assertIn('rho_positive + rho_negative < 1', constraint)
                 self.assertNotIn('0.5', constraint)
 
-# --- merged from test_binary_preprocessing.py ---
-import tempfile
-
-# --- merged from test_binary_preprocessing.py ---
-from pathlib import Path
-
-# --- merged from test_binary_preprocessing.py ---
-import unittest
-
-# --- merged from test_binary_preprocessing.py ---
-import numpy as np
-
-# --- merged from test_binary_preprocessing.py ---
-import lnl_toolbox.data as data_package
-
-# --- merged from test_binary_preprocessing.py ---
-from lnl_toolbox.data import binary_benchmarks
-
-# --- merged from test_binary_preprocessing.py ---
-from lnl_toolbox.data.binary_benchmarks import BinaryBenchmark
-
-# --- merged from test_binary_preprocessing.py ---
-from lnl_toolbox.data.preprocessing import BinaryPreprocessingConfig, BinaryPreprocessor
-
-# --- merged from test_binary_preprocessing.py ---
 class _binary_preprocessing_BinaryPreprocessingTest(unittest.TestCase):
 
     def test_delimited_categorical_missing_and_state_round_trip(self) -> None:
@@ -221,37 +199,6 @@ class _binary_preprocessing_BinaryPreprocessingTest(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, message):
                         BinaryPreprocessor().load_state_dict(bad)
 
-    def test_binary_package_exports_only_consumed_public_api(self) -> None:
-        self.assertFalse(hasattr(data_package, 'load_uci_binary'))
-        self.assertTrue(callable(binary_benchmarks.corrupt_binary_labels))
-        self.assertTrue(callable(binary_benchmarks.stratified_binary_splits))
-        self.assertTrue(callable(binary_benchmarks.cifar_airplane_automobile_view))
-
-# --- merged from test_binary_training.py ---
-import tempfile
-
-# --- merged from test_binary_training.py ---
-import unittest
-
-# --- merged from test_binary_training.py ---
-from pathlib import Path
-
-# --- merged from test_binary_training.py ---
-import numpy as np
-
-# --- merged from test_binary_training.py ---
-import torch
-
-# --- merged from test_binary_training.py ---
-from torch.utils.data import DataLoader
-
-# --- merged from test_binary_training.py ---
-from lnl_toolbox.data.binary_benchmarks import BinaryBenchmark, stratified_binary_splits
-
-# --- merged from test_binary_training.py ---
-from lnl_toolbox.training.binary_experiment import BinaryTensorDataset, build_binary_linear, build_binary_mlp, run_binary_experiment, train_binary_epoch
-
-# --- merged from test_binary_training.py ---
 class _binary_training_BinaryTrainingTest(unittest.TestCase):
 
     def test_risk_name_is_validated_before_loading_data(self) -> None:
@@ -288,10 +235,6 @@ class _binary_training_BinaryTrainingTest(unittest.TestCase):
         first = stratified_binary_splits(labels, 3, 9)
         second = stratified_binary_splits(labels, 3, 9)
         self.assertEqual([(a.tolist(), b.tolist()) for a, b in first], [(a.tolist(), b.tolist()) for a, b in second])
-
-    def test_linear_classifier_is_available_for_paper_logistic_path(self) -> None:
-        model = build_binary_linear(2)
-        self.assertEqual(tuple(model(torch.zeros(3, 2)).shape), (3, 2))
 
     def test_runner_consumes_registered_non_cifar_binary_source(self) -> None:
         import json

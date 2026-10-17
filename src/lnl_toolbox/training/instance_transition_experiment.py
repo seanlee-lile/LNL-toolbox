@@ -313,8 +313,14 @@ def _run_pdl_official_phases(
             with torch.no_grad():
                 model.T_revision.weight.zero_()
         algorithm.on_run_start(state)
+        from lnl_toolbox.training.early_stopping import StageEarlyStopping
+        stage_path = "trainer.early_stopping" if phase == "correction" else "revision.early_stopping"
+        stopping = StageEarlyStopping(config, stage_path, "validation_accuracy", run_dir=run_dir)
+        stopping.replay(rows, phase=phase)
         with metrics_path.open("a", encoding="utf-8") as handle:
             for local_epoch in range(local_start, phase_length):
+                if stopping.stopped:
+                    break
                 state.cycle = local_epoch
                 algorithm.on_cycle_start(state)
                 loss_sum = accuracy_sum = samples = 0.0
@@ -375,6 +381,9 @@ def _run_pdl_official_phases(
                 )
                 if bool(config.get("trainer", {}).get("progress", {}).get("curves", True)):
                     write_training_curves_svg(rows, run_dir / "training_curves.svg")
+                if stopping.observe(row, {"model": model, "optimizer": optimizer}):
+                    break
+        stopping.restore_best({"model": model})
         algorithm.on_run_end(state)
         if phase == "correction" and revision_epochs > 0:
             if phase_best_state is None:
@@ -491,7 +500,9 @@ def run_instance_transition_experiment(
         warmup_epochs = int(config["warmup"]["epochs"])
         best_state = None
         best_accuracy = float("-inf")
-        for _ in range(warmup_epochs):
+        from lnl_toolbox.training.early_stopping import StageEarlyStopping
+        warmup_stopping = StageEarlyStopping(config, "warmup.early_stopping", "validation_accuracy", run_dir=run_dir)
+        for warmup_epoch in range(warmup_epochs):
             pretrain_noisy_classifier(warmup_model, warmup_optimizer, train_loader,
                 device, epochs=1, criterion=warmup_loss)
             score = evaluate_classification(warmup_model, noisy_validation_loader, warmup_loss, device)
@@ -500,6 +511,9 @@ def run_instance_transition_experiment(
                 best_state = {key: value.detach().cpu().clone() for key, value in warmup_model.state_dict().items()}
             if warmup_scheduler is not None:
                 warmup_scheduler.step()
+            if warmup_stopping.observe({"epoch": warmup_epoch + 1, "validation_accuracy": score["accuracy"]},
+                                       {"model": warmup_model, "optimizer": warmup_optimizer}):
+                break
         if best_state is not None:
             warmup_model.load_state_dict(best_state)
         torch.save({"model": warmup_model.state_dict(), "best_noisy_validation_accuracy": best_accuracy},
@@ -676,8 +690,13 @@ def run_instance_transition_experiment(
         rows = [json.loads(line) for line in metrics_path.read_text(encoding="utf-8").splitlines()
             if json.loads(line).get("event") == "epoch"]
     algorithm.on_run_start(state)
+    from lnl_toolbox.training.early_stopping import StageEarlyStopping
+    stopping = StageEarlyStopping(config, "trainer.early_stopping", "validation_accuracy", run_dir=run_dir)
+    stopping.replay(rows, completed=completed_epoch + 1)
     with metrics_path.open("a", encoding="utf-8") as handle:
         for epoch in range(completed_epoch + 1, epochs):
+            if stopping.stopped:
+                break
             state.cycle = epoch
             algorithm.on_cycle_start(state)
             loss_sum = accuracy_sum = samples = 0.0
@@ -711,9 +730,12 @@ def run_instance_transition_experiment(
                 pipeline={"phase": "corrected_train", "artifact_hash": artifact.artifact_hash})
             if bool(config["trainer"].get("progress", {}).get("curves", True)):
                 write_training_curves_svg(rows, run_dir / "training_curves.svg")
+            if stopping.observe(row, {"model": model, "optimizer": optimizer, "scheduler": scheduler}):
+                break
+        stopping.restore_best({"model": model})
         algorithm.on_run_end(state)
         test = evaluate_classification(model, test_loader, criterion, device)
-        final = {"event": "final", "completed_epochs": epochs, "global_step": state.step,
+        final = {"event": "final", "completed_epochs": len(rows), "global_step": state.step,
             "best_epoch": best_epoch, "best_selection_accuracy": best_accuracy,
             "test_loss": test["loss"], "test_accuracy": test["accuracy"],
             "artifact_hash": artifact.artifact_hash}

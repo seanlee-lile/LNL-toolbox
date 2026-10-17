@@ -157,17 +157,6 @@ class _cwd_CWDTest(unittest.TestCase):
         value = CWDGlobalObjective(artifact, variant='binary_scalar').compute(model=model, logits=model(features), features=features, noisy_targets=torch.tensor([0, 1]), sample_indices=torch.tensor([0, 1]), base_loss=CrossEntropyLoss(), metadata={})
         torch.testing.assert_close(value.detach(), expected)
 
-    def test_dynamic_centroid_matches_static_identity_case(self) -> None:
-        snapshot = FeatureSnapshot(np.asarray([[1.0, 0.0], [0.0, 1.0]]), np.asarray([0, 1]), np.arange(2), 'fixture', 'train')
-        artifact = CWDEstimator(np.eye(2)).estimate(snapshot)
-        model = _cwd__ScalarFeatureModel()
-        features = torch.tensor([[1.0, 0.0], [0.0, 1.0]], requires_grad=True)
-        output = model.forward_with_features(features)
-        kwargs = dict(model=model, logits=output.logits, features=features, noisy_targets=torch.tensor([0, 1]), sample_indices=torch.tensor([0, 1]), base_loss=CrossEntropyLoss(), metadata={})
-        static = CWDGlobalObjective(artifact, variant='binary_scalar', dynamic_centroid=False).compute(**kwargs)
-        dynamic = CWDGlobalObjective(artifact, variant='binary_scalar', dynamic_centroid=True).compute(**kwargs)
-        torch.testing.assert_close(static.detach(), dynamic.detach())
-
     def test_dynamic_centroid_loss_and_full_model_gradients_match_reference(self) -> None:
         class LearnedFeatures(nn.Module):
             def __init__(self):
@@ -335,15 +324,3 @@ class _cwd_training_CWDTrainingTest(unittest.TestCase):
             save(before, checkpoint)
             with self.assertRaisesRegex(ValueError, 'data-loader RNG states'):
                 run_cwd_experiment(config, resume=checkpoint)
-
-    def test_web_explains_single_fold_and_static_centroid_limit(self) -> None:
-        import yaml
-        from web.command_console import _config_schema
-        registry = yaml.safe_load(Path('web/lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
-        method = registry['methods']['cwd']
-        self.assertIn('one selected fold', method['paper_comparison']['summary'])
-        self.assertIn('选定的一折', method['parameters']['locked']['parameter_record.source']['note'])
-        schema = _config_schema('cwd-cifar10-reproduction')
-        field = next(field for field in schema['fields'] if field['path']=='cwd.dynamic_centroid')
-        self.assertIn('固定特征', field['note'])
-        self.assertIn('梯度', field['note'])

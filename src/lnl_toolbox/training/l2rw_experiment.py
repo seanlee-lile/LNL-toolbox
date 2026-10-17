@@ -265,7 +265,10 @@ def run_l2rw_experiment(
                 or any(point <= 0 for point in step_milestones)
                 or any(not math.isfinite(rate) or rate <= 0 for rate in step_rates)):
             raise ValueError("scheduler.lr_values requires one positive learning rate per distinct step milestone")
-    while (global_step < max_steps) if max_steps else (start < epochs):
+    from lnl_toolbox.training.early_stopping import StageEarlyStopping
+    stopping = StageEarlyStopping(config, "trainer.early_stopping", "validation_accuracy", run_dir=run_dir)
+    stopping.replay(rows, completed=start)
+    while not stopping.stopped and ((global_step < max_steps) if max_steps else (start < epochs)):
         epoch = start
         model.train(); meta_model.train(); trusted_iterator = iter(trusted_loader)
         total = correct = 0; loss_sum = weight_sum = positive_sum = 0.0
@@ -334,6 +337,9 @@ def run_l2rw_experiment(
             "rng_state": capture_rng_state(),
         }, run_dir / "last.pt")
         start += 1
+        if stopping.observe(row, {"model": model, "optimizer": optimizer, "scheduler": scheduler}):
+            break
+    stopping.restore_best({"model": model})
     (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     if rows: write_training_curves_svg(rows, run_dir / "training_curves.svg")
     test = evaluate_classification(model, test_loader, criterion, device)

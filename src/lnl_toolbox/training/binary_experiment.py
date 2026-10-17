@@ -182,6 +182,12 @@ def run_binary_experiment(
     web_rows = []
     metrics_path = destination / "metrics.jsonl"
     metrics_path.write_text("", encoding="utf-8")
+    from copy import deepcopy
+    from lnl_toolbox.training.early_stopping import StageEarlyStopping
+    stopping = StageEarlyStopping(resolved_config, "trainer.early_stopping", "validation_accuracy", run_dir=destination)
+    if stopping.enabled and not prepared.validation_indices.size:
+        raise ValueError("trainer.early_stopping requires a validation split")
+    best_model = None
     for epoch in range(epochs):
         row = train_binary_epoch(model, loader, optimizer, risk=risk)
         row["epoch"] = float(epoch + 1)
@@ -202,6 +208,16 @@ def run_binary_experiment(
             "".join(json.dumps(item, sort_keys=True) + "\n" for item in web_rows),
             encoding="utf-8",
         )
+        previous_best = stopping.counter.best
+        stopped = stopping.update(web_row)
+        if stopping.enabled and stopping.counter.best != previous_best:
+            best_model = deepcopy(model.state_dict())
+        if stopped:
+            break
+
+    if best_model is not None:
+        model.load_state_dict(best_model)
+        torch.save({"model": best_model, "config": resolved_config}, destination / "best.pt")
 
     (destination / "resolved_config.json").write_text(json.dumps(resolved_config, indent=2), encoding="utf-8")
     if record is not None:

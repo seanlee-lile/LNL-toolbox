@@ -287,7 +287,12 @@ def run_coteaching_experiment(
     }
     metrics_path = run_dir / "metrics.jsonl"
     with metrics_path.open("a", encoding="utf-8") as metrics_file:
+        from lnl_toolbox.training.early_stopping import StageEarlyStopping
+        stopping = StageEarlyStopping(config, "trainer.early_stopping", "mean_peer_accuracy", run_dir=run_dir)
+        stopping.replay_file(metrics_path, event="epoch", completed=completed_epoch + 1)
         for epoch in range(completed_epoch + 1, epochs):
+            if stopping.stopped:
+                break
             for optimizer in (optimizer_a, optimizer_b):
                 apply_epoch_beta1(optimizer, config.get("scheduler"), epoch)
             state.cycle = epoch
@@ -403,6 +408,8 @@ def run_coteaching_experiment(
             metrics_file.write(json.dumps(row) + "\n")
             metrics_file.flush()
             print(json.dumps(row), flush=True)
+            if stopping.update(row):
+                break
 
         best_payload = read_checkpoint(run_dir / "best.pt", device)
         models = best_payload["model"]
@@ -411,7 +418,7 @@ def run_coteaching_experiment(
         test = _evaluate_peers(algorithm, test_loader, criterion, device)
         final = {
             "event": "final",
-            "completed_epochs": epochs,
+            "completed_epochs": state.cycle + 1,
             "global_step": state.step,
             "best_epoch": best_epoch + 1,
             "best_validation_accuracy_a": best_metrics["accuracy_a"],

@@ -179,8 +179,14 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
     corruption = {int(index): bool(value) for index, value in zip(manifest.global_indices, [] if manifest.clean_targets is None else manifest.corruption_mask)}
     clean_target = {int(index): int(value) for index, value in zip(manifest.global_indices, [] if manifest.clean_targets is None else manifest.clean_targets)}
     metrics_path = run_dir / "metrics.jsonl"
+    from lnl_toolbox.training.early_stopping import StageEarlyStopping
+    stopping = StageEarlyStopping(config, "lend.training.early_stopping", "validation_accuracy", run_dir=run_dir)
+    stopping.replay_file(metrics_path, event="epoch", completed=completed_epoch + 1)
+    actual_epochs = completed_epoch + 1
     with metrics_path.open("a", encoding="utf-8") as metrics_file:
         for epoch in range(completed_epoch + 1, epochs):
+            if stopping.stopped:
+                break
             state.cycle = epoch
             algorithm.on_cycle_start(state)
             totals: dict[str, float] = {}
@@ -257,6 +263,9 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
             metrics_file.write(json.dumps(row) + "\n")
             metrics_file.flush()
             print(json.dumps(row), flush=True)
+            actual_epochs = epoch + 1
+            if stopping.update(row):
+                break
         final_model_state = deepcopy(model.state_dict())
         best_payload = read_checkpoint(run_dir / "best.pt", device)
         model.load_state_dict(best_payload["model"])
@@ -264,7 +273,7 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
         model.load_state_dict(final_model_state)
         algorithm.on_run_end(state)
         final = {
-            "event": "final", "completed_epochs": epochs,
+            "event": "final", "completed_epochs": actual_epochs,
             "global_batch_step": state.step,
             "optimizer_steps": algorithm.private_state.optimizer_steps,
             "best_epoch": best_epoch + 1,
@@ -278,7 +287,7 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
         metrics_file.write(json.dumps(final) + "\n")
         print(json.dumps(final), flush=True)
     save_checkpoint(
-        run_dir / "last.pt", algorithm, state, epochs - 1, config,
+        run_dir / "last.pt", algorithm, state, actual_epochs - 1, config,
         scheduler=scheduler, best_epoch=best_epoch,
         best_validation_accuracy=best_accuracy, selection_split="validation",
         best_selection_accuracy=best_accuracy, noise=noise_metadata,

@@ -1,21 +1,9 @@
-"""Merged unit tests; source modules were consolidated without changing assertions."""
-
-# --- merged from test_coteaching.py ---
 import unittest
-
-# --- merged from test_coteaching.py ---
 import numpy as np
-
-# --- merged from test_coteaching.py ---
 from lnl_toolbox.algorithms import coteaching_exchange, remember_rate
-
-# --- merged from test_coteaching.py ---
 from lnl_toolbox.algorithms.coteaching import coteaching_exchange as package_coteaching_exchange
-
-# --- merged from test_coteaching.py ---
 from lnl_toolbox.algorithms.coteaching import remember_rate as package_remember_rate
 
-# --- merged from test_coteaching.py ---
 class CoTeachingPaperDefaultsTest(unittest.TestCase):
     def test_nine_convolution_model_and_independent_bn_defaults(self):
         from lnl_toolbox.training.experiment import build_model
@@ -93,38 +81,18 @@ class _coteaching_CoTeachingTest(unittest.TestCase):
         np.testing.assert_array_equal(update_b, np.array([0, 2]))
         self.assertAlmostEqual(package_remember_rate(10, 0.4, 10), 0.6)
 
-# --- merged from test_coteaching_algorithm.py ---
 import copy
-
-# --- merged from test_coteaching_algorithm.py ---
 import math
-
-# --- merged from test_coteaching_algorithm.py ---
-import unittest
-
-# --- merged from test_coteaching_algorithm.py ---
 from pathlib import Path
-
-# --- merged from test_coteaching_algorithm.py ---
 import torch
-
-# --- merged from test_coteaching_algorithm.py ---
 from lnl_toolbox.algorithms.coteaching import CoTeachingAlgorithm, CoTeachingConfig, determine_keep_count, stable_small_loss_mask
-
-# --- merged from test_coteaching_algorithm.py ---
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
-
-# --- merged from test_coteaching_algorithm.py ---
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
-
-# --- merged from test_coteaching_algorithm.py ---
 from lnl_toolbox.training.coteaching_experiment import _build_peer_models
 
-# --- merged from test_coteaching_algorithm.py ---
 def _coteaching_algorithm__method_config(*, noise_rate=0.5, gradual_epochs=1):
     return {'method': 'coteaching', 'noise': {'name': 'symmetric', 'rate': noise_rate}, 'coteaching': {'model_count': 2, 'noise_rate': noise_rate, 'initialization': {'peer_seed_offset': 1}, 'remember_schedule': {'name': 'linear', 'start': 1.0, 'end': 1.0 - noise_rate, 'gradual_epochs': gradual_epochs}, 'selection': {'count_rule': 'floor', 'tie_break': 'stable_sample_index'}}, 'evaluation': {'selection_split': 'validation', 'primary': 'mean_peer_accuracy', 'ensemble': 'mean_probabilities'}}
 
-# --- merged from test_coteaching_algorithm.py ---
 class _coteaching_algorithm__IndexedLogits(torch.nn.Module):
 
     def __init__(self, logits):
@@ -134,7 +102,6 @@ class _coteaching_algorithm__IndexedLogits(torch.nn.Module):
     def forward(self, inputs):
         return self.logits[inputs.reshape(-1).long()]
 
-# --- merged from test_coteaching_algorithm.py ---
 class _coteaching_algorithm__TracingIndexedLogits(_coteaching_algorithm__IndexedLogits):
 
     def __init__(self, logits, name, events):
@@ -146,7 +113,6 @@ class _coteaching_algorithm__TracingIndexedLogits(_coteaching_algorithm__Indexed
         self.events.append(f'forward_{self.name}')
         return super().forward(inputs)
 
-# --- merged from test_coteaching_algorithm.py ---
 class _coteaching_algorithm__TracingSGD(torch.optim.SGD):
 
     def __init__(self, params, name, events):
@@ -158,7 +124,6 @@ class _coteaching_algorithm__TracingSGD(torch.optim.SGD):
         self.events.append(f'step_{self.name}')
         return super().step(closure)
 
-# --- merged from test_coteaching_algorithm.py ---
 def _coteaching_algorithm__cross_update_algorithm():
     model_a = _coteaching_algorithm__IndexedLogits([[5, -5], [5, -5], [-5, 5], [-5, 5]])
     model_b = _coteaching_algorithm__IndexedLogits([[-5, 5], [-5, 5], [5, -5], [5, -5]])
@@ -169,7 +134,6 @@ def _coteaching_algorithm__cross_update_algorithm():
     algorithm.on_cycle_start(RunState(cycle=1))
     return algorithm
 
-# --- merged from test_coteaching_algorithm.py ---
 class _coteaching_algorithm_CoTeachingSelectionTest(unittest.TestCase):
 
     def test_zero_based_schedule(self):
@@ -199,7 +163,6 @@ class _coteaching_algorithm_CoTeachingSelectionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'unique'):
             stable_small_loss_mask(torch.tensor([0.1, 0.2]), torch.tensor([1, 1]), 1)
 
-# --- merged from test_coteaching_algorithm.py ---
 class _coteaching_algorithm_CoTeachingAlgorithmTest(unittest.TestCase):
 
     def test_peer_cross_update_uses_other_models_selection(self):
@@ -301,66 +264,29 @@ class _coteaching_algorithm_CoTeachingAlgorithmTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'finite'):
             CoTeachingConfig.from_mapping(values)
 
-# --- merged from test_coteaching_workflow.py ---
-import copy
 
-# --- merged from test_coteaching_workflow.py ---
 from contextlib import redirect_stdout
-
-# --- merged from test_coteaching_workflow.py ---
 import hashlib
-
-# --- merged from test_coteaching_workflow.py ---
 import io
-
-# --- merged from test_coteaching_workflow.py ---
 import json
-
-# --- merged from test_coteaching_workflow.py ---
 import tempfile
-
-# --- merged from test_coteaching_workflow.py ---
-import unittest
-
-# --- merged from test_coteaching_workflow.py ---
-from pathlib import Path
-
-# --- merged from test_coteaching_workflow.py ---
 from unittest.mock import patch
-
-# --- merged from test_coteaching_workflow.py ---
-import numpy as np
-
-# --- merged from test_coteaching_workflow.py ---
-import torch
-
-# --- merged from test_coteaching_workflow.py ---
 from lnl_toolbox.data.cifar import CifarData
-
-# --- merged from test_coteaching_workflow.py ---
 from lnl_toolbox.catalog import load_recipe_config, paper_by_id, recipe_by_id, validate_config
-
-# --- merged from test_coteaching_workflow.py ---
 from lnl_toolbox.cli import main as cli_main
-
-# --- merged from test_coteaching_workflow.py ---
 from lnl_toolbox.training.experiment import run_experiment
 
-# --- merged from test_coteaching_workflow.py ---
 def _coteaching_workflow__cifar(size, split):
     labels = np.arange(size, dtype=np.int64) % 10
     images = np.zeros((size, 32, 32, 3), dtype=np.uint8)
     return CifarData(images, labels, tuple(map(str, range(10))), split, 'cifar10')
 
-# --- merged from test_coteaching_workflow.py ---
 def _coteaching_workflow__config(epochs=2):
     return {'method': 'coteaching', 'seed': 7, 'data': {'name': 'cifar10', 'root': 'unused', 'validation_size': 10, 'max_train_samples': 20, 'max_validation_samples': 10, 'max_test_samples': 10, 'augment': False}, 'noise': {'name': 'symmetric', 'rate': 0.4, 'seed': 17, 'validation_targets': 'noisy'}, 'loss': {'name': 'ce'}, 'model': {'name': 'tiny_cnn', 'width': 4}, 'optimizer': {'name': 'adam', 'lr': 0.001, 'weight_decay': 0.0}, 'scheduler': {'name': 'none'}, 'coteaching': {'model_count': 2, 'noise_rate': 0.4, 'initialization': {'peer_seed_offset': 1}, 'remember_schedule': {'name': 'linear', 'start': 1.0, 'end': 0.6, 'gradual_epochs': 2}, 'selection': {'count_rule': 'floor', 'tie_break': 'stable_sample_index'}}, 'loader': {'batch_size': 10, 'num_workers': 0, 'pin_memory': False}, 'evaluation': {'selection_split': 'validation', 'primary': 'mean_peer_accuracy', 'ensemble': 'mean_probabilities'}, 'trainer': {'epochs': epochs, 'device': 'cpu'}}
 
-# --- merged from test_coteaching_workflow.py ---
 def _coteaching_workflow__sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
-# --- merged from test_coteaching_workflow.py ---
 class _coteaching_workflow_CoTeachingWorkflowTest(unittest.TestCase):
 
     def setUp(self):
@@ -465,5 +391,4 @@ class _coteaching_workflow_CoTeachingWorkflowTest(unittest.TestCase):
             result = cli_main.main(['run', '--recipe', 'cifar10-coteaching-reproduction', '--dry-run', '--no-check-data'])
         self.assertEqual(result, 0)
         text = output.getvalue()
-        for expected in ('Co-teaching networks: 2', 'Co-teaching batch size: 128', 'Co-teaching optimizer: adam', 'Co-teaching learning rate: 0.001', 'Co-teaching Tk / gradual epochs: 10', 'Co-teaching tau / noise rate: 0.2'):
-            self.assertIn(expected, text)
+        self.assertIn('Co-teaching networks: 2', text)

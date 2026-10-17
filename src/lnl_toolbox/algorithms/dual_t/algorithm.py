@@ -398,12 +398,15 @@ class DualTAlgorithm:
         )
 
     def train_posterior(self, *, max_epochs: int | None = None) -> None:
+        from lnl_toolbox.training.early_stopping import StageEarlyStopping
+        stopping = StageEarlyStopping(self.config, "posterior_stage.early_stopping", "validation_accuracy", run_dir=self.run_dir)
+        stopping.replay_file(self.metrics_path, event="epoch", phase="posterior", completed=self.state.posterior_completed_epochs)
         if self.state.phase is not DualTPhase.POSTERIOR_TRAINING:
             raise ValueError("posterior training is not active")
         target = self.method_config.posterior_stage.epochs
         if max_epochs is not None:
             target = min(target, self.state.posterior_completed_epochs + max_epochs)
-        while self.state.posterior_completed_epochs < target:
+        while self.state.posterior_completed_epochs < target and not stopping.stopped:
             epoch = self.state.posterior_completed_epochs
             learning_rate = float(
                 self.posterior_algorithm.optimizer.param_groups[0]["lr"]
@@ -452,10 +455,11 @@ class DualTAlgorithm:
                 ),
             }
             self._append_metrics(row)
+            stopping.update(row)
             self._save_last()
         if (
             self.state.posterior_completed_epochs
-            == self.method_config.posterior_stage.epochs
+            == self.method_config.posterior_stage.epochs or stopping.stopped
         ):
             self._validate_posterior_best(required=True)
             self.state.advance(DualTPhase.POSTERIOR_READY)
@@ -546,6 +550,9 @@ class DualTAlgorithm:
         self._save_last()
 
     def train_final(self, *, max_epochs: int | None = None) -> None:
+        from lnl_toolbox.training.early_stopping import StageEarlyStopping
+        stopping = StageEarlyStopping(self.config, "final_stage.early_stopping", "validation_accuracy", run_dir=self.run_dir)
+        stopping.replay_file(self.metrics_path, event="epoch", phase="final", completed=self.state.final_completed_epochs)
         if self.state.phase is not DualTPhase.FINAL_TRAINING:
             raise ValueError("final training is not active")
         if self.transition is None:
@@ -553,7 +560,7 @@ class DualTAlgorithm:
         target = self.method_config.final_stage.epochs
         if max_epochs is not None:
             target = min(target, self.state.final_completed_epochs + max_epochs)
-        while self.state.final_completed_epochs < target:
+        while self.state.final_completed_epochs < target and not stopping.stopped:
             epoch = self.state.final_completed_epochs
             learning_rate = float(
                 self.final_algorithm.optimizer.param_groups[0]["lr"]
@@ -596,8 +603,9 @@ class DualTAlgorithm:
                 ),
             }
             self._append_metrics(row)
+            stopping.update(row)
             self._save_last()
-        if self.state.final_completed_epochs == self.method_config.final_stage.epochs:
+        if self.state.final_completed_epochs == self.method_config.final_stage.epochs or stopping.stopped:
             self.complete()
 
     def complete(self) -> dict[str, Any]:

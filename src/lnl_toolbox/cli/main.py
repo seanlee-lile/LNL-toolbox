@@ -145,7 +145,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="PATH=VALUE",
-        help="override an existing dotted configuration value; repeatable",
+        help=("override a dotted configuration value; repeatable. "
+              "Stage early stopping is boolean, e.g. "
+              "--set trainer.early_stopping=true or --set upm.stage1.early_stopping=false"),
     )
 
     resume = sub.add_parser("resume", help="从运行目录自动恢复")
@@ -214,12 +216,14 @@ def build_parser() -> argparse.ArgumentParser:
     mentor_prepare.add_argument("--config", type=Path, required=True)
     mentor_prepare.add_argument("--output-dir", type=Path, required=True)
     mentor_prepare.add_argument("--project-root", type=Path)
+    mentor_prepare.add_argument("--set", dest="overrides", action="append", default=[], metavar="PATH=VALUE")
     mentor_train = mentor_sub.add_parser(
         "train", help="train and freeze a reusable MentorArtifact"
     )
     mentor_train.add_argument("--config", type=Path, required=True)
     mentor_train.add_argument("--output", type=Path, required=True)
     mentor_train.add_argument("--project-root", type=Path)
+    mentor_train.add_argument("--set", dest="overrides", action="append", default=[], metavar="PATH=VALUE")
 
     methods = sub.add_parser("methods", help="discover dataset/method compatibility")
     methods_sub = methods.add_subparsers(dest="methods_command", required=True)
@@ -1441,6 +1445,7 @@ def _mentor_command(args: argparse.Namespace) -> int:
         raise FileNotFoundError(f"Mentor configuration does not exist: {config_path}")
     config = load_yaml(config_path)
     if args.mentor_command == "prepare":
+        config = apply_override_assignments(config, args.overrides)
         from lnl_toolbox.training.mentor_learning import (
             prepare_trusted_mentor_features,
         )
@@ -1453,6 +1458,7 @@ def _mentor_command(args: argparse.Namespace) -> int:
         print(feature_path)
         return 0
     if args.mentor_command == "train":
+        config = apply_override_assignments(config, args.overrides)
         from lnl_toolbox.training.mentor_learning import train_mentor_artifact
 
         feature_data = Path(str(config.get("feature_data", ""))).expanduser()

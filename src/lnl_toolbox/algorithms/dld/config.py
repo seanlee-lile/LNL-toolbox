@@ -92,13 +92,7 @@ class DLDConfig:
                     + ", ".join(sorted(supported))
                 )
             required = (
-                (
-                    "run_directory_env",
-                    "checkpoint_sha256",
-                    "manifest_sha256",
-                    "mapping_hash",
-                    "dataset_fingerprint",
-                )
+                ("run_directory_env",)
                 if adapter == "upm_main_best"
                 else ("weights", "input_contract")
             )

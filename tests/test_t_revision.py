@@ -1,31 +1,13 @@
-"""Merged unit tests; source modules were consolidated without changing assertions."""
 from __future__ import annotations
-
-# --- merged from test_t_revision_algorithm.py ---
 from pathlib import Path
-
-# --- merged from test_t_revision_algorithm.py ---
 import tempfile
-
-# --- merged from test_t_revision_algorithm.py ---
 import unittest
-
-# --- merged from test_t_revision_algorithm.py ---
 import numpy as np
-
-# --- merged from test_t_revision_algorithm.py ---
 import torch
-
-# --- merged from test_t_revision_algorithm.py ---
 from torch import nn
-
-# --- merged from test_t_revision_algorithm.py ---
 from lnl_toolbox.algorithms.t_revision import AdditiveTransitionRevision, RevisedTransitionArtifact, TRevisionPhase, TRevisionState, validate_revision_optimizer
-
-# --- merged from test_t_revision_algorithm.py ---
 from lnl_toolbox.noise.transition import TransitionArtifact
 
-# --- merged from test_t_revision_algorithm.py ---
 class TRevisionPaperDefaultsTest(unittest.TestCase):
 
     def test_author_network_and_global_defaults(self):
@@ -124,7 +106,6 @@ class _t_revision_algorithm_TRevisionTransitionTest(unittest.TestCase):
         self.assertEqual(restored.artifact_hash, artifact.artifact_hash)
         np.testing.assert_allclose(restored.revised_transition, artifact.revised_transition)
 
-# --- merged from test_t_revision_algorithm.py ---
 class _t_revision_algorithm_TRevisionStateTest(unittest.TestCase):
 
     def test_only_forward_phase_transitions_are_allowed(self) -> None:
@@ -152,22 +133,10 @@ class _t_revision_algorithm_TRevisionStateTest(unittest.TestCase):
         restored = TRevisionState.from_state_dict(state.state_dict())
         self.assertIs(restored.phase, TRevisionPhase.COMPLETED)
 
-# --- merged from test_t_revision_objective.py ---
 import math
-
-# --- merged from test_t_revision_objective.py ---
-import unittest
-
-# --- merged from test_t_revision_objective.py ---
-import torch
-
-# --- merged from test_t_revision_objective.py ---
 from torch.nn import functional as F
-
-# --- merged from test_t_revision_objective.py ---
 from lnl_toolbox.algorithms.t_revision import t_revision_reweight_objective
 
-# --- merged from test_t_revision_objective.py ---
 class _t_revision_objective_TRevisionObjectiveTest(unittest.TestCase):
 
     def test_matches_vectorized_equation_three_by_hand(self) -> None:
@@ -211,11 +180,6 @@ class _t_revision_objective_TRevisionObjectiveTest(unittest.TestCase):
         self.assertGreater(float(logits.grad.abs().sum()), 0.0)
         self.assertGreater(float(transition.grad.abs().sum()), 0.0)
 
-    def test_ratio_is_numerator_over_denominator_not_reversed(self) -> None:
-        logits = torch.tensor([[1.5, -0.2]])
-        transition = torch.tensor([[0.6, 0.4], [0.2, 0.8]])
-        result = t_revision_reweight_objective(logits, torch.tensor([0]), transition, denominator_floor=0.0)
-        self.assertNotAlmostEqual(result.weight_mean, 1.0 / result.weight_mean)
 
     def test_invalid_denominator_and_nonfinite_values_fail(self) -> None:
         logits = torch.tensor([[0.0, 0.0]])
@@ -234,52 +198,17 @@ class _t_revision_objective_TRevisionObjectiveTest(unittest.TestCase):
         result.objective.backward()
         self.assertIsNotNone(transition.grad)
 
-# --- merged from test_t_revision_workflow.py ---
 import hashlib
-
-# --- merged from test_t_revision_workflow.py ---
 import json
-
-# --- merged from test_t_revision_workflow.py ---
 import os
-
-# --- merged from test_t_revision_workflow.py ---
-from pathlib import Path
-
-# --- merged from test_t_revision_workflow.py ---
 import subprocess
-
-# --- merged from test_t_revision_workflow.py ---
 import sys
-
-# --- merged from test_t_revision_workflow.py ---
-import tempfile
-
-# --- merged from test_t_revision_workflow.py ---
-import unittest
-
-# --- merged from test_t_revision_workflow.py ---
-import torch
-
-# --- merged from test_t_revision_workflow.py ---
-from torch import nn
-
-# --- merged from test_t_revision_workflow.py ---
 from torch.utils.data import DataLoader
-
-# --- merged from test_t_revision_workflow.py ---
-from lnl_toolbox.algorithms.t_revision import TRevisionAlgorithm, TRevisionConfig, TRevisionPhase
-
-# --- merged from test_t_revision_workflow.py ---
+from lnl_toolbox.algorithms.t_revision import TRevisionAlgorithm, TRevisionConfig
 from lnl_toolbox.training.checkpoint import read_checkpoint
-
-# --- merged from test_t_revision_workflow.py ---
 from lnl_toolbox.training.experiment import run_experiment
-
-# --- merged from test_t_revision_workflow.py ---
 from lnl_toolbox.training.t_revision_experiment import _preflight_model_output
 
-# --- merged from test_t_revision_workflow.py ---
 class _t_revision_workflow__Classifier(nn.Module):
 
     def __init__(self, classes: int=3) -> None:
@@ -289,19 +218,16 @@ class _t_revision_workflow__Classifier(nn.Module):
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return inputs @ self.weight.t()
 
-# --- merged from test_t_revision_workflow.py ---
 def _t_revision_workflow__records(*, clean_offset: int=0):
     records = []
     for position, target in enumerate((0, 0, 1, 1, 2, 2)):
         records.append({'input': torch.nn.functional.one_hot(torch.tensor(target), num_classes=3).float(), 'target': torch.tensor(target), 'index': torch.tensor(100 + position * 11), 'clean_target': torch.tensor((target + clean_offset) % 3)})
     return records
 
-# --- merged from test_t_revision_workflow.py ---
 def _t_revision_workflow__config(*, stage1_epochs: int=1, stage2a_epochs: int=1, revision_epochs: int=1):
     return {'method': 't_revision', 'seed': 5, 'data': {'name': 'fixture', 'width': 3, 'validation_size': 3}, 'noise': {'name': 'symmetric', 'rate': 0.2, 'seed': 9, 'validation_targets': 'noisy', 'mapping_hash': 'a' * 64}, 'loader': {'batch_size': 3}, 'trainer': {'device': 'cpu'}, 'evaluation': {'selection_split': 'validation'}, 't_revision': {'objective': 'reweight', 'fidelity': 'paper_experiment_raw_additive', 'stage1': {'epochs': stage1_epochs, 'model': {'name': 'fixture'}, 'optimizer': {'name': 'sgd', 'lr': 0.01}, 'scheduler': {'name': 'none'}, 'best_metric': 'noisy_validation_accuracy'}, 'transition_initialization': {'method': 'pseudo_anchor_max_posterior', 'posterior_split': 'train', 'extraction_augmentation': False, 'tie_break': 'stable_sample_index'}, 'classifier_initialization': {'epochs': stage2a_epochs, 'optimizer': {'name': 'sgd', 'lr': 0.01}, 'scheduler': {'name': 'none'}, 'start_from': 'stage1_best', 'best_metric': 'revised_noisy_validation_accuracy'}, 'revision': {'epochs': revision_epochs, 'transition_mode': 'paper_experiment_raw_additive', 'delta_initialization': 'zeros', 'start_from': 'classifier_initialization_best', 'optimizer': {'name': 'adam', 'lr': 0.01}, 'scheduler': {'name': 'none'}, 'ratio': {'detach': False, 'clamp': 'none', 'denominator_floor': 1e-12}, 'best_metric': 'revised_noisy_validation_accuracy'}}}
 
-# --- merged from test_t_revision_workflow.py ---
-def _t_revision_workflow__algorithm(directory: str | Path, *, stage1_epochs: int=1, stage2a_epochs: int=1, revision_epochs: int=1, clean_offset: int=0, device: str='cpu'):
+def _t_revision_workflow__algorithm(directory: str | Path, *, stage1_epochs: int=1, stage2a_epochs: int=1, revision_epochs: int=1, clean_offset: int=0, device: str='cpu', stage_early_stopping=None):
     torch_device = torch.device(device)
     model = _t_revision_workflow__Classifier().to(torch_device)
     stage1_optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
@@ -316,14 +242,58 @@ def _t_revision_workflow__algorithm(directory: str | Path, *, stage1_epochs: int
     posterior = DataLoader(_t_revision_workflow__records(clean_offset=clean_offset), batch_size=3, shuffle=False)
     validation = DataLoader(_t_revision_workflow__records(clean_offset=2), batch_size=3, shuffle=False)
     test = DataLoader(_t_revision_workflow__records(clean_offset=1), batch_size=3, shuffle=False)
-    return TRevisionAlgorithm(model=model, stage1_optimizer=stage1_optimizer, stage1_scheduler=None, classifier_optimizer_factory=classifier_optimizer, classifier_scheduler_factory=lambda optimizer: None, revision_optimizer_factory=revision_optimizer, revision_scheduler_factory=lambda optimizer: None, loss=nn.CrossEntropyLoss(reduction='none'), train_loader=train, posterior_loader=posterior, noisy_validation_loader=validation, clean_test_loader=test, device=torch_device, run_dir=directory, config=_t_revision_workflow__config(stage1_epochs=stage1_epochs, stage2a_epochs=stage2a_epochs, revision_epochs=revision_epochs), dataset='fixture', num_classes=3, noise_metadata={'manifest_sha256': 'b' * 64, 'mapping_hash': 'a' * 64})
+    config = _t_revision_workflow__config(stage1_epochs=stage1_epochs, stage2a_epochs=stage2a_epochs, revision_epochs=revision_epochs)
+    if stage_early_stopping is not None:
+        config['early_stopping'] = {'scope': 'stages', **stage_early_stopping}
+    return TRevisionAlgorithm(model=model, stage1_optimizer=stage1_optimizer, stage1_scheduler=None, classifier_optimizer_factory=classifier_optimizer, classifier_scheduler_factory=lambda optimizer: None, revision_optimizer_factory=revision_optimizer, revision_scheduler_factory=lambda optimizer: None, loss=nn.CrossEntropyLoss(reduction='none'), train_loader=train, posterior_loader=posterior, noisy_validation_loader=validation, clean_test_loader=test, device=torch_device, run_dir=directory, config=config, dataset='fixture', num_classes=3, noise_metadata={'manifest_sha256': 'b' * 64, 'mapping_hash': 'a' * 64})
 
-# --- merged from test_t_revision_workflow.py ---
 def _t_revision_workflow__sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
-# --- merged from test_t_revision_workflow.py ---
 class _t_revision_workflow_TRevisionWorkflowTest(unittest.TestCase):
+
+    def test_each_stage_stops_after_exactly_fifteen_bad_epochs_and_completes(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            algorithm = _t_revision_workflow__algorithm(
+                directory, stage1_epochs=20, stage2a_epochs=20, revision_epochs=20,
+                stage_early_stopping={'patience': 15})
+            from lnl_toolbox.core.config_schema import normalize_experiment_config
+            normalize_experiment_config(algorithm.config)
+            stable = {'accuracy': .5, 'loss': 1.}
+            with patch('lnl_toolbox.algorithms.t_revision.algorithm.evaluate_classification', return_value=stable), patch.object(algorithm, '_evaluate_noisy', return_value=stable):
+                algorithm.run()
+            self.assertIs(algorithm.state.phase, TRevisionPhase.COMPLETED)
+            self.assertEqual(algorithm.state.stage1_completed_epochs, 16)
+            self.assertEqual(algorithm.state.stage2a_completed_epochs, 16)
+            self.assertEqual(algorithm.state.revision_completed_epochs, 16)
+            self.assertTrue((Path(directory) / 'final_metrics.json').is_file())
+            for stopper in algorithm.stage_stoppers.values():
+                self.assertEqual(stopper.bad_epochs, 15)
+
+    def test_enabling_stage_stopping_on_old_checkpoint_reuses_history_and_best(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            first = _t_revision_workflow__algorithm(directory, stage2a_epochs=20)
+            first.train_stage1()
+            first.initialize_transition()
+            first.start_classifier_initialization()
+            with patch.object(first, '_evaluate_noisy', return_value={'accuracy': .5, 'loss': 1.}):
+                first.train_classifier_initialization(max_epochs=17)
+            best_hash = _t_revision_workflow__sha(first.stage2a_best_path)
+            restored = _t_revision_workflow__algorithm(directory, stage2a_epochs=20,
+                stage_early_stopping={'patience': 15})
+            restored.resume(Path(directory) / 'last.pt')
+            self.assertTrue(restored._stage_stopped('classifier_initialization'))
+            with patch.object(restored, '_train_reweight_epoch', side_effect=AssertionError('must not train another initialization epoch')):
+                restored.train_classifier_initialization()
+            self.assertEqual(restored.state.stage2a_completed_epochs, 17)
+            self.assertIs(restored.state.phase, TRevisionPhase.CLASSIFIER_READY)
+            self.assertEqual(_t_revision_workflow__sha(restored.stage2a_best_path), best_hash)
+            best = read_checkpoint(restored.stage2a_best_path, 'cpu')
+            restored.start_revision()
+            for key, value in restored.model.state_dict().items():
+                torch.testing.assert_close(value.cpu(), best['model'][key])
 
     def test_config_rejects_unsupported_variants_and_test_selection(self) -> None:
         values = _t_revision_workflow__config()

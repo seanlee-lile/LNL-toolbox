@@ -123,7 +123,7 @@ def run_ca2c_experiment(
         memory = CandidateMemory.from_state_dict(payload["candidate_memory"])
         if payload.get("candidate_memory_hash") not in {None, memory.fingerprint()}:
             raise ValueError("CA2C candidate memory checkpoint hash mismatch")
-        start = int(payload["completed_epoch"]) + 1
+        start = int(payload.get("schedule_epoch", payload["completed_epoch"])) + 1
         rows = list(payload.get("metrics", []))
         restore_rng_state(payload["rng_state"])
     ca2c_config = dict(config.get("ca2c", {}) or {})
@@ -138,7 +138,20 @@ def run_ca2c_experiment(
             ca2c_config.get("lambda", ca2c_config.get("hard_weight", 0.99)),
         )
     )
-    for epoch in range(start, epochs):
+    from lnl_toolbox.training.early_stopping import StageEarlyStopping, stage_epochs
+    warmup_stopping = StageEarlyStopping(config, "ca2c.warmup_early_stopping", "validation_accuracy", run_dir=run_dir)
+    main_stopping = StageEarlyStopping(config, "trainer.early_stopping", "validation_accuracy", run_dir=run_dir)
+    if (warmup_stopping.enabled or main_stopping.enabled) and validation_loader is None:
+        raise ValueError("CA2C stage early stopping requires a validation split")
+    warmup_stopping.replay(rows, phase="warmup")
+    main_stopping.replay(rows, phase="robust")
+    components = {"p_model": p_model, "n_model": n_model, "p_optimizer": p_optimizer, "n_optimizer": n_optimizer}
+    if warmup_stopping.stopped and start < warmup_epochs:
+        warmup_stopping.restore_best(components)
+    for epoch in stage_epochs(start, epochs, warmup_epochs, warmup_stopping, main_stopping):
+        if p_scheduler is not None and p_scheduler.last_epoch < epoch:
+            p_scheduler.step(epoch)
+            n_scheduler.step(epoch)
         train_loader = data.loader(DataRole.TRAIN, epoch=epoch, stream=21)
         p_model.train(); n_model.train(); total = correct = 0; loss_sum = 0.0
         for batch in train_loader:
@@ -168,7 +181,7 @@ def run_ca2c_experiment(
             ensemble = (p_logits.detach() + n_logits.detach()) / 2; total += targets.numel(); correct += int(ensemble.argmax(1).eq(targets).sum()); loss_sum += float((p_loss.detach() + n_loss.detach()) / 2) * targets.numel()
         test = _evaluate((p_model, n_model), test_loader, criterion, device)
         row_values = {
-            "epoch": epoch + 1,
+            "epoch": len(rows) + 1, "schedule_epoch": epoch,
             "phase": "warmup" if epoch < warmup_epochs else "robust",
             "train_loss": loss_sum / total,
             "train_accuracy": correct / total,
@@ -204,10 +217,13 @@ def run_ca2c_experiment(
             "n_scheduler": None if n_scheduler is None else n_scheduler.state_dict(),
             "candidate_memory": memory.state_dict(),
             "candidate_memory_hash": memory.fingerprint(),
-            "completed_epoch": epoch,
+            "completed_epoch": len(rows) - 1, "schedule_epoch": epoch,
             "metrics": rows,
             "rng_state": capture_rng_state(),
         }, run_dir / "last.pt")
+        stopping = warmup_stopping if epoch < warmup_epochs else main_stopping
+        stopping.observe(row, components)
+    main_stopping.restore_best(components)
     (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8"); (run_dir / "metrics.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     if rows: write_training_curves_svg(rows, run_dir / "training_curves.svg")
     return run_dir

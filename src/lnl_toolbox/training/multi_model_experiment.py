@@ -298,8 +298,22 @@ def run_multi_model_experiment(
         ]
 
     algorithm.on_run_start(state)
+    from lnl_toolbox.training.early_stopping import StageEarlyStopping
+    stopping = StageEarlyStopping(config, "trainer.early_stopping", "validation_accuracy", run_dir=run_dir)
+    stopping.replay_file(metrics_path, event="epoch", completed=completed_epoch + 1)
+    if stopping.enabled:
+        if validation_loader is None:
+            raise ValueError("trainer.early_stopping requires validation data")
+        # Early stopping owns its validation selection even when the paper's
+        # default reporting protocol selects no checkpoint. The public
+        # evaluation config remains unchanged; disabled stopping keeps it.
+        selection_loader = validation_loader
+        selection_split = "validation"
+    actual_epochs = completed_epoch + 1
     with metrics_path.open("a", encoding="utf-8") as metrics_file:
         for epoch in range(completed_epoch + 1, epochs):
+            if stopping.stopped:
+                break
             state.cycle = epoch
             _apply_epoch_optimizer_schedule(
                 optimizer,
@@ -415,13 +429,20 @@ def run_multi_model_experiment(
                     curve_rows, run_dir / "training_curves.svg"
                 )
 
+            actual_epochs = epoch + 1
+            if stopping.update(row):
+                break
+
         algorithm.on_run_end(state)
+        if stopping.enabled:
+            best_payload = read_checkpoint(run_dir / "best.pt", device)
+            models.load_state_dict(best_payload["model"])
         test_metrics = evaluate_model_group(models, test_loader, criterion, device)
         report_last = int(evaluation.get("report_last_epochs", 0))
         window_rows = curve_rows[-report_last:] if report_last else []
         final = {
             "event": "final",
-            "completed_epochs": epochs,
+            "completed_epochs": actual_epochs,
             "global_step": state.step,
             "best_epoch": best_epoch,
             "best_selection_accuracy": best_accuracy if selection_loader is not None else None,

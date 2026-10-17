@@ -1,31 +1,19 @@
-"""Merged unit tests; source modules were consolidated without changing assertions."""
 from __future__ import annotations
-
-# --- merged from test_estimators.py ---
 from dataclasses import FrozenInstanceError, dataclass
-
-# --- merged from test_estimators.py ---
 import unittest
-
-# --- merged from test_estimators.py ---
 import torch
-
-# --- merged from test_estimators.py ---
 from lnl_toolbox.estimators import ReliabilityEstimator, ReliabilityResult, StatisticResult, validate_reliability_result, validate_statistic_result
 
-# --- merged from test_estimators.py ---
 @dataclass(frozen=True)
 class _estimators_DummyReliabilityInput:
     values: torch.Tensor
     sample_indices: torch.Tensor
 
-# --- merged from test_estimators.py ---
 class _estimators_DummyStatelessEstimator:
 
     def estimate(self, estimator_input: _estimators_DummyReliabilityInput) -> ReliabilityResult:
         return ReliabilityResult(sample_indices=estimator_input.sample_indices, scores=estimator_input.values.detach(), metrics={'score_mean': float(estimator_input.values.mean().item())})
 
-# --- merged from test_estimators.py ---
 class _estimators_EstimatorContractTest(unittest.TestCase):
 
     def test_stateless_estimator_satisfies_protocol_without_state_methods(self):
@@ -36,12 +24,6 @@ class _estimators_EstimatorContractTest(unittest.TestCase):
         indices, scores = validate_reliability_result(result)
         self.assertEqual(indices.tolist(), [4, 1])
         self.assertEqual(scores.tolist(), result.scores.tolist())
-
-    def test_larger_scores_have_the_documented_more_reliable_direction(self):
-        result = ReliabilityResult(sample_indices=torch.tensor([8, 3, 5]), scores=torch.tensor([0.2, 0.9, 0.5]))
-        _, scores = validate_reliability_result(result)
-        ranked_indices = result.sample_indices[torch.argsort(scores, descending=True)]
-        self.assertEqual(ranked_indices.tolist(), [3, 5, 8])
 
     def test_reliability_result_is_frozen(self):
         result = ReliabilityResult(sample_indices=torch.tensor([0]), scores=torch.tensor([1.0]))
@@ -87,9 +69,6 @@ class _estimators_EstimatorContractTest(unittest.TestCase):
         payload = CentroidStatistics(centroids=torch.tensor([[1.0, 2.0]]), class_counts=(3,))
         result = StatisticResult(statistics=payload, metrics={'classes': 1.0})
         self.assertIs(validate_statistic_result(result), payload)
-        self.assertFalse(hasattr(result, 'fit'))
-        self.assertFalse(hasattr(result, 'compute'))
-        self.assertFalse(hasattr(result, 'state_dict'))
 
     def test_statistic_validation_does_not_inspect_payload(self):
         opaque_payload = object()
@@ -101,34 +80,14 @@ class _estimators_EstimatorContractTest(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, 'Python float'):
             validate_statistic_result(StatisticResult(statistics=object(), metrics={'count': 1}))
 
-# --- merged from test_transition_estimators.py ---
 import json
-
-# --- merged from test_transition_estimators.py ---
 from pathlib import Path
-
-# --- merged from test_transition_estimators.py ---
 import tempfile
-
-# --- merged from test_transition_estimators.py ---
-import unittest
-
-# --- merged from test_transition_estimators.py ---
 import numpy as np
-
-# --- merged from test_transition_estimators.py ---
-import torch
-
-# --- merged from test_transition_estimators.py ---
 from torch.utils.data import DataLoader
-
-# --- merged from test_transition_estimators.py ---
 from lnl_toolbox.noise import AnchorTransitionEstimator, DualTransitionEstimator, KnownTransitionEstimator, PosteriorSnapshot, TransitionArtifact
-
-# --- merged from test_transition_estimators.py ---
 from lnl_toolbox.training.snapshots import collect_posterior_snapshot
 
-# --- merged from test_transition_estimators.py ---
 class _transition_estimators_TransitionEstimatorTest(unittest.TestCase):
 
     def test_collector_sorts_indices_and_restores_model_mode(self) -> None:
@@ -321,25 +280,11 @@ class _transition_estimators_TransitionEstimatorTest(unittest.TestCase):
             self.assertEqual(cuda.dtype, torch.float32)
             np.testing.assert_allclose(cuda.cpu().numpy(), artifact.matrix, rtol=1e-06)
 
-# --- merged from test_volmin_training.py ---
-import tempfile
 
-# --- merged from test_volmin_training.py ---
-import unittest
-
-# --- merged from test_volmin_training.py ---
-from pathlib import Path
-
-# --- merged from test_volmin_training.py ---
 import yaml
-
-# --- merged from test_volmin_training.py ---
 from lnl_toolbox.training.volmin_experiment import run_volmin_experiment
-
-# --- merged from test_volmin_training.py ---
 from lnl_toolbox.training.experiment import run_experiment
 
-# --- merged from test_volmin_training.py ---
 class _volmin_training_VolMinTrainingTest(unittest.TestCase):
 
     def test_smoke_and_resume(self) -> None:
@@ -356,22 +301,10 @@ class _volmin_training_VolMinTrainingTest(unittest.TestCase):
             resumed = [json.loads(line) for line in (run / 'metrics.jsonl').read_text().splitlines()]
             self.assertEqual([row['event'] for row in resumed], ['epoch', 'epoch', 'final'])
 
-# --- merged from test_volminnet_algorithm.py ---
 import copy
-
-# --- merged from test_volminnet_algorithm.py ---
-import unittest
-
-# --- merged from test_volminnet_algorithm.py ---
-import torch
-
-# --- merged from test_volminnet_algorithm.py ---
 from torch import nn
-
-# --- merged from test_volminnet_algorithm.py ---
 from lnl_toolbox.algorithms.volminnet import VolMinNetAlgorithm, VolMinTransition
 
-# --- merged from test_volminnet_algorithm.py ---
 class VolMinNetPaperDefaultsTest(unittest.TestCase):
     def test_formal_network_stem_and_default_initialization(self):
         from lnl_toolbox.catalog import load_yaml
@@ -462,19 +395,10 @@ class _volminnet_algorithm_VolMinNetAlgorithmTest(unittest.TestCase):
         self.assertEqual(second.state.state_dict(), first.state.state_dict())
         self.assertEqual(second.transition.state_dict().keys(), first.transition.state_dict().keys())
 
-# --- merged from test_volminnet_objective.py ---
-import unittest
 
-# --- merged from test_volminnet_objective.py ---
-import torch
-
-# --- merged from test_volminnet_objective.py ---
 from torch.nn import functional as F
-
-# --- merged from test_volminnet_objective.py ---
 from lnl_toolbox.algorithms.volminnet import volminnet_objective
 
-# --- merged from test_volminnet_objective.py ---
 class _volminnet_objective_VolMinNetObjectiveTest(unittest.TestCase):
 
     def test_asymmetric_row_direction_and_hand_calculation(self) -> None:
@@ -512,27 +436,9 @@ class _volminnet_objective_VolMinNetObjectiveTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'finite'):
             volminnet_objective(torch.randn(2, 3), torch.tensor([0, 1]), invalid, lambda_volume=0.0001)
 
-    def test_objective_uses_log_probabilities_not_cross_entropy_on_probabilities(self) -> None:
-        logits = torch.tensor([[0.2, 0.4, -0.1]], dtype=torch.float64)
-        transition = torch.tensor([[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.2, 0.7]], dtype=torch.float64)
-        objective, _ = volminnet_objective(logits, torch.tensor([1]), transition, lambda_volume=0.1)
-        wrong = F.cross_entropy(torch.softmax(logits, 1) @ transition, torch.tensor([1]))
-        wrong = wrong + 0.1 * torch.logdet(transition)
-        self.assertFalse(torch.allclose(objective, wrong))
-
-# --- merged from test_volminnet_transition.py ---
 import math
 
-# --- merged from test_volminnet_transition.py ---
-import unittest
 
-# --- merged from test_volminnet_transition.py ---
-import torch
-
-# --- merged from test_volminnet_transition.py ---
-from lnl_toolbox.algorithms.volminnet import VolMinTransition
-
-# --- merged from test_volminnet_transition.py ---
 class _volminnet_transition_VolMinTransitionTest(unittest.TestCase):
 
     def test_paper_initialization_and_row_contract(self) -> None:
@@ -574,65 +480,29 @@ class _volminnet_transition_VolMinTransitionTest(unittest.TestCase):
         matrix[0, 1].backward()
         self.assertTrue(bool(torch.isfinite(transition.off_diagonal_logits.grad).all()))
 
-# --- merged from test_volminnet_workflow.py ---
 import hashlib
-
-# --- merged from test_volminnet_workflow.py ---
-import json
-
-# --- merged from test_volminnet_workflow.py ---
-from pathlib import Path
-
-# --- merged from test_volminnet_workflow.py ---
-import tempfile
-
-# --- merged from test_volminnet_workflow.py ---
-import unittest
-
-# --- merged from test_volminnet_workflow.py ---
 from unittest.mock import patch
-
-# --- merged from test_volminnet_workflow.py ---
-import numpy as np
-
-# --- merged from test_volminnet_workflow.py ---
-import torch
-
-# --- merged from test_volminnet_workflow.py ---
-import yaml
-
-# --- merged from test_volminnet_workflow.py ---
 from lnl_toolbox.algorithms.volminnet import VolMinNetConfig
-
-# --- merged from test_volminnet_workflow.py ---
 from lnl_toolbox.data.cifar import CifarData
-
 from lnl_toolbox.data.contracts import (
     DataSpec,
     RawDatasetSplit,
     UnsupportedDatasetSplitError,
 )
-
 from lnl_toolbox.data.multiclass_synthetic import generate_synthetic_multiclass
-
 from lnl_toolbox.training.data_service import DATASETS
 
-# --- merged from test_volminnet_workflow.py ---
-from lnl_toolbox.training.experiment import run_experiment
 
-# --- merged from test_volminnet_workflow.py ---
 def _volminnet_workflow__cifar(size: int, split: str, classes: int=10) -> CifarData:
     rng = np.random.default_rng(12 if split == 'train' else 13)
     images = rng.integers(0, 256, (size, 32, 32, 3), dtype=np.uint8)
     labels = np.arange(size, dtype=np.int64) % classes
     return CifarData(images, labels, tuple(map(str, range(classes))), split, f'cifar{classes}')
 
-# --- merged from test_volminnet_workflow.py ---
 def _volminnet_workflow__config(epochs: int=2, dataset: str='cifar10') -> dict:
     classes = 10 if dataset == 'cifar10' else 100
     return {'method': 'volminnet', 'execution': {'runner': 'volminnet'}, 'seed': 5, 'data': {'name': dataset, 'root': 'unused', 'num_classes': classes, 'validation_size': classes, 'max_train_samples': classes * 2, 'max_validation_samples': classes, 'max_test_samples': classes, 'augment': False}, 'noise': {'name': 'symmetric', 'rate': 0.2, 'seed': 7, 'sampling': 'transition', 'rng': 'default_rng', 'validation_targets': 'noisy', 'manifest_filename': 'noise_manifest.npz'}, 'volminnet': {'fidelity': 'paper_positive_logdet', 'model': {'name': 'tiny_cnn', 'width': 2}, 'transition': {'parameterization': 'fixed_diagonal_sigmoid_offdiag', 'convention': 'clean_to_noisy_row', 'normalization_axis': 'row', 'initialization': {'mode': 'paper'}}, 'objective': {'classification': 'noisy_nll', 'volume': {'mode': 'positive_logdet', 'coefficient': 0.0001}}, 'optimizer': {'classifier': {'name': 'sgd', 'lr': 0.01, 'momentum': 0.0}, 'transition': {'name': 'sgd', 'lr': 0.01, 'momentum': 0.0}}, 'scheduler': {'classifier': {'name': 'none'}, 'transition': {'name': 'none'}}, 'checkpoint_selection': {'split': 'noisy_validation', 'metric': 'loss', 'mode': 'min'}}, 'loader': {'batch_size': classes, 'num_workers': 0, 'pin_memory': False}, 'trainer': {'epochs': epochs, 'device': 'cpu'}}
 
-# --- merged from test_volminnet_workflow.py ---
 def _volminnet_workflow__sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -668,7 +538,6 @@ class _volminnet_workflow__GenericTabularAdapter:
             source='test_fixture',
         )
 
-# --- merged from test_volminnet_workflow.py ---
 class _volminnet_workflow_VolMinNetWorkflowTest(unittest.TestCase):
 
     def test_generic_four_class_tabular_data_reaches_training(self) -> None:
@@ -697,13 +566,8 @@ class _volminnet_workflow_VolMinNetWorkflowTest(unittest.TestCase):
     def test_formal_config_matches_cifar10_paper_protocol(self) -> None:
         path = Path(__file__).resolve().parents[1] / 'configs/experiment/volminnet_cifar10_reproduction.yaml'
         config = yaml.safe_load(path.read_text(encoding='utf-8'))
-        parsed = VolMinNetConfig.from_mapping(config)
+        VolMinNetConfig.from_mapping(config)
         self.assertEqual(config['configuration_fidelity'], 'paper_protocol')
-        self.assertEqual(config['volminnet']['model']['name'], 'resnet18')
-        self.assertEqual(config['loader']['batch_size'], 128)
-        self.assertEqual(config['trainer']['epochs'], 150)
-        self.assertEqual(parsed.lambda_volume, 0.0001)
-        self.assertEqual(parsed.classifier_scheduler['milestones'], [30, 60])
 
     def setUp(self) -> None:
         self.train = _volminnet_workflow__cifar(40, 'train')

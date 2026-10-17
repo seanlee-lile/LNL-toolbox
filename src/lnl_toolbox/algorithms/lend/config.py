@@ -102,7 +102,7 @@ class LENDConfig:
         if empty != "skip_update":
             raise ValueError("LEND first version requires empty_batch: skip_update")
         training = _mapping(values.get("training"), "lend.training")
-        if set(training) != {"epochs"} or int(training["epochs"]) <= 0:
+        if "epochs" not in training or set(training) - {"epochs", "early_stopping"} or int(training["epochs"]) <= 0:
             raise ValueError("lend.training requires positive epochs")
         if "selector" in config or "target_provider" in config or "weight_provider" in config:
             raise ValueError("LEND cannot combine with generic sample-treatment providers")

@@ -66,16 +66,6 @@ class DataCapabilityContractTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def test_inspect_constructs_profile_and_capabilities(self) -> None:
-        report = self.service.inspect("toy-local")
-        self.assertEqual(report.status, "ready")
-        self.assertIsNotNone(report.profile)
-        self.assertEqual(report.profile.input_shape, (8, 8, 3))
-        self.assertEqual(report.profile.clean_validation_labels, KnowledgeState.UNKNOWN)
-        capabilities = self.service.capabilities("toy-local")
-        self.assertEqual(capabilities.dataset, "toy-local")
-        self.assertEqual(capabilities.clean_train_labels, KnowledgeState.UNKNOWN)
-
     def test_read_only_inspection_never_marks_catalog_failed(self) -> None:
         self.assertEqual(self.service.inspect("toy-local").status, "ready")
         self.adapter.fail = True

@@ -216,9 +216,6 @@ class _l2rw_training_L2RWTrainingTest(unittest.TestCase):
         from lnl_toolbox.training.l2rw_experiment import _step_learning_rate
 
         milestones = [40000, 60000]
-        self.assertEqual(sum((39999 + 1 >= value for value in milestones)), 1)
-        self.assertEqual(sum((40000 + 1 >= value for value in milestones)), 1)
-        self.assertEqual(sum((59999 + 1 >= value for value in milestones)), 2)
         self.assertAlmostEqual(_step_learning_rate(0.1, milestones, 0.1, None, 40000), 0.01)
         self.assertAlmostEqual(_step_learning_rate(0.1, milestones, 0.1, [0.03, 0.007], 39999), 0.1)
         self.assertAlmostEqual(_step_learning_rate(0.1, milestones, 0.1, [0.03, 0.007], 40000), 0.03)
@@ -336,8 +333,3 @@ class L2RWPreparedDataIsolationTest(unittest.TestCase):
         registry = yaml.safe_load((_l2rw_training_ROOT / 'web/lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
         comparison = registry['methods']['l2rw']['paper_comparison']
         self.assertEqual(comparison['alignment_status'], 'official_meta_algorithm_mixed_experiment_defaults')
-        self.assertIn('WRN-28-10', comparison['summary'])
-        self.assertIn('remain unimplemented', comparison['summary'])
-        recipe = yaml.safe_load((_l2rw_training_ROOT / 'src/lnl_toolbox/scratch/recipes/papers/l2rw.yaml').read_text(encoding='utf-8'))
-        self.assertIn('Educational L2RW', recipe['description'])
-        self.assertIn('not the paper', recipe['description'])

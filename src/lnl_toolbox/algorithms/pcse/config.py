@@ -26,6 +26,10 @@ def _exact_keys(
     owner: str,
     allowed: set[str],
 ) -> None:
+    if owner in {"pretraining_stage", "transition_stage", "ensemble_stage"}:
+        allowed = allowed | {"early_stopping"}
+        if "early_stopping" in value and not isinstance(value["early_stopping"], bool):
+            raise TypeError(owner + ".early_stopping must be a boolean")
     unexpected = sorted(set(value) - allowed)
     if unexpected:
         raise ValueError(f"{owner} has unsupported fields: {unexpected}")

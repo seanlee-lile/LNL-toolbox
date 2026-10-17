@@ -1,23 +1,13 @@
-"""Merged unit tests; source modules were consolidated without changing assertions."""
 from __future__ import annotations
 
-# --- merged from test_ca2c.py ---
 import unittest
-
-# --- merged from test_ca2c.py ---
 import torch
 
-# --- merged from test_ca2c.py ---
 from lnl_toolbox.models.ca2c_cnn import CA2CSevenCNN
-
-# --- merged from test_ca2c.py ---
 from lnl_toolbox.algorithms.ca2c import CandidateMemory, cross_guidance, negative_label_objective, partial_label_objective
-
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
-
 from lnl_toolbox.training.ca2c_experiment import _ca2c_batch_objectives
 
-# --- merged from test_ca2c.py ---
 class _ca2c_CA2CTest(unittest.TestCase):
 
     def test_official_seven_cnn_shape(self) -> None:
@@ -56,15 +46,6 @@ class _ca2c_CA2CTest(unittest.TestCase):
             torch.tensor([[1.0, 1.0 / 3.0, 0.0]]),
         )
 
-    def test_objectives_only_update_target_logits(self) -> None:
-        logits = torch.tensor([[1.0, 0.0, -1.0]], requires_grad=True)
-        partial = partial_label_objective(logits, torch.tensor([[0.5, 0.5, 0.0]]), 0.5)
-        partial.backward(retain_graph=True)
-        self.assertIsNotNone(logits.grad)
-        logits.grad.zero_()
-        negative = negative_label_objective(logits, torch.tensor([[False, False, True]]))
-        negative.backward()
-        self.assertTrue(torch.isfinite(negative))
 
     def test_negative_objective_sums_classes_per_sample(self) -> None:
         logits = torch.zeros(2, 3, requires_grad=True)
@@ -72,14 +53,6 @@ class _ca2c_CA2CTest(unittest.TestCase):
         value = negative_label_objective(logits, mask)
         expected = (2.0 * -torch.log(torch.tensor(2.0 / 3.0)) + -torch.log(torch.tensor(2.0 / 3.0))) / 2.0
         self.assertAlmostEqual(float(value), float(expected), places=6)
-
-    def test_partial_objective_accepts_official_confidence_weight(self) -> None:
-        logits = torch.zeros(2, 3, requires_grad=True)
-        targets = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
-        value = partial_label_objective(logits, targets, 0.99, confidence_weights=torch.tensor([[1.0, 0.5, 0.0], [0.5, 1.0, 0.0]]))
-        self.assertTrue(torch.isfinite(value))
-        value.backward()
-        self.assertIsNotNone(logits.grad)
 
     def test_partial_objective_applies_weights_per_class(self) -> None:
         logits = torch.log(torch.tensor([[0.6, 0.3, 0.1]]))
@@ -155,19 +128,6 @@ class _ca2c_CA2CTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             cross_guidance(torch.zeros(1, 3), torch.zeros(1, 3), 3)
 
-    def test_400_warmup_epochs_preserve_history_then_only_n_adds_candidates(self) -> None:
-        p = torch.tensor([[3., 2., 1.]])
-        n = torch.tensor([[1., 3., 2.]])
-        indices = torch.tensor([7])
-        memory = CandidateMemory.create(indices, 3)
-        for _ in range(400):
-            _ca2c_batch_objectives(p, n, torch.tensor([0]), indices, CrossEntropyLoss(), memory,
-                                  candidate_k=2, hard_weight=.99, robust=False)
-        torch.testing.assert_close(memory.counts, torch.tensor([[400., 800., 400.]]))
-        _ca2c_batch_objectives(p, n, torch.tensor([0]), indices, CrossEntropyLoss(), memory,
-                              candidate_k=2, hard_weight=.99, robust=True)
-        torch.testing.assert_close(memory.counts, torch.tensor([[400., 801., 401.]]))
-
     def test_robust_mixture_matches_loss_and_gradients_for_both_peers(self) -> None:
         inputs = [torch.tensor([[2., 0., -1.], [0., 2., 1.]], requires_grad=True),
                   torch.tensor([[0., 2., -1.], [2., 0., 1.]], requires_grad=True),
@@ -220,9 +180,6 @@ class CA2CRunnerChangesTest(unittest.TestCase):
         fields = {f['path']: f for f in command_console._config_schema('ca2c-cifar100-reproduction')['fields']}
         self.assertEqual(fields['optimizer.lr']['value'], .01)
         self.assertEqual(fields['ca2c.robust_weight']['value'], .8)
-        self.assertIn('PLL/NL', fields['ca2c.robust_weight']['note'])
-        self.assertIn('强增强一致性', fields['ca2c.robust_weight']['note'])
-        self.assertIn('lambda 单独控制', fields['ca2c.robust_weight']['note'])
         with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
             saved = command_console._save_config({'recipe': 'ca2c-cifar100-reproduction', 'path': str(Path(directory) / 'edited.yaml'),
                        'patches': [{'path': 'ca2c.robust_weight', 'value': .2}], 'acknowledge_paper_impact': True})

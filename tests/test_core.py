@@ -80,8 +80,6 @@ import numpy as np
 import torch
 
 # --- merged from test_foundations.py ---
-from lnl_toolbox.algorithms.multi_model import SmallLossPeerExchange, consistency_loss
-
 # --- merged from test_foundations.py ---
 from lnl_toolbox.core import CandidateLabelResult, ComplementaryLabelResult, PseudoLabelResult, SoftTargetResult
 
@@ -167,12 +165,6 @@ class _foundations_FoundationTest(unittest.TestCase):
     def test_target_results_reject_cross_device_fields(self) -> None:
         with self.assertRaisesRegex(ValueError, 'device'):
             SoftTargetResult(targets=torch.tensor([[0.8, 0.2], [0.1, 0.9]], device='cuda'), sample_indices=torch.tensor([4, 5]))
-
-    def test_peer_exchange_and_consistency(self) -> None:
-        losses = {'a': torch.tensor([0.1, 0.5]), 'b': torch.tensor([0.4, 0.2])}
-        result = SmallLossPeerExchange(0.5).exchange(losses, torch.tensor([4, 9]))
-        self.assertEqual(int(result.masks['a'].sum()), 1)
-        self.assertTrue(torch.isfinite(consistency_loss(torch.randn(2, 3), torch.randn(2, 3))))
 
     def test_transition_and_artifact_roundtrips(self) -> None:
         transition = TrainableTransitionModel(3)

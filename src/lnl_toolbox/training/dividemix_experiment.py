@@ -157,8 +157,16 @@ def run_dividemix_experiment(
             algorithm.state.phase = DivideMixPhase.CO_DIVIDE_FITTING
     (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8"); (run_dir / "environment.json").write_text(json.dumps(_environment(seed, device), indent=2), encoding="utf-8"); (run_dir / "noise_summary.json").write_text(json.dumps(noise_metadata, indent=2), encoding="utf-8")
     metrics_path = run_dir / "metrics.jsonl"
+    from lnl_toolbox.training.early_stopping import StageEarlyStopping
+    warmup_stopping = StageEarlyStopping(config, "dividemix.warmup.early_stopping", "validation_accuracy_ensemble", run_dir=run_dir)
+    main_stopping = StageEarlyStopping(config, "dividemix.training.early_stopping", "validation_accuracy_ensemble", run_dir=run_dir)
+    warmup_stopping.replay_file(metrics_path, event="warmup", completed=algorithm.state.warmup_completed_epochs)
+    main_stopping.replay_file(metrics_path, event="epoch", completed=algorithm.state.main_completed_epochs)
+    peers = {"model_a": model_a, "model_b": model_b, "optimizer_a": optimizer_a, "optimizer_b": optimizer_b}
     with metrics_path.open("a", encoding="utf-8") as metrics_file:
-        while algorithm.state.warmup_completed_epochs < method.warmup_epochs:
+        while (algorithm.state.phase == DivideMixPhase.WARMUP
+               and algorithm.state.warmup_completed_epochs < method.warmup_epochs
+               and not warmup_stopping.stopped):
             epoch = algorithm.state.warmup_completed_epochs; sums = {peer: {"objective": 0.0, "confidence_penalty": 0.0} for peer in ("a", "b")}; batches = 0
             warm_loader = prepared.subset_loader(
                 prepared.train_indices,
@@ -174,8 +182,16 @@ def run_dividemix_experiment(
             algorithm.step_schedulers(); algorithm.state.warmup_completed_epochs += 1
             if algorithm.state.warmup_completed_epochs == method.warmup_epochs: algorithm.state.transition(DivideMixPhase.CO_DIVIDE_FITTING)
             row = {"event": "warmup", "epoch": epoch + 1, "warmup_objective_a": sums["a"]["objective"] / batches, "warmup_objective_b": sums["b"]["objective"] / batches, "confidence_penalty_a": sums["a"]["confidence_penalty"] / batches, "confidence_penalty_b": sums["b"]["confidence_penalty"] / batches}
+            if warmup_stopping.enabled:
+                validation = _evaluate(algorithm, validation_loader, device)
+                row["validation_accuracy_ensemble"] = validation["accuracy_ensemble"]
+                warmup_stopping.observe(row, peers)
             metrics_file.write(json.dumps(row) + "\n"); metrics_file.flush(); _save_last(run_dir, algorithm, config, noise_metadata, best_epoch, best_metric, best_metrics)
-        while algorithm.state.main_completed_epochs < method.training_epochs:
+        if warmup_stopping.stopped and algorithm.state.phase == DivideMixPhase.WARMUP:
+            warmup_stopping.restore_best(peers)
+            algorithm.state.transition(DivideMixPhase.CO_DIVIDE_FITTING)
+            _save_last(run_dir, algorithm, config, noise_metadata, best_epoch, best_metric, best_metrics)
+        while algorithm.state.main_completed_epochs < method.training_epochs and not main_stopping.stopped:
             epoch = algorithm.state.main_completed_epochs
             artifact_path = run_dir / f"dividemix_epoch_{epoch + 1:04d}.npz"
             if algorithm.state.phase in {DivideMixPhase.CO_DIVIDE_FITTING, DivideMixPhase.EPOCH_READY}:
@@ -204,6 +220,7 @@ def run_dividemix_experiment(
             row = {"event": "epoch", "epoch": epoch + 1, "global_step_a": algorithm.state.optimizer_steps_a, "global_step_b": algorithm.state.optimizer_steps_b, "validation_accuracy_a": validation["accuracy_a"], "validation_accuracy_b": validation["accuracy_b"], "validation_accuracy_ensemble": validation["accuracy_ensemble"], "artifact_hash": artifact_hash, **{f"train_a_{k}": v for k, v in metrics_a.items()}, **{f"train_b_{k}": v for k, v in metrics_b.items()}}
             metrics_file.write(json.dumps(row) + "\n"); metrics_file.flush(); _save_last(run_dir, algorithm, config, noise_metadata, best_epoch, best_metric, best_metrics)
             if improved: atomic_save(_checkpoint_payload(algorithm, config, noise_metadata, best_epoch, best_metric, best_metrics) | {"checkpoint_role": "paired_best"}, run_dir / "best.pt")
+            main_stopping.update(row)
         algorithm.state.transition(DivideMixPhase.COMPLETED); _save_last(run_dir, algorithm, config, noise_metadata, best_epoch, best_metric, best_metrics)
         best = read_checkpoint(run_dir / "best.pt", "cpu"); algorithm.model_a.load_state_dict(best["algorithm"]["model"]["a"]); algorithm.model_b.load_state_dict(best["algorithm"]["model"]["b"]); test = _evaluate(algorithm, test_loader, device)
         final = {"event": "final", "completed_warmup_epochs": algorithm.state.warmup_completed_epochs, "completed_epochs": algorithm.state.main_completed_epochs, "global_step_a": algorithm.state.optimizer_steps_a, "global_step_b": algorithm.state.optimizer_steps_b, "best_epoch": best_epoch + 1, "best_validation_accuracy_ensemble": best_metric, "test_accuracy_a": test["accuracy_a"], "test_accuracy_b": test["accuracy_b"], "test_accuracy_ensemble": test["accuracy_ensemble"], "ensemble": method.ensemble, "co_divide_artifact_hash": algorithm.state.current_artifact_hash, "noise": noise_metadata}

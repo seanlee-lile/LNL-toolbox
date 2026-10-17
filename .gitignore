@@ -78,3 +78,7 @@ papers/reading-standard.md
 
 # Local draft of the GitHub usage documentation
 /github-how-to-use/
+
+# Local browser-driven paper acceptance scripts and their training output
+/local-web-small-test/
+/artifact/small-test/

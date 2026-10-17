@@ -253,10 +253,13 @@ class UPMWorkflow:
             generator.manual_seed(int(self.config.get("seed", 1)) + offset + epoch)
 
     def train_stage1(self, *, max_epochs: int | None = None) -> None:
+        from lnl_toolbox.training.early_stopping import StageEarlyStopping
+        stopping = StageEarlyStopping(self.config, "upm.stage1.early_stopping", "noisy_validation_accuracy", run_dir=self.run_dir)
+        stopping.replay_file(self.run_dir / "metrics.jsonl", event="stage1_epoch", completed=self.state.stage1_completed_epochs, zero_based=True)
         target = self.method_config.stage1.epochs
         if max_epochs is not None:
             target = min(target, self.state.stage1_completed_epochs + int(max_epochs))
-        while self.state.stage1_completed_epochs < target:
+        while self.state.stage1_completed_epochs < target and not stopping.stopped:
             epoch = self.state.stage1_completed_epochs
             self._seed_loader(epoch, 0)
             train = _train_epoch(self.stage1_algorithm, self.train_loader, self.stage1_run_state, epoch)
@@ -278,8 +281,9 @@ class UPMWorkflow:
             self._append({"event": "stage1_epoch", "epoch": epoch, **train,
                           "noisy_validation_loss": validation["loss"],
                           "noisy_validation_accuracy": validation["accuracy"]})
+            stopping.update({"epoch": epoch, "noisy_validation_accuracy": validation["accuracy"]})
             self._save_last()
-        if self.state.stage1_completed_epochs < self.method_config.stage1.epochs:
+        if self.state.stage1_completed_epochs < self.method_config.stage1.epochs and not stopping.stopped:
             return
         best = read_checkpoint(self.stage1_best_path, self.device)
         self.stage1_model.load_state_dict(best["model"])
@@ -342,12 +346,15 @@ class UPMWorkflow:
             self._save_last()
 
     def train_main(self, *, max_epochs: int | None = None) -> None:
+        from lnl_toolbox.training.early_stopping import StageEarlyStopping
+        stopping = StageEarlyStopping(self.config, "upm.main.early_stopping", "noisy_validation_accuracy", run_dir=self.run_dir)
+        stopping.replay_file(self.run_dir / "metrics.jsonl", event="main_epoch", completed=self.state.main_completed_epochs, zero_based=True)
         self._prepare_main()
         assert self.main_algorithm is not None
         target = self.method_config.main.epochs
         if max_epochs is not None:
             target = min(target, self.state.main_completed_epochs + int(max_epochs))
-        while self.state.main_completed_epochs < target:
+        while self.state.main_completed_epochs < target and not stopping.stopped:
             epoch = self.state.main_completed_epochs
             self._seed_loader(epoch, 100000)
             train = _train_epoch(self.main_algorithm, self.train_loader, self.main_run_state, epoch)
@@ -380,7 +387,9 @@ class UPMWorkflow:
                 "eta_update_count": float(counts.sum().item()),
             })
             _save_eta(self.run_dir / "eta_last.npz", self.eta_state)
+            stopping.update({"epoch": epoch, "noisy_validation_accuracy": validation["accuracy"]})
             self._save_last()
+        self.main_stage_early_stopped = stopping.stopped
 
     def complete(self) -> None:
         if self.best_main_model_state is None or self.best_eta_state is None:
@@ -419,6 +428,11 @@ class UPMWorkflow:
 
     def run(self) -> None:
         if self.state.phase is UPMPhase.COMPLETED:
+            from lnl_toolbox.training.early_stopping import StageEarlyStopping
+            stopping = StageEarlyStopping(self.config, "upm.main.early_stopping", "noisy_validation_accuracy")
+            stopping.replay_file(self.run_dir / "metrics.jsonl", event="main_epoch", completed=self.state.main_completed_epochs, zero_based=True)
+            if stopping.stopped:
+                return
             if self.state.main_completed_epochs >= self.method_config.main.epochs:
                 return
             self.state.phase = UPMPhase.MAIN_TRAINING
@@ -428,7 +442,7 @@ class UPMWorkflow:
             self.publish_psi()
         if self.state.phase in {UPMPhase.PSI_READY, UPMPhase.MAIN_TRAINING}:
             self.train_main()
-            if self.state.main_completed_epochs >= self.method_config.main.epochs:
+            if self.state.main_completed_epochs >= self.method_config.main.epochs or getattr(self, "main_stage_early_stopped", False):
                 self.complete()
 
     def resume(self, checkpoint: str | Path) -> None:

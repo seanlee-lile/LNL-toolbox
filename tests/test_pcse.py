@@ -1,62 +1,26 @@
-"""Merged unit tests; source modules were consolidated without changing assertions."""
 from __future__ import annotations
-
-# --- merged from test_pcse_pretrained_adapter.py ---
 import os
-
-# --- merged from test_pcse_pretrained_adapter.py ---
 from pathlib import Path
-
-# --- merged from test_pcse_pretrained_adapter.py ---
 import tempfile
-
-# --- merged from test_pcse_pretrained_adapter.py ---
 import unittest
-
-# --- merged from test_pcse_pretrained_adapter.py ---
 from unittest import mock
-
-# --- merged from test_pcse_pretrained_adapter.py ---
 import numpy as np
-
-# --- merged from test_pcse_pretrained_adapter.py ---
 import torch
-
-# --- merged from test_pcse_pretrained_adapter.py ---
 from lnl_toolbox.algorithms.pcse.config import PCSEFeatureLayerConfig
-
-# --- merged from test_pcse_pretrained_adapter.py ---
 from lnl_toolbox.algorithms.pcse.features import collect_pcse_features
-
-# --- merged from test_pcse_pretrained_adapter.py ---
 from lnl_toolbox.data.noisy_dataset import NoisyTargetDataset
 from lnl_toolbox.data.contracts import InputSpec
-
-# --- merged from test_pcse_pretrained_adapter.py ---
 from lnl_toolbox.data.torch_cifar import TorchCifarDataset
-
-# --- merged from test_pcse_pretrained_adapter.py ---
 from lnl_toolbox.noise.generators import generate_symmetric
-
-# --- merged from test_pcse_pretrained_adapter.py ---
 from lnl_toolbox.noise.manifest import fingerprint_labels
-
-# --- merged from test_pcse_pretrained_adapter.py ---
 from lnl_toolbox.training.checkpoint import atomic_save
-
-# --- merged from test_pcse_pretrained_adapter.py ---
 from lnl_toolbox.training.experiment import build_model
-
-# --- merged from test_pcse_pretrained_adapter.py ---
 from lnl_toolbox.training.noisy_labels import file_sha256
-
-# --- merged from test_pcse_pretrained_adapter.py ---
 from lnl_toolbox.training.pcse_pretrained import (
     load_pretrained_classifier_source,
     load_upm_main_best_source,
 )
 
-# --- merged from test_pcse_pretrained_adapter.py ---
 class _pcse_pretrained_adapter__CifarFixture:
 
     def __init__(self, size: int) -> None:
@@ -66,7 +30,6 @@ class _pcse_pretrained_adapter__CifarFixture:
     def __len__(self) -> int:
         return int(self.labels.size)
 
-# --- merged from test_pcse_pretrained_adapter.py ---
 def _pcse_pretrained_adapter__source(directory: Path) -> tuple[dict, torch.nn.Module]:
     model_config = {'name': 'resnet18', 'base_width': 16}
     model = build_model(model_config, 10)
@@ -146,7 +109,6 @@ def _pcse_pretrained_adapter__standard_source(
     }
     return source_config, model
 
-# --- merged from test_pcse_pretrained_adapter.py ---
 class _pcse_pretrained_adapter_PCSEPretrainedAdapterTest(unittest.TestCase):
 
     def test_supported_standard_classifier_sources_are_loaded_strictly(self) -> None:
@@ -261,28 +223,11 @@ class _pcse_pretrained_adapter_PCSEPretrainedAdapterTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'model logits output'):
                 collect_pcse_features(model, loader, 'cpu', dataset='cifar10', split='train', layers=(PCSEFeatureLayerConfig('classifier'), PCSEFeatureLayerConfig('layer4')))
 
-# --- merged from test_pcse_statistics.py ---
-import unittest
 
-# --- merged from test_pcse_statistics.py ---
-from unittest import mock
-
-# --- merged from test_pcse_statistics.py ---
-import numpy as np
-
-# --- merged from test_pcse_statistics.py ---
-import torch
-
-# --- merged from test_pcse_statistics.py ---
 from lnl_toolbox.algorithms.pcse.gda import GDALayer, fit_ensemble_weights, fit_gda_layers
-
-# --- merged from test_pcse_statistics.py ---
 from lnl_toolbox.algorithms.pcse.statistics import PCSELayerStatistics, PCSEStatistics, build_coefficient_matrix, estimate_pcse_statistics, recover_clean_priors
-
-# --- merged from test_pcse_statistics.py ---
 from lnl_toolbox.training.snapshots import FeatureSnapshot
 
-# --- merged from test_pcse_statistics.py ---
 def _pcse_statistics__snapshots() -> tuple[FeatureSnapshot, FeatureSnapshot]:
     features = np.array([[-2.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, 2.0], [2.0, 2.0], [3.0, 3.0]], dtype=np.float64)
     targets = np.repeat(np.arange(3, dtype=np.int64), 2)
@@ -291,7 +236,6 @@ def _pcse_statistics__snapshots() -> tuple[FeatureSnapshot, FeatureSnapshot]:
     second = FeatureSnapshot(features * np.array([2.0, 0.5]), targets, indices, 'synthetic', 'train:hidden2')
     return (first, second)
 
-# --- merged from test_pcse_statistics.py ---
 class _pcse_statistics_PCSEStatisticsTest(unittest.TestCase):
 
     def test_identity_transition_recovers_empirical_statistics(self) -> None:
@@ -401,86 +345,39 @@ class _pcse_statistics_PCSEStatisticsTest(unittest.TestCase):
         self.assertAlmostEqual(float(weights.sum().item()), 1.0)
         self.assertTrue(all(np.isfinite(losses)))
 
-# --- merged from test_pcse_volmin.py ---
 from copy import deepcopy
-
-# --- merged from test_pcse_volmin.py ---
 import json
-
-# --- merged from test_pcse_volmin.py ---
-from pathlib import Path
-
-# --- merged from test_pcse_volmin.py ---
-import tempfile
-
-# --- merged from test_pcse_volmin.py ---
-import unittest
-
-# --- merged from test_pcse_volmin.py ---
-from unittest import mock
-
-# --- merged from test_pcse_volmin.py ---
-import numpy as np
-
-# --- merged from test_pcse_volmin.py ---
-import torch
-
-# --- merged from test_pcse_volmin.py ---
 from torch import nn
-
-# --- merged from test_pcse_volmin.py ---
 from torch.utils.data import DataLoader
-
-# --- merged from test_pcse_volmin.py ---
 import yaml
-
-# --- merged from test_pcse_volmin.py ---
 from lnl_toolbox.algorithms.pcse import PCSEAlgorithm, PCSEPhase
-
-# --- merged from test_pcse_volmin.py ---
 from lnl_toolbox.algorithms.pcse.volmin import DiagonallyDominantTransition, build_volmin_optimizer, validate_trainable_transition, volmin_objective
-
-# --- merged from test_pcse_volmin.py ---
 from lnl_toolbox.data.multiclass_synthetic import MulticlassTensorDataset, generate_synthetic_multiclass
-
 from lnl_toolbox.data.contracts import (
     DataSpec,
     RawDatasetSplit,
     UnsupportedDatasetSplitError,
 )
-
 from lnl_toolbox.training.data_service import DATASETS
-
-# --- merged from test_pcse_volmin.py ---
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
-
-# --- merged from test_pcse_volmin.py ---
 from lnl_toolbox.noise.transition import TransitionArtifact
-
-# --- merged from test_pcse_volmin.py ---
 from lnl_toolbox.training.checkpoint import read_checkpoint
-
-# --- merged from test_pcse_volmin.py ---
 from lnl_toolbox.training.pcse_experiment import (
     _PCSEMultilayerPerceptron,
     _build_pcse_pretraining_model,
     run_pcse_experiment,
 )
 
-# --- merged from test_pcse_volmin.py ---
 _pcse_volmin_ROOT = Path(__file__).resolve().parents[1]
 
-# --- merged from test_pcse_volmin.py ---
 _pcse_volmin_VOLMIN_CONFIG = _pcse_volmin_ROOT / 'configs/experiment/pcse_multiclass_volmin_smoke.yaml'
 
-# --- merged from test_pcse_volmin.py ---
 def _pcse_volmin__config() -> dict:
     config = yaml.safe_load(_pcse_volmin_VOLMIN_CONFIG.read_text(encoding='utf-8'))
     config['transition_stage']['parameterization'] = {
         'name': 'sigmoid_off_diagonal', 'initial_weight': -3., 'seed': 3}
     return config
 
-# --- merged from test_pcse_volmin.py ---
 def _pcse_volmin__algorithm(run_dir: Path) -> PCSEAlgorithm:
     config = _pcse_volmin__config()
     config['pretraining_stage']['epochs'] = 1
@@ -496,7 +393,6 @@ def _pcse_volmin__algorithm(run_dir: Path) -> PCSEAlgorithm:
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
     return PCSEAlgorithm(model=model, optimizer=optimizer, scheduler=None, loss=CrossEntropyLoss(), train_loader=train_loader, statistics_loader=train_loader, noisy_validation_loader=validation_loader, clean_test_loader=DataLoader(MulticlassTensorDataset(test), batch_size=30, shuffle=False), device=torch.device('cpu'), run_dir=run_dir, config=config, dataset='synthetic_multiclass', num_classes=3, noise_metadata={})
 
-# --- merged from test_pcse_volmin.py ---
 class _pcse_volmin_PCSEVolMinPrimitiveTest(unittest.TestCase):
 
     def test_parameterization_is_safe_deterministic_and_row_stochastic(self) -> None:
@@ -547,7 +443,6 @@ class _pcse_volmin_PCSEVolMinPrimitiveTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'diagonally dominant|determinant'):
             validate_trainable_transition(negative_sign, determinant_tolerance=1e-08, condition_limit=1000000.0)
 
-# --- merged from test_pcse_volmin.py ---
 class _pcse_volmin_PCSEVolMinWorkflowTest(unittest.TestCase):
 
     def test_transition_training_interruption_resume_and_model_binding(self) -> None:
@@ -624,71 +519,19 @@ class _pcse_volmin_PCSEVolMinWorkflowTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'method settings'):
                 run_pcse_experiment(mismatch, resume=run_dir / 'last.pt')
 
-# --- merged from test_pcse_workflow.py ---
-from copy import deepcopy
 
-# --- merged from test_pcse_workflow.py ---
-import json
-
-# --- merged from test_pcse_workflow.py ---
-from pathlib import Path
-
-# --- merged from test_pcse_workflow.py ---
-import tempfile
-
-# --- merged from test_pcse_workflow.py ---
-import unittest
-
-# --- merged from test_pcse_workflow.py ---
-from unittest import mock
-
-# --- merged from test_pcse_workflow.py ---
-import numpy as np
-
-# --- merged from test_pcse_workflow.py ---
-import torch
-
-# --- merged from test_pcse_workflow.py ---
-from torch import nn
-
-# --- merged from test_pcse_workflow.py ---
-from torch.utils.data import DataLoader, Dataset
-
-# --- merged from test_pcse_workflow.py ---
-import yaml
-
-# --- merged from test_pcse_workflow.py ---
-from lnl_toolbox.algorithms.pcse import PCSEAlgorithm, PCSEConfig, PCSEPhase, PCSEState
-
-# --- merged from test_pcse_workflow.py ---
-from lnl_toolbox.algorithms.pcse.config import PCSEFeatureLayerConfig
-
-# --- merged from test_pcse_workflow.py ---
-from lnl_toolbox.algorithms.pcse.features import collect_pcse_features
-
-# --- merged from test_pcse_workflow.py ---
+from torch.utils.data import Dataset
+from lnl_toolbox.algorithms.pcse import PCSEConfig, PCSEState
 from lnl_toolbox.algorithms.pcse.artifacts import PCSEEnsembleArtifact, persist_npz_atomically
 
-# --- merged from test_pcse_workflow.py ---
-from lnl_toolbox.data.multiclass_synthetic import MulticlassTensorDataset, generate_synthetic_multiclass
 
-# --- merged from test_pcse_workflow.py ---
-from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
-
-# --- merged from test_pcse_workflow.py ---
-from lnl_toolbox.training.pcse_experiment import _PCSEMultilayerPerceptron, run_pcse_experiment
-
-# --- merged from test_pcse_workflow.py ---
 _pcse_workflow_ROOT = Path(__file__).resolve().parents[1]
 
-# --- merged from test_pcse_workflow.py ---
 _pcse_workflow_SMOKE_CONFIG = _pcse_workflow_ROOT / 'configs/experiment/pcse_multiclass_smoke.yaml'
 
-# --- merged from test_pcse_workflow.py ---
 def _pcse_workflow__load_smoke_config() -> dict:
     return yaml.safe_load(_pcse_workflow_SMOKE_CONFIG.read_text(encoding='utf-8'))
 
-# --- merged from test_pcse_workflow.py ---
 def _pcse_workflow__pretraining_algorithm(run_dir: Path, *, pretraining_epochs: int=2, fixed_model: bool=False) -> PCSEAlgorithm:
     config = _pcse_workflow__load_smoke_config()
     config['pretraining_stage']['epochs'] = pretraining_epochs
@@ -705,7 +548,6 @@ def _pcse_workflow__pretraining_algorithm(run_dir: Path, *, pretraining_epochs: 
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.0 if fixed_model else 0.01)
     return PCSEAlgorithm(model=model, optimizer=optimizer, scheduler=None, loss=CrossEntropyLoss(), train_loader=train_loader, statistics_loader=train_loader, noisy_validation_loader=validation_loader, clean_test_loader=DataLoader(test_set, batch_size=30, shuffle=False), device=torch.device('cpu'), run_dir=run_dir, config=config, dataset='synthetic_multiclass', num_classes=3, noise_metadata={})
 
-# --- merged from test_pcse_workflow.py ---
 class _pcse_workflow__FeatureDataset(Dataset):
 
     def __init__(self, clean_values: torch.Tensor) -> None:
@@ -720,7 +562,6 @@ class _pcse_workflow__FeatureDataset(Dataset):
     def __getitem__(self, item: int):
         return {'input': self.inputs[item], 'target': self.targets[item], 'index': self.indices[item], 'clean_target': self.clean_values[item]}
 
-# --- merged from test_pcse_workflow.py ---
 class _pcse_workflow__HookModel(nn.Module):
 
     def __init__(self) -> None:
@@ -735,7 +576,6 @@ class _pcse_workflow__HookModel(nn.Module):
     def forward(self, values: torch.Tensor) -> torch.Tensor:
         return self.classifier(self.hidden2(self.hidden1(values)))
 
-# --- merged from test_pcse_workflow.py ---
 class _pcse_workflow__FixedPCSEModel(nn.Module):
     """Near-oracle noisy-posterior fixture without reading clean targets."""
 
@@ -785,7 +625,6 @@ class _pcse_workflow__GenericTabularAdapter:
             source='test_fixture',
         )
 
-# --- merged from test_pcse_workflow.py ---
 class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
 
     def test_clean_training_keeps_labels_and_records_zero_corruption(self) -> None:

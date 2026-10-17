@@ -705,6 +705,8 @@ def run_supervised_experiment(
         )
     else:
         preparation_options = {}
+        if pipeline.early_stopping:
+            preparation_options["validation_loader"] = validation_loader
         if estimated_correction:
             from itertools import chain
 
@@ -759,7 +761,13 @@ def run_supervised_experiment(
     )
     algorithm.setup(ExperimentContext(run_dir, config, seed))
     state = RunState(phase="train")
-    early_stopping = EarlyStopping.from_config(config.get("early_stopping"))
+    from lnl_toolbox.training.early_stopping import StageEarlyStopping
+    stop_on_loss = evaluation_config.get("selection_metric", "accuracy") == "loss"
+    stage_stopping = StageEarlyStopping(config, "trainer.early_stopping",
+                                       "validation_loss" if stop_on_loss else "validation_accuracy",
+                                       mode="min" if stop_on_loss else "max", run_dir=run_dir)
+    early_stopping = (None if "early_stopping" in config.get("trainer", {})
+                      else EarlyStopping.from_config(config.get("early_stopping")))
     completed_epoch = -1
     last_completed_epoch = completed_epoch
     best_epoch = -1
@@ -819,6 +827,25 @@ def run_supervised_experiment(
     progress_enabled = bool(progress_config.get("enabled", False))
     progress_interval = int(progress_config.get("update_interval", 20))
     curves_enabled = bool(progress_config.get("curves", progress_enabled))
+    stage_stopping.replay(curve_rows, completed=completed_epoch + 1)
+    consumer_config = (config.get("pipeline") or {}).get("objective_consumer") or {}
+    dss_warmup = int(consumer_config.get("warmup_epochs", 0)) if consumer_config.get("name") == "dss" else 0
+    warmup_stopping = StageEarlyStopping(config, "pipeline.objective_consumer.warmup_early_stopping",
+                                        "validation_accuracy", run_dir=run_dir)
+    if dss_warmup:
+        warmup_stopping.replay([row for row in curve_rows if row.get("phase", "warmup" if row["epoch"] <= dss_warmup else "main") == "warmup"])
+        stage_stopping = StageEarlyStopping(config, "trainer.early_stopping",
+                                           "validation_loss" if stop_on_loss else "validation_accuracy",
+                                           mode="min" if stop_on_loss else "max", run_dir=run_dir)
+        stage_stopping.replay([row for row in curve_rows if row.get("phase", "warmup" if row["epoch"] <= dss_warmup else "main") == "main"])
+    if stage_stopping.enabled and selection_split != "validation":
+        raise ValueError("trainer.early_stopping requires validation model selection")
+    if dss_warmup and warmup_stopping.stopped:
+        selector_state = pipeline.objective_consumer.selector
+        if selector_state.current_epoch + 1 < dss_warmup and not getattr(selector_state, "warmup_finished", False):
+            warmup_stopping.restore_best({"model": model, "optimizer": optimizer, "scheduler": scheduler})
+            selector_state.warmup_finished = True
+            selector_state.on_cycle_end(selector_state.current_epoch)
     with metrics_path.open("a", encoding="utf-8") as metrics_file:
         if compatibility_warnings:
             metrics_file.write(json.dumps({
@@ -827,6 +854,13 @@ def run_supervised_experiment(
             }) + "\n")
             metrics_file.flush()
         for epoch in range(completed_epoch + 1, epochs):
+            if stage_stopping.stopped:
+                break
+            dss_in_warmup = bool(dss_warmup and epoch < dss_warmup and not warmup_stopping.stopped)
+            if dss_warmup and not dss_in_warmup:
+                main_rows = [item for item in curve_rows if item.get("phase", "warmup" if item["epoch"] <= dss_warmup else "main") == "main"]
+                if len(main_rows) >= epochs - dss_warmup:
+                    break
             if pipeline.pretraining_protocol == "loss_correction" or report_checkpoint == "last":
                 train_loader = prepared.loader(DataRole.TRAIN, epoch=epoch)
             state.cycle = epoch
@@ -898,6 +932,8 @@ def run_supervised_experiment(
                 "selection_loss": selection["loss"],
                 "selection_accuracy": selection["accuracy"],
             }
+            if dss_warmup:
+                row["phase"] = "warmup" if dss_in_warmup else "main"
             if validation is not None:
                 row.update({
                     "validation_loss": validation["loss"],
@@ -913,7 +949,7 @@ def run_supervised_experiment(
                 for key, value in row.items()
                 if isinstance(value, float)
             }
-            improved = report_checkpoint == "best" and (
+            improved = (report_checkpoint == "best" or stage_stopping.enabled) and (
                 selection["loss"] < best_selection_loss if selection_metric == "loss"
                 else selection["accuracy"] > best_selection_accuracy
             )
@@ -975,11 +1011,24 @@ def run_supervised_experiment(
                     curve_rows_for_svg, run_dir / "training_curves.svg"
                 )
             print(json.dumps(row), flush=True)
-            if early_stopping is not None and early_stopping.stopped:
+            active_stopping = warmup_stopping if dss_in_warmup else stage_stopping
+            if active_stopping.observe(row, {"model": model, "optimizer": optimizer, "scheduler": scheduler}):
+                if dss_in_warmup:
+                    selector_state = pipeline.objective_consumer.selector
+                    if epoch + 1 < dss_warmup:
+                        selector_state.warmup_finished = True
+                        selector_state.on_cycle_end(epoch)
+                    pipeline.state.metadata["warmup_early_stopped"] = True
+                    continue
+                state.stopped = True
+                break
+            if early_stopping is not None and early_stopping.stopped and not dss_in_warmup:
                 state.stopped = True
                 break
 
-        best_path = run_dir / ("last.pt" if report_checkpoint == "last" else "best.pt")
+        best_path = run_dir / ("last.pt" if report_checkpoint == "last" and not stage_stopping.enabled else "best.pt")
+        if stage_stopping.enabled and stage_stopping.counter.best is not None:
+            best_path = run_dir / (stage_stopping.path.replace(".", "_") + "_best.pt")
         if not best_path.is_file():
             raise RuntimeError(
                 f"No {report_checkpoint} checkpoint exists; increase the total epoch target when resuming"
@@ -1006,7 +1055,7 @@ def run_supervised_experiment(
             "test_loss": test["loss"],
             "test_accuracy": test["accuracy"],
         }
-        if report_checkpoint == "last":
+        if report_checkpoint == "last" and not stage_stopping.enabled:
             final.update({
                 "report_epoch": last_completed_epoch + 1,
                 "best_epoch": None, "best_validation_accuracy": None,

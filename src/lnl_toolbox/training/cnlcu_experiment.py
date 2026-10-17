@@ -154,7 +154,12 @@ def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None =
     corruption = {int(i): bool(c) for i, c in zip(manifest.global_indices, [] if manifest.clean_targets is None else manifest.corruption_mask)}
     metrics_path = run_dir / "metrics.jsonl"
     with metrics_path.open("a", encoding="utf-8") as metrics_file:
+        from lnl_toolbox.training.early_stopping import StageEarlyStopping
+        stopping = StageEarlyStopping(config, "trainer.early_stopping", "mean_peer_accuracy", run_dir=run_dir)
+        stopping.replay_file(metrics_path, event="epoch", completed=completed_epoch + 1)
         for epoch in range(completed_epoch + 1, epochs):
+            if stopping.stopped:
+                break
             for optimizer in (optimizer_a, optimizer_b):
                 _apply_epoch_beta1(optimizer, config.get("scheduler"), epoch)
             state.cycle = epoch; algorithm.on_cycle_start(state)
@@ -235,11 +240,13 @@ def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None =
             if improved:
                 save_checkpoint(run_dir / "best.pt", algorithm, state, epoch, config, scheduler=None, **kwargs)
             metrics_file.write(json.dumps(row) + "\n"); metrics_file.flush(); print(json.dumps(row), flush=True)
+            if stopping.update(row):
+                break
         best_payload = read_checkpoint(run_dir / "best.pt", device)
         algorithm.model_a.load_state_dict(best_payload["model"]["a"])
         algorithm.model_b.load_state_dict(best_payload["model"]["b"])
         test = _evaluate_peers(algorithm, test_loader, criterion, device)
-        final = {"event": "final", "completed_epochs": epochs, "global_step": state.step,
+        final = {"event": "final", "completed_epochs": state.cycle + 1, "global_step": state.step,
                  "best_epoch": best_epoch + 1, "best_validation_accuracy_a": best_metrics["accuracy_a"],
                  "best_validation_accuracy_b": best_metrics["accuracy_b"],
                  "best_mean_peer_accuracy": best_metrics["mean_peer_accuracy"],

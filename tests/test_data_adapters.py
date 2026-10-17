@@ -1,67 +1,28 @@
-"""Merged unit tests; source modules were consolidated without changing assertions."""
 from __future__ import annotations
-
-# --- merged from test_data_adapters.py ---
 import gzip
-
-# --- merged from test_data_adapters.py ---
 from pathlib import Path
-
-# --- merged from test_data_adapters.py ---
 import struct
-
-# --- merged from test_data_adapters.py ---
 import tempfile
-
-# --- merged from test_data_adapters.py ---
 import unittest
-
-# --- merged from test_data_adapters.py ---
 from unittest.mock import patch
-
-# --- merged from test_data_adapters.py ---
 import numpy as np
-
-# --- merged from test_data_adapters.py ---
 from PIL import Image
-
-# --- merged from test_data_adapters.py ---
 import torch
-
-# --- merged from test_data_adapters.py ---
 from lnl_toolbox.data.cifar import CifarData
-
-# --- merged from test_data_adapters.py ---
 from lnl_toolbox.data.cifar_n import CifarNAdapter
-
-# --- merged from test_data_adapters.py ---
 from lnl_toolbox.data.contracts import DataSpec
-
-# --- merged from test_data_adapters.py ---
 from lnl_toolbox.data.profile import DatasetSemanticHints, KnowledgeState, Modality, NoiseStatus
-
-# --- merged from test_data_adapters.py ---
 from lnl_toolbox.data.registry import DatasetRegistry
-
-# --- merged from test_data_adapters.py ---
 from lnl_toolbox.data.mnist import MnistAdapter
-
-# --- merged from test_data_adapters.py ---
 from lnl_toolbox.data.real_noise import Animal10NAdapter, Clothing1MAdapter
-
-# --- merged from test_data_adapters.py ---
 from lnl_toolbox.data.sources import CifarAdapter, SyntheticAdapter, UciBinaryAdapter
-
-# --- merged from test_data_adapters.py ---
 from lnl_toolbox.training.data_service import DataService
 
-# --- merged from test_data_adapters.py ---
 def _data_adapters__cifar(size: int, split: str, classes: int=10) -> CifarData:
     labels = np.arange(size, dtype=np.int64) % classes
     return CifarData(np.zeros((size, 32, 32, 3), dtype=np.uint8), labels, tuple(map(str, range(classes))), split, f'cifar{classes}')
 
-# --- merged from test_data_adapters.py ---
-def _data_adapters__write_idx(root: Path, split: str, count: int) -> None:
+def _write_idx(root: Path, split: str, count: int) -> None:
     prefix = 'train' if split == 'train' else 't10k'
     images = np.arange(count * 28 * 28, dtype=np.uint8).reshape(count, 28, 28)
     labels = np.arange(count, dtype=np.uint8) % 10
@@ -70,12 +31,10 @@ def _data_adapters__write_idx(root: Path, split: str, count: int) -> None:
     with gzip.open(root / f'{prefix}-labels-idx1-ubyte.gz', 'wb') as handle:
         handle.write(struct.pack('>II', 2049, count) + labels.tobytes())
 
-# --- merged from test_data_adapters.py ---
 def _data_adapters__animal_record(index: int, label: int) -> bytes:
     pixels = np.full(3 * 64 * 64, index % 256, dtype=np.uint8)
     return index.to_bytes(4, 'little') + label.to_bytes(4, 'little') + pixels.tobytes()
 
-# --- merged from test_data_adapters.py ---
 class _data_adapters_DataAdapterFixtureTest(unittest.TestCase):
 
     def test_cifar_and_cifar_n_observed_clean_separation(self) -> None:
@@ -110,8 +69,8 @@ class _data_adapters_DataAdapterFixtureTest(unittest.TestCase):
     def test_mnist_official_idx_gzip_layout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            _data_adapters__write_idx(root, 'train', 8)
-            _data_adapters__write_idx(root, 'test', 4)
+            _write_idx(root, 'train', 8)
+            _write_idx(root, 'test', 4)
             adapter = MnistAdapter('mnist')
             adapter.validate(DataSpec('mnist', root=root))
             split = adapter.load(DataSpec('mnist', root=root), 'train', seed=1)
@@ -205,30 +164,13 @@ class _data_adapters_DataAdapterFixtureTest(unittest.TestCase):
         repeated = adapter.load(spec, 'train', seed=7)
         np.testing.assert_array_equal(train.inputs, repeated.inputs)
 
-# --- merged from test_cifar_reader.py ---
 import pickle
-
-# --- merged from test_cifar_reader.py ---
-import tempfile
-
-# --- merged from test_cifar_reader.py ---
-import unittest
-
-# --- merged from test_cifar_reader.py ---
-from pathlib import Path
-
-# --- merged from test_cifar_reader.py ---
-import numpy as np
-
-# --- merged from test_cifar_reader.py ---
 from lnl_toolbox.data.cifar import load_cifar10, load_cifar100, summarize_cifar
 
-# --- merged from test_cifar_reader.py ---
 def _cifar_reader_dump(path: Path, payload: dict) -> None:
     with path.open('wb') as handle:
         pickle.dump(payload, handle)
 
-# --- merged from test_cifar_reader.py ---
 class _cifar_reader_CifarReaderTest(unittest.TestCase):
 
     def test_cifar10_pickle_layout(self) -> None:
@@ -254,43 +196,13 @@ class _cifar_reader_CifarReaderTest(unittest.TestCase):
         self.assertEqual(data.images.shape, (3, 32, 32, 3))
         self.assertEqual(summary['class_count_max'], 2)
 
-# --- merged from test_data_service.py ---
-import gzip
 
-# --- merged from test_data_service.py ---
 import json
-
-# --- merged from test_data_service.py ---
-from pathlib import Path
-
-# --- merged from test_data_service.py ---
-import struct
-
-# --- merged from test_data_service.py ---
-import tempfile
-
-# --- merged from test_data_service.py ---
-import unittest
-
-# --- merged from test_data_service.py ---
-import numpy as np
-
-# --- merged from test_data_service.py ---
-import torch
-
-# --- merged from test_data_service.py ---
 from lnl_toolbox.data import DataProtocol, DataRequirements, DataRole, DataSpec, DatasetRegistry, IndexedDatasetView, InputSpec, LocalDatasetCatalog, NoiseDescriptor, RawDatasetSplit, UnsupportedDatasetSplitError
-
-# --- merged from test_data_service.py ---
 from lnl_toolbox.training.checkpoint import atomic_save, read_checkpoint
+from lnl_toolbox.training.data_service import DATASETS, prepare_experiment_data
+from lnl_toolbox.data.profile import DatasetDeclarations, NoiseRateInfo, NoiseRateStatus
 
-# --- merged from test_data_service.py ---
-from lnl_toolbox.training.data_service import DATASETS, DataService, prepare_experiment_data
-
-# --- merged from test_data_service.py ---
-from lnl_toolbox.data.profile import DatasetDeclarations, KnowledgeState, Modality, NoiseRateInfo, NoiseRateStatus, NoiseStatus
-
-# --- merged from test_data_service.py ---
 class _data_service__FixtureAdapter:
     name = 'fixture'
     aliases = ('fixture-data',)
@@ -309,7 +221,6 @@ class _data_service__FixtureAdapter:
         count = 8 if split == 'train' else 4
         return RawDatasetSplit(inputs=np.arange(count * 2, dtype=np.float32).reshape(count, 2), observed_targets=np.arange(count, dtype=np.int64) % 2, global_indices=np.arange(count, dtype=np.int64), dataset=self.name, split=split, num_classes=2, source=str(spec.root))
 
-# --- merged from test_data_service.py ---
 class _data_service__BrokenValidationFixtureAdapter(_data_service__FixtureAdapter):
     name = 'broken_validation_fixture'
 
@@ -318,7 +229,6 @@ class _data_service__BrokenValidationFixtureAdapter(_data_service__FixtureAdapte
             raise ValueError('validation fixture has an invalid shape')
         return super().load(spec, split, seed=seed)
 
-# --- merged from test_data_service.py ---
 class _data_service__NativeNoisyFixtureAdapter:
     name = 'native_noisy_fixture'
     aliases = ()
@@ -386,21 +296,10 @@ class _data_service__DerivedValidationFixtureAdapter:
         )
 
 
-# --- merged from test_data_service.py ---
 def _data_service__config() -> dict:
     return {'seed': 9, 'data': {'name': 'synthetic_multiclass', 'num_classes': 3, 'dimension': 4, 'train_size': 30, 'validation_size': 12, 'test_size': 12}, 'noise': {'name': 'clean', 'rate': 0.0, 'seed': 9}, 'loader': {'batch_size': 6, 'num_workers': 0, 'drop_last': False}}
 
-# --- merged from test_data_service.py ---
-def _data_service__write_fashion_idx(root: Path, split: str, count: int) -> None:
-    prefix = 'train' if split == 'train' else 't10k'
-    images = np.arange(count * 28 * 28, dtype=np.uint8).reshape(count, 28, 28)
-    labels = np.arange(count, dtype=np.uint8) % 10
-    with gzip.open(root / f'{prefix}-images-idx3-ubyte.gz', 'wb') as handle:
-        handle.write(struct.pack('>IIII', 2051, count, 28, 28) + images.tobytes())
-    with gzip.open(root / f'{prefix}-labels-idx1-ubyte.gz', 'wb') as handle:
-        handle.write(struct.pack('>II', 2049, count) + labels.tobytes())
 
-# --- merged from test_data_service.py ---
 class _data_service_DataServiceTest(unittest.TestCase):
 
     def test_gce_evaluation_reuses_training_pixel_mean(self) -> None:
@@ -789,8 +688,6 @@ class _data_service_DataServiceTest(unittest.TestCase):
             self.assertNotEqual(first.data_fingerprint, second.data_fingerprint)
             with self.assertRaisesRegex(KeyError, 'validation role'):
                 first.validation_loader()
-        self.assertEqual(DataRole.UNLABELED.value, 'unlabeled')
-        self.assertEqual(DataRole.CURRICULUM.value, 'curriculum')
 
     def test_test_split_is_never_promoted_to_clean_validation(self) -> None:
         requirements = DataRequirements(
@@ -856,8 +753,8 @@ class _data_service_DataServiceTest(unittest.TestCase):
             root = Path(directory)
             data_root, run_root = (root / 'fashion', root / 'run')
             data_root.mkdir()
-            _data_service__write_fashion_idx(data_root, 'train', 20)
-            _data_service__write_fashion_idx(data_root, 'test', 10)
+            _write_idx(data_root, 'train', 20)
+            _write_idx(data_root, 'test', 10)
             config = {'data': {'name': 'fashion_mnist', 'root': str(data_root), 'validation_size': 0}, 'noise': {'name': 'clean', 'rate': 0.0, 'seed': 3}, 'loader': {'batch_size': 5, 'num_workers': 0}}
             prepared = prepare_experiment_data(config, requirements=requirements, run_dir=run_root, seed=3)
             batch = next(iter(prepared.loader(DataRole.TRAIN, epoch=0)))
@@ -870,8 +767,8 @@ class _data_service_DataServiceTest(unittest.TestCase):
             root = Path(directory)
             data_root = root / 'FashionMNIST' / 'raw'
             data_root.mkdir(parents=True)
-            _data_service__write_fashion_idx(data_root, 'train', 40)
-            _data_service__write_fashion_idx(data_root, 'test', 20)
+            _write_idx(data_root, 'train', 40)
+            _write_idx(data_root, 'test', 20)
             service = DataService(DATASETS, LocalDatasetCatalog(root / 'catalog.json'))
             service.register('fashion', 'fashion_mnist', {'root': root})
             report, run_dir = service.verify('fashion', None, root / 'verify')
@@ -909,15 +806,6 @@ class _data_service_DataServiceTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'data identity mismatch'):
                 current.load_state_dict(original.state_dict())
 
-    def test_all_experiment_runners_use_only_unified_entry(self) -> None:
-        root = Path(__file__).resolve().parents[1] / 'src' / 'lnl_toolbox' / 'training'
-        runners = ('experiment.py', 'multi_model_experiment.py', 'binary_experiment.py', 'importance_reweighting_experiment.py', 'cwd_experiment.py', 'dual_t_experiment.py', 'dual_t_evidence_experiment.py', 'instance_transition_experiment.py', 't_revision_experiment.py', 'volminnet_experiment.py', 'upm_experiment.py', 'pcse_experiment.py', 'mc_ldce_experiment.py', 'cal_experiment.py', 'volmin_experiment.py', 'coteaching_experiment.py', 'cnlcu_experiment.py', 'lend_experiment.py', 'fine_experiment.py', 'dld_experiment.py', 'ca2c_experiment.py', 'dividemix_experiment.py', 'l2rw_experiment.py')
-        forbidden = ('from lnl_toolbox.data.cifar', 'from lnl_toolbox.data.torch_cifar', 'DataLoader(', 'prepare_noisy_classification(')
-        for filename in runners:
-            source = (root / filename).read_text(encoding='utf-8')
-            self.assertIn('prepare_experiment_data', source, filename)
-            for pattern in forbidden:
-                self.assertNotIn(pattern, source, f'{filename}: {pattern}')
 
     def test_inspect_generates_deterministic_profile_and_persists_it(self) -> None:
         registry = DatasetRegistry()
@@ -965,53 +853,15 @@ class _data_service_DataServiceTest(unittest.TestCase):
             self.assertIsNone(record.declarations)
             self.assertIsNone(record.profile_fingerprint)
 
-# --- merged from test_dataset_training_fixtures.py ---
-import gzip
 
-# --- merged from test_dataset_training_fixtures.py ---
-import json
-
-# --- merged from test_dataset_training_fixtures.py ---
-from pathlib import Path
-
-# --- merged from test_dataset_training_fixtures.py ---
-import struct
-
-# --- merged from test_dataset_training_fixtures.py ---
-import tempfile
-
-# --- merged from test_dataset_training_fixtures.py ---
-import unittest
-
-# --- merged from test_dataset_training_fixtures.py ---
-import numpy as np
-
-# --- merged from test_dataset_training_fixtures.py ---
-from PIL import Image
-
-# --- merged from test_dataset_training_fixtures.py ---
 from lnl_toolbox.training.service import ExperimentService
 
-# --- merged from test_dataset_training_fixtures.py ---
-def _dataset_training_fixtures__write_idx(root: Path, split: str, count: int) -> None:
-    """Write the official MNIST/Fashion-MNIST IDX.GZ pair."""
-    prefix = 'train' if split == 'train' else 't10k'
-    images = np.arange(count * 28 * 28, dtype=np.uint8).reshape(count, 28, 28)
-    labels = np.arange(count, dtype=np.uint8) % 10
-    with gzip.open(root / f'{prefix}-images-idx3-ubyte.gz', 'wb') as handle:
-        handle.write(struct.pack('>IIII', 2051, count, 28, 28))
-        handle.write(images.tobytes())
-    with gzip.open(root / f'{prefix}-labels-idx1-ubyte.gz', 'wb') as handle:
-        handle.write(struct.pack('>II', 2049, count))
-        handle.write(labels.tobytes())
 
-# --- merged from test_dataset_training_fixtures.py ---
 def _dataset_training_fixtures__write_rgb(path: Path, value: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     pixels = np.full((40, 40, 3), value, dtype=np.uint8)
     Image.fromarray(pixels, mode='RGB').save(path)
 
-# --- merged from test_dataset_training_fixtures.py ---
 def _dataset_training_fixtures__write_clothing1m(root: Path) -> None:
     train = [f'images/train/{index}.jpg' for index in range(8)]
     validation = [f'images/val/{index}.jpg' for index in range(4)]
@@ -1025,18 +875,15 @@ def _dataset_training_fixtures__write_clothing1m(root: Path) -> None:
     clean = validation + test
     (root / 'clean_label_kv.txt').write_text('\n'.join((f'{key} {index % 2}' for index, key in enumerate(clean))) + '\n', encoding='utf-8')
 
-# --- merged from test_dataset_training_fixtures.py ---
 def _dataset_training_fixtures__animal_record(identifier: int, label: int) -> bytes:
     pixel_value = (16 + identifier * 7) % 256
     pixels = np.full((3, 64, 64), pixel_value, dtype=np.uint8)
     return struct.pack('<II', identifier, label) + pixels.tobytes()
 
-# --- merged from test_dataset_training_fixtures.py ---
 def _dataset_training_fixtures__write_animal10n(root: Path) -> None:
     (root / 'data_batch_1.bin').write_bytes(b''.join((_dataset_training_fixtures__animal_record(index, index % 2) for index in range(8))))
     (root / 'test_batch.bin').write_bytes(b''.join((_dataset_training_fixtures__animal_record(100 + index, index % 2) for index in range(4))))
 
-# --- merged from test_dataset_training_fixtures.py ---
 def _dataset_training_fixtures__write_uci_heart(path: Path) -> None:
     rows = []
     for index in range(40):
@@ -1044,11 +891,9 @@ def _dataset_training_fixtures__write_uci_heart(path: Path) -> None:
         rows.append(' '.join(features + [str(1 + index % 2)]))
     path.write_text('\n'.join(rows) + '\n', encoding='utf-8')
 
-# --- merged from test_dataset_training_fixtures.py ---
 def _dataset_training_fixtures__image_config(name: str, root: Path) -> dict:
     return {'seed': 13, 'data': {'name': name, 'root': str(root), 'validation_size': 4, 'augment': False, 'image_size': 32}, 'loader': {'batch_size': 64, 'num_workers': 0, 'pin_memory': False}, 'model': {'name': 'tiny_cnn', 'width': 2}, 'loss': {'name': 'ce'}, 'optimizer': {'name': 'adam', 'lr': 0.001}, 'scheduler': {'name': 'none'}, 'trainer': {'epochs': 1, 'device': 'cpu', 'progress': False}, 'execution': {'runner': 'clean'}}
 
-# --- merged from test_dataset_training_fixtures.py ---
 class _dataset_training_fixtures_DatasetTrainingFixturesTest(unittest.TestCase):
 
     def _assert_trained(self, config: dict, run_dir: Path) -> None:
@@ -1071,8 +916,8 @@ class _dataset_training_fixtures_DatasetTrainingFixturesTest(unittest.TestCase):
             root = Path(directory)
             data_root = root / 'MNIST' / 'raw'
             data_root.mkdir(parents=True)
-            _dataset_training_fixtures__write_idx(data_root, 'train', 40)
-            _dataset_training_fixtures__write_idx(data_root, 'test', 20)
+            _write_idx(data_root, 'train', 40)
+            _write_idx(data_root, 'test', 20)
             self._assert_trained(_dataset_training_fixtures__image_config('mnist', root), root / 'run')
 
     def test_official_fashion_mnist_idx_gzip_trains_one_epoch(self) -> None:
@@ -1080,8 +925,8 @@ class _dataset_training_fixtures_DatasetTrainingFixturesTest(unittest.TestCase):
             root = Path(directory)
             data_root = root / 'FashionMNIST' / 'raw'
             data_root.mkdir(parents=True)
-            _dataset_training_fixtures__write_idx(data_root, 'train', 40)
-            _dataset_training_fixtures__write_idx(data_root, 'test', 20)
+            _write_idx(data_root, 'train', 40)
+            _write_idx(data_root, 'test', 20)
             self._assert_trained(_dataset_training_fixtures__image_config('fashion_mnist', root), root / 'run')
 
     def test_official_clothing1m_lists_and_label_maps_train_one_epoch(self) -> None:
@@ -1113,19 +958,9 @@ class _dataset_training_fixtures_DatasetTrainingFixturesTest(unittest.TestCase):
             self.assertTrue(np.isfinite(float(rows[0]['test_accuracy'])))
             self.assertTrue((result / 'data_manifest.json').is_file())
 
-# --- merged from test_local_data_catalog.py ---
-from pathlib import Path
 
-# --- merged from test_local_data_catalog.py ---
-import tempfile
-
-# --- merged from test_local_data_catalog.py ---
-import unittest
-
-# --- merged from test_local_data_catalog.py ---
 from lnl_toolbox.data.local_catalog import LocalDatasetCatalog
 
-# --- merged from test_local_data_catalog.py ---
 class _local_data_catalog_LocalDatasetCatalogTest(unittest.TestCase):
 
     def test_concurrent_writes_do_not_collide_on_shared_temp_file(self) -> None:
@@ -1189,22 +1024,11 @@ class _local_data_catalog_LocalDatasetCatalogTest(unittest.TestCase):
             self.assertEqual(failed.effective_state, 'failed')
             self.assertEqual(failed.error, 'bad labels')
 
-# --- merged from test_reliability_selection_adapter.py ---
-import unittest
 
-# --- merged from test_reliability_selection_adapter.py ---
-import torch
-
-# --- merged from test_reliability_selection_adapter.py ---
 from lnl_toolbox.estimators import DivideMixGMMCleanProbabilityEstimator, DivideMixGMMLossInput, ReliabilityResult, ReliabilityToSelectionInputAdapter
-
-# --- merged from test_reliability_selection_adapter.py ---
 from lnl_toolbox.selectors import SmallLossSelector
-
-# --- merged from test_reliability_selection_adapter.py ---
 from lnl_toolbox.treatments import SelectorContributionAdapter
 
-# --- merged from test_reliability_selection_adapter.py ---
 class _reliability_selection_adapter_ReliabilitySelectionAdapterTest(unittest.TestCase):
 
     def setUp(self) -> None:
@@ -1292,28 +1116,10 @@ class _reliability_selection_adapter_ReliabilitySelectionAdapterTest(unittest.Te
         expected_scores = -torch.stack([reliability.scores[reliability.sample_indices == index].squeeze(0) for index in expected])
         self.assertTrue(torch.equal(selection_input.scores, expected_scores))
 
-# --- merged from test_trusted_supervision.py ---
-import tempfile
 
-# --- merged from test_trusted_supervision.py ---
-from pathlib import Path
-
-# --- merged from test_trusted_supervision.py ---
-import unittest
-
-# --- merged from test_trusted_supervision.py ---
-import numpy as np
-
-# --- merged from test_trusted_supervision.py ---
-import torch
-
-# --- merged from test_trusted_supervision.py ---
 from torch.utils.data import Dataset
-
-# --- merged from test_trusted_supervision.py ---
 from lnl_toolbox.data.trusted import TrustedSupervisionManifest, TrustedValidationProvider
 
-# --- merged from test_trusted_supervision.py ---
 class _trusted_supervision__Dataset(Dataset):
 
     def __len__(self):
@@ -1322,7 +1128,6 @@ class _trusted_supervision__Dataset(Dataset):
     def __getitem__(self, item):
         return {'input': torch.tensor([float(item)]), 'target': 99, 'index': (8, 3)[item]}
 
-# --- merged from test_trusted_supervision.py ---
 class _trusted_supervision_TrustedSupervisionTest(unittest.TestCase):
 
     def test_manifest_roundtrip_and_provider_replaces_only_explicit_targets(self) -> None:

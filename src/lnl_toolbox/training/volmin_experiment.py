@@ -138,7 +138,12 @@ def run_volmin_experiment(
     metrics_path = run_dir / "metrics.jsonl"
     _write_epoch_metrics(rows, metrics_path)
     criterion = CrossEntropyLoss().to(device)
+    from lnl_toolbox.training.early_stopping import StageEarlyStopping
+    stopping = StageEarlyStopping(config, "trainer.early_stopping", "validation_accuracy", run_dir=run_dir)
+    stopping.replay(rows, completed=start)
     for epoch in range(start, epochs):
+        if stopping.stopped:
+            break
         model.train(); total_loss = 0.0; total = correct = 0
         for batch in train_loader:
             inputs, targets = batch["input"].to(device), batch["target"].to(device)
@@ -196,6 +201,10 @@ def run_volmin_experiment(
             "metrics": rows,
             "rng_state": capture_rng_state(),
         }, run_dir / "last.pt")
+        if stopping.observe(row, {"model": model, "transition": transition, "optimizer": optimizer,
+                                  "transition_optimizer": transition_optimizer}):
+            break
+    stopping.restore_best({"model": model, "transition": transition})
     (run_dir / "resolved_config.yaml").write_text(
         yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
     )

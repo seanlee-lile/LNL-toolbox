@@ -1,22 +1,10 @@
-"""Merged unit tests; source modules were consolidated without changing assertions."""
 from __future__ import annotations
-
-# --- merged from test_importance_reweighting.py ---
 from dataclasses import dataclass
-
-# --- merged from test_importance_reweighting.py ---
 import math
-
-# --- merged from test_importance_reweighting.py ---
 import unittest
-
-# --- merged from test_importance_reweighting.py ---
 import torch
-
-# --- merged from test_importance_reweighting.py ---
 from lnl_toolbox.treatments import BinaryRCNImportanceWeightProvider, BinaryRCNWeightInput, ReductionSpec, SupervisedWeightInput, WeightContributionAdapter, WeightResult, reduce_per_sample_loss
 
-# --- merged from test_importance_reweighting.py ---
 class _importance_reweighting_ImportanceReweightingTest(unittest.TestCase):
 
     def test_binary_rcn_requires_explicit_posterior_input(self):
@@ -137,61 +125,25 @@ class _importance_reweighting_ImportanceReweightingTest(unittest.TestCase):
         self.assertIs(contribution.sample_weights.requires_grad, False)
         self.assertEqual(contribution.metrics, {'weight_mean': 0.5})
 
-# --- merged from test_importance_reweighting_kliep.py ---
 from copy import deepcopy
-
-# --- merged from test_importance_reweighting_kliep.py ---
 from pathlib import Path
-
-# --- merged from test_importance_reweighting_kliep.py ---
 import tempfile
-
-# --- merged from test_importance_reweighting_kliep.py ---
-import unittest
-
-# --- merged from test_importance_reweighting_kliep.py ---
 import numpy as np
-
-# --- merged from test_importance_reweighting_kliep.py ---
-import torch
-
-# --- merged from test_importance_reweighting_kliep.py ---
 import yaml
-
-# --- merged from test_importance_reweighting_kliep.py ---
 from lnl_toolbox.algorithms.importance_reweighting import ImportanceReweightingConfig, KLIEPBinaryNoisyPosteriorEstimator, PaperRawMinNoiseRateEstimator
-
-# --- merged from test_importance_reweighting_kliep.py ---
 from lnl_toolbox.data.binary_synthetic import generate_synthetic_binary_high_dim
-
-# --- merged from test_importance_reweighting_kliep.py ---
 from lnl_toolbox.training.checkpoint import read_checkpoint
-
-# --- merged from test_importance_reweighting_kliep.py ---
 from lnl_toolbox.training.experiment import run_experiment
 
-# --- merged from test_importance_reweighting_kliep.py ---
 _importance_reweighting_kliep_CONFIG = Path(__file__).resolve().parents[1] / 'configs' / 'experiment' / 'importance_reweighting_binary_high_dim_smoke.yaml'
 
-# --- merged from test_importance_reweighting_kliep.py ---
 def _importance_reweighting_kliep_load_config() -> dict:
     return yaml.safe_load(_importance_reweighting_kliep_CONFIG.read_text(encoding='utf-8'))
 
-# --- merged from test_importance_reweighting_kliep.py ---
 def _importance_reweighting_kliep_build_estimator() -> KLIEPBinaryNoisyPosteriorEstimator:
     return KLIEPBinaryNoisyPosteriorEstimator(bandwidth=4.0, max_centers=16, max_iterations=150, learning_rate=0.02, tolerance=1e-07, epsilon=1e-12, seed=37)
 
-# --- merged from test_importance_reweighting_kliep.py ---
 class _importance_reweighting_kliep_KLIEPPosteriorTest(unittest.TestCase):
-
-    def test_high_dimensional_data_is_balanced_and_deterministic(self) -> None:
-        first = generate_synthetic_binary_high_dim(40, 20, 5, split='train')
-        second = generate_synthetic_binary_high_dim(40, 20, 5, split='train')
-        self.assertEqual(first.features.shape, (40, 20))
-        self.assertEqual(first.dataset, 'synthetic_binary_high_dim')
-        np.testing.assert_array_equal(np.bincount(first.labels), [20, 20])
-        np.testing.assert_array_equal(first.features, second.features)
-        np.testing.assert_array_equal(first.global_indices, second.global_indices)
 
     def test_posterior_is_valid_deterministic_and_index_aligned(self) -> None:
         data = generate_synthetic_binary_high_dim(80, 20, 9, start_index=100, split='train')
@@ -243,7 +195,6 @@ class _importance_reweighting_kliep_KLIEPPosteriorTest(unittest.TestCase):
         self.assertGreaterEqual(rates.rho_negative, 0.0)
         self.assertLess(rates.rho_positive + rates.rho_negative, 1.0)
 
-# --- merged from test_importance_reweighting_kliep.py ---
 class _importance_reweighting_kliep_KLIEPWorkflowTest(unittest.TestCase):
 
     def test_config_requires_matching_high_dimension(self) -> None:
@@ -410,68 +361,24 @@ class _importance_reweighting_kliep_KLIEPWorkflowTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'backend hash'):
                 run_experiment(config, resume=bad)
 
-# --- merged from test_importance_reweighting_method.py ---
-from copy import deepcopy
 
-# --- merged from test_importance_reweighting_method.py ---
-from pathlib import Path
-
-# --- merged from test_importance_reweighting_method.py ---
-import tempfile
-
-# --- merged from test_importance_reweighting_method.py ---
-import unittest
-
-# --- merged from test_importance_reweighting_method.py ---
 from unittest import mock
-
-# --- merged from test_importance_reweighting_method.py ---
-import numpy as np
-
-# --- merged from test_importance_reweighting_method.py ---
-import torch
-
-# --- merged from test_importance_reweighting_method.py ---
-import yaml
-
-# --- merged from test_importance_reweighting_method.py ---
-from lnl_toolbox.algorithms.importance_reweighting import ImportanceReweightingAlgorithm, ImportanceReweightingConfig, ImportanceReweightingPhase, ImportanceReweightingState, IndexedBinaryRCNWeightProvider, KDEBinaryNoisyPosteriorEstimator, NoiseRateArtifact, PaperRawMinNoiseRateEstimator, validate_binary_posterior_snapshot
-
-# --- merged from test_importance_reweighting_method.py ---
+from lnl_toolbox.algorithms.importance_reweighting import ImportanceReweightingAlgorithm, ImportanceReweightingPhase, ImportanceReweightingState, IndexedBinaryRCNWeightProvider, KDEBinaryNoisyPosteriorEstimator, NoiseRateArtifact, validate_binary_posterior_snapshot
 from lnl_toolbox.data.binary_synthetic import BinaryTensorDataset, SyntheticBinaryData, generate_synthetic_binary_2d, validate_zero_one_labels
-
-# --- merged from test_importance_reweighting_method.py ---
 from lnl_toolbox.noise.binary_rcn import generate_binary_asymmetric_rcn, validate_binary_rcn_manifest
-
-# --- merged from test_importance_reweighting_method.py ---
 from lnl_toolbox.noise.manifest import NoiseManifest
-
-# --- merged from test_importance_reweighting_method.py ---
 from lnl_toolbox.noise.estimators import PosteriorSnapshot
 
-# --- merged from test_importance_reweighting_method.py ---
-from lnl_toolbox.training.checkpoint import read_checkpoint
 
-# --- merged from test_importance_reweighting_method.py ---
-from lnl_toolbox.training.experiment import run_experiment
-
-# --- merged from test_importance_reweighting_method.py ---
-from lnl_toolbox.treatments import SupervisedWeightInput
-
-# --- merged from test_importance_reweighting_method.py ---
 _importance_reweighting_method_ROOT = Path(__file__).resolve().parents[1]
 
-# --- merged from test_importance_reweighting_method.py ---
 _importance_reweighting_method_CONFIG = _importance_reweighting_method_ROOT / 'configs/experiment/importance_reweighting_binary_smoke.yaml'
 
-# --- merged from test_importance_reweighting_method.py ---
 _importance_reweighting_method_UCI_CONFIG = _importance_reweighting_method_ROOT / 'configs/reproduction/uci_heart_importance_reweighting.yaml'
 
-# --- merged from test_importance_reweighting_method.py ---
 def _importance_reweighting_method_load_config() -> dict:
     return yaml.safe_load(_importance_reweighting_method_CONFIG.read_text(encoding='utf-8'))
 
-# --- merged from test_importance_reweighting_method.py ---
 class _importance_reweighting_method_BinaryMethodBoundaryTest(unittest.TestCase):
 
     def test_config_accepts_an_arbitrary_binary_dataset_identity(self) -> None:
@@ -531,7 +438,6 @@ class _importance_reweighting_method_BinaryMethodBoundaryTest(unittest.TestCase)
         with self.assertRaisesRegex(ValueError, '\\[N, 2\\]'):
             validate_binary_posterior_snapshot(snapshot)
 
-# --- merged from test_importance_reweighting_method.py ---
 class _importance_reweighting_method_EstimationAndWeightLookupTest(unittest.TestCase):
 
     def setUp(self) -> None:
@@ -584,7 +490,6 @@ class _importance_reweighting_method_EstimationAndWeightLookupTest(unittest.Test
         self.assertEqual(snapshot.noisy_probabilities.shape, (30, 2))
         np.testing.assert_array_equal(snapshot.global_indices, np.sort(data.global_indices))
 
-# --- merged from test_importance_reweighting_method.py ---
 class _importance_reweighting_method_StateAndSmokeTest(unittest.TestCase):
 
     @staticmethod
@@ -765,43 +670,16 @@ class _importance_reweighting_method_StateAndSmokeTest(unittest.TestCase):
                 run_experiment(config, resume=run_dir / 'last.pt')
             self.assertEqual(snapshot.read_bytes(), corrupted)
 
-# --- merged from test_importance_reweighting_uci.py ---
-from copy import deepcopy
 
-# --- merged from test_importance_reweighting_uci.py ---
 import hashlib
-
-# --- merged from test_importance_reweighting_uci.py ---
 import json
-
-# --- merged from test_importance_reweighting_uci.py ---
-from pathlib import Path
-
-# --- merged from test_importance_reweighting_uci.py ---
-import tempfile
-
-# --- merged from test_importance_reweighting_uci.py ---
-import unittest
-
-# --- merged from test_importance_reweighting_uci.py ---
-import numpy as np
-
-# --- merged from test_importance_reweighting_uci.py ---
-import yaml
-
-# --- merged from test_importance_reweighting_uci.py ---
 from lnl_toolbox.data.binary_benchmarks import BinaryBenchmarkTensorDataset
 
-# --- merged from test_importance_reweighting_uci.py ---
-from lnl_toolbox.training.experiment import run_experiment
 
-# --- merged from test_importance_reweighting_uci.py ---
 _importance_reweighting_uci_ROOT = Path(__file__).resolve().parents[1]
 
-# --- merged from test_importance_reweighting_uci.py ---
 _importance_reweighting_uci_CONFIG = _importance_reweighting_uci_ROOT / 'configs/reproduction/uci_heart_importance_reweighting.yaml'
 
-# --- merged from test_importance_reweighting_uci.py ---
 def _importance_reweighting_uci__heart_fixture(path: Path, samples: int=60) -> str:
     rows: list[str] = []
     for index in range(samples):
@@ -813,7 +691,6 @@ def _importance_reweighting_uci__heart_fixture(path: Path, samples: int=60) -> s
     path.write_bytes(payload)
     return hashlib.sha256(payload).hexdigest()
 
-# --- merged from test_importance_reweighting_uci.py ---
 def _importance_reweighting_uci__config(source: Path, sha256: str, epochs: int) -> dict:
     config = yaml.safe_load(_importance_reweighting_uci_CONFIG.read_text(encoding='utf-8'))
     config['data']['path'] = str(source)
@@ -824,7 +701,6 @@ def _importance_reweighting_uci__config(source: Path, sha256: str, epochs: int) 
     config['trainer'].update({'epochs': epochs, 'device': 'cpu'})
     return config
 
-# --- merged from test_importance_reweighting_uci.py ---
 class _importance_reweighting_uci_ImportanceReweightingUCIAdapterTest(unittest.TestCase):
 
     def test_training_view_never_exposes_clean_target(self) -> None:

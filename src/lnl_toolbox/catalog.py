@@ -785,6 +785,8 @@ def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
             path = f"{prefix}.{key}" if prefix else str(key)
             flat[path] = current
             kind = exact.get(path, leaf_rules.get(str(key)))
+            if prefix and key in {"early_stopping", "warmup_early_stopping"}:
+                kind = "boolean"
             choices = enums.get(path)
             parts = path.split(".")
             if choices is not None:

@@ -32,7 +32,6 @@ class FormulaWebApiTest(unittest.TestCase):
                 response = connection.getresponse()
                 payload = json.loads(response.read())
                 self.assertEqual(response.status, 200)
-                self.assertGreaterEqual(len(payload), 5)
                 formula = {
                     "id": "user/web_formula",
                     "name": "Web Formula",

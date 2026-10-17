@@ -127,6 +127,7 @@ class StandardNoisyERMPipeline:
     regularizer: Any | None = None
     warmup_epochs: int = 0
     pretraining_protocol: str = "standard"
+    early_stopping: bool = False
     artifacts: PipelineArtifacts = field(default_factory=PipelineArtifacts)
     state: PipelineState = field(default_factory=PipelineState)
 
@@ -223,6 +224,7 @@ class StandardNoisyERMPipeline:
                     "objective_consumer",
                     "regularizer",
                     "warmup_epochs",
+                    "early_stopping",
                 }
             )
             if unknown_composition:
@@ -245,6 +247,7 @@ class StandardNoisyERMPipeline:
             regularizer=regularizer,
             warmup_epochs=warmup_epochs,
             pretraining_protocol=pretraining_protocol,
+            early_stopping=values.get("early_stopping", False),
         )
 
     def warmup(
@@ -253,6 +256,8 @@ class StandardNoisyERMPipeline:
         optimizer: torch.optim.Optimizer,
         loader,
         device: torch.device,
+        validation_loader=None,
+        run_dir=None,
     ) -> None:
         """Train a noisy-label classifier before posterior estimation."""
 
@@ -265,6 +270,9 @@ class StandardNoisyERMPipeline:
             loader,
             device,
             epochs=self.warmup_epochs,
+            validation_loader=validation_loader if self.early_stopping else None,
+            checkpoint_dir=run_dir if self.early_stopping else None,
+            early_stopping=self.early_stopping,
         )
         self.state.phase = PipelinePhase.SNAPSHOT
 
@@ -295,10 +303,11 @@ class StandardNoisyERMPipeline:
                 model, optimizer, loader if warmup_loader is None else warmup_loader, device, epochs=self.warmup_epochs,
                 validation_loader=validation_loader, scheduler=warmup_scheduler,
                 checkpoint_dir=run_dir, checkpoint_identity=checkpoint_identity,
+                early_stopping=self.early_stopping,
             )
             self.state.phase = PipelinePhase.SNAPSHOT
         else:
-            self.warmup(model, optimizer, loader, device)
+            self.warmup(model, optimizer, loader, device, validation_loader=validation_loader, run_dir=run_dir)
         snapshot = collect_posterior_snapshot(
             model,
             loader if snapshot_loader is None else snapshot_loader,
@@ -332,13 +341,14 @@ class StandardNoisyERMPipeline:
         dataset: str,
         split: str,
         run_dir: str | Path,
+        validation_loader=None,
     ) -> PipelineArtifacts:
         """Run warm-up, feature snapshot, and a generic statistic estimator."""
 
         if self.statistic_estimator is None:
             return self.artifacts
         model.to(device)
-        self.warmup(model, optimizer, loader, device)
+        self.warmup(model, optimizer, loader, device, validation_loader=validation_loader, run_dir=run_dir)
         snapshot = collect_feature_snapshot(
             model,
             loader,

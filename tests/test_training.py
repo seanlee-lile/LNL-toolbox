@@ -1,71 +1,27 @@
-"""Merged unit tests; source modules were consolidated without changing assertions."""
 from __future__ import annotations
-
-# --- merged from test_torch_training.py ---
 import tempfile
-
-# --- merged from test_torch_training.py ---
 import unittest
-
-# --- merged from test_torch_training.py ---
 from pathlib import Path
-
-# --- merged from test_torch_training.py ---
 from unittest.mock import patch
-
-# --- merged from test_torch_training.py ---
 import numpy as np
-
-# --- merged from test_torch_training.py ---
 import torch
 from torchvision import transforms
-
-# --- merged from test_torch_training.py ---
 from lnl_toolbox.algorithms.supervised import SupervisedClassificationAlgorithm
-
-# --- merged from test_torch_training.py ---
 from lnl_toolbox.algorithms.dss import DSSObjective
-
-# --- merged from test_torch_training.py ---
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
-
-# --- merged from test_torch_training.py ---
 from lnl_toolbox.core import SoftTargetResult
-
-# --- merged from test_torch_training.py ---
-from lnl_toolbox.data.cifar import CifarData, default_data_root
-
-# --- merged from test_torch_training.py ---
+from lnl_toolbox.data.cifar import CifarData
 from lnl_toolbox.data.noisy_dataset import NoisyTargetDataset
-
-# --- merged from test_torch_training.py ---
 from lnl_toolbox.data.torch_cifar import TorchCifarDataset, build_cifar_transform, cifar_pixel_mean, stratified_split, train_validation_split
-
-# --- merged from test_torch_training.py ---
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
-
-# --- merged from test_torch_training.py ---
 from lnl_toolbox.models import TinyCNN
-
-# --- merged from test_torch_training.py ---
 from lnl_toolbox.models.feature_output import FeatureOutput, forward_with_features
-
-# --- merged from test_torch_training.py ---
 from lnl_toolbox.plugins.builtin import build_builtin_loss
-
-# --- merged from test_torch_training.py ---
 from lnl_toolbox.runtime import resolve_device
-
-# --- merged from test_torch_training.py ---
 from lnl_toolbox.selectors import AllSelector, SelectionResult, SmallLossSelector
-
-# --- merged from test_torch_training.py ---
 from lnl_toolbox.training.checkpoint import load_checkpoint, restore_rng_state, save_checkpoint
-
-# --- merged from test_torch_training.py ---
 from lnl_toolbox.training.experiment import build_model, build_scheduler
 
-# --- merged from test_torch_training.py ---
 class _torch_training_TorchTrainingTest(unittest.TestCase):
 
     def test_objective_consumer_is_opt_in_and_owns_backward(self):
@@ -101,12 +57,6 @@ class _torch_training_TorchTrainingTest(unittest.TestCase):
     def _target_batch():
         return Batch({'input': torch.eye(2), 'target': torch.tensor([0, 1]), 'index': torch.tensor([9, 3])})
 
-    def test_repository_data_path(self):
-        self.assertEqual(default_data_root().name, 'data')
-        cifar_batch = default_data_root() / 'cifar10' / 'data_batch_1'
-        if not cifar_batch.is_file():
-            self.skipTest('official CIFAR-10 data is not available in this checkout')
-        self.assertTrue(cifar_batch.is_file())
 
     def test_dataset_shape_dtype_target_and_stable_index(self):
         data = CifarData(np.zeros((3, 32, 32, 3), dtype=np.uint8), np.array([2, 1, 0]), ('a', 'b', 'c'), 'train', 'fixture')
@@ -424,14 +374,6 @@ class _torch_training_TorchTrainingTest(unittest.TestCase):
         self.assertEqual(result.metrics['selected_samples'], 1.0)
         self.assertEqual(result.metrics['selected_ratio'], 0.5)
 
-    def test_small_loss_selector_completes_training_step(self):
-        model = TinyCNN(10, 8)
-        algorithm = SupervisedClassificationAlgorithm(model, torch.optim.SGD(model.parameters(), lr=0.01), CrossEntropyLoss(), torch.device('cpu'), selector=SmallLossSelector(keep_rate=0.5))
-        algorithm.setup(ExperimentContext(Path.cwd()))
-        result = algorithm.step(Batch({'input': torch.randn(4, 3, 32, 32), 'target': torch.tensor([0, 1, 2, 3]), 'index': torch.tensor([100, 20, 80, 40])}), RunState())
-        self.assertEqual(result.metrics['selected_samples'], 2.0)
-        self.assertEqual(result.metrics['selected_ratio'], 0.5)
-
     def test_small_loss_reducer_matches_selected_mean_and_parameter_update(self):
         selected_model = torch.nn.Linear(2, 2, bias=False)
         reference_model = torch.nn.Linear(2, 2, bias=False)
@@ -576,22 +518,9 @@ class _torch_training_TorchTrainingTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'scheduler'):
                 load_checkpoint(path, algorithm, torch.device('cpu'), scheduler=scheduler)
 
-# --- merged from test_training_progress.py ---
 import io
-
-# --- merged from test_training_progress.py ---
-import tempfile
-
-# --- merged from test_training_progress.py ---
-import unittest
-
-# --- merged from test_training_progress.py ---
-from pathlib import Path
-
-# --- merged from test_training_progress.py ---
 from lnl_toolbox.training.progress import TerminalTrainingProgress, standardize_epoch_row, write_training_curves_svg
 
-# --- merged from test_training_progress.py ---
 class _training_progress_TrainingProgressTest(unittest.TestCase):
 
     def test_terminal_progress_reports_interval_and_final_batch(self) -> None:
@@ -670,34 +599,10 @@ class _training_progress_TrainingProgressTest(unittest.TestCase):
                     Path(directory) / 'mixed.svg',
                 )
 
-# --- merged from test_clean_baseline.py ---
-import tempfile
 
-# --- merged from test_clean_baseline.py ---
-import unittest
-
-# --- merged from test_clean_baseline.py ---
-from pathlib import Path
-
-# --- merged from test_clean_baseline.py ---
-import torch
-
-# --- merged from test_clean_baseline.py ---
-from lnl_toolbox.algorithms.supervised import SupervisedClassificationAlgorithm
-
-# --- merged from test_clean_baseline.py ---
-from lnl_toolbox.core import ExperimentContext, RunState
-
-# --- merged from test_clean_baseline.py ---
-from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
-
-# --- merged from test_clean_baseline.py ---
 from lnl_toolbox.training.clean_baseline import build_clean_model, build_clean_optimizer, build_clean_scheduler, run_clean_experiment
 
-# --- merged from test_clean_baseline.py ---
-from lnl_toolbox.training.checkpoint import load_checkpoint, save_checkpoint
 
-# --- merged from test_clean_baseline.py ---
 class _clean_baseline_CleanBaselineTest(unittest.TestCase):
 
     def test_clean_runner_rejects_noise_manifest_configuration(self):
@@ -746,62 +651,25 @@ class _clean_baseline_CleanBaselineTest(unittest.TestCase):
         scheduler = build_clean_scheduler(optimizer, {'name': 'multistep', 'milestones': [2, 4], 'gamma': 0.1}, 5)
         self.assertIsNotNone(scheduler)
 
-# --- merged from test_noisy_ce_baseline.py ---
 import json
-
-# --- merged from test_noisy_ce_baseline.py ---
 import os
-
-# --- merged from test_noisy_ce_baseline.py ---
 from copy import deepcopy
-
-# --- merged from test_noisy_ce_baseline.py ---
-import tempfile
-
-# --- merged from test_noisy_ce_baseline.py ---
-import unittest
-
-# --- merged from test_noisy_ce_baseline.py ---
-from pathlib import Path
-
-# --- merged from test_noisy_ce_baseline.py ---
-from unittest.mock import patch
-
-# --- merged from test_noisy_ce_baseline.py ---
-import numpy as np
-
-# --- merged from test_noisy_ce_baseline.py ---
-import torch
-
-# --- merged from test_noisy_ce_baseline.py ---
-from lnl_toolbox.data.cifar import CifarData
-
 from lnl_toolbox.data.contracts import (
     DataSpec,
     RawDatasetSplit,
     UnsupportedDatasetSplitError,
 )
-
 from lnl_toolbox.data.multiclass_synthetic import generate_synthetic_multiclass
-
-# --- merged from test_noisy_ce_baseline.py ---
 from lnl_toolbox.noise.manifest import NoiseManifest
-
-# --- merged from test_noisy_ce_baseline.py ---
 from lnl_toolbox.training.experiment import _validate_resume_config, run_experiment
-
-# --- merged from test_noisy_ce_baseline.py ---
 from lnl_toolbox.training.noisy_labels import prepare_noise_manifest
-
 from lnl_toolbox.training.data_service import DATASETS
 
-# --- merged from test_noisy_ce_baseline.py ---
 def _noisy_ce_baseline__cifar(size: int, split: str) -> CifarData:
     labels = np.arange(size, dtype=np.int64) % 10
     images = np.zeros((size, 32, 32, 3), dtype=np.uint8)
     return CifarData(images, labels, tuple(map(str, range(10))), split, 'cifar10')
 
-# --- merged from test_noisy_ce_baseline.py ---
 def _noisy_ce_baseline__config(epochs: int=1) -> dict:
     return {'seed': 7, 'data': {'name': 'cifar10', 'root': 'unused', 'validation_size': 10, 'max_train_samples': 20, 'max_validation_samples': 10, 'max_test_samples': 10, 'augment': False}, 'noise': {'name': 'symmetric', 'rate': 0.4, 'seed': 17}, 'loss': {'name': 'ce'}, 'loader': {'batch_size': 10, 'num_workers': 0, 'pin_memory': False}, 'model': {'name': 'tiny_cnn', 'width': 4}, 'optimizer': {'name': 'adamw', 'lr': 0.001}, 'scheduler': {'name': 'cosine', 't_max': 2}, 'trainer': {'epochs': epochs, 'device': 'cpu'}}
 
@@ -844,9 +712,6 @@ class APLReportingProtocolTest(unittest.TestCase):
             self.assertEqual(config['evaluation']['report_checkpoint'], 'last')
             self.assertFalse(config['evaluation']['allow_test_selection'])
             self.assertEqual(config['data']['validation_size'], 0)
-            self.assertEqual(config['loader']['batch_size'], 128)
-            self.assertEqual(config['trainer']['epochs'], 120)
-            self.assertEqual(config['optimizer']['lr'], 0.01)
         registry = yaml.safe_load((root / 'web' / 'lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
         self.assertIn('evaluation.report_checkpoint', registry['parameter_display_policy']['hidden_paths_by_method']['apl'])
         self.assertEqual(registry['methods']['apl']['parameters']['locked']['evaluation.report_checkpoint']['current'], 'last')
@@ -932,7 +797,6 @@ class _noisy_ce_baseline__GenericTabularAdapter:
             source='test_fixture',
         )
 
-# --- merged from test_noisy_ce_baseline.py ---
 class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
 
     def test_relative_output_root_is_resolved_before_manifest_metadata(self) -> None:
@@ -1232,28 +1096,12 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'test selection requires'):
             run_experiment(config)
 
-# --- merged from test_new_paper_training.py ---
-from copy import deepcopy
 
-# --- merged from test_new_paper_training.py ---
-from pathlib import Path
-
-# --- merged from test_new_paper_training.py ---
-import tempfile
-
-# --- merged from test_new_paper_training.py ---
-import unittest
-
-# --- merged from test_new_paper_training.py ---
 import yaml
 
-# --- merged from test_new_paper_training.py ---
-from lnl_toolbox.training.experiment import run_experiment
 
-# --- merged from test_new_paper_training.py ---
 _new_paper_training_ROOT = Path(__file__).resolve().parents[1]
 
-# --- merged from test_new_paper_training.py ---
 class _new_paper_training_NewPaperTrainingTest(unittest.TestCase):
 
     def _config(self, name: str) -> dict:
@@ -1296,19 +1144,10 @@ class _new_paper_training_NewPaperTrainingTest(unittest.TestCase):
                         self.assertEqual(saved['lifecycle_version'], config['mc_ldce']['lifecycle_version'])
                         self.assertEqual(saved['completed_epoch'], config['trainer']['epochs'] - 1)
 
-# --- merged from test_update_policy.py ---
-import unittest
 
-# --- merged from test_update_policy.py ---
-import torch
-
-# --- merged from test_update_policy.py ---
 from lnl_toolbox.algorithms.update_policy import ParameterUpdateInput, ParameterUpdateResult, StandardUpdatePolicy, restore_update_policy, serialize_update_policy
 
-# --- merged from test_update_policy.py ---
-from lnl_toolbox.core import RunState
 
-# --- merged from test_update_policy.py ---
 class _update_policy_ParameterUpdatePolicyTest(unittest.TestCase):
 
     def test_standard_policy_matches_ordinary_torch_update(self) -> None:

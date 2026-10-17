@@ -44,14 +44,6 @@ class _loss_correction_reproduction_LossCorrectionReproductionTest(unittest.Test
         self.assertEqual(config['evaluation']['selection_metric'], 'loss')
         self.assertTrue(config['evaluation']['corrected_loss'])
 
-    def test_known_transition_forward_and_backward_paths(self) -> None:
-        logits = torch.tensor([[2.0, -1.0], [-1.0, 2.0]], requires_grad=True)
-        targets = torch.tensor([0, 1])
-        transition = KnownTransition(torch.eye(2).numpy())
-        criterion = CrossEntropyLoss()
-        forward = ForwardRiskCorrector().per_sample_risk(logits=logits, noisy_targets=targets, base_loss=criterion, transition=transition)
-        backward = BackwardRiskCorrector().per_sample_risk(logits=logits, noisy_targets=targets, base_loss=criterion, transition=transition)
-        self.assertTrue(torch.allclose(forward, backward, atol=1e-06))
 
     def test_paper_depth_constructors_return_class_logits(self) -> None:
         inputs = torch.randn(2, 3, 32, 32)

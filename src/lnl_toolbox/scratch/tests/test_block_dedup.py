@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
 import unittest
 
 import torch
 
-from lnl_toolbox.scratch import ScratchContext, load_recipe, validate_recipe
+from lnl_toolbox.scratch import ScratchContext
 from lnl_toolbox.scratch.blocks.forward import softmax
 from lnl_toolbox.scratch.blocks.losses import (
     affine_transform,
@@ -21,9 +20,6 @@ from lnl_toolbox.scratch.blocks.selection import (
     select_lowest_scores,
 )
 from lnl_toolbox.scratch.registry import BLOCKS
-
-
-ROOT = Path(__file__).resolve().parents[1]
 
 
 class ScratchBlockDedupTest(unittest.TestCase):
@@ -110,32 +106,6 @@ class ScratchBlockDedupTest(unittest.TestCase):
             ctx = ScratchContext({"epoch": epoch})
             linear_rate_schedule(ctx, start=1.0, end=0.5, warmup_epochs=10)
             self.assertAlmostEqual(ctx["keep_rate"], expected)
-
-    def test_deleted_duplicate_ids_are_not_registered(self) -> None:
-        deleted = {
-            "remember_" + "rate_formula", "jocor_" + "keep_rate_formula",
-            "small_" + "loss_indices", "jocor_small_" + "loss_indices",
-            "mean_selected_" + "loss", "cross_select_loss_a_" + "from_b",
-            "cross_select_loss_b_" + "from_a", "gather_target_" + "probability",
-            "softmax_" + "probability", "gce_" + "q_formula", "peer_" + "exchange",
-            "track_best_" + "peer_models", "restore_best_" + "peer_models",
-            "upm_" + "soft_target_loss",
-            "small_loss",
-            "l2rw_" + "initialize_epsilon", "l2rw_" + "virtual_weighted_loss",
-            "t_revision_" + "weighted_objective",
-            "jocor_" + "agreement", "jocor_" + "symmetric_kl",
-            "volminnet_" + "objective", "cnlcu_" + "soft_influence",
-        }
-        self.assertTrue(deleted.isdisjoint(BLOCKS))
-
-    def test_paper_recipes_use_common_ids(self) -> None:
-        for name in ("gce.yaml", "coteaching.yaml", "cnlcu.yaml", "jocor.yaml", "t_revision.yaml"):
-            recipe = load_recipe(ROOT / "recipes" / "papers" / name)
-            validate_recipe(recipe)
-            text = str(recipe)
-            for old in ("remember_" + "rate_formula", "jocor_" + "keep_rate_formula", "small_" + "loss_indices", "jocor_small_" + "loss_indices", "gather_target_" + "probability", "softmax_" + "probability", "track_best_" + "peer_models", "restore_best_" + "peer_models"):
-                self.assertNotIn(old, text, name)
-
 
 if __name__ == "__main__":
     unittest.main()

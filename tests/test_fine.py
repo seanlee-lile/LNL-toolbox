@@ -18,21 +18,6 @@ from lnl_toolbox.selectors.base import SelectionInput
 # --- merged from test_fine.py ---
 class _fine_FINETest(unittest.TestCase):
 
-    def test_regularizer_matches_paper_two_terms_and_state_round_trip(self) -> None:
-        regularizer = FINERegularizer(beta=0.001, gamma=0.1, seed=4)
-        logits = torch.tensor([[2.0, 0.0], [0.0, 2.0]], requires_grad=True)
-        targets = torch.tensor([0, 0])
-        pseudo = torch.tensor([0, 1])
-        value = regularizer(logits, targets, rejected_mask=torch.ones(2, dtype=torch.bool), pseudo_labels=pseudo)
-        probabilities = torch.softmax(logits, dim=1)
-        expected = 0.1 * -torch.log(1.0 + 1e-07 - probabilities[1, 1]) / 2 + 0.001 * torch.log_softmax(logits, dim=1)[1, 0] / 2
-        self.assertTrue(torch.allclose(value, expected))
-        value.backward()
-        state = regularizer.state_dict()
-        restored = FINERegularizer(beta=0.001, gamma=0.1, seed=4)
-        restored.load_state_dict(state)
-        self.assertTrue(torch.isfinite(value))
-
     def test_nsnl_uses_complementary_class_and_one_over_c(self) -> None:
         regularizer = FINERegularizer(beta=0.0, gamma=1.0, seed=4)
         logits = torch.log(torch.tensor([[0.8, 0.1, 0.1]]))

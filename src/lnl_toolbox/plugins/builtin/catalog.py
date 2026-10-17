@@ -539,6 +539,7 @@ def build_builtin_objective_consumer(
     if not isinstance(config, Mapping):
         raise TypeError("Objective consumer configuration must be a mapping")
     values = dict(config)
+    values.pop("warmup_early_stopping", None)
     name = str(values.pop("name", "")).strip().lower()
     if not name:
         raise ValueError("Objective consumer configuration requires a name")
@@ -621,6 +622,10 @@ def build_builtin_multi_model_algorithm(
         raise ValueError("multi-model algorithm name must not be empty")
     if "lambda" in values:
         values["lambda_"] = values.pop("lambda")
+    if name == "jocor":
+        # The public noise prior configures the remember schedule; it is not
+        # a JoCoRAlgorithm constructor argument.
+        values.pop("estimated_noise_rate", None)
     catalog = catalog or create_builtin_catalog()
     try:
         return catalog.build(

@@ -35,6 +35,71 @@ _MENTOR_KEYS = {
     "loader", "student_model", "student_optimizer", "student_trainer", "model",
     "optimizer", "trainer", "execution",
 }
+def training_stage_controls(config: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Public boolean controls for iterative training, not artifact computation."""
+    execution = config.get("execution") or {}
+    method = config.get("method") or ""
+    if isinstance(method, Mapping):
+        method = method.get("name", "")
+    runner = str(execution.get("runner") or method or "supervised")
+    if not execution.get("runner"):
+        for section in ("cwd", "fine", "instance_transition"):
+            if section in config:
+                runner = section
+    definitions = {
+        "t_revision": [("t_revision.stage1", "后验模型训练"), ("t_revision.classifier_initialization", "分类器初始化"), ("t_revision.revision", "转移矩阵修正训练")],
+        "dual_t": [("posterior_stage", "后验模型训练"), ("final_stage", "最终分类器训练")],
+        "upm": [("upm.stage1", "后验模型预训练"), ("upm.main", "交替优化训练")],
+        "pcse": [("pretraining_stage", "特征模型预训练"), ("transition_stage", "转移矩阵训练"), ("ensemble_stage", "集成权重训练")],
+        "dld": [("dld.diffusion", "标签扩散模型训练")],
+        "lend": [("lend.training", "标签稀释训练")],
+        "dividemix": [("dividemix.warmup", "预热训练"), ("dividemix.training", "双网络训练")],
+        "instance_transition": [("warmup", "模型预训练"), ("trainer", "校正训练"), ("revision", "修正训练")],
+        "cal": [("warmup", "辅助标签模型训练"), ("trainer", "CAL训练")],
+        "mc_ldce": [("warmup", "模型预训练"), ("transition", "转移矩阵估计训练"), ("trainer", "分类器训练")],
+    }
+    entries = definitions.get(runner, [("trainer", "模型训练")])
+    if config.get("kind") == "mentor_artifact" or "student_trainer" in config:
+        entries = [("student_trainer", "反馈样本生成训练"), ("trainer", "Mentor网络训练")]
+    result = []
+    for prefix, label in entries:
+        current: Any = config
+        for part in prefix.split("."):
+            current = current.get(part) if isinstance(current, Mapping) else None
+        if isinstance(current, Mapping):
+            if prefix == "pretraining_stage" and current.get("mode") == "external_checkpoint":
+                continue
+            if prefix == "transition_stage" and runner == "pcse" and current.get("name", "dual_t") != "paper_volmin":
+                continue
+            result.append({"path": prefix + ".early_stopping", "stage": prefix,
+                           "label": label + "早停", "value": current.get("early_stopping", False)})
+    extra = {
+        "ca2c": ("ca2c.warmup_early_stopping", "预热阶段早停"),
+        "fine": ("fine.warmup_early_stopping", "预热阶段早停"),
+    }
+    if runner in extra:
+        path, label = extra[runner]
+        parent, leaf = path.rsplit(".", 1)
+        result.insert(0, {"path": path, "stage": parent + ".warmup", "label": label,
+                          "value": (config.get(parent) or {}).get(leaf, False)})
+    pipeline = config.get("pipeline") or {}
+    if runner == "supervised" and int(pipeline.get("warmup_epochs") or 0) > 0:
+        result.insert(0, {"path": "pipeline.early_stopping", "stage": "pipeline",
+                          "label": "预训练早停", "value": pipeline.get("early_stopping", False)})
+    consumer = pipeline.get("objective_consumer") or {}
+    if runner == "supervised" and int(consumer.get("warmup_epochs") or 0) > 0:
+        result.insert(0, {"path": "pipeline.objective_consumer.warmup_early_stopping",
+                          "stage": "pipeline.objective_consumer.warmup", "label": "预热阶段早停",
+                          "value": consumer.get("warmup_early_stopping", False)})
+    errors = [
+        f"invalid config for {field['path']}, expected a boolean"
+        for field in result if not isinstance(field["value"], bool)
+    ]
+    if errors:
+        raise ValueError("\n".join(errors))
+    return result
+
+
 def _mapping(value: object, path: str) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{path} must be a mapping")
@@ -205,6 +270,7 @@ def validate_experiment_config(config: Mapping[str, Any]) -> None:
     if unknown:
         raise ValueError("unknown top-level configuration fields: " + ", ".join(unknown))
     if kind == "experiment":
+        training_stage_controls(config)
         data = _mapping(config.get("data"), "data")
         if not str(data.get("name", "")).strip():
             raise ValueError("data.name is required")

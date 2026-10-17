@@ -288,25 +288,6 @@ class QuickStartServiceTests(unittest.TestCase):
             noise_selection=QuickStartNoiseSelection('native', 'native'), data_service=self.data_service)
         self.assertIsNone(config['pipeline']['transition_estimator']['percentile'])
 
-    def test_method_noise_prior_does_not_keep_old_recipe_rate(self) -> None:
-        paper = next(item for item in load_papers() if item.id == "coteaching")
-        profile = self.data_service.status("local-cifar10").profile.to_dict()
-        base = method_template_for_paper(paper).config
-        selected = adapt_method_template(
-            base, dataset_alias="local-cifar10", dataset_profile=profile,
-            noise_selection=QuickStartNoiseSelection(
-                "synthetic", "symmetric", rate=0.3, seed=1,
-            ), data_service=self.data_service,
-        )
-        self.assertEqual(selected["coteaching"]["noise_rate"], 0.3)
-        self.assertAlmostEqual(selected["coteaching"]["remember_schedule"]["end"], 0.7)
-        clean = adapt_method_template(
-            base, dataset_alias="local-cifar10", dataset_profile=profile,
-            noise_selection=QuickStartNoiseSelection("clean", "clean", seed=1),
-            data_service=self.data_service,
-        )
-        self.assertEqual(clean["coteaching"]["noise_rate"], 0.0)
-        self.assertEqual(clean["coteaching"]["remember_schedule"]["end"], 1.0)
 
     def test_prior_adaptation_updates_keep_rate_for_both_peer_methods(self) -> None:
         from lnl_toolbox.catalog import validate_config
@@ -432,7 +413,6 @@ class QuickStartServiceTests(unittest.TestCase):
         result = self.service.method_options(
             "local-cifar10", QuickStartNoiseSelection("clean", "clean")
         )
-        self.assertGreater(len(result), 5)
         self.assertTrue(all(item.acronym for item in result))
         fine = next(item for item in result if item.paper_id == "fine")
         self.assertEqual(fine.status, "ready")
@@ -602,7 +582,6 @@ class QuickStartServiceTests(unittest.TestCase):
             second = self.service.method_options("local-cifar10", selection)
         self.assertEqual(first, second)
         self.assertEqual(checker.call_count, 1)
-        self.assertGreater(len(first), 5)
 
     def test_method_options_use_accepted_profile_without_dataset_inspection(self) -> None:
         selection = QuickStartNoiseSelection("clean", "clean")

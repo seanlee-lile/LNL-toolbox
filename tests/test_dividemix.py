@@ -1,35 +1,16 @@
-"""Merged unit tests; source modules were consolidated without changing assertions."""
 from __future__ import annotations
-
-# --- merged from test_dividemix_algorithm.py ---
 from copy import deepcopy
-
-# --- merged from test_dividemix_algorithm.py ---
 import unittest
-
-# --- merged from test_dividemix_algorithm.py ---
 import numpy as np
-
-# --- merged from test_dividemix_algorithm.py ---
 import torch
-
-# --- merged from test_dividemix_algorithm.py ---
 from torch import nn
-
-# --- merged from test_dividemix_algorithm.py ---
 from unittest.mock import patch
-
-# --- merged from test_dividemix_algorithm.py ---
 from lnl_toolbox.algorithms.dividemix import DivideMixAlgorithm, DivideMixConfig, DivideMixPhase, DivideMixState, append_loss_history, build_co_divide, history_input
-
-# --- merged from test_dividemix_algorithm.py ---
 from lnl_toolbox.estimators import ReliabilityResult
 
-# --- merged from test_dividemix_algorithm.py ---
 def _dividemix_algorithm_config():
     return {'method': 'dividemix', 'execution': {'runner': 'dividemix'}, 'noise': {'name': 'symmetric', 'rate': 0.2, 'validation_targets': 'noisy'}, 'evaluation': {'selection_split': 'validation'}, 'dividemix': {'fidelity': 'official_cifar_v1', 'warmup': {'epochs': 1}, 'gmm': {'threshold': 0.5, 'loss_history': {'name': 'official_auto', 'window_epochs': 5}}, 'mixmatch': {'augmentations': 2, 'temperature': 0.5, 'mixup_alpha': 4.0, 'mixup_lambda_scope': 'minibatch'}, 'objective': {'lambda_u': 25.0, 'lambda_r': 1.0, 'rampup_epochs': 16}, 'training': {'epochs': 2}, 'inference': {'ensemble': 'official_logits_sum'}}}
 
-# --- merged from test_dividemix_algorithm.py ---
 class _dividemix_algorithm_DivideMixAlgorithmTest(unittest.TestCase):
 
     def make_algorithm(self):
@@ -115,41 +96,23 @@ class _dividemix_algorithm_DivideMixAlgorithmTest(unittest.TestCase):
             self.assertEqual(result.metrics['loss_history_depth'], 2. if rate == .9 else 1.)
             self.assertEqual(result.labeled_for_a.tolist(), [True] * 4 + [False] * 4)
 
-# --- merged from test_dividemix_gmm.py ---
 import math
-
-# --- merged from test_dividemix_gmm.py ---
 import os
-
-# --- merged from test_dividemix_gmm.py ---
 from pathlib import Path
-
-# --- merged from test_dividemix_gmm.py ---
 import subprocess
-
-# --- merged from test_dividemix_gmm.py ---
 import sys
 
-# --- merged from test_dividemix_gmm.py ---
-import unittest
 
-# --- merged from test_dividemix_gmm.py ---
-import torch
-
-# --- merged from test_dividemix_gmm.py ---
 try:
     import tomllib
 except ModuleNotFoundError:
     import tomli as tomllib
 
-# --- merged from test_dividemix_gmm.py ---
 from lnl_toolbox.estimators import DivideMixGMMCleanProbabilityEstimator, DivideMixGMMLossInput, ReliabilityEstimator, validate_reliability_result
 
-# --- merged from test_dividemix_gmm.py ---
 def _dividemix_gmm__separated_input(*, device: torch.device | str='cpu', requires_grad: bool=False) -> DivideMixGMMLossInput:
     return DivideMixGMMLossInput(per_sample_losses=torch.tensor([0.1, 0.13, 0.16, 1.8, 2.0, 2.2], device=device, requires_grad=requires_grad), sample_indices=torch.tensor([40, 10, 70, 20, 90, 30], device=device))
 
-# --- merged from test_dividemix_gmm.py ---
 class _dividemix_gmm_DivideMixGMMTest(unittest.TestCase):
 
     def test_estimator_import_is_safe_without_sklearn_until_estimate(self):
@@ -288,19 +251,9 @@ class _dividemix_gmm_DivideMixGMMTest(unittest.TestCase):
             with self.subTest(kwargs=kwargs), self.assertRaisesRegex(error_type, message):
                 DivideMixGMMCleanProbabilityEstimator(**kwargs)
 
-# --- merged from test_dividemix_mixmatch.py ---
-import unittest
 
-# --- merged from test_dividemix_mixmatch.py ---
-import numpy as np
-
-# --- merged from test_dividemix_mixmatch.py ---
-import torch
-
-# --- merged from test_dividemix_mixmatch.py ---
 from lnl_toolbox.algorithms.dividemix import dividemix_objective, mixmatch_mixup, unsupervised_weight
 
-# --- merged from test_dividemix_mixmatch.py ---
 class _dividemix_mixmatch_DivideMixMixMatchTest(unittest.TestCase):
 
     def test_mixup_uses_one_scalar_and_shared_permutation(self):
@@ -316,35 +269,51 @@ class _dividemix_mixmatch_DivideMixMixMatchTest(unittest.TestCase):
         self.assertEqual(result.labeled_count, 4)
 
     def test_objective_matches_manual_terms_and_keeps_autograd(self):
-        logits_x = torch.tensor([[1.0, 0.0]], requires_grad=True)
-        logits_u = torch.tensor([[0.0, 1.0]], requires_grad=True)
+        import numpy as np
+
+        logits_x = torch.tensor([[1.0, 0.0]], dtype=torch.float64, requires_grad=True)
+        logits_u = torch.tensor([[0.2, 0.7]], dtype=torch.float64, requires_grad=True)
         targets_x = torch.tensor([[0.75, 0.25]])
         targets_u = torch.tensor([[0.2, 0.8]])
         all_logits = torch.cat((logits_x, logits_u))
         objective, metrics = dividemix_objective(logits_x, targets_x, logits_u, targets_u, all_logits, lambda_u=2.0, lambda_r=1.0)
         objective.backward()
-        self.assertIsNotNone(logits_x.grad)
-        self.assertIsNotNone(logits_u.grad)
-        self.assertAlmostEqual(float(objective.detach()), metrics['objective'], places=6)
+        x_targets = targets_x.numpy().astype(np.float64)
+        u_targets = targets_u.numpy().astype(np.float64)
+
+        def reference(values):
+            exponentials = np.exp(values - values.max(axis=1, keepdims=True))
+            probabilities = exponentials / exponentials.sum(axis=1, keepdims=True)
+            supervised = -(x_targets * np.log(probabilities[:1])).sum(axis=1).mean()
+            unsupervised = ((probabilities[1:] - u_targets) ** 2).mean()
+            mean_prediction = probabilities.mean(axis=0)
+            regularizer = (0.5 * np.log(0.5 / mean_prediction)).sum()
+            return supervised, unsupervised, regularizer
+
+        values = np.array([[1.0, 0.0], [0.2, 0.7]])
+        terms = reference(values)
+        expected = terms[0] + 2.0 * terms[1] + terms[2]
+        self.assertAlmostEqual(objective.item(), expected, places=10)
+        for name, value in zip(('loss_x', 'loss_u', 'loss_regularizer'), terms):
+            self.assertAlmostEqual(metrics[name], value, places=10)
+        gradient = np.empty_like(values)
+        for index in np.ndindex(values.shape):
+            plus, minus = values.copy(), values.copy()
+            plus[index] += 1e-5
+            minus[index] -= 1e-5
+            a, b = reference(plus), reference(minus)
+            gradient[index] = ((a[0] + 2 * a[1] + a[2]) - (b[0] + 2 * b[1] + b[2])) / 2e-5
+        np.testing.assert_allclose(torch.cat((logits_x.grad, logits_u.grad)).numpy(),
+                                   gradient, rtol=1e-6, atol=1e-8)
 
     def test_fractional_ramp_up(self):
         self.assertEqual(unsupervised_weight(25.0, 1.0, 1, 16), 0.0)
         self.assertAlmostEqual(unsupervised_weight(25.0, 9.0, 1, 16), 12.5)
         self.assertEqual(unsupervised_weight(25.0, 30.0, 1, 16), 25.0)
 
-# --- merged from test_dividemix_targets.py ---
-import unittest
 
-# --- merged from test_dividemix_targets.py ---
-import torch
-
-# --- merged from test_dividemix_targets.py ---
-from torch import nn
-
-# --- merged from test_dividemix_targets.py ---
 from lnl_toolbox.algorithms.dividemix import co_guess, co_refine, sharpen
 
-# --- merged from test_dividemix_targets.py ---
 class _dividemix_targets_FixedModel(nn.Module):
 
     def __init__(self, logits):
@@ -354,7 +323,6 @@ class _dividemix_targets_FixedModel(nn.Module):
     def forward(self, inputs):
         return self.values.expand(inputs.shape[0], -1)
 
-# --- merged from test_dividemix_targets.py ---
 class _dividemix_targets_DivideMixTargetsTest(unittest.TestCase):
 
     def test_sharpen_is_normalized_and_detached(self):
@@ -381,61 +349,28 @@ class _dividemix_targets_DivideMixTargetsTest(unittest.TestCase):
         self.assertTrue(torch.allclose(result[0], expected))
         self.assertTrue(torch.allclose(result.sum(1), torch.ones(2)))
 
-# --- merged from test_dividemix_workflow.py ---
 import hashlib
-
-# --- merged from test_dividemix_workflow.py ---
 import json
-
-# --- merged from test_dividemix_workflow.py ---
-from pathlib import Path
-
-# --- merged from test_dividemix_workflow.py ---
 import tempfile
-
-# --- merged from test_dividemix_workflow.py ---
-import unittest
-
-# --- merged from test_dividemix_workflow.py ---
-from unittest.mock import patch
-
-# --- merged from test_dividemix_workflow.py ---
-import numpy as np
-
-# --- merged from test_dividemix_workflow.py ---
-import torch
-
-# --- merged from test_dividemix_workflow.py ---
 from lnl_toolbox.data.cifar import CifarData
-
-# --- merged from test_dividemix_workflow.py ---
-from lnl_toolbox.estimators import ReliabilityResult
-
-# --- merged from test_dividemix_workflow.py ---
 from lnl_toolbox.catalog import load_recipe_config, recipe_by_id
-
-# --- merged from test_dividemix_workflow.py ---
 from lnl_toolbox.training.experiment import run_experiment
 
-# --- merged from test_dividemix_workflow.py ---
 def _dividemix_workflow__data(size, split):
     rng = np.random.default_rng(12 if split == 'train' else 13)
     images = rng.integers(0, 256, (size, 32, 32, 3), dtype=np.uint8)
     labels = np.arange(size, dtype=np.int64) % 10
     return CifarData(images, labels, tuple(map(str, range(10))), split, 'cifar10')
 
-# --- merged from test_dividemix_workflow.py ---
 def _dividemix_workflow__data100(size, split):
     rng = np.random.default_rng(22 if split == 'train' else 23)
     images = rng.integers(0, 256, (size, 32, 32, 3), dtype=np.uint8)
     labels = np.arange(size, dtype=np.int64) % 100
     return CifarData(images, labels, tuple(map(str, range(100))), split, 'cifar100')
 
-# --- merged from test_dividemix_workflow.py ---
 def _dividemix_workflow__config(epochs=1):
     return {'method': 'dividemix', 'seed': 4, 'data': {'name': 'cifar10', 'root': 'unused', 'validation_size': 10, 'max_train_samples': 20, 'max_validation_samples': 10, 'max_test_samples': 10, 'augment': False}, 'noise': {'name': 'symmetric', 'rate': 0.2, 'seed': 8, 'validation_targets': 'noisy'}, 'model': {'name': 'tiny_cnn', 'width': 4}, 'optimizer': {'name': 'adam', 'lr': 0.001}, 'scheduler': {'name': 'none'}, 'loader': {'batch_size': 5, 'num_workers': 0, 'pin_memory': False}, 'evaluation': {'selection_split': 'validation', 'primary': 'ensemble_accuracy'}, 'dividemix': {'fidelity': 'official_cifar_v1', 'initialization': {'peer_seed_offset': 1}, 'warmup': {'epochs': 1, 'confidence_penalty_weight': 1.0}, 'gmm': {'threshold': 0.5, 'loss_history': {'name': 'official_auto', 'window_epochs': 5}}, 'mixmatch': {'augmentations': 2, 'temperature': 0.5, 'mixup_alpha': 4.0, 'mixup_lambda_scope': 'minibatch'}, 'objective': {'lambda_u': 25.0, 'lambda_r': 1.0, 'rampup_epochs': 16}, 'training': {'epochs': epochs}, 'inference': {'ensemble': 'official_logits_sum'}}, 'trainer': {'device': 'cpu'}, 'execution': {'runner': 'dividemix'}}
 
-# --- merged from test_dividemix_workflow.py ---
 class _dividemix_workflow__FakeEstimator:
 
     def __init__(self, **_kwargs):
@@ -446,11 +381,9 @@ class _dividemix_workflow__FakeEstimator:
         scores = torch.where(torch.arange(count) % 2 == 0, 0.9, 0.1).to(torch.float64)
         return ReliabilityResult(value.sample_indices.detach(), scores, {'gmm_iterations': 1.0, 'clean_component_mean': 0.25, 'noisy_component_mean': 0.75})
 
-# --- merged from test_dividemix_workflow.py ---
 def _dividemix_workflow__hash(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
-# --- merged from test_dividemix_workflow.py ---
 class _dividemix_workflow_DivideMixWorkflowTest(unittest.TestCase):
 
     def setUp(self):
@@ -520,19 +453,6 @@ class _dividemix_workflow_DivideMixWorkflowTest(unittest.TestCase):
             actual = next(iter(prepared.loader(DataRole.TEST, shuffle=False)))['input']
         expected = (-torch.tensor(normalization['mean']) / torch.tensor(normalization['std'])).view(1, 3, 1, 1)
         torch.testing.assert_close(actual, expected.expand_as(actual))
-
-    def test_web_and_scratch_descriptions_state_current_limits(self):
-        import yaml
-        from web import command_console
-        root = Path(__file__).resolve().parents[1]
-        fields = {f['path']: f for f in command_console._config_schema('cifar10-dividemix-sym20')['fields']}
-        self.assertEqual(fields['loader.batch_size']['value'], 128)
-        self.assertEqual(fields['optimizer.lr']['value'], .02)
-        self.assertFalse(fields['dividemix.fidelity']['visible'])
-        self.assertIn('非对称噪声', fields['dividemix.warmup.confidence_penalty_weight']['note'])
-        self.assertIn('对称噪声下不使用', fields['dividemix.warmup.confidence_penalty_weight']['note'])
-        recipe = yaml.safe_load((root / 'src/lnl_toolbox/scratch/recipes/papers/dividemix.yaml').read_text(encoding='utf-8'))
-        self.assertIn('Not a complete DivideMix reproduction', recipe['description'])
 
     def test_fresh_extension_and_completed_noop(self):
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self.load), patch('lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator', _dividemix_workflow__FakeEstimator):

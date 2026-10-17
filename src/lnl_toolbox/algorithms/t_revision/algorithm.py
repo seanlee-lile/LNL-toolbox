@@ -26,6 +26,7 @@ from lnl_toolbox.training.checkpoint import (
     restore_rng_state,
 )
 from lnl_toolbox.training.snapshots import collect_posterior_snapshot
+from lnl_toolbox.training.early_stopping import EarlyStopping
 
 from .artifacts import RevisedTransitionArtifact
 from .config import TRevisionConfig
@@ -149,6 +150,36 @@ class TRevisionAlgorithm:
         self.revision: AdditiveTransitionRevision | None = None
         self.revision_best_model_state: dict[str, Tensor] | None = None
         self.revision_best_delta_state: Tensor | None = None
+        policy = self.config.get("early_stopping")
+        if isinstance(policy, Mapping) and policy.get("scope") != "stages":
+            policy = None
+        self.stage_stoppers: dict[str, EarlyStopping] = {}
+        if policy not in (None, False):
+            if not isinstance(policy, Mapping):
+                raise TypeError("stage_early_stopping must be a mapping")
+            patience = policy.get("patience", 15)
+            if not isinstance(patience, int) or isinstance(patience, bool) or patience < 1:
+                raise ValueError("stage_early_stopping patience must be a positive integer")
+            for stage, metric in (
+                ("stage1", "noisy_validation_accuracy"),
+                ("classifier_initialization", "revised_noisy_validation_accuracy"),
+                ("revision", "revised_noisy_validation_accuracy"),
+            ):
+                self.stage_stoppers[stage] = EarlyStopping(
+                    monitor=metric, mode="max", patience=patience,
+                    min_delta=float(policy.get("min_delta", 0.0)),
+                )
+        for stage, metric in (("stage1", "noisy_validation_accuracy"),
+                              ("classifier_initialization", "revised_noisy_validation_accuracy"),
+                              ("revision", "revised_noisy_validation_accuracy")):
+            flag = (self.config.get("t_revision", {}).get(stage) or {}).get("early_stopping")
+            if flag is not None:
+                if not isinstance(flag, bool):
+                    raise TypeError("t_revision." + stage + ".early_stopping must be a boolean")
+                if flag:
+                    self.stage_stoppers[stage] = EarlyStopping(monitor=metric, patience=15)
+                else:
+                    self.stage_stoppers.pop(stage, None)
 
     @property
     def stage1_best_path(self) -> Path:
@@ -234,6 +265,9 @@ class TRevisionAlgorithm:
             "revision_best_delta_state": self.revision_best_delta_state,
             "noise": self.noise_metadata,
             "rng_state": capture_rng_state(),
+            "stage_early_stopping": {
+                stage: stopper.state_dict() for stage, stopper in self.stage_stoppers.items()
+            },
         }
 
     def _save(self, path: Path, *, role: str) -> None:
@@ -243,8 +277,27 @@ class TRevisionAlgorithm:
         self._save(self.last_path, role="run_state")
 
     def _append_metrics(self, row: Mapping[str, Any]) -> None:
+        self._update_stage_stopper(row)
         with self.metrics_path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(dict(row), sort_keys=True) + "\n")
+
+    def _update_stage_stopper(self, row: Mapping[str, Any]) -> None:
+        stopper = self.stage_stoppers.get(str(row.get("stage", "")))
+        if stopper is not None and row.get("event") == "epoch":
+            stopper.update(row)
+            # Batch acceptance uses exactly N consecutive non-improvements.
+            stopper.stopped = stopper.bad_epochs >= stopper.patience
+
+    def _stage_stopped(self, stage: str) -> bool:
+        stopper = self.stage_stoppers.get(stage)
+        return bool(stopper is not None and stopper.stopped)
+
+    def _record_stage_stop(self, stage: str) -> None:
+        if self._stage_stopped(stage):
+            self._append_metrics({
+                "event": "stage_early_stop", "stage": stage,
+                **self.stage_stoppers[stage].state_dict(),
+            })
 
     def _seed_train_loader(self, stage_offset: int, epoch: int) -> None:
         generator = getattr(self.train_loader, "generator", None)
@@ -422,6 +475,26 @@ class TRevisionAlgorithm:
         self.run_state.phase = str(run_state.get("phase", "t_revision"))
         if "rng_state" in payload:
             restore_rng_state(payload["rng_state"])
+        # Older checkpoints have no stopper state. Reconstruct from committed
+        # epoch records, excluding any epoch written after the last checkpoint.
+        if self.stage_stoppers and self.metrics_path.is_file():
+            limits = {
+                "stage1": self.state.stage1_completed_epochs,
+                "classifier_initialization": self.state.stage2a_completed_epochs,
+                "revision": self.state.revision_completed_epochs,
+            }
+            seen = set()
+            for line in self.metrics_path.read_text(encoding="utf-8").splitlines():
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                key = (row.get("stage"), row.get("epoch"))
+                if (row.get("event") == "epoch" and key not in seen
+                        and isinstance(key[1], int)
+                        and 1 <= key[1] <= limits.get(key[0], 0)):
+                    self._update_stage_stopper(row)
+                    seen.add(key)
         if self.state.phase is TRevisionPhase.COMPLETED:
             if not self.revised_transition_path.is_file():
                 raise FileNotFoundError("T-Revision revised transition artifact is missing")
@@ -471,7 +544,7 @@ class TRevisionAlgorithm:
         target = self.method_config.stage1.epochs
         if max_epochs is not None:
             target = min(target, self.state.stage1_completed_epochs + max_epochs)
-        while self.state.stage1_completed_epochs < target:
+        while self.state.stage1_completed_epochs < target and not self._stage_stopped("stage1"):
             epoch = self.state.stage1_completed_epochs
             self._seed_train_loader(10_000, epoch)
             learning_rate = float(self.optimizer.param_groups[0]["lr"])
@@ -499,8 +572,9 @@ class TRevisionAlgorithm:
                 "best_stage1_epoch": self.state.stage1_best_epoch + 1,
             })
             self._save_last()
-        if self.state.stage1_completed_epochs == self.method_config.stage1.epochs:
+        if self.state.stage1_completed_epochs == self.method_config.stage1.epochs or self._stage_stopped("stage1"):
             self._validate_best(self.stage1_best_path, self.state.stage1_best_hash, owner="stage1 best")
+            self._record_stage_stop("stage1")
             self.state.advance(TRevisionPhase.STAGE1_READY)
             self._save_last()
 
@@ -799,7 +873,7 @@ class TRevisionAlgorithm:
         if max_epochs is not None:
             target = min(target, self.state.stage2a_completed_epochs + max_epochs)
         transition = self._transition_tensor()
-        while self.state.stage2a_completed_epochs < target:
+        while self.state.stage2a_completed_epochs < target and not self._stage_stopped("classifier_initialization"):
             epoch = self.state.stage2a_completed_epochs
             self._seed_train_loader(20_000, epoch)
             learning_rate = float(self.optimizer.param_groups[0]["lr"])
@@ -833,8 +907,10 @@ class TRevisionAlgorithm:
                 epoch_metrics["true_T_relative_L1_error"] = true_error
             self._append_metrics(epoch_metrics)
             self._save_last()
-        if self.state.stage2a_completed_epochs == target == self.method_config.classifier_initialization.epochs:
+        if (self.state.stage2a_completed_epochs == self.method_config.classifier_initialization.epochs
+                or self._stage_stopped("classifier_initialization")):
             self._validate_best(self.stage2a_best_path, self.state.stage2a_best_hash, owner="stage2a best")
+            self._record_stage_stop("classifier_initialization")
             self.state.advance(TRevisionPhase.CLASSIFIER_READY)
             self._save_last()
 
@@ -858,7 +934,7 @@ class TRevisionAlgorithm:
         target = self.method_config.revision.epochs
         if max_epochs is not None:
             target = min(target, self.state.revision_completed_epochs + max_epochs)
-        while self.state.revision_completed_epochs < target:
+        while self.state.revision_completed_epochs < target and not self._stage_stopped("revision"):
             epoch = self.state.revision_completed_epochs
             self._seed_train_loader(30_000, epoch)
             learning_rate = float(self.optimizer.param_groups[0]["lr"])
@@ -906,7 +982,9 @@ class TRevisionAlgorithm:
                 epoch_metrics["true_T_relative_L1_error"] = true_error
             self._append_metrics(epoch_metrics)
             self._save_last()
-        if self.state.revision_completed_epochs == target == self.method_config.revision.epochs:
+        if (self.state.revision_completed_epochs == self.method_config.revision.epochs
+                or self._stage_stopped("revision")):
+            self._record_stage_stop("revision")
             self.complete()
 
     def complete(self) -> dict[str, Any]:

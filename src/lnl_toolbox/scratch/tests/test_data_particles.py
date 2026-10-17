@@ -63,12 +63,6 @@ class DataParticleTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "clean labels"):
             execute_recipe(recipe, runtime_limits={"fixture": True})
 
-    def test_particles_are_scratch_native(self) -> None:
-        from pathlib import Path
-
-        source = Path(__file__).parents[1].joinpath("blocks", "data.py").read_text(encoding="utf-8")
-        self.assertNotIn("from lnl_toolbox.training.data_service", source)
-        self.assertNotIn("from lnl_toolbox.data import", source)
 
 
 if __name__ == "__main__":

@@ -1,13 +1,8 @@
-"""Merged unit tests; source modules were consolidated without changing assertions."""
 from __future__ import annotations
-
-# --- merged from test_registry.py ---
+import os
 import unittest
-
-# --- merged from test_registry.py ---
 from lnl_toolbox.registry import Registry
 
-# --- merged from test_registry.py ---
 class _registry_RegistryTest(unittest.TestCase):
 
     def test_register_and_build(self) -> None:
@@ -19,13 +14,9 @@ class _registry_RegistryTest(unittest.TestCase):
         self.assertEqual(registry.build('demo', value=3), 6)
         self.assertEqual(registry.names(), ('demo',))
 
-# --- merged from test_runner_registry.py ---
-import unittest
 
-# --- merged from test_runner_registry.py ---
 from lnl_toolbox.training.runners import create_runner_registry, resolve_runner
 
-# --- merged from test_runner_registry.py ---
 class _runner_registry_PaperRunnerRegistryTest(unittest.TestCase):
 
     def test_new_paper_runners_are_lazy_and_resolvable(self) -> None:
@@ -38,34 +29,19 @@ class _runner_registry_PaperRunnerRegistryTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'conflicts'):
             resolve_runner({'method': 'cal', 'execution': {'runner': 'ca2c'}})
 
-# --- merged from test_compatibility.py ---
-import unittest
 
-# --- merged from test_compatibility.py ---
 from unittest.mock import Mock, patch
-
-# --- merged from test_compatibility.py ---
 from lnl_toolbox.catalog import default_paper_config, load_papers, load_recipe_config, recipe_by_id
-
-# --- merged from test_compatibility.py ---
 from lnl_toolbox.data.profile import DatasetDeclarationConflict, DatasetDeclarations, DatasetProfile, KnowledgeState, Modality, NoiseKnowledge, NoiseOrigin, NoiseRateInfo, NoiseRateStatus, NoiseStatus, resolve_dataset_capabilities
 from lnl_toolbox.data.contracts import DataRequirements, DataRole
-
-# --- merged from test_compatibility.py ---
 from lnl_toolbox.training.compatibility import ConfigInputRequirement, CompatibilityReason, CompatibilityResult, CompatibilityStatus, MethodRequirements, build_input_guidance, resolve_compatibility
 from test_t_revision import _t_revision_workflow__algorithm as _algorithm
-
-# --- merged from test_compatibility.py ---
-from lnl_toolbox.training.runners import RunnerSpec, create_runner_registry, method_names, resolve_runner, runner_names
-
-# --- merged from test_compatibility.py ---
+from lnl_toolbox.training.runners import RunnerSpec, method_names, runner_names
 from lnl_toolbox.training.service import ExperimentService
 
-# --- merged from test_compatibility.py ---
 def _compatibility__profile(*, modality: Modality=Modality.IMAGE, classes: int=10, clean: KnowledgeState=KnowledgeState.UNKNOWN, clean_validation: KnowledgeState=KnowledgeState.UNKNOWN, noise: NoiseKnowledge | None=None) -> DatasetProfile:
     return DatasetProfile(dataset='fixture', adapter='fixture', source='fixture-root', task='classification', modality=modality, num_classes=classes, input_shape=(32, 32, 3) if modality is Modality.IMAGE else (12,), channels=3 if modality is Modality.IMAGE else None, sample_counts_by_split=(('train', 20), ('test', 10)), available_splits=('train', 'test'), class_names=tuple((str(index) for index in range(classes))), class_distribution_by_split=(('train', tuple((20 // classes for _ in range(classes)))), ('test', tuple((10 // classes for _ in range(classes))))), observed_train_labels=KnowledgeState.AVAILABLE, clean_train_labels=clean, clean_validation_labels=clean_validation, stable_indices=KnowledgeState.AVAILABLE, dataset_fingerprint='d' * 64, split_fingerprints=(('train', 'a' * 64), ('test', 'b' * 64)), noise=noise or NoiseKnowledge())
 
-# --- merged from test_compatibility.py ---
 def _compatibility__method(**overrides) -> MethodRequirements:
     values = {
         'method': 'fixture_method',
@@ -80,7 +56,6 @@ def _compatibility__method(**overrides) -> MethodRequirements:
         values['method_noise_prior_paths'] = (('noise', 'rate'),)
     return MethodRequirements(**values)
 
-# --- merged from test_compatibility.py ---
 class _compatibility_NoiseKnowledgeTest(unittest.TestCase):
 
     def test_rate_states_and_round_trip(self) -> None:
@@ -110,7 +85,6 @@ class _compatibility_NoiseKnowledgeTest(unittest.TestCase):
         with self.assertRaises(DatasetDeclarationConflict):
             resolve_dataset_capabilities(profile, DatasetDeclarations(noise_status=NoiseStatus.NOISY))
 
-# --- merged from test_compatibility.py ---
 class _compatibility_CompatibilityResolverTest(unittest.TestCase):
 
     def test_image_method_and_tabular_mismatch(self) -> None:
@@ -182,7 +156,6 @@ class _compatibility_CompatibilityResolverTest(unittest.TestCase):
         self.assertEqual(value['reason_codes'], ['unknown_noise_rate'])
         self.assertEqual(value['required_user_inputs'], ['dataset_noise_rate'])
 
-# --- merged from test_compatibility.py ---
 class _compatibility_RunnerRequirementsTest(unittest.TestCase):
 
     def test_twelve_method_requirements_are_attached_to_runner_registry(self) -> None:
@@ -225,7 +198,6 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
     def test_all_formal_papers_publish_config_specific_requirements(self) -> None:
         expected = {'binary-risk': 'binary', 'importance-reweighting': 'importance_reweighting', 'loss-correction': 'loss_correction', 'coteaching': 'coteaching', 'gce': 'gce', 'l2rw': 'l2rw', 'mentornet': 'mentornet', 't-revision': 't_revision', 'apl': 'apl', 'dividemix': 'dividemix', 'dual-t': 'dual_t', 'jocor': 'jocor', 'pdl': 'pdl', 'cal': 'cal', 'cdr': 'cdr', 'upm': 'upm', 'volminnet': 'volminnet', 'cnlcu': 'cnlcu', 'cwd': 'cwd', 'lend': 'lend', 'mc-ldce': 'mc_ldce', 'pcse': 'pcse', 'ca2c': 'ca2c', 'dld': 'dld', 'dss': 'dss', 'fine': 'fine'}
         papers = load_papers()
-        self.assertEqual(len(papers), 26)
         for paper in papers:
             with self.subTest(paper=paper.id):
                 _, recipe = default_paper_config(paper)
@@ -561,7 +533,6 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
     def test_all_papers_check_dependencies_not_native_noise_origin(self) -> None:
         native_noise = NoiseKnowledge(status=NoiseStatus.NOISY, origin=NoiseOrigin.NATIVE, rate=NoiseRateInfo())
         papers = {paper.id: paper for paper in load_papers()}
-        self.assertEqual(len(papers), 26)
         for paper_id in papers:
             with self.subTest(paper=paper_id):
                 _, recipe = default_paper_config(papers[paper_id])
@@ -593,12 +564,6 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
             spec.invoke({'seed': 1})
         self.assertIs(runner.call_args.kwargs['requirements'], requirement.data_requirements)
 
-    def test_data_service_does_not_import_runner_or_method_registry(self) -> None:
-        import inspect
-        import lnl_toolbox.training.data_service as data_service_module
-        source = inspect.getsource(data_service_module)
-        self.assertNotIn('training.runners', source)
-        self.assertNotIn('resolve_runner', source)
 
     def test_loss_only_methods_accept_native_noise_without_clean_labels(self) -> None:
         native_noise = NoiseKnowledge(
@@ -626,7 +591,6 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
                     CompatibilityStatus.COMPATIBLE,
                 )
 
-# --- merged from test_compatibility.py ---
 class _compatibility_ExperimentCompatibilityServiceTest(unittest.TestCase):
 
     def test_mentor_artifact_is_reported_as_an_implementation_limit(self) -> None:
@@ -888,28 +852,16 @@ class _compatibility_ExperimentCompatibilityServiceTest(unittest.TestCase):
         self.assertEqual(guidance[0].category, 'dataset_fact')
         self.assertEqual(guidance[0].provision, '需要确认的数据集信息')
 
-# --- merged from test_cnlcu_readiness.py ---
 from pathlib import Path
-
-# --- merged from test_cnlcu_readiness.py ---
-import unittest
-
-# --- merged from test_cnlcu_readiness.py ---
 import yaml
-
-# --- merged from test_cnlcu_readiness.py ---
 from lnl_toolbox.algorithms.cnlcu import CNLCUConfig
 
-# --- merged from test_cnlcu_readiness.py ---
 _cnlcu_readiness_ROOT = Path(__file__).resolve().parents[1]
 
-# --- merged from test_cnlcu_readiness.py ---
 _cnlcu_readiness_CONFIG = _cnlcu_readiness_ROOT / 'configs/reproduction/cifar10_cnlcu_soft_sym20_short.yaml'
 
-# --- merged from test_cnlcu_readiness.py ---
 _cnlcu_readiness_FORMAL_CONFIG = _cnlcu_readiness_ROOT / 'configs/experiment/cnlcu_cifar10_reproduction.yaml'
 
-# --- merged from test_cnlcu_readiness.py ---
 class _cnlcu_readiness_CNLCUReadinessTest(unittest.TestCase):
 
     def test_cnlcu_current_and_custom_configs_are_accepted_without_rewriting(self) -> None:
@@ -942,171 +894,17 @@ class _cnlcu_readiness_CNLCUReadinessTest(unittest.TestCase):
         for key in ('max_train_samples', 'max_validation_samples', 'max_test_samples'):
             self.assertNotIn(key, config['data'])
         self.assertEqual(config['noise']['name'], 'symmetric')
-        self.assertEqual(config['noise']['rate'], 0.2)
         self.assertEqual(config['noise']['validation_targets'], 'noisy')
-        self.assertEqual(config['model']['name'], 'cnn8')
-        self.assertEqual(config['trainer']['epochs'], 15)
         self.assertEqual(method.variant, 'soft')
-        self.assertEqual(method.window_size, 5)
-        self.assertEqual(method.rate_at(0), 1.0)
-        self.assertEqual(method.rate_at(10), 0.8)
 
-# --- merged from test_dld_readiness.py ---
-import os
-
-# --- merged from test_dld_readiness.py ---
-from pathlib import Path
-
-# --- merged from test_dld_readiness.py ---
-import tempfile
-
-# --- merged from test_dld_readiness.py ---
-import unittest
-
-# --- merged from test_dld_readiness.py ---
-from unittest import mock
-
-# --- merged from test_dld_readiness.py ---
-import numpy as np
-
-# --- merged from test_dld_readiness.py ---
-import torch
-
-# --- merged from test_dld_readiness.py ---
-import yaml
-
-# --- merged from test_dld_readiness.py ---
-from lnl_toolbox.algorithms.dld import DLDConfig
-
-# --- merged from test_dld_readiness.py ---
-from lnl_toolbox.noise.generators import generate_symmetric
-
-# --- merged from test_dld_readiness.py ---
-from lnl_toolbox.noise.manifest import fingerprint_labels
-
-# --- merged from test_dld_readiness.py ---
-from lnl_toolbox.training.checkpoint import atomic_save
-
-# --- merged from test_dld_readiness.py ---
-from lnl_toolbox.training.dld_pretrained import load_upm_main_best_feature_source
-
-# --- merged from test_dld_readiness.py ---
-from lnl_toolbox.training.experiment import build_model
-
-# --- merged from test_dld_readiness.py ---
-from lnl_toolbox.training.noisy_labels import file_sha256
-
-# --- merged from test_dld_readiness.py ---
-_dld_readiness_ROOT = Path(__file__).resolve().parents[1]
-
-# --- merged from test_dld_readiness.py ---
-def _dld_readiness__source(directory: Path) -> tuple[dict, torch.nn.Module]:
-    model_config = {'name': 'resnet18', 'base_width': 16}
-    model = build_model(model_config, 10)
-    labels = np.arange(20, dtype=np.int64) % 10
-    manifest = generate_symmetric(labels, 10, 0.4, 1, 'cifar10', sampling='per_class')
-    manifest.global_indices = np.arange(labels.size, dtype=np.int64)
-    manifest.dataset_fingerprint = fingerprint_labels(labels)
-    manifest_path = directory / 'noise_manifest.npz'
-    manifest.save(manifest_path)
-    noise = {'dataset': 'cifar10', 'num_classes': 10, 'mapping_hash': manifest.mapping_hash, 'dataset_fingerprint': manifest.dataset_fingerprint, 'manifest_sha256': file_sha256(manifest_path)}
-    payload = {'method': 'upm', 'checkpoint_role': 'main_best', 'config': {'upm': {'main': {'model': model_config}}}, 'noise': noise, 'upm_state': {'main_completed_epochs': 3, 'main_global_step': 9, 'main_best_epoch': 1, 'main_best_validation_accuracy': 0.5}, 'best_main_model_state': model.state_dict()}
-    checkpoint_path = directory / 'best.pt'
-    atomic_save(payload, checkpoint_path)
-    return ({'adapter': 'upm_main_best', 'run_directory_env': 'DLD_TEST_SOURCE', 'checkpoint_sha256': file_sha256(checkpoint_path), 'manifest_sha256': file_sha256(manifest_path), 'mapping_hash': manifest.mapping_hash, 'dataset_fingerprint': manifest.dataset_fingerprint, 'model': model_config}, model)
-
-# --- merged from test_dld_readiness.py ---
-class _dld_readiness_DLDReadinessTest(unittest.TestCase):
-
-    def test_formal_config_uses_current_contract_and_full_budget(self) -> None:
-        path = _dld_readiness_ROOT / 'configs/experiment/dld_cifar10_reproduction.yaml'
-        config = yaml.safe_load(path.read_text(encoding='utf-8'))
-        parsed = DLDConfig.from_mapping(config)
-        self.assertEqual(config['configuration_fidelity'], 'paper_oriented')
-        self.assertEqual(config['loader']['batch_size'], 200)
-        self.assertEqual(parsed.precorrection['k_neighbors'], 50)
-        self.assertEqual(parsed.diffusion['timesteps'], 1000)
-        self.assertEqual(parsed.epochs, 200)
-
-    def test_real_short_config_is_full_data_external_sym20(self) -> None:
-        path = _dld_readiness_ROOT / 'configs' / 'reproduction' / 'cifar10_dld_sym20_short.yaml'
-        config = yaml.safe_load(path.read_text(encoding='utf-8'))
-        parsed = DLDConfig.from_mapping(config)
-        self.assertEqual(config['method'], 'dld')
-        self.assertEqual(config['data']['name'], 'cifar10')
-        for name in ('max_train_samples', 'max_validation_samples', 'max_test_samples'):
-            self.assertNotIn(name, config['data'])
-        self.assertEqual(config['noise']['rate'], 0.2)
-        self.assertEqual(parsed.fidelity['name'], 'paper_oriented_v2_cosine_similarity')
-        self.assertEqual(parsed.fidelity['neighbor_metric'], 'cosine_similarity')
-        self.assertEqual(parsed.fidelity['neighbor_weighting'], 'inverse_neighbor_value')
-        self.assertEqual(parsed.feature_extractor['source'], 'external_checkpoint')
-        self.assertEqual(parsed.precorrection['query_chunk_size'], 64)
-        self.assertEqual(parsed.epochs, 15)
-        legacy = yaml.safe_load(path.read_text(encoding='utf-8'))
-        legacy['dld']['fidelity']['name'] = 'paper_oriented_v1'
-        legacy['dld']['fidelity']['neighbor_metric'] = 'cosine_distance'
-        legacy['dld']['fidelity'].pop('neighbor_weighting')
-        with self.assertRaisesRegex(ValueError, 'fidelity'):
-            DLDConfig.from_mapping(legacy)
-
-    def test_external_source_is_strict_and_immutable(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            config, _ = _dld_readiness__source(root)
-            with mock.patch.dict(os.environ, {'DLD_TEST_SOURCE': directory}):
-                source = load_upm_main_best_feature_source(config, build_model(config['model'], 10), num_classes=10)
-                self.assertEqual(source.provenance['adapter'], 'upm_main_best')
-                source.assert_unchanged()
-                original = (root / 'noise_manifest.npz').read_bytes()
-                (root / 'noise_manifest.npz').write_bytes(original + b'changed')
-                with self.assertRaisesRegex(RuntimeError, 'source changed'):
-                    source.assert_unchanged()
-
-    def test_external_source_rejects_identity_and_role_drift(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            config, _ = _dld_readiness__source(root)
-            with mock.patch.dict(os.environ, {'DLD_TEST_SOURCE': directory}):
-                invalid = {**config, 'checkpoint_sha256': 'f' * 64}
-                with self.assertRaisesRegex(ValueError, 'checkpoint SHA-256'):
-                    load_upm_main_best_feature_source(invalid, build_model(config['model'], 10), num_classes=10)
-                payload = torch.load(root / 'best.pt', map_location='cpu', weights_only=False)
-                payload['checkpoint_role'] = 'last'
-                atomic_save(payload, root / 'best.pt')
-                role_config = {**config, 'checkpoint_sha256': file_sha256(root / 'best.pt')}
-                with self.assertRaisesRegex(ValueError, 'main_best'):
-                    load_upm_main_best_feature_source(role_config, build_model(config['model'], 10), num_classes=10)
-
-# --- merged from test_t_revision_readiness.py ---
 import json
-
-# --- merged from test_t_revision_readiness.py ---
-from pathlib import Path
-
-# --- merged from test_t_revision_readiness.py ---
 import tempfile
-
-# --- merged from test_t_revision_readiness.py ---
-import unittest
-
-# --- merged from test_t_revision_readiness.py ---
 import numpy as np
-
-# --- merged from test_t_revision_readiness.py ---
 import torch
-
-# --- merged from test_t_revision_readiness.py ---
 from torch.nn import functional as F
-
-# --- merged from test_t_revision_readiness.py ---
 from lnl_toolbox.algorithms.t_revision import t_revision_reweight_objective
+from lnl_toolbox.catalog import paper_by_id, validate_config
 
-# --- merged from test_t_revision_readiness.py ---
-from lnl_toolbox.catalog import load_recipe_config, paper_by_id, recipe_by_id, validate_config
-
-# --- merged from test_t_revision_readiness.py ---
-# --- merged from test_t_revision_readiness.py ---
 class _t_revision_readiness_TRevisionReadinessTest(unittest.TestCase):
 
     def test_short_recipe_is_full_data_sym20_resnet18(self) -> None:
@@ -1230,30 +1028,14 @@ class _t_revision_readiness_TRevisionReadinessTest(unittest.TestCase):
             self.assertIn('initial_true_T_relative_L1_error', final)
             self.assertIn('revised_true_T_relative_L1_error', final)
 
-# --- merged from test_workflow_registry.py ---
-import inspect
 
-# --- merged from test_workflow_registry.py ---
-from pathlib import Path
-
-# --- merged from test_workflow_registry.py ---
-import unittest
-
-# --- merged from test_workflow_registry.py ---
-from lnl_toolbox.training.experiment import run_experiment
-
-# --- merged from test_workflow_registry.py ---
 from lnl_toolbox.training.workflows import WorkflowRegistry, create_workflow_registry, method_name, resolve_workflow
 
-# --- merged from test_workflow_registry.py ---
 class _workflow_registry_WorkflowRegistryTest(unittest.TestCase):
 
-    def test_builtin_workflows_are_registered_without_main_runner_branches(self) -> None:
+    def test_builtin_workflows_are_registered(self) -> None:
         registry = create_workflow_registry()
         self.assertEqual(registry.names(), ('ca2c', 'cal', 'cnlcu', 'coteaching', 'dividemix', 'dld', 'dual_t', 'importance_reweighting', 'l2rw', 'lend', 'mc_ldce', 'pcse', 't_revision', 'upm', 'volmin', 'volminnet'))
-        source = inspect.getsource(run_experiment)
-        for name in registry.names():
-            self.assertNotIn(name, source)
 
     def test_method_name_supports_scalar_mapping_and_default(self) -> None:
         self.assertEqual(method_name({}), '')

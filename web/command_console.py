@@ -1797,6 +1797,8 @@ def _parameter_base_note(path: str, original: str) -> str:
 
 
 def _parameter_ui_spec(path: str) -> list[str] | None:
+    if path.endswith((".early_stopping", ".warmup_early_stopping")):
+        return [path, "启用后，验证指标连续15轮没有改善时结束训练，使用保存的最佳模型继续后续流程；关闭后按设置的训练预算运行。"]
     if path == "algorithm.estimated_noise_rate":
         return ["algorithm.estimated_noise_rate", "预计训练标签中错误标签的比例，用于确定样本筛选的最终保留比例（1−此值）。人工加噪时自动使用所设噪声率；干净数据为 0；原生带噪且噪声率未知时需要填写。修改此值不会改变标签或加噪率。"]
     ui = _parameter_registry().get("parameter_ui", {})
@@ -2191,6 +2193,7 @@ def _config_schema(
             },
         )
     )
+    fields = [field for field in fields if not str(field["path"]).startswith("early_stopping.")]
     fields.extend(_schedule_editor_fields(payload["config"]))
     original = (
         _config_payload(recipe_hint)["config"]
@@ -2214,10 +2217,22 @@ def _config_schema(
                 source = source.get(part) if isinstance(source, dict) else None
             if isinstance(source, int) and not isinstance(source, bool):
                 field["split_reference"] = {"count": source, "total": original_count}
+    fields.extend(_stage_early_stopping_fields(payload["config"]))
     display_order = _parameter_registry().get("default_parameter_paths", {}).get("methods", {}).get(_method_registry_key(method), ())
     positions = {path: index for index, path in enumerate(display_order)}
     fields.sort(key=lambda field: positions.get(str(field["path"]), len(positions))
                 if field.get("display_group") == "default" else len(positions))
+    if method == "pcse":
+        stages = ("pretraining_stage", "transition_stage", "feature_stage",
+                  "statistics_stage", "gda_stage", "ensemble_stage")
+        for stage in stages:
+            controls = [field for field in fields if field["path"] == stage + ".early_stopping"]
+            for control in controls:
+                fields.remove(control)
+                indices = [index for index, field in enumerate(fields)
+                           if field.get("display_group") == control["display_group"]
+                           and str(field["path"]).startswith(stage + ".")]
+                fields.insert(indices[-1] + 1 if indices else len(fields), control)
     return {
         "recipe": payload["recipe"],
         "source_path": payload["path"],
@@ -2235,13 +2250,30 @@ def _field_map(config: dict[str, Any], method: str) -> dict[str, dict[str, objec
         if registry_fields is not None
         else _legacy_editable_config_fields(config)
     )
-    result = {str(field["path"]): field for field in fields}
+    result = {str(field["path"]): field for field in fields
+              if not str(field["path"]).startswith("early_stopping.")}
     for schedule_field in _schedule_editor_fields(config):
         result[str(schedule_field["path"])] = schedule_field
+    for stage_field in _stage_early_stopping_fields(config):
+        result[str(stage_field["path"])] = stage_field
     for field in result.values():
         field["choices"] = _parameter_choices(field, method)
         field["rows"] = _parameter_list_rows(field, config, method)
     return result
+
+
+def _stage_early_stopping_fields(config: dict[str, Any]) -> list[dict[str, object]]:
+    from lnl_toolbox.core.config_schema import training_stage_controls
+
+    method = _config_method(config)
+    return [{
+        "path": control["path"], "label": _parameter_user_label(control["path"], method),
+        "value": control["value"], "kind": "boolean", "nullable": False,
+        "level": "basic", "display_group": "default", "editable": True,
+        "visible": True, "presentation": "parameter", "choices": None,
+        "note": _parameter_user_note(control["path"], "", method),
+        "research_group": "", "research_category": "", "linked_fields": [],
+    } for control in training_stage_controls(config)]
 
 
 def _schedule_editor_fields(config: dict[str, Any]) -> list[dict[str, object]]:
@@ -2310,6 +2342,16 @@ def _validate_schedule_editor_rates(config: dict[str, Any]) -> None:
 
 
 def _set_config_path(config: dict[str, object], path: str, value: object) -> None:
+    from lnl_toolbox.core.config_schema import training_stage_controls
+
+    if path in {control["path"] for control in training_stage_controls(config)}:
+        # Use the same typed override implementation as `lnl run --set`.
+        from lnl_toolbox.core.config_overrides import apply_override
+
+        updated = apply_override(config, path, value)
+        config.clear()
+        config.update(updated)
+        return
     parts = path.split(".")
     current: dict[str, object] = config
     for part in parts[:-1]:

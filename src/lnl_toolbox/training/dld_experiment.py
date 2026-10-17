@@ -402,7 +402,10 @@ class DLDWorkflow:
     def train(self) -> None:
         self._prepare_algorithm()
         assert self.algorithm is not None
-        while self.state.completed_epochs < self.method_config.epochs:
+        from lnl_toolbox.training.early_stopping import StageEarlyStopping
+        stopping = StageEarlyStopping(self.config, "dld.diffusion.early_stopping", "validation_accuracy", run_dir=self.run_dir)
+        stopping.replay_file(self.run_dir / "metrics.jsonl", event="diffusion_epoch", completed=self.state.completed_epochs, zero_based=True)
+        while self.state.completed_epochs < self.method_config.epochs and not stopping.stopped:
             epoch = self.state.completed_epochs
             loader = self.prepared_data.loader_for_dataset(
                 _IndexDataset(self.train_indices), shuffle=True,
@@ -459,7 +462,9 @@ class DLDWorkflow:
                     if name != "accuracy"
                 },
             })
+            stopping.update({"epoch": epoch, "validation_accuracy": validation_accuracy})
             self._save_last()
+        self.diffusion_early_stopped = stopping.stopped
 
     def complete(self) -> None:
         if self.best_algorithm_state is None or not self.best_path.is_file():
@@ -533,6 +538,11 @@ class DLDWorkflow:
         if self.feature_source is not None:
             self.feature_source.assert_unchanged()
         if self.state.phase is DLDPhase.COMPLETED:
+            from lnl_toolbox.training.early_stopping import StageEarlyStopping
+            stopping = StageEarlyStopping(self.config, "dld.diffusion.early_stopping", "validation_accuracy")
+            stopping.replay_file(self.run_dir / "metrics.jsonl", event="diffusion_epoch", completed=self.state.completed_epochs, zero_based=True)
+            if stopping.stopped:
+                return
             if self.state.completed_epochs >= self.method_config.epochs:
                 return
             self.state.phase = DLDPhase.DIFFUSION_TRAINING
@@ -540,7 +550,7 @@ class DLDWorkflow:
             self.build_precorrection()
         if self.state.phase in {DLDPhase.PRECORRECTION_READY, DLDPhase.DIFFUSION_TRAINING}:
             self.train()
-        if self.state.completed_epochs >= self.method_config.epochs and self.state.phase is DLDPhase.DIFFUSION_TRAINING:
+        if (self.state.completed_epochs >= self.method_config.epochs or getattr(self, "diffusion_early_stopped", False)) and self.state.phase is DLDPhase.DIFFUSION_TRAINING:
             self.complete()
         if self.feature_source is not None:
             self.feature_source.assert_unchanged()

@@ -349,7 +349,10 @@ class PCSEAlgorithm:
         target = self.method_config.pretraining.epochs
         if max_epochs is not None:
             target = min(target, self.state.pretraining_completed_epochs + max_epochs)
-        while self.state.pretraining_completed_epochs < target:
+        from lnl_toolbox.training.early_stopping import StageEarlyStopping
+        stopping = StageEarlyStopping(self.config, "pretraining_stage.early_stopping", "validation_accuracy", run_dir=self.run_dir)
+        stopping.replay_file(self.run_dir / "metrics.jsonl", event="epoch", phase="pretraining", completed=self.state.pretraining_completed_epochs)
+        while self.state.pretraining_completed_epochs < target and not stopping.stopped:
             epoch = self.state.pretraining_completed_epochs
             train = _train_supervised_epoch(
                 self.pretraining_algorithm,
@@ -409,7 +412,8 @@ class PCSEAlgorithm:
                 ),
             })
             self._save_last()
-        if self.state.pretraining_completed_epochs == target == (
+            stopping.update({"epoch": epoch + 1, "validation_accuracy": validation["accuracy"]})
+        if stopping.stopped or self.state.pretraining_completed_epochs == target == (
             self.method_config.pretraining.epochs
         ):
             self._validate_best_checkpoint(required=True)
@@ -689,7 +693,10 @@ class PCSEAlgorithm:
             )
         latest_metrics: Mapping[str, float] | None = None
         model = self.pretraining_algorithm.model
-        while self.state.transition_completed_epochs < target:
+        from lnl_toolbox.training.early_stopping import StageEarlyStopping, forward_validation
+        stopping = StageEarlyStopping(self.config, "transition_stage.early_stopping", "validation_loss", mode="min", run_dir=self.run_dir)
+        stopping.replay_file(self.run_dir / "metrics.jsonl", event="epoch", phase="transition", completed=self.state.transition_completed_epochs)
+        while self.state.transition_completed_epochs < target and not stopping.stopped:
             model.train()
             samples = 0
             totals: dict[str, float] = {}
@@ -728,6 +735,8 @@ class PCSEAlgorithm:
                 name: value / samples for name, value in totals.items()
             }
             self.state.transition_completed_epochs += 1
+            if stopping.enabled:
+                latest_metrics = {**latest_metrics, **forward_validation(model, self.transition_model, self.noisy_validation_loader, self.device)}
             self._append_metrics({
                 "event": "epoch",
                 "stage": "transition",
@@ -736,7 +745,11 @@ class PCSEAlgorithm:
                 **latest_metrics,
             })
             self._save_last()
-        if self.state.transition_completed_epochs == int(values["epochs"]):
+            if stopping.observe({"epoch": self.state.transition_completed_epochs, **latest_metrics},
+                                {"model": model, "transition": self.transition_model, "optimizer": self.transition_optimizer}):
+                break
+        if stopping.stopped or self.state.transition_completed_epochs == int(values["epochs"]):
+            stopping.restore_best({"model": model, "transition": self.transition_model})
             transition = self.transition_model.matrix()
             _, diagnostics = validate_paper_volmin_transition(
                 transition,
@@ -1000,7 +1013,10 @@ class PCSEAlgorithm:
         target = self.method_config.ensemble.epochs
         if max_epochs is not None:
             target = min(target, self.state.ensemble_completed_epochs + max_epochs)
-        while self.state.ensemble_completed_epochs < target:
+        from lnl_toolbox.training.early_stopping import StageEarlyStopping
+        stopping = StageEarlyStopping(self.config, "ensemble_stage.early_stopping", "validation_nll", mode="min", run_dir=self.run_dir)
+        stopping.replay_file(self.run_dir / "metrics.jsonl", event="epoch", phase="ensemble", completed=self.state.ensemble_completed_epochs)
+        while self.state.ensemble_completed_epochs < target and not stopping.stopped:
             raw, optimizer, losses = fit_ensemble_weights(
                 probabilities,
                 targets,
@@ -1023,9 +1039,13 @@ class PCSEAlgorithm:
                 "ensemble_weights": weights.tolist(),
             })
             self._save_last()
-        if self.state.ensemble_completed_epochs == (
+            if stopping.observe({"epoch": self.state.ensemble_completed_epochs, "validation_nll": losses[-1]},
+                                {"weights": self.ensemble_raw_weights, "optimizer": self.ensemble_optimizer}):
+                break
+        if stopping.stopped or self.state.ensemble_completed_epochs == (
             self.method_config.ensemble.epochs
         ):
+            stopping.restore_best({"weights": self.ensemble_raw_weights})
             self.complete()
 
     def complete(self) -> dict[str, Any]:
@@ -1041,7 +1061,7 @@ class PCSEAlgorithm:
                 "method": "pcse",
                 "gda_artifact_hash": self.gda_artifact.artifact_hash,
                 "validation_split": "noisy_validation",
-                "ensemble_epochs": self.method_config.ensemble.epochs,
+                "ensemble_epochs": self.state.ensemble_completed_epochs,
                 "ensemble_learning_rate": (
                     self.method_config.ensemble.learning_rate
                 ),

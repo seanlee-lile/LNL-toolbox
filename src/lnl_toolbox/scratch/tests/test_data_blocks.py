@@ -209,16 +209,6 @@ class DataBlockExecutionTest(unittest.TestCase):
         self.assertIn("strong", row["views"])
         self.assertEqual(tuple(row["inputs"].shape), (3, 4, 4))
 
-    def test_noncanonical_data_convenience_blocks_are_removed(self) -> None:
-        root = Path(__file__).parents[1]
-        data_source = (root / "blocks" / "data.py").read_text(encoding="utf-8")
-        examples = list((root / "recipes" / "examples").glob("*.yaml"))
-        example_text = "\n".join(path.read_text(encoding="utf-8") for path in examples)
-        for block_id in ("select_" + "dataset", "configure_" + "noise", "create_" + "loader"):
-            self.assertNotIn(f'id="{block_id}"', data_source)
-            self.assertNotIn(f"block: {block_id}", example_text)
-        self.assertIn("load_synthetic", data_source)
-        self.assertNotIn("create_" + "loader", example_text)
 
 
 if __name__ == "__main__":

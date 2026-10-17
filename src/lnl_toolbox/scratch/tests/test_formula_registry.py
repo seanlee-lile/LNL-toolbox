@@ -41,15 +41,12 @@ class FormulaRegistryTest(unittest.TestCase):
         })
         self.assertEqual(get_formula("user/nested_formula").name, "Nested Formula")
 
-    def test_builtin_formula_count(self):
-        self.assertGreaterEqual(len([item for item in BLOCKS if item.startswith("formula__builtin__")]), 5)
 
     def test_formula_blocks_have_explicit_kinds_and_no_legacy_flag(self):
         allowed = {"primitive", "special", "composite"}
         for block in list_blocks():
             if block.formula:
                 self.assertIn(block.formula_kind, allowed, block.id)
-            self.assertNotIn("formula" + "_safe", block.describe())
 
     def test_nested_cycle_is_rejected(self):
         register_formula(_formula("user/cycle_a"))

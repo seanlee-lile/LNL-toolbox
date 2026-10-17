@@ -98,10 +98,14 @@ def prepare_trusted_mentor_features(
     size = int(student_trainer.get("trusted_size", config.get("trusted_size", 5000)))
     noise_rate = float(dict(config.get("noise", {})).get("rate", config.get("noise_rate", 0.4)))
     data_config = _mentor_data_config(config, seed, size, noise_rate)
+    from lnl_toolbox.training.early_stopping import StageEarlyStopping
+    stopping = StageEarlyStopping(config, "student_trainer.early_stopping", "validation_accuracy", run_dir=destination)
+    if stopping.enabled:
+        data_config["data"].setdefault("validation_size", max(1, size // 10))
     prepared = prepare_experiment_data(
         data_config,
         requirements=DataRequirements(
-            roles=frozenset({DataRole.TRAIN}), manifest_scope="effective_train"
+            roles=frozenset({DataRole.TRAIN, DataRole.CLEAN_VALIDATION} if stopping.enabled else {DataRole.TRAIN}), manifest_scope="effective_train"
         ),
         run_dir=destination,
         seed=seed,
@@ -117,6 +121,7 @@ def prepare_trusted_mentor_features(
     clean = np.asarray([clean_source[positions[int(index)]] for index in indices], dtype=np.int64)
     np.savez_compressed(destination / "trusted_indices.npz", indices=indices)
     loader = prepared.loader(DataRole.TRAIN)
+    validation_loader = prepared.loader(DataRole.CLEAN_VALIDATION, shuffle=False) if stopping.enabled else None
     device = torch.device(str(student_trainer.get("device", config.get("device", "cpu"))))
     sample = prepared.dataset_for(DataRole.TRAIN)[0]["input"]
     model = _build_student_model(sample, prepared.num_classes, config).to(device)
@@ -131,6 +136,7 @@ def prepare_trusted_mentor_features(
     targets_out: list[np.ndarray] = []
     epochs_out: list[np.ndarray] = []
     labels_out: list[np.ndarray] = []
+    sample_indices_out: list[np.ndarray] = []
     moving: float | None = None
     epochs = int(student_trainer.get("epochs", config.get("student_epochs", 20)))
     for epoch in range(epochs):
@@ -139,6 +145,7 @@ def prepare_trusted_mentor_features(
             inputs = batch["input"].to(device)
             targets = torch.as_tensor(batch["target"], device=device)
             sample_indices = torch.as_tensor(batch["index"]).cpu().numpy()
+            sample_indices_out.append(sample_indices)
             per_sample = torch.nn.functional.cross_entropy(
                 model(inputs), targets, reduction="none"
             )
@@ -159,6 +166,12 @@ def prepare_trusted_mentor_features(
                 float(noisy_targets[position] == clean_by_global[int(index)])
                 for position, index in enumerate(sample_indices)
             ], dtype=np.float32))
+        if stopping.enabled:
+            from lnl_toolbox.evaluation.classification import evaluate_classification
+            validation = evaluate_classification(model, validation_loader, nn.CrossEntropyLoss(reduction="none"), device)
+            if stopping.observe({"epoch": epoch + 1, "validation_accuracy": validation["accuracy"]},
+                                {"model": model, "optimizer": optimizer}):
+                break
     feature_path = destination / "mentor_features.npz"
     np.savez_compressed(
         feature_path,
@@ -168,11 +181,12 @@ def prepare_trusted_mentor_features(
         epoch_percentages=np.concatenate(epochs_out),
         curriculum_targets=np.concatenate(targets_out),
     )
+    np.savez_compressed(destination / "mentor_feature_sample_indices.npz", indices=np.concatenate(sample_indices_out))
     metadata = {
         "seed": seed,
         "trusted_size": size,
         "noise_rate": noise_rate,
-        "student_epochs": epochs,
+        "student_epochs": epoch + 1,
         "feature_records": int(sum(len(value) for value in losses_out)),
         "clean_truth_scope": "offline_curriculum_target_only",
     }
@@ -192,6 +206,26 @@ def train_mentor_artifact(
     loader_config = dict(config.get("loader", {}))
     trainer_config = dict(config.get("trainer", {}))
     optimizer_config = dict(config.get("optimizer", {}))
+    from lnl_toolbox.training.early_stopping import StageEarlyStopping
+    stopping = StageEarlyStopping(config, "trainer.early_stopping", "validation_loss", mode="min", run_dir=Path(output_path).parent)
+    validation_loader = None
+    if stopping.enabled:
+        source = Path(config["feature_data"]).parent / "mentor_feature_sample_indices.npz"
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        if not source.is_file():
+            raise ValueError("Mentor early stopping requires sample-group metadata; regenerate features with lnl mentor prepare")
+        with np.load(source, allow_pickle=False) as payload:
+            groups = np.asarray(payload["indices"])
+        if groups.shape != (len(dataset),):
+            raise ValueError("Mentor feature sample-group metadata is not aligned")
+        unique = np.unique(groups)
+        if len(unique) < 2:
+            raise ValueError("Mentor early stopping requires at least two distinct source samples")
+        shuffled = np.random.default_rng(seed).permutation(unique)
+        held_out = np.isin(groups, shuffled[:max(1, len(unique) // 10)])
+        validation_loader = DataLoader(torch.utils.data.Subset(dataset, np.flatnonzero(held_out).tolist()),
+                                       batch_size=int(loader_config.get("batch_size", 128)), shuffle=False)
+        dataset = torch.utils.data.Subset(dataset, np.flatnonzero(~held_out).tolist())
     loader = DataLoader(
         dataset,
         batch_size=int(loader_config.get("batch_size", config.get("batch_size", 128))),
@@ -213,6 +247,24 @@ def train_mentor_artifact(
     if epochs <= 0:
         raise ValueError("MentorNet epochs must be positive")
     model.train()
+    completed_epochs = 0
+
+    def validation_finished(epoch):
+        if not stopping.enabled:
+            return False
+        model.eval()
+        total_loss, count = 0.0, 0
+        with torch.inference_mode():
+            for batch in validation_loader:
+                prediction = model(batch["loss"].to(device), batch["loss_difference"].to(device),
+                                   batch["label"].to(device), batch["epoch_percentage"].to(device))
+                targets = batch["curriculum_target"].to(device)
+                total_loss += float(torch.nn.functional.binary_cross_entropy(prediction, targets, reduction="sum"))
+                count += targets.numel()
+        model.train()
+        return stopping.observe({"epoch": epoch, "validation_loss": total_loss / count},
+                                {"model": model, "optimizer": optimizer})
+
     if implementation == "official" and max_steps is not None:
         iterator = iter(loader)
         for step in range(max_steps):
@@ -237,8 +289,12 @@ def train_mentor_artifact(
             objective.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             optimizer.step()
+            if (step + 1) % len(loader) == 0:
+                completed_epochs += 1
+                if validation_finished(completed_epochs):
+                    break
     else:
-        for _ in range(epochs):
+        for epoch in range(epochs):
             for batch in loader:
                 prediction = model(
                     batch["loss"].to(device),
@@ -252,6 +308,10 @@ def train_mentor_artifact(
                 optimizer.zero_grad(set_to_none=True)
                 objective.backward()
                 optimizer.step()
+            completed_epochs = epoch + 1
+            if validation_finished(completed_epochs):
+                break
+    stopping.restore_best({"model": model})
     artifact = MentorArtifact.create(
         architecture=model.architecture(),
         feature_schema={
@@ -264,7 +324,7 @@ def train_mentor_artifact(
         source={
             "feature_data": str(Path(config["feature_data"])),
             "seed": seed,
-            "epochs": epochs,
+            "epochs": completed_epochs if stopping.enabled else epochs,
             "max_steps": max_steps,
             "optimizer": "adam",
             "learning_rate_decay": "0.9 every 1000 steps" if max_steps else None,

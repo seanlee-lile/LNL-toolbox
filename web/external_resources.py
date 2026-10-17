@@ -61,8 +61,8 @@ def resources(config, root):
     if feature.get("source") == "external_checkpoint" and feature.get("external", {}).get("adapter") == "torchvision_resnet34_imagenet1k_v1":
         import torch
         add("dld-resnet34", "ResNet-34 预训练权重", Path(torch.hub.get_dir()) / "checkpoints/resnet34-b627a593.pth",
-            "https://download.pytorch.org/models/resnet34-b627a593.pth", "b627a593",
-            "用于 DLD 提取图像特征，约 83 MB。自行下载后保留原文件名。")
+            "https://download.pytorch.org/models/resnet34-b627a593.pth",
+            note="用于 DLD 提取图像特征，约 83 MB。自行下载后保留原文件名。")
     data = config.get("data", {})
     if data.get("name") == "uci_statlog_heart":
         from scripts.prepare_uci_statlog_heart import URL, RAW_SHA256

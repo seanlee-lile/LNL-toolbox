@@ -271,7 +271,7 @@ def run_fine_experiment(
         scr.load_state_dict(checkpoint["scr"])
         regularizer.load_state_dict(checkpoint["regularizer"])
         restore_rng_state(checkpoint["rng_state"])
-        start_epoch = int(checkpoint["completed_epoch"]) + 1
+        start_epoch = int(checkpoint.get("schedule_epoch", checkpoint["completed_epoch"])) + 1
         rows = list(checkpoint.get("metrics", []))
 
     criterion = CrossEntropyLoss().to(device)
@@ -285,7 +285,17 @@ def run_fine_experiment(
         )
         if checkpoint is not None and checkpoint.get("scheduler") is not None:
             scheduler.load_state_dict(checkpoint["scheduler"])
-    for epoch in range(start_epoch, epochs):
+    from lnl_toolbox.training.early_stopping import StageEarlyStopping, stage_epochs
+    warmup_stopping = StageEarlyStopping(config, "fine.warmup_early_stopping", "validation_accuracy", run_dir=run_dir)
+    main_stopping = StageEarlyStopping(config, "trainer.early_stopping", "validation_accuracy", run_dir=run_dir)
+    if (warmup_stopping.enabled or main_stopping.enabled) and validation_loader is None:
+        raise ValueError("FINE stage early stopping requires a validation split")
+    warmup_stopping.replay(rows, phase="warmup")
+    main_stopping.replay(rows, phase="robust")
+    components = {"model": model, "ema": ema, "optimizer": optimizer}
+    if warmup_stopping.stopped and start_epoch < warmup_epochs:
+        warmup_stopping.restore_best(components)
+    for epoch in stage_epochs(start_epoch, epochs, warmup_epochs, warmup_stopping, main_stopping):
         # Epoch-derived loader seeds make interrupted training reproducible,
         # including augmentation workers and batch order.
         train_loader = prepared.loader(DataRole.TRAIN, epoch=epoch)
@@ -327,7 +337,7 @@ def run_fine_experiment(
             )
             clean_ratio = float(clean_mask.float().mean())
         row_values = {
-            "epoch": epoch + 1,
+            "epoch": len(rows) + 1, "schedule_epoch": epoch,
             "phase": "warmup" if epoch < warmup_epochs else "robust",
             "train_loss": train_loss,
             "train_accuracy": train_accuracy,
@@ -364,11 +374,14 @@ def run_fine_experiment(
             "scs": scs.state_dict(),
             "scr": scr.state_dict(),
             "regularizer": regularizer.state_dict(),
-            "completed_epoch": epoch,
+            "completed_epoch": len(rows) - 1, "schedule_epoch": epoch,
             "metrics": rows,
             "rng_state": capture_rng_state(),
             "noise": noise_metadata,
         }, run_dir / "last.pt")
+        stopping = warmup_stopping if epoch < warmup_epochs else main_stopping
+        stopping.observe(row, components)
+    main_stopping.restore_best(components)
     (run_dir / "resolved_config.yaml").write_text(
         yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
     )
@@ -379,7 +392,7 @@ def run_fine_experiment(
     tail = rows[-10:]
     final_row = {
         "event": "final",
-        "completed_epochs": epochs,
+        "completed_epochs": len(rows),
         "test_loss": rows[-1]["test_loss"],
         "test_accuracy": rows[-1]["test_accuracy"],
         "last_10_test_accuracy": sum(row["test_accuracy"] for row in tail) / len(tail),

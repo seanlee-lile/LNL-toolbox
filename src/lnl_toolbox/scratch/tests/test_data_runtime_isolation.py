@@ -21,10 +21,6 @@ class ScratchDataRuntimeIsolationTest(unittest.TestCase):
             self.assertFalse(any(name.startswith(forbidden) for name in imports),
                              f"{path} imports legacy data runtime: {imports}")
 
-    def test_old_data_prepare_blocks_are_not_reintroduced(self):
-        text = (ROOT / "scratch" / "blocks" / "data.py").read_text(encoding="utf-8")
-        self.assertNotIn("def prepare_", text)
-        self.assertNotIn('id="prepare_', text)
 
 
 if __name__ == "__main__":

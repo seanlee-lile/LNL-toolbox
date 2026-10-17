@@ -70,7 +70,11 @@ def apply_override(config: Mapping[str, Any], path: str, value: Any) -> dict[str
         current = child
     leaf = keys[-1]
     if leaf not in current:
-        raise _unknown_path(path, leaf, tuple(current))
+        from .config_schema import training_stage_controls
+        if path not in {field["path"] for field in training_stage_controls(result)}:
+            raise _unknown_path(path, leaf, tuple(current))
+    if leaf in {"early_stopping", "warmup_early_stopping"} and not isinstance(value, bool):
+        raise ValueError(path + " must be true or false")
     current[leaf] = value
     return result
 

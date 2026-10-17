@@ -161,6 +161,8 @@ def run_cal_experiment(
         warmup_scheduler = _build_warmup_scheduler(
             warmup_optimizer, config, warmup_epochs
         )
+        from lnl_toolbox.training.early_stopping import StageEarlyStopping
+        warmup_stopping = StageEarlyStopping(config, "warmup.early_stopping", "validation_accuracy", run_dir=run_dir)
         for epoch in range(warmup_epochs):
             warmup.train()
             confidence_weight = resolve_confidence_weight(
@@ -185,6 +187,14 @@ def run_cal_experiment(
                     float(warmup_cfg["confidence_weight"]),
                     warmup_cfg.get("confidence_schedule"),
                 ))
+            if warmup_stopping.enabled:
+                if validation_loader is None:
+                    raise ValueError("warmup.early_stopping requires a validation split")
+                score = evaluate_classification(warmup, validation_loader, CrossEntropyLoss().to(device), device)
+                if warmup_stopping.observe({"epoch": epoch + 1, "validation_accuracy": score["accuracy"]},
+                                           {"model": warmup, "optimizer": warmup_optimizer}):
+                    break
+        warmup_stopping.restore_best({"model": warmup})
         atomic_save(
             {
                 "method": "cal_warmup",
@@ -192,7 +202,7 @@ def run_cal_experiment(
                 "model": warmup.state_dict(),
                 "optimizer": warmup_optimizer.state_dict(),
                 "scheduler": None if warmup_scheduler is None else warmup_scheduler.state_dict(),
-                "completed_epoch": warmup_epochs - 1,
+                "completed_epoch": epoch if warmup_epochs else -1,
                 "rng_state": capture_rng_state(),
             },
             run_dir / "cal_warmup.pt",
@@ -248,7 +258,12 @@ def run_cal_experiment(
             raise ValueError("CAL reference transition checkpoint mismatch")
         rows = list(payload.get("metrics", [])); start = int(payload["completed_epoch"]) + 1; restore_rng_state(payload["rng_state"])
     _write_epoch_metrics(rows, metrics_path)
+    from lnl_toolbox.training.early_stopping import StageEarlyStopping
+    stopping = StageEarlyStopping(config, "trainer.early_stopping", "validation_accuracy", run_dir=run_dir)
+    stopping.replay(rows, completed=start)
     for epoch in range(start, epochs):
+        if stopping.stopped:
+            break
         model.train(); total = correct = 0; loss_sum = 0.0
         epoch_loss_sums = torch.zeros_like(means)
         epoch_class_counts = torch.zeros(classes, device=device)
@@ -296,10 +311,13 @@ def run_cal_experiment(
                 cal_schedule,
             ))
         atomic_save({"method": "cal", "config": config, "model": model.state_dict(), "optimizer": optimizer.state_dict(), "scheduler": None if scheduler is None else scheduler.state_dict(), "completed_epoch": epoch, "metrics": rows, "proxy_hash": proxy.artifact_hash, "reference_loss_means": means.cpu(), "reference_transition_means": transition_means.cpu(), "rng_state": capture_rng_state()}, run_dir / "last.pt")
+        if stopping.observe(row, {"model": model, "optimizer": optimizer, "scheduler": scheduler}):
+            break
+    stopping.restore_best({"model": model})
     (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     if rows: write_training_curves_svg(rows, run_dir / "training_curves.svg")
     test = evaluate_classification(model, test_loader, criterion, device)
-    final_row = {"event": "final", "completed_epochs": epochs, "test_loss": test["loss"], "test_accuracy": test["accuracy"], "selection_split": "none", "test_selection_leakage": False, "method": "cal"}
+    final_row = {"event": "final", "completed_epochs": len(rows), "test_loss": test["loss"], "test_accuracy": test["accuracy"], "selection_split": "none", "test_selection_leakage": False, "method": "cal"}
     _write_epoch_metrics([*rows, final_row], metrics_path)
     return run_dir
 

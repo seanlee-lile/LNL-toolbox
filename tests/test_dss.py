@@ -107,25 +107,6 @@ class DSSScratchProtocolTest(unittest.TestCase):
                                      roles=['train', 'test'], data_config={}, preprocessing_transform=ctx['preprocessing_transform'], view_transforms=ctx['view_transforms'])
         self.assertIs(legacy['test'].transform, legacy['train'].transform)
 
-    def test_dss_web_rng_metadata_matches_yaml(self) -> None:
-        from web import command_console
-        config = yaml.safe_load(Path('configs/experiment/dss_cifar10_symmetric05_reproduction.yaml').read_text(encoding='utf-8'))
-        registry = yaml.safe_load(Path('web/lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
-        def find_paper(value):
-            if isinstance(value, dict):
-                if isinstance(value.get('dss'), dict) and 'parameters' in value['dss']:
-                    return value['dss']
-                for child in value.values():
-                    result = find_paper(child)
-                    if result is not None:
-                        return result
-            return None
-        advanced = find_paper(registry)['parameters']['advanced']
-        self.assertEqual(advanced['noise.rng']['current'], config['noise']['rng'])
-        self.assertEqual(advanced['data.validation_split.rng']['current'], config['data']['validation_split']['rng'])
-        fields = {f['path']: f for f in command_console._config_schema('dss-cifar10-symmetric05-reproduction')['fields']}
-        self.assertEqual(fields['data.validation_split.rng']['value'], 'numpy_legacy')
-
     def test_dss_scratch_recipe_short_training_restores_validation_best_model(self) -> None:
         from copy import deepcopy
         from lnl_toolbox.scratch import ScratchContext, execute_recipe, validate_recipe

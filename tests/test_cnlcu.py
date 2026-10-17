@@ -81,31 +81,14 @@ class CNLCUReferenceDefaultsTest(unittest.TestCase):
                 self.assertEqual(resolved[owner][key], .2)
                 CNLCUConfig.from_mapping(resolved)
 
-# --- merged from test_cnlcu_algorithm.py ---
 import copy
-
-# --- merged from test_cnlcu_algorithm.py ---
-import unittest
-
-# --- merged from test_cnlcu_algorithm.py ---
 from pathlib import Path
-
-# --- merged from test_cnlcu_algorithm.py ---
 import torch
-
-# --- merged from test_cnlcu_algorithm.py ---
 from lnl_toolbox.algorithms.cnlcu import CNLCUAlgorithm, CNLCUConfig
-
-# --- merged from test_cnlcu_algorithm.py ---
 from lnl_toolbox.algorithms.coteaching.selection import determine_keep_count, stable_small_loss_mask
-
-# --- merged from test_cnlcu_algorithm.py ---
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
-
-# --- merged from test_cnlcu_algorithm.py ---
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss, validate_per_sample_loss
 
-# --- merged from test_cnlcu_algorithm.py ---
 def _cnlcu_algorithm__config(window_size=3, sigma=0.1, variant='soft'):
     result = {'method': 'cnlcu', 'noise': {'name': 'symmetric', 'rate': 0.5}, 'cnlcu': {'variant': variant, 'model_count': 2, 'noise_rate': 0.5, 'initialization': {'peer_seed_offset': 1}, 'remember_schedule': {'name': 'linear', 'start': 1.0, 'end': 0.5, 'gradual_epochs': 1}, 'history': {'window_size': window_size, 'storage_dtype': 'float32'}, 'selection': {'count_rule': 'floor', 'tie_break': 'stable_sample_index'}}, 'evaluation': {'selection_split': 'validation', 'primary': 'mean_peer_accuracy', 'ensemble': 'mean_probabilities'}}
     if variant == 'soft':
@@ -114,7 +97,6 @@ def _cnlcu_algorithm__config(window_size=3, sigma=0.1, variant='soft'):
         result['cnlcu'].update({'hard_fidelity': 'paper_formula_corrected_lof', 'uncertainty': {'tau_min': 0.0001, 'loss_upper_bound': {'mode': 'fixed', 'value': 20.0}}, 'truncation': {'method': 'lof', 'n_neighbors': 2, 'contamination': 0.1, 'minimum_observations': 3}})
     return result
 
-# --- merged from test_cnlcu_algorithm.py ---
 class _cnlcu_algorithm__IndexedLogits(torch.nn.Module):
 
     def __init__(self, logits):
@@ -124,7 +106,6 @@ class _cnlcu_algorithm__IndexedLogits(torch.nn.Module):
     def forward(self, inputs):
         return self.logits[inputs.reshape(-1).long()]
 
-# --- merged from test_cnlcu_algorithm.py ---
 def _cnlcu_algorithm__algorithm(variant='soft'):
     a = _cnlcu_algorithm__IndexedLogits([[5, -5], [5, -5], [-5, 5], [-5, 5]])
     b = _cnlcu_algorithm__IndexedLogits([[-5, 5], [-5, 5], [5, -5], [5, -5]])
@@ -133,7 +114,6 @@ def _cnlcu_algorithm__algorithm(variant='soft'):
     result.on_cycle_start(RunState(cycle=1))
     return result
 
-# --- merged from test_cnlcu_algorithm.py ---
 def _cnlcu_algorithm__reference_step(algorithm, batch, state):
     """Execute the pre-telemetry CNLCU step contract for regression comparison."""
     payload = batch.payload
@@ -165,7 +145,6 @@ def _cnlcu_algorithm__reference_step(algorithm, batch, state):
     state.step += 1
     return {'selected_a': indices[selected_a].detach().cpu(), 'selected_b': indices[selected_b].detach().cpu(), 'objective_a': objective_a.detach(), 'objective_b': objective_b.detach()}
 
-# --- merged from test_cnlcu_algorithm.py ---
 class _cnlcu_algorithm_CNLCUAlgorithmTest(unittest.TestCase):
 
     def test_read_only_telemetry_preserves_selection_loss_and_parameter_updates(self):
@@ -347,25 +326,11 @@ class _cnlcu_algorithm_CNLCUAlgorithmTest(unittest.TestCase):
         self.assertEqual(algorithm.private_state.history_a.values.device.type, 'cpu')
         self.assertEqual(algorithm.private_state.history_b.values.device.type, 'cpu')
 
-# --- merged from test_cnlcu_estimators.py ---
-import copy
 
-# --- merged from test_cnlcu_estimators.py ---
 import math
-
-# --- merged from test_cnlcu_estimators.py ---
-import unittest
-
-# --- merged from test_cnlcu_estimators.py ---
 from unittest.mock import patch
-
-# --- merged from test_cnlcu_estimators.py ---
-import torch
-
-# --- merged from test_cnlcu_estimators.py ---
 from lnl_toolbox.algorithms.cnlcu import HardRobustLossEstimator, PeerLossHistory, cnlcu_hard_score, cnlcu_soft_score, lof_retained_mask, soft_influence, soft_robust_mean
 
-# --- merged from test_cnlcu_estimators.py ---
 class _cnlcu_estimators_CNLCUSoftEstimatorTest(unittest.TestCase):
 
     def test_influence_and_eq3_match_hand_calculation(self):
@@ -405,7 +370,6 @@ class _cnlcu_estimators_CNLCUSoftEstimatorTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'at least one'):
             soft_robust_mean(torch.zeros(1, 2), torch.zeros(1, 2, dtype=torch.bool))
 
-# --- merged from test_cnlcu_estimators.py ---
 class _cnlcu_estimators_CNLCUHistoryTest(unittest.TestCase):
 
     def test_sparse_mapping_append_permutation_and_window_reset(self):
@@ -468,7 +432,6 @@ class _cnlcu_estimators_CNLCUHistoryTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'cursor'):
             PeerLossHistory(torch.tensor([7, 20]), 3, 'a').load_state_dict(bad_cursor)
 
-# --- merged from test_cnlcu_estimators.py ---
 class _cnlcu_estimators_CNLCUHardEstimatorTest(unittest.TestCase):
 
     def test_short_history_keeps_every_observation(self):
@@ -574,57 +537,29 @@ class _cnlcu_estimators_CNLCUHardEstimatorTest(unittest.TestCase):
         torch.testing.assert_close(cpu[0], cuda[0].cpu())
         torch.testing.assert_close(cpu[1], cuda[1].cpu())
 
-# --- merged from test_cnlcu_workflow.py ---
 import hashlib
-
-# --- merged from test_cnlcu_workflow.py ---
 import json
-
-# --- merged from test_cnlcu_workflow.py ---
 import tempfile
-
-# --- merged from test_cnlcu_workflow.py ---
-import unittest
-
-# --- merged from test_cnlcu_workflow.py ---
-from pathlib import Path
-
-# --- merged from test_cnlcu_workflow.py ---
-from unittest.mock import patch
-
-# --- merged from test_cnlcu_workflow.py ---
 import numpy as np
-
-# --- merged from test_cnlcu_workflow.py ---
-import torch
-
-# --- merged from test_cnlcu_workflow.py ---
 from lnl_toolbox.data.cifar import CifarData
-
-# --- merged from test_cnlcu_workflow.py ---
 from lnl_toolbox.training.experiment import run_experiment
 
-# --- merged from test_cnlcu_workflow.py ---
 def _cnlcu_workflow__cifar(size, split, classes=10):
     labels = np.arange(size, dtype=np.int64) % classes
     return CifarData(np.zeros((size, 32, 32, 3), dtype=np.uint8), labels, tuple(map(str, range(classes))), split, f'cifar{classes}')
 
-# --- merged from test_cnlcu_workflow.py ---
 def _cnlcu_workflow__config(epochs=2, dataset='cifar10'):
     classes = 10 if dataset == 'cifar10' else 100
     return {'method': 'cnlcu', 'seed': 7, 'data': {'name': dataset, 'root': 'unused', 'validation_size': classes, 'max_train_samples': classes * 2, 'max_validation_samples': classes, 'max_test_samples': classes, 'augment': False}, 'noise': {'name': 'symmetric', 'rate': 0.4, 'seed': 17, 'validation_targets': 'noisy'}, 'loss': {'name': 'ce'}, 'model': {'name': 'tiny_cnn', 'width': 2}, 'optimizer': {'name': 'adam', 'lr': 0.001, 'weight_decay': 0.0}, 'scheduler': {'name': 'none'}, 'cnlcu': {'variant': 'soft', 'model_count': 2, 'noise_rate': 0.4, 'initialization': {'peer_seed_offset': 1}, 'remember_schedule': {'name': 'linear', 'start': 1.0, 'end': 0.6, 'gradual_epochs': 2}, 'history': {'window_size': 2, 'storage_dtype': 'float32'}, 'uncertainty': {'sigma_squared': 0.01}, 'selection': {'count_rule': 'floor', 'tie_break': 'stable_sample_index'}}, 'loader': {'batch_size': classes, 'num_workers': 0, 'pin_memory': False}, 'evaluation': {'selection_split': 'validation', 'primary': 'mean_peer_accuracy', 'ensemble': 'mean_probabilities'}, 'trainer': {'epochs': epochs, 'device': 'cpu'}}
 
-# --- merged from test_cnlcu_workflow.py ---
 def _cnlcu_workflow__hard_config(epochs=2, dataset='cifar10'):
     result = _cnlcu_workflow__config(epochs, dataset)
     result['cnlcu'] = {'variant': 'hard', 'hard_fidelity': 'paper_formula_corrected_lof', 'model_count': 2, 'noise_rate': 0.4, 'initialization': {'peer_seed_offset': 1}, 'remember_schedule': {'name': 'linear', 'start': 1.0, 'end': 0.6, 'gradual_epochs': 2}, 'history': {'window_size': 3, 'storage_dtype': 'float32'}, 'uncertainty': {'tau_min': 0.0001, 'loss_upper_bound': {'mode': 'fixed', 'value': 10.0}}, 'truncation': {'method': 'lof', 'n_neighbors': 2, 'contamination': 0.1, 'minimum_observations': 3}, 'selection': {'count_rule': 'floor', 'tie_break': 'stable_sample_index'}}
     return result
 
-# --- merged from test_cnlcu_workflow.py ---
 def _cnlcu_workflow__sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
-# --- merged from test_cnlcu_workflow.py ---
 def _cnlcu_workflow__assert_nested_equal(test_case, left, right):
     test_case.assertEqual(type(left), type(right))
     if torch.is_tensor(left):
@@ -640,7 +575,6 @@ def _cnlcu_workflow__assert_nested_equal(test_case, left, right):
     else:
         test_case.assertEqual(left, right)
 
-# --- merged from test_cnlcu_workflow.py ---
 class _cnlcu_workflow_CNLCUWorkflowTest(unittest.TestCase):
 
     def _run_case(self, dataset='cifar10', variant='soft'):

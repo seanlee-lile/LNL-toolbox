@@ -505,7 +505,12 @@ class ImportanceReweightingAlgorithm:
             self.state.advance(ImportanceReweightingPhase.FINAL_TRAINING)
             self._save_last()
         metrics_path = self.run_dir / "metrics.jsonl"
+        from lnl_toolbox.training.early_stopping import StageEarlyStopping
+        stopping = StageEarlyStopping(self.raw_config, "trainer.early_stopping", "validation_accuracy", run_dir=self.run_dir)
+        stopping.replay_file(metrics_path, phase="final_training", completed=self.state.final_completed_epochs, zero_based=True)
         for epoch in range(self.state.final_completed_epochs, self.config.epochs):
+            if stopping.stopped:
+                break
             self.run_state.cycle = epoch
             self.final_algorithm.on_cycle_start(self.run_state)
             totals: dict[str, float] = {}
@@ -574,6 +579,7 @@ class ImportanceReweightingAlgorithm:
                 atomic_save(self._checkpoint_payload("best"), self.run_dir / "best.pt")
             self._save_last()
 
+            stopping.update(record)
         best = read_checkpoint(self.run_dir / "best.pt", self.device)
         best_model = self.model_factory().to(self.device)
         best_model.load_state_dict(dict(best["algorithm"])["model"])
