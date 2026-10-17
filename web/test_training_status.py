@@ -11,6 +11,14 @@ from web.training_status import TrainingContext, infer_training_context, trainin
 
 
 class TrainingStatusTest(unittest.TestCase):
+    def test_raw_log_visibility_is_independent_of_metric_detail_mode(self) -> None:
+        script = (Path(__file__).parent / "assets" / "run_output.js").read_text(encoding="utf-8")
+        toggle = script[script.index("function applyToggle(detail)"):script.index("function toggle(detail)")]
+        self.assertIn('raw.classList.remove("hidden")', toggle)
+        self.assertNotIn('raw.classList.toggle("hidden"', script)
+        self.assertNotIn('raw.classList.add("hidden"', script)
+        self.assertIn('metrics.classList.toggle("hidden", !detail)', toggle)
+
     def test_step_budget_and_flushed_step_are_used(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -36,6 +44,19 @@ const nodes = Object.fromEntries(['training-output','training-summary','training
   'qs-training-progress','qs-training-progress-label'].map(id=>[id,element()]));
 const window = {};
 vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), {window,document:{getElementById:id=>nodes[id]}});
+nodes.output.textContent = 'Epoch 1\nRuntimeError: synthetic training failure\nPrerequisite: unchanged raw text';
+const originalLog = nodes.output.textContent;
+for (const state of ['starting','running','failed','cancelled','completed']) {
+  nodes.output.classList.add('hidden');
+  window.trainingOutput.render({training:{state,metrics:[]}});
+  window.trainingOutput.toggle(false);
+  assert(!nodes.output.classList.contains('hidden'));
+  assert.equal(nodes.output.textContent, originalLog);
+  window.trainingOutput.toggle(true);
+  assert(!nodes.output.classList.contains('hidden'));
+  assert.equal(nodes.output.textContent, originalLog);
+}
+window.trainingOutput.toggle(false);
 window.trainingOutput.render({training:{state:'running',completed_epoch:2,total_epochs:10,metrics:[{epoch:2}]}});
 assert.equal(nodes['qs-training-progress'].value,20);
 assert(nodes['training-summary'].classList.contains('hidden'));

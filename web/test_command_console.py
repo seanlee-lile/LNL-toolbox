@@ -3,6 +3,7 @@ import io
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -1573,6 +1574,107 @@ if __name__ == "__main__":
 
 
 class IntegratedJobUiTest(unittest.TestCase):
+    def test_final_failed_output_is_drained_and_kept_as_raw_text(self):
+        lines = ["Epoch 1", "RuntimeError: synthetic training failure", "Prerequisite: classifier",
+                 "type: pretrained_classifier", "status: INVALID", "reason: source rejected",
+                 "config field: source.path", "action: provide artifact", "[2] external labels"]
+        process = mock.Mock(stdout=io.StringIO("\n".join(lines) + "\n"))
+        process.poll.return_value = 2
+        process.wait.return_value = 2
+        job = command_console.Job("failed-drain", "custom", ["lnl", "run"], "lnl run", process=process)
+        initial = command_console._job_payload(job)
+        self.assertEqual(initial["returncode"], 2)
+        self.assertFalse(initial["output_complete"])
+        command_console._read_output(job)
+        final = command_console._job_payload(job)
+        self.assertTrue(final["output_complete"])
+        self.assertEqual(final["lines"], lines)
+        self.assertIsNone(final["structured"])
+
+    def test_output_render_precedes_scroll_and_cancellation_is_not_failure(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        show = page[page.index("function showJob(job)"):page.index("function formatDatasetResult(result)")]
+        scroll = show.index("outputNode.scrollTop = outputNode.scrollHeight")
+        for operation in ('outputNode.textContent =', 'outputNode.classList.remove("hidden")',
+                          'window.trainingOutput.render(job)', 'renderConsoleContext();'):
+            self.assertLess(show.index(operation), scroll)
+        self.assertIn('else if (job.cancel_requested)', show)
+        self.assertLess(show.index('else if (job.cancel_requested)'), show.index('else if (job.error || job.returncode !== 0)'))
+        cancelled = show[show.index('else if (job.cancel_requested)'):show.index('else if (job.error || job.returncode !== 0)')]
+        self.assertIn("已取消", cancelled)
+        self.assertNotIn('status failed', cancelled)
+        poll = page[page.index("async function pollJob()"):page.index('stopTaskButton.addEventListener("click"')]
+        self.assertLess(poll.index("showJob(job)"), poll.index("job.output_complete !== false"))
+        cancel = page[page.index('stopTaskButton.addEventListener("click"'):page.index('runButton.addEventListener("click"')]
+        self.assertNotIn('status failed', cancel[:cancel.index('} catch (error)')])
+
+    @unittest.skipUnless(shutil.which("node"), "JS RUNTIME COVERAGE: SKIPPED — NODE MISSING")
+    def test_failure_resume_cancel_and_success_render_raw_log_before_scrolling(self):
+        import subprocess
+
+        script = r'''
+const fs = require('fs'), vm = require('vm'), assert = require('assert/strict');
+const events = [];
+function element() {
+  const classes = new Set(); let content = '';
+  return {hidden:false, value:0,
+    classList:{toggle:(name,on)=>on ? classes.add(name) : classes.delete(name),
+      add:name=>classes.add(name), remove:name=>{classes.delete(name); events.push('visible');},
+      contains:name=>classes.has(name)},
+    get textContent(){return content;}, set textContent(value){content=value; events.push('text');},
+    get scrollHeight(){assert(!classes.has('hidden')); return content.length;},
+    set scrollTop(value){assert.equal(value,content.length); events.push('scroll');},
+    removeAttribute(name){delete this[name];}
+  };
+}
+const nodes = Object.fromEntries(['training-output','training-summary','training-metrics','output',
+  'training-simple','training-detail','status','structured','stop'].map(id=>[id,element()]));
+const context = {window:{}, document:{getElementById:id=>nodes[id]}, state:{},
+  outputNode:nodes.output, statusNode:nodes.status, structuredNode:nodes.structured, stopTaskButton:nodes.stop,
+  renderStructured:()=>{}, renderConsoleContext:()=>events.push('context')};
+vm.createContext(context);
+vm.runInContext(fs.readFileSync(process.argv[1],'utf8'),context);
+const html = fs.readFileSync(process.argv[2],'utf8');
+const show = html.match(/    function showJob\(job\) \{[\s\S]*?\n    \}/)[0];
+vm.runInContext(show,context);
+function render(job) {
+  events.length = 0; nodes.output.classList.add('hidden');
+  context.showJob(job);
+  assert(!nodes.output.classList.contains('hidden'));
+  assert.equal(events[events.length-1],'scroll');
+  assert.equal(events[events.length-2],'context');
+}
+for (const command of ['lnl run fixture.yaml','lnl resume fixture-run']) {
+  const job = {id:'job',command,lines:['Epoch 1'],running:false,returncode:2,
+    error:null,structured:null,output_complete:false,cancel_requested:false,
+    training:{state:'failed',metrics:[]}};
+  render(job);
+  job.lines.push('RuntimeError: synthetic training failure','Prerequisite: unchanged',
+    'type: model','status: INVALID','reason: source rejected','config field: source',
+    'action: provide artifact','[2] another blocker');
+  job.output_complete=true; render(job);
+  assert.equal(nodes.output.textContent,job.lines.join('\n'));
+  assert.equal(nodes.status.className,'status failed');
+  assert(nodes.status.textContent.includes('失败'));
+}
+render({id:'cancel',command:'lnl run',lines:['cancelled'],running:false,returncode:-15,
+  cancel_requested:true,training:{state:'cancelled',metrics:[]}});
+assert(nodes.status.textContent.includes('已取消'));
+assert(!nodes.status.textContent.includes('失败'));
+assert(!nodes.status.className.includes('failed'));
+render({id:'done',command:'lnl run',lines:['done'],running:false,returncode:0,
+  cancel_requested:false,training:{state:'completed',metrics:[]}});
+assert.equal(nodes.status.className,'status success');
+assert(!nodes.status.textContent.includes('失败'));
+render({id:'startup',command:'lnl run',lines:[],running:false,returncode:-1,
+  error:'RuntimeError: launch failure',training:null});
+assert(nodes.output.textContent.includes('RuntimeError: launch failure'));
+'''
+        result = subprocess.run([shutil.which("node"), "-e", script,
+                                 str(command_console.WEB_ROOT / "assets" / "run_output.js"),
+                                 str(command_console.WEB_ROOT / "index.html")], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_output_completion_waits_for_stdout_drain(self):
         process = mock.Mock(stdout=io.StringIO('{"ok":true}\n'))
         process.poll.return_value = 0

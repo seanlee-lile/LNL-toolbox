@@ -68,7 +68,8 @@
   function applyToggle(detail) {
     const raw = document.getElementById("output");
     const metrics = document.getElementById("training-metrics");
-    if (raw) raw.classList.toggle("hidden", !detail);
+    // The complete console log is permanent; detail mode only controls metrics.
+    if (raw) raw.classList.remove("hidden");
     if (metrics) metrics.classList.toggle("hidden", !detail);
     const simple = document.getElementById("training-simple");
     const detailed = document.getElementById("training-detail");
