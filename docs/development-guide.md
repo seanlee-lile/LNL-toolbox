@@ -1,5 +1,88 @@
 # LNL Toolbox 开发指南
 
+## 新论文方法接入 checklist
+
+新增算法属于开发行为，不存在运行时 `paper register`。先确定下面的扩展类型；
+不要把一份可运行 YAML、一个 plugin 或 smoke 成功等同于论文方法已完整接入。
+本节不使用 Scratch 作为正式产品扩展方案。
+
+| 类型 | 必需登记点 | 条件性登记点 | 最低测试 |
+| --- | --- | --- | --- |
+| CONFIG_ONLY | 实验 YAML、recipe catalog、paper catalog | 发行包配置清单；可选 Web 中文 presentation | 配置/runner/requirements、discovery、packaging |
+| COMPONENT_EXTENSION | 上述清单、组件实现、builtin component factory、明确的 requirements | 参数校验、组件专用 guidance | 组件行为与失败输入、requirements、原有方法不回归 |
+| DEDICATED_RUNNER | 上述清单、专用 runner、RunnerSpec/requirements | method 路由集合、配置 validator、新顶层字段的 schema、预算 planner | admission、数据角色、checkpoint/恢复、最终结果 |
+| PREREQUISITE_WORKFLOW | 对应方法接入、SourceDescriptor、consumer validator 及注册 | source adapter、producer 专用入口；不是每个方法都要 producer | 缺失/无效/READY、schema/identity、执行前重新验证 |
+
+### 共同登记顺序
+
+1. 实现范围：先写清论文机制、当前支持边界、数据要求与未完成项。
+2. YAML：使用已支持的配置字段，选择真实存在的 runner 和组件。
+   自定义 YAML 可通过 `lnl run --config ...` 使用，但不会自动进入内置 catalog。
+3. Recipe：在 `src/lnl_toolbox/cli/data/recipe_catalog.json` 的 `recipes` 登记路径；
+   按真实需要设置 `public`/`conditional`。recipe ID 由 YAML 文件名派生，必须避免冲突。
+4. Paper：在 `src/lnl_toolbox/paper_catalog.json` 登记论文 metadata 和实际 recipe ID；
+   paper ID 不等于 `method` 路由名。复用 supervised 时不要直接填写一个未知 method ID。
+5. Packaging：发行配置应列入 `pyproject.toml` 的 setuptools data-files；
+   源码 checkout 能读取配置，不证明安装包已包含它。
+6. Requirements：在 runner provider 声明实际数据/方法合同，不根据论文标题猜测。
+   新 loss 必须显式审计 requirements；不能因为 factory 可构造就默认其具有 CE 的合同。
+7. Web：论文列表来自 backend catalog，`web/paper_presentation.json` 是可选展示覆盖；
+   没有覆盖时应回退原 metadata。新增专用控件不是登记论文的必要步骤。
+8. Tests/docs：补对应测试与复现说明；保持 implemented、engineering/smoke、
+   paper-oriented、conditional 与 numerical reproduction verified 的区别。
+
+### 专用 runner 与 prerequisite
+
+新 runner 在 `training/runners.py` 显式登记，声明 requirements、resume 支持和预算路径。
+需要新增 `method` 路由、配置 validator 或顶层 schema 字段时，逐项列入任务 allowlist，
+不能认为注册一个 RunnerSpec 会自动完成这些工作。CLI 应继续复用通用 run/validate，
+不按论文名字新增分支。
+
+外部输入复用 `SourceDescriptor`、readiness 和 consumer 校验；路径存在不等于 READY。
+schema、身份、role、manifest 和 mapping 的要求由真实 consumer 决定。
+producer 的 prepare/train 与 Student execution 分开；不要隐式启动 producer。
+
+### 验收与禁止事项
+
+- 先做静态登记一致性检查，再做配置/组件测试和轻量 fixture preflight。
+- 未知组件、缺失输入、无效 artifact 必须有可检测错误；不得伪造 requirements。
+- 检查正式 execution admission、completed resume no-op、unfinished resume 重新准入。
+- 有恢复能力时验证 RNG/optimizer/scheduler/方法私有状态；不支持时明确声明。
+- 不为登记论文修改现有算法公式、训练循环、checkpoint/resume 语义或 dataset 行为。
+- 不修改现有论文参数，不以 smoke 证明数值复现，不将数据/权重/生成运行提交到 Git。
+- 新增 registry/catalog/Web 元数据属于共享文件修改，先协调并批准精确 allowlist。
+
+开发入口见后续章节；用户命令合同以 [CLI 使用手册](toolbox-usage-manual.md) 为准。
+
+登记材料准备完成后，在已安装项目的环境运行：
+
+```powershell
+python scripts/check_paper_registration.py
+python -m unittest tests.test_paper_registration -v
+```
+
+checker 只检查内置清单、YAML、runner/requirements 与正式配置打包引用，不执行
+preflight、数据加载或 artifact consumer。PASS 不等于数据就绪、算法正确或数值复现。
+`clean` 的 requirements 按其真实委托关系检查 supervised provider，不生成第二份声明。
+
+### 生成接入草稿（不会注册论文）
+
+```powershell
+python scripts/new_paper.py new-paper-demo --extension-type COMPONENT_EXTENSION
+python scripts/check_paper_registration.py --draft artifacts/paper-drafts/new-paper-demo
+```
+
+默认只在 `artifacts/paper-drafts/<paper-id>/` 生成 paper metadata、fragment YAML、
+recipe/package 清单片段和 reproduction/checklist 草稿；拒绝覆盖已有目录。
+fragment 不是可训练实验，不生成虚假 loss、requirements 或 prerequisite。
+checker 对未完成 TODO 返回 1，这是草稿尚未完成，不代表生成失败。
+
+可用 `--output-dir` 指定独立草稿根目录，或明确使用
+`--base-config configs/experiment/cifar10_clean_smoke.yaml` 复制现有实验。
+复制不会缩短预算或改变训练值，也不会实现新论文；草稿标为 engineering/experiment、
+unavailable、not_run，必须由开发者审阅。生成器不写正式 catalog、源码或打包配置。
+完成实现和测试后再人工整合片段并运行仓库一致性检查；生成成功不等于注册成功。
+
 ## 1. 开发环境
 
 推荐为本项目创建独立 Conda 环境，避免与 Cleanlab、Ultralytics 等其他项目的依赖混在一起。

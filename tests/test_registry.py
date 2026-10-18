@@ -1227,3 +1227,68 @@ class _workflow_registry_WorkflowRegistryTest(unittest.TestCase):
         with self.assertRaisesRegex(KeyError, 'already registered'):
             registry.add('example', 'pathlib', 'Path')
         self.assertIs(registry.resolve('example'), Path)
+
+
+class SupervisedLossRequirementsGuardTest(unittest.TestCase):
+    def test_existing_registered_losses_keep_their_original_requirements(self):
+        from dataclasses import replace
+        from lnl_toolbox.plugins.builtin import create_builtin_catalog
+
+        catalog = create_builtin_catalog()
+        self.assertEqual(
+            {item.name for item in catalog.find(kind='loss')},
+            {'ce', 'gce', 'apl', 'mae', 'nce', 'rce'},
+        )
+        runner = resolve_runner({'execution': {'runner': 'supervised'}})
+        baseline = runner.requirements({'loss': {'name': 'ce'}, 'noise': {'name': 'clean'}})
+        for loss in ('ce', 'gce', 'apl', 'mae', 'nce', 'rce'):
+            with self.subTest(loss=loss):
+                expected = replace(baseline, method=loss) if loss in {'gce', 'apl'} else baseline
+                self.assertEqual(runner.requirements({'loss': {'name': loss}, 'noise': {'name': 'clean'}}), expected)
+        self.assertEqual(runner.requirements({}), baseline)
+
+    def test_gce_apl_manifest_rules_unchanged(self):
+        runner = resolve_runner({'execution': {'runner': 'supervised'}})
+        for loss in ('gce', 'apl'):
+            for noise, manifest in (({'name': 'symmetric'}, True), ({'name': 'external'}, False), ({'name': 'clean', 'manifest': 'source.npz'}, True)):
+                with self.subTest(loss=loss, noise=noise):
+                    value = runner.requirements({'loss': {'name': loss}, 'noise': noise})
+                    self.assertEqual(value.method, loss)
+                    self.assertEqual(value.requires_noise_manifest, manifest)
+
+    def test_registered_plugin_without_declared_requirements_is_rejected(self):
+        from lnl_toolbox.plugins.builtin import create_builtin_catalog
+
+        catalog = create_builtin_catalog()
+        catalog.add('loss', 'new_robust_demo', lambda: object())
+        self.assertIsNotNone(catalog.build('loss', 'new_robust_demo'))
+        config = {'execution': {'runner': 'supervised'}, 'loss': {'name': 'new_robust_demo'}}
+        self.assertEqual(resolve_runner(config).name, 'supervised')
+        with self.assertRaisesRegex(ValueError, 'no declared method requirements'):
+            resolve_runner(config).requirements(config)
+
+    def test_pipeline_branches_cannot_mask_undeclared_loss(self):
+        configurations = (
+            {'pipeline': {'risk_corrector': {'name': 'forward'}}},
+            {'pipeline': {'weight_provider': {'name': 'mentornet'}}},
+            {'pipeline': {'objective_consumer': {'name': 'dss'}}},
+            {'parameter_update': {'name': 'cdr'}},
+        )
+        for extra in configurations:
+            with self.subTest(extra=extra):
+                config = {'execution': {'runner': 'supervised'}, 'loss': {'name': 'undeclared'}, **extra}
+                with self.assertRaisesRegex(ValueError, 'no declared method requirements'):
+                    resolve_runner(config).requirements(config)
+
+    def test_known_loss_pipeline_precedence_unchanged(self):
+        examples = (
+            ({'pipeline': {'risk_corrector': {'name': 'forward'}}}, 'loss_correction'),
+            ({'pipeline': {'weight_provider': {'name': 'mentornet'}}}, 'mentornet'),
+            ({'pipeline': {'objective_consumer': {'name': 'dss'}}}, 'dss'),
+            ({'parameter_update': {'name': 'cdr'}}, 'cdr'),
+        )
+        for extra, expected in examples:
+            for loss in ('ce', 'gce', 'apl', 'mae', 'nce', 'rce'):
+                with self.subTest(extra=extra, loss=loss):
+                    config = {'execution': {'runner': 'supervised'}, 'loss': {'name': loss}, **extra}
+                    self.assertEqual(resolve_runner(config).requirements(config).method, expected)

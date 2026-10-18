@@ -283,6 +283,15 @@ def _supervised_requirements(config: Mapping[str, Any]) -> MethodRequirements | 
     update = _component_name(config, "parameter_update")
     loss = _component_name(config, "loss")
 
+    # These existing losses retain their exact requirement branches below.
+    # A newly constructible plugin is not evidence of CE-equivalent semantics.
+    # Guard before pipeline branches so they cannot mask an undeclared loss.
+    if loss not in {"", "ce", "gce", "apl", "mae", "nce", "rce"}:
+        raise ValueError(
+            f"supervised loss {loss!r} has no declared method requirements; "
+            "declare its requirements in the runner provider before execution"
+        )
+
     if risk in {"forward", "backward"}:
         estimator = _component_name(config, "pipeline", "transition_estimator")
         inputs = ()

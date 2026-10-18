@@ -17,6 +17,180 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import command_console  # noqa: E402
 
 
+class PaperProfileFallbackTest(unittest.TestCase):
+    def paper(self):
+        from lnl_toolbox.catalog import paper_by_id
+        return paper_by_id("gce")
+
+    def payload(self, paper):
+        with mock.patch("lnl_toolbox.catalog.load_papers", return_value=(paper,)):
+            return command_console._paper_payload()[0]
+
+    def test_reproduction_remains_default_even_when_smoke_is_first(self):
+        paper = self.paper()
+        self.assertEqual(paper.configs[0].profile, "smoke")
+        result = self.payload(paper)
+        self.assertEqual(result["default_recipe_id"], next(c.recipe_id for c in paper.configs if c.profile == "reproduction"))
+        self.assertNotIn("metadata_only", result)
+        self.assertEqual(len(result["configs"]), len(paper.configs))
+
+    def test_smoke_only_paper_has_real_config_and_original_metadata_fallback(self):
+        from dataclasses import replace
+        paper = self.paper()
+        smoke = next(c for c in paper.configs if c.profile == "smoke")
+        paper = replace(paper, id="new-paper-demo", configs=(smoke,))
+        result = self.payload(paper)
+        self.assertEqual(result["default_recipe_id"], smoke.recipe_id)
+        self.assertEqual(result["default_variant"], smoke.variant)
+        self.assertEqual(result["default_fidelity"], smoke.configuration_fidelity)
+        self.assertEqual(result["configs"][0]["profile"], "smoke")
+        self.assertEqual(result["summary"], paper.summary)
+        self.assertNotIn("metadata_only", result)
+
+    def test_metadata_only_paper_is_explicitly_unavailable_without_consuming_sources(self):
+        from dataclasses import replace
+        paper = replace(self.paper(), id="metadata-demo", configs=())
+        with mock.patch("lnl_toolbox.training.service.ExperimentService.prerequisite_readiness") as readiness, \
+             mock.patch("lnl_toolbox.catalog.load_recipe_config") as load:
+            result = self.payload(paper)
+        readiness.assert_not_called()
+        load.assert_not_called()
+        self.assertTrue(result["metadata_only"])
+        self.assertEqual(result["availability"], "unavailable")
+        self.assertEqual(result["configs"], [])
+        self.assertEqual(result["default_recipe_id"], "")
+        self.assertEqual(result["title"], paper.title)
+
+    def test_frontend_empty_config_contract_is_local_to_paper_fallback(self):
+        page = (command_console.WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        details = page[page.index("function renderPaperDetails()"):page.index("function renderAdvanced()")]
+        self.assertIn("if (!config)", details)
+        self.assertIn("metadata-only", details)
+        self.assertIn("unavailable", details)
+        self.assertLess(details.index("if (!config)"), details.index("const configRows"))
+        self.assertIn('document.getElementById("paper-recipe").disabled = !configItems.length;', page)
+        self.assertIn("(!activePaperConfig ? 'disabled' : '')", page)
+        self.assertIn('return Boolean(config) && (!config.prerequisite_status || config.prerequisite_status === "ready")', page)
+
+    @unittest.skipUnless(shutil.which("node"), "JS RUNTIME COVERAGE: SKIPPED — NODE MISSING")
+    def test_browser_functions_handle_smoke_metadata_and_ready_gating(self):
+        import subprocess
+        script = r'''
+const fs=require('fs'), vm=require('vm'), assert=require('assert/strict');
+const html=fs.readFileSync(process.argv[1], 'utf8');
+const nodes={};
+function node(id){return nodes[id]||(nodes[id]={value:'',innerHTML:'',addEventListener(){},querySelectorAll(){return [];}});}
+const context={state:{papers:[],paperId:'',paperRecipe:''},document:{getElementById:node},window:{},
+ parameterPanel:{innerHTML:''},commonFormStart:()=>'',commonFormEnd:()=>'',field:()=>'',selectControl:()=>'',
+ escapeHtml:x=>String(x??''), tableHtml:()=>'',renderPrerequisitePanel:()=>'', updateModulePreview:()=>{}};
+vm.createContext(context);
+for(const name of ['paperCanStart','renderPapers','renderPaperDetails']){
+ const start=html.indexOf('    function '+name+'('),end=html.indexOf('\n    }',start);
+ assert(start>=0&&end>start);vm.runInContext(html.slice(start,end+6),context);
+}
+const paper={id:'demo',acronym:'Demo',title:'Demo',summary:'问题',mechanism:'方法',configs:[],lifecycle:[],concept_to_config:[],limitations:[]};
+context.state.papers=[paper];context.renderPapers();
+assert(nodes['paper-details'].innerHTML.includes('metadata-only'));
+assert(nodes['paper-recipe'].disabled);assert(context.parameterPanel.innerHTML.includes('disabled'));
+const smoke={recipe_id:'demo-smoke',profile:'smoke',label:'smoke',noise:'clean',data:'cifar10'};
+paper.configs=[smoke];paper.default_recipe_id=smoke.recipe_id;context.renderPapers();
+assert(!nodes['paper-recipe'].disabled);assert.equal(context.state.paperRecipe,'demo-smoke');
+assert(!nodes['paper-details'].innerHTML.includes('metadata-only'));
+assert(context.paperCanStart(smoke));
+for(const status of ['needs_input','invalid'])assert(!context.paperCanStart({...smoke,prerequisite_status:status}));
+assert(context.paperCanStart({...smoke,prerequisite_status:'ready'}));
+assert(!context.paperCanStart({...smoke,preparation:{artifact_ready:false}}));
+'''
+        result = subprocess.run([shutil.which("node"), "-e", script, str(command_console.WEB_ROOT / "index.html")], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class DatasetPaperAggregationFallbackTest(unittest.TestCase):
+    @staticmethod
+    def metadata_paper():
+        return {
+            "id": "metadata-demo", "acronym": "Demo", "title": "Metadata only",
+            "configs": [], "default_recipe_id": "", "default_fidelity": "",
+            "metadata_only": True, "availability": "unavailable",
+        }
+
+    def aggregate(self, papers):
+        from lnl_toolbox.catalog import recipe_by_id
+
+        service = mock.Mock()
+
+        def compatible(alias, configs, **kwargs):
+            return tuple((key, mock.Mock(to_dict=mock.Mock(return_value={
+                "method": key, "dataset": alias, "status": "compatible",
+                "reasons": [], "required_user_inputs": [],
+            }))) for key in configs)
+
+        service.list_config_compatibility.side_effect = compatible
+        with mock.patch.object(command_console, "_paper_payload", return_value=papers), \
+             mock.patch.object(command_console, "_dataset_profile_payload", return_value={"dataset": "lab"}), \
+             mock.patch("lnl_toolbox.training.service.ExperimentService", return_value=service) as constructor, \
+             mock.patch("lnl_toolbox.catalog.recipe_by_id", wraps=recipe_by_id) as lookup:
+            result = command_console._dataset_recipe_compatibility_payload("lab", method_noise_rate_prior=0.2)
+        return result, service, constructor, lookup
+
+    def test_metadata_only_produces_no_recipe_compatibility_or_readiness(self):
+        with mock.patch("lnl_toolbox.training.service.ExperimentService.prerequisite_readiness") as readiness:
+            result, service, constructor, lookup = self.aggregate([self.metadata_paper()])
+        self.assertEqual(result, {"dataset": "lab", "profile": {"dataset": "lab"}, "methods": [], "recipes": []})
+        lookup.assert_not_called()
+        constructor.assert_not_called()
+        service.list_config_compatibility.assert_not_called()
+        readiness.assert_not_called()
+
+    def test_smoke_only_keeps_real_default_recipe_and_passes_config_to_service(self):
+        paper = {
+            "id": "smoke-demo", "acronym": "Smoke", "title": "Smoke only",
+            "default_recipe_id": "gce-cifar10-noise02-smoke", "default_fidelity": "smoke",
+            "configs": [{"recipe_id": "gce-cifar10-noise02-smoke", "profile": "smoke", "configuration_fidelity": "smoke"}],
+        }
+        result, service, _, lookup = self.aggregate([self.metadata_paper(), paper])
+        self.assertEqual([row["recipe_id"] for row in result["recipes"]], [paper["default_recipe_id"]])
+        self.assertEqual([row["paper_id"] for row in result["methods"]], [paper["id"]])
+        self.assertEqual(list(service.list_config_compatibility.call_args.args[1]), [paper["default_recipe_id"]])
+        self.assertEqual(service.list_config_compatibility.call_args.kwargs, {"method_noise_rate_prior": 0.2})
+        self.assertTrue(all(call.args[0] for call in lookup.call_args_list))
+
+    def test_reproduction_still_wins_over_smoke(self):
+        paper = {
+            "id": "gce", "acronym": "GCE", "title": "GCE",
+            "default_recipe_id": "gce-cifar10-noise02-reproduction", "default_fidelity": "paper_oriented",
+            "configs": [
+                {"recipe_id": "gce-cifar10-noise02-smoke", "profile": "smoke"},
+                {"recipe_id": "gce-cifar10-noise02-reproduction", "profile": "reproduction"},
+            ],
+        }
+        result, service, _, _ = self.aggregate([self.metadata_paper(), paper])
+        self.assertEqual([row["recipe_id"] for row in result["recipes"]], [paper["default_recipe_id"]])
+        self.assertEqual(result["recipes"][0]["profile"], "reproduction")
+        service.list_config_compatibility.assert_called_once()
+
+    def test_legacy_default_recipe_payload_is_preserved(self):
+        paper = {
+            "id": "gce", "acronym": "GCE", "title": "Legacy payload",
+            "default_recipe_id": "gce-cifar10-noise02-reproduction", "default_fidelity": "paper_oriented",
+        }
+        result, _, _, _ = self.aggregate([self.metadata_paper(), paper])
+        self.assertEqual(result["recipes"][0]["recipe_id"], paper["default_recipe_id"])
+
+    def test_current_26_paper_outputs_and_candidate_configs_unchanged_when_metadata_added(self):
+        papers = command_console._paper_payload()
+        self.assertEqual(len(papers), 26)
+        self.assertEqual(sum(len(paper["configs"]) for paper in papers), 56)
+        baseline, baseline_service, _, baseline_lookup = self.aggregate(papers)
+        mixed, mixed_service, _, mixed_lookup = self.aggregate([self.metadata_paper(), *papers])
+        self.assertEqual(mixed, baseline)
+        self.assertEqual(mixed_service.list_config_compatibility.call_args, baseline_service.list_config_compatibility.call_args)
+        self.assertEqual(mixed_lookup.call_args_list, baseline_lookup.call_args_list)
+        expected = [config["recipe_id"] for paper in papers for config in paper["configs"] if config["profile"] == "reproduction"]
+        self.assertEqual([row["recipe_id"] for row in mixed["recipes"]], expected)
+        self.assertNotIn("metadata-demo", {row["paper_id"] for row in mixed["methods"]})
+
+
 class CommandConsoleTest(unittest.TestCase):
     def submit_inline_cli_job(self, command):
         """Exercise the HTTP/CLI handoff while keeping the runner mock separate."""
