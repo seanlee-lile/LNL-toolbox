@@ -265,7 +265,9 @@ class _pdl_PDLTest(unittest.TestCase):
         indices = np.arange(6, dtype=np.int64)
         features = FeatureSnapshot(np.array([[1.0, 0.0, 0.2], [0.8, 0.2, 0.1], [0.1, 0.9, 0.2], [0.2, 0.8, 0.1], [0.6, 0.4, 0.3], [0.3, 0.7, 0.4]]), np.array([0, 0, 1, 1, 0, 1]), indices, 'toy', 'union')
         posteriors = PosteriorSnapshot(np.array([[0.9, 0.1], [0.75, 0.25], [0.15, 0.85], [0.25, 0.75], [0.65, 0.35], [0.35, 0.65]]), features.noisy_targets, indices, 'toy', 'union')
-        estimator = PartTransitionEstimator(num_parts=2, anchor_candidates=2, representation_seed=7, representation_iterations=2, anchor_percentages=(97.0, 99.0), basis_epochs=1, basis_loss_threshold=0.0)
+        # Each split has only three samples: 97/99 select the same anchor.
+        # Separate quantiles make this shared-representation fixture identifiable.
+        estimator = PartTransitionEstimator(num_parts=2, anchor_candidates=2, representation_seed=7, representation_iterations=2, anchor_percentages=(50.0, 99.0), basis_epochs=1, basis_loss_threshold=0.0)
         parts, coefficients = fit_part_representation(features.features, 2, seed=7, iterations=2)
         train = FeatureSnapshot(features.features[:3], features.noisy_targets[:3], indices[:3], 'toy', 'train')
         train_posterior = PosteriorSnapshot(posteriors.noisy_probabilities[:3], posteriors.noisy_targets[:3], indices[:3], 'toy', 'train')
@@ -282,6 +284,35 @@ class _pdl_PDLTest(unittest.TestCase):
         np.testing.assert_allclose(revision_artifact.part_matrices, train_artifact.part_matrices)
         self.assertEqual(revision_artifact.metadata['artifact_role'], 'revision_validation')
         self.assertEqual(revision_artifact.metadata['source_artifact_hash'], train_artifact.artifact_hash)
+
+    def test_paper_anchors_reject_rank_deficient_basis(self) -> None:
+        from lnl_toolbox.noise.pdl import fit_pdl_basis_matrices, select_pdl_anchor_candidates
+
+        probabilities = np.array([[0.9, 0.1], [0.75, 0.25], [0.15, 0.85]])
+        coefficients = np.array([[1., 0.], [0.5, 0.5], [0., 1.]])
+        positions = select_pdl_anchor_candidates(probabilities, [97., 99.])
+        self.assertTrue(np.all(positions[:, 0] == positions[:, 1]))
+        with self.assertRaisesRegex(ValueError, "cannot identify 2 parts"):
+            fit_pdl_basis_matrices(
+                coefficients[positions], probabilities[positions], epochs=1,
+            )
+
+    def test_distinct_anchors_are_explicit_and_independent(self) -> None:
+        from lnl_toolbox.noise.pdl import select_pdl_anchor_candidates
+
+        probabilities = np.array([[0.9, 0.1], [0.75, 0.25], [0.15, 0.85]])
+        coefficients = np.array([[1., 0.], [0.5, 0.5], [0., 1.]])
+        positions = select_pdl_anchor_candidates(
+            probabilities, [97., 99.], policy="distinct", coefficients=coefficients,
+        )
+        for row in positions:
+            self.assertEqual(np.unique(row).size, 2)
+            self.assertEqual(np.linalg.matrix_rank(coefficients[row]), 2)
+        with self.assertRaisesRegex(ValueError, "insufficient independent anchors"):
+            select_pdl_anchor_candidates(
+                probabilities, [97., 99.], policy="distinct",
+                coefficients=np.ones((3, 2)),
+            )
 
     def test_forward_and_importance_objectives_match_manual_values(self) -> None:
         logits = torch.tensor([[1.0, -0.5], [-0.2, 0.7]], dtype=torch.float64, requires_grad=True)

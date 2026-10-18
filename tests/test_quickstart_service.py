@@ -194,6 +194,81 @@ class QuickStartServiceTests(unittest.TestCase):
         self.assertEqual(saved["noise"]["rho_positive"], 0.3)
         self.assertEqual(saved["noise"]["rho_negative"], 0.05)
 
+    def test_class_conditional_matrix_survives_plan_and_noise_generation(self) -> None:
+        from lnl_toolbox.catalog import load_yaml
+        from lnl_toolbox.training.noisy_labels import prepare_noise_manifest
+
+        matrix = ((0.7, 0.3), (0.1, 0.9))
+        selection = QuickStartNoiseSelection(
+            "synthetic", "class_conditional", rate=0.2, seed=1,
+            transition_matrix=matrix,
+        )
+        plan = self.service.build_plan(
+            dataset_alias="local-cifar10", noise_selection=selection, paper_id="gce",
+        )
+        self.assertEqual(plan.status, "ready", plan.details)
+        saved = load_yaml(Path(plan.generated_config_path))
+        np.testing.assert_array_equal(saved["noise"]["transition_matrix"], matrix)
+        labels = np.arange(12, dtype=np.int64) % 2
+        manifest, _ = prepare_noise_manifest(
+            saved, dataset="cifar10", clean_targets=labels,
+            global_indices=np.arange(labels.size), num_classes=2,
+            run_dir=Path(self.temp.name),
+        )
+        np.testing.assert_array_equal(manifest.transition_matrix, matrix)
+
+    def test_replacing_noise_matrix_or_path_invalidates_only_stale_matrices(self) -> None:
+        from copy import deepcopy
+
+        paper = next(item for item in load_papers() if item.id == "mc-ldce")
+        service = DataService(
+            registry=DatasetRegistry((_FakeTenClassImageAdapter(),)),
+            catalog=LocalDatasetCatalog(Path(self.temp.name) / "matrix-catalog.json"),
+        )
+        service.register("ten-class", "cifar10", {"root": str(self.data_root)})
+        profile = service.inspect("ten-class").profile.to_dict()
+        original_matrix = (0.8 * np.eye(10) + (0.2 / 9) * (1 - np.eye(10))).tolist()
+        for key in ("class_conditional", "external_torch"):
+            for changed in (False, True):
+                with self.subTest(key=key, changed=changed):
+                    base = deepcopy(method_template_for_paper(paper).config)
+                    base["noise"] = {
+                        "name": key, "rate": 0.2, "rng": "numpy_legacy",
+                        "transition_matrix": original_matrix, "path": "old-labels.pt",
+                    }
+                    base["transition"]["matrix"] = deepcopy(original_matrix)
+                    matrix = tuple(map(tuple, 0.8 * np.eye(10) + 0.2 * np.roll(np.eye(10), 1, axis=1))) if changed else tuple(map(tuple, original_matrix))
+                    path = "new-labels.pt" if changed else "old-labels.pt"
+                    config = adapt_method_template(
+                        base, dataset_alias="ten-class", dataset_profile=profile,
+                        noise_selection=QuickStartNoiseSelection(
+                            "synthetic", key, rate=0.2, seed=1,
+                            transition_matrix=matrix if key == "class_conditional" else None,
+                            path=path if key == "external_torch" else None,
+                        ), data_service=service,
+                    )
+                    self.assertEqual("matrix" in config["transition"], not changed)
+                    if key == "class_conditional":
+                        np.testing.assert_array_equal(config["noise"]["transition_matrix"], matrix)
+                    else:
+                        self.assertEqual(config["noise"]["path"], path)
+                        if changed:
+                            self.assertNotIn("transition_matrix", config["noise"])
+                    self.assertEqual(base["transition"]["matrix"], original_matrix)
+
+    def test_class_conditional_matrix_must_match_registered_classes(self) -> None:
+        paper = next(item for item in load_papers() if item.id == "gce")
+        with self.assertRaisesRegex(ValueError, "类别数"):
+            adapt_method_template(
+                method_template_for_paper(paper).config,
+                dataset_alias="local-cifar10",
+                dataset_profile=self.data_service.status("local-cifar10").profile.to_dict(),
+                noise_selection=QuickStartNoiseSelection(
+                    "synthetic", "class_conditional", rate=0.2, seed=1,
+                    transition_matrix=((1., 0., 0.), (0., 1., 0.), (0., 0., 1.)),
+                ), data_service=self.data_service,
+            )
+
     def test_binary_risk_rates_follow_selected_noise(self) -> None:
         paper = next(item for item in load_papers() if item.id == "binary-risk")
         profile = self.data_service.status("local-cifar10").profile.to_dict()

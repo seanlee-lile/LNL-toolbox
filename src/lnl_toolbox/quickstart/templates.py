@@ -312,6 +312,10 @@ def adapt_method_template(
             and original_noise.get("rho_positive") != noise_selection.rho_positive)
         or (noise_selection.rho_negative is not None
             and original_noise.get("rho_negative") != noise_selection.rho_negative)
+        or (noise_selection.transition_matrix is not None
+            and original_noise.get("transition_matrix") != [list(row) for row in noise_selection.transition_matrix])
+        or (noise_selection.path is not None
+            and original_noise.get("path") != noise_selection.path)
     )
     if noise_selection.kind in {"clean", "native"} or selected_noise_name in {"clean", "native"}:
         # Label selection is independent of artificial corruption. Keep the
@@ -376,6 +380,9 @@ def adapt_method_template(
             num_classes=num_classes,
             discard_transition_matrices=noise_protocol_changed,
         )
+        if noise_selection.kind == "synthetic" and selected_noise_name == "class_conditional":
+            # Cleanup removes inherited matrices, not this run's explicit input.
+            candidate["noise"]["transition_matrix"] = _synthetic_transition_matrix(noise_selection, num_classes)
     if requirements is not None:
         if requirements.requires_method_noise_prior:
             known_rate = 0.0 if noise_selection.kind == "clean" else noise_selection.rate

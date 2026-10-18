@@ -245,8 +245,14 @@ class _binary_training_BinaryTrainingTest(unittest.TestCase):
             self.assertTrue((Path(result) / 'metrics.json').is_file())
             self.assertTrue((Path(result) / 'data_manifest.json').is_file())
             rows = [json.loads(line) for line in (Path(result) / 'metrics.jsonl').read_text(encoding='utf-8').splitlines()]
-            self.assertEqual([row['event'] for row in rows], ['epoch'])
+            self.assertEqual([row['event'] for row in rows], ['epoch', 'final'])
             self.assertEqual(rows[0]['epoch'], 1)
+            final = json.loads((Path(result) / 'final_metrics.json').read_text(encoding='utf-8'))
+            self.assertEqual(rows[-1], final)
+            self.assertEqual(final['completed_epochs'], 1)
+            self.assertEqual(final['test_samples'], 8)
+            self.assertTrue(np.isfinite(final['test_loss']))
+            self.assertTrue(0.0 <= final['test_accuracy'] <= 1.0)
 
     def test_runner_rejects_multiclass_source_explicitly(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
