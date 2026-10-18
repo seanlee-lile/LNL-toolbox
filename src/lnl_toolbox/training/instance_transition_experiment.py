@@ -567,12 +567,6 @@ def run_instance_transition_experiment(
             train_posteriors.save(run_dir / "train_posterior_snapshot.npz")
             validation_posteriors.save(run_dir / "validation_posterior_snapshot.npz")
             percentages = estimator.anchor_percentages_for_paper()
-            train_anchor_positions = select_pdl_anchor_candidates(
-                train_posteriors.noisy_probabilities, percentages
-            )
-            validation_anchor_positions = select_pdl_anchor_candidates(
-                validation_posteriors.noisy_probabilities, percentages
-            )
             train_representation_positions = _representation_positions(
                 representation_indices, train_posteriors.global_indices
             )
@@ -585,6 +579,14 @@ def run_instance_transition_experiment(
             validation_split_coefficients = representation_coefficients[
                 validation_representation_positions
             ]
+            train_anchor_positions = select_pdl_anchor_candidates(
+                train_posteriors.noisy_probabilities, percentages,
+                policy=estimator.anchor_policy, coefficients=train_split_coefficients,
+            )
+            validation_anchor_positions = select_pdl_anchor_candidates(
+                validation_posteriors.noisy_probabilities, percentages,
+                policy=estimator.anchor_policy, coefficients=validation_split_coefficients,
+            )
             train_basis, validation_basis = fit_pdl_basis_matrices_pair(
                 train_split_coefficients[train_anchor_positions],
                 train_posteriors.noisy_probabilities[train_anchor_positions],

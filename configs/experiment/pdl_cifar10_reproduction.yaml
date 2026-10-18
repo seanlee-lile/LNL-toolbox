@@ -46,6 +46,7 @@ instance_transition:
   representation_seed: 1
   representation_error_tolerance: 1.0e-05
   anchor_candidates: 20
+  anchor_policy: paper
   anchor_percentages:
   - 97.0
   - 97.1052631579

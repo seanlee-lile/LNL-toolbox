@@ -680,6 +680,7 @@ def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
     leaf_rules = {name: kind for kind, names in leaf_groups.items() for name in names.split()}
     # Exact overrides distinguish parameters sharing a spelling but not a domain.
     exact = {
+        "t_revision.transition_initialization.percentile": "positive",
         "trainer.epochs": "positive_integer",
         "seed": "seed",
         "evaluation.report_last_epochs": "integer",
@@ -707,6 +708,11 @@ def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
         "transition_stage.parameterization.max_flip_mass": "half_probability",
     }
     enums = {
+        "instance_transition.anchor_policy": "paper distinct",
+        "lend.selection.reduction": "batch_mean sum",
+        "trainer.early_stopping_monitor": "validation_accuracy validation_loss",
+        "posterior_stage.name": "kde kliep neural",
+        "t_revision.transition_initialization.method": "pseudo_anchor_max_posterior pseudo_anchor_percentile",
         "algorithm.correction": "forward pdl pdl_revision",
         "cnlcu.variant": "soft hard", "cwd.variant": "binary_scalar multiclass",
         "data.preprocessing": "standard tensor_only gce2018 l2rw",

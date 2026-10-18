@@ -607,7 +607,10 @@ class TRevisionAlgorithm:
                 "T-Revision posterior snapshot is missing noisy target classes: "
                 f"{missing}"
             )
-        base = AnchorTransitionEstimator().estimate(snapshot)
+        initialization = self.config["t_revision"]["transition_initialization"]
+        percentile = (float(initialization.get("percentile", 97.0))
+                      if initialization["method"] == "pseudo_anchor_percentile" else None)
+        base = AnchorTransitionEstimator(percentile=percentile).estimate(snapshot)
         metadata = dict(base.metadata)
         metadata.update({
             "method": "t_revision",
@@ -714,6 +717,8 @@ class TRevisionAlgorithm:
         optimizer_steps = 0
         gradient_norm_sum = 0.0
         gradient_norm_max = 0.0
+        classifier_gradient_norm_max = revision_gradient_norm_max = 0.0
+        classifier_parameter_ids = {id(parameter) for parameter in self.model.parameters()}
         sample_weights: list[Tensor] = []
         sample_denominators: list[Tensor] = []
         optimized_parameters = [
@@ -756,6 +761,14 @@ class TRevisionAlgorithm:
                 raise ValueError("T-Revision gradient norm must be finite")
             gradient_norm_sum += gradient_norm
             gradient_norm_max = max(gradient_norm_max, gradient_norm)
+            classifier_gradient_norm_max = max(classifier_gradient_norm_max, float(np.sqrt(sum(
+                float(parameter.grad.detach().double().square().sum())
+                for parameter in optimized_parameters
+                if id(parameter) in classifier_parameter_ids and parameter.grad is not None))))
+            revision_gradient_norm_max = max(revision_gradient_norm_max, float(np.sqrt(sum(
+                float(parameter.grad.detach().double().square().sum())
+                for parameter in optimized_parameters
+                if id(parameter) not in classifier_parameter_ids and parameter.grad is not None))))
             self.optimizer.step()
             optimizer_steps += 1
             sample_weights.append(result.sample_weights.cpu())
@@ -832,6 +845,8 @@ class TRevisionAlgorithm:
                 "denominator_min": float(denominators.min().item()),
                 "gradient_norm": float(gradient_norm_sum / optimizer_steps),
                 "gradient_norm_max": float(gradient_norm_max),
+                "classifier_gradient_norm_max": classifier_gradient_norm_max,
+                "revision_gradient_norm_max": revision_gradient_norm_max,
                 "parameter_norm": parameter_norm,
                 "update_norm": update_norm,
                 "relative_update_norm": float(relative_update_norm),

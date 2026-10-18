@@ -61,7 +61,7 @@ class EarlyStopping:
             self.bad_epochs = 0
         else:
             self.bad_epochs += 1
-        self.stopped = self.bad_epochs > self.patience
+        self.stopped = not improved and self.bad_epochs >= self.patience
         return improved
 
     def state_dict(self) -> dict[str, Any]:

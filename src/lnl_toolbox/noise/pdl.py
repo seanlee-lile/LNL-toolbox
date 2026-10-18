@@ -91,6 +91,9 @@ def fit_part_representation(
 def select_pdl_anchor_candidates(
     probabilities: np.ndarray,
     percentages: np.ndarray | list[float] | tuple[float, ...],
+    *,
+    policy: str = "paper",
+    coefficients: np.ndarray | None = None,
 ) -> np.ndarray:
     """Replicate official ``tools.fit(..., filter_outlier=True)``."""
 
@@ -104,9 +107,16 @@ def select_pdl_anchor_candidates(
         raise ValueError("probabilities must be finite and non-negative")
     if np.any((levels < 0.0) | (levels > 100.0)):
         raise ValueError("anchor percentages must lie in [0, 100]")
+    if policy not in {"paper", "distinct"}:
+        raise ValueError("PDL anchor_policy must be paper or distinct")
+    if policy == "distinct":
+        weights = np.asarray(coefficients, dtype=np.float64)
+        if weights.shape != (values.shape[0], levels.size) or not np.isfinite(weights).all():
+            raise ValueError("distinct PDL anchors require finite coefficients [N, num_parts]")
     positions = np.empty((values.shape[1], levels.size), dtype=np.int64)
     for class_index in range(values.shape[1]):
         column = values[:, class_index]
+        chosen: list[int] = []
         for basis_index, percentage in enumerate(levels):
             try:
                 threshold = np.percentile(column, float(percentage), method="higher")
@@ -114,7 +124,21 @@ def select_pdl_anchor_candidates(
                 threshold = np.percentile(column, float(percentage), interpolation="higher")
             robust = column.copy()
             robust[robust >= threshold] = 0.0
-            positions[class_index, basis_index] = int(np.argmax(robust))
+            position = int(np.argmax(robust))
+            if policy == "distinct":
+                # Explicit small-data alternative: prefer the paper candidate,
+                # then expand by posterior proximity until a new independent
+                # coefficient row is found. Never reduce the number of parts.
+                candidates = np.argsort(np.abs(column - column[position]), kind="stable")
+                position = next((int(index) for index in candidates
+                                 if int(index) not in chosen
+                                 and np.linalg.matrix_rank(weights[chosen + [int(index)]]) > len(chosen)), -1)
+                if position < 0:
+                    raise ValueError(
+                        f"PDL class {class_index}: insufficient independent anchors for {levels.size} parts"
+                    )
+            chosen.append(position)
+            positions[class_index, basis_index] = position
     return positions
 
 
@@ -185,6 +209,12 @@ def _fit_pdl_basis_group(
     classes, basis, parts = coefficients.shape
     if parts != basis or targets.shape != (classes, basis, classes):
         raise ValueError("PDL basis group dimensions do not match")
+    ranks = [int(np.linalg.matrix_rank(row)) for row in coefficients]
+    if any(rank < parts for rank in ranks):
+        raise ValueError(
+            f"PDL anchor coefficients cannot identify {parts} parts; class ranks={ranks}. "
+            "Inspect the representation or explicitly choose anchor_policy=distinct for small data."
+        )
     result = np.empty((basis, classes, classes), dtype=np.float64)
     for class_index in range(classes):
         # Exact ``tools.init_params`` behavior for Matrix_optimize: reset
@@ -252,6 +282,12 @@ def fit_pdl_basis_matrices_pair(
         raise ValueError("train PDL basis dimensions do not match")
     if validation_targets.shape != (classes, basis, classes):
         raise ValueError("validation PDL basis dimensions do not match")
+    for split, values in (("train", train_coefficients), ("validation", validation_coefficients)):
+        if not np.isfinite(values).all():
+            raise ValueError(f"PDL {split} coefficients must be finite")
+        ranks = [int(np.linalg.matrix_rank(row)) for row in values]
+        if any(rank < parts for rank in ranks):
+            raise ValueError(f"PDL {split} anchor ranks={ranks}; {parts} independent parts required. Inspect the representation or explicitly choose anchor_policy=distinct.")
     if epochs < 1 or learning_rate <= 0.0 or loss_threshold < 0.0:
         raise ValueError("invalid PDL basis optimization hyperparameters")
     if not (
@@ -496,6 +532,7 @@ class PartTransitionEstimator:
     representation_iterations: int = 200
     representation_error_tolerance: float = 1e-5
     anchor_percentages: tuple[float, ...] | None = None
+    anchor_policy: str = "paper"
     basis_epochs: int = 1500
     basis_learning_rate: float = 0.001
     basis_loss_threshold: float = 0.02
@@ -568,7 +605,8 @@ class PartTransitionEstimator:
         split_coefficients = coefficients[order][positions]
         percentages = self._anchor_percentages()
         anchor_positions = select_pdl_anchor_candidates(
-            posteriors.noisy_probabilities, percentages
+            posteriors.noisy_probabilities, percentages,
+            policy=self.anchor_policy, coefficients=split_coefficients,
         )
         anchor_indices = posteriors.global_indices[anchor_positions]
         matrices = (
@@ -595,6 +633,9 @@ class PartTransitionEstimator:
                 "estimator": "part_dependent",
                 "num_parts": self.num_parts,
                 "anchor_percentages": list(percentages),
+                "anchor_policy": self.anchor_policy,
+                "unique_anchors_per_class": [int(np.unique(row).size) for row in anchor_indices],
+                "anchor_coefficient_ranks": [int(np.linalg.matrix_rank(split_coefficients[row])) for row in anchor_positions],
                 "representation_seed": self.representation_seed,
                 "representation_iterations": self.representation_iterations,
                 "representation_error_tolerance": self.representation_error_tolerance,

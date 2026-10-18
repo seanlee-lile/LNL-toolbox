@@ -136,6 +136,7 @@ class ImportanceReweightingAlgorithm:
         test_loader: Any,
         loss: nn.Module,
         device: torch.device,
+        posterior_backend: Any | None = None,
     ) -> None:
         self.raw_config = deepcopy(dict(config))
         self.config = ImportanceReweightingConfig.from_mapping(config)
@@ -150,7 +151,7 @@ class ImportanceReweightingAlgorithm:
             raise ValueError(
                 "importance reweighting posterior features must have shape [N, D]"
             )
-        self.posterior_backend = build_binary_noisy_posterior_backend(
+        self.posterior_backend = posterior_backend if posterior_backend is not None else build_binary_noisy_posterior_backend(
             self.config.posterior_stage
         )
         self.posterior_backend_identity = dict(
@@ -209,6 +210,7 @@ class ImportanceReweightingAlgorithm:
                 "finite_count": int(np.isfinite(probabilities).sum()),
                 "value_count": int(probabilities.size),
                 "row_sum_max_error": float(row_errors.max()),
+                "near_one_hot_fraction": float(np.mean(probabilities.max(axis=1) >= 1.0 - 1e-6)),
                 "observed_class_prior": [
                     float(np.mean(self.snapshot.noisy_targets == label))
                     for label in (0, 1)
@@ -254,6 +256,7 @@ class ImportanceReweightingAlgorithm:
                 "nonfinite_count": int(np.sum(~np.isfinite(weights))),
                 "ess": float(ess),
                 "ess_fraction": float(ess / max(1, weights.size)),
+                "all_weights_equal_one": bool(np.allclose(weights, 1.0)),
             },
         }
 

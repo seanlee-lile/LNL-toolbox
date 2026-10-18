@@ -279,7 +279,9 @@
       (addNoise ? '<label>加噪类型<select id="qs-noise">' + syntheticOptions.map(function (item) { return '<option value="' + esc(item.key) + '"' + (item.key === selected?.key ? ' selected' : '') + '>' + esc(item.label) + '</option>'; }).join("") + '</select></label>' +
         (selected?.description ? '<p class="helper">' + esc(selected.description) + '</p>' : '') +
         (selected?.key === "binary_asymmetric_rcn" ? '<div class="qs-noise-inputs"><label>正类翻转率<input id="qs-rho-positive" type="number" min="0" max="1" step="0.01" value="' + esc(state.noiseSelection.rho_positive ?? 0.2) + '"></label><label>负类翻转率<input id="qs-rho-negative" type="number" min="0" max="1" step="0.01" value="' + esc(state.noiseSelection.rho_negative ?? 0.1) + '"></label></div><p class="helper">分别表示真实正类被标成负类、真实负类被标成正类的概率；两者之和必须小于 1。</p>' :
-        selected?.requires_rate ? '<label>人工噪声率<input id="qs-rate" type="number" min="0" max="1" step="0.01" value="' + esc(state.noiseSelection.rate == null ? "0.2" : state.noiseSelection.rate) + '"></label><p class="helper">这是新生成的错误标签比例，不是数据集原本的噪声率。</p>' : '') : '<p class="helper">不加噪：按登记的干净标签直接训练；不需要噪声率。</p>');
+        selected?.requires_rate ? '<label>人工噪声率<input id="qs-rate" type="number" min="0" max="1" step="0.01" value="' + esc(state.noiseSelection.rate == null ? "0.2" : state.noiseSelection.rate) + '"></label><p class="helper">这是加噪设置中的比例；实际错误比例由所选生成规则决定。</p>' : '') +
+        (selected?.key === "class_conditional" ? '<label>类别转移矩阵<textarea id="qs-transition-matrix" rows="8" style="width:100%">' + esc(JSON.stringify(state.noiseSelection.transition_matrix || Array.from({length:state.dataset.num_classes}, function (_, row) { return Array.from({length:state.dataset.num_classes}, function (_, col) { return Number(row === col); }); }))) + '</textarea></label><p class="helper">填写 JSON 二维数组。第 i 行第 j 列是原类别 i 被标为类别 j 的概率；每行之和必须为 1。</p>' : '') +
+        (selected?.key === "external_torch" ? '<label>外部标签文件路径<input id="qs-noise-path" value="' + esc(state.noiseSelection.path || "") + '" placeholder="例如 data/cal/IDN_0.2_C10.pt"></label><p class="helper">文件包含 clean_label_train 和 noise_label_train，顺序须与当前训练池一致；子集需要使用对齐后的标签文件。</p>' : '') : '<p class="helper">不加噪：按登记的干净标签直接训练；不需要噪声率。</p>');
     const unknownMessage = '<div class="qs-feedback qs-warning"><strong>训练标签的干净性尚不能确认</strong><p>现有数据资料不足以判断其是否含噪，不能默认它是干净数据并提供人工加噪。可先在“数据集”中补充有依据的标签事实；也可以只按当前观测标签继续检查方法。</p><button type="button" id="qs-open-dataset-facts" class="secondary">查看数据集事实</button> <button type="button" id="qs-confirm-labels" class="secondary">按当前标签继续</button></div>';
     return '<section id="qs-noise-step" class="qs-step"><h3>2. 标签噪声</h3>' + (native ? noisy : unknown || state.noise.dataset_state === "unknown" ? unknownMessage : clean) +
       '<label>实验随机种子<input id="qs-seed" type="number" min="0" step="1" value="' + esc(state.noiseSelection.seed == null ? "1" : state.noiseSelection.seed) + '"></label><p class="helper">同一个种子用于本次实验的数据划分、人工加噪（若启用）和其他随机步骤。</p></section>';
@@ -821,6 +823,8 @@
     document.getElementById("qs-rate")?.addEventListener("change", updateNoise);
     document.getElementById("qs-rho-positive")?.addEventListener("change", updateNoise);
     document.getElementById("qs-rho-negative")?.addEventListener("change", updateNoise);
+    document.getElementById("qs-transition-matrix")?.addEventListener("change", updateNoise);
+    document.getElementById("qs-noise-path")?.addEventListener("change", updateNoise);
     document.getElementById("qs-seed")?.addEventListener("change", updateNoise);
     document.getElementById("qs-native-rate-status")?.addEventListener("change", function () { state.nativeRateMode = this.value; render(); });
     document.getElementById("qs-save-native-rate")?.addEventListener("click", saveNativeRate);
@@ -1144,7 +1148,15 @@
       state.error = "人工噪声率必须是 0 到 1 之间的数字"; render(); return;
     }
     state.error = "";
-    state.noiseSelection = {kind:native ? "native" : addNoise ? "synthetic" : "clean", key:key, rate:rate, seed:Number(document.getElementById("qs-seed")?.value ?? 1), rho_positive:positive, rho_negative:negative};
+    let matrix = null;
+    if (key === "class_conditional") {
+      try {
+        matrix = JSON.parse(document.getElementById("qs-transition-matrix")?.value || JSON.stringify(Array.from({length:state.dataset.num_classes}, function (_, row) { return Array.from({length:state.dataset.num_classes}, function (_, col) { return Number(row === col); }); })));
+        if (!Array.isArray(matrix) || matrix.length !== state.dataset.num_classes || matrix.some(function (row) { return !Array.isArray(row) || row.length !== matrix.length || row.some(function (value) { return typeof value !== "number" || !Number.isFinite(value) || value < 0; }) || Math.abs(row.reduce(function (sum, value) { return sum + value; }, 0) - 1) > 1e-8; })) throw new Error("matrix");
+      } catch (error) { state.error = "转移矩阵须与类别数一致，各项非负且每行之和为 1"; render(); return; }
+    }
+    const labelPath = key === "external_torch" ? (document.getElementById("qs-noise-path")?.value || state.noiseSelection.path || "").trim() : null;
+    state.noiseSelection = {kind:native ? "native" : addNoise ? "synthetic" : "clean", key:key, rate:rate, seed:Number(document.getElementById("qs-seed")?.value ?? 1), rho_positive:positive, rho_negative:negative, transition_matrix:matrix, path:labelPath};
     state.methods = [];
     state.methodListExpanded = false;
     state.methodInputs = {};
@@ -1277,7 +1289,9 @@
         }
         state.noiseSelection = {kind:"synthetic", key:option.key, rate:option.requires_rate ? Number(configuredRate) : null, seed:state.noiseSelection.seed ?? 1,
           rho_positive:configuredNoise === "binary_asymmetric_rcn" ? Number(schemaValue(pending.schema, "noise.rho_positive")) : null,
-          rho_negative:configuredNoise === "binary_asymmetric_rcn" ? Number(schemaValue(pending.schema, "noise.rho_negative")) : null};
+          rho_negative:configuredNoise === "binary_asymmetric_rcn" ? Number(schemaValue(pending.schema, "noise.rho_negative")) : null,
+          transition_matrix:configuredNoise === "class_conditional" ? schemaValue(pending.schema, "noise.transition_matrix") : null,
+          path:configuredNoise === "external_torch" ? schemaValue(pending.schema, "noise.path") : null};
       }
     }
     state.pendingPaper = null;

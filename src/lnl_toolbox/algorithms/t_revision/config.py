@@ -88,7 +88,6 @@ class TRevisionConfig:
             owner="t_revision.transition_initialization",
         )
         expected_initializer = {
-            "method": "pseudo_anchor_max_posterior",
             "posterior_split": "train",
             "extraction_augmentation": False,
             "tie_break": "stable_sample_index",
@@ -99,6 +98,12 @@ class TRevisionConfig:
                     f"t_revision.transition_initialization.{name} must be "
                     f"{expected!r}"
                 )
+        if initializer.get("method") not in {"pseudo_anchor_max_posterior", "pseudo_anchor_percentile"}:
+            raise ValueError("transition initialization must use max posterior or percentile filtering")
+        if initializer.get("method") == "pseudo_anchor_percentile":
+            percentile = float(initializer.get("percentile", 97.0))
+            if not math.isfinite(percentile) or not 0.0 < percentile < 100.0:
+                raise ValueError("transition initialization percentile must lie in (0,100)")
 
         classifier_values = _mapping(
             config.get("classifier_initialization"),

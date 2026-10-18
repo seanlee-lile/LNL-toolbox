@@ -84,6 +84,10 @@ def _synthetic_transition_matrix(
 ) -> list[list[float]] | None:
     if selection.kind != "synthetic" or num_classes < 2:
         return None
+    if selection.key == "class_conditional" and selection.transition_matrix:
+        if len(selection.transition_matrix) != num_classes:
+            raise ValueError("类别转移矩阵大小必须与当前数据集类别数相同")
+        return [list(row) for row in selection.transition_matrix]
     if selection.key in {"symmetric", "pairflip"} and selection.rate is not None:
         rate = float(selection.rate)
         if selection.key == "symmetric":
@@ -327,11 +331,16 @@ def adapt_method_template(
             seed=noise_selection.seed,
             rho_positive=noise_selection.rho_positive,
             rho_negative=noise_selection.rho_negative,
+            transition_matrix=noise_selection.transition_matrix,
+            path=noise_selection.path,
         )
         if noise is None:
             raise ValueError(
                 f"noise choice {noise_selection.key!r} needs additional method/data inputs"
             )
+        if original_noise_name == selected_noise_name:
+            # Preserve the selected paper's sampling/RNG and label-file keys.
+            noise = {**original_noise, **noise}
         if "validation_targets" in original_noise:
             noise["validation_targets"] = original_noise["validation_targets"]
         candidate["noise"] = noise
@@ -342,6 +351,21 @@ def adapt_method_template(
     from lnl_toolbox.training.runners import resolve_runner
 
     runner = resolve_runner(candidate)
+    if runner.name == "importance_reweighting" and selected_dataset.startswith("cifar"):
+        # Low-dimensional KDE/KLIEP recipes are not image posterior models.
+        # Record the image adaptation in the actual config shown by Quick Start.
+        data["dimension"] = 3 * 32 * 32
+        candidate["data"] = data
+        if candidate.get("posterior_stage", {}).get("name") in {"kde", "kliep"}:
+            candidate["posterior_stage"] = {
+                "name": "neural", "epochs": int(candidate["trainer"]["epochs"]),
+                "early_stopping": False, "rate_estimator": "paper_raw_min",
+                "model": {"name": "resnet18", "base_width": 16},
+                "optimizer": {"name": "sgd", "lr": 0.01, "momentum": 0.9, "weight_decay": 0.0001},
+                "scheduler": {"name": "none"},
+            }
+            candidate["model"] = {"name": "resnet18", "base_width": 16, "num_classes": 2}
+            candidate["configuration_fidelity"] = "engineering"
     requirements = runner.requirements(candidate)
     num_classes = int(dataset_profile.get("num_classes", 0) or 0)
     if num_classes > 1 and _class_count_is_supported(requirements, num_classes):
@@ -444,6 +468,10 @@ def find_exact_reproduction(
         if data_name != str(dataset_adapter).lower().replace("-", "_"):
             continue
         if noise_name != wanted_noise:
+            continue
+        if noise_selection.transition_matrix is not None and _get(config, ("noise", "transition_matrix")) != [list(row) for row in noise_selection.transition_matrix]:
+            continue
+        if noise_selection.path is not None and str(_get(config, ("noise", "path"), "")) != noise_selection.path:
             continue
         configured_rate = _get(config, ("noise", "rate"))
         if noise_selection.rate is not None and configured_rate is not None:

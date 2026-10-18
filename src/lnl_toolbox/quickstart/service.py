@@ -244,6 +244,7 @@ class QuickStartService:
                 {"key": item.key, "label": item.label, "description": item.description, "requires_rate": item.requires_rate}
                 for item in quick_start_noise_specs()
                 if item.key == "clean" or item in visible_synthetic_noise_specs()
+                or item.visible and item.category == "external"
             ] + ([{"key": "binary_asymmetric_rcn", "label": "二分类非对称噪声", "description": "分别设置正类与负类标签翻转概率。", "requires_rate": False}]
                  if report.classes == 2 else []),
         }

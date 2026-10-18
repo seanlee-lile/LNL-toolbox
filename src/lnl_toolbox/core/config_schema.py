@@ -59,6 +59,8 @@ def training_stage_controls(config: Mapping[str, Any]) -> list[dict[str, Any]]:
         "mc_ldce": [("warmup", "模型预训练"), ("transition", "转移矩阵估计训练"), ("trainer", "分类器训练")],
     }
     entries = definitions.get(runner, [("trainer", "模型训练")])
+    if runner == "importance_reweighting" and (config.get("posterior_stage") or {}).get("name") == "neural":
+        entries = [("posterior_stage", "带噪标签后验模型训练"), ("trainer", "加权分类器训练")]
     if config.get("kind") == "mentor_artifact" or "student_trainer" in config:
         entries = [("student_trainer", "反馈样本生成训练"), ("trainer", "Mentor网络训练")]
     result = []

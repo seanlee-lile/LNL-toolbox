@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import torch
+import numpy as np
 import yaml
 
 from lnl_toolbox.algorithms.lend import LENDAlgorithm, LENDConfig
@@ -192,6 +193,8 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
             totals: dict[str, float] = {}
             samples = selected_total = oracle_clean_selected = 0.0
             oracle_clean_observed = oracle_diluted_correct = 0.0
+            oracle_current_correct = neighbor_correct = neighbor_count = 0
+            label_counts = np.zeros(num_classes, dtype=np.int64)
             for raw_batch in prepared.loader(DataRole.TRAIN, epoch=epoch):
                 result = algorithm.step(Batch(raw_batch), state)
                 count = result.metrics["samples"]
@@ -205,6 +208,14 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
                 batch_indices = result.metadata["batch_indices"].tolist()
                 oracle_clean_observed += sum(not corruption[int(index)] for index in batch_indices if corruption)
                 history_predictions = result.metadata["history_values"].argmax(dim=1).tolist()
+                label_counts += np.bincount(history_predictions, minlength=num_classes)
+                if clean_target:
+                    clean_batch = torch.tensor([clean_target[int(index)] for index in batch_indices])
+                    current_predictions = result.metadata["diluted_labels"].argmax(dim=1)
+                    oracle_current_correct += int((current_predictions == clean_batch).sum())
+                    neighbor_mask = result.metadata["neighbor_mask"]
+                    neighbor_count += int(neighbor_mask.sum())
+                    neighbor_correct += int((neighbor_mask & (clean_batch[:, None] == clean_batch[None, :])).sum())
                 oracle_diluted_correct += sum(
                     prediction == clean_target[int(index)]
                     for prediction, index in zip(history_predictions, batch_indices)
@@ -241,6 +252,10 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
                     if oracle_clean_observed else 0.0) if corruption else None
                 ),
                 "oracle_diluted_label_accuracy": oracle_diluted_correct / samples if clean_target else None,
+                "oracle_current_dilution_accuracy": oracle_current_correct / samples if clean_target else None,
+                "oracle_neighbor_purity": neighbor_correct / neighbor_count if neighbor_count else None,
+                "history_label_counts": label_counts.tolist(),
+                "history_largest_class_fraction": float(label_counts.max() / samples),
                 "validation_accuracy": validation["accuracy"],
                 "best_validation_accuracy": best_accuracy,
             }

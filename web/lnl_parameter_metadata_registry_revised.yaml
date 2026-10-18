@@ -3,6 +3,11 @@ parameter_ui:
   # Help and choices are shared by Quick Start and the YAML field editor.
   # Field meanings below document the keys; displayed parameter names stay unchanged.
   choices:
+    instance_transition.anchor_policy: [paper, distinct]
+    posterior_stage.name: [kde, kliep, neural]
+    trainer.early_stopping_monitor: [validation_accuracy, validation_loss]
+    lend.selection.reduction: [batch_mean, sum]
+    t_revision.transition_initialization.method: [pseudo_anchor_max_posterior, pseudo_anchor_percentile]
     algorithm.correction: [forward, pdl, pdl_revision]
     cnlcu.variant: [soft, hard]
     cwd.variant: [binary_scalar, multiclass]
@@ -241,6 +246,9 @@ parameter_ui:
     uci_statlog_heart: UCI Statlog 心脏病数据
     standard: 已登记的标准格式数据
   fields:
+    instance_transition.anchor_policy: [锚点选择方式, paper保留作者分位候选；distinct在候选重复或系数不独立时扩展搜索，保证每类使用不同且线性独立的锚点。这是小数据适配，会改变锚点样本。]
+    trainer.early_stopping_monitor: [早停观察指标, validation_accuracy观察验证准确率升高；validation_loss观察验证损失降低。连续15轮未改善时停止并恢复该指标最好的模型。]
+    t_revision.transition_initialization.percentile: [锚点过滤分位数, 先去掉预测概率达到该分位数的高置信样本，再从其余样本选伪锚点。CIFAR-10参考实现使用97。]
     seed: [实验随机种子, 控制数据划分、标签加噪和模型初始化等随机过程；相同种子便于重复实验。]
     loader.batch_size: [训练批次大小, 每次参数更新读取的训练样本数；较大的批次通常需要更多显存。]
     trainer.epochs: [训练轮数, 训练数据最多完整遍历的次数。]
@@ -353,7 +361,7 @@ parameter_ui:
     fine.maximum_threshold: [类别筛选阈值上限, 限制类别筛选所用置信度阈值的最大值。]
     fine.warmup_lr: [预热学习率, FINE 预热训练阶段使用的学习率。]
     feature_stage.layers: [特征提取层, PCSE 从哪些网络层提取特征，以及每层如何汇总特征；至少选择两个不同层。]
-    posterior_stage.name: [后验概率估计方式, Importance Reweighting 估计样本属于各带噪标签类别的概率；当前配置选择核密度或密度比估计。]
+    posterior_stage.name: [后验概率估计方式, 用带噪训练标签估计各类别概率。kde为核密度估计，kliep为密度比估计，neural为先训练分类网络再提取概率；图像数据采用neural。]
     posterior_stage.rate_estimator: [噪声率估计方式, 从估计的带噪标签后验概率中提取类别噪声率。]
     posterior_stage.bandwidth: [核密度估计带宽, 后验概率估计的平滑尺度；较大值通常使估计更平滑。]
     final_stage.classifier: [最终分类器校正方式, 最终分类器使用的标签噪声校正方法。]
@@ -445,7 +453,7 @@ parameter_ui:
     lend.history.beta: [历史标签平滑系数, 更新历史标签估计时保留旧估计的比例。]
     lend.history.first_observation: [历史标签初次记录方式, 第一次观察到样本时用当前估计初始化历史记录。]
     lend.selection.rule: [训练样本保留规则, 保留观测标签与稀释后最高概率类别一致的样本。]
-    lend.selection.reduction: [筛选损失平均方式, 用整个批次大小作为筛选后训练损失的平均分母。]
+    lend.selection.reduction: [筛选损失计算方式, batch_mean将入选样本损失总和除以整个批次大小；sum直接使用论文公式中的损失总和。切换会改变梯度尺度，学习率需一并考虑。]
     lend.selection.empty_batch: [批次无样本保留时的处理, 当前批次没有样本通过筛选时跳过参数更新。]
     pipeline.name: [训练流程, 当前方法采用的数据、损失和更新步骤组合。]
     pipeline.warmup_epochs: [流程预热轮数, 正式方法步骤开始前执行的预热轮数。]
@@ -913,7 +921,7 @@ runtime_fixed_parameter_paths:
   upm: [upm.psi.source, upm.psi.split, upm.psi.augmentation, upm.main.initialization, evaluation.selection_split]
   dld: [dld.precorrection.gmm_components, dld.diffusion.model.independent_predictors, dld.inference.steps, dld.inference.deterministic, dld.inference.initialization]
   dividemix: [evaluation.selection_split, dividemix.mixmatch.mixup_lambda_scope, dividemix.inference.ensemble]
-  lend: [lend.history.first_observation, lend.selection.rule, lend.selection.reduction, lend.selection.empty_batch]
+  lend: [lend.history.first_observation, lend.selection.rule, lend.selection.empty_batch]
 runtime_derived_parameter_paths:
   importance_reweighting: [model.in_features]
   coteaching: [coteaching.remember_schedule.end]
@@ -1811,6 +1819,12 @@ methods:
       note: ''
     parameters:
       basic:
+        trainer.early_stopping_monitor:
+          current: validation_accuracy
+          value_type: string
+          ui_control: select
+          origin: experiment_control
+          note: 选择验证准确率或验证损失作为早停指标。
         data.seed:
           current: 2013
           value_type: integer
@@ -2940,6 +2954,54 @@ methods:
           origin: advanced_experiment_or_implementation_control
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: dataset protocol
+        posterior_stage.epochs:
+          current: 50
+          value_type: integer
+          ui_control: number
+          origin: experiment_control
+          note: 带噪标签后验模型的训练轮数上限；启用本阶段早停后可提前结束。
+        posterior_stage.model.name:
+          current: resnet18
+          value_type: string
+          ui_control: select
+          origin: experiment_control
+          note: 用于估计带噪标签概率的分类网络，只使用当前训练划分的观测标签。
+        posterior_stage.model.base_width:
+          current: 16
+          value_type: integer
+          ui_control: number
+          origin: experiment_control
+          note: 后验网络的基础通道数。
+        posterior_stage.optimizer.name:
+          current: sgd
+          value_type: string
+          ui_control: select
+          origin: experiment_control
+          note: 后验网络训练使用的优化器。
+        posterior_stage.optimizer.lr:
+          current: 0.01
+          value_type: number
+          ui_control: number
+          origin: experiment_control
+          note: 后验网络训练的学习率。
+        posterior_stage.optimizer.momentum:
+          current: 0.9
+          value_type: number
+          ui_control: number
+          origin: experiment_control
+          note: 后验网络SGD优化器的动量系数。
+        posterior_stage.optimizer.weight_decay:
+          current: 0.0001
+          value_type: number
+          ui_control: number
+          origin: experiment_control
+          note: 后验网络优化器的权重衰减系数。
+        posterior_stage.scheduler.name:
+          current: none
+          value_type: string
+          ui_control: select
+          origin: experiment_control
+          note: 后验网络训练的学习率调度器；none表示保持学习率不变。
         posterior_stage.bandwidth:
           current: 4.0
           value_type: number
@@ -8406,6 +8468,12 @@ methods:
           note: 可直接修改的实验随机性/realization 控制；修改会改变具体实验实例，但不会使 recipe 的结构或 runner 契约失效。
           reproduction_context: noise realization
       paper:
+        instance_transition.anchor_policy:
+          current: paper
+          value_type: string
+          ui_control: select
+          origin: experiment_control
+          note: paper沿用作者分位选点；distinct显式扩展搜索，选择不重复且系数独立的锚点。
         instance_transition.anchor_candidates:
           current: 20
           value_type: integer

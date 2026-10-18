@@ -1340,8 +1340,19 @@ def _parameter_presentation(path: str, method: str = "") -> tuple[str, str]:
     # the ordinary Web parameter editor.
     if path.startswith("trusted_validation."):
         return "hidden", ""
+    if path in {
+        "dld.feature_extractor.model.weights",
+        "dld.feature_extractor.model.feature_dimension",
+        "dld.feature_extractor.external.adapter",
+        "dld.feature_extractor.external.weights",
+        "dld.feature_extractor.external.input_contract",
+    }:
+        # The selected frozen extractor defines these implementation details.
+        return "hidden", ""
     if method == "jocor" and path == "selector.keep_rate.end":
         return "hidden", ""
+    if method == "apl" and path == "evaluation.selection_split":
+        return "parameter", ""
     if path in {
         "data.validation_split.source", "data.validation_split.rng",
         "data.validation_split.strategy", "evaluation.selection_split",
@@ -1850,7 +1861,7 @@ def _parameter_choices(field: dict[str, object], method: str) -> list[dict[str, 
         if extra:
             choices.append(extra)
         if method == "importance_reweighting":
-            choices = ["linear"]
+            choices = ["linear", "resnet18", "resnet34", "cnn8"]
         elif method == "pcse":
             choices = ["pcse_mlp"] if field.get("value") == "pcse_mlp" else ["resnet18", "resnet34", "resnet50", "resnet101"]
         elif method == "dld" and field.get("value") == "torchvision_resnet34":
@@ -2009,6 +2020,10 @@ def _registry_config_fields(
             presentation, resource_label = _parameter_presentation(str(path), method)
             found, current = _config_path_value(config, str(path))
             if not found:
+                if method == "importance_reweighting" and str(path).startswith("posterior_stage."):
+                    # Neural stage controls are absent from KDE/KLIEP recipes;
+                    # density bandwidth is absent from neural recipes.
+                    continue
                 if method == "loss_correction" and str(path) in {"pipeline.transition_estimator.matrix", "pipeline.transition_estimator.percentile", "model.variant"}:
                     continue
                 if allow_missing:
@@ -2083,7 +2098,7 @@ def _registry_config_fields(
                     ),
                 }
             )
-    if method == "binary_risk":
+    if method in {"binary_risk", "cwd"}:
         # The binary runner's ordinary hold-out is optional, not a method hyperparameter.
         fields.append({
             "path": "data.validation_size", "label": _parameter_user_label("data.validation_size", method),
@@ -2542,6 +2557,8 @@ def _synchronize_web_derived_parameters(config: dict[str, Any], method: str) -> 
         config.update(normalize_experiment_config(config))
     derived = _parameter_registry().get("runtime_derived_parameter_paths", {})
     for path in derived.get(method, ()):
+        if method == "importance_reweighting" and path == "model.in_features" and config.get("model", {}).get("name") != "linear":
+            continue
         _, _, expected = _parameter_edit_rule(config, method, path, "advanced")
         _set_config_path(config, path, expected)
 
@@ -2580,7 +2597,7 @@ def _validate_changed_model_configs(
             continue
         if not isinstance(model, dict):
             raise ValueError(f"模型配置必须是 mapping：{path}")
-        if method in {"binary_risk", "importance_reweighting"}:
+        if method == "binary_risk" or (method == "importance_reweighting" and model.get("name", "linear") == "linear"):
             from lnl_toolbox.training.binary_experiment import build_binary_model
 
             dimension = int(after.get("data", {}).get("dimension", model.get("in_features", 2)))

@@ -47,7 +47,8 @@ t_revision:
       name: none
     best_metric: noisy_validation_accuracy
   transition_initialization:
-    method: pseudo_anchor_max_posterior
+    method: pseudo_anchor_percentile
+    percentile: 97
     posterior_split: train
     extraction_augmentation: false
     tie_break: stable_sample_index

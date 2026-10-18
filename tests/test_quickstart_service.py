@@ -167,7 +167,7 @@ class QuickStartServiceTests(unittest.TestCase):
         self.assertEqual(result["clean_train_labels"], "available")
         keys = {item["key"] for item in result["options"]}
         self.assertIn("symmetric", keys)
-        self.assertNotIn("external_torch", keys)
+        self.assertTrue({"external_torch", "class_conditional", "official_uniform_flip"} <= keys)
         self.assertIn("binary_asymmetric_rcn", keys)
 
     def test_binary_asymmetric_selection_reaches_plan(self) -> None:

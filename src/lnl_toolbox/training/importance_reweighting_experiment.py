@@ -21,8 +21,8 @@ from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.plugins.builtin import build_builtin_loss
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.data_service import prepare_experiment_data
-from lnl_toolbox.training.experiment import _environment, build_optimizer, build_scheduler
-from lnl_toolbox.training.snapshots import collect_feature_snapshot
+from lnl_toolbox.training.experiment import _environment, bind_model_input, build_model, build_optimizer, build_scheduler
+from lnl_toolbox.training.snapshots import collect_feature_snapshot, collect_posterior_snapshot, pretrain_noisy_classifier
 
 
 def _realized_noise_rates(manifest) -> tuple[float | None, float | None]:
@@ -96,9 +96,13 @@ def run_importance_reweighting_experiment(
     posterior_targets = feature_snapshot.noisy_targets
     posterior_indices = feature_snapshot.global_indices
     dimension = int(posterior_inputs.shape[1])
+    if dimension != int(method_config.data["dimension"]):
+        raise ValueError(f"data.dimension={method_config.data['dimension']} does not match actual input dimension {dimension}")
 
     def model_factory() -> nn.Module:
-        return nn.Sequential(nn.Flatten(start_dim=1), nn.Linear(dimension, 2))
+        if str(method_config.model.get("name", "linear")) == "linear":
+            return nn.Sequential(nn.Flatten(start_dim=1), nn.Linear(dimension, 2))
+        return build_model(bind_model_input(method_config.model, prepared.input_spec), 2)
 
     def optimizer_factory(model: nn.Module):
         return build_optimizer(model, method_config.optimizer)
@@ -133,6 +137,44 @@ def run_importance_reweighting_experiment(
                 "state_hash" if artifact_name.startswith("preprocessing") else "split_hash",
                 "",
             )
+    posterior_backend = None
+    if method_config.posterior_stage["name"] == "neural":
+        from lnl_toolbox.algorithms.importance_reweighting.estimation import SnapshotBinaryNoisyPosteriorEstimator
+        from lnl_toolbox.noise.estimators import PosteriorSnapshot
+
+        stage = dict(method_config.posterior_stage)
+        stage_dir = run_dir / "posterior_stage"
+        stage_dir.mkdir(exist_ok=True)
+        stage_model_config = dict(stage.get("model", method_config.model))
+        stage_optimizer_config = dict(stage.get("optimizer", method_config.optimizer))
+        stage_scheduler_config = dict(stage.get("scheduler", {"name": "none"}))
+        identity = {"stage": stage, "model": stage_model_config,
+                    "optimizer": stage_optimizer_config, "scheduler": stage_scheduler_config,
+                    "seed": method_config.seed, "manifest": manifest_identity}
+        if stage_model_config.get("name", "linear") == "linear":
+            stage_model = nn.Sequential(nn.Flatten(start_dim=1), nn.Linear(dimension, 2))
+        else:
+            stage_model = build_model(bind_model_input(stage_model_config, prepared.input_spec), 2)
+        stage_model.to(device)
+        stage_optimizer = build_optimizer(stage_model, stage_optimizer_config)
+        summary = pretrain_noisy_classifier(
+            stage_model, stage_optimizer, train_loader_factory, device,
+            epochs=int(stage["epochs"]), validation_loader=validation_loader,
+            scheduler=build_scheduler(stage_optimizer, stage_scheduler_config, int(stage["epochs"])),
+            checkpoint_dir=stage_dir, checkpoint_identity=identity,
+            early_stopping=stage.get("early_stopping", False),
+        )
+        snapshot_path = stage_dir / "posterior_snapshot.npz"
+        # Reuse the exact persisted snapshot on resume; do not change backend identity.
+        if snapshot_path.is_file():
+            snapshot = PosteriorSnapshot.load(snapshot_path)
+        else:
+            snapshot = collect_posterior_snapshot(
+                stage_model, prepared.loader(DataRole.TRAIN, shuffle=False, stream=4000),
+                device, dataset=data_name, split="train")
+            snapshot.save(snapshot_path)
+        (stage_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        posterior_backend = SnapshotBinaryNoisyPosteriorEstimator(snapshot, identity)
     algorithm = ImportanceReweightingAlgorithm(
         config=config,
         run_dir=run_dir,
@@ -148,6 +190,7 @@ def run_importance_reweighting_experiment(
         test_loader=test_loader,
         loss=build_builtin_loss(method_config.loss),
         device=device,
+        posterior_backend=posterior_backend,
     )
     if resume is not None:
         algorithm.resume(resume)

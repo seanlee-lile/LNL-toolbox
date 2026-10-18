@@ -27,4 +27,5 @@ optimizer:
   name: sgd
   momentum: 0.9
 trainer:
+  early_stopping_monitor: validation_accuracy
   epochs: 50

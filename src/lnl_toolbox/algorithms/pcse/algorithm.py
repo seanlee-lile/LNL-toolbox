@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-"""First complete PCSE workflow with a replaceable transition backend.
-
-The first phase uses the existing Dual-T estimator as an engineering backend.
-It is not the minimum-volume estimator in PCSE paper Eq. (1).  The backend
-boundary intentionally leaves room for a future ``paper_volmin`` producer.
-"""
+"""PCSE workflow with pretrained features and explicit transition backends."""
 
 import hashlib
+from copy import deepcopy
 import json
 from pathlib import Path
 from typing import Any, Mapping, Protocol
@@ -1081,13 +1077,23 @@ class PCSEAlgorithm:
         predictions = posterior.argmax(axis=1)
         test_accuracy = float(np.mean(predictions == clean_targets))
         source_backbone_accuracy = None
-        if self.external_source_model is not None:
-            source_evaluation = evaluate_classification(
-                self.external_source_model,
-                self.clean_test_loader,
-                self.pretraining_algorithm.loss,
-                self.device,
-            )
+        backbone = self.external_source_model or self.pretraining_algorithm.model
+        if backbone is not None:
+            # Transition estimation fine-tunes the local backbone. Compare
+            # post-processing against the actual pretrained checkpoint.
+            current_weights = deepcopy(backbone.state_dict())
+            try:
+                if self.external_source_model is None:
+                    payload = read_checkpoint(self.pretrained_best_path, "cpu")
+                    backbone.load_state_dict(payload["pretraining_algorithm"]["model"])
+                source_evaluation = evaluate_classification(
+                    backbone,
+                    self.clean_test_loader,
+                    self.pretraining_algorithm.loss,
+                    self.device,
+                )
+            finally:
+                backbone.load_state_dict(current_weights)
             source_backbone_accuracy = float(source_evaluation["accuracy"])
         self.ensemble_artifact = loaded
         self.state.ensemble_artifact_hash = loaded.artifact_hash
@@ -1117,6 +1123,9 @@ class PCSEAlgorithm:
             "ensemble_artifact_hash": self.state.ensemble_artifact_hash,
             "ensemble_weights": loaded.weights.tolist(),
             "test_accuracy": test_accuracy,
+            "postprocessing_accuracy_change": (
+                None if source_backbone_accuracy is None else test_accuracy - source_backbone_accuracy
+            ),
             "test_samples": int(clean_targets.size),
             "external_source_provenance": self.external_source_provenance,
             "source_backbone_clean_test_accuracy": (

@@ -50,6 +50,27 @@ def validate_binary_posterior_snapshot(
     return snapshot
 
 
+class SnapshotBinaryNoisyPosteriorEstimator:
+    """Use a genuinely trained noisy-label classifier, never clean labels."""
+
+    def __init__(self, snapshot: PosteriorSnapshot, config: Mapping[str, Any]) -> None:
+        self.snapshot = validate_binary_posterior_snapshot(snapshot)
+        self.config = dict(config)
+
+    def identity(self, feature_dimension: int) -> dict[str, Any]:
+        return {"name": "neural", "implementation_version": 1,
+                "feature_dimension": int(feature_dimension), "config": self.config,
+                "snapshot_hash": self.snapshot.snapshot_hash}
+
+    def fit_predict(self, features, targets, indices, *, dataset: str, split: str) -> PosteriorSnapshot:
+        order = np.argsort(indices, kind="stable")
+        if (dataset != self.snapshot.dataset or split != self.snapshot.split
+                or not np.array_equal(np.asarray(indices)[order], self.snapshot.global_indices)
+                or not np.array_equal(np.asarray(targets)[order], self.snapshot.noisy_targets)):
+            raise ValueError("trained posterior snapshot does not match the training split")
+        return self.snapshot
+
+
 class KDEBinaryNoisyPosteriorEstimator:
     """Estimate ``P(noisy label | x)`` using two class-conditional KDEs."""
 

@@ -165,15 +165,20 @@ class ImportanceReweightingConfig:
             value.get("posterior_stage"), owner="posterior_stage"
         )
         posterior_name = str(posterior.get("name", "")).strip().lower()
-        if posterior_name not in {"kde", "kliep"}:
+        if posterior_name not in {"kde", "kliep", "neural"}:
             raise ValueError(
-                "posterior_stage.name must be kde or kliep"
+                "posterior_stage.name must be kde, kliep or neural"
             )
         posterior["name"] = posterior_name
         bandwidth = float(posterior.get("bandwidth", 0.0))
-        if not math.isfinite(bandwidth) or bandwidth <= 0.0:
+        if posterior_name != "neural" and (not math.isfinite(bandwidth) or bandwidth <= 0.0):
             raise ValueError("posterior_stage.bandwidth must be positive")
         posterior["bandwidth"] = bandwidth
+        if posterior_name == "neural":
+            if int(posterior.get("epochs", 0)) <= 0:
+                raise ValueError("posterior_stage.epochs must be positive")
+            if not isinstance(posterior.get("early_stopping", False), bool):
+                raise ValueError("posterior_stage.early_stopping must be boolean")
         if posterior_name == "kliep":
             max_centers = int(posterior.get("max_centers", 0))
             max_iterations = int(posterior.get("max_iterations", 0))
@@ -213,15 +218,17 @@ class ImportanceReweightingConfig:
             )
 
         model = _mapping(value.get("model", {"name": "linear"}), owner="model")
-        if str(model.get("name", "linear")).strip().lower() != "linear":
+        model_name = str(model.get("name", "linear")).strip().lower()
+        if model_name not in {"linear", "resnet18", "resnet34", "cnn8"}:
             raise ValueError(
-                "importance reweighting first version only supports model: linear"
+                "importance reweighting supports linear, resnet18, resnet34 or cnn8"
             )
-        if int(model.get("in_features", dimension)) != dimension:
+        if model_name == "linear" and int(model.get("in_features", dimension)) != dimension:
             raise ValueError(
                 "importance reweighting model in_features must match data.dimension"
             )
-        model["in_features"] = dimension
+        if model_name == "linear":
+            model["in_features"] = dimension
         if int(model.get("num_classes", 2)) != 2:
             raise ValueError("importance reweighting model output must contain 2 classes")
 

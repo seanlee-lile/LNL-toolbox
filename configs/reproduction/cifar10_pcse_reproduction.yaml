@@ -40,7 +40,8 @@ pretraining_stage:
     name: none
 transition_stage:
   name: paper_volmin
-  epochs: 1
+  # VolMinNet CIFAR-10 reference budget; not a PCSE paper-mandated epoch count.
+  epochs: 80
   lambda_volume: 0.001
   optimizer:
     name: adamw

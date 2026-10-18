@@ -78,6 +78,9 @@ def train_binary_epoch(
     total_loss = 0.0
     correct = 0
     samples = 0
+    input_square_sum = logit_square_sum = 0.0
+    input_elements = logit_elements = 0
+    gradient_norm_max = 0.0
     for batch in loader:
         inputs = batch["input"].to(resolved, dtype=torch.float32)
         targets = batch["target"].to(resolved, dtype=torch.long)
@@ -88,6 +91,15 @@ def train_binary_epoch(
         loss = values.mean()
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
+        gradient_norm = sum(float(parameter.grad.detach().square().sum())
+                            for parameter in model.parameters() if parameter.grad is not None) ** 0.5
+        gradient_norm_max = max(gradient_norm_max, gradient_norm)
+        if not np.isfinite(float(loss.detach())) or not np.isfinite(gradient_norm):
+            raise ValueError("Binary Risk produced a non-finite objective or gradient")
+        input_square_sum += float(inputs.detach().double().square().sum())
+        input_elements += inputs.numel()
+        logit_square_sum += float(logits.detach().double().square().sum())
+        logit_elements += logits.numel()
         optimizer.step()
         count = int(targets.numel())
         total_loss += float(loss.detach().item()) * count
@@ -95,7 +107,11 @@ def train_binary_epoch(
         samples += count
     if samples == 0:
         raise ValueError("binary loader must not be empty")
-    return {"loss": total_loss / samples, "accuracy": correct / samples, "samples": float(samples)}
+    return {"loss": total_loss / samples, "accuracy": correct / samples, "samples": float(samples),
+            "input_rms": (input_square_sum / input_elements) ** 0.5,
+            "logit_rms": (logit_square_sum / logit_elements) ** 0.5,
+            "gradient_norm_max": gradient_norm_max,
+            "parameter_norm": sum(float(parameter.detach().double().square().sum()) for parameter in model.parameters()) ** 0.5}
 
 
 @torch.no_grad()
@@ -139,6 +155,14 @@ def run_binary_experiment(
         if risk_name not in {"natarajan", "natarajan_unbiased"}:
             raise ValueError("binary experiment supports risk.name: natarajan or natarajan_unbiased")
         risk = NatarajanUnbiasedRisk(float(risk_config["rho_positive"]), float(risk_config["rho_negative"]))
+        noise = resolved_config.get("noise", {})
+        mismatch = any(key in noise and float(noise[key]) != float(risk_config[key])
+                       for key in ("rho_positive", "rho_negative"))
+        allow_mismatch = risk_config.get("allow_noise_prior_mismatch", False)
+        if not isinstance(allow_mismatch, bool):
+            raise ValueError("risk.allow_noise_prior_mismatch must be boolean")
+        if mismatch and not allow_mismatch:
+            raise ValueError("Binary Risk correction rates differ from noise generation rates; set risk.allow_noise_prior_mismatch explicitly to study misspecification")
     destination = Path(output_dir or resolved_config.get("output_root", "artifacts/binary")).resolve()
     destination.mkdir(parents=True, exist_ok=True)
     seed = int(resolved_config.get("seed", 1))
@@ -184,10 +208,15 @@ def run_binary_experiment(
     metrics_path.write_text("", encoding="utf-8")
     from copy import deepcopy
     from lnl_toolbox.training.early_stopping import StageEarlyStopping
-    stopping = StageEarlyStopping(resolved_config, "trainer.early_stopping", "validation_accuracy", run_dir=destination)
+    monitor = str(resolved_config["trainer"].get("early_stopping_monitor", "validation_accuracy"))
+    if monitor not in {"validation_accuracy", "validation_loss"}:
+        raise ValueError("trainer.early_stopping_monitor must be validation_accuracy or validation_loss")
+    stopping = StageEarlyStopping(resolved_config, "trainer.early_stopping", monitor,
+                                 mode="min" if monitor == "validation_loss" else "max", run_dir=destination)
     if stopping.enabled and not prepared.validation_indices.size:
         raise ValueError("trainer.early_stopping requires a validation split")
     best_model = None
+    best_epoch = None
     for epoch in range(epochs):
         row = train_binary_epoch(model, loader, optimizer, risk=risk)
         row["epoch"] = float(epoch + 1)
@@ -212,12 +241,31 @@ def run_binary_experiment(
         stopped = stopping.update(web_row)
         if stopping.enabled and stopping.counter.best != previous_best:
             best_model = deepcopy(model.state_dict())
+            best_epoch = epoch + 1
         if stopped:
             break
 
     if best_model is not None:
         model.load_state_dict(best_model)
         torch.save({"model": best_model, "config": resolved_config}, destination / "best.pt")
+
+    final = {
+        "event": "final",
+        "completed_epochs": len(rows),
+        "best_epoch": best_epoch,
+        "selection_split": "validation" if stopping.enabled else None,
+        "selection_metric": monitor,
+        "best_selection_value": stopping.counter.best if stopping.enabled else None,
+        "best_selection_accuracy": stopping.counter.best if stopping.enabled and monitor == "validation_accuracy" else None,
+        "test_checkpoint": "best.pt" if best_model is not None else "last_model",
+    }
+    if len(prepared.dataset_for(DataRole.TEST)) > 0:
+        evaluation = evaluate_binary(model, prepared.loader(DataRole.TEST, shuffle=False))
+        final.update(test_loss=evaluation["loss"], test_accuracy=evaluation["accuracy"],
+                     test_samples=int(evaluation["samples"]))
+    with metrics_path.open("a", encoding="utf-8") as metrics_file:
+        metrics_file.write(json.dumps(final, sort_keys=True) + "\n")
+    (destination / "final_metrics.json").write_text(json.dumps(final, indent=2), encoding="utf-8")
 
     (destination / "resolved_config.json").write_text(json.dumps(resolved_config, indent=2), encoding="utf-8")
     if record is not None:

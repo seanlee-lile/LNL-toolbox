@@ -97,8 +97,8 @@ class LENDConfig:
         empty = str(selection["empty_batch"]).strip().lower()
         if rule != "noisy_equals_diluted_argmax":
             raise ValueError("unsupported LEND selection rule")
-        if reduction != "batch_mean":
-            raise ValueError("LEND requires batch_mean reduction")
+        if reduction not in {"batch_mean", "sum"}:
+            raise ValueError("LEND reduction must be batch_mean or sum")
         if empty != "skip_update":
             raise ValueError("LEND first version requires empty_batch: skip_update")
         training = _mapping(values.get("training"), "lend.training")

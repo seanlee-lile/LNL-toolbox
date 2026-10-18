@@ -44,8 +44,12 @@ def _directory(config, output_dir, resume) -> Path:
 def _write_epoch_metrics(rows: list[dict[str, Any]], path: Path) -> None:
     """Rewrite the complete epoch history for live WebUI reads and resume."""
 
+    transition_rows = []
+    if path.is_file():
+        transition_rows = [row for line in path.read_text(encoding="utf-8").splitlines()
+                           if line.strip() and (row := json.loads(line)).get("event") == "transition_epoch"]
     path.write_text(
-        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in transition_rows + rows),
         encoding="utf-8",
     )
 
@@ -123,6 +127,8 @@ def _estimate_volmin(config, model, loader, device, validation_loader=None, run_
     completed = 0
     for epoch in range(int(value["epochs"])):
         model.train()
+        totals = {}
+        samples = 0
         for batch in loader:
             logits = model(batch["input"].to(device)).to(torch.float64)
             objective, latest = paper_volmin_objective(
@@ -132,9 +138,24 @@ def _estimate_volmin(config, model, loader, device, validation_loader=None, run_
                 condition_limit=float(value.get("condition_limit", 1e8)),
             )
             optimizer.zero_grad(set_to_none=True); objective.backward(); optimizer.step()
+            count = int(batch["target"].numel())
+            samples += count
+            for key, metric in latest.items():
+                totals[key] = totals.get(key, 0.0) + float(metric) * count
+        if not samples:
+            raise ValueError("MC-LDCE transition loader is empty")
+        latest = {key: metric / samples for key, metric in totals.items()}
         if scheduler is not None:
             scheduler.step()
         completed = epoch + 1
+        row = {"event": "transition_epoch", "stage": "transition", "epoch": completed,
+               **latest, "transition_matrix": transition_model.matrix().detach().cpu().tolist(),
+               "classifier_weight_decay": float(optimizer.param_groups[0]["weight_decay"]),
+               "transition_weight_decay": float(optimizer.param_groups[1]["weight_decay"])}
+        if run_dir is not None:
+            with (Path(run_dir) / "metrics.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row) + "\n")
+        print(json.dumps(row), flush=True)
         if stopping.enabled:
             validation = forward_validation(model, transition_model, validation_loader, device)
             if stopping.observe({"epoch": completed, **validation},
@@ -150,6 +171,7 @@ def _estimate_volmin(config, model, loader, device, validation_loader=None, run_
     return matrix.detach().cpu().numpy(), {
         "epochs": completed,
         "optimizer": dict(value["optimizer"]),
+        "transition_weight_decay": 0.0,
         "scheduler": scheduler_config,
         "parameterization": parameterization,
         **latest,
@@ -302,8 +324,16 @@ def run_mc_ldce_experiment(
         if stopping.observe(row, {"model": model, "optimizer": optimizer, "scheduler": scheduler}):
             break
     stopping.restore_best({"model": model})
+    final_test = evaluate_classification(model, test_loader, criterion, device)
+    final = {"event": "final", "method": "mc_ldce", "completed_epochs": len(rows),
+             "test_loss": final_test["loss"], "test_accuracy": final_test["accuracy"],
+             "selection_split": "validation" if stopping.enabled else None,
+             "best_selection_accuracy": stopping.counter.best if stopping.enabled else None,
+             "test_checkpoint": "trainer_early_stopping_best.pt" if stopping.enabled else "last.pt"}
+    with metrics_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(final) + "\n")
+    (run_dir / "final_metrics.json").write_text(json.dumps(final, indent=2), encoding="utf-8")
     (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
-    _write_epoch_metrics(rows, metrics_path)
     if rows: write_training_curves_svg(rows, run_dir / "training_curves.svg")
     if rows:
         tail = rows[-10:]

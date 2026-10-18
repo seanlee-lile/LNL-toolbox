@@ -40,6 +40,10 @@ def _selection(body: Mapping[str, object]) -> QuickStartNoiseSelection:
         seed=None if raw.get("seed") in {None, ""} else int(raw["seed"]),
         rho_positive=None if raw.get("rho_positive") in {None, ""} else float(raw["rho_positive"]),
         rho_negative=None if raw.get("rho_negative") in {None, ""} else float(raw["rho_negative"]),
+        transition_matrix=(None if not raw.get("transition_matrix") else tuple(
+            tuple(float(value) for value in row) for row in raw["transition_matrix"]
+        )),
+        path=str(raw.get("path") or "").strip() or None,
     )
 
 

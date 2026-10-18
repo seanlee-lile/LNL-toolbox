@@ -52,7 +52,8 @@ class QuickStartNoiseCatalogTests(unittest.TestCase):
     def test_every_visible_synthetic_capability_builds_a_config(self) -> None:
         for spec in visible_synthetic_noise_specs():
             with self.subTest(spec=spec.key):
-                self.assertIsNotNone(build_noise_config(spec.key, rate=0.2, seed=1))
+                inputs = {"transition_matrix": ((0.8, 0.2), (0.2, 0.8))} if spec.key == "class_conditional" else {}
+                self.assertIsNotNone(build_noise_config(spec.key, rate=0.2, seed=1, **inputs))
 
 
 if __name__ == "__main__":

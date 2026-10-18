@@ -100,7 +100,9 @@ class LENDAlgorithm:
             # the executable mini-batch reduction.  Divide by the actual
             # batch size (not selected_count) so changing the selected ratio
             # does not amplify the SGD scale by O(B).
-            objective = per_sample[selected].sum() / count
+            objective = per_sample[selected].sum()
+            if self.method_config.reduction == "batch_mean":
+                objective = objective / count
             if not bool(torch.isfinite(objective)):
                 raise ValueError("LEND selected objective is non-finite")
             self.optimizer.zero_grad(set_to_none=True)
@@ -141,6 +143,7 @@ class LENDAlgorithm:
             "diluted_labels": current.detach().cpu(),
             "history_values": history_values.detach().cpu(),
             "batch_indices": indices.detach().cpu(),
+            "neighbor_mask": (adjacency != 0).detach().cpu(),
         })
 
     def on_cycle_end(self, state: RunState) -> StepResult:
