@@ -129,6 +129,21 @@ class _jocor_JoCoRAlgorithmTest(unittest.TestCase):
             for name in source.models.models:
                 torch.testing.assert_close(source.models.models[name].weight, restored.models.models[name].weight)
 
+    def test_checkpoint_roundtrip_without_selection_metrics(self) -> None:
+        source = self._algorithm()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, 'last.pt')
+            save_checkpoint(path, source, RunState(step=7), 0, {},
+                            selection_split='none', best_validation_accuracy=None,
+                            best_selection_accuracy=None)
+            restored = self._algorithm()
+            state, completed, payload = load_checkpoint(path, restored, torch.device('cpu'))
+            self.assertIsNone(payload['best_validation_accuracy'])
+            self.assertIsNone(payload['best_selection_accuracy'])
+            self.assertEqual(payload['selection_split'], 'none')
+            self.assertEqual(state.step, 7)
+            self.assertEqual(completed, 0)
+
 # --- merged from test_jocor.py ---
 class _jocor_JoCoRConfigurationTest(unittest.TestCase):
     def test_estimated_rate_changes_selection_not_artificial_noise(self) -> None:

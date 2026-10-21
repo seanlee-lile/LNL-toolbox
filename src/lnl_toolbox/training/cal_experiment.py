@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import datetime
 import json
 from pathlib import Path
+import time
 from typing import Any
 
 import numpy as np
@@ -164,6 +165,7 @@ def run_cal_experiment(
         from lnl_toolbox.training.early_stopping import StageEarlyStopping
         warmup_stopping = StageEarlyStopping(config, "warmup.early_stopping", "validation_accuracy", run_dir=run_dir)
         for epoch in range(warmup_epochs):
+            epoch_started = time.perf_counter()
             warmup.train()
             confidence_weight = resolve_confidence_weight(
                 epoch,
@@ -194,6 +196,7 @@ def run_cal_experiment(
                 if warmup_stopping.observe({"epoch": epoch + 1, "validation_accuracy": score["accuracy"]},
                                            {"model": warmup, "optimizer": warmup_optimizer}):
                     break
+            print(f"CAL warmup epoch {epoch + 1} epoch_seconds={time.perf_counter() - epoch_started:.3f}", flush=True)
         warmup_stopping.restore_best({"model": warmup})
         atomic_save(
             {
@@ -262,6 +265,7 @@ def run_cal_experiment(
     stopping = StageEarlyStopping(config, "trainer.early_stopping", "validation_accuracy", run_dir=run_dir)
     stopping.replay(rows, completed=start)
     for epoch in range(start, epochs):
+        epoch_started = time.perf_counter()
         if stopping.stopped:
             break
         model.train(); total = correct = 0; loss_sum = 0.0
@@ -300,6 +304,7 @@ def run_cal_experiment(
         if validation_loader is not None:
             validation = evaluate_classification(model, validation_loader, criterion, device)
             row_values.update({"validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"]})
+        row_values["epoch_seconds"] = time.perf_counter() - epoch_started
         row = standardize_epoch_row(
             row_values, require_validation=validation_loader is not None
         ); rows.append(row)

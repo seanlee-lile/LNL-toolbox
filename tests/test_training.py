@@ -748,6 +748,10 @@ class APLReportingProtocolTest(unittest.TestCase):
             actual = torch.load(partial / 'last.pt', map_location='cpu', weights_only=False)
             for key, value in expected['model'].items():
                 torch.testing.assert_close(actual['model'][key], value, rtol=0, atol=0)
+            self.assertEqual(actual['scheduler'], expected['scheduler'])
+            for parameter, state in expected['optimizer']['state'].items():
+                for name, value in state.items():
+                    torch.testing.assert_close(actual['optimizer']['state'][parameter][name], value, rtol=0, atol=0)
 
     def test_test_monitoring_cannot_trigger_early_stopping(self):
         config = self.config()

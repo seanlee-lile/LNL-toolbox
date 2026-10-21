@@ -16,7 +16,7 @@ current noisy mini-batch
 -> Eq. (3) label dilution from noisy one-hot labels until convergence
 -> stable-index Eq. (5) cross-epoch history
 -> Eq. (6) agreement selection
--> summed selected noisy-label CE
+-> selected noisy-label CE sum divided by current batch size
 ```
 
 Diluted vectors are detached selection evidence, not probability targets. Empty
@@ -25,7 +25,8 @@ backward and the optimizer step.
 
 The catalog default and Scratch paper recipe stop when the maximum absolute
 change between successive label matrices is at most `1e-5`, with a safety cap
-of 1000 iterations. The paper requests convergence but supplies neither number;
+of 10000 iterations in the formal recipe (the parser fallback remains 1000).
+The paper requests convergence but supplies neither number;
 both are explicit toolbox numerical settings. Exhausting the cap raises an
 error, not a successful selection result. Iteration count, residual and
 convergence status are reported by the formal batch algorithm.

@@ -9,6 +9,7 @@ import math
 import platform
 from pathlib import Path
 import sys
+import time
 from typing import Any, Mapping
 
 import numpy as np
@@ -639,6 +640,16 @@ def run_supervised_experiment(
         seed=seed,
         checkpoint_payload=checkpoint_payload,
     )
+    record_loading_speed = str((config.get("loss") or {}).get("name", "")) == "apl" or str(
+        (config.get("pipeline") or {}).get("pretraining_protocol", "")
+    ) == "loss_correction"
+    record_loading_speed = record_loading_speed or str(
+        (config.get("parameter_update") or {}).get("name", "")
+    ) == "cdr"
+    if (str((config.get("loss") or {}).get("name", "")) == "gce"
+            or (config.get("pipeline", {}).get("weight_provider") or {}).get("name") == "mentornet"
+            or (config.get("pipeline", {}).get("objective_consumer") or {}).get("name") == "dss"):
+        prepared.enable_loader_reuse()
     dataset_name = prepared.dataset
     num_classes = prepared.num_classes
     manifest, manifest_path = prepared.manifest, prepared.manifest_path
@@ -856,6 +867,7 @@ def run_supervised_experiment(
         for epoch in range(completed_epoch + 1, epochs):
             if stage_stopping.stopped:
                 break
+            epoch_started = time.perf_counter()
             dss_in_warmup = bool(dss_warmup and epoch < dss_warmup and not warmup_stopping.stopped)
             if dss_warmup and not dss_in_warmup:
                 main_rows = [item for item in curve_rows if item.get("phase", "warmup" if item["epoch"] <= dss_warmup else "main") == "main"]
@@ -934,6 +946,8 @@ def run_supervised_experiment(
             }
             if dss_warmup:
                 row["phase"] = "warmup" if dss_in_warmup else "main"
+            if record_loading_speed:
+                row["epoch_seconds"] = time.perf_counter() - epoch_started
             if validation is not None:
                 row.update({
                     "validation_loss": validation["loss"],

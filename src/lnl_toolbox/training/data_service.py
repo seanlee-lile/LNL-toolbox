@@ -3,7 +3,7 @@ from __future__ import annotations
 """Single data-preparation entry point shared by every experiment runner."""
 
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import hashlib
 import json
 from pathlib import Path
@@ -372,6 +372,13 @@ class PreparedData:
     seed: int
     data_manifest_path: Path
     data_fingerprint: str
+    _reuse_loaders: bool = field(default=False, init=False, repr=False)
+    _loader_cache: dict[tuple[Any, ...], DataLoader] = field(default_factory=dict, init=False, repr=False)
+
+    def enable_loader_reuse(self) -> None:
+        """Keep fixed-role loaders and their workers alive within this run."""
+        self._reuse_loaders = True
+        self.loader_config = {**self.loader_config, "persistent_workers": True}
 
     @property
     def num_classes(self) -> int:
@@ -499,7 +506,17 @@ class PreparedData:
         generator = torch.Generator().manual_seed(
             int(generator_seed) if generator_seed is not None else int(self.seed) + int(epoch) + int(stream)
         )
-        return DataLoader(
+        cache_key = (
+            key, int(stream), bool(shuffle), bool(drop_last),
+            int(batch_size or self.loader_config.get("batch_size", 128)),
+            int(self.loader_config.get("num_workers", 0)),
+            bool(self.loader_config.get("pin_memory", False)),
+        )
+        if self._reuse_loaders and cache_key in self._loader_cache:
+            loader = self._loader_cache[cache_key]
+            loader.generator.set_state(generator.get_state())
+            return loader
+        loader = DataLoader(
             self.dataset_for(key),
             batch_size=int(batch_size or self.loader_config.get("batch_size", 128)),
             shuffle=bool(shuffle),
@@ -511,6 +528,9 @@ class PreparedData:
             generator=generator,
             worker_init_fn=_seed_worker,
         )
+        if self._reuse_loaders:
+            self._loader_cache[cache_key] = loader
+        return loader
 
     def validation_loader(self, **loader_options: Any) -> DataLoader:
         """Return the validation role declared by the method contract."""
@@ -905,7 +925,7 @@ def _prepare_experiment_data(
                 [train_indices.size - trusted_size, trusted_size],
                 int(data_config.get("seed", seed)),
             )
-            if not ("num_val" in data_config and "num_clean" in data_config):
+            if trusted_source == "official_generated" or not ("num_val" in data_config and "num_clean" in data_config):
                 if train.clean_targets is None:
                     raise ValueError(
                         "trusted_validation requires source clean targets or an audited manifest"

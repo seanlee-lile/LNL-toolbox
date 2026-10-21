@@ -198,6 +198,7 @@ def run_mc_ldce_experiment(
         run_dir=run_dir,
         seed=seed,
     )
+    prepared.loader_config = {**prepared.loader_config, "persistent_workers": True}
     train_loader = prepared.loader(DataRole.TRAIN, stream=21)
     snapshot_loader = prepared.loader(DataRole.TRAIN_EVAL, stream=22, shuffle=False)
     validation_loader = (

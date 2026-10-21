@@ -104,6 +104,8 @@ def build_noise_config(
     if spec.key == "external_torch":
         if not path or not str(path).strip():
             raise ValueError("请选择与当前训练样本对齐的外部标签文件")
+        if rate is None:
+            config.pop("rate", None)
         config.update(path=str(path).strip(), clean_key="clean_label_train", noisy_key="noise_label_train")
     return config
 

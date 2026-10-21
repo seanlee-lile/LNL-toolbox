@@ -348,7 +348,11 @@ class UPMWorkflow:
     def train_main(self, *, max_epochs: int | None = None) -> None:
         from lnl_toolbox.training.early_stopping import StageEarlyStopping
         stopping = StageEarlyStopping(self.config, "upm.main.early_stopping", "noisy_validation_accuracy", run_dir=self.run_dir)
-        stopping.replay_file(self.run_dir / "metrics.jsonl", event="main_epoch", completed=self.state.main_completed_epochs, zero_based=True)
+        metrics_path = self.run_dir / "metrics.jsonl"
+        if metrics_path.is_file():
+            history = [json.loads(line) for line in metrics_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            stopping.replay([row for row in history if row.get("eta_update_count", 0) > 0],
+                            event="main_epoch", completed=self.state.main_completed_epochs, zero_based=True)
         self._prepare_main()
         assert self.main_algorithm is not None
         target = self.method_config.main.epochs
@@ -387,7 +391,8 @@ class UPMWorkflow:
                 "eta_update_count": float(counts.sum().item()),
             })
             _save_eta(self.run_dir / "eta_last.npz", self.eta_state)
-            stopping.update({"epoch": epoch, "noisy_validation_accuracy": validation["accuracy"]})
+            if bool(counts.gt(0).any()):
+                stopping.update({"epoch": epoch, "noisy_validation_accuracy": validation["accuracy"]})
             self._save_last()
         self.main_stage_early_stopped = stopping.stopped
 
@@ -542,6 +547,7 @@ def run_upm_experiment(
         requirements=requirements,
         run_dir=run_dir, seed=seed, checkpoint_payload=checkpoint,
     )
+    prepared.loader_config = {**prepared.loader_config, "persistent_workers": True}
     dataset, classes = prepared.dataset, prepared.num_classes
     manifest, manifest_path = prepared.manifest, prepared.manifest_path
     if manifest is None or manifest_path is None:

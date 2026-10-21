@@ -78,6 +78,24 @@ class _pdl_PDLTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "all-zero"):
             _row_positive_normalize(torch.tensor([[[-0.2, -0.8]]]))
 
+    def test_validation_uses_training_projection_for_negative_entries(self) -> None:
+        from types import SimpleNamespace
+        from lnl_toolbox.training.instance_transition_experiment import _pdl_validation
+
+        logits = torch.tensor([[2.0, -1.0]])
+        targets = torch.tensor([1])
+        matrices = torch.tensor([[[-0.2, 0.8], [0.4, 0.6]]])
+        artifact = SimpleNamespace(transition_for=lambda *args, **kwargs: matrices)
+        loader = [{"input": logits, "target": targets, "index": torch.tensor([0])}]
+        actual = _pdl_validation(nn.Identity(), loader, artifact, torch.device("cpu"), revision=False)
+        clean = logits.softmax(1)
+        observed = torch.bmm(clean.unsqueeze(1), _row_positive_normalize(matrices)).squeeze(1)
+        expected = -(clean[0, 1] / observed[0, 1]) * observed[0, 1].log()
+        self.assertAlmostEqual(actual["loss"], float(expected), places=7)
+        invalid = SimpleNamespace(transition_for=lambda *args, **kwargs: -torch.ones(1, 2, 2))
+        with self.assertRaisesRegex(ValueError, "all-zero"):
+            _pdl_validation(nn.Identity(), loader, invalid, torch.device("cpu"), revision=False)
+
     def test_official_raw_features_convert_hwc_to_flattened_chw(self) -> None:
         image = np.zeros((1, 32, 32, 3), dtype=np.float64)
         image[0, 0, 0] = [1.0, 2.0, 3.0]

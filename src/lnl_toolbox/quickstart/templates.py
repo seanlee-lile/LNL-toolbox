@@ -44,8 +44,18 @@ def _cached_recipe_by_id(recipe_id: str) -> RecipeSpec:
     return recipe_by_id(recipe_id)
 
 
-@lru_cache(maxsize=None)
 def _cached_recipe_config(recipe_id: str) -> dict[str, Any]:
+    recipe = _cached_recipe_by_id(recipe_id)
+    stat = recipe.config_path.stat()
+    return deepcopy(_recipe_config_revision(
+        recipe_id, str(recipe.config_path), stat.st_mtime_ns, stat.st_size
+    ))
+
+
+@lru_cache(maxsize=128)
+def _recipe_config_revision(recipe_id: str, config_path: str,
+                            mtime_ns: int, size: int) -> dict[str, Any]:
+    # Cache parsed YAML, but never reuse a plan template after its source changed.
     return load_recipe_config(_cached_recipe_by_id(recipe_id))
 
 
@@ -173,6 +183,10 @@ def adapt_split_counts(config: dict[str, Any], original: Mapping[str, Any], trai
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             continue
         adjusted = 0 if value == 0 else max(1, math.floor(value * train_count / reference_count + 0.5))
+        if path == ("data", "num_clean") and value > 0:
+            classes = int(config.get("data", {}).get("num_classes", 0))
+            if classes > 0:
+                adjusted = max(classes, math.ceil(adjusted / classes) * classes)
         _set(config, path, min(adjusted, train_count - 1))
 
 
@@ -345,6 +359,8 @@ def adapt_method_template(
         if original_noise_name == selected_noise_name:
             # Preserve the selected paper's sampling/RNG and label-file keys.
             noise = {**original_noise, **noise}
+        if noise_selection.key == "external_torch" and noise_selection.rate is None:
+            noise.pop("rate", None)
         if "validation_targets" in original_noise:
             noise["validation_targets"] = original_noise["validation_targets"]
         candidate["noise"] = noise

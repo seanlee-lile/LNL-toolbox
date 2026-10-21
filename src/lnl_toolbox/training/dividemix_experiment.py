@@ -138,6 +138,7 @@ def run_dividemix_experiment(
         requirements=requirements,
         run_dir=run_dir, seed=seed, checkpoint_payload=checkpoint,
     )
+    prepared.enable_loader_reuse()
     dataset_name, num_classes = prepared.dataset, prepared.num_classes
     manifest, manifest_path = prepared.manifest, prepared.manifest_path
     if manifest is None or manifest_path is None: raise ValueError("DivideMix requires a NoiseManifest")
@@ -163,17 +164,19 @@ def run_dividemix_experiment(
     warmup_stopping.replay_file(metrics_path, event="warmup", completed=algorithm.state.warmup_completed_epochs)
     main_stopping.replay_file(metrics_path, event="epoch", completed=algorithm.state.main_completed_epochs)
     peers = {"model_a": model_a, "model_b": model_b, "optimizer_a": optimizer_a, "optimizer_b": optimizer_b}
+    warm_loader = None
     with metrics_path.open("a", encoding="utf-8") as metrics_file:
         while (algorithm.state.phase == DivideMixPhase.WARMUP
                and algorithm.state.warmup_completed_epochs < method.warmup_epochs
                and not warmup_stopping.stopped):
             epoch = algorithm.state.warmup_completed_epochs; sums = {peer: {"objective": 0.0, "confidence_penalty": 0.0} for peer in ("a", "b")}; batches = 0
-            warm_loader = prepared.subset_loader(
-                prepared.train_indices,
-                views=("view_0",),
-                targets_by_index=noisy_by_index,
-                generator_seed=seed + epoch,
-            )
+            if warm_loader is None:
+                warm_loader = prepared.subset_loader(
+                    prepared.train_indices, views=("view_0",),
+                    targets_by_index=noisy_by_index, generator_seed=seed + epoch,
+                )
+            else:
+                warm_loader.generator.manual_seed(seed + epoch)
             for batch in warm_loader:
                 for peer in ("a", "b"):
                     result = algorithm.warmup_step(peer, batch["views"]["view_0"], batch["target"], asymmetric=str(config["noise"].get("name", "")).lower() == "asymmetric")

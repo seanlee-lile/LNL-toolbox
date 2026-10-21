@@ -108,6 +108,28 @@ class _FakeNoisyImageAdapter(_FakeImageAdapter):
 
 
 class QuickStartServiceTests(unittest.TestCase):
+    def test_plan_template_cache_tracks_recipe_file_revision(self) -> None:
+        from lnl_toolbox.quickstart import templates
+        from lnl_toolbox.catalog import recipe_by_id
+        from dataclasses import replace
+        import yaml
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recipe.yaml"
+            path.write_text("lend: {selection: {reduction: sum}}", encoding="utf-8")
+            recipe = replace(recipe_by_id("lend-cifar10-reproduction"), config_path=path)
+            templates._recipe_config_revision.cache_clear()
+            with patch.object(templates, "_cached_recipe_by_id", return_value=recipe), \
+                 patch.object(templates, "load_recipe_config", side_effect=lambda recipe: yaml.safe_load(path.read_text(encoding="utf-8"))) as load:
+                first = templates._cached_recipe_config(recipe.id)
+                templates._cached_recipe_config(recipe.id)
+                self.assertEqual(load.call_count, 1)
+                path.write_text("lend: {selection: {reduction: batch_mean}}", encoding="utf-8")
+                second = templates._cached_recipe_config(recipe.id)
+                self.assertEqual(load.call_count, 2)
+                self.assertEqual(first["lend"]["selection"]["reduction"], "sum")
+                self.assertEqual(second["lend"]["selection"]["reduction"], "batch_mean")
+
     def test_all_papers_keep_original_counts_and_one_web_validation_source(self) -> None:
         from copy import deepcopy
         from lnl_toolbox.quickstart.templates import configure_validation_split, SPLIT_COUNT_PATHS

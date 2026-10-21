@@ -251,7 +251,8 @@ class DualTPaperProtocolTest(unittest.TestCase):
             return loaders[role]
         prepared = SimpleNamespace(dataset='fixture', num_classes=3,
             manifest=object(), manifest_path=Path('unused.npz'), train_indices=[],
-            validation_indices=[], input_spec=SimpleNamespace(channels=None), loader=loader)
+            validation_indices=[], input_spec=SimpleNamespace(channels=None), loader=loader,
+            enable_loader_reuse=lambda: None)
         from lnl_toolbox.training.snapshots import collect_posterior_snapshot
         prefix = 'lnl_toolbox.training.dual_t_experiment.'
         with tempfile.TemporaryDirectory() as directory, \

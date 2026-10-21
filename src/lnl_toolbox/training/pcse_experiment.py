@@ -294,6 +294,7 @@ def run_pcse_experiment(
         seed=seed + 10 if pretraining_mode == "train" else seed,
         checkpoint_payload=resume_payload,
     )
+    prepared.loader_config = {**prepared.loader_config, "persistent_workers": True}
     data_name, num_classes = prepared.dataset, prepared.num_classes
     if pretraining_mode == "train":
         model = _build_pcse_pretraining_model(

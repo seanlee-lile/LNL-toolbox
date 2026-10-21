@@ -115,6 +115,8 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
         requirements=requirements,
         run_dir=run_dir, seed=seed, checkpoint_payload=checkpoint_payload,
     )
+    prepared.loader_config = {**prepared.loader_config, "persistent_workers": True}
+    train_loader = prepared.loader(DataRole.TRAIN)
     dataset_name, num_classes = prepared.dataset, prepared.num_classes
     manifest, manifest_path = prepared.manifest, prepared.manifest_path
     if manifest is None or manifest_path is None:
@@ -195,7 +197,8 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
             oracle_clean_observed = oracle_diluted_correct = 0.0
             oracle_current_correct = neighbor_correct = neighbor_count = 0
             label_counts = np.zeros(num_classes, dtype=np.int64)
-            for raw_batch in prepared.loader(DataRole.TRAIN, epoch=epoch):
+            train_loader.generator.manual_seed(prepared.seed + epoch)
+            for raw_batch in train_loader:
                 result = algorithm.step(Batch(raw_batch), state)
                 count = result.metrics["samples"]
                 samples += count

@@ -74,6 +74,8 @@ def run_importance_reweighting_experiment(
         run_dir=run_dir,
         seed=method_config.seed,
     )
+    prepared.loader_config = {**prepared.loader_config, "persistent_workers": True}
+    train_loader = prepared.loader(DataRole.TRAIN, stream=1000)
     data_name = prepared.dataset
     manifest = prepared.manifest
     if manifest is None:
@@ -81,7 +83,8 @@ def run_importance_reweighting_experiment(
     realized_rho_positive, realized_rho_negative = _realized_noise_rates(manifest)
 
     def train_loader_factory(epoch: int):
-        return prepared.loader(DataRole.TRAIN, epoch=int(epoch), stream=1000)
+        train_loader.generator.manual_seed(prepared.seed + int(epoch) + 1000)
+        return train_loader
 
     validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False, stream=2000)
     test_loader = prepared.loader(DataRole.TEST, shuffle=False, stream=3000)

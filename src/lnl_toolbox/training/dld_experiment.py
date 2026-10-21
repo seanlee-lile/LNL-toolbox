@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import time
 from typing import Any, Mapping
 
 import numpy as np
@@ -407,9 +408,15 @@ class DLDWorkflow:
         stopping.replay_file(self.run_dir / "metrics.jsonl", event="diffusion_epoch", completed=self.state.completed_epochs, zero_based=True)
         while self.state.completed_epochs < self.method_config.epochs and not stopping.stopped:
             epoch = self.state.completed_epochs
-            loader = self.prepared_data.loader_for_dataset(
-                _IndexDataset(self.train_indices), shuffle=True,
-                epoch=epoch, stream=5000,
+            epoch_started = time.perf_counter()
+            # Features are already materialized; these batches contain only indices.
+            loader = torch.utils.data.DataLoader(
+                _IndexDataset(self.train_indices),
+                batch_size=int(self.loader_config.get("batch_size", 128)),
+                shuffle=True,
+                drop_last=bool(self.loader_config.get("drop_last", False)),
+                num_workers=0,
+                generator=torch.Generator().manual_seed(self.prepared_data.seed + epoch + 5000),
             )
             totals = {
                 "direction_loss": 0.0,
@@ -434,6 +441,7 @@ class DLDWorkflow:
             if samples <= 0:
                 raise RuntimeError("DLD training epoch contains no samples")
             validation_metrics = self._evaluate_metrics(self.validation_snapshot)
+            epoch_seconds = time.perf_counter() - epoch_started
             validation_accuracy = validation_metrics["accuracy"]
             self.state.completed_epochs = epoch + 1
             if validation_accuracy > self.state.best_validation_accuracy:
@@ -447,6 +455,7 @@ class DLDWorkflow:
                 self.algorithm.noise_scheduler.step()
             self._append({
                 "event": "diffusion_epoch", "epoch": epoch,
+                "epoch_seconds": epoch_seconds,
                 **{name: value / samples for name, value in totals.items()},
                 "validation_accuracy": validation_accuracy,
                 "best_validation_accuracy": self.state.best_validation_accuracy,

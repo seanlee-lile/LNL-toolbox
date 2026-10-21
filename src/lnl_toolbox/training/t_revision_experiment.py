@@ -110,6 +110,7 @@ def run_t_revision_experiment(
         seed=seed,
         checkpoint_payload=checkpoint_payload,
     )
+    prepared.loader_config = {**prepared.loader_config, "persistent_workers": True}
     dataset_name, num_classes = prepared.dataset, prepared.num_classes
     manifest, manifest_path = prepared.manifest, prepared.manifest_path
     if manifest is None or manifest_path is None:

@@ -829,7 +829,7 @@
     document.getElementById("qs-native-rate-status")?.addEventListener("change", function () { state.nativeRateMode = this.value; render(); });
     document.getElementById("qs-save-native-rate")?.addEventListener("click", saveNativeRate);
     document.getElementById("qs-open-dataset-facts")?.addEventListener("click", function () { context?.switchModule?.("data"); });
-    document.getElementById("qs-confirm-labels")?.addEventListener("click", async function () { state.labelsConfirmed = true; render(); await loadMethods(); if (state.pendingPaper) await continuePendingPaper(); else recheckSelectedPaper(); });
+    document.getElementById("qs-confirm-labels")?.addEventListener("click", async function () { state.labelsConfirmed = true; render(); if (!await loadMethods()) return; if (state.pendingPaper) await continuePendingPaper(); else recheckSelectedPaper(); });
     document.getElementById("qs-methods-panel")?.addEventListener("toggle", function () { state.methodListExpanded = this.open; });
     document.getElementById("qs-prev")?.addEventListener("click", function () { state.currentStep = Math.max(0, state.currentStep - 1); render(); });
     document.getElementById("qs-next")?.addEventListener("click", advanceQuickStart);
@@ -1166,7 +1166,7 @@
     state.segmentedPaths = {};
     state.scheduleStash = {};
     render();
-    loadMethods().then(function () { recheckSelectedPaper({navigate:false}); });
+    loadMethods().then(function (current) { if (current) recheckSelectedPaper({navigate:false}); });
   }
   function saveNativeRate() {
     const value = Number(document.getElementById("qs-native-rate-value")?.value);
@@ -1226,11 +1226,11 @@
     }).catch(function (error) { state.error = String(error.message || error); render(); });
   }
   function loadMethods() {
-    if (!state.dataset || !state.noiseSelection) return Promise.resolve();
+    if (!state.dataset || !state.noiseSelection) return Promise.resolve(false);
     const token = ++methodsToken;
     const signature = JSON.stringify([state.dataset.alias, state.noiseSelection]);
     const current = function () { return token === methodsToken && signature === JSON.stringify([state.dataset?.alias, state.noiseSelection]); };
-    return post("/api/quick-start/methods", {dataset:state.dataset.alias, noise:state.noiseSelection}, "正在匹配论文方法…").then(function (payload) { if (!current()) return; state.methods = payload.methods || []; render(); }).catch(function (error) { if (!current()) return; state.error = String(error.message || error); render(); });
+    return post("/api/quick-start/methods", {dataset:state.dataset.alias, noise:state.noiseSelection}, "正在匹配论文方法…").then(function (payload) { if (!current()) return false; state.methods = payload.methods || []; render(); return true; }).catch(function (error) { if (current()) { state.error = String(error.message || error); render(); } return false; });
   }
   function planRequestSignature() {
     return JSON.stringify([state.dataset?.alias, state.selectedPaperId, state.noiseSelection, state.methodInputs]);
@@ -1249,10 +1249,10 @@
     return post("/api/quick-start/plan", {dataset:state.dataset.alias, paper_id:state.selectedPaperId, noise:state.noiseSelection, user_inputs:userInputs}, "正在核对…").then(function (payload) { if (!current()) return; state.plan = payload; state.planSchema = null; state.parameterDraft = {}; state.segmentedPaths = {}; state.scheduleStash = {}; state.parameterError = ""; const index = quickStartStepIndex("plan"); if (navigate && index >= 0) state.currentStep = index; render(); return loadPlanSchema(payload); }).catch(function (error) { if (!current()) return; state.error = String(error.message || error); render(); });
   }
   function recheckSelectedPaper(options) {
-    if (!state.selectedPaperId || state.error) return;
+    if (options === false || !state.selectedPaperId || state.error) return;
     const selected = state.methods.find(function (item) { return item.paper_id === state.selectedPaperId; });
     if (selected && ["ready", "needs_input"].includes(selected.status)) {
-      buildPlan(options);
+      return buildPlan(options);
     } else {
       state.error = "所选论文不适用当前噪声设置。";
       if (options?.navigate !== false) state.currentStep = quickStartStepIndex("methods");
@@ -1303,7 +1303,7 @@
     state.segmentedPaths = {};
     state.scheduleStash = {};
     state.methodListExpanded = false;
-    await loadMethods();
+    if (!await loadMethods()) return;
     buildPlan();
   }
 

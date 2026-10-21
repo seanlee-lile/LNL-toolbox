@@ -284,6 +284,7 @@ class _importance_reweighting_kliep_KLIEPWorkflowTest(unittest.TestCase):
             num_classes=2, metadata={'label_convention':'zero_one'}, actual_rate=None)
         batch = {'input':torch.ones(4, 20), 'target':torch.tensor([0, 1, 0, 1]), 'index':torch.arange(4)}
         prepared = SimpleNamespace(dataset='fixture', manifest=manifest, data_fingerprint='fixture',
+            loader_config={},
             loader=lambda *args, **kwargs: [batch])
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import datetime
 import json
 from pathlib import Path
+import time
 from typing import Any, Mapping
 
 import numpy as np
@@ -159,6 +160,7 @@ def run_cwd_experiment(
         requirements=requirements,
         run_dir=run_dir, seed=seed, checkpoint_payload=checkpoint,
     )
+    prepared.loader_config = {**prepared.loader_config, "persistent_workers": True}
     if prepared.num_classes != 2 or prepared.manifest is None or prepared.manifest_path is None:
         raise ValueError("CWD requires a noisy binary dataset view")
     manifest, manifest_path = prepared.manifest, prepared.manifest_path
@@ -236,6 +238,7 @@ def run_cwd_experiment(
     for epoch in range(start_epoch, epochs):
         if stopping.stopped:
             break
+        epoch_started = time.perf_counter()
         snapshot = collect_feature_snapshot(
             model,
             snapshot_loader,
@@ -282,6 +285,7 @@ def run_cwd_experiment(
         if validation_loader is not None:
             validation = _evaluate_cwd(model, validation_loader, device, scalar_binary=cwd_variant == "binary_scalar")
             row.update({"validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"]})
+        row["epoch_seconds"] = time.perf_counter() - epoch_started
         metrics_path.write_text(
             "".join(json.dumps(value, sort_keys=True) + "\n" for value in rows),
             encoding="utf-8",
@@ -311,6 +315,12 @@ def run_cwd_experiment(
         if stopping.observe(row, {"model": model, "optimizer": optimizer, "scheduler": scheduler}):
             break
     stopping.restore_best({"model": model})
+    final_test = _evaluate_cwd(model, test_loader, device, scalar_binary=cwd_variant == "binary_scalar")
+    (run_dir / "final_metrics.json").write_text(json.dumps({
+        "event": "final", "method": "cwd", "completed_epochs": len(rows),
+        "test_loss": final_test["loss"], "test_accuracy": final_test["accuracy"],
+        "selection_split": "validation" if validation_loader is not None else "none",
+    }, indent=2), encoding="utf-8")
     (run_dir / "resolved_config.yaml").write_text(
         yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
     )

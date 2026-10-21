@@ -80,10 +80,8 @@ def meta_gradient(
     if trusted_logits.ndim != 2 or trusted_logits.shape[0] != trusted_inputs.shape[0]:
         raise ValueError("L2RW model must return trusted logits with shape [B,C]")
     trusted_loss = F.cross_entropy(trusted_logits, trusted_targets.long())
-    if decay:
-        trusted_loss = trusted_loss + 0.5 * decay * sum(
-            parameter.square().sum() for parameter in parameters.values()
-        )
+    # Eq. (7) differentiates the trusted classification loss. Optimizer
+    # weight decay belongs to the real parameter update, not example scoring.
     if implementation == "official":
         trusted_gradients = torch.autograd.grad(
             trusted_loss, tuple(parameters.values()), retain_graph=True

@@ -249,6 +249,7 @@ def run_volminnet_experiment(
         seed=seed,
         checkpoint_payload=resume_payload,
     )
+    prepared.enable_loader_reuse()
     dataset_name, num_classes = prepared.dataset, prepared.num_classes
     config["data"].setdefault("num_classes", num_classes)
     method_config = VolMinNetConfig.from_mapping(config)

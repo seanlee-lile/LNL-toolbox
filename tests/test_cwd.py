@@ -312,7 +312,13 @@ class _cwd_training_CWDTrainingTest(unittest.TestCase):
             self.assertEqual([row['epoch'] for row in resumed['metrics']], list(range(1, config['trainer']['epochs'] + 1)))
             for name, value in complete['model'].items():
                 torch.testing.assert_close(resumed['model'][name], value, rtol=0, atol=0)
-            self.assertEqual(resumed['metrics'], complete['metrics'])
+            def training_metrics(rows):
+                return [{key: value for key, value in row.items() if key != 'epoch_seconds'} for row in rows]
+
+            self.assertEqual(training_metrics(resumed['metrics']), training_metrics(complete['metrics']))
+            for row in resumed['metrics'] + complete['metrics']:
+                self.assertGreaterEqual(row['epoch_seconds'], 0.)
+                self.assertTrue(np.isfinite(row['epoch_seconds']))
             for name, state in complete['loader_rng_state'].items():
                 torch.testing.assert_close(resumed['loader_rng_state'][name], state, rtol=0, atol=0)
             rows = [json.loads(line) for line in (checkpoint.parent/'metrics.jsonl').read_text().splitlines()]

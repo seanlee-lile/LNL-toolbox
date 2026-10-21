@@ -13,7 +13,10 @@ from torch import nn
 import yaml
 
 from lnl_toolbox.algorithms.instance_transition import InstanceTransitionClassificationAlgorithm
-from lnl_toolbox.algorithms.instance_transition import pdl_instance_corrected_losses
+from lnl_toolbox.algorithms.instance_transition import (
+    _row_positive_normalize,
+    pdl_instance_corrected_losses,
+)
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
 from lnl_toolbox.core.hyperparameters import resolve_parameter_sampling
 from lnl_toolbox.data import DataRequirements, DataRole
@@ -182,13 +185,8 @@ def _pdl_validation(
             if revision:
                 head = getattr(model, "T_revision")
                 matrices = matrices + head.weight.to(matrices)
-            # Official ``val_correction`` and ``val_revision`` normalize the
-            # matrix immediately before multiplying probabilities.  The
-            # revision path additionally applies abs() to matrix+T_revision.
-            matrices = matrices.abs()
-            matrices = matrices / matrices.sum(dim=2, keepdim=True).clamp_min(
-                torch.finfo(matrices.dtype).tiny
-            )
+            # Use the same non-negative row normalization as training.
+            matrices = _row_positive_normalize(matrices)
             clean = torch.softmax(logits, dim=1)
             observed = torch.bmm(clean.unsqueeze(1), matrices).squeeze(1)
             clean_y = clean.gather(1, targets[:, None]).squeeze(1)
@@ -450,6 +448,7 @@ def run_instance_transition_experiment(
         requirements=requirements,
         run_dir=run_dir, seed=seed, checkpoint_payload=checkpoint_payload,
     )
+    prepared.loader_config = {**prepared.loader_config, "persistent_workers": True}
     dataset_name, num_classes = prepared.dataset, prepared.num_classes
     manifest = prepared.manifest
     if manifest is None:
@@ -596,7 +595,7 @@ def run_instance_transition_experiment(
                 learning_rate=estimator.basis_learning_rate,
                 loss_threshold=estimator.basis_loss_threshold,
                 seed=estimator.representation_seed,
-                official_raw=True,
+                official_raw=False,
             )
             # The reference clips only the train basis group before
             # correction; validation is normalized later by tools.norm().
@@ -608,7 +607,7 @@ def run_instance_transition_experiment(
                 representation_coefficients=representation_coefficients,
                 representation_indices=representation_indices,
                 part_matrices=train_basis,
-                official_raw_basis=True,
+                official_raw_basis=False,
             )
             validation_artifact = estimator.estimate_from_shared_representation(
                 validation_features,
@@ -617,7 +616,7 @@ def run_instance_transition_experiment(
                 representation_coefficients=representation_coefficients,
                 representation_indices=representation_indices,
                 part_matrices=validation_basis,
-                official_raw_basis=True,
+                official_raw_basis=False,
             )
             # This mirrors the official val_revision call: validation W is
             # paired with the train-fitted basis matrices.

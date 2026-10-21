@@ -84,6 +84,7 @@ def run_dual_t_experiment(
         seed=seed,
         checkpoint_payload=checkpoint_payload,
     )
+    prepared.enable_loader_reuse()
     dataset_name = prepared.dataset
     num_classes = prepared.num_classes
     manifest, manifest_path = prepared.manifest, prepared.manifest_path

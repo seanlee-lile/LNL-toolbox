@@ -186,6 +186,7 @@ def run_fine_experiment(
         seed=seed,
         checkpoint_payload=checkpoint,
     )
+    prepared.enable_loader_reuse()
     num_classes = prepared.num_classes
     manifest, manifest_path = prepared.manifest, prepared.manifest_path
     noise_metadata = None
@@ -295,14 +296,12 @@ def run_fine_experiment(
     components = {"model": model, "ema": ema, "optimizer": optimizer}
     if warmup_stopping.stopped and start_epoch < warmup_epochs:
         warmup_stopping.restore_best(components)
+    snapshot_loader = prepared.loader_for_dataset(snapshot_dataset, shuffle=False, stream=1000)
     for epoch in stage_epochs(start_epoch, epochs, warmup_epochs, warmup_stopping, main_stopping):
-        # Epoch-derived loader seeds make interrupted training reproducible,
-        # including augmentation workers and batch order.
         train_loader = prepared.loader(DataRole.TRAIN, epoch=epoch)
-        snapshot_loader = prepared.loader_for_dataset(
-            snapshot_dataset, shuffle=False, epoch=epoch, stream=1000,
-        )
+        snapshot_loader.generator.manual_seed(seed + epoch + 1000)
         if epoch == warmup_epochs:
+            warmup_stopping.restore_best(components)
             for group in optimizer.param_groups:
                 group["lr"] = float(config["optimizer"]["lr"])
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -389,15 +388,21 @@ def run_fine_experiment(
         write_training_curves_svg(rows, run_dir / "training_curves.svg")
     if not rows:
         raise ValueError("FINE requires at least one completed epoch for reporting")
+    selected_best = main_stopping.enabled and main_stopping.counter.best is not None
+    final_test = (
+        evaluate_classification(model, test_loader, criterion, device)
+        if selected_best
+        else {"loss": rows[-1]["test_loss"], "accuracy": rows[-1]["test_accuracy"]}
+    )
     tail = rows[-10:]
     final_row = {
         "event": "final",
         "completed_epochs": len(rows),
-        "test_loss": rows[-1]["test_loss"],
-        "test_accuracy": rows[-1]["test_accuracy"],
+        "test_loss": final_test["loss"],
+        "test_accuracy": final_test["accuracy"],
         "last_10_test_accuracy": sum(row["test_accuracy"] for row in tail) / len(tail),
         "epochs_averaged": len(tail),
-        "selection_split": "none",
+        "selection_split": "validation" if selected_best else "none",
         "test_selection_leakage": False,
         "method": "fine_sed",
     }

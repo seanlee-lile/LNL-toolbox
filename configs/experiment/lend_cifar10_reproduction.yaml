@@ -55,12 +55,13 @@ lend:
     steps: 10
     # Numerical stopping settings are toolbox choices, not paper-specified values.
     tolerance: 1.0e-5
-    max_steps: 1000
+    max_steps: 10000
   history:
     beta: 0.9
     first_observation: current
   selection:
     rule: noisy_equals_diluted_argmax
+    # Normalize the selected-loss sum by actual batch size to keep SGD scale stable.
     reduction: batch_mean
     empty_batch: skip_update
   training:

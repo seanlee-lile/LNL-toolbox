@@ -127,10 +127,12 @@ class _l2rw_training_L2RWTrainingTest(unittest.TestCase):
         train_loss = torch.sum(epsilon * torch.nn.functional.cross_entropy(model(inputs), targets, reduction='none'))
         train_gradients = torch.autograd.grad(train_loss, parameters, create_graph=True)
         trusted_loss = torch.nn.functional.cross_entropy(model(trusted_inputs), trusted_targets)
-        trusted_loss = trusted_loss + 0.1 * sum((parameter.square().sum() for parameter in parameters))
         trusted_gradients = torch.autograd.grad(trusted_loss, parameters, retain_graph=True)
         expected = torch.autograd.grad(train_gradients, epsilon, grad_outputs=trusted_gradients)[0]
         torch.testing.assert_close(actual, expected)
+        without_decay = meta_gradient(model, inputs, targets, trusted_inputs, trusted_targets,
+            virtual_learning_rate=1.0, weight_decay=0., implementation='official')
+        torch.testing.assert_close(actual, without_decay, rtol=0, atol=0)
 
     def test_official_preprocessing_maps_zero_and_max_pixels_to_minus_one_and_one(self) -> None:
         import pickle
@@ -276,21 +278,31 @@ class L2RWPreparedDataIsolationTest(unittest.TestCase):
         for position, index in enumerate(prepared.trusted_indices):
             self.assertEqual(int(trusted[position]['target']), int(self.train.labels[index]))
 
-    def test_real_data_service_keeps_trusted_out_of_train_and_matches_author_noise(self):
+    def test_real_data_service_balances_trusted_and_matches_author_noise(self):
         from unittest.mock import patch
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self.load):
             prepared = self.prepare(directory, self.config)
             self.assert_isolated(prepared, 20, 10)
             pool, validation = _official_partition(40, [30, 10], seed=self.config['seed'])
-            noisy_indices, clean_indices = _official_train_subsets(pool, num_clean=10, seed=self.config['seed'])
+            np.testing.assert_array_equal(prepared.validation_indices, validation)
+            self.assertEqual(set(prepared.train_indices) | set(prepared.trusted_indices), set(pool))
+            np.testing.assert_array_equal(np.bincount(self.train.labels[prepared.trusted_indices], minlength=10),
+                                          np.ones(10, dtype=np.int64))
+            # Recover the pre-noise order; the author's permutation depends on
+            # the seed and sample count, not the class labels.
+            _, _, order = _official_flip_labels(np.zeros(20, dtype=np.int64), num_classes=10,
+                                               rate=.4, seed=self.config['seed'])
+            noisy_indices = prepared.train_indices[np.argsort(order)]
             noisy_labels, _, order = _official_flip_labels(self.train.labels[noisy_indices], num_classes=10,
                                                           rate=.4, seed=self.config['seed'])
             np.testing.assert_array_equal(prepared.train_indices, noisy_indices[order])
             np.testing.assert_array_equal(prepared.manifest.global_indices, noisy_indices[order])
             np.testing.assert_array_equal(prepared.manifest.clean_targets, self.train.labels[noisy_indices[order]])
             np.testing.assert_array_equal(prepared.manifest.noisy_targets, noisy_labels)
-            np.testing.assert_array_equal(prepared.trusted_indices, clean_indices)
-            np.testing.assert_array_equal(prepared.validation_indices, validation)
+            repeated = self.prepare(Path(directory) / 'repeat', self.config)
+            np.testing.assert_array_equal(prepared.train_indices, repeated.train_indices)
+            np.testing.assert_array_equal(prepared.trusted_indices, repeated.trusted_indices)
+            np.testing.assert_array_equal(prepared.manifest.noisy_targets, repeated.manifest.noisy_targets)
 
     def test_isolation_with_clean_noise_zero_rate_and_sample_limit(self):
         from unittest.mock import patch

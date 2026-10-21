@@ -246,6 +246,7 @@ class _mc_ldce_MCLDCETest(unittest.TestCase):
                  'target': torch.tensor([0, 1]), 'index': torch.arange(2)}
         prepared = SimpleNamespace(
             input_spec=SimpleNamespace(channels=None), num_classes=2, dataset='fixture',
+            loader_config={'num_workers': 0},
             available_roles={DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.TEST},
             loader=lambda *args, **kwargs: [batch])
         models = []

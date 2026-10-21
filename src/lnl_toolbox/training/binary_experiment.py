@@ -182,7 +182,10 @@ def run_binary_experiment(
             f"with exactly two classes; got {prepared.dataset!r} with "
             f"{prepared.num_classes} classes"
         )
+    prepared.loader_config = {**prepared.loader_config, "persistent_workers": True}
     loader = prepared.loader(DataRole.TRAIN)
+    validation_loader = prepared.validation_loader(shuffle=False) if prepared.validation_indices.size else None
+    test_loader = prepared.loader(DataRole.TEST, shuffle=False)
     if prepared.input_spec.shape is None:
         sample = prepared.dataset_for(DataRole.TRAIN)[0]
         input_dim = int(torch.as_tensor(sample["input"]).numel())
@@ -221,12 +224,10 @@ def run_binary_experiment(
         row = train_binary_epoch(model, loader, optimizer, risk=risk)
         row["epoch"] = float(epoch + 1)
         if prepared.validation_indices.size:
-            validation_loader = prepared.validation_loader(shuffle=False)
             validation = evaluate_binary(model, validation_loader)
             row["validation_loss"] = validation["loss"]
             row["validation_accuracy"] = validation["accuracy"]
         if len(prepared.dataset_for(DataRole.TEST)) > 0:
-            test_loader = prepared.loader(DataRole.TEST, shuffle=False)
             evaluation = evaluate_binary(model, test_loader)
             row["test_loss"] = evaluation["loss"]
             row["test_accuracy"] = evaluation["accuracy"]
@@ -260,7 +261,7 @@ def run_binary_experiment(
         "test_checkpoint": "best.pt" if best_model is not None else "last_model",
     }
     if len(prepared.dataset_for(DataRole.TEST)) > 0:
-        evaluation = evaluate_binary(model, prepared.loader(DataRole.TEST, shuffle=False))
+        evaluation = evaluate_binary(model, test_loader)
         final.update(test_loss=evaluation["loss"], test_accuracy=evaluation["accuracy"],
                      test_samples=int(evaluation["samples"]))
     with metrics_path.open("a", encoding="utf-8") as metrics_file:

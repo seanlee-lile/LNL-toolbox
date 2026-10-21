@@ -103,7 +103,9 @@ def run_ca2c_experiment(
         requirements=requirements,
         run_dir=run_dir,
         seed=seed,
-    ); classes = data.num_classes
+    )
+    data.enable_loader_reuse()
+    classes = data.num_classes
     validation_loader = (
         data.loader(DataRole.CLEAN_VALIDATION, stream=23, shuffle=False)
         if DataRole.CLEAN_VALIDATION in data.available_roles

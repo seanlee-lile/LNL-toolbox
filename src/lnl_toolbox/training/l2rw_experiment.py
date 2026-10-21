@@ -7,6 +7,7 @@ from datetime import datetime
 import json
 import math
 from pathlib import Path
+import time
 from typing import Any, Mapping
 
 import numpy as np
@@ -170,6 +171,9 @@ def run_l2rw_experiment(
         run_dir=run_dir,
         seed=data_seed if official_generated else seed,
     )
+    # Reuse loading workers when the trusted stream wraps and across epochs.
+    # The shared loader already disables persistence when num_workers is zero.
+    prepared.loader_config = {**prepared.loader_config, "persistent_workers": True}
     num_classes, dataset_name = prepared.num_classes, prepared.dataset
     input_seed = int(config.get("data", {}).get("input_seed", seed))
     train_loader = prepared.loader(DataRole.TRAIN, generator_seed=input_seed)
@@ -179,7 +183,7 @@ def run_l2rw_experiment(
     if official_generated:
         trusted_indices = np.asarray(getattr(trusted_base, "indices"), dtype=np.int64)
         trusted_targets = np.asarray([int(trusted_base[index]["target"]) for index in range(len(trusted_base))], dtype=np.int64)
-        counts = np.unique(trusted_targets, return_counts=True)[1]
+        counts = np.bincount(trusted_targets, minlength=num_classes)
         manifest = TrustedSupervisionManifest(
             trusted_indices, trusted_targets, dataset_name, "train_clean", "official_generated",
             bool(counts.size and np.all(counts == counts[0])),
@@ -270,6 +274,8 @@ def run_l2rw_experiment(
     stopping.replay(rows, completed=start)
     while not stopping.stopped and ((global_step < max_steps) if max_steps else (start < epochs)):
         epoch = start
+        epoch_started = time.perf_counter()
+        epoch_start_step = global_step
         model.train(); meta_model.train(); trusted_iterator = iter(trusted_loader)
         total = correct = 0; loss_sum = weight_sum = positive_sum = 0.0
         for batch in train_loader:
@@ -307,7 +313,10 @@ def run_l2rw_experiment(
             count = targets.numel(); total += count; loss_sum += float(objective.detach()) * count
             correct += int(logits.argmax(1).eq(targets).sum())
             weight_sum += float(weights.sample_weights.sum()); positive_sum += weights.metrics["positive_weight_count"]
+        training_finished = time.perf_counter()
         validation = evaluate_classification(model, validation_loader, criterion, device)
+        validation_finished = time.perf_counter()
+        training_seconds = training_finished - epoch_started
         row = standardize_epoch_row({
             "epoch": epoch + 1, "train_loss": loss_sum / total,
             "train_accuracy": correct / total, "validation_loss": validation["loss"],
@@ -315,13 +324,19 @@ def run_l2rw_experiment(
             "method": "l2rw", "mean_weight_sum": weight_sum / len(train_loader),
             "mean_positive_weights": positive_sum / len(train_loader),
             "trusted_fingerprint": manifest.fingerprint, "global_step": global_step,
+            "epoch_training_seconds": training_seconds,
+            "epoch_validation_seconds": validation_finished - training_finished,
+            "epoch_seconds": validation_finished - epoch_started,
+            "training_steps_per_second": (global_step - epoch_start_step) / training_seconds,
         })
         rows.append(row)
         _write_epoch_metrics(rows, metrics_path)
         print(
             f"L2RW epoch {epoch + 1}/{epochs} steps={global_step} "
             f"loss={row['train_loss']:.5f} val={row['validation_accuracy']:.4f} "
-            f"weights={row['mean_positive_weights']:.1f}",
+            f"weights={row['mean_positive_weights']:.1f} "
+            f"epoch_seconds={row['epoch_seconds']:.3f} "
+            f"steps_per_second={row['training_steps_per_second']:.3f}",
             flush=True,
         )
         if scheduler is not None: scheduler.step()

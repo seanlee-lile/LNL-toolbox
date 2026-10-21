@@ -320,6 +320,7 @@ class LENDConvergenceAndScratchTest(unittest.TestCase):
         import tempfile, yaml
         from pathlib import Path
         fields = {f['path']: f for f in command_console._config_schema('lend-cifar10-reproduction')['fields']}
+        self.assertEqual(fields['lend.dilution.max_steps']['value'], 10000)
         self.assertEqual(fields['lend.dilution.policy']['value'], 'until_converged')
         self.assertTrue(fields['lend.dilution.policy']['editable'])
         self.assertEqual([choice['value'] for choice in fields['lend.dilution.policy']['choices']], ['until_converged', 'fixed_steps'])
@@ -333,7 +334,7 @@ class LENDConvergenceAndScratchTest(unittest.TestCase):
                 config = yaml.safe_load((command_console.ROOT / saved['path']).read_text(encoding='utf-8'))
                 parsed = LENDConfig.from_mapping(config)
                 self.assertEqual(parsed.dilution_policy, policy)
-                self.assertEqual(parsed.dilution_max_steps, 1000)
+                self.assertEqual(parsed.dilution_max_steps, fields['lend.dilution.max_steps']['value'])
                 self.assertEqual(parsed.dilution_tolerance, 1e-5)
 
     def test_generic_knn_component_has_no_paper_lend_aliases(self):

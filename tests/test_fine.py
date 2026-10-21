@@ -38,7 +38,7 @@ class _fine_FINETest(unittest.TestCase):
                 targets = torch.tensor([0,1,2,0])
                 rejected = torch.tensor([False,True,True,True])
                 pseudo = torch.tensor([1,2,2,2])
-                mask = rejected & pseudo.ne(targets)
+                mask = rejected
                 generator = torch.Generator().manual_seed(17)
                 complementary = (targets + torch.randint(1,classes,targets.shape,generator=generator))%classes
                 regularizer = FINERegularizer(seed=17)
@@ -61,6 +61,14 @@ class _fine_FINETest(unittest.TestCase):
         expected = torch.log_softmax(logits,1)[0,0]/3
         torch.testing.assert_close(actual,expected)
         torch.testing.assert_close(torch.autograd.grad(actual,logits,retain_graph=True)[0],torch.autograd.grad(expected,logits)[0])
+
+    def test_regularizer_requires_an_aligned_selection_mask(self) -> None:
+        regularizer = FINERegularizer()
+        logits, targets = torch.randn(2, 3), torch.tensor([0, 1])
+        with self.assertRaisesRegex(ValueError, "requires a clean or noisy sample selection mask"):
+            regularizer(logits, targets)
+        with self.assertRaisesRegex(ValueError, "selection mask must match the target shape"):
+            regularizer(logits, targets, rejected_mask=torch.tensor([True]))
 
     def test_complementary_rng_resumes_exactly(self) -> None:
         logits = torch.tensor([[2.0, 1.0, -1.0]])
@@ -163,6 +171,58 @@ def _fine_training__cifar(split: str, samples_per_class: int) -> CifarData:
 
 # --- merged from test_fine_training.py ---
 class _fine_training_FINETrainingTest(unittest.TestCase):
+
+    def test_stage_handoff_and_final_test_use_restored_best_models(self) -> None:
+        train, test = _fine_training__cifar('train', 2), _fine_training__cifar('test', 1)
+        config = {
+            'seed': 3,
+            'data': {'name': 'cifar100', 'root': 'unused', 'validation_size': 100, 'augment': False},
+            'noise': {'name': 'symmetric', 'rate': 0.2},
+            'loader': {'batch_size': 100, 'num_workers': 0},
+            'model': {'name': 'tiny_cnn', 'width': 1},
+            'optimizer': {'name': 'sgd', 'lr': 0.01},
+            'trainer': {'epochs': 6, 'device': 'cpu', 'early_stopping': True},
+            'fine': {'warmup_epochs': 3, 'warmup_early_stopping': True},
+        }
+        warmup_calls, robust_starts, evaluation_calls = [], [], []
+
+        def warmup(model, *args):
+            warmup_calls.append(True)
+            with torch.no_grad():
+                next(model.parameters()).fill_(len(warmup_calls))
+            return 1.0, 0.5
+
+        def robust(model, *args, **kwargs):
+            robust_starts.append(float(next(model.parameters()).flatten()[0]))
+            with torch.no_grad():
+                next(model.parameters()).fill_(2 + len(robust_starts))
+            return 1.0, 0.5
+
+        def predictions(model, ema_model, loader, device, positions, classes):
+            probabilities = torch.full((len(positions), classes), 1.0 / classes)
+            return probabilities, probabilities.clone(), torch.zeros(len(positions), dtype=torch.long)
+
+        def evaluate(model, *args):
+            value = float(next(model.parameters()).flatten()[0])
+            evaluation_calls.append(value)
+            validation = len(evaluation_calls) <= 8 and len(evaluation_calls) % 2 == 1
+            return {'loss': value, 'accuracy': 1.0 - value / 10 if validation else value / 10}
+
+        with tempfile.TemporaryDirectory() as directory:
+            with patch('lnl_toolbox.data.sources.load_cifar100', side_effect=lambda root, split: train if split == 'train' else test), \
+                 patch('lnl_toolbox.training.fine_experiment._train_warmup', side_effect=warmup), \
+                 patch('lnl_toolbox.training.fine_experiment._train_robust', side_effect=robust), \
+                 patch('lnl_toolbox.training.fine_experiment._epoch_predictions', side_effect=predictions), \
+                 patch('lnl_toolbox.training.fine_experiment.evaluate_classification', side_effect=evaluate), \
+                 patch('lnl_toolbox.training.early_stopping.StageEarlyStopping.PATIENCE', 1):
+                result = run_fine_experiment(config, directory)
+            rows = [json.loads(line) for line in (result / 'metrics.jsonl').read_text().splitlines()]
+        self.assertEqual(len(warmup_calls), 2)
+        self.assertEqual(robust_starts, [1.0, 3.0])
+        self.assertEqual(evaluation_calls[-1], 3.0)
+        self.assertAlmostEqual(rows[-2]['test_accuracy'], 0.4)
+        self.assertAlmostEqual(rows[-1]['test_accuracy'], 0.3)
+        self.assertEqual(rows[-1]['selection_split'], 'validation')
 
     def test_seven_cnn_exposes_logits_and_features(self) -> None:
         model = FineSevenCNN(100, base_width=2)

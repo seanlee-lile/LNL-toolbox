@@ -1351,8 +1351,6 @@ def _parameter_presentation(path: str, method: str = "") -> tuple[str, str]:
         return "hidden", ""
     if method == "jocor" and path == "selector.keep_rate.end":
         return "hidden", ""
-    if method == "apl" and path == "evaluation.selection_split":
-        return "parameter", ""
     if path in {
         "data.validation_split.source", "data.validation_split.rng",
         "data.validation_split.strategy", "evaluation.selection_split",
@@ -2386,6 +2384,9 @@ def _set_config_path(config: dict[str, object], path: str, value: object) -> Non
                 current["name"] = "multistep"
         return
     if parts[-1] not in current:
+        if path == "data.validation_size" and _config_method(config, config.get("execution", {}).get("runner", "")) in {"binary_risk", "cwd"}:
+            current[parts[-1]] = value
+            return
         raise ValueError(f"配置字段不存在：{path}")
     current[parts[-1]] = value
 
@@ -2492,6 +2493,8 @@ def _parameter_edit_rule(
     value; `derived` is computed from another editable parameter.
     """
 
+    if method == "apl" and path == "evaluation.selection_split" and config.get("trainer", {}).get("early_stopping") is True:
+        return "derived", "开启早停时自动使用验证集选择模型。", "validation"
     if level == "locked":
         return "fixed", "", None
     if method == "loss_correction" and path == "pipeline.transition_estimator.name":
@@ -2547,6 +2550,8 @@ def _parameter_edit_rule(
 
 
 def _synchronize_web_derived_parameters(config: dict[str, Any], method: str) -> None:
+    if method == "apl" and config.get("trainer", {}).get("early_stopping") is True:
+        _set_config_path(config, "evaluation.selection_split", "validation")
     if method == "loss_correction":
         from lnl_toolbox.quickstart.templates import configure_loss_correction_transition
 
@@ -2900,6 +2905,8 @@ def _save_config(payload: object, *, for_review: bool = False, destination: Path
                 rate = optimizer_rate if "optimizer.lr" in changed_rates else schedule_rate
                 _set_config_path(parsed, "optimizer.lr", rate)
                 _set_config_path(parsed, "scheduler.initial_lr", rate)
+        if method == "apl":
+            _synchronize_web_derived_parameters(parsed, method)
         parsed = synchronize_experiment_seed(parsed)
         _assert_locked_parameters_unchanged(source_config, parsed, method)
         if payload.get("automatic_validation_split"):

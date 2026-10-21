@@ -60,17 +60,14 @@ class FINERegularizer:
         pseudo_labels: Tensor | None = None,
         **_: Any,
     ) -> Tensor:
-        mask = rejected_mask if rejected_mask is not None else (
-            torch.ones(logits.shape[0], dtype=torch.bool, device=logits.device)
-            if selected_mask is None else ~selected_mask
-        )
-        if pseudo_labels is None:
-            pseudo_labels = logits.detach().argmax(dim=1)
-        if pseudo_labels.shape != noisy_targets.shape:
-            raise ValueError("FINE pseudo_labels must have shape [B]")
-        mask = mask & pseudo_labels.to(noisy_targets.device).long().ne(
-            noisy_targets.long()
-        )
+        if rejected_mask is not None:
+            mask = rejected_mask.to(device=logits.device, dtype=torch.bool)
+        elif selected_mask is not None:
+            mask = ~selected_mask.to(device=logits.device, dtype=torch.bool)
+        else:
+            raise ValueError("FINE requires a clean or noisy sample selection mask")
+        if mask.shape != noisy_targets.shape:
+            raise ValueError("FINE selection mask must match the target shape")
         if not bool(mask.any()):
             return logits.sum() * 0.0
         num_classes = logits.shape[1]
