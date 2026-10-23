@@ -308,6 +308,7 @@ def _transforms(
                 pixel_mean=pixel_mean,
                 normalization_mean=normalization.get("mean", data.get("normalization_mean")),
                 normalization_std=normalization.get("std", data.get("normalization_std")),
+                reflect_padding=bool(data.get("reflect_padding", False)),
             )
         result = {view: weak for view in requirements.views}
         if "strong" in result:

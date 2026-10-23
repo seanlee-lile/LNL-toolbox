@@ -337,6 +337,21 @@ class _pcse_statistics_PCSEStatisticsTest(unittest.TestCase):
         expected = point @ means.T - 0.5 + np.log(1 / 3)
         np.testing.assert_allclose(gda.scores(point), expected)
 
+    def test_gda_uses_pseudoinverse_for_singular_covariance(self) -> None:
+        means = np.eye(3, dtype=np.float64)
+        covariance = np.diag([2., 0., 4.])
+        gda = GDALayer('hidden', np.full(3, 1/3), means, covariance, 0.)
+        point = np.array([[2., 3., 4.]])
+        precision = np.diag([.5, 0., .25])
+        expected = point @ precision - .5*np.diag(precision) + np.log(1/3)
+        np.testing.assert_allclose(gda.scores(point), expected)
+
+    def test_ensemble_epoch_updates_every_fifty_samples(self) -> None:
+        probabilities = np.full((2, 110, 3), 1/3)
+        _, optimizer, losses = fit_ensemble_weights(probabilities, np.arange(110)%3, epochs=2, learning_rate=.02)
+        self.assertEqual(len(losses), 2)
+        self.assertEqual(float(next(iter(optimizer.state.values()))['step']), 6.)
+
     def test_ensemble_weights_are_positive_simplex(self) -> None:
         probabilities = np.array([[[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]], [[0.6, 0.2, 0.2], [0.2, 0.6, 0.2], [0.2, 0.2, 0.6]]])
         raw, _, losses = fit_ensemble_weights(probabilities, np.array([0, 1, 2]), epochs=5, learning_rate=0.1)
@@ -469,10 +484,10 @@ class _pcse_volmin_PCSEVolMinWorkflowTest(unittest.TestCase):
             self.assertEqual(resumed.state.phase, PCSEPhase.TRANSITION_READY)
             self.assertGreater(resumed.state.transition_global_step, initial_step)
             self.assertEqual(resumed.transition.metadata['source_pretrained_checkpoint_sha256'], source_hash)
-            self.assertEqual(resumed.transition.metadata['feature_model_checkpoint_sha256'], resumed.state.volmin_final_checkpoint_sha256)
-            self.assertNotEqual(resumed.state.feature_model_checkpoint_sha256, source_hash)
+            self.assertEqual(resumed.transition.metadata['feature_model_checkpoint_sha256'], source_hash)
+            self.assertEqual(resumed.state.feature_model_checkpoint_sha256, source_hash)
             statistics = resumed.estimate_statistics()
-            self.assertEqual(statistics.provenance['feature_model_checkpoint_sha256'], resumed.state.volmin_final_checkpoint_sha256)
+            self.assertEqual(statistics.provenance['feature_model_checkpoint_sha256'], source_hash)
             resumed.close()
 
     def test_publish_validation_failure_preserves_formal_files_and_state(self) -> None:
@@ -725,6 +740,28 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
         self.assertEqual(config['pretraining_stage']['method'], 'cross_entropy')
         self.assertEqual(config['noise']['mode'], 'generated')
         self.assertNotIn('source', config['pretraining_stage'])
+        self.assertTrue(config['data']['augment'])
+        self.assertEqual(config['gda_stage']['covariance_ridge'], 0)
+        self.assertEqual([x['name'] for x in config['feature_stage']['layers']], ['layer4', 'avgpool'])
+        stage = config['pretraining_stage']
+        self.assertEqual(stage['epochs'], 200)
+        self.assertEqual(stage['model']['base_width'], 64)
+        self.assertEqual(stage['model']['stem_padding'], 0)
+        self.assertEqual(stage['optimizer']['name'], 'adam')
+        self.assertEqual(stage['optimizer']['lr'], .001)
+        self.assertEqual(stage['optimizer']['weight_decay'], 0)
+        self.assertEqual(config['ensemble_stage'], {'epochs':20, 'learning_rate':.02})
+        from lnl_toolbox.training.experiment import build_optimizer, build_scheduler, apply_epoch_beta1
+        model = torch.nn.Linear(2, 3)
+        optimizer = build_optimizer(model, stage['optimizer'])
+        scheduler = build_scheduler(optimizer, stage['scheduler'], stage['epochs'])
+        for epoch in range(200):
+            apply_epoch_beta1(optimizer, stage['scheduler'], epoch)
+            expected_lr = .001 if epoch < 80 else (200-epoch)/120*.001
+            self.assertAlmostEqual(optimizer.param_groups[0]['lr'], expected_lr)
+            self.assertEqual(optimizer.param_groups[0]['betas'][0], .9 if epoch < 80 else .1)
+            optimizer.step()
+            scheduler.step()
 
     def test_paper_volmin_can_express_sixty_percent_symmetric_noise(self) -> None:
         from lnl_toolbox.algorithms.pcse.volmin import PaperVolMinTransition, paper_volmin_objective
@@ -756,8 +793,10 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
             root = Path(directory)
             run_pcse_experiment(config, output_dir=root)
             artifact = PCSEEnsembleArtifact.load(root/'pcse_ensemble.npz')
-            self.assertEqual(artifact.layer_names, ('hidden2',))
-            np.testing.assert_array_equal(artifact.weights, [1.])
+            self.assertEqual(artifact.layer_names, ('hidden2', 'discriminative'))
+            self.assertEqual(artifact.weights.shape, (2,))
+            self.assertTrue((artifact.weights > 0).all())
+            self.assertAlmostEqual(float(artifact.weights.sum()), 1.0)
             names = ('pcse_statistics.npz', 'pcse_gda.npz', 'pcse_ensemble.npz', 'final_metrics.json')
             before = {name:(root/name).read_bytes() for name in names}
             run_pcse_experiment(config, resume=root/'last.pt')
@@ -792,7 +831,10 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
                     run_dir = run_pcse_experiment(config, output_dir=root/'run')
                     metrics = json.loads((run_dir/'final_metrics.json').read_text())
                     self.assertTrue(np.isfinite(metrics['test_accuracy']))
-                    self.assertEqual(PCSEEnsembleArtifact.load(run_dir/'pcse_ensemble.npz').weights.tolist(), [1.])
+                    ensemble = PCSEEnsembleArtifact.load(run_dir/'pcse_ensemble.npz')
+                    self.assertEqual(ensemble.layer_names, ('layer4', 'discriminative'))
+                    self.assertEqual(ensemble.weights.shape, (2,))
+                    self.assertAlmostEqual(float(ensemble.weights.sum()), 1.0)
                     payload = read_checkpoint(run_dir/'last.pt', 'cpu')
                     self.assertEqual(payload['external_source_provenance']['adapter'], adapter)
                     self.assertEqual(payload['pretraining_source'], adapter)
@@ -977,6 +1019,32 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
             first.estimate_transition()
             first.estimate_statistics()
             first.build_gda()
+            probabilities, targets, indices = first._layer_probabilities(
+                first.noisy_validation_loader, split='validation'
+            )
+            from lnl_toolbox.training.snapshots import collect_posterior_snapshot
+            reference = collect_posterior_snapshot(
+                first.pretraining_algorithm.model, first.noisy_validation_loader,
+                'cpu', dataset=first.dataset, split='validation',
+            )
+            self.assertEqual(probabilities.shape[0], len(first.gda_artifact.layers) + 1)
+            np.testing.assert_allclose(probabilities[-1], reference.noisy_probabilities)
+            np.testing.assert_array_equal(indices, reference.global_indices)
+            np.testing.assert_array_equal(targets, reference.noisy_targets)
+            # Changing the transition/feature backbone must not replace the
+            # original classifier used by the discriminative ensemble member.
+            backbone = first.pretraining_algorithm.model
+            original_weights = deepcopy(backbone.state_dict())
+            with torch.no_grad():
+                backbone.classifier.weight.zero_()
+            changed_weights = deepcopy(backbone.state_dict())
+            restored_probabilities, _, _ = first._layer_probabilities(
+                first.noisy_validation_loader, split='validation'
+            )
+            np.testing.assert_allclose(restored_probabilities[-1], reference.noisy_probabilities)
+            for name, value in backbone.state_dict().items():
+                torch.testing.assert_close(value, changed_weights[name])
+            backbone.load_state_dict(original_weights)
             first.start_ensemble_training()
             first.train_ensemble(max_epochs=1)
             self.assertEqual(first.state.phase, PCSEPhase.ENSEMBLE_TRAINING)
@@ -1001,7 +1069,7 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
             self.assertEqual(final['pretraining_model'], 'pcse_mlp')
             self.assertEqual(final['pretraining_source'], 'internal_training')
             self.assertEqual(final['transition_backend'], 'dual_t')
-            self.assertEqual(len(final['ensemble_weights']), 2)
+            self.assertEqual(len(final['ensemble_weights']), 3)
             self.assertTrue(all((value > 0 for value in final['ensemble_weights'])))
             self.assertAlmostEqual(sum(final['ensemble_weights']), 1.0)
             with np.load(run_dir / 'posterior_snapshot.npz', allow_pickle=False) as snapshot:

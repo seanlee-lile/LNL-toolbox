@@ -93,18 +93,31 @@ class _upm_objective_UPMObjectiveTest(unittest.TestCase):
         psi = torch.tensor([0.3, 0.4])
         eta = torch.tensor([0.25, 0.0])
         actual = predict_true_posterior(clean, targets, psi, eta)
-        factor = torch.tensor([[0.075, 0.825, 0.075], [1.0, 0.0, 0.0]])
+        factor = torch.tensor([[0.075, 0.825, 0.075], [1.0, 1e-5, 1e-5]])
         expected = clean * factor
         expected /= expected.sum(1, keepdim=True)
         torch.testing.assert_close(actual, expected)
         self.assertFalse(actual.requires_grad)
-        torch.testing.assert_close(actual[1], torch.tensor([1.0, 0.0, 0.0]))
+        self.assertGreater(float(actual[1, 1]), 0.0)
         eta_one = predict_true_posterior(clean[:1], targets[:1], psi[:1], torch.ones(1))
         torch.testing.assert_close(eta_one, clean[:1])
 
-    def test_eq8_rejects_zero_normalizer(self) -> None:
-        with self.assertRaisesRegex(ValueError, 'positive'):
-            predict_true_posterior(torch.tensor([[1.0, 0.0]]), torch.tensor([1]), torch.tensor([0.0]), torch.tensor([0.0]))
+    def test_eq8_floor_handles_zero_observed_probability(self) -> None:
+        q = predict_true_posterior(torch.tensor([[1.0, 0.0]]), torch.tensor([1]), torch.tensor([0.0]), torch.tensor([0.0]))
+        torch.testing.assert_close(q, torch.tensor([[1.0, 0.0]]))
+
+    def test_zero_eta_can_recover_with_author_probability_floor(self) -> None:
+        clean = torch.tensor([[0.1, 0.9]], dtype=torch.float64)
+        targets = torch.tensor([0])
+        psi = torch.tensor([0.2], dtype=torch.float64)
+        eta = torch.zeros(1, dtype=torch.float64)
+        q = predict_true_posterior(clean, targets, psi, eta)
+        factor = torch.tensor([[1.0, 1e-5]], dtype=torch.float64)
+        expected = clean * factor
+        expected /= expected.sum(1, keepdim=True)
+        torch.testing.assert_close(q, expected)
+        updated = update_confusing_probability(eta, q, targets, psi, learning_rate=0.7)
+        self.assertGreater(float(updated.item()), 0.0)
 
     def test_eq11_hand_calculation_clamp_and_detach(self) -> None:
         eta = torch.tensor([0.2, 0.9], requires_grad=True)

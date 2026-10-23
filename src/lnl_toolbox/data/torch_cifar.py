@@ -146,6 +146,7 @@ def build_cifar_transform(
     pixel_mean: torch.Tensor | None = None,
     normalization_mean: Sequence[float] | None = None,
     normalization_std: Sequence[float] | None = None,
+    reflect_padding: bool = False,
 ) -> Callable[[Image.Image], torch.Tensor]:
     preprocessing = str(preprocessing).strip().lower()
     if preprocessing == "tensor_only":
@@ -199,7 +200,10 @@ def build_cifar_transform(
         )
     operations: list[Any] = []
     if training and augment:
-        operations.extend((transforms.RandomCrop(32, padding=4), transforms.RandomHorizontalFlip()))
+        if reflect_padding:
+            operations.extend((transforms.RandomHorizontalFlip(), transforms.RandomCrop(32, padding=4, padding_mode="reflect")))
+        else:
+            operations.extend((transforms.RandomCrop(32, padding=4), transforms.RandomHorizontalFlip()))
     operations.extend((
         transforms.ToTensor(),
         transforms.Normalize(mean, std),

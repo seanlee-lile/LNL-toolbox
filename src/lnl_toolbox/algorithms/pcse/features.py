@@ -95,19 +95,50 @@ def collect_pcse_features(
     split: str,
     layers: tuple[PCSEFeatureLayerConfig, ...],
 ) -> PCSEFeatureCollection:
+    if not layers:
+        raise ValueError("PCSE requires at least one hidden feature layer")
+    widths: list[int] = []
+
+    def extract_all(current_model: nn.Module, inputs: Tensor) -> Tensor:
+        captured: list[Any] = [None] * len(layers)
+        counts = [0] * len(layers)
+        handles = []
+        try:
+            for index, layer in enumerate(layers):
+                try:
+                    module = current_model.get_submodule(layer.name)
+                except AttributeError as exc:
+                    raise ValueError(f"Unknown PCSE feature layer: {layer.name!r}") from exc
+                def capture(_module, _inputs, output, position=index):
+                    captured[position] = output
+                    counts[position] += 1
+                handles.append(module.register_forward_hook(capture))
+            model_output = current_model(inputs)
+        finally:
+            for handle in handles:
+                handle.remove()
+        if any(count != 1 for count in counts):
+            raise ValueError("PCSE feature layers must each be invoked exactly once")
+        if any(value is model_output for value in captured):
+            raise ValueError("PCSE feature layer is the model logits output; PCSE requires hidden representations")
+        values = [_pool_activation(value, layer.pooling) for value, layer in zip(captured, layers)]
+        current_widths = [value.shape[1] for value in values]
+        if widths and widths != current_widths:
+            raise ValueError("PCSE feature widths changed between batches")
+        widths[:] = current_widths
+        return torch.cat(values, dim=1)
+
+    # One forward pass per batch keeps every layer on the same augmented view.
+    combined = collect_feature_snapshot(
+        model, loader, device, dataset=dataset, split=split,
+        feature_extractor=extract_all,
+    )
+    boundaries = np.cumsum([0, *widths])
     snapshots = tuple(
-        collect_feature_snapshot(
-            model,
-            loader,
-            device,
-            dataset=dataset,
-            split=f"{split}:{layer.name}",
-            feature_extractor=(
-                lambda current_model, inputs, current_layer=layer:
-                extract_named_activation(current_model, inputs, current_layer)
-            ),
-        )
-        for layer in layers
+        FeatureSnapshot(combined.features[:, boundaries[index]:boundaries[index + 1]],
+                        combined.noisy_targets, combined.global_indices,
+                        dataset, f"{split}:{layer.name}")
+        for index, layer in enumerate(layers)
     )
     return PCSEFeatureCollection(
         layer_names=tuple(layer.name for layer in layers),

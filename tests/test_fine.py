@@ -358,11 +358,17 @@ class _fine_training_FINETrainingTest(unittest.TestCase):
              patch('lnl_toolbox.data.sources.load_cifar100',side_effect=lambda _root,split:train if split=='train' else test):
             root=Path(directory)
             original=PreparedData.dynamic_dataset
-            with patch.object(PreparedData,'dynamic_dataset',autospec=True,side_effect=original) as dynamic:
+            original_loader = PreparedData.loader_for_dataset
+            with patch.object(PreparedData,'dynamic_dataset',autospec=True,side_effect=original) as dynamic, \
+                 patch.object(PreparedData,'loader_for_dataset',autospec=True,side_effect=original_loader) as loaders:
                 complete=run_fine_experiment(config,root/'complete')
                 calls=[call for call in dynamic.call_args_list if call.kwargs.get('views')==('weak',)]
                 self.assertTrue(calls)
                 self.assertTrue(all(call.kwargs['training'] for call in calls))
+                snapshots = [call for call in loaders.call_args_list if call.kwargs.get('stream') == 1000]
+                self.assertTrue(snapshots)
+                self.assertTrue(all(call.kwargs['shuffle'] for call in snapshots))
+                self.assertTrue(all(call.kwargs['drop_last'] is False for call in snapshots))
             def interrupt(payload,path):
                 save(payload,path)
                 if payload['completed_epoch']==1:

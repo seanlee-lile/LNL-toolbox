@@ -272,6 +272,7 @@ parameter_ui:
     data.test_size: [生成测试样本数, 合成数据生成器创建的测试样本总数；填写正偶数。]
     data.preprocessing: [输入预处理, 将原始图像像素转换成模型输入的方式。]
     data.augment: [训练数据增强, 训练时随机裁剪、翻转等；具体变换由当前数据协议决定。]
+    data.reflect_padding: [反射填充, 随机裁剪前通过镜像扩展图像边缘；PCSE 作者的弱增强使用此方式。]
     data.strong_augment: [强数据增强, 为训练样本生成变化更明显的图像视图。]
     data.strong_policy: [强增强方案, 决定强增强视图使用哪些图像变换。]
     data.strong_magnitude: [强增强强度, 强增强操作的幅度；数值越大通常改变图像越明显。]
@@ -3547,20 +3548,20 @@ methods:
           note: 转移矩阵体积正则项的系数；论文包含此项，但未确认指定 0.001，当前数值是工具箱默认值。
           evidence_ref: pcse
         ensemble_stage.epochs:
-          current: 5
+          current: 20
           value_type: integer
           ui_control: number
           reproduction_impact: medium
-          origin: toolbox_default
-          note: 多层 GDA 混合权重的训练轮数；5 是工具箱默认值，使用带噪验证标签。单层时权重恒为 1。
+          origin: author_implementation
+          note: GDA 分类器与原预训练分类器的混合权重训练轮数；使用带噪验证标签，作者实现为 20 轮。
           evidence_ref: pcse
         ensemble_stage.learning_rate:
-          current: 0.05
+          current: 0.02
           value_type: number
           ui_control: number
           reproduction_impact: medium
-          origin: toolbox_default
-          note: GDA 层混合权重的优化学习率；0.05 是工具箱默认值，未确认来自作者实现。
+          origin: author_implementation
+          note: 集成权重使用 Adam 优化的学习率；作者实现为 0.02。
           evidence_ref: pcse
         noise.rate:
           current: 0.4
@@ -3638,7 +3639,7 @@ methods:
           evidence_ref: pretrain
           reproduction_context: source model protocol
         pretraining_stage.model.base_width:
-          current: 16
+          current: 64
           value_type: integer
           ui_control: number
           reproduction_impact: high
@@ -3647,7 +3648,7 @@ methods:
           evidence_ref: pretrain
           reproduction_context: source model architecture
         pretraining_stage.epochs:
-          current: 100
+          current: 200
           value_type: integer
           ui_control: number
           reproduction_impact: high
@@ -3656,7 +3657,7 @@ methods:
           evidence_ref: pretrain
           reproduction_context: internal-training lifecycle
         pretraining_stage.optimizer.name:
-          current: sgd
+          current: adam
           value_type: string
           ui_control: text
           reproduction_impact: high
@@ -3665,13 +3666,13 @@ methods:
           evidence_ref: pretrain
           reproduction_context: source optimizer family
         pretraining_stage.optimizer.lr:
-          current: 0.05
+          current: 0.001
           value_type: number
           ui_control: number
           reproduction_impact: low_to_medium
           origin: implementation_or_training_detail
           note: 优化器或学习率调度细节；影响数值复现，但不定义算法身份。
-        pretraining_stage.optimizer.momentum:
+        pretraining_stage.optimizer.beta1:
           current: 0.9
           value_type: number
           ui_control: number
@@ -3679,14 +3680,14 @@ methods:
           origin: implementation_or_training_detail
           note: 优化器或学习率调度细节；影响数值复现，但不定义算法身份。
         pretraining_stage.optimizer.weight_decay:
-          current: 0.0001
+          current: 0.0
           value_type: number
           ui_control: number
           reproduction_impact: low_to_medium
           origin: implementation_or_training_detail
           note: 优化器或学习率调度细节；影响数值复现，但不定义算法身份。
         pretraining_stage.scheduler.name:
-          current: none
+          current: linear_after
           value_type: string
           ui_control: text
           reproduction_impact: high
@@ -3795,9 +3796,9 @@ methods:
           note: 工程实现或估计器内部细节；默认折叠。
         feature_stage.layers:
           current:
-          - name: layer3
-            pooling: global_average
           - name: layer4
+            pooling: global_average
+          - name: avgpool
             pooling: global_average
           value_type: list
           ui_control: list_editor
@@ -3814,7 +3815,7 @@ methods:
           origin: implementation_or_training_detail
           note: 数值稳定/病态矩阵保护参数；默认折叠，除非定位数值问题不建议修改。
         gda_stage.covariance_ridge:
-          current: 0.1
+          current: 0.0
           value_type: number
           ui_control: number
           reproduction_impact: low_to_medium

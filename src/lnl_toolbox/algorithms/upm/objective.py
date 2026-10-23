@@ -55,7 +55,9 @@ def predict_true_posterior(
     eta = eta.detach()
     batch, classes = _validate_inputs(clean, noisy_targets, psi, eta)
     one_hot = F.one_hot(noisy_targets.to(torch.long), classes).to(clean.dtype)
-    factor = (1.0 - eta[:, None]) * one_hot + eta[:, None] * psi[:, None]
+    # Match the author's predict_truelabel probability floor: an exact zero
+    # would make eta=0 an absorbing state for subsequent posterior updates.
+    factor = ((1.0 - eta[:, None]) * one_hot + eta[:, None] * psi[:, None]).clamp_min(1e-5)
     unnormalized = clean * factor
     denominator = unnormalized.sum(1, keepdim=True)
     if not bool(torch.isfinite(denominator).all()) or bool((denominator <= 0).any()):

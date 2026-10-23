@@ -228,6 +228,7 @@ class CifarResNet(nn.Module):
         self.layer4 = self._make_layer(block, base_width * 8, layer_counts[3], 2)
         self.preactivation = preactivation and variant != "dss_author"
         self.final_bn = nn.BatchNorm2d(base_width * 8) if self.preactivation else nn.Identity()
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
         self.classifier = nn.Linear(
             base_width * 8,
             num_classes,
@@ -261,7 +262,7 @@ class CifarResNet(nn.Module):
         output = self.layer4(self.layer3(self.layer2(self.layer1(self.stem(inputs)))))
         if self.preactivation:
             output = F.relu(self.final_bn(output), inplace=True)
-        return F.adaptive_avg_pool2d(output, 1).flatten(1)
+        return self.avgpool(output).flatten(1)
 
     def forward_with_features(
         self,

@@ -296,7 +296,11 @@ def run_fine_experiment(
     components = {"model": model, "ema": ema, "optimizer": optimizer}
     if warmup_stopping.stopped and start_epoch < warmup_epochs:
         warmup_stopping.restore_best(components)
-    snapshot_loader = prepared.loader_for_dataset(snapshot_dataset, shuffle=False, stream=1000)
+    # Snapshot forwards use train-mode BatchNorm, as in the author's shuffled
+    # train loader. Keep every sample and resolve predictions by stable index.
+    snapshot_loader = prepared.loader_for_dataset(
+        snapshot_dataset, shuffle=True, drop_last=False, stream=1000,
+    )
     for epoch in stage_epochs(start_epoch, epochs, warmup_epochs, warmup_stopping, main_stopping):
         train_loader = prepared.loader(DataRole.TRAIN, epoch=epoch)
         snapshot_loader.generator.manual_seed(seed + epoch + 1000)

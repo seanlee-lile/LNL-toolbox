@@ -326,7 +326,7 @@ def run_pcse_experiment(
         else None
     )
     train_loader = prepared.loader(DataRole.TRAIN, generator_seed=seed + 101)
-    statistics_loader = prepared.loader(DataRole.TRAIN_EVAL, shuffle=False, generator_seed=seed + 102)
+    statistics_loader = prepared.loader(DataRole.TRAIN, shuffle=False, generator_seed=seed + 102)
     validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False, generator_seed=seed + 103)
     test_loader = prepared.loader(DataRole.TEST, shuffle=False, generator_seed=seed + 104)
 

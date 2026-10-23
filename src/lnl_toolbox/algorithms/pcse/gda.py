@@ -43,12 +43,11 @@ class GDALayer:
             raise ValueError("GDA clean priors must be positive and sum to one")
         if not np.allclose(covariance, covariance.T, atol=1e-9, rtol=1e-7):
             raise ValueError("GDA shared covariance must be symmetric")
-        try:
-            np.linalg.cholesky(covariance)
-        except np.linalg.LinAlgError as exc:
-            raise ValueError(
-                "GDA shared covariance is not positive definite"
-            ) from exc
+        if self.covariance_ridge > 0:
+            try:
+                np.linalg.cholesky(covariance)
+            except np.linalg.LinAlgError as exc:
+                raise ValueError("GDA shared covariance is not positive definite") from exc
         object.__setattr__(self, "clean_priors", priors.copy())
         object.__setattr__(self, "means", means.copy())
         object.__setattr__(self, "shared_covariance", covariance.copy())
@@ -62,9 +61,7 @@ class GDALayer:
             raise ValueError("GDA features must have shape [N,D]")
         if not np.isfinite(values).all():
             raise ValueError("GDA features must be finite")
-        precision_means = np.linalg.solve(
-            self.shared_covariance, self.means.T
-        ).T
+        precision_means = self.means @ np.linalg.pinv(self.shared_covariance, hermitian=True)
         biases = (
             -0.5 * np.einsum("cd,cd->c", self.means, precision_means)
             + np.log(self.clean_priors)
@@ -93,14 +90,10 @@ def fit_gda_layers(
         raise ValueError("GDA covariance ridge must be finite and non-negative")
     layers: list[GDALayer] = []
     for layer in statistics.layers:
-        shared = np.einsum(
-            "c,cij->ij",
-            statistics.clean_priors,
-            layer.clean_covariances,
-        )
+        shared = layer.clean_covariances.mean(axis=0)
         shared = 0.5 * (shared + shared.T)
         smallest = float(np.linalg.eigvalsh(shared).min())
-        if smallest < -1e-8:
+        if covariance_ridge > 0 and smallest < -1e-8:
             raise ValueError(
                 f"PCSE layer {layer.name!r} recovered a non-PSD covariance: "
                 f"minimum eigenvalue={smallest:.6g}"
@@ -186,14 +179,19 @@ def fit_ensemble_weights(
         optimizer.load_state_dict(optimizer_state)
     losses: list[float] = []
     for _ in range(epochs):
-        weights = torch.softmax(parameter, dim=0)
-        mixture = torch.einsum("l,lnc->nc", weights, probabilities)
-        observed = mixture.gather(1, targets[:, None]).squeeze(1)
-        loss = -torch.log(observed.clamp_min(torch.finfo(torch.float64).tiny)).mean()
-        if not torch.isfinite(loss):
-            raise ValueError("PCSE ensemble NLL became non-finite")
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        optimizer.step()
-        losses.append(float(loss.detach().item()))
+        order = torch.randperm(samples)
+        total_loss = 0.0
+        for start in range(0, samples, 50):
+            indices = order[start:start + 50]
+            weights = torch.softmax(parameter, dim=0)
+            mixture = torch.einsum("l,lnc->nc", weights, probabilities[:, indices])
+            observed = mixture.gather(1, targets[indices, None]).squeeze(1)
+            loss = -torch.log(observed + 1e-10).mean()
+            if not torch.isfinite(loss):
+                raise ValueError("PCSE ensemble NLL became non-finite")
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            optimizer.step()
+            total_loss += float(loss.detach().item()) * len(indices)
+        losses.append(total_loss / samples)
     return parameter, optimizer, losses

@@ -72,7 +72,9 @@ class _DualTTransitionBackend:
     requires_snapshot = True
 
     def estimate(self, snapshot: PosteriorSnapshot) -> TransitionArtifact:
-        return DualTransitionEstimator().estimate(snapshot)
+        # Preserve this legacy engineering backend; the PCSE reproduction
+        # uses paper_volmin, and the Dual-T runner uses filtered anchors.
+        return DualTransitionEstimator(percentile=None).estimate(snapshot)
 
 
 class _PaperVolMinTransitionBackend:
@@ -350,6 +352,12 @@ class PCSEAlgorithm:
         stopping.replay_file(self.run_dir / "metrics.jsonl", event="epoch", phase="pretraining", completed=self.state.pretraining_completed_epochs)
         while self.state.pretraining_completed_epochs < target and not stopping.stopped:
             epoch = self.state.pretraining_completed_epochs
+            from lnl_toolbox.training.experiment import apply_epoch_beta1
+            apply_epoch_beta1(
+                self.pretraining_algorithm.optimizer,
+                self.method_config.pretraining.scheduler,
+                epoch,
+            )
             train = _train_supervised_epoch(
                 self.pretraining_algorithm,
                 self.train_loader,
@@ -609,7 +617,7 @@ class PCSEAlgorithm:
                 "source_pretrained_checkpoint_sha256": (
                     self.state.pretrained_checkpoint_sha256
                 ),
-                "feature_model_checkpoint_sha256": final_hash,
+                "feature_model_checkpoint_sha256": self.state.pretrained_checkpoint_sha256,
                 "noise_manifest_sha256": self.noise_metadata.get(
                     "manifest_sha256", ""
                 ),
@@ -644,14 +652,14 @@ class PCSEAlgorithm:
                 raise ValueError("PCSE VolMin transition hash mismatch")
             if loaded_transition.metadata.get(
                 "feature_model_checkpoint_sha256"
-            ) != final_hash:
+            ) != self.state.pretrained_checkpoint_sha256:
                 raise ValueError(
                     "PCSE VolMin transition model provenance mismatch"
                 )
             final_temporary.replace(self.volmin_final_path)
             transition_temporary.replace(self.transition_path)
             self.state.volmin_final_checkpoint_sha256 = final_hash
-            self.state.feature_model_checkpoint_sha256 = final_hash
+            self.state.feature_model_checkpoint_sha256 = self.state.pretrained_checkpoint_sha256
             self.state.transition_artifact_hash = (
                 loaded_transition.artifact_hash
             )
@@ -661,7 +669,7 @@ class PCSEAlgorithm:
                 "event": "transition",
                 "stage": "transition",
                 "backend": "paper_volmin",
-                "feature_model_checkpoint_sha256": final_hash,
+                "feature_model_checkpoint_sha256": self.state.pretrained_checkpoint_sha256,
                 "transition_artifact_hash": loaded_transition.artifact_hash,
                 **dict(diagnostics),
             })
@@ -845,23 +853,8 @@ class PCSEAlgorithm:
         )
 
     def _load_feature_model(self) -> None:
-        if self.transition_backend.name == "dual_t":
-            self._load_best_model()
-            expected = self.state.pretrained_checkpoint_sha256
-        else:
-            if not self.volmin_final_path.is_file():
-                raise FileNotFoundError(
-                    "PCSE VolMin final model checkpoint is missing"
-                )
-            actual = _file_sha256(self.volmin_final_path)
-            if actual != self.state.volmin_final_checkpoint_sha256:
-                raise ValueError(
-                    "PCSE VolMin final model checkpoint hash mismatch"
-                )
-            payload = read_checkpoint(self.volmin_final_path, "cpu")
-            self._validate_volmin_final_payload(payload)
-            self.pretraining_algorithm.model.load_state_dict(payload["model"])
-            expected = actual
+        self._load_best_model()
+        expected = self.state.pretrained_checkpoint_sha256
         if expected != self.state.feature_model_checkpoint_sha256:
             raise ValueError("PCSE feature-model checkpoint identity mismatch")
 
@@ -975,6 +968,26 @@ class PCSEAlgorithm:
             )
         ])
         reference = features.snapshots[0]
+        # The discriminative member is the original pretrained classifier,
+        # not the backbone subsequently updated by transition estimation.
+        backbone = self.external_source_model or self.pretraining_algorithm.model
+        current_weights = deepcopy(backbone.state_dict())
+        try:
+            if self.external_source_model is None:
+                payload = read_checkpoint(self.pretrained_best_path, "cpu")
+                backbone.load_state_dict(payload["pretraining_algorithm"]["model"])
+            discriminative = collect_posterior_snapshot(
+                backbone, loader, self.device, dataset=self.dataset, split=split,
+            )
+        finally:
+            backbone.load_state_dict(current_weights)
+        if not np.array_equal(discriminative.global_indices, reference.global_indices) or not np.array_equal(
+            discriminative.noisy_targets, reference.noisy_targets
+        ):
+            raise ValueError("PCSE discriminative and GDA samples are misaligned")
+        probabilities = np.concatenate(
+            (probabilities, discriminative.noisy_probabilities[None, :, :]), axis=0
+        )
         return probabilities, reference.noisy_targets, reference.global_indices
 
     def start_ensemble_training(self) -> None:
@@ -983,7 +996,7 @@ class PCSEAlgorithm:
         if self.gda_artifact is None:
             self._restore_gda_artifact()
         self.ensemble_raw_weights = torch.zeros(
-            len(self.gda_artifact.layers),
+            len(self.gda_artifact.layers) + 1,
             dtype=torch.float64,
             requires_grad=True,
         )
@@ -1024,7 +1037,7 @@ class PCSEAlgorithm:
             self.ensemble_raw_weights = raw
             self.ensemble_optimizer = optimizer
             self.state.ensemble_completed_epochs += 1
-            self.state.ensemble_global_step += 1
+            self.state.ensemble_global_step += (len(targets) + 49) // 50
             weights = torch.softmax(raw.detach(), dim=0)
             self._append_metrics({
                 "event": "epoch",
@@ -1051,7 +1064,7 @@ class PCSEAlgorithm:
             self.ensemble_raw_weights.detach(), dim=0
         ).cpu().numpy()
         ensemble = PCSEEnsembleArtifact(
-            layer_names=tuple(layer.name for layer in self.gda_artifact.layers),
+            layer_names=tuple(layer.name for layer in self.gda_artifact.layers) + ("discriminative",),
             weights=weights,
             provenance={
                 "method": "pcse",
@@ -1201,8 +1214,13 @@ class PCSEAlgorithm:
                 raise ValueError("PCSE VolMin source checkpoint mismatch")
             if transition.metadata.get(
                 "feature_model_checkpoint_sha256"
-            ) != self.state.volmin_final_checkpoint_sha256:
+            ) != self.state.pretrained_checkpoint_sha256:
                 raise ValueError("PCSE VolMin feature-model provenance mismatch")
+            if not self.volmin_final_path.is_file():
+                raise FileNotFoundError("PCSE VolMin final model checkpoint is missing")
+            if _file_sha256(self.volmin_final_path) != self.state.volmin_final_checkpoint_sha256:
+                raise ValueError("PCSE VolMin final model checkpoint hash mismatch")
+            self._validate_volmin_final_payload(read_checkpoint(self.volmin_final_path, "cpu"))
             self._load_feature_model()
             self.snapshot = None
         self.transition = transition
@@ -1341,6 +1359,8 @@ class PCSEAlgorithm:
             optimizer_state = payload.get("ensemble_optimizer")
             if not torch.is_tensor(raw) or optimizer_state is None:
                 raise ValueError("PCSE checkpoint ensemble state is missing")
+            if raw.shape != (len(self.gda_artifact.layers) + 1,):
+                raise ValueError("PCSE checkpoint ensemble must include the discriminative classifier")
             self.ensemble_raw_weights = raw.to(
                 dtype=torch.float64
             ).detach().requires_grad_(True)
@@ -1353,6 +1373,8 @@ class PCSEAlgorithm:
             if not self.ensemble_path.is_file():
                 raise FileNotFoundError("PCSE ensemble artifact is missing")
             ensemble = PCSEEnsembleArtifact.load(self.ensemble_path)
+            if ensemble.layer_names != tuple(layer.name for layer in self.gda_artifact.layers) + ("discriminative",):
+                raise ValueError("PCSE ensemble classifier order mismatch")
             if ensemble.artifact_hash != self.state.ensemble_artifact_hash:
                 raise ValueError("PCSE ensemble artifact hash mismatch")
             if ensemble.provenance.get("gda_artifact_hash") != (

@@ -10,7 +10,8 @@ data:
   validation_size: 5000
   split_strategy: stratified
   split_rng: default_rng
-  augment: false
+  augment: true
+  reflect_padding: true
   preprocessing: standard
 noise:
   mode: generated
@@ -24,20 +25,26 @@ noise:
 pretraining_stage:
   mode: train
   method: cross_entropy
-  epochs: 100
+  epochs: 200
   checkpoint_selection: noisy_validation_accuracy
   model:
     name: resnet18
-    base_width: 16
+    base_width: 64
+    stem_padding: 0
+    initialization: torch_default
   loss:
     name: ce
   optimizer:
-    name: sgd
-    lr: 0.05
-    momentum: 0.9
-    weight_decay: 0.0001
+    name: adam
+    lr: 0.001
+    beta1: 0.9
+    weight_decay: 0.0
   scheduler:
-    name: none
+    name: linear_after
+    start_epoch: 80
+    end_epoch: 200
+    beta1_before: 0.9
+    beta1_after: 0.1
 transition_stage:
   name: paper_volmin
   # VolMinNet CIFAR-10 reference budget; not a PCSE paper-mandated epoch count.
@@ -58,17 +65,17 @@ transition_stage:
   condition_limit: 1000000.0
 feature_stage:
   layers:
-  - name: layer3
-    pooling: global_average
   - name: layer4
+    pooling: global_average
+  - name: avgpool
     pooling: global_average
 statistics_stage:
   condition_limit: 100000000.0
 gda_stage:
-  covariance_ridge: 0.1
+  covariance_ridge: 0.0
 ensemble_stage:
-  epochs: 5
-  learning_rate: 0.05
+  epochs: 20
+  learning_rate: 0.02
 loader:
   batch_size: 128
   num_workers: 4

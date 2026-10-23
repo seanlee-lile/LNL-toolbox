@@ -296,16 +296,43 @@ class DualTPaperProtocolTest(unittest.TestCase):
 
 class _dual_t_forward_DualTMathTest(unittest.TestCase):
 
+    def test_imagenet_variant_is_used_for_both_formal_models(self) -> None:
+        import yaml
+        from lnl_toolbox.training.experiment import build_model
+        config = yaml.safe_load((Path(__file__).resolve().parents[1] / 'configs/reproduction/cifar10_dual_t_sym20.yaml').read_text(encoding='utf-8'))
+        for stage in ('posterior_stage', 'final_stage'):
+            model = build_model(config[stage]['model'], 10)
+            self.assertEqual(model.conv1.kernel_size, (7, 7))
+            self.assertEqual(model.conv1.stride, (2, 2))
+            self.assertEqual(model.conv1.padding, (3, 3))
+            self.assertIsInstance(model.maxpool, nn.MaxPool2d)
+            model.eval()
+            with torch.no_grad():
+                self.assertEqual(model(torch.zeros(1, 3, 32, 32)).shape, (1, 10))
+        ordinary = build_model({'name':'resnet18', 'base_width':4}, 3)
+        self.assertEqual(ordinary.stem[0].kernel_size, (3, 3))
+        self.assertEqual(ordinary.stem[0].stride, (1, 1))
+        self.assertFalse(any(isinstance(item, nn.MaxPool2d) for item in ordinary.stem))
+
     @staticmethod
     def _snapshot() -> PosteriorSnapshot:
         return PosteriorSnapshot(noisy_probabilities=np.asarray([[0.9, 0.05, 0.05], [0.6, 0.2, 0.2], [0.1, 0.8, 0.1], [0.2, 0.6, 0.2], [0.05, 0.05, 0.9], [0.2, 0.2, 0.6]]), noisy_targets=np.asarray([0, 1, 1, 2, 2, 0]), global_indices=np.asarray([30, 20, 10, 40, 50, 60]), dataset='fixture', split='train')
 
     def test_t_club_times_t_spade_and_not_reverse(self) -> None:
-        artifact = DualTransitionEstimator().estimate(self._snapshot())
+        snapshot = self._snapshot()
+        before = snapshot.noisy_probabilities.copy()
+        artifact = DualTransitionEstimator().estimate(snapshot)
+        np.testing.assert_array_equal(snapshot.noisy_probabilities, before)
         t_club = np.asarray(artifact.metadata['t_club'])
         t_spade = np.asarray(artifact.metadata['t_spade'])
         np.testing.assert_allclose(artifact.matrix, t_club @ t_spade)
-        self.assertFalse(np.allclose(t_club @ t_spade, t_spade @ t_club))
+        probabilities = self._snapshot().noisy_probabilities
+        positions = []
+        for column in probabilities.T:
+            threshold = np.percentile(column, 97, method='higher')
+            positions.append(np.argmax(np.where(column < threshold, column, -np.inf)))
+        np.testing.assert_allclose(t_club, probabilities[positions])
+        self.assertEqual(artifact.metadata['anchor_percentile'], 97.0)
 
     def test_stable_index_permutation_does_not_change_estimate(self) -> None:
         original = self._snapshot()

@@ -255,13 +255,14 @@ class KnownTransitionEstimator:
 class DualTransitionEstimator:
     """Yao et al. (NeurIPS 2020), Algorithm 1, in row-vector convention."""
 
+    percentile: float | None = 97.0
+
     def estimate(
         self,
         snapshot: PosteriorSnapshot,
         *,
         allow_empty_intermediate: bool = False,
     ) -> TransitionArtifact:
-        t_club_artifact = AnchorTransitionEstimator().estimate(snapshot)
         probabilities = snapshot.noisy_probabilities
         intermediate_targets = probabilities.argmax(axis=1)
 
@@ -283,6 +284,7 @@ class DualTransitionEstimator:
         t_spade[present] = counts[present] / totals[present, None]
         if missing.size:
             t_spade[missing] = 1.0 / snapshot.num_classes
+        t_club_artifact = AnchorTransitionEstimator(percentile=self.percentile).estimate(snapshot)
         matrix = t_club_artifact.matrix @ t_spade
         return TransitionArtifact(
             matrix=matrix,
@@ -297,6 +299,7 @@ class DualTransitionEstimator:
                 "t_spade": t_spade.tolist(),
                 "t_spade_counts": counts.tolist(),
                 "t_club_artifact_hash": t_club_artifact.artifact_hash,
+                "anchor_percentile": self.percentile,
                 "anchor_global_indices": t_club_artifact.metadata[
                     "anchor_global_indices"
                 ],
