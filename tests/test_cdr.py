@@ -1,4 +1,5 @@
 import math
+import copy
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,6 +24,29 @@ class _cdr__VectorModel(torch.nn.Module):
         return self.values
 
 class _cdr_CDRUpdatePolicyTest(unittest.TestCase):
+
+    def test_author_mode_preserves_reporting_forward_and_batchnorm_updates(self) -> None:
+        for mode, forwards in (("paper", 1), ("official_code", 2)):
+            with self.subTest(mode=mode):
+                torch.manual_seed(7)
+                model = torch.nn.Sequential(torch.nn.BatchNorm1d(2), torch.nn.Linear(2, 2))
+                reference = copy.deepcopy(model)
+                optimizer = torch.optim.SGD(model.parameters(), lr=.01)
+                reference_optimizer = torch.optim.SGD(reference.parameters(), lr=.01)
+                policy = CDRUpdatePolicy(.4, 0., compatibility_mode=mode)
+                inputs = torch.tensor([[1., 2.], [2., 1.], [-1., 0.], [0., -1.]])
+                targets = torch.tensor([0, 1, 0, 1])
+                if mode == "official_code":
+                    reference(inputs)
+                objective = CrossEntropyLoss()(reference(inputs), targets).mean()
+                CDRUpdatePolicy(.4, 0., compatibility_mode=mode).update(
+                    ParameterUpdateInput(objective, reference, reference_optimizer, RunState()))
+                algorithm = SupervisedClassificationAlgorithm(
+                    model, optimizer, CrossEntropyLoss(), torch.device('cpu'), update_policy=policy)
+                algorithm.step(Batch({'input': inputs, 'target': targets, 'index': torch.arange(4)}), RunState())
+                self.assertEqual(int(model[0].num_batches_tracked), forwards)
+                for name, value in model.state_dict().items():
+                    torch.testing.assert_close(value, reference.state_dict()[name])
 
     def test_criticality_and_exact_top_k_match_equations_three_and_four(self) -> None:
         parameter = torch.nn.Parameter(torch.tensor([2.0, -1.0, 0.0, 4.0]))

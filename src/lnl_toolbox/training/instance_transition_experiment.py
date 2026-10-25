@@ -595,7 +595,7 @@ def run_instance_transition_experiment(
                 learning_rate=estimator.basis_learning_rate,
                 loss_threshold=estimator.basis_loss_threshold,
                 seed=estimator.representation_seed,
-                official_raw=False,
+                official_raw=True,
             )
             # The reference clips only the train basis group before
             # correction; validation is normalized later by tools.norm().
@@ -607,7 +607,7 @@ def run_instance_transition_experiment(
                 representation_coefficients=representation_coefficients,
                 representation_indices=representation_indices,
                 part_matrices=train_basis,
-                official_raw_basis=False,
+                official_raw_basis=True,
             )
             validation_artifact = estimator.estimate_from_shared_representation(
                 validation_features,
@@ -616,7 +616,7 @@ def run_instance_transition_experiment(
                 representation_coefficients=representation_coefficients,
                 representation_indices=representation_indices,
                 part_matrices=validation_basis,
-                official_raw_basis=False,
+                official_raw_basis=True,
             )
             # This mirrors the official val_revision call: validation W is
             # paired with the train-fitted basis matrices.

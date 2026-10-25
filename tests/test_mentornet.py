@@ -175,6 +175,21 @@ class _mentornet_MentorNetTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'hash mismatch'):
                 MentorArtifact.load(path)
 
+    def test_artifact_hash_is_independent_of_torch_serialization_format(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'mentor.pt'
+            artifact = self._artifact(path)
+            payload = torch.load(path, map_location='cpu', weights_only=False)
+            portable_hash = artifact.artifact_hash
+            original_save = torch.save
+
+            def save_with_different_protocol(value, destination, **kwargs):
+                return original_save(value, destination, pickle_protocol=4, **kwargs)
+
+            with patch('lnl_toolbox.training.mentor_artifacts.torch.save', side_effect=save_with_different_protocol):
+                torch.save(payload, path)
+            self.assertEqual(MentorArtifact.load(path).artifact_hash, portable_hash)
+
     def test_step_milestone_policy_and_plugin(self) -> None:
         model = torch.nn.Linear(2, 1)
         optimizer = torch.optim.SGD(model.parameters(), lr=0.1)

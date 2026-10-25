@@ -282,6 +282,11 @@ def adapt_method_template(
     candidate = data_service.apply(_paper_method_config(base_config), dataset_alias)
     data = dict(candidate.get("data", {}) or {})
     data["name"] = str(dataset_profile.get("adapter") or data.get("name", ""))
+    if not data["name"].startswith("synthetic_"):
+        # These sizes generate synthetic samples; real adapters load their
+        # registered splits and do not consume these inherited recipe fields.
+        data.pop("train_size", None)
+        data.pop("test_size", None)
     candidate["data"] = data
     source_dataset = str(_get(base_config, ("data", "name"), "")).replace("_", "").lower()
     selected_dataset = data["name"].replace("_", "").lower()

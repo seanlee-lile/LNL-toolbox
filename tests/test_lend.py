@@ -242,6 +242,9 @@ class LENDConvergenceAndScratchTest(unittest.TestCase):
                                max_steps=1000, diagnostics=diagnostics)
         torch.testing.assert_close(result, torch.full_like(labels, .5), atol=1e-8, rtol=0)
         self.assertEqual(diagnostics['converged'], 1.)
+        self.assertEqual(diagnostics['initial_classes'], 2.)
+        self.assertEqual(diagnostics['final_classes'], 2.)
+        self.assertEqual(diagnostics['dominant_class_fraction'], .5)
         self.assertLessEqual(diagnostics['residual'], 1e-8)
         self.assertLess(diagnostics['iterations'], 10)
         self.assertFalse(result.requires_grad)
@@ -373,6 +376,17 @@ class LENDConvergenceAndScratchTest(unittest.TestCase):
 
 
 class _lend_dilution_LENDDilutionTest(unittest.TestCase):
+
+    def test_numeric_convergence_also_reports_class_collapse(self):
+        labels = torch.tensor([[1., 0.], [0., 1.], [1., 0.]], dtype=torch.float64)
+        graph = torch.full((3, 3), 1 / 3, dtype=torch.float64)
+        diagnostics = {}
+        dilute_labels(labels, graph, alpha=.99, policy='until_converged',
+                      tolerance=1e-8, diagnostics=diagnostics)
+        self.assertEqual(diagnostics['converged'], 1.)
+        self.assertEqual(diagnostics['initial_classes'], 2.)
+        self.assertEqual(diagnostics['final_classes'], 1.)
+        self.assertEqual(diagnostics['dominant_class_fraction'], 1.)
 
     def test_single_and_multiple_step_equation(self):
         labels = torch.eye(2)

@@ -1683,6 +1683,18 @@ class CommandConsoleTest(unittest.TestCase):
         fields = {field["path"]: field for field in command_console._config_schema(recipe)["fields"]}
         self.assertFalse(fields["data.dimension"]["editable"])
         self.assertFalse(fields["model.in_features"]["editable"])
+        from copy import deepcopy
+        from lnl_toolbox.catalog import load_yaml, recipe_by_id
+
+        adapted = deepcopy(load_yaml(recipe_by_id(recipe, command_console.ROOT).config_path))
+        adapted["data"]["name"] = "cifar10"
+        adapted["data"]["dimension"] = 3072
+        adapted["model"] = {"name": "resnet18", "base_width": 16, "num_classes": 2}
+        command_console._assert_locked_parameters_unchanged(adapted, deepcopy(adapted), "importance_reweighting")
+        self.assertEqual(
+            command_console._parameter_edit_rule(adapted, "importance_reweighting", "model.in_features", "advanced")[0],
+            "fixed",
+        )
         with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
             with self.assertRaisesRegex(ValueError, "锁定参数"):
                 command_console._save_config({

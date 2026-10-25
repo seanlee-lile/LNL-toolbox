@@ -209,6 +209,11 @@ class CDRUpdatePolicy:
 
         return self._compatibility_mode
 
+    @property
+    def requires_reporting_forward(self) -> bool:
+        """The released train loop forwards once before train_one_step."""
+        return self.compatibility_mode == "official_code"
+
     def setup(self, context: ExperimentContext) -> None:
         del context
 

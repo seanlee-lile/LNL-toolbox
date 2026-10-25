@@ -199,6 +199,14 @@ class CWDGlobalObjective:
             cross = (weight * centroids).sum()
             if bias is not None:
                 cross = cross + (bias * prior).sum()
+        self.last_diagnostics = {
+            "constant": self.constant,
+            "quadratic": float(quadratic.detach().item()),
+            "cross": float(cross.detach().item()),
+            "feature_abs_max": float(features.detach().abs().max().item()),
+            "centroid_norm": float(centroids.detach().norm().item()),
+            "classifier_weight_norm": float(weight.detach().norm().item()),
+        }
         return validate_objective(self.constant + quadratic - 2.0 * cross)
 
     def bind_statistic(self, statistic: StatisticArtifact) -> None:

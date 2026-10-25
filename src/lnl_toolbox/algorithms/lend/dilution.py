@@ -49,6 +49,14 @@ def dilute_labels(noisy_onehot: Tensor, graph: Tensor, *, alpha: float,
         if policy == "until_converged":
             raise RuntimeError(f"LEND dilution did not converge after {limit} iterations "
                                f"(residual={residual:.6g}, tolerance={tolerance:.6g})")
+    if diagnostics is not None:
+        labels = current.argmax(dim=1)
+        counts = torch.bincount(labels, minlength=current.shape[1])
+        diagnostics.update(
+            initial_classes=float(noisy_onehot.argmax(dim=1).unique().numel()),
+            final_classes=float((counts > 0).sum().item()),
+            dominant_class_fraction=float(counts.max().item() / current.shape[0]),
+        )
     return current.detach()
 
 

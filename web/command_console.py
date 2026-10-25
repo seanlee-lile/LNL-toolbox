@@ -2508,6 +2508,9 @@ def _parameter_edit_rule(
     derived = registry.get("runtime_derived_parameter_paths", {})
     if path in derived.get(method, ()):
         if method == "importance_reweighting":
+            model = config.get("model", {})
+            if isinstance(model, dict) and model.get("name", "linear") != "linear":
+                return "fixed", "当前模型不使用线性输入维度参数。", None
             _, dimension = _config_path_value(config, "data.dimension")
             if dimension is None:
                 return "fixed", "输入特征数由当前数据决定。", None

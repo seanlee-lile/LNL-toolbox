@@ -355,6 +355,9 @@ class UPMWorkflow:
                             event="main_epoch", completed=self.state.main_completed_epochs, zero_based=True)
         self._prepare_main()
         assert self.main_algorithm is not None
+        psi_observed = self.snapshot.noisy_probabilities[
+            np.arange(len(self.snapshot.noisy_targets)), self.snapshot.noisy_targets
+        ]
         target = self.method_config.main.epochs
         if max_epochs is not None:
             target = min(target, self.state.main_completed_epochs + int(max_epochs))
@@ -388,6 +391,11 @@ class UPMWorkflow:
                 "eta_mean": float(eta.mean().item()),
                 "eta_min": float(eta.min().item()),
                 "eta_max": float(eta.max().item()),
+                "eta_zero_fraction": float(eta.eq(0).double().mean().item()),
+                "eta_one_fraction": float(eta.eq(1).double().mean().item()),
+                "psi_observed_mean": float(psi_observed.mean()),
+                "psi_observed_min": float(psi_observed.min()),
+                "psi_observed_max": float(psi_observed.max()),
                 "eta_update_count": float(counts.sum().item()),
             })
             _save_eta(self.run_dir / "eta_last.npz", self.eta_state)

@@ -307,6 +307,8 @@ class QuickStartServiceTests(unittest.TestCase):
         self.assertEqual(config["noise"]["rho_negative"], 0.1)
         self.assertEqual(config["risk"]["rho_positive"], 0.2)
         self.assertEqual(config["risk"]["rho_negative"], 0.1)
+        self.assertNotIn("train_size", config["data"])
+        self.assertNotIn("test_size", config["data"])
 
         symmetric = adapt_method_template(
             method_template_for_paper(paper).config,

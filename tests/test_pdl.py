@@ -68,15 +68,22 @@ class _pdl_PDLTest(unittest.TestCase):
             'algorithm': {'correction': 'forward'},
         }))
 
-    def test_revision_projects_negative_entries_to_zero(self) -> None:
+    def test_revision_matches_author_absolute_normalization_and_gradient(self) -> None:
+        matrices = torch.tensor([[[-0.2, 0.8], [0.4, 0.6]]], requires_grad=True)
         actual = _row_positive_normalize(
-            torch.tensor([[[-0.2, 0.8], [0.4, 0.6]]])
+            matrices
         )
         torch.testing.assert_close(
-            actual[0, 0], torch.tensor([0.0, 1.0])
+            actual[0, 0], torch.tensor([0.2, 0.8])
+        )
+        actual[0, 0, 0].backward()
+        torch.testing.assert_close(matrices.grad[0, 0], torch.tensor([-0.8, -0.2]))
+        torch.testing.assert_close(
+            _row_positive_normalize(torch.tensor([[[-0.2, -0.8]]])),
+            torch.tensor([[[0.2, 0.8]]]),
         )
         with self.assertRaisesRegex(ValueError, "all-zero"):
-            _row_positive_normalize(torch.tensor([[[-0.2, -0.8]]]))
+            _row_positive_normalize(torch.zeros(1, 1, 2))
 
     def test_validation_uses_training_projection_for_negative_entries(self) -> None:
         from types import SimpleNamespace
@@ -92,7 +99,7 @@ class _pdl_PDLTest(unittest.TestCase):
         observed = torch.bmm(clean.unsqueeze(1), _row_positive_normalize(matrices)).squeeze(1)
         expected = -(clean[0, 1] / observed[0, 1]) * observed[0, 1].log()
         self.assertAlmostEqual(actual["loss"], float(expected), places=7)
-        invalid = SimpleNamespace(transition_for=lambda *args, **kwargs: -torch.ones(1, 2, 2))
+        invalid = SimpleNamespace(transition_for=lambda *args, **kwargs: torch.zeros(1, 2, 2))
         with self.assertRaisesRegex(ValueError, "all-zero"):
             _pdl_validation(nn.Identity(), loader, invalid, torch.device("cpu"), revision=False)
 
