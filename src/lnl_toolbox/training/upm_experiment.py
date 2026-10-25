@@ -370,6 +370,9 @@ class UPMWorkflow:
                 self.main_scheduler.step()
             eta = self.eta_state.eta
             counts = self.eta_state.update_count
+            psi_observed = self.snapshot.noisy_probabilities[
+                np.arange(len(self.snapshot.noisy_targets)), self.snapshot.noisy_targets
+            ]
             self._append({
                 "event": "main_epoch", "epoch": epoch, **train,
                 "noisy_validation_loss": validation["loss"],
@@ -377,6 +380,11 @@ class UPMWorkflow:
                 "eta_mean": float(eta.mean().item()),
                 "eta_min": float(eta.min().item()),
                 "eta_max": float(eta.max().item()),
+                "eta_zero_fraction": float(eta.eq(0).double().mean().item()),
+                "eta_one_fraction": float(eta.eq(1).double().mean().item()),
+                "psi_observed_mean": float(psi_observed.mean()),
+                "psi_observed_min": float(psi_observed.min()),
+                "psi_observed_max": float(psi_observed.max()),
                 "eta_update_count": float(counts.sum().item()),
             })
             _save_eta(self.run_dir / "eta_last.npz", self.eta_state)
@@ -397,6 +405,7 @@ class UPMWorkflow:
         self.state.advance(UPMPhase.COMPLETED)
         eta_best_tensor = torch.as_tensor(self.best_eta_state["eta"])
         final = {
+            "event": "final",
             "method": "upm",
             "phase": self.state.phase.value,
             "completed_epochs": self.state.main_completed_epochs,
@@ -409,12 +418,16 @@ class UPMWorkflow:
             "clean_test_accuracy": test["accuracy"],
             "psi_snapshot_hash": self.state.psi_snapshot_hash,
             "eta_best_mean": float(eta_best_tensor.mean().item()),
+            "eta_update_count": int(self.eta_state.update_count.sum().item()),
+            "eta_updated_sample_fraction": float((self.eta_state.update_count > 0).float().mean().item()),
+            "best_eta_updated_sample_fraction": float((torch.as_tensor(self.best_eta_state["update_count"]) > 0).float().mean().item()),
             "noise_mapping_hash": self.noise_metadata.get("mapping_hash", ""),
             "test_selection_leakage": False,
         }
         (self.run_dir / "final_metrics.json").write_text(
             json.dumps(final, indent=2), encoding="utf-8"
         )
+        self._append(final)
         self._save_last()
 
     def run(self) -> None:

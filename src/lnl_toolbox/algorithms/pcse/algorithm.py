@@ -8,6 +8,7 @@ boundary intentionally leaves room for a future ``paper_volmin`` producer.
 """
 
 import hashlib
+from copy import deepcopy
 import json
 from pathlib import Path
 from typing import Any, Mapping, Protocol
@@ -183,6 +184,7 @@ class PCSEAlgorithm:
     ) -> None:
         self.config = dict(config)
         self.method_config = PCSEConfig.from_mapping(config)
+        self._feature_source_policy = "pretrained"
         self.transition_backend = _build_transition_backend(
             self.method_config
         )
@@ -277,6 +279,7 @@ class PCSEAlgorithm:
     def _checkpoint_payload(self, *, role: str) -> dict[str, Any]:
         return {
             "format_version": 2,
+            "feature_source_policy": self._feature_source_policy,
             "method": "pcse",
             "checkpoint_role": role,
             "config": self.config,
@@ -593,6 +596,8 @@ class PCSEAlgorithm:
             loaded_final = read_checkpoint(final_temporary, "cpu")
             self._validate_volmin_final_payload(loaded_final)
             final_hash = _file_sha256(final_temporary)
+            feature_hash = (self.state.pretrained_checkpoint_sha256
+                            if self._feature_source_policy == "pretrained" else final_hash)
             provenance = {
                 "method": "pcse",
                 "transition_backend": "paper_volmin",
@@ -611,7 +616,7 @@ class PCSEAlgorithm:
                 "source_pretrained_checkpoint_sha256": (
                     self.state.pretrained_checkpoint_sha256
                 ),
-                "feature_model_checkpoint_sha256": final_hash,
+                "feature_model_checkpoint_sha256": feature_hash,
                 "noise_manifest_sha256": self.noise_metadata.get(
                     "manifest_sha256", ""
                 ),
@@ -646,14 +651,14 @@ class PCSEAlgorithm:
                 raise ValueError("PCSE VolMin transition hash mismatch")
             if loaded_transition.metadata.get(
                 "feature_model_checkpoint_sha256"
-            ) != final_hash:
+            ) != feature_hash:
                 raise ValueError(
                     "PCSE VolMin transition model provenance mismatch"
                 )
             final_temporary.replace(self.volmin_final_path)
             transition_temporary.replace(self.transition_path)
             self.state.volmin_final_checkpoint_sha256 = final_hash
-            self.state.feature_model_checkpoint_sha256 = final_hash
+            self.state.feature_model_checkpoint_sha256 = feature_hash
             self.state.transition_artifact_hash = (
                 loaded_transition.artifact_hash
             )
@@ -663,7 +668,7 @@ class PCSEAlgorithm:
                 "event": "transition",
                 "stage": "transition",
                 "backend": "paper_volmin",
-                "feature_model_checkpoint_sha256": final_hash,
+                "feature_model_checkpoint_sha256": feature_hash,
                 "transition_artifact_hash": loaded_transition.artifact_hash,
                 **dict(diagnostics),
             })
@@ -835,26 +840,25 @@ class PCSEAlgorithm:
             dataset=self.dataset,
             split=split,
             layers=self.method_config.feature_layers,
+            single_forward=self._feature_source_policy != "legacy_transition",
+            include_classifier=self.method_config.ensemble.include_discriminative,
         )
 
     def _load_feature_model(self) -> None:
-        if self.transition_backend.name == "dual_t":
+        volmin_payload = None
+        if self.transition_backend.name == "paper_volmin":
+            if not self.volmin_final_path.is_file():
+                raise FileNotFoundError("PCSE VolMin final model checkpoint is missing")
+            if _file_sha256(self.volmin_final_path) != self.state.volmin_final_checkpoint_sha256:
+                raise ValueError("PCSE VolMin final model checkpoint hash mismatch")
+            volmin_payload = read_checkpoint(self.volmin_final_path, "cpu")
+            self._validate_volmin_final_payload(volmin_payload)
+        if self.transition_backend.name == "dual_t" or self._feature_source_policy == "pretrained":
             self._load_best_model()
             expected = self.state.pretrained_checkpoint_sha256
         else:
-            if not self.volmin_final_path.is_file():
-                raise FileNotFoundError(
-                    "PCSE VolMin final model checkpoint is missing"
-                )
-            actual = _file_sha256(self.volmin_final_path)
-            if actual != self.state.volmin_final_checkpoint_sha256:
-                raise ValueError(
-                    "PCSE VolMin final model checkpoint hash mismatch"
-                )
-            payload = read_checkpoint(self.volmin_final_path, "cpu")
-            self._validate_volmin_final_payload(payload)
-            self.pretraining_algorithm.model.load_state_dict(payload["model"])
-            expected = actual
+            self.pretraining_algorithm.model.load_state_dict(volmin_payload["model"])
+            expected = self.state.volmin_final_checkpoint_sha256
         if expected != self.state.feature_model_checkpoint_sha256:
             raise ValueError("PCSE feature-model checkpoint identity mismatch")
 
@@ -920,9 +924,13 @@ class PCSEAlgorithm:
         layers = fit_gda_layers(
             self.statistics_artifact.statistics,
             covariance_ridge=self.method_config.covariance_ridge,
+            precision_strategy=self.method_config.precision_strategy,
+            covariance_strategy=self.method_config.covariance_strategy,
         )
         artifact = PCSEGDAArtifact(
             layers,
+            strategy_metadata={"precision": self.method_config.precision_strategy,
+                               "covariance": self.method_config.covariance_strategy},
             provenance={
                 "method": "pcse",
                 "statistics_artifact_hash": (
@@ -968,7 +976,14 @@ class PCSEAlgorithm:
             )
         ])
         reference = features.snapshots[0]
+        if self.method_config.ensemble.include_discriminative:
+            # Feature extraction and source probabilities share the exact same view/order.
+            probabilities = np.concatenate([probabilities, features.classifier_probabilities[None]], axis=0)
         return probabilities, reference.noisy_targets, reference.global_indices
+
+    def _ensemble_members(self) -> tuple[str, ...]:
+        names = tuple(layer.name for layer in self.gda_artifact.layers)
+        return names + ("pretrained_classifier",) if self.method_config.ensemble.include_discriminative else names
 
     def start_ensemble_training(self) -> None:
         if self.state.phase is not PCSEPhase.GDA_READY:
@@ -976,7 +991,7 @@ class PCSEAlgorithm:
         if self.gda_artifact is None:
             self._restore_gda_artifact()
         self.ensemble_raw_weights = torch.zeros(
-            len(self.gda_artifact.layers),
+            len(self._ensemble_members()),
             dtype=torch.float64,
             requires_grad=True,
         )
@@ -1010,6 +1025,7 @@ class PCSEAlgorithm:
                 learning_rate=self.method_config.ensemble.learning_rate,
                 raw_weights=self.ensemble_raw_weights,
                 optimizer_state=self.ensemble_optimizer.state_dict(),
+                batch_size=self.method_config.ensemble.batch_size,
             )
             self.ensemble_raw_weights = raw
             self.ensemble_optimizer = optimizer
@@ -1037,7 +1053,7 @@ class PCSEAlgorithm:
             self.ensemble_raw_weights.detach(), dim=0
         ).cpu().numpy()
         ensemble = PCSEEnsembleArtifact(
-            layer_names=tuple(layer.name for layer in self.gda_artifact.layers),
+            layer_names=self._ensemble_members(),
             weights=weights,
             provenance={
                 "method": "pcse",
@@ -1047,6 +1063,8 @@ class PCSEAlgorithm:
                 "ensemble_learning_rate": (
                     self.method_config.ensemble.learning_rate
                 ),
+                "include_discriminative": self.method_config.ensemble.include_discriminative,
+                "batch_size": self.method_config.ensemble.batch_size,
             },
         )
         loaded = persist_npz_atomically(
@@ -1063,13 +1081,29 @@ class PCSEAlgorithm:
         predictions = posterior.argmax(axis=1)
         test_accuracy = float(np.mean(predictions == clean_targets))
         source_backbone_accuracy = None
-        if self.external_source_model is not None:
-            source_evaluation = evaluate_classification(
-                self.external_source_model,
-                self.clean_test_loader,
-                self.pretraining_algorithm.loss,
-                self.device,
-            )
+        backbone = self.external_source_model or self.pretraining_algorithm.model
+        if backbone is not None:
+            current_weights = deepcopy(backbone.state_dict())
+            current_mode = backbone.training
+            rng_state = capture_rng_state()
+            generator = getattr(self.clean_test_loader, "generator", None)
+            generator_state = generator.get_state() if generator is not None else None
+            try:
+                if self.external_source_model is None:
+                    payload = read_checkpoint(self.pretrained_best_path, "cpu")
+                    backbone.load_state_dict(payload["pretraining_algorithm"]["model"])
+                source_evaluation = evaluate_classification(
+                    backbone,
+                    self.clean_test_loader,
+                    self.pretraining_algorithm.loss,
+                    self.device,
+                )
+            finally:
+                backbone.load_state_dict(current_weights)
+                backbone.train(current_mode)
+                restore_rng_state(rng_state)
+                if generator_state is not None:
+                    generator.set_state(generator_state)
             source_backbone_accuracy = float(source_evaluation["accuracy"])
         self.ensemble_artifact = loaded
         self.state.ensemble_artifact_hash = loaded.artifact_hash
@@ -1099,6 +1133,9 @@ class PCSEAlgorithm:
             "ensemble_artifact_hash": self.state.ensemble_artifact_hash,
             "ensemble_weights": loaded.weights.tolist(),
             "test_accuracy": test_accuracy,
+            "postprocessing_accuracy_change": (
+                None if source_backbone_accuracy is None else test_accuracy - source_backbone_accuracy
+            ),
             "test_samples": int(clean_targets.size),
             "external_source_provenance": self.external_source_provenance,
             "source_backbone_clean_test_accuracy": (
@@ -1174,7 +1211,7 @@ class PCSEAlgorithm:
                 raise ValueError("PCSE VolMin source checkpoint mismatch")
             if transition.metadata.get(
                 "feature_model_checkpoint_sha256"
-            ) != self.state.volmin_final_checkpoint_sha256:
+            ) != self.state.feature_model_checkpoint_sha256:
                 raise ValueError("PCSE VolMin feature-model provenance mismatch")
             self._load_feature_model()
             self.snapshot = None
@@ -1230,6 +1267,10 @@ class PCSEAlgorithm:
             item.name for item in self.method_config.feature_layers
         ]:
             raise ValueError("PCSE GDA layer provenance mismatch")
+        effective = artifact.strategy_metadata or {"precision": "legacy_strict", "covariance": "prior_weighted"}
+        precision = "strict" if effective["precision"] == "legacy_strict" else effective["precision"]
+        if precision != self.method_config.precision_strategy or effective["covariance"] != self.method_config.covariance_strategy:
+            raise ValueError("PCSE GDA strategy provenance mismatch")
         self.gda_artifact = artifact
 
     def resume(self, path: str | Path) -> None:
@@ -1246,6 +1287,10 @@ class PCSEAlgorithm:
             raise ValueError("PCSE checkpoint configuration is missing")
         if PCSEConfig.from_mapping(saved_config) != self.method_config:
             raise ValueError("Resume configuration changed PCSE method settings")
+        # Method-private additive metadata; absent means the exact pre-union path.
+        self._feature_source_policy = payload.get("feature_source_policy", "legacy_transition")
+        if self._feature_source_policy not in {"pretrained", "legacy_transition"}:
+            raise ValueError("PCSE checkpoint feature source policy is invalid")
         for key in ("seed", "data", "noise", "loader"):
             if saved_config.get(key) != self.config.get(key):
                 raise ValueError(f"Resume configuration changed {key}")
@@ -1317,6 +1362,8 @@ class PCSEAlgorithm:
             self.ensemble_raw_weights = raw.to(
                 dtype=torch.float64
             ).detach().requires_grad_(True)
+            if self.ensemble_raw_weights.shape != (len(self._ensemble_members()),):
+                raise ValueError("PCSE checkpoint ensemble member count mismatch")
             self.ensemble_optimizer = torch.optim.Adam(
                 [self.ensemble_raw_weights],
                 lr=self.method_config.ensemble.learning_rate,
@@ -1332,6 +1379,8 @@ class PCSEAlgorithm:
                 self.state.gda_artifact_hash
             ):
                 raise ValueError("PCSE ensemble provenance mismatch")
+            if ensemble.layer_names != self._ensemble_members():
+                raise ValueError("PCSE ensemble member order mismatch")
             if (
                 ensemble.provenance.get("ensemble_epochs")
                 != self.method_config.ensemble.epochs
@@ -1339,6 +1388,8 @@ class PCSEAlgorithm:
                 != self.method_config.ensemble.learning_rate
                 or ensemble.provenance.get("validation_split")
                 != "noisy_validation"
+                or ensemble.provenance.get("include_discriminative", False) != self.method_config.ensemble.include_discriminative
+                or ensemble.provenance.get("batch_size") != self.method_config.ensemble.batch_size
             ):
                 raise ValueError("PCSE ensemble configuration provenance mismatch")
             self.ensemble_artifact = ensemble

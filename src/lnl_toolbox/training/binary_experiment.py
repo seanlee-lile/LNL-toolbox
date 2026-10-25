@@ -78,6 +78,9 @@ def train_binary_epoch(
     total_loss = 0.0
     correct = 0
     samples = 0
+    input_square_sum = logit_square_sum = 0.0
+    input_elements = logit_elements = 0
+    gradient_norm_max = 0.0
     for batch in loader:
         inputs = batch["input"].to(resolved, dtype=torch.float32)
         targets = batch["target"].to(resolved, dtype=torch.long)
@@ -86,8 +89,21 @@ def train_binary_epoch(
             logits=logits, noisy_targets=targets, base_loss=criterion, transition=None
         )
         loss = values.mean()
+        if not bool(torch.isfinite(loss)):
+            raise ValueError("Binary Risk produced a non-finite objective")
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
+        gradient_norm = sum(
+            float(parameter.grad.detach().double().square().sum())
+            for parameter in model.parameters() if parameter.grad is not None
+        ) ** 0.5
+        if not np.isfinite(gradient_norm):
+            raise ValueError("Binary Risk produced a non-finite gradient")
+        gradient_norm_max = max(gradient_norm_max, gradient_norm)
+        input_square_sum += float(inputs.detach().double().square().sum())
+        input_elements += inputs.numel()
+        logit_square_sum += float(logits.detach().double().square().sum())
+        logit_elements += logits.numel()
         optimizer.step()
         count = int(targets.numel())
         total_loss += float(loss.detach().item()) * count
@@ -95,7 +111,13 @@ def train_binary_epoch(
         samples += count
     if samples == 0:
         raise ValueError("binary loader must not be empty")
-    return {"loss": total_loss / samples, "accuracy": correct / samples, "samples": float(samples)}
+    return {
+        "loss": total_loss / samples, "accuracy": correct / samples, "samples": float(samples),
+        "input_rms": (input_square_sum / input_elements) ** 0.5,
+        "logit_rms": (logit_square_sum / logit_elements) ** 0.5,
+        "gradient_norm_max": gradient_norm_max,
+        "parameter_norm": sum(float(parameter.detach().double().square().sum()) for parameter in model.parameters()) ** 0.5,
+    }
 
 
 @torch.no_grad()
@@ -192,6 +214,19 @@ def run_binary_experiment(
             "".join(json.dumps(item, sort_keys=True) + "\n" for item in web_rows),
             encoding="utf-8",
         )
+        print(json.dumps(web_row, sort_keys=True), flush=True)
+
+    # This runner reports its final model; it has no best-model selection lifecycle.
+    final = {
+        "event": "final", "completed_epochs": len(rows),
+        "selection_split": None, "test_checkpoint": "last_model",
+    }
+    if "test_accuracy" in rows[-1]:
+        final.update(test_accuracy=rows[-1]["test_accuracy"], test_loss=rows[-1]["test_loss"])
+    with metrics_path.open("a", encoding="utf-8") as metrics_file:
+        metrics_file.write(json.dumps(final, sort_keys=True) + "\n")
+    (destination / "final_metrics.json").write_text(json.dumps(final, indent=2), encoding="utf-8")
+    print(json.dumps(final, sort_keys=True), flush=True)
 
     (destination / "resolved_config.json").write_text(json.dumps(resolved_config, indent=2), encoding="utf-8")
     if record is not None:

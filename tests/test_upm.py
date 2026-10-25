@@ -253,6 +253,19 @@ class _upm_workflow_UPMWorkflowTest(unittest.TestCase):
     def setUp(self) -> None:
         self.train = _upm_workflow__cifar(40, 'train')
         self.test = _upm_workflow__cifar(20, 'test')
+        # The mocked loader still enters the real execution admission boundary.
+        data_root = tempfile.TemporaryDirectory()
+        self.addCleanup(data_root.cleanup)
+        original_config = _upm_workflow__config
+
+        def config_with_existing_root(*args, **kwargs):
+            config = original_config(*args, **kwargs)
+            config['data']['root'] = data_root.name
+            return config
+
+        config_patch = patch(__name__ + '._upm_workflow__config', side_effect=config_with_existing_root)
+        config_patch.start()
+        self.addCleanup(config_patch.stop)
 
     def _load(self, _root, split):
         return self.train if split == 'train' else self.test
@@ -266,6 +279,24 @@ class _upm_workflow_UPMWorkflowTest(unittest.TestCase):
             self.assertEqual(payload['upm_state']['main_global_step'], 4)
             self.assertIsNotNone(payload['best_main_model_state'])
             self.assertIsNotNone(payload['best_eta_state'])
+            history = [json.loads(line) for line in (run_dir / 'metrics.jsonl').read_text(encoding='utf-8').splitlines()]
+            final_events = [row for row in history if row.get('event') == 'final']
+            self.assertEqual(len(final_events), 1)
+            final = json.loads((run_dir / 'final_metrics.json').read_text(encoding='utf-8'))
+            # ExperimentService enriches final_metrics with result metadata.
+            for key in ('event', 'eta_update_count', 'eta_updated_sample_fraction', 'best_eta_updated_sample_fraction'):
+                self.assertEqual(final_events[0][key], final[key])
+            for row in history:
+                if row.get('event') == 'main_epoch':
+                    for key in ('eta_zero_fraction', 'eta_one_fraction', 'psi_observed_mean', 'psi_observed_min', 'psi_observed_max'):
+                        self.assertGreaterEqual(row[key], 0.0)
+                        self.assertLessEqual(row[key], 1.0)
+                    self.assertLessEqual(row['psi_observed_min'], row['psi_observed_mean'])
+                    self.assertLessEqual(row['psi_observed_mean'], row['psi_observed_max'])
+            self.assertGreaterEqual(final['eta_update_count'], 0)
+            for key in ('eta_updated_sample_fraction', 'best_eta_updated_sample_fraction'):
+                self.assertGreaterEqual(final[key], 0.0)
+                self.assertLessEqual(final[key], 1.0)
             names = ('resolved_config.yaml', 'environment.json', 'noise_manifest.npz', 'stage1_best.pt', 'psi_snapshot.npz', 'eta_initial.npz', 'eta_best.npz', 'eta_last.npz', 'best.pt', 'last.pt', 'metrics.jsonl', 'final_metrics.json')
             for name in names:
                 self.assertTrue((run_dir / name).is_file(), name)

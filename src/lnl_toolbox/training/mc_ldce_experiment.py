@@ -44,8 +44,12 @@ def _directory(config, output_dir, resume) -> Path:
 def _write_epoch_metrics(rows: list[dict[str, Any]], path: Path) -> None:
     """Rewrite the complete epoch history for live WebUI reads and resume."""
 
+    transition_rows = []
+    if path.is_file():
+        transition_rows = [row for line in path.read_text(encoding="utf-8").splitlines()
+                           if line.strip() and (row := json.loads(line)).get("event") == "transition_epoch"]
     path.write_text(
-        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in transition_rows + rows),
         encoding="utf-8",
     )
 
@@ -107,7 +111,7 @@ def _prepare_fixed_feature_classifier(model: nn.Module) -> None:
         freeze()
 
 
-def _estimate_volmin(config, model, loader, device):
+def _estimate_volmin(config, model, loader, device, run_dir=None):
     value = dict(config["transition"])
     parameterization = dict(value["parameterization"])
     transition_model = PaperVolMinTransition(
@@ -127,8 +131,10 @@ def _estimate_volmin(config, model, loader, device):
     elif str(scheduler_config.get("name", "none")).lower() != "none":
         raise ValueError("paper VolMin transition scheduler must be none or multistep")
     latest = {}
-    for _ in range(int(value["epochs"])):
+    for epoch in range(int(value["epochs"])):
         model.train()
+        totals = {}
+        samples = 0
         for batch in loader:
             logits = model(batch["input"].to(device)).to(torch.float64)
             objective, latest = paper_volmin_objective(
@@ -138,8 +144,28 @@ def _estimate_volmin(config, model, loader, device):
                 condition_limit=float(value.get("condition_limit", 1e8)),
             )
             optimizer.zero_grad(set_to_none=True); objective.backward(); optimizer.step()
+            count = int(batch["target"].numel())
+            samples += count
+            for key, metric in latest.items():
+                totals[key] = totals.get(key, 0.0) + float(metric) * count
+        if not samples:
+            raise ValueError("MC-LDCE transition loader is empty")
+        epoch_metrics = {key: metric / samples for key, metric in totals.items()}
         if scheduler is not None:
             scheduler.step()
+        transition_ids = {id(parameter) for parameter in transition_model.parameters()}
+        transition_decay = next(float(group["weight_decay"]) for group in optimizer.param_groups
+                                if any(id(parameter) in transition_ids for parameter in group["params"]))
+        row = {
+            "event": "transition_epoch", "stage": "transition", "epoch": epoch + 1,
+            **epoch_metrics, "transition_matrix": transition_model.matrix().detach().cpu().tolist(),
+            "classifier_weight_decay": float(optimizer.param_groups[0]["weight_decay"]),
+            "transition_weight_decay": transition_decay,
+        }
+        if run_dir is not None:
+            with (Path(run_dir) / "metrics.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row, sort_keys=True) + "\n")
+        print(json.dumps(row, sort_keys=True), flush=True)
     matrix = transition_model.matrix()
     _, diagnostics = validate_paper_volmin_transition(
         matrix,
@@ -210,7 +236,7 @@ def run_mc_ldce_experiment(
             prepared.num_classes,
         ).to(device)
         matrix, transition_metadata = _estimate_volmin(
-            config, estimator_model, train_loader, device
+            config, estimator_model, train_loader, device, run_dir=run_dir
         )
         del estimator_model
         _prepare_fixed_feature_classifier(model)
@@ -281,10 +307,22 @@ def run_mc_ldce_experiment(
         row = standardize_epoch_row(row_values, require_validation=validation_loader is not None)
         rows.append(row)
         _write_epoch_metrics(rows, metrics_path)
+        print(json.dumps(row, sort_keys=True), flush=True)
         if scheduler is not None: scheduler.step()
         atomic_save({"method": "mc_ldce", "lifecycle_version": lifecycle["lifecycle_version"], "config": config, "model": model.state_dict(), "optimizer": optimizer.state_dict(), "scheduler": None if scheduler is None else scheduler.state_dict(), "completed_epoch": epoch, "metrics": rows, "statistic_hash": statistic.artifact_hash, "rng_state": capture_rng_state()}, run_dir / "last.pt")
     (run_dir / "resolved_config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     _write_epoch_metrics(rows, metrics_path)
+    if rows:
+        # LIFE returns the last fixed-feature classifier, not a selected best model.
+        final = {
+            "event": "final", "method": "mc_ldce", "completed_epochs": len(rows),
+            "test_loss": rows[-1]["test_loss"], "test_accuracy": rows[-1]["test_accuracy"],
+            "selection_split": None, "test_checkpoint": "last.pt",
+        }
+        with metrics_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(final, sort_keys=True) + "\n")
+        (run_dir / "final_metrics.json").write_text(json.dumps(final, indent=2), encoding="utf-8")
+        print(json.dumps(final, sort_keys=True), flush=True)
     if rows: write_training_curves_svg(rows, run_dir / "training_curves.svg")
     return run_dir
 

@@ -22,6 +22,7 @@ from .config import PCSEFeatureLayerConfig
 class PCSEFeatureCollection:
     layer_names: tuple[str, ...]
     snapshots: tuple[FeatureSnapshot, ...]
+    classifier_probabilities: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         if len(self.layer_names) < 2 or len(self.layer_names) != len(self.snapshots):
@@ -94,22 +95,71 @@ def collect_pcse_features(
     dataset: str,
     split: str,
     layers: tuple[PCSEFeatureLayerConfig, ...],
+    single_forward: bool = True,
+    include_classifier: bool = False,
 ) -> PCSEFeatureCollection:
-    snapshots = tuple(
-        collect_feature_snapshot(
-            model,
-            loader,
-            device,
-            dataset=dataset,
-            split=f"{split}:{layer.name}",
-            feature_extractor=(
-                lambda current_model, inputs, current_layer=layer:
-                extract_named_activation(current_model, inputs, current_layer)
-            ),
+    if not single_forward:
+        if include_classifier:
+            raise ValueError("Discriminative ensemble requires aligned single-forward features")
+        snapshots = tuple(
+            collect_feature_snapshot(
+                model, loader, device, dataset=dataset, split=f"{split}:{layer.name}",
+                feature_extractor=lambda current, inputs, layer=layer: extract_named_activation(current, inputs, layer),
+            ) for layer in layers
         )
-        for layer in layers
+        return PCSEFeatureCollection(tuple(layer.name for layer in layers), snapshots)
+    if len(layers) < 2:
+        raise ValueError("PCSE requires at least two hidden feature layers")
+    widths: list[int] = []
+
+    def extract_all(current: nn.Module, inputs: Tensor) -> Tensor:
+        captured: list[Any] = [None] * len(layers)
+        counts = [0] * len(layers)
+        original_outputs: list[Any] = [None] * len(layers)
+        handles = []
+        try:
+            for index, layer in enumerate(layers):
+                try:
+                    module = current.get_submodule(layer.name)
+                except AttributeError as exc:
+                    raise ValueError(f"Unknown PCSE feature layer: {layer.name!r}") from exc
+
+                def capture(_module, _inputs, output, position=index):
+                    # Downstream in-place activations must not mutate a captured layer.
+                    captured[position] = output.clone() if torch.is_tensor(output) else output
+                    original_outputs[position] = output
+                    counts[position] += 1
+
+                handles.append(module.register_forward_hook(capture))
+            logits = current(inputs)
+        finally:
+            for handle in handles:
+                handle.remove()
+        if any(count != 1 for count in counts):
+            raise ValueError("PCSE feature layers must each be invoked exactly once")
+        # A hooked terminal module may be the classifier itself.
+        if any(value is logits for value in original_outputs):
+            raise ValueError("PCSE feature layer is the model logits output; PCSE requires hidden representations")
+        values = [_pool_activation(value, layer.pooling) for value, layer in zip(captured, layers)]
+        current_widths = [value.shape[1] for value in values]
+        if widths and widths != current_widths:
+            raise ValueError("PCSE feature widths changed between batches")
+        widths[:] = current_widths
+        if include_classifier:
+            values.append(torch.softmax(logits, dim=1))
+        return torch.cat(values, dim=1)
+
+    combined = collect_feature_snapshot(
+        model, loader, device, dataset=dataset, split=split, feature_extractor=extract_all,
+    )
+    boundaries = np.cumsum([0, *widths])
+    snapshots = tuple(
+        FeatureSnapshot(combined.features[:, boundaries[index]:boundaries[index + 1]],
+                        combined.noisy_targets, combined.global_indices, dataset, f"{split}:{layer.name}")
+        for index, layer in enumerate(layers)
     )
     return PCSEFeatureCollection(
         layer_names=tuple(layer.name for layer in layers),
         snapshots=snapshots,
+        classifier_probabilities=combined.features[:, boundaries[-1]:] if include_classifier else None,
     )

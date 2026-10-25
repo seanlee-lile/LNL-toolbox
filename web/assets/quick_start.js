@@ -216,7 +216,9 @@
       (addNoise ? '<label>加噪类型<select id="qs-noise">' + syntheticOptions.map(function (item) { return '<option value="' + esc(item.key) + '"' + (item.key === selected?.key ? ' selected' : '') + '>' + esc(item.label) + '</option>'; }).join("") + '</select></label>' +
         (selected?.description ? '<p class="helper">' + esc(selected.description) + '</p>' : '') +
         (selected?.key === "binary_asymmetric_rcn" ? '<div class="qs-noise-inputs"><label>正类翻转率<input id="qs-rho-positive" type="number" min="0" max="1" step="0.01" value="' + esc(state.noiseSelection.rho_positive ?? 0.2) + '"></label><label>负类翻转率<input id="qs-rho-negative" type="number" min="0" max="1" step="0.01" value="' + esc(state.noiseSelection.rho_negative ?? 0.1) + '"></label></div><p class="helper">分别表示真实正类被标成负类、真实负类被标成正类的概率；两者之和必须小于 1。</p>' :
-        selected?.requires_rate ? '<label>人工噪声率<input id="qs-rate" type="number" min="0" max="1" step="0.01" value="' + esc(state.noiseSelection.rate == null ? "0.2" : state.noiseSelection.rate) + '"></label><p class="helper">这是新生成的错误标签比例，不是数据集原本的噪声率。</p>' : '') : '<p class="helper">不加噪：按登记的干净标签直接训练；不需要噪声率。</p>');
+        selected?.requires_rate ? '<label>人工噪声率<input id="qs-rate" type="number" min="0" max="1" step="0.01" value="' + esc(state.noiseSelection.rate == null ? "0.2" : state.noiseSelection.rate) + '"></label><p class="helper">这是人工加噪设置，不是数据集原本的噪声率；实际错误比例由生成规则决定。</p>' : '') +
+        (selected?.key === "class_conditional" ? '<label>类别转移矩阵<textarea id="qs-transition-matrix" rows="8" style="width:100%">' + esc(JSON.stringify(state.noiseSelection.transition_matrix || Array.from({length:state.dataset.num_classes}, function (_, row) { return Array.from({length:state.dataset.num_classes}, function (_, col) { return Number(row === col); }); }))) + '</textarea></label><p class="helper">JSON 方阵：第 i 行第 j 列为原类别 i 标为 j 的概率；各行之和为 1。</p>' : '') +
+        (selected?.key === "external_torch" ? '<label>外部标签文件路径<input id="qs-noise-path" value="' + esc(state.noiseSelection.path || "") + '"></label><p class="helper">文件须与当前训练样本对齐；clean_label_train 只用于身份、对齐和评估，不参与训练更新。仍须通过实际 consumer 检查。</p>' : '') : '<p class="helper">不加噪：按登记的干净标签直接训练；不需要噪声率。</p>');
     const unknownMessage = '<div class="qs-feedback qs-warning"><strong>训练标签的干净性尚不能确认</strong><p>现有数据资料不足以判断其是否含噪，不能默认它是干净数据并提供人工加噪。可先在“数据集”中补充有依据的标签事实；也可以只按当前观测标签继续检查方法。</p><button type="button" id="qs-open-dataset-facts" class="secondary">查看数据集事实</button> <button type="button" id="qs-confirm-labels" class="secondary">按当前标签继续</button></div>';
     return '<section id="qs-noise-step" class="qs-step"><h3>2. 标签噪声</h3>' + (native ? noisy : unknown || state.noise.dataset_state === "unknown" ? unknownMessage : clean) +
       '<label>实验随机种子<input id="qs-seed" type="number" min="0" step="1" value="' + esc(state.noiseSelection.seed == null ? "1" : state.noiseSelection.seed) + '"></label><p class="helper">同一个种子用于本次实验的数据划分、人工加噪（若启用）和其他随机步骤。</p></section>';
@@ -690,11 +692,13 @@
     document.getElementById("qs-rate")?.addEventListener("change", updateNoise);
     document.getElementById("qs-rho-positive")?.addEventListener("change", updateNoise);
     document.getElementById("qs-rho-negative")?.addEventListener("change", updateNoise);
+    document.getElementById("qs-transition-matrix")?.addEventListener("change", updateNoise);
+    document.getElementById("qs-noise-path")?.addEventListener("change", updateNoise);
     document.getElementById("qs-seed")?.addEventListener("change", updateNoise);
     document.getElementById("qs-native-rate-status")?.addEventListener("change", function () { state.nativeRateMode = this.value; render(); });
     document.getElementById("qs-save-native-rate")?.addEventListener("click", saveNativeRate);
     document.getElementById("qs-open-dataset-facts")?.addEventListener("click", function () { context?.switchModule?.("data"); });
-    document.getElementById("qs-confirm-labels")?.addEventListener("click", async function () { state.labelsConfirmed = true; render(); await loadMethods(); if (state.pendingPaper) await continuePendingPaper(); else recheckSelectedPaper(); });
+    document.getElementById("qs-confirm-labels")?.addEventListener("click", async function () { state.labelsConfirmed = true; render(); if (!await loadMethods()) return; if (state.pendingPaper) await continuePendingPaper(); else recheckSelectedPaper(); });
     document.getElementById("qs-methods-panel")?.addEventListener("toggle", function () { state.methodListExpanded = this.open; });
     document.getElementById("qs-prev")?.addEventListener("click", function () { state.currentStep = Math.max(0, state.currentStep - 1); render(); });
     document.getElementById("qs-next")?.addEventListener("click", advanceQuickStart);
@@ -1015,7 +1019,16 @@
       state.error = "人工噪声率必须是 0 到 1 之间的数字"; render(); return;
     }
     state.error = "";
-    state.noiseSelection = {kind:native ? "native" : addNoise ? "synthetic" : "clean", key:key, rate:rate, seed:Number(document.getElementById("qs-seed")?.value ?? 1), rho_positive:positive, rho_negative:negative};
+    let matrix = null;
+    if (key === "class_conditional") {
+      try {
+        const initial = state.noiseSelection.key === "class_conditional" ? state.noiseSelection.transition_matrix : null;
+        matrix = JSON.parse(document.getElementById("qs-transition-matrix")?.value || JSON.stringify(initial || Array.from({length:state.dataset.num_classes}, function (_, row) { return Array.from({length:state.dataset.num_classes}, function (_, col) { return Number(row === col); }); })));
+        if (!Array.isArray(matrix) || matrix.length !== state.dataset.num_classes || matrix.some(function (row) { return !Array.isArray(row) || row.length !== matrix.length || row.some(function (value) { return typeof value !== "number" || !Number.isFinite(value) || value < 0; }) || Math.abs(row.reduce(function (sum, value) { return sum + value; }, 0) - 1) > 1e-8; })) throw new Error("matrix");
+      } catch (error) { state.error = "转移矩阵须与类别数一致，各项非负且每行之和为 1"; render(); return; }
+    }
+    const labelPath = key === "external_torch" ? (document.getElementById("qs-noise-path")?.value || state.noiseSelection.path || "").trim() : null;
+    state.noiseSelection = {kind:native ? "native" : addNoise ? "synthetic" : "clean", key:key, rate:rate, seed:Number(document.getElementById("qs-seed")?.value ?? 1), rho_positive:positive, rho_negative:negative, transition_matrix:matrix, path:labelPath};
     state.methods = [];
     state.methodListExpanded = false;
     state.methodInputs = {};
@@ -1025,7 +1038,7 @@
     state.segmentedPaths = {};
     state.scheduleStash = {};
     render();
-    loadMethods().then(function () { recheckSelectedPaper({navigate:false}); });
+    loadMethods().then(function (current) { if (current) recheckSelectedPaper({navigate:false}); });
   }
   function saveNativeRate() {
     const value = Number(document.getElementById("qs-native-rate-value")?.value);
@@ -1086,11 +1099,11 @@
     }).catch(function (error) { state.error = String(error.message || error); render(); });
   }
   function loadMethods() {
-    if (!state.dataset || !state.noiseSelection) return Promise.resolve();
+    if (!state.dataset || !state.noiseSelection) return Promise.resolve(false);
     const token = ++methodsToken;
     const signature = JSON.stringify([state.dataset.alias, state.noiseSelection]);
     const current = function () { return token === methodsToken && signature === JSON.stringify([state.dataset?.alias, state.noiseSelection]); };
-    return post("/api/quick-start/methods", {dataset:state.dataset.alias, noise:state.noiseSelection}, "正在匹配论文方法…").then(function (payload) { if (!current()) return; state.methods = payload.methods || []; render(); }).catch(function (error) { if (!current()) return; state.error = String(error.message || error); render(); });
+    return post("/api/quick-start/methods", {dataset:state.dataset.alias, noise:state.noiseSelection}, "正在匹配论文方法…").then(function (payload) { if (!current()) return false; state.methods = payload.methods || []; render(); return true; }).catch(function (error) { if (current()) { state.error = String(error.message || error); render(); } return false; });
   }
   function planRequestSignature() {
     return JSON.stringify([state.dataset?.alias, state.selectedPaperId, state.noiseSelection, state.methodInputs]);
@@ -1109,10 +1122,10 @@
     return post("/api/quick-start/plan", {dataset:state.dataset.alias, paper_id:state.selectedPaperId, noise:state.noiseSelection, user_inputs:userInputs}, "正在核对…").then(function (payload) { if (!current()) return; state.plan = payload; state.planSchema = null; state.parameterDraft = {}; state.segmentedPaths = {}; state.scheduleStash = {}; state.parameterError = ""; const index = quickStartStepIndex("plan"); if (navigate && index >= 0) state.currentStep = index; render(); return loadPlanSchema(payload); }).catch(function (error) { if (!current()) return; state.error = String(error.message || error); render(); });
   }
   function recheckSelectedPaper(options) {
-    if (!state.selectedPaperId || state.error) return;
+    if (options === false || !state.selectedPaperId || state.error) return;
     const selected = state.methods.find(function (item) { return item.paper_id === state.selectedPaperId; });
     if (selected && ["ready", "needs_input"].includes(selected.status)) {
-      buildPlan(options);
+      return buildPlan(options);
     } else {
       state.error = "所选论文不适用当前噪声设置。";
       if (options?.navigate !== false) state.currentStep = quickStartStepIndex("methods");
@@ -1149,7 +1162,9 @@
         }
         state.noiseSelection = {kind:"synthetic", key:option.key, rate:option.requires_rate ? Number(configuredRate) : null, seed:state.noiseSelection.seed ?? 1,
           rho_positive:configuredNoise === "binary_asymmetric_rcn" ? Number(schemaValue(pending.schema, "noise.rho_positive")) : null,
-          rho_negative:configuredNoise === "binary_asymmetric_rcn" ? Number(schemaValue(pending.schema, "noise.rho_negative")) : null};
+          rho_negative:configuredNoise === "binary_asymmetric_rcn" ? Number(schemaValue(pending.schema, "noise.rho_negative")) : null,
+          transition_matrix:configuredNoise === "class_conditional" ? schemaValue(pending.schema, "noise.transition_matrix") : null,
+          path:configuredNoise === "external_torch" ? schemaValue(pending.schema, "noise.path") : null};
       }
     }
     state.pendingPaper = null;
@@ -1161,7 +1176,7 @@
     state.segmentedPaths = {};
     state.scheduleStash = {};
     state.methodListExpanded = false;
-    await loadMethods();
+    if (!await loadMethods()) return;
     buildPlan();
   }
 

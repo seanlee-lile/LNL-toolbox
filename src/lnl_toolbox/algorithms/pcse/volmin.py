@@ -234,7 +234,10 @@ def build_paper_volmin_optimizer(
     if not math.isfinite(weight_decay) or weight_decay < 0.0:
         raise ValueError("paper VolMin weight_decay must be non-negative")
     return torch.optim.SGD(
-        list(model.parameters()) + list(transition_model.parameters()),
+        [
+            {"params": list(model.parameters()), "weight_decay": weight_decay, "name": "model"},
+            {"params": list(transition_model.parameters()), "weight_decay": 0.0, "name": "transition"},
+        ],
         lr=lr,
         momentum=momentum,
         weight_decay=weight_decay,

@@ -156,6 +156,17 @@ class PCSEGDAArtifact:
     layers: tuple[GDALayer, ...]
     provenance: Mapping[str, Any]
     version: str = "1.0"
+    strategy_metadata: Mapping[str, str] | None = None
+
+    def __post_init__(self) -> None:
+        strategies = self.strategy_metadata or {
+            "precision": "legacy_strict", "covariance": "prior_weighted",
+        }
+        if set(strategies) != {"precision", "covariance"}:
+            raise ValueError("PCSE GDA strategy metadata is invalid")
+        if any(layer.precision_strategy != strategies["precision"] or
+               layer.covariance_strategy != strategies["covariance"] for layer in self.layers):
+            raise ValueError("PCSE GDA strategy metadata does not match layers")
 
     def _parts(self) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
         metadata = {
@@ -168,6 +179,9 @@ class PCSEGDAArtifact:
             ],
         }
         arrays: dict[str, np.ndarray] = {}
+        # Omit the key for legacy artifacts: their hash and interpretation stay exact.
+        if self.strategy_metadata is not None:
+            metadata["strategies"] = dict(self.strategy_metadata)
         for index, layer in enumerate(self.layers):
             arrays[f"layer_{index}_priors"] = layer.clean_priors
             arrays[f"layer_{index}_means"] = layer.means
@@ -192,6 +206,10 @@ class PCSEGDAArtifact:
     def load(cls, path: str | Path) -> "PCSEGDAArtifact":
         with np.load(path, allow_pickle=False) as data:
             payload = json.loads(str(data["metadata_json"].item()))
+            strategies = payload.get("strategies")
+            effective = strategies if strategies is not None else {
+                "precision": "legacy_strict", "covariance": "prior_weighted",
+            }
             layers = tuple(
                 GDALayer(
                     name=name,
@@ -201,6 +219,8 @@ class PCSEGDAArtifact:
                     covariance_ridge=float(
                         payload["covariance_ridges"][index]
                     ),
+                    precision_strategy=effective["precision"],
+                    covariance_strategy=effective["covariance"],
                 )
                 for index, name in enumerate(payload["layer_names"])
             )
@@ -208,6 +228,7 @@ class PCSEGDAArtifact:
                 layers=layers,
                 provenance=payload["provenance"],
                 version=payload["version"],
+                strategy_metadata=strategies,
             )
             if payload.get("artifact_hash") != artifact.artifact_hash:
                 raise ValueError("PCSE GDA artifact hash mismatch")

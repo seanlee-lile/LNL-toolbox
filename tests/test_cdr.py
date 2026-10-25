@@ -55,6 +55,40 @@ class _cdr__VectorModel(torch.nn.Module):
 # --- merged from test_cdr.py ---
 class _cdr_CDRUpdatePolicyTest(unittest.TestCase):
 
+    def test_reporting_forward_is_official_only_and_matches_released_step(self) -> None:
+        from copy import deepcopy
+
+        inputs = torch.tensor([[0.1, 0.7], [0.2, -0.8], [0.6, 0.3], [0.9, -0.2]])
+        targets = torch.tensor([0, 1, 0, 1])
+        batch = Batch({'input': inputs, 'target': targets, 'index': torch.arange(4)})
+        for mode, expected_forwards in (('paper', 1), ('official_code', 2)):
+            torch.manual_seed(23)
+            model = torch.nn.Sequential(torch.nn.Linear(2, 3), torch.nn.BatchNorm1d(3), torch.nn.Dropout(0.2), torch.nn.Linear(3, 2))
+            reference = deepcopy(model)
+            policy = CDRUpdatePolicy(0.25, 0.0, compatibility_mode=mode)
+            optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+            algorithm = SupervisedClassificationAlgorithm(model, optimizer, CrossEntropyLoss(), torch.device('cpu'), update_policy=policy)
+            algorithm.setup(ExperimentContext(Path.cwd()))
+            algorithm.on_cycle_start(RunState())
+            rng = torch.get_rng_state()
+            result = algorithm.step(batch, RunState())
+            actual_rng = torch.get_rng_state()
+            torch.set_rng_state(rng)
+            reporting = None
+            if mode == 'official_code':
+                with torch.no_grad():
+                    reporting = reference(inputs)
+            logits = reference(inputs)
+            loss = CrossEntropyLoss()(logits, targets).mean()
+            reference_optimizer = torch.optim.SGD(reference.parameters(), lr=0.01)
+            CDRUpdatePolicy(0.25, 0.0, compatibility_mode=mode).update(ParameterUpdateInput(loss, reference, reference_optimizer, RunState()))
+            self.assertEqual(int(model[1].num_batches_tracked), expected_forwards)
+            for key, value in model.state_dict().items():
+                torch.testing.assert_close(value, reference.state_dict()[key])
+            self.assertTrue(torch.equal(actual_rng, torch.get_rng_state()))
+            expected_accuracy = float(((logits if reporting is None else reporting).argmax(1) == targets).float().mean())
+            self.assertEqual(result.metrics['accuracy'], expected_accuracy)
+
     def test_criticality_and_exact_top_k_match_equations_three_and_four(self) -> None:
         parameter = torch.nn.Parameter(torch.tensor([2.0, -1.0, 0.0, 4.0]))
         parameter.grad = torch.tensor([1.0, 3.0, 9.0, -0.25])

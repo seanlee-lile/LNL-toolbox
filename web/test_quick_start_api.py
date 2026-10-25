@@ -33,6 +33,17 @@ class _FakeService:
 
 
 class QuickStartApiTests(unittest.TestCase):
+    def test_selection_carries_matrix_path_and_binary_rates(self) -> None:
+        matrix = [[0.8, 0.2], [0.1, 0.9]]
+        selection = quick_start_api._selection({'noise': {'kind': 'synthetic', 'key': 'class_conditional',
+            'rate': 0.2, 'seed': 3, 'transition_matrix': matrix, 'path': ' labels.pt ',
+            'rho_positive': 0.2, 'rho_negative': 0.1}})
+        self.assertEqual(selection.transition_matrix, ((0.8, 0.2), (0.1, 0.9)))
+        self.assertEqual(selection.path, 'labels.pt')
+        self.assertEqual(selection.rho_positive, 0.2)
+        self.assertEqual(selection.rho_negative, 0.1)
+        self.assertEqual(quick_start_api._selection({'noise': {'key': 'clean'}}).transition_matrix, None)
+
     def test_probe_shape(self) -> None:
         with patch.object(quick_start_api, "SERVICE", _FakeService()):
             payload = quick_start_api.probe_payload({"path": "C:/data"})

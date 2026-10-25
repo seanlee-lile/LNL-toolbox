@@ -102,6 +102,63 @@ class _mentornet_MentorNetTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'hash mismatch'):
                 MentorArtifact.load(path)
 
+    def test_legacy_artifact_preserves_student_checkpoint_identity(self) -> None:
+        import hashlib
+        import io
+        from dataclasses import replace
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'legacy.pt'
+            artifact = self._artifact(path)
+            content = {
+                'architecture': dict(artifact.architecture),
+                'feature_schema': dict(artifact.feature_schema),
+                'source': dict(artifact.source),
+                'model_state': dict(artifact.model_state),
+            }
+            buffer = io.BytesIO()
+            torch.save(content, buffer)
+            legacy_hash = hashlib.sha256(buffer.getvalue()).hexdigest()
+            replace(artifact, artifact_hash=legacy_hash).save(path)
+            self.assertNotEqual(legacy_hash, artifact.artifact_hash)
+            self.assertEqual(MentorArtifact.load(path).artifact_hash, legacy_hash)
+            provider = MentorNetWeightProvider(str(path), 10)
+            checkpoint_state = dict(provider.state_dict(), artifact_hash=legacy_hash)
+            restored = MentorNetWeightProvider(str(path), 10)
+            restored.load_state_dict(checkpoint_state)
+            checkpoint_state['artifact_hash'] = artifact.artifact_hash
+            with self.assertRaisesRegex(ValueError, 'identity mismatch'):
+                restored.load_state_dict(checkpoint_state)
+            copied = Path(directory) / 'copy.pt'
+            MentorArtifact.load(path).save(copied)
+            self.assertEqual(MentorArtifact.load(copied).artifact_hash, legacy_hash)
+
+    def test_portable_artifact_hash_is_content_based_and_detects_tampering(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'mentor.pt'
+            artifact = self._artifact(path)
+            copied = MentorArtifact.create(
+                architecture=dict(reversed(list(artifact.architecture.items()))),
+                feature_schema=artifact.feature_schema, source=artifact.source,
+                model_state={key: value.clone() for key, value in reversed(list(artifact.model_state.items()))},
+            )
+            self.assertEqual(copied.artifact_hash, artifact.artifact_hash)
+            for protocol in (2, 4):
+                payload = torch.load(path, weights_only=False)
+                torch.save(payload, path, pickle_protocol=protocol)
+                self.assertEqual(MentorArtifact.load(path).artifact_hash, artifact.artifact_hash)
+            for field in ('source', 'model_state'):
+                artifact.save(path)
+                payload = torch.load(path, weights_only=False)
+                if field == 'source':
+                    payload[field]['dataset'] = 'different'
+                else:
+                    key = next(iter(payload[field]))
+                    payload[field][key] = payload[field][key] + 1
+                torch.save(payload, path)
+                with self.assertRaisesRegex(ValueError, 'hash mismatch'):
+                    MentorArtifact.load(path)
+
     def test_step_milestone_policy_and_plugin(self) -> None:
         model = torch.nn.Linear(2, 1)
         optimizer = torch.optim.SGD(model.parameters(), lr=0.1)

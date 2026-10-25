@@ -214,6 +214,11 @@ class SupervisedClassificationAlgorithm:
             batch.payload["index"], dtype=torch.long, device=self.device
         )
         model_output: FeatureOutput | None = None
+        reporting_logits = None
+        if bool(getattr(self.update_policy, "requires_reporting_forward", False)):
+            # Preserve the released CDR loop's BatchNorm and RNG consumption.
+            with torch.no_grad():
+                reporting_logits = self.model(inputs)
         if bool(getattr(self.objective_consumer, "requires_features", False)):
             model_output = forward_with_features(self.model, inputs)
             logits = model_output.logits
@@ -403,7 +408,8 @@ class SupervisedClassificationAlgorithm:
         ))
         count = int(targets.numel())
         selected_count = int(selected_mask.sum().item())
-        correct = int((logits.argmax(1) == targets).sum().item())
+        metric_logits = logits if reporting_logits is None else reporting_logits
+        correct = int((metric_logits.argmax(1) == targets).sum().item())
         state.step += 1
         metrics = {
             "loss": float(

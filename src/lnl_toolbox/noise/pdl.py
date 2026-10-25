@@ -184,6 +184,14 @@ def _fit_pdl_basis_group(
     classes, basis, parts = coefficients.shape
     if parts != basis or targets.shape != (classes, basis, classes):
         raise ValueError("PDL basis group dimensions do not match")
+    if not np.isfinite(coefficients).all():
+        raise ValueError("PDL anchor coefficients must be finite")
+    ranks = [int(np.linalg.matrix_rank(row)) for row in coefficients]
+    if any(rank < parts for rank in ranks):
+        raise ValueError(
+            f"PDL anchor coefficients cannot identify {parts} parts; class ranks={ranks}. "
+            "Inspect the representation and anchor coefficients."
+        )
     result = np.empty((basis, classes, classes), dtype=np.float64)
     for class_index in range(classes):
         # Exact ``tools.init_params`` behavior for Matrix_optimize: reset
@@ -260,6 +268,10 @@ def fit_pdl_basis_matrices_pair(
         and np.isfinite(validation_targets).all()
     ):
         raise ValueError("PDL basis inputs must be finite")
+    for split, values in (("train", train_coefficients), ("validation", validation_coefficients)):
+        ranks = [int(np.linalg.matrix_rank(row)) for row in values]
+        if any(rank < parts for rank in ranks):
+            raise ValueError(f"PDL {split} anchor ranks={ranks}; {parts} independent parts required")
 
     import torch
     from torch import nn

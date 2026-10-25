@@ -415,6 +415,26 @@ def _dld_workflow__partition(p_w, p_s, targets, **kwargs):
 # --- merged from test_dld_workflow.py ---
 class _dld_workflow_DLDWorkflowTest(unittest.TestCase):
 
+    def test_index_loader_preserves_epoch_order_and_drop_last_without_workers(self) -> None:
+        from types import SimpleNamespace
+        from lnl_toolbox.training.data_service import PreparedData
+        from lnl_toolbox.training.dld_experiment import _IndexDataset, _index_loader
+
+        indices = np.asarray([19, 3, 8, 22, 11, 7, 15])
+        for drop_last in (False, True):
+            config = {'batch_size': 3, 'drop_last': drop_last, 'num_workers': 0}
+            prepared = SimpleNamespace(loader_config=config, seed=17)
+            for epoch in (0, 1, 5):
+                expected = list(PreparedData.loader_for_dataset(
+                    prepared, _IndexDataset(indices), epoch=epoch, stream=5000,
+                ))
+                loader = _index_loader(indices, dict(config, num_workers=4, persistent_workers=True), seed=17, epoch=epoch)
+                self.assertEqual(loader.num_workers, 0)
+                actual = list(loader)
+                self.assertEqual([batch['index'].tolist() for batch in actual], [batch['index'].tolist() for batch in expected])
+                resumed = list(_index_loader(indices, config, seed=17, epoch=epoch))
+                self.assertEqual([batch['index'].tolist() for batch in resumed], [batch['index'].tolist() for batch in actual])
+
     def test_state_rejects_illegal_transition(self) -> None:
         with self.assertRaisesRegex(ValueError, 'illegal'):
             DLDState().advance(DLDPhase.DIFFUSION_TRAINING)

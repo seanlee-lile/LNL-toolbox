@@ -2,9 +2,10 @@ from __future__ import annotations
 
 """Hash-verified frozen curriculum-model artifacts."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import io
+import json
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -17,6 +18,42 @@ def _artifact_digest(
     source: Mapping[str, Any],
     model_state: Mapping[str, Any],
 ) -> str:
+    """Hash content independently of torch serialization and tensor storage IDs."""
+    digest = hashlib.sha256(b"mentor-artifact-v2\0")
+    metadata = {
+        "architecture": dict(architecture),
+        "feature_schema": dict(feature_schema),
+        "source": dict(source),
+    }
+    encoded = json.dumps(
+        metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    digest.update(len(encoded).to_bytes(8, "big"))
+    digest.update(encoded)
+    for name, value in sorted(model_state.items(), key=lambda item: str(item[0])):
+        if not isinstance(value, torch.Tensor):
+            raise TypeError(f"Mentor model state entry {name!r} is not a tensor")
+        tensor = value.detach().cpu().contiguous()
+        descriptor = json.dumps(
+            {"name": str(name), "dtype": str(tensor.dtype), "shape": list(tensor.shape)},
+            sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")
+        raw = tensor.reshape(-1).view(torch.uint8).numpy().tobytes()
+        digest.update(len(descriptor).to_bytes(8, "big"))
+        digest.update(descriptor)
+        digest.update(len(raw).to_bytes(8, "big"))
+        digest.update(raw)
+    return digest.hexdigest()
+
+
+def _legacy_artifact_digest(
+    architecture: Mapping[str, Any],
+    feature_schema: Mapping[str, Any],
+    source: Mapping[str, Any],
+    model_state: Mapping[str, Any],
+) -> str:
+    """Validate existing artifacts without changing their persisted identity."""
     buffer = io.BytesIO()
     torch.save(
         {
@@ -81,6 +118,13 @@ class MentorArtifact:
             source=payload["source"],
             model_state=payload["model_state"],
         )
-        if payload.get("artifact_hash") != artifact.artifact_hash:
-            raise ValueError("MentorArtifact hash mismatch")
+        stored_hash = payload.get("artifact_hash")
+        if stored_hash != artifact.artifact_hash:
+            if stored_hash != _legacy_artifact_digest(
+                artifact.architecture, artifact.feature_schema,
+                artifact.source, artifact.model_state,
+            ):
+                raise ValueError("MentorArtifact hash mismatch")
+            # Student checkpoints bind to this exact identity, not a rehashed one.
+            artifact = replace(artifact, artifact_hash=stored_hash)
         return artifact

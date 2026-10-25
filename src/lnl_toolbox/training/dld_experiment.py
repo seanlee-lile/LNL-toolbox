@@ -12,7 +12,7 @@ from typing import Any, Mapping
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset
 import yaml
 
 from lnl_toolbox.algorithms.dld import (
@@ -85,6 +85,18 @@ class _IndexDataset(Dataset[dict[str, int]]):
 
     def __getitem__(self, position: int) -> dict[str, int]:
         return {"index": int(self.indices[position])}
+
+
+def _index_loader(indices: np.ndarray, loader_config: Mapping[str, Any], *, seed: int, epoch: int) -> DataLoader:
+    """Batch materialized feature indices without image-loading worker overhead."""
+    return DataLoader(
+        _IndexDataset(indices),
+        batch_size=int(loader_config.get("batch_size", 128)),
+        shuffle=True,
+        drop_last=bool(loader_config.get("drop_last", False)),
+        num_workers=0,
+        generator=torch.Generator().manual_seed(int(seed) + int(epoch) + 5000),
+    )
 
 
 def _feature_snapshot(
@@ -404,9 +416,9 @@ class DLDWorkflow:
         assert self.algorithm is not None
         while self.state.completed_epochs < self.method_config.epochs:
             epoch = self.state.completed_epochs
-            loader = self.prepared_data.loader_for_dataset(
-                _IndexDataset(self.train_indices), shuffle=True,
-                epoch=epoch, stream=5000,
+            loader = _index_loader(
+                self.train_indices, self.prepared_data.loader_config,
+                seed=self.prepared_data.seed, epoch=epoch,
             )
             totals = {
                 "direction_loss": 0.0,

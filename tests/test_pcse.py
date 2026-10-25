@@ -287,6 +287,73 @@ def _pcse_statistics__snapshots() -> tuple[FeatureSnapshot, FeatureSnapshot]:
 # --- merged from test_pcse_statistics.py ---
 class _pcse_statistics_PCSEStatisticsTest(unittest.TestCase):
 
+    def test_strategy_artifacts_preserve_legacy_identity_and_explicit_precision(self) -> None:
+        from lnl_toolbox.algorithms.pcse.artifacts import PCSEGDAArtifact, _hash_payload
+
+        priors = np.array([0.2, 0.3, 0.5])
+        means = np.eye(3)
+        for strategy, covariance in (
+            ('legacy_strict', np.eye(3)), ('strict', np.eye(3)),
+            ('author_pinv', np.diag([1.0, 2.0, 0.0])),
+        ):
+            with self.subTest(strategy=strategy), tempfile.TemporaryDirectory() as directory:
+                layer = GDALayer('hidden', priors, means, covariance, 0.0, precision_strategy=strategy)
+                metadata = None if strategy == 'legacy_strict' else {'precision': strategy, 'covariance': 'prior_weighted'}
+                artifact = PCSEGDAArtifact((layer,), {'fixture': 'identity'}, strategy_metadata=metadata)
+                path = Path(directory) / 'gda.npz'
+                artifact.save(path)
+                before, mtime = path.read_bytes(), path.stat().st_mtime_ns
+                loaded = PCSEGDAArtifact.load(path)
+                self.assertEqual(loaded.artifact_hash, artifact.artifact_hash)
+                self.assertEqual(loaded.layers[0].precision_strategy, strategy)
+                np.testing.assert_allclose(loaded.layers[0].scores(means), layer.scores(means))
+                self.assertEqual(path.read_bytes(), before)
+                self.assertEqual(path.stat().st_mtime_ns, mtime)
+                loaded.save(Path(directory) / 'copy.npz')
+                self.assertEqual(PCSEGDAArtifact.load(Path(directory) / 'copy.npz').artifact_hash, artifact.artifact_hash)
+                if strategy == 'legacy_strict':
+                    # Exact pre-change metadata/arrays: no implicit default key enters the hash.
+                    old_metadata = {'version': '1.0', 'kind': 'pcse_gda', 'provenance': {'fixture': 'identity'},
+                                    'layer_names': ['hidden'], 'covariance_ridges': [0.0]}
+                    arrays = {'layer_0_priors': priors, 'layer_0_means': means, 'layer_0_covariance': covariance}
+                    self.assertEqual(artifact.artifact_hash, _hash_payload(old_metadata, arrays))
+                    self.assertIsNone(loaded.strategy_metadata)
+
+    def test_precision_is_explicit_and_prior_weighting_is_not_replaced(self) -> None:
+        from dataclasses import replace
+
+        priors = np.array([0.2, 0.3, 0.5])
+        covariances = np.asarray([np.eye(2), np.eye(2) * 3, np.eye(2) * 7])
+        layer = PCSELayerStatistics('hidden', np.zeros((3, 2)), covariances, np.zeros((3, 2)), covariances, covariances)
+        statistics = PCSEStatistics(priors, priors, np.eye(3), 1.0, 1.0, (layer, replace(layer, name='hidden2')))
+        weighted = np.einsum('c,cij->ij', priors, covariances)
+        for strategy in ('legacy_strict', 'strict', 'author_pinv'):
+            result = fit_gda_layers(statistics, covariance_ridge=0, precision_strategy=strategy)
+            np.testing.assert_allclose(result[0].shared_covariance, weighted)
+        uniform = fit_gda_layers(statistics, covariance_ridge=0, precision_strategy='author_pinv', covariance_strategy='uniform_mean')
+        np.testing.assert_allclose(uniform[0].shared_covariance, covariances.mean(0))
+        for covariance in (np.diag([1.0, 0.0]), np.diag([1.0, -1.0])):
+            modified = replace(statistics, layers=tuple(replace(item, clean_covariances=np.repeat(covariance[None], 3, axis=0)) for item in statistics.layers))
+            for strategy in ('legacy_strict', 'strict'):
+                with self.assertRaises(ValueError):
+                    fit_gda_layers(modified, covariance_ridge=0, precision_strategy=strategy)
+            explicit = fit_gda_layers(modified, covariance_ridge=0, precision_strategy='author_pinv')[0]
+            self.assertTrue(np.isfinite(explicit.scores(np.ones((1, 2)))).all())
+
+    def test_minibatch_ensemble_resume_preserves_rng_and_optimizer_state(self) -> None:
+        probabilities = np.array([[[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8]],
+                                  [[0.6, 0.2, 0.2], [0.2, 0.6, 0.2], [0.2, 0.2, 0.6]]])
+        targets = np.arange(3)
+        torch.manual_seed(17)
+        full, _, losses = fit_ensemble_weights(probabilities, targets, epochs=3, learning_rate=0.05, batch_size=2)
+        torch.manual_seed(17)
+        partial, optimizer, _ = fit_ensemble_weights(probabilities, targets, epochs=1, learning_rate=0.05, batch_size=2)
+        restored = partial.detach().clone().requires_grad_(True)
+        resumed, _, _ = fit_ensemble_weights(probabilities, targets, epochs=2, learning_rate=0.05,
+                                            batch_size=2, raw_weights=restored, optimizer_state=optimizer.state_dict())
+        torch.testing.assert_close(full, resumed, rtol=0, atol=0)
+        self.assertTrue(np.isfinite(losses).all())
+
     def test_identity_transition_recovers_empirical_statistics(self) -> None:
         snapshots = _pcse_statistics__snapshots()
         statistics = estimate_pcse_statistics(snapshots, ('hidden1', 'hidden2'), np.eye(3))
@@ -540,6 +607,30 @@ class _pcse_volmin_PCSEVolMinPrimitiveTest(unittest.TestCase):
 # --- merged from test_pcse_volmin.py ---
 class _pcse_volmin_PCSEVolMinWorkflowTest(unittest.TestCase):
 
+    def test_legacy_checkpoint_keeps_transition_feature_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory)
+            first = _pcse_volmin__algorithm(run)
+            first.train_pretraining()
+            payload = read_checkpoint(run / 'last.pt', 'cpu')
+            payload.pop('feature_source_policy')
+            torch.save(payload, run / 'last.pt')
+            first.close()
+            resumed = _pcse_volmin__algorithm(run)
+            resumed.resume(run / 'last.pt')
+            self.assertEqual(resumed._feature_source_policy, 'legacy_transition')
+            resumed.start_transition_training()
+            resumed.train_transition()
+            self.assertEqual(resumed.state.feature_model_checkpoint_sha256, resumed.state.volmin_final_checkpoint_sha256)
+            resumed.estimate_statistics()
+            before = resumed.statistics_path.read_bytes()
+            resumed.close()
+            final = _pcse_volmin__algorithm(run)
+            final.resume(run / 'last.pt')
+            self.assertEqual(final.state.feature_model_checkpoint_sha256, final.state.volmin_final_checkpoint_sha256)
+            self.assertEqual(final.statistics_path.read_bytes(), before)
+            final.close()
+
     def test_transition_training_interruption_resume_and_model_binding(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory)
@@ -564,10 +655,10 @@ class _pcse_volmin_PCSEVolMinWorkflowTest(unittest.TestCase):
             self.assertEqual(resumed.state.phase, PCSEPhase.TRANSITION_READY)
             self.assertGreater(resumed.state.transition_global_step, initial_step)
             self.assertEqual(resumed.transition.metadata['source_pretrained_checkpoint_sha256'], source_hash)
-            self.assertEqual(resumed.transition.metadata['feature_model_checkpoint_sha256'], resumed.state.volmin_final_checkpoint_sha256)
-            self.assertNotEqual(resumed.state.feature_model_checkpoint_sha256, source_hash)
+            self.assertEqual(resumed.transition.metadata['feature_model_checkpoint_sha256'], source_hash)
+            self.assertEqual(resumed.state.feature_model_checkpoint_sha256, source_hash)
             statistics = resumed.estimate_statistics()
-            self.assertEqual(statistics.provenance['feature_model_checkpoint_sha256'], resumed.state.volmin_final_checkpoint_sha256)
+            self.assertEqual(statistics.provenance['feature_model_checkpoint_sha256'], source_hash)
             resumed.close()
 
     def test_publish_validation_failure_preserves_formal_files_and_state(self) -> None:
@@ -777,6 +868,89 @@ class _pcse_workflow__GenericTabularAdapter:
 
 # --- merged from test_pcse_workflow.py ---
 class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
+
+    def test_explicit_ensemble_and_precision_survive_interruption_and_completed_resume(self) -> None:
+        def configured(path):
+            algorithm = _pcse_workflow__pretraining_algorithm(path, pretraining_epochs=1, fixed_model=True)
+            algorithm.config['gda_stage'].update(precision_strategy='author_pinv', covariance_strategy='uniform_mean')
+            algorithm.config['ensemble_stage'].update(include_discriminative=True, batch_size=11)
+            algorithm.method_config = PCSEConfig.from_mapping(algorithm.config)
+            return algorithm
+
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory)
+            first = configured(run)
+            first.train_pretraining()
+            first.estimate_transition()
+            first.estimate_statistics()
+            first.build_gda()
+            gda_hash = first.gda_artifact.artifact_hash
+            first.start_ensemble_training()
+            self.assertEqual(first._ensemble_members(), ('hidden1', 'hidden2', 'pretrained_classifier'))
+            first.train_ensemble(max_epochs=1)
+            first.close()
+            resumed = configured(run)
+            resumed.resume(run / 'last.pt')
+            self.assertEqual(resumed.gda_artifact.artifact_hash, gda_hash)
+            self.assertEqual(resumed.gda_artifact.strategy_metadata, {'precision': 'author_pinv', 'covariance': 'uniform_mean'})
+            self.assertEqual(resumed.ensemble_raw_weights.shape, (3,))
+            resumed.run()
+            ensemble_hash = resumed.ensemble_artifact.artifact_hash
+            self.assertEqual(resumed.ensemble_artifact.layer_names, resumed._ensemble_members())
+            resumed.close()
+            completed = configured(run)
+            completed.resume(run / 'last.pt')
+            self.assertEqual(completed.ensemble_artifact.artifact_hash, ensemble_hash)
+            self.assertEqual(completed.gda_artifact.artifact_hash, gda_hash)
+            completed.close()
+
+    def test_legacy_gda_resume_keeps_identity_and_strict_strategy(self) -> None:
+        from dataclasses import replace
+        from lnl_toolbox.algorithms.pcse.artifacts import PCSEGDAArtifact
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            first = _pcse_workflow__pretraining_algorithm(path, pretraining_epochs=1, fixed_model=True)
+            first._feature_source_policy = 'legacy_transition'
+            first.train_pretraining()
+            first.estimate_transition()
+            first.estimate_statistics()
+            first.build_gda()
+            legacy = PCSEGDAArtifact(tuple(replace(layer, precision_strategy='legacy_strict') for layer in first.gda_artifact.layers), first.gda_artifact.provenance)
+            legacy.save(first.gda_path)
+            first.state.gda_artifact_hash = legacy.artifact_hash
+            first._save_last()
+            payload = read_checkpoint(path / 'last.pt', 'cpu')
+            payload.pop('feature_source_policy')
+            torch.save(payload, path / 'last.pt')
+            before, mtime = first.gda_path.read_bytes(), first.gda_path.stat().st_mtime_ns
+            first.close()
+            resumed = _pcse_workflow__pretraining_algorithm(path, pretraining_epochs=1, fixed_model=True)
+            resumed.resume(path / 'last.pt')
+            self.assertIsNone(resumed.gda_artifact.strategy_metadata)
+            self.assertEqual(resumed.gda_artifact.artifact_hash, legacy.artifact_hash)
+            resumed.run()
+            self.assertEqual(resumed.gda_path.read_bytes(), before)
+            self.assertEqual(resumed.gda_path.stat().st_mtime_ns, mtime)
+            resumed.close()
+
+    def test_single_forward_aligns_layers_and_classifier_and_cleans_hooks_on_error(self) -> None:
+        model = _pcse_workflow__HookModel()
+        loader = DataLoader(_pcse_workflow__FeatureDataset(torch.tensor([0, 1, 2])), batch_size=2)
+        layers = (PCSEFeatureLayerConfig('hidden1'), PCSEFeatureLayerConfig('hidden2'))
+        model.train()
+        with mock.patch.object(model, 'forward', wraps=model.forward) as forward:
+            result = collect_pcse_features(model, loader, 'cpu', dataset='synthetic', split='train', layers=layers, include_classifier=True)
+            self.assertEqual(forward.call_count, 2)
+        self.assertTrue(model.training)
+        self.assertEqual(result.classifier_probabilities.shape, (3, 3))
+        np.testing.assert_allclose(result.classifier_probabilities.sum(1), 1, atol=1e-6)
+        np.testing.assert_array_equal(result.snapshots[0].global_indices, [10, 20, 30])
+        with mock.patch.object(model, 'forward', side_effect=RuntimeError('injected')):
+            with self.assertRaisesRegex(RuntimeError, 'injected'):
+                collect_pcse_features(model, loader, 'cpu', dataset='synthetic', split='train', layers=layers)
+        self.assertFalse(model.hidden1._forward_hooks)
+        self.assertFalse(model.hidden2._forward_hooks)
 
     def test_train_mode_runs_with_a_generic_registered_tabular_adapter(self) -> None:
         try:
@@ -1008,6 +1182,39 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
             self.assertEqual(resumed.state.ensemble_completed_epochs, 3)
             resumed.close()
 
+    def test_source_baseline_restores_backbone_and_rng(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            algorithm = _pcse_workflow__pretraining_algorithm(
+                Path(directory), pretraining_epochs=1, fixed_model=True,
+            )
+            self.addCleanup(algorithm.close)
+            algorithm.train_pretraining()
+            algorithm.estimate_transition()
+            algorithm.estimate_statistics()
+            algorithm.build_gda()
+            algorithm.start_ensemble_training()
+            model = algorithm.pretraining_algorithm.model
+            with torch.no_grad():
+                next(model.parameters()).add_(0.1)
+            expected_weights = {key: value.clone() for key, value in model.state_dict().items()}
+            source_weights = read_checkpoint(algorithm.pretrained_best_path, 'cpu')['pretraining_algorithm']['model']
+            observed_rng = []
+
+            def evaluate_source(current, *_args):
+                for key, value in current.state_dict().items():
+                    torch.testing.assert_close(value, source_weights[key])
+                observed_rng.append(torch.get_rng_state().clone())
+                torch.rand(3)
+                return {'loss': 1.0, 'accuracy': 0.25, 'samples': 30.0}
+
+            with mock.patch('lnl_toolbox.algorithms.pcse.algorithm.evaluate_classification', side_effect=evaluate_source):
+                algorithm.train_ensemble()
+            for key, value in model.state_dict().items():
+                torch.testing.assert_close(value, expected_weights[key])
+            torch.testing.assert_close(torch.get_rng_state(), observed_rng[0])
+            final = json.loads((Path(directory) / 'final_metrics.json').read_text(encoding='utf-8'))
+            self.assertEqual(final['source_backbone_clean_test_accuracy'], 0.25)
+
     def test_two_layer_workflow_completed_resume_and_artifact_damage(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / 'run'
@@ -1019,6 +1226,11 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
             self.assertEqual(final['pretraining_model'], 'pcse_mlp')
             self.assertEqual(final['pretraining_source'], 'internal_training')
             self.assertEqual(final['transition_backend'], 'dual_t')
+            self.assertTrue(np.isfinite(final['source_backbone_clean_test_accuracy']))
+            self.assertAlmostEqual(
+                final['postprocessing_accuracy_change'],
+                final['test_accuracy'] - final['source_backbone_clean_test_accuracy'],
+            )
             self.assertEqual(len(final['ensemble_weights']), 2)
             self.assertTrue(all((value > 0 for value in final['ensemble_weights'])))
             self.assertAlmostEqual(sum(final['ensemble_weights']), 1.0)

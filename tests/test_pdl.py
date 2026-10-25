@@ -59,15 +59,19 @@ class _pdl_PDLTest(unittest.TestCase):
             'algorithm': {'correction': 'forward'},
         }))
 
-    def test_revision_projects_negative_entries_to_zero(self) -> None:
+    def test_revision_normalizes_absolute_entries_and_preserves_gradients(self) -> None:
+        values = torch.tensor([[[-0.2, 0.8], [-0.4, -0.6]]], requires_grad=True)
         actual = _row_positive_normalize(
-            torch.tensor([[[-0.2, 0.8], [0.4, 0.6]]])
+            values
         )
         torch.testing.assert_close(
-            actual[0, 0], torch.tensor([0.0, 1.0])
+            actual[0, 0], torch.tensor([0.2, 0.8])
         )
+        torch.testing.assert_close(actual[0, 1], torch.tensor([0.4, 0.6]))
+        actual[0, 0, 0].backward()
+        torch.testing.assert_close(values.grad[0, 0], torch.tensor([-0.8, -0.2]))
         with self.assertRaisesRegex(ValueError, "all-zero"):
-            _row_positive_normalize(torch.tensor([[[-0.2, -0.8]]]))
+            _row_positive_normalize(torch.zeros(1, 2, 2))
 
     def test_official_raw_features_convert_hwc_to_flattened_chw(self) -> None:
         image = np.zeros((1, 32, 32, 3), dtype=np.float64)
@@ -75,6 +79,24 @@ class _pdl_PDLTest(unittest.TestCase):
         actual = _pdl_official_raw_features(image)
         expected = np.transpose(image, (0, 3, 1, 2)).reshape(1, -1)
         np.testing.assert_array_equal(actual, expected)
+
+    def test_basis_optimization_rejects_unidentifiable_or_nonfinite_anchors(self) -> None:
+        from lnl_toolbox.noise.pdl import fit_pdl_basis_matrices, fit_pdl_basis_matrices_pair
+
+        valid = np.tile(np.eye(2)[None], (2, 1, 1))
+        targets = valid.copy()
+        deficient = np.full_like(valid, 0.5)
+        with self.assertRaisesRegex(ValueError, 'cannot identify'):
+            fit_pdl_basis_matrices(deficient, targets, epochs=1)
+        for split in ('train', 'validation'):
+            train = deficient if split == 'train' else valid
+            validation = deficient if split == 'validation' else valid
+            with self.assertRaisesRegex(ValueError, split + ' anchor ranks'):
+                fit_pdl_basis_matrices_pair(train, targets, validation, targets, epochs=1)
+        nonfinite = valid.copy()
+        nonfinite[0, 0, 0] = np.nan
+        with self.assertRaisesRegex(ValueError, 'finite'):
+            fit_pdl_basis_matrices_pair(nonfinite, targets, valid, targets, epochs=1)
 
     def test_official_cifar_resnet34_stem_setting_is_available(self) -> None:
         model = cifar_resnet34(10, initialization='torch_default', stem_padding=0)
@@ -232,7 +254,9 @@ class _pdl_PDLTest(unittest.TestCase):
         indices = np.arange(6, dtype=np.int64)
         features = FeatureSnapshot(np.array([[1.0, 0.0, 0.2], [0.8, 0.2, 0.1], [0.1, 0.9, 0.2], [0.2, 0.8, 0.1], [0.6, 0.4, 0.3], [0.3, 0.7, 0.4]]), np.array([0, 0, 1, 1, 0, 1]), indices, 'toy', 'union')
         posteriors = PosteriorSnapshot(np.array([[0.9, 0.1], [0.75, 0.25], [0.15, 0.85], [0.25, 0.75], [0.65, 0.35], [0.35, 0.65]]), features.noisy_targets, indices, 'toy', 'union')
-        estimator = PartTransitionEstimator(num_parts=2, anchor_candidates=2, representation_seed=7, representation_iterations=2, anchor_percentages=(97.0, 99.0), basis_epochs=1, basis_loss_threshold=0.0)
+        # Three examples cannot distinguish the 97th and 99th percentiles.
+        # Use two identifiable anchors in this shared-representation fixture.
+        estimator = PartTransitionEstimator(num_parts=2, anchor_candidates=2, representation_seed=7, representation_iterations=2, anchor_percentages=(50.0, 99.0), basis_epochs=1, basis_loss_threshold=0.0)
         parts, coefficients = fit_part_representation(features.features, 2, seed=7, iterations=2)
         train = FeatureSnapshot(features.features[:3], features.noisy_targets[:3], indices[:3], 'toy', 'train')
         train_posterior = PosteriorSnapshot(posteriors.noisy_probabilities[:3], posteriors.noisy_targets[:3], indices[:3], 'toy', 'train')

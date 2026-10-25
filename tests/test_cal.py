@@ -3,6 +3,7 @@ from __future__ import annotations
 
 # --- merged from test_cal.py ---
 import tempfile
+import math
 
 import json
 
@@ -192,6 +193,8 @@ class _cal_CALTest(unittest.TestCase):
         self.assertNotEqual(calls[0], calls[1])
         self.assertEqual([row['event'] for row in rows], ['epoch', 'final'])
         self.assertIn('validation_loss', rows[0])
+        self.assertGreaterEqual(rows[0]['epoch_seconds'], 0.0)
+        self.assertTrue(math.isfinite(rows[0]['epoch_seconds']))
         self.assertNotIn('test_loss', rows[0])
         self.assertFalse(rows[-1]['test_selection_leakage'])
 

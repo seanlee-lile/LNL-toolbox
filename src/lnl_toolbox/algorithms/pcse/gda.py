@@ -19,6 +19,8 @@ class GDALayer:
     means: np.ndarray  # [C,D]
     shared_covariance: np.ndarray  # [D,D], includes configured ridge
     covariance_ridge: float
+    precision_strategy: str = "legacy_strict"
+    covariance_strategy: str = "prior_weighted"
 
     def __post_init__(self) -> None:
         priors = np.asarray(self.clean_priors, dtype=np.float64)
@@ -43,12 +45,17 @@ class GDALayer:
             raise ValueError("GDA clean priors must be positive and sum to one")
         if not np.allclose(covariance, covariance.T, atol=1e-9, rtol=1e-7):
             raise ValueError("GDA shared covariance must be symmetric")
-        try:
-            np.linalg.cholesky(covariance)
-        except np.linalg.LinAlgError as exc:
-            raise ValueError(
-                "GDA shared covariance is not positive definite"
-            ) from exc
+        if self.precision_strategy not in {"legacy_strict", "strict", "author_pinv"}:
+            raise ValueError("Unknown GDA precision strategy")
+        if self.covariance_strategy not in {"prior_weighted", "uniform_mean"}:
+            raise ValueError("Unknown GDA covariance strategy")
+        if self.precision_strategy != "author_pinv":
+            try:
+                np.linalg.cholesky(covariance)
+            except np.linalg.LinAlgError as exc:
+                raise ValueError(
+                    "GDA shared covariance is not positive definite"
+                ) from exc
         object.__setattr__(self, "clean_priors", priors.copy())
         object.__setattr__(self, "means", means.copy())
         object.__setattr__(self, "shared_covariance", covariance.copy())
@@ -62,9 +69,12 @@ class GDALayer:
             raise ValueError("GDA features must have shape [N,D]")
         if not np.isfinite(values).all():
             raise ValueError("GDA features must be finite")
-        precision_means = np.linalg.solve(
-            self.shared_covariance, self.means.T
-        ).T
+        if self.precision_strategy == "author_pinv":
+            precision_means = self.means @ np.linalg.pinv(self.shared_covariance, hermitian=True)
+        else:
+            precision_means = np.linalg.solve(
+                self.shared_covariance, self.means.T
+            ).T
         biases = (
             -0.5 * np.einsum("cd,cd->c", self.means, precision_means)
             + np.log(self.clean_priors)
@@ -88,19 +98,22 @@ def fit_gda_layers(
     statistics: PCSEStatistics,
     *,
     covariance_ridge: float,
+    precision_strategy: str = "legacy_strict",
+    covariance_strategy: str = "prior_weighted",
 ) -> tuple[GDALayer, ...]:
     if not np.isfinite(covariance_ridge) or covariance_ridge < 0.0:
         raise ValueError("GDA covariance ridge must be finite and non-negative")
     layers: list[GDALayer] = []
     for layer in statistics.layers:
-        shared = np.einsum(
-            "c,cij->ij",
-            statistics.clean_priors,
-            layer.clean_covariances,
-        )
+        if covariance_strategy == "prior_weighted":
+            shared = np.einsum("c,cij->ij", statistics.clean_priors, layer.clean_covariances)
+        elif covariance_strategy == "uniform_mean":
+            shared = layer.clean_covariances.mean(axis=0)
+        else:
+            raise ValueError("Unknown GDA covariance strategy")
         shared = 0.5 * (shared + shared.T)
         smallest = float(np.linalg.eigvalsh(shared).min())
-        if smallest < -1e-8:
+        if smallest < -1e-8 and precision_strategy != "author_pinv":
             raise ValueError(
                 f"PCSE layer {layer.name!r} recovered a non-PSD covariance: "
                 f"minimum eigenvalue={smallest:.6g}"
@@ -113,6 +126,8 @@ def fit_gda_layers(
                 means=layer.clean_means,
                 shared_covariance=regularized,
                 covariance_ridge=float(covariance_ridge),
+                precision_strategy=precision_strategy,
+                covariance_strategy=covariance_strategy,
             )
         )
     return tuple(layers)
@@ -149,6 +164,7 @@ def fit_ensemble_weights(
     learning_rate: float,
     raw_weights: Tensor | None = None,
     optimizer_state: dict | None = None,
+    batch_size: int | None = None,
 ) -> tuple[Tensor, torch.optim.Optimizer, list[float]]:
     """Optimize positive simplex weights on noisy-validation NLL."""
 
@@ -174,6 +190,8 @@ def fit_ensemble_weights(
         raise ValueError("each PCSE layer posterior row must sum to one")
     if epochs < 0 or not np.isfinite(learning_rate) or learning_rate <= 0:
         raise ValueError("PCSE ensemble optimization settings are invalid")
+    if batch_size is not None and (isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size <= 0):
+        raise ValueError("PCSE ensemble batch_size must be a positive integer or None")
     parameter = (
         torch.zeros(layers, dtype=torch.float64, requires_grad=True)
         if raw_weights is None
@@ -186,14 +204,19 @@ def fit_ensemble_weights(
         optimizer.load_state_dict(optimizer_state)
     losses: list[float] = []
     for _ in range(epochs):
-        weights = torch.softmax(parameter, dim=0)
-        mixture = torch.einsum("l,lnc->nc", weights, probabilities)
-        observed = mixture.gather(1, targets[:, None]).squeeze(1)
-        loss = -torch.log(observed.clamp_min(torch.finfo(torch.float64).tiny)).mean()
-        if not torch.isfinite(loss):
-            raise ValueError("PCSE ensemble NLL became non-finite")
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        optimizer.step()
-        losses.append(float(loss.detach().item()))
+        order = torch.arange(samples) if batch_size is None else torch.randperm(samples)
+        total_loss = 0.0
+        for indices in order.split(samples if batch_size is None else batch_size):
+            weights = torch.softmax(parameter, dim=0)
+            mixture = torch.einsum("l,lnc->nc", weights, probabilities[:, indices])
+            observed = mixture.gather(1, targets[indices, None]).squeeze(1)
+            probability = observed.clamp_min(torch.finfo(torch.float64).tiny) if batch_size is None else observed + 1e-10
+            loss = -torch.log(probability).mean()
+            if not torch.isfinite(loss):
+                raise ValueError("PCSE ensemble NLL became non-finite")
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            optimizer.step()
+            total_loss += float(loss.detach().item()) * len(indices)
+        losses.append(total_loss / samples)
     return parameter, optimizer, losses

@@ -230,6 +230,27 @@ class _binary_training_BinaryTrainingTest(unittest.TestCase):
         optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
         result = train_binary_epoch(model, DataLoader(dataset, batch_size=2), optimizer)
         self.assertEqual(result['samples'], 4.0)
+        for key in ('input_rms', 'logit_rms', 'gradient_norm_max', 'parameter_norm'):
+            self.assertTrue(np.isfinite(result[key]), key)
+
+    def test_nonfinite_objective_or_gradient_does_not_update_parameters(self) -> None:
+        from unittest.mock import Mock
+
+        dataset = BinaryTensorDataset(BinaryBenchmark(np.asarray([[0.2], [0.8]]), np.asarray([0, 1]), 'fixture'))
+        for failure in ('objective', 'gradient'):
+            model = build_binary_linear(1)
+            before = {name: value.clone() for name, value in model.state_dict().items()}
+            optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+            risk = Mock()
+            if failure == 'objective':
+                risk.per_sample_risk.side_effect = lambda **kwargs: kwargs['logits'][:, 0] * float('nan')
+            else:
+                risk = None
+                next(model.parameters()).register_hook(lambda gradient: gradient * float('nan'))
+            with self.assertRaisesRegex(ValueError, 'non-finite ' + failure):
+                train_binary_epoch(model, DataLoader(dataset, batch_size=2), optimizer, risk=risk)
+            for name, value in model.state_dict().items():
+                self.assertTrue(torch.equal(value, before[name]))
 
     def test_stratified_splits_are_deterministic(self) -> None:
         labels = np.asarray([0, 1, 0, 1, 0, 1])
@@ -250,8 +271,14 @@ class _binary_training_BinaryTrainingTest(unittest.TestCase):
             self.assertTrue((Path(result) / 'metrics.json').is_file())
             self.assertTrue((Path(result) / 'data_manifest.json').is_file())
             rows = [json.loads(line) for line in (Path(result) / 'metrics.jsonl').read_text(encoding='utf-8').splitlines()]
-            self.assertEqual([row['event'] for row in rows], ['epoch'])
+            self.assertEqual([row['event'] for row in rows], ['epoch', 'final'])
             self.assertEqual(rows[0]['epoch'], 1)
+            final = json.loads((Path(result) / 'final_metrics.json').read_text())
+            self.assertEqual(final, rows[-1])
+            self.assertEqual(final['test_accuracy'], rows[0]['test_accuracy'])
+            self.assertEqual(final['test_checkpoint'], 'last_model')
+            self.assertIsNone(final['selection_split'])
+            self.assertFalse((Path(result) / 'best.pt').exists())
 
     def test_runner_rejects_multiclass_source_explicitly(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

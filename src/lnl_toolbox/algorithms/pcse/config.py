@@ -65,6 +65,8 @@ class PCSEPretrainingConfig:
 class PCSEEnsembleConfig:
     epochs: int
     learning_rate: float
+    include_discriminative: bool = False
+    batch_size: int | None = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,8 @@ class PCSEConfig:
     condition_limit: float
     covariance_ridge: float
     ensemble: PCSEEnsembleConfig
+    precision_strategy: str = "strict"
+    covariance_strategy: str = "prior_weighted"
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "PCSEConfig":
@@ -395,6 +399,12 @@ class PCSEConfig:
         )
 
         gda = _mapping(value.get("gda_stage", {}), owner="gda_stage")
+        precision_strategy = str(gda.get("precision_strategy", "strict"))
+        covariance_strategy = str(gda.get("covariance_strategy", "prior_weighted"))
+        if precision_strategy not in {"strict", "author_pinv"}:
+            raise ValueError("gda_stage.precision_strategy must be strict or author_pinv")
+        if covariance_strategy not in {"prior_weighted", "uniform_mean"}:
+            raise ValueError("gda_stage.covariance_strategy must be prior_weighted or uniform_mean")
         covariance_ridge = float(gda.get("covariance_ridge", 1e-5))
         if not math.isfinite(covariance_ridge) or covariance_ridge < 0.0:
             raise ValueError(
@@ -407,12 +417,20 @@ class PCSEConfig:
         ensemble_epochs = int(ensemble.get("epochs", 0))
         if ensemble_epochs <= 0:
             raise ValueError("ensemble_stage.epochs must be positive")
+        include_discriminative = ensemble.get("include_discriminative", False)
+        if not isinstance(include_discriminative, bool):
+            raise ValueError("ensemble_stage.include_discriminative must be boolean")
+        batch_size = ensemble.get("batch_size")
+        if batch_size is not None and (isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size <= 0):
+            raise ValueError("ensemble_stage.batch_size must be a positive integer")
         ensemble_config = PCSEEnsembleConfig(
             epochs=ensemble_epochs,
             learning_rate=_positive_float(
                 ensemble.get("learning_rate", 0.05),
                 owner="ensemble_stage.learning_rate",
             ),
+            include_discriminative=include_discriminative,
+            batch_size=batch_size,
         )
 
         noise = _mapping(value.get("noise"), owner="noise")
@@ -437,4 +455,6 @@ class PCSEConfig:
             condition_limit=condition_limit,
             covariance_ridge=covariance_ridge,
             ensemble=ensemble_config,
+            precision_strategy=precision_strategy,
+            covariance_strategy=covariance_strategy,
         )

@@ -13,7 +13,7 @@ from torch import nn
 import yaml
 
 from lnl_toolbox.algorithms.instance_transition import InstanceTransitionClassificationAlgorithm
-from lnl_toolbox.algorithms.instance_transition import pdl_instance_corrected_losses
+from lnl_toolbox.algorithms.instance_transition import _row_positive_normalize, pdl_instance_corrected_losses
 from lnl_toolbox.core import Batch, ExperimentContext, RunState
 from lnl_toolbox.core.hyperparameters import resolve_parameter_sampling
 from lnl_toolbox.data import DataRequirements, DataRole
@@ -169,10 +169,7 @@ def _pdl_validation(
             # Official ``val_correction`` and ``val_revision`` normalize the
             # matrix immediately before multiplying probabilities.  The
             # revision path additionally applies abs() to matrix+T_revision.
-            matrices = matrices.abs()
-            matrices = matrices / matrices.sum(dim=2, keepdim=True).clamp_min(
-                torch.finfo(matrices.dtype).tiny
-            )
+            matrices = _row_positive_normalize(matrices)
             clean = torch.softmax(logits, dim=1)
             observed = torch.bmm(clean.unsqueeze(1), matrices).squeeze(1)
             clean_y = clean.gather(1, targets[:, None]).squeeze(1)

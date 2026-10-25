@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import datetime
 import json
 from pathlib import Path
+import time
 from typing import Any
 
 import numpy as np
@@ -159,6 +160,7 @@ def run_cal_experiment(
             warmup_optimizer, config, warmup_epochs
         )
         for epoch in range(warmup_epochs):
+            epoch_started = time.perf_counter()
             warmup.train()
             confidence_weight = resolve_confidence_weight(
                 epoch,
@@ -182,6 +184,7 @@ def run_cal_experiment(
                     float(warmup_cfg["confidence_weight"]),
                     warmup_cfg.get("confidence_schedule"),
                 ))
+            print(f"CAL warmup epoch {epoch + 1} epoch_seconds={time.perf_counter() - epoch_started:.3f}", flush=True)
         atomic_save(
             {
                 "method": "cal_warmup",
@@ -255,6 +258,7 @@ def run_cal_experiment(
         rows = list(payload.get("metrics", [])); start = int(payload["completed_epoch"]) + 1; restore_rng_state(payload["rng_state"])
     _write_epoch_metrics(rows, metrics_path)
     for epoch in range(start, epochs):
+        epoch_started = time.perf_counter()
         model.train(); total = correct = 0; loss_sum = 0.0
         epoch_loss_sums = torch.zeros_like(means)
         epoch_class_counts = torch.zeros(classes, device=device)
@@ -291,6 +295,7 @@ def run_cal_experiment(
         if validation_loader is not None:
             validation = evaluate_classification(model, validation_loader, criterion, device)
             row_values.update({"validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"]})
+        row_values["epoch_seconds"] = time.perf_counter() - epoch_started
         row = standardize_epoch_row(
             row_values, require_validation=validation_loader is not None
         ); rows.append(row)

@@ -101,10 +101,6 @@ class QuickStartService:
             return self._recipe_cache
 
     def _template(self, paper, recipes: Mapping[str, object]) -> MethodTemplate:
-        with self._method_cache_lock:
-            cached = self._template_cache.get(paper.id)
-        if cached is not None:
-            return cached  # type: ignore[return-value]
         selected = next(
             (item for item in paper.configs if item.profile == "reproduction"),
             None,
@@ -114,12 +110,18 @@ class QuickStartService:
         recipe = recipes.get(selected.recipe_id)
         if recipe is None:
             raise ValueError(f"unknown recipe {selected.recipe_id!r}")
+        stat = recipe.config_path.stat()
+        revision = (selected.recipe_id, str(recipe.config_path), stat.st_mtime_ns, stat.st_size)
+        with self._method_cache_lock:
+            cached = self._template_cache.get(paper.id)
+        if cached is not None and cached[0] == revision:
+            return deepcopy(cached[1])
         template = MethodTemplate(
             paper.id, selected.recipe_id, recipe, load_recipe_config(recipe)
         )
         with self._method_cache_lock:
-            self._template_cache[paper.id] = template
-        return template
+            self._template_cache[paper.id] = (revision, template)
+        return deepcopy(template)
 
     def probe(self, path: str) -> DatasetProbeResult:
         return probe_dataset_path(path, data_service=self.data_service)
@@ -205,6 +207,7 @@ class QuickStartService:
                 {"key": item.key, "label": item.label, "description": item.description, "requires_rate": item.requires_rate}
                 for item in quick_start_noise_specs()
                 if item.key == "clean" or item in visible_synthetic_noise_specs()
+                or item.visible and item.category == "external"
             ],
         }
 
@@ -221,9 +224,15 @@ class QuickStartService:
         dataset_alias: str,
         noise_selection: QuickStartNoiseSelection,
     ) -> tuple[QuickStartMethodOption, ...]:
+        recipes = self._recipes()
+        revisions = []
+        for key, recipe in sorted(recipes.items()):
+            stat = recipe.config_path.stat()
+            revisions.append((key, str(recipe.config_path), stat.st_mtime_ns, stat.st_size))
         cache_key = json.dumps({
             "dataset": dataset_alias,
             "noise": noise_selection.to_dict(),
+            "recipe_revisions": revisions,
         }, sort_keys=True)
         with self._method_cache_lock:
             cached = self._method_cache.get(cache_key)
@@ -236,7 +245,6 @@ class QuickStartService:
         profile_data = report.profile.to_dict()
         dataset_service = _CachedDatasetService(self.data_service, dataset_alias)
         papers = load_papers()
-        recipes = self._recipes()
         prepared: list[
             tuple[
                 object,

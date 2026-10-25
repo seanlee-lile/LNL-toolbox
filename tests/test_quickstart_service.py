@@ -60,6 +60,106 @@ class _FakeFashionMnistAdapter(_FakeImageAdapter):
 
 
 class QuickStartServiceTests(unittest.TestCase):
+
+    def test_matrix_path_adaptation_preserves_explicit_inputs_and_valid_keys(self) -> None:
+        from copy import deepcopy
+
+        profile = self.data_service.inspect('local-cifar10').profile.to_dict()
+        paper = next(item for item in load_papers() if item.id == 'loss-correction')
+        base = deepcopy(method_template_for_paper(paper).config)
+        base['noise'] = {'name': 'class_conditional', 'rate': 0.4, 'seed': 1, 'rng': 'numpy_legacy',
+                         'transition_matrix': [[0.6, 0.4], [0.4, 0.6]], 'validation_targets': 'noisy'}
+        base['pipeline']['transition_estimator'] = {'name': 'known', 'matrix': [[0.6, 0.4], [0.4, 0.6]]}
+        original = deepcopy(base)
+        matrix = ((0.8, 0.2), (0.1, 0.9))
+        adapted = adapt_method_template(base, dataset_alias='local-cifar10', dataset_profile=profile,
+            noise_selection=QuickStartNoiseSelection('synthetic', 'class_conditional', rate=0.2, seed=5, transition_matrix=matrix), data_service=self.data_service)
+        self.assertEqual(adapted['noise']['transition_matrix'], [list(row) for row in matrix])
+        self.assertEqual(adapted['pipeline']['transition_estimator']['matrix'], [list(row) for row in matrix])
+        self.assertEqual(base, original)
+        with self.assertRaisesRegex(ValueError, '类别数'):
+            adapt_method_template(base, dataset_alias='local-cifar10', dataset_profile=profile,
+                noise_selection=QuickStartNoiseSelection('synthetic', 'class_conditional', rate=0.2, seed=5, transition_matrix=tuple(tuple(float(i == j) for j in range(3)) for i in range(3))), data_service=self.data_service)
+        external = deepcopy(base)
+        external['noise'] = {'name': 'external_torch', 'path': 'old.pt', 'clean_key': 'custom_clean', 'noisy_key': 'custom_noisy', 'validation_targets': 'noisy'}
+        adapted = adapt_method_template(external, dataset_alias='local-cifar10', dataset_profile=profile,
+            noise_selection=QuickStartNoiseSelection('synthetic', 'external_torch', seed=5, path='new.pt'), data_service=self.data_service)
+        self.assertEqual(adapted['noise']['path'], 'new.pt')
+        self.assertEqual(adapted['noise']['clean_key'], 'custom_clean')
+        self.assertEqual(adapted['noise']['noisy_key'], 'custom_noisy')
+        self.assertNotIn('matrix', adapted['pipeline']['transition_estimator'])
+        self.assertNotIn('rate', adapted['noise'])
+        clean = adapt_method_template(external, dataset_alias='local-cifar10', dataset_profile=profile,
+            noise_selection=QuickStartNoiseSelection('clean', 'clean', seed=5), data_service=self.data_service)
+        self.assertNotIn('path', clean['noise'])
+        self.assertNotIn('clean_key', clean['noise'])
+
+    def test_exact_match_requires_matrix_and_path_equality(self) -> None:
+        paper = SimpleNamespace(configs=(SimpleNamespace(profile='reproduction', recipe_id='fixture'),))
+        matrix = ((0.8, 0.2), (0.1, 0.9))
+        config = {'data': {'name': 'cifar10'}, 'noise': {'name': 'class_conditional', 'rate': 0.2, 'transition_matrix': [list(row) for row in matrix]}}
+        with patch('lnl_toolbox.quickstart.templates._cached_recipe_config', return_value=config):
+            self.assertIsNone(find_exact_reproduction(paper, dataset_adapter='cifar10', noise_selection=QuickStartNoiseSelection('synthetic', 'class_conditional', rate=0.2)))
+            self.assertEqual(find_exact_reproduction(paper, dataset_adapter='cifar10', noise_selection=QuickStartNoiseSelection('synthetic', 'class_conditional', rate=0.2, transition_matrix=matrix)), 'fixture')
+            self.assertIsNone(find_exact_reproduction(paper, dataset_adapter='cifar10', noise_selection=QuickStartNoiseSelection('synthetic', 'class_conditional', rate=0.2, transition_matrix=((1., 0.), (0., 1.)))))
+            config['noise'] = {'name': 'external_torch', 'path': 'a.pt'}
+            self.assertEqual(find_exact_reproduction(paper, dataset_adapter='cifar10', noise_selection=QuickStartNoiseSelection('synthetic', 'external_torch', path='a.pt')), 'fixture')
+            self.assertIsNone(find_exact_reproduction(paper, dataset_adapter='cifar10', noise_selection=QuickStartNoiseSelection('synthetic', 'external_torch', path='b.pt')))
+
+    def test_external_path_does_not_bypass_preflight(self) -> None:
+        compatible = SimpleNamespace(status=CompatibilityStatus.COMPATIBLE, reasons=(), required_user_inputs=())
+        with patch.object(self.service.experiment_service, 'list_config_compatibility', return_value=(('gce', compatible),)), patch.object(self.service.experiment_service, 'preflight', side_effect=ValueError('consumer alignment rejected')) as preflight:
+            plan = self.service.build_plan(dataset_alias='local-cifar10', paper_id='gce',
+                noise_selection=QuickStartNoiseSelection('synthetic', 'external_torch', path='missing.pt'))
+        preflight.assert_called_once()
+        self.assertEqual(plan.status, 'unsupported')
+        self.assertIsNone(plan.command)
+        self.assertIn('consumer alignment rejected', plan.details)
+
+    def test_service_template_cache_tracks_revision_and_returns_copies(self) -> None:
+        from dataclasses import replace
+        from lnl_toolbox.catalog import recipe_by_id
+        import yaml
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'recipe.yaml'
+            path.write_text('trainer: {epochs: 1}', encoding='utf-8')
+            paper = next(item for item in load_papers() if item.id == 'gce')
+            recipe = replace(recipe_by_id(paper.configs[0].recipe_id), config_path=path)
+            recipes = {item.recipe_id: recipe for item in paper.configs}
+            with patch('lnl_toolbox.quickstart.service.load_recipe_config', side_effect=lambda item: yaml.safe_load(item.config_path.read_text())) as loader:
+                first = self.service._template(paper, recipes)
+                first.config['trainer']['epochs'] = 999
+                self.assertEqual(self.service._template(paper, recipes).config['trainer']['epochs'], 1)
+                self.assertEqual(loader.call_count, 1)
+                path.write_text('trainer: {epochs: 20}', encoding='utf-8')
+                self.assertEqual(self.service._template(paper, recipes).config['trainer']['epochs'], 20)
+                self.assertEqual(loader.call_count, 2)
+
+    def test_plan_template_cache_tracks_revision_and_isolates_callers(self) -> None:
+        from dataclasses import replace
+        import yaml
+        from lnl_toolbox.catalog import recipe_by_id
+        from lnl_toolbox.quickstart import templates
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'recipe.yaml'
+            path.write_text('trainer: {epochs: 1}', encoding='utf-8')
+            paper = next(item for item in load_papers() if item.id == 'gce')
+            recipe = replace(recipe_by_id(paper.configs[0].recipe_id), config_path=path)
+            templates._recipe_config_revision.cache_clear()
+            self.addCleanup(templates._recipe_config_revision.cache_clear)
+            with patch.object(templates, '_cached_recipe_by_id', return_value=recipe), patch.object(
+                templates, 'load_recipe_config',
+                side_effect=lambda item: yaml.safe_load(item.config_path.read_text(encoding='utf-8')),
+            ) as load:
+                first = templates._cached_recipe_config(recipe.id)
+                first['trainer']['epochs'] = 999
+                self.assertEqual(templates._cached_recipe_config(recipe.id)['trainer']['epochs'], 1)
+                self.assertEqual(load.call_count, 1)
+                path.write_text('trainer: {epochs: 20}', encoding='utf-8')
+                self.assertEqual(templates._cached_recipe_config(recipe.id)['trainer']['epochs'], 20)
+                self.assertEqual(load.call_count, 2)
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
@@ -86,7 +186,8 @@ class QuickStartServiceTests(unittest.TestCase):
         result = self.service.noise_options("local-cifar10")
         keys = {item["key"] for item in result["options"]}
         self.assertIn("symmetric", keys)
-        self.assertNotIn("external_torch", keys)
+        self.assertIn("external_torch", keys)
+        self.assertIn("class_conditional", keys)
 
     def test_method_options_are_paper_catalog_driven(self) -> None:
         result = self.service.method_options(
@@ -300,7 +401,9 @@ class QuickStartServiceTests(unittest.TestCase):
             candidates["dss"]["pipeline"]["objective_consumer"]["num_classes"], 100
         )
         estimator = candidates["loss-correction"]["pipeline"]["transition_estimator"]
-        self.assertNotIn("matrix", estimator)
+        self.assertEqual(len(estimator['matrix']), 100)
+        self.assertAlmostEqual(estimator['matrix'][0][0], 0.8)
+        self.assertAlmostEqual(estimator['matrix'][0][1], 0.2 / 99)
 
     def test_clean_upm_needs_input_and_symmetric_upm_builds_ready_plan(self) -> None:
         clean = QuickStartNoiseSelection("clean", "clean")

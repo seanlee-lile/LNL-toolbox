@@ -80,6 +80,53 @@ class _mc_ldce_MCLDCETest(unittest.TestCase):
         self.assertEqual(value, math.log(1.0 / (10 - 2)))
         self.assertEqual(config['transition']['model']['name'], 'mc_ldce_cnn')
 
+    def test_transition_diagnostics_survive_epoch_and_resume_rewrites(self) -> None:
+        import json
+        from lnl_toolbox.training.mc_ldce_experiment import _estimate_volmin
+
+        model = nn.Linear(2, 3)
+        loader = [{'input': torch.tensor([[0.1, 0.2], [0.3, 0.4]]), 'target': torch.tensor([0, 1])}]
+        config = {'transition': {
+            'num_classes': 3, 'epochs': 2, 'lambda_volume': 0.0001,
+            'parameterization': {'initial_weight': -2.0, 'seed': 7},
+            'optimizer': {'name': 'sgd', 'lr': 0.01, 'momentum': 0.0, 'weight_decay': 0.0001},
+        }}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'metrics.jsonl'
+            _, diagnostics = _estimate_volmin(config, model, loader, 'cpu', run_dir=directory)
+            before = [json.loads(line) for line in path.read_text().splitlines()]
+            self.assertEqual(len(before), 2)
+            self.assertEqual(diagnostics['epochs'], 2)
+            self.assertTrue(all(row['event'] == 'transition_epoch' for row in before))
+            self.assertIn('transition_matrix', before[-1])
+            self.assertIn('condition_number', before[-1])
+            epochs = [{'event': 'epoch', 'epoch': 1}]
+            _write_epoch_metrics(epochs, path)
+            _write_epoch_metrics(epochs, path)
+            after = [json.loads(line) for line in path.read_text().splitlines()]
+            self.assertEqual(after, before + epochs)
+
+    def test_final_event_reports_last_model_and_resume_does_not_duplicate_history(self) -> None:
+        import json
+        import yaml
+        from lnl_toolbox.training.mc_ldce_experiment import run_mc_ldce_experiment
+
+        config = yaml.safe_load(Path('configs/experiment/mc_ldce_cifar10_smoke.yaml').read_text(encoding='utf-8'))
+        with tempfile.TemporaryDirectory() as directory:
+            run = run_mc_ldce_experiment(config, directory)
+            path = run / 'metrics.jsonl'
+            rows = [json.loads(line) for line in path.read_text().splitlines()]
+            final = rows[-1]
+            self.assertEqual(final['event'], 'final')
+            self.assertEqual(final['test_checkpoint'], 'last.pt')
+            self.assertIsNone(final['selection_split'])
+            epoch = [row for row in rows if row['event'] == 'epoch'][-1]
+            self.assertEqual(final['test_accuracy'], epoch['test_accuracy'])
+            self.assertEqual(final['test_loss'], epoch['test_loss'])
+            run_mc_ldce_experiment(config, resume=run / 'last.pt')
+            resumed = [json.loads(line) for line in path.read_text().splitlines()]
+            self.assertEqual(resumed, rows)
+
     def test_mc_uses_paper_sigmoid_off_diagonal_volmin_parameterization(self) -> None:
         transition_model = PaperVolMinTransition(3, initial_weight=-2.0, seed=1)
         matrix = transition_model.matrix().detach().numpy()
@@ -101,6 +148,24 @@ class _mc_ldce_MCLDCETest(unittest.TestCase):
         self.assertTrue(torch.isfinite(logits.grad).all())
         self.assertIn('volume_regularizer', metrics)
         self.assertTrue(transition_model.off_diagonal_logits.grad is not None)
+
+    def test_volmin_sgd_applies_decay_only_to_classifier_parameters(self) -> None:
+        from lnl_toolbox.algorithms.pcse.volmin import build_paper_volmin_optimizer
+
+        model = nn.Linear(2, 3)
+        transition = PaperVolMinTransition(3, initial_weight=-2.0, seed=2)
+        optimizer = build_paper_volmin_optimizer(model, transition, {'name': 'sgd', 'lr': 0.1, 'momentum': 0.0, 'weight_decay': 0.2})
+        self.assertIsInstance(optimizer, torch.optim.SGD)
+        self.assertEqual([group['weight_decay'] for group in optimizer.param_groups], [0.2, 0.0])
+        model_before = [parameter.detach().clone() for parameter in model.parameters()]
+        transition_before = [parameter.detach().clone() for parameter in transition.parameters()]
+        for parameter in list(model.parameters()) + list(transition.parameters()):
+            parameter.grad = torch.zeros_like(parameter)
+        optimizer.step()
+        for actual, before in zip(model.parameters(), model_before):
+            torch.testing.assert_close(actual, before * 0.98)
+        for actual, before in zip(transition.parameters(), transition_before):
+            torch.testing.assert_close(actual, before, rtol=0, atol=0)
 
     def test_paper_cnn_exposes_128_dimensional_features(self) -> None:
         output = forward_with_features(MCLDCECifarCNN(10), torch.randn(2, 3, 32, 32))

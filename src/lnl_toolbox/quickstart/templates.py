@@ -42,8 +42,19 @@ def _cached_recipe_by_id(recipe_id: str) -> RecipeSpec:
     return recipe_by_id(recipe_id)
 
 
-@lru_cache(maxsize=None)
 def _cached_recipe_config(recipe_id: str) -> dict[str, Any]:
+    recipe = _cached_recipe_by_id(recipe_id)
+    stat = recipe.config_path.stat()
+    return deepcopy(_recipe_config_revision(
+        recipe_id, str(recipe.config_path), stat.st_mtime_ns, stat.st_size
+    ))
+
+
+@lru_cache(maxsize=128)
+def _recipe_config_revision(
+    recipe_id: str, config_path: str, mtime_ns: int, size: int,
+) -> dict[str, Any]:
+    """Cache parsed YAML by source revision; callers receive isolated copies."""
     return load_recipe_config(_cached_recipe_by_id(recipe_id))
 
 
@@ -69,6 +80,39 @@ def _set(config: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
 
 def _paper_method_config(config: Mapping[str, Any]) -> dict[str, Any]:
     return deepcopy(dict(config))
+
+
+def _unset(config: dict[str, Any], path: tuple[str, ...]) -> None:
+    current: Any = config
+    for key in path[:-1]:
+        if not isinstance(current, dict):
+            return
+        current = current.get(key)
+    if isinstance(current, dict):
+        current.pop(path[-1], None)
+
+
+def _synthetic_transition_matrix(selection: QuickStartNoiseSelection, classes: int) -> list[list[float]] | None:
+    if classes < 2:
+        return None
+    if selection.kind == "clean":
+        return [[float(row == col) for col in range(classes)] for row in range(classes)]
+    if selection.kind != "synthetic":
+        return None
+    if selection.key == "class_conditional" and selection.transition_matrix is not None:
+        if len(selection.transition_matrix) != classes:
+            raise ValueError("类别转移矩阵大小必须与当前数据集类别数相同")
+        return [list(row) for row in selection.transition_matrix]
+    if selection.key in {"symmetric", "pairflip"} and selection.rate is not None:
+        rate = float(selection.rate)
+        return [[1 - rate if row == col else (
+            rate / (classes - 1) if selection.key == "symmetric" else float(col == (row + 1) % classes) * rate
+        ) for col in range(classes)] for row in range(classes)]
+    if selection.key == "binary_asymmetric_rcn" and classes == 2:
+        if selection.rho_positive is not None and selection.rho_negative is not None:
+            positive, negative = float(selection.rho_positive), float(selection.rho_negative)
+            return [[1 - negative, negative], [positive, 1 - positive]]
+    return None
 
 
 def _class_count_is_supported(requirements: object, num_classes: int) -> bool:
@@ -139,18 +183,39 @@ def adapt_method_template(
     original_noise = dict(candidate.get("noise", {}) or {})
     original_noise_name = str(original_noise.get("name", "clean")).strip().lower()
     selected_noise_name = str(noise_selection.key).strip().lower()
+    noise_protocol_changed = (
+        original_noise_name != selected_noise_name
+        or any(value is not None and original_noise.get(key) != value for key, value in (
+            ("rate", noise_selection.rate), ("rho_positive", noise_selection.rho_positive),
+            ("rho_negative", noise_selection.rho_negative), ("path", noise_selection.path),
+            ("transition_matrix", None if noise_selection.transition_matrix is None else [list(row) for row in noise_selection.transition_matrix]),
+        ))
+    )
     if noise_selection.kind in {"clean", "native"} or selected_noise_name in {"clean", "native"}:
+        # No synthetic generator is configured for clean/native labels. In
+        # particular, a literal name='clean' must not satisfy configured-noise inputs.
         candidate.pop("noise", None)
+        if "validation_targets" in original_noise:
+            candidate["noise"] = {"validation_targets": original_noise["validation_targets"]}
     else:
         noise = build_noise_config(
             noise_selection.key,
             rate=noise_selection.rate,
             seed=noise_selection.seed,
+            rho_positive=noise_selection.rho_positive,
+            rho_negative=noise_selection.rho_negative,
+            transition_matrix=noise_selection.transition_matrix,
+            path=noise_selection.path,
         )
         if noise is None:
             raise ValueError(
                 f"noise choice {noise_selection.key!r} needs additional method/data inputs"
             )
+        if original_noise_name == selected_noise_name:
+            # Retain valid sampler/label-key choices, never stale source paths or matrices.
+            for key in ("rng", "clean_key", "noisy_key"):
+                if key in original_noise:
+                    noise[key] = original_noise[key]
         if "validation_targets" in original_noise:
             noise["validation_targets"] = original_noise["validation_targets"]
         candidate["noise"] = noise
@@ -169,13 +234,43 @@ def adapt_method_template(
         _rebind_class_dependent_values(
             candidate,
             num_classes=num_classes,
-            discard_transition_matrices=original_noise_name != selected_noise_name,
+            discard_transition_matrices=noise_protocol_changed,
         )
+        if selected_noise_name == "class_conditional" and noise_selection.kind == "synthetic":
+            candidate["noise"]["transition_matrix"] = _synthetic_transition_matrix(noise_selection, num_classes)
     if requirements is not None and requirements.requires_method_noise_prior:
-        prior = inputs.get("noise_rate_prior", noise_selection.rate)
-        if prior is not None:
-            for path in requirements.method_noise_prior_paths:
+        prior = inputs.get("noise_rate_prior", 0.0 if noise_selection.kind == "clean" else noise_selection.rate)
+        for path in requirements.method_noise_prior_paths:
+            if prior is None:
+                _unset(candidate, path)
+            else:
                 _set(candidate, path, float(prior))
+        if prior is not None and requirements.method in {"coteaching", "cnlcu"}:
+            # Existing validators require this endpoint to match the supplied prior.
+            _set(candidate, (requirements.method, "remember_schedule", "end"), 1.0 - float(prior))
+    if requirements is not None:
+        transition = _synthetic_transition_matrix(noise_selection, num_classes)
+        binary_rates = None
+        if num_classes == 2 and noise_selection.kind == "synthetic":
+            if selected_noise_name == "binary_asymmetric_rcn":
+                binary_rates = (noise_selection.rho_positive, noise_selection.rho_negative)
+            elif selected_noise_name in {"symmetric", "pairflip"}:
+                binary_rates = (noise_selection.rate, noise_selection.rate)
+        for requirement in requirements.required_config_inputs:
+            if requirement.code == "requires_transition_matrix":
+                for path in requirement.paths:
+                    if transition is None:
+                        _unset(candidate, path)
+                    else:
+                        _set(candidate, path, transition)
+            elif requirement.code == "requires_binary_noise_prior":
+                for path in requirement.paths:
+                    if path[0] == "noise":
+                        continue
+                    if binary_rates is None or any(rate is None for rate in binary_rates):
+                        _unset(candidate, path)
+                    elif path[-1] in {"rho_positive", "rho_negative"}:
+                        _set(candidate, path, float(binary_rates[path[-1] == "rho_negative"]))
     for path_text, value in inputs.items():
         if path_text == "noise_rate_prior":
             continue
@@ -203,6 +298,20 @@ def find_exact_reproduction(
         if data_name != str(dataset_adapter).lower().replace("-", "_"):
             continue
         if noise_name != wanted_noise:
+            continue
+        if wanted_noise == "class_conditional" and noise_selection.transition_matrix is None:
+            continue
+        if wanted_noise == "external_torch" and not noise_selection.path:
+            continue
+        if noise_selection.transition_matrix is not None and _get(config, ("noise", "transition_matrix")) != [list(row) for row in noise_selection.transition_matrix]:
+            continue
+        if noise_selection.path is not None and str(_get(config, ("noise", "path"), "")) != noise_selection.path:
+            continue
+        if wanted_noise == "binary_asymmetric_rcn" and (
+            noise_selection.rho_positive is None or noise_selection.rho_negative is None
+            or _get(config, ("noise", "rho_positive")) != noise_selection.rho_positive
+            or _get(config, ("noise", "rho_negative")) != noise_selection.rho_negative
+        ):
             continue
         configured_rate = _get(config, ("noise", "rate"))
         if noise_selection.rate is not None and configured_rate is not None:

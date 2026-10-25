@@ -17,9 +17,9 @@ from .transition_risk import (
 
 
 def _row_positive_normalize(transitions: torch.Tensor) -> torch.Tensor:
-    """Project PDL's revised transition onto the non-negative row simplex."""
+    """Apply PDL's absolute-value row normalization to revised transitions."""
 
-    projected = transitions.clamp_min(0.0)
+    projected = transitions.abs()
     row_sum = projected.sum(dim=2, keepdim=True)
     if bool((row_sum <= 0).any()):
         raise ValueError("PDL revision produced an all-zero transition row")
