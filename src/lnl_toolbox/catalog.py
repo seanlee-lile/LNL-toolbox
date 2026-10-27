@@ -929,7 +929,7 @@ def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
             milestones = flat.get(path.rsplit(".", 1)[0] + ".milestones")
             if isinstance(milestones, list) and len(current) != len(milestones):
                 fail(path, "one finite value per confidence milestone")
-    if method == "importance_reweighting" and flat.get("data.name") != "uci_statlog_heart":
+    if method == "importance_reweighting" and str(flat.get("data.name", "")).strip().lower().startswith("synthetic_"):
         for name in ("train_size", "validation_size", "test_size"):
             if name == "validation_size" and flat.get("data.validation_split.source") == "training_pool":
                 continue  # Hold-out counts do not inherit the synthetic generator's parity constraint.

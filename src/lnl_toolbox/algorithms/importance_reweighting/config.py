@@ -133,7 +133,9 @@ class ImportanceReweightingConfig:
                 )
             data["schema"] = schema
         data["dimension"] = dimension
-        if data_name != "uci_statlog_heart":
+        # Only synthetic adapters generate balanced samples from these sizes.
+        # Registered datasets are validated from their loaded data instead.
+        if data_name.startswith("synthetic_"):
             for name in ("train_size", "validation_size", "test_size"):
                 size = int(data.get(name, 0))
                 if name == "validation_size" and (data.get("validation_split", {}) or {}).get("source") == "training_pool":
