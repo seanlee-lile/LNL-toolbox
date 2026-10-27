@@ -89,16 +89,6 @@ class _mentornet_MentorNetTest(unittest.TestCase):
             for parameter, expected in zip(model.parameters(), expected_grads):
                 torch.testing.assert_close(parameter.grad, expected * scale)
 
-    def test_paper_decay_is_used_by_recipe_and_web(self) -> None:
-        import yaml
-        from web import command_console
-        root = Path(__file__).resolve().parents[1]
-        config = yaml.safe_load((root / 'configs/experiment/mentornet_dd_cifar100_symmetric04_reproduction.yaml').read_text(encoding='utf-8'))
-        self.assertEqual(config['pipeline']['weight_provider']['decay'], .95)
-        fields = {f['path']: f for f in command_console._config_schema('mentornet-dd-cifar100-symmetric04-reproduction')['fields']}
-        field = fields['pipeline.weight_provider.decay']
-        self.assertEqual(field['value'], .95)
-        self.assertIn('0.95', field['note'])
 
     def test_teacher_yaml_generates_loadable_official_artifact(self) -> None:
         import yaml

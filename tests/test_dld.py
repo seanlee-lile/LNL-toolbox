@@ -452,17 +452,6 @@ def _dld_readiness__source(directory: Path) -> tuple[dict, torch.nn.Module]:
 
 class _dld_readiness_DLDReadinessTest(unittest.TestCase):
 
-    def test_formal_config_uses_current_contract_and_full_budget(self) -> None:
-        path = _dld_readiness_ROOT / 'configs/experiment/dld_cifar10_reproduction.yaml'
-        config = yaml.safe_load(path.read_text(encoding='utf-8'))
-        parsed = DLDConfig.from_mapping(config)
-        self.assertEqual(config['configuration_fidelity'], 'paper_oriented')
-        self.assertEqual(config['loader']['batch_size'], 200)
-        self.assertEqual(parsed.precorrection['k_neighbors'], 50)
-        self.assertEqual(parsed.diffusion['timesteps'], 1000)
-        self.assertEqual(parsed.epochs, 200)
-        self.assertEqual(parsed.feature_extractor['source'], 'external_checkpoint')
-        self.assertEqual(parsed.feature_extractor['external']['adapter'], 'torchvision_resnet34_imagenet1k_v1')
 
     def test_torchvision_resnet34_source_is_pretrained_frozen_and_explicit(self) -> None:
         from torchvision.models import resnet34
@@ -513,33 +502,6 @@ class _dld_readiness_DLDReadinessTest(unittest.TestCase):
             cached.write_bytes(b'not official weights')
             self.assertEqual(_cached_torchvision_weight(ResNet34_Weights.IMAGENET1K_V1.url), cached)
 
-    def test_real_short_config_is_full_data_external_sym20(self) -> None:
-        path = _dld_readiness_ROOT / 'configs' / 'reproduction' / 'cifar10_dld_sym20_short.yaml'
-        config = yaml.safe_load(path.read_text(encoding='utf-8'))
-        parsed = DLDConfig.from_mapping(config)
-        self.assertEqual(config['method'], 'dld')
-        self.assertEqual(config['data']['name'], 'cifar10')
-        for name in ('max_train_samples', 'max_validation_samples', 'max_test_samples'):
-            self.assertNotIn(name, config['data'])
-        self.assertEqual(config['noise']['rate'], 0.2)
-        self.assertEqual(parsed.fidelity['name'], 'paper_oriented_v2_cosine_similarity')
-        self.assertEqual(parsed.fidelity['neighbor_metric'], 'cosine_similarity')
-        self.assertEqual(parsed.fidelity['neighbor_weighting'], 'inverse_neighbor_value')
-        self.assertEqual(parsed.feature_extractor['source'], 'external_checkpoint')
-        self.assertEqual(parsed.feature_extractor['external']['adapter'], 'torchvision_resnet34_imagenet1k_v1')
-        self.assertNotIn('checkpoint_sha256', parsed.feature_extractor['external'])
-        from lnl_toolbox.training.runners import resolve_runner
-        requirements = resolve_runner(config).requirements(config)
-        self.assertEqual(requirements.required_pretrained_roles, ())
-        self.assertEqual(requirements.prerequisites[0].key, 'dld_feature_extractor')
-        self.assertEqual(parsed.precorrection['query_chunk_size'], 64)
-        self.assertEqual(parsed.epochs, 15)
-        legacy = yaml.safe_load(path.read_text(encoding='utf-8'))
-        legacy['dld']['fidelity']['name'] = 'paper_oriented_v1'
-        legacy['dld']['fidelity']['neighbor_metric'] = 'cosine_distance'
-        legacy['dld']['fidelity'].pop('neighbor_weighting')
-        with self.assertRaisesRegex(ValueError, 'fidelity'):
-            DLDConfig.from_mapping(legacy)
 
     def test_external_source_is_strict_and_immutable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

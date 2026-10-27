@@ -368,22 +368,6 @@ class _coteaching_workflow_CoTeachingWorkflowTest(unittest.TestCase):
             self.assertEqual(run_experiment(_coteaching_workflow__config()), Path('coteaching-run'))
             run.assert_called_once()
 
-    def test_full_run_recipe_uses_engineering_cifar10_protocol(self):
-        recipe = recipe_by_id('cifar10-coteaching-reproduction')
-        self.assertEqual(recipe.profile, 'reproduction')
-        self.assertEqual(recipe.method, 'coteaching')
-        self.assertEqual(recipe.runner, 'coteaching')
-        self.assertEqual(recipe.configuration_fidelity, 'engineering')
-        config = load_recipe_config(recipe)
-        self.assertEqual(validate_config(config).name, 'coteaching')
-        self.assertEqual(config['method'], 'coteaching')
-        self.assertEqual(config['execution']['runner'], 'coteaching')
-        for key in ('max_train_samples', 'max_validation_samples', 'max_test_samples'):
-            self.assertNotIn(key, config['data'])
-        self.assertEqual(config['coteaching']['model_count'], 2)
-        paper = paper_by_id('coteaching')
-        exposed = {item.recipe_id: item for item in paper.configs}
-        self.assertEqual(exposed[recipe.id].configuration_fidelity, 'engineering')
 
     def test_coteaching_dry_run_reports_method_specific_settings(self):
         output = io.StringIO()

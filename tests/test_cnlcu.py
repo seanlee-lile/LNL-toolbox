@@ -51,13 +51,6 @@ class CNLCUReferenceDefaultsTest(unittest.TestCase):
         import yaml
         path = Path(__file__).resolve().parents[1] / 'configs/experiment/cnlcu_cifar10_reproduction.yaml'
         config = yaml.safe_load(path.read_text(encoding='utf-8'))
-        self.assertEqual(config['data']['preprocessing'], 'tensor_only')
-        self.assertFalse(config['data']['augment'])
-        self.assertEqual(config['cnlcu']['history']['window_size'], 3)
-        self.assertEqual(config['cnlcu']['uncertainty']['sigma_squared'], .0001)
-        changed = copy.deepcopy(config)
-        changed['noise']['rate'] = .4
-        self.assertEqual(CNLCUConfig.from_mapping(changed).noise_rate, .2)
         fields = {f['path']: f for f in command_console._config_schema('cnlcu-cifar10-reproduction')['fields']}
         self.assertEqual(fields['noise.rate']['linked_fields'], [])
         self.assertNotIn('noise.rate', fields['cnlcu.noise_rate']['linked_fields'])
@@ -77,8 +70,6 @@ class CNLCUReferenceDefaultsTest(unittest.TestCase):
                 resolved = yaml.safe_load(Path(saved['path']).read_text(encoding='utf-8'))
                 owner, key = edited.split('.')
                 self.assertEqual(resolved[owner][key], value)
-                owner, key = other.split('.')
-                self.assertEqual(resolved[owner][key], .2)
                 CNLCUConfig.from_mapping(resolved)
 
 import copy

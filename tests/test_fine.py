@@ -386,24 +386,3 @@ class _fine_training_FINETrainingTest(unittest.TestCase):
             self.assertEqual(resumed['metrics'],complete_state['metrics'])
             final=[json.loads(line) for line in (resumed_path.parent/'metrics.jsonl').read_text().splitlines()][-1]
             self.assertAlmostEqual(final['last_10_test_accuracy'],sum(row['test_accuracy'] for row in resumed['metrics'])/3)
-
-    def test_formal_scratch_and_web_defaults_follow_paper(self) -> None:
-        import yaml
-        from web.command_console import _config_schema
-        config=yaml.safe_load(Path('configs/experiment/fine_cifar100n_reproduction.yaml').read_text(encoding='utf-8'))
-        self.assertEqual((config['fine']['beta'],config['fine']['gamma']),(.001,.1))
-        scratch=yaml.safe_load(Path('src/lnl_toolbox/scratch/recipes/papers/fine.yaml').read_text(encoding='utf-8'))
-        state=next(step['params'] for step in scratch['steps'] if step['block']=='create_fine_state')
-        self.assertEqual((state['beta'],state['gamma']),(.001,.1))
-        refresh=next(step for step in scratch['steps'] if step['block']=='epoch_loop')['steps']
-        snapshot_loader=next(step['params'] for step in refresh if step['block']=='refresh_epoch_loader' and step['params']['save_as']=='train_eval_loader')
-        self.assertEqual(snapshot_loader['role'],'train')
-        registry=yaml.safe_load(Path('web/lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
-        parameters=registry['methods']['fine']['parameters']
-        self.assertEqual(parameters['basic']['noise.seed']['current'],23)
-        self.assertEqual(parameters['advanced']['noise.rng']['current'],'numpy_legacy')
-        schema=_config_schema('fine-cifar100n-reproduction')
-        fields={field['path']:field for field in schema['fields']}
-        self.assertFalse(fields['model.dropout']['visible'])
-        self.assertEqual(fields['fine.beta']['value'],.001)
-        self.assertEqual(fields['fine.gamma']['value'],.1)

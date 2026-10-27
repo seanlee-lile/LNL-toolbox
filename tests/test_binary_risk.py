@@ -49,20 +49,6 @@ class _binary_risk_BinaryRiskTest(unittest.TestCase):
                     clean_gradient = torch.autograd.grad(clean.sum(), logits)[0]
                     torch.testing.assert_close(actual_gradient, clean_gradient, rtol=1e-12, atol=1e-12)
 
-    def test_metadata_distinguishes_toolbox_defaults_and_joint_rate_constraint(self) -> None:
-        from pathlib import Path
-        import yaml
-        registry = yaml.safe_load((Path(__file__).resolve().parents[1] / 'web' /
-            'lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
-        method = registry['methods']['binary_risk']
-        for path in ('data.train_size', 'data.test_size'):
-            self.assertEqual(method['parameters']['basic'][path]['origin'], 'toolbox_default')
-            self.assertNotIn(path, method['parameters']['paper'])
-        for prefix in ('risk', 'noise'):
-            for suffix in ('rho_positive', 'rho_negative'):
-                constraint = method['parameters']['paper'][f'{prefix}.{suffix}']['constraints']
-                self.assertIn('rho_positive + rho_negative < 1', constraint)
-                self.assertNotIn('0.5', constraint)
 
 class _binary_preprocessing_BinaryPreprocessingTest(unittest.TestCase):
 

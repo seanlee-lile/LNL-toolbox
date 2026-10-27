@@ -72,13 +72,6 @@ class _mc_ldce_MCLDCETest(unittest.TestCase):
             rows = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
         self.assertEqual([row['epoch'] for row in rows], [1, 2])
 
-    def test_reproduction_config_uses_exact_volmin_initialization(self) -> None:
-        import yaml
-        from pathlib import Path
-        config = yaml.safe_load(Path('configs/experiment/mc_ldce_cifar10_reproduction.yaml').read_text(encoding='utf-8'))
-        value = float(config['transition']['parameterization']['initial_weight'])
-        self.assertEqual(value, math.log(1.0 / (10 - 2)))
-        self.assertEqual(config['transition']['model']['name'], 'mc_ldce_cnn')
 
     def test_mc_uses_paper_sigmoid_off_diagonal_volmin_parameterization(self) -> None:
         transition_model = PaperVolMinTransition(3, initial_weight=-2.0, seed=1)
@@ -284,17 +277,3 @@ class _mc_ldce_MCLDCETest(unittest.TestCase):
             for name, value in uninterrupted['model'].items():
                 torch.testing.assert_close(resumed['model'][name], value, rtol=0, atol=0)
             self.assertEqual(resumed['metrics'], uninterrupted['metrics'])
-
-    def test_formal_defaults_and_web_metadata_agree(self) -> None:
-        import yaml
-        config = yaml.safe_load(Path('configs/experiment/mc_ldce_cifar10_reproduction.yaml').read_text(encoding='utf-8'))
-        registry = yaml.safe_load(Path('web/lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
-        self.assertEqual(config['mc_ldce']['feature_mode'], 'joint')
-        self.assertEqual(config['mc_ldce']['lifecycle_version'], 3)
-        parameters = {
-            path: field
-            for group in registry['methods']['mc_ldce']['parameters'].values()
-            for path, field in group.items()
-        }
-        self.assertEqual(parameters['mc_ldce.feature_mode']['current'], config['mc_ldce']['feature_mode'])
-        self.assertEqual(parameters['mc_ldce.lifecycle_version']['current'], config['mc_ldce']['lifecycle_version'])

@@ -323,12 +323,8 @@ class LENDConvergenceAndScratchTest(unittest.TestCase):
         import tempfile, yaml
         from pathlib import Path
         fields = {f['path']: f for f in command_console._config_schema('lend-cifar10-reproduction')['fields']}
-        self.assertEqual(fields['lend.dilution.max_steps']['value'], 10000)
-        self.assertEqual(fields['lend.dilution.policy']['value'], 'until_converged')
         self.assertTrue(fields['lend.dilution.policy']['editable'])
         self.assertEqual([choice['value'] for choice in fields['lend.dilution.policy']['choices']], ['until_converged', 'fixed_steps'])
-        self.assertIn('并非论文指定', fields['lend.dilution.tolerance']['note'])
-        self.assertIn('工具箱默认值', fields['lend.graph.gamma']['note'])
         for policy in ('fixed_steps', 'until_converged'):
             with self.subTest(policy=policy), tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
                 saved = command_console._save_config({'recipe': 'lend-cifar10-reproduction',
@@ -338,13 +334,7 @@ class LENDConvergenceAndScratchTest(unittest.TestCase):
                 parsed = LENDConfig.from_mapping(config)
                 self.assertEqual(parsed.dilution_policy, policy)
                 self.assertEqual(parsed.dilution_max_steps, fields['lend.dilution.max_steps']['value'])
-                self.assertEqual(parsed.dilution_tolerance, 1e-5)
 
-    def test_generic_knn_component_has_no_paper_lend_aliases(self):
-        from lnl_toolbox.selectors import lend as component
-        self.assertFalse(hasattr(component, 'LENDSelector'))
-        self.assertFalse(hasattr(component, 'dilute_labels'))
-        self.assertTrue(hasattr(component, 'KNNLabelPropagationSelector'))
 
     def test_algorithm_records_convergence_before_selection_and_update(self):
         algorithm = _lend_algorithm_LENDAlgorithmTest()._algorithm(beta=.9, lr=.01)

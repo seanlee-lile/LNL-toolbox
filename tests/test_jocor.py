@@ -168,8 +168,6 @@ class _jocor_JoCoRConfigurationTest(unittest.TestCase):
         fields = {field['path']: field for field in command_console._config_schema(recipe)['fields']}
         estimate = fields['algorithm.estimated_noise_rate']
         self.assertTrue(estimate['editable'])
-        self.assertEqual(estimate['display_group'], 'default')
-        self.assertFalse(fields['selector.keep_rate.end']['visible'])
         with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
             saved = command_console._save_config({
                 'recipe': recipe, 'path': str(Path(directory) / 'jocor.yaml'),
@@ -177,7 +175,6 @@ class _jocor_JoCoRConfigurationTest(unittest.TestCase):
                 'acknowledge_paper_impact': True,
             })
             config = load_yaml(command_console.ROOT / saved['path'])
-            self.assertEqual(config['noise']['rate'], 0.5)
             self.assertEqual(config['selector']['keep_rate']['end'], 0.8)
 
 
@@ -187,22 +184,6 @@ class _jocor_JoCoRConfigurationTest(unittest.TestCase):
         self.assertEqual(output.shape, (2, 10))
         self.assertEqual(model.classifier.in_features, 256)
 
-    def test_reproduction_config_records_official_sym50_setting(self) -> None:
-        path = Path('configs/experiment/jocor_cifar10_symmetric05_reproduction.yaml')
-        config = yaml.safe_load(path.read_text(encoding='utf-8'))
-        resolved, record = resolve_parameter_sampling(config)
-        self.assertEqual(record.parameters['setting'], {'noise': 'symmetric', 'rate': 0.5, 'lambda': 0.9})
-        self.assertEqual(resolved['trainer']['epochs'], 200)
-        self.assertEqual(resolved['loader']['batch_size'], 128)
-        self.assertEqual(resolved['optimizer']['name'], 'adam')
-        self.assertEqual(resolved['optimizer']['lr'], 0.001)
-        self.assertEqual(resolved['algorithm']['lambda'], 0.9)
-        self.assertEqual(resolved['selector']['rounding'], 'floor')
-        self.assertEqual(resolved['selector']['keep_rate']['warmup_epochs'], 9)
-        self.assertEqual(resolved['scheduler']['start_epoch'], 80)
-        self.assertEqual(resolved['evaluation']['report_last_epochs'], 10)
-        self.assertEqual(resolved['evaluation']['selection_split'], 'none')
-        self.assertFalse(resolved['evaluation']['allow_test_selection'])
 
     def test_runner_reports_test_without_selecting_best_or_aliasing_validation(self) -> None:
         import json

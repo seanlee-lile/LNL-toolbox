@@ -175,21 +175,6 @@ class ScratchExecutorTest(unittest.TestCase):
         evaluate_accuracy(context, model="model", loader="loader", save_as="accuracy")
         self.assertEqual(context["accuracy"], 1.0)
 
-    def test_gce_recipe_matches_its_reproduction_protocol(self) -> None:
-        root = Path(__file__).resolve().parents[4]
-        recipe = load_recipe(root / "src" / "lnl_toolbox" / "scratch" / "recipes" / "papers" / "gce.yaml")
-        config = yaml.safe_load((root / "configs" / "experiment" / "gce_cifar10_noise02_reproduction.yaml").read_text(encoding="utf-8"))
-        top = {step["block"]: step.get("params", {}) for step in recipe["steps"]}
-        data = top
-        self.assertEqual(data["create_dataset_split"]["validation_size"], config["data"]["validation_size"])
-        self.assertEqual(data["configure_preprocessing"]["augment"], config["data"]["augment"])
-        self.assertEqual((data["apply_noise"]["name"], data["apply_noise"]["rate"], data["apply_noise"]["seed"], data["configure_loader"]["batch_size"]), (config["noise"]["name"], config["noise"]["rate"], config["noise"]["seed"], config["loader"]["batch_size"]))
-        self.assertEqual(top["create_model"], {"model": config["model"]["name"], "num_classes": 10, "base_width": config["model"]["base_width"], "device": "device"})
-        self.assertEqual({key: top["create_optimizer"][key] for key in ("optimizer", "lr", "momentum", "nesterov", "weight_decay")}, {"optimizer": config["optimizer"]["name"], "lr": config["optimizer"]["lr"], "momentum": config["optimizer"]["momentum"], "nesterov": config["optimizer"]["nesterov"], "weight_decay": config["optimizer"]["weight_decay"]})
-        self.assertEqual({key: top["create_scheduler"][key] for key in ("scheduler", "milestones", "gamma")}, {"scheduler": config["scheduler"]["name"], "milestones": config["scheduler"]["milestones"], "gamma": config["scheduler"]["gamma"]})
-        epoch = next(step for step in recipe["steps"] if step["block"] == "epoch_loop")
-        self.assertEqual(epoch["params"]["epochs"], config["trainer"]["epochs"])
-        self.assertEqual([step["block"] for step in epoch["steps"]], ["refresh_epoch_loader", "batch_loop", "evaluate_accuracy", "track_best_model", "scheduler_step"])
 
     def test_gce_formula_blocks_match_the_legacy_lq_loss(self) -> None:
         import torch

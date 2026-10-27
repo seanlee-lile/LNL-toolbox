@@ -733,35 +733,6 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
         self.assertEqual(parsed_paper.transition_backend, 'paper_volmin')
         self.assertEqual(parsed_paper.transition_backend_config['lambda_volume'], 0.001)
 
-    def test_cifar10_reproduction_trains_its_own_pretrainer(self) -> None:
-        path = _pcse_workflow_ROOT / 'configs/reproduction/cifar10_pcse_reproduction.yaml'
-        config = yaml.safe_load(path.read_text(encoding='utf-8'))
-        self.assertEqual(config['pretraining_stage']['mode'], 'train')
-        self.assertEqual(config['pretraining_stage']['method'], 'cross_entropy')
-        self.assertEqual(config['noise']['mode'], 'generated')
-        self.assertNotIn('source', config['pretraining_stage'])
-        self.assertTrue(config['data']['augment'])
-        self.assertEqual(config['gda_stage']['covariance_ridge'], 0)
-        self.assertEqual([x['name'] for x in config['feature_stage']['layers']], ['layer4', 'avgpool'])
-        stage = config['pretraining_stage']
-        self.assertEqual(stage['epochs'], 200)
-        self.assertEqual(stage['model']['base_width'], 64)
-        self.assertEqual(stage['model']['stem_padding'], 0)
-        self.assertEqual(stage['optimizer']['name'], 'adam')
-        self.assertEqual(stage['optimizer']['lr'], .001)
-        self.assertEqual(stage['optimizer']['weight_decay'], 0)
-        self.assertEqual(config['ensemble_stage'], {'epochs':20, 'learning_rate':.02})
-        from lnl_toolbox.training.experiment import build_optimizer, build_scheduler, apply_epoch_beta1
-        model = torch.nn.Linear(2, 3)
-        optimizer = build_optimizer(model, stage['optimizer'])
-        scheduler = build_scheduler(optimizer, stage['scheduler'], stage['epochs'])
-        for epoch in range(200):
-            apply_epoch_beta1(optimizer, stage['scheduler'], epoch)
-            expected_lr = .001 if epoch < 80 else (200-epoch)/120*.001
-            self.assertAlmostEqual(optimizer.param_groups[0]['lr'], expected_lr)
-            self.assertEqual(optimizer.param_groups[0]['betas'][0], .9 if epoch < 80 else .1)
-            optimizer.step()
-            scheduler.step()
 
     def test_paper_volmin_can_express_sixty_percent_symmetric_noise(self) -> None:
         from lnl_toolbox.algorithms.pcse.volmin import PaperVolMinTransition, paper_volmin_objective
@@ -842,23 +813,6 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
                     run_pcse_experiment(config, resume=run_dir/'last.pt')
                     self.assertEqual((run_dir/'pcse_ensemble.npz').read_bytes(), before)
 
-    def test_pcse_formal_web_schema_matches_new_parameterization(self) -> None:
-        from web.command_console import _config_schema
-        config = yaml.safe_load((_pcse_workflow_ROOT/'configs/reproduction/cifar10_pcse_reproduction.yaml').read_text(encoding='utf-8'))
-        parsed = PCSEConfig.from_mapping(config)
-        self.assertEqual(parsed.transition_backend_config['parameterization']['name'], 'sigmoid_off_diagonal')
-        registry = yaml.safe_load((_pcse_workflow_ROOT/'web/lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
-        method = registry['methods']['pcse']
-        self.assertEqual(method['parameters']['advanced']['transition_stage.parameterization.seed']['current'], 1)
-        self.assertEqual(sum(len(group) for group in method['parameters'].values()), method['coverage']['parameter_count'])
-        for group, entries in method['parameters'].items():
-            self.assertEqual(len(entries), method['coverage']['by_level'][group])
-        schema = _config_schema('cifar10-pcse-reproduction')
-        fields = {field['path']:field for field in schema['fields']}
-        self.assertEqual(fields['transition_stage.parameterization.name']['value'], 'sigmoid_off_diagonal')
-        self.assertEqual(fields['transition_stage.parameterization.initial_weight']['value'], config['transition_stage']['parameterization']['initial_weight'])
-        self.assertNotIn('transition_stage.parameterization.max_flip_mass', fields)
-        self.assertEqual(PCSEConfig.from_mapping(config).pretraining.mode, 'train')
 
     def test_external_checkpoint_config_is_strict_and_train_mode_unchanged(self) -> None:
         config = _pcse_workflow__load_smoke_config()

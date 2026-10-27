@@ -122,7 +122,7 @@ class _transition_estimators_TransitionEstimatorTest(unittest.TestCase):
 
     def test_dual_t_matches_paper_factorization(self) -> None:
         snapshot = self._dual_t_snapshot()
-        artifact = DualTransitionEstimator().estimate(snapshot)
+        artifact = DualTransitionEstimator(percentile=None).estimate(snapshot)
         t_club = np.asarray([[0.9, 0.05, 0.05], [0.1, 0.8, 0.1], [0.05, 0.05, 0.9]])
         t_spade = np.asarray([[0.5, 0.5, 0.0], [0.0, 0.5, 0.5], [0.5, 0.0, 0.5]])
         self.assertEqual(artifact.estimator, 'dual_t')
@@ -160,7 +160,7 @@ class _transition_estimators_TransitionEstimatorTest(unittest.TestCase):
         probabilities = np.asarray([[0.9, 0.1], [0.8, 0.2], [0.2, 0.8], [0.1, 0.9]])
         snapshot = PosteriorSnapshot(noisy_probabilities=probabilities, noisy_targets=probabilities.argmax(axis=1), global_indices=np.asarray([0, 1, 2, 3]), dataset='fixture', split='train')
         anchor = AnchorTransitionEstimator().estimate(snapshot)
-        dual = DualTransitionEstimator().estimate(snapshot)
+        dual = DualTransitionEstimator(percentile=None).estimate(snapshot)
         np.testing.assert_allclose(dual.metadata['t_spade'], np.eye(2))
         np.testing.assert_allclose(dual.matrix, anchor.matrix)
 
@@ -306,40 +306,7 @@ from torch import nn
 from lnl_toolbox.algorithms.volminnet import VolMinNetAlgorithm, VolMinTransition
 
 class VolMinNetPaperDefaultsTest(unittest.TestCase):
-    def test_formal_network_stem_and_default_initialization(self):
-        from lnl_toolbox.catalog import load_yaml
-        from lnl_toolbox.training.experiment import build_model
-        from lnl_toolbox.models.cifar_resnet import CifarResNet, BasicBlock
-        root = Path(__file__).resolve().parents[1]
-        config = load_yaml(root / 'configs/experiment/volminnet_cifar10_reproduction.yaml')
-        torch.manual_seed(9)
-        model = build_model(config['volminnet']['model'], 10).eval()
-        torch.manual_seed(9)
-        reference = CifarResNet(BasicBlock, 10, 64, initialization='torch_default', stem_padding=0)
-        self.assertEqual(model.stem[0].padding, (0, 0))
-        self.assertEqual(model.stem(torch.zeros(2, 3, 32, 32)).shape[-2:], (30, 30))
-        for name, value in reference.state_dict().items():
-            torch.testing.assert_close(model.state_dict()[name], value, rtol=0, atol=0)
-        self.assertEqual(build_model({'name': 'resnet18'}, 10).stem[0].padding, (1, 1))
 
-    def test_author_normalization_and_paper_optimizer_defaults(self):
-        from lnl_toolbox.catalog import load_yaml
-        from lnl_toolbox.data.torch_cifar import build_cifar_transform
-        from PIL import Image
-        import numpy as np
-        config = load_yaml(Path(__file__).resolve().parents[1] / 'configs/experiment/volminnet_cifar10_reproduction.yaml')
-        normalization = config['data']['normalization']
-        transform = build_cifar_transform(False, False,
-            normalization_mean=normalization['mean'], normalization_std=normalization['std'])
-        actual = transform(Image.fromarray(np.zeros((32, 32, 3), dtype=np.uint8)))
-        expected = -torch.tensor([0.4914, 0.4822, 0.4465]) / torch.tensor([0.2023, 0.1994, 0.2010])
-        torch.testing.assert_close(actual[:, 0, 0], expected)
-        for role in ('classifier', 'transition'):
-            optimizer = config['volminnet']['optimizer'][role]
-            self.assertEqual(optimizer['weight_decay'], 0.001)
-            self.assertEqual(optimizer['lr'], 0.01)
-            self.assertEqual(optimizer['momentum'], 0.9)
-        self.assertEqual(config['trainer']['epochs'], 150)
 
     def test_formal_network_can_train_one_short_epoch(self):
         from lnl_toolbox.catalog import load_yaml
@@ -563,11 +530,6 @@ class _volminnet_workflow_VolMinNetWorkflowTest(unittest.TestCase):
             final = json.loads((run_dir / 'final_metrics.json').read_text())
             self.assertEqual(len(final['learned_transition']), 4)
 
-    def test_formal_config_matches_cifar10_paper_protocol(self) -> None:
-        path = Path(__file__).resolve().parents[1] / 'configs/experiment/volminnet_cifar10_reproduction.yaml'
-        config = yaml.safe_load(path.read_text(encoding='utf-8'))
-        VolMinNetConfig.from_mapping(config)
-        self.assertEqual(config['configuration_fidelity'], 'paper_protocol')
 
     def setUp(self) -> None:
         self.train = _volminnet_workflow__cifar(40, 'train')

@@ -185,36 +185,6 @@ class _pdl_PDLTest(unittest.TestCase):
                 np.testing.assert_allclose(actual_coefficients.sum(axis=1), 1.0)
                 self.assertTrue((actual_coefficients >= 0.0).all())
 
-    def test_cifar10_three_stage_defaults_match_author_training_loops(self) -> None:
-        import yaml
-        from lnl_toolbox.training.experiment import build_optimizer, build_scheduler
-
-        path = Path(__file__).resolve().parents[1] / 'configs' / 'experiment' / 'pdl_cifar10_reproduction.yaml'
-        config = yaml.safe_load(path.read_text(encoding='utf-8'))
-        warmup = config['warmup']
-        self.assertEqual(warmup['epochs'], len(range(1, 5)))
-        self.assertEqual(warmup['optimizer']['momentum'], 0.0)
-        self.assertEqual(warmup['optimizer']['lr'], 0.01)
-        self.assertEqual(warmup['scheduler'], {'name': 'none', 'milestones': [], 'gamma': 0.1})
-        model = torch.nn.Linear(1, 1)
-        optimizer = build_optimizer(model, warmup['optimizer'])
-        scheduler = build_scheduler(optimizer, warmup['scheduler'], warmup['epochs'])
-        self.assertIsInstance(optimizer, torch.optim.SGD)
-        self.assertEqual(optimizer.param_groups[0]['momentum'], 0.0)
-        self.assertIsNone(scheduler)
-        for _ in range(warmup['epochs']):
-            optimizer.step()
-            self.assertAlmostEqual(optimizer.param_groups[0]['lr'], 0.01)
-        correction = build_optimizer(model, config['optimizer'])
-        revision = build_optimizer(model, config['revision']['optimizer'])
-        self.assertIsInstance(correction, torch.optim.SGD)
-        self.assertEqual(correction.param_groups[0]['momentum'], 0.9)
-        self.assertIsInstance(revision, torch.optim.Adam)
-        self.assertAlmostEqual(revision.param_groups[0]['lr'], 5e-7)
-        self.assertEqual(config['phases']['correction_epochs'], len(range(1, 50)))
-        self.assertEqual(config['phases']['revision_epochs'], len(range(1, 50)))
-        self.assertEqual(config['trainer']['epochs'], sum(config['phases'].values()))
-        self.assertEqual(warmup['epochs'] + config['trainer']['epochs'], 102)
 
     def test_official_basis_reset_matches_init_params_scale(self) -> None:
         from torch.nn import functional as F

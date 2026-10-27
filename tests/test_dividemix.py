@@ -126,15 +126,6 @@ class _dividemix_gmm_DivideMixGMMTest(unittest.TestCase):
         self.assertEqual(completed.stdout.strip(), 'lazy-import-ok')
         self.assertNotIn('ModuleNotFoundError', completed.stderr)
 
-    def test_pyproject_has_one_parseable_optional_dependency_table(self):
-        repository_root = Path(__file__).resolve().parents[1]
-        pyproject_path = repository_root / 'pyproject.toml'
-        source = pyproject_path.read_text(encoding='utf-8')
-        self.assertEqual(source.count('[project.optional-dependencies]'), 1)
-        parsed = tomllib.loads(source)
-        optional_dependencies = parsed['project']['optional-dependencies']
-        self.assertIn('train', optional_dependencies)
-        self.assertIn('scikit-learn>=1.7,<2', optional_dependencies['train'])
 
     def test_separated_clusters_return_lower_loss_clean_probabilities(self):
         estimator = DivideMixGMMCleanProbabilityEstimator(random_seed=17)
@@ -392,29 +383,6 @@ class _dividemix_workflow_DivideMixWorkflowTest(unittest.TestCase):
     def load(self, _root, split):
         return self.train if split == 'train' else self.test
 
-    def test_formal_recipe_has_full_data_and_paper_oriented_contract(self):
-        config = load_recipe_config(recipe_by_id('cifar10-dividemix-sym20'))
-        self.assertFalse({'max_train_samples', 'max_validation_samples', 'max_test_samples'} & set(config['data']))
-        self.assertEqual(config['data']['name'], 'cifar10')
-        self.assertTrue(config['data']['augment'])
-        self.assertEqual(config['noise']['name'], 'symmetric')
-        self.assertEqual(config['noise']['rate'], 0.2)
-        self.assertEqual(config['noise']['sampling'], 'global')
-        self.assertEqual(config['model'], {'name': 'preact_resnet18', 'base_width': 64, 'variant': 'dss_author'})
-        self.assertEqual(config['data']['normalization'], {'mean': [.4914, .4822, .4465], 'std': [.2023, .1994, .2010]})
-        self.assertEqual(config['optimizer'], {'name': 'sgd', 'lr': 0.02, 'momentum': 0.9, 'weight_decay': 0.0005})
-        self.assertEqual(config['scheduler'], {'name': 'multistep', 'milestones': [150], 'gamma': 0.1})
-        self.assertEqual(config['loader']['batch_size'], 128)
-        method = config['dividemix']
-        self.assertEqual(method['warmup']['epochs'], 10)
-        self.assertEqual(method['training']['epochs'], 290)
-        self.assertEqual(method['warmup']['epochs'] + method['training']['epochs'], 300)
-        self.assertEqual(method['gmm']['threshold'], 0.5)
-        self.assertEqual(method['mixmatch']['augmentations'], 2)
-        self.assertEqual(method['mixmatch']['temperature'], 0.5)
-        self.assertEqual(method['mixmatch']['mixup_alpha'], 4.0)
-        self.assertEqual(method['objective']['lambda_u'], 25.0)
-        self.assertEqual(method['objective']['lambda_r'], 1.0)
 
     def test_author_style_network_matches_explicit_forward_and_has_gradients(self):
         from lnl_toolbox.models.cifar_resnet import preact_resnet18

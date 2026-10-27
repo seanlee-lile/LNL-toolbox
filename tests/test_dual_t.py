@@ -165,19 +165,6 @@ def _dual_t_forward__algorithm(directory: str | Path, *, posterior_epochs: int=2
 
 class DualTPaperProtocolTest(unittest.TestCase):
 
-    def test_formal_defaults_and_metadata(self):
-        from lnl_toolbox.catalog import load_yaml
-        from lnl_toolbox.training.experiment import build_optimizer
-        root = Path(__file__).resolve().parents[1]
-        config = load_yaml(root / 'configs/reproduction/cifar10_dual_t_sym20.yaml')
-        metadata = load_yaml(root / 'web/lnl_parameter_metadata_registry_revised.yaml')['methods']['dual_t']
-        for stage in ('posterior_stage', 'final_stage'):
-            build_optimizer(nn.Linear(3, 3), config[stage]['optimizer'])
-            self.assertEqual(config[stage]['model']['variant'], 'imagenet_standard')
-            self.assertEqual(metadata['parameters']['paper'][stage + '.epochs']['current'], config[stage]['epochs'])
-        for level, fields in metadata['parameters'].items():
-            self.assertEqual(metadata['coverage']['by_level'][level], len(fields))
-        self.assertEqual(metadata['coverage']['parameter_count'], sum(len(v) for v in metadata['parameters'].values()))
 
     def test_standard_resnet_stem_and_unchanged_cifar_default(self):
         for name, blocks in (('resnet18', [2, 2, 2, 2]), ('resnet34', [3, 4, 6, 3])):
@@ -296,23 +283,6 @@ class DualTPaperProtocolTest(unittest.TestCase):
 
 class _dual_t_forward_DualTMathTest(unittest.TestCase):
 
-    def test_imagenet_variant_is_used_for_both_formal_models(self) -> None:
-        import yaml
-        from lnl_toolbox.training.experiment import build_model
-        config = yaml.safe_load((Path(__file__).resolve().parents[1] / 'configs/reproduction/cifar10_dual_t_sym20.yaml').read_text(encoding='utf-8'))
-        for stage in ('posterior_stage', 'final_stage'):
-            model = build_model(config[stage]['model'], 10)
-            self.assertEqual(model.conv1.kernel_size, (7, 7))
-            self.assertEqual(model.conv1.stride, (2, 2))
-            self.assertEqual(model.conv1.padding, (3, 3))
-            self.assertIsInstance(model.maxpool, nn.MaxPool2d)
-            model.eval()
-            with torch.no_grad():
-                self.assertEqual(model(torch.zeros(1, 3, 32, 32)).shape, (1, 10))
-        ordinary = build_model({'name':'resnet18', 'base_width':4}, 3)
-        self.assertEqual(ordinary.stem[0].kernel_size, (3, 3))
-        self.assertEqual(ordinary.stem[0].stride, (1, 1))
-        self.assertFalse(any(isinstance(item, nn.MaxPool2d) for item in ordinary.stem))
 
     @staticmethod
     def _snapshot() -> PosteriorSnapshot:

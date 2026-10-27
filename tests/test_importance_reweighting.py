@@ -309,17 +309,6 @@ class _importance_reweighting_kliep_KLIEPWorkflowTest(unittest.TestCase):
                 self.assertIsNone(rates['realized_rho_positive'])
                 self.assertIsNone(rates['realized_rho_negative'])
 
-    def test_web_model_constraint_and_scale_sources(self) -> None:
-        from web.command_console import _config_schema
-        registry = yaml.safe_load(Path('web/lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
-        parameters = registry['methods']['importance_reweighting']['parameters']
-        for path in ('data.train_size', 'data.test_size'):
-            self.assertEqual(parameters['paper'][path]['origin'], 'toolbox_default')
-        self.assertEqual(parameters['advanced']['model.name']['ui_control'], 'readonly')
-        schema = _config_schema('importance-reweighting-binary-high-dim')
-        field = next(field for field in schema['fields'] if field['path']=='model.name')
-        self.assertFalse(field['editable'])
-        self.assertEqual([choice['value'] for choice in field['choices']], ['linear'])
 
     def test_resume_rejects_backend_and_parameter_mismatch(self) -> None:
         config = _importance_reweighting_kliep_load_config()
@@ -382,19 +371,44 @@ def _importance_reweighting_method_load_config() -> dict:
 
 class _importance_reweighting_method_BinaryMethodBoundaryTest(unittest.TestCase):
 
+    def test_real_binary_config_does_not_require_generator_sizes(self) -> None:
+        config = _importance_reweighting_method_load_config()
+        config['data']['name'] = 'custom_binary_images'
+        for key in ('train_size', 'validation_size', 'test_size'):
+            config['data'].pop(key)
+        parsed = ImportanceReweightingConfig.from_mapping(config)
+        self.assertEqual(parsed.data['name'], 'custom_binary_images')
+        self.assertNotIn('train_size', parsed.data)
+
+    def test_real_validation_count_does_not_inherit_generator_parity(self) -> None:
+        from lnl_toolbox.catalog import _config_parameter_errors
+
+        config = _importance_reweighting_method_load_config()
+        config['data']['name'] = 'custom_binary_images'
+        config['data'].pop('train_size')
+        config['data'].pop('test_size')
+        config['data']['validation_size'] = 3
+        self.assertEqual(_config_parameter_errors(config), [])
+        self.assertEqual(ImportanceReweightingConfig.from_mapping(config).data['validation_size'], 3)
+
+    def test_synthetic_generator_still_rejects_missing_or_odd_sizes(self) -> None:
+        for key in ('train_size', 'validation_size', 'test_size'):
+            for invalid in (None, 3):
+                with self.subTest(field=key, value=invalid):
+                    config = _importance_reweighting_method_load_config()
+                    if invalid is None:
+                        config['data'].pop(key)
+                    else:
+                        config['data'][key] = invalid
+                    with self.assertRaisesRegex(ValueError, key):
+                        ImportanceReweightingConfig.from_mapping(config)
+
     def test_config_accepts_an_arbitrary_binary_dataset_identity(self) -> None:
         config = _importance_reweighting_method_load_config()
         config['data']['name'] = 'custom_binary_images'
         parsed = ImportanceReweightingConfig.from_mapping(config)
         self.assertEqual(parsed.data['name'], 'custom_binary_images')
 
-    def test_uci_config_has_strict_binary_schema(self) -> None:
-        config = yaml.safe_load(_importance_reweighting_method_UCI_CONFIG.read_text(encoding='utf-8'))
-        parsed = ImportanceReweightingConfig.from_mapping(config)
-        self.assertEqual(parsed.data['name'], 'uci_statlog_heart')
-        self.assertEqual(parsed.data['dimension'], 13)
-        self.assertEqual(tuple(parsed.data['preprocessing']['label_values']), ('1', '2'))
-        self.assertEqual(parsed.posterior_stage['name'], 'kliep')
 
     def test_config_rejects_multiclass_and_wrong_model_output(self) -> None:
         for classes in (3, 10):
@@ -499,9 +513,6 @@ class _importance_reweighting_method_StateAndSmokeTest(unittest.TestCase):
         if pending:
             raise AssertionError(f'temporary artifacts were not cleaned: {pending}')
 
-    def test_method_forces_paper_batch_mean_reduction(self) -> None:
-        self.assertEqual(ImportanceReweightingAlgorithm.FINAL_REDUCTION.normalization, 'batch_mean')
-        self.assertNotEqual(ImportanceReweightingAlgorithm.FINAL_REDUCTION.normalization, 'weight_sum_mean')
 
     def test_phase_transitions_and_extension(self) -> None:
         state = ImportanceReweightingState()

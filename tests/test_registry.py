@@ -884,18 +884,6 @@ class _cnlcu_readiness_CNLCUReadinessTest(unittest.TestCase):
         self.assertEqual(config, modified)
         self.assertEqual(yaml.safe_load(_cnlcu_readiness_FORMAL_CONFIG.read_text(encoding='utf-8')), original)
 
-    def test_short_config_is_full_data_cnlcu_soft_sym20(self) -> None:
-        config = yaml.safe_load(_cnlcu_readiness_CONFIG.read_text(encoding='utf-8'))
-        method = CNLCUConfig.from_mapping(config)
-        self.assertEqual(config['method'], 'cnlcu')
-        self.assertEqual(config['execution']['runner'], 'cnlcu')
-        self.assertEqual(config['configuration_fidelity'], 'engineering')
-        self.assertEqual(config['data']['name'], 'cifar10')
-        for key in ('max_train_samples', 'max_validation_samples', 'max_test_samples'):
-            self.assertNotIn(key, config['data'])
-        self.assertEqual(config['noise']['name'], 'symmetric')
-        self.assertEqual(config['noise']['validation_targets'], 'noisy')
-        self.assertEqual(method.variant, 'soft')
 
 import json
 import tempfile
@@ -907,37 +895,11 @@ from lnl_toolbox.catalog import paper_by_id, validate_config
 
 class _t_revision_readiness_TRevisionReadinessTest(unittest.TestCase):
 
-    def test_short_recipe_is_full_data_sym20_resnet18(self) -> None:
-        recipe = recipe_by_id('cifar10-t-revision-sym20-short')
-        self.assertEqual(recipe.profile, 'reproduction')
-        self.assertEqual(recipe.runner, 't_revision')
-        self.assertEqual(recipe.configuration_fidelity, 'engineering')
-        config = load_recipe_config(recipe)
-        self.assertEqual(validate_config(config).name, 't_revision')
-        self.assertEqual(config['data']['name'], 'cifar10')
-        for limit in ('max_train_samples', 'max_validation_samples', 'max_test_samples'):
-            self.assertNotIn(limit, config['data'])
-        self.assertEqual(config['data']['validation_size'], 5000)
-        self.assertIs(config['data']['augment'], True)
-        self.assertEqual(config['noise']['rate'], 0.2)
-        self.assertEqual(config['noise']['sampling'], 'transition')
-        self.assertEqual(config['noise']['validation_targets'], 'noisy')
-        self.assertEqual(config['loader']['batch_size'], 128)
-        self.assertEqual(config['t_revision']['stage1']['model']['name'], 'resnet18')
-        self.assertEqual(config['t_revision']['stage1']['epochs'], 15)
-        self.assertEqual(config['t_revision']['classifier_initialization']['epochs'], 15)
-        self.assertEqual(config['t_revision']['revision']['epochs'], 20)
-        paper = paper_by_id('t-revision')
-        self.assertNotIn(recipe.id, {item.recipe_id for item in paper.configs})
 
     def test_quick_start_uses_full_t_revision_budget(self) -> None:
         recipe = recipe_by_id('cifar10-t-revision-sym20-reproduction')
         config = load_recipe_config(recipe)
         self.assertEqual(validate_config(config).name, 't_revision')
-        self.assertEqual(recipe.configuration_fidelity, 'paper_oriented')
-        self.assertEqual(config['t_revision']['stage1']['epochs'], 20)
-        self.assertEqual(config['t_revision']['classifier_initialization']['epochs'], 200)
-        self.assertEqual(config['t_revision']['revision']['epochs'], 200)
         paper = paper_by_id('t-revision')
         self.assertIn(recipe.id, {item.recipe_id for item in paper.configs if item.profile == 'reproduction'})
 

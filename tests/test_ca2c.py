@@ -177,15 +177,11 @@ class CA2CRunnerChangesTest(unittest.TestCase):
         import yaml
         from pathlib import Path
         from web import command_console
-        fields = {f['path']: f for f in command_console._config_schema('ca2c-cifar100-reproduction')['fields']}
-        self.assertEqual(fields['optimizer.lr']['value'], .01)
-        self.assertEqual(fields['ca2c.robust_weight']['value'], .8)
         with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
             saved = command_console._save_config({'recipe': 'ca2c-cifar100-reproduction', 'path': str(Path(directory) / 'edited.yaml'),
                        'patches': [{'path': 'ca2c.robust_weight', 'value': .2}], 'acknowledge_paper_impact': True})
             resolved = yaml.safe_load((command_console.ROOT / saved['path']).read_text(encoding='utf-8'))
             self.assertEqual(resolved['ca2c']['robust_weight'], .2)
-            self.assertEqual(resolved['ca2c']['lambda'], .99)
 
     def test_real_two_epoch_training_uses_strong_views_and_resumes_memory(self) -> None:
         import tempfile

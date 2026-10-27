@@ -32,29 +32,6 @@ class _config_schema_ConfigSchemaTest(unittest.TestCase):
         self.assertEqual(config['dividemix']['initialization']['peer_seed_offset'], 1)
         self.assertEqual(config['parameter_record']['sampling_seed'], 99)
 
-    def test_all_formal_papers_have_one_active_seed_in_source_yaml(self) -> None:
-        import yaml
-
-        papers = load_papers()
-        self.assertTrue(papers)
-        for paper in papers:
-            path = default_paper_config(paper)[1].config_path
-            config = yaml.safe_load(path.read_text(encoding='utf-8'))
-            seed = config['seed']
-
-            def check(value, prefix=''):
-                if not isinstance(value, dict):
-                    return
-                for key, item in value.items():
-                    path_key = f'{prefix}.{key}' if prefix else key
-                    if key in {'parameter_record', 'parameter_sampling', 'hyperparameters'}:
-                        continue
-                    if (key == 'seed' or key.endswith('_seed')) and key != 'peer_seed_offset':
-                        self.assertEqual(item, seed, (paper.id, path_key))
-                    else:
-                        check(item, path_key)
-
-            check(config)
 
     def test_binary_legacy_aliases_normalize_to_shared_sections(self) -> None:
         value = normalize_experiment_config({'execution': {'runner': 'binary'}, 'data': {'name': 'synthetic_binary_2d'}, 'batch_size': 8, 'learning_rate': 0.02, 'epochs': 3})

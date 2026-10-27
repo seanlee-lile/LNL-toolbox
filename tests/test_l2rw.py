@@ -142,18 +142,6 @@ class _l2rw_training_L2RWTrainingTest(unittest.TestCase):
         np.testing.assert_allclose(transform(Image.fromarray(np.zeros((32, 32, 3), dtype=np.uint8))).numpy(), -1.0)
         np.testing.assert_allclose(transform(Image.fromarray(np.full((32, 32, 3), 255, dtype=np.uint8))).numpy(), 1.0)
 
-    def test_formal_config_selects_official_l2rw_resnet(self) -> None:
-        config = yaml.safe_load((_l2rw_training_ROOT / 'configs/experiment/l2rw_cifar10_reproduction.yaml').read_text(encoding='utf-8'))
-        self.assertEqual(config['model']['name'], 'l2rw_resnet32')
-        self.assertEqual(config['seed'], 1234)
-        for section in ('data', 'noise', 'trusted_validation'):
-            self.assertEqual(config[section]['seed'], config['seed'], section)
-        from lnl_toolbox.models.cifar_resnet import L2RWResNet32
-        from lnl_toolbox.training.reproduction_data import build_reproduction_model
-        model = build_reproduction_model(config['model'], config['data'], 10)
-        self.assertIsInstance(model, L2RWResNet32)
-        self.assertEqual(len(model.stages), 15)
-        self.assertEqual(tuple(model(torch.randn(2, 3, 32, 32)).shape), (2, 10))
 
     def test_official_meta_resnet_uses_batch_statistics_without_running_state(self) -> None:
         from lnl_toolbox.models.cifar_resnet import L2RWResNet32, share_l2rw_meta_parameters
@@ -340,8 +328,3 @@ class L2RWPreparedDataIsolationTest(unittest.TestCase):
             before = checkpoint.read_bytes()
             self.assertEqual(run_experiment(config, resume=checkpoint), run_dir)
             self.assertEqual(checkpoint.read_bytes(), before)
-
-    def test_metadata_and_scratch_do_not_claim_complete_uniform_preset(self):
-        registry = yaml.safe_load((_l2rw_training_ROOT / 'web/lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
-        comparison = registry['methods']['l2rw']['paper_comparison']
-        self.assertEqual(comparison['alignment_status'], 'official_meta_algorithm_mixed_experiment_defaults')

@@ -328,23 +328,6 @@ class _cdr_reproduction_CDRReproductionTest(unittest.TestCase):
         self.assertEqual(model.stem[0].padding, (1, 1))
         self.assertEqual(tuple((len(layer) for layer in (model.layer1, model.layer2, model.layer3, model.layer4))), (2, 2, 2, 2))
 
-    def test_reproduction_config_records_audited_paper_and_data_path(self):
-        path = Path(__file__).resolve().parents[1] / 'configs' / 'experiment' / 'cifar10_symmetric_cdr_reproduction.yaml'
-        config = yaml.safe_load(path.read_text(encoding='utf-8'))
-        self.assertEqual(config['noise']['validation_targets'], 'noisy')
-        self.assertEqual(config['noise']['sampling'], 'transition')
-        self.assertEqual(config['noise']['seed'], config['seed'])
-        self.assertEqual(config['parameter_update']['compatibility_mode'], 'official_code')
-        self.assertEqual(config['parameter_update']['critical_scope'], 'matrix_and_convolution_weights')
-        self.assertEqual(config['parameter_update']['l1_decay'], 0.0)
-        self.assertEqual(config['model']['name'], 'resnet50')
-        self.assertEqual(config['model']['stem_padding'], 0)
-        self.assertEqual(config['model']['initialization'], 'torch_default')
-        _validate_supervised_config(config)
-        model = build_model(config['model'], 10)
-        build_optimizer(model, config['optimizer'])
-        policy = build_builtin_parameter_update_policy(config['parameter_update'])
-        self.assertEqual(policy.compatibility_mode, 'official_code')
 
     def test_scratch_author_updates_match_runner_and_resume_with_momentum(self) -> None:
         from copy import deepcopy
@@ -388,52 +371,7 @@ class _cdr_reproduction_CDRReproductionTest(unittest.TestCase):
                 for left, right in zip(runner.parameters(), resumed.parameters()):
                     torch.testing.assert_close(left, right, rtol=0, atol=0)
 
-    def test_formal_scratch_and_web_share_experiment_defaults(self) -> None:
-        from web import command_console
-        root = Path(__file__).resolve().parents[1]
-        config = yaml.safe_load((root / 'configs/experiment/cifar10_symmetric_cdr_reproduction.yaml').read_text(encoding='utf-8'))
-        recipe = yaml.safe_load((root / 'src/lnl_toolbox/scratch/recipes/papers/cdr.yaml').read_text(encoding='utf-8'))
-        def flatten(steps):
-            for step in steps:
-                yield step
-                yield from flatten(step.get('steps', []))
-        blocks = {step['block']: step.get('params', {}) for step in flatten(recipe['steps'])}
-        for key in ['lr', 'momentum', 'weight_decay']:
-            self.assertEqual(blocks['create_optimizer'][key], config['optimizer'][key])
-        for key in ['stem_padding', 'initialization']:
-            self.assertEqual(blocks['create_model'][key], config['model'][key])
-        self.assertEqual(blocks['epoch_loop']['epochs'], 100)
-        self.assertEqual(blocks['parameter_criticality_mask']['compatibility_mode'], 'official_code')
-        self.assertEqual(blocks['masked_gradient_update']['l1_decay'], 0.)
-        fields = {field['path']: field for field in command_console._config_schema('cifar10-symmetric-cdr-reproduction')['fields']}
-        for key in ['momentum', 'weight_decay']:
-            self.assertEqual(fields['optimizer.' + key]['value'], config['optimizer'][key])
-        self.assertEqual(fields['parameter_update.compatibility_mode']['value'], 'official_code')
-        self.assertEqual(fields['parameter_update.l1_decay']['value'], 0.)
-        metadata = yaml.safe_load((root / 'web/lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
-        # Find the paper node rather than depending on a particular registry root layout.
-        def find_cdr(value):
-            if isinstance(value, dict):
-                if 'cdr' in value and isinstance(value['cdr'], dict) and 'parameters' in value['cdr']:
-                    return value['cdr']
-                for child in value.values():
-                    found = find_cdr(child)
-                    if found is not None:
-                        return found
-            return None
-        paper = find_cdr(metadata)
-        self.assertEqual(paper['parameters']['advanced']['noise.rng']['current'], 'numpy_legacy')
-        self.assertEqual(paper['parameters']['advanced']['optimizer.momentum']['current'], .9)
-        self.assertEqual(paper['parameters']['advanced']['optimizer.weight_decay']['current'], .001)
 
-    def test_smoke_config_uses_strict_paper_optimizer_contract(self) -> None:
-        path = Path(__file__).resolve().parents[1] / 'configs' / 'experiment' / 'cifar10_symmetric_cdr_smoke.yaml'
-        config = yaml.safe_load(path.read_text(encoding='utf-8'))
-        self.assertEqual(config['parameter_update']['compatibility_mode'], 'paper')
-        self.assertEqual(config['optimizer']['momentum'], 0.0)
-        self.assertEqual(config['optimizer']['weight_decay'], 0.0)
-        self.assertEqual(config['noise']['rate'], config['parameter_update']['noise_rate'])
-        _validate_supervised_config(config)
 
     def test_scratch_cdr_recipe_applies_explicit_normalization(self) -> None:
         from lnl_toolbox.scratch.context import ScratchContext

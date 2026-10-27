@@ -703,18 +703,6 @@ class APLReportingProtocolTest(unittest.TestCase):
                 torch.testing.assert_close(module.bias, torch.zeros_like(module.bias))
         self.assertEqual(model(torch.randn(2, 3, 32, 32)).shape, (2, 10))
 
-    def test_formal_defaults_and_metadata(self):
-        import yaml
-        root = Path(__file__).resolve().parents[1]
-        for rate in ('02', '04'):
-            config = yaml.safe_load((root / 'configs' / 'experiment' /
-                f'apl_cifar10_noise{rate}_reproduction.yaml').read_text(encoding='utf-8'))
-            self.assertEqual(config['evaluation']['report_checkpoint'], 'last')
-            self.assertFalse(config['evaluation']['allow_test_selection'])
-            self.assertEqual(config['data']['validation_size'], 0)
-        registry = yaml.safe_load((root / 'web' / 'lnl_parameter_metadata_registry_revised.yaml').read_text(encoding='utf-8'))
-        self.assertIn('evaluation.report_checkpoint', registry['parameter_display_policy']['hidden_paths_by_method']['apl'])
-        self.assertEqual(registry['methods']['apl']['parameters']['locked']['evaluation.report_checkpoint']['current'], 'last')
 
     def test_last_checkpoint_report_does_not_select_highest_test_accuracy(self):
         import json

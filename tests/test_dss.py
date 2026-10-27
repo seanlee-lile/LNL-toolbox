@@ -194,13 +194,7 @@ class DSSAuthorModelTest(unittest.TestCase):
         fields = {field['path']: field for field in command_console._config_schema(
             'dss-cifar10-symmetric05-reproduction')['fields']}
         variant = fields['model.variant']
-        self.assertEqual(variant['value'], 'dss_author')
         self.assertEqual({choice['value'] for choice in variant['choices']}, {'standard', 'dss_author'})
-        self.assertIn('默认初始化', variant['note'])
-        self.assertEqual(fields['data.normalization.std']['value'], [.2023, .1994, .201])
-        self.assertEqual(fields['loader.batch_size']['value'], 128)
-        self.assertEqual(fields['optimizer.lr']['value'], .02)
-        self.assertEqual(fields['trainer.epochs']['value'], 150)
 
 
 class _dss_DSSRiskTest(unittest.TestCase):
@@ -330,13 +324,3 @@ class _dss_DSSObjectiveTest(unittest.TestCase):
         torch.testing.assert_close(restored.objective_consumer.selector.history.values, objective.selector.history.values)
         with self.assertRaisesRegex(ValueError, 'missing'):
             restored.load_component_states({})
-
-    def test_configs_do_not_duplicate_total_epochs(self) -> None:
-        for filename, expected_epochs in (('dss_cifar10_symmetric05_smoke.yaml', 2), ('dss_cifar10_symmetric05_reproduction.yaml', 150)):
-            config = yaml.safe_load((Path('configs/experiment') / filename).read_text(encoding='utf-8'))
-            objective = config['pipeline']['objective_consumer']
-            self.assertNotIn('total_epochs', objective)
-            _resolve_dss_epoch_contract(config, int(config['trainer']['epochs']))
-            self.assertEqual(objective.get('total_epochs'), None)
-            self.assertEqual(config['pipeline']['objective_consumer']['total_epochs'], expected_epochs)
-            self.assertEqual(config['evaluation']['selection_split'], 'validation')

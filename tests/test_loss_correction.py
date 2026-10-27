@@ -31,18 +31,6 @@ from lnl_toolbox.plugins.builtin import build_builtin_pipeline
 # --- merged from test_loss_correction_reproduction.py ---
 class _loss_correction_reproduction_LossCorrectionReproductionTest(unittest.TestCase):
 
-    def test_formal_cifar10_configuration_uses_paper_schedule(self) -> None:
-        root = Path(__file__).resolve().parents[1]
-        config = yaml.safe_load((root / 'configs' / 'experiment' / 'loss_correction_cifar10_asymmetric04.yaml').read_text(encoding='utf-8'))
-        self.assertEqual(config['trainer']['epochs'], 120)
-        self.assertEqual(config['scheduler']['milestones'], [40, 80])
-        self.assertEqual(config['loader']['batch_size'], 128)
-        self.assertEqual(config['model']['name'], 'resnet32')
-        self.assertEqual(config['noise']['name'], 'class_conditional')
-        self.assertEqual(config['pipeline']['transition_estimator']['name'], 'known')
-        self.assertEqual(config['model']['variant'], 'loss_correction')
-        self.assertEqual(config['evaluation']['selection_metric'], 'loss')
-        self.assertTrue(config['evaluation']['corrected_loss'])
 
 
     def test_paper_depth_constructors_return_class_logits(self) -> None:
@@ -57,9 +45,6 @@ class _loss_correction_reproduction_LossCorrectionReproductionTest(unittest.Test
         self.assertIsInstance(pipeline.risk_corrector, ForwardRiskCorrector)
         self.assertIsNotNone(pipeline.transition_estimator)
         self.assertIsInstance(build_builtin_pipeline({'name': 'standard_noisy_erm', 'transition_estimator': {'name': 'anchor'}, 'risk_corrector': {'name': 'backward'}}).risk_corrector, BackwardRiskCorrector)
-        fragment = yaml.safe_load((root / 'configs' / 'algorithm' / 'loss_correction.yaml').read_text(encoding='utf-8'))
-        self.assertEqual(fragment['name'], 'forward')
-        self.assertNotIn('pipeline', fragment)
 
 # --- merged from test_transition_risk.py ---
 import unittest

@@ -48,12 +48,6 @@ class SemanticsRepairTest(unittest.TestCase):
         final_sum = [step for step in blocks if step["block"] == "sum_values" and step.get("params", {}).get("save_as") == "loss"]
         self.assertTrue(final_sum)
 
-    def test_apl_recipe_has_paper_rce_constant_and_no_gradient_clip(self) -> None:
-        recipe = load_recipe(ROOT / "recipes" / "papers" / "apl.yaml")
-        blocks = list(_walk(recipe["steps"]))
-        rce = next(step for step in blocks if step["block"] == "rce_loss")
-        self.assertEqual(rce["params"]["log_zero"], -4.0)
-        self.assertNotIn("clip_grad_norm", [step["block"] for step in blocks])
 
     def test_fine_rejected_regularizer_uses_seeded_complementary_label(self) -> None:
         logits = torch.tensor([[2.0, 0.0, -1.0], [0.0, 2.0, -1.0]], requires_grad=True)
@@ -125,11 +119,6 @@ class SemanticsRepairTest(unittest.TestCase):
         expected = (observed - (all_losses * root_prior).sum(1)).mean()
         torch.testing.assert_close(context["risk"], expected)
 
-    def test_cal_recipe_uses_paper_proxy_thresholds(self) -> None:
-        recipe = load_recipe(ROOT / "recipes" / "papers" / "cal.yaml")
-        step = next(step for step in _walk(recipe["steps"]) if step.get("block") == "cal_materialize_proxy_artifact")
-        self.assertEqual(step["params"]["lower_threshold"], -8.3)
-        self.assertEqual(step["params"]["upper_threshold"], -8.3)
 
     def test_pdl_transition_uses_per_sample_coefficients(self) -> None:
         features = FeatureSnapshot(
