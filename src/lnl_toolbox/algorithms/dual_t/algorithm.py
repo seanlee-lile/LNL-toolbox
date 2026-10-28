@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -62,11 +63,30 @@ def _train_supervised_epoch(
     loss_sum = 0.0
     all_loss_sum = 0.0
     correct_sum = 0.0
+    raw_correct_sum = 0.0
     selected = 0.0
     samples = 0.0
     for raw_batch in loader:
-        result = algorithm.step(Batch(raw_batch), state)
+        # Reuse the optimization forward; do not update BatchNorm twice.
+        captured = []
+        handle = None
+        if algorithm.transition is not None:
+            handle = algorithm.model.register_forward_hook(
+                lambda _module, _inputs, output: captured.append(output.detach())
+            )
+        try:
+            result = algorithm.step(Batch(raw_batch), state)
+        finally:
+            if handle is not None:
+                handle.remove()
         count = result.metrics["samples"]
+        raw_correct_sum += result.metrics["accuracy"] * count
+        if algorithm.transition is not None:
+            logits = captured[-1]
+            matrix = algorithm.transition.as_tensor(device=logits.device, dtype=logits.dtype)
+            observed = torch.softmax(logits, dim=1) @ matrix
+            targets = raw_batch["target"].to(logits.device)
+            result.metrics["accuracy"] = float((observed.argmax(1) == targets).float().mean().item())
         selected_count = result.metrics["selected_samples"]
         loss_sum += result.metrics["loss"] * selected_count
         all_loss_sum += result.metrics["all_sample_loss"] * count
@@ -80,6 +100,7 @@ def _train_supervised_epoch(
         "train_loss": loss_sum / selected,
         "train_all_sample_loss": all_loss_sum / samples,
         "train_accuracy": correct_sum / samples,
+        "train_raw_accuracy": raw_correct_sum / samples,
         "selected_samples": selected,
         "selected_ratio": selected / samples,
     }
@@ -482,7 +503,8 @@ class DualTAlgorithm:
             split="train",
         )
         snapshot.save(self.snapshot_path)
-        base_transition = DualTransitionEstimator().estimate(snapshot)
+        # Paper Section 4.1 removes percentile filtering and takes the maximum.
+        base_transition = DualTransitionEstimator(percentile=None).estimate(snapshot)
         provenance = dict(base_transition.metadata)
         provenance.update({
             "method": "dual_t",
@@ -616,7 +638,9 @@ class DualTAlgorithm:
         payload = read_checkpoint(self.best_path, "cpu")
         if payload.get("checkpoint_role") != "final_best":
             raise ValueError("Dual-T final best checkpoint identity mismatch")
-        final_epoch_state = self.final_algorithm.state_dict()
+        # state_dict tensors alias live parameters. Loading the selected model
+        # must not overwrite the terminal state that last.pt will preserve.
+        final_epoch_state = deepcopy(self.final_algorithm.state_dict())
         self.final_algorithm.load_state_dict(payload["final_algorithm"])
         test = evaluate_classification(
             self.final_algorithm.model,

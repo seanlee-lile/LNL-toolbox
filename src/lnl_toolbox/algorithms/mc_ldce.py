@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+import numpy as np
 import torch
 from torch import Tensor, nn
 
@@ -16,12 +17,31 @@ class MCLDCEObjective:
     requires_features = True
 
     def __init__(self, statistic: StatisticArtifact | None = None) -> None:
-        self.statistic = statistic
+        self.statistic: StatisticArtifact | None = None
+        self._inverse: np.ndarray | None = None
+        self._inverse_tensors: dict[tuple[torch.device, torch.dtype], Tensor] = {}
+        if statistic is not None:
+            self.bind_statistic(statistic)
 
     def bind_statistic(self, statistic: StatisticArtifact) -> None:
         if statistic.estimator != self.name:
             raise ValueError("MC-LDCE requires an MC-LDCE statistic artifact")
+        coefficient = np.asarray(statistic.metadata["coefficient_matrix"], dtype=np.float64)
+        if (coefficient.ndim != 2 or coefficient.shape[0] != coefficient.shape[1]
+                or not np.isfinite(coefficient).all()):
+            raise ValueError("MC-LDCE coefficient matrix must be finite and square")
+        inverse = statistic.metadata.get("coefficient_pseudoinverse")
+        # Legacy artifacts do not store the inverse. Compute it once in the
+        # same float64 precision and with the same cutoff as the estimator.
+        inverse = (
+            np.linalg.pinv(coefficient, rcond=float(statistic.metadata["rcond"]))
+            if inverse is None else np.asarray(inverse, dtype=np.float64)
+        )
+        if inverse.shape != coefficient.shape or not np.isfinite(inverse).all():
+            raise ValueError("MC-LDCE coefficient pseudoinverse is invalid")
         self.statistic = statistic
+        self._inverse = inverse.copy()
+        self._inverse_tensors.clear()
 
     def compute(
         self,
@@ -45,15 +65,13 @@ class MCLDCEObjective:
         # Keep this expression in autograd, using the same features (including
         # augmentation and dropout) as the quadratic term. M and its priors
         # are estimated globally, not from a possibly single-class minibatch.
-        coefficient = torch.as_tensor(
-            self.statistic.metadata["coefficient_matrix"],
-            dtype=features.dtype, device=features.device,
-        )
-        inverse = torch.linalg.pinv(
-            coefficient, rtol=float(self.statistic.metadata["rcond"])
-        )
+        key = (features.device, features.dtype)
+        inverse = self._inverse_tensors.get(key)
+        if inverse is None:
+            inverse = torch.tensor(self._inverse, dtype=features.dtype, device=features.device)
+            self._inverse_tensors[key] = inverse
         labels = torch.nn.functional.one_hot(
-            noisy_targets, num_classes=coefficient.shape[0]
+            noisy_targets, num_classes=inverse.shape[0]
         ).to(features)
         centroid = (features.transpose(0, 1) @ labels / features.shape[0] @ inverse).T
         if weight.shape != centroid.shape:

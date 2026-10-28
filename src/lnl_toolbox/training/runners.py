@@ -3,7 +3,7 @@ from __future__ import annotations
 """Central lazy registry for user-facing experiment execution."""
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from difflib import get_close_matches
 from importlib import import_module
 from pathlib import Path
@@ -207,6 +207,13 @@ def _image_requirements(
             required_config_inputs=required_inputs,
         )
     return provide
+
+
+def _lend_requirements(config: Mapping[str, Any]) -> MethodRequirements:
+    requirements = _image_requirements("lend")(config)
+    if str((config.get("evaluation", {}) or {}).get("selection_split", "validation")).lower() == "none":
+        return replace(requirements, data_requirements=_classification_data(validation="none", validation_size=0), validation_target=None)
+    return requirements
 
 
 def _config_input(
@@ -493,6 +500,8 @@ def _cal_requirements(config: Mapping[str, Any]) -> MethodRequirements:
 
 
 def _cwd_requirements(_config: Mapping[str, Any]) -> MethodRequirements:
+    if str((_config.get("cwd") or {}).get("variant", "")).lower() == "multiclass":
+        return MethodRequirements(method="cwd", supports_native_noisy_labels=True, supported_modalities=frozenset({Modality.IMAGE}), data_requirements=_classification_data(validation="none", extra_roles=(DataRole.TRAIN_EVAL,)), implemented_variant="multiclass_equations_18_30", min_classes=2)
     return MethodRequirements(
         method="cwd",
         supports_native_noisy_labels=True,
@@ -870,7 +879,7 @@ def create_runner_registry() -> RunnerRegistry:
         "run_lend_experiment",
         budget_path=("lend", "training", "epochs"),
         planner=lend_plan,
-        requirements_provider=_image_requirements("lend"),
+        requirements_provider=_lend_requirements,
     )
     registry.add(
         "cnlcu", "lnl_toolbox.training.cnlcu_experiment", "run_cnlcu_experiment",

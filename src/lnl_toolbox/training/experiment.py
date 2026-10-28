@@ -112,6 +112,14 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
             int(config.get("base_width", 16)),
             input_channels=int(config.get("input_channels", 3)),
         )
+    if name == "wide_resnet28_10":
+        from lnl_toolbox.models.wide_resnet import WideResNet28
+        return WideResNet28(num_classes, int(config.get("width_multiplier", 10)), float(config.get("dropout", 0.3)))
+    if name == "cifar_six_conv":
+        from lnl_toolbox.models.cifar_six_conv import CifarSixConvNet
+        return CifarSixConvNet(num_classes, batch_norm_momentum=float(config.get("batch_norm_momentum", 0.1)))
+    if name == "resnet44":
+        return cifar_resnet_depth(44, num_classes, int(config.get("base_width", 16)), input_channels=int(config.get("input_channels", 3)), variant=str(config.get("variant", "standard")))
     if name == "resnet32":
         return cifar_resnet32(
             num_classes,
@@ -658,7 +666,7 @@ def run_supervised_experiment(
         effective_rate = effective_subset_actual_rate(manifest, prepared.train_indices)
         effective_validation_rate = (
             prepared.realized_noise_rate(DataRole.NOISY_VALIDATION)
-            if validation_target_source == "noisy"
+            if validation_target_source == "noisy" and DataRole.NOISY_VALIDATION in requirements.roles
             else None
         )
         metadata_mode = (

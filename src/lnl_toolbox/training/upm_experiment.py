@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import datetime
 import hashlib
 import json
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -208,6 +209,8 @@ class UPMWorkflow:
     @property
     def stage1_best_path(self) -> Path: return self.run_dir / "stage1_best.pt"
     @property
+    def stage1_last_path(self) -> Path: return self.run_dir / "stage1_last.pt"
+    @property
     def snapshot_path(self) -> Path: return self.run_dir / "psi_snapshot.npz"
     @property
     def metrics_path(self) -> Path: return self.run_dir / "metrics.jsonl"
@@ -246,6 +249,7 @@ class UPMWorkflow:
     def _append(self, row: Mapping[str, Any]) -> None:
         with self.metrics_path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(dict(row), sort_keys=True) + "\n")
+        print(json.dumps(dict(row), sort_keys=True), flush=True)
 
     def _seed_loader(self, epoch: int, offset: int) -> None:
         generator = getattr(self.train_loader, "generator", None)
@@ -261,6 +265,8 @@ class UPMWorkflow:
             target = min(target, self.state.stage1_completed_epochs + int(max_epochs))
         while self.state.stage1_completed_epochs < target and not stopping.stopped:
             epoch = self.state.stage1_completed_epochs
+            started = time.perf_counter()
+            learning_rate = float(self.stage1_optimizer.param_groups[0]["lr"])
             self._seed_loader(epoch, 0)
             train = _train_epoch(self.stage1_algorithm, self.train_loader, self.stage1_run_state, epoch)
             validation = evaluate_classification(
@@ -279,21 +285,47 @@ class UPMWorkflow:
             if self.stage1_scheduler is not None:
                 self.stage1_scheduler.step()
             self._append({"event": "stage1_epoch", "epoch": epoch, **train,
+                          "learning_rate": learning_rate,
+                          "epoch_seconds": time.perf_counter() - started,
                           "noisy_validation_loss": validation["loss"],
                           "noisy_validation_accuracy": validation["accuracy"]})
             stopping.update({"epoch": epoch, "noisy_validation_accuracy": validation["accuracy"]})
             self._save_last()
         if self.state.stage1_completed_epochs < self.method_config.stage1.epochs and not stopping.stopped:
             return
+        # Preserve the actual terminal producer BEFORE restoring validation-best.
+        # The configured source decides which producer supplies psi.
+        atomic_save({
+            "method": "upm", "checkpoint_role": "stage1_last",
+            "epoch": self.state.stage1_completed_epochs - 1,
+            "model": self.stage1_model.state_dict(),
+        }, self.stage1_last_path)
+        self.state.stage1_last_checkpoint_sha256 = _file_sha256(self.stage1_last_path)
         best = read_checkpoint(self.stage1_best_path, self.device)
         self.stage1_model.load_state_dict(best["model"])
         self.state.stage1_best_checkpoint_sha256 = _file_sha256(self.stage1_best_path)
         self.state.advance(UPMPhase.STAGE1_READY)
         self._save_last()
 
+    def _psi_source(self) -> tuple[str, Path, str]:
+        source = str(self.method_config.psi["source"]).lower()
+        path = self.stage1_best_path if source == "stage1_best" else self.stage1_last_path
+        expected = (self.state.stage1_best_checkpoint_sha256 if source == "stage1_best"
+                    else self.state.stage1_last_checkpoint_sha256)
+        if len(expected) != 64:
+            raise ValueError(f"UPM {source} checkpoint identity is missing")
+        if not path.is_file():
+            raise FileNotFoundError(f"UPM psi source checkpoint is missing: {path.name}")
+        if _file_sha256(path) != expected:
+            raise ValueError(f"UPM {source} checkpoint hash mismatch")
+        return source, path, expected
+
     def publish_psi(self) -> None:
-        if _file_sha256(self.stage1_best_path) != self.state.stage1_best_checkpoint_sha256:
-            raise ValueError("UPM Stage 1 best checkpoint changed before psi collection")
+        source, path, source_hash = self._psi_source()
+        producer = read_checkpoint(path, self.device)
+        if producer.get("method") != "upm" or producer.get("checkpoint_role") != source:
+            raise ValueError("UPM psi source checkpoint role mismatch")
+        self.stage1_model.load_state_dict(producer["model"])
         snapshot = collect_posterior_snapshot(
             self.stage1_model, self.posterior_loader, self.device,
             dataset=self.dataset, split="train",
@@ -306,8 +338,8 @@ class UPMWorkflow:
         self.state.psi_snapshot_hash = persisted.snapshot_hash
         self.state.psi_file_sha256 = _file_sha256(self.snapshot_path)
         self.psi_provenance = {
-            "source": "stage1_best",
-            "source_checkpoint_sha256": self.state.stage1_best_checkpoint_sha256,
+            "source": source,
+            "source_checkpoint_sha256": source_hash,
             "snapshot_hash": persisted.snapshot_hash,
             "snapshot_file_sha256": self.state.psi_file_sha256,
             "upm_config_identity_hash": self.method_config.identity_hash,
@@ -363,6 +395,8 @@ class UPMWorkflow:
             target = min(target, self.state.main_completed_epochs + int(max_epochs))
         while self.state.main_completed_epochs < target and not stopping.stopped:
             epoch = self.state.main_completed_epochs
+            started = time.perf_counter()
+            learning_rate = float(self.main_optimizer.param_groups[0]["lr"])
             self._seed_loader(epoch, 100000)
             train = _train_epoch(self.main_algorithm, self.train_loader, self.main_run_state, epoch)
             validation = evaluate_classification(
@@ -386,6 +420,8 @@ class UPMWorkflow:
             counts = self.eta_state.update_count
             self._append({
                 "event": "main_epoch", "epoch": epoch, **train,
+                "learning_rate": learning_rate,
+                "epoch_seconds": time.perf_counter() - started,
                 "noisy_validation_loss": validation["loss"],
                 "noisy_validation_accuracy": validation["accuracy"],
                 "eta_mean": float(eta.mean().item()),
@@ -426,6 +462,7 @@ class UPMWorkflow:
             "global_step": self.state.main_global_step,
             "stage1_best_epoch": self.state.stage1_best_epoch,
             "stage1_best_noisy_validation_accuracy": self.state.stage1_best_validation_accuracy,
+            "psi_source": self.psi_provenance.get("source"),
             "best_epoch": self.state.main_best_epoch,
             "best_noisy_validation_accuracy": self.state.main_best_validation_accuracy,
             "clean_test_loss": test["loss"],
@@ -468,6 +505,13 @@ class UPMWorkflow:
         if payload.get("method") != "upm":
             raise ValueError("resume checkpoint is not a UPM run")
         saved_config = UPMConfig.from_mapping(payload["config"])
+        if payload.get("upm_config_identity_hash") != self.method_config.identity_hash:
+            raise ValueError("UPM checkpoint algorithm/configuration identity changed on resume")
+        # Formula identity and manifest hashes do not capture augmentation,
+        # loader/drop-last settings or the seed used for epoch reseeding.
+        for key in ("seed", "data", "loader", "evaluation"):
+            if payload["config"].get(key) != self.config.get(key):
+                raise ValueError(f"UPM training configuration changed on resume: {key}")
         if saved_config.identity_hash != self.method_config.identity_hash:
             raise ValueError("UPM identity settings changed on resume")
         if self.method_config.stage1.epochs != saved_config.stage1.epochs:
@@ -499,10 +543,13 @@ class UPMWorkflow:
         self.best_main_model_state = payload.get("best_main_model_state")
         self.best_eta_state = payload.get("best_eta_state")
         self.psi_provenance = dict(payload.get("psi_provenance", {}))
+        if self.state.phase is not UPMPhase.STAGE1_TRAINING:
+            source, _, source_hash = self._psi_source()
         if self.state.phase in {UPMPhase.PSI_READY, UPMPhase.MAIN_TRAINING, UPMPhase.COMPLETED}:
             self.snapshot = self._load_snapshot_strict()
             expected = {
-                "source_checkpoint_sha256": self.state.stage1_best_checkpoint_sha256,
+                "source": source,
+                "source_checkpoint_sha256": source_hash,
                 "snapshot_hash": self.state.psi_snapshot_hash,
                 "snapshot_file_sha256": self.state.psi_file_sha256,
                 "upm_config_identity_hash": self.method_config.identity_hash,
@@ -555,7 +602,8 @@ def run_upm_experiment(
         requirements=requirements,
         run_dir=run_dir, seed=seed, checkpoint_payload=checkpoint,
     )
-    prepared.loader_config = {**prepared.loader_config, "persistent_workers": True}
+    # Epoch reseeding must also recreate workers and their augmentation RNGs.
+    prepared.loader_config = {**prepared.loader_config, "persistent_workers": False}
     dataset, classes = prepared.dataset, prepared.num_classes
     manifest, manifest_path = prepared.manifest, prepared.manifest_path
     if manifest is None or manifest_path is None:

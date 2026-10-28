@@ -128,7 +128,21 @@ class CWDGlobalObjective:
             prior = torch.as_tensor(prior_values, dtype=features.dtype, device=features.device)
         if prior.shape != (centroids.shape[0],) or not torch.isfinite(prior).all() or bool((prior < 0).any()):
             raise ValueError("CWD class_prior must be a finite non-negative [C] vector")
-        prior = prior / prior.sum().clamp_min(torch.finfo(prior.dtype).tiny)
+        if not bool(prior.sum() > 0):
+            raise ValueError("CWD class_prior must have positive mass")
+        prior = prior / prior.sum()
+        # An affine classifier is a linear classifier on [features, 1]. The
+        # constant coordinate must use the same CWD reconstruction, not an
+        # unrelated clean-prior estimate (Eqs. (15), (18), (30)).
+        centroid_mass = prior
+        pseudoinverses = self.statistic.metadata.get("coefficient_pseudoinverses")
+        observed_prior = self.statistic.metadata.get("observed_class_prior")
+        if bias is not None and pseudoinverses is not None and observed_prior is not None:
+            mass = torch.as_tensor(observed_prior, dtype=features.dtype, device=features.device)
+            centroid_mass = sum(
+                mass @ torch.as_tensor(value, dtype=features.dtype, device=features.device)
+                for value in pseudoinverses
+            ) - (centroids.shape[0] - 1) * mass
         if self.dynamic_centroid:
             pseudoinverses = self.statistic.metadata.get(
                 "coefficient_pseudoinverses"
@@ -150,20 +164,32 @@ class CWDGlobalObjective:
             ).to(dtype=features.dtype)
             observed = features.transpose(0, 1) @ one_hot
             observed = observed / float(features.shape[0])
-            virtual = []
-            for value in pseudoinverses:
-                inverse = torch.as_tensor(
-                    value, dtype=features.dtype, device=features.device
-                )
-                if inverse.shape != (centroids.shape[0], centroids.shape[0]):
-                    raise ValueError(
-                        "CWD coefficient pseudoinverse has an invalid shape"
+            combined = self.statistic.metadata.get("combined_coefficient")
+            if combined is not None:
+                coefficient = torch.as_tensor(combined, dtype=features.dtype, device=features.device)
+                if coefficient.shape != (centroids.shape[0], centroids.shape[0]):
+                    raise ValueError("CWD combined coefficient shape mismatch")
+                centroids = (observed @ coefficient).transpose(0, 1)
+            else:
+                virtual = []
+                for value in pseudoinverses:
+                    inverse = torch.as_tensor(
+                        value, dtype=features.dtype, device=features.device
                     )
-                virtual.append(observed @ inverse)
-            centroids = (
-                torch.stack(virtual, dim=0).sum(dim=0)
-                - (centroids.shape[0] - 1) * observed
-            ).transpose(0, 1)
+                    if inverse.shape != (centroids.shape[0], centroids.shape[0]):
+                        raise ValueError(
+                            "CWD coefficient pseudoinverse has an invalid shape"
+                        )
+                    virtual.append(observed @ inverse)
+                centroids = (
+                    torch.stack(virtual, dim=0).sum(dim=0)
+                    - (centroids.shape[0] - 1) * observed
+                ).transpose(0, 1)
+                mass = one_hot.mean(dim=0)
+                centroid_mass = sum(
+                    mass @ torch.as_tensor(value, dtype=features.dtype, device=features.device)
+                    for value in pseudoinverses
+                ) - (centroids.shape[0] - 1) * mass
         if self.variant == "binary_scalar":
             if centroids.shape[0] != 2 or weight.shape[0] != 1:
                 raise ValueError(
@@ -177,7 +203,7 @@ class CWDGlobalObjective:
             signed_centroid = centroids[1] - centroids[0]
             cross = (weight[0] * signed_centroid).sum()
             if bias is not None:
-                cross = cross + bias[0] * (prior[1] - prior[0])
+                cross = cross + bias[0] * (centroid_mass[1] - centroid_mass[0])
         elif self.variant in {"binary", "binary_margin"}:
             if centroids.shape[0] != 2 or weight.shape[0] != 2:
                 raise ValueError("CWD binary_margin requires exactly two classes")
@@ -190,7 +216,7 @@ class CWDGlobalObjective:
             signed_centroid = centroids[1] - centroids[0]
             cross = (margin_weight * signed_centroid).sum()
             if bias is not None:
-                cross = cross + (bias[1] - bias[0]) * (prior[1] - prior[0])
+                cross = cross + (bias[1] - bias[0]) * (centroid_mass[1] - centroid_mass[0])
         else:
             scores = features @ weight.transpose(0, 1)
             if bias is not None:
@@ -198,7 +224,7 @@ class CWDGlobalObjective:
             quadratic = scores.square().sum(dim=1).mean()
             cross = (weight * centroids).sum()
             if bias is not None:
-                cross = cross + (bias * prior).sum()
+                cross = cross + (bias * centroid_mass).sum()
         self.last_diagnostics = {
             "constant": self.constant,
             "quadratic": float(quadratic.detach().item()),

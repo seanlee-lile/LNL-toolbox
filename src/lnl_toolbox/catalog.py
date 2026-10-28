@@ -608,11 +608,12 @@ def _validate_dedicated_runner(config: Mapping[str, Any], runner: str) -> None:
         # use the paper's explicit Moore-Penrose default above.
         if "ridge" in cwd and float(cwd.get("ridge", 0.0)) < 0.0:
             raise ValueError("cwd.ridge must be non-negative")
-        data = _require_mapping(config, "data")
-        folds = int(data.get("folds", 0))
-        fold_index = int(data.get("fold_index", -1))
-        if folds < 2 or not 0 <= fold_index < folds:
-            raise ValueError("CWD requires 0 <= data.fold_index < data.folds")
+        if str(cwd.get("variant", "")).lower() != "multiclass":
+            data = _require_mapping(config, "data")
+            folds = int(data.get("folds", 0))
+            fold_index = int(data.get("fold_index", -1))
+            if folds < 2 or not 0 <= fold_index < folds:
+                raise ValueError("CWD requires 0 <= data.fold_index < data.folds")
     elif runner == "fine":
         fine = _require_mapping(config, "fine")
         if int(fine.get("warmup_epochs", 0)) <= 0:
@@ -767,6 +768,10 @@ def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
             method = "binary_risk"
     if method == "jocor":
         enums["evaluation.selection_split"] = "validation test none"
+    if method == "cwd" and str((config.get("cwd") or {}).get("variant", "")).lower() == "multiclass":
+        enums["evaluation.selection_split"] = "none"
+    if method == "lend":
+        enums["evaluation.selection_split"] = "validation none"
     if method in {"coteaching", "cnlcu"}:
         exact["noise.rate"] = "decay"
         exact[method + ".noise_rate"] = "decay"
@@ -779,7 +784,7 @@ def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
     if method == "cwd":
         enums["optimizer.name"] = "adam"
         enums["model.name"] = "resnet34 cifar_resnet34 tiny_cnn feature_mlp"
-    model_names = "tiny_cnn cnn8 cnn9 resnet14 resnet32 resnet18 resnet34 resnet50 resnet101 preact_resnet18 mentor_wide_resnet feature_mlp pcse_mlp mlp linear cifar_six_conv cifar_resnet34 fine_seven_cnn ca2c_seven_cnn mc_ldce_cnn l2rw_resnet32 torchvision_resnet34"
+    model_names = "tiny_cnn cnn8 cnn9 wide_resnet28_10 resnet14 resnet32 resnet44 resnet18 resnet34 resnet50 resnet101 preact_resnet18 mentor_wide_resnet feature_mlp pcse_mlp mlp linear cifar_six_conv cifar_resnet34 fine_seven_cnn ca2c_seven_cnn mc_ldce_cnn l2rw_resnet32 torchvision_resnet34"
     errors: dict[str, str] = {}
     flat: dict[str, Any] = {}
 
@@ -815,6 +820,7 @@ def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
                 model_name = str(value.get("name", "preact_resnet18")).lower()
                 choices = {
                     "resnet32": "standard loss_correction",
+                    "resnet44": "standard loss_correction",
                     "preact_resnet18": "standard dss_author",
                     "resnet18": "standard imagenet_standard",
                     "resnet34": "standard imagenet_standard",
@@ -971,7 +977,7 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
             raise ValueError("model configuration must be a mapping")
         model_name = str(model.get("name", "preact_resnet18")).lower()
         supported_models = {
-            "tiny_cnn", "cnn8", "resnet14", "resnet32", "resnet18", "resnet34",
+            "tiny_cnn", "cnn8", "resnet14", "resnet32", "resnet44", "resnet18", "resnet34",
             "resnet50", "resnet101", "mentor_wide_resnet", "preact_resnet18"
         }
         if model_name not in supported_models:

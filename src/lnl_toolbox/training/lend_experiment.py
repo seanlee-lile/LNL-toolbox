@@ -19,7 +19,9 @@ from lnl_toolbox.losses.torch_losses import validate_per_sample_loss
 from lnl_toolbox.models.feature_output import forward_with_features
 from lnl_toolbox.plugins.builtin import build_builtin_loss
 from lnl_toolbox.runtime import resolve_device, seed_everything
-from lnl_toolbox.training.checkpoint import load_checkpoint, read_checkpoint, save_checkpoint
+from lnl_toolbox.training.checkpoint import (
+    capture_rng_state, load_checkpoint, read_checkpoint, restore_rng_state, save_checkpoint,
+)
 from lnl_toolbox.training.experiment import (
     _environment, _resolved_noise_config,
     bind_model_input, build_model, build_optimizer, build_scheduler,
@@ -51,6 +53,21 @@ def _evaluate(model, loader, criterion, device: torch.device) -> dict[str, float
             "samples": float(samples)}
 
 
+def _evaluate_test_curve(model, loader, criterion, device: torch.device) -> dict[str, float]:
+    """Record test metrics without advancing training or loader random state."""
+    rng = capture_rng_state()
+    generator = getattr(loader, "generator", None)
+    loader_rng = None if generator is None else generator.get_state()
+    was_training = model.training
+    try:
+        return _evaluate(model, loader, criterion, device)
+    finally:
+        restore_rng_state(rng)
+        if generator is not None:
+            generator.set_state(loader_rng)
+        model.train(was_training)
+
+
 def _resume_noise_spec(noise: Mapping[str, Any]) -> dict[str, Any]:
     keys = {"name", "rate", "seed", "sampling", "rng", "manifest",
             "manifest_sha256", "manifest_filename", "validation_targets"}
@@ -79,6 +96,9 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
     """Run the paper-oriented, online LEND workflow."""
 
     config = deepcopy(config)
+    if str(config.get("evaluation", {}).get("selection_split", "validation")).lower() == "none":
+        # No validation labels are consumed; canonicalize before resume identity checks.
+        config["noise"]["validation_targets"] = "none"
     method_config = LENDConfig.from_mapping(config)
     seed = int(config.get("seed", 1))
     epochs = method_config.epochs
@@ -103,9 +123,17 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
 
     data_config = config["data"]
     validation_size = int(data_config.get("validation_size", 0))
-    if validation_size <= 0:
+    selection_split = str(config.get("evaluation", {}).get("selection_split", "validation")).lower()
+    if selection_split not in {"validation", "none"}:
+        raise ValueError("LEND selection_split must be validation or none; test-based selection is forbidden")
+    uses_validation = selection_split == "validation"
+    if uses_validation and validation_size <= 0:
         raise ValueError("LEND requires a non-empty noisy validation split")
-    if str(config["noise"].get("validation_targets", "")).lower() != "noisy":
+    if not uses_validation and validation_size != 0:
+        raise ValueError("LEND final-epoch reporting requires validation_size=0")
+    if not uses_validation and config.get("lend", {}).get("training", {}).get("early_stopping", False):
+        raise ValueError("LEND validation early stopping requires a validation split")
+    if uses_validation and str(config["noise"].get("validation_targets", "")).lower() != "noisy":
         raise ValueError("LEND best-checkpoint selection requires noisy validation targets")
     if requirements is None:
         from lnl_toolbox.training.runners import resolve_data_requirements
@@ -126,13 +154,13 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
     remainder = len(prepared.train_indices) % batch_size
     if len(prepared.train_indices) <= method_config.k or (not drop_last and 0 < remainder <= method_config.k):
         raise ValueError("LEND final partial training batch must satisfy B > k")
-    validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False)
+    validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False) if uses_validation else None
     test_loader = prepared.loader(DataRole.TEST, shuffle=False)
     effective_rate = effective_subset_actual_rate(manifest, prepared.train_indices)
-    effective_validation_rate = prepared.realized_noise_rate(DataRole.NOISY_VALIDATION)
+    effective_validation_rate = prepared.realized_noise_rate(DataRole.NOISY_VALIDATION) if uses_validation else None
     noise_metadata = checkpoint_noise_metadata(
         manifest, manifest_path, run_dir, effective_rate, mode=noise_mode(config),
-        validation_targets="noisy", effective_validation_rate=effective_validation_rate,
+        validation_targets="noisy" if uses_validation else "none", effective_validation_rate=effective_validation_rate,
     )
     config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
 
@@ -163,7 +191,7 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
     algorithm.setup(ExperimentContext(run_dir, config, seed))
     state = RunState(phase="training")
     completed_epoch = best_epoch = -1
-    best_accuracy = float("-inf")
+    best_accuracy = float("-inf") if uses_validation else None
     if resume is not None:
         state, completed_epoch, checkpoint_payload = load_checkpoint(
             resume, algorithm, device, scheduler=scheduler
@@ -172,7 +200,7 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
         if bool(history.initialized.any()) and int(history.last_updated_epoch.max()) > completed_epoch:
             raise ValueError("LEND history contains updates beyond the completed epoch")
         best_epoch = int(checkpoint_payload["best_epoch"])
-        best_accuracy = float(checkpoint_payload["best_validation_accuracy"])
+        best_accuracy = float(checkpoint_payload["best_validation_accuracy"]) if uses_validation else None
         if completed_epoch + 1 >= epochs:
             return run_dir
 
@@ -227,16 +255,17 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
                 for key, value in result.metrics.items():
                     if key in {"samples", "selected_samples", "optimizer_steps", "empty_selection_batches"}:
                         continue
-                    if key == "selected_train_loss_sum":
+                    if key in {"selected_train_loss_sum", "selected_train_objective"}:
                         totals[key] = totals.get(key, 0.0) + value
                     else:
                         totals[key] = totals.get(key, 0.0) + value * count
             algorithm.on_cycle_end(state)
-            validation = _evaluate(model, validation_loader, criterion, device)
+            validation = _evaluate(model, validation_loader, criterion, device) if uses_validation else None
+            test_curve = _evaluate_test_curve(model, test_loader, criterion, device)
             learning_rate = float(optimizer.param_groups[0]["lr"])
             if scheduler is not None:
                 scheduler.step()
-            improved = validation["accuracy"] > best_accuracy
+            improved = uses_validation and validation["accuracy"] > best_accuracy
             if improved:
                 best_accuracy, best_epoch = validation["accuracy"], epoch
             row = {
@@ -259,17 +288,19 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
                 "oracle_neighbor_purity": neighbor_correct / neighbor_count if neighbor_count else None,
                 "history_label_counts": label_counts.tolist(),
                 "history_largest_class_fraction": float(label_counts.max() / samples),
-                "validation_accuracy": validation["accuracy"],
+                "test_accuracy": test_curve["accuracy"],
+                "test_loss": test_curve["loss"],
+                "validation_accuracy": validation["accuracy"] if uses_validation else None,
                 "best_validation_accuracy": best_accuracy,
             }
             for key, value in totals.items():
                 row["train_" + key] = (
-                    value if key == "selected_train_loss_sum" else value / samples
+                    value if key in {"selected_train_loss_sum", "selected_train_objective"} else value / samples
                 )
             kwargs = {
                 "best_epoch": best_epoch,
                 "best_validation_accuracy": best_accuracy,
-                "selection_split": "validation",
+                "selection_split": selection_split,
                 "best_selection_accuracy": best_accuracy,
                 "noise": noise_metadata,
             }
@@ -285,16 +316,20 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
             if stopping.update(row):
                 break
         final_model_state = deepcopy(model.state_dict())
-        best_payload = read_checkpoint(run_dir / "best.pt", device)
-        model.load_state_dict(best_payload["model"])
-        test = _evaluate(model, test_loader, criterion, device)
+        if uses_validation:
+            best_payload = read_checkpoint(run_dir / "best.pt", device)
+            model.load_state_dict(best_payload["model"])
+        test = _evaluate_test_curve(model, test_loader, criterion, device)
         model.load_state_dict(final_model_state)
         algorithm.on_run_end(state)
         final = {
             "event": "final", "completed_epochs": actual_epochs,
             "global_batch_step": state.step,
             "optimizer_steps": algorithm.private_state.optimizer_steps,
-            "best_epoch": best_epoch + 1,
+            "best_epoch": best_epoch + 1 if uses_validation else None,
+            "reported_epoch": best_epoch + 1 if uses_validation else actual_epochs,
+            "selection_split": selection_split,
+            "reporting_rule": "noisy_validation_selected" if uses_validation else "final_epoch",
             "best_validation_accuracy": best_accuracy,
             "clean_test_accuracy": test["accuracy"],
             "fidelity": "paper_oriented",
@@ -307,7 +342,7 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
     save_checkpoint(
         run_dir / "last.pt", algorithm, state, actual_epochs - 1, config,
         scheduler=scheduler, best_epoch=best_epoch,
-        best_validation_accuracy=best_accuracy, selection_split="validation",
+        best_validation_accuracy=best_accuracy, selection_split=selection_split,
         best_selection_accuracy=best_accuracy, noise=noise_metadata,
         component_states={"lend_completion": {"completed": True}},
     )

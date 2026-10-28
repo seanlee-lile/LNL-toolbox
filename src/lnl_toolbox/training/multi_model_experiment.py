@@ -214,7 +214,7 @@ def run_multi_model_experiment(
     validation_loader = (
         None
         if validation_size == 0
-        else prepared.loader(DataRole.CLEAN_VALIDATION, shuffle=False)
+        else prepared.validation_loader(shuffle=False)
     )
     test_loader = prepared.loader(DataRole.TEST, shuffle=False)
 

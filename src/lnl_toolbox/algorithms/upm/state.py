@@ -32,6 +32,7 @@ class UPMState:
     stage1_best_epoch: int = -1
     stage1_best_validation_accuracy: float = float("-inf")
     stage1_best_checkpoint_sha256: str = ""
+    stage1_last_checkpoint_sha256: str = ""
     psi_snapshot_hash: str = ""
     psi_file_sha256: str = ""
     main_completed_epochs: int = 0
@@ -63,6 +64,7 @@ class UPMState:
             stage1_best_epoch=int(value.get("stage1_best_epoch", -1)),
             stage1_best_validation_accuracy=float(value.get("stage1_best_validation_accuracy", float("-inf"))),
             stage1_best_checkpoint_sha256=str(value.get("stage1_best_checkpoint_sha256", "")),
+            stage1_last_checkpoint_sha256=str(value.get("stage1_last_checkpoint_sha256", "")),
             psi_snapshot_hash=str(value.get("psi_snapshot_hash", "")),
             psi_file_sha256=str(value.get("psi_file_sha256", "")),
             main_completed_epochs=int(value.get("main_completed_epochs", 0)),

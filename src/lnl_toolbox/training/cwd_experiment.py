@@ -20,6 +20,7 @@ from lnl_toolbox.evaluation.classification import evaluate_classification
 from lnl_toolbox.losses.torch_losses import CrossEntropyLoss
 from lnl_toolbox.models.cifar_resnet import cifar_resnet34
 from lnl_toolbox.models.feature_output import forward_with_features
+from lnl_toolbox.models.feature_output import FeatureOutput
 from lnl_toolbox.models.tiny_cnn import TinyCNN
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import (
@@ -34,27 +35,46 @@ from lnl_toolbox.training.experiment import build_scheduler
 from lnl_toolbox.training.snapshots import collect_feature_snapshot
 
 
+class _FeatureMLP(torch.nn.Module):
+    """Expose the same feature/classifier contract as image backbones."""
+
+    def __init__(self, input_dim: int, hidden_width: int, outputs: int):
+        super().__init__()
+        self.encoder = torch.nn.Sequential(
+            torch.nn.Linear(input_dim, hidden_width), torch.nn.ReLU(),
+        )
+        self.classifier = torch.nn.Linear(hidden_width, outputs)
+
+    def forward_with_features(self, inputs):
+        features = self.encoder(inputs)
+        return FeatureOutput(self.classifier(features), features)
+
+    def forward(self, inputs):
+        return self.forward_with_features(inputs).logits
+
+
 def _build_model(config: Mapping[str, Any]):
     name = str(config.get("name", "resnet34")).strip().lower()
     if name in {"resnet34", "cifar_resnet34"}:
         outputs = int(config.get("num_outputs", 2))
-        return cifar_resnet34(
+        model = cifar_resnet34(
             outputs,
             int(config.get("base_width", 64)),
             bias=bool(config.get("bias", True)),
         )
+        probability = float(config.get("feature_dropout", 0.0))
+        if not 0.0 <= probability < 1.0:
+            raise ValueError("feature_dropout must be in [0, 1)")
+        model.feature_dropout.p = probability
+        return model
     if name == "tiny_cnn":
-        return TinyCNN(2, int(config.get("width", 8)))
+        return TinyCNN(int(config.get("num_outputs", 2)), int(config.get("width", 8)))
     if name == "feature_mlp":
         input_dim = int(config.get("input_dim", 0))
         hidden_width = int(config.get("hidden_width", 16))
         if input_dim <= 0 or hidden_width <= 0:
             raise ValueError("CWD feature_mlp requires positive input dimensions")
-        return torch.nn.Sequential(
-            torch.nn.Linear(input_dim, hidden_width),
-            torch.nn.ReLU(),
-            torch.nn.Linear(hidden_width, int(config.get("num_outputs", 2))),
-        )
+        return _FeatureMLP(input_dim, hidden_width, int(config.get("num_outputs", 2)))
     raise ValueError(f"Unsupported CWD model: {name}")
 
 
@@ -128,6 +148,9 @@ def run_cwd_experiment(
     """Run one configured fold of the paper's five-fold CIFAR-binary protocol."""
 
     config = deepcopy(config)
+    # Persist the resolved algorithm choice. Old checkpoints which omitted
+    # this setting used a static centroid and must not silently change it.
+    config.setdefault("cwd", {}).setdefault("dynamic_centroid", True)
     seed = int(config.get("seed", 1))
     seed_everything(seed)
     device = resolve_device(str(config["trainer"].get("device", "auto")))
@@ -153,18 +176,22 @@ def run_cwd_experiment(
     folds = int(data_config.get("folds", 5))
     fold_index = int(data_config.get("fold_index", 0))
     noise_config = config["noise"]
-    rho_positive = float(noise_config["rho_positive"])
-    rho_negative = float(noise_config["rho_negative"])
+    rho_positive = float(noise_config.get("rho_positive", 0.0))
+    rho_negative = float(noise_config.get("rho_negative", 0.0))
     prepared = prepare_experiment_data(
         config,
         requirements=requirements,
         run_dir=run_dir, seed=seed, checkpoint_payload=checkpoint,
     )
-    prepared.loader_config = {**prepared.loader_config, "persistent_workers": True}
-    if prepared.num_classes != 2 or prepared.manifest is None or prepared.manifest_path is None:
-        raise ValueError("CWD requires a noisy binary dataset view")
+    # Recreate workers each epoch so resumed runs consume the same loader RNG
+    # sequence and initialize worker RNGs identically to uninterrupted runs.
+    prepared.loader_config = {**prepared.loader_config, "persistent_workers": False}
+    multiclass = str(config.get("cwd", {}).get("variant", "")).lower() == "multiclass"
+    if (not multiclass and prepared.num_classes != 2) or prepared.manifest is None or prepared.manifest_path is None:
+        raise ValueError("CWD requires a noisy indexed dataset matching the selected variant")
     manifest, manifest_path = prepared.manifest, prepared.manifest_path
-    manifest.metadata.update({"folds": folds, "fold_index": fold_index})
+    if not multiclass:
+        manifest.metadata.update({"folds": folds, "fold_index": fold_index})
     if checkpoint is not None and checkpoint.get("noise_mapping_hash") != manifest.mapping_hash:
         raise ValueError("CWD resume noise manifest mismatch")
     train_loader = prepared.loader(DataRole.TRAIN)
@@ -174,10 +201,14 @@ def run_cwd_experiment(
     validation_loader = (prepared.validation_loader(shuffle=False)
                          if {DataRole.CLEAN_VALIDATION, DataRole.NOISY_VALIDATION}.intersection(prepared.available_roles)
                          else None)
+    if validation_loader is not None:
+        loaders["validation"] = validation_loader
 
     cwd_config = config.get("cwd", {})
     cwd_variant = str(cwd_config.get("variant", "multiclass")).strip().lower()
     model_config = dict(config["model"])
+    if multiclass:
+        model_config["num_outputs"] = prepared.num_classes
     if str(model_config.get("name", "")).lower() == "feature_mlp" and "input_dim" not in model_config:
         if prepared.input_spec.feature_dim is None:
             raise ValueError("CWD feature_mlp requires a known feature dimension")
@@ -221,6 +252,14 @@ def run_cwd_experiment(
         ],
         dtype=np.float64,
     )
+    if multiclass:
+        from lnl_toolbox.algorithms.volminnet.artifacts import VolMinTransitionArtifact
+        transition_path = Path(config["cwd"]["transition_artifact"])
+        learned = VolMinTransitionArtifact.load(transition_path)
+        transition = learned.matrix
+        if transition.shape != (prepared.num_classes, prepared.num_classes):
+            raise ValueError("CWD learned transition class count mismatch")
+        (run_dir / "transition-source.json").write_text(json.dumps({"path": str(transition_path), "artifact_hash": learned.artifact_hash, "source": "same-cohort VolMin learned matrix; no oracle transition"}, indent=2))
     pinv_rcond = config.get("cwd", {}).get("pinv_rcond")
     if pinv_rcond is None and "ridge" in config.get("cwd", {}):
         # Backward-compatible parsing for old smoke configurations.  The
@@ -244,7 +283,7 @@ def run_cwd_experiment(
             snapshot_loader,
             device,
             dataset=prepared.dataset,
-            split=f"train_fold_{fold_index}",
+            split="train" if multiclass else f"train_fold_{fold_index}",
             feature_extractor=lambda current, inputs: forward_with_features(current, inputs).features,
         )
         artifact = estimator.estimate(snapshot)
@@ -254,7 +293,7 @@ def run_cwd_experiment(
             artifact,
             variant=str(config.get("cwd", {}).get("variant", "multiclass")),
             dynamic_centroid=bool(
-                config.get("cwd", {}).get("dynamic_centroid", False)
+                config.get("cwd", {}).get("dynamic_centroid", True)
             ),
         )
         train_loss, train_accuracy = _train_epoch(
@@ -286,6 +325,7 @@ def run_cwd_experiment(
             validation = _evaluate_cwd(model, validation_loader, device, scalar_binary=cwd_variant == "binary_scalar")
             row.update({"validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"]})
         row["epoch_seconds"] = time.perf_counter() - epoch_started
+        print(json.dumps(row, sort_keys=True), flush=True)
         metrics_path.write_text(
             "".join(json.dumps(value, sort_keys=True) + "\n" for value in rows),
             encoding="utf-8",

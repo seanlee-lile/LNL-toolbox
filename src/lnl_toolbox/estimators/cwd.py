@@ -81,6 +81,8 @@ def _virtual_system(
     coefficient = np.zeros((classes, classes), dtype=np.float64)
     for source in range(classes):
         for target in range(classes):
+            if virtual_prior[source] * virtual_flip[source, target] == 0.0:
+                continue
             coefficient += (
                 virtual_prior[source]
                 * virtual_flip[source, target]
@@ -184,6 +186,7 @@ class CWDEstimator:
                 "virtual_flip_matrices": virtual_flip_matrices,
                 "coefficient_matrices": coefficient_matrices,
                 "coefficient_pseudoinverses": coefficient_pseudoinverses,
+                "combined_coefficient": (np.sum(np.asarray(coefficient_pseudoinverses, dtype=np.float64), axis=0) - (classes - 1) * np.eye(classes)).tolist(),
                 "transition_rank": int(np.linalg.matrix_rank(transition)),
                 "virtual_samples": int(len(labels)),
                 "cwd_equations": "19,21-30",

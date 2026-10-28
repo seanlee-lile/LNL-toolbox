@@ -632,8 +632,7 @@ class PreparedData:
             num_workers=int(self.loader_config.get("num_workers", 0)),
             pin_memory=bool(self.loader_config.get("pin_memory", False)),
             drop_last=bool(drop_last),
-            persistent_workers=bool(self.loader_config.get("persistent_workers", False))
-            and int(self.loader_config.get("num_workers", 0)) > 0,
+            persistent_workers=False,  # Dynamic datasets are recreated; do not retain worker handles.
             generator=generator,
             worker_init_fn=_seed_worker,
         )

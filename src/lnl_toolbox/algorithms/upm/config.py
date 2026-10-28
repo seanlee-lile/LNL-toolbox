@@ -9,6 +9,11 @@ import math
 from typing import Any, Mapping
 
 
+# Numerical factor floor used in the authors' predict_truelabel implementation.
+# It is an implementation constant, not an experiment-facing hyperparameter.
+UPM_POSTERIOR_FACTOR_FLOOR = 1e-5
+
+
 def _mapping(value: Any, *, owner: str) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise TypeError(f"{owner} must be a mapping")
@@ -70,8 +75,12 @@ class UPMConfusingConfig:
         return cls(initial, learning_rate, epsilon, start, interval)
 
     def updates_at(self, epoch: int) -> bool:
-        return epoch >= self.update_start_epoch and (
-            epoch - self.update_start_epoch
+        # Training passes zero-based indices; configured paper epochs are one-based.
+        # Zero remains an alias for starting at the first epoch.
+        current_epoch = epoch + 1
+        start_epoch = max(1, self.update_start_epoch)
+        return current_epoch >= start_epoch and (
+            current_epoch - start_epoch
         ) % self.update_interval_epochs == 0
 
 
@@ -98,7 +107,7 @@ class UPMConfig:
             raise ValueError("UPM Stage 1 must select noisy_validation_accuracy")
         psi = _mapping(upm.get("psi"), owner="upm.psi")
         checks = {
-            "source": str(psi.get("source", "")).lower() == "stage1_best",
+            "source": str(psi.get("source", "")).lower() in {"stage1_best", "stage1_last"},
             "split": str(psi.get("split", "")).lower() == "train",
             "augmentation": psi.get("augmentation", True) is False,
         }
@@ -124,6 +133,8 @@ class UPMConfig:
     @property
     def identity_hash(self) -> str:
         payload = {
+            "posterior_equation": "author_eq8_factor_floor_v2",
+            "posterior_factor_floor": UPM_POSTERIOR_FACTOR_FLOOR,
             "stage1": {
                 "model": dict(self.stage1.model),
                 "optimizer": dict(self.stage1.optimizer),

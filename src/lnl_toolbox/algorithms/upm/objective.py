@@ -8,6 +8,8 @@ import torch
 from torch import Tensor
 from torch.nn import functional as F
 
+from .config import UPM_POSTERIOR_FACTOR_FLOOR
+
 
 def _validate_inputs(
     clean_probabilities: Tensor,
@@ -48,17 +50,22 @@ def predict_true_posterior(
     psi: Tensor,
     eta: Tensor,
 ) -> Tensor:
-    """Compute detached true-label posterior ``q`` from paper Eq. (8)."""
+    """Compute Eq. (8) with the authors' numerical factor protection.
+
+    The released ``predict_truelabel`` clamps the likelihood factor before
+    taking its logarithm. Without that floor, eta=0 creates an exact one-hot q
+    and the printed eta update cannot move the sample away from zero again.
+    This retains the paper's alternating posterior/model/eta updates; it does
+    not replace Eq. (11) with another gradient or add mass directly to q.
+    """
 
     clean = clean_probabilities.detach()
     psi = psi.detach()
     eta = eta.detach()
     batch, classes = _validate_inputs(clean, noisy_targets, psi, eta)
     one_hot = F.one_hot(noisy_targets.to(torch.long), classes).to(clean.dtype)
-    # Match the author's predict_truelabel probability floor: an exact zero
-    # would make eta=0 an absorbing state for subsequent posterior updates.
-    factor = ((1.0 - eta[:, None]) * one_hot + eta[:, None] * psi[:, None]).clamp_min(1e-5)
-    unnormalized = clean * factor
+    factor = (1.0 - eta[:, None]) * one_hot + eta[:, None] * psi[:, None]
+    unnormalized = clean * factor.clamp_min(UPM_POSTERIOR_FACTOR_FLOOR)
     denominator = unnormalized.sum(1, keepdim=True)
     if not bool(torch.isfinite(denominator).all()) or bool((denominator <= 0).any()):
         raise ValueError("UPM Eq. (8) normalization must be finite and positive")
@@ -108,6 +115,11 @@ def soft_target_cross_entropy(logits: Tensor, q: Tensor) -> Tensor:
         raise ValueError("UPM q must be floating [B, C] on the logits device")
     if q.requires_grad or not bool(torch.isfinite(q).all()):
         raise ValueError("UPM q must be detached and finite")
+    if bool((q < 0).any()) or not torch.allclose(
+        q.sum(1), torch.ones(q.shape[0], device=q.device, dtype=q.dtype),
+        atol=1e-6, rtol=1e-5,
+    ):
+        raise ValueError("UPM q must be a normalized non-negative distribution")
     return -(q * F.log_softmax(logits, dim=1)).sum(1)
 
 

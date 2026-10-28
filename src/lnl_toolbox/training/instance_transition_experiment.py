@@ -252,9 +252,9 @@ def _run_pdl_official_phases(
     phase_start = 0
     completed_in_phase = -1
     if payload is not None:
-        if payload.get("method") != "pdl" or payload.get("config") != dict(config):
+        if payload.get("config") != dict(config):
             raise ValueError("PDL resume configuration mismatch")
-        if payload.get("artifact_hash") != artifact.artifact_hash:
+        if payload.get("pipeline", {}).get("artifact_hash") != artifact.artifact_hash:
             raise ValueError("PDL transition artifact resume mismatch")
         pipeline = dict(payload.get("pipeline", {}))
         if pipeline.get("validation_artifact_hash") != validation_artifact.artifact_hash:
@@ -294,6 +294,11 @@ def _run_pdl_official_phases(
             phase_best_accuracy = float(saved_best["accuracy"])
             phase_best_state = saved_best["model"]
         optimizer = build_optimizer(model, optimizer_config)
+        scheduler_config = (
+            config.get("scheduler", {}) if phase == "correction"
+            else config.get("revision", {}).get("scheduler", {})
+        )
+        scheduler = build_scheduler(optimizer, scheduler_config, phase_length)
         algorithm_config = dict(config["algorithm"])
         algorithm_config["correction"] = correction
         algorithm = build_builtin_instance_transition_algorithm(
@@ -304,7 +309,7 @@ def _run_pdl_official_phases(
         state = RunState(phase=phase)
         local_start = 0
         if payload is not None and phase_index == phase_start:
-            state, completed, loaded = load_checkpoint(resume, algorithm, device)
+            state, completed, loaded = load_checkpoint(resume, algorithm, device, scheduler=scheduler)
             local_start = int(completed) + 1
             payload = loaded
         elif phase == "revision":
@@ -344,6 +349,7 @@ def _run_pdl_official_phases(
                     "event": "epoch", "epoch": global_epoch, "phase": phase,
                     "phase_epoch": local_epoch + 1, "global_step": state.step,
                     "learning_rate": optimizer.param_groups[0]["lr"],
+                    "optimizer_momentum": optimizer.param_groups[0].get("momentum"),
                     "train_loss": loss_sum / samples,
                     "train_accuracy": accuracy_sum / samples,
                     "selection_split": "noisy_validation",
@@ -366,6 +372,8 @@ def _run_pdl_official_phases(
                         phase_best_path,
                     )
                 best_accuracy = max(best_accuracy, selection["accuracy"])
+                if scheduler is not None:
+                    scheduler.step()
                 save_checkpoint(
                     run_dir / "last.pt", algorithm, state, local_epoch, dict(config),
                     pipeline={
@@ -375,11 +383,11 @@ def _run_pdl_official_phases(
                         "revision_validation_artifact_hash": revision_validation_artifact.artifact_hash,
                     },
                     best_epoch=global_epoch, best_selection_accuracy=best_accuracy,
-                    selection_split="noisy_validation",
+                    selection_split="noisy_validation", scheduler=scheduler,
                 )
                 if bool(config.get("trainer", {}).get("progress", {}).get("curves", True)):
                     write_training_curves_svg(rows, run_dir / "training_curves.svg")
-                if stopping.observe(row, {"model": model, "optimizer": optimizer}):
+                if stopping.observe(row, {"model": model, "optimizer": optimizer, **({"scheduler": scheduler} if scheduler is not None else {})}):
                     break
         stopping.restore_best({"model": model})
         algorithm.on_run_end(state)

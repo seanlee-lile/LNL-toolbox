@@ -104,7 +104,7 @@ class DLDConfig:
                     raise ValueError(
                         "DLD torchvision ResNet34 weights must be IMAGENET1K_V1"
                     )
-                if str(external["input_contract"]).strip() != "cifar10_standard_normalized":
+                if str(external["input_contract"]).strip() not in {"cifar10_standard_normalized", "cifar100_standard_normalized"}:
                     raise ValueError(
                         "DLD torchvision ResNet34 input_contract must be "
                         "cifar10_standard_normalized"

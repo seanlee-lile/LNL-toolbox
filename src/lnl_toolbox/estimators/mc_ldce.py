@@ -84,13 +84,14 @@ class MCLDCEEstimator:
         coefficient = build_label_imputation_matrix(clean_prior, matrix)
         coefficient_rank = int(np.linalg.matrix_rank(coefficient))
         coefficient_condition = float(np.linalg.cond(coefficient))
-        if coefficient_rank != classes:
-            raise ValueError("MC-LDCE coefficient matrix is not identifiable")
-        if not math.isfinite(coefficient_condition) or coefficient_condition > self.condition_limit:
-            raise ValueError("MC-LDCE coefficient matrix exceeds condition limit")
+        # Eq. (4.12) uses a Moore-Penrose inverse, including singular M.
+        # Rank and condition remain diagnostics, not an invertibility gate.
+        inverse = np.linalg.pinv(coefficient, rcond=self.rcond)
+        if not np.isfinite(inverse).all():
+            raise ValueError("MC-LDCE coefficient pseudoinverse is non-finite")
         one_hot = np.eye(classes, dtype=np.float64)[labels]
         noisy_centroid = snapshot.features.T @ one_hot / labels.size
-        clean_centroid = noisy_centroid @ np.linalg.pinv(coefficient, rcond=self.rcond)
+        clean_centroid = noisy_centroid @ inverse
         return StatisticArtifact(
             values=clean_centroid.T,
             estimator=self.name,
@@ -102,8 +103,15 @@ class MCLDCEEstimator:
                 "clean_class_prior": clean_prior.tolist(),
                 "observed_class_prior": observed_prior.tolist(),
                 "coefficient_matrix": coefficient.tolist(),
+                "coefficient_pseudoinverse": inverse.tolist(),
                 "coefficient_rank": coefficient_rank,
-                "coefficient_condition": coefficient_condition,
+                "coefficient_condition": (
+                    coefficient_condition if math.isfinite(coefficient_condition) else None
+                ),
+                "coefficient_condition_warning": (
+                    not math.isfinite(coefficient_condition)
+                    or coefficient_condition > self.condition_limit
+                ),
                 "transition_rank": rank,
                 "transition_condition": condition,
                 "feature_dimension": int(snapshot.features.shape[1]),

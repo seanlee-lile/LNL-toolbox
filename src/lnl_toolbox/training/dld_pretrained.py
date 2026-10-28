@@ -139,9 +139,13 @@ class _TorchvisionResNet34FeatureModel(nn.Module):
     _IMAGENET_MEAN = (0.485, 0.456, 0.406)
     _IMAGENET_STD = (0.229, 0.224, 0.225)
 
-    def __init__(self, model: nn.Module) -> None:
+    def __init__(self, model: nn.Module, input_contract: str = "cifar10_standard_normalized") -> None:
         super().__init__()
         self.model = model
+        self.input_contract = input_contract
+        if input_contract == "cifar100_standard_normalized":
+            self._CIFAR_MEAN = (0.5071, 0.4867, 0.4408)
+            self._CIFAR_STD = (0.2675, 0.2565, 0.2761)
 
     @staticmethod
     def _values(values: tuple[float, ...], inputs: torch.Tensor) -> torch.Tensor:
@@ -193,9 +197,9 @@ class DLDTorchvisionResNet34Source:
             "checkpoint": self.checkpoint.state_dict(),
             "feature_output": "global_average_pool(layer4)",
             "feature_dimension": 512,
-            "input_contract": "cifar10_standard_normalized",
+            "input_contract": self.model.input_contract,
             "preprocessing": {
-                "restore": "CIFAR-10 standard normalized tensor to [0,1]",
+                "restore": self.model.input_contract + " to [0,1]",
                 "resize": 256,
                 "center_crop": 224,
                 "normalization": "ImageNet-1K V1",
@@ -228,9 +232,7 @@ def load_torchvision_resnet34_imagenet1k_v1_source(
         raise ValueError("DLD torchvision feature adapter identity mismatch")
     if str(source_config.get("weights", "")).strip() != "IMAGENET1K_V1":
         raise ValueError("DLD torchvision ResNet34 weights must be IMAGENET1K_V1")
-    if str(source_config.get("input_contract", "")).strip() != (
-        "cifar10_standard_normalized"
-    ):
+    if str(source_config.get("input_contract", "")).strip() not in {"cifar10_standard_normalized", "cifar100_standard_normalized"}:
         raise ValueError("DLD torchvision ResNet34 input contract mismatch")
 
     from torchvision.models import ResNet34_Weights, resnet34
@@ -239,7 +241,7 @@ def load_torchvision_resnet34_imagenet1k_v1_source(
     cached = _cached_torchvision_weight(weights.url)
     identity = DLDSourceFileIdentity.capture(cached)
     # The official cached checkpoint is fingerprinted before loading.
-    model = _TorchvisionResNet34FeatureModel(resnet34(weights=weights)).eval()
+    model = _TorchvisionResNet34FeatureModel(resnet34(weights=weights), str(source_config["input_contract"])).eval()
     for parameter in model.parameters():
         parameter.requires_grad_(False)
     result = DLDTorchvisionResNet34Source(identity, model)

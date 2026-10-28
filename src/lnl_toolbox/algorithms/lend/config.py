@@ -99,8 +99,8 @@ class LENDConfig:
             raise ValueError("unsupported LEND selection rule")
         if reduction not in {"batch_mean", "sum"}:
             raise ValueError("LEND reduction must be batch_mean or sum")
-        if empty != "skip_update":
-            raise ValueError("LEND first version requires empty_batch: skip_update")
+        if empty not in {"skip_update", "zero_gradient"}:
+            raise ValueError("LEND empty_batch must be skip_update or zero_gradient")
         training = _mapping(values.get("training"), "lend.training")
         if "epochs" not in training or set(training) - {"epochs", "early_stopping"} or int(training["epochs"]) <= 0:
             raise ValueError("lend.training requires positive epochs")

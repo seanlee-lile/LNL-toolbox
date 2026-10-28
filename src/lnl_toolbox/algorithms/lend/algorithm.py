@@ -94,13 +94,15 @@ class LENDAlgorithm:
         history_values = proposal.values.to(self.device, dtype=current.dtype)
         selected = select_lend_samples(targets, history_values)
         selected_count = int(selected.sum().item())
+        selected_loss_sum = per_sample[selected].sum()
         objective_value = 0.0
-        if selected_count:
-            # Eq. (7) writes a sum over selected examples, but does not state
-            # the executable mini-batch reduction.  Divide by the actual
-            # batch size (not selected_count) so changing the selected ratio
-            # does not amplify the SGD scale by O(B).
-            objective = per_sample[selected].sum()
+        if not selected_count:
+            self.private_state.empty_selection_batches += 1
+        if selected_count or self.method_config.empty_batch == "zero_gradient":
+            # Eq. (7) sums selected losses. batch_mean is an explicit variant.
+            # An empty differentiable sum produces zero data gradients while
+            # still allowing the optimizer's momentum/weight decay update.
+            objective = selected_loss_sum
             if self.method_config.reduction == "batch_mean":
                 objective = objective / count
             if not bool(torch.isfinite(objective)):
@@ -110,10 +112,7 @@ class LENDAlgorithm:
             self.optimizer.step()
             self.private_state.optimizer_steps += 1
             objective_value = float(objective.detach().item())
-        else:
-            self.private_state.empty_selection_batches += 1
-        # An empty selection is still a successfully observed batch.  It does
-        # not update parameters, but its label evidence advances Eq. (5).
+        # Both empty-batch policies still commit the observed label evidence.
         self.private_state.history.commit(proposal)
         state.step += 1
         product = adjacency.transpose(0, 1) @ adjacency
@@ -125,7 +124,8 @@ class LENDAlgorithm:
             "samples": float(count),
             "selected_samples": float(selected_count),
             "selected_ratio": float(agreement.item()),
-            "selected_train_loss_sum": objective_value,
+            "selected_train_loss_sum": float(selected_loss_sum.detach().item()),
+            "selected_train_objective": objective_value,
             "all_sample_noisy_ce_loss": float(per_sample.detach().mean().item()),
             "diluted_noisy_agreement": float(agreement.item()),
             "history_initialized_ratio": float(self.private_state.history.initialized.float().mean().item()),
