@@ -735,9 +735,10 @@ def _paper_payload() -> list[dict[str, object]]:
     payload = []
     for paper in _web_paper_specs():
         default_config = next(
-            config for config in paper.configs if config.profile == "reproduction"
+            (config for config in paper.configs if config.profile == "reproduction"),
+            None,
         )
-        default_recipe = recipes[default_config.recipe_id]
+        default_recipe = recipes[default_config.recipe_id] if default_config else None
         payload.append({
             "id": paper.id,
             "acronym": paper.acronym,
@@ -753,11 +754,13 @@ def _paper_payload() -> list[dict[str, object]]:
             "implementation_paths": list(paper.implementation_paths),
             "implementation_status": paper.implementation_status,
             "reproduction_status": paper.reproduction_status,
-            "default_recipe_id": default_recipe.id,
-            "default_variant": default_config.variant,
-            "default_fidelity": default_config.configuration_fidelity,
+            "default_recipe_id": default_recipe.id if default_recipe else "",
+            "default_variant": default_config.variant if default_config else "",
+            "default_fidelity": default_config.configuration_fidelity if default_config else "",
             "configs": [],
         })
+        if default_config is None:
+            payload[-1].update(availability="unavailable", metadata_only=True)
         for config in paper.configs:
             recipe = recipes[config.recipe_id]
             profile_label = {
@@ -937,6 +940,8 @@ def _compute_dataset_recipe_compatibility_payload(
     papers = _paper_payload()
     recipe_meta: dict[str, dict[str, object]] = {}
     for paper in papers:
+        if not paper.get("default_recipe_id"):
+            continue
         paper_configs = paper.get("configs") or [{
             "recipe_id": paper["default_recipe_id"],
             "profile": "reproduction",
@@ -961,14 +966,17 @@ def _compute_dataset_recipe_compatibility_payload(
         recipe_id: _web_recipe_config(recipe_id)
         for recipe_id in recipe_meta
     }
-    service = ExperimentService()
-    profile, capabilities = _dataset_profile_context(alias)
-    results = dict(service.list_config_compatibility(
-        alias,
-        configs,
-        method_noise_rate_prior=method_noise_rate_prior,
-        dataset_capabilities=capabilities,
-    ))
+    results = {}
+    profile = None
+    if configs:
+        service = ExperimentService()
+        profile, capabilities = _dataset_profile_context(alias)
+        results = dict(service.list_config_compatibility(
+            alias,
+            configs,
+            method_noise_rate_prior=method_noise_rate_prior,
+            dataset_capabilities=capabilities,
+        ))
     recipes = []
     for recipe_id, meta in recipe_meta.items():
         result = results[recipe_id].to_dict()

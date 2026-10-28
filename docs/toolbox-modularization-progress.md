@@ -1,5 +1,42 @@
 # Toolbox modularization progress
 
+## 提取旧 life 的独立改动（2026-10-29）
+
+- 当前任务：从 `life@ca855a7` 提取开发工具、错误诊断和论文资料页容错，不覆盖当前训练实现。
+- 分支 / 基线：提取分支 `codex/extract-life-1019`，基线 `scratch@84959b1`；合并目标为本地 scratch。
+  没有引入最新 life；未推送。
+- Checklist：历史与来源核对、局部提取、针对性检查、26 篇前后对照、完整检查、本地合并与范围复核。
+- 进度：6 / 6（100%）；本节随本地合并提交生效。提取提交：`9917951`。
+- 修改范围：`src/lnl_toolbox/cli/main.py`、`src/lnl_toolbox/training/service.py`、
+  `web/command_console.py`、`web/index.html`、`web/assets/run_output.js`、`tests/test_cli.py`、
+  `tests/test_experiment_service_data_contract.py`、`web/test_command_console.py`、
+  `web/test_training_status.py`、`docs/development-guide.md` 和本文档。
+- 新增：`scripts/new_paper.py`、`scripts/check_paper_registration.py`、
+  `tests/test_new_paper.py`、`tests/test_paper_registration.py`。工具与其检查取自旧 life；
+  去掉固定论文 / 配置数量断言，不加入 CI，不新增依赖。
+- 保留 scratch：正式配方选择、原始参数校验顺序、数据适配、配置保存、启动分发、恢复、
+  算法 / 模型 / 预处理、正式 YAML、Quick Start 核心、现有 CI；不引入 life 的强制重复准入或 smoke 默认回退。
+- 验证：针对性 53 项 + 论文页 Node 行为 1 项通过；登记工具检查 PASS（0 issues）；Ruff 通过。
+  26 篇现有页面 payload 与基线完全一致，26 篇完整训练调用参数一致；调用被拦截，没有执行 26 篇真实训练。
+  AST 对照确认 CLI 参数解析（除 help）、保存、启动、分发、恢复和成功校验路径不变；受保护路径 git diff 为空。
+  完整单元 1155 项、Web 142 项、Scratch 224 项全部通过，无失败或跳过。
+- 实际运行的检查命令：在既有 `F:/Miniconda/envs/pytorch/python.exe` 环境设置
+  `PYTHONPATH=src;tests;.`、`PYTHONDONTWRITEBYTECODE=1`；分别以
+  `python -B -c "import torch,unittest; torch.set_num_threads(2); r=unittest.TextTestRunner(verbosity=1,buffer=True).run(unittest.defaultTestLoader.discover(DIRECTORY)); raise SystemExit(not r.wasSuccessful())"`
+  运行 `tests`、`web`（pattern=`test_*.py`）和 `src/lnl_toolbox/scratch/tests`。
+  `python -B scripts/check_paper_registration.py`、
+  `python -B -m ruff check --no-cache src tests web scripts/new_paper.py scripts/check_paper_registration.py`、
+  `git diff --check` 均通过。
+- 真实 Web 短训练：临时 HTTP 服务，通过 methods → plan → `/api/run` → jobs
+  选择 GCE / `gce-cifar10-noise02-reproduction` / 已登记 `cifar10-local`，仅用 `--epochs 1` 缩短预算。
+  实际完成 1 轮、19 次参数更新，退出码 0，Web 状态 completed；临时输出自动清理。
+  这是 Web API 到真实训练的验证，不是浏览器逐次点击，也不是 26 篇论文全部真实训练。
+- 冲突与边界：CLI / service / Web / 共享文档为协作敏感文件，均局部合入；
+  原有 Dual-T 文件状态、SSH 密钥和训练产物保持不动，不加入提交。
+- 范围复核：11 个已有文件、4 个新增文件与批准白名单完全一致；无计划外源码文件。
+  不需要整理临时提交历史；完整检查和真实短训练通过后，局部提取合并回本地 scratch。
+- 精确下一步：查看本地合并结果与差异；若需要发布，另行批准推送 scratch。
+
 ## CI input-validation and resume repair (2026-10-15)
 
 - Task: resolve the failures in quality run `38672394362`, without freezing configurable experiment values to historical defaults. Branch/base: `scratch` / `8f673918f2246864022a6db093ae2ac27216665e`. No branch change, commit or push is authorized.

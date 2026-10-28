@@ -1,5 +1,32 @@
 # LNL Toolbox 开发指南
 
+## 新论文接入工具
+
+这两个开发工具提取自 `life@ca855a7`，需要手动运行，不接入 Quick Start、训练启动或 CI。
+
+```powershell
+python scripts/check_paper_registration.py
+python scripts/new_paper.py new-paper-demo --extension-type COMPONENT_EXTENSION
+python scripts/check_paper_registration.py --draft artifacts/paper-drafts/new-paper-demo
+```
+
+登记检查只核对 recipe、paper catalog、runner requirements 和正式配置的打包引用，
+不加载数据、不读取模型权重、不执行训练。检查通过不代表算法实现或训练结果通过验收。
+
+草稿生成器只在 `artifacts/paper-drafts/<paper-id>/` 创建独立材料，拒绝覆盖已有目录；
+不会登记论文，也不会生成算法实现。未完成的草稿检查返回 1。
+可以用 `--output-dir` 指定其他草稿目录，或用 `--base-config` 明确复制现有实验配置；
+复制保留全部训练值，仍需人工审查，不会自动将实验改成短测。
+
+接入顺序：先实现组件或 runner 并声明数据要求，再登记实验 YAML、recipe catalog、
+paper catalog 和发行包配置，最后验证选择、配置、执行与恢复链路。
+论文资料可以先登记而不提供配置；此时 Web 只展示资料，不提供训练入口。
+
+CLI 的 `validate` 默认做静态检查，`--check-data` 增加数据与兼容性检查；
+`run --dry-run` 检查并展示计划，`run` 启动训练，`resume` 读取已有运行目录。
+`source`、`--recipe`、`--config` 三选一；`--data` 使用本机登记的数据集别名。
+失败提示复用后端已有的错误和前置条件信息，不额外执行一次校验。
+
 ## 1. 开发环境
 
 推荐为本项目创建独立 Conda 环境，避免与 Cleanlab、Ultralytics 等其他项目的依赖混在一起。

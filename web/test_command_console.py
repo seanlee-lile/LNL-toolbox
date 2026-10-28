@@ -18,6 +18,76 @@ import command_console  # noqa: E402
 
 
 class CommandConsoleTest(unittest.TestCase):
+    def test_paper_browser_keeps_formal_start_and_blocks_metadata_and_smoke(self):
+        import shutil
+        import subprocess
+        node = shutil.which('node')
+        self.assertIsNotNone(node, 'Node is required for the paper browser regression')
+        script = r'''
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const html=fs.readFileSync('web/index.html','utf8');
+const begin=html.indexOf('    function renderPapers() {');
+const end=html.indexOf('    function renderRunWorkspace() {',begin);
+assert(begin>=0 && end>begin);
+const nodes={};
+for(const id of ['paper-id','paper-start-quickstart','paper-details'])
+  nodes[id]={value:'',innerHTML:'',handlers:{},addEventListener(name,fn){this.handlers[name]=fn;},querySelectorAll(){return [];}};
+const starts=[],state={papers:[],paperId:'',paperRecipe:''},panel={innerHTML:''};
+const context={state,parameterPanel:panel,document:{getElementById:id=>nodes[id]},
+  window:{quickStartController:{openPaper(...args){starts.push(args);}}},
+  commonFormStart(){return '';},commonFormEnd(){return '';},field(){return '';},selectControl(){return '';},
+  escapeHtml(value){return String(value);},tableHtml(){return '';},updateModulePreview(){}};
+vm.runInNewContext(html.slice(begin,end),context);
+const base={id:'fixture',acronym:'Fixture',title:'Original title',summary:'Original summary',
+  mechanism:'Original mechanism',venue:'Test',year:2026,source_url:'https://example.com',lifecycle:[],limitations:[],concept_to_config:[]};
+for(const profile of ['reproduction','metadata','smoke']){
+  const recipe={recipe_id:'fixture-'+profile,profile,label:profile,data:'cifar10'};
+  const paper={...base,default_recipe_id:profile==='reproduction'?recipe.recipe_id:'',configs:profile==='metadata'?[]:[recipe]};
+  state.papers=[paper];state.paperId=paper.id;state.paperRecipe=profile==='smoke'?recipe.recipe_id:'';
+  const count=starts.length;
+  context.renderPapers();nodes['paper-start-quickstart'].handlers.click();
+  assert(nodes['paper-details'].innerHTML.includes('Original title'));
+  assert(nodes['paper-details'].innerHTML.includes('Original summary'));
+  if(profile==='reproduction'){
+    assert.equal(starts.length,count+1);assert.equal(starts[count][1],recipe.recipe_id);
+    assert(!panel.innerHTML.includes('disabled'));
+  }else{
+    assert.equal(starts.length,count);assert(panel.innerHTML.includes('disabled'));
+  }
+}
+'''
+        result = subprocess.run([node, '-e', script], cwd=command_console.ROOT,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_metadata_only_paper_has_no_training_recipe_or_dataset_checks(self):
+        from dataclasses import replace
+        paper = replace(command_console._web_paper_specs()[0], configs=())
+        with mock.patch.object(command_console, '_web_paper_specs', return_value=(paper,)), \
+             mock.patch.object(command_console, '_web_recipe_catalog', return_value={}):
+            payload = command_console._paper_payload()
+        self.assertEqual(payload[0]['title'], paper.title)
+        self.assertEqual(payload[0]['default_recipe_id'], '')
+        self.assertEqual(payload[0]['configs'], [])
+        self.assertTrue(payload[0]['metadata_only'])
+        self.assertEqual(payload[0]['availability'], 'unavailable')
+        with mock.patch.object(command_console, '_paper_payload', return_value=payload), \
+             mock.patch.object(command_console, '_dataset_profile_context', side_effect=AssertionError('data inspection')):
+            result = command_console._compute_dataset_recipe_compatibility_payload('fixture')
+        self.assertEqual(result['recipes'], [])
+
+    def test_paper_without_formal_recipe_never_defaults_to_smoke(self):
+        from dataclasses import replace
+        paper = next(item for item in command_console._web_paper_specs()
+                     if any(config.profile == 'smoke' for config in item.configs))
+        paper = replace(paper, configs=tuple(config for config in paper.configs if config.profile == 'smoke'))
+        with mock.patch.object(command_console, '_web_paper_specs', return_value=(paper,)):
+            payload = command_console._paper_payload()[0]
+        self.assertEqual(payload['default_recipe_id'], '')
+        self.assertTrue(payload['metadata_only'])
+        self.assertTrue(payload['configs'])
+        self.assertTrue(all(item['profile'] == 'smoke' for item in payload['configs']))
+
     def test_stage_early_stopping_fields_share_the_parameter_contract(self):
         from copy import deepcopy
         from lnl_toolbox.core.config_schema import training_stage_controls
