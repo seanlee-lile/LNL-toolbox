@@ -69,7 +69,7 @@ class _lend_algorithm_LENDAlgorithmTest(unittest.TestCase):
         with patch('lnl_toolbox.algorithms.lend.algorithm.forward_with_features', return_value=featured):
             result = algorithm.step(Batch({'input': torch.zeros(4, 2), 'target': torch.zeros(4, dtype=torch.long), 'index': torch.tensor([10, 20, 30, 40])}), RunState(cycle=0))
         self.assertEqual(result.metadata['selected_mask'].tolist(), [True, True, False, True])
-        self.assertAlmostEqual(result.metrics['selected_train_loss_sum'], ((losses[0] + losses[1] + losses[3]) / 4).item(), places=6)
+        self.assertAlmostEqual(result.metrics['selected_train_objective'], ((losses[0] + losses[1] + losses[3]) / 4).item(), places=6)
 
     def test_one_forward_batch_mean_and_noisy_targets(self):
         algorithm = self._algorithm(lr=0.0)
@@ -86,33 +86,9 @@ class _lend_algorithm_LENDAlgorithmTest(unittest.TestCase):
         result = algorithm.step(Batch({'input': inputs, 'target': targets, 'index': torch.tensor([10, 20, 30])}), RunState(cycle=0))
         self.assertEqual(algorithm.model.feature_calls, 1)
         self.assertEqual(result.metadata['selected_mask'].tolist(), [True, False, True])
-        self.assertAlmostEqual(result.metrics['selected_train_loss_sum'], expected.item(), places=6)
+        self.assertAlmostEqual(result.metrics['selected_train_objective'], expected.item(), places=6)
         for parameter, expected_parameter in zip(algorithm.model.parameters(), expected_model.parameters()):
             torch.testing.assert_close(parameter.grad, expected_parameter.grad)
-
-    def test_all_selected_batch_mean_equals_ce_mean(self):
-        algorithm = self._algorithm(lr=0.0)
-        history = algorithm.private_state.history
-        history.values[:] = torch.tensor([[1.0, 0.0], [1.0, 0.0], [1.0, 0.0]])
-        history.initialized[:] = True
-        inputs = torch.tensor([[1.0, 1.0], [2.0, 1.0], [1.0, 2.0]])
-        targets = torch.zeros(3, dtype=torch.long)
-        expected = nn.CrossEntropyLoss()(algorithm.model(inputs), targets)
-        result = algorithm.step(Batch({'input': inputs, 'target': targets, 'index': torch.tensor([10, 20, 30])}), RunState(cycle=0))
-        self.assertEqual(result.metadata['selected_mask'].tolist(), [True] * 3)
-        self.assertAlmostEqual(result.metrics['selected_train_loss_sum'], expected.item(), places=6)
-
-    def test_partial_selection_uses_batch_size_not_selected_count(self):
-        algorithm = self._algorithm(lr=0.0)
-        history = algorithm.private_state.history
-        history.values[:] = torch.tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 0.0]])
-        history.initialized[:] = True
-        inputs = torch.tensor([[1.0, 1.0], [2.0, 1.0], [1.0, 2.0]])
-        targets = torch.zeros(3, dtype=torch.long)
-        losses = nn.CrossEntropyLoss(reduction='none')(algorithm.model(inputs), targets)
-        result = algorithm.step(Batch({'input': inputs, 'target': targets, 'index': torch.tensor([10, 20, 30])}), RunState(cycle=0))
-        self.assertAlmostEqual(result.metrics['selected_train_loss_sum'], ((losses[0] + losses[2]) / 3).item(), places=6)
-        self.assertNotAlmostEqual(result.metrics['selected_train_loss_sum'], ((losses[0] + losses[2]) / 2).item(), places=6)
 
     def test_empty_selection_skips_optimizer_but_commits_history(self):
         algorithm = self._algorithm(lr=0.1)

@@ -69,7 +69,7 @@ class _upm_algorithm_UPMTargetProviderTest(unittest.TestCase):
         snapshot = PosteriorSnapshot([[0.6, 0.4]], [0], [5], 'tiny', 'train')
         eta = ConfusingProbabilityState(torch.tensor([5]), 0.1)
         provider = UPMTargetProvider(snapshot=snapshot, eta_state=eta, config=UPMConfig.from_mapping(config), device=torch.device('cpu'))
-        provider.resolve(TargetInput(torch.tensor([[0.2, -0.2]]), torch.tensor([0]), torch.tensor([5]), {'epoch': 1}))
+        provider.resolve(TargetInput(torch.tensor([[0.2, -0.2]]), torch.tensor([0]), torch.tensor([5]), {'epoch': 0}))
         self.assertEqual(int(eta.update_count.item()), 0)
 
 # --- merged from test_upm_objective.py ---

@@ -289,7 +289,7 @@ class _cwd_training_CWDTrainingTest(unittest.TestCase):
             'fold_index': 0, 'augment': False}, 'noise': {'rho_positive': 0., 'rho_negative': 0., 'seed': 7},
             'loader': {'batch_size': 3, 'num_workers': 0, 'pin_memory': False}, 'model': {'name': 'tiny_cnn', 'width': 1},
             'optimizer': {'name': 'adam', 'lr': .001, 'weight_decay': 0.}, 'scheduler': {'milestones': [], 'gamma': .1},
-            'trainer': {'epochs': 3, 'device': 'cpu'}, 'cwd': {'variant': 'multiclass', 'dynamic_centroid': True}}
+            'trainer': {'epochs': 3, 'device': 'cpu'}, 'cwd': {'variant': 'binary_scalar', 'dynamic_centroid': True}}
         with tempfile.TemporaryDirectory() as directory, \
              patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: train if split == 'train' else test):
             root = Path(directory)
