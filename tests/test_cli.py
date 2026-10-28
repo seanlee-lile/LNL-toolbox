@@ -18,6 +18,30 @@ def _cli_scripted_session(values: list[str]) -> tuple[PromptSession, list[str]]:
 
 class _cli_PromptSessionTest(unittest.TestCase):
 
+    def test_diagnostic_formatter_does_not_replace_original_cli_error(self):
+        from lnl_toolbox.cli import main as cli_main
+        with redirect_stderr(StringIO()) as output, \
+             patch.object(cli_main, '_run', side_effect=FileNotFoundError('missing original input')), \
+             patch.object(cli_main, '_print_failure_guidance', side_effect=RuntimeError('formatter failed')):
+            code = cli_main.main(['run', '--recipe', 'example'])
+        self.assertEqual(code, 2)
+        self.assertIn('missing original input', output.getvalue())
+        self.assertNotIn('formatter failed', output.getvalue())
+
+    def test_cli_projects_compatibility_failure_without_running_a_second_check(self):
+        from lnl_toolbox.cli import main as cli_main
+        from lnl_toolbox.training.compatibility import CompatibilityReason, CompatibilityResult, CompatibilityStatus
+        from lnl_toolbox.training.service import ExperimentReadinessError
+        result = CompatibilityResult(CompatibilityStatus.INCOMPATIBLE, 'gce', 'fixture',
+                                     reasons=(CompatibilityReason('fixture_blocker', 'original backend reason'),))
+        with redirect_stderr(StringIO()) as output, \
+             patch.object(cli_main, '_run', side_effect=ExperimentReadinessError('original rejection', result)), \
+             patch.object(ExperimentService, 'preflight', side_effect=AssertionError('second check')):
+            code = cli_main.main(['run', '--recipe', 'example'])
+        self.assertEqual(code, 2)
+        self.assertIn('original rejection', output.getvalue())
+        self.assertIn('fixture_blocker: original backend reason', output.getvalue())
+
     def test_clean_template_discovery_excludes_noisy_configs(self) -> None:
         names = {path.name for path, _ in cli_shared._experiment_templates(clean=True)}
         self.assertNotIn('cifar10_symmetric_ce_smoke.yaml', names)

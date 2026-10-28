@@ -817,7 +817,7 @@
       return reasons.join("；") || "当前正式配置满足该数据集的训练前门禁";
     }
     function yamlPaperOptions() {
-      return state.papers.map(function (paper) {
+      return state.papers.filter(function (paper) { return Boolean(paper.default_recipe_id); }).map(function (paper) {
         const compatibility = recipeCompatibility(paper.default_recipe_id);
         return {
           value: paper.default_recipe_id,
@@ -1828,15 +1828,16 @@
       const paper = state.papers.find(function (item) { return item.id === state.paperId; }) || state.papers[0];
       if (paper) state.paperId = paper.id;
       const configItems = (paper?.configs || []).map(function (item) { return {value:item.recipe_id, label:item.label}; });
-      if (!configItems.some(function (item) { return item.value === state.paperRecipe; })) state.paperRecipe = paper?.default_recipe_id || configItems[0]?.value || "";
+      if (!configItems.some(function (item) { return item.value === state.paperRecipe; })) state.paperRecipe = paper?.default_recipe_id || "";
       const activePaperConfig = (paper?.configs || []).find(function (item) { return item.recipe_id === state.paperRecipe; });
       parameterPanel.innerHTML = commonFormStart() +
         field("论文方法", "paper-id", selectControl("__ID__", paperItems.length ? paperItems : ["binary-risk"])) +
-        '<div class="paper-start-actions"><button id="paper-start-quickstart" type="button" class="primary">开始训练</button></div>' +
+        '<div class="paper-start-actions"><button id="paper-start-quickstart" type="button" class="primary" ' + (!activePaperConfig || activePaperConfig.profile !== "reproduction" ? 'disabled' : '') + '>开始训练</button></div>' +
         commonFormEnd() + '<div id="paper-details"></div>';
       document.getElementById("paper-id").value = state.paperId;
       document.getElementById("paper-id").addEventListener("change", function (event) { state.paperId = event.target.value; state.paperRecipe = ""; renderPapers(); updateModulePreview(); });
       document.getElementById("paper-start-quickstart").addEventListener("click", function () {
+        if (!activePaperConfig || activePaperConfig.profile !== "reproduction") return;
         if (window.quickStartController?.openPaper) {
           window.quickStartController.openPaper(state.paperId, state.paperRecipe, activePaperConfig?.data);
         } else {
@@ -1850,14 +1851,14 @@
     function renderPaperDetails() {
       const node = document.getElementById("paper-details");
       const paper = state.papers.find(function (item) { return item.id === state.paperId; });
-      const config = paper?.configs.find(function (item) { return item.recipe_id === state.paperRecipe; });
-      if (!node || !paper || !config) return;
+      const config = (paper?.configs || []).find(function (item) { return item.recipe_id === state.paperRecipe; });
+      if (!node || !paper) return;
       const lifecycle = (paper.lifecycle || []).map(function (stage) { return '<li>' + escapeHtml(String(stage).replace(/^\s*\d+\s*[.)、]\s*/, "")) + '</li>'; }).join("");
       const mappingRows = (paper.concept_to_config || []).map(function (item) { return {"论文概念":item.concept, "YAML 配置字段":item.config, "实现模块":item.implementation}; });
-      const configRows = [{"配置文件":config.config_path, "数据集":config.data, "噪声":config.noise + (config.noise_rate == null ? "" : " · " + config.noise_rate), "训练轮次":config.epochs ?? "-", "执行器":config.runner, "方法":config.method || "-"}];
+      const configRows = config ? [{"配置文件":config.config_path, "数据集":config.data, "噪声":config.noise + (config.noise_rate == null ? "" : " · " + config.noise_rate), "训练轮次":config.epochs ?? "-", "执行器":config.runner, "方法":config.method || "-"}] : [];
       const limitations = (paper.limitations || []).map(function (item) { return '<li>' + escapeHtml(item) + '</li>'; }).join("");
-      const preparation = config.preparation;
-      const resourceConfigs = paper.configs.filter(function (item) { return item.profile === "reproduction" && item.external_resources?.length; });
+      const preparation = config?.preparation;
+      const resourceConfigs = (paper.configs || []).filter(function (item) { return item.profile === "reproduction" && item.external_resources?.length; });
       const externalCards = resourceConfigs.map(function (item, index) { return '<div><p class="helper">' + escapeHtml(item.label) + '</p><div id="paper-external-' + index + '"></div></div>'; }).join('');
       const preparationCard = preparation ? '<div class="guide-card mentor-preparation ' + (preparation.artifact_ready ? 'is-ready' : 'is-pending') + '"><strong>MentorArtifact: <span class="mentor-status ' + (preparation.artifact_ready ? 'ready' : 'not-ready') + '">' + (preparation.artifact_ready ? 'READY' : 'NOT READY') + '</span></strong>' +
         '<p class="helper">' + escapeHtml(preparation.artifact_path) + '</p>' +
@@ -1870,7 +1871,7 @@
       node.innerHTML = '<div class="guide-card"><h3>' + escapeHtml(paper.acronym + "：" + paper.title) + '</h3><p>' + escapeHtml(paper.venue + " " + paper.year) + ' · <a href="' + escapeHtml(paper.source_url) + '" target="_blank" rel="noreferrer">查看论文来源</a></p><p><strong>解决的问题：</strong>' + escapeHtml(paper.summary) + '</p><p><strong>核心方法：</strong>' + escapeHtml(paper.mechanism) + '</p></div>' +
         '<div class="guide-card"><strong>论文训练流程</strong><ol>' + lifecycle + '</ol></div>' +
         externalCards + preparationCard +
-        '<div class="guide-card"><strong>当前配置如何运行这篇论文</strong>' + tableHtml(configRows) + '<p class="helper">可直接准备正式训练指令，也可另存为项目 YAML 后修改或进入参数组合实验；内置配置不会被覆盖。</p></div>' +
+        (config ? '<div class="guide-card"><strong>当前配置如何运行这篇论文</strong>' + tableHtml(configRows) + '<p class="helper">可直接准备正式训练指令，也可另存为项目 YAML 后修改或进入参数组合实验；内置配置不会被覆盖。</p></div>' : '<div class="guide-card">该论文尚无正式运行配置，当前仅展示论文资料。</div>') +
         '<div class="guide-card"><strong>论文方法、配置字段与代码的关系</strong>' + tableHtml(mappingRows) + '</div>' +
         (limitations ? '<details class="guide-card"><summary>已知限制</summary><ul>' + limitations + '</ul></details>' : '');
       resourceConfigs.forEach(function (item, index) { window.paperExternalResources?.mount(document.getElementById("paper-external-" + index), {recipe:item.recipe_id}); });

@@ -37,7 +37,7 @@ from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE, DatasetStatu
 from lnl_toolbox.data.profile import NoiseRateInfo, NoiseRateStatus
 from lnl_toolbox.training.compatibility import CompatibilityResult, CompatibilityStatus
 from lnl_toolbox.training.runners import apply_epoch_override, resolve_runner, runner_names
-from lnl_toolbox.training.service import ExperimentService
+from lnl_toolbox.training.service import ExperimentReadinessError, ExperimentService
 from lnl_toolbox.training.sweep import (
     plan_sweep,
     resolve_planned_config,
@@ -58,15 +58,15 @@ def _should_check_data(args: argparse.Namespace) -> bool:
 
 
 def _source_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("source", nargs="?", help="recipe name or YAML path")
+    parser.add_argument("source", nargs="?", help="实验 recipe 名称或 YAML 路径；与 --recipe、--config 三选一")
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--recipe", help="内置实验配置名称")
-    group.add_argument("--config", type=Path, help="自定义 YAML 配置")
+    group.add_argument("--recipe", help="使用内置实验配置；不要同时填写 source 或 --config")
+    group.add_argument("--config", type=Path, help="读取实验 YAML 文件；不要同时填写 source 或 --recipe")
     parser.add_argument("--project-root", type=Path, help="显式指定项目根目录")
     parser.add_argument(
         "--data",
         dest="local_dataset",
-        help="machine-local dataset alias registered with 'lnl data register'",
+        help="使用 lnl data register 登记的本机数据集别名，覆盖配置中的数据来源",
     )
 
 
@@ -117,16 +117,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="输出格式；human 适合阅读，tsv 适合脚本处理（默认: human）",
     )
 
-    validate = sub.add_parser("validate", help="训练前静态检查配置")
+    validate = sub.add_parser("validate", help="静态检查实验配置；不执行训练")
     _source_options(validate)
-    validate.add_argument("--check-data", action="store_true")
+    validate.add_argument("--check-data", action="store_true", help="同时检查数据路径、方法兼容性和适用的外部输入")
 
     run = sub.add_parser("run", help="运行内置 recipe 或自定义配置")
     _source_options(run)
     run.add_argument("--output-dir", type=Path)
-    run.add_argument("--resume", type=Path)
-    run.add_argument("--epochs", type=int)
-    run.add_argument("--dry-run", action="store_true")
+    run.add_argument("--resume", type=Path, help="从 checkpoint 文件恢复；保持该运行的配置身份")
+    run.add_argument("--epochs", type=int, help="覆盖该方法支持的训练阶段轮数；多阶段方法按现有规则处理")
+    run.add_argument("--dry-run", action="store_true", help="检查并展示运行计划，不启动训练")
     run.add_argument("--review", action="store_true", help="report parameter-check and rehearsal phases in one dry-run process")
     data_check = run.add_mutually_exclusive_group()
     data_check.add_argument(
@@ -137,7 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
     data_check.add_argument(
         "--no-check-data",
         action="store_true",
-        help="skip dataset path/layout checks during dry-run",
+        help="仅限 --dry-run：跳过数据检查和完整兼容性检查；不代表外部文件已就绪",
     )
     run.add_argument(
         "--set",
@@ -151,8 +151,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     resume = sub.add_parser("resume", help="从运行目录自动恢复")
-    resume.add_argument("run_dir", type=Path)
-    resume.add_argument("--checkpoint", choices=("last", "best"), default="last")
+    resume.add_argument("run_dir", type=Path, help="已有运行目录，包含 resolved_config.yaml；不是 checkpoint 文件路径")
+    resume.add_argument("--checkpoint", choices=("last", "best"), default="last", help="选择 last.pt 或 best.pt；已完成的运行不重新训练")
 
     data = sub.add_parser("data", help="register and verify machine-local datasets")
     data_sub = data.add_subparsers(dest="data_command", required=True)
@@ -441,6 +441,72 @@ def _paper_config_value(config: dict[str, Any], key: str) -> str:
         if value is not None:
             staged.append(f"{stage_name}={value}")
     return "；".join(staged) if staged else "由执行器决定"
+
+
+
+
+
+def _print_failure_guidance(error: Exception) -> None:
+    """Present backend facts only; never validate or infer a readiness state."""
+    result = error.compatibility if isinstance(error, ExperimentReadinessError) else None
+    context = getattr(error, "prerequisite_context", ())
+    if result is not None:
+        print(f"Compatibility: {result.status.value.upper()}", file=sys.stderr)
+        for reason in result.reasons:
+            print(f"  {reason.code}: {reason.message}", file=sys.stderr)
+        items = [(item.descriptor, item) for item in result.prerequisites if item.status != "ready"]
+    else:
+        # An early catalog failure has declarations, not validated statuses.
+        items = [(entry["descriptor"], None) for entry in context]
+    for index, (descriptor, readiness) in enumerate(items, 1):
+        label = "Prerequisite" if readiness is not None else "Prerequisite context (not evaluated)"
+        print(f"[{index}] {label}: {descriptor.name}", file=sys.stderr)
+        print(f"  type: {descriptor.kind}", file=sys.stderr)
+        print(f"  role: {descriptor.key}", file=sys.stderr)
+        if readiness is not None:
+            print(f"  status: {readiness.status.upper()}", file=sys.stderr)
+            if readiness.level is not None:
+                print(f"  level: {readiness.level.name}", file=sys.stderr)
+            print(f"  reason: {readiness.message}", file=sys.stderr)
+        source = next((entry["configured"] for entry in context if entry["descriptor"] == descriptor), ())
+        applicable = []
+        seen_sources = set()
+        for entry in source:
+            parent = entry.get("source")
+            if parent:
+                text = json.dumps(parent, ensure_ascii=False, default=str)
+                if text not in seen_sources:
+                    print(f"  configured source: {text}", file=sys.stderr)
+                    seen_sources.add(text)
+            value = entry.get("value")
+            if value is not None:
+                applicable.append(entry["path"])
+                print(f"  config field: {entry['path']} = {value}", file=sys.stderr)
+            if entry.get("environment_variable"):
+                text = entry.get("environment_value")
+                print(f"  source env: {entry['environment_variable']}" + (f" = {text}" if text else " (not set)"), file=sys.stderr)
+        if descriptor.requirement:
+            print(f"  expected: {descriptor.requirement}", file=sys.stderr)
+        if descriptor.obtain:
+            print(f"  preparation: {descriptor.obtain}", file=sys.stderr)
+        # A declared env/run-directory field may not apply to the configured
+        # cached-weight adapter.  Do not present it as that adapter's action.
+        if applicable and descriptor.provide:
+            print(f"  action: {descriptor.provide}", file=sys.stderr)
+    if result is not None:
+        represented = {"pretrained:" + item.descriptor.key for item in result.prerequisites}
+        for guidance in result.input_guidance:
+            if guidance.input_id in represented:
+                continue
+            print(f"Input ({guidance.category}): {guidance.label}", file=sys.stderr)
+            for name, value in (("reason", guidance.missing), ("expected", guidance.expected_value),
+                                ("action", guidance.provision)):
+                if value:
+                    print(f"  {name}: {value}", file=sys.stderr)
+            for path in guidance.config_paths:
+                print(f"  config field: {'.'.join(path)}", file=sys.stderr)
+            if guidance.environment_variable:
+                print(f"  source env: {guidance.environment_variable}", file=sys.stderr)
 
 
 def _print_compatibility_result(result: CompatibilityResult | None) -> None:
@@ -1560,6 +1626,11 @@ def main(argv: list[str] | None = None) -> int:
             return _paper_config(args)
     except (OSError, RuntimeError, TypeError, ValueError, KeyError) as exc:
         print(f"错误: {exc}", file=sys.stderr)
+        try:
+            _print_failure_guidance(exc)
+        except Exception:
+            # Diagnostic rendering must preserve the original error and exit code.
+            pass
         return 2
     parser.error("unknown command")
     return 2

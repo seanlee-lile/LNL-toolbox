@@ -40,6 +40,28 @@ class _Adapter:
 
 
 class ExperimentServiceDataContractTests(unittest.TestCase):
+    def test_diagnostic_snapshot_failure_preserves_original_validation_error(self):
+        from unittest.mock import patch
+        original = ValueError('original parameter rejection')
+        service = ExperimentService()
+        with patch('lnl_toolbox.catalog.validate_config', side_effect=original), \
+             patch('lnl_toolbox.training.service.resolve_runner', side_effect=RuntimeError('diagnostic failure')), \
+             patch.object(service.data_service, 'validate_config') as validate_data:
+            with self.assertRaises(ValueError) as caught:
+                service.preflight({'data': {'name': 'cifar10'}})
+        self.assertIs(caught.exception, original)
+        validate_data.assert_not_called()
+
+    def test_compatibility_error_retains_original_backend_result(self):
+        from lnl_toolbox.training.compatibility import CompatibilityResult, CompatibilityStatus
+        from lnl_toolbox.training.service import ExperimentReadinessError
+        result = CompatibilityResult(CompatibilityStatus.COMPATIBLE_WITH_REQUIREMENTS, 'gce', 'fixture',
+                                     required_user_inputs=('fixture_input',))
+        with self.assertRaises(ExperimentReadinessError) as caught:
+            ExperimentService._enforce_compatibility(result)
+        self.assertIs(caught.exception.compatibility, result)
+        self.assertIsInstance(caught.exception, ValueError)
+
     def test_web_split_repartitions_the_original_pool_and_keeps_test_separate(self) -> None:
         from lnl_toolbox.data.contracts import DataRequirements, DataRole
         from lnl_toolbox.training.data_service import prepare_experiment_data

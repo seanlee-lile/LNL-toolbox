@@ -38,6 +38,14 @@ if TYPE_CHECKING:
     from lnl_toolbox.training.data_service import DataService
 
 
+class ExperimentReadinessError(ValueError):
+    """An existing compatibility rejection with its unmodified backend facts."""
+
+    def __init__(self, message: str, result: CompatibilityResult) -> None:
+        super().__init__(message)
+        self.compatibility = result
+
+
 class ExperimentService:
     def __init__(self, data_service: "DataService | None" = None) -> None:
         if data_service is None:
@@ -485,10 +493,41 @@ class ExperimentService:
             "; required_user_inputs=" + ",".join(result.required_user_inputs)
             if result.required_user_inputs else ""
         )
-        raise ValueError(
+        raise ExperimentReadinessError(
             f"method {result.method!r} is not ready for dataset {result.dataset!r}: "
-            f"{result.status.value}; {details}{required}"
+            f"{result.status.value}; {details}{required}",
+            result,
         )
+
+    def _attach_failure_context(self, error: Exception, config: Mapping[str, Any]) -> None:
+        """Best-effort declaration/source snapshot, never a second validation.
+
+        Catalog checks can reject before a CompatibilityResult exists.  Such
+        declarations are context only, not inferred readiness or blockers.
+        Keep the original exception (including OSError subclasses) authoritative.
+        """
+        try:
+            requirements = resolve_runner(config).requirements(config)
+            if requirements is None:
+                return
+            context = []
+            for descriptor in requirements.prerequisites:
+                configured = []
+                for path in descriptor.config_paths:
+                    value = self._config_value(config, path)
+                    parent = self._config_value(config, path[:-1])
+                    entry = {"path": ".".join(path), "value": deepcopy(value)}
+                    if isinstance(parent, Mapping):
+                        entry["source"] = deepcopy(dict(parent))
+                    if path[-1] == "run_directory_env" and isinstance(value, str) and value.strip():
+                        entry["environment_variable"] = value
+                        entry["environment_value"] = os.environ.get(value)
+                    configured.append(entry)
+                context.append({"descriptor": descriptor, "configured": tuple(configured)})
+            error.prerequisite_context = tuple(context)
+        except Exception:
+            # Diagnostics must never replace a schema/identity/consumer error.
+            return
 
     def _compatibility_preflight(
         self,
@@ -521,16 +560,20 @@ class ExperimentService:
         from lnl_toolbox.catalog import validate_config
 
         raw = {"kind": "experiment", **dict(config)}
-        runner = validate_config(raw, check_data=False)
-        candidate = runtime_experiment_config(raw)
-        if candidate.get("kind") != "experiment":
-            raise ValueError("ExperimentService requires kind: experiment")
-        if check_data:
-            self.data_service.validate_config(candidate)
-            self._compatibility_preflight(candidate, runner)
-        else:
-            self.last_compatibility = None
-            self._last_compatibility_config = None
+        try:
+            runner = validate_config(raw, check_data=False)
+            candidate = runtime_experiment_config(raw)
+            if candidate.get("kind") != "experiment":
+                raise ValueError("ExperimentService requires kind: experiment")
+            if check_data:
+                self.data_service.validate_config(candidate)
+                self._compatibility_preflight(candidate, runner)
+            else:
+                self.last_compatibility = None
+                self._last_compatibility_config = None
+        except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
+            self._attach_failure_context(error, raw)
+            raise
         return runner
 
     def _ensure_metadata(self, run_dir: Path, config: Mapping[str, Any]) -> None:
@@ -624,4 +667,4 @@ class ExperimentService:
         )
 
 
-__all__ = ["ExperimentService"]
+__all__ = ["ExperimentService", "ExperimentReadinessError"]

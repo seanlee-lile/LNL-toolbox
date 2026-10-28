@@ -36,6 +36,9 @@ const nodes = Object.fromEntries(['training-output','training-summary','training
 const window = {};
 vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), {window,document:{getElementById:id=>nodes[id]}});
 window.trainingOutput.render({training:{state:'running',completed_epoch:2,total_epochs:10,metrics:[{epoch:2}]}});
+assert(!nodes.output.classList.contains('hidden'));
+window.trainingOutput.toggle(false);
+assert(!nodes.output.classList.contains('hidden'));
 assert.equal(nodes['qs-training-progress'].value,20);
 assert(nodes['training-summary'].classList.contains('hidden'));
 assert(nodes['qs-training-summary'].textContent.includes('2/10'));
