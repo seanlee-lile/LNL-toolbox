@@ -110,6 +110,18 @@ def _evaluate_cwd(model, loader, device, *, scalar_binary: bool) -> dict[str, fl
     return {"loss": loss_sum / samples, "accuracy": correct / samples}
 
 
+def _apply_cwd_beta1_schedule(optimizer, epoch: int, *, enabled: bool = False) -> None:
+    """Apply the reference release's zero-based epoch-80 Adam beta1 switch.
+
+    Leave the loaded optimizer untouched when disabled, including on resume.
+    LR, beta2, optimizer state and scheduler ownership remain unchanged.
+    """
+    if enabled:
+        beta1 = 0.9 if epoch < 80 else 0.1
+        for group in optimizer.param_groups:
+            group["betas"] = (beta1, group["betas"][1])
+
+
 def _train_epoch(model, optimizer, loader, objective, device) -> tuple[float, float]:
     model.train()
     loss_sum = correct = samples = 0.0
@@ -217,6 +229,9 @@ def run_cwd_experiment(
         model_config["num_outputs"] = 1
     model = _build_model(model_config).to(device)
     optimizer_config = config["optimizer"]
+    beta1_schedule = optimizer_config.get("beta1_schedule", False)
+    if not isinstance(beta1_schedule, bool):
+        raise ValueError("optimizer.beta1_schedule must be a boolean")
     if str(optimizer_config.get("name", "adam")).lower() != "adam":
         raise ValueError("CWD paper runner requires Adam")
     optimizer = torch.optim.Adam(
@@ -278,6 +293,7 @@ def run_cwd_experiment(
         if stopping.stopped:
             break
         epoch_started = time.perf_counter()
+        _apply_cwd_beta1_schedule(optimizer, epoch, enabled=beta1_schedule)
         snapshot = collect_feature_snapshot(
             model,
             snapshot_loader,
@@ -321,6 +337,8 @@ def run_cwd_experiment(
             require_validation=False,
         )
         rows.append(row)
+        if beta1_schedule:
+            row["adam_beta1"] = float(optimizer.param_groups[0]["betas"][0])
         if validation_loader is not None:
             validation = _evaluate_cwd(model, validation_loader, device, scalar_binary=cwd_variant == "binary_scalar")
             row.update({"validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"]})
