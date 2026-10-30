@@ -208,6 +208,28 @@ def dld_plan(config: Mapping[str, Any], runner: str, budget_path: tuple[str, ...
 
 def lend_plan(config: Mapping[str, Any], runner: str, budget_path: tuple[str, ...] | None) -> RunPlan:
     base = generic_plan(config, runner, budget_path)
+    variant = str((config.get("lend", {}) or {}).get("implementation_variant", "paper_equation")).strip().lower()
+    if variant not in {"paper_equation", "author_release"}:
+        raise ValueError("unknown LEND implementation_variant")
+    if variant == "author_release":
+        from lnl_toolbox.algorithms.lend.config import LENDConfig
+        method_config = LENDConfig.from_mapping(config)
+        effective = method_config.implementation_metadata()
+        return RunPlan(
+            base.runner, base.method,
+            f"{method_config.epochs} (LEND)",
+            base.fields + (
+                PlanField("LEND implementation", "author_release (core algorithm; Toolbox outer protocol)"),
+                PlanField("LEND batch size", str((config.get("loader", {}) or {}).get("batch_size", "-"))),
+                PlanField("LEND optimizer", str((config.get("optimizer", {}) or {}).get("name", "-"))),
+                PlanField("LEND learning rate", str((config.get("optimizer", {}) or {}).get("lr", "-"))),
+                PlanField("LEND graph", f"k={method_config.k} squared_euclidean gamma=3 topk_then_clear_diagonal AAT normalize_features=False"),
+                PlanField("LEND dilution", "resolvent_solve lambda=0.99 softmax_scale=1 whole_batch_input_then_softmax NaN fallback"),
+                PlanField("LEND history", f"beta={method_config.beta} pre_propagation; enabled at zero-based epoch 10"),
+                PlanField("LEND weighting", "continuous noisy_class_probability; original noisy targets; batch_mean; no hard selection"),
+                PlanField("LEND inactive inherited controls", ", ".join(effective["inactive_config_fields"])),
+            ),
+        )
     values = config.get("lend", {}) or {}
     graph = values.get("graph", {}) or {}
     dilution = values.get("dilution", {}) or {}

@@ -69,7 +69,8 @@ class _lend_algorithm_LENDAlgorithmTest(unittest.TestCase):
         with patch('lnl_toolbox.algorithms.lend.algorithm.forward_with_features', return_value=featured):
             result = algorithm.step(Batch({'input': torch.zeros(4, 2), 'target': torch.zeros(4, dtype=torch.long), 'index': torch.tensor([10, 20, 30, 40])}), RunState(cycle=0))
         self.assertEqual(result.metadata['selected_mask'].tolist(), [True, True, False, True])
-        self.assertAlmostEqual(result.metrics['selected_train_loss_sum'], ((losses[0] + losses[1] + losses[3]) / 4).item(), places=6)
+        self.assertAlmostEqual(result.metrics['selected_train_loss_sum'], (losses[0] + losses[1] + losses[3]).item(), places=6)
+        self.assertAlmostEqual(result.metrics['selected_train_objective'], ((losses[0] + losses[1] + losses[3]) / 4).item(), places=6)
 
     def test_one_forward_batch_mean_and_noisy_targets(self):
         algorithm = self._algorithm(lr=0.0)
@@ -86,7 +87,8 @@ class _lend_algorithm_LENDAlgorithmTest(unittest.TestCase):
         result = algorithm.step(Batch({'input': inputs, 'target': targets, 'index': torch.tensor([10, 20, 30])}), RunState(cycle=0))
         self.assertEqual(algorithm.model.feature_calls, 1)
         self.assertEqual(result.metadata['selected_mask'].tolist(), [True, False, True])
-        self.assertAlmostEqual(result.metrics['selected_train_loss_sum'], expected.item(), places=6)
+        self.assertAlmostEqual(result.metrics['selected_train_loss_sum'], expected.item() * 3, places=6)
+        self.assertAlmostEqual(result.metrics['selected_train_objective'], expected.item(), places=6)
         for parameter, expected_parameter in zip(algorithm.model.parameters(), expected_model.parameters()):
             torch.testing.assert_close(parameter.grad, expected_parameter.grad)
 
@@ -100,7 +102,8 @@ class _lend_algorithm_LENDAlgorithmTest(unittest.TestCase):
         expected = nn.CrossEntropyLoss()(algorithm.model(inputs), targets)
         result = algorithm.step(Batch({'input': inputs, 'target': targets, 'index': torch.tensor([10, 20, 30])}), RunState(cycle=0))
         self.assertEqual(result.metadata['selected_mask'].tolist(), [True] * 3)
-        self.assertAlmostEqual(result.metrics['selected_train_loss_sum'], expected.item(), places=6)
+        self.assertAlmostEqual(result.metrics['selected_train_loss_sum'], expected.item() * 3, places=6)
+        self.assertAlmostEqual(result.metrics['selected_train_objective'], expected.item(), places=6)
 
     def test_partial_selection_uses_batch_size_not_selected_count(self):
         algorithm = self._algorithm(lr=0.0)
@@ -111,8 +114,9 @@ class _lend_algorithm_LENDAlgorithmTest(unittest.TestCase):
         targets = torch.zeros(3, dtype=torch.long)
         losses = nn.CrossEntropyLoss(reduction='none')(algorithm.model(inputs), targets)
         result = algorithm.step(Batch({'input': inputs, 'target': targets, 'index': torch.tensor([10, 20, 30])}), RunState(cycle=0))
-        self.assertAlmostEqual(result.metrics['selected_train_loss_sum'], ((losses[0] + losses[2]) / 3).item(), places=6)
-        self.assertNotAlmostEqual(result.metrics['selected_train_loss_sum'], ((losses[0] + losses[2]) / 2).item(), places=6)
+        self.assertAlmostEqual(result.metrics['selected_train_loss_sum'], (losses[0] + losses[2]).item(), places=6)
+        self.assertAlmostEqual(result.metrics['selected_train_objective'], ((losses[0] + losses[2]) / 3).item(), places=6)
+        self.assertNotAlmostEqual(result.metrics['selected_train_objective'], ((losses[0] + losses[2]) / 2).item(), places=6)
 
     def test_empty_selection_skips_optimizer_but_commits_history(self):
         algorithm = self._algorithm(lr=0.1)
@@ -566,6 +570,383 @@ def _lend_workflow__nested_equal(test, left, right):
             _lend_workflow__nested_equal(test, a, b)
     else:
         test.assertEqual(left, right)
+
+def _author_release_reference(features, current, k):
+    """Independent CPU translation of release code/main.py:42-69 (no imports/I/O)."""
+    square = (features ** 2).sum(1, keepdim=True)
+    nearest = (square + square.t() - 2 * features @ features.t()).topk(k=k, largest=False).indices
+    adjacency = ((features @ features.t()) / features.size(0)).clamp(min=0) ** 3
+    eye = torch.eye(features.size(0), device=features.device, dtype=features.dtype)
+    adjacency = adjacency * (1 - eye)
+    mask = torch.ones_like(adjacency)
+    for row in range(nearest.size(0)):
+        mask[row][nearest[row]] = 0
+    adjacency *= 1 - mask
+    graph = adjacency @ adjacency.t()
+    diagonal = (1 / graph.sum(1, keepdim=True).sqrt()) * eye
+    graph = diagonal @ graph @ diagonal
+    result = (eye - .99 * graph).inverse() @ current
+    if bool((result != result).any()):
+        result = current
+    return adjacency, graph, nearest, result.softmax(1)
+
+
+class LENDAuthorReleaseTest(unittest.TestCase):
+    def _config(self, variant='author_release'):
+        config = _lend_algorithm__config(beta=.9)
+        config['lend']['implementation_variant'] = variant
+        return config
+
+    def _algorithm(self, variant='author_release', lr=.01):
+        torch.manual_seed(37)
+        model = _lend_algorithm_FeatureModel()
+        algorithm = LENDAlgorithm(
+            model=model, optimizer=torch.optim.SGD(model.parameters(), lr=lr, momentum=.9),
+            loss=nn.CrossEntropyLoss(reduction='none'), device=torch.device('cpu'),
+            method_config=LENDConfig.from_mapping(self._config(variant)),
+            canonical_global_indices=torch.tensor([10, 20, 30]), num_classes=2,
+        )
+        return algorithm
+
+    def _batch(self, order=None):
+        inputs = torch.tensor([[1., 1.], [2., 1.], [1., 2.]])
+        targets = torch.tensor([0, 1, 0])
+        indices = torch.tensor([10, 20, 30])
+        order = torch.arange(3) if order is None else order
+        return Batch({'input': inputs[order], 'target': targets[order], 'index': indices[order]})
+
+    def test_variant_defaults_unknown_and_catalog(self):
+        from lnl_toolbox.catalog import validate_config
+        paper = _lend_algorithm__config()
+        explicit = copy.deepcopy(paper)
+        explicit['lend']['implementation_variant'] = 'paper_equation'
+        self.assertEqual(LENDConfig.from_mapping(paper), LENDConfig.from_mapping(explicit))
+        config = _lend_workflow__config()
+        config['lend']['implementation_variant'] = 'author_release'
+        self.assertEqual(validate_config(config, check_data=False).name, 'lend')
+        config['lend']['implementation_variant'] = 'typo'
+        with self.assertRaisesRegex(ValueError, 'implementation_variant'):
+            validate_config(config, check_data=False)
+
+    def test_effective_constants_and_inactive_controls(self):
+        config = self._config()
+        config['lend']['selection']['reduction'] = 'sum'
+        method = LENDConfig.from_mapping(config)
+        effective = method.implementation_metadata()
+        self.assertEqual(effective['gamma'], 3)
+        self.assertEqual(effective['metric'], 'squared_euclidean')
+        self.assertEqual(effective['orientation'], 'AAT')
+        self.assertEqual(effective['lambda'], .99)
+        self.assertEqual(effective['softmax_scale'], 1.)
+        self.assertEqual(effective['reduction'], 'batch_mean')
+        self.assertEqual(effective['k'], method.k)
+        self.assertEqual(effective['beta'], method.beta)
+        self.assertIn('lend.selection', effective['inactive_config_fields'])
+
+    def test_graph_and_solve_match_author_reference(self):
+        from lnl_toolbox.algorithms.lend.graph import build_author_release_graph
+        from lnl_toolbox.algorithms.lend.dilution import author_release_propagation
+        for dtype in (torch.float32, torch.float64):
+            with self.subTest(dtype=dtype):
+                features = torch.tensor([[1., 0.], [1., .3], [.5, 1.], [.2, 2.], [1.2, .5]], dtype=dtype)
+                current = torch.eye(5, dtype=dtype)[:, :2] + .1
+                a, w, neighbors, expected = _author_release_reference(features, current, 3)
+                actual_a, actual_w, actual_neighbors = build_author_release_graph(features, torch.arange(5), k=3)
+                torch.testing.assert_close(actual_neighbors, neighbors)
+                torch.testing.assert_close(actual_a, a, rtol=0, atol=0)
+                torch.testing.assert_close(actual_w, w, rtol=0, atol=0)
+                torch.testing.assert_close(author_release_propagation(current, actual_w), expected, rtol=1e-4, atol=1e-5)
+                self.assertFalse(torch.allclose(a.T @ a, a @ a.T))
+                self.assertTrue(bool((neighbors == torch.arange(5)[:, None]).any(1).all()))
+                self.assertTrue(bool((a.diag() == 0).all()))
+
+    def test_topk_duplicate_ties_match_same_device_reference(self):
+        from lnl_toolbox.algorithms.lend.graph import build_author_release_graph
+        features = torch.tensor([[1., 1.], [1., 1.], [2., .5], [2., .5]])
+        expected = _author_release_reference(features, torch.eye(4), 2)
+        actual = build_author_release_graph(features, torch.tensor([40, 30, 20, 10]), k=2)
+        for left, right in zip(actual, expected[:3]):
+            torch.testing.assert_close(left, right, equal_nan=True)
+
+    def test_zero_degree_whole_batch_fallback_then_softmax(self):
+        from lnl_toolbox.algorithms.lend.graph import build_author_release_graph
+        from lnl_toolbox.algorithms.lend.dilution import author_release_propagation
+        for features in (torch.zeros(3, 2), torch.tensor([[0., 0.], [1., 1.], [1., 2.]])):
+            with self.subTest(features=features):
+                current = torch.tensor([[1., 0.], [.2, .8], [0., 1.]])
+                graph = build_author_release_graph(features, torch.arange(3), k=2)[1]
+                diagnostics = {}
+                with patch('torch.linalg.solve', side_effect=AssertionError('known NaN graph must not enter solve')):
+                    actual = author_release_propagation(current, graph, diagnostics=diagnostics)
+                torch.testing.assert_close(actual, _author_release_reference(features, current, 2)[3])
+                torch.testing.assert_close(actual, current.softmax(1))
+                self.assertEqual(diagnostics['fallback'], 1.)
+
+    def test_solver_nan_fallback_and_exceptions_not_swallowed(self):
+        from lnl_toolbox.algorithms.lend.dilution import author_release_propagation
+        current = torch.eye(2)
+        with patch('torch.linalg.solve', return_value=torch.full((2, 2), float('nan'))):
+            torch.testing.assert_close(author_release_propagation(current, torch.eye(2)), current.softmax(1))
+        with patch('torch.linalg.solve', side_effect=RuntimeError('solver failure')):
+            with self.assertRaisesRegex(RuntimeError, 'solver failure'):
+                author_release_propagation(current, torch.eye(2))
+        with self.assertRaisesRegex(ValueError, 'infinity'):
+            author_release_propagation(current, torch.full((2, 2), float('inf')))
+
+    def test_history_zero_based_boundary_and_direct_storage(self):
+        from lnl_toolbox.algorithms.lend.history import LENDLabelHistory
+        indices = torch.tensor([20, 10, 30])
+        history = LENDLabelHistory(indices, 2)
+        onehot = torch.tensor([[1., 0.], [0., 1.], [1., 0.]])
+        previous = torch.tensor([[.1, .9], [.8, .2], [.3, .7]])
+        history.commit(history.propose_author(indices, previous, epoch=8))
+        torch.testing.assert_close(history.author_input(indices, onehot, epoch=9, beta=.9), onehot)
+        history.commit(history.propose_author(indices, previous, epoch=9))
+        torch.testing.assert_close(history.author_input(indices, onehot, epoch=10, beta=.9), .9 * onehot + .1 * previous)
+        changed = previous.flip(1)
+        history.commit(history.propose_author(indices, changed, epoch=10))
+        torch.testing.assert_close(history.author_input(indices, onehot, epoch=11, beta=.9), .9 * onehot + .1 * changed)
+        with self.assertRaisesRegex(ValueError, 'twice'):
+            history.author_input(indices, onehot, epoch=10, beta=.9)
+
+    def test_history_missing_or_stale_at_boundary_rejected(self):
+        from lnl_toolbox.algorithms.lend.history import LENDLabelHistory
+        history = LENDLabelHistory(torch.tensor([10, 20, 30]), 2)
+        for epoch in (10, 11):
+            with self.assertRaisesRegex(ValueError, 'previous-epoch'):
+                history.author_input(torch.tensor([10, 20, 30]), torch.ones(3, 2), epoch=epoch, beta=.9)
+
+    def test_soft_weight_loss_gradient_and_noisy_target_guard(self):
+        algorithm = self._algorithm(lr=0.)
+        batch = self._batch()
+        logits = torch.tensor([[2., 0.], [1., 3.], [.5, 0.]], requires_grad=True)
+        diluted = torch.tensor([[.3, .7], [.8, .2], [.5, .5]])
+        expected_logits = logits.detach().clone().requires_grad_()
+        expected_weights = diluted.gather(1, batch.payload['target'][:, None]).squeeze(1)
+        expected_sum = (expected_weights * nn.CrossEntropyLoss(reduction='none')(expected_logits, batch.payload['target'])).sum()
+        (expected_sum / 3).backward()
+        # Retain the fixed loss/logits while using a real finite graph.
+        with patch('lnl_toolbox.algorithms.lend.algorithm.forward_with_features', return_value=FeatureOutput(logits, torch.ones(3, 2))), patch('lnl_toolbox.algorithms.lend.algorithm.author_release_propagation', side_effect=lambda c, g, diagnostics: (diagnostics.update(fallback=0.) or diluted)):
+            result = algorithm.step(batch, RunState(cycle=0))
+        torch.testing.assert_close(result.metadata['sample_weights'], expected_weights)
+        self.assertFalse(result.metadata['sample_weights'].requires_grad)
+        self.assertNotIn('selected_samples', result.metrics)
+        self.assertNotIn('selected_mask', result.metadata)
+        self.assertAlmostEqual(result.metrics['weighted_loss_sum'], expected_sum.item(), places=6)
+        self.assertAlmostEqual(result.metrics['weighted_objective'], expected_sum.item() / 3, places=6)
+        torch.testing.assert_close(logits.grad, expected_logits.grad)
+
+    def test_full_step_matches_reference_including_history_and_optimizer(self):
+        algorithm = self._algorithm()
+        reference_model = copy.deepcopy(algorithm.model)
+        reference_optimizer = torch.optim.SGD(reference_model.parameters(), lr=.01, momentum=.9)
+        batch = self._batch(torch.tensor([2, 0, 1]))
+        previous = torch.tensor([[.2, .8], [.8, .2], [.4, .6]])
+        algorithm.private_state.history.commit(algorithm.private_state.history.propose_author(batch.payload['index'], previous, epoch=9))
+        featured = reference_model.forward_with_features(batch.payload['input'])
+        logits, features = featured.logits, featured.features.detach()
+        onehot = torch.nn.functional.one_hot(batch.payload['target'], 2).float()
+        diluted = _author_release_reference(features, .9 * onehot + .1 * previous, 2)[3].detach()
+        weights = diluted.gather(1, batch.payload['target'][:, None]).squeeze(1)
+        expected = (weights * nn.CrossEntropyLoss(reduction='none')(logits, batch.payload['target'])).mean()
+        expected.backward()
+        reference_optimizer.step()
+        result = algorithm.step(batch, RunState(cycle=10))
+        self.assertEqual(algorithm.model.feature_calls, 1)
+        self.assertAlmostEqual(result.metrics['weighted_objective'], expected.item(), places=5)
+        for left, right in zip(algorithm.model.parameters(), reference_model.parameters()):
+            torch.testing.assert_close(left, right, rtol=1e-5, atol=1e-6)
+        rows = torch.searchsorted(algorithm.private_state.history.canonical_sample_indices, batch.payload['index'])
+        torch.testing.assert_close(algorithm.private_state.history.values[rows], diluted, rtol=1e-4, atol=1e-5)
+
+    def test_optimizer_failure_does_not_commit_author_history(self):
+        algorithm = self._algorithm()
+        before = copy.deepcopy(algorithm.private_state.state_dict())
+        with patch.object(algorithm.optimizer, 'step', side_effect=RuntimeError('synthetic failure')):
+            with self.assertRaisesRegex(RuntimeError, 'synthetic failure'):
+                algorithm.step(self._batch(), RunState(cycle=0))
+        _lend_workflow__nested_equal(self, before, algorithm.private_state.state_dict())
+
+    def test_clean_labels_ignored_and_diagnostics_do_not_consume_rng(self):
+        a, b = self._algorithm(), self._algorithm()
+        batch = self._batch()
+        before = torch.get_rng_state().clone()
+        result_a = a.step(batch, RunState(cycle=0))
+        torch.testing.assert_close(before, torch.get_rng_state(), rtol=0, atol=0)
+        batch.payload['clean_target'] = 1 - batch.payload['target']
+        result_b = b.step(batch, RunState(cycle=0))
+        _lend_workflow__nested_equal(self, a.state_dict(), b.state_dict())
+        self.assertEqual(result_a.metrics, result_b.metrics)
+
+    def test_same_variant_checkpoint_resume_across_history_boundary(self):
+        from lnl_toolbox.training.checkpoint import save_checkpoint, load_checkpoint
+        continuous = self._algorithm()
+        state = RunState()
+        for epoch in range(10):
+            state.cycle = epoch
+            continuous.step(self._batch(), state)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'last.pt'
+            save_checkpoint(path, continuous, state, 9, self._config())
+            restored = self._algorithm()
+            restored_state, completed, _ = load_checkpoint(path, restored, torch.device('cpu'))
+            self.assertEqual(completed, 9)
+            for epoch in (10, 11):
+                state.cycle = restored_state.cycle = epoch
+                order = torch.tensor([2, 0, 1]) if epoch == 10 else torch.tensor([1, 2, 0])
+                continuous.step(self._batch(order), state)
+                restored.step(self._batch(order), restored_state)
+            _lend_workflow__nested_equal(self, continuous.state_dict(), restored.state_dict())
+
+    def test_legacy_paper_and_cross_variant_identity(self):
+        paper = self._algorithm('paper_equation')
+        legacy = copy.deepcopy(paper.state_dict())
+        legacy['method_config'].pop('implementation_variant')
+        saved_copy = copy.deepcopy(legacy)
+        restored = self._algorithm('paper_equation')
+        restored.load_state_dict(legacy)
+        _lend_workflow__nested_equal(self, saved_copy, legacy)
+        for source, target in ((legacy, self._algorithm()), (paper.state_dict(), self._algorithm()), (self._algorithm().state_dict(), self._algorithm('paper_equation'))):
+            with self.subTest(target=target.method_config.implementation_variant):
+                with self.assertRaisesRegex(ValueError, 'configuration changed'):
+                    target.load_state_dict(source)
+        legacy['method_config'].pop('gamma')
+        with self.assertRaisesRegex(ValueError, 'configuration changed'):
+            restored.load_state_dict(legacy)
+
+    def test_resume_config_variant_and_other_drift(self):
+        from lnl_toolbox.training.lend_experiment import _validate_resume_config
+        old = _lend_workflow__config()
+        explicit = copy.deepcopy(old)
+        explicit['lend']['implementation_variant'] = 'paper_equation'
+        _validate_resume_config(explicit, old)
+        author = copy.deepcopy(old)
+        author['lend']['implementation_variant'] = 'author_release'
+        for current, saved in ((author, old), (old, author)):
+            with self.assertRaisesRegex(ValueError, 'LEND settings'):
+                _validate_resume_config(current, saved)
+        changed = copy.deepcopy(author)
+        changed['optimizer']['lr'] *= 2
+        with self.assertRaisesRegex(ValueError, 'optimizer'):
+            _validate_resume_config(changed, author)
+
+    def test_dry_run_effective_semantics_and_original_paper_plan(self):
+        from lnl_toolbox.training.planning import lend_plan
+        config = _lend_workflow__config()
+        old_plan = lend_plan(config, 'lend', ('lend', 'training', 'epochs'))
+        config['lend']['implementation_variant'] = 'paper_equation'
+        self.assertEqual(old_plan, lend_plan(config, 'lend', ('lend', 'training', 'epochs')))
+        config['lend']['implementation_variant'] = 'author_release'
+        text = str(lend_plan(config, 'lend', ('lend', 'training', 'epochs')))
+        for value in ('author_release', 'squared_euclidean', 'gamma=3', 'AAT', 'lambda=0.99', 'softmax_scale=1', 'epoch 10', 'continuous noisy_class_probability', 'inactive inherited controls'):
+            self.assertIn(value, text)
+        self.assertNotIn('until_converged', text)
+
+    def test_epoch_weight_statistics_use_global_not_batch_medians(self):
+        from lnl_toolbox.training.lend_experiment import _weight_diagnostics
+        weights = torch.tensor([0., 0., .2, .3, .9])
+        targets = torch.tensor([0, 1, 0, 1, 1])
+        stats = _weight_diagnostics(weights, targets, 3)
+        self.assertAlmostEqual(stats['effective_weight_sum'], weights.double().sum().item())
+        self.assertAlmostEqual(stats['sample_weight_median'], .2)
+        torch.testing.assert_close(torch.tensor(stats['classwise_weight_sum']), torch.tensor([.2, 1.2, 0.]))
+
+    def test_explicit_paper_matches_legacy_step_exactly(self):
+        from dataclasses import replace
+        explicit = self._algorithm('paper_equation')
+        implicit = self._algorithm('paper_equation')
+        implicit.method_config = LENDConfig.from_mapping(_lend_algorithm__config(beta=.9))
+        for epoch in (0, 1):
+            left = explicit.step(self._batch(), RunState(cycle=epoch))
+            right = implicit.step(self._batch(), RunState(cycle=epoch))
+            self.assertEqual(left.metrics, right.metrics)
+            _lend_workflow__nested_equal(self, left.metadata, right.metadata)
+            _lend_workflow__nested_equal(self, explicit.state_dict(), implicit.state_dict())
+        # All-zero soft weights must still execute the author's optimizer
+        # step (e.g. momentum); argmax agreement must not decide admission.
+        author = self._algorithm()
+        author.method_config = replace(author.method_config, reduction='sum')
+        diluted = torch.tensor([[0., 1.], [1., 0.], [0., 1.]])
+        with patch('lnl_toolbox.algorithms.lend.algorithm.author_release_propagation', side_effect=lambda c, g, diagnostics: (diagnostics.update(fallback=0.) or diluted)):
+            result = author.step(self._batch(), RunState(cycle=0))
+        self.assertEqual(author.private_state.optimizer_steps, 1)
+        self.assertEqual(result.metrics['weighted_objective'], 0.)
+        self.assertEqual(author.private_state.empty_selection_batches, 0)
+
+    def test_runner_pairing_metadata_diagnostics_and_selection_unchanged(self):
+        import contextlib
+        import io
+        import yaml
+        from lnl_toolbox.training import lend_experiment
+        train, test = _lend_workflow__cifar(40, 'train'), _lend_workflow__cifar(20, 'test')
+        initial_models, batches = [], []
+        build_model = lend_experiment.build_model
+        step = LENDAlgorithm.step
+
+        def capture_model(*args, **kwargs):
+            model = build_model(*args, **kwargs)
+            initial_models.append(copy.deepcopy(model.state_dict()))
+            return model
+
+        def capture_step(algorithm, batch, state):
+            batches.append((state.cycle, batch.payload['index'].tolist()))
+            return step(algorithm, batch, state)
+
+        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: train if split == 'train' else test), patch.object(lend_experiment, 'build_model', side_effect=capture_model), patch.object(LENDAlgorithm, 'step', capture_step), contextlib.redirect_stdout(io.StringIO()):
+            paper_config = _lend_workflow__config(2)
+            author_config = copy.deepcopy(paper_config)
+            author_config['lend']['implementation_variant'] = 'author_release'
+            paper_dir = run_experiment(paper_config, Path(directory) / 'paper')
+            paper_batches = copy.deepcopy(batches)
+            batches.clear()
+            author_dir = run_experiment(author_config, Path(directory) / 'author')
+            self.assertEqual(paper_batches, batches)
+            _lend_workflow__nested_equal(self, initial_models[0], initial_models[1])
+            left = torch.load(paper_dir / 'last.pt', map_location='cpu', weights_only=False)
+            right = torch.load(author_dir / 'last.pt', map_location='cpu', weights_only=False)
+            self.assertEqual(left['noise'], right['noise'])
+            self.assertEqual(left['selection_split'], right['selection_split'])
+            self.assertEqual(left['config']['data'], right['config']['data'])
+            self.assertEqual(left['config']['optimizer'], right['config']['optimizer'])
+            self.assertEqual(left['config']['scheduler'], right['config']['scheduler'])
+            resolved = yaml.safe_load((author_dir / 'resolved_config.yaml').read_text(encoding='utf-8'))
+            self.assertEqual(resolved['lend']['implementation_variant'], 'author_release')
+            self.assertEqual(resolved['lend']['implementation_metadata']['gamma'], 3)
+            self.assertEqual(right['algorithm_private_state']['method_config']['implementation_variant'], 'author_release')
+            rows = [json.loads(line) for line in (author_dir / 'metrics.jsonl').read_text().splitlines()]
+            epochs = [row for row in rows if row['event'] == 'epoch']
+            for row in epochs:
+                self.assertEqual(row['implementation_variant'], 'author_release')
+                self.assertNotIn('selected_samples', row)
+                self.assertNotIn('oracle_selection_precision', row)
+                self.assertIn('sample_weight_median', row)
+                self.assertIn('propagation_fallback_batches', row)
+                self.assertAlmostEqual(sum(row['classwise_weight_sum']), row['effective_weight_sum'])
+                self.assertAlmostEqual(row['effective_weight_sum'], row['sample_weight_mean'] * 20)
+            final = rows[-1]
+            self.assertEqual(final['reporting_rule'], 'noisy_validation_selected')
+            self.assertEqual(final['reported_epoch'], max(epochs, key=lambda row: row['validation_accuracy'])['epoch'])
+            # Resume is still the same runner; same-variant restoration never
+            # changes reporting/selection or rewrites the old checkpoint in place.
+            resumed_config = copy.deepcopy(author_config)
+            resumed_config['lend']['training']['epochs'] = 3
+            run_experiment(resumed_config, resume=author_dir / 'last.pt')
+            restored = torch.load(author_dir / 'last.pt', map_location='cpu', weights_only=False)
+            self.assertEqual(restored['completed_epoch'], 2)
+            self.assertEqual(restored['config']['lend']['implementation_variant'], 'author_release')
+
+    @unittest.skipUnless(torch.cuda.is_available(), 'CUDA required')
+    def test_cuda_author_graph_and_propagation_parity(self):
+        from lnl_toolbox.algorithms.lend.graph import build_author_release_graph
+        from lnl_toolbox.algorithms.lend.dilution import author_release_propagation
+        features = torch.tensor([[1., 0.], [1., .3], [.5, 1.], [.2, 2.], [1.2, .5]], device='cuda')
+        current = torch.eye(5, device='cuda')
+        reference = _author_release_reference(features, current, 3)
+        actual = build_author_release_graph(features, torch.arange(5, device='cuda'), k=3)
+        for left, right in zip(actual, reference[:3]):
+            torch.testing.assert_close(left, right)
+        torch.testing.assert_close(author_release_propagation(current, actual[1]), reference[3], rtol=1e-4, atol=1e-5)
+
 
 class _lend_workflow_LENDWorkflowTest(unittest.TestCase):
 

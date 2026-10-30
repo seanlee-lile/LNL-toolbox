@@ -60,4 +60,38 @@ def dilute_labels(noisy_onehot: Tensor, graph: Tensor, *, alpha: float,
     return current.detach()
 
 
-__all__ = ["dilute_labels"]
+def author_release_propagation(current: Tensor, graph: Tensor, *,
+                               diagnostics: dict[str, float] | None = None) -> Tensor:
+    """Release code/main.py:67-69; solve is equivalent to inverse @ current.
+
+    Preserve the release's whole-batch NaN fallback, including zero-degree
+    normalization. Do not introduce pinv/ridge or swallow solver exceptions.
+    """
+    if current.ndim != 2 or not torch.is_floating_point(current) or current.requires_grad:
+        raise ValueError("LEND author input must be detached floating [B,C]")
+    if not bool(torch.isfinite(current).all()) or bool((current < 0).any()):
+        raise ValueError("LEND author input must be finite and non-negative")
+    if (graph.shape != (current.shape[0], current.shape[0]) or graph.requires_grad
+            or graph.dtype != current.dtype or graph.device != current.device):
+        raise ValueError("LEND author graph must align with detached input")
+    # A zero-degree release graph is NaN. Avoid passing known NaNs into a
+    # backend-dependent LAPACK/CUDA solver, which may throw instead of return NaN.
+    fallback = bool(torch.isnan(graph).any())
+    if fallback:
+        result = current
+    else:
+        if not bool(torch.isfinite(graph).all()):
+            raise ValueError("LEND author graph contains infinity")
+        eye = torch.eye(graph.shape[0], dtype=graph.dtype, device=graph.device)
+        result = torch.linalg.solve(eye - 0.99 * graph, current)
+        fallback = bool(torch.isnan(result).any())
+        if fallback:
+            result = current
+    if not bool(torch.isfinite(result).all()):
+        raise ValueError("LEND author propagation is non-finite")
+    if diagnostics is not None:
+        diagnostics["fallback"] = float(fallback)
+    return result.softmax(dim=1).detach()
+
+
+__all__ = ["dilute_labels", "author_release_propagation"]

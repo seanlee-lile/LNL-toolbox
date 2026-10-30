@@ -90,6 +90,24 @@ def _validate_resume_config(current: Mapping[str, Any], saved: Mapping[str, Any]
         raise ValueError("LEND resume cannot reduce the epoch target")
 
 
+def _weight_diagnostics(weights: torch.Tensor, targets: torch.Tensor,
+                        num_classes: int) -> dict[str, Any]:
+    """Epoch-wide detached statistics, not averages of batch quantiles."""
+    weights = weights.detach().cpu().to(torch.float64)
+    targets = targets.detach().cpu().to(torch.int64)
+    quantiles = torch.quantile(weights, torch.tensor([0.1, 0.25, 0.5, 0.75, 0.9], dtype=weights.dtype))
+    classwise = torch.zeros(num_classes, dtype=weights.dtype).scatter_add_(0, targets, weights)
+    return {
+        "sample_weight_mean": float(weights.mean()),
+        "sample_weight_median": float(quantiles[2]),
+        "sample_weight_min": float(weights.min()),
+        "sample_weight_max": float(weights.max()),
+        "weight_quantiles": dict(zip(("p10", "p25", "p50", "p75", "p90"), quantiles.tolist())),
+        "effective_weight_sum": float(weights.sum()),
+        "classwise_weight_sum": classwise.tolist(),
+    }
+
+
 def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = None,
                         resume: str | Path | None = None, *,
                         requirements: DataRequirements | None = None) -> Path:
@@ -100,6 +118,9 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
         # No validation labels are consumed; canonicalize before resume identity checks.
         config["noise"]["validation_targets"] = "none"
     method_config = LENDConfig.from_mapping(config)
+    config["lend"]["implementation_variant"] = method_config.implementation_variant
+    config["lend"]["implementation_metadata"] = method_config.implementation_metadata()
+    author = method_config.implementation_variant == "author_release"
     seed = int(config.get("seed", 1))
     epochs = method_config.epochs
     seed_everything(seed)
@@ -225,17 +246,29 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
             oracle_clean_observed = oracle_diluted_correct = 0.0
             oracle_current_correct = neighbor_correct = neighbor_count = 0
             label_counts = np.zeros(num_classes, dtype=np.int64)
+            classwise_selected = np.zeros(num_classes, dtype=np.int64)
+            epoch_weights, epoch_targets = [], []
+            fallback_batches = 0
             train_loader.generator.manual_seed(prepared.seed + epoch)
             for raw_batch in train_loader:
                 result = algorithm.step(Batch(raw_batch), state)
                 count = result.metrics["samples"]
                 samples += count
-                selected = result.metrics["selected_samples"]
+                selected = result.metrics.get("selected_samples", 0.0)
                 selected_total += selected
-                oracle_clean_selected += sum(
-                    not corruption[int(index)] for index in result.metadata["selected_indices"].tolist()
-                    if corruption
-                )
+                if author:
+                    epoch_weights.append(result.metadata["sample_weights"])
+                    epoch_targets.append(raw_batch["target"].detach().cpu())
+                    fallback_batches += int(result.metrics["propagation_fallback"])
+                else:
+                    classwise_selected += np.bincount(
+                        raw_batch["target"].detach().cpu()[result.metadata["selected_mask"]].numpy(),
+                        minlength=num_classes,
+                    )
+                    oracle_clean_selected += sum(
+                        not corruption[int(index)] for index in result.metadata["selected_indices"].tolist()
+                        if corruption
+                    )
                 batch_indices = result.metadata["batch_indices"].tolist()
                 oracle_clean_observed += sum(not corruption[int(index)] for index in batch_indices if corruption)
                 history_predictions = result.metadata["history_values"].argmax(dim=1).tolist()
@@ -253,9 +286,9 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
                     if clean_target
                 )
                 for key, value in result.metrics.items():
-                    if key in {"samples", "selected_samples", "optimizer_steps", "empty_selection_batches"}:
+                    if key in {"samples", "selected_samples", "optimizer_steps", "empty_selection_batches", "propagation_fallback"}:
                         continue
-                    if key in {"selected_train_loss_sum", "selected_train_objective"}:
+                    if key in {"selected_train_loss_sum", "selected_train_objective", "weighted_loss_sum", "weighted_objective"}:
                         totals[key] = totals.get(key, 0.0) + value
                     else:
                         totals[key] = totals.get(key, 0.0) + value * count
@@ -270,6 +303,8 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
                 best_accuracy, best_epoch = validation["accuracy"], epoch
             row = {
                 "event": "epoch", "epoch": epoch + 1,
+                "implementation_variant": method_config.implementation_variant,
+                "implementation_metadata": method_config.implementation_metadata(),
                 "global_batch_step": state.step,
                 "optimizer_steps": algorithm.private_state.optimizer_steps,
                 "learning_rate": learning_rate,
@@ -293,9 +328,16 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
                 "validation_accuracy": validation["accuracy"] if uses_validation else None,
                 "best_validation_accuracy": best_accuracy,
             }
+            if author:
+                for key in ("selected_samples", "selected_ratio", "oracle_selection_precision", "oracle_selection_recall"):
+                    row.pop(key)
+                row.update(_weight_diagnostics(torch.cat(epoch_weights), torch.cat(epoch_targets), num_classes))
+                row["propagation_fallback_batches"] = fallback_batches
+            else:
+                row["classwise_selected_counts"] = classwise_selected.tolist()
             for key, value in totals.items():
                 row["train_" + key] = (
-                    value if key in {"selected_train_loss_sum", "selected_train_objective"} else value / samples
+                    value if key in {"selected_train_loss_sum", "selected_train_objective", "weighted_loss_sum", "weighted_objective"} else value / samples
                 )
             kwargs = {
                 "best_epoch": best_epoch,
@@ -324,6 +366,8 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
         algorithm.on_run_end(state)
         final = {
             "event": "final", "completed_epochs": actual_epochs,
+            "implementation_variant": method_config.implementation_variant,
+            "implementation_metadata": method_config.implementation_metadata(),
             "global_batch_step": state.step,
             "optimizer_steps": algorithm.private_state.optimizer_steps,
             "best_epoch": best_epoch + 1 if uses_validation else None,
