@@ -87,4 +87,32 @@ def normalize_lend_graph(adjacency: Tensor, *, zero_degree_policy: str = "zero_i
     return graph.detach()
 
 
-__all__ = ["build_lend_similarity", "normalize_lend_graph"]
+def build_author_release_graph(features: Tensor, sample_indices: Tensor, *, k: int
+                               ) -> tuple[Tensor, Tensor, Tensor]:
+    """Release code/main.py:42-66, including topk ties and zero-degree NaNs.
+
+    Do not substitute the paper zero-inverse policy here: release propagation
+    falls back for the whole batch when the resulting solve contains NaNs.
+    """
+    features = features.detach()
+    _validate(features, sample_indices, k, 3.0)
+    squared = (features ** 2).sum(1, keepdim=True)
+    distances = squared + squared.T - 2 * features @ features.T
+    neighbors = distances.topk(k=k, largest=False).indices
+    adjacency = ((features @ features.T) / features.shape[0]).clamp(min=0) ** 3
+    eye = torch.eye(features.shape[0], dtype=features.dtype, device=features.device)
+    adjacency = adjacency * (1 - eye)
+    mask = torch.zeros_like(adjacency).scatter_(1, neighbors, 1)
+    adjacency = adjacency * mask
+    if not bool(torch.isfinite(adjacency).all()):
+        raise ValueError("LEND author adjacency is non-finite")
+    product = adjacency @ adjacency.T
+    degree = product.sum(1, keepdim=True)
+    if not bool(torch.isfinite(degree).all()):
+        raise ValueError("LEND author graph degree is non-finite")
+    diagonal = degree.sqrt().reciprocal() * eye
+    graph = diagonal @ product @ diagonal
+    return adjacency.detach(), graph.detach(), neighbors.detach()
+
+
+__all__ = ["build_lend_similarity", "normalize_lend_graph", "build_author_release_graph"]

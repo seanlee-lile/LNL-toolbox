@@ -236,6 +236,129 @@ def _pcse_statistics__snapshots() -> tuple[FeatureSnapshot, FeatureSnapshot]:
     second = FeatureSnapshot(features * np.array([2.0, 0.5]), targets, indices, 'synthetic', 'train:hidden2')
     return (first, second)
 
+class PCSEPriorWeightedCovarianceTest(unittest.TestCase):
+
+    def _statistics(self, priors):
+        priors = np.asarray(priors, dtype=np.float64)
+        classes = len(priors)
+        means = np.column_stack((np.arange(classes), -np.arange(classes) / 2.0))
+        scales = np.geomspace(1., 8., classes)
+        covariances = scales[:, None, None] * np.array([[1., .2], [.2, 2.]])
+        second = covariances + np.einsum('ci,cj->cij', means, means)
+        layer = PCSELayerStatistics(
+            name='fixture', noisy_means=means, noisy_second_moments=second,
+            clean_means=means, clean_second_moments=second,
+            clean_covariances=covariances,
+        )
+        # Deliberately different from imbalanced clean priors: pooling must
+        # not accidentally use the observed/noisy prior instead.
+        return PCSEStatistics(
+            noisy_priors=np.full(classes, 1. / classes), clean_priors=priors,
+            coefficient_matrix=np.eye(classes), transition_condition=1.,
+            coefficient_condition=1., layers=(layer,),
+        )
+
+    def test_uniform_prior_matches_previous_arithmetic_mean(self):
+        statistics = self._statistics([.25, .25, .25, .25])
+        layer = fit_gda_layers(statistics, covariance_ridge=0.)[0]
+        np.testing.assert_allclose(
+            layer.shared_covariance, statistics.layers[0].clean_covariances.mean(axis=0),
+            rtol=1e-14, atol=1e-14,
+        )
+
+    def test_imbalanced_prior_matches_explicit_weighted_sum_not_mean(self):
+        statistics = self._statistics([.5, .3, .15, .05])
+        covariances = statistics.layers[0].clean_covariances
+        expected = sum(prior * covariance for prior, covariance in zip(
+            statistics.clean_priors, covariances,
+        ))
+        actual = fit_gda_layers(statistics, covariance_ridge=0.)[0]
+        np.testing.assert_allclose(actual.shared_covariance, expected, rtol=1e-14, atol=1e-14)
+        self.assertFalse(np.allclose(actual.shared_covariance, covariances.mean(axis=0)))
+        self.assertEqual(actual.shared_covariance.dtype, np.dtype('float64'))
+
+    def test_posterior_and_covariance_use_the_same_clean_prior(self):
+        statistics = self._statistics([.5, .3, .15, .05])
+        layer = fit_gda_layers(statistics, covariance_ridge=.01)[0]
+        np.testing.assert_array_equal(layer.clean_priors, statistics.clean_priors)
+        covariance = sum(p * c for p, c in zip(
+            statistics.clean_priors, statistics.layers[0].clean_covariances,
+        )) + .01 * np.eye(2)
+        np.testing.assert_allclose(layer.shared_covariance, covariance)
+        points = np.array([[.2, .8], [2., -1.], [-1., 1.]])
+        precision = np.linalg.inv(covariance)
+        means = statistics.layers[0].clean_means
+        scores = (points @ precision @ means.T
+                  - .5 * np.sum((means @ precision) * means, axis=1)
+                  + np.log(statistics.clean_priors))
+        expected = np.exp(scores - scores.max(axis=1, keepdims=True))
+        expected /= expected.sum(axis=1, keepdims=True)
+        np.testing.assert_allclose(layer.scores(points), scores, rtol=1e-13, atol=1e-13)
+        np.testing.assert_allclose(layer.posterior(points), expected, rtol=1e-13, atol=1e-13)
+
+    def test_tiny_negative_clean_prior_remains_rejected(self):
+        transition = np.full((3, 3), .1)
+        np.fill_diagonal(transition, .8)
+        invalid_clean = np.array([-1e-14, .5, .5 + 1e-14])
+        noisy = transition.T @ invalid_clean
+        self.assertTrue((noisy > 0).all())
+        with self.assertRaisesRegex(ValueError, 'strictly positive'):
+            recover_clean_priors(noisy, transition)
+        with self.assertRaisesRegex(ValueError, 'positive'):
+            self._statistics(invalid_clean)
+
+    def test_near_unit_prior_is_not_silently_renormalized(self):
+        priors = np.array([.5, .3, .15, .05]) * (1. + 1e-8)
+        recovered = recover_clean_priors(priors, np.eye(4))
+        np.testing.assert_array_equal(recovered, priors)
+        statistics = self._statistics(recovered)
+        layer = fit_gda_layers(statistics, covariance_ridge=0.)[0]
+        expected = sum(p * c for p, c in zip(priors, statistics.layers[0].clean_covariances))
+        np.testing.assert_allclose(layer.shared_covariance, expected, rtol=1e-14, atol=1e-14)
+        np.testing.assert_array_equal(layer.clean_priors, priors)
+
+    def test_cifar100_uniform_prior_regression(self):
+        statistics = self._statistics(np.full(100, .01))
+        layer = fit_gda_layers(statistics, covariance_ridge=.001)[0]
+        previous = statistics.layers[0].clean_covariances.mean(axis=0) + .001 * np.eye(2)
+        np.testing.assert_allclose(layer.shared_covariance, previous, rtol=1e-13, atol=1e-13)
+        np.testing.assert_array_equal(layer.clean_priors, statistics.clean_priors)
+
+    def test_new_weighted_gda_artifact_roundtrip(self):
+        from lnl_toolbox.algorithms.pcse.artifacts import PCSEGDAArtifact
+        statistics = self._statistics([.5, .3, .15, .05])
+        layers = fit_gda_layers(statistics, covariance_ridge=.01)
+        artifact = PCSEGDAArtifact(layers, {'method': 'pcse', 'statistics_artifact_hash': 'fixture'})
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'gda.npz'
+            artifact.save(path)
+            restored = PCSEGDAArtifact.load(path)
+            self.assertEqual(restored.artifact_hash, artifact.artifact_hash)
+            np.testing.assert_array_equal(restored.layers[0].clean_priors, layers[0].clean_priors)
+            np.testing.assert_array_equal(restored.layers[0].shared_covariance, layers[0].shared_covariance)
+            points = np.array([[.5, .2], [1., -1.]])
+            np.testing.assert_array_equal(restored.layers[0].posterior(points), layers[0].posterior(points))
+
+    def test_preexisting_arithmetic_gda_artifact_not_reinterpreted_on_load(self):
+        from lnl_toolbox.algorithms.pcse.artifacts import PCSEGDAArtifact
+        statistics = self._statistics([.5, .3, .15, .05])
+        previous = GDALayer(
+            'fixture', statistics.clean_priors, statistics.layers[0].clean_means,
+            statistics.layers[0].clean_covariances.mean(axis=0), 0.,
+        )
+        artifact = PCSEGDAArtifact((previous,), {'method': 'pcse'})
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'old-gda.npz'
+            artifact.save(path)
+            before = path.read_bytes()
+            restored = PCSEGDAArtifact.load(path)
+            self.assertEqual(restored.artifact_hash, artifact.artifact_hash)
+            self.assertEqual(path.read_bytes(), before)
+            np.testing.assert_array_equal(restored.layers[0].shared_covariance, previous.shared_covariance)
+            weighted = fit_gda_layers(statistics, covariance_ridge=0.)[0]
+            self.assertFalse(np.allclose(restored.layers[0].shared_covariance, weighted.shared_covariance))
+
+
 class _pcse_statistics_PCSEStatisticsTest(unittest.TestCase):
 
     def test_identity_transition_recovers_empirical_statistics(self) -> None:

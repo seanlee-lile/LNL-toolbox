@@ -1,5 +1,40 @@
 # Toolbox modularization progress
 
+## code 分支三方法预合并（2026-10-31）
+
+- 任务：把远端 `code@413d858f3d72c3ff74fec511e3f881e922968b2a` 的 CWD、PCSE、LEND 改动局部合入当前工作区；用户随后明确批准提交并推送到远端 scratch，不切换分支。
+- 当前分支 / 基线：`scratch@f48715faae5e4712495c1e1df2fd68287ce910e6`；共同基线 `c59a9b5d78e18b84232775a6cf3aa611016e2931`。
+- 来源提交：`637e7462`（CWD Adam beta1 调度）、`0f2f33ff`（PCSE 按 clean priors 加权共享协方差）、`413d858f`（LEND author_release 可选实现）。
+- 进度：来源核实、范围核对、局部应用、冲突处理、针对性验证、最终范围记录，共 6 / 6。
+- 用户批准的修改清单（13 个已有文件，无新增源码或依赖）：
+  - `src/lnl_toolbox/algorithms/lend/algorithm.py`、`config.py`、`dilution.py`、`graph.py`、`history.py`；
+  - `src/lnl_toolbox/algorithms/pcse/gda.py`；
+  - `src/lnl_toolbox/training/cwd_experiment.py`、`lend_experiment.py`、`planning.py`；
+  - `tests/test_cwd.py`、`tests/test_pcse.py`、`tests/test_lend.py`；
+  - 本文档。
+- 逐文件变化：
+  - CWD runner：可选 `optimizer.beta1_schedule`，zero-based epoch 80 将 Adam beta1 从 0.9 切换至 0.1；默认关闭，记录有效 beta1。
+  - PCSE GDA：以恢复的干净类别先验加权各类协方差，替换等权平均；保留原对称化与 ridge 处理。
+  - LEND algorithm：按显式 implementation_variant 分流；author_release 使用连续 noisy-class probability 权重；保留 paper_equation 路径和旧 checkpoint 身份兼容。
+  - LEND config：校验 paper_equation / author_release，记录各实现的有效控制项及 inactive inherited controls。
+  - LEND graph：新增作者实现的平方欧氏 top-k、AAT 图及其零度数行为。
+  - LEND dilution：新增 lambda=0.99 resolvent solve、整批 NaN 回退与 softmax。
+  - LEND history：新增传播前历史混合与直接存储，zero-based epoch 10 开始使用上一轮历史。
+  - LEND runner：保存实现身份和权重统计，不改变数据、模型、优化器、调度器或结果选择协议。
+  - planning.py：仅在 author_release 分支展示实际实现语义；原计划路径保留。
+  - 三个测试文件：合入远端新增覆盖；CWD 与 LEND 保留当前 scratch 已有测试调整，LEND 不恢复本地已删除的旧测试，并补查 loss sum 与 objective 的区别。
+- 一致性：通过 GitHub tree blob SHA 与本地 `git hash-object` 比较，9 个生产源码文件全部与 code tip 一致；测试文件的本地差异为上述有意保留项。直接 git fetch 遇到网络连接失败，改用 GitHub 接口获取同一固定 SHA 的提交补丁及 tree，不修改远端地址。
+- 实际验证（既有 `F:/Miniconda/envs/pytorch/python.exe`，`PYTHONPATH=src;tests;.`，`PYTHONDONTWRITEBYTECODE=1`，torch threads=2）：
+  - `unittest.defaultTestLoader.loadTestsFromNames(['test_cwd','test_pcse','test_lend'])`：130 项通过，89.183 秒。
+  - `loadTestsFromNames(['test_registry','web.test_quick_start_api','test_lend._lend_algorithm_LENDAlgorithmTest.test_exact_batch_mean_formula_uses_four_sample_denominator','test_lend._lend_algorithm_LENDAlgorithmTest.test_one_forward_batch_mean_and_noisy_targets'])`：61 项通过，19.554 秒；包含最终补充的两条 loss-sum 断言。
+  - `python -B -m ruff check --no-cache src/lnl_toolbox/algorithms/lend src/lnl_toolbox/algorithms/pcse/gda.py src/lnl_toolbox/training/cwd_experiment.py src/lnl_toolbox/training/lend_experiment.py src/lnl_toolbox/training/planning.py tests/test_cwd.py tests/test_pcse.py tests/test_lend.py`：通过。
+  - `git diff --check`：通过，仅有现有 Windows 行尾提示。
+  - 发布前补查：以 `unittest.defaultTestLoader.discover(DIRECTORY, pattern='test_*.py')` 和 `TextTestRunner(verbosity=1, buffer=True)` 运行完整 `tests`：1191 项通过（390.840 秒）；完整 `web`：142 项通过（305.124 秒）；完整 `src/lnl_toolbox/scratch/tests`：224 项通过（39.429 秒）。环境变量及 torch 线程数同上。三组均无失败、错误或跳过。
+- 范围保护：未修改 Web、正式 YAML、数据或 checkpoint；原有 `data/cifar_n.py`、`training/dual_t_evidence_experiment.py`、SSH 密钥及未跟踪训练产物保持不动。实际源码修改与批准清单一致。
+- 限制：没有执行浏览器点击短训练或全量训练；不是正式论文准确率验收。CWD 新调度仍需显式开启，LEND 原配置默认仍为 paper_equation；没有擅改默认实现。
+- 发布安排：用户已批准提交并推送 `scratch`；只暂存本次 13 个文件，单个提交 `Integrate CWD PCSE and LEND updates from code`，不创建分支、不重写历史、不强制推送。实际提交号及远端结果以 Git 记录为准。共享文件协作关注点是 planning.py 的 LEND 计划分支及本文档的新记录。
+- 下一步：提交后推送至 origin 的 scratch，并核对远端提交号；若需默认启用 author_release，另行明确批准配置修改范围。
+
 ## 提取旧 life 的独立改动（2026-10-29）
 
 - 当前任务：从 `life@ca855a7` 提取开发工具、错误诊断和论文资料页容错，不覆盖当前训练实现。

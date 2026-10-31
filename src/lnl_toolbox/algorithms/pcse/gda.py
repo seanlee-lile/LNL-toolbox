@@ -90,7 +90,11 @@ def fit_gda_layers(
         raise ValueError("GDA covariance ridge must be finite and non-negative")
     layers: list[GDALayer] = []
     for layer in statistics.layers:
-        shared = layer.clean_covariances.mean(axis=0)
+        shared = np.einsum(
+            "c,cij->ij",
+            statistics.clean_priors,
+            layer.clean_covariances,
+        )
         shared = 0.5 * (shared + shared.T)
         smallest = float(np.linalg.eigvalsh(shared).min())
         if covariance_ridge > 0 and smallest < -1e-8:

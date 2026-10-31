@@ -31,6 +31,7 @@ class LENDConfig:
     epochs: int
     dilution_tolerance: float = 1e-5
     dilution_max_steps: int = 1000
+    implementation_variant: str = "paper_equation"
 
     @classmethod
     def from_mapping(cls, config: Mapping[str, Any]) -> "LENDConfig":
@@ -40,6 +41,9 @@ class LENDConfig:
         if str(method).strip().lower() != "lend":
             raise ValueError("LEND requires method: lend")
         values = _mapping(config.get("lend"), "lend configuration")
+        variant = str(values.get("implementation_variant", "paper_equation")).strip().lower()
+        if variant not in {"paper_equation", "author_release"}:
+            raise ValueError("LEND implementation_variant must be paper_equation or author_release")
         graph = _mapping(values.get("graph"), "lend.graph")
         required_graph = {"k", "gamma", "metric", "normalize_features"}
         if set(graph) != required_graph:
@@ -132,7 +136,38 @@ class LENDConfig:
             raise ValueError("LEND model must be a supported feature-aware model")
         return cls(k, gamma, metric, normalize_features, zero_degree_policy,
                    alpha, policy, steps, beta, first, rule, reduction, empty,
-                   int(training["epochs"]), tolerance, max_steps)
+                   int(training["epochs"]), tolerance, max_steps, variant)
+
+    def implementation_metadata(self) -> dict[str, Any]:
+        """Effective semantics; inherited paper controls are inactive for author release.
+
+        Author constants follow code/main.py:56-69,135-150. Only k/beta and
+        the outer training protocol are shared experimental controls.
+        """
+        if self.implementation_variant == "author_release":
+            return {
+                "variant": self.implementation_variant, "k": self.k,
+                "metric": "squared_euclidean", "gamma": 3,
+                "normalize_features": False, "self_policy": "topk_then_clear_diagonal",
+                "orientation": "AAT", "propagation": "resolvent_solve",
+                "lambda": 0.99, "softmax_scale": 1.0,
+                "nan_policy": "whole_batch_input_then_softmax",
+                "beta": self.beta, "history": "pre_propagation",
+                "history_start_epoch_zero_based": 10,
+                "weighting": "noisy_class_probability", "reduction": "batch_mean",
+                "inactive_config_fields": [
+                    "lend.graph.gamma", "lend.graph.metric", "lend.graph.normalize_features",
+                    "lend.dilution", "lend.history.first_observation", "lend.selection",
+                ],
+            }
+        return {
+            "variant": self.implementation_variant, "k": self.k,
+            "metric": self.metric, "gamma": self.gamma,
+            "normalize_features": self.normalize_features, "orientation": "ATA",
+            "propagation": self.dilution_policy, "alpha": self.alpha,
+            "beta": self.beta, "history": "post_propagation_ema",
+            "weighting": self.selection_rule, "reduction": self.reduction,
+        }
 
     def identity(self) -> dict[str, Any]:
         value = asdict(self)

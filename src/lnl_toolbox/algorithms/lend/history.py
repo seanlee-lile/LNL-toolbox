@@ -79,6 +79,29 @@ class LENDLabelHistory:
         )
         return HistoryProposal(rows=rows, values=blended, epoch=epoch)
 
+    def author_input(self, indices: Tensor, onehot: Tensor, *, epoch: int,
+                     beta: float) -> Tensor:
+        """Read release history before propagation (zero-based epoch >= 10)."""
+        if epoch < 0 or not 0 <= beta <= 1:
+            raise ValueError("invalid LEND author history epoch/beta")
+        rows = self._rows(indices)
+        if (onehot.shape != (rows.numel(), self.num_classes) or not torch.is_floating_point(onehot)
+                or onehot.requires_grad or not bool(torch.isfinite(onehot).all())
+                or bool((onehot < 0).any())):
+            raise ValueError("LEND author history input must be detached finite [B,C]")
+        if bool((self.last_updated_epoch[rows] == epoch).any()):
+            raise ValueError("LEND sample history cannot update twice in one epoch")
+        if epoch < 10:
+            return onehot.detach()
+        if not bool((self.initialized[rows] & (self.last_updated_epoch[rows] == epoch - 1)).all()):
+            raise ValueError("LEND author propagation requires previous-epoch history")
+        previous = self.values[rows].to(device=onehot.device, dtype=onehot.dtype)
+        return (beta * onehot + (1.0 - beta) * previous).detach()
+
+    def propose_author(self, indices: Tensor, current: Tensor, *, epoch: int) -> HistoryProposal:
+        """Store the release softmax output directly; no post-propagation EMA."""
+        return self.propose(indices, current, epoch=epoch, beta=0.0)
+
     def commit(self, proposal: HistoryProposal) -> None:
         if not isinstance(proposal, HistoryProposal):
             raise TypeError("LEND history commit requires a HistoryProposal")
