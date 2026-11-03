@@ -73,14 +73,14 @@ YAML，或直接将内置配置带入参数 Sweep；项目 YAML 保存成功后�
 `configs/experiment/<recipe>-custom.yaml`。有未保存修改时，运行或 Sweep 会先要求保存。
 
 参数 Sweep 同时接受内置 recipe 和项目 YAML。参数列表复用
-`lnl_parameter_metadata_registry_revised.yaml`。元数据仍记录基础、论文、高级和锁定权限，
+`src/lnl_toolbox/parameter_metadata.yaml`（随包发布，CLI 与 Web 共用）。元数据仍记录基础、论文、高级和锁定权限，
 但页面只按下述两层展示；锁定参数不能加入矩阵，论文参数会显示依据与复现影响，并在预检结果中明确标记偏离。Sweep
 完成后可把输出目录直接带入“运行管理”。
 
 26 篇正式论文的 YAML 参数编辑器和 Sweep 参数列表只显示两组：“默认显示”
 放数据集、适用的噪声条件、常用训练控制和逐篇挑选的方法核心参数；“高级参数”
 按需展开随机种子、模型/协议/实现细节、资源路径和复杂结构。
-逐篇选择见 `lnl_parameter_metadata_registry_revised.yaml` 的 `default_parameter_paths`；
+逐篇选择见 `src/lnl_toolbox/parameter_metadata.yaml` 的 `default_parameter_paths`；
 不再按旧研究类别自动展开所有字段。分类只改变展示位置，不改变参数值、编辑权限、
 论文依据或偏离记录。互相依赖的字段在表单中同步输入。
 

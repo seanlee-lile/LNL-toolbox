@@ -2,6 +2,7 @@ from __future__ import annotations
 from pathlib import Path
 import tempfile
 import unittest
+import copy
 from unittest.mock import patch
 import yaml
 from lnl_toolbox.cli import PromptSession, TrainingSelection
@@ -186,6 +187,107 @@ from lnl_toolbox.training.runners import resolve_runner, runner_names
 from lnl_toolbox.training.service import ExperimentService
 
 _unified_cli_ROOT = Path(__file__).resolve().parents[1]
+
+
+class CliPresentationAndEditorTest(unittest.TestCase):
+    def test_browsing_in_fresh_process_does_not_import_training_dependencies(self):
+        script = """
+import sys
+from lnl_toolbox.cli.main import main
+for argv in (['--lang','en','--help'], ['papers','list'], ['show','GCE','--no-interactive']):
+    try:
+        result = main(argv)
+    except SystemExit as exc:
+        result = exc.code
+    assert result == 0
+    assert not any(name.split('.')[0] in {'torch','torchvision','sklearn'} for name in sys.modules)
+    assert 'web.command_console' not in sys.modules
+"""
+        result = subprocess.run([sys.executable, '-B', '-c', script], env={**os.environ, 'PYTHONPATH': str(_unified_cli_ROOT / 'src'), 'PYTHONDONTWRITEBYTECODE': '1'}, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_all_paper_defaults_permissions_and_english_notes_match_shared_schema(self):
+        from lnl_toolbox.cli.paper_editor import PaperEditor
+        from lnl_toolbox.cli.parameter_help import english_note
+        from web.command_console import _config_schema
+        for paper in load_papers():
+            with self.subTest(paper=paper.id):
+                editor = PaperEditor(paper, PromptSession(read=lambda _: self.fail('unexpected prompt')))
+                self.assertEqual(editor.schema(), _config_schema(editor.recipe.id))
+                self.assertEqual(editor.config, editor.baseline)
+                self.assertNotEqual(editor.recipe.profile, 'smoke')
+                for field in editor.schema()['fields']:
+                    if field.get('visible', True) and field.get('editable') and field.get('display_group') != 'restricted':
+                        self.assertTrue(english_note(field['path'], editor.recipe.method))
+                        self.assertFalse(editor.rules._internal_seed_path(field['path']))
+
+    def test_validate_and_legacy_dry_run_use_same_full_check_and_do_not_run(self):
+        from lnl_toolbox import parameters
+        recipe = recipe_by_id('binary-risk-natarajan-reproduction')
+        runner = resolve_runner(load_recipe_config(recipe))
+        service = Mock(last_compatibility=None)
+        service.preflight.return_value = runner
+        with patch('lnl_toolbox.cli.main.ExperimentService', return_value=service):
+            left = _invoke_cli('validate', '--recipe', recipe.id, '--set', 'seed=3')
+            right = _invoke_cli('run', '--recipe', recipe.id, '--set', 'seed=3', '--dry-run')
+        self.assertEqual(left, right)
+        self.assertEqual(left[0], 0, left)
+        self.assertEqual(service.preflight.call_count, 2)
+        self.assertTrue(all(call.kwargs['check_data'] for call in service.preflight.call_args_list))
+        service.run.assert_not_called()
+        with patch('lnl_toolbox.cli.main.ExperimentService', return_value=service):
+            service.preflight.side_effect = FileNotFoundError('missing external checkpoint')
+            code, _, error = _invoke_cli('validate', '--recipe', recipe.id)
+        self.assertEqual(code, 2)
+        self.assertIn('missing external checkpoint', error)
+
+    def test_editor_transaction_and_segment_toggle_keep_one_learning_rate_control(self):
+        from lnl_toolbox.cli.paper_editor import PaperEditor, resolve_paper
+        editor = PaperEditor(resolve_paper('GCE'), PromptSession(read=lambda _: self.fail('unexpected prompt')))
+        self.assertNotIn('optimizer.lr', [f['path'] for f in editor.fields()])
+        original = copy.deepcopy(editor.config)
+        with self.assertRaises(ValueError):
+            editor.update([('optimizer.lr', 'not-a-number')])
+        self.assertEqual(editor.config, original)
+        editor.update([('loader.batch_size', '64')])
+        self.assertEqual(editor.config['loader']['batch_size'], 64)
+        self.assertEqual(editor.config['optimizer'], original['optimizer'])
+        editor.session, _ = _cli_scripted_session(['', 'n'])
+        editor.edit_schedule()
+        self.assertIn('optimizer.lr', [f['path'] for f in editor.fields()])
+        self.assertEqual(editor.config['optimizer']['lr'], original['optimizer']['lr'])
+        editor.session, _ = _cli_scripted_session(['', 'y', 'multistep', '[40,80]', '0.01', '0.02', '0.005'])
+        editor.edit_schedule()
+        self.assertEqual(editor.config['scheduler']['lr_values'], [.02, .005])
+        self.assertNotIn('optimizer.lr', [f['path'] for f in editor.fields()])
+
+    def test_editor_exit_does_not_save_validate_or_train(self):
+        from lnl_toolbox.cli.paper_editor import PaperEditor, resolve_paper
+        session, _ = _cli_scripted_session([''])
+        editor = PaperEditor(resolve_paper('gce'), session)
+        with patch.object(editor, 'save') as save, patch.object(editor, 'verify') as verify:
+            self.assertEqual(editor.run(), 0)
+        save.assert_not_called()
+        verify.assert_not_called()
+
+    def test_language_precedence_and_removed_commands(self):
+        from lnl_toolbox.cli import i18n
+        with tempfile.TemporaryDirectory() as directory, patch.object(i18n, 'preference_path', return_value=Path(directory) / 'cli.json'), patch.dict(os.environ, {'LNL_LANG':'en'}):
+            i18n.save_language('zh')
+            token = i18n.select_language()
+            self.assertEqual(i18n.language(), 'en')
+            i18n.reset_language(token)
+            token = i18n.select_language('zh')
+            self.assertEqual(i18n.language(), 'zh')
+            i18n.reset_language(token)
+            self.assertEqual(i18n.saved_language(), 'zh')
+        for argv in (['compose'], ['data','status']):
+            with self.assertRaises(SystemExit), redirect_stderr(StringIO()):
+                main(argv)
+        code, summary, _ = _invoke_cli('--lang', 'en', 'show', 'gce', '--no-interactive')
+        self.assertEqual(code, 0)
+        self.assertIn('Edit parameters:', summary)
+        self.assertNotIn('实现', summary)
 
 
 class ConfigParameterGateTest(unittest.TestCase):
@@ -879,7 +981,7 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
                 self.assertEqual(code, 0, error)
                 self.assertIn('lab-cifar100', output)
                 self.assertIn('incomplete', output)
-                code, output, error = self.invoke('data', 'status', 'lab-cifar100')
+                code, output, error = self.invoke('data', 'list', 'lab-cifar100')
                 self.assertEqual(code, 0, error)
                 self.assertIn('Status           INCOMPLETE', output)
                 code, output, error = self.invoke('data', 'path', 'lab-cifar100')
@@ -951,28 +1053,26 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
         self.assertIn('个可运行实验（规模=smoke）', output)
         self.assertIn('数据集：', output)
         self.assertIn('执行器：', output)
-        self.assertIn('先预览：', output)
+        self.assertIn('lnl validate --recipe', output)
         self.assertNotIn('RECIPE | PROFILE', output)
         code, output, _ = self.invoke('papers', 'list')
         self.assertEqual(code, 0)
         self.assertIn('dual-t', output)
-        self.assertIn('篇具有可运行配置的论文', output)
-        self.assertIn('实现保真度：', output)
-        self.assertIn('建议先看：', output)
+        self.assertIn('[26/26]', output)
+        self.assertNotIn('实现保真度', output)
+        self.assertNotIn('smoke', output)
+        self.assertIn('https://', output)
+        self.assertEqual(output.count('lnl show <paper>'), 1)
         self.assertNotIn('ID | PAPER', output)
         code, output, _ = self.invoke('papers', 'show', 'jocor')
         self.assertEqual(code, 0)
-        self.assertIn('Toolbox 生命周期', output)
-        self.assertIn('论文概念 -> config -> 实现', output)
-        self.assertIn('已知差异与限制', output)
-        self.assertIn('Recipe：', output)
-        self.assertIn('标签来源：', output)
-        self.assertIn('Scheduler：', output)
-        self.assertIn('生成 symmetric 噪声', output)
-        self.assertIn('由执行器决定', output)
+        self.assertIn('JoCoR', output)
+        self.assertNotIn('已知差异与限制', output)
+        self.assertNotIn('Recipe：', output)
+        self.assertIn('lnl show jocor', output)
         code, output, _ = self.invoke('papers', 'show', 'dual-t')
         self.assertEqual(code, 0)
-        self.assertIn('posterior_stage=', output)
+        self.assertIn('Dual-T', output)
 
     def test_experiment_list_supports_tsv_for_scripts(self) -> None:
         code, output, _ = self.invoke('list', 'experiments', '--profile', 'smoke', '--format', 'tsv')
@@ -992,7 +1092,7 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
         self.assertEqual(output.splitlines()[0], 'kind\tname\tcapabilities\tpaper')
         code, output, _ = self.invoke('papers', 'list', '--format', 'tsv')
         self.assertEqual(code, 0)
-        self.assertEqual(output.splitlines()[0], 'id\tacronym\ttitle\tvenue\tyear\tprofiles\tfidelity\trunners\trecommended')
+        self.assertEqual(output.splitlines()[0], 'id\tacronym\ttitle\tvenue\tyear\tsource_url')
 
     def test_paper_config_resolved_does_not_change_source(self) -> None:
         path = _unified_cli_ROOT / 'configs/experiment/cifar10_coteaching_smoke.yaml'
@@ -1080,54 +1180,9 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
             self.assertEqual(after, before)
             runner.assert_not_called()
 
-    def test_compose_lists_compatible_slots_and_dedicated_runners(self) -> None:
-        code, output, _ = self.invoke('compose', 'list', '--runner', 'supervised')
-        self.assertEqual(code, 0)
-        self.assertIn('可组合结构', output)
-        self.assertIn('transition_estimator 必须与 risk_corrector 配对', output)
-        self.assertIn('regularizer 虽已注册，但尚未接入', output)
-        code, output, _ = self.invoke('compose', 'list', '--runner', 'dual_t')
-        self.assertEqual(code, 0)
-        self.assertIn('专用生命周期', output)
-        self.assertIn('cifar10-dual-t-smoke', output)
 
-    def test_compose_creates_valid_yaml_without_overwriting(self) -> None:
-        source = _unified_cli_ROOT / 'configs/experiment/cifar10_symmetric_ce_smoke.yaml'
-        before = source.read_bytes()
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / 'gce_small_loss.yaml'
-            code, text, error = self.invoke('compose', 'create', '--base', 'cifar10-symmetric-ce-smoke', '--loss', 'gce', '--selector', 'small_loss', '--keep-rate', '0.6', '--output', str(output))
-            self.assertEqual((code, error), (0, ''))
-            self.assertIn('已生成新配置', text)
-            config = load_yaml(output)
-            self.assertEqual(config['loss'], {'name': 'gce'})
-            self.assertEqual(config['selector'], {'name': 'small_loss', 'keep_rate': 0.6})
-            self.assertEqual(config['execution'], {'runner': 'supervised'})
-            code, _, error = self.invoke('compose', 'create', '--base', 'cifar10-symmetric-ce-smoke', '--output', str(output))
-            self.assertEqual(code, 2)
-            self.assertIn('refusing to overwrite', error)
-        self.assertEqual(source.read_bytes(), before)
 
-    def test_compose_rejects_incompatible_objective_before_write(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / 'invalid.yaml'
-            code, _, error = self.invoke('compose', 'create', '--base', 'dss-cifar10-symmetric05-smoke', '--selector', 'small_loss', '--keep-rate', '0.5', '--output', str(output))
-            self.assertEqual(code, 2)
-            self.assertIn("DSS requires selector.name='all'", error)
-            self.assertFalse(output.exists())
 
-    def test_compose_copies_dedicated_paper_recipe_without_overrides(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / 'volminnet.yaml'
-            code, text, error = self.invoke('compose', 'create', '--base', 'volminnet-cifar10-reproduction', '--output', str(output))
-            self.assertEqual((code, error), (0, ''))
-            self.assertIn('论文生命周期：volminnet', text)
-            self.assertEqual(load_yaml(output), load_yaml(_unified_cli_ROOT / 'configs/experiment/volminnet_cifar10_reproduction.yaml'))
-            rejected = Path(directory) / 'invalid.yaml'
-            code, _, error = self.invoke('compose', 'create', '--base', 'volminnet-cifar10-reproduction', '--loss', 'ce', '--output', str(rejected))
-            self.assertEqual(code, 2)
-            self.assertIn('only be copied without component overrides', error)
-            self.assertFalse(rejected.exists())
 
     def test_list_experiments_marks_status_and_hides_conditional(self) -> None:
         code, output, _ = self.invoke('list', 'experiments', '--profile', 'smoke')
@@ -1155,13 +1210,14 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
         code, output, _ = self.invoke('papers', 'show', 'volminnet')
         self.assertEqual(code, 0)
         self.assertIn('VolMinNet', output)
-        self.assertIn('paper_positive_logdet', output)
+        self.assertIn('https://proceedings.mlr.press/v139/li21l.html', output)
         code, output, _ = self.invoke('papers', 'config', 'volminnet', '--profile', 'smoke', '--path-only')
         self.assertEqual(code, 0)
         self.assertTrue(output.strip().endswith('cifar10_volminnet_smoke.yaml'))
 
     def test_volminnet_validate_dry_run_and_epoch_override(self) -> None:
-        code, _, error = self.invoke('validate', '--recipe', 'cifar10-volminnet-smoke')
+        # This test exercises source/epoch dispatch, not local data readiness.
+        code, _, error = self.invoke('run', '--recipe', 'cifar10-volminnet-smoke', '--dry-run', '--no-check-data')
         self.assertEqual(code, 0, error)
         code, output, error = self.invoke('run', '--recipe', 'cifar10-volminnet-smoke', '--dry-run', '--no-check-data', '--epochs', '3')
         self.assertEqual(code, 0, error)
@@ -1171,7 +1227,7 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
     def test_dividemix_is_discoverable_and_has_staged_epoch_override(self) -> None:
         code, output, error = self.invoke('papers', 'show', 'dividemix')
         self.assertEqual(code, 0, error)
-        self.assertIn('cross-network GMM', output)
+        self.assertIn('https://openreview.net/forum?id=HJgExaVtwr', output)
         code, output, error = self.invoke('run', '--recipe', 'cifar10-dividemix-smoke', '--dry-run', '--no-check-data', '--epochs', '3')
         self.assertEqual(code, 0, error)
         self.assertIn('1/3/4 (warmup/main/total)', output)
@@ -1184,7 +1240,7 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
 
     def test_positional_yaml_is_accepted(self) -> None:
         path = _unified_cli_ROOT / 'configs/experiment/cifar10_symmetric_ce_smoke.yaml'
-        code, output, error = self.invoke('validate', str(path))
+        code, output, error = self.invoke('run', str(path), '--dry-run', '--no-check-data')
         self.assertEqual(code, 0, error)
         self.assertIn('supervised', output)
 

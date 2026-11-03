@@ -26,28 +26,30 @@ from lnl_toolbox.catalog import (
     select_paper_config,
     validate_config,
 )
-from lnl_toolbox.composition import (
-    apply_overrides,
-    validate_composition,
-    write_composed_config,
-)
 from lnl_toolbox.core.config_overrides import apply_override_assignments
-from lnl_toolbox.evaluation.run_comparison import compare_runs, write_report
-from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE, DatasetStatusReport
+compare_runs = None  # Loaded only by commands that use it.
+write_report = None  # Loaded only by commands that use it.
+DEFAULT_DATA_SERVICE = None  # Loaded only by commands that use it.
+DatasetStatusReport = None  # Loaded only by commands that use it.
 from lnl_toolbox.data.profile import NoiseRateInfo, NoiseRateStatus
 from lnl_toolbox.training.compatibility import CompatibilityResult, CompatibilityStatus
 from lnl_toolbox.training.runners import apply_epoch_override, resolve_runner, runner_names
-from lnl_toolbox.training.service import ExperimentReadinessError, ExperimentService
-from lnl_toolbox.training.sweep import (
-    plan_sweep,
-    resolve_planned_config,
-    run_sweep,
-    sweep_status,
-)
+ExperimentReadinessError = None  # Loaded only by commands that use it.
+ExperimentService = None  # Loaded only by commands that use it.
+plan_sweep = None  # Loaded only by commands that use it.
+resolve_planned_config = None  # Loaded only by commands that use it.
+run_sweep = None  # Loaded only by commands that use it.
+sweep_status = None  # Loaded only by commands that use it.
 from lnl_toolbox.cli.ports import cleanup_ports
+from lnl_toolbox.cli.i18n import LocalizedParser, language, text, translated_print
+
+print = translated_print
 
 
 def _validate_with_registry(config: dict[str, Any], *, check_data: bool):
+    global ExperimentService
+    if ExperimentService is None:
+        from lnl_toolbox.training.service import ExperimentService as ExperimentService
     return ExperimentService().preflight(config, check_data=check_data)
 
 
@@ -71,15 +73,20 @@ def _source_options(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = LocalizedParser(
         prog="lnl",
         description="LNL Toolbox 统一命令行入口",
         epilog=(
-            "推荐顺序: lnl doctor -> lnl list experiments -> "
-            "lnl run <source> --dry-run -> lnl run <source>"
+            "lnl papers list -> lnl show <paper> -> lnl validate <source> -> lnl run <source>"
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument("--lang", choices=("zh", "en"), help=text("输出语言", "Output language"))
+    show_paper = sub.add_parser("show", help=text("查看和编辑论文默认参数", "View and edit a paper's default parameters"))
+    show_paper.add_argument("paper_id")
+    show_paper.add_argument("--no-interactive", action="store_true", help=text("仅输出摘要", "Print a summary without prompting"))
+    lang = sub.add_parser("language", help=text("保存输出语言偏好", "Save the preferred output language"))
+    lang.add_argument("value", choices=("zh", "en"))
 
     doctor = sub.add_parser("doctor", help="检查环境、项目和数据路径")
     doctor.add_argument("--config", type=Path)
@@ -117,17 +124,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="输出格式；human 适合阅读，tsv 适合脚本处理（默认: human）",
     )
 
-    validate = sub.add_parser("validate", help="静态检查实验配置；不执行训练")
+    validate = sub.add_parser("validate", help=text("检查参数、数据和依赖，展示运行计划", "Check parameters, data and prerequisites, and display the run plan"))
     _source_options(validate)
-    validate.add_argument("--check-data", action="store_true", help="同时检查数据路径、方法兼容性和适用的外部输入")
+    validate.add_argument("--check-data", action="store_true", default=True, help=argparse.SUPPRESS)
+    validate.add_argument("--epochs", type=int)
+    validate.add_argument("--set", dest="overrides", action="append", default=[], metavar="PATH=VALUE")
+    validate.add_argument("--output-dir", type=Path)
 
     run = sub.add_parser("run", help="运行内置 recipe 或自定义配置")
     _source_options(run)
     run.add_argument("--output-dir", type=Path)
     run.add_argument("--resume", type=Path, help="从 checkpoint 文件恢复；保持该运行的配置身份")
     run.add_argument("--epochs", type=int, help="覆盖该方法支持的训练阶段轮数；多阶段方法按现有规则处理")
-    run.add_argument("--dry-run", action="store_true", help="检查并展示运行计划，不启动训练")
-    run.add_argument("--review", action="store_true", help="report parameter-check and rehearsal phases in one dry-run process")
+    run.add_argument("--dry-run", action="store_true", help=argparse.SUPPRESS)
+    run.add_argument("--review", action="store_true", help=argparse.SUPPRESS)
     data_check = run.add_mutually_exclusive_group()
     data_check.add_argument(
         "--check-data",
@@ -137,7 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
     data_check.add_argument(
         "--no-check-data",
         action="store_true",
-        help="仅限 --dry-run：跳过数据检查和完整兼容性检查；不代表外部文件已就绪",
+        help=argparse.SUPPRESS,
     )
     run.add_argument(
         "--set",
@@ -164,10 +174,8 @@ def build_parser() -> argparse.ArgumentParser:
     data_register.add_argument("--labels", type=Path)
     data_register.add_argument("--noise-variant")
     data_list = data_sub.add_parser("list", help="list registration and verification states")
+    data_list.add_argument("name", nargs="?")
     data_list.add_argument("--format", choices=("human", "json"), default="human")
-    data_status = data_sub.add_parser("status", help="show dataset readiness")
-    data_status.add_argument("name", nargs="?")
-    data_status.add_argument("--format", choices=("human", "json"), default="human")
     data_path = data_sub.add_parser("path", help="show a registered dataset path")
     data_path.add_argument("name")
     data_show = data_sub.add_parser("show", help="show one local dataset record")
@@ -321,28 +329,6 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--require-equal", action="append")
     report.add_argument("--strict", action="store_true")
 
-    compose = sub.add_parser("compose", help="查看兼容组合并生成自定义 YAML")
-    compose_sub = compose.add_subparsers(dest="compose_command", required=True)
-    compose_list = compose_sub.add_parser("list", help="查看指定 runner 的组合槽位")
-    compose_list.add_argument("--runner", choices=runner_names(), default="supervised")
-    compose_check = compose_sub.add_parser("check", help="检查自定义配置的组合兼容性")
-    compose_check.add_argument("--config", type=Path, required=True)
-    compose_check.add_argument("--project-root", type=Path)
-    compose_create = compose_sub.add_parser("create", help="从内置 recipe 生成新配置")
-    compose_create.add_argument("--base", required=True, help="作为起点的内置 recipe")
-    compose_create.add_argument("--output", type=Path, required=True, help="新 YAML 文件路径")
-    compose_create.add_argument("--project-root", type=Path)
-    compose_create.add_argument("--loss", choices=("ce", "gce", "nce", "mae", "rce", "apl"))
-    compose_create.add_argument("--selector", choices=("all", "small_loss"))
-    compose_create.add_argument("--keep-rate", type=float)
-    compose_create.add_argument(
-        "--parameter-update", choices=("standard", "step_milestone", "cdr")
-    )
-    compose_create.add_argument("--milestones", type=int, nargs="+")
-    compose_create.add_argument("--gamma", type=float)
-    compose_create.add_argument("--cdr-noise-rate", type=float)
-    compose_create.add_argument("--l1-decay", type=float)
-
     papers = sub.add_parser("papers", help="查看有可运行配置的知名论文")
     paper_sub = papers.add_subparsers(dest="paper_command", required=True)
     paper_list = paper_sub.add_parser("list", help="列出有可运行 config 的论文")
@@ -354,6 +340,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     show = paper_sub.add_parser("show", help="解释论文在 toolbox 中的详细实现")
     show.add_argument("paper_id")
+    show.add_argument("--no-interactive", action="store_true")
     config = paper_sub.add_parser("config", help="查看论文 YAML 配置")
     config.add_argument("paper_id")
     config.add_argument("--profile", choices=("smoke", "reproduction"))
@@ -365,6 +352,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _load_source(args: argparse.Namespace) -> tuple[dict[str, Any], Path, RecipeSpec | None, Path]:
+    global DEFAULT_DATA_SERVICE
+    if DEFAULT_DATA_SERVICE is None:
+        from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE as DEFAULT_DATA_SERVICE
     root = args.project_root.expanduser().resolve() if args.project_root else None
     source = getattr(args, "source", None)
     recipe_name = getattr(args, "recipe", None)
@@ -448,6 +438,9 @@ def _paper_config_value(config: dict[str, Any], key: str) -> str:
 
 def _print_failure_guidance(error: Exception) -> None:
     """Present backend facts only; never validate or infer a readiness state."""
+    global ExperimentReadinessError
+    if ExperimentReadinessError is None:
+        from lnl_toolbox.training.service import ExperimentReadinessError as ExperimentReadinessError
     result = error.compatibility if isinstance(error, ExperimentReadinessError) else None
     context = getattr(error, "prerequisite_context", ())
     if result is not None:
@@ -558,7 +551,7 @@ def _doctor(args: argparse.Namespace) -> int:
 
     def report(ok: bool, name: str, detail: str) -> None:
         nonlocal failures
-        print(f"[{'OK' if ok else 'FAIL'}] {name}: {detail}")
+        print(f"[{'OK' if ok else 'FAIL'}] {text(name)}: {text(detail)}")
         failures += 0 if ok else 1
 
     report(sys.version_info >= (3, 10), "Python", platform.python_version())
@@ -651,7 +644,7 @@ def _list_experiments(args: argparse.Namespace) -> int:
             f"AVAILABILITY={item.availability}"
         )
         print("  先预览：")
-        print(f"    lnl run --recipe {item.id} --dry-run")
+        print(f"    lnl validate --recipe {item.id}")
     return 0
 
 
@@ -699,17 +692,18 @@ def _list_components(args: argparse.Namespace) -> int:
 
 
 def _validate(args: argparse.Namespace) -> int:
-    config, path, _recipe, project = _load_source(args)
-    service = ExperimentService()
-    runner = service.preflight(config, check_data=args.check_data)
-    print(f"配置有效: {path}")
-    print(f"执行器: {runner.name}")
-    print(f"项目根目录: {project}")
-    _print_compatibility_result(service.last_compatibility)
-    return 0
+    # Keep one preflight/plan implementation, including the Web's legacy path.
+    args.dry_run = True
+    args.review = False
+    args.no_check_data = False
+    args.resume = None
+    return _run(args)
 
 
 def _run(args: argparse.Namespace) -> int:
+    global ExperimentService
+    if ExperimentService is None:
+        from lnl_toolbox.training.service import ExperimentService as ExperimentService
     review = bool(getattr(args, "review", False))
     if review and not args.dry_run:
         raise ValueError("--review requires --dry-run")
@@ -747,12 +741,26 @@ def _run(args: argparse.Namespace) -> int:
 
 
 def _resume(args: argparse.Namespace) -> int:
+    global ExperimentService
+    if ExperimentService is None:
+        from lnl_toolbox.training.service import ExperimentService as ExperimentService
     result = ExperimentService().resume(args.run_dir, args.checkpoint)
     print(f"resume complete: {result}")
     return 0
 
 
 def _sweep(args: argparse.Namespace) -> int:
+    global ExperimentService, plan_sweep, resolve_planned_config, run_sweep, sweep_status
+    if ExperimentService is None:
+        from lnl_toolbox.training.service import ExperimentService as ExperimentService
+    if plan_sweep is None:
+        from lnl_toolbox.training.sweep import plan_sweep as plan_sweep
+    if resolve_planned_config is None:
+        from lnl_toolbox.training.sweep import resolve_planned_config as resolve_planned_config
+    if run_sweep is None:
+        from lnl_toolbox.training.sweep import run_sweep as run_sweep
+    if sweep_status is None:
+        from lnl_toolbox.training.sweep import sweep_status as sweep_status
     if args.source == "status":
         if args.status_path is None:
             raise ValueError("provide a sweep directory after 'lnl sweep status'")
@@ -920,6 +928,9 @@ def _print_sweep_plan(plan) -> None:
 
 
 def _compare(args: argparse.Namespace) -> int:
+    global compare_runs
+    if compare_runs is None:
+        from lnl_toolbox.evaluation.run_comparison import compare_runs as compare_runs
     comparison = compare_runs(
         args.path,
         group_by=_comparison_fields(args.group_by),
@@ -958,6 +969,11 @@ def _compare(args: argparse.Namespace) -> int:
 
 
 def _report(args: argparse.Namespace) -> int:
+    global compare_runs, write_report
+    if compare_runs is None:
+        from lnl_toolbox.evaluation.run_comparison import compare_runs as compare_runs
+    if write_report is None:
+        from lnl_toolbox.evaluation.run_comparison import write_report as write_report
     comparison = compare_runs(
         args.path,
         group_by=_comparison_fields(args.group_by),
@@ -984,131 +1000,13 @@ def _comparison_fields(values: list[str] | None):
     return fields
 
 
+
+
+
+
 def _paper_list(args: argparse.Namespace) -> int:
-    recipes = {item.id: item for item in discover_recipes(include_conditional=True)}
-    papers = load_papers()
-    if args.format == "json":
-        print(json.dumps([
-            {
-                "id": paper.id,
-                "acronym": paper.acronym,
-                "title": paper.title,
-                "venue": paper.venue,
-                "year": paper.year,
-                "profiles": sorted({item.profile for item in paper.configs}),
-                "fidelity": sorted({item.configuration_fidelity for item in paper.configs}),
-                "runners": sorted({recipes[item.recipe_id].runner for item in paper.configs}),
-                "recommended": next(
-                    (item.recipe_id for item in paper.configs if item.profile == "smoke"),
-                    paper.configs[0].recipe_id if paper.configs else None,
-                ),
-            }
-            for paper in papers
-        ], ensure_ascii=False))
-        return 0
-    if args.format == "tsv":
-        print("id\tacronym\ttitle\tvenue\tyear\tprofiles\tfidelity\trunners\trecommended")
-        for paper in papers:
-            profiles = ",".join(sorted({item.profile for item in paper.configs}))
-            fidelity = ",".join(sorted({item.configuration_fidelity for item in paper.configs}))
-            runners = ",".join(sorted({recipes[item.recipe_id].runner for item in paper.configs}))
-            recommended = next(
-                (item.recipe_id for item in paper.configs if item.profile == "smoke"),
-                paper.configs[0].recipe_id if paper.configs else "-",
-            )
-            print(
-                f"{paper.id}\t{paper.acronym}\t{paper.title}\t{paper.venue}\t{paper.year}\t"
-                f"{profiles}\t{fidelity}\t{runners}\t{recommended}"
-            )
-        return 0
-
-    print(f"找到 {len(papers)} 篇具有可运行配置的论文")
-    print("建议先查看实现说明，再对推荐的 smoke recipe 执行 dry-run。")
-    total = len(papers)
-    for index, paper in enumerate(papers, start=1):
-        profiles = ",".join(sorted({item.profile for item in paper.configs}))
-        fidelity = ",".join(sorted({item.configuration_fidelity for item in paper.configs}))
-        runners = ",".join(sorted({recipes[item.recipe_id].runner for item in paper.configs}))
-        recommended = next(
-            (item.recipe_id for item in paper.configs if item.profile == "smoke"),
-            paper.configs[0].recipe_id if paper.configs else "-",
-        )
-        print()
-        print(f"[{index}/{total}] {paper.id} · {paper.acronym}")
-        print(f"  标题：{paper.title}")
-        print(f"  出处：{paper.venue} {paper.year}")
-        print(f"  可用配置：{profiles}")
-        print(f"  实现保真度：{fidelity}")
-        print(
-            f"  实现状态：{paper.implementation_status} | "
-            f"复现状态：{paper.reproduction_status} | "
-            f"可用性：{paper.availability}"
-        )
-        print(f"  实际执行器：{runners}")
-        print("  建议先看：")
-        print(f"    lnl papers show {paper.id}")
-        print("  推荐试跑：")
-        print(f"    lnl run --recipe {recommended} --dry-run")
-    return 0
-
-
-def _paper_show(paper: PaperSpec) -> int:
-    recipes = {item.id: item for item in discover_recipes(include_conditional=True)}
-    print(f"{paper.acronym}: {paper.title}")
-    print(f"出处: {paper.venue} {paper.year} | {paper.source_url}")
-    print(f"问题: {paper.summary}")
-    print(f"核心机制: {paper.mechanism}")
-    print("\nToolbox 生命周期:")
-    for index, stage in enumerate(paper.lifecycle, 1):
-        print(f"  {index}. {stage}")
-    print("\n论文概念 -> config -> 实现:")
-    for item in paper.concept_to_config:
-        print(f"  {item['concept']} -> {item['config']} -> {item['implementation']}")
-    print("\n可用配置:")
-    total = len(paper.configs)
-    for index, item in enumerate(paper.configs, start=1):
-        recipe = recipes[item.recipe_id]
-        config = load_recipe_config(recipe)
-        data = config.get("data", {}) or {}
-        noise = config.get("noise", {}) or {}
-        print()
-        print(f"  [{index}/{total}] {item.profile} / {item.variant}")
-        print(f"      Recipe：{item.recipe_id}")
-        print(f"      实现保真度：{item.configuration_fidelity}")
-        print(
-            f"      实现状态：{item.implementation_status} | "
-            f"复现状态：{item.reproduction_status} | "
-            f"可用性：{item.availability}"
-        )
-        print(f"      执行器：{recipe.runner}")
-        print(f"      数据集：{data.get('name', '-')}")
-        print(f"      噪声：{noise.get('name', 'clean')}，比例={noise.get('rate', '-')}")
-        print(f"      模型：{_paper_config_value(config, 'model')}")
-        print(f"      优化器：{_paper_config_value(config, 'optimizer')}")
-        print(f"      Scheduler：{_paper_config_value(config, 'scheduler')}")
-        print(f"      训练轮数：{_paper_config_value(config, 'epochs')}")
-        print(f"      标签来源：{_noise_description(config)}")
-        print(f"      模型选择：{_selection_description(config)}")
-    print("\nCheckpoint / resume:")
-    print("  runner 保存 resolved_config 和阶段状态；支持时用 lnl resume <run_dir> 恢复。")
-    print("\n已知差异与限制:")
-    for limitation in paper.limitations:
-        print(f"  - {limitation}")
-    print("\n核心实现路径:")
-    for path in paper.implementation_paths:
-        print(f"  - {path}")
-    print("\n推荐命令:")
-    if paper.configs:
-        recommended = next(
-            (item for item in paper.configs if item.profile == "smoke"),
-            paper.configs[0],
-        )
-        print(f"  lnl validate --recipe {recommended.recipe_id}")
-        print(f"  lnl run --recipe {recommended.recipe_id} --dry-run")
-        print(f"  lnl run --recipe {recommended.recipe_id}")
-    else:
-        print("  当前只有组件实现，没有内置可直接运行 recipe。")
-    return 0
+    from lnl_toolbox.cli.paper_editor import list_papers
+    return list_papers(args.format)
 
 
 def _paper_config(args: argparse.Namespace) -> int:
@@ -1130,131 +1028,12 @@ def _paper_config(args: argparse.Namespace) -> int:
     return 0
 
 
-def _print_composition_summary(summary) -> None:
-    print(f"  执行器：{summary.runner}")
-    print(f"  Loss：{summary.loss}")
-    print(f"  Selector：{summary.selector}")
-    print(f"  参数更新：{summary.parameter_update}")
-    features = "、".join(summary.pipeline_features) or "无"
-    print(f"  Pipeline 扩展：{features}")
 
 
-def _compose_list(args: argparse.Namespace) -> int:
-    recipes = tuple(item for item in discover_recipes() if item.runner == args.runner)
-    if args.runner != "supervised":
-        print(f"{args.runner} 是专用生命周期，不支持自由替换通用组件。")
-        print("请从以下完整 recipe 开始，并用 validate / dry-run 检查：")
-        if not recipes:
-            print("  当前没有内置 recipe。")
-        for index, recipe in enumerate(recipes, start=1):
-            print(f"  {index}. {recipe.id}")
-            print(f"     lnl run --recipe {recipe.id} --dry-run")
-        return 0
-
-    from lnl_toolbox.plugins.builtin import create_builtin_catalog
-
-    catalog = create_builtin_catalog()
-    names = lambda kind: "、".join(item.name for item in catalog.find(kind=kind))
-    print("supervised runner 的可组合结构")
-    print("  数据/噪声 → 模型 → Loss → Selector → Pipeline → 参数更新")
-    print()
-    print("可替换槽位：")
-    print(f"  Loss（选择一个）：{names('loss')}")
-    print(f"  Selector（选择一个）：{names('batch_selector')}")
-    print(f"  参数更新（选择一个）：{names('parameter_update_policy')}")
-    print()
-    print("Pipeline 规则：")
-    print("  1. transition_estimator 必须与 risk_corrector 配对。")
-    print("  2. weight_provider 可以与普通 Loss/Selector 共同产生样本贡献。")
-    print("  3. objective_consumer 独占训练目标，要求 all selector 和 standard 更新。")
-    print("  4. statistic_estimator 必须把产物交给 objective_consumer。")
-    print("  5. regularizer 虽已注册，但尚未接入 supervised runner。")
-    print()
-    print("建议作为 base 的完整模板：")
-    preferred = (
-        "cifar10-symmetric-ce-smoke",
-        "cifar10-foundation-smoke",
-        "mentornet-dd-cifar100-symmetric04-smoke",
-        "dss-cifar10-symmetric05-smoke",
-    )
-    known = {item.id for item in recipes}
-    for recipe_id in preferred:
-        if recipe_id in known:
-            print(f"  - {recipe_id}")
-    print()
-    print("生成示例：")
-    print("  lnl compose create --base cifar10-symmetric-ce-smoke `")
-    print("    --loss gce --selector small_loss --keep-rate 0.6 `")
-    print("    --output configs/experiment/my_gce_small_loss.yaml")
-    return 0
 
 
-def _compose_check(args: argparse.Namespace) -> int:
-    root = args.project_root.expanduser().resolve() if args.project_root else None
-    path = args.config.expanduser().resolve()
-    project = find_project_root(path, root)
-    config = resolve_config_paths(load_yaml(path), project)
-    summary = validate_composition(config)
-    print(f"组合有效：{path}")
-    _print_composition_summary(summary)
-    print("下一步：")
-    print(f"  lnl run --config \"{path}\" --dry-run")
-    return 0
 
 
-def _compose_create(args: argparse.Namespace) -> int:
-    root = args.project_root.expanduser().resolve() if args.project_root else None
-    recipe = recipe_by_id(args.base, root)
-    override_values = (
-        args.loss,
-        args.selector,
-        args.keep_rate,
-        args.parameter_update,
-        args.milestones,
-        args.gamma,
-        args.cdr_noise_rate,
-        args.l1_decay,
-    )
-    has_overrides = any(value is not None for value in override_values)
-    if recipe.runner != "supervised" and has_overrides:
-        raise ValueError(
-            f"base recipe uses dedicated runner {recipe.runner!r}; "
-            "paper lifecycle recipes can only be copied without component overrides"
-        )
-    source = load_yaml(recipe.config_path)
-    project = find_project_root(recipe.config_path, root)
-    if recipe.runner == "supervised":
-        composed = apply_overrides(
-            source,
-            loss=args.loss,
-            selector=args.selector,
-            keep_rate=args.keep_rate,
-            parameter_update=args.parameter_update,
-            milestones=args.milestones,
-            gamma=args.gamma,
-            cdr_noise_rate=args.cdr_noise_rate,
-            l1_decay=args.l1_decay,
-        )
-        summary = validate_composition(resolve_config_paths(composed, project))
-    else:
-        composed = source
-        validate_config(resolve_config_paths(composed, project))
-        summary = None
-    destination = write_composed_config(composed, args.output)
-    print(f"已生成新配置：{destination}")
-    print(f"基础 recipe：{recipe.id}")
-    if summary is not None:
-        _print_composition_summary(summary)
-    else:
-        print(f"论文生命周期：{recipe.runner}（未修改组件）")
-    print("原 recipe 未修改；已有目标文件不会被覆盖。")
-    print("下一步：")
-    if summary is not None:
-        print(f"  lnl compose check --config \"{destination}\"")
-    else:
-        print(f"  lnl validate --config \"{destination}\"")
-    print(f"  lnl run --config \"{destination}\" --dry-run")
-    return 0
 
 
 def _print_local_dataset(record) -> None:
@@ -1328,23 +1107,19 @@ def _print_dataset_table(reports) -> None:
 
 
 def _data_command(args: argparse.Namespace) -> int:
+    global DEFAULT_DATA_SERVICE
+    if DEFAULT_DATA_SERVICE is None:
+        from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE as DEFAULT_DATA_SERVICE
     service = DEFAULT_DATA_SERVICE
     if args.data_command == "list":
-        reports = service.list_datasets()
+        reports = service.list_datasets() if args.name is None else (service.status(args.name),)
         if args.format == "json":
             print(json.dumps([item.to_dict() for item in reports], ensure_ascii=False))
         else:
-            _print_dataset_table(reports)
-        return 0
-    if args.data_command == "status":
-        if args.format == "json":
-            reports = service.status() if args.name is None else [service.status(args.name)]
-            print(json.dumps([item.to_dict() for item in reports], ensure_ascii=False))
-            return 0
-        if args.name is None:
-            _print_dataset_table(service.status())
-        else:
-            _print_dataset_report(service.status(args.name))
+            if args.name is None:
+                _print_dataset_table(reports)
+            else:
+                _print_dataset_report(reports[0])
         return 0
     if args.data_command == "path":
         path = service.path(args.name)
@@ -1450,6 +1225,9 @@ def _data_command(args: argparse.Namespace) -> int:
 
 
 def _methods_command(args: argparse.Namespace) -> int:
+    global ExperimentService
+    if ExperimentService is None:
+        from lnl_toolbox.training.service import ExperimentService as ExperimentService
     if args.methods_command != "compatible":
         raise ValueError(f"unknown methods command: {args.methods_command}")
     results = ExperimentService().list_compatible_methods(
@@ -1582,10 +1360,18 @@ def _ports_command(args: argparse.Namespace) -> int:
     return cleanup_ports(args.ports, dry_run=args.dry_run)
 
 
-def main(argv: list[str] | None = None) -> int:
+def _dispatch(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.command == "language":
+            from lnl_toolbox.cli.i18n import save_language
+            save_language(args.value)
+            print(text("语言偏好已保存。", "Language preference saved."))
+            return 0
+        if args.command == "show" or (args.command == "papers" and args.paper_command == "show"):
+            from lnl_toolbox.cli.paper_editor import resolve_paper, show_paper
+            return show_paper(resolve_paper(args.paper_id), interactive=not args.no_interactive)
         if args.command == "doctor":
             return _doctor(args)
         if args.command == "list":
@@ -1612,20 +1398,12 @@ def main(argv: list[str] | None = None) -> int:
             return _compare(args)
         if args.command == "report":
             return _report(args)
-        if args.command == "compose":
-            if args.compose_command == "list":
-                return _compose_list(args)
-            if args.compose_command == "check":
-                return _compose_check(args)
-            return _compose_create(args)
         if args.command == "papers":
             if args.paper_command == "list":
                 return _paper_list(args)
-            if args.paper_command == "show":
-                return _paper_show(paper_by_id(args.paper_id))
             return _paper_config(args)
     except (OSError, RuntimeError, TypeError, ValueError, KeyError) as exc:
-        print(f"错误: {exc}", file=sys.stderr)
+        print(text("错误", "Error") + ": " + text(str(exc)), file=sys.stderr)
         try:
             _print_failure_guidance(exc)
         except Exception:
@@ -1634,6 +1412,29 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     parser.error("unknown command")
     return 2
+
+
+def main(argv: list[str] | None = None) -> int:
+    from lnl_toolbox.cli.i18n import reset_language, select_language
+    values = list(sys.argv[1:] if argv is None else argv)
+    values = [part for value in values for part in (["--lang", value.split("=", 1)[1]] if value.startswith("--lang=") else [value])]
+    # Accept --lang before or after subcommands without altering Web argv.
+    explicit = None
+    while "--lang" in values:
+        index = values.index("--lang")
+        if index + 1 >= len(values) or values[index + 1] not in {"zh", "en"}:
+            build_parser().error("--lang requires zh or en")
+        explicit = values[index + 1]
+        del values[index:index + 2]
+    try:
+        token = select_language(explicit)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    try:
+        return _dispatch(values)
+    finally:
+        reset_language(token)
 
 
 if __name__ == "__main__":

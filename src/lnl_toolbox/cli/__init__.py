@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import sys
 from typing import Any, TypeVar
+from .i18n import text
 
 
 T = TypeVar("T")
@@ -54,7 +55,7 @@ class PromptSession:
             if not value and default is not None:
                 value = default
             if not value and required:
-                self.write("此项不能为空。")
+                self.write(text("此项不能为空。", "A value is required."))
                 continue
             if validator is not None and value and not validator(value):
                 self.write(error)
@@ -78,7 +79,7 @@ class PromptSession:
             1,
         )
         while True:
-            raw = self._read(f"请选择 [默认 {default_index}]: ")
+            raw = self._read(text(f"请选择 [默认 {default_index}]: ", f"Choose [default {default_index}]: "))
             if not raw:
                 return choices[default_index - 1][1]
             if raw.isdigit() and 1 <= int(raw) <= len(choices):
@@ -87,7 +88,7 @@ class PromptSession:
             for label, value in choices:
                 if lowered in {label.casefold(), str(value).casefold()}:
                     return value
-            self.write("选项无效，请输入编号或选项名称。")
+            self.write(text("选项无效，请输入编号或选项名称。", "Enter an option number or name."))
 
     def integer(
         self,
@@ -166,13 +167,13 @@ class PromptSession:
                 return None
             value = Path(raw).expanduser()
             if must_exist and not value.exists():
-                self.write(f"路径不存在：{value}")
+                self.write(text(f"路径不存在：{value}", f"Path does not exist: {value}"))
                 continue
             if file_only and value.exists() and not value.is_file():
-                self.write(f"需要文件路径：{value}")
+                self.write(text(f"需要文件路径：{value}", f"Expected a file path: {value}"))
                 continue
             if directory_only and value.exists() and not value.is_dir():
-                self.write(f"需要目录路径：{value}")
+                self.write(text(f"需要目录路径：{value}", f"Expected a directory path: {value}"))
                 continue
             return value
 
@@ -186,7 +187,7 @@ class PromptSession:
                 return True
             if raw in {"n", "no", "0", "否"}:
                 return False
-            self.write("请输入 y 或 n。")
+            self.write(text("请输入 y 或 n。", "Enter y or n."))
 
 
 @dataclass(slots=True)

@@ -53,7 +53,7 @@ data/cifar100/train, test, meta
 然后执行一次完整但不训练的预检：
 
 ```powershell
-lnl run cifar10-symmetric-ce-smoke --dry-run
+lnl validate cifar10-symmetric-ce-smoke
 ```
 
 真实 UCI workflow 的数据准备命令见对应 reproduction 文档；数据和训练产物都不应提交到 Git。
@@ -65,7 +65,7 @@ lnl run cifar10-symmetric-ce-smoke --dry-run
 ```powershell
 lnl data register lab-cifar10 --adapter cifar10 --root F:/datasets/cifar10
 lnl data list
-lnl data status lab-cifar10
+lnl data list lab-cifar10
 lnl data path lab-cifar10
 lnl data inspect lab-cifar10
 lnl data verify lab-cifar10 --recipe cifar10-clean-smoke
@@ -85,7 +85,7 @@ adapter 成功加载 train/test 后才标记 `ready`。`verify` 会先执行同�
 ```powershell
 lnl doctor
 lnl list experiments --profile smoke
-lnl run cifar10-symmetric-ce-smoke --dry-run
+lnl validate cifar10-symmetric-ce-smoke
 lnl run cifar10-symmetric-ce-smoke
 ```
 
@@ -146,12 +146,11 @@ lnl list experiments --profile smoke --format tsv
 ### 第三步：预检实际运行内容
 
 ```powershell
-lnl run cifar10-symmetric-ce-smoke --dry-run
+lnl validate cifar10-symmetric-ce-smoke
 ```
 
 意义：解析并验证配置、runner、数据路径、外部 artifact 和必要依赖，然后显示
-运行计划。`--dry-run` 不启动训练，也不创建 checkpoint。数据尚未准备、只想检查
-配置结构时，可以显式使用 `--no-check-data`；此时不能据此判断正式训练已经就绪。
+运行计划。`validate` 不启动训练、不创建 checkpoint，也不下载外部文件；缺少数据或依赖时会返回错误。
 
 请重点确认：
 
@@ -183,9 +182,9 @@ lnl papers list
 查看某篇论文在 toolbox 中的详细实现：
 
 ```powershell
-lnl papers show dual-t
-lnl papers show jocor
-lnl papers show fine
+lnl show dual-t
+lnl show jocor
+lnl show fine
 ```
 
 意义：了解论文核心机制、toolbox 生命周期、论文概念与 YAML 字段的对应关系、标签使用边界、已知实现差异和推荐命令。
@@ -215,7 +214,7 @@ lnl papers config dual-t --profile smoke --variant cifar10-sym20 --path-only
 复制一份现有配置后，可以直接把 YAML 路径作为 source：
 
 ```powershell
-lnl run configs/experiment/my_experiment.yaml --dry-run
+lnl validate configs/experiment/my_experiment.yaml
 lnl run configs/experiment/my_experiment.yaml
 ```
 
@@ -229,7 +228,7 @@ lnl run cifar10-symmetric-ce-smoke `
 ```
 
 `--set` 只能覆盖已经存在的 dotted path，路径拼错会在训练前失败。临时实验使用
-`--set`；需要长期保存、评审或复用的配置应创建 YAML 或使用 `lnl compose create`。
+`--set`；需要长期保存、评审或复用的配置应使用 `lnl show <paper>` 编辑并另存 YAML。
 
 每份可运行配置都应明确声明：
 
@@ -355,38 +354,30 @@ lnl list components --kind batch_selector
 
 意义：按类型查看可组合的 loss、selector、pipeline 和 parameter-update 组件。默认展示每个组件的能力与论文关联；脚本处理时可追加 `--format tsv`。组件不一定等于完整论文方法；完整论文入口应优先从 `lnl papers list` 或 `lnl list experiments` 获取。
 
-## 9. 组合组件并生成配置
-
-先查看指定 runner 的组合边界：
+## 9. 交互式论文参数编辑
 
 ```powershell
-lnl compose list --runner supervised
-lnl compose list --runner dual_t
+lnl papers list
+lnl show gce
+lnl show gce --no-interactive
+lnl language en
+lnl --lang zh show gce
 ```
 
-`supervised` 会列出可以替换的 loss、selector、parameter update 和 pipeline 规则；Dual-T、FINE、Co-teaching 等专用 runner 只展示完整 recipe，不允许被错误拆装。
+`show` 在终端中显示默认参数和菜单，可展开高级参数、选择已登记的数据集、编辑学习率阶段表、另存 YAML、完整验证和确认后启动训练。参数说明、枚举选项和修改权限与 Web 共用；内部随机种子和禁止修改的参数不可编辑。
 
-从内置 smoke recipe 生成一份新配置：
+仅在内存中编辑，不覆盖论文内置配置。保存时建议使用 `configs/experiment/gce-custom.yaml`；已有文件需要确认才覆盖。空操作默认退出；启动前先验证，确认后才训练。
+
+输出重定向或传入 `--no-interactive` 时仅打印摘要，不等待终端输入。旧的 `lnl show gce` 映射到同一入口。
+
+语言优先级为 `--lang`、`LNL_LANG`、用户保存偏好、中文默认。`language` 将偏好保存到用户配置目录的 `lnl-toolbox/cli.json`，不会修改实验配置。参数键、枚举值和 JSON 字段保持不变。
 
 ```powershell
-lnl compose create `
-  --base cifar10-symmetric-ce-smoke `
-  --loss gce `
-  --selector small_loss `
-  --keep-rate 0.6 `
-  --output configs/experiment/my_gce_small_loss.yaml
+lnl validate configs/experiment/gce-custom.yaml
+lnl run configs/experiment/gce-custom.yaml
 ```
 
-意义：保留 base recipe 的数据、模型和训练规模，把损失改为 GCE，并让每个 batch 只使用损失较小的 60% 样本。生成前会检查组件名称、runner、构造参数和跨槽位冲突；已有输出文件不会被覆盖，原 recipe 也不会被修改。
-
-检查并预览生成结果：
-
-```powershell
-lnl compose check --config configs/experiment/my_gce_small_loss.yaml
-lnl run --config configs/experiment/my_gce_small_loss.yaml --dry-run
-```
-
-自定义组合只代表工程实验，不自动对应论文方法或论文复现结果。
+`validate` 默认检查参数、数据、方法条件和外部依赖并显示计划；不训练、不下载文件或生成预训练权重。缺少条件会返回非零退出码。Web 所需的旧预演参数仍保留兼容，但不作为公开推荐入口。
 
 ## 10. 开发与验证
 

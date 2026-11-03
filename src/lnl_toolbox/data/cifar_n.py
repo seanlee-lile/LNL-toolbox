@@ -13,6 +13,17 @@ from .contracts import DataSpec, RawDatasetSplit, UnsupportedDatasetSplitError
 from .registry import DatasetRegistry
 
 
+def _reconstruct(*args: Any) -> Any:
+    """Resolve the NumPy 1 constructor stored in official CIFAR-N files."""
+    return np.core.multiarray._reconstruct(*args)
+
+
+# PyTorch 2.5 identifies allowlisted functions by module and name. NumPy 2
+# moved the real constructor to numpy._core; retain the release's old path
+# without modifying NumPy globals or disabling weights-only loading.
+_reconstruct.__module__ = "numpy.core.multiarray"
+
+
 def _load_mapping(path: Path) -> Mapping[str, Any]:
     if not path.is_file():
         raise FileNotFoundError(f"CIFAR-N annotation file does not exist: {path}")
@@ -21,6 +32,7 @@ def _load_mapping(path: Path) -> Mapping[str, Any]:
     # required by that release instead of falling back to arbitrary pickle.
     safe_types: list[Any] = [
         np.core.multiarray._reconstruct,
+        _reconstruct,
         np.ndarray,
         np.dtype,
     ]

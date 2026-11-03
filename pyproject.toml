@@ -38,7 +38,7 @@ lnl-train = "lnl_toolbox.cli.train:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-lnl_toolbox = ["paper_catalog.json"]
+lnl_toolbox = ["paper_catalog.json", "parameter_metadata.yaml"]
 "lnl_toolbox.cli" = ["data/recipe_catalog.json"]
 "lnl_toolbox.scratch" = ["recipes/**/*.yaml", "formula/composites/*.yaml", "web/*.html", "web/*.js", "web/*.css"]
 

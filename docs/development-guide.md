@@ -23,7 +23,7 @@ paper catalog 和发行包配置，最后验证选择、配置、执行与恢复
 论文资料可以先登记而不提供配置；此时 Web 只展示资料，不提供训练入口。
 
 CLI 的 `validate` 默认做静态检查，`--check-data` 增加数据与兼容性检查；
-`run --dry-run` 检查并展示计划，`run` 启动训练，`resume` 读取已有运行目录。
+`validate` 检查参数、数据、依赖并展示计划，`run` 启动训练，`resume` 读取已有运行目录。Web 使用的旧预演参数保留内部兼容。
 `source`、`--recipe`、`--config` 三选一；`--data` 使用本机登记的数据集别名。
 失败提示复用后端已有的错误和前置条件信息，不额外执行一次校验。
 
@@ -112,7 +112,7 @@ data/
 `data/` 已加入 `.gitignore`。
 
 下载 CIFAR 官方 Python 版本后，只复制解压目录中的数据文件，不要提交压缩包或数据集。
-统一 CLI 不会在训练时自动下载数据；普通用户使用 `lnl run <source> --dry-run`
+统一 CLI 不会在训练时自动下载数据；普通用户使用 `lnl validate <source>`
 执行与正式训练一致的数据 preflight。`lnl validate --check-data` 主要用于配置开发、
 CI 和高级排错。
 
@@ -215,7 +215,7 @@ preflight、标准运行元数据和 `final_metrics.json` Result Contract。新�
 常用命令：
 
 ```powershell
-lnl run cifar10-symmetric-ce-smoke --set trainer.epochs=2 --dry-run
+lnl validate cifar10-symmetric-ce-smoke --set trainer.epochs=2
 lnl run configs/experiment/cifar10_symmetric_ce_smoke.yaml
 lnl sweep cifar10-symmetric-ce-smoke --seeds 1 2 3
 lnl sweep cifar10-clean-smoke `
@@ -233,8 +233,7 @@ lnl report artifacts/sweeps/example
 配置读取会拒绝未知顶层字段和旧式 `noise.type`、顶层 `epochs/batch_size/learning_rate`。
 原始迁移前配置位于 `archive/configs-legacy-2026-08-21/`，仅供恢复和比对。
 
-`--dry-run` 默认验证数据与外部 artifact，只跳过真正训练和 checkpoint 写入；仅当
-数据尚未准备时才使用 `--no-check-data`。Sweep matrix 必须调用
+`validate` 默认验证数据与外部 artifact，只跳过真正训练和 checkpoint 写入；不自动下载或生成外部产物。Sweep matrix 必须调用
 `core.config_overrides` 的 dotted-path override，不得自行修改嵌套配置。每个任务由
 seed、resolved override 和 config hash 共同标识。
 

@@ -414,7 +414,7 @@
             <summary>快捷命令</summary>
             <div id="commands" class="commands"></div>
           </details>
-          <div class="note">训练按钮默认面向短测试。正式论文实验请使用对应 reproduction YAML 和论文规定轮次。</div>
+          <div class="note">开始训练将执行运行计划中确认的参数与训练预算。</div>
           <div id="status" class="status">尚未执行命令</div>
           <section id="training-output" class="hidden" aria-live="polite">
             <div class="section-title">训练详细输出</div>
@@ -475,7 +475,6 @@
       "resume": "从 checkpoint 继续训练。",
       "report": "汇总实验配置与指标。",
       "compare": "比较训练曲线与实验结果。",
-      "compose": "从配置生成项目 YAML。",
       "papers": "浏览工具箱内置的论文方法目录。",
       "paper-config": "查看论文正式配置与映射。"
     };
@@ -882,129 +881,22 @@
       return '<div class="guide-card"><strong>数据集约束</strong><p>' + escapeHtml(state.yamlDataset + " · " + compatibilityStatusLabel(current?.status)) + '</p><p>' + escapeHtml(compatibilitySummary(current)) + '</p><p class="helper">数据别名作为运行时覆盖传给 CLI，不改写论文配置中锁定的数据/噪声协议；因此这是数据迁移训练，不再等同于原论文数据组合。</p></div>';
     }
     function renderYaml() {
-      const paperOptions = yamlPaperOptions();
+      state.yamlMode = "paper";
       parameterPanel.innerHTML = configContextHtml() + commonFormStart() +
-        field("创建方式", "yaml-mode", selectControl("__ID__", [
-          {value:"paper", label:"论文正式配置"},
-          {value:"supervised", label:"通用监督组合"}
-        ]), true) +
-        field("目标已登记数据集（可选）", "yaml-dataset", selectControl("__ID__", registeredDatasetOptions(true)), true) +
-        field("论文方法", "yaml-paper", selectControl("__ID__", paperOptions), true) +
-        field("基础配方", "yaml-base", recipesSelect("__ID__", "cifar10-symmetric-ce-smoke", "supervised"), true) +
-        field("损失函数", "yaml-loss", selectControl("__ID__", ["ce", "gce", "nce", "mae", "rce", "apl"])) +
-        field("样本选择器", "yaml-selector", selectControl("__ID__", ["all", "small_loss"])) +
-        field("保留率", "yaml-keep-rate", inputControl("__ID__", "0.8", "number", "step=0.01 min=0 max=1")) +
-        field("参数更新策略", "yaml-update", selectControl("__ID__", [
-          {value:"standard", label:"standard"}, {value:"step_milestone", label:"step_milestone"}, {value:"cdr", label:"cdr"}
-        ])) +
-        field("milestones", "yaml-milestones", inputControl("__ID__", "60 80")) +
-        field("gamma", "yaml-gamma", inputControl("__ID__", "0.1", "number", "step=0.01")) +
-        field("CDR noise rate", "yaml-cdr-noise-rate", inputControl("__ID__", "0.2", "number", "step=0.01 min=0 max=1")) +
-        field("L1 decay", "yaml-l1-decay", inputControl("__ID__", "0.0", "number", "step=0.0001 min=0")) +
-        commonFormEnd() + yamlCompatibilityHtml() + '<p id="yaml-help" class="helper">每篇论文只显示一份默认正式训练配置；唯一保存路径在“显示/编辑 YAML”中设置，不再重复显示第二个路径框。</p>';
-      document.getElementById("yaml-mode").value = state.yamlMode;
-      document.getElementById("yaml-dataset").value = state.yamlDataset;
-      const paperNode = document.getElementById("yaml-paper");
-      if (!state.yamlPaper) state.yamlPaper = paperNode.options[0]?.value || "";
-      if ([...paperNode.options].some(function (option) { return option.value === state.yamlPaper && !option.disabled; })) paperNode.value = state.yamlPaper;
-      else state.yamlPaper = paperNode.value;
-      const baseNode = document.getElementById("yaml-base");
-      if ([...baseNode.options].some(function (option) { return option.value === state.yamlBase; })) baseNode.value = state.yamlBase;
-      document.getElementById("yaml-loss").value = state.yamlLoss;
-      document.getElementById("yaml-selector").value = state.yamlSelector;
-      document.getElementById("yaml-keep-rate").value = state.yamlKeepRate;
-      document.getElementById("yaml-update").value = state.yamlUpdate;
-      document.getElementById("yaml-milestones").value = state.yamlMilestones;
-      document.getElementById("yaml-gamma").value = state.yamlGamma;
-      document.getElementById("yaml-cdr-noise-rate").value = state.yamlCdrNoiseRate;
-      document.getElementById("yaml-l1-decay").value = state.yamlL1Decay;
-      document.getElementById("yaml-dataset").addEventListener("change", function () {
-        captureYamlBuilderValues(); state.yamlRecipeCompatibility = null; state.yamlRecipeCompatibilityAlias = ""; loadYamlRecipeCompatibility(state.yamlDataset);
+        field("论文方法", "yaml-paper", selectControl("__ID__", yamlPaperOptions()), true) +
+        commonFormEnd() + '<p class="helper">使用“显示/编辑 YAML”编辑并另存配置；数据和运行参数可在快速开始中设置。</p>';
+      const node = document.getElementById("yaml-paper");
+      if ([...node.options].some(function (option) { return option.value === state.yamlPaper; })) node.value = state.yamlPaper;
+      else state.yamlPaper = node.value;
+      node.addEventListener("change", function () {
+        state.yamlPaper = node.value;
+        setActiveConfig("recipe", state.yamlPaper);
+        state.yamlDestinationPath = defaultCustomYamlPath(state.yamlPaper);
+        updateModulePreview();
       });
-      paperNode.addEventListener("change", function () {
-        captureYamlBuilderValues(); setActiveConfig("recipe", state.yamlPaper); state.yamlSuggestedPath = defaultCustomYamlPath(state.yamlPaper); state.yamlDestinationPath = state.yamlSuggestedPath; updateModulePreview();
-      });
-      baseNode.addEventListener("change", function () {
-        captureYamlBuilderValues(); setActiveConfig("recipe", state.yamlBase); state.yamlSuggestedPath = defaultCustomYamlPath(state.yamlBase); state.yamlDestinationPath = state.yamlSuggestedPath; updateModulePreview();
-      });
-      setActiveConfig("recipe", currentYamlBuilderRecipe());
-      if (!state.yamlDestinationPath) state.yamlDestinationPath = defaultCustomYamlPath(currentYamlBuilderRecipe());
-      updateYamlFields();
-      // A dataset can be restored programmatically (Quick Start, opening a saved
-      // experiment, or a page refresh), so no native `change` event is emitted.
-      // Trigger the same compatibility check whenever the selected alias has not
-      // yet been checked for the current YAML builder state.
-      if (state.yamlDataset && state.yamlRecipeCompatibilityAlias !== state.yamlDataset && !state.yamlCompatibilityLoading) {
-        const alias = state.yamlDataset;
-        setTimeout(function () {
-          if (state.module === "yaml" && state.yamlDataset === alias && state.yamlRecipeCompatibilityAlias !== alias && !state.yamlCompatibilityLoading) {
-            loadYamlRecipeCompatibility(alias);
-          }
-        }, 0);
-      }
+      setActiveConfig("recipe", state.yamlPaper);
+      updateYamlEditorButton();
     }
-    const DATASET_GUIDES = {
-      cifar10: {
-        title: "CIFAR-10",
-        root: "将官方压缩包完整解压；根目录直接包含 data_batch_1 到 data_batch_5、test_batch、batches.meta。",
-        action: "选择适配器 cifar10，数据根目录填写包含这些文件的文件夹。无需填写单文件路径或人工标签文件。",
-        note: "不要选择压缩包文件本身，也不要把路径填到上一级目录。"
-      },
-      cifar100: {
-        title: "CIFAR-100",
-        root: "将官方压缩包完整解压；根目录直接包含 train、test、meta。",
-        action: "选择适配器 cifar100，数据根目录填写包含 train/test/meta 的文件夹。",
-        note: "train 和 test 是官方 CIFAR-100 二进制文件，不是普通图片目录。"
-      },
-      cifar10_airplane_automobile: {
-        title: "CIFAR-10 airplane/automobile 二分类视图",
-        root: "准备已解压的 CIFAR-10 官方目录，结构与 CIFAR-10 相同。",
-        action: "选择该适配器，数据根目录填写 CIFAR-10 根目录；工具箱会自动保留 airplane 和 automobile 两类。",
-        note: "不需要另外复制或筛选图片。"
-      },
-      cifar10n: {
-        title: "CIFAR-10N",
-        root: "准备已解压的 CIFAR-10 根目录，并另外保存官方 CIFAR-10_human.pt。",
-        action: "根目录填写 CIFAR-10 文件夹；人工标签文件填写 CIFAR-10_human.pt 的完整路径。",
-        note: "基础 CIFAR 图像和官方人工标签文件都必须存在。"
-      },
-      cifar100n: {
-        title: "CIFAR-100N",
-        root: "准备已解压的 CIFAR-100 根目录，并另外保存官方 CIFAR-100_human.pt。",
-        action: "根目录填写 CIFAR-100 文件夹；人工标签文件填写 CIFAR-100_human.pt 的完整路径。",
-        note: "必须使用官方标签文件，不能用自定义 CSV 替代。"
-      },
-      mnist: {
-        title: "MNIST",
-        root: "准备官方 IDX/IDX.GZ 文件：train-images、train-labels、t10k-images、t10k-labels。",
-        action: "选择适配器 mnist，根目录填写这些文件所在目录，或包含 raw/MNIST/raw 的目录。",
-        note: "工具箱不联网下载数据。"
-      },
-      fashion_mnist: {
-        title: "Fashion-MNIST",
-        root: "准备官方 IDX/IDX.GZ 文件：train-images、train-labels、t10k-images、t10k-labels。",
-        action: "选择适配器 fashion_mnist，根目录填写文件所在目录。",
-        note: "必须是 Fashion-MNIST 的 IDX 文件，不是普通图片目录。"
-      },
-      clothing1m: {
-        title: "Clothing1M",
-        root: "根目录需要包含 noisy_train_key_list.txt、clean_val_key_list.txt、clean_test_key_list.txt、标签映射文件和图片。",
-        action: "选择适配器 clothing1m，根目录填写官方数据目录；相对路径以该目录为基准。",
-        note: "先执行 inspect，再执行 verify；不会自动下载或复制图片。"
-      },
-      animal10n: {
-        title: "Animal-10N",
-        root: "支持官方 data_batch_*.bin/test_batch.bin，或包含 training/testing（也可为 train/test）图片目录的结构。",
-        action: "选择适配器 animal10n，数据根目录填写包含上述文件或子目录的文件夹。",
-        note: "不要把 CIFAR-10 路径与 animal10n 适配器组合。"
-      },
-      uci_binary: {
-        title: "UCI 二分类表格",
-        root: "准备一个 CSV 或空白分隔文件；每行一个样本，并包含特征和二分类目标列。",
-        action: "选择适配器 uci_binary；单文件路径填写数据文件，数据根目录可留空。",
-        note: "不要把文件路径填到根目录字段。"
-      }
-    };
 
     function datasetGuideHtml(adapter) {
       const guide = DATASET_GUIDES[adapter] || {
@@ -2426,35 +2318,6 @@
       if (step.id === "resume" && state.tutorialResume?.resumable) return "lnl resume " + output + " --checkpoint last";
       return "";
     }
-    function buildYamlCommand() {
-      const paperMode = selectValue("yaml-mode", "paper") === "paper";
-      const base = paperMode
-        ? selectValue("yaml-paper", "")
-        : selectValue("yaml-base", "cifar10-symmetric-ce-smoke");
-      if (!base) return "";
-      const compatibility = state.yamlDataset ? recipeCompatibility(base) : null;
-      if (state.yamlDataset && compatibility?.status !== "compatible") return "";
-      const destination = state.yamlDestinationPath || defaultCustomYamlPath(base);
-      if (paperMode) {
-        return "lnl compose create --base " + base +
-          " --output " + quoteArg(destination);
-      }
-      const selector = selectValue("yaml-selector", "all");
-      const update = selectValue("yaml-update", "standard");
-      let command = "lnl compose create --base " + base +
-        " --output " + quoteArg(destination) +
-        " --loss " + selectValue("yaml-loss", "ce") + " --selector " + selector;
-      if (selector === "small_loss") command += " --keep-rate " + selectValue("yaml-keep-rate", "0.8");
-      command += " --parameter-update " + update;
-      if (update === "step_milestone") {
-        command += " --milestones " + selectValue("yaml-milestones", "60 80") +
-          " --gamma " + selectValue("yaml-gamma", "0.1");
-      } else if (update === "cdr") {
-        command += " --cdr-noise-rate " + selectValue("yaml-cdr-noise-rate", "0.2") +
-          " --l1-decay " + selectValue("yaml-l1-decay", "0.0");
-      }
-      return command;
-    }
     function datasetRegistrationSources(adapter) {
       const sources = {root:"", path:"", labels:""};
       if (adapter === "uci_binary") {
@@ -2476,14 +2339,14 @@
     function buildModuleCommand() {
       if (state.module === "quickstart") return "";
       if (state.module === "beginner") return buildBeginnerCommand();
-      if (state.module === "yaml") return buildYamlCommand();
+      if (state.module === "yaml") return "";
       if (state.module === "run") return buildRunWorkspaceCommand();
       if (state.module === "data") {
         const action = selectValue("data-action", state.dataAction === "remove" ? "remove" : "list");
         const alias = selectValue("data-alias", state.dataAlias);
         const recipe = selectValue("data-recipe", "cifar10-clean-smoke");
         if (action === "list") return "";
-        if (action === "status") return "lnl data status" + (alias ? " " + quoteArg(alias) : "");
+        if (action === "status") return "lnl data list" + (alias ? " " + quoteArg(alias) : "");
         if (action === "path") return alias ? "lnl data path " + quoteArg(alias) : "";
         if (action === "register") {
           const adapter = selectValue("data-adapter", "cifar10");
@@ -2789,14 +2652,6 @@
       runButton.disabled = true; outputNode.textContent = "正在执行，请稍候...";
       const endpoint = state.request.dataset ? "/api/datasets" : "/api/run";
       const body = state.request.dataset || state.request;
-      if (
-        state.module === "yaml" &&
-        !state.request.dataset &&
-        typeof body.command === "string" &&
-        body.command.startsWith("lnl compose create ")
-      ) {
-        state.pendingYamlPath = state.yamlDestinationPath || defaultCustomYamlPath(currentYamlBuilderRecipe());
-      }
       try {
         const response = await fetch(endpoint, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
         let result;
