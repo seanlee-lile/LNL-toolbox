@@ -191,5 +191,56 @@ class StandardDatasetTests(unittest.TestCase):
             _unpickle(path)
 
 
+class CIFAR10NWorstBinaryViewTest(unittest.TestCase):
+    def test_full_mapping_keeps_indices_and_omits_train_clean_targets(self):
+        import numpy as np
+        from unittest.mock import patch
+        from lnl_toolbox.data.cifar_n import CifarNAdapter, CifarNWorstBinaryAdapter
+        from lnl_toolbox.data.contracts import RawDatasetSplit, DataSpec
+        labels = np.arange(10, dtype=np.int64)
+        indices = np.arange(10, dtype=np.int64) + 100
+        raw = RawDatasetSplit(np.zeros((10,32,32,3), dtype=np.uint8), labels, indices,
+                              'cifar10n', 'train', 10, clean_targets=labels[::-1])
+        spec = DataSpec.from_mapping({'name':'cifar10n_vehicle_animal','noise_variant':'worse_label'})
+        with patch.object(CifarNAdapter, 'load', return_value=raw):
+            result = CifarNWorstBinaryAdapter().load(spec, 'train', seed=17)
+        np.testing.assert_array_equal(result.observed_targets, [0,0,1,1,1,1,1,1,0,0])
+        np.testing.assert_array_equal(result.global_indices, indices)
+        self.assertEqual(len(result), len(raw))
+        self.assertIsNone(result.clean_targets)
+        self.assertEqual(result.num_classes, 2)
+        self.assertIs(result.inputs, raw.inputs)
+
+    def test_clean_train_labels_do_not_change_observations(self):
+        import numpy as np
+        from unittest.mock import patch
+        from lnl_toolbox.data.cifar_n import CifarNAdapter, CifarNWorstBinaryAdapter
+        from lnl_toolbox.data.contracts import RawDatasetSplit, DataSpec
+        observed=np.arange(10, dtype=np.int64)
+        spec=DataSpec.from_mapping({'name':'cifar10n_vehicle_animal','noise_variant':'worse_label'})
+        results=[]
+        for clean in (observed, observed[::-1]):
+            raw=RawDatasetSplit(np.zeros((10,32,32,3),dtype=np.uint8),observed,np.arange(10),'cifar10n','train',10,clean_targets=clean)
+            with patch.object(CifarNAdapter,'load',return_value=raw):
+                results.append(CifarNWorstBinaryAdapter().load(spec,'train',seed=17))
+        np.testing.assert_array_equal(results[0].observed_targets,results[1].observed_targets)
+        self.assertIsNone(results[0].clean_targets)
+        self.assertIsNone(results[1].clean_targets)
+
+    def test_test_labels_and_worst_variant_guard(self):
+        import numpy as np
+        from unittest.mock import patch
+        from lnl_toolbox.data.cifar_n import CifarNAdapter, CifarNWorstBinaryAdapter
+        from lnl_toolbox.data.contracts import RawDatasetSplit, DataSpec
+        labels=np.arange(10,dtype=np.int64)
+        raw=RawDatasetSplit(np.zeros((10,32,32,3),dtype=np.uint8),labels,np.arange(10),'cifar10n','test',10,clean_targets=labels)
+        spec=DataSpec.from_mapping({'name':'cifar10n_vehicle_animal','noise_variant':'worse_label'})
+        with patch.object(CifarNAdapter,'load',return_value=raw):
+            result=CifarNWorstBinaryAdapter().load(spec,'test',seed=17)
+        np.testing.assert_array_equal(result.clean_targets,result.observed_targets)
+        with self.assertRaisesRegex(ValueError,'worse_label'):
+            CifarNWorstBinaryAdapter().load(DataSpec.from_mapping({'name':'cifar10n_vehicle_animal'}),'train',seed=17)
+
+
 if __name__ == "__main__":
     unittest.main()

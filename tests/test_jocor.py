@@ -229,3 +229,54 @@ class _jocor_JoCoRConfigurationTest(unittest.TestCase):
             self.assertIsNone(final['best_selection_accuracy'])
             self.assertEqual(final['last_window_epochs'], 2)
             self.assertAlmostEqual(final['last_window_member_mean_accuracy'], .5)
+
+class JoCoRStableKLRegressionTest(unittest.TestCase):
+    """NUMERIC-FIX 2026-11-01: underflow must not corrupt peer gradients."""
+
+    def test_underflow_forward_and_gradients_remain_finite(self):
+        for device in ['cpu'] + (['cuda'] if torch.cuda.is_available() else []):
+            for first, second in [([0., -110.], [0., -109.]),
+                                  ([0., -120.], [-120., 0.]),
+                                  ([0., -1000.], [0., -1000.])]:
+                with self.subTest(device=device, first=first, second=second):
+                    a=torch.tensor([first],device=device,requires_grad=True)
+                    b=torch.tensor([second],device=device,requires_grad=True)
+                    loss=symmetric_kl_per_sample(a,b)
+                    self.assertTrue(bool(torch.isfinite(loss).all()))
+                    loss.sum().backward()
+                    self.assertTrue(bool(torch.isfinite(a.grad).all()))
+                    self.assertTrue(bool(torch.isfinite(b.grad).all()))
+
+    def test_regular_values_and_both_peer_gradients_match_original(self):
+        torch.manual_seed(17)
+        a=torch.randn(8,10,dtype=torch.float64,requires_grad=True)
+        b=torch.randn(8,10,dtype=torch.float64,requires_grad=True)
+        actual=symmetric_kl_per_sample(a,b)
+        aa=a.detach().clone().requires_grad_();bb=b.detach().clone().requires_grad_()
+        p=torch.log_softmax(aa,1);q=torch.log_softmax(bb,1)
+        expected=(nn.functional.kl_div(p,q.exp(),reduction='none')+
+                  nn.functional.kl_div(q,p.exp(),reduction='none')).sum(1)
+        torch.testing.assert_close(actual,expected,rtol=1e-12,atol=1e-12)
+        actual.sum().backward();expected.sum().backward()
+        torch.testing.assert_close(a.grad,aa.grad,rtol=1e-11,atol=1e-12)
+        torch.testing.assert_close(b.grad,bb.grad,rtol=1e-11,atol=1e-12)
+
+    def test_unselected_underflow_sample_cannot_poison_other_samples(self):
+        a=torch.tensor([[0.,-110.],[1.,0.]],requires_grad=True)
+        b=torch.tensor([[0.,-109.],[0.,1.]],requires_grad=True)
+        scores=symmetric_kl_per_sample(a,b)
+        scores[torch.tensor([False,True])].mean().backward()
+        self.assertTrue(bool(torch.isfinite(a.grad).all()))
+        self.assertTrue(bool(torch.isfinite(b.grad).all()))
+        torch.testing.assert_close(a.grad[0],torch.zeros(2))
+        torch.testing.assert_close(b.grad[0],torch.zeros(2))
+
+    def test_old_expression_reproduces_zero_probability_nan_gradient(self):
+        a=torch.tensor([[0.,-110.]],requires_grad=True)
+        b=torch.tensor([[0.,-109.]],requires_grad=True)
+        p=torch.log_softmax(a,1);q=torch.log_softmax(b,1)
+        old=(nn.functional.kl_div(p,q.exp(),reduction='none')+
+             nn.functional.kl_div(q,p.exp(),reduction='none')).sum()
+        self.assertTrue(bool(torch.isfinite(old)))
+        old.backward()
+        self.assertFalse(bool(torch.isfinite(a.grad).all() and torch.isfinite(b.grad).all()))

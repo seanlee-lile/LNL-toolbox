@@ -125,9 +125,38 @@ class CifarNAdapter:
         )
 
 
+class CifarNWorstBinaryAdapter(CifarNAdapter):
+    """Full CIFAR-10N vehicle/animal view; retain native human observations.
+
+    0: airplane/automobile/ship/truck; 1: bird/cat/deer/dog/frog/horse.
+    No filtering by clean labels or by noisy/clean agreement. Train clean
+    labels are deliberately omitted from the returned data contract.
+    """
+
+    source_adapter = "cifar10n"
+
+    def __init__(self) -> None:
+        super().__init__("cifar10n_vehicle_animal", 10)
+        self.aliases = ()
+
+    def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
+        if str(spec.options.get("noise_variant", "")) != "worse_label":
+            raise ValueError("CIFAR-10N binary experiment requires worse_label")
+        raw = super().load(spec, split, seed=seed)
+        lookup = np.asarray([0, 0, 1, 1, 1, 1, 1, 1, 0, 0], dtype=np.int64)
+        observed = lookup[raw.observed_targets]
+        clean = None if split == "train" else lookup[raw.clean_targets]
+        return RawDatasetSplit(
+            raw.inputs, observed, raw.global_indices, self.name, split, 2,
+            clean_targets=clean, class_names=("vehicle", "animal"),
+            source=raw.source + ":vehicle_vs_animal:no_clean_train_targets",
+        )
+
+
 def add_cifar_n_sources(registry: DatasetRegistry) -> None:
     registry.add(CifarNAdapter("cifar10n", 10))
     registry.add(CifarNAdapter("cifar100n", 100))
+    registry.add(CifarNWorstBinaryAdapter())
 
 
 __all__ = ["add_cifar_n_sources"]

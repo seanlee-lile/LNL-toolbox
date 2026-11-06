@@ -242,9 +242,9 @@ def run_l2rw_experiment(
         if scheduler is not None: scheduler.load_state_dict(payload["scheduler"])
         restore_rng_state(payload["rng_state"])
         if train_loader.generator is not None:
-            train_loader.generator.set_state(payload["train_loader_rng"])
+            train_loader.generator.set_state(payload["train_loader_rng"].cpu())
         if trusted_loader.generator is not None:
-            trusted_loader.generator.set_state(payload["trusted_loader_rng"])
+            trusted_loader.generator.set_state(payload["trusted_loader_rng"].cpu())
         start = int(payload["completed_epoch"]) + 1
         rows = [
             dict(row)

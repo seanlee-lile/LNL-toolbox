@@ -211,6 +211,17 @@ class _l2rw_training_L2RWTrainingTest(unittest.TestCase):
         self.assertAlmostEqual(_step_learning_rate(0.1, milestones, 0.1, [0.03, 0.007], 40000), 0.03)
         self.assertAlmostEqual(_step_learning_rate(0.1, milestones, 0.1, [0.03, 0.007], 60000), 0.007)
 
+    @unittest.skipUnless(torch.cuda.is_available(), 'CUDA is required to check checkpoint RNG device mapping')
+    def test_cuda_resume_restores_cpu_loader_generators(self) -> None:
+        config = yaml.safe_load((_l2rw_training_ROOT / 'configs/smoke/l2rw_cifar10_smoke.yaml').read_text(encoding='utf-8'))
+        config['trainer'] = {'epochs': 2, 'max_steps': 2, 'device': 'cuda'}
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = run_experiment(config, Path(directory) / 'run')
+            checkpoint = run_dir / 'last.pt'
+            checkpoint_before = checkpoint.read_bytes()
+            self.assertEqual(run_experiment(config, resume=checkpoint), run_dir)
+            self.assertEqual(checkpoint.read_bytes(), checkpoint_before)
+
     def test_smoke_and_completed_resume(self) -> None:
         config = yaml.safe_load((_l2rw_training_ROOT / 'configs/smoke/l2rw_cifar10_smoke.yaml').read_text(encoding='utf-8'))
         config['trainer']['epochs'] = 2

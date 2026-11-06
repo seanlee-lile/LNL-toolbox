@@ -24,10 +24,12 @@ def symmetric_kl_per_sample(logits_1: Tensor, logits_2: Tensor) -> Tensor:
     log_2 = F.log_softmax(logits_2, dim=1)
     prob_1 = log_1.exp()
     prob_2 = log_2.exp()
-    result = (
-        F.kl_div(log_1, prob_2, reduction="none").sum(dim=1)
-        + F.kl_div(log_2, prob_1, reduction="none").sum(dim=1)
-    )
+    # NUMERIC-FIX 2026-11-01: algebraically identical symmetric KL.
+    # Exp(log_p) can underflow to zero; using it as kl_div's differentiable
+    # target then creates NaN target gradients through log(0). Keep the
+    # finite log probabilities directly: sum((p-q) * (log_p-log_q)).
+    # No epsilon/clamp/detach, loss rescaling, or change to either peer's gradient.
+    result = ((prob_1 - prob_2) * (log_1 - log_2)).sum(dim=1)
     if not bool(torch.isfinite(result).all().item()):
         raise ValueError("JoCoR agreement produced non-finite values")
     return result
