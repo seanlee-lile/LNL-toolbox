@@ -71,6 +71,32 @@ class _config_schema_ConfigSchemaTest(unittest.TestCase):
             self.assertIn(recipe.config_path.resolve(), {path.resolve() for path in paths})
         self.assertIn('gce-cifar10-noise02-reproduction', recipe_ids)
 
+    def test_default_paper_filenames_follow_paper_and_dataset(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        papers = load_papers(root)
+        self.assertEqual(len(papers), 26)
+        for paper in papers:
+            with self.subTest(paper=paper.id):
+                selected, recipe = default_paper_config(paper, root=root)
+                dataset = load_yaml(recipe.config_path)['data']['name']
+                expected = f"{paper.id.replace('-', '_')}_{dataset}.yaml"
+                self.assertEqual(recipe.config_path.name, expected)
+                self.assertEqual(recipe.config_path.parent, root / 'configs/reproduction')
+                self.assertEqual(selected.profile, 'reproduction')
+
+    def test_relocated_variants_keep_recipe_ids_and_profiles(self) -> None:
+        from lnl_toolbox.catalog import recipe_by_id
+        for recipe_id, profile in (
+            ('apl-cifar10-noise04-reproduction', 'reproduction'),
+            ('cifar10-clean', 'experiment'),
+            ('cifar10-clean-smoke', 'smoke'),
+        ):
+            with self.subTest(recipe=recipe_id):
+                recipe = recipe_by_id(recipe_id)
+                self.assertEqual(recipe.id, recipe_id)
+                self.assertEqual(recipe.profile, profile)
+                self.assertEqual(recipe.config_path.parent.name, 'smoke')
+
 # --- merged from test_config_overrides.py ---
 from copy import deepcopy
 

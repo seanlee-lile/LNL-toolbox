@@ -1097,7 +1097,7 @@ _new_paper_training_ROOT = Path(__file__).resolve().parents[1]
 class _new_paper_training_NewPaperTrainingTest(unittest.TestCase):
 
     def _config(self, name: str) -> dict:
-        return yaml.safe_load((_new_paper_training_ROOT / 'configs' / 'experiment' / name).read_text(encoding='utf-8'))
+        return yaml.safe_load((_new_paper_training_ROOT / 'configs' / 'smoke' / name).read_text(encoding='utf-8'))
 
     def test_registered_pcse_volmin_fixture_trains_without_parameter_replacement(self) -> None:
         from lnl_toolbox.catalog import validate_config

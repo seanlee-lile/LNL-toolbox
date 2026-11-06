@@ -133,7 +133,8 @@ def _display_method(config: Mapping[str, Any], runner: str) -> str:
 
 
 def _recipe_manifest() -> tuple[
-    tuple[str, ...], frozenset[str], Mapping[str, Mapping[str, str]]
+    tuple[str, ...], frozenset[str], Mapping[str, Mapping[str, str]],
+    Mapping[str, Mapping[str, str]],
 ]:
     text = resources.files("lnl_toolbox.cli").joinpath(
         "data/recipe_catalog.json"
@@ -155,10 +156,19 @@ def _recipe_manifest() -> tuple[
         raise ValueError(
             f"public recipe manifest references unknown paths: {sorted(unknown)}"
         )
+    identities = raw.get("identities", {})
+    if not isinstance(identities, dict) or set(identities).difference(paths):
+        raise ValueError("recipe identities must reference registered paths")
+    for identity in identities.values():
+        if not isinstance(identity, dict) or not isinstance(identity.get("id"), str):
+            raise ValueError("recipe identity must contain a string id")
+        if identity.get("profile") not in {"smoke", "reproduction", "experiment"}:
+            raise ValueError("recipe identity has an invalid profile")
     return (
         paths,
         frozenset(str(value) for value in raw.get("conditional", ())),
         public,
+        identities,
     )
 
 
@@ -217,7 +227,7 @@ def discover_recipes(
     public_only: bool = False,
 ) -> tuple[RecipeSpec, ...]:
     project = (root or repository_root()).resolve()
-    manifest_paths, conditional_paths, public_recipes = _recipe_manifest()
+    manifest_paths, conditional_paths, public_recipes, identities = _recipe_manifest()
     recipes: list[RecipeSpec] = []
     seen: set[str] = set()
     for relative in manifest_paths:
@@ -227,7 +237,9 @@ def discover_recipes(
         if conditional and not include_conditional:
             continue
         path = _recipe_path(relative, project)
-        recipe_id = _recipe_id(path)
+        identity = identities.get(relative, {})
+        recipe_id = identity.get("id", _recipe_id(path))
+        profile = identity.get("profile", _profile(path))
         if recipe_id in seen:
             recipe_id = f"{path.parent.name}-{recipe_id}"
         seen.add(recipe_id)
@@ -244,7 +256,7 @@ def discover_recipes(
             RecipeSpec(
                 id=recipe_id,
                 config_path=path.resolve(),
-                profile=_profile(path),
+                profile=profile,
                 runner=runner,
                 dataset=str(data.get("name", "unknown")),
                 noise=str(noise.get("name", "clean")) if noise else "clean",
@@ -256,7 +268,7 @@ def discover_recipes(
                 configuration_fidelity=str(
                     config.get(
                         "configuration_fidelity",
-                        _configuration_fidelity(path, _profile(path)),
+                        identity.get("configuration_fidelity", _configuration_fidelity(path, profile)),
                     )
                 ),
                 reproduction_status="not_run",

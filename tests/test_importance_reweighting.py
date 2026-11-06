@@ -135,7 +135,7 @@ from lnl_toolbox.data.binary_synthetic import generate_synthetic_binary_high_dim
 from lnl_toolbox.training.checkpoint import read_checkpoint
 from lnl_toolbox.training.experiment import run_experiment
 
-_importance_reweighting_kliep_CONFIG = Path(__file__).resolve().parents[1] / 'configs' / 'experiment' / 'importance_reweighting_binary_high_dim_smoke.yaml'
+_importance_reweighting_kliep_CONFIG = Path(__file__).resolve().parents[1] / 'configs' / 'smoke' / 'importance_reweighting_binary_high_dim_smoke.yaml'
 
 def _importance_reweighting_kliep_load_config() -> dict:
     return yaml.safe_load(_importance_reweighting_kliep_CONFIG.read_text(encoding='utf-8'))
@@ -362,9 +362,9 @@ from lnl_toolbox.noise.estimators import PosteriorSnapshot
 
 _importance_reweighting_method_ROOT = Path(__file__).resolve().parents[1]
 
-_importance_reweighting_method_CONFIG = _importance_reweighting_method_ROOT / 'configs/experiment/importance_reweighting_binary_smoke.yaml'
+_importance_reweighting_method_CONFIG = _importance_reweighting_method_ROOT / 'configs/smoke/importance_reweighting_binary_smoke.yaml'
 
-_importance_reweighting_method_UCI_CONFIG = _importance_reweighting_method_ROOT / 'configs/reproduction/uci_heart_importance_reweighting.yaml'
+_importance_reweighting_method_UCI_CONFIG = _importance_reweighting_method_ROOT / 'configs/smoke/uci_heart_importance_reweighting.yaml'
 
 def _importance_reweighting_method_load_config() -> dict:
     return yaml.safe_load(_importance_reweighting_method_CONFIG.read_text(encoding='utf-8'))
@@ -690,7 +690,7 @@ from lnl_toolbox.data.binary_benchmarks import BinaryBenchmarkTensorDataset
 
 _importance_reweighting_uci_ROOT = Path(__file__).resolve().parents[1]
 
-_importance_reweighting_uci_CONFIG = _importance_reweighting_uci_ROOT / 'configs/reproduction/uci_heart_importance_reweighting.yaml'
+_importance_reweighting_uci_CONFIG = _importance_reweighting_uci_ROOT / 'configs/smoke/uci_heart_importance_reweighting.yaml'
 
 def _importance_reweighting_uci__heart_fixture(path: Path, samples: int=60) -> str:
     rows: list[str] = []

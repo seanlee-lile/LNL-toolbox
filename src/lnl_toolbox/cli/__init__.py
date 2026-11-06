@@ -217,7 +217,11 @@ def _load_yaml_mapping(path: Path) -> dict[str, Any]:
 
 
 def _experiment_templates(*, clean: bool) -> list[tuple[Path, dict[str, Any]]]:
-    directories = [Path.cwd() / "configs" / "experiment", repository_root() / "configs" / "experiment"]
+    directories = [
+        root / "configs" / folder
+        for root in (Path.cwd(), repository_root())
+        for folder in ("reproduction", "smoke", "experiment")
+    ]
     discovered: dict[Path, dict[str, Any]] = {}
     for directory in directories:
         if not directory.is_dir():

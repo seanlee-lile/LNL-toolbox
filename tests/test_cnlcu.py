@@ -49,7 +49,7 @@ class CNLCUReferenceDefaultsTest(unittest.TestCase):
     def test_independent_estimate_and_web_defaults(self):
         from web import command_console
         import yaml
-        path = Path(__file__).resolve().parents[1] / 'configs/experiment/cnlcu_cifar10_reproduction.yaml'
+        path = Path(__file__).resolve().parents[1] / 'configs/reproduction/cnlcu_cifar10.yaml'
         config = yaml.safe_load(path.read_text(encoding='utf-8'))
         fields = {f['path']: f for f in command_console._config_schema('cnlcu-cifar10-reproduction')['fields']}
         self.assertEqual(fields['noise.rate']['linked_fields'], [])

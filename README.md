@@ -94,14 +94,14 @@ lnl run cifar10-symmetric-ce-smoke
 
 ```powershell
 lnl run cifar10-symmetric-ce-smoke
-lnl run configs/experiment/cifar10_symmetric_ce_smoke.yaml
+lnl run configs/smoke/cifar10_symmetric_ce_smoke.yaml
 ```
 
 原有的显式写法继续兼容，但不再是主要推荐形式：
 
 ```powershell
 lnl run --recipe cifar10-symmetric-ce-smoke
-lnl run --config configs/experiment/cifar10_symmetric_ce_smoke.yaml
+lnl run --config configs/smoke/cifar10_symmetric_ce_smoke.yaml
 ```
 
 ### 第一步：检查环境

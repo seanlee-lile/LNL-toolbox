@@ -61,6 +61,13 @@ def check_repository(root: Path) -> list[Issue]:
         return issues
     paths = manifest["recipes"]
     known_paths = {value for value in paths if isinstance(value, str)}
+    identities = manifest.get("identities", {})
+    if not isinstance(identities, Mapping):
+        issues.append(Issue("recipe_catalog_schema", "identities", "expected a mapping"))
+        identities = {}
+    for value in identities:
+        if value not in known_paths:
+            issues.append(Issue("unknown_catalog_reference", "identities", str(value)))
     for value in manifest.get("conditional", []):
         if value not in known_paths:
             issues.append(Issue("unknown_catalog_reference", "conditional", str(value)))
@@ -93,12 +100,18 @@ def check_repository(root: Path) -> list[Issue]:
             config = load_yaml(path)
             if config.get("kind") != "experiment":
                 continue  # producer/fragment configs are not standalone recipes
-            recipe_id = path.stem.lower().replace("_", "-")
+            identity = identities.get(relative, {})
+            if not isinstance(identity, Mapping):
+                raise ValueError("recipe identity must be a mapping")
+            recipe_id = identity.get("id", path.stem.lower().replace("_", "-"))
+            profile = identity.get("profile", "reproduction" if "reproduction" in path.stem or path.parent.name == "reproduction" else "smoke" if "smoke" in path.stem else "experiment")
+            if not isinstance(recipe_id, str) or not recipe_id or profile not in {"experiment", "reproduction", "smoke"}:
+                raise ValueError("invalid recipe identity or profile")
             if recipe_id in recipes:
                 issues.append(Issue("duplicate_recipe_id", recipe_id, relative))
                 continue
             recipes[recipe_id] = (relative, config)
-            if "reproduction" in path.stem or path.parent.name == "reproduction":
+            if profile == "reproduction":
                 formal_paths[relative] = recipe_id
             runner = resolve_runner(config)
         except (KeyError, TypeError, ValueError, ImportError) as error:

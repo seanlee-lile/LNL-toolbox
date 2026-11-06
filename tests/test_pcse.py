@@ -508,7 +508,7 @@ from lnl_toolbox.training.pcse_experiment import (
 
 _pcse_volmin_ROOT = Path(__file__).resolve().parents[1]
 
-_pcse_volmin_VOLMIN_CONFIG = _pcse_volmin_ROOT / 'configs/experiment/pcse_multiclass_volmin_smoke.yaml'
+_pcse_volmin_VOLMIN_CONFIG = _pcse_volmin_ROOT / 'configs/smoke/pcse_multiclass_volmin_smoke.yaml'
 
 def _pcse_volmin__config() -> dict:
     config = yaml.safe_load(_pcse_volmin_VOLMIN_CONFIG.read_text(encoding='utf-8'))
@@ -665,7 +665,7 @@ from lnl_toolbox.algorithms.pcse.artifacts import PCSEEnsembleArtifact, persist_
 
 _pcse_workflow_ROOT = Path(__file__).resolve().parents[1]
 
-_pcse_workflow_SMOKE_CONFIG = _pcse_workflow_ROOT / 'configs/experiment/pcse_multiclass_smoke.yaml'
+_pcse_workflow_SMOKE_CONFIG = _pcse_workflow_ROOT / 'configs/smoke/pcse_multiclass_smoke.yaml'
 
 def _pcse_workflow__load_smoke_config() -> dict:
     return yaml.safe_load(_pcse_workflow_SMOKE_CONFIG.read_text(encoding='utf-8'))
@@ -906,7 +906,7 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
                 source_dir = root/'source'
                 source_dir.mkdir()
                 source, _ = _pcse_pretrained_adapter__standard_source(source_dir, adapter, samples=100, zero_features=True)
-                config = yaml.safe_load((_pcse_workflow_ROOT/'configs/reproduction/cifar10_pcse_reproduction.yaml').read_text(encoding='utf-8'))
+                config = yaml.safe_load((_pcse_workflow_ROOT/'configs/reproduction/pcse_cifar10.yaml').read_text(encoding='utf-8'))
                 config['data'].update({'root':str(root), 'validation_size':10})
                 config['pretraining_stage'].update({'mode':'external_checkpoint', 'epochs':0,
                     'model':source['model'], 'source':source})

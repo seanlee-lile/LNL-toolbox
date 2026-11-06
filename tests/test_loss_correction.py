@@ -40,7 +40,7 @@ class _loss_correction_reproduction_LossCorrectionReproductionTest(unittest.Test
 
     def test_full_experiment_config_routes_correction_through_pipeline(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        config = yaml.safe_load((root / 'configs' / 'experiment' / 'cifar10_foundation_smoke.yaml').read_text(encoding='utf-8'))
+        config = yaml.safe_load((root / 'configs' / 'smoke' / 'cifar10_foundation_smoke.yaml').read_text(encoding='utf-8'))
         pipeline = build_builtin_pipeline(config['pipeline'])
         self.assertIsInstance(pipeline.risk_corrector, ForwardRiskCorrector)
         self.assertIsNotNone(pipeline.transition_estimator)
@@ -167,7 +167,7 @@ class LossCorrectionPaperProtocolTest(unittest.TestCase):
         self.assertEqual([item['value'] for item in fields['pipeline.risk_corrector.name']['choices']], ['forward', 'backward'])
         from copy import deepcopy
         from unittest.mock import patch
-        native = yaml.safe_load((web.ROOT/'configs/experiment/loss_correction_cifar10_asymmetric04.yaml').read_text(encoding='utf-8'))
+        native = yaml.safe_load((web.ROOT/'configs/reproduction/loss_correction_cifar10.yaml').read_text(encoding='utf-8'))
         native['noise'] = {'name': 'native', 'validation_targets': 'noisy', 'seed': 1, 'rng': 'numpy_legacy', 'manifest_filename': 'noise_manifest.npz'}
         native['pipeline']['transition_estimator'] = {'name': 'anchor', 'percentile': 97.0}
         native['pipeline']['warmup_epochs'] = 120

@@ -97,9 +97,9 @@ normalization is an explicit repository implementation choice.
 
 | Workflow | Configuration |
 |---|---|
-| low-dimensional KDE | `configs/reproduction/importance_reweighting_binary_low_dim.yaml` |
-| high-dimensional KLIEP | `configs/reproduction/importance_reweighting_binary_high_dim.yaml` |
-| real UCI Statlog Heart + KLIEP | `configs/reproduction/uci_heart_importance_reweighting.yaml` |
+| low-dimensional KDE | `configs/reproduction/importance_reweighting_synthetic_binary_2d.yaml` |
+| high-dimensional KLIEP | `configs/smoke/importance_reweighting_binary_high_dim.yaml` |
+| real UCI Statlog Heart + KLIEP | `configs/smoke/uci_heart_importance_reweighting.yaml` |
 
 ## Real UCI engineering workflow
 
@@ -157,7 +157,7 @@ Low-dimensional KDE:
 
 ```powershell
 lnl run `
-  --config configs/reproduction/importance_reweighting_binary_low_dim.yaml `
+  --config configs/reproduction/importance_reweighting_synthetic_binary_2d.yaml `
   --output-dir artifacts/reproductions/importance-reweighting-low-dim-seed17
 ```
 
@@ -165,7 +165,7 @@ High-dimensional KLIEP:
 
 ```powershell
 lnl run `
-  --config configs/reproduction/importance_reweighting_binary_high_dim.yaml `
+  --config configs/smoke/importance_reweighting_binary_high_dim.yaml `
   --output-dir artifacts/reproductions/importance-reweighting-high-dim-seed17
 ```
 

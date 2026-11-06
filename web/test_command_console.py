@@ -630,7 +630,7 @@ for(const profile of ['reproduction','metadata','smoke']){
             command_console._sweep_plan_payload(
                 {
                     "recipe": "fine-cifar100n-reproduction",
-                    "path": "configs/experiment/fine_cifar100n_reproduction.yaml",
+                    "path": "configs/reproduction/fine_cifar100.yaml",
                 }
             )
         with self.assertRaisesRegex(ValueError, "locked parameter"):
@@ -1028,7 +1028,7 @@ for(const profile of ['reproduction','metadata','smoke']){
             custom = load_yaml(command_console.ROOT / saved["path"])
             self.assertEqual(custom["scheduler"]["lr_values"], [0.003, 0.0007])
             self.assertEqual(custom["scheduler"]["gamma"], 0.1)
-            formal = load_yaml(command_console.ROOT / "configs/experiment/gce_cifar10_noise02_reproduction.yaml")
+            formal = load_yaml(command_console.ROOT / "configs/reproduction/gce_cifar10.yaml")
             self.assertNotIn("lr_values", formal["scheduler"])
             with self.assertRaisesRegex(ValueError, "one value per milestone"):
                 command_console._save_config({
@@ -1055,7 +1055,7 @@ for(const profile of ['reproduction','metadata','smoke']){
                 "acknowledge_paper_impact": True,
             })
             custom = load_yaml(destination)
-            formal = load_yaml(command_console.ROOT / "configs/experiment/lend_cifar10_reproduction.yaml")
+            formal = load_yaml(command_console.ROOT / "configs/reproduction/lend_cifar10.yaml")
             self.assertEqual(custom["scheduler"]["lr_values"], [0.007])
             self.assertNotIn("lr_values", formal["scheduler"])
             self.assertEqual(formal["optimizer"]["lr"], 0.05)

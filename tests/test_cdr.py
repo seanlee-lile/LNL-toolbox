@@ -379,7 +379,7 @@ class _cdr_reproduction_CDRReproductionTest(unittest.TestCase):
         from lnl_toolbox.scratch.blocks.data import configure_preprocessing, configure_views
         root = Path(__file__).resolve().parents[1]
         recipe = yaml.safe_load((root / 'src/lnl_toolbox/scratch/recipes/papers/cdr.yaml').read_text(encoding='utf-8'))
-        config = yaml.safe_load((root / 'configs/experiment/cifar10_symmetric_cdr_reproduction.yaml').read_text(encoding='utf-8'))
+        config = yaml.safe_load((root / 'configs/reproduction/cdr_cifar10.yaml').read_text(encoding='utf-8'))
         params = next(step['params'] for step in recipe['steps'] if step['block'] == 'configure_preprocessing')
         self.assertEqual(params['options']['normalization'], config['data']['normalization'])
         source = ScratchSplit('cifar10', 'train', (ScratchSample(torch.zeros(3, 32, 32), 0, 0, 0),), 10)

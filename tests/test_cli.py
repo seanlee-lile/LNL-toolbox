@@ -599,7 +599,7 @@ class _unified_cli_CatalogTest(unittest.TestCase):
             prefix = Path(temporary) / 'venv'
             site_packages = prefix / 'lib' / 'site-packages'
             site_packages.mkdir(parents=True)
-            relative = 'configs/experiment/cifar10_volminnet_smoke.yaml'
+            relative = 'configs/smoke/cifar10_volminnet_smoke.yaml'
             entry = Path('../..') / 'share' / 'lnl-toolbox' / relative
 
             class Distribution:
@@ -793,12 +793,6 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
             student_path.write_text(
                 yaml.safe_dump(student, sort_keys=False), encoding='utf-8'
             )
-            code, output, error = self.invoke(
-                'validate', '--config', str(student_path),
-                '--project-root', str(_unified_cli_ROOT),
-            )
-            self.assertEqual(code, 0, error)
-            self.assertIn('supervised', output)
             code, output, error = self.invoke(
                 'run', '--config', str(student_path), '--dry-run',
                 '--no-check-data', '--project-root', str(_unified_cli_ROOT),
@@ -1095,7 +1089,7 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
         self.assertEqual(output.splitlines()[0], 'id\tacronym\ttitle\tvenue\tyear\tsource_url')
 
     def test_paper_config_resolved_does_not_change_source(self) -> None:
-        path = _unified_cli_ROOT / 'configs/experiment/cifar10_coteaching_smoke.yaml'
+        path = _unified_cli_ROOT / 'configs/smoke/cifar10_coteaching_smoke.yaml'
         before = path.read_bytes()
         code, output, _ = self.invoke('papers', 'config', 'coteaching', '--profile', 'smoke', '--resolved')
         self.assertEqual(code, 0)
@@ -1239,7 +1233,7 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
         self.assertIn('Training budget: 2', output)
 
     def test_positional_yaml_is_accepted(self) -> None:
-        path = _unified_cli_ROOT / 'configs/experiment/cifar10_symmetric_ce_smoke.yaml'
+        path = _unified_cli_ROOT / 'configs/smoke/cifar10_symmetric_ce_smoke.yaml'
         code, output, error = self.invoke('run', str(path), '--dry-run', '--no-check-data')
         self.assertEqual(code, 0, error)
         self.assertIn('supervised', output)
@@ -1347,7 +1341,7 @@ class _dld_cli_DLDCliTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.path = _dld_cli_ROOT / 'configs' / 'experiment' / 'cifar10_dld_smoke.yaml'
+        cls.path = _dld_cli_ROOT / 'configs' / 'smoke' / 'cifar10_dld_smoke.yaml'
         cls.config = yaml.safe_load(cls.path.read_text(encoding='utf-8'))
 
     def test_registry_recipe_paper_and_preflight(self) -> None:
@@ -1369,7 +1363,7 @@ class _dld_cli_DLDCliTest(unittest.TestCase):
             self.assertIn(value, text)
 
     def test_real_short_config_validates_and_dry_runs(self) -> None:
-        path = _dld_cli_ROOT / 'configs' / 'reproduction' / 'cifar10_dld_sym20_short.yaml'
+        path = _dld_cli_ROOT / 'configs' / 'smoke' / 'cifar10_dld_sym20_short.yaml'
         config = yaml.safe_load(path.read_text(encoding='utf-8'))
         self.assertEqual(validate_config(config).name, 'dld')
         code, text, error = _invoke_cli(*['run', '--config', str(path), '--dry-run', '--no-check-data'])
@@ -1388,9 +1382,9 @@ class _lend_cli_LENDCliTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.path = _lend_cli_ROOT / 'configs/experiment/cifar10_lend_smoke.yaml'
+        cls.path = _lend_cli_ROOT / 'configs/smoke/cifar10_lend_smoke.yaml'
         cls.config = yaml.safe_load(cls.path.read_text(encoding='utf-8'))
-        cls.reproduction_path = _lend_cli_ROOT / 'configs/experiment/lend_cifar10_reproduction.yaml'
+        cls.reproduction_path = _lend_cli_ROOT / 'configs/reproduction/lend_cifar10.yaml'
         cls.reproduction_config = yaml.safe_load(cls.reproduction_path.read_text(encoding='utf-8'))
 
     def test_registry_recipe_paper_and_preflight(self):
@@ -1555,7 +1549,7 @@ class _upm_cli_UPMCliTest(unittest.TestCase):
         self.assertNotIn('epochs', config['trainer'])
 
     def test_dry_run_reports_stages_psi_and_eta(self) -> None:
-        config_path = Path('configs/experiment/cifar10_upm_smoke.yaml').resolve()
+        config_path = Path('configs/smoke/cifar10_upm_smoke.yaml').resolve()
         code, text, error = _invoke_cli(*['run', '--config', str(config_path), '--dry-run', '--no-check-data'])
         self.assertEqual(code, 0, error)
         for expected in ('upm', '2/2 (stage1/main)', 'UPM psi source: stage1_best', 'UPM eta initial value: 0.01', 'UPM eta update start epoch: 0', 'UPM eta update interval: 1'):

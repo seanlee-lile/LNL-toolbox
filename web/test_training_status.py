@@ -114,7 +114,7 @@ assert(!nodes['training-summary'].classList.contains('hidden'));
 
     def test_positional_config_and_explicit_output_are_inferred(self) -> None:
         context = infer_training_context(
-            ["lnl", "run", "configs/experiment/cifar10_clean_smoke.yaml", "--output-dir", "artifacts/web"],
+            ["lnl", "run", "configs/smoke/cifar10_clean_smoke.yaml", "--output-dir", "artifacts/web"],
             Path.cwd(),
         )
         assert context is not None

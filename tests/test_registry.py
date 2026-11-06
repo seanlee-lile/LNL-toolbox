@@ -858,9 +858,9 @@ from lnl_toolbox.algorithms.cnlcu import CNLCUConfig
 
 _cnlcu_readiness_ROOT = Path(__file__).resolve().parents[1]
 
-_cnlcu_readiness_CONFIG = _cnlcu_readiness_ROOT / 'configs/reproduction/cifar10_cnlcu_soft_sym20_short.yaml'
+_cnlcu_readiness_CONFIG = _cnlcu_readiness_ROOT / 'configs/smoke/cifar10_cnlcu_soft_sym20_short.yaml'
 
-_cnlcu_readiness_FORMAL_CONFIG = _cnlcu_readiness_ROOT / 'configs/experiment/cnlcu_cifar10_reproduction.yaml'
+_cnlcu_readiness_FORMAL_CONFIG = _cnlcu_readiness_ROOT / 'configs/reproduction/cnlcu_cifar10.yaml'
 
 class _cnlcu_readiness_CNLCUReadinessTest(unittest.TestCase):
 

@@ -174,7 +174,7 @@ class _cal_CALTest(unittest.TestCase):
         import yaml
 
         config = yaml.safe_load(
-            (Path(__file__).resolve().parents[1] / 'configs' / 'experiment' / 'cal_cifar10_smoke.yaml').read_text(encoding='utf-8')
+            (Path(__file__).resolve().parents[1] / 'configs' / 'smoke' / 'cal_cifar10_smoke.yaml').read_text(encoding='utf-8')
         )
         calls = []
 
@@ -201,7 +201,7 @@ class _cal_CALTest(unittest.TestCase):
         from unittest.mock import patch
 
         config = yaml.safe_load(
-            (Path(__file__).resolve().parents[1] / 'configs' / 'experiment' / 'cal_cifar10_smoke.yaml').read_text(encoding='utf-8')
+            (Path(__file__).resolve().parents[1] / 'configs' / 'smoke' / 'cal_cifar10_smoke.yaml').read_text(encoding='utf-8')
         )
         config['data']['validation_size'] = 0
         calls = []

@@ -35,7 +35,7 @@ class PaperRegistrationTest(unittest.TestCase):
             "src/lnl_toolbox/cli/data/recipe_catalog.json": json.dumps(self.manifest),
             "src/lnl_toolbox/paper_catalog.json": json.dumps(self.papers),
             self.relative: yaml.safe_dump(self.config),
-            "pyproject.toml": '[tool.setuptools.data-files]\n"share/lnl-toolbox/configs/experiment" = ' + json.dumps([self.relative] if self.packaged else []) + '\n',
+            "pyproject.toml": '[tool.setuptools.data-files]\n' + json.dumps('share/lnl-toolbox/' + str(Path(self.relative).parent).replace('\\', '/')) + ' = ' + json.dumps([self.relative] if self.packaged else []) + '\n',
         }
         for relative, text in files.items():
             path = self.root / relative
@@ -53,6 +53,20 @@ class PaperRegistrationTest(unittest.TestCase):
 
     def test_minimal_valid_chain(self):
         self.assertEqual(self.codes(), set())
+
+    def test_renamed_recipe_keeps_explicit_identity(self):
+        self.relative = "configs/reproduction/demo_cifar10.yaml"
+        self.manifest["recipes"] = [self.relative]
+        self.manifest["identities"] = {
+            self.relative: {"id": "demo-reproduction", "profile": "reproduction"}
+        }
+        self.assertEqual(self.codes(), set())
+
+    def test_unknown_identity_reference_is_rejected(self):
+        self.manifest["identities"] = {
+            "configs/reproduction/missing.yaml": {"id": "demo", "profile": "reproduction"}
+        }
+        self.assertIn("unknown_catalog_reference", self.codes())
 
     def test_unknown_public_and_conditional_references(self):
         self.manifest.update(public=[{"path": "missing.yaml"}], conditional=["absent.yaml"])

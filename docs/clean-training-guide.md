@@ -5,9 +5,9 @@
 新用户和统一实验工作流优先使用 `lnl run`，它与其他方法共用 validate、dry-run、运行目录和结果生命周期：
 
 ```powershell
-lnl validate --config configs/experiment/cifar10_clean_baseline.yaml --check-data
-lnl run --config configs/experiment/cifar10_clean_baseline.yaml --dry-run --check-data
-lnl run --config configs/experiment/cifar10_clean_baseline.yaml
+lnl validate --config configs/smoke/cifar10_clean_baseline.yaml --check-data
+lnl run --config configs/smoke/cifar10_clean_baseline.yaml --dry-run --check-data
+lnl run --config configs/smoke/cifar10_clean_baseline.yaml
 ```
 
 ## 兼容/专用 clean-only 入口
@@ -28,21 +28,21 @@ lnl-clean-train
 
 ```powershell
 $env:PYTHONPATH = "src"
-python -m lnl_toolbox.cli.clean_train --config configs/experiment/cifar10_clean_baseline.yaml
+python -m lnl_toolbox.cli.clean_train --config configs/smoke/cifar10_clean_baseline.yaml
 ```
 
 如果 console script 不可用，可在已安装依赖的同一 Python 环境中使用模块入口：
 
 ```powershell
 $env:PYTHONPATH = "src"
-python -m lnl_toolbox.cli.clean_train --config configs/experiment/cifar10_clean_baseline.yaml
+python -m lnl_toolbox.cli.clean_train --config configs/smoke/cifar10_clean_baseline.yaml
 ```
 
 ## 专用入口的 Smoke 与恢复
 
 ```powershell
-python -m lnl_toolbox.cli.clean_train --config configs/experiment/cifar10_clean_smoke.yaml --output-dir artifacts/runs/clean-smoke
-python -m lnl_toolbox.cli.clean_train --config configs/experiment/cifar10_clean_smoke.yaml --resume artifacts/runs/clean-smoke/last.pt --epochs 3
+python -m lnl_toolbox.cli.clean_train --config configs/smoke/cifar10_clean_smoke.yaml --output-dir artifacts/runs/clean-smoke
+python -m lnl_toolbox.cli.clean_train --config configs/smoke/cifar10_clean_smoke.yaml --resume artifacts/runs/clean-smoke/last.pt --epochs 3
 ```
 
 `--epochs` 表示总 epoch 目标。恢复时会继续 checkpoint 中的 model、optimizer、scheduler、epoch 和 global step。
@@ -50,7 +50,7 @@ python -m lnl_toolbox.cli.clean_train --config configs/experiment/cifar10_clean_
 ## 多 seed
 
 ```powershell
-python -m lnl_toolbox.cli.clean_train --config configs/experiment/cifar10_clean_baseline.yaml --seeds 1 2 3 --output-dir artifacts/runs/cifar10-clean-3seeds
+python -m lnl_toolbox.cli.clean_train --config configs/smoke/cifar10_clean_baseline.yaml --seeds 1 2 3 --output-dir artifacts/runs/cifar10-clean-3seeds
 ```
 
 多 seed 运行按顺序执行，输出 `summary.json` 与 `summary.csv`，包含测试准确率均值和样本标准差。

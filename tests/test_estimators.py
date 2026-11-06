@@ -288,7 +288,7 @@ from lnl_toolbox.training.experiment import run_experiment
 class _volmin_training_VolMinTrainingTest(unittest.TestCase):
 
     def test_smoke_and_resume(self) -> None:
-        config = yaml.safe_load(Path('configs/experiment/volmin_cifar10_smoke.yaml').read_text())
+        config = yaml.safe_load(Path('configs/smoke/volmin_cifar10_smoke.yaml').read_text())
         config['trainer']['epochs'] = 2
         with tempfile.TemporaryDirectory() as directory:
             run = run_experiment(config, Path(directory) / 'run')
@@ -311,7 +311,7 @@ class VolMinNetPaperDefaultsTest(unittest.TestCase):
     def test_formal_network_can_train_one_short_epoch(self):
         from lnl_toolbox.catalog import load_yaml
         from lnl_toolbox.training.experiment import run_experiment
-        config = load_yaml(Path(__file__).resolve().parents[1] / 'configs/experiment/volminnet_cifar10_reproduction.yaml')
+        config = load_yaml(Path(__file__).resolve().parents[1] / 'configs/reproduction/volminnet_cifar10.yaml')
         config['trainer'].update(epochs=1, device='cpu')
         config['data'].update(root='unused', validation_size=10, max_train_samples=20,
                               max_validation_samples=10, max_test_samples=10, augment=False)

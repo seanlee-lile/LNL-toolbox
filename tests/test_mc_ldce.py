@@ -232,7 +232,7 @@ class _mc_ldce_MCLDCETest(unittest.TestCase):
             def forward(self, inputs):
                 return self.forward_with_features(inputs)[0]
 
-        config = yaml.safe_load(Path('configs/experiment/mc_ldce_cifar10_reproduction.yaml').read_text(encoding='utf-8'))
+        config = yaml.safe_load(Path('configs/reproduction/mc_ldce_cifar10.yaml').read_text(encoding='utf-8'))
         config['trainer'] = {'epochs': 2, 'device': 'cpu'}
         config['transition'] = {'estimator': 'known', 'matrix': [[1., 0.], [0., 1.]]}
         batch = {'input': torch.tensor([[1., 0.], [0., 1.]]),

@@ -24,7 +24,7 @@ python -m unittest discover -s tests -v
 Run a short GPU/CPU integration check:
 
 ```powershell
-python -m lnl_toolbox.cli.clean_train --config configs/experiment/cifar10_clean_smoke.yaml
+python -m lnl_toolbox.cli.clean_train --config configs/smoke/cifar10_clean_smoke.yaml
 ```
 
 Use `cifar10_clean_baseline.yaml` for formal clean-label runs. Resume with `--resume <run>/last.pt`; run repeated seeds with `--seeds 1 2 3`.

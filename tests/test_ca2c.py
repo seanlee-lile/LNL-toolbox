@@ -193,7 +193,7 @@ class CA2CRunnerChangesTest(unittest.TestCase):
         from lnl_toolbox.training import ca2c_experiment as runner
         from lnl_toolbox.training.checkpoint import read_checkpoint
         root = Path(__file__).resolve().parents[1]
-        config = yaml.safe_load((root / 'configs/experiment/ca2c_cifar100_reproduction.yaml').read_text(encoding='utf-8'))
+        config = yaml.safe_load((root / 'configs/reproduction/ca2c_cifar100.yaml').read_text(encoding='utf-8'))
         # Controlled image data and a tiny classifier exercise warmup -> robust
         # without running the 700-epoch paper experiment.
         config['data'].update(name='cifar10', root='unused-controlled-source', validation_size=0)

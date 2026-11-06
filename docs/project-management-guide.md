@@ -41,7 +41,7 @@ python -m unittest discover -s tests -v
 
 ```powershell
 python -m unittest discover -s tests -v
-lnl run --config configs/experiment/cifar10_smoke.yaml
+lnl run --config configs/smoke/cifar10_smoke.yaml
 ```
 
 ### 4.3 提交前
@@ -83,8 +83,8 @@ git push
 | 文件 | 功能 | 关键字段或注意事项 |
 |---|---|---|
 | `configs/README.md` | 解释配置层与核心框架的关系。 | 配置机制变化时更新。 |
-| `configs/experiment/cifar10_smoke.yaml` | 两轮、小样本快速实验。 | 用于确认程序能跑通，不用于报告正式精度。 |
-| `configs/experiment/cifar10_clean.yaml` | 30 轮干净 CIFAR-10 基准实验。 | 正式运行前确认数据路径、设备和训练轮数。 |
+| `configs/smoke/cifar10_smoke.yaml` | 两轮、小样本快速实验。 | 用于确认程序能跑通，不用于报告正式精度。 |
+| `configs/smoke/cifar10_clean.yaml` | 30 轮干净 CIFAR-10 基准实验。 | 正式运行前确认数据路径、设备和训练轮数。 |
 | `configs/algorithm/ce.yaml` | CE 示例算法配置。 | `name` 和 loss 名称必须与插件注册一致。 |
 | `configs/algorithm/gce.yaml` | GCE 示例配置。 | `q` 控制 CE 与 MAE 之间的折中。 |
 | `configs/algorithm/coteaching.yaml` | Co-teaching 参数片段。 | 双模型方法由 `method: coteaching` 专属 runner 消费；不是通用 Selector 配置。 |

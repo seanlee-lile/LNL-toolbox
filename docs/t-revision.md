@@ -23,7 +23,7 @@ process.
 ```powershell
 $env:PYTHONPATH = "src"
 lnl run `
-  --config configs/experiment/cifar10_t_revision_smoke.yaml `
+  --config configs/smoke/cifar10_t_revision_smoke.yaml `
   --output-dir artifacts/runs/t-revision-smoke
 ```
 
@@ -31,7 +31,7 @@ Resume only from the run-local `last.pt`:
 
 ```powershell
 lnl run `
-  --config configs/experiment/cifar10_t_revision_smoke.yaml `
+  --config configs/smoke/cifar10_t_revision_smoke.yaml `
   --resume artifacts/runs/t-revision-smoke/last.pt
 ```
 
@@ -45,7 +45,7 @@ the revision target may be extended.
 ## Required configuration
 
 The maintained example is
-`configs/experiment/cifar10_t_revision_smoke.yaml`. These choices must remain
+`configs/smoke/cifar10_t_revision_smoke.yaml`. These choices must remain
 explicit:
 
 - `method: t_revision`;

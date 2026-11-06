@@ -51,7 +51,7 @@ class NewPaperDraftTest(unittest.TestCase):
                 self.assertNotIn("prerequisites", config)
 
     def test_explicit_base_preserves_all_training_values_and_requires_review(self):
-        base = ROOT / "configs/experiment/cifar10_clean_smoke.yaml"
+        base = ROOT / "configs/smoke/cifar10_clean_smoke.yaml"
         path = self.draft(base_config=base, title="New Robust Loss Paper")
         manifest = json.loads((path / "draft.json").read_text())
         self.assertEqual(yaml.safe_load((path / manifest["recipe_file"]).read_text()), load_yaml(base))
@@ -117,7 +117,7 @@ class NewPaperDraftTest(unittest.TestCase):
         self.assertIn("draft_path_invalid", {i.code for i in check_draft(path)})
 
     def test_checker_detects_wrong_recipe_reference_and_reproduction_claim(self):
-        path = self.draft(base_config=ROOT / "configs/experiment/cifar10_clean_smoke.yaml")
+        path = self.draft(base_config=ROOT / "configs/smoke/cifar10_clean_smoke.yaml")
         paper_path = path / "paper.json"
         paper = json.loads(paper_path.read_text())
         paper["configs"][0]["recipe_id"] = "another-recipe"

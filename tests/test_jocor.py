@@ -148,7 +148,7 @@ class _jocor_JoCoRAlgorithmTest(unittest.TestCase):
 class _jocor_JoCoRConfigurationTest(unittest.TestCase):
     def test_estimated_rate_changes_selection_not_artificial_noise(self) -> None:
         from lnl_toolbox.core.config_schema import normalize_experiment_config
-        path = Path('configs/experiment/jocor_cifar10_symmetric05_reproduction.yaml')
+        path = Path('configs/reproduction/jocor_cifar10.yaml')
         config = yaml.safe_load(path.read_text(encoding='utf-8'))
         legacy = normalize_experiment_config(config)
         self.assertEqual(legacy['selector']['keep_rate']['end'], 0.5)
@@ -191,7 +191,7 @@ class _jocor_JoCoRConfigurationTest(unittest.TestCase):
         from unittest.mock import Mock, patch
         from lnl_toolbox.training import multi_model_experiment as runner
 
-        config = yaml.safe_load(Path('configs/experiment/jocor_cifar10_symmetric05_reproduction.yaml').read_text(encoding='utf-8'))
+        config = yaml.safe_load(Path('configs/reproduction/jocor_cifar10.yaml').read_text(encoding='utf-8'))
         config['trainer'].update(epochs=2, device='cpu', progress=False)
         config['scheduler'] = {'name': 'none'}
         prepared = Mock(dataset='cifar10', num_classes=10, manifest=None,

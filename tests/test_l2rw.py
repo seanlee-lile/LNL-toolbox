@@ -186,7 +186,7 @@ class _l2rw_training_L2RWTrainingTest(unittest.TestCase):
         np.testing.assert_array_equal(labels[actual_order], labels[order])
 
     def test_step_budget_stops_exactly(self) -> None:
-        config = yaml.safe_load((_l2rw_training_ROOT / 'configs/experiment/l2rw_cifar10_smoke.yaml').read_text(encoding='utf-8'))
+        config = yaml.safe_load((_l2rw_training_ROOT / 'configs/smoke/l2rw_cifar10_smoke.yaml').read_text(encoding='utf-8'))
         config['trainer'] = {'epochs': 10, 'max_steps': 2, 'device': 'cpu'}
         with tempfile.TemporaryDirectory() as directory:
             run_dir = run_experiment(config, Path(directory) / 'run')
@@ -194,7 +194,7 @@ class _l2rw_training_L2RWTrainingTest(unittest.TestCase):
         self.assertEqual(payload['global_step'], 2)
 
     def test_official_meta_path_runs_end_to_end_for_short_budget(self) -> None:
-        config = yaml.safe_load((_l2rw_training_ROOT / 'configs/experiment/l2rw_cifar10_smoke.yaml').read_text(encoding='utf-8'))
+        config = yaml.safe_load((_l2rw_training_ROOT / 'configs/smoke/l2rw_cifar10_smoke.yaml').read_text(encoding='utf-8'))
         config['meta'] = {'virtual_learning_rate': 1.0, 'implementation': 'official'}
         config['trainer'] = {'epochs': 10, 'max_steps': 2, 'device': 'cpu'}
         with tempfile.TemporaryDirectory() as directory:
@@ -212,7 +212,7 @@ class _l2rw_training_L2RWTrainingTest(unittest.TestCase):
         self.assertAlmostEqual(_step_learning_rate(0.1, milestones, 0.1, [0.03, 0.007], 60000), 0.007)
 
     def test_smoke_and_completed_resume(self) -> None:
-        config = yaml.safe_load((_l2rw_training_ROOT / 'configs/experiment/l2rw_cifar10_smoke.yaml').read_text(encoding='utf-8'))
+        config = yaml.safe_load((_l2rw_training_ROOT / 'configs/smoke/l2rw_cifar10_smoke.yaml').read_text(encoding='utf-8'))
         config['trainer']['epochs'] = 2
         with tempfile.TemporaryDirectory() as directory:
             run_dir = run_experiment(config, Path(directory) / 'run')
@@ -237,7 +237,7 @@ class L2RWPreparedDataIsolationTest(unittest.TestCase):
                                np.arange(40) % 10, names, 'train', 'cifar10')
         self.test = CifarData(rng.integers(0, 256, (20, 32, 32, 3), dtype=np.uint8),
                               np.arange(20) % 10, names, 'test', 'cifar10')
-        self.config = yaml.safe_load((_l2rw_training_ROOT / 'configs/experiment/l2rw_cifar10_reproduction.yaml').read_text(encoding='utf-8'))
+        self.config = yaml.safe_load((_l2rw_training_ROOT / 'configs/reproduction/l2rw_cifar10.yaml').read_text(encoding='utf-8'))
         self.config['data'].update(root='unused-controlled-source', num_val=10, num_clean=10)
         self.config['loader'].update(batch_size=5, num_workers=0, pin_memory=False)
         self.config['trusted_validation']['batch_size'] = 5
