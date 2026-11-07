@@ -516,7 +516,7 @@ class QuickStartServiceTests(unittest.TestCase):
         fine = next(item for item in result if item.paper_id == "fine")
         self.assertEqual(fine.status, "ready")
 
-    def test_internal_pcse_does_not_require_upm_environment(self) -> None:
+    def test_internal_pcse_is_available_without_prerequisite_runs(self) -> None:
         root = Path(self.temp.name)
         service = DataService(
             registry=DatasetRegistry((_FakeCifar100Adapter(),)),
@@ -526,20 +526,18 @@ class QuickStartServiceTests(unittest.TestCase):
             "local-cifar100", "cifar100", {"root": str(self.data_root)}
         )
         service.inspect("local-cifar100")
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("LNL_PCSE_SOURCE_RUN", None)
-            option = next(
-                item
-                for item in QuickStartService(
-                    service, artifact_root=root / "pcse-artifacts"
-                ).method_options(
-                    "local-cifar100",
-                    QuickStartNoiseSelection("synthetic", "symmetric", rate=0.2, seed=1),
-                )
-                if item.paper_id == "pcse"
+        option = next(
+            item
+            for item in QuickStartService(
+                service, artifact_root=root / "pcse-artifacts"
+            ).method_options(
+                "local-cifar100",
+                QuickStartNoiseSelection("synthetic", "symmetric", rate=0.2, seed=1),
             )
+            if item.paper_id == "pcse"
+        )
         self.assertNotEqual(option.status, "needs_input")
-        self.assertNotIn("LNL_PCSE_SOURCE_RUN", option.required_user_inputs)
+        self.assertFalse(option.required_user_inputs)
 
     def test_clean_pcse_plan_preserves_labels_and_observed_validation(self) -> None:
         from lnl_toolbox.catalog import load_yaml

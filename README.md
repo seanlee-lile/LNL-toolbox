@@ -241,10 +241,8 @@ execution:
 
 MentorNet 等依赖外部训练 artifact 的 recipe 默认不会出现在直接可运行列表中；使用 `lnl list experiments --include-conditional` 查看，并先运行 `lnl validate` 获取缺失 artifact 的明确提示。
 
-PCSE 的真实 CIFAR profile 同样属于 conditional workflow。当前只接受角色明确且身份兼容的
-来源：UPM 主模型、监督 CE 模型或 Co-teaching 的 peer A；不会把任意 checkpoint 猜作合法来源。
-可用 `LNL_PCSE_SOURCE_RUN` 指向来源运行目录，并按
-`papers/pcse/reproduction.md` 中的 source identity 配置 YAML；缺失或不匹配时，`validate` 和 Dry-run 会在训练前失败。
+PCSE 在本次运行中完成交叉熵预训练、转移矩阵估计、统计恢复和集成训练。
+不需要其他方法的运行目录或模型权重；配置只设置本篇各阶段的训练参数。
 
 DLD 的 formal/paper-oriented 流程需要真实、可验证的预训练特征提取器；Toolbox 不会自动联网下载 torchvision 权重。随机冻结模型只可用于 engineering/smoke 链路，不能当作 formal pretrained source。CAL 则需要对齐的外部 clean/noisy label artifact，而不是预训练模型；其中 clean vector 仅用于 identity、alignment 和 evaluation，不参与训练更新。
 

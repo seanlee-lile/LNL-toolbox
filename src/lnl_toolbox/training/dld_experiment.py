@@ -40,7 +40,6 @@ from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
 from lnl_toolbox.training.dld_pretrained import (
     DLDTorchvisionResNet34Source,
-    DLDUPMMainBestSource,
     load_dld_feature_source,
 )
 from lnl_toolbox.training.experiment import (
@@ -124,7 +123,7 @@ class DLDWorkflow:
         noise_metadata: Mapping[str, Any],
         feature_model: torch.nn.Module,
         feature_identity: str,
-        feature_source: DLDUPMMainBestSource | DLDTorchvisionResNet34Source | None,
+        feature_source: DLDTorchvisionResNet34Source | None,
         feature_source_provenance: Mapping[str, Any],
         train_indices: np.ndarray,
         dual_view_loader: Any,
@@ -626,7 +625,7 @@ def run_dld_experiment(
     config["noise"] = _resolved_noise_config(config["noise"], noise_metadata)
 
     seed_everything(seed + 3000)
-    feature_source: DLDUPMMainBestSource | DLDTorchvisionResNet34Source | None = None
+    feature_source: DLDTorchvisionResNet34Source | None = None
     source_name = str(method.feature_extractor["source"]).strip().lower()
     if source_name == "external_checkpoint":
         feature_source = load_dld_feature_source(

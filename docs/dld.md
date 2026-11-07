@@ -7,8 +7,8 @@ Directional Label Diffusion（DLD）在 Toolbox 中通过统一的
 ## 前置条件与状态
 
 正式 DLD 配置必须使用真实、可验证且与配置身份兼容的预训练特征提取器。当前支持的
-formal source 由 recipe/readiness 检查明确列出，例如
-`torchvision_resnet34_imagenet1k_v1` 或兼容的 `upm_main_best` 来源。Toolbox 不会自动
+formal source 为官方 ImageNet ResNet-34 权重
+`torchvision_resnet34_imagenet1k_v1`，不读取其他论文的运行结果。Toolbox 不会自动
 联网下载 torchvision 权重；缺少权重、身份不匹配或 schema 无效时，Validate、Dry-run 和
 Paper 页面都会显示 prerequisite 未满足并阻止运行。
 

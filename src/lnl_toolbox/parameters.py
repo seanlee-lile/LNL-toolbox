@@ -1424,16 +1424,6 @@ def _parameter_edit_rule(
         meta = config.get("meta", {})
         if isinstance(meta, dict) and str(meta.get("implementation", "paper")).lower() == "official":
             return "required", "official L2RW 实现固定为 1，不执行显式虚拟参数更新", 1.0
-    if method == "pcse":
-        pretraining = config.get("pretraining_stage", {})
-        if isinstance(pretraining, dict) and pretraining.get("mode") == "external_checkpoint":
-            if path == "pretraining_stage.epochs":
-                return "required", "外部预训练模式使用已有检查点；预训练轮数为 0。", 0
-            if path.startswith((
-                "pretraining_stage.model.", "pretraining_stage.optimizer.",
-                "pretraining_stage.scheduler.",
-            )):
-                return "fixed", "外部预训练模式使用已有检查点；此项不由当前训练配置执行。", None
     if method == "cdr":
         update = config.get("parameter_update", {})
         mode = str(update.get("compatibility_mode", "paper")).lower() if isinstance(update, dict) else ""

@@ -301,7 +301,7 @@ MentorNet reproduction 可能要求外部准备、identity-compatible 的正式 
 
 ## 13.1 PCSE、DLD 与 CAL 前置条件
 
-- **PCSE**：当前只接受身份兼容且角色明确的 UPM 主模型、监督 CE 模型或 Co-teaching peer A 模型。可用 `LNL_PCSE_SOURCE_RUN` 提供来源运行目录，但仍必须满足 YAML 中的 identity 检查；不能把任意 checkpoint 当作合法来源。
+- **PCSE**：本次运行内完成交叉熵预训练及后续训练，不需要其他论文的模型或运行结果。
 - **DLD**：formal/paper-oriented 配置需要真实、已验证的 pretrained feature extractor。Toolbox 不会自动联网下载 torchvision 权重；random frozen 模型仅用于 engineering/smoke，不能视为正式 pretrained source。
 - **CAL**：需要 external aligned clean/noisy label artifact，而不是 pretrained model。clean vector 仅用于 identity、alignment 和 evaluation，不参与 optimizer 更新。
 

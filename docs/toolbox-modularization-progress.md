@@ -550,3 +550,18 @@
 - Known limitations / integration: 直接使用旧 YAML 路径的外部脚本需改新路径；旧 recipe 命令保留。已运行的 Web 服务可能缓存旧路径，需要操作者重启；本轮不停止现有服务。此前论文参数对照发现的问题不在本次路径整理中修复。共享高冲突文件是 catalog、recipe manifest、pyproject、CLI 共享模板、已有 CLI 测试与进度文档，合并时需保留本轮任务外改动。
 - Local checkpoint commits: none。Allowlist comparison: 变更符合上述批准范围，无额外仓库源文件；历史清理和发布均未授权。
 - Exact next step: 交付路径整理结果；需要使用新路径时由操作者重启已有 Web 服务。论文参数差异另行处理；无 commit/push 步骤。
+
+## 2026-11-07 PCSE / DLD 跨论文运行依赖删除
+
+- Goal/scope: 非 Scratch 的 PCSE / DLD 不读取其他论文训练结果。PCSE 固定执行自身 CE 预训练；DLD 保留官方 ImageNet ResNet-34 权重入口和独立 frozen-model 流程。训练参数值不变，远端运行快照不动。
+- Branch/base: `scratch`，开始时 HEAD `29b9752373827555a276cf75904358001dcfbdaf`。无新文件、无 commit/push。保留已有 CAL、Dual-T 和远端运维文件改动。
+- Checklist: (1) 依赖实现删除；(2) 内置配置与元数据清理；(3) 专属测试删除及相关回归；(4) Web/CLI 文案残留清理；(5) 最终审计。完成 5/5（100%）。后续新增的本地正式配置一轮运行验证：PCSE、DLD 均完成，进程退出码均为 0。
+- Changed implementation: `algorithms/pcse/config.py` 删除 mode/source schema；`algorithms/pcse/algorithm.py` 删除外部模型接管与来源状态；`training/pcse_experiment.py` 固定自身预训练；删除 `training/pcse_pretrained.py`（317 行外部适配实现，Git 历史可恢复）。`algorithms/dld/config.py`、`training/dld_pretrained.py`、`training/dld_experiment.py` 删除 UPM 加载分支，保留官方权重检查。上述路径均以 `src/lnl_toolbox/` 为根。
+- Changed shared files: `training/runners.py`、`training/service.py`、`catalog.py` 删除对应前置运行要求；`core/config_schema.py`、`parameters.py` 删除旧模式规则；`parameter_metadata.yaml`、`web/lnl_parameter_metadata_registry.yaml` 删除旧选项。PCSE 默认及 multiclass smoke 配置删除 mode；volmin smoke 内容未变。README、Web README、DLD 文档及两份使用手册说明自身训练流程。
+- Tests: `tests/test_pcse.py`、`test_dld.py` 删除外部来源专属回归；`test_registry.py`、`test_pipeline.py`、`test_cli.py`、`test_quickstart_service.py` 改为独立入口的断言。保留内部训练、恢复及 ImageNet 检查。
+- Executed: PCSE/DLD/registry/pipeline 143 项通过（43.962 秒）；CLI/Quick Start 153 项通过（297.603 秒）；清理环境变量断言后相关 2 项重跑通过（3.182 秒）。Web 134 项中首次 133 通过、1 失败；原因是本轮元数据清理误伤参数路径，修正后该项重跑通过（26.863 秒）。未完整重跑 Web 134 项，未跑全站测试，也未启动 Web 真实训练。此前选定文件 Ruff 检查通过；最终审计待做。
+- Additional files approved/completed: 用户随后要求“完后本地运行”，完成 `web/assets/quick_start.js` 删除 PCSE mode 判断并将“训练或加载模型”改为自身训练；`src/lnl_toolbox/cli/parameter_help.py` 删除旧模式说明。Web assets 33 项测试通过（60.310 秒），选定文件 Ruff 与 git diff --check 通过。
+- Local actual training: `artifacts/local-formal-one-epoch-20261107/dld` 正式 `dld_cifar10.yaml`，仅覆盖 `dld.diffusion.epochs=1`、`trainer.epochs=1`；显式选择完整 CIFAR-10 别名 `local-cifar10`，不使用 mini 数据。完整执行官方 ImageNet ResNet34 特征、45000 样本预校正与一轮扩散训练（225 次更新），进程退出码 0。模型、噪声、学习率、分段、推理步数均未改，生成的路径与噪声事实由正常运行补充。
+- PCSE actual training: 用户批准后，正式 `pcse_cifar10.yaml` 仅临时覆盖 pretraining/transition/ensemble epochs 为 1、scheduler.start_epoch/end_epoch 为 0/1，选完整 `local-cifar10`；结果位于 `artifacts/local-formal-one-epoch-20261107/pcse`。自身 CE 预训练 352 次更新、VolMin 矩阵估计 352 次更新、特征统计、GDA 和集成训练 100 次更新全部完成，退出码 0，最终测试样本数 10000。未读取其他论文结果。内置正式 YAML 未改为短测值。
+- Integration: 当前修改均在已批准清单内。共享冲突点为 catalog、参数元数据、runner/service 及 CLI/Quick Start 测试。旧的带 mode/source PCSE 配置将明确报不支持，不再加载其他论文结果。官方 ImageNet 权重仍是 DLD 的外部文件需求，不是其他论文产物。全部训练产物本地忽略，不提交。
+- Exact next step: 交付本地两篇正式配置缩短预算后的真实运行结果。无 commit/push。

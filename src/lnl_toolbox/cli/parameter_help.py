@@ -118,7 +118,6 @@ COMMON = {
     "posterior_stage.bandwidth": "Kernel bandwidth used by the posterior density estimator.",
     "final_stage.classifier": "Classifier trained in the final reweighted stage.",
     "final_stage.fresh_model": "Initialize a new model for the final stage instead of reusing the previous model.",
-    "pretraining_stage.mode": "Train a feature classifier locally or load an external pretrained checkpoint.",
     "transition.estimator": "Estimator used to recover the label transition probabilities.",
     "transition.parameterization.name": "Parameterization used to keep the estimated transition matrix valid.",
     "transition.parameterization.initial_weight": "Initial unconstrained weight of the learned transition parameterization.",

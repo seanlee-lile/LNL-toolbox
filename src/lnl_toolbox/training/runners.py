@@ -624,8 +624,6 @@ def _importance_reweighting_requirements(_config: Mapping[str, Any]) -> MethodRe
 
 
 def _pcse_requirements(config: Mapping[str, Any]) -> MethodRequirements:
-    pretraining = config.get("pretraining_stage", {}) or {}
-    external = isinstance(pretraining, Mapping) and str(pretraining.get("mode", "train")) == "external_checkpoint"
     return MethodRequirements(
         method="pcse",
         supports_native_noisy_labels=True,
@@ -637,25 +635,6 @@ def _pcse_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         implemented_variant="per_class_statistics",
         implementation_limits=frozenset({"class_count"}),
         min_classes=3,
-        exact_classes=frozenset({10}) if external else frozenset(),
-        required_pretrained_roles=("upm_main_best",) if external else (),
-        pretrained_role_paths=(
-            (("upm_main_best", ("pretraining_stage", "source", "run_directory_env")),)
-            if external else ()
-        ),
-        prerequisites=(
-            SourceDescriptor(
-                key="upm_main_best",
-                kind="pretrained_classifier",
-                name="PCSE pretrained classifier",
-                requirement="a compatible trained classifier with hidden-layer features",
-                obtain="finish a supported CE, Co-teaching peer A, or UPM run",
-                provide="select the immutable producer run and configure its hashes",
-                validator="pcse_classifier",
-                supported_sources=("supervised_best", "coteaching_peer_a_best", "upm_main_best"),
-                config_paths=(("pretraining_stage", "source", "run_directory_env"),),
-            ),
-        ) if external else (),
     )
 
 
@@ -709,10 +688,10 @@ def _dld_requirements(config: Mapping[str, Any]) -> MethodRequirements:
                 kind="pretrained_feature_extractor",
                 name="DLD pretrained feature extractor",
                 requirement="a compatible frozen feature extractor",
-                obtain="use a supported ImageNet ResNet-34 or UPM producer run",
+                obtain="use the official ImageNet ResNet-34 weights",
                 provide="provide a supported pretrained feature source",
                 validator="dld_feature_extractor",
-                supported_sources=("torchvision_resnet34_imagenet1k_v1", "upm_main_best"),
+                supported_sources=("torchvision_resnet34_imagenet1k_v1",),
                 config_paths=(("dld", "feature_extractor", "external"),),
             ),
         ) if source == "external_checkpoint" else (),

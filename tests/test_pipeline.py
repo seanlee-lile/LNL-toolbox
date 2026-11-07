@@ -243,14 +243,13 @@ class _runner_planning_RunnerPlanningTest(unittest.TestCase):
         self.assertEqual(fields['Co-teaching tau / noise rate'], '0.2')
 
     def test_dld_plan_exposes_current_fidelity_and_provenance(self) -> None:
-        config = {'method': 'dld', 'execution': {'runner': 'dld'}, 'data': {'name': 'cifar10'}, 'loader': {'batch_size': 256}, 'dld': {'fidelity': {'name': 'paper_oriented_v2_cosine_similarity', 'neighbor_metric': 'cosine_similarity', 'self_neighbor': 'include', 'divergence': 'kl_ps_to_pw'}, 'feature_extractor': {'source': 'external_checkpoint', 'model': {'name': 'resnet18'}, 'external': {'adapter': 'upm_main_best', 'checkpoint_sha256': 'a' * 64}}, 'precorrection': {'k_neighbors': 50}, 'diffusion': {'epochs': 15, 'timesteps': 100}, 'inference': {'steps': 5}}}
+        config = {'method': 'dld', 'execution': {'runner': 'dld'}, 'data': {'name': 'cifar10'}, 'loader': {'batch_size': 256}, 'dld': {'fidelity': {'name': 'paper_oriented_v2_cosine_similarity', 'neighbor_metric': 'cosine_similarity', 'self_neighbor': 'include', 'divergence': 'kl_ps_to_pw'}, 'feature_extractor': {'source': 'external_checkpoint', 'model': {'name': 'torchvision_resnet34'}, 'external': {'adapter': 'torchvision_resnet34_imagenet1k_v1', 'weights': 'IMAGENET1K_V1', 'input_contract': 'cifar10_standard_normalized'}}, 'precorrection': {'k_neighbors': 50}, 'diffusion': {'epochs': 15, 'timesteps': 100}, 'inference': {'steps': 5}}}
         plan = resolve_runner(config).describe(config)
         fields = {field.label: field.value for field in plan.fields}
         self.assertEqual(plan.training_budget, '15 (diffusion)')
         self.assertEqual(fields['DLD feature source'], 'external_checkpoint')
-        self.assertEqual(fields['DLD feature model'], 'resnet18')
-        self.assertEqual(fields['DLD source adapter'], 'upm_main_best')
-        self.assertEqual(fields['DLD checkpoint identity'], 'a' * 64)
+        self.assertEqual(fields['DLD feature model'], 'torchvision_resnet34')
+        self.assertEqual(fields['DLD source adapter'], 'torchvision_resnet34_imagenet1k_v1')
         self.assertEqual(fields['DLD neighbors'], 'K=50')
         self.assertEqual(fields['DLD neighbor metric'], 'cosine_similarity')
         self.assertEqual(fields['DLD self-neighbor'], 'include')

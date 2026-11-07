@@ -251,10 +251,8 @@ execution:
 
 MentorNet 等依赖外部训练 artifact 的 recipe 默认不会出现在直接可运行列表中；使用 `lnl list experiments --include-conditional` 查看，并先运行 `lnl validate` 获取缺失 artifact 的明确提示。
 
-PCSE 的真实 CIFAR profile 同样属于 conditional workflow：它要求一个严格匹配的 UPM
-`main_best` checkpoint 和 noise manifest。先阅读
-`papers/pcse/reproduction.md`，准备 source artifact 并设置
-`LNL_PCSE_SOURCE_RUN`；缺失或 identity 不匹配时，`validate` 和 dry-run 会在训练前失败。
+PCSE 在本次运行内训练预训练模型，再执行转移矩阵估计、统计恢复和集成训练。
+无需先运行另一篇论文，也不读取其他方法的 checkpoint。
 
 兼容的显式写法和训练预算快捷参数仍然可用：
 

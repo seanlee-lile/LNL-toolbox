@@ -2772,15 +2772,6 @@ methods:
           origin: algorithm_or_protocol_contract
           note: 为保持论文算法身份、完整 lifecycle 或正式复现协议而锁定。
           lock_reason: noise provenance
-        pretraining_stage.mode:
-          current: external_checkpoint
-          value_type: string
-          ui_control: readonly
-          reproduction_impact: high
-          origin: algorithm_or_protocol_contract
-          note: 为保持论文算法身份、完整 lifecycle 或正式复现协议而锁定。
-          evidence_ref: pretrain
-          lock_reason: PCSE lifecycle
         pretraining_stage.epochs:
           current: 0
           value_type: integer
@@ -2809,78 +2800,6 @@ methods:
           evidence_ref: pretrain
           lock_reason: source model protocol
         pretraining_stage.model.base_width:
-          current: 16
-          value_type: integer
-          ui_control: readonly
-          reproduction_impact: high
-          origin: algorithm_or_protocol_contract
-          note: 为保持论文算法身份、完整 lifecycle 或正式复现协议而锁定。
-          evidence_ref: pretrain
-          lock_reason: source model architecture
-        pretraining_stage.source.adapter:
-          current: upm_main_best
-          value_type: string
-          ui_control: readonly
-          reproduction_impact: high
-          origin: algorithm_or_protocol_contract
-          note: 为保持论文算法身份、完整 lifecycle 或正式复现协议而锁定。
-          evidence_ref: pretrain
-          lock_reason: source adapter
-        pretraining_stage.source.run_directory_env:
-          current: LNL_PCSE_SOURCE_RUN
-          value_type: string
-          ui_control: readonly
-          reproduction_impact: high
-          origin: algorithm_or_protocol_contract
-          note: 为保持论文算法身份、完整 lifecycle 或正式复现协议而锁定。
-          evidence_ref: pretrain
-          lock_reason: external source contract
-        pretraining_stage.source.checkpoint_sha256:
-          current: <recipe hash>
-          value_type: string
-          ui_control: readonly
-          reproduction_impact: high
-          origin: algorithm_or_protocol_contract
-          note: 为保持论文算法身份、完整 lifecycle 或正式复现协议而锁定。
-          evidence_ref: pretrain
-          lock_reason: source integrity
-        pretraining_stage.source.manifest_sha256:
-          current: <recipe hash>
-          value_type: string
-          ui_control: readonly
-          reproduction_impact: high
-          origin: algorithm_or_protocol_contract
-          note: 为保持论文算法身份、完整 lifecycle 或正式复现协议而锁定。
-          evidence_ref: pretrain
-          lock_reason: source integrity
-        pretraining_stage.source.mapping_hash:
-          current: <recipe hash>
-          value_type: string
-          ui_control: readonly
-          reproduction_impact: high
-          origin: algorithm_or_protocol_contract
-          note: 为保持论文算法身份、完整 lifecycle 或正式复现协议而锁定。
-          evidence_ref: pretrain
-          lock_reason: source integrity
-        pretraining_stage.source.dataset_fingerprint:
-          current: <recipe fingerprint>
-          value_type: string
-          ui_control: readonly
-          reproduction_impact: high
-          origin: algorithm_or_protocol_contract
-          note: 为保持论文算法身份、完整 lifecycle 或正式复现协议而锁定。
-          evidence_ref: pretrain
-          lock_reason: source integrity
-        pretraining_stage.source.model.name:
-          current: preact_resnet18
-          value_type: string
-          ui_control: readonly
-          reproduction_impact: high
-          origin: algorithm_or_protocol_contract
-          note: 为保持论文算法身份、完整 lifecycle 或正式复现协议而锁定。
-          evidence_ref: pretrain
-          lock_reason: source model contract
-        pretraining_stage.source.model.base_width:
           current: 16
           value_type: integer
           ui_control: readonly

@@ -6,7 +6,7 @@ import tempfile
 import unittest
 import numpy as np
 import torch
-from lnl_toolbox.algorithms.cal import cal_covariance_correction, cal_sieve_scores, cal_transition_indicators, cores2_adjusted_losses, cores2_warmup_prior, resolve_confidence_weight
+from lnl_toolbox.algorithms.cal import cal_all_class_losses, cal_covariance_correction, cal_sieve_scores, cal_transition_indicators, cores2_adjusted_losses, cores2_warmup_prior, resolve_confidence_weight
 from lnl_toolbox.noise.cal import DROP, KEEP, RELABEL, CALProxyArtifact, build_cal_proxy_artifact
 from lnl_toolbox.noise.estimators import PosteriorSnapshot
 from lnl_toolbox.training.cal_experiment import _assert_finite_warmup_gradients, _build_warmup_scheduler, _reference_transition_means, run_cal_experiment
@@ -111,6 +111,75 @@ class _cal_CALTest(unittest.TestCase):
         torch.testing.assert_close(
             means, torch.tensor([[0.5, 0.5], [0.0, 0.0]])
         )
+
+    def test_vectorized_covariance_matches_class_loop_values_and_gradients(self) -> None:
+        devices = ['cpu'] + (['cuda'] if torch.cuda.is_available() else [])
+        for device in devices:
+            for dtype in (torch.float32, torch.float64):
+                for classes in (5, 100):
+                    for retained in (
+                        [True] * 9,
+                        [True, False, True, False, False, True, True, False, True],
+                        [False] * 9,
+                    ):
+                        with self.subTest(device=device, dtype=dtype, classes=classes, retained=retained):
+                            generator = torch.Generator().manual_seed(1729)
+                            logits = torch.randn(9, classes, generator=generator, dtype=dtype).to(device).requires_grad_()
+                            reference_logits = logits.detach().clone().requires_grad_()
+                            proxy = torch.tensor([0, 0, 0, 1, 1, 3, 3, 3, 3], device=device)
+                            noisy = torch.tensor([0, 1, 2, 3, 4, 0, 1, 2, 4], device=device)
+                            mask = torch.tensor(retained, device=device)
+                            prior = torch.arange(1, classes + 1, device=device, dtype=dtype)
+                            prior = prior / prior.sum()
+                            history = torch.randn(classes, classes, generator=generator, dtype=dtype).to(device)
+                            history_before = history.clone()
+                            transition = torch.rand(classes, classes, generator=generator, dtype=dtype).to(device)
+                            transition = transition / transition.sum(dim=1, keepdim=True)
+                            losses = cal_all_class_losses(reference_logits)
+                            expected = losses.sum() * 0.0
+                            expected_means = history.clone()
+                            for proxy_class in range(classes):
+                                keep = mask & proxy.eq(proxy_class)
+                                if not bool(keep.any()):
+                                    continue
+                                class_losses = losses[keep]
+                                expected_means[proxy_class] = class_losses.detach().mean(dim=0)
+                                for noisy_class in range(classes):
+                                    indicator = noisy[keep].eq(noisy_class).to(dtype)
+                                    expected = expected + prior[proxy_class] * (
+                                        (indicator - transition[proxy_class, noisy_class])
+                                        * (class_losses[:, noisy_class] - history[proxy_class, noisy_class])
+                                    ).mean()
+                            actual, means = cal_covariance_correction(
+                                cal_all_class_losses(logits), proxy, noisy, mask,
+                                prior, history, transition,
+                            )
+                            actual.backward()
+                            expected.backward()
+                            tolerance = {'rtol': 2e-5, 'atol': 2e-6} if dtype == torch.float32 else {'rtol': 1e-10, 'atol': 1e-12}
+                            torch.testing.assert_close(actual, expected, **tolerance)
+                            torch.testing.assert_close(means, expected_means, **tolerance)
+                            torch.testing.assert_close(logits.grad, reference_logits.grad, **tolerance)
+                            torch.testing.assert_close(history, history_before, rtol=0, atol=0)
+                            self.assertFalse(means.requires_grad)
+
+    def test_grouped_epoch_statistics_match_class_loop(self) -> None:
+        for device in ['cpu'] + (['cuda'] if torch.cuda.is_available() else []):
+            losses = torch.arange(45, device=device, dtype=torch.float32).reshape(9, 5) / 7
+            proxy = torch.tensor([0, 0, 0, 1, 1, 3, 3, 3, 3], device=device)
+            mask = torch.tensor([True, False, True, False, False, True, True, False, True], device=device)
+            old_sums = torch.zeros(5, 5, device=device)
+            old_counts = torch.zeros(5, device=device)
+            for proxy_class in range(5):
+                keep = mask & proxy.eq(proxy_class)
+                old_sums[proxy_class] += losses[keep].sum(dim=0)
+                old_counts[proxy_class] += keep.sum()
+            sums, counts = torch.zeros_like(old_sums), torch.zeros_like(old_counts)
+            weights = mask.to(losses.dtype)
+            sums.index_add_(0, proxy, losses * weights[:, None])
+            counts.index_add_(0, proxy, weights)
+            torch.testing.assert_close(sums, old_sums)
+            torch.testing.assert_close(counts, old_counts, rtol=0, atol=0)
 
     def test_transition_indicator(self) -> None:
         value = cal_transition_indicators(torch.tensor([0, 1]), torch.tensor([1, 0]), torch.tensor([True, False]), 2)

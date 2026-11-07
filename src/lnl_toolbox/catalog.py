@@ -750,7 +750,6 @@ def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
         "noise.sampling": "global per_class transition",
         "parameter_update.compatibility_mode": "paper official_code",
         "parameter_update.critical_scope": "all_trainable matrix_and_convolution_weights",
-        "pretraining_stage.mode": "train external_checkpoint",
         "selector.keep_rate.name": "linear constant",
         "transition.estimator": "paper_volmin dual_t known_smoke",
         "transition.parameterization.name": "sigmoid_off_diagonal",
@@ -1062,28 +1061,9 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
         from importlib import import_module
 
         module_name, class_name = validators[method_name]
-        parsed_method_config = getattr(
+        getattr(
             import_module(module_name), class_name
         ).from_mapping(config)
-        if (
-            method_name == "pcse"
-            and parsed_method_config.pretraining.mode == "external_checkpoint"
-        ):
-            from lnl_toolbox.training.experiment import build_model
-            from lnl_toolbox.training.pcse_pretrained import (
-                load_pretrained_classifier_source,
-            )
-
-            num_classes = int(_require_mapping(config, "data")["num_classes"])
-            model = build_model(
-                dict(parsed_method_config.pretraining.model), num_classes
-            )
-            source = load_pretrained_classifier_source(
-                parsed_method_config.pretraining.source,
-                model,
-                num_classes=num_classes,
-            )
-            source.assert_unchanged()
     pipeline = config.get("pipeline", {}) or {}
     if isinstance(pipeline, Mapping):
         provider = pipeline.get("weight_provider", {}) or {}

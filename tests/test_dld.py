@@ -429,26 +429,12 @@ from lnl_toolbox.algorithms.dld import DLDConfig
 from lnl_toolbox.noise.generators import generate_symmetric
 from lnl_toolbox.noise.manifest import fingerprint_labels
 from lnl_toolbox.training.checkpoint import atomic_save
-from lnl_toolbox.training.dld_pretrained import load_torchvision_resnet34_imagenet1k_v1_source, load_upm_main_best_feature_source
+from lnl_toolbox.training.dld_pretrained import load_torchvision_resnet34_imagenet1k_v1_source
 from lnl_toolbox.training.experiment import build_model
 from lnl_toolbox.training.noisy_labels import file_sha256
 
 _dld_readiness_ROOT = Path(__file__).resolve().parents[1]
 
-def _dld_readiness__source(directory: Path) -> tuple[dict, torch.nn.Module]:
-    model_config = {'name': 'resnet18', 'base_width': 16}
-    model = build_model(model_config, 10)
-    labels = np.arange(20, dtype=np.int64) % 10
-    manifest = generate_symmetric(labels, 10, 0.4, 1, 'cifar10', sampling='per_class')
-    manifest.global_indices = np.arange(labels.size, dtype=np.int64)
-    manifest.dataset_fingerprint = fingerprint_labels(labels)
-    manifest_path = directory / 'noise_manifest.npz'
-    manifest.save(manifest_path)
-    noise = {'dataset': 'cifar10', 'num_classes': 10, 'mapping_hash': manifest.mapping_hash, 'dataset_fingerprint': manifest.dataset_fingerprint, 'manifest_sha256': file_sha256(manifest_path)}
-    payload = {'method': 'upm', 'checkpoint_role': 'main_best', 'config': {'upm': {'main': {'model': model_config}}}, 'noise': noise, 'upm_state': {'main_completed_epochs': 3, 'main_global_step': 9, 'main_best_epoch': 1, 'main_best_validation_accuracy': 0.5}, 'best_main_model_state': model.state_dict()}
-    checkpoint_path = directory / 'best.pt'
-    atomic_save(payload, checkpoint_path)
-    return ({'adapter': 'upm_main_best', 'run_directory_env': 'DLD_TEST_SOURCE', 'model': model_config}, model)
 
 class _dld_readiness_DLDReadinessTest(unittest.TestCase):
 
@@ -501,32 +487,3 @@ class _dld_readiness_DLDReadinessTest(unittest.TestCase):
             cached.parent.mkdir()
             cached.write_bytes(b'not official weights')
             self.assertEqual(_cached_torchvision_weight(ResNet34_Weights.IMAGENET1K_V1.url), cached)
-
-
-    def test_external_source_is_strict_and_immutable(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            config, _ = _dld_readiness__source(root)
-            with mock.patch.dict(os.environ, {'DLD_TEST_SOURCE': directory}):
-                source = load_upm_main_best_feature_source(config, build_model(config['model'], 10), num_classes=10)
-                self.assertEqual(source.provenance['adapter'], 'upm_main_best')
-                source.assert_unchanged()
-                original = (root / 'noise_manifest.npz').read_bytes()
-                (root / 'noise_manifest.npz').write_bytes(original + b'changed')
-                with self.assertRaisesRegex(RuntimeError, 'source changed'):
-                    source.assert_unchanged()
-
-    def test_external_source_ignores_legacy_hashes_but_checks_checkpoint_role(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            config, _ = _dld_readiness__source(root)
-            with mock.patch.dict(os.environ, {'DLD_TEST_SOURCE': directory}):
-                legacy = {**config, 'checkpoint_sha256': 'obsolete', 'manifest_sha256': 'obsolete',
-                          'mapping_hash': 'obsolete', 'dataset_fingerprint': 'obsolete'}
-                source = load_upm_main_best_feature_source(legacy, build_model(config['model'], 10), num_classes=10)
-                self.assertEqual(source.provenance['adapter'], 'upm_main_best')
-                payload = torch.load(root / 'best.pt', map_location='cpu', weights_only=False)
-                payload['checkpoint_role'] = 'last'
-                atomic_save(payload, root / 'best.pt')
-                with self.assertRaisesRegex(ValueError, 'main_best'):
-                    load_upm_main_best_feature_source(config, build_model(config['model'], 10), num_classes=10)

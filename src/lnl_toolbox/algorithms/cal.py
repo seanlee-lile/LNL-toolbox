@@ -138,23 +138,31 @@ def cal_covariance_correction(
     prior = proxy_class_prior.to(all_class_losses)
     if prior.shape != (classes,):
         raise ValueError("CAL proxy class prior must have shape [C]")
-    correction = all_class_losses.sum() * 0.0
-    detached_means = reference_loss_means.detach().clone().to(all_class_losses)
-    for proxy_class in range(classes):
-        class_mask = retained_mask & proxy_targets.eq(proxy_class)
-        count = int(class_mask.sum().item())
-        if count == 0:
-            continue
-        losses = all_class_losses[class_mask]
-        detached_means[proxy_class] = losses.detach().mean(dim=0)
-        noisy = noisy_targets[class_mask]
-        for noisy_class in range(classes):
-            indicator = noisy.eq(noisy_class).to(losses.dtype)
-            centered_indicator = (
-                indicator - transition_means[proxy_class, noisy_class]
-            )
-            centered_loss = losses[:, noisy_class] - reference_loss_means[proxy_class, noisy_class]
-            correction = correction + prior[proxy_class] * (centered_indicator * centered_loss).mean()
+    proxy_ids = proxy_targets.long()
+    retained = retained_mask.to(all_class_losses.dtype)
+    counts = all_class_losses.new_zeros(classes)
+    counts.index_add_(0, proxy_ids, retained)
+
+    indicators = F.one_hot(
+        noisy_targets.long(), num_classes=classes
+    ).to(all_class_losses)
+    centered_indicators = indicators - transition_means[proxy_ids]
+    centered_losses = all_class_losses - reference_loss_means[proxy_ids]
+    # Preserve each proxy class's own retained-sample denominator, not B.
+    sample_weights = prior[proxy_ids] * retained / counts[proxy_ids].clamp_min(1)
+    correction = (
+        sample_weights * (centered_indicators * centered_losses).sum(dim=1)
+    ).sum()
+
+    loss_sums = all_class_losses.new_zeros(classes, classes)
+    loss_sums.index_add_(
+        0, proxy_ids, all_class_losses.detach() * retained[:, None]
+    )
+    detached_means = torch.where(
+        counts[:, None] > 0,
+        loss_sums / counts.clamp_min(1)[:, None],
+        reference_loss_means.detach().to(all_class_losses),
+    )
     return correction, detached_means
 
 

@@ -83,7 +83,6 @@ class DLDConfig:
             )
             adapter = str(external.get("adapter", "")).strip().lower()
             supported = {
-                "upm_main_best",
                 "torchvision_resnet34_imagenet1k_v1",
             }
             if adapter not in supported:
@@ -91,12 +90,7 @@ class DLDConfig:
                     "DLD external feature adapter must be one of: "
                     + ", ".join(sorted(supported))
                 )
-            required = (
-                ("run_directory_env",)
-                if adapter == "upm_main_best"
-                else ("weights", "input_contract")
-            )
-            for field in required:
+            for field in ("weights", "input_contract"):
                 if not str(external.get(field, "")).strip():
                     raise ValueError(f"dld.feature_extractor.external.{field} is required")
             if adapter == "torchvision_resnet34_imagenet1k_v1":

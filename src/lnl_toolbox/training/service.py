@@ -56,7 +56,6 @@ class ExperimentService:
         self.last_compatibility: CompatibilityResult | None = None
         self._last_compatibility_config: dict[str, Any] | None = None
         self.prerequisites = PrerequisiteRegistry()
-        self.prerequisites.register("pcse_classifier", self._validate_pcse_source)
         self.prerequisites.register("dld_feature_extractor", self._validate_dld_source)
         self.prerequisites.register("cal_external_labels", self._validate_cal_source)
 
@@ -93,31 +92,6 @@ class ExperimentService:
         level = ReadinessLevel.PATH_EXISTS if path_exists else ReadinessLevel.CONFIGURED
         return ValidationMetadata.invalid(descriptor, level, str(error))
 
-    def _validate_pcse_source(
-        self, descriptor: SourceDescriptor, config: Mapping[str, Any]
-    ) -> ValidationMetadata:
-        source = self._source_mapping(config, ("pretraining_stage", "source"))
-        if source is None:
-            return ValidationMetadata.needs_input(descriptor, "PCSE source is not configured")
-        environment = str(source.get("run_directory_env", "")).strip()
-        run_value = os.environ.get(environment, "").strip() if environment else ""
-        path_exists = bool(run_value and Path(run_value).expanduser().is_dir())
-        if not run_value:
-            return ValidationMetadata.needs_input(
-                descriptor, f"set {environment or 'the configured source environment variable'}"
-            )
-        try:
-            from lnl_toolbox.training.experiment import build_model
-            from lnl_toolbox.training.pcse_pretrained import load_pretrained_classifier_source
-
-            num_classes = int((config.get("data", {}) or {}).get("num_classes", 10))
-            model = build_model(dict(source.get("model", {})), num_classes)
-            value = load_pretrained_classifier_source(source, model, num_classes=num_classes)
-        except (FileNotFoundError, TypeError, ValueError) as error:
-            return self._invalid_prerequisite(descriptor, error, path_exists=path_exists)
-        return ValidationMetadata.ready(
-            descriptor, "PCSE classifier source is consumer-validated", provenance=value.provenance
-        )
 
     def _validate_dld_source(
         self, descriptor: SourceDescriptor, config: Mapping[str, Any]
@@ -127,17 +101,7 @@ class ExperimentService:
             return ValidationMetadata.needs_input(
                 descriptor, "DLD feature extractor source is not configured"
             )
-        external = extractor["external"]
-        adapter = str(external.get("adapter", "")).strip().lower()
         path_exists = False
-        if adapter in {"upm_main_best", "run_directory"}:
-            environment = str(external.get("run_directory_env", "")).strip()
-            value = os.environ.get(environment, "").strip() if environment else ""
-            path_exists = bool(value and Path(value).expanduser().is_dir())
-            if not value:
-                return ValidationMetadata.needs_input(
-                    descriptor, f"set {environment or 'the DLD source environment variable'}"
-                )
         try:
             from lnl_toolbox.training.dld_pretrained import load_dld_feature_source
 

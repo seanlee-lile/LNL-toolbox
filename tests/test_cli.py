@@ -669,9 +669,7 @@ class _unified_cli_CatalogTest(unittest.TestCase):
             validate_config(resolve_config_paths(mentor, _unified_cli_ROOT))
         self.assertIn('MentorArtifact: NOT READY', str(raised.exception))
         pcse = load_recipe_config(next((item for item in discover_recipes(_unified_cli_ROOT, include_conditional=True) if item.id == 'cifar10-pcse-reproduction')))
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop('LNL_PCSE_SOURCE_RUN', None)
-            self.assertEqual(validate_config(resolve_config_paths(pcse, _unified_cli_ROOT)).name, 'pcse')
+        self.assertEqual(validate_config(resolve_config_paths(pcse, _unified_cli_ROOT)).name, 'pcse')
 
     def test_mentornet_ready_requires_a_valid_artifact_and_keeps_cross_dataset_contract(self) -> None:
         recipe = recipe_by_id('mentornet-dd-cifar100-symmetric04-smoke', _unified_cli_ROOT)
@@ -1472,9 +1470,8 @@ class _pcse_cli_PCSECliTest(unittest.TestCase):
         self.assertEqual(recipe.runner, 'pcse')
         config = load_recipe_config(recipe)
         parsed = PCSEConfig.from_mapping(config)
-        self.assertEqual(parsed.pretraining.mode, 'train')
+        self.assertGreater(parsed.pretraining.epochs, 0)
         self.assertEqual(parsed.pretraining.method, 'cross_entropy')
-        self.assertIsNone(parsed.pretraining.source)
         self.assertEqual(validate_config(config).name, 'pcse')
         self.assertEqual(config['data']['name'], 'cifar10')
         self.assertNotIn('max_train_samples', config['data'])
@@ -1486,25 +1483,6 @@ class _pcse_cli_PCSECliTest(unittest.TestCase):
         all_ids = {item.id for item in discover_recipes(include_conditional=True)}
         self.assertIn('cifar10-pcse-reproduction', all_ids)
 
-    def test_real_cifar_preflight_distinguishes_internal_and_external_pretraining(self) -> None:
-        config = load_recipe_config(recipe_by_id('cifar10-pcse-reproduction'))
-        with mock.patch.dict(os.environ, {}, clear=False):
-            source_env = 'LNL_PCSE_TEST_SOURCE_RUN'
-            os.environ.pop(source_env, None)
-            self.assertEqual(validate_config(config).name, 'pcse')
-            external = deepcopy(config)
-            pretraining = external['pretraining_stage']
-            pretraining['mode'] = 'external_checkpoint'
-            pretraining['epochs'] = 0
-            pretraining['scheduler'] = {'name': 'none'}
-            pretraining['source'] = {
-                'adapter': 'supervised_best', 'run_directory_env': source_env,
-                'checkpoint_sha256': 'a' * 64, 'manifest_sha256': 'b' * 64,
-                'mapping_hash': 'c' * 64, 'dataset_fingerprint': 'd' * 64,
-                'model': deepcopy(pretraining['model']),
-            }
-            with self.assertRaisesRegex(ValueError, 'source environment variable is not set'):
-                validate_config(external)
 
 
 

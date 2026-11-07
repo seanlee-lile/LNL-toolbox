@@ -3,7 +3,6 @@ from __future__ import annotations
 """Verified pretrained feature source for real-data DLD runs."""
 
 from dataclasses import dataclass
-import os
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlparse
@@ -13,8 +12,6 @@ from torch import nn
 from torch.nn import functional as F
 
 from lnl_toolbox.models.feature_output import FeatureOutput
-from lnl_toolbox.noise.manifest import NoiseManifest
-from lnl_toolbox.training.checkpoint import read_checkpoint
 from lnl_toolbox.training.noisy_labels import file_sha256
 
 
@@ -48,87 +45,8 @@ class DLDSourceFileIdentity:
             raise RuntimeError(f"DLD pretrained source changed: {self.path}")
 
 
-@dataclass(frozen=True)
-class DLDUPMMainBestSource:
-    run_dir: Path
-    checkpoint: DLDSourceFileIdentity
-    manifest: DLDSourceFileIdentity
-    checkpoint_payload: Mapping[str, Any]
-    noise_manifest: NoiseManifest
-    model: nn.Module
-
-    @property
-    def provenance(self) -> dict[str, Any]:
-        config = self.checkpoint_payload["config"]
-        state = self.checkpoint_payload["upm_state"]
-        return {
-            "adapter": "upm_main_best",
-            "method": "upm",
-            "checkpoint_role": "main_best",
-            "run_dir": str(self.run_dir),
-            "checkpoint": self.checkpoint.state_dict(),
-            "manifest": self.manifest.state_dict(),
-            "mapping_hash": self.noise_manifest.mapping_hash,
-            "dataset_fingerprint": self.noise_manifest.dataset_fingerprint,
-            "model": dict(config["upm"]["main"]["model"]),
-            "completed_epochs": int(state["main_completed_epochs"]),
-            "global_step": int(state["main_global_step"]),
-            "best_epoch": int(state["main_best_epoch"]),
-            "best_validation_accuracy": float(state["main_best_validation_accuracy"]),
-        }
-
-    def assert_unchanged(self) -> None:
-        self.checkpoint.assert_unchanged()
-        self.manifest.assert_unchanged()
 
 
-def load_upm_main_best_feature_source(
-    source_config: Mapping[str, Any],
-    model: nn.Module,
-    *,
-    num_classes: int,
-) -> DLDUPMMainBestSource:
-    """Load the one explicitly supported source schema without guessing."""
-
-    if str(source_config.get("adapter", "")).strip().lower() != "upm_main_best":
-        raise ValueError("DLD external feature adapter must be upm_main_best")
-    environment_name = str(source_config.get("run_directory_env", "")).strip()
-    run_value = os.environ.get(environment_name, "").strip()
-    if not environment_name or not run_value:
-        raise ValueError(f"DLD source environment variable is not set: {environment_name}")
-    run_dir = Path(run_value).expanduser().resolve()
-    if not run_dir.is_dir():
-        raise FileNotFoundError(f"DLD pretrained source run does not exist: {run_dir}")
-    checkpoint = DLDSourceFileIdentity.capture(run_dir / "best.pt")
-    manifest_identity = DLDSourceFileIdentity.capture(run_dir / "noise_manifest.npz")
-
-    payload = read_checkpoint(checkpoint.path, "cpu")
-    if payload.get("method") != "upm" or payload.get("checkpoint_role") != "main_best":
-        raise ValueError("DLD source must be an UPM main_best checkpoint")
-    config = payload.get("config")
-    noise = payload.get("noise")
-    state = payload.get("upm_state")
-    model_state = payload.get("best_main_model_state")
-    if not all(isinstance(item, Mapping) for item in (config, noise, state, model_state)):
-        raise ValueError("DLD UPM source checkpoint schema is incomplete")
-    expected_model = dict(source_config.get("model", {}))
-    actual_model = dict(config.get("upm", {}).get("main", {}).get("model", {}))
-    if expected_model != actual_model:
-        raise ValueError("DLD source model architecture mismatch")
-    if str(noise.get("dataset")) != "cifar10" or int(noise.get("num_classes", -1)) != num_classes:
-        raise ValueError("DLD source dataset or class count mismatch")
-    manifest = NoiseManifest.load(manifest_identity.path)
-    if manifest.dataset != "cifar10" or manifest.num_classes != num_classes:
-        raise ValueError("DLD source manifest dataset contract mismatch")
-    try:
-        model.load_state_dict(model_state, strict=True)
-    except RuntimeError as error:
-        raise ValueError("DLD source state_dict is incompatible") from error
-    result = DLDUPMMainBestSource(
-        run_dir, checkpoint, manifest_identity, payload, manifest, model
-    )
-    result.assert_unchanged()
-    return result
 
 
 class _TorchvisionResNet34FeatureModel(nn.Module):
@@ -253,28 +171,19 @@ def load_dld_feature_source(
     extractor_config: Mapping[str, Any],
     *,
     num_classes: int,
-) -> DLDUPMMainBestSource | DLDTorchvisionResNet34Source:
+) -> DLDTorchvisionResNet34Source:
     external = extractor_config.get("external")
     if not isinstance(external, Mapping):
         raise TypeError("DLD external feature source must be a mapping")
     adapter = str(external.get("adapter", "")).strip().lower()
     if adapter == "torchvision_resnet34_imagenet1k_v1":
         return load_torchvision_resnet34_imagenet1k_v1_source(external)
-    if adapter == "upm_main_best":
-        from lnl_toolbox.training.experiment import build_model
-
-        model = build_model(dict(extractor_config.get("model", {})), num_classes)
-        return load_upm_main_best_feature_source(
-            external, model, num_classes=num_classes
-        )
     raise ValueError(f"unsupported DLD feature adapter: {adapter}")
 
 
 __all__ = [
     "DLDSourceFileIdentity",
-    "DLDUPMMainBestSource",
     "DLDTorchvisionResNet34Source",
     "load_dld_feature_source",
     "load_torchvision_resnet34_imagenet1k_v1_source",
-    "load_upm_main_best_feature_source",
 ]

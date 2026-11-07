@@ -47,7 +47,7 @@ Quick Start 第 4 步直接显示本次配置的默认参数和可折叠的高�
 
 论文页面使用具体 recipe 的“当前选择”卡片显示 **可用**、**需补充条件** 或 **不兼容**，不再显示旧的兼容性分类列表。缺少 prerequisite 时 Run 保持禁用；满足真实条件后会恢复可用。
 
-- **PCSE** 仅支持角色明确、身份兼容的 UPM 主模型、监督 CE 模型和 Co-teaching peer A 模型。可用 `LNL_PCSE_SOURCE_RUN` 提供来源运行目录，但不能把任意 checkpoint 当作来源。
+- **PCSE** 在本次运行内完成模型预训练和后续阶段，不读取其他论文的训练结果。
 - **DLD** 的 formal/paper-oriented 配置需要真实的 pretrained feature extractor；Toolbox 不自动联网下载 torchvision 权重，random frozen 模型只属于 engineering/smoke。
 - **CAL** 需要对齐的 external clean/noisy label artifact，不是 pretrained model；clean vector 仅用于 identity、alignment 和 evaluation，不参与训练更新。
 - **MentorNet** 保持单独的准备流程：准备 Mentor 特征 → 训练 MentorArtifact → 运行 Student。缺少 artifact 时 Student 被阻止，不会自动训练 Mentor。

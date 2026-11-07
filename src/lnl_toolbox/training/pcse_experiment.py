@@ -14,7 +14,6 @@ from torch import nn
 import yaml
 
 from lnl_toolbox.algorithms.pcse import PCSEAlgorithm, PCSEConfig
-from lnl_toolbox.evaluation.classification import evaluate_classification
 from lnl_toolbox.data import DataRequirements, DataRole
 from lnl_toolbox.noise.generators import generate_pairflip, generate_symmetric
 from lnl_toolbox.noise.manifest import NoiseManifest
@@ -34,7 +33,6 @@ from lnl_toolbox.training.noisy_labels import (
     effective_subset_actual_rate,
     file_sha256,
 )
-from lnl_toolbox.training.pcse_pretrained import load_pretrained_classifier_source
 
 
 class _PCSEMultilayerPerceptron(nn.Module):
@@ -118,21 +116,6 @@ def _noisy_targets(
     return manifest.noisy_targets[rows]
 
 
-def _persist_source_manifest(source: Path, destination: Path) -> None:
-    temporary = destination.with_name(destination.name + ".tmp")
-    if temporary.exists():
-        raise FileExistsError(
-            f"PCSE temporary source manifest already exists: {temporary}"
-        )
-    try:
-        temporary.write_bytes(source.read_bytes())
-        loaded = NoiseManifest.load(temporary)
-        if loaded.mapping_hash != NoiseManifest.load(source).mapping_hash:
-            raise ValueError("PCSE source manifest temporary validation failed")
-        temporary.replace(destination)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
 
 
 def _prepare_synthetic_manifest(
@@ -253,37 +236,6 @@ def run_pcse_experiment(
     if not isinstance(loader, Mapping):
         raise TypeError("PCSE loader configuration must be a mapping")
     model_config = method_config.pretraining.model
-    external_source = None
-    source_model = None
-    model: nn.Module | None = None
-    pretraining_mode = method_config.pretraining.mode
-    if pretraining_mode == "train":
-        manifest_mode = "generated"
-    elif pretraining_mode == "external_checkpoint":
-        data_name = str(data.get("name", "")).strip().lower()
-        num_classes = int(data.get("num_classes", 0))
-        if data_name != "cifar10":
-            raise ValueError("PCSE external classifier source currently requires CIFAR-10")
-        if num_classes != 10:
-            raise ValueError("PCSE CIFAR-10 requires data.num_classes: 10")
-        model = build_model(model_config, num_classes)
-        external_source = load_pretrained_classifier_source(
-            method_config.pretraining.source, model, num_classes=num_classes
-        )
-        source_model = build_model(model_config, num_classes)
-        source_model.load_state_dict(external_source.state_dict, strict=True)
-        source_model.to(device)
-        manifest = external_source.noise_manifest
-        config["noise"] = {
-            "name": "external",
-            "manifest": str(external_source.manifest.path),
-            "manifest_sha256": external_source.manifest.sha256,
-            "validation_targets": "noisy",
-        }
-        manifest_mode = "external"
-    else:
-        raise ValueError(f"unsupported PCSE pretraining mode: {pretraining_mode}")
-
     if requirements is None:
         from lnl_toolbox.training.runners import resolve_data_requirements
         requirements = resolve_data_requirements(config, expected_runner="pcse")
@@ -291,27 +243,22 @@ def run_pcse_experiment(
         config,
         requirements=requirements,
         run_dir=run_dir,
-        seed=seed + 10 if pretraining_mode == "train" else seed,
+        seed=seed + 10,
         checkpoint_payload=resume_payload,
     )
     prepared.loader_config = {**prepared.loader_config, "persistent_workers": True}
     data_name, num_classes = prepared.dataset, prepared.num_classes
-    if pretraining_mode == "train":
-        model = _build_pcse_pretraining_model(
-            model_config, prepared.input_spec, num_classes
-        )
-    elif num_classes != 10:
-        raise ValueError("PCSE external classifier source class count mismatch")
-    if model is None:
-        raise RuntimeError("PCSE model construction did not complete")
+    model = _build_pcse_pretraining_model(
+        model_config, prepared.input_spec, num_classes
+    )
     manifest, manifest_path = prepared.manifest, prepared.manifest_path
     if manifest is None or manifest_path is None:
         raise ValueError("PCSE requires noisy train and validation labels")
-    if pretraining_mode == "train":
-        if manifest.noise_type == "clean":
-            manifest_mode = "clean"
-        elif manifest.noise_type == "real_world":
-            manifest_mode = "native"
+    manifest_mode = "generated"
+    if manifest.noise_type == "clean":
+        manifest_mode = "clean"
+    elif manifest.noise_type == "real_world":
+        manifest_mode = "native"
     effective_train_rate = effective_subset_actual_rate(manifest, prepared.train_indices)
     # Validation may be an independently namespaced source split.  Its
     # realized rate must be measured from the materialized role view rather
@@ -339,8 +286,6 @@ def run_pcse_experiment(
             method_config.pretraining.scheduler,
             method_config.pretraining.epochs,
         )
-        if method_config.pretraining.mode == "train"
-        else None
     )
     loss = build_builtin_loss({"name": "ce"}).to(device)
 
@@ -380,28 +325,11 @@ def run_pcse_experiment(
         dataset=data_name,
         num_classes=num_classes,
         noise_metadata=noise_metadata,
-        external_source_provenance=(
-            None if external_source is None else external_source.provenance
-        ),
-        external_source_model=source_model,
     )
     try:
         if resume is not None:
             algorithm.resume(resume)
-        elif external_source is not None:
-            validation = evaluate_classification(
-                model, validation_loader, loss, device
-            )
-            algorithm.adopt_external_pretrained(
-                completed_epochs=external_source.source_completed_epochs,
-                global_step=external_source.source_global_step,
-                best_epoch=external_source.best_epoch,
-                validation_accuracy=external_source.best_validation_accuracy,
-                validation_loss=float(validation["loss"]),
-            )
         algorithm.run()
     finally:
         algorithm.close()
-        if external_source is not None:
-            external_source.assert_unchanged()
     return run_dir

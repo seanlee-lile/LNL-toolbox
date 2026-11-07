@@ -272,8 +272,12 @@ def run_cal_experiment(
         epoch_loss_sums = torch.zeros_like(means)
         epoch_class_counts = torch.zeros(classes, device=device)
         for batch in train_loader:
-            inputs, targets, indices = batch["input"].to(device), batch["target"].to(device), batch["index"].to(device)
-            proxy_targets, mask, _ = proxy.lookup(indices); logits = model(inputs)
+            inputs = batch["input"].to(device, non_blocking=True)
+            targets = batch["target"].to(device, non_blocking=True)
+            proxy_targets, mask, _ = proxy.lookup(batch["index"])
+            proxy_targets = proxy_targets.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
+            logits = model(inputs)
             confidence_weight = resolve_confidence_weight(
                 epoch,
                 float(cal_cfg["confidence_weight"]),
@@ -291,10 +295,11 @@ def run_cal_experiment(
                 confidence_weight=confidence_weight,
             )
             detached_all_losses = cal_all_class_losses(logits.detach())
-            for proxy_class in range(classes):
-                class_mask = mask & proxy_targets.eq(proxy_class)
-                epoch_loss_sums[proxy_class] += detached_all_losses[class_mask].sum(dim=0)
-                epoch_class_counts[proxy_class] += class_mask.sum()
+            retained_weights = mask.to(detached_all_losses.dtype)
+            epoch_loss_sums.index_add_(
+                0, proxy_targets, detached_all_losses * retained_weights[:, None]
+            )
+            epoch_class_counts.index_add_(0, proxy_targets, retained_weights)
             optimizer.zero_grad(set_to_none=True); loss.backward(); optimizer.step()
             total += targets.numel(); loss_sum += float(loss.detach()) * targets.numel(); correct += int(logits.argmax(1).eq(targets).sum())
         observed_classes = epoch_class_counts > 0

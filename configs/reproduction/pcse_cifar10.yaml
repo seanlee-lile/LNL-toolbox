@@ -23,7 +23,6 @@ noise:
   validation_targets: noisy
   manifest_filename: noise_manifest.npz
 pretraining_stage:
-  mode: train
   method: cross_entropy
   epochs: 200
   checkpoint_selection: noisy_validation_accuracy

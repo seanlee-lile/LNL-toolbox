@@ -69,8 +69,6 @@ def training_stage_controls(config: Mapping[str, Any]) -> list[dict[str, Any]]:
         for part in prefix.split("."):
             current = current.get(part) if isinstance(current, Mapping) else None
         if isinstance(current, Mapping):
-            if prefix == "pretraining_stage" and current.get("mode") == "external_checkpoint":
-                continue
             if prefix == "transition_stage" and runner == "pcse" and current.get("name", "dual_t") != "paper_volmin":
                 continue
             result.append({"path": prefix + ".early_stopping", "stage": prefix,

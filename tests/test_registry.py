@@ -145,9 +145,9 @@ class _compatibility_CompatibilityResolverTest(unittest.TestCase):
         native_supported = _compatibility__method(supports_native_noisy_labels=True)
         self.assertEqual(resolve_compatibility(native, native_supported).status, CompatibilityStatus.COMPATIBLE)
         dataset = resolve_dataset_capabilities(_compatibility__profile(clean=KnowledgeState.AVAILABLE))
-        result = resolve_compatibility(dataset, _compatibility__method(required_pretrained_roles=('upm_main_best',)))
+        result = resolve_compatibility(dataset, _compatibility__method(required_pretrained_roles=('example_pretrained',)))
         self.assertEqual(result.status, CompatibilityStatus.COMPATIBLE_WITH_REQUIREMENTS)
-        self.assertIn('pretrained:upm_main_best', result.required_user_inputs)
+        self.assertIn('pretrained:example_pretrained', result.required_user_inputs)
 
     def test_machine_result_uses_stable_reason_codes(self) -> None:
         result = CompatibilityResult(CompatibilityStatus.COMPATIBLE_WITH_REQUIREMENTS, 'method', 'dataset', reasons=(CompatibilityReason('unknown_noise_rate', 'rate is unknown'),), required_user_inputs=('dataset_noise_rate',))
@@ -182,16 +182,13 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
         self.assertFalse(dividemix.requires_method_noise_prior)
         self.assertFalse(dividemix.requires_dataset_true_noise_rate)
         self.assertEqual(dividemix.method_noise_prior_paths, ())
-        pcse = registry.get('pcse').requirements({'pretraining_stage': {'mode': 'external_checkpoint'}})
-        self.assertEqual(pcse.required_pretrained_roles, ('upm_main_best',))
-        self.assertEqual(pcse.pretrained_role_paths, (('upm_main_best', ('pretraining_stage', 'source', 'run_directory_env')),))
         dld = registry.get('dld').requirements({'dld': {'feature_extractor': {'source': 'external_checkpoint'}}})
         self.assertEqual(len(dld.prerequisites), 1)
         source = dld.prerequisites[0]
         self.assertEqual(source.kind, 'pretrained_feature_extractor')
         self.assertEqual(source.validator, 'dld_feature_extractor')
         self.assertIn('torchvision_resnet34_imagenet1k_v1', source.supported_sources)
-        self.assertIn('upm_main_best', source.supported_sources)
+        self.assertEqual(source.supported_sources, ("torchvision_resnet34_imagenet1k_v1",))
         self.assertEqual(source.config_paths, (('dld', 'feature_extractor', 'external'),))
         self.assertFalse(registry.get('dld').requirements({}).prerequisites)
 
@@ -239,13 +236,7 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
                     'requires_noisy_training_labels',
                     {item.code for item in requirements.required_config_inputs},
                 )
-        external_pcse = registry.get('pcse').requirements(
-            {'pretraining_stage': {'mode': 'external_checkpoint'}}
-        )
-        self.assertEqual(external_pcse.exact_classes, frozenset({10}))
-        train_pcse = registry.get('pcse').requirements(
-            {'pretraining_stage': {'mode': 'train'}}
-        )
+        train_pcse = registry.get("pcse").requirements({})
         self.assertEqual(train_pcse.exact_classes, frozenset())
         self.assertEqual(train_pcse.required_pretrained_roles, ())
         self.assertEqual(train_pcse.pretrained_role_paths, ())
@@ -759,70 +750,6 @@ class _compatibility_ExperimentCompatibilityServiceTest(unittest.TestCase):
         requirement = ConfigInputRequirement(code='source', paths=(('a',), ('b',)), mode='any')
         self.assertEqual(requirement.mode, 'any')
 
-    def test_pretrained_run_guidance_uses_environment_not_adapter(self) -> None:
-        capabilities = resolve_dataset_capabilities(
-            _compatibility__profile(clean=KnowledgeState.AVAILABLE)
-        )
-        requirements = _compatibility__method(
-            method='pcse',
-            required_pretrained_roles=('upm_main_best',),
-            pretrained_role_paths=((
-                'upm_main_best',
-                ('pretraining_stage', 'source', 'run_directory_env'),
-            ),),
-        )
-        runner = Mock(name='pcse')
-        runner.requirements.return_value = requirements
-        config = {
-            'pretraining_stage': {
-                'source': {
-                    'adapter': 'upm_main_best',
-                    'run_directory_env': 'LNL_PCSE_SOURCE_RUN',
-                },
-            },
-        }
-        service = ExperimentService(data_service=Mock())
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop('LNL_PCSE_SOURCE_RUN', None)
-            missing = service._resolve_for_capabilities(capabilities, runner, config)
-        self.assertEqual(missing.status, CompatibilityStatus.COMPATIBLE_WITH_REQUIREMENTS)
-        guidance = {item.input_id: item for item in missing.input_guidance}
-        source = guidance['pretrained:upm_main_best']
-        self.assertEqual(source.environment_variable, 'LNL_PCSE_SOURCE_RUN')
-        self.assertIn('best.pt', source.expected_value)
-        self.assertIn('noise_manifest.npz', source.expected_value)
-        self.assertNotIn('adapter', source.provision)
-        with tempfile.TemporaryDirectory() as directory, patch.dict(
-            os.environ, {'LNL_PCSE_SOURCE_RUN': directory}, clear=False,
-        ):
-            ready = service._resolve_for_capabilities(capabilities, runner, config)
-        self.assertEqual(ready.status, CompatibilityStatus.COMPATIBLE)
-
-        dld_requirements = _compatibility__method(
-            method='dld',
-            required_pretrained_roles=('upm_main_best',),
-            pretrained_role_paths=((
-                'upm_main_best',
-                ('dld', 'feature_extractor', 'external', 'run_directory_env'),
-            ),),
-        )
-        runner.requirements.return_value = dld_requirements
-        dld_config = {
-            'dld': {'feature_extractor': {'external': {
-                'adapter': 'upm_main_best',
-                'run_directory_env': 'LNL_DLD_SOURCE_RUN',
-            }}},
-        }
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop('LNL_DLD_SOURCE_RUN', None)
-            dld_missing = service._resolve_for_capabilities(
-                capabilities, runner, dld_config,
-            )
-        dld_source = {
-            item.input_id: item for item in dld_missing.input_guidance
-        }['pretrained:upm_main_best']
-        self.assertEqual(dld_source.environment_variable, 'LNL_DLD_SOURCE_RUN')
-        self.assertNotIn('adapter', dld_source.provision)
 
     def test_developer_metadata_error_is_not_a_user_input(self) -> None:
         capabilities = resolve_dataset_capabilities(

@@ -522,7 +522,7 @@
         ["最终模型", "使用估计矩阵训练", "final_stage.epochs"],
       ],
       pcse: [
-        ["准备特征模型", "训练或加载模型", "pretraining_stage.epochs"],
+        ["准备特征模型", "训练特征模型", "pretraining_stage.epochs"],
         ["估计噪声矩阵", "学习转移关系", "transition_stage.epochs"],
         ["提取特征与统计", "建立校正信息", null],
         ["集成训练", "组合阶段结果", "ensemble_stage.epochs"],
@@ -535,9 +535,7 @@
     if (!stages || stages.filter(function (stage) { return stage[2] && fields.some(function (field) { return field.path === stage[2]; }); }).length < 2) return "";
     const cards = stages.map(function (stage, index) {
       const field = fields.find(function (item) { return item.path === stage[2]; });
-      const mode = state.planSchema.method === "pcse" && stage[2] === "pretraining_stage.epochs"
-        ? fields.find(function (item) { return item.path === "pretraining_stage.mode"; }) : null;
-      const count = field && (!mode || parameterValue(mode) === "train") ? Number(parameterValue(field)) : null;
+      const count = field ? Number(parameterValue(field)) : null;
       const duration = Number.isFinite(count) && count > 0 ? count + " 轮" : "自动";
       return '<li><span class="qs-stage-number">' + (index + 1) + '</span><strong>' + esc(trainingStageName(stage[2]) || stage[0]) + '</strong><span class="qs-stage-duration">' + esc(duration) + '</span><small>' + esc(stage[1]) + '</small></li>';
     }).join("");

@@ -44,7 +44,6 @@ parameter_ui:
     noise.sampling: [global, per_class, transition]
     parameter_update.compatibility_mode: [paper, official_code]
     parameter_update.critical_scope: [all_trainable, matrix_and_convolution_weights]
-    pretraining_stage.mode: [train, external_checkpoint]
     selector.keep_rate.name: [linear, constant]
     transition.estimator: [paper_volmin, dual_t, known_smoke]
     transition.parameterization.name: [sigmoid_off_diagonal]
@@ -205,7 +204,6 @@ parameter_ui:
     t_revision.revision.ratio.clamp: {none: 不截断权重比值}
     noise.name: {none: 不加人工噪声}
     lend.graph.metric: {cosine: 余弦相似度}
-    pretraining_stage.mode: {train: 在本机训练预训练模型}
   model_descriptions:
     tiny_cnn: 小型卷积网络
     cnn8: 八层网络（六层卷积＋两层全连接）
@@ -367,7 +365,6 @@ parameter_ui:
     posterior_stage.bandwidth: [核密度估计带宽, 后验概率估计的平滑尺度；较大值通常使估计更平滑。]
     final_stage.classifier: [最终分类器校正方式, 最终分类器使用的标签噪声校正方法。]
     final_stage.fresh_model: [重新初始化最终模型, 开启后重新创建最终分类器，不沿用前一阶段模型参数。]
-    pretraining_stage.mode: [预训练模型来源, 选择本地训练预训练模型或读取已有模型权重。]
     transition.estimator: [标签转移矩阵估计方式, 决定从数据或已知条件中怎样获得标签转移概率矩阵。]
     transition.parameterization.name: [转移矩阵参数形式, 控制可训练参数如何转换成标签转移概率。]
     transition.parameterization.initial_weight: [转移参数初始值, 学习标签转移矩阵前使用的参数初值。]
@@ -983,7 +980,7 @@ research_parameter_view:
   # The noise realization seed is a user-visible data/noise condition. Only
   # implementation-specific RNG selectors belong to the runtime category.
   implementation_paths: [seed, noise.rng, data.split_rng, data.validation_split.rng, trusted_validation.seed]
-  method_protocol_paths: [configuration_fidelity, noise.rng, evaluation.selection_split, trusted_validation.source, pretraining_stage.mode]
+  method_protocol_paths: [configuration_fidelity, noise.rng, evaluation.selection_split, trusted_validation.source]
   method_protocol_suffixes: [.fidelity, .fidelity.name, .implementation, .count_rule, .tie_break, .rounding]
   data_paths:
   - data.name
@@ -1047,7 +1044,7 @@ research_parameter_view:
     loss_correction: [noise.rng, model.variant, pipeline.pretraining_protocol, evaluation.selection_metric, evaluation.corrected_loss]
     importance_reweighting: [posterior_stage.bandwidth, posterior_stage.rate_estimator]
     cwd: [cwd.variant, cwd.dynamic_centroid]
-    pcse: [configuration_fidelity, pretraining_stage.mode, pretraining_stage.epochs, transition_stage.epochs, transition_stage.parameterization.name, transition_stage.parameterization.initial_weight, feature_stage.layers]
+    pcse: [configuration_fidelity, pretraining_stage.epochs, transition_stage.epochs, transition_stage.parameterization.name, transition_stage.parameterization.initial_weight, feature_stage.layers]
     fine: [fine.probability_floor]
     cdr: [parameter_update.critical_scope, parameter_update.compatibility_mode]
     dss: [pipeline.objective_consumer.mda, pipeline.objective_consumer.ccs]
@@ -3620,15 +3617,6 @@ methods:
           origin: advanced_experiment_or_implementation_control
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: split protocol
-        pretraining_stage.mode:
-          current: train
-          value_type: string
-          ui_control: text
-          reproduction_impact: high
-          origin: advanced_experiment_or_implementation_control
-          note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
-          evidence_ref: pretrain
-          reproduction_context: PCSE lifecycle
         pretraining_stage.model.name:
           current: resnet18
           value_type: string
