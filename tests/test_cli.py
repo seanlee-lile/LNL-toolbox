@@ -194,14 +194,18 @@ class CliPresentationAndEditorTest(unittest.TestCase):
         script = """
 import sys
 from lnl_toolbox.cli.main import main
-for argv in (['--lang','en','--help'], ['papers','list'], ['show','GCE','--no-interactive']):
+from unittest.mock import patch
+for argv in (['--lang','en','--help'], ['papers','list'], ['show','GCE'], ['papers','show','GCE']):
     try:
-        result = main(argv)
+        with patch('sys.stdin.isatty', return_value=True), patch('sys.stdout.isatty', return_value=True):
+            result = main(argv)
     except SystemExit as exc:
         result = exc.code
     assert result == 0
     assert not any(name.split('.')[0] in {'torch','torchvision','sklearn'} for name in sys.modules)
     assert 'web.command_console' not in sys.modules
+    assert 'lnl_toolbox.parameters' not in sys.modules
+    assert 'prompt_toolkit' not in sys.modules
 """
         result = subprocess.run([sys.executable, '-B', '-c', script], env={**os.environ, 'PYTHONPATH': str(_unified_cli_ROOT / 'src'), 'PYTHONDONTWRITEBYTECODE': '1'}, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -242,7 +246,8 @@ for argv in (['--lang','en','--help'], ['papers','list'], ['show','GCE','--no-in
         self.assertIn('missing external checkpoint', error)
 
     def test_editor_transaction_and_segment_toggle_keep_one_learning_rate_control(self):
-        from lnl_toolbox.cli.paper_editor import PaperEditor, resolve_paper
+        from lnl_toolbox.cli.paper_editor import PaperEditor
+        from lnl_toolbox.cli.paper_editor import resolve_paper
         editor = PaperEditor(resolve_paper('GCE'), PromptSession(read=lambda _: self.fail('unexpected prompt')))
         self.assertNotIn('optimizer.lr', [f['path'] for f in editor.fields()])
         original = copy.deepcopy(editor.config)
@@ -252,23 +257,43 @@ for argv in (['--lang','en','--help'], ['papers','list'], ['show','GCE','--no-in
         editor.update([('loader.batch_size', '64')])
         self.assertEqual(editor.config['loader']['batch_size'], 64)
         self.assertEqual(editor.config['optimizer'], original['optimizer'])
-        editor.session, _ = _cli_scripted_session(['', 'n'])
-        editor.edit_schedule()
+        editor.set_schedule('scheduler', enabled=False)
         self.assertIn('optimizer.lr', [f['path'] for f in editor.fields()])
         self.assertEqual(editor.config['optimizer']['lr'], original['optimizer']['lr'])
-        editor.session, _ = _cli_scripted_session(['', 'y', 'multistep', '[40,80]', '0.01', '0.02', '0.005'])
-        editor.edit_schedule()
+        editor.set_schedule('scheduler', enabled=True, nodes=[40, 80], initial=.01, rates=[.02, .005])
         self.assertEqual(editor.config['scheduler']['lr_values'], [.02, .005])
         self.assertNotIn('optimizer.lr', [f['path'] for f in editor.fields()])
 
     def test_editor_exit_does_not_save_validate_or_train(self):
-        from lnl_toolbox.cli.paper_editor import PaperEditor, resolve_paper
+        from lnl_toolbox.cli.paper_editor import PaperEditor
+        from lnl_toolbox.cli.paper_editor import resolve_paper
         session, _ = _cli_scripted_session([''])
         editor = PaperEditor(resolve_paper('gce'), session)
-        with patch.object(editor, 'save') as save, patch.object(editor, 'verify') as verify:
-            self.assertEqual(editor.run(), 0)
+        with patch.object(editor, 'save_to') as save, patch.object(editor, 'verify') as verify:
+            self._drive_workspace(editor, lambda w, pipe: self._keys(w, pipe, '\x1b', lambda: not w.app.is_running))
         save.assert_not_called()
         verify.assert_not_called()
+
+    def test_edit_command_uses_explicit_editor_entrypoint(self):
+        from lnl_toolbox.cli import paper_editor
+        with patch.object(paper_editor, 'edit_paper', return_value=0) as edit:
+            code, _, _ = _invoke_cli('edit', 'GCE')
+        self.assertEqual(code, 0)
+        self.assertEqual(edit.call_args.args[0].id, 'gce')
+
+    def test_edit_requires_terminal_and_default_exit_does_not_validate(self):
+        from lnl_toolbox.cli.paper_editor import PaperEditor, edit_paper
+        from lnl_toolbox.cli.paper_editor import resolve_paper
+        with patch('sys.stdin.isatty', return_value=False):
+            code, _, error = _invoke_cli('--lang', 'en', 'edit', 'gce')
+        self.assertEqual(code, 2)
+        self.assertIn('requires a terminal', error)
+        session, _ = _cli_scripted_session([''])
+        with patch.object(PaperEditor, 'run', return_value=0) as run, patch.object(PaperEditor, 'verify') as verify, patch.object(PaperEditor, 'save_to') as save:
+            self.assertEqual(edit_paper(resolve_paper('gce'), session=session), 0)
+        run.assert_called_once()
+        verify.assert_not_called()
+        save.assert_not_called()
 
     def test_language_precedence_and_removed_commands(self):
         from lnl_toolbox.cli import i18n
@@ -288,6 +313,159 @@ for argv in (['--lang','en','--help'], ['papers','list'], ['show','GCE','--no-in
         self.assertEqual(code, 0)
         self.assertIn('Edit parameters:', summary)
         self.assertNotIn('实现', summary)
+
+    def _drive_workspace(self, editor, scenario, *, columns=110):
+        import asyncio
+        from prompt_toolkit.input import create_pipe_input
+        from prompt_toolkit.output import DummyOutput
+        from prompt_toolkit.data_structures import Size
+
+        class Output(DummyOutput):
+            def get_size(self):
+                return Size(rows=32, columns=columns)
+
+        async def drive():
+            with create_pipe_input() as pipe:
+                workspace = editor.workspace(input=pipe, output=Output())
+                task = asyncio.create_task(workspace.app.run_async(set_exception_handler=False))
+                await asyncio.sleep(.05)
+                try:
+                    await asyncio.wait_for(scenario(workspace, pipe), timeout=12)
+                finally:
+                    if workspace.app.is_running and not task.done():
+                        workspace.app.exit(result=0)
+                    await asyncio.wait_for(task, timeout=3)
+                return workspace
+        from lnl_toolbox.cli.i18n import select_language, reset_language
+        token = select_language('en')
+        try:
+            return asyncio.run(drive())
+        finally:
+            reset_language(token)
+
+    async def _keys(self, workspace, pipe, keys, predicate):
+        import asyncio
+        pipe.send_text(keys)
+        for _ in range(150):
+            if predicate():
+                return
+            await asyncio.sleep(.02)
+        self.fail('keyboard action did not complete: ' + repr(keys) + ' status=' + workspace.status
+                  + ' modals=' + str(len(workspace.modals)) + ' buffer='
+                  + str(getattr(getattr(workspace.app.layout.current_control, 'buffer', None), 'text', '')))
+
+    def test_tui_keyboard_search_edit_error_undo_and_escape(self):
+        from lnl_toolbox.cli.paper_editor import PaperEditor, resolve_paper
+        editor = PaperEditor(resolve_paper('gce'))
+        original = copy.deepcopy(editor.config)
+
+        async def scenario(w, pipe):
+            await self._keys(w, pipe, '\x06loss.q', lambda: len(w.entries) == 1)
+            await self._keys(w, pipe, '\r', lambda: w.app.layout.has_focus(w.list_control))
+            await self._keys(w, pipe, '\r', lambda: bool(w.modals))
+            await self._keys(w, pipe, '\x152\r', lambda: w.error)
+            self.assertEqual(editor.config, original)
+            await self._keys(w, pipe, '\r', lambda: bool(w.modals))
+            await self._keys(w, pipe, '\x150.8\r', lambda: editor.config['loss']['q'] == .8)
+            self.assertTrue(editor.changes())
+            await self._keys(w, pipe, '\x1a', lambda: editor.config == original)
+            await self._keys(w, pipe, '\x1b', lambda: not w.search.text)
+            await self._keys(w, pipe, '\x1b', lambda: not w.app.is_running)
+        self._drive_workspace(editor, scenario)
+
+    def test_tui_palette_choices_and_unsaved_exit_cancel(self):
+        from lnl_toolbox.cli.paper_editor import PaperEditor, resolve_paper
+        editor = PaperEditor(resolve_paper('gce'))
+
+        async def scenario(w, pipe):
+            await self._keys(w, pipe, '/', lambda: bool(w.modals))
+            await self._keys(w, pipe, 'advanced\r', lambda: editor.advanced)
+            self.assertFalse(w.modals)
+            w.change(lambda: editor.update([('loader.batch_size', 64)]))
+            await self._keys(w, pipe, '\x1b', lambda: bool(w.modals))
+            await self._keys(w, pipe, '\r', lambda: not w.modals)
+            self.assertTrue(w.app.is_running)
+            await self._keys(w, pipe, '\x1b', lambda: bool(w.modals))
+            await self._keys(w, pipe, '\x1b[B\r', lambda: not w.app.is_running)
+        with patch('lnl_toolbox.cli.paper_editor.language', return_value='en'):
+            self._drive_workspace(editor, scenario, columns=65)
+
+    def test_tui_free_schedule_grid_cancel_and_commit(self):
+        from lnl_toolbox.cli.paper_editor import PaperEditor, resolve_paper
+        editor = PaperEditor(resolve_paper('gce'))
+        original = copy.deepcopy(editor.config)
+
+        async def scenario(w, pipe):
+            await self._keys(w, pipe, '\r', lambda: bool(w.modals))
+            await self._keys(w, pipe, '\x1b', lambda: not w.modals)
+            self.assertEqual(editor.config, original)
+            await self._keys(w, pipe, '\r', lambda: bool(w.modals))
+            await self._keys(w, pipe, '\r', lambda: not w.modals)
+            self.assertEqual(editor.config['scheduler'], original['scheduler'])
+            self.assertEqual(editor.changes(), [])
+            w.undo()
+            await self._keys(w, pipe, '\r', lambda: bool(w.modals))
+            # Toggle the scheduling checkbox with Space, then apply with Enter.
+            await self._keys(w, pipe, ' \r', lambda: not w.modals)
+            self.assertEqual(editor.config['scheduler']['name'], 'none')
+            self.assertIn('optimizer.lr', [f['path'] for f in editor.fields()])
+            w.undo()
+            await self._keys(w, pipe, '\r', lambda: bool(w.modals))
+            await self._keys(w, pipe, '\t\t\t\t',
+                             lambda: getattr(getattr(w.app.layout.current_control, 'buffer', None), 'text', '') == '0.001')
+            await self._keys(w, pipe, '\x150.03\t\t\t',
+                             lambda: getattr(getattr(w.app.layout.current_control, 'buffer', None), 'text', '') == '0.0001')
+            await self._keys(w, pipe, '\x150.007\r',
+                             lambda: editor.config['scheduler'].get('lr_values') == [.03, .007])
+            self.assertEqual(editor.config['scheduler']['lr_values'], [.03, .007])
+        self._drive_workspace(editor, scenario)
+
+    def test_editor_save_protection_and_no_unedited_parameter_changes(self):
+        from lnl_toolbox.cli.paper_editor import PaperEditor, resolve_paper
+        editor = PaperEditor(resolve_paper('gce'))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'custom.yaml'
+            editor.save_to(path)
+            saved = load_yaml(path)
+            self.assertEqual(saved['optimizer'], editor.baseline['optimizer'])
+            self.assertEqual(saved['trainer'], editor.baseline['trainer'])
+            self.assertFalse(editor.changes(editor.saved_config))
+            with self.assertRaises(FileExistsError):
+                editor.save_to(path)
+            with self.assertRaises(ValueError):
+                editor.save_to(editor.recipe.config_path, overwrite=True)
+
+    def test_tui_validation_failure_is_visible_without_starting_training(self):
+        from lnl_toolbox.cli.paper_editor import PaperEditor, resolve_paper
+        editor = PaperEditor(resolve_paper('gce'))
+
+        async def scenario(w, pipe):
+            await self._keys(w, pipe, '/', lambda: bool(w.modals))
+            await self._keys(w, pipe, 'Validate\r', lambda: w.error)
+            self.assertIn('missing data', w.status)
+            self.assertFalse(w.busy)
+        with patch.object(editor, 'verify', side_effect=FileNotFoundError('missing data')):
+            with patch('lnl_toolbox.cli.paper_editor.language', return_value='en'):
+                self._drive_workspace(editor, scenario)
+
+    def test_tui_training_requires_plan_review_and_explicit_confirmation(self):
+        from lnl_toolbox.cli.paper_editor import PaperEditor, resolve_paper
+        editor = PaperEditor(resolve_paper('gce'))
+        service = Mock()
+
+        async def scenario(w, pipe):
+            for dismiss in ('\x1b', '\r'):
+                await self._keys(w, pipe, '/', lambda: bool(w.modals))
+                await self._keys(w, pipe, 'Start training\r',
+                                 lambda: len(w.modals) == 1 and not w.modals[-1].get('move'))
+                await self._keys(w, pipe, dismiss,
+                                 lambda: not w.modals if dismiss == '\x1b' else bool(w.modals[-1].get('move')))
+                if dismiss == '\r':
+                    await self._keys(w, pipe, '\r', lambda: not w.modals)
+                self.assertTrue(w.app.is_running)
+                service.run.assert_not_called()
+        with patch.object(editor, 'verify', return_value=(service, editor.config)):
+            self._drive_workspace(editor, scenario)
 
 
 class ConfigParameterGateTest(unittest.TestCase):
@@ -1061,7 +1239,7 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
         self.assertIn('JoCoR', output)
         self.assertNotIn('已知差异与限制', output)
         self.assertNotIn('Recipe：', output)
-        self.assertIn('lnl show jocor', output)
+        self.assertIn('lnl edit jocor', output)
         code, output, _ = self.invoke('papers', 'show', 'dual-t')
         self.assertEqual(code, 0)
         self.assertIn('Dual-T', output)

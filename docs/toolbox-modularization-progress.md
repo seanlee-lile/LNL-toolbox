@@ -565,3 +565,36 @@
 - PCSE actual training: 用户批准后，正式 `pcse_cifar10.yaml` 仅临时覆盖 pretraining/transition/ensemble epochs 为 1、scheduler.start_epoch/end_epoch 为 0/1，选完整 `local-cifar10`；结果位于 `artifacts/local-formal-one-epoch-20261107/pcse`。自身 CE 预训练 352 次更新、VolMin 矩阵估计 352 次更新、特征统计、GDA 和集成训练 100 次更新全部完成，退出码 0，最终测试样本数 10000。未读取其他论文结果。内置正式 YAML 未改为短测值。
 - Integration: 当前修改均在已批准清单内。共享冲突点为 catalog、参数元数据、runner/service 及 CLI/Quick Start 测试。旧的带 mode/source PCSE 配置将明确报不支持，不再加载其他论文结果。官方 ImageNet 权重仍是 DLD 的外部文件需求，不是其他论文产物。全部训练产物本地忽略，不提交。
 - Exact next step: 交付本地两篇正式配置缩短预算后的真实运行结果。无 commit/push。
+
+## 2026-11-09 CLI 摘要与交互编辑模块分离
+
+- Current task: show 仅展示论文信息；将可编辑 CLI 拆成独立模块，通过显式 edit 命令接入。Branch/base: scratch / 3098df1；不创建分支、不提交、不推送。三个已有远端运维未跟踪文件不动。
+- Approved modification allowlist: 修改 src/lnl_toolbox/cli/paper_editor.py、src/lnl_toolbox/cli/main.py、tests/test_cli.py、README.md、本记录；新建 src/lnl_toolbox/cli/interactive_editor.py。实际范围一致，没有额外文件或依赖。
+- Checklist: 独立模块、命令接入、文档、针对性验证、CLI 完整回归。完成 5/5（100%）。
+- Changes by file: interactive_editor.py 原样承接 PaperEditor，提供 edit_paper(paper, session=None)；paper_editor.py 仅保留解析、列表、摘要；main.py 的 show/papers show 仅摘要，edit 按需导入新模块；测试调整类引用和旧摘要提示，并覆盖终端 show 不加载编辑模块、edit 分发及非终端拒绝；README 更新显式编辑用法。本记录用于交接。
+- Compatibility: show 的 --no-interactive 保留为隐藏兼容参数；Web、共享参数模块、权限、算法、配置默认值均未改。编辑模块继续使用原共享参数规则；禁止非终端直接进入输入菜单。其他入口可调用 edit_paper 或注入 PromptSession。旧内部 PaperEditor 导入应改为 cli.interactive_editor，不做旧模块的重导出，以保证摘要模块独立轻量。
+- Tests executed: PYTHONPATH=src;.;tests 下 F:/Miniconda/envs/pytorch/python.exe -B -m unittest test_cli.CliPresentationAndEditorTest：8 项通过（60.692 秒）；PaperEditor 新旧 AST 比较相同；真实模块 show GCE 输出摘要而无参数表；选定文件 Ruff 和 git diff --check 通过。首次完整 CLI 109 项中 108 通过、1 项旧断言失败（期待 lnl show jocor 编辑提示），已改为 lnl edit jocor；同一环境 -m unittest test_cli 重跑 109 项全部通过（148.136 秒）。
+- Integration/conflicts: 共享冲突点是 main.py 命令注册/分发、现有 CLI 测试、README 和本记录；没有变更 Web 入口、Scratch 或后端。未运行全仓测试或训练，本任务不涉及训练语义。
+- Local checkpoints: none；history cleanup not needed；push not authorized。Final diff 与批准清单一致，无非计划源码改动。Exact next step: 交付独立编辑模块；后续 CLI 优化可接入 edit_paper，不再让 show 承担编辑操作。
+
+### 2026-11-09 按用户要求合并编辑模块
+
+- 用户明确要求删除 interactive_editor.py 并入 paper_editor.py。edit_paper 和 PaperEditor 原样移回，main.py、tests/test_cli.py、README 的引用同步更新；此前新建且未提交的 interactive_editor.py 已删除，不再保留该模块。
+- 命令行为不变：show/papers show 仅摘要，edit 显式进入编辑。共享参数、Web、算法与训练配置未修改；无新增文件或依赖。当前改动仅上述四文件及本记录，原有三个运维文件保持不动。
+- 验证：PYTHONPATH=src;.;tests 下 F:/Miniconda/envs/pytorch/python.exe -B -m unittest test_cli.CliPresentationAndEditorTest，8 项全部通过（37.093 秒）；选定文件 Ruff、git diff --check 通过；src、tests 和 README 已无 interactive_editor 引用。此次合并未重跑全量 CLI 或训练。
+- 完成 3/3：合并删除、入口和文档更新、针对性回归。仍在 scratch / 基线 3098df1；无提交、无推送。下一步：按合并后的 paper_editor.edit_paper 接入后续 CLI 优化。共享冲突点仍为 CLI 入口、既有测试和文档。
+
+## 2026-11-09 现代交互式参数工作区
+
+- Goal: 只升级 lnl edit 的交互体验，取消重复打印和编号输入；show 保持只读摘要。Branch/base: scratch / 3098df1。任务开始时已有上一轮的 README、main.py、paper_editor.py、CLI 测试和本记录改动，均按现状保留；三个远端运维未跟踪文件不动。
+- Approved allowlist: paper_editor.py、pyproject.toml、tests/test_cli.py、README.md、本文档；无新建源文件。实际修改符合清单。main.py 的工作区差异来自前轮 show/edit 分离，本轮没有追加修改。无新分支、暂存、提交或推送。
+- Checklist: (1) 键盘工作区；(2) 类型化编辑与阶段表；(3) 保存/验证/训练确认；(4) 文档及依赖；(5) 自动化与真实终端回归。完成 5/5（100%）。
+- Implementation: 全部代码仍在 cli/paper_editor.py。PaperEditor 保留共享 schema/权限/事务校验，外层 _PaperWorkspace 使用 prompt_toolkit 全屏布局、搜索、参数说明、状态、可搜索操作面板及弹窗；按终端宽度切换左右/上下布局。支持方向键、Tab/Shift+Tab、Enter、Esc、Ctrl+F、F2、Ctrl+S、Ctrl+Z、帮助和鼠标选择；输入错误保留草稿。编辑枚举时默认选中当前值，布尔值直接切换。
+- Schedule: 节点和各段学习率使用独立输入格，可添加/移除节点；多节点按窗口宽度分组显示。更改不要求等比；关闭后基础学习率回到普通字段。平滑曲线保留对应方式且仍可编辑起始学习率。显示浮点数使用紧凑格式，未编辑的数值沿用原精度；无改动确认不会引入 lr_values 或修改论文默认分段。模型/优化器/训练算法未改。
+- Safety: 保存前使用原共享参数门禁，内置配置禁止覆盖；已有文件明确确认，未确认的新文件使用独占创建防止竞态覆盖。退出未保存草稿需确认。验证在工作线程中运行，不冻结界面；错误和计划留在界面中。训练必须先验证、查看计划、再明确确认；确认后退出全屏，由原 service.run 在主线程输出日志和处理 Ctrl+C，结束后返回工作区，不留后台训练。语言切换在父上下文中应用后重建界面，避免异步 ContextVar 隔离导致界面语言不一致。
+- Dependency: pyproject.toml 添加 prompt_toolkit>=3.0,<4；本机 F:/Miniconda/envs/pytorch 安装 3.0.53（自动依赖 wcwidth）。只有进入编辑才导入终端库；帮助、论文列表、show 的独立进程检查确认不导入 prompt_toolkit、torch、torchvision、sklearn、Web 或共享参数编辑模块。未新增其他依赖或 Python 文件。
+- Tests executed: PYTHONPATH=src;.;tests 下 F:/Miniconda/envs/pytorch/python.exe -B -m unittest test_cli.CliPresentationAndEditorTest，14 项通过（83.631 秒）；最后的 -m unittest test_cli，115 项全部通过（215.303 秒），覆盖 26 篇默认配置/schema/权限/解释、键盘搜索、非法值、撤销、阶段开关、逐格自由学习率、保存防覆盖、未保存退出和验证/训练确认。新增的无改动阶段确认断言也在最后全量 CLI 回归通过。选定文件 Ruff（包括 E9/F821/F401）与 git diff --check 通过。
+- Debugging record: 初轮发现布局初始化提前访问 app、初始光标位置、Checkbox Enter 截获、弹窗 Tab 进入隐藏控件及容器归一化问题；均已修正并重跑。保留真实错误处理，没有删去失败用例或改宽断言。测试输入使用 prompt_toolkit 的真实键盘事件循环；测试关闭其交互异常接管，以免无控制台时递归产生提示。
+- Real terminal: 通过 exec tty/Windows ConPTY 打开真实 edit gce。英文验证 Ctrl+F 搜索 loss.q、弹窗编辑为 0.8、未保存标记、Ctrl+Z 撤销和 Esc 退出；中文验证参数说明、分母显示及阶段表。退出后恢复原终端，所有本轮终端进程已关闭。真实终端未保存草稿或启动训练；训练确认链路由针对性测试检查，不能据此声称已做 CLI/Web 真实训练。
+- Integration: 共享冲突点是 paper_editor.py、pyproject.toml、既有 CLI 测试及文档。Web、Scratch、参数元数据、服务/执行器、算法、默认 YAML 全部保持不动。推荐至少 65 列、25 行；本轮实际验证 Windows，未在 Linux/macOS 实机验收。桌面旧 PDF 未在本轮范围内更新。
+- Local checkpoints/history: none/not needed。Push readiness: 未申请，不作全仓发布验收结论；未运行全仓测试、Web 回归或真实训练。Exact next step: 用户在已安装依赖的环境运行 lnl edit <paper> 体验工作区；后续修改继续放在 paper_editor.py，show 不承载编辑。

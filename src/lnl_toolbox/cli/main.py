@@ -82,9 +82,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
     parser.add_argument("--lang", choices=("zh", "en"), help=text("输出语言", "Output language"))
-    show_paper = sub.add_parser("show", help=text("查看和编辑论文默认参数", "View and edit a paper's default parameters"))
+    show_paper = sub.add_parser("show", help=text("查看论文摘要", "View a paper summary"))
     show_paper.add_argument("paper_id")
-    show_paper.add_argument("--no-interactive", action="store_true", help=text("仅输出摘要", "Print a summary without prompting"))
+    show_paper.add_argument("--no-interactive", action="store_true", help=argparse.SUPPRESS)
+    edit_paper = sub.add_parser("edit", help=text("交互编辑论文参数", "Interactively edit paper parameters"))
+    edit_paper.add_argument("paper_id")
     lang = sub.add_parser("language", help=text("保存输出语言偏好", "Save the preferred output language"))
     lang.add_argument("value", choices=("zh", "en"))
 
@@ -338,9 +340,9 @@ def build_parser() -> argparse.ArgumentParser:
         default="human",
         help="输出格式；human 适合阅读，tsv 适合脚本处理（默认: human）",
     )
-    show = paper_sub.add_parser("show", help="解释论文在 toolbox 中的详细实现")
+    show = paper_sub.add_parser("show", help=text("查看论文摘要", "View a paper summary"))
     show.add_argument("paper_id")
-    show.add_argument("--no-interactive", action="store_true")
+    show.add_argument("--no-interactive", action="store_true", help=argparse.SUPPRESS)
     config = paper_sub.add_parser("config", help="查看论文 YAML 配置")
     config.add_argument("paper_id")
     config.add_argument("--profile", choices=("smoke", "reproduction"))
@@ -1371,7 +1373,10 @@ def _dispatch(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "show" or (args.command == "papers" and args.paper_command == "show"):
             from lnl_toolbox.cli.paper_editor import resolve_paper, show_paper
-            return show_paper(resolve_paper(args.paper_id), interactive=not args.no_interactive)
+            return show_paper(resolve_paper(args.paper_id))
+        if args.command == "edit":
+            from lnl_toolbox.cli.paper_editor import edit_paper, resolve_paper
+            return edit_paper(resolve_paper(args.paper_id))
         if args.command == "doctor":
             return _doctor(args)
         if args.command == "list":

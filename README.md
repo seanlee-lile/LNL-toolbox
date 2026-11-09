@@ -228,7 +228,7 @@ lnl run cifar10-symmetric-ce-smoke `
 ```
 
 `--set` 只能覆盖已经存在的 dotted path，路径拼错会在训练前失败。临时实验使用
-`--set`；需要长期保存、评审或复用的配置应使用 `lnl show <paper>` 编辑并另存 YAML。
+`--set`；需要长期保存、评审或复用的配置应使用 `lnl edit <paper>` 编辑并另存 YAML。
 
 每份可运行配置都应明确声明：
 
@@ -357,16 +357,22 @@ lnl list components --kind batch_selector
 ```powershell
 lnl papers list
 lnl show gce
-lnl show gce --no-interactive
+lnl edit gce
 lnl language en
 lnl --lang zh show gce
 ```
 
-`show` 在终端中显示默认参数和菜单，可展开高级参数、选择已登记的数据集、编辑学习率阶段表、另存 YAML、完整验证和确认后启动训练。参数说明、枚举选项和修改权限与 Web 共用；内部随机种子和禁止修改的参数不可编辑。
+`show` 只显示论文摘要和来源链接，不展示可编辑参数或进入菜单。`edit` 打开全屏终端工作区：参数列表、说明区、搜索框和状态栏持续显示，不再输入菜单编号。宽窗口左右布局，窄窗口上下布局。参数说明、枚举选项和修改权限与 Web 共用；内部随机种子和禁止修改的参数不可编辑。
 
-仅在内存中编辑，不覆盖论文内置配置。保存时建议使用 `configs/experiment/gce-custom.yaml`；已有文件需要确认才覆盖。空操作默认退出；启动前先验证，确认后才训练。
+- ↑↓ / PageUp / PageDown 选择参数，Enter 编辑；布尔值直接切换，枚举值从可搜索列表选择。
+- Ctrl+F 搜索参数，Tab / Shift+Tab 切换焦点，F2 显示或隐藏高级参数。
+- 在参数列表按 `/` 搜索操作：选择数据集、查看改动、保存、验证、训练、切换语言等；`?` 查看帮助。
+- Ctrl+S 另存 YAML，Ctrl+Z 撤销上次修改；Esc 取消弹窗、清空搜索或退出。未保存修改退出前需确认。
+- 学习率阶段在表格中逐格填写节点和学习率，可添加/移除节点；各段学习率不要求使用相同倍率。关闭阶段后，学习率回到普通参数列表。
 
-输出重定向或传入 `--no-interactive` 时仅打印摘要，不等待终端输入。旧的 `lnl show gce` 映射到同一入口。
+仅在内存中编辑，不覆盖论文内置配置。保存时建议使用 `configs/experiment/gce-custom.yaml`；已有文件需要确认才覆盖。验证失败就地显示错误并保留草稿；启动前先验证并展示运行计划，再明确确认。训练时全屏界面退出，由现有训练流程在普通终端输出日志，完成或中断后返回编辑界面。
+
+`show` 无论在终端还是重定向输出中均只打印摘要；旧的 `lnl papers show gce` 使用同一摘要入口，`--no-interactive` 保留兼容。`edit` 需要交互终端，非终端调用会明确报错，不等待输入。推荐终端至少 65 列、25 行。论文展示和编辑统一放在 `cli/paper_editor.py`，其他 CLI 可调用该模块的 `edit_paper(paper)` 接入。交互依赖 prompt_toolkit，仅进入编辑时加载，不影响帮助或摘要的轻量启动。
 
 语言优先级为 `--lang`、`LNL_LANG`、用户保存偏好、中文默认。`language` 将偏好保存到用户配置目录的 `lnl-toolbox/cli.json`，不会修改实验配置。参数键、枚举值和 JSON 字段保持不变。
 
