@@ -30,7 +30,7 @@ def run_clean_experiment(
 ) -> Path:
     if config.get("noise"):
         raise ValueError(
-            "Clean baseline does not accept noise configuration; use lnl-train for noisy-label runs"
+            "Clean baseline does not accept noise configuration; use lnl run for noisy-label runs"
         )
     return run_supervised_experiment(config, output_dir, resume)
 

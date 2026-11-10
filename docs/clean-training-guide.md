@@ -10,39 +10,11 @@ lnl run --config configs/smoke/cifar10_clean_baseline.yaml --dry-run --check-dat
 lnl run --config configs/smoke/cifar10_clean_baseline.yaml
 ```
 
-## 兼容/专用 clean-only 入口
-
-`lnl-clean-train` 与 `python -m lnl_toolbox.cli.clean_train` 仍是可用的 clean-only 专用（兼容/legacy）入口。它支持 CIFAR-10/100、TinyCNN、CIFAR ResNet-18、PreActResNet-18、SGD/AdamW、cosine/multistep 学习率、最佳模型保存、断点恢复和多随机种子汇总；它拒绝带噪声的配置，且其 `--epochs`、`--seeds` 等专用参数不应被视为统一 experiment runner 的通用合同。
-
-安装 editable package 后，无参数运行 `lnl-clean-train` 会进入中文向导，可选择配置模板、数据、模型、loss、优化器、scheduler、设备以及单次/恢复/多 seed 模式。最终确认前不会创建运行目录；向导只修改内存配置，实际配置仍由运行目录中的 `resolved_config.yaml` 记录。
-
-## 专用入口：单次 clean baseline 训练
-
-交互方式：
+## 单次训练与恢复
 
 ```powershell
-lnl-clean-train
-```
-
-适合脚本的非交互方式：
-
-```powershell
-$env:PYTHONPATH = "src"
-python -m lnl_toolbox.cli.clean_train --config configs/smoke/cifar10_clean_baseline.yaml
-```
-
-如果 console script 不可用，可在已安装依赖的同一 Python 环境中使用模块入口：
-
-```powershell
-$env:PYTHONPATH = "src"
-python -m lnl_toolbox.cli.clean_train --config configs/smoke/cifar10_clean_baseline.yaml
-```
-
-## 专用入口的 Smoke 与恢复
-
-```powershell
-python -m lnl_toolbox.cli.clean_train --config configs/smoke/cifar10_clean_smoke.yaml --output-dir artifacts/runs/clean-smoke
-python -m lnl_toolbox.cli.clean_train --config configs/smoke/cifar10_clean_smoke.yaml --resume artifacts/runs/clean-smoke/last.pt --epochs 3
+lnl run --config configs/smoke/cifar10_clean_smoke.yaml --output-dir artifacts/runs/clean-smoke
+lnl run --config configs/smoke/cifar10_clean_smoke.yaml --resume artifacts/runs/clean-smoke/last.pt --epochs 3
 ```
 
 `--epochs` 表示总 epoch 目标。恢复时会继续 checkpoint 中的 model、optimizer、scheduler、epoch 和 global step。
@@ -50,7 +22,7 @@ python -m lnl_toolbox.cli.clean_train --config configs/smoke/cifar10_clean_smoke
 ## 多 seed
 
 ```powershell
-python -m lnl_toolbox.cli.clean_train --config configs/smoke/cifar10_clean_baseline.yaml --seeds 1 2 3 --output-dir artifacts/runs/cifar10-clean-3seeds
+lnl clean-suite --config configs/smoke/cifar10_clean_baseline.yaml --seeds 1 2 3 --output-dir artifacts/runs/cifar10-clean-3seeds
 ```
 
 多 seed 运行按顺序执行，输出 `summary.json` 与 `summary.csv`，包含测试准确率均值和样本标准差。

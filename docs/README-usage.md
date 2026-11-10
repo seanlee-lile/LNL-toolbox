@@ -47,7 +47,13 @@ lnl ports cleanup
 执行前只查看候选进程而不终止：`lnl ports cleanup --dry-run`；也可以用重复的
 `--port 8765` 参数将范围限定到指定端口。其他程序的监听进程不会被清理。
 
-原有的 `lnl-train`、`lnl-clean-train`、`lnl-inspect-data` 和 `lnl-make-noise` 命令仍然保留。
+训练、数据检查和噪声清单生成统一使用 `lnl` 命令。
+
+```powershell
+lnl data inspect --adapter cifar10 --root data/cifar10 --split train
+lnl data make-noise labels.npy noise.npz --kind symmetric --rate 0.2 --classes 10
+lnl clean-suite --config configs/smoke/cifar10_clean_baseline.yaml --seeds 1 2 3
+```
 
 ### 准备 CIFAR 数据
 

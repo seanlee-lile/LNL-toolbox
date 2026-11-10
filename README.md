@@ -38,7 +38,7 @@ lnl web
 `http://127.0.0.1:8765/scratch`。这些页面由同一个 `lnl web` 服务提供；使用
 `lnl web --no-open` 可只启动服务。
 
-原有的 `lnl-train`、`lnl-clean-train`、`lnl-inspect-data` 和 `lnl-make-noise` 命令仍然保留。
+训练、数据检查和噪声清单生成统一使用 `lnl` 命令。
 
 ### 准备 CIFAR 数据
 

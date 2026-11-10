@@ -309,8 +309,8 @@ output_dir: artifacts/runs/${dataset.name}/${noise.name}/${algorithm.name}/seed_
 命令行形式：
 
 ```bash
-python -m lnl_toolbox.cli.make_noise +experiment=cifar10_idn_ce
-python -m lnl_toolbox.cli.train +experiment=cifar10_idn_ce algorithm=gce algorithm.q=0.7
+lnl data make-noise labels.npy noise.npz --kind symmetric --rate 0.2 --classes 10
+lnl run --config configs/smoke/cifar10_smoke.yaml --set loss.name=gce --set loss.q=0.7
 python -m lnl_toolbox.cli.evaluate run_dir=artifacts/runs/...
 ```
 

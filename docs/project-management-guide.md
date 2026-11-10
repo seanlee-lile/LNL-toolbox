@@ -180,10 +180,7 @@ git push
 | 文件 | 功能 | 常用命令 |
 |---|---|---|
 | `cli/__init__.py` | 提供共享交互提示、模板发现和训练配置覆盖，不执行训练数学。 | 由其他 CLI 导入。 |
-| `cli/inspect_data.py` | 交互或参数化地检查 CIFAR 文件、尺寸和类别分布。 | `lnl-inspect-data` |
-| `cli/make_noise.py` | 交互或参数化地从 `.npy` 标签生成噪声清单。 | `lnl-make-noise` |
-| `cli/train.py` | 无参数进入向导；有参数时读取 YAML、覆盖 epochs 并调用通用训练。 | `lnl-train` |
-| `cli/clean_train.py` | Clean baseline 向导及单次、恢复、多 seed 调度。 | `lnl-clean-train` |
+| `cli/main.py` | 统一训练、数据检查、噪声清单生成及多 seed 调度入口。 | `lnl run`、`lnl data inspect`、`lnl data make-noise`、`lnl clean-suite` |
 
 ## 17. 单元测试 `tests/`
 

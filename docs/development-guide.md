@@ -128,18 +128,18 @@ python -m unittest discover -s tests -v
 
 ## 6. 运行训练
 
-人工启动实验时，可以无参数进入交互向导：
+人工启动实验时，可以交互编辑论文参数：
 
 ```powershell
-lnl-train
+lnl edit gce
 ```
 
-向导先选择现有 YAML，再覆盖常用参数并展示最终配置；确认默认为否。只要命令中出现任意参数，就完全使用 argparse 非交互模式，不会在批处理过程中等待输入。
+编辑器支持修改参数、验证和确认后启动训练。
 
 快速 GPU/CPU smoke test：
 
 ```powershell
-lnl-train --config configs/smoke/cifar10_smoke.yaml
+lnl run --config configs/smoke/cifar10_smoke.yaml
 ```
 
 等价的模块运行方式：
@@ -152,7 +152,7 @@ lnl run `
 完整 CIFAR-10 配置：
 
 ```powershell
-lnl-train --config configs/smoke/cifar10_clean.yaml
+lnl run --config configs/smoke/cifar10_clean.yaml
 ```
 
 每次运行会在 `artifacts/runs/` 下生成：
@@ -168,7 +168,7 @@ lnl-train --config configs/smoke/cifar10_clean.yaml
 `--epochs` 表示恢复后的总 epoch 目标，而不是额外训练轮数。例如，从已经完成 2 个 epoch 的 checkpoint 继续到第 3 个 epoch：
 
 ```powershell
-lnl-train `
+lnl run `
   --config configs/smoke/cifar10_smoke.yaml `
   --resume artifacts/runs/cifar10_smoke/last.pt `
   --epochs 3
@@ -201,7 +201,7 @@ python -m unittest discover -s tests -v
 
 ```powershell
 python -m unittest discover -s tests -v
-lnl-train --config configs/smoke/cifar10_smoke.yaml
+lnl run --config configs/smoke/cifar10_smoke.yaml
 ```
 
 不要直接使用完整 Conda 环境的 `pip freeze` 覆盖 requirements；那会把其他项目的 Cleanlab、OpenCV、Pandas、Ultralytics 等无关依赖一起带入。

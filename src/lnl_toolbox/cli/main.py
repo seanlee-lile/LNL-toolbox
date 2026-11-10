@@ -166,6 +166,12 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("run_dir", type=Path, help="已有运行目录，包含 resolved_config.yaml；不是 checkpoint 文件路径")
     resume.add_argument("--checkpoint", choices=("last", "best"), default="last", help="选择 last.pt 或 best.pt；已完成的运行不重新训练")
 
+    clean_suite = sub.add_parser("clean-suite", help=text("以多个随机种子运行干净标签训练并汇总结果", "Run and summarize clean-label training across seeds"))
+    clean_suite.add_argument("--config", required=True, type=Path)
+    clean_suite.add_argument("--seeds", required=True, type=int, nargs="+")
+    clean_suite.add_argument("--epochs", type=int)
+    clean_suite.add_argument("--output-dir", type=Path)
+
     data = sub.add_parser("data", help="register and verify machine-local datasets")
     data_sub = data.add_subparsers(dest="data_command", required=True)
     data_register = data_sub.add_parser("register", help="register a local dataset path")
@@ -183,8 +189,20 @@ def build_parser() -> argparse.ArgumentParser:
     data_show = data_sub.add_parser("show", help="show one local dataset record")
     data_show.add_argument("alias")
     data_inspect = data_sub.add_parser("inspect", help="load and validate train/test layout")
-    data_inspect.add_argument("alias")
+    data_inspect.add_argument("alias", nargs="?")
     data_inspect.add_argument("--format", choices=("human", "json"), default="human")
+    data_inspect.add_argument("--adapter", help=text("直接检查指定类型及路径，无需登记", "Inspect a dataset type and path without registration"))
+    data_inspect.add_argument("--root", type=Path)
+    data_inspect.add_argument("--path", type=Path)
+    data_inspect.add_argument("--split", choices=("train", "validation", "test", "all"), default="all")
+    data_noise = data_sub.add_parser("make-noise", help=text("从标签文件生成可复用的噪声清单", "Generate a reusable noise manifest from labels"))
+    data_noise.add_argument("labels", type=Path)
+    data_noise.add_argument("output", type=Path)
+    data_noise.add_argument("--kind", choices=("symmetric", "pairflip"), default="symmetric")
+    data_noise.add_argument("--rate", type=float, required=True)
+    data_noise.add_argument("--classes", type=int, required=True)
+    data_noise.add_argument("--seed", type=int, default=1)
+    data_noise.add_argument("--dataset", default="unknown")
     data_declare = data_sub.add_parser("declare", help="record explicit dataset knowledge")
     data_declare.add_argument("alias")
     data_declare.add_argument(
@@ -751,6 +769,18 @@ def _resume(args: argparse.Namespace) -> int:
     return 0
 
 
+def _clean_suite(args: argparse.Namespace) -> int:
+    from lnl_toolbox.training.clean_baseline import run_seed_suite
+
+    path = args.config.expanduser().resolve()
+    config = resolve_config_paths(load_yaml(path), find_project_root(path))
+    if args.epochs is not None:
+        config["trainer"]["epochs"] = args.epochs
+    output = args.output_dir or Path(config.get("output_root", "artifacts/runs")) / "seed-suite"
+    print(run_seed_suite(config, args.seeds, output))
+    return 0
+
+
 def _sweep(args: argparse.Namespace) -> int:
     global ExperimentService, plan_sweep, resolve_planned_config, run_sweep, sweep_status
     if ExperimentService is None:
@@ -1109,6 +1139,16 @@ def _print_dataset_table(reports) -> None:
 
 
 def _data_command(args: argparse.Namespace) -> int:
+    if args.data_command == "make-noise":
+        import numpy as np
+        from lnl_toolbox.noise import generate_pairflip, generate_symmetric
+
+        labels = np.load(args.labels)
+        generator = generate_symmetric if args.kind == "symmetric" else generate_pairflip
+        manifest = generator(labels, args.classes, args.rate, args.seed, args.dataset)
+        manifest.save(args.output)
+        print(f"saved {args.output}; realized_rate={manifest.realized_rate:.4f}")
+        return 0
     global DEFAULT_DATA_SERVICE
     if DEFAULT_DATA_SERVICE is None:
         from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE as DEFAULT_DATA_SERVICE
@@ -1150,6 +1190,22 @@ def _data_command(args: argparse.Namespace) -> int:
         print(f"Removed local dataset registration: {args.alias}")
         return 0
     if args.data_command == "inspect":
+        if args.adapter:
+            spec = service.validate_config({"seed": 0, "data": {"name": args.adapter, "root": args.root, "path": args.path}})
+            splits = ("train", "validation", "test") if args.split == "all" else (args.split,)
+            summaries = []
+            for split in splits:
+                try:
+                    current = service.registry.load(spec, split, seed=0)
+                except ValueError:
+                    continue
+                summaries.append({"dataset": current.dataset, "split": current.split, "samples": len(current), "classes": current.num_classes, "identity": current.identity.to_dict()})
+            print(json.dumps(summaries, ensure_ascii=False, indent=2))
+            return 0
+        if not args.alias:
+            raise ValueError(text("请提供已登记数据集名称或使用 --adapter 指定数据类型", "Provide a registered dataset name or specify --adapter"))
+        if args.root is not None or args.path is not None or args.split != "all":
+            raise ValueError(text("--root、--path 和 --split 需要与 --adapter 一起使用", "--root, --path and --split require --adapter"))
         report = service.inspect(args.alias)
         if args.format == "json":
             print(json.dumps(report.to_dict(), ensure_ascii=False, sort_keys=True))
@@ -1387,6 +1443,8 @@ def _dispatch(argv: list[str] | None = None) -> int:
             return _run(args)
         if args.command == "resume":
             return _resume(args)
+        if args.command == "clean-suite":
+            return _clean_suite(args)
         if args.command == "data":
             return _data_command(args)
         if args.command == "methods":
