@@ -159,6 +159,8 @@ for(const profile of ['reproduction','metadata','smoke']){
         for recipe in discover_recipes(command_console.ROOT, include_conditional=True):
             schema = command_console._config_schema(recipe.id)
             method = schema["method"]
+            if recipe.id.endswith(("-cifar10", "-cifar100")):
+                self.assertEqual(method, recipe.id.rsplit("-cifar", 1)[0].replace("-", "_"))
             if method not in bindings:
                 continue
             covered.add(method)
@@ -169,7 +171,7 @@ for(const profile of ['reproduction','metadata','smoke']){
                     self.assertIsNotNone(command_console._parameter_ui_spec(field["path"]))
                     self.assertRegex(field["note"], r"[\u4e00-\u9fff]")
                     self.assertNotIn("通用配置参数", field["note"])
-                    if field["kind"] in {"text", "string"} and not field["path"].endswith((".path", ".artifact_path")):
+                    if field["kind"] in {"text", "string"} and field["path"] != "noise.manifest" and not field["path"].endswith((".path", ".artifact_path")):
                         choices = field["choices"]
                         self.assertTrue(choices, "selectable strings must provide dropdown choices")
                         self.assertIn(str(field["value"]), {choice["value"] for choice in choices})
@@ -187,6 +189,43 @@ for(const profile of ['reproduction','metadata','smoke']){
                                     self.assertTrue(child["choices"])
                                     self.assertIn(child["value"], {choice["value"] for choice in child["choices"]})
         self.assertEqual(covered, set(bindings))
+
+    def test_historical_best_resource_and_parameter_controls(self):
+        from lnl_toolbox import parameters
+
+        for method, dataset in (("cwd", "cifar10"), ("cwd", "cifar100"),
+                                ("lend", "cifar10"), ("mentornet", "cifar100"),
+                                ("volminnet", "cifar100"), ("cnlcu", "cifar100"),
+                                ("l2rw", "cifar100")):
+            path = f"configs/reproduction/{method}_{dataset}.yaml"
+            with self.subTest(config=path):
+                payload = parameters._config_payload(path_value=path)
+                payload["method"] = method
+                schema = parameters.schema_from_payload(payload)
+                fields = {field["path"]: field for field in schema["fields"]}
+                if method == "lend":
+                    manifest = fields["noise.manifest"]
+                    self.assertEqual(manifest["presentation"], "resource")
+                    self.assertIsNone(manifest["choices"])
+                    self.assertEqual(parameters._coerce_patch_value(manifest, "data/自选 噪声.npz"),
+                                     "data/自选 噪声.npz")
+                    self.assertFalse(fields["noise.source_manifest_sha256"]["visible"])
+                if method == "cwd":
+                    self.assertTrue(fields["model.feature_dropout"]["visible"])
+                    self.assertIn("池化特征", fields["model.feature_dropout"]["note"])
+                    if "model.num_outputs" in fields:
+                        self.assertFalse(fields["model.num_outputs"]["visible"])
+                if method == "mentornet":
+                    target = fields["noise.validation_targets"]
+                    self.assertEqual({choice["value"] for choice in target["choices"]}, {"clean", "noisy"})
+                    with self.assertRaisesRegex(ValueError, "下拉"):
+                        parameters._coerce_patch_value(target, "invented")
+                if method == "volminnet":
+                    self.assertIn(fields["volminnet.model.variant"]["value"],
+                                  {choice["value"] for choice in fields["volminnet.model.variant"]["choices"]})
+                if method in {"cnlcu", "l2rw"}:
+                    self.assertIn(fields["model.name"]["value"],
+                                  {choice["value"] for choice in fields["model.name"]["choices"]})
 
     def test_nested_parameter_dropdowns_reject_unknown_values(self):
         from copy import deepcopy
@@ -275,7 +314,7 @@ for(const profile of ['reproduction','metadata','smoke']){
                         self.assertEqual(job["returncode"], 0, "\n".join(job["lines"]))
                         if "--review" in command:
                             self.assertIn("Quick Start phase: validating", job["lines"])
-                            self.assertIn("Quick Start phase: rehearsing", job["lines"])
+                            self.assertNotIn("Quick Start phase: rehearsing", job["lines"])
                             self.assertIn(f'  artifact directory: {saved["output_dir"]}', job["lines"])
                             self.assertIn(f'  training configuration: {saved["config_path"]}', job["lines"])
                     self.assertFalse(Path(saved["path"]).exists())
@@ -630,7 +669,7 @@ for(const profile of ['reproduction','metadata','smoke']){
             command_console._sweep_plan_payload(
                 {
                     "recipe": "fine-cifar100n-reproduction",
-                    "path": "configs/reproduction/fine_cifar100.yaml",
+                    "path": "configs/reproduction/fine_default.yaml",
                 }
             )
         with self.assertRaisesRegex(ValueError, "locked parameter"):
@@ -1028,7 +1067,7 @@ for(const profile of ['reproduction','metadata','smoke']){
             custom = load_yaml(command_console.ROOT / saved["path"])
             self.assertEqual(custom["scheduler"]["lr_values"], [0.003, 0.0007])
             self.assertEqual(custom["scheduler"]["gamma"], 0.1)
-            formal = load_yaml(command_console.ROOT / "configs/reproduction/gce_cifar10.yaml")
+            formal = load_yaml(command_console.ROOT / "configs/reproduction/gce_default.yaml")
             self.assertNotIn("lr_values", formal["scheduler"])
             with self.assertRaisesRegex(ValueError, "one value per milestone"):
                 command_console._save_config({
@@ -1055,7 +1094,7 @@ for(const profile of ['reproduction','metadata','smoke']){
                 "acknowledge_paper_impact": True,
             })
             custom = load_yaml(destination)
-            formal = load_yaml(command_console.ROOT / "configs/reproduction/lend_cifar10.yaml")
+            formal = load_yaml(command_console.ROOT / "configs/reproduction/lend_default.yaml")
             self.assertEqual(custom["scheduler"]["lr_values"], [0.007])
             self.assertNotIn("lr_values", formal["scheduler"])
             self.assertEqual(formal["optimizer"]["lr"], 0.05)

@@ -29,7 +29,7 @@ Run the production Dual-T workflow:
 ```powershell
 $env:PYTHONPATH = "src"
 lnl run `
-  --config configs/reproduction/dual_t_cifar10.yaml `
+  --config configs/reproduction/dual_t_default.yaml `
   --output-dir artifacts/reproductions/cifar10-dual-t-sym20-seed1
 ```
 
@@ -113,7 +113,7 @@ Run the validation sequence in this order:
 1. Run the existing production and evidence smoke configurations.
 2. Run a short GPU sanity using the smoke configuration on CUDA and inspect
    checkpoint, snapshot, transition artifact, and resume behavior.
-3. Run one full seed with `dual_t_cifar10.yaml`.
+3. Run one full seed with `dual_t_default.yaml`.
 4. Run the formal evidence configuration and compare ordinary T versus
    Dual-T matrix error and T-Forward versus DT-Forward clean-test accuracy.
 5. Repeat the formal configurations for five explicitly recorded seeds and

@@ -248,7 +248,7 @@ class L2RWPreparedDataIsolationTest(unittest.TestCase):
                                np.arange(40) % 10, names, 'train', 'cifar10')
         self.test = CifarData(rng.integers(0, 256, (20, 32, 32, 3), dtype=np.uint8),
                               np.arange(20) % 10, names, 'test', 'cifar10')
-        self.config = yaml.safe_load((_l2rw_training_ROOT / 'configs/reproduction/l2rw_cifar10.yaml').read_text(encoding='utf-8'))
+        self.config = yaml.safe_load((_l2rw_training_ROOT / 'configs/reproduction/l2rw_default.yaml').read_text(encoding='utf-8'))
         self.config['data'].update(root='unused-controlled-source', num_val=10, num_clean=10)
         self.config['loader'].update(batch_size=5, num_workers=0, pin_memory=False)
         self.config['trusted_validation']['batch_size'] = 5

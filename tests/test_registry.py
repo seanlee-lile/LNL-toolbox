@@ -787,7 +787,7 @@ _cnlcu_readiness_ROOT = Path(__file__).resolve().parents[1]
 
 _cnlcu_readiness_CONFIG = _cnlcu_readiness_ROOT / 'configs/smoke/cifar10_cnlcu_soft_sym20_short.yaml'
 
-_cnlcu_readiness_FORMAL_CONFIG = _cnlcu_readiness_ROOT / 'configs/reproduction/cnlcu_cifar10.yaml'
+_cnlcu_readiness_FORMAL_CONFIG = _cnlcu_readiness_ROOT / 'configs/reproduction/cnlcu_default.yaml'
 
 class _cnlcu_readiness_CNLCUReadinessTest(unittest.TestCase):
 

@@ -249,6 +249,7 @@ class Job:
 JOBS: dict[str, Job] = {}
 JOBS_LOCK = threading.Lock()
 REVIEW_FILES: dict[str, tempfile.TemporaryDirectory] = {}
+REVIEW_CONFIG_CONTENTS: dict[str, str] = {}
 
 
 def _cleanup_review_file(path: str) -> None:
@@ -1124,6 +1125,7 @@ from lnl_toolbox.parameters import (
     _LEGACY_PROTECTED_LEAF_NAMES,
     _PARAMETER_REGISTRY_PATH,
     _PARAMETER_LEVEL_ORDER,
+    _display_path,
     _project_path,
     _config_payload,
     _builtin_config_paths,
@@ -1166,6 +1168,7 @@ from lnl_toolbox.parameters import (
     _assert_locked_parameters_unchanged,
     _paper_parameter_changes,
     _record_paper_parameter_status,
+    _QUICK_START_OVERRIDE_AUTH,
     _save_config,
 )
 
@@ -1180,8 +1183,39 @@ def _quick_start_config(payload: dict[str, object], *, review: bool) -> dict[str
     run_dir = ROOT / "artifacts" / "web-runs" / run_id
     locations = {"run_id": run_id, "output_dir": str(run_dir), "config_path": str(run_dir / "config.yaml")}
     if not review:
-        body.update(content=payload.get("content"), path=str(run_dir / "config.yaml"))
-        return {**_save_config(body), **locations}
+        content = payload.get("content")
+        destination = run_dir / "config.yaml"
+        try:
+            destination.resolve().relative_to(ROOT.resolve())
+        except ValueError as exc:
+            raise ValueError("运行配置必须保存在项目目录内") from exc
+        if destination.resolve() in _builtin_config_paths():
+            raise ValueError("不能覆盖内置论文配置")
+        with JOBS_LOCK:
+            reviewed_content = REVIEW_CONFIG_CONTENTS.get(run_id)
+            if not isinstance(content, str) or reviewed_content is None or content != reviewed_content:
+                raise ValueError("启动配置与已验证内容不一致或已过期，请重新预演。")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(reviewed_content, encoding="utf-8")
+            REVIEW_CONFIG_CONTENTS.pop(run_id, None)
+        return {
+            "path": _display_path(destination),
+            "bytes": destination.stat().st_size,
+            "content": reviewed_content,
+            "dataset_alias": payload.get("dataset_alias"),
+            **locations,
+        }
+    if body.get("recipe") and isinstance(payload.get("noise"), dict):
+        from web.quick_start_api import SERVICE, _selection
+
+        method_inputs = payload.get("method_inputs") or {}
+        if not isinstance(method_inputs, dict):
+            raise ValueError("method_inputs must be an object")
+        selection = _selection({"noise": payload["noise"]})
+        body["_quick_start_overrides"] = SERVICE.runtime_overrides(
+            str(body["recipe"]), selection, method_inputs,
+        )
+        body["_quick_start_override_auth"] = _QUICK_START_OVERRIDE_AUTH
     directory = tempfile.TemporaryDirectory(prefix="lnl-review-")
     path = str(Path(directory.name) / "config.yaml")
     try:
@@ -1191,12 +1225,15 @@ def _quick_start_config(payload: dict[str, object], *, review: bool) -> dict[str
         raise
     with JOBS_LOCK:
         REVIEW_FILES[path] = directory
+        REVIEW_CONFIG_CONTENTS[run_id] = str(saved["content"])
     # Clean abandoned requests too; an active CLI owns its file until exit.
     def expire() -> None:
         with JOBS_LOCK:
             active = any(path in job.command and not job.output_complete for job in JOBS.values())
         if not active:
             _cleanup_review_file(path)
+            with JOBS_LOCK:
+                REVIEW_CONFIG_CONTENTS.pop(run_id, None)
     timer = threading.Timer(600, expire)
     timer.daemon = True
     timer.start()

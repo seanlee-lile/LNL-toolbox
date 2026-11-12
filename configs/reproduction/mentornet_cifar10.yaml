@@ -1,0 +1,95 @@
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / D
+# Source: artifact/full-test-best-20261106/cifar10/mentornet/config.json
+# Source SHA256: 81a5fe4d69f46a7816d3d8481c8c52f79b2cc838837b3defd7b69fe07a413446
+# Historical code: toolbox-e217414e614f228f
+# Recovery: source_available_effective_overrides_preserved
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   local_dataset.adapter
+#   local_dataset.alias
+#   local_dataset.source_signature
+#   meta.web_parameter_record.effective_reproduction_status
+#   meta.web_parameter_record.formal_recipe
+#   meta.web_parameter_record.modified_from_paper
+#   meta.web_parameter_record.paper_change_acknowledged
+#   meta.web_parameter_record.paper_parameter_changes
+#   meta.web_parameter_record.parameter_metadata_registry_version
+#   output_root
+# Required external resources (not downloaded or generated):
+#   pipeline.weight_provider.artifact_path: data/mentornet/cifar10-symmetric04-official-port-seed20260729/mentor_artifact.pt
+data:
+  augment: true
+  name: cifar10
+  num_classes: 10
+  validation_size: 5000
+  validation_split:
+    source: training_pool
+evaluation:
+  selection_split: validation
+execution:
+  runner: supervised
+hyperparameters:
+  sampled_setting: CIFAR-100 symmetric-40 MentorNet-DD ResNet 39k steps
+  sampling_seed: 20260729
+  source: Jiang et al. ICML 2018 supplementary and official repository
+kind: experiment
+loader:
+  batch_size: 128
+  drop_last: true
+  num_workers: 4
+loss:
+  name: ce
+model:
+  leakiness: 0.1
+  name: mentor_wide_resnet
+  num_residual_units: 9
+  weight_decay: 0.0002
+  width_multiplier: 1
+noise:
+  name: symmetric
+  rate: 0.4
+  seed: 20260729
+  validation_targets: clean
+optimizer:
+  lr: 0.1
+  momentum: 0.9
+  name: sgd
+  weight_decay: 0.0
+parameter_update:
+  gamma: 0.1
+  milestones:
+  - 19500
+  - 25000
+  - 30000
+  name: step_milestone
+pipeline:
+  weight_provider:
+    artifact_path: data/mentornet/cifar10-symmetric04-official-port-seed20260729/mentor_artifact.pt
+    burn_in_epoch: 18
+    decay: 0.95
+    dropout_schedule:
+    - - 0.5
+      - 17
+    - - 0.05
+      - 78
+    - - 0.9
+      - 5
+    fixed_epoch_after_burn_in: true
+    fixed_label: 0
+    name: mentornet
+    percentile: 0.6
+    seed: 20260729
+    total_epochs: 100
+scheduler:
+  name: none
+schema_version: 1
+seed: 20260729
+selector:
+  name: all
+trainer:
+  early_stopping: false
+  epochs: 100
+output_root: artifacts/reproductions/mentornet-cifar10-best

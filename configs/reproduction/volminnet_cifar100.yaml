@@ -1,0 +1,96 @@
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / E
+# Source: artifact/full-test-best-20261106/cifar100/volminnet/config.json
+# Source SHA256: e2e5a96f69321f4a5090be69db0a709012dfc66dd9adc00f83790c14e11d2f52
+# Historical code: toolbox-best-a3a126060aab6e9d
+# Recovery: original_input_content_recovered
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   output_root
+kind: experiment
+schema_version: 1
+method: volminnet
+execution:
+  runner: volminnet
+configuration_fidelity: paper_protocol
+seed: 1
+output_root: artifacts/reproductions/volminnet-cifar100-best
+data:
+  name: cifar100
+  validation_size: 5000
+  validation_split:
+    strategy: stratified
+    rng: default_rng
+    source: training_pool
+  augment: true
+  preprocessing: standard
+  normalization:
+    mean:
+    - 0.5071
+    - 0.4867
+    - 0.4408
+    std:
+    - 0.2675
+    - 0.2565
+    - 0.2761
+  max_train_samples: null
+  max_test_samples: null
+  max_validation_samples: null
+  num_classes: 100
+noise:
+  name: symmetric
+  rate: 0.2
+  seed: 1
+  sampling: per_class
+  rng: default_rng
+  validation_targets: noisy
+volminnet:
+  fidelity: paper_positive_logdet
+  model:
+    name: resnet32
+    variant: standard
+    base_width: 16
+  transition:
+    parameterization: fixed_diagonal_sigmoid_offdiag
+    convention: clean_to_noisy_row
+    normalization_axis: row
+    initialization:
+      mode: paper
+  objective:
+    classification: noisy_nll
+    volume:
+      mode: positive_logdet
+      coefficient: 0.0001
+  optimizer:
+    classifier:
+      name: sgd
+      lr: 0.01
+      momentum: 0.9
+      weight_decay: 0.001
+    transition:
+      name: adam
+      lr: 0.001
+      weight_decay: 0.0
+  scheduler:
+    classifier:
+      name: multistep
+      milestones:
+      - 30
+      - 60
+      gamma: 0.1
+    transition:
+      name: none
+  checkpoint_selection:
+    split: noisy_validation
+    metric: loss
+    mode: min
+loader:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+trainer:
+  epochs: 150
+  device: cuda
+  early_stopping: false

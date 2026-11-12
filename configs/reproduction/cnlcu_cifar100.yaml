@@ -1,0 +1,95 @@
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / E
+# Source: artifact/full-test-best-20261106/cifar100/cnlcu/config.json
+# Source SHA256: ae6cb721be3e95455c2eabab3636eb8d7fff1f2008eec09a1a3bfffce36dcbab
+# Historical code: toolbox-best-bdab41e8696da072
+# Recovery: original_input_content_recovered
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   output_root
+kind: experiment
+schema_version: 1
+method: cnlcu
+execution:
+  runner: cnlcu
+configuration_fidelity: paper_protocol
+seed: 1
+output_root: artifacts/reproductions/cnlcu-cifar100-best
+data:
+  name: cifar100
+  validation_size: 5000
+  validation_split:
+    strategy: stratified
+    rng: default_rng
+    source: training_pool
+  augment: false
+  preprocessing: tensor_only
+  normalization:
+    mean:
+    - 0.5071
+    - 0.4867
+    - 0.4408
+    std:
+    - 0.2675
+    - 0.2565
+    - 0.2761
+  max_train_samples: null
+  max_test_samples: null
+  max_validation_samples: null
+  num_classes: 100
+noise:
+  name: symmetric
+  rate: 0.2
+  seed: 1
+  sampling: per_class
+  rng: default_rng
+  validation_targets: noisy
+loss:
+  name: ce
+model:
+  name: cifar_six_conv
+  batch_norm_momentum: 0.1
+optimizer:
+  name: adam
+  lr: 0.001
+  beta1: 0.9
+  weight_decay: 0.0
+scheduler:
+  name: linear_after
+  start_epoch: 80
+  end_epoch: 200
+  beta1_before: 0.9
+  beta1_after: 0.1
+cnlcu:
+  variant: soft
+  model_count: 2
+  noise_rate: 0.2
+  initialization:
+    peer_seed_offset: 1
+  remember_schedule:
+    name: linear
+    start: 1.0
+    end: 0.8
+    gradual_epochs: 10
+  history:
+    window_size: 3
+    storage_dtype: float32
+  uncertainty:
+    sigma_squared: 0.0001
+  selection:
+    count_rule: floor
+    tie_break: stable_sample_index
+loader:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+evaluation:
+  selection_split: validation
+  primary: mean_peer_accuracy
+  ensemble: mean_probabilities
+trainer:
+  epochs: 200
+  device: cuda
+  early_stopping: false

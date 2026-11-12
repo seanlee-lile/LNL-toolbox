@@ -1,0 +1,88 @@
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / E
+# Source: artifact/full-test-best-20261106/cifar100/apl/config.json
+# Source SHA256: 81c51288a48eb644646bd9d72e5686306becd951df20dcf45b04d1bf410b6b43
+# Historical code: toolbox-best-e9915ce4c6551722
+# Recovery: original_input_content_recovered
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   output_root
+data:
+  augment: true
+  max_test_samples: null
+  max_train_samples: null
+  max_validation_samples: null
+  name: cifar100
+  normalization:
+    mean:
+    - 0.5071
+    - 0.4867
+    - 0.4408
+    std:
+    - 0.2675
+    - 0.2565
+    - 0.2761
+  num_classes: 100
+  preprocessing: standard
+  validation_size: 0
+  validation_split:
+    source: training_pool
+evaluation:
+  allow_test_selection: false
+  loss:
+    name: ce
+  report_checkpoint: last
+  selection_split: test
+execution:
+  runner: supervised
+kind: experiment
+loader:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+loss:
+  active:
+    name: nce
+  alpha: 10.0
+  beta: 0.1
+  name: apl
+  passive:
+    log_zero: -4.0
+    name: rce
+model:
+  name: resnet34
+noise:
+  name: symmetric
+  rate: 0.2
+  rng: default_rng
+  sampling: per_class
+  seed: 1
+  validation_targets: noisy
+optimizer:
+  lr: 0.1
+  momentum: 0.9
+  name: sgd
+  nesterov: false
+  weight_decay: 1.0e-05
+output_root: artifacts/reproductions/apl-cifar100-best
+parameter_update:
+  max_grad_norm: 5.0
+  name: standard
+scheduler:
+  eta_min: 0.0
+  name: cosine
+  t_max: 200
+schema_version: 1
+seed: 1
+selector:
+  name: all
+trainer:
+  device: cuda
+  early_stopping: false
+  epochs: 200
+  progress:
+    curves: true
+    enabled: true
+    update_interval: 20

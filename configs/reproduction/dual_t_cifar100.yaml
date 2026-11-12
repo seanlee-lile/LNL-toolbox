@@ -1,0 +1,99 @@
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / E
+# Source: artifact/full-test-best-20261106/cifar100/dual-t/config.json
+# Source SHA256: 17034d74edb96da82150392b84e0494605187fed44c84c6f552263b340a04f15
+# Historical code: toolbox-best-fd363df75a653df0
+# Recovery: original_input_content_recovered
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   output_root
+kind: experiment
+schema_version: 1
+method: dual_t
+seed: 1
+output_root: artifacts/reproductions/dual-t-cifar100-best
+data:
+  name: cifar100
+  validation_size: 10000
+  augment: true
+  preprocessing: standard
+  validation_split:
+    source: training_pool
+  normalization:
+    mean:
+    - 0.5071
+    - 0.4867
+    - 0.4408
+    std:
+    - 0.2675
+    - 0.2565
+    - 0.2761
+  max_train_samples: null
+  max_test_samples: null
+  max_validation_samples: null
+  num_classes: 100
+noise:
+  name: symmetric
+  rate: 0.2
+  seed: 1
+  sampling: per_class
+  rng: default_rng
+  validation_targets: noisy
+loader:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+trainer:
+  device: cuda
+evaluation:
+  selection_split: validation
+posterior_stage:
+  epochs: 100
+  checkpoint_selection: noisy_validation_accuracy
+  model:
+    name: resnet34
+    base_width: 64
+    variant: imagenet_standard
+  loss:
+    name: ce
+  optimizer:
+    name: sgd
+    lr: 0.01
+    momentum: 0.0
+    nesterov: false
+    weight_decay: 0.0001
+  scheduler:
+    name: multistep
+    milestones:
+    - 50
+    gamma: 0.1
+  early_stopping: false
+transition_stage: {}
+final_stage:
+  classifier: forward
+  epochs: 200
+  fresh_model: true
+  model:
+    name: resnet34
+    base_width: 64
+    variant: imagenet_standard
+  loss:
+    name: ce
+  optimizer:
+    name: sgd
+    lr: 0.01
+    momentum: 0.0
+    nesterov: false
+    weight_decay: 0.0001
+  scheduler:
+    name: multistep
+    milestones:
+    - 50
+    - 100
+    - 150
+    gamma: 0.1
+  early_stopping: false
+execution:
+  runner: dual_t

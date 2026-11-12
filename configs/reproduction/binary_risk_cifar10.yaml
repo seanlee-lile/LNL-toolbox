@@ -1,0 +1,54 @@
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / D
+# Source: artifact/full-test-best-20261106/cifar10/binary-risk/config.json
+# Source SHA256: 077c2231e1217328e41295a78a107f1e501289ce7e53f9ff69258f8ad1b103e0
+# Historical code: toolbox-08b067ea67eec7d5
+# Recovery: original_input_content_recovered
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   local_dataset.adapter
+#   local_dataset.alias
+#   local_dataset.source_signature
+#   meta.web_parameter_record.effective_reproduction_status
+#   meta.web_parameter_record.formal_recipe
+#   meta.web_parameter_record.modified_from_paper
+#   meta.web_parameter_record.paper_change_acknowledged
+#   meta.web_parameter_record.paper_parameter_changes
+#   meta.web_parameter_record.parameter_metadata_registry_version
+#   output_root
+kind: experiment
+schema_version: 1
+seed: 2013
+output_root: artifacts/reproductions/binary-risk-cifar10-best
+data:
+  name: cifar10_airplane_automobile
+  seed: 2013
+  num_classes: 2
+  validation_split:
+    source: training_pool
+  validation_size: 1000
+noise:
+  rho_positive: 0.4
+  rho_negative: 0.4
+  seed: 2013
+  name: binary_asymmetric_rcn
+risk:
+  name: natarajan_unbiased
+  rho_positive: 0.4
+  rho_negative: 0.4
+model:
+  name: linear
+execution:
+  runner: binary
+loader:
+  batch_size: 64
+optimizer:
+  lr: 0.01
+  name: sgd
+  momentum: 0.9
+trainer:
+  early_stopping_monitor: validation_loss
+  epochs: 50
+  early_stopping: false

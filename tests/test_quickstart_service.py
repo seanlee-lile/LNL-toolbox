@@ -19,7 +19,6 @@ from lnl_toolbox.quickstart.models import QuickStartNoiseSelection
 from lnl_toolbox.quickstart.service import QuickStartService
 from lnl_toolbox.quickstart.templates import adapt_method_template, method_template_for_paper
 from lnl_toolbox.quickstart.templates import find_exact_reproduction
-from lnl_toolbox.training.compatibility import CompatibilityStatus
 
 
 class _FakeImageAdapter:
@@ -108,6 +107,52 @@ class _FakeNoisyImageAdapter(_FakeImageAdapter):
 
 
 class QuickStartServiceTests(unittest.TestCase):
+    def test_dataset_yaml_selection_covers_all_48_historical_configs(self) -> None:
+        from lnl_toolbox.catalog import discover_recipes, load_yaml
+        from lnl_toolbox.quickstart.templates import DatasetConfigurationUnavailable
+
+        recipes = {recipe.id: recipe for recipe in discover_recipes(include_conditional=True)}
+        covered = 0
+        for paper in load_papers():
+            default = method_template_for_paper(paper)
+            for adapter in ("cifar10", "cifar100"):
+                with self.subTest(paper=paper.id, adapter=adapter):
+                    if adapter == "cifar100" and paper.id in {"binary-risk", "importance-reweighting", "mc-ldce", "pdl"}:
+                        with self.assertRaisesRegex(DatasetConfigurationUnavailable, "没有对应"):
+                            self.service._template(paper, recipes, adapter)
+                        continue
+                    selected = self.service._template(paper, recipes, adapter)
+                    self.assertEqual(selected.recipe_id, f"{paper.id}-{adapter}")
+                    self.assertEqual(selected.recipe.config_path.name, f"{paper.id.replace('-', '_')}_{adapter}.yaml")
+                    self.assertEqual(selected.config, load_yaml(selected.recipe.config_path))
+                    covered += 1
+            self.assertEqual(method_template_for_paper(paper).config, default.config)
+        self.assertEqual(covered, 48)
+        paper = next(paper for paper in load_papers() if paper.id == "cwd")
+        self.assertEqual(self.service._template(paper, recipes, "cifar10_airplane_automobile").recipe_id,
+                         "cwd-cifar10")
+
+    def test_dataset_yaml_plan_and_method_card_use_same_source(self) -> None:
+        import json
+        from lnl_toolbox.catalog import load_yaml
+
+        selection = QuickStartNoiseSelection("synthetic", "symmetric", rate=0.2, seed=73)
+        option = next(item for item in self.service.method_options("local-cifar10", selection) if item.paper_id == "gce")
+        self.assertEqual(option.recipe_id, "gce-cifar10")
+        plan = self.service.build_plan(dataset_alias="local-cifar10", paper_id="gce", noise_selection=selection)
+        self.assertEqual(plan.status, "ready", plan.details)
+        provenance = json.loads(Path(plan.provenance_path).read_text(encoding="utf-8"))
+        self.assertEqual(provenance["base_recipe"], option.recipe_id)
+        base = load_yaml(Path(provenance["base_config_path"]))
+        saved = load_yaml(Path(plan.generated_config_path))
+        for key in ("model", "optimizer", "scheduler", "trainer", "loss"):
+            self.assertEqual(saved[key], base[key], key)
+        self.assertEqual(saved["seed"], 73)
+        self.assertEqual(saved["noise"]["rate"], 0.2)
+        self.assertIn(plan.generated_config_path, plan.command)
+        self.assertIn(plan.generated_config_path, plan.dry_run_command)
+        self.assertIsNone(plan.recipe_id)  # The bound draft, not the old default, is executed.
+
     def test_plan_template_cache_tracks_recipe_file_revision(self) -> None:
         from lnl_toolbox.quickstart import templates
         from lnl_toolbox.catalog import recipe_by_id
@@ -191,6 +236,14 @@ class QuickStartServiceTests(unittest.TestCase):
         self.assertIn("symmetric", keys)
         self.assertTrue({"external_torch", "class_conditional", "official_uniform_flip"} <= keys)
         self.assertIn("binary_asymmetric_rcn", keys)
+
+    def test_cal_accepts_quickstart_generated_noise_without_external_file(self) -> None:
+        for kind, key, rate in (("clean", "clean", None), ("synthetic", "symmetric", 0.2), ("synthetic", "pairflip", 0.2)):
+            with self.subTest(noise=key):
+                selection = QuickStartNoiseSelection(kind, key, rate=rate, seed=1)
+                plan = self.service.build_plan(dataset_alias="local-cifar10", paper_id="cal", noise_selection=selection)
+                self.assertEqual(plan.status, "ready", plan.details)
+                self.assertNotIn("config:requires_external_noise_labels", plan.required_user_inputs)
 
     def test_binary_asymmetric_selection_reaches_plan(self) -> None:
         selection = QuickStartNoiseSelection(
@@ -742,29 +795,25 @@ class QuickStartServiceTests(unittest.TestCase):
                 "local-cifar10", QuickStartNoiseSelection("clean", "clean")
             )
 
-    def test_exact_reproduction_cannot_bypass_preflight(self) -> None:
-        compatible = SimpleNamespace(
-            status=CompatibilityStatus.COMPATIBLE,
-            reasons=(),
-            required_user_inputs=(),
-        )
-        paper = next(item for item in __import__("lnl_toolbox.catalog", fromlist=["load_papers"]).load_papers() if item.id == "gce")
-        with patch("lnl_toolbox.catalog.paper_by_id", return_value=paper), \
-             patch("lnl_toolbox.quickstart.service.find_exact_reproduction", return_value="fake-recipe"), \
-             patch("lnl_toolbox.quickstart.service.recipe_by_id", return_value=SimpleNamespace()), \
-             patch("lnl_toolbox.quickstart.service.load_recipe_config", return_value={"data": {"name": "cifar10"}}), \
-             patch("lnl_toolbox.quickstart.service.reference_train_size", return_value=12), \
-             patch.object(self.data_service, "apply", return_value={"data": {"name": "cifar10"}}), \
-             patch.object(self.service.experiment_service, "list_config_compatibility", return_value=(("gce", compatible),)), \
-             patch.object(self.service.experiment_service, "preflight", side_effect=ValueError("preflight failed")):
+    def test_plan_uses_cached_applicability_result_without_preflight(self) -> None:
+        selection = QuickStartNoiseSelection("clean", "clean")
+        with patch.object(
+            self.service.experiment_service,
+            "preflight",
+            side_effect=AssertionError("plan display must not run preflight"),
+        ) as preflight:
+            with self.assertRaisesRegex(ValueError, "先完成第 2 步到第 3 步"):
+                self.service.build_plan(
+                    dataset_alias="local-cifar10", noise_selection=selection, paper_id="gce",
+                )
+            self.service.method_options("local-cifar10", selection)
             plan = self.service.build_plan(
-                dataset_alias="local-cifar10",
-                noise_selection=QuickStartNoiseSelection("clean", "clean"),
-                paper_id="gce",
+                dataset_alias="local-cifar10", noise_selection=selection, paper_id="gce",
             )
-        self.assertEqual(plan.status, "unsupported")
-        self.assertIsNone(plan.command)
-        self.assertIn("preflight failed", plan.details)
+        preflight.assert_not_called()
+        self.assertEqual(plan.status, "ready", plan.details)
+        self.assertEqual(plan.recipe_id, "gce-cifar10")
+        self.assertIsNone(plan.generated_config_path)
 
     def test_adapted_split_counts_follow_paper_fraction_on_mini_dataset(self) -> None:
         profile = self.data_service.status("local-cifar10").profile.to_dict()

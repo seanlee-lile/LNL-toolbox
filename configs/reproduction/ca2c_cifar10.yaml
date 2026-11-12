@@ -1,0 +1,69 @@
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / D
+# Source: artifact/full-test-best-20261106/cifar10/ca2c/config.json
+# Source SHA256: 261046482cb525d4b8ff034ebc3eb27d0107fbfa07b2ef83af2a07f52e6f4959
+# Historical code: toolbox-8ae486ae787321d4
+# Recovery: original_input_content_recovered
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   local_dataset.adapter
+#   local_dataset.alias
+#   local_dataset.source_signature
+#   meta.web_parameter_record.effective_reproduction_status
+#   meta.web_parameter_record.formal_recipe
+#   meta.web_parameter_record.modified_from_paper
+#   meta.web_parameter_record.paper_change_acknowledged
+#   meta.web_parameter_record.paper_parameter_changes
+#   meta.web_parameter_record.parameter_metadata_registry_version
+#   output_root
+kind: experiment
+schema_version: 1
+method: ca2c
+execution:
+  runner: ca2c
+seed: 1
+output_root: artifacts/reproductions/ca2c-cifar10-best
+data:
+  name: cifar10
+  validation_size: 300
+  augment: true
+  strong_augment: true
+  strong_magnitude: 10
+  num_classes: 10
+  validation_split:
+    source: training_pool
+noise:
+  rate: 0.2
+  seed: 1
+  sampling: per_class
+  rng: default_rng
+  name: symmetric
+loader:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+  drop_last: true
+model:
+  name: ca2c_seven_cnn
+optimizer:
+  name: sgd
+  lr: 0.01
+  momentum: 0.9
+  nesterov: true
+  weight_decay: 0.0005
+scheduler:
+  name: cosine
+  t_max: 700
+  eta_min: 0.0
+ca2c:
+  warmup_epochs: 400
+  candidate_k: 2
+  lambda: 0.99
+  robust_weight: 0.8
+  warmup_early_stopping: false
+trainer:
+  epochs: 700
+  device: auto
+  early_stopping: false

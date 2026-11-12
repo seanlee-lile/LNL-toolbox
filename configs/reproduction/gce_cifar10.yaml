@@ -1,53 +1,73 @@
-schema_version: 1
-kind: experiment
-seed: 1
-output_root: artifacts/reproductions
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / D
+# Source: artifact/full-test-best-20261106/cifar10/gce/config.json
+# Source SHA256: 9b359747a08f09bdca0ca02b3e14b73e21d4469902ba46463996a6e4a8d22284
+# Historical code: toolbox-63429530e2f54dbc
+# Recovery: source_available_effective_overrides_preserved
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   meta.web_parameter_record.effective_reproduction_status
+#   meta.web_parameter_record.formal_recipe
+#   meta.web_parameter_record.modified_from_paper
+#   meta.web_parameter_record.paper_change_acknowledged
+#   meta.web_parameter_record.paper_parameter_changes
+#   meta.web_parameter_record.parameter_metadata_registry_version
+#   output_root
 data:
-  name: cifar10
-  validation_size: 5000
+  augment: true
+  max_test_samples: null
   max_train_samples: null
   max_validation_samples: null
-  max_test_samples: null
-  augment: true
+  name: cifar10
   preprocessing: gce2018
-noise:
-  name: symmetric
-  rate: 0.2
-  seed: 1
-  validation_targets: noisy
-  manifest_filename: noise_manifest.npz
-loss:
-  name: gce
-  q: 0.7
-selector:
-  name: all
-parameter_update:
-  name: standard
+  validation_size: 5000
+  validation_split:
+    source: training_pool
+execution:
+  runner: supervised
+kind: experiment
 loader:
   batch_size: 128
   num_workers: 0
   pin_memory: true
+loss:
+  name: gce
+  q: 0.7
 model:
-  name: resnet34
   base_width: 64
+  name: resnet34
+noise:
+  manifest_filename: noise_manifest.npz
+  name: symmetric
+  rate: 0.2
+  seed: 1
+  validation_targets: noisy
 optimizer:
-  name: sgd
   lr: 0.01
   momentum: 0.9
+  name: sgd
   nesterov: false
   weight_decay: 0.0001
+output_root: artifacts/reproductions/gce-cifar10-best
+parameter_update:
+  name: standard
 scheduler:
-  name: multistep
+  gamma: 0.1
   milestones:
   - 40
   - 80
-  gamma: 0.1
+  name: multistep
+schema_version: 1
+seed: 1
+selector:
+  name: all
 trainer:
-  epochs: 120
   device: auto
+  early_stopping: false
+  epochs: 120
   progress:
+    curves: true
     enabled: true
     update_interval: 20
-    curves: true
-execution:
-  runner: supervised

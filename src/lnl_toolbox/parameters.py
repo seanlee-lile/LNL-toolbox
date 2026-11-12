@@ -9,6 +9,7 @@ from lnl_toolbox.catalog import find_project_root
 from lnl_toolbox.quickstart.templates import SPLIT_COUNT_PATHS, reference_train_size
 
 ROOT = find_project_root(Path(__file__))
+_QUICK_START_OVERRIDE_AUTH = object()
 
 def _display_path(path):
     try:
@@ -313,6 +314,13 @@ def _config_method(config: object, fallback: object = "") -> str:
         web_record.get("formal_recipe") if isinstance(web_record, dict) else ""
     ) or (record.get("formal_recipe") if isinstance(record, dict) else "")
     candidate_recipe = str(formal_recipe or fallback or "")
+    # Historical dataset variants use the paper ID, not the executor/component
+    # name (for example Loss Correction's component is called "forward").
+    for suffix in ("-cifar10", "-cifar100"):
+        if candidate_recipe.endswith(suffix):
+            candidate_method = _method_registry_key(candidate_recipe[:-len(suffix)])
+            if candidate_method in registry["methods"]:
+                return candidate_method
     for candidate_method, recipe_id in registry["formal_recipe_bindings"].items():
         if candidate_recipe == str(recipe_id):
             return str(candidate_method)
@@ -693,6 +701,8 @@ def _parameter_base_note(path: str, original: str) -> str:
 
 
 def _parameter_ui_spec(path: str) -> list[str] | None:
+    if "scheduler" in path.split(".") and path.endswith(".step_size"):
+        return [path, "每经过多少个训练轮次，将学习率乘以衰减倍率。"]
     if path.endswith((".early_stopping", ".warmup_early_stopping")):
         return [path, "启用后，验证指标连续15轮没有改善时结束训练，使用保存的最佳模型继续后续流程；关闭后按设置的训练预算运行。"]
     if path == "algorithm.estimated_noise_rate":
@@ -721,7 +731,7 @@ def _parameter_choices(field: dict[str, object], method: str) -> list[dict[str, 
     if field.get("visible") is False:
         return None
     path = str(field["path"])
-    if path.endswith((".path", ".artifact_path")):
+    if path == "noise.manifest" or path.endswith((".path", ".artifact_path")):
         return None  # A user-supplied filesystem path is not an enumeration.
     ui = _parameter_registry().get("parameter_ui", {})
     choices = ui.get("choices", {}).get(path)
@@ -741,10 +751,14 @@ def _parameter_choices(field: dict[str, object], method: str) -> list[dict[str, 
                    "preact_resnet18", "mentor_wide_resnet", "feature_mlp"]
         if method in {"apl", "gce", "cdr", "dss", "mentornet", "loss_correction", "pdl"}:
             choices = [value for value in choices if value not in {"cnn9", "feature_mlp"}]
-        extra = {"jocor": "cifar_six_conv", "fine": "fine_seven_cnn",
+        extra = {"jocor": "cifar_six_conv", "cnlcu": "cifar_six_conv", "fine": "fine_seven_cnn",
                  "ca2c": "ca2c_seven_cnn", "l2rw": "l2rw_resnet32", "mc_ldce": "mc_ldce_cnn"}.get(method)
         if extra:
             choices.append(extra)
+        if method == "l2rw":
+            choices.append("wide_resnet28_10")
+        if method == "loss_correction":
+            choices.append("resnet44")
         if method == "importance_reweighting":
             choices = ["linear", "resnet18", "resnet34", "cnn8"]
         elif method == "pcse":
@@ -766,15 +780,18 @@ def _parameter_choices(field: dict[str, object], method: str) -> list[dict[str, 
         elif method == "cwd":
             choices = ["resnet34", "cifar_resnet34", "tiny_cnn", "feature_mlp"]
     if category == "scheduler":
-        if method == "jocor":
+        if method == "fine":
+            choices = ["cosine"]
+        elif method == "jocor":
             choices = ["none", "linear_decay"]
         elif method == "cal":
             choices = ["none", "step", "multistep"]
-        elif method == "dld":
+        elif method in {"dld", "volminnet"}:
             choices = ["none", "cosine", "multistep"]
         elif method == "mc_ldce" and path == "transition.scheduler.name":
             choices = ["none", "multistep"]
         elif method in {"apl", "gce", "cdr", "dss", "mentornet", "loss_correction", "pdl"}:
+            # The supervised configuration contract excludes linear_after.
             choices = ["none", "cosine", "multistep"]
     if path == "evaluation.primary":
         # Dedicated evaluators expose their own metric, not an interchangeable
@@ -1099,7 +1116,7 @@ def schema_from_payload(payload: dict[str, Any], *, recipe_hint=None) -> dict[st
         )
     )
     fields = [field for field in fields if not str(field["path"]).startswith("early_stopping.")]
-    fields.extend(_schedule_editor_fields(payload["config"]))
+    fields = list({field["path"]: field for field in [*fields, *_schedule_editor_fields(payload["config"], method=method)]}.values())
     original = (
         _config_payload(recipe_hint)["config"]
         if recipe_hint and payload["recipe"] != recipe_hint
@@ -1157,7 +1174,7 @@ def _field_map(config: dict[str, Any], method: str) -> dict[str, dict[str, objec
     )
     result = {str(field["path"]): field for field in fields
               if not str(field["path"]).startswith("early_stopping.")}
-    for schedule_field in _schedule_editor_fields(config):
+    for schedule_field in _schedule_editor_fields(config, method=method):
         result[str(schedule_field["path"])] = schedule_field
     for stage_field in _stage_early_stopping_fields(config):
         result[str(stage_field["path"])] = stage_field
@@ -1181,12 +1198,36 @@ def _stage_early_stopping_fields(config: dict[str, Any]) -> list[dict[str, objec
     } for control in training_stage_controls(config)]
 
 
-def _schedule_editor_fields(config: dict[str, Any]) -> list[dict[str, object]]:
+def _schedule_epochs(config: dict[str, Any], path: str, *, method: str = "") -> int:
+    """Match the epoch budget passed by the runner to this schedule."""
+    method = method or _config_method(config)
+    budget = config.get("trainer", {}).get("epochs", 1)
+    owner = config
+    for part in path.split(".")[:-1]:
+        owner = owner.get(part, {}) if isinstance(owner, dict) else {}
+        budget = owner.get("epochs", budget)
+    if method == "dld":
+        budget = config.get("dld", {}).get("diffusion", {}).get("epochs", budget)
+    if method == "dividemix":
+        dm = config.get("dividemix", {})
+        budget = dm.get("warmup", {}).get("epochs", 0) + dm.get("training", {}).get("epochs", budget)
+    return int(budget)
+
+
+def _schedule_editor_fields(config: dict[str, Any], *, method: str = "") -> list[dict[str, object]]:
     """Expose absolute stage rates wherever the training scheduler supports them."""
     result: list[dict[str, object]] = []
     execution = config.get("execution") or {}
-    method = str(config.get("method") or (execution.get("runner", "") if isinstance(execution, dict) else ""))
+    method = method or _config_method(config)
     cwd = config.get("method") == "cwd" or isinstance(execution, dict) and execution.get("runner") == "cwd"
+    parameters = _parameter_registry()["methods"].get(method, {}).get("parameters", {})
+    registered_paths = {path for entries in parameters.values() if isinstance(entries, dict) for path in entries}
+
+    def editable_schedule(path: str) -> bool:
+        for level, entries in parameters.items():
+            if isinstance(entries, dict) and path + ".name" in entries:
+                return _parameter_edit_rule(config, method, path + ".name", level)[0] == "editable"
+        return cwd and path == "scheduler"
 
     if cwd and isinstance(config.get("scheduler"), dict):
         result.append({
@@ -1200,6 +1241,46 @@ def _schedule_editor_fields(config: dict[str, Any]) -> list[dict[str, object]]:
     def visit(value: object, path: str = "") -> None:
         if not isinstance(value, dict):
             return
+        if "scheduler" in path.split(".") and editable_schedule(path) and ("name" in value or path == "scheduler" and cwd):
+            name_field = {"path": path + ".name", "kind": "text", "value": value.get("name", "multistep"),
+                          "editable": True, "visible": True}
+            modes = [option["value"] for option in (_parameter_choices(name_field, method) or [])]
+            budget = _schedule_epochs(config, path, method=method)
+            defaults: dict[str, object] = {}
+            if "step_milestones" not in value:
+                if "multistep" in modes:
+                    defaults.update(milestones=[], gamma=0.1, lr_values=None)
+                if "cosine" in modes:
+                    defaults.update(t_max=budget, eta_min=5e-4 if method == "fine" else 0.0)
+                if "linear_after" in modes:
+                    if method == "mc_ldce" and path == "scheduler":
+                        defaults.update(decay_start=0)
+                    else:
+                        defaults.update(start_epoch=0, end_epoch=budget)
+                if "step" in modes:
+                    defaults.update(step_size=1, gamma=0.1)
+            for suffix, default in defaults.items():
+                field_path = path + "." + suffix
+                if suffix in value and field_path in registered_paths:
+                    continue
+                result.append({
+                    "path": field_path, "label": _parameter_user_label(field_path, method),
+                    "note": _parameter_user_note(field_path, "", method), "value": value.get(suffix, default),
+                    "kind": "list" if suffix in {"milestones", "lr_values"} else "number",
+                    "number_type": "integer" if suffix in {"start_epoch", "end_epoch", "decay_start", "t_max", "step_size"} else "float",
+                    "nullable": suffix == "lr_values", "virtual": suffix not in value,
+                    "editable": True, "visible": True, "level": "advanced", "presentation": "parameter",
+                    "research_group": "", "research_category": "",
+                })
+            if method == "fine":
+                # FINE owns its post-warmup cosine schedule; name/t_max are not switches.
+                duration = max(1, int(budget) - int(config.get("fine", {}).get("warmup_epochs", 0)))
+                result.extend([
+                    {**name_field, "value": "cosine", "level": "advanced", "label": "scheduler.name", "note": "预热结束后使用余弦下降。"},
+                    {"path": path + ".t_max", "value": duration, "kind": "number", "number_type": "integer",
+                     "editable": False, "visible": True, "level": "advanced", "label": "scheduler.t_max",
+                     "note": "下降周期为主训练阶段的轮数。"},
+                ])
         if "scheduler" in path.split(".") and (
             (value.get("name") in {"multistep", "none"} and isinstance(value.get("milestones"), list))
             or (path == "scheduler" and isinstance(value.get("step_milestones"), list))
@@ -1246,7 +1327,7 @@ def _validate_schedule_editor_rates(config: dict[str, Any]) -> None:
     visit(config)
 
 
-def _set_config_path(config: dict[str, object], path: str, value: object) -> None:
+def _set_config_path(config: dict[str, object], path: str, value: object, *, method: str = "") -> None:
     from lnl_toolbox.core.config_schema import training_stage_controls
 
     if path in {control["path"] for control in training_stage_controls(config)}:
@@ -1276,6 +1357,9 @@ def _set_config_path(config: dict[str, object], path: str, value: object) -> Non
                 current["name"] = "multistep"
         return
     if parts[-1] not in current:
+        if any(field["path"] == path and field.get("virtual") for field in _schedule_editor_fields(config, method=method)):
+            current[parts[-1]] = value
+            return
         if path == "data.validation_size" and _config_method(config, config.get("execution", {}).get("runner", "")) in {"binary_risk", "cwd"}:
             current[parts[-1]] = value
             return
@@ -1575,7 +1659,7 @@ def _validate_changed_training_selectors(
             if method == "mc_ldce" and path == "transition.scheduler" and name not in {"none", "multistep"}:
                 raise ValueError("MC-LDCE transition scheduler 只支持 none 或 multistep")
             optimizer = torch.optim.SGD(dummy.parameters(), lr=0.01)
-            epochs = int(after.get("trainer", {}).get("epochs", 1))
+            epochs = _schedule_epochs(after, path, method=method)
             if method == "cal" and path == "scheduler":
                 from lnl_toolbox.training.experiment import build_alpha_scaled_scheduler
 
@@ -1596,13 +1680,20 @@ def _validate_changed_training_selectors(
 
 
 def _assert_locked_parameters_unchanged(
-    before: dict[str, Any], after: dict[str, Any], method: str
+    before: dict[str, Any], after: dict[str, Any], method: str,
+    *, allowed_changes: set[str] | None = None,
 ) -> None:
+    allowed_changes = allowed_changes or set()
     parameters = _parameter_registry()["methods"].get(method, {}).get("parameters", {})
     for level, entries in parameters.items():
         if not isinstance(entries, dict):
             continue
         for path in entries:
+            if any(
+                str(path) == allowed or str(path).startswith(allowed + ".")
+                for allowed in allowed_changes
+            ):
+                continue
             permission, reason, required = _parameter_edit_rule(after, method, str(path), level)
             if permission not in {"fixed", "required", "derived"}:
                 continue
@@ -1702,6 +1793,14 @@ def prepare_config(payload: object, *, for_review: bool = False) -> tuple[dict[s
     source_path = payload.get("source_path")
     content = payload.get("content")
     patches = payload.get("patches")
+    system_overrides = payload.get("_quick_start_overrides")
+    authorized_system_overrides = (
+        payload.get("_quick_start_override_auth") is _QUICK_START_OVERRIDE_AUTH
+    )
+    if system_overrides is not None and not authorized_system_overrides:
+        raise ValueError("Quick Start 内部配置只能由运行计划生成")
+    if system_overrides is not None and not isinstance(system_overrides, dict):
+        raise ValueError("Quick Start 内部配置格式错误")
     from lnl_toolbox.catalog import load_yaml, recipe_by_id, validate_config
 
     source_config: dict[str, Any] | None = None
@@ -1749,10 +1848,28 @@ def prepare_config(payload: object, *, for_review: bool = False) -> tuple[dict[s
                 raise ValueError(f"不允许修改配置结构或组件：{path}")
             if not field.get("editable", False):
                 raise ValueError(f"锁定参数不能通过普通 WebUI 修改：{path}")
-            _set_config_path(parsed, path, patch.get("value") if for_review else _coerce_patch_value(field, patch.get("value")))
+            _set_config_path(parsed, path, patch.get("value") if for_review else _coerce_patch_value(field, patch.get("value")), method=method)
+        for patch in patches:
+            path = patch["path"]
+            if path.endswith(".name") and "scheduler" in path.split("."):
+                _, schedule = _config_path_value(parsed, path.rsplit(".", 1)[0])
+                if isinstance(schedule, dict) and schedule.get("name") != "multistep" and "step_milestones" not in schedule:
+                    schedule.pop("lr_values", None)
         from lnl_toolbox.catalog import _config_parameter_errors
         if not for_review or not _config_parameter_errors(parsed):
             _synchronize_web_derived_parameters(parsed, method)
+    allowed_system_changes: set[str] = set()
+    for raw_path, value in (system_overrides or {}).items():
+        path = str(raw_path).strip()
+        if not path:
+            raise ValueError("Quick Start 内部配置路径不能为空")
+        if path == "noise":
+            if not isinstance(value, dict):
+                raise ValueError("Quick Start 噪声配置必须是 mapping")
+            parsed["noise"] = dict(value)
+        else:
+            _set_config_path(parsed, path, value)
+        allowed_system_changes.add(path)
     method = source_method or _config_method(source_config or parsed, _config_method(parsed))
     if method == "loss_correction":
         pipeline_values = parsed.get("pipeline", {}) or {}
@@ -1793,7 +1910,9 @@ def prepare_config(payload: object, *, for_review: bool = False) -> tuple[dict[s
         if method == "apl":
             _synchronize_web_derived_parameters(parsed, method)
         parsed = synchronize_experiment_seed(parsed)
-        _assert_locked_parameters_unchanged(source_config, parsed, method)
+        _assert_locked_parameters_unchanged(
+            source_config, parsed, method, allowed_changes=allowed_system_changes,
+        )
         if payload.get("automatic_validation_split"):
             from lnl_toolbox.quickstart.templates import configure_validation_split
 

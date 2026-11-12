@@ -1,19 +1,40 @@
-schema_version: 1
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / E
+# Source: artifact/full-test-best-20261106/cifar100/ca2c/config.json
+# Source SHA256: f3e15f960161ae187b17a024302bf17dca5919dc3974defa3b0abebb7a0577ea
+# Historical code: toolbox-best-9df1cefd82ea54dc
+# Recovery: original_input_content_recovered
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   output_root
 kind: experiment
+schema_version: 1
 method: ca2c
 execution:
   runner: ca2c
-seed: 123
-output_root: artifacts/reproductions/ca2c-cifar100-sym20
+seed: 1
+output_root: artifacts/reproductions/ca2c-cifar100-best
 data:
   name: cifar100
   validation_size: 0
   augment: true
   strong_augment: true
   strong_magnitude: 10
+  normalization:
+    mean:
+    - 0.5071
+    - 0.4867
+    - 0.4408
+    std:
+    - 0.2675
+    - 0.2565
+    - 0.2761
+  num_classes: 100
 noise:
   rate: 0.2
-  seed: 123
+  seed: 1
   sampling: per_class
   rng: default_rng
   name: symmetric
@@ -41,4 +62,4 @@ ca2c:
   robust_weight: 0.8
 trainer:
   epochs: 700
-  device: auto
+  device: cuda

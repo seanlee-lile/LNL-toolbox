@@ -1,20 +1,44 @@
-schema_version: 1
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / D
+# Source: artifact/full-test-best-20261106/cifar10/t-revision/config.json
+# Source SHA256: c6716c5ca1222a881f973cb9e5cb0d60de46f3a51e51b7abf741fd7dcc60fb11
+# Historical code: toolbox-10729ff620cc71df
+# Recovery: source_available_effective_overrides_preserved
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   meta.web_parameter_record.effective_reproduction_status
+#   meta.web_parameter_record.formal_recipe
+#   meta.web_parameter_record.modified_from_paper
+#   meta.web_parameter_record.paper_change_acknowledged
+#   meta.web_parameter_record.paper_parameter_changes
+#   meta.web_parameter_record.parameter_metadata_registry_version
+#   output_root
 kind: experiment
+schema_version: 1
 method: t_revision
 execution:
   runner: t_revision
 configuration_fidelity: paper_oriented
 seed: 1
-output_root: artifacts/reproductions/t-revision-cifar10-sym20
+output_root: artifacts/reproductions/t-revision-cifar10-best
 data:
   name: cifar10
   validation_size: 5000
   preprocessing: standard
   augment: true
-  # Author transformer.py; the paper does not specify channel normalization.
   normalization:
-    mean: [0.4914, 0.4822, 0.4465]
-    std: [0.2023, 0.1994, 0.2010]
+    mean:
+    - 0.4914
+    - 0.4822
+    - 0.4465
+    std:
+    - 0.2023
+    - 0.1994
+    - 0.201
+  validation_split:
+    source: training_pool
 noise:
   name: symmetric
   rate: 0.2
@@ -35,7 +59,6 @@ t_revision:
     model:
       name: resnet18
       base_width: 64
-      # Author Resnet.py: unpadded stem and PyTorch default initialization.
       stem_padding: 0
       initialization: torch_default
     optimizer:
@@ -46,6 +69,7 @@ t_revision:
     scheduler:
       name: none
     best_metric: noisy_validation_accuracy
+    early_stopping: false
   transition_initialization:
     method: pseudo_anchor_percentile
     percentile: 97
@@ -67,6 +91,7 @@ t_revision:
       gamma: 0.1
     start_from: stage1_best
     best_metric: revised_noisy_validation_accuracy
+    early_stopping: false
   revision:
     epochs: 200
     transition_mode: paper_experiment_raw_additive
@@ -83,5 +108,6 @@ t_revision:
       clamp: none
       denominator_floor: 1.0e-12
     best_metric: revised_noisy_validation_accuracy
+    early_stopping: false
 evaluation:
   selection_split: validation

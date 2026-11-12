@@ -1,13 +1,32 @@
-schema_version: 1
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / D
+# Source: artifact/full-test-best-20261106/cifar10/dual-t/config.json
+# Source SHA256: 61608fdb051ec1dca25a56e1e15dac8c121257bb029acfa7e219c92715115e5b
+# Historical code: toolbox-fixed-81b2e26de01c8562
+# Recovery: source_available_effective_overrides_preserved
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   meta.web_parameter_record.effective_reproduction_status
+#   meta.web_parameter_record.formal_recipe
+#   meta.web_parameter_record.modified_from_paper
+#   meta.web_parameter_record.paper_change_acknowledged
+#   meta.web_parameter_record.paper_parameter_changes
+#   meta.web_parameter_record.parameter_metadata_registry_version
+#   output_root
 kind: experiment
+schema_version: 1
 method: dual_t
 seed: 1
-output_root: artifacts/reproductions
+output_root: artifacts/reproductions/dual-t-cifar10-best
 data:
   name: cifar10
   validation_size: 10000
   augment: true
   preprocessing: standard
+  validation_split:
+    source: training_pool
 noise:
   name: symmetric
   rate: 0.2
@@ -34,7 +53,6 @@ posterior_stage:
   optimizer:
     name: sgd
     lr: 0.01
-    # Author SGD construction omits momentum; its effective value is zero.
     momentum: 0.0
     nesterov: false
     weight_decay: 0.0001
@@ -43,10 +61,10 @@ posterior_stage:
     milestones:
     - 50
     gamma: 0.1
+  early_stopping: false
 transition_stage: {}
 final_stage:
   classifier: forward
-  # Author cl_epochs default; the paper specifies 100 only for posterior estimation.
   epochs: 200
   fresh_model: true
   model:
@@ -68,5 +86,6 @@ final_stage:
     - 100
     - 150
     gamma: 0.1
+  early_stopping: false
 execution:
   runner: dual_t

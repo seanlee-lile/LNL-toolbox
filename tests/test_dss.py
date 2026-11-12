@@ -139,7 +139,7 @@ class DSSAuthorModelTest(unittest.TestCase):
         from torch import nn
         from lnl_toolbox.models.cifar_resnet import DSSAuthorPreActBlock, PreActBlock, preact_resnet18
         from lnl_toolbox.training.experiment import build_model
-        config = yaml.safe_load(Path('configs/reproduction/dss_cifar10.yaml').read_text(encoding='utf-8'))
+        config = yaml.safe_load(Path('configs/reproduction/dss_default.yaml').read_text(encoding='utf-8'))
         self.assertEqual(config['model']['variant'], 'dss_author')
         torch.manual_seed(17)
         expected_stem = nn.Conv2d(3, 64, 3, padding=1, bias=False)
@@ -183,7 +183,7 @@ class DSSAuthorModelTest(unittest.TestCase):
 
     def test_author_variant_config_is_valid_and_rejects_unknown_variant(self) -> None:
         from lnl_toolbox.catalog import validate_config
-        config = yaml.safe_load(Path('configs/reproduction/dss_cifar10.yaml').read_text(encoding='utf-8'))
+        config = yaml.safe_load(Path('configs/reproduction/dss_default.yaml').read_text(encoding='utf-8'))
         validate_config(config)
         config['model']['variant'] = 'unknown'
         with self.assertRaisesRegex(ValueError, 'model.variant'):

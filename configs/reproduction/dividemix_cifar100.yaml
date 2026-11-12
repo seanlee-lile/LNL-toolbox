@@ -1,0 +1,103 @@
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / E
+# Source: artifact/full-test-best-20261106/cifar100/dividemix/config.json
+# Source SHA256: 9e8bb0867fe551c03ab82be7822778998c51d22522cac5ae4046e33ac922c52f
+# Historical code: toolbox-fixed-132c95d4904be4a6
+# Recovery: original_input_content_recovered
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   output_root
+kind: experiment
+schema_version: 1
+method: dividemix
+execution:
+  runner: dividemix
+configuration_fidelity: paper_oriented
+seed: 1
+output_root: artifacts/reproductions/dividemix-cifar100-best
+data:
+  name: cifar100
+  validation_size: 5000
+  augment: true
+  preprocessing: standard
+  normalization:
+    mean:
+    - 0.5071
+    - 0.4867
+    - 0.4408
+    std:
+    - 0.2675
+    - 0.2565
+    - 0.2761
+  validation_split:
+    source: training_pool
+  max_train_samples: null
+  max_test_samples: null
+  max_validation_samples: null
+  num_classes: 100
+noise:
+  name: symmetric
+  rate: 0.2
+  seed: 1
+  sampling: per_class
+  rng: default_rng
+  validation_targets: noisy
+model:
+  name: preact_resnet18
+  base_width: 64
+  variant: dss_author
+optimizer:
+  name: sgd
+  lr: 0.02
+  momentum: 0.9
+  weight_decay: 0.0005
+scheduler:
+  name: multistep
+  milestones:
+  - 150
+  gamma: 0.1
+loader:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+evaluation:
+  selection_split: validation
+  primary: ensemble_accuracy
+dividemix:
+  fidelity: official_cifar_v1
+  model_count: 2
+  initialization:
+    peer_seed_offset: 1
+  warmup:
+    epochs: 30
+    confidence_penalty_weight: 1.0
+    early_stopping: false
+  gmm:
+    threshold: 0.5
+    random_seed: 1
+    max_iterations: 10
+    tolerance: 0.01
+    covariance_regularization: 0.0005
+    minimum_mean_separation: 1.0e-06
+    loss_history:
+      name: official_auto
+      high_noise_rate: 0.9
+      window_epochs: 5
+  mixmatch:
+    augmentations: 2
+    temperature: 0.5
+    mixup_alpha: 4.0
+    mixup_lambda_scope: minibatch
+  objective:
+    lambda_u: 150.0
+    lambda_r: 1.0
+    rampup_epochs: 16
+  training:
+    epochs: 270
+    early_stopping: false
+  inference:
+    ensemble: official_logits_sum
+trainer:
+  device: cuda

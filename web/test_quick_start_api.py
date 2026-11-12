@@ -33,6 +33,48 @@ class _FakeService:
 
 
 class QuickStartApiTests(unittest.TestCase):
+    def test_real_plan_api_uses_registered_adapter_yaml_not_alias_or_default(self) -> None:
+        from copy import deepcopy
+        import json
+        from types import SimpleNamespace
+        from lnl_toolbox.catalog import load_yaml
+        from lnl_toolbox.quickstart.service import QuickStartService
+        from lnl_toolbox.training.compatibility import CompatibilityStatus
+
+        # Check the real selection/plan/API path; only data access and preflight
+        # are stubbed. No training is implied by this plan-contract test.
+        profile_data = {"adapter": "cifar100", "num_classes": 100,
+                        "sample_counts_by_split": {"train": 50000, "test": 10000}}
+        def bind(config, alias):
+            result = deepcopy(config)
+            result.setdefault("data", {}).update(name="cifar100", root="/registered/data")
+            return result
+        service = QuickStartService(SimpleNamespace(apply=bind))
+        report = SimpleNamespace(profile=SimpleNamespace(to_dict=lambda: profile_data))
+        capabilities = SimpleNamespace(noise_rate=SimpleNamespace(value=None))
+        compatible = SimpleNamespace(status=CompatibilityStatus.COMPATIBLE, reasons=(), required_user_inputs=())
+        with tempfile.TemporaryDirectory() as directory:
+            service.artifact_root = Path(directory)
+            with patch.object(quick_start_api, "SERVICE", service), \
+                 patch.object(service, "_accepted_report", return_value=report), \
+                 patch.object(service, "_accepted_capabilities", return_value=capabilities), \
+                 patch.object(service.experiment_service, "list_config_compatibility", return_value=(("gce", compatible),)), \
+                 patch.object(service.experiment_service, "preflight"):
+                payload = quick_start_api.plan_payload({"dataset": "alias-says-cifar10", "paper_id": "gce",
+                    "noise": {"kind": "synthetic", "key": "symmetric", "rate": 0.2, "seed": 73}})
+                self.assertEqual(payload["status"], "ready", payload["details"])
+                provenance = json.loads(Path(payload["provenance_path"]).read_text(encoding="utf-8"))
+                self.assertEqual(provenance["base_recipe"], "gce-cifar100")
+                saved = load_yaml(Path(payload["generated_config_path"]))
+                base = load_yaml(Path(provenance["base_config_path"]))
+                self.assertEqual(saved["trainer"], base["trainer"])
+                self.assertEqual(saved["scheduler"], base["scheduler"])
+                self.assertIn(payload["generated_config_path"], payload["command"])
+                self.assertIn(payload["generated_config_path"], payload["dry_run_command"])
+                with self.assertRaisesRegex(ValueError, "没有对应"):
+                    quick_start_api.plan_payload({"dataset": "alias-says-cifar10", "paper_id": "pdl",
+                                                 "noise": {"kind": "clean", "key": "clean"}})
+
     def test_probe_shape(self) -> None:
         with patch.object(quick_start_api, "SERVICE", _FakeService()):
             payload = quick_start_api.probe_payload({"path": "C:/data"})

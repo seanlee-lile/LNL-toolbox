@@ -1,0 +1,71 @@
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / E
+# Source: artifact/full-test-best-20261106/cifar100/cwd/config.json
+# Source SHA256: e9f43ab72cca7941d999265f1c618d3851cbe7fc610bf47857e2fc7270eca5f2
+# Historical code: toolbox-fixed-4ba4506fb5acf846
+# Recovery: partial_reconstruction_from_effective_config
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   cwd.transition_artifact
+#   data.root
+#   noise.type
+#   output_root
+# Required external resources (not downloaded or generated):
+#   cwd.transition_artifact: data/cwd/cifar100-best-transition.npz
+kind: experiment
+schema_version: 1
+seed: 1
+output_root: artifacts/reproductions/cwd-cifar100-best
+data:
+  name: cifar100
+  validation_size: 0
+  augment: true
+  normalization:
+    mean:
+    - 0.5071
+    - 0.4867
+    - 0.4408
+    std:
+    - 0.2675
+    - 0.2565
+    - 0.2761
+  num_classes: 100
+noise:
+  name: symmetric
+  rate: 0.2
+  seed: 1
+  sampling: per_class
+  rng: default_rng
+  validation_targets: noisy
+loader:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+model:
+  name: cifar_resnet34
+  base_width: 64
+  bias: false
+  feature_dropout: 0.5
+  num_outputs: 100
+optimizer:
+  name: adam
+  lr: 0.001
+  weight_decay: 0.0
+scheduler:
+  name: linear_after
+  start_epoch: 80
+  end_epoch: 200
+  beta1_before: 0.9
+  beta1_after: 0.1
+trainer:
+  epochs: 200
+  device: cuda
+cwd:
+  variant: multiclass
+  dynamic_centroid: true
+  transition_artifact: data/cwd/cifar100-best-transition.npz
+execution:
+  runner: cwd
+evaluation:
+  selection_split: none

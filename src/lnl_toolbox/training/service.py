@@ -161,6 +161,7 @@ class ExperimentService:
         config: Mapping[str, Any],
         *,
         method_noise_rate_prior: float | None = None,
+        check_prerequisites: bool = True,
     ) -> CompatibilityResult:
         requirements = runner.requirements(config)
         if requirements is None:
@@ -179,17 +180,40 @@ class ExperimentService:
         prior_info = None if prior is None else NoiseRateInfo(
             NoiseRateStatus.KNOWN, prior, prior_source
         )
-        prerequisite_results = tuple(
-            self.prerequisites.evaluate(descriptor, config)
-            for descriptor in requirements.prerequisites
-        )
-        pretrained_roles = frozenset(
-            item.descriptor.key
-            for item in prerequisite_results
-            if item.status == ReadinessStatus.READY
-        )
-        if not requirements.prerequisites:
-            pretrained_roles = self._available_pretrained_roles(config, requirements)
+        if check_prerequisites:
+            prerequisite_results = tuple(
+                self.prerequisites.evaluate(descriptor, config)
+                for descriptor in requirements.prerequisites
+            )
+            pretrained_roles = frozenset(
+                item.descriptor.key
+                for item in prerequisite_results
+                if item.status == ReadinessStatus.READY
+            )
+            if not requirements.prerequisites:
+                pretrained_roles = self._available_pretrained_roles(config, requirements)
+        else:
+            # Method selection checks configured conditions only. External file
+            # existence and artifact validity are checked at final preflight.
+            configured_roles = set()
+            for descriptor in requirements.prerequisites:
+                configured = all(
+                    self._config_value_present(self._config_value(config, path))
+                    for path in descriptor.config_paths
+                ) if descriptor.config_paths else bool(
+                    descriptor.environment_variable
+                    and os.environ.get(descriptor.environment_variable, "").strip()
+                )
+                if configured:
+                    configured_roles.add(descriptor.key)
+            for role, path in requirements.pretrained_role_paths:
+                value = self._config_value(config, path)
+                if path[-1] == "run_directory_env" and value is not None:
+                    value = os.environ.get(str(value), "")
+                if self._config_value_present(value):
+                    configured_roles.add(role)
+            prerequisite_results = ()
+            pretrained_roles = frozenset(configured_roles)
         result = resolve_compatibility(
             capabilities,
             requirements,
@@ -420,6 +444,7 @@ class ExperimentService:
         *,
         method_noise_rate_prior: float | None = None,
         dataset_capabilities: DatasetCapabilities | None = None,
+        check_prerequisites: bool = True,
     ) -> tuple[tuple[str, CompatibilityResult], ...]:
         """Resolve configurations with supplied or freshly inspected capabilities."""
 
@@ -442,6 +467,7 @@ class ExperimentService:
                     runner,
                     candidate,
                     method_noise_rate_prior=method_noise_rate_prior,
+                    check_prerequisites=check_prerequisites,
                 ),
             ))
         return tuple(results)

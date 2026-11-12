@@ -1,0 +1,89 @@
+schema_version: 1
+kind: experiment
+method: dld
+execution:
+  runner: dld
+configuration_fidelity: paper_oriented
+seed: 123
+output_root: artifacts/reproductions/dld-cifar10-sym20
+data:
+  name: cifar10
+  validation_size: 5000
+  strong_augment: true
+  strong_magnitude: 10
+loader:
+  batch_size: 200
+  num_workers: 4
+  pin_memory: true
+noise:
+  name: symmetric
+  rate: 0.2
+  seed: 123
+  sampling: transition
+  rng: default_rng
+  validation_targets: noisy
+dld:
+  fidelity:
+    name: paper_oriented_v2_cosine_similarity
+    hard_y0: averaged_views
+    direction_endpoint: estimated_yn
+    direction: yn_minus_y0
+    neighbor_metric: cosine_similarity
+    neighbor_weighting: inverse_neighbor_value
+    self_neighbor: include
+    divergence: kl_ps_to_pw
+    divergence_softmax: false
+    hard_yn_zero_denominator: fail
+    schedule: average
+    inference_initialization: zero
+    inference_steps: 5
+  feature_extractor:
+    source: external_checkpoint
+    model:
+      name: torchvision_resnet34
+      base_width: 64
+      weights: IMAGENET1K_V1
+      feature_dimension: 512
+    external:
+      adapter: torchvision_resnet34_imagenet1k_v1
+      weights: IMAGENET1K_V1
+      input_contract: cifar10_standard_normalized
+  precorrection:
+    k_neighbors: 50
+    delta: 1.0e-6
+    gmm_components: 2
+    gmm_seed: 123
+    minimum_mean_separation: 1.0e-6
+    query_chunk_size: 64
+  diffusion:
+    timesteps: 1000
+    epochs: 200
+    model:
+      independent_predictors: true
+      hidden_dim: 512
+      time_dim: 64
+    optimizer:
+      direction:
+        name: adam
+        lr: 0.0001
+      noise:
+        name: adam
+        lr: 0.0001
+    scheduler:
+      direction:
+        name: none
+      noise:
+        name: none
+    ema:
+      enabled: true
+      decay: 0.999
+  inference:
+    steps: 5
+    deterministic: true
+    initialization: zero
+evaluation:
+  selection_split: validation
+  primary: accuracy
+trainer:
+  epochs: 200
+  device: auto

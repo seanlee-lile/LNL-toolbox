@@ -1,88 +1,137 @@
-schema_version: 1
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / D
+# Source: artifact/full-test-best-20261106/cifar10/jocor/config.json
+# Source SHA256: 9bcade773338ebcbb257885669eaf5f8dc85c777917afb3315d3f0485c6dcd69
+# Historical code: toolbox-8d3f893c298f4f02
+# Recovery: source_available_effective_overrides_preserved
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   meta.web_parameter_record.effective_reproduction_status
+#   meta.web_parameter_record.formal_recipe
+#   meta.web_parameter_record.modified_from_paper
+#   meta.web_parameter_record.paper_change_acknowledged
+#   meta.web_parameter_record.paper_parameter_changes
+#   meta.web_parameter_record.parameter_metadata_registry_version
+#   output_root
+algorithm:
+  estimated_noise_rate: 0.5
+  lambda: 0.9
+  name: jocor
+data:
+  augment: false
+  name: cifar10
+  preprocessing: tensor_only
+  validation_size: 300
+  validation_split:
+    source: training_pool
+evaluation:
+  allow_test_selection: false
+  report_last_epochs: 10
+  selection_split: none
+execution:
+  runner: multi_model
 kind: experiment
-seed: 1
-output_root: artifacts/reproductions
+loader:
+  batch_size: 128
+  drop_last: true
+  num_workers: 4
+  pin_memory: true
+loss:
+  name: ce
+models:
+- batch_norm_momentum: 0.1
+  name: cifar_six_conv
+- batch_norm_momentum: 0.1
+  name: cifar_six_conv
+noise:
+  name: symmetric
+  rate: 0.5
+  rng: numpy_legacy
+  sampling: transition
+  seed: 1
+optimizer:
+  betas:
+  - 0.9
+  - 0.999
+  lr: 0.001
+  name: adam
+  weight_decay: 0.0
+output_root: artifacts/reproductions/jocor-cifar10-best
 parameter_sampling:
-  paper: jocor
-  seed: 20260728
   candidates:
     setting:
-    - noise: symmetric
+    - lambda: 0.9
+      noise: symmetric
       rate: 0.2
-      lambda: 0.9
-    - noise: symmetric
+    - lambda: 0.9
+      noise: symmetric
       rate: 0.5
-      lambda: 0.9
-    - noise: symmetric
+    - lambda: 0.65
+      noise: symmetric
       rate: 0.8
-      lambda: 0.65
-    - noise: asymmetric
+    - lambda: 0.9
+      noise: asymmetric
       rate: 0.4
+    train_seed:
+    - 1
+  paper: jocor
+  seed: 20260728
+  sources:
+    setting: CVPR 2020 paper and official JoCoR README
+    train_seed: official main.py default
+scheduler:
+  beta1_after: 0.1
+  beta1_before: 0.9
+  end_epoch: 200
+  final_lr: 0.0
+  initial_lr: 0.001
+  name: linear_decay
+  start_epoch: 80
+schema_version: 1
+seed: 1
+selector:
+  keep_rate:
+    end: 0.5
+    name: linear
+    start: 1.0
+    warmup_epochs: 9
+  name: small_loss
+  rounding: floor
+trainer:
+  device: auto
+  early_stopping: false
+  epochs: 200
+  progress:
+    curves: true
+    enabled: true
+    update_interval: 50
+parameter_record:
+  paper: jocor
+  sampling_seed: 20260728
+  parameters:
+    setting:
       lambda: 0.9
+      noise: symmetric
+      rate: 0.5
+    train_seed: 1
+  candidates:
+    setting:
+    - lambda: 0.9
+      noise: symmetric
+      rate: 0.2
+    - lambda: 0.9
+      noise: symmetric
+      rate: 0.5
+    - lambda: 0.65
+      noise: symmetric
+      rate: 0.8
+    - lambda: 0.9
+      noise: asymmetric
+      rate: 0.4
     train_seed:
     - 1
   sources:
     setting: CVPR 2020 paper and official JoCoR README
     train_seed: official main.py default
-data:
-  name: cifar10
-  validation_size: 0
-  preprocessing: tensor_only
-  augment: false
-noise:
-  name: symmetric
-  rate: 0.5
-  seed: 1
-  sampling: transition
-  rng: numpy_legacy
-loss:
-  name: ce
-algorithm:
-  name: jocor
-  lambda: 0.9
-selector:
-  name: small_loss
-  rounding: floor
-  keep_rate:
-    name: linear
-    start: 1.0
-    end: 0.5
-    warmup_epochs: 9
-models:
-- name: cifar_six_conv
-  batch_norm_momentum: 0.1
-- name: cifar_six_conv
-  batch_norm_momentum: 0.1
-optimizer:
-  name: adam
-  lr: 0.001
-  betas:
-  - 0.9
-  - 0.999
-  weight_decay: 0.0
-scheduler:
-  name: linear_decay
-  start_epoch: 80
-  end_epoch: 200
-  initial_lr: 0.001
-  final_lr: 0.0
-  beta1_before: 0.9
-  beta1_after: 0.1
-loader:
-  batch_size: 128
-  num_workers: 4
-  pin_memory: true
-  drop_last: true
-trainer:
-  epochs: 200
-  device: auto
-  progress:
-    enabled: true
-    update_interval: 50
-    curves: true
-evaluation:
-  selection_split: none
-  allow_test_selection: false
-  report_last_epochs: 10
-execution:
-  runner: multi_model

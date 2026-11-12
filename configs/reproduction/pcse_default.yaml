@@ -1,0 +1,87 @@
+schema_version: 1
+kind: experiment
+method: pcse
+configuration_fidelity: engineering
+seed: 1
+output_root: artifacts/reproductions/pcse-cifar10-ce-sym40
+data:
+  name: cifar10
+  num_classes: 10
+  validation_size: 5000
+  split_strategy: stratified
+  split_rng: default_rng
+  augment: true
+  reflect_padding: true
+  preprocessing: standard
+noise:
+  mode: generated
+  name: symmetric
+  rate: 0.4
+  seed: 1
+  sampling: per_class
+  rng: default_rng
+  validation_targets: noisy
+  manifest_filename: noise_manifest.npz
+pretraining_stage:
+  method: cross_entropy
+  epochs: 200
+  checkpoint_selection: noisy_validation_accuracy
+  model:
+    name: resnet18
+    base_width: 64
+    stem_padding: 0
+    initialization: torch_default
+  loss:
+    name: ce
+  optimizer:
+    name: adam
+    lr: 0.001
+    beta1: 0.9
+    weight_decay: 0.0
+  scheduler:
+    name: linear_after
+    start_epoch: 80
+    end_epoch: 200
+    beta1_before: 0.9
+    beta1_after: 0.1
+transition_stage:
+  name: paper_volmin
+  # VolMinNet CIFAR-10 reference budget; not a PCSE paper-mandated epoch count.
+  epochs: 80
+  lambda_volume: 0.001
+  optimizer:
+    name: adamw
+    model_lr: 0.0002
+    transition_lr: 0.001
+    weight_decay: 0.0001
+  scheduler:
+    name: none
+  parameterization:
+    name: sigmoid_off_diagonal
+    initial_weight: -5.135798437050262
+    seed: 1
+  determinant_tolerance: 1.0e-06
+  condition_limit: 1000000.0
+feature_stage:
+  layers:
+  - name: layer4
+    pooling: global_average
+  - name: avgpool
+    pooling: global_average
+statistics_stage:
+  condition_limit: 100000000.0
+gda_stage:
+  covariance_ridge: 0.0
+ensemble_stage:
+  epochs: 20
+  learning_rate: 0.02
+loader:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+trainer:
+  device: auto
+evaluation:
+  selection_split: validation
+execution:
+  runner: pcse

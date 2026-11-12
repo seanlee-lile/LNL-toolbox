@@ -1,5 +1,16 @@
-schema_version: 1
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / D
+# Source: artifact/full-test-best-20261106/cifar10/mc-ldce/config.json
+# Source SHA256: 4b2d737271a57e301dce5a322612626ccb866a1f13311390e4f8e5de0ed2cdab
+# Historical code: toolbox-fixed-8c9a045a46a5d517
+# Recovery: original_input_content_recovered
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   output_root
 kind: experiment
+schema_version: 1
 method: mc_ldce
 execution:
   runner: mc_ldce
@@ -9,7 +20,7 @@ mc_ldce:
   feature_mode: joint
   classifier_bias: false
 seed: 1
-output_root: artifacts/reproductions/mc-ldce-cifar10-sym20
+output_root: artifacts/reproductions/mc-ldce-cifar10-best
 data:
   name: cifar10
   validation_size: 0
@@ -31,7 +42,7 @@ optimizer:
   lr: 0.001
   beta1: 0.9
   beta2: 0.999
-  weight_decay: 0.0
+  weight_decay: 0.0001
 scheduler:
   name: linear_after
   decay_start: 80
@@ -66,4 +77,4 @@ statistics:
   condition_limit: 1.0e8
 trainer:
   epochs: 200
-  device: auto
+  device: cuda

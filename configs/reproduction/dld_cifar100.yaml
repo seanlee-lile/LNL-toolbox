@@ -1,0 +1,120 @@
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / E
+# Source: artifact/full-test-best-20261106/cifar100/dld/config.json
+# Source SHA256: 4ff634a518d2d7b321c08baea294757e0a10fe29ee8f5f7e961798708eb2850b
+# Historical code: toolbox-best-9384c6bc3a8bf833
+# Recovery: source_available_effective_overrides_preserved
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   noise.path
+#   output_root
+# Required external resources (not downloaded or generated):
+#   noise.path: data/dld/cifar100-idn-0.2.pt
+#   dld.feature_extractor.external.weights: IMAGENET1K_V1
+kind: experiment
+schema_version: 1
+method: dld
+execution:
+  runner: dld
+configuration_fidelity: paper_oriented
+seed: 1
+output_root: artifacts/reproductions/dld-cifar100-best
+data:
+  name: cifar100
+  validation_size: 5000
+  strong_augment: true
+  strong_magnitude: 10
+  validation_split:
+    source: training_pool
+  normalization:
+    mean:
+    - 0.5071
+    - 0.4867
+    - 0.4408
+    std:
+    - 0.2675
+    - 0.2565
+    - 0.2761
+  max_train_samples: null
+  max_test_samples: null
+  max_validation_samples: null
+  num_classes: 100
+loader:
+  batch_size: 200
+  num_workers: 4
+  pin_memory: true
+noise:
+  name: external_torch
+  path: data/dld/cifar100-idn-0.2.pt
+  clean_key: clean_label_train
+  noisy_key: noise_label_train
+  seed: 1
+  validation_targets: noisy
+dld:
+  fidelity:
+    name: paper_oriented_v2_cosine_similarity
+    hard_y0: averaged_views
+    direction_endpoint: estimated_yn
+    direction: yn_minus_y0
+    neighbor_metric: cosine_similarity
+    neighbor_weighting: inverse_neighbor_value
+    self_neighbor: include
+    divergence: kl_ps_to_pw
+    divergence_softmax: false
+    hard_yn_zero_denominator: fail
+    schedule: average
+    inference_initialization: zero
+    inference_steps: 5
+  feature_extractor:
+    source: external_checkpoint
+    model:
+      name: torchvision_resnet34
+      base_width: 64
+      weights: IMAGENET1K_V1
+      feature_dimension: 512
+    external:
+      adapter: torchvision_resnet34_imagenet1k_v1
+      weights: IMAGENET1K_V1
+      input_contract: cifar100_standard_normalized
+  precorrection:
+    k_neighbors: 50
+    delta: 1.0e-06
+    gmm_components: 2
+    gmm_seed: 1
+    minimum_mean_separation: 1.0e-06
+    query_chunk_size: 64
+  diffusion:
+    timesteps: 1000
+    epochs: 200
+    model:
+      independent_predictors: true
+      hidden_dim: 512
+      time_dim: 64
+    optimizer:
+      direction:
+        name: adam
+        lr: 0.0001
+      noise:
+        name: adam
+        lr: 0.0001
+    scheduler:
+      direction:
+        name: none
+      noise:
+        name: none
+    ema:
+      enabled: true
+      decay: 0.999
+    early_stopping: false
+  inference:
+    steps: 5
+    deterministic: true
+    initialization: zero
+evaluation:
+  selection_split: validation
+  primary: accuracy
+trainer:
+  epochs: 200
+  device: cuda

@@ -1,19 +1,44 @@
-schema_version: 1
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / D
+# Source: artifact/full-test-best-20261106/cifar10/dividemix/config.json
+# Source SHA256: 73541dd7ca811c0ed42993022bad6de6b82d7b4a2b6772f64d0f4ee743b0f681
+# Historical code: toolbox-c144953215518ca5
+# Recovery: source_available_effective_overrides_preserved
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   meta.web_parameter_record.effective_reproduction_status
+#   meta.web_parameter_record.formal_recipe
+#   meta.web_parameter_record.modified_from_paper
+#   meta.web_parameter_record.paper_change_acknowledged
+#   meta.web_parameter_record.paper_parameter_changes
+#   meta.web_parameter_record.parameter_metadata_registry_version
+#   output_root
 kind: experiment
+schema_version: 1
 method: dividemix
 execution:
   runner: dividemix
 configuration_fidelity: paper_oriented
 seed: 1
-output_root: artifacts/reproductions/dividemix-cifar10-sym20
+output_root: artifacts/reproductions/dividemix-cifar10-best
 data:
   name: cifar10
   validation_size: 5000
   augment: true
   preprocessing: standard
   normalization:
-    mean: [0.4914, 0.4822, 0.4465]
-    std: [0.2023, 0.1994, 0.2010]
+    mean:
+    - 0.4914
+    - 0.4822
+    - 0.4465
+    std:
+    - 0.2023
+    - 0.1994
+    - 0.201
+  validation_split:
+    source: training_pool
 noise:
   name: symmetric
   rate: 0.2
@@ -51,6 +76,7 @@ dividemix:
   warmup:
     epochs: 10
     confidence_penalty_weight: 1.0
+    early_stopping: false
   gmm:
     threshold: 0.5
     random_seed: 1
@@ -73,6 +99,7 @@ dividemix:
     rampup_epochs: 16
   training:
     epochs: 290
+    early_stopping: false
   inference:
     ensemble: official_logits_sum
 trainer:

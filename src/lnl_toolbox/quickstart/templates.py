@@ -26,16 +26,121 @@ class MethodTemplate:
     config: Mapping[str, Any]
 
 
-def method_template_for_paper(paper: PaperSpec) -> MethodTemplate:
+class DatasetConfigurationUnavailable(ValueError):
+    """The selected corpus has no registered configuration for this paper."""
+
+
+def quickstart_runtime_overrides(
+    config: Mapping[str, Any],
+    noise_selection: QuickStartNoiseSelection,
+    *,
+    method_inputs: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Map Quick Start choices onto a paper YAML at final review time."""
+
+    original_noise = dict(config.get("noise", {}) or {})
+    if noise_selection.kind == "clean" or noise_selection.key == "clean":
+        selected_noise: dict[str, object] = {"name": "clean"}
+    elif noise_selection.kind == "native" or noise_selection.key == "native":
+        selected_noise = {"name": "native"}
+    else:
+        selected_noise = build_noise_config(
+            noise_selection.key,
+            rate=noise_selection.rate,
+            seed=noise_selection.seed,
+            rho_positive=noise_selection.rho_positive,
+            rho_negative=noise_selection.rho_negative,
+            transition_matrix=noise_selection.transition_matrix,
+            path=noise_selection.path,
+        ) or {}
+        if str(original_noise.get("name", "")).lower() == str(selected_noise.get("name", "")).lower():
+            selected_noise = {**original_noise, **selected_noise}
+    if "validation_targets" in original_noise:
+        selected_noise["validation_targets"] = original_noise["validation_targets"]
+
+    overrides: dict[str, object] = {"noise": selected_noise}
+    candidate = deepcopy(dict(config))
+    candidate["noise"] = selected_noise
+    if noise_selection.seed is not None:
+        overrides["seed"] = int(noise_selection.seed)
+        candidate["seed"] = int(noise_selection.seed)
+        if noise_selection.kind == "synthetic":
+            selected_noise["seed"] = int(noise_selection.seed)
+
+    from lnl_toolbox.training.runners import resolve_runner
+
+    requirements = resolve_runner(candidate).requirements(candidate)
+    inputs = dict(method_inputs or {})
+    if requirements is not None:
+        prior = inputs.get("noise_rate_prior")
+        if prior is None:
+            if noise_selection.kind == "clean":
+                prior = 0.0
+            elif noise_selection.kind != "native":
+                prior = noise_selection.rate
+        if prior is not None:
+            for path in requirements.method_noise_prior_paths:
+                current: dict[str, Any] = candidate
+                for part in path[:-1]:
+                    child = current.get(part)
+                    if not isinstance(child, dict):
+                        child = {}
+                        current[part] = child
+                    current = child
+                current[path[-1]] = float(prior)
+                overrides[".".join(path)] = float(prior)
+
+    for raw_path, value in inputs.items():
+        if raw_path == "noise_rate_prior":
+            continue
+        path = tuple(str(part) for part in str(raw_path).split("."))
+        if not path or any(not part for part in path):
+            continue
+        current = candidate
+        for part in path[:-1]:
+            child = current.get(part)
+            if not isinstance(child, dict):
+                child = {}
+                current[part] = child
+            current = child
+        current[path[-1]] = value
+        overrides[str(raw_path)] = value
+    return overrides
+
+
+def method_template_for_paper(
+    paper: PaperSpec, *, dataset_adapter: str | None = None,
+    recipes: Mapping[str, RecipeSpec] | None = None,
+) -> MethodTemplate:
+    # Use adapter identity, never a local alias or the number of classes.
+    dataset = {
+        "cifar10": "cifar10", "cifar100": "cifar100",
+        "cifar10_airplane_automobile": "cifar10",
+    }.get(str(dataset_adapter or "").lower())
+    if dataset:
+        recipe_id = f"{paper.id}-{dataset}"
+        try:
+            recipe = recipes[recipe_id] if recipes is not None else _cached_recipe_by_id(recipe_id)
+        except (KeyError, ValueError) as exc:
+            raise DatasetConfigurationUnavailable(
+                f"{paper.acronym} 没有对应的 {dataset.upper()} YAML，不能使用其他配置替代。"
+            ) from exc
+        if not recipe.config_path.is_file():
+            raise DatasetConfigurationUnavailable(f"配置文件不存在：{recipe.config_path}")
+        return MethodTemplate(
+            paper.id, recipe_id, recipe,
+            load_recipe_config(recipe) if recipes is not None else _cached_recipe_config(recipe_id),
+        )
     selected = next(
         (item for item in paper.configs if item.profile == "reproduction"),
         None,
     )
     if selected is None:
         raise ValueError(f"paper {paper.id!r} has no formal reproduction recipe")
-    recipe = _cached_recipe_by_id(selected.recipe_id)
+    recipe = recipes[selected.recipe_id] if recipes is not None else _cached_recipe_by_id(selected.recipe_id)
     return MethodTemplate(
-        paper.id, selected.recipe_id, recipe, _cached_recipe_config(selected.recipe_id)
+        paper.id, selected.recipe_id, recipe,
+        load_recipe_config(recipe) if recipes is not None else _cached_recipe_config(selected.recipe_id),
     )
 
 

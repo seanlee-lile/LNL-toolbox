@@ -1,13 +1,28 @@
-schema_version: 1
-kind: experiment
-seed: 1
-output_root: artifacts/reproductions
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / D
+# Source: artifact/full-test-best-20261106/cifar10/pdl/config.json
+# Source SHA256: f66b1ace9892eeee651d54d4479b74bef82415de81f8b146af89a64fd6c7c2c7
+# Historical code: toolbox-1fc636ee9ce75027
+# Recovery: source_available_effective_overrides_preserved
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   meta.web_parameter_record.effective_reproduction_status
+#   meta.web_parameter_record.formal_recipe
+#   meta.web_parameter_record.modified_from_paper
+#   meta.web_parameter_record.paper_change_acknowledged
+#   meta.web_parameter_record.paper_parameter_changes
+#   meta.web_parameter_record.parameter_metadata_registry_version
+#   output_root
+algorithm:
+  correction: pdl
+  name: corrected_classification
 data:
-  name: cifar10
-  max_train_samples: null
-  max_test_samples: null
-  preprocessing: standard
   augment: false
+  max_test_samples: null
+  max_train_samples: null
+  name: cifar10
   normalization:
     mean:
     - 0.4914
@@ -17,36 +32,13 @@ data:
     - 0.2023
     - 0.1994
     - 0.201
-noise:
-  name: pdl
-  rate: 0.4
-  seed: 1
-  manifest_filename: noise_manifest.npz
-warmup:
-  epochs: 4
-  noisy_validation_size: 5000
-  split_strategy: random
-  split_rng: numpy_legacy
-  loss:
-    name: ce
-  optimizer:
-    name: sgd
-    lr: 0.01
-    momentum: 0.0
-    nesterov: false
-    weight_decay: 0.0001
-  scheduler:
-    name: none
-    milestones: []
-    gamma: 0.1
+  preprocessing: standard
+  validation_split:
+    source: training_pool
+execution:
+  runner: instance_transition
 instance_transition:
-  name: pdl
-  num_parts: 20
-  representation_iterations: 10
-  representation_seed: 1
-  representation_error_tolerance: 1.0e-05
   anchor_candidates: 20
-  anchor_policy: paper
   anchor_percentages:
   - 97.0
   - 97.1052631579
@@ -68,44 +60,74 @@ instance_transition:
   - 98.7894736842
   - 98.8947368421
   - 99.0
+  anchor_policy: paper
   basis_epochs: 1500
   basis_learning_rate: 0.001
   basis_loss_threshold: 0.02
-algorithm:
-  name: corrected_classification
-  correction: pdl
+  name: pdl
+  num_parts: 20
+  representation_error_tolerance: 1.0e-05
+  representation_iterations: 10
+  representation_seed: 1
+kind: experiment
+loader:
+  batch_size: 128
+  drop_last: false
+  num_workers: 0
+  pin_memory: true
 loss:
   name: ce
 model:
-  name: resnet34
   base_width: 64
-  stem_padding: 0
   initialization: torch_default
+  name: resnet34
+  stem_padding: 0
+noise:
+  manifest_filename: noise_manifest.npz
+  name: pdl
+  rate: 0.4
+  seed: 1
 optimizer:
-  name: sgd
   lr: 0.01
   momentum: 0.9
+  name: sgd
   nesterov: false
   weight_decay: 0.0001
-scheduler:
-  name: none
-loader:
-  batch_size: 128
-  num_workers: 0
-  pin_memory: true
-  drop_last: false
+output_root: artifacts/reproductions/pdl-cifar10-best
 phases:
   correction_epochs: 49
   revision_epochs: 49
 revision:
+  early_stopping: false
   optimizer:
-    name: adam
     lr: 5.0e-07
+    name: adam
     weight_decay: 0.0001
+scheduler:
+  name: none
+schema_version: 1
+seed: 1
 trainer:
-  epochs: 98
   device: auto
+  early_stopping: false
+  epochs: 98
   progress:
     curves: true
-execution:
-  runner: instance_transition
+warmup:
+  early_stopping: false
+  epochs: 4
+  loss:
+    name: ce
+  noisy_validation_size: 5000
+  optimizer:
+    lr: 0.01
+    momentum: 0.0
+    name: sgd
+    nesterov: false
+    weight_decay: 0.0001
+  scheduler:
+    gamma: 0.1
+    milestones: []
+    name: none
+  split_rng: numpy_legacy
+  split_strategy: random

@@ -1,0 +1,83 @@
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / D
+# Source: artifact/full-test-best-20261106/cifar10/importance-reweighting/config.json
+# Source SHA256: f95709e6b1c8d9acfb810c6ff4dc917ff9d0bf3fa4ef72dcd4ee5742f95d18d7
+# Historical code: toolbox-e262c3bbe0a08c03
+# Recovery: original_input_content_recovered
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   local_dataset.adapter
+#   local_dataset.alias
+#   local_dataset.source_signature
+#   meta.web_parameter_record.effective_reproduction_status
+#   meta.web_parameter_record.formal_recipe
+#   meta.web_parameter_record.modified_from_paper
+#   meta.web_parameter_record.paper_change_acknowledged
+#   meta.web_parameter_record.paper_parameter_changes
+#   meta.web_parameter_record.parameter_metadata_registry_version
+#   output_root
+kind: experiment
+schema_version: 1
+method: importance_reweighting
+num_classes: 2
+label_convention: zero_one
+seed: 17
+output_root: artifacts/reproductions/importance-reweighting-cifar10-best
+data:
+  name: cifar10_airplane_automobile
+  dimension: 3072
+  train_size: 4096
+  validation_size: 2500
+  test_size: 1024
+  num_classes: 2
+  validation_split:
+    source: training_pool
+noise:
+  name: binary_asymmetric_rcn
+  rho_positive: 0.2
+  rho_negative: 0.1
+  seed: 17
+  validation_targets: noisy
+posterior_stage:
+  name: neural
+  epochs: 50
+  early_stopping: false
+  rate_estimator: paper_raw_min
+  model:
+    name: resnet18
+    base_width: 16
+  optimizer:
+    name: sgd
+    lr: 0.01
+    momentum: 0.9
+    weight_decay: 0.0001
+  scheduler:
+    name: none
+model:
+  name: resnet18
+  base_width: 16
+  num_classes: 2
+loss:
+  name: ce
+optimizer:
+  name: sgd
+  lr: 0.1
+  momentum: 0.0
+  weight_decay: 0.0
+scheduler:
+  name: none
+loader:
+  batch_size: 128
+  num_workers: 0
+  pin_memory: false
+trainer:
+  epochs: 50
+  device: auto
+  early_stopping: false
+evaluation:
+  selection_split: validation
+execution:
+  runner: importance_reweighting
+configuration_fidelity: engineering

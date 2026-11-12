@@ -1,0 +1,66 @@
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / D
+# Source: artifact/full-test-best-20261106/cifar10/cwd/config.json
+# Source SHA256: c671b83b671870b291c98bbe0d56f9d1dd585116b4adf5d9e8512cec3147ece1
+# Historical code: toolbox-fixed-1165c066eb403d01
+# Recovery: partial_reconstruction_from_effective_config
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   diagnostic_control.compared_source
+#   diagnostic_control.dropout_probability
+#   diagnostic_control.source
+#   diagnostic_control.variant
+#   diagnostic_control.warning
+#   model.feature_dropout
+#   noise.type
+#   output_root
+# feature_dropout=0.5 restores the historical diagnostic-driver injection.
+kind: experiment
+schema_version: 1
+seed: 17
+output_root: artifacts/reproductions/cwd-cifar10-best
+data:
+  name: cifar10_airplane_automobile
+  folds: 5
+  fold_index: 0
+  augment: true
+noise:
+  rho_positive: 0.2
+  rho_negative: 0.2
+  seed: 17
+  name: binary_asymmetric_rcn
+loader:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+model:
+  name: cifar_resnet34
+  base_width: 64
+  bias: false
+  feature_dropout: 0.5
+optimizer:
+  name: adam
+  lr: 0.05
+  weight_decay: 0.0001
+scheduler:
+  name: multistep
+  milestones:
+  - 40
+  - 120
+  gamma: 0.1
+trainer:
+  epochs: 200
+  device: cuda
+cwd:
+  pinv_rcond: null
+  variant: binary_scalar
+  dynamic_centroid: true
+parameter_record:
+  sampling_seed: 17
+  selected_group: cifar_binary_symmetric_02
+  source: paper_cifar_binary_protocol
+  repeated_runs: 1
+execution:
+  runner: cwd

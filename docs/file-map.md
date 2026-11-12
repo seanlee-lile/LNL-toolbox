@@ -11,26 +11,31 @@ data 安装，避免用户本地 YAML 污染 catalog。
 `--all` 或 `/recipe` 才展示内部配方。配置重命名后的稳定 recipe ID、原 profile 和保真度
 记录在 manifest 的 `identities` 中，不因目录变化而改变实验身份。
 
-## 配置目录（2026-11-06）
+## 配置目录（2026-11-10）
 
 | 目录 | 数量 | 用途 |
 |---|---:|---|
-| `configs/reproduction/` | 26 | Web/CLI 每篇论文的默认基础配置，文件名为 `论文名_数据集.yaml`。 |
+| `configs/reproduction/` | 74 | 26 份 `论文名_default.yaml` 默认配置，以及 26 份 `论文名_cifar10.yaml`、22 份 `论文名_cifar100.yaml` 历史 best 变体；实际数据集和任务由 YAML 中的 `data.name` 指定。 |
 | `configs/smoke/` | 52 | 非默认实验，包括短测、基线、其他噪声档位及数据变体；目录名不表示全部是小样本测试，参数和原 profile 保持不变。 |
 | `configs/experiment/` | 1 | MentorNet 教师准备配置；之后用户另存的自定义 YAML 仍可放在此目录。 |
 | `configs/algorithm/`、`configs/noise/` | 16 | 算法和噪声配置片段。 |
 
-默认配置：`binary_risk_synthetic_binary_2d.yaml`、`importance_reweighting_synthetic_binary_2d.yaml`、
-`loss_correction_cifar10.yaml`、`coteaching_cifar10.yaml`、`gce_cifar10.yaml`、`l2rw_cifar10.yaml`、
-`mentornet_cifar100.yaml`、`t_revision_cifar10.yaml`、`apl_cifar10.yaml`、`dividemix_cifar10.yaml`、
-`dual_t_cifar10.yaml`、`jocor_cifar10.yaml`、`pdl_cifar10.yaml`、`cal_cifar10.yaml`、`cdr_cifar10.yaml`、
-`upm_cifar10.yaml`、`volminnet_cifar10.yaml`、`cnlcu_cifar10.yaml`、`cwd_cifar10_airplane_automobile.yaml`、
-`lend_cifar10.yaml`、`mc_ldce_cifar10.yaml`、`pcse_cifar10.yaml`、`ca2c_cifar100.yaml`、`dld_cifar10.yaml`、
-`dss_cifar10.yaml`、`fine_cifar100.yaml`。它们全部位于 `configs/reproduction/`。
+默认配置：`binary_risk_default.yaml`、`importance_reweighting_default.yaml`、
+`loss_correction_default.yaml`、`coteaching_default.yaml`、`gce_default.yaml`、`l2rw_default.yaml`、
+`mentornet_default.yaml`、`t_revision_default.yaml`、`apl_default.yaml`、`dividemix_default.yaml`、
+`dual_t_default.yaml`、`jocor_default.yaml`、`pdl_default.yaml`、`cal_default.yaml`、`cdr_default.yaml`、
+`upm_default.yaml`、`volminnet_default.yaml`、`cnlcu_default.yaml`、`cwd_default.yaml`、
+`lend_default.yaml`、`mc_ldce_default.yaml`、`pcse_default.yaml`、`ca2c_default.yaml`、`dld_default.yaml`、
+`dss_default.yaml`、`fine_default.yaml`。它们全部位于 `configs/reproduction/`。
 
 例如 `lnl run --recipe gce-cifar10-noise02-reproduction` 仍然有效，读取的是
-`configs/reproduction/gce_cifar10.yaml`。直接传 YAML 路径的调用方则需要使用新路径。
+`configs/reproduction/gce_default.yaml`。直接传 YAML 路径的调用方则需要使用新路径。
 没有运行引用的两份旧 `*-custom.yaml` 已移除；历史归档及已有训练输出不迁移。
+
+历史 best 配置按实际 YAML 文件名登记为 `<论文ID>-cifar10`、`<论文ID>-cifar100`，
+对应 `configs/reproduction/<论文ID>_cifar10.yaml` 与 `*_cifar100.yaml`；不改变论文默认选择。
+文件头保存来源、校验和、历史代码及迁移说明；具体资源位置和恢复限制见 `configs/README.md`。
+未创建缺少历史结果的四份 C100 变体。
 
 ## 1. 仓库根目录
 
@@ -111,7 +116,7 @@ data 安装，避免用户本地 YAML 污染 catalog。
 | `cli/instance_transition_train.py` | 通用实例转移实验命令行入口。 |
 | `configs/noise/pdl.yaml` | PDL Algorithm 2 噪声 manifest 参数片段。 |
 | `configs/smoke/pdl_cifar10_smoke.yaml` | PDL 小样本多阶段 smoke。 |
-| `configs/reproduction/pdl_cifar10.yaml` | 论文 CIFAR-10 单次正式配置；尚未运行。 |
+| `configs/reproduction/pdl_default.yaml` | 论文 CIFAR-10 单次正式配置；尚未运行。 |
 | `tests/test_pdl.py` | generator、anchor、Eq. (1)/(2)/(4)、artifact、Forward/Reweight、checkpoint identity 测试。 |
 
 | 文件 | 作用 |
@@ -218,12 +223,12 @@ data 安装，避免用户本地 YAML 污染 catalog。
 | `configs/smoke/cifar10_cnlcu_hard_smoke.yaml` | 双 TinyCNN、symmetric 0.4、corrected LOF 的 CPU CNLCU-H smoke 配置。 |
 | `configs/smoke/cifar10_t_revision_smoke.yaml` | TinyCNN、symmetric 0.4、Stage 1/2A/2B 各两轮的 CPU T-Revision Reweight-R smoke 配置。 |
 | `configs/smoke/gce_cifar10_noise02_smoke.yaml` | GCE 论文设置的 CIFAR-10、symmetric 0.2、ResNet-34 小样本 CUDA smoke。 |
-| `configs/reproduction/gce_cifar10.yaml` | GCE 论文设置的 CIFAR-10、symmetric 0.2、单次 120 epoch 正式配置。 |
-| `configs/reproduction/loss_correction_cifar10.yaml` | Loss Correction 论文设置的 CIFAR-10、官方 class-conditional asymmetric 0.4、Forward、单次 120 epoch 正式配置。 |
+| `configs/reproduction/gce_default.yaml` | GCE 论文设置的 CIFAR-10、symmetric 0.2、单次 120 epoch 正式配置。 |
+| `configs/reproduction/loss_correction_default.yaml` | Loss Correction 论文设置的 CIFAR-10、官方 class-conditional asymmetric 0.4、Forward、单次 120 epoch 正式配置。 |
 | `configs/smoke/dss_cifar10_symmetric05_smoke.yaml` | DSS 两 epoch 小样本闭环配置，仅用于 pipeline/checkpoint 验证。 |
-| `configs/reproduction/dss_cifar10.yaml` | 单次 DSS CIFAR-10 symmetric-50% 正式配置：seed 4、PreActResNet-18、150 epochs。 |
+| `configs/reproduction/dss_default.yaml` | 单次 DSS CIFAR-10 symmetric-50% 正式配置：seed 4、PreActResNet-18、150 epochs。 |
 | `configs/smoke/jocor_cifar10_symmetric05_smoke.yaml` | JoCoR 两模型、共同选样、checkpoint 和 CUDA/CPU 闭环 smoke 配置。 |
-| `configs/reproduction/jocor_cifar10.yaml` | JoCoR CIFAR-10 symmetric-50% 单次正式配置：官方 CNN、Adam、λ=0.9、200 epochs 和末 10 epoch 双成员均值。 |
+| `configs/reproduction/jocor_default.yaml` | JoCoR CIFAR-10 symmetric-50% 单次正式配置：官方 CNN、Adam、λ=0.9、200 epochs 和末 10 epoch 双成员均值。 |
 | 实验 YAML 顶层 `selector` | 省略时为 `all`；当前支持 `all` 和固定 keep-rate `small_loss`。 |
 | 实验 YAML 顶层 `noise` | 省略时 clean；`name/rate/seed` 生成 symmetric、pairflip 或 class-conditional 噪声；symmetric 可选 fixed-global、per-class 或 transition 采样；也可用 `manifest` 导入外部映射。 |
 | 实验 YAML 的 `data.validation_split` / `data.normalization` | 通用配置 random/stratified split、RNG 实现以及三通道 mean/std；默认保持原有分层划分与 Toolbox 标准常数。 |
@@ -348,7 +353,7 @@ data 安装，避免用户本地 YAML 污染 catalog。
 | `algorithms/l2rw.py` | differentiable virtual SGD、trusted meta-loss、epsilon 二阶梯度和非负归一化权重。 |
 | `training/l2rw_experiment.py` | noisy batch 与 trusted batch 分离、真实加权更新、loader RNG/checkpoint/resume。 |
 | `configs/smoke/l2rw_cifar10_smoke.yaml` | 只允许 `synthetic_fixture` 的一轮确定性 smoke。 |
-| `configs/reproduction/l2rw_cifar10.yaml` | 要求外部 audited balanced trusted manifest 的正式候选配置。 |
+| `configs/reproduction/l2rw_default.yaml` | 要求外部 audited balanced trusted manifest 的正式候选配置。 |
 | `tests/test_trusted_supervision.py` | 拒绝普通 validation/test 提升、manifest roundtrip 和显式 target 映射。 |
 | `tests/test_l2rw.py`、`tests/test_l2rw_training.py` | 有限差分、权重退化规则、模型不变性及 runner smoke/resume。 |
 
@@ -400,7 +405,7 @@ data 安装，避免用户本地 YAML 污染 catalog。
 | Binary Risk | `artifacts/reproductions/binary-risk-natarajan-formal-50ep-v3/` | 50 epochs completed; best clean-test accuracy 83.30% at epoch 49; synthetic protocol recorded as implementation validation, not exact numerical reproduction. |
 | FINE | `artifacts/reproductions/fine-cifar100-formal-seed23-20260806-v8-150ep/` | 150/300 epochs completed in official warm-up; test accuracy rose from 14.14% to 50.92%. |
 
-Formal entries used here: `configs/reproduction/binary_risk_synthetic_binary_2d.yaml`, `src/lnl_toolbox/algorithms/binary_risk.py`, `src/lnl_toolbox/training/binary_experiment.py`, and the existing FINE independent runner/configuration.
+Formal entries used here: `configs/reproduction/binary_risk_default.yaml`, `src/lnl_toolbox/algorithms/binary_risk.py`, `src/lnl_toolbox/training/binary_experiment.py`, and the existing FINE independent runner/configuration.
 
 ## 19. MC-LDCE / PDL / L2RW strict-alignment audit (2026-08-06)
 
@@ -412,7 +417,7 @@ Formal entries used here: `configs/reproduction/binary_risk_synthetic_binary_2d.
 | `src/lnl_toolbox/noise/pdl.py`、`src/lnl_toolbox/noise/generators.py` | Official PDL Algorithm 2, multiplicative NMF representation, percentile anchor selection, and Matrix_optimize basis fitting. |
 | `src/lnl_toolbox/training/instance_transition_experiment.py` | PDL raw-input noise generation, official split/normalization, warm-up → correction → revision lifecycle, and artifact-aware resume. |
 | `src/lnl_toolbox/training/l2rw_experiment.py` | Official L2RW CIFAR partition/noise generator, noisy train/clean meta/validation/test loaders, and step-level resume. |
-| `configs/reproduction/pdl_cifar10.yaml`、`configs/reproduction/l2rw_cifar10.yaml` | Paper/official-source reproduction settings; formal configs do not select the legacy audited-manifest path. |
+| `configs/reproduction/pdl_default.yaml`、`configs/reproduction/l2rw_default.yaml` | Paper/official-source reproduction settings; formal configs do not select the legacy audited-manifest path. |
 | `tests/test_mc_ldce.py`、`tests/test_pdl.py`、`tests/test_l2rw_training.py` | Non-identity MC-LDCE matrix recovery, PDL beta-NLL, official PDL/L2RW data operations, and resume/smoke coverage. |
 
 The legacy L2RW audited-manifest path remains only as a reusable non-official data adapter for existing smoke/audit fixtures. It is not used by the official reproduction YAML and is not evidence for the official numerical result.
@@ -425,7 +430,7 @@ The legacy L2RW audited-manifest path remains only as a reusable non-official da
 | `src/lnl_toolbox/training/instance_transition_experiment.py` | Official PDL train/validation/revision-validation artifact lifecycle and hash-aware resume; generic instance-transition path remains unchanged. |
 | `src/lnl_toolbox/algorithms/pcse/volmin.py` | `PaperVolMinTransition` and Eq. 7 objective for MC-LDCE's VolMin estimation; legacy `DiagonallyDominantTransition` remains only for PCSE compatibility. |
 | `src/lnl_toolbox/training/mc_ldce_experiment.py` | Separate paper-style VolMin estimator model, SGD/milestone schedule, then fixed-feature MC-LDCE objective. |
-| `configs/reproduction/mc_ldce_cifar10.yaml` | One paper-aligned MC-LDCE configuration: 150 VolMin epochs, SGD, milestones 30/60, lambda `1e-4`, sigmoid off-diagonal parameterization. |
+| `configs/reproduction/mc_ldce_default.yaml` | One paper-aligned MC-LDCE configuration: 150 VolMin epochs, SGD, milestones 30/60, lambda `1e-4`, sigmoid off-diagonal parameterization. |
 | `tests/test_pdl.py`, `tests/test_mc_ldce.py` | Split artifact semantics, non-identity matrix recovery, paper VolMin parameterization, differentiability, and failure boundaries. |
 
 The formal MC-LDCE path no longer selects the old PCSE transition parameterization. No global experiment runner or plugin registry change was needed.
@@ -447,7 +452,7 @@ This section supersedes only the verification counts and path details above; pri
 | Method | Corrected formal-path evidence | Not yet claimed |
 |---|---|---|
 | PDL | `noise/generators.py` now follows the official global NumPy/Torch seed order, truncated-normal rate sampling, Torch softmax, and global `np.random.choice`; `training/instance_transition_experiment.py` converts HWC images back to the official raw CHW flattened layout before Algorithm 2. Focused PDL tests: 13/13. | The corrected 100-epoch formal result has not been rerun, so the old anomalous result is not used as evidence. |
-| MC-LDCE | `mc_ldce_cifar10.yaml` now selects the paper's six-layer CNN for the transition-estimation path; focused MC-LDCE tests: 11/11, PCSE/VolMin tests: 28/28. | No author-maintained GitHub implementation was found; this is equation/configuration alignment, not line-by-line official-source reproduction. The fixed-feature lifecycle remains a paper interpretation until an implementation source is available. |
+| MC-LDCE | `mc_ldce_default.yaml` now selects the paper's six-layer CNN for the transition-estimation path; focused MC-LDCE tests: 11/11, PCSE/VolMin tests: 28/28. | No author-maintained GitHub implementation was found; this is equation/configuration alignment, not line-by-line official-source reproduction. The fixed-feature lifecycle remains a paper interpretation until an implementation source is available. |
 | L2RW | The formal path now uses the official CIFAR partition/noise operation, `[-1,1]` preprocessing, 15-unit official ResNet-32 topology, source HVP/meta-weight sign, weight-decay term, and pre-boundary scheduler semantics. Focused L2RW training tests: 10/10, including an official-mode end-to-end short smoke. | The 80,000-step formal result has not been run. |
 
 The official formal paths do not use the legacy audited-manifest adapter. No `training/experiment.py`, global pipeline, or plugin-catalog change was made for these corrections.
@@ -613,9 +618,9 @@ Recipe/YAML 编辑功能。`lnl web` 由 `cli/main.py` 启动 `web/command_conso
 | `web/index.html`、`web/command_console.py` | “新建 YAML”分为 26 篇论文正式配置和通用监督组合两种模式 |
 | `models/cifar_cnn.py` | `CNN9` 实现论文附录的九层 CIFAR CNN |
 | `training/experiment.py` | 注册通用 `cnn9` 模型名和 `linear_after` scheduler，不包含 CNLCU 论文分支 |
-| `configs/reproduction/cnlcu_cifar10.yaml` | CNLCU-S CIFAR-10 Sym20 单组论文协议配置 |
-| `configs/reproduction/volminnet_cifar10.yaml` | VolMinNet CIFAR-10 Sym20 单组论文协议配置 |
-| `configs/reproduction/dld_cifar10.yaml` | DLD 完整预算的当前工具箱配置；因未接入官方 ViT-L/14 特征路径，明确标记 `paper_oriented` |
+| `configs/reproduction/cnlcu_default.yaml` | CNLCU-S CIFAR-10 Sym20 单组论文协议配置 |
+| `configs/reproduction/volminnet_default.yaml` | VolMinNet CIFAR-10 Sym20 单组论文协议配置 |
+| `configs/reproduction/dld_default.yaml` | DLD 完整预算的当前工具箱配置；因未接入官方 ViT-L/14 特征路径，明确标记 `paper_oriented` |
 
 正式 YAML 表示完整数据规模、模型、优化器、scheduler 与训练预算均已写明，不等价于已完成论文多 seed 数值复现。
 

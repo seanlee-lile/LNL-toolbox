@@ -445,25 +445,17 @@ def _l2rw_requirements(config: Mapping[str, Any]) -> MethodRequirements:
 
 def _cal_requirements(config: Mapping[str, Any]) -> MethodRequirements:
     noise = config.get("noise", {}) or {}
-    synthetic_feature_smoke = (
-        _component_name(config, "data") == "synthetic_multiclass"
-        and _component_name(config, "model") == "feature_mlp"
-        and _component_name(config, "noise") == "symmetric"
-        and isinstance(noise, Mapping)
-        and not any(noise.get(key) for key in ("path", "clean_key", "noisy_key"))
-        and isinstance(config.get("cal"), Mapping)
-    )
+    uses_external_labels = _component_name(config, "noise") == "external_torch"
     external_labels_configured = isinstance(noise, Mapping) and all(
         _component_name(config, "noise", key) != ""
         for key in ("path", "clean_key", "noisy_key")
     )
-    native_observations = _component_name(config, "noise") in {"native", "real_world"}
-    inputs = () if synthetic_feature_smoke or external_labels_configured or native_observations else (_config_input(
+    inputs = (_config_input(
         "requires_external_noise_labels",
         ("noise", "path"), ("noise", "clean_key"), ("noise", "noisy_key"),
         description="当前 CAL 配置需要外部标签文件",
         implementation_limit="external_noise_labels",
-    ),)
+    ),) if uses_external_labels and not external_labels_configured else ()
     return MethodRequirements(
         method="cal",
         supported_modalities=frozenset({Modality.IMAGE, Modality.TABULAR}),
@@ -495,7 +487,7 @@ def _cal_requirements(config: Mapping[str, Any]) -> MethodRequirements:
                     "they are not an input to CAL optimizer updates."
                 ),
             ),
-        ) if external_labels_configured else (),
+        ) if uses_external_labels and external_labels_configured else (),
     )
 
 

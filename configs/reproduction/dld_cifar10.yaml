@@ -1,16 +1,37 @@
-schema_version: 1
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / D
+# Source: artifact/full-test-best-20261106/cifar10/dld/config.json
+# Source SHA256: 7bbaa8d1c3facadf0219154974bca7a023834267406a9e19b6362276e8926387
+# Historical code: toolbox-3f250051602f2929
+# Recovery: source_available_effective_overrides_preserved
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   meta.web_parameter_record.effective_reproduction_status
+#   meta.web_parameter_record.formal_recipe
+#   meta.web_parameter_record.modified_from_paper
+#   meta.web_parameter_record.paper_change_acknowledged
+#   meta.web_parameter_record.paper_parameter_changes
+#   meta.web_parameter_record.parameter_metadata_registry_version
+#   output_root
+# Required external resources (not downloaded or generated):
+#   dld.feature_extractor.external.weights: IMAGENET1K_V1
 kind: experiment
+schema_version: 1
 method: dld
 execution:
   runner: dld
 configuration_fidelity: paper_oriented
 seed: 123
-output_root: artifacts/reproductions/dld-cifar10-sym20
+output_root: artifacts/reproductions/dld-cifar10-best
 data:
   name: cifar10
   validation_size: 5000
   strong_augment: true
   strong_magnitude: 10
+  validation_split:
+    source: training_pool
 loader:
   batch_size: 200
   num_workers: 4
@@ -50,10 +71,10 @@ dld:
       input_contract: cifar10_standard_normalized
   precorrection:
     k_neighbors: 50
-    delta: 1.0e-6
+    delta: 1.0e-06
     gmm_components: 2
     gmm_seed: 123
-    minimum_mean_separation: 1.0e-6
+    minimum_mean_separation: 1.0e-06
     query_chunk_size: 64
   diffusion:
     timesteps: 1000
@@ -77,6 +98,7 @@ dld:
     ema:
       enabled: true
       decay: 0.999
+    early_stopping: false
   inference:
     steps: 5
     deterministic: true

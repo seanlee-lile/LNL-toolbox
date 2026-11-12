@@ -1,0 +1,94 @@
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / E
+# Source: artifact/full-test-best-20261106/cifar100/dss/config.json
+# Source SHA256: 934d035ec360bc8080d169e12c0aef0e8b63d1a147142360af3e7f7ed8b7fd48
+# Historical code: toolbox-best-66110095db8ee58d
+# Recovery: original_input_content_recovered
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   output_root
+data:
+  augment: true
+  max_test_samples: null
+  max_train_samples: null
+  max_validation_samples: null
+  name: cifar100
+  normalization:
+    mean:
+    - 0.5071
+    - 0.4867
+    - 0.4408
+    std:
+    - 0.2675
+    - 0.2565
+    - 0.2761
+  num_classes: 100
+  validation_size: 5000
+  validation_split:
+    rng: numpy_legacy
+    source: training_pool
+    strategy: classwise_legacy
+early_stopping: false
+evaluation:
+  selection_split: validation
+execution:
+  runner: supervised
+kind: experiment
+loader:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+loss:
+  name: ce
+model:
+  base_width: 64
+  name: preact_resnet18
+  variant: dss_author
+noise:
+  name: symmetric
+  rate: 0.5
+  rng: default_rng
+  sampling: per_class
+  seed: 1
+  validation_targets: noisy
+optimizer:
+  lr: 0.02
+  momentum: 0.9
+  name: sgd
+  nesterov: false
+  weight_decay: 0.001
+output_root: artifacts/reproductions/dss-cifar100-best
+parameter_update:
+  name: standard
+pipeline:
+  name: standard_noisy_erm
+  objective_consumer:
+    alpha: 0.1
+    ccs: true
+    mda: true
+    name: dss
+    num_classes: 100
+    num_samples: 50000
+    prior_decay: 0.99
+    total_epochs: 150
+    warmup_early_stopping: false
+    warmup_epochs: 30
+scheduler:
+  gamma: 0.1
+  milestones:
+  - 80
+  name: multistep
+schema_version: 1
+seed: 1
+selector:
+  name: all
+trainer:
+  device: cuda
+  early_stopping: false
+  epochs: 150
+  progress:
+    curves: true
+    enabled: true
+    update_interval: 20

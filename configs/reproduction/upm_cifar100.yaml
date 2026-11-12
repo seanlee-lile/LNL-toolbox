@@ -1,0 +1,105 @@
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / E
+# Source: artifact/full-test-best-20261106/cifar100/upm/config.json
+# Source SHA256: 83fed50154e157eb903d97042c17e4226eafd4df81bf0a8aae894c3bba1e2662
+# Historical code: toolbox-best-58bb151467c2e3c3
+# Recovery: original_input_content_recovered
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   noise.path
+#   output_root
+# Required external resources (not downloaded or generated):
+#   noise.path: data/upm-cifar100-mlp/labels.pt
+kind: experiment
+schema_version: 1
+method: upm
+execution:
+  runner: upm
+configuration_fidelity: engineering
+seed: 1
+data:
+  name: cifar100
+  validation_size: 5000
+  split_strategy: stratified
+  split_rng: default_rng
+  augment: true
+  normalization:
+    mean:
+    - 0.5071
+    - 0.4867
+    - 0.4408
+    std:
+    - 0.2675
+    - 0.2565
+    - 0.2761
+  max_train_samples: null
+  max_test_samples: null
+  max_validation_samples: null
+  num_classes: 100
+loader:
+  batch_size: 256
+  num_workers: 4
+  pin_memory: true
+  drop_last: false
+noise:
+  name: external_torch
+  path: data/upm-cifar100-mlp/labels.pt
+  clean_key: clean_label_train
+  noisy_key: noise_label_train
+  seed: 1
+  validation_targets: noisy
+upm:
+  stage1:
+    epochs: 160
+    model:
+      name: resnet32
+      base_width: 16
+    optimizer:
+      name: sgd
+      lr: 0.05
+      momentum: 0.9
+      weight_decay: 0.0001
+    scheduler:
+      name: multistep
+      milestones:
+      - 40
+      - 80
+      - 120
+      gamma: 0.1
+    best_metric: noisy_validation_accuracy
+  psi:
+    source: stage1_last
+    split: train
+    augmentation: false
+  main:
+    epochs: 160
+    initialization: fresh
+    model:
+      name: resnet32
+      base_width: 16
+    optimizer:
+      name: sgd
+      lr: 0.05
+      momentum: 0.9
+      weight_decay: 0.0001
+    scheduler:
+      name: multistep
+      milestones:
+      - 40
+      - 80
+      - 120
+      gamma: 0.1
+  confusing_probability:
+    initial_value: 0.01
+    learning_rate: 0.5
+    epsilon: 0.0001
+    update_start_epoch: 35
+    update_interval_epochs: 5
+evaluation:
+  selection_split: validation
+  primary: accuracy
+trainer:
+  device: cuda
+output_root: artifacts/reproductions/upm-cifar100-best

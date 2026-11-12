@@ -1,13 +1,36 @@
-schema_version: 1
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / D
+# Source: artifact/full-test-best-20261106/cifar10/cal/config.json
+# Source SHA256: 5199cbff4f86087d29d8b2c77c47b0bc51bc6941849565c49ffe946ccc71e635
+# Historical code: toolbox-e7d5ecd69dca617d
+# Recovery: original_input_content_recovered
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   local_dataset.adapter
+#   local_dataset.alias
+#   local_dataset.source_signature
+#   meta.web_parameter_record.effective_reproduction_status
+#   meta.web_parameter_record.formal_recipe
+#   meta.web_parameter_record.modified_from_paper
+#   meta.web_parameter_record.paper_change_acknowledged
+#   meta.web_parameter_record.paper_parameter_changes
+#   meta.web_parameter_record.parameter_metadata_registry_version
+#   noise.path
+#   output_root
+# Required external resources (not downloaded or generated):
+#   noise.path: data/cal/IDN_0.2_C10-subset.pt
 kind: experiment
+schema_version: 1
 method: cal
 execution:
   runner: cal
 seed: 10086
-output_root: artifacts/reproductions/cal-cifar10-idn20
+output_root: artifacts/reproductions/cal-cifar10-best
 data:
   name: cifar10
-  validation_size: 0
+  validation_size: 300
   augment: true
   normalization:
     mean:
@@ -18,10 +41,12 @@ data:
     - 0.2023
     - 0.1994
     - 0.201
+  num_classes: 10
+  validation_split:
+    source: training_pool
 noise:
-  rate: 0.2
   seed: 10086
-  path: data/cal/IDN_0.2_C10.pt
+  path: data/cal/IDN_0.2_C10-subset.pt
   clean_key: clean_label_train
   noisy_key: noise_label_train
   name: external_torch
@@ -55,6 +80,7 @@ warmup:
     - 0.0
     - 2.0
     - 2.0
+  early_stopping: false
 sieve:
   lower_threshold: -8.0
   upper_threshold: -8.0
@@ -72,3 +98,4 @@ cal:
 trainer:
   epochs: 100
   device: auto
+  early_stopping: false

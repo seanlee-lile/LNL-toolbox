@@ -1,0 +1,125 @@
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / E
+# Source: artifact/full-test-best-20261106/cifar100/pcse/config.json
+# Source SHA256: da3622ddafc1d71f1b21ff3419089894d7b9aa8beabf420c7616ecfd00dbcc9c
+# Historical code: toolbox-best-c554c85162c5c32e
+# Recovery: source_available_effective_overrides_preserved
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   noise.dataset
+#   noise.dataset_fingerprint
+#   noise.has_per_sample_transition
+#   noise.has_transition_matrix
+#   noise.manifest_actual_rate
+#   noise.manifest_path
+#   noise.manifest_sha256
+#   noise.manifest_version
+#   noise.noise_type
+#   noise.num_classes
+#   noise.requested_rate
+#   noise.split
+#   output_root
+#   pretraining_stage.mode
+kind: experiment
+schema_version: 1
+method: pcse
+configuration_fidelity: engineering
+seed: 1
+output_root: artifacts/reproductions/pcse-cifar100-best
+data:
+  name: cifar100
+  validation_size: 5000
+  split_strategy: stratified
+  split_rng: default_rng
+  augment: true
+  reflect_padding: true
+  preprocessing: standard
+  validation_split:
+    source: training_pool
+  normalization:
+    mean:
+    - 0.5071
+    - 0.4867
+    - 0.4408
+    std:
+    - 0.2675
+    - 0.2565
+    - 0.2761
+  max_train_samples: null
+  max_test_samples: null
+  max_validation_samples: null
+  num_classes: 100
+noise:
+  name: symmetric
+  rate: 0.2
+  seed: 1
+  sampling: per_class
+  rng: default_rng
+  validation_targets: noisy
+pretraining_stage:
+  method: cross_entropy
+  epochs: 200
+  checkpoint_selection: noisy_validation_accuracy
+  model:
+    name: resnet34
+    base_width: 64
+    stem_padding: 0
+    initialization: torch_default
+  loss:
+    name: ce
+  optimizer:
+    name: adam
+    lr: 0.001
+    beta1: 0.9
+    weight_decay: 0.0
+  scheduler:
+    name: linear_after
+    start_epoch: 80
+    end_epoch: 200
+    beta1_before: 0.9
+    beta1_after: 0.1
+  early_stopping: false
+transition_stage:
+  name: paper_volmin
+  epochs: 80
+  lambda_volume: 0.001
+  optimizer:
+    name: adamw
+    model_lr: 0.0002
+    transition_lr: 0.001
+    weight_decay: 0.0001
+  scheduler:
+    name: none
+  parameterization:
+    name: sigmoid_off_diagonal
+    initial_weight: -4.584967478670572
+    seed: 1
+  determinant_tolerance: 1.0e-06
+  condition_limit: 1000000.0
+  early_stopping: false
+feature_stage:
+  layers:
+  - name: layer4
+    pooling: global_average
+  - name: avgpool
+    pooling: global_average
+statistics_stage:
+  condition_limit: 100000000.0
+gda_stage:
+  covariance_ridge: 0.0
+ensemble_stage:
+  epochs: 20
+  learning_rate: 0.02
+  early_stopping: false
+loader:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+trainer:
+  device: cuda
+evaluation:
+  selection_split: validation
+execution:
+  runner: pcse

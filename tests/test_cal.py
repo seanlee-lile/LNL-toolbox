@@ -13,6 +13,20 @@ from lnl_toolbox.training.cal_experiment import _assert_finite_warmup_gradients,
 from lnl_toolbox.training.experiment import build_alpha_scaled_scheduler
 class _cal_CALTest(unittest.TestCase):
 
+    def test_noise_sources_only_require_external_fields_for_external_labels(self) -> None:
+        from lnl_toolbox.training.runners import _cal_requirements
+
+        for name in ("clean", "native", "symmetric", "pairflip", "pdl", "class_conditional"):
+            with self.subTest(noise=name):
+                requirements = _cal_requirements({"noise": {"name": name}})
+                self.assertFalse(requirements.required_config_inputs)
+                self.assertFalse(requirements.prerequisites)
+        missing = _cal_requirements({"noise": {"name": "external_torch"}})
+        self.assertEqual(missing.required_config_inputs[0].code, "requires_external_noise_labels")
+        complete = _cal_requirements({"noise": {"name": "external_torch", "path": "labels.pt", "clean_key": "clean", "noisy_key": "noisy"}})
+        self.assertFalse(complete.required_config_inputs)
+        self.assertEqual(complete.prerequisites[0].key, "cal_external_labels")
+
     def test_cores2_warmup_uses_sqrt_prior_without_cifar10_class_multiplier(self) -> None:
         prior = torch.tensor([0.8, 0.2, 0.0], dtype=torch.float64)
         original = prior.clone()

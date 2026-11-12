@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import asdict
-from datetime import datetime, timezone
-import hashlib
 import json
 from pathlib import Path
 from threading import RLock
@@ -27,32 +25,7 @@ from .models import (
     QuickStartNoiseSelection,
     QuickStartPlan,
 )
-from .templates import MethodTemplate, adapt_method_template, configure_validation_split, find_exact_reproduction, method_template_for_paper, reference_train_size
-
-
-class _CachedDatasetService:
-    """Provide one local-dataset overlay without rereading the catalog per paper."""
-
-    _SOURCE_KEYS = {"root", "path", "noise_path", "labels_path", "annotation_root"}
-
-    def __init__(self, service: DataService, alias: str) -> None:
-        self._service = service
-        self._alias = alias
-        applied = service.apply({}, alias)
-        self._data = dict(applied.get("data", {}) or {})
-        self._local_dataset = dict(applied.get("local_dataset", {}) or {})
-
-    def apply(self, config: Mapping[str, Any], alias: object) -> dict[str, Any]:
-        if str(alias) != self._alias:
-            return self._service.apply(config, alias)
-        result = deepcopy(dict(config))
-        data = dict(result.get("data", {}) or {})
-        for key in self._SOURCE_KEYS:
-            data.pop(key, None)
-        data.update(self._data)
-        result["data"] = data
-        result["local_dataset"] = dict(self._local_dataset)
-        return result
+from .templates import DatasetConfigurationUnavailable, MethodTemplate, method_template_for_paper, quickstart_runtime_overrides
 
 
 def _split_size(profile, name: str) -> int | None:
@@ -89,6 +62,7 @@ class QuickStartService:
         self.experiment_service = ExperimentService(data_service=self.data_service)
         self.artifact_root = Path(artifact_root or "artifacts/web-quick-start").expanduser().resolve()
         self._method_cache: dict[str, tuple[QuickStartMethodOption, ...]] = {}
+        self._selection_cache: dict[str, tuple[QuickStartMethodOption, ...]] = {}
         self._method_cache_lock = RLock()
         self._template_cache: dict[str, object] = {}
         self._recipe_cache: dict[str, object] | None = None
@@ -102,25 +76,17 @@ class QuickStartService:
                 }
             return self._recipe_cache
 
-    def _template(self, paper, recipes: Mapping[str, object]) -> MethodTemplate:
+    def _template(self, paper, recipes: Mapping[str, object], dataset_adapter: str = "") -> MethodTemplate:
+        key = f"{paper.id}:{dataset_adapter}"
         with self._method_cache_lock:
-            cached = self._template_cache.get(paper.id)
+            cached = self._template_cache.get(key)
         if cached is not None:
             return cached  # type: ignore[return-value]
-        selected = next(
-            (item for item in paper.configs if item.profile == "reproduction"),
-            None,
-        )
-        if selected is None:
-            raise ValueError(f"paper {paper.id!r} has no formal reproduction recipe")
-        recipe = recipes.get(selected.recipe_id)
-        if recipe is None:
-            raise ValueError(f"unknown recipe {selected.recipe_id!r}")
-        template = MethodTemplate(
-            paper.id, selected.recipe_id, recipe, load_recipe_config(recipe)
+        template = method_template_for_paper(
+            paper, dataset_adapter=dataset_adapter, recipes=recipes,
         )
         with self._method_cache_lock:
-            self._template_cache[paper.id] = template
+            self._template_cache[key] = template
         return template
 
     def probe(self, path: str) -> DatasetProbeResult:
@@ -143,6 +109,43 @@ class QuickStartService:
     def _accepted_capabilities(self, alias: str, report):
         return resolve_dataset_capabilities(
             report.profile, self.data_service.declarations(alias)
+        )
+
+    @staticmethod
+    def _selection_key(dataset_alias: str, noise_selection: QuickStartNoiseSelection) -> str:
+        return dataset_alias + ":" + json.dumps(noise_selection.to_dict(), sort_keys=True)
+
+    @staticmethod
+    def _apply_overrides(config: Mapping[str, Any], overrides: Mapping[str, object]) -> dict[str, Any]:
+        candidate = deepcopy(dict(config))
+        for path, value in overrides.items():
+            if path == "noise":
+                candidate["noise"] = deepcopy(value)
+                continue
+            parts = tuple(str(path).split("."))
+            current = candidate
+            for part in parts[:-1]:
+                child = current.get(part)
+                if not isinstance(child, dict):
+                    child = {}
+                    current[part] = child
+                current = child
+            current[parts[-1]] = value
+        return candidate
+
+    def runtime_overrides(
+        self,
+        recipe_id: str,
+        noise_selection: QuickStartNoiseSelection,
+        method_inputs: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        """Return the final, validated-stage choices to apply to a paper YAML."""
+
+        from lnl_toolbox.catalog import recipe_by_id
+
+        recipe = recipe_by_id(recipe_id)
+        return quickstart_runtime_overrides(
+            load_recipe_config(recipe), noise_selection, method_inputs=method_inputs,
         )
 
     @staticmethod
@@ -204,6 +207,7 @@ class QuickStartService:
         self.data_service.register(alias, candidate.adapter, candidate_data)
         with self._method_cache_lock:
             self._method_cache.clear()
+            self._selection_cache.clear()
             self._template_cache.clear()
         report = self._require_ready_report(self.data_service.inspect(alias), alias)
         return self._summary(alias, report)
@@ -276,7 +280,6 @@ class QuickStartService:
             return cached
 
         profile_data = report.profile.to_dict()
-        dataset_service = _CachedDatasetService(self.data_service, dataset_alias)
         papers = load_papers()
         recipes = self._recipes()
         prepared: list[
@@ -291,21 +294,21 @@ class QuickStartService:
         compatibility_configs: dict[str, Mapping[str, Any]] = {}
         for paper in papers:
             try:
-                template = self._template(paper, recipes)
-                candidate = adapt_method_template(
+                template = self._template(paper, recipes, str(profile_data.get("adapter", "")))
+                runtime_overrides = quickstart_runtime_overrides(
                     template.config,
-                    dataset_alias=dataset_alias,
-                    dataset_profile=profile_data,
-                    noise_selection=noise_selection,
-                    data_service=dataset_service,
+                    noise_selection,
                     method_inputs=(
                         {"noise_rate_prior": capabilities.noise_rate.value}
                         if noise_selection.kind == "native" and capabilities.noise_rate.value is not None
                         else None
                     ),
                 )
+                candidate = self._apply_overrides(template.config, runtime_overrides)
                 prepared.append((paper, template, candidate, None, None))
                 compatibility_configs[paper.id] = candidate
+            except DatasetConfigurationUnavailable as exc:
+                prepared.append((paper, None, None, None, (str(exc),)))
             except Exception as exc:
                 prepared.append((paper, None, None, (str(exc),), None))
 
@@ -315,6 +318,7 @@ class QuickStartService:
                 batch = self.experiment_service.list_config_compatibility(
                     dataset_alias, compatibility_configs,
                     dataset_capabilities=capabilities,
+                    check_prerequisites=False,
                 )
                 results = dict(batch)
             except Exception:
@@ -324,62 +328,53 @@ class QuickStartService:
                         results[paper_id] = self.experiment_service.list_config_compatibility(
                             dataset_alias, {paper_id: candidate},
                             dataset_capabilities=capabilities,
+                            check_prerequisites=False,
                         )[0][1]
                     except Exception as exc:
                         results[paper_id] = exc
 
         options: list[QuickStartMethodOption] = []
-        for paper, template, candidate, error, class_space_problems in prepared:
+        for paper, template, candidate, error, selection_problems in prepared:
             if error is not None:
                 options.append(QuickStartMethodOption(
                     paper.id, paper.acronym, paper.title, paper.summary, paper.venue, paper.year,
                     "metadata_error", error, (), None, None, None, (),
                 ))
                 continue
-            assert template is not None and candidate is not None
-            if class_space_problems is not None:
+            if selection_problems is not None:
                 options.append(QuickStartMethodOption(
                     paper.id, paper.acronym, paper.title, paper.summary,
                     paper.venue, paper.year, "unsupported",
-                    class_space_problems, (), template.recipe_id,
-                    "toolbox_adapted", candidate, (),
+                    selection_problems, (), None,
+                    None, candidate, (),
                 ))
                 continue
+            assert template is not None and candidate is not None
             result = results.get(paper.id)
             if isinstance(result, Exception) or result is None:
                 reason = str(result) if isinstance(result, Exception) else "兼容性检查未返回结果"
                 options.append(QuickStartMethodOption(
                     paper.id, paper.acronym, paper.title, paper.summary, paper.venue, paper.year,
                     "metadata_error", (reason,), (), template.recipe_id,
-                    "toolbox_adapted", candidate, (),
+                    "paper_reproduction", candidate, (),
                 ))
                 continue
             status = self._status(result)
             reasons = tuple(item.message for item in result.reasons)
-            if status == "ready":
-                try:
-                    self.experiment_service.preflight(candidate, check_data=False)
-                except Exception as exc:
-                    status = "unsupported"
-                    reasons = (*reasons, str(exc))
             options.append(QuickStartMethodOption(
                 paper.id, paper.acronym, paper.title, paper.summary, paper.venue, paper.year,
                 status,
                 reasons,
                 tuple(result.required_user_inputs),
                 template.recipe_id,
-                "paper_reproduction" if find_exact_reproduction(
-                    paper,
-                    dataset_adapter=str(profile_data.get("adapter", "")),
-                    noise_selection=noise_selection,
-                    recipes=recipes,
-                ) else "toolbox_adapted",
+                "paper_reproduction",
                 candidate,
                 tuple(result.required_input_paths),
             ))
         final = tuple(options)
         with self._method_cache_lock:
             self._method_cache[cache_key] = final
+            self._selection_cache[self._selection_key(dataset_alias, noise_selection)] = final
         return final
 
     @staticmethod
@@ -394,126 +389,41 @@ class QuickStartService:
         paper_id: str,
         user_inputs: Mapping[str, object] | None = None,
     ) -> QuickStartPlan:
-        from lnl_toolbox.catalog import paper_by_id
+        from lnl_toolbox.catalog import recipe_by_id
 
-        paper = paper_by_id(paper_id)
-        report = self._accepted_report(dataset_alias)
-        capabilities = self._accepted_capabilities(dataset_alias, report)
-        profile = report.profile
-        profile_data = profile.to_dict()
-        exact = find_exact_reproduction(
-            paper,
-            dataset_adapter=str(profile_data.get("adapter", "")),
-            noise_selection=noise_selection,
-        )
-        if exact is not None:
-            original_count = reference_train_size(load_recipe_config(recipe_by_id(exact)))
-            if original_count is not None and training_pool_size(report.adapter, dict(profile.sample_counts_by_split)) != original_count:
-                exact = None
-        if exact is not None:
-            plan_id = self._plan_id(dataset_alias, paper.id)
-            config = self.data_service.apply(
-                load_recipe_config(recipe_by_id(exact)), dataset_alias
-            )
-            configure_validation_split(config)
-            output_dir = self.artifact_root / "runs" / plan_id
-            result = self.experiment_service.list_config_compatibility(
-                dataset_alias, {paper.id: config},
-                dataset_capabilities=capabilities,
-            )[0][1]
-            status = self._status(result)
-            details = tuple(item.message for item in result.reasons)
-            if status != "ready":
-                return QuickStartPlan(
-                    plan_id, dataset_alias, paper.id, paper.acronym,
-                    noise_selection, "paper_reproduction", exact, None, status,
-                    tuple(result.required_user_inputs),
-                    summary="正式复现配置与当前数据集不兼容或仍需补充输入。",
-                    details=details,
-                )
-            try:
-                self.experiment_service.preflight(config, check_data=False)
-            except Exception as exc:
-                return QuickStartPlan(
-                    plan_id, dataset_alias, paper.id, paper.acronym,
-                    noise_selection, "paper_reproduction", exact, None,
-                    "unsupported", (),
-                    summary="正式复现配置未通过训练前检查。",
-                    details=(str(exc),),
-                )
-            details = tuple(f"训练轮次：{item}" for item in _epoch_details(config)) + (
-                f"输出目录：{output_dir}",
-            )
-            return QuickStartPlan(
-                plan_id, dataset_alias, paper.id, paper.acronym,
-                noise_selection, "paper_reproduction", exact, None, "ready", (),
-                f"lnl run --recipe {exact} --data {dataset_alias} --output-dir {output_dir} --check-data",
-                f"lnl run --recipe {exact} --data {dataset_alias} --output-dir {output_dir} --dry-run --check-data",
-                "条件完全匹配正式论文复现配置。",
-                details=details,
-            )
-        template = method_template_for_paper(paper)
-        candidate = adapt_method_template(
-            template.config,
-            dataset_alias=dataset_alias,
-            dataset_profile=profile_data,
-            noise_selection=noise_selection,
-            data_service=self.data_service,
-            method_inputs={
-                **({"noise_rate_prior": capabilities.noise_rate.value}
-                   if noise_selection.kind == "native" and capabilities.noise_rate.value is not None
-                   else {}),
-                **dict(user_inputs or {}),
-            },
-        )
-        result = self.experiment_service.list_config_compatibility(
-            dataset_alias, {paper.id: candidate},
-            dataset_capabilities=capabilities,
-        )[0][1]
-        status = self._status(result)
-        details = tuple(item.message for item in result.reasons)
-        plan_id = self._plan_id(dataset_alias, paper.id)
-        if status != "ready":
-            return QuickStartPlan(
-                plan_id, dataset_alias, paper.id, paper.acronym, noise_selection,
-                "toolbox_adapted", None, None, status, tuple(result.required_user_inputs),
-                summary="当前方法需要补充输入或不适用于该数据集。", details=details,
-            )
-
-        try:
-            self.experiment_service.preflight(candidate, check_data=False)
-        except Exception as exc:
-            return QuickStartPlan(
-                plan_id, dataset_alias, paper.id, paper.acronym, noise_selection,
-                "toolbox_adapted", None, None, "unsupported", (),
-                summary="适配配置未通过训练前检查。", details=(str(exc),),
-            )
-        self.artifact_root.joinpath("configs").mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        stem = f"{stamp}-{dataset_alias}-{paper.id}-{noise_selection.key}"
-        config_path = self.artifact_root / "configs" / f"{stem}.yaml"
-        provenance_path = config_path.with_suffix(".json")
+        with self._method_cache_lock:
+            options = self._selection_cache.get(self._selection_key(dataset_alias, noise_selection))
+        if options is None:
+            raise ValueError("请先完成第 2 步到第 3 步的方法适用性检查。")
+        selected = next((item for item in options if item.paper_id == paper_id), None)
+        if selected is None or selected.recipe_id is None:
+            raise ValueError("所选论文没有对应的已登记 YAML 配置。")
+        recipe = recipe_by_id(selected.recipe_id)
+        config = load_recipe_config(recipe)
+        inputs = dict(user_inputs or {})
+        remaining = list(selected.required_user_inputs)
+        for required in tuple(remaining):
+            if required == "noise_rate_prior" and inputs.get(required) not in (None, ""):
+                remaining.remove(required)
+                continue
+            if required.startswith("config:"):
+                mapped = next((paths for name, paths in selected.required_input_paths if name == required), ())
+                if mapped and all(".".join(path) in inputs and inputs[".".join(path)] not in (None, "") for path in mapped):
+                    remaining.remove(required)
+        status = selected.status if selected.status != "needs_input" or remaining else "ready"
+        plan_id = self._plan_id(dataset_alias, paper_id)
         output_dir = self.artifact_root / "runs" / plan_id
-        import yaml
-
-        config_path.write_text(yaml.safe_dump(candidate, sort_keys=False), encoding="utf-8")
-        provenance_path.write_text(json.dumps({
-            "kind": "toolbox_adapted",
-            "dataset_alias": dataset_alias,
-            "paper_id": paper.id,
-            "base_recipe": template.recipe_id,
-            "noise": noise_selection.to_dict(),
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-        }, indent=2, ensure_ascii=False), encoding="utf-8")
+        # Store the selected noise and method-specific inputs in the review YAML,
+        # not in the paper's built-in source file.
+        command = f"lnl run --recipe {selected.recipe_id} --data {dataset_alias} --output-dir {output_dir} --check-data"
+        dry_run = f"lnl run --recipe {selected.recipe_id} --data {dataset_alias} --output-dir {output_dir} --dry-run --check-data"
         return QuickStartPlan(
-            plan_id, dataset_alias, paper.id, paper.acronym, noise_selection,
-            "toolbox_adapted", None, str(config_path), "ready", (),
-            f"lnl run --config {config_path} --output-dir {output_dir} --check-data",
-            f"lnl run --config {config_path} --output-dir {output_dir} --dry-run --check-data",
-            "基于现有方法模板生成的 Toolbox 适配配置，不等同于论文原始复现。",
-            str(provenance_path), details + tuple(
-                f"训练轮次：{item}" for item in _epoch_details(candidate)
-            ) + (f"输出目录：{output_dir}",),
+            plan_id, dataset_alias, paper_id, selected.acronym, noise_selection,
+            "paper_reproduction", selected.recipe_id, None, status,
+            tuple(remaining), command, dry_run,
+            summary="已读取所选论文的 YAML；完整数据与依赖检查在最后一步执行。",
+            details=tuple(f"训练轮次：{item}" for item in _epoch_details(config))
+            + (f"配置文件：{recipe.config_path}", f"输出目录：{output_dir}"),
         )
 
 

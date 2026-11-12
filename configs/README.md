@@ -9,6 +9,51 @@ kind: experiment  # 或 fragment / mentor_artifact
 
 ## 用户可见配方
 
+### 默认配置与历史 best 配置
+
+`configs/reproduction/*_default.yaml` 是原有 26 篇论文的默认入口。本轮另外提供
+26 份 `*_cifar10.yaml`、22 份 `*_cifar100.yaml`，对应
+`outputs/论文参数五方对照_默认栏补全.xlsx` 中的历史 best 列，不替换默认入口。
+Binary Risk、Importance Reweighting、MC-LDCE、PDL 没有历史 C100 best，未创建该组。
+C10 的 Binary Risk、Importance Reweighting、CWD 仍为飞机/汽车二分类，不是十分类。
+
+这些历史变体可通过独立 ID 或文件路径调用，例如：
+
+```powershell
+lnl validate --recipe apl-cifar100 --data my-cifar100
+lnl run --recipe apl-cifar100 --data my-cifar100
+lnl run --config configs/reproduction/apl_cifar10.yaml --data my-cifar10
+```
+
+48 份配置均来自表中引用的 `artifact/full-test-best-20261106/<数据集>/<论文>/config.json`。
+文件头记录源文件 SHA-256、历史代码版本、恢复状态和迁移字段；大矩阵保留完整值。
+当前代码不会自动切换为历史代码，因此相同参数不保证重现历史分数。
+C10 CNLCU 来源未记录独立代码版本号，文件头明确标注缺失；C10/C100 CWD 和
+C10 Loss Correction 的原始输入文本只做了部分恢复，不能宣称逐字恢复。
+
+迁移仅移除机器绝对数据目录、旧 Web/运行时记录和旧 `noise.type` 别名，
+为每份配置设置独立相对输出目录；数据通过本机登记及 `--data` 指定。
+CWD C10 的历史驱动 dropout=0.5 已写入 `model.feature_dropout`。
+PCSE 的旧 `pretraining_stage.mode=train` 已省略：当前执行器始终执行同一 CE 预训练阶段，
+其模型、预算、优化器和检查点选择不变。L2RW 的虚拟更新学习率保留。
+
+下列资源只迁移了引用路径，没有复制、下载或生成。需要准备与历史来源相同内容的文件，
+不能用同名的任意文件替代；缺失时 `validate` 应报错。
+
+| 配置 | 必需资源位置（相对仓库） |
+|---|---|
+| CAL C10 | `data/cal/IDN_0.2_C10-subset.pt`（历史带噪/干净标签及顺序须与输入对齐） |
+| CAL C100 | `data/cal/IDN_0.2_C100.pt` |
+| DLD C100 | `data/dld/cifar100-idn-0.2.pt` |
+| UPM C100 | `data/upm-cifar100-mlp/labels.pt` |
+| CWD C100 | `data/cwd/cifar100-best-transition.npz` |
+| LEND C10 | `data/lend/cifar10-best-noise-manifest.npz`（保留历史来源哈希约束） |
+| MentorNet C10/C100 | `data/mentornet/cifar10-symmetric04-official-port-seed20260729/mentor_artifact.pt` |
+| DLD C10/C100 | 原配置使用的 TorchVision ResNet-34 `IMAGENET1K_V1` 缓存权重 |
+
+表中 DSS C10 的 `early_stopping` 总项写“未显式设置”，但四个子项和原始配置均有值；
+历史 YAML 保留完整字典，不因总项空缺而删除。本文不将历史 best 称为论文唯一参数或新训练结果。
+
 活动 YAML 是内部可复现资产，不等于都需要出现在用户菜单中。
 `src/lnl_toolbox/cli/data/recipe_catalog.json` 的 `public` 清单维护默认公开模板：
 

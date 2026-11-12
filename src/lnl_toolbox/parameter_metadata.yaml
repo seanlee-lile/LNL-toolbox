@@ -39,6 +39,8 @@ parameter_ui:
     posterior_stage.model.variant: [standard, imagenet_standard]
     final_stage.model.variant: [standard, imagenet_standard]
     model.variant: [standard, dss_author]
+    volminnet.model.variant: [standard]
+    noise.validation_targets: [clean, noisy]
     noise.mode: [generated, external, clean]
     noise.name: [symmetric, pairflip, class_conditional, binary_asymmetric_rcn, asymmetric_rcn, external_torch, official_uniform_flip, pdl, clean, none, native, real_world]
     noise.sampling: [global, per_class, transition]
@@ -244,6 +246,10 @@ parameter_ui:
     uci_statlog_heart: UCI Statlog 心脏病数据
     standard: 已登记的标准格式数据
   fields:
+    noise.manifest: [噪声标签文件路径, 读取已保存的 NPZ 噪声标签文件；文件中的样本编号和标签需与当前训练数据对应。相对路径以项目目录为起点。]
+    noise.validation_targets: [验证标签来源, clean 使用验证样本的干净标签；noisy 使用按当前噪声协议生成的验证标签。该值影响验证指标和模型选择。]
+    model.feature_dropout: [分类前特征丢弃比例, CWD 的 ResNet 分类器在训练时随机将该比例的池化特征置零；0 表示关闭，取值需小于 1。评估时不丢弃特征。]
+    volminnet.model.variant: [模型实现版本, standard 使用所选网络的标准实现。]
     instance_transition.anchor_policy: [锚点选择方式, paper保留作者分位候选；distinct在候选重复或系数不独立时扩展搜索，保证每类使用不同且线性独立的锚点。这是小数据适配，会改变锚点样本。]
     trainer.early_stopping_monitor: [早停观察指标, validation_accuracy观察验证准确率升高；validation_loss观察验证损失降低。连续15轮未改善时停止并恢复该指标最好的模型。]
     t_revision.transition_initialization.percentile: [锚点过滤分位数, 先去掉预测概率达到该分位数的高置信样本，再从其余样本选伪锚点。CIFAR-10参考实现使用97。]
@@ -629,6 +635,9 @@ global_ui_rules:
 # prerequisite section instead of being mixed with method hyperparameters.
 parameter_display_policy:
   hidden_paths:
+  # Recorded source identity and dataset-derived classifier size are not inputs.
+  - noise.source_manifest_sha256
+  - model.num_outputs
   - data.sha256
   - data.expected_samples
   - schema_version
@@ -726,11 +735,13 @@ parameter_display_policy:
   - hyperparameters.sampling_seed
   - hyperparameters.sampled_setting
   resource_paths:
+  - noise.manifest
   - pipeline.weight_provider.artifact_path
   - noise.path
   - dld.feature_extractor.source
   - trusted_validation.source
   resource_labels:
+    noise.manifest: 噪声标签文件
     pipeline.weight_provider.artifact_path: 外部权重文件
     noise.path: 外部噪声/标签文件
     dld.feature_extractor.source: DLD 特征来源

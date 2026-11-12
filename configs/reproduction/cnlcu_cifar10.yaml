@@ -1,17 +1,35 @@
-schema_version: 1
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / D
+# Source: artifact/full-test-best-20261106/cifar10/cnlcu/config.json
+# Source SHA256: f3ab7b4ae9976349f999e3a1f0e2e15ed5fef14a14b33dff4dbccdcc56e4ebb1
+# Historical code: not recorded; see source provenance.json
+# Recovery: source_available_effective_overrides_preserved
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   meta.web_parameter_record.effective_reproduction_status
+#   meta.web_parameter_record.formal_recipe
+#   meta.web_parameter_record.modified_from_paper
+#   meta.web_parameter_record.paper_change_acknowledged
+#   meta.web_parameter_record.paper_parameter_changes
+#   meta.web_parameter_record.parameter_metadata_registry_version
+#   output_root
 kind: experiment
+schema_version: 1
 method: cnlcu
 execution:
   runner: cnlcu
 configuration_fidelity: paper_protocol
 seed: 1
-output_root: artifacts/reproductions/cnlcu-cifar10-sym20
+output_root: artifacts/reproductions/cnlcu-cifar10-best
 data:
   name: cifar10
   validation_size: 5000
   validation_split:
     strategy: stratified
     rng: default_rng
+    source: training_pool
   augment: false
   preprocessing: tensor_only
 noise:
@@ -67,3 +85,4 @@ evaluation:
 trainer:
   epochs: 200
   device: auto
+  early_stopping: false

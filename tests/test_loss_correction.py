@@ -167,7 +167,7 @@ class LossCorrectionPaperProtocolTest(unittest.TestCase):
         self.assertEqual([item['value'] for item in fields['pipeline.risk_corrector.name']['choices']], ['forward', 'backward'])
         from copy import deepcopy
         from unittest.mock import patch
-        native = yaml.safe_load((web.ROOT/'configs/reproduction/loss_correction_cifar10.yaml').read_text(encoding='utf-8'))
+        native = yaml.safe_load((web.ROOT/'configs/reproduction/loss_correction_default.yaml').read_text(encoding='utf-8'))
         native['noise'] = {'name': 'native', 'validation_targets': 'noisy', 'seed': 1, 'rng': 'numpy_legacy', 'manifest_filename': 'noise_manifest.npz'}
         native['pipeline']['transition_estimator'] = {'name': 'anchor', 'percentile': 97.0}
         native['pipeline']['warmup_epochs'] = 120

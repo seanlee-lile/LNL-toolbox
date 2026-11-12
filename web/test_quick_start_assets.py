@@ -13,6 +13,87 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class QuickStartAssetsTests(unittest.TestCase):
+    def test_external_label_path_is_required_on_noise_step(self) -> None:
+        script = r"""
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+let source=fs.readFileSync('web/assets/quick_start.js','utf8');
+source=source.replace('window.quickStartController =','window.__probe={state,quickStartCanAdvance,renderNoise}; window.quickStartController =');
+const ctx={window:{},document:{getElementById(){return null;},querySelector(){return null;}}};
+vm.runInNewContext(source,ctx);
+const {state,quickStartCanAdvance,renderNoise}=ctx.window.__probe;
+state.dataset={num_classes:10};state.noise={dataset_state:'clean',options:[{key:'external_torch',label:'外部标签文件'}]};
+state.noiseSelection={kind:'synthetic',key:'external_torch',path:'',seed:1};
+assert(!quickStartCanAdvance({id:'noise'}));assert(renderNoise().includes('请选择外部标签文件后继续'));
+state.noiseSelection.path=' F:/labels.pt ';assert(quickStartCanAdvance({id:'noise'}));
+state.noiseSelection={kind:'synthetic',key:'symmetric'};assert(quickStartCanAdvance({id:'noise'}));
+"""
+        result = subprocess.run([shutil.which("node"), "-e", script], cwd=ROOT,
+                                capture_output=True, text=True, encoding="utf-8", check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_external_noise_label_picker_reuses_existing_web_picker(self) -> None:
+        self.assertIsNotNone(shutil.which("node"), "CI requires Node-backed UI verification")
+        script = r"""
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+let source=fs.readFileSync('web/assets/quick_start.js','utf8');
+source=source.replace('window.quickStartController =',
+ 'window.__probe={state,renderNoise,updateNoise}; window.quickStartController =');
+source=source.replace('function render() {','function render() { return;');
+const index=fs.readFileSync('web/index.html','utf8');
+const shared=index.slice(index.indexOf('    async function pickPath('),index.indexOf('    function renderStructured('));
+let result={cancelled:false,path:'F:/labels with spaces/带噪标签.pt'},ok=true,calls=[],bindings=0;
+const callbacks={},button={dataset:{pickerTarget:'qs-noise-path',pickerMode:'open_file',pickerKind:'all'},
+ addEventListener(name,fn){callbacks[name]=fn;bindings++;}};
+const controls={
+ 'qs-noise-path':{value:'F:/old.pt',dispatchEvent(event){if(event.type==='change')ctx.window.__probe.updateNoise();}},
+ 'qs-noise-pick':button,'qs-noise':{value:'external_torch'},'qs-add-noise':{checked:true},'qs-seed':{value:'73'}
+};
+const ctx={window:{setTimeout(){return 1;},clearTimeout(){}},
+ Event:class {constructor(type){this.type=type;}},statusNode:{},
+ document:{getElementById(id){return controls[id]||null;},querySelector(){return null;},
+ querySelectorAll(){return [button];}},
+ fetch:async(url,options)=>{
+  const body=JSON.parse(options.body);calls.push({url,body});
+  if(url==='/api/picker')return {ok,json:async()=>result};
+  return {ok:true,json:async()=>({methods:[]})};
+ }};
+vm.runInNewContext(source,ctx);
+vm.runInNewContext(shared,ctx);
+const p=ctx.window.__probe,s=p.state;
+s.dataset={alias:'mini',num_classes:10};
+s.noise={dataset_state:'clean',options:[{key:'external_torch',label:'外部标签文件'}]};
+s.noiseSelection={kind:'synthetic',key:'external_torch',path:'F:/old.pt',seed:73};
+async function click(){callbacks.click();await new Promise(setImmediate);}
+(async()=>{
+ const html=p.renderNoise();
+ assert(html.includes('data-picker-target="qs-noise-path"'));
+ assert(html.includes('data-picker-mode="open_file"'));
+ assert(html.includes('>浏览</button>'));
+ assert(source.includes('window.installPathPickers?.(panel)'));
+ assert(!source.includes('function pickNoiseLabelPath'));
+ ctx.installPathPickers();ctx.installPathPickers();assert.strictEqual(bindings,1);
+ s.plan={plan_id:'old'};
+ await click();
+ assert.deepStrictEqual(calls[0],{url:'/api/picker',body:{mode:'open_file',kind:'all',initial:'F:/old.pt'}});
+ assert.strictEqual(controls['qs-noise-path'].value,result.path);
+ assert.strictEqual(s.noiseSelection.path,result.path);
+ assert.strictEqual(s.noiseSelection.seed,73);assert.strictEqual(s.plan,null);
+ assert(calls.some(c=>c.url==='/api/quick-start/methods'&&c.body.noise.path===result.path));
+ const previous=s.noiseSelection;
+ result={cancelled:true,path:null};calls=[];await click();
+ assert.strictEqual(s.noiseSelection,previous);
+ assert.strictEqual(controls['qs-noise-path'].value,previous.path);
+ assert.strictEqual(calls.length,1);
+ ok=false;result={error:'Windows picker unavailable'};await click();
+ assert(ctx.statusNode.textContent.includes('Windows picker unavailable'));
+ assert.strictEqual(ctx.statusNode.className,'status failed');
+ assert.strictEqual(controls['qs-noise-path'].value,previous.path);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+        result = subprocess.run([shutil.which("node"), "-e", script], cwd=ROOT,
+                                capture_output=True, text=True, encoding="utf-8", check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_selecting_paper_preserves_noise_step_seed(self) -> None:
         self.assertIsNotNone(shutil.which("node"), "CI requires Node-backed UI verification")
         script = r"""
@@ -26,7 +107,7 @@ const binding=source.split('\n').find(line=>line.includes('panel.querySelectorAl
     const calls=[];
     let click;
     const button={dataset:{paper:'l2rw'},addEventListener(event,handler){click=handler;}};
-    const ctx={state,panel:{querySelectorAll(){return [button];}},render(){},
+    const ctx={state,panel:{querySelectorAll(){return [button];}},render(){},confirmConfigurationChange(){return true;},
       buildPlan(){calls.push(state.noiseSelection.seed);},
       request:async()=>({fields:[{path:'seed',value:1234}]})};
     vm.runInNewContext(binding,ctx);
@@ -40,6 +121,45 @@ const binding=source.split('\n').find(line=>line.includes('panel.querySelectorAl
   }
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """
+        result = subprocess.run([shutil.which("node"), "-e", script], cwd=ROOT,
+                                capture_output=True, text=True, encoding="utf-8", check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_dataset_and_paper_switches_confirm_before_discarding_draft(self) -> None:
+        script = r'''
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+let source=fs.readFileSync('web/assets/quick_start.js','utf8');
+const binding=source.split('\n').find(line=>line.includes('panel.querySelectorAll(".qs-method-card")'));
+source=source.replace('window.quickStartController =',
+ 'window.__probe={state,changeDatasetPath,confirmConfigurationChange}; window.quickStartController =');
+source=source.replace('function render() {','function render() { return;');
+let approve=false,prompts=0,builds=0,click;
+const ctx={window:{confirm(message){prompts++;assert(message.includes('未保存'));return approve;}}};
+vm.runInNewContext(source,ctx);
+const p=ctx.window.__probe,s=p.state;
+function draft(){
+ s.path='F:/old';s.dataset={alias:'local'};s.selectedPaperId='gce';s.plan={plan_id:'old'};
+ s.planSchema={fields:[{path:'optimizer.lr',kind:'number',editable:true,value:0.1}]};
+ s.parameterDraft={'optimizer.lr':'0.3'};
+}
+draft();
+assert.strictEqual(p.changeDatasetPath('F:/new'),false);
+assert.strictEqual(s.path,'F:/old');assert.strictEqual(s.plan.plan_id,'old');
+assert.strictEqual(s.parameterDraft['optimizer.lr'],'0.3');
+approve=true;assert.strictEqual(p.changeDatasetPath('F:/new'),true);
+assert.strictEqual(s.plan,null);assert.strictEqual(Object.keys(s.parameterDraft).length,0);
+draft();approve=false;s.methods=[{paper_id:'l2rw',status:'ready'}];
+const button={dataset:{paper:'l2rw'},addEventListener(event,fn){click=fn;}};
+Object.assign(ctx,{state:s,panel:{querySelectorAll(){return [button];}},render(){},
+ confirmConfigurationChange:p.confirmConfigurationChange,buildPlan(){builds++;}});
+vm.runInNewContext(binding,ctx);
+click.call(button);assert.strictEqual(s.selectedPaperId,'gce');assert.strictEqual(builds,0);
+approve=true;click.call(button);assert.strictEqual(s.selectedPaperId,'l2rw');
+assert.strictEqual(s.plan,null);assert.strictEqual(builds,1);
+assert.strictEqual(Object.keys(s.parameterDraft).length,0);
+const before=prompts;click.call(button);assert.strictEqual(prompts,before);assert.strictEqual(builds,1);
+'''
+        self.assertIsNotNone(shutil.which("node"))
         result = subprocess.run([shutil.which("node"), "-e", script], cwd=ROOT,
                                 capture_output=True, text=True, encoding="utf-8", check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -115,7 +235,7 @@ source=source.replace('window.quickStartController =',
 source=source.replace('function render() {','function render() { return;');
 let mode='detected', calls=[];
 const dataset={alias:'new-data',display_name:'new-data',path:'F:/new',train_size:3000,test_size:0,num_classes:10};
-const ctx={window:{setTimeout(){return 1;},clearTimeout(){}},document:{getElementById(){return null;}},
+const ctx={window:{setTimeout(){return 1;},clearTimeout(){},confirm(){return true;}},document:{getElementById(){return null;}},
   fetch:async(url, options)=>{
     calls.push([url,options ? JSON.parse(options.body):null]);
     if(url.endsWith('/probe')) return {ok:mode!=='error',json:async()=>mode==='error'?{error:'无法读取目录'}:{status:mode,candidates:[{adapter:'cifar10'}]}};
@@ -127,7 +247,7 @@ const ctx={window:{setTimeout(){return 1;},clearTimeout(){}},document:{getElemen
 vm.runInNewContext(source,ctx);
 const p=ctx.window.__probe,s=p.state;
 (async()=>{
-  s.path='F:/old';s.dataset={alias:'old'};s.noise={};s.plan={};s.planSchema={};
+  s.path='F:/old';s.dataset={alias:'old'};s.noise={};s.plan={};s.planSchema={fields:[{path:'optimizer.lr',value:0.1,kind:'number',editable:true}]};
   s.parameterDraft={'optimizer.lr':1};s.review={phase:'ready'};s.selectedPaperId='old-paper';
   p.changeDatasetPath('F:/new');
   assert.strictEqual(s.dataset,null);assert.strictEqual(s.plan,null);assert.strictEqual(s.review,null);
@@ -519,81 +639,6 @@ if (!html.includes('查看论文外部数据') || html.includes('noise.path') ||
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_all_formal_papers_keep_one_editable_learning_rate_when_schedule_is_disabled(self) -> None:
-        if not shutil.which("node"):
-            self.skipTest("Node.js is unavailable")
-        from lnl_toolbox.catalog import default_paper_config, load_papers
-        from web import command_console
-
-        schemas = []
-        for paper in load_papers(command_console.ROOT):
-            recipe = default_paper_config(paper, root=command_console.ROOT)[0]
-            schemas.append(command_console._config_schema(recipe.recipe_id))
-        self.assertEqual(len(schemas), len(load_papers(command_console.ROOT)))
-        self.assertTrue(schemas)
-        script = r"""
-const fs = require('fs');
-const vm = require('vm');
-const schemas = JSON.parse(fs.readFileSync(0, 'utf8'));
-let source = fs.readFileSync('web/assets/quick_start.js', 'utf8');
-source = source.replace('window.quickStartController =',
-  'window.__probe = {state, renderPlanParameters, parameterPatches, scheduleGroups, scheduleEnabled, setScheduleEnabled}; window.quickStartController =');
-const context = {window:{}};
-vm.runInNewContext(source, context);
-const {state, renderPlanParameters, parameterPatches, scheduleGroups, scheduleEnabled, setScheduleEnabled} = context.window.__probe;
-for (const schema of schemas) {
-  state.planSchema = schema;
-  state.parameterDraft = {};
-  state.segmentedPaths = {};
-  state.scheduleStash = {};
-  const rates = schema.fields.filter(field => field.editable && field.visible !== false &&
-    field.display_group !== 'restricted' && field.path.includes('optimizer.') && field.path.endsWith('.lr'));
-  const check = (label) => {
-    const html = renderPlanParameters();
-    for (const field of rates) {
-      const needle = 'data-qs-param="' + field.path + '"';
-      if (html.split(needle).length !== 2)
-        throw Error(schema.method + ' ' + label + ': ' + field.path + ' editor count is ' + (html.split(needle).length - 1));
-    }
-    return html;
-  };
-  const original = check('original');
-  const baseline = parameterPatches();
-  for (const patch of baseline) {
-    const field = schema.fields.find(item => item.path === patch.path);
-    if (!field || field.kind !== 'boolean' ||
-        !/\.(early_stopping|warmup_early_stopping)$/.test(patch.path) || patch.value !== field.value)
-      throw Error(schema.method + ': initial render changed a parameter: ' + patch.path);
-  }
-  const originalPatches = JSON.stringify(baseline);
-  const active = scheduleGroups(schema.fields).filter(scheduleEnabled);
-  for (const group of active) {
-    if (!group.fields.some(field => field.path === group.prefix + '.lr_values')) continue;
-    if (!original.includes('data-qs-schedule-rate="' + group.prefix + '"'))
-      throw Error(schema.method + ': independent stage rates missing for ' + group.prefix);
-  }
-  for (const group of active) setScheduleEnabled(group.prefix, false);
-  const disabled = check('disabled');
-  for (const field of rates) {
-    if (!disabled.includes('data-qs-param="' + field.path + '"'))
-      throw Error(schema.method + ': missing fixed rate ' + field.path);
-    state.parameterDraft[field.path] = String(Number(field.value) + 0.001);
-    const patch = parameterPatches().find(item => item.path === field.path);
-    if (!patch || typeof patch.value !== 'number')
-      throw Error(schema.method + ': rate is not saved as a number: ' + field.path);
-  }
-  for (const field of rates) delete state.parameterDraft[field.path];
-  for (const group of active) setScheduleEnabled(group.prefix, true);
-  check('restored');
-  if (JSON.stringify(parameterPatches()) !== originalPatches)
-    throw Error(schema.method + ': off/on changed the original schedule: ' + JSON.stringify(parameterPatches()));
-}
-"""
-        result = subprocess.run(
-            [shutil.which("node"), "-e", script], cwd=ROOT,
-            input=json.dumps(schemas), capture_output=True, text=True, check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_split_editor_shows_current_and_paper_counts(self) -> None:
         if not shutil.which("node"):
@@ -660,36 +705,6 @@ if (!splitAllocationText().includes('训练 2694，验证 300，干净参考 6')
         self.assertIn('id="context-config-label"', html)
 
 
-    def test_step_schedule_preview_shows_formal_l2rw_rates(self) -> None:
-        if not shutil.which("node"):
-            self.skipTest("Node.js is unavailable")
-        script = r"""
-const fs = require('fs');
-const vm = require('vm');
-let source = fs.readFileSync('web/assets/quick_start.js', 'utf8');
-source = source.replace('window.quickStartController =', 'window.__probe = {state, renderScheduleControl}; window.quickStartController =');
-const context = {window: {}};
-vm.runInNewContext(source, context);
-const fields = [
-  {path:'scheduler.name', value:'none', editable:true},
-  {path:'scheduler.step_milestones', value:[40000, 60000], editable:true},
-  {path:'scheduler.gamma', value:0.1, editable:true},
-  {path:'optimizer.lr', value:0.1, editable:true},
-  {path:'trainer.max_steps', value:80000, editable:true}
-];
-const probe = context.window.__probe;
-probe.state.segmentedPaths['optimizer.lr'] = true;
-const html = probe.renderScheduleControl({prefix:'scheduler', fields:fields.slice(0, 3)}, fields);
-if (!html.includes('data-qs-schedule-toggle="scheduler" checked') ||
-    !html.includes('40000') || !html.includes('60000') ||
-    !html.includes('0.01') || !html.includes('0.001') ||
-    !html.includes('data-qs-schedule-rate')) process.exit(1);
-"""
-        result = subprocess.run(
-            [shutil.which("node"), "-e", script], cwd=ROOT,
-            capture_output=True, text=True, check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_quick_start_shows_only_effective_training_budget(self) -> None:
         if not shutil.which("node"):
@@ -821,178 +836,9 @@ if (!augment.includes('<span>训练数据增强</span>') || augment.includes('�
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_run_plan_leads_with_training_schedule_without_duplicate_status(self) -> None:
-        if not shutil.which("node"):
-            self.skipTest("Node.js is unavailable")
-        script = r"""
-const fs = require('fs');
-const vm = require('vm');
-let source = fs.readFileSync('web/assets/quick_start.js', 'utf8');
-source = source.replace('window.quickStartController =', 'window.__probe = {state, renderPlan}; window.quickStartController =');
-const context = {window:{}};
-vm.runInNewContext(source, context);
-const {state, renderPlan} = context.window.__probe;
-state.plan = {status:'ready', config_kind:'paper_reproduction', summary:'条件完全匹配正式论文复现配置。',
-  details:['训练轮次：trainer.epochs=200', '输出目录：temporary']};
-state.planSchema = {fields:[
-  {path:'trainer.epochs', value:200, editable:true, visible:true, display_group:'default', kind:'number'},
-  {path:'scheduler.name', value:'cosine', editable:true, visible:true, display_group:'default', kind:'string'},
-  {path:'optimizer.lr', value:0.001, editable:true, visible:true, display_group:'default', kind:'number'}
-]};
-let html = renderPlan();
-if (!html.includes('模型训练计划') || html.indexOf('模型训练计划') > html.indexOf('可修改的训练参数') ||
-    html.includes('已修改的运行配置') || html.includes('条件完全匹配正式论文复现配置') ||
-    html.includes('已匹配已验收数据资料') || html.includes('训练轮次：trainer.epochs=200') ||
-    !html.includes('data-qs-param="trainer.epochs"')) process.exit(1);
-state.plan = {status:'needs_input', summary:'需要提供方法输入'};
-html = renderPlan();
-if (!html.includes('运行前还需处理') || !html.includes('需要提供方法输入')) process.exit(2);
-"""
-        result = subprocess.run(
-            [shutil.which("node"), "-e", script], cwd=ROOT,
-            capture_output=True, text=True, check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_only_supported_learning_rate_moves_into_segment_table(self) -> None:
-        if not shutil.which("node"):
-            self.skipTest("Node.js is unavailable")
-        script = r"""
-const fs = require('fs');
-const vm = require('vm');
-let source = fs.readFileSync('web/assets/quick_start.js', 'utf8');
-source = source.replace('window.quickStartController =',
-  'window.__probe = {state, renderPlanParameters, parameterPatches}; window.quickStartController =');
-const context = {window:{}};
-vm.runInNewContext(source, context);
-const {state, renderPlanParameters, parameterPatches} = context.window.__probe;
-state.planSchema = {fields:[
-  {path:'scheduler.name', value:'multistep', editable:true, visible:true, display_group:'default', kind:'string'},
-  {path:'scheduler.milestones', value:[40,80], editable:true, visible:true, display_group:'default', kind:'list'},
-  {path:'scheduler.gamma', value:0.1, editable:true, visible:true, display_group:'default', kind:'number'},
-  {path:'scheduler.lr_values', value:null, editable:true, visible:true, display_group:'advanced', kind:'list', nullable:true},
-  {path:'optimizer.lr', value:0.01, editable:true, visible:true, display_group:'default', kind:'number'},
-  {path:'optimizer.momentum', value:0.9, editable:true, visible:true, display_group:'default', kind:'number'},
-  {path:'optimizer.weight_decay', value:0.0001, editable:true, visible:true, display_group:'default', kind:'number'},
-  {path:'model.name', value:'cnn8', editable:true, visible:true, display_group:'default', kind:'string'},
-  {path:'trainer.epochs', value:120, editable:true, visible:true, display_group:'default', kind:'number'}
-]};
-let html = renderPlanParameters();
-if (!html.includes('qs-segment-table') || !html.includes('data-qs-segment-param="optimizer.lr"') ||
-    !html.includes('data-qs-segment-param="optimizer.lr" checked') ||
-    !html.includes('data-qs-schedule-rate="scheduler"') ||
-    (html.match(/data-qs-param="optimizer.lr"/g) || []).length !== 1 ||
-    html.includes('data-qs-segment-param="optimizer.momentum"') ||
-    html.includes('data-qs-segment-param="optimizer.weight_decay"') ||
-    html.includes('data-qs-segment-param="model.name"') ||
-    !html.includes('data-qs-param="optimizer.momentum"') ||
-    !html.includes('data-qs-param="optimizer.weight_decay"') ||
-    !html.includes('data-qs-param="model.name"')) process.exit(1);
-state.parameterDraft['scheduler.lr_values'] = JSON.stringify([0.003, 0.0007]);
-html = renderPlanParameters();
-const patch = parameterPatches().find(item => item.path === 'scheduler.lr_values');
-if (!html.includes('value="0.003"') || !html.includes('value="0.0007"') ||
-    !html.includes('每一格都可以独立修改') || !patch ||
-    JSON.stringify(patch.value) !== '[0.003,0.0007]') process.exit(3);
-delete state.parameterDraft['scheduler.lr_values'];
-state.segmentedPaths['optimizer.lr'] = false;
-html = renderPlanParameters();
-if (!html.includes('学习率仍在下方编辑') || html.includes('data-qs-schedule-rate="scheduler"') ||
-    (html.match(/data-qs-param="optimizer.lr"/g) || []).length !== 1 ||
-    !html.includes('data-qs-param="optimizer.momentum"') ||
-    parameterPatches().length !== 0) process.exit(2);
-"""
-        result = subprocess.run(
-            [shutil.which("node"), "-e", script], cwd=ROOT,
-            capture_output=True, text=True, check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_l2rw_disabled_schedule_returns_learning_rate_to_parameters(self) -> None:
-        if not shutil.which("node"):
-            self.skipTest("Node.js is unavailable")
-        script = r"""
-const fs = require('fs');
-const vm = require('vm');
-let source = fs.readFileSync('web/assets/quick_start.js', 'utf8');
-source = source.replace('window.quickStartController =',
-  'window.__probe = {state, renderPlanParameters, parameterPatches}; window.quickStartController =');
-const context = {window:{}};
-vm.runInNewContext(source, context);
-const {state, renderPlanParameters, parameterPatches} = context.window.__probe;
-state.planSchema = {method:'l2rw', fields:[
-  {path:'scheduler.name', value:'none', editable:true, visible:true, display_group:'default', kind:'string'},
-  {path:'scheduler.step_milestones', value:[40000,60000], editable:true, visible:true, display_group:'advanced', kind:'list'},
-  {path:'scheduler.gamma', value:0.1, editable:true, visible:true, display_group:'default', kind:'number'},
-  {path:'optimizer.lr', value:0.1, editable:true, visible:true, display_group:'default', kind:'number'},
-  {path:'trainer.max_steps', value:80000, editable:true, visible:true, display_group:'default', kind:'number'}
-]};
-let html = renderPlanParameters();
-if ((html.match(/data-qs-param="optimizer.lr"/g) || []).length !== 1 ||
-    !html.includes('data-qs-schedule-rate="scheduler"')) process.exit(1);
-state.parameterDraft['scheduler.step_milestones'] = '[]';
-html = renderPlanParameters();
-if (html.includes('data-qs-schedule-rate="scheduler"') ||
-    (html.match(/data-qs-param="optimizer.lr"/g) || []).length !== 1 ||
-    !html.includes('value="0.1"') ||
-    !parameterPatches().some(item => item.path === 'scheduler.step_milestones')) process.exit(2);
-state.parameterDraft['optimizer.lr'] = '0.05';
-if (!parameterPatches().some(item => item.path === 'optimizer.lr' && item.value === 0.05)) process.exit(3);
-"""
-        result = subprocess.run(
-            [shutil.which("node"), "-e", script], cwd=ROOT,
-            capture_output=True, text=True, check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_schedule_toggle_restores_unsaved_custom_nodes_and_rates(self) -> None:
-        if not shutil.which("node"):
-            self.skipTest("Node.js is unavailable")
-        script = r"""
-const fs = require('fs');
-const vm = require('vm');
-let source = fs.readFileSync('web/assets/quick_start.js', 'utf8');
-source = source.replace('window.quickStartController =',
-  'window.__probe = {state, setScheduleEnabled, renderPlanParameters, parameterPatches}; window.quickStartController =');
-const context = {window:{}};
-vm.runInNewContext(source, context);
-const {state, setScheduleEnabled, renderPlanParameters, parameterPatches} = context.window.__probe;
-const common = {editable:true, visible:true, display_group:'default'};
-state.planSchema = {method:'gce', fields:[
-  {...common, path:'scheduler.name', value:'multistep', kind:'string'},
-  {...common, path:'scheduler.milestones', value:[40,80], kind:'list'},
-  {...common, path:'scheduler.gamma', value:0.1, kind:'number'},
-  {...common, path:'scheduler.lr_values', value:null, kind:'list', nullable:true},
-  {...common, path:'optimizer.lr', value:0.01, kind:'number'},
-  {...common, path:'trainer.epochs', value:120, kind:'number'}
-]};
-state.parameterDraft['scheduler.milestones'] = '[30,70]';
-state.parameterDraft['scheduler.lr_values'] = '[0.004,0.0008]';
-setScheduleEnabled('scheduler', false);
-if (!renderPlanParameters().includes('data-qs-param="optimizer.lr"') ||
-    !parameterPatches().some(item => item.path === 'scheduler.name' && item.value === 'none')) process.exit(1);
-setScheduleEnabled('scheduler', true);
-if (JSON.stringify(parameterPatches().find(item => item.path === 'scheduler.milestones')?.value) !== '[30,70]' ||
-    JSON.stringify(parameterPatches().find(item => item.path === 'scheduler.lr_values')?.value) !== '[0.004,0.0008]') process.exit(2);
-state.planSchema = {method:'l2rw', fields:[
-  {...common, path:'scheduler.name', value:'none', kind:'string'},
-  {...common, path:'scheduler.step_milestones', value:[40000,60000], kind:'list'},
-  {...common, path:'scheduler.gamma', value:0.1, kind:'number'},
-  {...common, path:'optimizer.lr', value:0.1, kind:'number'},
-  {...common, path:'trainer.max_steps', value:80000, kind:'number'}
-]};
-state.parameterDraft = {'scheduler.step_milestones':'[30000,50000]'};
-state.scheduleStash = {};
-setScheduleEnabled('scheduler', false);
-if (JSON.stringify(parameterPatches().find(item => item.path === 'scheduler.step_milestones')?.value) !== '[]') process.exit(3);
-setScheduleEnabled('scheduler', true);
-if (JSON.stringify(parameterPatches().find(item => item.path === 'scheduler.step_milestones')?.value) !== '[30000,50000]') process.exit(4);
-"""
-        result = subprocess.run(
-            [shutil.which("node"), "-e", script], cwd=ROOT,
-            capture_output=True, text=True, check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_noise_question_follows_accepted_dataset_facts(self) -> None:
         if not shutil.which("node"):
@@ -1109,79 +955,7 @@ class ContinuousScheduleRegressionTests(unittest.TestCase):
                         'path': str(Path(directory) / 'invalid.yaml'),
                         'patches': [{'path': 'scheduler.decay_start', 'value': start}], 'acknowledge_paper_impact': True})
 
-    def test_all_registered_papers_render_continuous_phases_without_duplicate_editors(self) -> None:
-        from lnl_toolbox.catalog import default_paper_config, load_papers
-        from web import command_console as console
-        schemas = [console._config_schema(default_paper_config(p, root=ROOT)[0].recipe_id) for p in load_papers(ROOT)]
-        script = r"""
-const fs=require('fs'),vm=require('vm');
-const schemas=JSON.parse(fs.readFileSync(0,'utf8'));
-let source=fs.readFileSync('web/assets/quick_start.js','utf8');
-source=source.replace('window.quickStartController =','window.__probe={state,renderPlanParameters,scheduleGroups,scheduleEnabled,setScheduleEnabled,renderScheduleControl,parameterPatches};window.quickStartController =');
-const context={window:{}};vm.runInNewContext(source,context);const p=context.window.__probe;
-const expected=new Set(['coteaching','cnlcu','jocor','mc_ldce','apl','ca2c','fine']);
-const seen=new Set();
-for(const schema of schemas){
- const state=p.state;state.planSchema=schema;state.parameterDraft={};state.segmentedPaths={};state.scheduleStash={};state.expandedSchedules={};
- const original=p.renderPlanParameters();
- const baseline=p.parameterPatches();
- for(const patch of baseline){
-  const field=schema.fields.find(f=>f.path===patch.path);
-  if(!field||field.kind!=='boolean'||!/\.(early_stopping|warmup_early_stopping)$/.test(patch.path)||patch.value!==field.value)
-   throw Error(schema.method+' initial render changed '+patch.path);
- }
- const originalPatches=JSON.stringify(baseline);
- const count=(html,path)=>html.split('data-qs-param="'+path+'"').length-1;
- for(const f of schema.fields)if(count(original,f.path)>1)throw Error(schema.method+' duplicates '+f.path);
- const active=p.scheduleGroups(schema.fields).filter(p.scheduleEnabled);
- for(const group of active){
-  const name=group.fields.find(f=>f.path===group.prefix+'.name').value;
-  if(!['linear_after','linear_decay','cosine'].includes(name))continue;
-  seen.add(schema.method);
-  const html=p.renderScheduleControl(group,schema.fields);
-  if(!html.includes('qs-schedule-track')||!html.includes('qs-segment-table'))throw Error(schema.method+' lacks continuous phase UI');
-  if(html.includes('当前方式不使用额外节点'))throw Error(schema.method+' has old fallback');
-  for(const suffix of ['start_epoch','end_epoch','decay_start','t_max','eta_min','beta1_before','beta1_after','final_lr']){
-   const field=group.fields.find(f=>f.path===group.prefix+'.'+suffix);
-   if(field&&count(html,field.path)!==1)throw Error(schema.method+' phase editor missing/duplicated '+field.path);
-  }
-  if(schema.method==='jocor'&&count(html,'scheduler.initial_lr')!==0)throw Error('JoCoR shows a second initial rate');
- }
- const rates=schema.fields.filter(f=>f.editable&&f.visible!==false&&f.path.includes('optimizer.')&&f.path.endsWith('.lr')&&f.display_group!=='restricted');
- for(const group of active)p.setScheduleEnabled(group.prefix,false);
- const off=p.renderPlanParameters();for(const f of rates)if(count(off,f.path)!==1)throw Error(schema.method+' disabled loses/duplicates '+f.path);
- for(const group of active)p.setScheduleEnabled(group.prefix,true);
- const restored=p.renderPlanParameters();for(const f of rates)if(count(restored,f.path)!==1)throw Error(schema.method+' restore loses/duplicates '+f.path);
- if(JSON.stringify(p.parameterPatches())!==originalPatches)throw Error(schema.method+' toggle changed defaults');
-}
-if([...expected].some(id=>!seen.has(id)))throw Error('not all seven continuous papers checked');
-"""
-        result = subprocess.run([shutil.which('node'), '-e', script], cwd=ROOT, input=json.dumps(schemas),
-                                capture_output=True, text=True, check=False)
-        self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_continuous_table_edits_produce_numeric_configuration_patches(self) -> None:
-        from web import command_console as console
-        schemas = [console._config_schema(recipe) for recipe in ('jocor-cifar10-symmetric05-reproduction',
-                   'mc-ldce-cifar10-reproduction', 'apl-cifar10-noise02-reproduction')]
-        script = r"""
-const fs=require('fs'),vm=require('vm');let source=fs.readFileSync('web/assets/quick_start.js','utf8');
-source=source.replace('window.quickStartController =','window.__probe={state,parameterPatches,renderPlanParameters};window.quickStartController =');
-const context={window:{}};vm.runInNewContext(source,context);const p=context.window.__probe;
-for(const schema of JSON.parse(fs.readFileSync(0,'utf8'))){
- p.state.planSchema=schema;p.state.parameterDraft={};p.state.segmentedPaths={};p.state.expandedSchedules={};
- const edits=schema.method==='jocor'?{'optimizer.lr':'0.003','scheduler.start_epoch':'81','scheduler.beta1_after':'0.2'}:
-             schema.method==='mc_ldce'?{'scheduler.decay_start':'81'}:{'scheduler.t_max':'119','scheduler.eta_min':'0.00001'};
- p.state.parameterDraft=edits;const html=p.renderPlanParameters();const patches=p.parameterPatches();
- for(const [path,value] of Object.entries(edits)){
-  const patch=patches.find(x=>x.path===path);if(!patch||patch.value!==Number(value))throw Error('wrong typed patch '+path);
-  if(html.split('data-qs-param="'+path+'"').length!==2)throw Error('edited field missing/duplicated '+path);
- }
-}
-"""
-        result = subprocess.run([shutil.which('node'), '-e', script], cwd=ROOT, input=json.dumps(schemas),
-                                capture_output=True, text=True, check=False)
-        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

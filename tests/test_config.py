@@ -71,15 +71,14 @@ class _config_schema_ConfigSchemaTest(unittest.TestCase):
             self.assertIn(recipe.config_path.resolve(), {path.resolve() for path in paths})
         self.assertIn('gce-cifar10-noise02-reproduction', recipe_ids)
 
-    def test_default_paper_filenames_follow_paper_and_dataset(self) -> None:
+    def test_default_paper_filenames_follow_paper_and_default(self) -> None:
         root = Path(__file__).resolve().parents[1]
         papers = load_papers(root)
         self.assertEqual(len(papers), 26)
         for paper in papers:
             with self.subTest(paper=paper.id):
                 selected, recipe = default_paper_config(paper, root=root)
-                dataset = load_yaml(recipe.config_path)['data']['name']
-                expected = f"{paper.id.replace('-', '_')}_{dataset}.yaml"
+                expected = f"{paper.id.replace('-', '_')}_default.yaml"
                 self.assertEqual(recipe.config_path.name, expected)
                 self.assertEqual(recipe.config_path.parent, root / 'configs/reproduction')
                 self.assertEqual(selected.profile, 'reproduction')
@@ -96,6 +95,65 @@ class _config_schema_ConfigSchemaTest(unittest.TestCase):
                 self.assertEqual(recipe.id, recipe_id)
                 self.assertEqual(recipe.profile, profile)
                 self.assertEqual(recipe.config_path.parent.name, 'smoke')
+
+    def test_historical_best_cifar_configs_are_registered_without_replacing_defaults(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        papers = load_papers(root)
+        recipes = {r.id: r for r in discover_recipes(root, include_conditional=True)}
+        missing_c100 = {'binary-risk', 'importance-reweighting', 'mc-ldce', 'pdl'}
+        outputs = set()
+        count = 0
+        for paper in papers:
+            _, default = default_paper_config(paper, root=root)
+            self.assertEqual(default.config_path.name, paper.id.replace('-', '_') + '_default.yaml')
+            for dataset in ('cifar10', 'cifar100'):
+                path = root / 'configs/reproduction' / f"{paper.id.replace('-', '_')}_{dataset}.yaml"
+                if dataset == 'cifar100' and paper.id in missing_c100:
+                    self.assertFalse(path.exists())
+                    self.assertNotIn(f'{paper.id}-{dataset}-best', recipes)
+                    continue
+                with self.subTest(paper=paper.id, dataset=dataset):
+                    recipe = recipes[f'{paper.id}-{dataset}-best']
+                    self.assertEqual(recipe.config_path, path.resolve())
+                    self.assertEqual(recipe.visibility, 'internal')
+                    config = load_yaml(path)
+                    expected = 'cifar10_airplane_automobile' if dataset == 'cifar10' and paper.id in {
+                        'binary-risk', 'importance-reweighting', 'cwd',
+                    } else dataset
+                    self.assertEqual(config['data']['name'], expected)
+                    self.assertNotIn('root', config['data'])
+                    self.assertNotIn('local_dataset', config)
+                    self.assertNotIn('diagnostic_control', config)
+                    self.assertNotIn('web_parameter_record', config.get('meta', {}))
+                    self.assertNotIn(config['output_root'], outputs)
+                    outputs.add(config['output_root'])
+                    header = path.read_text(encoding='utf-8')
+                    self.assertIn('# Source SHA256:', header)
+                    self.assertIn('# Recovery:', header)
+                    count += 1
+        self.assertEqual(count, 48)
+        self.assertEqual(len(list((root / 'configs/reproduction').glob('*.yaml'))), 74)
+
+    def test_historical_best_keeps_distinct_training_settings(self) -> None:
+        root = Path(__file__).resolve().parents[1] / 'configs/reproduction'
+        def config(name):
+            return load_yaml(root / (name + '.yaml'))
+        self.assertEqual(config('cwd_cifar10')['model']['feature_dropout'], 0.5)
+        self.assertEqual(config('apl_cifar100')['loss']['alpha'], 10.0)
+        self.assertEqual(config('dividemix_cifar100')['dividemix']['objective']['lambda_u'], 150)
+        self.assertEqual(config('l2rw_cifar10')['data']['num_clean'], 300)
+        self.assertEqual(config('l2rw_cifar100')['trainer']['max_steps'], 60000)
+        self.assertEqual(config('lend_default')['lend']['dilution']['policy'], 'until_converged')
+        self.assertEqual(config('lend_cifar10')['lend']['dilution']['policy'], 'fixed_steps')
+        self.assertEqual(config('upm_default')['upm']['psi']['source'], 'stage1_best')
+        self.assertEqual(config('upm_cifar10')['upm']['psi']['source'], 'stage1_last')
+        self.assertEqual(config('loss_correction_default')['optimizer']['lr'], 0.01)
+        self.assertEqual(config('loss_correction_cifar10')['optimizer']['lr'], 0.1)
+        for dataset in ('cifar10', 'cifar100'):
+            pcse = config('pcse_' + dataset)
+            self.assertEqual(pcse['pretraining_stage']['method'], 'cross_entropy')
+            self.assertNotIn('mode', pcse['pretraining_stage'])
+            self.assertNotIn('manifest_sha256', pcse['noise'])
 
 # --- merged from test_config_overrides.py ---
 from copy import deepcopy

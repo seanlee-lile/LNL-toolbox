@@ -1,0 +1,90 @@
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / D
+# Source: artifact/full-test-best-20261106/cifar10/fine/config.json
+# Source SHA256: ab6ccc3799b81b9b36a9a26c2c04dd9a7923f60233e21f7d432173c655369ba5
+# Historical code: toolbox-edb289846dd47756
+# Recovery: original_input_content_recovered
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   local_dataset.adapter
+#   local_dataset.alias
+#   local_dataset.source_signature
+#   meta.web_parameter_record.effective_reproduction_status
+#   meta.web_parameter_record.formal_recipe
+#   meta.web_parameter_record.modified_from_paper
+#   meta.web_parameter_record.paper_change_acknowledged
+#   meta.web_parameter_record.paper_parameter_changes
+#   meta.web_parameter_record.parameter_metadata_registry_version
+#   output_root
+kind: experiment
+schema_version: 1
+seed: 23
+output_root: artifacts/reproductions/fine-cifar10-best
+data:
+  name: cifar10
+  validation_size: 300
+  augment: true
+  strong_policy: official_cifar10
+  normalization:
+    mean:
+    - 0.485
+    - 0.456
+    - 0.406
+    std:
+    - 0.229
+    - 0.224
+    - 0.225
+  num_classes: 10
+  validation_split:
+    source: training_pool
+noise:
+  name: symmetric
+  rate: 0.2
+  seed: 23
+  sampling: transition
+  rng: numpy_legacy
+loader:
+  batch_size: 128
+  num_workers: 8
+  pin_memory: true
+  drop_last: false
+evaluation:
+  batch_size: 16
+model:
+  name: fine_seven_cnn
+  base_width: 64
+  dropout: 0.25
+optimizer:
+  name: sgd
+  lr: 0.05
+  momentum: 0.9
+  nesterov: true
+  weight_decay: 0.0005
+scheduler:
+  name: cosine
+  eta_min: 0.0005
+trainer:
+  epochs: 300
+  device: auto
+  early_stopping: false
+fine:
+  warmup_epochs: 200
+  warmup_lr: 0.1
+  ema_momentum: 0.95
+  momentum_scs: 0.999
+  momentum_scr: 0.99
+  maximum_threshold: 0.95
+  alpha: 1.0
+  beta: 0.001
+  gamma: 0.1
+  probability_floor: 1.0e-07
+  warmup_early_stopping: false
+parameter_record:
+  sampling_seed: 23
+  selected_group: cifar100_symmetric_02
+  source: paper_equations_with_author_sed_training
+  repeated_runs: 1
+execution:
+  runner: fine

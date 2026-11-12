@@ -1,0 +1,96 @@
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / E
+# Source: artifact/full-test-best-20261106/cifar100/cal/config.json
+# Source SHA256: 0a279bc12fd293307e3006a291360af179034bd3193140df50d41e5805bff390
+# Historical code: toolbox-best-fb39c65db2892527
+# Recovery: original_input_content_recovered
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   noise.path
+#   output_root
+# Required external resources (not downloaded or generated):
+#   noise.path: data/cal/IDN_0.2_C100.pt
+kind: experiment
+schema_version: 1
+method: cal
+execution:
+  runner: cal
+seed: 1
+output_root: artifacts/reproductions/cal-cifar100-best
+data:
+  name: cifar100
+  validation_size: 300
+  augment: true
+  normalization:
+    mean:
+    - 0.5071
+    - 0.4867
+    - 0.4408
+    std:
+    - 0.2675
+    - 0.2565
+    - 0.2761
+  validation_split:
+    source: training_pool
+  max_train_samples: null
+  max_test_samples: null
+  max_validation_samples: null
+  num_classes: 100
+noise:
+  name: external_torch
+  path: data/cal/IDN_0.2_C100.pt
+  clean_key: clean_label_train
+  noisy_key: noise_label_train
+  seed: 1
+  validation_targets: noisy
+loader:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+model:
+  name: resnet34
+  base_width: 64
+  initialization: torch_default
+optimizer:
+  name: sgd
+  lr: 0.1
+  momentum: 0.9
+  weight_decay: 0.0005
+scheduler:
+  name: multistep
+  milestones:
+  - 60
+  gamma: 0.1
+warmup:
+  epochs: 65
+  confidence_weight: 10.0
+  confidence_schedule:
+    milestones:
+    - 10
+    - 40
+    - 80
+    values:
+    - 0.0
+    - 10.0
+    - 10.0
+  early_stopping: false
+sieve:
+  lower_threshold: -8.0
+  upper_threshold: -8.0
+cal:
+  confidence_weight: 10.0
+  confidence_schedule:
+    milestones:
+    - 10
+    - 40
+    - 80
+    values:
+    - 0.0
+    - 10.0
+    - 10.0
+trainer:
+  epochs: 100
+  device: cuda
+  early_stopping: false

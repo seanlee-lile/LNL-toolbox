@@ -561,8 +561,8 @@
 - Tests: `tests/test_pcse.py`、`test_dld.py` 删除外部来源专属回归；`test_registry.py`、`test_pipeline.py`、`test_cli.py`、`test_quickstart_service.py` 改为独立入口的断言。保留内部训练、恢复及 ImageNet 检查。
 - Executed: PCSE/DLD/registry/pipeline 143 项通过（43.962 秒）；CLI/Quick Start 153 项通过（297.603 秒）；清理环境变量断言后相关 2 项重跑通过（3.182 秒）。Web 134 项中首次 133 通过、1 失败；原因是本轮元数据清理误伤参数路径，修正后该项重跑通过（26.863 秒）。未完整重跑 Web 134 项，未跑全站测试，也未启动 Web 真实训练。此前选定文件 Ruff 检查通过；最终审计待做。
 - Additional files approved/completed: 用户随后要求“完后本地运行”，完成 `web/assets/quick_start.js` 删除 PCSE mode 判断并将“训练或加载模型”改为自身训练；`src/lnl_toolbox/cli/parameter_help.py` 删除旧模式说明。Web assets 33 项测试通过（60.310 秒），选定文件 Ruff 与 git diff --check 通过。
-- Local actual training: `artifacts/local-formal-one-epoch-20261107/dld` 正式 `dld_cifar10.yaml`，仅覆盖 `dld.diffusion.epochs=1`、`trainer.epochs=1`；显式选择完整 CIFAR-10 别名 `local-cifar10`，不使用 mini 数据。完整执行官方 ImageNet ResNet34 特征、45000 样本预校正与一轮扩散训练（225 次更新），进程退出码 0。模型、噪声、学习率、分段、推理步数均未改，生成的路径与噪声事实由正常运行补充。
-- PCSE actual training: 用户批准后，正式 `pcse_cifar10.yaml` 仅临时覆盖 pretraining/transition/ensemble epochs 为 1、scheduler.start_epoch/end_epoch 为 0/1，选完整 `local-cifar10`；结果位于 `artifacts/local-formal-one-epoch-20261107/pcse`。自身 CE 预训练 352 次更新、VolMin 矩阵估计 352 次更新、特征统计、GDA 和集成训练 100 次更新全部完成，退出码 0，最终测试样本数 10000。未读取其他论文结果。内置正式 YAML 未改为短测值。
+- Local actual training: `artifacts/local-formal-one-epoch-20261107/dld` 正式 `dld_default.yaml`，仅覆盖 `dld.diffusion.epochs=1`、`trainer.epochs=1`；显式选择完整 CIFAR-10 别名 `local-cifar10`，不使用 mini 数据。完整执行官方 ImageNet ResNet34 特征、45000 样本预校正与一轮扩散训练（225 次更新），进程退出码 0。模型、噪声、学习率、分段、推理步数均未改，生成的路径与噪声事实由正常运行补充。
+- PCSE actual training: 用户批准后，正式 `pcse_default.yaml` 仅临时覆盖 pretraining/transition/ensemble epochs 为 1、scheduler.start_epoch/end_epoch 为 0/1，选完整 `local-cifar10`；结果位于 `artifacts/local-formal-one-epoch-20261107/pcse`。自身 CE 预训练 352 次更新、VolMin 矩阵估计 352 次更新、特征统计、GDA 和集成训练 100 次更新全部完成，退出码 0，最终测试样本数 10000。未读取其他论文结果。内置正式 YAML 未改为短测值。
 - Integration: 当前修改均在已批准清单内。共享冲突点为 catalog、参数元数据、runner/service 及 CLI/Quick Start 测试。旧的带 mode/source PCSE 配置将明确报不支持，不再加载其他论文结果。官方 ImageNet 权重仍是 DLD 的外部文件需求，不是其他论文产物。全部训练产物本地忽略，不提交。
 - Exact next step: 交付本地两篇正式配置缩短预算后的真实运行结果。无 commit/push。
 
@@ -598,3 +598,60 @@
 - Real terminal: 通过 exec tty/Windows ConPTY 打开真实 edit gce。英文验证 Ctrl+F 搜索 loss.q、弹窗编辑为 0.8、未保存标记、Ctrl+Z 撤销和 Esc 退出；中文验证参数说明、分母显示及阶段表。退出后恢复原终端，所有本轮终端进程已关闭。真实终端未保存草稿或启动训练；训练确认链路由针对性测试检查，不能据此声称已做 CLI/Web 真实训练。
 - Integration: 共享冲突点是 paper_editor.py、pyproject.toml、既有 CLI 测试及文档。Web、Scratch、参数元数据、服务/执行器、算法、默认 YAML 全部保持不动。推荐至少 65 列、25 行；本轮实际验证 Windows，未在 Linux/macOS 实机验收。桌面旧 PDF 未在本轮范围内更新。
 - Local checkpoints/history: none/not needed。Push readiness: 未申请，不作全仓发布验收结论；未运行全仓测试、Web 回归或真实训练。Exact next step: 用户在已安装依赖的环境运行 lnl edit <paper> 体验工作区；后续修改继续放在 paper_editor.py，show 不承载编辑。
+
+## 2026-11-10 Quick Start 外部标签文件浏览按钮
+
+- Scope/base: scratch / 3fed95d；批准范围为 web/assets/quick_start.js、web/test_quick_start_assets.py、本文档。无新增文件、依赖、提交或推送；保留任务开始时已有的噪声实现、Quick Start 文案及远端运维文件改动。
+- Implementation: 外部标签路径旁添加“浏览”，直接复用 Web 已有 data-picker-*、installPathPickers 和 /api/picker；没有另写选择器。选择文件后沿用现有 change 事件更新配置并重新检查方法；取消不改路径。阻止按钮 mousedown 引发输入框失焦重绘，避免点击被吞。Web index、后端、CLI、算法和论文默认值未修改。
+- Checks executed: QuickStartAssetsTests 及两个现有 Windows picker 后端测试共 36 项通过（47.890 秒）；node --check web/assets/quick_start.js、git diff --check 通过。新增一项检查使用原有共享前端函数，覆盖路径回填、中文与空格、取消、错误、seed 保留、计划失效及避免重复绑定。
+- Limitations: 测试模拟原生选择器返回值，未手动操作 Windows 对话框，未启动训练；本次只改文件选择入口。刷新页面后可使用。下一步为交付，无发布操作。
+
+## 2026-11-10 默认配置统一使用 default 后缀
+
+- Task/base: scratch / 3fed95d。用户批准文件级计划；仅重命名配置及更新引用，不改变论文参数、算法或 recipe ID。Checklist: 26 文件重命名、引用迁移、回归与内容核对、交付记录；4/4 完成（100%）。未提交、未推送，无历史整理操作。
+- Renamed: `configs/reproduction/` 下 apl、binary_risk、ca2c、cal、cdr、cnlcu、coteaching、cwd、dividemix、dld、dss、dual_t、fine、gce、importance_reweighting、jocor、l2rw、lend、loss_correction、mc_ldce、mentornet、pcse、pdl、t_revision、upm、volminnet 共 26 份文件由原数据集后缀改为 `<方法>_default.yaml`。逐文件 SHA-256 与修改前快照完全相同；没有新增配置变体。
+- Runtime/package: `src/lnl_toolbox/cli/data/recipe_catalog.json` 中 recipes、public、conditional、identities 的配置路径同步更新；JSON 与原版本比较只发生文件路径替换，ID、profile 和其他元数据原样保留。`pyproject.toml` 的 reproduction data-files 26 项均指向存在的新文件。26 篇 default_paper_config 均解析到正确新路径。
+- References/tests: `tests/test_{config,ca2c,cdr,cli,cnlcu,cwd,dss,estimators,jocor,l2rw,lend,loss_correction,mc_ldce,registry}.py`、`web/test_command_console.py`、`src/lnl_toolbox/scratch/tests/test_formula_templates.py`；只改文件路径，test_config 中将“方法+数据集”的文件名断言改为“方法+default”。没有删除测试、放宽参数断言或新增测试文件。
+- Docs: `docs/file-map.md`、本文，以及 `papers/{dividemix,dual-t,importance-reweighting}/reproduction.md` 的活动配置引用更新。新增文件只有上述 26 个重命名后的 YAML，无新增源码或依赖。实际变更与批准清单一致。
+- Checks executed: `PYTHONPATH=src;.;tests`，`F:/Miniconda/envs/pytorch/python.exe -B -c` 中先设置 torch intra/inter-op threads=2，再用 unittest 加载 `test_config,test_paper_registration,test_registry,test_cli,web.test_command_console,web.test_quick_start_api,src.lnl_toolbox.scratch.tests.test_formula_templates`，279 项通过（416.697 秒）；同样入口加载 `test_ca2c,test_cdr,test_cnlcu,test_cwd,test_dss,test_estimators,test_jocor,test_l2rw,test_lend,test_loss_correction,test_mc_ldce`，282 项通过（55.400 秒）。合计 561 项通过。
+- Other validation: `PYTHONPATH=src;.` 下 `F:/Miniconda/envs/pytorch/python.exe -B scripts/check_paper_registration.py` 为 PASS / 0 issues；Ruff 对上述修改的 Python 测试文件检查通过；`git diff --check` 通过。全量扫描活动 Git 跟踪文本，原 26 个文件名残留为 0；历史 archive、outputs、artifact/artifacts 未修改。未运行全仓测试或新增真实训练，本轮不改变训练内容。
+- Collaborator protection: 开始时已存在 noise/generators.py、noise/quickstart_catalog.py、training/noisy_labels.py、web/assets/quick_start.js、web/test_quick_start_assets.py 及运维文件改动，本轮未操作。过程中又出现 training/runners.py、tests/test_cal.py、tests/test_quickstart_service.py 的 CAL 改动，同样未操作，不归入本任务。本文保留已有记录，仅局部更新引用并追加本节；manifest、pyproject、共享测试为集成冲突点。
+- Integration/limits: 旧 recipe ID 仍有效；直接传入旧 YAML 文件路径的外部脚本需要改用新路径，不保留重复旧文件。历史结果、表格及外部绝对路径不回写。索引未暂存任何文件。下一步为用户审阅；无需历史整理，未申请发布，不作全仓 push readiness 结论。
+
+## 2026-11-11 历史 best CIFAR 配置整理（尚未收口）
+
+- Source/scope: 使用 outputs/论文参数五方对照_默认栏补全.xlsx（2026-11-10 09:34:41）的历史 best 列及其 artifact/full-test-best-20261106 来源快照。创建 configs/reproduction 下 26 份 CIFAR-10、22 份 CIFAR-100 YAML；binary-risk、importance-reweighting、mc-ldce、pdl 没有历史 CIFAR-100 输入，不虚构配置。另更新 pyproject.toml、recipe_catalog.json、tests/test_config.py、configs/README.md、docs/file-map.md 和本文。原 26 份 *_default.yaml 的 SHA-256 全部保持不变。
+- Migration: 保留历史训练值，去除机器数据根路径、运行绑定及生成的记录，输出目录改为独立相对路径。CWD 恢复历史驱动注入的 feature_dropout=0.5；PCSE 删除当前 schema 不接受的旧 mode: train，保留相同的内部 CE 预训练参数。L2RW 实际使用的 meta 虚拟学习率未删除。外部资源只记录可移植路径，没有下载、伪造或替换资源。
+- Traceability: 每份 YAML 写入来源路径、输入 SHA-256、历史代码版本和恢复状态。CWD 两组及 Loss Correction CIFAR-10 来源为部分重建；CNLCU CIFAR-10 没有历史代码版本记录，明确标注缺失。历史配置不等于自动切换至对应历史源码。新增 recipe 使用 *-cifar10-best / *-cifar100-best，内部登记，不替换 Web 默认绑定。
+- Workbook audit: 2606 个单元格与来源匹配，187 个单元格属于不存在的 CIFAR-100 组，5 份矩阵摘要与完整矩阵摘要匹配。DSS CIFAR-10 的 early_stopping 父单元格写“未显式设置”，但子项及来源 JSON 均有配置；保留来源完整字典，已在 configs/README.md 记录冲突，未改工作簿。
+- Checks executed: 48 份 YAML 均通过 validate_config，并逐个比较迁移后的字典与来源；登记检查 PASS / 0 issues。test_config + test_paper_registration 共 33 项通过（115.451 秒）。扩大到配置、登记、CLI、registry、Web console 和 Quick Start API 后共运行 271 项（2023.285 秒），1 failure、1 error，不能声称全部通过。git diff --check 通过。
+- Open issues: Web 全变体检查遇到 LEND noise.manifest 缺少具体说明。逐份补查发现另外缺项为 noise.source_manifest_sha256、model.feature_dropout、model.num_outputs、noise.validation_targets；VolMinNet CIFAR-100 的 model.variant 选项也未覆盖。需要补充共享参数元数据及必要的资源/选项处理，不能删去真实历史值绕过。另一个失败是已有 CAL requirements({}) 行为与旧 registry 测试断言不一致，涉及任务开始前已有的 runners.py 改动，本轮未修改。
+- Approval boundary: 尚未修改 parameters.py、parameter_metadata.yaml 或 Web 参数测试。下一步先请求扩展批准范围，再补齐说明、资源字段和枚举并重跑针对性回归。没有提交、推送、下载、启动训练或修改算法；既有其他工作区改动保持不动。
+
+### 2026-11-11 批准扩展范围后的收口
+
+- 用户批准新增修改 parameters.py、parameter_metadata.yaml、web/test_command_console.py；实际修改未超出扩展清单和原有配置/文档清单。parameter_metadata 补充 CWD 分类前特征 dropout、验证标签来源、LEND NPZ 噪声文件路径及 VolMinNet 模型版本说明/选项；来源哈希与数据派生的输出维数不显示。parameters 将 noise.manifest 识别为自由文件路径，并补齐 CNLCU cifar_six_conv、L2RW wide_resnet28_10 和 Loss Correction resnet44 的现有模型选项；训练端已有这些模型，没有新建模型实现。
+- 全配置复查还发现，部分历史 recipe 没有显式 method，旧参数解析只认识正式 recipe ID，导致历史变体回落到通用字段。parameters 按已生成的 <paper>-cifar10-best / <paper>-cifar100-best 命名识别注册论文；Web 测试新增逐个历史 ID 的 method 断言，避免遍历检查漏掉这些配置。没有修改 recipe 默认绑定或训练行为。
+- Final checks executed: 6 项针对性 Web console 测试全部通过（304.960 秒），包括所有已登记配置的具体说明/枚举、历史资源与参数、既有资源显示、嵌套选项、单 seed 保存和缺省字段兼容。独立遍历 48 份历史 YAML，实际方法识别、可见字段说明和当前枚举值均通过；全部 YAML 文件未被 schema 处理改写，26 份 default 哈希仍一致。再逐份比较来源 SHA-256、迁移后的完整配置字典、validate_config 和安装包/manifest 条目，48 份均通过。Ruff E9/F821 及限定文件 git diff --check 通过。
+- Debugging: 首次资源/说明修复后，测试继续发现 CNLCU、L2RW 模型选项遗漏；方法识别补齐后，独立审查又发现 Loss Correction resnet44 遗漏。均保留历史值并补齐已有模型，不替换配置来让测试通过。一次来源核对脚本误把 converted 的字典返回值按元组读取而报 KeyError；修正只读核对命令后 48 份完整比较通过，未修改生成配置。
+- Completion/limits: 配置生成、来源核对、登记打包和本次新增字段的参数页兼容已收口。之前扩大回归中 CAL requirements({}) 的失败仍属于工作区已有 CAL 改动，与本轮不同，没有擅自修测试或算法；不宣称全仓全部通过。没有启动 CLI/Web 训练，没有下载所需外部资源，也不声称旧成绩在当前代码上重新复现。无暂存、提交或推送。下一步为用户按实际数据登记和外部资源条件使用这些历史配置；详细路径和来源限制见 configs/README.md。
+
+## 2026-11-11 Quick Start 按数据集选择历史 YAML
+
+- Approved scope/base: 用户批准修改 quickstart/templates.py、quickstart/service.py、web/assets/quick_start.js、tests/test_quickstart_service.py、web/test_quick_start_assets.py、web/test_quick_start_api.py 和本文，未批准新文件。scratch / 3fed95d；已有配置整理、共享参数、CAL 和 Web 路径浏览改动保持不动。本轮不改算法、YAML、CLI 默认绑定或安装清单，无提交、推送。
+- Selection: method_template_for_paper 增加可选 dataset_adapter/recipes；原无参行为保留。Quick Start 的 CIFAR-10、CIFAR-100 依据登记 adapter（不是别名或类别数）分别选择 <paper>-cifar10-best、<paper>-cifar100-best；已登记的 CIFAR-10 airplane/automobile 子集使用 CIFAR-10 组。其他 adapter 沿用原有流程。没有对应历史 YAML 或文件缺失时明确拒绝，不回退 default/smoke。
+- Consistency: 方法卡片和 build_plan 共用选择函数，模板缓存按论文和 adapter 隔离。CIFAR 历史组不再被旧 find_exact_reproduction 分支替换为 default。继续使用原适配逻辑绑定数据路径、按样本量缩放划分和应用用户明确选择的噪声/seed；原训练参数来自所选 YAML。预演和启动都指向同一份绑定后的草稿；provenance 记录 base_recipe 和 base_config_path。缺少外部文件仍按真实兼容条件处理，不虚构资源或训练成功。
+- Frontend: 切换数据路径、已登记数据集或论文前检查参数草稿和用户补充输入；取消保留当前配置，确认后清除旧计划/预演和草稿，再生成新配置。同一论文重复点击不重载。文件夹选择取消不清空原数据；从论文栏进入复用同一次确认，避免重复弹窗。
+- Initial checks executed: 首轮 12 项通过（69.054 秒）：48 份历史 YAML 的实际路径及完整字典、四篇缺失 CIFAR-100 的拒绝、默认模板不变、方法卡与计划来源一致、API 按登记类型而非误导别名选择、预演/启动配置路径一致、前端取消/确认和 seed 保留。Node syntax 与 git diff --check 通过；Ruff E9/F821 通过。额外运行 F401 报告 service.py 和既有测试原有的 5 个未使用导入，本轮未作无关清理，不宣称该项通过。
+- Final validation: 扩大回归使用 PYTHONPATH=src;.;tests，F:/Miniconda/envs/pytorch/python.exe -B，在入口设置 torch intra/inter-op threads=2，unittest 加载 test_quickstart_service、web.test_quick_start_api、web.test_quick_start_assets，共 92 项全部通过（1031.723 秒）。包括跨登记数据集和四种噪声的“ready 方法可生成 ready 计划”、48 份历史 YAML 映射、单 seed、原有参数权限/分段编辑、API 错误和前端响应过期保护。最后的切换保护微调另跑 3 项前端检查通过（0.358 秒）；接口及切换保护另跑 10 项通过（6.361 秒）。各轮有重叠，不把数量相加作为独立覆盖数。
+- Completion/limits: 选择、加载、切换保护和回归均完成，实际改动为获批的七个文件，无新建文件或依赖。26 份 default SHA-256 与原快照一致，48 份历史配置未改写。接口测试验证真实配置选择与计划链路，对数据访问和 preflight 使用替身，不代表真实训练；服务层既有集成检查使用登记的测试 adapter。本轮没有启动真实训练、下载外部文件、改动算法或提交/推送。需要重启 Web 服务并刷新页面以加载新后端和前端；运行时仍要求实际数据、类别条件和外部依赖满足。此处“通过”限于上述 92 项，不宣称全仓测试或训练复现通过。
+
+## 2026-11-12 Quick Start 学习率方式与参数切换
+
+- Approved scope: web/assets/quick_start.js、src/lnl_toolbox/parameters.py、web/test_quick_start_assets.py、本文。不新增文件或依赖，不修改训练算法、论文 YAML、其他已有工作，不提交或推送。上述文件已有前轮改动，本轮仅追加学习率板块修改。
+- UI: 选项使用共享参数能力列表，不按已有字段猜测；明确区分节点、线性、余弦和固定间隔方式。切换时初始化缺少的必要字段，只展示并提交当前方式有效的草稿参数，保留未保存的其他方式草稿以便切回。关闭变化后学习率回到普通参数区。DivideMix 使用预热与主训练总预算；FINE 按真实后端固定为预热后的余弦调度，周期为主训练轮数，不提供无效开关。余弦周期短于训练预算时提示后续回升。
+- Shared configuration: 缺少的调度参数以虚拟字段提供，未进入编辑不会写入配置；保存时仅允许补充这些受控字段。配置已有但未登记的必要调度字段按实际值补入面板。切离节点方式时清理冲突的 lr_values，其余原配置字段保留兼容。阶段校验使用对应阶段轮数，不再使用总配置的占位轮数。锁定调度不生成可编辑的附加字段；保持 supervised、CAL、JoCoR、DLD、VolMinNet 和 MC-LDCE 等实际配置/执行器支持边界。历史配置的论文身份沿用现有服务解析结果，不以 supervised 执行器冒充论文 ID。Co-teaching/CNLCU 已有 Adam beta1 阶段独立保留，切换 LR 曲线不隐藏其有效参数或丢弃编辑。
+- Test removal: 按用户要求删除学习率界面的 8 个专属测试，未新增测试；保留 JoCoR 初始学习率及 MC-LDCE 边界保存的两个后端用例。两项后端用例实际重跑通过（77.166 秒）；最初误用测试类名导致加载失败，纠正后重跑，不将错误调用算作通过。
+- Validation progress: 首轮 26 篇渲染/补丁检查完成；配置检查发现阶段预算和 supervised 不支持 linear_after 的边界，已修正。26 篇 prepare_config 108 个非步数方式组合首轮 105 通过、3 个因身份解析漏补 milestones 失败；修复后 MentorNet/APL/PDL 三项重检通过，另确认 Co-teaching/CNLCU beta1_after 可保存。第一次扩展 74 份配置渲染检查发现 PCSE 已有 start_epoch 未登记，已补齐并重跑。曾有一次审计脚本误用 config_schema 导入名而中止，改为 _config_schema 后继续。Node 语法、修改的 Python 文件 Ruff、git diff --check 已通过；没有新增持久化测试或生成训练产物。
+- Final validation: 最新源码读取 26 份默认配置和 48 份历史 CIFAR 配置，共 74 份；315 个学习率渲染、必要字段、重复/缺失编辑器、beta1 草稿与模式开关/补丁场景通过。GCE/PCSE 的 CIFAR-10 和 CIFAR-100 历史配置各执行 cosine、multistep、none 的 prepare_config，共 12 个实际保存校验入口组合通过；只返回内存配置，不写 YAML。最终 Node syntax、两份 Python 文件 Ruff、四文件 git diff --check 通过。此前一次把重复绑定检查扩展到非学习率早停控件而中断，最终检查严格限定学习率板块，不据此宣称其他面板无重复绑定。
+- Completion/limits: 实际修改仅批准的四个文件，无新增源码、测试函数或依赖；其他已有工作保留，无提交/推送。未操作真实浏览器或启动训练，不宣称训练验收。下一步为重启已有 Web 服务并刷新页面加载后端/前端变更；本轮不停止用户现有服务。

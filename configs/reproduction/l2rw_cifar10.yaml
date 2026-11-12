@@ -1,17 +1,36 @@
-schema_version: 1
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / D
+# Source: artifact/full-test-best-20261106/cifar10/l2rw/config.json
+# Source SHA256: 2b13db17c0250bc0fd7a9561040c48bf9190f38a5eac248e8e58b79ee7547433
+# Historical code: toolbox-545f1e0e27af2cca
+# Recovery: source_available_effective_overrides_preserved
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   meta.web_parameter_record.effective_reproduction_status
+#   meta.web_parameter_record.formal_recipe
+#   meta.web_parameter_record.modified_from_paper
+#   meta.web_parameter_record.paper_change_acknowledged
+#   meta.web_parameter_record.paper_parameter_changes
+#   meta.web_parameter_record.parameter_metadata_registry_version
+#   output_root
 kind: experiment
+schema_version: 1
 method: l2rw
 execution:
   runner: l2rw
 seed: 1234
-output_root: artifacts/reproductions/l2rw-cifar10-uniform40
+output_root: artifacts/reproductions/l2rw-cifar10-best
 data:
   name: cifar10
   num_val: 5000
-  num_clean: 100
+  num_clean: 300
   augment: true
   input_seed: 1234
   seed: 1234
+  validation_split:
+    source: training_pool
 noise:
   rate: 0.4
   seed: 1234
@@ -46,3 +65,4 @@ trainer:
   epochs: 180
   max_steps: 80000
   device: auto
+  early_stopping: false

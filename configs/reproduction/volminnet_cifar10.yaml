@@ -1,23 +1,47 @@
-schema_version: 1
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / D
+# Source: artifact/full-test-best-20261106/cifar10/volminnet/config.json
+# Source SHA256: 03b38d1494717e9bf8b9f201bb53343aae80d368efe64ae625b325a0614906b7
+# Historical code: toolbox-7b452d246c7b29c6
+# Recovery: source_available_effective_overrides_preserved
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   meta.web_parameter_record.effective_reproduction_status
+#   meta.web_parameter_record.formal_recipe
+#   meta.web_parameter_record.modified_from_paper
+#   meta.web_parameter_record.paper_change_acknowledged
+#   meta.web_parameter_record.paper_parameter_changes
+#   meta.web_parameter_record.parameter_metadata_registry_version
+#   output_root
 kind: experiment
+schema_version: 1
 method: volminnet
 execution:
   runner: volminnet
 configuration_fidelity: paper_protocol
 seed: 1
-output_root: artifacts/reproductions/volminnet-cifar10-sym20
+output_root: artifacts/reproductions/volminnet-cifar10-best
 data:
   name: cifar10
   validation_size: 5000
   validation_split:
     strategy: stratified
     rng: default_rng
+    source: training_pool
   augment: true
   preprocessing: standard
-  # Author transformer.py; the paper does not specify normalization constants.
   normalization:
-    mean: [0.4914, 0.4822, 0.4465]
-    std: [0.2023, 0.1994, 0.2010]
+    mean:
+    - 0.4914
+    - 0.4822
+    - 0.4465
+    std:
+    - 0.2023
+    - 0.1994
+    - 0.201
+  num_classes: 10
 noise:
   name: symmetric
   rate: 0.2
@@ -31,7 +55,6 @@ volminnet:
   model:
     name: resnet18
     base_width: 64
-    # Author models.py: unpadded stem and PyTorch default initialization.
     stem_padding: 0
     initialization: torch_default
   transition:
@@ -59,11 +82,15 @@ volminnet:
   scheduler:
     classifier:
       name: multistep
-      milestones: [30, 60]
+      milestones:
+      - 30
+      - 60
       gamma: 0.1
     transition:
       name: multistep
-      milestones: [30, 60]
+      milestones:
+      - 30
+      - 60
       gamma: 0.1
   checkpoint_selection:
     split: noisy_validation
@@ -76,3 +103,4 @@ loader:
 trainer:
   epochs: 150
   device: auto
+  early_stopping: false

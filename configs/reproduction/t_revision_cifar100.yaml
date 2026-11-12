@@ -1,0 +1,111 @@
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / E
+# Source: artifact/full-test-best-20261106/cifar100/t-revision/config.json
+# Source SHA256: f7703b21a5f3d6107fa442c579e16007d023350e2f392ee207a0c2101bbdd748
+# Historical code: toolbox-best-f1d47e4e48e46f42
+# Recovery: original_input_content_recovered
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   output_root
+kind: experiment
+schema_version: 1
+method: t_revision
+execution:
+  runner: t_revision
+configuration_fidelity: paper_oriented
+seed: 1
+output_root: artifacts/reproductions/t-revision-cifar100-best
+data:
+  name: cifar100
+  validation_size: 5000
+  preprocessing: standard
+  augment: true
+  normalization:
+    mean:
+    - 0.5071
+    - 0.4867
+    - 0.4408
+    std:
+    - 0.2675
+    - 0.2565
+    - 0.2761
+  validation_split:
+    source: training_pool
+  max_train_samples: null
+  max_test_samples: null
+  max_validation_samples: null
+  num_classes: 100
+noise:
+  name: symmetric
+  rate: 0.2
+  seed: 1
+  sampling: per_class
+  rng: default_rng
+  validation_targets: noisy
+loader:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+trainer:
+  device: cuda
+t_revision:
+  objective: reweight
+  fidelity: paper_experiment_raw_additive
+  stage1:
+    epochs: 20
+    model:
+      name: resnet34
+      base_width: 64
+      stem_padding: 0
+      initialization: torch_default
+    optimizer:
+      name: sgd
+      lr: 0.01
+      momentum: 0.0
+      weight_decay: 0.0001
+    scheduler:
+      name: none
+    best_metric: noisy_validation_accuracy
+    early_stopping: false
+  transition_initialization:
+    method: pseudo_anchor_max_posterior
+    posterior_split: train
+    extraction_augmentation: false
+    tie_break: stable_sample_index
+  classifier_initialization:
+    epochs: 200
+    optimizer:
+      name: sgd
+      lr: 0.01
+      momentum: 0.9
+      weight_decay: 0.0001
+    scheduler:
+      name: multistep
+      milestones:
+      - 40
+      - 80
+      gamma: 0.1
+    start_from: stage1_best
+    best_metric: revised_noisy_validation_accuracy
+    early_stopping: false
+  revision:
+    epochs: 200
+    transition_mode: paper_experiment_raw_additive
+    delta_initialization: zeros
+    start_from: classifier_initialization_best
+    optimizer:
+      name: adam
+      lr: 5.0e-07
+      weight_decay: 0.0001
+    scheduler:
+      name: none
+    ratio:
+      detach: false
+      clamp: none
+      denominator_floor: 1.0e-12
+    best_metric: revised_noisy_validation_accuracy
+    early_stopping: false
+evaluation:
+  selection_split: validation

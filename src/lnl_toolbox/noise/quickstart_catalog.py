@@ -27,7 +27,7 @@ _SPECS: tuple[QuickStartNoiseSpec, ...] = (
     QuickStartNoiseSpec("clean", "保持干净", "直接使用数据集提供的训练标签。", None, True, False, False, "clean"),
     QuickStartNoiseSpec("symmetric", "对称噪声", "按给定比例随机翻转到其他类别。", "symmetric", True, True, True, "synthetic"),
     QuickStartNoiseSpec("pairflip", "Pair-flip 噪声", "按类别顺序将标签翻转到下一个类别。", "pairflip", True, True, True, "synthetic"),
-    QuickStartNoiseSpec("class_conditional", "类条件噪声", "使用类别转移矩阵指定每类标签的翻转概率；噪声率记录本次实验设置的翻转强度。", "class_conditional", True, True, True, "synthetic"),
+    QuickStartNoiseSpec("class_conditional", "类条件噪声", "使用类别转移矩阵指定每类标签变为各类别的概率。", "class_conditional", True, False, True, "synthetic"),
     QuickStartNoiseSpec("instance_dependent", "实例依赖噪声", "噪声概率由每个样本的输入特征决定。", "instance_dependent", False, True, True, "synthetic"),
     QuickStartNoiseSpec("pdl", "PDL 实例依赖噪声", "使用 PDL 论文规定的实例依赖噪声生成流程。", "pdl", True, True, True, "synthetic"),
     QuickStartNoiseSpec("external_torch", "外部标签文件", "读取与当前训练样本顺序一致的干净标签和噪声标签文件。", "external_torch", True, False, False, "external"),

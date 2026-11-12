@@ -371,7 +371,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_source(args: argparse.Namespace) -> tuple[dict[str, Any], Path, RecipeSpec | None, Path]:
+def _load_source(
+    args: argparse.Namespace, *, check_parameters: bool = True,
+) -> tuple[dict[str, Any], Path, RecipeSpec | None, Path]:
     global DEFAULT_DATA_SERVICE
     if DEFAULT_DATA_SERVICE is None:
         from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE as DEFAULT_DATA_SERVICE
@@ -390,13 +392,13 @@ def _load_source(args: argparse.Namespace) -> tuple[dict[str, Any], Path, Recipe
     if recipe_name:
         recipe = recipe_by_id(recipe_name, root)
         config_path = recipe.config_path
-        config = load_recipe_config(recipe, check_parameters=True)
+        config = load_recipe_config(recipe, check_parameters=check_parameters)
     elif config_arg is not None:
         recipe = None
         config_path = config_arg.expanduser().resolve()
         if not config_path.is_file():
             raise FileNotFoundError(f"configuration does not exist: {config_path}")
-        config = load_yaml(config_path, check_parameters=True)
+        config = load_yaml(config_path, check_parameters=check_parameters)
     else:
         raise ValueError("provide a recipe name or YAML path")
     project = find_project_root(None if recipe is not None else config_path, root)
@@ -729,16 +731,13 @@ def _run(args: argparse.Namespace) -> int:
         raise ValueError("--review requires --dry-run")
     if review:
         print("Quick Start phase: validating", flush=True)
-    config, path, recipe, project = _load_source(args)
+    config, path, recipe, project = _load_source(args, check_parameters=False)
     config = apply_override_assignments(config, args.overrides)
     if args.epochs is not None:
         apply_epoch_override(config, args.epochs)
     if args.no_check_data and not args.dry_run:
         raise ValueError("--no-check-data is only valid together with --dry-run")
     service = ExperimentService()
-    if review:
-        service.preflight(config, check_data=False)
-        print("Quick Start phase: rehearsing", flush=True)
     service.preflight(config, check_data=_should_check_data(args))
     if args.dry_run:
         if args.output_dir is not None:

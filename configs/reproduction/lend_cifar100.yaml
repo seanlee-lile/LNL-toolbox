@@ -1,0 +1,93 @@
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / E
+# Source: artifact/full-test-best-20261106/cifar100/lend/config.json
+# Source SHA256: a0c52cfae6ba12042955e46c34c7acbf4b35b45b03a40504170375374dc64175
+# Historical code: toolbox-best-91d2e7ea94d22f0c
+# Recovery: source_available_effective_overrides_preserved
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   output_root
+kind: experiment
+schema_version: 1
+method: lend
+execution:
+  runner: lend
+configuration_fidelity: paper_oriented
+seed: 1
+output_root: artifacts/reproductions/lend-cifar100-best
+data:
+  name: cifar100
+  validation_size: 0
+  validation_split:
+    strategy: stratified
+    rng: default_rng
+  augment: true
+  preprocessing: standard
+  normalization:
+    mean:
+    - 0.5071
+    - 0.4867
+    - 0.4408
+    std:
+    - 0.2675
+    - 0.2565
+    - 0.2761
+  max_train_samples: null
+  max_test_samples: null
+  max_validation_samples: null
+  num_classes: 100
+noise:
+  name: symmetric
+  rate: 0.4
+  seed: 1
+  sampling: per_class
+  rng: default_rng
+  validation_targets: none
+loader:
+  batch_size: 256
+  num_workers: 4
+  pin_memory: true
+  drop_last: false
+model:
+  name: resnet18
+  base_width: 64
+loss:
+  name: ce
+optimizer:
+  name: sgd
+  lr: 0.05
+  momentum: 0.9
+  weight_decay: 0.0005
+scheduler:
+  name: multistep
+  milestones:
+  - 100
+  gamma: 0.1
+lend:
+  graph:
+    k: 8
+    gamma: 1.0
+    metric: inner_product
+    normalize_features: true
+  dilution:
+    alpha: 0.99
+    policy: fixed_steps
+    steps: 10
+    tolerance: 1.0e-05
+    max_steps: 10000
+  history:
+    beta: 0.9
+    first_observation: current
+  selection:
+    rule: noisy_equals_diluted_argmax
+    reduction: batch_mean
+    empty_batch: zero_gradient
+  training:
+    epochs: 200
+evaluation:
+  selection_split: none
+  primary: accuracy
+trainer:
+  device: cuda

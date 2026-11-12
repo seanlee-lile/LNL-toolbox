@@ -1430,7 +1430,7 @@ class _lend_cli_LENDCliTest(unittest.TestCase):
     def setUpClass(cls):
         cls.path = _lend_cli_ROOT / 'configs/smoke/cifar10_lend_smoke.yaml'
         cls.config = yaml.safe_load(cls.path.read_text(encoding='utf-8'))
-        cls.reproduction_path = _lend_cli_ROOT / 'configs/reproduction/lend_cifar10.yaml'
+        cls.reproduction_path = _lend_cli_ROOT / 'configs/reproduction/lend_default.yaml'
         cls.reproduction_config = yaml.safe_load(cls.reproduction_path.read_text(encoding='utf-8'))
 
     def test_registry_recipe_paper_and_preflight(self):

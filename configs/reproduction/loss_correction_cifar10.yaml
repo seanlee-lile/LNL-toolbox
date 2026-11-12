@@ -1,22 +1,60 @@
-schema_version: 1
-kind: experiment
-seed: 1
-output_root: artifacts/reproductions
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / D
+# Source: artifact/full-test-best-20261106/cifar10/loss-correction/config.json
+# Source SHA256: b6c2f92d3153b9d7ff4441637065e158d2fa8e5ff8996bfab1807ba932da30fb
+# Historical code: toolbox-fixed-77eb7825b232aa7d
+# Recovery: partial_reconstruction_from_effective_config
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   local_dataset.adapter
+#   local_dataset.alias
+#   local_dataset.source_signature
+#   meta.diagnostic_control.source_run
+#   meta.diagnostic_control.variant
+#   meta.diagnostic_control.warning
+#   meta.web_parameter_record.effective_reproduction_status
+#   meta.web_parameter_record.formal_recipe
+#   meta.web_parameter_record.modified_from_paper
+#   meta.web_parameter_record.paper_change_acknowledged
+#   meta.web_parameter_record.paper_parameter_changes
+#   meta.web_parameter_record.parameter_metadata_registry_version
+#   noise.type
+#   output_root
 data:
-  name: cifar10
-  validation_size: 5000
+  augment: true
+  max_test_samples: null
   max_train_samples: null
   max_validation_samples: null
-  max_test_samples: null
-  augment: true
+  name: cifar10
   preprocessing: gce2018
+  validation_size: 5000
+  validation_split:
+    source: training_pool
+evaluation:
+  corrected_loss: true
+  selection_metric: loss
+  selection_split: validation
+execution:
+  runner: supervised
+kind: experiment
+loader:
+  batch_size: 128
+  num_workers: 0
+  pin_memory: true
+loss:
+  name: ce
+model:
+  base_width: 16
+  name: resnet32
+  variant: loss_correction
 noise:
+  manifest_filename: noise_manifest.npz
   name: class_conditional
   rate: 0.4
-  seed: 1
   rng: numpy_legacy
-  validation_targets: noisy
-  manifest_filename: noise_manifest.npz
+  seed: 1
   transition_matrix:
   - - 1.0
     - 0.0
@@ -118,14 +156,22 @@ noise:
     - 0.0
     - 0.0
     - 0.6
-loss:
-  name: ce
+  validation_targets: noisy
+optimizer:
+  lr: 0.1
+  momentum: 0.9
+  name: sgd
+  nesterov: false
+  weight_decay: 0.0001
+output_root: artifacts/reproductions/loss-correction-cifar10-best
+parameter_update:
+  name: standard
 pipeline:
   name: standard_noisy_erm
   pretraining_protocol: loss_correction
-  warmup_epochs: 0
+  risk_corrector:
+    name: forward
   transition_estimator:
-    name: known
     matrix:
     - - 1.0
       - 0.0
@@ -227,38 +273,23 @@ pipeline:
       - 0.0
       - 0.0
       - 0.6
-  risk_corrector:
-    name: forward
-loader:
-  batch_size: 128
-  num_workers: 0
-  pin_memory: true
-model:
-  name: resnet32
-  variant: loss_correction
-  base_width: 16
-optimizer:
-  name: sgd
-  lr: 0.01
-  momentum: 0.9
-  nesterov: false
-  weight_decay: 0.0001
+    name: known
+  warmup_epochs: 0
 scheduler:
-  name: multistep
+  gamma: 0.1
   milestones:
   - 40
   - 80
-  gamma: 0.1
-evaluation:
-  selection_split: validation
-  selection_metric: loss
-  corrected_loss: true
+  name: multistep
+schema_version: 1
+seed: 1
+selector:
+  name: all
 trainer:
+  device: cuda
+  early_stopping: false
   epochs: 120
-  device: auto
   progress:
+    curves: true
     enabled: true
     update_interval: 20
-    curves: true
-execution:
-  runner: supervised

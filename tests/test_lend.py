@@ -133,7 +133,7 @@ class _lend_algorithm_LENDAlgorithmTest(unittest.TestCase):
         config['lend']['graph']['k'] = 8
         from pathlib import Path
         import yaml
-        formal = yaml.safe_load((Path(__file__).resolve().parents[1] / 'configs/reproduction/lend_cifar10.yaml').read_text(encoding='utf-8'))
+        formal = yaml.safe_load((Path(__file__).resolve().parents[1] / 'configs/reproduction/lend_default.yaml').read_text(encoding='utf-8'))
         config['lend']['dilution'] = formal['lend']['dilution']
         algorithm = LENDAlgorithm(model=model, optimizer=optimizer, loss=nn.CrossEntropyLoss(reduction='none'), device=torch.device('cpu'), method_config=LENDConfig.from_mapping(config), canonical_global_indices=torch.arange(256), num_classes=10)
         algorithm.setup(ExperimentContext(__import__('pathlib').Path('.')))

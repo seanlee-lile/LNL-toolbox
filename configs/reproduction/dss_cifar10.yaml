@@ -1,17 +1,26 @@
-schema_version: 1
-kind: experiment
-seed: 4
-output_root: artifacts/reproductions
+# Historical best input; not the paper-default recipe or a new accuracy claim.
+# Spreadsheet: outputs/论文参数五方对照_默认栏补全.xlsx / 逐项配置 / D
+# Source: artifact/full-test-best-20261106/cifar10/dss/config.json
+# Source SHA256: ff85b4c57cd3d403ea838819ef1502f9b7b49b82908d4331ef77a60520f57bbf
+# Historical code: toolbox-ef84a6434a114f78
+# Recovery: source_available_effective_overrides_preserved
+# Current code is not automatically replaced by the historical source snapshot.
+# Data: register matching data and pass --data <alias>; original absolute root removed.
+# Changed fields (portable bindings / records / driver recovery):
+#   data.root
+#   meta.web_parameter_record.effective_reproduction_status
+#   meta.web_parameter_record.formal_recipe
+#   meta.web_parameter_record.modified_from_paper
+#   meta.web_parameter_record.paper_change_acknowledged
+#   meta.web_parameter_record.paper_parameter_changes
+#   meta.web_parameter_record.parameter_metadata_registry_version
+#   output_root
 data:
-  name: cifar10
-  validation_size: 5000
+  augment: true
+  max_test_samples: null
   max_train_samples: null
   max_validation_samples: null
-  max_test_samples: null
-  augment: true
-  validation_split:
-    strategy: classwise_legacy
-    rng: numpy_legacy
+  name: cifar10
   normalization:
     mean:
     - 0.4914
@@ -21,63 +30,75 @@ data:
     - 0.2023
     - 0.1994
     - 0.201
-noise:
-  name: symmetric
-  rate: 0.5
-  seed: 4
-  sampling: transition
-  rng: numpy_legacy
-  validation_targets: noisy
-  manifest_filename: noise_manifest.npz
+  validation_size: 5000
+  validation_split:
+    rng: numpy_legacy
+    source: training_pool
+    strategy: classwise_legacy
+early_stopping:
+  min_delta: 0.0
+  mode: max
+  monitor: selection_accuracy
+  patience: 2000
+evaluation:
+  selection_split: validation
+execution:
+  runner: supervised
+kind: experiment
+loader:
+  batch_size: 128
+  num_workers: 8
+  pin_memory: true
 loss:
   name: ce
-selector:
-  name: all
+model:
+  base_width: 64
+  name: preact_resnet18
+  variant: dss_author
+noise:
+  manifest_filename: noise_manifest.npz
+  name: symmetric
+  rate: 0.5
+  rng: numpy_legacy
+  sampling: transition
+  seed: 4
+  validation_targets: noisy
+optimizer:
+  lr: 0.02
+  momentum: 0.9
+  name: sgd
+  nesterov: false
+  weight_decay: 0.001
+output_root: artifacts/reproductions/dss-cifar10-best
 parameter_update:
   name: standard
 pipeline:
   name: standard_noisy_erm
   objective_consumer:
-    name: dss
-    num_samples: 50000
-    num_classes: 10
-    warmup_epochs: 30
     alpha: 0.1
-    prior_decay: 0.99
-    mda: true
     ccs: true
-loader:
-  batch_size: 128
-  num_workers: 8
-  pin_memory: true
-model:
-  name: preact_resnet18
-  variant: dss_author
-  base_width: 64
-optimizer:
-  name: sgd
-  lr: 0.02
-  momentum: 0.9
-  nesterov: false
-  weight_decay: 0.001
+    mda: true
+    name: dss
+    num_classes: 10
+    num_samples: 50000
+    prior_decay: 0.99
+    warmup_early_stopping: false
+    warmup_epochs: 30
+    total_epochs: 150
 scheduler:
-  name: multistep
+  gamma: 0.1
   milestones:
   - 80
-  gamma: 0.1
-early_stopping:
-  monitor: selection_accuracy
-  mode: max
-  patience: 2000
-  min_delta: 0.0
+  name: multistep
+schema_version: 1
+seed: 4
+selector:
+  name: all
 trainer:
-  epochs: 150
   device: auto
+  early_stopping: false
+  epochs: 150
   progress:
+    curves: true
     enabled: true
     update_interval: 20
-    curves: true
-evaluation:
-  selection_split: validation
-execution:
-  runner: supervised
