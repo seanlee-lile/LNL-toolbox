@@ -381,6 +381,34 @@ class QuickStartService:
     def _plan_id(dataset_alias: str, paper_id: str) -> str:
         return f"{dataset_alias}-{paper_id}-{uuid.uuid4().hex[:10]}"
 
+    def _external_label_facts(self, noise_selection, report) -> dict[str, object] | None:
+        """Validate a chosen external label file before any plan is produced."""
+
+        if str(getattr(noise_selection, "key", "")) != "external_torch":
+            return None
+        from lnl_toolbox.noise.quickstart_catalog import inspect_external_label_file
+
+        problems: list[str] = []
+        try:
+            facts = inspect_external_label_file(noise_selection.path or "")
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            return {"compatible": False, "problems": (str(exc),)}
+        counts = dict(getattr(report.profile, "sample_counts_by_split", {}) or {})
+        expected = training_pool_size(str(report.adapter), counts)
+        if expected is not None and int(facts["rows"]) != int(expected):
+            problems.append(
+                f"外部标签文件有 {facts['rows']} 行，而当前训练池是 {expected} 个样本；"
+                "请确认文件与所选数据集/子集一致"
+            )
+        facts["expected_rows"] = expected
+        facts["compatible"] = not problems
+        facts["problems"] = tuple(problems)
+        facts["summary"] = (
+            f"外部标签：{facts['rows']} 行，实测噪声率 {float(facts['measured_noise_rate']):.3f}，"
+            f"路径 {facts['path']}"
+        )
+        return facts
+
     def build_plan(
         self,
         *,
@@ -400,6 +428,15 @@ class QuickStartService:
             raise ValueError("所选论文没有对应的已登记 YAML 配置。")
         recipe = recipe_by_id(selected.recipe_id)
         config = load_recipe_config(recipe)
+        label_file = self._external_label_facts(noise_selection, self._accepted_report(dataset_alias))
+        if label_file is not None and not label_file["compatible"]:
+            return QuickStartPlan(
+                self._plan_id(dataset_alias, paper_id), dataset_alias, paper_id,
+                selected.acronym, noise_selection, "paper_reproduction",
+                selected.recipe_id, None, "unsupported", (), None, None,
+                summary="所选外部标签文件与当前数据集不匹配。",
+                details=tuple(label_file["problems"]),
+            )
         inputs = dict(user_inputs or {})
         remaining = list(selected.required_user_inputs)
         for required in tuple(remaining):
@@ -423,7 +460,8 @@ class QuickStartService:
             tuple(remaining), command, dry_run,
             summary="已读取所选论文的 YAML；完整数据与依赖检查在最后一步执行。",
             details=tuple(f"训练轮次：{item}" for item in _epoch_details(config))
-            + (f"配置文件：{recipe.config_path}", f"输出目录：{output_dir}"),
+            + (f"配置文件：{recipe.config_path}", f"输出目录：{output_dir}")
+            + (() if label_file is None else (str(label_file["summary"]),)),
         )
 
 

@@ -7,12 +7,11 @@
 # Current code is not automatically replaced by the historical source snapshot.
 # Data: register matching data and pass --data <alias>; original absolute root removed.
 # Changed fields (portable bindings / records / driver recovery):
-#   cwd.transition_artifact
+#   cwd.transition_stage
 #   data.root
 #   noise.type
 #   output_root
-# Required external resources (not downloaded or generated):
-#   cwd.transition_artifact: data/cwd/cifar100-best-transition.npz
+# All inputs are derived from the configuration and its seed.
 kind: experiment
 schema_version: 1
 seed: 1
@@ -64,7 +63,36 @@ trainer:
 cwd:
   variant: multiclass
   dynamic_centroid: true
-  transition_artifact: data/cwd/cifar100-best-transition.npz
+  transition_stage:
+    epochs: 80
+    lambda_volume: 0.0001
+    validation_size: 5000
+    selection: noisy_validation_loss
+    require_valid_prior: true
+    model:
+      name: resnet34
+      base_width: 64
+      stem_padding: 0
+      initialization: torch_default
+    optimizer:
+      classifier:
+        name: sgd
+        lr: 0.01
+        momentum: 0.9
+        weight_decay: 0.0001
+      transition:
+        name: adam
+        lr: 0.001
+        beta1: 0.9
+        beta2: 0.999
+        weight_decay: 0.0
+    scheduler:
+      classifier:
+        name: multistep
+        milestones: [30, 60]
+        gamma: 0.1
+      transition:
+        name: none
 execution:
   runner: cwd
 evaluation:

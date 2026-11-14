@@ -225,9 +225,9 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
         self.assertTrue(cal.supports_native_noisy_labels)
         l2rw = registry.get('l2rw').requirements({'trusted_validation': {'source': 'official_generated'}})
         self.assertTrue(l2rw.requires_clean_train_labels)
-        audited = registry.get('l2rw').requirements({'trusted_validation': {'source': 'audited_manifest'}})
+        audited = registry.get('l2rw').requirements({'trusted_validation': {'source': 'official_generated'}})
         self.assertFalse(audited.requires_clean_train_labels)
-        self.assertEqual({item.code for item in audited.required_config_inputs}, {'requires_trusted_validation', 'requires_trusted_manifest'})
+        self.assertEqual({item.code for item in audited.required_config_inputs}, {'requires_trusted_validation'})
         noisy_only = ('coteaching', 'dual_t', 'upm', 'dividemix', 'cnlcu', 't_revision')
         for runner_name in noisy_only:
             with self.subTest(runner=runner_name):
@@ -312,7 +312,7 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
                 'risk': {'name': 'natarajan_unbiased'},
             }),
             registry.get('l2rw').requirements({
-                'trusted_validation': {'source': 'audited_manifest'},
+                'trusted_validation': {'source': 'official_generated'},
             }),
             registry.get('cal').requirements({}),
             registry.get('mc_ldce').requirements({
@@ -329,7 +329,6 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
             'requires_mentor_artifact',
             'requires_binary_noise_prior',
             'requires_trusted_validation',
-            'requires_trusted_manifest',
             'requires_external_noise_labels',
             'requires_transition_source',
         }
@@ -584,7 +583,7 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
 
 class _compatibility_ExperimentCompatibilityServiceTest(unittest.TestCase):
 
-    def test_mentor_artifact_is_reported_as_an_implementation_limit(self) -> None:
+    def test_mentor_artifact_is_optional_when_derived_from_the_seed(self) -> None:
         capabilities = resolve_dataset_capabilities(
             _compatibility__profile(clean=KnowledgeState.AVAILABLE)
         )
@@ -597,12 +596,26 @@ class _compatibility_ExperimentCompatibilityServiceTest(unittest.TestCase):
             'pipeline': {'weight_provider': {'name': 'mentornet'}},
         }
         result = service.resolve_method_compatibility(config, config)
+        self.assertNotIn(
+            'requires_mentor_artifact',
+            {item.code for item in result.reasons},
+            'a seed-derived teacher must not require a pre-built artifact',
+        )
+
+        pinned_config = {
+            'execution': {'runner': 'supervised'},
+            'data': {'name': 'fixture'},
+            'pipeline': {'weight_provider': {
+                'name': 'mentornet', 'derive_from_seed': False,
+            }},
+        }
+        pinned = service.resolve_method_compatibility(pinned_config, pinned_config)
         reason = next(
-            item for item in result.reasons
+            item for item in pinned.reasons
             if item.code == 'requires_mentor_artifact'
         )
         self.assertEqual(reason.origin, 'implemented_variant_limit')
-        serialized = result.to_dict()
+        serialized = pinned.to_dict()
         serialized_reason = next(
             item for item in serialized['reasons']
             if item['code'] == 'requires_mentor_artifact'

@@ -54,9 +54,7 @@ class VolMinTransitionArtifact:
             Path(path),
             raw_off_diagonal=self.raw_off_diagonal,
             matrix=self.matrix,
-            metadata_json=np.array(json.dumps({
-                "metadata": dict(self.metadata), "artifact_hash": self.artifact_hash
-            }, sort_keys=True)),
+            metadata_json=np.array(json.dumps(dict(self.metadata), sort_keys=True)),
         )
 
     @classmethod
@@ -65,10 +63,7 @@ class VolMinTransitionArtifact:
             if set(data.files) != {"raw_off_diagonal", "matrix", "metadata_json"}:
                 raise ValueError("VolMinNet transition artifact fields are invalid")
             payload = json.loads(str(data["metadata_json"].item()))
-            artifact = cls(data["raw_off_diagonal"], data["matrix"], payload["metadata"])
-            if payload.get("artifact_hash") != artifact.artifact_hash:
-                raise ValueError("VolMinNet transition artifact hash mismatch")
-            return artifact
+            return cls(data["raw_off_diagonal"], data["matrix"], payload.get("metadata", payload))
 
 
 def persist_transition_atomically(

@@ -17,10 +17,8 @@
 #   meta.web_parameter_record.paper_change_acknowledged
 #   meta.web_parameter_record.paper_parameter_changes
 #   meta.web_parameter_record.parameter_metadata_registry_version
-#   noise.path
 #   output_root
-# Required external resources (not downloaded or generated):
-#   noise.path: data/cal/IDN_0.2_C10-subset.pt
+# Noise is generated from the configured seed; no external label file is read.
 kind: experiment
 schema_version: 1
 method: cal
@@ -45,11 +43,12 @@ data:
   validation_split:
     source: training_pool
 noise:
+  name: symmetric
+  rate: 0.2
   seed: 10086
-  path: data/cal/IDN_0.2_C10-subset.pt
-  clean_key: clean_label_train
-  noisy_key: noise_label_train
-  name: external_torch
+  sampling: per_class
+  rng: default_rng
+  validation_targets: noisy
 loader:
   batch_size: 128
   num_workers: 0

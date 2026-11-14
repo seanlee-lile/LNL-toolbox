@@ -45,35 +45,12 @@ def _artifact_digest(
     return digest.hexdigest()
 
 
-def _legacy_artifact_digest(
-    architecture: Mapping[str, Any],
-    feature_schema: Mapping[str, Any],
-    source: Mapping[str, Any],
-    model_state: Mapping[str, Any],
-) -> str:
-    """Read artifacts written before the portable content hash was introduced."""
-    import io
-
-    buffer = io.BytesIO()
-    torch.save(
-        {
-            "architecture": dict(architecture),
-            "feature_schema": dict(feature_schema),
-            "source": dict(source),
-            "model_state": dict(model_state),
-        },
-        buffer,
-    )
-    return hashlib.sha256(buffer.getvalue()).hexdigest()
-
-
 @dataclass(frozen=True)
 class MentorArtifact:
     architecture: Mapping[str, Any]
     feature_schema: Mapping[str, Any]
     source: Mapping[str, Any]
     model_state: Mapping[str, Any]
-    artifact_hash: str
 
     @classmethod
     def create(
@@ -84,15 +61,11 @@ class MentorArtifact:
         source: Mapping[str, Any],
         model_state: Mapping[str, Any],
     ) -> "MentorArtifact":
-        digest = _artifact_digest(
-            architecture, feature_schema, source, model_state
-        )
         return cls(
             dict(architecture),
             dict(feature_schema),
             dict(source),
             dict(model_state),
-            digest,
         )
 
     def save(self, path: str | Path) -> None:
@@ -104,7 +77,6 @@ class MentorArtifact:
                 "feature_schema": dict(self.feature_schema),
                 "source": dict(self.source),
                 "model_state": dict(self.model_state),
-                "artifact_hash": self.artifact_hash,
             },
             destination,
         )
@@ -118,9 +90,4 @@ class MentorArtifact:
             source=payload["source"],
             model_state=payload["model_state"],
         )
-        stored_hash = payload.get("artifact_hash")
-        if stored_hash != artifact.artifact_hash and stored_hash != _legacy_artifact_digest(
-            artifact.architecture, artifact.feature_schema, artifact.source, artifact.model_state
-        ):
-            raise ValueError("MentorArtifact hash mismatch")
         return artifact

@@ -513,6 +513,16 @@ def mentornet_preparation_status(
     ):
         return None
     root = (project_root or find_project_root()).resolve()
+    if not str(provider.get("artifact_path") or "").strip() and bool(provider.get("derive_from_seed", True)):
+        return {
+            "status": "derived_from_seed",
+            "artifact_path": "(derived from seed at run start)",
+            "artifact_ready": True,
+            "feature_ready": False,
+            "feature_error": None,
+            "artifact_error": None,
+            "commands": {},
+        }
     artifact = Path(str(provider.get("artifact_path", ""))).expanduser()
     artifact = artifact if artifact.is_absolute() else (root / artifact).resolve()
     artifact_ready = False
@@ -620,6 +630,20 @@ def _validate_dedicated_runner(config: Mapping[str, Any], runner: str) -> None:
         # use the paper's explicit Moore-Penrose default above.
         if "ridge" in cwd and float(cwd.get("ridge", 0.0)) < 0.0:
             raise ValueError("cwd.ridge must be non-negative")
+        if str(cwd.get("variant", "")).lower() == "multiclass":
+            if "transition_artifact" in cwd:
+                raise ValueError("CWD no longer accepts an external transition_artifact")
+            stage = _require_mapping(cwd, "transition_stage")
+            if type(stage.get("epochs")) is not int or stage["epochs"] <= 0:
+                raise ValueError("cwd.transition_stage.epochs must be positive")
+            coefficient = float(stage.get("lambda_volume", 0.0))
+            if not math.isfinite(coefficient) or coefficient <= 0.0:
+                raise ValueError("cwd.transition_stage.lambda_volume must be finite and positive")
+            _require_mapping(stage, "model")
+            for section in ("optimizer", "scheduler"):
+                values = _require_mapping(stage, section)
+                for owner in ("classifier", "transition"):
+                    _require_mapping(values, owner)
         if str(cwd.get("variant", "")).lower() != "multiclass":
             data = _require_mapping(config, "data")
             folds = int(data.get("folds", 0))
@@ -1070,7 +1094,7 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
         if isinstance(provider, Mapping) and str(provider.get("name", "")).lower() == "mentornet":
             status = mentornet_preparation_status(config)
             assert status is not None
-            if not status["artifact_ready"]:
+            if not status["artifact_ready"] and not bool(provider.get("derive_from_seed", True)):
                 guidance = ""
                 commands = status["commands"]
                 if commands:

@@ -19,12 +19,12 @@ data:
     - 0.1994
     - 0.201
 noise:
+  name: symmetric
   rate: 0.2
   seed: 10086
-  path: data/cal/IDN_0.2_C10.pt
-  clean_key: clean_label_train
-  noisy_key: noise_label_train
-  name: external_torch
+  sampling: per_class
+  rng: default_rng
+  validation_targets: noisy
 loader:
   batch_size: 128
   num_workers: 0

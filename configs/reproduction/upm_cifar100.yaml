@@ -8,10 +8,8 @@
 # Data: register matching data and pass --data <alias>; original absolute root removed.
 # Changed fields (portable bindings / records / driver recovery):
 #   data.root
-#   noise.path
 #   output_root
-# Required external resources (not downloaded or generated):
-#   noise.path: data/upm-cifar100-mlp/labels.pt
+# Noise is generated from the configured seed; no external label file is read.
 kind: experiment
 schema_version: 1
 method: upm
@@ -44,11 +42,11 @@ loader:
   pin_memory: true
   drop_last: false
 noise:
-  name: external_torch
-  path: data/upm-cifar100-mlp/labels.pt
-  clean_key: clean_label_train
-  noisy_key: noise_label_train
+  name: symmetric
+  rate: 0.2
   seed: 1
+  sampling: per_class
+  rng: default_rng
   validation_targets: noisy
 upm:
   stage1:

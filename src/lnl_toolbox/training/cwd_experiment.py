@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime
+import hashlib
 import json
 from pathlib import Path
 import time
@@ -31,7 +32,9 @@ from lnl_toolbox.training.checkpoint import (
 )
 from lnl_toolbox.training.progress import standardize_epoch_row, write_training_curves_svg
 from lnl_toolbox.training.data_service import prepare_experiment_data
-from lnl_toolbox.training.experiment import build_scheduler
+from lnl_toolbox.training.experiment import (
+    bind_model_input, build_model, build_optimizer, build_scheduler,
+)
 from lnl_toolbox.training.snapshots import collect_feature_snapshot
 
 
@@ -61,6 +64,8 @@ def _build_model(config: Mapping[str, Any]):
             outputs,
             int(config.get("base_width", 64)),
             bias=bool(config.get("bias", True)),
+            stem_padding=int(config.get("stem_padding", 1)),
+            initialization=str(config.get("initialization", "kaiming")),
         )
         probability = float(config.get("feature_dropout", 0.0))
         if not 0.0 <= probability < 1.0:
@@ -150,6 +155,216 @@ def _train_epoch(model, optimizer, loader, objective, device) -> tuple[float, fl
     return loss_sum / samples, correct / samples
 
 
+def _estimate_cwd_transition(prepared, config, run_dir, device, *, publish_last=True):
+    """Own the VolMin algorithm stage; never load another experiment's result."""
+    from lnl_toolbox.algorithms.volminnet import VolMinNetAlgorithm, VolMinTransition
+
+    stage = config["cwd"]["transition_stage"]
+    run_dir.mkdir(parents=True, exist_ok=True)
+    epochs = int(stage["epochs"])
+    validation_size = int(stage.get("validation_size", 0))
+    selection = str(stage.get("selection", "final"))
+    if selection not in {"final", "noisy_validation_loss"}:
+        raise ValueError("CWD transition selection must be final or noisy_validation_loss")
+    select_validation = selection == "noisy_validation_loss"
+    if validation_size < 0 or validation_size >= len(prepared.train_indices):
+        raise ValueError("CWD transition validation_size must leave training samples")
+    if select_validation and validation_size == 0:
+        raise ValueError("CWD transition noisy validation selection requires held-out samples")
+    identity = {
+        "config": config,
+        "data_fingerprint": prepared.data_fingerprint,
+        "noise_mapping_hash": prepared.manifest.mapping_hash,
+        "train_indices_sha256": hashlib.sha256(
+            np.asarray(prepared.train_indices, dtype="<i8").tobytes()
+        ).hexdigest(),
+    }
+    positions = {int(index): offset for offset, index in enumerate(prepared.manifest.global_indices)}
+    observed = np.asarray(prepared.manifest.noisy_targets)[
+        [positions[int(index)] for index in prepared.train_indices]
+    ]
+    observed_prior = np.bincount(observed, minlength=prepared.num_classes) / len(observed)
+    fit_indices = np.asarray(prepared.train_indices)
+    validation_loader = None
+    if validation_size:
+        permutation = np.random.default_rng(int(config.get("seed", 1))).permutation(fit_indices)
+        validation_indices = np.sort(permutation[:validation_size])
+        fit_indices = np.sort(permutation[validation_size:])
+        # Both subsets use observed labels; never fall back to raw clean labels.
+        targets_by_index = {
+            int(index): int(prepared.manifest.noisy_targets[offset])
+            for index, offset in positions.items()
+        }
+        validation_loader = prepared.subset_loader(
+            validation_indices, targets_by_index=targets_by_index,
+            training=False, shuffle=False, drop_last=False, stream=1001,
+        )
+        np.savez(run_dir / "cwd_transition_split.npz", train=fit_indices, noisy_validation=validation_indices)
+    path = run_dir / "cwd_transition.pt"
+    saved = read_checkpoint(path, "cpu") if path.is_file() else None
+    if saved is not None and saved.get("identity") != identity:
+        raise ValueError("CWD internal transition checkpoint data/config mismatch")
+    if saved is not None and int(saved["completed_epochs"]) == epochs:
+        key = "selected_matrix" if select_validation else "matrix"
+        if saved.get(key) is None:
+            raise ValueError("CWD internal transition has no valid selected matrix")
+        return np.asarray(saved[key], dtype=np.float64).copy()
+
+    # Keep CWD's model/dropout RNG independent of the auxiliary lifecycle.
+    outer_rng = capture_rng_state()
+    try:
+        # An optional independent auxiliary stream derives from the one public
+        # experiment seed. Restore the main stream in finally, including errors.
+        if bool(stage.get("independent_rng", False)):
+            seed_everything(int(config.get("seed", 1)))
+        model_config = bind_model_input(stage["model"], prepared.input_spec)
+        auxiliary = build_model(model_config, prepared.num_classes).to(device)
+        transition_model = VolMinTransition(prepared.num_classes).to(device)
+        if "initial_raw_value" in stage:
+            initial = float(stage["initial_raw_value"])
+            if not np.isfinite(initial):
+                raise ValueError("CWD transition initial_raw_value must be finite")
+            with torch.no_grad():
+                transition_model.off_diagonal_logits.fill_(initial)
+        classifier_optimizer = build_optimizer(auxiliary, stage["optimizer"]["classifier"])
+        transition_optimizer = build_optimizer(transition_model, stage["optimizer"]["transition"])
+        algorithm = VolMinNetAlgorithm(
+            model=auxiliary,
+            transition=transition_model,
+            classifier_optimizer=classifier_optimizer,
+            transition_optimizer=transition_optimizer,
+            classifier_scheduler=build_scheduler(
+                classifier_optimizer, stage["scheduler"]["classifier"], epochs
+            ),
+            transition_scheduler=build_scheduler(
+                transition_optimizer, stage["scheduler"]["transition"], epochs
+            ),
+            lambda_volume=float(stage["lambda_volume"]),
+            device=device,
+        )
+        completed = 0
+        rows = []
+        selected_matrix = None
+        selected_epoch = None
+        selected_loss = float("inf")
+        if saved is not None:
+            algorithm.load_state_dict(saved["algorithm"])
+            restore_rng_state(saved["rng_state"])
+            completed = int(saved["completed_epochs"])
+            rows = list(saved["metrics"])
+            selected_matrix = saved.get("selected_matrix")
+            selected_epoch = saved.get("selected_epoch")
+            selected_loss = float(saved.get("selected_loss", float("inf")))
+
+        def persist():
+            payload = {
+                "format_version": 1,
+                "method": "cwd",
+                "phase": "cwd_transition",
+                "config": config,
+                "identity": identity,
+                "algorithm": algorithm.state_dict(),
+                "completed_epochs": completed,
+                "rng_state": capture_rng_state(),
+                "matrix": transition_model.matrix().detach().cpu().numpy().copy(),
+                "metrics": rows,
+                "selection": selection,
+                "selected_matrix": selected_matrix,
+                "selected_epoch": selected_epoch,
+                "selected_loss": selected_loss,
+            }
+            atomic_save(payload, path)
+            if publish_last:
+                atomic_save(payload, run_dir / "last.pt")
+
+        if saved is None:
+            persist()
+        for epoch in range(completed, epochs):
+            started = time.perf_counter()
+            loader = (
+                prepared.subset_loader(
+                    fit_indices, targets_by_index=targets_by_index,
+                    training=True, shuffle=True, drop_last=False, epoch=epoch, stream=1000,
+                ) if validation_size else
+                prepared.loader(DataRole.TRAIN, epoch=epoch, stream=1000)
+            )
+            loss_sum = classification_sum = samples = 0.0
+            for batch in loader:
+                metrics = algorithm.train_batch(batch)
+                samples += metrics["samples"]
+                loss_sum += metrics["objective"] * metrics["samples"]
+                classification_sum += metrics["classification_loss"] * metrics["samples"]
+            if samples == 0:
+                raise ValueError("CWD transition training data is empty")
+            completed = epoch + 1
+            algorithm.state.completed_epochs = completed
+            algorithm.state.completed = completed == epochs
+            algorithm.step_schedulers()
+            row = {
+                "event": "epoch", "phase": "cwd_transition", "epoch": completed,
+                "global_step": algorithm.state.global_step,
+                "objective": loss_sum / samples,
+                "classification_loss": classification_sum / samples,
+                "epoch_seconds": time.perf_counter() - started,
+                **transition_model.diagnostics(),
+            }
+            # Diagnostics only: never use clean labels, or alter the learned matrix/prior.
+            matrix = transition_model.matrix().detach().cpu().numpy()
+            try:
+                prior = np.linalg.solve(matrix.T, observed_prior)
+                row.update({
+                    "inferred_prior_min": float(prior.min()),
+                    "inferred_prior_negative_classes": int((prior < -1e-8).sum()),
+                    "inferred_prior_residual": float(np.linalg.norm(matrix.T @ prior - observed_prior)),
+                })
+            except np.linalg.LinAlgError:
+                row["inferred_prior_error"] = "singular_matrix"
+            if validation_loader is not None:
+                auxiliary.eval()
+                validation_loss = validation_samples = 0.0
+                with torch.no_grad():
+                    transition_tensor = transition_model.matrix(dtype=torch.float32)
+                    for batch in validation_loader:
+                        logits = auxiliary(batch["input"].to(device, non_blocking=True))
+                        targets = batch["target"].to(device, non_blocking=True).long()
+                        log_probability = torch.logsumexp(
+                            torch.log_softmax(logits, dim=1)[:, :, None]
+                            + transition_tensor.log()[None, :, :], dim=1,
+                        )
+                        validation_loss += float(torch.nn.functional.nll_loss(
+                            log_probability, targets, reduction="sum"
+                        ))
+                        validation_samples += int(targets.numel())
+                if validation_samples == 0:
+                    raise ValueError("CWD transition noisy validation data is empty")
+                row["noisy_validation_loss"] = validation_loss / validation_samples
+                feasible = (
+                    "inferred_prior_error" not in row
+                    and row.get("inferred_prior_negative_classes", 1) == 0
+                )
+                row["selection_eligible"] = feasible or not bool(stage.get("require_valid_prior", False))
+                if (select_validation and row["selection_eligible"]
+                        and np.isfinite(row["noisy_validation_loss"])
+                        and row["noisy_validation_loss"] < selected_loss):
+                    selected_loss = row["noisy_validation_loss"]
+                    selected_epoch = completed
+                    selected_matrix = matrix.copy()
+            rows.append(row)
+            persist()
+            (run_dir / "transition_metrics.jsonl").write_text(
+                "".join(json.dumps(item, sort_keys=True) + "\n" for item in rows),
+                encoding="utf-8",
+            )
+            print(json.dumps(row, sort_keys=True), flush=True)
+        if select_validation:
+            if selected_matrix is None:
+                raise ValueError("CWD transition stage found no valid noisy-validation-selected matrix")
+            return np.asarray(selected_matrix, dtype=np.float64).copy()
+        return transition_model.matrix().detach().cpu().numpy().copy()
+    finally:
+        restore_rng_state(outer_rng)
+
+
 def run_cwd_experiment(
     config: dict[str, Any],
     output_dir: str | Path | None = None,
@@ -179,6 +394,11 @@ def run_cwd_experiment(
     checkpoint = None if resume is None else read_checkpoint(resume, "cpu")
     if checkpoint is not None and checkpoint.get("config") != config:
         raise ValueError("CWD resume configuration mismatch")
+    if checkpoint is not None and checkpoint.get("phase") == "cwd_transition":
+        # The helper resumes its own algorithm/optimizers/RNG from cwd_transition.pt.
+        if not (run_dir / "cwd_transition.pt").is_file():
+            raise FileNotFoundError("CWD internal transition checkpoint is missing")
+        checkpoint = None
     if requirements is None:
         from lnl_toolbox.training.runners import resolve_data_requirements
 
@@ -260,21 +480,27 @@ def run_cwd_experiment(
         for name, state in loader_states.items():
             loaders[name].generator.set_state(state.cpu())
 
-    transition = np.asarray(
-        [
-            [1.0 - rho_negative, rho_negative],
-            [rho_positive, 1.0 - rho_positive],
-        ],
-        dtype=np.float64,
-    )
     if multiclass:
-        from lnl_toolbox.algorithms.volminnet.artifacts import VolMinTransitionArtifact
-        transition_path = Path(config["cwd"]["transition_artifact"])
-        learned = VolMinTransitionArtifact.load(transition_path)
-        transition = learned.matrix
+        if "transition_artifact" in cwd_config:
+            raise ValueError("CWD no longer accepts an external transition_artifact")
+        if checkpoint is not None and not (run_dir / "cwd_transition.pt").is_file():
+            raise FileNotFoundError("CWD internal transition checkpoint is missing")
+        transition = _estimate_cwd_transition(
+            prepared, config, run_dir, device, publish_last=checkpoint is None
+        )
         if transition.shape != (prepared.num_classes, prepared.num_classes):
             raise ValueError("CWD learned transition class count mismatch")
-        (run_dir / "transition-source.json").write_text(json.dumps({"path": str(transition_path), "artifact_hash": learned.artifact_hash, "source": "same-cohort VolMin learned matrix; no oracle transition"}, indent=2))
+        (run_dir / "transition-source.json").write_text(json.dumps({
+            "path": "cwd_transition.pt", "source": "cwd_internal_volmin_algorithm",
+            "noise_mapping_hash": manifest.mapping_hash,
+            "selection": cwd_config["transition_stage"].get("selection", "final"),
+            "selected_epoch": read_checkpoint(run_dir / "cwd_transition.pt", "cpu").get("selected_epoch"),
+        }, indent=2), encoding="utf-8")
+    else:
+        transition = np.asarray([
+            [1.0 - rho_negative, rho_negative],
+            [rho_positive, 1.0 - rho_positive],
+        ], dtype=np.float64)
     pinv_rcond = config.get("cwd", {}).get("pinv_rcond")
     if pinv_rcond is None and "ridge" in config.get("cwd", {}):
         # Backward-compatible parsing for old smoke configurations.  The

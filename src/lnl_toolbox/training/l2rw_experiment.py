@@ -105,11 +105,11 @@ def _trusted_manifest(
         raise ValueError("L2RW requires an explicit trusted_validation configuration")
     source = str(trusted.get("source", "")).strip().lower()
     if source == "audited_manifest":
-        path = trusted.get("manifest")
-        if not path:
-            raise ValueError("audited trusted supervision requires manifest path")
-        manifest = TrustedSupervisionManifest.load(path)
-    elif source == "synthetic_fixture":
+        raise ValueError(
+            "audited_manifest trusted supervision is retired: L2RW derives its "
+            "trusted set from the configured seed (official_generated)"
+        )
+    if source == "synthetic_fixture":
         if dataset_name != "synthetic_multiclass":
             raise ValueError("synthetic_fixture trusted supervision is smoke-only")
         indices, targets = [], []
@@ -125,7 +125,7 @@ def _trusted_manifest(
         )
     else:
         raise ValueError(
-            "trusted_validation.source must be audited_manifest or synthetic_fixture"
+            "trusted_validation.source must be official_generated or synthetic_fixture"
         )
     if not manifest.balanced:
         raise ValueError("L2RW trusted supervision must be class-balanced")

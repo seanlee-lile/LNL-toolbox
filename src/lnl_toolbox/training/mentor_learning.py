@@ -2,12 +2,13 @@ from __future__ import annotations
 
 """Offline, dataset-neutral MentorNet artifact learning."""
 
+import json
+import os
+import time
 from pathlib import Path
 from typing import Any, Mapping
-import json
 
 import numpy as np
-
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
@@ -194,6 +195,91 @@ def prepare_trusted_mentor_features(
         json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8"
     )
     return feature_path
+
+
+def ensure_mentor_artifact(
+    config: Mapping[str, Any],
+    *,
+    run_dir: str | Path | None = None,
+    resuming: bool = False,
+    cache_root: str | Path | None = None,
+) -> Path | None:
+    """Train the MentorNet teacher for this run, or reuse the run's own teacher.
+
+    A fresh run always retrains the feature student and the mentor from the
+    configured seed: the two-stage protocol is an input to the run, not a
+    fixture shared between runs. Reuse happens only when the run is being
+    resumed and that run already stored its teacher.
+    """
+
+    pipeline = config.get("pipeline") or {}
+    if not isinstance(pipeline, Mapping):
+        return None
+    provider = pipeline.get("weight_provider") or {}
+    if not isinstance(provider, Mapping):
+        return None
+    if str(provider.get("name", "")).strip().lower() != "mentornet":
+        return None
+
+    configured = str(provider.get("artifact_path") or "").strip()
+
+    if run_dir is not None:
+        stored = Path(run_dir) / "mentor" / "mentor_artifact.pt"
+        if resuming and stored.is_file():
+            return stored
+
+    if not bool(provider.get("derive_from_seed", True)):
+        raise FileNotFoundError(
+            f"MentorArtifact not found: {configured or '(no artifact_path)'}; "
+            "derive_from_seed is disabled, so nothing can be trained"
+        )
+
+    seed = int(provider.get("teacher_seed", config.get("seed", 1)))
+    if run_dir is not None:
+        destination = Path(run_dir) / "mentor"
+    elif cache_root is not None:
+        destination = Path(cache_root)
+    else:
+        from lnl_toolbox.catalog import find_project_root
+
+        destination = (
+            find_project_root()
+            / "artifacts"
+            / "mentor-runs"
+            / f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{os.getpid()}"
+        )
+    destination.mkdir(parents=True, exist_ok=True)
+    artifact_path = destination / "mentor_artifact.pt"
+
+    teacher = {
+        "seed": seed,
+        "data": dict(config.get("data") or {}),
+        "noise": dict(config.get("noise") or {}),
+        "loader": dict(config.get("loader") or {}),
+        "student_trainer": dict(
+            provider.get("teacher_trainer") or {"trusted_size": 5000, "epochs": 5}
+        ),
+        "student_optimizer": dict(provider.get("teacher_optimizer") or {"lr": 0.1}),
+        "student_model": provider.get("teacher_student_model", "auto"),
+        "model": dict(provider.get("teacher_model") or {"implementation": "official"}),
+        "trainer": dict(provider.get("teacher_trainer_epochs") or {"epochs": 20}),
+        "optimizer": dict(provider.get("teacher_optimizer_config") or {"lr": 1e-3}),
+        "device": str(config.get("trainer", {}).get("device", "cpu")),
+    }
+    features = prepare_trusted_mentor_features(teacher, destination)
+    teacher["feature_data"] = str(features)
+    train_mentor_artifact(teacher, artifact_path)
+    provenance = {
+        "teacher_seed": seed,
+        "student_epochs": teacher["student_trainer"].get("epochs"),
+        "trusted_size": teacher["student_trainer"].get("trusted_size", 5000),
+        "artifact": str(artifact_path),
+        "policy": "retrained for this run from the configured seed",
+    }
+    (destination / "provenance.json").write_text(
+        json.dumps(provenance, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    return artifact_path
 
 
 def train_mentor_artifact(

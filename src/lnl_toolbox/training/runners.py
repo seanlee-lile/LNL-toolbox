@@ -311,19 +311,27 @@ def _supervised_requirements(config: Mapping[str, Any]) -> MethodRequirements | 
             required_config_inputs=inputs,
         )
     if weight == "mentornet":
+        provider_config = dict(
+            ((config.get("pipeline") or {}).get("weight_provider") or {})
+        )
+        derive_from_seed = bool(provider_config.get("derive_from_seed", True))
+        mentor_inputs = ()
+        if not derive_from_seed:
+            mentor_inputs = (_config_input(
+                "requires_mentor_artifact",
+                ("pipeline", "weight_provider", "artifact_path"),
+                description="MentorNet requires a configured MentorArtifact",
+                implementation_limit="mentor_artifact",
+            ),)
         return MethodRequirements(
             method="mentornet",
             supports_native_noisy_labels=True,
             supported_modalities=frozenset({Modality.IMAGE}),
             data_requirements=_classification_data(validation="clean"),
-            implemented_variant="artifact_weight_provider",
-            implementation_limits=frozenset({"modality", "mentor_artifact"}),
-            required_config_inputs=(_config_input(
-                "requires_mentor_artifact",
-                ("pipeline", "weight_provider", "artifact_path"),
-                description="MentorNet requires a configured MentorArtifact",
-                implementation_limit="mentor_artifact",
-            ),),
+            implemented_variant="seed_derived_artifact_weight_provider" if derive_from_seed
+            else "artifact_weight_provider",
+            implementation_limits=frozenset({"modality"} if derive_from_seed else {"modality", "mentor_artifact"}),
+            required_config_inputs=mentor_inputs,
         )
     if objective == "dss":
         return MethodRequirements(
@@ -419,12 +427,6 @@ def _l2rw_requirements(config: Mapping[str, Any]) -> MethodRequirements:
         ("trusted_validation", "source"),
         description="L2RW requires an explicit trusted-validation source",
     )]
-    if source == "audited_manifest":
-        inputs.append(_config_input(
-            "requires_trusted_manifest",
-            ("trusted_validation", "manifest"),
-            description="audited L2RW supervision requires a trusted manifest",
-        ))
     return MethodRequirements(
         method="l2rw",
         supports_native_noisy_labels=True,

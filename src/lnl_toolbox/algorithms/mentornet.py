@@ -71,7 +71,13 @@ class MentorNetWeightProvider:
         dropout_schedule: Sequence[Sequence[float]] = (),
         seed: int = 0,
         zero_weight_policy: str = "error",
+        derive_from_seed: bool = True,
     ) -> None:
+        # ``derive_from_seed`` is a lifecycle switch read by the catalog, the
+        # runner and mentor_learning; it decides whether the teacher artifact is
+        # trained from the run seed. It is accepted here only because the
+        # weight-provider mapping is forwarded verbatim as constructor keywords.
+        self.derive_from_seed = bool(derive_from_seed)
         self.artifact_path = str(Path(artifact_path))
         self.artifact = MentorArtifact.load(self.artifact_path)
         self.model = build_mentor_model(dict(self.artifact.architecture))
@@ -163,9 +169,26 @@ class MentorNetWeightProvider:
             },
         )
 
+    def _identity(self) -> str:
+        """Stable identity of the teacher's architecture and provenance."""
+
+        import hashlib
+        import json
+
+        payload = json.dumps(
+            {
+                "architecture": dict(self.artifact.architecture),
+                "source": dict(self.artifact.source),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
     def state_dict(self) -> Mapping[str, Any]:
         return {
-            "artifact_hash": self.artifact.artifact_hash,
+            "artifact_identity": self._identity(),
             "total_epochs": self.total_epochs,
             "burn_in_epoch": self.burn_in_epoch,
             "fixed_epoch_after_burn_in": self.fixed_epoch_after_burn_in,
@@ -174,7 +197,7 @@ class MentorNetWeightProvider:
         }
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
-        if state.get("artifact_hash") != self.artifact.artifact_hash:
+        if state.get("artifact_identity") != self._identity():
             raise ValueError("MentorArtifact identity mismatch")
         if "total_epochs" in state and int(state["total_epochs"]) != self.total_epochs:
             raise ValueError("MentorNet total_epochs mismatch")

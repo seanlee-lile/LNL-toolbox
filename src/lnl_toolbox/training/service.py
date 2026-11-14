@@ -617,6 +617,26 @@ class ExperimentService:
             expected_root = Path(output_dir).expanduser().resolve()
         final_path = expected_root / "final_metrics.json" if expected_root else None
         before_final = final_path.read_bytes() if final_path and final_path.is_file() else None
+        try:
+            from lnl_toolbox.training.mentor_learning import ensure_mentor_artifact
+
+            derived = ensure_mentor_artifact(
+                candidate, run_dir=expected_root, resuming=resume is not None
+            )
+        except (
+            EOFError,
+            KeyError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise ValueError(f"MentorArtifact could not be prepared from the configured seed: {exc}") from exc
+        if derived is not None:
+            provider = (candidate.get("pipeline") or {}).get("weight_provider") or {}
+            provider = dict(provider)
+            provider["artifact_path"] = str(Path(derived))
+            candidate["pipeline"] = {**(candidate.get("pipeline") or {}), "weight_provider": provider}
         returned = Path(runner.invoke(candidate, output_dir, resume))
         result = returned.resolve()
         if not result.is_dir():

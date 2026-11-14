@@ -152,25 +152,38 @@ class _mentornet_MentorNetTest(unittest.TestCase):
             restored.load_state_dict(saved)
             actual = restored.compute(request)
             self.assertTrue(torch.equal(actual.sample_weights, expected.sample_weights))
-            self.assertEqual(saved['artifact_hash'], artifact.artifact_hash)
             self.assertFalse(first.sample_weights.requires_grad)
 
-    def test_artifact_detects_tampered_hash(self) -> None:
+    def test_artifact_ignores_extra_keys_but_rejects_broken_structure(self) -> None:
+        """The artifact contract is structure only; no hash is stored or compared."""
+
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'mentor.pt'
             self._artifact(path)
             payload = torch.load(path, weights_only=False)
-            payload['artifact_hash'] = 'bad'
+            payload['legacy_marker'] = 'ignored'
             torch.save(payload, path)
-            with self.assertRaisesRegex(ValueError, 'hash mismatch'):
+            loaded = MentorArtifact.load(path)
+            self.assertTrue(loaded.model_state)
+            self.assertFalse(hasattr(loaded, 'artifact_hash'))
+
+            payload = torch.load(path, weights_only=False)
+            del payload['model_state']
+            torch.save(payload, path)
+            with self.assertRaisesRegex(ValueError, 'model_state'):
                 MentorArtifact.load(path)
 
-    def test_artifact_hash_is_independent_of_torch_serialization_format(self) -> None:
+            payload = torch.load(path, weights_only=False)
+            payload['model_state'] = {'w': torch.tensor([float('nan')])}
+            torch.save(payload, path)
+            with self.assertRaisesRegex(ValueError, 'non-finite'):
+                MentorArtifact.load(path)
+
+    def test_artifact_round_trips_across_pickle_protocols(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'mentor.pt'
             artifact = self._artifact(path)
             payload = torch.load(path, map_location='cpu', weights_only=False)
-            portable_hash = artifact.artifact_hash
             original_save = torch.save
 
             def save_with_different_protocol(value, destination, **kwargs):
@@ -178,7 +191,10 @@ class _mentornet_MentorNetTest(unittest.TestCase):
 
             with patch('lnl_toolbox.training.mentor_artifacts.torch.save', side_effect=save_with_different_protocol):
                 torch.save(payload, path)
-            self.assertEqual(MentorArtifact.load(path).artifact_hash, portable_hash)
+            reloaded = MentorArtifact.load(path)
+            self.assertEqual(reloaded.architecture, artifact.architecture)
+            for name, tensor in artifact.model_state.items():
+                self.assertTrue(torch.equal(reloaded.model_state[name], tensor))
 
     def test_step_milestone_policy_and_plugin(self) -> None:
         model = torch.nn.Linear(2, 1)

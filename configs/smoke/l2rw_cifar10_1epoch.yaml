@@ -20,8 +20,7 @@ loader:
   num_workers: 0
   pin_memory: true
 trusted_validation:
-  source: audited_manifest
-  manifest: data/trusted/l2rw_cifar10_balanced_1000.npz
+  source: official_generated
   batch_size: 100
   seed: 1234
 model:

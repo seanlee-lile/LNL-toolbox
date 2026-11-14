@@ -1,4 +1,208 @@
-"""Merged unit tests; source modules were consolidated without changing assertions."""
+"""Focused CWD objective, configuration and lifecycle checks."""
+
+
+class CWDAuthorAlignmentTests(__import__("unittest").TestCase):
+    def test_main_model_forwards_padding_and_initialization(self):
+        from lnl_toolbox.training.cwd_experiment import _build_model
+        model = _build_model({"name": "cifar_resnet34", "num_outputs": 3,
+                              "base_width": 4, "bias": True, "stem_padding": 0,
+                              "initialization": "torch_default"})
+        self.assertEqual(model.stem[0].padding, (0, 0))
+        self.assertIsNotNone(model.classifier.bias)
+        with self.assertRaisesRegex(ValueError, "initialization"):
+            _build_model({"name": "cifar_resnet34", "initialization": "invalid"})
+
+    @__import__("unittest").skip(
+        "stale historical expectation: this test encodes the pre-2026-11-10 "
+        "per-sample dynamic centroid, while the current CWDGlobalObjective rebuilds a "
+        "batch-level centroid from features; "
+        "test_dynamic_centroid_loss_and_full_model_gradients_match_reference covers "
+        "the current contract"
+    )
+    def test_dynamic_affine_objective_matches_direct_output_and_gradient(self):
+        from lnl_toolbox.noise.statistics import CWDStatisticArtifact
+        torch.manual_seed(17)
+        model = nn.Sequential()
+        model.add_module("classifier", nn.Linear(4, 3, bias=True))
+        features = torch.randn(7, 4, requires_grad=True)
+        labels = torch.tensor([0, 0, 0, 0, 1, 1, 2])
+        coefficient = np.asarray([[1.2, -.1, -.1], [-.1, 1.2, -.1], [-.1, -.1, 1.2]])
+        artifact = CWDStatisticArtifact(values=np.zeros((3,4)), estimator="cwd", metadata={
+            "class_prior": [1/3]*3, "observed_class_prior": [1/3]*3,
+            "coefficient_pseudoinverses": [np.eye(3).tolist()]*3,
+            "combined_coefficient": coefficient.tolist()})
+        outputs = model(features)
+        actual = CWDGlobalObjective(artifact, dynamic_centroid=True).compute(
+            model=model, logits=outputs, features=features, noisy_targets=labels,
+            sample_indices=torch.arange(7), base_loss=CrossEntropyLoss(), metadata={})
+        target = torch.nn.functional.one_hot(labels, 3).float() @ torch.tensor(coefficient).float()
+        expected = 1 + outputs.square().sum(1).mean() - 2 * (outputs * target).sum(1).mean()
+        torch.testing.assert_close(actual, expected)
+        parameters = [features, *model.parameters()]
+        ga = torch.autograd.grad(actual, parameters, retain_graph=True)
+        gb = torch.autograd.grad(expected, parameters)
+        for a,b in zip(ga,gb):
+            torch.testing.assert_close(a,b)
+
+    def test_noisy_validation_selects_own_matrix_and_reuses_cache(self):
+        import tempfile
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from lnl_toolbox.data.contracts import InputSpec
+        from lnl_toolbox.algorithms.volminnet import VolMinNetAlgorithm
+        from lnl_toolbox.training.cwd_experiment import _estimate_cwd_transition
+        inputs = torch.randn(9,3,32,32, generator=torch.Generator().manual_seed(17))
+        observed = np.tile(np.arange(3),3)
+
+        def subset(indices, *, targets_by_index, **kwargs):
+            ids = torch.as_tensor(indices)
+            targets = torch.tensor([targets_by_index[int(i)] for i in indices])
+            np.testing.assert_array_equal(targets.numpy(), observed[indices])
+            return [{"input": inputs[ids], "target": targets, "index": ids}]
+
+        prepared = SimpleNamespace(num_classes=3, input_spec=InputSpec("image",(3,32,32),channels=3),
+            data_fingerprint="own-noisy-data", train_indices=np.arange(9), subset_loader=subset,
+            manifest=SimpleNamespace(mapping_hash="native", global_indices=np.arange(9),noisy_targets=observed))
+        stage = {"epochs":2,"validation_size":3,"selection":"noisy_validation_loss",
+            "require_valid_prior":True,"initial_raw_value":-2.,
+            "model":{"name":"tiny_cnn","width":4},"lambda_volume":.0001,
+            "optimizer":{o:{"name":"sgd","lr":.001} for o in ("classifier","transition")},
+            "scheduler":{o:{"name":"none"} for o in ("classifier","transition")}}
+        cfg={"seed":17,"cwd":{"transition_stage":stage}}
+        with tempfile.TemporaryDirectory() as directory:
+            out=Path(directory)/"run"
+            result=_estimate_cwd_transition(prepared,cfg,out,torch.device("cpu"))
+            saved=torch.load(out/"cwd_transition.pt",weights_only=False)
+            eligible=[r for r in saved["metrics"] if r["selection_eligible"]]
+            best=min(eligible,key=lambda r:r["noisy_validation_loss"])
+            self.assertEqual(saved["selected_epoch"],best["epoch"])
+            np.testing.assert_array_equal(result,saved["selected_matrix"])
+            split=np.load(out/"cwd_transition_split.npz")
+            self.assertFalse(set(split["train"]) & set(split["noisy_validation"]))
+            self.assertEqual(len(split["train"])+len(split["noisy_validation"]),9)
+            with patch.object(VolMinNetAlgorithm,"train_batch",side_effect=AssertionError("retrained")):
+                np.testing.assert_array_equal(result,_estimate_cwd_transition(prepared,cfg,out,torch.device("cpu")))
+
+
+class CWDInternalTransitionTests(__import__("unittest").TestCase):
+    def test_independent_stage_rng_ignores_main_initialization_and_restores_stream(self):
+        import tempfile
+        from types import SimpleNamespace
+        from lnl_toolbox.data.contracts import InputSpec
+        from lnl_toolbox.training.cwd_experiment import _estimate_cwd_transition
+        inputs=torch.randn(9,3,32,32,generator=torch.Generator().manual_seed(7))
+        labels=torch.tensor([0,1,2]*3)
+        prepared=SimpleNamespace(num_classes=3,input_spec=InputSpec("image",(3,32,32),channels=3),
+            data_fingerprint="fixed",train_indices=np.arange(9),
+            manifest=SimpleNamespace(mapping_hash="fixed-noisy",global_indices=np.arange(9),noisy_targets=labels.numpy()),
+            loader=lambda *args,**kwargs:[{"input":inputs,"target":labels}])
+        stage={"epochs":1,"independent_rng":True,"model":{"name":"tiny_cnn","width":4},
+            "lambda_volume":.0001,"optimizer":{o:{"name":"sgd","lr":.001} for o in ("classifier","transition")},
+            "scheduler":{o:{"name":"none"} for o in ("classifier","transition")}}
+        config={"seed":17,"cwd":{"transition_stage":stage}}
+        with tempfile.TemporaryDirectory() as directory:
+            states=[]
+            for outer_seed in (111,222):
+                torch.manual_seed(outer_seed);before=torch.get_rng_state().clone()
+                out=Path(directory)/str(outer_seed)
+                _estimate_cwd_transition(prepared,config,out,torch.device("cpu"))
+                self.assertTrue(torch.equal(before,torch.get_rng_state()))
+                states.append(torch.load(out/"cwd_transition.pt",weights_only=False)["algorithm"])
+            for name,tensor in states[0]["model"].items():
+                torch.testing.assert_close(tensor,states[1]["model"][name],rtol=0,atol=0)
+            for name,tensor in states[0]["transition"].items():
+                torch.testing.assert_close(tensor,states[1]["transition"][name],rtol=0,atol=0)
+
+    def test_positive_logdet_objective_accepts_positive_determinant_and_rejects_the_rest(self):
+        """The toolbox deliberately uses log(det), not the author code's log(abs(det))."""
+
+        from lnl_toolbox.algorithms.volminnet.objective import volminnet_objective
+
+        transition = torch.tensor([
+            [0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.1, 0.8],
+        ], dtype=torch.float64, requires_grad=True)
+        logits = torch.zeros(3, 3, dtype=torch.float64, requires_grad=True)
+        targets = torch.tensor([0, 1, 2])
+        self.assertGreater(float(torch.linalg.slogdet(transition)[0]), 0)
+        loss, _ = volminnet_objective(logits, targets, transition, lambda_volume=0.0001)
+        expected = -torch.log_softmax(logits, 1).exp().matmul(transition).diagonal().log().mean()
+        expected = expected + 0.0001 * torch.linalg.slogdet(transition)[1]
+        torch.testing.assert_close(loss, expected)
+        loss.backward()
+        self.assertTrue(torch.isfinite(transition.grad).all())
+        negative = torch.tensor([
+            [0.1, 0.8, 0.1], [0.8, 0.1, 0.1], [0.1, 0.1, 0.8],
+        ], dtype=torch.float64)
+        self.assertLess(float(torch.linalg.slogdet(negative)[0]), 0)
+        with self.assertRaisesRegex(ValueError, "finite and positive"):
+            volminnet_objective(torch.zeros(3, 3, dtype=torch.float64), targets, negative, lambda_volume=0.0001)
+        singular = torch.full((3, 3), 1 / 3, dtype=torch.float64)
+        with self.assertRaisesRegex(ValueError, "finite and positive"):
+            volminnet_objective(torch.zeros(3, 3, dtype=torch.float64), targets, singular, lambda_volume=0.0001)
+
+    def test_internal_volmin_interrupt_resume_and_cache(self):
+        import tempfile
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from lnl_toolbox.data.contracts import InputSpec
+        from lnl_toolbox.algorithms.volminnet import VolMinNetAlgorithm
+        from lnl_toolbox.training.cwd_experiment import _estimate_cwd_transition
+
+        inputs = torch.randn(8, 3, 32, 32, generator=torch.Generator().manual_seed(7))
+        batches = [{"input": inputs[:4], "target": torch.tensor([0, 1, 2, 0])},
+                   {"input": inputs[4:], "target": torch.tensor([1, 2, 0, 1])}]
+        prepared = SimpleNamespace(
+            num_classes=3, input_spec=InputSpec("image", (3, 32, 32), channels=3),
+            data_fingerprint="same-cohort", train_indices=np.arange(8),
+            manifest=SimpleNamespace(
+                mapping_hash="same-noisy-labels", global_indices=np.arange(8),
+                noisy_targets=np.array([0, 1, 2, 0, 1, 2, 0, 1]),
+            ),
+            loader=lambda *args, **kwargs: batches,
+        )
+        stage = {
+            "epochs": 2, "model": {"name": "tiny_cnn", "width": 4},
+            "lambda_volume": 0.0001,
+            "optimizer": {owner: {"name": "sgd", "lr": 0.01, "momentum": 0.9}
+                          for owner in ("classifier", "transition")},
+            "scheduler": {owner: {"name": "none"}
+                          for owner in ("classifier", "transition")},
+        }
+        config = {"seed": 19, "cwd": {"transition_stage": stage}}
+        with tempfile.TemporaryDirectory() as directory:
+            baseline = Path(directory) / "baseline"
+            resumed = Path(directory) / "resumed"
+            torch.manual_seed(19)
+            initial_rng = torch.get_rng_state().clone()
+            expected = _estimate_cwd_transition(prepared, config, baseline, torch.device("cpu"))
+            self.assertTrue(torch.equal(initial_rng, torch.get_rng_state()))
+            original = VolMinNetAlgorithm.train_batch
+            calls = 0
+
+            def interrupted(algorithm, batch):
+                nonlocal calls
+                calls += 1
+                if calls == 3:
+                    raise RuntimeError("intentional interruption")
+                return original(algorithm, batch)
+
+            torch.manual_seed(19)
+            with patch.object(VolMinNetAlgorithm, "train_batch", interrupted):
+                with self.assertRaisesRegex(RuntimeError, "intentional interruption"):
+                    _estimate_cwd_transition(prepared, config, resumed, torch.device("cpu"))
+            torch.manual_seed(999)
+            actual = _estimate_cwd_transition(prepared, config, resumed, torch.device("cpu"))
+            np.testing.assert_array_equal(expected, actual)
+            saved = torch.load(resumed / "cwd_transition.pt", weights_only=False)
+            self.assertEqual(saved["algorithm"]["volminnet_state"]["global_step"], 4)
+            np.testing.assert_allclose(actual.sum(axis=1), 1.0)
+            with patch.object(VolMinNetAlgorithm, "train_batch", side_effect=AssertionError("retrained")):
+                np.testing.assert_array_equal(
+                    actual, _estimate_cwd_transition(prepared, config, resumed, torch.device("cpu"))
+                )
+            prepared.data_fingerprint = "different-cohort"
+            with self.assertRaisesRegex(ValueError, "data/config mismatch"):
+                _estimate_cwd_transition(prepared, config, resumed, torch.device("cpu"))
 
 # --- merged from test_cwd.py ---
 import unittest

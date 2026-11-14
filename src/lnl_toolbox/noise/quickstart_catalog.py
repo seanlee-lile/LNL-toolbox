@@ -6,9 +6,13 @@ The catalog is intentionally separate from reproduction recipes.  Its public
 configuration output uses the existing experiment ``noise`` contract.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import math
+from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +55,45 @@ def quick_start_noise_spec(key: str) -> QuickStartNoiseSpec:
         return _BY_KEY[normalized]
     except KeyError as exc:
         raise ValueError(f"unknown Quick Start noise capability: {key!r}") from exc
+
+
+
+def inspect_external_label_file(path: str | Path) -> dict[str, object]:
+    """Structural facts about an external clean/noisy label file.
+
+    No content hash is computed or compared: the file is accepted on the shape
+    of its contents. The label values themselves are what the training run
+    consumes, so they are what this reports.
+    """
+
+    import torch
+
+    source = Path(str(path)).expanduser()
+    if not source.is_file():
+        raise FileNotFoundError(f"外部标签文件不存在：{source}")
+    payload = torch.load(source, map_location="cpu", weights_only=True)
+    if not isinstance(payload, Mapping):
+        raise TypeError("外部标签文件必须包含一个映射（dict）")
+    clean = payload.get("clean_label_train")
+    noisy = payload.get("noise_label_train")
+    if clean is None or noisy is None:
+        raise ValueError(
+            "外部标签文件缺少 clean_label_train / noise_label_train 两个键"
+        )
+    clean_array = np.asarray(clean.detach().cpu() if hasattr(clean, "detach") else clean, dtype=np.int64)
+    noisy_array = np.asarray(noisy.detach().cpu() if hasattr(noisy, "detach") else noisy, dtype=np.int64)
+    if clean_array.ndim != 1 or noisy_array.ndim != 1 or clean_array.size != noisy_array.size:
+        raise ValueError("外部标签文件中的干净/噪声标签必须是等长的一维向量")
+    if clean_array.size == 0:
+        raise ValueError("外部标签文件为空")
+    if clean_array.min() < 0 or noisy_array.min() < 0:
+        raise ValueError("外部标签文件包含负类别下标")
+    return {
+        "path": str(source),
+        "rows": int(clean_array.size),
+        "num_classes_seen": int(max(clean_array.max(), noisy_array.max())) + 1,
+        "measured_noise_rate": float(np.mean(clean_array != noisy_array)),
+    }
 
 
 def build_noise_config(
@@ -113,6 +156,7 @@ def build_noise_config(
 __all__ = [
     "QuickStartNoiseSpec",
     "build_noise_config",
+    "inspect_external_label_file",
     "quick_start_noise_spec",
     "quick_start_noise_specs",
     "visible_synthetic_noise_specs",
