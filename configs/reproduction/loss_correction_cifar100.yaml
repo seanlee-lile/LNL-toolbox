@@ -45,7 +45,8 @@ loss:
 model:
   base_width: 16
   name: resnet44
-  variant: loss_correction
+  weights: none
+  variant: loss_correction_specific
 noise:
   name: class_conditional
   rate: 0.4

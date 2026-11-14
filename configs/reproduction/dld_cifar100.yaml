@@ -69,6 +69,7 @@ dld:
     source: external_checkpoint
     model:
       name: torchvision_resnet34
+      variant: imagenet_standard
       base_width: 64
       weights: IMAGENET1K_V1
       feature_dimension: 512

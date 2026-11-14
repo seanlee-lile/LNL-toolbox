@@ -19,6 +19,8 @@ loader:
   pin_memory: false
 model:
   name: tiny_cnn
+  variant: standard
+  weights: none
   width: 4
 optimizer:
   name: adam

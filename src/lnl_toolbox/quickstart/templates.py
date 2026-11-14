@@ -351,7 +351,7 @@ def configure_loss_correction_transition(config: dict[str, Any]) -> dict[str, An
     if pipeline.get("pretraining_protocol") != "loss_correction":
         return config
     model = config.get("model", {}) or {}
-    if model.get("name") != "resnet32" and model.get("variant") == "loss_correction":
+    if model.get("name") != "resnet32" and model.get("variant") in {"loss_correction", "loss_correction_specific"}:
         model.pop("variant")
     estimator = pipeline.get("transition_estimator", {}) or {}
     name = str(estimator.get("name", "known"))

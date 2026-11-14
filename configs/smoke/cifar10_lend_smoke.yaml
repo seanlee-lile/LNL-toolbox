@@ -23,6 +23,8 @@ noise:
   validation_targets: noisy
 model:
   name: tiny_cnn
+  variant: standard
+  weights: none
   width: 8
 loss:
   name: ce

@@ -25,6 +25,8 @@ loader:
   pin_memory: true
 model:
   name: tiny_cnn
+  variant: standard
+  weights: none
   width: 32
 optimizer:
   name: adamw

@@ -10057,6 +10057,8 @@ trusted_validation:
   input_seed: 1
 model:
   name: wide_resnet28_10
+  variant: standard
+  weights: none
   width_multiplier: 10
   dropout: 0.3
 optimizer:

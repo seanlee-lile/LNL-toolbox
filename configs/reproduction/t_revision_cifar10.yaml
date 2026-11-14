@@ -58,6 +58,8 @@ t_revision:
     epochs: 20
     model:
       name: resnet18
+      variant: standard
+      weights: none
       base_width: 64
       stem_padding: 0
       initialization: torch_default

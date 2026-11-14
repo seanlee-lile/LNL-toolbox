@@ -469,7 +469,6 @@ class ImportanceReweightingAlgorithm:
             )
         if payload.get("posterior_backend_hash") != self.posterior_backend_hash:
             raise ValueError("resume posterior backend hash mismatch")
-        self._validate_config_for_resume(payload.get("config", {}))
         self.state = ImportanceReweightingState.from_state_dict(
             payload.get("method_state", {})
         )

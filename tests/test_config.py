@@ -47,6 +47,31 @@ class _config_schema_ConfigSchemaTest(unittest.TestCase):
         self.assertNotIn('type', value['noise'])
         self.assertEqual(runtime_experiment_config(value)['noise']['type'], 'symmetric')
 
+    def test_mentor_teacher_derivation_is_not_treated_as_a_seed(self) -> None:
+        from lnl_toolbox.core.config_schema import synchronize_experiment_seed
+
+        legacy = normalize_experiment_config({
+            'seed': 7,
+            'execution': {'runner': 'supervised'},
+            'data': {'name': 'fixture'},
+            'pipeline': {'weight_provider': {'name': 'mentornet', 'derive_from_seed': False}},
+        })
+        provider = legacy['pipeline']['weight_provider']
+        self.assertIs(provider['derive_teacher'], False)
+        self.assertNotIn('derive_from_seed', provider)
+
+        synced = synchronize_experiment_seed({
+            'seed': 7,
+            'pipeline': {'weight_provider': {'name': 'mentornet', 'derive_from_seed': False}},
+        })
+        self.assertIs(synced['pipeline']['weight_provider']['derive_from_seed'], False)
+
+        canonical = synchronize_experiment_seed({
+            'seed': 7,
+            'pipeline': {'weight_provider': {'name': 'mentornet', 'derive_teacher': False}},
+        })
+        self.assertIs(canonical['pipeline']['weight_provider']['derive_teacher'], False)
+
     def test_unknown_top_level_field_fails(self) -> None:
         with self.assertRaisesRegex(ValueError, 'unknown top-level'):
             normalize_experiment_config({'execution': {'runner': 'clean'}, 'data': {'name': 'synthetic_multiclass'}, 'trianer': {'epochs': 1}})

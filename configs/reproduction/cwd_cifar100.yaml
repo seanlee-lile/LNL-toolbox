@@ -43,6 +43,8 @@ loader:
   pin_memory: true
 model:
   name: cifar_resnet34
+  variant: standard
+  weights: none
   base_width: 64
   bias: false
   feature_dropout: 0.5
@@ -71,6 +73,8 @@ cwd:
     require_valid_prior: true
     model:
       name: resnet34
+      variant: standard
+      weights: none
       base_width: 64
       stem_padding: 0
       initialization: torch_default

@@ -175,11 +175,6 @@ def run_multi_model_experiment(
     checkpoint_payload = (
         None if resume is None else read_checkpoint(resume, device)
     )
-    if checkpoint_payload is not None:
-        saved = dict(checkpoint_payload.get("config") or {})
-        if saved != config:
-            raise ValueError("Resume configuration changed")
-
     if requirements is None:
         from lnl_toolbox.training.runners import resolve_data_requirements
         requirements = resolve_data_requirements(config, expected_runner="multi_model")

@@ -34,6 +34,8 @@ t_revision:
     epochs: 20
     model:
       name: resnet18
+      variant: standard
+      weights: none
       base_width: 64
       # Author Resnet.py: unpadded stem and PyTorch default initialization.
       stem_padding: 0

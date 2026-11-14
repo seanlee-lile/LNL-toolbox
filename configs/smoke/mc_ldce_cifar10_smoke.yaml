@@ -29,6 +29,8 @@ loader:
   pin_memory: false
 model:
   name: feature_mlp
+  variant: standard
+  weights: none
   hidden_width: 6
 optimizer:
   name: adam

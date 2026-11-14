@@ -48,6 +48,8 @@ noise:
   validation_targets: noisy
 model:
   name: cnn9
+  variant: standard
+  weights: none
   batch_norm_momentum: 0.1
 optimizer:
   name: adam

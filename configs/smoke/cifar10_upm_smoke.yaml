@@ -26,6 +26,8 @@ upm:
     epochs: 2
     model:
       name: tiny_cnn
+      variant: standard
+      weights: none
       width: 8
     optimizer:
       name: sgd
@@ -44,6 +46,8 @@ upm:
     initialization: fresh
     model:
       name: tiny_cnn
+      variant: standard
+      weights: none
       width: 8
     optimizer:
       name: sgd

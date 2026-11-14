@@ -20,6 +20,8 @@ loader:
   pin_memory: false
 model:
   name: tiny_cnn
+  variant: standard
+  weights: none
   width: 2
 optimizer:
   name: sgd

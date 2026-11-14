@@ -45,6 +45,8 @@ model:
   base_width: 64
   initialization: torch_default
   name: resnet50
+  variant: standard
+  weights: none
   stem_padding: 0
 noise:
   name: symmetric

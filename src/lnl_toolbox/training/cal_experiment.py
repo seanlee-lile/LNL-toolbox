@@ -226,7 +226,7 @@ def run_cal_experiment(
             raise ValueError("CAL sieve-score indices do not match posterior snapshot")
         proxy = build_cal_proxy_artifact(snapshot, all_losses[order], lower_threshold=float(config["sieve"]["lower_threshold"]), upper_threshold=float(config["sieve"]["upper_threshold"])); proxy.save(proxy_path)
     else:
-        if payload.get("method") != "cal" or payload.get("config") != config: raise ValueError("CAL resume identity mismatch")
+        if payload.get("method") != "cal": raise ValueError("CAL resume identity mismatch")
         proxy = CALProxyArtifact.load(proxy_path)
         if proxy.artifact_hash != payload["proxy_hash"]: raise ValueError("CAL proxy resume mismatch")
     transition_means = _reference_transition_means(

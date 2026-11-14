@@ -54,7 +54,8 @@ loss:
 model:
   base_width: 64
   name: preact_resnet18
-  variant: dss_author
+  weights: none
+  variant: dss_specific
 noise:
   manifest_filename: noise_manifest.npz
   name: symmetric

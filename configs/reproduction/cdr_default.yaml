@@ -45,6 +45,8 @@ loader:
   pin_memory: true
 model:
   name: resnet50
+  variant: standard
+  weights: none
   base_width: 64
   stem_padding: 0
   initialization: torch_default

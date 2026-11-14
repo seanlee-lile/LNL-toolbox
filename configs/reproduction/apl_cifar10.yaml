@@ -49,6 +49,8 @@ loss:
     name: rce
 model:
   name: cnn8
+  variant: standard
+  weights: none
 noise:
   manifest_filename: noise_manifest.npz
   name: symmetric

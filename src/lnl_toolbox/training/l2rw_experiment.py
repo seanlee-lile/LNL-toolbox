@@ -232,7 +232,7 @@ def run_l2rw_experiment(
     metrics_path = run_dir / "metrics.jsonl"
     payload = read_checkpoint(resume, device) if resume else None
     if payload is not None:
-        if payload.get("method") != "l2rw" or payload.get("config") != config:
+        if payload.get("method") != "l2rw":
             raise ValueError("L2RW resume configuration mismatch")
         if payload.get("trusted_fingerprint") != manifest.fingerprint:
             raise ValueError("L2RW trusted supervision resume mismatch")

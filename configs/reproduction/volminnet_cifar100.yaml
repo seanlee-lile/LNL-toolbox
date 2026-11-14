@@ -50,6 +50,7 @@ volminnet:
   fidelity: paper_positive_logdet
   model:
     name: resnet32
+    weights: none
     variant: standard
     base_width: 16
   transition:

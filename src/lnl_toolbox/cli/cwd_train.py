@@ -10,7 +10,7 @@ from lnl_toolbox.training.cwd_experiment import run_cwd_experiment
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run one CWD CIFAR-binary fold")
-    parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--config", type=Path)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--resume", type=Path)
     return parser
@@ -18,6 +18,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    if args.resume is not None:
+        from lnl_toolbox.training.service import ExperimentService
+        ExperimentService().run({}, resume=args.resume)
+        return 0
+    if args.config is None:
+        raise ValueError("--config is required for a new run")
     config = yaml.safe_load(args.config.read_text(encoding="utf-8"))
     if not isinstance(config, dict):
         raise ValueError("CWD configuration must contain a YAML mapping")

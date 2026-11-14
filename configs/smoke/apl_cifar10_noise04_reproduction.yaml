@@ -38,6 +38,8 @@ loader:
   pin_memory: true
 model:
   name: cnn8
+  variant: standard
+  weights: none
 optimizer:
   name: sgd
   lr: 0.01

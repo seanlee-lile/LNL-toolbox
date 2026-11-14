@@ -461,6 +461,33 @@
       gce2018: "从每张图片的各像素位置减去训练集在对应位置的平均值；不除以标准差。"
     })[value] || "使用当前配置指定的输入预处理方案。";
   }
+  function modelChoices(field) {
+    if (!field.model_name || !/\.(variant|weights)$/.test(field.path)) return field.choices;
+    const prefix = field.path.replace(/\.(variant|weights)$/, "");
+    const fields = state.planSchema?.fields || [];
+    const current = function (path, fallback) {
+      const item = fields.find(function (candidate) { return candidate.path === path; });
+      return item ? String(parameterValue(item)).toLowerCase() : String(fallback).toLowerCase();
+    };
+    const name = current(prefix + ".name", field.model_name);
+    const variant = current(prefix + ".variant", field.model_variant || "standard");
+    const cwd = state.selectedPaperId === "cwd" && prefix === "model";
+    let values = ["standard"];
+    if (field.path.endsWith(".variant")) {
+      if (name === "preact_resnet18") values.push("dss_specific");
+      else if (["resnet32", "resnet44"].includes(name)) values.push("loss_correction_specific");
+      else if (["resnet18", "resnet34", "resnet50", "resnet101"].includes(name) && !cwd) values.push("imagenet_standard");
+      else if (name === "torchvision_resnet34") values = ["imagenet_standard"];
+    } else {
+      values = ["none"];
+      if (name === "torchvision_resnet34") values = ["IMAGENET1K_V1"];
+      else if (variant === "imagenet_standard" && ["resnet18", "resnet34", "resnet50", "resnet101"].includes(name) && !cwd) {
+        values.push("imagenet1k_v1");
+        if (["resnet50", "resnet101"].includes(name)) values.push("imagenet1k_v2");
+      }
+    }
+    return values.map(function (value) { return (field.choices || []).find(function (item) { return item.value === value; }) || {value:value, label:value}; });
+  }
   function renderParameterField(field, segmentable) {
     segmentable = Boolean(segmentable && field.editable && field.display_group !== "restricted");
     const value = parameterValue(field);
@@ -469,7 +496,7 @@
     const selectedDataset = field.path === "data.name";
     const readonly = !field.editable || selectedDataset;
     const label = selectedDataset ? "当前数据集" : trainingStageName(field.path) ? trainingBudgetLabel(field) : field.label || field.presentation_label || field.path;
-    const choices = selectedDataset ? null : field.choices;
+    const choices = selectedDataset ? null : modelChoices(field);
     let control;
     if (field.kind === "boolean") {
       control = '<input type="checkbox" data-qs-param="' + esc(field.path) + '"' + (value ? ' checked' : '') + (readonly ? ' disabled' : '') + '>';
@@ -920,6 +947,7 @@
         }
       }
       markParameterEdited();
+      if (/(^|\.)model\.(name|variant)$/.test(path)) render();
     }); });
     window.parameterListEditor.bind(panel, function (path) { return Array.from(panel.querySelectorAll('[data-qs-param]')).find(function (input) { return input.dataset.qsParam === path; }); });
     const budgetPaths = new Set(scheduleGroups(state.planSchema?.fields || []).map(function (group) { return scheduleBudgetField(group, state.planSchema.fields)?.path; }).filter(Boolean));

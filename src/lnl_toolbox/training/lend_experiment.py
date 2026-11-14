@@ -137,10 +137,6 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
     checkpoint_payload = None
     if resume is not None:
         checkpoint_payload = read_checkpoint(resume, "cpu")
-        saved_config = checkpoint_payload.get("config")
-        if not isinstance(saved_config, Mapping):
-            raise ValueError("LEND checkpoint is missing resolved config")
-        _validate_resume_config(config, saved_config)
 
     data_config = config["data"]
     validation_size = int(data_config.get("validation_size", 0))

@@ -18,6 +18,8 @@ noise:
   manifest_filename: noise_manifest.npz
 model:
   name: tiny_cnn
+  variant: standard
+  weights: none
   width: 16
 optimizer:
   name: adam

@@ -228,10 +228,10 @@ def ensure_mentor_artifact(
         if resuming and stored.is_file():
             return stored
 
-    if not bool(provider.get("derive_from_seed", True)):
+    if not bool(provider.get("derive_teacher", provider.get("derive_from_seed", True))):
         raise FileNotFoundError(
             f"MentorArtifact not found: {configured or '(no artifact_path)'}; "
-            "derive_from_seed is disabled, so nothing can be trained"
+            "derive_teacher is disabled, so nothing can be trained"
         )
 
     seed = int(provider.get("teacher_seed", config.get("seed", 1)))

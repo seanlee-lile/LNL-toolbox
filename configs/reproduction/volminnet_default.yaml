@@ -30,6 +30,8 @@ volminnet:
   fidelity: paper_positive_logdet
   model:
     name: resnet18
+    variant: standard
+    weights: none
     base_width: 64
     # Author models.py: unpadded stem and PyTorch default initialization.
     stem_padding: 0

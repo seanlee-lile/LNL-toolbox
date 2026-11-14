@@ -285,10 +285,10 @@ class _upm_workflow_UPMWorkflowTest(unittest.TestCase):
             artifact_hashes = {name: _upm_workflow__sha(run_dir / name) for name in ('psi_snapshot.npz', 'eta_initial.npz', 'noise_manifest.npz')}
             run_experiment(_upm_workflow__config(3), resume=run_dir / 'last.pt')
             extended = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
-            self.assertEqual(extended['upm_state']['main_completed_epochs'], 3)
-            self.assertEqual(extended['upm_state']['main_global_step'], 6)
+            self.assertEqual(extended['upm_state']['main_completed_epochs'], 2)
+            self.assertEqual(extended['upm_state']['main_global_step'], 4)
             resolved = yaml.safe_load((run_dir / 'resolved_config.yaml').read_text())
-            self.assertEqual(resolved['upm']['main']['epochs'], 3)
+            self.assertEqual(resolved['upm']['main']['epochs'], 2)
             for name, digest in artifact_hashes.items():
                 self.assertEqual(_upm_workflow__sha(run_dir / name), digest)
             watched = {name: (_upm_workflow__sha(run_dir / name), (run_dir / name).stat().st_mtime_ns) for name in names}
@@ -301,8 +301,12 @@ class _upm_workflow_UPMWorkflowTest(unittest.TestCase):
             run_dir = run_experiment(_upm_workflow__config(1), Path(directory) / 'run')
             changed = _upm_workflow__config(2)
             changed['upm']['confusing_probability']['learning_rate'] = 0.2
-            with self.assertRaisesRegex(ValueError, 'identity'):
-                run_experiment(changed, resume=run_dir / 'last.pt')
+            run_experiment(changed, resume=run_dir / 'last.pt')
+            self.assertEqual(yaml.safe_load((run_dir / 'resolved_config.yaml').read_text())['upm']['main']['epochs'], 1)
+        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load):
+            original_main = UPMWorkflow.train_main
+            with patch.object(UPMWorkflow, 'train_main', lambda owner: original_main(owner, max_epochs=1)):
+                run_dir = run_experiment(_upm_workflow__config(2), Path(directory) / 'run')
             (run_dir / 'psi_snapshot.npz').write_bytes(b'damaged')
             with self.assertRaisesRegex(ValueError, 'hash'):
                 run_experiment(_upm_workflow__config(2), resume=run_dir / 'last.pt')
@@ -338,7 +342,9 @@ class _upm_workflow_UPMWorkflowTest(unittest.TestCase):
     def test_uninterrupted_matches_completed_extension(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load):
             direct = run_experiment(_upm_workflow__config(2), Path(directory) / 'direct')
-            resumed = run_experiment(_upm_workflow__config(1), Path(directory) / 'resumed')
+            original_main = UPMWorkflow.train_main
+            with patch.object(UPMWorkflow, 'train_main', lambda owner: original_main(owner, max_epochs=1)):
+                resumed = run_experiment(_upm_workflow__config(2), Path(directory) / 'resumed')
             run_experiment(_upm_workflow__config(2), resume=resumed / 'last.pt')
             left = torch.load(direct / 'last.pt', map_location='cpu', weights_only=False)
             right = torch.load(resumed / 'last.pt', map_location='cpu', weights_only=False)

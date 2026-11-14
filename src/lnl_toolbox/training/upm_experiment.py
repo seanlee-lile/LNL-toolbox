@@ -504,20 +504,6 @@ class UPMWorkflow:
         payload = read_checkpoint(checkpoint, self.device)
         if payload.get("method") != "upm":
             raise ValueError("resume checkpoint is not a UPM run")
-        saved_config = UPMConfig.from_mapping(payload["config"])
-        if payload.get("upm_config_identity_hash") != self.method_config.identity_hash:
-            raise ValueError("UPM checkpoint algorithm/configuration identity changed on resume")
-        # Formula identity and manifest hashes do not capture augmentation,
-        # loader/drop-last settings or the seed used for epoch reseeding.
-        for key in ("seed", "data", "loader", "evaluation"):
-            if payload["config"].get(key) != self.config.get(key):
-                raise ValueError(f"UPM training configuration changed on resume: {key}")
-        if saved_config.identity_hash != self.method_config.identity_hash:
-            raise ValueError("UPM identity settings changed on resume")
-        if self.method_config.stage1.epochs != saved_config.stage1.epochs:
-            raise ValueError("UPM Stage 1 epoch target changed on resume")
-        if self.method_config.main.epochs < saved_config.main.epochs:
-            raise ValueError("UPM main epoch target cannot be reduced")
         saved_noise = payload.get("noise", {})
         for key in ("mapping_hash", "manifest_sha256", "dataset", "num_classes"):
             if saved_noise.get(key) != self.noise_metadata.get(key):

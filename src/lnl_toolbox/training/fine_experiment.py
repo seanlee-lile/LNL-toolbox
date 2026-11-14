@@ -172,8 +172,6 @@ def run_fine_experiment(
     )
     run_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = None if resume is None else read_checkpoint(resume, "cpu")
-    if checkpoint is not None and checkpoint.get("config") != config:
-        raise ValueError("FINE resume configuration mismatch")
     if requirements is None:
         from lnl_toolbox.training.runners import resolve_data_requirements
 

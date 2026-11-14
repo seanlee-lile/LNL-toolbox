@@ -17,6 +17,8 @@ loader:
   drop_last: false
 model:
   name: fine_seven_cnn
+  variant: standard
+  weights: none
   base_width: 128
   dropout: 0.25
 optimizer:

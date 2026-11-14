@@ -44,6 +44,8 @@ loss:
 model:
   leakiness: 0.1
   name: mentor_wide_resnet
+  variant: standard
+  weights: none
   num_residual_units: 9
   weight_decay: 0.0002
   width_multiplier: 1
@@ -10081,7 +10083,7 @@ pipeline:
     fixed_epoch_after_burn_in: true
     fixed_label: 0
     name: mentornet
-    derive_from_seed: true
+    derive_teacher: true
     percentile: 0.6
     seed: 1
     total_epochs: 100

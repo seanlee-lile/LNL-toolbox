@@ -726,6 +726,10 @@ def _run(args: argparse.Namespace) -> int:
     global ExperimentService
     if ExperimentService is None:
         from lnl_toolbox.training.service import ExperimentService as ExperimentService
+    if getattr(args, "resume", None) is not None and not args.dry_run:
+        result = ExperimentService().run({}, resume=args.resume)
+        print(f"运行完成: {result}")
+        return 0
     review = bool(getattr(args, "review", False))
     if review and not args.dry_run:
         raise ValueError("--review requires --dry-run")

@@ -600,6 +600,19 @@ class ExperimentService:
         recipe: str | None = None,
         completed_noop: bool = True,
     ) -> Path:
+        if resume is not None:
+            import yaml
+
+            resume_path = Path(resume).expanduser().resolve()
+            if not resume_path.is_file():
+                raise ValueError(f"checkpoint does not exist: {resume_path}")
+            config_path = resume_path.parent / "resolved_config.yaml"
+            if not config_path.is_file():
+                raise ValueError(f"run directory is missing resolved_config.yaml: {resume_path.parent}")
+            saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            if not isinstance(saved, Mapping):
+                raise ValueError(f"resolved configuration must be a mapping: {config_path}")
+            config = saved
         # Preserve the public dispatch contract even for otherwise incomplete
         # configurations: an unknown explicit method must fail as an unknown
         # method before schema validation reports missing dataset fields.
@@ -637,6 +650,17 @@ class ExperimentService:
             provider = dict(provider)
             provider["artifact_path"] = str(Path(derived))
             candidate["pipeline"] = {**(candidate.get("pipeline") or {}), "weight_provider": provider}
+        if resume is None:
+            import yaml
+            from datetime import datetime
+
+            if output_dir is None:
+                output_dir = Path(candidate.get("output_root", "artifacts/runs")) / datetime.now().strftime("%Y%m%d-%H%M%S")
+            run_root = Path(output_dir).expanduser().resolve()
+            run_root.mkdir(parents=True, exist_ok=True)
+            config_path = run_root / "resolved_config.yaml"
+            if not config_path.exists():
+                config_path.write_text(yaml.safe_dump(candidate, sort_keys=False), encoding="utf-8")
         returned = Path(runner.invoke(candidate, output_dir, resume))
         result = returned.resolve()
         if not result.is_dir():

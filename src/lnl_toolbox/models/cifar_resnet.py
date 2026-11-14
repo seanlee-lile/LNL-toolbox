@@ -201,10 +201,12 @@ class CifarResNet(nn.Module):
                  input_channels: int = 3,
                  variant: str = "standard") -> None:
         super().__init__()
-        if variant not in {"standard", "dss_author"}:
-            raise ValueError("ResNet variant must be standard or dss_author")
-        if variant == "dss_author" and not preactivation:
-            raise ValueError("dss_author requires a preactivation network")
+        if variant == "dss_author":
+            variant = "dss_specific"
+        if variant not in {"standard", "dss_specific"}:
+            raise ValueError("ResNet variant must be standard or dss_specific")
+        if variant == "dss_specific" and not preactivation:
+            raise ValueError("dss_specific requires a preactivation network")
         if len(layer_counts) != 4 or any(count <= 0 for count in layer_counts):
             raise ValueError("layer_counts must contain four positive integers")
         initialization = str(initialization).strip().lower()
@@ -219,14 +221,14 @@ class CifarResNet(nn.Module):
             int(input_channels), base_width, 3,
             padding=int(stem_padding), bias=False
         )
-        if not preactivation or variant == "dss_author":
+        if not preactivation or variant == "dss_specific":
             stem = nn.Sequential(stem, nn.BatchNorm2d(base_width), nn.ReLU(inplace=True))
         self.stem = stem
         self.layer1 = self._make_layer(block, base_width, layer_counts[0], 1)
         self.layer2 = self._make_layer(block, base_width * 2, layer_counts[1], 2)
         self.layer3 = self._make_layer(block, base_width * 4, layer_counts[2], 2)
         self.layer4 = self._make_layer(block, base_width * 8, layer_counts[3], 2)
-        self.preactivation = preactivation and variant != "dss_author"
+        self.preactivation = preactivation and variant != "dss_specific"
         self.final_bn = nn.BatchNorm2d(base_width * 8) if self.preactivation else nn.Identity()
         self.avgpool = nn.AdaptiveAvgPool2d(1)
         self.feature_dropout = nn.Dropout(p=0.0)
@@ -362,14 +364,16 @@ def preact_resnet18(
     input_channels: int = 3,
     variant: str = "standard",
 ) -> CifarResNet:
+    if variant == "dss_author":  # Existing configuration files and checkpoints.
+        variant = "dss_specific"
     return CifarResNet(
-        DSSAuthorPreActBlock if variant == "dss_author" else PreActBlock,
+        DSSAuthorPreActBlock if variant == "dss_specific" else PreActBlock,
         num_classes,
         base_width,
         preactivation=True,
         input_channels=input_channels,
         variant=variant,
-        initialization="torch_default" if variant == "dss_author" else "kaiming",
+        initialization="torch_default" if variant == "dss_specific" else "kaiming",
     )
 
 
@@ -406,6 +410,8 @@ class CifarResNetDepth(nn.Module):
         variant: str = "standard",
     ) -> None:
         super().__init__()
+        if variant == "loss_correction_specific":
+            variant = "loss_correction"
         if variant not in {"standard", "loss_correction"}:
             raise ValueError("CIFAR depth variant must be standard or loss_correction")
         self.variant = variant

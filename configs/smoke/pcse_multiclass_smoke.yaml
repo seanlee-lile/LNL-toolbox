@@ -24,6 +24,8 @@ pretraining_stage:
   checkpoint_selection: noisy_validation_accuracy
   model:
     name: pcse_mlp
+    variant: standard
+    weights: none
     hidden_width: 12
   loss:
     name: ce

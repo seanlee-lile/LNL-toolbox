@@ -513,8 +513,6 @@ class DLDWorkflow:
         payload = read_checkpoint(checkpoint, "cpu")
         if payload.get("method") != "dld" or payload.get("checkpoint_role") != "run_state":
             raise ValueError("only a DLD last.pt checkpoint may be resumed")
-        if payload.get("dld_identity_hash") != self.method_config.identity_hash:
-            raise ValueError("DLD identity configuration changed on resume")
         if payload.get("feature_identity") != self.feature_identity:
             raise ValueError("DLD feature extractor identity changed on resume")
         saved_feature_source = payload.get("feature_source")

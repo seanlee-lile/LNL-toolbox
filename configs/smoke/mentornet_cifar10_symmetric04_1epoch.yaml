@@ -8,6 +8,8 @@ data:
   augment: true
 model:
   name: resnet101
+  variant: standard
+  weights: none
   base_width: 64
 noise:
   name: symmetric

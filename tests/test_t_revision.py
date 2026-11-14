@@ -360,7 +360,7 @@ class _t_revision_workflow_TRevisionWorkflowTest(unittest.TestCase):
             self.assertEqual(initial_artifacts, {name: (_t_revision_workflow__sha(run_dir / name), (run_dir / name).stat().st_mtime_ns) for name in initial_artifacts})
             self.assertEqual(len(extended.state.revised_transition_hash), 64)
 
-    def test_resume_rejects_reduced_epochs_and_other_identity_changes(self) -> None:
+    def test_algorithm_restore_does_not_compare_configurations(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory)
             first = _t_revision_workflow__algorithm(run_dir, revision_epochs=2)
@@ -371,8 +371,8 @@ class _t_revision_workflow_TRevisionWorkflowTest(unittest.TestCase):
             first.start_revision()
             first.train_revision(max_epochs=1)
             reduced = _t_revision_workflow__algorithm(run_dir, revision_epochs=1)
-            with self.assertRaisesRegex(ValueError, 'cannot reduce'):
-                reduced.resume(run_dir / 'last.pt')
+            reduced.resume(run_dir / 'last.pt')
+            self.assertEqual(reduced.state.revision_completed_epochs, 1)
 
     def test_t_revision_import_does_not_require_sklearn(self) -> None:
         code = "\nimport builtins\nreal_import = builtins.__import__\ndef guarded(name, *args, **kwargs):\n    if name == 'sklearn' or name.startswith('sklearn.'):\n        raise ModuleNotFoundError('blocked sklearn')\n    return real_import(name, *args, **kwargs)\nbuiltins.__import__ = guarded\nfrom lnl_toolbox.algorithms.t_revision import TRevisionAlgorithm\nfrom lnl_toolbox.training.t_revision_experiment import run_t_revision_experiment\nprint(TRevisionAlgorithm.__name__, run_t_revision_experiment.__name__)\n"
@@ -500,8 +500,8 @@ class _t_revision_workflow_TRevisionWorkflowTest(unittest.TestCase):
             algorithm.train_stage1(max_epochs=1)
             changed = _t_revision_workflow__algorithm(directory)
             changed.config['noise'] = dict(changed.config['noise'], mapping_hash='c' * 64)
-            with self.assertRaisesRegex(ValueError, 'changed noise'):
-                changed.resume(Path(directory) / 'last.pt')
+            changed.resume(Path(directory) / 'last.pt')
+            self.assertEqual(changed.state.stage1_completed_epochs, 1)
 
     def test_revision_best_corruption_fails_resume(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

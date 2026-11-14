@@ -28,6 +28,8 @@ posterior_stage:
   rate_estimator: paper_raw_min
 model:
   name: linear
+  variant: standard
+  weights: none
   in_features: 20
   num_classes: 2
 loss:

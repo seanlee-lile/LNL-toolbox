@@ -38,6 +38,8 @@ dld:
     source: repository_frozen_model
     model:
       name: tiny_cnn
+      variant: standard
+      weights: none
       width: 8
   precorrection:
     k_neighbors: 10

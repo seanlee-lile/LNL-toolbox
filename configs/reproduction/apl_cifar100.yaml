@@ -53,6 +53,8 @@ loss:
     name: rce
 model:
   name: resnet34
+  variant: standard
+  weights: none
 noise:
   name: symmetric
   rate: 0.2

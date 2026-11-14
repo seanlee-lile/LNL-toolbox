@@ -38,6 +38,8 @@ loss:
 model:
   base_width: 64
   name: resnet34
+  variant: standard
+  weights: none
 noise:
   manifest_filename: noise_manifest.npz
   name: symmetric

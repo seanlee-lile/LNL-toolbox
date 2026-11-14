@@ -11,7 +11,7 @@ from lnl_toolbox.training.instance_transition_experiment import run_instance_tra
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train a staged instance-transition experiment")
-    parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--config", type=Path)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--epochs", type=int)
@@ -20,6 +20,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
+    if arguments.resume is not None:
+        from lnl_toolbox.training.service import ExperimentService
+        ExperimentService().run({}, resume=arguments.resume)
+        return 0
+    if arguments.config is None:
+        raise ValueError("--config is required for a new run")
     config = yaml.safe_load(arguments.config.read_text(encoding="utf-8"))
     if not isinstance(config, dict):
         raise ValueError("configuration must contain a YAML mapping")

@@ -44,10 +44,10 @@ class DSSScratchProtocolTest(unittest.TestCase):
         from lnl_toolbox.scratch.blocks.models import create_model
         from lnl_toolbox.scratch.context import ScratchContext
         torch.manual_seed(17)
-        formal = preact_resnet18(num_classes=10, base_width=4, variant='dss_author')
+        formal = preact_resnet18(num_classes=10, base_width=4, variant='dss_specific')
         torch.manual_seed(17)
         ctx = ScratchContext(device=torch.device('cpu'))
-        create_model(ctx, model='preact_resnet18', base_width=4, variant='dss_author')
+        create_model(ctx, model='preact_resnet18', base_width=4, variant='dss_specific')
         scratch = ctx['model']
         self.assertEqual(set(formal.state_dict()), set(scratch.state_dict()))
         for name, value in formal.state_dict().items():
@@ -60,7 +60,7 @@ class DSSScratchProtocolTest(unittest.TestCase):
         for name, parameter in formal.named_parameters():
             torch.testing.assert_close(parameter.grad, dict(scratch.named_parameters())[name].grad)
         with self.assertRaisesRegex(ValueError, 'variant'):
-            create_model(ctx, model='resnet50', variant='dss_author')
+            create_model(ctx, model='resnet50', variant='dss_specific')
 
     def test_scratch_classwise_split_matches_formal_indices(self) -> None:
         import numpy as np
@@ -140,7 +140,7 @@ class DSSAuthorModelTest(unittest.TestCase):
         from lnl_toolbox.models.cifar_resnet import DSSAuthorPreActBlock, PreActBlock, preact_resnet18
         from lnl_toolbox.training.experiment import build_model
         config = yaml.safe_load(Path('configs/reproduction/dss_default.yaml').read_text(encoding='utf-8'))
-        self.assertEqual(config['model']['variant'], 'dss_author')
+        self.assertEqual(config['model']['variant'], 'dss_specific')
         torch.manual_seed(17)
         expected_stem = nn.Conv2d(3, 64, 3, padding=1, bias=False)
         torch.manual_seed(17)
@@ -194,7 +194,7 @@ class DSSAuthorModelTest(unittest.TestCase):
         fields = {field['path']: field for field in command_console._config_schema(
             'dss-cifar10-symmetric05-reproduction')['fields']}
         variant = fields['model.variant']
-        self.assertEqual({choice['value'] for choice in variant['choices']}, {'standard', 'dss_author'})
+        self.assertEqual({choice['value'] for choice in variant['choices']}, {'standard', 'dss_specific'})
 
 
 class _dss_DSSRiskTest(unittest.TestCase):

@@ -606,7 +606,7 @@ class _compatibility_ExperimentCompatibilityServiceTest(unittest.TestCase):
             'execution': {'runner': 'supervised'},
             'data': {'name': 'fixture'},
             'pipeline': {'weight_provider': {
-                'name': 'mentornet', 'derive_from_seed': False,
+                'name': 'mentornet', 'derive_teacher': False,
             }},
         }
         pinned = service.resolve_method_compatibility(pinned_config, pinned_config)
@@ -621,6 +621,20 @@ class _compatibility_ExperimentCompatibilityServiceTest(unittest.TestCase):
             if item['code'] == 'requires_mentor_artifact'
         )
         self.assertEqual(serialized_reason['origin'], 'implemented_variant_limit')
+
+        legacy_config = {
+            'execution': {'runner': 'supervised'},
+            'data': {'name': 'fixture'},
+            'pipeline': {'weight_provider': {
+                'name': 'mentornet', 'derive_from_seed': False,
+            }},
+        }
+        legacy = service.resolve_method_compatibility(legacy_config, legacy_config)
+        self.assertIn(
+            'requires_mentor_artifact',
+            {item.code for item in legacy.reasons},
+            'the legacy derive_from_seed key must keep its meaning',
+        )
 
     def test_l2rw_trusted_supervision_remains_an_algorithm_requirement(self) -> None:
         capabilities = resolve_dataset_capabilities(

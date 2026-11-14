@@ -48,6 +48,15 @@ def forward_with_features(
 
     method = getattr(model, "forward_with_features", None)
     if not callable(method):
+        if type(model).__module__ == "torchvision.models.resnet" and isinstance(getattr(model, "fc", None), nn.Linear):
+            values = model.relu(model.bn1(model.conv1(inputs)))
+            values = model.maxpool(values)
+            values = model.layer1(values)
+            values = model.layer2(values)
+            values = model.layer3(values)
+            values = model.layer4(values)
+            features = torch.flatten(model.avgpool(values), 1)
+            return FeatureOutput(model.fc(features), features)
         raise TypeError(
             f"model {type(model).__name__} does not expose "
             "forward_with_features()"
@@ -72,6 +81,8 @@ def classifier_parameters(model: nn.Module) -> tuple[Tensor, Tensor | None]:
     """Return the final linear classifier through a model-neutral contract."""
 
     classifier = getattr(model, "classifier", None)
+    if type(model).__module__ == "torchvision.models.resnet":
+        classifier = getattr(model, "fc", classifier)
     if isinstance(classifier, nn.Linear):
         return classifier.weight, classifier.bias
     if isinstance(classifier, nn.Sequential):

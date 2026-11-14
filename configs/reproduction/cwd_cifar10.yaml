@@ -37,6 +37,8 @@ loader:
   pin_memory: true
 model:
   name: cifar_resnet34
+  variant: standard
+  weights: none
   base_width: 64
   bias: false
   feature_dropout: 0.5

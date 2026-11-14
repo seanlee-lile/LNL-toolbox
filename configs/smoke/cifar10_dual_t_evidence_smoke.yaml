@@ -30,6 +30,8 @@ posterior_stage:
   checkpoint_selection: noisy_validation_accuracy
   model:
     name: tiny_cnn
+    variant: standard
+    weights: none
     width: 32
   loss:
     name: ce
@@ -45,6 +47,8 @@ final_stage:
   fresh_model: true
   model:
     name: tiny_cnn
+    variant: standard
+    weights: none
     width: 32
   loss:
     name: ce

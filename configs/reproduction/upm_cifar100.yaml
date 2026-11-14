@@ -53,6 +53,8 @@ upm:
     epochs: 160
     model:
       name: resnet32
+      variant: standard
+      weights: none
       base_width: 16
     optimizer:
       name: sgd
@@ -76,6 +78,8 @@ upm:
     initialization: fresh
     model:
       name: resnet32
+      variant: standard
+      weights: none
       base_width: 16
     optimizer:
       name: sgd

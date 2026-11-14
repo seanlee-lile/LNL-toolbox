@@ -145,7 +145,13 @@ def synchronize_experiment_seed(config: Mapping[str, Any]) -> dict[str, Any]:
         for key, item in section.items():
             if key in {"parameter_record", "parameter_sampling", "hyperparameters"}:
                 continue
-            if isinstance(key, str) and (key == "seed" or (key.endswith("_seed") and key != "peer_seed_offset")):
+            if isinstance(key, str) and (
+                key == "seed"
+                or (
+                    key.endswith("_seed")
+                    and key not in {"peer_seed_offset", "derive_from_seed"}
+                )
+            ):
                 section[key] = seed
             elif isinstance(item, dict):
                 synchronize(item)
@@ -188,6 +194,23 @@ def normalize_experiment_config(config: Mapping[str, Any]) -> dict[str, Any]:
         } <= set(normalized_noise):
             normalized_noise["name"] = "binary_asymmetric_rcn"
         value["noise"] = normalized_noise
+
+    pipeline = value.get("pipeline")
+    if isinstance(pipeline, Mapping):
+        provider = pipeline.get("weight_provider")
+        if isinstance(provider, Mapping):
+            normalized_provider = deepcopy(dict(provider))
+            legacy_derivation = normalized_provider.pop("derive_from_seed", None)
+            if legacy_derivation is not None:
+                if (
+                    "derive_teacher" in normalized_provider
+                    and normalized_provider["derive_teacher"] != legacy_derivation
+                ):
+                    raise ValueError(
+                        "pipeline.weight_provider.derive_teacher conflicts with legacy derive_from_seed"
+                    )
+                normalized_provider.setdefault("derive_teacher", legacy_derivation)
+            value["pipeline"] = {**deepcopy(dict(pipeline)), "weight_provider": normalized_provider}
 
     runner = str((_mapping(value.get("execution", {}), "execution")).get("runner", ""))
     if runner == "binary" or "risk" in value:

@@ -253,13 +253,6 @@ def run_volminnet_experiment(
     dataset_name, num_classes = prepared.dataset, prepared.num_classes
     config["data"].setdefault("num_classes", num_classes)
     method_config = VolMinNetConfig.from_mapping(config)
-    if resume_payload is not None:
-        saved_config = resume_payload.get("config")
-        if not isinstance(saved_config, Mapping):
-            raise ValueError("VolMinNet checkpoint resolved config is missing")
-        _validate_resume_config(config, saved_config)
-        if resume_payload.get("config_identity_hash") != _stable_hash(_resume_identity(config)):
-            raise ValueError("VolMinNet checkpoint config identity hash mismatch")
     manifest, manifest_path = prepared.manifest, prepared.manifest_path
     if manifest is None or manifest_path is None:
         raise ValueError("VolMinNet requires noisy train and validation labels")

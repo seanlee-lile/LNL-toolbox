@@ -400,7 +400,7 @@ class TRevisionAlgorithm:
         saved_config = payload.get("config")
         if not isinstance(saved_config, Mapping):
             raise ValueError("T-Revision checkpoint is missing config")
-        saved_revision_epochs = self._validate_config(saved_config)
+        saved_revision_epochs = TRevisionConfig.from_mapping(saved_config).revision.epochs
         self.state = TRevisionState.from_state_dict(payload["t_revision_state"])
         extend_completed_revision = (
             self.state.phase is TRevisionPhase.COMPLETED

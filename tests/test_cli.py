@@ -409,8 +409,8 @@ class ConfigParameterGateTest(unittest.TestCase):
         from lnl_toolbox.catalog import _config_parameter_errors
 
         cases = (
-            ('resnet32', 'variant', 'loss_correction'),
-            ('preact_resnet18', 'variant', 'dss_author'),
+            ('resnet32', 'variant', 'loss_correction_specific'),
+            ('preact_resnet18', 'variant', 'dss_specific'),
             ('resnet18', 'variant', 'imagenet_standard'),
             ('resnet34', 'variant', 'imagenet_standard'),
             ('resnet18', 'initialization', 'torch_default'),
@@ -426,7 +426,7 @@ class ConfigParameterGateTest(unittest.TestCase):
                     self.set_value(config, owner + '.' + option, 'not-supported')
                     errors = _config_parameter_errors(config)
                     self.assertTrue(any(owner + '.' + option in error for error in errors))
-        for name, variant in (('resnet32', 'dss_author'), ('preact_resnet18', 'loss_correction')):
+        for name, variant in (('resnet32', 'dss_specific'), ('preact_resnet18', 'loss_correction')):
             self.assertTrue(_config_parameter_errors({'model': {'name': name, 'variant': variant}}))
 
     def test_multiple_errors_are_one_line_per_parameter(self):
@@ -1190,7 +1190,7 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
 
             def fake_run(_config, output_dir, _resume):
                 output = Path(output_dir)
-                output.mkdir()
+                output.mkdir(exist_ok=True)
                 (output / 'metrics.jsonl').write_text(json.dumps({'epoch': 1, 'test_accuracy': 0.75}) + '\n', encoding='utf-8')
                 return output
             with patch('lnl_toolbox.training.runners.RunnerSpec.invoke', side_effect=fake_run), patch('lnl_toolbox.cli.main.ExperimentService.preflight'):

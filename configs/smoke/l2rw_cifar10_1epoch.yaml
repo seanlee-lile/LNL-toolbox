@@ -25,6 +25,8 @@ trusted_validation:
   seed: 1234
 model:
   name: resnet32
+  variant: standard
+  weights: none
   base_width: 16
 optimizer:
   name: sgd

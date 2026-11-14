@@ -730,8 +730,18 @@ class APLReportingProtocolTest(unittest.TestCase):
             'lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: _noisy_ce_baseline__cifar(40 if split == 'train' else 20, split)
         ):
             full = run_experiment(self.config(), output_dir=Path(directory) / 'full')
-            partial = run_experiment(self.config(1), output_dir=Path(directory) / 'resumed')
-            run_experiment(self.config(), output_dir=partial, resume=partial / 'last.pt')
+            partial = Path(directory) / 'resumed'
+            original_save = save_checkpoint
+            def interrupt_after_checkpoint(path, *args, **kwargs):
+                original_save(path, *args, **kwargs)
+                if Path(path).name == 'last.pt':
+                    raise RuntimeError('simulated interruption')
+            with patch('lnl_toolbox.training.experiment.save_checkpoint', side_effect=interrupt_after_checkpoint):
+                with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
+                    run_experiment(self.config(), output_dir=partial)
+            self.assertTrue((partial / 'resolved_config.yaml').is_file())
+            # An unrelated caller configuration must not override the saved run.
+            run_experiment(self.config(1), output_dir=partial, resume=partial / 'last.pt')
             expected = torch.load(full / 'last.pt', map_location='cpu', weights_only=False)
             actual = torch.load(partial / 'last.pt', map_location='cpu', weights_only=False)
             for key, value in expected['model'].items():

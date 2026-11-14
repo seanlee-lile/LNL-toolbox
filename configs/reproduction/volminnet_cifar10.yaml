@@ -54,6 +54,8 @@ volminnet:
   fidelity: paper_positive_logdet
   model:
     name: resnet18
+    variant: standard
+    weights: none
     base_width: 64
     stem_padding: 0
     initialization: torch_default

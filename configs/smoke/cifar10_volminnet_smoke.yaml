@@ -24,6 +24,8 @@ volminnet:
   fidelity: paper_positive_logdet
   model:
     name: tiny_cnn
+    variant: standard
+    weights: none
     width: 8
   transition:
     parameterization: fixed_diagonal_sigmoid_offdiag

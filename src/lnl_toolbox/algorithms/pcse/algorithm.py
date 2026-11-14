@@ -1205,14 +1205,6 @@ class PCSEAlgorithm:
             raise ValueError("Checkpoint is not a PCSE checkpoint")
         if payload.get("checkpoint_role") != "run_state":
             raise ValueError("Only PCSE last.pt may be resumed")
-        saved_config = payload.get("config")
-        if not isinstance(saved_config, Mapping):
-            raise ValueError("PCSE checkpoint configuration is missing")
-        if PCSEConfig.from_mapping(saved_config) != self.method_config:
-            raise ValueError("Resume configuration changed PCSE method settings")
-        for key in ("seed", "data", "noise", "loader"):
-            if saved_config.get(key) != self.config.get(key):
-                raise ValueError(f"Resume configuration changed {key}")
         self.state = PCSEState.from_state_dict(payload["pcse_state"])
         self.pretraining_algorithm.load_state_dict(
             payload["pretraining_algorithm"]

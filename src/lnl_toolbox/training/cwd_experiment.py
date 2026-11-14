@@ -58,6 +58,8 @@ class _FeatureMLP(torch.nn.Module):
 
 def _build_model(config: Mapping[str, Any]):
     name = str(config.get("name", "resnet34")).strip().lower()
+    if str(config.get("variant", "standard")).lower() != "standard" or str(config.get("weights") or "none").lower() != "none":
+        raise ValueError("CWD's dedicated model supports only standard architecture without pretrained weights")
     if name in {"resnet34", "cifar_resnet34"}:
         outputs = int(config.get("num_outputs", 2))
         model = cifar_resnet34(
@@ -392,8 +394,6 @@ def run_cwd_experiment(
     )
     run_dir.mkdir(parents=True, exist_ok=True)
     checkpoint = None if resume is None else read_checkpoint(resume, "cpu")
-    if checkpoint is not None and checkpoint.get("config") != config:
-        raise ValueError("CWD resume configuration mismatch")
     if checkpoint is not None and checkpoint.get("phase") == "cwd_transition":
         # The helper resumes its own algorithm/optimizers/RNG from cwd_transition.pt.
         if not (run_dir / "cwd_transition.pt").is_file():

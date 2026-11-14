@@ -48,7 +48,8 @@ loss:
 model:
   base_width: 16
   name: resnet32
-  variant: loss_correction
+  weights: none
+  variant: loss_correction_specific
 noise:
   manifest_filename: noise_manifest.npz
   name: class_conditional

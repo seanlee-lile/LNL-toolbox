@@ -49,8 +49,9 @@ noise:
   manifest_filename: noise_manifest.npz
 model:
   name: preact_resnet18
+  weights: none
   base_width: 64
-  variant: dss_author
+  variant: dss_specific
 optimizer:
   name: sgd
   lr: 0.02

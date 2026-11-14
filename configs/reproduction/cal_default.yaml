@@ -31,6 +31,8 @@ loader:
   pin_memory: true
 model:
   name: resnet34
+  variant: standard
+  weights: none
   base_width: 64
   initialization: torch_default
 optimizer:

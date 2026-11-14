@@ -46,6 +46,8 @@ trusted_validation:
   input_seed: 1234
 model:
   name: l2rw_resnet32
+  variant: standard
+  weights: none
   base_width: 16
 optimizer:
   name: sgd

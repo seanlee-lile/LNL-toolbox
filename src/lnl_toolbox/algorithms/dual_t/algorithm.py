@@ -309,10 +309,6 @@ class DualTAlgorithm:
                 "Only the Dual-T run-state checkpoint may be resumed; "
                 "posterior/final best checkpoints are evaluation artifacts"
             )
-        saved_config = payload.get("config")
-        if not isinstance(saved_config, Mapping):
-            raise ValueError("Dual-T checkpoint is missing its configuration")
-        self._validate_resume_config(saved_config)
 
         self.state = DualTState.from_state_dict(payload["dual_t_state"])
         self.posterior_algorithm.load_state_dict(payload["posterior_algorithm"])

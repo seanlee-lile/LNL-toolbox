@@ -29,6 +29,8 @@ loader:
   drop_last: false
 model:
   name: resnet18
+  variant: standard
+  weights: none
   base_width: 64
 loss:
   name: ce

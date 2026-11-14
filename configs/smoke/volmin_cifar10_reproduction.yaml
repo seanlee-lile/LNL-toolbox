@@ -25,6 +25,8 @@ loader:
   drop_last: false
 model:
   name: resnet18
+  variant: standard
+  weights: none
   base_width: 16
 optimizer:
   name: sgd

@@ -78,6 +78,8 @@ loss:
   name: ce
 model:
   name: resnet34
+  variant: standard
+  weights: none
   base_width: 64
   stem_padding: 0
   initialization: torch_default

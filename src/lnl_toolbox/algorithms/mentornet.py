@@ -71,13 +71,17 @@ class MentorNetWeightProvider:
         dropout_schedule: Sequence[Sequence[float]] = (),
         seed: int = 0,
         zero_weight_policy: str = "error",
-        derive_from_seed: bool = True,
+        derive_teacher: bool = True,
+        derive_from_seed: bool | None = None,
     ) -> None:
-        # ``derive_from_seed`` is a lifecycle switch read by the catalog, the
+        # ``derive_teacher`` is a lifecycle switch read by the catalog, the
         # runner and mentor_learning; it decides whether the teacher artifact is
         # trained from the run seed. It is accepted here only because the
         # weight-provider mapping is forwarded verbatim as constructor keywords.
-        self.derive_from_seed = bool(derive_from_seed)
+        # ``derive_from_seed`` stays as a legacy alias for older YAML files.
+        self.derive_teacher = bool(
+            derive_from_seed if derive_from_seed is not None else derive_teacher
+        )
         self.artifact_path = str(Path(artifact_path))
         self.artifact = MentorArtifact.load(self.artifact_path)
         self.model = build_mentor_model(dict(self.artifact.architecture))

@@ -129,7 +129,6 @@ def run_dividemix_experiment(
     checkpoint = read_checkpoint(resume, "cpu") if resume else None
     if checkpoint:
         if checkpoint.get("method") != "dividemix": raise ValueError("checkpoint method is not DivideMix")
-        _validate_resume(config, checkpoint["config"])
     if requirements is None:
         from lnl_toolbox.training.runners import resolve_data_requirements
         requirements = resolve_data_requirements(config, expected_runner="dividemix")

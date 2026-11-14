@@ -27,6 +27,7 @@ posterior_stage:
   checkpoint_selection: noisy_validation_accuracy
   model:
     name: resnet18
+    weights: none
     base_width: 64
     variant: imagenet_standard
   loss:
@@ -51,6 +52,7 @@ final_stage:
   fresh_model: true
   model:
     name: resnet18
+    weights: none
     base_width: 64
     variant: imagenet_standard
   loss:

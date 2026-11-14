@@ -513,7 +513,9 @@ def mentornet_preparation_status(
     ):
         return None
     root = (project_root or find_project_root()).resolve()
-    if not str(provider.get("artifact_path") or "").strip() and bool(provider.get("derive_from_seed", True)):
+    if not str(provider.get("artifact_path") or "").strip() and bool(
+        provider.get("derive_teacher", provider.get("derive_from_seed", True))
+    ):
         return {
             "status": "derived_from_seed",
             "artifact_path": "(derived from seed at run start)",
@@ -854,12 +856,28 @@ def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
                 # one nesting depth. Match the actual model factory contracts.
                 model_name = str(value.get("name", "preact_resnet18")).lower()
                 choices = {
-                    "resnet32": "standard loss_correction",
-                    "resnet44": "standard loss_correction",
-                    "preact_resnet18": "standard dss_author",
+                    "resnet32": "standard loss_correction_specific loss_correction",
+                    "resnet44": "standard loss_correction_specific loss_correction",
+                    "preact_resnet18": "standard dss_specific dss_author",
                     "resnet18": "standard imagenet_standard",
                     "resnet34": "standard imagenet_standard",
+                    "resnet50": "standard imagenet_standard",
+                    "resnet101": "standard imagenet_standard",
+                    "torchvision_resnet34": "imagenet_standard",
                 }.get(model_name, "standard")
+                if method == "cwd" and prefix == "model":
+                    choices = "standard"
+            elif key == "weights" and "model" in parts:
+                model_name = str(value.get("name", "")).lower()
+                variant = str(value.get("variant", "standard")).lower()
+                if model_name == "torchvision_resnet34":
+                    choices = "imagenet1k_v1"
+                elif variant == "imagenet_standard" and model_name in {"resnet18", "resnet34"}:
+                    choices = "none imagenet1k_v1"
+                elif variant == "imagenet_standard" and model_name in {"resnet50", "resnet101"}:
+                    choices = "none imagenet1k_v1 imagenet1k_v2"
+                else:
+                    choices = "none"
             elif key == "name" and "loss" in parts:
                 choices = "ce cross_entropy nce mae gce rce apl nce_rce nce_mae"
             if choices is not None:
@@ -1094,7 +1112,9 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
         if isinstance(provider, Mapping) and str(provider.get("name", "")).lower() == "mentornet":
             status = mentornet_preparation_status(config)
             assert status is not None
-            if not status["artifact_ready"] and not bool(provider.get("derive_from_seed", True)):
+            if not status["artifact_ready"] and not bool(
+                provider.get("derive_teacher", provider.get("derive_from_seed", True))
+            ):
                 guidance = ""
                 commands = status["commands"]
                 if commands:

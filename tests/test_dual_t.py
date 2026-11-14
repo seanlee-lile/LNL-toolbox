@@ -167,18 +167,36 @@ class DualTPaperProtocolTest(unittest.TestCase):
 
 
     def test_standard_resnet_stem_and_unchanged_cifar_default(self):
-        for name, blocks in (('resnet18', [2, 2, 2, 2]), ('resnet34', [3, 4, 6, 3])):
+        for name, blocks in (('resnet18', [2, 2, 2, 2]), ('resnet34', [3, 4, 6, 3]),
+                             ('resnet50', [3, 4, 6, 3]), ('resnet101', [3, 4, 23, 3])):
             model = build_model({'name': name, 'variant': 'imagenet_standard'}, 10).eval()
             self.assertEqual(model.conv1.kernel_size, (7, 7))
             self.assertEqual(model.conv1.stride, (2, 2))
             self.assertEqual(model.maxpool.kernel_size, 3)
             self.assertEqual([len(getattr(model, f'layer{i}')) for i in range(1, 5)], blocks)
             self.assertEqual(model(torch.zeros(2, 3, 32, 32)).shape, (2, 10))
+            from lnl_toolbox.models.feature_output import forward_with_features, classifier_parameters
+            output = forward_with_features(model, torch.zeros(2, 3, 32, 32))
+            self.assertEqual(output.logits.shape, (2, 10))
+            self.assertEqual(output.features.shape[1], model.fc.in_features)
+            self.assertEqual(len(list(classifier_parameters(model))), 2)
             cifar = build_model({'name': name}, 10)
             self.assertEqual(cifar.stem[0].kernel_size, (3, 3))
             self.assertEqual(cifar.stem[0].stride, (1, 1))
         with self.assertRaisesRegex(ValueError, 'base_width'):
             build_model({'name': 'resnet18', 'variant': 'imagenet_standard', 'base_width': 16}, 10)
+
+    def test_pretrained_resnet_replaces_only_classifier(self):
+        from torchvision import models
+        reference = models.resnet18(weights=None)
+        with torch.no_grad():
+            reference.conv1.weight.fill_(0.125)
+        with patch('torchvision.models.resnet18', return_value=reference) as factory:
+            model = build_model({'name': 'resnet18', 'variant': 'imagenet_standard',
+                                 'weights': 'imagenet1k_v1'}, 10)
+        self.assertEqual(factory.call_args.kwargs['weights'], models.ResNet18_Weights.IMAGENET1K_V1)
+        self.assertTrue(torch.all(model.conv1.weight == 0.125))
+        self.assertEqual(model.fc.out_features, 10)
 
     def test_forward_epsilon_loss_and_gradient_preserve_default_behavior(self):
         from lnl_toolbox.algorithms.dual_t.algorithm import _build_final_risk_corrector

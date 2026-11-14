@@ -119,7 +119,7 @@ def run_ca2c_experiment(
     memory = CandidateMemory.create(torch.as_tensor(data.train_indices), classes); criterion = CrossEntropyLoss().to(device); start = 0; rows = []
     payload = read_checkpoint(resume, device) if resume else None
     if payload is not None:
-        if payload.get("method") != "ca2c" or payload.get("config") != config: raise ValueError("CA2C resume identity mismatch")
+        if payload.get("method") != "ca2c": raise ValueError("CA2C resume identity mismatch")
         p_model.load_state_dict(payload["p_model"]); n_model.load_state_dict(payload["n_model"]); p_optimizer.load_state_dict(payload["p_optimizer"]); n_optimizer.load_state_dict(payload["n_optimizer"])
         if p_scheduler is not None: p_scheduler.load_state_dict(payload["p_scheduler"]); n_scheduler.load_state_dict(payload["n_scheduler"])
         memory = CandidateMemory.from_state_dict(payload["candidate_memory"])

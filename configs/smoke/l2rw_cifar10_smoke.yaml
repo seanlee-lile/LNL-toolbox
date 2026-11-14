@@ -28,6 +28,8 @@ trusted_validation:
   seed: 29
 model:
   name: feature_mlp
+  variant: standard
+  weights: none
   hidden_width: 8
 optimizer:
   name: sgd

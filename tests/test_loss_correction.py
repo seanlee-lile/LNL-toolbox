@@ -107,7 +107,7 @@ class LossCorrectionPaperProtocolTest(unittest.TestCase):
         inputs = -torch.ones(2, 3, 8, 8)
         torch.testing.assert_close(block(inputs), inputs)
         standard = cifar_resnet32()
-        corrected = cifar_resnet32(variant='loss_correction')
+        corrected = cifar_resnet32(variant='loss_correction_specific')
         self.assertTrue(any(isinstance(layer, BasicBlock) for layer in standard.modules()))
         self.assertTrue(any(isinstance(layer, LossCorrectionPreActBlock) for layer in corrected.modules()))
         self.assertEqual(corrected(torch.randn(2, 3, 32, 32)).shape, (2, 10))
@@ -226,13 +226,13 @@ class LossCorrectionPaperProtocolTest(unittest.TestCase):
             losses = [row['selection_loss'] for row in rows if row['event'] == 'epoch']
             self.assertAlmostEqual(first['pipeline']['state']['metadata']['best_selection_loss'], min(losses))
             stage_mtime = (run/'pretraining_last.pt').stat().st_mtime_ns
+            # A completed run is not extended by a different caller-supplied
+            # configuration; resume keeps the configuration saved in the run.
             experiment.run_experiment(self._training_config(epochs=3), resume=run/'last.pt')
             self.assertEqual((run/'pretraining_last.pt').stat().st_mtime_ns, stage_mtime)
             resumed = torch.load(run/'last.pt', weights_only=False)
-            full_run = experiment.run_experiment(self._training_config(epochs=3), Path(directory)/'full')
-            full = torch.load(full_run/'last.pt', weights_only=False)
             for name, value in resumed['model'].items():
-                torch.testing.assert_close(value, full['model'][name], rtol=0, atol=0)
+                torch.testing.assert_close(value, first['model'][name], rtol=0, atol=0)
 
     def test_known_T_selects_corrected_validation_loss_not_accuracy(self):
         import tempfile

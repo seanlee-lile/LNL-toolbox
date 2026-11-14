@@ -26,6 +26,8 @@ loss:
   name: ce
 model:
   name: cnn8
+  variant: standard
+  weights: none
 optimizer:
   name: adam
   lr: 0.001

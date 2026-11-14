@@ -45,6 +45,8 @@ loader:
   drop_last: true
 model:
   name: ca2c_seven_cnn
+  variant: standard
+  weights: none
 optimizer:
   name: sgd
   lr: 0.01

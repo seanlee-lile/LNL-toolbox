@@ -409,11 +409,11 @@ def _resnet18(
 ):
     torch, nn = _torch()
     import torch.nn.functional as F
-    if variant not in {"standard", "dss_author"}:
-        raise ValueError("ResNet variant must be standard or dss_author")
-    if variant == "dss_author" and not preactivation:
-        raise ValueError("dss_author requires a preactivation network")
-    author = variant == "dss_author"
+    if variant not in {"standard", "dss_specific"}:
+        raise ValueError("ResNet variant must be standard or dss_specific")
+    if variant == "dss_specific" and not preactivation:
+        raise ValueError("dss_specific requires a preactivation network")
+    author = variant == "dss_specific"
     if author:
         initialization = "torch_default"
 
@@ -523,7 +523,7 @@ def _resnet18(
         "weight_decay": {"type": "float", "default": 0.0002, "min": 0.0},
         "stem_padding": {"type": "int", "default": 1, "min": 0, "max": 3},
         "initialization": {"type": "str", "default": "kaiming"},
-        "variant": {"type": "enum", "default": "standard", "options": ["standard", "dss_author"]},
+        "variant": {"type": "enum", "default": "standard", "options": ["standard", "dss_specific", "dss_author"]},
         "bias": {"type": "bool", "default": True},
         "classifier_bias": {"type": "bool", "default": True},
         "device": {"type": "slot", "default": "device"},
@@ -567,8 +567,10 @@ def create_model(
             "the matching class count or update the model num_classes parameter"
         )
     name = str(model).strip().lower().replace("-", "_")
-    if variant not in {"standard", "dss_author"} or (variant == "dss_author" and name != "preact_resnet18"):
-        raise ValueError("dss_author variant requires preact_resnet18")
+    if variant == "dss_author":
+        variant = "dss_specific"
+    if variant not in {"standard", "dss_specific"} or (variant == "dss_specific" and name != "preact_resnet18"):
+        raise ValueError("dss_specific variant requires preact_resnet18")
     effective_classifier_bias = bool(classifier_bias and bias)
     if name in {"resnet18", "cifar_resnet18", "preact_resnet18"}:
         network = _resnet18(num_classes, preactivation=name.startswith("preact"), base_width=int(base_width), initialization=initialization, classifier_bias=effective_classifier_bias, stem_padding=int(stem_padding), variant=variant)

@@ -30,6 +30,8 @@ t_revision:
     epochs: 15
     model:
       name: resnet18
+      variant: standard
+      weights: none
       base_width: 64
     optimizer:
       name: sgd

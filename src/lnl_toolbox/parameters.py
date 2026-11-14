@@ -431,6 +431,8 @@ def _parameter_display_group(field: dict[str, object], method: str) -> str:
 
     if not field.get("editable"):
         return "restricted"
+    if field.get("model_editor"):
+        return "default"
     if tuple(str(field.get("path", "")).split(".")) in SPLIT_COUNT_PATHS:
         return "default"
     if (
@@ -701,6 +703,8 @@ def _parameter_base_note(path: str, original: str) -> str:
 
 
 def _parameter_ui_spec(path: str) -> list[str] | None:
+    if path == "model.weights" or path.endswith(".model.weights"):
+        return [path, "模型初始权重来源。none 表示随机初始化；ImageNet 权重加载后会按当前类别数重新建立分类头。"]
     if "scheduler" in path.split(".") and path.endswith(".step_size"):
         return [path, "每经过多少个训练轮次，将学习率乘以衰减倍率。"]
     if path.endswith((".early_stopping", ".warmup_early_stopping")):
@@ -741,6 +745,27 @@ def _parameter_choices(field: dict[str, object], method: str) -> list[dict[str, 
         choices = ["forward", "backward"]
     parts = path.split(".")
     category = next((part for part in ("optimizer", "scheduler", "model", "loss") if part in parts), "")
+    if category == "model" and parts[-1] in {"variant", "weights"} and "model_name" in field:
+        model_name = str(field["model_name"]).lower()
+        model_variant = str(field.get("model_variant", "standard")).lower()
+        if parts[-1] == "variant":
+            choices = ["standard"]
+            if model_name == "preact_resnet18":
+                choices.append("dss_specific")
+            elif model_name in {"resnet32", "resnet44"}:
+                choices.append("loss_correction_specific")
+            elif model_name in {"resnet18", "resnet34", "resnet50", "resnet101"} and not (method == "cwd" and path == "model.variant"):
+                choices.append("imagenet_standard")
+            elif model_name == "torchvision_resnet34":
+                choices = ["imagenet_standard"]
+        else:
+            choices = ["none"]
+            if model_name == "torchvision_resnet34":
+                choices = ["IMAGENET1K_V1"]
+            elif model_variant == "imagenet_standard" and model_name in {"resnet18", "resnet34", "resnet50", "resnet101"} and not (method == "cwd" and path == "model.weights"):
+                choices.append("imagenet1k_v1")
+                if model_name in {"resnet50", "resnet101"}:
+                    choices.append("imagenet1k_v2")
     if choices is None and parts[-1] == "name" and category:
         choices = ui["choices"].get(category + ".name")
     if category == "model" and parts[-1] == "name":
@@ -1117,6 +1142,7 @@ def schema_from_payload(payload: dict[str, Any], *, recipe_hint=None) -> dict[st
     )
     fields = [field for field in fields if not str(field["path"]).startswith("early_stopping.")]
     fields = list({field["path"]: field for field in [*fields, *_schedule_editor_fields(payload["config"], method=method)]}.values())
+    fields.extend(_model_editor_fields(payload["config"], fields))
     original = (
         _config_payload(recipe_hint)["config"]
         if recipe_hint and payload["recipe"] != recipe_hint
@@ -1130,6 +1156,7 @@ def schema_from_payload(payload: dict[str, Any], *, recipe_hint=None) -> dict[st
         if _parameter_ui_spec(str(field["path"])):
             field["label"] = _parameter_user_label(str(field["path"]), method)
             field["note"] = _parameter_user_note(str(field["path"]), "", method)
+        _annotate_model_field(field, payload["config"])
         field["choices"] = _parameter_choices(field, method)
         field["rows"] = _parameter_list_rows(field, payload["config"], method)
         path = tuple(str(field.get("path", "")).split("."))
@@ -1174,13 +1201,49 @@ def _field_map(config: dict[str, Any], method: str) -> dict[str, dict[str, objec
     )
     result = {str(field["path"]): field for field in fields
               if not str(field["path"]).startswith("early_stopping.")}
+    for model_field in _model_editor_fields(config, list(result.values())):
+        result[str(model_field["path"])] = model_field
     for schedule_field in _schedule_editor_fields(config, method=method):
         result[str(schedule_field["path"])] = schedule_field
     for stage_field in _stage_early_stopping_fields(config):
         result[str(stage_field["path"])] = stage_field
     for field in result.values():
+        _annotate_model_field(field, config)
         field["choices"] = _parameter_choices(field, method)
         field["rows"] = _parameter_list_rows(field, config, method)
+    return result
+
+
+def _annotate_model_field(field: dict[str, object], config: dict[str, Any]) -> None:
+    path = str(field.get("path", ""))
+    if path.endswith((".model.variant", ".model.weights")) or path in {"model.variant", "model.weights"}:
+        parent = path.rsplit(".", 1)[0]
+        _, model = _config_path_value(config, parent)
+        if isinstance(model, dict):
+            field["model_name"] = str(model.get("name", ""))
+            field["model_variant"] = str(model.get("variant", "standard"))
+
+
+def _model_editor_fields(config: dict[str, Any], fields: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Expose architecture and weight settings alongside editable model names."""
+    known = {str(field["path"]) for field in fields}
+    result = []
+    for field in fields:
+        path = str(field["path"])
+        if not field.get("editable") or not (path == "model.name" or path.endswith(".model.name")):
+            continue
+        parent = path.rsplit(".", 1)[0]
+        _, model = _config_path_value(config, parent)
+        if not isinstance(model, dict):
+            continue
+        for suffix in ("variant", "weights"):
+            field_path = parent + "." + suffix
+            if field_path in known:
+                continue
+            result.append({"path": field_path, "value": model.get(suffix, "standard" if suffix == "variant" else "none"),
+                           "kind": "text", "level": "basic", "visible": True, "editable": True,
+                           "presentation": "parameter", "research_group": "", "research_category": "",
+                           "linked_fields": [], "note": "", "virtual": suffix not in model, "model_editor": True})
     return result
 
 
@@ -1357,6 +1420,9 @@ def _set_config_path(config: dict[str, object], path: str, value: object, *, met
                 current["name"] = "multistep"
         return
     if parts[-1] not in current:
+        if parts[-1] in {"variant", "weights"} and parts[-2] == "model" and "name" in current:
+            current[parts[-1]] = value
+            return
         if any(field["path"] == path and field.get("virtual") for field in _schedule_editor_fields(config, method=method)):
             current[parts[-1]] = value
             return
@@ -1571,6 +1637,13 @@ def _validate_changed_model_configs(
             continue
         if not isinstance(model, dict):
             raise ValueError(f"模型配置必须是 mapping：{path}")
+        # Validation must not download pretrained weights.  The architecture is
+        # checked with random weights; the configured weights remain untouched.
+        model = dict(model)
+        if str(model.get("weights", "none")).lower() != "none":
+            if int(model.get("input_channels", 3)) != 3:
+                raise ValueError("ImageNet pretrained weights require three input channels")
+            model["weights"] = "none"
         if method == "binary_risk" or (method == "importance_reweighting" and model.get("name", "linear") == "linear"):
             from lnl_toolbox.training.binary_experiment import build_binary_model
 
@@ -1848,7 +1921,13 @@ def prepare_config(payload: object, *, for_review: bool = False) -> tuple[dict[s
                 raise ValueError(f"不允许修改配置结构或组件：{path}")
             if not field.get("editable", False):
                 raise ValueError(f"锁定参数不能通过普通 WebUI 修改：{path}")
-            _set_config_path(parsed, path, patch.get("value") if for_review else _coerce_patch_value(field, patch.get("value")), method=method)
+            # Model choices depend on the final name/variant; validate the
+            # complete combination after all patches rather than against the
+            # old model's dropdown choices.
+            coercion_field = dict(field)
+            if "model_name" in field and path.endswith((".variant", ".weights")):
+                coercion_field["choices"] = None
+            _set_config_path(parsed, path, patch.get("value") if for_review else _coerce_patch_value(coercion_field, patch.get("value")), method=method)
         for patch in patches:
             path = patch["path"]
             if path.endswith(".name") and "scheduler" in path.split("."):

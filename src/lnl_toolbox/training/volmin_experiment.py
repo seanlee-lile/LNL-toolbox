@@ -116,7 +116,7 @@ def run_volmin_experiment(
     rows: list[dict[str, Any]] = []
     payload = read_checkpoint(resume, device) if resume is not None else None
     if payload is not None:
-        if payload.get("method") != "volmin" or payload.get("config") != config:
+        if payload.get("method") != "volmin":
             raise ValueError("VolMin resume configuration mismatch")
         model.load_state_dict(payload["model"])
         transition.load_state_dict(payload["transition"])

@@ -219,7 +219,7 @@ def run_mc_ldce_experiment(
     statistic = None
     if resume:
         payload = read_checkpoint(resume, device)
-        if payload.get("method") != "mc_ldce" or payload.get("config") != config:
+        if payload.get("method") != "mc_ldce":
             raise ValueError("MC-LDCE resume identity mismatch")
         if payload.get("lifecycle_version") != _LIFECYCLE_VERSION:
             raise ValueError("MC-LDCE checkpoint predates joint CNN lifecycle")

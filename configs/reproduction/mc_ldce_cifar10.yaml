@@ -37,6 +37,8 @@ loader:
   pin_memory: true
 model:
   name: mc_ldce_cnn
+  variant: standard
+  weights: none
 optimizer:
   name: adam
   lr: 0.001
@@ -53,6 +55,8 @@ transition:
   num_classes: 10
   model:
     name: mc_ldce_cnn
+    variant: standard
+    weights: none
   epochs: 150
   lambda_volume: 0.0001
   determinant_tolerance: 1.0e-08

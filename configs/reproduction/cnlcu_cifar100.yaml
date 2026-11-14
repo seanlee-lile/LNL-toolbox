@@ -50,6 +50,8 @@ loss:
   name: ce
 model:
   name: cifar_six_conv
+  variant: standard
+  weights: none
   batch_norm_momentum: 0.1
 optimizer:
   name: adam

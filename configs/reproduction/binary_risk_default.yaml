@@ -18,6 +18,8 @@ risk:
   rho_negative: 0.4
 model:
   name: linear
+  variant: standard
+  weights: none
 execution:
   runner: binary
 loader:

@@ -314,9 +314,13 @@ def _supervised_requirements(config: Mapping[str, Any]) -> MethodRequirements | 
         provider_config = dict(
             ((config.get("pipeline") or {}).get("weight_provider") or {})
         )
-        derive_from_seed = bool(provider_config.get("derive_from_seed", True))
+        derive_teacher = bool(
+            provider_config.get(
+                "derive_teacher", provider_config.get("derive_from_seed", True)
+            )
+        )
         mentor_inputs = ()
-        if not derive_from_seed:
+        if not derive_teacher:
             mentor_inputs = (_config_input(
                 "requires_mentor_artifact",
                 ("pipeline", "weight_provider", "artifact_path"),
@@ -328,9 +332,9 @@ def _supervised_requirements(config: Mapping[str, Any]) -> MethodRequirements | 
             supports_native_noisy_labels=True,
             supported_modalities=frozenset({Modality.IMAGE}),
             data_requirements=_classification_data(validation="clean"),
-            implemented_variant="seed_derived_artifact_weight_provider" if derive_from_seed
+            implemented_variant="seed_derived_artifact_weight_provider" if derive_teacher
             else "artifact_weight_provider",
-            implementation_limits=frozenset({"modality"} if derive_from_seed else {"modality", "mentor_artifact"}),
+            implementation_limits=frozenset({"modality"} if derive_teacher else {"modality", "mentor_artifact"}),
             required_config_inputs=mentor_inputs,
         )
     if objective == "dss":

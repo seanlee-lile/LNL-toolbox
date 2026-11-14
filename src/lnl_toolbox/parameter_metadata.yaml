@@ -38,7 +38,7 @@ parameter_ui:
     t_revision.stage1.model.initialization: [kaiming, torch_default]
     posterior_stage.model.variant: [standard, imagenet_standard]
     final_stage.model.variant: [standard, imagenet_standard]
-    model.variant: [standard, dss_author]
+    model.variant: [standard, dss_specific]
     volminnet.model.variant: [standard]
     noise.validation_targets: [clean, noisy]
     noise.mode: [generated, external, clean]
@@ -501,8 +501,8 @@ parameter_ui:
     scheduler.name: [学习率变化方式, 本阶段学习率随训练进度变化的方式。]
     model.name: [模型架构, 本阶段使用的神经网络结构。]
     model.base_width: [基础通道数, 网络首层或基础模块的通道宽度。]
-    model.initialization: [模型初始化方式, 开始训练前模型参数的初始化规则。]
-    model.variant: [模型实现版本, dss_author 使用 DSS 作者网络：入口含 BN 和 ReLU、无投影残差支路使用激活后输入、分类前不额外添加 BN/ReLU，并使用 PyTorch 默认初始化。standard 使用工具箱原有 PreActResNet 实现。]
+    model.initialization: [模型初始化方式, 不使用预训练权重时的参数初始化规则。]
+    model.variant: [模型实现版本, standard 使用所选模型的原有结构；imagenet_standard 使用大图 ResNet 结构；dss_specific 使用 DSS 作者版本；loss_correction_specific 使用该论文的 CIFAR 结构。]
     model.dropout: [神经元随机丢弃比例, 训练时随机将多少比例的神经元输出置零。]
     model.width_multiplier: [网络宽度倍数, 网络通道数相对基础宽度的倍数。]
     model.num_residual_units: [每组残差单元数, 每组残差模块包含的残差单元数量。]
@@ -2523,7 +2523,7 @@ methods:
           reproduction_context: fixed benchmark transition matrix
       advanced:
         model.variant:
-          current: loss_correction
+          current: loss_correction_specific
           value_type: string
           ui_control: readonly
           reproduction_impact: high
@@ -4962,13 +4962,13 @@ methods:
           note: 可修改的高级实验/实现选项；改变它可能改变数据协议、模型、优化器、fidelity/variant 或评估细节，但“偏离论文”本身不是锁定理由。
           reproduction_context: input protocol
         model.variant:
-          current: dss_author
+          current: dss_specific
           value_type: string
           ui_control: select
           reproduction_impact: high
           origin: author_implementation
           evidence_ref: model
-          note: dss_author 使用作者网络结构与默认初始化；standard 保留工具箱原有 PreActResNet 结构。
+          note: dss_specific 使用作者网络结构与默认初始化；standard 保留工具箱原有 PreActResNet 结构。
         data.validation_split.rng:
           current: numpy_legacy
           value_type: string
@@ -10675,7 +10675,7 @@ methods:
           details.
         peers: Two-network co-divide/co-training and official logits-sum inference are algorithm/protocol semantics.
         cifar_defaults: Paper Section 4.1 specifies batch size 128 and 300 total epochs with LR decay after 150 epochs. Author
-          PreResNet.py uses a Conv-BN-ReLU stem, preactivated shortcuts and no final BN/ReLU; the existing dss_author variant
+          PreResNet.py uses a Conv-BN-ReLU stem, preactivated shortcuts and no final BN/ReLU; the existing dss_specific variant
           implements these details. Author dataloader_cifar.py uses CIFAR-10 mean [0.4914, 0.4822, 0.4465] and std [0.2023, 0.1994, 0.2010].
         loss_history: Author Train_cifar.py normalizes each epoch's losses once, then at noise rate 0.9 averages the last five
           normalized vectors and fits GMM directly without rescaling that average.

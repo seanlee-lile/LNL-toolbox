@@ -64,18 +64,39 @@ def _selected_loss_mean(loss_sum: float, selected_samples: float) -> float:
 
 def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
     name = str(config.get("name", "preact_resnet18")).lower()
-    if name in {"resnet18", "resnet34"} and config.get("variant") == "imagenet_standard":
+    variant = str(config.get("variant", "standard")).lower()
+    raw_weights = config.get("weights", "none")
+    weights_name = "none" if raw_weights is None else str(raw_weights).strip().lower()
+    if name in {"resnet18", "resnet34", "resnet50", "resnet101"} and variant not in {"standard", "imagenet_standard"}:
+        raise ValueError(f"Unsupported {name} variant: {variant}")
+    if name in {"resnet18", "resnet34", "resnet50", "resnet101"} and variant == "imagenet_standard":
         # Author Dual-T uses the standard 7x7/stride-2 stem with max pooling.
         # Explicit opt-in leaves the existing CIFAR networks unchanged.
         from torchvision import models
         if int(config.get("base_width", 64)) != 64:
             raise ValueError("imagenet_standard ResNet requires base_width=64")
-        model = getattr(models, name)(weights=None, num_classes=num_classes)
         channels = int(config.get("input_channels", 3))
+        if weights_name not in {"none", "imagenet1k_v1", "imagenet1k_v2"}:
+            raise ValueError(f"Unsupported {name} weights: {raw_weights}")
+        if weights_name != "none" and channels != 3:
+            raise ValueError("ImageNet pretrained weights require three input channels")
+        if weights_name == "none":
+            model = getattr(models, name)(weights=None, num_classes=num_classes)
+        else:
+            weight_enum = models.get_model_weights(name)
+            weights = getattr(weight_enum, weights_name.upper(), None)
+            if weights is None:
+                raise ValueError(f"{name} does not provide {weights_name} weights")
+            # Load the original 1000-class head before replacing it: torchvision
+            # validates num_classes against the pretrained weight metadata.
+            model = getattr(models, name)(weights=weights)
+            model.fc = nn.Linear(model.fc.in_features, num_classes)
         if channels != 3:
             model.conv1 = nn.Conv2d(channels, 64, 7, stride=2, padding=3, bias=False)
             nn.init.kaiming_normal_(model.conv1.weight, mode="fan_out", nonlinearity="relu")
         return model
+    if weights_name != "none":
+        raise ValueError(f"{name} with variant {variant} does not support pretrained weights")
     if name == "feature_mlp":
         input_dim = int(config.get("input_dim", 0))
         hidden_width = int(config.get("hidden_width", 16))
@@ -630,12 +651,6 @@ def run_supervised_experiment(
     checkpoint_payload = None
     if resume is not None:
         checkpoint_payload = read_checkpoint(resume, "cpu")
-        saved_config = checkpoint_payload.get("config")
-        if not isinstance(saved_config, Mapping):
-            raise ValueError("Checkpoint is missing its resolved configuration")
-        _validate_resume_config(config, saved_config)
-        if parameter_record is not None and saved_config.get("parameter_record") != parameter_record.to_dict():
-            raise ValueError("Resume parameter sampling record changed")
 
     noise_config = config.get("noise") or {}
     validation_target_source = str(

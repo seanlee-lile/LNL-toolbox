@@ -235,7 +235,8 @@ loader:
   pin_memory: true
 model:
   name: resnet32
-  variant: loss_correction
+  weights: none
+  variant: loss_correction_specific
   base_width: 16
 optimizer:
   name: sgd

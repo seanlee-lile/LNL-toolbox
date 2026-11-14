@@ -140,7 +140,7 @@ def _write_environment(path: Path, seed: int, device: torch.device) -> None:
 def _build_instance_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
     """Build the reusable instance-transition model with optional CIFAR stem settings."""
 
-    if str(config.get("name", "")).strip().lower() == "resnet34" and (
+    if str(config.get("variant", "standard")).lower() != "imagenet_standard" and str(config.get("weights") or "none").lower() == "none" and str(config.get("name", "")).strip().lower() == "resnet34" and (
         "stem_padding" in config or "initialization" in config
     ):
         return cifar_resnet34(
@@ -252,8 +252,6 @@ def _run_pdl_official_phases(
     phase_start = 0
     completed_in_phase = -1
     if payload is not None:
-        if payload.get("config") != dict(config):
-            raise ValueError("PDL resume configuration mismatch")
         if payload.get("pipeline", {}).get("artifact_hash") != artifact.artifact_hash:
             raise ValueError("PDL transition artifact resume mismatch")
         pipeline = dict(payload.get("pipeline", {}))
@@ -445,8 +443,6 @@ def run_instance_transition_experiment(
     device = resolve_device(str(config["trainer"].get("device", "auto")))
     run_dir = Path(resume).resolve().parent if resume else _run_directory(config, output_dir)
     checkpoint_payload = None if resume is None else read_checkpoint(resume, device)
-    if checkpoint_payload is not None and dict(checkpoint_payload.get("config") or {}) != config:
-        raise ValueError("Resume configuration changed")
 
     if requirements is None:
         from lnl_toolbox.training.runners import resolve_data_requirements
