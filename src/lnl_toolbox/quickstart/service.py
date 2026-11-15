@@ -452,8 +452,8 @@ class QuickStartService:
         output_dir = self.artifact_root / "runs" / plan_id
         # Store the selected noise and method-specific inputs in the review YAML,
         # not in the paper's built-in source file.
-        command = f"lnl run --recipe {selected.recipe_id} --data {dataset_alias} --output-dir {output_dir} --check-data"
-        dry_run = f"lnl run --recipe {selected.recipe_id} --data {dataset_alias} --output-dir {output_dir} --dry-run --check-data"
+        command = f"lnl run --recipe {selected.recipe_id} --data {dataset_alias} --output-dir {output_dir} --check-data" if status == "ready" else None
+        dry_run = f"lnl run --recipe {selected.recipe_id} --data {dataset_alias} --output-dir {output_dir} --dry-run --check-data" if status == "ready" else None
         return QuickStartPlan(
             plan_id, dataset_alias, paper_id, selected.acronym, noise_selection,
             "paper_reproduction", selected.recipe_id, None, status,

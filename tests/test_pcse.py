@@ -454,7 +454,7 @@ class _pcse_volmin_PCSEVolMinWorkflowTest(unittest.TestCase):
             self.assertEqual(before, after)
             mismatch = deepcopy(config)
             mismatch['transition_stage']['lambda_volume'] *= 2.0
-            with self.assertRaisesRegex(ValueError, 'method settings'):
+            with self.assertRaisesRegex(ValueError, 'transition backend configuration mismatch'):
                 run_pcse_experiment(mismatch, resume=run_dir / 'last.pt')
 
 
@@ -881,5 +881,5 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
             transition_path.write_bytes(valid_transition)
             mismatch = _pcse_workflow__load_smoke_config()
             mismatch['feature_stage']['layers'].reverse()
-            with self.assertRaisesRegex(ValueError, 'method settings'):
+            with self.assertRaisesRegex(ValueError, 'statistics feature provenance mismatch'):
                 run_pcse_experiment(mismatch, resume=run_dir / 'last.pt')

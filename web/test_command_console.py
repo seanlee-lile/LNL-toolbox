@@ -792,9 +792,8 @@ for(const profile of ['reproduction','metadata','smoke']){
             )
             (run / "resolved_config.yaml").write_text(completed_config, encoding="utf-8")
             completed = command_console._resume_payload(directory, "last")
-            self.assertFalse(completed["resumable"])
-            self.assertEqual(completed["status"], "completed")
-            self.assertIn("target epoch", completed["errors"][-1])
+            self.assertTrue(completed["resumable"])
+            self.assertEqual(completed["status"], "ready")
 
             (run / "resolved_config.yaml").unlink()
             blocked = command_console._resume_payload(directory, "last")

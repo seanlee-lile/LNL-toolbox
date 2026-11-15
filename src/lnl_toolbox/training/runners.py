@@ -754,7 +754,6 @@ def create_runner_registry() -> RunnerRegistry:
         "binary",
         "lnl_toolbox.training.binary_experiment",
         "run_binary_experiment",
-        supports_resume=False,
         budget_path=None,
         requirements_provider=_binary_requirements,
     )

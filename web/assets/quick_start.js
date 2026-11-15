@@ -847,7 +847,7 @@
       return '<button type="button" class="qs-carousel-dot' + (index === state.currentStep ? ' active' : '') + '" data-qs-step="' + index + '"' + (disabled ? ' disabled' : '') + ' aria-label="第 ' + (index + 1) + ' 步：' + esc(step.label) + '">' + (index + 1) + '<span>' + esc(step.label) + '</span></button>';
     }).join('<span class="qs-carousel-connector" aria-hidden="true"></span>');
     const previousDisabled = state.currentStep === 0;
-    const nextDisabled = state.loading || (active.id !== "dataset" && state.currentStep >= steps.length - 1) || !quickStartCanAdvance(active);
+    const nextDisabled = state.loading || (active.id !== "dataset" && active.id !== "noise" && state.currentStep >= steps.length - 1) || !quickStartCanAdvance(active);
     return '<div class="qs-carousel" aria-label="Quick Start 步骤导航"><div class="qs-carousel-slide" aria-live="polite"><div class="qs-carousel-card"><div class="qs-carousel-nav"><button type="button" id="qs-prev" class="secondary"' + (previousDisabled ? ' disabled' : '') + '>&lt; 上一步</button><div class="qs-carousel-progress">' + progress + '</div><button type="button" id="qs-next" class="primary"' + (nextDisabled ? ' disabled' : '') + '>下一步 &gt;</button></div>' + active.render() + '</div></div><div class="qs-carousel-position">' + (state.currentStep + 1) + ' / ' + steps.length + '</div></div>';
   }
 
@@ -1257,6 +1257,7 @@
     state.scheduleStash = {};
     render();
     ++methodsToken;
+    ++planToken;
   }
 
   function validateNoiseSelectionForCheck() {

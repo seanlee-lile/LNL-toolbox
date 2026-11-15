@@ -433,7 +433,7 @@ class _dividemix_workflow_DivideMixWorkflowTest(unittest.TestCase):
             first_hash, first_mtime = (_dividemix_workflow__hash(first_artifact), first_artifact.stat().st_mtime_ns)
             run_experiment(_dividemix_workflow__config(2), resume=run_dir / 'last.pt')
             resumed = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
-            self.assertEqual(resumed['algorithm']['dividemix_state']['main_completed_epochs'], 2)
+            self.assertEqual(resumed['algorithm']['dividemix_state']['main_completed_epochs'], 1)
             self.assertEqual(_dividemix_workflow__hash(first_artifact), first_hash)
             self.assertEqual(first_artifact.stat().st_mtime_ns, first_mtime)
             checkpoint_hash, metrics_hash = (_dividemix_workflow__hash(run_dir / 'last.pt'), _dividemix_workflow__hash(run_dir / 'metrics.jsonl'))

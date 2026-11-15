@@ -143,6 +143,7 @@ def _cached_torchvision_weight(url: str) -> Path:
 
 def load_torchvision_resnet34_imagenet1k_v1_source(
     source_config: Mapping[str, Any],
+    *, checkpoint_path: str | Path | None = None,
 ) -> DLDTorchvisionResNet34Source:
     if str(source_config.get("adapter", "")).strip().lower() != (
         "torchvision_resnet34_imagenet1k_v1"
@@ -156,10 +157,15 @@ def load_torchvision_resnet34_imagenet1k_v1_source(
     from torchvision.models import ResNet34_Weights, resnet34
 
     weights = ResNet34_Weights.IMAGENET1K_V1
-    cached = _cached_torchvision_weight(weights.url)
+    cached = Path(checkpoint_path) if checkpoint_path is not None else _cached_torchvision_weight(weights.url)
     identity = DLDSourceFileIdentity.capture(cached)
     # The official cached checkpoint is fingerprinted before loading.
-    model = _TorchvisionResNet34FeatureModel(resnet34(weights=weights), str(source_config["input_contract"])).eval()
+    if checkpoint_path is None:
+        backbone = resnet34(weights=weights)
+    else:
+        backbone = resnet34(weights=None)
+        backbone.load_state_dict(torch.load(cached, map_location="cpu", weights_only=True))
+    model = _TorchvisionResNet34FeatureModel(backbone, str(source_config["input_contract"])).eval()
     for parameter in model.parameters():
         parameter.requires_grad_(False)
     result = DLDTorchvisionResNet34Source(identity, model)
@@ -171,13 +177,14 @@ def load_dld_feature_source(
     extractor_config: Mapping[str, Any],
     *,
     num_classes: int,
+    checkpoint_path: str | Path | None = None,
 ) -> DLDTorchvisionResNet34Source:
     external = extractor_config.get("external")
     if not isinstance(external, Mapping):
         raise TypeError("DLD external feature source must be a mapping")
     adapter = str(external.get("adapter", "")).strip().lower()
     if adapter == "torchvision_resnet34_imagenet1k_v1":
-        return load_torchvision_resnet34_imagenet1k_v1_source(external)
+        return load_torchvision_resnet34_imagenet1k_v1_source(external, checkpoint_path=checkpoint_path)
     raise ValueError(f"unsupported DLD feature adapter: {adapter}")
 
 

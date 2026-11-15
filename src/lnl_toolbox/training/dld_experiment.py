@@ -39,6 +39,7 @@ from lnl_toolbox.models.feature_output import forward_with_features
 from lnl_toolbox.runtime import resolve_device, seed_everything
 from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
 from lnl_toolbox.training.dld_pretrained import (
+    DLDSourceFileIdentity,
     DLDTorchvisionResNet34Source,
     load_dld_feature_source,
 )
@@ -57,6 +58,19 @@ from lnl_toolbox.training.noisy_labels import (
     noise_mode,
 )
 from lnl_toolbox.training.snapshots import FeatureSnapshot, collect_feature_snapshot
+
+
+def _same_feature_source(left: Any, right: Any) -> bool:
+    if left is None or right is None:
+        return left is right
+    if not isinstance(left, Mapping) or not isinstance(right, Mapping):
+        return False
+    left, right = deepcopy(dict(left)), deepcopy(dict(right))
+    for source in (left, right):
+        if isinstance(source.get("checkpoint"), dict):
+            source["checkpoint"].pop("path", None)
+            source["checkpoint"].pop("mtime_ns", None)
+    return left == right
 
 
 def _model_identity(model: torch.nn.Module) -> str:
@@ -300,7 +314,7 @@ class DLDWorkflow:
             "sample mapping": np.array_equal(artifact.global_indices, self.train_indices),
             "feature identity": artifact.metadata.get("feature_extractor_identity") == self.feature_identity,
             "feature source": (
-                artifact.metadata.get("feature_source") == self.feature_source_provenance
+                _same_feature_source(artifact.metadata.get("feature_source"), self.feature_source_provenance)
                 or (
                     artifact.metadata.get("feature_source") is None
                     and self.feature_source is None
@@ -521,7 +535,7 @@ class DLDWorkflow:
             and self.feature_source is not None
         ) or (
             saved_feature_source is not None
-            and dict(saved_feature_source) != self.feature_source_provenance
+            and not _same_feature_source(saved_feature_source, self.feature_source_provenance)
         ):
             raise ValueError("DLD feature source provenance changed on resume")
         if dict(payload.get("noise", {})) != self.noise_metadata:
@@ -626,9 +640,19 @@ def run_dld_experiment(
     feature_source: DLDTorchvisionResNet34Source | None = None
     source_name = str(method.feature_extractor["source"]).strip().lower()
     if source_name == "external_checkpoint":
-        feature_source = load_dld_feature_source(
-            method.feature_extractor, num_classes=classes,
-        )
+        local_source = run_dir / "dld_feature_source.pth"
+        if resume is not None:
+            if not local_source.is_file():
+                raise FileNotFoundError(f"续训所需的 DLD 特征提取器权重不存在：{local_source}")
+            feature_source = load_dld_feature_source(method.feature_extractor, num_classes=classes, checkpoint_path=local_source)
+        else:
+            import shutil
+
+            feature_source = load_dld_feature_source(method.feature_extractor, num_classes=classes)
+            if local_source.exists():
+                raise FileExistsError(f"DLD 特征提取器文件已存在：{local_source}")
+            shutil.copy2(feature_source.checkpoint.path, local_source)
+            feature_source = DLDTorchvisionResNet34Source(DLDSourceFileIdentity.capture(local_source), feature_source.model)
         feature_model = feature_source.model.to(device).eval()
         feature_source_provenance = feature_source.provenance
     else:

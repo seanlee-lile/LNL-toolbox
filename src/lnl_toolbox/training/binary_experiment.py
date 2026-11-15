@@ -137,7 +137,8 @@ def evaluate_binary(model: nn.Module, loader: DataLoader, device: torch.device |
 
 
 def run_binary_experiment(
-    config: Mapping[str, Any], output_dir: str | Path | None = None, *,
+    config: Mapping[str, Any], output_dir: str | Path | None = None,
+    resume: str | Path | None = None, *,
     requirements: DataRequirements | None = None,
 ) -> Path:
     """Run a single configured binary experiment and persist its metrics."""
@@ -163,7 +164,8 @@ def run_binary_experiment(
             raise ValueError("risk.allow_noise_prior_mismatch must be boolean")
         if mismatch and not allow_mismatch:
             raise ValueError("Binary Risk correction rates differ from noise generation rates; set risk.allow_noise_prior_mismatch explicitly to study misspecification")
-    destination = Path(output_dir or resolved_config.get("output_root", "artifacts/binary")).resolve()
+    destination = (Path(resume).resolve().parent if resume is not None else
+                   Path(output_dir or resolved_config.get("output_root", "artifacts/binary")).resolve())
     destination.mkdir(parents=True, exist_ok=True)
     seed = int(resolved_config.get("seed", 1))
     if requirements is None:
@@ -208,7 +210,8 @@ def run_binary_experiment(
     rows = []
     web_rows = []
     metrics_path = destination / "metrics.jsonl"
-    metrics_path.write_text("", encoding="utf-8")
+    if resume is None:
+        metrics_path.write_text("", encoding="utf-8")
     from copy import deepcopy
     from lnl_toolbox.training.early_stopping import StageEarlyStopping
     monitor = str(resolved_config["trainer"].get("early_stopping_monitor", "validation_accuracy"))
@@ -220,7 +223,26 @@ def run_binary_experiment(
         raise ValueError("trainer.early_stopping requires a validation split")
     best_model = None
     best_epoch = None
-    for epoch in range(epochs):
+    start_epoch = 0
+    from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state, read_checkpoint, restore_rng_state
+    if resume is not None:
+        payload = read_checkpoint(resume, "cpu")
+        if payload.get("method") != "binary" or payload.get("checkpoint_role") != "run_state":
+            raise ValueError("Binary Risk 续训需要该实验的 last.pt 训练断点")
+        model.load_state_dict(payload["model"])
+        optimizer.load_state_dict(payload["optimizer"])
+        start_epoch = int(payload["completed_epoch"]) + 1
+        loader.generator.set_state(payload["loader_rng_state"])
+        restore_rng_state(payload["rng_state"])
+        stopping.counter.load_state_dict(payload["early_stopping"])
+        stopping.history = list(payload.get("early_stopping_history", []))
+        best_model, best_epoch = payload.get("best_model"), payload.get("best_epoch")
+        if not metrics_path.is_file():
+            raise FileNotFoundError(f"续训所需的训练记录不存在：{metrics_path}")
+        web_rows = [json.loads(line) for line in metrics_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        web_rows = [row for row in web_rows if row.get("event") == "epoch" and int(row.get("epoch", 0)) <= start_epoch]
+        rows = [{key: value for key, value in row.items() if key != "event"} for row in web_rows]
+    for epoch in range(start_epoch, epochs if not stopping.stopped else start_epoch):
         row = train_binary_epoch(model, loader, optimizer, risk=risk)
         row["epoch"] = float(epoch + 1)
         if prepared.validation_indices.size:
@@ -243,6 +265,15 @@ def run_binary_experiment(
         if stopping.enabled and stopping.counter.best != previous_best:
             best_model = deepcopy(model.state_dict())
             best_epoch = epoch + 1
+        atomic_save({"method": "binary", "checkpoint_role": "run_state", "config": resolved_config,
+                     "completed_epoch": epoch, "model": model.state_dict(), "optimizer": optimizer.state_dict(),
+                     "rng_state": capture_rng_state(), "loader_rng_state": loader.generator.get_state(),
+                     "early_stopping": stopping.counter.state_dict(), "early_stopping_history": stopping.history,
+                     "noise_manifest_path": None if prepared.manifest_path is None else (
+                         str(prepared.manifest_path.resolve().relative_to(destination))
+                         if prepared.manifest_path.resolve().is_relative_to(destination)
+                         else str(prepared.manifest_path.resolve())),
+                     "best_model": best_model, "best_epoch": best_epoch}, destination / "last.pt")
         if stopped:
             break
 

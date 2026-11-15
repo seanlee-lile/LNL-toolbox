@@ -77,9 +77,9 @@ class CWDAuthorAlignmentTests(__import__("unittest").TestCase):
             best=min(eligible,key=lambda r:r["noisy_validation_loss"])
             self.assertEqual(saved["selected_epoch"],best["epoch"])
             np.testing.assert_array_equal(result,saved["selected_matrix"])
-            split=np.load(out/"cwd_transition_split.npz")
-            self.assertFalse(set(split["train"]) & set(split["noisy_validation"]))
-            self.assertEqual(len(split["train"])+len(split["noisy_validation"]),9)
+            with np.load(out/"cwd_transition_split.npz") as split:
+                self.assertFalse(set(split["train"]) & set(split["noisy_validation"]))
+                self.assertEqual(len(split["train"])+len(split["noisy_validation"]),9)
             with patch.object(VolMinNetAlgorithm,"train_batch",side_effect=AssertionError("retrained")):
                 np.testing.assert_array_equal(result,_estimate_cwd_transition(prepared,cfg,out,torch.device("cpu")))
 

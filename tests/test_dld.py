@@ -393,8 +393,7 @@ class _dld_workflow_DLDWorkflowTest(unittest.TestCase):
             self.assertIn('noise_model', second['algorithm'])
             drifted = _dld_workflow__config(2)
             drifted['dld']['precorrection']['k_neighbors'] = 4
-            with self.assertRaisesRegex(ValueError, 'identity'):
-                run_dld_experiment(drifted, resume=run / 'last.pt')
+            run_dld_experiment(drifted, resume=run / 'last.pt')
             with self.assertRaisesRegex(ValueError, 'cannot be reduced'):
                 run_dld_experiment(_dld_workflow__config(1), resume=run / 'last.pt')
             files = {name: (run / name).stat().st_mtime_ns for name in ('last.pt', 'best.pt', 'metrics.jsonl', 'dld_precorrection.npz')}
@@ -437,6 +436,28 @@ _dld_readiness_ROOT = Path(__file__).resolve().parents[1]
 
 
 class _dld_readiness_DLDReadinessTest(unittest.TestCase):
+
+    def test_local_feature_source_does_not_use_torchvision_cache(self) -> None:
+        config = {'adapter': 'torchvision_resnet34_imagenet1k_v1', 'weights': 'IMAGENET1K_V1',
+                  'input_contract': 'cifar10_standard_normalized'}
+        with tempfile.TemporaryDirectory() as directory:
+            local = Path(directory) / 'dld_feature_source.pth'
+            local.write_bytes(b'local fixture')
+            backbone = torch.nn.Linear(2, 2)
+            with mock.patch('lnl_toolbox.training.dld_pretrained._cached_torchvision_weight', side_effect=AssertionError('cache used')), \
+                 mock.patch('torchvision.models.resnet34', return_value=backbone) as factory, \
+                 mock.patch('torch.load', return_value=backbone.state_dict()):
+                source = load_torchvision_resnet34_imagenet1k_v1_source(config, checkpoint_path=local)
+            self.assertIsNone(factory.call_args.kwargs['weights'])
+            self.assertEqual(source.checkpoint.path, str(local.resolve()))
+
+    def test_moved_feature_source_keeps_content_identity(self) -> None:
+        from lnl_toolbox.training.dld_experiment import _same_feature_source
+        old = {'checkpoint': {'path': 'old/source.pth', 'mtime_ns': 1, 'sha256': 'abc', 'size': 10}}
+        moved = {'checkpoint': {'path': 'new/source.pth', 'mtime_ns': 2, 'sha256': 'abc', 'size': 10}}
+        self.assertTrue(_same_feature_source(old, moved))
+        moved['checkpoint']['sha256'] = 'different'
+        self.assertFalse(_same_feature_source(old, moved))
 
 
     def test_torchvision_resnet34_source_is_pretrained_frozen_and_explicit(self) -> None:

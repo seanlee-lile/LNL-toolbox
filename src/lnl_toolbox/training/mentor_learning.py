@@ -227,6 +227,10 @@ def ensure_mentor_artifact(
         stored = Path(run_dir) / "mentor" / "mentor_artifact.pt"
         if resuming and stored.is_file():
             return stored
+        if resuming:
+            raise FileNotFoundError(f"续训所需的 MentorNet 教师文件不存在：{stored}；不会重新生成。")
+    elif resuming:
+        raise ValueError("续训 MentorNet 时必须指定原实验目录。")
 
     if not bool(provider.get("derive_teacher", provider.get("derive_from_seed", True))):
         raise FileNotFoundError(

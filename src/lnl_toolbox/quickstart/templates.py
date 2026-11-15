@@ -78,6 +78,9 @@ def quickstart_runtime_overrides(
                 prior = 0.0
             elif noise_selection.kind != "native":
                 prior = noise_selection.rate
+        if prior is None and noise_selection.kind == "native" and requirements.requires_method_noise_prior:
+            for path in requirements.method_noise_prior_paths:
+                overrides[".".join(path)] = None
         if prior is not None:
             for path in requirements.method_noise_prior_paths:
                 current: dict[str, Any] = candidate

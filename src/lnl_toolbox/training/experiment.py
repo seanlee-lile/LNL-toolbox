@@ -712,6 +712,10 @@ def run_supervised_experiment(
     selection_loader = test_loader if selection_split == "test" else validation_loader
 
     model_config = bind_model_input(config["model"], prepared.input_spec)
+    if resume is not None and str(model_config.get("weights", "none")).lower() != "none":
+        # The checkpoint restores all model parameters below; do not fetch the
+        # original pretraining file just to allocate the same architecture.
+        model_config = {**model_config, "weights": "none"}
     model = build_model(model_config, num_classes)
     criterion = build_builtin_loss(config["loss"]).to(device)
     selector = build_builtin_selector(config["selector"])

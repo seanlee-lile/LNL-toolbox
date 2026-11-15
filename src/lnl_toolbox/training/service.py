@@ -612,6 +612,23 @@ class ExperimentService:
             saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
             if not isinstance(saved, Mapping):
                 raise ValueError(f"resolved configuration must be a mapping: {config_path}")
+            from lnl_toolbox.training.checkpoint import read_checkpoint
+
+            checkpoint_data = read_checkpoint(resume_path, "cpu")
+            data_identity = checkpoint_data.get("data")
+            if isinstance(data_identity, Mapping) and data_identity.get("data_fingerprint"):
+                manifest = resume_path.parent / "data_manifest.json"
+                if not manifest.is_file():
+                    raise FileNotFoundError(f"续训所需的数据记录不存在：{manifest}")
+            noise = checkpoint_data.get("noise")
+            noise_path = noise.get("manifest_path") if isinstance(noise, Mapping) else None
+            noise_path = noise_path or checkpoint_data.get("noise_manifest_path")
+            if noise_path:
+                manifest = Path(str(noise_path))
+                if not manifest.is_absolute():
+                    manifest = resume_path.parent / manifest
+                if not manifest.is_file():
+                    raise FileNotFoundError(f"续训所需的噪声记录不存在：{manifest}")
             config = saved
         # Preserve the public dispatch contract even for otherwise incomplete
         # configurations: an unknown explicit method must fail as an unknown
@@ -628,6 +645,19 @@ class ExperimentService:
             expected_root = Path(resume).expanduser().resolve().parent
         elif output_dir is not None:
             expected_root = Path(output_dir).expanduser().resolve()
+        else:
+            from datetime import datetime
+
+            expected_root = (Path(candidate.get("output_root", "artifacts/runs")) /
+                             datetime.now().strftime("%Y%m%d-%H%M%S")).expanduser().resolve()
+            output_dir = expected_root
+        if resume is None:
+            import yaml
+
+            expected_root.mkdir(parents=True, exist_ok=True)
+            config_path = expected_root / "resolved_config.yaml"
+            if not config_path.exists():
+                config_path.write_text(yaml.safe_dump(candidate, sort_keys=False), encoding="utf-8")
         final_path = expected_root / "final_metrics.json" if expected_root else None
         before_final = final_path.read_bytes() if final_path and final_path.is_file() else None
         try:
@@ -650,17 +680,6 @@ class ExperimentService:
             provider = dict(provider)
             provider["artifact_path"] = str(Path(derived))
             candidate["pipeline"] = {**(candidate.get("pipeline") or {}), "weight_provider": provider}
-        if resume is None:
-            import yaml
-            from datetime import datetime
-
-            if output_dir is None:
-                output_dir = Path(candidate.get("output_root", "artifacts/runs")) / datetime.now().strftime("%Y%m%d-%H%M%S")
-            run_root = Path(output_dir).expanduser().resolve()
-            run_root.mkdir(parents=True, exist_ok=True)
-            config_path = run_root / "resolved_config.yaml"
-            if not config_path.exists():
-                config_path.write_text(yaml.safe_dump(candidate, sort_keys=False), encoding="utf-8")
         returned = Path(runner.invoke(candidate, output_dir, resume))
         result = returned.resolve()
         if not result.is_dir():

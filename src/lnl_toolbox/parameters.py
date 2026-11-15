@@ -947,6 +947,11 @@ def _registry_config_fields(
             presentation, resource_label = _parameter_presentation(str(path), method)
             found, current = _config_path_value(config, str(path))
             if not found:
+                if method == "mentornet" and str(path) == "pipeline.weight_provider.artifact_path":
+                    # The teacher can be generated for the run instead of supplied as a file.
+                    continue
+                if method == "cal" and str(path) in {"noise.path", "noise.clean_key", "noise.noisy_key"} and (config.get("noise") or {}).get("name") != "external_torch":
+                    continue
                 if method == "importance_reweighting" and str(path).startswith("posterior_stage."):
                     # Neural stage controls are absent from KDE/KLIEP recipes;
                     # density bandwidth is absent from neural recipes.

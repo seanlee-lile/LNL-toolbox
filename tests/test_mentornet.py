@@ -50,6 +50,15 @@ from lnl_toolbox.treatments.weights import SupervisedWeightInput
 # --- merged from test_mentornet.py ---
 class _mentornet_MentorNetTest(unittest.TestCase):
 
+    def test_resume_missing_teacher_does_not_retrain(self):
+        from lnl_toolbox.training.mentor_learning import ensure_mentor_artifact
+        with tempfile.TemporaryDirectory() as directory, \
+                patch('lnl_toolbox.training.mentor_learning.prepare_trusted_mentor_features') as prepare:
+            with self.assertRaisesRegex(FileNotFoundError, 'mentor_artifact.pt'):
+                ensure_mentor_artifact({'pipeline': {'weight_provider': {'name': 'mentornet'}}},
+                                       run_dir=directory, resuming=True)
+            prepare.assert_not_called()
+
     def test_mentor_weights_preserve_loss_and_gradient_scale(self) -> None:
         from lnl_toolbox.algorithms.supervised import SupervisedClassificationAlgorithm
         from lnl_toolbox.core import Batch

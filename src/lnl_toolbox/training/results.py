@@ -288,6 +288,29 @@ def inspect_resume_run(
     else:
         errors.append(f"missing {checkpoint}.pt")
 
+    if isinstance(payload.get("data"), Mapping) and payload["data"].get("data_fingerprint"):
+        if not (root / "data_manifest.json").is_file():
+            errors.append("missing data_manifest.json")
+    noise = payload.get("noise")
+    noise_path = noise.get("manifest_path") if isinstance(noise, Mapping) else None
+    noise_path = noise_path or payload.get("noise_manifest_path")
+    if noise_path:
+        noise_file = Path(str(noise_path))
+        if not noise_file.is_absolute():
+            noise_file = root / noise_file
+        if not noise_file.is_file():
+            errors.append(f"missing noise manifest: {noise_file}")
+    pipeline = config.get("pipeline") or {}
+    provider = (pipeline.get("weight_provider") or {}) if isinstance(pipeline, Mapping) else {}
+    if isinstance(provider, Mapping) and str(provider.get("name", "")).lower() == "mentornet":
+        if not (root / "mentor" / "mentor_artifact.pt").is_file():
+            errors.append("missing mentor/mentor_artifact.pt")
+    dld = config.get("dld") or {}
+    extractor = dld.get("feature_extractor") or {} if isinstance(dld, Mapping) else {}
+    if isinstance(extractor, Mapping) and extractor.get("source") == "external_checkpoint":
+        if not (root / "dld_feature_source.pth").is_file():
+            errors.append("missing dld_feature_source.pth")
+
     history, history_errors = load_metric_history(root)
     errors.extend(history_errors)
     latest = history[-1] if history else {}
@@ -311,12 +334,6 @@ def inspect_resume_run(
     trainer = config.get("trainer", {}) if isinstance(config.get("trainer"), Mapping) else {}
     target_epoch = trainer.get("epochs")
     completed = is_completed_result(root)
-    target_reached = (
-        isinstance(current_epoch, (int, float))
-        and isinstance(target_epoch, (int, float))
-        and current_epoch >= target_epoch
-    )
-    completed = completed or target_reached
 
     try:
         from lnl_toolbox.training.runners import resolve_runner
@@ -349,11 +366,7 @@ def inspect_resume_run(
     resumable = not errors and not completed
     status = "ready" if resumable else "completed" if completed and not errors else "blocked"
     if completed:
-        errors.append(
-            "configured target epoch has already been reached; resume would be a no-op"
-            if target_reached
-            else "run is already completed; resume would be a no-op"
-        )
+        errors.append("run is already completed; resume would be a no-op")
     return {
         "run_dir": str(root),
         "status": status,
