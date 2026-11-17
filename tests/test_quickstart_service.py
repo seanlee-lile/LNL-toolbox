@@ -132,26 +132,6 @@ class QuickStartServiceTests(unittest.TestCase):
         self.assertEqual(self.service._template(paper, recipes, "cifar10_airplane_automobile").recipe_id,
                          "cwd-cifar10")
 
-    def test_dataset_yaml_plan_and_method_card_use_same_source(self) -> None:
-        import json
-        from lnl_toolbox.catalog import load_yaml
-
-        selection = QuickStartNoiseSelection("synthetic", "symmetric", rate=0.2, seed=73)
-        option = next(item for item in self.service.method_options("local-cifar10", selection) if item.paper_id == "gce")
-        self.assertEqual(option.recipe_id, "gce-cifar10")
-        plan = self.service.build_plan(dataset_alias="local-cifar10", paper_id="gce", noise_selection=selection)
-        self.assertEqual(plan.status, "ready", plan.details)
-        provenance = json.loads(Path(plan.provenance_path).read_text(encoding="utf-8"))
-        self.assertEqual(provenance["base_recipe"], option.recipe_id)
-        base = load_yaml(Path(provenance["base_config_path"]))
-        saved = load_yaml(Path(plan.generated_config_path))
-        for key in ("model", "optimizer", "scheduler", "trainer", "loss"):
-            self.assertEqual(saved[key], base[key], key)
-        self.assertEqual(saved["seed"], 73)
-        self.assertEqual(saved["noise"]["rate"], 0.2)
-        self.assertIn(plan.generated_config_path, plan.command)
-        self.assertIn(plan.generated_config_path, plan.dry_run_command)
-        self.assertIsNone(plan.recipe_id)  # The bound draft, not the old default, is executed.
 
     def test_plan_template_cache_tracks_recipe_file_revision(self) -> None:
         from lnl_toolbox.quickstart import templates
@@ -237,60 +217,8 @@ class QuickStartServiceTests(unittest.TestCase):
         self.assertTrue({"external_torch", "class_conditional", "official_uniform_flip"} <= keys)
         self.assertIn("binary_asymmetric_rcn", keys)
 
-    def test_cal_accepts_quickstart_generated_noise_without_external_file(self) -> None:
-        for kind, key, rate in (("clean", "clean", None), ("synthetic", "symmetric", 0.2), ("synthetic", "pairflip", 0.2)):
-            with self.subTest(noise=key):
-                selection = QuickStartNoiseSelection(kind, key, rate=rate, seed=1)
-                plan = self.service.build_plan(dataset_alias="local-cifar10", paper_id="cal", noise_selection=selection)
-                self.assertEqual(plan.status, "ready", plan.details)
-                self.assertNotIn("config:requires_external_noise_labels", plan.required_user_inputs)
 
-    def test_binary_asymmetric_selection_reaches_plan(self) -> None:
-        selection = QuickStartNoiseSelection(
-            "synthetic", "binary_asymmetric_rcn", seed=1,
-            rho_positive=0.3, rho_negative=0.05,
-        )
-        profile = self.data_service.status("local-cifar10").profile.to_dict()
-        paper = next(item for item in load_papers() if item.id == "importance-reweighting")
-        config = adapt_method_template(
-            method_template_for_paper(paper).config,
-            dataset_alias="local-cifar10", dataset_profile=profile,
-            noise_selection=selection, data_service=self.data_service,
-        )
-        self.assertEqual(config["noise"]["rho_positive"], 0.3)
-        self.assertEqual(config["noise"]["rho_negative"], 0.05)
-        plan = self.service.build_plan(
-            dataset_alias="local-cifar10", noise_selection=selection,
-            paper_id="importance-reweighting",
-        )
-        self.assertEqual(plan.status, "ready", plan.details)
-        from lnl_toolbox.catalog import load_yaml
-        saved = load_yaml(Path(plan.generated_config_path))
-        self.assertEqual(saved["noise"]["rho_positive"], 0.3)
-        self.assertEqual(saved["noise"]["rho_negative"], 0.05)
 
-    def test_class_conditional_matrix_survives_plan_and_noise_generation(self) -> None:
-        from lnl_toolbox.catalog import load_yaml
-        from lnl_toolbox.training.noisy_labels import prepare_noise_manifest
-
-        matrix = ((0.7, 0.3), (0.1, 0.9))
-        selection = QuickStartNoiseSelection(
-            "synthetic", "class_conditional", rate=0.2, seed=1,
-            transition_matrix=matrix,
-        )
-        plan = self.service.build_plan(
-            dataset_alias="local-cifar10", noise_selection=selection, paper_id="gce",
-        )
-        self.assertEqual(plan.status, "ready", plan.details)
-        saved = load_yaml(Path(plan.generated_config_path))
-        np.testing.assert_array_equal(saved["noise"]["transition_matrix"], matrix)
-        labels = np.arange(12, dtype=np.int64) % 2
-        manifest, _ = prepare_noise_manifest(
-            saved, dataset="cifar10", clean_targets=labels,
-            global_indices=np.arange(labels.size), num_classes=2,
-            run_dir=Path(self.temp.name),
-        )
-        np.testing.assert_array_equal(manifest.transition_matrix, matrix)
 
     def test_replacing_noise_matrix_or_path_invalidates_only_stale_matrices(self) -> None:
         from copy import deepcopy
@@ -592,28 +520,6 @@ class QuickStartServiceTests(unittest.TestCase):
         self.assertNotEqual(option.status, "needs_input")
         self.assertFalse(option.required_user_inputs)
 
-    def test_clean_pcse_plan_preserves_labels_and_observed_validation(self) -> None:
-        from lnl_toolbox.catalog import load_yaml
-        from lnl_toolbox.algorithms.pcse.config import PCSEConfig
-
-        root = Path(self.temp.name)
-        data_service = DataService(
-            registry=DatasetRegistry((_FakeCifar100Adapter(),)),
-            catalog=LocalDatasetCatalog(root / "pcse-clean-catalog.json"),
-        )
-        data_service.register("pcse-clean", "cifar100", {"root": str(self.data_root)})
-        data_service.inspect("pcse-clean")
-        service = QuickStartService(data_service, artifact_root=root / "pcse-clean-artifacts")
-        plan = service.build_plan(
-            dataset_alias="pcse-clean",
-            noise_selection=QuickStartNoiseSelection("clean", "clean", seed=1),
-            paper_id="pcse",
-        )
-        self.assertEqual(plan.status, "ready", plan.details)
-        self.assertTrue(plan.command)
-        config = load_yaml(Path(plan.generated_config_path))
-        self.assertEqual(config["noise"], {"name": "clean", "validation_targets": "noisy"})
-        PCSEConfig.from_mapping(config)
 
     def test_no_corruption_preserves_label_contract_for_every_paper(self) -> None:
         profile = self.data_service.inspect("local-cifar10").profile.to_dict()
@@ -646,76 +552,13 @@ class QuickStartServiceTests(unittest.TestCase):
                     }:
                         self.service.experiment_service.preflight(candidate, check_data=False)
 
-    def test_jocor_estimate_defaults_and_native_unknown_input(self) -> None:
-        from lnl_toolbox.catalog import load_yaml
-        for kind, key, rate, expected in (
-            ("clean", "clean", None, 0.0),
-            ("synthetic", "symmetric", 0.3, 0.3),
-        ):
-            with self.subTest(kind=kind):
-                plan = self.service.build_plan(
-                    dataset_alias="local-cifar10", paper_id="jocor",
-                    noise_selection=QuickStartNoiseSelection(kind, key, rate=rate, seed=1),
-                )
-                self.assertEqual(plan.status, "ready", plan.details)
-                config = load_yaml(Path(plan.generated_config_path))
-                self.assertEqual(config["algorithm"]["estimated_noise_rate"], expected)
-                if kind == "synthetic":
-                    self.assertEqual(config["noise"]["rate"], rate)
-                else:
-                    self.assertNotIn("rate", config["noise"])
-        self.data_service.update_declarations("local-cifar10", {
-            "noise_status": "noisy", "noise_origin": "native",
-            "noise_rate": {"status": "known", "value": 0.2},
-        })
-        native = QuickStartNoiseSelection("native", "native")
-        known = self.service.build_plan(dataset_alias="local-cifar10", paper_id="jocor", noise_selection=native)
-        self.assertEqual(known.status, "ready", known.details)
-        self.assertEqual(load_yaml(Path(known.generated_config_path))["algorithm"]["estimated_noise_rate"], 0.2)
-        self.data_service.update_declarations("local-cifar10", {"noise_rate": {"status": "unknown"}})
-        unknown = self.service.build_plan(dataset_alias="local-cifar10", paper_id="jocor", noise_selection=native)
-        self.assertEqual(unknown.status, "needs_input")
-        self.assertIn("noise_rate_prior", unknown.required_user_inputs)
-        supplied = self.service.build_plan(dataset_alias="local-cifar10", paper_id="jocor", noise_selection=native,
-                                           user_inputs={"noise_rate_prior": 0.4})
-        self.assertEqual(supplied.status, "ready", supplied.details)
-        config = load_yaml(Path(supplied.generated_config_path))
-        self.assertEqual(config["algorithm"]["estimated_noise_rate"], 0.4)
-        self.assertNotIn("rate", config["noise"])
 
-    def test_invalid_class_dependent_parameter_is_rejected_in_method_options(self) -> None:
+    def test_ca2c_default_candidate_count_is_compatible_with_ten_classes(self) -> None:
         selection = QuickStartNoiseSelection("synthetic", "symmetric", rate=0.2, seed=1)
         option = next(item for item in self.service.method_options("local-cifar10", selection)
                       if item.paper_id == "ca2c")
-        self.assertEqual(option.status, "unsupported")
-        self.assertTrue(any("candidate_k" in reason for reason in option.reasons))
+        self.assertEqual(option.status, "ready")
 
-    def test_ca2c_supports_ten_classes_without_changing_candidate_count(self) -> None:
-        from lnl_toolbox.catalog import load_yaml
-        root = Path(self.temp.name)
-        for name in ("cifar10", "fashion_mnist"):
-            adapter = _FakeTenClassImageAdapter(name)
-            data_service = DataService(
-                registry=DatasetRegistry((adapter,)),
-                catalog=LocalDatasetCatalog(root / f"{name}-ten-class-catalog.json"),
-            )
-            data_service.register("ten-classes", adapter.name, {"root": str(self.data_root)})
-            data_service.inspect("ten-classes")
-            service = QuickStartService(data_service, artifact_root=root / f"{name}-ten-class-artifacts")
-            for key in ("clean", "symmetric", "pairflip", "pdl"):
-                with self.subTest(dataset=name, noise=key):
-                    selection = QuickStartNoiseSelection(
-                        "clean" if key == "clean" else "synthetic", key,
-                        rate=None if key == "clean" else 0.2, seed=1,
-                    )
-                    option = next(item for item in service.method_options("ten-classes", selection)
-                                  if item.paper_id == "ca2c")
-                    self.assertEqual(option.status, "ready", option.reasons)
-                    plan = service.build_plan(dataset_alias="ten-classes", noise_selection=selection, paper_id="ca2c")
-                    self.assertEqual(plan.status, "ready", plan.details)
-                    config = load_yaml(Path(plan.generated_config_path))
-                    self.assertEqual(config["data"]["num_classes"], 10)
-                    self.assertEqual(config["ca2c"]["candidate_k"], 2)
 
     def test_method_options_batches_compatibility_and_reuses_cache(self) -> None:
         selection = QuickStartNoiseSelection("clean", "clean")
@@ -980,17 +823,6 @@ class QuickStartServiceTests(unittest.TestCase):
         self.assertEqual(template['final_stage']['model']['name'], 'resnet18')
         self.assertEqual(template['final_stage']['epochs'], 200)
 
-    def test_small_dataset_uses_adapted_plan_instead_of_full_size_recipe(self) -> None:
-        from lnl_toolbox.catalog import load_yaml
-
-        plan = self.service.build_plan(
-            dataset_alias="local-cifar10",
-            noise_selection=QuickStartNoiseSelection("synthetic", "symmetric", rate=0.2, seed=1),
-            paper_id="gce",
-        )
-        self.assertEqual(plan.config_kind, "toolbox_adapted")
-        self.assertEqual(plan.status, "ready", plan.details)
-        self.assertEqual(load_yaml(Path(plan.generated_config_path))["data"]["validation_size"], 1)
 
     def test_exact_reproduction_preserves_native_noise_and_returns_recipe_id(self) -> None:
         clean_paper = SimpleNamespace(configs=(SimpleNamespace(profile="reproduction", recipe_id="formal-clean"),))

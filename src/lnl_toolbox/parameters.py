@@ -1155,6 +1155,9 @@ def schema_from_payload(payload: dict[str, Any], *, recipe_hint=None) -> dict[st
     )
     original_count = reference_train_size(original)
     for field in fields:
+        field.setdefault("presentation", "parameter")
+        field.setdefault("research_group", "")
+        field.setdefault("research_category", "")
         field["display_group"] = _parameter_display_group(field, method)
         if method in _parameter_registry()["methods"] and field.get("visible") is not False and not _parameter_ui_spec(str(field["path"])):
             raise ValueError(f"参数尚未提供具体说明：{field['path']}")

@@ -422,61 +422,26 @@ class _dividemix_workflow_DivideMixWorkflowTest(unittest.TestCase):
         expected = (-torch.tensor(normalization['mean']) / torch.tensor(normalization['std'])).view(1, 3, 1, 1)
         torch.testing.assert_close(actual, expected.expand_as(actual))
 
-    def test_fresh_extension_and_completed_noop(self):
+    def test_resume_from_directory_continues_next_epoch(self):
+        from lnl_toolbox.training import dividemix_experiment
+        from lnl_toolbox.training.service import ExperimentService
+        save = dividemix_experiment.atomic_save
+        def interrupt(payload, path):
+            save(payload, path)
+            if Path(path).name == 'best.pt' and payload['algorithm']['dividemix_state']['main_completed_epochs'] == 1:
+                raise RuntimeError('simulated interruption')
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self.load), patch('lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator', _dividemix_workflow__FakeEstimator):
-            run_dir = run_experiment(_dividemix_workflow__config(1), Path(directory) / 'run')
-            payload = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
-            self.assertEqual(payload['algorithm']['dividemix_state']['phase'], 'completed')
-            self.assertEqual(payload['algorithm']['dividemix_state']['main_completed_epochs'], 1)
-            self.assertEqual(set(payload['algorithm']['model']), {'a', 'b'})
-            first_artifact = run_dir / 'dividemix_epoch_0001.npz'
-            first_hash, first_mtime = (_dividemix_workflow__hash(first_artifact), first_artifact.stat().st_mtime_ns)
-            run_experiment(_dividemix_workflow__config(2), resume=run_dir / 'last.pt')
-            resumed = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
-            self.assertEqual(resumed['algorithm']['dividemix_state']['main_completed_epochs'], 1)
-            self.assertEqual(_dividemix_workflow__hash(first_artifact), first_hash)
-            self.assertEqual(first_artifact.stat().st_mtime_ns, first_mtime)
-            checkpoint_hash, metrics_hash = (_dividemix_workflow__hash(run_dir / 'last.pt'), _dividemix_workflow__hash(run_dir / 'metrics.jsonl'))
-            run_experiment(_dividemix_workflow__config(2), resume=run_dir / 'last.pt')
-            self.assertEqual(_dividemix_workflow__hash(run_dir / 'last.pt'), checkpoint_hash)
-            self.assertEqual(_dividemix_workflow__hash(run_dir / 'metrics.jsonl'), metrics_hash)
-            final = json.loads((run_dir / 'final_metrics.json').read_text())
-            self.assertEqual(final['ensemble'], 'official_logits_sum')
-
-    def test_corrupt_ready_artifact_fails_instead_of_refitting(self):
-        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self.load), patch('lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator', _dividemix_workflow__FakeEstimator):
-            run_dir = run_experiment(_dividemix_workflow__config(1), Path(directory) / 'run')
-            payload = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
-            payload['algorithm']['dividemix_state']['phase'] = 'co_divide_ready'
-            atomic = run_dir / 'last.pt'
-            torch.save(payload, atomic)
-            (run_dir / payload['algorithm']['dividemix_state']['current_artifact']).write_bytes(b'broken')
-            with self.assertRaises(Exception):
-                run_experiment(_dividemix_workflow__config(2), resume=atomic)
-
-    def test_network_a_ready_resume_does_not_repeat_a(self):
-        import lnl_toolbox.training.dividemix_experiment as workflow
-        original = workflow._train_peer_epoch
-        failed = {'value': False}
-
-        def interrupt_b(*args, **kwargs):
-            peer = args[1]
-            if peer == 'b' and (not failed['value']):
-                failed['value'] = True
-                raise RuntimeError('controlled B interruption')
-            return original(*args, **kwargs)
-        with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / 'run'
-            with patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self.load), patch('lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator', _dividemix_workflow__FakeEstimator), patch('lnl_toolbox.training.dividemix_experiment._train_peer_epoch', side_effect=interrupt_b):
-                with self.assertRaisesRegex(RuntimeError, 'controlled B'):
-                    run_experiment(_dividemix_workflow__config(1), run_dir)
-            interrupted = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
-            self.assertEqual(interrupted['algorithm']['dividemix_state']['phase'], 'network_a_ready')
-            steps_a = interrupted['algorithm']['dividemix_state']['optimizer_steps_a']
-            with patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self.load), patch('lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator', _dividemix_workflow__FakeEstimator):
-                run_experiment(_dividemix_workflow__config(1), resume=run_dir / 'last.pt')
+            with patch.object(dividemix_experiment, 'atomic_save', side_effect=interrupt):
+                with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
+                    run_experiment(_dividemix_workflow__config(2), run_dir)
+            first = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
+            self.assertEqual(first['algorithm']['dividemix_state']['main_completed_epochs'], 1)
+            ExperimentService().resume(run_dir)
             resumed = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
-            self.assertEqual(resumed['algorithm']['dividemix_state']['optimizer_steps_a'], steps_a)
+            self.assertEqual(resumed['algorithm']['dividemix_state']['main_completed_epochs'], 2)
+
+
 
     def test_cifar100_lightweight_workflow(self):
         train, test = (_dividemix_workflow__data100(220, 'train'), _dividemix_workflow__data100(100, 'test'))

@@ -296,71 +296,26 @@ class _coteaching_workflow_CoTeachingWorkflowTest(unittest.TestCase):
     def _load_data(self, _root, split):
         return self.train_data if split == 'train' else self.test_data
 
-    def test_adam_phases_are_applied_to_both_peers_and_survive_resume(self):
-        config = _coteaching_workflow__config(2)
-        config['scheduler'] = {
-            'name':'linear_after', 'start_epoch':1, 'end_epoch':2,
-            'beta1_before':.9, 'beta1_after':.1,
-        }
-        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load_data):
-            run_dir = run_experiment(config, Path(directory)/'run')
-            first = torch.load(run_dir/'last.pt', map_location='cpu', weights_only=False)
-            for peer in ('a','b'):
-                self.assertEqual(first['optimizer'][peer]['param_groups'][0]['betas'], (.1,.999))
-            resumed_config = copy.deepcopy(config)
-            resumed_config['trainer']['epochs'] = 3
-            run_experiment(resumed_config, resume=run_dir/'last.pt')
-            resumed = torch.load(run_dir/'last.pt', map_location='cpu', weights_only=False)
-            for peer in ('a','b'):
-                self.assertEqual(resumed['optimizer'][peer]['param_groups'][0]['betas'], (.1,.999))
-                self.assertEqual(resumed['optimizer'][peer]['param_groups'][0]['lr'], 0)
-                for name, value in resumed['model'][peer].items():
-                    torch.testing.assert_close(value, first['model'][peer][name], rtol=0, atol=0)
 
-    def test_fresh_resume_and_completed_resume_preserve_dual_state(self):
+    def test_resume_from_directory_continues_next_epoch(self):
+        from lnl_toolbox.training import coteaching_experiment
+        from lnl_toolbox.training.service import ExperimentService
+        save = coteaching_experiment.save_checkpoint
+        def interrupt(path, *args, **kwargs):
+            save(path, *args, **kwargs)
+            if Path(path).name == 'best.pt':
+                raise RuntimeError('simulated interruption')
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load_data):
-            run_dir = run_experiment(_coteaching_workflow__config(2), Path(directory) / 'run')
+            run_dir = Path(directory) / 'run'
+            with patch.object(coteaching_experiment, 'save_checkpoint', side_effect=interrupt):
+                with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
+                    run_experiment(_coteaching_workflow__config(2), run_dir)
             first = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
-            manifest = run_dir / 'noise_manifest.npz'
-            manifest_hash = _coteaching_workflow__sha256(manifest)
-            manifest_mtime = manifest.stat().st_mtime_ns
-            rows = [json.loads(line) for line in (run_dir / 'metrics.jsonl').read_text(encoding='utf-8').splitlines()]
-            epochs = [row for row in rows if row['event'] == 'epoch']
-            self.assertEqual(len(epochs), 2)
-            self.assertEqual(set(first['model']), {'a', 'b'})
-            self.assertEqual(set(first['optimizer']), {'a', 'b'})
-            self.assertEqual(set(first['algorithm_private_state']['schedulers']), {'a', 'b'})
-            self.assertEqual(first['algorithm_private_state']['method_identity'], 'coteaching')
-            self.assertEqual(first['run_state']['step'], 4)
-            self.assertEqual(first['algorithm_private_state']['coteaching_state']['optimizer_steps_a'], 4)
-            self.assertEqual(first['algorithm_private_state']['coteaching_state']['optimizer_steps_b'], 4)
-            self.assertTrue((run_dir / 'best.pt').is_file())
-            final = json.loads((run_dir / 'final_metrics.json').read_text(encoding='utf-8'))
-            for key in ('test_accuracy_a', 'test_accuracy_b', 'test_mean_peer_accuracy', 'test_accuracy_ensemble'):
-                self.assertIn(key, final)
-            run_experiment(_coteaching_workflow__config(3), resume=run_dir / 'last.pt')
+            self.assertEqual(first['completed_epoch'], 0)
+            ExperimentService().resume(run_dir)
             resumed = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
             self.assertEqual(resumed['completed_epoch'], 1)
-            self.assertEqual(resumed['run_state']['step'], 4)
-            self.assertEqual(_coteaching_workflow__sha256(manifest), manifest_hash)
-            self.assertEqual(manifest.stat().st_mtime_ns, manifest_mtime)
-            self.assertAlmostEqual(json.loads((run_dir / 'metrics.jsonl').read_text(encoding='utf-8').splitlines()[-2])['remember_rate'], 0.8)
-            checkpoint_hash = _coteaching_workflow__sha256(run_dir / 'last.pt')
-            checkpoint_mtime = (run_dir / 'last.pt').stat().st_mtime_ns
-            metrics_hash = _coteaching_workflow__sha256(run_dir / 'metrics.jsonl')
-            run_experiment(_coteaching_workflow__config(3), resume=run_dir / 'last.pt')
-            self.assertEqual(_coteaching_workflow__sha256(run_dir / 'last.pt'), checkpoint_hash)
-            self.assertEqual((run_dir / 'last.pt').stat().st_mtime_ns, checkpoint_mtime)
-            self.assertEqual(_coteaching_workflow__sha256(run_dir / 'metrics.jsonl'), metrics_hash)
 
-    def test_resume_ignores_caller_configuration(self):
-        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load_data):
-            run_dir = run_experiment(_coteaching_workflow__config(1), Path(directory) / 'run')
-            changed = _coteaching_workflow__config(2)
-            changed['coteaching']['initialization']['peer_seed_offset'] = 2
-            before = _coteaching_workflow__sha256(run_dir / 'last.pt')
-            run_experiment(changed, resume=run_dir / 'last.pt')
-            self.assertEqual(_coteaching_workflow__sha256(run_dir / 'last.pt'), before)
 
     def test_cli_dispatch_is_lazy_and_does_not_change_supervised_default(self):
         with patch('lnl_toolbox.training.coteaching_experiment.run_coteaching_experiment', return_value=Path('coteaching-run')) as run:

@@ -84,6 +84,14 @@ class MentorArtifact:
     @classmethod
     def load(cls, path: str | Path) -> "MentorArtifact":
         payload = torch.load(Path(path), map_location="cpu", weights_only=False)
+        if not isinstance(payload, Mapping):
+            raise ValueError("Mentor artifact must contain a mapping")
+        for key in ("architecture", "feature_schema", "source", "model_state"):
+            if key not in payload or not isinstance(payload[key], Mapping):
+                raise ValueError(f"Mentor artifact is missing or has invalid {key}")
+        for name, value in payload["model_state"].items():
+            if not isinstance(value, torch.Tensor) or not torch.isfinite(value).all():
+                raise ValueError(f"Mentor artifact model_state contains invalid or non-finite value: {name}")
         artifact = cls.create(
             architecture=payload["architecture"],
             feature_schema=payload["feature_schema"],

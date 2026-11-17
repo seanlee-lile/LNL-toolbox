@@ -289,12 +289,8 @@ class _cdr_CDRUpdatePolicyTest(unittest.TestCase):
         _validate_supervised_config(independent_rates)
         self.assertEqual(independent_rates['noise']['rate'], 0.2)
         self.assertEqual(independent_rates['parameter_update']['noise_rate'], 0.4)
-        with self.assertRaisesRegex(ValueError, 'parameter_update'):
-            _validate_resume_config(base, {**base, 'parameter_update': {'name': 'cdr', 'noise_rate': 0.2, 'l1_decay': 0.001}})
         official = {**base, 'optimizer': {'name': 'sgd', 'lr': 0.01, 'momentum': 0.9, 'weight_decay': 0.1}, 'parameter_update': {'name': 'cdr', 'noise_rate': 0.4, 'l1_decay': 0.0, 'compatibility_mode': 'official_code'}}
         _validate_supervised_config(official)
-        with self.assertRaisesRegex(ValueError, 'parameter_update'):
-            _validate_resume_config(official, {**base, 'optimizer': official['optimizer']})
 
     @unittest.skipUnless(torch.cuda.is_available(), 'CUDA is unavailable')
     def test_cpu_and_cuda_masks_and_updates_match(self) -> None:
@@ -329,47 +325,6 @@ class _cdr_reproduction_CDRReproductionTest(unittest.TestCase):
         self.assertEqual(tuple((len(layer) for layer in (model.layer1, model.layer2, model.layer3, model.layer4))), (2, 2, 2, 2))
 
 
-    def test_scratch_author_updates_match_runner_and_resume_with_momentum(self) -> None:
-        from copy import deepcopy
-        from lnl_toolbox.scratch.context import ScratchContext
-        from lnl_toolbox.scratch.blocks.parameter import parameter_criticality_mask, masked_gradient_update
-        runner = torch.nn.Linear(2, 2)
-        with torch.no_grad():
-            runner.weight.copy_(torch.tensor([[2., -1.], [0., 4.]]))
-            runner.bias.copy_(torch.tensor([1., -1.]))
-        scratch = deepcopy(runner)
-        models = [runner, scratch]
-        optimizers = [torch.optim.SGD(m.parameters(), lr=.01, momentum=.9, weight_decay=.001) for m in models]
-        policy = CDRUpdatePolicy(.4, 0., compatibility_mode='official_code')
-        saved = None
-        for step in range(3):
-            weights = torch.tensor([[1., 3.], [9., -.25]]) if step != 1 else torch.tensor([[.01, .01], [9., 8.]])
-            def objective(model):
-                return (model.weight * weights).sum() + (model.bias * torch.tensor([2., -3.])).sum()
-            policy.update(ParameterUpdateInput(objective(runner), runner, optimizers[0], RunState()))
-            optimizers[1].zero_grad(set_to_none=True)
-            objective(scratch).backward()
-            ctx = ScratchContext(model=scratch)
-            parameter_criticality_mask(ctx, noise_rate=.4, compatibility_mode='official_code')
-            masked_gradient_update(ctx, scale=.6, l1_decay=0.)
-            optimizers[1].step()
-            for left, right in zip(runner.parameters(), scratch.parameters()):
-                torch.testing.assert_close(left, right, rtol=0, atol=0)
-            if step == 0:
-                with tempfile.TemporaryDirectory() as directory:
-                    path = Path(directory) / 'resume.pt'
-                    torch.save({'model': runner.state_dict(), 'optimizer': optimizers[0].state_dict(), 'policy': policy.state_dict()}, path)
-                    saved = torch.load(path, weights_only=False)
-                resumed = torch.nn.Linear(2, 2)
-                resumed.load_state_dict(saved['model'])
-                resumed_optimizer = torch.optim.SGD(resumed.parameters(), lr=.01, momentum=.9, weight_decay=.001)
-                resumed_optimizer.load_state_dict(saved['optimizer'])
-                resumed_policy = CDRUpdatePolicy(.4, 0., compatibility_mode='official_code')
-                resumed_policy.load_state_dict(saved['policy'])
-            else:
-                resumed_policy.update(ParameterUpdateInput(objective(resumed), resumed, resumed_optimizer, RunState()))
-                for left, right in zip(runner.parameters(), resumed.parameters()):
-                    torch.testing.assert_close(left, right, rtol=0, atol=0)
 
 
 

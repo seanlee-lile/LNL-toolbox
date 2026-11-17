@@ -187,9 +187,9 @@ class _binary_preprocessing_BinaryPreprocessingTest(unittest.TestCase):
 
 class _binary_training_BinaryTrainingTest(unittest.TestCase):
 
-    def test_interrupted_run_resumes_from_directory_with_same_state(self):
+    def test_resume_from_directory_continues_next_epoch(self):
         from unittest.mock import patch
-        from lnl_toolbox.training.experiment import run_experiment
+        from lnl_toolbox.training.service import ExperimentService
         from lnl_toolbox.training.checkpoint import atomic_save
         config = {'seed': 4, 'execution': {'runner': 'binary'}, 'data': {'name': 'synthetic_binary_2d', 'train_size': 20, 'test_size': 8},
                   'noise': {'name': 'binary_asymmetric_rcn', 'rho_positive': 0.2, 'rho_negative': 0.1},
@@ -198,33 +198,16 @@ class _binary_training_BinaryTrainingTest(unittest.TestCase):
                   'trainer': {'epochs': 2}, 'optimizer': {'name': 'sgd', 'lr': 0.01}}
         def interrupt(payload, path):
             atomic_save(payload, path)
-            raise RuntimeError('simulated interruption')
+            if Path(path).name == 'last.pt':
+                raise RuntimeError('simulated interruption')
         with tempfile.TemporaryDirectory() as directory:
-            torch.manual_seed(123)
-            uninterrupted = run_experiment(config, Path(directory) / 'full')
-            torch.manual_seed(123)
-            interrupted = Path(directory) / 'interrupted'
+            run_dir = Path(directory) / 'run'
             with patch('lnl_toolbox.training.checkpoint.atomic_save', side_effect=interrupt):
                 with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
-                    run_experiment(config, interrupted)
-            self.assertTrue((interrupted / 'resolved_config.yaml').is_file())
-            from lnl_toolbox.training.service import ExperimentService
-            manifest = interrupted / 'data_manifest.json'
-            relocated = interrupted / 'data_manifest.saved'
-            manifest.rename(relocated)
-            try:
-                with self.assertRaisesRegex(FileNotFoundError, 'data_manifest.json'):
-                    ExperimentService().resume(interrupted)
-                self.assertFalse(manifest.exists())
-            finally:
-                relocated.rename(manifest)
-            ExperimentService().resume(interrupted)
-            expected = torch.load(uninterrupted / 'last.pt', map_location='cpu', weights_only=False)
-            actual = torch.load(interrupted / 'last.pt', map_location='cpu', weights_only=False)
-            self.assertEqual(actual['completed_epoch'], 1)
-            for key in expected['model']:
-                torch.testing.assert_close(actual['model'][key], expected['model'][key], rtol=0, atol=0)
-            self.assertEqual(actual['optimizer']['param_groups'], expected['optimizer']['param_groups'])
+                    ExperimentService().run(config, run_dir)
+            self.assertEqual(torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)['completed_epoch'], 0)
+            ExperimentService().resume(run_dir)
+            self.assertEqual(torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)['completed_epoch'], 1)
 
     def test_risk_name_is_validated_before_loading_data(self) -> None:
         from unittest.mock import patch

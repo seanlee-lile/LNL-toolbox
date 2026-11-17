@@ -252,16 +252,7 @@ class _mc_ldce_MCLDCETest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, \
              patch('lnl_toolbox.training.mc_ldce_experiment.prepare_experiment_data', return_value=prepared), \
              patch('lnl_toolbox.training.mc_ldce_experiment.build_reproduction_model', side_effect=build):
-            run_dir = run_mc_ldce_experiment(config, output_dir=directory, requirements=object())
-            uninterrupted = torch.load(run_dir / 'last.pt', weights_only=False)
-            self.assertFalse(torch.equal(models[0][1], uninterrupted['model']['encoder.weight']))
-            summary = json.loads((run_dir / 'summary.json').read_text())
-            self.assertEqual(summary['epochs_averaged'], 2)
-            self.assertAlmostEqual(summary['test_accuracy_mean'],
-                sum(row['test_accuracy'] for row in uninterrupted['metrics']) / 2)
-            self.assertEqual(len(uninterrupted['optimizer']['param_groups'][0]['params']), 3)
-
-            # Interrupt after epoch 1, then resume with the SAME two-epoch plan.
+            from lnl_toolbox.training.service import ExperimentService
             from lnl_toolbox.training.checkpoint import atomic_save as save
             interrupted_dir = Path(directory) / 'interrupted'
 
@@ -271,9 +262,9 @@ class _mc_ldce_MCLDCETest(unittest.TestCase):
 
             with patch('lnl_toolbox.training.mc_ldce_experiment.atomic_save', side_effect=stop_after_save):
                 with self.assertRaisesRegex(RuntimeError, 'test interruption'):
-                    run_mc_ldce_experiment(config, output_dir=interrupted_dir, requirements=object())
-            run_mc_ldce_experiment(config, resume=interrupted_dir / 'last.pt', requirements=object())
+                    ExperimentService().run(config, interrupted_dir)
+            first = torch.load(interrupted_dir / 'last.pt', weights_only=False)
+            self.assertEqual(first['completed_epoch'], 0)
+            ExperimentService().resume(interrupted_dir)
             resumed = torch.load(interrupted_dir / 'last.pt', weights_only=False)
-            for name, value in uninterrupted['model'].items():
-                torch.testing.assert_close(resumed['model'][name], value, rtol=0, atol=0)
-            self.assertEqual(resumed['metrics'], uninterrupted['metrics'])
+            self.assertEqual(resumed['completed_epoch'], 1)

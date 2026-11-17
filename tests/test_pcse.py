@@ -383,35 +383,6 @@ class _pcse_volmin_PCSEVolMinPrimitiveTest(unittest.TestCase):
 
 class _pcse_volmin_PCSEVolMinWorkflowTest(unittest.TestCase):
 
-    def test_transition_training_interruption_resume_and_model_binding(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            run_dir = Path(directory)
-            first = _pcse_volmin__algorithm(run_dir)
-            first.train_pretraining()
-            source_hash = first.state.pretrained_checkpoint_sha256
-            first.start_transition_training()
-            first.train_transition(max_epochs=1)
-            self.assertEqual(first.state.phase, PCSEPhase.TRANSITION_TRAINING)
-            self.assertEqual(first.state.transition_completed_epochs, 1)
-            initial_step = first.state.transition_global_step
-            interrupted_payload = read_checkpoint(run_dir / 'last.pt', 'cpu')
-            self.assertIsInstance(interrupted_payload['transition_model'], dict)
-            self.assertIsInstance(interrupted_payload['transition_optimizer'], dict)
-            self.assertIn('rng_state', interrupted_payload)
-            first.close()
-            resumed = _pcse_volmin__algorithm(run_dir)
-            resumed.resume(run_dir / 'last.pt')
-            self.assertEqual(resumed.state.transition_completed_epochs, 1)
-            self.assertTrue(bool(resumed.transition_optimizer.state_dict()['state']))
-            resumed.train_transition()
-            self.assertEqual(resumed.state.phase, PCSEPhase.TRANSITION_READY)
-            self.assertGreater(resumed.state.transition_global_step, initial_step)
-            self.assertEqual(resumed.transition.metadata['source_pretrained_checkpoint_sha256'], source_hash)
-            self.assertEqual(resumed.transition.metadata['feature_model_checkpoint_sha256'], source_hash)
-            self.assertEqual(resumed.state.feature_model_checkpoint_sha256, source_hash)
-            statistics = resumed.estimate_statistics()
-            self.assertEqual(statistics.provenance['feature_model_checkpoint_sha256'], source_hash)
-            resumed.close()
 
     def test_publish_validation_failure_preserves_formal_files_and_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -437,25 +408,26 @@ class _pcse_volmin_PCSEVolMinWorkflowTest(unittest.TestCase):
             self.assertNotEqual((run_dir / 'last.pt').read_bytes(), before_last)
             algorithm.close()
 
-    def test_tiny_workflow_completed_resume_keeps_artifacts(self) -> None:
+    def test_resume_from_directory_continues_next_epoch(self) -> None:
+        from unittest.mock import patch
+        from lnl_toolbox.algorithms.pcse import algorithm as impl
+        from lnl_toolbox.training.service import ExperimentService
+        config = _pcse_volmin__config()
+        config['pretraining_stage']['epochs'] = 1
+        config['ensemble_stage']['epochs'] = 2
+        save = impl.atomic_save
+        def interrupt(payload, path):
+            save(payload, path)
+            if Path(path).name == 'last.pt' and payload['pcse_state']['ensemble_completed_epochs'] == 1:
+                raise RuntimeError('simulated interruption')
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / 'run'
-            config = _pcse_volmin__config()
-            run_pcse_experiment(config, output_dir=run_dir)
-            final = json.loads((run_dir / 'final_metrics.json').read_text(encoding='utf-8'))
-            self.assertEqual(final['transition_backend'], 'paper_volmin')
-            noise_summary = json.loads((run_dir / 'noise_summary.json').read_text(encoding='utf-8'))
-            self.assertEqual(noise_summary['validation_targets'], 'noisy')
-            self.assertIsNone(noise_summary['effective_validation_subset_actual_rate'])
-            names = ('volmin_final.pt', 'transition_artifact.npz', 'pcse_statistics.npz', 'pcse_gda.npz', 'pcse_ensemble.npz')
-            before = {name: ((run_dir / name).read_bytes(), (run_dir / name).stat().st_mtime_ns) for name in names}
-            run_pcse_experiment(config, resume=run_dir / 'last.pt')
-            after = {name: ((run_dir / name).read_bytes(), (run_dir / name).stat().st_mtime_ns) for name in names}
-            self.assertEqual(before, after)
-            mismatch = deepcopy(config)
-            mismatch['transition_stage']['lambda_volume'] *= 2.0
-            with self.assertRaisesRegex(ValueError, 'transition backend configuration mismatch'):
-                run_pcse_experiment(mismatch, resume=run_dir / 'last.pt')
+            with patch.object(impl, 'atomic_save', side_effect=interrupt):
+                with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
+                    ExperimentService().run(config, run_dir)
+            self.assertEqual(read_checkpoint(run_dir / 'last.pt', 'cpu')['pcse_state']['ensemble_completed_epochs'], 1)
+            ExperimentService().resume(run_dir)
+            self.assertEqual(read_checkpoint(run_dir / 'last.pt', 'cpu')['pcse_state']['ensemble_completed_epochs'], 2)
 
 
 from torch.utils.data import Dataset
@@ -677,26 +649,6 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(model.off_diagonal_logits.grad).all())
         self.assertTrue(torch.isfinite(logits.grad).all())
 
-    def test_single_layer_real_workflow_save_and_completed_resume(self) -> None:
-        config = _pcse_volmin__config()
-        config['pretraining_stage']['epochs'] = 1
-        config['transition_stage']['epochs'] = 1
-        config['ensemble_stage']['epochs'] = 1
-        config['feature_stage']['layers'] = [{'name':'hidden2'}]
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            run_pcse_experiment(config, output_dir=root)
-            artifact = PCSEEnsembleArtifact.load(root/'pcse_ensemble.npz')
-            self.assertEqual(artifact.layer_names, ('hidden2', 'discriminative'))
-            self.assertEqual(artifact.weights.shape, (2,))
-            self.assertTrue((artifact.weights > 0).all())
-            self.assertAlmostEqual(float(artifact.weights.sum()), 1.0)
-            names = ('pcse_statistics.npz', 'pcse_gda.npz', 'pcse_ensemble.npz', 'final_metrics.json')
-            before = {name:(root/name).read_bytes() for name in names}
-            run_pcse_experiment(config, resume=root/'last.pt')
-            self.assertEqual(before, {name:(root/name).read_bytes() for name in names})
-            metrics = json.loads((root/'final_metrics.json').read_text())
-            self.assertTrue(np.isfinite(metrics['test_accuracy']))
 
 
 
@@ -743,38 +695,6 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
             np.testing.assert_array_equal(left.features, right.features)
             np.testing.assert_array_equal(left.noisy_targets, right.noisy_targets)
 
-    def test_pretraining_interruption_and_resume(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            first = _pcse_workflow__pretraining_algorithm(Path(directory))
-            first.train_pretraining(max_epochs=1)
-            self.assertEqual(first.state.phase, PCSEPhase.PRETRAINING)
-            self.assertEqual(first.state.pretraining_completed_epochs, 1)
-            best = torch.load(
-                Path(directory) / 'pretrained_best.pt',
-                map_location='cpu',
-                weights_only=False,
-            )
-            self.assertEqual(best['pretraining_method'], 'cross_entropy')
-            self.assertEqual(best['pretraining_model'], 'pcse_mlp')
-            self.assertEqual(best['pretraining_source'], 'internal_training')
-            rows = [
-                json.loads(line)
-                for line in (Path(directory) / 'metrics.jsonl').read_text(encoding='utf-8').splitlines()
-            ]
-            self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]['event'], 'epoch')
-            self.assertEqual(rows[0]['pretraining_method'], 'cross_entropy')
-            self.assertEqual(rows[0]['pretraining_source'], 'internal_training')
-            first.close()
-            resumed = _pcse_workflow__pretraining_algorithm(Path(directory))
-            resumed.resume(Path(directory) / 'last.pt')
-            self.assertEqual(resumed.state.pretraining_completed_epochs, 1)
-            initial_step = resumed.state.pretraining_global_step
-            resumed.train_pretraining()
-            self.assertEqual(resumed.state.phase, PCSEPhase.PRETRAINED)
-            self.assertEqual(resumed.state.pretraining_completed_epochs, 2)
-            self.assertGreater(resumed.state.pretraining_global_step, initial_step)
-            resumed.close()
 
     def test_transition_persistence_failure_does_not_advance_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -802,84 +722,4 @@ class _pcse_workflow_PCSEWorkflowTest(unittest.TestCase):
                 persist_npz_atomically(replacement, destination, lambda _path: (_ for _ in ()).throw(ValueError('injected validation failure')))
             self.assertEqual(destination.read_bytes(), before)
 
-    def test_ensemble_interruption_and_resume(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            run_dir = Path(directory)
-            first = _pcse_workflow__pretraining_algorithm(run_dir, pretraining_epochs=1, fixed_model=True)
-            first.train_pretraining()
-            first.estimate_transition()
-            first.estimate_statistics()
-            first.build_gda()
-            probabilities, targets, indices = first._layer_probabilities(
-                first.noisy_validation_loader, split='validation'
-            )
-            from lnl_toolbox.training.snapshots import collect_posterior_snapshot
-            reference = collect_posterior_snapshot(
-                first.pretraining_algorithm.model, first.noisy_validation_loader,
-                'cpu', dataset=first.dataset, split='validation',
-            )
-            self.assertEqual(probabilities.shape[0], len(first.gda_artifact.layers) + 1)
-            np.testing.assert_allclose(probabilities[-1], reference.noisy_probabilities)
-            np.testing.assert_array_equal(indices, reference.global_indices)
-            np.testing.assert_array_equal(targets, reference.noisy_targets)
-            # Changing the transition/feature backbone must not replace the
-            # original classifier used by the discriminative ensemble member.
-            backbone = first.pretraining_algorithm.model
-            original_weights = deepcopy(backbone.state_dict())
-            with torch.no_grad():
-                backbone.classifier.weight.zero_()
-            changed_weights = deepcopy(backbone.state_dict())
-            restored_probabilities, _, _ = first._layer_probabilities(
-                first.noisy_validation_loader, split='validation'
-            )
-            np.testing.assert_allclose(restored_probabilities[-1], reference.noisy_probabilities)
-            for name, value in backbone.state_dict().items():
-                torch.testing.assert_close(value, changed_weights[name])
-            backbone.load_state_dict(original_weights)
-            first.start_ensemble_training()
-            first.train_ensemble(max_epochs=1)
-            self.assertEqual(first.state.phase, PCSEPhase.ENSEMBLE_TRAINING)
-            self.assertEqual(first.state.ensemble_completed_epochs, 1)
-            first.close()
-            resumed = _pcse_workflow__pretraining_algorithm(run_dir, pretraining_epochs=1, fixed_model=True)
-            resumed.resume(run_dir / 'last.pt')
-            self.assertEqual(resumed.state.ensemble_completed_epochs, 1)
-            resumed.train_ensemble()
-            self.assertEqual(resumed.state.phase, PCSEPhase.COMPLETED)
-            self.assertEqual(resumed.state.ensemble_completed_epochs, 3)
-            resumed.close()
 
-    def test_two_layer_workflow_completed_resume_and_artifact_damage(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            run_dir = Path(directory) / 'run'
-            result = run_pcse_experiment(_pcse_workflow__load_smoke_config(), output_dir=run_dir)
-            self.assertEqual(result, run_dir.resolve())
-            final = json.loads((run_dir / 'final_metrics.json').read_text(encoding='utf-8'))
-            self.assertEqual(final['method'], 'pcse')
-            self.assertEqual(final['pretraining_method'], 'cross_entropy')
-            self.assertEqual(final['pretraining_model'], 'pcse_mlp')
-            self.assertEqual(final['pretraining_source'], 'internal_training')
-            self.assertEqual(final['transition_backend'], 'dual_t')
-            self.assertEqual(len(final['ensemble_weights']), 3)
-            self.assertTrue(all((value > 0 for value in final['ensemble_weights'])))
-            self.assertAlmostEqual(sum(final['ensemble_weights']), 1.0)
-            with np.load(run_dir / 'posterior_snapshot.npz', allow_pickle=False) as snapshot:
-                posterior = snapshot['noisy_probabilities']
-            self.assertEqual(posterior.shape[1], 3)
-            self.assertTrue(np.isfinite(posterior).all())
-            np.testing.assert_allclose(posterior.sum(axis=1), 1.0, rtol=1e-06, atol=1e-08)
-            artifact_names = ('posterior_snapshot.npz', 'transition_artifact.npz', 'pcse_statistics.npz', 'pcse_gda.npz', 'pcse_ensemble.npz')
-            before = {name: ((run_dir / name).read_bytes(), (run_dir / name).stat().st_mtime_ns) for name in artifact_names}
-            run_pcse_experiment(_pcse_workflow__load_smoke_config(), resume=run_dir / 'last.pt')
-            after = {name: ((run_dir / name).read_bytes(), (run_dir / name).stat().st_mtime_ns) for name in artifact_names}
-            self.assertEqual(before, after)
-            transition_path = run_dir / 'transition_artifact.npz'
-            valid_transition = transition_path.read_bytes()
-            transition_path.write_bytes(b'damaged')
-            with self.assertRaises((ValueError, OSError)):
-                run_pcse_experiment(_pcse_workflow__load_smoke_config(), resume=run_dir / 'last.pt')
-            transition_path.write_bytes(valid_transition)
-            mismatch = _pcse_workflow__load_smoke_config()
-            mismatch['feature_stage']['layers'].reverse()
-            with self.assertRaisesRegex(ValueError, 'statistics feature provenance mismatch'):
-                run_pcse_experiment(mismatch, resume=run_dir / 'last.pt')

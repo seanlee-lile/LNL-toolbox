@@ -8,7 +8,7 @@
 .qs-review-center pre { white-space: pre-wrap; overflow-wrap: anywhere; text-align: left; max-width: 100%; }
 .qs-review-center [data-review-locations] { width: 100%; min-height: 0; }
 .qs-review-center details { width: 100%; }
-.qs-review-errors { color: var(--text-primary); border: 1px solid var(--border); padding: 16px; width: 100%; }
+.qs-review-errors { color: var(--code-text); border: 1px solid var(--border); padding: 16px; width: 100%; }
 .qs-is-loading { position: relative; }
 .qs-is-loading button, .qs-is-loading input, .qs-is-loading select { pointer-events: none; opacity: .62; }
 @keyframes qs-spin { to { transform: rotate(360deg); } }

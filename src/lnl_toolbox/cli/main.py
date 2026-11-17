@@ -398,7 +398,13 @@ def _load_source(
         config_path = config_arg.expanduser().resolve()
         if not config_path.is_file():
             raise FileNotFoundError(f"configuration does not exist: {config_path}")
-        config = load_yaml(config_path, check_parameters=check_parameters)
+        if check_parameters:
+            config = load_yaml(config_path, check_parameters=True)
+        else:
+            import yaml
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            if not isinstance(config, dict):
+                raise ValueError(f"configuration must contain a YAML mapping: {config_path}")
     else:
         raise ValueError("provide a recipe name or YAML path")
     project = find_project_root(None if recipe is not None else config_path, root)

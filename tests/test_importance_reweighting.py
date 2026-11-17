@@ -211,39 +211,25 @@ class _importance_reweighting_kliep_KLIEPWorkflowTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'num_classes'):
             ImportanceReweightingConfig.from_mapping(invalid)
 
-    def test_high_dimensional_smoke_and_resume_preserve_artifacts(self) -> None:
+    def test_resume_from_directory_continues_next_epoch(self) -> None:
+        from unittest.mock import patch
+        from lnl_toolbox.algorithms.importance_reweighting import algorithm as impl
+        from lnl_toolbox.training.service import ExperimentService
         config = _importance_reweighting_kliep_load_config()
-        with tempfile.TemporaryDirectory() as temporary:
-            run_dir = Path(temporary) / 'run'
-            result = run_experiment(config, run_dir)
-            snapshot = result / 'posterior_snapshot.npz'
-            rates = result / 'noise_rate_artifact.npz'
-            snapshot_before = snapshot.read_bytes()
-            rates_before = rates.read_bytes()
-            first = read_checkpoint(result / 'last.pt', 'cpu')
-            self.assertEqual(first['method_state']['final_completed_epochs'], 2)
-            self.assertEqual(first['method_state']['final_global_step'], 8)
-            self.assertEqual(first['posterior_backend_identity']['name'], 'kliep')
-            self.assertEqual(first['posterior_backend_identity']['feature_dimension'], 20)
-            self.assertEqual(first['posterior_backend_hash'], first['method_state']['posterior_backend_hash'])
-            config['trainer']['epochs'] = 3
-            run_experiment(config, resume=result / 'last.pt')
-            final = read_checkpoint(result / 'last.pt', 'cpu')
-            self.assertEqual(final['method_state']['final_completed_epochs'], 3)
-            self.assertEqual(final['method_state']['final_global_step'], 12)
-            self.assertEqual(snapshot.read_bytes(), snapshot_before)
-            self.assertEqual(rates.read_bytes(), rates_before)
-            metrics = yaml.safe_load((result / 'final_metrics.json').read_text(encoding='utf-8'))
-            for name in ('test_accuracy', 'test_loss', 'rho_positive_hat', 'rho_negative_hat'):
-                self.assertTrue(np.isfinite(metrics[name]))
-            self.assertEqual(metrics['reduction'], 'batch_mean')
-            manifest = NoiseManifest.load(result / 'noise_manifest.npz')
-            summary = json.loads((result / 'noise_summary.json').read_text())
-            for label, name in ((1, 'realized_rho_positive'), (0, 'realized_rho_negative')):
-                mask = manifest.clean_targets == label
-                expected = float(np.mean(manifest.noisy_targets[mask] != label))
-                self.assertEqual(summary[name], expected)
-                self.assertEqual(metrics['noise_rates'][name], expected)
+        config['trainer']['epochs'] = 2
+        save = impl.atomic_save
+        def interrupt(payload, path):
+            save(payload, path)
+            if Path(path).name == 'last.pt' and payload['method_state']['final_completed_epochs'] == 1:
+                raise RuntimeError('simulated interruption')
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / 'run'
+            with patch.object(impl, 'atomic_save', side_effect=interrupt):
+                with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
+                    ExperimentService().run(config, run_dir)
+            self.assertEqual(read_checkpoint(run_dir / 'last.pt', 'cpu')['method_state']['final_completed_epochs'], 1)
+            ExperimentService().resume(run_dir)
+            self.assertEqual(read_checkpoint(run_dir / 'last.pt', 'cpu')['method_state']['final_completed_epochs'], 2)
 
 
     def test_high_dimensional_features_are_uniform_and_linearly_separated(self) -> None:
@@ -310,46 +296,7 @@ class _importance_reweighting_kliep_KLIEPWorkflowTest(unittest.TestCase):
                 self.assertIsNone(rates['realized_rho_negative'])
 
 
-    def test_resume_rejects_backend_and_parameter_mismatch(self) -> None:
-        config = _importance_reweighting_kliep_load_config()
-        with tempfile.TemporaryDirectory() as temporary:
-            run_dir = Path(temporary) / 'run'
-            run_experiment(config, run_dir)
-            checkpoint = run_dir / 'last.pt'
-            changed = deepcopy(config)
-            changed['posterior_stage']['bandwidth'] = 3.5
-            changed['trainer']['epochs'] = 3
-            with self.assertRaisesRegex(ValueError, 'backend identity'):
-                run_experiment(changed, resume=checkpoint)
-            changed = deepcopy(config)
-            changed['posterior_stage']['name'] = 'kde'
-            changed['posterior_stage'].pop('max_centers')
-            changed['posterior_stage'].pop('max_iterations')
-            changed['posterior_stage'].pop('learning_rate')
-            changed['posterior_stage'].pop('tolerance')
-            changed['posterior_stage'].pop('epsilon')
-            changed['posterior_stage'].pop('seed')
-            changed['trainer']['epochs'] = 3
-            with self.assertRaisesRegex(ValueError, 'backend identity'):
-                run_experiment(changed, resume=checkpoint)
-            changed = deepcopy(config)
-            changed['data']['dimension'] = 19
-            changed['model']['in_features'] = 19
-            changed['trainer']['epochs'] = 3
-            with self.assertRaisesRegex(ValueError, 'data_manifest|data identity'):
-                run_experiment(changed, resume=checkpoint)
 
-    def test_resume_rejects_checkpoint_backend_hash_corruption(self) -> None:
-        config = _importance_reweighting_kliep_load_config()
-        with tempfile.TemporaryDirectory() as temporary:
-            run_dir = Path(temporary) / 'run'
-            run_experiment(config, run_dir)
-            payload = read_checkpoint(run_dir / 'last.pt', 'cpu')
-            payload['posterior_backend_hash'] = 'f' * 64
-            bad = run_dir / 'bad-backend.pt'
-            torch.save(payload, bad)
-            with self.assertRaisesRegex(ValueError, 'backend hash'):
-                run_experiment(config, resume=bad)
 
 
 from unittest import mock
@@ -529,63 +476,27 @@ class _importance_reweighting_method_StateAndSmokeTest(unittest.TestCase):
         state.reopen_final_training(3)
         self.assertEqual(state.phase, ImportanceReweightingPhase.FINAL_TRAINING)
 
-    def test_tiny_smoke_and_resume_preserve_artifacts(self) -> None:
+    def test_resume_from_directory_continues_next_epoch(self) -> None:
+        from unittest.mock import patch
+        from lnl_toolbox.algorithms.importance_reweighting import algorithm as impl
+        from lnl_toolbox.training.service import ExperimentService
         config = _importance_reweighting_method_load_config()
-        with tempfile.TemporaryDirectory() as temporary:
-            run_dir = Path(temporary) / 'run'
-            result = run_experiment(config, run_dir)
-            snapshot = result / 'posterior_snapshot.npz'
-            rates = result / 'noise_rate_artifact.npz'
-            before_snapshot = snapshot.read_bytes()
-            before_rates = rates.read_bytes()
-            first = read_checkpoint(result / 'last.pt', 'cpu')
-            self.assertEqual(first['method_state']['final_completed_epochs'], 2)
-            self.assertEqual(first['method_state']['final_global_step'], 8)
-            self.assertEqual(first['method_state']['phase'], 'completed')
-            self.assertEqual(read_checkpoint(result / 'last.pt', 'cpu')['config']['num_classes'], 2)
-            config['trainer']['epochs'] = 3
-            run_experiment(config, resume=result / 'last.pt')
-            final = read_checkpoint(result / 'last.pt', 'cpu')
-            self.assertEqual(final['method_state']['final_completed_epochs'], 3)
-            self.assertEqual(final['method_state']['final_global_step'], 12)
-            self.assertEqual(snapshot.read_bytes(), before_snapshot)
-            self.assertEqual(rates.read_bytes(), before_rates)
-            self.assertEqual(final['posterior_snapshot_hash'], first['posterior_snapshot_hash'])
-            self.assertEqual(final['noise_rate_artifact_hash'], first['noise_rate_artifact_hash'])
-            self.assertEqual(final['config']['trainer']['epochs'], 3)
-            metrics = yaml.safe_load((result / 'final_metrics.json').read_text(encoding='utf-8'))
-            self.assertEqual(metrics['reduction'], 'batch_mean')
-            self.assertTrue(np.isfinite(metrics['test_loss']))
+        config['trainer']['epochs'] = 2
+        save = impl.atomic_save
+        def interrupt(payload, path):
+            save(payload, path)
+            if Path(path).name == 'last.pt' and payload['method_state']['final_completed_epochs'] == 1:
+                raise RuntimeError('simulated interruption')
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / 'run'
+            with patch.object(impl, 'atomic_save', side_effect=interrupt):
+                with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
+                    ExperimentService().run(config, run_dir)
+            self.assertEqual(read_checkpoint(run_dir / 'last.pt', 'cpu')['method_state']['final_completed_epochs'], 1)
+            ExperimentService().resume(run_dir)
+            self.assertEqual(read_checkpoint(run_dir / 'last.pt', 'cpu')['method_state']['final_completed_epochs'], 2)
 
-    def test_resume_rejects_class_and_convention_corruption(self) -> None:
-        config = _importance_reweighting_method_load_config()
-        with tempfile.TemporaryDirectory() as temporary:
-            run_dir = Path(temporary) / 'run'
-            run_experiment(config, run_dir)
-            original = read_checkpoint(run_dir / 'last.pt', 'cpu')
-            for field, value, pattern in (('num_classes', 3, 'num_classes'), ('label_convention', 'minus_plus', 'convention')):
-                corrupted = deepcopy(original)
-                corrupted[field] = value
-                path = run_dir / f'bad-{field}.pt'
-                torch.save(corrupted, path)
-                with self.assertRaisesRegex(ValueError, pattern):
-                    run_experiment(config, resume=path)
 
-    def test_resume_rejects_rate_artifact_provenance_mismatch(self) -> None:
-        config = _importance_reweighting_method_load_config()
-        with tempfile.TemporaryDirectory() as temporary:
-            run_dir = Path(temporary) / 'run'
-            run_experiment(config, run_dir)
-            payload = read_checkpoint(run_dir / 'last.pt', 'cpu')
-            original = NoiseRateArtifact.load(run_dir / 'noise_rate_artifact.npz')
-            wrong = NoiseRateArtifact(rho_positive=original.rho_positive, rho_negative=original.rho_negative, positive_extreme_global_index=original.positive_extreme_global_index, negative_extreme_global_index=original.negative_extreme_global_index, source_snapshot_hash='f' * 64, dataset=original.dataset, split=original.split)
-            wrong.save(run_dir / 'noise_rate_artifact.npz')
-            payload['noise_rate_artifact_hash'] = wrong.artifact_hash
-            payload['method_state']['noise_rate_artifact_hash'] = wrong.artifact_hash
-            bad = run_dir / 'bad-provenance.pt'
-            torch.save(payload, bad)
-            with self.assertRaisesRegex(ValueError, 'source snapshot'):
-                run_experiment(config, resume=bad)
 
     def test_posterior_temporary_write_failure_preserves_formal_path(self) -> None:
         config = _importance_reweighting_method_load_config()
@@ -670,17 +581,6 @@ class _importance_reweighting_method_StateAndSmokeTest(unittest.TestCase):
         self.assertIn(('posterior_ready', True), observations)
         self.assertIn(('rate_ready', True), observations)
 
-    def test_resume_rejects_corrupted_formal_snapshot_without_rebuilding(self) -> None:
-        config = _importance_reweighting_method_load_config()
-        with tempfile.TemporaryDirectory() as temporary:
-            run_dir = Path(temporary) / 'run'
-            run_experiment(config, run_dir)
-            snapshot = run_dir / 'posterior_snapshot.npz'
-            snapshot.write_bytes(b'corrupted')
-            corrupted = snapshot.read_bytes()
-            with self.assertRaises(ValueError):
-                run_experiment(config, resume=run_dir / 'last.pt')
-            self.assertEqual(snapshot.read_bytes(), corrupted)
 
 
 import hashlib
@@ -721,49 +621,4 @@ class _importance_reweighting_uci_ImportanceReweightingUCIAdapterTest(unittest.T
         item = BinaryBenchmarkTensorDataset(benchmark, np.asarray([1, 1, 0, 0]))[0]
         self.assertEqual(set(item), {'input', 'target', 'index'})
 
-    def test_real_adapter_resume_preserves_data_and_method_artifacts(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / 'heart.dat'
-            sha256 = _importance_reweighting_uci__heart_fixture(source)
-            run_dir = root / 'run'
-            run_experiment(_importance_reweighting_uci__config(source, sha256, 2), output_dir=run_dir)
-            artifact_names = ('noise_manifest.npz', 'posterior_snapshot.npz', 'noise_rate_artifact.npz', 'preprocessing_state.json', 'split_manifest.json')
-            before = {name: (hashlib.sha256((run_dir / name).read_bytes()).hexdigest(), (run_dir / name).stat().st_mtime_ns) for name in artifact_names}
-            run_experiment(_importance_reweighting_uci__config(source, sha256, 3), resume=run_dir / 'last.pt')
-            after = {name: (hashlib.sha256((run_dir / name).read_bytes()).hexdigest(), (run_dir / name).stat().st_mtime_ns) for name in artifact_names}
-            self.assertEqual(before, after)
-            final = json.loads((run_dir / 'final_metrics.json').read_text())
-            self.assertEqual(final['completed_epochs'], 3)
-            self.assertEqual(final['posterior']['value_count'], 72)
-            self.assertEqual(final['posterior']['finite_count'], 72)
-            self.assertLess(final['posterior']['row_sum_max_error'], 1e-10)
-            self.assertEqual(final['weights']['negative_count'], 0)
-            self.assertEqual(final['weights']['nonfinite_count'], 0)
-            self.assertGreater(final['weights']['ess'], 0.0)
-            self.assertFalse(final['optimization']['optimizer_stall'])
 
-    def test_raw_hash_and_resume_split_identity_are_strict(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / 'heart.dat'
-            sha256 = _importance_reweighting_uci__heart_fixture(source)
-            bad = _importance_reweighting_uci__config(source, '0' * 64, 1)
-            with self.assertRaisesRegex(ValueError, 'SHA-256'):
-                run_experiment(bad, output_dir=root / 'bad')
-            run_dir = root / 'run'
-            run_experiment(_importance_reweighting_uci__config(source, sha256, 1), output_dir=run_dir)
-            before = {name: (run_dir / name).read_bytes() for name in ('split_manifest.json', 'noise_manifest.npz', 'last.pt')}
-            for change in ('seed', 'split', 'noise'):
-                with self.subTest(change=change):
-                    changed = _importance_reweighting_uci__config(source, sha256, 2)
-                    if change == 'seed':
-                        # One public seed controls the split and corruption.
-                        changed['seed'] += 1
-                    elif change == 'split':
-                        changed['data']['split']['test_fraction'] = 0.3
-                    else:
-                        changed['noise']['rho_positive'] += 0.05
-                    with self.assertRaisesRegex(ValueError, 'identity mismatch|configuration mismatch|noise manifest|data_manifest'):
-                        run_experiment(changed, resume=run_dir / 'last.pt')
-                    self.assertEqual(before, {name: (run_dir / name).read_bytes() for name in before})

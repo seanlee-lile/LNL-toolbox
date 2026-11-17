@@ -225,7 +225,7 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
         self.assertTrue(cal.supports_native_noisy_labels)
         l2rw = registry.get('l2rw').requirements({'trusted_validation': {'source': 'official_generated'}})
         self.assertTrue(l2rw.requires_clean_train_labels)
-        audited = registry.get('l2rw').requirements({'trusted_validation': {'source': 'official_generated'}})
+        audited = registry.get('l2rw').requirements({'trusted_validation': {'source': 'external'}})
         self.assertFalse(audited.requires_clean_train_labels)
         self.assertEqual({item.code for item in audited.required_config_inputs}, {'requires_trusted_validation'})
         noisy_only = ('coteaching', 'dual_t', 'upm', 'dividemix', 'cnlcu', 't_revision')
@@ -306,7 +306,7 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
                 },
             }),
             registry.get('supervised').requirements({
-                'pipeline': {'weight_provider': {'name': 'mentornet'}},
+                'pipeline': {'weight_provider': {'name': 'mentornet', 'derive_teacher': False}},
             }),
             registry.get('binary').requirements({
                 'risk': {'name': 'natarajan_unbiased'},
@@ -314,7 +314,7 @@ class _compatibility_RunnerRequirementsTest(unittest.TestCase):
             registry.get('l2rw').requirements({
                 'trusted_validation': {'source': 'official_generated'},
             }),
-            registry.get('cal').requirements({}),
+            registry.get('cal').requirements({'noise': {'name': 'external_torch'}}),
             registry.get('mc_ldce').requirements({
                 'transition': {'estimator': 'known_smoke'},
             }),

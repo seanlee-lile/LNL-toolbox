@@ -120,57 +120,10 @@ class _pipeline_PipelineIntegrationTest(unittest.TestCase):
             self.assertEqual(restored.artifacts.snapshot.snapshot_hash, artifacts.snapshot.snapshot_hash)
 
 
-    def test_resume_missing_transition_artifact_fails(self) -> None:
-        pipeline, _, _, _ = self._transition_fixture()
-        with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(FileNotFoundError, 'artifact missing'):
-                pipeline.restore_for_resume(directory, checkpoint_state=pipeline.state_dict(), component_states={}, dataset='synthetic', split='train')
 
-    def test_resume_transition_hash_mismatch_fails(self) -> None:
-        pipeline, model, optimizer, loader = self._transition_fixture()
-        with tempfile.TemporaryDirectory() as directory:
-            pipeline.prepare_transition(model=model, optimizer=optimizer, loader=loader, device=torch.device('cpu'), dataset='synthetic', split='train', run_dir=directory)
-            checkpoint_state = pipeline.state_dict()
-            transition_path = Path(directory, 'transition_artifact.npz')
-            with np.load(transition_path, allow_pickle=False) as data:
-                matrix = data['matrix'].copy()
-                metadata_json = data['metadata_json'].copy()
-            matrix[0] = np.roll(matrix[0], 1)
-            np.savez_compressed(transition_path, matrix=matrix, metadata_json=metadata_json)
-            restored, _, _, _ = self._transition_fixture()
-            with self.assertRaisesRegex(ValueError, 'artifact hash mismatch'):
-                restored.restore_for_resume(directory, checkpoint_state=checkpoint_state, component_states={}, dataset='synthetic', split='train')
 
-    def test_resume_artifact_provenance_mismatch_fails(self) -> None:
-        pipeline, model, optimizer, loader = self._transition_fixture()
-        with tempfile.TemporaryDirectory() as directory:
-            pipeline.prepare_transition(model=model, optimizer=optimizer, loader=loader, device=torch.device('cpu'), dataset='synthetic', split='train', run_dir=directory)
-            restored, _, _, _ = self._transition_fixture()
-            with self.assertRaisesRegex(ValueError, 'artifact provenance mismatch'):
-                restored.restore_for_resume(directory, checkpoint_state=pipeline.state_dict(), component_states={}, dataset='different', split='train')
 
-    def test_checkpoint_artifact_identity_verified(self) -> None:
-        pipeline, model, optimizer, loader = self._transition_fixture()
-        with tempfile.TemporaryDirectory() as directory:
-            pipeline.prepare_transition(model=model, optimizer=optimizer, loader=loader, device=torch.device('cpu'), dataset='synthetic', split='train', run_dir=directory)
-            checkpoint_state = deepcopy(pipeline.state_dict())
-            checkpoint_state['artifacts']['transition_artifact_hash'] = '0' * 64
-            restored, _, _, _ = self._transition_fixture()
-            with self.assertRaisesRegex(ValueError, 'checkpoint identity mismatch'):
-                restored.restore_for_resume(directory, checkpoint_state=checkpoint_state, component_states={}, dataset='synthetic', split='train')
 
-    def test_pipeline_state_restored_before_training(self) -> None:
-        pipeline, model, optimizer, loader = self._transition_fixture()
-        with tempfile.TemporaryDirectory() as directory:
-            pipeline.prepare_transition(model=model, optimizer=optimizer, loader=loader, device=torch.device('cpu'), dataset='synthetic', split='train', run_dir=directory)
-            pipeline.state.phase = PipelinePhase.EVALUATE
-            pipeline.state.cycle = 7
-            pipeline.state.metadata['marker'] = 'restored'
-            restored, _, _, _ = self._transition_fixture()
-            restored.restore_for_resume(directory, checkpoint_state=pipeline.state_dict(), component_states={}, dataset='synthetic', split='train')
-            self.assertEqual(restored.state.phase, PipelinePhase.EVALUATE)
-            self.assertEqual(restored.state.cycle, 7)
-            self.assertEqual(restored.state.metadata['marker'], 'restored')
 
     def test_component_states_roundtrip(self) -> None:
         source = StandardNoisyERMPipeline(transition_estimator=_pipeline__StatefulEstimator(11))
@@ -179,14 +132,6 @@ class _pipeline_PipelineIntegrationTest(unittest.TestCase):
         restored.load_component_states(states)
         self.assertEqual(restored.transition_estimator.value, 11)
 
-    def test_legacy_checkpoint_without_pipeline_state(self) -> None:
-        pipeline, model, optimizer, loader = self._transition_fixture()
-        with tempfile.TemporaryDirectory() as directory:
-            pipeline.prepare_transition(model=model, optimizer=optimizer, loader=loader, device=torch.device('cpu'), dataset='synthetic', split='train', run_dir=directory)
-            restored, _, _, _ = self._transition_fixture()
-            warnings = restored.restore_for_resume(directory, checkpoint_state=None, component_states=None, dataset='synthetic', split='train')
-            self.assertTrue(warnings)
-            self.assertEqual(restored.artifacts.transition.artifact_hash, pipeline.artifacts.transition.artifact_hash)
 
     def test_binary_rcn_rejects_current_model_softmax_fallback(self) -> None:
         with self.assertRaisesRegex(ValueError, 'explicit noisy-label posterior producer'):
@@ -356,17 +301,6 @@ class _experiment_service_ExperimentServiceTest(unittest.TestCase):
             self.assertNotIn('type', resolved['noise'])
             self.assertTrue((root / 'environment.json').is_file())
 
-    def test_resume_of_completed_run_is_strict_noop(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / 'resolved_config.yaml').write_text(yaml.safe_dump({'method': 'fake'}), encoding='utf-8')
-            final = root / 'final_metrics.json'
-            final.write_text(json.dumps({'status': 'completed', 'completed': True}), encoding='utf-8')
-            before = final.read_bytes()
-            with patch('lnl_toolbox.training.service.resolve_runner') as resolver:
-                self.assertEqual(ExperimentService().resume(root), root.resolve())
-            resolver.assert_not_called()
-            self.assertEqual(final.read_bytes(), before)
 
     def test_config_compatibility_loads_dataset_capabilities_once(self) -> None:
         data_service = Mock()

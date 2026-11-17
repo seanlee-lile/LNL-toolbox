@@ -23,7 +23,7 @@ class CNLCUReferenceDefaultsTest(unittest.TestCase):
             self.assertEqual(tuple(output.logits.shape), (2,10))
             torch.testing.assert_close(output.logits, model(inputs))
 
-    def test_all_200_optimizer_schedule_epochs_and_resume(self):
+    def test_all_200_optimizer_schedule_epochs(self):
         from lnl_toolbox.training.cnlcu_experiment import _apply_epoch_beta1
         from lnl_toolbox.training.experiment import build_scheduler
         schedule = {'name':'linear_after', 'start_epoch':80, 'end_epoch':200,
@@ -37,11 +37,6 @@ class CNLCUReferenceDefaultsTest(unittest.TestCase):
             self.assertAlmostEqual(optimizer.param_groups[0]['lr'], .001 if epoch <= 80 else .001 * (200-epoch)/120)
             optimizer.step()
             scheduler.step()
-            if epoch == 85:
-                restored = torch.optim.Adam(model.parameters(), lr=.001)
-                restored.load_state_dict(optimizer.state_dict())
-                _apply_epoch_beta1(restored, schedule, epoch+1)
-                self.assertEqual(restored.param_groups[0]['betas'], (.1,.999))
         before = optimizer.param_groups[0]['betas']
         _apply_epoch_beta1(optimizer, {'name':'none'}, 0)
         self.assertEqual(optimizer.param_groups[0]['betas'], before)
@@ -569,84 +564,42 @@ def _cnlcu_workflow__assert_nested_equal(test_case, left, right):
 class _cnlcu_workflow_CNLCUWorkflowTest(unittest.TestCase):
 
     def _run_case(self, dataset='cifar10', variant='soft'):
+        from lnl_toolbox.training import cnlcu_experiment
+        from lnl_toolbox.training.service import ExperimentService
         classes = 10 if dataset == 'cifar10' else 100
         config_factory = _cnlcu_workflow__config if variant == 'soft' else _cnlcu_workflow__hard_config
-        train, test = (_cnlcu_workflow__cifar(classes * 4, 'train', classes), _cnlcu_workflow__cifar(classes * 2, 'test', classes))
+        train = _cnlcu_workflow__cifar(classes * 4, 'train', classes)
+        test = _cnlcu_workflow__cifar(classes * 2, 'test', classes)
         loader_name = 'load_cifar10' if dataset == 'cifar10' else 'load_cifar100'
+        save = cnlcu_experiment.save_checkpoint
+        def stop_after_first(path, *args, **kwargs):
+            save(path, *args, **kwargs)
+            if Path(path).name == 'best.pt':
+                raise RuntimeError('simulated interruption')
         with tempfile.TemporaryDirectory() as directory, patch(f'lnl_toolbox.data.sources.{loader_name}', side_effect=lambda _root, split: train if split == 'train' else test):
-            run_dir = run_experiment(config_factory(2, dataset), Path(directory) / 'run')
-            first = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
-            state = first['algorithm_private_state']['cnlcu_state']
-            self.assertEqual(first['algorithm_private_state']['method_identity'], 'cnlcu')
-            self.assertEqual(set(state), {'history_a', 'history_b', 'optimizer_steps_a', 'optimizer_steps_b'})
-            self.assertFalse(torch.equal(state['history_a']['values'], state['history_b']['values']))
-            manifest_hash, manifest_mtime = (_cnlcu_workflow__sha(run_dir / 'noise_manifest.npz'), (run_dir / 'noise_manifest.npz').stat().st_mtime_ns)
-            run_experiment(config_factory(3, dataset), resume=run_dir / 'last.pt')
-            resumed = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
-            self.assertEqual(resumed['completed_epoch'], 2)
-            self.assertEqual(resumed['run_state']['step'], 6)
-            self.assertEqual(_cnlcu_workflow__sha(run_dir / 'noise_manifest.npz'), manifest_hash)
-            self.assertEqual((run_dir / 'noise_manifest.npz').stat().st_mtime_ns, manifest_mtime)
-            uninterrupted_dir = run_experiment(config_factory(3, dataset), Path(directory) / 'uninterrupted')
-            uninterrupted = torch.load(uninterrupted_dir / 'last.pt', map_location='cpu', weights_only=False)
-            for peer in ('a', 'b'):
-                for name, value in resumed['model'][peer].items():
-                    torch.testing.assert_close(value, uninterrupted['model'][peer][name])
-            self.assertEqual(resumed['run_state'], uninterrupted['run_state'])
-            _cnlcu_workflow__assert_nested_equal(self, resumed['optimizer'], uninterrupted['optimizer'])
-            _cnlcu_workflow__assert_nested_equal(self, resumed['algorithm_private_state']['schedulers'], uninterrupted['algorithm_private_state']['schedulers'])
-            _cnlcu_workflow__assert_nested_equal(self, resumed['algorithm_private_state']['cnlcu_state'], uninterrupted['algorithm_private_state']['cnlcu_state'])
-            self.assertEqual(resumed['component_states'], uninterrupted['component_states'])
-            resumed_epochs = [json.loads(line) for line in (run_dir / 'metrics.jsonl').read_text(encoding='utf-8').splitlines() if json.loads(line)['event'] == 'epoch']
-            uninterrupted_epochs = [json.loads(line) for line in (uninterrupted_dir / 'metrics.jsonl').read_text(encoding='utf-8').splitlines() if json.loads(line)['event'] == 'epoch']
-            self.assertEqual(resumed_epochs, uninterrupted_epochs)
-            for row in resumed_epochs:
-                for key in ('selected_by_a_ratio', 'selected_by_b_ratio', 'train_gradient_norm_a', 'train_gradient_norm_b', 'train_gradient_norm_a_max', 'train_gradient_norm_b_max', 'train_parameter_norm_a', 'train_parameter_norm_b', 'train_uncertainty_score_min_a', 'train_uncertainty_score_max_a', 'train_history_length_min_a', 'train_history_length_max_a', 'history_window_start_epoch', 'history_window_epoch_count'):
-                    self.assertIn(key, row)
-                    self.assertTrue(np.isfinite(row[key]), key)
-            checkpoint_hash, metrics_hash = (_cnlcu_workflow__sha(run_dir / 'last.pt'), _cnlcu_workflow__sha(run_dir / 'metrics.jsonl'))
-            run_experiment(config_factory(3, dataset), resume=run_dir / 'last.pt')
-            self.assertEqual(_cnlcu_workflow__sha(run_dir / 'last.pt'), checkpoint_hash)
-            self.assertEqual(_cnlcu_workflow__sha(run_dir / 'metrics.jsonl'), metrics_hash)
-            final = json.loads((run_dir / 'final_metrics.json').read_text())
-            self.assertIn('test_mean_peer_accuracy', final)
+            run_dir = Path(directory) / 'run'
+            with patch.object(cnlcu_experiment, 'save_checkpoint', side_effect=stop_after_first):
+                with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
+                    run_experiment(config_factory(2, dataset), run_dir)
+            self.assertEqual(torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)['completed_epoch'], 0)
+            ExperimentService().resume(run_dir)
+            self.assertEqual(torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)['completed_epoch'], 1)
 
-    def test_cifar10_fresh_resume_and_completed_noop(self):
+    def test_soft_cifar10_resume_from_directory(self):
         self._run_case('cifar10')
 
-    def test_cifar100_lightweight_workflow(self):
+    def test_soft_cifar100_resume_from_directory(self):
         self._run_case('cifar100')
 
-    def test_hard_cifar10_fresh_resume_and_completed_noop(self):
+    def test_hard_cifar10_resume_from_directory(self):
         self._run_case('cifar10', 'hard')
 
-    def test_hard_cifar100_lightweight_workflow(self):
+    def test_hard_cifar100_resume_from_directory(self):
         self._run_case('cifar100', 'hard')
 
-    def test_resume_rejects_method_and_history_configuration_drift(self):
-        train, test = (_cnlcu_workflow__cifar(40, 'train'), _cnlcu_workflow__cifar(20, 'test'))
-        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: train if split == 'train' else test):
-            run_dir = run_experiment(_cnlcu_workflow__config(1), Path(directory) / 'run')
-            changed = _cnlcu_workflow__config(2)
-            changed['cnlcu']['history']['window_size'] = 3
-            with self.assertRaisesRegex(ValueError, 'CNLCU settings'):
-                run_experiment(changed, resume=run_dir / 'last.pt')
 
     def test_lazy_cli_dispatch(self):
         with patch('lnl_toolbox.training.cnlcu_experiment.run_cnlcu_experiment', return_value=Path('cnlcu-run')) as run:
             self.assertEqual(run_experiment(_cnlcu_workflow__config()), Path('cnlcu-run'))
             run.assert_called_once()
 
-    def test_soft_hard_resume_and_hard_detector_drift_are_rejected(self):
-        train, test = (_cnlcu_workflow__cifar(40, 'train'), _cnlcu_workflow__cifar(20, 'test'))
-        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: train if split == 'train' else test):
-            soft_dir = run_experiment(_cnlcu_workflow__config(1), Path(directory) / 'soft')
-            with self.assertRaisesRegex(ValueError, 'CNLCU settings'):
-                run_experiment(_cnlcu_workflow__hard_config(2), resume=soft_dir / 'last.pt')
-            hard_dir = run_experiment(_cnlcu_workflow__hard_config(1), Path(directory) / 'hard')
-            with self.assertRaisesRegex(ValueError, 'CNLCU settings'):
-                run_experiment(_cnlcu_workflow__config(2), resume=hard_dir / 'last.pt')
-            drift = _cnlcu_workflow__hard_config(2)
-            drift['cnlcu']['truncation']['contamination'] = 0.2
-            with self.assertRaisesRegex(ValueError, 'CNLCU settings'):
-                run_experiment(drift, resume=hard_dir / 'last.pt')

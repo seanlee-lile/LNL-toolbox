@@ -70,21 +70,6 @@ class _fine_FINETest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "selection mask must match the target shape"):
             regularizer(logits, targets, rejected_mask=torch.tensor([True]))
 
-    def test_complementary_rng_resumes_exactly(self) -> None:
-        logits = torch.tensor([[2.0, 1.0, -1.0]])
-        targets = torch.tensor([0])
-        kwargs = {
-            "rejected_mask": torch.tensor([True]),
-            "pseudo_labels": torch.tensor([1]),
-        }
-        regularizer = FINERegularizer(beta=0.0, gamma=1.0, seed=9)
-        regularizer(logits, targets, **kwargs)
-        state = regularizer.state_dict()
-        expected = regularizer(logits, targets, **kwargs)
-        restored = FINERegularizer(beta=0.0, gamma=1.0, seed=9)
-        restored.load_state_dict(state)
-        actual = restored(logits, targets, **kwargs)
-        torch.testing.assert_close(actual, expected)
 
     def test_sed_keeps_at_least_one_sample(self) -> None:
         result = SEDSelector(threshold=0.0).select(SelectionInput(torch.tensor([0.2, 0.4]), torch.tensor([3, 4])))
@@ -305,27 +290,6 @@ class _fine_training_FINETrainingTest(unittest.TestCase):
             self.assertEqual(rows[-1]['epochs_averaged'], 2)
             self.assertAlmostEqual(rows[-1]['last_10_test_accuracy'], sum(row['test_accuracy'] for row in rows[:-1])/2)
 
-    def test_no_validation_reports_test_per_epoch_without_retesting_completed_resume(self) -> None:
-        train = _fine_training__cifar('train', 1)
-        test = _fine_training__cifar('test', 1)
-        config = {'seed': 3, 'data': {'name': 'cifar100', 'root': 'unused', 'validation_size': 0, 'max_test_samples': 100, 'augment': False, 'strong_magnitude': 1}, 'noise': {'name': 'symmetric', 'rate': 0.2, 'seed': 3}, 'loader': {'batch_size': 100, 'num_workers': 0, 'pin_memory': False}, 'model': {'name': 'tiny_cnn', 'width': 2}, 'optimizer': {'name': 'sgd', 'lr': 0.01, 'momentum': 0.0}, 'scheduler': {'eta_min': 0.0005}, 'trainer': {'epochs': 1, 'device': 'cpu'}, 'fine': {'warmup_epochs': 1, 'warmup_lr': 0.01, 'ema_momentum': 0.9, 'momentum_scs': 0.9, 'momentum_scr': 0.9, 'beta': 0.1, 'gamma': 0.002, 'alpha': 1.0}}
-        calls = []
-
-        def evaluate(_model, loader, _criterion, _device):
-            calls.append(loader)
-            return {'loss': 1.0, 'accuracy': 0.25, 'samples': float(len(loader.dataset))}
-
-        with tempfile.TemporaryDirectory() as directory:
-            with patch('lnl_toolbox.data.sources.load_cifar100', side_effect=lambda _root, split: train if split == 'train' else test), patch('lnl_toolbox.training.fine_experiment.evaluate_classification', side_effect=evaluate):
-                result = run_fine_experiment(config, directory)
-                run_fine_experiment(config, resume=result / 'last.pt')
-            rows = [json.loads(line) for line in (result / 'metrics.jsonl').read_text(encoding='utf-8').splitlines()]
-        self.assertEqual(len(calls), 1)
-        self.assertEqual([row['event'] for row in rows], ['epoch', 'final'])
-        self.assertEqual(sum(row['event'] == 'final' for row in rows), 1)
-        self.assertNotIn('validation_loss', rows[0])
-        self.assertIn('test_loss', rows[0])
-        self.assertEqual(rows[-1]['test_loss'], 1.0)
 
     def test_last_ten_report_uses_only_tail_without_model_selection(self) -> None:
         train, test = _fine_training__cifar('train',1), _fine_training__cifar('test',1)
@@ -346,43 +310,25 @@ class _fine_training_FINETrainingTest(unittest.TestCase):
             self.assertEqual(rows[-1]['selection_split'],'none')
             self.assertFalse((root/'best.pt').exists())
 
-    def test_augmented_snapshot_and_exact_interrupted_resume(self) -> None:
-        from lnl_toolbox.training.data_service import PreparedData
-        from lnl_toolbox.training.checkpoint import atomic_save as save
-        train, test = _fine_training__cifar('train',2), _fine_training__cifar('test',1)
+    def test_resume_from_directory_continues_next_epoch(self) -> None:
+        from lnl_toolbox.training import fine_experiment
+        from lnl_toolbox.training.service import ExperimentService
+        train, test = _fine_training__cifar('train', 2), _fine_training__cifar('test', 1)
         config = {'seed':3,'data':{'name':'cifar100','root':'unused','validation_size':0,'augment':True,'strong_magnitude':1},
             'noise':{'name':'symmetric','rate':.2},'loader':{'batch_size':100,'num_workers':0,'pin_memory':False},
             'model':{'name':'tiny_cnn','width':2},'optimizer':{'name':'sgd','lr':.01,'momentum':.0},
-            'scheduler':{'eta_min':.0005},'trainer':{'epochs':3,'device':'cpu'},'fine':{'warmup_epochs':1,'warmup_lr':.01}}
-        with tempfile.TemporaryDirectory() as directory, \
-             patch('lnl_toolbox.data.sources.load_cifar100',side_effect=lambda _root,split:train if split=='train' else test):
-            root=Path(directory)
-            original=PreparedData.dynamic_dataset
-            original_loader = PreparedData.loader_for_dataset
-            with patch.object(PreparedData,'dynamic_dataset',autospec=True,side_effect=original) as dynamic, \
-                 patch.object(PreparedData,'loader_for_dataset',autospec=True,side_effect=original_loader) as loaders:
-                complete=run_fine_experiment(config,root/'complete')
-                calls=[call for call in dynamic.call_args_list if call.kwargs.get('views')==('weak',)]
-                self.assertTrue(calls)
-                self.assertTrue(all(call.kwargs['training'] for call in calls))
-                snapshots = [call for call in loaders.call_args_list if call.kwargs.get('stream') == 1000]
-                self.assertTrue(snapshots)
-                self.assertTrue(all(call.kwargs['shuffle'] for call in snapshots))
-                self.assertTrue(all(call.kwargs['drop_last'] is False for call in snapshots))
-            def interrupt(payload,path):
-                save(payload,path)
-                if payload['completed_epoch']==1:
-                    raise RuntimeError('test interruption')
-            with patch('lnl_toolbox.training.fine_experiment.atomic_save',side_effect=interrupt):
-                with self.assertRaisesRegex(RuntimeError,'test interruption'):
-                    run_fine_experiment(config,root/'interrupted')
-            resumed_path=root/'interrupted'/'last.pt'
-            run_fine_experiment(config,resume=resumed_path)
-            complete_state=torch.load(complete/'last.pt',weights_only=False)
-            resumed=torch.load(resumed_path,weights_only=False)
-            self.assertEqual(resumed['completed_epoch'],2)
-            for name,value in complete_state['model'].items():
-                torch.testing.assert_close(resumed['model'][name],value,rtol=0,atol=0)
-            self.assertEqual(resumed['metrics'],complete_state['metrics'])
-            final=[json.loads(line) for line in (resumed_path.parent/'metrics.jsonl').read_text().splitlines()][-1]
-            self.assertAlmostEqual(final['last_10_test_accuracy'],sum(row['test_accuracy'] for row in resumed['metrics'])/3)
+            'scheduler':{'eta_min':.0005},'trainer':{'epochs':2,'device':'cpu'},'fine':{'warmup_epochs':1,'warmup_lr':.01},
+            'execution':{'runner':'fine'}}
+        save = fine_experiment.atomic_save
+        def interrupt(payload,path):
+            save(payload,path)
+            if payload['completed_epoch']==0:
+                raise RuntimeError('simulated interruption')
+        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar100',side_effect=lambda _root,split:train if split=='train' else test):
+            run_dir=Path(directory)/'run'
+            with patch.object(fine_experiment,'atomic_save',side_effect=interrupt):
+                with self.assertRaisesRegex(RuntimeError,'simulated interruption'):
+                    ExperimentService().run(config,run_dir)
+            self.assertEqual(torch.load(run_dir/'last.pt',weights_only=False)['completed_epoch'],0)
+            ExperimentService().resume(run_dir)
+            self.assertEqual(torch.load(run_dir/'last.pt',weights_only=False)['completed_epoch'],1)

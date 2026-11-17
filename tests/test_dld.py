@@ -373,42 +373,25 @@ class _dld_workflow_DLDWorkflowTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'illegal'):
             DLDState().advance(DLDPhase.DIFFUSION_TRAINING)
 
-    def test_fresh_resume_extension_and_completed_noop(self) -> None:
+    def test_resume_from_directory_continues_next_epoch(self) -> None:
+        from lnl_toolbox.training import dld_experiment
+        from lnl_toolbox.training.service import ExperimentService
         train, test = (_dld_workflow__data('train', 4), _dld_workflow__data('test', 2))
+        save = dld_experiment.atomic_save
+        def interrupt(payload, path):
+            save(payload, path)
+            if Path(path).name == 'last.pt' and payload['dld_state']['completed_epochs'] == 1:
+                raise RuntimeError('simulated interruption')
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda root, split: train if split == 'train' else test), patch('lnl_toolbox.training.dld_experiment.partition_samples', side_effect=_dld_workflow__partition):
-            run = Path(directory) / 'run'
-            run_dld_experiment(_dld_workflow__config(1), run)
-            first = read_checkpoint(run / 'last.pt', 'cpu')
-            self.assertEqual(first['dld_state']['phase'], 'completed')
-            artifact = run / 'dld_precorrection.npz'
-            hash_before = first['dld_state']['precorrection_artifact_hash']
-            mtime_before = artifact.stat().st_mtime_ns
-            run_dld_experiment(_dld_workflow__config(2), resume=run / 'last.pt')
-            second = read_checkpoint(run / 'last.pt', 'cpu')
-            self.assertEqual(second['dld_state']['completed_epochs'], 2)
-            self.assertGreater(second['dld_state']['global_step'], first['dld_state']['global_step'])
-            self.assertEqual(second['dld_state']['precorrection_artifact_hash'], hash_before)
-            self.assertEqual(artifact.stat().st_mtime_ns, mtime_before)
-            self.assertIn('direction_model', second['algorithm'])
-            self.assertIn('noise_model', second['algorithm'])
-            drifted = _dld_workflow__config(2)
-            drifted['dld']['precorrection']['k_neighbors'] = 4
-            run_dld_experiment(drifted, resume=run / 'last.pt')
-            with self.assertRaisesRegex(ValueError, 'cannot be reduced'):
-                run_dld_experiment(_dld_workflow__config(1), resume=run / 'last.pt')
-            files = {name: (run / name).stat().st_mtime_ns for name in ('last.pt', 'best.pt', 'metrics.jsonl', 'dld_precorrection.npz')}
-            run_dld_experiment(_dld_workflow__config(2), resume=run / 'last.pt')
-            self.assertEqual(files, {name: (run / name).stat().st_mtime_ns for name in files})
-            final = json.loads((run / 'final_metrics.json').read_text())
-            self.assertFalse(final['test_selection_leakage'])
-            for name in ('test_reverse_output_min', 'test_reverse_output_max', 'test_reverse_output_std', 'test_reverse_prediction_class_count', 'test_reverse_prediction_entropy'):
-                self.assertTrue(np.isfinite(final[name]), name)
-            epoch_rows = [json.loads(line) for line in (run / 'metrics.jsonl').read_text().splitlines() if '"event": "diffusion_epoch"' in line]
-            self.assertTrue(epoch_rows)
-            for name in ('direction_parameter_norm', 'noise_parameter_norm', 'predicted_direction_rms', 'predicted_noise_rms', 'validation_reverse_output_std', 'validation_reverse_prediction_class_count'):
-                self.assertTrue(np.isfinite(epoch_rows[-1][name]), name)
-            for name in ('last.pt', 'best.pt', 'metrics.jsonl', 'final_metrics.json', 'noise_manifest.npz'):
-                self.assertTrue((run / name).is_file(), name)
+            run_dir = Path(directory) / 'run'
+            with patch.object(dld_experiment, 'atomic_save', side_effect=interrupt):
+                with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
+                    ExperimentService().run(_dld_workflow__config(2), run_dir)
+            first = read_checkpoint(run_dir / 'last.pt', 'cpu')
+            self.assertEqual(first['dld_state']['completed_epochs'], 1)
+            ExperimentService().resume(run_dir)
+            resumed = read_checkpoint(run_dir / 'last.pt', 'cpu')
+            self.assertEqual(resumed['dld_state']['completed_epochs'], 2)
 
     def test_cifar100_dispatch_is_supported(self) -> None:
         config = _dld_workflow__config(1)

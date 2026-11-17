@@ -657,7 +657,10 @@ class ExperimentService:
             expected_root.mkdir(parents=True, exist_ok=True)
             config_path = expected_root / "resolved_config.yaml"
             if not config_path.exists():
-                config_path.write_text(yaml.safe_dump(candidate, sort_keys=False), encoding="utf-8")
+                config_path.write_text(
+                    yaml.safe_dump(normalize_experiment_config(candidate), sort_keys=False),
+                    encoding="utf-8",
+                )
         final_path = expected_root / "final_metrics.json" if expected_root else None
         before_final = final_path.read_bytes() if final_path and final_path.is_file() else None
         try:

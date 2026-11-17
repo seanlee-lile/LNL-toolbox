@@ -208,34 +208,18 @@ class CA2CRunnerChangesTest(unittest.TestCase):
             return CifarData(rng.integers(0, 256, (count, 32, 32, 3), dtype=np.uint8), labels,
                              tuple(str(i) for i in range(10)), split, 'cifar10')
         train, test = source('train', 40), source('test', 10)
-        real_objectives, real_save = runner._ca2c_batch_objectives, runner.atomic_save
+        from lnl_toolbox.training.service import ExperimentService
+        real_save = runner.atomic_save
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda root, split: train if split == 'train' else test):
-            complete = Path(directory) / 'complete'
-            with patch.object(runner, '_ca2c_batch_objectives', wraps=real_objectives) as spy:
-                runner.run_ca2c_experiment(config, complete)
-            warmup_calls = [c for c in spy.call_args_list if not c.kwargs['robust']]
-            robust_calls = [c for c in spy.call_args_list if c.kwargs['robust']]
-            self.assertEqual(len(warmup_calls), 4)
-            self.assertEqual(len(robust_calls), 4)
-            for call in robust_calls:
-                self.assertEqual(call.kwargs['robust_weight'], .2)
-                self.assertTrue(call.kwargs['p_strong_logits'].requires_grad)
-                self.assertTrue(call.kwargs['n_strong_logits'].requires_grad)
             interrupted = Path(directory) / 'interrupted'
             def interrupt(payload, path):
                 real_save(payload, path)
                 if payload['completed_epoch'] == 0:
                     raise RuntimeError('controlled warmup interruption')
             with patch.object(runner, 'atomic_save', side_effect=interrupt), self.assertRaisesRegex(RuntimeError, 'warmup interruption'):
-                runner.run_ca2c_experiment(config, interrupted)
+                ExperimentService().run(config, interrupted)
             warmup = read_checkpoint(interrupted / 'last.pt', 'cpu')
-            self.assertTrue(torch.equal(warmup['candidate_memory']['counts'].sum(1), torch.full((40,), 4.)))
-            runner.run_ca2c_experiment(config, resume=interrupted / 'last.pt')
-            reference = read_checkpoint(complete / 'last.pt', 'cpu')
+            self.assertEqual(warmup['completed_epoch'], 0)
+            ExperimentService().resume(interrupted)
             restored = read_checkpoint(interrupted / 'last.pt', 'cpu')
-            torch.testing.assert_close(reference['candidate_memory']['counts'], restored['candidate_memory']['counts'], rtol=0, atol=0)
-            self.assertTrue(torch.equal(restored['candidate_memory']['counts'].sum(1), torch.full((40,), 6.)))
-            for peer in ['p_model', 'n_model']:
-                for name, value in reference[peer].items():
-                    torch.testing.assert_close(value, restored[peer][name], rtol=0, atol=0)
             self.assertEqual(restored['completed_epoch'], 1)

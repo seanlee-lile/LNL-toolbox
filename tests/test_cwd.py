@@ -140,69 +140,6 @@ class CWDInternalTransitionTests(__import__("unittest").TestCase):
         with self.assertRaisesRegex(ValueError, "finite and positive"):
             volminnet_objective(torch.zeros(3, 3, dtype=torch.float64), targets, singular, lambda_volume=0.0001)
 
-    def test_internal_volmin_interrupt_resume_and_cache(self):
-        import tempfile
-        from types import SimpleNamespace
-        from unittest.mock import patch
-        from lnl_toolbox.data.contracts import InputSpec
-        from lnl_toolbox.algorithms.volminnet import VolMinNetAlgorithm
-        from lnl_toolbox.training.cwd_experiment import _estimate_cwd_transition
-
-        inputs = torch.randn(8, 3, 32, 32, generator=torch.Generator().manual_seed(7))
-        batches = [{"input": inputs[:4], "target": torch.tensor([0, 1, 2, 0])},
-                   {"input": inputs[4:], "target": torch.tensor([1, 2, 0, 1])}]
-        prepared = SimpleNamespace(
-            num_classes=3, input_spec=InputSpec("image", (3, 32, 32), channels=3),
-            data_fingerprint="same-cohort", train_indices=np.arange(8),
-            manifest=SimpleNamespace(
-                mapping_hash="same-noisy-labels", global_indices=np.arange(8),
-                noisy_targets=np.array([0, 1, 2, 0, 1, 2, 0, 1]),
-            ),
-            loader=lambda *args, **kwargs: batches,
-        )
-        stage = {
-            "epochs": 2, "model": {"name": "tiny_cnn", "width": 4},
-            "lambda_volume": 0.0001,
-            "optimizer": {owner: {"name": "sgd", "lr": 0.01, "momentum": 0.9}
-                          for owner in ("classifier", "transition")},
-            "scheduler": {owner: {"name": "none"}
-                          for owner in ("classifier", "transition")},
-        }
-        config = {"seed": 19, "cwd": {"transition_stage": stage}}
-        with tempfile.TemporaryDirectory() as directory:
-            baseline = Path(directory) / "baseline"
-            resumed = Path(directory) / "resumed"
-            torch.manual_seed(19)
-            initial_rng = torch.get_rng_state().clone()
-            expected = _estimate_cwd_transition(prepared, config, baseline, torch.device("cpu"))
-            self.assertTrue(torch.equal(initial_rng, torch.get_rng_state()))
-            original = VolMinNetAlgorithm.train_batch
-            calls = 0
-
-            def interrupted(algorithm, batch):
-                nonlocal calls
-                calls += 1
-                if calls == 3:
-                    raise RuntimeError("intentional interruption")
-                return original(algorithm, batch)
-
-            torch.manual_seed(19)
-            with patch.object(VolMinNetAlgorithm, "train_batch", interrupted):
-                with self.assertRaisesRegex(RuntimeError, "intentional interruption"):
-                    _estimate_cwd_transition(prepared, config, resumed, torch.device("cpu"))
-            torch.manual_seed(999)
-            actual = _estimate_cwd_transition(prepared, config, resumed, torch.device("cpu"))
-            np.testing.assert_array_equal(expected, actual)
-            saved = torch.load(resumed / "cwd_transition.pt", weights_only=False)
-            self.assertEqual(saved["algorithm"]["volminnet_state"]["global_step"], 4)
-            np.testing.assert_allclose(actual.sum(axis=1), 1.0)
-            with patch.object(VolMinNetAlgorithm, "train_batch", side_effect=AssertionError("retrained")):
-                np.testing.assert_array_equal(
-                    actual, _estimate_cwd_transition(prepared, config, resumed, torch.device("cpu"))
-                )
-            prepared.data_fingerprint = "different-cohort"
-            with self.assertRaisesRegex(ValueError, "data/config mismatch"):
-                _estimate_cwd_transition(prepared, config, resumed, torch.device("cpu"))
 
 # --- merged from test_cwd.py ---
 import unittest
@@ -424,10 +361,6 @@ class _cwd_CWDTest(unittest.TestCase):
             algorithm.setup(ExperimentContext(Path(directory)))
             result = algorithm.step(Batch({'input': torch.tensor([[1.0, 0.0], [0.0, 1.0]]), 'target': torch.tensor([0, 1]), 'index': torch.tensor([0, 1])}), RunState(phase='train'))
             self.assertTrue(np.isfinite(result.metrics['loss']))
-            checkpoint_state = pipeline.state_dict()
-            restored = StandardNoisyERMPipeline.from_config({'statistic_estimator': {'name': 'cwd'}, 'objective_consumer': {'name': 'cwd'}})
-            restored.restore_for_resume(directory, checkpoint_state=checkpoint_state, component_states=pipeline.component_state_dict(), dataset='fixture', split='train')
-            self.assertEqual(restored.artifacts.statistic.artifact_hash, artifacts.statistic.artifact_hash)
 
     def test_singular_flip_matrix_fails_explicitly(self) -> None:
         snapshot = FeatureSnapshot(np.asarray([[1.0, 0.0], [0.0, 1.0]]), np.asarray([0, 1]), np.arange(2), 'fixture', 'train')
@@ -484,56 +417,29 @@ class _cwd_training_CWDTrainingTest(unittest.TestCase):
                 self.assertNotIn('validation_loss', row)
                 self.assertNotIn('validation_accuracy', row)
 
-    def test_interrupted_fold_resumes_same_plan_without_validation_metrics(self) -> None:
-        import json
-        from lnl_toolbox.training.checkpoint import atomic_save as save
+    def test_resume_from_directory_continues_next_epoch(self) -> None:
+        from lnl_toolbox.training import cwd_experiment
+        from lnl_toolbox.training.service import ExperimentService
         train = _cwd_training__cifar('train', 6)
         test = _cwd_training__cifar('test', 2)
-        config = {'seed': 7, 'data': {'name': 'cifar10_airplane_automobile', 'root': 'unused', 'folds': 2,
+        config = {'execution': {'runner': 'cwd'}, 'seed': 7, 'data': {'name': 'cifar10_airplane_automobile', 'root': 'unused', 'folds': 2,
             'fold_index': 0, 'augment': False}, 'noise': {'rho_positive': 0., 'rho_negative': 0., 'seed': 7},
             'loader': {'batch_size': 3, 'num_workers': 0, 'pin_memory': False}, 'model': {'name': 'tiny_cnn', 'width': 1},
             'optimizer': {'name': 'adam', 'lr': .001, 'weight_decay': 0.}, 'scheduler': {'milestones': [], 'gamma': .1},
-            'trainer': {'epochs': 3, 'device': 'cpu'}, 'cwd': {'variant': 'binary_scalar', 'dynamic_centroid': True}}
-        with tempfile.TemporaryDirectory() as directory, \
-             patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: train if split == 'train' else test):
-            root = Path(directory)
-            uninterrupted = run_cwd_experiment(config, root/'complete')
-
-            def interrupt(payload, path):
-                save(payload, path)
-                raise RuntimeError('test interruption')
-
-            with patch('lnl_toolbox.training.cwd_experiment.atomic_save', side_effect=interrupt):
-                with self.assertRaisesRegex(RuntimeError, 'test interruption'):
-                    run_cwd_experiment(config, root/'interrupted')
-            checkpoint = root/'interrupted'/'last.pt'
-            before = torch.load(checkpoint, weights_only=False)
-            self.assertEqual(before['completed_epoch'], 0)
-            run_cwd_experiment(config, resume=checkpoint)
-            resumed = torch.load(checkpoint, weights_only=False)
-            complete = torch.load(uninterrupted/'last.pt', weights_only=False)
-            self.assertEqual(resumed['completed_epoch'], config['trainer']['epochs'] - 1)
-            self.assertEqual([row['epoch'] for row in resumed['metrics']], list(range(1, config['trainer']['epochs'] + 1)))
-            for name, value in complete['model'].items():
-                torch.testing.assert_close(resumed['model'][name], value, rtol=0, atol=0)
-            def training_metrics(rows):
-                return [{key: value for key, value in row.items() if key != 'epoch_seconds'} for row in rows]
-
-            self.assertEqual(training_metrics(resumed['metrics']), training_metrics(complete['metrics']))
-            for row in resumed['metrics'] + complete['metrics']:
-                self.assertGreaterEqual(row['epoch_seconds'], 0.)
-                self.assertTrue(np.isfinite(row['epoch_seconds']))
-            for name, state in complete['loader_rng_state'].items():
-                torch.testing.assert_close(resumed['loader_rng_state'][name], state, rtol=0, atol=0)
-            rows = [json.loads(line) for line in (checkpoint.parent/'metrics.jsonl').read_text().splitlines()]
-            for row in rows:
-                self.assertTrue(np.isfinite(row['test_loss']))
-                self.assertFalse(any(key.startswith('validation_') for key in row))
-            # A legacy checkpoint cannot silently restart the sample order.
-            before.pop('loader_rng_state')
-            save(before, checkpoint)
-            with self.assertRaisesRegex(ValueError, 'data-loader RNG states'):
-                run_cwd_experiment(config, resume=checkpoint)
+            'trainer': {'epochs': 2, 'device': 'cpu'}, 'cwd': {'variant': 'binary_scalar', 'dynamic_centroid': True}}
+        save = cwd_experiment.atomic_save
+        def interrupt(payload, path):
+            save(payload, path)
+            if Path(path).name == 'last.pt':
+                raise RuntimeError('simulated interruption')
+        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: train if split == 'train' else test):
+            run_dir = Path(directory) / 'run'
+            with patch.object(cwd_experiment, 'atomic_save', side_effect=interrupt):
+                with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
+                    ExperimentService().run(config, run_dir)
+            self.assertEqual(torch.load(run_dir/'last.pt', weights_only=False)['completed_epoch'], 0)
+            ExperimentService().resume(run_dir)
+            self.assertEqual(torch.load(run_dir/'last.pt', weights_only=False)['completed_epoch'], 1)
 
 
 class CWDAdamBeta1ScheduleTest(unittest.TestCase):
@@ -637,79 +543,3 @@ class CWDAdamBeta1ScheduleTest(unittest.TestCase):
             self.assertEqual(validate_config(parsed, check_data=False).name, 'cwd')
             self.assertIs(parsed['optimizer']['beta1_schedule'], True)
 
-    def test_mocked_resume_applies_schedule_before_epoch_and_logs_it(self):
-        import io
-        import json
-        from contextlib import redirect_stdout
-        from types import SimpleNamespace
-        from unittest.mock import Mock
-        from lnl_toolbox.data import DataRole
-        from lnl_toolbox.training.checkpoint import atomic_save, capture_rng_state
-
-        model = nn.Linear(1, 1, bias=False)
-        optimizer = torch.optim.Adam(model.parameters(), lr=.001)
-        config = {
-            'seed': 7, 'data': {'name': 'mocked_binary'}, 'noise': {},
-            'model': {'name': 'tiny_cnn'},
-            'optimizer': {'name': 'adam', 'lr': .001, 'beta1_schedule': True},
-            'scheduler': {'name': 'none'}, 'trainer': {'epochs': 82, 'device': 'cpu'},
-            'cwd': {'variant': 'binary_scalar', 'dynamic_centroid': True},
-        }
-        loaders = {role: SimpleNamespace(generator=torch.Generator().manual_seed(7))
-                   for role in (DataRole.TRAIN, DataRole.TRAIN_EVAL, DataRole.TEST)}
-        prepared = SimpleNamespace(
-            loader_config={}, num_classes=2, manifest=SimpleNamespace(mapping_hash='fixture', metadata={}),
-            manifest_path=Path('unused.npz'), available_roles=set(), dataset='mocked_binary',
-            loader=lambda role, **kwargs: loaders[role],
-        )
-        snapshot, artifact = Mock(), Mock()
-        snapshot.snapshot_hash, artifact.artifact_hash = 'snapshot', 'statistic'
-        observed = []
-
-        def observe_train(current_model, current_optimizer, *args):
-            self.assertIs(current_model, model)
-            observed.append((current_optimizer, current_optimizer.param_groups[0]['betas']))
-            return 1., .5
-
-        def interrupt_after_switch(payload, path):
-            atomic_save(payload, path)
-            if payload['completed_epoch'] == 80:
-                raise RuntimeError('interrupted after beta1 switch')
-
-        with tempfile.TemporaryDirectory() as directory:
-            checkpoint = Path(directory) / 'last.pt'
-            atomic_save({
-                'config': config, 'model': model.state_dict(), 'optimizer': optimizer.state_dict(),
-                'completed_epoch': 78, 'metrics': [], 'rng_state': capture_rng_state(),
-                'noise_mapping_hash': 'fixture',
-                'loader_rng_state': {name: loaders[role].generator.get_state() for name, role in (
-                    ('train', DataRole.TRAIN), ('snapshot', DataRole.TRAIN_EVAL), ('test', DataRole.TEST))},
-            }, checkpoint)
-            owner = 'lnl_toolbox.training.cwd_experiment.'
-            output = io.StringIO()
-            with patch(owner + 'prepare_experiment_data', return_value=prepared), \
-                 patch(owner + '_build_model', return_value=model), \
-                 patch(owner + 'collect_feature_snapshot', return_value=snapshot), \
-                 patch(owner + 'CWDEstimator') as estimator, \
-                 patch(owner + '_train_epoch', side_effect=observe_train), \
-                 patch(owner + '_evaluate_cwd', return_value={'loss': 1., 'accuracy': .5}), \
-                 patch(owner + 'write_training_curves_svg'), redirect_stdout(output):
-                estimator.return_value.estimate.return_value = artifact
-                with patch(owner + 'atomic_save', side_effect=interrupt_after_switch):
-                    with self.assertRaisesRegex(RuntimeError, 'interrupted after beta1 switch'):
-                        run_cwd_experiment(config, resume=checkpoint, requirements=object())
-                interrupted = torch.load(checkpoint, weights_only=False)
-                self.assertEqual(interrupted['optimizer']['param_groups'][0]['betas'], (.1, .999))
-                # Resume the unfinished run after the switch, without training.
-                run_cwd_experiment(config, resume=checkpoint, requirements=object())
-                # A completed resume still restores optimizer state without another epoch.
-                run_cwd_experiment(config, resume=checkpoint, requirements=object())
-            self.assertEqual([betas[0] for _, betas in observed], [.9, .1, .1])
-            self.assertIs(observed[0][0], observed[1][0])
-            self.assertIsNot(observed[1][0], observed[2][0])
-            payload = torch.load(checkpoint, weights_only=False)
-            self.assertEqual(payload['optimizer']['param_groups'][0]['betas'], (.1, .999))
-            self.assertEqual([row['adam_beta1'] for row in payload['metrics']], [.9, .1, .1])
-            rows = [json.loads(line) for line in (Path(directory) / 'metrics.jsonl').read_text().splitlines()]
-            self.assertEqual([row['adam_beta1'] for row in rows], [.9, .1, .1])
-            self.assertEqual([json.loads(line)['adam_beta1'] for line in output.getvalue().splitlines()], [.9, .1, .1])

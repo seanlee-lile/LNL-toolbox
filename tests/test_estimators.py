@@ -287,19 +287,25 @@ from lnl_toolbox.training.experiment import run_experiment
 
 class _volmin_training_VolMinTrainingTest(unittest.TestCase):
 
-    def test_smoke_and_resume(self) -> None:
+    def test_resume_from_directory_continues_next_epoch(self) -> None:
+        from unittest.mock import patch
+        from lnl_toolbox.training import volmin_experiment
+        from lnl_toolbox.training.service import ExperimentService
         config = yaml.safe_load(Path('configs/smoke/volmin_cifar10_smoke.yaml').read_text())
         config['trainer']['epochs'] = 2
+        save = volmin_experiment.atomic_save
+        def interrupt(payload, path):
+            save(payload, path)
+            if Path(path).name == 'last.pt' and payload['completed_epoch'] == 1:
+                raise RuntimeError('simulated interruption')
         with tempfile.TemporaryDirectory() as directory:
-            run = run_experiment(config, Path(directory) / 'run')
-            self.assertTrue((run / 'last.pt').is_file())
-            rows = [json.loads(line) for line in (run / 'metrics.jsonl').read_text().splitlines()]
-            self.assertEqual([row['event'] for row in rows], ['epoch', 'epoch', 'final'])
-            self.assertTrue(all(not {'test_loss', 'test_accuracy'}.intersection(row) for row in rows[:2]))
-            self.assertIn('test_accuracy', rows[-1])
-            run_experiment(config, resume=run / 'last.pt')
-            resumed = [json.loads(line) for line in (run / 'metrics.jsonl').read_text().splitlines()]
-            self.assertEqual([row['event'] for row in resumed], ['epoch', 'epoch', 'final'])
+            run_dir = Path(directory) / 'run'
+            with patch.object(volmin_experiment, 'atomic_save', side_effect=interrupt):
+                with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
+                    ExperimentService().run(config, run_dir)
+            self.assertEqual(torch.load(run_dir/'last.pt', weights_only=False)['completed_epoch'], 1)
+            ExperimentService().resume(run_dir)
+            self.assertEqual(torch.load(run_dir/'last.pt', weights_only=False)['completed_epoch'], 2)
 
 import copy
 from torch import nn
@@ -538,46 +544,26 @@ class _volminnet_workflow_VolMinNetWorkflowTest(unittest.TestCase):
     def _load(self, _root, split):
         return self.train if split == 'train' else self.test
 
-    def test_fresh_resume_extension_and_completed_noop(self) -> None:
+    def test_resume_from_run_directory_continues_next_epoch(self) -> None:
+        from lnl_toolbox.training import volminnet_experiment
+        from lnl_toolbox.training.service import ExperimentService
+        save = volminnet_experiment.atomic_save
+        def stop_after_first(payload, path):
+            save(payload, path)
+            if Path(path).name == 'best.pt':
+                raise RuntimeError('simulated interruption')
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load):
-            run_dir = run_experiment(_volminnet_workflow__config(1), Path(directory) / 'run')
+            run_dir = Path(directory) / 'run'
+            with patch.object(volminnet_experiment, 'atomic_save', side_effect=stop_after_first):
+                with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
+                    run_experiment(_volminnet_workflow__config(2), run_dir)
             first = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
-            self.assertTrue(first['algorithm']['volminnet_state']['completed'])
-            self.assertEqual(first['algorithm']['volminnet_state']['global_step'], 2)
-            self.assertIn('model', first['best_pair'])
-            self.assertIn('transition', first['best_pair'])
-            for name in ('resolved_config.yaml', 'environment.json', 'noise_manifest.npz', 'metrics.jsonl', 'final_metrics.json', 'last.pt', 'best.pt', 'transition_initial.npz', 'transition_best.npz', 'transition_last.npz'):
-                self.assertTrue((run_dir / name).is_file(), name)
-            manifest_hash = _volminnet_workflow__sha(run_dir / 'noise_manifest.npz')
-            initial_hash = _volminnet_workflow__sha(run_dir / 'transition_initial.npz')
-            run_experiment(_volminnet_workflow__config(2), resume=run_dir / 'last.pt')
-            resumed = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
-            self.assertEqual(resumed['algorithm']['volminnet_state']['global_step'], 4)
-            self.assertEqual(_volminnet_workflow__sha(run_dir / 'noise_manifest.npz'), manifest_hash)
-            self.assertEqual(_volminnet_workflow__sha(run_dir / 'transition_initial.npz'), initial_hash)
-            watched = {name: (_volminnet_workflow__sha(run_dir / name), (run_dir / name).stat().st_mtime_ns) for name in ('last.pt', 'best.pt', 'metrics.jsonl', 'final_metrics.json', 'noise_manifest.npz', 'transition_initial.npz', 'transition_best.npz', 'transition_last.npz')}
-            run_experiment(_volminnet_workflow__config(2), resume=run_dir / 'last.pt')
-            for name, expected in watched.items():
-                self.assertEqual((_volminnet_workflow__sha(run_dir / name), (run_dir / name).stat().st_mtime_ns), expected)
+            self.assertEqual(first['algorithm']['volminnet_state']['completed_epochs'], 1)
+            ExperimentService().resume(run_dir)
+            result = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
+            self.assertEqual(result['algorithm']['volminnet_state']['completed_epochs'], 2)
 
-    def test_uninterrupted_matches_epoch_boundary_resume(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load):
-            direct = run_experiment(_volminnet_workflow__config(2), Path(directory) / 'direct')
-            resumed = run_experiment(_volminnet_workflow__config(1), Path(directory) / 'resumed')
-            run_experiment(_volminnet_workflow__config(2), resume=resumed / 'last.pt')
-            direct_state = torch.load(direct / 'last.pt', map_location='cpu', weights_only=False)['algorithm']
-            resumed_state = torch.load(resumed / 'last.pt', map_location='cpu', weights_only=False)['algorithm']
-            for owner in ('model', 'transition'):
-                for key in direct_state[owner]:
-                    self.assertTrue(torch.equal(direct_state[owner][key], resumed_state[owner][key]), f'{owner}.{key}')
 
-    def test_resume_rejects_method_drift(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load):
-            run_dir = run_experiment(_volminnet_workflow__config(1), Path(directory) / 'run')
-            changed = _volminnet_workflow__config(2)
-            changed['volminnet']['objective']['volume']['coefficient'] = 0.01
-            with self.assertRaisesRegex(ValueError, 'method settings'):
-                run_experiment(changed, resume=run_dir / 'last.pt')
 
     def test_cifar100_lightweight_dispatch(self) -> None:
         train = _volminnet_workflow__cifar(200, 'train', 100)

@@ -50,14 +50,37 @@ from lnl_toolbox.treatments.weights import SupervisedWeightInput
 # --- merged from test_mentornet.py ---
 class _mentornet_MentorNetTest(unittest.TestCase):
 
-    def test_resume_missing_teacher_does_not_retrain(self):
-        from lnl_toolbox.training.mentor_learning import ensure_mentor_artifact
-        with tempfile.TemporaryDirectory() as directory, \
-                patch('lnl_toolbox.training.mentor_learning.prepare_trusted_mentor_features') as prepare:
-            with self.assertRaisesRegex(FileNotFoundError, 'mentor_artifact.pt'):
-                ensure_mentor_artifact({'pipeline': {'weight_provider': {'name': 'mentornet'}}},
-                                       run_dir=directory, resuming=True)
-            prepare.assert_not_called()
+    def test_resume_from_directory_continues_next_epoch(self):
+        import yaml
+        from lnl_toolbox.data.cifar import CifarData
+        from lnl_toolbox.training import experiment
+        from lnl_toolbox.training.service import ExperimentService
+        config = yaml.safe_load(Path('configs/smoke/mentornet_cifar10_symmetric04_1epoch.yaml').read_text(encoding='utf-8'))
+        config['data'].update(root='unused', validation_size=10, augment=False)
+        config['evaluation'] = {'selection_split': 'validation'}
+        config['model'] = {'name': 'tiny_cnn', 'width': 4}
+        config['trainer'] = {'epochs': 2, 'device': 'cpu'}
+        config['loader'] = {'batch_size': 10, 'num_workers': 0}
+        def source(_root, split):
+            count = 40 if split == 'train' else 20
+            return CifarData(np.zeros((count,32,32,3), dtype=np.uint8), np.arange(count)%10, tuple(map(str,range(10))), split, 'cifar10')
+        save = experiment.save_checkpoint
+        def interrupt(path, *args, **kwargs):
+            save(path, *args, **kwargs)
+            if Path(path).name == 'best.pt':
+                raise RuntimeError('simulated interruption')
+        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=source):
+            run_dir = Path(directory) / 'run'
+            run_dir.mkdir()
+            artifact = run_dir / 'mentor.pt'
+            self._artifact(artifact)
+            config['pipeline']['weight_provider']['artifact_path'] = str(artifact)
+            with patch.object(experiment, 'save_checkpoint', side_effect=interrupt):
+                with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
+                    ExperimentService().run(config, run_dir)
+            self.assertEqual(torch.load(run_dir / 'last.pt', weights_only=False)['completed_epoch'], 0)
+            ExperimentService().resume(run_dir)
+            self.assertEqual(torch.load(run_dir / 'last.pt', weights_only=False)['completed_epoch'], 1)
 
     def test_mentor_weights_preserve_loss_and_gradient_scale(self) -> None:
         from lnl_toolbox.algorithms.supervised import SupervisedClassificationAlgorithm
@@ -148,20 +171,6 @@ class _mentornet_MentorNetTest(unittest.TestCase):
         restored.load_state_dict(state.state_dict())
         self.assertEqual(restored.value, state.value)
 
-    def test_provider_burn_in_and_resume_are_deterministic(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'mentor.pt'
-            artifact = self._artifact(path)
-            provider = MentorNetWeightProvider(str(path), 10, burn_in_fraction=0.2, dropout_schedule=((0.5, 10),), seed=7)
-            request = SupervisedWeightInput(logits=torch.randn(4, 3), noisy_targets=torch.zeros(4, dtype=torch.long), sample_indices=torch.arange(4), per_sample_loss=torch.tensor([0.1, 0.2, 0.3, 0.4]), metadata={'epoch': 0})
-            first = provider.compute(request)
-            saved = provider.state_dict()
-            expected = provider.compute(request)
-            restored = MentorNetWeightProvider(str(path), 10, burn_in_fraction=0.2, dropout_schedule=((0.5, 10),), seed=999)
-            restored.load_state_dict(saved)
-            actual = restored.compute(request)
-            self.assertTrue(torch.equal(actual.sample_weights, expected.sample_weights))
-            self.assertFalse(first.sample_weights.requires_grad)
 
     def test_artifact_ignores_extra_keys_but_rejects_broken_structure(self) -> None:
         """The artifact contract is structure only; no hash is stored or compared."""

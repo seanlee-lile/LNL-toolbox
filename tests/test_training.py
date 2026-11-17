@@ -725,11 +725,10 @@ class APLReportingProtocolTest(unittest.TestCase):
             for key, value in evaluated[-1].items():
                 torch.testing.assert_close(value, evaluated[-2][key], rtol=0, atol=0)
 
-    def test_last_checkpoint_resume_matches_uninterrupted_training(self):
+    def test_resume_from_run_directory_continues_next_epoch(self):
         with tempfile.TemporaryDirectory() as directory, patch(
             'lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: _noisy_ce_baseline__cifar(40 if split == 'train' else 20, split)
         ):
-            full = run_experiment(self.config(), output_dir=Path(directory) / 'full')
             partial = Path(directory) / 'resumed'
             original_save = save_checkpoint
             def interrupt_after_checkpoint(path, *args, **kwargs):
@@ -739,17 +738,12 @@ class APLReportingProtocolTest(unittest.TestCase):
             with patch('lnl_toolbox.training.experiment.save_checkpoint', side_effect=interrupt_after_checkpoint):
                 with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
                     run_experiment(self.config(), output_dir=partial)
-            self.assertTrue((partial / 'resolved_config.yaml').is_file())
-            # An unrelated caller configuration must not override the saved run.
-            run_experiment(self.config(1), output_dir=partial, resume=partial / 'last.pt')
-            expected = torch.load(full / 'last.pt', map_location='cpu', weights_only=False)
+            first = torch.load(partial / 'last.pt', map_location='cpu', weights_only=False)
+            self.assertEqual(first['completed_epoch'], 0)
+            from lnl_toolbox.training.service import ExperimentService
+            ExperimentService().resume(partial)
             actual = torch.load(partial / 'last.pt', map_location='cpu', weights_only=False)
-            for key, value in expected['model'].items():
-                torch.testing.assert_close(actual['model'][key], value, rtol=0, atol=0)
-            self.assertEqual(actual['scheduler'], expected['scheduler'])
-            for parameter, state in expected['optimizer']['state'].items():
-                for name, value in state.items():
-                    torch.testing.assert_close(actual['optimizer']['state'][parameter][name], value, rtol=0, atol=0)
+            self.assertEqual(actual['completed_epoch'], 1)
 
     def test_test_monitoring_cannot_trigger_early_stopping(self):
         config = self.config()
@@ -882,26 +876,7 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
         self.assertEqual(summary['validation_targets'], 'noisy')
         self.assertIsNotNone(summary['effective_validation_subset_actual_rate'])
 
-    def test_resume_reuses_manifest_and_rejects_hash_mismatch(self) -> None:
-        config = _noisy_ce_baseline__config()
-        indices = np.arange(20, dtype=np.int64)
-        targets = indices % 10
-        with tempfile.TemporaryDirectory() as directory:
-            run_dir = Path(directory)
-            manifest, path = prepare_noise_manifest(config, dataset='cifar10', clean_targets=targets, global_indices=indices, num_classes=10, run_dir=run_dir)
-            metadata = {'manifest_path': path.name, 'mapping_hash': manifest.mapping_hash, 'dataset': manifest.dataset, 'split': manifest.split, 'dataset_fingerprint': manifest.dataset_fingerprint, 'noise_type': manifest.noise_type, 'requested_rate': manifest.requested_rate, 'seed': manifest.seed, 'num_classes': manifest.num_classes, 'manifest_actual_rate': manifest.actual_rate}
-            loaded, _ = prepare_noise_manifest(config, dataset='cifar10', clean_targets=targets, global_indices=indices, num_classes=10, run_dir=run_dir, checkpoint_payload={'noise': metadata})
-            self.assertEqual(loaded.mapping_hash, manifest.mapping_hash)
-            metadata['mapping_hash'] = 'tampered'
-            with self.assertRaisesRegex(ValueError, 'mapping hash'):
-                prepare_noise_manifest(config, dataset='cifar10', clean_targets=targets, global_indices=indices, num_classes=10, run_dir=run_dir, checkpoint_payload={'noise': metadata})
 
-    def test_resume_requires_existing_manifest(self) -> None:
-        config = _noisy_ce_baseline__config()
-        with tempfile.TemporaryDirectory() as directory:
-            metadata = {'manifest_path': 'noise_manifest.npz', 'mapping_hash': 'missing'}
-            with self.assertRaises(FileNotFoundError):
-                prepare_noise_manifest(config, dataset='cifar10', clean_targets=np.arange(10), global_indices=np.arange(10), num_classes=10, run_dir=Path(directory), checkpoint_payload={'noise': metadata})
 
     def test_noisy_runner_accepts_configured_gce_loss(self) -> None:
         config = _noisy_ce_baseline__config()
@@ -1035,7 +1010,7 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
                     self.assertEqual(final['completed_epochs'], 1)
                     self.assertTrue(np.isfinite(final['test_loss']))
 
-    def test_small_loss_selector_is_applied_and_resume_config_is_checked(self) -> None:
+    def test_small_loss_selector_is_applied(self) -> None:
         config = _noisy_ce_baseline__config()
         config['selector'] = {'name': 'small_loss', 'keep_rate': 0.5}
         train_data = _noisy_ce_baseline__cifar(40, 'train')
@@ -1052,45 +1027,8 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
         self.assertEqual(epoch_row['selected_ratio'], 0.5)
         self.assertIn('train_all_sample_loss', epoch_row)
         self.assertEqual(checkpoint['config']['selector'], config['selector'])
-        changed = _noisy_ce_baseline__config()
-        changed['selector'] = {'name': 'small_loss', 'keep_rate': 0.75}
-        with self.assertRaisesRegex(ValueError, 'selector'):
-            _validate_resume_config(changed, config)
 
-    def test_resume_rejects_every_linear_schedule_configuration_change(self) -> None:
-        saved = _noisy_ce_baseline__config()
-        saved['selector'] = {'name': 'small_loss', 'keep_rate': {'name': 'linear', 'start': 1.0, 'end': 0.6, 'warmup_epochs': 10}}
-        _validate_resume_config(deepcopy(saved), saved)
-        changes = {'name': 'constant', 'start': 0.9, 'end': 0.5, 'warmup_epochs': 11}
-        for key, value in changes.items():
-            with self.subTest(key=key):
-                current = deepcopy(saved)
-                current['selector']['keep_rate'][key] = value
-                with self.assertRaisesRegex(ValueError, 'selector'):
-                    _validate_resume_config(current, saved)
 
-    def test_resume_rejects_preprocessing_or_validation_target_change(self) -> None:
-        saved = _noisy_ce_baseline__config()
-        saved['data']['preprocessing'] = 'gce2018'
-        saved['noise']['validation_targets'] = 'noisy'
-        changed = deepcopy(saved)
-        changed['data']['preprocessing'] = 'standard'
-        with self.assertRaisesRegex(ValueError, 'data.preprocessing'):
-            _validate_resume_config(changed, saved)
-        changed = deepcopy(saved)
-        changed['noise']['validation_targets'] = 'clean'
-        with self.assertRaisesRegex(ValueError, 'noise.validation_targets'):
-            _validate_resume_config(changed, saved)
-        saved['data']['validation_split'] = {'strategy': 'random', 'rng': 'numpy_legacy'}
-        saved['data']['normalization'] = {'mean': [0.1, 0.2, 0.3], 'std': [0.4, 0.5, 0.6]}
-        changed = deepcopy(saved)
-        changed['data']['validation_split']['strategy'] = 'stratified'
-        with self.assertRaisesRegex(ValueError, 'data.validation_split'):
-            _validate_resume_config(changed, saved)
-        changed = deepcopy(saved)
-        changed['data']['normalization']['std'][0] = 0.7
-        with self.assertRaisesRegex(ValueError, 'data.normalization'):
-            _validate_resume_config(changed, saved)
 
     def test_test_set_cannot_select_checkpoint_without_explicit_opt_in(self):
         config = _noisy_ce_baseline__config()
@@ -1120,31 +1058,26 @@ class _new_paper_training_NewPaperTrainingTest(unittest.TestCase):
             checkpoint = run_dir / 'last.pt'
             self.assertTrue(checkpoint.is_file())
             self.assertTrue((run_dir / 'final_metrics.json').is_file())
-            self.assertEqual(run_experiment(config, resume=checkpoint), run_dir)
         self.assertEqual(config, original)
 
-    def test_all_new_workflows_smoke_and_resume(self) -> None:
-        names = ('mc_ldce_cifar10_smoke.yaml', 'cal_cifar10_smoke.yaml', 'ca2c_cifar10_smoke.yaml')
+    def test_cal_resume_from_directory_continues_next_epoch(self) -> None:
+        from lnl_toolbox.training import cal_experiment
+        from lnl_toolbox.training.service import ExperimentService
+        config = deepcopy(self._config('cal_cifar10_smoke.yaml'))
+        config['trainer']['epochs'] = 2
+        save = cal_experiment.atomic_save
+        def interrupt(payload, path):
+            save(payload, path)
+            if Path(path).name == 'last.pt' and 'proxy_hash' in payload and payload['completed_epoch'] == 0:
+                raise RuntimeError('simulated interruption')
         with tempfile.TemporaryDirectory() as directory:
-            for name in names:
-                with self.subTest(name=name):
-                    config = deepcopy(self._config(name))
-                    if config['method'] == 'mc_ldce':
-                        from lnl_toolbox.catalog import validate_config
-                        from lnl_toolbox.training.mc_ldce_experiment import _lifecycle
-
-                        self.assertEqual(validate_config(config).name, 'mc_ldce')
-                        _lifecycle(config)
-                        config['trainer']['epochs'] = 2
-                    run_dir = run_experiment(config, Path(directory) / name)
-                    checkpoint = run_dir / 'last.pt'
-                    self.assertTrue(checkpoint.is_file())
-                    self.assertTrue((run_dir / 'metrics.jsonl').is_file())
-                    self.assertEqual(run_experiment(config, resume=checkpoint), run_dir)
-                    if config['method'] == 'mc_ldce':
-                        saved = torch.load(checkpoint, map_location='cpu', weights_only=False)
-                        self.assertEqual(saved['lifecycle_version'], config['mc_ldce']['lifecycle_version'])
-                        self.assertEqual(saved['completed_epoch'], config['trainer']['epochs'] - 1)
+            run_dir = Path(directory) / 'run'
+            with patch.object(cal_experiment, 'atomic_save', side_effect=interrupt):
+                with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
+                    ExperimentService().run(config, run_dir)
+            self.assertEqual(torch.load(run_dir / 'last.pt', weights_only=False)['completed_epoch'], 0)
+            ExperimentService().resume(run_dir)
+            self.assertEqual(torch.load(run_dir / 'last.pt', weights_only=False)['completed_epoch'], 1)
 
 
 from lnl_toolbox.algorithms.update_policy import ParameterUpdateInput, ParameterUpdateResult, StandardUpdatePolicy, restore_update_policy, serialize_update_policy

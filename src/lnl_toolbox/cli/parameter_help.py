@@ -221,6 +221,7 @@ SUFFIXES = {
     "model.base_width": "Base channel width of the convolutional network.",
     "model.initialization": "Initialization applied to model parameters before training.",
     "model.variant": "Architecture implementation variant; dss_specific follows DSS's released PreActResNet structure, while standard uses the toolbox architecture.",
+    "model.weights": "Initial model weights; none starts with randomly initialized weights.",
     "model.dropout": "Probability of dropping a unit's output during training.",
     "model.width_multiplier": "Channel-width multiplier relative to the base network.",
     "model.num_residual_units": "Number of residual units in each residual group.",

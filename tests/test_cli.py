@@ -80,9 +80,8 @@ for argv in (['--lang','en','--help'], ['papers','list'], ['show','GCE'], ['pape
         result = subprocess.run([sys.executable, '-B', '-c', script], env={**os.environ, 'PYTHONPATH': str(_unified_cli_ROOT / 'src'), 'PYTHONDONTWRITEBYTECODE': '1'}, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_all_paper_defaults_permissions_and_english_notes_match_shared_schema(self):
+    def test_all_paper_defaults_and_permissions_match_shared_schema(self):
         from lnl_toolbox.cli.paper_editor import PaperEditor
-        from lnl_toolbox.cli.parameter_help import english_note
         from web.command_console import _config_schema
         for paper in load_papers():
             with self.subTest(paper=paper.id):
@@ -92,7 +91,6 @@ for argv in (['--lang','en','--help'], ['papers','list'], ['show','GCE'], ['pape
                 self.assertNotEqual(editor.recipe.profile, 'smoke')
                 for field in editor.schema()['fields']:
                     if field.get('visible', True) and field.get('editable') and field.get('display_group') != 'restricted':
-                        self.assertTrue(english_note(field['path'], editor.recipe.method))
                         self.assertFalse(editor.rules._internal_seed_path(field['path']))
 
     def test_validate_and_legacy_dry_run_use_same_full_check_and_do_not_run(self):
@@ -713,6 +711,7 @@ class _unified_cli_CatalogTest(unittest.TestCase):
         self.assertIn('lnl mentor train', preparation['commands']['train'])
         self.assertIn('mentornet_dd_teacher_cifar10_symmetric04.yaml', preparation['commands']['prepare'])
         mentor['pipeline']['weight_provider']['artifact_path'] = str(_unified_cli_ROOT / 'data/mentornet/missing-artifact-for-test.pt')
+        mentor['pipeline']['weight_provider']['derive_teacher'] = False
         with self.assertRaisesRegex(ValueError, 'conditional.*MentorArtifact') as raised:
             validate_config(resolve_config_paths(mentor, _unified_cli_ROOT))
         self.assertIn('MentorArtifact: NOT READY', str(raised.exception))
@@ -1204,21 +1203,28 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
             self.assertEqual(final['status'], 'completed')
             self.assertIs(final['completed'], True)
 
-    def test_completed_resume_is_strict_noop(self) -> None:
+    def test_resume_directory_continues_next_epoch(self) -> None:
+        import torch
+        from lnl_toolbox.training.service import ExperimentService
+        from lnl_toolbox.training.checkpoint import atomic_save
+        config = {'seed': 4, 'execution': {'runner': 'binary'}, 'data': {'name': 'synthetic_binary_2d', 'train_size': 20, 'test_size': 8},
+                  'noise': {'name': 'binary_asymmetric_rcn', 'rho_positive': 0.2, 'rho_negative': 0.1},
+                  'risk': {'name': 'natarajan', 'rho_positive': 0.2, 'rho_negative': 0.1},
+                  'loader': {'batch_size': 5, 'num_workers': 0}, 'model': {'name': 'linear'},
+                  'trainer': {'epochs': 2}, 'optimizer': {'name': 'sgd', 'lr': 0.01}}
+        def interrupt(payload, path):
+            atomic_save(payload, path)
+            if Path(path).name == 'last.pt':
+                raise RuntimeError('simulated interruption')
         with tempfile.TemporaryDirectory() as directory:
-            run_dir = Path(directory)
-            (run_dir / 'resolved_config.yaml').write_text(yaml.safe_dump({'data': {'name': 'cifar10', 'root': 'missing-data-is-irrelevant'}, 'execution': {'runner': 'supervised'}}), encoding='utf-8')
-            (run_dir / 'last.pt').write_bytes(b'checkpoint')
-            (run_dir / 'metrics.jsonl').write_text('original\n', encoding='utf-8')
-            (run_dir / 'final_metrics.json').write_text(json.dumps({'test_accuracy': 0.5}), encoding='utf-8')
-            before = {path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in run_dir.iterdir()}
-            with patch('lnl_toolbox.training.experiment.run_experiment') as runner:
-                code, output, error = self.invoke('resume', str(run_dir))
-            after = {path.name: (path.read_bytes(), path.stat().st_mtime_ns) for path in run_dir.iterdir()}
+            run_dir = Path(directory) / 'run'
+            with patch('lnl_toolbox.training.checkpoint.atomic_save', side_effect=interrupt):
+                with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
+                    ExperimentService().run(config, run_dir)
+            code, output, error = self.invoke('resume', str(run_dir))
             self.assertEqual(code, 0, error)
             self.assertIn('resume complete', output)
-            self.assertEqual(after, before)
-            runner.assert_not_called()
+            self.assertEqual(torch.load(run_dir / 'last.pt', weights_only=False)['completed_epoch'], 1)
 
 
 

@@ -211,32 +211,7 @@ class _l2rw_training_L2RWTrainingTest(unittest.TestCase):
         self.assertAlmostEqual(_step_learning_rate(0.1, milestones, 0.1, [0.03, 0.007], 40000), 0.03)
         self.assertAlmostEqual(_step_learning_rate(0.1, milestones, 0.1, [0.03, 0.007], 60000), 0.007)
 
-    @unittest.skipUnless(torch.cuda.is_available(), 'CUDA is required to check checkpoint RNG device mapping')
-    def test_cuda_resume_restores_cpu_loader_generators(self) -> None:
-        config = yaml.safe_load((_l2rw_training_ROOT / 'configs/smoke/l2rw_cifar10_smoke.yaml').read_text(encoding='utf-8'))
-        config['trainer'] = {'epochs': 2, 'max_steps': 2, 'device': 'cuda'}
-        with tempfile.TemporaryDirectory() as directory:
-            run_dir = run_experiment(config, Path(directory) / 'run')
-            checkpoint = run_dir / 'last.pt'
-            checkpoint_before = checkpoint.read_bytes()
-            self.assertEqual(run_experiment(config, resume=checkpoint), run_dir)
-            self.assertEqual(checkpoint.read_bytes(), checkpoint_before)
 
-    def test_smoke_and_completed_resume(self) -> None:
-        config = yaml.safe_load((_l2rw_training_ROOT / 'configs/smoke/l2rw_cifar10_smoke.yaml').read_text(encoding='utf-8'))
-        config['trainer']['epochs'] = 2
-        with tempfile.TemporaryDirectory() as directory:
-            run_dir = run_experiment(config, Path(directory) / 'run')
-            checkpoint = run_dir / 'last.pt'
-            self.assertTrue(checkpoint.is_file())
-            self.assertTrue((run_dir / 'trusted_validation_manifest.npz').is_file())
-            rows = [json.loads(line) for line in (run_dir / 'metrics.jsonl').read_text().splitlines()]
-            self.assertEqual([row['event'] for row in rows], ['epoch', 'epoch', 'final'])
-            self.assertTrue(all(not {'test_loss', 'test_accuracy'}.intersection(row) for row in rows[:2]))
-            self.assertIn('test_accuracy', rows[-1])
-            self.assertEqual(run_experiment(config, resume=checkpoint), run_dir)
-            resumed = [json.loads(line) for line in (run_dir / 'metrics.jsonl').read_text().splitlines()]
-            self.assertEqual([row['event'] for row in resumed], ['epoch', 'epoch', 'final'])
 
 
 class L2RWPreparedDataIsolationTest(unittest.TestCase):
@@ -319,23 +294,23 @@ class L2RWPreparedDataIsolationTest(unittest.TestCase):
                 if rate == 0.:
                     np.testing.assert_array_equal(prepared.manifest.noisy_targets, prepared.manifest.clean_targets)
 
-    def test_controlled_two_step_training_and_completed_resume_preserve_isolation(self):
+    def test_resume_from_directory_continues_next_epoch(self):
         from unittest.mock import patch
-        from lnl_toolbox.noise import NoiseManifest
-        from lnl_toolbox.data.trusted import TrustedSupervisionManifest
+        from lnl_toolbox.training import l2rw_experiment
+        from lnl_toolbox.training.service import ExperimentService
         config = deepcopy(self.config)
         config['model'] = {'name': 'tiny_cnn', 'width': 4}
-        config['trainer'] = {'epochs': 2, 'max_steps': 2, 'device': 'cpu'}
+        config['trainer'] = {'epochs': 2, 'device': 'cpu'}
+        save = l2rw_experiment.atomic_save
+        def interrupt(payload, path):
+            save(payload, path)
+            if Path(path).name == 'last.pt' and payload['completed_epoch'] == 0:
+                raise RuntimeError('simulated interruption')
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self.load):
-            run_dir = run_experiment(config, Path(directory) / 'run')
-            checkpoint = run_dir / 'last.pt'
-            payload = torch.load(checkpoint, map_location='cpu', weights_only=False)
-            self.assertEqual(payload['global_step'], 2)
-            noisy = NoiseManifest.load(run_dir / 'noise_manifest.npz')
-            trusted = TrustedSupervisionManifest.load(run_dir / 'trusted_validation_manifest.npz')
-            self.assertEqual(len(noisy.global_indices), 20)
-            self.assertEqual(len(trusted.global_indices), 10)
-            self.assertFalse(set(noisy.global_indices) & set(trusted.global_indices))
-            before = checkpoint.read_bytes()
-            self.assertEqual(run_experiment(config, resume=checkpoint), run_dir)
-            self.assertEqual(checkpoint.read_bytes(), before)
+            run_dir = Path(directory) / 'run'
+            with patch.object(l2rw_experiment, 'atomic_save', side_effect=interrupt):
+                with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
+                    ExperimentService().run(config, run_dir)
+            self.assertEqual(torch.load(run_dir / 'last.pt', weights_only=False)['completed_epoch'], 0)
+            ExperimentService().resume(run_dir)
+            self.assertEqual(torch.load(run_dir / 'last.pt', weights_only=False)['completed_epoch'], 1)

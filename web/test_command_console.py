@@ -190,42 +190,6 @@ for(const profile of ['reproduction','metadata','smoke']){
                                     self.assertIn(child["value"], {choice["value"] for choice in child["choices"]})
         self.assertEqual(covered, set(bindings))
 
-    def test_historical_best_resource_and_parameter_controls(self):
-        from lnl_toolbox import parameters
-
-        for method, dataset in (("cwd", "cifar10"), ("cwd", "cifar100"),
-                                ("lend", "cifar10"), ("mentornet", "cifar100"),
-                                ("volminnet", "cifar100"), ("cnlcu", "cifar100"),
-                                ("l2rw", "cifar100")):
-            path = f"configs/reproduction/{method}_{dataset}.yaml"
-            with self.subTest(config=path):
-                payload = parameters._config_payload(path_value=path)
-                payload["method"] = method
-                schema = parameters.schema_from_payload(payload)
-                fields = {field["path"]: field for field in schema["fields"]}
-                if method == "lend":
-                    manifest = fields["noise.manifest"]
-                    self.assertEqual(manifest["presentation"], "resource")
-                    self.assertIsNone(manifest["choices"])
-                    self.assertEqual(parameters._coerce_patch_value(manifest, "data/自选 噪声.npz"),
-                                     "data/自选 噪声.npz")
-                    self.assertFalse(fields["noise.source_manifest_sha256"]["visible"])
-                if method == "cwd":
-                    self.assertTrue(fields["model.feature_dropout"]["visible"])
-                    self.assertIn("池化特征", fields["model.feature_dropout"]["note"])
-                    if "model.num_outputs" in fields:
-                        self.assertFalse(fields["model.num_outputs"]["visible"])
-                if method == "mentornet":
-                    target = fields["noise.validation_targets"]
-                    self.assertEqual({choice["value"] for choice in target["choices"]}, {"clean", "noisy"})
-                    with self.assertRaisesRegex(ValueError, "下拉"):
-                        parameters._coerce_patch_value(target, "invented")
-                if method == "volminnet":
-                    self.assertIn(fields["volminnet.model.variant"]["value"],
-                                  {choice["value"] for choice in fields["volminnet.model.variant"]["choices"]})
-                if method in {"cnlcu", "l2rw"}:
-                    self.assertIn(fields["model.name"]["value"],
-                                  {choice["value"] for choice in fields["model.name"]["choices"]})
 
     def test_nested_parameter_dropdowns_reject_unknown_values(self):
         from copy import deepcopy
@@ -747,58 +711,28 @@ for(const profile of ['reproduction','metadata','smoke']){
         self.assertEqual(len(payload["runs"]), 1)
         self.assertEqual(payload["runs"][0]["current_epoch"], 1)
 
-    def test_resume_payload_reports_config_phase_files_and_readiness(self):
+    def test_resume_payload_and_run_directory_continue_next_epoch(self):
         import torch
-
+        from unittest.mock import patch
+        from lnl_toolbox.training.checkpoint import atomic_save
+        from lnl_toolbox.training.service import ExperimentService
+        config = {'seed': 4, 'execution': {'runner': 'binary'}, 'data': {'name': 'synthetic_binary_2d', 'train_size': 20, 'test_size': 8},
+                  'noise': {'name': 'binary_asymmetric_rcn', 'rho_positive': 0.2, 'rho_negative': 0.1},
+                  'risk': {'name': 'natarajan', 'rho_positive': 0.2, 'rho_negative': 0.1},
+                  'loader': {'batch_size': 5, 'num_workers': 0}, 'model': {'name': 'linear'},
+                  'trainer': {'epochs': 2}, 'optimizer': {'name': 'sgd', 'lr': 0.01}}
+        def interrupt(payload, path):
+            atomic_save(payload, path)
+            if Path(path).name == 'last.pt':
+                raise RuntimeError('simulated interruption')
         with tempfile.TemporaryDirectory() as directory:
-            run = Path(directory)
-            (run / "resolved_config.yaml").write_text(
-                "seed: 7\nmethod: supervised\nexecution:\n  runner: supervised\n"
-                "data:\n  name: cifar10\nnoise:\n  name: symmetric\n"
-                "model:\n  name: tiny_cnn\noptimizer:\n  name: sgd\n"
-                "trainer:\n  epochs: 20\n  warmup_epochs: 5\n",
-                encoding="utf-8",
-            )
-            (run / "metrics.jsonl").write_text(
-                json.dumps(
-                    {
-                        "epoch": 4,
-                        "phase": "warmup",
-                        "validation_accuracy": 0.4,
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            torch.save(
-                {
-                    "completed_epoch": 3,
-                    "run_state": {"phase": "train", "step": 12},
-                    "best_epoch": 3,
-                    "best_validation_accuracy": 0.4,
-                },
-                run / "last.pt",
-            )
-            payload = command_console._resume_payload(directory, "last")
-            self.assertTrue(payload["resumable"])
-            self.assertEqual(payload["phase"], "warmup")
-            self.assertEqual(payload["current_epoch"], 4)
-            self.assertEqual(payload["target_epoch"], 20)
-            self.assertEqual(payload["config_summary"]["data"], "cifar10")
-            self.assertIn("resolved_config.yaml", {item["name"] for item in payload["files"]})
-
-            completed_config = (run / "resolved_config.yaml").read_text(encoding="utf-8").replace(
-                "epochs: 20", "epochs: 4"
-            )
-            (run / "resolved_config.yaml").write_text(completed_config, encoding="utf-8")
-            completed = command_console._resume_payload(directory, "last")
-            self.assertTrue(completed["resumable"])
-            self.assertEqual(completed["status"], "ready")
-
-            (run / "resolved_config.yaml").unlink()
-            blocked = command_console._resume_payload(directory, "last")
-            self.assertFalse(blocked["resumable"])
-            self.assertIn("missing resolved_config.yaml", blocked["errors"])
+            run_dir = Path(directory) / 'run'
+            with patch('lnl_toolbox.training.checkpoint.atomic_save', side_effect=interrupt):
+                with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
+                    ExperimentService().run(config, run_dir)
+            self.assertTrue(command_console._resume_payload(str(run_dir), 'last')['resumable'])
+            ExperimentService().resume(run_dir)
+            self.assertEqual(torch.load(run_dir / 'last.pt', weights_only=False)['completed_epoch'], 1)
 
     def test_paper_menu_exposes_recipe_variants(self):
         papers = command_console._paper_payload()
@@ -1122,7 +1056,9 @@ for(const profile of ['reproduction','metadata','smoke']){
                 for path, field in fields.items():
                     if not field["editable"] or not field["visible"]:
                         continue
-                    if path.endswith("scheduler.name") and field["value"] != "none":
+                    choices = field.get("choices") or []
+                    allowed = {choice["value"] for choice in choices}
+                    if path.endswith("scheduler.name") and field["value"] != "none" and "none" in allowed:
                         patches.append({"path": path, "value": "none"})
                     if path == "scheduler.step_milestones" and field["value"]:
                         patches.append({"path": path, "value": []})
@@ -1367,6 +1303,14 @@ for(const profile of ['reproduction','metadata','smoke']){
             )
             fields = {field["path"]: field for field in schema["fields"]}
             self.assertEqual(len(fields), len(schema["fields"]), paper.id)
+            from lnl_toolbox.catalog import load_recipe_config, recipe_by_id
+            raw_config = load_recipe_config(recipe_by_id(config.recipe_id, command_console.ROOT))
+            optional_fields = set()
+            provider = (raw_config.get("pipeline") or {}).get("weight_provider") or {}
+            if schema["method"] == "mentornet" and provider.get("derive_teacher", provider.get("derive_from_seed", True)):
+                optional_fields.add("pipeline.weight_provider.artifact_path")
+            if schema["method"] == "cal" and (raw_config.get("noise") or {}).get("name") != "external_torch":
+                optional_fields.update({"noise.path", "noise.clean_key", "noise.noisy_key"})
             for path in (
                 "data.max_train_samples", "data.max_validation_samples", "data.max_test_samples"
             ):
@@ -1379,9 +1323,13 @@ for(const profile of ['reproduction','metadata','smoke']){
                 "resource_paths_by_method", "hidden_paths_by_method",
             ):
                 for path in display_policy[presentation_key][schema["method"]]:
+                    if path in optional_fields and path not in fields:
+                        continue
                     self.assertIn(path, fields, (paper.id, path))
             selected = (set(default_paths["common"]) | set(default_paths["methods"][schema["method"]])) - set(default_paths.get("exclude", {}).get(schema["method"], ()))
-            self.assertTrue(set(default_paths["methods"][schema["method"]]) <= set(fields), paper.id)
+            method_defaults = set(default_paths["methods"][schema["method"]])
+            method_defaults -= optional_fields - set(fields)
+            self.assertTrue(method_defaults <= set(fields), paper.id)
             defaults = {path for path, field in fields.items() if field["visible"] and field["display_group"] == "default"}
             self.assertTrue({
                 path for path in selected

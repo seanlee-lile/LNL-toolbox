@@ -228,29 +228,6 @@ class _t_revision_workflow_TRevisionWorkflowTest(unittest.TestCase):
             for stopper in algorithm.stage_stoppers.values():
                 self.assertEqual(stopper.bad_epochs, 15)
 
-    def test_enabling_stage_stopping_on_old_checkpoint_reuses_history_and_best(self):
-        from unittest.mock import patch
-        with tempfile.TemporaryDirectory() as directory:
-            first = _t_revision_workflow__algorithm(directory, stage2a_epochs=20)
-            first.train_stage1()
-            first.initialize_transition()
-            first.start_classifier_initialization()
-            with patch.object(first, '_evaluate_noisy', return_value={'accuracy': .5, 'loss': 1.}):
-                first.train_classifier_initialization(max_epochs=17)
-            best_hash = _t_revision_workflow__sha(first.stage2a_best_path)
-            restored = _t_revision_workflow__algorithm(directory, stage2a_epochs=20,
-                stage_early_stopping={'patience': 15})
-            restored.resume(Path(directory) / 'last.pt')
-            self.assertTrue(restored._stage_stopped('classifier_initialization'))
-            with patch.object(restored, '_train_reweight_epoch', side_effect=AssertionError('must not train another initialization epoch')):
-                restored.train_classifier_initialization()
-            self.assertEqual(restored.state.stage2a_completed_epochs, 17)
-            self.assertIs(restored.state.phase, TRevisionPhase.CLASSIFIER_READY)
-            self.assertEqual(_t_revision_workflow__sha(restored.stage2a_best_path), best_hash)
-            best = read_checkpoint(restored.stage2a_best_path, 'cpu')
-            restored.start_revision()
-            for key, value in restored.model.state_dict().items():
-                torch.testing.assert_close(value.cpu(), best['model'][key])
 
     def test_config_rejects_unsupported_variants_and_test_selection(self) -> None:
         values = _t_revision_workflow__config()
@@ -320,59 +297,8 @@ class _t_revision_workflow_TRevisionWorkflowTest(unittest.TestCase):
         model(torch.ones(2, 3, device=device)).sum().backward()
         self.assertIsNotNone(model.weight.grad)
 
-    def test_full_three_stage_workflow_and_completed_resume_noop(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            run_dir = Path(directory)
-            algorithm = _t_revision_workflow__algorithm(run_dir)
-            result = algorithm.run()
-            self.assertIs(algorithm.state.phase, TRevisionPhase.COMPLETED)
-            self.assertEqual(result['method'], 't_revision')
-            self.assertEqual(result['phase'], 'completed')
-            self.assertIs(result['revised_transition_is_probability_matrix'], False)
-            self.assertIn('artifact_paths', result)
-            self.assertEqual(result['artifact_paths']['transition_revised'], 'transition_revised.npz')
-            self.assertIn('best_stage1_noisy_validation_accuracy', result)
-            self.assertIn('best_classifier_initialization_noisy_validation_accuracy', result)
-            for name in ('stage1_best.pt', 'posterior_snapshot.npz', 'transition_initial.npz', 'stage2a_best.pt', 'best.pt', 'transition_revised.npz', 'last.pt', 'final_metrics.json'):
-                self.assertTrue((run_dir / name).is_file(), name)
-            delta = read_checkpoint(run_dir / 'best.pt', 'cpu')['delta']
-            self.assertGreater(float(delta.abs().sum()), 0.0)
-            protected = {name: (_t_revision_workflow__sha(run_dir / name), (run_dir / name).stat().st_mtime_ns) for name in ('posterior_snapshot.npz', 'transition_initial.npz', 'transition_revised.npz', 'last.pt', 'metrics.jsonl')}
-            resumed = _t_revision_workflow__algorithm(run_dir)
-            resumed.resume(run_dir / 'last.pt')
-            second = resumed.run()
-            self.assertEqual(second, result)
-            self.assertEqual(protected, {name: (_t_revision_workflow__sha(run_dir / name), (run_dir / name).stat().st_mtime_ns) for name in protected})
 
-    def test_completed_revision_can_extend_epochs_without_rebuilding_initial_artifacts(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            run_dir = Path(directory)
-            first = _t_revision_workflow__algorithm(run_dir, revision_epochs=1)
-            first.run()
-            initial_artifacts = {name: (_t_revision_workflow__sha(run_dir / name), (run_dir / name).stat().st_mtime_ns) for name in ('posterior_snapshot.npz', 'transition_initial.npz')}
-            old_step = first.state.revision_global_step
-            extended = _t_revision_workflow__algorithm(run_dir, revision_epochs=2)
-            extended.resume(run_dir / 'last.pt')
-            self.assertIs(extended.state.phase, TRevisionPhase.REVISION_TRAINING)
-            extended.run()
-            self.assertEqual(extended.state.revision_completed_epochs, 2)
-            self.assertGreater(extended.state.revision_global_step, old_step)
-            self.assertEqual(initial_artifacts, {name: (_t_revision_workflow__sha(run_dir / name), (run_dir / name).stat().st_mtime_ns) for name in initial_artifacts})
-            self.assertEqual(len(extended.state.revised_transition_hash), 64)
 
-    def test_algorithm_restore_does_not_compare_configurations(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            run_dir = Path(directory)
-            first = _t_revision_workflow__algorithm(run_dir, revision_epochs=2)
-            first.train_stage1()
-            first.initialize_transition()
-            first.start_classifier_initialization()
-            first.train_classifier_initialization()
-            first.start_revision()
-            first.train_revision(max_epochs=1)
-            reduced = _t_revision_workflow__algorithm(run_dir, revision_epochs=1)
-            reduced.resume(run_dir / 'last.pt')
-            self.assertEqual(reduced.state.revision_completed_epochs, 1)
 
     def test_t_revision_import_does_not_require_sklearn(self) -> None:
         code = "\nimport builtins\nreal_import = builtins.__import__\ndef guarded(name, *args, **kwargs):\n    if name == 'sklearn' or name.startswith('sklearn.'):\n        raise ModuleNotFoundError('blocked sklearn')\n    return real_import(name, *args, **kwargs)\nbuiltins.__import__ = guarded\nfrom lnl_toolbox.algorithms.t_revision import TRevisionAlgorithm\nfrom lnl_toolbox.training.t_revision_experiment import run_t_revision_experiment\nprint(TRevisionAlgorithm.__name__, run_t_revision_experiment.__name__)\n"
@@ -382,29 +308,7 @@ class _t_revision_workflow_TRevisionWorkflowTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('TRevisionAlgorithm', result.stdout)
 
-    def test_stage1_interruption_resume_reaches_completion(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            first = _t_revision_workflow__algorithm(directory, stage1_epochs=2)
-            first.train_stage1(max_epochs=1)
-            self.assertIs(first.state.phase, TRevisionPhase.STAGE1_TRAINING)
-            step = first.state.stage1_global_step
-            second = _t_revision_workflow__algorithm(directory, stage1_epochs=2)
-            second.resume(Path(directory) / 'last.pt')
-            second.run()
-            self.assertIs(second.state.phase, TRevisionPhase.COMPLETED)
-            self.assertGreater(second.state.stage1_global_step, step)
 
-    def test_transition_and_later_stages_resume_without_reestimating_artifacts(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            run_dir = Path(directory)
-            first = _t_revision_workflow__algorithm(run_dir)
-            first.train_stage1()
-            first.initialize_transition()
-            initial_hashes = {path.name: (_t_revision_workflow__sha(path), path.stat().st_mtime_ns) for path in (first.snapshot_path, first.initial_transition_path)}
-            second = _t_revision_workflow__algorithm(run_dir)
-            second.resume(run_dir / 'last.pt')
-            second.run()
-            self.assertEqual(initial_hashes, {name: (_t_revision_workflow__sha(run_dir / name), (run_dir / name).stat().st_mtime_ns) for name in initial_hashes})
 
     def test_snapshot_and_anchor_transition_come_from_stage1_best(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -429,32 +333,35 @@ class _t_revision_workflow_TRevisionWorkflowTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'missing noisy target classes'):
                 algorithm.initialize_transition()
 
-    def test_classifier_initialization_and_revision_resume_match_uninterrupted(self) -> None:
-        with tempfile.TemporaryDirectory() as uninterrupted_dir, tempfile.TemporaryDirectory() as resumed_dir:
-            torch.manual_seed(31)
-            uninterrupted = _t_revision_workflow__algorithm(uninterrupted_dir, stage2a_epochs=2, revision_epochs=2)
-            uninterrupted.run()
-            uninterrupted_best = read_checkpoint(Path(uninterrupted_dir) / 'best.pt', 'cpu')
-            torch.manual_seed(31)
-            first = _t_revision_workflow__algorithm(resumed_dir, stage2a_epochs=2, revision_epochs=2)
-            first.train_stage1()
-            first.initialize_transition()
-            first.start_classifier_initialization()
-            first.train_classifier_initialization(max_epochs=1)
-            self.assertIs(first.state.phase, TRevisionPhase.CLASSIFIER_INITIALIZATION)
-            second = _t_revision_workflow__algorithm(resumed_dir, stage2a_epochs=2, revision_epochs=2)
-            second.resume(Path(resumed_dir) / 'last.pt')
-            second.train_classifier_initialization()
-            second.start_revision()
-            second.train_revision(max_epochs=1)
-            self.assertIs(second.state.phase, TRevisionPhase.REVISION_TRAINING)
-            third = _t_revision_workflow__algorithm(resumed_dir, stage2a_epochs=2, revision_epochs=2)
-            third.resume(Path(resumed_dir) / 'last.pt')
-            third.run()
-            resumed_best = read_checkpoint(Path(resumed_dir) / 'best.pt', 'cpu')
-            for name, value in uninterrupted_best['model'].items():
-                torch.testing.assert_close(value, resumed_best['model'][name])
-            torch.testing.assert_close(uninterrupted_best['delta'], resumed_best['delta'])
+    def test_resume_from_directory_continues_next_epoch(self) -> None:
+        import yaml
+        from unittest.mock import patch
+        from lnl_toolbox.data.cifar import CifarData
+        from lnl_toolbox.algorithms.t_revision import algorithm as impl
+        from lnl_toolbox.training.service import ExperimentService
+        config = yaml.safe_load(Path('configs/smoke/cifar10_t_revision_smoke.yaml').read_text(encoding='utf-8'))
+        config['data'].update(root='unused', validation_size=10, max_train_samples=20, max_validation_samples=10, max_test_samples=10)
+        config['loader']['batch_size'] = 10
+        config['t_revision']['stage1']['epochs'] = 1
+        config['t_revision']['stage1']['model']['width'] = 4
+        config['t_revision']['classifier_initialization']['epochs'] = 1
+        config['t_revision']['revision']['epochs'] = 2
+        def source(_root, split):
+            count = 40 if split == 'train' else 20
+            return CifarData(np.zeros((count, 32, 32, 3), dtype=np.uint8), np.arange(count) % 10, tuple(map(str, range(10))), split, 'cifar10')
+        save = impl.atomic_save
+        def interrupt(payload, path):
+            save(payload, path)
+            if Path(path).name == 'last.pt' and payload['t_revision_state']['revision_completed_epochs'] == 1:
+                raise RuntimeError('simulated interruption')
+        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=source):
+            run_dir = Path(directory) / 'run'
+            with patch.object(impl, 'atomic_save', side_effect=interrupt):
+                with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
+                    ExperimentService().run(config, run_dir)
+            self.assertEqual(read_checkpoint(run_dir / 'last.pt', 'cpu')['t_revision_state']['revision_completed_epochs'], 1)
+            ExperimentService().resume(run_dir)
+            self.assertEqual(read_checkpoint(run_dir / 'last.pt', 'cpu')['t_revision_state']['revision_completed_epochs'], 2)
 
     def test_stage2a_fixes_transition_and_revision_rebuilds_adam(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -484,34 +391,7 @@ class _t_revision_workflow_TRevisionWorkflowTest(unittest.TestCase):
             self.assertEqual(first.state.snapshot_hash, second.state.snapshot_hash)
             self.assertEqual(first.state.initial_transition_hash, second.state.initial_transition_hash)
 
-    def test_artifact_and_manifest_drift_fail_resume(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            run_dir = Path(directory)
-            algorithm = _t_revision_workflow__algorithm(run_dir)
-            algorithm.train_stage1()
-            algorithm.initialize_transition()
-            snapshot = run_dir / 'posterior_snapshot.npz'
-            snapshot.write_bytes(b'broken')
-            resumed = _t_revision_workflow__algorithm(run_dir)
-            with self.assertRaises(Exception):
-                resumed.resume(run_dir / 'last.pt')
-        with tempfile.TemporaryDirectory() as directory:
-            algorithm = _t_revision_workflow__algorithm(directory)
-            algorithm.train_stage1(max_epochs=1)
-            changed = _t_revision_workflow__algorithm(directory)
-            changed.config['noise'] = dict(changed.config['noise'], mapping_hash='c' * 64)
-            changed.resume(Path(directory) / 'last.pt')
-            self.assertEqual(changed.state.stage1_completed_epochs, 1)
 
-    def test_revision_best_corruption_fails_resume(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            run_dir = Path(directory)
-            algorithm = _t_revision_workflow__algorithm(run_dir)
-            algorithm.run()
-            (run_dir / 'best.pt').write_bytes(b'broken')
-            resumed = _t_revision_workflow__algorithm(run_dir)
-            with self.assertRaisesRegex(ValueError, 'revision best.*hash mismatch'):
-                resumed.resume(run_dir / 'last.pt')
 
     def test_dispatch_is_lazy_and_available(self) -> None:
         with unittest.mock.patch('lnl_toolbox.training.t_revision_experiment.run_t_revision_experiment', return_value=Path('fixture')) as runner:

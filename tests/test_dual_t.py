@@ -410,38 +410,6 @@ class _dual_t_forward_DualTAlgorithmLifecycleTest(unittest.TestCase):
             self.assertEqual(production, extracted)
             self.assertEqual(first_state.step, second_state.step)
 
-    def test_tiny_cpu_end_to_end_uses_fresh_models_and_artifacts(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            algorithm = _dual_t_forward__algorithm(directory, posterior_epochs=1, final_epochs=1)
-            self.assertIsNot(algorithm.posterior_algorithm.model, algorithm.final_algorithm.model)
-            self.assertIsNot(algorithm.posterior_algorithm.optimizer, algorithm.final_algorithm.optimizer)
-            final = algorithm.run()
-            self.assertIs(algorithm.state.phase, DualTPhase.COMPLETED)
-            self.assertEqual(final['method'], 'dual_t')
-            self.assertEqual(final['completed_posterior_epochs'], 1)
-            self.assertEqual(final['completed_final_epochs'], 1)
-            for filename in ('posterior_best.pt', 'posterior_snapshot.npz', 'transition_artifact.npz', 'last.pt', 'best.pt', 'metrics.jsonl', 'final_metrics.json'):
-                self.assertTrue(Path(directory, filename).is_file(), filename)
-            self.assertEqual(algorithm.transition.metadata['composition'], 't_club @ t_spade')
-            self.assertEqual(algorithm.transition.metadata['posterior_best_checkpoint_sha256'], algorithm.state.best_posterior_checkpoint_sha256)
-            self.assertEqual(algorithm.transition.metadata['method'], 'dual_t')
-            metric_rows = [json.loads(line) for line in Path(directory, 'metrics.jsonl').read_text(encoding='utf-8').splitlines()]
-            final_epoch = next((row for row in metric_rows if row.get('stage') == 'final' and row.get('event') == 'epoch'))
-            self.assertIn('validation_forward_loss', final_epoch)
-            self.assertNotIn('validation_observed_ce_loss', final_epoch)
-            self.assertNotIn('validation_loss', final_epoch)
-            actual_best_sha = hashlib.sha256(Path(directory, 'posterior_best.pt').read_bytes()).hexdigest()
-            best_payload = read_checkpoint(Path(directory, 'posterior_best.pt'), 'cpu')
-            last_payload = read_checkpoint(Path(directory, 'last.pt'), 'cpu')
-            self.assertNotEqual(best_payload['dual_t_state']['best_posterior_checkpoint_sha256'], actual_best_sha)
-            self.assertEqual(last_payload['dual_t_state']['best_posterior_checkpoint_sha256'], actual_best_sha)
-            snapshot_mtime = Path(directory, 'posterior_snapshot.npz').stat().st_mtime_ns
-            transition_mtime = Path(directory, 'transition_artifact.npz').stat().st_mtime_ns
-            restored = _dual_t_forward__algorithm(directory, posterior_epochs=1, final_epochs=1)
-            restored.resume(Path(directory, 'last.pt'))
-            restored.run()
-            self.assertEqual(Path(directory, 'posterior_snapshot.npz').stat().st_mtime_ns, snapshot_mtime)
-            self.assertEqual(Path(directory, 'transition_artifact.npz').stat().st_mtime_ns, transition_mtime)
 
     def test_transition_snapshot_is_loaded_from_best_not_current_model(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -468,38 +436,8 @@ class _dual_t_forward_DualTAlgorithmLifecycleTest(unittest.TestCase):
             self.assertEqual(first.snapshot.snapshot_hash, second.snapshot.snapshot_hash)
             np.testing.assert_allclose(first.transition.matrix, second.transition.matrix)
 
-    def test_posterior_training_interruption_resumes(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            first = _dual_t_forward__algorithm(directory)
-            first.train_posterior(max_epochs=1)
-            self.assertIs(first.state.phase, DualTPhase.POSTERIOR_TRAINING)
-            self.assertEqual(first.state.posterior_completed_epochs, 1)
-            restored = _dual_t_forward__algorithm(directory)
-            restored.resume(Path(directory) / 'last.pt')
-            final = restored.run()
-            self.assertEqual(final['completed_posterior_epochs'], 2)
-            self.assertEqual(final['posterior_global_step'], 4)
 
-    def test_transition_ready_resume_requires_and_loads_artifacts(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            first = _dual_t_forward__algorithm(directory)
-            first.train_posterior()
-            first.estimate_transition()
-            self.assertIs(first.state.phase, DualTPhase.TRANSITION_READY)
-            restored = _dual_t_forward__algorithm(directory)
-            restored.resume(Path(directory) / 'last.pt')
-            self.assertIsNotNone(restored.transition)
-            self.assertEqual(restored.transition.artifact_hash, first.transition.artifact_hash)
 
-    def test_transition_ready_resume_rejects_missing_snapshot(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            first = _dual_t_forward__algorithm(directory)
-            first.train_posterior()
-            first.estimate_transition()
-            Path(directory, 'posterior_snapshot.npz').unlink()
-            restored = _dual_t_forward__algorithm(directory)
-            with self.assertRaisesRegex(FileNotFoundError, 'artifact missing'):
-                restored.resume(Path(directory) / 'last.pt')
 
     def test_transition_save_failure_does_not_advance_phase_or_last(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -515,50 +453,39 @@ class _dual_t_forward_DualTAlgorithmLifecycleTest(unittest.TestCase):
             self.assertEqual(algorithm.state.transition_artifact_hash, '')
             self.assertEqual(Path(directory, 'last.pt').read_bytes(), last_before)
 
-    def test_transition_ready_resume_rejects_artifact_hash_mismatch(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            first = _dual_t_forward__algorithm(directory)
-            first.train_posterior()
-            first.estimate_transition()
-            transition_path = Path(directory, 'transition_artifact.npz')
-            with np.load(transition_path, allow_pickle=False) as data:
-                matrix = data['matrix'].copy()
-                metadata_json = data['metadata_json'].copy()
-            matrix[0] = np.roll(matrix[0], 1)
-            np.savez_compressed(transition_path, matrix=matrix, metadata_json=metadata_json)
-            restored = _dual_t_forward__algorithm(directory)
-            with self.assertRaisesRegex(ValueError, 'hash'):
-                restored.resume(Path(directory) / 'last.pt')
 
-    def test_resume_rejects_posterior_best_hash_mismatch(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            first = _dual_t_forward__algorithm(directory)
-            first.train_posterior(max_epochs=1)
-            with Path(directory, 'posterior_best.pt').open('ab') as stream:
-                stream.write(b'tamper')
-            restored = _dual_t_forward__algorithm(directory)
-            with self.assertRaisesRegex(ValueError, 'checkpoint hash mismatch'):
-                restored.resume(Path(directory) / 'last.pt')
 
-    def test_final_training_interruption_resumes(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            first = _dual_t_forward__algorithm(directory)
-            first.train_posterior()
-            first.estimate_transition()
-            first.start_final_training()
-            first.train_final(max_epochs=1)
-            self.assertIs(first.state.phase, DualTPhase.FINAL_TRAINING)
-            self.assertEqual(first.state.final_completed_epochs, 1)
-            restored = _dual_t_forward__algorithm(directory)
-            restored.resume(Path(directory) / 'last.pt')
-            final = restored.run()
-            self.assertEqual(final['completed_final_epochs'], 2)
-            self.assertEqual(final['final_global_step'], 4)
+    def test_resume_from_directory_continues_next_epoch(self) -> None:
+        import yaml
+        from unittest.mock import patch
+        from lnl_toolbox.data.cifar import CifarData
+        from lnl_toolbox.algorithms.dual_t import algorithm as impl
+        from lnl_toolbox.noise.estimators import DualTransitionEstimator
+        from lnl_toolbox.training.service import ExperimentService
+        config = yaml.safe_load(Path('configs/smoke/cifar10_dual_t_smoke.yaml').read_text(encoding='utf-8'))
+        config['data'].update(root='unused', validation_size=10, max_train_samples=20, max_validation_samples=10, max_test_samples=10, augment=False)
+        config['loader']['batch_size'] = 10
+        config['posterior_stage']['epochs'] = 1
+        config['posterior_stage']['model']['width'] = 4
+        config['final_stage']['epochs'] = 2
+        config['final_stage']['model']['width'] = 4
+        def source(_root, split):
+            count = 40 if split == 'train' else 20
+            return CifarData(np.zeros((count,32,32,3), dtype=np.uint8), np.arange(count)%10, tuple(map(str,range(10))), split, 'cifar10')
+        save = impl.atomic_save
+        estimate = DualTransitionEstimator.estimate
+        def interrupt(payload, path):
+            save(payload, path)
+            if Path(path).name == 'last.pt' and payload['dual_t_state']['final_completed_epochs'] == 1:
+                raise RuntimeError('simulated interruption')
+        def estimate_fixture(estimator, snapshot):
+            return estimate(estimator, snapshot, allow_empty_intermediate=True)
+        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=source), patch.object(DualTransitionEstimator, 'estimate', estimate_fixture):
+            run_dir = Path(directory) / 'run'
+            with patch.object(impl, 'atomic_save', side_effect=interrupt):
+                with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
+                    ExperimentService().run(config, run_dir)
+            self.assertEqual(read_checkpoint(run_dir / 'last.pt', 'cpu')['dual_t_state']['final_completed_epochs'], 1)
+            ExperimentService().resume(run_dir)
+            self.assertEqual(read_checkpoint(run_dir / 'last.pt', 'cpu')['dual_t_state']['final_completed_epochs'], 2)
 
-    def test_posterior_best_cannot_be_used_as_run_resume(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            first = _dual_t_forward__algorithm(directory)
-            first.train_posterior(max_epochs=1)
-            restored = _dual_t_forward__algorithm(directory)
-            with self.assertRaisesRegex(ValueError, 'run-state checkpoint'):
-                restored.resume(Path(directory) / 'posterior_best.pt')

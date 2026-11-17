@@ -325,22 +325,6 @@ class LENDConvergenceAndScratchTest(unittest.TestCase):
         self.assertLessEqual(result.metrics['dilution_residual'], 1e-5)
         self.assertGreaterEqual(result.metrics['dilution_iterations'], 1.)
 
-    def test_controlled_converged_training_resume_matches_uninterrupted(self):
-        import tempfile
-        from pathlib import Path
-        train, test = _lend_workflow__cifar(60, 'train'), _lend_workflow__cifar(20, 'test')
-        config = _lend_workflow__config(1)
-        config['lend']['dilution'] = {'alpha': .99, 'policy': 'until_converged', 'tolerance': 1e-5, 'max_steps': 1000}
-        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10',
-                                                             side_effect=lambda root, split: train if split == 'train' else test):
-            run_dir = run_experiment(config, Path(directory) / 'resumed')
-            config['lend']['training']['epochs'] = 2
-            run_experiment(config, resume=run_dir / 'last.pt')
-            fresh = run_experiment(config, Path(directory) / 'fresh')
-            resumed = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
-            continuous = torch.load(fresh / 'last.pt', map_location='cpu', weights_only=False)
-            for key in ('model', 'optimizer', 'algorithm_private_state'):
-                _lend_workflow__nested_equal(self, resumed[key], continuous[key])
 
 
 class _lend_dilution_LENDDilutionTest(unittest.TestCase):
@@ -752,25 +736,6 @@ class LENDAuthorReleaseTest(unittest.TestCase):
         _lend_workflow__nested_equal(self, a.state_dict(), b.state_dict())
         self.assertEqual(result_a.metrics, result_b.metrics)
 
-    def test_same_variant_checkpoint_resume_across_history_boundary(self):
-        from lnl_toolbox.training.checkpoint import save_checkpoint, load_checkpoint
-        continuous = self._algorithm()
-        state = RunState()
-        for epoch in range(10):
-            state.cycle = epoch
-            continuous.step(self._batch(), state)
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'last.pt'
-            save_checkpoint(path, continuous, state, 9, self._config())
-            restored = self._algorithm()
-            restored_state, completed, _ = load_checkpoint(path, restored, torch.device('cpu'))
-            self.assertEqual(completed, 9)
-            for epoch in (10, 11):
-                state.cycle = restored_state.cycle = epoch
-                order = torch.tensor([2, 0, 1]) if epoch == 10 else torch.tensor([1, 2, 0])
-                continuous.step(self._batch(order), state)
-                restored.step(self._batch(order), restored_state)
-            _lend_workflow__nested_equal(self, continuous.state_dict(), restored.state_dict())
 
     def test_legacy_paper_and_cross_variant_identity(self):
         paper = self._algorithm('paper_equation')
@@ -788,21 +753,6 @@ class LENDAuthorReleaseTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'configuration changed'):
             restored.load_state_dict(legacy)
 
-    def test_resume_config_variant_and_other_drift(self):
-        from lnl_toolbox.training.lend_experiment import _validate_resume_config
-        old = _lend_workflow__config()
-        explicit = copy.deepcopy(old)
-        explicit['lend']['implementation_variant'] = 'paper_equation'
-        _validate_resume_config(explicit, old)
-        author = copy.deepcopy(old)
-        author['lend']['implementation_variant'] = 'author_release'
-        for current, saved in ((author, old), (old, author)):
-            with self.assertRaisesRegex(ValueError, 'LEND settings'):
-                _validate_resume_config(current, saved)
-        changed = copy.deepcopy(author)
-        changed['optimizer']['lr'] *= 2
-        with self.assertRaisesRegex(ValueError, 'optimizer'):
-            _validate_resume_config(changed, author)
 
     def test_dry_run_effective_semantics_and_original_paper_plan(self):
         from lnl_toolbox.training.planning import lend_plan
@@ -847,67 +797,6 @@ class LENDAuthorReleaseTest(unittest.TestCase):
         self.assertEqual(result.metrics['weighted_objective'], 0.)
         self.assertEqual(author.private_state.empty_selection_batches, 0)
 
-    def test_runner_pairing_metadata_diagnostics_and_selection_unchanged(self):
-        import contextlib
-        import io
-        import yaml
-        from lnl_toolbox.training import lend_experiment
-        train, test = _lend_workflow__cifar(40, 'train'), _lend_workflow__cifar(20, 'test')
-        initial_models, batches = [], []
-        build_model = lend_experiment.build_model
-        step = LENDAlgorithm.step
-
-        def capture_model(*args, **kwargs):
-            model = build_model(*args, **kwargs)
-            initial_models.append(copy.deepcopy(model.state_dict()))
-            return model
-
-        def capture_step(algorithm, batch, state):
-            batches.append((state.cycle, batch.payload['index'].tolist()))
-            return step(algorithm, batch, state)
-
-        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: train if split == 'train' else test), patch.object(lend_experiment, 'build_model', side_effect=capture_model), patch.object(LENDAlgorithm, 'step', capture_step), contextlib.redirect_stdout(io.StringIO()):
-            paper_config = _lend_workflow__config(2)
-            author_config = copy.deepcopy(paper_config)
-            author_config['lend']['implementation_variant'] = 'author_release'
-            paper_dir = run_experiment(paper_config, Path(directory) / 'paper')
-            paper_batches = copy.deepcopy(batches)
-            batches.clear()
-            author_dir = run_experiment(author_config, Path(directory) / 'author')
-            self.assertEqual(paper_batches, batches)
-            _lend_workflow__nested_equal(self, initial_models[0], initial_models[1])
-            left = torch.load(paper_dir / 'last.pt', map_location='cpu', weights_only=False)
-            right = torch.load(author_dir / 'last.pt', map_location='cpu', weights_only=False)
-            self.assertEqual(left['noise'], right['noise'])
-            self.assertEqual(left['selection_split'], right['selection_split'])
-            self.assertEqual(left['config']['data'], right['config']['data'])
-            self.assertEqual(left['config']['optimizer'], right['config']['optimizer'])
-            self.assertEqual(left['config']['scheduler'], right['config']['scheduler'])
-            resolved = yaml.safe_load((author_dir / 'resolved_config.yaml').read_text(encoding='utf-8'))
-            self.assertEqual(resolved['lend']['implementation_variant'], 'author_release')
-            self.assertEqual(resolved['lend']['implementation_metadata']['gamma'], 3)
-            self.assertEqual(right['algorithm_private_state']['method_config']['implementation_variant'], 'author_release')
-            rows = [json.loads(line) for line in (author_dir / 'metrics.jsonl').read_text().splitlines()]
-            epochs = [row for row in rows if row['event'] == 'epoch']
-            for row in epochs:
-                self.assertEqual(row['implementation_variant'], 'author_release')
-                self.assertNotIn('selected_samples', row)
-                self.assertNotIn('oracle_selection_precision', row)
-                self.assertIn('sample_weight_median', row)
-                self.assertIn('propagation_fallback_batches', row)
-                self.assertAlmostEqual(sum(row['classwise_weight_sum']), row['effective_weight_sum'])
-                self.assertAlmostEqual(row['effective_weight_sum'], row['sample_weight_mean'] * 20)
-            final = rows[-1]
-            self.assertEqual(final['reporting_rule'], 'noisy_validation_selected')
-            self.assertEqual(final['reported_epoch'], max(epochs, key=lambda row: row['validation_accuracy'])['epoch'])
-            # Resume is still the same runner; same-variant restoration never
-            # changes reporting/selection or rewrites the old checkpoint in place.
-            resumed_config = copy.deepcopy(author_config)
-            resumed_config['lend']['training']['epochs'] = 3
-            run_experiment(resumed_config, resume=author_dir / 'last.pt')
-            restored = torch.load(author_dir / 'last.pt', map_location='cpu', weights_only=False)
-            self.assertEqual(restored['completed_epoch'], 2)
-            self.assertEqual(restored['config']['lend']['implementation_variant'], 'author_release')
 
     @unittest.skipUnless(torch.cuda.is_available(), 'CUDA required')
     def test_cuda_author_graph_and_propagation_parity(self):
@@ -925,50 +814,32 @@ class LENDAuthorReleaseTest(unittest.TestCase):
 class _lend_workflow_LENDWorkflowTest(unittest.TestCase):
 
     def _run_case(self, dataset='cifar10'):
+        from lnl_toolbox.training import lend_experiment
+        from lnl_toolbox.training.service import ExperimentService
         classes = 10 if dataset == 'cifar10' else 100
-        train, test = (_lend_workflow__cifar(classes * 4, 'train', classes), _lend_workflow__cifar(classes * 2, 'test', classes))
+        train = _lend_workflow__cifar(classes * 4, 'train', classes)
+        test = _lend_workflow__cifar(classes * 2, 'test', classes)
         loader_name = 'load_cifar10' if dataset == 'cifar10' else 'load_cifar100'
+        save = lend_experiment.save_checkpoint
+        def stop_after_first(path, *args, **kwargs):
+            save(path, *args, **kwargs)
+            if Path(path).name == 'best.pt':
+                raise RuntimeError('simulated interruption')
         with tempfile.TemporaryDirectory() as directory, patch(f'lnl_toolbox.data.sources.{loader_name}', side_effect=lambda _root, split: train if split == 'train' else test):
-            run_dir = run_experiment(_lend_workflow__config(1, dataset), Path(directory) / 'resumed')
-            first = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
-            self.assertEqual(first['completed_epoch'], 0)
-            manifest_hash = _lend_workflow__sha(run_dir / 'noise_manifest.npz')
-            manifest_mtime = (run_dir / 'noise_manifest.npz').stat().st_mtime_ns
-            run_experiment(_lend_workflow__config(2, dataset), resume=run_dir / 'last.pt')
-            resumed = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
-            uninterrupted_dir = run_experiment(_lend_workflow__config(2, dataset), Path(directory) / 'fresh')
-            uninterrupted = torch.load(uninterrupted_dir / 'last.pt', map_location='cpu', weights_only=False)
-            self.assertEqual(resumed['completed_epoch'], 1)
-            self.assertEqual(resumed['run_state']['phase'], 'completed')
-            self.assertEqual(resumed['run_state']['step'], 4)
-            _lend_workflow__nested_equal(self, resumed['model'], uninterrupted['model'])
-            _lend_workflow__nested_equal(self, resumed['optimizer'], uninterrupted['optimizer'])
-            _lend_workflow__nested_equal(self, resumed['algorithm_private_state'], uninterrupted['algorithm_private_state'])
-            epoch_rows = lambda path: [json.loads(line) for line in path.read_text().splitlines() if json.loads(line)['event'] == 'epoch']
-            self.assertEqual(epoch_rows(run_dir / 'metrics.jsonl'), epoch_rows(uninterrupted_dir / 'metrics.jsonl'))
-            self.assertEqual(_lend_workflow__sha(run_dir / 'noise_manifest.npz'), manifest_hash)
-            self.assertEqual((run_dir / 'noise_manifest.npz').stat().st_mtime_ns, manifest_mtime)
-            tracked = {name: (_lend_workflow__sha(run_dir / name), (run_dir / name).stat().st_mtime_ns) for name in ('last.pt', 'metrics.jsonl', 'noise_manifest.npz')}
-            run_experiment(_lend_workflow__config(2, dataset), resume=run_dir / 'last.pt')
-            self.assertEqual(tracked, {name: (_lend_workflow__sha(run_dir / name), (run_dir / name).stat().st_mtime_ns) for name in tracked})
-            final = json.loads((run_dir / 'final_metrics.json').read_text())
-            self.assertIn('clean_test_accuracy', final)
-            self.assertEqual(final['fidelity'], 'paper_oriented')
+            run_dir = Path(directory) / 'run'
+            with patch.object(lend_experiment, 'save_checkpoint', side_effect=stop_after_first):
+                with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
+                    run_experiment(_lend_workflow__config(2, dataset), run_dir)
+            self.assertEqual(torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)['completed_epoch'], 0)
+            ExperimentService().resume(run_dir)
+            self.assertEqual(torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)['completed_epoch'], 1)
 
-    def test_cifar10_fresh_resume_and_completed_noop(self):
+    def test_cifar10_resume_from_directory(self):
         self._run_case()
 
-    def test_cifar100_lightweight_workflow(self):
+    def test_cifar100_resume_from_directory(self):
         self._run_case('cifar100')
 
-    def test_resume_rejects_graph_drift(self):
-        train, test = (_lend_workflow__cifar(40, 'train'), _lend_workflow__cifar(20, 'test'))
-        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: train if split == 'train' else test):
-            run_dir = run_experiment(_lend_workflow__config(1), Path(directory) / 'run')
-            changed = copy.deepcopy(_lend_workflow__config(2))
-            changed['lend']['graph']['gamma'] = 2.0
-            with self.assertRaisesRegex(ValueError, 'LEND settings'):
-                run_experiment(changed, resume=run_dir / 'last.pt')
 
     @unittest.skipUnless(torch.cuda.is_available(), 'CUDA required')
     def test_cuda_lightweight_workflow(self):

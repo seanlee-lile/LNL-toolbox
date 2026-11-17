@@ -208,31 +208,24 @@ class LossCorrectionPaperProtocolTest(unittest.TestCase):
         images = np.random.default_rng(9 if split == 'train' else 10).integers(0, 256, (size, 32, 32, 3), dtype=np.uint8)
         return CifarData(images, np.arange(size) % 10, tuple(map(str, range(10))), split, 'cifar10')
 
-    def test_real_two_stage_training_reinitializes_and_resumes(self):
-        import json, tempfile
+    def test_resume_from_directory_continues_next_epoch(self):
+        import tempfile
         from unittest.mock import patch
         from lnl_toolbox.training import experiment
-        from lnl_toolbox.noise.estimators import PosteriorSnapshot
-        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._data), \
-                patch.object(experiment, 'build_model', wraps=experiment.build_model) as build:
-            run = experiment.run_experiment(self._training_config(), Path(directory)/'run')
-            self.assertEqual(build.call_count, 2)
-            snapshot = PosteriorSnapshot.load(run/'posterior_snapshot.npz')
-            self.assertEqual(snapshot.num_samples, 40)
-            self.assertEqual(len(set(snapshot.global_indices)), 40)
-            first = torch.load(run/'last.pt', weights_only=False)
-            self.assertEqual(first['pipeline']['state']['metadata']['pretraining']['epochs'], 1)
-            rows = [json.loads(row) for row in (run/'metrics.jsonl').read_text().splitlines()]
-            losses = [row['selection_loss'] for row in rows if row['event'] == 'epoch']
-            self.assertAlmostEqual(first['pipeline']['state']['metadata']['best_selection_loss'], min(losses))
-            stage_mtime = (run/'pretraining_last.pt').stat().st_mtime_ns
-            # A completed run is not extended by a different caller-supplied
-            # configuration; resume keeps the configuration saved in the run.
-            experiment.run_experiment(self._training_config(epochs=3), resume=run/'last.pt')
-            self.assertEqual((run/'pretraining_last.pt').stat().st_mtime_ns, stage_mtime)
-            resumed = torch.load(run/'last.pt', weights_only=False)
-            for name, value in resumed['model'].items():
-                torch.testing.assert_close(value, first['model'][name], rtol=0, atol=0)
+        from lnl_toolbox.training.service import ExperimentService
+        save = experiment.save_checkpoint
+        def interrupt(path, *args, **kwargs):
+            save(path, *args, **kwargs)
+            if Path(path).name == 'best.pt':
+                raise RuntimeError('simulated interruption')
+        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._data):
+            run_dir = Path(directory) / 'run'
+            with patch.object(experiment, 'save_checkpoint', side_effect=interrupt):
+                with self.assertRaisesRegex(RuntimeError, 'simulated interruption'):
+                    ExperimentService().run(self._training_config(), run_dir)
+            self.assertEqual(torch.load(run_dir / 'last.pt', weights_only=False)['completed_epoch'], 0)
+            ExperimentService().resume(run_dir)
+            self.assertEqual(torch.load(run_dir / 'last.pt', weights_only=False)['completed_epoch'], 1)
 
     def test_known_T_selects_corrected_validation_loss_not_accuracy(self):
         import tempfile

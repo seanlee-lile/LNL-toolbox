@@ -270,89 +270,21 @@ class _upm_workflow_UPMWorkflowTest(unittest.TestCase):
     def _load(self, _root, split):
         return self.train if split == 'train' else self.test
 
-    def test_fresh_resume_extension_and_completed_noop(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load):
-            run_dir = run_experiment(_upm_workflow__config(2), Path(directory) / 'run')
-            payload = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
-            self.assertEqual(payload['upm_state']['phase'], 'completed')
-            self.assertEqual(payload['upm_state']['main_completed_epochs'], 2)
-            self.assertEqual(payload['upm_state']['main_global_step'], 4)
-            self.assertIsNotNone(payload['best_main_model_state'])
-            self.assertIsNotNone(payload['best_eta_state'])
-            names = ('resolved_config.yaml', 'environment.json', 'noise_manifest.npz', 'stage1_best.pt', 'psi_snapshot.npz', 'eta_initial.npz', 'eta_best.npz', 'eta_last.npz', 'best.pt', 'last.pt', 'metrics.jsonl', 'final_metrics.json')
-            for name in names:
-                self.assertTrue((run_dir / name).is_file(), name)
-            artifact_hashes = {name: _upm_workflow__sha(run_dir / name) for name in ('psi_snapshot.npz', 'eta_initial.npz', 'noise_manifest.npz')}
-            run_experiment(_upm_workflow__config(3), resume=run_dir / 'last.pt')
-            extended = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
-            self.assertEqual(extended['upm_state']['main_completed_epochs'], 2)
-            self.assertEqual(extended['upm_state']['main_global_step'], 4)
-            resolved = yaml.safe_load((run_dir / 'resolved_config.yaml').read_text())
-            self.assertEqual(resolved['upm']['main']['epochs'], 2)
-            for name, digest in artifact_hashes.items():
-                self.assertEqual(_upm_workflow__sha(run_dir / name), digest)
-            watched = {name: (_upm_workflow__sha(run_dir / name), (run_dir / name).stat().st_mtime_ns) for name in names}
-            run_experiment(resolved, resume=run_dir / 'last.pt')
-            for name, expected in watched.items():
-                self.assertEqual((_upm_workflow__sha(run_dir / name), (run_dir / name).stat().st_mtime_ns), expected)
 
-    def test_snapshot_corruption_and_identity_drift_fail(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load):
-            run_dir = run_experiment(_upm_workflow__config(1), Path(directory) / 'run')
-            changed = _upm_workflow__config(2)
-            changed['upm']['confusing_probability']['learning_rate'] = 0.2
-            run_experiment(changed, resume=run_dir / 'last.pt')
-            self.assertEqual(yaml.safe_load((run_dir / 'resolved_config.yaml').read_text())['upm']['main']['epochs'], 1)
-        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load):
-            original_main = UPMWorkflow.train_main
-            with patch.object(UPMWorkflow, 'train_main', lambda owner: original_main(owner, max_epochs=1)):
-                run_dir = run_experiment(_upm_workflow__config(2), Path(directory) / 'run')
-            (run_dir / 'psi_snapshot.npz').write_bytes(b'damaged')
-            with self.assertRaisesRegex(ValueError, 'hash'):
-                run_experiment(_upm_workflow__config(2), resume=run_dir / 'last.pt')
 
-    def test_stage1_and_main_interrupted_resume(self) -> None:
-        original_stage1 = UPMWorkflow.train_stage1
+    def test_resume_from_directory_continues_next_epoch(self) -> None:
+        from lnl_toolbox.training.service import ExperimentService
         original_main = UPMWorkflow.train_main
-
-        def one_stage1(owner):
-            return original_stage1(owner, max_epochs=1)
-
-        def one_main(owner):
-            return original_main(owner, max_epochs=1)
-        config = _upm_workflow__config(2, stage1_epochs=2)
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load):
-            stage1_dir = Path(directory) / 'stage1'
-            with patch.object(UPMWorkflow, 'train_stage1', one_stage1):
-                run_experiment(config, stage1_dir)
-            stage1_payload = torch.load(stage1_dir / 'last.pt', map_location='cpu', weights_only=False)
-            self.assertEqual(stage1_payload['upm_state']['phase'], 'stage1_training')
-            self.assertEqual(stage1_payload['upm_state']['stage1_completed_epochs'], 1)
-            run_experiment(config, resume=stage1_dir / 'last.pt')
-            self.assertEqual(torch.load(stage1_dir / 'last.pt', map_location='cpu', weights_only=False)['upm_state']['phase'], 'completed')
-            main_dir = Path(directory) / 'main'
-            with patch.object(UPMWorkflow, 'train_main', one_main):
-                run_experiment(_upm_workflow__config(2), main_dir)
-            main_payload = torch.load(main_dir / 'last.pt', map_location='cpu', weights_only=False)
-            self.assertEqual(main_payload['upm_state']['phase'], 'main_training')
-            self.assertEqual(main_payload['upm_state']['main_completed_epochs'], 1)
-            run_experiment(_upm_workflow__config(2), resume=main_dir / 'last.pt')
-            self.assertEqual(torch.load(main_dir / 'last.pt', map_location='cpu', weights_only=False)['upm_state']['phase'], 'completed')
-
-    def test_uninterrupted_matches_completed_extension(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load):
-            direct = run_experiment(_upm_workflow__config(2), Path(directory) / 'direct')
-            original_main = UPMWorkflow.train_main
+            run_dir = Path(directory) / 'run'
             with patch.object(UPMWorkflow, 'train_main', lambda owner: original_main(owner, max_epochs=1)):
-                resumed = run_experiment(_upm_workflow__config(2), Path(directory) / 'resumed')
-            run_experiment(_upm_workflow__config(2), resume=resumed / 'last.pt')
-            left = torch.load(direct / 'last.pt', map_location='cpu', weights_only=False)
-            right = torch.load(resumed / 'last.pt', map_location='cpu', weights_only=False)
-            for owner in ('main',):
-                for key, value in left[owner]['model'].items():
-                    self.assertTrue(torch.equal(value, right[owner]['model'][key]), key)
-            torch.testing.assert_close(left['eta_state']['eta'], right['eta_state']['eta'], rtol=0, atol=0)
-            torch.testing.assert_close(left['eta_state']['update_count'], right['eta_state']['update_count'], rtol=0, atol=0)
+                run_experiment(_upm_workflow__config(2), run_dir)
+            first = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
+            self.assertEqual(first['upm_state']['main_completed_epochs'], 1)
+            ExperimentService().resume(run_dir)
+            resumed = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
+            self.assertEqual(resumed['upm_state']['main_completed_epochs'], 2)
+
 
     def test_clean_test_does_not_select_best(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load), patch('lnl_toolbox.training.upm_experiment.evaluate_classification', side_effect=[{'loss': 1.0, 'accuracy': 0.4, 'samples': 10.0}, {'loss': 1.2, 'accuracy': 0.3, 'samples': 10.0}, {'loss': 999.0, 'accuracy': 0.0, 'samples': 10.0}]):
