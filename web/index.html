@@ -734,6 +734,7 @@
           execute: function () { runButton.click(); },
           status: function (message, kind) { statusNode.textContent = message; statusNode.className = "status " + (kind || ""); },
           switchModule: switchModule,
+          isActive: function () { return state.module === "quickstart"; },
           openPaperDetails: function (paperId) { state.paperId = paperId; state.paperRecipe = ""; switchModule("papers"); },
           compact: true,
           datasetReady: function (dataset) {
@@ -1100,6 +1101,9 @@
       const response = await fetch("/api/datasets/" + encodeURIComponent(alias) + "/declarations", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({declarations:declarations})});
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "数据集信息保存失败");
+      window.quickStartController?.datasetFactsChanged(alias).catch(function (error) {
+        console.error("Quick Start 数据集信息刷新失败", error);
+      });
       await refreshDatasets();
       if (state.dataAlias !== alias) return;
       state.dataCompatibility = payload;

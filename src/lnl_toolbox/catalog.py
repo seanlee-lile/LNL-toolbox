@@ -5,11 +5,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import lru_cache
 from importlib import metadata, resources
 import json
 import math
 from pathlib import Path
 import pickle
+from threading import RLock
 from typing import Any
 
 from lnl_toolbox.cli import repository_root
@@ -73,7 +75,11 @@ class PaperSpec:
     availability: str
 
 
-def load_yaml(path: Path, *, check_parameters: bool = False) -> dict[str, Any]:
+_catalog_lock = RLock()
+
+
+@lru_cache(maxsize=512)
+def _parsed_yaml(path: Path, revision: tuple[int, int, int]) -> dict[str, Any]:
     try:
         import yaml
     except ImportError as exc:
@@ -81,14 +87,27 @@ def load_yaml(path: Path, *, check_parameters: bool = False) -> dict[str, Any]:
             "PyYAML is required; install training dependencies with "
             "python -m pip install -e \".[train]\""
         ) from exc
-    value = yaml.safe_load(path.read_text(encoding="utf-8"))
+    loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+    value = yaml.load(path.read_text(encoding="utf-8"), Loader=loader)
     if not isinstance(value, Mapping):
         raise ValueError(f"configuration must contain a YAML mapping: {path}")
+    return dict(value)
+
+
+def _file_revision(path: Path) -> tuple[int, int, int]:
+    stat = path.stat()
+    return stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size
+
+
+def load_yaml(path: Path, *, check_parameters: bool = False) -> dict[str, Any]:
+    path = Path(path).resolve()
+    with _catalog_lock:
+        value = deepcopy(_parsed_yaml(path, _file_revision(path)))
     if check_parameters:
         errors = _config_parameter_errors(value)
         if errors:
             raise ValueError("\n".join(errors))
-    return normalize_experiment_config(dict(value))
+    return normalize_experiment_config(value)
 
 
 def _profile(path: Path) -> str:
@@ -227,9 +246,13 @@ def discover_recipes(
     public_only: bool = False,
 ) -> tuple[RecipeSpec, ...]:
     project = (root or repository_root()).resolve()
+    with _catalog_lock:
+        return _discover_recipes(project, include_conditional, public_only)
+
+
+def _discover_recipes(project: Path, include_conditional: bool, public_only: bool) -> tuple[RecipeSpec, ...]:
     manifest_paths, conditional_paths, public_recipes, identities = _recipe_manifest()
-    recipes: list[RecipeSpec] = []
-    seen: set[str] = set()
+    entries = []
     for relative in manifest_paths:
         if public_only and relative not in public_recipes:
             continue
@@ -237,13 +260,25 @@ def discover_recipes(
         if conditional and not include_conditional:
             continue
         path = _recipe_path(relative, project)
-        identity = identities.get(relative, {})
+        entries.append((path, _file_revision(path), conditional,
+                        tuple(identities.get(relative, {}).items()),
+                        tuple(public_recipes.get(relative, {}).items())))
+    return _recipe_specs(tuple(entries))
+
+
+@lru_cache(maxsize=16)
+def _recipe_specs(entries: tuple) -> tuple[RecipeSpec, ...]:
+    recipes: list[RecipeSpec] = []
+    seen: set[str] = set()
+    for path, revision, conditional, identity_items, public_items in entries:
+        identity = dict(identity_items)
+        public = dict(public_items)
         recipe_id = identity.get("id", _recipe_id(path))
         profile = identity.get("profile", _profile(path))
         if recipe_id in seen:
             recipe_id = f"{path.parent.name}-{recipe_id}"
         seen.add(recipe_id)
-        config = load_yaml(path)
+        config = normalize_experiment_config(deepcopy(_parsed_yaml(path, revision)))
         data = config.get("data")
         # Auxiliary stage configs (for example Mentor training) are not
         # standalone experiment recipes and remain available to their CLI.
@@ -273,9 +308,9 @@ def discover_recipes(
                 ),
                 reproduction_status="not_run",
                 availability="conditional" if conditional else "runnable",
-                visibility="public" if relative in public_recipes else "internal",
-                label=public_recipes.get(relative, {}).get("label", recipe_id),
-                description=public_recipes.get(relative, {}).get("description", ""),
+                visibility="public" if public else "internal",
+                label=public.get("label", recipe_id),
+                description=public.get("description", ""),
             )
         )
     return tuple(recipes)
@@ -297,17 +332,15 @@ def recipe_by_id(recipe_id: str, root: Path | None = None) -> RecipeSpec:
         raise ValueError(f"unknown recipe {recipe_id!r}{hint}") from exc
 
 
-def load_papers(root: Path | None = None) -> tuple[PaperSpec, ...]:
+def load_papers(root: Path | None = None, *, recipes: Mapping[str, RecipeSpec] | None = None) -> tuple[PaperSpec, ...]:
     project = (root or repository_root()).resolve()
     raw = json.loads(
         resources.files("lnl_toolbox").joinpath("paper_catalog.json").read_text(
             encoding="utf-8"
         )
     )
-    recipes = {
-        item.id: item
-        for item in discover_recipes(project, include_conditional=True)
-    }
+    if recipes is None:
+        recipes = {item.id: item for item in discover_recipes(project, include_conditional=True)}
     papers: list[PaperSpec] = []
     for item in raw:
         parsed_configs: list[PaperConfig] = []

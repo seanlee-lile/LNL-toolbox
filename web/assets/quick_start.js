@@ -86,10 +86,32 @@
   let context = null;
   let panel = null;
   let loadingTimer = null;
+  let activeRequests = 0;
   let renderedStep = null;
   let reviewToken = 0;
   let methodsToken = 0;
   let planToken = 0;
+  let registeredLoaded = false;
+  let noiseInitialized = false;
+  const reads = new Map();
+  const plans = new Map();
+  const methods = new Map();
+  const registeredDatasets = new Map();
+  const datasetRevisions = new Map();
+
+  function reuse(map, key, load) {
+    if (map.has(key)) return map.get(key);
+    const pending = Promise.resolve(load()).catch(function (error) {
+      if (map.get(key) === pending) map.delete(key);
+      throw error;
+    });
+    map.set(key, pending);
+    return pending;
+  }
+
+  function readOnce(url, message) {
+    return reuse(reads, url, function () { return request(url, undefined, message); });
+  }
 
   function esc(value) {
     return String(value == null ? "" : value).replace(/[&<>"']/g, function (char) {
@@ -107,9 +129,13 @@
     async function refresh() {
       if (!node.isConnected) { if (timer) clearTimeout(timer); return; }
       try {
-        const response = await fetch("/api/external-resources?" + query);
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || "无法检查外部数据");
+        const url = "/api/external-resources?" + query;
+        const payload = await reuse(reads, url, async function () {
+          const response = await fetch(url);
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || "无法检查外部数据");
+          return data;
+        });
         if (!node.isConnected) return;
         const items = payload.resources || [];
         const downloading = items.some(function (item) { return item.status === "downloading"; });
@@ -123,7 +149,12 @@
             (item.url && !compact ? '<a href="' + esc(item.url) + '" target="_blank" rel="noreferrer">自行下载</a>' : '') +
             (openPaper && !item.ready ? '<button type="button" class="secondary" data-external-paper>前往论文栏查看准备说明</button>' : '') + '</div></div>';
         }).join('') + '<button type="button" class="secondary" data-external-refresh>刷新状态</button></div>' : '';
-        node.querySelector("[data-external-refresh]")?.addEventListener("click", refresh);
+        const refreshStatus = function () {
+          if (!node.isConnected) return;
+          reads.delete(url);
+          return refresh();
+        };
+        node.querySelector("[data-external-refresh]")?.addEventListener("click", refreshStatus);
         node.querySelectorAll("[data-external-paper]").forEach(function (button) { button.onclick = openPaper; });
         node.querySelectorAll("[data-external-download]").forEach(function (button) {
           button.onclick = async function () {
@@ -134,7 +165,7 @@
               const body = await result.json();
               if (!result.ok) throw new Error(body.error || "下载失败");
               wasDownloading = true;
-              await refresh();
+              await refreshStatus();
             } catch (error) {
               if (!node.isConnected) return;
               button.disabled = false;
@@ -147,7 +178,7 @@
           };
         });
         if (timer) clearTimeout(timer);
-        if (downloading) timer = setTimeout(refresh, 1000);
+        if (downloading) timer = setTimeout(refreshStatus, 1000);
         if (completed && onDownloaded) onDownloaded();
       } catch (error) {
         if (!node.isConnected) return;
@@ -189,13 +220,16 @@
     render();
   }
   function request(url, options, message) {
+    activeRequests++;
     beginLoading(message);
     return fetch(url, options).then(function (response) {
       return response.json().then(function (payload) {
         if (!response.ok) throw new Error(payload.error || "Quick Start 请求失败");
         return payload;
       });
-    }).finally(endLoading);
+    }).finally(function () {
+      if (--activeRequests === 0) endLoading();
+    });
   }
   function post(url, body, message) {
     return request(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)}, message);
@@ -211,8 +245,9 @@
     if (context && context.status) context.status(message, kind || "");
   }
   function loadRegistered() {
-    return request("/api/datasets", undefined, "正在读取数据集…").then(function (payload) {
+    return readOnce("/api/datasets", "正在读取数据集…").then(function (payload) {
       state.registered = (payload.datasets || []).filter(function (item) { return item.location; });
+      registeredLoaded = true;
     }).catch(function (error) { state.error = String(error.message || error); });
   }
   function pickPath() {
@@ -243,6 +278,8 @@
     state.parameterError = "";
     state.review = null;
     reviewToken++;
+    methodsToken++;
+    planToken++;
     state.error = "";
     state.currentStep = 0;
     if (redraw) render();
@@ -291,12 +328,15 @@
         (selected?.key === "binary_asymmetric_rcn" ? '<div class="qs-noise-inputs"><label>正类翻转率<input id="qs-rho-positive" type="number" min="0" max="1" step="0.01" value="' + esc(state.noiseSelection.rho_positive ?? 0.2) + '"></label><label>负类翻转率<input id="qs-rho-negative" type="number" min="0" max="1" step="0.01" value="' + esc(state.noiseSelection.rho_negative ?? 0.1) + '"></label></div><p class="helper">分别表示真实正类被标成负类、真实负类被标成正类的概率；两者之和必须小于 1。</p>' :
         selected?.requires_rate ? '<label>' + (selected.key === "official_uniform_flip" ? '标签替换比例' : '人工噪声率') + '<input id="qs-rate" type="number" min="0" max="1" step="0.01" value="' + esc(state.noiseSelection.rate == null ? "0.2" : state.noiseSelection.rate) + '"></label><p class="helper">' + (selected.key === "official_uniform_flip" ? '替换后可能与原标签相同，因此实际错误比例可能更低。' : selected.key === "pdl" ? '控制生成实例依赖噪声的目标比例。' : '控制标签翻转比例。') + '</p>' : '') +
         (selected?.key === "pairflip" ? '<p class="helper">当前翻转方向固定为：' + Array.from({length:state.dataset.num_classes}, function (_, i) { return i + ' → ' + ((i + 1) % state.dataset.num_classes); }).join('，') + '。当前不能在这里修改方向。</p>' : '') +
-        (selected?.key === "symmetric" ? '<p class="helper">翻转后，在其余类别中均匀选择目标。具体采样方式由所选论文配置决定。</p>' : '') +
+        (selected?.key === "symmetric" ? '<p class="helper">翻转后，在其余类别中均匀选择目标。</p>' : '') +
         (selected?.key === "pdl" ? '<p class="helper">以输入的噪声率为截断正态分布的位置参数，标准差固定为 0.1；结合样本输入和随机权重生成翻转概率。</p>' : '') +
         (selected?.key === "class_conditional" ? '<label>类别转移矩阵<textarea id="qs-transition-matrix" rows="8" style="width:100%">' + esc(JSON.stringify(state.noiseSelection.transition_matrix || Array.from({length:state.dataset.num_classes}, function (_, row) { return Array.from({length:state.dataset.num_classes}, function (_, col) { return Number(row === col); }); }))) + '</textarea></label><p class="helper">填写 JSON 二维数组。第 i 行第 j 列是原类别 i 被标为类别 j 的概率；每行之和必须为 1。默认单位矩阵不会翻转任何标签。</p>' : '') +
         (selected?.key === "external_torch" ? '<label>外部标签文件路径<span class="path-control"><input id="qs-noise-path" value="' + esc(state.noiseSelection.path || "") + '" placeholder="例如 data/cal/IDN_0.2_C10.pt"><button type="button" id="qs-noise-pick" data-picker-target="qs-noise-path" data-picker-mode="open_file" data-picker-kind="all" aria-label="浏览外部标签文件">浏览</button></span></label>' + (!state.noiseSelection.path ? '<p class="qs-feedback qs-warning">请选择外部标签文件后继续。</p>' : '') + '<p class="helper">文件包含 clean_label_train 和 noise_label_train，顺序须与当前训练池一致；子集需要使用对齐后的标签文件。</p>' : '') : '<p class="helper">不加噪：按登记的干净标签直接训练；不需要噪声率。</p>');
     const unknownMessage = '<div class="qs-feedback qs-warning"><strong>训练标签的干净性尚不能确认</strong><p>现有数据资料不足以判断其是否含噪，不能默认它是干净数据并提供人工加噪。可先在“数据集”中补充有依据的标签事实；也可以只按当前观测标签继续检查方法。</p><button type="button" id="qs-open-dataset-facts" class="secondary">查看数据集事实</button> <button type="button" id="qs-confirm-labels" class="secondary">按当前标签继续</button></div>';
-    return '<section id="qs-noise-step" class="qs-step"><h3>2. 标签噪声</h3>' + (native ? noisy : unknown || state.noise.dataset_state === "unknown" ? unknownMessage : clean) +
+    const mismatch = noiseDatasetMismatch();
+    const warning = mismatch ? '<div class="qs-feedback qs-warning">' + esc(mismatch) +
+      ' <button type="button" id="qs-use-dataset-noise" class="secondary">使用当前数据集的标签设置</button></div>' : "";
+    return '<section id="qs-noise-step" class="qs-step"><h3>2. 标签噪声</h3>' + warning + (native ? noisy : unknown || state.noise.dataset_state === "unknown" ? unknownMessage : clean) +
       '<label>实验随机种子<input id="qs-seed" type="number" min="0" step="1" value="' + esc(state.noiseSelection.seed == null ? "1" : state.noiseSelection.seed) + '"></label><p class="helper">同一个种子用于本次实验的数据划分、人工加噪（若启用）和其他随机步骤。</p></section>';
   }
   function methodCard(item) {
@@ -384,7 +424,7 @@
   function reviewSignature() {
     return JSON.stringify([state.plan?.plan_id, state.plan?.status, state.plan?.command, state.plan?.dry_run_command,
       state.planSchema?.fields.map(function (field) { return [field.path, field.value]; }),
-      state.parameterDraft, state.methodInputs, state.dataset?.alias]);
+      state.parameterDraft, state.methodInputs, methodSignature()]);
   }
   function reviewTitle(review) {
     return ({saving:"正在准备最终配置…", validating:"正在完整验证这份配置…", ready:"配置验证通过，可以开始训练", started:"训练已启动", error:"验证未通过"})[review?.phase] || "请返回运行计划，点击下一步进行验证";
@@ -488,6 +528,25 @@
     }
     return values.map(function (value) { return (field.choices || []).find(function (item) { return item.value === value; }) || {value:value, label:value}; });
   }
+  function parameterOptions(choices, value) {
+    const current = String(value ?? "");
+    const options = choices.some(option => option.value === current)
+      ? choices : [{value:current, label:"当前配置含未支持选项", unsupported:true}, ...choices];
+    return window.parameterChoiceHelp.options(options, current);
+  }
+  function updateModelOptions(editor, path) {
+    if (!/(^|\.)model\.(name|variant)$/.test(path)) return;
+    const prefix = path.slice(0, path.lastIndexOf("."));
+    for (const input of editor.querySelectorAll("select[data-qs-param]")) {
+      const dependent = input.dataset.qsParam;
+      if (dependent !== prefix + ".weights" && !(path.endsWith(".name") && dependent === prefix + ".variant")) continue;
+      const field = state.planSchema.fields.find(item => item.path === dependent);
+      const choices = field && modelChoices(field);
+      if (!choices) continue;
+      input.innerHTML = parameterOptions(choices, parameterValue(field));
+      window.parameterChoiceHelp.update(input);
+    }
+  }
   function renderParameterField(field, segmentable) {
     segmentable = Boolean(segmentable && field.editable && field.display_group !== "restricted");
     const value = parameterValue(field);
@@ -505,10 +564,7 @@
     } else if (field.kind === "list" || field.kind === "object") {
       control = '<textarea data-qs-param="' + esc(field.path) + '"' + (readonly ? ' disabled' : '') + '>' + esc(JSON.stringify(value)) + '</textarea>';
     } else if (choices) {
-      const current = String(value ?? "");
-      const options = choices.some(function (option) { return option.value === current; })
-        ? choices : [{value:current, label:"当前配置含未支持选项", unsupported:true}, ...choices];
-      control = '<select data-qs-param="' + esc(field.path) + '"' + (readonly ? ' disabled' : '') + '>' + window.parameterChoiceHelp.options(options, current) + '</select>';
+      control = '<select data-qs-param="' + esc(field.path) + '"' + (readonly ? ' disabled' : '') + '>' + parameterOptions(choices, value) + '</select>';
     } else {
       const shown = selectedDataset ? state.dataset.alias : value == null ? "" : value;
       control = '<input type="' + (field.kind === "number" ? "number" : "text") + '" value="' + esc(shown) + '" data-qs-param="' + esc(field.path) + '"' + (split ? ' min="0" max="' + esc(currentTrainCount - 1) + '" step="1"' : '') + (readonly ? ' disabled' : '') + '>';
@@ -776,8 +832,7 @@
     if (!state.planSchema) return '<p class="helper">正在加载当前运行配置的参数…</p>';
     // Dataset, noise and the single experiment seed are controlled in the
     // earlier steps; never present duplicate editors for the same setting.
-    const earlierStepPaths = new Set(["data.name", "noise.name", "noise.rate", "noise.seed", "seed"]);
-    const fields = (state.planSchema.fields || []).filter(function (field) { return field.visible !== false && !earlierStepPaths.has(field.path); });
+    const fields = (state.planSchema.fields || []).filter(function (field) { return field.visible !== false && !isQuickStartInput(field.path); });
     const maxSteps = fields.find(function (field) { return field.path === "trainer.max_steps"; });
     const stepBudget = state.planSchema.method === "l2rw" && Number(scheduleValue(maxSteps)) > 0;
     const unusedBudgetPaths = new Set(stepBudget ? ["trainer.epochs"] : ["trainer.max_steps"]);
@@ -859,7 +914,7 @@
     return '<section class="qs-step qs-next-actions"><h3>完整方法兼容性引导</h3><p>' + intro + '</p>' + renderQuickStartCarousel() + '</section>';
   }
   function render() {
-    if (!panel) return;
+    if (!panel || context?.isActive?.() === false) return;
     if (state.dataset && context && context.datasetReady) context.datasetReady(state.dataset);
     if (context && context.paperSelected) context.paperSelected(state.methods.find(function (item) { return item.paper_id === state.selectedPaperId; }) || null);
     const compact = Boolean(context && context.compact);
@@ -892,6 +947,12 @@
     });
     panel.querySelectorAll(".qs-candidate").forEach(function (button) { button.addEventListener("click", function () { registerPath(state.path, this.dataset.adapter); }); });
     document.getElementById("qs-noise")?.addEventListener("change", updateNoise);
+    document.getElementById("qs-use-dataset-noise")?.addEventListener("click", function () {
+      state.noiseSelection = datasetNoiseDefault(state.noise);
+      invalidateMethodView();
+      state.error = "";
+      render();
+    });
     document.getElementById("qs-add-noise")?.addEventListener("change", updateNoise);
     document.getElementById("qs-rate")?.addEventListener("change", updateNoise);
     document.getElementById("qs-rho-positive")?.addEventListener("change", updateNoise);
@@ -923,9 +984,33 @@
       if (context?.openPaperDetails) context.openPaperDetails(state.selectedPaperId);
       else context?.switchModule?.("papers");
     });
+    bindPlanParameters(panel.querySelector(".qs-parameter-panel"));
+    document.getElementById("qs-apply-inputs")?.addEventListener("click", buildPlan);
+    document.getElementById("qs-run")?.addEventListener("click", function () { executePlan(); });
+    if (renderedStep !== state.currentStep) {
+      renderedStep = state.currentStep;
+      window.scrollConsoleToTop?.();
+    }
+  }
+  function refreshPlanParameters() {
+    const editor = panel.querySelector(".qs-parameter-panel");
+    if (!editor) return;
+    const details = Array.from(editor.querySelectorAll("details"), item => item.open);
+    const active = document.activeElement;
+    const focusKey = item => [item.tagName, JSON.stringify(item.dataset), item.getAttribute("aria-label")].join("|");
+    const key = active && editor.contains(active) ? focusKey(active) : null;
+    const template = document.createElement("template");
+    template.innerHTML = renderPlanParameters();
+    const next = template.content.firstElementChild;
+    editor.replaceWith(next);
+    next.querySelectorAll("details").forEach((item, index) => { item.open = details[index] ?? false; });
+    bindPlanParameters(next);
+    if (key) Array.from(next.querySelectorAll("input, select, button, textarea, summary")).find(item => focusKey(item) === key)?.focus({preventScroll:true});
+  }
+  function bindPlanParameters(panel) {
+    if (!panel) return;
     function markParameterEdited() {
-      const note = panel.querySelector(".qs-parameter-panel > .qs-feedback");
-      if (!note) panel.querySelector(".qs-parameter-panel")?.insertAdjacentHTML("beforeend", '<p class="qs-feedback qs-warning">参数已修改，仅写入本次配置；不会改动论文原始 YAML。开始前会验证这份配置。</p>');
+      if (!panel.querySelector(":scope > .qs-feedback")) panel.insertAdjacentHTML("beforeend", '<p class="qs-feedback qs-warning">参数已修改，仅写入本次配置；不会改动论文原始 YAML。开始前会验证这份配置。</p>');
     }
     panel.querySelectorAll("[data-qs-param]").forEach(function (input) { input.addEventListener(input.tagName === "SELECT" ? "change" : "input", function () {
       window.parameterChoiceHelp.update(input);
@@ -947,7 +1032,7 @@
         }
       }
       markParameterEdited();
-      if (/(^|\.)model\.(name|variant)$/.test(path)) render();
+      updateModelOptions(panel, path);
     }); });
     window.parameterListEditor.bind(panel, function (path) { return Array.from(panel.querySelectorAll('[data-qs-param]')).find(function (input) { return input.dataset.qsParam === path; }); });
     const budgetPaths = new Set(scheduleGroups(state.planSchema?.fields || []).map(function (group) { return scheduleBudgetField(group, state.planSchema.fields)?.path; }).filter(Boolean));
@@ -956,20 +1041,20 @@
     }
     budgetPaths.add("trainer.max_steps");
     panel.querySelectorAll("[data-qs-param]").forEach(function (input) {
-      if (budgetPaths.has(input.dataset.qsParam)) input.addEventListener("change", render);
+      if (budgetPaths.has(input.dataset.qsParam)) input.addEventListener("change", refreshPlanParameters);
     });
     panel.querySelectorAll("[data-qs-segment-param]").forEach(function (checkbox) { checkbox.addEventListener("change", function () {
       state.segmentedPaths[this.dataset.qsSegmentParam] = this.checked;
-      render();
+      refreshPlanParameters();
     }); });
     panel.querySelectorAll("[data-qs-schedule-expand]").forEach(function (button) { button.addEventListener("click", function () {
       const prefix = this.dataset.qsScheduleExpand;
       state.expandedSchedules[prefix] = !state.expandedSchedules[prefix];
-      render();
+      refreshPlanParameters();
     }); });
     panel.querySelectorAll(".qs-schedule-mode select").forEach(function (select) { select.addEventListener("change", function () {
       setScheduleMode(this.dataset.qsParam.slice(0, -5), this.value);
-      render();
+      refreshPlanParameters();
     }); });
     function scheduleField(prefix, suffix) {
       return (state.planSchema?.fields || []).find(function (field) { return field.path === prefix + "." + suffix; });
@@ -992,7 +1077,7 @@
     panel.querySelectorAll("[data-qs-schedule-toggle]").forEach(function (toggle) { toggle.addEventListener("change", function () {
       setScheduleEnabled(this.dataset.qsScheduleToggle, this.checked);
       if (this.checked) state.expandedSchedules[this.dataset.qsScheduleToggle] = true;
-      render();
+      refreshPlanParameters();
     }); });
     panel.querySelectorAll("[data-qs-schedule-milestone]").forEach(function (input) { input.addEventListener("change", function () {
       const field = scheduleMilestoneField(this.dataset.qsScheduleMilestone);
@@ -1009,7 +1094,7 @@
       const ordered = milestones.map(function (point, index) { return {point:point, rate:explicit?.[index]}; }).sort(function (a, b) { return a.point - b.point; });
       state.parameterDraft[field.path] = JSON.stringify(ordered.map(function (item) { return item.point; }));
       if (explicitField && explicit) state.parameterDraft[explicitField.path] = JSON.stringify(ordered.map(function (item) { return item.rate; }));
-      render();
+      refreshPlanParameters();
     }); });
     panel.querySelectorAll("[data-qs-schedule-add]").forEach(function (button) { button.addEventListener("click", function () {
       const field = scheduleMilestoneField(this.dataset.qsScheduleAdd);
@@ -1021,7 +1106,7 @@
       milestones.push(next);
       state.parameterDraft[field.path] = JSON.stringify(milestones);
       if (explicitField && explicit) state.parameterDraft[explicitField.path] = JSON.stringify(explicit.concat(explicit.at(-1) ?? Number(scheduleValue(scheduleBaseField(this.dataset.qsScheduleAdd, state.planSchema?.fields || [])))));
-      render();
+      refreshPlanParameters();
     }); });
     panel.querySelectorAll("[data-qs-schedule-remove]").forEach(function (button) { button.addEventListener("click", function () {
       const field = scheduleMilestoneField(this.dataset.qsScheduleRemove);
@@ -1032,7 +1117,7 @@
       milestones.splice(Number(this.dataset.index), 1);
       state.parameterDraft[field.path] = JSON.stringify(milestones);
       if (explicitField && explicit) { explicit.splice(Number(this.dataset.index), 1); state.parameterDraft[explicitField.path] = JSON.stringify(explicit); }
-      render();
+      refreshPlanParameters();
     }); });
     panel.querySelectorAll("[data-qs-schedule-rate]").forEach(function (input) { input.addEventListener("change", function () {
       const prefix = this.dataset.qsScheduleRate;
@@ -1054,27 +1139,21 @@
         const values = currentScheduleRates(prefix);
         values[Number(this.dataset.index)] = rate;
         state.parameterDraft[explicitField.path] = JSON.stringify(values);
-        render();
+        refreshPlanParameters();
         return;
       }
       state.parameterDraft[gammaField.path] = String(Math.pow(rate / base, 1 / (Number(this.dataset.index) + 1)));
-      render();
+      refreshPlanParameters();
     }); });
-    document.getElementById("qs-apply-inputs")?.addEventListener("click", buildPlan);
-    document.getElementById("qs-run")?.addEventListener("click", function () { executePlan(); });
-    if (renderedStep !== state.currentStep) {
-      renderedStep = state.currentStep;
-      window.scrollConsoleToTop?.();
-    }
   }
   function loadPlanSchema(plan) {
     const signature = planRequestSignature();
     const current = function () { return state.plan?.plan_id === plan.plan_id && state.selectedPaperId === plan.paper_id && signature === planRequestSignature(); };
     const selected = state.methods.find(function (item) { return item.paper_id === plan.paper_id; });
-    const source = plan.recipe_id ? "recipe=" + encodeURIComponent(plan.recipe_id)
+    const source = plan.recipe_id ? "recipe=" + encodeURIComponent(plan.recipe_id) + "&quickstart_dataset=" + encodeURIComponent(state.dataset.alias)
       : plan.generated_config_path ? "path=" + encodeURIComponent(plan.generated_config_path) + "&recipe_hint=" + encodeURIComponent(selected?.recipe_id || "") : "";
     if (!source) return Promise.resolve();
-    return request("/api/config-schema?" + source, undefined, "正在读取参数…").then(function (schema) {
+    return readOnce("/api/config-schema?" + source, "正在读取参数…").then(function (schema) {
       if (!current()) return;
       state.planSchema = schema;
       state.parameterError = "";
@@ -1092,7 +1171,7 @@
       const stageSwitch = field.kind === "boolean" && /\.(early_stopping|warmup_early_stopping)$/.test(field.path);
       const hasDraft = Object.prototype.hasOwnProperty.call(state.parameterDraft, field.path);
       if (!hasDraft && !stageSwitch) continue;
-      if (!field.editable || field.visible === false || field.path === "data.name") continue;
+      if (!field.editable || field.visible === false || isQuickStartInput(field.path)) continue;
       const group = scheduleGroups(fields).find(group => field.path.startsWith(group.prefix + ".") && field.path !== group.prefix + ".name");
       if (group) {
         const name = scheduleValue(group.fields.find(item => item.path === group.prefix + ".name"));
@@ -1123,6 +1202,9 @@
     }
     return patches;
   }
+  function isQuickStartInput(path) {
+    return /^(?:noise(?:\.|$)|seed$|data\.(?:name|root|path|noise_path|labels_path|annotation_root|seed)$)/.test(path);
+  }
   function commandForSavedConfig(command, plan, path) {
     const original = plan.recipe_id ? "--recipe " + plan.recipe_id : "--config " + plan.generated_config_path;
     if (!command || !command.includes(original)) throw new Error("运行计划的配置来源已变化，请重新生成计划");
@@ -1149,10 +1231,15 @@
   async function reviewPlan() {
     const plan = state.plan;
     if (!plan || plan.status !== "ready" || !state.planSchema || state.parameterError) return;
-    const token = ++reviewToken;
     const signature = reviewSignature();
-    const current = function () { return token === reviewToken && signature === reviewSignature() && quickStartSteps()[state.currentStep]?.id === "review"; };
+    if (state.review?.signature === signature && state.review.phase !== "error" && Date.now() < state.review.expiresAt) {
+      render();
+      return;
+    }
+    const token = ++reviewToken;
+    const current = function () { return token === reviewToken && signature === reviewSignature(); };
     state.review = {phase:"saving", signature, lines:[]};
+    state.review.expiresAt = Date.now() + 9 * 60 * 1000;
     render();
     async function jsonRequest(url, body) {
       const response = await fetch(url, body ? {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)} : undefined);
@@ -1201,6 +1288,7 @@
   async function executePlan() {
     const review = state.review;
     if (review?.phase !== "ready" || review.signature !== reviewSignature()) return;
+    if (Date.now() >= review.expiresAt) return reviewPlan();
     review.phase = "saving"; updateReview();
     try {
       const response = await fetch("/api/quick-start/training-config", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(review.snapshot)});
@@ -1241,10 +1329,17 @@
         matrix = JSON.parse(document.getElementById("qs-transition-matrix")?.value || JSON.stringify(Array.from({length:state.dataset.num_classes}, function (_, row) { return Array.from({length:state.dataset.num_classes}, function (_, col) { return Number(row === col); }); })));
       } catch (error) { matrix = null; }
     }
-    const labelPath = key === "external_torch" ? (document.getElementById("qs-noise-path")?.value || state.noiseSelection.path || "").trim() : null;
+    const labelPath = key === "external_torch" ? (document.getElementById("qs-noise-path")?.value ?? state.noiseSelection.path ?? "").trim() : null;
     const rawSeed = document.getElementById("qs-seed")?.value ?? 1;
     const seed = String(rawSeed).trim() === "" ? null : Number(rawSeed);
-    state.noiseSelection = {kind:native ? "native" : addNoise ? "synthetic" : "clean", key:key, rate:rate, seed:seed, rho_positive:positive, rho_negative:negative, transition_matrix:matrix, path:labelPath};
+    const selection = {kind:native ? "native" : addNoise ? "synthetic" : "clean", key:key, rate:rate, seed:seed, rho_positive:positive, rho_negative:negative, transition_matrix:matrix, path:labelPath};
+    if (JSON.stringify(selection) === JSON.stringify(state.noiseSelection)) return;
+    state.noiseSelection = selection;
+    invalidateMethodView();
+    render();
+  }
+
+  function invalidateMethodView() {
     state.methods = [];
     state.methodCheckSignature = "";
     state.selectedPaperId = "";
@@ -1255,13 +1350,16 @@
     state.parameterDraft = {};
     state.segmentedPaths = {};
     state.scheduleStash = {};
-    render();
+    state.review = null;
+    ++reviewToken;
     ++methodsToken;
     ++planToken;
   }
 
   function validateNoiseSelectionForCheck() {
     const selection = state.noiseSelection || {};
+    const mismatch = noiseDatasetMismatch();
+    if (mismatch) { state.error = mismatch; render(); return false; }
     if (!Number.isInteger(selection.seed)) { state.error = "随机种子须填写整数"; render(); return false; }
     if (selection.kind === "synthetic") {
       const option = (state.noise?.options || []).find(function (item) { return item.key === selection.key; });
@@ -1292,8 +1390,9 @@
       state.error = "请填写 0 到 1 之间的原始噪声率，并说明数字的依据"; render(); return;
     }
     const rate = {status:state.nativeRateMode, value:value, provenance:source};
-    post("/api/datasets/" + encodeURIComponent(state.dataset.alias) + "/declarations", {declarations:{noise_rate:rate}}, "正在保存数据集噪声率…")
-      .then(function () { state.error = ""; return loadNoise(); })
+    const alias = state.dataset.alias;
+    post("/api/datasets/" + encodeURIComponent(alias) + "/declarations", {declarations:{noise_rate:rate}}, "正在保存数据集噪声率…")
+      .then(function () { state.error = ""; return datasetFactsChanged(alias); })
       .catch(function (error) { state.error = String(error.message || error); render(); });
   }
   async function advanceQuickStart() {
@@ -1308,6 +1407,7 @@
     if (active.id === "noise") {
       if (!validateNoiseSelectionForCheck()) return;
       if (!await loadMethods()) return;
+      if (quickStartSteps()[state.currentStep]?.id !== "noise") return;
       if (state.pendingPaper) { await continuePendingPaper(true); return; }
       const methodIndex = quickStartStepIndex("methods");
       if (methodIndex < 0) { state.error = "没有可检查的论文方法。"; render(); return; }
@@ -1328,21 +1428,92 @@
   function registerPath(path, adapter, alreadyRegistered, discardConfirmed = false) {
     if (!discardConfirmed && state.dataset && !confirmConfigurationChange()) return Promise.resolve(null);
     const message = "正在读取数据集…";
-    return post("/api/quick-start/register", {path:path, adapter:adapter || ""}, message).then(function (payload) { if (payload.kind !== "dataset") { state.probe = payload; render(); return; } state.dataset = payload.dataset; state.path = payload.dataset.path; state.error = ""; state.selectedPaperId = ""; state.plan = null; state.planSchema = null; state.parameterDraft = {}; state.segmentedPaths = {}; state.scheduleStash = {}; state.methodListExpanded = false; state.currentStep = 0; return loadRegistered().then(function () { render(); return loadNoise(); }).then(function () { if (state.noise) state.currentStep = quickStartStepIndex("noise"); render(); }); }).catch(function (error) { state.error = String(error.message || error); render(); return null; });
+    const register = function () { return post("/api/quick-start/register", {path:path, adapter:adapter || ""}, message); };
+    const result = alreadyRegistered && registeredDatasets.has(path)
+      ? Promise.resolve(registeredDatasets.get(path)) : register();
+    return result.then(async function (payload) {
+      if (payload.kind !== "dataset") { state.probe = payload; render(); return; }
+      registeredDatasets.set(payload.dataset.path, payload);
+      state.dataset = payload.dataset;
+      state.path = payload.dataset.path;
+      state.error = "";
+      invalidateMethodView();
+      if (!alreadyRegistered) {
+        reads.delete("/api/datasets");
+        await loadRegistered();
+      }
+      await loadNoise();
+      if (state.noise) state.currentStep = quickStartStepIndex("noise");
+      render();
+    }).catch(function (error) { state.error = String(error.message || error); render(); return null; });
+  }
+  function noiseOptionsUrl(alias) {
+    return "/api/quick-start/noises?dataset=" + encodeURIComponent(alias);
+  }
+  function datasetFactsChanged(alias) {
+    reads.delete(noiseOptionsUrl(alias));
+    datasetRevisions.set(alias, (datasetRevisions.get(alias) || 0) + 1);
+    if (state.dataset?.alias !== alias) return Promise.resolve();
+    invalidateMethodView();
+    state.noise = null;
+    state.currentStep = 0;
+    if (context?.isActive?.() === false) return Promise.resolve();
+    return openNoiseStep(alias);
+  }
+  function openNoiseStep(alias) {
+    return loadNoise().then(function () {
+      if (state.dataset?.alias === alias) state.currentStep = quickStartStepIndex("noise");
+      render();
+    });
+  }
+  function datasetNoiseDefault(payload) {
+    const key = ["native", "noisy"].includes(payload.dataset_state) ? "native" : "clean";
+    return {kind:key, key:key, rate:null, seed:state.noiseSelection.seed};
+  }
+  function noiseDatasetMismatch() {
+    if (!state.noise) return "";
+    const kind = state.noiseSelection.kind;
+    const native = ["native", "noisy"].includes(state.noise.dataset_state);
+    if (native && kind !== "native") return "当前数据集已含噪声，先前的标签设置不适用。";
+    if (!native && kind === "native") return "先前选择了使用原始噪声，当前数据集不支持该设置。";
+    if (kind === "synthetic" && state.noise.dataset_state !== "clean") return "当前数据集不能添加人工噪声。";
+    return "";
   }
   function loadNoise() {
-    return request("/api/quick-start/noises?dataset=" + encodeURIComponent(state.dataset.alias), undefined, "正在读取标签与噪声选项…").then(function (payload) { state.noise = payload; state.nativeRateMode = "unknown"; state.labelsConfirmed = !payload.requires_confirmation; state.methods = []; state.methodCheckSignature = ""; state.selectedPaperId = ""; state.plan = null; state.planSchema = null; state.methodInputs = {}; if (["native", "noisy"].includes(payload.dataset_state)) state.noiseSelection = {kind:"native", key:"native", rate:null, seed:state.noiseSelection.seed ?? 1}; else state.noiseSelection = {kind:"clean", key:"clean", rate:null, seed:state.noiseSelection.seed ?? 1}; render(); return payload; });
+    const alias = state.dataset.alias;
+    return readOnce(noiseOptionsUrl(alias), "正在读取标签与噪声选项…").then(function (payload) {
+      if (state.dataset?.alias !== alias || state.noise === payload) return payload;
+      state.noise = payload;
+      state.nativeRateMode = "unknown";
+      state.labelsConfirmed = !payload.requires_confirmation;
+      if (!noiseInitialized) {
+        state.noiseSelection = datasetNoiseDefault(payload);
+        noiseInitialized = true;
+      }
+      render();
+      return payload;
+    });
+  }
+  function methodSignature() {
+    const alias = state.dataset?.alias;
+    const noise = state.noiseSelection;
+    return JSON.stringify([alias, noise.kind, noise.key, noise.rate, noise.seed,
+      noise.rho_positive, noise.rho_negative, noise.transition_matrix, noise.path,
+      datasetRevisions.get(alias) || 0]);
   }
   function loadMethods() {
     if (!state.dataset || !state.noiseSelection) return Promise.resolve(false);
-    const signature = JSON.stringify([state.dataset.alias, state.noiseSelection]);
+    const signature = methodSignature();
     if (state.methodCheckSignature === signature && state.methods.length) return Promise.resolve(true);
     const token = ++methodsToken;
-    const current = function () { return token === methodsToken && signature === JSON.stringify([state.dataset?.alias, state.noiseSelection]); };
-    return post("/api/quick-start/methods", {dataset:state.dataset.alias, noise:state.noiseSelection}, "正在检查论文与当前数据/噪声是否相容…").then(function (payload) { if (!current()) return false; state.methods = payload.methods || []; state.methodCheckSignature = signature; render(); return true; }).catch(function (error) { if (current()) { state.error = String(error.message || error); render(); } return false; });
+    const current = function () { return token === methodsToken && signature === methodSignature(); };
+    const body = {dataset:state.dataset.alias, noise:state.noiseSelection};
+    return reuse(methods, signature, function () {
+      return post("/api/quick-start/methods", body, "正在检查论文与当前数据/噪声是否相容…");
+    }).then(function (payload) { if (!current()) return false; state.methods = payload.methods || []; state.methodCheckSignature = signature; render(); return true; }).catch(function (error) { if (current()) { state.error = String(error.message || error); render(); } return false; });
   }
   function planRequestSignature() {
-    return JSON.stringify([state.dataset?.alias, state.selectedPaperId, state.noiseSelection, state.methodInputs]);
+    return JSON.stringify([methodSignature(), state.selectedPaperId, state.methodInputs]);
   }
   function buildPlan(options) {
     if (!state.dataset || !state.selectedPaperId) return;
@@ -1355,12 +1526,25 @@
     state.plan = null;
     state.planSchema = null;
     state.review = null;
-    return post("/api/quick-start/plan", {dataset:state.dataset.alias, paper_id:state.selectedPaperId, noise:state.noiseSelection, user_inputs:userInputs}, "正在读取所选论文的 YAML…").then(function (payload) { if (!current()) return; state.plan = payload; state.planSchema = null; state.parameterDraft = {}; state.segmentedPaths = {}; state.scheduleStash = {}; state.parameterError = ""; const index = quickStartStepIndex("plan"); if (navigate && index >= 0) state.currentStep = index; render(); return loadPlanSchema(payload); }).catch(function (error) { if (!current()) return; state.error = String(error.message || error); render(); });
+    const body = {dataset:state.dataset.alias, paper_id:state.selectedPaperId, noise:state.noiseSelection, user_inputs:userInputs};
+    const origin = state.currentStep;
+    return reuse(plans, signature, function () {
+      return post("/api/quick-start/plan", body, "正在读取所选论文的 YAML…");
+    }).then(function (payload) {
+      if (!current()) return;
+      state.plan = payload;
+      state.parameterError = "";
+      const index = quickStartStepIndex("plan");
+      if (navigate && index >= 0 && state.currentStep === origin) state.currentStep = index;
+      render();
+      return loadPlanSchema(payload);
+    }).catch(function (error) { if (!current()) return; state.error = String(error.message || error); render(); });
   }
   async function continuePendingPaper(methodsChecked = false) {
     const pending = state.pendingPaper;
     if (!pending || !state.dataset || !state.noise) return;
     if (state.noise.requires_confirmation && !state.labelsConfirmed) return;
+    if (!validateNoiseSelectionForCheck()) return;
     if (!methodsChecked && !await loadMethods()) return;
     const selected = state.methods.find(function (item) { return item.paper_id === pending.paperId; });
     if (!selected || !["ready", "needs_input"].includes(selected.status)) {
@@ -1388,10 +1572,10 @@
     state.pendingPaper = null;
     context?.switchModule?.("quickstart");
     try {
-      if (!state.registered.length) await loadRegistered();
+      if (!registeredLoaded) await loadRegistered();
       const requiredAdapter = typeof adapter === "string" ? adapter : String(adapter?.name || adapter?.dataset || "");
       const registered = state.registered.find(function (item) { return item.adapter === requiredAdapter; });
-      if (!state.dataset || state.dataset.alias !== registered?.name) {
+      if (!state.dataset) {
         if (!registered) {
           state.currentStep = 0;
           state.error = "请先登记论文配置对应的数据集（" + (requiredAdapter || "未识别的数据集") + "），再开始训练。";
@@ -1417,8 +1601,14 @@
     panel = target;
     context = options || {};
     renderedStep = null;
-    if (!state.registered.length) loadRegistered().then(render);
+    if (!registeredLoaded && !state.registered.length) loadRegistered().then(render);
+    if (state.dataset && !state.noise) openNoiseStep(state.dataset.alias).catch(function (error) {
+      state.error = String(error.message || error);
+      render();
+    });
     render();
   }
-  window.quickStartController = {mount:mount, render:render, onModuleEnter:mount, openPaper:openPaper, showCompatibilityGuide:function () { render(); return state.noise ? Promise.resolve() : loadNoise(); }};
+  window.quickStartController = {mount:mount, render:render, onModuleEnter:mount, openPaper:openPaper,
+    datasetFactsChanged:datasetFactsChanged,
+    showCompatibilityGuide:function () { render(); return state.noise ? Promise.resolve() : loadNoise(); }};
 }());

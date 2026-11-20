@@ -53,8 +53,6 @@ def quickstart_runtime_overrides(
             transition_matrix=noise_selection.transition_matrix,
             path=noise_selection.path,
         ) or {}
-        if str(original_noise.get("name", "")).lower() == str(selected_noise.get("name", "")).lower():
-            selected_noise = {**original_noise, **selected_noise}
     if "validation_targets" in original_noise:
         selected_noise["validation_targets"] = original_noise["validation_targets"]
 
@@ -72,12 +70,10 @@ def quickstart_runtime_overrides(
     requirements = resolve_runner(candidate).requirements(candidate)
     inputs = dict(method_inputs or {})
     if requirements is not None:
-        prior = inputs.get("noise_rate_prior")
-        if prior is None:
-            if noise_selection.kind == "clean":
-                prior = 0.0
-            elif noise_selection.kind != "native":
-                prior = noise_selection.rate
+        if noise_selection.kind == "native":
+            prior = inputs.get("noise_rate_prior")
+        else:
+            prior = 0.0 if noise_selection.kind == "clean" else noise_selection.rate
         if prior is None and noise_selection.kind == "native" and requirements.requires_method_noise_prior:
             for path in requirements.method_noise_prior_paths:
                 overrides[".".join(path)] = None
@@ -99,6 +95,11 @@ def quickstart_runtime_overrides(
         path = tuple(str(part) for part in str(raw_path).split("."))
         if not path or any(not part for part in path):
             continue
+        source_keys = {"name", "root", "path", "noise_path", "labels_path", "annotation_root", "seed"}
+        if path[0] in {"noise", "seed", "local_dataset"} or (
+            path[0] == "data" and (len(path) == 1 or path[1] in source_keys)
+        ):
+            raise ValueError(f"请在 Quick Start 的数据集或标签噪声步骤修改：{raw_path}")
         current = candidate
         for part in path[:-1]:
             child = current.get(part)

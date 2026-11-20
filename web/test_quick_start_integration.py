@@ -109,7 +109,7 @@ class QuickStartIntegrationTests(unittest.TestCase):
         status, noises = self._request("GET", "/api/quick-start/noises?dataset=" + alias)
         self.assertEqual(status, 200)
         self.assertIn("symmetric", {item["key"] for item in noises["options"]})
-        noise = {"kind": "clean", "key": "clean"}
+        noise = {"kind": "clean", "key": "clean", "seed": 43}
         status, methods = self._request("POST", "/api/quick-start/methods", {"dataset": alias, "noise": noise})
         self.assertEqual(status, 200)
         self.assertTrue(methods["methods"])
@@ -122,6 +122,33 @@ class QuickStartIntegrationTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(plan["status"], "ready")
         self.assertTrue(plan["command"])
+        import yaml
+
+        with patch("lnl_toolbox.training.data_service.DEFAULT_DATA_SERVICE", self.service.data_service):
+            status, reviewed = self._request("POST", "/api/quick-start/review-config", {
+                "dataset_alias": alias, "noise": noise, "recipe": ready["recipe_id"],
+                "patches": [],
+            })
+        self.assertEqual(status, 200, reviewed)
+        effective = yaml.safe_load(reviewed["content"])
+        self.assertEqual(effective["local_dataset"]["alias"], alias)
+        self.assertEqual(Path(effective["data"]["root"]), self.dataset_root)
+        self.assertEqual(effective["noise"]["name"], "clean")
+        self.assertEqual(effective["seed"], 43)
+
+        with patch.object(self.service, "accepted_training_pool_size", return_value=2700), \
+                patch("lnl_toolbox.training.data_service.DEFAULT_DATA_SERVICE", self.service.data_service):
+            status, schema = self._request("GET", "/api/config-schema?recipe=gce-cifar10&quickstart_dataset=" + alias)
+            self.assertEqual(status, 200, schema)
+            field = next(item for item in schema["fields"] if item["path"] == "data.validation_size")
+            self.assertEqual(field["value"], 270)
+            self.assertEqual(field["split_reference"], {"count": 5000, "total": 50000})
+            for patches, expected in (([], 270), ([{"path": "data.validation_size", "value": 200}], 200)):
+                status, reviewed = self._request("POST", "/api/quick-start/review-config", {
+                    "dataset_alias": alias, "noise": noise, "recipe": "gce-cifar10", "patches": patches,
+                })
+                self.assertEqual(status, 200, reviewed)
+                self.assertEqual(yaml.safe_load(reviewed["content"])["data"]["validation_size"], expected)
 
     def test_http_never_turns_a_needs_input_method_into_a_runnable_plan(self) -> None:
         status, registered = self._request(

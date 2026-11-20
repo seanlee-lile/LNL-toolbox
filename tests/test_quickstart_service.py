@@ -521,6 +521,21 @@ class QuickStartServiceTests(unittest.TestCase):
         self.assertFalse(option.required_user_inputs)
 
 
+    def test_synthetic_noise_settings_are_owned_by_quick_start_for_every_paper(self) -> None:
+        from lnl_toolbox.quickstart.templates import quickstart_runtime_overrides
+
+        selection = QuickStartNoiseSelection("synthetic", "symmetric", rate=0.27, seed=43)
+        for paper in load_papers():
+            with self.subTest(paper=paper.id):
+                template = method_template_for_paper(paper)
+                overrides = quickstart_runtime_overrides(
+                    template.config, selection, method_inputs={"noise_rate_prior": 0.1},
+                )
+                self.assertEqual(overrides["seed"], 43)
+                noise = dict(overrides["noise"])
+                noise.pop("validation_targets", None)
+                self.assertEqual(noise, {"name": "symmetric", "rate": 0.27, "seed": 43})
+
     def test_no_corruption_preserves_label_contract_for_every_paper(self) -> None:
         profile = self.data_service.inspect("local-cifar10").profile.to_dict()
         for paper in load_papers():

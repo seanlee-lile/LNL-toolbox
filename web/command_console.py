@@ -1216,6 +1216,8 @@ def _quick_start_config(payload: dict[str, object], *, review: bool) -> dict[str
             str(body["recipe"]), selection, method_inputs,
         )
         body["_quick_start_override_auth"] = _QUICK_START_OVERRIDE_AUTH
+        if body.get("dataset_alias"):
+            body["_quickstart_train_count"] = SERVICE.accepted_training_pool_size(str(body["dataset_alias"]))
     directory = tempfile.TemporaryDirectory(prefix="lnl-review-")
     path = str(Path(directory.name) / "config.yaml")
     try:
@@ -1696,9 +1698,16 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 recipe_id = query.get("recipe", [""])[0]
                 path_value = query.get("path", [""])[0]
                 recipe_hint = query.get("recipe_hint", [""])[0]
+                dataset_alias = query.get("quickstart_dataset", [""])[0]
+                train_count = None
+                if dataset_alias and recipe_id and not path_value:
+                    from web.quick_start_api import SERVICE
+
+                    train_count = SERVICE.accepted_training_pool_size(dataset_alias)
                 _json_response(
                     self,
-                    _config_schema(recipe_id, path_value=path_value, recipe_hint=recipe_hint),
+                    _config_schema(recipe_id, path_value=path_value, recipe_hint=recipe_hint,
+                                   quickstart_train_count=train_count),
                 )
             except Exception as exc:
                 _json_response(self, {"error": str(exc)}, 400)

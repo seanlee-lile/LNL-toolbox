@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from lnl_toolbox.catalog import find_project_root
-from lnl_toolbox.quickstart.templates import SPLIT_COUNT_PATHS, reference_train_size
+from lnl_toolbox.quickstart.templates import SPLIT_COUNT_PATHS, adapt_split_counts, reference_train_size
 
 ROOT = find_project_root(Path(__file__))
 _QUICK_START_OVERRIDE_AUTH = object()
@@ -1108,12 +1108,20 @@ def _config_schema(
     *,
     path_value: object = None,
     recipe_hint: object = None,
+    quickstart_train_count: int | None = None,
 ) -> dict[str, object]:
     payload = _config_payload(recipe_id, path_value=path_value)
-    return schema_from_payload(payload, recipe_hint=recipe_hint)
+    original = None
+    if quickstart_train_count is not None and payload["recipe"]:
+        from copy import deepcopy
+
+        original = payload["config"]
+        payload["config"] = deepcopy(original)
+        adapt_split_counts(payload["config"], original, quickstart_train_count)
+    return schema_from_payload(payload, recipe_hint=recipe_hint, split_reference_config=original)
 
 
-def schema_from_payload(payload: dict[str, Any], *, recipe_hint=None) -> dict[str, object]:
+def schema_from_payload(payload: dict[str, Any], *, recipe_hint=None, split_reference_config=None) -> dict[str, object]:
     """Describe an in-memory draft using exactly the Web field policy."""
     method = _config_method(
         payload["config"], payload["recipe"] or recipe_hint or payload["method"]
@@ -1148,7 +1156,7 @@ def schema_from_payload(payload: dict[str, Any], *, recipe_hint=None) -> dict[st
     fields = [field for field in fields if not str(field["path"]).startswith("early_stopping.")]
     fields = list({field["path"]: field for field in [*fields, *_schedule_editor_fields(payload["config"], method=method)]}.values())
     fields.extend(_model_editor_fields(payload["config"], fields))
-    original = (
+    original = split_reference_config if split_reference_config is not None else (
         _config_payload(recipe_hint)["config"]
         if recipe_hint and payload["recipe"] != recipe_hint
         else payload["config"]
@@ -1886,6 +1894,7 @@ def prepare_config(payload: object, *, for_review: bool = False) -> tuple[dict[s
 
     source_config: dict[str, Any] | None = None
     source_method = ""
+    allowed_system_changes: set[str] = set()
     if isinstance(recipe_id, str) and recipe_id.strip():
         source_recipe = recipe_by_id(recipe_id, ROOT)
         source_config = load_yaml(source_recipe.config_path)
@@ -1914,6 +1923,13 @@ def prepare_config(payload: object, *, for_review: bool = False) -> tuple[dict[s
         parsed = load_yaml(recipe_by_id(recipe_id, ROOT).config_path) if (
             isinstance(recipe_id, str) and recipe_id.strip()
         ) else load_yaml(_project_path(source_path))
+        train_count = payload.get("_quickstart_train_count")
+        if for_review and authorized_system_overrides and train_count is not None and recipe_id:
+            adapt_split_counts(parsed, source_config, train_count)
+            for parts in SPLIT_COUNT_PATHS:
+                path = ".".join(parts)
+                if _config_path_value(parsed, path) != _config_path_value(source_config, path):
+                    allowed_system_changes.add(path)
         if not isinstance(patches, list):
             raise ValueError("只能通过参数菜单提交 YAML 修改")
         method = source_method or _config_method(parsed, recipe_id)
@@ -1945,7 +1961,6 @@ def prepare_config(payload: object, *, for_review: bool = False) -> tuple[dict[s
         from lnl_toolbox.catalog import _config_parameter_errors
         if not for_review or not _config_parameter_errors(parsed):
             _synchronize_web_derived_parameters(parsed, method)
-    allowed_system_changes: set[str] = set()
     for raw_path, value in (system_overrides or {}).items():
         path = str(raw_path).strip()
         if not path:
@@ -2015,6 +2030,10 @@ def prepare_config(payload: object, *, for_review: bool = False) -> tuple[dict[s
         _validate_changed_model_configs(source_config, parsed, method)
         _validate_changed_training_selectors(source_config, parsed, method)
     dataset_alias = str(payload.get("dataset_alias") or "").strip()
+    if dataset_alias and for_review and system_overrides is not None:
+        from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE
+
+        parsed = DEFAULT_DATA_SERVICE.apply(parsed, dataset_alias)
     if dataset_alias and not for_review:
         from lnl_toolbox.training.service import ExperimentService
 

@@ -12,37 +12,6 @@ class CWDAuthorAlignmentTests(__import__("unittest").TestCase):
         with self.assertRaisesRegex(ValueError, "initialization"):
             _build_model({"name": "cifar_resnet34", "initialization": "invalid"})
 
-    @__import__("unittest").skip(
-        "stale historical expectation: this test encodes the pre-2026-11-10 "
-        "per-sample dynamic centroid, while the current CWDGlobalObjective rebuilds a "
-        "batch-level centroid from features; "
-        "test_dynamic_centroid_loss_and_full_model_gradients_match_reference covers "
-        "the current contract"
-    )
-    def test_dynamic_affine_objective_matches_direct_output_and_gradient(self):
-        from lnl_toolbox.noise.statistics import CWDStatisticArtifact
-        torch.manual_seed(17)
-        model = nn.Sequential()
-        model.add_module("classifier", nn.Linear(4, 3, bias=True))
-        features = torch.randn(7, 4, requires_grad=True)
-        labels = torch.tensor([0, 0, 0, 0, 1, 1, 2])
-        coefficient = np.asarray([[1.2, -.1, -.1], [-.1, 1.2, -.1], [-.1, -.1, 1.2]])
-        artifact = CWDStatisticArtifact(values=np.zeros((3,4)), estimator="cwd", metadata={
-            "class_prior": [1/3]*3, "observed_class_prior": [1/3]*3,
-            "coefficient_pseudoinverses": [np.eye(3).tolist()]*3,
-            "combined_coefficient": coefficient.tolist()})
-        outputs = model(features)
-        actual = CWDGlobalObjective(artifact, dynamic_centroid=True).compute(
-            model=model, logits=outputs, features=features, noisy_targets=labels,
-            sample_indices=torch.arange(7), base_loss=CrossEntropyLoss(), metadata={})
-        target = torch.nn.functional.one_hot(labels, 3).float() @ torch.tensor(coefficient).float()
-        expected = 1 + outputs.square().sum(1).mean() - 2 * (outputs * target).sum(1).mean()
-        torch.testing.assert_close(actual, expected)
-        parameters = [features, *model.parameters()]
-        ga = torch.autograd.grad(actual, parameters, retain_graph=True)
-        gb = torch.autograd.grad(expected, parameters)
-        for a,b in zip(ga,gb):
-            torch.testing.assert_close(a,b)
 
     def test_noisy_validation_selects_own_matrix_and_reuses_cache(self):
         import tempfile

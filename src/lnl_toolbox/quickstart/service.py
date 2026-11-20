@@ -8,7 +8,7 @@ from threading import RLock
 from typing import Any, Mapping
 import uuid
 
-from lnl_toolbox.catalog import discover_recipes, load_papers, recipe_by_id, load_recipe_config
+from lnl_toolbox.catalog import discover_recipes, load_papers, load_recipe_config
 from lnl_toolbox.data.probe import DatasetProbeResult, probe_dataset_path, suggest_dataset_alias
 from lnl_toolbox.data.archive import extract_dataset_archive
 from lnl_toolbox.data.registry import training_pool_size
@@ -66,6 +66,7 @@ class QuickStartService:
         self._method_cache_lock = RLock()
         self._template_cache: dict[str, object] = {}
         self._recipe_cache: dict[str, object] | None = None
+        self._paper_cache = None
 
     def _recipes(self) -> dict[str, object]:
         with self._method_cache_lock:
@@ -106,6 +107,9 @@ class QuickStartService:
         """Use the profile established at registration without reopening sample files."""
         return self._require_ready_report(self.data_service.status(alias), alias)
 
+    def accepted_training_pool_size(self, alias: str) -> int | None:
+        return self._summary(alias, self._accepted_report(alias)).training_pool_size
+
     def _accepted_capabilities(self, alias: str, report):
         return resolve_dataset_capabilities(
             report.profile, self.data_service.declarations(alias)
@@ -141,9 +145,7 @@ class QuickStartService:
     ) -> dict[str, object]:
         """Return the final, validated-stage choices to apply to a paper YAML."""
 
-        from lnl_toolbox.catalog import recipe_by_id
-
-        recipe = recipe_by_id(recipe_id)
+        recipe = self._recipes()[recipe_id]
         return quickstart_runtime_overrides(
             load_recipe_config(recipe), noise_selection, method_inputs=method_inputs,
         )
@@ -205,10 +207,6 @@ class QuickStartService:
         aliases = [record.alias for record in self.data_service.catalog.records()]
         alias = suggest_dataset_alias(candidate.adapter, result.path, aliases)
         self.data_service.register(alias, candidate.adapter, candidate_data)
-        with self._method_cache_lock:
-            self._method_cache.clear()
-            self._selection_cache.clear()
-            self._template_cache.clear()
         report = self._require_ready_report(self.data_service.inspect(alias), alias)
         return self._summary(alias, report)
 
@@ -266,6 +264,13 @@ class QuickStartService:
         dataset_alias: str,
         noise_selection: QuickStartNoiseSelection,
     ) -> tuple[QuickStartMethodOption, ...]:
+        # Share cold catalog initialization and compatibility work between tabs.
+        with self._method_cache_lock:
+            return self._method_options(dataset_alias, noise_selection)
+
+    def _method_options(
+        self, dataset_alias: str, noise_selection: QuickStartNoiseSelection,
+    ) -> tuple[QuickStartMethodOption, ...]:
         report = self._accepted_report(dataset_alias)
         capabilities = self._accepted_capabilities(dataset_alias, report)
         cache_key = json.dumps({
@@ -280,8 +285,10 @@ class QuickStartService:
             return cached
 
         profile_data = report.profile.to_dict()
-        papers = load_papers()
         recipes = self._recipes()
+        if self._paper_cache is None:
+            self._paper_cache = load_papers(recipes=recipes)
+        papers = self._paper_cache
         prepared: list[
             tuple[
                 object,
@@ -417,8 +424,6 @@ class QuickStartService:
         paper_id: str,
         user_inputs: Mapping[str, object] | None = None,
     ) -> QuickStartPlan:
-        from lnl_toolbox.catalog import recipe_by_id
-
         with self._method_cache_lock:
             options = self._selection_cache.get(self._selection_key(dataset_alias, noise_selection))
         if options is None:
@@ -426,7 +431,7 @@ class QuickStartService:
         selected = next((item for item in options if item.paper_id == paper_id), None)
         if selected is None or selected.recipe_id is None:
             raise ValueError("所选论文没有对应的已登记 YAML 配置。")
-        recipe = recipe_by_id(selected.recipe_id)
+        recipe = self._recipes()[selected.recipe_id]
         config = load_recipe_config(recipe)
         label_file = self._external_label_facts(noise_selection, self._accepted_report(dataset_alias))
         if label_file is not None and not label_file["compatible"]:
