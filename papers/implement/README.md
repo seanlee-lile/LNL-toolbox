@@ -6,11 +6,15 @@
 
 - `paper-baseline-taxonomy.md`：按训练流程修改位置对论文分类。
 - `paper-implementation-guideline.md`：规定每篇论文应复用或扩展的唯一模块、接口和调用顺序。
-- `paper-reproduction-progress.md`：复现状态总表和“复现增量与复用审计表”。
-- `working-baseline.md`：研究过程中的工作稿。
+- `paper-reproduction-progress.md`：历史复现状态、实验记录和复用审计。
 - `*-audit.md`、`common-loss-functions.md`：跨论文公式或组件审计。
 - `<method>/plan.md`：单篇论文的实施计划。
 - `<method>/result.md`：实际执行参数、产物、结果和与原文的差异。
+
+逐方法复现说明见 [DivideMix](../dividemix/reproduction.md)、[DLD](../dld/reproduction.md)、
+[Dual-T](../dual-t/reproduction.md)、[Importance Reweighting](../importance-reweighting/reproduction.md)、
+[LEND](../lend/reproduction.md)、[PCSE](../pcse/reproduction.md)、[UPM](../upm/reproduction.md)和
+[VolMinNet](../volminnet/reproduction.md)。
 
 ## 维护规则
 

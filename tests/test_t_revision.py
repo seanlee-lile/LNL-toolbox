@@ -514,10 +514,23 @@ class _t_revision_workflow_TRevisionWorkflowTest(unittest.TestCase):
                 resumed.resume(run_dir / 'last.pt')
 
     def test_dispatch_is_lazy_and_available(self) -> None:
-        with unittest.mock.patch('lnl_toolbox.training.t_revision_experiment.run_t_revision_experiment', return_value=Path('fixture')) as runner:
-            result = run_experiment(_t_revision_workflow__config())
-        self.assertEqual(result, Path('fixture'))
-        runner.assert_called_once()
+        from lnl_toolbox.data.cifar import CifarData
+
+        def load(_root, split):
+            count = 40 if split == 'train' else 20
+            return CifarData(np.zeros((count, 32, 32, 3), dtype=np.uint8),
+                             np.arange(count) % 10, tuple(map(str, range(10))), split, 'cifar10')
+
+        with tempfile.TemporaryDirectory() as directory, unittest.mock.patch(
+            'lnl_toolbox.data.sources.load_cifar10', side_effect=load
+        ), unittest.mock.patch('lnl_toolbox.training.t_revision_experiment.run_t_revision_experiment') as runner:
+            output = Path(directory) / 'fixture'
+            runner.return_value = output
+            config = _t_revision_workflow__config()
+            config['data'] = {'name': 'cifar10', 'root': directory, 'validation_size': 10}
+            config['t_revision']['stage1']['model'] = {'name': 'tiny_cnn', 'width': 4}
+            self.assertEqual(run_experiment(config), output)
+            runner.assert_called_once()
 
     def test_unknown_method_fails_instead_of_supervised_fallback(self) -> None:
         with self.assertRaisesRegex(ValueError, 'Unsupported training method'):

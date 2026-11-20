@@ -7,6 +7,11 @@ from pathlib import Path
 # --- merged from test_config_schema.py ---
 import unittest
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
+
 # --- merged from test_config_schema.py ---
 from lnl_toolbox.catalog import discover_recipes, load_yaml, load_papers, default_paper_config
 
@@ -51,11 +56,19 @@ class _config_schema_ConfigSchemaTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'unknown top-level'):
             normalize_experiment_config({'execution': {'runner': 'clean'}, 'data': {'name': 'synthetic_multiclass'}, 'trianer': {'epochs': 1}})
 
-    def test_every_active_yaml_is_versioned_and_canonical(self) -> None:
+    def test_every_packaged_config_yaml_is_versioned_and_canonical(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        paths = sorted((root / 'configs').rglob('*.yaml'))
-        self.assertTrue(paths, 'the active configuration catalog must not be empty')
-        for path in paths:
+        pyproject = tomllib.loads((root / 'pyproject.toml').read_text(encoding='utf-8'))
+        data_files = pyproject['tool']['setuptools']['data-files']
+        paths = {
+            (root / path).resolve()
+            for destination, entries in data_files.items()
+            if destination.startswith('share/lnl-toolbox/configs/')
+            for path in entries
+            if Path(path).suffix in {'.yaml', '.yml'}
+        }
+        self.assertTrue(paths, 'the published configuration collection must not be empty')
+        for path in sorted(paths):
             value = load_yaml(path)
             self.assertEqual(value['schema_version'], 1, path)
             self.assertIn(value['kind'], {'experiment', 'fragment', 'mentor_artifact'})
@@ -68,7 +81,7 @@ class _config_schema_ConfigSchemaTest(unittest.TestCase):
         self.assertTrue(recipes)
         self.assertEqual(len(recipe_ids), len(set(recipe_ids)), 'recipe IDs must be unique')
         for recipe in recipes:
-            self.assertIn(recipe.config_path.resolve(), {path.resolve() for path in paths})
+            self.assertIn(recipe.config_path.resolve(), paths)
         self.assertIn('gce-cifar10-noise02-reproduction', recipe_ids)
 
 # --- merged from test_config_overrides.py ---

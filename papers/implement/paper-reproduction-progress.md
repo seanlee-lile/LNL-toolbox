@@ -2,7 +2,9 @@
 
 > 归档位置与维护规则见本目录的 `README.md`。
 
-本文件是论文复现的唯一进度入口。`paper-implementation-guideline.md` 说明算法应如何实现；本文件只记录“是否已经实际运行”、使用了哪些参数、产物在哪里以及结果与原文相差多少。
+> **历史台账。** 各段日期对应当时的验收口径，不代表当前发布状态。当前论文与配置的可用范围以 [Paper catalog](../../src/lnl_toolbox/paper_catalog.json) 和实际 CLI discovery 为准；数值结果以对应运行记录为准。
+
+`paper-implementation-guideline.md` 记录实现路线；本台账记录当时是否运行、使用的参数、产物位置及与原文的差异。
 
 状态定义（本轮论文复现验收口径）：
 

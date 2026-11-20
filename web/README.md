@@ -4,13 +4,19 @@
 
 ## 启动
 
-在仓库根目录运行：
+主 Web 控制台使用源码 checkout 中的服务器和页面资源。克隆仓库后，按[安装说明](../README.md#1-安装)在项目环境中执行 `python -m pip install -e ".[train]"`，然后在仓库根目录运行：
 
     lnl web --host 127.0.0.1 --port 8765
 
 然后打开 http://127.0.0.1:8765。
 根路径是原有主控制台；Recipe/YAML 编辑器保留为独立子页面：
 http://127.0.0.1:8765/recipe。`lnl web` 默认打开主页；`lnl web --no-open` 只启动服务。
+
+独立安装的 wheel 当前不承诺提供完整主 Web。使用流程参见[使用手册](../docs/toolbox-usage-manual.md)。
+
+默认端口被旧的 LNL Web 监听进程占用时，可运行 `lnl web restart`。如需先查看候选进程，
+运行 `lnl ports cleanup --dry-run --port 8765`。确认候选后，可使用
+`lnl ports cleanup --port 8765` 清理该端口上识别到的 LNL Web 监听进程。
 
 `lnl web` 是普通用户和本地使用的推荐入口。直接开发后端时仍可运行：
 

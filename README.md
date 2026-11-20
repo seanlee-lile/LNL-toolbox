@@ -2,6 +2,13 @@
 
 LNL Toolbox 是一个面向 Learning with Noisy Labels（噪声标签学习）实验的可复现工具箱。使用者可以通过统一的 `lnl` 命令检查环境、浏览实验、组合组件、预检配置、运行训练、恢复 checkpoint，以及查看知名论文在 toolbox 中的具体实现。
 
+## v1.0 发布范围
+
+- **正式功能**：Python 训练运行时、`lnl` CLI、内置实验配方，以及从源码 checkout 启动的本地 Web 控制台。独立安装的 wheel 当前不承诺提供完整主 Web。
+- **开发与研究资料**：测试、CI 和开发指南用于维护；`scripts/` 提供实验辅助工具；`papers/` 记录论文来源与复现证据；`archive/` 保存历史配置以供恢复。
+- **实验性子系统**：Scratch 仍随源码和包分发，并保留 CI 测试，属于实验性功能。
+- **本机内容**：数据、训练产物、缓存、本地环境与自定义实验文件由使用者管理，不随发布分发。
+
 ## 1. 安装
 
 要求 Python 3.10 或更高版本。先克隆仓库，再在独立环境中安装训练依赖：
@@ -34,8 +41,7 @@ lnl web
 两条入口使用同一套数据、兼容性和训练合同。配置存在、Dry-run 通过或 smoke 成功只说明相应工程链路可用，不自动代表论文数值已经复现。
 
 主控制台为 `http://127.0.0.1:8765/`；Recipe/YAML 编辑子页面为
-`http://127.0.0.1:8765/recipe`；Scratch 积木搭建器为
-`http://127.0.0.1:8765/scratch`。这些页面由同一个 `lnl web` 服务提供；使用
+`http://127.0.0.1:8765/recipe`。这些页面由同一个 `lnl web` 服务提供；使用
 `lnl web --no-open` 可只启动服务。
 
 原有的 `lnl-train`、`lnl-clean-train`、`lnl-inspect-data` 和 `lnl-make-noise` 命令仍然保留。
@@ -406,7 +412,7 @@ python -m unittest discover -s tests -v
 - [数据流指南](docs/data-flow-guide.md)
 - [项目管理指南](docs/project-management-guide.md)
 - [长期架构与实验路线](toolbox-architecture.md)
-- [论文实现进度](papers/implement/paper-reproduction-progress.md)
+- [论文覆盖总览](papers/lnl-26-paper-module-coverage.md)、[论文资料索引](papers/README.md)与[逐方法复现文档导航](papers/implement/README.md)
 
 本地数据放在 `data/`，训练产物放在 `artifacts/`；二者均不应提交到 Git。
 

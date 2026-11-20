@@ -359,6 +359,7 @@ class LENDConvergenceAndScratchTest(unittest.TestCase):
         config['lend']['dilution'] = {'alpha': .99, 'policy': 'until_converged', 'tolerance': 1e-5, 'max_steps': 1000}
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10',
                                                              side_effect=lambda root, split: train if split == 'train' else test):
+            config['data']['root'] = directory
             run_dir = run_experiment(config, Path(directory) / 'resumed')
             config['lend']['training']['epochs'] = 2
             run_experiment(config, resume=run_dir / 'last.pt')
@@ -894,6 +895,7 @@ class LENDAuthorReleaseTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: train if split == 'train' else test), patch.object(lend_experiment, 'build_model', side_effect=capture_model), patch.object(LENDAlgorithm, 'step', capture_step), contextlib.redirect_stdout(io.StringIO()):
             paper_config = _lend_workflow__config(2)
+            paper_config['data']['root'] = directory
             author_config = copy.deepcopy(paper_config)
             author_config['lend']['implementation_variant'] = 'author_release'
             paper_dir = run_experiment(paper_config, Path(directory) / 'paper')
@@ -955,14 +957,19 @@ class _lend_workflow_LENDWorkflowTest(unittest.TestCase):
         train, test = (_lend_workflow__cifar(classes * 4, 'train', classes), _lend_workflow__cifar(classes * 2, 'test', classes))
         loader_name = 'load_cifar10' if dataset == 'cifar10' else 'load_cifar100'
         with tempfile.TemporaryDirectory() as directory, patch(f'lnl_toolbox.data.sources.{loader_name}', side_effect=lambda _root, split: train if split == 'train' else test):
-            run_dir = run_experiment(_lend_workflow__config(1, dataset), Path(directory) / 'resumed')
+            def config(epochs):
+                value = _lend_workflow__config(epochs, dataset)
+                value['data']['root'] = directory
+                return value
+
+            run_dir = run_experiment(config(1), Path(directory) / 'resumed')
             first = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
             self.assertEqual(first['completed_epoch'], 0)
             manifest_hash = _lend_workflow__sha(run_dir / 'noise_manifest.npz')
             manifest_mtime = (run_dir / 'noise_manifest.npz').stat().st_mtime_ns
-            run_experiment(_lend_workflow__config(2, dataset), resume=run_dir / 'last.pt')
+            run_experiment(config(2), resume=run_dir / 'last.pt')
             resumed = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
-            uninterrupted_dir = run_experiment(_lend_workflow__config(2, dataset), Path(directory) / 'fresh')
+            uninterrupted_dir = run_experiment(config(2), Path(directory) / 'fresh')
             uninterrupted = torch.load(uninterrupted_dir / 'last.pt', map_location='cpu', weights_only=False)
             self.assertEqual(resumed['completed_epoch'], 1)
             self.assertEqual(resumed['run_state']['phase'], 'completed')
@@ -975,7 +982,7 @@ class _lend_workflow_LENDWorkflowTest(unittest.TestCase):
             self.assertEqual(_lend_workflow__sha(run_dir / 'noise_manifest.npz'), manifest_hash)
             self.assertEqual((run_dir / 'noise_manifest.npz').stat().st_mtime_ns, manifest_mtime)
             tracked = {name: (_lend_workflow__sha(run_dir / name), (run_dir / name).stat().st_mtime_ns) for name in ('last.pt', 'metrics.jsonl', 'noise_manifest.npz')}
-            run_experiment(_lend_workflow__config(2, dataset), resume=run_dir / 'last.pt')
+            run_experiment(config(2), resume=run_dir / 'last.pt')
             self.assertEqual(tracked, {name: (_lend_workflow__sha(run_dir / name), (run_dir / name).stat().st_mtime_ns) for name in tracked})
             final = json.loads((run_dir / 'final_metrics.json').read_text())
             self.assertIn('clean_test_accuracy', final)
@@ -990,8 +997,11 @@ class _lend_workflow_LENDWorkflowTest(unittest.TestCase):
     def test_resume_rejects_graph_drift(self):
         train, test = (_lend_workflow__cifar(40, 'train'), _lend_workflow__cifar(20, 'test'))
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: train if split == 'train' else test):
-            run_dir = run_experiment(_lend_workflow__config(1), Path(directory) / 'run')
+            initial = _lend_workflow__config(1)
+            initial['data']['root'] = directory
+            run_dir = run_experiment(initial, Path(directory) / 'run')
             changed = copy.deepcopy(_lend_workflow__config(2))
+            changed['data']['root'] = directory
             changed['lend']['graph']['gamma'] = 2.0
             with self.assertRaisesRegex(ValueError, 'LEND settings'):
                 run_experiment(changed, resume=run_dir / 'last.pt')
@@ -1002,6 +1012,7 @@ class _lend_workflow_LENDWorkflowTest(unittest.TestCase):
         config = _lend_workflow__config(1)
         config['trainer']['device'] = 'cuda'
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: train if split == 'train' else test):
+            config['data']['root'] = directory
             run_dir = run_experiment(config, Path(directory) / 'cuda')
             final = json.loads((run_dir / 'final_metrics.json').read_text())
             self.assertGreater(final['max_cuda_memory_mb'], 0.0)

@@ -359,8 +359,8 @@ def _dividemix_workflow__data100(size, split):
     labels = np.arange(size, dtype=np.int64) % 100
     return CifarData(images, labels, tuple(map(str, range(100))), split, 'cifar100')
 
-def _dividemix_workflow__config(epochs=1):
-    return {'method': 'dividemix', 'seed': 4, 'data': {'name': 'cifar10', 'root': 'unused', 'validation_size': 10, 'max_train_samples': 20, 'max_validation_samples': 10, 'max_test_samples': 10, 'augment': False}, 'noise': {'name': 'symmetric', 'rate': 0.2, 'seed': 8, 'validation_targets': 'noisy'}, 'model': {'name': 'tiny_cnn', 'width': 4}, 'optimizer': {'name': 'adam', 'lr': 0.001}, 'scheduler': {'name': 'none'}, 'loader': {'batch_size': 5, 'num_workers': 0, 'pin_memory': False}, 'evaluation': {'selection_split': 'validation', 'primary': 'ensemble_accuracy'}, 'dividemix': {'fidelity': 'official_cifar_v1', 'initialization': {'peer_seed_offset': 1}, 'warmup': {'epochs': 1, 'confidence_penalty_weight': 1.0}, 'gmm': {'threshold': 0.5, 'loss_history': {'name': 'official_auto', 'window_epochs': 5}}, 'mixmatch': {'augmentations': 2, 'temperature': 0.5, 'mixup_alpha': 4.0, 'mixup_lambda_scope': 'minibatch'}, 'objective': {'lambda_u': 25.0, 'lambda_r': 1.0, 'rampup_epochs': 16}, 'training': {'epochs': epochs}, 'inference': {'ensemble': 'official_logits_sum'}}, 'trainer': {'device': 'cpu'}, 'execution': {'runner': 'dividemix'}}
+def _dividemix_workflow__config(epochs=1, *, data_root=None):
+    return {'method': 'dividemix', 'seed': 4, 'data': {'name': 'cifar10', **({'root': data_root} if data_root is not None else {}), 'validation_size': 10, 'max_train_samples': 20, 'max_validation_samples': 10, 'max_test_samples': 10, 'augment': False}, 'noise': {'name': 'symmetric', 'rate': 0.2, 'seed': 8, 'validation_targets': 'noisy'}, 'model': {'name': 'tiny_cnn', 'width': 4}, 'optimizer': {'name': 'adam', 'lr': 0.001}, 'scheduler': {'name': 'none'}, 'loader': {'batch_size': 5, 'num_workers': 0, 'pin_memory': False}, 'evaluation': {'selection_split': 'validation', 'primary': 'ensemble_accuracy'}, 'dividemix': {'fidelity': 'official_cifar_v1', 'initialization': {'peer_seed_offset': 1}, 'warmup': {'epochs': 1, 'confidence_penalty_weight': 1.0}, 'gmm': {'threshold': 0.5, 'loss_history': {'name': 'official_auto', 'window_epochs': 5}}, 'mixmatch': {'augmentations': 2, 'temperature': 0.5, 'mixup_alpha': 4.0, 'mixup_lambda_scope': 'minibatch'}, 'objective': {'lambda_u': 25.0, 'lambda_r': 1.0, 'rampup_epochs': 16}, 'training': {'epochs': epochs}, 'inference': {'ensemble': 'official_logits_sum'}}, 'trainer': {'device': 'cpu'}, 'execution': {'runner': 'dividemix'}}
 
 class _dividemix_workflow__FakeEstimator:
 
@@ -378,6 +378,9 @@ def _dividemix_workflow__hash(path):
 class _dividemix_workflow_DivideMixWorkflowTest(unittest.TestCase):
 
     def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.data_root = temporary.name
         self.train, self.test = (_dividemix_workflow__data(40, 'train'), _dividemix_workflow__data(20, 'test'))
 
     def load(self, _root, split):
@@ -411,7 +414,7 @@ class _dividemix_workflow_DivideMixWorkflowTest(unittest.TestCase):
         from lnl_toolbox.data import DataRole
         from lnl_toolbox.training.data_service import prepare_experiment_data
         from lnl_toolbox.training.runners import resolve_data_requirements
-        config = _dividemix_workflow__config()
+        config = _dividemix_workflow__config(data_root=self.data_root)
         normalization = load_recipe_config(recipe_by_id('cifar10-dividemix-sym20'))['data']['normalization']
         config['data']['normalization'] = normalization
         self.test.images.fill(0)
@@ -424,20 +427,20 @@ class _dividemix_workflow_DivideMixWorkflowTest(unittest.TestCase):
 
     def test_fresh_extension_and_completed_noop(self):
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self.load), patch('lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator', _dividemix_workflow__FakeEstimator):
-            run_dir = run_experiment(_dividemix_workflow__config(1), Path(directory) / 'run')
+            run_dir = run_experiment(_dividemix_workflow__config(1, data_root=self.data_root), Path(directory) / 'run')
             payload = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
             self.assertEqual(payload['algorithm']['dividemix_state']['phase'], 'completed')
             self.assertEqual(payload['algorithm']['dividemix_state']['main_completed_epochs'], 1)
             self.assertEqual(set(payload['algorithm']['model']), {'a', 'b'})
             first_artifact = run_dir / 'dividemix_epoch_0001.npz'
             first_hash, first_mtime = (_dividemix_workflow__hash(first_artifact), first_artifact.stat().st_mtime_ns)
-            run_experiment(_dividemix_workflow__config(2), resume=run_dir / 'last.pt')
+            run_experiment(_dividemix_workflow__config(2, data_root=self.data_root), resume=run_dir / 'last.pt')
             resumed = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
             self.assertEqual(resumed['algorithm']['dividemix_state']['main_completed_epochs'], 2)
             self.assertEqual(_dividemix_workflow__hash(first_artifact), first_hash)
             self.assertEqual(first_artifact.stat().st_mtime_ns, first_mtime)
             checkpoint_hash, metrics_hash = (_dividemix_workflow__hash(run_dir / 'last.pt'), _dividemix_workflow__hash(run_dir / 'metrics.jsonl'))
-            run_experiment(_dividemix_workflow__config(2), resume=run_dir / 'last.pt')
+            run_experiment(_dividemix_workflow__config(2, data_root=self.data_root), resume=run_dir / 'last.pt')
             self.assertEqual(_dividemix_workflow__hash(run_dir / 'last.pt'), checkpoint_hash)
             self.assertEqual(_dividemix_workflow__hash(run_dir / 'metrics.jsonl'), metrics_hash)
             final = json.loads((run_dir / 'final_metrics.json').read_text())
@@ -445,14 +448,14 @@ class _dividemix_workflow_DivideMixWorkflowTest(unittest.TestCase):
 
     def test_corrupt_ready_artifact_fails_instead_of_refitting(self):
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self.load), patch('lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator', _dividemix_workflow__FakeEstimator):
-            run_dir = run_experiment(_dividemix_workflow__config(1), Path(directory) / 'run')
+            run_dir = run_experiment(_dividemix_workflow__config(1, data_root=self.data_root), Path(directory) / 'run')
             payload = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
             payload['algorithm']['dividemix_state']['phase'] = 'co_divide_ready'
             atomic = run_dir / 'last.pt'
             torch.save(payload, atomic)
             (run_dir / payload['algorithm']['dividemix_state']['current_artifact']).write_bytes(b'broken')
             with self.assertRaises(Exception):
-                run_experiment(_dividemix_workflow__config(2), resume=atomic)
+                run_experiment(_dividemix_workflow__config(2, data_root=self.data_root), resume=atomic)
 
     def test_network_a_ready_resume_does_not_repeat_a(self):
         import lnl_toolbox.training.dividemix_experiment as workflow
@@ -469,18 +472,18 @@ class _dividemix_workflow_DivideMixWorkflowTest(unittest.TestCase):
             run_dir = Path(directory) / 'run'
             with patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self.load), patch('lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator', _dividemix_workflow__FakeEstimator), patch('lnl_toolbox.training.dividemix_experiment._train_peer_epoch', side_effect=interrupt_b):
                 with self.assertRaisesRegex(RuntimeError, 'controlled B'):
-                    run_experiment(_dividemix_workflow__config(1), run_dir)
+                    run_experiment(_dividemix_workflow__config(1, data_root=self.data_root), run_dir)
             interrupted = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
             self.assertEqual(interrupted['algorithm']['dividemix_state']['phase'], 'network_a_ready')
             steps_a = interrupted['algorithm']['dividemix_state']['optimizer_steps_a']
             with patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self.load), patch('lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator', _dividemix_workflow__FakeEstimator):
-                run_experiment(_dividemix_workflow__config(1), resume=run_dir / 'last.pt')
+                run_experiment(_dividemix_workflow__config(1, data_root=self.data_root), resume=run_dir / 'last.pt')
             resumed = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
             self.assertEqual(resumed['algorithm']['dividemix_state']['optimizer_steps_a'], steps_a)
 
     def test_cifar100_lightweight_workflow(self):
         train, test = (_dividemix_workflow__data100(220, 'train'), _dividemix_workflow__data100(100, 'test'))
-        value = _dividemix_workflow__config(1)
+        value = _dividemix_workflow__config(1, data_root=self.data_root)
         value['data'].update({'name': 'cifar100', 'validation_size': 100, 'max_train_samples': 100, 'max_validation_samples': 100, 'max_test_samples': 100})
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar100', side_effect=lambda _root, split: train if split == 'train' else test), patch('lnl_toolbox.algorithms.dividemix.gmm.DivideMixGMMCleanProbabilityEstimator', _dividemix_workflow__FakeEstimator):
             run_dir = run_experiment(value, Path(directory) / 'run')

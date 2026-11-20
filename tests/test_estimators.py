@@ -313,13 +313,14 @@ class VolMinNetPaperDefaultsTest(unittest.TestCase):
         from lnl_toolbox.training.experiment import run_experiment
         config = load_yaml(Path(__file__).resolve().parents[1] / 'configs/experiment/volminnet_cifar10_reproduction.yaml')
         config['trainer'].update(epochs=1, device='cpu')
-        config['data'].update(root='unused', validation_size=10, max_train_samples=20,
+        config['data'].update(validation_size=10, max_train_samples=20,
                               max_validation_samples=10, max_test_samples=10, augment=False)
         config['loader'].update(batch_size=10, num_workers=0)
         with tempfile.TemporaryDirectory() as directory, patch(
             'lnl_toolbox.data.sources.load_cifar10',
             side_effect=lambda _root, split: _volminnet_workflow__cifar(40 if split == 'train' else 20, split),
         ):
+            config['data']['root'] = directory
             run_dir = run_experiment(config, output_dir=Path(directory) / 'run')
             self.assertTrue((run_dir / 'last.pt').is_file())
             self.assertTrue((run_dir / 'final_metrics.json').is_file())
@@ -466,9 +467,9 @@ def _volminnet_workflow__cifar(size: int, split: str, classes: int=10) -> CifarD
     labels = np.arange(size, dtype=np.int64) % classes
     return CifarData(images, labels, tuple(map(str, range(classes))), split, f'cifar{classes}')
 
-def _volminnet_workflow__config(epochs: int=2, dataset: str='cifar10') -> dict:
+def _volminnet_workflow__config(epochs: int=2, dataset: str='cifar10', *, data_root=None) -> dict:
     classes = 10 if dataset == 'cifar10' else 100
-    return {'method': 'volminnet', 'execution': {'runner': 'volminnet'}, 'seed': 5, 'data': {'name': dataset, 'root': 'unused', 'num_classes': classes, 'validation_size': classes, 'max_train_samples': classes * 2, 'max_validation_samples': classes, 'max_test_samples': classes, 'augment': False}, 'noise': {'name': 'symmetric', 'rate': 0.2, 'seed': 7, 'sampling': 'transition', 'rng': 'default_rng', 'validation_targets': 'noisy', 'manifest_filename': 'noise_manifest.npz'}, 'volminnet': {'fidelity': 'paper_positive_logdet', 'model': {'name': 'tiny_cnn', 'width': 2}, 'transition': {'parameterization': 'fixed_diagonal_sigmoid_offdiag', 'convention': 'clean_to_noisy_row', 'normalization_axis': 'row', 'initialization': {'mode': 'paper'}}, 'objective': {'classification': 'noisy_nll', 'volume': {'mode': 'positive_logdet', 'coefficient': 0.0001}}, 'optimizer': {'classifier': {'name': 'sgd', 'lr': 0.01, 'momentum': 0.0}, 'transition': {'name': 'sgd', 'lr': 0.01, 'momentum': 0.0}}, 'scheduler': {'classifier': {'name': 'none'}, 'transition': {'name': 'none'}}, 'checkpoint_selection': {'split': 'noisy_validation', 'metric': 'loss', 'mode': 'min'}}, 'loader': {'batch_size': classes, 'num_workers': 0, 'pin_memory': False}, 'trainer': {'epochs': epochs, 'device': 'cpu'}}
+    return {'method': 'volminnet', 'execution': {'runner': 'volminnet'}, 'seed': 5, 'data': {'name': dataset, **({'root': data_root} if data_root is not None else {}), 'num_classes': classes, 'validation_size': classes, 'max_train_samples': classes * 2, 'max_validation_samples': classes, 'max_test_samples': classes, 'augment': False}, 'noise': {'name': 'symmetric', 'rate': 0.2, 'seed': 7, 'sampling': 'transition', 'rng': 'default_rng', 'validation_targets': 'noisy', 'manifest_filename': 'noise_manifest.npz'}, 'volminnet': {'fidelity': 'paper_positive_logdet', 'model': {'name': 'tiny_cnn', 'width': 2}, 'transition': {'parameterization': 'fixed_diagonal_sigmoid_offdiag', 'convention': 'clean_to_noisy_row', 'normalization_axis': 'row', 'initialization': {'mode': 'paper'}}, 'objective': {'classification': 'noisy_nll', 'volume': {'mode': 'positive_logdet', 'coefficient': 0.0001}}, 'optimizer': {'classifier': {'name': 'sgd', 'lr': 0.01, 'momentum': 0.0}, 'transition': {'name': 'sgd', 'lr': 0.01, 'momentum': 0.0}}, 'scheduler': {'classifier': {'name': 'none'}, 'transition': {'name': 'none'}}, 'checkpoint_selection': {'split': 'noisy_validation', 'metric': 'loss', 'mode': 'min'}}, 'loader': {'batch_size': classes, 'num_workers': 0, 'pin_memory': False}, 'trainer': {'epochs': epochs, 'device': 'cpu'}}
 
 def _volminnet_workflow__sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -512,10 +513,10 @@ class _volminnet_workflow_VolMinNetWorkflowTest(unittest.TestCase):
             DATASETS.get(_volminnet_workflow__GenericTabularAdapter.name)
         except ValueError:
             DATASETS.add(_volminnet_workflow__GenericTabularAdapter())
-        config = _volminnet_workflow__config(1)
+        config = _volminnet_workflow__config(1, data_root=self.data_root)
         config['data'] = {
             'name': _volminnet_workflow__GenericTabularAdapter.name,
-            'root': 'unused',
+            'root': self.data_root,
             'num_classes': 4,
             'validation_size': 8,
         }
@@ -532,6 +533,9 @@ class _volminnet_workflow_VolMinNetWorkflowTest(unittest.TestCase):
 
 
     def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.data_root = temporary.name
         self.train = _volminnet_workflow__cifar(40, 'train')
         self.test = _volminnet_workflow__cifar(20, 'test')
 
@@ -540,7 +544,7 @@ class _volminnet_workflow_VolMinNetWorkflowTest(unittest.TestCase):
 
     def test_fresh_resume_extension_and_completed_noop(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load):
-            run_dir = run_experiment(_volminnet_workflow__config(1), Path(directory) / 'run')
+            run_dir = run_experiment(_volminnet_workflow__config(1, data_root=self.data_root), Path(directory) / 'run')
             first = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
             self.assertTrue(first['algorithm']['volminnet_state']['completed'])
             self.assertEqual(first['algorithm']['volminnet_state']['global_step'], 2)
@@ -550,21 +554,21 @@ class _volminnet_workflow_VolMinNetWorkflowTest(unittest.TestCase):
                 self.assertTrue((run_dir / name).is_file(), name)
             manifest_hash = _volminnet_workflow__sha(run_dir / 'noise_manifest.npz')
             initial_hash = _volminnet_workflow__sha(run_dir / 'transition_initial.npz')
-            run_experiment(_volminnet_workflow__config(2), resume=run_dir / 'last.pt')
+            run_experiment(_volminnet_workflow__config(2, data_root=self.data_root), resume=run_dir / 'last.pt')
             resumed = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
             self.assertEqual(resumed['algorithm']['volminnet_state']['global_step'], 4)
             self.assertEqual(_volminnet_workflow__sha(run_dir / 'noise_manifest.npz'), manifest_hash)
             self.assertEqual(_volminnet_workflow__sha(run_dir / 'transition_initial.npz'), initial_hash)
             watched = {name: (_volminnet_workflow__sha(run_dir / name), (run_dir / name).stat().st_mtime_ns) for name in ('last.pt', 'best.pt', 'metrics.jsonl', 'final_metrics.json', 'noise_manifest.npz', 'transition_initial.npz', 'transition_best.npz', 'transition_last.npz')}
-            run_experiment(_volminnet_workflow__config(2), resume=run_dir / 'last.pt')
+            run_experiment(_volminnet_workflow__config(2, data_root=self.data_root), resume=run_dir / 'last.pt')
             for name, expected in watched.items():
                 self.assertEqual((_volminnet_workflow__sha(run_dir / name), (run_dir / name).stat().st_mtime_ns), expected)
 
     def test_uninterrupted_matches_epoch_boundary_resume(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load):
-            direct = run_experiment(_volminnet_workflow__config(2), Path(directory) / 'direct')
-            resumed = run_experiment(_volminnet_workflow__config(1), Path(directory) / 'resumed')
-            run_experiment(_volminnet_workflow__config(2), resume=resumed / 'last.pt')
+            direct = run_experiment(_volminnet_workflow__config(2, data_root=self.data_root), Path(directory) / 'direct')
+            resumed = run_experiment(_volminnet_workflow__config(1, data_root=self.data_root), Path(directory) / 'resumed')
+            run_experiment(_volminnet_workflow__config(2, data_root=self.data_root), resume=resumed / 'last.pt')
             direct_state = torch.load(direct / 'last.pt', map_location='cpu', weights_only=False)['algorithm']
             resumed_state = torch.load(resumed / 'last.pt', map_location='cpu', weights_only=False)['algorithm']
             for owner in ('model', 'transition'):
@@ -573,8 +577,8 @@ class _volminnet_workflow_VolMinNetWorkflowTest(unittest.TestCase):
 
     def test_resume_rejects_method_drift(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load):
-            run_dir = run_experiment(_volminnet_workflow__config(1), Path(directory) / 'run')
-            changed = _volminnet_workflow__config(2)
+            run_dir = run_experiment(_volminnet_workflow__config(1, data_root=self.data_root), Path(directory) / 'run')
+            changed = _volminnet_workflow__config(2, data_root=self.data_root)
             changed['volminnet']['objective']['volume']['coefficient'] = 0.01
             with self.assertRaisesRegex(ValueError, 'method settings'):
                 run_experiment(changed, resume=run_dir / 'last.pt')
@@ -583,12 +587,12 @@ class _volminnet_workflow_VolMinNetWorkflowTest(unittest.TestCase):
         train = _volminnet_workflow__cifar(200, 'train', 100)
         test = _volminnet_workflow__cifar(100, 'test', 100)
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar100', side_effect=lambda _root, split: train if split == 'train' else test):
-            run_dir = run_experiment(_volminnet_workflow__config(1, 'cifar100'), Path(directory) / 'run')
+            run_dir = run_experiment(_volminnet_workflow__config(1, 'cifar100', data_root=self.data_root), Path(directory) / 'run')
             final = json.loads((run_dir / 'final_metrics.json').read_text())
             self.assertEqual(len(final['learned_transition']), 100)
 
     def test_test_metrics_do_not_select_best(self) -> None:
-        config = _volminnet_workflow__config(1)
+        config = _volminnet_workflow__config(1, data_root=self.data_root)
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load), patch('lnl_toolbox.training.volminnet_experiment._evaluate_clean', return_value={'loss': 999.0, 'accuracy': 0.0, 'samples': 10.0}):
             run_dir = run_experiment(config, Path(directory) / 'run')
             payload = torch.load(run_dir / 'best.pt', map_location='cpu', weights_only=False)

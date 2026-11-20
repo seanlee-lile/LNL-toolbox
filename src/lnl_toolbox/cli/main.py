@@ -659,8 +659,8 @@ def _run(args: argparse.Namespace) -> int:
     if review:
         service.preflight(config, check_data=False)
         print("Quick Start phase: rehearsing", flush=True)
-    service.preflight(config, check_data=_should_check_data(args))
     if args.dry_run:
+        service.preflight(config, check_data=_should_check_data(args))
         if args.output_dir is not None:
             output = args.output_dir.expanduser().resolve()
             print("Planned training artifacts (created when training starts)")
@@ -732,12 +732,12 @@ def _sweep(args: argparse.Namespace) -> int:
         recipe=recipe.id if recipe is not None else None,
     )
     service = ExperimentService()
-    for planned in plan.runs:
-        service.preflight(
-            resolve_planned_config(config, planned),
-            check_data=not args.no_check_data,
-        )
     if args.dry_run:
+        for planned in plan.runs:
+            service.preflight(
+                resolve_planned_config(config, planned),
+                check_data=not args.no_check_data,
+            )
         _print_sweep_plan(plan)
         return 0
     result = run_sweep(

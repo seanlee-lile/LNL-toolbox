@@ -278,15 +278,25 @@ class _runner_planning_RunnerPlanningTest(unittest.TestCase):
         self.assertIn('first=current', fields['LEND history'])
 
     def test_public_workflow_configs_are_declared_as_package_data(self) -> None:
+        from lnl_toolbox.catalog import discover_recipes
+
         root = Path(__file__).resolve().parents[1]
         pyproject = tomllib.loads((root / 'pyproject.toml').read_text(encoding='utf-8'))
         data_files = pyproject['tool']['setuptools']['data-files']
         declared = {path for paths in data_files.values() for path in paths}
         manifest = json.loads((root / 'src/lnl_toolbox/cli/data/recipe_catalog.json').read_text(encoding='utf-8'))
-        catalog_recipes = set(manifest['recipes']) | set(manifest.get('conditional', []))
+        catalog_recipes = set(manifest['recipes'])
+        conditional = set(manifest.get('conditional', []))
+        self.assertEqual(conditional - catalog_recipes, set())
         self.assertEqual(catalog_recipes - declared, set())
         for path in catalog_recipes:
             self.assertTrue((root / path).is_file(), path)
+
+        recipes = discover_recipes(root, include_conditional=True)
+        discovered = {recipe.config_path.relative_to(root).as_posix() for recipe in recipes}
+        self.assertEqual(discovered, catalog_recipes)
+        recipe_ids = [recipe.id for recipe in recipes]
+        self.assertEqual(len(recipe_ids), len(set(recipe_ids)), 'recipe IDs must be unique')
 
 # --- merged from test_experiment_service.py ---
 import json
@@ -346,8 +356,8 @@ class _experiment_service_ExperimentServiceTest(unittest.TestCase):
 
     def test_service_invokes_runner_and_writes_standard_artifacts(self) -> None:
         runner = _experiment_service__FakeRunner()
-        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.training.service.resolve_runner', return_value=runner):
-            root = ExperimentService().run({'schema_version': 1, 'kind': 'experiment', 'seed': 2, 'method': 'fake', 'execution': {'runner': 'fake'}, 'data': {'name': 'synthetic_multiclass'}, 'noise': {'name': 'symmetric', 'rate': 0.2}}, directory, recipe='fake-smoke')
+        with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.training.runners.RunnerSpec.invoke', side_effect=runner.invoke):
+            root = ExperimentService().run({'schema_version': 1, 'kind': 'experiment', 'seed': 2, 'execution': {'runner': 'supervised'}, 'data': {'name': 'synthetic_multiclass', 'num_classes': 3, 'dimension': 4, 'train_size': 18, 'test_size': 9, 'validation_size': 6}, 'noise': {'name': 'symmetric', 'rate': 0.2}}, directory, recipe='fake-smoke')
             result = json.loads((root / 'final_metrics.json').read_text(encoding='utf-8'))
             self.assertEqual(runner.calls, 1)
             self.assertEqual(result['recipe'], 'fake-smoke')

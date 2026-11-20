@@ -468,6 +468,22 @@ class _unified_cli_RunnerResolutionTest(unittest.TestCase):
 
 class _unified_cli_CatalogTest(unittest.TestCase):
 
+    def test_tabular_feature_mlp_is_valid_for_supervised_and_clean(self) -> None:
+        for name in ('supervised', 'clean'):
+            with self.subTest(runner=name):
+                config = {
+                    'execution': {'runner': name},
+                    'data': {'name': 'synthetic_multiclass'},
+                    'model': {'name': 'feature_mlp', 'hidden_width': 8},
+                }
+                self.assertEqual(validate_config(config).name, name)
+                config['model']['name'] = 'unregistered_model'
+                with self.assertRaisesRegex(ValueError, r'model\.name'):
+                    validate_config(config)
+                config['model']['name'] = 'pcse_mlp'
+                with self.assertRaisesRegex(ValueError, 'unsupported model'):
+                    validate_config(config)
+
     def test_installed_recipe_uses_distribution_file_record(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             prefix = Path(temporary) / 'venv'
@@ -751,7 +767,7 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
 
     def test_compatibility_failure_prevents_validate_dry_run_and_run(self) -> None:
         error = ValueError("method 'upm' is not ready for dataset 'heart': incompatible; unsupported_modality: image required")
-        with patch('lnl_toolbox.cli.main.ExperimentService.preflight', side_effect=error), patch('lnl_toolbox.cli.main.ExperimentService.run') as runner:
+        with patch('lnl_toolbox.cli.main.ExperimentService.preflight', side_effect=error), patch('lnl_toolbox.training.runners.RunnerSpec.invoke') as runner:
             code, _, stderr = self.invoke('validate', '--recipe', 'cifar10-upm-smoke', '--check-data')
             self.assertEqual(code, 2)
             self.assertIn('unsupported_modality', stderr)
@@ -1009,10 +1025,12 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
             root = Path(directory)
             config_path = root / 'missing-data.yaml'
             config_path.write_text(yaml.safe_dump({'data': {'name': 'cifar10', 'root': str(root / 'missing')}, 'execution': {'runner': 'supervised'}}), encoding='utf-8')
-            with patch('lnl_toolbox.training.experiment.run_experiment') as runner:
+            with patch('lnl_toolbox.training.runners.RunnerSpec.invoke') as runner:
                 code, _, error = self.invoke('run', '--config', str(config_path), '--project-root', str(_unified_cli_ROOT))
+                with self.assertRaises(FileNotFoundError) as direct:
+                    ExperimentService().run(yaml.safe_load(config_path.read_text(encoding='utf-8')))
             self.assertEqual(code, 2)
-            self.assertIn('data path does not exist', error)
+            self.assertIn(str(direct.exception), error)
             runner.assert_not_called()
 
     def test_run_normalizes_final_result_contract(self) -> None:

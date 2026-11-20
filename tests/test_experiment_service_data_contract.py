@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import torch
+import yaml
 
+from lnl_toolbox.catalog import load_recipe_config, recipe_by_id
+from lnl_toolbox.core.config_schema import runtime_experiment_config
 from lnl_toolbox.data.contracts import (
     DataSpec,
     RawDatasetSplit,
@@ -15,6 +20,7 @@ from lnl_toolbox.data.contracts import (
 from lnl_toolbox.data.local_catalog import LocalDatasetCatalog
 from lnl_toolbox.data.registry import DatasetRegistry
 from lnl_toolbox.training.data_service import DataService
+from lnl_toolbox.training.runners import RunnerSpec
 from lnl_toolbox.training.service import ExperimentService
 
 
@@ -190,6 +196,90 @@ class ExperimentServiceDataContractTests(unittest.TestCase):
         torch.save({"clean": torch.from_numpy(clean)}, artifact)
         with self.assertRaisesRegex(ValueError, "configured clean/noisy keys"):
             self.service.data_service.validate_cal_external_labels(config)
+
+    def test_direct_run_rejects_missing_data_before_runner(self) -> None:
+        root = Path(self.temp.name)
+        config = {
+            "execution": {"runner": "supervised"},
+            "data": {"name": "cifar10", "root": str(root / "missing")},
+        }
+        output = root / "output"
+        with patch.object(RunnerSpec, "invoke") as invoke:
+            with self.assertRaisesRegex(FileNotFoundError, "data path does not exist"):
+                self.service.run(config, output)
+        invoke.assert_not_called()
+        self.assertFalse(output.exists())
+
+    def test_formal_execution_preserves_runner_arguments(self) -> None:
+        root = Path(self.temp.name)
+        config = {
+            "execution": {"runner": "supervised"},
+            "data": {"name": "cifar10", "root": str(root / "data")},
+            "trainer": {"epochs": 3},
+            "noise": {"name": "symmetric", "rate": 0.2},
+        }
+        expected = runtime_experiment_config({"kind": "experiment", **config})
+        output = root / "output"
+        run = root / "unfinished"
+        run.mkdir()
+        checkpoint = run / "last.pt"
+        checkpoint.write_bytes(b"runner-owned checkpoint")
+        (run / "resolved_config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+        with patch.object(RunnerSpec, "invoke", autospec=True, return_value=output) as invoke:
+            self.assertEqual(self.service.run(config, output), output)
+            runner, candidate, output_arg, resume_arg = invoke.call_args.args
+            self.assertEqual(runner.name, "supervised")
+            self.assertEqual((candidate, output_arg, resume_arg), (expected, output, None))
+            invoke.reset_mock()
+            self.service.resume(run)
+            runner, candidate, output_arg, resume_arg = invoke.call_args.args
+            self.assertEqual(runner.name, "supervised")
+            self.assertEqual((candidate, output_arg, resume_arg), (expected, run, checkpoint))
+        self.assertFalse(output.exists())
+        self.assertEqual(checkpoint.read_bytes(), b"runner-owned checkpoint")
+
+    def test_run_and_unfinished_resume_refresh_replaced_artifact(self) -> None:
+        root = Path(self.temp.name)
+        config = load_recipe_config(recipe_by_id("cal-cifar10-reproduction"))
+        config["data"] = {"name": "cifar10", "root": str(root / "data")}
+        artifact = root / "labels.pt"
+        clean = torch.arange(20) % 10
+        config["noise"].update(path=str(artifact), clean_key="clean", noisy_key="noisy")
+        run = root / "unfinished"
+        run.mkdir()
+        (run / "last.pt").write_bytes(b"runner-owned checkpoint")
+        (run / "resolved_config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+        before = {p.name: p.read_bytes() for p in run.iterdir()}
+        for resume in (False, True):
+            with self.subTest(resume=resume):
+                torch.save({"clean": clean, "noisy": (clean + 1) % 10}, artifact)
+                service = ExperimentService(data_service=self.service.data_service)
+                service.preflight(config)
+                torch.save({"clean": (clean + 1) % 10, "noisy": clean}, artifact)
+                with patch.object(RunnerSpec, "invoke") as invoke:
+                    with self.assertRaisesRegex(ValueError, "identity alignment"):
+                        if resume:
+                            service.resume(run)
+                        else:
+                            service.run(config, root / "output")
+                invoke.assert_not_called()
+        self.assertEqual({p.name: p.read_bytes() for p in run.iterdir()}, before)
+
+    def test_completed_resume_does_not_revalidate_missing_data(self) -> None:
+        root = Path(self.temp.name) / "completed"
+        root.mkdir()
+        (root / "resolved_config.yaml").write_text(
+            yaml.safe_dump({"data": {"name": "cifar10", "root": str(root / "missing")}}),
+            encoding="utf-8",
+        )
+        final = root / "final_metrics.json"
+        final.write_text(json.dumps({"status": "completed", "completed": True}), encoding="utf-8")
+        before = {p.name: p.read_bytes() for p in root.iterdir()}
+        with patch.object(self.service, "preflight") as preflight, patch.object(RunnerSpec, "invoke") as invoke:
+            self.assertEqual(self.service.resume(root), root.resolve())
+        preflight.assert_not_called()
+        invoke.assert_not_called()
+        self.assertEqual({p.name: p.read_bytes() for p in root.iterdir()}, before)
 
 
 if __name__ == "__main__":

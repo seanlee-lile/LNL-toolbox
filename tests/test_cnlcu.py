@@ -574,20 +574,25 @@ class _cnlcu_workflow_CNLCUWorkflowTest(unittest.TestCase):
         train, test = (_cnlcu_workflow__cifar(classes * 4, 'train', classes), _cnlcu_workflow__cifar(classes * 2, 'test', classes))
         loader_name = 'load_cifar10' if dataset == 'cifar10' else 'load_cifar100'
         with tempfile.TemporaryDirectory() as directory, patch(f'lnl_toolbox.data.sources.{loader_name}', side_effect=lambda _root, split: train if split == 'train' else test):
-            run_dir = run_experiment(config_factory(2, dataset), Path(directory) / 'run')
+            def config(epochs):
+                value = config_factory(epochs, dataset)
+                value['data']['root'] = directory
+                return value
+
+            run_dir = run_experiment(config(2), Path(directory) / 'run')
             first = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
             state = first['algorithm_private_state']['cnlcu_state']
             self.assertEqual(first['algorithm_private_state']['method_identity'], 'cnlcu')
             self.assertEqual(set(state), {'history_a', 'history_b', 'optimizer_steps_a', 'optimizer_steps_b'})
             self.assertFalse(torch.equal(state['history_a']['values'], state['history_b']['values']))
             manifest_hash, manifest_mtime = (_cnlcu_workflow__sha(run_dir / 'noise_manifest.npz'), (run_dir / 'noise_manifest.npz').stat().st_mtime_ns)
-            run_experiment(config_factory(3, dataset), resume=run_dir / 'last.pt')
+            run_experiment(config(3), resume=run_dir / 'last.pt')
             resumed = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
             self.assertEqual(resumed['completed_epoch'], 2)
             self.assertEqual(resumed['run_state']['step'], 6)
             self.assertEqual(_cnlcu_workflow__sha(run_dir / 'noise_manifest.npz'), manifest_hash)
             self.assertEqual((run_dir / 'noise_manifest.npz').stat().st_mtime_ns, manifest_mtime)
-            uninterrupted_dir = run_experiment(config_factory(3, dataset), Path(directory) / 'uninterrupted')
+            uninterrupted_dir = run_experiment(config(3), Path(directory) / 'uninterrupted')
             uninterrupted = torch.load(uninterrupted_dir / 'last.pt', map_location='cpu', weights_only=False)
             for peer in ('a', 'b'):
                 for name, value in resumed['model'][peer].items():
@@ -605,7 +610,7 @@ class _cnlcu_workflow_CNLCUWorkflowTest(unittest.TestCase):
                     self.assertIn(key, row)
                     self.assertTrue(np.isfinite(row[key]), key)
             checkpoint_hash, metrics_hash = (_cnlcu_workflow__sha(run_dir / 'last.pt'), _cnlcu_workflow__sha(run_dir / 'metrics.jsonl'))
-            run_experiment(config_factory(3, dataset), resume=run_dir / 'last.pt')
+            run_experiment(config(3), resume=run_dir / 'last.pt')
             self.assertEqual(_cnlcu_workflow__sha(run_dir / 'last.pt'), checkpoint_hash)
             self.assertEqual(_cnlcu_workflow__sha(run_dir / 'metrics.jsonl'), metrics_hash)
             final = json.loads((run_dir / 'final_metrics.json').read_text())
@@ -626,27 +631,41 @@ class _cnlcu_workflow_CNLCUWorkflowTest(unittest.TestCase):
     def test_resume_rejects_method_and_history_configuration_drift(self):
         train, test = (_cnlcu_workflow__cifar(40, 'train'), _cnlcu_workflow__cifar(20, 'test'))
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: train if split == 'train' else test):
-            run_dir = run_experiment(_cnlcu_workflow__config(1), Path(directory) / 'run')
-            changed = _cnlcu_workflow__config(2)
+            initial = self._config_for_root(_cnlcu_workflow__config, 1, directory)
+            run_dir = run_experiment(initial, Path(directory) / 'run')
+            changed = self._config_for_root(_cnlcu_workflow__config, 2, directory)
             changed['cnlcu']['history']['window_size'] = 3
             with self.assertRaisesRegex(ValueError, 'CNLCU settings'):
                 run_experiment(changed, resume=run_dir / 'last.pt')
 
     def test_lazy_cli_dispatch(self):
-        with patch('lnl_toolbox.training.cnlcu_experiment.run_cnlcu_experiment', return_value=Path('cnlcu-run')) as run:
-            self.assertEqual(run_experiment(_cnlcu_workflow__config()), Path('cnlcu-run'))
+        train, test = (_cnlcu_workflow__cifar(40, 'train'), _cnlcu_workflow__cifar(20, 'test'))
+        with tempfile.TemporaryDirectory() as directory, patch(
+            'lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: train if split == 'train' else test
+        ), patch('lnl_toolbox.training.cnlcu_experiment.run_cnlcu_experiment') as run:
+            output = Path(directory) / 'cnlcu-run'
+            run.return_value = output
+            self.assertEqual(run_experiment(self._config_for_root(_cnlcu_workflow__config, 2, directory)), output)
             run.assert_called_once()
+
+    @staticmethod
+    def _config_for_root(factory, epochs, directory):
+        config = factory(epochs)
+        config['data']['root'] = directory
+        return config
 
     def test_soft_hard_resume_and_hard_detector_drift_are_rejected(self):
         train, test = (_cnlcu_workflow__cifar(40, 'train'), _cnlcu_workflow__cifar(20, 'test'))
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: train if split == 'train' else test):
-            soft_dir = run_experiment(_cnlcu_workflow__config(1), Path(directory) / 'soft')
+            soft = lambda epochs: self._config_for_root(_cnlcu_workflow__config, epochs, directory)
+            hard = lambda epochs: self._config_for_root(_cnlcu_workflow__hard_config, epochs, directory)
+            soft_dir = run_experiment(soft(1), Path(directory) / 'soft')
             with self.assertRaisesRegex(ValueError, 'CNLCU settings'):
-                run_experiment(_cnlcu_workflow__hard_config(2), resume=soft_dir / 'last.pt')
-            hard_dir = run_experiment(_cnlcu_workflow__hard_config(1), Path(directory) / 'hard')
+                run_experiment(hard(2), resume=soft_dir / 'last.pt')
+            hard_dir = run_experiment(hard(1), Path(directory) / 'hard')
             with self.assertRaisesRegex(ValueError, 'CNLCU settings'):
-                run_experiment(_cnlcu_workflow__config(2), resume=hard_dir / 'last.pt')
-            drift = _cnlcu_workflow__hard_config(2)
+                run_experiment(soft(2), resume=hard_dir / 'last.pt')
+            drift = hard(2)
             drift['cnlcu']['truncation']['contamination'] = 0.2
             with self.assertRaisesRegex(ValueError, 'CNLCU settings'):
                 run_experiment(drift, resume=hard_dir / 'last.pt')

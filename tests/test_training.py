@@ -675,9 +675,14 @@ def _noisy_ce_baseline__config(epochs: int=1) -> dict:
 
 
 class APLReportingProtocolTest(unittest.TestCase):
-    @staticmethod
-    def config(epochs=2):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.data_root = temporary.name
+
+    def config(self, epochs=2):
         config = _noisy_ce_baseline__config(epochs)
+        config['data']['root'] = self.data_root
         config['data']['validation_size'] = 0
         config['data'].pop('max_validation_samples')
         config['model'] = {'name': 'cnn8'}
@@ -744,7 +749,7 @@ class APLReportingProtocolTest(unittest.TestCase):
     def test_test_monitoring_cannot_trigger_early_stopping(self):
         config = self.config()
         config['early_stopping'] = {}
-        with self.assertRaisesRegex(ValueError, 'Test monitoring must not control early stopping'):
+        with patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: _noisy_ce_baseline__cifar(40 if split == 'train' else 20, split)), self.assertRaisesRegex(ValueError, 'Test monitoring must not control early stopping'):
             run_experiment(config)
 
     def test_validation_requirement_is_removed_only_for_apl_last_test_report(self):
@@ -791,8 +796,38 @@ class _noisy_ce_baseline__GenericTabularAdapter:
 
 class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
 
-    def test_relative_output_root_is_resolved_before_manifest_metadata(self) -> None:
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.data_root = temporary.name
+
+    def _config(self) -> dict:
         config = _noisy_ce_baseline__config()
+        config['data']['root'] = self.data_root
+        return config
+
+    def _run_and_check_tabular_admission(self, config: dict, output: Path) -> Path:
+        from lnl_toolbox.core.config_schema import runtime_experiment_config
+        from lnl_toolbox.training.runners import RunnerSpec
+
+        expected = runtime_experiment_config({'kind': 'experiment', **config})
+        invoke_runner = RunnerSpec.invoke
+
+        def check_and_invoke(runner, candidate, output_dir, resume):
+            self.assertEqual(runner.name, 'supervised')
+            self.assertEqual(candidate['model']['name'], 'feature_mlp')
+            self.assertEqual(candidate, expected)
+            self.assertEqual(output_dir, output)
+            self.assertIsNone(resume)
+            return invoke_runner(runner, candidate, output_dir, resume)
+
+        with patch.object(RunnerSpec, 'invoke', autospec=True, side_effect=check_and_invoke) as invoke:
+            result = run_experiment(config, output)
+        invoke.assert_called_once()
+        return result
+
+    def test_relative_output_root_is_resolved_before_manifest_metadata(self) -> None:
+        config = self._config()
         config['output_root'] = 'runs'
         train_data = _noisy_ce_baseline__cifar(40, 'train')
         test_data = _noisy_ce_baseline__cifar(20, 'test')
@@ -812,9 +847,9 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
             self.assertTrue((run_dir / 'noise_summary.json').is_file())
 
     def test_unconnected_transition_estimator_configuration_is_rejected(self) -> None:
-        config = _noisy_ce_baseline__config()
+        config = self._config()
         config['transition_estimator'] = {'name': 'anchor'}
-        with self.assertRaisesRegex(ValueError, "field 'transition_estimator'.*pipeline.transition_estimator"):
+        with patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: _noisy_ce_baseline__cifar(40 if split == 'train' else 20, split)), self.assertRaisesRegex(ValueError, "field 'transition_estimator'.*pipeline.transition_estimator"):
             run_experiment(config)
 
     def test_noisy_training_writes_manifest_metadata_and_clean_evaluation_sets(self) -> None:
@@ -830,7 +865,7 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
             observed_evaluation_targets.append((sample['index'], sample['target']))
             return {'loss': 1.0, 'accuracy': 0.25, 'samples': float(len(loader.dataset))}
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=load_data), patch('lnl_toolbox.training.experiment.evaluate_classification', side_effect=evaluate):
-            run_dir = run_experiment(_noisy_ce_baseline__config(), directory)
+            run_dir = run_experiment(self._config(), directory)
             manifest = NoiseManifest.load(run_dir / 'noise_manifest.npz')
             checkpoint = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
             final = json.loads((run_dir / 'final_metrics.json').read_text(encoding='utf-8'))
@@ -846,7 +881,7 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
             self.assertEqual(target, index % 10)
 
     def test_paper_mode_can_apply_one_manifest_to_train_and_validation(self) -> None:
-        config = _noisy_ce_baseline__config()
+        config = self._config()
         config['noise']['validation_targets'] = 'noisy'
         train_data = _noisy_ce_baseline__cifar(40, 'train')
         test_data = _noisy_ce_baseline__cifar(20, 'test')
@@ -894,7 +929,7 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
                 prepare_noise_manifest(config, dataset='cifar10', clean_targets=np.arange(10), global_indices=np.arange(10), num_classes=10, run_dir=Path(directory), checkpoint_payload={'noise': metadata})
 
     def test_noisy_runner_accepts_configured_gce_loss(self) -> None:
-        config = _noisy_ce_baseline__config()
+        config = self._config()
         config['loss'] = {'name': 'gce', 'q': 0.7}
         train_data = _noisy_ce_baseline__cifar(40, 'train')
         test_data = _noisy_ce_baseline__cifar(20, 'test')
@@ -939,7 +974,7 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
                 with self.subTest(loss=loss['name']):
                     config = deepcopy(base)
                     config['loss'] = loss
-                    run_dir = run_experiment(config, Path(directory) / loss['name'])
+                    run_dir = self._run_and_check_tabular_admission(config, Path(directory) / loss['name'])
                     checkpoint = torch.load(
                         run_dir / 'last.pt', map_location='cpu', weights_only=False
                     )
@@ -959,7 +994,7 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
             'seed': 7,
             'data': {
                 'name': _noisy_ce_baseline__GenericTabularAdapter.name,
-                'root': 'unused',
+                'root': self.data_root,
                 'num_classes': 4,
                 'validation_size': 8,
             },
@@ -1018,7 +1053,7 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
                 with self.subTest(method=method):
                     config = deepcopy(base)
                     config.update(additions)
-                    run_dir = run_experiment(config, Path(directory) / method)
+                    run_dir = self._run_and_check_tabular_admission(config, Path(directory) / method)
                     final = json.loads(
                         (run_dir / 'final_metrics.json').read_text(encoding='utf-8')
                     )
@@ -1026,7 +1061,7 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
                     self.assertTrue(np.isfinite(final['test_loss']))
 
     def test_small_loss_selector_is_applied_and_resume_config_is_checked(self) -> None:
-        config = _noisy_ce_baseline__config()
+        config = self._config()
         config['selector'] = {'name': 'small_loss', 'keep_rate': 0.5}
         train_data = _noisy_ce_baseline__cifar(40, 'train')
         test_data = _noisy_ce_baseline__cifar(20, 'test')
@@ -1083,9 +1118,9 @@ class _noisy_ce_baseline_NoisyCeBaselineTest(unittest.TestCase):
             _validate_resume_config(changed, saved)
 
     def test_test_set_cannot_select_checkpoint_without_explicit_opt_in(self):
-        config = _noisy_ce_baseline__config()
+        config = self._config()
         config['evaluation'] = {'selection_split': 'test'}
-        with self.assertRaisesRegex(ValueError, 'test selection requires'):
+        with patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: _noisy_ce_baseline__cifar(40 if split == 'train' else 20, split)), self.assertRaisesRegex(ValueError, 'test selection requires'):
             run_experiment(config)
 
 

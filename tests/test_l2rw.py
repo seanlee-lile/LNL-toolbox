@@ -231,6 +231,8 @@ class _l2rw_training_L2RWTrainingTest(unittest.TestCase):
 class L2RWPreparedDataIsolationTest(unittest.TestCase):
     def setUp(self):
         from lnl_toolbox.data.cifar import CifarData
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
         rng = np.random.default_rng(17)
         names = tuple(map(str, range(10)))
         self.train = CifarData(rng.integers(0, 256, (40, 32, 32, 3), dtype=np.uint8),
@@ -238,7 +240,7 @@ class L2RWPreparedDataIsolationTest(unittest.TestCase):
         self.test = CifarData(rng.integers(0, 256, (20, 32, 32, 3), dtype=np.uint8),
                               np.arange(20) % 10, names, 'test', 'cifar10')
         self.config = yaml.safe_load((_l2rw_training_ROOT / 'configs/experiment/l2rw_cifar10_reproduction.yaml').read_text(encoding='utf-8'))
-        self.config['data'].update(root='unused-controlled-source', num_val=10, num_clean=10)
+        self.config['data'].update(root=temporary.name, num_val=10, num_clean=10)
         self.config['loader'].update(batch_size=5, num_workers=0, pin_memory=False)
         self.config['trusted_validation']['batch_size'] = 5
 

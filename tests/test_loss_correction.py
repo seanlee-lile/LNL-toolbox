@@ -186,9 +186,10 @@ class LossCorrectionPaperProtocolTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, '预训练轮数必须大于 0'):
                 web._save_config(payload, for_review=True, destination=destination)
 
-    def _training_config(self, estimated=True, epochs=2):
+    def _training_config(self, estimated=True, epochs=2, *, data_root=None):
+        source = {} if data_root is None else {'root': data_root}
         return {'execution': {'runner': 'supervised'}, 'seed': 7,
-            'data': {'name': 'cifar10', 'root': 'unused', 'validation_size': 10, 'augment': False},
+            'data': {'name': 'cifar10', **source, 'validation_size': 10, 'augment': False},
             'noise': {'name': 'symmetric', 'rate': .2, 'validation_targets': 'noisy'},
             'model': {'name': 'tiny_cnn', 'width': 4}, 'loss': {'name': 'ce'},
             'optimizer': {'name': 'sgd', 'lr': .01, 'momentum': .9}, 'scheduler': {'name': 'none'},
@@ -208,6 +209,27 @@ class LossCorrectionPaperProtocolTest(unittest.TestCase):
         images = np.random.default_rng(9 if split == 'train' else 10).integers(0, 256, (size, 32, 32, 3), dtype=np.uint8)
         return CifarData(images, np.arange(size) % 10, tuple(map(str, range(10))), split, 'cifar10')
 
+    def test_anchor_percentile_validation_matches_estimator(self):
+        from lnl_toolbox.catalog import validate_config
+        from lnl_toolbox.noise.estimators import AnchorTransitionEstimator
+
+        config = self._training_config()
+        for percentile in (None, 0.001, 97, 97.0, 99.999, -1, 0, 100, 101):
+            with self.subTest(percentile=percentile):
+                config['pipeline']['transition_estimator']['percentile'] = percentile
+                if percentile is None or 0 < percentile < 100:
+                    AnchorTransitionEstimator(percentile)
+                    self.assertEqual(validate_config(config).name, 'supervised')
+                else:
+                    with self.assertRaises(ValueError):
+                        AnchorTransitionEstimator(percentile)
+                    with self.assertRaisesRegex(ValueError, r'pipeline\.transition_estimator\.percentile.*\(0, 100\)'):
+                        validate_config(config)
+        config['pipeline']['transition_estimator']['percentile'] = 97
+        config['noise']['rate'] = 1.01
+        with self.assertRaisesRegex(ValueError, r'noise\.rate.*\[0, 1\]'):
+            validate_config(config)
+
     def test_real_two_stage_training_reinitializes_and_resumes(self):
         import json, tempfile
         from unittest.mock import patch
@@ -215,7 +237,7 @@ class LossCorrectionPaperProtocolTest(unittest.TestCase):
         from lnl_toolbox.noise.estimators import PosteriorSnapshot
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._data), \
                 patch.object(experiment, 'build_model', wraps=experiment.build_model) as build:
-            run = experiment.run_experiment(self._training_config(), Path(directory)/'run')
+            run = experiment.run_experiment(self._training_config(data_root=directory), Path(directory)/'run')
             self.assertEqual(build.call_count, 2)
             snapshot = PosteriorSnapshot.load(run/'posterior_snapshot.npz')
             self.assertEqual(snapshot.num_samples, 40)
@@ -226,10 +248,10 @@ class LossCorrectionPaperProtocolTest(unittest.TestCase):
             losses = [row['selection_loss'] for row in rows if row['event'] == 'epoch']
             self.assertAlmostEqual(first['pipeline']['state']['metadata']['best_selection_loss'], min(losses))
             stage_mtime = (run/'pretraining_last.pt').stat().st_mtime_ns
-            experiment.run_experiment(self._training_config(epochs=3), resume=run/'last.pt')
+            experiment.run_experiment(self._training_config(epochs=3, data_root=directory), resume=run/'last.pt')
             self.assertEqual((run/'pretraining_last.pt').stat().st_mtime_ns, stage_mtime)
             resumed = torch.load(run/'last.pt', weights_only=False)
-            full_run = experiment.run_experiment(self._training_config(epochs=3), Path(directory)/'full')
+            full_run = experiment.run_experiment(self._training_config(epochs=3, data_root=directory), Path(directory)/'full')
             full = torch.load(full_run/'last.pt', weights_only=False)
             for name, value in resumed['model'].items():
                 torch.testing.assert_close(value, full['model'][name], rtol=0, atol=0)
@@ -245,7 +267,7 @@ class LossCorrectionPaperProtocolTest(unittest.TestCase):
                     {'loss': .5, 'accuracy': .4})[len(criteria)-1]
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._data), \
                 patch.object(experiment, 'evaluate_classification', side_effect=evaluate):
-            run = experiment.run_experiment(self._training_config(estimated=False), Path(directory)/'known')
+            run = experiment.run_experiment(self._training_config(estimated=False, data_root=directory), Path(directory)/'known')
             best = torch.load(run/'best.pt', weights_only=False)
             self.assertEqual(best['best_epoch'], 1)
             self.assertFalse((run/'pretraining_last.pt').exists())

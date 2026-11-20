@@ -281,8 +281,8 @@ def _coteaching_workflow__cifar(size, split):
     images = np.zeros((size, 32, 32, 3), dtype=np.uint8)
     return CifarData(images, labels, tuple(map(str, range(10))), split, 'cifar10')
 
-def _coteaching_workflow__config(epochs=2):
-    return {'method': 'coteaching', 'seed': 7, 'data': {'name': 'cifar10', 'root': 'unused', 'validation_size': 10, 'max_train_samples': 20, 'max_validation_samples': 10, 'max_test_samples': 10, 'augment': False}, 'noise': {'name': 'symmetric', 'rate': 0.4, 'seed': 17, 'validation_targets': 'noisy'}, 'loss': {'name': 'ce'}, 'model': {'name': 'tiny_cnn', 'width': 4}, 'optimizer': {'name': 'adam', 'lr': 0.001, 'weight_decay': 0.0}, 'scheduler': {'name': 'none'}, 'coteaching': {'model_count': 2, 'noise_rate': 0.4, 'initialization': {'peer_seed_offset': 1}, 'remember_schedule': {'name': 'linear', 'start': 1.0, 'end': 0.6, 'gradual_epochs': 2}, 'selection': {'count_rule': 'floor', 'tie_break': 'stable_sample_index'}}, 'loader': {'batch_size': 10, 'num_workers': 0, 'pin_memory': False}, 'evaluation': {'selection_split': 'validation', 'primary': 'mean_peer_accuracy', 'ensemble': 'mean_probabilities'}, 'trainer': {'epochs': epochs, 'device': 'cpu'}}
+def _coteaching_workflow__config(epochs=2, *, data_root=None):
+    return {'method': 'coteaching', 'seed': 7, 'data': {'name': 'cifar10', **({'root': data_root} if data_root is not None else {}), 'validation_size': 10, 'max_train_samples': 20, 'max_validation_samples': 10, 'max_test_samples': 10, 'augment': False}, 'noise': {'name': 'symmetric', 'rate': 0.4, 'seed': 17, 'validation_targets': 'noisy'}, 'loss': {'name': 'ce'}, 'model': {'name': 'tiny_cnn', 'width': 4}, 'optimizer': {'name': 'adam', 'lr': 0.001, 'weight_decay': 0.0}, 'scheduler': {'name': 'none'}, 'coteaching': {'model_count': 2, 'noise_rate': 0.4, 'initialization': {'peer_seed_offset': 1}, 'remember_schedule': {'name': 'linear', 'start': 1.0, 'end': 0.6, 'gradual_epochs': 2}, 'selection': {'count_rule': 'floor', 'tie_break': 'stable_sample_index'}}, 'loader': {'batch_size': 10, 'num_workers': 0, 'pin_memory': False}, 'evaluation': {'selection_split': 'validation', 'primary': 'mean_peer_accuracy', 'ensemble': 'mean_probabilities'}, 'trainer': {'epochs': epochs, 'device': 'cpu'}}
 
 def _coteaching_workflow__sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -290,6 +290,9 @@ def _coteaching_workflow__sha256(path):
 class _coteaching_workflow_CoTeachingWorkflowTest(unittest.TestCase):
 
     def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.data_root = temporary.name
         self.train_data = _coteaching_workflow__cifar(40, 'train')
         self.test_data = _coteaching_workflow__cifar(20, 'test')
 
@@ -297,7 +300,7 @@ class _coteaching_workflow_CoTeachingWorkflowTest(unittest.TestCase):
         return self.train_data if split == 'train' else self.test_data
 
     def test_adam_phases_are_applied_to_both_peers_and_survive_resume(self):
-        config = _coteaching_workflow__config(2)
+        config = _coteaching_workflow__config(2, data_root=self.data_root)
         config['scheduler'] = {
             'name':'linear_after', 'start_epoch':1, 'end_epoch':2,
             'beta1_before':.9, 'beta1_after':.1,
@@ -321,7 +324,7 @@ class _coteaching_workflow_CoTeachingWorkflowTest(unittest.TestCase):
 
     def test_fresh_resume_and_completed_resume_preserve_dual_state(self):
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load_data):
-            run_dir = run_experiment(_coteaching_workflow__config(2), Path(directory) / 'run')
+            run_dir = run_experiment(_coteaching_workflow__config(2, data_root=self.data_root), Path(directory) / 'run')
             first = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
             manifest = run_dir / 'noise_manifest.npz'
             manifest_hash = _coteaching_workflow__sha256(manifest)
@@ -340,7 +343,7 @@ class _coteaching_workflow_CoTeachingWorkflowTest(unittest.TestCase):
             final = json.loads((run_dir / 'final_metrics.json').read_text(encoding='utf-8'))
             for key in ('test_accuracy_a', 'test_accuracy_b', 'test_mean_peer_accuracy', 'test_accuracy_ensemble'):
                 self.assertIn(key, final)
-            run_experiment(_coteaching_workflow__config(3), resume=run_dir / 'last.pt')
+            run_experiment(_coteaching_workflow__config(3, data_root=self.data_root), resume=run_dir / 'last.pt')
             resumed = torch.load(run_dir / 'last.pt', map_location='cpu', weights_only=False)
             self.assertEqual(resumed['completed_epoch'], 2)
             self.assertEqual(resumed['run_state']['step'], 6)
@@ -350,22 +353,25 @@ class _coteaching_workflow_CoTeachingWorkflowTest(unittest.TestCase):
             checkpoint_hash = _coteaching_workflow__sha256(run_dir / 'last.pt')
             checkpoint_mtime = (run_dir / 'last.pt').stat().st_mtime_ns
             metrics_hash = _coteaching_workflow__sha256(run_dir / 'metrics.jsonl')
-            run_experiment(_coteaching_workflow__config(3), resume=run_dir / 'last.pt')
+            run_experiment(_coteaching_workflow__config(3, data_root=self.data_root), resume=run_dir / 'last.pt')
             self.assertEqual(_coteaching_workflow__sha256(run_dir / 'last.pt'), checkpoint_hash)
             self.assertEqual((run_dir / 'last.pt').stat().st_mtime_ns, checkpoint_mtime)
             self.assertEqual(_coteaching_workflow__sha256(run_dir / 'metrics.jsonl'), metrics_hash)
 
     def test_resume_rejects_method_configuration_drift(self):
         with tempfile.TemporaryDirectory() as directory, patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load_data):
-            run_dir = run_experiment(_coteaching_workflow__config(1), Path(directory) / 'run')
-            changed = _coteaching_workflow__config(2)
+            run_dir = run_experiment(_coteaching_workflow__config(1, data_root=self.data_root), Path(directory) / 'run')
+            changed = _coteaching_workflow__config(2, data_root=self.data_root)
             changed['coteaching']['initialization']['peer_seed_offset'] = 2
             with self.assertRaisesRegex(ValueError, 'Co-teaching settings'):
                 run_experiment(changed, resume=run_dir / 'last.pt')
 
     def test_cli_dispatch_is_lazy_and_does_not_change_supervised_default(self):
-        with patch('lnl_toolbox.training.coteaching_experiment.run_coteaching_experiment', return_value=Path('coteaching-run')) as run:
-            self.assertEqual(run_experiment(_coteaching_workflow__config()), Path('coteaching-run'))
+        output = Path(self.data_root) / 'coteaching-run'
+        with patch('lnl_toolbox.data.sources.load_cifar10', side_effect=self._load_data), patch(
+            'lnl_toolbox.training.coteaching_experiment.run_coteaching_experiment', return_value=output
+        ) as run:
+            self.assertEqual(run_experiment(_coteaching_workflow__config(data_root=self.data_root)), output)
             run.assert_called_once()
 
 

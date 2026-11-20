@@ -567,12 +567,17 @@ class ExperimentService:
         recipe: str | None = None,
         completed_noop: bool = True,
     ) -> Path:
+        """Admit a formal execution using current data and prerequisite state."""
         # Preserve the public dispatch contract even for otherwise incomplete
         # configurations: an unknown explicit method must fail as an unknown
         # method before schema validation reports missing dataset fields.
         explicit_method = config.get("method")
         if isinstance(explicit_method, str):
             resolve_runner({"method": explicit_method})
+        # Preview checks may reuse compatibility, but they do not authorize execution.
+        self.last_compatibility = None
+        self._last_compatibility_config = None
+        self.preflight(config, check_data=True)
         candidate = runtime_experiment_config({"kind": "experiment", **dict(config)})
         if candidate.get("kind") != "experiment":
             raise ValueError("ExperimentService requires kind: experiment")

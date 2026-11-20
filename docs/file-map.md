@@ -247,8 +247,6 @@ data 安装，避免用户本地 YAML 污染 catalog。
 
 | 文件 | 作用 |
 |---|---|
-| `scripts/download_papers.ps1` | 下载论文并检查 PDF 文件头，生成来源 manifest。 |
-| `scripts/extract_papers.py` | 从论文 PDF 抽取文本供摘要整理使用。 |
 | `scripts/prepare_split_noise_manifest.py` | 为 CIFAR 生成 classwise-legacy split-aware external Noise Manifest。 |
 | `docs/paper-summaries.md` | 26 篇 LNL 论文的中文摘要、代码链接与伪代码。 |
 | `docs/usage-guide.md` | 面向使用者的当前功能、命令和下一步测试说明。 |
@@ -462,9 +460,9 @@ Full regression after this pass: `609/609 OK`; `git diff --check` passed. No `tr
 | LEND | `selectors/lend.py` implements batch-local feature diffusion and `SelectionResult`; `selectors/history.py` adds indexed `Z[N,C]` state; `data/neighbors.py` adds batch graph construction; `training/lend_experiment.py` provides a resumable lifecycle. | No author-maintained implementation was found. This is explicitly a paper-equation implementation, not an official-source line-by-line reproduction. |
 
 The three new runners are registered in `training/runners.py`; no `training/experiment.py`, shared pipeline, model, or plugin-catalog branch was added. Focused smoke paths use `configs/experiment/{volmin_cifar10_smoke,upm_cifar10_smoke,lend_cifar10_smoke}.yaml`.
-## Current paper acceptance status (2026-08-07)
+## Historical paper acceptance notes (2026-08-07)
 
-The current reproduction acceptance status is maintained in `papers/implement/paper-reproduction-progress.md`. Only MentorNet and CDR remain incomplete; VolMinNet, UPM, and LEND are completed after source/equation alignment and validation.
+The [reproduction ledger](../papers/implement/paper-reproduction-progress.md) preserves dated engineering and experiment records. For current method/config availability, consult the [runtime Paper catalog](../src/lnl_toolbox/paper_catalog.json). Source or equation alignment and passing validation are not evidence of verified numerical reproduction.
 
 ## Official dataset-format compatibility audit (2026-08-19)
 

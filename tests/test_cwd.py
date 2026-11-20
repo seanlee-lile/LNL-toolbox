@@ -282,6 +282,7 @@ class _cwd_training_CWDTrainingTest(unittest.TestCase):
 
     def test_interrupted_fold_resumes_same_plan_without_validation_metrics(self) -> None:
         import json
+        from lnl_toolbox.algorithms.volminnet.artifacts import VolMinTransitionArtifact
         from lnl_toolbox.training.checkpoint import atomic_save as save
         train = _cwd_training__cifar('train', 6)
         test = _cwd_training__cifar('test', 2)
@@ -293,6 +294,18 @@ class _cwd_training_CWDTrainingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, \
              patch('lnl_toolbox.data.sources.load_cifar10', side_effect=lambda _root, split: train if split == 'train' else test):
             root = Path(directory)
+            transition = VolMinTransitionArtifact(
+                raw_off_diagonal=np.zeros(2),
+                matrix=np.array([[0.9, 0.1], [0.1, 0.9]]),
+                metadata={
+                    'method': 'volminnet', 'role': 'last', 'convention': 'clean_to_noisy_row',
+                    'parameterization': 'fixed_diagonal_sigmoid_offdiag', 'normalization_axis': 'row',
+                    'initialization': 'fixture', 'epoch': 0, 'global_step': 1,
+                },
+            )
+            transition_path = root / 'transition.npz'
+            transition.save(transition_path)
+            config['cwd']['transition_artifact'] = str(transition_path)
             uninterrupted = run_cwd_experiment(config, root/'complete')
 
             def interrupt(payload, path):
@@ -308,6 +321,14 @@ class _cwd_training_CWDTrainingTest(unittest.TestCase):
             run_cwd_experiment(config, resume=checkpoint)
             resumed = torch.load(checkpoint, weights_only=False)
             complete = torch.load(uninterrupted/'last.pt', weights_only=False)
+            for run_dir in (uninterrupted, checkpoint.parent):
+                source = json.loads((run_dir / 'transition-source.json').read_text(encoding='utf-8'))
+                self.assertEqual(source['artifact_hash'], transition.artifact_hash)
+            self.assertEqual(resumed['config']['cwd']['variant'], 'multiclass')
+            self.assertTrue(resumed['config']['cwd']['dynamic_centroid'])
+            for key in ('noise_mapping_hash', 'statistic_hash', 'feature_snapshot_hash'):
+                self.assertEqual(resumed[key], complete[key], key)
+            self.assertEqual(resumed['scheduler'], complete['scheduler'])
             self.assertEqual(resumed['completed_epoch'], config['trainer']['epochs'] - 1)
             self.assertEqual([row['epoch'] for row in resumed['metrics']], list(range(1, config['trainer']['epochs'] + 1)))
             for name, value in complete['model'].items():

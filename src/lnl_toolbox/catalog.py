@@ -654,6 +654,7 @@ def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
         "positive": ("a finite number > 0", lambda v: number(v) and v > 0),
         "probability": ("a finite number in [0, 1]", lambda v: number(v) and 0 <= v <= 1),
         "open_probability": ("a finite number in (0, 1)", lambda v: number(v) and 0 < v < 1),
+        "optional_open_percentile": ("null or a finite number in (0, 100)", lambda v: v is None or (number(v) and 0 < v < 100)),
         "decay": ("a finite number in [0, 1)", lambda v: number(v) and 0 <= v < 1),
         "seed": ("an integer in [0, 4294967295]", lambda v: type(v) is int and 0 <= v < 2**32),
         "half_probability": ("a finite number in (0, 0.5)", lambda v: number(v) and 0 < v < 0.5),
@@ -682,6 +683,7 @@ def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
     # Exact overrides distinguish parameters sharing a spelling but not a domain.
     exact = {
         "t_revision.transition_initialization.percentile": "positive",
+        "pipeline.transition_estimator.percentile": "optional_open_percentile",
         "trainer.epochs": "positive_integer",
         "seed": "seed",
         "evaluation.report_last_epochs": "integer",
@@ -977,7 +979,7 @@ def validate_config(config: Mapping[str, Any], *, check_data: bool = False) -> R
             raise ValueError("model configuration must be a mapping")
         model_name = str(model.get("name", "preact_resnet18")).lower()
         supported_models = {
-            "tiny_cnn", "cnn8", "resnet14", "resnet32", "resnet44", "resnet18", "resnet34",
+            "feature_mlp", "tiny_cnn", "cnn8", "resnet14", "resnet32", "resnet44", "resnet18", "resnet34",
             "resnet50", "resnet101", "mentor_wide_resnet", "preact_resnet18"
         }
         if model_name not in supported_models:

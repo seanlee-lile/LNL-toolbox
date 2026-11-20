@@ -14,7 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class QuickStartAssetsTests(unittest.TestCase):
     def test_selecting_paper_preserves_noise_step_seed(self) -> None:
-        self.assertIsNotNone(shutil.which("node"), "CI requires Node-backed UI verification")
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is unavailable")
         script = r"""
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const source=fs.readFileSync('web/assets/quick_start.js','utf8');
@@ -40,12 +42,14 @@ const binding=source.split('\n').find(line=>line.includes('panel.querySelectorAl
   }
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """
-        result = subprocess.run([shutil.which("node"), "-e", script], cwd=ROOT,
+        result = subprocess.run([node, "-e", script], cwd=ROOT,
                                 capture_output=True, text=True, encoding="utf-8", check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_compatibility_guide_reuses_loaded_noise_facts(self) -> None:
-        self.assertIsNotNone(shutil.which("node"), "CI requires Node-backed UI verification")
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is unavailable")
         script = r"""
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 let source=fs.readFileSync('web/assets/quick_start.js','utf8');
@@ -64,7 +68,7 @@ const s=ctx.window.__probe.state,c=ctx.window.quickStartController;
  assert(s.noise);await c.showCompatibilityGuide();assert.strictEqual(calls.length,1);
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """
-        result = subprocess.run([shutil.which("node"), "-e", script], cwd=ROOT,
+        result = subprocess.run([node, "-e", script], cwd=ROOT,
                                 capture_output=True, text=True, encoding="utf-8", check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -1110,6 +1114,9 @@ class ContinuousScheduleRegressionTests(unittest.TestCase):
                         'patches': [{'path': 'scheduler.decay_start', 'value': start}], 'acknowledge_paper_impact': True})
 
     def test_all_registered_papers_render_continuous_phases_without_duplicate_editors(self) -> None:
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is unavailable")
         from lnl_toolbox.catalog import default_paper_config, load_papers
         from web import command_console as console
         schemas = [console._config_schema(default_paper_config(p, root=ROOT)[0].recipe_id) for p in load_papers(ROOT)]
@@ -1156,11 +1163,14 @@ for(const schema of schemas){
 }
 if([...expected].some(id=>!seen.has(id)))throw Error('not all seven continuous papers checked');
 """
-        result = subprocess.run([shutil.which('node'), '-e', script], cwd=ROOT, input=json.dumps(schemas),
+        result = subprocess.run([node, '-e', script], cwd=ROOT, input=json.dumps(schemas),
                                 capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_continuous_table_edits_produce_numeric_configuration_patches(self) -> None:
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is unavailable")
         from web import command_console as console
         schemas = [console._config_schema(recipe) for recipe in ('jocor-cifar10-symmetric05-reproduction',
                    'mc-ldce-cifar10-reproduction', 'apl-cifar10-noise02-reproduction')]
@@ -1179,7 +1189,7 @@ for(const schema of JSON.parse(fs.readFileSync(0,'utf8'))){
  }
 }
 """
-        result = subprocess.run([shutil.which('node'), '-e', script], cwd=ROOT, input=json.dumps(schemas),
+        result = subprocess.run([node, '-e', script], cwd=ROOT, input=json.dumps(schemas),
                                 capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
 

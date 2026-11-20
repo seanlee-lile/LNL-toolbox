@@ -1,12 +1,13 @@
 # LEND reproduction and maintenance
 
-The toolbox implements a **论文方法对齐（paper-oriented）工程流程（engineering workflow）**.
-It is not described as paper-exact, released-code exact, or a numerical
-reproduction because no
-verifiable author implementation was found and the paper leaves several runtime
-choices unspecified.
+The Toolbox default is a **论文方法对齐（paper-oriented）工程流程（engineering workflow）**.
+It uses `lend.implementation_variant: paper_equation`. An explicitly selected
+`lend.implementation_variant: author_release` is also implemented. The default
+recipe is unchanged. Focused tests check selected mechanisms of the variant;
+this does not establish end-to-end author-code parity or verified numerical
+reproduction. The paper leaves several runtime choices unspecified.
 
-## Implemented flow
+## Default paper-equation flow
 
 ```text
 current noisy mini-batch
