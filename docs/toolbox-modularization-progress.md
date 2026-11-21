@@ -1,5 +1,67 @@
 # Toolbox modularization progress
 
+## Recipe Identity Migration Phase 0 (2026-11-21)
+
+Baseline: `code@c9a3234a03db7311c0dd70e6700ab5ae5971303a`. Scope is tests,
+the readable identity fixture, and this record; production resolution is unchanged.
+
+- `tests/fixtures/recipe_identity_baseline.json` freezes the ordered four discovery
+  views (conditional/public-only), 68 recipe records, 26 Paper records with 56
+  ordered associations and 26 formal defaults, the 26 Web editing baselines,
+  71 package resource mappings (including three packaged-only YAMLs), and two
+  representative sweep plans. The old aggregate digests are additional checks,
+  not a replacement for the individual records. Do not regenerate the fixture
+  to make an unexplained difference pass.
+- Authoritative inputs are the existing manifest (membership, visibility and
+  conditional flags), runtime Paper catalog (associations, roles and ordering),
+  YAML plus runner resolution (executed parameters and dispatch), Web metadata
+  (editor bindings), and packaging declaration (installed resource targets).
+  IDs and discovery profiles are currently derived from paths. Loss Correction
+  intentionally retains a Paper/discovery profile difference. Normalized config
+  hashes and sweep/member hashes are observations, not registry fields.
+- `python -m unittest tests.test_recipe_identity -v` compares the source
+  contract. For package verification, start an isolated Python from an external
+  empty working directory, explicitly prepend only the wheel's installed
+  site-packages path, and execute this test module by its file path with
+  `--verify-installed PREFIX WHEEL`. Verify both a direct wheel and a wheel
+  built from the actual sdist, using the existing setuptools backend. The
+  verifier checks import and actual mapped resource locations before comparing
+  against the source fixture. Run the development suites from a checkout:
+  setuptools includes the new test module in the sdist by default, but not
+  the checkout-only JSON fixture. This does not change installed runtime assets
+  or the existing CI contract, which installs the sdist and exercises its CLI.
+- The candidate gate in tests rejects duplicate paths and canonical collisions
+  (including collisions after parent-prefix fallback), dangling normal,
+  public or conditional references, broken Paper keys and cross-view identity
+  drift. This is **not** a production guarantee: the current resolver can
+  overwrite a repeated final ID when building its index and can silently
+  ignore a dangling conditional entry. Duplicate declared normal paths and
+  unknown public paths are already rejected by production; Paper lookup also
+  rejects a dangling recipe key.
+- Existing runtime gap, not an identity migration: take the built-in CWD
+  reproduction config in memory, set `cwd.variant` to `multiclass`, and omit
+  `cwd.transition_artifact`. Static preflight can pass and the multiclass
+  requirements do not advertise that input. The runner subsequently indexes
+  the field and loads the VolMin artifact after data preparation. No runner,
+  artifact, schema, or checkpoint contract was changed to cover this case.
+- Phase 1 should preserve the public identities with dual-format reads; single
+  global identity resolution must fail closed before new entries can route
+  ambiguously. Keep history-based resume independent of catalog availability.
+  Environment-dependent checks (browser/Node, accelerator-specific execution
+  and real external artifacts) are not proved by matching the fixture alone.
+- Verification (6/6: snapshot, candidate negatives, Web/Quick Start,
+  resume/sweep, isolated packages, full regression): focused identity and
+  integration run 26 passed / 1 Node skip; `python -m unittest discover -s
+  tests -v` 1156 passed / 21 CUDA skips; `python -m unittest discover -s web
+  -p "test_*.py" -v` 110 passed / 31 Node skips; `python -m unittest discover -s
+  src/lnl_toolbox/scratch/tests -v` 196 passed / 10 Node skips. No failures or
+  errors. Source, direct-wheel, and sdist-built installs matched all identity
+  records, all four CLI views, Paper recommendations, and the prior digests.
+  Both installed wheels retained the baseline member contents (excluding
+  installation bookkeeping). No Phase 0 stage, commit, or push; next step is
+  human diff review and separate Phase 1 approval, not regeneration of the
+  fixture or remediation of unrelated runtime gaps.
+
 ## CI input-validation and resume repair (2026-10-15)
 
 - Task: resolve the failures in quality run `38672394362`, without freezing configurable experiment values to historical defaults. Branch/base: `scratch` / `8f673918f2246864022a6db093ae2ac27216665e`. No branch change, commit or push is authorized.

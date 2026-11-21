@@ -231,7 +231,21 @@ class ExperimentServiceDataContractTests(unittest.TestCase):
             self.assertEqual(runner.name, "supervised")
             self.assertEqual((candidate, output_arg, resume_arg), (expected, output, None))
             invoke.reset_mock()
-            self.service.resume(run)
+            from lnl_toolbox.cli.main import main
+
+            # Historical RUN_DIR resume has no dependency on the live catalog.
+            with patch("lnl_toolbox.catalog.recipe_by_id", side_effect=AssertionError("catalog lookup")), \
+                 patch("lnl_toolbox.catalog.discover_recipes", side_effect=AssertionError("catalog discovery")), \
+                 patch("lnl_toolbox.cli.main.ExperimentService", return_value=self.service):
+                self.assertEqual(main(["resume", str(run)]), 0)
+                runner, candidate, output_arg, resume_arg = invoke.call_args.args
+                self.assertEqual(runner.name, "supervised")
+                self.assertEqual((candidate, output_arg, resume_arg), (expected, run, checkpoint))
+                invoke.reset_mock()
+                self.assertEqual(main([
+                    "run", "--config", str(run / "resolved_config.yaml"),
+                    "--resume", str(checkpoint), "--output-dir", str(run),
+                ]), 0)
             runner, candidate, output_arg, resume_arg = invoke.call_args.args
             self.assertEqual(runner.name, "supervised")
             self.assertEqual((candidate, output_arg, resume_arg), (expected, run, checkpoint))
@@ -275,7 +289,10 @@ class ExperimentServiceDataContractTests(unittest.TestCase):
         final = root / "final_metrics.json"
         final.write_text(json.dumps({"status": "completed", "completed": True}), encoding="utf-8")
         before = {p.name: p.read_bytes() for p in root.iterdir()}
-        with patch.object(self.service, "preflight") as preflight, patch.object(RunnerSpec, "invoke") as invoke:
+        with patch.object(self.service, "preflight") as preflight, \
+             patch.object(RunnerSpec, "invoke") as invoke, \
+             patch("lnl_toolbox.catalog.recipe_by_id", side_effect=AssertionError("catalog lookup")), \
+             patch("lnl_toolbox.catalog.discover_recipes", side_effect=AssertionError("catalog discovery")):
             self.assertEqual(self.service.resume(root), root.resolve())
         preflight.assert_not_called()
         invoke.assert_not_called()

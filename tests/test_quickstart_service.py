@@ -979,6 +979,38 @@ class QuickStartServiceTests(unittest.TestCase):
         self.assertEqual(result, recipe.id)
         load.assert_called_once_with(recipe)
 
+    def test_exact_plan_commands_resolve_to_the_displayed_builtin_recipe(self) -> None:
+        import shlex
+
+        from lnl_toolbox.catalog import default_paper_config, paper_by_id
+        from lnl_toolbox.cli.main import _load_source, build_parser
+
+        expected = default_paper_config(paper_by_id("gce"))[1]
+        # Isolate dataset size/readiness only; use the installed catalog rules
+        # and Quick Start's real exact matcher, static preflight, and commands.
+        compatibility = SimpleNamespace(
+            status=CompatibilityStatus.COMPATIBLE, reasons=(), required_user_inputs=(),
+        )
+        with patch("lnl_toolbox.quickstart.service.reference_train_size", return_value=None), \
+             patch.object(self.service.experiment_service, "list_config_compatibility",
+                          return_value=(("gce", compatibility),)), \
+             patch.object(self.service, "artifact_root", Path("artifacts")):
+            plan = self.service.build_plan(
+                dataset_alias="local-cifar10",
+                noise_selection=QuickStartNoiseSelection("synthetic", "symmetric", rate=0.2, seed=1),
+                paper_id="gce",
+            )
+        self.assertEqual(plan.status, "ready", plan.details)
+        self.assertEqual(plan.config_kind, "paper_reproduction")
+        self.assertEqual(plan.recipe_id, expected.id)
+        for dry_run, command in ((False, plan.command), (True, plan.dry_run_command)):
+            with self.subTest(dry_run=dry_run):
+                args = build_parser().parse_args(shlex.split(command)[1:])
+                self.assertEqual(args.dry_run, dry_run)
+                with patch("lnl_toolbox.cli.main.DEFAULT_DATA_SERVICE", self.data_service):
+                    _, path, recipe, _ = _load_source(args)
+                self.assertEqual((recipe.id, path), (plan.recipe_id, expected.config_path))
+
     def test_changed_experiment_seed_is_not_mistaken_for_exact_recipe(self) -> None:
         paper = SimpleNamespace(configs=(SimpleNamespace(profile="reproduction", recipe_id="formal-gce"),))
         with patch("lnl_toolbox.quickstart.templates._cached_recipe_config", return_value={

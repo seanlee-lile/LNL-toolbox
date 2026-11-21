@@ -18,6 +18,103 @@ import command_console  # noqa: E402
 
 
 class CommandConsoleTest(unittest.TestCase):
+    def test_recipe_identity_matches_paper_dataset_and_editor_on_cold_and_warm_cache(self):
+        from lnl_toolbox.training.results import config_hash
+
+        path = command_console.ROOT / "tests/fixtures/recipe_identity_baseline.json"
+        baseline = json.loads(path.read_text(encoding="utf-8"))
+        recipes = {x["id"]: x for x in baseline["recipes"]}
+        expected_formal = [
+            (paper["id"], item["recipe_id"]) for paper in baseline["papers"]
+            for item in paper["associations"] if item["profile"] == "reproduction"
+        ]
+        result = SimpleNamespace(to_dict=lambda: {"status": "compatible"})
+        service = mock.Mock()
+        service.list_config_compatibility.side_effect = (
+            lambda alias, configs, **kwargs: [(key, result) for key in configs]
+        )
+        catalog_cache = mock.patch.object(command_console, "_WEB_RECIPE_CATALOG", None)
+        catalog_cache.start()
+        self.addCleanup(catalog_cache.stop)
+        for cached in (
+            command_console._web_paper_specs,
+            command_console._web_recipe_config, command_console._registry_recipe_paths,
+            command_console._formal_registry_config, command_console._parameter_registry,
+        ):
+            cached.cache_clear()
+            self.addCleanup(cached.cache_clear)
+        alias = "phase0-identity-fixture"
+        command_console._invalidate_dataset_recipe_compatibility(alias)
+        self.addCleanup(command_console._invalidate_dataset_recipe_compatibility, alias)
+        with mock.patch.object(command_console, "_dataset_profile_context", return_value=({}, None)), \
+             mock.patch("lnl_toolbox.training.service.ExperimentService", return_value=service):
+            for cache in ("cold", "warm"):
+                with self.subTest(cache=cache):
+                    papers = command_console._paper_payload()
+                    self.assertEqual(
+                        [(p["id"], p["default_recipe_id"]) for p in papers],
+                        [(p["id"], p["default"]) for p in baseline["papers"]],
+                    )
+                    for actual, frozen in zip(papers, baseline["papers"]):
+                        self.assertEqual(
+                            [(c["recipe_id"], c["profile"], c["variant"]) for c in actual["configs"]],
+                            [(c["recipe_id"], c["profile"], c["variant"]) for c in frozen["associations"]],
+                            frozen["id"],
+                        )
+                        for config in actual["configs"]:
+                            self.assertEqual(config["config_path"], recipes[config["recipe_id"]]["path"])
+                    rows = command_console._dataset_recipe_compatibility_payload(alias)["recipes"]
+                    self.assertEqual([(x["paper_id"], x["recipe_id"]) for x in rows], expected_formal)
+                    for method, canonical in baseline["web_formal_bindings"].items():
+                        selected, config = command_console._formal_registry_config(method)
+                        self.assertEqual(selected, canonical, method)
+                        self.assertEqual(config_hash(config), recipes[canonical]["normalized_config_hash"], method)
+        service.list_config_compatibility.assert_called_once()
+        sent = service.list_config_compatibility.call_args.args[1]
+        self.assertEqual(list(sent), [canonical for _, canonical in expected_formal])
+        for canonical, config in sent.items():
+            self.assertEqual(config_hash(config), recipes[canonical]["normalized_config_hash"], canonical)
+
+    def test_dataset_first_generated_command_resolves_to_selected_recipe(self):
+        import shutil
+        import subprocess
+        from lnl_toolbox.cli.main import _load_source, build_parser
+
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is unavailable")
+        baseline = json.loads(
+            (command_console.ROOT / "tests/fixtures/recipe_identity_baseline.json").read_text(encoding="utf-8")
+        )
+        paper = next(paper for paper in baseline["papers"] if paper["id"] == "gce")
+        recipes = {x["id"]: x for x in baseline["recipes"]}
+        # Execute the actual browser command builder without starting training.
+        script = """
+const fs = require("node:fs");
+const source = fs.readFileSync(process.argv[1], "utf8");
+const recipe = JSON.parse(process.argv[2]);
+const state = { dataAlias:"local-cifar10", dataSelectedRecipe:recipe.recipe_id,
+  dataRecipeCompatibility:{ recipes:[recipe] }, dataMethodNoisePrior:"" };
+const quote = source.slice(source.indexOf("function quoteArg("), source.indexOf("function updatePreviewControls("));
+const workflow = source.slice(source.indexOf("function compatibilityWorkflowCommand("), source.indexOf("async function startCompatibilityWorkflow("));
+eval(quote + workflow + 'console.log(compatibilityWorkflowCommand("run"));');
+"""
+        shown = next(p for p in command_console._paper_payload() if p["id"] == "gce")
+        self.assertEqual(shown["default_recipe_id"], paper["default"])
+        row = {"recipe_id": shown["default_recipe_id"], "status": "compatible"}
+        command = subprocess.check_output(
+            [node, "-e", script, str(command_console.ROOT / "web/index.html"), json.dumps(row)],
+            text=True, encoding="utf-8",
+        ).strip()
+        with mock.patch.object(command_console, "resolve_lnl_command", return_value=["lnl"]):
+            argv = command_console.parse_free_command(command)
+        args = build_parser().parse_args(argv[1:])
+        self.assertEqual((args.recipe, args.local_dataset), (row["recipe_id"], "local-cifar10"))
+        with mock.patch("lnl_toolbox.cli.main.DEFAULT_DATA_SERVICE.apply", side_effect=lambda config, _: config):
+            _, config_path, recipe, _ = _load_source(args)
+        self.assertEqual(recipe.id, row["recipe_id"])
+        self.assertEqual(config_path.relative_to(command_console.ROOT).as_posix(), recipes[recipe.id]["path"])
+
     def test_stage_early_stopping_fields_share_the_parameter_contract(self):
         from copy import deepcopy
         from lnl_toolbox.core.config_schema import training_stage_controls

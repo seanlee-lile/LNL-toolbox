@@ -1,0 +1,2794 @@
+{
+  "baseline_commit": "c9a3234a03db7311c0dd70e6700ab5ae5971303a",
+  "recipes": [
+    {
+      "id": "apl-cifar10-noise02-reproduction",
+      "path": "configs/experiment/apl_cifar10_noise02_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/apl_cifar10_noise02_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "supervised",
+      "method": "apl",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 120,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "apl-cifar10-noise02-reproduction",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "component",
+      "normalized_config_hash": "5537065ea1f92fb21b1581663b9fb233fcbc176fc8ea4eeb4f52aa15f643d699",
+      "paper_associations": [
+        {
+          "paper": "apl",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "apl"
+      ]
+    },
+    {
+      "id": "apl-cifar10-noise02-smoke",
+      "path": "configs/experiment/apl_cifar10_noise02_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/apl_cifar10_noise02_smoke.yaml",
+      "profile": "smoke",
+      "runner": "supervised",
+      "method": "apl",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 2,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "apl-cifar10-noise02-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "component",
+      "normalized_config_hash": "dba6de12994103d56e2d645da197cd6e683fe5fb1a815918846f9f85e262ba06",
+      "paper_associations": [
+        {
+          "paper": "apl",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "apl-cifar10-noise04-reproduction",
+      "path": "configs/experiment/apl_cifar10_noise04_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/apl_cifar10_noise04_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "supervised",
+      "method": "apl",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 120,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "apl-cifar10-noise04-reproduction",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "component",
+      "normalized_config_hash": "635e857f67bf8e5305561ba555da7e172e2f3ff4e0fce77a4f95eebc589020e2",
+      "paper_associations": [
+        {
+          "paper": "apl",
+          "order": 2,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "binary-risk-natarajan-1epoch",
+      "path": "configs/experiment/binary_risk_natarajan_1epoch.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/binary_risk_natarajan_1epoch.yaml",
+      "profile": "experiment",
+      "runner": "binary",
+      "method": "binary",
+      "dataset": "synthetic_binary_2d",
+      "noise": "binary_asymmetric_rcn",
+      "epochs": 1,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "binary-risk-natarajan-1epoch",
+      "description": "",
+      "configuration_fidelity": "engineering",
+      "implementation_status": "workflow",
+      "normalized_config_hash": "46ad76bd8c2fea292a88cf562015d452124c9184053b53880ed52af71300d6b5",
+      "paper_associations": [],
+      "web_formal_methods": []
+    },
+    {
+      "id": "binary-risk-natarajan-reproduction",
+      "path": "configs/experiment/binary_risk_natarajan_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/binary_risk_natarajan_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "binary",
+      "method": "binary",
+      "dataset": "synthetic_binary_2d",
+      "noise": "binary_asymmetric_rcn",
+      "epochs": 50,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "binary-risk-natarajan-reproduction",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "workflow",
+      "normalized_config_hash": "7917d2a5f7945e9b7d9894953e8063e811c92862ca753d3c12d7fca4cbbc0ba1",
+      "paper_associations": [
+        {
+          "paper": "binary-risk",
+          "order": 0,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "binary_risk"
+      ]
+    },
+    {
+      "id": "ca2c-cifar100-reproduction",
+      "path": "configs/experiment/ca2c_cifar100_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/ca2c_cifar100_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "ca2c",
+      "method": "ca2c",
+      "dataset": "cifar100",
+      "noise": "symmetric",
+      "epochs": 700,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "ca2c-cifar100-reproduction",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "workflow",
+      "normalized_config_hash": "95c7b04d3fc2d8673488b44756a9e0eea549fb240af8ead5dd2491da12b475d9",
+      "paper_associations": [
+        {
+          "paper": "ca2c",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "ca2c"
+      ]
+    },
+    {
+      "id": "ca2c-cifar10-smoke",
+      "path": "configs/experiment/ca2c_cifar10_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/ca2c_cifar10_smoke.yaml",
+      "profile": "smoke",
+      "runner": "ca2c",
+      "method": "ca2c",
+      "dataset": "synthetic_multiclass",
+      "noise": "symmetric",
+      "epochs": 2,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "ca2c-cifar10-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "workflow",
+      "normalized_config_hash": "065f48a4e6fddbbefab4047a101a42c650a31f7e46fbcc35a9663bf3295dea5f",
+      "paper_associations": [
+        {
+          "paper": "ca2c",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cal-cifar10-reproduction",
+      "path": "configs/experiment/cal_cifar10_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cal_cifar10_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "cal",
+      "method": "cal",
+      "dataset": "cifar10",
+      "noise": "external_torch",
+      "epochs": 100,
+      "visibility": "internal",
+      "availability": "conditional",
+      "label": "cal-cifar10-reproduction",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "workflow",
+      "normalized_config_hash": "a21eb3b557b8257694229f050654c3ae85bc500cc4e82abbbf12ab213312f726",
+      "paper_associations": [
+        {
+          "paper": "cal",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "cal"
+      ]
+    },
+    {
+      "id": "cal-cifar10-smoke",
+      "path": "configs/experiment/cal_cifar10_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cal_cifar10_smoke.yaml",
+      "profile": "smoke",
+      "runner": "cal",
+      "method": "cal",
+      "dataset": "synthetic_multiclass",
+      "noise": "symmetric",
+      "epochs": 1,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cal-cifar10-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "workflow",
+      "normalized_config_hash": "a2b0aad74492671a3302cd54a6aa069401dcc463927f32b6c6af36fd9fb4eb43",
+      "paper_associations": [
+        {
+          "paper": "cal",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cifar10-clean",
+      "path": "configs/experiment/cifar10_clean.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_clean.yaml",
+      "profile": "experiment",
+      "runner": "clean",
+      "method": "clean",
+      "dataset": "cifar10",
+      "noise": "clean",
+      "epochs": 30,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-clean",
+      "description": "",
+      "configuration_fidelity": "engineering",
+      "implementation_status": "component",
+      "normalized_config_hash": "60a1b87f9618c330a3603368b941ef37755293853f70a0037af266dce99959cd",
+      "paper_associations": [],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cifar10-clean-baseline",
+      "path": "configs/experiment/cifar10_clean_baseline.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_clean_baseline.yaml",
+      "profile": "experiment",
+      "runner": "clean",
+      "method": "clean",
+      "dataset": "cifar10",
+      "noise": "clean",
+      "epochs": 200,
+      "visibility": "public",
+      "availability": "runnable",
+      "label": "图像分类正式训练",
+      "description": "使用完整数据、正式模型和优化器进行干净标签训练。",
+      "configuration_fidelity": "engineering",
+      "implementation_status": "component",
+      "normalized_config_hash": "f48db4cc67f0c6f745156879e5859a4914ebc11ee75d3d6d669e70873f50a227",
+      "paper_associations": [],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cifar10-clean-smoke",
+      "path": "configs/experiment/cifar10_clean_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_clean_smoke.yaml",
+      "profile": "smoke",
+      "runner": "clean",
+      "method": "clean",
+      "dataset": "cifar10",
+      "noise": "clean",
+      "epochs": 2,
+      "visibility": "public",
+      "availability": "runnable",
+      "label": "图像分类快速检查",
+      "description": "用少量样本检查图像训练链路。",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "component",
+      "normalized_config_hash": "b51a503317d19c37a6e2bcd6f44e7a9c1cfcf1fc7924e80a6cc2e58255f6ee5c",
+      "paper_associations": [],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cifar10-cnlcu-hard-smoke",
+      "path": "configs/experiment/cifar10_cnlcu_hard_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_cnlcu_hard_smoke.yaml",
+      "profile": "smoke",
+      "runner": "cnlcu",
+      "method": "cnlcu",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 3,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-cnlcu-hard-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "976f0fd57b1accaf591d102d512d1e863a681c9dcb988af6ef069c00cdf3536f",
+      "paper_associations": [
+        {
+          "paper": "cnlcu",
+          "order": 1,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cifar10-cnlcu-soft-smoke",
+      "path": "configs/experiment/cifar10_cnlcu_soft_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_cnlcu_soft_smoke.yaml",
+      "profile": "smoke",
+      "runner": "cnlcu",
+      "method": "cnlcu",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 2,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-cnlcu-soft-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "9a0662cc458e0409d690d297eebcf261ff815490372ce2d3e63f5eeb0e7e29ad",
+      "paper_associations": [
+        {
+          "paper": "cnlcu",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cnlcu-cifar10-reproduction",
+      "path": "configs/experiment/cnlcu_cifar10_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cnlcu_cifar10_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "cnlcu",
+      "method": "cnlcu",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 200,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cnlcu-cifar10-reproduction",
+      "description": "",
+      "configuration_fidelity": "paper_protocol",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "63c98a324d876d980bfb1212e1f4a5380f4e6009fba6e7d335cb2185525c43bf",
+      "paper_associations": [
+        {
+          "paper": "cnlcu",
+          "order": 2,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "cnlcu"
+      ]
+    },
+    {
+      "id": "cifar10-coteaching-reproduction",
+      "path": "configs/experiment/cifar10_coteaching_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_coteaching_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "coteaching",
+      "method": "coteaching",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 200,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-coteaching-reproduction",
+      "description": "",
+      "configuration_fidelity": "engineering",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "1f4d4abc4e88b96c91a9b503a5082ab5e9310b9a29bf526d58bb0ebc1dbc4fd0",
+      "paper_associations": [
+        {
+          "paper": "coteaching",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "coteaching"
+      ]
+    },
+    {
+      "id": "cifar10-coteaching-smoke",
+      "path": "configs/experiment/cifar10_coteaching_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_coteaching_smoke.yaml",
+      "profile": "smoke",
+      "runner": "coteaching",
+      "method": "coteaching",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 2,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-coteaching-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "3bd970565ffad40681b27d71d2693d1d77b515d02de66d5263843f1b41bbe056",
+      "paper_associations": [
+        {
+          "paper": "coteaching",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cifar10-dual-t-evidence-smoke",
+      "path": "configs/experiment/cifar10_dual_t_evidence_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_dual_t_evidence_smoke.yaml",
+      "profile": "smoke",
+      "runner": "dual_t",
+      "method": "dual_t",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": null,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-dual-t-evidence-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "1cb3c844ce265275eb4b10916a2a71bb3d9358d277634690abbbb08191cab533",
+      "paper_associations": [],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cifar10-dual-t-smoke",
+      "path": "configs/experiment/cifar10_dual_t_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_dual_t_smoke.yaml",
+      "profile": "smoke",
+      "runner": "dual_t",
+      "method": "dual_t",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": null,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-dual-t-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "112690294e02a4e527603459feca1691726c5f2bad45f92023e4ca9c60e6d8c6",
+      "paper_associations": [
+        {
+          "paper": "dual-t",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cifar10-dld-smoke",
+      "path": "configs/experiment/cifar10_dld_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_dld_smoke.yaml",
+      "profile": "smoke",
+      "runner": "dld",
+      "method": "dld",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": null,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-dld-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "workflow",
+      "normalized_config_hash": "d8fabdd9f2ea2a8c3208344449568eaecbd34e4eb936e72425aaa52b9b3e2ae4",
+      "paper_associations": [
+        {
+          "paper": "dld",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "dld-cifar10-reproduction",
+      "path": "configs/experiment/dld_cifar10_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/dld_cifar10_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "dld",
+      "method": "dld",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 200,
+      "visibility": "internal",
+      "availability": "conditional",
+      "label": "dld-cifar10-reproduction",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "workflow",
+      "normalized_config_hash": "56ab871129f7c93d1eba3092b029c7aa49f5739003553f477216ca042db6b149",
+      "paper_associations": [
+        {
+          "paper": "dld",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "dld"
+      ]
+    },
+    {
+      "id": "cifar10-dividemix-smoke",
+      "path": "configs/experiment/cifar10_dividemix_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_dividemix_smoke.yaml",
+      "profile": "smoke",
+      "runner": "dividemix",
+      "method": "dividemix",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": null,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-dividemix-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "55f2cb69a069347b3b1d70c3f5a147ea65e8b34da97147e9e6741c32ee403533",
+      "paper_associations": [
+        {
+          "paper": "dividemix",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cifar10-lend-smoke",
+      "path": "configs/experiment/cifar10_lend_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_lend_smoke.yaml",
+      "profile": "smoke",
+      "runner": "lend",
+      "method": "lend",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": null,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-lend-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "ceffed6b75dfc6d97a71eeaafd6aa78b1162ee1a8276a3a6242f2709c7ca29bc",
+      "paper_associations": [
+        {
+          "paper": "lend",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "lend-cifar10-reproduction",
+      "path": "configs/experiment/lend_cifar10_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/lend_cifar10_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "lend",
+      "method": "lend",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": null,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "lend-cifar10-reproduction",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "daf2a835437a166dcc7423210ea1d553e90e8282a8eff4f0749d6bad3f753a4b",
+      "paper_associations": [
+        {
+          "paper": "lend",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "lend"
+      ]
+    },
+    {
+      "id": "cifar10-foundation-smoke",
+      "path": "configs/experiment/cifar10_foundation_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_foundation_smoke.yaml",
+      "profile": "smoke",
+      "runner": "supervised",
+      "method": "forward",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 3,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-foundation-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "component",
+      "normalized_config_hash": "7669e758d8e7bc08bed3aa45c7899aa8577729391e806c019fe5f8185b530a55",
+      "paper_associations": [],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cifar10-smoke",
+      "path": "configs/experiment/cifar10_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_smoke.yaml",
+      "profile": "smoke",
+      "runner": "supervised",
+      "method": "supervised",
+      "dataset": "cifar10",
+      "noise": "clean",
+      "epochs": 2,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "component",
+      "normalized_config_hash": "1cc867b6ab6f17d4901bd3e80974c3ff9377aa2bfd3e9ad6833ed4d13ec4b73a",
+      "paper_associations": [],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cifar10-symmetric-cdr-reproduction",
+      "path": "configs/experiment/cifar10_symmetric_cdr_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_symmetric_cdr_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "supervised",
+      "method": "cdr",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 100,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-symmetric-cdr-reproduction",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "component",
+      "normalized_config_hash": "38b163bf52a7a00f47144e091e74e94277ee66d87525265931dd8dccb67fbf6a",
+      "paper_associations": [
+        {
+          "paper": "cdr",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "cdr"
+      ]
+    },
+    {
+      "id": "cifar10-symmetric-cdr-smoke",
+      "path": "configs/experiment/cifar10_symmetric_cdr_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_symmetric_cdr_smoke.yaml",
+      "profile": "smoke",
+      "runner": "supervised",
+      "method": "cdr",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 2,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-symmetric-cdr-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "component",
+      "normalized_config_hash": "a526b937d79539daa150a3c459462fbed15855156bb7da1ed966ab638a7e1787",
+      "paper_associations": [
+        {
+          "paper": "cdr",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cifar10-symmetric-ce-smoke",
+      "path": "configs/experiment/cifar10_symmetric_ce_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_symmetric_ce_smoke.yaml",
+      "profile": "smoke",
+      "runner": "supervised",
+      "method": "supervised",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 2,
+      "visibility": "public",
+      "availability": "runnable",
+      "label": "噪声标签分类快速检查",
+      "description": "用少量样本检查可配置标签噪声的监督训练链路。",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "component",
+      "normalized_config_hash": "3ae52fb322e392677fa3b7a81c93be38033a261c0223baa1c1273aed1be47092",
+      "paper_associations": [],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cifar10-symmetric-small-loss-linear-smoke",
+      "path": "configs/experiment/cifar10_symmetric_small_loss_linear_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_symmetric_small_loss_linear_smoke.yaml",
+      "profile": "smoke",
+      "runner": "supervised",
+      "method": "small_loss",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 2,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-symmetric-small-loss-linear-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "component",
+      "normalized_config_hash": "54abf966eddcbb189141e67ab033d7ebf286c2e4281aee8d95880f64156853de",
+      "paper_associations": [],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cifar10-symmetric-small-loss-smoke",
+      "path": "configs/experiment/cifar10_symmetric_small_loss_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_symmetric_small_loss_smoke.yaml",
+      "profile": "smoke",
+      "runner": "supervised",
+      "method": "small_loss",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 2,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-symmetric-small-loss-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "component",
+      "normalized_config_hash": "b4440af52aa3362dbbb5b7a7b01d37a5c8b54f8cd91333eda319d6139b364264",
+      "paper_associations": [],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cifar10-t-revision-smoke",
+      "path": "configs/experiment/cifar10_t_revision_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_t_revision_smoke.yaml",
+      "profile": "smoke",
+      "runner": "t_revision",
+      "method": "t_revision",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": null,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-t-revision-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "f29a9ddec3fc6402ca9fed88103eb727acb96aed921ff6b4db37f8ac4df0446d",
+      "paper_associations": [
+        {
+          "paper": "t-revision",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cifar10-upm-smoke",
+      "path": "configs/experiment/cifar10_upm_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_upm_smoke.yaml",
+      "profile": "smoke",
+      "runner": "upm",
+      "method": "upm",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": null,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-upm-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "3f9af98c6076ebb1a67ec8a7cd892de3c2d0bb9fdcfe6916cd1079c5abcd5ad3",
+      "paper_associations": [
+        {
+          "paper": "upm",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "upm-cifar10-reproduction",
+      "path": "configs/experiment/upm_cifar10_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/upm_cifar10_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "upm",
+      "method": "upm",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": null,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "upm-cifar10-reproduction",
+      "description": "",
+      "configuration_fidelity": "engineering",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "7e19c0438f23848958492b6c2491b23f71c4f88fb4ecdb0dea92d37f57a18f12",
+      "paper_associations": [
+        {
+          "paper": "upm",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "upm"
+      ]
+    },
+    {
+      "id": "cwd-cifar10-reproduction",
+      "path": "configs/experiment/cwd_cifar10_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cwd_cifar10_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "cwd",
+      "method": "cwd",
+      "dataset": "cifar10_airplane_automobile",
+      "noise": "binary_asymmetric_rcn",
+      "epochs": 200,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cwd-cifar10-reproduction",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "eee9332540f6fbeea97c1b584dc8db211ad4c6bdb3b86827cbd6733e6f46b176",
+      "paper_associations": [
+        {
+          "paper": "cwd",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "cwd"
+      ]
+    },
+    {
+      "id": "cwd-cifar10-smoke",
+      "path": "configs/experiment/cwd_cifar10_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cwd_cifar10_smoke.yaml",
+      "profile": "smoke",
+      "runner": "cwd",
+      "method": "cwd",
+      "dataset": "cifar10_airplane_automobile",
+      "noise": "binary_asymmetric_rcn",
+      "epochs": 1,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cwd-cifar10-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "386e4e8cba57e253aa029706a9b41d485a55544a377ac2319fe0b1b41cc54366",
+      "paper_associations": [
+        {
+          "paper": "cwd",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "dss-cifar10-symmetric05-reproduction",
+      "path": "configs/experiment/dss_cifar10_symmetric05_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/dss_cifar10_symmetric05_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "supervised",
+      "method": "dss",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 150,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "dss-cifar10-symmetric05-reproduction",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "53f6a93c4225ae448df434624adf69dd775095ce310dbd964a778c64a356e3ac",
+      "paper_associations": [
+        {
+          "paper": "dss",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "dss"
+      ]
+    },
+    {
+      "id": "dss-cifar10-symmetric05-smoke",
+      "path": "configs/experiment/dss_cifar10_symmetric05_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/dss_cifar10_symmetric05_smoke.yaml",
+      "profile": "smoke",
+      "runner": "supervised",
+      "method": "dss",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 2,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "dss-cifar10-symmetric05-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "1ed8479b89b0c80d5856e915b89c0162fa3923b14a8331d3e54bda778cc5c226",
+      "paper_associations": [
+        {
+          "paper": "dss",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "fine-cifar100n-reproduction",
+      "path": "configs/experiment/fine_cifar100n_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/fine_cifar100n_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "fine",
+      "method": "fine",
+      "dataset": "cifar100",
+      "noise": "symmetric",
+      "epochs": 300,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "fine-cifar100n-reproduction",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "f1421f4891c67f178ef4d7549e0cece728ed06fd0efa1b917c6cfa7a43b47d83",
+      "paper_associations": [
+        {
+          "paper": "fine",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "fine"
+      ]
+    },
+    {
+      "id": "fine-cifar100n-smoke",
+      "path": "configs/experiment/fine_cifar100n_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/fine_cifar100n_smoke.yaml",
+      "profile": "smoke",
+      "runner": "fine",
+      "method": "fine",
+      "dataset": "cifar100",
+      "noise": "symmetric",
+      "epochs": 2,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "fine-cifar100n-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "1b2e8458b1436bd3ac9fd87dc99d9b3e84ef14bff6d013fbeea7b9718cd75eb4",
+      "paper_associations": [
+        {
+          "paper": "fine",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "gce-cifar10-noise02-reproduction",
+      "path": "configs/experiment/gce_cifar10_noise02_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/gce_cifar10_noise02_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "supervised",
+      "method": "gce",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 120,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "gce-cifar10-noise02-reproduction",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "component",
+      "normalized_config_hash": "3732890b70324d6833e44edcbef808bff22ae97ebdeea66c2047ff4ba02b8b37",
+      "paper_associations": [
+        {
+          "paper": "gce",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "gce"
+      ]
+    },
+    {
+      "id": "gce-cifar10-noise02-smoke",
+      "path": "configs/experiment/gce_cifar10_noise02_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/gce_cifar10_noise02_smoke.yaml",
+      "profile": "smoke",
+      "runner": "supervised",
+      "method": "gce",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 2,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "gce-cifar10-noise02-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "component",
+      "normalized_config_hash": "dc49f794fe366bbb8599c28aac55a958b5161d90566b83655982b729886ad0cf",
+      "paper_associations": [
+        {
+          "paper": "gce",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "importance-reweighting-binary-high-dim-smoke",
+      "path": "configs/experiment/importance_reweighting_binary_high_dim_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/importance_reweighting_binary_high_dim_smoke.yaml",
+      "profile": "smoke",
+      "runner": "importance_reweighting",
+      "method": "importance_reweighting",
+      "dataset": "synthetic_binary_high_dim",
+      "noise": "binary_asymmetric_rcn",
+      "epochs": 2,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "importance-reweighting-binary-high-dim-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "4cbb8a72a90cb721bc5ae4df296e5608b0c036e9b84a8254cd5739fed07d1262",
+      "paper_associations": [],
+      "web_formal_methods": []
+    },
+    {
+      "id": "importance-reweighting-binary-smoke",
+      "path": "configs/experiment/importance_reweighting_binary_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/importance_reweighting_binary_smoke.yaml",
+      "profile": "smoke",
+      "runner": "importance_reweighting",
+      "method": "importance_reweighting",
+      "dataset": "synthetic_binary_2d",
+      "noise": "binary_asymmetric_rcn",
+      "epochs": 2,
+      "visibility": "public",
+      "availability": "runnable",
+      "label": "二分类表格快速检查",
+      "description": "用于表格或合成数据的短二分类训练。",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "a137a34ba7d986248bd665b26251190a715c3e34ba26dfc0a89035c93b66d922",
+      "paper_associations": [
+        {
+          "paper": "importance-reweighting",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "jocor-cifar10-symmetric05-reproduction",
+      "path": "configs/experiment/jocor_cifar10_symmetric05_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/jocor_cifar10_symmetric05_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "multi_model",
+      "method": "jocor",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 200,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "jocor-cifar10-symmetric05-reproduction",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "25a3c2ee93e518beacd7a32d3ee9fa090d52b3d4133092aaf32ed02020be6c12",
+      "paper_associations": [
+        {
+          "paper": "jocor",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "jocor"
+      ]
+    },
+    {
+      "id": "jocor-cifar10-symmetric05-smoke",
+      "path": "configs/experiment/jocor_cifar10_symmetric05_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/jocor_cifar10_symmetric05_smoke.yaml",
+      "profile": "smoke",
+      "runner": "multi_model",
+      "method": "jocor",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 2,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "jocor-cifar10-symmetric05-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "87674663e17548b94b9691044fb536d25e487ef3ac76fd762279c619c597e332",
+      "paper_associations": [
+        {
+          "paper": "jocor",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "loss-correction-cifar10-asymmetric04",
+      "path": "configs/experiment/loss_correction_cifar10_asymmetric04.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/loss_correction_cifar10_asymmetric04.yaml",
+      "profile": "experiment",
+      "runner": "supervised",
+      "method": "forward",
+      "dataset": "cifar10",
+      "noise": "class_conditional",
+      "epochs": 120,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "loss-correction-cifar10-asymmetric04",
+      "description": "",
+      "configuration_fidelity": "engineering",
+      "implementation_status": "component",
+      "normalized_config_hash": "3e1757f1806979f455a31a1bfba78a0a7387df359de274239657e727ebc72d96",
+      "paper_associations": [
+        {
+          "paper": "loss-correction",
+          "order": 0,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "loss_correction"
+      ]
+    },
+    {
+      "id": "l2rw-cifar10-reproduction",
+      "path": "configs/experiment/l2rw_cifar10_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/l2rw_cifar10_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "l2rw",
+      "method": "l2rw",
+      "dataset": "cifar10",
+      "noise": "official_uniform_flip",
+      "epochs": 180,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "l2rw-cifar10-reproduction",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "workflow",
+      "normalized_config_hash": "2fe2ec7d36faffbcc1f9f1a6c0b647baac43c1895c4045ecafeb608dbfcc5806",
+      "paper_associations": [
+        {
+          "paper": "l2rw",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "l2rw"
+      ]
+    },
+    {
+      "id": "l2rw-cifar10-smoke",
+      "path": "configs/experiment/l2rw_cifar10_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/l2rw_cifar10_smoke.yaml",
+      "profile": "smoke",
+      "runner": "l2rw",
+      "method": "l2rw",
+      "dataset": "synthetic_multiclass",
+      "noise": "symmetric",
+      "epochs": 1,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "l2rw-cifar10-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "workflow",
+      "normalized_config_hash": "d456d3749219f3eec7c500fee5d047ffa2cdcdc04e901d00e33624e79c3ac08c",
+      "paper_associations": [
+        {
+          "paper": "l2rw",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "mc-ldce-cifar10-reproduction",
+      "path": "configs/experiment/mc_ldce_cifar10_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/mc_ldce_cifar10_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "mc_ldce",
+      "method": "mc_ldce",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 200,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "mc-ldce-cifar10-reproduction",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "workflow",
+      "normalized_config_hash": "4555781269811bd9521ffccb6ece16b0db0fbf9e2926648f2673648d0857e61f",
+      "paper_associations": [
+        {
+          "paper": "mc-ldce",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "mc_ldce"
+      ]
+    },
+    {
+      "id": "mc-ldce-cifar10-smoke",
+      "path": "configs/experiment/mc_ldce_cifar10_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/mc_ldce_cifar10_smoke.yaml",
+      "profile": "smoke",
+      "runner": "mc_ldce",
+      "method": "mc_ldce",
+      "dataset": "synthetic_multiclass",
+      "noise": "symmetric",
+      "epochs": 1,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "mc-ldce-cifar10-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "workflow",
+      "normalized_config_hash": "90ca4818c7808f967f683c21a15300996211f1b241a4a3febbe23c139ddbbf40",
+      "paper_associations": [
+        {
+          "paper": "mc-ldce",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "mentornet-dd-cifar100-symmetric04-reproduction",
+      "path": "configs/experiment/mentornet_dd_cifar100_symmetric04_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/mentornet_dd_cifar100_symmetric04_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "supervised",
+      "method": "mentornet",
+      "dataset": "cifar100",
+      "noise": "symmetric",
+      "epochs": 100,
+      "visibility": "internal",
+      "availability": "conditional",
+      "label": "mentornet-dd-cifar100-symmetric04-reproduction",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "workflow",
+      "normalized_config_hash": "b1db18b1d57deb4ff24ce0e51aa2f96549670e43bdf7552c0bb4e2e1599dc150",
+      "paper_associations": [
+        {
+          "paper": "mentornet",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "mentornet"
+      ]
+    },
+    {
+      "id": "mentornet-dd-cifar100-symmetric04-smoke",
+      "path": "configs/experiment/mentornet_dd_cifar100_symmetric04_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/mentornet_dd_cifar100_symmetric04_smoke.yaml",
+      "profile": "smoke",
+      "runner": "supervised",
+      "method": "mentornet",
+      "dataset": "cifar100",
+      "noise": "symmetric",
+      "epochs": 2,
+      "visibility": "internal",
+      "availability": "conditional",
+      "label": "mentornet-dd-cifar100-symmetric04-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "workflow",
+      "normalized_config_hash": "84aa6aad1e9c99ea1f316d5eea933510a18f105c6d4eb847ac3c579fd633b4b1",
+      "paper_associations": [
+        {
+          "paper": "mentornet",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "pcse-multiclass-smoke",
+      "path": "configs/experiment/pcse_multiclass_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/pcse_multiclass_smoke.yaml",
+      "profile": "smoke",
+      "runner": "pcse",
+      "method": "pcse",
+      "dataset": "synthetic_multiclass",
+      "noise": "symmetric",
+      "epochs": null,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "pcse-multiclass-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "c8b6f1639051e634dee817b4c7e1b97f45e72276d6e45323c2128a45861667bb",
+      "paper_associations": [
+        {
+          "paper": "pcse",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "pcse-multiclass-volmin-smoke",
+      "path": "configs/experiment/pcse_multiclass_volmin_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/pcse_multiclass_volmin_smoke.yaml",
+      "profile": "smoke",
+      "runner": "pcse",
+      "method": "pcse",
+      "dataset": "synthetic_multiclass",
+      "noise": "symmetric",
+      "epochs": null,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "pcse-multiclass-volmin-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "ab41d10bfa6f45bfec5bbb739c185e46bf8f5d6ca8d337603b26296e41287309",
+      "paper_associations": [
+        {
+          "paper": "pcse",
+          "order": 1,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cifar10-volminnet-smoke",
+      "path": "configs/experiment/cifar10_volminnet_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/cifar10_volminnet_smoke.yaml",
+      "profile": "smoke",
+      "runner": "volminnet",
+      "method": "volminnet",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 2,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-volminnet-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "20f9a4ec7c7fef67dc5cdd5f834e089a2ff75fd8df415b6a4a077a183fc7bacb",
+      "paper_associations": [
+        {
+          "paper": "volminnet",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "volminnet-cifar10-reproduction",
+      "path": "configs/experiment/volminnet_cifar10_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/volminnet_cifar10_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "volminnet",
+      "method": "volminnet",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": 150,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "volminnet-cifar10-reproduction",
+      "description": "",
+      "configuration_fidelity": "paper_protocol",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "2086017a96f16dbcc1527caa2fd47a673741f7849eb6fb67cf9ab01046f5ff83",
+      "paper_associations": [
+        {
+          "paper": "volminnet",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "volminnet"
+      ]
+    },
+    {
+      "id": "pdl-cifar10-reproduction",
+      "path": "configs/experiment/pdl_cifar10_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/pdl_cifar10_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "instance_transition",
+      "method": "pdl",
+      "dataset": "cifar10",
+      "noise": "pdl",
+      "epochs": 98,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "pdl-cifar10-reproduction",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "f026c36bd306c45caee072b8a0a74c67719bab4d57c35143027525b2fcd67a72",
+      "paper_associations": [
+        {
+          "paper": "pdl",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "pdl"
+      ]
+    },
+    {
+      "id": "pdl-cifar10-smoke",
+      "path": "configs/experiment/pdl_cifar10_smoke.yaml",
+      "package_resource": "share/lnl-toolbox/configs/experiment/pdl_cifar10_smoke.yaml",
+      "profile": "smoke",
+      "runner": "instance_transition",
+      "method": "pdl",
+      "dataset": "cifar10",
+      "noise": "pdl",
+      "epochs": 2,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "pdl-cifar10-smoke",
+      "description": "",
+      "configuration_fidelity": "smoke",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "2bea206786de623a468b103739c2b67ba6ad92027673d855760722871ab33ff7",
+      "paper_associations": [
+        {
+          "paper": "pdl",
+          "order": 0,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cifar10-dual-t-sym20",
+      "path": "configs/reproduction/cifar10_dual_t_sym20.yaml",
+      "package_resource": "share/lnl-toolbox/configs/reproduction/cifar10_dual_t_sym20.yaml",
+      "profile": "reproduction",
+      "runner": "dual_t",
+      "method": "dual_t",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": null,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-dual-t-sym20",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "b905faf2333d97d48aef4ce9e2e54a953685026dc6910c4ff0db0a57d68b2917",
+      "paper_associations": [
+        {
+          "paper": "dual-t",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "dual_t"
+      ]
+    },
+    {
+      "id": "cifar10-dual-t-sym20-evidence",
+      "path": "configs/reproduction/cifar10_dual_t_sym20_evidence.yaml",
+      "package_resource": "share/lnl-toolbox/configs/reproduction/cifar10_dual_t_sym20_evidence.yaml",
+      "profile": "reproduction",
+      "runner": "dual_t",
+      "method": "dual_t",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": null,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-dual-t-sym20-evidence",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "3eec2d2104ba233dec00a0e4a3bc95f6b38f8cbadef9a14817a9232f73735af3",
+      "paper_associations": [
+        {
+          "paper": "dual-t",
+          "order": 2,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cifar10-dividemix-sym20",
+      "path": "configs/reproduction/cifar10_dividemix_sym20.yaml",
+      "package_resource": "share/lnl-toolbox/configs/reproduction/cifar10_dividemix_sym20.yaml",
+      "profile": "reproduction",
+      "runner": "dividemix",
+      "method": "dividemix",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": null,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-dividemix-sym20",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "efddd2054b5072d2d06490f74c41302761421b7c611d9e54cd5280aa6d385b84",
+      "paper_associations": [
+        {
+          "paper": "dividemix",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "dividemix"
+      ]
+    },
+    {
+      "id": "cifar10-pcse-reproduction",
+      "path": "configs/reproduction/cifar10_pcse_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/reproduction/cifar10_pcse_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "pcse",
+      "method": "pcse",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": null,
+      "visibility": "internal",
+      "availability": "conditional",
+      "label": "cifar10-pcse-reproduction",
+      "description": "",
+      "configuration_fidelity": "engineering",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "4b3522760c2409080f1db95a121ca97cb502bbcb590998482d679b416bdfaea8",
+      "paper_associations": [
+        {
+          "paper": "pcse",
+          "order": 2,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "pcse"
+      ]
+    },
+    {
+      "id": "cifar10-t-revision-sym20-short",
+      "path": "configs/reproduction/cifar10_t_revision_sym20_short.yaml",
+      "package_resource": "share/lnl-toolbox/configs/reproduction/cifar10_t_revision_sym20_short.yaml",
+      "profile": "reproduction",
+      "runner": "t_revision",
+      "method": "t_revision",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": null,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-t-revision-sym20-short",
+      "description": "",
+      "configuration_fidelity": "engineering",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "4daf94df88280e3c5790d0d9a246fc49ad846220de401d159c60525bfab360c4",
+      "paper_associations": [],
+      "web_formal_methods": []
+    },
+    {
+      "id": "cifar10-t-revision-sym20-reproduction",
+      "path": "configs/reproduction/cifar10_t_revision_sym20_reproduction.yaml",
+      "package_resource": "share/lnl-toolbox/configs/reproduction/cifar10_t_revision_sym20_reproduction.yaml",
+      "profile": "reproduction",
+      "runner": "t_revision",
+      "method": "t_revision",
+      "dataset": "cifar10",
+      "noise": "symmetric",
+      "epochs": null,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "cifar10-t-revision-sym20-reproduction",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "c05440d0be322a52d731fbbfbcc23bb1829c3bb5b66d9b348dc4d9b77c245850",
+      "paper_associations": [
+        {
+          "paper": "t-revision",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "t_revision"
+      ]
+    },
+    {
+      "id": "importance-reweighting-binary-high-dim",
+      "path": "configs/reproduction/importance_reweighting_binary_high_dim.yaml",
+      "package_resource": "share/lnl-toolbox/configs/reproduction/importance_reweighting_binary_high_dim.yaml",
+      "profile": "reproduction",
+      "runner": "importance_reweighting",
+      "method": "importance_reweighting",
+      "dataset": "synthetic_binary_high_dim",
+      "noise": "binary_asymmetric_rcn",
+      "epochs": 50,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "importance-reweighting-binary-high-dim",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "9b7af7e98b2ec0f9b71c9bde412d07dea987f0f944fe5349470db8a0fb85ea94",
+      "paper_associations": [
+        {
+          "paper": "importance-reweighting",
+          "order": 2,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    },
+    {
+      "id": "importance-reweighting-binary-low-dim",
+      "path": "configs/reproduction/importance_reweighting_binary_low_dim.yaml",
+      "package_resource": "share/lnl-toolbox/configs/reproduction/importance_reweighting_binary_low_dim.yaml",
+      "profile": "reproduction",
+      "runner": "importance_reweighting",
+      "method": "importance_reweighting",
+      "dataset": "synthetic_binary_2d",
+      "noise": "binary_asymmetric_rcn",
+      "epochs": 50,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "importance-reweighting-binary-low-dim",
+      "description": "",
+      "configuration_fidelity": "paper_oriented",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "a98587b1995636cfabbb1273274e23b617a309a1a2f4d0f555f991d8421da20d",
+      "paper_associations": [
+        {
+          "paper": "importance-reweighting",
+          "order": 1,
+          "formal_default": true
+        }
+      ],
+      "web_formal_methods": [
+        "importance_reweighting"
+      ]
+    },
+    {
+      "id": "uci-heart-importance-reweighting",
+      "path": "configs/reproduction/uci_heart_importance_reweighting.yaml",
+      "package_resource": "share/lnl-toolbox/configs/reproduction/uci_heart_importance_reweighting.yaml",
+      "profile": "reproduction",
+      "runner": "importance_reweighting",
+      "method": "importance_reweighting",
+      "dataset": "uci_statlog_heart",
+      "noise": "binary_asymmetric_rcn",
+      "epochs": 100,
+      "visibility": "internal",
+      "availability": "runnable",
+      "label": "uci-heart-importance-reweighting",
+      "description": "",
+      "configuration_fidelity": "engineering",
+      "implementation_status": "user_ready",
+      "normalized_config_hash": "7c98c5222f777568e7a92742ab6515cfcdf8b26506a52c128cd3df08886bd6e5",
+      "paper_associations": [
+        {
+          "paper": "importance-reweighting",
+          "order": 3,
+          "formal_default": false
+        }
+      ],
+      "web_formal_methods": []
+    }
+  ],
+  "papers": [
+    {
+      "id": "binary-risk",
+      "default": "binary-risk-natarajan-reproduction",
+      "associations": [
+        {
+          "recipe_id": "binary-risk-natarajan-reproduction",
+          "profile": "reproduction",
+          "variant": "natarajan-binary",
+          "configuration_fidelity": "paper_oriented",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "binary-risk-natarajan-reproduction"
+    },
+    {
+      "id": "importance-reweighting",
+      "default": "importance-reweighting-binary-low-dim",
+      "associations": [
+        {
+          "recipe_id": "importance-reweighting-binary-smoke",
+          "profile": "smoke",
+          "variant": "synthetic-2d",
+          "configuration_fidelity": "paper-aligned",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "importance-reweighting-binary-low-dim",
+          "profile": "reproduction",
+          "variant": "synthetic-low-dim",
+          "configuration_fidelity": "paper-aligned",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "importance-reweighting-binary-high-dim",
+          "profile": "reproduction",
+          "variant": "synthetic-high-dim",
+          "configuration_fidelity": "paper-aligned",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "uci-heart-importance-reweighting",
+          "profile": "reproduction",
+          "variant": "uci-statlog-heart-kliep",
+          "configuration_fidelity": "engineering",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "importance-reweighting-binary-smoke"
+    },
+    {
+      "id": "loss-correction",
+      "default": "loss-correction-cifar10-asymmetric04",
+      "associations": [
+        {
+          "recipe_id": "loss-correction-cifar10-asymmetric04",
+          "profile": "reproduction",
+          "variant": "cifar10-asym40",
+          "configuration_fidelity": "paper-aligned",
+          "implementation_status": "component",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "loss-correction-cifar10-asymmetric04"
+    },
+    {
+      "id": "coteaching",
+      "default": "cifar10-coteaching-reproduction",
+      "associations": [
+        {
+          "recipe_id": "cifar10-coteaching-smoke",
+          "profile": "smoke",
+          "variant": "cifar10-sym40",
+          "configuration_fidelity": "paper-aligned",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "cifar10-coteaching-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar10-sym20-full",
+          "configuration_fidelity": "engineering",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "cifar10-coteaching-smoke"
+    },
+    {
+      "id": "gce",
+      "default": "gce-cifar10-noise02-reproduction",
+      "associations": [
+        {
+          "recipe_id": "gce-cifar10-noise02-smoke",
+          "profile": "smoke",
+          "variant": "cifar10-sym20",
+          "configuration_fidelity": "engineering",
+          "implementation_status": "component",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "gce-cifar10-noise02-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar10-sym20",
+          "configuration_fidelity": "paper-aligned",
+          "implementation_status": "component",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "gce-cifar10-noise02-smoke"
+    },
+    {
+      "id": "l2rw",
+      "default": "l2rw-cifar10-reproduction",
+      "associations": [
+        {
+          "recipe_id": "l2rw-cifar10-smoke",
+          "profile": "smoke",
+          "variant": "cifar10",
+          "configuration_fidelity": "smoke",
+          "implementation_status": "workflow",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "l2rw-cifar10-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar10",
+          "configuration_fidelity": "paper_oriented",
+          "implementation_status": "workflow",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "l2rw-cifar10-smoke"
+    },
+    {
+      "id": "mentornet",
+      "default": "mentornet-dd-cifar100-symmetric04-reproduction",
+      "associations": [
+        {
+          "recipe_id": "mentornet-dd-cifar100-symmetric04-smoke",
+          "profile": "smoke",
+          "variant": "cifar100-sym40",
+          "configuration_fidelity": "paper-aligned",
+          "implementation_status": "workflow",
+          "reproduction_status": "not_run",
+          "availability": "conditional"
+        },
+        {
+          "recipe_id": "mentornet-dd-cifar100-symmetric04-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar100-sym40",
+          "configuration_fidelity": "paper-protocol",
+          "implementation_status": "workflow",
+          "reproduction_status": "not_run",
+          "availability": "conditional"
+        }
+      ],
+      "cli_recommended": "mentornet-dd-cifar100-symmetric04-smoke"
+    },
+    {
+      "id": "t-revision",
+      "default": "cifar10-t-revision-sym20-reproduction",
+      "associations": [
+        {
+          "recipe_id": "cifar10-t-revision-smoke",
+          "profile": "smoke",
+          "variant": "cifar10-sym40",
+          "configuration_fidelity": "paper_oriented",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "cifar10-t-revision-sym20-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar10-sym20-full",
+          "configuration_fidelity": "paper_oriented",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "cifar10-t-revision-smoke"
+    },
+    {
+      "id": "apl",
+      "default": "apl-cifar10-noise02-reproduction",
+      "associations": [
+        {
+          "recipe_id": "apl-cifar10-noise02-smoke",
+          "profile": "smoke",
+          "variant": "cifar10-sym20",
+          "configuration_fidelity": "engineering",
+          "implementation_status": "component",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "apl-cifar10-noise02-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar10-sym20",
+          "configuration_fidelity": "paper-aligned",
+          "implementation_status": "component",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "apl-cifar10-noise04-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar10-sym40",
+          "configuration_fidelity": "paper-aligned",
+          "implementation_status": "component",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "apl-cifar10-noise02-smoke"
+    },
+    {
+      "id": "dividemix",
+      "default": "cifar10-dividemix-sym20",
+      "associations": [
+        {
+          "recipe_id": "cifar10-dividemix-smoke",
+          "profile": "smoke",
+          "variant": "cifar10-sym20",
+          "configuration_fidelity": "paper_official_oriented",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "cifar10-dividemix-sym20",
+          "profile": "reproduction",
+          "variant": "cifar10-sym20-full",
+          "configuration_fidelity": "paper_oriented",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "cifar10-dividemix-smoke"
+    },
+    {
+      "id": "dual-t",
+      "default": "cifar10-dual-t-sym20",
+      "associations": [
+        {
+          "recipe_id": "cifar10-dual-t-smoke",
+          "profile": "smoke",
+          "variant": "cifar10-sym20",
+          "configuration_fidelity": "paper-aligned",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "cifar10-dual-t-sym20",
+          "profile": "reproduction",
+          "variant": "cifar10-sym20",
+          "configuration_fidelity": "paper-protocol",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "cifar10-dual-t-sym20-evidence",
+          "profile": "reproduction",
+          "variant": "cifar10-sym20-evidence",
+          "configuration_fidelity": "paper-protocol",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "cifar10-dual-t-smoke"
+    },
+    {
+      "id": "jocor",
+      "default": "jocor-cifar10-symmetric05-reproduction",
+      "associations": [
+        {
+          "recipe_id": "jocor-cifar10-symmetric05-smoke",
+          "profile": "smoke",
+          "variant": "cifar10-sym50",
+          "configuration_fidelity": "paper-aligned",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "jocor-cifar10-symmetric05-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar10-sym50",
+          "configuration_fidelity": "paper-protocol",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "jocor-cifar10-symmetric05-smoke"
+    },
+    {
+      "id": "pdl",
+      "default": "pdl-cifar10-reproduction",
+      "associations": [
+        {
+          "recipe_id": "pdl-cifar10-smoke",
+          "profile": "smoke",
+          "variant": "cifar10-idn40",
+          "configuration_fidelity": "paper-aligned",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "pdl-cifar10-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar10-idn40",
+          "configuration_fidelity": "paper-protocol",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "pdl-cifar10-smoke"
+    },
+    {
+      "id": "cal",
+      "default": "cal-cifar10-reproduction",
+      "associations": [
+        {
+          "recipe_id": "cal-cifar10-smoke",
+          "profile": "smoke",
+          "variant": "cifar10",
+          "configuration_fidelity": "smoke",
+          "implementation_status": "workflow",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "cal-cifar10-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar10",
+          "configuration_fidelity": "paper_oriented",
+          "implementation_status": "workflow",
+          "reproduction_status": "not_run",
+          "availability": "conditional"
+        }
+      ],
+      "cli_recommended": "cal-cifar10-smoke"
+    },
+    {
+      "id": "cdr",
+      "default": "cifar10-symmetric-cdr-reproduction",
+      "associations": [
+        {
+          "recipe_id": "cifar10-symmetric-cdr-smoke",
+          "profile": "smoke",
+          "variant": "cifar10-sym40",
+          "configuration_fidelity": "paper-aligned",
+          "implementation_status": "component",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "cifar10-symmetric-cdr-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar10-sym40",
+          "configuration_fidelity": "paper-protocol",
+          "implementation_status": "component",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "cifar10-symmetric-cdr-smoke"
+    },
+    {
+      "id": "upm",
+      "default": "upm-cifar10-reproduction",
+      "associations": [
+        {
+          "recipe_id": "cifar10-upm-smoke",
+          "profile": "smoke",
+          "variant": "cifar10-workflow",
+          "configuration_fidelity": "paper_oriented",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "upm-cifar10-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar10-sym40-full",
+          "configuration_fidelity": "engineering",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "cifar10-upm-smoke"
+    },
+    {
+      "id": "volminnet",
+      "default": "volminnet-cifar10-reproduction",
+      "associations": [
+        {
+          "recipe_id": "cifar10-volminnet-smoke",
+          "profile": "smoke",
+          "variant": "cifar10-sym40",
+          "configuration_fidelity": "paper_oriented",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "volminnet-cifar10-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar10-sym20",
+          "configuration_fidelity": "paper_protocol",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "cifar10-volminnet-smoke"
+    },
+    {
+      "id": "cnlcu",
+      "default": "cnlcu-cifar10-reproduction",
+      "associations": [
+        {
+          "recipe_id": "cifar10-cnlcu-soft-smoke",
+          "profile": "smoke",
+          "variant": "cnlcu-s",
+          "configuration_fidelity": "smoke",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "cifar10-cnlcu-hard-smoke",
+          "profile": "smoke",
+          "variant": "cnlcu-h",
+          "configuration_fidelity": "smoke",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "cnlcu-cifar10-reproduction",
+          "profile": "reproduction",
+          "variant": "cnlcu-s-cifar10-sym20",
+          "configuration_fidelity": "paper_protocol",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "cifar10-cnlcu-soft-smoke"
+    },
+    {
+      "id": "cwd",
+      "default": "cwd-cifar10-reproduction",
+      "associations": [
+        {
+          "recipe_id": "cwd-cifar10-smoke",
+          "profile": "smoke",
+          "variant": "cifar10-binary",
+          "configuration_fidelity": "paper-aligned",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "cwd-cifar10-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar10-binary",
+          "configuration_fidelity": "paper-protocol",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "cwd-cifar10-smoke"
+    },
+    {
+      "id": "lend",
+      "default": "lend-cifar10-reproduction",
+      "associations": [
+        {
+          "recipe_id": "cifar10-lend-smoke",
+          "profile": "smoke",
+          "variant": "cifar10-sym20",
+          "configuration_fidelity": "paper_oriented",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "lend-cifar10-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar10-sym40-full",
+          "configuration_fidelity": "paper_oriented",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "cifar10-lend-smoke"
+    },
+    {
+      "id": "mc-ldce",
+      "default": "mc-ldce-cifar10-reproduction",
+      "associations": [
+        {
+          "recipe_id": "mc-ldce-cifar10-smoke",
+          "profile": "smoke",
+          "variant": "cifar10",
+          "configuration_fidelity": "smoke",
+          "implementation_status": "workflow",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "mc-ldce-cifar10-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar10",
+          "configuration_fidelity": "paper_oriented",
+          "implementation_status": "workflow",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "mc-ldce-cifar10-smoke"
+    },
+    {
+      "id": "pcse",
+      "default": "cifar10-pcse-reproduction",
+      "associations": [
+        {
+          "recipe_id": "pcse-multiclass-smoke",
+          "profile": "smoke",
+          "variant": "synthetic-dual-t",
+          "configuration_fidelity": "engineering",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "pcse-multiclass-volmin-smoke",
+          "profile": "smoke",
+          "variant": "synthetic-volmin",
+          "configuration_fidelity": "paper-aligned",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "cifar10-pcse-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar10-upm-sym40-real-data",
+          "configuration_fidelity": "engineering",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "conditional"
+        }
+      ],
+      "cli_recommended": "pcse-multiclass-smoke"
+    },
+    {
+      "id": "ca2c",
+      "default": "ca2c-cifar100-reproduction",
+      "associations": [
+        {
+          "recipe_id": "ca2c-cifar10-smoke",
+          "profile": "smoke",
+          "variant": "cifar10",
+          "configuration_fidelity": "smoke",
+          "implementation_status": "workflow",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "ca2c-cifar100-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar100-sym20",
+          "configuration_fidelity": "paper_oriented",
+          "implementation_status": "workflow",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "ca2c-cifar10-smoke"
+    },
+    {
+      "id": "dld",
+      "default": "dld-cifar10-reproduction",
+      "associations": [
+        {
+          "recipe_id": "cifar10-dld-smoke",
+          "profile": "smoke",
+          "variant": "cifar10-workflow",
+          "configuration_fidelity": "engineering",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "dld-cifar10-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar10-sym20-full",
+          "configuration_fidelity": "paper_oriented",
+          "implementation_status": "conditional",
+          "reproduction_status": "not_run",
+          "availability": "conditional"
+        }
+      ],
+      "cli_recommended": "cifar10-dld-smoke"
+    },
+    {
+      "id": "dss",
+      "default": "dss-cifar10-symmetric05-reproduction",
+      "associations": [
+        {
+          "recipe_id": "dss-cifar10-symmetric05-smoke",
+          "profile": "smoke",
+          "variant": "cifar10-sym50",
+          "configuration_fidelity": "paper-aligned",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "dss-cifar10-symmetric05-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar10-sym50",
+          "configuration_fidelity": "paper-protocol",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "dss-cifar10-symmetric05-smoke"
+    },
+    {
+      "id": "fine",
+      "default": "fine-cifar100n-reproduction",
+      "associations": [
+        {
+          "recipe_id": "fine-cifar100n-smoke",
+          "profile": "smoke",
+          "variant": "cifar100-sym20",
+          "configuration_fidelity": "paper-aligned",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        },
+        {
+          "recipe_id": "fine-cifar100n-reproduction",
+          "profile": "reproduction",
+          "variant": "cifar100-sym20",
+          "configuration_fidelity": "paper-protocol",
+          "implementation_status": "user_ready",
+          "reproduction_status": "not_run",
+          "availability": "runnable"
+        }
+      ],
+      "cli_recommended": "fine-cifar100n-smoke"
+    }
+  ],
+  "web_formal_bindings": {
+    "apl": "apl-cifar10-noise02-reproduction",
+    "gce": "gce-cifar10-noise02-reproduction",
+    "binary_risk": "binary-risk-natarajan-reproduction",
+    "dual_t": "cifar10-dual-t-sym20",
+    "loss_correction": "loss-correction-cifar10-asymmetric04",
+    "importance_reweighting": "importance-reweighting-binary-low-dim",
+    "cwd": "cwd-cifar10-reproduction",
+    "pcse": "cifar10-pcse-reproduction",
+    "fine": "fine-cifar100n-reproduction",
+    "cdr": "cifar10-symmetric-cdr-reproduction",
+    "dss": "dss-cifar10-symmetric05-reproduction",
+    "coteaching": "cifar10-coteaching-reproduction",
+    "jocor": "jocor-cifar10-symmetric05-reproduction",
+    "cnlcu": "cnlcu-cifar10-reproduction",
+    "mentornet": "mentornet-dd-cifar100-symmetric04-reproduction",
+    "t_revision": "cifar10-t-revision-sym20-reproduction",
+    "mc_ldce": "mc-ldce-cifar10-reproduction",
+    "volminnet": "volminnet-cifar10-reproduction",
+    "pdl": "pdl-cifar10-reproduction",
+    "upm": "upm-cifar10-reproduction",
+    "cal": "cal-cifar10-reproduction",
+    "dld": "dld-cifar10-reproduction",
+    "ca2c": "ca2c-cifar100-reproduction",
+    "dividemix": "cifar10-dividemix-sym20",
+    "l2rw": "l2rw-cifar10-reproduction",
+    "lend": "lend-cifar10-reproduction"
+  },
+  "views": {
+    "False/False": [
+      "apl-cifar10-noise02-reproduction",
+      "apl-cifar10-noise02-smoke",
+      "apl-cifar10-noise04-reproduction",
+      "binary-risk-natarajan-1epoch",
+      "binary-risk-natarajan-reproduction",
+      "ca2c-cifar100-reproduction",
+      "ca2c-cifar10-smoke",
+      "cal-cifar10-smoke",
+      "cifar10-clean",
+      "cifar10-clean-baseline",
+      "cifar10-clean-smoke",
+      "cifar10-cnlcu-hard-smoke",
+      "cifar10-cnlcu-soft-smoke",
+      "cnlcu-cifar10-reproduction",
+      "cifar10-coteaching-reproduction",
+      "cifar10-coteaching-smoke",
+      "cifar10-dual-t-evidence-smoke",
+      "cifar10-dual-t-smoke",
+      "cifar10-dld-smoke",
+      "cifar10-dividemix-smoke",
+      "cifar10-lend-smoke",
+      "lend-cifar10-reproduction",
+      "cifar10-foundation-smoke",
+      "cifar10-smoke",
+      "cifar10-symmetric-cdr-reproduction",
+      "cifar10-symmetric-cdr-smoke",
+      "cifar10-symmetric-ce-smoke",
+      "cifar10-symmetric-small-loss-linear-smoke",
+      "cifar10-symmetric-small-loss-smoke",
+      "cifar10-t-revision-smoke",
+      "cifar10-upm-smoke",
+      "upm-cifar10-reproduction",
+      "cwd-cifar10-reproduction",
+      "cwd-cifar10-smoke",
+      "dss-cifar10-symmetric05-reproduction",
+      "dss-cifar10-symmetric05-smoke",
+      "fine-cifar100n-reproduction",
+      "fine-cifar100n-smoke",
+      "gce-cifar10-noise02-reproduction",
+      "gce-cifar10-noise02-smoke",
+      "importance-reweighting-binary-high-dim-smoke",
+      "importance-reweighting-binary-smoke",
+      "jocor-cifar10-symmetric05-reproduction",
+      "jocor-cifar10-symmetric05-smoke",
+      "loss-correction-cifar10-asymmetric04",
+      "l2rw-cifar10-reproduction",
+      "l2rw-cifar10-smoke",
+      "mc-ldce-cifar10-reproduction",
+      "mc-ldce-cifar10-smoke",
+      "pcse-multiclass-smoke",
+      "pcse-multiclass-volmin-smoke",
+      "cifar10-volminnet-smoke",
+      "volminnet-cifar10-reproduction",
+      "pdl-cifar10-reproduction",
+      "pdl-cifar10-smoke",
+      "cifar10-dual-t-sym20",
+      "cifar10-dual-t-sym20-evidence",
+      "cifar10-dividemix-sym20",
+      "cifar10-t-revision-sym20-short",
+      "cifar10-t-revision-sym20-reproduction",
+      "importance-reweighting-binary-high-dim",
+      "importance-reweighting-binary-low-dim",
+      "uci-heart-importance-reweighting"
+    ],
+    "False/True": [
+      "cifar10-clean-baseline",
+      "cifar10-clean-smoke",
+      "cifar10-symmetric-ce-smoke",
+      "importance-reweighting-binary-smoke"
+    ],
+    "True/False": [
+      "apl-cifar10-noise02-reproduction",
+      "apl-cifar10-noise02-smoke",
+      "apl-cifar10-noise04-reproduction",
+      "binary-risk-natarajan-1epoch",
+      "binary-risk-natarajan-reproduction",
+      "ca2c-cifar100-reproduction",
+      "ca2c-cifar10-smoke",
+      "cal-cifar10-reproduction",
+      "cal-cifar10-smoke",
+      "cifar10-clean",
+      "cifar10-clean-baseline",
+      "cifar10-clean-smoke",
+      "cifar10-cnlcu-hard-smoke",
+      "cifar10-cnlcu-soft-smoke",
+      "cnlcu-cifar10-reproduction",
+      "cifar10-coteaching-reproduction",
+      "cifar10-coteaching-smoke",
+      "cifar10-dual-t-evidence-smoke",
+      "cifar10-dual-t-smoke",
+      "cifar10-dld-smoke",
+      "dld-cifar10-reproduction",
+      "cifar10-dividemix-smoke",
+      "cifar10-lend-smoke",
+      "lend-cifar10-reproduction",
+      "cifar10-foundation-smoke",
+      "cifar10-smoke",
+      "cifar10-symmetric-cdr-reproduction",
+      "cifar10-symmetric-cdr-smoke",
+      "cifar10-symmetric-ce-smoke",
+      "cifar10-symmetric-small-loss-linear-smoke",
+      "cifar10-symmetric-small-loss-smoke",
+      "cifar10-t-revision-smoke",
+      "cifar10-upm-smoke",
+      "upm-cifar10-reproduction",
+      "cwd-cifar10-reproduction",
+      "cwd-cifar10-smoke",
+      "dss-cifar10-symmetric05-reproduction",
+      "dss-cifar10-symmetric05-smoke",
+      "fine-cifar100n-reproduction",
+      "fine-cifar100n-smoke",
+      "gce-cifar10-noise02-reproduction",
+      "gce-cifar10-noise02-smoke",
+      "importance-reweighting-binary-high-dim-smoke",
+      "importance-reweighting-binary-smoke",
+      "jocor-cifar10-symmetric05-reproduction",
+      "jocor-cifar10-symmetric05-smoke",
+      "loss-correction-cifar10-asymmetric04",
+      "l2rw-cifar10-reproduction",
+      "l2rw-cifar10-smoke",
+      "mc-ldce-cifar10-reproduction",
+      "mc-ldce-cifar10-smoke",
+      "mentornet-dd-cifar100-symmetric04-reproduction",
+      "mentornet-dd-cifar100-symmetric04-smoke",
+      "pcse-multiclass-smoke",
+      "pcse-multiclass-volmin-smoke",
+      "cifar10-volminnet-smoke",
+      "volminnet-cifar10-reproduction",
+      "pdl-cifar10-reproduction",
+      "pdl-cifar10-smoke",
+      "cifar10-dual-t-sym20",
+      "cifar10-dual-t-sym20-evidence",
+      "cifar10-dividemix-sym20",
+      "cifar10-pcse-reproduction",
+      "cifar10-t-revision-sym20-short",
+      "cifar10-t-revision-sym20-reproduction",
+      "importance-reweighting-binary-high-dim",
+      "importance-reweighting-binary-low-dim",
+      "uci-heart-importance-reweighting"
+    ],
+    "True/True": [
+      "cifar10-clean-baseline",
+      "cifar10-clean-smoke",
+      "cifar10-symmetric-ce-smoke",
+      "importance-reweighting-binary-smoke"
+    ]
+  },
+  "packaged_only": {
+    "configs/experiment/mentornet_dd_teacher_cifar10_symmetric04.yaml": "share/lnl-toolbox/configs/experiment/mentornet_dd_teacher_cifar10_symmetric04.yaml",
+    "configs/reproduction/cifar10_cnlcu_soft_sym20_short.yaml": "share/lnl-toolbox/configs/reproduction/cifar10_cnlcu_soft_sym20_short.yaml",
+    "configs/reproduction/cifar10_dld_sym20_short.yaml": "share/lnl-toolbox/configs/reproduction/cifar10_dld_sym20_short.yaml"
+  },
+  "sweep": {
+    "seed_only": {
+      "default_root": "artifacts/sweeps/gce-cifar10-noise02-smoke-dc49f794fe",
+      "planned_runs": [
+        {
+          "seed": 8,
+          "overrides": [],
+          "config_hash": "611ca5f4749f1c8145aee30921c9431997e6fb5643b12120b7f6da7d77f659f5",
+          "run_id": "run-0001-611ca5f474"
+        },
+        {
+          "seed": 3,
+          "overrides": [],
+          "config_hash": "2d679d455a42de3fd74cab090d818e7e3ff7343faac31df5b801334d68781f87",
+          "run_id": "run-0002-2d679d455a"
+        }
+      ],
+      "manifest": {
+        "schema_version": 2,
+        "sweep_id": "gce-cifar10-noise02-smoke-dc49f794fe",
+        "recipe": "gce-cifar10-noise02-smoke",
+        "config_hash": "dc49f794fe366bbb8599c28aac55a958b5161d90566b83655982b729886ad0cf",
+        "sweep_hash": "6222ad5faa82746ce0dd3690a8bb500a42d05dac3bdc09210c82d95ade6a74eb",
+        "seeds": [
+          8,
+          3
+        ],
+        "matrix": {},
+        "status": "running",
+        "runs": [
+          {
+            "run_id": "run-0001-611ca5f474",
+            "seed": 8,
+            "overrides": {},
+            "config_hash": "611ca5f4749f1c8145aee30921c9431997e6fb5643b12120b7f6da7d77f659f5",
+            "status": "pending",
+            "run_dir": "artifacts/sweeps/gce-cifar10-noise02-smoke-dc49f794fe/runs/run-0001-611ca5f474",
+            "error": null
+          },
+          {
+            "run_id": "run-0002-2d679d455a",
+            "seed": 3,
+            "overrides": {},
+            "config_hash": "2d679d455a42de3fd74cab090d818e7e3ff7343faac31df5b801334d68781f87",
+            "status": "pending",
+            "run_dir": "artifacts/sweeps/gce-cifar10-noise02-smoke-dc49f794fe/runs/run-0002-2d679d455a",
+            "error": null
+          }
+        ]
+      }
+    },
+    "matrix": {
+      "default_root": "artifacts/sweeps/gce-cifar10-noise02-smoke-1f1beec948",
+      "planned_runs": [
+        {
+          "seed": 8,
+          "overrides": [
+            [
+              "trainer.epochs",
+              1
+            ]
+          ],
+          "config_hash": "f49199daf21955250e5ae4152ee17802c2d59e993ce84935e0519fb6f3cc67df",
+          "run_id": "run-0001-f49199daf2"
+        },
+        {
+          "seed": 3,
+          "overrides": [
+            [
+              "trainer.epochs",
+              1
+            ]
+          ],
+          "config_hash": "696e021ec0f2febe895deb6439b8c78a3ade7fc156bc7895208219d02f0bc3cf",
+          "run_id": "run-0002-696e021ec0"
+        },
+        {
+          "seed": 8,
+          "overrides": [
+            [
+              "trainer.epochs",
+              2
+            ]
+          ],
+          "config_hash": "611ca5f4749f1c8145aee30921c9431997e6fb5643b12120b7f6da7d77f659f5",
+          "run_id": "run-0003-611ca5f474"
+        },
+        {
+          "seed": 3,
+          "overrides": [
+            [
+              "trainer.epochs",
+              2
+            ]
+          ],
+          "config_hash": "2d679d455a42de3fd74cab090d818e7e3ff7343faac31df5b801334d68781f87",
+          "run_id": "run-0004-2d679d455a"
+        }
+      ],
+      "manifest": {
+        "schema_version": 2,
+        "sweep_id": "gce-cifar10-noise02-smoke-1f1beec948",
+        "recipe": "gce-cifar10-noise02-smoke",
+        "config_hash": "dc49f794fe366bbb8599c28aac55a958b5161d90566b83655982b729886ad0cf",
+        "sweep_hash": "1f1beec948ee3d691e9183c89995e4daedd85ebe78b9636522b61aa8ed52670b",
+        "seeds": [
+          8,
+          3
+        ],
+        "matrix": {
+          "trainer.epochs": [
+            1,
+            2
+          ]
+        },
+        "status": "running",
+        "runs": [
+          {
+            "run_id": "run-0001-f49199daf2",
+            "seed": 8,
+            "overrides": {
+              "trainer.epochs": 1
+            },
+            "config_hash": "f49199daf21955250e5ae4152ee17802c2d59e993ce84935e0519fb6f3cc67df",
+            "status": "pending",
+            "run_dir": "artifacts/sweeps/gce-cifar10-noise02-smoke-1f1beec948/runs/run-0001-f49199daf2",
+            "error": null
+          },
+          {
+            "run_id": "run-0002-696e021ec0",
+            "seed": 3,
+            "overrides": {
+              "trainer.epochs": 1
+            },
+            "config_hash": "696e021ec0f2febe895deb6439b8c78a3ade7fc156bc7895208219d02f0bc3cf",
+            "status": "pending",
+            "run_dir": "artifacts/sweeps/gce-cifar10-noise02-smoke-1f1beec948/runs/run-0002-696e021ec0",
+            "error": null
+          },
+          {
+            "run_id": "run-0003-611ca5f474",
+            "seed": 8,
+            "overrides": {
+              "trainer.epochs": 2
+            },
+            "config_hash": "611ca5f4749f1c8145aee30921c9431997e6fb5643b12120b7f6da7d77f659f5",
+            "status": "pending",
+            "run_dir": "artifacts/sweeps/gce-cifar10-noise02-smoke-1f1beec948/runs/run-0003-611ca5f474",
+            "error": null
+          },
+          {
+            "run_id": "run-0004-2d679d455a",
+            "seed": 3,
+            "overrides": {
+              "trainer.epochs": 2
+            },
+            "config_hash": "2d679d455a42de3fd74cab090d818e7e3ff7343faac31df5b801334d68781f87",
+            "status": "pending",
+            "run_dir": "artifacts/sweeps/gce-cifar10-noise02-smoke-1f1beec948/runs/run-0004-2d679d455a",
+            "error": null
+          }
+        ]
+      }
+    }
+  },
+  "summaries": {
+    "recipe": "ac7b430c213e331fab7ef8c044d9ff384473524e4fb4f1ae35d918790133eb49",
+    "paper": "ef2af29c25c75641f5ec4222de69e774ac5d5092d45c5b50cfcc16087896d09c",
+    "source_discovery": "02cfa7cc14878f7c10ad6080be9ae6d5ea1411e8b512b0bc9f1bf1b202711499",
+    "packaging_discovery": "6b63060f14b8b281bc6ba6d3f244c8efd08d39b2ff53508cee833cfb9c7c3ea5"
+  }
+}
