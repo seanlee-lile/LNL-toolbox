@@ -288,6 +288,57 @@ class RecipeIdentityTest(unittest.TestCase):
             [a["recipe_id"] for paper in self.actual["papers"] for a in paper["associations"]],
         )
 
+    def test_installed_catalog_reads_distribution_once_per_build_and_revalidates(self):
+        package_map = _package_map(ROOT)
+        paths = {
+            PurePosixPath("prefix", resource): (ROOT / source).resolve()
+            for source, resource in package_map.items()
+        }
+        entries = list(paths)
+        expected = self.expected["recipes"]
+        conditional = next(item for item in expected if item["id"] == "cifar10-pcse-reproduction")
+        removed = PurePosixPath("prefix", conditional["package_resource"])
+        file_reads = []
+
+        class Distribution:
+            @property
+            def files(self):
+                file_reads.append(None)
+                return tuple(entries)
+
+            def locate_file(self, entry):
+                return paths[entry]
+
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(catalog.metadata, "distribution", return_value=Distribution()) as lookup, \
+             patch.object(catalog, "load_yaml", wraps=catalog.load_yaml) as load:
+            project = Path(directory)
+            installed = catalog.discover_recipes(project, include_conditional=True)
+            lookup.assert_called_once_with("lnl-toolbox")
+            self.assertEqual(len(file_reads), 1)
+            self.assertEqual(
+                [(item.id, item.config_path.relative_to(ROOT).as_posix()) for item in installed],
+                [(item["id"], item["path"]) for item in expected],
+            )
+            self.assertEqual(len(package_map), 71)
+            self.assertEqual(
+                [call.args[0] for call in load.call_args_list],
+                [item.config_path for item in installed],
+            )
+            self.assertEqual(
+                installed, catalog.discover_recipes(ROOT, include_conditional=True)
+            )
+            lookup.assert_called_once_with("lnl-toolbox")
+            self.assertEqual(len(file_reads), 1)
+
+            # Changing the installation record must affect the next build,
+            # even when the missing conditional is excluded from the view.
+            entries.remove(removed)
+            with self.assertRaisesRegex(FileNotFoundError, "missing YAML.*cifar10-pcse-reproduction"):
+                catalog.discover_recipes(project, public_only=True)
+            self.assertEqual(lookup.call_count, 2)
+            self.assertEqual(len(file_reads), 2)
+
 
 class CandidateIdentityGateTest(unittest.TestCase):
     def test_candidate_failures_cannot_be_silently_overwritten(self):
@@ -411,6 +462,36 @@ class ProductionRecipeIdentityTest(unittest.TestCase):
             self.assert_catalog_rejected(
                 "ambiguous installed resource", "installed", *(entry.as_posix() for entry in candidates)
             )
+
+    def test_installed_record_without_file_is_rejected(self):
+        relative = "configs/installed/absent.yaml"
+        record = PurePosixPath("prefix/share/lnl-toolbox", relative)
+        self.manifest([relative], conditional=[relative])
+        dist = SimpleNamespace(files=[record], locate_file=lambda entry: self.root / entry)
+        with patch.object(catalog.metadata, "distribution", return_value=dist):
+            self.assert_catalog_rejected(
+                "missing YAML for built-in recipe", "absent", relative,
+                exception=FileNotFoundError,
+            )
+
+    def test_source_precedes_installed_candidates_even_in_mixed_index(self):
+        a, b = "configs/experiment/source.yaml", "configs/reproduction/installed.yaml"
+        source = self.write(a)
+        candidates = [PurePosixPath(f"{p}/share/lnl-toolbox/{a}") for p in ("x", "y")]
+        candidates.append(PurePosixPath("x/share/lnl-toolbox", b))
+        for entry in candidates:
+            self.write(entry.as_posix())
+        dist = SimpleNamespace(files=candidates, locate_file=lambda entry: self.root / entry)
+        with patch.object(catalog.metadata, "distribution", return_value=dist) as lookup:
+            self.manifest([a])
+            self.assertEqual(catalog.recipe_by_id("source", self.root).config_path, source)
+            lookup.assert_not_called()
+            self.manifest([a, b])
+            rows = catalog.discover_recipes(self.root)
+            self.assertEqual(
+                [item.config_path for item in rows], [source, self.root / candidates[-1]]
+            )
+            lookup.assert_called_once_with("lnl-toolbox")
 
     def test_valid_conditional_resource_does_not_require_runtime_inputs(self):
         a, b = "configs/phase1a/visible.yaml", "configs/phase1a/conditional.yaml"

@@ -169,39 +169,64 @@ def _recipe_manifest() -> tuple[
     return paths, frozenset(conditional), public
 
 
-def _installed_recipe_path(relative: str, *, require_unique: bool = False) -> Path:
+def _installed_distribution(relative: str) -> metadata.Distribution:
     try:
-        distribution = metadata.distribution("lnl-toolbox")
+        return metadata.distribution("lnl-toolbox")
     except metadata.PackageNotFoundError as exc:
         raise FileNotFoundError(
             f"built-in recipe is unavailable outside a source checkout: {relative}"
         ) from exc
-    suffix = Path("share/lnl-toolbox") / relative
-    suffix_parts = suffix.parts
-    suffix_text = suffix.as_posix()
-    matches = (
-        entry for entry in distribution.files or ()
-        if (
-            entry.parts[-len(suffix_parts):] == suffix_parts
-            if require_unique else entry.as_posix().endswith(suffix_text)
-        )
-    )
-    first = next(matches, None)
-    if first is None:
-        raise FileNotFoundError(f"packaged built-in recipe is missing: {relative}")
-    if require_unique and (others := list(matches)):
-        raise ValueError(
-            f"ambiguous installed resource for built-in recipe {_recipe_id(Path(relative))!r} "
-            f"({relative}): {[entry.as_posix() for entry in (first, *others)]}"
-        )
-    return Path(distribution.locate_file(first)).resolve()
 
 
-def _recipe_path(relative: str, project: Path) -> Path:
+class _InstalledRecipeLookup:
+    """A lazy distribution-record index owned by one built-in index build."""
+
+    def __init__(self, relatives: tuple[str, ...]) -> None:
+        self._relatives = relatives
+        self._distribution: metadata.Distribution | None = None
+        self._candidates: dict[tuple[str, ...], list[metadata.PackagePath]] = {}
+
+    def resolve(self, relative: str) -> Path:
+        distribution = self._distribution
+        suffix = (Path("share/lnl-toolbox") / relative).parts
+        if distribution is None:
+            distribution = _installed_distribution(relative)
+            wanted = {(Path("share/lnl-toolbox") / name).parts for name in self._relatives}
+            lengths = {len(parts) for parts in wanted}
+            for entry in distribution.files or ():
+                parts = entry.parts
+                for length in lengths:
+                    if len(parts) >= length and (key := parts[-length:]) in wanted:
+                        self._candidates.setdefault(key, []).append(entry)
+            self._distribution = distribution
+
+        matches = self._candidates.get(suffix, ())
+        if not matches:
+            raise FileNotFoundError(f"packaged built-in recipe is missing: {relative}")
+        if len(matches) > 1:
+            raise ValueError(
+                f"ambiguous installed resource for built-in recipe {_recipe_id(Path(relative))!r} "
+                f"({relative}): {[entry.as_posix() for entry in matches]}"
+            )
+        return Path(distribution.locate_file(matches[0])).resolve()
+
+
+def _installed_recipe_path(relative: str, *, require_unique: bool = False) -> Path:
+    if require_unique:
+        return _InstalledRecipeLookup((relative,)).resolve(relative)
+    distribution = _installed_distribution(relative)
+    suffix = (Path("share/lnl-toolbox") / relative).as_posix()
+    for entry in distribution.files or ():
+        if entry.as_posix().endswith(suffix):
+            return Path(distribution.locate_file(entry)).resolve()
+    raise FileNotFoundError(f"packaged built-in recipe is missing: {relative}")
+
+
+def _recipe_path(relative: str, project: Path, installed_lookup: _InstalledRecipeLookup) -> Path:
     source = (project / relative).resolve()
     if source.is_file():
         return source
-    installed = _installed_recipe_path(relative, require_unique=True)
+    installed = installed_lookup.resolve(relative)
     if not installed.is_file():
         raise FileNotFoundError(f"packaged built-in recipe is missing: {relative}")
     return installed
@@ -237,13 +262,14 @@ def _builtin_recipe_index(root: Path | None) -> dict[str, RecipeSpec]:
 
     project = (root or repository_root()).resolve()
     manifest_paths, conditional_paths, public_recipes = _recipe_manifest()
+    installed_lookup = _InstalledRecipeLookup(manifest_paths)
     recipes: dict[str, RecipeSpec] = {}
     id_paths: dict[str, str] = {}
     resource_paths: dict[Path, str] = {}
     file_paths: dict[tuple[int, int], str] = {}
     for relative in manifest_paths:
         try:
-            path = _recipe_path(relative, project)
+            path = _recipe_path(relative, project, installed_lookup)
             stat = path.stat()
         except FileNotFoundError as exc:
             raise FileNotFoundError(
