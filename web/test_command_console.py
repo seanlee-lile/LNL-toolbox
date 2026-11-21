@@ -341,6 +341,8 @@ eval(quote + workflow + 'console.log(compatibilityWorkflowCommand("run"));');
 
 
     def test_concrete_recipe_compatibility_preserves_paper_identity(self):
+        from lnl_toolbox.catalog import discover_recipes
+
         result = mock.Mock()
         result.to_dict.return_value = {
             "method": "fine",
@@ -353,7 +355,7 @@ eval(quote + workflow + 'console.log(compatibilityWorkflowCommand("run"));');
         }
         service = mock.Mock()
         service.list_config_compatibility.return_value = (("fine-formal", result),)
-        recipe = mock.Mock(config_path=Path("fine.yaml"))
+        config = {"execution": {"runner": "fine"}}
         paper = {
             "id": "fine",
             "acronym": "FINE",
@@ -361,11 +363,11 @@ eval(quote + workflow + 'console.log(compatibilityWorkflowCommand("run"));');
             "default_recipe_id": "fine-formal",
             "default_fidelity": "paper-protocol",
         }
-        with mock.patch.object(command_console, "_paper_payload", return_value=[paper]), mock.patch(
-            "lnl_toolbox.catalog.recipe_by_id", return_value=recipe
-        ), mock.patch(
-            "lnl_toolbox.catalog.load_yaml", return_value={"execution": {"runner": "fine"}}
-        ), mock.patch(
+        command_console._invalidate_dataset_recipe_compatibility("lab")
+        self.addCleanup(command_console._invalidate_dataset_recipe_compatibility, "lab")
+        with mock.patch.object(command_console, "_paper_payload", return_value=[paper]), mock.patch.object(
+            command_console, "_web_recipe_config", return_value=config
+        ) as lookup, mock.patch(
             "command_console._dataset_profile_context",
             return_value=(
                 {"dataset": "lab", "profile": {}, "detected": {}, "capabilities": {}, "unresolved_dataset_facts": [], "declared": {}},
@@ -375,10 +377,17 @@ eval(quote + workflow + 'console.log(compatibilityWorkflowCommand("run"));');
             "lnl_toolbox.training.service.ExperimentService", return_value=service
         ):
             value = command_console._dataset_recipe_compatibility_payload("lab")
+            # The synthetic Web config must not replace any registered YAML.
+            builtins = discover_recipes(command_console.ROOT, include_conditional=True)
+            self.assertEqual(len(builtins), 68)
+            self.assertNotIn("fine-formal", {item.id for item in builtins})
+        lookup.assert_called_once_with("fine-formal")
+        self.assertEqual(value["recipes"][0]["paper_id"], "fine")
         self.assertEqual(value["recipes"][0]["recipe_id"], "fine-formal")
         self.assertEqual(value["recipes"][0]["acronym"], "FINE")
         self.assertEqual(value["recipes"][0]["status"], "incompatible")
         service.list_config_compatibility.assert_called_once()
+        self.assertEqual(service.list_config_compatibility.call_args.args[1], {"fine-formal": config})
 
     def test_web_profile_and_compatibility_helpers_use_experiment_service(self):
         profile = mock.Mock()

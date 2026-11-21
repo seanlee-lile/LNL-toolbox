@@ -8,7 +8,9 @@ import json
 from pathlib import Path, PurePosixPath
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 from zipfile import ZipFile
 
 try:
@@ -309,6 +311,123 @@ class CandidateIdentityGateTest(unittest.TestCase):
     def test_discovery_gate_rejects_cross_view_resource_drift(self):
         with self.assertRaisesRegex(AssertionError, "shared moved from"):
             verify_view_identities({"first": [("shared", "a")], "second": [("shared", "b")]})
+
+
+class ProductionRecipeIdentityTest(unittest.TestCase):
+    """Exercise the real resolver; only the manifest and temporary resources are substituted."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        files = patch.object(catalog.resources, "files")
+        self.resource_files = files.start()
+        self.addCleanup(files.stop)
+
+    def write(self, relative, source="kind: experiment\ndata: {name: cifar10}\n"):
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source, encoding="utf-8")
+        return path
+
+    def manifest(self, paths, *, conditional=(), public=()):
+        self.resource_files.return_value.joinpath.return_value.read_text.return_value = json.dumps({
+            "recipes": paths, "conditional": conditional,
+            "public": [{"path": p, "label": p, "description": ""} for p in public],
+        })
+
+    def assert_catalog_rejected(self, error, *details, exception=ValueError):
+        for conditional, public in VIEWS:
+            with self.subTest(conditional=conditional, public=public):
+                with self.assertRaisesRegex(exception, error) as raised:
+                    catalog.discover_recipes(
+                        self.root, include_conditional=conditional, public_only=public
+                    )
+                for detail in details:
+                    self.assertIn(detail, str(raised.exception))
+
+    def test_shared_canonical_id_rejected_before_all_projections_and_lookup(self):
+        a, b = "configs/one/shared_smoke.yaml", "configs/two/shared-smoke.yaml"
+        self.write(a)
+        self.write(b)
+        self.manifest([a, b], conditional=[a], public=[b])
+        self.assert_catalog_rejected("duplicate canonical recipe ID", "shared-smoke", a, b)
+        with self.assertRaisesRegex(ValueError, "duplicate canonical recipe ID.*shared-smoke"):
+            catalog.recipe_by_id(" SHARED_SMOKE ", self.root)
+        with self.assertRaisesRegex(ValueError, "duplicate canonical recipe ID.*shared-smoke"):
+            catalog.load_papers(self.root)
+
+    def test_old_parent_fallback_collision_rejected_in_either_order(self):
+        a, b = "configs/one/shared.yaml", "configs/two/shared.yaml"
+        c = "configs/two/two-shared.yaml"
+        for path in (a, b, c):
+            self.write(path)
+        # The old fallback for the second shared.yaml collided with this
+        # independently named recipe in this ordering.
+        for order in ((c, a, b), (b, a, c)):
+            with self.subTest(order=order):
+                self.manifest(order, conditional=[a], public=[c])
+                self.assert_catalog_rejected("duplicate canonical recipe ID", "'shared'", a, b)
+
+    def test_duplicate_resource_rejected_even_with_distinct_manifest_spelling(self):
+        a, b = "configs/one/shared.yaml", "configs/one/./shared.yaml"
+        self.write(a)
+        self.manifest([a, b])
+        self.assert_catalog_rejected("duplicate resource", "shared", a, b)
+
+    def test_dangling_conditional_and_duplicate_projection_references_rejected(self):
+        a, b = "configs/one/normal.yaml", "configs/one/unknown.yaml"
+        self.write(a)
+        for options, error, detail in (
+            ({"conditional": [b]}, "conditional recipe manifest references unknown paths", b),
+            ({"conditional": [a, a]}, "duplicate conditional path", a),
+            ({"public": [a, a]}, "duplicate public path", a),
+        ):
+            with self.subTest(options=options):
+                self.manifest([a], **options)
+                self.assert_catalog_rejected(error, detail)
+
+    def test_hidden_declared_yaml_must_exist_and_parse(self):
+        a, b = "configs/phase1a/visible.yaml", "configs/phase1a/hidden.yaml"
+        self.write(a)
+        self.manifest([a, b], conditional=[b], public=[a])
+        with patch.object(catalog.metadata, "distribution",
+                          side_effect=metadata.PackageNotFoundError("lnl-toolbox")):
+            self.assert_catalog_rejected("missing YAML for built-in recipe", "hidden", b,
+                                         exception=FileNotFoundError)
+        for value in ("data: [", "kind: fragment\n", "kind: experiment\ndata: {name: cifar10}\ntrainer: []"):
+            with self.subTest(value=value):
+                self.write(b, value)
+                self.assert_catalog_rejected("invalid YAML for built-in recipe", "hidden", b)
+
+    def test_installed_identity_rejects_multiple_matching_distribution_records(self):
+        relative = "configs/phase1a/installed.yaml"
+        candidates = tuple(PurePosixPath(f"{name}/share/lnl-toolbox/{relative}") for name in ("a", "b"))
+        for entry in candidates:
+            self.write(entry.as_posix())
+        self.manifest([relative])
+        dist = SimpleNamespace(files=candidates, locate_file=lambda entry: self.root / entry)
+        with patch.object(catalog.metadata, "distribution", return_value=dist):
+            self.assert_catalog_rejected(
+                "ambiguous installed resource", "installed", *(entry.as_posix() for entry in candidates)
+            )
+
+    def test_valid_conditional_resource_does_not_require_runtime_inputs(self):
+        a, b = "configs/phase1a/visible.yaml", "configs/phase1a/conditional.yaml"
+        self.write(a)
+        config = self.write(b, "kind: experiment\ndata: {name: cifar10, root: not-present}\n")
+        self.manifest([a, b], conditional=[b], public=[a, b])
+        with patch.object(catalog, "validate_config", side_effect=AssertionError("runtime validation")):
+            for conditional, public in VIEWS:
+                with self.subTest(conditional=conditional, public=public):
+                    rows = catalog.discover_recipes(
+                        self.root, include_conditional=conditional, public_only=public
+                    )
+                    self.assertEqual([r.id for r in rows],
+                                     ["visible", "conditional"] if conditional else ["visible"])
+                    if conditional:
+                        self.assertEqual(rows[-1].config_path, config)
+            self.assertEqual(catalog.recipe_by_id("conditional", self.root).config_path, config)
 
 
 def verify_installed(prefix, wheel=None):

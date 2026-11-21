@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Discoverable experiment recipes and paper-to-implementation metadata."""
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from importlib import metadata, resources
@@ -132,6 +132,16 @@ def _display_method(config: Mapping[str, Any], runner: str) -> str:
     return runner
 
 
+def _manifest_paths(values: Iterable[object], section: str) -> tuple[str, ...]:
+    paths = tuple(str(value) for value in values)
+    seen: set[str] = set()
+    for path in paths:
+        if path in seen:
+            raise ValueError(f"built-in recipe manifest has duplicate {section} path: {path!r}")
+        seen.add(path)
+    return paths
+
+
 def _recipe_manifest() -> tuple[
     tuple[str, ...], frozenset[str], Mapping[str, Mapping[str, str]]
 ]:
@@ -139,10 +149,16 @@ def _recipe_manifest() -> tuple[
         "data/recipe_catalog.json"
     ).read_text(encoding="utf-8")
     raw = json.loads(text)
-    paths = tuple(str(value) for value in raw["recipes"])
-    if len(paths) != len(set(paths)):
-        raise ValueError("built-in recipe manifest contains duplicate paths")
+    paths = _manifest_paths(raw["recipes"], "recipes")
     public_items = raw.get("public", ())
+    public_paths = _manifest_paths((item["path"] for item in public_items), "public")
+    conditional = _manifest_paths(raw.get("conditional", ()), "conditional")
+    for section, references in (("public", public_paths), ("conditional", conditional)):
+        unknown = set(references).difference(paths)
+        if unknown:
+            raise ValueError(
+                f"{section} recipe manifest references unknown paths: {sorted(unknown)}"
+            )
     public = {
         str(item["path"]): {
             "label": str(item["label"]),
@@ -150,37 +166,42 @@ def _recipe_manifest() -> tuple[
         }
         for item in public_items
     }
-    unknown = set(public).difference(paths)
-    if unknown:
-        raise ValueError(
-            f"public recipe manifest references unknown paths: {sorted(unknown)}"
-        )
-    return (
-        paths,
-        frozenset(str(value) for value in raw.get("conditional", ())),
-        public,
-    )
+    return paths, frozenset(conditional), public
 
 
-def _installed_recipe_path(relative: str) -> Path:
+def _installed_recipe_path(relative: str, *, require_unique: bool = False) -> Path:
     try:
         distribution = metadata.distribution("lnl-toolbox")
     except metadata.PackageNotFoundError as exc:
         raise FileNotFoundError(
             f"built-in recipe is unavailable outside a source checkout: {relative}"
         ) from exc
-    installed_suffix = (Path("share/lnl-toolbox") / relative).as_posix()
-    for entry in distribution.files or ():
-        if entry.as_posix().endswith(installed_suffix):
-            return Path(distribution.locate_file(entry)).resolve()
-    raise FileNotFoundError(f"packaged built-in recipe is missing: {relative}")
+    suffix = Path("share/lnl-toolbox") / relative
+    suffix_parts = suffix.parts
+    suffix_text = suffix.as_posix()
+    matches = (
+        entry for entry in distribution.files or ()
+        if (
+            entry.parts[-len(suffix_parts):] == suffix_parts
+            if require_unique else entry.as_posix().endswith(suffix_text)
+        )
+    )
+    first = next(matches, None)
+    if first is None:
+        raise FileNotFoundError(f"packaged built-in recipe is missing: {relative}")
+    if require_unique and (others := list(matches)):
+        raise ValueError(
+            f"ambiguous installed resource for built-in recipe {_recipe_id(Path(relative))!r} "
+            f"({relative}): {[entry.as_posix() for entry in (first, *others)]}"
+        )
+    return Path(distribution.locate_file(first)).resolve()
 
 
 def _recipe_path(relative: str, project: Path) -> Path:
     source = (project / relative).resolve()
     if source.is_file():
         return source
-    installed = _installed_recipe_path(relative)
+    installed = _installed_recipe_path(relative, require_unique=True)
     if not installed.is_file():
         raise FileNotFoundError(f"packaged built-in recipe is missing: {relative}")
     return installed
@@ -210,71 +231,112 @@ def _configuration_fidelity(path: Path, profile: str) -> str:
     return "engineering"
 
 
+def _builtin_recipe_index(root: Path | None) -> dict[str, RecipeSpec]:
+    """Validate registered resources before deriving any discovery projection."""
+    import yaml
+
+    project = (root or repository_root()).resolve()
+    manifest_paths, conditional_paths, public_recipes = _recipe_manifest()
+    recipes: dict[str, RecipeSpec] = {}
+    id_paths: dict[str, str] = {}
+    resource_paths: dict[Path, str] = {}
+    file_paths: dict[tuple[int, int], str] = {}
+    for relative in manifest_paths:
+        try:
+            path = _recipe_path(relative, project)
+            stat = path.stat()
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(
+                f"missing YAML for built-in recipe {_recipe_id(Path(relative))!r} "
+                f"(manifest path {relative!r}): {exc}"
+            ) from exc
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise ValueError(
+                f"invalid resource for built-in recipe {_recipe_id(Path(relative))!r} "
+                f"(manifest path {relative!r}): {exc}"
+            ) from exc
+
+        file_key = (stat.st_dev, stat.st_ino)
+        other = resource_paths.get(path)
+        if other is None and stat.st_ino:
+            other = file_paths.get(file_key)
+        if other is not None:
+            raise ValueError(
+                f"duplicate resource for built-in recipe {_recipe_id(path)!r}: "
+                f"manifest paths {other!r} and {relative!r} resolve to the same file ({path})"
+            )
+        resource_paths[path] = relative
+        if stat.st_ino:
+            file_paths[file_key] = relative
+
+        recipe_id = _recipe_id(path)
+        if recipe_id in id_paths:
+            raise ValueError(
+                f"duplicate canonical recipe ID {recipe_id!r}: "
+                f"manifest paths {id_paths[recipe_id]!r} and {relative!r}"
+            )
+        id_paths[recipe_id] = relative
+        try:
+            config = load_yaml(path)
+            data = config.get("data")
+            if config.get("kind") != "experiment" or not isinstance(data, Mapping):
+                raise ValueError("registered YAML must describe an experiment with a data mapping")
+            runner = resolve_runner(config).name
+            noise = config.get("noise")
+            trainer = config.get("trainer")
+            noise = {} if noise is None else noise
+            trainer = {} if trainer is None else trainer
+            if not isinstance(noise, Mapping) or not isinstance(trainer, Mapping):
+                raise ValueError("noise and trainer must be mappings")
+            epochs = int(trainer["epochs"]) if "epochs" in trainer else None
+        except (OSError, TypeError, ValueError, OverflowError, yaml.YAMLError) as exc:
+            raise ValueError(
+                f"invalid YAML for built-in recipe {recipe_id!r} "
+                f"(manifest path {relative!r}, resource {path}): {exc}"
+            ) from exc
+
+        conditional = relative in conditional_paths
+        profile = _profile(path)
+        method = _display_method(config, runner)
+        public = public_recipes.get(relative)
+        recipes[recipe_id] = RecipeSpec(
+            id=recipe_id,
+            config_path=path,
+            profile=profile,
+            runner=runner,
+            dataset=str(data.get("name", "unknown")),
+            noise=str(noise.get("name", "clean")) if noise else "clean",
+            method=method,
+            epochs=epochs,
+            implementation_status=_implementation_status(method, runner),
+            configuration_fidelity=str(
+                config.get("configuration_fidelity", _configuration_fidelity(path, profile))
+            ),
+            reproduction_status="not_run",
+            availability="conditional" if conditional else "runnable",
+            visibility="public" if public is not None else "internal",
+            label=public["label"] if public is not None else recipe_id,
+            description=public["description"] if public is not None else "",
+        )
+    return recipes
+
+
 def discover_recipes(
     root: Path | None = None,
     *,
     include_conditional: bool = False,
     public_only: bool = False,
 ) -> tuple[RecipeSpec, ...]:
-    project = (root or repository_root()).resolve()
-    manifest_paths, conditional_paths, public_recipes = _recipe_manifest()
-    recipes: list[RecipeSpec] = []
-    seen: set[str] = set()
-    for relative in manifest_paths:
-        if public_only and relative not in public_recipes:
-            continue
-        conditional = relative in conditional_paths
-        if conditional and not include_conditional:
-            continue
-        path = _recipe_path(relative, project)
-        recipe_id = _recipe_id(path)
-        if recipe_id in seen:
-            recipe_id = f"{path.parent.name}-{recipe_id}"
-        seen.add(recipe_id)
-        config = load_yaml(path)
-        data = config.get("data")
-        # Auxiliary stage configs (for example Mentor training) are not
-        # standalone experiment recipes and remain available to their CLI.
-        if not isinstance(data, Mapping):
-            continue
-        runner = resolve_runner(config).name
-        noise = config.get("noise", {}) or {}
-        trainer = config.get("trainer", {}) or {}
-        recipes.append(
-            RecipeSpec(
-                id=recipe_id,
-                config_path=path.resolve(),
-                profile=_profile(path),
-                runner=runner,
-                dataset=str(data.get("name", "unknown")),
-                noise=str(noise.get("name", "clean")) if noise else "clean",
-                method=_display_method(config, runner),
-                epochs=int(trainer["epochs"]) if "epochs" in trainer else None,
-                implementation_status=_implementation_status(
-                    _display_method(config, runner), runner
-                ),
-                configuration_fidelity=str(
-                    config.get(
-                        "configuration_fidelity",
-                        _configuration_fidelity(path, _profile(path)),
-                    )
-                ),
-                reproduction_status="not_run",
-                availability="conditional" if conditional else "runnable",
-                visibility="public" if relative in public_recipes else "internal",
-                label=public_recipes.get(relative, {}).get("label", recipe_id),
-                description=public_recipes.get(relative, {}).get("description", ""),
-            )
-        )
-    return tuple(recipes)
+    return tuple(
+        item for item in _builtin_recipe_index(root).values()
+        if (include_conditional or item.availability != "conditional")
+        and (not public_only or item.visibility == "public")
+    )
 
 
 def recipe_by_id(recipe_id: str, root: Path | None = None) -> RecipeSpec:
     key = recipe_id.strip().lower().replace("_", "-")
-    recipes = {
-        item.id: item
-        for item in discover_recipes(root, include_conditional=True)
-    }
+    recipes = _builtin_recipe_index(root)
     try:
         return recipes[key]
     except KeyError as exc:
@@ -292,10 +354,7 @@ def load_papers(root: Path | None = None) -> tuple[PaperSpec, ...]:
             encoding="utf-8"
         )
     )
-    recipes = {
-        item.id: item
-        for item in discover_recipes(project, include_conditional=True)
-    }
+    recipes = _builtin_recipe_index(project)
     papers: list[PaperSpec] = []
     for item in raw:
         parsed_configs: list[PaperConfig] = []

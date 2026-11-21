@@ -1,5 +1,62 @@
 # Toolbox modularization progress
 
+## Recipe Identity Migration Phase 1A (2026-11-21)
+
+Base: `code@7d889b75bb4c7b149404f042cecf928128af4ff4` (pushed Phase 0).
+The frozen experiment contract is still `c9a3234a03db7311c0dd70e6700ab5ae5971303a`.
+The scope is built-in registry validation, its tests, and this record. Phase 1B
+and all source YAML, Paper mapping, packaging configuration, and training
+or resume changes are out of scope.
+
+- The old resolver filtered first and tried a parent-directory prefix on a
+  repeated stem. A second collision could overwrite an earlier recipe in the
+  lookup/Paper dictionary; a dangling conditional reference was also silently
+  ignored. Literal duplicate primary paths and unknown public or Paper
+  references were already rejected.
+- Catalog discovery, direct ID lookup and Paper lookup now use one ordered
+  built-in index per call. The index rejects repeated canonical IDs, repeated
+  resolved resources, and bad registered files before projection. Public and
+  conditional references must be unique and registered. Installed built-in
+  lookup rejects multiple matching distribution records instead of selecting
+  the first. Conditional still describes catalog availability; index creation
+  does not perform data access, readiness checks, artifact loading or training.
+- Seven direct production resolver tests passed; they exercise synthetic
+  manifest references with real temporary YAML resources. Phase 0 source
+  snapshots, CLI input compatibility and formal Web/Quick Start, sweep and
+  resume focused checks passed without regenerating the fixture. The 68
+  recipes have distinct IDs and resources, so none needs the removed prefix
+  fallback. Custom YAML and MentorNet producer lookup are outside the index.
+- Windows sample medians for the public catalog, Web recipe menu and CLI
+  default list rose from about 23, 24 and 76 ms to 401, 428 and 442 ms, respectively
+  (seven repeated invocations, excluding interpreter startup). Public
+  discovery reads 68 YAMLs instead of 4. The isolated installed public view
+  rose from about 72 ms to 1.59 s in a five-run sample; the installed full view
+  was about 1.40 s before and 1.49 s afterward. These are local measurements,
+  not CI bounds. No persistent cache was added.
+- A pre-existing Web unit-test fixture replaces the global YAML loader with
+  an incomplete dummy config for every file. It passes on the old resolver,
+  which silently drops those entries, but fails closed on a cold Phase 1A
+  catalog. The replacement fixture should stub only the Web config lookup for
+  its `fine-formal` scenario. That Web test file is outside the approved
+  Phase 1A allowlist; it was not changed. No production bypass is appropriate.
+- The unrelated CWD transition-artifact late failure, sdist dev-test/fixture
+  distribution, and Node/CUDA validation gaps remain deferred. Review the
+  allowlisted diff; do not stage or start Phase 1B with a failing regression.
+- Verification: direct resolver 7/7 passed; focused identity/CLI/Web
+  binding/Quick Start/sweep/resume 138 passed and 1 Node skip. Full main
+  suite: 1163 passed / 21 CUDA skips; Scratch: 196 passed / 10 Node skips;
+  Web: 109 passed / 31 Node skips / 1 fixture error as described above.
+  The Web test passed on Phase 0 and its original assertions passed on the
+  Phase 1A checkout when only the local config lookup was stubbed in memory.
+  No such test-file change was made. Direct wheel and the wheel built from
+  the actual sdist passed isolated resource and CLI verification, including
+  all 71 YAMLs, 68 unique recipes, 63/4/68/4 projections, 26 Papers, 56 ordered
+  links, and 26 defaults. All Phase 0 summaries matched.
+- Status: 5/6 verification gates complete (resolver negatives, frozen source
+  baseline and focused consumers, main, Scratch, external packages);
+  the Web full-suite gate is blocked on approval to fix the fixture, followed
+  by a Web re-run. No stage, commit, push or Phase 1B work.
+
 ## Recipe Identity Migration Phase 0 (2026-11-21)
 
 Baseline: `code@c9a3234a03db7311c0dd70e6700ab5ae5971303a`. Scope is tests,
