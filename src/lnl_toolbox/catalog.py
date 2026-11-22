@@ -10,6 +10,7 @@ import json
 import math
 from pathlib import Path
 import pickle
+import re
 from typing import Any
 
 from lnl_toolbox.cli import repository_root
@@ -142,14 +143,51 @@ def _manifest_paths(values: Iterable[object], section: str) -> tuple[str, ...]:
     return paths
 
 
+@dataclass(frozen=True, slots=True)
+class _RecipeManifestEntry:
+    path: str
+    id: str | None = None
+    profile: str | None = None
+
+
+def _manifest_recipe_entry(value: object, position: int) -> _RecipeManifestEntry:
+    if isinstance(value, str):
+        return _RecipeManifestEntry(value)
+    where = f"built-in recipe manifest recipes[{position}]"
+    if not isinstance(value, dict):
+        raise ValueError(f"{where}: expected a path string or an explicit recipe object")
+    fields = {"id", "path", "profile"}
+    missing, unknown = fields - value.keys(), value.keys() - fields
+    if missing or unknown:
+        raise ValueError(
+            f"{where}: invalid explicit recipe fields; "
+            f"missing={sorted(missing)}, unknown={sorted(unknown)}"
+        )
+    recipe_id, path, profile = value["id"], value["path"], value["profile"]
+    if not isinstance(recipe_id, str) or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", recipe_id):
+        raise ValueError(f"{where}: invalid explicit recipe id {recipe_id!r}; expected a canonical ID")
+    if (
+        not isinstance(path, str)
+        or path != path.strip()
+        or any(char in path for char in ("\\", ":", "\0"))
+        or any(part in {"", ".", ".."} for part in path.split("/"))
+        or not path.lower().endswith((".yaml", ".yml"))
+    ):
+        raise ValueError(f"{where}: invalid explicit path {path!r} for {recipe_id!r}; expected a relative YAML path")
+    if not isinstance(profile, str) or profile not in {"smoke", "reproduction", "experiment"}:
+        raise ValueError(f"{where}: invalid explicit profile {profile!r} for {recipe_id!r}")
+    return _RecipeManifestEntry(path, recipe_id, profile)
+
+
 def _recipe_manifest() -> tuple[
-    tuple[str, ...], frozenset[str], Mapping[str, Mapping[str, str]]
+    tuple[_RecipeManifestEntry, ...], frozenset[str], Mapping[str, Mapping[str, str]]
 ]:
     text = resources.files("lnl_toolbox.cli").joinpath(
         "data/recipe_catalog.json"
     ).read_text(encoding="utf-8")
     raw = json.loads(text)
-    paths = _manifest_paths(raw["recipes"], "recipes")
+    entries = tuple(_manifest_recipe_entry(value, position) for position, value in enumerate(raw["recipes"]))
+    paths = _manifest_paths((entry.path for entry in entries), "recipes")
     public_items = raw.get("public", ())
     public_paths = _manifest_paths((item["path"] for item in public_items), "public")
     conditional = _manifest_paths(raw.get("conditional", ()), "conditional")
@@ -166,7 +204,7 @@ def _recipe_manifest() -> tuple[
         }
         for item in public_items
     }
-    return paths, frozenset(conditional), public
+    return entries, frozenset(conditional), public
 
 
 def _installed_distribution(relative: str) -> metadata.Distribution:
@@ -186,7 +224,7 @@ class _InstalledRecipeLookup:
         self._distribution: metadata.Distribution | None = None
         self._candidates: dict[tuple[str, ...], list[metadata.PackagePath]] = {}
 
-    def resolve(self, relative: str) -> Path:
+    def resolve(self, relative: str, *, recipe_id: str | None = None) -> Path:
         distribution = self._distribution
         suffix = (Path("share/lnl-toolbox") / relative).parts
         if distribution is None:
@@ -205,7 +243,7 @@ class _InstalledRecipeLookup:
             raise FileNotFoundError(f"packaged built-in recipe is missing: {relative}")
         if len(matches) > 1:
             raise ValueError(
-                f"ambiguous installed resource for built-in recipe {_recipe_id(Path(relative))!r} "
+                f"ambiguous installed resource for built-in recipe {recipe_id or _recipe_id(Path(relative))!r} "
                 f"({relative}): {[entry.as_posix() for entry in matches]}"
             )
         return Path(distribution.locate_file(matches[0])).resolve()
@@ -222,13 +260,15 @@ def _installed_recipe_path(relative: str, *, require_unique: bool = False) -> Pa
     raise FileNotFoundError(f"packaged built-in recipe is missing: {relative}")
 
 
-def _recipe_path(relative: str, project: Path, installed_lookup: _InstalledRecipeLookup) -> Path:
-    source = (project / relative).resolve()
+def _recipe_path(
+    entry: _RecipeManifestEntry, project: Path, installed_lookup: _InstalledRecipeLookup,
+) -> Path:
+    source = (project / entry.path).resolve()
     if source.is_file():
         return source
-    installed = installed_lookup.resolve(relative)
+    installed = installed_lookup.resolve(entry.path, recipe_id=entry.id)
     if not installed.is_file():
-        raise FileNotFoundError(f"packaged built-in recipe is missing: {relative}")
+        raise FileNotFoundError(f"packaged built-in recipe is missing: {entry.path}")
     return installed
 
 
@@ -261,41 +301,42 @@ def _builtin_recipe_index(root: Path | None) -> dict[str, RecipeSpec]:
     import yaml
 
     project = (root or repository_root()).resolve()
-    manifest_paths, conditional_paths, public_recipes = _recipe_manifest()
-    installed_lookup = _InstalledRecipeLookup(manifest_paths)
+    manifest_entries, conditional_paths, public_recipes = _recipe_manifest()
+    installed_lookup = _InstalledRecipeLookup(tuple(entry.path for entry in manifest_entries))
     recipes: dict[str, RecipeSpec] = {}
     id_paths: dict[str, str] = {}
     resource_paths: dict[Path, str] = {}
     file_paths: dict[tuple[int, int], str] = {}
-    for relative in manifest_paths:
+    for entry in manifest_entries:
+        relative = entry.path
         try:
-            path = _recipe_path(relative, project, installed_lookup)
+            path = _recipe_path(entry, project, installed_lookup)
             stat = path.stat()
         except FileNotFoundError as exc:
             raise FileNotFoundError(
-                f"missing YAML for built-in recipe {_recipe_id(Path(relative))!r} "
+                f"missing YAML for built-in recipe {entry.id or _recipe_id(Path(relative))!r} "
                 f"(manifest path {relative!r}): {exc}"
             ) from exc
         except (OSError, RuntimeError, ValueError) as exc:
             raise ValueError(
-                f"invalid resource for built-in recipe {_recipe_id(Path(relative))!r} "
+                f"invalid resource for built-in recipe {entry.id or _recipe_id(Path(relative))!r} "
                 f"(manifest path {relative!r}): {exc}"
             ) from exc
 
+        recipe_id = entry.id if entry.id is not None else _recipe_id(path)
         file_key = (stat.st_dev, stat.st_ino)
         other = resource_paths.get(path)
         if other is None and stat.st_ino:
             other = file_paths.get(file_key)
         if other is not None:
             raise ValueError(
-                f"duplicate resource for built-in recipe {_recipe_id(path)!r}: "
+                f"duplicate resource for built-in recipe {recipe_id!r}: "
                 f"manifest paths {other!r} and {relative!r} resolve to the same file ({path})"
             )
         resource_paths[path] = relative
         if stat.st_ino:
             file_paths[file_key] = relative
 
-        recipe_id = _recipe_id(path)
         if recipe_id in id_paths:
             raise ValueError(
                 f"duplicate canonical recipe ID {recipe_id!r}: "
@@ -322,7 +363,7 @@ def _builtin_recipe_index(root: Path | None) -> dict[str, RecipeSpec]:
             ) from exc
 
         conditional = relative in conditional_paths
-        profile = _profile(path)
+        profile = entry.profile if entry.profile is not None else _profile(path)
         method = _display_method(config, runner)
         public = public_recipes.get(relative)
         recipes[recipe_id] = RecipeSpec(

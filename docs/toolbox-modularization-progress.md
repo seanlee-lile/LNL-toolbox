@@ -1,5 +1,52 @@
 # Toolbox modularization progress
 
+## Recipe Identity Migration Phase 1B pilot (2026-11-22)
+
+Base: `code@ec40cc07f1635871f996ff0830ba6e8453d2de4d` (pushed Stage 2).
+The frozen experiment contract remains
+`c9a3234a03db7311c0dd70e6700ab5ae5971303a`.
+
+- The ordered built-in `recipes` array accepts legacy path strings and
+  explicit objects with exactly `id`, `path`, and `profile`. Legacy entries
+  retain the existing ID/profile inference. Explicit entries use a lowercase
+  canonical ID, a repository-relative YAML path, and one of `smoke`,
+  `reproduction`, or `experiment`. Incomplete or invalid objects are rejected,
+  never interpreted as legacy entries.
+- Both forms share one fail-closed identity index. Public and conditional
+  references are still paths. Source resources take precedence, and installed
+  fallback still indexes the distribution file list once per build.
+  Paper/Web continue to consume the catalog by canonical ID.
+- Only `cifar10-symmetric-small-loss-linear-smoke` was converted in place;
+  67 entries remain legacy. This internal, nonconditional smoke recipe has
+  no Paper association or formal Web binding. Its legacy and explicit
+  catalog/CLI results, normalized configuration and seed-only/matrix
+  Sweep plans are equal.
+- The official catalog API preserves recipe behavior. Tools outside this
+  repository that parse the raw manifest and assume every array element is
+  a string may need an adapter; their compatibility was not verified.
+- Scope: catalog resolver, built-in manifest, identity tests, the existing
+  pipeline package-coverage assertion, and this record. No YAML,
+  packaging layout, migration baseline, runner, or resume changes.
+- Focused: 166 passed / 1 Node skip. The frozen source snapshot and both
+  external wheel and sdist-derived installations match the 68 recipes,
+  71 YAMLs, 63/4/68/4 views, 26 Papers, 56 ordered associations, 26 defaults,
+  and normalized configuration/package fingerprints. Isolated CLI discovery
+  and Paper recommendations also match.
+- Measured discovery medians in milliseconds (Stage 2 to Phase 1B, excluding
+  interpreter startup): source default/full 347.1/364.4 to 318.3/306.3;
+  wheel 388.7/405.6 to 392.4/404.6; sdist install 380.5/396.3 to 415.9/422.6.
+  Both installed paths still read the distribution file list once per
+  build, and all environments parse 68 YAMLs. These are samples, not bounds.
+- Full suites: main 1171 passed / 21 skipped, Web 110 passed / 31 skipped,
+  Scratch 196 passed / 10 skipped, all with zero failures and errors.
+  Existing Node/CUDA skips are not runtime verification of those paths.
+- Progress: 6/6 gates complete (dual-format resolver and negative tests;
+  single-pilot equivalence and focused consumers; isolated packaging;
+  performance; full suites; Git scope and whitespace checks). Five approved
+  existing files changed, no files added, no Phase 1B staging, commit or push.
+  Next step: human review. Keep the remaining 67 entries on the legacy format
+  until an additional batch is approved.
+
 ## Recipe Identity Migration Phase 1A (2026-11-21)
 
 Base: `code@7d889b75bb4c7b149404f042cecf928128af4ff4` (pushed Phase 0).

@@ -74,8 +74,9 @@ def _unique(values, label, key=lambda item: item):
 
 
 def verify_candidate_manifest(raw, known_paths, paper_recipe_ids=()):
-    """Test-side gate for the legacy candidate format, not a production parser."""
-    paths = raw["recipes"]
+    """Test-side gate, not a production manifest parser."""
+    entries = raw["recipes"]
+    paths = [entry if isinstance(entry, str) else entry["path"] for entry in entries]
     registered = _unique(paths, "manifest path")
     for kind, refs, targets in (
         ("normal", paths, set(known_paths)),
@@ -91,7 +92,7 @@ def verify_candidate_manifest(raw, known_paths, paper_recipe_ids=()):
     stems = set()
     allocated = set()
     ambiguous = []
-    for path in paths:
+    for path in (entry for entry in entries if isinstance(entry, str)):
         p = PurePosixPath(path)
         stem = catalog._recipe_id(p)
         candidate = stem
@@ -105,6 +106,10 @@ def verify_candidate_manifest(raw, known_paths, paper_recipe_ids=()):
         stems.add(stem)
     if ambiguous:
         raise AssertionError(f"ambiguous canonical stem: {ambiguous}")
+    for entry in (entry for entry in entries if not isinstance(entry, str)):
+        if entry["id"] in allocated:
+            raise AssertionError(f"duplicate canonical identity: {entry['id']}")
+        allocated.add(entry["id"])
     if missing := set(paper_recipe_ids) - allocated:
         raise AssertionError(f"dangling Paper recipe reference: {sorted(missing)}")
 
@@ -288,6 +293,23 @@ class RecipeIdentityTest(unittest.TestCase):
             [a["recipe_id"] for paper in self.actual["papers"] for a in paper["associations"]],
         )
 
+    def test_only_pilot_recipe_changes_representation_not_behavior(self):
+        recipe_id = "cifar10-symmetric-small-loss-linear-smoke"
+        expected = next(row for row in self.expected["recipes"] if row["id"] == recipe_id)
+        manifest_path = ROOT / "src/lnl_toolbox/cli/data/recipe_catalog.json"
+        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+        pilot = {"id": recipe_id, "path": expected["path"], "profile": expected["profile"]}
+        self.assertEqual([entry for entry in raw["recipes"] if isinstance(entry, dict)], [pilot])
+        actual = catalog.recipe_by_id(" CIFAR10_SYMMETRIC_SMALL_LOSS_LINEAR_SMOKE ", ROOT)
+        original = [entry["path"] if entry == pilot else entry for entry in raw["recipes"]]
+        with patch.object(catalog.resources, "files") as files:
+            files.return_value.joinpath.return_value.read_text.return_value = json.dumps({
+                **raw, "recipes": original,
+            })
+            legacy = catalog.recipe_by_id(recipe_id, ROOT)
+        self.assertEqual(actual, legacy)
+        self.assertEqual(config_hash(catalog.load_recipe_config(actual)), expected["normalized_config_hash"])
+
     def test_installed_catalog_reads_distribution_once_per_build_and_revalidates(self):
         package_map = _package_map(ROOT)
         paths = {
@@ -396,6 +418,94 @@ class ProductionRecipeIdentityTest(unittest.TestCase):
                     )
                 for detail in details:
                     self.assertIn(detail, str(raised.exception))
+
+    def test_explicit_identity_overrides_filename_and_preserves_path_projections(self):
+        path = "configs/experiment/totally_unrelated_smoke.yaml"
+        legacy = "configs/experiment/legacy_smoke.yaml"
+        source = self.write(path)
+        self.write(legacy)
+        self.manifest(
+            [legacy, {"id": "stable-recipe-id", "path": path, "profile": "reproduction"}],
+            conditional=[path], public=[path],
+        )
+        recipe = catalog.recipe_by_id(" STABLE_RECIPE_ID ", self.root)
+        self.assertEqual((recipe.id, recipe.profile, recipe.config_path),
+                         ("stable-recipe-id", "reproduction", source))
+        with self.assertRaisesRegex(ValueError, "unknown recipe"):
+            catalog.recipe_by_id("totally-unrelated-smoke", self.root)
+        expected_ids = (
+            ["legacy-smoke"], [], ["legacy-smoke", "stable-recipe-id"], ["stable-recipe-id"],
+        )
+        for (conditional, public), expected in zip(VIEWS, expected_ids):
+            with self.subTest(conditional=conditional, public=public):
+                rows = catalog.discover_recipes(self.root, include_conditional=conditional, public_only=public)
+                self.assertEqual([row.id for row in rows], expected)
+                for row in rows:
+                    if row.id == recipe.id:
+                        self.assertEqual(row, recipe)
+                    else:
+                        self.assertEqual(row.profile, "smoke")
+        self.assertEqual((recipe.availability, recipe.visibility), ("conditional", "public"))
+
+    def test_invalid_explicit_metadata_cannot_fall_back_to_path_inference(self):
+        path = "configs/reproduction/fallback.yaml"
+        self.write(path)
+        valid = {"id": "stable-id", "path": path, "profile": "smoke"}
+        invalid = [
+            ({key: value for key, value in valid.items() if key != missing}, f"missing=.*{missing}")
+            for missing in valid
+        ]
+        invalid += [
+            ({**valid, "runner": "supervised"}, "unknown=.*runner"),
+            ({**valid, "id": "STABLE_ID"}, "invalid explicit recipe id"),
+            ({**valid, "id": 1}, "invalid explicit recipe id"),
+            ({**valid, "path": ""}, "invalid explicit path"),
+            ({**valid, "path": 1}, "invalid explicit path"),
+            ({**valid, "path": "../outside.yaml"}, "invalid explicit path"),
+            ({**valid, "path": "/absolute.yaml"}, "invalid explicit path"),
+            ({**valid, "path": "C:/absolute.yaml"}, "invalid explicit path"),
+            ({**valid, "path": "configs/recipe.json"}, "invalid explicit path"),
+            ({**valid, "profile": "formal"}, "invalid explicit profile"),
+            ({**valid, "profile": []}, "invalid explicit profile"),
+        ]
+        for entry, error in invalid:
+            with self.subTest(entry=entry):
+                self.manifest([entry])
+                self.assert_catalog_rejected(error, "recipes[0]")
+
+    def test_explicit_and_legacy_ids_share_one_namespace(self):
+        a, b = "configs/one/shared_id.yaml", "configs/two/unrelated.yaml"
+        for path in (a, b):
+            self.write(path)
+        explicit_a = {"id": "shared-id", "path": a, "profile": "smoke"}
+        explicit_b = {"id": "shared-id", "path": b, "profile": "experiment"}
+        for first, second in ((a, explicit_b), (explicit_b, a), (explicit_a, explicit_b)):
+            with self.subTest(entries=(first, second)):
+                self.manifest([first, second], conditional=[b], public=[a])
+                self.assert_catalog_rejected("duplicate canonical recipe ID", "shared-id", a, b)
+
+    def test_explicit_entries_preserve_resource_and_projection_safety(self):
+        path = "configs/experiment/actual.yaml"
+        alias = "configs/experiment/./actual.yaml"
+        self.write(path)
+        entry = {"id": "stable-id", "path": path, "profile": "smoke"}
+        self.manifest([alias, entry])
+        self.assert_catalog_rejected("duplicate resource", "stable-id", path, alias)
+        self.manifest([path, entry])
+        self.assert_catalog_rejected("duplicate recipes path", path)
+        for section in ("public", "conditional"):
+            self.manifest([entry], **{section: [path, path]})
+            self.assert_catalog_rejected(f"duplicate {section} path", path)
+            self.manifest([entry], **{section: [alias]})
+            self.assert_catalog_rejected(f"{section} recipe manifest references unknown paths", alias)
+        self.write(path, "broken: [")
+        self.manifest([entry], conditional=[path])
+        self.assert_catalog_rejected("invalid YAML for built-in recipe", "stable-id", path)
+        missing = "configs/experiment/other.yaml"
+        self.manifest([{**entry, "path": missing}], conditional=[missing])
+        with patch.object(catalog.metadata, "distribution", return_value=SimpleNamespace(files=[])):
+            self.assert_catalog_rejected("missing YAML for built-in recipe", "stable-id", missing,
+                                         exception=FileNotFoundError)
 
     def test_shared_canonical_id_rejected_before_all_projections_and_lookup(self):
         a, b = "configs/one/shared_smoke.yaml", "configs/two/shared-smoke.yaml"

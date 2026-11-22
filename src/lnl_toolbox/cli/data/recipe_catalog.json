@@ -29,7 +29,11 @@
     "configs/experiment/cifar10_symmetric_cdr_reproduction.yaml",
     "configs/experiment/cifar10_symmetric_cdr_smoke.yaml",
     "configs/experiment/cifar10_symmetric_ce_smoke.yaml",
-    "configs/experiment/cifar10_symmetric_small_loss_linear_smoke.yaml",
+    {
+      "id": "cifar10-symmetric-small-loss-linear-smoke",
+      "path": "configs/experiment/cifar10_symmetric_small_loss_linear_smoke.yaml",
+      "profile": "smoke"
+    },
     "configs/experiment/cifar10_symmetric_small_loss_smoke.yaml",
     "configs/experiment/cifar10_t_revision_smoke.yaml",
     "configs/experiment/cifar10_upm_smoke.yaml",
