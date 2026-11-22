@@ -1,5 +1,51 @@
 # Toolbox modularization progress
 
+## Recipe Identity Migration Phase 1C — first low-risk batch (2026-11-22)
+
+Base: `code@e8f6f1c554ae05e657ff6a692f98f4b8457acc49` (pushed Phase 1B).
+The frozen experiment contract remains
+`c9a3234a03db7311c0dd70e6700ab5ae5971303a`.
+
+- Converted only `cifar10-clean` (`experiment`, clean runner) and
+  `cifar10-symmetric-small-loss-smoke` (`smoke`, supervised runner, fixed
+  small-loss keep rate 0.5). Both are internal, nonconditional, and lack
+  Paper associations, Web formal bindings, and external artifact requirements.
+  The original pilot remains explicit: 3 explicit and 65 legacy entries.
+- Compared the manifest to the Phase 1B commit: only the two approved entries
+  changed representation, at their original positions. Paths, projections,
+  YAML, normalized config hashes, runtime metadata, and package layout did
+  not change. The production resolver and packaging implementation are unchanged.
+- The focused suite passed 167 tests with one Node skip. It retains the Phase
+  1B decoupling and mixed-format fail-closed assertions, tests the two recipes
+  against their legacy entries and the frozen fixture, and compares CLI
+  lookup and seed-only/matrix Sweep plans, roots, and member identities.
+  Both direct `--config` and positional path usage for the clean YAML still
+  bypass built-in recipe lookup.
+- Direct wheel and sdist-derived installs from an external directory match
+  the frozen 68 recipes/resources, 71 YAMLs, 63/4/68/4 ordered views, and
+  26 Papers / 56 ordered associations / 26 defaults. Installed CLI discovery
+  and Paper recommendations also matched.
+- Stage 2 is intact: wheel and sdist-derived installs still read the
+  distribution file list once per index build; all views parse 68 YAMLs.
+  Discovery medians in milliseconds, Phase 1B to this batch: wheel
+  default/full 386.3/417.4 to 418.6/436.1; sdist install 494.7/487.1 to
+  503.5/485.9. Separate source checkouts read 294.7/302.8 versus
+  519.7/481.1; alternating the two manifests with the same resolver and
+  source directory measured 529.0/532.4 versus 520.6/521.5.
+  The timings are local observations, not regression thresholds.
+- The official catalog API and CLI continue to accept the same IDs. External
+  tooling that assumes every raw `recipes[]` item is a string still needs
+  adaptation; no new schema or external-consumer claim is made in this batch.
+- Full suites: Main 1172 passed / 21 skipped, Web 110 passed / 31 skipped,
+  Scratch 196 passed / 10 skipped. All have zero failures and errors; the
+  existing Node/CUDA skip policy is unchanged.
+- Scope: manifest, recipe identity tests, and this record. Keep the other
+  65 recipes unchanged, especially public/default/fallback, conditional,
+  artifact handoff, and special-profile entries. All 6/6 checks passed:
+  manifest scope, focused equivalence and fail-closed tests, frozen baseline,
+  isolated packaging, installed lookup, and full regressions.
+  Next step: human review; no next batch, stage, commit, or push.
+
 ## Recipe Identity Migration Phase 1B pilot (2026-11-22)
 
 Base: `code@ec40cc07f1635871f996ff0830ba6e8453d2de4d` (pushed Stage 2).

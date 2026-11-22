@@ -293,13 +293,13 @@ class RecipeIdentityTest(unittest.TestCase):
             [a["recipe_id"] for paper in self.actual["papers"] for a in paper["associations"]],
         )
 
-    def test_only_pilot_recipe_changes_representation_not_behavior(self):
+    def test_pilot_recipe_changes_representation_not_behavior(self):
         recipe_id = "cifar10-symmetric-small-loss-linear-smoke"
         expected = next(row for row in self.expected["recipes"] if row["id"] == recipe_id)
         manifest_path = ROOT / "src/lnl_toolbox/cli/data/recipe_catalog.json"
         raw = json.loads(manifest_path.read_text(encoding="utf-8"))
         pilot = {"id": recipe_id, "path": expected["path"], "profile": expected["profile"]}
-        self.assertEqual([entry for entry in raw["recipes"] if isinstance(entry, dict)], [pilot])
+        self.assertIn(pilot, raw["recipes"])
         actual = catalog.recipe_by_id(" CIFAR10_SYMMETRIC_SMALL_LOSS_LINEAR_SMOKE ", ROOT)
         original = [entry["path"] if entry == pilot else entry for entry in raw["recipes"]]
         with patch.object(catalog.resources, "files") as files:
@@ -309,6 +309,73 @@ class RecipeIdentityTest(unittest.TestCase):
             legacy = catalog.recipe_by_id(recipe_id, ROOT)
         self.assertEqual(actual, legacy)
         self.assertEqual(config_hash(catalog.load_recipe_config(actual)), expected["normalized_config_hash"])
+
+    def test_first_low_risk_batch_preserves_cli_path_and_sweep_identity(self):
+        batch = ("cifar10-clean", "cifar10-symmetric-small-loss-smoke")
+        pilot = "cifar10-symmetric-small-loss-linear-smoke"
+        expected = {row["id"]: row for row in self.expected["recipes"]}
+        raw = json.loads(
+            (ROOT / "src/lnl_toolbox/cli/data/recipe_catalog.json").read_text(encoding="utf-8")
+        )
+        entries = raw["recipes"]
+        self.assertEqual(
+            [item for item in entries if isinstance(item, dict)],
+            [{key: expected[recipe_id][key] for key in ("id", "path", "profile")}
+             for recipe_id in sorted((*batch, pilot))],
+        )
+        self.assertEqual(sum(isinstance(item, str) for item in entries), 65)
+        self.assertEqual(
+            [item if isinstance(item, str) else item["path"] for item in entries],
+            [row["path"] for row in self.expected["recipes"]],
+        )
+        old_entries = [
+            item["path"] if isinstance(item, dict) and item["id"] in batch else item
+            for item in entries
+        ]
+        parser = build_parser()
+        direct_path = str(ROOT / expected["cifar10-clean"]["path"])
+
+        def cli_load(*args):
+            return _load_source(parser.parse_args(["run", *args]))
+
+        explicit = {
+            key: cli_load("--recipe", f" {key.upper().replace('-', '_')} ") for key in batch
+        }
+        direct = cli_load("--config", direct_path)
+        self.assertEqual(direct, cli_load(direct_path))
+        with patch.object(catalog.resources, "files") as files:
+            files.return_value.joinpath.return_value.read_text.return_value = json.dumps({
+                **raw, "recipes": old_entries,
+            })
+            legacy = {key: cli_load("--recipe", key) for key in batch}
+            self.assertEqual(direct, cli_load("--config", direct_path))
+            self.assertEqual(direct, cli_load(direct_path))
+        self.assertIsNone(direct[2])
+        self.assertEqual(direct[:2], explicit["cifar10-clean"][:2])
+        self.assertEqual(
+            explicit[batch[1]][0]["selector"], {"name": "small_loss", "keep_rate": 0.5}
+        )
+
+        for key in batch:
+            with self.subTest(recipe=key):
+                config, path, recipe, _ = explicit[key]
+                self.assertEqual(explicit[key], legacy[key])
+                self.assertEqual(path.relative_to(ROOT).as_posix(), expected[key]["path"])
+                self.assertEqual(
+                    (recipe.id, recipe.profile, recipe.runner, recipe.method),
+                    (key, *(expected[key][field] for field in ("profile", "runner", "method"))),
+                )
+                self.assertEqual(
+                    config_hash(catalog.load_recipe_config(recipe)),
+                    expected[key]["normalized_config_hash"],
+                )
+                old_config, _, old_recipe, _ = legacy[key]
+                for matrix in (None, {"trainer.epochs": [1, 2]}):
+                    with self.subTest(matrix=matrix):
+                        current = plan_sweep(config, [8, 3], matrix=matrix, recipe=recipe.id)
+                        previous = plan_sweep(old_config, [8, 3], matrix=matrix, recipe=old_recipe.id)
+                        self.assertEqual(current, previous)
+                        _validate_existing_manifest(_new_manifest(previous), current)
 
     def test_installed_catalog_reads_distribution_once_per_build_and_revalidates(self):
         package_map = _package_map(ROOT)

@@ -9,7 +9,11 @@
     "configs/experiment/ca2c_cifar10_smoke.yaml",
     "configs/experiment/cal_cifar10_reproduction.yaml",
     "configs/experiment/cal_cifar10_smoke.yaml",
-    "configs/experiment/cifar10_clean.yaml",
+    {
+      "id": "cifar10-clean",
+      "path": "configs/experiment/cifar10_clean.yaml",
+      "profile": "experiment"
+    },
     "configs/experiment/cifar10_clean_baseline.yaml",
     "configs/experiment/cifar10_clean_smoke.yaml",
     "configs/experiment/cifar10_cnlcu_hard_smoke.yaml",
@@ -34,7 +38,11 @@
       "path": "configs/experiment/cifar10_symmetric_small_loss_linear_smoke.yaml",
       "profile": "smoke"
     },
-    "configs/experiment/cifar10_symmetric_small_loss_smoke.yaml",
+    {
+      "id": "cifar10-symmetric-small-loss-smoke",
+      "path": "configs/experiment/cifar10_symmetric_small_loss_smoke.yaml",
+      "profile": "smoke"
+    },
     "configs/experiment/cifar10_t_revision_smoke.yaml",
     "configs/experiment/cifar10_upm_smoke.yaml",
     "configs/experiment/upm_cifar10_reproduction.yaml",
