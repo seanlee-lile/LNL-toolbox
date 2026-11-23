@@ -61,6 +61,10 @@
 .qs-parameter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .qs-parameter-field { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #fffdf7; }
 .qs-parameter-field > span { font-weight: 700; overflow-wrap: anywhere; }
+.qs-model-card { min-width: 0; margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #fffdf7; }
+.qs-model-card > legend { padding: 0 5px; font-weight: 700; }
+.qs-model-card > .qs-parameter-field { padding: 8px 0; border: 0; border-radius: 0; background: transparent; }
+.qs-model-card > .qs-parameter-field + .qs-parameter-field { border-top: 1px solid var(--border); }
 .qs-parameter-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .qs-parameter-title strong { overflow-wrap: anywhere; }
 .qs-segment-choice { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 12px; font-weight: 700; cursor: pointer; }

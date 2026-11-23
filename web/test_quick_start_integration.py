@@ -150,6 +150,48 @@ class QuickStartIntegrationTests(unittest.TestCase):
                 self.assertEqual(status, 200, reviewed)
                 self.assertEqual(yaml.safe_load(reviewed["content"])["data"]["validation_size"], expected)
 
+    def test_resnet_stem_is_resolved_after_dataset_overlay(self) -> None:
+        import yaml
+
+        status, registered = self._request("POST", "/api/quick-start/register", {"path": str(self.dataset_root)})
+        self.assertEqual(status, 200, registered)
+        alias = registered["dataset"]["alias"]
+        service = self.service.data_service
+        apply = service.apply
+        selected = {}
+
+        def overlay(config, dataset_alias):
+            effective = apply(config, dataset_alias)
+            effective["data"].update(selected)
+            return effective
+
+        with patch.object(service, "apply", side_effect=overlay), \
+                patch("lnl_toolbox.training.data_service.DEFAULT_DATA_SERVICE", service), \
+                patch("lnl_toolbox.training.data_service._transforms", side_effect=AssertionError("ran preprocessing")):
+            for data, expected in (({"name": "clothing1m"}, "imagenet_standard"),
+                                   ({"name": "clothing1m", "image_size": 64}, "standard"),
+                                   ({"name": "cifar10"}, "standard")):
+                selected = data
+                status, schema = self._request("GET", "/api/config-schema?recipe=gce-cifar10&quickstart_dataset=" + alias)
+                self.assertEqual(status, 200, schema)
+                field = next(item for item in schema["fields"] if item["path"] == "model.variant")
+                self.assertEqual(field["value"], expected)
+                status, reviewed = self._request("POST", "/api/quick-start/review-config", {
+                    "dataset_alias": alias, "noise": {"kind": "clean", "key": "clean", "seed": 1},
+                    "recipe": "gce-cifar10", "patches": [],
+                })
+                self.assertEqual(status, 200, reviewed)
+                self.assertEqual(yaml.safe_load(reviewed["content"])["model"]["variant"], expected)
+
+            selected = {"name": "clothing1m"}
+            status, reviewed = self._request("POST", "/api/quick-start/review-config", {
+                "dataset_alias": alias, "noise": {"kind": "clean", "key": "clean", "seed": 1},
+                "recipe": "gce-cifar10", "patches": [{"path": "model.weights", "value": "imagenet1k_v1"}],
+            })
+            self.assertEqual(status, 200, reviewed)
+            model = yaml.safe_load(reviewed["content"])["model"]
+            self.assertEqual((model["variant"], model["weights"]), ("imagenet_standard", "imagenet1k_v1"))
+
     def test_http_never_turns_a_needs_input_method_into_a_runnable_plan(self) -> None:
         status, registered = self._request(
             "POST", "/api/quick-start/register", {"path": str(self.dataset_root)}

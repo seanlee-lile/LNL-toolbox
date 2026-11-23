@@ -277,6 +277,16 @@ def _profile_from_splits(
     )
 
 
+def classification_image_size(dataset: str, data: Mapping[str, Any]) -> int:
+    """Output side length of the classification image transforms."""
+    name = dataset.replace("_", "").lower()
+    if name.startswith("cifar"):
+        return 32
+    if name in {"mnist", "fashionmnist"}:
+        return 28
+    return int(data.get("image_size", 224))
+
+
 def _transforms(
     split: RawDatasetSplit,
     data: Mapping[str, Any],
@@ -288,6 +298,7 @@ def _transforms(
     if not _is_image_split(split):
         return {name: None for name in requirements.views}
     name = split.dataset.replace("_", "").lower()
+    image_size = classification_image_size(split.dataset, data)
     normalization = dict(data.get("normalization", {}) or {})
     if name.startswith("cifar"):
         preprocessing = str(data.get("preprocessing", "standard"))
@@ -297,7 +308,7 @@ def _transforms(
             from torchvision import transforms
             operations: list[Any] = []
             if training and bool(data.get("augment", True)):
-                operations.extend((transforms.Pad(4), transforms.RandomCrop(32), transforms.RandomHorizontalFlip()))
+                operations.extend((transforms.Pad(4), transforms.RandomCrop(image_size), transforms.RandomHorizontalFlip()))
             operations.extend((transforms.ToTensor(), transforms.Lambda(_scale_cifar_tensor)))
             weak = transforms.Compose(operations)
         else:
@@ -328,11 +339,10 @@ def _transforms(
     if name in {"mnist", "fashionmnist"}:
         operations: list[Any] = []
         if training and bool(data.get("augment", False)):
-            operations.append(transforms.RandomCrop(28, padding=4))
+            operations.append(transforms.RandomCrop(image_size, padding=4))
         operations.extend((transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))))
         base = transforms.Compose(operations)
         return {view: base for view in requirements.views}
-    image_size = int(data.get("image_size", 224))
     mean = tuple(normalization.get("mean", (0.485, 0.456, 0.406)))
     std = tuple(normalization.get("std", (0.229, 0.224, 0.225)))
     weak_ops: list[Any] = (

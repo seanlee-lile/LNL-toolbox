@@ -241,6 +241,15 @@ for(const schema of JSON.parse(fs.readFileSync(0,'utf8'))) {
   }
   const panel=p.renderPlanParameters();
   if(panel.includes('>Normalize<') || panel.includes('>Scale<') || panel.includes('>Center<')) throw Error('old preprocessing names');
+  if(schema.method==='dual_t') {
+    for(const [prefix,title] of [['posterior_stage.model','初始模型'],['final_stage.model','最终模型']]) {
+      const card=panel.split('data-qs-model="'+prefix+'"')[1]?.split('</fieldset>')[0] || '';
+      if(!card.includes('<legend>'+title+'</legend>')) throw Error('missing stage model card '+prefix);
+      for(const key of ['name','variant','weights']) {
+        if(!card.includes('data-qs-param="'+prefix+'.'+key+'"')) throw Error('missing grouped control '+prefix+'.'+key);
+      }
+    }
+  }
 }
 """
         result = subprocess.run([shutil.which("node"), "-e", script], cwd=ROOT,

@@ -255,6 +255,60 @@ def configure_validation_split(config: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
+def adapt_resnet_stems(
+    config: dict[str, Any],
+    effective_data: Mapping[str, Any],
+    *,
+    method: str,
+    edited_paths: frozenset[str] = frozenset(),
+) -> set[str]:
+    """Resolve supported ResNet stems using the selected dataset's transform settings."""
+    from lnl_toolbox.training.data_service import classification_image_size
+
+    size = classification_image_size(str(effective_data["name"]), effective_data)
+    changed: set[str] = set()
+    if 64 < size < 128:
+        return changed
+    target = "standard" if size <= 64 else "imagenet_standard"
+    supported = {"resnet18", "resnet34", "resnet50", "resnet101"}
+
+    def apply(model: dict[str, Any], path: str) -> None:
+        variant = model.get("variant", "standard")
+        weights = str(model.get("weights") or "none").strip().lower()
+        if (
+            model.get("name") not in supported
+            or variant not in {"standard", "imagenet_standard"}
+            or f"{path}.variant" in edited_paths
+            or (method == "cwd" and path == "model")
+            or (method == "dual_t" and variant == "imagenet_standard")
+        ):
+            return
+        if weights != "none" and f"{path}.weights" not in edited_paths:
+            return
+        selected = "imagenet_standard" if weights in {"imagenet1k_v1", "imagenet1k_v2"} else target
+        if model.get("variant") != selected:
+            model["variant"] = selected
+            changed.add(f"{path}.variant")
+        if selected == "imagenet_standard" and model.get("base_width", 64) != 64:
+            model["base_width"] = 64
+            changed.add(f"{path}.base_width")
+
+    def visit(section: dict[str, Any], prefix: str = "") -> None:
+        for key, value in section.items():
+            path = f"{prefix}.{key}" if prefix else key
+            if key == "model" and isinstance(value, dict):
+                apply(value, path)
+            elif key == "models" and isinstance(value, list):
+                for index, model in enumerate(value):
+                    if isinstance(model, dict):
+                        apply(model, f"{path}.{index}")
+            elif isinstance(value, dict) and key not in {"data", "noise"}:
+                visit(value, path)
+
+    visit(config)
+    return changed
+
+
 SPLIT_COUNT_PATHS = (
     ("data", "validation_size"),
     ("data", "num_val"),

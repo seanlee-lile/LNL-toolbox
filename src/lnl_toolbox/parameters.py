@@ -1109,16 +1109,33 @@ def _config_schema(
     path_value: object = None,
     recipe_hint: object = None,
     quickstart_train_count: int | None = None,
+    quickstart_dataset: str = "",
+    quickstart_data_service=None,
 ) -> dict[str, object]:
     payload = _config_payload(recipe_id, path_value=path_value)
     original = None
-    if quickstart_train_count is not None and payload["recipe"]:
+    if payload["recipe"] and (quickstart_train_count is not None or quickstart_dataset):
         from copy import deepcopy
 
         original = payload["config"]
         payload["config"] = deepcopy(original)
-        adapt_split_counts(payload["config"], original, quickstart_train_count)
+        if quickstart_train_count is not None:
+            adapt_split_counts(payload["config"], original, quickstart_train_count)
+        if quickstart_dataset:
+            effective = quickstart_data_service.apply(payload["config"], quickstart_dataset)
+            _adapt_quickstart_models(payload["config"], effective["data"], quickstart_dataset, quickstart_data_service,
+                                     method=_config_method(original, payload["recipe"]))
     return schema_from_payload(payload, recipe_hint=recipe_hint, split_reference_config=original)
+
+
+def _adapt_quickstart_models(config, effective_data, dataset_alias, data_service, *, method, edited_paths=frozenset()):
+    from lnl_toolbox.data.profile import Modality
+    from lnl_toolbox.quickstart.templates import adapt_resnet_stems
+
+    profile = data_service.status(dataset_alias).profile
+    if profile is not None and profile.modality == Modality.IMAGE:
+        return adapt_resnet_stems(config, effective_data, method=method, edited_paths=edited_paths)
+    return set()
 
 
 def schema_from_payload(payload: dict[str, Any], *, recipe_hint=None, split_reference_config=None) -> dict[str, object]:
@@ -1983,6 +2000,22 @@ def prepare_config(payload: object, *, for_review: bool = False) -> tuple[dict[s
     if source_config is None:
         formal = _formal_registry_config(method)
         source_config = formal[1] if formal is not None else parsed
+    dataset_alias = str(payload.get("dataset_alias") or "").strip()
+    effective_dataset = None
+    if dataset_alias and for_review and system_overrides is not None:
+        from copy import deepcopy
+        from lnl_toolbox.quickstart.templates import configure_validation_split
+        from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE
+
+        dataset_candidate = deepcopy(parsed)
+        if payload.get("automatic_validation_split"):
+            configure_validation_split(dataset_candidate)
+        effective_dataset = DEFAULT_DATA_SERVICE.apply(dataset_candidate, dataset_alias)
+        edited_paths = frozenset(patch["path"] for patch in (patches or []))
+        allowed_system_changes.update(_adapt_quickstart_models(
+            parsed, effective_dataset["data"], dataset_alias, DEFAULT_DATA_SERVICE,
+            method=method, edited_paths=edited_paths,
+        ))
     from lnl_toolbox.catalog import _config_parameter_errors
     raw_errors = _config_parameter_errors(parsed) if for_review else []
     if not for_review:
@@ -2019,6 +2052,11 @@ def prepare_config(payload: object, *, for_review: bool = False) -> tuple[dict[s
             from lnl_toolbox.quickstart.templates import configure_validation_split
 
             configure_validation_split(parsed)
+    if effective_dataset is not None:
+        parsed["data"] = effective_dataset["data"]
+        parsed["local_dataset"] = effective_dataset["local_dataset"]
+        if not raw_errors:
+            parsed = synchronize_experiment_seed(parsed)
     _record_paper_parameter_status(
         parsed,
         method,
@@ -2029,11 +2067,6 @@ def prepare_config(payload: object, *, for_review: bool = False) -> tuple[dict[s
         _validate_changed_data_noise_selectors(source_config, parsed)
         _validate_changed_model_configs(source_config, parsed, method)
         _validate_changed_training_selectors(source_config, parsed, method)
-    dataset_alias = str(payload.get("dataset_alias") or "").strip()
-    if dataset_alias and for_review and system_overrides is not None:
-        from lnl_toolbox.training.data_service import DEFAULT_DATA_SERVICE
-
-        parsed = DEFAULT_DATA_SERVICE.apply(parsed, dataset_alias)
     if dataset_alias and not for_review:
         from lnl_toolbox.training.service import ExperimentService
 

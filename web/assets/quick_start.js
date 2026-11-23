@@ -534,6 +534,9 @@
       ? choices : [{value:current, label:"当前配置含未支持选项", unsupported:true}, ...choices];
     return window.parameterChoiceHelp.options(options, current);
   }
+  function singleModelChoice(choices, value) {
+    return choices?.length === 1 && choices[0].value === String(value ?? "") ? choices[0] : null;
+  }
   function updateModelOptions(editor, path) {
     if (!/(^|\.)model\.(name|variant)$/.test(path)) return;
     const prefix = path.slice(0, path.lastIndexOf("."));
@@ -543,18 +546,26 @@
       const field = state.planSchema.fields.find(item => item.path === dependent);
       const choices = field && modelChoices(field);
       if (!choices) continue;
-      input.innerHTML = parameterOptions(choices, parameterValue(field));
+      const value = parameterValue(field);
+      input.innerHTML = parameterOptions(choices, value);
+      const fixed = input.parentElement.querySelector("[data-qs-model-fixed]");
+      if (fixed) {
+        const onlyChoice = singleModelChoice(choices, value);
+        input.hidden = Boolean(onlyChoice);
+        fixed.hidden = !onlyChoice;
+        fixed.textContent = onlyChoice?.label || "";
+      }
       window.parameterChoiceHelp.update(input);
     }
   }
-  function renderParameterField(field, segmentable) {
+  function renderParameterField(field, segmentable, modelLabel = "") {
     segmentable = Boolean(segmentable && field.editable && field.display_group !== "restricted");
     const value = parameterValue(field);
     const currentTrainCount = Number(state.dataset?.training_pool_size ?? state.dataset?.train_size);
     const split = field.split_reference && Number.isInteger(currentTrainCount) && currentTrainCount > 0;
     const selectedDataset = field.path === "data.name";
     const readonly = !field.editable || selectedDataset;
-    const label = selectedDataset ? "当前数据集" : trainingStageName(field.path) ? trainingBudgetLabel(field) : field.label || field.presentation_label || field.path;
+    const label = modelLabel || (selectedDataset ? "当前数据集" : trainingStageName(field.path) ? trainingBudgetLabel(field) : field.label || field.presentation_label || field.path);
     const choices = selectedDataset ? null : modelChoices(field);
     let control;
     if (field.kind === "boolean") {
@@ -564,7 +575,9 @@
     } else if (field.kind === "list" || field.kind === "object") {
       control = '<textarea data-qs-param="' + esc(field.path) + '"' + (readonly ? ' disabled' : '') + '>' + esc(JSON.stringify(value)) + '</textarea>';
     } else if (choices) {
-      control = '<select data-qs-param="' + esc(field.path) + '"' + (readonly ? ' disabled' : '') + '>' + parameterOptions(choices, value) + '</select>';
+      const onlyChoice = modelLabel ? singleModelChoice(choices, value) : null;
+      control = '<select data-qs-param="' + esc(field.path) + '"' + (readonly ? ' disabled' : '') + (onlyChoice ? ' hidden' : '') + '>' + parameterOptions(choices, value) + '</select>';
+      if (modelLabel) control += '<small data-qs-model-fixed' + (onlyChoice ? '' : ' hidden') + '>' + esc(onlyChoice?.label || "") + '</small>';
     } else {
       const shown = selectedDataset ? state.dataset.alias : value == null ? "" : value;
       control = '<input type="' + (field.kind === "number" ? "number" : "text") + '" value="' + esc(shown) + '" data-qs-param="' + esc(field.path) + '"' + (split ? ' min="0" max="' + esc(currentTrainCount - 1) + '" step="1"' : '') + (readonly ? ' disabled' : '') + '>';
@@ -581,6 +594,36 @@
     }
     const wrapper = field.rows ? "div" : "label";
     return '<' + wrapper + ' class="qs-parameter-field"><span>' + esc(label) + '</span>' + control + note + '</' + wrapper + '>';
+  }
+
+  function groupModelParameters(sections) {
+    const models = new Map();
+    return sections.map(function (fields) {
+      return fields.flatMap(function (field) {
+        const match = /^((?:.+\.)?model)\.(name|variant|weights)$/.exec(field.path);
+        if (!match) return [{field}];
+        const prefix = match[1];
+        if (models.has(prefix)) {
+          models.get(prefix).fields[match[2]] = field;
+          return [];
+        }
+        const model = {prefix, fields:{[match[2]]:field}};
+        models.set(prefix, model);
+        return [model];
+      });
+    });
+  }
+
+  function renderParameterCard(card, segmentablePaths) {
+    if (card.field) return renderParameterField(card.field, segmentablePaths.has(card.field.path));
+    const parent = card.prefix.replace(/\.?model$/, "");
+    const stage = trainingStageName(parent + ".epochs");
+    const title = stage || ({ "dld.feature_extractor":"特征提取器" })[parent] || (parent ? card.prefix : "模型");
+    const labels = {name:"模型架构", variant:"结构版本", weights:"初始权重"};
+    const controls = Object.keys(labels).map(function (key) {
+      return card.fields[key] ? renderParameterField(card.fields[key], false, labels[key]) : "";
+    }).join("");
+    return '<fieldset class="qs-model-card" data-qs-model="' + esc(card.prefix) + '"><legend>' + esc(title) + '</legend>' + controls + '</fieldset>';
   }
 
   function splitAllocationText() {
@@ -856,15 +899,18 @@
       return hasNodes && (explicit?.editable || gamma?.editable) && base?.editable && (name === "multistep" || group.fields.some(function (field) { return field.path === group.prefix + ".step_milestones"; })) ? [base.path] : [];
     }));
     const regular = fields.filter(function (field) { return !unusedBudgetPaths.has(field.path) && !movedPaths.has(field.path) && !schedulePaths.has(field.path) && !(segmentablePaths.has(field.path) && state.segmentedPaths[field.path] !== false); });
-    const defaults = regular.filter(function (field) { return field.display_group === "default"; });
-    const advanced = regular.filter(function (field) { return field.display_group === "advanced"; });
-    const restricted = fields.filter(function (field) { return field.display_group === "restricted" && !schedulePaths.has(field.path); });
+    const [defaults, advanced, restricted] = groupModelParameters([
+      regular.filter(function (field) { return field.display_group === "default"; }),
+      regular.filter(function (field) { return field.display_group === "advanced"; }),
+      fields.filter(function (field) { return field.display_group === "restricted" && !schedulePaths.has(field.path); })
+    ]);
+    const renderCard = function (card) { return renderParameterCard(card, segmentablePaths); };
     const changed = Object.keys(state.parameterDraft).length > 0;
     const timeline = renderTrainingTimeline(fields);
     const schedulePlan = schedules.length ? '<div class="qs-training-plan"><h4>模型训练计划 · 学习率设置</h4>' + (timeline ? '<p class="helper">各阶段独立设置；关闭变化后仍会训练。</p>' : '') + schedules.map(function (group) { return renderScheduleControl(group, fields, Boolean(timeline)); }).join("") + '</div>' : '';
-    return '<div class="qs-parameter-panel">' + timeline + schedulePlan + '<h4>可修改的训练参数</h4><p class="helper" data-qs-split-summary>' + esc(splitAllocationText()) + '</p><div class="qs-parameter-grid">' + defaults.map(function (field) { return renderParameterField(field, segmentablePaths.has(field.path)); }).join("") + '</div>' +
-      (advanced.length ? '<details class="qs-parameter-advanced"><summary>高级参数（' + advanced.length + '）</summary><div class="qs-parameter-grid">' + advanced.map(function (field) { return renderParameterField(field, segmentablePaths.has(field.path)); }).join("") + '</div></details>' : '') +
-      (restricted.length ? '<details class="qs-parameter-advanced"><summary>禁止在 Web 修改的专属参数（' + restricted.length + '）</summary><p class="helper">这些值由配置契约固定；此处仅供查看。</p><div class="qs-parameter-grid">' + restricted.map(function (field) { return renderParameterField(field, false); }).join("") + '</div></details>' : '') +
+    return '<div class="qs-parameter-panel">' + timeline + schedulePlan + '<h4>可修改的训练参数</h4><p class="helper" data-qs-split-summary>' + esc(splitAllocationText()) + '</p><div class="qs-parameter-grid">' + defaults.map(renderCard).join("") + '</div>' +
+      (advanced.length ? '<details class="qs-parameter-advanced"><summary>高级参数（' + advanced.length + '）</summary><div class="qs-parameter-grid">' + advanced.map(renderCard).join("") + '</div></details>' : '') +
+      (restricted.length ? '<details class="qs-parameter-advanced"><summary>禁止在 Web 修改的专属参数（' + restricted.length + '）</summary><p class="helper">这些值由配置契约固定；此处仅供查看。</p><div class="qs-parameter-grid">' + restricted.map(renderCard).join("") + '</div></details>' : '') +
       (changed ? '<p class="qs-feedback qs-warning">参数已修改，仅写入本次配置；不会改动论文原始 YAML。开始前会验证这份配置。</p>' : '') + '</div>';
   }
 

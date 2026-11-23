@@ -1700,14 +1700,18 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 recipe_hint = query.get("recipe_hint", [""])[0]
                 dataset_alias = query.get("quickstart_dataset", [""])[0]
                 train_count = None
+                data_service = None
                 if dataset_alias and recipe_id and not path_value:
                     from web.quick_start_api import SERVICE
 
                     train_count = SERVICE.accepted_training_pool_size(dataset_alias)
+                    data_service = SERVICE.data_service
                 _json_response(
                     self,
                     _config_schema(recipe_id, path_value=path_value, recipe_hint=recipe_hint,
-                                   quickstart_train_count=train_count),
+                                   quickstart_train_count=train_count,
+                                   quickstart_dataset=dataset_alias if data_service is not None else "",
+                                   quickstart_data_service=data_service),
                 )
             except Exception as exc:
                 _json_response(self, {"error": str(exc)}, 400)

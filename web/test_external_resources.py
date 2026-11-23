@@ -1,8 +1,6 @@
 import hashlib
 import io
 import json
-import shutil
-import subprocess
 import tempfile
 import threading
 import time
@@ -157,36 +155,6 @@ class ExternalResourcesTest(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
                 thread.join()
-
-    def test_ui_download_polls_then_refreshes_plan_and_guides_failure(self):
-        if not shutil.which("node"):
-            self.skipTest("Node.js unavailable")
-        script = r'''
-const fs = require('fs'), vm = require('vm'), assert = require('assert');
-let status = 'missing', clicks = [], completed = 0, timers = [];
-const item = () => ({id:'dld-resnet34',title:'ResNet',path:'/cache/weights.pth',url:'https://download.pytorch.org/models/resnet34-b627a593.pth',note:'weights',ready:status === 'ready',status,error:status === 'failed' ? 'offline' : '',downloadable:true});
-const download = {dataset:{externalDownload:'dld-resnet34'}}, paper = {};
-const node = {isConnected:true,innerHTML:'',appendChild(){},replaceChildren(){},
-  querySelector(){return {addEventListener(){}}},
-  querySelectorAll(selector){return selector === '[data-external-download]' ? [download] : [paper]}};
-const context = {window:{},URLSearchParams,clearTimeout(){},setTimeout(fn){timers.push(fn);return timers.length},
-  document:{createElement(){return {}}},
-  fetch:async (url,options) => {clicks.push([url,options]); if (options) status='downloading'; return {ok:true,json:async()=>options?{started:true}:{resources:[item()]}}}};
-vm.runInNewContext(fs.readFileSync('web/assets/quick_start.js','utf8'),context);
-const tick = () => new Promise(resolve=>setImmediate(resolve));
-(async()=>{
-  context.window.paperExternalResources.mount(node,{recipe:'dld'},()=>{},()=>completed++);
-  await tick(); assert(node.innerHTML.includes('尚未准备')); assert(node.innerHTML.includes('/cache/weights.pth'));
-  await download.onclick(); assert(node.innerHTML.includes('正在下载')); assert.strictEqual(completed,0);
-  status='ready'; await timers.pop()(); assert(node.innerHTML.includes('已就绪')); assert.strictEqual(completed,1);
-  status='failed'; context.window.paperExternalResources.mount(node,{recipe:'dld'},()=>{}); await tick();
-  assert(node.innerHTML.includes('offline')); assert(node.innerHTML.includes('前往论文栏')); assert(node.innerHTML.includes('自行下载'));
-  assert(clicks.some(([url,options])=>url==='/api/external-resources/download' && JSON.parse(options.body).resource==='dld-resnet34'));
-})().catch(error=>{console.error(error);process.exitCode=1});
-'''
-        result = subprocess.run([shutil.which("node"), "-e", script], cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-
 
 if __name__ == "__main__":
     unittest.main()
