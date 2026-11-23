@@ -102,11 +102,12 @@ def edit_paper(paper, *, session=None):
         return 130
 
 class PaperEditor:
-    def __init__(self, paper, session=None):
+    def __init__(self, paper, session=None, *, recipe=None, guided=False):
         from lnl_toolbox import parameters
         self.rules = parameters
         self.paper, self.session = paper, session
-        _, self.recipe = default_paper_config(paper)
+        self.recipe = recipe if recipe is not None else default_paper_config(paper)[1]
+        self.guided = guided
         self.baseline = load_recipe_config(self.recipe)
         self.config = deepcopy(self.baseline)
         self.dataset = ""
@@ -121,7 +122,7 @@ class PaperEditor:
             "config": deepcopy(self.config), "recipe": self.recipe.id,
             "path": self.rules._display_path(self.recipe.config_path), "runner": self.recipe.runner,
             "method": self.recipe.method,
-        })
+        }, split_reference_config=self.baseline if self.guided else None)
 
     def schedules(self):
         groups = []
@@ -414,9 +415,17 @@ class _PaperWorkspace:
         def actions(event):
             self.launch(self.command_palette())
 
-        @kb.add("c-s", filter=browsing)
+        @kb.add("c-s", filter=browsing & Condition(lambda: not self.editor.guided))
         def save(event):
             self.launch(self.save())
+
+        @kb.add("f5", filter=browsing & Condition(lambda: self.editor.guided))
+        def review(event):
+            self.app.exit(result="review")
+
+        @kb.add("left", filter=on_list & Condition(lambda: self.editor.guided))
+        def back(event):
+            self.launch(self.quit())
 
         @kb.add("f2", filter=browsing)
         def advanced(event):
@@ -478,6 +487,10 @@ class _PaperWorkspace:
 
     def header(self):
         dataset = self.editor.dataset or self.editor.config.get("data", {}).get("name", "-")
+        if self.editor.guided:
+            return f" LNL Start / {self.editor.paper.acronym}    {dataset}\n " + text(
+                "[4/5] 运行计划  ·  F5 检查与确认  ·  ← / Esc 返回方法",
+                "[4/5] Run plan  ·  F5 Review and confirm  ·  ← / Esc Back to methods")
         dirty = bool(self.editor.changes(self.editor.saved_config))
         return f" LNL Toolbox / {self.editor.paper.acronym}    {dataset}\n " + text(
             f"已修改 {len(self.editor.changes())} 项 / " + ("未保存" if dirty else "无未保存修改"),
@@ -713,6 +726,11 @@ class _PaperWorkspace:
             self.app.exit(result=("language", chosen))
 
     async def help(self):
+        if self.editor.guided:
+            await self.show_text(text("键盘操作", "Keyboard controls"), text(
+                "↑↓：选择参数\nEnter：编辑\nCtrl+F：搜索参数\nF2：高级参数\nCtrl+Z：撤销\n/：操作菜单\nF5：检查与确认\n← / Esc：返回方法选择",
+                "Up/Down: select a parameter\nEnter: edit\nCtrl+F: search\nF2: advanced parameters\nCtrl+Z: undo\n/: actions\nF5: review and confirm\n← / Esc: back to methods"))
+            return
         await self.show_text(text("键盘操作", "Keyboard controls"), text(
             "↑↓ / PageUp / PageDown：选择参数\nEnter：编辑；布尔值直接切换\nTab / Shift+Tab：切换焦点\nCtrl+F：搜索参数\nF2：显示/隐藏高级参数\n/：搜索操作（保存、验证、数据集、改动、训练、语言）\nCtrl+S：另存 YAML\nCtrl+Z：撤销上次修改\nEsc：关闭弹窗、清空搜索或退出\n\n* 表示相对原始配置发生修改。草稿不会自动保存；启动训练需验证和明确确认。",
             "Up/Down / PageUp / PageDown: select a parameter\nEnter: edit; booleans toggle directly\nTab / Shift+Tab: change focus\nCtrl+F: search parameters\nF2: show/hide advanced parameters\n/: search actions (save, validate, dataset, diff, train, language)\nCtrl+S: save YAML as\nCtrl+Z: undo the last change\nEsc: dismiss a dialog, clear search or exit\n\n* marks a change from the initial configuration. Drafts are not saved automatically. Training requires validation and explicit confirmation."))
@@ -723,7 +741,7 @@ class _PaperWorkspace:
                          for path, before, after in rows) or text("没有修改。", "No changes.")
 
     async def command_palette(self):
-        choice = await self.pick(text("操作", "Actions"), [
+        actions = [
             (text("选择数据集", "Choose dataset"), "dataset"),
             (text("显示/隐藏高级参数", "Toggle advanced parameters"), "advanced"),
             (text("查看改动", "Review changes"), "diff"),
@@ -734,7 +752,15 @@ class _PaperWorkspace:
             ("语言 / Language", "language"),
             (text("帮助", "Help"), "help"),
             (text("退出", "Exit"), "quit"),
-        ])
+        ]
+        if self.editor.guided:
+            actions = [(text("下一步：检查与确认", "Next: Review and confirm"), "review")] + [
+                item for item in actions if item[1] not in {"dataset", "save", "validate", "train"}
+            ]
+        choice = await self.pick(text("操作", "Actions"), actions)
+        if choice == "review":
+            self.app.exit(result="review")
+            return
         if choice == "advanced":
             self.toggle_advanced()
         elif choice == "undo":
@@ -803,7 +829,7 @@ class _PaperWorkspace:
         if self.editor.changes(self.editor.saved_config):
             if not await self.confirm(text("放弃未保存的修改？", "Discard unsaved changes?"), ""):
                 return
-        self.app.exit(result=0)
+        self.app.exit(result="back" if self.editor.guided else 0)
 
     async def schedule(self, field):
         from prompt_toolkit.widgets import TextArea, Label, Checkbox

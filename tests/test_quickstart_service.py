@@ -207,6 +207,95 @@ class QuickStartServiceTests(unittest.TestCase):
         self.assertEqual(result.alias, "local-cifar10")
         self.assertEqual(len(self.data_service.catalog.records()), 1)
 
+    def test_cli_left_arrow_backs_out_of_dataset_path_and_noise(self) -> None:
+        from prompt_toolkit.input import create_pipe_input
+        from prompt_toolkit.output import DummyOutput
+
+        from lnl_toolbox.cli.quick_start import _terminal_session, _wizard
+
+        messages = []
+        with create_pipe_input() as terminal, patch.object(self.service, "register_and_inspect") as register:
+            session = _terminal_session(input=terminal, output=DummyOutput(), write=messages.append)
+            # Open the path prompt, go back, select the registered dataset,
+            # go back from noise, then exit from the dataset list.
+            terminal.send_text("2\r\x1b[D1\r\x1b[D3\r")
+            self.assertEqual(_wizard(session, self.service), 0)
+            register.assert_not_called()
+        self.assertEqual([line.strip()[1:4] for line in messages if line.startswith("\n[")],
+                         ["1/5", "1/5", "2/5", "1/5"])
+
+        with create_pipe_input() as terminal:
+            session = _terminal_session(input=terminal, output=DummyOutput())
+            terminal.send_text("abc\x1b[DX\r")
+            self.assertEqual(session.text("path"), "abXc")
+
+    def test_cli_five_steps_run_the_reviewed_configuration(self) -> None:
+        import json
+        import torch
+        import yaml
+
+        from lnl_toolbox.cli import PromptSession
+        from lnl_toolbox.cli.quick_start import QuickStartEditor, _wizard
+
+        root = Path(self.temp.name)
+        data = DataService(
+            registry=DatasetRegistry((_FakeTenClassImageAdapter(),)),
+            catalog=LocalDatasetCatalog(root / "cli-catalog.json"),
+        )
+        data.register("cifar-for-start", "cifar10", {"root": str(self.data_root)})
+        data.inspect("cifar-for-start")
+        service = QuickStartService(data, artifact_root=root / "cli")
+
+        actual_edit = QuickStartEditor.edit
+
+        def edit(editor):
+            from prompt_toolkit.input import create_pipe_input
+            from prompt_toolkit.output import DummyOutput
+
+            self.assertEqual(editor.recipe.id, "gce-cifar10")
+            self.assertEqual(editor.config["seed"], 19)
+            self.assertEqual(editor.config["noise"]["rate"], .2)
+            with create_pipe_input() as terminal, patch.dict(os.environ, {"LNL_LANG": "en"}):
+                terminal.send_text("\x1b[D")
+                self.assertFalse(actual_edit(editor, input=terminal, output=DummyOutput()))
+            editor.update([("trainer.epochs", 1), ("loader.batch_size", 16),
+                           ("model.name", "tiny_cnn")])
+            with create_pipe_input() as terminal, patch.dict(os.environ, {"LNL_LANG": "en"}):
+                terminal.send_text("\x1b[15~")  # F5
+                return actual_edit(editor, input=terminal, output=DummyOutput())
+
+        for decision in ("3", "2"):
+            answers = iter(("cifar-for-start", "symmetric", "19", ".2", "gce", decision))
+            messages = []
+            session = PromptSession(read=lambda _: next(answers), write=messages.append)
+            with patch("lnl_toolbox.training.data_service.DEFAULT_DATA_SERVICE", data), \
+                    patch.object(QuickStartEditor, "edit", edit), \
+                    patch("torch.cuda.is_available", return_value=False):
+                self.assertEqual(_wizard(session, service), 0, messages)
+            self.assertEqual([line.strip()[1:4] for line in messages if line.startswith("\n[")],
+                             ["1/5", "2/5", "3/5", "4/5", "5/5"])
+            runs = list((root / "cli" / "runs").glob("*"))
+            self.assertEqual(len(runs), int(decision == "2"))
+
+        saved = yaml.safe_load((runs[0] / "config.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(saved["model"]["name"], "tiny_cnn")
+        self.assertEqual(saved["seed"], 19)
+        self.assertEqual(saved["trainer"]["epochs"], 1)
+        result = json.loads((runs[0] / "final_metrics.json").read_text(encoding="utf-8"))
+        self.assertEqual(result["completed_epochs"], 1)
+        self.assertTrue((runs[0] / "last.pt").is_file())
+
+        # A new noise choice must also update the method's derived keep rate.
+        from lnl_toolbox.parameters import prepare_config
+        with patch("lnl_toolbox.training.data_service.DEFAULT_DATA_SERVICE", data):
+            for method in ("coteaching", "cnlcu"):
+                config, _ = prepare_config(service.review_payload(
+                    f"{method}-cifar10", "cifar-for-start",
+                    QuickStartNoiseSelection("clean", "clean", seed=19), {}, [],
+                ), for_review=True)
+                self.assertEqual(config[method]["noise_rate"], 0)
+                self.assertEqual(config[method]["remember_schedule"]["end"], 1)
+
     def test_noise_options_are_capability_based(self) -> None:
         result = self.service.noise_options("local-cifar10")
         self.assertEqual(result["dataset_state"], "clean")

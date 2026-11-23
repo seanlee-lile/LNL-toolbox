@@ -150,6 +150,28 @@ class QuickStartService:
             load_recipe_config(recipe), noise_selection, method_inputs=method_inputs,
         )
 
+    def review_payload(
+        self,
+        recipe_id: str,
+        dataset_alias: str | None,
+        noise_selection: QuickStartNoiseSelection,
+        method_inputs: Mapping[str, object],
+        patches: object,
+    ) -> dict[str, object]:
+        """Build the trusted parameter input used by both Quick Start clients."""
+        from lnl_toolbox.parameters import _QUICK_START_OVERRIDE_AUTH
+
+        return {
+            "recipe": recipe_id,
+            "dataset_alias": dataset_alias,
+            "patches": patches,
+            "acknowledge_paper_impact": True,
+            "automatic_validation_split": True,
+            "_quick_start_overrides": self.runtime_overrides(recipe_id, noise_selection, method_inputs),
+            "_quick_start_override_auth": _QUICK_START_OVERRIDE_AUTH,
+            "_quickstart_train_count": self.accepted_training_pool_size(dataset_alias) if dataset_alias else None,
+        }
+
     @staticmethod
     def _summary(alias: str, report) -> QuickStartDatasetSummary:
         profile = report.profile

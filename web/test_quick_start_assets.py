@@ -240,6 +240,19 @@ for(const schema of JSON.parse(fs.readFileSync(0,'utf8'))) {
     if(html.includes('通用配置参数') || html.includes('可修改的高级实验/实现选项')) throw Error('vague helper');
   }
   const panel=p.renderPlanParameters();
+  const advanced=panel.match(/<details[^>]*><summary>高级参数[^<]*<\/summary>([\s\S]*?)<\/details>/)?.[1] || '';
+  for(const field of schema.fields.filter(f=>f.visible!==false && /early_stopping/.test(f.path))) {
+    const attribute='data-qs-param="'+field.path+'"';
+    if(!advanced.includes(attribute) || panel.split(attribute).length!==2) {
+      throw Error(schema.method+': early stopping missing, misplaced or repeated '+field.path);
+    }
+  }
+  if(schema.method==='binary_risk') {
+    const card=panel.split('<legend>早停</legend>')[1]?.split('</fieldset>')[0] || '';
+    if(!card.includes('data-qs-param="trainer.early_stopping"') ||
+       !card.includes('data-qs-early-monitor="trainer.early_stopping" hidden') ||
+       !card.includes('data-qs-param="trainer.early_stopping_monitor"')) throw Error('missing grouped early stopping');
+  }
   if(panel.includes('>Normalize<') || panel.includes('>Scale<') || panel.includes('>Center<')) throw Error('old preprocessing names');
   if(schema.method==='dual_t') {
     for(const [prefix,title] of [['posterior_stage.model','初始模型'],['final_stage.model','最终模型']]) {

@@ -596,10 +596,17 @@
     return '<' + wrapper + ' class="qs-parameter-field"><span>' + esc(label) + '</span>' + control + note + '</' + wrapper + '>';
   }
 
-  function groupModelParameters(sections) {
+  function groupParameterCards(sections) {
     const models = new Map();
+    const monitors = new Map(sections.flat().filter(function (field) {
+      return field.path.endsWith(".early_stopping_monitor");
+    }).map(function (field) { return [field.path.slice(0, -"_monitor".length), field]; }));
+    const switches = new Set(sections.flat().map(function (field) { return field.path; }));
     return sections.map(function (fields) {
       return fields.flatMap(function (field) {
+        const monitor = monitors.get(field.path);
+        if (monitor) return [{earlyStopping:field, monitor}];
+        if (field.path.endsWith(".early_stopping_monitor") && switches.has(field.path.slice(0, -"_monitor".length))) return [];
         const match = /^((?:.+\.)?model)\.(name|variant|weights)$/.exec(field.path);
         if (!match) return [{field}];
         const prefix = match[1];
@@ -615,6 +622,12 @@
   }
 
   function renderParameterCard(card, segmentablePaths) {
+    if (card.earlyStopping) {
+      const owner = card.earlyStopping;
+      return '<fieldset class="qs-model-card"><legend>早停</legend>' +
+        renderParameterField(owner, false) + '<div data-qs-early-monitor="' + esc(owner.path) + '"' +
+        (parameterValue(owner) ? '' : ' hidden') + '>' + renderParameterField(card.monitor, false) + '</div></fieldset>';
+    }
     if (card.field) return renderParameterField(card.field, segmentablePaths.has(card.field.path));
     const parent = card.prefix.replace(/\.?model$/, "");
     const stage = trainingStageName(parent + ".epochs");
@@ -899,7 +912,7 @@
       return hasNodes && (explicit?.editable || gamma?.editable) && base?.editable && (name === "multistep" || group.fields.some(function (field) { return field.path === group.prefix + ".step_milestones"; })) ? [base.path] : [];
     }));
     const regular = fields.filter(function (field) { return !unusedBudgetPaths.has(field.path) && !movedPaths.has(field.path) && !schedulePaths.has(field.path) && !(segmentablePaths.has(field.path) && state.segmentedPaths[field.path] !== false); });
-    const [defaults, advanced, restricted] = groupModelParameters([
+    const [defaults, advanced, restricted] = groupParameterCards([
       regular.filter(function (field) { return field.display_group === "default"; }),
       regular.filter(function (field) { return field.display_group === "advanced"; }),
       fields.filter(function (field) { return field.display_group === "restricted" && !schedulePaths.has(field.path); })
@@ -1079,6 +1092,10 @@
       }
       markParameterEdited();
       updateModelOptions(panel, path);
+      if (path.endsWith(".early_stopping")) {
+        const monitor = Array.from(panel.querySelectorAll("[data-qs-early-monitor]")).find(node => node.dataset.qsEarlyMonitor === path);
+        if (monitor) monitor.hidden = !this.checked;
+      }
     }); });
     window.parameterListEditor.bind(panel, function (path) { return Array.from(panel.querySelectorAll('[data-qs-param]')).find(function (input) { return input.dataset.qsParam === path; }); });
     const budgetPaths = new Set(scheduleGroups(state.planSchema?.fields || []).map(function (group) { return scheduleBudgetField(group, state.planSchema.fields)?.path; }).filter(Boolean));

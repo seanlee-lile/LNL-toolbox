@@ -77,7 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="lnl",
         description="LNL Toolbox 统一命令行入口",
         epilog=(
-            "lnl papers list -> lnl show <paper> -> lnl validate <source> -> lnl run <source>"
+            text("lnl start 启动交互式实验引导", "Use lnl start for guided experiments")
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -87,6 +87,14 @@ def build_parser() -> argparse.ArgumentParser:
     show_paper.add_argument("--no-interactive", action="store_true", help=argparse.SUPPRESS)
     edit_paper = sub.add_parser("edit", help=text("交互编辑论文参数", "Interactively edit paper parameters"))
     edit_paper.add_argument("paper_id")
+    sub.add_parser(
+        "start",
+        help=text("按五步引导配置并启动实验", "Configure and launch an experiment in five steps"),
+        description=text(
+            "选择数据集 → 设置标签噪声 → 选择兼容方法 → 编辑运行计划 → 检查与确认。",
+            "Choose a dataset → Set label noise → Choose a compatible method → Edit the run plan → Review and confirm.",
+        ),
+    )
     lang = sub.add_parser("language", help=text("保存输出语言偏好", "Save the preferred output language"))
     lang.add_argument("value", choices=("zh", "en"))
 
@@ -1442,6 +1450,9 @@ def _dispatch(argv: list[str] | None = None) -> int:
         if args.command == "edit":
             from lnl_toolbox.cli.paper_editor import edit_paper, resolve_paper
             return edit_paper(resolve_paper(args.paper_id))
+        if args.command == "start":
+            from lnl_toolbox.cli.quick_start import start
+            return start()
         if args.command == "doctor":
             return _doctor(args)
         if args.command == "list":

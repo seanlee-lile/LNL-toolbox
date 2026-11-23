@@ -95,6 +95,11 @@ for(const profile of ['reproduction','metadata','smoke']){
         for method, recipe in command_console._parameter_registry()['formal_recipe_bindings'].items():
             config = command_console._config_payload(recipe)['config']
             fields = command_console._config_schema(recipe)['fields']
+            early_fields = [field for field in fields if field.get('visible') is not False
+                            and 'early_stopping' in field['path']]
+            with self.subTest(method=method):
+                self.assertTrue(early_fields)
+                self.assertEqual({field['display_group'] for field in early_fields}, {'advanced'})
             for control in training_stage_controls(config):
                 with self.subTest(method=method, path=control['path']):
                     matches = [field for field in fields if field['path'] == control['path']]
@@ -272,6 +277,7 @@ for(const profile of ['reproduction','metadata','smoke']){
                     self.assertNotIn(str(command_console.ROOT), saved["path"])
                     saved = post("/api/quick-start/review-config", {"recipe": "binary-risk-natarajan-reproduction", "patches": []})
                     self.assertFalse(Path(saved["output_dir"]).exists())
+                    self.assertRegex(Path(saved["output_dir"]).name, r"^binary-risk_\d{8}-\d{6}-\d{6}_synthetic_binary_2d$")
                     self.assertEqual(Path(saved["config_path"]).parent, Path(saved["output_dir"]))
                     for command in (f'lnl validate --config "{saved["path"]}"', f'lnl run --config "{saved["path"]}" --output-dir "{saved["output_dir"]}" --dry-run --review'):
                         job = wait(post("/api/run", {"command": command}))

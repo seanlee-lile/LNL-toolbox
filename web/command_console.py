@@ -12,6 +12,7 @@ import ipaddress
 import json
 import math
 import os
+import re
 import socket
 import shlex
 import subprocess
@@ -21,6 +22,7 @@ import tempfile
 import uuid
 import webbrowser
 from dataclasses import dataclass, field
+from datetime import datetime
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -249,7 +251,7 @@ class Job:
 JOBS: dict[str, Job] = {}
 JOBS_LOCK = threading.Lock()
 REVIEW_FILES: dict[str, tempfile.TemporaryDirectory] = {}
-REVIEW_CONFIG_CONTENTS: dict[str, str] = {}
+REVIEW_CONFIG_CONTENTS: dict[str, tuple[str, Path]] = {}
 
 
 def _cleanup_review_file(path: str) -> None:
@@ -335,6 +337,28 @@ def _reconcile_job_process(job: Job) -> None:
             job.returncode = returncode
 
 
+def _web_run_directory(config: dict[str, Any], recipe_id: str = "", dataset_alias: str = "") -> Path:
+    from lnl_toolbox.catalog import _display_method
+
+    data = config.get("data")
+    dataset = dataset_alias or (data.get("name", "") if isinstance(data, dict) else "")
+    recipe = _web_recipe_catalog().get(recipe_id) if recipe_id else None
+    paper = next((item.id for item in _web_paper_specs()
+                  if any(entry.recipe_id == recipe_id for entry in item.configs)), "") if recipe else ""
+    if not paper:
+        execution = config.get("execution")
+        runner = execution.get("runner", "") if isinstance(execution, dict) else ""
+        paper = str(_display_method(config, runner) or getattr(recipe, "method", "") or recipe_id or "experiment")
+    dataset = dataset or getattr(recipe, "dataset", "") or "dataset"
+
+    def component(value: object, fallback: str) -> str:
+        return re.sub(r"[^\w-]+", "-", str(value)).strip("-_")[:60] or fallback
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    name = f"{component(paper, 'experiment')}_{timestamp}_{component(dataset, 'dataset')}"
+    return ROOT / "artifacts" / "web-runs" / name
+
+
 def _start_process(key: str, command: list[str], display_command: str) -> Job:
     child_env = os.environ.copy()
     # Windows Python processes may otherwise select the GBK console codec
@@ -347,7 +371,7 @@ def _start_process(key: str, command: list[str], display_command: str) -> Job:
         command=command,
         display_command=display_command,
     )
-    from web.training_status import infer_training_context
+    from web.training_status import _option_value, infer_training_context
 
     context = infer_training_context(command, ROOT)
     if (
@@ -359,7 +383,22 @@ def _start_process(key: str, command: list[str], display_command: str) -> Job:
         # A recipe's output_root can produce a runner-defined subdirectory.
         # Give Web-owned formal runs a unique explicit location instead, so
         # polling never guesses from the newest artifact directory.
-        web_output = ROOT / "artifacts" / "web-runs" / job.job_id
+        import yaml
+
+        from lnl_toolbox.catalog import load_yaml
+
+        recipe_id = _option_value(command, "--recipe") or ""
+        config = {}
+        if context.config_path and context.config_path.is_file():
+            try:
+                config = load_yaml(context.config_path)
+            except (OSError, ValueError, TypeError, yaml.YAMLError):
+                pass  # The CLI reports invalid configuration.
+        elif not recipe_id:
+            index = command.index("run") + 1
+            if index < len(command) and not command[index].startswith("-"):
+                recipe_id = command[index]
+        web_output = _web_run_directory(config, recipe_id, _option_value(command, "--data") or "")
         command = [*command, "--output-dir", str(web_output.relative_to(ROOT))]
         job.command = command
         job.display_command = f"{display_command} --output-dir {web_output.relative_to(ROOT)}"
@@ -1168,7 +1207,6 @@ from lnl_toolbox.parameters import (
     _assert_locked_parameters_unchanged,
     _paper_parameter_changes,
     _record_paper_parameter_status,
-    _QUICK_START_OVERRIDE_AUTH,
     _save_config,
 )
 
@@ -1180,22 +1218,19 @@ def _quick_start_config(payload: dict[str, object], *, review: bool) -> dict[str
     run_id = uuid.uuid4().hex if review else str(payload.get("run_id") or uuid.uuid4().hex)
     if uuid.UUID(run_id).hex != run_id:
         raise ValueError("invalid run identifier")
-    run_dir = ROOT / "artifacts" / "web-runs" / run_id
-    locations = {"run_id": run_id, "output_dir": str(run_dir), "config_path": str(run_dir / "config.yaml")}
     if not review:
         content = payload.get("content")
-        destination = run_dir / "config.yaml"
-        try:
-            destination.resolve().relative_to(ROOT.resolve())
-        except ValueError as exc:
-            raise ValueError("运行配置必须保存在项目目录内") from exc
-        if destination.resolve() in _builtin_config_paths():
-            raise ValueError("不能覆盖内置论文配置")
         with JOBS_LOCK:
-            reviewed_content = REVIEW_CONFIG_CONTENTS.get(run_id)
-            if not isinstance(content, str) or reviewed_content is None or content != reviewed_content:
+            reviewed = REVIEW_CONFIG_CONTENTS.get(run_id)
+            if not isinstance(content, str) or reviewed is None or content != reviewed[0]:
                 raise ValueError("启动配置与已验证内容不一致或已过期，请重新预演。")
-            destination.parent.mkdir(parents=True, exist_ok=True)
+            reviewed_content, run_dir = reviewed
+            destination = run_dir / "config.yaml"
+            try:
+                destination.resolve().relative_to(ROOT.resolve())
+            except ValueError as exc:
+                raise ValueError("运行配置必须保存在项目目录内") from exc
+            destination.parent.mkdir(parents=True, exist_ok=False)
             destination.write_text(reviewed_content, encoding="utf-8")
             REVIEW_CONFIG_CONTENTS.pop(run_id, None)
         return {
@@ -1203,7 +1238,9 @@ def _quick_start_config(payload: dict[str, object], *, review: bool) -> dict[str
             "bytes": destination.stat().st_size,
             "content": reviewed_content,
             "dataset_alias": payload.get("dataset_alias"),
-            **locations,
+            "run_id": run_id,
+            "output_dir": str(run_dir),
+            "config_path": str(destination),
         }
     if body.get("recipe") and isinstance(payload.get("noise"), dict):
         from web.quick_start_api import SERVICE, _selection
@@ -1212,22 +1249,24 @@ def _quick_start_config(payload: dict[str, object], *, review: bool) -> dict[str
         if not isinstance(method_inputs, dict):
             raise ValueError("method_inputs must be an object")
         selection = _selection({"noise": payload["noise"]})
-        body["_quick_start_overrides"] = SERVICE.runtime_overrides(
-            str(body["recipe"]), selection, method_inputs,
-        )
-        body["_quick_start_override_auth"] = _QUICK_START_OVERRIDE_AUTH
-        if body.get("dataset_alias"):
-            body["_quickstart_train_count"] = SERVICE.accepted_training_pool_size(str(body["dataset_alias"]))
+        body.update(SERVICE.review_payload(
+            str(body["recipe"]), body.get("dataset_alias"), selection, method_inputs, body.get("patches"),
+        ))
     directory = tempfile.TemporaryDirectory(prefix="lnl-review-")
     path = str(Path(directory.name) / "config.yaml")
     try:
         saved = _save_config(body, for_review=True, destination=Path(path))
+        import yaml
+
+        config = yaml.safe_load(str(saved["content"]))
+        run_dir = _web_run_directory(config, str(body.get("recipe") or body.get("recipe_hint") or ""),
+                                     str(body.get("dataset_alias") or ""))
     except Exception:
         directory.cleanup()
         raise
     with JOBS_LOCK:
         REVIEW_FILES[path] = directory
-        REVIEW_CONFIG_CONTENTS[run_id] = str(saved["content"])
+        REVIEW_CONFIG_CONTENTS[run_id] = (str(saved["content"]), run_dir)
     # Clean abandoned requests too; an active CLI owns its file until exit.
     def expire() -> None:
         with JOBS_LOCK:
@@ -1239,7 +1278,7 @@ def _quick_start_config(payload: dict[str, object], *, review: bool) -> dict[str
     timer = threading.Timer(600, expire)
     timer.daemon = True
     timer.start()
-    return {**saved, **locations}
+    return {**saved, "run_id": run_id, "output_dir": str(run_dir), "config_path": str(run_dir / "config.yaml")}
 
 
 def _job_payload(job: Job) -> dict[str, object]:

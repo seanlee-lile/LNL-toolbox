@@ -431,9 +431,12 @@ def _parameter_display_group(field: dict[str, object], method: str) -> str:
 
     if not field.get("editable"):
         return "restricted"
+    path = str(field.get("path", ""))
+    if path == "data.preprocessing":
+        return "advanced"
     if field.get("model_editor"):
         return "default"
-    if tuple(str(field.get("path", "")).split(".")) in SPLIT_COUNT_PATHS:
+    if tuple(path.split(".")) in SPLIT_COUNT_PATHS:
         return "default"
     if (
         field.get("kind") in {"list", "object"}
@@ -450,12 +453,11 @@ def _parameter_display_group(field: dict[str, object], method: str) -> str:
     selected = (set(policy.get("common", ())) | set(method_paths)) - set(excluded)
     if field.get("presentation") == "hidden":
         return "advanced"
-    path = str(field.get("path", ""))
     if path in selected:
         return "default"
     if path in {
         "data.validation_size", "data.augment", "data.strong_augment",
-        "data.preprocessing", "data.folds", "data.fold_index",
+        "data.folds", "data.fold_index",
         "trainer.max_steps", "noise.path", "dld.feature_extractor.source",
         "pipeline.weight_provider.artifact_path", "posterior_stage.rate_estimator",
         "selector.keep_rate.start", "selector.keep_rate.end",
@@ -1199,7 +1201,10 @@ def schema_from_payload(payload: dict[str, Any], *, recipe_hint=None, split_refe
                 source = source.get(part) if isinstance(source, dict) else None
             if isinstance(source, int) and not isinstance(source, bool):
                 field["split_reference"] = {"count": source, "total": original_count}
-    fields.extend(_stage_early_stopping_fields(payload["config"]))
+    early_stopping_fields = _stage_early_stopping_fields(payload["config"])
+    early_stopping_paths = {field["path"] for field in early_stopping_fields}
+    fields = [field for field in fields if field["path"] not in early_stopping_paths]
+    fields.extend(early_stopping_fields)
     display_order = _parameter_registry().get("default_parameter_paths", {}).get("methods", {}).get(_method_registry_key(method), ())
     positions = {path: index for index, path in enumerate(display_order)}
     fields.sort(key=lambda field: positions.get(str(field["path"]), len(positions))
@@ -1287,7 +1292,7 @@ def _stage_early_stopping_fields(config: dict[str, Any]) -> list[dict[str, objec
     return [{
         "path": control["path"], "label": _parameter_user_label(control["path"], method),
         "value": control["value"], "kind": "boolean", "nullable": False,
-        "level": "basic", "display_group": "default", "editable": True,
+        "level": "advanced", "display_group": "advanced", "editable": True,
         "visible": True, "presentation": "parameter", "choices": None,
         "note": _parameter_user_note(control["path"], "", method),
         "research_group": "", "research_category": "", "linked_fields": [],
@@ -2042,7 +2047,7 @@ def prepare_config(payload: object, *, for_review: bool = False) -> tuple[dict[s
                 rate = optimizer_rate if "optimizer.lr" in changed_rates else schedule_rate
                 _set_config_path(parsed, "optimizer.lr", rate)
                 _set_config_path(parsed, "scheduler.initial_lr", rate)
-        if method == "apl":
+        if method == "apl" or system_overrides is not None:
             _synchronize_web_derived_parameters(parsed, method)
         parsed = synchronize_experiment_seed(parsed)
         _assert_locked_parameters_unchanged(
