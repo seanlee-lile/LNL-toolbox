@@ -1,5 +1,31 @@
 # Toolbox modularization progress
 
+## Recipe Identity Migration Phase 1C — third batch
+
+Base: `code@208d9d0dbb57a98ab9b2b8777dfa3a02f32d4464` (pushed Batch 2).
+This batch converts four entries in place: `binary-risk-natarajan-1epoch`,
+`importance-reweighting-binary-high-dim-smoke`, `cifar10-t-revision-sym20-short`,
+and `cifar10-foundation-smoke`. The manifest now has 10 explicit and 58
+legacy entries. Paths, order, YAML, Paper/Web bindings and the frozen fixture
+are unchanged. DSS and the higher-coupling entries are deferred.
+
+- The real Compose list and create commands are checked against both forms.
+  Foundation smoke uses its existing canonical ID and source path; the
+  recommendation list, output guidance and generated YAML are compared.
+- Dedicated-runner checks compare CLI validation, no-data dry-run, direct
+  YAML lookup and seed/matrix Sweep plans. T-Revision uses its existing
+  `t_revision.revision.epochs` budget field, not `trainer.epochs`.
+- No new raw manifest consumer was found. External consumers still need to
+  support both path strings and explicit objects.
+- Focused: 169 passed / 1 Node skip. Main: 1174 passed / 21 skipped. Web:
+  110 passed / 31 skipped. Scratch: 196 passed / 10 skipped. No failures or errors.
+- External wheel and sdist installs matched the frozen snapshot: 68 unique
+  IDs and resources, 71 packaged YAMLs, discovery 63/4/68/4, 26 Papers,
+  56 ordered associations and 26 defaults. Installed CLI passed; both
+  installs read the distribution file list once per index build.
+- Scope check: three approved files, no additions. Wait for human review
+  before staging, committing, pushing, or migrating further.
+
 ## Recipe Identity Migration Phase 1C — second batch (2026-11-23)
 
 Base: `code@868e4235d39fa2b187db5a278b6f8e0ab9712b48` (pushed Batch 1).

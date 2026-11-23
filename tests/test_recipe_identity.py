@@ -37,6 +37,12 @@ PAPER_VARIANT_BATCH = {
     "cifar10-cnlcu-hard-smoke": "cnlcu",
     "importance-reweighting-binary-high-dim": "importance-reweighting",
 }
+DEDICATED_BATCH = (
+    "binary-risk-natarajan-1epoch",
+    "importance-reweighting-binary-high-dim-smoke",
+    "cifar10-t-revision-sym20-short",
+)
+COMPOSE_BATCH_RECIPE = "cifar10-foundation-smoke"
 HISTORICAL_SUMMARIES = {
     "recipe": "ac7b430c213e331fab7ef8c044d9ff384473524e4fb4f1ae35d918790133eb49",
     "paper": "ef2af29c25c75641f5ec4222de69e774ac5d5092d45c5b50cfcc16087896d09c",
@@ -325,12 +331,13 @@ class RecipeIdentityTest(unittest.TestCase):
             (ROOT / "src/lnl_toolbox/cli/data/recipe_catalog.json").read_text(encoding="utf-8")
         )
         entries = raw["recipes"]
+        explicit_ids = {*batch, pilot, *PAPER_VARIANT_BATCH, *DEDICATED_BATCH, COMPOSE_BATCH_RECIPE}
         self.assertEqual(
             [item for item in entries if isinstance(item, dict)],
-            [{key: expected[recipe_id][key] for key in ("id", "path", "profile")}
-             for recipe_id in sorted((*batch, pilot, *PAPER_VARIANT_BATCH))],
+            [{key: row[key] for key in ("id", "path", "profile")}
+             for row in self.expected["recipes"] if row["id"] in explicit_ids],
         )
-        self.assertEqual(sum(isinstance(item, str) for item in entries), 62)
+        self.assertEqual(sum(isinstance(item, str) for item in entries), 58)
         self.assertEqual(
             [item if isinstance(item, str) else item["path"] for item in entries],
             [row["path"] for row in self.expected["recipes"]],
@@ -443,6 +450,73 @@ class RecipeIdentityTest(unittest.TestCase):
         for key, (_, plans) in explicit.items():
             for old, new in zip(legacy[key][1], plans):
                 _validate_existing_manifest(_new_manifest(old), new)
+
+    def test_dedicated_and_compose_batch_preserves_cli_and_execution_projection(self):
+        batch = (*DEDICATED_BATCH, COMPOSE_BATCH_RECIPE)
+        raw = json.loads(
+            (ROOT / "src/lnl_toolbox/cli/data/recipe_catalog.json").read_text(encoding="utf-8")
+        )
+        legacy_manifest = json.dumps({
+            **raw, "recipes": [
+                item["path"] if isinstance(item, dict) and item["id"] in batch else item
+                for item in raw["recipes"]
+            ],
+        })
+        expected = {row["id"]: row for row in self.expected["recipes"]}
+        parser = build_parser()
+
+        def cli(*args):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(list(args)), 0, out.getvalue())
+            return out.getvalue()
+
+        def observe():
+            listed = cli("compose", "list", "--runner", "supervised")
+            self.assertIn(f"  - {COMPOSE_BATCH_RECIPE}\n", listed)
+            with tempfile.TemporaryDirectory() as folder:
+                destination = Path(folder) / "composed.yaml"
+                # Capture the YAML selected by the real Compose create handler.
+                with patch("lnl_toolbox.cli.main.load_yaml", wraps=catalog.load_yaml) as load:
+                    composed = cli("compose", "create", "--base", COMPOSE_BATCH_RECIPE,
+                                   "--output", str(destination))
+                load.assert_called_once_with(ROOT / expected[COMPOSE_BATCH_RECIPE]["path"])
+                generated = catalog.load_yaml(destination)
+            self.assertIn(str(destination), composed)
+            self.assertIn(COMPOSE_BATCH_RECIPE, composed)
+
+            observed = {}
+            for key in batch:
+                with self.subTest(recipe=key):
+                    row = expected[key]
+                    config, path, recipe, _ = _load_source(parser.parse_args(["run", "--recipe", key]))
+                    self.assertEqual((recipe.id, recipe.profile, recipe.runner, recipe.method),
+                                     (key, row["profile"], row["runner"], row["method"]))
+                    self.assertEqual(path, ROOT / row["path"])
+                    self.assertEqual(config_hash(catalog.load_recipe_config(recipe)),
+                                     row["normalized_config_hash"])
+                    direct = _load_source(parser.parse_args(["run", "--config", str(path)]))
+                    self.assertEqual(direct[:3], (config, path, None))
+                    self.assertEqual(row["paper_associations"], [])
+                    self.assertEqual(row["web_formal_methods"], [])
+                    budget_path = ("t_revision.revision.epochs" if recipe.runner == "t_revision"
+                                   else "trainer.epochs")
+                    observed[key] = (
+                        recipe, config, cli("validate", "--recipe", key),
+                        cli("run", "--recipe", key, "--dry-run", "--no-check-data"),
+                        [plan_sweep(config, [8, 3], recipe=key, matrix=m)
+                         for m in (None, {budget_path: [1, 2]})],
+                    )
+            return listed, composed.replace(str(destination), "<destination>"), generated, observed
+
+        explicit = observe()
+        real_files = catalog.resources.files
+        with patch.object(catalog.resources, "files") as files:
+            fake = files.return_value
+            fake.joinpath.return_value.read_text.return_value = legacy_manifest
+            files.side_effect = lambda package: fake if package == "lnl_toolbox.cli" else real_files(package)
+            legacy = observe()
+        self.assertEqual(explicit, legacy)
 
     def test_installed_catalog_reads_distribution_once_per_build_and_revalidates(self):
         package_map = _package_map(ROOT)

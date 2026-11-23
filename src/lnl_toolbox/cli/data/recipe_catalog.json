@@ -7,7 +7,11 @@
       "path": "configs/experiment/apl_cifar10_noise04_reproduction.yaml",
       "profile": "reproduction"
     },
-    "configs/experiment/binary_risk_natarajan_1epoch.yaml",
+    {
+      "id": "binary-risk-natarajan-1epoch",
+      "path": "configs/experiment/binary_risk_natarajan_1epoch.yaml",
+      "profile": "experiment"
+    },
     "configs/experiment/binary_risk_natarajan_reproduction.yaml",
     "configs/experiment/ca2c_cifar100_reproduction.yaml",
     "configs/experiment/ca2c_cifar10_smoke.yaml",
@@ -36,7 +40,11 @@
     "configs/experiment/cifar10_dividemix_smoke.yaml",
     "configs/experiment/cifar10_lend_smoke.yaml",
     "configs/experiment/lend_cifar10_reproduction.yaml",
-    "configs/experiment/cifar10_foundation_smoke.yaml",
+    {
+      "id": "cifar10-foundation-smoke",
+      "path": "configs/experiment/cifar10_foundation_smoke.yaml",
+      "profile": "smoke"
+    },
     "configs/experiment/cifar10_smoke.yaml",
     "configs/experiment/cifar10_symmetric_cdr_reproduction.yaml",
     "configs/experiment/cifar10_symmetric_cdr_smoke.yaml",
@@ -62,7 +70,11 @@
     "configs/experiment/fine_cifar100n_smoke.yaml",
     "configs/experiment/gce_cifar10_noise02_reproduction.yaml",
     "configs/experiment/gce_cifar10_noise02_smoke.yaml",
-    "configs/experiment/importance_reweighting_binary_high_dim_smoke.yaml",
+    {
+      "id": "importance-reweighting-binary-high-dim-smoke",
+      "path": "configs/experiment/importance_reweighting_binary_high_dim_smoke.yaml",
+      "profile": "smoke"
+    },
     "configs/experiment/importance_reweighting_binary_smoke.yaml",
     "configs/experiment/jocor_cifar10_symmetric05_reproduction.yaml",
     "configs/experiment/jocor_cifar10_symmetric05_smoke.yaml",
@@ -83,7 +95,11 @@
     "configs/reproduction/cifar10_dual_t_sym20_evidence.yaml",
     "configs/reproduction/cifar10_dividemix_sym20.yaml",
     "configs/reproduction/cifar10_pcse_reproduction.yaml",
-    "configs/reproduction/cifar10_t_revision_sym20_short.yaml",
+    {
+      "id": "cifar10-t-revision-sym20-short",
+      "path": "configs/reproduction/cifar10_t_revision_sym20_short.yaml",
+      "profile": "reproduction"
+    },
     "configs/reproduction/cifar10_t_revision_sym20_reproduction.yaml",
     {
       "id": "importance-reweighting-binary-high-dim",
