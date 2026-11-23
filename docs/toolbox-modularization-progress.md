@@ -1,5 +1,29 @@
 # Toolbox modularization progress
 
+## Recipe Identity Migration Phase 1C — final standard Paper smoke batch
+
+Base: `code@86c3d547c8237399ccef524d5885887690e16319` (pushed Batch 5).
+Converted only `cwd-cifar10-smoke`, `fine-cifar100n-smoke`, and
+`cifar10-lend-smoke` in place. The registry has 22 explicit and 46 legacy
+entries. No YAML, path, ordering, Paper/Web metadata, or frozen fixture
+changes.
+
+- The before/after test compares ordered Paper associations, CLI smoke
+  recommendations, formal defaults and real `papers list/show/config`
+  output for all three Papers. CWD remains two-class with no transition
+  artifact input; FINE still uses CIFAR-100 synthetic symmetric noise
+  without an external label resource; LEND smoke remains distinct from
+  the formal default and uses the paper-equation implementation.
+- Deferred recipes are untouched. Raw manifest consumers still need to
+  accept both path strings and explicit identity objects.
+- Focused: 172 passed / 1 Node skip. Isolated wheel and sdist-derived
+  install checks match the frozen snapshot and installed CLI output.
+  Each installed index build still reads the distribution file list once.
+- Full suites: Main 1177 passed / 21 skipped; Web 110 passed / 31 skipped;
+  Scratch 196 passed / 10 skipped. Zero failures and errors. Only the
+  three approved existing files changed. Await human review; no stage,
+  commit, push, or next batch.
+
 ## Recipe Identity Migration Phase 1C — standard Paper smoke recommendations
 
 Base: `code@9fef04a020c496483f30684467651bba7d9aecb2` (pushed Batch 4).

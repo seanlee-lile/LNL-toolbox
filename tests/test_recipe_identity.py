@@ -57,6 +57,11 @@ STANDARD_PAPER_SMOKE_BATCH = {
     "l2rw-cifar10-smoke": "l2rw",
     "cifar10-t-revision-smoke": "t-revision",
 }
+FINAL_STANDARD_PAPER_SMOKE_BATCH = {
+    "cwd-cifar10-smoke": "cwd",
+    "fine-cifar100n-smoke": "fine",
+    "cifar10-lend-smoke": "lend",
+}
 HISTORICAL_SUMMARIES = {
     "recipe": "ac7b430c213e331fab7ef8c044d9ff384473524e4fb4f1ae35d918790133eb49",
     "paper": "ef2af29c25c75641f5ec4222de69e774ac5d5092d45c5b50cfcc16087896d09c",
@@ -348,13 +353,14 @@ class RecipeIdentityTest(unittest.TestCase):
         explicit_ids = {
             *batch, pilot, *PAPER_VARIANT_BATCH, *DEDICATED_BATCH,
             COMPOSE_BATCH_RECIPE, *PAPER_SMOKE_BATCH, *STANDARD_PAPER_SMOKE_BATCH,
+            *FINAL_STANDARD_PAPER_SMOKE_BATCH,
         }
         self.assertEqual(
             [item for item in entries if isinstance(item, dict)],
             [{key: row[key] for key in ("id", "path", "profile")}
              for row in self.expected["recipes"] if row["id"] in explicit_ids],
         )
-        self.assertEqual(sum(isinstance(item, str) for item in entries), 49)
+        self.assertEqual(sum(isinstance(item, str) for item in entries), 46)
         self.assertEqual(
             [item if isinstance(item, str) else item["path"] for item in entries],
             [row["path"] for row in self.expected["recipes"]],
@@ -474,6 +480,30 @@ class RecipeIdentityTest(unittest.TestCase):
     def test_standard_paper_smoke_batch_preserves_order_and_cli_recommendations(self):
         self._assert_paper_smoke_batch(STANDARD_PAPER_SMOKE_BATCH)
 
+    def test_final_standard_smoke_batch_preserves_paper_and_runtime_contracts(self):
+        self._assert_paper_smoke_batch(FINAL_STANDARD_PAPER_SMOKE_BATCH)
+
+    def _assert_final_smoke_contract(self, recipe, parsed):
+        requirements = resolve_runner(parsed).requirements(parsed)
+        self.assertFalse(requirements.prerequisites)
+        if recipe.id == "cwd-cifar10-smoke":
+            self.assertEqual(parsed["data"]["name"], "cifar10_airplane_automobile")
+            self.assertEqual(requirements.implemented_variant, "binary_protocol")
+            self.assertEqual(requirements.exact_classes, frozenset({2}))
+            self.assertNotIn("transition_artifact", parsed["cwd"])
+        elif recipe.id == "fine-cifar100n-smoke":
+            from web.external_resources import resources
+
+            self.assertEqual(parsed["data"]["name"], "cifar100")
+            self.assertEqual(parsed["noise"]["name"], "symmetric")
+            self.assertNotIn("path", parsed["noise"])
+            self.assertEqual(resources(parsed, ROOT), [])
+        elif recipe.id == "cifar10-lend-smoke":
+            from lnl_toolbox.algorithms.lend.config import LENDConfig
+
+            self.assertEqual(recipe.profile, "smoke")
+            self.assertEqual(LENDConfig.from_mapping(parsed).implementation_variant, "paper_equation")
+
     def _assert_paper_smoke_batch(self, batch):
         raw = json.loads(
             (ROOT / "src/lnl_toolbox/cli/data/recipe_catalog.json").read_text(encoding="utf-8")
@@ -534,6 +564,8 @@ class RecipeIdentityTest(unittest.TestCase):
                             runner = resolve_runner(parsed)
                             self.assertEqual(runner.name, row["runner"])
                             self.assertFalse(getattr(runner.requirements(parsed), "prerequisites", ()))
+                        if recipe.id == recommended and recommended in FINAL_STANDARD_PAPER_SMOKE_BATCH:
+                            self._assert_final_smoke_contract(recipe, parsed)
                         if recipe.id == "l2rw-cifar10-smoke":
                             from_path = _load_source(parser.parse_args(
                                 ["run", "--config", str(recipe.config_path)]
