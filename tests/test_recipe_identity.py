@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from contextlib import redirect_stdout
 import hashlib
 from importlib import metadata
+import io
 import json
 from pathlib import Path, PurePosixPath
 import sys
@@ -20,7 +22,7 @@ except ModuleNotFoundError:
 import yaml
 
 from lnl_toolbox import catalog
-from lnl_toolbox.cli.main import _load_source, build_parser
+from lnl_toolbox.cli.main import _load_source, build_parser, main
 from lnl_toolbox.training.results import config_hash
 from lnl_toolbox.training.sweep import _new_manifest, _validate_existing_manifest, plan_sweep
 
@@ -30,6 +32,11 @@ BASELINE = Path(__file__).with_name("fixtures") / "recipe_identity_baseline.json
 BASE_SHA = "c9a3234a03db7311c0dd70e6700ab5ae5971303a"
 CONFIG_DEST = "share/lnl-toolbox/configs/"
 VIEWS = ((False, False), (False, True), (True, False), (True, True))
+PAPER_VARIANT_BATCH = {
+    "apl-cifar10-noise04-reproduction": "apl",
+    "cifar10-cnlcu-hard-smoke": "cnlcu",
+    "importance-reweighting-binary-high-dim": "importance-reweighting",
+}
 HISTORICAL_SUMMARIES = {
     "recipe": "ac7b430c213e331fab7ef8c044d9ff384473524e4fb4f1ae35d918790133eb49",
     "paper": "ef2af29c25c75641f5ec4222de69e774ac5d5092d45c5b50cfcc16087896d09c",
@@ -321,9 +328,9 @@ class RecipeIdentityTest(unittest.TestCase):
         self.assertEqual(
             [item for item in entries if isinstance(item, dict)],
             [{key: expected[recipe_id][key] for key in ("id", "path", "profile")}
-             for recipe_id in sorted((*batch, pilot))],
+             for recipe_id in sorted((*batch, pilot, *PAPER_VARIANT_BATCH))],
         )
-        self.assertEqual(sum(isinstance(item, str) for item in entries), 65)
+        self.assertEqual(sum(isinstance(item, str) for item in entries), 62)
         self.assertEqual(
             [item if isinstance(item, str) else item["path"] for item in entries],
             [row["path"] for row in self.expected["recipes"]],
@@ -376,6 +383,66 @@ class RecipeIdentityTest(unittest.TestCase):
                         previous = plan_sweep(old_config, [8, 3], matrix=matrix, recipe=old_recipe.id)
                         self.assertEqual(current, previous)
                         _validate_existing_manifest(_new_manifest(previous), current)
+
+    def test_paper_variant_batch_preserves_selection_path_and_sweep(self):
+        raw = json.loads(
+            (ROOT / "src/lnl_toolbox/cli/data/recipe_catalog.json").read_text(encoding="utf-8")
+        )
+        legacy_manifest = json.dumps({
+            **raw, "recipes": [
+                item["path"] if isinstance(item, dict) and item["id"] in PAPER_VARIANT_BATCH else item
+                for item in raw["recipes"]
+            ],
+        })
+        expected_papers = {paper["id"]: paper for paper in self.expected["papers"]}
+        parser = build_parser()
+
+        def observe():
+            out = io.StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["papers", "list", "--format", "json"]), 0)
+            self.assertEqual(
+                [(item["id"], item["recommended"]) for item in json.loads(out.getvalue())],
+                [(paper["id"], paper["cli_recommended"]) for paper in self.expected["papers"]],
+            )
+            papers = {paper.id: paper for paper in catalog.load_papers(ROOT)}
+            selected = {}
+            for key, paper_id in PAPER_VARIANT_BATCH.items():
+                with self.subTest(recipe=key):
+                    paper, expected = papers[paper_id], expected_papers[paper_id]
+                    self.assertEqual([asdict(item) for item in paper.configs], expected["associations"])
+                    association = next(item for item in paper.configs if item.recipe_id == key)
+                    paper_config, recipe = catalog.select_paper_config(
+                        paper, profile=association.profile, variant=association.variant, root=ROOT
+                    )
+                    self.assertEqual(paper_config, association)
+                    self.assertEqual(recipe.id, key)
+                    default = catalog.default_paper_config(paper, root=ROOT)[1].id
+                    self.assertEqual(default, expected["default"])
+                    self.assertNotEqual(default, key)
+                    config, path, bound, _ = _load_source(parser.parse_args(["run", "--recipe", key]))
+                    direct, direct_path, unbound, _ = _load_source(
+                        parser.parse_args(["run", "--config", str(path)])
+                    )
+                    self.assertEqual(bound, recipe)
+                    self.assertEqual((direct, direct_path, unbound), (config, path, None))
+                    selected[key] = (recipe, [
+                        plan_sweep(config, [8, 3], recipe=key, matrix=matrix)
+                        for matrix in (None, {"trainer.epochs": [1, 2]})
+                    ])
+            return selected
+
+        explicit = observe()
+        real_files = catalog.resources.files
+        with patch.object(catalog.resources, "files") as files:
+            fake = files.return_value
+            fake.joinpath.return_value.read_text.return_value = legacy_manifest
+            files.side_effect = lambda package: fake if package == "lnl_toolbox.cli" else real_files(package)
+            legacy = observe()
+        self.assertEqual(explicit, legacy)
+        for key, (_, plans) in explicit.items():
+            for old, new in zip(legacy[key][1], plans):
+                _validate_existing_manifest(_new_manifest(old), new)
 
     def test_installed_catalog_reads_distribution_once_per_build_and_revalidates(self):
         package_map = _package_map(ROOT)

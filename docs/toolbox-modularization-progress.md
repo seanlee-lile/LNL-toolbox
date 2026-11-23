@@ -1,5 +1,31 @@
 # Toolbox modularization progress
 
+## Recipe Identity Migration Phase 1C — second batch (2026-11-23)
+
+Base: `code@868e4235d39fa2b187db5a278b6f8e0ab9712b48` (pushed Batch 1).
+The frozen identity fixture is unchanged.
+
+- In-place conversions: `apl-cifar10-noise04-reproduction`, `cifar10-cnlcu-hard-smoke`,
+  and `importance-reweighting-binary-high-dim`. Registry: 6 explicit / 62
+  legacy. No YAML, path, order, visibility, or runtime metadata changes.
+- Production selection preserves APL sym40 / paper-aligned, CNLCU-H (with
+  CNLCU-S still the CLI smoke recommendation), and the synthetic high-dim
+  Importance Reweighting variant. Tests compare ordered Paper associations,
+  formal defaults, CLI recommendations, direct YAML loads, and Sweep plans
+  against the legacy form. UCI Heart and its Web external-resource contract
+  are outside this batch and untouched.
+- Raw JSON consumers must still accept both path strings and explicit objects.
+  There is no new schema change or new external-resource dependency.
+- Focused: 168 passed / 1 Node skip. Source and isolated wheel/sdist
+  installs matched the frozen identities, 68 unique resources and 71
+  packaged YAMLs, the 63/4/68/4 discovery views, 26 Papers, 56 ordered
+  associations and 26 defaults. Installed CLI recommendations matched;
+  both installs read the distribution file list once per index build.
+- Full regressions: Main 1173 passed / 21 skipped, Web 110 passed / 31
+  skipped, Scratch 196 passed / 10 skipped; zero failures or errors.
+  Scope check: three approved existing files only; no additions.
+  Next step: human review. No stage, commit, push, or next batch.
+
 ## Recipe Identity Migration Phase 1C — first low-risk batch (2026-11-22)
 
 Base: `code@e8f6f1c554ae05e657ff6a692f98f4b8457acc49` (pushed Phase 1B).
