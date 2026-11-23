@@ -1,5 +1,30 @@
 # Toolbox modularization progress
 
+## Recipe Identity Migration Phase 1C — first Paper smoke recommendation batch
+
+Base: `code@07fb9dc38207b7585b1d09aa5fef1ffd4199cb98` (pushed Batch 3).
+Only the APL, CNLCU-S, Co-teaching and CDR smoke recommendations were
+converted in place; the manifest contains 14 explicit and 54 legacy
+entries. YAML, registry order, Paper/Web metadata, and the frozen fixture
+are unchanged.
+
+- The before/after test calls the real CLI `papers list/show/config`
+  commands. It compares all ordered associations, formal defaults and
+  per-variant selections for the four Papers, including CNLCU-S and
+  CNLCU-H together and the other APL variants. Selected paths, runner,
+  method and normalized configuration hashes are checked.
+- Paper consumes canonical IDs through catalog APIs, not raw manifest
+  entry types. External raw JSON consumers still need to accept both
+  path strings and explicit objects. Deferred recipes are unchanged.
+- Focused: 170 passed / 1 Node skip. Isolated wheel and sdist-derived
+  installs matched the frozen snapshot, ordered CLI discovery and Paper
+  recommendations. Each installed index build still reads the distribution
+  file list once.
+- Full suites: Main 1175 passed / 21 skipped; Web 110 passed / 31 skipped;
+  Scratch 196 passed / 10 skipped. Zero failures and errors. The three
+  approved files are the only changes. Await review; no stage, commit,
+  push, or next batch.
+
 ## Recipe Identity Migration Phase 1C — third batch
 
 Base: `code@208d9d0dbb57a98ab9b2b8777dfa3a02f32d4464` (pushed Batch 2).

@@ -1,7 +1,11 @@
 {
   "recipes": [
     "configs/experiment/apl_cifar10_noise02_reproduction.yaml",
-    "configs/experiment/apl_cifar10_noise02_smoke.yaml",
+    {
+      "id": "apl-cifar10-noise02-smoke",
+      "path": "configs/experiment/apl_cifar10_noise02_smoke.yaml",
+      "profile": "smoke"
+    },
     {
       "id": "apl-cifar10-noise04-reproduction",
       "path": "configs/experiment/apl_cifar10_noise04_reproduction.yaml",
@@ -29,10 +33,18 @@
       "path": "configs/experiment/cifar10_cnlcu_hard_smoke.yaml",
       "profile": "smoke"
     },
-    "configs/experiment/cifar10_cnlcu_soft_smoke.yaml",
+    {
+      "id": "cifar10-cnlcu-soft-smoke",
+      "path": "configs/experiment/cifar10_cnlcu_soft_smoke.yaml",
+      "profile": "smoke"
+    },
     "configs/experiment/cnlcu_cifar10_reproduction.yaml",
     "configs/experiment/cifar10_coteaching_reproduction.yaml",
-    "configs/experiment/cifar10_coteaching_smoke.yaml",
+    {
+      "id": "cifar10-coteaching-smoke",
+      "path": "configs/experiment/cifar10_coteaching_smoke.yaml",
+      "profile": "smoke"
+    },
     "configs/experiment/cifar10_dual_t_evidence_smoke.yaml",
     "configs/experiment/cifar10_dual_t_smoke.yaml",
     "configs/experiment/cifar10_dld_smoke.yaml",
@@ -47,7 +59,11 @@
     },
     "configs/experiment/cifar10_smoke.yaml",
     "configs/experiment/cifar10_symmetric_cdr_reproduction.yaml",
-    "configs/experiment/cifar10_symmetric_cdr_smoke.yaml",
+    {
+      "id": "cifar10-symmetric-cdr-smoke",
+      "path": "configs/experiment/cifar10_symmetric_cdr_smoke.yaml",
+      "profile": "smoke"
+    },
     "configs/experiment/cifar10_symmetric_ce_smoke.yaml",
     {
       "id": "cifar10-symmetric-small-loss-linear-smoke",

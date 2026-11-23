@@ -43,6 +43,12 @@ DEDICATED_BATCH = (
     "cifar10-t-revision-sym20-short",
 )
 COMPOSE_BATCH_RECIPE = "cifar10-foundation-smoke"
+PAPER_SMOKE_BATCH = {
+    "apl-cifar10-noise02-smoke": "apl",
+    "cifar10-cnlcu-soft-smoke": "cnlcu",
+    "cifar10-coteaching-smoke": "coteaching",
+    "cifar10-symmetric-cdr-smoke": "cdr",
+}
 HISTORICAL_SUMMARIES = {
     "recipe": "ac7b430c213e331fab7ef8c044d9ff384473524e4fb4f1ae35d918790133eb49",
     "paper": "ef2af29c25c75641f5ec4222de69e774ac5d5092d45c5b50cfcc16087896d09c",
@@ -331,13 +337,16 @@ class RecipeIdentityTest(unittest.TestCase):
             (ROOT / "src/lnl_toolbox/cli/data/recipe_catalog.json").read_text(encoding="utf-8")
         )
         entries = raw["recipes"]
-        explicit_ids = {*batch, pilot, *PAPER_VARIANT_BATCH, *DEDICATED_BATCH, COMPOSE_BATCH_RECIPE}
+        explicit_ids = {
+            *batch, pilot, *PAPER_VARIANT_BATCH, *DEDICATED_BATCH,
+            COMPOSE_BATCH_RECIPE, *PAPER_SMOKE_BATCH,
+        }
         self.assertEqual(
             [item for item in entries if isinstance(item, dict)],
             [{key: row[key] for key in ("id", "path", "profile")}
              for row in self.expected["recipes"] if row["id"] in explicit_ids],
         )
-        self.assertEqual(sum(isinstance(item, str) for item in entries), 58)
+        self.assertEqual(sum(isinstance(item, str) for item in entries), 54)
         self.assertEqual(
             [item if isinstance(item, str) else item["path"] for item in entries],
             [row["path"] for row in self.expected["recipes"]],
@@ -450,6 +459,71 @@ class RecipeIdentityTest(unittest.TestCase):
         for key, (_, plans) in explicit.items():
             for old, new in zip(legacy[key][1], plans):
                 _validate_existing_manifest(_new_manifest(old), new)
+
+    def test_paper_smoke_batch_preserves_order_and_cli_recommendations(self):
+        raw = json.loads(
+            (ROOT / "src/lnl_toolbox/cli/data/recipe_catalog.json").read_text(encoding="utf-8")
+        )
+        legacy_manifest = json.dumps({
+            **raw, "recipes": [
+                item["path"] if isinstance(item, dict) and item["id"] in PAPER_SMOKE_BATCH else item
+                for item in raw["recipes"]
+            ],
+        })
+        expected_papers = {row["id"]: row for row in self.expected["papers"]}
+        expected_recipes = {row["id"]: row for row in self.expected["recipes"]}
+
+        def cli(*args):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(main(["papers", *args]), 0, out.getvalue())
+            return out.getvalue()
+
+        def observe():
+            listed = cli("list", "--format", "json")
+            recommendations = {row["id"]: row["recommended"] for row in json.loads(listed)}
+            self.assertEqual(recommendations,
+                             {key: row["cli_recommended"] for key, row in expected_papers.items()})
+            papers = {paper.id: paper for paper in catalog.load_papers(ROOT)}
+            selections = {}
+            for recommended, paper_id in PAPER_SMOKE_BATCH.items():
+                with self.subTest(paper=paper_id):
+                    paper, expected = papers[paper_id], expected_papers[paper_id]
+                    ordered = [item.recipe_id for item in paper.configs]
+                    self.assertEqual(ordered, [item["recipe_id"] for item in expected["associations"]])
+                    self.assertEqual([asdict(item) for item in paper.configs], expected["associations"])
+                    self.assertEqual(catalog.default_paper_config(paper, root=ROOT)[1].id, expected["default"])
+                    self.assertNotEqual(expected["default"], recommended)
+                    self.assertEqual(recommendations[paper_id], recommended)
+                    shown = cli("show", paper_id)
+                    self.assertIn(f"lnl run --recipe {recommended} --dry-run", shown)
+                    configs = []
+                    for association in paper.configs:
+                        args = ("config", paper_id, "--profile", association.profile,
+                                "--variant", association.variant)
+                        selection, recipe = catalog.select_paper_config(
+                            paper, profile=association.profile, variant=association.variant, root=ROOT
+                        )
+                        self.assertEqual(selection, association)
+                        self.assertEqual(recipe.id, association.recipe_id)
+                        row = expected_recipes[recipe.id]
+                        self.assertEqual((recipe.profile, recipe.runner, recipe.method),
+                                         (row["profile"], row["runner"], row["method"]))
+                        self.assertEqual(recipe.config_path, ROOT / row["path"])
+                        self.assertEqual(Path(cli(*args, "--path-only").strip()), recipe.config_path)
+                        config = cli(*args)
+                        self.assertEqual(config_hash(yaml.safe_load(config)), row["normalized_config_hash"])
+                        configs.append((recipe, config))
+                    selections[paper_id] = (ordered, shown, configs)
+            return listed, selections
+
+        explicit = observe()
+        real_files = catalog.resources.files
+        with patch.object(catalog.resources, "files") as files:
+            fake = files.return_value
+            fake.joinpath.return_value.read_text.return_value = legacy_manifest
+            files.side_effect = lambda package: fake if package == "lnl_toolbox.cli" else real_files(package)
+            self.assertEqual(explicit, observe())
 
     def test_dedicated_and_compose_batch_preserves_cli_and_execution_projection(self):
         batch = (*DEDICATED_BATCH, COMPOSE_BATCH_RECIPE)
