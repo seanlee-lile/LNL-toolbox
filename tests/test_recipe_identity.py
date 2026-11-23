@@ -24,6 +24,7 @@ import yaml
 from lnl_toolbox import catalog
 from lnl_toolbox.cli.main import _load_source, build_parser, main
 from lnl_toolbox.training.results import config_hash
+from lnl_toolbox.training.runners import resolve_runner
 from lnl_toolbox.training.sweep import _new_manifest, _validate_existing_manifest, plan_sweep
 
 
@@ -48,6 +49,13 @@ PAPER_SMOKE_BATCH = {
     "cifar10-cnlcu-soft-smoke": "cnlcu",
     "cifar10-coteaching-smoke": "coteaching",
     "cifar10-symmetric-cdr-smoke": "cdr",
+}
+STANDARD_PAPER_SMOKE_BATCH = {
+    "ca2c-cifar10-smoke": "ca2c",
+    "cifar10-dividemix-smoke": "dividemix",
+    "jocor-cifar10-symmetric05-smoke": "jocor",
+    "l2rw-cifar10-smoke": "l2rw",
+    "cifar10-t-revision-smoke": "t-revision",
 }
 HISTORICAL_SUMMARIES = {
     "recipe": "ac7b430c213e331fab7ef8c044d9ff384473524e4fb4f1ae35d918790133eb49",
@@ -339,14 +347,14 @@ class RecipeIdentityTest(unittest.TestCase):
         entries = raw["recipes"]
         explicit_ids = {
             *batch, pilot, *PAPER_VARIANT_BATCH, *DEDICATED_BATCH,
-            COMPOSE_BATCH_RECIPE, *PAPER_SMOKE_BATCH,
+            COMPOSE_BATCH_RECIPE, *PAPER_SMOKE_BATCH, *STANDARD_PAPER_SMOKE_BATCH,
         }
         self.assertEqual(
             [item for item in entries if isinstance(item, dict)],
             [{key: row[key] for key in ("id", "path", "profile")}
              for row in self.expected["recipes"] if row["id"] in explicit_ids],
         )
-        self.assertEqual(sum(isinstance(item, str) for item in entries), 54)
+        self.assertEqual(sum(isinstance(item, str) for item in entries), 49)
         self.assertEqual(
             [item if isinstance(item, str) else item["path"] for item in entries],
             [row["path"] for row in self.expected["recipes"]],
@@ -461,17 +469,24 @@ class RecipeIdentityTest(unittest.TestCase):
                 _validate_existing_manifest(_new_manifest(old), new)
 
     def test_paper_smoke_batch_preserves_order_and_cli_recommendations(self):
+        self._assert_paper_smoke_batch(PAPER_SMOKE_BATCH)
+
+    def test_standard_paper_smoke_batch_preserves_order_and_cli_recommendations(self):
+        self._assert_paper_smoke_batch(STANDARD_PAPER_SMOKE_BATCH)
+
+    def _assert_paper_smoke_batch(self, batch):
         raw = json.loads(
             (ROOT / "src/lnl_toolbox/cli/data/recipe_catalog.json").read_text(encoding="utf-8")
         )
         legacy_manifest = json.dumps({
             **raw, "recipes": [
-                item["path"] if isinstance(item, dict) and item["id"] in PAPER_SMOKE_BATCH else item
+                item["path"] if isinstance(item, dict) and item["id"] in batch else item
                 for item in raw["recipes"]
             ],
         })
         expected_papers = {row["id"]: row for row in self.expected["papers"]}
         expected_recipes = {row["id"]: row for row in self.expected["recipes"]}
+        parser = build_parser()
 
         def cli(*args):
             out = io.StringIO()
@@ -486,7 +501,7 @@ class RecipeIdentityTest(unittest.TestCase):
                              {key: row["cli_recommended"] for key, row in expected_papers.items()})
             papers = {paper.id: paper for paper in catalog.load_papers(ROOT)}
             selections = {}
-            for recommended, paper_id in PAPER_SMOKE_BATCH.items():
+            for recommended, paper_id in batch.items():
                 with self.subTest(paper=paper_id):
                     paper, expected = papers[paper_id], expected_papers[paper_id]
                     ordered = [item.recipe_id for item in paper.configs]
@@ -495,6 +510,7 @@ class RecipeIdentityTest(unittest.TestCase):
                     self.assertEqual(catalog.default_paper_config(paper, root=ROOT)[1].id, expected["default"])
                     self.assertNotEqual(expected["default"], recommended)
                     self.assertEqual(recommendations[paper_id], recommended)
+                    self.assertEqual(ordered[0], recommended)
                     shown = cli("show", paper_id)
                     self.assertIn(f"lnl run --recipe {recommended} --dry-run", shown)
                     configs = []
@@ -512,8 +528,28 @@ class RecipeIdentityTest(unittest.TestCase):
                         self.assertEqual(recipe.config_path, ROOT / row["path"])
                         self.assertEqual(Path(cli(*args, "--path-only").strip()), recipe.config_path)
                         config = cli(*args)
-                        self.assertEqual(config_hash(yaml.safe_load(config)), row["normalized_config_hash"])
+                        parsed = yaml.safe_load(config)
+                        self.assertEqual(config_hash(parsed), row["normalized_config_hash"])
+                        if recipe.id == recommended and recommended in STANDARD_PAPER_SMOKE_BATCH:
+                            runner = resolve_runner(parsed)
+                            self.assertEqual(runner.name, row["runner"])
+                            self.assertFalse(getattr(runner.requirements(parsed), "prerequisites", ()))
+                        if recipe.id == "l2rw-cifar10-smoke":
+                            from_path = _load_source(parser.parse_args(
+                                ["run", "--config", str(recipe.config_path)]
+                            ))
+                            from_id = _load_source(parser.parse_args(["run", "--recipe", recipe.id]))
+                            self.assertEqual(from_path[:3], (*from_id[:2], None))
                         configs.append((recipe, config))
+                    if paper_id == "t-revision":
+                        short = catalog.recipe_by_id("cifar10-t-revision-sym20-short", ROOT)
+                        row = expected_recipes[short.id]
+                        self.assertNotIn(short.id, ordered)
+                        self.assertEqual((short.runner, short.profile, short.config_path),
+                                         ("t_revision", row["profile"], ROOT / row["path"]))
+                        self.assertEqual(config_hash(catalog.load_recipe_config(short)),
+                                         row["normalized_config_hash"])
+                        configs.append((short, None))
                     selections[paper_id] = (ordered, shown, configs)
             return listed, selections
 

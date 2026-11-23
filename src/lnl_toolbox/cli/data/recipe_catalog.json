@@ -18,7 +18,11 @@
     },
     "configs/experiment/binary_risk_natarajan_reproduction.yaml",
     "configs/experiment/ca2c_cifar100_reproduction.yaml",
-    "configs/experiment/ca2c_cifar10_smoke.yaml",
+    {
+      "id": "ca2c-cifar10-smoke",
+      "path": "configs/experiment/ca2c_cifar10_smoke.yaml",
+      "profile": "smoke"
+    },
     "configs/experiment/cal_cifar10_reproduction.yaml",
     "configs/experiment/cal_cifar10_smoke.yaml",
     {
@@ -49,7 +53,11 @@
     "configs/experiment/cifar10_dual_t_smoke.yaml",
     "configs/experiment/cifar10_dld_smoke.yaml",
     "configs/experiment/dld_cifar10_reproduction.yaml",
-    "configs/experiment/cifar10_dividemix_smoke.yaml",
+    {
+      "id": "cifar10-dividemix-smoke",
+      "path": "configs/experiment/cifar10_dividemix_smoke.yaml",
+      "profile": "smoke"
+    },
     "configs/experiment/cifar10_lend_smoke.yaml",
     "configs/experiment/lend_cifar10_reproduction.yaml",
     {
@@ -75,7 +83,11 @@
       "path": "configs/experiment/cifar10_symmetric_small_loss_smoke.yaml",
       "profile": "smoke"
     },
-    "configs/experiment/cifar10_t_revision_smoke.yaml",
+    {
+      "id": "cifar10-t-revision-smoke",
+      "path": "configs/experiment/cifar10_t_revision_smoke.yaml",
+      "profile": "smoke"
+    },
     "configs/experiment/cifar10_upm_smoke.yaml",
     "configs/experiment/upm_cifar10_reproduction.yaml",
     "configs/experiment/cwd_cifar10_reproduction.yaml",
@@ -93,10 +105,18 @@
     },
     "configs/experiment/importance_reweighting_binary_smoke.yaml",
     "configs/experiment/jocor_cifar10_symmetric05_reproduction.yaml",
-    "configs/experiment/jocor_cifar10_symmetric05_smoke.yaml",
+    {
+      "id": "jocor-cifar10-symmetric05-smoke",
+      "path": "configs/experiment/jocor_cifar10_symmetric05_smoke.yaml",
+      "profile": "smoke"
+    },
     "configs/experiment/loss_correction_cifar10_asymmetric04.yaml",
     "configs/experiment/l2rw_cifar10_reproduction.yaml",
-    "configs/experiment/l2rw_cifar10_smoke.yaml",
+    {
+      "id": "l2rw-cifar10-smoke",
+      "path": "configs/experiment/l2rw_cifar10_smoke.yaml",
+      "profile": "smoke"
+    },
     "configs/experiment/mc_ldce_cifar10_reproduction.yaml",
     "configs/experiment/mc_ldce_cifar10_smoke.yaml",
     "configs/experiment/mentornet_dd_cifar100_symmetric04_reproduction.yaml",

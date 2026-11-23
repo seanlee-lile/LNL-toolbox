@@ -1,5 +1,27 @@
 # Toolbox modularization progress
 
+## Recipe Identity Migration Phase 1C — standard Paper smoke recommendations
+
+Base: `code@9fef04a020c496483f30684467651bba7d9aecb2` (pushed Batch 4).
+Only the CA2C, DivideMix, JoCoR, L2RW and T-Revision standard smoke
+recommendations were converted in place. The manifest now contains 19
+explicit and 49 legacy entries. YAML, resource paths, manifest order,
+Paper/Web metadata, and the frozen fixture are unchanged.
+
+- The shared before/after test checks the real `papers list/show/config`
+  commands, ordered associations, formal defaults and all published
+  variants for these five Papers. It also checks L2RW direct YAML loading,
+  DivideMix and the other smoke runners' prerequisite sets, and
+  coexistence with the already-explicit T-Revision short recipe.
+- Deferred recipes were not changed. Direct consumers of the raw JSON
+  still need to support both strings and explicit objects.
+- Focused: 171 passed / 1 Node skip. Both isolated wheel and sdist installs
+  match the frozen snapshot and installed CLI output, with one distribution
+  file-list read per index build.
+- Full suites: Main 1176 passed / 21 skipped; Web 110 passed / 31 skipped;
+  Scratch 196 passed / 10 skipped; zero failures or errors. Only the three
+  approved files changed. Await review; no stage, commit, push, or next batch.
+
 ## Recipe Identity Migration Phase 1C — first Paper smoke recommendation batch
 
 Base: `code@07fb9dc38207b7585b1d09aa5fef1ffd4199cb98` (pushed Batch 3).
