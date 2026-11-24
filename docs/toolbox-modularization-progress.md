@@ -1,5 +1,30 @@
 # Toolbox modularization progress
 
+## Recipe Identity Migration Phase 1C — bulk identity data migration
+
+Base: `code@d09828db41f64f2d70be835935f4593e2ab63b9c` (pushed Batch 9).
+Converted the remaining 34 legacy path strings in place using the production
+resolver's canonical ID, path and discovery profile. The registry moves
+from 34 explicit / 34 legacy to 68 explicit / 0 legacy. YAML, paths, order,
+public/conditional membership, algorithms, runners and consumers are unchanged.
+
+The manifest inventory now checks all 68 explicit entries against the
+unchanged frozen baseline. The legacy parser and its compatibility tests
+remain in place. External raw JSON consumers that assume every
+`recipes[]` item is a string are incompatible with the all-object manifest;
+the official catalog API and CLI keep their existing behavior.
+
+- Focused: 20 passed. Unified regression: Main 1181 passed / 21 skipped,
+  Web 110 passed / 31 skipped, Scratch 196 passed / 10 skipped; no failures
+  or errors. Existing skip policy is unchanged.
+- Isolated wheel and sdist-derived installs match all 68 IDs and resources,
+  71 published YAMLs, discovery 63 / 4 / 68 / 4, 26 Papers, 56 ordered
+  associations and 26 defaults. Both installed CLI checks pass, with one
+  distribution file-list read per index build.
+- Migration and validation complete (5/5: remote freeze, conversion,
+  focused, full regression, isolated installs). Await human review;
+  bulk changes are unstaged, uncommitted and unpushed. No parser cleanup.
+
 ## Recipe Identity Migration Phase 1C — first formal defaults
 
 Base: `code@a19dfca456a88a85bcd06ff27b9a5229fdc2300f` (pushed Batch 8).

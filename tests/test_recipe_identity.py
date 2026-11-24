@@ -360,33 +360,31 @@ class RecipeIdentityTest(unittest.TestCase):
         self.assertEqual(actual, legacy)
         self.assertEqual(config_hash(catalog.load_recipe_config(actual)), expected["normalized_config_hash"])
 
-    def test_first_low_risk_batch_preserves_cli_path_and_sweep_identity(self):
-        batch = ("cifar10-clean", "cifar10-symmetric-small-loss-smoke")
-        pilot = "cifar10-symmetric-small-loss-linear-smoke"
-        expected = {row["id"]: row for row in self.expected["recipes"]}
+    def test_manifest_fully_explicit_and_in_frozen_order(self):
         raw = json.loads(
             (ROOT / "src/lnl_toolbox/cli/data/recipe_catalog.json").read_text(encoding="utf-8")
         )
         entries = raw["recipes"]
-        explicit_ids = {
-            *batch, pilot, *PAPER_VARIANT_BATCH, *DEDICATED_BATCH,
-            COMPOSE_BATCH_RECIPE, *PAPER_SMOKE_BATCH, *STANDARD_PAPER_SMOKE_BATCH,
-            *FINAL_STANDARD_PAPER_SMOKE_BATCH, *INTERNAL_LIFECYCLE_SMOKE_BATCH,
-            *ADDITIONAL_CONSUMER_SMOKE_BATCH, *FIRST_FORMAL_BATCH,
-        }
+        fields = ("id", "path", "profile")
+        self.assertEqual(len(entries), 68)
+        for index, entry in enumerate(entries, start=1):
+            self.assertIsInstance(entry, dict, f"manifest entry {index}")
+            self.assertEqual(set(entry), set(fields), f"manifest entry {index}")
+        for field in ("id", "path"):
+            self.assertEqual(len({entry[field] for entry in entries}), 68, field)
         self.assertEqual(
-            [item for item in entries if isinstance(item, dict)],
-            [{key: row[key] for key in ("id", "path", "profile")}
-             for row in self.expected["recipes"] if row["id"] in explicit_ids],
+            entries, [{key: row[key] for key in fields} for row in self.expected["recipes"]]
         )
-        self.assertEqual(sum(isinstance(item, str) for item in entries), 34)
-        self.assertEqual(
-            [item if isinstance(item, str) else item["path"] for item in entries],
-            [row["path"] for row in self.expected["recipes"]],
+
+    def test_first_low_risk_batch_preserves_cli_path_and_sweep_identity(self):
+        batch = ("cifar10-clean", "cifar10-symmetric-small-loss-smoke")
+        expected = {row["id"]: row for row in self.expected["recipes"]}
+        raw = json.loads(
+            (ROOT / "src/lnl_toolbox/cli/data/recipe_catalog.json").read_text(encoding="utf-8")
         )
         old_entries = [
             item["path"] if isinstance(item, dict) and item["id"] in batch else item
-            for item in entries
+            for item in raw["recipes"]
         ]
         parser = build_parser()
         direct_path = str(ROOT / expected["cifar10-clean"]["path"])
