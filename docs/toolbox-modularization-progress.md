@@ -1,5 +1,29 @@
 # Toolbox modularization progress
 
+## Config path decoupling — default fidelity
+
+Base: `code@b17013db5dc1fc6d67f478cb982d7bb3330bf390`.
+Default built-in configuration fidelity now derives from the explicit discovery
+profile, not its YAML filename or parent directory. Explicit YAML fidelity and
+Paper association overrides keep precedence. All existing YAML and manifest
+entries, recipe IDs, packaging, and the frozen fixture are unchanged.
+
+Curated/conditional path references and legacy interactive CLI template
+selection are deferred. Source-first and installed resource location, direct
+`--config`, MentorNet producer lookup, and run/output paths are unchanged.
+The config guide documents the actual explicit-object registration contract.
+
+- Focused: 18 passed, including path relocation and explicit fidelity
+  precedence. Main: 1182 passed / 21 skipped; Web: 110 passed / 31 skipped;
+  Scratch: 196 passed / 10 skipped. No failures or errors.
+- Source and isolated wheel/sdist-derived installs match the frozen results:
+  68 unique IDs/resources, 71 packaged YAMLs, discovery views 63 / 4 / 68 / 4,
+  26 Papers, 56 associations and 26 defaults. Installed CLI discovery matched,
+  with one distribution file-list read per index build. Sweep and Resume
+  regressions passed.
+- Completed 5/5 (audit, scoped edit, focused, full regression, package
+  verification). Await review; no stage, commit, push, or config moves.
+
 ## Recipe Identity Migration — explicit-only built-in manifest
 
 Base: `code@439401fdf7f9eac8284cfbb5e9ee3668faea1fa5` (pushed full data migration).

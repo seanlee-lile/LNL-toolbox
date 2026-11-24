@@ -14,18 +14,20 @@ kind: experiment  # 或 fragment / mentor_artifact
 | Paper | 论文及其实现说明。Paper catalog 使用稳定的 Paper ID，并通过 `recipe_id` 关联一个或多个内置配方。 |
 | Method / runner | Method 是用户选择或看到的方法，runner 是 `execution.runner` 指定的执行器。多个方法可以复用同一 runner；例如 GCE 使用 `supervised` runner 和 `loss.name: gce`。 |
 | Config / recipe | Config 是配置内容。内置 recipe 是 catalog 登记且可用公开 ID 查找的完整实验配置。用户也可按路径运行未登记的完整 YAML。 |
-| Profile | `smoke` 用于短预算链路检查，`reproduction` 用于论文相关正式实验，`experiment` 用于其他配置。Profile 是发现、筛选和展示分类。 |
+| Profile | `smoke` 用于短预算链路检查，`reproduction` 用于论文相关正式实验，`experiment` 用于其他配置。内置 recipe 的发现 profile 来自 manifest，不取决于 YAML 文件名或所在目录。 |
 | Variant | Paper catalog 的 `variant` 是选择某个数据集、噪声或协议配置的标签。实现变体由方法专用 YAML 字段选择，实际含义由 runner 决定。 |
-| Fidelity | `configuration_fidelity` 描述配置的协议或实现对齐边界。新增记录优先使用现有下划线写法，如 `paper_oriented`、`paper_protocol`；工程配置可使用 `engineering`。Paper catalog 仍兼容旧字段 `fidelity`，已有标签按原值展示。 |
+| Fidelity | `configuration_fidelity` 描述配置的协议或实现对齐边界。内置 recipe 优先使用 YAML 的显式值；未声明时，按 discovery profile `smoke` / `reproduction` / `experiment` 分别得到 `smoke` / `paper_oriented` / `engineering`，不读取文件名或目录。Paper 关联可覆盖该标签，并继续兼容旧字段 `fidelity`。 |
 | Reproduction status | `reproduction_status` 记录复现证据状态，默认 `not_run`。正式 profile、fidelity 标签和 smoke 通过均不能证明论文数值已复现。 |
 
 ## 新增内置 recipe
 
 1. 将完整实验写为 `kind: experiment`，使用 `snake_case` 的字段、注册键和 YAML 文件名，沿用现有 runner、方法和组件的精确注册名。参考片段用 `kind: fragment`，MentorNet 等生产者配置按各自入口使用，不能当作普通训练 recipe 登记。
-2. 为新文件选全局唯一的 stem。公开 recipe ID 将 stem 转为小写并把下划线换成连字符，例如 `gce_cifar10_noise02_smoke.yaml` 对应 `gce-cifar10-noise02-smoke`。新 smoke 和正式配置建议使用 `_smoke`、`_reproduction` 后缀。发现时，文件名含 `reproduction` 或父目录为 `reproduction` 会优先得到正式 profile，其次匹配文件名中的 `smoke`，其余为 `experiment`。已有文件的命名、路径和撞名消歧行为保持兼容。
-3. 将相对仓库根目录的路径加入 `src/lnl_toolbox/cli/data/recipe_catalog.json` 的 `recipes`，并同步 `pyproject.toml` 的 `tool.setuptools.data-files`。如需外部前置条件，同时登记到 `conditional`；仅在该配方应加入精选公开列表时添加 `public`。文件存在或被打包均不会自动登记 recipe。
+2. 为新配方选择全局唯一的稳定 ID，使用小写字母、数字和连字符。文件名可用 `_smoke`、`_reproduction` 后缀帮助读者辨识，但不定义 ID、profile 或 fidelity。不要因重命名 YAML 而改变已发布的 ID。
+3. 在 `src/lnl_toolbox/cli/data/recipe_catalog.json` 的 `recipes` 中登记恰含 `id`、`path`、`profile` 的对象，例如现有 GCE smoke 条目：`{"id": "gce-cifar10-noise02-smoke", "path": "configs/experiment/gce_cifar10_noise02_smoke.yaml", "profile": "smoke"}`。不接受裸路径字符串。同步 `pyproject.toml` 的 `tool.setuptools.data-files`，按需以相同路径登记 `conditional` 或精选 `public` 条目。文件存在或被打包均不会自动登记 recipe。
 4. 若配方应出现在 Paper 页面，在 `src/lnl_toolbox/paper_catalog.json` 补齐 `recipe_id`、`profile` 和用于选择的 `variant`（新标签用连字符分隔）。保留该 Paper 的正式默认顺序，代码取第一个 `reproduction` 条目。新增条目的 Paper profile 应与发现 profile 一致。已有 Loss Correction 条目的 Paper profile 为 `reproduction`，发现 profile 为 `experiment`，属于保留的历史例外。
 5. 若配方替换正式参数编辑基准或新增可编辑字段，检查 `web/lnl_parameter_metadata_registry_revised.yaml` 中的正式绑定与字段路径。运行配置、catalog 关联和 Web 参数展示分别承担执行、导航和编辑职责。
+
+移动内置 YAML 时，仍须同步 manifest 的资源路径、打包声明和适用的 `public` / `conditional` 路径引用，并核对直接 `--config` 示例、旧交互模板及 packaged-only producer 等特定路径消费者。旧交互模板仍有按目录和文件名的兼容选择，不属于 recipe identity 规则。
 
 **GCE（现有 loss 和 runner）。** 参考 `experiment/gce_cifar10_noise02_reproduction.yaml`。新增同类配方时沿用 `supervised` 和 `loss.name: gce`，完成 YAML、manifest 和打包路径登记，再按需关联 GCE Paper。沿用现有字段和正式编辑基准时，无需修改 Web 元数据。
 

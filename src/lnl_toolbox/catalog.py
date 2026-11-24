@@ -276,11 +276,10 @@ def _implementation_status(method: str, runner: str) -> str:
     return "workflow"
 
 
-def _configuration_fidelity(path: Path, profile: str) -> str:
-    name = path.stem.lower()
+def _default_configuration_fidelity(profile: str) -> str:
     if profile == "smoke":
         return "smoke"
-    if "reproduction" in name or path.parent.name == "reproduction":
+    if profile == "reproduction":
         return "paper_oriented"
     return "engineering"
 
@@ -366,7 +365,7 @@ def _builtin_recipe_index(root: Path | None) -> dict[str, RecipeSpec]:
             epochs=epochs,
             implementation_status=_implementation_status(method, runner),
             configuration_fidelity=str(
-                config.get("configuration_fidelity", _configuration_fidelity(path, profile))
+                config.get("configuration_fidelity", _default_configuration_fidelity(profile))
             ),
             reproduction_status="not_run",
             availability="conditional" if conditional else "runnable",

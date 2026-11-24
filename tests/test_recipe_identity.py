@@ -902,6 +902,28 @@ class ProductionRecipeIdentityTest(unittest.TestCase):
                         self.assertEqual(row.profile, "smoke")
         self.assertEqual((recipe.availability, recipe.visibility), ("conditional", "public"))
 
+    def test_configuration_fidelity_follows_profile_not_resource_path(self):
+        recipe_id = "stable-fidelity"
+        original = "configs/reproduction/budget_reproduction.yaml"
+        moved = "configs/methods/example/budget_smoke.yaml"
+        for profile, default in (
+            ("experiment", "engineering"),
+            ("smoke", "smoke"),
+            ("reproduction", "paper_oriented"),
+        ):
+            for override in (None, "paper_protocol"):
+                for path in (original, moved):
+                    with self.subTest(profile=profile, override=override, path=path):
+                        source = "kind: experiment\ndata: {name: cifar10}\n"
+                        if override is not None:
+                            source += f"configuration_fidelity: {override}\n"
+                        resource = self.write(path, source)
+                        self.manifest([_manifest_entry(path, recipe_id, profile)])
+                        recipe = catalog.recipe_by_id(recipe_id, self.root)
+                        self.assertEqual((recipe.id, recipe.profile, recipe.config_path),
+                                         (recipe_id, profile, resource))
+                        self.assertEqual(recipe.configuration_fidelity, override or default)
+
     def test_invalid_explicit_metadata_cannot_fall_back_to_path_inference(self):
         path = "configs/reproduction/fallback.yaml"
         self.write(path)
