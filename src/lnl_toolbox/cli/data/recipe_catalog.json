@@ -50,7 +50,11 @@
       "profile": "smoke"
     },
     "configs/experiment/cifar10_dual_t_evidence_smoke.yaml",
-    "configs/experiment/cifar10_dual_t_smoke.yaml",
+    {
+      "id": "cifar10-dual-t-smoke",
+      "path": "configs/experiment/cifar10_dual_t_smoke.yaml",
+      "profile": "smoke"
+    },
     "configs/experiment/cifar10_dld_smoke.yaml",
     "configs/experiment/dld_cifar10_reproduction.yaml",
     {
@@ -130,15 +134,27 @@
       "profile": "smoke"
     },
     "configs/experiment/mc_ldce_cifar10_reproduction.yaml",
-    "configs/experiment/mc_ldce_cifar10_smoke.yaml",
+    {
+      "id": "mc-ldce-cifar10-smoke",
+      "path": "configs/experiment/mc_ldce_cifar10_smoke.yaml",
+      "profile": "smoke"
+    },
     "configs/experiment/mentornet_dd_cifar100_symmetric04_reproduction.yaml",
     "configs/experiment/mentornet_dd_cifar100_symmetric04_smoke.yaml",
-    "configs/experiment/pcse_multiclass_smoke.yaml",
+    {
+      "id": "pcse-multiclass-smoke",
+      "path": "configs/experiment/pcse_multiclass_smoke.yaml",
+      "profile": "smoke"
+    },
     "configs/experiment/pcse_multiclass_volmin_smoke.yaml",
     "configs/experiment/cifar10_volminnet_smoke.yaml",
     "configs/experiment/volminnet_cifar10_reproduction.yaml",
     "configs/experiment/pdl_cifar10_reproduction.yaml",
-    "configs/experiment/pdl_cifar10_smoke.yaml",
+    {
+      "id": "pdl-cifar10-smoke",
+      "path": "configs/experiment/pdl_cifar10_smoke.yaml",
+      "profile": "smoke"
+    },
     "configs/reproduction/cifar10_dual_t_sym20.yaml",
     "configs/reproduction/cifar10_dual_t_sym20_evidence.yaml",
     "configs/reproduction/cifar10_dividemix_sym20.yaml",

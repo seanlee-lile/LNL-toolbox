@@ -62,6 +62,12 @@ FINAL_STANDARD_PAPER_SMOKE_BATCH = {
     "fine-cifar100n-smoke": "fine",
     "cifar10-lend-smoke": "lend",
 }
+INTERNAL_LIFECYCLE_SMOKE_BATCH = {
+    "pcse-multiclass-smoke": "pcse",
+    "mc-ldce-cifar10-smoke": "mc-ldce",
+    "pdl-cifar10-smoke": "pdl",
+    "cifar10-dual-t-smoke": "dual-t",
+}
 HISTORICAL_SUMMARIES = {
     "recipe": "ac7b430c213e331fab7ef8c044d9ff384473524e4fb4f1ae35d918790133eb49",
     "paper": "ef2af29c25c75641f5ec4222de69e774ac5d5092d45c5b50cfcc16087896d09c",
@@ -353,14 +359,14 @@ class RecipeIdentityTest(unittest.TestCase):
         explicit_ids = {
             *batch, pilot, *PAPER_VARIANT_BATCH, *DEDICATED_BATCH,
             COMPOSE_BATCH_RECIPE, *PAPER_SMOKE_BATCH, *STANDARD_PAPER_SMOKE_BATCH,
-            *FINAL_STANDARD_PAPER_SMOKE_BATCH,
+            *FINAL_STANDARD_PAPER_SMOKE_BATCH, *INTERNAL_LIFECYCLE_SMOKE_BATCH,
         }
         self.assertEqual(
             [item for item in entries if isinstance(item, dict)],
             [{key: row[key] for key in ("id", "path", "profile")}
              for row in self.expected["recipes"] if row["id"] in explicit_ids],
         )
-        self.assertEqual(sum(isinstance(item, str) for item in entries), 46)
+        self.assertEqual(sum(isinstance(item, str) for item in entries), 42)
         self.assertEqual(
             [item if isinstance(item, str) else item["path"] for item in entries],
             [row["path"] for row in self.expected["recipes"]],
@@ -483,6 +489,48 @@ class RecipeIdentityTest(unittest.TestCase):
     def test_final_standard_smoke_batch_preserves_paper_and_runtime_contracts(self):
         self._assert_paper_smoke_batch(FINAL_STANDARD_PAPER_SMOKE_BATCH)
 
+    def test_internal_lifecycle_smoke_batch_preserves_paper_and_runtime_contracts(self):
+        self._assert_paper_smoke_batch(INTERNAL_LIFECYCLE_SMOKE_BATCH)
+
+    def _observe_internal_lifecycle(self, recipe, config, command):
+        from lnl_toolbox.training.service import ExperimentService
+
+        runner = ExperimentService().preflight(config, check_data=False)
+        self.assertEqual(runner.name, recipe.runner)
+        requirements = runner.requirements(config)
+        self.assertFalse(requirements.prerequisites)
+        artifacts = ()
+        if recipe.runner == "pcse":
+            self.assertEqual(config["data"]["num_classes"], 3)
+            self.assertEqual(config["pretraining_stage"]["mode"], "train")
+            self.assertNotIn("source", config["pretraining_stage"])
+        elif recipe.runner == "mc_ldce":
+            self.assertEqual(config["transition"]["estimator"], "known_smoke")
+            self.assertIn("matrix", config["transition"])
+            self.assertNotIn("artifact", config["transition"])
+            # The bundled tiny synthetic smoke needs no external dataset.
+            with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+                run_dir = runner.invoke(config, output_dir=Path(directory) / "run")
+                artifacts = tuple(sorted(path.name for path in run_dir.glob("*.npz")))
+            self.assertTrue({"feature_snapshot.npz", "transition_artifact.npz",
+                             "statistic_artifact.npz"}.issubset(artifacts))
+        elif recipe.runner == "instance_transition":
+            self.assertEqual(config["instance_transition"]["name"], "pdl")
+            self.assertNotIn("artifact", config["instance_transition"])
+            self.assertEqual(config["warmup"]["epochs"], 1)
+        elif recipe.runner == "dual_t":
+            self.assertNotIn("evidence", config)
+            self.assertTrue(config["final_stage"]["fresh_model"])
+            self.assertEqual(config["transition_stage"], {})
+
+        sweep = plan_sweep(config, [8, 3], recipe=recipe.id)
+        _validate_existing_manifest(_new_manifest(sweep), sweep)
+        return (
+            runner, requirements, runner.describe(config), sweep, artifacts,
+            command("validate", "--recipe", recipe.id),
+            command("run", "--recipe", recipe.id, "--dry-run", "--no-check-data"),
+        )
+
     def _assert_final_smoke_contract(self, recipe, parsed):
         requirements = resolve_runner(parsed).requirements(parsed)
         self.assertFalse(requirements.prerequisites)
@@ -518,11 +566,14 @@ class RecipeIdentityTest(unittest.TestCase):
         expected_recipes = {row["id"]: row for row in self.expected["recipes"]}
         parser = build_parser()
 
-        def cli(*args):
+        def command(*args):
             out = io.StringIO()
             with redirect_stdout(out):
-                self.assertEqual(main(["papers", *args]), 0, out.getvalue())
+                self.assertEqual(main(list(args)), 0, out.getvalue())
             return out.getvalue()
+
+        def cli(*args):
+            return command("papers", *args)
 
         def observe():
             listed = cli("list", "--format", "json")
@@ -544,6 +595,7 @@ class RecipeIdentityTest(unittest.TestCase):
                     shown = cli("show", paper_id)
                     self.assertIn(f"lnl run --recipe {recommended} --dry-run", shown)
                     configs = []
+                    lifecycle = None
                     for association in paper.configs:
                         args = ("config", paper_id, "--profile", association.profile,
                                 "--variant", association.variant)
@@ -566,6 +618,8 @@ class RecipeIdentityTest(unittest.TestCase):
                             self.assertFalse(getattr(runner.requirements(parsed), "prerequisites", ()))
                         if recipe.id == recommended and recommended in FINAL_STANDARD_PAPER_SMOKE_BATCH:
                             self._assert_final_smoke_contract(recipe, parsed)
+                        if recipe.id == recommended and recommended in INTERNAL_LIFECYCLE_SMOKE_BATCH:
+                            lifecycle = self._observe_internal_lifecycle(recipe, parsed, command)
                         if recipe.id == "l2rw-cifar10-smoke":
                             from_path = _load_source(parser.parse_args(
                                 ["run", "--config", str(recipe.config_path)]
@@ -582,7 +636,12 @@ class RecipeIdentityTest(unittest.TestCase):
                         self.assertEqual(config_hash(catalog.load_recipe_config(short)),
                                          row["normalized_config_hash"])
                         configs.append((short, None))
-                    selections[paper_id] = (ordered, shown, configs)
+                    if paper_id == "dual-t":
+                        evidence = catalog.recipe_by_id("cifar10-dual-t-evidence-smoke", ROOT)
+                        self.assertNotIn(evidence.id, ordered)
+                        self.assertIn("evidence", catalog.load_recipe_config(evidence))
+                        configs.append((evidence, config_hash(catalog.load_recipe_config(evidence))))
+                    selections[paper_id] = (ordered, shown, configs, lifecycle)
             return listed, selections
 
         explicit = observe()

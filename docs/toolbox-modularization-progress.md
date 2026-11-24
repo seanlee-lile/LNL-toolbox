@@ -1,5 +1,34 @@
 # Toolbox modularization progress
 
+## Recipe Identity Migration Phase 1C — self-contained lifecycle smoke batch
+
+Base: `code@be8c13b3b940d1888f8339584286edd3877604c2` (pushed Batch 6).
+Converted only the PCSE, MC-LDCE, PDL and Dual-T smoke recommendations in
+place: 26 explicit and 42 legacy entries. YAML, registry order, Paper/Web
+metadata, and the frozen fixture are unchanged.
+
+- The before/after test compares ordered Paper associations, CLI smoke
+  recommendations, formal defaults and real `papers list/show/config`
+  output. It also compares static preflight, runner plans, no-data dry-run,
+  and Sweep identity. PCSE still pretrains internally and uses no external
+  checkpoint. MC-LDCE still uses a configured matrix and a short synthetic
+  test checks its generated feature, transition and statistic file names.
+- PDL still runs the warmup/instance-transition workflow with no external
+  input artifact. A no-training probe intercepted the real runner's resume
+  lookup and confirmed the same run-local `instance_transition_artifact.npz`
+  in both representations. Dual-T remains separate from the evidence recipe.
+  Existing method tests cover artifact loading, validation and resume.
+- Deferred recipes are untouched. Raw JSON consumers still need to handle
+  both path strings and explicit objects.
+- Focused: 293 passed / 1 Node skip, including PCSE, MC-LDCE, PDL and Dual-T
+  method tests. Isolated wheel and sdist-derived installs matched the
+  frozen snapshot and CLI discovery; each installed index build still
+  reads the distribution file list once.
+- Full suites: Main 1178 passed / 21 skipped; Web 110 passed / 31 skipped;
+  Scratch 196 passed / 10 skipped. Zero failures or errors. Only the
+  three approved existing files changed. Await human review; no stage,
+  commit, push, or next batch.
+
 ## Recipe Identity Migration Phase 1C — final standard Paper smoke batch
 
 Base: `code@86c3d547c8237399ccef524d5885887690e16319` (pushed Batch 5).
