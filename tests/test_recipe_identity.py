@@ -68,6 +68,12 @@ INTERNAL_LIFECYCLE_SMOKE_BATCH = {
     "pdl-cifar10-smoke": "pdl",
     "cifar10-dual-t-smoke": "dual-t",
 }
+ADDITIONAL_CONSUMER_SMOKE_BATCH = {
+    "dss-cifar10-symmetric05-smoke": "dss",
+    "gce-cifar10-noise02-smoke": "gce",
+    "cal-cifar10-smoke": "cal",
+    "cifar10-dld-smoke": "dld",
+}
 HISTORICAL_SUMMARIES = {
     "recipe": "ac7b430c213e331fab7ef8c044d9ff384473524e4fb4f1ae35d918790133eb49",
     "paper": "ef2af29c25c75641f5ec4222de69e774ac5d5092d45c5b50cfcc16087896d09c",
@@ -360,13 +366,14 @@ class RecipeIdentityTest(unittest.TestCase):
             *batch, pilot, *PAPER_VARIANT_BATCH, *DEDICATED_BATCH,
             COMPOSE_BATCH_RECIPE, *PAPER_SMOKE_BATCH, *STANDARD_PAPER_SMOKE_BATCH,
             *FINAL_STANDARD_PAPER_SMOKE_BATCH, *INTERNAL_LIFECYCLE_SMOKE_BATCH,
+            *ADDITIONAL_CONSUMER_SMOKE_BATCH,
         }
         self.assertEqual(
             [item for item in entries if isinstance(item, dict)],
             [{key: row[key] for key in ("id", "path", "profile")}
              for row in self.expected["recipes"] if row["id"] in explicit_ids],
         )
-        self.assertEqual(sum(isinstance(item, str) for item in entries), 42)
+        self.assertEqual(sum(isinstance(item, str) for item in entries), 38)
         self.assertEqual(
             [item if isinstance(item, str) else item["path"] for item in entries],
             [row["path"] for row in self.expected["recipes"]],
@@ -491,6 +498,68 @@ class RecipeIdentityTest(unittest.TestCase):
 
     def test_internal_lifecycle_smoke_batch_preserves_paper_and_runtime_contracts(self):
         self._assert_paper_smoke_batch(INTERNAL_LIFECYCLE_SMOKE_BATCH)
+
+    def test_additional_consumer_smoke_batch_preserves_paper_and_secondary_consumers(self):
+        self._assert_paper_smoke_batch(ADDITIONAL_CONSUMER_SMOKE_BATCH)
+
+    def _observe_additional_smoke_consumer(self, recipe, config, command):
+        if recipe.id == "dss-cifar10-symmetric05-smoke":
+            listed = command("compose", "list", "--runner", "supervised")
+            self.assertIn(f"  - {recipe.id}\n", listed)
+            with tempfile.TemporaryDirectory() as directory:
+                target = Path(directory) / "dss.yaml"
+                with patch("lnl_toolbox.cli.main.load_yaml", wraps=catalog.load_yaml) as load:
+                    created = command("compose", "create", "--base", recipe.id, "--output", str(target))
+                load.assert_called_once_with(recipe.config_path)
+                return listed, created.replace(str(target), "<destination>"), target.read_bytes()
+        if recipe.id == "gce-cifar10-noise02-smoke":
+            snapshot = _sweep_snapshot({recipe.id: recipe}, {recipe.id: config})
+            self.assertEqual(snapshot, self.expected["sweep"])
+            return snapshot
+
+        from lnl_toolbox.training.service import ExperimentService
+        from web.external_resources import resources
+
+        runner = ExperimentService().preflight(config, check_data=False)
+        self.assertEqual(runner.name, recipe.runner)
+        requirements = runner.requirements(config)
+        self.assertFalse(requirements.prerequisites)
+        self.assertEqual(resources(config, ROOT), [])
+        feature_identity = None
+        if recipe.runner == "cal":
+            self.assertEqual(config["data"]["name"], "synthetic_multiclass")
+            self.assertEqual(config["model"]["name"], "feature_mlp")
+            self.assertEqual(config["noise"]["name"], "symmetric")
+            self.assertFalse(requirements.required_config_inputs)
+        else:
+            from lnl_toolbox.training import dld_experiment
+            from tests.test_dld import _dld_workflow__data
+
+            self.assertEqual(config["dld"]["feature_extractor"]["source"], "repository_frozen_model")
+            train, test = _dld_workflow__data("train", 20), _dld_workflow__data("test", 8)
+
+            class ExtractorReady(Exception):
+                pass
+
+            def inspect_extractor(model, *_args, **_kwargs):
+                self.assertFalse(model.training)
+                self.assertTrue(all(not parameter.requires_grad for parameter in model.parameters()))
+                raise ExtractorReady(dld_experiment._model_identity(model))
+
+            # Halt at feature extraction; no diffusion training or network access.
+            with tempfile.TemporaryDirectory() as directory, \
+                 patch("lnl_toolbox.data.sources.load_cifar10",
+                       side_effect=lambda root, split: train if split == "train" else test), \
+                 patch.object(dld_experiment, "load_dld_feature_source") as external, \
+                 patch.object(dld_experiment, "_feature_snapshot", side_effect=inspect_extractor), \
+                 self.assertRaises(ExtractorReady) as ready:
+                runtime = {**config, "data": {**config["data"], "root": directory}}
+                runner.invoke(runtime, output_dir=Path(directory) / "run")
+            external.assert_not_called()
+            feature_identity = str(ready.exception)
+        return (runner, requirements, runner.describe(config), feature_identity,
+                command("validate", "--recipe", recipe.id),
+                command("run", "--recipe", recipe.id, "--dry-run", "--no-check-data"))
 
     def _observe_internal_lifecycle(self, recipe, config, command):
         from lnl_toolbox.training.service import ExperimentService
@@ -620,6 +689,8 @@ class RecipeIdentityTest(unittest.TestCase):
                             self._assert_final_smoke_contract(recipe, parsed)
                         if recipe.id == recommended and recommended in INTERNAL_LIFECYCLE_SMOKE_BATCH:
                             lifecycle = self._observe_internal_lifecycle(recipe, parsed, command)
+                        if recipe.id == recommended and recommended in ADDITIONAL_CONSUMER_SMOKE_BATCH:
+                            lifecycle = self._observe_additional_smoke_consumer(recipe, parsed, command)
                         if recipe.id == "l2rw-cifar10-smoke":
                             from_path = _load_source(parser.parse_args(
                                 ["run", "--config", str(recipe.config_path)]

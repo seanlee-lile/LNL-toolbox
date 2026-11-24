@@ -1,5 +1,29 @@
 # Toolbox modularization progress
 
+## Recipe Identity Migration Phase 1C — additional-consumer smoke batch
+
+Base: `code@cc1979fee6f19239c412f0bec11b5432f003772f` (pushed Batch 7).
+Only the DSS, GCE, CAL and DLD smoke entries are converted in place:
+30 explicit and 38 legacy. YAML, paths, ordering, Paper/Web metadata
+and the frozen identity and Sweep fixtures are unchanged.
+
+- Paper selection compares ordered associations, formal defaults, CLI
+  recommendations and config output. DSS also uses real Compose list
+  and create; GCE compares plan identity, member hashes and default roots
+  directly to the frozen Sweep fixture.
+- CAL exercises static preflight and no-data dry-run with synthetic inputs
+  and no external label file. DLD exercises the real local frozen extractor
+  branch using a tiny CIFAR fixture and stops before diffusion training.
+  The external extractor loader is not used; formal/conditional siblings
+  remain untouched.
+- Both isolated wheel and sdist-derived installs matched the frozen
+  snapshot and CLI discovery, with one distribution file-list read per
+  installed index build. Focused: 220 passed / 2 Node/CUDA skips.
+- Full suites: Main 1179 passed / 21 skipped; Web 110 passed / 31 skipped;
+  Scratch 196 passed / 10 skipped. Zero failures or errors. Only the three
+  approved existing files changed. Await human review; no stage, commit,
+  push, or next batch.
+
 ## Recipe Identity Migration Phase 1C — self-contained lifecycle smoke batch
 
 Base: `code@be8c13b3b940d1888f8339584286edd3877604c2` (pushed Batch 6).

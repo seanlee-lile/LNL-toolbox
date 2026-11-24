@@ -24,7 +24,11 @@
       "profile": "smoke"
     },
     "configs/experiment/cal_cifar10_reproduction.yaml",
-    "configs/experiment/cal_cifar10_smoke.yaml",
+    {
+      "id": "cal-cifar10-smoke",
+      "path": "configs/experiment/cal_cifar10_smoke.yaml",
+      "profile": "smoke"
+    },
     {
       "id": "cifar10-clean",
       "path": "configs/experiment/cifar10_clean.yaml",
@@ -55,7 +59,11 @@
       "path": "configs/experiment/cifar10_dual_t_smoke.yaml",
       "profile": "smoke"
     },
-    "configs/experiment/cifar10_dld_smoke.yaml",
+    {
+      "id": "cifar10-dld-smoke",
+      "path": "configs/experiment/cifar10_dld_smoke.yaml",
+      "profile": "smoke"
+    },
     "configs/experiment/dld_cifar10_reproduction.yaml",
     {
       "id": "cifar10-dividemix-smoke",
@@ -105,7 +113,11 @@
       "profile": "smoke"
     },
     "configs/experiment/dss_cifar10_symmetric05_reproduction.yaml",
-    "configs/experiment/dss_cifar10_symmetric05_smoke.yaml",
+    {
+      "id": "dss-cifar10-symmetric05-smoke",
+      "path": "configs/experiment/dss_cifar10_symmetric05_smoke.yaml",
+      "profile": "smoke"
+    },
     "configs/experiment/fine_cifar100n_reproduction.yaml",
     {
       "id": "fine-cifar100n-smoke",
@@ -113,7 +125,11 @@
       "profile": "smoke"
     },
     "configs/experiment/gce_cifar10_noise02_reproduction.yaml",
-    "configs/experiment/gce_cifar10_noise02_smoke.yaml",
+    {
+      "id": "gce-cifar10-noise02-smoke",
+      "path": "configs/experiment/gce_cifar10_noise02_smoke.yaml",
+      "profile": "smoke"
+    },
     {
       "id": "importance-reweighting-binary-high-dim-smoke",
       "path": "configs/experiment/importance_reweighting_binary_high_dim_smoke.yaml",
