@@ -327,6 +327,9 @@ def run_l2rw_experiment(
             "epoch_training_seconds": training_seconds,
             "epoch_validation_seconds": validation_finished - training_finished,
             "epoch_seconds": validation_finished - epoch_started,
+            "epoch_steps": global_step - epoch_start_step,
+            "total_steps": max_steps if max_steps else None,
+            "total_epochs": None if max_steps else epochs,
             "training_steps_per_second": (global_step - epoch_start_step) / training_seconds,
         })
         rows.append(row)

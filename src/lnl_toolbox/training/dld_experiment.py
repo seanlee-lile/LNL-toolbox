@@ -468,6 +468,7 @@ class DLDWorkflow:
                 self.algorithm.noise_scheduler.step()
             self._append({
                 "event": "diffusion_epoch", "epoch": epoch,
+                "stage_epoch": epoch + 1, "total_epochs": self.method_config.epochs,
                 "epoch_seconds": epoch_seconds,
                 **{name: value / samples for name, value in totals.items()},
                 "validation_accuracy": validation_accuracy,

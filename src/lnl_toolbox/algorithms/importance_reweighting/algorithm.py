@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 """Paper-specific lifecycle for binary asymmetric-RCN importance reweighting."""
 
 from copy import deepcopy
@@ -511,6 +513,7 @@ class ImportanceReweightingAlgorithm:
         stopping = StageEarlyStopping(self.raw_config, "trainer.early_stopping", "validation_accuracy", run_dir=self.run_dir)
         stopping.replay_file(metrics_path, phase="final_training", completed=self.state.final_completed_epochs, zero_based=True)
         for epoch in range(self.state.final_completed_epochs, self.config.epochs):
+            epoch_started = perf_counter()
             if stopping.stopped:
                 break
             self.run_state.cycle = epoch
@@ -557,6 +560,9 @@ class ImportanceReweightingAlgorithm:
             self.state.final_global_step = self.run_state.step
             record = {
                 "phase": "final_training",
+                "epoch_seconds": perf_counter() - epoch_started,
+                "total_epochs": self.config.epochs,
+                "stage_epoch": epoch + 1,
                 "epoch": epoch,
                 "global_step": self.run_state.step,
                 "learning_rate": learning_rate,

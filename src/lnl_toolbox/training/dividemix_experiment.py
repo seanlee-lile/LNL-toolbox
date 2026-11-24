@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 """CIFAR assembly, artifacts, and phase-aware resume for DivideMix."""
 
 from copy import deepcopy
@@ -168,6 +170,7 @@ def run_dividemix_experiment(
         while (algorithm.state.phase == DivideMixPhase.WARMUP
                and algorithm.state.warmup_completed_epochs < method.warmup_epochs
                and not warmup_stopping.stopped):
+            epoch_started = perf_counter()
             epoch = algorithm.state.warmup_completed_epochs; sums = {peer: {"objective": 0.0, "confidence_penalty": 0.0} for peer in ("a", "b")}; batches = 0
             if warm_loader is None:
                 warm_loader = prepared.subset_loader(
@@ -184,16 +187,19 @@ def run_dividemix_experiment(
             algorithm.step_schedulers(); algorithm.state.warmup_completed_epochs += 1
             if algorithm.state.warmup_completed_epochs == method.warmup_epochs: algorithm.state.transition(DivideMixPhase.CO_DIVIDE_FITTING)
             row = {"event": "warmup", "epoch": epoch + 1, "warmup_objective_a": sums["a"]["objective"] / batches, "warmup_objective_b": sums["b"]["objective"] / batches, "confidence_penalty_a": sums["a"]["confidence_penalty"] / batches, "confidence_penalty_b": sums["b"]["confidence_penalty"] / batches}
+            row["total_epochs"] = method.warmup_epochs
             if warmup_stopping.enabled:
                 validation = _evaluate(algorithm, validation_loader, device)
                 row["validation_accuracy_ensemble"] = validation["accuracy_ensemble"]
                 warmup_stopping.observe(row, peers)
+            row["epoch_seconds"] = perf_counter() - epoch_started
             metrics_file.write(json.dumps(row) + "\n"); metrics_file.flush(); _save_last(run_dir, algorithm, config, noise_metadata, best_epoch, best_metric, best_metrics)
         if warmup_stopping.stopped and algorithm.state.phase == DivideMixPhase.WARMUP:
             warmup_stopping.restore_best(peers)
             algorithm.state.transition(DivideMixPhase.CO_DIVIDE_FITTING)
             _save_last(run_dir, algorithm, config, noise_metadata, best_epoch, best_metric, best_metrics)
         while algorithm.state.main_completed_epochs < method.training_epochs and not main_stopping.stopped:
+            epoch_started = perf_counter()
             epoch = algorithm.state.main_completed_epochs
             artifact_path = run_dir / f"dividemix_epoch_{epoch + 1:04d}.npz"
             if algorithm.state.phase in {DivideMixPhase.CO_DIVIDE_FITTING, DivideMixPhase.EPOCH_READY}:
@@ -219,7 +225,7 @@ def run_dividemix_experiment(
             metrics_b = _train_peer_epoch(algorithm, "b", artifact, prepared, noisy_by_index, epoch, seed); algorithm.state.transition(DivideMixPhase.EPOCH_READY); algorithm.step_schedulers(); algorithm.state.main_completed_epochs += 1
             validation = _evaluate(algorithm, validation_loader, device); improved = validation["accuracy_ensemble"] > best_metric
             if improved: best_epoch, best_metric, best_metrics = epoch, validation["accuracy_ensemble"], validation
-            row = {"event": "epoch", "epoch": epoch + 1, "global_step_a": algorithm.state.optimizer_steps_a, "global_step_b": algorithm.state.optimizer_steps_b, "validation_accuracy_a": validation["accuracy_a"], "validation_accuracy_b": validation["accuracy_b"], "validation_accuracy_ensemble": validation["accuracy_ensemble"], "artifact_hash": artifact_hash, **{f"train_a_{k}": v for k, v in metrics_a.items()}, **{f"train_b_{k}": v for k, v in metrics_b.items()}}
+            row = {"epoch_seconds": perf_counter() - epoch_started, "total_epochs": method.training_epochs, "event": "epoch", "epoch": epoch + 1, "global_step_a": algorithm.state.optimizer_steps_a, "global_step_b": algorithm.state.optimizer_steps_b, "validation_accuracy_a": validation["accuracy_a"], "validation_accuracy_b": validation["accuracy_b"], "validation_accuracy_ensemble": validation["accuracy_ensemble"], "artifact_hash": artifact_hash, **{f"train_a_{k}": v for k, v in metrics_a.items()}, **{f"train_b_{k}": v for k, v in metrics_b.items()}}
             metrics_file.write(json.dumps(row) + "\n"); metrics_file.flush(); _save_last(run_dir, algorithm, config, noise_metadata, best_epoch, best_metric, best_metrics)
             if improved: atomic_save(_checkpoint_payload(algorithm, config, noise_metadata, best_epoch, best_metric, best_metrics) | {"checkpoint_role": "paired_best"}, run_dir / "best.pt")
             main_stopping.update(row)

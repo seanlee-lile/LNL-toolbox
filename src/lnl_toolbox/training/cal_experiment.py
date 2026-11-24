@@ -189,14 +189,20 @@ def run_cal_experiment(
                     float(warmup_cfg["confidence_weight"]),
                     warmup_cfg.get("confidence_schedule"),
                 ))
+            score = None
             if warmup_stopping.enabled:
                 if validation_loader is None:
                     raise ValueError("warmup.early_stopping requires a validation split")
                 score = evaluate_classification(warmup, validation_loader, CrossEntropyLoss().to(device), device)
+            print(json.dumps({
+                "event": "warmup_epoch", "stage": "warmup", "epoch": epoch + 1,
+                "total_epochs": warmup_epochs, "epoch_seconds": time.perf_counter() - epoch_started,
+                "validation_accuracy": score["accuracy"] if score is not None else None,
+            }), flush=True)
+            if score is not None:
                 if warmup_stopping.observe({"epoch": epoch + 1, "validation_accuracy": score["accuracy"]},
                                            {"model": warmup, "optimizer": warmup_optimizer}):
                     break
-            print(f"CAL warmup epoch {epoch + 1} epoch_seconds={time.perf_counter() - epoch_started:.3f}", flush=True)
         warmup_stopping.restore_best({"model": warmup})
         atomic_save(
             {
@@ -310,6 +316,7 @@ def run_cal_experiment(
             validation = evaluate_classification(model, validation_loader, criterion, device)
             row_values.update({"validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"]})
         row_values["epoch_seconds"] = time.perf_counter() - epoch_started
+        row_values["total_epochs"] = epochs
         row = standardize_epoch_row(
             row_values, require_validation=validation_loader is not None
         ); rows.append(row)

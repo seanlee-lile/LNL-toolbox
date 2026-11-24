@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 """CIFAR assembly and strict epoch-boundary lifecycle for LEND."""
 
 from copy import deepcopy
@@ -233,6 +235,7 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
     actual_epochs = completed_epoch + 1
     with metrics_path.open("a", encoding="utf-8") as metrics_file:
         for epoch in range(completed_epoch + 1, epochs):
+            epoch_started = perf_counter()
             if stopping.stopped:
                 break
             state.cycle = epoch
@@ -299,6 +302,8 @@ def run_lend_experiment(config: dict[str, Any], output_dir: str | Path | None = 
                 best_accuracy, best_epoch = validation["accuracy"], epoch
             row = {
                 "event": "epoch", "epoch": epoch + 1,
+                "epoch_seconds": perf_counter() - epoch_started,
+                "total_epochs": epochs,
                 "implementation_variant": method_config.implementation_variant,
                 "implementation_metadata": method_config.implementation_metadata(),
                 "global_batch_step": state.step,

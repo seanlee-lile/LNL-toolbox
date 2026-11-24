@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 """Reusable CIFAR experiment runner for jointly trained model groups."""
 
 from datetime import datetime
@@ -308,6 +310,7 @@ def run_multi_model_experiment(
     actual_epochs = completed_epoch + 1
     with metrics_path.open("a", encoding="utf-8") as metrics_file:
         for epoch in range(completed_epoch + 1, epochs):
+            epoch_started = perf_counter()
             if stopping.stopped:
                 break
             state.cycle = epoch
@@ -353,6 +356,8 @@ def run_multi_model_experiment(
             row = standardize_epoch_row({
                 "event": "epoch",
                 "epoch": epoch + 1,
+                "epoch_seconds": perf_counter() - epoch_started,
+                "total_epochs": epochs,
                 "global_step": state.step,
                 "learning_rate": float(optimizer.param_groups[0]["lr"]),
                 "train_loss": totals["loss"] / selected_samples,

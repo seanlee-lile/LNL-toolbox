@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 """Complete first-version Dual-T estimation followed by Forward correction."""
 
 import hashlib
@@ -424,6 +426,7 @@ class DualTAlgorithm:
         if max_epochs is not None:
             target = min(target, self.state.posterior_completed_epochs + max_epochs)
         while self.state.posterior_completed_epochs < target and not stopping.stopped:
+            epoch_started = perf_counter()
             epoch = self.state.posterior_completed_epochs
             learning_rate = float(
                 self.posterior_algorithm.optimizer.param_groups[0]["lr"]
@@ -461,6 +464,8 @@ class DualTAlgorithm:
                 "event": "epoch",
                 "stage": "posterior",
                 "epoch": epoch + 1,
+                "epoch_seconds": perf_counter() - epoch_started,
+                "total_epochs": target,
                 "global_step": self.state.posterior_global_step,
                 "learning_rate": learning_rate,
                 **train,
@@ -579,6 +584,7 @@ class DualTAlgorithm:
         if max_epochs is not None:
             target = min(target, self.state.final_completed_epochs + max_epochs)
         while self.state.final_completed_epochs < target and not stopping.stopped:
+            epoch_started = perf_counter()
             epoch = self.state.final_completed_epochs
             learning_rate = float(
                 self.final_algorithm.optimizer.param_groups[0]["lr"]
@@ -610,6 +616,8 @@ class DualTAlgorithm:
                 "event": "epoch",
                 "stage": "final",
                 "epoch": epoch + 1,
+                "epoch_seconds": perf_counter() - epoch_started,
+                "total_epochs": target,
                 "global_step": self.state.final_global_step,
                 "learning_rate": learning_rate,
                 **train,

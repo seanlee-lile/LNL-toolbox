@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 """Deterministic model snapshots consumed by offline noise estimators."""
 
 from collections.abc import Iterable, Mapping
@@ -253,9 +255,12 @@ def pretrain_noisy_classifier(
             if stopping.enabled and payload.get("early_stopping") is not None:
                 stopping.counter.load_state_dict(payload["early_stopping"])
     try:
+        if destination is not None and completed_epoch + 1 < epochs and not stopping.stopped:
+            print(json.dumps({"event": "stage_started", "stage": "pretraining", "total_epochs": epochs}), flush=True)
         for epoch in range(completed_epoch + 1, epochs):
             if stopping.stopped:
                 break
+            epoch_started = perf_counter()
             model.train()
             epoch_loader = loader(epoch) if callable(loader) else loader
             for batch in epoch_loader:
@@ -268,11 +273,13 @@ def pretrain_noisy_classifier(
                 loss.backward()
                 optimizer.step()
                 steps += 1
-            validation_loss = None
+            validation_loss = validation_accuracy = None
             if validation_loader is not None:
                 from lnl_toolbox.evaluation.classification import evaluate_classification
 
-                validation_loss = evaluate_classification(model, validation_loader, criterion, resolved_device)["loss"]
+                validation = evaluate_classification(model, validation_loader, criterion, resolved_device)
+                validation_loss = validation["loss"]
+                validation_accuracy = validation.get("accuracy")
                 if not np.isfinite(validation_loss):
                     raise ValueError("CE pretraining validation loss must be finite")
             if (validation_loader is not None or destination is not None) and (validation_loss is None or validation_loss < best_loss):
@@ -295,7 +302,9 @@ def pretrain_noisy_classifier(
                     "early_stopping": stopping.counter.state_dict() if stopping.enabled else None,
                 }, destination / "pretraining_last.pt")
                 print(json.dumps({"event": "pretraining_epoch", "stage": "pretraining", "epoch": epoch + 1,
-                                  "total_epochs": epochs, "validation_loss": validation_loss}), flush=True)
+                                  "total_epochs": epochs, "validation_loss": validation_loss,
+                                  "validation_accuracy": validation_accuracy,
+                                  "epoch_seconds": perf_counter() - epoch_started}), flush=True)
         if validation_loader is not None and best_model is not None:
             model.load_state_dict(best_model)
     finally:

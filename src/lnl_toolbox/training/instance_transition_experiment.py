@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 """Reusable staged CIFAR runner for instance-transition estimators."""
 
 from datetime import datetime
@@ -320,6 +322,7 @@ def _run_pdl_official_phases(
         stopping.replay(rows, phase=phase)
         with metrics_path.open("a", encoding="utf-8") as handle:
             for local_epoch in range(local_start, phase_length):
+                epoch_started = perf_counter()
                 if stopping.stopped:
                     break
                 state.cycle = local_epoch
@@ -344,6 +347,9 @@ def _run_pdl_official_phases(
                 test = evaluate_classification(model, test_loader, criterion, device)
                 global_epoch += 1
                 row = standardize_epoch_row({
+                    "epoch_seconds": perf_counter() - epoch_started,
+                    "total_epochs": phase_length,
+                    "stage_epoch": local_epoch + 1,
                     "event": "epoch", "epoch": global_epoch, "phase": phase,
                     "phase_epoch": local_epoch + 1, "global_step": state.step,
                     "learning_rate": optimizer.param_groups[0]["lr"],
@@ -505,7 +511,9 @@ def run_instance_transition_experiment(
         best_accuracy = float("-inf")
         from lnl_toolbox.training.early_stopping import StageEarlyStopping
         warmup_stopping = StageEarlyStopping(config, "warmup.early_stopping", "validation_accuracy", run_dir=run_dir)
+        print(json.dumps({"event": "stage_started", "stage": "warmup", "total_epochs": warmup_epochs}), flush=True)
         for warmup_epoch in range(warmup_epochs):
+            epoch_started = perf_counter()
             pretrain_noisy_classifier(warmup_model, warmup_optimizer, train_loader,
                 device, epochs=1, criterion=warmup_loss)
             score = evaluate_classification(warmup_model, noisy_validation_loader, warmup_loss, device)
@@ -514,6 +522,11 @@ def run_instance_transition_experiment(
                 best_state = {key: value.detach().cpu().clone() for key, value in warmup_model.state_dict().items()}
             if warmup_scheduler is not None:
                 warmup_scheduler.step()
+            print(json.dumps({
+                "event": "warmup_epoch", "stage": "warmup", "epoch": warmup_epoch + 1,
+                "total_epochs": warmup_epochs, "epoch_seconds": perf_counter() - epoch_started,
+                "noisy_validation_accuracy": score["accuracy"],
+            }), flush=True)
             if warmup_stopping.observe({"epoch": warmup_epoch + 1, "validation_accuracy": score["accuracy"]},
                                        {"model": warmup_model, "optimizer": warmup_optimizer}):
                 break
@@ -700,6 +713,7 @@ def run_instance_transition_experiment(
     stopping.replay(rows, completed=completed_epoch + 1)
     with metrics_path.open("a", encoding="utf-8") as handle:
         for epoch in range(completed_epoch + 1, epochs):
+            epoch_started = perf_counter()
             if stopping.stopped:
                 break
             state.cycle = epoch
@@ -713,7 +727,7 @@ def run_instance_transition_experiment(
                 accuracy_sum += result.metrics["accuracy"] * count
             algorithm.on_cycle_end(state)
             selection = evaluate_classification(model, noisy_validation_loader, criterion, device)
-            row = standardize_epoch_row({"event": "epoch", "epoch": epoch + 1,
+            row = standardize_epoch_row({"epoch_seconds": perf_counter() - epoch_started, "total_epochs": epochs, "event": "epoch", "epoch": epoch + 1,
                 "global_step": state.step, "learning_rate": optimizer.param_groups[0]["lr"],
                 "train_loss": loss_sum / samples, "train_accuracy": accuracy_sum / samples,
                 "selection_split": "noisy_validation", "selection_loss": selection["loss"],

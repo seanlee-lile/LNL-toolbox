@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 """Standalone, modular SED+FINE experiment lifecycle."""
 
 from copy import deepcopy
@@ -300,6 +302,7 @@ def run_fine_experiment(
         snapshot_dataset, shuffle=True, drop_last=False, stream=1000,
     )
     for epoch in stage_epochs(start_epoch, epochs, warmup_epochs, warmup_stopping, main_stopping):
+        epoch_started = perf_counter()
         train_loader = prepared.loader(DataRole.TRAIN, epoch=epoch)
         snapshot_loader.generator.manual_seed(seed + epoch + 1000)
         if epoch == warmup_epochs:
@@ -338,6 +341,9 @@ def run_fine_experiment(
             )
             clean_ratio = float(clean_mask.float().mean())
         row_values = {
+            "epoch_seconds": perf_counter() - epoch_started,
+            "total_epochs": min(warmup_epochs, epochs) if epoch < warmup_epochs else epochs - warmup_epochs,
+            "stage_epoch": epoch + 1 if epoch < warmup_epochs else epoch - warmup_epochs + 1,
             "epoch": len(rows) + 1, "schedule_epoch": epoch,
             "phase": "warmup" if epoch < warmup_epochs else "robust",
             "train_loss": train_loss,
@@ -350,6 +356,7 @@ def run_fine_experiment(
             row_values.update({
                 "validation_loss": validation["loss"],
                 "validation_accuracy": validation["accuracy"],
+                "validation_targets": requirements.validation_targets,
             })
         # Report each epoch for the paper's last-ten mean, never for selection.
         test = evaluate_classification(model, test_loader, criterion, device)

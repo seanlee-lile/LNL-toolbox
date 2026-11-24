@@ -285,6 +285,7 @@ class UPMWorkflow:
             if self.stage1_scheduler is not None:
                 self.stage1_scheduler.step()
             self._append({"event": "stage1_epoch", "epoch": epoch, **train,
+                          "stage_epoch": epoch + 1, "total_epochs": self.method_config.stage1.epochs,
                           "learning_rate": learning_rate,
                           "epoch_seconds": time.perf_counter() - started,
                           "noisy_validation_loss": validation["loss"],
@@ -420,6 +421,7 @@ class UPMWorkflow:
             counts = self.eta_state.update_count
             self._append({
                 "event": "main_epoch", "epoch": epoch, **train,
+                "stage_epoch": epoch + 1, "total_epochs": self.method_config.main.epochs,
                 "learning_rate": learning_rate,
                 "epoch_seconds": time.perf_counter() - started,
                 "noisy_validation_loss": validation["loss"],

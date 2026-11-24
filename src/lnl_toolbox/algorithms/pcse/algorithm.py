@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 """PCSE workflow with pretrained features and explicit transition backends."""
 
 import hashlib
@@ -331,6 +333,7 @@ class PCSEAlgorithm:
         stopping = StageEarlyStopping(self.config, "pretraining_stage.early_stopping", "validation_accuracy", run_dir=self.run_dir)
         stopping.replay_file(self.run_dir / "metrics.jsonl", event="epoch", phase="pretraining", completed=self.state.pretraining_completed_epochs)
         while self.state.pretraining_completed_epochs < target and not stopping.stopped:
+            epoch_started = perf_counter()
             epoch = self.state.pretraining_completed_epochs
             from lnl_toolbox.training.experiment import apply_epoch_beta1
             apply_epoch_beta1(
@@ -382,6 +385,8 @@ class PCSEAlgorithm:
                 "stage": "pretraining",
                 **self._pretraining_audit(),
                 "epoch": epoch + 1,
+                "epoch_seconds": perf_counter() - epoch_started,
+                "total_epochs": target,
                 "global_step": self.state.pretraining_global_step,
                 "learning_rate": learning_rate,
                 **train,
@@ -623,6 +628,7 @@ class PCSEAlgorithm:
         stopping = StageEarlyStopping(self.config, "transition_stage.early_stopping", "validation_loss", mode="min", run_dir=self.run_dir)
         stopping.replay_file(self.run_dir / "metrics.jsonl", event="epoch", phase="transition", completed=self.state.transition_completed_epochs)
         while self.state.transition_completed_epochs < target and not stopping.stopped:
+            epoch_started = perf_counter()
             model.train()
             samples = 0
             totals: dict[str, float] = {}
@@ -667,6 +673,8 @@ class PCSEAlgorithm:
                 "event": "epoch",
                 "stage": "transition",
                 "epoch": self.state.transition_completed_epochs,
+                "epoch_seconds": perf_counter() - epoch_started,
+                "total_epochs": target,
                 "global_step": self.state.transition_global_step,
                 **latest_metrics,
             })
@@ -947,6 +955,7 @@ class PCSEAlgorithm:
         stopping = StageEarlyStopping(self.config, "ensemble_stage.early_stopping", "validation_nll", mode="min", run_dir=self.run_dir)
         stopping.replay_file(self.run_dir / "metrics.jsonl", event="epoch", phase="ensemble", completed=self.state.ensemble_completed_epochs)
         while self.state.ensemble_completed_epochs < target and not stopping.stopped:
+            epoch_started = perf_counter()
             raw, optimizer, losses = fit_ensemble_weights(
                 probabilities,
                 targets,
@@ -964,6 +973,8 @@ class PCSEAlgorithm:
                 "event": "epoch",
                 "stage": "ensemble",
                 "epoch": self.state.ensemble_completed_epochs,
+                "epoch_seconds": perf_counter() - epoch_started,
+                "total_epochs": target,
                 "global_step": self.state.ensemble_global_step,
                 "validation_nll": losses[-1],
                 "ensemble_weights": weights.tolist(),

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 """Framework-neutral binary experiment utilities for UCI and CIFAR views."""
 
 import json
@@ -243,6 +245,7 @@ def run_binary_experiment(
         web_rows = [row for row in web_rows if row.get("event") == "epoch" and int(row.get("epoch", 0)) <= start_epoch]
         rows = [{key: value for key, value in row.items() if key != "event"} for row in web_rows]
     for epoch in range(start_epoch, epochs if not stopping.stopped else start_epoch):
+        epoch_started = perf_counter()
         row = train_binary_epoch(model, loader, optimizer, risk=risk)
         row["epoch"] = float(epoch + 1)
         if prepared.validation_indices.size:
@@ -254,7 +257,10 @@ def run_binary_experiment(
             row["test_loss"] = evaluation["loss"]
             row["test_accuracy"] = evaluation["accuracy"]
         rows.append(row)
-        web_row = {"event": "epoch", **row, "epoch": epoch + 1}
+        web_row = {
+            "event": "epoch", **row, "epoch": epoch + 1,
+            "epoch_seconds": perf_counter() - epoch_started, "total_epochs": epochs,
+        }
         web_rows.append(web_row)
         metrics_path.write_text(
             "".join(json.dumps(item, sort_keys=True) + "\n" for item in web_rows),

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 """Dedicated, resumable MC-LDCE lifecycle."""
 
 from copy import deepcopy
@@ -126,6 +128,7 @@ def _estimate_volmin(config, model, loader, device, validation_loader=None, run_
     stopping = StageEarlyStopping(config, "transition.early_stopping", "validation_loss", mode="min", run_dir=run_dir)
     completed = 0
     for epoch in range(int(value["epochs"])):
+        epoch_started = perf_counter()
         model.train()
         totals = {}
         samples = 0
@@ -148,16 +151,18 @@ def _estimate_volmin(config, model, loader, device, validation_loader=None, run_
         if scheduler is not None:
             scheduler.step()
         completed = epoch + 1
-        row = {"event": "transition_epoch", "stage": "transition", "epoch": completed,
+        validation = forward_validation(model, transition_model, validation_loader, device) if stopping.enabled else None
+        row = {"epoch_seconds": perf_counter() - epoch_started, "total_epochs": int(value["epochs"]), "event": "transition_epoch", "stage": "transition", "epoch": completed,
                **latest, "transition_matrix": transition_model.matrix().detach().cpu().tolist(),
                "classifier_weight_decay": float(optimizer.param_groups[0]["weight_decay"]),
                "transition_weight_decay": float(optimizer.param_groups[1]["weight_decay"])}
+        if validation is not None:
+            row["noisy_validation_accuracy"] = validation["validation_accuracy"]
         if run_dir is not None:
             with (Path(run_dir) / "metrics.jsonl").open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(row) + "\n")
         print(json.dumps(row), flush=True)
-        if stopping.enabled:
-            validation = forward_validation(model, transition_model, validation_loader, device)
+        if validation is not None:
             if stopping.observe({"epoch": completed, **validation},
                                 {"model": model, "transition": transition_model, "optimizer": optimizer}):
                 break
@@ -243,7 +248,9 @@ def run_mc_ldce_experiment(
         warmup_optimizer = build_optimizer(model, config["optimizer"])
         from lnl_toolbox.training.early_stopping import StageEarlyStopping
         warmup_stopping = StageEarlyStopping(config, "warmup.early_stopping", "validation_accuracy", run_dir=run_dir)
+        print(json.dumps({"event": "stage_started", "stage": "warmup", "total_epochs": warmup_epochs}), flush=True)
         for warmup_epoch in range(warmup_epochs):
+            epoch_started = perf_counter()
             model.train()
             for batch in train_loader:
                 inputs, targets = batch["input"].to(device), batch["target"].to(device)
@@ -251,10 +258,17 @@ def run_mc_ldce_experiment(
                 warmup_optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 warmup_optimizer.step()
+            score = None
             if warmup_stopping.enabled:
                 if validation_loader is None:
                     raise ValueError("warmup.early_stopping requires a validation split")
                 score = evaluate_classification(model, validation_loader, criterion, device)
+            print(json.dumps({
+                "event": "warmup_epoch", "stage": "warmup", "epoch": warmup_epoch + 1,
+                "total_epochs": warmup_epochs, "epoch_seconds": perf_counter() - epoch_started,
+                "clean_validation_accuracy": score["accuracy"] if score is not None else None,
+            }), flush=True)
+            if score is not None:
                 if warmup_stopping.observe({"epoch": warmup_epoch + 1, "validation_accuracy": score["accuracy"]},
                                            {"model": model, "optimizer": warmup_optimizer}):
                     break
@@ -297,6 +311,7 @@ def run_mc_ldce_experiment(
     stopping = StageEarlyStopping(config, "trainer.early_stopping", "validation_accuracy", run_dir=run_dir)
     stopping.replay(rows, completed=start_epoch)
     for epoch in range(start_epoch, epochs):
+        epoch_started = perf_counter()
         if stopping.stopped:
             break
         if str(config.get("scheduler", {}).get("name", "none")).lower() == "linear_after":
@@ -313,10 +328,11 @@ def run_mc_ldce_experiment(
             optimizer.zero_grad(set_to_none=True); loss.backward(); optimizer.step()
             count = targets.numel(); total += count; loss_sum += float(loss.detach()) * count; correct += int(output.logits.argmax(1).eq(targets).sum())
         test = evaluate_classification(model, test_loader, criterion, device)
-        row_values = {"epoch": epoch + 1, "train_loss": loss_sum / total, "train_accuracy": correct / total, "test_loss": test["loss"], "test_accuracy": test["accuracy"], "learning_rate": optimizer.param_groups[0]["lr"], "method": "mc_ldce"}
+        row_values = {"epoch_seconds": perf_counter() - epoch_started, "total_epochs": epochs, "epoch": epoch + 1, "train_loss": loss_sum / total, "train_accuracy": correct / total, "test_loss": test["loss"], "test_accuracy": test["accuracy"], "learning_rate": optimizer.param_groups[0]["lr"], "method": "mc_ldce"}
         if validation_loader is not None:
             validation = evaluate_classification(model, validation_loader, criterion, device)
-            row_values.update({"validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"]})
+            row_values.update({"validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"],
+                               "validation_targets": "clean"})
         row = standardize_epoch_row(row_values, require_validation=validation_loader is not None)
         rows.append(row)
         _write_epoch_metrics(rows, metrics_path)

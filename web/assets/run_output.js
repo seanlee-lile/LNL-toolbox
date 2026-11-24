@@ -4,21 +4,48 @@
   let detailMode = false;
   let latestJob = null;
 
-  function text(value) { return value == null ? "-" : String(value); }
+  function duration(seconds) {
+    if (seconds < 60) return seconds.toFixed(1) + " 秒";
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return minutes + " 分钟";
+    return Math.floor(minutes / 60) + " 小时 " + (minutes % 60) + " 分钟";
+  }
 
   function simpleSummary(training) {
     if (!training) return "";
     const labels = {starting: "正在启动", running: "训练中", completed: "已完成", failed: "训练失败", cancelled: "已取消"};
-    const parts = [labels[training.state] || training.state];
-    if (training.stage) parts.push("阶段：" + training.stage);
+    const stages = {
+      warmup: "预热", pretraining: "预训练", stage1: "预训练",
+      mentor_feedback: "反馈模型训练", mentor_teacher: "导师模型训练",
+      posterior: "后验模型训练", transition: "转移矩阵估计",
+      cwd_transition: "转移矩阵估计", transition_initialization: "初始化转移矩阵",
+      statistics: "估计类别统计量", gda: "拟合类别分布", precorrection: "预校正标签",
+      classifier_initialization: "分类器初始化", correction_training: "校正训练",
+      correction: "校正训练", revision: "修正训练", diffusion: "扩散训练", ensemble: "集成校准",
+      main: "正式训练", final: "正式训练", final_training: "正式训练",
+      robust: "正式训练", cwd: "正式训练",
+    };
+    const stage = stages[training.stage];
+    let heading = labels[training.state] || training.state;
+    if (stage) heading = training.state === "running" ? stage : heading + " · " + stage;
     if (training.completed_epoch != null) {
-      const total = training.total_epochs == null ? "" : "/" + training.total_epochs;
-      parts.push("最近完成 epoch：" + training.completed_epoch + total);
-    } else if (training.total_epochs != null) {
-      parts.push("总 epoch：" + training.total_epochs);
+      const total = training.total_epochs == null ? "" : " / " + training.total_epochs;
+      heading += " · 第 " + training.completed_epoch + total + " 轮";
     }
-    if (training.warning) parts.push("状态读取提示：" + training.warning);
-    return parts.join(" · ");
+    const parts = [heading];
+    if (Number.isFinite(training.epoch_seconds)) parts.push("本轮耗时 " + duration(training.epoch_seconds));
+    if (training.state === "running" && Number.isFinite(training.estimated_total_seconds)) {
+      parts.push("预计本阶段总耗时 " + duration(training.estimated_total_seconds));
+    }
+    const splits = {
+      noisy_validation: "带噪验证准确率", clean_validation: "干净验证准确率",
+      validation: "验证准确率", test: "测试准确率",
+    };
+    if (Number.isFinite(training.accuracy) && splits[training.accuracy_split]) {
+      parts.push(splits[training.accuracy_split] + " " + (training.accuracy * 100).toFixed(1) + "%");
+    }
+    if (training.warning) parts.push("状态读取提示 " + training.warning);
+    return parts.join(" ｜ ");
   }
 
   function render(job) {
@@ -61,7 +88,7 @@
     }
     metrics.textContent = (training.metrics || []).map(function (row) {
       return JSON.stringify(row);
-    }).join("\n") || "尚无已 flush 的 metrics.jsonl 事件。";
+    }).join("\n") || "尚无训练指标。";
     applyToggle(detailMode);
   }
 

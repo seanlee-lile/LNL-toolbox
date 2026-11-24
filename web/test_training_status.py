@@ -35,13 +35,16 @@ const nodes = Object.fromEntries(['training-output','training-summary','training
   'qs-training-progress','qs-training-progress-label'].map(id=>[id,element()]));
 const window = {};
 vm.runInNewContext(fs.readFileSync(process.argv[1], 'utf8'), {window,document:{getElementById:id=>nodes[id]}});
-window.trainingOutput.render({training:{state:'running',completed_epoch:2,total_epochs:10,metrics:[{epoch:2}]}});
+window.trainingOutput.render({training:{state:'running',stage:'pretraining',completed_epoch:2,total_epochs:10,
+  epoch_seconds:12.4,estimated_total_seconds:124,accuracy:.732,accuracy_split:'noisy_validation',
+  metrics:[{epoch:2}]}});
 assert(!nodes.output.classList.contains('hidden'));
 window.trainingOutput.toggle(false);
 assert(!nodes.output.classList.contains('hidden'));
 assert.equal(nodes['qs-training-progress'].value,20);
 assert(nodes['training-summary'].classList.contains('hidden'));
-assert(nodes['qs-training-summary'].textContent.includes('2/10'));
+assert.equal(nodes['qs-training-summary'].textContent,
+  '预训练 · 第 2 / 10 轮 ｜ 本轮耗时 12.4 秒 ｜ 预计本阶段总耗时 2 分钟 ｜ 带噪验证准确率 73.2%');
 window.trainingOutput.toggle(true);
 assert(!nodes.output.classList.contains('hidden'));
 assert(!nodes['training-metrics'].classList.contains('hidden'));
@@ -111,6 +114,31 @@ assert(!nodes['training-summary'].classList.contains('hidden'));
         )
         assert snapshot is not None
         self.assertEqual((snapshot.source, snapshot.state, snapshot.completed_epoch), ("stdout", "completed", 2))
+
+    def test_stage_uses_local_epoch_budget_and_actual_accuracy_split(self) -> None:
+        context = TrainingContext(None, None, "run", 60, validation_targets="noisy")
+        row = {"event": "epoch", "stage": "posterior", "epoch": 12, "stage_epoch": 2,
+               "total_epochs": 20, "epoch_seconds": 12.4, "validation_accuracy": .732}
+        snapshot = training_snapshot(context, lines=[json.dumps(row)], running=True,
+                                     returncode=None, cancel_requested=False)
+        self.assertEqual((snapshot.stage, snapshot.completed_epoch, snapshot.total_epochs), ("posterior", 2, 20))
+        self.assertAlmostEqual(snapshot.estimated_total_seconds, 248)
+        self.assertEqual((snapshot.accuracy, snapshot.accuracy_split), (.732, "noisy_validation"))
+        row.update({"selection_split": "test", "selection_accuracy": .732})
+        snapshot = training_snapshot(context, lines=[json.dumps(row)], running=True,
+                                     returncode=None, cancel_requested=False)
+        self.assertEqual((snapshot.accuracy, snapshot.accuracy_split), (.732, "test"))
+
+    def test_zero_based_epoch_and_no_accuracy_in_loss_only_stage(self) -> None:
+        context = TrainingContext(None, None, "run", 60)
+        rows = [{"event": "stage1_epoch", "epoch": 3, "noisy_validation_accuracy": .8},
+                {"event": "epoch", "stage": "ensemble", "epoch": 1, "validation_nll": 1.3}]
+        first, second = [json.dumps(row) for row in rows]
+        snapshot = training_snapshot(context, lines=[first], running=True, returncode=None, cancel_requested=False)
+        self.assertEqual(snapshot.completed_epoch, 4)
+        snapshot = training_snapshot(context, lines=[first, second], running=True,
+                                     returncode=None, cancel_requested=False)
+        self.assertEqual((snapshot.stage, snapshot.total_epochs, snapshot.accuracy), ("ensemble", None, None))
 
     def test_positional_config_and_explicit_output_are_inferred(self) -> None:
         context = infer_training_context(

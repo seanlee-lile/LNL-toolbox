@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 """Unified CIFAR runner for the standalone VolMinNet method."""
 
 from copy import deepcopy
@@ -328,6 +330,7 @@ def run_volminnet_experiment(
     stopping = StageEarlyStopping(config, "trainer.early_stopping", "noisy_validation_loss", mode="min", run_dir=run_dir)
     stopping.replay_file(metrics_path, event="epoch", completed=algorithm.state.completed_epochs)
     for epoch in range(algorithm.state.completed_epochs, epochs):
+        epoch_started = perf_counter()
         if stopping.stopped:
             break
         sums = {"objective": 0.0, "classification_loss": 0.0, "volume_logdet": 0.0}
@@ -381,6 +384,8 @@ def run_volminnet_experiment(
         row = {
             "event": "epoch",
             "epoch": epoch + 1,
+            "epoch_seconds": perf_counter() - epoch_started,
+            "total_epochs": epochs,
             "global_step": algorithm.state.global_step,
             "train_objective": sums["objective"] / samples,
             "train_noisy_nll": sums["classification_loss"] / samples,

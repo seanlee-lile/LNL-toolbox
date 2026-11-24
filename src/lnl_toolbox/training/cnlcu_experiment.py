@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 """CIFAR assembly and epoch-boundary lifecycle for CNLCU-S/H."""
 
 from copy import deepcopy
@@ -155,6 +157,7 @@ def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None =
         stopping = StageEarlyStopping(config, "trainer.early_stopping", "mean_peer_accuracy", run_dir=run_dir)
         stopping.replay_file(metrics_path, event="epoch", completed=completed_epoch + 1)
         for epoch in range(completed_epoch + 1, epochs):
+            epoch_started = perf_counter()
             if stopping.stopped:
                 break
             for optimizer in (optimizer_a, optimizer_b):
@@ -205,7 +208,7 @@ def run_cnlcu_experiment(config: dict[str, Any], output_dir: str | Path | None =
             validation = _evaluate_peers(algorithm, validation_loader, criterion, device)
             lr_a, lr_b = float(optimizer_a.param_groups[0]["lr"]), float(optimizer_b.param_groups[0]["lr"])
             algorithm.step_schedulers()
-            row = {"event": "epoch", "epoch": epoch + 1, "global_step": state.step,
+            row = {"epoch_seconds": perf_counter() - epoch_started, "total_epochs": epochs, "event": "epoch", "epoch": epoch + 1, "global_step": state.step,
                    "remember_rate": method_config.rate_at(epoch), "learning_rate_a": lr_a, "learning_rate_b": lr_b,
                    "train_loss_a_on_selected_by_b": sums["loss_a_on_selected_by_b"] / selected_b_total,
                    "train_loss_b_on_selected_by_a": sums["loss_b_on_selected_by_a"] / selected_a_total,

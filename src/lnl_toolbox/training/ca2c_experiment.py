@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 """Two-network CA2C workflow with global candidate memory."""
 
 from copy import deepcopy
@@ -151,6 +153,7 @@ def run_ca2c_experiment(
     if warmup_stopping.stopped and start < warmup_epochs:
         warmup_stopping.restore_best(components)
     for epoch in stage_epochs(start, epochs, warmup_epochs, warmup_stopping, main_stopping):
+        epoch_started = perf_counter()
         if p_scheduler is not None and p_scheduler.last_epoch < epoch:
             p_scheduler.step(epoch)
             n_scheduler.step(epoch)
@@ -183,6 +186,9 @@ def run_ca2c_experiment(
             ensemble = (p_logits.detach() + n_logits.detach()) / 2; total += targets.numel(); correct += int(ensemble.argmax(1).eq(targets).sum()); loss_sum += float((p_loss.detach() + n_loss.detach()) / 2) * targets.numel()
         test = _evaluate((p_model, n_model), test_loader, criterion, device)
         row_values = {
+            "epoch_seconds": perf_counter() - epoch_started,
+            "total_epochs": min(warmup_epochs, epochs) if epoch < warmup_epochs else epochs - warmup_epochs,
+            "stage_epoch": epoch + 1 if epoch < warmup_epochs else epoch - warmup_epochs + 1,
             "epoch": len(rows) + 1, "schedule_epoch": epoch,
             "phase": "warmup" if epoch < warmup_epochs else "robust",
             "train_loss": loss_sum / total,
@@ -195,7 +201,8 @@ def run_ca2c_experiment(
         }
         if validation_loader is not None:
             validation = _evaluate((p_model, n_model), validation_loader, criterion, device)
-            row_values.update({"validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"]})
+            row_values.update({"validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"],
+                               "validation_targets": "clean"})
         row = standardize_epoch_row(row_values, require_validation=validation_loader is not None)
         rows.append(row)
         # Keep the live Web console and offline artifacts on the same

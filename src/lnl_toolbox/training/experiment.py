@@ -663,12 +663,6 @@ def run_supervised_experiment(
         seed=seed,
         checkpoint_payload=checkpoint_payload,
     )
-    record_loading_speed = str((config.get("loss") or {}).get("name", "")) == "apl" or str(
-        (config.get("pipeline") or {}).get("pretraining_protocol", "")
-    ) == "loss_correction"
-    record_loading_speed = record_loading_speed or str(
-        (config.get("parameter_update") or {}).get("name", "")
-    ) == "cdr"
     if (str((config.get("loss") or {}).get("name", "")) == "gce"
             or (config.get("pipeline", {}).get("weight_provider") or {}).get("name") == "mentornet"
             or (config.get("pipeline", {}).get("objective_consumer") or {}).get("name") == "dss"):
@@ -973,12 +967,16 @@ def run_supervised_experiment(
             }
             if dss_warmup:
                 row["phase"] = "warmup" if dss_in_warmup else "main"
-            if record_loading_speed:
-                row["epoch_seconds"] = time.perf_counter() - epoch_started
+                row["stage_epoch"] = epoch + 1 if dss_in_warmup else len(main_rows) + 1
+                row["total_epochs"] = min(dss_warmup, epochs) if dss_in_warmup else epochs - dss_warmup
+            else:
+                row["total_epochs"] = epochs
+            row["epoch_seconds"] = time.perf_counter() - epoch_started
             if validation is not None:
                 row.update({
                     "validation_loss": validation["loss"],
                     "validation_accuracy": validation["accuracy"],
+                    "validation_targets": requirements.validation_targets,
                 })
             if update_metric_steps:
                 row.update({

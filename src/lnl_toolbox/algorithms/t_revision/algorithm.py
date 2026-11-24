@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 """Three-stage T-Revision Reweight-R lifecycle."""
 
 from dataclasses import replace
@@ -545,6 +547,7 @@ class TRevisionAlgorithm:
         if max_epochs is not None:
             target = min(target, self.state.stage1_completed_epochs + max_epochs)
         while self.state.stage1_completed_epochs < target and not self._stage_stopped("stage1"):
+            epoch_started = perf_counter()
             epoch = self.state.stage1_completed_epochs
             self._seed_train_loader(10_000, epoch)
             learning_rate = float(self.optimizer.param_groups[0]["lr"])
@@ -564,6 +567,8 @@ class TRevisionAlgorithm:
                 self._save(self.stage1_best_path, role="stage1_best")
                 self.state.stage1_best_hash = _file_sha256(self.stage1_best_path)
             self._append_metrics({
+                "epoch_seconds": perf_counter() - epoch_started,
+                "total_epochs": target,
                 "event": "epoch", "stage": "stage1", "epoch": epoch + 1,
                 "global_step": self.state.stage1_global_step,
                 "learning_rate": learning_rate, **train,
@@ -889,6 +894,7 @@ class TRevisionAlgorithm:
             target = min(target, self.state.stage2a_completed_epochs + max_epochs)
         transition = self._transition_tensor()
         while self.state.stage2a_completed_epochs < target and not self._stage_stopped("classifier_initialization"):
+            epoch_started = perf_counter()
             epoch = self.state.stage2a_completed_epochs
             self._seed_train_loader(20_000, epoch)
             learning_rate = float(self.optimizer.param_groups[0]["lr"])
@@ -907,6 +913,8 @@ class TRevisionAlgorithm:
                 self.state.stage2a_best_hash = _file_sha256(self.stage2a_best_path)
             epoch_metrics = {
                 "event": "epoch", "stage": "classifier_initialization",
+                "epoch_seconds": perf_counter() - epoch_started,
+                "total_epochs": target,
                 "epoch": epoch + 1, "global_step": self.state.stage2a_global_step,
                 "learning_rate": learning_rate, **train,
                 "revised_noisy_validation_loss": validation["loss"],
@@ -950,6 +958,7 @@ class TRevisionAlgorithm:
         if max_epochs is not None:
             target = min(target, self.state.revision_completed_epochs + max_epochs)
         while self.state.revision_completed_epochs < target and not self._stage_stopped("revision"):
+            epoch_started = perf_counter()
             epoch = self.state.revision_completed_epochs
             self._seed_train_loader(30_000, epoch)
             learning_rate = float(self.optimizer.param_groups[0]["lr"])
@@ -973,6 +982,8 @@ class TRevisionAlgorithm:
                 self._save(self.best_path, role="revision_best")
                 self.state.revision_best_checkpoint_hash = _file_sha256(self.best_path)
             epoch_metrics = {
+                "epoch_seconds": perf_counter() - epoch_started,
+                "total_epochs": target,
                 "event": "epoch", "stage": "revision", "epoch": epoch + 1,
                 "global_step": self.state.revision_global_step,
                 "learning_rate": learning_rate, **train,

@@ -140,7 +140,9 @@ def prepare_trusted_mentor_features(
     sample_indices_out: list[np.ndarray] = []
     moving: float | None = None
     epochs = int(student_trainer.get("epochs", config.get("student_epochs", 20)))
+    print(json.dumps({"event": "stage_started", "stage": "mentor_feedback", "total_epochs": epochs}), flush=True)
     for epoch in range(epochs):
+        epoch_started = time.perf_counter()
         model.train()
         for batch in loader:
             inputs = batch["input"].to(device)
@@ -167,9 +169,16 @@ def prepare_trusted_mentor_features(
                 float(noisy_targets[position] == clean_by_global[int(index)])
                 for position, index in enumerate(sample_indices)
             ], dtype=np.float32))
+        validation = None
         if stopping.enabled:
             from lnl_toolbox.evaluation.classification import evaluate_classification
             validation = evaluate_classification(model, validation_loader, nn.CrossEntropyLoss(reduction="none"), device)
+        print(json.dumps({
+            "event": "mentor_feedback_epoch", "stage": "mentor_feedback", "epoch": epoch + 1,
+            "total_epochs": epochs, "epoch_seconds": time.perf_counter() - epoch_started,
+            "clean_validation_accuracy": validation["accuracy"] if validation is not None else None,
+        }), flush=True)
+        if validation is not None:
             if stopping.observe({"epoch": epoch + 1, "validation_accuracy": validation["accuracy"]},
                                 {"model": model, "optimizer": optimizer}):
                 break
@@ -356,7 +365,9 @@ def train_mentor_artifact(
                                 {"model": model, "optimizer": optimizer})
 
     if implementation == "official" and max_steps is not None:
+        print(json.dumps({"event": "stage_started", "stage": "mentor_teacher", "total_steps": max_steps}), flush=True)
         iterator = iter(loader)
+        epoch_started = time.perf_counter()
         for step in range(max_steps):
             try:
                 batch = next(iterator)
@@ -381,10 +392,24 @@ def train_mentor_artifact(
             optimizer.step()
             if (step + 1) % len(loader) == 0:
                 completed_epochs += 1
-                if validation_finished(completed_epochs):
+                stopped = validation_finished(completed_epochs)
+                print(json.dumps({
+                    "event": "mentor_teacher_epoch", "stage": "mentor_teacher", "epoch": completed_epochs,
+                    "global_step": step + 1, "total_steps": max_steps, "epoch_steps": len(loader),
+                    "epoch_seconds": time.perf_counter() - epoch_started,
+                }), flush=True)
+                if stopped:
                     break
+                epoch_started = time.perf_counter()
+            elif step + 1 == max_steps:
+                print(json.dumps({
+                    "event": "mentor_teacher_step", "stage": "mentor_teacher",
+                    "global_step": step + 1, "total_steps": max_steps,
+                }), flush=True)
     else:
+        print(json.dumps({"event": "stage_started", "stage": "mentor_teacher", "total_epochs": epochs}), flush=True)
         for epoch in range(epochs):
+            epoch_started = time.perf_counter()
             for batch in loader:
                 prediction = model(
                     batch["loss"].to(device),
@@ -399,7 +424,12 @@ def train_mentor_artifact(
                 objective.backward()
                 optimizer.step()
             completed_epochs = epoch + 1
-            if validation_finished(completed_epochs):
+            stopped = validation_finished(completed_epochs)
+            print(json.dumps({
+                "event": "mentor_teacher_epoch", "stage": "mentor_teacher", "epoch": completed_epochs,
+                "total_epochs": epochs, "epoch_seconds": time.perf_counter() - epoch_started,
+            }), flush=True)
+            if stopped:
                 break
     stopping.restore_best({"model": model})
     artifact = MentorArtifact.create(

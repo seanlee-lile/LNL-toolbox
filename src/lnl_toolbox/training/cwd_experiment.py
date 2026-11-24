@@ -304,10 +304,10 @@ def _estimate_cwd_transition(prepared, config, run_dir, device, *, publish_last=
             algorithm.step_schedulers()
             row = {
                 "event": "epoch", "phase": "cwd_transition", "epoch": completed,
+                "total_epochs": epochs,
                 "global_step": algorithm.state.global_step,
                 "objective": loss_sum / samples,
                 "classification_loss": classification_sum / samples,
-                "epoch_seconds": time.perf_counter() - started,
                 **transition_model.diagnostics(),
             }
             # Diagnostics only: never use clean labels, or alter the learned matrix/prior.
@@ -323,7 +323,7 @@ def _estimate_cwd_transition(prepared, config, run_dir, device, *, publish_last=
                 row["inferred_prior_error"] = "singular_matrix"
             if validation_loader is not None:
                 auxiliary.eval()
-                validation_loss = validation_samples = 0.0
+                validation_loss = validation_samples = validation_correct = 0
                 with torch.no_grad():
                     transition_tensor = transition_model.matrix(dtype=torch.float32)
                     for batch in validation_loader:
@@ -337,9 +337,11 @@ def _estimate_cwd_transition(prepared, config, run_dir, device, *, publish_last=
                             log_probability, targets, reduction="sum"
                         ))
                         validation_samples += int(targets.numel())
+                        validation_correct += int(log_probability.argmax(dim=1).eq(targets).sum())
                 if validation_samples == 0:
                     raise ValueError("CWD transition noisy validation data is empty")
                 row["noisy_validation_loss"] = validation_loss / validation_samples
+                row["noisy_validation_accuracy"] = validation_correct / validation_samples
                 feasible = (
                     "inferred_prior_error" not in row
                     and row.get("inferred_prior_negative_classes", 1) == 0
@@ -351,6 +353,7 @@ def _estimate_cwd_transition(prepared, config, run_dir, device, *, publish_last=
                     selected_loss = row["noisy_validation_loss"]
                     selected_epoch = completed
                     selected_matrix = matrix.copy()
+            row["epoch_seconds"] = time.perf_counter() - started
             rows.append(row)
             persist()
             (run_dir / "transition_metrics.jsonl").write_text(
@@ -569,6 +572,7 @@ def run_cwd_experiment(
             validation = _evaluate_cwd(model, validation_loader, device, scalar_binary=cwd_variant == "binary_scalar")
             row.update({"validation_loss": validation["loss"], "validation_accuracy": validation["accuracy"]})
         row["epoch_seconds"] = time.perf_counter() - epoch_started
+        row["total_epochs"] = epochs
         print(json.dumps(row, sort_keys=True), flush=True)
         metrics_path.write_text(
             "".join(json.dumps(value, sort_keys=True) + "\n" for value in rows),

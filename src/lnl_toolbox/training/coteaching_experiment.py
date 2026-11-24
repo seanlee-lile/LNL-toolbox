@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 """CIFAR assembly and lifecycle for the complete Co-teaching method."""
 
 from copy import deepcopy
@@ -288,6 +290,7 @@ def run_coteaching_experiment(
         stopping = StageEarlyStopping(config, "trainer.early_stopping", "mean_peer_accuracy", run_dir=run_dir)
         stopping.replay_file(metrics_path, event="epoch", completed=completed_epoch + 1)
         for epoch in range(completed_epoch + 1, epochs):
+            epoch_started = perf_counter()
             if stopping.stopped:
                 break
             for optimizer in (optimizer_a, optimizer_b):
@@ -343,6 +346,8 @@ def run_coteaching_experiment(
             row = {
                 "event": "epoch",
                 "epoch": epoch + 1,
+                "epoch_seconds": perf_counter() - epoch_started,
+                "total_epochs": epochs,
                 "global_step": state.step,
                 "remember_rate": method_config.rate_at(epoch),
                 "learning_rate_a": learning_rate_a,
