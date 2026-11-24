@@ -17,7 +17,11 @@
       "profile": "experiment"
     },
     "configs/experiment/binary_risk_natarajan_reproduction.yaml",
-    "configs/experiment/ca2c_cifar100_reproduction.yaml",
+    {
+      "id": "ca2c-cifar100-reproduction",
+      "path": "configs/experiment/ca2c_cifar100_reproduction.yaml",
+      "profile": "reproduction"
+    },
     {
       "id": "ca2c-cifar10-smoke",
       "path": "configs/experiment/ca2c_cifar10_smoke.yaml",
@@ -112,7 +116,11 @@
       "path": "configs/experiment/cwd_cifar10_smoke.yaml",
       "profile": "smoke"
     },
-    "configs/experiment/dss_cifar10_symmetric05_reproduction.yaml",
+    {
+      "id": "dss-cifar10-symmetric05-reproduction",
+      "path": "configs/experiment/dss_cifar10_symmetric05_reproduction.yaml",
+      "profile": "reproduction"
+    },
     {
       "id": "dss-cifar10-symmetric05-smoke",
       "path": "configs/experiment/dss_cifar10_symmetric05_smoke.yaml",
@@ -124,7 +132,11 @@
       "path": "configs/experiment/fine_cifar100n_smoke.yaml",
       "profile": "smoke"
     },
-    "configs/experiment/gce_cifar10_noise02_reproduction.yaml",
+    {
+      "id": "gce-cifar10-noise02-reproduction",
+      "path": "configs/experiment/gce_cifar10_noise02_reproduction.yaml",
+      "profile": "reproduction"
+    },
     {
       "id": "gce-cifar10-noise02-smoke",
       "path": "configs/experiment/gce_cifar10_noise02_smoke.yaml",
@@ -136,7 +148,11 @@
       "profile": "smoke"
     },
     "configs/experiment/importance_reweighting_binary_smoke.yaml",
-    "configs/experiment/jocor_cifar10_symmetric05_reproduction.yaml",
+    {
+      "id": "jocor-cifar10-symmetric05-reproduction",
+      "path": "configs/experiment/jocor_cifar10_symmetric05_reproduction.yaml",
+      "profile": "reproduction"
+    },
     {
       "id": "jocor-cifar10-symmetric05-smoke",
       "path": "configs/experiment/jocor_cifar10_symmetric05_smoke.yaml",

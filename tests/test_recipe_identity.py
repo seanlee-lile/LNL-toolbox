@@ -74,6 +74,12 @@ ADDITIONAL_CONSUMER_SMOKE_BATCH = {
     "cal-cifar10-smoke": "cal",
     "cifar10-dld-smoke": "dld",
 }
+FIRST_FORMAL_BATCH = {
+    "ca2c-cifar100-reproduction": "ca2c",
+    "dss-cifar10-symmetric05-reproduction": "dss",
+    "gce-cifar10-noise02-reproduction": "gce",
+    "jocor-cifar10-symmetric05-reproduction": "jocor",
+}
 HISTORICAL_SUMMARIES = {
     "recipe": "ac7b430c213e331fab7ef8c044d9ff384473524e4fb4f1ae35d918790133eb49",
     "paper": "ef2af29c25c75641f5ec4222de69e774ac5d5092d45c5b50cfcc16087896d09c",
@@ -366,14 +372,14 @@ class RecipeIdentityTest(unittest.TestCase):
             *batch, pilot, *PAPER_VARIANT_BATCH, *DEDICATED_BATCH,
             COMPOSE_BATCH_RECIPE, *PAPER_SMOKE_BATCH, *STANDARD_PAPER_SMOKE_BATCH,
             *FINAL_STANDARD_PAPER_SMOKE_BATCH, *INTERNAL_LIFECYCLE_SMOKE_BATCH,
-            *ADDITIONAL_CONSUMER_SMOKE_BATCH,
+            *ADDITIONAL_CONSUMER_SMOKE_BATCH, *FIRST_FORMAL_BATCH,
         }
         self.assertEqual(
             [item for item in entries if isinstance(item, dict)],
             [{key: row[key] for key in ("id", "path", "profile")}
              for row in self.expected["recipes"] if row["id"] in explicit_ids],
         )
-        self.assertEqual(sum(isinstance(item, str) for item in entries), 38)
+        self.assertEqual(sum(isinstance(item, str) for item in entries), 34)
         self.assertEqual(
             [item if isinstance(item, str) else item["path"] for item in entries],
             [row["path"] for row in self.expected["recipes"]],
@@ -502,6 +508,9 @@ class RecipeIdentityTest(unittest.TestCase):
     def test_additional_consumer_smoke_batch_preserves_paper_and_secondary_consumers(self):
         self._assert_paper_smoke_batch(ADDITIONAL_CONSUMER_SMOKE_BATCH)
 
+    def test_first_formal_batch_preserves_defaults_and_consumer_bindings(self):
+        self._assert_paper_smoke_batch(FIRST_FORMAL_BATCH, formal=True)
+
     def _observe_additional_smoke_consumer(self, recipe, config, command):
         if recipe.id == "dss-cifar10-symmetric05-smoke":
             listed = command("compose", "list", "--runner", "supervised")
@@ -621,7 +630,7 @@ class RecipeIdentityTest(unittest.TestCase):
             self.assertEqual(recipe.profile, "smoke")
             self.assertEqual(LENDConfig.from_mapping(parsed).implementation_variant, "paper_equation")
 
-    def _assert_paper_smoke_batch(self, batch):
+    def _assert_paper_smoke_batch(self, batch, *, formal=False):
         raw = json.loads(
             (ROOT / "src/lnl_toolbox/cli/data/recipe_catalog.json").read_text(encoding="utf-8")
         )
@@ -644,6 +653,43 @@ class RecipeIdentityTest(unittest.TestCase):
         def cli(*args):
             return command("papers", *args)
 
+        def formal_consumers():
+            from lnl_toolbox.quickstart.service import QuickStartService
+            from web import command_console
+
+            # Force both representations through fresh production catalog reads.
+            caches = (command_console._web_paper_specs, command_console._web_recipe_config,
+                      command_console._registry_recipe_paths, command_console._formal_registry_config)
+            for cached in caches:
+                cached.cache_clear()
+                self.addCleanup(cached.cache_clear)
+            with patch.object(command_console, "_WEB_RECIPE_CATALOG", None):
+                payload = {row["id"]: row for row in command_console._paper_payload()}
+                quick_start = QuickStartService()
+                recipes = quick_start._recipes()
+                papers = {paper.id: paper for paper in catalog.load_papers(ROOT)}
+                consumers = {}
+                for default_id, paper_id in batch.items():
+                    with self.subTest(paper=paper_id, consumer="formal"):
+                        row = payload[paper_id]
+                        expected = expected_papers[paper_id]
+                        self.assertEqual(row["default_recipe_id"], default_id)
+                        self.assertEqual([item["recipe_id"] for item in row["configs"]],
+                                         [item["recipe_id"] for item in expected["associations"]])
+                        selected = next(item for item in row["configs"] if item["recipe_id"] == default_id)
+                        spec = expected_recipes[default_id]
+                        self.assertEqual((selected["config_path"], selected["runner"], selected["method"]),
+                                         (spec["path"], spec["runner"], spec["method"]))
+                        web_id, web_config = command_console._formal_registry_config(paper_id)
+                        self.assertEqual(web_id, default_id)
+                        self.assertEqual(command_console._registry_recipe_paths()[web_id], ROOT / spec["path"])
+                        template = quick_start._template(papers[paper_id], recipes)
+                        self.assertEqual(template.recipe_id, default_id)
+                        self.assertEqual(template.recipe, recipes[default_id])
+                        self.assertEqual(config_hash(template.config), spec["normalized_config_hash"])
+                        consumers[paper_id] = (row, web_id, web_config, template)
+                return consumers
+
         def observe():
             listed = cli("list", "--format", "json")
             recommendations = {row["id"]: row["recommended"] for row in json.loads(listed)}
@@ -651,13 +697,16 @@ class RecipeIdentityTest(unittest.TestCase):
                              {key: row["cli_recommended"] for key, row in expected_papers.items()})
             papers = {paper.id: paper for paper in catalog.load_papers(ROOT)}
             selections = {}
-            for recommended, paper_id in batch.items():
+            for recipe_id, paper_id in batch.items():
                 with self.subTest(paper=paper_id):
                     paper, expected = papers[paper_id], expected_papers[paper_id]
+                    recommended = expected["cli_recommended"] if formal else recipe_id
                     ordered = [item.recipe_id for item in paper.configs]
                     self.assertEqual(ordered, [item["recipe_id"] for item in expected["associations"]])
                     self.assertEqual([asdict(item) for item in paper.configs], expected["associations"])
                     self.assertEqual(catalog.default_paper_config(paper, root=ROOT)[1].id, expected["default"])
+                    if formal:
+                        self.assertEqual(expected["default"], recipe_id)
                     self.assertNotEqual(expected["default"], recommended)
                     self.assertEqual(recommendations[paper_id], recommended)
                     self.assertEqual(ordered[0], recommended)
@@ -691,6 +740,10 @@ class RecipeIdentityTest(unittest.TestCase):
                             lifecycle = self._observe_internal_lifecycle(recipe, parsed, command)
                         if recipe.id == recommended and recommended in ADDITIONAL_CONSUMER_SMOKE_BATCH:
                             lifecycle = self._observe_additional_smoke_consumer(recipe, parsed, command)
+                        if formal and recipe.id == recipe_id:
+                            self.assertEqual(recipe.profile, "reproduction")
+                            self.assertEqual(resolve_runner(parsed).name, row["runner"])
+                            self.assertEqual(cli("config", paper_id, "--profile", "reproduction"), config)
                         if recipe.id == "l2rw-cifar10-smoke":
                             from_path = _load_source(parser.parse_args(
                                 ["run", "--config", str(recipe.config_path)]
@@ -698,6 +751,18 @@ class RecipeIdentityTest(unittest.TestCase):
                             from_id = _load_source(parser.parse_args(["run", "--recipe", recipe.id]))
                             self.assertEqual(from_path[:3], (*from_id[:2], None))
                         configs.append((recipe, config))
+                    if formal:
+                        configs_by_id = {recipe.id: config for recipe, config in configs}
+                        # A variant can span smoke and reproduction. Variant-only selection
+                        # uses the first ordered match, not necessarily the formal recipe.
+                        variant_outputs = {}
+                        for item in expected["associations"]:
+                            variant = item["variant"]
+                            if variant not in variant_outputs:
+                                chosen = cli("config", paper_id, "--variant", variant)
+                                self.assertEqual(chosen, configs_by_id[item["recipe_id"]])
+                                variant_outputs[variant] = chosen
+                        lifecycle = (lifecycle, variant_outputs)
                     if paper_id == "t-revision":
                         short = catalog.recipe_by_id("cifar10-t-revision-sym20-short", ROOT)
                         row = expected_recipes[short.id]
@@ -713,7 +778,7 @@ class RecipeIdentityTest(unittest.TestCase):
                         self.assertIn("evidence", catalog.load_recipe_config(evidence))
                         configs.append((evidence, config_hash(catalog.load_recipe_config(evidence))))
                     selections[paper_id] = (ordered, shown, configs, lifecycle)
-            return listed, selections
+            return listed, selections, formal_consumers() if formal else None
 
         explicit = observe()
         real_files = catalog.resources.files

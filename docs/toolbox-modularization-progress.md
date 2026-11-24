@@ -1,5 +1,33 @@
 # Toolbox modularization progress
 
+## Recipe Identity Migration Phase 1C — first formal defaults
+
+Base: `code@a19dfca456a88a85bcd06ff27b9a5229fdc2300f` (pushed Batch 8).
+Only the CA2C, DSS, GCE and JoCoR formal defaults are converted in place:
+34 explicit and 34 legacy. YAML, resource paths, registry order,
+Paper/Web metadata, and the frozen fixture are unchanged.
+
+- Before/after coverage compares Paper association order, CLI recommendation,
+  `papers list/show/config`, profile/variant selection, Web Paper payload and
+  formal registry binding, Quick Start templates, and normalized config hashes.
+  If smoke and formal share a variant, variant-only selection continues to
+  choose the first ordered match; profile plus variant selects the intended row.
+- DSS Compose still uses the smoke recipe when selected by ID; GCE's frozen
+  Sweep identity still uses smoke. Neither smoke entry is changed by this batch.
+- The new formal gate and 72 targeted identity, execution/resume, Web and
+  Quick Start tests passed. An old inventory assertion initially still
+  expected 30 explicit entries; it was updated without changing the
+  frozen baseline. Main full rerun: 1180 passed / 21 skipped; Web: 110
+  passed / 31 skipped; Scratch: 196 passed / 10 skipped. Zero final failures
+  or errors, with the existing Node/CUDA skip policy.
+- Source and isolated wheel/sdist-derived installs match 68 recipes and
+  resources, 71 packaged YAMLs, discovery 63 / 4 / 68 / 4, 26 Papers, 56
+  ordered associations and 26 defaults. Installed CLI resolves all four
+  formal paths; each installed index build reads the file list once.
+- Implementation and validation: 5/5 (scope, migration, focused gate,
+  full regression, isolated installs). Await human review; no stage,
+  commit, push, or next batch. External raw JSON consumers were not tested.
+
 ## Recipe Identity Migration Phase 1C — additional-consumer smoke batch
 
 Base: `code@cc1979fee6f19239c412f0bec11b5432f003772f` (pushed Batch 7).
