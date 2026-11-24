@@ -10,6 +10,8 @@ import sys
 from lnl_toolbox.catalog import default_paper_config, load_papers, load_recipe_config
 from lnl_toolbox.cli.i18n import language, saved_language, save_language, text
 
+_CLEAR_VALUE = object()
+
 SUMMARIES_EN = {
     "binary-risk": "Construct an unbiased binary risk using known class-dependent label-noise rates.",
     "importance-reweighting": "Estimate and apply importance weights under binary asymmetric random classification noise.",
@@ -470,10 +472,13 @@ class _PaperWorkspace:
 
     def refresh(self, *, reset=False):
         query = self.search.text.casefold()
-        fields = [("field", field) for field in self.editor.fields()]
-        schedules = [("schedule", {"path": prefix, "base": base, "value": schedule})
-                     for prefix, base, schedule in self.editor.schedules()]
-        self.entries = schedules + fields
+        if self.editor.guided:
+            self.entries = self.editor.plan_entries()
+        else:
+            fields = [("field", field) for field in self.editor.fields()]
+            schedules = [("schedule", {"path": prefix, "base": base, "value": schedule})
+                         for prefix, base, schedule in self.editor.schedules()]
+            self.entries = schedules + fields
         if query:
             self.entries = [(kind, f) for kind, f in self.entries
                             if query in f["path"].casefold()
@@ -483,6 +488,8 @@ class _PaperWorkspace:
             self.app.invalidate()
 
     def group_title(self):
+        if self.editor.guided and self.editor.restricted:
+            return text("专属参数（只读）", "Restricted parameters (read-only)")
         return text("全部可编辑参数", "All editable parameters") if self.editor.advanced else text("默认参数", "Default parameters")
 
     def header(self):
@@ -502,8 +509,16 @@ class _PaperWorkspace:
         for index, (kind, field) in enumerate(self.entries):
             value = field["value"]
             if kind == "schedule":
-                value = text("启用", "On") if self.editor.enabled(value) else text("关闭", "Off")
+                if self.editor.guided:
+                    value = self.schedule_label(field)
+                else:
+                    value = text("启用", "On") if self.editor.enabled(value) else text("关闭", "Off")
                 label = field["path"] + text("  学习率阶段", "  LR schedule")
+            elif kind == "group":
+                label = field["path"]
+                value = " / ".join(str(child["value"]) for child in field["children"])
+            elif kind == "info":
+                label = field["path"]
             else:
                 label = field["path"]
                 value = json.dumps(value, ensure_ascii=False)
@@ -522,6 +537,8 @@ class _PaperWorkspace:
         return result or [("class:muted", text(" 没有匹配的参数。", " No matching parameters."))]
 
     def split_total(self, field):
+        if self.editor.guided and self.editor.pool_size:
+            return self.editor.pool_size
         from lnl_toolbox.data.registry import training_pool_size
         profile = self.editor.config.get("local_dataset", {}).get("profile") or {}
         counts = profile.get("sample_counts_by_split", {})
@@ -532,7 +549,13 @@ class _PaperWorkspace:
         if not self.entries:
             return text("清空搜索或按 F2 显示高级参数。", "Clear search or press F2 for advanced parameters.")
         kind, field = self.entries[self.selected]
+        if kind == "info":
+            return str(field["value"])
+        if kind == "group":
+            return "\n\n".join(child["path"] + "\n" + self.editor.note(child) for child in field["children"])
         if kind == "schedule":
+            if self.editor.guided:
+                return self.schedule_label(field) + "\n" + text("按 Enter 查看本阶段控制项。", "Press Enter to inspect stage controls.")
             schedule = field["value"]
             nodes = schedule.get("step_milestones", schedule.get("milestones", []))
             return text("按 Enter 编辑阶段开关、节点和各段学习率。", "Press Enter to edit the toggle, milestones and per-segment rates.") + "\n" + field["base"] + "\n" + str(nodes)
@@ -540,6 +563,8 @@ class _PaperWorkspace:
         reference = field.get("split_reference")
         if reference:
             note += "\n" + text("原论文：", "Paper: ") + f"{reference['count']} / {reference['total']}"
+            if self.editor.guided:
+                note += "\n" + self.editor.split_summary()
         return field["path"] + "\n\n" + note
 
     def status_text(self):
@@ -572,6 +597,17 @@ class _PaperWorkspace:
         return button
 
     def change(self, operation):
+        if self.editor.guided:
+            before = self.editor.snapshot()
+            try:
+                operation()
+            except Exception:
+                self.editor.restore(before)
+                raise
+            if before != self.editor.snapshot():
+                self.editor.history.append(before)
+            self.refresh()
+            return
         before = (deepcopy(self.editor.config), self.editor.dataset, deepcopy(self.editor.schedule_stash))
         operation()
         if before[0] != self.editor.config:
@@ -580,11 +616,16 @@ class _PaperWorkspace:
 
     def undo(self):
         if self.editor.history:
-            self.editor.config, self.editor.dataset, self.editor.schedule_stash = self.editor.history.pop()
+            if self.editor.guided:
+                self.editor.restore(self.editor.history.pop())
+            else:
+                self.editor.config, self.editor.dataset, self.editor.schedule_stash = self.editor.history.pop()
             self.refresh()
             self.set_status(text("已撤销上一次修改。", "Last change undone."))
 
     def toggle_advanced(self):
+        if self.editor.guided:
+            self.editor.restricted = False
         self.editor.advanced = not self.editor.advanced
         self.refresh(reset=True)
 
@@ -695,7 +736,7 @@ class _PaperWorkspace:
             result = await self.value(child)
             if result is None:
                 return None
-            values[index][child["key"]] = result
+            values[index][child["key"]] = None if result is _CLEAR_VALUE else result
             return values
         if field["kind"] == "boolean":
             return not field["value"]
@@ -703,21 +744,50 @@ class _PaperWorkspace:
             return await self.pick(field["path"], [(c["value"], c["value"]) for c in field["choices"]], default=field["value"])
         def convert(raw):
             from lnl_toolbox.core.config_overrides import parse_override_value
-            value = parse_override_value(raw) if field["kind"] in {"number", "list"} else raw
-            return self.editor.rules._coerce_patch_value(field, value)
-        return await self.ask(field["path"], json.dumps(field["value"]) if field["kind"] in {"number", "list"} else field["value"],
+            if self.editor.guided and field.get("nullable") and not raw.strip():
+                value = None
+            elif self.editor.guided and field["kind"] in {"list", "object"}:
+                value = json.loads(raw)
+            else:
+                value = parse_override_value(raw) if field["kind"] in {"number", "list"} else raw
+            value = self.editor.rules._coerce_patch_value(field, value)
+            return _CLEAR_VALUE if self.editor.guided and value is None else value
+        structured = field["kind"] in {"number", "list", "object"}
+        initial = json.dumps(field["value"], ensure_ascii=False) if structured else field["value"]
+        return await self.ask(field["path"], initial,
                               note=self.editor.note(field) if "." in field["path"] else "", convert=convert)
 
     async def edit_selected(self):
         if not self.entries:
             return
         kind, field = self.entries[self.selected]
+        if kind == "info":
+            return
+        if kind == "group":
+            children = field["children"]
+            if self.editor.restricted:
+                await self.show_text(field["path"], self.details())
+                return
+            choices = []
+            for child in children:
+                options = child.get("choices") or []
+                fixed_choice = len(options) == 1 and options[0]["value"] == child["value"]
+                if child["editable"] and child.get("display_group") != "restricted" and not fixed_choice:
+                    choices.append((f"{child['path']} = {child['value']}", child))
+            field = await self.pick(field["path"], choices) if choices else None
+            if field is None:
+                return
         if kind == "schedule":
-            await self.schedule(field)
+            if self.editor.guided:
+                await self.guided_schedule(field["path"])
+            else:
+                await self.schedule(field)
+            return
+        if not field["editable"] or self.editor.guided and self.editor.restricted:
             return
         value = await self.value(field)
         if value is not None:
-            self.change(lambda: self.editor.update([(field["path"], value)]))
+            self.change(lambda: self.editor.update([(field["path"], None if value is _CLEAR_VALUE else value)]))
             self.set_status(text("已更新草稿。", "Draft updated."))
 
     async def choose_language(self):
@@ -757,7 +827,12 @@ class _PaperWorkspace:
             actions = [(text("下一步：检查与确认", "Next: Review and confirm"), "review")] + [
                 item for item in actions if item[1] not in {"dataset", "save", "validate", "train"}
             ]
+            actions.insert(1, (text("查看专属参数 / 返回可编辑参数", "Toggle restricted parameters"), "restricted"))
         choice = await self.pick(text("操作", "Actions"), actions)
+        if choice == "restricted":
+            self.editor.restricted = not self.editor.restricted
+            self.refresh(reset=True)
+            return
         if choice == "review":
             self.app.exit(result="review")
             return
@@ -830,6 +905,152 @@ class _PaperWorkspace:
             if not await self.confirm(text("放弃未保存的修改？", "Discard unsaved changes?"), ""):
                 return
         self.app.exit(result="back" if self.editor.guided else 0)
+
+    def schedule_label(self, group):
+        labels = {
+            "multistep": text("按节点变化", "Milestones"),
+            "cosine": text("余弦下降", "Cosine decay"),
+            "linear_after": text("线性下降", "Linear decay"),
+            "linear_decay": text("线性下降", "Linear decay"),
+            "step": text("固定间隔衰减", "Fixed interval decay"),
+        }
+        mode = (labels.get(group["value"], labels["multistep"]) if group["enabled"]
+                else text("固定学习率", "Constant learning rate"))
+        budget = self.editor.schedule_budget(group)
+        unit = text("步", "steps") if group["stepped"] else text("轮", "epochs")
+        return f"{mode} / {budget} {unit}" if budget is not None else mode
+
+    async def guided_schedule(self, prefix):
+        group = self.editor.schedule_groups()[prefix]
+        fields = group["fields"]
+        options = []
+        if "none" in group["choices"]:
+            label = text("关闭动态学习率", "Disable dynamic learning rate") if group["enabled"] else text("启用动态学习率", "Enable dynamic learning rate")
+            options.append((label, "toggle"))
+        if group["enabled"] and not group["stepped"] and len(set(group["choices"]) - {"none"}) > 1:
+            options.append((text("变化方式", "Schedule mode"), "mode"))
+        base = group["base"]
+        has_nodes = group["stepped"] or group["value"] == "multistep"
+        if group["enabled"] and group["can_segment"]:
+            label = (text("移出学习率分段表", "Move learning rate out of stage table") if group["segmented"]
+                     else text("加入学习率分段表", "Move learning rate into stage table"))
+            options.append((label, "segment"))
+        if group["enabled"] and base and base["editable"] and (not has_nodes or group["segmented"]):
+            options.append((f"{text('起始学习率', 'Initial learning rate')} = {base['value']}", base["path"]))
+        node = group["node"]
+        if group["enabled"] and has_nodes and node is not None:
+            options.append((f"{text('学习率节点', 'Milestones')} {node['value']}", "nodes"))
+        if group["enabled"]:
+            active = self.editor.active_schedule_fields(group)
+            for suffix, field in fields.items():
+                if suffix not in active or suffix in {"milestones", "step_milestones", "lr_values"} or has_nodes and suffix == "gamma":
+                    continue
+                value = field["value"]
+                if suffix == "t_max" and not field["editable"] and self.editor.source_schema["method"] == "fine":
+                    warmup = self.editor._visible().get("fine.warmup_epochs", {}).get("value", 0)
+                    budget = self.editor.schedule_budget(group)
+                    if budget is not None:
+                        value = max(1, budget - warmup)
+                options.append((f"{field.get('label', field['path'])} = {value}", field["path"]))
+        options.append((text("返回运行计划", "Back to run plan"), None))
+        note = self.schedule_label(group)
+        if "none" not in group["choices"]:
+            note += "\n" + text("此阶段的学习率变化方式由训练端固定。", "The training method fixes this schedule mode.")
+        if self.editor.source_schema["method"] == "fine" and group["value"] == "cosine":
+            warmup = self.editor._visible().get("fine.warmup_epochs", {}).get("value", 0)
+            budget = self.editor.schedule_budget(group)
+            if budget is not None:
+                note += "\n" + text(f"预热 {warmup} 轮，余弦下降 {max(1, budget-warmup)} 轮。",
+                                     f"Warmup: {warmup} epochs. Cosine decay: {max(1, budget-warmup)} epochs.")
+        choice = await self.pick(prefix, options, note=note)
+        if choice == "toggle":
+            self.change(lambda: self.editor.toggle_schedule(prefix))
+        elif choice == "segment":
+            self.change(lambda: self.editor.segmented.update({base["path"]: not group["segmented"]}))
+        elif choice == "mode":
+            mode = await self.pick(text("变化方式", "Schedule mode"), [
+                (item, item) for item in group["choices"] if item != "none"
+            ], default=group["value"])
+            if mode is not None:
+                self.change(lambda: self.editor.set_schedule_mode(prefix, mode))
+        elif choice == "nodes":
+            await self.guided_schedule_nodes(group)
+        elif choice is not None:
+            field = self.editor._visible()[choice]
+            if not field["editable"]:
+                await self.show_text(field["path"], self.editor.note(field))
+                return
+            value = await self.value(field)
+            if value is not None:
+                self.change(lambda: self.editor.update([(choice, None if value is _CLEAR_VALUE else value)]))
+
+    async def guided_schedule_nodes(self, group):
+        import math
+
+        fields = group["fields"]
+        node = group["node"]
+        nodes = list(node["value"] or [])
+        rates_field = fields.get("lr_values")
+        gamma = fields.get("gamma")
+        explicit = rates_field["value"] if rates_field else None
+        base = group["base"]["value"] if group["base"] else None
+        rates = list(explicit) if explicit is not None else [
+            float(f"{base * (gamma['value'] if gamma else .1) ** (i + 1):.7g}") if base is not None else None
+            for i in range(len(nodes))
+        ]
+        options = []
+        for index, point in enumerate(nodes):
+            options.append((f"{text('节点', 'Milestone')} {index+1}  {point}", ("node", index)))
+            if group["segmented"] and index < len(rates) and rates[index] is not None:
+                options.append((f"  {text('学习率', 'Learning rate')}  {rates[index]}", ("rate", index)))
+            if node["editable"]:
+                options.append((f"  {text('移除节点', 'Remove milestone')} {index+1}", ("remove", index)))
+        if node["editable"]:
+            options.append((text("添加节点", "Add milestone"), ("add", None)))
+        options.append((text("返回", "Back"), None))
+        action = await self.pick(group["path"], options, note=self.schedule_label(group))
+        if action is None:
+            return
+        operation, index = action
+        if operation == "rate":
+            def rate_value(raw):
+                value = float(raw)
+                if not math.isfinite(value) or value <= 0 or not base or base <= 0:
+                    raise ValueError(text("起始和分段学习率必须为正数。", "Initial and segment learning rates must be positive."))
+                return value
+            rate = await self.ask(text("节点后的学习率", "Learning rate after milestone"), rates[index], convert=rate_value)
+            if rate is not None:
+                if rates_field and rates_field["editable"]:
+                    rates[index] = rate
+                    self.change(lambda: self.editor.update([(rates_field["path"], rates)]))
+                elif gamma and gamma["editable"]:
+                    self.change(lambda: self.editor.update([(gamma["path"], (rate / base) ** (1 / (index + 1)))]))
+            return
+        if not node["editable"]:
+            return
+        if operation == "node":
+            def milestone(raw):
+                value = int(raw)
+                if value < 1 or any(value == item for i, item in enumerate(nodes) if i != index):
+                    raise ValueError(text("节点须为不重复的正整数。", "Milestones must be distinct positive integers."))
+                return value
+            point = await self.ask(text("节点位置", "Milestone position"), nodes[index], convert=milestone)
+            if point is None:
+                return
+            nodes[index] = point
+        elif operation == "add":
+            nodes.append(max(nodes, default=0) + 1)
+            if explicit is not None:
+                rates.append(rates[-1] if rates else base)
+        elif operation == "remove":
+            nodes.pop(index)
+            if explicit is not None and index < len(rates):
+                rates.pop(index)
+        order = sorted(range(len(nodes)), key=nodes.__getitem__)
+        patches = [(node["path"], [nodes[i] for i in order])]
+        if explicit is not None and rates_field["editable"] and len(rates) == len(nodes):
+            patches.append((rates_field["path"], [rates[i] for i in order]))
+        self.change(lambda: self.editor.update(patches))
 
     async def schedule(self, field):
         from prompt_toolkit.widgets import TextArea, Label, Checkbox

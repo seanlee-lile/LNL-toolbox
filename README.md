@@ -29,7 +29,7 @@ lnl web
 首次使用可以任选一种入口：
 
 - **Web-first**：打开首页后，从“快速开始”输入本地数据路径，完成识别、登记、实际加载、方法选择、预演和运行；完整步骤见 [Web 使用手册](docs/toolbox-usage-manual.md)。
-- **CLI-first**：依次执行 `lnl doctor`、`lnl list experiments --profile smoke`、`lnl validate --recipe <recipe> --check-data`、Dry-run 和 `lnl run`；命令速查见 [CLI 简明操作教程](docs/LNL-Toolbox-简明操作教程.md)。
+- **CLI-first**：运行 `lnl start`，按五步向导选择数据集、标签噪声和论文方法，编辑参数并确认训练。用 `lnl --help` 查看命令，用 `lnl <命令> --help` 查看参数。
 
 两条入口使用同一套数据、兼容性和训练合同。配置存在、Dry-run 通过或 smoke 成功只说明相应工程链路可用，不自动代表论文数值已经复现。
 
@@ -80,7 +80,13 @@ adapter 成功加载 train/test 后才标记 `ready`。`verify` 会先执行同�
 
 ## 2. Quick Start
 
-新用户推荐按下面的顺序操作：
+在交互终端启动五步向导。按左箭头或 Esc 可以返回上一步。
+
+```powershell
+lnl start
+```
+
+已有配置或需要在脚本中运行时，可以直接使用以下命令：
 
 ```powershell
 lnl doctor

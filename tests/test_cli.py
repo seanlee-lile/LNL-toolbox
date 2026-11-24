@@ -60,6 +60,24 @@ _unified_cli_ROOT = Path(__file__).resolve().parents[1]
 
 
 class CliPresentationAndEditorTest(unittest.TestCase):
+    def test_help_lists_current_workflows_and_hides_compatibility_aliases(self):
+        def help_for(*args):
+            with redirect_stdout(StringIO()) as output, self.assertRaises(SystemExit) as exit_info:
+                main([*args, "--help"])
+            self.assertEqual(exit_info.exception.code, 0)
+            return output.getvalue()
+
+        for locale in ("zh", "en"):
+            with self.subTest(locale=locale):
+                root = help_for("--lang", locale)
+                for example in ("lnl start", "lnl papers list", "lnl validate", "lnl resume <run-dir>"):
+                    self.assertIn(example, root)
+                self.assertIn("{list,config}", help_for("--lang", locale, "papers"))
+                self.assertNotIn("{list,show,config}", help_for("--lang", locale, "papers"))
+                run_help = help_for("--lang", locale, "run")
+                for flag in ("--resume", "--check-data", "--dry-run", "--review"):
+                    self.assertNotIn(flag, run_help)
+
     def test_browsing_in_fresh_process_does_not_import_training_dependencies(self):
         script = """
 import sys

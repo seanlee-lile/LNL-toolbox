@@ -41,46 +41,280 @@ def _terminal_session(*, input=None, output=None, write=None):
 
 
 class QuickStartEditor(PaperEditor):
+    _SCHEDULE_FIELDS = {
+        "multistep": ("milestones", "gamma", "lr_values"),
+        "cosine": ("t_max", "eta_min"),
+        "linear_after": ("start_epoch", "end_epoch", "decay_start"),
+        "linear_decay": ("start_epoch", "end_epoch", "initial_lr", "final_lr", "beta1_before", "beta1_after"),
+        "step": ("step_size", "gamma"),
+    }
+
     def __init__(self, method, service, dataset, noise, inputs):
         super().__init__(method, recipe=recipe_by_id(method.recipe_id), guided=True)
         self.dataset = dataset.alias
+        self.pool_size = dataset.training_pool_size or dataset.train_size
         self.review_payload = service.review_payload(self.recipe.id, self.dataset, noise, inputs, [])
-        self.config = self._prepare_patches([])
-        self.initial = deepcopy(self.config)
-        self.saved_config = deepcopy(self.config)
+        overrides = self.review_payload["_quick_start_overrides"]
+        self.config = service._apply_overrides(self.baseline, overrides)
+        self.source_schema = self.rules._config_schema(
+            self.recipe.id, quickstart_train_count=self.review_payload["_quickstart_train_count"],
+            quickstart_dataset=self.dataset, quickstart_data_service=service.data_service,
+        )
+        self.draft = {}
+        self.segmented = {}
+        self.restricted = False
 
     def _protected(self, path):
         # These controls are owned by the preceding steps of the wizard.
-        protected = set(self.review_payload["_quick_start_overrides"]) | {
+        protected = {
             "noise", "seed", "data.name", "data.root", "data.path", "data.noise_path",
             "data.labels_path", "data.annotation_root", "data.seed", "local_dataset",
         }
         return any(path == key or path.startswith(key + ".") for key in protected)
 
-    def fields(self):
-        return [field for field in super().fields() if not self._protected(field["path"])]
+    def schema(self):
+        schema = deepcopy(self.source_schema)
+        fields = {field["path"]: field for field in schema["fields"]}
+        for path, field in fields.items():
+            field["value"] = deepcopy(self.draft.get(path, field["value"]))
+        for path, field in fields.items():
+            if field.get("model_name") and path.endswith((".variant", ".weights")):
+                parent = path.rsplit(".", 1)[0]
+                field["model_name"] = fields.get(parent + ".name", {}).get("value", field["model_name"])
+                field["model_variant"] = fields.get(parent + ".variant", {}).get("value", field.get("model_variant"))
+                field["choices"] = self.rules._parameter_choices(field, schema["method"])
+        return schema
+
+    def _visible(self):
+        return {field["path"]: field for field in self.schema()["fields"]
+                if field.get("visible", True) and not self._protected(field["path"])}
+
+    def schedule_groups(self, fields=None):
+        fields = self._visible() if fields is None else fields
+        groups = {}
+        for path, name in fields.items():
+            if not (name["editable"] and path.endswith(".name")
+                    and (path == "scheduler.name" or ".scheduler." in path)):
+                continue
+            prefix = path[:-5]
+            stage, _, owner = prefix.partition("scheduler")
+            base = fields.get(stage + "optimizer" + owner + ".lr")
+            if base is None:
+                base = next((field for key, field in fields.items() if key.startswith(stage + "optimizer.")
+                             and key.endswith("_lr")), None)
+            controls = {key[len(prefix)+1:]: f for key, f in fields.items() if key.startswith(prefix + ".")}
+            node = controls.get("step_milestones") or controls.get("milestones")
+            stepped = "step_milestones" in controls
+            mode = name["value"] or "none"
+            enabled = bool(node["value"]) if stepped else mode != "none"
+            can_segment = bool(base and base["editable"] and node and
+                               (stepped or mode == "multistep") and
+                               any(controls.get(key, {}).get("editable") for key in ("gamma", "lr_values")))
+            groups[prefix] = {
+                "path": prefix, "fields": controls, "base": base, "node": node, "stepped": stepped,
+                "value": mode, "enabled": enabled, "can_segment": can_segment,
+                "segmented": can_segment and self.segmented.get(base["path"], True),
+                "choices": [choice["value"] for choice in name.get("choices") or []],
+            }
+        return groups
+
+    @classmethod
+    def active_schedule_fields(cls, group):
+        if group["stepped"]:
+            return {"step_milestones", "gamma", "lr_values"}
+        active = set(cls._SCHEDULE_FIELDS.get(group["value"], ()))
+        if group["enabled"] and "beta1_before" in group["fields"]:
+            active.update(("start_epoch", "beta1_before", "beta1_after"))
+        return active
+
+    def fields(self, fields=None):
+        fields = self._visible() if fields is None else fields
+        groups = self.schedule_groups(fields)
+        managed = {field["path"] for group in groups.values() for field in group["fields"].values()}
+        for group in groups.values():
+            base = group["base"]
+            if base and base["editable"] and group["enabled"] and (
+                group["segmented"] or not (group["stepped"] or group["value"] == "multistep")
+            ):
+                managed.add(base["path"])
+        steps = fields.get("trainer.max_steps", {}).get("value") or 0
+        budget = "trainer.epochs" if self.source_schema["method"] == "l2rw" and steps > 0 else "trainer.max_steps"
+        regular = []
+        for path, field in fields.items():
+            if path in managed or path == budget:
+                continue
+            if path.endswith(".early_stopping_monitor"):
+                switch = fields.get(path.removesuffix("_monitor"))
+                if switch is not None and not switch["value"]:
+                    continue
+            regular.append(field)
+        return regular
+
+    def plan_entries(self):
+        visible = self._visible()
+        fields = self.fields(visible)
+        groups = self.schedule_groups(visible)
+        regular = {field["path"]: field for field in fields}
+        model_cards = {}
+        entries = []
+        for field in fields:
+            parent, _, key = field["path"].rpartition(".")
+            if (parent == "model" or parent.endswith(".model")) and key in {"name", "variant", "weights"}:
+                if parent not in model_cards:
+                    model_cards[parent] = {**field, "path": parent, "children": []}
+                    entries.append(("group", model_cards[parent]))
+                model_cards[parent]["children"].append(field)
+            elif field["path"].endswith(".early_stopping") and field["path"] + "_monitor" in visible:
+                monitor = regular.get(field["path"] + "_monitor")
+                entries.append(("group", {**field, "children": [field, monitor] if monitor else [field]}))
+            elif not (field["path"].endswith(".early_stopping_monitor")
+                      and field["path"].removesuffix("_monitor") in regular):
+                entries.append(("field", field))
+        if self.restricted:
+            return [(kind, field) for kind, field in entries if field.get("display_group") == "restricted"]
+        stages = self.timeline(visible)
+        timeline = [("info", {"path": text("训练时间轴", "Training timeline"), "value": " → ".join(stages)})] if stages else []
+        return timeline + [("schedule", group) for group in groups.values()] + [
+            (kind, field) for kind, field in entries
+            if field.get("display_group") == "default" or self.advanced and field.get("display_group") == "advanced"
+        ]
+
+    def timeline(self, fields=None):
+        stages = {
+            "t_revision": (("初始分类器", "Initial classifier", "t_revision.stage1.epochs"),
+                           ("估计噪声矩阵", "Estimate transition matrix", None),
+                           ("校正分类器", "Correct classifier", "t_revision.classifier_initialization.epochs"),
+                           ("联合修正", "Joint correction", "t_revision.revision.epochs")),
+            "dual_t": (("初始模型", "Initial model", "posterior_stage.epochs"),
+                       ("估计噪声矩阵", "Estimate transition matrix", None),
+                       ("最终模型", "Final model", "final_stage.epochs")),
+            "pcse": (("特征预训练", "Feature pretraining", "pretraining_stage.epochs"),
+                     ("估计噪声矩阵", "Estimate transition matrix", "transition_stage.epochs"),
+                     ("提取特征与统计", "Extract features and statistics", None),
+                     ("集成训练", "Ensemble training", "ensemble_stage.epochs")),
+            "dividemix": (("双模型预热", "Warm up both models", "dividemix.warmup.epochs"),
+                          ("协同训练", "Co-training", "dividemix.training.epochs")),
+        }.get(self.source_schema["method"], ())
+        fields = self._visible() if fields is None else fields
+        if sum(path in fields for _, _, path in stages) < 2:
+            return []
+        return [
+            text(zh, en) + (text(f"（{fields[path]['value']} 轮）", f" ({fields[path]['value']} epochs)") if path in fields else "")
+            for zh, en, path in stages
+        ]
+
+    def split_summary(self):
+        fields = self._visible()
+        total = self.pool_size
+        validation = next((fields[key]["value"] for key in
+                           ("data.num_val", "warmup.noisy_validation_size", "data.validation_size") if key in fields), None)
+        if validation is None or not total:
+            return ""
+        trusted = fields.get("data.num_clean", {}).get("value", 0)
+        if min(validation, trusted) < 0 or validation + trusted >= total:
+            return text("划分不合法：至少保留一个训练样本。", "Invalid split: keep at least one training sample.")
+        return text(f"训练池 {total} · 训练 {total-validation-trusted} · 验证 {validation}",
+                    f"Pool {total} · train {total-validation-trusted} · validation {validation}") + (
+            text(f" · 干净参考 {trusted}", f" · trusted {trusted}") if "data.num_clean" in fields else ""
+        )
+
+    def schedule_budget(self, group):
+        fields = self._visible()
+        prefix = group["path"]
+        if prefix == "scheduler" and self.source_schema["method"] == "dividemix":
+            return sum(fields.get(path, {}).get("value", 0) for path in
+                       ("dividemix.warmup.epochs", "dividemix.training.epochs"))
+        steps = fields.get("trainer.max_steps", {}).get("value") or 0
+        if group["stepped"] and steps > 0:
+            return steps
+        stage = prefix.partition("scheduler")[0]
+        paths = [stage + suffix for suffix in ("epochs", "training.epochs", "trainer.epochs")] if stage else [
+            self.source_schema["method"] + ".training.epochs"
+        ]
+        return next((fields[path]["value"] for path in [*paths, "trainer.epochs"] if path in fields), None)
 
     def changes(self, reference=None):
-        return super().changes(self.initial if reference is None else reference)
+        original = {f["path"]: f["value"] for f in self.source_schema["fields"]}
+        return [(path, original[path], value) for path, value in sorted(self.draft.items())
+                if original[path] != value]
 
-    def _prepare_patches(self, patches):
-        config, _ = self.rules.prepare_config({**self.review_payload, "patches": patches}, for_review=True)
+    def snapshot(self):
+        return deepcopy((self.draft, self.schedule_stash, self.segmented))
+
+    def restore(self, snapshot):
+        self.draft, self.schedule_stash, self.segmented = snapshot
+
+    def update(self, patches):
+        fields = self._visible()
+        draft = self.draft.copy()
+        for path, value in patches:
+            field = fields.get(path)
+            if not field or not field["editable"] or field.get("display_group") == "restricted":
+                raise ValueError(text(f"此参数不可修改：{path}", f"This parameter cannot be edited: {path}"))
+            draft[path] = self.rules._coerce_patch_value(field, value)
+            for linked in field.get("linked_fields", ()):
+                if linked in fields and fields[linked]["editable"]:
+                    draft[linked] = draft[path]
+        self.draft = draft
+
+    def review_patches(self):
+        fields = self._visible()
+        groups = self.schedule_groups(fields)
+        inactive = {f["path"] for group in groups.values()
+                    for suffix, f in group["fields"].items()
+                    if suffix != "name" and suffix not in self.active_schedule_fields(group)}
+        patches = []
+        for source in self.source_schema["fields"]:
+            path = source["path"]
+            if path not in fields or path in inactive or not source["editable"]:
+                continue
+            switch = source["kind"] == "boolean" and path.endswith((".early_stopping", ".warmup_early_stopping"))
+            if path not in self.draft and not switch:
+                continue
+            value = fields[path]["value"]
+            if switch or source.get("virtual") or value != source["value"]:
+                patches.append({"path": path, "value": value})
+        return patches
+
+    def review_config(self):
+        config, _ = self.rules.prepare_config(
+            {**self.review_payload, "patches": self.review_patches()}, for_review=True,
+        )
         return config
 
-    def prepare(self, config):
-        # Send the same typed patch list as Web. Keep virtual controls, linked
-        # values and dataset adaptation under the shared parameter rules.
-        before = deepcopy(self.initial)
-        method = self.rules._config_method(before, self.recipe.id)
-        fields = self.rules._field_map(before, method)
-        patches = []
-        for path, field in fields.items():
-            if not field.get("editable") or self._protected(path) or self.rules._internal_seed_path(path):
-                continue
-            found, value = self.rules._config_path_value(config, path)
-            if found and (True, value) != self.rules._config_path_value(before, path):
-                patches.append({"path": path, "value": value})
-        return self._prepare_patches(patches)
+    def set_schedule_mode(self, prefix, name):
+        group = self.schedule_groups()[prefix]
+        if name not in group["choices"] or group["stepped"]:
+            raise ValueError(text("当前阶段不支持该调度模式。", "This schedule mode is unavailable for this stage."))
+        patches = [(group["fields"]["name"]["path"], name)]
+        active = self.active_schedule_fields({**group, "value": name, "enabled": name != "none"})
+        for suffix, field in group["fields"].items():
+            if suffix in active and field.get("virtual") and field["editable"] and field["path"] not in self.draft:
+                patches.append((field["path"], field["value"]))
+        self.update(patches)
+
+    def toggle_schedule(self, prefix):
+        group = self.schedule_groups()[prefix]
+        if "none" not in group["choices"]:
+            raise ValueError(text("此阶段的调度固定。", "This stage has a fixed schedule."))
+        fields = group["fields"]
+        if group["enabled"]:
+            stash = {suffix: fields[suffix]["value"] for suffix in ("name", "milestones", "step_milestones", "lr_values") if suffix in fields}
+            self.update([(fields[key]["path"], value) for key, value in
+                         (("name", "none"), ("step_milestones", []), ("lr_values", None))
+                         if key in fields and fields[key]["editable"]])
+            self.schedule_stash[prefix] = stash
+        else:
+            stash = self.schedule_stash.get(prefix, {})
+            if not group["stepped"]:
+                name = stash.get("name") or next(choice for choice in group["choices"] if choice != "none")
+                self.set_schedule_mode(prefix, name)
+            original = {f["path"]: f["value"] for f in self.source_schema["fields"]}
+            patches = [(fields[key]["path"], stash.get(key, original[fields[key]["path"]]))
+                       for key in ("step_milestones", "lr_values") if key in fields and fields[key]["editable"]]
+            if group["stepped"] and "name" in stash:
+                patches.append((fields["name"]["path"], stash["name"]))
+            self.update(patches)
 
     def edit(self, *, input=None, output=None):
         while True:
@@ -229,7 +463,7 @@ def _method_inputs(session, option, prior):
 
 
 def _review(session, service, editor):
-    config = resolve_config_paths(editor.config, find_project_root())
+    config = resolve_config_paths(editor.review_config(), find_project_root())
     trainer = service.experiment_service
     runner = trainer.preflight(config, check_data=True)
     session.write(f"  {editor.paper.acronym} · {editor.dataset}")

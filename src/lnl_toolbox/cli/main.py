@@ -76,25 +76,44 @@ def build_parser() -> argparse.ArgumentParser:
     parser = LocalizedParser(
         prog="lnl",
         description="LNL Toolbox 统一命令行入口",
-        epilog=(
-            text("lnl start 启动交互式实验引导", "Use lnl start for guided experiments")
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=text(
+            "常用示例\n"
+            "  lnl start                         交互式快速开始，按 ← 或 Esc 返回\n"
+            "  lnl web                           打开本机 Web 控制台\n"
+            "  lnl papers list                   浏览论文和方法 ID\n"
+            "  lnl edit gce                      编辑 GCE 参数并另存 YAML\n"
+            "  lnl validate <recipe-or-yaml>      检查配置、数据和依赖\n"
+            "  lnl run <recipe-or-yaml>           执行已有配置\n"
+            "  lnl resume <run-dir>              从原运行目录续训\n\n"
+            "使用 lnl <命令> --help 查看该命令的参数。",
+            "Examples\n"
+            "  lnl start                         Start the wizard; press Left or Esc to go back\n"
+            "  lnl web                           Open the local Web console\n"
+            "  lnl papers list                   Browse papers and method IDs\n"
+            "  lnl edit gce                      Edit GCE parameters and save a YAML file\n"
+            "  lnl validate <recipe-or-yaml>      Check the configuration, data, and dependencies\n"
+            "  lnl run <recipe-or-yaml>           Run an existing configuration\n"
+            "  lnl resume <run-dir>              Resume from the original run directory\n\n"
+            "Use lnl <command> --help for command-specific options.",
         ),
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND",
+                                title=text("命令", "Commands"))
     parser.add_argument("--lang", choices=("zh", "en"), help=text("输出语言", "Output language"))
-    show_paper = sub.add_parser("show", help=text("查看论文摘要", "View a paper summary"))
-    show_paper.add_argument("paper_id")
-    show_paper.add_argument("--no-interactive", action="store_true", help=argparse.SUPPRESS)
-    edit_paper = sub.add_parser("edit", help=text("交互编辑论文参数", "Interactively edit paper parameters"))
-    edit_paper.add_argument("paper_id")
     sub.add_parser(
         "start",
         help=text("按五步引导配置并启动实验", "Configure and launch an experiment in five steps"),
         description=text(
-            "选择数据集 → 设置标签噪声 → 选择兼容方法 → 编辑运行计划 → 检查与确认。",
-            "Choose a dataset → Set label noise → Choose a compatible method → Edit the run plan → Review and confirm.",
+            "选择数据集 → 设置标签噪声 → 选择兼容方法 → 编辑运行计划 → 检查与确认。按 ← 或 Esc 返回。",
+            "Choose a dataset → Set label noise → Choose a compatible method → Edit the run plan → Review and confirm. Press Left or Esc to go back.",
         ),
     )
+    show_paper = sub.add_parser("show", help=text("查看指定论文的摘要", "View the summary of a paper"))
+    show_paper.add_argument("paper_id")
+    show_paper.add_argument("--no-interactive", action="store_true", help=argparse.SUPPRESS)
+    edit_paper = sub.add_parser("edit", help=text("交互编辑论文参数并另存 YAML", "Interactively edit paper parameters and save a YAML file"))
+    edit_paper.add_argument("paper_id")
     lang = sub.add_parser("language", help=text("保存输出语言偏好", "Save the preferred output language"))
     lang.add_argument("value", choices=("zh", "en"))
 
@@ -141,10 +160,10 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--set", dest="overrides", action="append", default=[], metavar="PATH=VALUE")
     validate.add_argument("--output-dir", type=Path)
 
-    run = sub.add_parser("run", help="运行内置 recipe 或自定义配置")
+    run = sub.add_parser("run", help=text("检查并运行内置配置或自定义 YAML", "Check and run a built-in recipe or custom YAML"))
     _source_options(run)
     run.add_argument("--output-dir", type=Path)
-    run.add_argument("--resume", type=Path, help="从 checkpoint 文件恢复；保持该运行的配置身份")
+    run.add_argument("--resume", type=Path, help=argparse.SUPPRESS)
     run.add_argument("--epochs", type=int, help="覆盖该方法支持的训练阶段轮数；多阶段方法按现有规则处理")
     run.add_argument("--dry-run", action="store_true", help=argparse.SUPPRESS)
     run.add_argument("--review", action="store_true", help=argparse.SUPPRESS)
@@ -152,7 +171,7 @@ def build_parser() -> argparse.ArgumentParser:
     data_check.add_argument(
         "--check-data",
         action="store_true",
-        help="compatibility flag; run preflight checks data by default",
+        help=argparse.SUPPRESS,
     )
     data_check.add_argument(
         "--no-check-data",
@@ -170,7 +189,7 @@ def build_parser() -> argparse.ArgumentParser:
               "--set trainer.early_stopping=true or --set upm.stage1.early_stopping=false"),
     )
 
-    resume = sub.add_parser("resume", help="从运行目录自动恢复")
+    resume = sub.add_parser("resume", help=text("加载原运行目录的配置和断点并续训", "Resume using the configuration and checkpoint in a run directory"))
     resume.add_argument("run_dir", type=Path, help="已有运行目录，包含 resolved_config.yaml；不是 checkpoint 文件路径")
     resume.add_argument("--checkpoint", choices=("last", "best"), default="last", help="选择 last.pt 或 best.pt；已完成的运行不重新训练")
 
@@ -270,7 +289,7 @@ def build_parser() -> argparse.ArgumentParser:
     methods_compatible.add_argument("--noise-rate-prior", type=float)
     methods_compatible.add_argument("--format", choices=("human", "json"), default="human")
 
-    web = sub.add_parser("web", help="start the local Data Management Web UI")
+    web = sub.add_parser("web", help=text("启动本机 Web 控制台，可用 web restart 重启", "Open the local Web console or restart it with web restart"))
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=8765)
     web.add_argument("--no-open", action="store_true")
@@ -307,7 +326,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="只列出候选进程，不终止",
     )
 
-    sweep = sub.add_parser("sweep", help="参数组合实验：按笛卡尔积运行多组实验")
+    sweep = sub.add_parser("sweep", help=text("运行参数组合实验，或用 sweep status 查看进度", "Run a parameter grid or inspect its progress with sweep status"))
     _source_options(sweep)
     sweep.add_argument(
         "status_path",
@@ -357,8 +376,8 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--require-equal", action="append")
     report.add_argument("--strict", action="store_true")
 
-    papers = sub.add_parser("papers", help="查看有可运行配置的知名论文")
-    paper_sub = papers.add_subparsers(dest="paper_command", required=True)
+    papers = sub.add_parser("papers", help=text("用 papers list 浏览论文，用 papers config 查看配置", "Browse papers with papers list or view a recipe with papers config"))
+    paper_sub = papers.add_subparsers(dest="paper_command", required=True, metavar="{list,config}")
     paper_list = paper_sub.add_parser("list", help="列出有可运行 config 的论文")
     paper_list.add_argument(
         "--format",
@@ -366,7 +385,8 @@ def build_parser() -> argparse.ArgumentParser:
         default="human",
         help="输出格式；human 适合阅读，tsv 适合脚本处理（默认: human）",
     )
-    show = paper_sub.add_parser("show", help=text("查看论文摘要", "View a paper summary"))
+    # Older callers can still use the alias. The public entry point is lnl show.
+    show = paper_sub.add_parser("show")
     show.add_argument("paper_id")
     show.add_argument("--no-interactive", action="store_true", help=argparse.SUPPRESS)
     config = paper_sub.add_parser("config", help="查看论文 YAML 配置")

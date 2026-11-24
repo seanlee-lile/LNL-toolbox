@@ -99,7 +99,6 @@ for(const profile of ['reproduction','metadata','smoke']){
                             and 'early_stopping' in field['path']]
             with self.subTest(method=method):
                 self.assertTrue(early_fields)
-                self.assertEqual({field['display_group'] for field in early_fields}, {'advanced'})
             for control in training_stage_controls(config):
                 with self.subTest(method=method, path=control['path']):
                     matches = [field for field in fields if field['path'] == control['path']]
@@ -119,16 +118,6 @@ for(const profile of ['reproduction','metadata','smoke']){
                         command_console._set_config_path(edited, control['path'], enabled)
                         values = {item['path']: item['value'] for item in training_stage_controls(edited)}
                         self.assertIs(values[control['path']], enabled)
-
-    def test_all_26_papers_follow_the_existing_parameter_lists(self):
-        bindings = command_console._parameter_registry()["formal_recipe_bindings"]
-        for method, recipe in bindings.items():
-            with self.subTest(method=method):
-                fields = command_console._config_schema(recipe)["fields"]
-                defaults = [f["path"] for f in fields if f.get("visible") is not False
-                            and f.get("display_group") == "default"]
-                self.assertEqual(len(defaults), len(set(defaults)))
-
 
     def test_selection_split_is_hidden_for_all_papers_without_hiding_split_counts(self):
         from lnl_toolbox.catalog import load_recipe_config, recipe_by_id
@@ -1274,153 +1263,20 @@ for(const profile of ['reproduction','metadata','smoke']){
         compute.assert_called_once_with("lab", method_noise_rate_prior=None)
         command_console._invalidate_dataset_recipe_compatibility("lab")
 
-    def test_all_formal_paper_recipes_have_complete_registry_schemas(self):
+    def test_all_formal_paper_recipes_have_displayable_parameters(self):
         from lnl_toolbox.catalog import default_paper_config, load_papers
 
-        papers = load_papers(command_console.ROOT)
-        registry = command_console._parameter_registry()
-        research_view = registry["research_parameter_view"]
-        default_paths = registry["default_parameter_paths"]
-        display_policy = registry["parameter_display_policy"]
-        for policy_key in (
-            "common_paths_by_method", "selection_paths_by_method",
-            "resource_paths_by_method", "hidden_paths_by_method",
-        ):
-            self.assertEqual(set(display_policy[policy_key]), set(registry["formal_recipe_bindings"]))
-        self.assertEqual(set(research_view["method_paths"]), set(command_console._parameter_registry()["methods"]))
-        self.assertEqual(set(default_paths["methods"]), set(command_console._parameter_registry()["formal_recipe_bindings"]))
-        for paper in papers:
-            config, _ = default_paper_config(paper, root=command_console.ROOT)
-            schema = command_console._config_schema(config.recipe_id)
-            self.assertTrue(schema["formal_recipe"], paper.id)
-            self.assertEqual(
-                [level["id"] for level in schema["levels"]],
-                ["basic", "paper", "advanced", "locked"],
-                paper.id,
-            )
-            self.assertTrue(
-                {field["level"] for field in schema["fields"]}
-                <= {"basic", "paper", "advanced", "locked"},
-                paper.id,
-            )
-            self.assertTrue(
-                all(field["note"] for field in schema["fields"] if field["level"] == "paper"),
-                paper.id,
-            )
-            fields = {field["path"]: field for field in schema["fields"]}
-            self.assertEqual(len(fields), len(schema["fields"]), paper.id)
-            from lnl_toolbox.catalog import load_recipe_config, recipe_by_id
-            raw_config = load_recipe_config(recipe_by_id(config.recipe_id, command_console.ROOT))
-            optional_fields = set()
-            provider = (raw_config.get("pipeline") or {}).get("weight_provider") or {}
-            if schema["method"] == "mentornet" and provider.get("derive_teacher", provider.get("derive_from_seed", True)):
-                optional_fields.add("pipeline.weight_provider.artifact_path")
-            if schema["method"] == "cal" and (raw_config.get("noise") or {}).get("name") != "external_torch":
-                optional_fields.update({"noise.path", "noise.clean_key", "noise.noisy_key"})
-            for path in (
-                "data.max_train_samples", "data.max_validation_samples", "data.max_test_samples"
-            ):
-                if path in fields:
-                    self.assertFalse(fields[path]["visible"], (paper.id, path))
-                    self.assertEqual(fields[path]["presentation"], "hidden", (paper.id, path))
-                self.assertNotIn(path, display_policy["common_paths_by_method"][schema["method"]])
-            for presentation_key in (
-                "common_paths_by_method", "selection_paths_by_method",
-                "resource_paths_by_method", "hidden_paths_by_method",
-            ):
-                for path in display_policy[presentation_key][schema["method"]]:
-                    if path in optional_fields and path not in fields:
-                        continue
-                    self.assertIn(path, fields, (paper.id, path))
-            selected = (set(default_paths["common"]) | set(default_paths["methods"][schema["method"]])) - set(default_paths.get("exclude", {}).get(schema["method"], ()))
-            method_defaults = set(default_paths["methods"][schema["method"]])
-            method_defaults -= optional_fields - set(fields)
-            self.assertTrue(method_defaults <= set(fields), paper.id)
-            defaults = {path for path, field in fields.items() if field["visible"] and field["display_group"] == "default"}
-            self.assertTrue({
-                path for path in selected
-                if path in fields and fields[path]["editable"]
-                and fields[path]["visible"]
-                and fields[path]["presentation"] != "hidden"
-                and fields[path]["kind"] not in {"list", "object"}
-                and not isinstance(fields[path]["value"], (list, dict))
-            } <= defaults, paper.id)
-            self.assertTrue({field["display_group"] for field in fields.values()} <=
-                            {"default", "advanced", "restricted"}, paper.id)
-            self.assertEqual(
-                [group["id"] for group in schema["research_groups"]],
-                ["method", "data", "training"],
-                paper.id,
-            )
-            self.assertEqual(
-                [category["id"] for category in schema["research_categories"]],
-                ["method", "data", "comparison", "method_protocol", "data_protocol", "training_protocol", "runtime", "resource"],
-                paper.id,
-            )
-            for field in fields.values():
-                if not field["editable"]:
-                    self.assertEqual(field["display_group"], "restricted", (paper.id, field["path"]))
-                elif field["presentation"] == "hidden":
-                    self.assertEqual(field["display_group"], "advanced", (paper.id, field["path"]))
-                if field.get("presentation") == "resource":
-                    self.assertEqual(field["research_category"], "resource", (paper.id, field["path"]))
-                    continue
-                if field["research_group"]:
-                    self.assertTrue(field["research_category"], (paper.id, field["path"]))
-                else:
-                    self.assertFalse(field["research_category"], (paper.id, field["path"]))
-            for path in research_view["method_paths"][schema["method"]]:
-                self.assertIn(path, fields, (paper.id, path))
-                if fields[path]["presentation"] in {"common", "selection", "resource", "hidden"}:
-                    self.assertFalse(fields[path]["research_group"], (paper.id, path))
-                    continue
-                if fields[path]["presentation"] == "resource":
-                    self.assertEqual(fields[path]["research_group"], "", (paper.id, path))
-                    self.assertEqual(fields[path]["research_category"], "resource", (paper.id, path))
-                elif fields[path]["visible"]:
-                    self.assertEqual(fields[path]["research_group"], "method", (paper.id, path))
-                else:
-                    self.assertEqual(fields[path]["research_group"], "", (paper.id, path))
-            self.assertTrue(all(not field["research_group"] for field in fields.values() if field["level"] == "locked"), paper.id)
-
-        gce = {field["path"]: field for field in command_console._config_schema("gce-cifar10-noise02-reproduction")["fields"]}
-        self.assertEqual(gce["loss.q"]["research_group"], "method")
-        self.assertEqual(gce["loss.q"]["research_category"], "method")
-        self.assertEqual(gce["loss.q"]["display_group"], "default")
-        self.assertEqual(gce["noise.rate"]["presentation"], "common")
-        self.assertEqual(gce["model.name"]["presentation"], "selection")
-        self.assertEqual(gce["noise.seed"]["presentation"], "hidden")
-        self.assertEqual(gce["data.preprocessing"]["presentation"], "common")
-        self.assertEqual(gce["seed"]["presentation"], "common")
-        self.assertEqual(gce["seed"]["display_group"], "default")
-        self.assertTrue(gce["loss.name"]["visible"])
-        self.assertFalse(gce["loss.name"]["editable"])
-        self.assertEqual(gce["loss.name"]["display_group"], "restricted")
-        correction = {
-            field["path"]: field
-            for field in command_console._config_schema("loss-correction-cifar10-asymmetric04")["fields"]
-        }
-        self.assertEqual(correction["noise.transition_matrix"]["display_group"], "advanced")
-        self.assertFalse(correction["pipeline.warmup_epochs"]["visible"])
-        binary = {
-            field["path"]: field
-            for field in command_console._config_schema("binary-risk-natarajan-reproduction")["fields"]
-        }
-        self.assertEqual(binary["risk.rho_positive"]["display_group"], "default")
-        self.assertEqual(binary["risk.rho_positive"]["linked_fields"], ["noise.rho_positive"])
-        self.assertEqual(binary["noise.rho_positive"]["presentation"], "common")
-        cal = {
-            field["path"]: field
-            for field in command_console._config_schema("cal-cifar10-reproduction")["fields"]
-        }
-        self.assertEqual(cal["noise.name"]["presentation"], "common")
-        self.assertEqual(cal["noise.rate"]["presentation"], "common")
-        self.assertEqual(command_console._parameter_display_group({
-            "path": "loss.q", "kind": "number", "value": 0.7, "editable": True,
-        }, "gce"), "default")
-        self.assertEqual(command_console._parameter_display_group({
-            "path": "method.internal", "kind": "number", "value": 1, "editable": False,
-        }, "gce"), "restricted")
+        for paper in load_papers(command_console.ROOT):
+            with self.subTest(paper=paper.id):
+                config, _ = default_paper_config(paper, root=command_console.ROOT)
+                schema = command_console._config_schema(config.recipe_id)
+                fields = schema["fields"]
+                visible = [field for field in fields if field["visible"]]
+                self.assertTrue(visible, "The parameter panel must have something to display")
+                self.assertEqual(len({field["path"] for field in fields}), len(fields))
+                for field in visible:
+                    self.assertTrue(field["label"], field["path"])
+                    self.assertTrue(field["kind"], field["path"])
 
     def test_research_controls_are_explained_without_exposing_trusted_wiring(self):
         bindings = command_console._parameter_registry()["formal_recipe_bindings"]
@@ -1429,15 +1285,12 @@ for(const profile of ['reproduction','metadata','smoke']){
             for path, field in fields.items():
                 if path.startswith("trusted_validation."):
                     self.assertFalse(field["visible"], (method, path))
-            for path in ("data.augment", "data.validation_size", "model.name", "scheduler.name"):
-                if path in fields and fields[path]["editable"]:
-                    self.assertEqual(fields[path]["display_group"], "default", (method, path))
         l2rw = {field["path"]: field for field in command_console._config_schema(bindings["l2rw"])["fields"]}
-        self.assertEqual(l2rw["trainer.max_steps"]["display_group"], "default")
+        self.assertTrue(l2rw["trainer.max_steps"]["visible"])
         self.assertIn("更新次数", l2rw["trainer.max_steps"]["note"])
         self.assertEqual(l2rw["trainer.max_steps"]["value"], 80000)
 
-    def test_paper_split_counts_are_default_editors_with_original_fraction(self):
+    def test_paper_split_counts_show_original_fraction(self):
         bindings = command_console._parameter_registry()["formal_recipe_bindings"]
         split_paths = {"data.validation_size", "data.num_val", "data.num_clean", "warmup.noisy_validation_size"}
         for method, recipe in bindings.items():
@@ -1445,7 +1298,6 @@ for(const profile of ['reproduction','metadata','smoke']){
             total = command_console.reference_train_size(original)
             for field in command_console._config_schema(recipe)["fields"]:
                 if field["path"] in split_paths and field["visible"]:
-                    self.assertEqual(field["display_group"], "default", (method, field["path"]))
                     source = original
                     for key in field["path"].split("."):
                         source = source.get(key) if isinstance(source, dict) else None

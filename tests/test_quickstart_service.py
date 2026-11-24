@@ -296,6 +296,58 @@ class QuickStartServiceTests(unittest.TestCase):
                 self.assertEqual(config[method]["noise_rate"], 0)
                 self.assertEqual(config[method]["remember_schedule"]["end"], 1)
 
+    def test_cli_plan_uses_web_schedule_permissions_and_patches(self) -> None:
+        from lnl_toolbox.cli.quick_start import QuickStartEditor
+        from lnl_toolbox.parameters import prepare_config
+
+        dataset = self.service.register_and_inspect(str(self.data_root))
+        noise = QuickStartNoiseSelection("synthetic", "symmetric", rate=.2, seed=19)
+        methods = {option.paper_id: option for option in self.service.method_options(dataset.alias, noise)}
+        gce = QuickStartEditor(methods["gce"], self.service, dataset, noise, {})
+        gce.advanced = True
+        model_card = next(field for kind, field in gce.plan_entries() if kind == "group" and field["path"] == "model")
+        self.assertEqual({field["path"] for field in model_card["children"]},
+                         {"model.name", "model.variant", "model.weights"})
+        binary = QuickStartEditor(SimpleNamespace(recipe_id="binary-risk-cifar10"), self.service, dataset, noise, {})
+        monitor = "trainer.early_stopping_monitor"
+        self.assertNotIn(monitor, {field["path"] for field in binary.fields()})
+        binary.update([("trainer.early_stopping", True)])
+        self.assertIn(monitor, {field["path"] for field in binary.fields()})
+        self.assertNotIn("scheduler.t_max", {field["path"] for field in gce.fields()})
+        self.assertTrue(gce.schedule_groups()["scheduler"]["segmented"])
+        gce.segmented["optimizer.lr"] = False
+        self.assertIn("optimizer.lr", {field["path"] for field in gce.fields()})
+        gce.update([("scheduler.lr_values", [.01, .001])])
+        gce.set_schedule_mode("scheduler", "cosine")
+        expected = {
+            "scheduler.name": "cosine", "scheduler.t_max": 120, "scheduler.eta_min": 0.0,
+        }
+        self.assertEqual({p["path"]: p["value"] for p in gce.review_patches()
+                          if p["path"].startswith("scheduler.")}, expected)
+        with patch("lnl_toolbox.training.data_service.DEFAULT_DATA_SERVICE", self.data_service):
+            web, _ = prepare_config(self.service.review_payload(
+                gce.recipe.id, dataset.alias, noise, {},
+                [{"path": path, "value": value} for path, value in expected.items()],
+            ), for_review=True)
+            self.assertEqual(gce.review_config()["scheduler"], web["scheduler"])
+
+        pcse = QuickStartEditor(methods["pcse"], self.service, dataset, noise, {})
+        self.assertNotIn("transition_stage.scheduler", pcse.schedule_groups())
+        self.assertTrue(pcse.timeline())
+        fine = QuickStartEditor(methods["fine"], self.service, dataset, noise, {})
+        self.assertEqual(fine.schedule_groups()["scheduler"]["choices"], ["cosine"])
+        with self.assertRaises(ValueError):
+            fine.toggle_schedule("scheduler")
+        self.assertFalse(fine.draft)
+        l2rw = QuickStartEditor(methods["l2rw"], self.service, dataset, noise, {})
+        group = l2rw.schedule_groups()["scheduler"]
+        self.assertTrue(group["stepped"])
+        self.assertEqual(l2rw.schedule_budget(group), 80000)
+        l2rw.toggle_schedule("scheduler")
+        self.assertFalse(l2rw.schedule_groups()["scheduler"]["enabled"])
+        l2rw.toggle_schedule("scheduler")
+        self.assertEqual(l2rw.schedule_groups()["scheduler"]["node"]["value"], [40000, 60000])
+
     def test_noise_options_are_capability_based(self) -> None:
         result = self.service.noise_options("local-cifar10")
         self.assertEqual(result["dataset_state"], "clean")
