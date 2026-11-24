@@ -92,15 +92,6 @@ def load_yaml(path: Path, *, check_parameters: bool = False) -> dict[str, Any]:
     return normalize_experiment_config(dict(value))
 
 
-def _profile(path: Path) -> str:
-    name = path.stem.lower()
-    if "reproduction" in name or path.parent.name == "reproduction":
-        return "reproduction"
-    if "smoke" in name:
-        return "smoke"
-    return "experiment"
-
-
 def _recipe_id(path: Path) -> str:
     return path.stem.lower().replace("_", "-")
 
@@ -146,16 +137,14 @@ def _manifest_paths(values: Iterable[object], section: str) -> tuple[str, ...]:
 @dataclass(frozen=True, slots=True)
 class _RecipeManifestEntry:
     path: str
-    id: str | None = None
-    profile: str | None = None
+    id: str
+    profile: str
 
 
 def _manifest_recipe_entry(value: object, position: int) -> _RecipeManifestEntry:
-    if isinstance(value, str):
-        return _RecipeManifestEntry(value)
     where = f"built-in recipe manifest recipes[{position}]"
     if not isinstance(value, dict):
-        raise ValueError(f"{where}: expected a path string or an explicit recipe object")
+        raise ValueError(f"{where}: built-in recipe manifest requires explicit recipe objects (id, path, profile)")
     fields = {"id", "path", "profile"}
     missing, unknown = fields - value.keys(), value.keys() - fields
     if missing or unknown:
@@ -309,21 +298,21 @@ def _builtin_recipe_index(root: Path | None) -> dict[str, RecipeSpec]:
     file_paths: dict[tuple[int, int], str] = {}
     for entry in manifest_entries:
         relative = entry.path
+        recipe_id = entry.id
         try:
             path = _recipe_path(entry, project, installed_lookup)
             stat = path.stat()
         except FileNotFoundError as exc:
             raise FileNotFoundError(
-                f"missing YAML for built-in recipe {entry.id or _recipe_id(Path(relative))!r} "
+                f"missing YAML for built-in recipe {recipe_id!r} "
                 f"(manifest path {relative!r}): {exc}"
             ) from exc
         except (OSError, RuntimeError, ValueError) as exc:
             raise ValueError(
-                f"invalid resource for built-in recipe {entry.id or _recipe_id(Path(relative))!r} "
+                f"invalid resource for built-in recipe {recipe_id!r} "
                 f"(manifest path {relative!r}): {exc}"
             ) from exc
 
-        recipe_id = entry.id if entry.id is not None else _recipe_id(path)
         file_key = (stat.st_dev, stat.st_ino)
         other = resource_paths.get(path)
         if other is None and stat.st_ino:
@@ -363,7 +352,7 @@ def _builtin_recipe_index(root: Path | None) -> dict[str, RecipeSpec]:
             ) from exc
 
         conditional = relative in conditional_paths
-        profile = entry.profile if entry.profile is not None else _profile(path)
+        profile = entry.profile
         method = _display_method(config, runner)
         public = public_recipes.get(relative)
         recipes[recipe_id] = RecipeSpec(

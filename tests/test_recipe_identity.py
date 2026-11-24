@@ -126,7 +126,7 @@ def _unique(values, label, key=lambda item: item):
 def verify_candidate_manifest(raw, known_paths, paper_recipe_ids=()):
     """Test-side gate, not a production manifest parser."""
     entries = raw["recipes"]
-    paths = [entry if isinstance(entry, str) else entry["path"] for entry in entries]
+    paths = [entry["path"] for entry in entries]
     registered = _unique(paths, "manifest path")
     for kind, refs, targets in (
         ("normal", paths, set(known_paths)),
@@ -137,29 +137,7 @@ def verify_candidate_manifest(raw, known_paths, paper_recipe_ids=()):
         if missing := set(refs) - targets:
             raise AssertionError(f"dangling {kind} reference: {sorted(missing)}")
 
-    # Model both the legacy fallback and its second collision hazard; forbid
-    # raw stem ambiguity even when the final fallback happens to be unique.
-    stems = set()
-    allocated = set()
-    ambiguous = []
-    for path in (entry for entry in entries if isinstance(entry, str)):
-        p = PurePosixPath(path)
-        stem = catalog._recipe_id(p)
-        candidate = stem
-        if stem in allocated:
-            candidate = f"{p.parent.name}-{stem}"
-        if candidate in allocated:
-            raise AssertionError(f"duplicate identity after fallback: {candidate}")
-        allocated.add(candidate)
-        if stem in stems:
-            ambiguous.append(stem)
-        stems.add(stem)
-    if ambiguous:
-        raise AssertionError(f"ambiguous canonical stem: {ambiguous}")
-    for entry in (entry for entry in entries if not isinstance(entry, str)):
-        if entry["id"] in allocated:
-            raise AssertionError(f"duplicate canonical identity: {entry['id']}")
-        allocated.add(entry["id"])
+    allocated = _unique(entries, "canonical identity", key=lambda entry: entry["id"])
     if missing := set(paper_recipe_ids) - allocated:
         raise AssertionError(f"dangling Paper recipe reference: {sorted(missing)}")
 
@@ -343,7 +321,7 @@ class RecipeIdentityTest(unittest.TestCase):
             [a["recipe_id"] for paper in self.actual["papers"] for a in paper["associations"]],
         )
 
-    def test_pilot_recipe_changes_representation_not_behavior(self):
+    def test_pilot_recipe_preserves_canonical_alias_and_config(self):
         recipe_id = "cifar10-symmetric-small-loss-linear-smoke"
         expected = next(row for row in self.expected["recipes"] if row["id"] == recipe_id)
         manifest_path = ROOT / "src/lnl_toolbox/cli/data/recipe_catalog.json"
@@ -351,13 +329,7 @@ class RecipeIdentityTest(unittest.TestCase):
         pilot = {"id": recipe_id, "path": expected["path"], "profile": expected["profile"]}
         self.assertIn(pilot, raw["recipes"])
         actual = catalog.recipe_by_id(" CIFAR10_SYMMETRIC_SMALL_LOSS_LINEAR_SMOKE ", ROOT)
-        original = [entry["path"] if entry == pilot else entry for entry in raw["recipes"]]
-        with patch.object(catalog.resources, "files") as files:
-            files.return_value.joinpath.return_value.read_text.return_value = json.dumps({
-                **raw, "recipes": original,
-            })
-            legacy = catalog.recipe_by_id(recipe_id, ROOT)
-        self.assertEqual(actual, legacy)
+        self.assertEqual(actual, catalog.recipe_by_id(recipe_id, ROOT))
         self.assertEqual(config_hash(catalog.load_recipe_config(actual)), expected["normalized_config_hash"])
 
     def test_manifest_fully_explicit_and_in_frozen_order(self):
@@ -382,10 +354,7 @@ class RecipeIdentityTest(unittest.TestCase):
         raw = json.loads(
             (ROOT / "src/lnl_toolbox/cli/data/recipe_catalog.json").read_text(encoding="utf-8")
         )
-        old_entries = [
-            item["path"] if isinstance(item, dict) and item["id"] in batch else item
-            for item in raw["recipes"]
-        ]
+        invalid_entries = [item["path"] if item["id"] in batch else item for item in raw["recipes"]]
         parser = build_parser()
         direct_path = str(ROOT / expected["cifar10-clean"]["path"])
 
@@ -399,9 +368,10 @@ class RecipeIdentityTest(unittest.TestCase):
         self.assertEqual(direct, cli_load(direct_path))
         with patch.object(catalog.resources, "files") as files:
             files.return_value.joinpath.return_value.read_text.return_value = json.dumps({
-                **raw, "recipes": old_entries,
+                **raw, "recipes": invalid_entries,
             })
-            legacy = {key: cli_load("--recipe", key) for key in batch}
+            with self.assertRaisesRegex(ValueError, "requires explicit recipe objects"):
+                cli_load("--recipe", batch[0])
             self.assertEqual(direct, cli_load("--config", direct_path))
             self.assertEqual(direct, cli_load(direct_path))
         self.assertIsNone(direct[2])
@@ -413,7 +383,8 @@ class RecipeIdentityTest(unittest.TestCase):
         for key in batch:
             with self.subTest(recipe=key):
                 config, path, recipe, _ = explicit[key]
-                self.assertEqual(explicit[key], legacy[key])
+                canonical = cli_load("--recipe", key)
+                self.assertEqual(explicit[key], canonical)
                 self.assertEqual(path.relative_to(ROOT).as_posix(), expected[key]["path"])
                 self.assertEqual(
                     (recipe.id, recipe.profile, recipe.runner, recipe.method),
@@ -423,7 +394,7 @@ class RecipeIdentityTest(unittest.TestCase):
                     config_hash(catalog.load_recipe_config(recipe)),
                     expected[key]["normalized_config_hash"],
                 )
-                old_config, _, old_recipe, _ = legacy[key]
+                old_config, _, old_recipe, _ = canonical
                 for matrix in (None, {"trainer.epochs": [1, 2]}):
                     with self.subTest(matrix=matrix):
                         current = plan_sweep(config, [8, 3], matrix=matrix, recipe=recipe.id)
@@ -432,15 +403,6 @@ class RecipeIdentityTest(unittest.TestCase):
                         _validate_existing_manifest(_new_manifest(previous), current)
 
     def test_paper_variant_batch_preserves_selection_path_and_sweep(self):
-        raw = json.loads(
-            (ROOT / "src/lnl_toolbox/cli/data/recipe_catalog.json").read_text(encoding="utf-8")
-        )
-        legacy_manifest = json.dumps({
-            **raw, "recipes": [
-                item["path"] if isinstance(item, dict) and item["id"] in PAPER_VARIANT_BATCH else item
-                for item in raw["recipes"]
-            ],
-        })
         expected_papers = {paper["id"]: paper for paper in self.expected["papers"]}
         parser = build_parser()
 
@@ -479,17 +441,9 @@ class RecipeIdentityTest(unittest.TestCase):
                     ])
             return selected
 
-        explicit = observe()
-        real_files = catalog.resources.files
-        with patch.object(catalog.resources, "files") as files:
-            fake = files.return_value
-            fake.joinpath.return_value.read_text.return_value = legacy_manifest
-            files.side_effect = lambda package: fake if package == "lnl_toolbox.cli" else real_files(package)
-            legacy = observe()
-        self.assertEqual(explicit, legacy)
-        for key, (_, plans) in explicit.items():
-            for old, new in zip(legacy[key][1], plans):
-                _validate_existing_manifest(_new_manifest(old), new)
+        for _, plans in observe().values():
+            for plan in plans:
+                _validate_existing_manifest(_new_manifest(plan), plan)
 
     def test_paper_smoke_batch_preserves_order_and_cli_recommendations(self):
         self._assert_paper_smoke_batch(PAPER_SMOKE_BATCH)
@@ -518,11 +472,13 @@ class RecipeIdentityTest(unittest.TestCase):
                 with patch("lnl_toolbox.cli.main.load_yaml", wraps=catalog.load_yaml) as load:
                     created = command("compose", "create", "--base", recipe.id, "--output", str(target))
                 load.assert_called_once_with(recipe.config_path)
-                return listed, created.replace(str(target), "<destination>"), target.read_bytes()
+                self.assertIn(recipe.id, created)
+                self.assertEqual(config_hash(catalog.load_yaml(target)), config_hash(config))
+            return
         if recipe.id == "gce-cifar10-noise02-smoke":
             snapshot = _sweep_snapshot({recipe.id: recipe}, {recipe.id: config})
             self.assertEqual(snapshot, self.expected["sweep"])
-            return snapshot
+            return
 
         from lnl_toolbox.training.service import ExperimentService
         from web.external_resources import resources
@@ -532,7 +488,6 @@ class RecipeIdentityTest(unittest.TestCase):
         requirements = runner.requirements(config)
         self.assertFalse(requirements.prerequisites)
         self.assertEqual(resources(config, ROOT), [])
-        feature_identity = None
         if recipe.runner == "cal":
             self.assertEqual(config["data"]["name"], "synthetic_multiclass")
             self.assertEqual(config["model"]["name"], "feature_mlp")
@@ -563,10 +518,9 @@ class RecipeIdentityTest(unittest.TestCase):
                 runtime = {**config, "data": {**config["data"], "root": directory}}
                 runner.invoke(runtime, output_dir=Path(directory) / "run")
             external.assert_not_called()
-            feature_identity = str(ready.exception)
-        return (runner, requirements, runner.describe(config), feature_identity,
-                command("validate", "--recipe", recipe.id),
-                command("run", "--recipe", recipe.id, "--dry-run", "--no-check-data"))
+            self.assertTrue(str(ready.exception))
+        command("validate", "--recipe", recipe.id)
+        command("run", "--recipe", recipe.id, "--dry-run", "--no-check-data")
 
     def _observe_internal_lifecycle(self, recipe, config, command):
         from lnl_toolbox.training.service import ExperimentService
@@ -575,7 +529,6 @@ class RecipeIdentityTest(unittest.TestCase):
         self.assertEqual(runner.name, recipe.runner)
         requirements = runner.requirements(config)
         self.assertFalse(requirements.prerequisites)
-        artifacts = ()
         if recipe.runner == "pcse":
             self.assertEqual(config["data"]["num_classes"], 3)
             self.assertEqual(config["pretraining_stage"]["mode"], "train")
@@ -601,11 +554,8 @@ class RecipeIdentityTest(unittest.TestCase):
 
         sweep = plan_sweep(config, [8, 3], recipe=recipe.id)
         _validate_existing_manifest(_new_manifest(sweep), sweep)
-        return (
-            runner, requirements, runner.describe(config), sweep, artifacts,
-            command("validate", "--recipe", recipe.id),
-            command("run", "--recipe", recipe.id, "--dry-run", "--no-check-data"),
-        )
+        command("validate", "--recipe", recipe.id)
+        command("run", "--recipe", recipe.id, "--dry-run", "--no-check-data")
 
     def _assert_final_smoke_contract(self, recipe, parsed):
         requirements = resolve_runner(parsed).requirements(parsed)
@@ -629,15 +579,6 @@ class RecipeIdentityTest(unittest.TestCase):
             self.assertEqual(LENDConfig.from_mapping(parsed).implementation_variant, "paper_equation")
 
     def _assert_paper_smoke_batch(self, batch, *, formal=False):
-        raw = json.loads(
-            (ROOT / "src/lnl_toolbox/cli/data/recipe_catalog.json").read_text(encoding="utf-8")
-        )
-        legacy_manifest = json.dumps({
-            **raw, "recipes": [
-                item["path"] if isinstance(item, dict) and item["id"] in batch else item
-                for item in raw["recipes"]
-            ],
-        })
         expected_papers = {row["id"]: row for row in self.expected["papers"]}
         expected_recipes = {row["id"]: row for row in self.expected["recipes"]}
         parser = build_parser()
@@ -655,7 +596,7 @@ class RecipeIdentityTest(unittest.TestCase):
             from lnl_toolbox.quickstart.service import QuickStartService
             from web import command_console
 
-            # Force both representations through fresh production catalog reads.
+            # Use fresh production catalog reads even if another test warmed the cache.
             caches = (command_console._web_paper_specs, command_console._web_recipe_config,
                       command_console._registry_recipe_paths, command_console._formal_registry_config)
             for cached in caches:
@@ -666,7 +607,6 @@ class RecipeIdentityTest(unittest.TestCase):
                 quick_start = QuickStartService()
                 recipes = quick_start._recipes()
                 papers = {paper.id: paper for paper in catalog.load_papers(ROOT)}
-                consumers = {}
                 for default_id, paper_id in batch.items():
                     with self.subTest(paper=paper_id, consumer="formal"):
                         row = payload[paper_id]
@@ -678,15 +618,13 @@ class RecipeIdentityTest(unittest.TestCase):
                         spec = expected_recipes[default_id]
                         self.assertEqual((selected["config_path"], selected["runner"], selected["method"]),
                                          (spec["path"], spec["runner"], spec["method"]))
-                        web_id, web_config = command_console._formal_registry_config(paper_id)
+                        web_id, _ = command_console._formal_registry_config(paper_id)
                         self.assertEqual(web_id, default_id)
                         self.assertEqual(command_console._registry_recipe_paths()[web_id], ROOT / spec["path"])
                         template = quick_start._template(papers[paper_id], recipes)
                         self.assertEqual(template.recipe_id, default_id)
                         self.assertEqual(template.recipe, recipes[default_id])
                         self.assertEqual(config_hash(template.config), spec["normalized_config_hash"])
-                        consumers[paper_id] = (row, web_id, web_config, template)
-                return consumers
 
         def observe():
             listed = cli("list", "--format", "json")
@@ -694,7 +632,6 @@ class RecipeIdentityTest(unittest.TestCase):
             self.assertEqual(recommendations,
                              {key: row["cli_recommended"] for key, row in expected_papers.items()})
             papers = {paper.id: paper for paper in catalog.load_papers(ROOT)}
-            selections = {}
             for recipe_id, paper_id in batch.items():
                 with self.subTest(paper=paper_id):
                     paper, expected = papers[paper_id], expected_papers[paper_id]
@@ -710,8 +647,7 @@ class RecipeIdentityTest(unittest.TestCase):
                     self.assertEqual(ordered[0], recommended)
                     shown = cli("show", paper_id)
                     self.assertIn(f"lnl run --recipe {recommended} --dry-run", shown)
-                    configs = []
-                    lifecycle = None
+                    configs_by_id = {}
                     for association in paper.configs:
                         args = ("config", paper_id, "--profile", association.profile,
                                 "--variant", association.variant)
@@ -735,9 +671,9 @@ class RecipeIdentityTest(unittest.TestCase):
                         if recipe.id == recommended and recommended in FINAL_STANDARD_PAPER_SMOKE_BATCH:
                             self._assert_final_smoke_contract(recipe, parsed)
                         if recipe.id == recommended and recommended in INTERNAL_LIFECYCLE_SMOKE_BATCH:
-                            lifecycle = self._observe_internal_lifecycle(recipe, parsed, command)
+                            self._observe_internal_lifecycle(recipe, parsed, command)
                         if recipe.id == recommended and recommended in ADDITIONAL_CONSUMER_SMOKE_BATCH:
-                            lifecycle = self._observe_additional_smoke_consumer(recipe, parsed, command)
+                            self._observe_additional_smoke_consumer(recipe, parsed, command)
                         if formal and recipe.id == recipe_id:
                             self.assertEqual(recipe.profile, "reproduction")
                             self.assertEqual(resolve_runner(parsed).name, row["runner"])
@@ -748,19 +684,17 @@ class RecipeIdentityTest(unittest.TestCase):
                             ))
                             from_id = _load_source(parser.parse_args(["run", "--recipe", recipe.id]))
                             self.assertEqual(from_path[:3], (*from_id[:2], None))
-                        configs.append((recipe, config))
+                        configs_by_id[recipe.id] = config
                     if formal:
-                        configs_by_id = {recipe.id: config for recipe, config in configs}
                         # A variant can span smoke and reproduction. Variant-only selection
                         # uses the first ordered match, not necessarily the formal recipe.
-                        variant_outputs = {}
+                        seen_variants = set()
                         for item in expected["associations"]:
                             variant = item["variant"]
-                            if variant not in variant_outputs:
+                            if variant not in seen_variants:
                                 chosen = cli("config", paper_id, "--variant", variant)
                                 self.assertEqual(chosen, configs_by_id[item["recipe_id"]])
-                                variant_outputs[variant] = chosen
-                        lifecycle = (lifecycle, variant_outputs)
+                                seen_variants.add(variant)
                     if paper_id == "t-revision":
                         short = catalog.recipe_by_id("cifar10-t-revision-sym20-short", ROOT)
                         row = expected_recipes[short.id]
@@ -769,34 +703,17 @@ class RecipeIdentityTest(unittest.TestCase):
                                          ("t_revision", row["profile"], ROOT / row["path"]))
                         self.assertEqual(config_hash(catalog.load_recipe_config(short)),
                                          row["normalized_config_hash"])
-                        configs.append((short, None))
                     if paper_id == "dual-t":
                         evidence = catalog.recipe_by_id("cifar10-dual-t-evidence-smoke", ROOT)
                         self.assertNotIn(evidence.id, ordered)
                         self.assertIn("evidence", catalog.load_recipe_config(evidence))
-                        configs.append((evidence, config_hash(catalog.load_recipe_config(evidence))))
-                    selections[paper_id] = (ordered, shown, configs, lifecycle)
-            return listed, selections, formal_consumers() if formal else None
+            if formal:
+                formal_consumers()
 
-        explicit = observe()
-        real_files = catalog.resources.files
-        with patch.object(catalog.resources, "files") as files:
-            fake = files.return_value
-            fake.joinpath.return_value.read_text.return_value = legacy_manifest
-            files.side_effect = lambda package: fake if package == "lnl_toolbox.cli" else real_files(package)
-            self.assertEqual(explicit, observe())
+        observe()
 
     def test_dedicated_and_compose_batch_preserves_cli_and_execution_projection(self):
         batch = (*DEDICATED_BATCH, COMPOSE_BATCH_RECIPE)
-        raw = json.loads(
-            (ROOT / "src/lnl_toolbox/cli/data/recipe_catalog.json").read_text(encoding="utf-8")
-        )
-        legacy_manifest = json.dumps({
-            **raw, "recipes": [
-                item["path"] if isinstance(item, dict) and item["id"] in batch else item
-                for item in raw["recipes"]
-            ],
-        })
         expected = {row["id"]: row for row in self.expected["recipes"]}
         parser = build_parser()
 
@@ -820,7 +737,8 @@ class RecipeIdentityTest(unittest.TestCase):
             self.assertIn(str(destination), composed)
             self.assertIn(COMPOSE_BATCH_RECIPE, composed)
 
-            observed = {}
+            self.assertEqual(config_hash(generated),
+                             expected[COMPOSE_BATCH_RECIPE]["normalized_config_hash"])
             for key in batch:
                 with self.subTest(recipe=key):
                     row = expected[key]
@@ -836,22 +754,13 @@ class RecipeIdentityTest(unittest.TestCase):
                     self.assertEqual(row["web_formal_methods"], [])
                     budget_path = ("t_revision.revision.epochs" if recipe.runner == "t_revision"
                                    else "trainer.epochs")
-                    observed[key] = (
-                        recipe, config, cli("validate", "--recipe", key),
-                        cli("run", "--recipe", key, "--dry-run", "--no-check-data"),
-                        [plan_sweep(config, [8, 3], recipe=key, matrix=m)
-                         for m in (None, {budget_path: [1, 2]})],
-                    )
-            return listed, composed.replace(str(destination), "<destination>"), generated, observed
+                    cli("validate", "--recipe", key)
+                    cli("run", "--recipe", key, "--dry-run", "--no-check-data")
+                    for matrix in (None, {budget_path: [1, 2]}):
+                        plan = plan_sweep(config, [8, 3], recipe=key, matrix=matrix)
+                        _validate_existing_manifest(_new_manifest(plan), plan)
 
-        explicit = observe()
-        real_files = catalog.resources.files
-        with patch.object(catalog.resources, "files") as files:
-            fake = files.return_value
-            fake.joinpath.return_value.read_text.return_value = legacy_manifest
-            files.side_effect = lambda package: fake if package == "lnl_toolbox.cli" else real_files(package)
-            legacy = observe()
-        self.assertEqual(explicit, legacy)
+        observe()
 
     def test_installed_catalog_reads_distribution_once_per_build_and_revalidates(self):
         package_map = _package_map(ROOT)
@@ -907,18 +816,16 @@ class RecipeIdentityTest(unittest.TestCase):
 
 class CandidateIdentityGateTest(unittest.TestCase):
     def test_candidate_failures_cannot_be_silently_overwritten(self):
-        a, b, c = "configs/a/shared.yaml", "configs/b/shared.yaml", "configs/b/b-shared.yaml"
-        # The third path repeats the fallback ID used for the second path.
+        a, b = "configs/a/shared.yaml", "configs/b/shared.yaml"
+        first = _manifest_entry(a, "shared")
+        second = _manifest_entry(b, "shared")
         for raw, real, paper, error in (
-            ({"recipes": [a, a]}, [a], [], "duplicate manifest path"),
-            ({"recipes": [a, b]}, [a, b], [], "ambiguous canonical stem"),
-            ({"recipes": [c, a, b]}, [a, b, c], [], "duplicate identity after fallback"),
-            ({"recipes": [a, "configs/b/SHARED.yaml"]}, [a, "configs/b/SHARED.yaml"], [],
-             "ambiguous canonical stem"),
-            ({"recipes": [a]}, [], [], "dangling normal"),
-            ({"recipes": [a], "public": [{"path": b}]}, [a], [], "dangling public"),
-            ({"recipes": [a], "conditional": [b]}, [a], [], "dangling conditional"),
-            ({"recipes": [a]}, [a], ["removed"], "dangling Paper"),
+            ({"recipes": [first, first]}, [a], [], "duplicate manifest path"),
+            ({"recipes": [first, second]}, [a, b], [], "duplicate canonical identity"),
+            ({"recipes": [first]}, [], [], "dangling normal"),
+            ({"recipes": [first], "public": [{"path": b}]}, [a], [], "dangling public"),
+            ({"recipes": [first], "conditional": [b]}, [a], [], "dangling conditional"),
+            ({"recipes": [first]}, [a], ["removed"], "dangling Paper"),
         ):
             with self.subTest(error=error, candidate=raw):
                 with self.assertRaisesRegex(AssertionError, error):
@@ -927,6 +834,10 @@ class CandidateIdentityGateTest(unittest.TestCase):
     def test_discovery_gate_rejects_cross_view_resource_drift(self):
         with self.assertRaisesRegex(AssertionError, "shared moved from"):
             verify_view_identities({"first": [("shared", "a")], "second": [("shared", "b")]})
+
+
+def _manifest_entry(path, recipe_id, profile="experiment"):
+    return {"id": recipe_id, "path": path, "profile": profile}
 
 
 class ProductionRecipeIdentityTest(unittest.TestCase):
@@ -946,9 +857,9 @@ class ProductionRecipeIdentityTest(unittest.TestCase):
         path.write_text(source, encoding="utf-8")
         return path
 
-    def manifest(self, paths, *, conditional=(), public=()):
+    def manifest(self, entries, *, conditional=(), public=()):
         self.resource_files.return_value.joinpath.return_value.read_text.return_value = json.dumps({
-            "recipes": paths, "conditional": conditional,
+            "recipes": entries, "conditional": conditional,
             "public": [{"path": p, "label": p, "description": ""} for p in public],
         })
 
@@ -964,11 +875,12 @@ class ProductionRecipeIdentityTest(unittest.TestCase):
 
     def test_explicit_identity_overrides_filename_and_preserves_path_projections(self):
         path = "configs/experiment/totally_unrelated_smoke.yaml"
-        legacy = "configs/experiment/legacy_smoke.yaml"
+        other = "configs/reproduction/totally_unrelated_smoke.yaml"
         source = self.write(path)
-        self.write(legacy)
+        self.write(other)
         self.manifest(
-            [legacy, {"id": "stable-recipe-id", "path": path, "profile": "reproduction"}],
+            [_manifest_entry(other, "other-smoke", "smoke"),
+             _manifest_entry(path, "stable-recipe-id", "reproduction")],
             conditional=[path], public=[path],
         )
         recipe = catalog.recipe_by_id(" STABLE_RECIPE_ID ", self.root)
@@ -977,7 +889,7 @@ class ProductionRecipeIdentityTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown recipe"):
             catalog.recipe_by_id("totally-unrelated-smoke", self.root)
         expected_ids = (
-            ["legacy-smoke"], [], ["legacy-smoke", "stable-recipe-id"], ["stable-recipe-id"],
+            ["other-smoke"], [], ["other-smoke", "stable-recipe-id"], ["stable-recipe-id"],
         )
         for (conditional, public), expected in zip(VIEWS, expected_ids):
             with self.subTest(conditional=conditional, public=public):
@@ -999,6 +911,8 @@ class ProductionRecipeIdentityTest(unittest.TestCase):
             for missing in valid
         ]
         invalid += [
+            (path, "requires explicit recipe objects"),
+            (None, "requires explicit recipe objects"),
             ({**valid, "runner": "supervised"}, "unknown=.*runner"),
             ({**valid, "id": "STABLE_ID"}, "invalid explicit recipe id"),
             ({**valid, "id": 1}, "invalid explicit recipe id"),
@@ -1016,25 +930,22 @@ class ProductionRecipeIdentityTest(unittest.TestCase):
                 self.manifest([entry])
                 self.assert_catalog_rejected(error, "recipes[0]")
 
-    def test_explicit_and_legacy_ids_share_one_namespace(self):
+    def test_string_entry_is_rejected_in_an_otherwise_explicit_manifest(self):
         a, b = "configs/one/shared_id.yaml", "configs/two/unrelated.yaml"
-        for path in (a, b):
-            self.write(path)
-        explicit_a = {"id": "shared-id", "path": a, "profile": "smoke"}
-        explicit_b = {"id": "shared-id", "path": b, "profile": "experiment"}
-        for first, second in ((a, explicit_b), (explicit_b, a), (explicit_a, explicit_b)):
+        explicit_b = _manifest_entry(b, "unrelated")
+        for first, second, position in ((a, explicit_b, 0), (explicit_b, a, 1)):
             with self.subTest(entries=(first, second)):
                 self.manifest([first, second], conditional=[b], public=[a])
-                self.assert_catalog_rejected("duplicate canonical recipe ID", "shared-id", a, b)
+                self.assert_catalog_rejected("requires explicit recipe objects", f"recipes[{position}]")
 
     def test_explicit_entries_preserve_resource_and_projection_safety(self):
         path = "configs/experiment/actual.yaml"
         alias = "configs/experiment/./actual.yaml"
         self.write(path)
         entry = {"id": "stable-id", "path": path, "profile": "smoke"}
-        self.manifest([alias, entry])
-        self.assert_catalog_rejected("duplicate resource", "stable-id", path, alias)
-        self.manifest([path, entry])
+        self.manifest([_manifest_entry(alias, "alias"), entry])
+        self.assert_catalog_rejected("invalid explicit path", alias)
+        self.manifest([_manifest_entry(path, "alias"), entry])
         self.assert_catalog_rejected("duplicate recipes path", path)
         for section in ("public", "conditional"):
             self.manifest([entry], **{section: [path, path]})
@@ -1054,30 +965,33 @@ class ProductionRecipeIdentityTest(unittest.TestCase):
         a, b = "configs/one/shared_smoke.yaml", "configs/two/shared-smoke.yaml"
         self.write(a)
         self.write(b)
-        self.manifest([a, b], conditional=[a], public=[b])
+        self.manifest([_manifest_entry(a, "shared-smoke"), _manifest_entry(b, "shared-smoke")],
+                      conditional=[a], public=[b])
         self.assert_catalog_rejected("duplicate canonical recipe ID", "shared-smoke", a, b)
         with self.assertRaisesRegex(ValueError, "duplicate canonical recipe ID.*shared-smoke"):
             catalog.recipe_by_id(" SHARED_SMOKE ", self.root)
         with self.assertRaisesRegex(ValueError, "duplicate canonical recipe ID.*shared-smoke"):
             catalog.load_papers(self.root)
 
-    def test_old_parent_fallback_collision_rejected_in_either_order(self):
+    def test_duplicate_explicit_id_rejected_in_either_order(self):
         a, b = "configs/one/shared.yaml", "configs/two/shared.yaml"
         c = "configs/two/two-shared.yaml"
         for path in (a, b, c):
             self.write(path)
-        # The old fallback for the second shared.yaml collided with this
-        # independently named recipe in this ordering.
+        ids = {a: "shared", b: "shared", c: "two-shared"}
         for order in ((c, a, b), (b, a, c)):
             with self.subTest(order=order):
-                self.manifest(order, conditional=[a], public=[c])
+                self.manifest([_manifest_entry(p, ids[p]) for p in order], conditional=[a], public=[c])
                 self.assert_catalog_rejected("duplicate canonical recipe ID", "'shared'", a, b)
 
-    def test_duplicate_resource_rejected_even_with_distinct_manifest_spelling(self):
-        a, b = "configs/one/shared.yaml", "configs/one/./shared.yaml"
-        self.write(a)
-        self.manifest([a, b])
-        self.assert_catalog_rejected("duplicate resource", "shared", a, b)
+    def test_duplicate_physical_resource_rejected_with_distinct_valid_paths(self):
+        a, b = "configs/one/shared.yaml", "configs/two/shared.yaml"
+        shared = self.write("shared.yaml")
+        records = [PurePosixPath("prefix/share/lnl-toolbox", path) for path in (a, b)]
+        self.manifest([_manifest_entry(a, "first"), _manifest_entry(b, "second")])
+        dist = SimpleNamespace(files=records, locate_file=lambda entry: shared)
+        with patch.object(catalog.metadata, "distribution", return_value=dist):
+            self.assert_catalog_rejected("duplicate resource", "second", a, b)
 
     def test_dangling_conditional_and_duplicate_projection_references_rejected(self):
         a, b = "configs/one/normal.yaml", "configs/one/unknown.yaml"
@@ -1088,13 +1002,14 @@ class ProductionRecipeIdentityTest(unittest.TestCase):
             ({"public": [a, a]}, "duplicate public path", a),
         ):
             with self.subTest(options=options):
-                self.manifest([a], **options)
+                self.manifest([_manifest_entry(a, "normal")], **options)
                 self.assert_catalog_rejected(error, detail)
 
     def test_hidden_declared_yaml_must_exist_and_parse(self):
         a, b = "configs/phase1a/visible.yaml", "configs/phase1a/hidden.yaml"
         self.write(a)
-        self.manifest([a, b], conditional=[b], public=[a])
+        self.manifest([_manifest_entry(a, "visible"), _manifest_entry(b, "hidden")],
+                      conditional=[b], public=[a])
         with patch.object(catalog.metadata, "distribution",
                           side_effect=metadata.PackageNotFoundError("lnl-toolbox")):
             self.assert_catalog_rejected("missing YAML for built-in recipe", "hidden", b,
@@ -1109,17 +1024,17 @@ class ProductionRecipeIdentityTest(unittest.TestCase):
         candidates = tuple(PurePosixPath(f"{name}/share/lnl-toolbox/{relative}") for name in ("a", "b"))
         for entry in candidates:
             self.write(entry.as_posix())
-        self.manifest([relative])
+        self.manifest([_manifest_entry(relative, "declared-id")])
         dist = SimpleNamespace(files=candidates, locate_file=lambda entry: self.root / entry)
         with patch.object(catalog.metadata, "distribution", return_value=dist):
             self.assert_catalog_rejected(
-                "ambiguous installed resource", "installed", *(entry.as_posix() for entry in candidates)
+                "ambiguous installed resource", "declared-id", *(entry.as_posix() for entry in candidates)
             )
 
     def test_installed_record_without_file_is_rejected(self):
         relative = "configs/installed/absent.yaml"
         record = PurePosixPath("prefix/share/lnl-toolbox", relative)
-        self.manifest([relative], conditional=[relative])
+        self.manifest([_manifest_entry(relative, "absent")], conditional=[relative])
         dist = SimpleNamespace(files=[record], locate_file=lambda entry: self.root / entry)
         with patch.object(catalog.metadata, "distribution", return_value=dist):
             self.assert_catalog_rejected(
@@ -1136,10 +1051,10 @@ class ProductionRecipeIdentityTest(unittest.TestCase):
             self.write(entry.as_posix())
         dist = SimpleNamespace(files=candidates, locate_file=lambda entry: self.root / entry)
         with patch.object(catalog.metadata, "distribution", return_value=dist) as lookup:
-            self.manifest([a])
+            self.manifest([_manifest_entry(a, "source")])
             self.assertEqual(catalog.recipe_by_id("source", self.root).config_path, source)
             lookup.assert_not_called()
-            self.manifest([a, b])
+            self.manifest([_manifest_entry(a, "source"), _manifest_entry(b, "installed")])
             rows = catalog.discover_recipes(self.root)
             self.assertEqual(
                 [item.config_path for item in rows], [source, self.root / candidates[-1]]
@@ -1150,7 +1065,8 @@ class ProductionRecipeIdentityTest(unittest.TestCase):
         a, b = "configs/phase1a/visible.yaml", "configs/phase1a/conditional.yaml"
         self.write(a)
         config = self.write(b, "kind: experiment\ndata: {name: cifar10, root: not-present}\n")
-        self.manifest([a, b], conditional=[b], public=[a, b])
+        self.manifest([_manifest_entry(a, "visible"), _manifest_entry(b, "conditional")],
+                      conditional=[b], public=[a, b])
         with patch.object(catalog, "validate_config", side_effect=AssertionError("runtime validation")):
             for conditional, public in VIEWS:
                 with self.subTest(conditional=conditional, public=public):

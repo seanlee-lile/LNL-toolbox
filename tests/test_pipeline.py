@@ -285,7 +285,7 @@ class _runner_planning_RunnerPlanningTest(unittest.TestCase):
         data_files = pyproject['tool']['setuptools']['data-files']
         declared = {path for paths in data_files.values() for path in paths}
         manifest = json.loads((root / 'src/lnl_toolbox/cli/data/recipe_catalog.json').read_text(encoding='utf-8'))
-        catalog_recipes = {entry if isinstance(entry, str) else entry['path'] for entry in manifest['recipes']}
+        catalog_recipes = {entry['path'] for entry in manifest['recipes']}
         conditional = set(manifest.get('conditional', []))
         self.assertEqual(conditional - catalog_recipes, set())
         self.assertEqual(catalog_recipes - declared, set())

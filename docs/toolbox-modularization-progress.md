@@ -1,5 +1,27 @@
 # Toolbox modularization progress
 
+## Recipe Identity Migration — explicit-only built-in manifest
+
+Base: `code@439401fdf7f9eac8284cfbb5e9ee3668faea1fa5` (pushed full data migration).
+The built-in manifest now requires objects with exactly `id`, `path` and
+`profile`. The index no longer derives identity from filenames or paths.
+The path-derived ID helper remains only for diagnostics in the standalone
+strict installed-resource lookup without a declared ID. Direct
+`--config path.yaml`, packaged-only producer lookup, and source-first
+resolution are unchanged. External tools emitting or reading string
+manifest entries must use the object schema; the shipped manifest data
+and identity baseline are unchanged.
+
+- Focused: 21 passed. Main: 1181 passed / 21 skipped; Web: 110 passed /
+  31 skipped; Scratch: 196 passed / 10 skipped. No failures or errors.
+- Isolated wheel and sdist-derived installations and installed CLI
+  discovery match the frozen baseline (68 IDs and resources, 71 packaged
+  YAMLs, 63 / 4 / 68 / 4 views, 26 Papers, 56 associations, 26 defaults).
+  Each installed index build reads the distribution file list once.
+- Cleanup and verification complete (5/5: audit, parser, tests, full
+  regression, and isolated installs). Await human review; cleanup is
+  unstaged, uncommitted and unpushed.
+
 ## Recipe Identity Migration Phase 1C — bulk identity data migration
 
 Base: `code@d09828db41f64f2d70be835935f4593e2ab63b9c` (pushed Batch 9).
