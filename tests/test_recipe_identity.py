@@ -53,6 +53,108 @@ RELOCATIONS = {
             "gce_cifar10_noise02_reproduction.yaml",
             "gce_cifar10_noise02_smoke.yaml",
         ),
+        "binary-risk": (
+            "binary_risk_natarajan_1epoch.yaml",
+            "binary_risk_natarajan_reproduction.yaml",
+        ),
+        "ca2c": (
+            "ca2c_cifar100_reproduction.yaml",
+            "ca2c_cifar10_smoke.yaml",
+        ),
+        "clean": (
+            "cifar10_clean.yaml",
+            "cifar10_clean_baseline.yaml",
+            "cifar10_clean_smoke.yaml",
+        ),
+        "cnlcu": (
+            "cifar10_cnlcu_hard_smoke.yaml",
+            "cifar10_cnlcu_soft_smoke.yaml",
+            "cnlcu_cifar10_reproduction.yaml",
+        ),
+        "coteaching": (
+            "cifar10_coteaching_reproduction.yaml",
+            "cifar10_coteaching_smoke.yaml",
+        ),
+        "cwd": (
+            "cwd_cifar10_reproduction.yaml",
+            "cwd_cifar10_smoke.yaml",
+        ),
+        "dividemix": (
+            "cifar10_dividemix_smoke.yaml",
+        ),
+        "dual-t": (
+            "cifar10_dual_t_smoke.yaml",
+        ),
+        "dual-t/evidence": (
+            "cifar10_dual_t_evidence_smoke.yaml",
+        ),
+        "fine": (
+            "fine_cifar100n_reproduction.yaml",
+            "fine_cifar100n_smoke.yaml",
+        ),
+        "importance-reweighting": (
+            "importance_reweighting_binary_high_dim_smoke.yaml",
+            "importance_reweighting_binary_smoke.yaml",
+        ),
+        "jocor": (
+            "jocor_cifar10_symmetric05_reproduction.yaml",
+            "jocor_cifar10_symmetric05_smoke.yaml",
+        ),
+        "l2rw": (
+            "l2rw_cifar10_reproduction.yaml",
+            "l2rw_cifar10_smoke.yaml",
+        ),
+        "lend": (
+            "cifar10_lend_smoke.yaml",
+            "lend_cifar10_reproduction.yaml",
+        ),
+        "loss-correction": (
+            "loss_correction_cifar10_asymmetric04.yaml",
+        ),
+        "mc-ldce": (
+            "mc_ldce_cifar10_reproduction.yaml",
+            "mc_ldce_cifar10_smoke.yaml",
+        ),
+        "pdl": (
+            "pdl_cifar10_reproduction.yaml",
+            "pdl_cifar10_smoke.yaml",
+        ),
+        "supervised-baselines": (
+            "cifar10_foundation_smoke.yaml",
+            "cifar10_smoke.yaml",
+            "cifar10_symmetric_ce_smoke.yaml",
+            "cifar10_symmetric_small_loss_linear_smoke.yaml",
+            "cifar10_symmetric_small_loss_smoke.yaml",
+        ),
+        "t-revision": (
+            "cifar10_t_revision_smoke.yaml",
+        ),
+    }.items()
+    for filename in files
+} | {
+    f"configs/reproduction/{filename}": f"configs/methods/{family}/{filename}"
+    for family, files in {
+        "cnlcu/support": (
+            "cifar10_cnlcu_soft_sym20_short.yaml",
+        ),
+        "dividemix": (
+            "cifar10_dividemix_sym20.yaml",
+        ),
+        "dual-t": (
+            "cifar10_dual_t_sym20.yaml",
+        ),
+        "dual-t/evidence": (
+            "cifar10_dual_t_sym20_evidence.yaml",
+        ),
+        "importance-reweighting": (
+            "importance_reweighting_binary_high_dim.yaml",
+            "importance_reweighting_binary_low_dim.yaml",
+            "uci_heart_importance_reweighting.yaml",
+        ),
+        "t-revision": (
+            "cifar10_t_revision_sym20_short.yaml",
+            "cifar10_t_revision_sym20_reproduction.yaml",
+        ),
     }.items()
     for filename in files
 }

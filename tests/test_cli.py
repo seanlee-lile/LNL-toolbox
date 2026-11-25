@@ -1105,7 +1105,7 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
         self.assertEqual(output.splitlines()[0], 'id\tacronym\ttitle\tvenue\tyear\tprofiles\tfidelity\trunners\trecommended')
 
     def test_paper_config_resolved_does_not_change_source(self) -> None:
-        path = _unified_cli_ROOT / 'configs/experiment/cifar10_coteaching_smoke.yaml'
+        path = _unified_cli_ROOT / 'configs/methods/coteaching/cifar10_coteaching_smoke.yaml'
         before = path.read_bytes()
         code, output, _ = self.invoke('papers', 'config', 'coteaching', '--profile', 'smoke', '--resolved')
         self.assertEqual(code, 0)
@@ -1204,7 +1204,7 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
         self.assertIn('cifar10-dual-t-smoke', output)
 
     def test_compose_creates_valid_yaml_without_overwriting(self) -> None:
-        source = _unified_cli_ROOT / 'configs/experiment/cifar10_symmetric_ce_smoke.yaml'
+        source = _unified_cli_ROOT / 'configs/methods/supervised-baselines/cifar10_symmetric_ce_smoke.yaml'
         before = source.read_bytes()
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'gce_small_loss.yaml'
@@ -1295,7 +1295,7 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
         self.assertIn('Training budget: 2', output)
 
     def test_positional_yaml_is_accepted(self) -> None:
-        path = _unified_cli_ROOT / 'configs/experiment/cifar10_symmetric_ce_smoke.yaml'
+        path = _unified_cli_ROOT / 'configs/methods/supervised-baselines/cifar10_symmetric_ce_smoke.yaml'
         code, output, error = self.invoke('validate', str(path))
         self.assertEqual(code, 0, error)
         self.assertIn('supervised', output)
@@ -1444,9 +1444,9 @@ class _lend_cli_LENDCliTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.path = _lend_cli_ROOT / 'configs/experiment/cifar10_lend_smoke.yaml'
+        cls.path = _lend_cli_ROOT / 'configs/methods/lend/cifar10_lend_smoke.yaml'
         cls.config = yaml.safe_load(cls.path.read_text(encoding='utf-8'))
-        cls.reproduction_path = _lend_cli_ROOT / 'configs/experiment/lend_cifar10_reproduction.yaml'
+        cls.reproduction_path = _lend_cli_ROOT / 'configs/methods/lend/lend_cifar10_reproduction.yaml'
         cls.reproduction_config = yaml.safe_load(cls.reproduction_path.read_text(encoding='utf-8'))
 
     def test_registry_recipe_paper_and_preflight(self):

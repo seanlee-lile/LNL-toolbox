@@ -1131,13 +1131,13 @@ _new_paper_training_ROOT = Path(__file__).resolve().parents[1]
 
 class _new_paper_training_NewPaperTrainingTest(unittest.TestCase):
 
-    def _config(self, name: str) -> dict:
-        return yaml.safe_load((_new_paper_training_ROOT / 'configs' / 'experiment' / name).read_text(encoding='utf-8'))
+    def _config(self, path: str) -> dict:
+        return yaml.safe_load((_new_paper_training_ROOT / path).read_text(encoding='utf-8'))
 
     def test_registered_pcse_volmin_fixture_trains_without_parameter_replacement(self) -> None:
         from lnl_toolbox.catalog import validate_config
 
-        config = self._config('pcse_multiclass_volmin_smoke.yaml')
+        config = self._config('configs/experiment/pcse_multiclass_volmin_smoke.yaml')
         original = deepcopy(config)
         self.assertEqual(validate_config(config).name, 'pcse')
         with tempfile.TemporaryDirectory() as directory:
@@ -1149,11 +1149,16 @@ class _new_paper_training_NewPaperTrainingTest(unittest.TestCase):
         self.assertEqual(config, original)
 
     def test_all_new_workflows_smoke_and_resume(self) -> None:
-        names = ('mc_ldce_cifar10_smoke.yaml', 'cal_cifar10_smoke.yaml', 'ca2c_cifar10_smoke.yaml')
+        paths = (
+            'configs/methods/mc-ldce/mc_ldce_cifar10_smoke.yaml',
+            'configs/experiment/cal_cifar10_smoke.yaml',
+            'configs/methods/ca2c/ca2c_cifar10_smoke.yaml',
+        )
         with tempfile.TemporaryDirectory() as directory:
-            for name in names:
+            for path in paths:
+                name = Path(path).name
                 with self.subTest(name=name):
-                    config = deepcopy(self._config(name))
+                    config = deepcopy(self._config(path))
                     if config['method'] == 'mc_ldce':
                         from lnl_toolbox.catalog import validate_config
                         from lnl_toolbox.training.mc_ldce_experiment import _lifecycle

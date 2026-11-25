@@ -112,20 +112,20 @@ lnl-train
 快速 GPU/CPU smoke test：
 
 ```powershell
-lnl-train --config configs/experiment/cifar10_smoke.yaml
+lnl-train --config configs/methods/supervised-baselines/cifar10_smoke.yaml
 ```
 
 等价的模块运行方式：
 
 ```powershell
 lnl run `
-  --config configs/experiment/cifar10_smoke.yaml
+  --config configs/methods/supervised-baselines/cifar10_smoke.yaml
 ```
 
 完整 CIFAR-10 配置：
 
 ```powershell
-lnl-train --config configs/experiment/cifar10_clean.yaml
+lnl-train --config configs/methods/clean/cifar10_clean.yaml
 ```
 
 每次运行会在 `artifacts/runs/` 下生成：
@@ -142,7 +142,7 @@ lnl-train --config configs/experiment/cifar10_clean.yaml
 
 ```powershell
 lnl-train `
-  --config configs/experiment/cifar10_smoke.yaml `
+  --config configs/methods/supervised-baselines/cifar10_smoke.yaml `
   --resume artifacts/runs/cifar10_smoke/last.pt `
   --epochs 3
 ```
@@ -174,7 +174,7 @@ python -m unittest discover -s tests -v
 
 ```powershell
 python -m unittest discover -s tests -v
-lnl-train --config configs/experiment/cifar10_smoke.yaml
+lnl-train --config configs/methods/supervised-baselines/cifar10_smoke.yaml
 ```
 
 不要直接使用完整 Conda 环境的 `pip freeze` 覆盖 requirements；那会把其他项目的 Cleanlab、OpenCV、Pandas、Ultralytics 等无关依赖一起带入。
@@ -189,7 +189,7 @@ preflight、标准运行元数据和 `final_metrics.json` Result Contract。新�
 
 ```powershell
 lnl run cifar10-symmetric-ce-smoke --set trainer.epochs=2 --dry-run
-lnl run configs/experiment/cifar10_symmetric_ce_smoke.yaml
+lnl run configs/methods/supervised-baselines/cifar10_symmetric_ce_smoke.yaml
 lnl sweep cifar10-symmetric-ce-smoke --seeds 1 2 3
 lnl sweep cifar10-clean-smoke `
   --matrix 'loader.batch_size=[256,512]' `

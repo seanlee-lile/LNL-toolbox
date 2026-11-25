@@ -29,7 +29,7 @@ Run the production Dual-T workflow:
 ```powershell
 $env:PYTHONPATH = "src"
 lnl run `
-  --config configs/reproduction/cifar10_dual_t_sym20.yaml `
+  --config configs/methods/dual-t/cifar10_dual_t_sym20.yaml `
   --output-dir artifacts/reproductions/cifar10-dual-t-sym20-seed1
 ```
 
@@ -38,7 +38,7 @@ Run the standalone evidence chain:
 ```powershell
 $env:PYTHONPATH = "src"
 python scripts/run_dual_t_evidence.py `
-  --config configs/reproduction/cifar10_dual_t_sym20_evidence.yaml `
+  --config configs/methods/dual-t/evidence/cifar10_dual_t_sym20_evidence.yaml `
   --output-dir artifacts/reproductions/cifar10-dual-t-sym20-evidence-seed1
 ```
 
@@ -96,13 +96,13 @@ the paper prescribed this exact DT-Forward optimization setup.
 
 ## Smoke Versus Formal Configurations
 
-`configs/experiment/cifar10_dual_t_smoke.yaml` and
-`configs/experiment/cifar10_dual_t_evidence_smoke.yaml` verify lifecycle,
+`configs/methods/dual-t/cifar10_dual_t_smoke.yaml` and
+`configs/methods/dual-t/evidence/cifar10_dual_t_evidence_smoke.yaml` verify lifecycle,
 artifact, fairness, and resume behavior. They use TinyCNN, small dataset
 subsets, CPU execution, and short epoch counts. Their accuracy and matrix
 errors are pipeline diagnostics only.
 
-The two files under `configs/reproduction/` use the full CIFAR-10 split,
+The two Sym20 files in the Dual-T family use the full CIFAR-10 split,
 ResNet-18, and formal training budgets. They are intended for GPU sanity and
 long-running experiments, not routine unit tests.
 

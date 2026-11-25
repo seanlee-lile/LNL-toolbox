@@ -672,7 +672,7 @@ eval(quote + workflow + 'console.log(compatibilityWorkflowCommand("run"));');
             command_console._sweep_plan_payload(
                 {
                     "recipe": "fine-cifar100n-reproduction",
-                    "path": "configs/experiment/fine_cifar100n_reproduction.yaml",
+                    "path": "configs/methods/fine/fine_cifar100n_reproduction.yaml",
                 }
             )
         with self.assertRaisesRegex(ValueError, "locked parameter"):
@@ -1097,7 +1097,7 @@ eval(quote + workflow + 'console.log(compatibilityWorkflowCommand("run"));');
                 "acknowledge_paper_impact": True,
             })
             custom = load_yaml(destination)
-            formal = load_yaml(command_console.ROOT / "configs/experiment/lend_cifar10_reproduction.yaml")
+            formal = load_yaml(command_console.ROOT / "configs/methods/lend/lend_cifar10_reproduction.yaml")
             self.assertEqual(custom["scheduler"]["lr_values"], [0.007])
             self.assertNotIn("lr_values", formal["scheduler"])
             self.assertEqual(formal["optimizer"]["lr"], 0.05)
