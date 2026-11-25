@@ -23,7 +23,7 @@ kind: experiment  # 或 fragment / mentor_artifact
 
 1. 将完整实验写为 `kind: experiment`，使用 `snake_case` 的字段、注册键和 YAML 文件名，沿用现有 runner、方法和组件的精确注册名。参考片段用 `kind: fragment`，MentorNet 等生产者配置按各自入口使用，不能当作普通训练 recipe 登记。
 2. 为新配方选择全局唯一的稳定 ID，使用小写字母、数字和连字符。文件名可用 `_smoke`、`_reproduction` 后缀帮助读者辨识，但不定义 ID、profile 或 fidelity。不要因重命名 YAML 而改变已发布的 ID。
-3. 在 `src/lnl_toolbox/cli/data/recipe_catalog.json` 的 `recipes` 中登记恰含 `id`、`path`、`profile` 的对象，例如现有 GCE smoke 条目：`{"id": "gce-cifar10-noise02-smoke", "path": "configs/experiment/gce_cifar10_noise02_smoke.yaml", "profile": "smoke"}`。不接受裸路径字符串。同步 `pyproject.toml` 的 `tool.setuptools.data-files`，按需以相同路径登记 `conditional` 或精选 `public` 条目。文件存在或被打包均不会自动登记 recipe。
+3. 在 `src/lnl_toolbox/cli/data/recipe_catalog.json` 的 `recipes` 中登记恰含 `id`、`path`、`profile` 的对象，例如现有 GCE smoke 条目：`{"id": "gce-cifar10-noise02-smoke", "path": "configs/methods/gce/gce_cifar10_noise02_smoke.yaml", "profile": "smoke"}`。不接受裸路径字符串。同步 `pyproject.toml` 的 `tool.setuptools.data-files`，按需以相同路径登记 `conditional` 或精选 `public` 条目。文件存在或被打包均不会自动登记 recipe。
 4. 若配方应出现在 Paper 页面，在 `src/lnl_toolbox/paper_catalog.json` 补齐 `recipe_id`、`profile` 和用于选择的 `variant`（新标签用连字符分隔）。保留该 Paper 的正式默认顺序，代码取第一个 `reproduction` 条目。新增条目的 Paper profile 应与发现 profile 一致。已有 Loss Correction 条目的 Paper profile 为 `reproduction`，发现 profile 为 `experiment`，属于保留的历史例外。
 5. 若配方替换正式参数编辑基准或新增可编辑字段，检查 `web/lnl_parameter_metadata_registry_revised.yaml` 中的正式绑定与字段路径。运行配置、catalog 关联和 Web 参数展示分别承担执行、导航和编辑职责。
 
@@ -33,7 +33,7 @@ kind: experiment  # 或 fragment / mentor_artifact
 
 向导另从当前项目的 `configs/experiment/*.yaml` 发现本地文件，保留独立用户项目的同名优先与无候选时的手输路径。源码根目录中的未登记文件只有符合向导资格才会显示为本地项；这避免将专用工作流和测试配置混入普通模板。Producer 用专用入口运行；packaged-only 辅助配置、开发例与任意自定义 YAML 可按路径使用。独立安装不自动从包内填充向导菜单；`--recipe` 和显式 `--config` 不受影响。
 
-**GCE（现有 loss 和 runner）。** 参考 `experiment/gce_cifar10_noise02_reproduction.yaml`。新增同类配方时沿用 `supervised` 和 `loss.name: gce`，完成 YAML、manifest 和打包路径登记，再按需关联 GCE Paper。沿用现有字段和正式编辑基准时，无需修改 Web 元数据。
+**GCE（现有 loss 和 runner）。** 参考 `methods/gce/gce_cifar10_noise02_reproduction.yaml`。新增同类配方时沿用 `supervised` 和 `loss.name: gce`，完成 YAML、manifest 和打包路径登记，再按需关联 GCE Paper。沿用现有字段和正式编辑基准时，无需修改 Web 元数据。
 
 **DLD（专用生命周期与前置条件）。** 参考 `experiment/dld_cifar10_reproduction.yaml`，保留 `dld` runner 及其特征提取、扩散和推理阶段。完成相同的路径登记及 Paper 关联；如果所用正式配置依赖外部特征来源，还需登记 `conditional`。只有正式参数基准或可编辑字段变化时，才同步 Web 绑定。
 

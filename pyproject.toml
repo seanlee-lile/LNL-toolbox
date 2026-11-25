@@ -61,9 +61,6 @@ skip_covered = true
 
 [tool.setuptools.data-files]
 "share/lnl-toolbox/configs/experiment" = [
-    "configs/experiment/apl_cifar10_noise02_reproduction.yaml",
-    "configs/experiment/apl_cifar10_noise02_smoke.yaml",
-    "configs/experiment/apl_cifar10_noise04_reproduction.yaml",
     "configs/experiment/binary_risk_natarajan_1epoch.yaml",
     "configs/experiment/binary_risk_natarajan_reproduction.yaml",
     "configs/experiment/ca2c_cifar100_reproduction.yaml",
@@ -85,8 +82,6 @@ skip_covered = true
     "configs/experiment/cifar10_lend_smoke.yaml",
     "configs/experiment/cifar10_foundation_smoke.yaml",
     "configs/experiment/cifar10_smoke.yaml",
-    "configs/experiment/cifar10_symmetric_cdr_reproduction.yaml",
-    "configs/experiment/cifar10_symmetric_cdr_smoke.yaml",
     "configs/experiment/cifar10_symmetric_ce_smoke.yaml",
     "configs/experiment/cifar10_symmetric_small_loss_linear_smoke.yaml",
     "configs/experiment/cifar10_symmetric_small_loss_smoke.yaml",
@@ -95,13 +90,9 @@ skip_covered = true
     "configs/experiment/cifar10_volminnet_smoke.yaml",
     "configs/experiment/cwd_cifar10_reproduction.yaml",
     "configs/experiment/cwd_cifar10_smoke.yaml",
-    "configs/experiment/dss_cifar10_symmetric05_reproduction.yaml",
-    "configs/experiment/dss_cifar10_symmetric05_smoke.yaml",
     "configs/experiment/dld_cifar10_reproduction.yaml",
     "configs/experiment/fine_cifar100n_reproduction.yaml",
     "configs/experiment/fine_cifar100n_smoke.yaml",
-    "configs/experiment/gce_cifar10_noise02_reproduction.yaml",
-    "configs/experiment/gce_cifar10_noise02_smoke.yaml",
     "configs/experiment/importance_reweighting_binary_high_dim_smoke.yaml",
     "configs/experiment/importance_reweighting_binary_smoke.yaml",
     "configs/experiment/jocor_cifar10_symmetric05_reproduction.yaml",
@@ -134,4 +125,25 @@ skip_covered = true
     "configs/reproduction/importance_reweighting_binary_high_dim.yaml",
     "configs/reproduction/importance_reweighting_binary_low_dim.yaml",
     "configs/reproduction/uci_heart_importance_reweighting.yaml",
+]
+
+"share/lnl-toolbox/configs/methods/apl" = [
+    "configs/methods/apl/apl_cifar10_noise02_reproduction.yaml",
+    "configs/methods/apl/apl_cifar10_noise02_smoke.yaml",
+    "configs/methods/apl/apl_cifar10_noise04_reproduction.yaml",
+]
+
+"share/lnl-toolbox/configs/methods/cdr" = [
+    "configs/methods/cdr/cifar10_symmetric_cdr_reproduction.yaml",
+    "configs/methods/cdr/cifar10_symmetric_cdr_smoke.yaml",
+]
+
+"share/lnl-toolbox/configs/methods/dss" = [
+    "configs/methods/dss/dss_cifar10_symmetric05_reproduction.yaml",
+    "configs/methods/dss/dss_cifar10_symmetric05_smoke.yaml",
+]
+
+"share/lnl-toolbox/configs/methods/gce" = [
+    "configs/methods/gce/gce_cifar10_noise02_reproduction.yaml",
+    "configs/methods/gce/gce_cifar10_noise02_smoke.yaml",
 ]

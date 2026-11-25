@@ -2,17 +2,17 @@
   "recipes": [
     {
       "id": "apl-cifar10-noise02-reproduction",
-      "path": "configs/experiment/apl_cifar10_noise02_reproduction.yaml",
+      "path": "configs/methods/apl/apl_cifar10_noise02_reproduction.yaml",
       "profile": "reproduction"
     },
     {
       "id": "apl-cifar10-noise02-smoke",
-      "path": "configs/experiment/apl_cifar10_noise02_smoke.yaml",
+      "path": "configs/methods/apl/apl_cifar10_noise02_smoke.yaml",
       "profile": "smoke"
     },
     {
       "id": "apl-cifar10-noise04-reproduction",
-      "path": "configs/experiment/apl_cifar10_noise04_reproduction.yaml",
+      "path": "configs/methods/apl/apl_cifar10_noise04_reproduction.yaml",
       "profile": "reproduction"
     },
     {
@@ -132,12 +132,12 @@
     },
     {
       "id": "cifar10-symmetric-cdr-reproduction",
-      "path": "configs/experiment/cifar10_symmetric_cdr_reproduction.yaml",
+      "path": "configs/methods/cdr/cifar10_symmetric_cdr_reproduction.yaml",
       "profile": "reproduction"
     },
     {
       "id": "cifar10-symmetric-cdr-smoke",
-      "path": "configs/experiment/cifar10_symmetric_cdr_smoke.yaml",
+      "path": "configs/methods/cdr/cifar10_symmetric_cdr_smoke.yaml",
       "profile": "smoke"
     },
     {
@@ -182,12 +182,12 @@
     },
     {
       "id": "dss-cifar10-symmetric05-reproduction",
-      "path": "configs/experiment/dss_cifar10_symmetric05_reproduction.yaml",
+      "path": "configs/methods/dss/dss_cifar10_symmetric05_reproduction.yaml",
       "profile": "reproduction"
     },
     {
       "id": "dss-cifar10-symmetric05-smoke",
-      "path": "configs/experiment/dss_cifar10_symmetric05_smoke.yaml",
+      "path": "configs/methods/dss/dss_cifar10_symmetric05_smoke.yaml",
       "profile": "smoke"
     },
     {
@@ -202,12 +202,12 @@
     },
     {
       "id": "gce-cifar10-noise02-reproduction",
-      "path": "configs/experiment/gce_cifar10_noise02_reproduction.yaml",
+      "path": "configs/methods/gce/gce_cifar10_noise02_reproduction.yaml",
       "profile": "reproduction"
     },
     {
       "id": "gce-cifar10-noise02-smoke",
-      "path": "configs/experiment/gce_cifar10_noise02_smoke.yaml",
+      "path": "configs/methods/gce/gce_cifar10_noise02_smoke.yaml",
       "profile": "smoke"
     },
     {

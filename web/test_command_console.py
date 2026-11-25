@@ -20,6 +20,7 @@ import command_console  # noqa: E402
 class CommandConsoleTest(unittest.TestCase):
     def test_recipe_identity_matches_paper_dataset_and_editor_on_cold_and_warm_cache(self):
         from lnl_toolbox.training.results import config_hash
+        from tests.test_recipe_identity import _current_path
 
         path = command_console.ROOT / "tests/fixtures/recipe_identity_baseline.json"
         baseline = json.loads(path.read_text(encoding="utf-8"))
@@ -62,7 +63,9 @@ class CommandConsoleTest(unittest.TestCase):
                             frozen["id"],
                         )
                         for config in actual["configs"]:
-                            self.assertEqual(config["config_path"], recipes[config["recipe_id"]]["path"])
+                            self.assertEqual(
+                                config["config_path"], _current_path(recipes[config["recipe_id"]]["path"])
+                            )
                     rows = command_console._dataset_recipe_compatibility_payload(alias)["recipes"]
                     self.assertEqual([(x["paper_id"], x["recipe_id"]) for x in rows], expected_formal)
                     for method, canonical in baseline["web_formal_bindings"].items():
@@ -79,6 +82,7 @@ class CommandConsoleTest(unittest.TestCase):
         import shutil
         import subprocess
         from lnl_toolbox.cli.main import _load_source, build_parser
+        from tests.test_recipe_identity import _current_path
 
         node = shutil.which("node")
         if node is None:
@@ -113,7 +117,9 @@ eval(quote + workflow + 'console.log(compatibilityWorkflowCommand("run"));');
         with mock.patch("lnl_toolbox.cli.main.DEFAULT_DATA_SERVICE.apply", side_effect=lambda config, _: config):
             _, config_path, recipe, _ = _load_source(args)
         self.assertEqual(recipe.id, row["recipe_id"])
-        self.assertEqual(config_path.relative_to(command_console.ROOT).as_posix(), recipes[recipe.id]["path"])
+        self.assertEqual(
+            config_path.relative_to(command_console.ROOT).as_posix(), _current_path(recipes[recipe.id]["path"])
+        )
 
     def test_stage_early_stopping_fields_share_the_parameter_contract(self):
         from copy import deepcopy
@@ -1064,7 +1070,7 @@ eval(quote + workflow + 'console.log(compatibilityWorkflowCommand("run"));');
             custom = load_yaml(command_console.ROOT / saved["path"])
             self.assertEqual(custom["scheduler"]["lr_values"], [0.003, 0.0007])
             self.assertEqual(custom["scheduler"]["gamma"], 0.1)
-            formal = load_yaml(command_console.ROOT / "configs/experiment/gce_cifar10_noise02_reproduction.yaml")
+            formal = load_yaml(command_console.ROOT / "configs/methods/gce/gce_cifar10_noise02_reproduction.yaml")
             self.assertNotIn("lr_values", formal["scheduler"])
             with self.assertRaisesRegex(ValueError, "one value per milestone"):
                 command_console._save_config({

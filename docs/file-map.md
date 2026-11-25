@@ -190,16 +190,16 @@ data 安装，避免用户本地 YAML 污染 catalog。
 | `configs/experiment/cifar10_symmetric_ce_smoke.yaml` | symmetric 0.4 + CE 的统一 noisy runner smoke 配置。 |
 | `configs/experiment/cifar10_symmetric_small_loss_smoke.yaml` | symmetric 0.4 + CE + 固定 0.5 keep-rate SmallLossSelector 的单模型 smoke 配置。 |
 | `configs/experiment/cifar10_symmetric_small_loss_linear_smoke.yaml` | symmetric 0.4 + CE + 从 1.0 线性变化到 0.5 的 SmallLossSelector smoke 配置。 |
-| `configs/experiment/cifar10_symmetric_cdr_smoke.yaml` | symmetric 0.4 + CE + paper-mode CDR ParameterUpdatePolicy 的 smoke 配置。 |
+| `configs/methods/cdr/cifar10_symmetric_cdr_smoke.yaml` | symmetric 0.4 + CE + paper-mode CDR ParameterUpdatePolicy 的 smoke 配置。 |
 | `configs/experiment/cifar10_coteaching_smoke.yaml` | 双 TinyCNN、symmetric 0.4、两轮 CPU Co-teaching smoke 配置。 |
 | `configs/experiment/cifar10_cnlcu_soft_smoke.yaml` | 双 TinyCNN、symmetric 0.4、两轮 CPU CNLCU-S smoke 配置。 |
 | `configs/experiment/cifar10_cnlcu_hard_smoke.yaml` | 双 TinyCNN、symmetric 0.4、corrected LOF 的 CPU CNLCU-H smoke 配置。 |
 | `configs/experiment/cifar10_t_revision_smoke.yaml` | TinyCNN、symmetric 0.4、Stage 1/2A/2B 各两轮的 CPU T-Revision Reweight-R smoke 配置。 |
-| `configs/experiment/gce_cifar10_noise02_smoke.yaml` | GCE 论文设置的 CIFAR-10、symmetric 0.2、ResNet-34 小样本 CUDA smoke。 |
-| `configs/experiment/gce_cifar10_noise02_reproduction.yaml` | GCE 论文设置的 CIFAR-10、symmetric 0.2、单次 120 epoch 正式配置。 |
+| `configs/methods/gce/gce_cifar10_noise02_smoke.yaml` | GCE 论文设置的 CIFAR-10、symmetric 0.2、ResNet-34 小样本 CUDA smoke。 |
+| `configs/methods/gce/gce_cifar10_noise02_reproduction.yaml` | GCE 论文设置的 CIFAR-10、symmetric 0.2、单次 120 epoch 正式配置。 |
 | `configs/experiment/loss_correction_cifar10_asymmetric04.yaml` | Loss Correction 论文设置的 CIFAR-10、官方 class-conditional asymmetric 0.4、Forward、单次 120 epoch 正式配置。 |
-| `configs/experiment/dss_cifar10_symmetric05_smoke.yaml` | DSS 两 epoch 小样本闭环配置，仅用于 pipeline/checkpoint 验证。 |
-| `configs/experiment/dss_cifar10_symmetric05_reproduction.yaml` | 单次 DSS CIFAR-10 symmetric-50% 正式配置：seed 4、PreActResNet-18、150 epochs。 |
+| `configs/methods/dss/dss_cifar10_symmetric05_smoke.yaml` | DSS 两 epoch 小样本闭环配置，仅用于 pipeline/checkpoint 验证。 |
+| `configs/methods/dss/dss_cifar10_symmetric05_reproduction.yaml` | 单次 DSS CIFAR-10 symmetric-50% 正式配置：seed 4、PreActResNet-18、150 epochs。 |
 | `configs/experiment/jocor_cifar10_symmetric05_smoke.yaml` | JoCoR 两模型、共同选样、checkpoint 和 CUDA/CPU 闭环 smoke 配置。 |
 | `configs/experiment/jocor_cifar10_symmetric05_reproduction.yaml` | JoCoR CIFAR-10 symmetric-50% 单次正式配置：官方 CNN、Adam、λ=0.9、200 epochs 和末 10 epoch 双成员均值。 |
 | 实验 YAML 顶层 `selector` | 省略时为 `all`；当前支持 `all` 和固定 keep-rate `small_loss`。 |

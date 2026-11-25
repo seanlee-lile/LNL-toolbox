@@ -32,6 +32,30 @@ ROOT = Path(__file__).resolve().parents[1]
 BASELINE = Path(__file__).with_name("fixtures") / "recipe_identity_baseline.json"
 BASE_SHA = "c9a3234a03db7311c0dd70e6700ab5ae5971303a"
 CONFIG_DEST = "share/lnl-toolbox/configs/"
+# Approved moves only. Keep the on-disk baseline in its original layout.
+RELOCATIONS = {
+    f"configs/experiment/{filename}": f"configs/methods/{family}/{filename}"
+    for family, files in {
+        "apl": (
+            "apl_cifar10_noise02_reproduction.yaml",
+            "apl_cifar10_noise02_smoke.yaml",
+            "apl_cifar10_noise04_reproduction.yaml",
+        ),
+        "cdr": (
+            "cifar10_symmetric_cdr_reproduction.yaml",
+            "cifar10_symmetric_cdr_smoke.yaml",
+        ),
+        "dss": (
+            "dss_cifar10_symmetric05_reproduction.yaml",
+            "dss_cifar10_symmetric05_smoke.yaml",
+        ),
+        "gce": (
+            "gce_cifar10_noise02_reproduction.yaml",
+            "gce_cifar10_noise02_smoke.yaml",
+        ),
+    }.items()
+    for filename in files
+}
 VIEWS = ((False, False), (False, True), (True, False), (True, True))
 PAPER_VARIANT_BATCH = {
     "apl-cifar10-noise04-reproduction": "apl",
@@ -240,18 +264,52 @@ def make_snapshot(root, package_map, resolve_resource, web_bindings):
     }, source_discovery
 
 
+def _current_path(frozen_path):
+    return RELOCATIONS.get(frozen_path, frozen_path)
+
+
+def _current_resource(resource):
+    prefix = "share/lnl-toolbox/"
+    return prefix + _current_path(resource.removeprefix(prefix))
+
+
+def _frozen_layout():
+    return json.loads(BASELINE.read_text(encoding="utf-8"))
+
+
+def _package_layout(frozen):
+    package = dict(frozen["packaged_only"])
+    package.update({r["path"]: r["package_resource"] for r in frozen["recipes"]})
+    return package
+
+
 def source_snapshot(root=ROOT):
     bindings_file = root / "web" / "lnl_parameter_metadata_registry_revised.yaml"
     bindings = yaml.safe_load(bindings_file.read_text(encoding="utf-8"))["formal_recipe_bindings"]
+    frozen_package = _package_layout(_frozen_layout())
+    current_to_frozen = {_current_path(path): path for path in frozen_package}
+    unittest.TestCase().assertEqual(_package_map(root), {
+        _current_path(path): _current_resource(resource)
+        for path, resource in frozen_package.items()
+    })
     return make_snapshot(
-        root, _package_map(root), lambda item: item.config_path.relative_to(root).as_posix(), bindings
+        root, frozen_package,
+        lambda item: current_to_frozen[item.config_path.relative_to(root).as_posix()], bindings,
     )
 
 
 class RecipeIdentityTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.expected = json.loads(BASELINE.read_text(encoding="utf-8"))
+        cls.frozen = _frozen_layout()
+        cls.expected = {
+            **cls.frozen,
+            "recipes": [
+                dict(row, path=_current_path(row["path"]),
+                     package_resource=_current_resource(row["package_resource"]))
+                for row in cls.frozen["recipes"]
+            ],
+        }
         cls.actual, _ = source_snapshot()
 
     def test_frozen_identity_and_paper_associations(self):
@@ -264,9 +322,9 @@ class RecipeIdentityTest(unittest.TestCase):
         for section in ("recipes", "papers"):
             self.assertEqual(
                 [row["id"] for row in self.actual[section]],
-                [row["id"] for row in self.expected[section]], section,
+                [row["id"] for row in self.frozen[section]], section,
             )
-            for actual, expected in zip(self.actual[section], self.expected[section]):
+            for actual, expected in zip(self.actual[section], self.frozen[section]):
                 with self.subTest(section=section, key=expected["id"]):
                     self.assertEqual(actual, expected)
         self.assertEqual(self.actual["web_formal_bindings"], self.expected["web_formal_bindings"])
@@ -1125,11 +1183,13 @@ def verify_installed(prefix, wheel=None):
         assert resolved.is_relative_to(prefix) and resolved.is_file(), resolved
         files[resource] = resolved
 
-    expected = json.loads(BASELINE.read_text(encoding="utf-8"))
-    package_map = dict(expected["packaged_only"])
-    package_map.update({r["path"]: r["package_resource"] for r in expected["recipes"]})
-    unittest.TestCase().assertEqual(set(files), set(package_map.values()))
-    path_to_source = {files[resource]: path for path, resource in package_map.items()}
+    expected = _frozen_layout()
+    package_map = _package_layout(expected)
+    resource_to_frozen = {_current_resource(resource): resource for resource in package_map.values()}
+    unittest.TestCase().assertEqual(set(files), set(resource_to_frozen))
+    path_to_source = {
+        files[_current_resource(resource)]: path for path, resource in package_map.items()
+    }
     actual, views = make_snapshot(
         root, package_map, lambda item: path_to_source[item.config_path], expected["web_formal_bindings"]
     )
@@ -1148,7 +1208,17 @@ def verify_installed(prefix, wheel=None):
         for name, digest in hashes.items():
             resource = name[name.index(CONFIG_DEST):]
             case.assertEqual(hashlib.sha256(files[resource].read_bytes()).hexdigest(), digest, resource)
-        case.assertEqual(_digest((names, hashes, views)), HISTORICAL_SUMMARIES["packaging_discovery"])
+        def historical_archive_name(name):
+            start = name.find(CONFIG_DEST)
+            if start < 0 or name[start:] not in resource_to_frozen:
+                return name
+            return name[:start] + resource_to_frozen[name[start:]]
+
+        frozen_names = sorted(historical_archive_name(name) for name in names)
+        frozen_hashes = {historical_archive_name(name): digest for name, digest in hashes.items()}
+        case.assertEqual(
+            _digest((frozen_names, frozen_hashes, views)), HISTORICAL_SUMMARIES["packaging_discovery"]
+        )
     print(f"PASS: isolated resources={len(files)}, recipes=68, Papers=26, associations=56, defaults=26")
 
 
