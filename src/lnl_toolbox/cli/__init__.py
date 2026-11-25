@@ -215,6 +215,17 @@ def _load_yaml_mapping(path: Path) -> dict[str, Any]:
     return dict(value)
 
 
+def _eligible_template(path: Path, *, clean: bool) -> dict[str, Any] | None:
+    try:
+        config = _load_yaml_mapping(path)
+    except (OSError, ValueError):
+        return None
+    model_name = str(config.get("model", {}).get("name", "tiny_cnn")).lower()
+    if clean and config.get("noise"):
+        return None
+    return config if clean or model_name == "tiny_cnn" else None
+
+
 def _experiment_templates(*, clean: bool) -> list[tuple[Path, dict[str, Any]]]:
     directories = [Path.cwd() / "configs" / "experiment", repository_root() / "configs" / "experiment"]
     discovered: dict[Path, dict[str, Any]] = {}
@@ -225,27 +236,41 @@ def _experiment_templates(*, clean: bool) -> list[tuple[Path, dict[str, Any]]]:
             resolved = path.resolve()
             if resolved in discovered:
                 continue
-            try:
-                config = _load_yaml_mapping(resolved)
-            except (OSError, ValueError):
-                continue
-            model_name = str(config.get("model", {}).get("name", "tiny_cnn")).lower()
-            if clean and config.get("noise"):
-                continue
-            if clean or model_name == "tiny_cnn":
+            config = _eligible_template(resolved, clean=clean)
+            if config is not None:
                 discovered[resolved] = config
     return list(discovered.items())
 
 
 def _choose_template(session: PromptSession, *, clean: bool) -> tuple[Path, dict[str, Any]]:
+    from lnl_toolbox.catalog import _source_recipe_path
+
     templates = _experiment_templates(clean=clean)
+    root, cwd = repository_root().resolve(), Path.cwd().resolve()
+    paths = {path for path, _ in templates}
+    recipe_id = "cifar10-clean-smoke" if clean else "cifar10-smoke"
+    # Preserve the legacy override for a user project, not for the official default.
+    legacy_name = "cifar10_clean_smoke.yaml" if clean else "cifar10_smoke.yaml"
+    local = (cwd / "configs" / "experiment" / legacy_name).resolve()
+    default = local if cwd != root and local.name == legacy_name and local in paths else None
+    try:
+        official = _source_recipe_path(recipe_id, root)
+    except (OSError, ValueError, KeyError, TypeError):
+        # A broken built-in manifest must not disable browsing arbitrary YAML.
+        official = None
+    if official is not None:
+        if official not in paths:
+            config = _eligible_template(official, clean=clean)
+            if config is not None:
+                templates.append((official, config))
+                paths.add(official)
+        if default is None and official in paths:
+            default = official
     if templates:
-        preferred = "cifar10_clean_smoke.yaml" if clean else "cifar10_smoke.yaml"
-        default = next((path for path, _ in templates if path.name == preferred), templates[0][0])
         path = session.choose(
             "选择实验配置模板",
             [(item.name, item) for item, _ in templates],
-            default=default,
+            default=default if default is not None else templates[0][0],
         )
     else:
         selected = session.path("实验 YAML 路径", required=True, must_exist=True, file_only=True)

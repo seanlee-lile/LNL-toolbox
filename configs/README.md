@@ -27,7 +27,9 @@ kind: experiment  # 或 fragment / mentor_artifact
 4. 若配方应出现在 Paper 页面，在 `src/lnl_toolbox/paper_catalog.json` 补齐 `recipe_id`、`profile` 和用于选择的 `variant`（新标签用连字符分隔）。保留该 Paper 的正式默认顺序，代码取第一个 `reproduction` 条目。新增条目的 Paper profile 应与发现 profile 一致。已有 Loss Correction 条目的 Paper profile 为 `reproduction`，发现 profile 为 `experiment`，属于保留的历史例外。
 5. 若配方替换正式参数编辑基准或新增可编辑字段，检查 `web/lnl_parameter_metadata_registry_revised.yaml` 中的正式绑定与字段路径。运行配置、catalog 关联和 Web 参数展示分别承担执行、导航和编辑职责。
 
-移动内置 YAML 时，仍须同步 manifest 的资源路径、打包声明和适用的 `public` / `conditional` 路径引用，并核对直接 `--config` 示例、旧交互模板及 packaged-only producer 等特定路径消费者。旧交互模板仍有按目录和文件名的兼容选择，不属于 recipe identity 规则。
+移动内置 YAML 时，仍须同步 manifest 的资源路径、打包声明和适用的 `public` / `conditional` 路径引用，并核对直接 `--config` 示例、旧交互菜单及 packaged-only producer 等特定路径消费者。公开菜单和条件配方仍按路径登记，在主 `recipes` 顺序上做筛选。
+
+旧 CLI 交互向导的官方默认模板按内置 ID 查找源码 YAML：clean 用 `cifar10-clean-smoke`，通用训练用 `cifar10-smoke`。已有菜单仍扫描当前目录和仓库的 `configs/experiment/*.yaml`，保留独立用户项目中可用的同名本地模板优先、首项回退和无候选时的手输路径。若官方模板移出旧扫描目录，仅补入这一项；其他内置模板不会自动加入。独立安装不从包内自动填入交互模板；`--recipe` 和显式 `--config` 不受此约定影响。
 
 **GCE（现有 loss 和 runner）。** 参考 `experiment/gce_cifar10_noise02_reproduction.yaml`。新增同类配方时沿用 `supervised` 和 `loss.name: gce`，完成 YAML、manifest 和打包路径登记，再按需关联 GCE Paper。沿用现有字段和正式编辑基准时，无需修改 Web 元数据。
 

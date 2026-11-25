@@ -1,9 +1,11 @@
 from __future__ import annotations
+import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import yaml
+from lnl_toolbox import catalog
 from lnl_toolbox.cli import PromptSession, TrainingSelection
 import lnl_toolbox.cli as cli_shared
 from lnl_toolbox.cli import clean_train as clean_cli
@@ -21,6 +23,76 @@ class _cli_PromptSessionTest(unittest.TestCase):
     def test_clean_template_discovery_excludes_noisy_configs(self) -> None:
         names = {path.name for path, _ in cli_shared._experiment_templates(clean=True)}
         self.assertNotIn('cifar10_symmetric_ce_smoke.yaml', names)
+
+    def test_official_wizard_defaults_follow_recipe_id_without_changing_local_choices(self) -> None:
+        for clean, recipe_id, filename in (
+            (True, "cifar10-clean-smoke", "cifar10_clean_smoke.yaml"),
+            (False, "cifar10-smoke", "cifar10_smoke.yaml"),
+        ):
+            with self.subTest(clean=clean), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                repo, cwd = root / "source", root / "project"
+                relative = f"configs/experiment/{filename}"
+                original, shadow = repo / relative, cwd / relative
+                ordinary = cwd / "configs/experiment/a_local.yaml"
+                repo_other = repo / "configs/experiment/a_repo.yaml"
+                filtered = cwd / "configs/experiment/z_filtered.yaml"
+                for path in (original, shadow, ordinary, repo_other, filtered):
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("model: {name: tiny_cnn}\n", encoding="utf-8")
+                other_config = "noise: {name: symmetric}\n" if clean else "model: {name: resnet18}\n"
+                filtered.write_text(other_config, encoding="utf-8")
+                shadow.unlink()
+
+                with patch.object(cli_shared, "repository_root", return_value=repo), \
+                     patch.object(Path, "cwd", return_value=cwd), \
+                     patch.object(catalog.resources, "files") as files, \
+                     patch.object(catalog, "_installed_distribution",
+                                  side_effect=AssertionError("wizard must not probe installed resources")):
+                    manifest = files.return_value.joinpath.return_value.read_text
+
+                    def set_manifest(resource, *, duplicate=False):
+                        entry = {"id": recipe_id, "path": resource, "profile": "smoke"}
+                        entries = [entry]
+                        if duplicate:
+                            entries.append({**entry, "path": repo_other.relative_to(repo).as_posix()})
+                        manifest.return_value = json.dumps({"recipes": entries})
+
+                    def assert_default(expected, menu):
+                        session = Mock()
+                        session.choose.side_effect = lambda *args, default: default
+                        chosen, _ = cli_shared._choose_template(session, clean=clean)
+                        self.assertEqual(chosen, expected)
+                        self.assertEqual(session.choose.call_args.args[1],
+                                         [(path.name, path) for path in menu])
+                        session.path.assert_not_called()
+
+                    set_manifest(relative)
+                    assert_default(original, [ordinary, repo_other, original])
+                    shadow.write_text("model: {name: tiny_cnn}\n", encoding="utf-8")
+                    assert_default(shadow, [ordinary, shadow, repo_other, original])
+                    moved = repo / "configs/methods/demo/renamed.yaml"
+                    moved.parent.mkdir(parents=True)
+                    original.rename(moved)
+                    set_manifest(moved.relative_to(repo).as_posix())
+                    assert_default(shadow, [ordinary, shadow, repo_other, moved])
+                    shadow.unlink()
+                    assert_default(moved, [ordinary, repo_other, moved])
+                    set_manifest(moved.relative_to(repo).as_posix(), duplicate=True)
+                    assert_default(ordinary, [ordinary, repo_other])
+
+    def test_template_wizard_keeps_manual_path_without_source_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            custom = root / "custom.yaml"
+            custom.write_text("model: {name: tiny_cnn}\n", encoding="utf-8")
+            session, _ = _cli_scripted_session([str(custom)])
+            with patch.object(cli_shared, "repository_root", return_value=root / "installed"), \
+                 patch.object(Path, "cwd", return_value=root), \
+                 patch.object(catalog, "_recipe_manifest",
+                              side_effect=AssertionError("no source templates to resolve")):
+                self.assertEqual(cli_shared._choose_template(session, clean=False),
+                                 (custom, {"model": {"name": "tiny_cnn"}}))
 
     def test_choice_and_number_retry(self) -> None:
         session, output = _cli_scripted_session(['invalid', '2', 'bad', '0', '3'])

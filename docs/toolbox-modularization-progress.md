@@ -1,5 +1,28 @@
 # Toolbox modularization progress
 
+## Config path decoupling — legacy wizard defaults
+
+Base: `code@fc75f39b9bd8ee9194f7c7f230d9ddbcc0d2bf23`.
+The legacy CLI wizards locate their official source templates by the IDs
+`cifar10-clean-smoke` and `cifar10-smoke`. Existing directory discovery,
+candidate filters, local project overrides, and manual path entry remain
+available; lookup does not enumerate installed resources. Only a relocated
+official default is added when it falls outside the old menu scan.
+
+Public/conditional references retain their path-based schema and ordering.
+No YAML moves, package changes, or training behavior changes are included.
+
+- Focused: 27 passed. Main: 1184 passed / 21 skipped; Web: 110 passed /
+  31 skipped; Scratch: 196 passed / 10 skipped. No failures or errors.
+- Source and isolated wheel/sdist-derived installs match the frozen catalog:
+  68 recipes, 71 packaged YAMLs, discovery 63 / 4 / 68 / 4, 26 Papers,
+  56 associations, and 26 defaults. Installed wizard manual-path checks,
+  CLI discovery, and one file-list read per installed index build passed.
+  Normalized configuration hashes and Sweep identity are unchanged;
+  Resume regression passed.
+- Complete (5/5: audit, implementation, focused, full suites, installed
+  verification). Await review; no stage, commit, push, or YAML moves.
+
 ## Config path decoupling — default fidelity
 
 Base: `code@b17013db5dc1fc6d67f478cb982d7bb3330bf390`.
